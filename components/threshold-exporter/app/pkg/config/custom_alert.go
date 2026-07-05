@@ -49,8 +49,14 @@ func logCustomAlertError(tenant, name string, err error) {
 }
 
 // flexStr accepts a YAML scalar that may be quoted-string OR bare number and
-// stores its raw textual form — so `quantile: 0.99` and `quantile: "0.99"` both
-// yield "0.99", matching Python's str(quantile) in the slug contract.
+// stores its textual form. NB (#1017): for conf.d input the text seen here has
+// ALREADY been re-canonicalised by parse.go's ScheduledValue passthrough
+// (Decode→Marshal turns a bare `0.990` into `0.99`) — agreement with Python's
+// str(quantile) for bare numbers was that coincidence, not raw-text fidelity,
+// and YAML-dialect edge cases (PyYAML reads `95e-2` as a string, yaml.v3 as a
+// float) still diverged. The schema now pins quantile to type:string (quoted),
+// so both languages read the same authored text; flexStr stays lenient here so
+// a legacy bare-number conf.d keeps resolving instead of erroring at runtime.
 type flexStr string
 
 func (f *flexStr) UnmarshalYAML(n *yaml.Node) error {

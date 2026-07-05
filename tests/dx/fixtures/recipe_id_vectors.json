@@ -23,6 +23,16 @@
       "recipe_id": "p99_latency__http_request_duration_seconds__gt__w5m__q0_99__for1m"
     },
     {
+      "_note": "#1017: quantile is schema type:string — the QUOTED text is the contract. \"0.990\" slugs as q0_990 on BOTH sides verbatim (no numeric canonicalisation to 0.99); trailing zeros are shape identity.",
+      "input": {"recipe": "p99_latency", "metric": "http_request_duration_seconds", "quantile": "0.990", "op": ">", "window": "5m"},
+      "recipe_id": "p99_latency__http_request_duration_seconds__gt__w5m__q0_990__for1m"
+    },
+    {
+      "_note": "#1017: dotless-exponent quantile text \"95e-2\" — the YAML-dialect ambiguity class that motivated string-only (bare, PyYAML 1.1 reads a string while yaml.v3 reads a float and Go re-canonicalises to 0.95). Quoted, both sides read the same text → q95e_2.",
+      "input": {"recipe": "p99_latency", "metric": "http_request_duration_seconds", "quantile": "95e-2", "op": ">", "window": "5m"},
+      "recipe_id": "p99_latency__http_request_duration_seconds__gt__w5m__q95e_2__for1m"
+    },
+    {
       "_note": "selector ordering must be deterministic: sorted by (key, op), regardless of YAML/map iteration order",
       "input": {"recipe": "threshold", "metric": "m", "op": ">=", "window": "1m", "selectors": {"zeta": "1", "alpha": "2"}},
       "recipe_id": "threshold__m__s_alpha_2__s_zeta_1__ge__w1m__for1m__xf841b595631882bc"

@@ -16,11 +16,18 @@ a trailing `__x{16-hex}` = SHA-256 over a length-prefixed canonical of the STRUC
 shape identity (see _shape_hash / _needs_shape_hash). window/quantile/metric/for/group_by
 are charset- or enum-bounded, so they cannot alias.
 
-CONTRACT INVARIANT (load-bearing): the schema `type: string` on every free-form
-slug-bearing field is what guarantees Go (which keeps raw YAML text) and Python (whose
-yaml.safe_load coerces bare scalars) read the SAME value string. Selectors are
-`type: string`; `quantile` still permits a bare number (`type: ["string","number"]`), so
-a bare-number quantile like `0.990` diverges Go↔Python — tracked separately, out of F3.
+CONTRACT INVARIANT (load-bearing): the schema `type: string` on every slug-bearing
+free-form field is what guarantees Go and Python read the SAME value text. Since #1017
+`quantile` is string-only too (was `type: ["string","number"]`). NB the bare-number
+hazard is subtler than "Go keeps raw text, Python str()s a float": the exporter's
+production path RE-CANONICALISES a bare scalar (parse.go ScheduledValue passthrough,
+Decode→Marshal) before flexStr ever sees it, so plain decimals like `0.990` converge
+to "0.99" on BOTH sides. The real divergence class is YAML-dialect disagreement —
+PyYAML (YAML 1.1) reads a dotless exponent like `95e-2` as a STRING while yaml.v3
+reads a FLOAT (Go q0_95 vs Python q95e_2 → silent join loss) — and even the
+convergent cases rest on a double coincidence (Go shortest-repr == CPython repr;
+the two resolvers agreeing). `type: string` removes the whole class structurally:
+both languages read identical authored text, no resolver in the loop.
 
 The contract is pinned by tests/dx/fixtures/recipe_id_vectors.json (a shared
 golden vector both implementations assert against).

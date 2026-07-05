@@ -189,3 +189,57 @@ func TestMerge_MissingTenantErrors(t *testing.T) {
 		t.Error("expected an error for a tenant not present in the yaml")
 	}
 }
+
+// #1017: the write plane must never emit a bare-number quantile into conf.d —
+// QuantileStringViolations rejects non-string JSON, and a STRING quantile must
+// round-trip QUOTED (yaml.v3 auto-quotes a number-looking !!str scalar), so
+// the Go exporter and the Python compiler read the same text (recipe_id parity).
+func TestQuantileStringViolations(t *testing.T) {
+	cases := []struct {
+		note    string
+		recipes []map[string]any
+		want    int
+	}{
+		{"string quantile passes", []map[string]any{
+			{"recipe": "p99_latency", "name": "ok", "quantile": "0.99"}}, 0},
+		{"absent quantile passes", []map[string]any{
+			{"recipe": "threshold", "name": "no_q"}}, 0},
+		{"JSON number rejected", []map[string]any{
+			{"recipe": "p99_latency", "name": "bad", "quantile": float64(0.99)}}, 1},
+		{"JSON null rejected", []map[string]any{
+			{"recipe": "p99_latency", "name": "null_q", "quantile": nil}}, 1},
+		{"only the offending recipe flagged, with its index", []map[string]any{
+			{"recipe": "p99_latency", "name": "fine", "quantile": "0.95"},
+			{"recipe": "p99_latency", "name": "oops", "quantile": float64(0.95)}}, 1},
+	}
+	for _, c := range cases {
+		got := QuantileStringViolations(c.recipes)
+		if len(got) != c.want {
+			t.Errorf("[%s] violations = %v, want %d", c.note, got, c.want)
+		}
+	}
+	// The violation must carry the `_custom_alerts[N]` locator (the modal's
+	// index-extraction regex) pointing at the OFFENDING index, and the name.
+	viol := QuantileStringViolations([]map[string]any{
+		{"recipe": "p99_latency", "name": "fine", "quantile": "0.95"},
+		{"recipe": "p99_latency", "name": "oops", "quantile": float64(0.95)},
+	})
+	if len(viol) != 1 || !strings.Contains(viol[0], "_custom_alerts[1]") || !strings.Contains(viol[0], `"oops"`) {
+		t.Errorf("violation must locate index 1 by name: %v", viol)
+	}
+}
+
+func TestMerge_StringQuantileEmittedQuoted(t *testing.T) {
+	out, err := MergeCustomAlerts(tenantWithComments, "shop-a", []map[string]any{
+		{"recipe": "p99_latency", "name": "p99_slow", "metric": "http_request_duration_seconds",
+			"quantile": "0.990", "threshold": "2:warning", "window": "5m"},
+	})
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	// Quoted → both YAML readers (yaml.v3 / PyYAML) see the text "0.990";
+	// a bare `quantile: 0.990` would be read back as the NUMBER 0.99.
+	if !strings.Contains(out, `quantile: "0.990"`) {
+		t.Errorf("string quantile must be emitted quoted, got:\n%s", out)
+	}
+}

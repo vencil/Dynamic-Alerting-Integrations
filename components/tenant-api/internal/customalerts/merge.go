@@ -143,6 +143,40 @@ func valueNode(v any) *yaml.Node {
 	return &n
 }
 
+// QuantileStringViolations rejects any recipe whose `quantile` arrives as a
+// non-string JSON value (number/bool/null) — one violation per offending
+// recipe, carrying the same `_custom_alerts[N]` locator prefix the S5
+// validator uses so the portal modal can point at the offending card.
+//
+// WHY reject instead of normalise (#1017): the quantile TEXT enters the
+// cross-language recipe_id slug that the Go exporter and the Python compiler
+// compute independently. A JSON number has already lost its authored text
+// (0.990 → float64 → "0.99"), and valueNode would emit it as a BARE YAML
+// scalar — which the two YAML readers can disagree on (PyYAML 1.1 reads a
+// dotless exponent like 95e-2 as a string, yaml.v3 as a float), silently
+// splitting the recipe_id join and muting the alert. The schema is
+// string-only (tenant-config.schema.json), so the write plane fails loud
+// here, symmetric with the conf.d schema CI gate (check_confd_schema.py).
+func QuantileStringViolations(recipes []map[string]any) []string {
+	var viol []string
+	for i, r := range recipes {
+		q, present := r["quantile"]
+		if !present {
+			continue
+		}
+		if _, ok := q.(string); ok {
+			continue
+		}
+		name, _ := r["name"].(string)
+		viol = append(viol, fmt.Sprintf(
+			"_custom_alerts[%d] (name %q): quantile must be a JSON string (e.g. \"0.99\"), got %T — "+
+				"the quantile text enters the cross-language recipe_id contract; a bare number is "+
+				"YAML-dialect-ambiguous and silently breaks the Go/Python join (#1017)",
+			i, name, q))
+	}
+	return viol
+}
+
 // mapValue returns the value node for key in a mapping node, or nil.
 func mapValue(m *yaml.Node, key string) *yaml.Node {
 	for i := 0; i+1 < len(m.Content); i += 2 {

@@ -116,6 +116,37 @@ class TestValidateDir:
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
         assert sum("must be a mapping" in v for v in viol) == 2
 
+    def test_bare_number_quantile_rejected(self, confd, schema):
+        # #1017: quantile is string-only. A bare YAML number is dialect-ambiguous
+        # (PyYAML 1.1 reads a dotless exponent like 95e-2 as a string, yaml.v3 as
+        # a float) and silently splits the Go/Python recipe_id join → the alert
+        # never fires. The schema gate must force the quote at author/CI time.
+        _write(confd, "db-a.yaml",
+               'tenants:\n  db-a:\n    _custom_alerts:\n'
+               '      - recipe: p99_latency\n'
+               '        name: p99_slow\n'
+               '        metric: http_request_duration_seconds\n'
+               '        quantile: 0.99\n'
+               '        op: ">"\n'
+               '        window: 5m\n'
+               '        threshold: "2:warning"\n')
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
+        assert any("quantile" in v and "string" in v for v in viol), viol
+
+    def test_quoted_quantile_valid(self, confd, schema):
+        # #1017 companion: the quoted form (the parity contract) stays valid.
+        _write(confd, "db-a.yaml",
+               'tenants:\n  db-a:\n    _custom_alerts:\n'
+               '      - recipe: p99_latency\n'
+               '        name: p99_slow\n'
+               '        metric: http_request_duration_seconds\n'
+               '        quantile: "0.99"\n'
+               '        op: ">"\n'
+               '        window: 5m\n'
+               '        threshold: "2:warning"\n')
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
+        assert viol == [], viol
+
     def test_real_confd_is_clean(self, schema):
         # The shipped conf.d must stay schema-valid (regression guard).
         checked, viol, _skipped = validate_dir(_REAL_CONFD, schema, jsonschema)
