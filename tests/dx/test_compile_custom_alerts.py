@@ -333,6 +333,28 @@ def test_failsoft_non_mapping_entry_quarantined(tmp_path):
     assert any("not a mapping" in s["reason"] for s in skipped)
 
 
+def test_failsoft_malformed_yaml_file_quarantined(tmp_path):
+    # #1008 Part B: a conf.d FILE that yaml.safe_load can't parse (a control char) is
+    # quarantined at FILE level — the load happens OUTSIDE the per-recipe loop, so without
+    # the file-level fail-soft one bad file (incl. a schema-check-skipped meta file) would
+    # crash the whole compile. Sibling valid files still compile.
+    _write_tree(tmp_path, {
+        "bad.yaml": 'tenants:\n  "x\x1by":\n    _custom_alerts: []\n',   # \x1b → PyYAML ReaderError
+        "good.yaml": 'tenants:\n  t:\n    _custom_alerts:\n'
+            '      - {recipe: threshold, name: ok, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n',
+    })
+    shapes, _per, skipped = ld.build_shapes(tmp_path)
+    assert len(shapes) == 1                               # good.yaml compiled
+    assert any(s["origin"] == "bad.yaml" for s in skipped)
+
+
+def test_safe_log_strips_control_chars():
+    # #1008: the quarantine CI-log line sanitizes control chars (newline / ANSI ESC / tab)
+    # from tenant-controlled fields so a malformed value can't inject forged log lines or
+    # terminal escapes.
+    assert cc._safe_log("a\nFAKE\x1b[2Jb\tc") == "a?FAKE?[2Jb?c"
+
+
 # --- 6. scope inheritance + cap count --------------------------------------
 def test_domain_and_platform_inheritance(tmp_path):
     _write_tree(tmp_path, {

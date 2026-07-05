@@ -144,6 +144,14 @@ def _assert_annotations_template_safe(groups: List[dict]) -> None:
                     )
 
 
+def _safe_log(value) -> str:
+    """Strip control chars (incl newline / ANSI ESC) from a tenant-controlled value before
+    printing a quarantine line to the CI log — a malformed tenant id / origin / exception
+    text must not inject forged log lines or terminal escapes (#1008 fail-soft observability).
+    PyYAML already rejects most control chars at parse, but newline/tab pass through."""
+    return re.sub(r"[\x00-\x1f\x7f]", "?", str(value))
+
+
 def build_pack(config_dir: Path,
                max_custom_recipes: int = _loader.MAX_CUSTOM_RECIPES_DEFAULT) -> dict:
     """Build the rule-pack dict (groups) from a conf.d tree."""
@@ -261,8 +269,8 @@ def main() -> int:
     # (a quarantined recipe does not deploy). NOT a hard failure by design.
     skipped = meta.get("skipped", [])
     for s in skipped:
-        print(f"  ⚠ custom-alert QUARANTINED (fail-soft, #1008): tenant={s['tenant']} "
-              f"name={s['name']!r} ({s['origin']}): {s['reason']}", file=sys.stderr)
+        print(f"  ⚠ custom-alert QUARANTINED (fail-soft, #1008): tenant={_safe_log(s['tenant'])} "
+              f"name={s['name']!r} ({_safe_log(s['origin'])}): {_safe_log(s['reason'])}", file=sys.stderr)
     if skipped:
         print(f"  ⚠ {len(skipped)} custom-alert recipe(s) quarantined — compiled the rest. "
               f"A quarantined recipe does NOT deploy; fix it (or it stays dropped).",

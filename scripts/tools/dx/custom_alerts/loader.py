@@ -44,12 +44,28 @@ def _load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
-def _dir_defaults_alerts(config_dir: Path) -> Dict[Path, List[dict]]:
-    """Map each directory → its _defaults.yaml top-level `_custom_alerts` list."""
+def _file_skip(origin: str, exc: Exception) -> dict:
+    """Skip record for a conf.d FILE that could not be loaded (malformed YAML / control
+    chars / bad encoding). Quarantined fail-soft (#1008 Part B): the YAML load happens
+    OUTSIDE the per-recipe try, so without this one bad file (incl. a schema-check-skipped
+    meta file) would crash the whole shared compile → block every tenant's PR."""
+    return {"tenant": None, "origin": origin, "name": None,
+            "reason": f"{type(exc).__name__}: {exc}"}
+
+
+def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path, List[dict]]:
+    """Map each directory → its _defaults.yaml top-level `_custom_alerts` list. A
+    _defaults.yaml that fails to load is quarantined into `file_errors` (#1008 Part B),
+    not raised."""
     out: Dict[Path, List[dict]] = {}
     for root, _dirs, files in os.walk(config_dir):
         if "_defaults.yaml" in files:
-            data = _load_yaml(Path(root) / "_defaults.yaml")
+            p = Path(root) / "_defaults.yaml"
+            try:
+                data = _load_yaml(p)
+            except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
+                file_errors.append(_file_skip(str(p.relative_to(config_dir)), exc))
+                continue
             alerts = data.get("_custom_alerts") or []
             if alerts:
                 out[Path(root).resolve()] = list(alerts)
@@ -75,23 +91,32 @@ def _inherited_for(leaf_dir: Path, config_dir: Path,
     return inherited
 
 
-def collect_instances(config_dir: Path) -> List[Tuple[str, dict, str, bool]]:
-    """Return (tenant, instance, origin, is_own) tuples for every effective decl.
+def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool]], List[dict]]:
+    """Return (triples, file_errors): (tenant, instance, origin, is_own) tuples for every
+    effective decl, PLUS skip records for conf.d files that failed to load.
 
-    origin is a human string (the file the instance was declared in) for error
-    messages. is_own distinguishes a tenant's OWN declaration from an INHERITED
-    platform/domain policy (the latter is vectorized + does NOT count toward the
-    per-tenant cap). Inherited instances are attributed to each tenant they land
-    on (that is what scope / effective-count mean).
+    origin is a human string (the file the instance was declared in) for error messages.
+    is_own distinguishes a tenant's OWN declaration from an INHERITED platform/domain
+    policy (the latter is vectorized + does NOT count toward the per-tenant cap). Inherited
+    instances are attributed to each tenant they land on (that is what scope / effective-
+    count mean). A file that yaml.safe_load can't parse (malformed / control chars / bad
+    encoding) is QUARANTINED into file_errors and skipped (#1008 Part B), never raised —
+    this load is outside the per-recipe fail-soft loop, so without it one bad file would
+    crash the whole compile.
     """
     config_dir = Path(config_dir)
-    dir_alerts = _dir_defaults_alerts(config_dir)
+    file_errors: List[dict] = []
+    dir_alerts = _dir_defaults_alerts(config_dir, file_errors)
     triples: List[Tuple[str, dict, str, bool]] = []
 
     for path in sorted(config_dir.rglob("*.yaml")):
         if path.name == "_defaults.yaml":
             continue
-        data = _load_yaml(path)
+        try:
+            data = _load_yaml(path)
+        except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
+            file_errors.append(_file_skip(str(path.relative_to(config_dir)), exc))
+            continue
         tenants = data.get("tenants") or {}
         if not isinstance(tenants, dict):
             continue
@@ -105,7 +130,7 @@ def collect_instances(config_dir: Path) -> List[Tuple[str, dict, str, bool]]:
                 triples.append((tenant, inst, f"{rel} (inherited _defaults.yaml)", False))
             for inst in own:
                 triples.append((tenant, inst, str(rel), True))
-    return triples
+    return triples, file_errors
 
 
 _NOTICE_TENANT_SAMPLE = 10   # max tenant names per lifecycle notice (CI-log readability)
@@ -139,7 +164,8 @@ def collect_lifecycle_notices(config_dir: Path) -> List[str]:
     platform retired the recipe.
     """
     by_status: Dict[Tuple[str, str], set] = defaultdict(set)   # (status, recipe) → tenants
-    for tenant, inst, _origin, _is_own in collect_instances(config_dir):
+    triples, _file_errors = collect_instances(config_dir)   # unloadable files → build_shapes reports them
+    for tenant, inst, _origin, _is_own in triples:
         if not isinstance(inst, dict):
             continue   # malformed entry (e.g. a scalar _custom_alerts) — quarantined by
             #            build_shapes (#1008 Part B); it is not a recipe for lifecycle purposes
@@ -202,7 +228,7 @@ def build_shapes(config_dir: Path,
         raise CustomAlertConfigError(
             f"max_custom_recipes must be >= 0 (got {max_custom_recipes})"
         )
-    triples = collect_instances(config_dir)
+    triples, file_errors = collect_instances(config_dir)
 
     # validation accumulators
     name_seen: Dict[Tuple[str, str], str] = {}              # (tenant, name) → origin
@@ -214,7 +240,7 @@ def build_shapes(config_dir: Path,
     shapes: Dict[str, dict] = {}                            # recipe_id → shape
     shape_sev: Dict[str, set] = defaultdict(set)            # recipe_id → severities
     sig_seen: Dict[str, tuple] = {}                         # recipe_id → shape_signature
-    skipped: List[dict] = []                                # quarantined recipes (fail-soft)
+    skipped: List[dict] = list(file_errors)                 # unloadable files + quarantined recipes (fail-soft)
 
     # required fields — match tenant-config.schema.json's customAlertInstance.
     # threshold carries the severity. The SHAPING duration is recipe-aware:
