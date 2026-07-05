@@ -270,6 +270,16 @@ class TestPssLabelRule:
         out = k8s.collect_pss_findings([broken])
         assert len(out) == 1 and "skipped this file" in out[0]
 
+    def test_misencoded_manifest_degrades_to_warn_not_crash(self, tmp_path):
+        # invalid UTF-8 raises UnicodeDecodeError (a ValueError subclass, NOT
+        # OSError/YAMLError) on read_text; the L4 contract requires it degrade
+        # to an explicit WARN, never crash the whole run (CodeRabbit #1027).
+        bad = tmp_path / "misencoded.yaml"
+        bad.write_bytes(b"\xff\xfe kind: Namespace\n")
+        out = k8s.collect_pss_findings([bad])
+        assert len(out) == 1 and "skipped this file" in out[0]
+        assert "UnicodeDecodeError" in out[0]
+
     def test_repo_namespaces_all_labeled(self):
         """Live baseline: every Namespace manifest under k8s/ ships labeled
         (db-a / db-b / monitoring / tenant-api warn+audit=restricted; the

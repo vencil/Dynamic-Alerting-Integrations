@@ -220,7 +220,7 @@ def collect_pss_findings(files: list[Path] | None = None) -> list[str]:
             rel = p.name
         try:
             docs = list(yaml.safe_load_all(p.read_text(encoding="utf-8")))
-        except (yaml.YAMLError, OSError) as e:
+        except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
             out.append(
                 f"[pss] {rel}: unreadable/unparseable "
                 f"({e.__class__.__name__}) — PSS-label rule skipped this file")
