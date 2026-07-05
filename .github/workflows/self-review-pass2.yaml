@@ -53,8 +53,13 @@ jobs:
 
       - name: Resolve base ref
         id: base
+        # Bind the base ref via env, NOT raw ${{ }} interpolation into the
+        # run: script (same script-injection class as the commitlint PR-title
+        # fix, #1021). base.ref is privileged-only — this is the house rule:
+        # zero raw ${{ github.event.* }} inside run:.
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
         run: |
-          BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
           # actions/checkout doesn't always materialise `origin/<branch>`;
           # fetch it explicitly so the trailer scan can resolve the range.
           git fetch --no-tags origin "${BASE_BRANCH}"

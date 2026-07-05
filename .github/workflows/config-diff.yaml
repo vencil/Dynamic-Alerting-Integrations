@@ -31,12 +31,17 @@ jobs:
           fetch-depth: 0  # need full history for base branch comparison
 
       - name: Extract base branch configs
+        # Bind the base ref via env, NOT raw ${{ }} interpolation into the
+        # run: script (#1021 class house rule: zero raw
+        # ${{ github.event.* }} / ${{ github.base_ref }} inside run:).
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
           mkdir -p /tmp/old-conf.d
-          git show origin/${{ github.base_ref }}:components/threshold-exporter/config/conf.d/ > /dev/null 2>&1 || exit 0
-          for f in $(git ls-tree --name-only origin/${{ github.base_ref }} components/threshold-exporter/config/conf.d/); do
+          git show "origin/$BASE_REF:components/threshold-exporter/config/conf.d/" > /dev/null 2>&1 || exit 0
+          for f in $(git ls-tree --name-only "origin/$BASE_REF" components/threshold-exporter/config/conf.d/); do
             fname=$(basename "$f")
-            git show "origin/${{ github.base_ref }}:$f" > "/tmp/old-conf.d/$fname" 2>/dev/null || true
+            git show "origin/$BASE_REF:$f" > "/tmp/old-conf.d/$fname" 2>/dev/null || true
           done
 
       - name: Run config diff

@@ -46,8 +46,11 @@ jobs:
     steps:
       - name: Scope — did this PR change the VM engine pin / anchor?
         id: scope
+        # PR number bound via env (#1021 class house rule: zero raw
+        # ${{ github.event.* }} inside run:).
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           # workflow_dispatch has no PR context → always run the anchor.
@@ -58,7 +61,7 @@ jobs:
           fi
           # Fail-SAFE: if we cannot determine the changed set, RUN the anchor rather than
           # skip-to-green blind (a transient gh/API hiccup must not silently bypass the gate).
-          if ! changed="$(gh pr diff "${{ github.event.pull_request.number }}" \
+          if ! changed="$(gh pr diff "$PR_NUMBER" \
               --repo "${{ github.repository }}" --name-only)"; then
             echo "gh pr diff failed → running the anchor (fail-safe, not skipping to green)."
             echo "run=true" >> "$GITHUB_OUTPUT"
