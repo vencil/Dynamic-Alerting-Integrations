@@ -26,12 +26,27 @@ jobs:
 
       - name: Validate PR title (for squash-merge)
         if: github.event_name == 'pull_request'
+        # Route the PR title through env, NOT raw ${{ }} interpolation into the
+        # run: script. GHA substitutes ${{ }} as literal TEXT before bash parses,
+        # so a title with a `"` breaks the here-string (commitlint dies "Unknown
+        # argument: ..."), and a title containing `...` or $(...) would EXECUTE on
+        # the runner - a classic GHA script-injection. An env-var expansion is not
+        # re-parsed by bash, so quotes/backticks/$() stay literal and inert.
+        # (Recurring gotcha before this fix: PR #501, #1019.)
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          npx commitlint --config .commitlintrc.yaml <<< "${{ github.event.pull_request.title }}"
+          npx commitlint --config .commitlintrc.yaml <<< "$PR_TITLE"
 
       - name: Validate commits on PR
         if: github.event_name == 'pull_request'
+        # SHAs are not user-controlled (40 hex chars, un-injectable), but bind them
+        # via env too so this workflow has ZERO raw ${{ github.event.* }} inside a
+        # run: script - the general rule, so nobody copies a raw-interpolation line.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           npx commitlint --config .commitlintrc.yaml \
-            --from ${{ github.event.pull_request.base.sha }} \
-            --to ${{ github.event.pull_request.head.sha }}
+            --from "$BASE_SHA" \
+            --to "$HEAD_SHA"
