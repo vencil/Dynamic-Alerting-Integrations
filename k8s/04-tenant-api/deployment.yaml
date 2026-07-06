@@ -109,6 +109,18 @@ spec:
             - --git-dir=/conf.d
             - --rbac=/etc/rbac/_rbac.yaml
             - --reload-interval=30s
+            # ADR-027 D2-B (GHSA-3g2h-rf85-5rrv L7 root-cause series): human-plane
+            # Unix socket. When enabled, tenant-api serves the same router on a
+            # pod-internal socket that the oauth2-proxy sidecar targets as its
+            # upstream, so browser traffic never touches the network 8080 plane.
+            # Commented out by default because it REQUIRES a tenant-api image that
+            # carries the --human-socket flag (raw-manifest users may still run an
+            # older image; the Helm chart gates this behind humanSocket.enabled).
+            # To enable, uncomment BOTH lines here AND the four commented UDS
+            # blocks below (volumeMount here, sidecar upstream + volumeMount, and
+            # the human-sock volume), matching helm/tenant-api render with
+            # humanSocket.enabled=true.
+            #   - --human-socket=/run/ta-human/human.sock
           env:
             # Committer identity for git commits (author comes from X-Forwarded-Email)
             - name: GIT_COMMITTER_NAME
@@ -144,6 +156,10 @@ spec:
             # git needs a writable HOME for config; tmpfs is enough
             - name: git-tmp
               mountPath: /tmp
+            # ADR-027 D2-B: shared dir for the human-plane Unix socket (uncomment
+            # with --human-socket above + the sidecar/volume blocks below).
+            #   - name: human-sock
+            #     mountPath: /run/ta-human
           resources:
             requests:
               cpu: 50m
@@ -192,6 +208,12 @@ spec:
             #   - --cookie-expire=4h               # revocation-lag guard (see docs)
             #   - --cookie-refresh=1h
             # Forward to tenant-api (only accessible within the pod)
+            # ADR-027 D2-B: to route the human plane over the pod-internal Unix
+            # socket instead of the network 8080 plane, REPLACE the line below with
+            #   - --upstream=unix:///run/ta-human/human.sock
+            # (and enable --human-socket + the volume/mount blocks). oauth2-proxy's
+            # --flush-interval defaults to 1s (< SSE 25s heartbeat), so streaming
+            # is not buffered — spike-verified against this exact proxy digest.
             - --upstream=http://localhost:8080
             - --http-address=0.0.0.0:4180
             # Redirect URL must match your Ingress host
@@ -227,6 +249,12 @@ spec:
             - name: http
               containerPort: 4180
               protocol: TCP
+          # ADR-027 D2-B: mount the shared human-sock dir (readOnly) so oauth2-proxy
+          # can dial the Unix socket when --upstream=unix://… is used above.
+          #   volumeMounts:
+          #     - name: human-sock
+          #       mountPath: /run/ta-human
+          #       readOnly: true
           resources:
             requests:
               cpu: 20m
@@ -264,3 +292,12 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 16Mi
+
+        # ADR-027 D2-B: pod-internal tmpfs dir for the human-plane Unix socket.
+        # Shared by tenant-api (binds) + oauth2-proxy (dials); pod-level fsGroup
+        # 65534 makes it group-writable to both. Uncomment with the --human-socket
+        # flag + upstream=unix://… + the two volumeMounts above.
+        #   - name: human-sock
+        #     emptyDir:
+        #       medium: Memory
+        #       sizeLimit: 1Mi

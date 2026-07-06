@@ -125,6 +125,15 @@ spec:
             - --machine-identity-audit
             - --machine-identity-audience={{ required "machineIdentity.audience MUST be set (ADR-027 G4: empty audience = TokenReview accepts ANY SA token incl default-audience)" .Values.machineIdentity.audience }}
             {{- end }}
+            {{- if .Values.humanSocket.enabled }}
+            # ADR-027 D2-B (GHSA-3g2h-rf85-5rrv L7 root-cause series): serve the
+            # human plane on a pod-internal Unix socket that the oauth2-proxy
+            # sidecar (below) targets as its upstream, so browser traffic never
+            # touches the network 8080 plane. The socket lives on the human-sock
+            # emptyDir mounted into both containers. audit-only impact: requests
+            # over this listener are excluded from the machine-identity audit.
+            - --human-socket={{ .Values.humanSocket.path }}
+            {{- end }}
           env:
             - name: GIT_COMMITTER_NAME
               value: {{ .Values.tenantApi.gitCommitterName | quote }}
@@ -213,6 +222,12 @@ spec:
               mountPath: /etc/federation
               readOnly: true
             {{- end }}
+            {{- if .Values.humanSocket.enabled }}
+            # ADR-027 D2-B: shared dir for the human-plane Unix socket. tenant-api
+            # binds+owns the socket here; the oauth2-proxy sidecar dials it.
+            - name: human-sock
+              mountPath: {{ dir .Values.humanSocket.path }}
+            {{- end }}
           resources:
             {{- toYaml .Values.resources.tenantApi | nindent 12 }}
           readinessProbe:
@@ -251,7 +266,16 @@ spec:
             {{- range .Values.oauth2Proxy.gitlabGroups }}
             - --gitlab-group={{ . }}
             {{- end }}
+            {{- if .Values.humanSocket.enabled }}
+            # ADR-027 D2-B: upstream is the pod-internal Unix socket, NOT the
+            # network 8080 plane. oauth2-proxy dials the socket over the shared
+            # human-sock volume; --flush-interval defaults to 1s, well below the
+            # SSE 25s heartbeat, so /api/v1/events streaming is not buffered
+            # (spike-verified against this exact oauth2-proxy digest).
+            - --upstream=unix://{{ .Values.humanSocket.path }}
+            {{- else }}
             - --upstream=http://localhost:8080
+            {{- end }}
             - --http-address=0.0.0.0:4180
             - --redirect-url={{ .Values.oauth2Proxy.redirectUrl }}
             - --email-domain={{ .Values.oauth2Proxy.emailDomain }}
@@ -289,6 +313,15 @@ spec:
             - name: http
               containerPort: 4180
               protocol: TCP
+          {{- if .Values.humanSocket.enabled }}
+          # ADR-027 D2-B: mount the shared human-sock dir so oauth2-proxy can dial
+          # the Unix socket tenant-api binds. readOnly: the proxy only connects to
+          # the socket, never creates files here (its rootfs stays read-only).
+          volumeMounts:
+            - name: human-sock
+              mountPath: {{ dir .Values.humanSocket.path }}
+              readOnly: true
+          {{- end }}
           resources:
             {{- toYaml .Values.resources.oauth2Proxy | nindent 12 }}
           readinessProbe:
@@ -311,6 +344,18 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 16Mi
+
+        {{- if .Values.humanSocket.enabled }}
+        # ADR-027 D2-B: pod-internal dir for the human-plane Unix socket. Memory-
+        # backed (tmpfs) — the socket is an ephemeral pod-local rendezvous, never
+        # persisted. Tiny: it holds one socket inode. Shared by tenant-api (binds)
+        # and oauth2-proxy (dials); pod-level fsGroup 65534 makes it group-writable
+        # to both.
+        - name: human-sock
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        {{- end }}
 
         {{- if .Values.federation.enabled }}
         # RS256 private key for signing federation tokens. defaultMode 0440 so

@@ -40,8 +40,20 @@ func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) str
 			// workload token if present. It never fails the request and never
 			// influences the decision below (which stays header-driven); being a
 			// synchronous TokenReview it may add bounded latency to a Bearer request.
+			//
+			// ADR-027 D2-B §2.3: the audit is bound to the NETWORK (TCP) listener.
+			// Human traffic arrives over the pod-internal Unix socket (--human-socket,
+			// fronted by the same-pod oauth2-proxy); that is a physically-isolated
+			// trusted hop, not a machine caller, so observing it would pollute the
+			// Phase-2 gate denominator (which is meant to be the machine/relay plane
+			// only). The listener identity is CONNECTION-derived (ConnContext), so
+			// a request cannot dodge the audit by faking it. A context with no
+			// listener stamp defaults to TCP (fail-safe) → still audited. Only an
+			// explicit UDS stamp skips it.
 			if m.machineAuditor != nil {
-				observeSafely(m.machineAuditor, r, bPrincipal)
+				if l, _ := ListenerFromContext(r.Context()); l != ListenerUDS {
+					observeSafely(m.machineAuditor, r, bPrincipal)
+				}
 			}
 
 			// For list endpoints (tenantIDFn == nil), check read on wildcard "*"

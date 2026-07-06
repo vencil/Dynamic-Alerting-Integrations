@@ -6,9 +6,30 @@ tenant-api installed — ADR-009 Tenant Manager CRUD API.
 SECURITY (GHSA-3g2h-rf85-5rrv) — internal port 8080 BYPASSES oauth2-proxy and
   blindly trusts X-Forwarded-Groups / X-Forwarded-Email. Anything that can reach
   8080 can assert ANY identity (incl. platform-admins -> fleet admin write +
-  federation token minting + git PR-write). The pod-scoped NetworkPolicy (only
-  Prometheus + threshold-govern admitted) is the ONLY control on that port — this
-  is why networkPolicy.enabled=false is a hard failure.
+  federation token minting + git PR-write). The pod-scoped NetworkPolicy (four
+  admitted clients: Prometheus + threshold-govern + recipe-preview + da-portal)
+  is the ONLY control on that port — this is why networkPolicy.enabled=false is a
+  hard failure.
+
+{{- if .Values.humanSocket.enabled }}
+
+HUMAN SOCKET (ADR-027 D2-B) — ENABLED. The oauth2-proxy sidecar forwards human
+  traffic to tenant-api over a pod-internal Unix socket ({{ .Values.humanSocket.path }}),
+  not the network 8080 plane. That human traffic is excluded from the machine-
+  identity audit denominator. Requires a tenant-api image that supports the
+  --human-socket flag (image tag derives from appVersion {{ .Chart.AppVersion }}); an
+  older image crash-loops on the unknown flag. Do NOT flip this via
+  `helm upgrade --reuse-values` — pass humanSocket values explicitly.
+{{- else }}
+
+HUMAN SOCKET (ADR-027 D2-B) — disabled (default). oauth2-proxy upstream stays
+  http://localhost:8080. Enable ONLY once the deployed image supports
+  --human-socket (tag derives from appVersion); pass humanSocket values
+  explicitly, never via --reuse-values. Example:
+    helm upgrade {{ .Release.Name }} helm/tenant-api \
+      --set humanSocket.enabled=true \
+      --set humanSocket.path=/run/ta-human/human.sock
+{{- end }}
 
 NetworkPolicy only works if your CNI ENFORCES it. Flannel (base) and some managed
   "simple" CNIs SILENTLY IGNORE NetworkPolicy: the API server accepts it and this

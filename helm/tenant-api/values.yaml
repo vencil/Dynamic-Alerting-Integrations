@@ -243,6 +243,33 @@ machineIdentity:
   # projected token with `audience: tenant-api` to match.
   audience: tenant-api
 
+# ADR-027 D2-B: human-plane Unix domain socket (GHSA-3g2h-rf85-5rrv L7 root-cause
+# series). When enabled, tenant-api serves the SAME router on a second listener
+# bound to a pod-internal Unix socket, and the oauth2-proxy sidecar points its
+# --upstream at that socket instead of http://localhost:8080. Human (browser)
+# traffic then reaches tenant-api over the socket — a physically pod-internal hop
+# that cannot be reached from the network — instead of the network 8080 plane.
+# The listener a request arrives on is stamped into its context (connection-
+# derived, unforgeable) and used to keep human traffic OUT of the machine-
+# identity audit denominator, so the audit reflects the machine/relay plane only.
+#
+# ⚠ PREREQUISITE: the running tenant-api image must already contain the
+# --human-socket flag (image tag derives from appVersion). Enabling this against
+# an image that predates the flag crash-loops on an unknown flag — enable only
+# once the deployed image supports it (same discipline as machineIdentity).
+# ⚠ Do NOT enable via `helm upgrade --reuse-values` — pass humanSocket values
+# explicitly, matching the machineIdentity guidance above.
+#
+# opt-in (default false) = a safe no-op: single TCP listener, oauth2-proxy
+# upstream unchanged, render byte-identical to pre-D2-B.
+humanSocket:
+  enabled: false
+  # Pod-internal socket path on a shared emptyDir mounted into both the
+  # tenant-api and oauth2-proxy containers. Both run under the pod-level uid/gid
+  # 65534 (podSecurityContext below), so the 0660 socket is reachable by the
+  # sidecar and nothing else.
+  path: /run/ta-human/human.sock
+
 service:
   type: ClusterIP
   # Port 80 → oauth2-proxy (4180) — external traffic
@@ -305,9 +332,11 @@ networkPolicy:
   prometheusNamespace: monitoring
   # Pod-level allow-list for the internal port (8080). ns-level alone over-grants
   # every pod in prometheusNamespace to a header-trusting port — these podSelector
-  # matchLabels narrow it to exactly the three legitimate 8080 clients (incl.
-  # recipe-preview's GET /tenants/{id}/access authz probe, #1004). Change only if
-  # you relabel Prometheus / the threshold-govern CronJob / recipe-preview.
+  # matchLabels narrow it to exactly the four legitimate 8080 clients (incl.
+  # recipe-preview's GET /tenants/{id}/access authz probe, #1004, and da-portal's
+  # relay of the human's /api/v1 requests with an audience-bound SA token,
+  # ADR-027 D2-B O1). Change only if you relabel Prometheus / the threshold-govern
+  # CronJob / recipe-preview / da-portal.
   internalPortAllow:
     prometheus:
       app: prometheus
@@ -315,6 +344,11 @@ networkPolicy:
       component: threshold-govern
     recipePreview:
       app.kubernetes.io/name: recipe-preview
+    # da-portal (ADR-027 D2-B O1): its nginx forwards the human's oauth2-proxy
+    # identity to tenant-api on 8080 with a per-request audience-bound SA token.
+    # pod-scoped like the others; audits as the third kindRelay workload.
+    daPortal:
+      app.kubernetes.io/name: da-portal
   # Egress restriction (ADR-024 §S6). DEFAULT false = egress stays
   # UNrestricted (the policy is Ingress-only), which is the historical
   # posture and lets tenant-api reach Prometheus (metric discovery),
