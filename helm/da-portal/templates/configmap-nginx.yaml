@@ -1,3 +1,14 @@
+{{- /*
+  Relay-token sanity guard (ADR-027 D2-B O1). The relay token rides the
+  /api/v1 reverse proxy to tenant-api; on a static-only (Tier 1) portal —
+  no auth proxy, no tenant-api upstream — it is meaningless AND the njs
+  wiring is actively harmful (old images die at startup on js_import).
+  Reject the combination at render time (mirrors the networkpolicy.yaml
+  fail-closed guards).
+*/ -}}
+{{- if and .Values.portal.relayToken.enabled (or (not .Values.oauth2Proxy.enabled) (not .Values.portal.tenantApiUrl)) }}
+{{- fail "portal.relayToken.enabled=true requires oauth2Proxy.enabled=true AND a non-empty portal.tenantApiUrl: the relay token rides the /api/v1 proxy to tenant-api (ADR-027 D2-B O1); a static-only (Tier 1) portal has no such proxy." }}
+{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -10,6 +21,13 @@ data:
   # Reverse proxy to tenant-api at /api/v1/
   # Security headers, health endpoint, Babel transpilation support
   default.conf: |
+    {{- if .Values.portal.relayToken.enabled }}
+    # ── Relay-token injector (ADR-027 D2-B O1) ─────────────────────────────────
+    # js_set evaluates per request — always-fresh projected token, no reload.
+    # Needs the njs-enabled portal image (see values.yaml relayToken PREREQUISITE).
+    js_import relay from conf.d/relay_token.js;
+    js_set $relay_auth relay.relayAuth;
+    {{- end }}
     # ── Portal Server Block ────────────────────────────────────────────────────
     server {
       listen {{ .Values.portal.listenPort }} default_server;
@@ -64,7 +82,14 @@ data:
         proxy_set_header X-Forwarded-Email  $http_x_forwarded_email;
         proxy_set_header X-Forwarded-User   $http_x_forwarded_user;
         proxy_set_header X-Forwarded-Groups $http_x_forwarded_groups;
+        {{- if .Values.portal.relayToken.enabled }}
+        # Machine-identity relay token (ADR-027 D2-B O1): the pod's audience-
+        # bound SA token — NOT the client's own Authorization — is what reaches
+        # the header-trusting 8080 (empty token value → header dropped, fail-soft).
+        proxy_set_header Authorization $relay_auth;
+        {{- else }}
         proxy_set_header Authorization $http_authorization;
+        {{- end }}
 
         # Connection handling
         proxy_connect_timeout 30s;
@@ -138,3 +163,11 @@ data:
       server localhost:{{ .Values.portal.listenPort }};
       keepalive 16;
     }
+  {{- if .Values.portal.relayToken.enabled }}
+  # Dual-copy of components/da-portal/relay_token.js: this configmap volume
+  # hides the image's /etc/nginx/conf.d, so the njs module must ship here too.
+  # Byte-identical to the image copy — pinned by
+  # tests/helm/test_portal_relay_token_guard.py.
+  relay_token.js: |
+    {{- .Files.Get "files/relay_token.js" | trimSuffix "\n" | nindent 4 }}
+  {{- end }}

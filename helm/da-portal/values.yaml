@@ -17,6 +17,27 @@ portal:
   tenantApiUrl: "http://tenant-api.tenant-api.svc.cluster.local:8080"
   # recipe-preview URL for reverse proxy /preview (#657 would-fire preview)
   recipePreviewUrl: "http://recipe-preview.monitoring.svc.cluster.local:8082"
+  # Machine-identity relay token (ADR-027 D2-B O1, GHSA-3g2h-rf85-5rrv series).
+  # When enabled, nginx reads the pod's audience-bound projected SA token
+  # (aud=tenant-api, TTL 900s — hardcoded in the deployment template, mirroring
+  # helm/recipe-preview) on EVERY /api/v1 request and presents it as
+  # `Authorization: Bearer`, making da-portal the third verified relay in
+  # tenant-api's machine-identity audit. Audit-only: the token never gates the
+  # user's authorization (X-Forwarded-* stays the authz input); a missing or
+  # unreadable token drops the header and never breaks the request.
+  # ⛔ PREREQUISITE: the da-portal image must ship the njs main config
+  # (portal/v2.10.0+). Older images FAIL LOUD at startup (unknown directive
+  # "js_import") — leave false until the image line carries it. Also requires
+  # the tenant-api chart >= 2.9.13 (da-portal admitted on the port-8080 netpol).
+  # If flipped on with an old image BY MISTAKE, flip back immediately: the
+  # ConfigMap mutates in place, so a container restart of the still-running
+  # old pod would also hit js_import and take the portal down.
+  # NOTE: `verified relay` attests the da-portal WORKLOAD, not that a given
+  # request passed oauth2-proxy — traffic reaching nginx's internal port
+  # directly is relayed with the same token (contained by the NetworkPolicy;
+  # relay trust model, ADR-027 documented residual).
+  relayToken:
+    enabled: false
 
 # nginx configuration
 nginx:
