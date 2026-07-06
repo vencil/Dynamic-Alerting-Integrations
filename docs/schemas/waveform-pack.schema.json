@@ -1,0 +1,238 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "waveform-pack.schema.json",
+  "title": "Fault-Waveform Pack (ADR-030 decision-layer validation, PR-1)",
+  "description": "SME-elicited fault signature pack consumed by scripts/tools/dx/waveform_compile.py. Two hard tiers: SME semantic fields (validator says 退回 SME on gaps) vs platform fields (validator says 平台補填). Anti-tautology: source enum forbids deriving waveforms from rule thresholds; independent_of_rule_conversion is a const-true attestation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["pack", "signatures"],
+  "properties": {
+    "pack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "domain",
+        "author_role",
+        "independent_of_rule_conversion",
+        "readback_signed_off"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "description": "Pack slug; used as output file stem by --compile."
+        },
+        "domain": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Domain of the SME (e.g. oracle-dba, storage, network)."
+        },
+        "author_role": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Role of the person the semantics came from (blind-write governance audit trail)."
+        },
+        "independent_of_rule_conversion": {
+          "const": true,
+          "description": "Attestation: waveform parameters were provided by an SME NOT involved in writing/converting the VM rules, and were NOT reverse-engineered from rule thresholds (ADR-030 D2 anti-tautology). Must be literally true."
+        },
+        "readback_signed_off": {
+          "type": "boolean",
+          "description": "Whether the SME confirmed the --render-readback output matches their intent (readback sign-off gate)."
+        }
+      }
+    },
+    "signatures": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/signature" }
+    }
+  },
+  "definitions": {
+    "duration": {
+      "type": "string",
+      "pattern": "^([0-9]+(s|m|h|d|w))+$",
+      "description": "promtool-style duration string, e.g. 30s / 5m / 2h / 1h30m."
+    },
+    "metric_name": {
+      "type": "string",
+      "pattern": "^[a-zA-Z_:][a-zA-Z0-9_:]*$"
+    },
+    "labels": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$" },
+      "additionalProperties": { "type": "string" }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "description",
+        "source",
+        "normal_level",
+        "fault_level",
+        "onset_duration",
+        "hold_duration",
+        "dips_back",
+        "agent_keeps_reporting",
+        "must_detect",
+        "metric",
+        "metric_kind",
+        "shape_class",
+        "fault_class"
+      ],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "SME field: free-text description of the fault."
+        },
+        "source": {
+          "enum": ["real-incident", "vendor-doc", "expert-experience", "self-test-seed"],
+          "description": "SME field: provenance of the signature (anti-tautology enum). self-test-seed packs are compiler-gated behind --allow-selftest and are excluded from catch-rate numerator/denominator."
+        },
+        "normal_level": {
+          "type": "number",
+          "description": "SME field: normal operating level, native units. Direction-neutral: fault_level may be above OR below."
+        },
+        "fault_level": {
+          "type": "number",
+          "description": "SME field: level during the fault, native units. Real magnitude, NOT a rule threshold."
+        },
+        "onset_duration": {
+          "$ref": "#/definitions/duration",
+          "description": "SME field: how fast things degrade from normal to fault level."
+        },
+        "hold_duration": {
+          "$ref": "#/definitions/duration",
+          "description": "SME field: how long the fault level persists."
+        },
+        "typical_wobble": {
+          "type": "number",
+          "minimum": 0,
+          "description": "SME field: everyday wobble amplitude in native units (NOT a percentage). Required unless metric_kind is boolean (noise exemption, auto-justified in output metadata)."
+        },
+        "dips_back": {
+          "type": "boolean",
+          "description": "SME field: does the signal temporarily dip back toward normal during the fault?"
+        },
+        "dip_detail": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["depth", "period"],
+          "properties": {
+            "depth": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Dip depth toward normal_level, native units."
+            },
+            "period": { "$ref": "#/definitions/duration" }
+          },
+          "description": "SME field: required when dips_back is true."
+        },
+        "agent_keeps_reporting": {
+          "type": "boolean",
+          "description": "SME field: does the monitoring agent keep emitting data during the fault?"
+        },
+        "must_detect": {
+          "type": "boolean",
+          "description": "SME field: would you want to be paged at 3am for this? (catch-rate ground truth)"
+        },
+        "metric": {
+          "$ref": "#/definitions/metric_name",
+          "description": "Platform field: exporter metric name, taken from the exporter catalog (NOT from a rule pack)."
+        },
+        "metric_kind": {
+          "enum": ["gauge", "counter", "boolean"],
+          "description": "Platform field: compile semantics. gauge=direct level; counter=levels are RATES, integrated into a monotone cumulative series; boolean=noise exemption + flapping/staleness-absence/fan-out variants."
+        },
+        "companion_series": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["metric", "role", "level"],
+            "properties": {
+              "metric": { "$ref": "#/definitions/metric_name" },
+              "labels": { "$ref": "#/definitions/labels" },
+              "role": { "enum": ["denominator", "static"] },
+              "metric_kind": {
+                "enum": ["gauge", "counter"],
+                "default": "gauge",
+                "description": "Platform field: gauge = constant level; counter = level is a per-second RATE, integrated to a cumulative ramp so rate(companion) in a ratio denominator is non-zero (a constant counter would make rate()=0 → ratio divides by zero)."
+              },
+              "level": {
+                "type": "number",
+                "description": "Steady-state level: gauge = the value; counter = the per-second rate."
+              }
+            }
+          },
+          "description": "Platform field: denominators / companions for ratio- or join-shaped alerts."
+        },
+        "shape_class": {
+          "enum": ["ramp", "spike", "plateau", "step"],
+          "description": "Platform field: waveform envelope class (maps back to ADR-030 R2-5 shape taxonomy)."
+        },
+        "noise_kind": {
+          "enum": ["gaussian", "uniform"],
+          "default": "gaussian",
+          "description": "Platform field: noise distribution. Compiler default; never asked of the SME."
+        },
+        "time_axis": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "jitter_s": {
+              "type": "number",
+              "minimum": 0,
+              "exclusiveMaximum": 15,
+              "description": "Per-sample timestamp jitter bound in seconds. Must stay below STEP/2 (=15) so jitter can never reorder samples — an out-of-order counter series reads as a phantom rate() reset. Materialization (b) only; (a) promtool values: notation cannot express it."
+            },
+            "dropout_pattern": {
+              "oneOf": [
+                { "type": "string", "pattern": "^every:[1-9][0-9]*$" },
+                { "type": "array", "items": { "type": "integer", "minimum": 0 } }
+              ],
+              "description": "Scrape dropout: 'every:N' drops every Nth sample (index>0), or an explicit list of 0-based sample indices."
+            },
+            "staleness_tail": {
+              "$ref": "#/definitions/duration",
+              "description": "Truncate this much duration off the series tail (staleness / agent death at the end)."
+            }
+          },
+          "description": "Platform field: time-axis perturbations (jitter / dropout / staleness)."
+        },
+        "fault_class": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "description": "Platform field: slug derived from the SME description; assigned by the platform engineer."
+        },
+        "labels": {
+          "$ref": "#/definitions/labels",
+          "description": "Platform field: topology labels. PR-1 seeds use neutral placeholders; PR-2 wires the harness."
+        },
+        "min_value": {
+          "type": "number",
+          "description": "Platform field (optional): physical lower bound for non-negative metrics (queue depth / bytes / counts). When set, synthesized gauge samples are clamped up to it (recorded in auto_adjustments). Omit for metrics that can legitimately go negative (deltas / temps / drift) — do NOT default to 0."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "dips_back": { "const": true } },
+            "required": ["dips_back"]
+          },
+          "then": { "required": ["dip_detail"] }
+        },
+        {
+          "if": {
+            "properties": { "metric_kind": { "const": "boolean" } },
+            "required": ["metric_kind"]
+          },
+          "else": { "required": ["typical_wobble"] }
+        }
+      ]
+    }
+  }
+}

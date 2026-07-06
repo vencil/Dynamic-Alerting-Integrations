@@ -85,6 +85,7 @@ lang: zh
 |------|------|
 | `_atomic_write.py` | Atomic write helper for regen tools (v2.8.0 Trap #60 mitigation). |
 | `_recipe_preview.py` | recipe would-fire preview core (#657 P2). |
+| `_waveform_lib.py` | fault-waveform pack 合成核心（ADR-030 決策層驗證 PR-1，純函式庫） |
 | `add_frontmatter.py` | Add YAML front matter to documentation files for MkDocs/Docusaurus integration. |
 | `analyze_bench_history.py` | Aggregate bench-record nightly history into per-benchmark stats. |
 | `analyze_tier1_fp_rate.py` | Tier 1 bench-gate friction-rate observer (issue #433 W3). |
@@ -126,6 +127,7 @@ lang: zh
 | `sync_schema.py` | Check tenant reserved-key drift across Schema / Go / Python. |
 | `sync_tool_registry.py` | 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP + JSX frontmatter |
 | `tenant_verify.py` | Verify a tenant's effective config — print merged_hash and source_hash. |
+| `waveform_compile.py` | fault-waveform pack 驗證 / 回讀 / 物化編譯器（ADR-030 決策層驗證 PR-1） |
 
 ## 文件 Lint / CI 工具
 

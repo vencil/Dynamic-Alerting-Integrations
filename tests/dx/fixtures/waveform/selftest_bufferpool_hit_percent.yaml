@@ -1,0 +1,38 @@
+# self-test seed: 比值型（命中率下墜）＋ companion_series 分母。
+# 方向中性示例：fault_level < normal_level（下墜型故障）。
+# dips_back=true → dip_detail 必填、震盪變體用 SME 宣告行為（繼承 must_detect）。
+pack:
+  id: selftest-bufferpool-hit-percent
+  domain: selftest
+  author_role: tool-selftest
+  independent_of_rule_conversion: true
+  readback_signed_off: true
+
+signatures:
+  - description: "自測用：緩衝池命中率從 95% 掉到 40%，期間偶爾短暫回升"
+    source: self-test-seed
+    normal_level: 95
+    fault_level: 40
+    onset_duration: 10m
+    hold_duration: 1h
+    typical_wobble: 2
+    dips_back: true
+    dip_detail:
+      depth: 30
+      period: 5m
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: selftest_bufferpool_hit_percent
+    metric_kind: gauge
+    companion_series:
+      - metric: selftest_bufferpool_reads_total_rate
+        labels:
+          resource: selftest-pool
+        role: denominator
+        level: 1200
+    shape_class: ramp
+    noise_kind: uniform
+    fault_class: hit-ratio-drop
+    labels:
+      instance: selftest-host-01
+      pool: selftest-pool

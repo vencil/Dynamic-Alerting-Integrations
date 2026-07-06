@@ -506,7 +506,10 @@ jobs:
         # uses it for .dockerignore baseline matching; its unit tests import
         # the module, so the dep must be explicit here (not relied on
         # transitively).
-        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec
+        # jsonschema: waveform_compile.py (ADR-030 fault-waveform packs) —
+        # without it tests/dx/test_waveform_compile.py importorskips and the
+        # governance-gate negative tests silently drop out of CI.
+        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema
 
       - name: Collect tests
         # CI skips 3 slow/benchmark test suites for speed:

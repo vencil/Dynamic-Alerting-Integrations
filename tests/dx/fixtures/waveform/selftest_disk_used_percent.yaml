@@ -1,0 +1,30 @@
+# self-test seed: gauge ramp（磁碟用量爬升）＋ dropout 時間軸擾動。
+# source: self-test-seed → 編譯器 gate（--allow-selftest）、PR-3 報告強制排除。
+pack:
+  id: selftest-disk-used-percent
+  domain: selftest
+  author_role: tool-selftest
+  independent_of_rule_conversion: true
+  readback_signed_off: true
+
+signatures:
+  - description: "自測用：磁碟空間在半小時內從常態爬升到近滿，並持續兩小時"
+    source: self-test-seed
+    normal_level: 42
+    fault_level: 96
+    onset_duration: 30m
+    hold_duration: 2h
+    typical_wobble: 1.5
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: selftest_disk_used_percent
+    metric_kind: gauge
+    shape_class: ramp
+    noise_kind: gaussian
+    time_axis:
+      dropout_pattern: "every:10"
+    fault_class: disk-fill
+    labels:
+      instance: selftest-host-01
+      mount: selftest-data

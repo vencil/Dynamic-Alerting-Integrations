@@ -1,0 +1,29 @@
+# self-test seed: boolean（服務存活 1→0）。
+# boolean 語義：噪音欄豁免（metadata 記 auto-justification）；變體改製為
+# flapping / staleness-absence（樣本提早結束＝把「down==absent 而非 0」
+# 盲區變成可注入測項）/ fan-out。agent_keeps_reporting=false → absence
+# 變體屬 SME 宣告行為、繼承 must_detect。
+pack:
+  id: selftest-service-up
+  domain: selftest
+  author_role: tool-selftest
+  independent_of_rule_conversion: true
+  readback_signed_off: true
+
+signatures:
+  - description: "自測用：服務整個掛掉，探測值 1 掉 0，且代理跟著斷線不再回報"
+    source: self-test-seed
+    normal_level: 1
+    fault_level: 0
+    onset_duration: 30s
+    hold_duration: 30m
+    dips_back: false
+    agent_keeps_reporting: false
+    must_detect: true
+    metric: selftest_service_up
+    metric_kind: boolean
+    shape_class: step
+    fault_class: service-down
+    labels:
+      instance: selftest-host-01
+      service: selftest-svc
