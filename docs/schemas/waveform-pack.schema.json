@@ -157,9 +157,14 @@
               "metric": { "$ref": "#/definitions/metric_name" },
               "labels": { "$ref": "#/definitions/labels" },
               "role": { "enum": ["denominator", "static"] },
+              "metric_kind": {
+                "enum": ["gauge", "counter"],
+                "default": "gauge",
+                "description": "Platform field: gauge = constant level; counter = level is a per-second RATE, integrated to a cumulative ramp so rate(companion) in a ratio denominator is non-zero (a constant counter would make rate()=0 → ratio divides by zero)."
+              },
               "level": {
                 "type": "number",
-                "description": "Steady-state level for the companion series."
+                "description": "Steady-state level: gauge = the value; counter = the per-second rate."
               }
             }
           },
@@ -206,6 +211,10 @@
         "labels": {
           "$ref": "#/definitions/labels",
           "description": "Platform field: topology labels. PR-1 seeds use neutral placeholders; PR-2 wires the harness."
+        },
+        "min_value": {
+          "type": "number",
+          "description": "Platform field (optional): physical lower bound for non-negative metrics (queue depth / bytes / counts). When set, synthesized gauge samples are clamped up to it (recorded in auto_adjustments). Omit for metrics that can legitimately go negative (deltas / temps / drift) — do NOT default to 0."
         }
       },
       "allOf": [

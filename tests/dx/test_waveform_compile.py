@@ -603,3 +603,48 @@ def test_noise_actually_perturbs():
     diffs = [abs(n - b) for b, n in zip(base.samples, noise.samples)
              if b is not None and n is not None]
     assert any(d > 1e-9 for d in diffs), "noise 變體與 base 完全相同 = 公式失效"
+
+
+# ── Gemini 外審盲區回歸 teeth（jitter 雙軌 / counter companion / 負值 gauge） ──
+
+def test_promtool_masks_jittered_series(tmp_path):
+    """Gemini 盲區1: 含 jitter 的 series 在 promtool 物化 (a) 以全 gap 呈現
+    （不可對帳），而非假裝無 jitter 的資料——否則 (a)/(b) 對帳誤判引擎差異。"""
+    import re
+    def mut(pack):
+        pack["signatures"][0].setdefault("time_axis", {})["jitter_s"] = 10
+    p = _mutate_fixture(tmp_path, _DISK, mut)
+    text = wf.materialize_promtool(_series_of(p))
+    value_lines = [ln for ln in text.splitlines() if re.match(r"\s*values: '", ln)]
+    assert value_lines
+    for ln in value_lines:
+        toks = re.match(r"\s*values: '(.*)'", ln).group(1).split()
+        assert toks and all(t == "_" for t in toks), f"jittered series 應全 gap: {ln}"
+
+
+def test_counter_companion_integrates_to_ramp(tmp_path):
+    """Gemini 盲區2: counter 角色的 companion 積分成累積斜線（rate 非零），
+    否則常數直線 → rate()=0 → 比值除以零（+Inf/NaN），告警永不誠實計分。"""
+    def mut(pack):
+        pack["signatures"][0]["companion_series"][0]["metric_kind"] = "counter"
+    p = _mutate_fixture(tmp_path, _RATIO, mut)
+    comp = next(s for s in _series_of(p) if s.expects == "companion")
+    vals = [v for v in comp.samples if v is not None]
+    assert vals and all(b > a for a, b in zip(vals, vals[1:])), "counter companion 非單調"
+    assert any("counter" in n for n in comp.auto_adjustments)
+
+
+def test_min_value_clamps_negative_gauge(tmp_path):
+    """Gemini 盲區3: min_value 設定時，gauge 合成的負值 clamp 至下界 + 留痕
+    （非負指標物理保護；不設則不動，避免對可負指標誤傷）。"""
+    def mut(pack):
+        sig = pack["signatures"][0]
+        sig["normal_level"] = 5
+        sig["fault_level"] = 3
+        sig["typical_wobble"] = 20   # 大 wobble → noise 會壓到負
+        sig["min_value"] = 0
+    p = _mutate_fixture(tmp_path, _DISK, mut)
+    noise = next(s for s in _series_of(p) if s.variant == "noise")
+    vals = [v for v in noise.samples if v is not None]
+    assert all(v >= 0 for v in vals), "min_value clamp 後不應有負值"
+    assert any("min_value" in n for n in noise.auto_adjustments), "clamp 須留痕"
