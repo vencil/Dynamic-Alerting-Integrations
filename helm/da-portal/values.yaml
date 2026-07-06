@@ -39,11 +39,6 @@ portal:
   relayToken:
     enabled: false
 
-# nginx configuration
-nginx:
-  # Enable custom nginx.conf from configmap-nginx.yaml
-  enabled: true
-
 # oauth2-proxy sidecar configuration
 oauth2Proxy:
   enabled: true

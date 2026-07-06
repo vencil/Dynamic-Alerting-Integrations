@@ -57,10 +57,6 @@ portal:
   # All endpoints require valid Bearer token (from OAuth2-proxy) in Authorization header.
   tenantApiUrl: "http://tenant-api.tenant-api.svc.cluster.local:8080"
 
-# nginx configuration
-nginx:
-  enabled: true
-
 # Tier 2: ENABLED — OAuth2-proxy provides authentication layer
 # 啟用 OAuth2-proxy：作為身份驗證層保護 Portal
 oauth2Proxy:
