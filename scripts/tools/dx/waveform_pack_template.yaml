@@ -18,8 +18,10 @@ pack:
   domain: example-domain      # 平台填：SME 的領域（如 oracle-dba / storage）
   author_role: dba            # 平台填：語意來源者的角色（治理審計軌跡）
   # 平台填：盲寫 attestation——確認波形參數由「未參與撰寫/轉換 VM 規則」
-  # 的獨立領域專家提供、且未從規則閾值反推。必須誠實為 true 才可入庫。
-  independent_of_rule_conversion: true
+  # 的獨立領域專家提供、且未從規則閾值反推。預設 false（未確認前不得複製
+  # 貼上直接改 true——若模板預設 true 剛好等於 schema 要求值、就測不出
+  # 「有沒有真的做過確認」，需明確改成 true 才代表誠實確認過）。
+  independent_of_rule_conversion: false
   # 平台填：SME 回讀簽核（--render-readback 輸出經 SME 確認）後改 true。
   readback_signed_off: false
 
