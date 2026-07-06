@@ -117,11 +117,22 @@ class TestValuesYamlValid:
         assert "listenPort" in portal
         assert "tenantApiUrl" in portal
 
-    def test_nginx_configuration(self, values_yaml_content: dict) -> None:
-        """驗證 nginx 設定存在。"""
-        assert "nginx" in values_yaml_content
-        nginx = values_yaml_content["nginx"]
-        assert "enabled" in nginx
+    @pytest.mark.parametrize(
+        "values_file", ["values.yaml", "values-tier1.yaml", "values-tier2.yaml"]
+    )
+    def test_no_dead_nginx_block(self, chart_dir: Path, values_file: str) -> None:
+        """驗證頂層 `nginx:` 死值區塊不存在（防再漂移）。
+
+        `.Values.nginx` 從未被任何 template 消費（`resources.nginx` 為不同 key、
+        有被 deployment.yaml 消費，不在此限）；設 `nginx.enabled=false` 毫無作用，
+        屬使用者誤導 → 整塊移除，並以本測試防止再被加回而不接線。
+        """
+        with open(chart_dir / values_file, encoding="utf-8") as f:
+            values = yaml.safe_load(f)
+        assert "nginx" not in values, (
+            f"{values_file} 不應有頂層 nginx: 區塊 — .Values.nginx 無任何 "
+            "template 消費（死值）；如需新增請先在 template 接線"
+        )
 
     def test_oauth2_proxy_configuration(self, values_yaml_content: dict) -> None:
         """驗證 oauth2Proxy 設定存在且完整。"""

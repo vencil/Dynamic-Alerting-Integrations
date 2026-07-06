@@ -46,11 +46,6 @@ portal:
   tenantApiUrl: ""
   recipePreviewUrl: ""
 
-# nginx configuration
-nginx:
-  # Enable simple nginx serving static assets only
-  enabled: true
-
 # DISABLED in Tier 1: OAuth2-proxy not needed for Git-Native teams
 # 不啟用 OAuth2-proxy（Git-Native 團隊無需身份驗證）
 oauth2Proxy:
