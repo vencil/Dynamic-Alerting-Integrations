@@ -493,6 +493,14 @@ def synthesize_pack(pack: dict, seed: int = DEFAULT_SEED,
                     notes.append(
                         f"counter: {clamped} negative instantaneous rate sample(s) "
                         f"clamped to 0 before integration (monotonicity)")
+            elif kind == "gauge" and sig.get("min_value") is not None:
+                min_v = float(sig["min_value"])
+                clamped_n = sum(1 for v in values if v < min_v)
+                if clamped_n:
+                    values = [max(min_v, v) for v in values]
+                    notes.append(
+                        f"gauge: {clamped_n} sample(s) below min_value={min_v} "
+                        f"clamped up (physical lower-bound guard)")
             samples, gaps, truncated = _apply_time_axis(values, time_axis)
             series = Series(
                 metric=sig["metric"],
@@ -513,10 +521,31 @@ def synthesize_pack(pack: dict, seed: int = DEFAULT_SEED,
                 comp_labels = dict(series.labels)
                 comp_labels.update(comp.get("labels") or {})
                 comp_level = float(comp["level"])
+                comp_kind = comp.get("metric_kind", "gauge")
+                comp_notes = [f"companion role={comp['role']} of {sig['metric']}"]
+                if comp_kind == "counter":
+                    # A constant counter renders rate()==0, so a ratio's
+                    # denominator would divide by zero (+Inf when the
+                    # numerator fires, NaN otherwise) — integrate to a
+                    # cumulative ramp instead, mirroring _integrate_counter.
+                    cum = 0.0
+                    comp_samples: list[Optional[float]] = []
+                    for s in samples:
+                        if s is None:
+                            comp_samples.append(None)
+                            continue
+                        cum += comp_level * STEP
+                        comp_samples.append(round(cum, 6))
+                    comp_notes.append(
+                        "counter: companion level treated as a per-second rate, "
+                        "integrated to a cumulative ramp (avoids rate()==0 → "
+                        "ratio divide-by-zero)")
+                else:
+                    comp_samples = [None if s is None else comp_level for s in samples]
                 out.append(Series(
                     metric=comp["metric"],
                     labels=comp_labels,
-                    samples=[None if s is None else comp_level for s in samples],
+                    samples=comp_samples,
                     variant=variant,
                     expects="companion",
                     signature_index=si,
@@ -524,7 +553,7 @@ def synthesize_pack(pack: dict, seed: int = DEFAULT_SEED,
                     source=sig["source"],
                     jitter_s=jitter_s,
                     truncated=series.truncated,
-                    auto_adjustments=[f"companion role={comp['role']} of {sig['metric']}"],
+                    auto_adjustments=comp_notes,
                     rng_key=f"{seed}|{pack_id}|{si}|{variant}|{fan_index or 0}|comp{ci}",
                 ))
     return out
@@ -535,25 +564,33 @@ def synthesize_pack(pack: dict, seed: int = DEFAULT_SEED,
 def materialize_promtool(series_list: list[Series]) -> str:
     """Materialization (a): promtool fixture fragment (``values:`` notation,
     ``_`` == gap). Reference only — divergence-explanation input, NOT the
-    catch-rate authority (that is (b)/VM). Cannot express jitter: when any
-    series declares jitter the fragment is explicitly annotated 不含 jitter."""
+    catch-rate authority (that is (b)/VM).
+
+    Cannot express jitter: promtool's ``values:`` notation has no per-sample
+    timestamp, so a jittered series rendered here with its "clean" values
+    would silently disagree with materialization (b) on fire/no-fire near an
+    eval-window boundary — that divergence would then be misread as a
+    MetricsQL engine difference instead of a data-fidelity artifact of this
+    tool. So any series carrying jitter_s > 0 is masked to all-gap here
+    (reference-only, no fabricated agreement); it can only be judged via
+    materialization (b) / vmalert-replay."""
     lines = [
         "# waveform materialization (a) — promtool fixture fragment",
         "# role: Prometheus-behaviour REFERENCE only; catch-rate authority is materialization (b)/VM",
         f"# step: {STEP}s, origin: index 0 == T0 ({T0} epoch seconds)",
     ]
-    jittered = sorted({s.jitter_s for s in series_list if s.jitter_s > 0})
-    if jittered:
-        jitter_txt = "/".join(_fmt(j) for j in jittered)
-        lines.append(
-            "# ⚠️ 本物化【不含 jitter】：promtool values: 記法無 per-sample timestamp，"
-            f"結構上表達不了 jitter_s={jitter_txt}"
-            "；jitter 僅存在於物化 (b)（vm import）")
     lines.append(f"interval: {STEP}s")
     lines.append("input_series:")
     for s in series_list:
-        tokens = " ".join("_" if v is None else _fmt(v) for v in s.samples)
         lines.append(f"  - series: '{s.metric}{_fmt_labels(s.labels)}'")
+        if s.jitter_s > 0:
+            lines.append(
+                f"    # ⚠️ jitter_s={_fmt(s.jitter_s)}：promtool values: 記法無 "
+                "per-sample timestamp、結構上表達不了 jitter，此 series 全 gap"
+                "（不可對帳）；只能在物化 (b)（vm import / vmalert-replay）判定")
+            tokens = " ".join("_" for _ in s.samples)
+        else:
+            tokens = " ".join("_" if v is None else _fmt(v) for v in s.samples)
         lines.append(f"    values: '{tokens}'")
     return "\n".join(lines) + "\n"
 

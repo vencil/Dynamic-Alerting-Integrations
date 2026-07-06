@@ -361,12 +361,13 @@ def test_dropout_gap_positions_in_promtool_materialization():
 
 
 def test_jitter_annotation_and_vm_only():
-    """jitter 只進物化 (b)；(a) 帶顯性「不含 jitter」標註。"""
+    """jitter 只進物化 (b)；(a) 對含 jitter 的 series 全 gap 遮罩（盲區1 修正：
+    不可假裝有可對帳資料，見 test_promtool_masks_jittered_series 覆蓋細節）。"""
     err_series = _series_of(_ERRORS)
     frag = wf.materialize_promtool(err_series)
-    assert "不含 jitter" in frag
+    assert "jitter" in frag  # per-series 遮罩註記仍提及 jitter
     disk_series = _series_of(_DISK)
-    assert "不含 jitter" not in wf.materialize_promtool(disk_series)
+    assert "jitter" not in wf.materialize_promtool(disk_series)
 
     vm = wf.materialize_vm(err_series)
     base = next(s for s in err_series if s.variant == "base")
