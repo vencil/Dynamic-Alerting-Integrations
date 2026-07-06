@@ -47,6 +47,16 @@ spec:
               mountPath: /var/cache/nginx
             - name: nginx-tmp
               mountPath: /var/run
+            {{- if .Values.portal.relayToken.enabled }}
+            # Audience-bound projected token for tenant-api's machine-identity
+            # audit (ADR-027 D2-B O1). readOnly; relay_token.js reads it per
+            # request (kubelet rotates the file at ~80% TTL, transparent to
+            # the reader). Nested under the nginx-tmp /var/run mount — k8s
+            # orders mounts by path, parent first.
+            - name: tenant-api-token
+              mountPath: /var/run/secrets/tokens
+              readOnly: true
+            {{- end }}
             {{- if .Values.customData.enabled }}
             - name: custom-data
               mountPath: /usr/share/nginx/html/custom
@@ -151,6 +161,24 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 32Mi
+
+        {{- if .Values.portal.relayToken.enabled }}
+        # Audience-bound machine-identity token for tenant-api's TokenReview
+        # audit (ADR-027 D2-B O1). The HARD `audience: tenant-api` binding is
+        # what stops a default-audience pod token from being accepted by
+        # tenant-api's TokenReview; kubelet auto-rotates it. This is an
+        # explicit, orthogonal mount — the SA keeps
+        # automountServiceAccountToken:false. Mirrors helm/recipe-preview.
+        - name: tenant-api-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: tenant-api-token
+                  audience: tenant-api
+                  # 900s (15m): caps a stolen-token replay window; well above
+                  # the apiserver 600s floor, kubelet refreshes at ~80% (~12m).
+                  expirationSeconds: 900
+        {{- end }}
 
         {{- if .Values.customData.enabled }}
         {{- if eq .Values.customData.type "configMap" }}

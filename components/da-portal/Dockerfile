@@ -13,6 +13,9 @@
 #   -v ./my-flows.json:/usr/share/nginx/html/assets/flows.json
 #   -v ./my-nginx.conf:/etc/nginx/conf.d/default.conf
 
+# NB: when bumping this base tag, re-diff the stock /etc/nginx/nginx.conf
+# against components/da-portal/nginx-main.conf (self-carried main config —
+# must stay in lockstep; see that file's header).
 FROM nginx:1.30-alpine3.23
 
 LABEL org.opencontainers.image.title="da-portal" \
@@ -45,7 +48,14 @@ RUN apk --no-cache upgrade && \
 RUN rm -rf /usr/share/nginx/html/*
 
 # ── Nginx config ──────────────────────────────────────────────
+# Main config is self-carried: the stock one loads no dynamic modules, and the
+# relay-token injector (ADR-027 D2-B O1) needs ngx_http_js_module (njs — kept
+# by the hardening apk-del above). In Helm deployments the configmap volume
+# hides the image's /etc/nginx/conf.d, so relay_token.js also ships in that
+# configmap (dual-copy pinned by tests/helm/test_portal_relay_token_guard.py).
+COPY components/da-portal/nginx-main.conf /etc/nginx/nginx.conf
 COPY --chown=nginx:nginx components/da-portal/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --chown=nginx:nginx components/da-portal/relay_token.js /etc/nginx/conf.d/relay_token.js
 
 # ── Interactive Tools Hub (index + changelog) ─────────────────
 COPY --chown=nginx:nginx docs/interactive/ /usr/share/nginx/html/interactive/

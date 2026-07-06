@@ -10,6 +10,30 @@ SECURITY (GHSA-3g2h-rf85-5rrv) — header-trust surface:
   shipped here is a REQUIRED control, not optional — this is why
   oauth2Proxy.enabled=false forbids a non-empty reverse-proxy target (render fails).
 
+{{- if .Values.portal.relayToken.enabled }}
+RELAY TOKEN (ADR-027 D2-B O1): ENABLED — nginx presents the pod's
+  audience-bound SA token (aud=tenant-api, TTL 900s, kubelet-rotated) as
+  Authorization: Bearer on every /api/v1 request; tenant-api's machine-identity
+  audit sees da-portal as its third verified relay. Audit-only: the token never
+  gates user authorization.
+  ⚠ PREREQUISITE: needs the njs-enabled da-portal image (portal/v2.10.0+) —
+  older images FAIL LOUD at startup (unknown directive "js_import"). Also
+  requires the tenant-api chart >= 2.9.13 (da-portal admitted on the port-8080
+  NetworkPolicy).
+  If this was flipped on with an OLD image by mistake, flip back IMMEDIATELY —
+  the ConfigMap mutates in place, so a container restart of the still-running
+  old pod would also hit js_import and take the portal down.
+  Verify after flip: tenant-api's machine-identity audit should converge
+  no_token -> verified for this workload (audit-only success is otherwise
+  invisible; an unreadable token logs "relay token unreadable" in the nginx
+  error log and still degrades to no_token).
+{{- else }}
+RELAY TOKEN (ADR-027 D2-B O1): disabled — /api/v1 requests carry no machine
+  identity, so tenant-api's port-8080 audit records this plane as no_token.
+  Flip portal.relayToken.enabled=true once the portal image line is
+  portal/v2.10.0+ AND the tenant-api chart is >= 2.9.13.
+{{- end }}
+
 NetworkPolicy only works if your CNI ENFORCES it. Flannel (base) and some managed
   "simple" CNIs SILENTLY IGNORE NetworkPolicy: the API server accepts it and this
   install succeeds, but traffic is left unrestricted (security theater). Use a

@@ -134,6 +134,28 @@ helm install da-portal helm/da-portal -n monitoring \
   --set 'portal.tenantApiUrl=http://tenant-api.db-a.svc.cluster.local:8080'
 ```
 
+#### Relay Token (ADR-027 D2-B O1)
+
+When `portal.relayToken.enabled=true`, nginx reads the pod's audience-bound
+projected ServiceAccount token (`aud=tenant-api`, TTL 900s, kubelet-rotated)
+on every `/api/v1` request and presents it as `Authorization: Bearer` to
+tenant-api's machine-identity audit — da-portal becomes the third verified
+relay, after threshold-govern and recipe-preview (GHSA-3g2h-rf85-5rrv
+hardening series). Audit-only: user authorization still rides the
+oauth2-proxy `X-Forwarded-*` headers; a missing/unreadable token drops the
+header and never breaks the request.
+
+⚠ **Prerequisites**: the da-portal image must carry the njs main config
+(`portal/v2.10.0`+; older images fail loud at startup on `js_import`), and
+the tenant-api chart must be ≥ 2.9.13 (da-portal admitted on the port-8080
+NetworkPolicy).
+
+```bash
+helm upgrade da-portal helm/da-portal -n monitoring \
+  -f your-values.yaml \
+  --set portal.relayToken.enabled=true
+```
+
 #### Custom nginx Config
 
 Provide a custom nginx configuration:
@@ -191,6 +213,7 @@ helm install da-portal helm/da-portal -n monitoring \
 |-----|------|---------|-------------|
 | portal.listenPort | int | 80 | nginx listening port |
 | portal.tenantApiUrl | string | `http://tenant-api.tenant-api.svc.cluster.local:8080` | Reverse proxy target |
+| portal.relayToken.enabled | bool | false | Inject the audience-bound SA relay token on /api/v1 (ADR-027 D2-B O1; needs the portal/v2.10.0+ image) |
 
 ### OAuth2 Proxy
 
