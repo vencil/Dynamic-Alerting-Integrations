@@ -239,6 +239,26 @@ class TestNginxConfigmapHasProxy:
             "configmap-nginx.yaml 應參考 .Values.portal.tenantApiUrl"
         )
 
+    def test_nginx_proxy_blocks_are_conditional(self, template_dir: Path) -> None:
+        """兩個 proxy location 區塊必須以各自的 upstream URL 為條件渲染。
+
+        Tier 1（values-tier1.yaml）依 GHSA-3g2h-rf85-5rrv 開放代理防護要求
+        兩個 URL 皆為空字串；若無條件渲染，空值內插會產出無 scheme 的
+        `proxy_pass /api/v1/;` → `nginx -t` 直接 fail（invalid URL prefix）
+        → 靜態 portal pod 啟動即 crashloop。render 層驗證見
+        tests/helm/test_portal_static_tier_guard.py。
+        """
+        configmap_file = template_dir / "configmap-nginx.yaml"
+        with open(configmap_file, encoding="utf-8") as f:
+            content = f.read()
+
+        assert "{{- if .Values.portal.tenantApiUrl }}" in content, (
+            "/api/v1/ location 區塊須以 portal.tenantApiUrl 非空為渲染條件"
+        )
+        assert "{{- if .Values.portal.recipePreviewUrl }}" in content, (
+            "/preview location 區塊須以 portal.recipePreviewUrl 非空為渲染條件"
+        )
+
 
 class TestDeploymentHasContainers:
     """驗證 deployment 模板定義了必要的容器。"""

@@ -18,7 +18,7 @@ metadata:
     {{- include "da-portal.labels" . | nindent 4 }}
 data:
   # nginx.conf - serves static Interactive Tools portal
-  # Reverse proxy to tenant-api at /api/v1/
+  # Reverse proxy to tenant-api at /api/v1/ (only when portal.tenantApiUrl is set)
   # Security headers, health endpoint, Babel transpilation support
   default.conf: |
     {{- if .Values.portal.relayToken.enabled }}
@@ -64,6 +64,12 @@ data:
         add_header Content-Type text/plain;
       }
 
+      {{- /* Reverse-proxy locations render only when their upstream URL is set.
+         A Tier-1 static-only portal keeps BOTH URLs empty (enforced by the
+         open-proxy guard in networkpolicy.yaml, GHSA-3g2h-rf85-5rrv); an empty
+         interpolation would emit a schemeless `proxy_pass /api/v1/;`, which
+         fails `nginx -t` and crashloops the pod. */}}
+      {{- if .Values.portal.tenantApiUrl }}
       # ── Reverse Proxy to tenant-api for /api/v1/ ──────────────────────────
       location /api/v1/ {
         proxy_pass {{ .Values.portal.tenantApiUrl }}/api/v1/;
@@ -101,7 +107,9 @@ data:
         proxy_buffer_size 128k;
         proxy_buffers 4 256k;
       }
+      {{- end }}
 
+      {{- if .Values.portal.recipePreviewUrl }}
       # ── Reverse Proxy to recipe-preview for /preview (#657 would-fire) ─────
       # Same-origin keeps CSP connect-src 'self' intact. recipe-preview is a PEP
       # that delegates tenant authz to tenant-api; forward the oauth2-proxy
@@ -121,6 +129,7 @@ data:
         proxy_connect_timeout 5s;
         proxy_read_timeout 30s;
       }
+      {{- end }}
 
       # ── Static Files (Interactive Tools, JSX, platform-data.json, etc.) ────
       location / {
