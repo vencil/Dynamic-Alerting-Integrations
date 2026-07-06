@@ -1,0 +1,77 @@
+# =====================================================================
+# fault-waveform pack 填空範本（ADR-030 決策層驗證 / R2-5 擷取問卷本體）
+# =====================================================================
+# 使用方式（SOP 詳見 docs/internal/waveform-elicitation-sop.md）：
+#   雙軌其一：
+#   (1) 訪談問卷：平台工程師照著每個欄位上方的「問句」訪談領域專家
+#       （DBA/SME），把自然語言回答轉譯成欄位值——轉譯者不得是
+#       VM 規則轉換者本人；轉譯完成後跑 --render-readback 請 SME 回讀簽核。
+#   (2) SME 直填：願意寫 YAML 的 SME 直接照問句填本檔。
+#   ⛔ 反循環鐵則：所有數值須來自「真實故障的實際行為」，
+#      絕不可從任何告警規則的閾值反推。填答前後 SME 都不看規則與閾值。
+#   驗證：python3 scripts/tools/dx/waveform_compile.py --check <本檔>
+# ---------------------------------------------------------------------
+
+pack:
+  # ── 以下由平台工程師填（SME 不必理會本區塊）──────────────────
+  id: example-pack            # 平台填：pack slug（小寫英數/-/_）
+  domain: example-domain      # 平台填：SME 的領域（如 oracle-dba / storage）
+  author_role: dba            # 平台填：語意來源者的角色（治理審計軌跡）
+  # 平台填：盲寫 attestation——確認波形參數由「未參與撰寫/轉換 VM 規則」
+  # 的獨立領域專家提供、且未從規則閾值反推。必須誠實為 true 才可入庫。
+  independent_of_rule_conversion: true
+  # 平台填：SME 回讀簽核（--render-readback 輸出經 SME 確認）後改 true。
+  readback_signed_off: false
+
+signatures:
+  # 每一種故障簽章一個條目；可多筆。
+  - # ════ SME 語意欄（訪談問句照唸即可，全部可用自然語言回答）════
+    # 問：這是什麼故障？請用一兩句話描述它發生時的樣子。
+    description: ""
+    # 問：這個描述的根據是什麼？——真的發生過的事故（real-incident）／
+    #     原廠文件（vendor-doc）／您的專家經驗（expert-experience）。
+    #     （self-test-seed 僅供工具自測，SME 請勿使用）
+    source: expert-experience
+    # 問：平常正常運作時，這個數值大概在多少？（用原生單位回答，
+    #     例如「用掉 42%」「每秒 0.1 個錯誤」；方向不拘，故障可高可低）
+    normal_level: 0
+    # 問：故障發生時，它實際會到多少？（真實幅度，不是警戒線）
+    fault_level: 0
+    # 問：從開始惡化到抵達故障水位，大概多快？（如 30s / 5m / 2h）
+    onset_duration: 5m
+    # 問：故障水位大概會持續多久？（如 30m / 2h / 1d）
+    hold_duration: 30m
+    # 問：平常沒事的時候，這個數值會自己晃動多少？（原生單位的
+    #     幅度，例如「上下 1.5%」→ 填 1.5；boolean 指標免答）
+    typical_wobble: 0
+    # 問：故障期間，數值會不會偶爾短暫掉回正常、然後又壞回去？
+    dips_back: false
+    # （dips_back 答「會」才問）問：掉回去大概掉多深？多久一次？
+    # dip_detail:
+    #   depth: 0        # 問：往正常方向掉多深？（原生單位）
+    #   period: 5m      # 問：大約多久發生一次？
+    # 問：故障的當下，監控代理（agent/exporter）還會不會繼續回報數據？
+    #     還是連數據都斷了？
+    agent_keeps_reporting: true
+    # 問：如果這件事半夜發生，您想不想被叫醒？（catch-rate ground truth）
+    must_detect: true
+
+    # ════ 平台欄（平台工程師/編譯器填；缺漏時 validator 報「平台補填」）════
+    metric: example_metric_name       # 平台填：exporter catalog 的 metric 名
+                                      # （取自 exporter catalog、非 rule pack）
+    metric_kind: gauge                # 平台填：gauge | counter | boolean
+                                      # counter＝SME 講的是速率，編譯器積分
+    # companion_series:               # 平台填：比值/join 型的分母與伴隨 series
+    #   - metric: example_denominator_total
+    #     labels: {resource: sessions}
+    #     role: denominator           # denominator | static
+    #     level: 100                  # 常態值
+    shape_class: ramp                 # 平台填：ramp | spike | plateau | step
+    noise_kind: gaussian              # 平台填：編譯器預設，不問 SME
+    # time_axis:                      # 平台填：時間軸擾動（平台屬性）
+    #   jitter_s: 5                   # 取樣時間抖動上界（秒；只進物化 (b)）
+    #   dropout_pattern: "every:10"   # 掉點：every:N 或 index 清單
+    #   staleness_tail: 5m            # 尾端提早斷線時長
+    fault_class: example-fault        # 平台填：由 description 派生的 slug
+    labels: {}                        # 平台填：拓撲 label（seed 用中性
+                                      # placeholder；PR-2 接 harness）

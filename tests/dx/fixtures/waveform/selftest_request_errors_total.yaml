@@ -1,0 +1,31 @@
+# self-test seed: counter spike（錯誤率尖峰）＋ jitter 時間軸擾動。
+# metric_kind=counter：normal/fault_level 為「速率」（每秒），編譯器積分成
+# 單調累積樣本；jitter 只進物化 (b)，物化 (a) 帶「不含 jitter」顯性標註。
+pack:
+  id: selftest-request-errors-total
+  domain: selftest
+  author_role: tool-selftest
+  independent_of_rule_conversion: true
+  readback_signed_off: true
+
+signatures:
+  - description: "自測用：請求錯誤速率在兩分鐘內飆到每秒 25 個並持續十分鐘"
+    source: self-test-seed
+    normal_level: 0.1
+    fault_level: 25
+    onset_duration: 2m
+    hold_duration: 10m
+    typical_wobble: 0.05
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: selftest_request_errors_total
+    metric_kind: counter
+    shape_class: spike
+    noise_kind: gaussian
+    time_axis:
+      jitter_s: 5
+    fault_class: error-spike
+    labels:
+      instance: selftest-host-01
+      endpoint: selftest-api
