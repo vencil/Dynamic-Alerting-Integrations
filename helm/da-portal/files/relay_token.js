@@ -11,6 +11,15 @@
 // no reload hook and no staleness window. The read hits a tmpfs-backed
 // projected volume; the cost is negligible for an admin UI.
 //
+// NOTE: a synchronous file read (fs.readFileSync) is generally an
+// ANTI-PATTERN in nginx/njs — it blocks the worker's event loop, so any
+// disk-I/O latency stalls every in-flight request on that worker. It is safe
+// here EXCLUSIVELY because (a) js_set variable handlers must return
+// synchronously (async I/O is not available in this hook), (b) the projected
+// token volume is tmpfs-backed (an in-memory read, µs-scale), and (c) this
+// is a low-QPS administrative portal, not a data plane. Do NOT copy this
+// pattern for high-throughput or real-disk I/O.
+//
 // Fail-soft by design: outside Kubernetes (docker compose / try-local) the
 // token file does not exist — return "" so nginx DROPS the Authorization
 // header (proxy_set_header with an empty value omits the header) instead of
@@ -23,7 +32,7 @@
 // byte-identical to this file (the helm configmap volume hides the image's
 // /etc/nginx/conf.d). tests/helm/test_portal_relay_token_guard.py pins it.
 
-const fs = require('fs');
+import fs from 'fs';
 
 // House path convention for audience-bound relay tokens (mirrors
 // recipe-preview's PREVIEW_AUTH_TOKEN_FILE and threshold-govern's mount).
