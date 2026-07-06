@@ -60,9 +60,6 @@ portal:
 # nginx configuration
 nginx:
   enabled: true
-  # 自訂 nginx.conf（可選）：新增自訂日誌、效能優化等
-  # Custom nginx.conf (optional): add custom logging, performance tuning, etc.
-  customConfig: ""
 
 # Tier 2: ENABLED — OAuth2-proxy provides authentication layer
 # 啟用 OAuth2-proxy：作為身份驗證層保護 Portal

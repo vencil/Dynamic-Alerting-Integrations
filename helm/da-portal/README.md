@@ -19,7 +19,7 @@ da-portal is an nginx-based static file server that delivers transpiled Interact
 - **Health Checks**: `/healthz` endpoint for liveness/readiness probes
 - **Network Policies**: Namespace-based ingress control
 - **Security**: Non-root pod security context, read-only filesystems, seccomp
-- **Customization**: ConfigMap-based nginx config override, custom data volumes
+- **Customization**: custom data volumes (platform-data.json, flows.json, static content)
 
 ## Architecture
 
@@ -154,30 +154,6 @@ NetworkPolicy).
 helm upgrade da-portal helm/da-portal -n monitoring \
   -f your-values.yaml \
   --set portal.relayToken.enabled=true
-```
-
-#### Custom nginx Config
-
-Provide a custom nginx configuration:
-
-```bash
-helm install da-portal helm/da-portal -n monitoring \
-  --set 'nginx.customConfig=<path-to-custom-nginx.conf>'
-```
-
-Or via values file:
-
-```yaml
-# values-custom.yaml
-nginx:
-  customConfig: |
-    server {
-      listen 80;
-      location / {
-        root /usr/share/nginx/html;
-        index index.html;
-      }
-    }
 ```
 
 #### Custom Data (platform-data.json, flows.json, etc.)
@@ -347,6 +323,8 @@ location /api/v1/ {
 ```
 
 This allows Interactive Tools to communicate with the tenant-api without cross-origin requests.
+
+The `/api/v1/` and `/preview` proxy blocks are rendered only when `portal.tenantApiUrl` / `portal.recipePreviewUrl` are set. Tier 1 (static-only, `values-tier1.yaml`) keeps both empty — the rendered config then serves static files only, with no proxy locations (an empty URL would otherwise produce a schemeless `proxy_pass` that fails `nginx -t`).
 
 ## Troubleshooting
 

@@ -43,9 +43,6 @@ portal:
 nginx:
   # Enable custom nginx.conf from configmap-nginx.yaml
   enabled: true
-  # Custom nginx.conf content (optional override)
-  # Leave empty to use built-in config
-  customConfig: ""
 
 # oauth2-proxy sidecar configuration
 oauth2Proxy:
