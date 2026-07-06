@@ -1,6 +1,6 @@
 # da-portal Helm Chart
 
-Self-Hosted Interactive Tools Portal for the Dynamic Alerting Platform (v2.7.0).
+Self-Hosted Interactive Tools Portal for the Dynamic Alerting Platform.
 
 ## Overview
 
@@ -60,11 +60,11 @@ helm install da-portal helm/da-portal \
   -n monitoring \
   -f helm/da-portal/values.yaml
 
-# Or with environment-specific overrides
+# Or with a deployment-tier overlay (e.g. full-stack Tier 2)
 helm install da-portal helm/da-portal \
   -n monitoring \
   -f helm/da-portal/values.yaml \
-  -f helm/da-portal/values-prod.yaml
+  -f helm/da-portal/values-tier2.yaml
 ```
 
 ### Configuration
@@ -131,7 +131,7 @@ To override:
 
 ```bash
 helm install da-portal helm/da-portal -n monitoring \
-  --set 'portal.tenantApiUrl=http://tenant-api.db-a.svc.cluster.local:8080'
+  --set 'portal.tenantApiUrl=http://tenant-api.tenant-api-staging.svc.cluster.local:8080'
 ```
 
 #### Relay Token (ADR-027 D2-B O1)
@@ -180,7 +180,7 @@ helm install da-portal helm/da-portal -n monitoring \
 |-----|------|---------|-------------|
 | replicaCount | int | 1 | Number of portal replicas |
 | image.repository | string | `ghcr.io/vencil/da-portal` | Container image |
-| image.tag | string | `2.7.0` | Image tag |
+| image.tag | string | `""` | Image tag; empty derives `v<Chart.appVersion>` (#682) |
 | image.pullPolicy | string | `IfNotPresent` | Image pull policy |
 
 ### Portal Settings
@@ -213,7 +213,7 @@ helm install da-portal helm/da-portal -n monitoring \
 | service.internalPort | int | 8080 | Internal port (nginx direct) |
 | ingress.enabled | bool | false | Enable Ingress |
 | ingress.className | string | `""` | Ingress class name |
-| ingress.hosts | list | `[]` | Ingress hosts |
+| ingress.hosts | list | `[da-portal.example.com]` | Ingress hosts (inert while `ingress.enabled=false`) |
 
 ### Resources
 
@@ -231,7 +231,7 @@ helm install da-portal helm/da-portal -n monitoring \
 | podSecurityContext.runAsUser | int | 65534 | Pod run-as UID (nobody) |
 | podSecurityContext.runAsGroup | int | 65534 | Pod run-as GID |
 | networkPolicy.enabled | bool | true | Enable NetworkPolicy |
-| networkPolicy.allowedNamespaces | list | `[monitoring, db-a, db-b]` | Namespaces allowed ingress |
+| networkPolicy.allowedNamespaces | list | `[monitoring, ingress-nginx]` | Namespaces allowed ingress — infra sources only; ⛔ do NOT add tenant namespaces (GHSA-3g2h-rf85-5rrv) |
 
 ## Deployment Examples
 
@@ -344,7 +344,7 @@ The `/api/v1/` and `/preview` proxy blocks are rendered only when `portal.tenant
 
 - Check ConfigMap: `kubectl -n monitoring get cm da-portal-nginx-config -o yaml`
 - Verify nginx container logs: `kubectl -n monitoring logs -f deployment/da-portal -c nginx`
-- Check image build: `docker inspect ghcr.io/vencil/da-portal:2.7.0`
+- Check image build: `docker inspect ghcr.io/vencil/da-portal:v2.9.0`
 
 ## Upgrading
 
