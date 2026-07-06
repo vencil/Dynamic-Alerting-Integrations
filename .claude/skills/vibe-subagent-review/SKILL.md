@@ -1,6 +1,6 @@
 ---
 name: vibe-subagent-review
-description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 blast-radius。Use after a multi-file PR or an `Agent` implementation run, before commit — 特別是改動含 Helm values / .gotmpl / Prometheus rules / VRL transforms（這類「爆炸半徑優先」非單純 code quality）。補 #448 機械 SAST 抓不到的 cross-file cascade（改 selector 連動 NetworkPolicy / ServiceMonitor / ConfigMap 等）。Also use BEFORE spawning long-running（>15 min）reviewer / verifier subagents — 內含長時驗證 agent 可觀測性協議（預設 `Workflow` 編排；raw `Agent` 為例外、須寫 `dev/<scope>/PROGRESS.jsonl` ledger；單 agent ~15 min 上限）。SKIP if change is single-file doc-only or single-file test-only.
+description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 blast-radius,含對抗式 review 紀律（finder≠verifier 自審 / verify-before-assert / only-actionable）。Use after a multi-file PR or an `Agent` implementation run, before commit — 特別是改動含 Helm values / .gotmpl / Prometheus rules / VRL transforms（這類「爆炸半徑優先」非單純 code quality）。補 #448 機械 SAST 抓不到的 cross-file cascade（改 selector 連動 NetworkPolicy / ServiceMonitor / ConfigMap 等）。Also use BEFORE spawning long-running（>15 min）reviewer / verifier subagents — 內含長時驗證 agent 可觀測性協議（預設 `Workflow` 編排；raw `Agent` 為例外、須寫 `dev/<scope>/PROGRESS.jsonl` ledger；單 agent ~15 min 上限）。SKIP if change is single-file doc-only or single-file test-only.
 ---
 
 # vibe-subagent-review — IaC-aware blast-radius review
@@ -22,6 +22,33 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 | `values.yaml` / `*.gotmpl` / `Chart.yaml` | **Blast Radius** | selector / RBAC / NetworkPolicy / ConfigMap 連動？ |
 | `.vrl` / Vector transform | **Schema cascade** | 下游 SIEM payload field 改了哪些？接收端要通知？ |
 | Prometheus rules（recording / alerting） | **Cardinality + Severity** | cardinality 暴增？severity 動到 dedup / Sentinel / 四層路由？ |
+
+## Review 紀律（所有 lens 通用）
+
+上表 domain checklist 決定**查什麼**；這節決定**怎麼報、怎麼驗**——把對抗式 review 紀律 codify 進「觸發時就會讀到」的地方（源自 2026-07 security-audit 方法論萃取）。
+
+**1. 只報站得住的（concrete > theoretical）**
+- 每個 finding = **具體 failure scenario**：什麼 input / state → 什麼壞輸出 / break，附 `file:line`。不是「這樣比較漂亮」「理論上可能」「建議考慮」。
+- **3 個真問題 > 10 個 style 意見**；別用 nit 灌厚度。**designed-behavior**（有 rationale 的刻意設計）不是 bug——先分辨再報。
+- **coverage-honesty**：講清楚**沒 review 到**哪些檔 / 路徑；絕不在沒看的地方 imply clean（空 ≠ 安全）。
+
+**2. verify-before-asserting（review finding 是一個 claim）**
+- 報 finding 前先 **grep + cite 實際 code** 佐證，不照 pattern-match 的直覺報。（燒過：外部 reviewer 對合法 Workflow-DSL top-level `return` 誤報 illegal-return、對 repo 未 enforce 的 lint 規則亂標——plausible-but-wrong；take / reframe / **reject** 前先驗那條規則 repo CI 真的擋嗎。）
+- 收到的「這是 bug」前提（他人 / 外審 / 上一棒）**可能為假** → 親驗，錯了就 reframe。
+
+**3. finder ≠ verifier 自審 pass（方法論核心）**
+- 產出 findings 後，**再跑一輪對抗式**：逐條試著**推翻它**——上游有 mitigation 嗎？是 designed-behavior 嗎？data 真的這樣流嗎？測試真的沒蓋嗎？**活不下來的殺掉。**
+- 一個 **FIX 可能移除附帶防護** → 重跑原始 invariant 確認沒開新洞。
+- 這是 harness 的**單 agent 便宜版**；要**升級到多 agent** 見下節。
+
+## 升級到多 agent harness（大 / 高風險 review；defer-with-trigger）
+
+上節 finder≠verifier **自審**是單 agent 便宜版。改動**很多檔 / 高 blast-radius IaC / 跨 component**、或 stakes 值得時，升級到多 agent——直接 reuse [`vibe-security-audit`](../vibe-security-audit/SKILL.md) 的 Workflow pattern，只換 lens：
+
+- **dimensions**（correctness / IaC-blast-radius / reuse-simplify）→ 各一個 **finder** subagent → 每個 finding 由**不同模型** validator「DISPROVE」→ synthesize survivors、ranked、only-actionable。
+- **模型分層**：強模型找、便宜模型驗（見 security-audit 的 `audit-workflow.js`）。編排走下方〈長時驗證 agent 可觀測性協議〉的 Workflow-first。
+
+⚠️ **不要對例行 multi-file PR 起這個**——它跟 security-audit 一樣貴，是**刻意的升級 tier**、非預設；例行 review 走上節單 agent 自審即可（MVP、不 gold-plate 例行 review）。真需要時再建 review-Workflow（現在 reuse security-audit harness，不另造）。
 
 ## Spec → Quality（`.go` / `.py`）
 
