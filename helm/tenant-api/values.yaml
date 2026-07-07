@@ -175,9 +175,13 @@ rbac:
   # false (default) = SHADOW: a tenant with no value for a restricted rule's
   # env/domain still appears in the list (byte-identical to the legacy
   # behavior) but is counted in tenant_api_scope_would_deny_total{axis="metadata"}.
-  # Flip to true = ENFORCE (hide unlabeled tenants) ONLY after that counter has
-  # soaked to zero (no still-unlabeled tenants), matching the machineIdentity
-  # audit→enforce discipline. Independent of machineIdentity/humanSocket.
+  # Flip to true = ENFORCE (hide unlabeled tenants) ONLY after that counter
+  # STOPS INCREMENTING over the soak window — it is a monotonic counter, so the
+  # signal is increase(...[window])==0 (a zero rate), not an absolute-zero value.
+  # Pair it with a scan for still-unlabeled tenants (the counter is traffic-
+  # driven: a tenant nobody LISTed never increments it). Matches the
+  # machineIdentity audit→enforce discipline. Independent of
+  # machineIdentity/humanSocket.
   metadataScopeEnforce: false
 
 # ── Tenant federation (ADR-020 IV-2m, issue #519) ───────────────────────────
