@@ -42,7 +42,7 @@ type PRListResponse struct {
 // @Router      /api/v1/prs [get]
 func ListPRs(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		idpGroups := rbac.RequestGroups(r)
+		p := rbac.RequestPrincipal(r)
 		tenantFilter := r.URL.Query().Get("tenant")
 
 		var prs []platform.PRInfo
@@ -51,7 +51,7 @@ func ListPRs(d *Deps) http.HandlerFunc {
 			// read the tenant, return empty (don't 403 — that
 			// would leak existence). If they can, surface the PR
 			// (or empty if there isn't one).
-			if d.RBAC.HasPermission(idpGroups, tenantFilter, rbac.PermRead) {
+			if d.RBAC.Allowed(p, tenantFilter, rbac.PermRead) {
 				if pr, ok := d.PRTracker.PendingPRForTenant(tenantFilter); ok {
 					prs = []platform.PRInfo{pr}
 				} else {
@@ -63,7 +63,7 @@ func ListPRs(d *Deps) http.HandlerFunc {
 		} else {
 			// Bulk query: filter by per-PR tenant authz.
 			all := d.PRTracker.PendingPRs()
-			prs = filterAccessiblePRs(d.RBAC, idpGroups, all)
+			prs = filterAccessiblePRs(d.RBAC, p, all)
 		}
 
 		writeJSON(w, http.StatusOK, PRListResponse{
@@ -78,8 +78,8 @@ func ListPRs(d *Deps) http.HandlerFunc {
 // through (administrative PRs not tied to a single tenant — these
 // shouldn't normally exist, but if they do they're surface-area
 // the caller already saw via other endpoints).
-func filterAccessiblePRs(rbacMgr *rbac.Manager, idpGroups []string, prs []platform.PRInfo) []platform.PRInfo {
-	return filterByRBAC(rbacMgr, idpGroups, prs, tenantIDFromPR, rbac.PermRead)
+func filterAccessiblePRs(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal, prs []platform.PRInfo) []platform.PRInfo {
+	return filterByRBAC(rbacMgr, p, prs, tenantIDFromPR, rbac.PermRead)
 }
 
 // tenantIDFromPR is the per-element extractor for filterByRBAC over

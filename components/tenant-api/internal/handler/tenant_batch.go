@@ -75,7 +75,11 @@ type BatchResponse struct {
 func BatchTenants(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		email := rbac.RequestEmail(r)
-		groups := rbac.RequestGroups(r)
+		// Capture the verified principal VALUE for the async path below —
+		// same discipline as email: the closure must never reach back into
+		// the request context (it outlives the HTTP request), so it captures
+		// the immutable principal snapshot, not r / r.Context().
+		p := rbac.RequestPrincipal(r)
 
 		var req BatchRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -116,7 +120,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 					batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
 					continue
 				}
-				if !d.RBAC.HasPermission(groups, op.TenantID, rbac.PermWrite) {
+				if !d.RBAC.Allowed(p, op.TenantID, rbac.PermWrite) {
 					batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: "insufficient permissions"})
 					continue
 				}
@@ -200,7 +204,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 		// v2.6.0: Async mode — submit to goroutine pool and return immediately
 		if r.URL.Query().Get("async") == "true" && d.Tasks != nil {
 			task := d.Tasks.Submit(taskID, func(ctx context.Context) ([]async.TaskResult, error) {
-				results := executeBatchOps(ctx, d.Writer, d.ConfigDir, req.Operations, email, groups, d.RBAC, d.Policy)
+				results := executeBatchOps(ctx, d.Writer, d.ConfigDir, req.Operations, email, p, d.RBAC, d.Policy)
 				asyncResults := make([]async.TaskResult, len(results))
 				for i, br := range results {
 					asyncResults[i] = async.TaskResult{
@@ -221,7 +225,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 		}
 
 		// Synchronous mode (default, backward compatible)
-		results := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, req.Operations, email, groups, d.RBAC, d.Policy)
+		results := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, req.Operations, email, p, d.RBAC, d.Policy)
 
 		// Compute summary
 		successes := 0
@@ -253,14 +257,14 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 
 // executeBatchOps runs batch operations synchronously and returns results.
 // This function is shared between sync and async paths to ensure consistency.
-func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, ops []BatchOperation, email string, idpGroups []string, rbacMgr *rbac.Manager, policyMgr *policy.Manager) []BatchResult {
+func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, policyMgr *policy.Manager) []BatchResult {
 	results := make([]BatchResult, 0, len(ops))
 	for _, op := range ops {
 		if err := ValidateTenantID(op.TenantID); err != nil {
 			results = append(results, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
 			continue
 		}
-		if !rbacMgr.HasPermission(idpGroups, op.TenantID, rbac.PermWrite) {
+		if !rbacMgr.Allowed(p, op.TenantID, rbac.PermWrite) {
 			results = append(results, BatchResult{TenantID: op.TenantID, Status: "error", Message: "insufficient permissions for tenant " + op.TenantID})
 			continue
 		}

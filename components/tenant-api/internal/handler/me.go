@@ -52,7 +52,8 @@ func Me(d *Deps) http.HandlerFunc {
 			groups []string
 			claims map[string]string
 		)
-		if p := rbac.RequestPrincipal(r); p != nil {
+		p := rbac.RequestPrincipal(r)
+		if p != nil {
 			email = p.Email
 			groups = p.Groups
 			claims = p.Claims
@@ -93,7 +94,11 @@ func Me(d *Deps) http.HandlerFunc {
 			Claims:            claims,
 		}
 
-		// Collect all accessible tenants and build permissions map
+		// Collect all accessible tenants and build permissions map.
+		// NOTE (ADR-027 / LD-6 P3): this raw group-name loop is the one
+		// remaining rule-match point outside rbac's shared ruleMatches
+		// predicate; it converges onto that predicate together with the
+		// claims-aware match: block (so /me lists match-rule hits too).
 		accessibleTenants := make(map[string]bool)
 		rbacCfg := d.RBAC.Get()
 
@@ -132,8 +137,8 @@ func Me(d *Deps) http.HandlerFunc {
 		sort.Strings(resp.AccessibleTenants)
 
 		// v2.5.0: Accessible environments and domains for UI filtering hints
-		resp.AccessibleEnvironments = d.RBAC.AccessibleEnvironments(groups)
-		resp.AccessibleDomains = d.RBAC.AccessibleDomains(groups)
+		resp.AccessibleEnvironments = d.RBAC.AccessibleEnvironmentsFor(p)
+		resp.AccessibleDomains = d.RBAC.AccessibleDomainsFor(p)
 		sort.Strings(resp.AccessibleEnvironments)
 		sort.Strings(resp.AccessibleDomains)
 

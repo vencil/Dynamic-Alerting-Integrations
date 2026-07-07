@@ -63,7 +63,7 @@ func BackfillAccounts(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Platform-wide change — require admin via a "*"-scoped group, the
 		// same gate as PutFederationPolicy.
-		if !d.RBAC.HasPermission(rbac.RequestGroups(r), "*", rbac.PermAdmin) {
+		if !d.RBAC.Allowed(rbac.RequestPrincipal(r), "*", rbac.PermAdmin) {
 			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
 				"platform admin permission required to backfill account IDs")
 			return

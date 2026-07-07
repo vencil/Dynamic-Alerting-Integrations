@@ -157,7 +157,7 @@ type ScopeAuditRecorder interface {
 // ScopeAxisMetadata; the org axis (P4) will add its own constant.
 const (
 	// scopeAxisMetadata is the environment/domain metadata scope filter axis.
-	// Unexported: the only emitter is HasMetadataAccess (via recordScopeShadowGap)
+	// Unexported: the only emitter is MetadataAllowed (via recordScopeShadowGap)
 	// in this package. The handler's exposition uses the same string literal for
 	// the {axis} label.
 	scopeAxisMetadata = "metadata"

@@ -58,7 +58,7 @@ type RBACConfig struct {
 //
 // Open-read mode: when the configured path is empty (no _rbac.yaml
 // supplied), the underlying Watcher stores an empty RBACConfig{}.
-// HasPermission's `len(cfg.Groups) == 0` check then degrades to
+// Allowed's `len(cfg.Groups) == 0` check then degrades to
 // "authenticated users have read access only" — matches the
 // pre-PR-8 behavior.
 type Manager struct {
@@ -194,12 +194,61 @@ func parseConfig(data []byte) (*RBACConfig, error) {
 	return &cfg, nil
 }
 
-// HasPermission checks whether any of the provided IdP groups grants the
-// specified permission for the given tenantID.
+// ── Principal-based evaluation core (ADR-027 / LD-6 P3) ──────────────────
+//
+// Allowed / MetadataAllowed / AccessibleEnvironmentsFor / AccessibleDomainsFor
+// are the ONLY production authorization entry points. They take the request's
+// *VerifiedPrincipal so the shared rule-matching predicate (ruleMatches) can
+// see everything the trusted hop attested — groups today, named claims once
+// the optional match: block lands. The legacy groups-slice signatures
+// (HasPermission / HasMetadataAccess / AccessibleEnvironments /
+// AccessibleDomains) live on as test-only one-line delegates in
+// export_test.go, so a production caller of the old shape is a COMPILE error.
+//
+// nil-principal contract: p == nil is a documented ANONYMOUS caller — no
+// groups, no claims (e.g. a request that never passed through Middleware).
+// It evaluates exactly as the empty groups slice always has: open mode still
+// grants read (and MetadataAllowed passes), configured/fail-closed modes
+// deny, and no rule can ever match.
+
+// matchSubject is the precomputed view of the caller that ruleMatches
+// evaluates each GroupRule against. It is built once per evaluation call
+// (subjectFor) and shared by the four evaluation methods.
+type matchSubject struct {
+	groupSet map[string]bool
+}
+
+// subjectFor precomputes the matchSubject for principal p. A nil principal
+// (anonymous caller) yields an empty group set, so no rule can match —
+// identical to how a nil groups slice has always evaluated.
+func subjectFor(p *VerifiedPrincipal) matchSubject {
+	var groups []string
+	if p != nil {
+		groups = p.Groups
+	}
+	set := make(map[string]bool, len(groups))
+	for _, g := range groups {
+		set[g] = true
+	}
+	return matchSubject{groupSet: set}
+}
+
+// ruleMatches is THE single rule-matching predicate shared by Allowed,
+// MetadataAllowed, AccessibleEnvironmentsFor and AccessibleDomainsFor: a rule
+// applies iff its Name is one of the caller's IdP groups — byte-identical to
+// the groupSet[rule.Name] test those methods previously inlined four times
+// over. The claims-aware match: block (ADR-027 / LD-6 P3) extends THIS
+// predicate; rule-matching semantics must never be implemented anywhere else.
+func (s matchSubject) ruleMatches(rule *GroupRule) bool {
+	return s.groupSet[rule.Name]
+}
+
+// Allowed checks whether the caller p is granted the wanted permission for
+// the given tenantID by any rule matching the principal.
 //
 // Permission hierarchy: admin ⊇ write ⊇ read.
 // An "admin" grant satisfies "write" and "read" checks.
-func (m *Manager) HasPermission(idpGroups []string, tenantID string, want Permission) bool {
+func (m *Manager) Allowed(p *VerifiedPrincipal, tenantID string, want Permission) bool {
 	cfg := m.Get()
 	if len(cfg.Groups) == 0 {
 		if m.failClosedOnEmpty {
@@ -209,20 +258,17 @@ func (m *Manager) HasPermission(idpGroups []string, tenantID string, want Permis
 		return want == PermRead
 	}
 
-	groupSet := make(map[string]bool, len(idpGroups))
-	for _, g := range idpGroups {
-		groupSet[g] = true
-	}
-
-	for _, rule := range cfg.Groups {
-		if !groupSet[rule.Name] {
+	subject := subjectFor(p)
+	for i := range cfg.Groups {
+		rule := &cfg.Groups[i]
+		if !subject.ruleMatches(rule) {
 			continue
 		}
 		if !tenantMatches(rule.Tenants, tenantID) {
 			continue
 		}
-		for _, p := range rule.Permissions {
-			if permCovers(p, want) {
+		for _, perm := range rule.Permissions {
+			if permCovers(perm, want) {
 				return true
 			}
 		}
@@ -230,11 +276,11 @@ func (m *Manager) HasPermission(idpGroups []string, tenantID string, want Permis
 	return false
 }
 
-// HasMetadataAccess checks whether any of the provided IdP groups grants
-// access for a tenant with the given environment and domain metadata.
-// Returns true if at least one matching rule allows the metadata values.
-// Empty environment or domain in the tenant metadata always passes (no restriction).
-func (m *Manager) HasMetadataAccess(idpGroups []string, tenantID, environment, domain string) bool {
+// MetadataAllowed checks whether the caller p is granted access for a tenant
+// with the given environment and domain metadata. Returns true if at least
+// one matching rule allows the metadata values. Empty environment or domain
+// in the tenant metadata always passes (no restriction).
+func (m *Manager) MetadataAllowed(p *VerifiedPrincipal, tenantID, environment, domain string) bool {
 	cfg := m.Get()
 	if len(cfg.Groups) == 0 {
 		if m.failClosedOnEmpty {
@@ -243,10 +289,7 @@ func (m *Manager) HasMetadataAccess(idpGroups []string, tenantID, environment, d
 		return true // open mode — no metadata restrictions
 	}
 
-	groupSet := make(map[string]bool, len(idpGroups))
-	for _, g := range idpGroups {
-		groupSet[g] = true
-	}
+	subject := subjectFor(p)
 
 	// Evaluate visibility under BOTH scope modes in one pass so the would-deny
 	// signal is per-tenant, not per-field: the tenant is recorded iff it is
@@ -254,8 +297,9 @@ func (m *Manager) HasMetadataAccess(idpGroups []string, tenantID, environment, d
 	// on unlabeled-tenant leniency). A wildcard rule granting access under
 	// strict semantics sets enforceVisible and suppresses the (false) would-deny.
 	shadowVisible, enforceVisible := false, false
-	for _, rule := range cfg.Groups {
-		if !groupSet[rule.Name] {
+	for i := range cfg.Groups {
+		rule := &cfg.Groups[i]
+		if !subject.ruleMatches(rule) {
 			continue
 		}
 		if !tenantMatches(rule.Tenants, tenantID) {
@@ -281,23 +325,20 @@ func (m *Manager) HasMetadataAccess(idpGroups []string, tenantID, environment, d
 	return shadowVisible
 }
 
-// AccessibleEnvironments returns the set of environments the user's IdP groups
+// AccessibleEnvironmentsFor returns the set of environments the caller p
 // can access (empty set means "all" — no restriction).
-func (m *Manager) AccessibleEnvironments(idpGroups []string) []string {
+func (m *Manager) AccessibleEnvironmentsFor(p *VerifiedPrincipal) []string {
 	cfg := m.Get()
 	if len(cfg.Groups) == 0 {
 		return nil // open mode
 	}
 
-	groupSet := make(map[string]bool, len(idpGroups))
-	for _, g := range idpGroups {
-		groupSet[g] = true
-	}
-
+	subject := subjectFor(p)
 	hasWildcard := false
 	envs := make(map[string]bool)
-	for _, rule := range cfg.Groups {
-		if !groupSet[rule.Name] {
+	for i := range cfg.Groups {
+		rule := &cfg.Groups[i]
+		if !subject.ruleMatches(rule) {
 			continue
 		}
 		if len(rule.Environments) == 0 {
@@ -318,23 +359,20 @@ func (m *Manager) AccessibleEnvironments(idpGroups []string) []string {
 	return result
 }
 
-// AccessibleDomains returns the set of domains the user's IdP groups
-// can access (empty set means "all" — no restriction).
-func (m *Manager) AccessibleDomains(idpGroups []string) []string {
+// AccessibleDomainsFor returns the set of domains the caller p can access
+// (empty set means "all" — no restriction).
+func (m *Manager) AccessibleDomainsFor(p *VerifiedPrincipal) []string {
 	cfg := m.Get()
 	if len(cfg.Groups) == 0 {
 		return nil
 	}
 
-	groupSet := make(map[string]bool, len(idpGroups))
-	for _, g := range idpGroups {
-		groupSet[g] = true
-	}
-
+	subject := subjectFor(p)
 	hasWildcard := false
 	doms := make(map[string]bool)
-	for _, rule := range cfg.Groups {
-		if !groupSet[rule.Name] {
+	for i := range cfg.Groups {
+		rule := &cfg.Groups[i]
+		if !subject.ruleMatches(rule) {
 			continue
 		}
 		if len(rule.Domains) == 0 {
