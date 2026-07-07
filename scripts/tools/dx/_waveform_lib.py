@@ -10,6 +10,8 @@ writes (the CLI owns I/O). Deterministic by construction:
     semantic constants, mirrored into every materialization's metadata);
   * fan-out labels derived from the series index (``series="f01"``), never
     uuid;
+  * every series carries ``waveform_signature="<signature_index>"`` +
+    ``waveform_variant`` labels (synth-time identity keys; PR-2 attribution);
   * gaussian noise is an OWNED Box-Muller over ``rng.random()`` so bitwise
     reproducibility does not depend on stdlib ``gauss`` internals.
 
@@ -414,8 +416,14 @@ def _apply_time_axis(samples: list, time_axis: dict) -> tuple[list, int, bool]:
     return out, len(drops), truncated
 
 
-def _series_labels(sig: dict, variant: str, fan_index: Optional[int] = None) -> dict:
+def _series_labels(sig: dict, signature_index: int, variant: str,
+                   fan_index: Optional[int] = None) -> dict:
     labels = dict(sig.get("labels") or {})
+    # Injective series↔signature key（PR-2 歸因）：ALERTS 不帶 __name__，兩個
+    # signature 若 topology labels 相同（或皆空）、僅 metric 名不同，讀回端無從
+    # 判別——此 label 讓 series identity 對 signature 単射，同時解掉「同
+    # metric+labels 兩簽章 import 互撞」。比照 waveform_variant 的合成期注入前例。
+    labels["waveform_signature"] = str(signature_index)
     labels["waveform_variant"] = variant
     if fan_index is not None:
         labels["series"] = f"f{fan_index:02d}"  # index-derived, never uuid
@@ -504,7 +512,7 @@ def synthesize_pack(pack: dict, seed: int = DEFAULT_SEED,
             samples, gaps, truncated = _apply_time_axis(values, time_axis)
             series = Series(
                 metric=sig["metric"],
-                labels=_series_labels(sig, variant, fan_index),
+                labels=_series_labels(sig, si, variant, fan_index),
                 samples=samples,
                 variant=variant,
                 expects=expects,

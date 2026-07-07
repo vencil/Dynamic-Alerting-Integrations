@@ -49,9 +49,7 @@ Set VM_PARITY_REQUIRE=1 to force-run (unreachable VM then hard-fails, never skip
 """
 from __future__ import annotations
 
-import json
 import os
-import urllib.parse
 import urllib.request
 import re
 from pathlib import Path
@@ -59,15 +57,22 @@ from pathlib import Path
 import pytest
 import yaml
 
+from vm_harness import (  # shared #968 harness — see vm_harness.py module docstring
+    VMClient,
+    expand_values,
+    parse_dur,
+    window_start,
+)
+
 _REPO = Path(__file__).resolve().parents[2]
 _FIXTURE_DIR = _REPO / "tests" / "rulepacks"
 
 VM_ENDPOINT = os.environ.get("VM_PARITY_ENDPOINT", "http://localhost:8428")
-_T0 = 1_700_000_000          # fixed epoch base — deterministic, never `now`
-_GAP = 3_600                 # ingest-window gap (s); >> VM default staleness (5m)
+_VM = VMClient(VM_ENDPOINT)
+# Fixed-epoch slot layout (T0 / GAP / MAX_BLOCKS / WORKER_SPAN) lives in vm_harness;
+# this anchor uses the harness defaults via window_start() (identical values to the
+# pre-extraction _T0/_GAP/_MAX_BLOCKS/_WORKER_SPAN constants).
 _EPSILON = 1e-6
-_MAX_BLOCKS = 50             # max test-blocks per case (slot budget)
-_WORKER_SPAN = 1_000         # slots reserved per xdist worker (>> groups*_MAX_BLOCKS)
 
 # Representative subset of ALERT goldens — idioms most likely to diverge cross-engine.
 # (fixture, alertname). A smoke (pattern-breaking detection), not 100% coverage.
@@ -88,28 +93,20 @@ _EXPR_CASES = [
 ]
 
 
-def _vm_reachable() -> bool:
-    try:
-        with urllib.request.urlopen(f"{VM_ENDPOINT}/health", timeout=3) as r:
-            return r.status == 200
-    except Exception:
-        return False
-
-
 # ON-DEMAND anchor (no per-PR CI job): skips when no VM is reachable (the normal case —
 # local dev, python-tests). Set VM_PARITY_REQUIRE=1 to force it (unreachable VM then HARD-
 # fails instead of skipping) — used when re-verifying equivalence on a VM-version bump
 # (docs/internal/backend-compat-baseline.md).
 _REQUIRE_VM = os.environ.get("VM_PARITY_REQUIRE") == "1"
 _needs_vm = pytest.mark.skipif(
-    not _REQUIRE_VM and not _vm_reachable(),
+    not _REQUIRE_VM and not _VM.reachable(),
     reason=f"no VictoriaMetrics at {VM_ENDPOINT} (on-demand anchor; start a pinned vmsingle "
            f"+ set VM_PARITY_ENDPOINT, or VM_PARITY_REQUIRE=1 to force — see backend-compat-baseline.md)",
 )
 
 
 def _require_vm_or_fail() -> None:
-    if _REQUIRE_VM and not _vm_reachable():
+    if _REQUIRE_VM and not _VM.reachable():
         pytest.fail(f"VM_PARITY_REQUIRE=1 but no VictoriaMetrics at {VM_ENDPOINT} — the "
                     f"equivalence anchor must not silently skip to green (vmsingle not started?)")
 
@@ -139,80 +136,17 @@ def _vm_server_version() -> str | None:
     return ver.group(1) if ver else None
 
 
-# ---- promtool series-values notation --------------------------------------
-def _expand_values(spec: str) -> list[float | None]:
-    """Expand promtool `values:` notation → list of samples (None == gap `_`).
-
-    Grammar: space-separated tokens, each: `v` | `_` gap | `vxN` | `v+dxN` | `v-dxN`.
-    `v+dxN` = v, v+d, ..., v+N*d  (N+1 samples). `vxN` = v repeated N+1 times.
-    Scientific notation (`1e-3`) is supported as a plain value.
-    """
-    out: list[float | None] = []
-    for tok in spec.split():
-        if tok == "_":
-            out.append(None)
-            continue
-        if "x" in tok:
-            base, count_s = tok.rsplit("x", 1)
-            count = int(count_s)
-            delta = 0.0
-            if "+" in base:                       # `a+d` incrementing
-                a_s, d_s = base.split("+", 1)
-                a, delta = float(a_s), float(d_s)
-            else:
-                try:
-                    a = float(base)               # plain repeat (incl `1e-3`, `-5`)
-                except ValueError:                # `a-d` decrementing (a may be negative)
-                    lead = "-" if base.startswith("-") else ""
-                    a_s, d_s = base[len(lead):].split("-", 1)
-                    a, delta = float(lead + a_s), -float(d_s)
-            for i in range(count + 1):
-                out.append(a + i * delta)
-        else:
-            out.append(float(tok))
-    return out
-
-
-# ---- VM import / query -----------------------------------------------------
-def _import_lines(lines: list[str]) -> None:
-    if not lines:
-        return
-    body = ("\n".join(lines) + "\n").encode()
-    req = urllib.request.Request(
-        f"{VM_ENDPOINT}/api/v1/import/prometheus", data=body, method="POST")
-    with urllib.request.urlopen(req, timeout=10) as r:
-        assert r.status in (200, 204), f"VM import failed: {r.status}"
-
-
-def _import_series(series_label_str: str, values: list[float | None],
-                   t0_ms: int, interval_ms: int) -> None:
-    """Import one series to VM (line per sample, absolute ms timestamps)."""
-    _import_lines([f"{series_label_str} {v} {t0_ms + i * interval_ms}"
-                   for i, v in enumerate(values) if v is not None])
-
-
+# ---- VM flush policy (anchor-specific wrapper over vm_harness) -------------
 def _flush_import() -> None:
     """Force VM to flush in-memory buffers so just-imported data is queryable.
     Single-node-only endpoint; when VM is REQUIRED (CI), a flush failure is fatal
     (a cluster VM without this endpoint would race unflushed data into false
     divergences) — never silently degrade."""
     try:
-        with urllib.request.urlopen(
-                f"{VM_ENDPOINT}/internal/force_flush", timeout=10) as r:
-            r.read()
+        _VM.flush()
     except Exception:
         if _REQUIRE_VM:
             raise
-
-
-def _query(expr: str, at_s: int) -> list[dict]:
-    """Instant query VM at absolute time `at_s`; nocache=1 (Gemini trap #2)."""
-    qs = urllib.parse.urlencode({"query": expr, "time": str(at_s), "nocache": "1"})
-    req = urllib.request.Request(f"{VM_ENDPOINT}/api/v1/query?{qs}")
-    with urllib.request.urlopen(req, timeout=15) as r:
-        data = json.loads(r.read())
-    assert data.get("status") == "success", f"VM query error: {data}"
-    return data["data"]["result"]
 
 
 # ---- fixture / rule-pack parsing ------------------------------------------
@@ -250,13 +184,13 @@ def _materialize_recording_rules(packs: list[dict], at_s: int) -> int:
                 if not rec:
                     continue
                 rule_lines = []
-                for r in _query(rule["expr"], at_s):
+                for r in _VM.query_instant(rule["expr"], at_s):
                     labels = {k: v for k, v in r["metric"].items() if k != "__name__"}
                     lbl = ("{" + ",".join(f'{k}="{v}"' for k, v in sorted(labels.items())) + "}"
                            ) if labels else ""
                     rule_lines.append(f"{rec}{lbl} {r['value'][1]} {at_ms}")
                 if rule_lines:
-                    _import_lines(rule_lines)
+                    _VM.import_prometheus(rule_lines)
                     _flush_import()   # make this rule visible to the next in the chain
                     written += len(rule_lines)
     return written
@@ -280,34 +214,7 @@ def _fmt(sets) -> list:
     return sorted(tuple(sorted(s)) for s in sets)
 
 
-def _worker_offset() -> int:
-    """Per-xdist-worker slot offset so parallel workers sharing one VM can't collide."""
-    w = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
-    return int("".join(c for c in w if c.isdigit()) or "0") * _WORKER_SPAN
-
-
-def _window_s(group_id: int, ti: int) -> int:
-    """Unique, DETERMINISTIC ingest-window start for one (worker, case, test-block).
-    group_id is a global per-case index; each window is _GAP apart (>> VM staleness)
-    so no two logical tests cross-talk, and re-runs re-import identically (idempotent)."""
-    slot = group_id * _MAX_BLOCKS + ti
-    assert slot < _WORKER_SPAN, f"slot {slot} overflows worker span (raise _WORKER_SPAN)"
-    return _T0 + (_worker_offset() + slot) * _GAP
-
-
-def _parse_dur(d) -> int:
-    """Minimal promtool duration → seconds (`15s`,`5m`,`1h`,`2h30m`...)."""
-    if isinstance(d, (int, float)):
-        return int(d)
-    total, num = 0, ""
-    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-    for ch in str(d):
-        if ch.isdigit():
-            num += ch
-        elif ch in units:
-            total += int(num or 0) * units[ch]
-            num = ""
-    return total or int(num or 0)
+# (worker_offset / window_start / parse_dur / expand_values now live in vm_harness)
 
 
 # ---- alert-decision parity (label-sets + fire/no-fire) ---------------------
@@ -328,23 +235,23 @@ def test_vm_alert_decision_parity(fixture_name, alertname):
         if not art:
             continue
         saw_block = True
-        interval_ms = _parse_dur(test.get("interval", doc.get("evaluation_interval", "1m"))) * 1000
-        window_s = _window_s(group_id, ti)
+        interval_ms = parse_dur(test.get("interval", doc.get("evaluation_interval", "1m"))) * 1000
+        window_s = window_start(group_id, ti)
         t0_ms = window_s * 1000
 
         for s in test["input_series"]:
-            _import_series(s["series"], _expand_values(s["values"]), t0_ms, interval_ms)
+            _VM.import_series(s["series"], expand_values(s["values"]), t0_ms, interval_ms)
         _flush_import()
 
         for case in art:
-            at_s = window_s + _parse_dur(case["eval_time"])
+            at_s = window_s + parse_dur(case["eval_time"])
             written = _materialize_recording_rules(packs, at_s)
             # plumbing guard: the chain MUST have produced something — otherwise an
             # empty alert result is a silent no-op masquerading as "no-fire" (false green).
             assert written > 0, (
                 f"{fixture_name} [{alertname}] test#{ti}: recording-rule chain wrote "
                 f"0 series — plumbing no-op'd, so a no-fire result would be meaningless")
-            got = {_labelset(r["metric"]) for r in _query(expr, at_s)}
+            got = {_labelset(r["metric"]) for r in _VM.query_instant(expr, at_s)}
             # Expected expr-output label-sets = golden exp_labels MINUS the LITERAL
             # static labels the evaluator adds (e.g. `severity: warning`). Templated
             # passthroughs (`tenant: "{{ $labels.tenant }}"`) re-expose labels the expr
@@ -381,18 +288,18 @@ def test_vm_expr_value_parity(fixture_name, expr):
         if not pet:
             continue
         saw_block = True
-        interval_ms = _parse_dur(test.get("interval", doc.get("evaluation_interval", "1m"))) * 1000
-        window_s = _window_s(group_id, ti)
+        interval_ms = parse_dur(test.get("interval", doc.get("evaluation_interval", "1m"))) * 1000
+        window_s = window_start(group_id, ti)
         t0_ms = window_s * 1000
 
         for s in test["input_series"]:
-            _import_series(s["series"], _expand_values(s["values"]), t0_ms, interval_ms)
+            _VM.import_series(s["series"], expand_values(s["values"]), t0_ms, interval_ms)
         _flush_import()
 
         for case in pet:
-            at_s = window_s + _parse_dur(case["eval_time"])
+            at_s = window_s + parse_dur(case["eval_time"])
             _materialize_recording_rules(packs, at_s)
-            got = {_labelset(r["metric"]): float(r["value"][1]) for r in _query(expr, at_s)}
+            got = {_labelset(r["metric"]): float(r["value"][1]) for r in _VM.query_instant(expr, at_s)}
             want = {_parse_series_str(s["labels"]): float(s["value"])
                     for s in case["exp_samples"]}
             assert set(got) == set(want), (
@@ -431,10 +338,10 @@ def test_harness_measures_real_vm_result():
     queried as `p*2`, must return exactly one series with the probe's labels and
     value 10±ε. If this drifts, every parity assertion above is suspect."""
     _require_vm_or_fail()
-    window = _window_s(len(_CASES) + len(_EXPR_CASES), 0)
-    _import_lines([f'parity_selftest_probe{{tenant="x",k="v"}} 5 {window * 1000}'])
+    window = window_start(len(_CASES) + len(_EXPR_CASES), 0)
+    _VM.import_prometheus([f'parity_selftest_probe{{tenant="x",k="v"}} 5 {window * 1000}'])
     _flush_import()
-    res = _query("parity_selftest_probe * 2", window)
+    res = _VM.query_instant("parity_selftest_probe * 2", window)
     assert len(res) == 1, f"expected exactly 1 series, got {res}"
     assert _labelset(res[0]["metric"]) == frozenset({("tenant", "x"), ("k", "v")})
     assert abs(float(res[0]["value"][1]) - 10.0) < _EPSILON, res[0]["value"]
@@ -452,14 +359,14 @@ def test_harness_measures_real_vm_result():
     ("1 _ 3", [1.0, None, 3.0]),              # gap
 ])
 def test_expand_values(spec, expected):
-    assert _expand_values(spec) == expected
+    assert expand_values(spec) == expected
 
 
 @pytest.mark.parametrize("dur,sec", [
     ("15s", 15), ("5m", 300), ("11m", 660), ("1h", 3600), ("2h30m", 9000), (60, 60),
 ])
 def test_parse_dur(dur, sec):
-    assert _parse_dur(dur) == sec
+    assert parse_dur(dur) == sec
 
 
 @pytest.mark.parametrize("s,expected", [
