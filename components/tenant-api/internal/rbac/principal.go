@@ -16,7 +16,12 @@ package rbac
 //   - The machine (KSA) path is audit-only: it verifies, logs, and counts,
 //     but NEVER blocks a request and NEVER feeds authz. See ksa_resolver.go.
 
-import "net/http"
+import (
+	"fmt"
+	"net/http"
+	"regexp"
+	"strings"
+)
 
 // VerifiedPrincipal is the resolved identity of a caller together with a
 // record of the trust source and assurance level that produced it. It is
@@ -36,6 +41,15 @@ type VerifiedPrincipal struct {
 	Email string
 	// Groups are the IdP group names used for RBAC checks (X-Forwarded-Groups).
 	Groups []string
+	// Claims are named verified claims (e.g. an org code) loaded from
+	// trusted-hop headers declared by deployment config
+	// (--identity-claim-headers → HeaderResolver.ClaimHeaders). nil means no
+	// claim axis was declared — or none of the declared headers carried a
+	// value. Their trust level is the same as Groups: this principal's
+	// Assurance (the same trusted hop injected both). P2 (ADR-027 / LD-6)
+	// only CARRIES them — nothing consumes Claims for authz until P3's match
+	// evaluation. Machine (KSA) principals never carry claims (always nil).
+	Claims map[string]string
 	// Source records which resolver attested this identity.
 	Source string
 	// Assurance records how strongly the identity is attested.
@@ -152,22 +166,112 @@ const (
 // IdentityResolver shape. Its Resolve is byte-for-byte equivalent to the
 // header parsing the middleware performed inline before the seam existed:
 // X-Forwarded-Email (empty → error) and comma-split X-Forwarded-Groups.
-type HeaderResolver struct{}
+// ADR-027 / LD-6 P2 adds the ClaimHeaders declaration; the zero value keeps
+// the exact pre-P2 behavior (no claim axes → Claims stays nil).
+type HeaderResolver struct {
+	// ClaimHeaders maps a claim key to the trusted-hop header carrying its
+	// value (claimKey → headerName), as declared by deployment config
+	// (--identity-claim-headers, parsed by ParseClaimHeaders). nil — the
+	// zero value — means no claim axes are declared: existing
+	// HeaderResolver{} construction sites stay valid and Resolve is
+	// byte-identical to the pre-P2 behavior.
+	ClaimHeaders map[string]string
+}
 
 // Resolve reads the oauth2-proxy identity headers into a VerifiedPrincipal.
 // An empty X-Forwarded-Email is an error (the middleware maps it to 401),
 // preserving the exact pre-seam semantics.
-func (HeaderResolver) Resolve(r *http.Request) (*VerifiedPrincipal, error) {
+//
+// Named claims (ADR-027 / LD-6 P2): for each configured (key, header) pair,
+// the header value is trimmed and, if non-empty, stored as Claims[key]. An
+// absent or empty header means the key is simply not present — an empty
+// string is NOT a claim (it would be an empty-string match footgun for P3).
+// The value is carried verbatim after trimming — no comma-splitting;
+// multi-value semantics belong to P3/P4. Claims is allocated only when at
+// least one claim hits, so "no claims" has exactly one representation (nil).
+func (h HeaderResolver) Resolve(r *http.Request) (*VerifiedPrincipal, error) {
 	email := r.Header.Get("X-Forwarded-Email")
 	if email == "" {
 		return nil, errMissingIdentity
 	}
 	groups := parseForwardedGroups(r.Header.Get("X-Forwarded-Groups"))
+	var claims map[string]string
+	for key, header := range h.ClaimHeaders {
+		if v := strings.TrimSpace(r.Header.Get(header)); v != "" {
+			if claims == nil {
+				claims = make(map[string]string, len(h.ClaimHeaders))
+			}
+			claims[key] = v
+		}
+	}
 	return &VerifiedPrincipal{
 		Subject:   email,
 		Email:     email,
 		Groups:    groups,
+		Claims:    claims,
 		Source:    SourceHumanHopB,
 		Assurance: AssuranceHopAttested,
 	}, nil
+}
+
+// claimKeyRe pins the allowed claim-key charset for ParseClaimHeaders. Claim
+// keys become config / match tokens in later phases (P3 match evaluation), so
+// the set is deliberately conservative.
+var claimKeyRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+// headerNameRe pins the allowed header-name charset for ParseClaimHeaders.
+// Deliberately conservative (a strict subset of RFC 9110 tchar): every real
+// identity header (X-Auth-Request-*, X-Forwarded-*) fits, and any name a
+// request could never actually carry — embedded '=', ',', spaces, control
+// characters — is a startup error instead of a silently-unreachable claim
+// axis. Widen only if a real deployment needs an exotic (but valid) name.
+var headerNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// ParseClaimHeaders parses the --identity-claim-headers flag value: a
+// comma-separated list of claimKey=Header-Name pairs, e.g.
+//
+//	org=X-Auth-Request-Org,region=X-Auth-Request-Region
+//
+// An empty (or all-whitespace) string returns (nil, nil) — no claim axes
+// declared, the seam stays closed. Whitespace around pairs, keys and header
+// names is trimmed.
+//
+// Validation is fail-loud (main wraps any error in log.Fatalf — a
+// misconfigured identity axis must never be silently absent): a pair without
+// '=', an empty claim key, a claim key outside [A-Za-z0-9_.-]+, an empty
+// header name, a header name outside [A-Za-z0-9_-]+ (the split cuts at the
+// FIRST '=', so an embedded '=' would otherwise slip into the header name and
+// leave that axis silently unreachable), or a duplicate claim key is an error
+// carrying the offending pair verbatim.
+func ParseClaimHeaders(s string) (map[string]string, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	out := make(map[string]string)
+	for _, raw := range strings.Split(s, ",") {
+		pair := strings.TrimSpace(raw)
+		key, header, ok := strings.Cut(pair, "=")
+		if !ok {
+			return nil, fmt.Errorf("claim-header pair %q: missing '=' (want claimKey=Header-Name)", raw)
+		}
+		key = strings.TrimSpace(key)
+		header = strings.TrimSpace(header)
+		if key == "" {
+			return nil, fmt.Errorf("claim-header pair %q: empty claim key", raw)
+		}
+		if !claimKeyRe.MatchString(key) {
+			return nil, fmt.Errorf("claim-header pair %q: claim key %q outside allowed charset [A-Za-z0-9_.-]", raw, key)
+		}
+		if header == "" {
+			return nil, fmt.Errorf("claim-header pair %q: empty header name", raw)
+		}
+		if !headerNameRe.MatchString(header) {
+			return nil, fmt.Errorf("claim-header pair %q: header name %q outside allowed charset [A-Za-z0-9_-] (a name a request cannot carry would leave the claim axis silently absent)", raw, header)
+		}
+		if _, dup := out[key]; dup {
+			return nil, fmt.Errorf("claim-header pair %q: duplicate claim key %q", raw, key)
+		}
+		out[key] = header
+	}
+	return out, nil
 }

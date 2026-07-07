@@ -1943,6 +1943,13 @@
                         "type": "string"
                     }
                 },
+                "claims": {
+                    "description": "Claims are the named verified claims carried by the request principal\n(ADR-027 / LD-6 P2; declared via --identity-claim-headers). omitempty:\nwith no claim axes declared (nil map) the key is absent, keeping the\nzero-config response body byte-identical to pre-P2. Go serialises map\nkeys sorted, so the rendering is deterministic.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
                 "email": {
                     "type": "string"
                 },

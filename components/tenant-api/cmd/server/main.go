@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -98,6 +99,8 @@ func main() {
 		"MED-8 escape hatch: allow open-read when a --rbac path parses to zero groups (default false = fail closed)")
 	rbacMetadataScopeEnforce := flag.Bool("rbac-metadata-scope-enforce", envBool("TA_RBAC_METADATA_SCOPE_ENFORCE"),
 		"ADR-027/LD-6 P1: DENY an unlabeled tenant on an env/domain-restricted rule (fail-closed). Default false = shadow (still allow, but count tenant_api_scope_would_deny_total{axis=\"metadata\"}); flip only after that counter stops incrementing over the soak window (increase()==0 — it is a monotonic counter, not a gauge)")
+	identityClaimHeaders := flag.String("identity-claim-headers", envOrDefault("TA_IDENTITY_CLAIM_HEADERS", ""),
+		"ADR-027/LD-6 P2: comma-separated claimKey=Header-Name pairs (e.g. 'org=X-Auth-Request-Org,region=X-Auth-Request-Region') declaring which trusted-hop headers load which named verified claims onto the request principal. Claims are carried only — nothing consumes them for authz until P3 match evaluation. Default empty = the seam is closed and behavior is unchanged.")
 	listenAddr := flag.String("addr", envOrDefault("TA_ADDR", ":8080"),
 		"HTTP listen address")
 	reloadInterval := flag.Duration("reload-interval", 30*time.Second,
@@ -269,6 +272,21 @@ func main() {
 		log.Printf("INFO: --rbac-metadata-scope-enforce set: unlabeled tenants on env/domain-restricted rules are DENIED (metadata scope fail-closed)")
 	} else {
 		log.Printf("INFO: metadata scope filter in SHADOW mode: unlabeled tenants still pass; watch increase(tenant_api_scope_would_deny_total{axis=\"metadata\"}[<soak-window>]) and flip --rbac-metadata-scope-enforce once it stays 0 across the window (monotonic counter — its rate, not its value, is the signal)")
+	}
+
+	// ADR-027 / LD-6 P2: identity-claims seam. The flag declares which
+	// trusted-hop headers load which named claims (claimKey=Header-Name);
+	// parsing is fail-loud — a misconfigured identity axis must never be
+	// silently absent. Default empty = no claim axes → byte-identical pre-P2
+	// behavior. The INFO line logs claim keys and header NAMES only (startup
+	// config — request values never appear in logs).
+	claimHeaders, err := rbac.ParseClaimHeaders(*identityClaimHeaders)
+	if err != nil {
+		log.Fatalf("FATAL: --identity-claim-headers: %v", err)
+	}
+	if len(claimHeaders) > 0 {
+		rbacMgr.SetClaimHeaders(claimHeaders)
+		log.Printf("INFO: identity claim headers configured: %s (claims ride the principal only; authz unchanged until P3)", formatClaimHeaders(claimHeaders))
 	}
 
 	// ADR-027 PR-1b-i: machine-identity audit side-channel. Built here so an
@@ -812,6 +830,22 @@ func envBool(key string) bool {
 func pathExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// formatClaimHeaders renders a claimKey→headerName map as deterministic
+// (key-sorted) "key=Header-Name" CSV for the startup INFO log. This is
+// startup config only — no request-carried claim values are ever logged.
+func formatClaimHeaders(m map[string]string) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	pairs := make([]string, 0, len(keys))
+	for _, k := range keys {
+		pairs = append(pairs, k+"="+m[k])
+	}
+	return strings.Join(pairs, ",")
 }
 
 // splitCSV splits a comma-separated flag value into trimmed, non-empty items.

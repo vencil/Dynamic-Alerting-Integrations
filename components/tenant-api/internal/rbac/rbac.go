@@ -103,6 +103,15 @@ type Manager struct {
 	// it just emits no would-deny counter. Set once at startup via
 	// SetScopeAuditor. Shared across scope axes (P1 metadata; P4 org).
 	scopeAudit ScopeAuditRecorder
+
+	// claimHeaders (ADR-027 / LD-6 P2) declares which trusted-hop header
+	// loads which named claim (claimKey → headerName), parsed from
+	// --identity-claim-headers by ParseClaimHeaders. Middleware hands it to
+	// HeaderResolver so the resolved principal carries the named claims.
+	// nil (the default) means no claim axes are declared — the principal's
+	// Claims stays nil and behavior is byte-identical to pre-P2. Set once at
+	// startup via SetClaimHeaders.
+	claimHeaders map[string]string
 }
 
 // SetMachineAuditor installs the machine-identity audit side-channel
@@ -126,6 +135,15 @@ func (m *Manager) EnableMetadataScopeEnforce() { m.metadataScopeEnforce = true }
 // (ADR-027 / LD-6 P1). Called once at startup. Passing nil leaves recording
 // disabled (the filter still behaves correctly). Mirrors SetMachineAuditor.
 func (m *Manager) SetScopeAuditor(a ScopeAuditRecorder) { m.scopeAudit = a }
+
+// SetClaimHeaders installs the claimKey→headerName declaration for the
+// identity-claims seam (ADR-027 / LD-6 P2), as parsed by ParseClaimHeaders.
+// Called once at startup, before serving begins; it must NOT be called again
+// after requests start flowing — the map is read per-request without locking,
+// mirroring EnableMetadataScopeEnforce / SetScopeAuditor. Passing nil (the
+// default state) leaves the seam closed: principals carry no claims and
+// behavior is byte-identical to pre-P2.
+func (m *Manager) SetClaimHeaders(h map[string]string) { m.claimHeaders = h }
 
 // NewManager creates a Manager and loads the RBAC config from path.
 // If path is empty, the manager starts in open mode (all

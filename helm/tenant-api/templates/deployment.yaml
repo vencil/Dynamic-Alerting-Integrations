@@ -118,6 +118,18 @@ spec:
             # tenant, mirroring the machineIdentity audit→enforce discipline.
             - --rbac-metadata-scope-enforce
             {{- end }}
+            {{- if .Values.identity.claimHeaders }}
+            # ADR-027 / LD-6 P2: named trusted-hop headers → principal claims
+            # (identity.claimHeaders). Rendered as ONE flag, keys sorted (helm
+            # map range iterates key-sorted). Carriage-only in P2 — the binary
+            # loads the named claims onto the verified principal; no authz
+            # behavior changes until P3 match evaluation consumes them.
+            {{- $pairs := list }}
+            {{- range $k, $v := .Values.identity.claimHeaders }}
+            {{- $pairs = append $pairs (printf "%s=%s" $k $v) }}
+            {{- end }}
+            - --identity-claim-headers={{ join "," $pairs }}
+            {{- end }}
             {{- if .Values.federation.enabled }}
             - --federation-key=/etc/federation/{{ .Values.federation.signingKey.secretKey }}
             - --federation-store={{ .Values.federation.store.configMapName }}
