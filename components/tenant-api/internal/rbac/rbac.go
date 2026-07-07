@@ -83,6 +83,26 @@ type Manager struct {
 	// byte-identically to the pre-seam version. Set once at startup via
 	// SetMachineAuditor.
 	machineAuditor MachineIdentityAuditor
+
+	// metadataScopeEnforce (ADR-027 / LD-6 P1) controls the fail-mode of the
+	// metadata (environment/domain) scope filter for an UNLABELED tenant — one
+	// that carries no value for a field a matching rule restricts. false (the
+	// default) is SHADOW mode: the unlabeled tenant still passes (byte-identical
+	// to the legacy fail-OPEN behavior) but a would-deny signal is recorded so
+	// operators can backfill labels before flipping. true is ENFORCE mode: the
+	// unlabeled tenant is denied (fail-CLOSED). Set once at startup via
+	// EnableMetadataScopeEnforce. Per-axis by design (ADR-027 D4): the org scope
+	// axis (P4) carries its own flag so the two audit→enforce rollouts stay
+	// independent.
+	metadataScopeEnforce bool
+
+	// scopeAudit is the optional would-deny metric sink for scope filters
+	// (instance-method DI, mirroring machineAuditor / the rate-limiter bridge,
+	// so metric state is not a package singleton and tests stay isolatable).
+	// nil (the default) means no recording — the filter still behaves correctly,
+	// it just emits no would-deny counter. Set once at startup via
+	// SetScopeAuditor. Shared across scope axes (P1 metadata; P4 org).
+	scopeAudit ScopeAuditRecorder
 }
 
 // SetMachineAuditor installs the machine-identity audit side-channel
@@ -92,6 +112,20 @@ type Manager struct {
 // constructor arg so NewManager's signature — and its many call sites — stay
 // unchanged.
 func (m *Manager) SetMachineAuditor(a MachineIdentityAuditor) { m.machineAuditor = a }
+
+// EnableMetadataScopeEnforce switches the metadata (environment/domain) scope
+// filter from SHADOW (default) to ENFORCE mode: an unlabeled tenant on a
+// restricted field is DENIED instead of allowed-with-would-deny-signal
+// (ADR-027 / LD-6 P1). Called from main when --rbac-metadata-scope-enforce is
+// set — after a shadow soak has driven the would-deny counter to zero. Kept a
+// setter (not a NewManager arg) so the many NewManager call sites stay
+// unchanged, mirroring AllowOpenReadOnEmpty / SetMachineAuditor.
+func (m *Manager) EnableMetadataScopeEnforce() { m.metadataScopeEnforce = true }
+
+// SetScopeAuditor installs the would-deny metric sink for scope filters
+// (ADR-027 / LD-6 P1). Called once at startup. Passing nil leaves recording
+// disabled (the filter still behaves correctly). Mirrors SetMachineAuditor.
+func (m *Manager) SetScopeAuditor(a ScopeAuditRecorder) { m.scopeAudit = a }
 
 // NewManager creates a Manager and loads the RBAC config from path.
 // If path is empty, the manager starts in open mode (all
@@ -196,6 +230,12 @@ func (m *Manager) HasMetadataAccess(idpGroups []string, tenantID, environment, d
 		groupSet[g] = true
 	}
 
+	// Evaluate visibility under BOTH scope modes in one pass so the would-deny
+	// signal is per-tenant, not per-field: the tenant is recorded iff it is
+	// visible under shadow but would be hidden under enforce (its access hinges
+	// on unlabeled-tenant leniency). A wildcard rule granting access under
+	// strict semantics sets enforceVisible and suppresses the (false) would-deny.
+	shadowVisible, enforceVisible := false, false
 	for _, rule := range cfg.Groups {
 		if !groupSet[rule.Name] {
 			continue
@@ -203,17 +243,24 @@ func (m *Manager) HasMetadataAccess(idpGroups []string, tenantID, environment, d
 		if !tenantMatches(rule.Tenants, tenantID) {
 			continue
 		}
-		// Check environment constraint (empty = wildcard)
-		if !metadataMatches(rule.Environments, environment) {
-			continue
+		envShadow, envEnforce := scopeFieldModes(rule.Environments, environment)
+		domShadow, domEnforce := scopeFieldModes(rule.Domains, domain)
+		if envShadow && domShadow {
+			shadowVisible = true
 		}
-		// Check domain constraint (empty = wildcard)
-		if !metadataMatches(rule.Domains, domain) {
-			continue
+		if envEnforce && domEnforce {
+			enforceVisible = true
 		}
-		return true
+		if shadowVisible && enforceVisible {
+			break // both outcomes decided; further rules cannot change either
+		}
 	}
-	return false
+
+	m.recordScopeShadowGap(shadowVisible, enforceVisible, scopeAxisMetadata)
+	if m.metadataScopeEnforce {
+		return enforceVisible
+	}
+	return shadowVisible
 }
 
 // AccessibleEnvironments returns the set of environments the user's IdP groups
@@ -290,15 +337,54 @@ func (m *Manager) AccessibleDomains(idpGroups []string) []string {
 	return result
 }
 
-// metadataMatches checks if a metadata value matches a rule's allowed list.
-// Empty allowList means wildcard (all values allowed).
-// Empty value in the tenant always matches (no metadata to restrict on).
+// scopeFieldModes evaluates one metadata field (environment or domain) against
+// a matching rule's allow-list under BOTH scope modes at once, returning
+// (passesShadow, passesEnforce). It is pure (no side effects) — the would-deny
+// recording happens once per tenant at the decision site (recordScopeShadowGap),
+// not per field, so the counter measures would-be-hidden tenants rather than
+// field-checks (ADR-027 / LD-6 P1).
+//
+//   - Empty allow-list → (true, true):  the rule does not restrict this field.
+//   - Empty value      → (true, false): unlabeled tenant on a restricted field —
+//     shadow is lenient (passes, legacy fail-open), enforce is strict (denies).
+//   - Labeled value    → (ok, ok):      exact membership, identical in both modes.
+//
+// Shared across scope axes (P1 metadata; P4 org) as the pure evaluation rail.
+func scopeFieldModes(allowList []string, value string) (passShadow, passEnforce bool) {
+	if len(allowList) == 0 {
+		return true, true // wildcard — no restriction on this field
+	}
+	if value == "" {
+		return true, false // unlabeled: shadow allows, enforce denies
+	}
+	ok := metadataMatches(allowList, value)
+	return ok, ok
+}
+
+// recordScopeShadowGap records one would-deny for axis iff a subject is visible
+// under shadow but would be hidden under enforce — i.e. its access hinges on the
+// unlabeled-tenant leniency. Called once per scope decision (per user+tenant),
+// so the counter measures would-be-hidden subjects, not per-field checks: a
+// tenant with two restricted-and-unlabeled fields is one observation, and a
+// tenant that another rule grants under strict semantics is zero (no false
+// positive that would keep the shadow-soak counter off zero forever). Under
+// enforce mode the same condition holds for a tenant that IS being hidden, so
+// the counter keeps doubling as a "denied by scope" signal. nil sink → no-op.
+// Shared across scope axes (P1 metadata; P4 org).
+func (m *Manager) recordScopeShadowGap(shadowVisible, enforceVisible bool, axis string) {
+	if shadowVisible && !enforceVisible && m.scopeAudit != nil {
+		m.scopeAudit.IncWouldDeny(axis)
+	}
+}
+
+// metadataMatches reports whether value is a member of a rule's allow-list.
+// An empty allow-list is a wildcard (the rule places no restriction on this
+// field). It no longer special-cases an empty value — the "unlabeled tenant on
+// a restricted field" case is a scope decision handled mode-aware by the caller
+// (scopeFieldModes), not silently fail-open here.
 func metadataMatches(allowList []string, value string) bool {
 	if len(allowList) == 0 {
 		return true // wildcard — no restriction
-	}
-	if value == "" {
-		return true // tenant has no metadata → passes (be permissive)
 	}
 	for _, allowed := range allowList {
 		if allowed == value {

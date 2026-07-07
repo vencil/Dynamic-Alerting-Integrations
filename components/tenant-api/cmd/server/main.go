@@ -96,6 +96,8 @@ func main() {
 		"Path to _rbac.yaml (leave empty for open-read mode)")
 	rbacEmptyOpen := flag.Bool("rbac-empty-open", envBool("TA_RBAC_EMPTY_OPEN"),
 		"MED-8 escape hatch: allow open-read when a --rbac path parses to zero groups (default false = fail closed)")
+	rbacMetadataScopeEnforce := flag.Bool("rbac-metadata-scope-enforce", envBool("TA_RBAC_METADATA_SCOPE_ENFORCE"),
+		"ADR-027/LD-6 P1: DENY an unlabeled tenant on an env/domain-restricted rule (fail-closed). Default false = shadow (still allow, but count tenant_api_scope_would_deny_total{axis=\"metadata\"}); flip only after that counter stops incrementing over the soak window (increase()==0 — it is a monotonic counter, not a gauge)")
 	listenAddr := flag.String("addr", envOrDefault("TA_ADDR", ":8080"),
 		"HTTP listen address")
 	reloadInterval := flag.Duration("reload-interval", 30*time.Second,
@@ -251,6 +253,22 @@ func main() {
 	}
 	if *rbacPath == "" {
 		log.Printf("WARN: no --rbac path configured: running in open-read mode (all authenticated identities have read access)")
+	}
+
+	// ADR-027 / LD-6 P1: metadata (env/domain) scope filter fail-mode. The
+	// would-deny recorder is wired unconditionally so tenant_api_scope_would_
+	// deny_total is always present (0-series). Default is SHADOW — an unlabeled
+	// tenant on a restricted rule still passes (byte-identical to the legacy
+	// fail-open) but is counted. --rbac-metadata-scope-enforce flips to
+	// fail-closed AFTER the counter stops incrementing over the soak window
+	// (it is a monotonic counter: the flip signal is a zero rate/increase, not
+	// an absolute zero value).
+	rbacMgr.SetScopeAuditor(handler.NewScopeWouldDenyRecorder())
+	if *rbacMetadataScopeEnforce {
+		rbacMgr.EnableMetadataScopeEnforce()
+		log.Printf("INFO: --rbac-metadata-scope-enforce set: unlabeled tenants on env/domain-restricted rules are DENIED (metadata scope fail-closed)")
+	} else {
+		log.Printf("INFO: metadata scope filter in SHADOW mode: unlabeled tenants still pass; watch increase(tenant_api_scope_would_deny_total{axis=\"metadata\"}[<soak-window>]) and flip --rbac-metadata-scope-enforce once it stays 0 across the window (monotonic counter — its rate, not its value, is the signal)")
 	}
 
 	// ADR-027 PR-1b-i: machine-identity audit side-channel. Built here so an

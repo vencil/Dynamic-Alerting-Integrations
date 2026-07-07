@@ -108,6 +108,16 @@ spec:
             - --git-dir=/conf.d
             - --rbac=/etc/rbac/_rbac.yaml
             - --reload-interval={{ .Values.tenantApi.reloadInterval }}
+            {{- if .Values.rbac.metadataScopeEnforce }}
+            # ADR-027 / LD-6 P1: flip the env/domain metadata scope filter from
+            # SHADOW (default) to fail-closed — an unlabeled tenant on a
+            # restricted rule is DENIED (hidden from the list). Flip ONLY after
+            # increase(tenant_api_scope_would_deny_total{axis="metadata"}[soak])
+            # has stayed 0 over the soak window (monotonic counter — a zero rate,
+            # not an absolute-zero value) AND a scan confirms no still-unlabeled
+            # tenant, mirroring the machineIdentity audit→enforce discipline.
+            - --rbac-metadata-scope-enforce
+            {{- end }}
             {{- if .Values.federation.enabled }}
             - --federation-key=/etc/federation/{{ .Values.federation.signingKey.secretKey }}
             - --federation-store={{ .Values.federation.store.configMapName }}

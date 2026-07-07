@@ -25,12 +25,16 @@ func TestMetadataMatches(t *testing.T) {
 			value:     "",
 			want:      true,
 		},
-		// Empty value always matches (tenant has no metadata)
+		// Empty value on a NON-empty allow-list is no longer a match: the
+		// "unlabeled tenant" fail-open moved out of metadataMatches into the
+		// mode-aware scopeFieldModes (ADR-027/LD-6 P1). metadataMatches is now
+		// pure exact-membership. The shadow/enforce behavior is covered by
+		// TestScopeFieldModes / TestHasMetadataAccess_ScopeMode below.
 		{
-			name:      "empty value matches despite non-empty allowList",
+			name:      "empty value does not match non-empty allowList (pure membership)",
 			allowList: []string{"production", "staging"},
 			value:     "",
-			want:      true,
+			want:      false,
 		},
 		// Exact match cases
 		{
