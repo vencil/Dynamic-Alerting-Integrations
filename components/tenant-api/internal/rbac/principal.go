@@ -124,6 +124,30 @@ const (
 	ResultAuditUnknownWorkload = "unknown_workload" // verified token, but the ServiceAccount is not in the machine-identity allowlist
 )
 
+// ScopeAuditRecorder is the metric sink for scope-filter would-deny
+// observations (ADR-027 / LD-6 P1). Like IdentityAuditRecorder it is declared
+// in package rbac (to avoid the handler→rbac import cycle) and implemented in
+// the handler package, injected into the Manager via SetScopeAuditor
+// (instance-method DI — no package singleton — so metric state stays
+// test-isolatable). Shared across scope axes.
+type ScopeAuditRecorder interface {
+	// IncWouldDeny records one scope would-deny observation for the given axis
+	// (one of the ScopeAxis* constants) — a subject that shadow mode allows but
+	// enforce mode would deny. Backs tenant_api_scope_would_deny_total{axis}.
+	IncWouldDeny(axis string)
+}
+
+// Scope axis labels for tenant_api_scope_would_deny_total{axis}. Fixed set
+// (bounded cardinality, no user-controlled values). P1 emits only
+// ScopeAxisMetadata; the org axis (P4) will add its own constant.
+const (
+	// scopeAxisMetadata is the environment/domain metadata scope filter axis.
+	// Unexported: the only emitter is HasMetadataAccess (via recordScopeShadowGap)
+	// in this package. The handler's exposition uses the same string literal for
+	// the {axis} label.
+	scopeAxisMetadata = "metadata"
+)
+
 // HeaderResolver wraps the pre-existing oauth2-proxy header-trust path in the
 // IdentityResolver shape. Its Resolve is byte-for-byte equivalent to the
 // header parsing the middleware performed inline before the seam existed:

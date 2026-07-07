@@ -135,6 +135,11 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	// audit is disabled) so the metric's shape is stable across the flag.
 	writeIdentityAuditMetrics(w)
 
+	// ADR-027 / LD-6 P1: scope-filter would-deny counters. Records unlabeled
+	// subjects that shadow mode allows but enforce mode would deny; operators
+	// watch this to zero before flipping a scope axis to enforce.
+	writeScopeWouldDenyMetrics(w)
+
 	// ADR-022 Layer 2 tripwire: 1 ⇒ --dev-bypass-auth is ON (LOCAL DEV ONLY).
 	// MUST be 0 in production; alert if 1 outside a dev/compose environment.
 	devBypass := 0
