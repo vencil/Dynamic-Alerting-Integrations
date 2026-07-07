@@ -3,6 +3,9 @@
 # 依賴 -remoteWrite.flushInterval + -replay.rulesDelay（rulesDelay >= flushInterval）
 # 才看得到剛寫回的 record 樣本；e2e 斷言鏈式 alert 真 fire，把 race 行為釘死。
 # record 是 plain 恆等式 → 保留輸入 labels（waveform_* 歸因鍵存活）。
+# ⚠️ 鏈式規則一律收在「同一個 group」（本檔即是）：-replay.rulesDelay 依官方
+# 文件是 group 內 per-rule 的 delay；跨 group 的鏈（record 在 A、alert 在 B）
+# 沒有任何 delay 保證，可見性取決於 group 執行順序與 flush 時機 → 必 flaky。
 groups:
   - name: selftest-disk-chained
     interval: 30s

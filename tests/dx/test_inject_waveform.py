@@ -503,6 +503,42 @@ def test_t0_step_pins_match_vm_harness():
     assert wf.STEP == vm_harness.STEP
 
 
+# ── replay 引擎失敗 fail-loud wiring（Gemini #1043 盲區1 disposition）：
+#    v1.146.0 實測 rule eval error → 5 retries → Fatalf rc=255、無 "replay
+#    succeed" → 雙因子斷言必攔——引擎跑不動絕不偽裝成「規則沒 fire」的資料。
+#    引擎行為 pin 見 vm_harness.replay docstring；VM pin 升版時重驗。 ─────────
+
+def test_replay_engine_failure_raises_not_silent(tmp_path):
+    # sys.executable 當假 vmalert：吃不下 -rule= flag → 非零退出、無 succeed 字串
+    with pytest.raises(AssertionError, match="replay failed"):
+        vm_harness.replay(sys.executable, "groups: []", vm_harness.T0,
+                          vm_harness.T0 + 60, tmp_path, "poison",
+                          datasource_url="http://127.0.0.1:1")
+
+
+def test_pipeline_assertion_failure_exits_two(monkeypatch, capsys):
+    def boom(a, p, r):
+        raise AssertionError("vmalert -replay failed for poison: fatal")
+    monkeypatch.setattr(iw, "run_pipeline", boom)
+    monkeypatch.setattr(sys, "argv", [
+        "inject_waveform.py", str(_DISK), "--rules", str(_RULES),
+        "--allow-selftest"])
+    assert iw.main() == 2
+    assert "ERROR" in capsys.readouterr().err
+
+
+def test_unattributed_alerts_emit_stderr_warning(monkeypatch, capsys):
+    # Gemini #1043 盲區2：unattributed 顯性警告（indeterminate 非 FN），不只藏 JSON
+    monkeypatch.setattr(iw, "run_pipeline", lambda a, p, r: {
+        "unattributed_alerts": [{"alertname": "AggAlert"}]})
+    monkeypatch.setattr(sys, "argv", [
+        "inject_waveform.py", str(_DISK), "--rules", str(_RULES),
+        "--allow-selftest", "--json"])
+    assert iw.main() == 0
+    captured = capsys.readouterr()
+    assert "無法自動歸因" in captured.err and "indeterminate" in captured.err
+
+
 # ── e2e（需 VM + vmalert；skip-if-no-VM + REQUIRE 旋鈕，語義照抄 #968） ──
 
 _VM_URL = os.environ.get("WAVEFORM_INJECT_VM_URL", "http://localhost:8428")

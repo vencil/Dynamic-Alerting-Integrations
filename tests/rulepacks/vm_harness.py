@@ -158,7 +158,14 @@ def replay(vmalert_bin: str, rules_text: str, w_start: int, w_end: int, tmp: Pat
     `rules_delay_s` / `remote_write_flush_interval_s`: optional record→alert chain
     visibility knobs (``-replay.rulesDelay`` / ``-remoteWrite.flushInterval``; vmalert
     docs require rulesDelay >= flushInterval). ``None`` (default) OMITS the flag —
-    existing #968 callers keep the exact original command line (parity guard)."""
+    existing #968 callers keep the exact original command line (parity guard).
+
+    Engine-failure contract（實測 pin，vmalert v1.146.0）：rule 的 query 在 eval 期
+    出錯（如 422）→ 內建 retry（``-replay.ruleRetryAttempts`` 預設 5 次）→ Fatalf
+    終止整個 process——exit 255、不印 "replay succeed!"、不會續跑其他規則（以
+    ``-search.maxSamplesPerQuery=1`` 強迫 eval error 親驗）。下方雙因子 assert
+    （rc==0 AND "replay succeed"）因此是「引擎跑不動」不會偽裝成「規則沒 fire」
+    的 fail-loud 防線；VM pin 升版時重驗此契約。"""
     rf = tmp / f"{tag}_rules.yml"
     rf.write_text(rules_text, encoding="utf-8")
     tf = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(w_start))

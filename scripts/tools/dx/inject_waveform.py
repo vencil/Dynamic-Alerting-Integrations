@@ -342,12 +342,18 @@ def attribute_alerts(records: list[dict], alerts: list[dict]) -> list[dict]:
     """把 alert 歸因到 (signature, variant[, fanout series]) 紀錄。
 
     歸因鍵 = **exact match** 合成期注入的 identity labels 三元組
-    ``(waveform_signature, waveform_variant[, series])``——對 records 単射
+    ``(waveform_signature, waveform_variant[, series])``——對 records 單射
     （signature_index×variant 唯一、fanout 由 series 消歧），單一 alert 至多歸因
     一筆，根除「雙簽章同 labels 異 metric → 雙重歸因」假陽性。
     簽章 topology labels 留 sanity：identity 鍵合但 topology 矛盾 → 不歸因。
     聚合型規則（``sum by`` 等）剝掉 identity labels → 進 unattributed
-    （誠實限制不變，PR-3 自行裁量）。回傳 unattributed 清單。"""
+    （誠實限制不變）。回傳 unattributed 清單。
+
+    ⚠️ PR-3 計分契約（Gemini #1043 盲區2 disposition）：unattributed = 「成功
+    開火但歸因不明」（indeterminate），**不得**因 signature 找不到對應 alert 而
+    逕判 0% catch（假 FN）。出路＝人工驗證；或（僅供歸因診斷）暫時把
+    ``waveform_signature`` 加入該規則的 ``by()``/``on()`` 子句——修改後規則 ≠
+    生產規則，其結果只用於歸因、不得回寫 catch-rate。"""
     unattributed = []
     for a in alerts:
         lb = a["labels"]
@@ -707,6 +713,13 @@ def main() -> int:
             subprocess.TimeoutExpired, http.client.HTTPException) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
+
+    # 聚合型規則剝除 identity labels 的開火進 unattributed——顯性警告、不只藏在
+    # JSON（Gemini #1043 盲區2）；計分語義見 attribute_alerts docstring。
+    if report.get("unattributed_alerts"):
+        print(f"WARNING: {len(report['unattributed_alerts'])} 筆開火無法自動歸因"
+              "（聚合型規則剝除 identity labels）——屬 indeterminate 非 FN，"
+              "PR-3 計分不得當漏報；詳 attribute_alerts docstring。", file=sys.stderr)
 
     # 報告輸出也是管線的一環——寫檔失敗（--out 目錄不存在等）是 operational
     # error（exit 2），不得帶著成功報告假綠或炸 traceback。
