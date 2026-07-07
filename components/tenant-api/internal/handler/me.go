@@ -9,6 +9,7 @@ import (
 
 // MeResponse is the response body for GET /api/v1/me
 // v2.5.0: Added AccessibleEnvironments and AccessibleDomains for UI filtering hints.
+// ADR-027 / LD-6 P2: Added Claims (named verified claims off the request principal).
 type MeResponse struct {
 	Email                  string              `json:"email"`
 	User                   string              `json:"user"`
@@ -17,6 +18,12 @@ type MeResponse struct {
 	AccessibleEnvironments []string            `json:"accessible_environments,omitempty"` // nil = all
 	AccessibleDomains      []string            `json:"accessible_domains,omitempty"`      // nil = all
 	Permissions            map[string][]string `json:"permissions"`
+	// Claims are the named verified claims carried by the request principal
+	// (ADR-027 / LD-6 P2; declared via --identity-claim-headers). omitempty:
+	// with no claim axes declared (nil map) the key is absent, keeping the
+	// zero-config response body byte-identical to pre-P2. Go serialises map
+	// keys sorted, so the rendering is deterministic.
+	Claims map[string]string `json:"claims,omitempty"`
 }
 
 // Me handles GET /api/v1/me
@@ -33,14 +40,32 @@ type MeResponse struct {
 // @Router      /api/v1/me [get]
 func Me(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		email := rbac.RequestEmail(r)
+		// ADR-027 / LD-6 P2: principal-first. The VerifiedPrincipal the RBAC
+		// middleware attached is the identity SSOT (email / groups / claims);
+		// the legacy context accessors remain only as a fallback for requests
+		// that never passed through Middleware (handler-direct tests or a
+		// misconfigured chain), where the empty email yields the same 401 as
+		// before. This also fixes the drift where groups were read from
+		// RequestGroups while the principal was already available.
+		var (
+			email  string
+			groups []string
+			claims map[string]string
+		)
+		if p := rbac.RequestPrincipal(r); p != nil {
+			email = p.Email
+			groups = p.Groups
+			claims = p.Claims
+		} else {
+			email = rbac.RequestEmail(r)
+			groups = rbac.RequestGroups(r)
+		}
 		if email == "" {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{
 				"error": "missing identity: X-Forwarded-Email header required",
 			})
 			return
 		}
-		groups := rbac.RequestGroups(r)
 		// TRK-228: schemathesis caught nil-vs-array drift. Normalise so JSON
 		// encodes [] not null — the spec declares these fields as `array`.
 		if groups == nil {
@@ -65,6 +90,7 @@ func Me(d *Deps) http.HandlerFunc {
 			Groups:            groups,
 			AccessibleTenants: []string{},
 			Permissions:       make(map[string][]string),
+			Claims:            claims,
 		}
 
 		// Collect all accessible tenants and build permissions map

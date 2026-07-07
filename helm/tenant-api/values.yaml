@@ -256,6 +256,26 @@ machineIdentity:
   # projected token with `audience: tenant-api` to match.
   audience: tenant-api
 
+# ── Identity claim headers (ADR-027 / LD-6 P2, issue #962) ──────────────────
+# Named verified claims carried on the request principal. Each entry maps a
+# CLAIM KEY (e.g. org — the P3 match evaluation will consume it) to the
+# TRUSTED-HOP HTTP HEADER carrying its value. Which header exists is decided
+# by the deployment's login entrypoint (e.g. oauth2-proxy alpha-config
+# `injectRequestHeaders`); wiring that transport side is a follow-up PR.
+# Rendered as a single `--identity-claim-headers=key=Header,...` arg with
+# keys sorted (helm map range iterates key-sorted).
+# ⚠ TRUST BOUNDARY: every header listed here MUST be injected by the trusted
+# hop and MUST NOT be client-forgeable (strip-and-set at the proxy) — the
+# same trust boundary as X-Forwarded-Groups. In-platform backstop: a claim
+# header arriving with MORE than one line is refused (claim not loaded,
+# WARN logged), so an append-not-overwrite proxy misconfig cannot enable
+# first-value hijacking. P2 is carriage-only: the
+# platform does not interpret claim semantics and no authz behavior changes.
+# Default {} = the seam is OFF: render and runtime behavior stay
+# byte-identical to pre-P2.
+identity:
+  claimHeaders: {}
+
 # ADR-027 D2-B: human-plane Unix domain socket (GHSA-3g2h-rf85-5rrv L7 root-cause
 # series). When enabled, tenant-api serves the SAME router on a second listener
 # bound to a pod-internal Unix socket, and the oauth2-proxy sidecar points its

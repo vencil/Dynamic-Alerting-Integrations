@@ -10,7 +10,8 @@ type: application
 # 2.9.12 — #1004: admit recipe-preview's /access probe on the port-8080 netpol (third pod-scoped allow entry)
 # 2.9.13 — ADR-027 D2-B: opt-in humanSocket (oauth2-proxy UDS upstream) + da-portal as 4th port-8080 netpol allow entry
 # 2.9.14 — ADR-027 / #962: opt-in rbac.metadataScopeEnforce (env/domain scope shadow→enforce flip; default shadow = no-op)
-version: 2.9.14
+# 2.9.15 — ADR-027 / #962: opt-in identity.claimHeaders (named trusted-hop headers → principal claims; default empty = no-op)
+version: 2.9.15
 # appVersion: Go binary 版本
 # ⚠ appVersion pins the image tag. The --human-socket binary flag ships in a NEW
 # tenant-api image; humanSocket.enabled=true REQUIRES that image (NOTES + values

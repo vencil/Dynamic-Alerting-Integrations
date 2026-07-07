@@ -28,8 +28,11 @@ func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) str
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Resolve the trusted-hop (header) principal. Empty email → 401,
-			// same message and status as before the seam.
-			bPrincipal, err := HeaderResolver{}.Resolve(r)
+			// same message and status as before the seam. ClaimHeaders
+			// (ADR-027 / LD-6 P2) loads the declared named claims onto the
+			// principal; nil (the default) resolves byte-identically to the
+			// pre-P2 zero-value HeaderResolver{}.
+			bPrincipal, err := HeaderResolver{ClaimHeaders: m.claimHeaders}.Resolve(r)
 			if err != nil {
 				writeError(w, http.StatusUnauthorized, err.Error())
 				return
