@@ -113,6 +113,7 @@ lang: zh
 | `generate_tenant_metadata.py` | 租戶元資料產生器 — 從 conf.d/ 解析 YAML，推斷 rule_packs、owner、tier、routing_channel。 |
 | `generate_tool_map.py` | 工具導覽自動生成 |
 | `inject_related_docs.py` | Auto-generate "相關資源 / Related Resources" tables in documentation files. |
+| `inject_waveform.py` | fault-waveform 注入執行器（ADR-030 決策層驗證 PR-2） |
 | `migrate_conf_d.py` | Migrate flat conf.d/ to hierarchical domain/region/env/ layout. |
 | `migrate_ssot_language.py` | SSOT 語言切換遷移工具 (DORMANT, S#101 policy lock) |
 | `pr_preflight.py` | PR Preflight Check — branch 收尾前的自動化檢查。 |

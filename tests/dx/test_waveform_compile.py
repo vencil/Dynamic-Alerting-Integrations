@@ -230,7 +230,8 @@ def test_golden_pinned_values(tmp_path):
     vm = (out / "selftest-request-errors-total.vm.txt").read_text(encoding="utf-8")
     # counter 積分（rate 0.1/s × 30s = 3/step）+ jitter 釘值（seed=1）
     assert ('selftest_request_errors_total{endpoint="selftest-api",'
-            'instance="selftest-host-01",waveform_variant="base"} 3 1699999997957') in vm
+            'instance="selftest-host-01",waveform_signature="0",'
+            'waveform_variant="base"} 3 1699999997957') in vm
 
 
 # ── 變體語義 ──────────────────────────────────────────────────────────
@@ -504,7 +505,8 @@ def test_promtool_roundtrip_reads_materialization_a(tmp_path):
     frag = yaml.safe_load(
         (out / "selftest-disk-used-percent.promtool.yaml").read_text(encoding="utf-8"))
     base_series = ('selftest_disk_used_percent{instance="selftest-host-01",'
-                   'mount="selftest-data",waveform_variant="base"}')
+                   'mount="selftest-data",waveform_signature="0",'
+                   'waveform_variant="base"}')
     test_doc = {
         "rule_files": [],
         "evaluation_interval": frag["interval"],

@@ -1,0 +1,13 @@
+# 最小 tenant-agnostic 候選規則 fixture（inject_waveform e2e 用）。
+# 配對 selftest_disk_used_percent.yaml seed：normal 42 → fault 96，閾值 80 落在
+# (normal, fault]。plain 比較式保留輸入 labels（waveform_variant / series），
+# 讓 label-歸因路徑可被 e2e 驗證。
+groups:
+  - name: selftest-disk-candidates
+    interval: 30s
+    rules:
+      - alert: SelftestDiskUsedHigh
+        expr: selftest_disk_used_percent > 80
+        for: 2m
+        labels:
+          severity: warning

@@ -71,55 +71,41 @@ a per-PR CI job — run it in a dev-container with a pinned vmsingle, or on a VM
 """
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
-import time
-import urllib.parse
-import urllib.request
-import uuid
 from pathlib import Path
 
 import pytest
 
+from vm_harness import (  # shared #968 harness — see vm_harness.py module docstring
+    STEP,
+    T0,
+    VMClient,
+    alert_offsets,
+    find_vmalert,
+    new_run_id,
+    replay,
+)
+
 VM = os.environ.get("VM_REPLAY_ENDPOINT", "http://localhost:8428")
-T0 = 1_700_000_000          # fixed epoch base — deterministic, never `now`
-STEP = 30                   # scrape + replay eval interval (s) — the pinned benchmark interval
+_VM = VMClient(VM)
+# T0 (fixed epoch base, never `now`) + STEP (the pinned 30s benchmark interval) are the
+# shared vm_harness constants — the interval-coupling caveat above pins STEP=30 semantics.
 CASE_GAP = 100_000          # s between per-case windows (>> any window; no cross-talk)
 _REQUIRE = os.environ.get("VM_REPLAY_REQUIRE") == "1"
 # Unique per pytest-process isolation tag → each run writes physically-new series (no delete,
-# no tombstone race — Gemini #968). uuid is fine here: assertions pin OFFSETS, not the tag.
-_RUN = "r" + uuid.uuid4().hex[:12]
+# no tombstone race — Gemini #968). Module-level new_run_id() call keeps the original
+# per-module-run uniqueness semantics; assertions pin OFFSETS, not the tag.
+_RUN = new_run_id()
 
-
-def _find_vmalert() -> str | None:
-    env = os.environ.get("VMALERT")
-    if env and Path(env).exists():
-        return env
-    for name in ("vmalert", "vmalert-prod"):
-        found = shutil.which(name)
-        if found:
-            return found
-    fallback = Path("/tmp/vm/vmalert-prod")   # dev-container provisioning
-    return str(fallback) if fallback.exists() else None
-
-
-def _vm_reachable() -> bool:
-    try:
-        with urllib.request.urlopen(f"{VM}/health", timeout=3) as r:
-            return r.status == 200
-    except Exception:
-        return False
-
-
-_VMALERT = _find_vmalert()
+_VMALERT = find_vmalert()
 _PROMTOOL = shutil.which("promtool")
 _missing = (
     # VM reachability is INDEPENDENT of _REQUIRE: under VM_REPLAY_REQUIRE=1 with vmsingle
     # down, _require_deps_or_fail() must hard-fail with the clear "no VictoriaMetrics"
     # message, not proceed and blow up later with a raw urllib error (CodeRabbit #968).
-    "no VictoriaMetrics" if not _vm_reachable() else
+    "no VictoriaMetrics" if not _VM.reachable() else
     "no vmalert binary" if _VMALERT is None else
     "no promtool" if _PROMTOOL is None else None
 )
@@ -137,49 +123,16 @@ def _require_deps_or_fail() -> None:
                     f"silently skip to green (vmsingle not started / binary absent?)")
 
 
-# ---- vmsingle HTTP ---------------------------------------------------------
-def _imp(lines: list[str]) -> None:
-    body = ("\n".join(lines) + "\n").encode()
-    req = urllib.request.Request(f"{VM}/api/v1/import/prometheus", data=body, method="POST")
-    with urllib.request.urlopen(req, timeout=10) as r:
-        assert r.status in (200, 204), f"VM import failed: {r.status}"
-
-
-def _flush() -> None:
-    with urllib.request.urlopen(f"{VM}/internal/force_flush", timeout=10) as r:
-        r.read()
-
-
-def _q_range(expr: str, start: int, end: int, step: int) -> list[dict]:
-    qs = urllib.parse.urlencode({"query": expr, "start": str(start), "end": str(end),
-                                 "step": f"{step}s", "nocache": "1"})
-    with urllib.request.urlopen(f"{VM}/api/v1/query_range?{qs}", timeout=20) as r:
-        d = json.loads(r.read())
-    assert d.get("status") == "success", f"VM query error: {d}"
-    return d["data"]["result"]
-
-
+# ---- thin bindings onto the shared vm_harness (module state: _VM/_RUN/_VMALERT) ----
 def _alert_offsets(name: str, state: str, w_start: int, w_end: int) -> list[int]:
     # run_id-scoped: ALERTS inherit run_id from the alert expressions' output labels, so this
     # read only sees THIS run's alerts even on a shared, never-deleted vmsingle.
-    res = _q_range(
-        f'ALERTS{{alertname="{name}",alertstate="{state}",run_id="{_RUN}"}}', w_start, w_end, STEP)
-    return sorted(int(v[0]) - w_start for s in res for v in s["values"])
+    return alert_offsets(_VM, name, state, w_start, w_end, run_id=_RUN)
 
 
-# ---- vmalert -replay + promtool --------------------------------------------
 def _replay(rules_text: str, w_start: int, w_end: int, tmp: Path, tag: str) -> None:
-    rf = tmp / f"{tag}_rules.yml"
-    rf.write_text(rules_text, encoding="utf-8")
-    tf = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(w_start))
-    tt = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(w_end))
-    p = subprocess.run(
-        [_VMALERT, f"-rule={rf.as_posix()}", f"-datasource.url={VM}", f"-remoteWrite.url={VM}",
-         f"-replay.timeFrom={tf}", f"-replay.timeTo={tt}", "-replay.disableProgressBar"],
-        capture_output=True, text=True, timeout=120)
-    assert p.returncode == 0 and "replay succeed" in p.stderr, (
-        f"vmalert -replay failed for {tag}:\n{p.stderr[-1500:]}")
-    _flush()
+    replay(_VMALERT, rules_text, w_start, w_end, tmp, tag, datasource_url=VM)
+    _VM.flush()   # make the replay-written ALERTS series queryable
 
 
 def _promtool_ok(fixture_text: str, rules_text: str, tmp: Path, tag: str) -> subprocess.CompletedProcess:
@@ -205,8 +158,8 @@ def test_tc2_staleness_resolve_and_absence(tmp_path):
     we = ws + 1800
     # SSOT: probe=100 (>80) for 0..300s @30s, then STOPS. Series tagged with run_id (unique
     # per run) → physically-new series, no delete needed (Gemini #968 tombstone-race fix).
-    _imp([f'{m}{{instance="t",run_id="{_RUN}"}} 100 {(ws + t) * 1000}' for t in range(0, 301, STEP)])
-    _flush()
+    _VM.import_prometheus([f'{m}{{instance="t",run_id="{_RUN}"}} 100 {(ws + t) * 1000}' for t in range(0, 301, STEP)])
+    _VM.flush()
 
     rules = (f"groups:\n  - name: tc2\n    interval: {STEP}s\n    rules:\n"
              f"      - alert: ProbeHigh\n        expr: {sel} > 80\n        for: 1m\n"
@@ -283,8 +236,8 @@ def test_tc1_threshold_gap_for_reset(tmp_path):
     we = ws + 900
     # SSOT: g=85 (>80) present 0..120s, MISSED scrapes 150..270, resume 300..600s @30s.
     present = list(range(0, 121, STEP)) + list(range(300, 601, STEP))
-    _imp([f'{m}{{instance="t",run_id="{_RUN}"}} 85 {(ws + t) * 1000}' for t in present])
-    _flush()
+    _VM.import_prometheus([f'{m}{{instance="t",run_id="{_RUN}"}} 85 {(ws + t) * 1000}' for t in present])
+    _VM.flush()
 
     rules = (f"groups:\n  - name: tc1\n    interval: {STEP}s\n    rules:\n"
              f"      - alert: HighFor\n        expr: {sel} > 80\n        for: 3m\n")
@@ -332,8 +285,8 @@ def test_harness_measures_real_replay(tmp_path):
     sel = f'{m}{{run_id="{_RUN}"}}'
     ws = T0 + 2 * CASE_GAP
     we = ws + 300
-    _imp([f'{m}{{instance="t",run_id="{_RUN}"}} 100 {(ws + t) * 1000}' for t in range(0, 301, STEP)])
-    _flush()
+    _VM.import_prometheus([f'{m}{{instance="t",run_id="{_RUN}"}} 100 {(ws + t) * 1000}' for t in range(0, 301, STEP)])
+    _VM.flush()
     rules = (f"groups:\n  - name: st\n    interval: {STEP}s\n    rules:\n"
              f"      - alert: SelfHigh\n        expr: {sel} > 80\n        for: 0s\n")
     _replay(rules, ws, we, tmp_path, "st")

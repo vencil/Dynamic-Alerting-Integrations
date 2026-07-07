@@ -36,7 +36,6 @@ is skipped (CI provisions it like promtool).
 """
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
@@ -45,25 +44,14 @@ from pathlib import Path
 import pytest
 import yaml
 
+from vm_harness import find_vmalert_tool  # shared #968 harness (binary discovery only)
+
 _HERE = Path(__file__).resolve().parent          # <repo>/tests/rulepacks
 _REPO = _HERE.parents[1]                          # <repo>
 _RULE_PACKS = _REPO / "rule-packs"
 _CATALOG = _HERE / "vm_deviation_catalog.yaml"
 
-
-def _find_vmalert_tool() -> str | None:
-    env = os.environ.get("VMALERT_TOOL")
-    if env and Path(env).exists():
-        return env
-    for name in ("vmalert-tool", "vmalert-tool-prod"):
-        found = shutil.which(name)
-        if found:
-            return found
-    fallback = Path("/tmp/vm/vmalert-tool-prod")  # jitter-harness dev-container download
-    return str(fallback) if fallback.exists() else None
-
-
-_VMALERT_TOOL = _find_vmalert_tool()
+_VMALERT_TOOL = find_vmalert_tool()
 
 pytestmark = pytest.mark.skipif(
     _VMALERT_TOOL is None,

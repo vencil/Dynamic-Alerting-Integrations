@@ -1,0 +1,16 @@
+# 鏈式候選規則 fixture（inject_waveform e2e 用；FIX-3 record→alert 鏈可見性）。
+# recording rule 先寫回 datasource，alert 再引用該 record——replay 模式下這條鏈
+# 依賴 -remoteWrite.flushInterval + -replay.rulesDelay（rulesDelay >= flushInterval）
+# 才看得到剛寫回的 record 樣本；e2e 斷言鏈式 alert 真 fire，把 race 行為釘死。
+# record 是 plain 恆等式 → 保留輸入 labels（waveform_* 歸因鍵存活）。
+groups:
+  - name: selftest-disk-chained
+    interval: 30s
+    rules:
+      - record: selftest:disk_used_percent:current
+        expr: selftest_disk_used_percent
+      - alert: SelftestDiskChainedHigh
+        expr: selftest:disk_used_percent:current > 80
+        for: 2m
+        labels:
+          severity: warning
