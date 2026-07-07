@@ -18,6 +18,7 @@ package rbac
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -189,6 +190,15 @@ type HeaderResolver struct {
 // The value is carried verbatim after trimming — no comma-splitting;
 // multi-value semantics belong to P3/P4. Claims is allocated only when at
 // least one claim hits, so "no claims" has exactly one representation (nil).
+//
+// A claim header that arrives with MORE THAN ONE line is refused (the claim
+// does not load) and logged loudly: Header.Get returns the FIRST of multiple
+// same-name lines, so if a hop ever APPENDS its trusted value instead of
+// strip-and-set, an attacker-supplied first line would win (first-value
+// hijacking). A declared claim header is set by exactly one trusted hop —
+// two lines mean injection or a broken proxy, and refusing is fail-closed
+// (a rule requiring the claim simply does not match). This is an in-platform
+// backstop; the transport-side strip-and-set requirement still stands.
 func (h HeaderResolver) Resolve(r *http.Request) (*VerifiedPrincipal, error) {
 	email := r.Header.Get("X-Forwarded-Email")
 	if email == "" {
@@ -197,7 +207,18 @@ func (h HeaderResolver) Resolve(r *http.Request) (*VerifiedPrincipal, error) {
 	groups := parseForwardedGroups(r.Header.Get("X-Forwarded-Groups"))
 	var claims map[string]string
 	for key, header := range h.ClaimHeaders {
-		if v := strings.TrimSpace(r.Header.Get(header)); v != "" {
+		vals := r.Header.Values(header)
+		if len(vals) > 1 {
+			// First-value-hijacking backstop — see the doc comment above.
+			// Header NAMES and count only: claim values never appear in logs.
+			slog.Warn("claim header carries multiple values; refusing to load the claim (expected exactly one trusted-hop line — verify the proxy strips client-supplied copies)",
+				"claim", key, "header", header, "lines", len(vals))
+			continue
+		}
+		if len(vals) == 0 {
+			continue
+		}
+		if v := strings.TrimSpace(vals[0]); v != "" {
 			if claims == nil {
 				claims = make(map[string]string, len(h.ClaimHeaders))
 			}

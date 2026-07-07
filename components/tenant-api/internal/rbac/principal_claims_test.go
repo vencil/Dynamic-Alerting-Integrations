@@ -213,6 +213,36 @@ func TestHeaderResolver_ClaimHeaders_UndeclaredHeaderNotCopied(t *testing.T) {
 	}
 }
 
+// First-value-hijacking backstop: a declared claim header arriving with MORE
+// THAN ONE line is refused outright — Header.Get would return the FIRST line,
+// so if a hop appended its trusted value instead of strip-and-set, an
+// attacker-supplied first line would win. Refusal is fail-closed (the claim
+// simply does not load; other claims are unaffected).
+func TestHeaderResolver_ClaimHeaders_MultiValueRefused(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("X-Forwarded-Email", "op@example.com")
+	// Simulate append-not-overwrite: attacker line first, trusted line second.
+	req.Header.Add("X-Auth-Request-Org", "evil-org")
+	req.Header.Add("X-Auth-Request-Org", "legit-org")
+	req.Header.Set("X-Auth-Request-Region", "region-east") // single line — loads
+
+	h := HeaderResolver{ClaimHeaders: map[string]string{
+		"org":    "X-Auth-Request-Org",
+		"region": "X-Auth-Request-Region",
+	}}
+	p, err := h.Resolve(req)
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if _, ok := p.Claims["org"]; ok {
+		t.Errorf("Claims[org] = %q, want absent — a multi-line claim header must be refused, not first-value-picked", p.Claims["org"])
+	}
+	if got := p.Claims["region"]; got != "region-east" {
+		t.Errorf("Claims[region] = %q, want region-east (single-line claim must be unaffected by a sibling refusal)", got)
+	}
+}
+
 // Zero-config invariant: a zero-value HeaderResolver{} (no claim axes) must
 // produce a principal IDENTICAL to the pre-P2 shape — Claims nil, every other
 // field unchanged — even when claim-looking headers are present on the wire.

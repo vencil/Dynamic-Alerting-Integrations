@@ -266,7 +266,10 @@ machineIdentity:
 # keys sorted (helm map range iterates key-sorted).
 # ⚠ TRUST BOUNDARY: every header listed here MUST be injected by the trusted
 # hop and MUST NOT be client-forgeable (strip-and-set at the proxy) — the
-# same trust boundary as X-Forwarded-Groups. P2 is carriage-only: the
+# same trust boundary as X-Forwarded-Groups. In-platform backstop: a claim
+# header arriving with MORE than one line is refused (claim not loaded,
+# WARN logged), so an append-not-overwrite proxy misconfig cannot enable
+# first-value hijacking. P2 is carriage-only: the
 # platform does not interpret claim semantics and no authz behavior changes.
 # Default {} = the seam is OFF: render and runtime behavior stay
 # byte-identical to pre-P2.
