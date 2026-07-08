@@ -66,9 +66,9 @@ func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) str
 			}
 
 			// Authorization runs off the hop-B principal through the single
-			// evaluation core (ADR-027 / LD-6 P3). Semantics are unchanged:
-			// today only the principal's groups participate; the optional
-			// match: block adds claims to the same predicate.
+			// evaluation core (ADR-027 / LD-6 P3): the principal's groups —
+			// and, for rules carrying a match: block, its named claims —
+			// feed the one shared ruleMatches predicate.
 			if !m.Allowed(bPrincipal, tenantID, want) {
 				writeForbidden(w, tenantID, want)
 				return

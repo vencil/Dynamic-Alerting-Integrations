@@ -94,40 +94,45 @@ func Me(d *Deps) http.HandlerFunc {
 			Claims:            claims,
 		}
 
-		// Collect all accessible tenants and build permissions map.
-		// NOTE (ADR-027 / LD-6 P3): this raw group-name loop is the one
-		// remaining rule-match point outside rbac's shared ruleMatches
-		// predicate; it converges onto that predicate together with the
-		// claims-aware match: block (so /me lists match-rule hits too).
+		// Collect all accessible tenants and build permissions map off the
+		// rules the principal matches (ADR-027 / LD-6 P3): rbac.RulesMatching
+		// runs the SAME ruleMatches predicate authz uses, so /me lists
+		// match-block rule hits (key = rule name) exactly like legacy
+		// name-matched rules, and no rule-matching semantics live outside the
+		// rbac package. Rules sharing a name contribute the UNION of their
+		// permissions/tenants — for a normal config (unique names, no match
+		// blocks) the output is byte-identical to the old per-group lookup;
+		// for the degenerate duplicate-name config the old code showed only
+		// the FIRST rule while authz already granted the union, so /me now
+		// tracks authz more closely.
+		//
+		// p may be nil only on the legacy no-middleware fallback above, where
+		// email is also empty → the 401 has already returned; RulesMatching
+		// is nil-safe regardless (anonymous matches no rule).
 		accessibleTenants := make(map[string]bool)
-		rbacCfg := d.RBAC.Get()
-
-		for _, groupName := range groups {
-			// Find the group rule in RBAC config
-			var groupRule *rbac.GroupRule
-			for i := range rbacCfg.Groups {
-				if rbacCfg.Groups[i].Name == groupName {
-					groupRule = &rbacCfg.Groups[i]
-					break
-				}
+		permsByRule := make(map[string]map[string]bool)
+		for _, rule := range d.RBAC.RulesMatching(p) {
+			set, ok := permsByRule[rule.Name]
+			if !ok {
+				set = make(map[string]bool)
+				permsByRule[rule.Name] = set
 			}
-
-			if groupRule == nil {
-				continue
+			for _, perm := range rule.Permissions {
+				set[string(perm)] = true
 			}
-
-			// Convert permissions to strings
-			var perms []string
-			for _, p := range groupRule.Permissions {
-				perms = append(perms, string(p))
-			}
-			sort.Strings(perms)
-			resp.Permissions[groupName] = perms
-
-			// Collect accessible tenants
-			for _, tenantPattern := range groupRule.Tenants {
+			for _, tenantPattern := range rule.Tenants {
 				accessibleTenants[tenantPattern] = true
 			}
+		}
+		for name, set := range permsByRule {
+			// A matched rule with no permissions keeps a nil slice, preserving
+			// the pre-P3 JSON rendering (`"<name>": null`).
+			var perms []string
+			for perm := range set {
+				perms = append(perms, perm)
+			}
+			sort.Strings(perms)
+			resp.Permissions[name] = perms
 		}
 
 		// Convert map to sorted slice for consistent output

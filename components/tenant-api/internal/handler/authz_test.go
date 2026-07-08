@@ -189,7 +189,7 @@ func TestPutGroup_AllMembersForbidden_ListsAllInError(t *testing.T) {
 	mgr := groups.NewManager(configDir)
 	writer := newTestWriter(configDir)
 
-	rbacMgr := newRBACManager(t, `groups: []` + "\n")
+	rbacMgr := newRBACManager(t, `groups: []`+"\n")
 
 	body := `{"label":"All Forbidden","members":["db-a","db-b","db-c"]}`
 	req := newRequestWithChiParam("PUT", "/api/v1/groups/forbidden", "id", "forbidden",
@@ -353,9 +353,9 @@ func (f *fakeTracker) ReleaseClaim(tenantID string)     {}
 func (f *fakeTracker) RegisterPR(pr platform.PRInfo) {
 	f.pending = append(f.pending, pr)
 }
-func (f *fakeTracker) LastSyncTime() time.Time            { return time.Now() }
-func (f *fakeTracker) WatchLoop(stopCh <-chan struct{})   {}
-func (f *fakeTracker) RefreshNow(ctx context.Context)     {}
+func (f *fakeTracker) LastSyncTime() time.Time          { return time.Now() }
+func (f *fakeTracker) WatchLoop(stopCh <-chan struct{}) {}
+func (f *fakeTracker) RefreshNow(ctx context.Context)   {}
 
 func TestListPRs_FiltersBulkListByTenantAccess(t *testing.T) {
 	t.Parallel()
@@ -450,7 +450,7 @@ func servePopulatingRBAC(t *testing.T, inner http.HandlerFunc, req *http.Request
 	if len(idpGroups) > 0 {
 		req.Header.Set("X-Forwarded-Groups", joinGroups(idpGroups))
 	}
-	mgr, _ := rbac.NewManager("")
+	mgr, _ := rbac.NewManager("", nil)
 	wrapped := mgr.Middleware(rbac.PermRead, nil)(inner)
 	rec := httptest.NewRecorder()
 	wrapped.ServeHTTP(rec, req)
@@ -482,4 +482,3 @@ func stringIndex(haystack, needle string) int {
 	}
 	return -1
 }
-

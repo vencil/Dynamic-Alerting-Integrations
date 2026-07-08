@@ -81,7 +81,7 @@ func TestNewManager_ConfiguredEmptyFailsClosed(t *testing.T) {
 	if err := os.WriteFile(path, []byte("groups: []\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m, err := NewManager(path)
+	m, err := NewManager(path, nil)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestNewManager_ConfiguredEmptyFailsClosed(t *testing.T) {
 
 func TestNewManager_NoPathStaysOpenRead(t *testing.T) {
 	t.Parallel()
-	m, err := NewManager("") // no --rbac path → intentional open mode
+	m, err := NewManager("", nil) // no --rbac path → intentional open mode
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}

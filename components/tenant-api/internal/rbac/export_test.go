@@ -36,3 +36,11 @@ func (m *Manager) AccessibleEnvironments(idpGroups []string) []string {
 func (m *Manager) AccessibleDomains(idpGroups []string) []string {
 	return m.AccessibleDomainsFor(&VerifiedPrincipal{Groups: idpGroups})
 }
+
+// SetClaimHeaders is the TEST-ONLY seam for installing the claimKey→header
+// declaration on a Manager built without the production constructor (e.g.
+// NewForTest, which takes an in-memory snapshot and never parses YAML).
+// Production wiring passes claimHeaders to NewManager instead, where the
+// same map also feeds match.claims validation inside the parse closure —
+// a prod setter would let the declaration drift from what validation saw.
+func (m *Manager) SetClaimHeaders(h map[string]string) { m.claimHeaders = h }

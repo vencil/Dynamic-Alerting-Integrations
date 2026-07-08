@@ -244,7 +244,24 @@ func main() {
 	}
 
 	// ── Dependencies ──────────────────────────────────────────────────────────
-	rbacMgr, err := rbac.NewManager(*rbacPath)
+	// ADR-027 / LD-6 P2+P3: identity-claims seam. The flag declares which
+	// trusted-hop headers load which named claims (claimKey=Header-Name);
+	// parsing is fail-loud — a misconfigured identity axis must never be
+	// silently absent. Default empty = no claim axes → byte-identical pre-P2
+	// behavior. Parsed BEFORE the RBAC manager because the declared claim
+	// keys participate in _rbac.yaml validation (a match.claims rule on an
+	// undeclared key is rejected at load — initial load fatal below,
+	// hot-reload keeps last-good). The INFO line logs claim keys and header
+	// NAMES only (startup config — request values never appear in logs).
+	claimHeaders, err := rbac.ParseClaimHeaders(*identityClaimHeaders)
+	if err != nil {
+		log.Fatalf("FATAL: --identity-claim-headers: %v", err)
+	}
+	if len(claimHeaders) > 0 {
+		log.Printf("INFO: identity claim headers configured: %s (claims ride the principal; _rbac.yaml match: rules may consume them)", formatClaimHeaders(claimHeaders))
+	}
+
+	rbacMgr, err := rbac.NewManager(*rbacPath, claimHeaders)
 	if err != nil {
 		log.Fatalf("FATAL: rbac init: %v", err)
 	}
@@ -272,21 +289,6 @@ func main() {
 		log.Printf("INFO: --rbac-metadata-scope-enforce set: unlabeled tenants on env/domain-restricted rules are DENIED (metadata scope fail-closed)")
 	} else {
 		log.Printf("INFO: metadata scope filter in SHADOW mode: unlabeled tenants still pass; watch increase(tenant_api_scope_would_deny_total{axis=\"metadata\"}[<soak-window>]) and flip --rbac-metadata-scope-enforce once it stays 0 across the window (monotonic counter — its rate, not its value, is the signal)")
-	}
-
-	// ADR-027 / LD-6 P2: identity-claims seam. The flag declares which
-	// trusted-hop headers load which named claims (claimKey=Header-Name);
-	// parsing is fail-loud — a misconfigured identity axis must never be
-	// silently absent. Default empty = no claim axes → byte-identical pre-P2
-	// behavior. The INFO line logs claim keys and header NAMES only (startup
-	// config — request values never appear in logs).
-	claimHeaders, err := rbac.ParseClaimHeaders(*identityClaimHeaders)
-	if err != nil {
-		log.Fatalf("FATAL: --identity-claim-headers: %v", err)
-	}
-	if len(claimHeaders) > 0 {
-		rbacMgr.SetClaimHeaders(claimHeaders)
-		log.Printf("INFO: identity claim headers configured: %s (claims ride the principal only; authz unchanged until P3)", formatClaimHeaders(claimHeaders))
 	}
 
 	// ADR-027 PR-1b-i: machine-identity audit side-channel. Built here so an

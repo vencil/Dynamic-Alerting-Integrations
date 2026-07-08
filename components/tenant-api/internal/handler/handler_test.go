@@ -49,15 +49,24 @@ func newTestWriter(configDir string) *gitops.Writer {
 // newRBACManager creates an RBAC manager from a YAML string.
 func newRBACManager(t *testing.T, yaml string) *rbac.Manager {
 	t.Helper()
+	return newRBACManagerWithClaims(t, yaml, nil)
+}
+
+// newRBACManagerWithClaims mirrors newRBACManager but declares identity
+// claim headers at construction — the production wiring shape (ADR-027 /
+// LD-6 P3): the declared claim keys feed both match.claims validation and
+// the middleware's claim loading.
+func newRBACManagerWithClaims(t *testing.T, yaml string, claimHeaders map[string]string) *rbac.Manager {
+	t.Helper()
 	if yaml == "" {
-		mgr, err := rbac.NewManager("")
+		mgr, err := rbac.NewManager("", claimHeaders)
 		if err != nil {
 			t.Fatalf("rbac.NewManager: %v", err)
 		}
 		return mgr
 	}
 	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", yaml)
-	mgr, err := rbac.NewManager(rbacFile)
+	mgr, err := rbac.NewManager(rbacFile, claimHeaders)
 	if err != nil {
 		t.Fatalf("rbac.NewManager: %v", err)
 	}
