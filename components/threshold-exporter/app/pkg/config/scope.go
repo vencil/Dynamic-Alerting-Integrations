@@ -175,9 +175,13 @@ func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
 		}
 		for tenantID := range doc.Tenants {
 			if existing, ok := tenantToFile[tenantID]; ok && existing != clean {
-				return fmt.Errorf(
-					"duplicate tenant ID %q: defined in both %s and %s",
-					tenantID, existing, clean)
+				// Typed so library callers can errors.As it (#127 C6-A);
+				// Error() string byte-identical to the former fmt.Errorf.
+				return &DuplicateTenantError{
+					TenantID: tenantID,
+					PathA:    existing,
+					PathB:    clean,
+				}
 			}
 			tenantToFile[tenantID] = clean
 		}

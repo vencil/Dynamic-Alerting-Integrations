@@ -57,12 +57,12 @@ const IMPORT_STEPS = [
     id: 'profile',
     title: () => t('3. 聚類建議 Profile', '3. Cluster proposals into Profile'),
     desc: () => t(
-      'C-9 Profile Builder 把 parser 輸出聚類成 _defaults.yaml 候選；接受 / 拒絕 / 編輯每組建議；輸出 conf.d/ 目錄結構（Profile-as-Directory-Default, ADR-018）。',
-      'C-9 Profile Builder clusters parser output into _defaults.yaml proposals; accept / reject / edit each group; emits conf.d/ directory shape (Profile-as-Directory-Default, ADR-018).'
+      'C-9 Profile Builder 把 parser 輸出聚類成 _defaults.yaml 候選、輸出 conf.d/ 目錄結構（Profile-as-Directory-Default, ADR-018）。目前以 library 形式（BuildProposals / EmitProposals）由 batch-pr 管線消費，尚未提供獨立的 da-tools profile build CLI（規劃中）。',
+      'C-9 Profile Builder clusters parser output into _defaults.yaml proposals and emits the conf.d/ directory shape (Profile-as-Directory-Default, ADR-018). It ships as a library (BuildProposals / EmitProposals) consumed by the batch-pr pipeline; the standalone da-tools profile build CLI is not yet shipped (planned).'
     ),
     cta: () => t('ADR-018', 'ADR-018'),
     href: docUrl('docs/adr/018-profile-as-directory-default.md'),
-    cmd: 'da-tools profile build \\\n  --input parsed.json \\\n  --decisions decisions.yaml \\\n  --enable-fuzzy   # opt-in duration-equivalence',
+    cmd: '# Profile Builder ships as a LIBRARY (BuildProposals / EmitProposals),\n# consumed by the da-batchpr pipeline. A standalone "da-tools profile build"\n# CLI is NOT yet shipped (planned) -- see ADR-018 for the emission shape.',
   },
   {
     id: 'batchpr',

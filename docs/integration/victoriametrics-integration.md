@@ -107,7 +107,7 @@ vmalert \
 customer PromRule YAML
     ↓ da-parser import
 ParsedRule JSON（含 dialect / vm_only / prom_portable 標註）
-    ↓ da-tools profile build  
+    ↓ Profile Builder（library）  
 Cluster + Profile-as-Directory-Default
     ↓ da-batchpr apply
 Hierarchy-aware Batch PRs
@@ -188,7 +188,7 @@ conf.d/ 樹（GitOps merge）
 
 - [ ] 跑 `da-parser import` 對 customer PromRule corpus
 - [ ] 檢查 dialect 分布 + non-portable 比例
-- [ ] 跑 `da-tools profile build` 萃取 cluster + Profile-as-Directory-Default
+- [ ] 以 Profile Builder library 萃取 cluster + Profile-as-Directory-Default（`da-tools profile build` 獨立 CLI 尚未出貨、規劃中）
 - [ ] 跑 `da-batchpr apply` 開出 Base + tenant chunk PRs
 - [ ] 跑 `da-guard` 過 4-layer schema/routing/cardinality/redundant-override 檢查
 - [ ] 詳情 → [Migration Toolkit Installation](../migration-toolkit-installation.md)

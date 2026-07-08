@@ -206,13 +206,13 @@ O(M) 複雜度（`group_left` 向量匹配）· 16 個 Rule Pack Projected Volum
 
 ### 工具鏈（da-tools CLI）
 
-涵蓋租戶**生命週期**（scaffold / onboard / migrate-rule / cutover / offboard）、**日常運維**（diagnose / patch-config / explain-route）、**品質治理**（validate-config / alert-quality / Policy-as-Code）、與**客戶導入管線**（da-parser → profile build → da-batchpr → da-guard）。全部封裝在 `ghcr.io/vencil/da-tools` 容器。
+涵蓋租戶**生命週期**（scaffold / onboard / migrate-rule / cutover / offboard）、**日常運維**（diagnose / patch-config / explain-route）、**品質治理**（validate-config / alert-quality / Policy-as-Code）、與**客戶導入管線**（da-parser → Profile Builder（library）→ da-batchpr → da-guard；Profile Builder 為 library、無獨立 `da-tools profile build` CLI）。全部封裝在 `ghcr.io/vencil/da-tools` 容器。
 
 完整命令、旗標與範例 → [CLI 參考](docs/cli-reference.md) · [速查表](docs/cheat-sheet.md) · [互動工具索引](docs/interactive-tools.md)
 
 ### 客戶導入：Migration Toolkit
 
-把客戶現有 PromRule corpus 全自動導入本平台 `conf.d/`（`da-parser → profile build → da-batchpr → da-guard`），並以 **Docker / static binary / air-gapped tar 三條交付路徑**（皆 cosign keyless 簽 + SBOM）覆蓋從外網到金融/政府/軍工封閉網路的全光譜環境。
+把客戶現有 PromRule corpus 全自動導入本平台 `conf.d/`（`da-parser → Profile Builder (library) → da-batchpr → da-guard`），並以 **Docker / static binary / air-gapped tar 三條交付路徑**（皆 cosign keyless 簽 + SBOM）覆蓋從外網到金融/政府/軍工封閉網路的全光譜環境。
 
 完整安裝與簽章驗證 → [Migration Toolkit Installation](docs/migration-toolkit-installation.md)
 

@@ -20,6 +20,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -421,6 +422,17 @@ func TestScanFromConfigSource_DuplicateTenantError(t *testing.T) {
 	_, _, _, _, err := config.ScanFromConfigSource(src, "/sim")
 	if err == nil || !strings.Contains(err.Error(), "duplicate tenant ID") {
 		t.Fatalf("err = %v, want duplicate tenant error", err)
+	}
+	// C6-A (#127): ScanFromConfigSource now returns the typed
+	// *config.DuplicateTenantError (lowered from package main), so the
+	// simulate path can errors.As it rather than string-match. Pin that the
+	// typed error unwraps and names the offending tenant.
+	var dupErr *config.DuplicateTenantError
+	if !errors.As(err, &dupErr) {
+		t.Fatalf("error should unwrap to *config.DuplicateTenantError, got %T: %v", err, err)
+	}
+	if dupErr.TenantID != "shared" {
+		t.Errorf("DuplicateTenantError.TenantID = %q, want shared", dupErr.TenantID)
 	}
 }
 

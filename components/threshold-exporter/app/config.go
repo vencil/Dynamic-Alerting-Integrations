@@ -291,6 +291,14 @@ func (m *ConfigManager) Mode() string {
 // logHeader is the human-readable banner inserted into the
 // "Config loaded (...)" log line.
 func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan *flatScanState, logHeader string) {
+	// Detect config source mode and git commit (v2.3.0). Refreshed on
+	// every commit because git-sync may rotate .git-revision between
+	// reloads. Done BEFORE the lock so the .git-revision disk read never
+	// blocks scrape readers; the results are then written under m.mu so
+	// GetConfigInfo (RLock) never observes an unsynchronised write, and
+	// config + config-info land in one consistent lock window.
+	configSource, gitCommit := m.detectConfigSource()
+
 	m.mu.Lock()
 	m.config = cfg
 	m.loaded = true
@@ -299,12 +307,9 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	if flatScan != nil {
 		m.flat = *flatScan
 	}
+	m.configSource = configSource
+	m.gitCommit = gitCommit
 	m.mu.Unlock()
-
-	// Detect config source mode and git commit (v2.3.0). Refreshed on
-	// every commit because git-sync may rotate .git-revision between
-	// reloads.
-	m.detectConfigSource()
 
 	logConfigStats(m.getLogger(), cfg, logHeader)
 }
@@ -331,21 +336,27 @@ func (m *ConfigManager) runHierarchyScanReject(label string) error {
 }
 
 // Load loads config from either a single file or a directory.
+//
+// Directory mode delegates to the single fullDirLoad path also used by the
+// watch loop and IncrementalLoad's cold-start fallback. Sharing it means the
+// initial commit uses the same composite-hash construction (scanDirFileHashes
+// hash-of-hashes) that the first watch tick recomputes — so the first tick no
+// longer sees a phantom change against a differently-built byte composite — and
+// the flat cache is populated up front so the next IncrementalLoad can take the
+// mtime fast-path instead of a full rebuild. fullDirLoad already runs the same
+// ApplyProfiles + issue-#127 hierarchical-scan-reject + commitConfig sequence
+// this path used to inline (mergePartialConfigs initialises every map).
 func (m *ConfigManager) Load() error {
-	var cfg ThresholdConfig
-	var hash string
-	var err error
-
 	if m.isDir {
-		cfg, hash, err = loadDirWithMetrics(m.path, m.getMetrics(), m.getLogger())
-	} else {
-		cfg, hash, err = loadFile(m.path)
+		return m.fullDirLoad()
 	}
+
+	cfg, hash, err := loadFile(m.path)
 	if err != nil {
 		return err
 	}
 
-	// Ensure maps are initialized
+	// Ensure maps are initialized (single-file loadFile may leave them nil).
 	if cfg.Defaults == nil {
 		cfg.Defaults = make(map[string]float64)
 	}
@@ -361,16 +372,6 @@ func (m *ConfigManager) Load() error {
 
 	// Expand profile values into tenant overrides (v1.12.0)
 	cfg.ApplyProfiles()
-
-	// v2.8.x issue #127: hierarchical scan runs BEFORE the flat-mode
-	// commit so mixed-mode duplicates reject Load at the boundary, not
-	// after partial state lands. See runHierarchyScanReject for the
-	// shared error policy.
-	if m.isDir {
-		if err := m.runHierarchyScanReject("Load"); err != nil {
-			return err
-		}
-	}
 
 	m.commitConfig(&cfg, hash, nil, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 	return nil
@@ -446,7 +447,7 @@ func (m *ConfigManager) IncrementalLoad() error {
 			delete(newConfigs, name)
 			continue
 		}
-		// Apply boundary enforcement (same rules as loadDir)
+		// Apply boundary enforcement (same rules as fullDirLoad)
 		applyBoundaryRules(name, &partial, m.getLogger())
 		newConfigs[name] = partial
 	}
@@ -1016,9 +1017,15 @@ func (m *ConfigManager) GetConfigInfo() ConfigInfo {
 //  3. Default → "configmap"
 //
 // Called on initial load and each reload to pick up git-sync rotations.
-func (m *ConfigManager) detectConfigSource() {
-	gitCommit := ""
-	configSource := "configmap"
+//
+// Pure w.r.t. ConfigManager state: it reads only the immutable m.path /
+// m.isDir (fixed at construction) plus the filesystem/env, and RETURNS
+// the detected values instead of writing m.configSource / m.gitCommit
+// directly. commitConfig writes them under m.mu so concurrent
+// GetConfigInfo readers never race an unsynchronised field write.
+func (m *ConfigManager) detectConfigSource() (configSource, gitCommit string) {
+	gitCommit = ""
+	configSource = "configmap"
 
 	// Check for .git-revision file (written by git-sync sidecar)
 	var searchDir string
@@ -1043,6 +1050,5 @@ func (m *ConfigManager) detectConfigSource() {
 		}
 	}
 
-	m.configSource = configSource
-	m.gitCommit = gitCommit
+	return configSource, gitCommit
 }

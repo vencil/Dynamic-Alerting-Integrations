@@ -76,8 +76,13 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 	c.collectThresholdExpiries(ch, cfg, now)
 	c.collectSeverityDedup(ch, cfg)
 	c.collectConfigInfo(ch)
-	c.collectMetadata(ch, cfg)
-	c.collectTenantExpectedExporter(ch, cfg)
+
+	// ResolveMetadata is a pure per-scrape snapshot (walks + yaml.Unmarshals
+	// every tenant's _metadata once). Resolve it a single time and share the
+	// slice between the two metadata consumers instead of resolving twice.
+	metadata := cfg.ResolveMetadata()
+	c.collectMetadata(ch, metadata)
+	c.collectTenantExpectedExporter(ch, metadata)
 }
 
 // collectThresholds emits the user_threshold gauge for every resolved
@@ -169,6 +174,32 @@ func (c *ThresholdCollector) collectStateFilters(ch chan<- prometheus.Metric, cf
 	}
 }
 
+// configEventDesc is the shared descriptor for da_config_event: an ephemeral
+// gauge emitted when a timed config (silent / maintenance / threshold expiry)
+// has expired. Used by the TenantConfigEvent alert rule (for: 0s) to notify
+// operators. The metric is emitted as long as the expired config YAML remains —
+// once the tenant removes or updates the config, this metric disappears (stale
+// marker). Shared by the three collect* expiry sites via emitConfigEvent.
+var configEventDesc = prometheus.NewDesc(
+	"da_config_event",
+	"Config lifecycle event (1=event active). Emitted when timed config expires. Labels identify event type and tenant.",
+	[]string{"tenant", "event", "reason"},
+	nil,
+)
+
+// emitConfigEvent sends one da_config_event series (value 1) for an expired
+// timed config. Consolidates the three collect* expiry sites that emit the same
+// {tenant,event,reason} shape; a NewConstMetric failure is logged and skipped
+// (never fatal to the scrape).
+func emitConfigEvent(ch chan<- prometheus.Metric, tenant, event, reason string) {
+	m, err := prometheus.NewConstMetric(configEventDesc, prometheus.GaugeValue, 1.0, tenant, event, reason)
+	if err != nil {
+		log.Printf("WARN: failed to create da_config_event metric for tenant=%s: %v", tenant, err)
+		return
+	}
+	ch <- m
+}
+
 // collectSilentModes emits user_silent_mode for active silences; expired
 // silences emit da_config_event instead (v1.7.0) so Alertmanager inhibit
 // stops and notifications resume.
@@ -179,16 +210,6 @@ func (c *ThresholdCollector) collectSilentModes(ch chan<- prometheus.Metric, cfg
 		[]string{"tenant", "target_severity"},
 		nil,
 	)
-	// da_config_event: ephemeral gauge emitted when a timed config (silent/maintenance)
-	// has expired. Used by TenantConfigEvent alert rule (for: 0s) to notify operators.
-	// The metric is emitted as long as the expired config YAML remains — once the tenant
-	// removes or updates the config, this metric disappears (stale marker).
-	configEventDesc := prometheus.NewDesc(
-		"da_config_event",
-		"Config lifecycle event (1=event active). Emitted when timed config expires. Labels identify event type and tenant.",
-		[]string{"tenant", "event", "reason"},
-		nil,
-	)
 	for _, sm := range cfg.ResolveSilentModes() {
 		if sm.Expired {
 			// Expired: emit config event instead of sentinel metric
@@ -196,13 +217,7 @@ func (c *ThresholdCollector) collectSilentModes(ch chan<- prometheus.Metric, cfg
 			if reason == "" {
 				reason = "silent_mode expired for " + sm.TargetSeverity
 			}
-			m, err := prometheus.NewConstMetric(configEventDesc, prometheus.GaugeValue, 1.0,
-				sm.Tenant, "silence_expired", reason)
-			if err != nil {
-				log.Printf("WARN: failed to create da_config_event metric for tenant=%s: %v", sm.Tenant, err)
-				continue
-			}
-			ch <- m
+			emitConfigEvent(ch, sm.Tenant, "silence_expired", reason)
 			continue
 		}
 		m, err := prometheus.NewConstMetric(silentDesc, prometheus.GaugeValue, 1.0, sm.Tenant, sm.TargetSeverity)
@@ -218,12 +233,6 @@ func (c *ThresholdCollector) collectSilentModes(ch chan<- prometheus.Metric, cfg
 // has auto-deactivated (v1.7.0). Active windows need no event (their state
 // filter simply keeps emitting).
 func (c *ThresholdCollector) collectMaintenanceExpiries(ch chan<- prometheus.Metric, cfg *ThresholdConfig) {
-	configEventDesc := prometheus.NewDesc(
-		"da_config_event",
-		"Config lifecycle event (1=event active). Emitted when timed config expires. Labels identify event type and tenant.",
-		[]string{"tenant", "event", "reason"},
-		nil,
-	)
 	for _, me := range cfg.ResolveMaintenanceExpiries() {
 		if !me.Expired {
 			continue // Still active, no event needed
@@ -232,13 +241,7 @@ func (c *ThresholdCollector) collectMaintenanceExpiries(ch chan<- prometheus.Met
 		if reason == "" {
 			reason = "maintenance_mode expired"
 		}
-		m, err := prometheus.NewConstMetric(configEventDesc, prometheus.GaugeValue, 1.0,
-			me.Tenant, "maintenance_expired", reason)
-		if err != nil {
-			log.Printf("WARN: failed to create da_config_event metric for tenant=%s: %v", me.Tenant, err)
-			continue
-		}
-		ch <- m
+		emitConfigEvent(ch, me.Tenant, "maintenance_expired", reason)
 	}
 }
 
@@ -250,12 +253,6 @@ func (c *ThresholdCollector) collectMaintenanceExpiries(ch chan<- prometheus.Met
 // distinct da_config_event series (the label set is {tenant,event,reason}, so a
 // shared user reason on two metrics would otherwise collide into one series).
 func (c *ThresholdCollector) collectThresholdExpiries(ch chan<- prometheus.Metric, cfg *ThresholdConfig, now time.Time) {
-	configEventDesc := prometheus.NewDesc(
-		"da_config_event",
-		"Config lifecycle event (1=event active). Emitted when timed config expires. Labels identify event type and tenant.",
-		[]string{"tenant", "event", "reason"},
-		nil,
-	)
 	for _, te := range cfg.ResolveThresholdExpiriesAt(now) {
 		if !te.Expired {
 			continue // not yet past its TTL — the override is still active
@@ -264,13 +261,7 @@ func (c *ThresholdCollector) collectThresholdExpiries(ch chan<- prometheus.Metri
 		if te.Reason != "" {
 			reason = te.MetricKey + ": " + te.Reason
 		}
-		m, err := prometheus.NewConstMetric(configEventDesc, prometheus.GaugeValue, 1.0,
-			te.Tenant, "threshold_expired", reason)
-		if err != nil {
-			log.Printf("WARN: failed to create da_config_event metric for tenant=%s: %v", te.Tenant, err)
-			continue
-		}
-		ch <- m
+		emitConfigEvent(ch, te.Tenant, "threshold_expired", reason)
 	}
 }
 
@@ -310,14 +301,14 @@ func (c *ThresholdCollector) collectConfigInfo(ch chan<- prometheus.Metric) {
 
 // collectMetadata emits tenant_metadata_info (v1.11.0): unconditional per-tenant
 // runbook_url/owner/tier labels for Alertmanager group_left joins.
-func (c *ThresholdCollector) collectMetadata(ch chan<- prometheus.Metric, cfg *ThresholdConfig) {
+func (c *ThresholdCollector) collectMetadata(ch chan<- prometheus.Metric, metadata []ResolvedMetadata) {
 	metadataDesc := prometheus.NewDesc(
 		"tenant_metadata_info",
 		"Tenant metadata labels (info metric, always 1). Unconditional output for group_left joins. v1.11.0+",
 		[]string{"tenant", "runbook_url", "owner", "tier"},
 		nil,
 	)
-	for _, md := range cfg.ResolveMetadata() {
+	for _, md := range metadata {
 		m, err := prometheus.NewConstMetric(metadataDesc, prometheus.GaugeValue, 1.0,
 			md.Tenant, md.RunbookURL, md.Owner, md.Tier)
 		if err != nil {
@@ -341,10 +332,11 @@ func (c *ThresholdCollector) collectMetadata(ch chan<- prometheus.Metric, cfg *T
 // tenant masked another tenant's total exporter outage.
 //
 // Opt-in contract — db_type guard is LOAD-BEARING, not cosmetic:
-// ResolveMetadata() returns EVERY tenant unconditionally, and a tenant with no
-// _metadata resolves to DBType=="" (resolve.go:763-765). Emitting db_type="" for
-// such tenants would put a left-hand series into the anti-join for a tenant that
-// has no corresponding `<db>_up` series at all → the rule would fire a permanent
+// the metadata slice (from ResolveMetadata, shared with collectMetadata) holds
+// EVERY tenant unconditionally, and a tenant with no _metadata resolves to
+// DBType=="" (see ResolveMetadata in pkg/config/resolve.go). Emitting db_type=""
+// for such tenants would put a left-hand series into the anti-join for a tenant
+// that has no corresponding `<db>_up` series at all → the rule would fire a permanent
 // false-positive critical against it. So we emit ONLY for tenants that declared a
 // db_type: liveness coverage is OPT-IN via declaring db_type. (Hence "1 series per
 // tenant that declares db_type", not "1 per tenant" — see #869 design note.)
@@ -355,7 +347,7 @@ func (c *ThresholdCollector) collectMetadata(ch chan<- prometheus.Metric, cfg *T
 // load-bearing 1-series-per-tenant info metric consumed by ~15 group_left joins,
 // so widening its label set is forbidden. This is a SCOPED reversal of types.go:102
 // limited to the narrow, low-cardinality (1 series/declaring tenant) liveness need.
-func (c *ThresholdCollector) collectTenantExpectedExporter(ch chan<- prometheus.Metric, cfg *ThresholdConfig) {
+func (c *ThresholdCollector) collectTenantExpectedExporter(ch chan<- prometheus.Metric, metadata []ResolvedMetadata) {
 	expectedDesc := prometheus.NewDesc(
 		"tenant_expected_exporter",
 		"Liveness expectation (always 1) for each tenant that declares a db_type in _metadata. "+
@@ -363,7 +355,7 @@ func (c *ThresholdCollector) collectTenantExpectedExporter(ch chan<- prometheus.
 		[]string{"tenant", "db_type"},
 		nil,
 	)
-	for _, md := range cfg.ResolveMetadata() {
+	for _, md := range metadata {
 		// Opt-in: only tenants that declared a db_type are expected to have a
 		// live exporter. Skipping db_type="" avoids a false-positive TenantExporterAbsent.
 		if md.DBType == "" {
