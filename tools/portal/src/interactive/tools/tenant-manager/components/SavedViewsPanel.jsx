@@ -29,9 +29,10 @@ purpose: |
   See `docs/internal/jsx-multi-file-pattern.md` for the indirect-eval
   / `window.__X` self-registration rationale.
 
-  Closure deps (window globals):
-    - `styles`  (`window.__styles`)
-    - `t`       (`window.__t` i18n helper)
+  Deps:
+    - `styles`  ESM import from `../styles.js` (was `window.__styles`
+                pre-TRK-233; see the import note below)
+    - `t`       `window.__t` i18n helper (host-page global)
 
   Props:
     - currentFilters:  { q, environment, tier, operational_mode,
