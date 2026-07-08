@@ -336,21 +336,27 @@ func (m *ConfigManager) runHierarchyScanReject(label string) error {
 }
 
 // Load loads config from either a single file or a directory.
+//
+// Directory mode delegates to the single fullDirLoad path also used by the
+// watch loop and IncrementalLoad's cold-start fallback. Sharing it means the
+// initial commit uses the same composite-hash construction (scanDirFileHashes
+// hash-of-hashes) that the first watch tick recomputes — so the first tick no
+// longer sees a phantom change against a differently-built byte composite — and
+// the flat cache is populated up front so the next IncrementalLoad can take the
+// mtime fast-path instead of a full rebuild. fullDirLoad already runs the same
+// ApplyProfiles + issue-#127 hierarchical-scan-reject + commitConfig sequence
+// this path used to inline (mergePartialConfigs initialises every map).
 func (m *ConfigManager) Load() error {
-	var cfg ThresholdConfig
-	var hash string
-	var err error
-
 	if m.isDir {
-		cfg, hash, err = loadDirWithMetrics(m.path, m.getMetrics(), m.getLogger())
-	} else {
-		cfg, hash, err = loadFile(m.path)
+		return m.fullDirLoad()
 	}
+
+	cfg, hash, err := loadFile(m.path)
 	if err != nil {
 		return err
 	}
 
-	// Ensure maps are initialized
+	// Ensure maps are initialized (single-file loadFile may leave them nil).
 	if cfg.Defaults == nil {
 		cfg.Defaults = make(map[string]float64)
 	}
@@ -366,16 +372,6 @@ func (m *ConfigManager) Load() error {
 
 	// Expand profile values into tenant overrides (v1.12.0)
 	cfg.ApplyProfiles()
-
-	// v2.8.x issue #127: hierarchical scan runs BEFORE the flat-mode
-	// commit so mixed-mode duplicates reject Load at the boundary, not
-	// after partial state lands. See runHierarchyScanReject for the
-	// shared error policy.
-	if m.isDir {
-		if err := m.runHierarchyScanReject("Load"); err != nil {
-			return err
-		}
-	}
 
 	m.commitConfig(&cfg, hash, nil, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 	return nil
@@ -451,7 +447,7 @@ func (m *ConfigManager) IncrementalLoad() error {
 			delete(newConfigs, name)
 			continue
 		}
-		// Apply boundary enforcement (same rules as loadDir)
+		// Apply boundary enforcement (same rules as fullDirLoad)
 		applyBoundaryRules(name, &partial, m.getLogger())
 		newConfigs[name] = partial
 	}
