@@ -52,6 +52,8 @@ import os
 import sys
 import urllib.parse
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Any, Optional
 
@@ -89,8 +91,8 @@ _HELP = {
         'en': 'Analyze only this tenant (omit for all)',
     },
     'lookback': {
-        'zh': '回溯期間（預設 7d）',
-        'en': 'Lookback period (default: 7d)',
+        'zh': '回溯期間（預設 7d；下界/percentile-lower key 建議 14d——需 ≥5 完整 UTC 日，7d 邊際薄）',
+        'en': 'Lookback period (default: 7d; use 14d for lower-bound/percentile-lower keys — needs ≥5 full UTC days, 7d is marginal)',
     },
     'min_samples': {
         'zh': '最低樣本數門檻（預設 100）',
@@ -129,6 +131,31 @@ PERCENTILES = {
 SAMPLE_THRESHOLD_HIGH = 1000
 SAMPLE_THRESHOLD_MEDIUM = 100
 
+# ---------------------------------------------------------------------------
+# #916 Item A — lower-bound (percentile-lower) engine tunables
+# ---------------------------------------------------------------------------
+# A lower-bound threshold (e.g. a hit-ratio / availability FLOOR in the ratio
+# domain (0,1)) recommends a LOW percentile: we want the floor to sit just under
+# routine dips so real drops still fire. The engine measures rot in COMPLEMENT
+# (miss-rate) space — m = 1 - value — because a floor at 0.95 vs 0.97 is a 40%
+# change in tolerated miss-rate, not the ~2% the raw values suggest.
+LOWER_PERCENTILE = 0.05          # P5 of the observed floor series
+LOWER_MARGIN = 0.10              # |rho-1| below this (tighten side) = no change
+LOWER_CLAMP_FRACTION = 0.25      # don't tighten miss-rate below 25% of current
+# Estimator-divergence gate: if the pooled-P5's miss-rate is >= K x the
+# daily-median-P5's, a recurring trough is hiding in the pooled low tail that the
+# daily median smooths over — auto-tightening would false-alarm on it every cycle,
+# so defer to a human. K=1.5 is deliberately conservative: missing one genuine
+# tighten only DEFERS it (cheap), whereas auto-tightening into a weekly trough is
+# a recurring false page (expensive). Owner-tunable.
+LOWER_DIVERGENCE_K = 1.5
+MIN_POINTS_PER_DAY = 60          # a UTC day with fewer points is not a valid day
+MIN_VALID_DAYS = 5               # need this many valid full days for an extreme pct
+MIN_TOTAL_SAMPLES = 60           # and this many samples overall
+# Stable reason token: formatters append a " miss" suffix to a lower-bound key's
+# delta so an operator never misreads the sign/direction as value-space.
+_MISS_RATE_MARKER = "miss-rate"
+
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -148,6 +175,12 @@ class KeyRecommendation:
     sample_count: int = 0
     reason: str = ""
     promql: str = ""
+    # #916 Item A (lower-bound engine): a guardrail tripped so this key needs a
+    # human (relaxation / out-of-domain / thin sample). recommended stays None;
+    # _exportable / is_governance_actionable exclude it; govern surfaces it in a
+    # manual-review section keyed on guardrail_reason.
+    force_manual: bool = False
+    guardrail_reason: str = ""
 
 
 @dataclass
@@ -335,6 +368,192 @@ def recommend_threshold(
 
 
 # ---------------------------------------------------------------------------
+# #916 Item A — lower-bound (percentile-lower) recommendation engine
+# ---------------------------------------------------------------------------
+def _median_upper(values: list[float]) -> float:
+    """Median with the UPPER-middle element on an even count.
+
+    ``statistics.median`` averages the two middle values; here the estimand is a
+    conservative floor and the daily-P5 series can be contaminated DOWNWARD by an
+    outage echo, so on a tie we take the higher of the two middles (more robust
+    against downward pollution). ``sorted[n // 2]`` is the upper-middle for even n
+    and the exact median for odd n.
+    """
+    s = sorted(values)
+    return s[len(s) // 2]
+
+
+def _force_manual(
+    key: str, current_value: Any, why: str, *,
+    sample_count: int = 0, delta_pct: Optional[float] = None,
+    p05: Optional[float] = None,
+) -> "KeyRecommendation":
+    """A lower-bound recommendation that a guardrail routed to manual review."""
+    return KeyRecommendation(
+        key=key, current_value=current_value, recommended=None,
+        delta_pct=delta_pct, sample_count=sample_count, p95=p05,
+        confidence=grade_confidence(sample_count, SAMPLE_THRESHOLD_MEDIUM),
+        reason=f"lower-bound floor → manual review: {why}",
+        force_manual=True, guardrail_reason=why,
+    )
+
+
+def recommend_threshold_lower(
+    key: str,
+    current_value: Any,
+    samples_ts: list[tuple[float, float]],
+    min_samples: int,
+) -> KeyRecommendation:
+    """Recommend a lower-bound (floor) threshold from a timestamped P5 series.
+
+    Domain: a ratio-space floor in (0,1) (hit-ratio / availability). Guardrails
+    run in order, ALL evaluated against the final 4-dp-floored target:
+
+      guard 0 (domain, first): a non-numeric current (incl. the legal conf.d
+        "disable") or a current / candidate outside the open interval (0,1) →
+        force_manual (never divide-by-zero on current==1.0).
+      estimator (anti-contamination): bucket by COMPLETE UTC day (drop the two
+        partial boundary days); a day needs ≥MIN_POINTS_PER_DAY points to count;
+        ``daily = median(valid days' daily-P5)`` (robust to a few polluted days)
+        and ``pooled = P5(all samples)`` (sees the whole low tail);
+        ``candidate = min(daily, pooled)``.
+      precision: 4-dp ROUND_FLOOR (floor so rounding never loosens the floor).
+      metric: complement (miss-rate) space — m_c=1-current, m_t=1-target,
+        rho=m_t/m_c, delta_pct=(rho-1)*100.
+      guard order (blocker): relaxation BEFORE margin, else a sub-10% loosen
+        slips through as "no change"; divergence AFTER relaxation so a DEEP
+        trough is claimed by relaxation and the SHALLOW (above-current) trough by
+        divergence:
+        1. sample gate → force_manual.
+        2. relaxation (rho>1 → target below current) → force_manual, no exemption.
+        3. divergence: (1-pooled) >= K*(1-daily) → force_manual (a recurring
+           trough the daily median smooths over sits in the pooled low tail;
+           auto-tightening would false-alarm on it each cycle). A transient
+           outage (<5% of samples) leaves pooled ≈ daily so it does not trip.
+        4. clamp: m_t < 0.25*m_c → target = 1 - 0.25*m_c, re-floor.
+        5. margin (tighten side only): |rho-1| < 0.10 → recommended=None.
+        6. tighten → auto-exportable.
+    """
+    # guard 0 — non-numeric current (e.g. "disable"): reuse the upper-bound early
+    # exit, but as force_manual so it surfaces in the govern manual-review section.
+    try:
+        current_float = float(current_value)
+    except (TypeError, ValueError):
+        return _force_manual(
+            key, current_value,
+            "non-numeric current threshold (e.g. 'disable') — manual review",
+        )
+    total = len(samples_ts)
+    confidence = grade_confidence(total, min_samples)
+
+    # guard 0 — current must be a ratio strictly inside (0,1); current==1.0 would
+    # divide by zero in miss-rate space and 95 means the units are wrong.
+    if not (0.0 < current_float < 1.0):
+        return _force_manual(
+            key, current_value,
+            "current threshold outside ratio domain (0,1) — check units",
+            sample_count=total,
+        )
+
+    # estimator — bucket by COMPLETE UTC day.
+    by_day: dict[Any, list[float]] = {}
+    for ts, val in samples_ts:
+        day = datetime.fromtimestamp(ts, tz=timezone.utc).date()
+        by_day.setdefault(day, []).append(val)
+    boundary = {min(by_day), max(by_day)} if by_day else set()
+    full_days = [d for d in by_day if d not in boundary]           # partials dropped
+    valid_days = [d for d in full_days if len(by_day[d]) >= MIN_POINTS_PER_DAY]
+
+    # guard 1 — sample gate (a distinct message when the LOOKBACK itself is short).
+    if len(full_days) < MIN_VALID_DAYS:
+        return _force_manual(
+            key, current_value, "lookback < 5 full UTC days",
+            sample_count=total,
+        )
+    if len(valid_days) < MIN_VALID_DAYS or total < MIN_TOTAL_SAMPLES:
+        return _force_manual(
+            key, current_value, "insufficient samples for extreme percentile",
+            sample_count=total,
+        )
+
+    all_values = [v for _, v in samples_ts]
+    daily = _median_upper([percentile(sorted(by_day[d]), LOWER_PERCENTILE)
+                           for d in valid_days])
+    pooled = percentile(sorted(all_values), LOWER_PERCENTILE)
+    candidate = min(daily, pooled)
+
+    # guard 0 (candidate) — a floor recommendation must itself stay in (0,1].
+    if not (0.0 < candidate <= 1.0):
+        return _force_manual(
+            key, current_value,
+            "computed floor outside ratio domain (0,1] — check units",
+            sample_count=total, p05=round(candidate, 4),
+        )
+
+    def _floor4(x: float) -> float:
+        return float(Decimal(str(x)).quantize(Decimal("0.0001"), rounding=ROUND_FLOOR))
+
+    target = _floor4(candidate)
+    m_c = 1.0 - current_float
+    m_t = 1.0 - target
+    rho = m_t / m_c
+    delta_pct = round((rho - 1.0) * 100.0, 1)
+
+    # guard 2 — relaxation (lowering the floor) has NO magnitude exemption: a
+    # sub-10% loosen would otherwise ride the govern loop into an auto floor-drop.
+    if rho > 1.0:
+        return _force_manual(
+            key, current_value,
+            "would relax the floor (lower it) — miss-rate rises; manual review",
+            sample_count=total, delta_pct=delta_pct, p05=target,
+        )
+
+    # guard 2.5 — estimator DIVERGENCE (real, not just an min()): the pooled-P5's
+    # miss-rate materially exceeds the daily-median-P5's, i.e. a recurring trough
+    # the daily median smooths over is hiding in the pooled low tail. Here
+    # candidate>current (tighten side — a DEEP trough already fell to relaxation
+    # above), so without this gate the engine would auto-tighten to a floor the
+    # trough breaches every cycle (a weekly false page). Compared against `daily`
+    # (NOT current), so it fires on the SHALLOW above-current trough the min()
+    # alone silently tightened. A transient outage (<5% of samples) leaves
+    # pooled ≈ daily → ratio ≈ 1 < K → does not trip.
+    if (1.0 - pooled) >= LOWER_DIVERGENCE_K * (1.0 - daily):
+        return _force_manual(
+            key, current_value,
+            "daily-P5 and pooled-P5 diverge (recurring trough) — manual review",
+            sample_count=total, delta_pct=delta_pct, p05=target,
+        )
+
+    # guard 3 — clamp: never tighten tolerated miss-rate below 25% of current
+    # (a P5 that collapses to ~0 miss usually means a quiet week, not a safe
+    # floor at ~1.0). Re-floor because 1 - 0.25*m_c need not be 4-dp exact.
+    if m_t < LOWER_CLAMP_FRACTION * m_c:
+        target = _floor4(1.0 - LOWER_CLAMP_FRACTION * m_c)
+        m_t = 1.0 - target
+        rho = m_t / m_c
+        delta_pct = round((rho - 1.0) * 100.0, 1)
+
+    # guard 4 — within-margin (tighten side): recommended=None so _exportable
+    # rejects it structurally (a reason string alone would still export).
+    if abs(rho - 1.0) < LOWER_MARGIN:
+        return KeyRecommendation(
+            key=key, current_value=current_value, recommended=None,
+            delta_pct=delta_pct, sample_count=total, p95=target,
+            confidence=confidence,
+            reason=f"within {int(LOWER_MARGIN*100)}% {_MISS_RATE_MARKER} margin, no change needed",
+        )
+
+    # guard 5 — tighten (raise the floor): auto-exportable.
+    return KeyRecommendation(
+        key=key, current_value=current_value, recommended=target,
+        delta_pct=delta_pct, sample_count=total, p95=target,
+        confidence=confidence,
+        reason=(f"lower-bound P5 floor → tighten (raise floor); "
+                f"{_MISS_RATE_MARKER} {delta_pct:+.1f}%"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Prometheus query helpers
 # ---------------------------------------------------------------------------
 def build_metric_query(observed_series: str, tenant: str, lookback: str) -> str:
@@ -421,6 +640,60 @@ def query_prometheus_range(
     return values, None
 
 
+def query_prometheus_range_ts(
+    prometheus_url: str,
+    promql: str,
+    *,
+    timeout: int = 30,
+) -> tuple[list[tuple[float, float]], Optional[str]]:
+    """Like ``query_prometheus_range`` but keeps the sample timestamps.
+
+    The lower-bound engine (#916) buckets samples by UTC day to compute a
+    daily-P5, so it needs ``(ts, value)`` pairs; the upper-bound path discards
+    the timestamp and is left unchanged. Returns ``(pairs, error_or_none)``.
+
+    NaN/Inf are filtered (parity with ``compute_percentiles``): a hit-ratio
+    recording rule can emit ``NaN`` while idle (0/0), and an unfiltered NaN would
+    sort to an arbitrary index and yield a silently-wrong percentile. A filtered
+    series that ends up too thin then hits the engine's own sample gate.
+    """
+    url = f"{prometheus_url}/api/v1/query"
+    params = urllib.parse.urlencode({"query": promql})
+    full_url = f"{url}?{params}"
+
+    data, err = http_get_json(full_url, timeout=timeout)
+    if err:
+        return [], err
+    if data.get("status") != "success":
+        return [], data.get("error", "Unknown Prometheus error")
+
+    def _finite(ts_raw, v_raw) -> Optional[tuple[float, float]]:
+        try:
+            ts, v = float(ts_raw), float(v_raw)
+        except (ValueError, TypeError):
+            return None
+        if math.isnan(v) or math.isinf(v):
+            return None
+        return (ts, v)
+
+    results = data.get("data", {}).get("result", [])
+    pairs: list[tuple[float, float]] = []
+    for series in results:
+        for point in series.get("values", []):
+            try:
+                p = _finite(point[0], point[1])
+            except IndexError:
+                continue
+            if p is not None:
+                pairs.append(p)
+        val = series.get("value")
+        if val and isinstance(val, list) and len(val) >= 2:
+            p = _finite(val[0], val[1])
+            if p is not None:
+                pairs.append(p)
+    return pairs, None
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -499,45 +772,69 @@ def analyze_tenant(
             report.keys.append(rec)
             continue
 
-        # Query Prometheus
-        values, err = query_prometheus_range(prometheus_url, promql)
-
-        if err:
-            rec = KeyRecommendation(
-                key=key,
-                current_value=current_value,
-                reason=f"query error: {err[:60]}",
-                promql=promql,
-            )
-            report.keys.append(rec)
+        # #916 Item A: route by comparison direction. A per-key try/except keeps
+        # one tenant's bad value (e.g. a Decimal/parse blow-up) from sinking the
+        # whole run — that key degrades to force_manual, the rest continue.
+        direction = entry.get("direction")
+        try:
+            if direction == "<":
+                # Lower-bound floor path: timestamped samples → daily-bucket P5
+                # engine (never the upper-bound percentile logic).
+                pairs, err = query_prometheus_range_ts(prometheus_url, promql)
+                if err:
+                    report.keys.append(KeyRecommendation(
+                        key=key, current_value=current_value,
+                        reason=f"query error: {err[:60]}", promql=promql,
+                    ))
+                    continue
+                if not pairs:
+                    report.keys.append(KeyRecommendation(
+                        key=key, current_value=current_value,
+                        confidence=CONFIDENCE_LOW, sample_count=0,
+                        reason="no data points found", promql=promql,
+                    ))
+                    continue
+                rec = recommend_threshold_lower(
+                    key, current_value, pairs, min_samples
+                )
+            else:
+                # Upper-bound path (unchanged).
+                values, err = query_prometheus_range(prometheus_url, promql)
+                if err:
+                    report.keys.append(KeyRecommendation(
+                        key=key, current_value=current_value,
+                        reason=f"query error: {err[:60]}", promql=promql,
+                    ))
+                    continue
+                if not values:
+                    report.keys.append(KeyRecommendation(
+                        key=key, current_value=current_value,
+                        confidence=CONFIDENCE_LOW, sample_count=0,
+                        reason="no data points found", promql=promql,
+                    ))
+                    continue
+                pcts = compute_percentiles(values)
+                rec = recommend_threshold(
+                    key=key, current_value=current_value, pcts=pcts,
+                    sample_count=len(values), min_samples=min_samples,
+                )
+        except Exception as exc:  # noqa: BLE001 — one bad value must not sink the run
+            # Reason phrasing follows the key's own direction (an upper-bound key
+            # blowing up must not be mislabelled "lower-bound floor").
+            what = "lower-bound floor" if direction == "<" else "recommendation"
+            report.keys.append(KeyRecommendation(
+                key=key, current_value=current_value,
+                reason=f"{what} → manual review: {str(exc)[:80]}",
+                force_manual=True, guardrail_reason=str(exc)[:100], promql=promql,
+            ))
             continue
 
-        if not values:
-            rec = KeyRecommendation(
-                key=key,
-                current_value=current_value,
-                confidence=CONFIDENCE_LOW,
-                sample_count=0,
-                reason="no data points found",
-                promql=promql,
-            )
-            report.keys.append(rec)
-            continue
-
-        # Compute percentiles
-        pcts = compute_percentiles(values)
-
-        # Generate recommendation
-        rec = recommend_threshold(
-            key=key,
-            current_value=current_value,
-            pcts=pcts,
-            sample_count=len(values),
-            min_samples=min_samples,
-        )
         rec.promql = promql
 
-        if rec.delta_pct is not None and abs(rec.delta_pct) >= 5.0:
+        # An actionable recommendation (upper or lower) counts as a change; a
+        # within-margin / force_manual / skipped key does not (_exportable is the
+        # single source of truth — a lower within-margin has recommended=None).
+        if _exportable(rec):
             report.recommended_changes += 1
 
         report.keys.append(rec)
@@ -678,17 +975,48 @@ def _format_threshold_value(value: float) -> str:
     return f"{value:g}"
 
 
+def _delta_str(r: KeyRecommendation) -> str:
+    """Render a recommendation's delta, tagging miss-rate space for lower-bound.
+
+    A lower-bound key's delta is a MISS-RATE change (complement space), so a bare
+    ``+7.0%`` reads backwards to an operator expecting value space; the `` miss``
+    suffix makes the axis explicit. The lower engine stamps ``miss-rate`` into the
+    reason, which is the stable signal formatters key off.
+    """
+    if r.delta_pct is None:
+        return "?"
+    s = f"{r.delta_pct:+.1f}%"
+    if _MISS_RATE_MARKER in (r.reason or ""):
+        s += " miss"
+    return s
+
+
+def _skip_comment_body(r: KeyRecommendation) -> tuple[str, str]:
+    """(label, detail) for a non-exportable key's transparency comment.
+
+    A ``force_manual`` key (a lower-bound guardrail tripped — relaxation / thin
+    sample / out-of-domain) is labelled ``manual`` and carries its
+    ``guardrail_reason`` so a floor rotting toward relaxation is never invisible;
+    every other non-exportable key stays ``skipped``.
+    """
+    if r.force_manual:
+        return "manual", (r.guardrail_reason or r.reason or "manual review required")
+    return "skipped", (r.reason or "no recommendation")
+
+
 def _exportable(r: KeyRecommendation) -> bool:
     """True iff this key carries an actionable, applyable recommendation.
 
     #720 STAGE-1 fail-loud: only emit a patch line for keys with a real
     recommendation — i.e. a numeric ``recommended`` AND a delta past the 5%
-    noise margin. Keys that were skipped (unmapped / lower-bound / unsupported
-    scope / no data — ``recommended is None``) or are within-margin (no change
-    needed) are intentionally NOT patched, mirroring the analyze_tenant skip.
+    noise margin. Keys that were skipped (unmapped / lower-bound N/A / unsupported
+    scope / no data — ``recommended is None``), within-margin (no change needed),
+    or routed to manual review by a lower-bound guardrail (#916 ``force_manual``)
+    are intentionally NOT patched, mirroring the analyze_tenant skip.
     """
     return (
         r.recommended is not None
+        and not r.force_manual
         and r.delta_pct is not None
         and abs(r.delta_pct) >= 5.0
     )
@@ -718,7 +1046,8 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
         "# threshold-recommend --export-patch (#720 STAGE-1)",
         "# Review, then merge each tenant block into the matching conf.d/<tenant>.yaml",
         "# and open a PR — backtest.yaml CI will post the old-vs-new firing-count risk report.",
-        "# Only keys with an actionable recommendation (|delta| >= 5%, mapped, upper-bound) appear.",
+        "# Only keys with an actionable recommendation (|delta| >= 5%, mapped, upper-bound",
+        "# or an opted-in percentile-lower floor) appear; lower-bound deltas are miss-rate.",
     ]
     if total == 0:
         lines.append("# (no actionable recommendations)")
@@ -728,8 +1057,8 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
         # empty/None YAML doc that applies to nothing).
         for rep in reports:
             for r in sorted(rep.keys, key=lambda x: x.key):
-                why = r.reason or "no recommendation"
-                lines.append(f"# [{rep.tenant}] (skipped) {r.key}: {why}")
+                label, detail = _skip_comment_body(r)
+                lines.append(f"# [{rep.tenant}] ({label}) {r.key}: {detail}")
         return "\n".join(lines) + "\n"
 
     lines.append("tenants:")
@@ -741,8 +1070,8 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
             # tenant has only non-actionable keys → no YAML block, but keep the
             # per-key skip context as top-level comments (don't drop it).
             for r in skipped:
-                why = r.reason or "no recommendation"
-                lines.append(f"# [{rep.tenant}] (skipped) {r.key}: {why}")
+                label, detail = _skip_comment_body(r)
+                lines.append(f"# [{rep.tenant}] ({label}) {r.key}: {detail}")
             continue
         lines.append(f"  {rep.tenant}:")
         for r in sorted(ks, key=lambda x: x.key):
@@ -755,14 +1084,14 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
             # skipped keys may carry an un-float-parseable / multiline value;
             # those comments use only the tool-generated reason string.)
             cur = r.current_value if r.current_value is not None else "?"
-            delta = f"{r.delta_pct:+.1f}%" if r.delta_pct is not None else "?"
+            delta = _delta_str(r)
             lines.append(
                 f'    {r.key}: "{val}"   # was {cur}, {delta}, {r.confidence} — {r.reason}'
             )
         # surface this tenant's skipped keys as in-block comments
         for r in skipped:
-            why = r.reason or "no recommendation"
-            lines.append(f"    # (skipped) {r.key}: {why}")
+            label, detail = _skip_comment_body(r)
+            lines.append(f"    # ({label}) {r.key}: {detail}")
     return "\n".join(lines) + "\n"
 
 

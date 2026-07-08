@@ -648,3 +648,278 @@ class TestCLI:
         assert "observed-map" in captured.out
         assert "3" in captured.out  # total keys echoed
         assert "preserved 1" in captured.out  # merge stats surfaced
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# #916 Item A — lower-bound (percentile-lower) engine
+# ═══════════════════════════════════════════════════════════════════════
+from datetime import datetime, timezone, timedelta  # noqa: E402
+
+
+def _floor_samples(floor, *, days=9, pts_per_day=200, base_day=0, above=None):
+    """(ts, val) samples across `days` UTC days whose per-day P5 == `floor`.
+
+    ~10% of each day's points sit AT the floor, the rest just above → the 5th
+    percentile lands in the floor band. `days` calendar days give days-2 FULL days
+    (the engine drops the two partial boundary days), so days=9 → 7 full days.
+    """
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    hi = above if above is not None else min(0.9999, floor + 0.02)
+    step = 86400 // pts_per_day
+    out = []
+    for d in range(days):
+        for i in range(pts_per_day):
+            ts = (base + timedelta(days=base_day + d, seconds=i * step)).timestamp()
+            out.append((ts, floor if i < pts_per_day * 0.10 else hi))
+    return out
+
+
+def _rho_target(current, rho):
+    """A floor value whose 4dp-floored target gives (approximately) miss-ratio rho."""
+    return round(1.0 - rho * (1.0 - current), 4)
+
+
+class TestQueryPrometheusRangeTs:
+    @patch("threshold_recommend.http_get_json")
+    def test_keeps_timestamps(self, mock_get):
+        mock_get.return_value = ({
+            "status": "success",
+            "data": {"resultType": "matrix", "result": [{
+                "metric": {}, "values": [[1000, "0.95"], [1060, "0.96"]]}]},
+        }, None)
+        pairs, err = tr.query_prometheus_range_ts("http://prom:9090", "q")
+        assert err is None
+        assert pairs == [(1000.0, 0.95), (1060.0, 0.96)]
+
+    @patch("threshold_recommend.http_get_json")
+    def test_error_propagates(self, mock_get):
+        mock_get.return_value = (None, "connection refused")
+        pairs, err = tr.query_prometheus_range_ts("http://prom:9090", "q")
+        assert pairs == [] and err == "connection refused"
+
+    @patch("threshold_recommend.http_get_json")
+    def test_filters_nan_and_inf(self, mock_get):
+        # a hit-ratio rule can emit NaN while idle (0/0); an unfiltered NaN would
+        # sort to an arbitrary index and corrupt the percentile.
+        mock_get.return_value = ({
+            "status": "success",
+            "data": {"resultType": "matrix", "result": [{
+                "metric": {}, "values": [
+                    [1000, "0.95"], [1060, "NaN"], [1120, "0.96"], [1180, "Inf"]]}]},
+        }, None)
+        pairs, err = tr.query_prometheus_range_ts("http://prom:9090", "q")
+        assert err is None
+        assert pairs == [(1000.0, 0.95), (1120.0, 0.96)]   # NaN + Inf dropped
+
+
+class TestRecommendThresholdLowerGuard0:
+    """guard 0 (domain, first): non-numeric / out-of-(0,1) current all force_manual,
+    never export, never crash (esp. current==1.0 → no divide-by-zero)."""
+
+    @pytest.mark.parametrize("cur", ["1", "1.0", "disable", "95", "0", "1.2"])
+    def test_domain_guard_force_manual_no_export(self, cur):
+        rec = tr.recommend_threshold_lower("db2_bufferpool_hit_ratio", cur,
+                                           _floor_samples(0.97), 100)
+        assert rec.force_manual is True
+        assert rec.recommended is None
+        assert not tr._exportable(rec)
+        assert rec.guardrail_reason  # a reason is always attached
+
+
+class TestRecommendThresholdLowerGuardOrder:
+    """The blocker: relaxation is checked BEFORE margin, so a sub-10% loosen is
+    force_manual (never slips through as within-margin 'no change')."""
+
+    @pytest.mark.parametrize("rho", [1.04, 1.05, 1.07, 1.10])
+    def test_relaxation_band_never_exports(self, rho):
+        floor = _rho_target(0.95, rho)          # target just BELOW current 0.95
+        rec = tr.recommend_threshold_lower("db2_bufferpool_hit_ratio", "0.95",
+                                           _floor_samples(floor), 100)
+        assert rec.force_manual is True, f"rho={rho} floor={floor} should be manual"
+        assert rec.recommended is None
+        # and it must not appear as an applyable line in the export patch YAML
+        yaml = pytest.importorskip("yaml")
+        rep = tr.TenantRecommendation(tenant="t", total_keys=1, keys=[rec])
+        doc = yaml.safe_load(tr.format_export_patch([rep]))
+        emitted = (doc or {}).get("tenants", {}).get("t", {}) if doc else {}
+        assert "db2_bufferpool_hit_ratio" not in emitted
+
+    def test_tighten_happy_path_exports(self):
+        rec = tr.recommend_threshold_lower("db2_bufferpool_hit_ratio", "0.95",
+                                           _floor_samples(0.97), 100)
+        assert rec.force_manual is False
+        assert rec.recommended == pytest.approx(0.97, abs=1e-9)
+        assert rec.recommended > 0.95          # raises the floor
+        assert tr._exportable(rec)
+        assert "miss-rate" in rec.reason       # miss-space delta signal
+
+    def test_within_margin_recommended_none(self):
+        # tighten side, |rho-1| < 0.10 → recommended=None (not just a reason string)
+        floor = _rho_target(0.95, 0.96)        # rho 0.96 → |rho-1|=0.04 < 0.10
+        rec = tr.recommend_threshold_lower("db2_bufferpool_hit_ratio", "0.95",
+                                           _floor_samples(floor), 100)
+        assert rec.force_manual is False
+        assert rec.recommended is None
+        assert not tr._exportable(rec)
+        assert "no change" in rec.reason
+
+    def test_clamp_to_quarter_miss_then_refloor(self):
+        # a P5 hugging 1.0 clamps to 1 - 0.25*m_c and re-floors to 4dp.
+        rec = tr.recommend_threshold_lower("db2_bufferpool_hit_ratio", "0.95",
+                                           _floor_samples(0.999), 100)
+        # m_c = 0.05 → clamp target = 1 - 0.25*0.05 = 0.9875
+        assert rec.recommended == pytest.approx(0.9875, abs=1e-9)
+        assert not rec.force_manual
+
+    def test_4dp_floor_truncates_not_rounds(self):
+        # candidate 0.976543 must floor DOWN to 0.9765 (never 0.9766) — floor keeps
+        # the recommendation from silently loosening via round-half-up.
+        rec = tr.recommend_threshold_lower("db2_bufferpool_hit_ratio", "0.95",
+                                           _floor_samples(0.976543), 100)
+        assert f"{rec.recommended:.4f}" == "0.9765"
+
+
+class TestRecommendThresholdLowerSamples:
+    def test_thin_lookback_force_manual(self):
+        # only 3 full days (5 calendar days) → force_manual with the lookback reason
+        rec = tr.recommend_threshold_lower("db2_bufferpool_hit_ratio", "0.95",
+                                           _floor_samples(0.97, days=5), 100)
+        assert rec.force_manual is True
+        assert "lookback" in rec.guardrail_reason
+
+    def test_insufficient_total_samples_force_manual(self):
+        # enough calendar days but too few points overall → force_manual
+        rec = tr.recommend_threshold_lower("db2_bufferpool_hit_ratio", "0.95",
+                                           _floor_samples(0.97, days=9, pts_per_day=5), 100)
+        assert rec.force_manual is True
+        assert "sample" in rec.guardrail_reason.lower()
+
+
+class TestRecommendThresholdLowerContamination:
+    @staticmethod
+    def _trough_samples(current_ignored, weekday, weekend, trough_days=(3, 6),
+                        days=9, pts=200):
+        """9 cal days (7 full); `trough_days` sit genuinely at `weekend` floor, the
+        rest at `weekday` floor (each day ~10% at its floor, rest just above)."""
+        base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        out = []
+        for d in range(days):
+            f = weekend if d in trough_days else weekday
+            for i in range(pts):
+                ts = (base + timedelta(days=d, seconds=i * 432)).timestamp()
+                out.append((ts, f if i < pts * 0.10 else min(0.9999, f + 0.005)))
+        return out
+
+    def test_outage_echo_transient_does_not_trip_divergence(self):
+        # A short degraded window crossing UTC midnight pollutes 2 daily buckets'
+        # P5 but is <5% of total → pooled ≈ daily (ratio ≈ 1 < K) so the divergence
+        # gate does NOT fire → the engine tightens to the clean floor.
+        s = _floor_samples(0.97, days=9, pts_per_day=200)
+        base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        for m in range(16):
+            s.append(((base + timedelta(days=4, seconds=23*3600 + m*120)).timestamp(), 0.80))
+            s.append(((base + timedelta(days=5, seconds=m*120)).timestamp(), 0.80))
+        rec = tr.recommend_threshold_lower("db2_bufferpool_hit_ratio", "0.95", s, 100)
+        assert rec.force_manual is False
+        assert rec.recommended == pytest.approx(0.97, abs=1e-9)
+
+    def test_shallow_trough_above_current_trips_divergence(self):
+        # THE MAJOR-BUG REGRESSION: a recurring trough ABOVE current (weekday floor
+        # 0.98, weekend trough 0.96, current 0.95). daily-median resists (~0.98) but
+        # pooled-P5 drops into the trough (~0.96) → without the divergence gate the
+        # engine auto-tightens to ~0.98 and false-alarms on the 0.96 trough every
+        # week. The gate ((1-pooled) >= 1.5*(1-daily)) must force_manual instead.
+        s = self._trough_samples("0.95", weekday=0.980, weekend=0.960)
+        rec = tr.recommend_threshold_lower("db2_bufferpool_hit_ratio", "0.95", s, 100)
+        assert rec.force_manual is True
+        assert "diverge" in rec.guardrail_reason
+        assert rec.recommended is None                 # never auto-tightens
+
+    def test_deep_trough_below_current_goes_relaxation_not_divergence(self):
+        # A trough BELOW current (weekend 0.90 < current 0.95): candidate=min lands
+        # below current → the RELAXATION guard claims it (checked before divergence),
+        # so the reason is relaxation, not divergence.
+        s = self._trough_samples("0.95", weekday=0.98, weekend=0.90)
+        rec = tr.recommend_threshold_lower("db2_bufferpool_hit_ratio", "0.95", s, 100)
+        assert rec.force_manual is True
+        assert "relax" in rec.guardrail_reason
+        assert "diverge" not in rec.guardrail_reason    # relaxation wins the race
+
+    def test_oscillation_uses_p5_floor_not_peaks(self):
+        # Intra-day oscillation 0.90<->0.99 with a stable daily-P5 ~0.90: the engine
+        # keys off the P5 floor (raise floor toward 0.90), not the 0.99 peaks.
+        base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        s = []
+        for d in range(9):
+            for i in range(200):
+                ts = (base + timedelta(days=d, seconds=i*432)).timestamp()
+                s.append((ts, 0.90 if i % 2 == 0 else 0.99))
+        rec = tr.recommend_threshold_lower("db2_bufferpool_hit_ratio", "0.85", s, 100)
+        # current 0.85 floor, P5 ~0.90 → tighten toward 0.90, not toward 0.99
+        assert rec.recommended is not None and not rec.force_manual
+        assert 0.89 <= rec.recommended <= 0.91
+
+    def test_exportable_rejects_force_manual(self):
+        rec = tr.KeyRecommendation("k", "0.95", recommended=None, delta_pct=8.0,
+                                   force_manual=True, guardrail_reason="relax")
+        assert not tr._exportable(rec)
+
+
+class TestAnalyzeTenantLowerBound:
+    """analyze_tenant routes a percentile-lower entry to the lower engine and a
+    N/A entry to a by-design skip."""
+
+    LOWER_MAP = {
+        "db2_bufferpool_hit_ratio": {
+            "scope": "tenant", "direction": "<",
+            "observed_series": "tenant:db2_bufferpool_hit_ratio:min",
+            "recommendation_mode": "percentile-lower",
+        },
+        "kafka_active_controllers": {
+            "scope": "tenant", "direction": "<",
+            "candidates": ["tenant:kafka_active_controllers:max"],
+            "recommendation_mode": "not-applicable",
+            "reason": "by-design not-applicable — invariant (#916)",
+        },
+    }
+
+    @patch("threshold_recommend.query_prometheus_range_ts")
+    def test_percentile_lower_routes_to_lower_engine(self, mock_ts):
+        mock_ts.return_value = (_floor_samples(0.97), None)
+        report = tr.analyze_tenant("db-x", {"db2_bufferpool_hit_ratio": "0.95"},
+                                   prometheus_url="http://p:9090", observed_map=self.LOWER_MAP)
+        rec = report.keys[0]
+        assert rec.recommended == pytest.approx(0.97, abs=1e-9)
+        assert "miss-rate" in rec.reason
+        assert report.recommended_changes == 1
+
+    def test_not_applicable_key_skipped_by_design(self):
+        report = tr.analyze_tenant("db-x", {"kafka_active_controllers": "1"},
+                                   dry_run=False, prometheus_url="http://p:9090",
+                                   observed_map=self.LOWER_MAP)
+        rec = report.keys[0]
+        assert rec.recommended is None
+        assert "by-design not-applicable" in rec.reason
+
+    @patch("threshold_recommend.query_prometheus_range_ts")
+    def test_bad_value_forces_manual_not_crash(self, mock_ts):
+        # one tenant's garbage value must degrade to force_manual, not sink the run
+        mock_ts.return_value = (_floor_samples(0.97), None)
+        report = tr.analyze_tenant("db-x", {"db2_bufferpool_hit_ratio": "not-a-ratio"},
+                                   prometheus_url="http://p:9090", observed_map=self.LOWER_MAP)
+        rec = report.keys[0]
+        assert rec.force_manual is True and rec.recommended is None
+
+    @patch("threshold_recommend.query_prometheus_range")
+    def test_upper_bound_exception_reason_not_lower_labelled(self, mock_q):
+        # item 4: an UPPER-bound key blowing up in the per-key try/except must NOT
+        # be mislabelled "lower-bound floor" — the reason follows direction.
+        mock_q.side_effect = RuntimeError("boom")
+        upper_map = {"connections": {"scope": "tenant", "direction": ">",
+                                     "observed_series": "tenant:x:max"}}
+        report = tr.analyze_tenant("db-x", {"connections": "100"},
+                                   prometheus_url="http://p:9090", observed_map=upper_map)
+        rec = report.keys[0]
+        assert rec.force_manual is True
+        assert "recommendation → manual review" in rec.reason
+        assert "lower-bound" not in rec.reason

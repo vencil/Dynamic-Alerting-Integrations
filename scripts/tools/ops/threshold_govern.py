@@ -148,17 +148,65 @@ class TenantOutcome:
 
 @dataclass
 class UngovernedKey:
-    """A threshold governance cannot act on — lower-bound ``<`` (engine-skipped).
+    """A threshold governance cannot act on — a bare/half-resolved lower-bound
+    ``<`` still engine-skipped (#916 left it needs_review / not-supported).
 
-    Surfaced so the deferred ``<`` support (#656) is an OBSERVABLE blind spot,
-    not a silent coverage hole: these never reach a PR (``recommended is None``
-    fails the gate), and ``<`` rot lowers a hit-ratio / availability floor =
-    protection silently reduced.
+    Surfaced so the un-classified ``<`` tail is an OBSERVABLE blind spot, not a
+    silent coverage hole: these never reach a PR (``recommended is None`` fails
+    the gate). After #916 the real map has none of these (every ``<`` key is
+    classified percentile-lower or not-applicable); the field stays for a
+    hand-edited / half-resolved entry.
     """
 
     tenant: str
     key: str
     reason: str
+
+
+@dataclass
+class NotApplicableKey:
+    """A ``<`` threshold classified by-design not-applicable (#916 Item A —
+    kafka active-controllers / broker-count / integer-count floors).
+
+    An expected-value invariant or a topology floor: no percentile recommendation
+    is ever meaningful, so it is reported as an INFO count (governance is complete
+    for it), NOT a ⚠ blind spot and NOT a manual-review item.
+    """
+
+    tenant: str
+    key: str
+    reason: str
+
+
+@dataclass
+class ForceManualKey:
+    """A lower-bound (percentile-lower) recommendation a guardrail routed to
+    manual review (#916 Item A ``force_manual``): relaxation (floor would drop),
+    an out-of-ratio-domain current/candidate, or too thin a sample.
+
+    This is the floor-rot CORE signal — a floor drifting toward relaxation must
+    never be invisible — so it gets its own manual-review section + summary count,
+    distinct from the auto-PR plan and the by-design N/A INFO.
+    """
+
+    tenant: str
+    key: str
+    guardrail_reason: str
+    delta_pct: Optional[float]
+
+
+@dataclass
+class GovernanceResult:
+    """One run's full result — a named container (not a positional tuple) so a new
+    surfaced category (#916 not_applicable / force_manual) is an added field, not a
+    silently-shifted tuple position that a caller could unpack into the wrong var.
+    """
+
+    plans: list[TenantPlan]
+    outcomes: list[TenantOutcome]
+    ungoverned: list[UngovernedKey]
+    not_applicable: list[NotApplicableKey] = field(default_factory=list)
+    force_manual: list[ForceManualKey] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -175,11 +223,14 @@ def is_governance_actionable(
     confidence floor is the anti-noise guard — we never nag an operator to retune
     a threshold off a thin sample (防破窗).
 
-    Keys the engine skipped (unmapped / lower-bound ``<`` / unsupported scope /
-    no data → ``recommended is None``) are excluded for free.
+    Keys the engine skipped (unmapped / lower-bound ``<`` N/A / unsupported scope
+    / no data → ``recommended is None``) are excluded for free, as are lower-bound
+    keys a guardrail routed to manual review (#916 ``force_manual`` — explicit
+    even though ``force_manual`` always implies ``recommended is None``).
     """
     return (
         rec.recommended is not None
+        and not getattr(rec, "force_manual", False)
         and rec.delta_pct is not None
         and abs(rec.delta_pct) >= min_delta_pct
         and rec.confidence in (recommend.CONFIDENCE_HIGH, recommend.CONFIDENCE_MEDIUM)
@@ -230,17 +281,66 @@ _LOWER_BOUND_SKIP_MARKER = "lower-bound (<)"
 def collect_ungoverned_lower_bound(
     reports: list["recommend.TenantRecommendation"],
 ) -> list[UngovernedKey]:
-    """Lower-bound ``<`` keys the engine skipped → the governance blind spot.
+    """Bare/half-resolved lower-bound ``<`` keys the engine skipped as not-supported.
 
     These fail the gate silently (``recommended is None``), so surfacing a count
-    keeps the deferred ``<`` support (#656) observable instead of an invisible
-    coverage hole. NOT actionable here (no PR) — they need manual review.
+    keeps any un-classified ``<`` tail observable instead of an invisible coverage
+    hole. NOT actionable here (no PR) — they need manual classification. After
+    #916 the real map yields none (every ``<`` is percentile-lower or N/A); the
+    detector stays for hand-edited entries.
     """
     out: list[UngovernedKey] = []
     for report in reports:
         for r in report.keys:
             if r.recommended is None and _LOWER_BOUND_SKIP_MARKER in (r.reason or ""):
                 out.append(UngovernedKey(report.tenant, r.key, r.reason))
+    out.sort(key=lambda u: (u.tenant, u.key))
+    return out
+
+
+# The by-design not-applicable marker build_map stamps into a N/A ``<`` entry's
+# skip-reason. Bound to the lib constant (via the recommender's import) so a
+# rename can't silently turn this detector into a no-op (mirrors the
+# _LOWER_BOUND_SKIP_MARKER contract). Must NOT be a substring of the ``<``
+# not-supported marker, else N/A keys mis-route into the ungoverned list.
+_NOT_APPLICABLE_MARKER = recommend.observed_map_lib._NOT_APPLICABLE_MARKER
+
+
+def collect_not_applicable(
+    reports: list["recommend.TenantRecommendation"],
+) -> list[NotApplicableKey]:
+    """By-design not-applicable ``<`` keys → an INFO count (governance complete).
+
+    These are expected-value invariants / topology floors: no percentile
+    recommendation is meaningful, so they leave the ⚠ ungoverned list and are
+    reported as an INFO by-design count instead.
+    """
+    out: list[NotApplicableKey] = []
+    for report in reports:
+        for r in report.keys:
+            if r.recommended is None and _NOT_APPLICABLE_MARKER in (r.reason or ""):
+                out.append(NotApplicableKey(report.tenant, r.key, r.reason))
+    out.sort(key=lambda u: (u.tenant, u.key))
+    return out
+
+
+def collect_force_manual(
+    reports: list["recommend.TenantRecommendation"],
+) -> list[ForceManualKey]:
+    """Lower-bound recommendations a guardrail routed to manual review (#916).
+
+    ``force_manual`` = relaxation / out-of-domain / thin sample; the floor-rot
+    core signal. Surfaced as its own manual-review section + count so a floor
+    drifting toward relaxation is never invisible in the governance run.
+    """
+    out: list[ForceManualKey] = []
+    for report in reports:
+        for r in report.keys:
+            if getattr(r, "force_manual", False):
+                out.append(ForceManualKey(
+                    report.tenant, r.key,
+                    r.guardrail_reason or r.reason, r.delta_pct,
+                ))
     out.sort(key=lambda u: (u.tenant, u.key))
     return out
 
@@ -612,6 +712,8 @@ def open_governance_pr(
 def format_text_report(
     plans: list[TenantPlan], outcomes: list[TenantOutcome], applied: bool,
     ungoverned: Optional[list["UngovernedKey"]] = None,
+    not_applicable: Optional[list["NotApplicableKey"]] = None,
+    force_manual: Optional[list["ForceManualKey"]] = None,
 ) -> str:
     lines: list[str] = []
     mode = "APPLY" if applied else "DRY-RUN (no writes — pass --apply to open PRs)"
@@ -623,22 +725,61 @@ def format_text_report(
         if not ung:
             return []
         head = (
-            f"⚠ {len(ung)} 個閾值未治理（lower-bound `<`，需人工 review；#656 DETECT `<` 暫緩）："
+            f"⚠ {len(ung)} 個閾值未治理（lower-bound `<` 未分類，需人工 review；#916）："
             if _LANG == "zh" else
-            f"⚠ {len(ung)} threshold(s) ungoverned (lower-bound `<`, manual review — "
-            "#656 DETECT `<` deferred):"
+            f"⚠ {len(ung)} threshold(s) ungoverned (unclassified lower-bound `<`, "
+            "manual review — #916):"
         )
         return ["", "-" * 78, head] + [f"    {u.tenant} / {u.key}" for u in ung]
 
-    def _ungoverned_note() -> str:
-        # Folded into Summary so a tail-scan catches the blind spot even when the
-        # per-tenant output is long; the detail list sits just above the summary.
-        n = len(ungoverned or [])
-        if not n:
-            return ""
-        return (f" ⚠ 另有 {n} 個 lower-bound `<` 閾值未治理（需人工 review）。"
-                if _LANG == "zh" else
-                f" ⚠ {n} lower-bound `<` threshold(s) also ungoverned (manual review).")
+    def _force_manual_lines() -> list[str]:
+        fm = force_manual or []
+        if not fm:
+            return []
+        head = (
+            f"⚠ {len(fm)} 個 lower-bound 閾值需人工 review（floor 護欄觸發；#916）："
+            if _LANG == "zh" else
+            f"⚠ {len(fm)} lower-bound threshold(s) need manual review "
+            "(floor guardrail tripped — #916):"
+        )
+        body = []
+        for k in fm:
+            d = f" ({k.delta_pct:+.1f}% miss)" if k.delta_pct is not None else ""
+            body.append(f"    {k.tenant} / {k.key}: {k.guardrail_reason}{d}")
+        return ["", "-" * 78, head] + body
+
+    def _not_applicable_lines() -> list[str]:
+        na = not_applicable or []
+        if not na:
+            return []
+        head = (
+            f"ℹ {len(na)} 個 lower-bound `<` 閾值 by-design 不適用百分位推薦（治理完成，無需動作；#916）。"
+            if _LANG == "zh" else
+            f"ℹ {len(na)} lower-bound `<` threshold(s) by-design not-applicable to "
+            "percentile recommendation (governance complete, no action — #916)."
+        )
+        return ["", "-" * 78, head]
+
+    def _deferred_note() -> str:
+        # Fold the two review-worthy counts into Summary so a tail-scan catches
+        # them even when the per-tenant output is long; N/A is complete (INFO), so
+        # it is NOT folded into the bottom line (its detail line above suffices).
+        n_ung = len(ungoverned or [])
+        n_fm = len(force_manual or [])
+        parts: list[str] = []
+        if n_fm:
+            parts.append(
+                f" ⚠ 另有 {n_fm} 個 lower-bound 閾值需人工 review。" if _LANG == "zh"
+                else f" ⚠ {n_fm} lower-bound threshold(s) also need manual review.")
+        if n_ung:
+            parts.append(
+                f" ⚠ 另有 {n_ung} 個未分類 `<` 閾值未治理。" if _LANG == "zh"
+                else f" ⚠ {n_ung} unclassified `<` threshold(s) also ungoverned.")
+        return "".join(parts)
+
+    def _deferred_block() -> list[str]:
+        # All three surfaced-but-no-auto-PR categories, above the bottom line.
+        return _force_manual_lines() + _ungoverned_lines() + _not_applicable_lines()
 
     if not plans:
         lines.append(
@@ -646,19 +787,24 @@ def format_text_report(
             if _LANG == "zh" else
             "No thresholds need governance (all within margin or low-confidence)."
         )
-        lines += _ungoverned_lines()
+        lines += _deferred_block()
         return "\n".join(lines)
 
     for plan in plans:
         lines.append(f"\nTenant: {plan.tenant} ({len(plan.changes)} change(s))")
-        lines.append(f"  {'Key':<26s} {'Current':>10s} {'→':^3s} {'Recommend':>10s} {'Delta':>9s} {'Conf':<8s}")
-        lines.append(f"  {'-' * 26} {'-' * 10} {'-' * 3} {'-' * 10} {'-' * 9} {'-' * 8}")
+        lines.append(f"  {'Key':<26s} {'Current':>10s} {'→':^3s} {'Recommend':>10s} {'Delta':>13s} {'Conf':<8s}")
+        lines.append(f"  {'-' * 26} {'-' * 10} {'-' * 3} {'-' * 10} {'-' * 13} {'-' * 8}")
         for c in plan.changes:
             cur = str(c.current_value)
             rec = recommend._format_threshold_value(c.recommended)
+            # Tag lower-bound (miss-rate space) deltas with " miss" so an operator
+            # never reads a negative delta beside a RISING value as a mistake. The
+            # engine stamps miss-rate into the reason; the plan carries that reason.
+            miss = " miss" if recommend._MISS_RATE_MARKER in (c.reason or "") else ""
+            delta = f"{c.delta_pct:+.1f}%{miss}"
             lines.append(
                 f"  {c.key:<26s} {cur:>10s} {'→':^3s} {rec:>10s} "
-                f"{c.delta_pct:>+8.1f}% {c.confidence:<8s}"
+                f"{delta:>13s} {c.confidence:<8s}"
             )
 
     if applied and outcomes:
@@ -673,10 +819,10 @@ def format_text_report(
             detail = o.pr_url or o.message
             lines.append(f"  [{tag}] {o.tenant}: {detail}")
 
-    # Blind-spot detail goes ABOVE the bottom line so Summary stays the last line
-    # a reader scanning the tail expects (CLI bottom-line convention); the count
-    # itself is folded into Summary via _ungoverned_note().
-    lines += _ungoverned_lines()
+    # Blind-spot / manual-review detail goes ABOVE the bottom line so Summary
+    # stays the last line a reader scanning the tail expects (CLI bottom-line
+    # convention); the review counts are folded into Summary via _deferred_note().
+    lines += _deferred_block()
 
     opened = sum(1 for o in outcomes if o.status == "pr_opened")
     pending = sum(1 for o in outcomes if o.status == "already_pending")
@@ -685,13 +831,13 @@ def format_text_report(
     if applied:
         lines.append(
             f"Summary: {opened} PR(s) opened, {pending} already-pending (skipped), "
-            f"{errors} error(s); {len(plans)} tenant(s) actionable." + _ungoverned_note()
+            f"{errors} error(s); {len(plans)} tenant(s) actionable." + _deferred_note()
         )
     else:
         total_changes = sum(len(p.changes) for p in plans)
         lines.append(
             f"Summary: {len(plans)} tenant(s) / {total_changes} change(s) would get a PR. "
-            "Re-run with --apply to open them." + _ungoverned_note()
+            "Re-run with --apply to open them." + _deferred_note()
         )
     return "\n".join(lines)
 
@@ -699,14 +845,20 @@ def format_text_report(
 def format_json_report(
     plans: list[TenantPlan], outcomes: list[TenantOutcome], applied: bool,
     ungoverned: Optional[list["UngovernedKey"]] = None,
+    not_applicable: Optional[list["NotApplicableKey"]] = None,
+    force_manual: Optional[list["ForceManualKey"]] = None,
 ) -> str:
     ung = ungoverned or []
+    na = not_applicable or []
+    fm = force_manual or []
     out = {
         "tool": "threshold-govern",
         "applied": applied,
         "plans": [asdict(p) for p in plans],
         "outcomes": [asdict(o) for o in outcomes],
         "ungoverned_lower_bound": [asdict(u) for u in ung],
+        "not_applicable": [asdict(u) for u in na],
+        "force_manual": [asdict(u) for u in fm],
         "summary": {
             "tenants_actionable": len(plans),
             "changes": sum(len(p.changes) for p in plans),
@@ -714,6 +866,8 @@ def format_json_report(
             "already_pending": sum(1 for o in outcomes if o.status == "already_pending"),
             "errors": sum(1 for o in outcomes if o.status == "error"),
             "ungoverned_lower_bound": len(ung),
+            "not_applicable": len(na),
+            "force_manual": len(fm),
         },
     }
     return json.dumps(out, indent=2, ensure_ascii=False)
@@ -722,14 +876,14 @@ def format_json_report(
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-def run(
-    args: argparse.Namespace,
-) -> tuple[list[TenantPlan], list[TenantOutcome], list[UngovernedKey]]:
+def run(args: argparse.Namespace) -> GovernanceResult:
     """Run the recommender, gate, and (if --apply) open per-tenant PRs.
 
-    Returns ``(plans, outcomes, ungoverned)``. In dry-run, outcomes is empty (no
-    writes). ``ungoverned`` is the lower-bound ``<`` blind spot — always surfaced,
-    independent of --apply, since it is informational (no PR is ever opened).
+    Returns a ``GovernanceResult``. In dry-run, outcomes is empty (no writes). The
+    three surfaced-but-not-auto-PR categories are always populated independent of
+    --apply (all informational): ``ungoverned`` (un-classified ``<`` tail),
+    ``not_applicable`` (by-design N/A INFO), and ``force_manual`` (lower-bound
+    guardrail tripped — manual review).
     """
     reports = recommend.run_analysis(
         args.config_dir,
@@ -741,10 +895,12 @@ def run(
     )
     plans = build_governance_plan(reports, args.min_delta_pct)
     ungoverned = collect_ungoverned_lower_bound(reports)
+    not_applicable = collect_not_applicable(reports)
+    force_manual = collect_force_manual(reports)
 
     outcomes: list[TenantOutcome] = []
     if not args.apply:
-        return plans, outcomes, ungoverned
+        return GovernanceResult(plans, outcomes, ungoverned, not_applicable, force_manual)
 
     opened = 0
     attempted = 0
@@ -780,7 +936,7 @@ def run(
             consecutive_errors += 1
         else:
             consecutive_errors = 0
-    return plans, outcomes, ungoverned
+    return GovernanceResult(plans, outcomes, ungoverned, not_applicable, force_manual)
 
 
 def _is_systemic_failure(outcomes: list[TenantOutcome], applied: bool) -> bool:
@@ -841,14 +997,24 @@ def main() -> None:
     parser.add_argument("--tenant", default=None,
                         help="只分析指定租戶" if _LANG == "zh" else "Analyze only this tenant")
     parser.add_argument("--lookback", default="7d",
-                        help="回溯期間（預設 7d）" if _LANG == "zh" else "Lookback period (default 7d)")
+                        help=("回溯期間（預設 7d；下界/percentile-lower key 建議 14d——"
+                              "7d 排除兩端 partial 後僅約 6 完整 UTC 日，對 scrape gap 脆弱）"
+                              if _LANG == "zh" else
+                              "Lookback period (default 7d; use 14d for lower-bound/"
+                              "percentile-lower keys — 7d leaves only ~6 full UTC days "
+                              "after dropping partial boundaries, fragile to scrape gaps)"))
     parser.add_argument("--min-samples", type=int, default=100,
                         help="最低樣本數門檻（預設 100）" if _LANG == "zh"
                         else "Minimum sample count (default 100)")
     parser.add_argument("--min-delta-pct", type=float, default=DEFAULT_MIN_DELTA_PCT,
-                        help=("治理介入門檻：|delta%%| 須 ≥ 此值才開 PR（預設 25）"
+                        help=("治理介入門檻：|delta%%| 須 ≥ 此值才開 PR（預設 25）。注意"
+                              "上界為 value 空間、下界為 miss-rate 空間——同旋鈕敏感度不同"
+                              "（0.95 floor 的 25%% miss ≈ 1.3%% value）"
                               if _LANG == "zh" else
-                              "Governance gate: only open a PR when |delta%%| >= this (default 25)"))
+                              "Governance gate: only open a PR when |delta%%| >= this (default 25). "
+                              "NB asymmetric: upper-bound is value space, lower-bound is MISS-RATE "
+                              "space — same knob, different sensitivity (25%% miss on a 0.95 floor "
+                              "≈ 1.3%% value)"))
     parser.add_argument("--max-prs", type=int, default=DEFAULT_MAX_PRS,
                         help=("每次最多開幾個 PR（防洪，預設 10）" if _LANG == "zh"
                               else "Max PRs opened per run (anti-flood, default 10)"))
@@ -897,10 +1063,14 @@ def main() -> None:
         sys.exit(EXIT_CALLER_ERROR)
 
     if args.min_delta_pct < 5.0:
-        # Below the engine's own no-change margin nothing is exportable anyway —
-        # fail loud rather than silently produce an empty plan.
-        msg = ("--min-delta-pct 不可低於引擎的 5%% 雜訊邊界" if _LANG == "zh"
-               else "--min-delta-pct cannot be below the engine's 5%% noise margin")
+        # Below the upper-bound engine's 5% VALUE no-change margin nothing is
+        # exportable anyway — fail loud rather than silently produce an empty plan.
+        # NB: for lower-bound keys --min-delta-pct is compared in MISS-RATE space
+        # (the engine's own lower no-change margin is 10% miss), so this floor is a
+        # necessary-not-sufficient lower bound; the two spaces are not the same
+        # sensitivity (see --min-delta-pct help).
+        msg = ("--min-delta-pct 不可低於上界引擎的 5%% value 雜訊邊界" if _LANG == "zh"
+               else "--min-delta-pct cannot be below the upper-bound engine's 5%% value noise margin")
         print(msg, file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
@@ -918,18 +1088,22 @@ def main() -> None:
             print(msg, file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
-    plans, outcomes, ungoverned = run(args)
+    result = run(args)
 
     if args.json_output:
-        print(format_json_report(plans, outcomes, args.apply, ungoverned))
+        print(format_json_report(
+            result.plans, result.outcomes, args.apply, result.ungoverned,
+            result.not_applicable, result.force_manual))
     else:
-        print(format_text_report(plans, outcomes, args.apply, ungoverned))
+        print(format_text_report(
+            result.plans, result.outcomes, args.apply, result.ungoverned,
+            result.not_applicable, result.force_manual))
 
     # #656: surface a governance run where EVERY write failed as a non-zero exit
     # (-> Job Failed + a frozen last_successful_time so ThresholdGovernanceStale can
     # fire). A clean / partial-success / dry-run run stays exit 0. See
     # _is_systemic_failure for why the dead-man's-switch needs this to be honest.
-    sys.exit(EXIT_VIOLATION if _is_systemic_failure(outcomes, args.apply) else EXIT_OK)
+    sys.exit(EXIT_VIOLATION if _is_systemic_failure(result.outcomes, args.apply) else EXIT_OK)
 
 
 if __name__ == "__main__":
