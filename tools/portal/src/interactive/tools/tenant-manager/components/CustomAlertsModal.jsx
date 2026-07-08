@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import RecipeBuilder from '../../recipe-builder.jsx';
+import { useModalFocusTrap } from '../../_common/hooks/useModalFocusTrap.js';
 
 /* ── i18n ──────────────────────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
@@ -90,11 +91,19 @@ function CustomAlertsModal(props) {
     onClose();
   }
 
-  useEffect(() => {
-    function onKey(e) { if (e.key === 'Escape') requestClose(); }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  });
+  // Modal focus trap + Esc + auto-focus via the shared _common hook
+  // (replaces a hand-rolled Escape-only window listener). The hook owns
+  // modalRef, auto-focuses the modal on open, and traps Tab within it —
+  // the two a11y behaviors the hand-rolled version lacked. Its Esc path
+  // invokes the second arg, which we route through a ref so it always
+  // calls the LATEST requestClose and preserves the Reef 8 unsaved-changes
+  // confirm: the hook re-subscribes only when its first arg changes, and
+  // we pass a constant (the modal is always "open" while mounted), so a
+  // direct `requestClose` would freeze at mount (isDirty=false) and
+  // silently skip the guard. The ref sidesteps that stale closure.
+  const requestCloseRef = useRef(requestClose);
+  useEffect(() => { requestCloseRef.current = requestClose; });
+  const modalRef = useModalFocusTrap(true, () => requestCloseRef.current());
 
   // Reef 5: name-based mutation by ORIGINAL name (rename-safe).
   function handleRecipeSubmit(recipe, originalName) {
@@ -176,10 +185,18 @@ function CustomAlertsModal(props) {
       data-testid="custom-alerts-modal"
       onMouseDown={(e) => { if (e.target === e.currentTarget) requestClose(); }} /* Reef 8 backdrop */
     >
-      <div className="w-full max-w-2xl mt-8" onMouseDown={(e) => e.stopPropagation()}>
+      <div
+        className="w-full max-w-2xl mt-8"
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="custom-alerts-title"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <div className={card}>
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold">
+            <h2 id="custom-alerts-title" className="text-lg font-semibold">
               {t('自訂告警', 'Custom Alerts')} — <span className="font-mono">{tenantId}</span>
             </h2>
             <button type="button" className={btn} data-testid="close" onClick={requestClose}>✕</button>

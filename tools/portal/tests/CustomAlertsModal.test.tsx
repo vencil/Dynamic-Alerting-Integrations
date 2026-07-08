@@ -152,4 +152,62 @@ describe('CustomAlertsModal', () => {
     expect(confirmSpy).not.toHaveBeenCalled(); // not dirty
     expect(onClose).toHaveBeenCalled();
   });
+
+  // ── useModalFocusTrap adoption (replaces the hand-rolled Esc listener) ──
+
+  it('a11y: auto-focuses into the modal on open (focus enters the dialog)', async () => {
+    const ft = fetchTenant([]);
+    render(<CustomAlertsModal tenantId="db-a" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} />);
+    await waitFor(() => expect(screen.getByTestId('add')).toBeInTheDocument());
+    // The shared hook focuses the ref'd panel on mount — focus must land
+    // *inside* the modal, not on document.body as before the adoption.
+    const modal = screen.getByTestId('custom-alerts-modal');
+    expect(modal.contains(document.activeElement)).toBe(true);
+  });
+
+  it('a11y: the focused panel is a labelled dialog (role/aria-modal/aria-labelledby)', async () => {
+    const ft = fetchTenant([]);
+    render(<CustomAlertsModal tenantId="db-a" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} />);
+    await waitFor(() => expect(screen.getByTestId('add')).toBeInTheDocument());
+    // The ref'd (focused) panel must expose dialog semantics for SR users —
+    // matching the sibling tenant-manager modal, not a bare focusable div.
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    // labelled by the visible title (the <h2> carrying the tenant id)
+    const labelId = dialog.getAttribute('aria-labelledby');
+    expect(labelId).toBeTruthy();
+    expect(document.getElementById(labelId as string)?.textContent).toMatch(/db-a/);
+  });
+
+  it('Reef 8 via Esc: Escape with unsaved changes prompts a confirm (stays open on cancel)', async () => {
+    // Regression guard for the stale-closure trap: the hook subscribes ONCE
+    // (constant modalType), so a direct `requestClose` would freeze at mount
+    // (isDirty=false) and let Esc close silently. The ref keeps it fresh, so
+    // Esc after an edit must see isDirty=true and fire the confirm.
+    const onClose = vi.fn();
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const ft = fetchTenant([]);
+    render(<CustomAlertsModal tenantId="db-a" onClose={onClose} fetchTenant={ft} fetchMetrics={mockMetrics(['m'])} />);
+    await waitFor(() => expect(screen.getByTestId('add')).toBeInTheDocument());
+    // make it dirty
+    fireEvent.click(screen.getByTestId('add'));
+    fillRecipeForm('d', 'm');
+    fireEvent.click(screen.getByTestId('submit'));
+    await waitFor(() => expect(screen.getByTestId('recipe-d')).toBeInTheDocument());
+    // Escape → hook routes to the LATEST requestClose → confirm fires → cancel keeps it open
+    fireEvent.keyDown(screen.getByTestId('custom-alerts-modal'), { key: 'Escape' });
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('Esc on a clean modal closes without a confirm', async () => {
+    const onClose = vi.fn();
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const ft = fetchTenant([]);
+    render(<CustomAlertsModal tenantId="db-a" onClose={onClose} fetchTenant={ft} fetchMetrics={mockMetrics([])} />);
+    await waitFor(() => expect(screen.getByTestId('add')).toBeInTheDocument());
+    fireEvent.keyDown(screen.getByTestId('custom-alerts-modal'), { key: 'Escape' });
+    expect(confirmSpy).not.toHaveBeenCalled(); // not dirty
+    expect(onClose).toHaveBeenCalled();
+  });
 });
