@@ -107,7 +107,7 @@ Migrating a customer's **existing PromRule corpus** into our `conf.d/` structure
 customer PromRule YAML
     ↓ da-parser import
 ParsedRule JSON (with dialect / vm_only / prom_portable annotations)
-    ↓ da-tools profile build
+    ↓ Profile Builder (library)
 Cluster + Profile-as-Directory-Default
     ↓ da-batchpr apply
 Hierarchy-aware Batch PRs
@@ -188,7 +188,7 @@ After finding your path via the §1 decision tree:
 
 - [ ] Run `da-parser import` against the customer PromRule corpus
 - [ ] Check dialect distribution + non-portable ratio
-- [ ] Run `da-tools profile build` to extract cluster + Profile-as-Directory-Default
+- [ ] Extract cluster + Profile-as-Directory-Default via the Profile Builder library (the standalone `da-tools profile build` CLI is not yet shipped — planned)
 - [ ] Run `da-batchpr apply` to open Base + tenant chunk PRs
 - [ ] Run `da-guard` through the 4-layer schema / routing / cardinality / redundant-override check
 - [ ] Details → [Migration Toolkit Installation](../migration-toolkit-installation.en.md)

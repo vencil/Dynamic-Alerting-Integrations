@@ -206,13 +206,13 @@ Tri-state mode (Normal / Silent / Maintenance with `expires` auto-expiry) · Fou
 
 ### Toolchain (da-tools CLI)
 
-Covers tenant **lifecycle** (scaffold / onboard / migrate-rule / cutover / offboard), **day-to-day ops** (diagnose / patch-config / explain-route), **quality governance** (validate-config / alert-quality / Policy-as-Code), and the **customer onboarding pipeline** (da-parser → profile build → da-batchpr → da-guard). All packaged in the `ghcr.io/vencil/da-tools` container.
+Covers tenant **lifecycle** (scaffold / onboard / migrate-rule / cutover / offboard), **day-to-day ops** (diagnose / patch-config / explain-route), **quality governance** (validate-config / alert-quality / Policy-as-Code), and the **customer onboarding pipeline** (da-parser → Profile Builder (library) → da-batchpr → da-guard; Profile Builder is a library — there is no standalone `da-tools profile build` CLI). All packaged in the `ghcr.io/vencil/da-tools` container.
 
 Full commands, flags & examples → [CLI Reference](docs/cli-reference.en.md) · [Cheat Sheet](docs/cheat-sheet.en.md) · [Interactive Tools Index](docs/interactive-tools.md)
 
 ### Customer Onboarding: Migration Toolkit
 
-Migrates a customer's existing PromRule corpus fully-automatically into this platform's `conf.d/` (`da-parser → profile build → da-batchpr → da-guard`), shipping via **three delivery paths — Docker / static binary / air-gapped tar** (all cosign keyless signed + SBOM) covering the full spectrum from internet-connected to isolated finance / government / defense networks.
+Migrates a customer's existing PromRule corpus fully-automatically into this platform's `conf.d/` (`da-parser → Profile Builder (library) → da-batchpr → da-guard`), shipping via **three delivery paths — Docker / static binary / air-gapped tar** (all cosign keyless signed + SBOM) covering the full spectrum from internet-connected to isolated finance / government / defense networks.
 
 Full installation & signature verification → [Migration Toolkit Installation](docs/migration-toolkit-installation.en.md)
 
