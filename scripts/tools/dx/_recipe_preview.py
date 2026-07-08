@@ -44,6 +44,9 @@ from custom_alerts import shape  # noqa: E402
 # remaining (rate/ratio/forecast/p99_latency) stay deferred (need a populated
 # lookback). Per-type gating (§7): an unsupported type returns supported:false
 # WITHOUT a compile, so it is never mislabeled firing/error.
+# Per-type branches (here + build_preview_test + the validation gates + reason
+# rendering) are deliberately NOT a registry abstraction — revisit only when a
+# 3rd recipe type is actually scheduled (2026-07 ROI review).
 SUPPORTED_RECIPES_MVP = frozenset({"threshold", "absence"})
 
 # `for:` is enum-bounded (shape.ALLOWED_FOR). Map to minutes to size the

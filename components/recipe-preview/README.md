@@ -34,8 +34,10 @@
 | 變數 | 預設 | 說明 |
 |---|---|---|
 | `PREVIEW_TENANT_API_URL` | `http://tenant-api.tenant-api.svc.cluster.local:8080` | PEP 打的 tenant-api base URL（tenant-api 位於專屬 `tenant-api` namespace，#1004）|
+| `PREVIEW_AUTHZ_TIMEOUT` | `5` | authz 探測（打 tenant-api `/access`）的 timeout 秒數；逾時→fail-closed 拒絕（`403`）|
 | `PREVIEW_LISTEN_PORT` | `8082` | 監聽埠 |
 | `PREVIEW_MAX_CONCURRENCY` | `4` | 同時評估上限（每次評估開一個 `promtool` 子程序）|
+| `PREVIEW_QUEUE_TIMEOUT` | `10` | 評估併發 slot 的排隊上限秒數；超時→`503` |
 | `PREVIEW_RATE_LIMIT_PER_MIN` | `30` | 每租戶每分鐘上限（`0`=關閉）|
 | `PREVIEW_MAX_BODY_BYTES` | `65536` | request body 上限（讀進記憶體前擋；超過回 `413`）|
 | `PREVIEW_REQUEST_TIMEOUT` | `60` | 每連線 socket 讀取 timeout 秒數（防 idle／慢速連線占住 thread）|
@@ -52,6 +54,7 @@
 - **`tini` 當 PID 1** — SIGTERM 轉發 + graceful 終止。（非殭屍回收：`subprocess.run` 為同步 `wait()`、已回收 `promtool`，且 `promtool` 不 fork 孫行程，故無 PID-1 殭屍堆積路徑。）
 - **生產級 WSGI**（gunicorn／waitress）取代 stdlib `ThreadingHTTPServer` — 完整 worker／timeout／Slowloris 管理。（現以 auth proxy + 每連線 socket timeout 部分緩解。）
 - **`/metrics` 端點** — `recipe_preview_requests_total{tenant,result_state}` 與 `recipe_preview_eval_duration_seconds`，把本服務狀態納入平台觀測體系。
+- **readiness/liveness 分離（`GET /ready`）** — 對齊 tenant-api 慣例：promtool 缺失 → NotReady。取捨備忘：readiness 不納入 tenant-api 可達性（fail-closed `403` 是正確行為，摘掉輪替只會把它變 connection refused）；promtool-absent gate 需連同 `/metrics` 一起上——否則單副本 NotReady 卻無告警面，比現況「200 + `cannot evaluate` warning」的優雅降級更差。
 
 觸發＝prod 部署，或 Domain Expert 開始實際使用。
 

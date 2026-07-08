@@ -141,6 +141,24 @@ class TestRateLimiterUnit:
         assert "a" in rl._hits and "b" not in rl._hits
 
 
+# ── §6 bounded concurrency (eval slots) ──
+class TestEvalSlots:
+    def test_exhausted_slots_return_503_and_do_not_release(self, monkeypatch):
+        """Queue-full path: acquire times out → (503, busy), AND the finally must
+        NOT release a slot it never acquired (a stray release would over-credit
+        the BoundedSemaphore → concurrency cap silently widens). Pins the
+        acquire-guarded try/finally in handle_preview."""
+        import threading
+        sem = threading.BoundedSemaphore(1)
+        assert sem.acquire(blocking=False)              # exhaust the only slot
+        monkeypatch.setattr(app, "_eval_slots", sem)
+        monkeypatch.setattr(app, "QUEUE_TIMEOUT", 0.01)  # don't sit out 10s in tests
+        s, r = _preview({"recipe": RECIPE, "tenant": "shop-a", "scenario": {"value": 1500}})
+        assert s == 503 and "busy" in r["error"]
+        # still exhausted: the failed request must not have released our hold
+        assert sem.acquire(blocking=False) is False
+
+
 # ── Content-Length guard (a negative value must not reach rfile.read) ──
 class TestContentLength:
     def test_absent_is_zero(self):
@@ -299,6 +317,22 @@ class TestEndToEnd:
             {"recipe": rate, "tenant": "shop-a", "scenario": {"value": 5}},
             HDR, authorizer=ALLOW)
         assert s == 200 and r["supported"] is False
+
+
+# ── ADR-022-style containment: dev-bypass must refuse to start inside K8s ──
+def test_dev_bypass_poison_pill_refuses_to_start_in_k8s(monkeypatch):
+    """app.py's import-time guard: PREVIEW_DEV_BYPASS_AUTH on + KUBERNETES_SERVICE_HOST
+    present → SystemExit at module exec, so a direct-to-pod caller can never be
+    auto-injected the demo admin identity. The no-op branch (bypass off / not in
+    K8s) is implicitly pinned by this file's own top-level exec_module succeeding
+    on every run."""
+    monkeypatch.setenv("PREVIEW_DEV_BYPASS_AUTH", "1")
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+    spec = importlib.util.spec_from_file_location(
+        "recipe_preview_app_poison_pill", os.path.join(_COMP, "app.py"))
+    mod = importlib.util.module_from_spec(spec)
+    with pytest.raises(SystemExit, match="must not be enabled inside Kubernetes"):
+        spec.loader.exec_module(mod)
 
 
 # ── HTTP layer: /healthz reports build provenance (no promtool needed) ──

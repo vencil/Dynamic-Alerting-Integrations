@@ -230,6 +230,17 @@ jobs:
             echo "::endgroup::"
           done
 
+      - name: Preview would-fire e2e (pinned promtool x verdict-signature contract)
+        # The preview's firing/inactive verdict is version-bound: classify_promtool_result
+        # (scripts/tools/dx/_recipe_preview.py) requires promtool's `FAILED:` + `got:[`
+        # output signature. This is the ONLY CI spot where the PINNED promtool meets that
+        # contract — the "Python Tests" job has no promtool, so the @_needs_promtool e2e
+        # skips there. A promtool re-pin that changes the output format fails HERE, not
+        # in front of a Domain Expert.
+        run: |
+          pip install pytest
+          python -m pytest tests/dx/test_recipe_preview.py tests/preview/ -q
+
       - name: Install vmalert-tool (VictoriaMetrics MetricsQL unit-test engine)
         # continue-on-error: this provisioning serves the INFORMATIONAL gate below; a
         # vmutils download/verify flake must never redden the REQUIRED "Lint Rule Packs"
