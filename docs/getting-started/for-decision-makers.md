@@ -29,7 +29,7 @@ lang: zh
 | **可靠** | 千租戶實證 + readiness soak（無記憶體洩漏）；端到端告警延遲在 1000→5000 租戶近乎持平 | [性能基準](../benchmarks.md) |
 | **信任** | 每條交付路徑 cosign keyless 簽 + SBOM，可離線驗（金融 / 政府 / 軍工） | [Migration Toolkit](../migration-toolkit-installation.md) |
 
-> **營運效益粗估**：在 50-tenant 模型下，規則維護從 O(N×M) 降到 O(M)、每月約省 40+ 工程時；Severity Dedup + 三態約壓 60%+ 告警噪音，改善 on-call 品質。（**模型推估，非單一客戶實測**。）
+> **營運效益粗估**：在 50-tenant 模型下，規則維護從 O(N×M) 降到 O(M)、每月約省 40+ 工程時；Severity Dedup + 靜默模式／維護模式約壓 60%+ 告警噪音，改善 on-call 品質。（**模型推估，非單一客戶實測**。）
 
 ## 這適合誰
 

@@ -29,7 +29,7 @@ Scaling multi-tenant monitoring the traditional way means "hand-writing a rule s
 | **Reliability** | 1000-tenant proof + readiness soak (no memory leak); end-to-end alert latency near-flat from 1000→5000 tenants | [Benchmarks](../benchmarks.en.md) |
 | **Trust** | Every delivery path is cosign keyless signed + SBOM, offline-verifiable (finance / government / defense) | [Migration Toolkit](../migration-toolkit-installation.en.md) |
 
-> **Rough operational upside**: in a 50-tenant model, rule maintenance drops from O(N×M) to O(M), saving ~40+ engineering hours/month; Severity Dedup + tri-state suppress ~60%+ alert noise, improving on-call quality of life. (**Modeled estimate, not a single-customer measurement**.)
+> **Rough operational upside**: in a 50-tenant model, rule maintenance drops from O(N×M) to O(M), saving ~40+ engineering hours/month; Severity Dedup + Silent Mode / Maintenance Mode suppress ~60%+ alert noise, improving on-call quality of life. (**Modeled estimate, not a single-customer measurement**.)
 
 ## Who it's for
 

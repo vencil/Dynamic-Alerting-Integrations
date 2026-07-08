@@ -49,19 +49,19 @@ Which one to try? **Tenant → da-portal** · **Platform Engineer → tenant-api
 
 - **:material-rocket: Platform Engineers**
 
-    Deploy & operate the platform. [**Get Started →**](getting-started/for-platform-engineers.md)
+    Deploy & operate the platform. [**Get Started →**](getting-started/for-platform-engineers.en.md)
 
     HA architecture, Helm integration, Prometheus/Alertmanager routing.
 
 - **:material-database: Domain Experts**
 
-    Define monitoring standards. [**Get Started →**](getting-started/for-domain-experts.md)
+    Define monitoring standards. [**Get Started →**](getting-started/for-domain-experts.en.md)
 
     Rule packs, baseline discovery, custom governance.
 
 - **:material-account-multiple: Tenants**
 
-    Onboard & configure thresholds. [**Get Started →**](getting-started/for-tenants.md)
+    Onboard & configure thresholds. [**Get Started →**](getting-started/for-tenants.en.md)
 
     `da-tools scaffold`, YAML config, zero PromQL.
 
@@ -75,9 +75,9 @@ Not sure which role? Try the [Getting Started Wizard](https://vencil.github.io/D
 
 The traditional approach needs one rule set per tenant (100 tenants × 50 rules = 5,000 expressions). This platform uses Prometheus `group_left` vector matching, so **a single rule covers every tenant and the rule count stays fixed regardless of tenant count** — tenants declare YAML thresholds only, zero PromQL.
 
-- **How it works & before/after comparison** → [Architecture & Design](architecture-and-design.md)
-- **Performance data** (rule evaluation flat at 60ms regardless of tenant count, memory profile) → [Benchmarks](benchmarks.md)
-- **Full metrics table, platform capabilities & design decisions (ADRs)** → [Architecture & Design](architecture-and-design.md) · [GitHub README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/README.en.md#platform-capabilities)
+- **How it works & before/after comparison** → [Architecture & Design](architecture-and-design.en.md)
+- **Performance data** (rule evaluation flat at 60ms regardless of tenant count, memory profile) → [Benchmarks](benchmarks.en.md)
+- **Full metrics table, platform capabilities & design decisions (ADRs)** → [Architecture & Design](architecture-and-design.en.md) · [GitHub README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/README.en.md#platform-capabilities)
 
 ---
 
@@ -85,13 +85,13 @@ The traditional approach needs one rule set per tenant (100 tenants × 50 rules 
 
 | Document | For | Topic |
 |----------|-----|-------|
-| [Architecture & Design](architecture-and-design.md) | Platform Engineers | Core design, HA, Rule Packs |
-| [Migration Guide](migration-guide.md) | DevOps, Tenants | Onboarding flow, AST engine |
-| [Governance & Security](governance-security.md) | Compliance, Leads | Three-layer governance, audit |
-| [Benchmarks](benchmarks.md) | Platform Engineers | Performance data & methodology |
-| Integration guides | Platform Engineers | [BYO Prometheus](integration/byo-prometheus-integration.md) · [BYO Alertmanager](integration/byo-alertmanager-integration.md) · [Federation](integration/federation-integration.md) · [GitOps](integration/gitops-deployment.md) · [VCS](vcs-integration-guide.md) |
+| [Architecture & Design](architecture-and-design.en.md) | Platform Engineers | Core design, HA, Rule Packs |
+| [Migration Guide](migration-guide.en.md) | DevOps, Tenants | Onboarding flow, AST engine |
+| [Governance & Security](governance-security.en.md) | Compliance, Leads | Three-layer governance, audit |
+| [Benchmarks](benchmarks.en.md) | Platform Engineers | Performance data & methodology |
+| Integration guides | Platform Engineers | [BYO Prometheus](integration/byo-prometheus-integration.en.md) · [BYO Alertmanager](integration/byo-alertmanager-integration.en.md) · [Federation](integration/federation-integration.en.md) · [GitOps](integration/gitops-deployment.en.md) · [VCS](vcs-integration-guide.md) |
 | [Rule Packs](rule-packs/README.md) | All | 16 packs + [Alert Reference](rule-packs/ALERT-REFERENCE.md) |
 | [Scenarios](scenarios/) | All | 9 hands-on scenarios |
-| [Troubleshooting](troubleshooting.md) | All | Common issues & solutions |
+| [Troubleshooting](troubleshooting.en.md) | All | Common issues & solutions |
 
-Full doc map: [doc-map.md](internal/doc-map.md) · Tool map: [tool-map.md](internal/tool-map.md)
+Full doc map: [doc-map.md](internal/doc-map.en.md) · Tool map: [tool-map.md](internal/tool-map.en.md)
