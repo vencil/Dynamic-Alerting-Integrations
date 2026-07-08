@@ -628,7 +628,17 @@ class TestCLI:
 
         def fake_write(out_path=None, pack_paths=None):
             called["yes"] = True
-            return {"path": str(tmp_path / "m.yaml"), "total": 3, "clean": 2, "needs_review": 1}
+            # #916 Item B: summary now carries merge stats (preserved/demoted/
+            # dropped) alongside the #719 count keys.
+            return {
+                "path": str(tmp_path / "m.yaml"),
+                "total": 3,
+                "clean": 2,
+                "needs_review": 1,
+                "preserved": 1,
+                "demoted": 0,
+                "dropped": 0,
+            }
 
         monkeypatch.setattr(tr.observed_map_lib, "write_observed_map", fake_write)
         with patch("sys.argv", ["threshold_recommend.py", "--generate-observed-map"]):
@@ -637,3 +647,4 @@ class TestCLI:
         assert called.get("yes") is True
         assert "observed-map" in captured.out
         assert "3" in captured.out  # total keys echoed
+        assert "preserved 1" in captured.out  # merge stats surfaced

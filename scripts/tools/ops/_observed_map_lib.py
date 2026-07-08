@@ -127,6 +127,10 @@ def _pack_name(path: str) -> str:
 # Recommendation engine currently supports only single-dimension (tenant) scope.
 SUPPORTED_SCOPES = {"tenant"}
 
+# Per-entry recommendation-mode field (#916 Item A output; Item B only reads it
+# here so a future build_map can round-trip it through a merge preserve).
+MODE_FIELD = "recommendation_mode"
+
 
 def scope_of(series: str) -> str:
     """Aggregation scope = the recording-rule prefix (``tenant`` / ``tenant_version``).
@@ -189,6 +193,14 @@ def build_map(pack_paths: list[str]) -> dict[str, Any]:
         direction = dirs[0] if len(dirs) == 1 else None
         if direction:
             entry["direction"] = direction
+        elif len(dirs) > 1:
+            # typed field (#916 Item B): >1 comparison direction across alerts.
+            # merge/drift logic keys off this instead of parsing reason text.
+            entry["directions"] = dirs
+        if e["scaled"]:
+            # typed field (#916 Item B): numeric scaling detected in the alert
+            # expr; consumed by check_consistency (scaled drift) + _revalidate.
+            entry["scaled"] = True
 
         # Only auto-resolve a single observed_series for SUPPORTED (tenant) scope.
         # Unsupported-scope (e.g. tenant_version) alerts are often compound
@@ -284,7 +296,180 @@ _MAP_HEADER = (
     "# The drift-guard (check_threshold_observed_map.py) cross-checks this map vs\n"
     "# the rule packs. needs_review entries are SKIPPED by threshold-recommend\n"
     "# until a human resolves them (pick one observed_series / confirm direction).\n"
+    "#\n"
+    "# MERGE SEMANTICS (#916 Item B): regeneration MERGES over the committed map\n"
+    "# rather than clobbering it, so human-resolved picks survive rule-pack edits.\n"
+    "# Three states per key on regenerate:\n"
+    "#   - DROP     : the key is no longer alert-extractable -> removed (WARN).\n"
+    "#   - PRESERVE : a still-valid manual pick is kept when the generator can no\n"
+    "#                longer determine the series on its own (WARN: verify pick).\n"
+    "#   - DEMOTE   : a manual pick that no longer revalidates falls back to the\n"
+    "#                fresh needs_review entry, annotated with why (WARN).\n"
+    "# A generator-determinate series always wins (fresh-wins); a generated entry\n"
+    "# that goes ambiguous simply falls back to needs_review (fail-safe).\n"
+    "#\n"
+    "# HAND-EDITS: free-form YAML comments do NOT survive regeneration. Put the\n"
+    "# rationale for a manual pick in a per-entry `refs:` list (it is carried\n"
+    "# across merges). To resolve a needs_review entry by hand, KEEP its\n"
+    "# `candidates:` list, add `observed_series:` with the chosen series, add\n"
+    "# `resolved_via: manual`, and delete `needs_review:`. That exact shape is\n"
+    "# what the merge recognizes as a human pick to preserve.\n"
 )
+
+
+def _is_manual(old_e: dict[str, Any]) -> bool:
+    """Human-pick fingerprint (narrowed — inspects the OLD entry only).
+
+    Any one of three independent shapes marks an entry as human-resolved:
+      1. explicit ``resolved_via: manual`` (the codified resolve step),
+      2. a human ``refs`` list (rationale the generator never emits),
+      3. the structural shape of a needs_review entry a human resolved by
+         filling ``observed_series`` WITHOUT deleting ``candidates`` — a shape
+         no generated entry has (build_map emits candidates XOR observed_series).
+
+    All 61 committed generated entries score 0 here (verified), so the guard
+    never misfires on a machine entry.
+
+    Note ``resolved_via`` values other than "manual" (e.g. the generated
+    ``<key>_critical sibling``) are NOT manual — only the literal "manual".
+    """
+    return (
+        old_e.get("resolved_via") == "manual"
+        or bool(old_e.get("refs"))
+        or bool(old_e.get("candidates") and old_e.get("observed_series"))
+    )
+
+
+def _revalidate(old_e: dict[str, Any], fresh_e: dict[str, Any]) -> tuple[bool, str]:
+    """Re-check a manual pick against fresh rule-pack truth. ALL gates must pass.
+
+    Returns ``(ok, why)``; ``why`` is empty on success, else a stable reason
+    phrase. Compares against the entry's OWN declared direction (not a hardwired
+    ``>``) so a future Item A ``<``-resolved entry can revalidate. None of the
+    ``why`` phrases contain the threshold_govern marker substrings (see the
+    string-safety test).
+
+    NOTE: this intentionally does NOT gate on ``SUPPORTED_SCOPES``. Preserving an
+    unsupported-scope manual pick is harmless — ``resolve_observed`` returns None
+    (skip) for any unsupported scope downstream, so it can never reach a
+    recommendation. Gating here would instead DEMOTE such a pick on every regen
+    and churn the map; letting it survive keeps the human's work intact.
+    """
+    series = old_e.get("observed_series")
+    if not series:
+        return False, "no observed_series on manual entry"
+    # legal set = fresh observed_series UNION fresh candidates (aligns with the
+    # union semantics check_consistency already uses for fresh_cands).
+    legal = set(fresh_e.get("candidates", []) or [])
+    if fresh_e.get("observed_series"):
+        legal.add(fresh_e["observed_series"])
+    if series not in legal:
+        return False, "pick no longer a candidate"
+    if "direction" not in fresh_e:
+        return False, "comparison direction ambiguous/undetermined in rule packs"
+    if fresh_e["direction"] != old_e.get("direction"):
+        return False, "direction changed"
+    if fresh_e.get("scaled"):
+        return False, "alert now applies numeric scaling"
+    if old_e.get("scope") != fresh_e.get("scope"):
+        return False, "scope changed"
+    return True, ""
+
+
+def merge_maps(
+    old: dict[str, dict[str, Any]],
+    fresh: dict[str, dict[str, Any]],
+) -> tuple[dict[str, Any], list[str], dict[str, int]]:
+    """Merge freshly-extracted truth over a committed map, preserving human work.
+
+    Returns ``(merged, warns, stats)`` where ``stats`` counts
+    ``{preserved, demoted, dropped, overridden}``. See ``_MAP_HEADER`` for the
+    three-state contract. Fail-safe by construction: a generated entry that goes
+    ambiguous falls back to the fresh needs_review form (never silently kept);
+    manual picks are only preserved when they still revalidate, and are rebuilt
+    from an ALLOWLIST of fresh fields (never a blind ``{**old_e}`` merge).
+    """
+    warns: list[str] = []
+    stats = {"preserved": 0, "demoted": 0, "dropped": 0, "overridden": 0}
+    merged: dict[str, Any] = {}
+
+    # 態1 DROP: keys carried in old but no longer extractable from fresh.
+    for key in old:
+        if key not in fresh:
+            warns.append(f"{key}: no longer extractable from rule packs — dropped")
+            stats["dropped"] += 1
+
+    for key, fresh_e in fresh.items():
+        # Shallow copy is enough: each fresh_e is consumed exactly once here and
+        # then discarded, so an aliased candidates list can never be mutated by a
+        # later iteration. (We never write through base into fresh_e's nested
+        # lists — only add/replace top-level keys.)
+        base = dict(fresh_e)
+        old_e = old.get(key)
+        if old_e is None:
+            merged[key] = base
+            continue
+
+        carry_refs = True
+        if fresh_e.get("observed_series"):
+            # Generator is determinate -> fresh wins.
+            merged[key] = base
+            if (
+                _is_manual(old_e)
+                and old_e.get("observed_series")
+                and old_e.get("observed_series") != fresh_e.get("observed_series")
+            ):
+                warns.append(
+                    f"{key}: manual pick '{old_e['observed_series']}' overridden by "
+                    f"generator-determinate resolution '{fresh_e['observed_series']}'"
+                )
+                stats["overridden"] += 1
+                # Override: the old manual value AND its rationale are superseded
+                # by the generator. Do NOT carry the old refs onto the new pick —
+                # they describe the now-rejected pick and would mislead. The
+                # overridden WARN is sufficient provenance.
+                carry_refs = False
+        elif not _is_manual(old_e):
+            # Fresh non-determinate + old is a generated entry -> fail-safe:
+            # let it fall back to needs_review. Do NOT preserve, do NOT overwrite.
+            merged[key] = base
+        else:
+            # Fresh non-determinate + old is a manual pick -> revalidate.
+            ok, why = _revalidate(old_e, fresh_e)
+            if ok:
+                # 態3 PRESERVE — ALLOWLIST rebuild (never {**old_e}); do not carry
+                # old reason/needs_review/candidates.
+                rebuilt: dict[str, Any] = {
+                    "pack": fresh_e["pack"],
+                    "scope": fresh_e["scope"],
+                    "direction": fresh_e["direction"],
+                    "observed_series": old_e["observed_series"],
+                    "resolved_via": "manual",
+                }
+                if MODE_FIELD in old_e:
+                    rebuilt[MODE_FIELD] = old_e[MODE_FIELD]
+                merged[key] = rebuilt
+                warns.append(
+                    f"{key}: previously-resolved entry preserved across a rule-pack "
+                    f"change — verify the pick is still correct"
+                )
+                stats["preserved"] += 1
+            else:
+                # 態2 DEMOTE — fall back to fresh, annotate reason (.get, never +=).
+                merged[key] = base
+                base["reason"] = base.get("reason", "") + f"; manual resolution invalidated: {why}"
+                warns.append(
+                    f"{key}: manual resolution invalidated ({why}) — demoted to needs_review"
+                )
+                stats["demoted"] += 1
+
+        # refs unified tail (preserve/demote/fresh-wins-same paths): carry a human
+        # refs list when fresh lacks one. Skipped on override (carry_refs=False,
+        # see above). Never write None/null.
+        if carry_refs and old_e and old_e.get("refs") and not merged[key].get("refs"):
+            merged[key]["refs"] = list(old_e["refs"])
+
+    return merged, warns, stats
 
 
 def write_observed_map(
@@ -293,7 +478,10 @@ def write_observed_map(
 ) -> dict[str, Any]:
     """Generate the observed-map from rule packs and write it to ``out_path``.
 
-    Returns a summary dict ``{path, total, clean, needs_review}``.
+    Regeneration MERGES over an existing committed map (merge_maps) so a human's
+    resolved picks survive rule-pack edits; a first-time write (no file yet) uses
+    the fresh extract directly. Returns a summary dict
+    ``{path, total, clean, needs_review, preserved, demoted, dropped}``.
     """
     if yaml is None:
         raise RuntimeError("pyyaml required")
@@ -305,7 +493,15 @@ def write_observed_map(
 
     packs = pack_paths or default_pack_paths()
     out = out_path or DEFAULT_MAP_PATH
-    keys = build_map(packs)
+    fresh = build_map(packs)
+    if os.path.isfile(out):
+        old = load_observed_map(out)
+        keys, warns, stats = merge_maps(old, fresh)
+        for msg in warns:
+            print(f"[WARN] {msg}", file=sys.stderr)
+    else:
+        keys = fresh
+        stats = {"preserved": 0, "demoted": 0, "dropped": 0, "overridden": 0}
     doc = {
         "version": 1,
         "_generated_by": "threshold-recommend --generate-observed-map (#719)",
@@ -314,7 +510,15 @@ def write_observed_map(
     body = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, default_flow_style=False)
     write_text_secure(out, _MAP_HEADER + body)
     nr = sum(1 for v in keys.values() if v.get("needs_review"))
-    return {"path": out, "total": len(keys), "clean": len(keys) - nr, "needs_review": nr}
+    return {
+        "path": out,
+        "total": len(keys),
+        "clean": len(keys) - nr,
+        "needs_review": nr,
+        "preserved": stats["preserved"],
+        "demoted": stats["demoted"],
+        "dropped": stats["dropped"],
+    }
 
 
 def load_observed_map(path: Optional[str] = None) -> dict[str, dict[str, Any]]:
@@ -382,13 +586,16 @@ def alert_referenced_keys(pack_paths: list[str]) -> set[str]:
 def check_consistency(
     observed_map: dict[str, dict[str, Any]],
     pack_paths: list[str],
+    enforce_known_deferred: bool = False,
 ) -> dict[str, list[str]]:
     """Cross-check a committed map against freshly-extracted rule-pack truth.
 
     Returns a dict with keys:
       - errors: hard drift — a mapped (key, observed_series) pair NOT found
-        together in any rule-pack alert, or scope inconsistent with the
-        observed_series prefix. CI should FAIL on these.
+        together in any rule-pack alert, scope inconsistent with the
+        observed_series prefix, comparison-direction drift, the alert now
+        scaling the observed operand, or (when ``enforce_known_deferred``) a
+        KNOWN_DEFERRED exit-lock violation. CI should FAIL on these.
       - infos: known-deferred keys (KNOWN_DEFERRED allowlist) present in rule
         packs but absent from the map — INFO only, never an error.
       - orphan_thresholds: keys with a recording rule but referenced by NO alert
@@ -396,6 +603,11 @@ def check_consistency(
         rule-pack authors.
       - coverage_gaps: alert-referenced threshold keys absent from the map AND
         not known-deferred — genuine extractor gaps. WARN so coverage is visible.
+
+    ``enforce_known_deferred`` defaults to False so hermetic tests that feed a
+    synthetic pack without the container_* keys are unaffected. The real-map
+    lint path (check_threshold_observed_map.py) passes True to lock the
+    KNOWN_DEFERRED allowlist against silent drift.
     """
     errors: list[str] = []
     infos: list[str] = []
@@ -443,6 +655,29 @@ def check_consistency(
                     f"{key}: observed_series '{series}' not found paired with "
                     f"this key in any rule-pack alert (stale map?)"
                 )
+        # direction drift (#916 Item B): the alert's comparison operator changed
+        # out from under a mapped direction. fresh_entry is None -> handled by the
+        # stale path above, so only check when a fresh entry exists.
+        if entry.get("direction") and fresh_entry:
+            if "direction" in fresh_entry:
+                if fresh_entry["direction"] != entry["direction"]:
+                    errors.append(
+                        f"{key}: direction drift — map '{entry['direction']}' vs "
+                        f"rule-pack '{fresh_entry['direction']}' (alert comparison "
+                        f"changed; regenerate)"
+                    )
+            else:
+                errors.append(
+                    f"{key}: comparison direction became ambiguous/undetermined in "
+                    f"rule packs — regenerate"
+                )
+        # scaled drift (#916 Item B): the alert now numerically scales the observed
+        # operand, so the bare mapped series is off by a factor.
+        if entry.get("observed_series") and fresh_entry and fresh_entry.get("scaled"):
+            errors.append(
+                f"{key}: alert now numerically scales the observed operand — the "
+                f"mapped series is off by a factor; regenerate"
+            )
 
     all_keys = all_threshold_keys(pack_paths)
     alert_keys = alert_referenced_keys(pack_paths)
@@ -453,6 +688,31 @@ def check_consistency(
             orphans.append(key)  # recording rule exists but no alert uses it
         else:
             gaps.append(key)
+
+    # KNOWN_DEFERRED exit-lock (#916 Item B): the allowlist is a promise that
+    # these keys are recording-rule-sourced and hand-managed. Enforce that the
+    # promise still holds so a silently-changed rule pack can't leave a stale
+    # deferral. Message names the symbol, not a line number (refactor-proof).
+    if enforce_known_deferred:
+        for k in KNOWN_DEFERRED:
+            if k in fresh:
+                errors.append(
+                    f"{k}: KNOWN_DEFERRED (_observed_map_lib.py) key is now "
+                    f"alert-extractable — regenerate the map and remove it from "
+                    f"KNOWN_DEFERRED"
+                )
+            if k not in all_keys:
+                errors.append(
+                    f"{k}: KNOWN_DEFERRED (_observed_map_lib.py) key is gone from "
+                    f"the rule packs — remove it from KNOWN_DEFERRED"
+                )
+            if k in observed_map:
+                errors.append(
+                    f"{k}: KNOWN_DEFERRED (_observed_map_lib.py) key was hand-added "
+                    f"to the map — deferred keys are not supported in the map; "
+                    f"remove the entry"
+                )
+
     return {
         "errors": errors,
         "infos": infos,
