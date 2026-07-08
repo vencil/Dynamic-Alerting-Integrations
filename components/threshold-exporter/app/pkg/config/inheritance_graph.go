@@ -89,40 +89,7 @@ func (g *InheritanceGraph) TenantsAffectedBy(defaultsPath string) []string {
 // `defaults` is the populated set of known _defaults.yaml paths
 // (basename match, set membership only — values are unused).
 func CollectDefaultsChain(leafDir, root string, defaults map[string]bool) []string {
-	var chain []string
-	current := filepath.Clean(leafDir)
-	rootClean := filepath.Clean(root)
-
-	for {
-		// Prefer .yaml over .yml when both exist at the same level
-		// (same precedence rule as describe_tenant.py).
-		yamlPath := filepath.Join(current, "_defaults.yaml")
-		ymlPath := filepath.Join(current, "_defaults.yml")
-		if defaults[yamlPath] {
-			chain = append(chain, yamlPath)
-		} else if defaults[ymlPath] {
-			chain = append(chain, ymlPath)
-		}
-
-		if current == rootClean {
-			break
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			// Reached filesystem root without hitting rootClean —
-			// shouldn't happen given the precondition, but don't loop.
-			break
-		}
-		current = parent
-	}
-
-	// Reverse to make chain[0] the top-most (L0) defaults and the last
-	// entry the nearest-to-tenant (Ln). Matches describe_tenant.py
-	// line 152.
-	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
-		chain[i], chain[j] = chain[j], chain[i]
-	}
-	return chain
+	return collectDefaultsChain(leafDir, root, defaults, nativePathOps)
 }
 
 // CollectDefaultsChainPOSIX is the POSIX-only sibling of CollectDefaultsChain.
@@ -140,15 +107,38 @@ func CollectDefaultsChain(leafDir, root string, defaults map[string]bool) []stri
 // missed the POSIX-keyed defaults map → empty chain → inherited keys
 // silently dropped from the merged config.
 func CollectDefaultsChainPOSIX(leafDir, root string, defaults map[string]bool) []string {
+	return collectDefaultsChain(leafDir, root, defaults, posixPathOps)
+}
+
+// pathOps abstracts the three path-manipulation functions the defaults-chain
+// walk needs, so one implementation can run over either OS-native filesystem
+// paths (filepath.*) or the synthetic POSIX paths (path.*) the in-memory
+// config source uses. path.* and filepath.* share these signatures exactly.
+type pathOps struct {
+	clean func(string) string
+	join  func(...string) string
+	dir   func(string) string
+}
+
+var (
+	nativePathOps = pathOps{clean: filepath.Clean, join: filepath.Join, dir: filepath.Dir}
+	posixPathOps  = pathOps{clean: path.Clean, join: path.Join, dir: path.Dir}
+)
+
+// collectDefaultsChain is the shared body of CollectDefaultsChain (native) and
+// CollectDefaultsChainPOSIX (POSIX). It walks from leafDir up to and including
+// root, picking the `_defaults.yaml` (or `.yml`) at each level, then reverses
+// the accumulator so chain[0] is the top-most (L0) defaults.
+func collectDefaultsChain(leafDir, root string, defaults map[string]bool, ops pathOps) []string {
 	var chain []string
-	current := path.Clean(leafDir)
-	rootClean := path.Clean(root)
+	current := ops.clean(leafDir)
+	rootClean := ops.clean(root)
 
 	for {
 		// Prefer .yaml over .yml when both exist at the same level
 		// (same precedence rule as describe_tenant.py).
-		yamlPath := path.Join(current, "_defaults.yaml")
-		ymlPath := path.Join(current, "_defaults.yml")
+		yamlPath := ops.join(current, "_defaults.yaml")
+		ymlPath := ops.join(current, "_defaults.yml")
 		if defaults[yamlPath] {
 			chain = append(chain, yamlPath)
 		} else if defaults[ymlPath] {
@@ -158,7 +148,7 @@ func CollectDefaultsChainPOSIX(leafDir, root string, defaults map[string]bool) [
 		if current == rootClean {
 			break
 		}
-		parent := path.Dir(current)
+		parent := ops.dir(current)
 		if parent == current {
 			// Reached filesystem root without hitting rootClean —
 			// shouldn't happen given the precondition, but don't loop.
@@ -168,7 +158,7 @@ func CollectDefaultsChainPOSIX(leafDir, root string, defaults map[string]bool) [
 	}
 
 	// Reverse to make chain[0] the top-most (L0) defaults and the last
-	// entry the nearest-to-tenant (Ln). Same as CollectDefaultsChain.
+	// entry the nearest-to-tenant (Ln). Matches describe_tenant.py line 152.
 	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
 		chain[i], chain[j] = chain[j], chain[i]
 	}
