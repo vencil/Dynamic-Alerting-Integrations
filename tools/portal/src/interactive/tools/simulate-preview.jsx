@@ -13,7 +13,7 @@ dependencies: [
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 // TRK-230f: ESM imports for shared hooks/components (PR-portal-1+8).
-// jsx-loader transformImports rewrites to window reads on legacy path.
+// esbuild bundles them natively (TD-030z retired the jsx-loader transform).
 import { useDebouncedValue } from './_common/hooks/useDebouncedValue.js';
 import { Loading } from './_common/components/Loading.jsx';
 

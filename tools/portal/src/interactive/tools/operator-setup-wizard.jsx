@@ -16,9 +16,8 @@ dependencies: [
 
 import React, { useState, useMemo, useCallback } from 'react';
 
-// TRK-230e: ESM imports. jsx-loader transformImports rewrites these to
-// `const X = window.__X` reads on legacy path; esbuild bundles them
-// natively on dist path.
+// TRK-230e: ESM imports; esbuild bundles them natively into the dist
+// file (TD-030z retired the old jsx-loader import-transform path).
 import { OSW_STEPS as STEPS, OSW_DEMO_TENANTS as DEMO_TENANTS, OSW_OPERATOR_VERSIONS as OPERATOR_VERSIONS, OSW_CLUSTER_TYPES as CLUSTER_TYPES, OSW_RECEIVER_TYPES as RECEIVER_TYPES, OSW_RULE_MODES as RULE_MODES } from './operator-setup-wizard/fixtures/wizard-defaults.js';
 import { validateTenantName } from './operator-setup-wizard/utils/generators.js';
 import { StepReview } from './operator-setup-wizard/components/StepReview.jsx';
