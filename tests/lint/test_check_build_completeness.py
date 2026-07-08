@@ -368,3 +368,184 @@ class TestRepoSmoke:
         assert exc.value.code == 0, (
             "repo's entrypoint.py + build.sh fail their own bidirectional check"
         )
+
+
+# ============================================================
+# check_underscore_imports — transitive sibling-lib packaging guard
+# ============================================================
+# da-tools image packaging bugfix (PR-0): threshold_recommend.py had a
+# top-level `import _observed_map_lib` but build.sh TOOL_FILES omitted the
+# lib → ImportError inside the flat image for BOTH threshold-recommend and
+# (transitively) threshold-govern. These tests pin the防再犯 lint so a
+# future shipped tool that imports a NEW sibling `_xxx.py` without listing
+# it in TOOL_FILES fails locally + in CI.
+
+
+def _make_tool(tools_src: Path, rel: str, body: str) -> None:
+    """Write a fake shipped tool at ``tools_src/<rel>`` with ``body``."""
+    p = tools_src / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    _write(p, body)
+
+
+class TestCheckUnderscoreImports:
+
+    def test_missing_sibling_lib_is_error(self, tmp_path):
+        # NEGATIVE FIXTURE: a shipped tool imports a real sibling _lib.py
+        # that is NOT in TOOL_FILES → ERROR (the _observed_map_lib bug).
+        _make_tool(tmp_path, "ops/mytool.py", "import _mylib\n")
+        _make_tool(tmp_path, "ops/_mylib.py", "X = 1\n")
+        errors = mod.check_underscore_imports(
+            {"ops/mytool.py"}, {"mytool.py"}, tools_src=tmp_path)
+        assert len(errors) == 1
+        severity, msg = errors[0]
+        assert severity == "error"
+        assert "_mylib" in msg
+        assert "mytool.py" in msg
+        assert "ImportError" in msg
+
+    def test_present_sibling_lib_is_clean(self, tmp_path):
+        # POSITIVE: same import but the lib IS listed in TOOL_FILES → clean.
+        _make_tool(tmp_path, "ops/mytool.py", "import _mylib\n")
+        _make_tool(tmp_path, "ops/_mylib.py", "X = 1\n")
+        errors = mod.check_underscore_imports(
+            {"ops/mytool.py"}, {"mytool.py", "_mylib.py"}, tools_src=tmp_path)
+        assert errors == []
+
+    def test_from_import_form_is_caught(self, tmp_path):
+        # Property: `from _mylib import x` form is caught too.
+        _make_tool(tmp_path, "ops/mytool.py", "from _mylib import x\n")
+        _make_tool(tmp_path, "ops/_mylib.py", "x = 1\n")
+        errors = mod.check_underscore_imports(
+            {"ops/mytool.py"}, {"mytool.py"}, tools_src=tmp_path)
+        assert len(errors) == 1
+        assert "_mylib" in errors[0][1]
+
+    def test_function_level_import_is_caught(self, tmp_path):
+        # Property: an import nested inside a function still crashes at call
+        # time in the image, so ast.walk (not just top-level) must catch it.
+        _make_tool(
+            tmp_path, "ops/mytool.py",
+            "def run():\n    import _mylib\n    return _mylib\n")
+        _make_tool(tmp_path, "ops/_mylib.py", "X = 1\n")
+        errors = mod.check_underscore_imports(
+            {"ops/mytool.py"}, {"mytool.py"}, tools_src=tmp_path)
+        assert len(errors) == 1
+        assert "_mylib" in errors[0][1]
+
+    def test_non_repo_underscore_module_skipped(self, tmp_path):
+        # Property: an underscore module with NO matching repo file is a
+        # stdlib/external import (e.g. `_socket`, `_lib_that_pip_installs`)
+        # → NOT flagged (would be a false-positive).
+        _make_tool(tmp_path, "ops/mytool.py", "import _not_a_repo_lib\n")
+        errors = mod.check_underscore_imports(
+            {"ops/mytool.py"}, {"mytool.py"}, tools_src=tmp_path)
+        assert errors == []
+
+    def test_dunder_import_skipped(self, tmp_path):
+        # Property: `from __future__ import annotations` (dunder) is excluded.
+        _make_tool(
+            tmp_path, "ops/mytool.py",
+            "from __future__ import annotations\nimport os\n")
+        errors = mod.check_underscore_imports(
+            {"ops/mytool.py"}, {"mytool.py"}, tools_src=tmp_path)
+        assert errors == []
+
+    def test_non_py_entry_skipped(self, tmp_path):
+        # Property: non-.py TOOL_FILES entries (data files) are skipped by
+        # the import scanner (they have no imports to walk).
+        _make_tool(tmp_path, "some-data.yaml", "version: 1\n")
+        errors = mod.check_underscore_imports(
+            {"some-data.yaml"}, set(), tools_src=tmp_path)
+        assert errors == []
+
+    def test_missing_source_file_not_double_reported(self, tmp_path):
+        # Property: a TOOL_FILES entry whose source file doesn't exist is
+        # left to build.sh's own cp existence check — this scanner stays
+        # silent (no crash, no error) rather than double-reporting.
+        errors = mod.check_underscore_imports(
+            {"ops/ghost.py"}, {"ghost.py"}, tools_src=tmp_path)
+        assert errors == []
+
+    def test_sibling_in_root_dir_resolves(self, tmp_path):
+        # Property: a root-level _lib (scripts/tools/_lib_x.py) imported by
+        # an ops/ tool resolves via the root candidate dir.
+        _make_tool(tmp_path, "ops/mytool.py", "import _lib_x\n")
+        _make_tool(tmp_path, "_lib_x.py", "X = 1\n")
+        errors = mod.check_underscore_imports(
+            {"ops/mytool.py"}, {"mytool.py"}, tools_src=tmp_path)
+        assert len(errors) == 1
+        assert "_lib_x" in errors[0][1]
+
+    def test_repo_files_pass_underscore_scan(self):
+        # Regression: the ACTUAL shipped TOOL_FILES must satisfy the
+        # transitive underscore-import guard (would have failed before the
+        # _observed_map_lib fix).
+        from _lint_helpers import parse_build_sh_tools, parse_build_sh_tool_paths
+        rel_paths = parse_build_sh_tool_paths()
+        build_tools = parse_build_sh_tools()
+        errors = mod.check_underscore_imports(rel_paths, build_tools)
+        assert errors == [], (
+            "shipped tools import sibling _libs not listed in TOOL_FILES: "
+            + "; ".join(m for _, m in errors)
+        )
+
+
+# ============================================================
+# check_required_data_files — module → data-file co-shipping guard
+# ============================================================
+
+
+class TestCheckRequiredDataFiles:
+
+    def test_missing_data_file_is_error(self):
+        # NEGATIVE FIXTURE: module shipped but its required data file absent
+        # → ERROR (the fail-quiet trap: load returns {} → all keys skipped).
+        required = {"_observed_map_lib.py": ("metric_observed_map.yaml",)}
+        errors = mod.check_required_data_files(
+            {"_observed_map_lib.py"}, required=required)
+        assert len(errors) == 1
+        severity, msg = errors[0]
+        assert severity == "error"
+        assert "metric_observed_map.yaml" in msg
+        assert "_observed_map_lib.py" in msg
+
+    def test_present_data_file_is_clean(self):
+        # POSITIVE: module + data file both shipped → clean.
+        required = {"_observed_map_lib.py": ("metric_observed_map.yaml",)}
+        errors = mod.check_required_data_files(
+            {"_observed_map_lib.py", "metric_observed_map.yaml"},
+            required=required)
+        assert errors == []
+
+    def test_module_not_shipped_no_requirement(self):
+        # Property: if the module itself isn't in TOOL_FILES, its data-file
+        # requirement doesn't apply (no spurious error).
+        required = {"_observed_map_lib.py": ("metric_observed_map.yaml",)}
+        errors = mod.check_required_data_files(set(), required=required)
+        assert errors == []
+
+    def test_multiple_data_files_each_checked(self):
+        # Property: a module requiring >1 data file reports each missing one.
+        required = {"tool.py": ("a.yaml", "b.yaml")}
+        errors = mod.check_required_data_files(
+            {"tool.py", "a.yaml"}, required=required)
+        assert len(errors) == 1
+        assert "b.yaml" in errors[0][1]
+
+    def test_repo_required_data_files_present(self):
+        # Regression: the real REQUIRED_DATA_FILES mapping must be satisfied
+        # by the actual shipped TOOL_FILES.
+        from _lint_helpers import parse_build_sh_tools
+        build_tools = parse_build_sh_tools()
+        errors = mod.check_required_data_files(build_tools)
+        assert errors == [], (
+            "shipped module missing its required data file: "
+            + "; ".join(m for _, m in errors)
+        )
+
+
+# Note: parse_build_sh_tool_paths itself is property-tested in
+# tests/shared/test_property_tools.py::TestParseBuildShToolPathsProperties
+# (sibling of the parse_build_sh_tools coverage), per the
+# property-coverage.yaml manifest convention.
