@@ -1,0 +1,9 @@
+# selftest 容差矩陣（waveform_score e2e / 單元測試用）。
+# ⚠️ 數值為工具自測示意值——只進 selftest fixture、不進任何文件（R2-2）；
+# 真實 engagement 的天花板矩陣由該客戶的 MTTA/SLO 導出（ADR-030 D5）。
+defaults:
+  critical: 300
+  warning: 600
+  default: 900
+overrides: []
+carve_outs: []

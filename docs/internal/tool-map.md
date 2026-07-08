@@ -129,6 +129,7 @@ lang: zh
 | `sync_tool_registry.py` | 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP + JSX frontmatter |
 | `tenant_verify.py` | Verify a tenant's effective config — print merged_hash and source_hash. |
 | `waveform_compile.py` | fault-waveform pack 驗證 / 回讀 / 物化編譯器（ADR-030 決策層驗證 PR-1） |
+| `waveform_score.py` | temporal-match + episode 對帳 + catch-rate 報告器（ADR-030 PR-3） |
 
 ## 文件 Lint / CI 工具
 

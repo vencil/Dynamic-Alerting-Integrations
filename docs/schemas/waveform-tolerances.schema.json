@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "waveform-tolerances.schema.json",
+  "title": "Waveform temporal-tolerance matrix (ADR-030 D5, PR-3)",
+  "description": "Two-tier tolerance input for waveform_score.py (ADR-030 D5 anti-gerrymandering): `defaults` is the pre-committed severity→ceiling matrix (locked BEFORE seeing any divergence); `overrides` are the per-alert-class negotiated exceptions — each MUST carry justification + approved_by (audit trail) and the tool enforces tolerance_s <= the declared severity row's ceiling. `carve_outs` lists compliance fault-classes excluded from the catch-rate denominator (dual-control human review path, D1/OQ1). `ignored_unattributed` is the drain-then-shadow allowlist of aggregate alertnames whose presence in unattributed_alerts must NOT shadow no-hit cases into INDETERMINATE (persistent-noise drain so real misses surface as FN) — each MUST carry justification + approved_by (audit trail); an unlisted unattributed alert still shadows (unknown noise stays INDETERMINATE, the CRITICAL defence is preserved). Concrete tolerance values are engagement inputs — none are documented here (R2-2).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["defaults"],
+  "properties": {
+    "defaults": {
+      "type": "object",
+      "description": "severity → tolerance ceiling in seconds. The `default` key is REQUIRED — it is the fallback row for alerts without a severity label (and for unknown severities).",
+      "required": ["default"],
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_-]*$" },
+      "additionalProperties": { "type": "number", "minimum": 0 }
+    },
+    "overrides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["alert_class", "severity", "tolerance_s", "justification", "approved_by"],
+        "properties": {
+          "alert_class": {
+            "type": "string",
+            "minLength": 1,
+            "description": "alertname this override applies to."
+          },
+          "severity": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Declared ceiling row (must be a key of `defaults`). The tool enforces tolerance_s <= defaults[severity] at load time, and fails loud at scoring time if the live alert's severity label contradicts the declaration."
+          },
+          "tolerance_s": { "type": "number", "minimum": 0 },
+          "justification": { "type": "string", "minLength": 1 },
+          "approved_by": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "carve_outs": {
+      "type": "array",
+      "description": "Compliance fault-classes (the waveform pack signature's `fault_class` slug — the case-side identity that exists BEFORE any alert fires) excluded from the catch-rate denominator and listed separately for dual-control review.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fault_class", "reason", "approved_by"],
+        "properties": {
+          "fault_class": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+          "reason": { "type": "string", "minLength": 1 },
+          "approved_by": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "ignored_unattributed": {
+      "type": "array",
+      "description": "Drain-then-shadow allowlist: aggregate `alertname`s whose presence in a report's unattributed_alerts is drained BEFORE the shadow test, so a persistent known-noise aggregate alert can no longer mask real misses into perpetual INDETERMINATE. Each entry MUST carry justification + approved_by (audit trail; enforced in code as well as here). CRITICAL invariant preserved: only the listed alertnames are drained — any unlisted unattributed alert still shadows no-hit cases into INDETERMINATE (unknown noise never reopens as PASS), and draining every unattributed alert lifts the shadow so genuine misses surface as FN (never washed to PASS).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["alertname", "justification", "approved_by"],
+        "properties": {
+          "alertname": { "type": "string", "minLength": 1 },
+          "justification": { "type": "string", "minLength": 1 },
+          "approved_by": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}
