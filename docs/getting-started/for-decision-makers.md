@@ -29,6 +29,8 @@ lang: zh
 | **可靠** | 千租戶實證 + readiness soak（無記憶體洩漏）；端到端告警延遲在 1000→5000 租戶近乎持平 | [性能基準](../benchmarks.md) |
 | **信任** | 每條交付路徑 cosign keyless 簽 + SBOM，可離線驗（金融 / 政府 / 軍工） | [Migration Toolkit](../migration-toolkit-installation.md) |
 
+> **營運效益粗估**：在 50-tenant 模型下，規則維護從 O(N×M) 降到 O(M)、每月約省 40+ 工程時；Severity Dedup + 三態約壓 60%+ 告警噪音，改善 on-call 品質。（**模型推估，非單一客戶實測**。）
+
 ## 這適合誰
 
 - **適合**：多租戶（資料庫 / 服務）監控、想要 GitOps 全程可追蹤、想讓租戶自助又不失控、跨團隊或跨叢集規模化。

@@ -71,83 +71,13 @@ Not sure which role? Try the [Getting Started Wizard](https://vencil.github.io/D
 
 ---
 
-## How It Works
+## Why It's Different
 
-=== "Traditional (❌)"
+The traditional approach needs one rule set per tenant (100 tenants × 50 rules = 5,000 expressions). This platform uses Prometheus `group_left` vector matching, so **a single rule covers every tenant and the rule count stays fixed regardless of tenant count** — tenants declare YAML thresholds only, zero PromQL.
 
-    ```yaml
-    # Each tenant = separate rule — 100 tenants × 50 rules = 5,000 expressions
-    - alert: MySQLHighConnections_db-a
-      expr: mysql_global_status_threads_connected{namespace="db-a"} > 100
-    - alert: MySQLHighConnections_db-b
-      expr: mysql_global_status_threads_connected{namespace="db-b"} > 80
-    # ... repeat for every tenant
-    ```
-
-=== "Dynamic Alerting (✅)"
-
-    ```yaml
-    # 1 rule covers all tenants via group_left matching
-    - alert: MariaDBHighConnections
-      expr: |
-        tenant:mysql_threads_connected:max
-        > on(tenant) group_left
-        tenant:alert_threshold:mysql_connections
-
-    # Tenants declare thresholds only (YAML, no PromQL):
-    tenants:
-      db-a: { mysql_connections: "100" }
-      db-b: { mysql_connections: "80" }
-    ```
-
----
-
-## Architecture
-
-```mermaid
-graph TB
-    A["Tenant Config\n(conf.d/*.yaml)"] -->|per-tenant threshold| B["threshold-exporter\n(×2 HA)"]
-    B -->|"Prometheus metric\n(tenant:alert_threshold:*)"| C["Prometheus\n(16 Rule Packs)"]
-    C -->|group_left matching| D["Alert Rules\n(fixed count)"]
-    D -->|AlertGroup| E["Alertmanager"]
-    E -->|dynamic route| F["Receivers\nwebhook/email/slack/teams"]
-
-    G["Config-driven\nRouting"] -->|YAML| E
-    H["Three-State Mode\n(Normal/Silent/Maintenance)"] -->|suppress| D
-
-    style A fill:#e8f5e9
-    style B fill:#fff3e0
-    style C fill:#e3f2fd
-    style D fill:#f3e5f5
-    style E fill:#fce4ec
-    style F fill:#e0f2f1
-```
-
-For detailed architecture, see [Architecture & Design](architecture-and-design.md). For performance data, see [Benchmarks](benchmarks.md).
-
----
-
-## Key Metrics
-
-| Metric | Traditional (100 tenants) | Dynamic Alerting |
-|--------|--------------------------|-----------------|
-| Rule count | 5,000+ (grows linearly) | 237 (fixed, O(M)) |
-| New tenant onboarding | 1–3 days | < 5 minutes |
-| Prometheus memory | ~600MB+ | ~154MB |
-| Rule evaluation time | Grows linearly | 60ms (2 or 102 tenants) |
-| Tenant knowledge required | PromQL + Alertmanager config | YAML threshold values |
-
----
-
-## Platform Capabilities
-
-**Rule Engine:** O(M) complexity via `group_left` · 16 Rule Pack Projected Volumes · Severity Dedup via Alertmanager Inhibit ([ADR-001](adr/001-severity-dedup-via-inhibit.md))
-
-**Tenant Management:** Tri-state mode (Normal/Silent/Maintenance) · Four-layer routing merge ([ADR-007](adr/007-cross-domain-routing-profiles.md)) · Scheduled thresholds & maintenance windows · Schema validation · Cardinality Guard
-
-**Toolchain:** `da-tools` CLI (scaffold → migrate → validate → cutover → diagnose) · [CLI Reference](cli-reference.md) · [Cheat Sheet](cheat-sheet.md)
-
-**Deployment Tiers:** Tier 1 (Git-Native / GitOps) or Tier 2 (Portal + API with RBAC). See [root README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/README.en.md#deployment-tiers) for comparison.
+- **How it works & before/after comparison** → [Architecture & Design](architecture-and-design.md)
+- **Performance data** (rule evaluation flat at 60ms regardless of tenant count, memory profile) → [Benchmarks](benchmarks.md)
+- **Full metrics table, platform capabilities & design decisions (ADRs)** → [Architecture & Design](architecture-and-design.md) · [GitHub README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/README.en.md#platform-capabilities)
 
 ---
 
