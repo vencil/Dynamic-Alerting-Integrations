@@ -81,16 +81,18 @@ def _record(sig=0, variant="base", series=None, expects="must_detect",
             "alerts": list(alerts)}
 
 
-def _meta(sig=0, variant="base", series=None, expects="must_detect", fw=_FW):
+def _meta(sig=0, variant="base", series=None, expects="must_detect", fw=_FW,
+          hold_start=None):
     labels = {"series": series} if series else {}
     return {"signature_index": sig, "variant": variant, "labels": labels,
             "expects": expects,
-            "fault_window_s": (list(fw) if fw is not None else None)}
+            "fault_window_s": (list(fw) if fw is not None else None),
+            "hold_start_s": hold_start}
 
 
-def _report(records, metas, unattributed=(), span=12000):
+def _report(records, metas, unattributed=(), span=12000, step=30):
     return {"tool": "inject-waveform", "pack_id": "synthetic-pack",
-            "records": records, "window": {"span_s": span},
+            "records": records, "window": {"span_s": span, "step_s": step},
             "metadata": {"series": metas},
             "unattributed_alerts": list(unattributed)}
 
@@ -601,6 +603,183 @@ def test_duplicate_pack_seed_inputs_warn_but_do_not_block(tmp_path):
     doc = json.loads(r.stdout)
     assert doc["warnings"] and "重複 pack" in doc["warnings"][0]
     assert doc["summary"]["scored_denominator"] == 2   # 膨脹如實呈現
+
+
+# ── G-1 drain-then-shadow 未歸因 allowlist（CRITICAL-preservation 鐵律） ──
+
+def _tol_with_ignored(*names):
+    tol = dict(_TOLS)
+    tol["ignored_unattributed"] = {
+        n: {"alertname": n, "justification": "已知平台聚合雜音",
+            "approved_by": "sre-oncall"} for n in names}
+    return tol
+
+
+def test_g1_a_no_allowlist_aggregate_still_shadows_indeterminate():
+    """G-1 (a)：無 allowlist（既有行為）→ 聚合 unattributed 仍遮蔽成 INDETERMINATE
+    （CRITICAL 防線不動）。"""
+    recs = [_record(sig=0, alerts=[_alert(fire=1000)]),
+            _record(sig=1, alerts=[])]
+    rep = _report(recs, [_meta(sig=0), _meta(sig=1)],
+                  unattributed=[{"alertname": "Aggregated", "labels": {}}])
+    out = ws.score([("r.json", rep)], _TOLS)   # 無 ignored_unattributed
+    by_sig = {c["signature_index"]: c for c in out["cases"]}
+    assert by_sig[1]["status"] == "indeterminate"
+    assert out["verdict"] == "INDETERMINATE"
+    assert out["unattributed_ignored"] == []
+    assert len(out["unattributed_effective"]) == 1
+
+
+def test_g1_b_allowlist_drains_shadow_real_miss_surfaces_as_fn():
+    """G-1 (b) CRITICAL-preservation：把遮蔽用的聚合 alert 加進 ignored_unattributed
+    → 20 個 no-hit case 從 INDETERMINATE 變 FN → verdict FAIL（allowlist 讓真 miss
+    浮現、**絕不**洗成 PASS）。"""
+    recs = [_record(sig=0, alerts=[_alert(fire=1000)])]
+    metas = [_meta(sig=0)]
+    for i in range(1, 21):
+        recs.append(_record(sig=i, alerts=[]))
+        metas.append(_meta(sig=i))
+    rep = _report(recs, metas,
+                  unattributed=[{"alertname": "Aggregated", "labels": {}}])
+    out = ws.score([("r.json", rep)], _tol_with_ignored("Aggregated"))
+    assert out["verdict"] == "FAIL"                    # 非 PASS、非 INDETERMINATE
+    assert out["summary"]["false_negatives"] == 20     # 真 miss 浮現
+    assert out["summary"]["indeterminate"] == 0        # 遮蔽解除
+    assert len(out["unattributed_ignored"]) == 1       # 顯性列出（no-silent-caps）
+    assert out["unattributed_ignored"][0]["ignored_by"]["approved_by"] == "sre-oncall"
+    assert out["unattributed_effective"] == []         # drain 到剩空
+
+
+def test_g1_c_all_hit_with_only_ignored_noise_is_pass():
+    """G-1 (c)：全 hit + 只有被 allowlist drain 的雜音 → PASS。"""
+    recs = [_record(sig=0, alerts=[_alert(fire=1000)]),
+            _record(sig=1, alerts=[_alert(fire=1000)])]
+    rep = _report(recs, [_meta(sig=0), _meta(sig=1)],
+                  unattributed=[{"alertname": "Aggregated", "labels": {}}])
+    out = ws.score([("r.json", rep)], _tol_with_ignored("Aggregated"))
+    assert out["verdict"] == "PASS"
+    assert out["summary"]["false_negatives"] == 0
+    assert out["summary"]["indeterminate"] == 0
+    assert len(out["unattributed_ignored"]) == 1
+
+
+def test_g1_d_unknown_noise_not_in_allowlist_still_indeterminate():
+    """G-1 (d) CRITICAL 保留：未在 allowlist 的未知雜音仍觸發遮蔽 → no-hit case
+    仍 INDETERMINATE（不重開 CRITICAL）。"""
+    recs = [_record(sig=0, alerts=[_alert(fire=1000)]),
+            _record(sig=1, alerts=[])]
+    rep = _report(recs, [_meta(sig=0), _meta(sig=1)],
+                  unattributed=[{"alertname": "UnknownNoise", "labels": {}}])
+    # allowlist 只有 Aggregated；UnknownNoise 不在 → 仍遮蔽
+    out = ws.score([("r.json", rep)], _tol_with_ignored("Aggregated"))
+    by_sig = {c["signature_index"]: c for c in out["cases"]}
+    assert by_sig[1]["status"] == "indeterminate"
+    assert out["verdict"] == "INDETERMINATE"
+    assert out["summary"]["false_negatives"] == 0
+    assert out["unattributed_ignored"] == []           # 未 drain
+    assert len(out["unattributed_effective"]) == 1
+    assert out["unattributed_effective"][0]["alert"]["alertname"] == "UnknownNoise"
+
+
+def test_g1_e_ignored_unattributed_missing_approved_by_fails_loud(tmp_path):
+    """G-1 (e)：ignored_unattributed 缺 approved_by → exit 2（schema + code 雙防）。"""
+    with pytest.raises(ws.ScoreInputError):             # 真 schema：required 擋
+        _load_tol(_write_tol(tmp_path, {
+            "defaults": {"default": 900},
+            "ignored_unattributed": [{"alertname": "Agg", "justification": "j"}]}))
+    empty_schema = {"type": "object"}                  # 降級 schema → code 層擋
+    tolfile = _write_tol(tmp_path, {
+        "defaults": {"default": 900},
+        "ignored_unattributed": [{"alertname": "Agg", "justification": "j"}]})
+    with pytest.raises(ws.ScoreInputError, match="approved_by"):
+        ws.load_tolerances(str(tolfile), empty_schema, jsonschema)
+
+
+def test_g1_ignored_unattributed_loads_and_dedups(tmp_path):
+    """G-1：合法 allowlist load 進 tol dict；重複 alertname fail-loud。"""
+    tol = _load_tol(_write_tol(tmp_path, {
+        "defaults": {"default": 900},
+        "ignored_unattributed": [
+            {"alertname": "Agg", "justification": "j", "approved_by": "a"}]}))
+    assert "Agg" in tol["ignored_unattributed"]
+    with pytest.raises(ws.ScoreInputError, match="重複"):
+        _load_tol(_write_tol(tmp_path, {
+            "defaults": {"default": 900},
+            "ignored_unattributed": [
+                {"alertname": "Agg", "justification": "j", "approved_by": "a"},
+                {"alertname": "Agg", "justification": "k", "approved_by": "b"}]}))
+
+
+# ── G-2 early-onset 過敏標記（揭露不 gate） ────────────────────────────
+
+def test_g2_early_onset_fire_flagged_and_counted():
+    """G-2：規則在 onset 段（fire < hold 起點）就開火 → hit 標 early_onset_fire +
+    summary 計數；hold 內開火 → 無旗標。皆不改 verdict。"""
+    # 窗 (300, 9270)、hold 起點 2100 → fire 500 落 [300, 2100) = early onset
+    early = _score_one(_record(alerts=[_alert(fire=500)]), _meta(hold_start=2100))
+    h = early["cases"][0]["hits"][0]
+    assert h["early_onset_fire"] is True
+    assert h["early_by_onset_s"] == 1600               # 2100 - 500
+    assert early["summary"]["early_onset_fires"] == 1
+    assert early["verdict"] == "PASS"                  # 不改 verdict
+    # hold 內開火（fire 3000 >= 2100）→ 無旗標
+    normal = _score_one(_record(alerts=[_alert(fire=3000)]), _meta(hold_start=2100))
+    assert "early_onset_fire" not in normal["cases"][0]["hits"][0]
+    assert normal["summary"]["early_onset_fires"] == 0
+
+
+def test_g2_no_hold_start_no_marking():
+    """G-2：metadata 無 hold_start_s（舊報告 / absence）→ 不標記（graceful）。"""
+    out = _score_one(_record(alerts=[_alert(fire=500)]), _meta(hold_start=None))
+    assert "early_onset_fire" not in out["cases"][0]["hits"][0]
+    assert out["summary"]["early_onset_fires"] == 0
+
+
+# ── G-3 flapping 偵測（揭露不 gate） ──────────────────────────────────
+
+def _flap_alert(fire, last, cnt, severity="warning"):
+    return {"alertname": "A", "fire_offset_s": fire, "last_fire_offset_s": last,
+            "resolve_offset_s": None, "firing_sample_count": cnt,
+            "labels": {"alertname": "A", "severity": severity}}
+
+
+def test_g3_flapping_suspected_flagged():
+    """G-3：firing_sample_count 遠少於 [fire, last_fire] 連續應有樣本數（缺口 ≥2）
+    → hit 標 flapping_suspected + firing_gap_samples + summary 計數 + stderr WARNING；
+    連續 firing → 無旗標。皆不改 verdict。"""
+    # fire=400, last=1300, step=30 → expected=(900/30)+1=31；cnt=5 → gap=26
+    out = _score_one(_record(alerts=[_flap_alert(400, 1300, 5)]), _meta())
+    h = out["cases"][0]["hits"][0]
+    assert h["flapping_suspected"] is True
+    assert h["firing_gap_samples"] == 26
+    assert out["summary"]["flapping_suspected"] == 1
+    assert out["verdict"] == "PASS"                    # 不改 verdict
+    assert any("flapping" in w for w in out["warnings"])
+    # 連續 firing（cnt == expected）→ 無旗標
+    out2 = _score_one(_record(alerts=[_flap_alert(400, 1300, 31)]), _meta())
+    assert "flapping_suspected" not in out2["cases"][0]["hits"][0]
+    assert out2["summary"]["flapping_suspected"] == 0
+    assert out2["warnings"] == []
+
+
+def test_g3_flapping_off_by_one_not_flagged():
+    """G-3 門檻：缺口僅 1 個樣本（off-by-one）不算 flapping（避免誤報）。"""
+    # expected 31、cnt 30 → gap 1 < 2
+    out = _score_one(_record(alerts=[_flap_alert(400, 1300, 30)]), _meta())
+    assert "flapping_suspected" not in out["cases"][0]["hits"][0]
+    assert out["summary"]["flapping_suspected"] == 0
+
+
+def test_g3_flapping_needs_step_and_last_fire():
+    """G-3：step_s 缺（舊報告）或 last_fire<=fire → 無法計算、跳過（不誤報）。"""
+    # 報告缺 step_s → 跳過
+    rep = _report([_record(alerts=[_flap_alert(400, 1300, 5)])], [_meta()])
+    del rep["window"]["step_s"]
+    out = ws.score([("r.json", rep)], _TOLS)
+    assert "flapping_suspected" not in out["cases"][0]["hits"][0]
+    # last_fire == fire（單一樣本）→ 跳過
+    out2 = _score_one(_record(alerts=[_flap_alert(400, 400, 1)]), _meta())
+    assert "flapping_suspected" not in out2["cases"][0]["hits"][0]
 
 
 # ── e2e（需 VM + vmalert；skip-if-no-VM + REQUIRE 旋鈕，語義照抄 #968） ──

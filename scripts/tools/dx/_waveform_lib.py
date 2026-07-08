@@ -270,6 +270,11 @@ class Series:
     # (start_s, end_s)；end_s=None = 開放至觀測窗尾（staleness_absence）；None = 無法
     # 定義（截斷吃光 hold 段，auto_adjustments 留痕）。語義詳 _fault_window_s。
     fault_window: Optional[tuple] = None
+    # fault-hold 段起點（秒；value 變體 = fw[0]*STEP，較窗下界 onset 起點晚）。PR-3
+    # scorer 用來標記「規則在 onset 段就開火」的 early-onset 過敏 hit（揭露不 gate）。
+    # staleness_absence → 設等於窗下界（early_onset 對 absence 不適用、令永不觸發）；
+    # fault_window=None → None（無窗可標）。additive 欄，語義詳 _hold_start_s。
+    hold_start_s: Optional[float] = None
 
 
 def _inherit_expects(sig: dict) -> str:
@@ -308,6 +313,24 @@ def _fault_window_s(variant: str, fw: tuple[int, int], n_samples: int,
             "無法定義（記 None；下游 scorer 須顯性列出、不得靜默計 hit/miss）")
         return None
     return (LEAD_STEPS * STEP, end_idx * STEP)
+
+
+def _hold_start_s(variant: str, fw: tuple[int, int],
+                  fault_window: Optional[tuple]) -> Optional[float]:
+    """fault-hold 段起點的秒級位移（PR-3 early-onset 過敏標記血緣；G-2 additive）。
+
+    * value 變體（base/noise/oscillation/fanout/flapping/probe）：``fw[0]*STEP``——
+      hold 段第一個樣本，較窗下界 onset 起點（LEAD_STEPS*STEP）晚。scorer 標記
+      fire_offset ∈ [onset 起點, hold 起點) 的「規則在故障才成形就開火」過敏 hit。
+    * staleness_absence：設 = 窗下界（``fault_window[0]``）——early_onset 對 absence
+      不適用（可偵測訊號自死亡點起），令永不觸發標記。
+    * fault_window=None（截斷吃光 hold 段）：None——無窗可標。
+    """
+    if fault_window is None:
+        return None
+    if variant == "staleness_absence":
+        return float(fault_window[0])   # == 窗下界，early_onset 永不觸發
+    return float(fw[0] * STEP)
 
 
 def _base_waveform(sig: dict) -> tuple[list[float], tuple[int, int]]:
@@ -549,6 +572,7 @@ def synthesize_pack(pack: dict, seed: int = DEFAULT_SEED,
                         f"clamped up (physical lower-bound guard)")
             samples, gaps, truncated = _apply_time_axis(values, time_axis)
             fault_window = _fault_window_s(variant, fw, len(samples), notes)
+            hold_start_s = _hold_start_s(variant, fw, fault_window)
             series = Series(
                 metric=sig["metric"],
                 labels=_series_labels(sig, si, variant, fan_index),
@@ -563,6 +587,7 @@ def synthesize_pack(pack: dict, seed: int = DEFAULT_SEED,
                 auto_adjustments=notes,
                 rng_key=f"{seed}|{pack_id}|{si}|{variant}|{fan_index or 0}",
                 fault_window=fault_window,
+                hold_start_s=hold_start_s,
             )
             out.append(series)
             for ci, comp in enumerate(sig.get("companion_series") or []):
@@ -604,6 +629,7 @@ def synthesize_pack(pack: dict, seed: int = DEFAULT_SEED,
                     auto_adjustments=comp_notes,
                     rng_key=f"{seed}|{pack_id}|{si}|{variant}|{fan_index or 0}|comp{ci}",
                     fault_window=series.fault_window,  # companion 隨主 series（informational）
+                    hold_start_s=series.hold_start_s,  # 隨主 series（informational）
                 ))
     return out
 
@@ -717,6 +743,9 @@ def build_metadata(pack: dict, series_list: list[Series], seed: int, fanout: int
                 # _fault_window_s docstring）：[start, end] / [start, null]（absence
                 # 開放至窗尾）/ null（截斷吃光、不可定義）。
                 "fault_window_s": list(s.fault_window) if s.fault_window is not None else None,
+                # fault-hold 段起點（秒；PR-3 early-onset 過敏標記血緣——語義見
+                # _hold_start_s docstring）。absence = 窗下界；截斷吃光 = null。additive 欄。
+                "hold_start_s": s.hold_start_s,
                 "auto_adjustments": list(s.auto_adjustments),
             }
             for s in series_list

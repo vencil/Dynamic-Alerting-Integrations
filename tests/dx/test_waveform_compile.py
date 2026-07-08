@@ -728,3 +728,48 @@ def test_fault_window_none_when_truncation_eats_whole_hold():
     # sanity：未截斷（n_samples 夠）時同輸入回正常窗、不觸發 None 分支
     assert wf._fault_window_s("base", (10, 20), 21, []) == (
         wf.LEAD_STEPS * wf.STEP, 20 * wf.STEP)
+
+
+# ── hold_start_s 血緣（PR-3 early-onset 過敏標記；G-2 additive 欄） ──────
+
+def test_hold_start_s_value_variants():
+    """value 變體 hold_start_s = fw[0]*STEP（hold 段起點，較窗下界 onset 起點晚）。"""
+    series = _series_of(_DISK)
+    base = next(s for s in series if s.variant == "base")
+    # ramp: fault-hold 段自 index 70 起（lead 10 + onset 60）→ hold_start = 70*STEP
+    assert base.hold_start_s == 70 * wf.STEP
+    assert base.hold_start_s > base.fault_window[0]     # 較 onset 起點晚
+    for s in series:
+        if s.expects != "companion":
+            assert s.hold_start_s == base.hold_start_s, s.variant
+
+
+def test_hold_start_s_absence_equals_window_lower_bound():
+    """staleness_absence hold_start_s = 窗下界（early_onset 對 absence 永不觸發）。"""
+    series = _series_of(_SERVICE)
+    absence = next(s for s in series if s.variant == "staleness_absence")
+    assert absence.hold_start_s == absence.fault_window[0]
+
+
+def test_hold_start_s_none_when_fault_window_none():
+    """截斷吃光 hold 段（fault_window=None）→ hold_start_s=None（無窗可標）。"""
+    assert wf._hold_start_s("base", (10, 20), None) is None
+    # sanity：正常窗回 fw[0]*STEP
+    assert wf._hold_start_s(
+        "base", (10, 20), (wf.LEAD_STEPS * wf.STEP, 20 * wf.STEP)) == 10 * wf.STEP
+
+
+def test_hold_start_s_companion_inherits():
+    series = _series_of(_RATIO)
+    comp = next(s for s in series if s.expects == "companion")
+    main = next(s for s in series
+                if s.variant == comp.variant and s.expects != "companion")
+    assert comp.hold_start_s == main.hold_start_s
+
+
+def test_hold_start_s_metadata_lineage():
+    series = _series_of(_DISK)
+    meta = wf.build_metadata(wf.load_pack(str(_DISK)), series, seed=1, fanout=3)
+    assert meta["series"]
+    for entry in meta["series"]:
+        assert entry["hold_start_s"] == 70 * wf.STEP
