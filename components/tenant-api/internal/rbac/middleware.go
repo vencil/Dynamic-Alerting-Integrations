@@ -65,8 +65,11 @@ func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) str
 				tenantID = tenantIDFn(r)
 			}
 
-			// Authorization is UNCHANGED: still decided off the hop-B groups.
-			if !m.HasPermission(bPrincipal.Groups, tenantID, want) {
+			// Authorization runs off the hop-B principal through the single
+			// evaluation core (ADR-027 / LD-6 P3): the principal's groups —
+			// and, for rules carrying a match: block, its named claims —
+			// feed the one shared ruleMatches predicate.
+			if !m.Allowed(bPrincipal, tenantID, want) {
 				writeForbidden(w, tenantID, want)
 				return
 			}

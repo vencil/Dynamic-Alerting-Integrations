@@ -35,14 +35,14 @@ type GroupResponse struct {
 // @Router      /api/v1/groups [get]
 func ListGroups(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		idpGroups := rbac.RequestGroups(r)
+		p := rbac.RequestPrincipal(r)
 		rbacCfg := d.RBAC.Get()
 
 		list := d.Groups.ListGroups()
 		resp := make([]GroupResponse, 0, len(list))
 		for _, g := range list {
 			// v2.5.0: Skip groups where user has no accessible members
-			if len(rbacCfg.Groups) > 0 && !hasAccessibleMember(d.RBAC, idpGroups, g.Members) {
+			if len(rbacCfg.Groups) > 0 && !hasAccessibleMember(d.RBAC, p, g.Members) {
 				continue
 			}
 			resp = append(resp, GroupResponse{
@@ -50,7 +50,7 @@ func ListGroups(d *Deps) http.HandlerFunc {
 				Label:       g.Label,
 				Description: g.Description,
 				Filters:     g.Filters,
-				Members:     filterAccessibleMembers(d.RBAC, idpGroups, g.Members),
+				Members:     filterAccessibleMembers(d.RBAC, p, g.Members),
 			})
 		}
 		writeJSON(w, http.StatusOK, resp)
@@ -58,9 +58,9 @@ func ListGroups(d *Deps) http.HandlerFunc {
 }
 
 // hasAccessibleMember returns true if the user can access at least one member.
-func hasAccessibleMember(rbacMgr *rbac.Manager, idpGroups, members []string) bool {
+func hasAccessibleMember(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal, members []string) bool {
 	for _, m := range members {
-		if rbacMgr.HasPermission(idpGroups, m, rbac.PermRead) {
+		if rbacMgr.Allowed(p, m, rbac.PermRead) {
 			return true
 		}
 	}
@@ -70,10 +70,10 @@ func hasAccessibleMember(rbacMgr *rbac.Manager, idpGroups, members []string) boo
 // filterAccessibleMembers returns only the members the user has read
 // access to. Members are tenant IDs themselves (so the identity
 // extractor `tenantIDFromString` is just `s -> s`). Open-mode RBAC
-// is handled inside filterByRBAC via HasPermission's open-mode
+// is handled inside filterByRBAC via Allowed's open-mode
 // short-circuit.
-func filterAccessibleMembers(rbacMgr *rbac.Manager, idpGroups, members []string) []string {
-	return filterByRBAC(rbacMgr, idpGroups, members, tenantIDFromString, rbac.PermRead)
+func filterAccessibleMembers(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal, members []string) []string {
+	return filterByRBAC(rbacMgr, p, members, tenantIDFromString, rbac.PermRead)
 }
 
 // tenantIDFromString is the identity extractor used when filtering a
@@ -161,7 +161,7 @@ func PutGroup(d *Deps) http.HandlerFunc {
 		}
 
 		email := rbac.RequestEmail(r)
-		idpGroups := rbac.RequestGroups(r)
+		p := rbac.RequestPrincipal(r)
 
 		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
 		if err != nil {
@@ -191,7 +191,7 @@ func PutGroup(d *Deps) http.HandlerFunc {
 		// if any member is forbidden. List ALL forbidden ids in the
 		// error so the operator can fix in one round-trip rather
 		// than discovering them one-at-a-time.
-		if forbidden := tenantsLackingPermission(d.RBAC, idpGroups, req.Members, rbac.PermWrite); len(forbidden) > 0 {
+		if forbidden := tenantsLackingPermission(d.RBAC, p, req.Members, rbac.PermWrite); len(forbidden) > 0 {
 			WriteJSONError(w, r, http.StatusForbidden,
 				"insufficient permission to write group with forbidden member tenants: "+
 					strings.Join(forbidden, ", "))
@@ -264,7 +264,7 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 		}
 
 		email := rbac.RequestEmail(r)
-		idpGroups := rbac.RequestGroups(r)
+		p := rbac.RequestPrincipal(r)
 
 		cfg := d.Groups.Get()
 		existing, ok := cfg.Groups[groupID]
@@ -279,7 +279,7 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 		// group whose members they don't own — a denial-of-
 		// service surface against teams who depend on dashboards
 		// keyed off that group.
-		if forbidden := tenantsLackingPermission(d.RBAC, idpGroups, existing.Members, rbac.PermWrite); len(forbidden) > 0 {
+		if forbidden := tenantsLackingPermission(d.RBAC, p, existing.Members, rbac.PermWrite); len(forbidden) > 0 {
 			WriteJSONError(w, r, http.StatusForbidden,
 				"insufficient permission to delete group with forbidden member tenants: "+
 					strings.Join(forbidden, ", "))

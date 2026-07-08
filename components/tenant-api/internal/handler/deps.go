@@ -67,7 +67,7 @@ type Deps struct {
 	Writer *gitops.Writer
 
 	// RBAC enforces tenant-scoped permissions on every routed handler.
-	// Open-mode (no _rbac.yaml) returns "allow all" from HasPermission.
+	// Open-mode (no _rbac.yaml) returns "allow all" from Allowed.
 	RBAC *rbac.Manager
 
 	// Policy enforces domain-level write policy. Optional — handlers

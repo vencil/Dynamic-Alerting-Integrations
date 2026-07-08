@@ -130,7 +130,7 @@ func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 
 		// Federation token issuance is data egress — require admin on
 		// the target tenant (ADR-020 Wave-0 decision 5).
-		if !d.RBAC.HasPermission(rbac.RequestGroups(r), req.TenantID, rbac.PermAdmin) {
+		if !d.RBAC.Allowed(rbac.RequestPrincipal(r), req.TenantID, rbac.PermAdmin) {
 			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
 				"admin permission required on tenant "+req.TenantID+" to issue a federation token")
 			return
@@ -221,7 +221,7 @@ func ListFederationTokens(d *handler.Deps) http.HandlerFunc {
 			return
 		}
 
-		if !d.RBAC.HasPermission(rbac.RequestGroups(r), tenantID, rbac.PermAdmin) {
+		if !d.RBAC.Allowed(rbac.RequestPrincipal(r), tenantID, rbac.PermAdmin) {
 			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
 				"admin permission required on tenant "+tenantID)
 			return
@@ -273,7 +273,7 @@ func DeleteFederationToken(d *handler.Deps) http.HandlerFunc {
 			return
 		}
 
-		if !d.RBAC.HasPermission(rbac.RequestGroups(r), rec.TenantID, rbac.PermAdmin) {
+		if !d.RBAC.Allowed(rbac.RequestPrincipal(r), rec.TenantID, rbac.PermAdmin) {
 			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
 				"admin permission required on tenant "+rec.TenantID)
 			return

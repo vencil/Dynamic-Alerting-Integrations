@@ -11,7 +11,7 @@
 //
 // `Watcher[T]` is the generic core. Each domain-specific Manager
 // embeds `*Watcher[ConfigType]` and contributes only its own
-// per-config methods (HasPermission for rbac, CheckWrite for
+// per-config methods (Allowed for rbac, CheckWrite for
 // policy, ListGroups for groups, etc.). Get / Reload / WatchLoop
 // promote through the embed.
 //

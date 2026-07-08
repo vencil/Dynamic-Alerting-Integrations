@@ -36,8 +36,7 @@ groups:
 // /me response.
 func TestMe_ClaimsExposed(t *testing.T) {
 	t.Parallel()
-	rbacMgr := newRBACManager(t, meClaimsRBACYaml)
-	rbacMgr.SetClaimHeaders(map[string]string{
+	rbacMgr := newRBACManagerWithClaims(t, meClaimsRBACYaml, map[string]string{
 		"org":    "X-Auth-Request-Org",
 		"region": "X-Auth-Request-Region",
 	})
@@ -76,19 +75,16 @@ func TestMe_ClaimsExposed(t *testing.T) {
 func TestMe_NoClaims_BodyOmitsClaimsKey(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name      string
-		configure func(*rbac.Manager)
+		name         string
+		claimHeaders map[string]string
 	}{
-		{"no claim config", func(*rbac.Manager) {}},
-		{"configured axis but no header on request", func(m *rbac.Manager) {
-			m.SetClaimHeaders(map[string]string{"org": "X-Auth-Request-Org"})
-		}},
+		{"no claim config", nil},
+		{"configured axis but no header on request", map[string]string{"org": "X-Auth-Request-Org"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rbacMgr := newRBACManager(t, meClaimsRBACYaml)
-			tc.configure(rbacMgr)
+			rbacMgr := newRBACManagerWithClaims(t, meClaimsRBACYaml, tc.claimHeaders)
 			handler := Me(&Deps{RBAC: rbacMgr})
 
 			req := httptest.NewRequest("GET", "/api/v1/me", nil)

@@ -14,7 +14,7 @@ import (
 
 func TestNewManager_EmptyPath(t *testing.T) {
 	t.Parallel()
-	m, err := NewManager("")
+	m, err := NewManager("", nil)
 	if err != nil {
 		t.Fatalf("NewManager('') returned error: %v", err)
 	}
@@ -26,7 +26,7 @@ func TestNewManager_EmptyPath(t *testing.T) {
 
 func TestNewManager_FileNotFound(t *testing.T) {
 	t.Parallel()
-	m, err := NewManager("/nonexistent/path/_rbac.yaml")
+	m, err := NewManager("/nonexistent/path/_rbac.yaml", nil)
 	if err != nil {
 		t.Fatalf("NewManager(nonexistent) returned error: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestNewManager_ValidFile(t *testing.T) {
 `
 	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", content)
 
-	m, err := NewManager(rbacFile)
+	m, err := NewManager(rbacFile, nil)
 	if err != nil {
 		t.Fatalf("NewManager returned error: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestNewManager_InvalidYAML(t *testing.T) {
 	t.Parallel()
 	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", "{{not valid yaml")
 
-	_, err := NewManager(rbacFile)
+	_, err := NewManager(rbacFile, nil)
 	if err == nil {
 		t.Error("expected error for invalid YAML, got nil")
 	}
@@ -80,7 +80,7 @@ func TestLoad_NoChangeSkipsUpdate(t *testing.T) {
 `
 	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", content)
 
-	m, err := NewManager(rbacFile)
+	m, err := NewManager(rbacFile, nil)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestLoad_DetectsChange(t *testing.T) {
 `
 	dir, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", content1)
 
-	m, err := NewManager(rbacFile)
+	m, err := NewManager(rbacFile, nil)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestLoad_DeletedFile(t *testing.T) {
 `
 	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", content)
 
-	m, err := NewManager(rbacFile)
+	m, err := NewManager(rbacFile, nil)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestWatchLoop_StopsOnClose(t *testing.T) {
 	t.Parallel()
 	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", "groups: []\n")
 
-	m, err := NewManager(rbacFile)
+	m, err := NewManager(rbacFile, nil)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}

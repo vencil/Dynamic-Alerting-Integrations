@@ -70,7 +70,7 @@ type PutFederationPolicyRequest struct {
 // the platform federation whitelist.
 //
 // Platform-wide config: requires admin via a "*"-scoped RBAC group.
-// HasPermission(groups, "*", admin) is true only when a rule's tenant
+// Allowed(p, "*", admin) is true only when a rule's tenant
 // list literally contains "*" — exactly a platform admin.
 //
 // Metrics newly added to the whitelist run through the admission
@@ -92,7 +92,7 @@ type PutFederationPolicyRequest struct {
 // @Router      /api/v1/federation/policy [put]
 func PutFederationPolicy(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !d.RBAC.HasPermission(rbac.RequestGroups(r), "*", rbac.PermAdmin) {
+		if !d.RBAC.Allowed(rbac.RequestPrincipal(r), "*", rbac.PermAdmin) {
 			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
 				"platform admin permission required to edit the federation whitelist")
 			return
@@ -388,7 +388,7 @@ func PutTenantFederation(d *handler.Deps) http.HandlerFunc {
 			handler.WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
-		if !d.RBAC.HasPermission(rbac.RequestGroups(r), tenantID, rbac.PermAdmin) {
+		if !d.RBAC.Allowed(rbac.RequestPrincipal(r), tenantID, rbac.PermAdmin) {
 			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
 				"admin permission required on tenant "+tenantID+" to edit its federation subset")
 			return

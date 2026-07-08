@@ -119,7 +119,7 @@ func (d *MetricDiscoverer) Discover(ctx context.Context, tenant, prefix string, 
 	// Force-build the selector server-side.
 	//
 	// The tenant value is ESCAPED, not trusted: in RBAC open mode
-	// (no _rbac.yaml) HasPermission grants read on ANY tenant ID, so a
+	// (no _rbac.yaml) rbac.Allowed grants read on ANY tenant ID, so a
 	// crafted path segment like `db-a"} or {x` would otherwise break out
 	// of the quoted literal and inject arbitrary matchers (cross-tenant
 	// metric-name enumeration / a malformed 502). escapeSelectorValue

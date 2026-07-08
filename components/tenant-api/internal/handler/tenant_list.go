@@ -42,7 +42,7 @@ type TenantSummary struct {
 // @Router      /api/v1/tenants [get]
 func ListTenants(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		idpGroups := rbac.RequestGroups(r)
+		p := rbac.RequestPrincipal(r)
 
 		tenants, err := loadAllTenants(d.ConfigDir)
 		if err != nil {
@@ -51,7 +51,7 @@ func ListTenants(d *Deps) http.HandlerFunc {
 		}
 
 		// v2.5.0: Filter tenants by RBAC (tenant pattern + environment/domain metadata)
-		filtered := filterTenantsByRBAC(tenants, d.RBAC, idpGroups)
+		filtered := filterTenantsByRBAC(tenants, d.RBAC, p)
 
 		writeJSON(w, http.StatusOK, filtered)
 	}
@@ -59,7 +59,7 @@ func ListTenants(d *Deps) http.HandlerFunc {
 
 // filterTenantsByRBAC returns only the tenants the user has metadata access to.
 // If RBAC is in open mode (empty config), all tenants are returned.
-func filterTenantsByRBAC(tenants []TenantSummary, rbacMgr *rbac.Manager, idpGroups []string) []TenantSummary {
+func filterTenantsByRBAC(tenants []TenantSummary, rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal) []TenantSummary {
 	cfg := rbacMgr.Get()
 	if len(cfg.Groups) == 0 {
 		// Path-less open mode only. A configured-but-empty _rbac.yaml never
@@ -70,7 +70,7 @@ func filterTenantsByRBAC(tenants []TenantSummary, rbacMgr *rbac.Manager, idpGrou
 
 	filtered := make([]TenantSummary, 0, len(tenants))
 	for _, t := range tenants {
-		if rbacMgr.HasMetadataAccess(idpGroups, t.ID, t.Environment, t.Domain) {
+		if rbacMgr.MetadataAllowed(p, t.ID, t.Environment, t.Domain) {
 			filtered = append(filtered, t)
 		}
 	}
