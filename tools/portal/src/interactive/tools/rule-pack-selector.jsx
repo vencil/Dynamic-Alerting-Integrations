@@ -9,6 +9,7 @@ related: [rule-pack-detail, dependency-graph, threshold-calculator]
 
 import React, { useState, useCallback } from 'react';
 import { Copy, ChevronDown } from 'lucide-react';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -91,7 +92,7 @@ export default function RulePackSelector() {
     ? new Set(window.__FLOW_STATE.selectedPacks) : new Set();
   const [selected, setSelected] = useState(flowInit);
   const [expandedPacks, setExpandedPacks] = useState(new Set());
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopyToClipboard();
 
   const toggleSelection = useCallback((packKey) => {
     const newSelected = new Set(selected);
@@ -172,11 +173,7 @@ ${generatePrometheusRuleFiles()}
 # Copy below into your values-override.yaml for helm install:
 ${generateHelmValues()}`;
 
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(yamlOutput);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  const copyToClipboard = () => copy(yamlOutput);
 
   const groupedPacks = Object.entries(CATEGORIES).reduce((acc, [category, label]) => {
     const packs = Object.entries(RULE_PACKS)

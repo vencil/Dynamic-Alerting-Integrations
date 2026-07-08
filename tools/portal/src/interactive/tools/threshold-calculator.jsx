@@ -8,6 +8,7 @@ related: [playground, alert-simulator, schema-explorer]
 ---
 
 import React, { useState, useMemo } from 'react';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -82,6 +83,7 @@ export default function ThresholdCalculator() {
   const [selectedPercentile, setSelectedPercentile] = useState('p90');
   const [customValues, setCustomValues] = useState({});
   const [basket, setBasket] = useState([]);
+  const { copy } = useCopyToClipboard();
 
   const profile = METRIC_PROFILES[selectedMetric];
   const thresholds = useMemo(
@@ -109,9 +111,7 @@ export default function ThresholdCalculator() {
 
   const yaml = useMemo(() => basket.length > 0 ? generateYAML(basket) : '', [basket]);
 
-  const copyYAML = () => {
-    navigator.clipboard.writeText(yaml);
-  };
+  const copyYAML = () => copy(yaml);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-8">

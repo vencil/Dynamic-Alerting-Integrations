@@ -5,6 +5,9 @@ audience: [platform-engineer, domain-expert, sre]
 version: v2.7.0
 lang: en
 related: [rule-pack-matrix, capacity-planner, multi-tenant-comparison]
+dependencies: [
+  "_common/hooks/useModalFocusTrap.js"
+]
 ---
 
 /**
@@ -19,6 +22,7 @@ related: [rule-pack-matrix, capacity-planner, multi-tenant-comparison]
  */
 
 import React, { useState, useMemo, useCallback } from 'react';
+import { useModalFocusTrap } from './_common/hooks/useModalFocusTrap.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -147,6 +151,11 @@ export default function ThresholdHeatmap() {
   const [detailCell, setDetailCell] = useState(null);
   const [csvExported, setCsvExported] = useState(false);
   const [lang, setLang] = useState('en');
+
+  // Detail-modal focus trap + Esc-to-close + auto-focus (shared _common
+  // hook — Esc closes via setDetailCell(null)). Called unconditionally
+  // at top level per Rules-of-Hooks.
+  const modalRef = useModalFocusTrap(detailCell, setDetailCell);
 
   // Sample data
   const { tenants: allTenants, data: tenantData } = useMemo(() => generateSampleTenantData(), []);
@@ -428,7 +437,7 @@ export default function ThresholdHeatmap() {
         {/* Detail Panel */}
         {detailCell && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-            <div className="bg-[color:var(--da-color-card-bg)] rounded-xl shadow-2xl max-w-md w-full p-6 relative" role="dialog" aria-live="polite" aria-atomic="true" aria-label={t('閾值詳情', 'Threshold details')}>
+            <div ref={modalRef} tabIndex={-1} className="bg-[color:var(--da-color-card-bg)] rounded-xl shadow-2xl max-w-md w-full p-6 relative" role="dialog" aria-modal="true" aria-live="polite" aria-atomic="true" aria-label={t('閾值詳情', 'Threshold details')}>
               <button
                 onClick={() => setDetailCell(null)}
                 className="absolute top-4 right-4 text-[color:var(--da-color-muted)] hover:text-[color:var(--da-color-fg)]"

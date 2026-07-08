@@ -9,6 +9,7 @@ related: [wizard, onboarding-checklist, glossary]
 
 import React, { useState, useCallback } from 'react';
 import { Copy, RefreshCw } from 'lucide-react';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -358,7 +359,7 @@ export default function CLIPlayground() {
   const [networkMode, setNetworkMode] = useState('linux');
   const [args, setArgs] = useState(initial.args);
   const [flags, setFlags] = useState(initial.flags);
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopyToClipboard();
   const [searchFilter, setSearchFilter] = useState('');
   const [showPopularOnly, setShowPopularOnly] = useState(false);
 
@@ -420,11 +421,7 @@ export default function CLIPlayground() {
     return cmd;
   };
 
-  const copyCommand = () => {
-    navigator.clipboard.writeText(buildCommand());
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  const copyCommand = () => copy(buildCommand());
 
   const commandsByCategory = {};
   Object.entries(COMMANDS).forEach(([key, cmd]) => {

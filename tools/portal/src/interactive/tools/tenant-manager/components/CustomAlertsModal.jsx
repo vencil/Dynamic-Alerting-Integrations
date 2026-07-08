@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import RecipeBuilder from '../../recipe-builder.jsx';
+import { useCopyToClipboard } from '../../_common/hooks/useCopyToClipboard.js';
 import { useModalFocusTrap } from '../../_common/hooks/useModalFocusTrap.js';
 
 /* ── i18n ──────────────────────────────────────────────────────────── */
@@ -51,6 +52,7 @@ function CustomAlertsModal(props) {
     saveCustomAlerts = defaultSaveCustomAlerts,
   } = props || {};
 
+  const { copy } = useCopyToClipboard();
   const [phase, setPhase] = useState('loading'); // loading | list | form | error
   const [recipes, setRecipes] = useState([]);
   const [baseHash, setBaseHash] = useState('');
@@ -218,7 +220,7 @@ function CustomAlertsModal(props) {
                   'The remote config was updated by someone else. Your edits are kept — copy a backup, then refresh and retry.')}
               </p>
               <button type="button" className={btn + ' mt-2'} data-testid="copy-backup"
-                onClick={() => { try { navigator.clipboard.writeText(JSON.stringify(recipes, null, 2)); } catch (_e) { /* noop */ } }}>
+                onClick={() => copy(JSON.stringify(recipes, null, 2))}>
                 {t('複製目前 recipe 備份', 'Copy current recipes')}
               </button>
             </div>

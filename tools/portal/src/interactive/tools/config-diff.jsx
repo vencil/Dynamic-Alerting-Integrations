@@ -8,6 +8,10 @@ related: [config-lint, playground, migration-simulator]
 ---
 
 import React, { useState, useMemo } from 'react';
+// Parsing + diff live in the sibling engine module (config-diff/diff.js),
+// which delegates to the shared _common parseYaml — inheriting its
+// prototype-pollution + size guards that the old inline mini-parser lacked.
+import { computeDiff } from './config-diff/diff.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -39,80 +43,6 @@ const EXAMPLE_NEW = `tenants:
     redis_memory: "80"
     redis_memory_critical: "95"`;
 
-// Simple key-value extractor from YAML (tenant-level only)
-function extractTenants(yaml) {
-  const tenants = {};
-  let currentTenant = null;
-  let inSpecial = false;
-  const lines = yaml.split('\n');
-  for (const line of lines) {
-    const indent = line.search(/\S/);
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    if (indent === 0 && trimmed === 'tenants:') continue;
-    if (indent === 2 && trimmed.endsWith(':') && !trimmed.includes(': ')) {
-      currentTenant = trimmed.slice(0, -1);
-      tenants[currentTenant] = {};
-      inSpecial = false;
-      continue;
-    }
-    if (indent === 4 && currentTenant) {
-      if (trimmed.startsWith('_')) {
-        inSpecial = true;
-        const kv = trimmed.split(':');
-        tenants[currentTenant][kv[0]] = trimmed;
-      } else if (trimmed.includes(':')) {
-        inSpecial = false;
-        const idx = trimmed.indexOf(':');
-        const key = trimmed.slice(0, idx).trim();
-        const val = trimmed.slice(idx + 1).trim();
-        tenants[currentTenant][key] = val;
-      }
-    } else if (indent >= 6 && currentTenant && inSpecial) {
-      // Collect sub-keys for special keys display
-      const lastSpecial = Object.keys(tenants[currentTenant]).filter(k => k.startsWith('_')).pop();
-      if (lastSpecial) {
-        tenants[currentTenant][lastSpecial] += '\n' + line;
-      }
-    }
-  }
-  return tenants;
-}
-
-function computeDiff(oldYaml, newYaml) {
-  const oldTenants = extractTenants(oldYaml);
-  const newTenants = extractTenants(newYaml);
-  const allTenants = new Set([...Object.keys(oldTenants), ...Object.keys(newTenants)]);
-  const changes = [];
-
-  allTenants.forEach(tenant => {
-    const oldT = oldTenants[tenant];
-    const newT = newTenants[tenant];
-    if (!oldT && newT) {
-      changes.push({ type: 'tenant-added', tenant, keys: Object.keys(newT) });
-      return;
-    }
-    if (oldT && !newT) {
-      changes.push({ type: 'tenant-removed', tenant, keys: Object.keys(oldT) });
-      return;
-    }
-    const allKeys = new Set([...Object.keys(oldT), ...Object.keys(newT)]);
-    allKeys.forEach(key => {
-      const oldVal = oldT[key];
-      const newVal = newT[key];
-      if (oldVal === undefined && newVal !== undefined) {
-        changes.push({ type: 'key-added', tenant, key, newVal });
-      } else if (oldVal !== undefined && newVal === undefined) {
-        changes.push({ type: 'key-removed', tenant, key, oldVal });
-      } else if (oldVal !== newVal) {
-        changes.push({ type: 'key-changed', tenant, key, oldVal, newVal });
-      }
-    });
-  });
-
-  return changes;
-}
-
 const DiffBadge = ({ type }) => {
   const styles = {
     'tenant-added': 'bg-green-100 text-green-800',
@@ -135,7 +65,7 @@ export default function ConfigDiff() {
   const [oldYaml, setOldYaml] = useState(EXAMPLE_OLD);
   const [newYaml, setNewYaml] = useState(EXAMPLE_NEW);
 
-  const changes = useMemo(() => computeDiff(oldYaml, newYaml), [oldYaml, newYaml]);
+  const { changes, errors } = useMemo(() => computeDiff(oldYaml, newYaml), [oldYaml, newYaml]);
 
   const tenantAdded = changes.filter(c => c.type === 'tenant-added').length;
   const tenantRemoved = changes.filter(c => c.type === 'tenant-removed').length;
@@ -176,6 +106,16 @@ export default function ConfigDiff() {
             />
           </div>
         </div>
+
+        {/* Parse warnings (e.g. size guard) — surfaced, never a crash */}
+        {errors.length > 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6" role="alert">
+            <h3 className="text-sm font-semibold text-amber-800 mb-1">{t('解析警告', 'Parse Warnings')}</h3>
+            <ul className="text-xs text-amber-700 list-disc list-inside space-y-0.5">
+              {errors.map((e, i) => <li key={i}>{e}</li>)}
+            </ul>
+          </div>
+        )}
 
         {/* Summary */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-6">

@@ -8,6 +8,7 @@ related: [wizard, architecture-quiz, glossary]
 ---
 
 import React, { useState, useMemo } from 'react';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -189,6 +190,7 @@ function ChecklistItem({ step, checked, onToggle }) {
 export default function OnboardingChecklist() {
   const [role, setRole] = useState(null);
   const [checked, setChecked] = useState({});
+  const { copy } = useCopyToClipboard();
 
   const checklist = role ? CHECKLISTS[role] : null;
 
@@ -232,9 +234,7 @@ export default function OnboardingChecklist() {
     return lines.join('\n');
   };
 
-  const copyChecklist = () => {
-    navigator.clipboard.writeText(generateText());
-  };
+  const copyChecklist = () => copy(generateText());
 
   const progressPct = totalSteps > 0 ? Math.round((checkedCount / totalSteps) * 100) : 0;
   const progressBarStyle = { width: progressPct + '%' };

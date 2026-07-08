@@ -7,7 +7,7 @@ purpose: |
   list for autocomplete / validation.
 
   Layered fallback at module-eval time:
-    1. window.__platformData.rulePacks  — if `make platform-data`
+    1. window.__PLATFORM_DATA.rulePacks — if `make platform-data`
        generated assets/platform-data.json and jsx-loader pre-fetched
        it (production deployment path)
     2. inline catalog below — last-resort offline / standalone bundle
@@ -32,7 +32,7 @@ purpose: |
 
 const t = window.__t || ((zh, en) => en);
 
-const RULE_PACK_DATA = window.__platformData?.rulePacks || {
+const RULE_PACK_DATA = window.__PLATFORM_DATA?.rulePacks || {
   mariadb: { label: 'MariaDB/MySQL', category: 'database', defaults: { mysql_connections: { value: 80, unit: 'count', desc: 'Max connections warning' }, mysql_cpu: { value: 80, unit: '%', desc: 'CPU threads rate warning' } }, metrics: ['connections', 'cpu', 'memory', 'slow_queries', 'replication_lag', 'query_errors'] },
   postgresql: { label: 'PostgreSQL', category: 'database', defaults: { pg_connections: { value: 80, unit: '%', desc: 'Connection usage warning' }, pg_replication_lag: { value: 30, unit: 'seconds', desc: 'Replication lag warning' } }, metrics: ['connections', 'cache_hit', 'query_time', 'disk_usage', 'replication_lag'] },
   redis: { label: 'Redis', category: 'database', defaults: { redis_memory_used_bytes: { value: 4294967296, unit: 'bytes', desc: 'Memory usage warning' }, redis_connected_clients: { value: 200, unit: 'count', desc: 'Connected clients warning' } }, metrics: ['memory', 'evictions', 'connected_clients', 'keyspace_hits'] },

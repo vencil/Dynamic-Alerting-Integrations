@@ -7,7 +7,8 @@ lang: en
 related: [architecture-quiz, cicd-setup-wizard, capacity-planner]
 dependencies: [
   "deployment-wizard/fixtures/wizard-defaults.js",
-  "deployment-wizard/utils/generators.js"
+  "deployment-wizard/utils/generators.js",
+  "_common/hooks/useCopyToClipboard.js"
 ]
 ---
 
@@ -25,6 +26,7 @@ import React, { useState, useMemo } from 'react';
 // TRK-230e: ESM imports.
 import { DEPLOY_STEPS as STEPS, DEPLOY_TIERS as TIERS, DEPLOY_ENVIRONMENTS as ENVIRONMENTS, DEPLOY_TENANT_SIZES as TENANT_SIZES, DEPLOY_OAUTH2_PROVIDERS as OAUTH2_PROVIDERS, DEPLOY_RULE_PACKS as RULE_PACKS } from './deployment-wizard/fixtures/wizard-defaults.js';
 import { deployGenerateHelmValues as generateHelmValues } from './deployment-wizard/utils/generators.js';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -39,7 +41,7 @@ export default function DeploymentWizard() {
     packs: [],
   });
   const [showOutput, setShowOutput] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const { copied, copy, reset } = useCopyToClipboard();
   const [packWarning, setPackWarning] = useState(false);
 
   const steps = STEPS.map((s, i) => {
@@ -72,16 +74,12 @@ export default function DeploymentWizard() {
     setStep(0);
     setConfig({ tier: 'tier1', environment: 'staging', tenantSize: 'medium', auth: 'github', packs: [] });
     setShowOutput(false);
-    setCopied(false);
+    reset();
   };
 
   /* ── Copy to clipboard ── */
   const helmValues = useMemo(() => generateHelmValues(config), [config]);
-  const handleCopy = () => {
-    navigator.clipboard.writeText(helmValues);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  const handleCopy = () => copy(helmValues);
 
   /* ── Summary before output ── */
   const summary = useMemo(() => ({

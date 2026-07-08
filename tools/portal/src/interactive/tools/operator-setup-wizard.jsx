@@ -8,6 +8,7 @@ related: [deployment-wizard, cicd-setup-wizard, config-lint]
 dependencies: [
   "operator-setup-wizard/fixtures/wizard-defaults.js",
   "operator-setup-wizard/utils/generators.js",
+  "_common/hooks/useCopyToClipboard.js",
   "operator-setup-wizard/components/StepReview.jsx",
   "_common/components/ErrorBoundary.jsx"
 ]
