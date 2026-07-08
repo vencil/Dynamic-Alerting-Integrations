@@ -8,6 +8,7 @@ related: [alert-timeline, runbook-viewer, config-lint]
 ---
 
 import React, { useState, useMemo } from 'react';
+import { simulateWithDedup } from './_common/sim/alert-engine.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -39,54 +40,13 @@ const DEFAULT_METRICS = {
   redis_memory: 72,
 };
 
-function simulate(config, metrics, dedupEnabled) {
-  const firing = [];
-  const suppressed = [];
-  const ok = [];
-
-  Object.entries(config).forEach(([key, thresholdStr]) => {
-    const def = ALERT_DEFS[key];
-    if (!def) return;
-    const threshold = parseFloat(thresholdStr);
-    if (isNaN(threshold)) return;
-    const current = metrics[key];
-    if (current === undefined || current === '') return;
-    const val = parseFloat(current);
-
-    const wouldFire = def.inverted ? val < threshold : val > threshold;
-    if (wouldFire) {
-      firing.push({ key, def, threshold, current: val });
-    } else {
-      ok.push({ key, def, threshold, current: val });
-    }
-  });
-
-  // Severity dedup: if critical fires, suppress matching warning
-  if (dedupEnabled) {
-    const criticalFiring = new Set(firing.filter(f => f.def.severity === 'critical').map(f => f.key.replace('_critical', '')));
-    firing.forEach(f => {
-      if (f.def.severity === 'warning' && criticalFiring.has(f.key)) {
-        suppressed.push({ ...f, reason: 'Suppressed by severity dedup (critical alert active)' });
-      }
-    });
-    const suppressedKeys = new Set(suppressed.map(s => s.key));
-    return {
-      firing: firing.filter(f => !suppressedKeys.has(f.key)),
-      suppressed,
-      ok,
-    };
-  }
-
-  return { firing, suppressed: [], ok };
-}
-
 export default function AlertSimulator() {
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [metrics, setMetrics] = useState(DEFAULT_METRICS);
   const [dedupEnabled, setDedupEnabled] = useState(true);
   const [routingType, setRoutingType] = useState('slack');
 
-  const result = useMemo(() => simulate(config, metrics, dedupEnabled), [config, metrics, dedupEnabled]);
+  const result = useMemo(() => simulateWithDedup(config, metrics, dedupEnabled, ALERT_DEFS), [config, metrics, dedupEnabled]);
 
   const updateConfig = (key, val) => setConfig(prev => ({ ...prev, [key]: val }));
   const removeConfig = (key) => setConfig(prev => { const n = { ...prev }; delete n[key]; return n; });
