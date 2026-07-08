@@ -10,6 +10,7 @@ import shutil
 import sys
 
 import pytest
+import yaml
 
 _DX = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "tools", "dx")
 sys.path.insert(0, _DX)
@@ -146,7 +147,7 @@ class TestBuildPreviewTest:
         r = dict(_THRESHOLD, **{"for": "30m"})
         doc, *_ = rp.build_preview_test(r, "shop-a", 1500, rp.shape.recipe_id(r))
         assert "eval_time: 35m" in doc          # 30 + 5
-        assert "x40'" in doc                    # series length 30 + 10
+        assert "x40" in doc                     # series length 30 + 10
 
     def test_exact_selector_value_is_escaped(self):
         """An exact-selector value is escaped via the compiler's own SSOT, so
@@ -156,6 +157,21 @@ class TestBuildPreviewTest:
         doc, *_ = rp.build_preview_test(r, "shop-a", 1500, rp.shape.recipe_id(r))
         esc = rp.shape._escape_value('a"b')     # compiler's canonical escaping
         assert f'path="{esc}"' in doc
+
+    def test_single_quote_selector_value_round_trips(self):
+        """R5 regression: a selector value with a single quote (e.g. `it's`) is a
+        VALID recipe — the compiler interpolates it into the PromQL matcher. The old
+        hand-assembled single-quoted YAML scalar broke on it (the `'` closed the
+        scalar early → promtool parse error → a would-deploy recipe mislabeled
+        state:error). The doc must be valid YAML that round-trips the series to the
+        exact string promtool matches against."""
+        r = dict(_THRESHOLD, selectors={"path": "it's"})
+        doc, *_ = rp.build_preview_test(r, "shop-a", 1500, rp.shape.recipe_id(r))
+        loaded = yaml.safe_load(doc)            # the bug was a ParserError here
+        series = [s["series"] for s in loaded["tests"][0]["input_series"]]
+        # the metric series carries the exact selector, single quote intact — the
+        # same literal the compiled `path="it's"` matcher expects
+        assert any('path="it\'s"' in s for s in series)
 
     def test_absence_omits_metric_and_sizes_window(self):
         """absence emits ONLY the declaration (user_threshold) + metadata and does

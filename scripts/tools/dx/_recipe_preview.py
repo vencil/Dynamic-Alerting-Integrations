@@ -140,12 +140,16 @@ def build_preview_test(recipe, tenant, value, slug):
         ut_labels["mode"] = str(mode)
 
     def _md(n):
-        # constant tenant_metadata_info for the group_left enrichment (both shapes)
-        return (
-            f"      - series: 'tenant_metadata_info{{tenant=\"{tenant}\", "
-            f"runbook_url=\"http://rb/{tenant}\", owner=\"team-{tenant}\", tier=\"gold\"}}'\n"
-            f"        values: '1x{n}'\n"
-        )
+        # constant tenant_metadata_info for the group_left enrichment (both shapes).
+        # Routed through _labels (not hand-written) so its escaping matches the
+        # metric / user_threshold series exactly — one escaping path, no drift.
+        md_labels = {
+            "tenant": tenant,
+            "runbook_url": f"http://rb/{tenant}",
+            "owner": f"team-{tenant}",
+            "tier": "gold",
+        }
+        return {"series": f"tenant_metadata_info{_labels(md_labels)}", "values": f"1x{n}"}
 
     if rtype == "absence":
         # eval must clear BOTH the absence detection window AND `for:`. The metric
@@ -155,11 +159,10 @@ def build_preview_test(recipe, tenant, value, slug):
         win_min = _window_minutes(recipe["window"])   # caller pre-validates (not None)
         eval_min = win_min + for_min + 5
         n = eval_min + 5
-        input_series = (
-            f"      - series: 'user_threshold{_labels(ut_labels)}'\n"
-            f"        values: '{thr_value}x{n}'\n"
-            + _md(n)
-        )
+        input_series = [
+            {"series": f"user_threshold{_labels(ut_labels)}", "values": f"{thr_value}x{n}"},
+            _md(n),
+        ]
     else:
         # threshold / == : a flat constant series at the scenario value, held long
         # enough to clear `for:`.
@@ -167,27 +170,36 @@ def build_preview_test(recipe, tenant, value, slug):
         n = for_min + 10
         selectors = {str(k): v for k, v in (recipe.get("selectors") or {}).items()}
         metric_labels = {"tenant": tenant, **selectors}
-        input_series = (
-            f"      - series: '{recipe['metric']}{_labels(metric_labels)}'\n"
-            f"        values: '{value}x{n}'\n"
-            f"      - series: 'user_threshold{_labels(ut_labels)}'\n"
-            f"        values: '{thr_value}x{n}'\n"
-            + _md(n)
-        )
+        input_series = [
+            {"series": f"{recipe['metric']}{_labels(metric_labels)}", "values": f"{value}x{n}"},
+            {"series": f"user_threshold{_labels(ut_labels)}", "values": f"{thr_value}x{n}"},
+            _md(n),
+        ]
 
-    doc = (
-        "rule_files:\n"
-        "  - rule-pack-custom-alerts.yaml\n"
-        "evaluation_interval: 1m\n"
-        "tests:\n"
-        "  - interval: 1m\n"
-        "    input_series:\n"
-        + input_series +
-        "    alert_rule_test:\n"
-        f"      - eval_time: {eval_min}m\n"
-        f"        alertname: Custom_{slug}\n"
-        "        exp_alerts: []\n"
-    )
+    # Build the promtool test as a data structure and let yaml.safe_dump handle the
+    # OUTER YAML quoting — NOT a hand-assembled string. The series CONTENT is still
+    # produced by _labels/_escape_value so each `{k="v"}` matches the compiled rule's
+    # label literal; the dumper owns the scalar quoting around it. Hand-wrapping the
+    # series in a single-quoted YAML scalar (the old form) silently broke on a valid
+    # selector value that contains a single quote (e.g. `it's`): the `'` closed the
+    # scalar early → promtool parse error → a would-actually-deploy recipe was
+    # mislabeled state:error. safe_dump escapes per YAML rules, so any exact-selector
+    # value round-trips to the same string promtool sees. (`exp_alerts: []` = the
+    # inverted assert; sort_keys=False keeps promtool's expected key order.)
+    doc_obj = {
+        "rule_files": ["rule-pack-custom-alerts.yaml"],
+        "evaluation_interval": "1m",
+        "tests": [{
+            "interval": "1m",
+            "input_series": input_series,
+            "alert_rule_test": [{
+                "eval_time": f"{eval_min}m",
+                "alertname": f"Custom_{slug}",
+                "exp_alerts": [],
+            }],
+        }],
+    }
+    doc = yaml.safe_dump(doc_obj, sort_keys=False, allow_unicode=True)
     return doc, severity, mode, thr_value
 
 
