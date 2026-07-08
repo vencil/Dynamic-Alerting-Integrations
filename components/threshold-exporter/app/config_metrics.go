@@ -95,7 +95,6 @@ type configMetrics struct {
 var (
 	configMetricsOnce sync.Once
 	configMetricsInst *configMetrics
-	configMetricsMu   sync.RWMutex
 )
 
 // newConfigMetrics builds a fresh set of metrics without registering them.
@@ -174,25 +173,14 @@ func newConfigMetrics() *configMetrics {
 }
 
 // getConfigMetrics returns the active instance, allocating the default on
-// first use. Safe for concurrent access.
+// first use. Safe for concurrent access: sync.Once guarantees the write in
+// Do happens-before every return, so no additional mutex is needed (the
+// instance is never reassigned — setConfigMetrics was removed in #4a).
 func getConfigMetrics() *configMetrics {
-	configMetricsMu.RLock()
-	inst := configMetricsInst
-	configMetricsMu.RUnlock()
-	if inst != nil {
-		return inst
-	}
 	configMetricsOnce.Do(func() {
-		configMetricsMu.Lock()
-		if configMetricsInst == nil {
-			configMetricsInst = newConfigMetrics()
-		}
-		configMetricsMu.Unlock()
+		configMetricsInst = newConfigMetrics()
 	})
-	configMetricsMu.RLock()
-	inst = configMetricsInst
-	configMetricsMu.RUnlock()
-	return inst
+	return configMetricsInst
 }
 
 // registerConfigMetrics installs all metrics on the given registry.
@@ -213,25 +201,26 @@ func registerConfigMetrics(reg prometheus.Registerer, m *configMetrics) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Method-form helpers on *configMetrics (foundation for #4a).
+// Method-form helpers on *configMetrics (#4a).
 //
-// Each top-level helper below has a sibling method on the receiver so
-// callers that own a *configMetrics instance can bump that instance's
-// counter directly — no global indirection. ConfigManager (after the
-// foundation lands) holds its own *configMetrics field; tests inject
-// a fresh instance via WithMetrics + assert against it without racing
-// the package-level singleton.
+// Every metric mutation goes through a method on the receiver so the
+// caller bumps a specific instance's counter with no global indirection.
+// The two consumers are: (1) ConfigManager, which holds its own
+// *configMetrics field and reaches it via m.getMetrics() — tests inject a
+// fresh instance via SetMetrics and assert against it without racing the
+// package-level singleton; (2) the top-level scanners (scanDirHierarchical,
+// flat_scanner), which receive a *configMetrics parameter that production
+// wiring fills from getConfigMetrics() and tests fill with freshMetrics.
 //
-// Top-level functions stay for callers that don't own a ConfigManager
-// (collector.go, top-level scanners called outside ConfigManager).
-// They delegate to getConfigMetrics().<method>() — same behavior as
-// before, just one indirection deeper.
+// There are deliberately NO top-level singleton wrapper functions here.
+// An earlier revision kept a `func Name(...) { getConfigMetrics().Name() }`
+// twin per method; they were removed in #4a because writing to the global
+// singleton bypasses the injection seam — collector_test.go documents a
+// real bug where the first Collect used the top-level PublishTenantMetrics-
+// OverLimit form and silently wrote past the injected instance. Reading the
+// singleton is confined to the wiring call sites above; mutation is
+// method-only so the footgun cannot recur.
 // ─────────────────────────────────────────────────────────────────────
-
-// IncParseFailure (method form) — see top-level IncParseFailure for docs.
-func (cm *configMetrics) IncParseFailure(fileBasename string) {
-	cm.parseFailures.WithLabelValues(fileBasename).Inc()
-}
 
 // IncParseFailure bumps the parse-failure counter for a specific file
 // basename. Called from scanDirHierarchical whenever yaml.Unmarshal
@@ -239,11 +228,20 @@ func (cm *configMetrics) IncParseFailure(fileBasename string) {
 // (not full path) is used as the label to keep cardinality bounded
 // in practice — same tenant name across domains sums to one series.
 // v2.8.0 A-8d (Issue #52-adjacent observability gap from Gemini R3).
-func IncParseFailure(fileBasename string) {
-	getConfigMetrics().IncParseFailure(fileBasename)
+func (cm *configMetrics) IncParseFailure(fileBasename string) {
+	cm.parseFailures.WithLabelValues(fileBasename).Inc()
 }
 
-// ObserveScanDuration (method form) — see top-level for docs.
+// ObserveScanDuration starts a timer and returns a stop function that
+// records the elapsed time into da_config_scan_duration_seconds. Idiomatic
+// use:
+//
+//	defer m.ObserveScanDuration()()
+//
+// Returns the "stop" closure so the caller can also record duration
+// manually when needed (e.g., for log correlation). Using time.Since
+// directly (vs. prometheus.NewTimer) lets us share the t0 for both the
+// metric and the debug log without double-observing.
 func (cm *configMetrics) ObserveScanDuration() func() {
 	t0 := time.Now()
 	return func() {
@@ -251,34 +249,16 @@ func (cm *configMetrics) ObserveScanDuration() func() {
 	}
 }
 
-// ObserveScanDuration starts a timer and returns a stop function that
-// records the elapsed time into da_config_scan_duration_seconds. Idiomatic
-// use:
-//
-//	defer ObserveScanDuration()()
-//
-// Returns the "stop" closure so the caller can also record duration
-// manually when needed (e.g., for log correlation). Using time.Since
-// directly (vs. prometheus.NewTimer) lets us share the t0 for both the
-// metric and the debug log without double-observing.
-func ObserveScanDuration() func() {
-	return getConfigMetrics().ObserveScanDuration()
-}
-
-// IncReloadTrigger (method form).
-func (cm *configMetrics) IncReloadTrigger(reason string) {
-	cm.reloadTriggers.WithLabelValues(reason).Inc()
-}
-
 // IncReloadTrigger bumps the reload counter for the given reason. Safe
 // to call with reasons not in the canonical set — Prometheus CounterVec
 // will happily create a new label value (operator can watch for drift
 // from the documented set in config_debounce.go).
-func IncReloadTrigger(reason string) {
-	getConfigMetrics().IncReloadTrigger(reason)
+func (cm *configMetrics) IncReloadTrigger(reason string) {
+	cm.reloadTriggers.WithLabelValues(reason).Inc()
 }
 
-// IncReloadTriggerBy (method form).
+// IncReloadTriggerBy bumps the counter by N (for the batch case where
+// diffAndReload reloads k tenants all with the same reason).
 func (cm *configMetrics) IncReloadTriggerBy(reason string, n int) {
 	if n <= 0 {
 		return
@@ -286,24 +266,14 @@ func (cm *configMetrics) IncReloadTriggerBy(reason string, n int) {
 	cm.reloadTriggers.WithLabelValues(reason).Add(float64(n))
 }
 
-// IncReloadTriggerBy bumps the counter by N (for the batch case where
-// diffAndReload reloads k tenants all with the same reason).
-func IncReloadTriggerBy(reason string, n int) {
-	getConfigMetrics().IncReloadTriggerBy(reason, n)
-}
-
-// IncDefaultsNoop (method form).
+// IncDefaultsNoop bumps the no-op counter. Called once per dependent
+// tenant whose merged_hash didn't move after a defaults file changed.
 func (cm *configMetrics) IncDefaultsNoop() {
 	cm.defaultsNoop.Inc()
 }
 
-// IncDefaultsNoop bumps the no-op counter. Called once per dependent
-// tenant whose merged_hash didn't move after a defaults file changed.
-func IncDefaultsNoop() {
-	getConfigMetrics().IncDefaultsNoop()
-}
-
-// IncDefaultsNoopBy (method form).
+// IncDefaultsNoopBy bumps the no-op counter by N. Used by diffAndReload
+// which computes the batch size without per-tenant allocations.
 func (cm *configMetrics) IncDefaultsNoopBy(n int) {
 	if n <= 0 {
 		return
@@ -311,46 +281,22 @@ func (cm *configMetrics) IncDefaultsNoopBy(n int) {
 	cm.defaultsNoop.Add(float64(n))
 }
 
-// IncDefaultsNoopBy bumps the no-op counter by N. Used by diffAndReload
-// which computes the batch size without per-tenant allocations.
-func IncDefaultsNoopBy(n int) {
-	getConfigMetrics().IncDefaultsNoopBy(n)
-}
-
-// IncDefaultsShadowed (method form).
-func (cm *configMetrics) IncDefaultsShadowed() {
-	cm.defaultsShadowed.Inc()
-}
-
 // IncDefaultsShadowed bumps the shadowed-defaults counter — called once
 // per dependent tenant whose merged_hash didn't move because every
 // changed defaults key is overridden by that tenant's source YAML
 // (v2.8.0 Issue #61). Distinct from IncDefaultsNoop, which now counts
 // only cosmetic edits.
-func IncDefaultsShadowed() {
-	getConfigMetrics().IncDefaultsShadowed()
+func (cm *configMetrics) IncDefaultsShadowed() {
+	cm.defaultsShadowed.Inc()
 }
 
-// IncDefaultsShadowedBy (method form).
+// IncDefaultsShadowedBy bumps the shadowed counter by N for the batch
+// case (mirror of IncDefaultsNoopBy).
 func (cm *configMetrics) IncDefaultsShadowedBy(n int) {
 	if n <= 0 {
 		return
 	}
 	cm.defaultsShadowed.Add(float64(n))
-}
-
-// IncDefaultsShadowedBy bumps the shadowed counter by N for the batch
-// case (mirror of IncDefaultsNoopBy).
-func IncDefaultsShadowedBy(n int) {
-	getConfigMetrics().IncDefaultsShadowedBy(n)
-}
-
-// ObserveBlastRadius (method form).
-func (cm *configMetrics) ObserveBlastRadius(reason, scope, effect string, n int) {
-	if n <= 0 {
-		return
-	}
-	cm.blastRadius.WithLabelValues(reason, scope, effect).Observe(float64(n))
 }
 
 // ObserveBlastRadius records one (reason, scope, effect) bucket
@@ -360,29 +306,19 @@ func (cm *configMetrics) ObserveBlastRadius(reason, scope, effect string, n int)
 // n <= 0 is silently no-op (caller can pass an empty bucket without
 // guarding) so the per-tick group-by emission loop in diffAndReload
 // can iterate over a sparse map without conditional logic.
-func ObserveBlastRadius(reason, scope, effect string, n int) {
-	getConfigMetrics().ObserveBlastRadius(reason, scope, effect, n)
-}
-
-// ObserveReloadDuration (method form).
-func (cm *configMetrics) ObserveReloadDuration(d time.Duration) {
-	cm.reloadDuration.Observe(d.Seconds())
+func (cm *configMetrics) ObserveBlastRadius(reason, scope, effect string, n int) {
+	if n <= 0 {
+		return
+	}
+	cm.blastRadius.WithLabelValues(reason, scope, effect).Observe(float64(n))
 }
 
 // ObserveReloadDuration records one diffAndReload elapsed-time sample
 // (v2.8.0 B-3). Called from fireDebounced wrapper around diffAndReload
 // and from the synchronous-fallback path in triggerDebouncedReload so
 // every reload contributes one sample regardless of debounce mode.
-func ObserveReloadDuration(d time.Duration) {
-	getConfigMetrics().ObserveReloadDuration(d)
-}
-
-// ObserveDebounceBatch (method form).
-func (cm *configMetrics) ObserveDebounceBatch(n int) {
-	if n < 0 {
-		return
-	}
-	cm.debounceBatch.Observe(float64(n))
+func (cm *configMetrics) ObserveReloadDuration(d time.Duration) {
+	cm.reloadDuration.Observe(d.Seconds())
 }
 
 // ObserveDebounceBatch records one debounce-window batch-size sample
@@ -391,13 +327,11 @@ func (cm *configMetrics) ObserveDebounceBatch(n int) {
 // does NOT contribute to this histogram — it has no batching semantics
 // to observe, and folding "1" samples in would skew the p50 baseline
 // that ops use to detect debounce regressions.
-func ObserveDebounceBatch(n int) {
-	getConfigMetrics().ObserveDebounceBatch(n)
-}
-
-// SetLastScanComplete (method form).
-func (cm *configMetrics) SetLastScanComplete(t time.Time) {
-	cm.lastScanComplete.Set(float64(t.Unix()))
+func (cm *configMetrics) ObserveDebounceBatch(n int) {
+	if n < 0 {
+		return
+	}
+	cm.debounceBatch.Observe(float64(n))
 }
 
 // SetLastScanComplete records the wall-clock unix seconds at successful
@@ -409,13 +343,8 @@ func (cm *configMetrics) SetLastScanComplete(t time.Time) {
 // value so a transient scan failure does not look like a successful
 // completion. Tests that want a clean baseline observe via freshMetrics
 // + m.SetMetrics injection (see config_metrics_test.go).
-func SetLastScanComplete(t time.Time) {
-	getConfigMetrics().SetLastScanComplete(t)
-}
-
-// SetLastReloadComplete (method form).
-func (cm *configMetrics) SetLastReloadComplete(t time.Time) {
-	cm.lastReloadComplete.Set(float64(t.Unix()))
+func (cm *configMetrics) SetLastScanComplete(t time.Time) {
+	cm.lastScanComplete.Set(float64(t.Unix()))
 }
 
 // SetLastReloadComplete records the wall-clock unix seconds at the
@@ -423,13 +352,8 @@ func (cm *configMetrics) SetLastReloadComplete(t time.Time) {
 // E2E harness reads this gauge as anchor T2.
 //
 // Called only on success path — see SetLastScanComplete docstring.
-func SetLastReloadComplete(t time.Time) {
-	getConfigMetrics().SetLastReloadComplete(t)
-}
-
-// IncFreeOSMemory (method form).
-func (cm *configMetrics) IncFreeOSMemory() {
-	cm.freeOSMemory.Inc()
+func (cm *configMetrics) SetLastReloadComplete(t time.Time) {
+	cm.lastReloadComplete.Set(float64(t.Unix()))
 }
 
 // IncFreeOSMemory bumps the FreeOSMemory-call counter — called once per
@@ -437,8 +361,8 @@ func (cm *configMetrics) IncFreeOSMemory() {
 // The counter stays at 0 for the default (lever-off) deployment, so a
 // non-zero value is itself the signal that the experimental return-to-OS
 // path is active.
-func IncFreeOSMemory() {
-	getConfigMetrics().IncFreeOSMemory()
+func (cm *configMetrics) IncFreeOSMemory() {
+	cm.freeOSMemory.Inc()
 }
 
 // PublishTenantMetricsOverLimit replaces the entire da_tenant_metrics_over_limit
@@ -463,10 +387,4 @@ func (cm *configMetrics) PublishTenantMetricsOverLimit(perTenant map[string]int)
 	for tenant, magnitude := range perTenant {
 		cm.tenantMetricsOverLimit.WithLabelValues(tenant).Set(float64(magnitude))
 	}
-}
-
-// PublishTenantMetricsOverLimit is the top-level singleton-form helper —
-// see method docstring for semantics. Called by ThresholdCollector.Collect.
-func PublishTenantMetricsOverLimit(perTenant map[string]int) {
-	getConfigMetrics().PublishTenantMetricsOverLimit(perTenant)
 }

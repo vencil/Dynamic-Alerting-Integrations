@@ -10,6 +10,7 @@ package config
 // inherited from ResolveEffective and tested there.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -216,6 +217,20 @@ func TestScopeEffective_DuplicateTenant(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "duplicate tenant ID") {
 		t.Errorf("error %q should call out duplicate", err.Error())
+	}
+	// C6-A (#127): the walker now returns a typed *DuplicateTenantError so
+	// library consumers can errors.As it instead of string-matching. Pin
+	// that the type unwraps at the pkg/config layer AND that its fields
+	// carry the offending tenant + both files (paths differ, non-empty).
+	var dupErr *DuplicateTenantError
+	if !errors.As(err, &dupErr) {
+		t.Fatalf("error should unwrap to *DuplicateTenantError, got %T: %v", err, err)
+	}
+	if dupErr.TenantID != "tenant-x" {
+		t.Errorf("DuplicateTenantError.TenantID = %q, want tenant-x", dupErr.TenantID)
+	}
+	if dupErr.PathA == "" || dupErr.PathB == "" || dupErr.PathA == dupErr.PathB {
+		t.Errorf("DuplicateTenantError paths malformed: A=%q B=%q", dupErr.PathA, dupErr.PathB)
 	}
 }
 

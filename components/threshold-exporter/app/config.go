@@ -291,6 +291,14 @@ func (m *ConfigManager) Mode() string {
 // logHeader is the human-readable banner inserted into the
 // "Config loaded (...)" log line.
 func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan *flatScanState, logHeader string) {
+	// Detect config source mode and git commit (v2.3.0). Refreshed on
+	// every commit because git-sync may rotate .git-revision between
+	// reloads. Done BEFORE the lock so the .git-revision disk read never
+	// blocks scrape readers; the results are then written under m.mu so
+	// GetConfigInfo (RLock) never observes an unsynchronised write, and
+	// config + config-info land in one consistent lock window.
+	configSource, gitCommit := m.detectConfigSource()
+
 	m.mu.Lock()
 	m.config = cfg
 	m.loaded = true
@@ -299,12 +307,9 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	if flatScan != nil {
 		m.flat = *flatScan
 	}
+	m.configSource = configSource
+	m.gitCommit = gitCommit
 	m.mu.Unlock()
-
-	// Detect config source mode and git commit (v2.3.0). Refreshed on
-	// every commit because git-sync may rotate .git-revision between
-	// reloads.
-	m.detectConfigSource()
 
 	logConfigStats(m.getLogger(), cfg, logHeader)
 }
@@ -1016,9 +1021,15 @@ func (m *ConfigManager) GetConfigInfo() ConfigInfo {
 //  3. Default → "configmap"
 //
 // Called on initial load and each reload to pick up git-sync rotations.
-func (m *ConfigManager) detectConfigSource() {
-	gitCommit := ""
-	configSource := "configmap"
+//
+// Pure w.r.t. ConfigManager state: it reads only the immutable m.path /
+// m.isDir (fixed at construction) plus the filesystem/env, and RETURNS
+// the detected values instead of writing m.configSource / m.gitCommit
+// directly. commitConfig writes them under m.mu so concurrent
+// GetConfigInfo readers never race an unsynchronised field write.
+func (m *ConfigManager) detectConfigSource() (configSource, gitCommit string) {
+	gitCommit = ""
+	configSource = "configmap"
 
 	// Check for .git-revision file (written by git-sync sidecar)
 	var searchDir string
@@ -1043,6 +1054,5 @@ func (m *ConfigManager) detectConfigSource() {
 		}
 	}
 
-	m.configSource = configSource
-	m.gitCommit = gitCommit
+	return configSource, gitCommit
 }

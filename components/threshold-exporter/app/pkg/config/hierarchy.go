@@ -162,10 +162,14 @@ func ResolveEffective(configDir, tenantID string) (*EffectiveConfig, error) {
 			if tenantFile != "" && tenantFile != clean {
 				// Duplicate definition across files — same error-loud principle
 				// as the exporter's scanner. Returning via the walk-closure
-				// needs care: filepath.WalkDir will propagate this out.
-				return fmt.Errorf(
-					"duplicate tenant ID %q: defined in both %s and %s",
-					tenantID, tenantFile, clean)
+				// needs care: filepath.WalkDir will propagate this out. Typed
+				// so library callers can errors.As it (#127 C6-A); the Error()
+				// string is byte-identical to the former fmt.Errorf.
+				return &DuplicateTenantError{
+					TenantID: tenantID,
+					PathA:    tenantFile,
+					PathB:    clean,
+				}
 			}
 			tenantFile = clean
 			tenantBytes = data
