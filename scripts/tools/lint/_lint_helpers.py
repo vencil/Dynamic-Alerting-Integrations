@@ -62,6 +62,14 @@ BUILD_EXEMPT = frozenset({
     # not a `da-tools <cmd>` operator CLI. Baked into the image but exempt from
     # COMMAND_MAP; the `_` prefix marks it non-dispatched.
     "_federation_revocation_reconciler.py",
+    # #719 — shared SoT extractor for the threshold observed-map. Library
+    # imported by threshold_recommend.py (and transitively threshold_govern.py),
+    # not a CLI command. Ships together with its data file
+    # metric_observed_map.yaml (same-dir lookup via DEFAULT_MAP_PATH).
+    "_observed_map_lib.py",
+    # #719 — data file for _observed_map_lib.py (non-.py entries are already
+    # filtered by the orphan check; listed for symmetry with metric-dictionary.yaml).
+    "metric_observed_map.yaml",
 })
 
 
@@ -116,6 +124,35 @@ def parse_build_sh_tools(path: Path | None = None) -> Set[str]:
                 name = stripped.strip("\"'(),").strip()
                 if name:
                     tools.add(os.path.basename(name))
+    return tools
+
+
+def parse_build_sh_tool_paths(path: Path | None = None) -> Set[str]:
+    """Parse TOOL_FILES array from build.sh, keeping relative paths.
+
+    Unlike :func:`parse_build_sh_tools` (basenames, for set comparison with
+    COMMAND_MAP), this preserves the ``scripts/tools/``-relative path as
+    written in build.sh (e.g. ``"ops/threshold_recommend.py"``) so callers
+    can open and inspect the source files (the transitive underscore-import
+    scan in check_build_completeness.py needs file contents, not just names).
+    """
+    path = path or BUILD_SH_PATH
+    tools: Set[str] = set()
+    in_block = False
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if "TOOL_FILES=(" in stripped:
+                in_block = True
+                continue
+            if in_block:
+                if stripped == ")":
+                    break
+                if not stripped or stripped.startswith("#"):
+                    continue
+                name = stripped.strip("\"'(),").strip()
+                if name:
+                    tools.add(name)
     return tools
 
 

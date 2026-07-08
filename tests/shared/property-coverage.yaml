@@ -176,6 +176,7 @@ modules:
     covered:
       - parse_command_map
       - parse_build_sh_tools
+      - parse_build_sh_tool_paths
     excluded:
       parse_command_map_keys: "Trivial wrapper around parse_command_map; covered transitively"
       resolve_diff_base: "Env-var lookup + git rev-parse subprocess wrapper; integration-tested via check_codename_leak --ci runs (smoke verified missing-base error path)"

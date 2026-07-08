@@ -109,6 +109,10 @@ TOOL_FILES=(
     ops/notification_tester.py
     ops/threshold_recommend.py
     ops/threshold_govern.py
+    # #719 — shared observed-map extractor lib; top-level import of
+    # threshold_recommend.py (threshold_govern.py imports threshold_recommend
+    # → transitive). Ships together with ops/metric_observed_map.yaml (below).
+    ops/_observed_map_lib.py
     ops/byo_check.py
     ops/federation_check.py
     ops/grafana_import.py
@@ -180,6 +184,10 @@ TOOL_FILES=(
     _lib_godispatch.py
     # Data files
     metric-dictionary.yaml
+    # #719 — SoT map read by _observed_map_lib.py via same-dir lookup
+    # (DEFAULT_MAP_PATH); a missing file fail-quiets load_observed_map()
+    # to {} (every key silently skipped), so it MUST ship with the lib.
+    ops/metric_observed_map.yaml
 )
 
 for f in "${TOOL_FILES[@]}"; do
@@ -198,7 +206,9 @@ echo "  Copied ${#TOOL_FILES[@]} files from scripts/tools/"
 # everything is flat, so remove the parent-dir line to keep images clean.
 for py in "$SCRIPT_DIR"/tools/*.py; do
     [ -f "$py" ] || continue
-    sed -i "/sys\.path\.insert.*os\.path\.join.*_THIS_DIR.*'\.\.')/d" "$py"
+    # Match both quote styles ('..' and "..") — _observed_map_lib.py uses
+    # double quotes; single-quote-only left its parent-dir line unstripped.
+    sed -i "/sys\.path\.insert.*os\.path\.join.*_THIS_DIR.*[\"']\.\.[\"'])/d" "$py"
 done
 echo "  Stripped repo-layout sys.path from Docker copies"
 
