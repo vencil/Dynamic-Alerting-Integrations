@@ -2818,7 +2818,7 @@ da-tools threshold-recommend --generate-observed-map
 
 > **#720 STAGE-1 (`--export-patch`)**: emits a `tenants:`-rooted conf.d override (only keys with an actionable recommendation; within-margin / skipped keys are listed as comments). The operator reviews it, merges it into the matching `conf.d/<tenant>.yaml`, and opens a PR → the existing `backtest.yaml` CI posts the old-vs-new firing-count risk report (the STAGE-1 value basis). The tool does **not** edit conf.d in place (the heavier in-place ruamel round-trip is deferred — #721).
 >
-> **#719 data source**: recommendations come from the observed recording rule each threshold key is actually compared against in its rule-pack alert (via `scripts/tools/ops/metric_observed_map.yaml`), NOT the configured `user_threshold`. Keys that are unmapped / lower-bound (<) / version-aware / pending manual resolution are fail-loud skipped with a reason. The observed-map is produced by `--generate-observed-map` and guarded by a CI drift-check.
+> **#719 data source**: recommendations come from the observed recording rule each threshold key is actually compared against in its rule-pack alert (via `scripts/tools/ops/metric_observed_map.yaml`), NOT the configured `user_threshold`. Keys that are unmapped / lower-bound (<) / version-aware / pending manual resolution are fail-loud skipped with a reason. The observed-map is produced by `--generate-observed-map` and guarded by a CI drift-check. Regeneration is **merge-preserve** (#916): a still-valid human-resolved `observed_series` survives rule-pack edits (an invalidated pick falls back to needs_review; a removed key is dropped), and the summary reports preserved/demoted/dropped counts with details on stderr WARN.
 
 **Confidence Levels**
 

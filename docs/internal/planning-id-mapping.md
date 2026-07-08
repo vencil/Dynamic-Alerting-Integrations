@@ -163,6 +163,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-328 | [#964](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/964) | VM parity gate count/time masking — rogue-check 只比 `(alert,direction)` 集合、漏既有分歧惡化成更多 failing assertion（gate-hardening；count-vs-time-vs-tolerance 設計取捨；defer-with-trigger 提議；#958 Gemini ext-review ①） | [#947](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/947) |
 | TRK-329 | [#978](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/978) | percent-render 範式守門 — renderer↔fixture 耦合 lint + 慣例 codify（`*100`/`humanizePercentage` 混用防呆、防 8500% 誤渲染；defer-with-trigger；#975 Gemini ext-review 盲區①） | [#947](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/947) |
 | TRK-330 | [#985](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/985) | `TenantHAReplicasDegraded` or-LHS masking — 兩臂 `max by(tenant)` label set 相同、SS+Deploy 同時降級只見 StatefulSet（不漏 page、傷 triage 可見度；修法＝`or` 前注入 `workload_kind` label + mutation 回歸案；#982 Gemini ext-review 點 B） | [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) |
+| TRK-331 | [#916](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/916) | threshold_recommend 覆蓋缺口：下界 metric 語意分流 + observed-map merge-preserve | [#721](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/721) |
 
 ## 不在 mapping 範圍
 

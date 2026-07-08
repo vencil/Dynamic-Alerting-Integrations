@@ -23,7 +23,11 @@ What it checks (via _observed_map_lib.check_consistency)
 - **infos (OK)**: known-deferred keys (KNOWN_DEFERRED allowlist, e.g. the
   version-aware ``container_cpu`` / ``container_memory`` whose comparison lives
   in a ``:core`` recording rule, deferred to #916). Printed as INFO,
-  NEVER an error — otherwise this bugfix could never merge.
+  NEVER an error — otherwise this bugfix could never merge. EXCEPTION
+  (#916 Item B exit-lock): the *deferral itself* is enforced — a deferred key
+  that becomes alert-extractable, disappears from the rule packs, or is
+  hand-added to the map IS a hard error (``enforce_known_deferred=True`` on the
+  real-map path), so the allowlist can't silently rot.
 - **orphan_thresholds (WARN)**: a ``record: tenant:alert_threshold:<key>`` with
   NO alert referencing it — a rule-pack gap, surfaced for the pack authors, not
   a map bug.
@@ -63,10 +67,18 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 
 def run_check() -> dict[str, list[str]]:
-    """Load the committed map + rule packs and return the consistency result."""
+    """Load the committed map + rule packs and return the consistency result.
+
+    Passes ``enforce_known_deferred=True`` so the KNOWN_DEFERRED allowlist is
+    exit-locked on the REAL map (a deferred key becoming alert-extractable /
+    disappearing from the packs / hand-added to the map is a hard error). The
+    hermetic unit tests call ``check_consistency`` without this flag.
+    """
     observed_map = observed_map_lib.load_observed_map()
     packs = observed_map_lib.default_pack_paths()
-    return observed_map_lib.check_consistency(observed_map, packs)
+    return observed_map_lib.check_consistency(
+        observed_map, packs, enforce_known_deferred=True
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

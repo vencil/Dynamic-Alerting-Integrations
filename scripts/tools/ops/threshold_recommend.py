@@ -785,9 +785,11 @@ def main() -> None:
         action="store_true",
         help=(
             "重新從 rule-packs/*.yaml 產生 observed-map 草稿（#719）；"
+            "merge 既有 map 保留人工 resolve 的 observed_series（#916）；"
             "needs_review 項目須人工 resolve" if _LANG == 'zh' else
             "Regenerate the observed-map draft from rule-packs/*.yaml (#719); "
-            "needs_review entries require manual resolution"
+            "merges over the existing map to preserve human-resolved observed_series "
+            "(#916); needs_review entries require manual resolution"
         ),
     )
     parser.add_argument(
@@ -847,11 +849,17 @@ def main() -> None:
             print(f"已產生 observed-map: {summary['path']}")
             print(f"  共 {summary['total']} 個 key："
                   f"{summary['clean']} clean / {summary['needs_review']} needs_review")
+            print(f"  merge：preserved {summary.get('preserved', 0)} / "
+                  f"demoted {summary.get('demoted', 0)} / dropped {summary.get('dropped', 0)}"
+                  "（人工 resolve 保留 / 失效降級 / 已移除；細節見 stderr WARN）")
             print("  needs_review 項目須人工 resolve（挑 observed_series / 確認方向）後才會被推薦使用。")
         else:
             print(f"Wrote observed-map: {summary['path']}")
             print(f"  {summary['total']} keys: "
                   f"{summary['clean']} clean / {summary['needs_review']} needs_review")
+            print(f"  merge: preserved {summary.get('preserved', 0)} / "
+                  f"demoted {summary.get('demoted', 0)} / dropped {summary.get('dropped', 0)} "
+                  "(see stderr WARN for details)")
             print("  needs_review entries require manual resolution before use.")
         return
 
