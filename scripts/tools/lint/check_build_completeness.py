@@ -56,6 +56,12 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 # relative to this dir; cp flattens them into the image's /app).
 TOOLS_SRC = REPO_ROOT / "scripts" / "tools"
 
+# Subdirectories under scripts/tools/ that hold shipped sibling modules a tool
+# may import ("" = the tools root itself). The underscore-import scan resolves
+# each imported `_xxx` against these; extend this list when a new tools
+# subdirectory appears so the scan's scope stays complete.
+_SIBLING_MODULE_DIRS = ("", "ops", "dx", "lint")
+
 # 資料檔無法用 import 掃 → 顯式列管（module → data files 皆為 basename，
 # 需同時出現在 TOOL_FILES）。只收「已驗證同目錄尋址」的組合：
 #   - _observed_map_lib.py: DEFAULT_MAP_PATH = <lib 同目錄>/metric_observed_map.yaml，
@@ -163,11 +169,9 @@ def check_underscore_imports(
             continue
         for name in sorted(imported):
             mod_file = f"{name}.py"
-            candidates = (
-                tools_src / mod_file,
-                tools_src / "ops" / mod_file,
-                tools_src / "dx" / mod_file,
-                tools_src / "lint" / mod_file,
+            candidates = tuple(
+                (tools_src / sub / mod_file) if sub else (tools_src / mod_file)
+                for sub in _SIBLING_MODULE_DIRS
             )
             if not any(c.is_file() for c in candidates):
                 continue  # 非 repo sibling（stdlib/外部）→ 不在守備範圍

@@ -105,26 +105,11 @@ def parse_command_map_keys(path: Path | None = None) -> Set[str]:
 def parse_build_sh_tools(path: Path | None = None) -> Set[str]:
     """Parse TOOL_FILES array from build.sh.
 
-    Returns set of basenames (e.g. {"check_alert.py", ...}).
+    Returns set of basenames (e.g. {"check_alert.py", ...}). Delegates the
+    actual parsing to :func:`parse_build_sh_tool_paths` (the single source of
+    truth) and applies ``basename`` here, so the two APIs cannot drift.
     """
-    path = path or BUILD_SH_PATH
-    tools: Set[str] = set()
-    in_block = False
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            stripped = line.strip()
-            if "TOOL_FILES=(" in stripped:
-                in_block = True
-                continue
-            if in_block:
-                if stripped == ")":
-                    break
-                if not stripped or stripped.startswith("#"):
-                    continue
-                name = stripped.strip("\"'(),").strip()
-                if name:
-                    tools.add(os.path.basename(name))
-    return tools
+    return {os.path.basename(p) for p in parse_build_sh_tool_paths(path)}
 
 
 def parse_build_sh_tool_paths(path: Path | None = None) -> Set[str]:

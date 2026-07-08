@@ -1791,6 +1791,20 @@ class TestParseBuildShToolPathsProperties:
         assert lh.parse_build_sh_tool_paths(f) == {"ops/foo.py"}
         assert lh.parse_build_sh_tools(f) == {"foo.py"}
 
+    def test_strips_quotes(self, tmp_path):
+        # Property: single- and double-quoted entries are unquoted (the parser
+        # relies on `.strip("\"'(),")`); both APIs inherit this via delegation.
+        f = tmp_path / "build.sh"
+        f.write_text(
+            'TOOL_FILES=(\n'
+            '  "ops/foo.py"\n'
+            "  'dx/bar.py'\n"
+            ')\n',
+            encoding="utf-8",
+        )
+        assert lh.parse_build_sh_tool_paths(f) == {"ops/foo.py", "dx/bar.py"}
+        assert lh.parse_build_sh_tools(f) == {"foo.py", "bar.py"}
+
 
 # ---------------------------------------------------------------------------
 # latest_version_from_changelog — newest `## [vX.Y.Z]` heading from CHANGELOG
