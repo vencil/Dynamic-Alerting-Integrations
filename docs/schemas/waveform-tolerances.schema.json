@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "waveform-tolerances.schema.json",
+  "title": "Waveform temporal-tolerance matrix (ADR-030 D5, PR-3)",
+  "description": "Two-tier tolerance input for waveform_score.py (ADR-030 D5 anti-gerrymandering): `defaults` is the pre-committed severity→ceiling matrix (locked BEFORE seeing any divergence); `overrides` are the per-alert-class negotiated exceptions — each MUST carry justification + approved_by (audit trail) and the tool enforces tolerance_s <= the declared severity row's ceiling. `carve_outs` lists compliance fault-classes excluded from the catch-rate denominator (dual-control human review path, D1/OQ1). Concrete tolerance values are engagement inputs — none are documented here (R2-2).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["defaults"],
+  "properties": {
+    "defaults": {
+      "type": "object",
+      "description": "severity → tolerance ceiling in seconds. The `default` key is REQUIRED — it is the fallback row for alerts without a severity label (and for unknown severities).",
+      "required": ["default"],
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_-]*$" },
+      "additionalProperties": { "type": "number", "minimum": 0 }
+    },
+    "overrides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["alert_class", "severity", "tolerance_s", "justification", "approved_by"],
+        "properties": {
+          "alert_class": {
+            "type": "string",
+            "minLength": 1,
+            "description": "alertname this override applies to."
+          },
+          "severity": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Declared ceiling row (must be a key of `defaults`). The tool enforces tolerance_s <= defaults[severity] at load time, and fails loud at scoring time if the live alert's severity label contradicts the declaration."
+          },
+          "tolerance_s": { "type": "number", "minimum": 0 },
+          "justification": { "type": "string", "minLength": 1 },
+          "approved_by": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "carve_outs": {
+      "type": "array",
+      "description": "Compliance fault-classes (the waveform pack signature's `fault_class` slug — the case-side identity that exists BEFORE any alert fires) excluded from the catch-rate denominator and listed separately for dual-control review.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fault_class", "reason", "approved_by"],
+        "properties": {
+          "fault_class": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+          "reason": { "type": "string", "minLength": 1 },
+          "approved_by": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

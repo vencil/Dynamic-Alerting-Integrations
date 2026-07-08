@@ -651,3 +651,65 @@ def test_min_value_clamps_negative_gauge(tmp_path):
     vals = [v for v in noise.samples if v is not None]
     assert all(v >= 0 for v in vals), "min_value clamp 後不應有負值"
     assert any("min_value" in n for n in noise.auto_adjustments), "clamp 須留痕"
+
+
+# ── fault_window 血緣（PR-3 temporal-match 的秒級窗；additive 欄） ──────
+
+def test_fault_window_value_variants_share_onset_to_hold_end():
+    series = _series_of(_DISK)
+    base = next(s for s in series if s.variant == "base")
+    # ramp: lead 10 → 窗下界 = onset 起點（LEAD_STEPS*STEP，非 hold 起點——
+    # for:-gated 告警常在 onset 段開火、屬提早接住）；上界 = hold 末樣本
+    # index 309（lead10 + onset60 + hold240 - 1）
+    assert base.fault_window == (wf.LEAD_STEPS * wf.STEP, 309 * wf.STEP)
+    for s in series:
+        assert s.fault_window == base.fault_window, s.variant  # 全 value 變體共用
+
+
+def test_fault_window_absence_open_ended():
+    series = _series_of(_SERVICE)
+    absence = next(s for s in series if s.variant == "staleness_absence")
+    # boolean step: lead 10 + onset 1 → hold 自 index 11；absence 自截斷點
+    # 開放至觀測窗尾（end=None，scorer 以報告窗長收尾）
+    assert absence.fault_window == (11 * wf.STEP, None)
+    base = next(s for s in series if s.variant == "base")
+    assert base.fault_window[1] is not None
+
+
+def test_fault_window_companion_inherits():
+    series = _series_of(_RATIO)
+    comp = next(s for s in series if s.expects == "companion")
+    main = next(s for s in series
+                if s.variant == comp.variant and s.expects != "companion")
+    assert comp.fault_window == main.fault_window
+
+
+def test_fault_window_clamped_by_staleness_tail(tmp_path):
+    def mut(pack):
+        pack["signatures"][0].setdefault("time_axis", {})["staleness_tail"] = "2h"
+    p = _mutate_fixture(tmp_path, _DISK, mut)
+    base = next(s for s in _series_of(p) if s.variant == "base")
+    # 380 樣本 - 240 截 = 140 → 上界 clamp 到末存活樣本 index 139（不越過截斷）
+    assert base.fault_window == (wf.LEAD_STEPS * wf.STEP, 139 * wf.STEP)
+
+
+def test_fault_window_absence_respects_staleness_tail(tmp_path):
+    """FIX-2 回歸：absence 變體被 time_axis.staleness_tail 二次截斷時，窗下界
+    須對齊「實際」死亡點（截斷後序列結尾），非 hold 起點常數——否則下界落在
+    資料還在的區段 → scorer 端假 FN（血緣破口）。"""
+    def mut(pack):
+        pack["signatures"][0].setdefault("time_axis", {})["staleness_tail"] = "5m"
+    p = _mutate_fixture(tmp_path, _SERVICE, mut)
+    series = _series_of(p)
+    absence = next(s for s in series if s.variant == "staleness_absence")
+    # 下界 = 截斷後序列結尾（len*STEP），且嚴格早於無 tail 時的 hold 起點（11*STEP）
+    assert absence.fault_window == (len(absence.samples) * wf.STEP, None)
+    assert absence.fault_window[0] < 11 * wf.STEP
+
+
+def test_fault_window_metadata_lineage():
+    series = _series_of(_DISK)
+    meta = wf.build_metadata(wf.load_pack(str(_DISK)), series, seed=1, fanout=3)
+    assert meta["series"]
+    for entry in meta["series"]:
+        assert entry["fault_window_s"] == [wf.LEAD_STEPS * wf.STEP, 309 * wf.STEP]

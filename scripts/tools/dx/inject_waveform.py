@@ -5,7 +5,8 @@
 （validate → synthesize → materialize_vm）→ 注入隔離 vmsingle →
 ``vmalert -replay`` 跑候選規則集 → 讀回 ``ALERTS`` → 輸出 per-signature×variant
 開火紀錄（PR-3 catch-rate 的原料）。本工具**不算 catch-rate、不做 temporal-match**
-（fault-window 時序欄不進 records——PR-3 可由 pack + metadata 決定性重算）。
+（fault-window 不進 records——``metadata`` 的 ``fault_window_s`` 直帶秒級窗，
+PR-1 合成期導出、PR-3 scorer 直接消費）。
 
 輸出紀錄（--json / --out）每筆至少含：
   signature_index / fault_class / metric / variant / series(fanout) / expects /
