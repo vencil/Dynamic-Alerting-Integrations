@@ -11,6 +11,7 @@ dependencies: [
   "tenant-manager/utils/yaml-generators.js",
   "tenant-manager/hooks/useTenantData.js",
   "_common/hooks/useModalFocusTrap.js",
+  "_common/hooks/useCopyToClipboard.js",
   "tenant-manager/components/GroupSidebar.jsx",
   "tenant-manager/components/ApiNotificationToast.jsx",
   "tenant-manager/components/OverflowBanner.jsx",
@@ -47,6 +48,7 @@ import { IdentityStrip } from './tenant-manager/components/IdentityStrip.jsx';
 import { SavedViewsPanel } from './tenant-manager/components/SavedViewsPanel.jsx';
 import { useDebouncedValue } from './_common/hooks/useDebouncedValue.js';
 import { useModalFocusTrap } from './_common/hooks/useModalFocusTrap.js';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 import { useURLState } from './_common/hooks/useURLState.js';
 import { useVirtualGrid } from './_common/hooks/useVirtualGrid.js';
 import { Loading } from './_common/components/Loading.jsx';
@@ -86,6 +88,7 @@ export default function TenantManager() {
   // with bulk-action / group-create / group-delete handlers below) but
   // useTenantData also writes it for the 429 retry toast.
   const [apiNotification, setApiNotification] = useState(null);
+  const { copy } = useCopyToClipboard();
 
   // PR-2b: URL state sync — bookmarkable filter state. Reads `?q=`
   // from URL on mount; setter writes back via history.replaceState
@@ -311,9 +314,7 @@ export default function TenantManager() {
     setModalType('silent');
   };
 
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(modalData);
-  };
+  const copyToClipboard = () => copy(modalData);
 
   const downloadYaml = () => {
     const blob = new Blob([modalData], { type: 'text/yaml' });

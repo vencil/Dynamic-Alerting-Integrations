@@ -14,6 +14,7 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { DOMAIN_POLICIES } from './_common/data/routing-profiles.js';
 import { parseYaml } from './_common/validation/yaml-parser.js';
 import { generateSampleYaml, resolveRoutingLayers } from './_common/sim/alert-engine.js';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -22,6 +23,7 @@ function RoutingTraceTab() {
   const [traceMetric, setTraceMetric] = useState('mysql_connections');
   const [traceSeverity, setTraceSeverity] = useState('warning');
   const [result, setResult] = useState(null);
+  const { copied, copy } = useCopyToClipboard();
 
   useEffect(() => {
     if (!yaml) {
@@ -339,15 +341,9 @@ function RoutingTraceTab() {
           <div className="mt-3 flex justify-end">
             <button
               className="text-xs px-3 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
-              onClick={() => {
-                const json = JSON.stringify(result, null, 2);
-                navigator.clipboard.writeText(json).then(() => {
-                  const el = document.getElementById('copy-trace-feedback');
-                  if (el) { el.textContent = t('已複製', 'Copied!'); setTimeout(() => { el.textContent = ''; }, 2000); }
-                });
-              }}
+              onClick={() => copy(JSON.stringify(result, null, 2))}
             >
-              {t('複製 JSON', 'Copy JSON')} <span id="copy-trace-feedback" className="ml-1 text-green-600"></span>
+              {t('複製 JSON', 'Copy JSON')} <span className="ml-1 text-green-600">{copied && t('已複製', 'Copied!')}</span>
             </button>
           </div>
         </div>

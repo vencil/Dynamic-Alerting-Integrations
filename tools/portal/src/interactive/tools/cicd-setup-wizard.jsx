@@ -8,7 +8,8 @@ related: [self-service-portal, template-gallery, onboarding-checklist]
 dependencies: [
   "cicd-setup-wizard/fixtures/wizard-defaults.js",
   "cicd-setup-wizard/utils/generators.js",
-  "_common/components/ErrorBoundary.jsx"
+  "_common/components/ErrorBoundary.jsx",
+  "_common/hooks/useCopyToClipboard.js"
 ]
 ---
 
@@ -18,6 +19,7 @@ import { CICD_STEPS as STEPS, CICD_RULE_PACKS as RULE_PACKS, CICD_CI_OPTIONS as 
 import { cicdGenerateInitCommand as generateInitCommand, cicdGenerateDockerCommand as generateDockerCommand, cicdGenerateFileTree as generateFileTree, cicdGenerateGitHubActionsPreview as generateGitHubActionsPreview } from './cicd-setup-wizard/utils/generators.js';
 // PR-portal-11: per-step subtree boundary (see operator-setup-wizard).
 import { ErrorBoundary } from './_common/components/ErrorBoundary.jsx';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -259,8 +261,8 @@ function StepTenants({ config, onChange }) {
 }
 
 function StepReview({ config }) {
-  const [copiedCmd, setCopiedCmd] = useState(false);
-  const [copiedDocker, setCopiedDocker] = useState(false);
+  const cmd = useCopyToClipboard();
+  const docker = useCopyToClipboard();
   const [showPipeline, setShowPipeline] = useState(false);
 
   const initCmd = generateInitCommand(config);
@@ -268,12 +270,6 @@ function StepReview({ config }) {
   const fileTree = generateFileTree(config);
 
   const isComplete = config.ci && config.deploy && config.packs.length > 0 && config.tenants.length > 0;
-
-  const copy = (text, setter) => {
-    navigator.clipboard.writeText(text);
-    setter(true);
-    setTimeout(() => setter(false), 2000);
-  };
 
   return (
     <div>
@@ -322,11 +318,11 @@ function StepReview({ config }) {
             <div className="flex items-center justify-between mb-1">
               <span className="text-sm font-medium text-[color:var(--da-color-fg)]">da-tools init {t('命令', 'command')}</span>
               <button
-                onClick={() => copy(initCmd, setCopiedCmd)}
+                onClick={() => cmd.copy(initCmd)}
                 aria-label={t('複製 da-tools init 命令', 'Copy da-tools init command')}
-                className={`text-xs px-2 py-1 rounded ${copiedCmd ? 'bg-[color:var(--da-color-success)] text-white' : 'bg-[color:var(--da-color-tag-bg)] hover:bg-[color:var(--da-color-surface-hover)]'}`}
+                className={`text-xs px-2 py-1 rounded ${cmd.copied ? 'bg-[color:var(--da-color-success)] text-white' : 'bg-[color:var(--da-color-tag-bg)] hover:bg-[color:var(--da-color-surface-hover)]'}`}
               >
-                {copiedCmd ? <span aria-hidden="true">✓</span> : t('複製', 'Copy')}
+                {cmd.copied ? <span aria-hidden="true">✓</span> : t('複製', 'Copy')}
               </button>
             </div>
             <pre className="bg-[color:var(--da-color-hero-bg)] text-[color:var(--da-color-success)] p-4 rounded-lg text-xs font-mono overflow-x-auto">
@@ -339,11 +335,11 @@ function StepReview({ config }) {
             <div className="flex items-center justify-between mb-1">
               <span className="text-sm font-medium text-[color:var(--da-color-fg)]">{t('Docker 一鍵執行', 'Docker one-liner')}</span>
               <button
-                onClick={() => copy(dockerCmd, setCopiedDocker)}
+                onClick={() => docker.copy(dockerCmd)}
                 aria-label={t('複製 Docker 命令', 'Copy Docker command')}
-                className={`text-xs px-2 py-1 rounded ${copiedDocker ? 'bg-[color:var(--da-color-success)] text-white' : 'bg-[color:var(--da-color-tag-bg)] hover:bg-[color:var(--da-color-surface-hover)]'}`}
+                className={`text-xs px-2 py-1 rounded ${docker.copied ? 'bg-[color:var(--da-color-success)] text-white' : 'bg-[color:var(--da-color-tag-bg)] hover:bg-[color:var(--da-color-surface-hover)]'}`}
               >
-                {copiedDocker ? <span aria-hidden="true">✓</span> : t('複製', 'Copy')}
+                {docker.copied ? <span aria-hidden="true">✓</span> : t('複製', 'Copy')}
               </button>
             </div>
             <pre className="bg-[color:var(--da-color-hero-bg)] text-[color:var(--da-color-hero-accent)] p-4 rounded-lg text-xs font-mono overflow-x-auto">

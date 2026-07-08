@@ -6,7 +6,8 @@ version: v2.7.0
 lang: en
 related: [self-service-portal, alert-simulator, template-gallery]
 dependencies: [
-  "notification-previewer/template-engine.js"
+  "notification-previewer/template-engine.js",
+  "_common/hooks/useCopyToClipboard.js"
 ]
 ---
 
@@ -22,6 +23,7 @@ import {
   generateYAML,
   generateJSON,
 } from './notification-previewer/template-engine.js';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -552,17 +554,14 @@ function TemplateEditorPanel({ receiverType, template, onTemplateChange }) {
 
 /* ── Export Panel ── */
 function ExportPanel({ receiverType, template }) {
-  const [copyFeedback, setCopyFeedback] = useState('');
+  const { copied, copy } = useCopyToClipboard();
   const yamlRef = useRef();
   const jsonRef = useRef();
   const receiverLabel = RECEIVER_TYPES[receiverType].label;
 
   const handleCopy = (format) => {
     const content = format === 'yaml' ? generateYAML(receiverType, template, receiverLabel) : generateJSON(receiverType, template, receiverLabel);
-    navigator.clipboard.writeText(content).then(() => {
-      setCopyFeedback(t('已複製！', 'Copied!'));
-      setTimeout(() => setCopyFeedback(''), 2000);
-    });
+    copy(content);
   };
 
   return (
@@ -583,7 +582,7 @@ function ExportPanel({ receiverType, template }) {
           style={{ ...styles.button, ...styles.buttonPrimary, width: '100%', marginTop: 'var(--da-space-2)' }}
           aria-label={t('複製 YAML', 'Copy YAML')}
         >
-          📋 {t('複製 YAML', 'Copy YAML')} {copyFeedback === t('已複製！', 'Copied!') && copyFeedback}
+          📋 {t('複製 YAML', 'Copy YAML')} {copied && t('已複製！', 'Copied!')}
         </button>
       </div>
 
@@ -599,7 +598,7 @@ function ExportPanel({ receiverType, template }) {
           style={{ ...styles.button, ...styles.buttonPrimary, width: '100%', marginTop: 'var(--da-space-2)' }}
           aria-label={t('複製 JSON', 'Copy JSON')}
         >
-          📋 {t('複製 JSON', 'Copy JSON')} {copyFeedback === t('已複製！', 'Copied!') && copyFeedback}
+          📋 {t('複製 JSON', 'Copy JSON')} {copied && t('已複製！', 'Copied!')}
         </button>
       </div>
     </div>

@@ -6,7 +6,8 @@ version: v2.7.0
 lang: en
 related: [alert-builder, alert-simulator, master-onboarding, cicd-setup-wizard, deployment-wizard]
 dependencies: [
-  "routing-trace/routing.js"
+  "routing-trace/routing.js",
+  "_common/hooks/useCopyToClipboard.js"
 ]
 ---
 
@@ -20,6 +21,7 @@ import {
   computeTrace,
   canAdvance,
 } from './routing-trace/routing.js';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -120,7 +122,7 @@ export default function RoutingTrace() {
       { match: { team: 'database' }, receiver: 'team-database' },
     ],
   });
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopyToClipboard();
 
   const trace = useMemo(() => computeTrace(state), [state]);
 
@@ -205,15 +207,7 @@ export default function RoutingTrace() {
     return lines.join('\n');
   }, [trace]);
 
-  const copyTrace = async () => {
-    try {
-      await navigator.clipboard.writeText(traceText);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('clipboard copy failed', err);
-    }
-  };
+  const copyTrace = () => copy(traceText);
 
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-6">

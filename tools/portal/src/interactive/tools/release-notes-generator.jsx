@@ -6,7 +6,8 @@ version: v2.7.0
 lang: en
 related: [deployment-wizard, health-dashboard, platform-health]
 dependencies: [
-  "release-notes-generator/changelog.js"
+  "release-notes-generator/changelog.js",
+  "_common/hooks/useCopyToClipboard.js"
 ]
 ---
 
@@ -20,6 +21,7 @@ import {
   filterChangesByRole,
   generateAutoSummary,
 } from './release-notes-generator/changelog.js';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -84,7 +86,7 @@ export default function ReleaseNotesGenerator() {
   const [changelogText, setChangelogText] = useState(SAMPLE_CHANGELOG);
   const [selectedRoles, setSelectedRoles] = useState(['platform-engineer']);
   const [lang, setLang] = useState('en');
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopyToClipboard();
 
   const sections = useMemo(() => parseChangelogMarkdown(changelogText), [changelogText]);
   const filtered = useMemo(() => filterChangesByRole(sections, selectedRoles), [sections, selectedRoles]);
@@ -116,12 +118,7 @@ export default function ReleaseNotesGenerator() {
 
   const markdown = generateMarkdown();
 
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(markdown).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
+  const copyToClipboard = () => copy(markdown);
 
   return (
     <div style={{

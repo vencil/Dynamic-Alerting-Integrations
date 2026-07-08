@@ -6,7 +6,8 @@ version: v2.7.0
 lang: en
 related: [config-lint, schema-explorer, template-gallery]
 dependencies: [
-  "playground/validation.js"
+  "playground/validation.js",
+  "_common/hooks/useCopyToClipboard.js"
 ]
 ---
 
@@ -16,6 +17,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 // to a unit-testable module (was inline + 0%-covered). Kept playground-local
 // (NOT merged with _common/validation — parseDuration contracts differ).
 import { validateTenantConfig } from './playground/validation.js';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -152,7 +154,7 @@ export default function TenantYAMLPlayground() {
   const [selectedTemplate, setSelectedTemplate] = useState(initial.tpl || 'mariadb');
   const [showDiff, setShowDiff] = useState(false);
   const [shareLink, setShareLink] = useState('');
-  const [shareCopied, setShareCopied] = useState(false);
+  const { copied: shareCopied, copy } = useCopyToClipboard(2500);
 
   const validation = useMemo(() => validateTenantConfig(yaml), [yaml]);
   const diff = useMemo(() => computeDiff(yaml, YAML_TEMPLATES[selectedTemplate]), [yaml, selectedTemplate]);
@@ -183,10 +185,7 @@ export default function TenantYAMLPlayground() {
     const base = window.location.origin + window.location.pathname + window.location.search;
     const link = base + '#yaml=' + encoded;
     setShareLink(link);
-    navigator.clipboard.writeText(link).then(() => {
-      setShareCopied(true);
-      setTimeout(() => setShareCopied(false), 2500);
-    });
+    copy(link);
   };
 
   return (

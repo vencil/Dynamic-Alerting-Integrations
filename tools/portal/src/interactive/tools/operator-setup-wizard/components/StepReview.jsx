@@ -28,17 +28,19 @@ import { useState, useCallback } from "react";  // TRK-233 ESM import
 // TRK-230e: ESM imports for sibling utilities. jsx-loader transformImports
 // rewrites to `const X = window.__X`; esbuild bundles natively.
 import { generateOperatorCommand, generateMigrationCommand, generateAlertmanagerConfigPreview } from '../utils/generators.js';
+import { useCopyToClipboard } from '../../_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
 function StepReview({ config }) {
   const [activeTab, setActiveTab] = useState('command');
   const selectedTenants = config.selectedTenants || [];
+  const { copy } = useCopyToClipboard();
 
   const copyToClipboard = useCallback((text, label) => {
-    navigator.clipboard.writeText(text);
+    copy(text);
     alert(t(`已複製${label}`, `Copied ${label}`));
-  }, []);
+  }, [copy]);
 
   const generatedCommand = generateOperatorCommand(config);
   const migrationCommand = generateMigrationCommand(config);

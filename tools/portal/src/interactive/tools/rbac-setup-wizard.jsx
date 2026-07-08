@@ -8,7 +8,8 @@ related: [config-lint, tenant-manager, self-service-portal]
 dependencies: [
   "rbac-setup-wizard/fixtures/wizard-defaults.js",
   "rbac-setup-wizard/utils/generators.js",
-  "_common/components/ErrorBoundary.jsx"
+  "_common/components/ErrorBoundary.jsx",
+  "_common/hooks/useCopyToClipboard.js"
 ]
 ---
 
@@ -18,6 +19,7 @@ import { RBAC_STEPS as STEPS, RBAC_PERMISSION_HIERARCHY as PERMISSION_HIERARCHY,
 import { rbacGenerateYaml as generateRbacYaml, rbacValidate as validateRbac } from './rbac-setup-wizard/utils/generators.js';
 // PR-portal-11: per-step subtree boundary (see operator-setup-wizard).
 import { ErrorBoundary } from './_common/components/ErrorBoundary.jsx';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -444,11 +446,12 @@ function StepFilters({ groups, onChange }) {
 function StepReview({ groups }) {
   const yaml = useMemo(() => generateRbacYaml(groups), [groups]);
   const warnings = useMemo(() => validateRbac(groups), [groups]);
+  const { copy } = useCopyToClipboard();
 
   const copyToClipboard = useCallback(() => {
-    navigator.clipboard.writeText(yaml);
+    copy(yaml);
     alert(t('已複製到剪貼板', 'Copied to clipboard'));
-  }, [yaml]);
+  }, [yaml, copy]);
 
   const downloadYaml = useCallback(() => {
     const blob = new Blob([yaml], { type: 'text/plain' });
