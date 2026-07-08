@@ -20,8 +20,8 @@ package guard
 // route to be orphaned from.
 //
 // Implementing a graph cycle detector against a model that can't
-// cycle would be theatre. PR-2 instead ships the five checks
-// that catch real bugs in the model that exists:
+// cycle would be theatre. PR-2 instead ships the checks that catch
+// real bugs in the model that exists:
 //
 //   1. Unknown receiver type (error)
 //      receiver.type not in {webhook, email, slack, teams,
@@ -38,10 +38,19 @@ package guard
 //      `from`, pagerduty needs `service_key`. Same checks for receivers
 //      embedded in overrides.
 //
-//   3. Empty override matcher (error)
-//      An override with no matcher field (no `alertname`,
-//      `metric_group`, etc.) would shadow ALL alerts for that
-//      tenant — almost certainly a bug. Block merge.
+//   3. Override matcher contract (error)
+//      The route generator
+//      (scripts/tools/ops/_grar_routes.py::_validate_override_matcher)
+//      requires EXACTLY ONE of `alertname` / `metric_group` per
+//      override, treating an empty-string value as unset, and skips
+//      any override that violates that. We block both discarded
+//      shapes so they can't merge as a silent no-op:
+//        - neither set (empty matcher) — would otherwise shadow ALL
+//          alerts for the tenant. Kind: empty_override_matcher.
+//        - both set (conflicting) — the generator can't pick one, so
+//          the override never fires. Kind: conflicting_override_matcher.
+//      No other key (severity, component, db_type, environment) is a
+//      matcher; they ride along as receiver/timing config.
 //
 //   4. Duplicate override matcher (warning)
 //      Two overrides with identical matchers — the first wins
@@ -97,23 +106,27 @@ var receiverTypeSpecs = map[string][]string{
 	"pagerduty":  {"service_key"},
 }
 
-// matcherKeys is the (non-exhaustive) set of override-block keys
-// the routing pipeline treats as matchers. Used by the empty-
-// matcher check + duplicate-matcher check to canonicalise the
-// override's "intent".
+// matcherKeys is the EXACT set of override-block keys the routing
+// pipeline treats as a matcher: alertname and metric_group only.
 //
-// Per-rule routing overrides today recognise these matchers in
-// generate_alertmanager_routes.py::expand_routing_overrides; we
-// mirror the names here. Anything not in this set inside an
-// override entry is treated as receiver/timing config rather
-// than a matcher.
+// The generator's contract lives in
+// scripts/tools/ops/_grar_routes.py::_validate_override_matcher +
+// _build_override_matchers: an override must carry EXACTLY ONE of
+// alertname / metric_group, and the emitted sub-route's matcher list
+// is built solely from whichever one is set (`tenant="…",
+// alertname="…"` OR `tenant="…", metric_group="…"`). No other key —
+// severity, component, db_type, environment — ever contributes to a
+// matcher; the generator treats those (alongside group_by / timing)
+// as receiver/timing config and never matches on them.
+//
+// So the guard canonicalises an override's matcher "intent" from
+// these two keys alone (used by the duplicate-matcher check).
+// Anything else inside an override entry is receiver/timing config,
+// not a matcher — the guard stays lenient about those keys and only
+// tightens matcher semantics.
 var matcherKeys = map[string]struct{}{
 	"alertname":    {},
 	"metric_group": {},
-	"severity":     {},
-	"component":    {},
-	"db_type":      {},
-	"environment":  {},
 }
 
 // checkRoutingGuardrails runs the five PR-2 routing checks. Returns
@@ -183,23 +196,47 @@ func checkOneTenantRouting(tenantID string, routing map[string]any) []Finding {
 			continue
 		}
 
-		// Check 3: empty matcher.
-		matcherFingerprint := canonicalMatcher(ov)
-		if matcherFingerprint == "" {
+		// Check 3: matcher contract — the generator's
+		// _validate_override_matcher requires EXACTLY ONE of
+		// alertname / metric_group, treating an absent key OR an
+		// empty-string value as "not set". We mirror that truthiness
+		// so the guard blocks the two override shapes the generator
+		// silently discards (both-set and neither-set), instead of
+		// letting them merge as a dead no-op.
+		hasAlertname := matcherValuePresent(ov["alertname"])
+		hasMetricGroup := matcherValuePresent(ov["metric_group"])
+
+		switch {
+		case hasAlertname && hasMetricGroup:
+			// Both set → the generator requires exactly one and skips
+			// the override entirely, so it silently never fires.
+			out = append(out, Finding{
+				Severity: SeverityError,
+				Kind:     FindingConflictingOverrideMatcher,
+				TenantID: tenantID,
+				Field:    fieldPath,
+				Message: fmt.Sprintf(
+					"tenant %q: %s sets both alertname and metric_group (exactly one required); the route generator skips this override, so it never takes effect",
+					tenantID, fieldPath),
+			})
+			// No duplicate check: a skipped override yields no matcher.
+		case !hasAlertname && !hasMetricGroup:
+			// Neither set → an empty matcher would shadow ALL alerts
+			// for the tenant (and the generator skips it anyway).
 			out = append(out, Finding{
 				Severity: SeverityError,
 				Kind:     FindingEmptyOverrideMatcher,
 				TenantID: tenantID,
 				Field:    fieldPath,
 				Message: fmt.Sprintf(
-					"tenant %q: %s has no matcher fields (alertname, metric_group, severity, component, db_type, environment); an empty matcher would shadow ALL alerts for this tenant",
+					"tenant %q: %s has no matcher field (needs exactly one of alertname, metric_group; empty-string values count as unset); an empty matcher would shadow ALL alerts for this tenant",
 					tenantID, fieldPath),
 			})
-			// Skip duplicate check for an empty-matcher override —
-			// "two empties match the same alert universe" is
-			// already implied by the empty-matcher error.
-		} else {
-			// Check 4: duplicate matcher across overrides.
+			// No duplicate check: same as the empty-matcher rationale.
+		default:
+			// Exactly one set → valid matcher. Check 4: duplicate
+			// matcher across overrides (dead-code sub-route).
+			matcherFingerprint := canonicalMatcher(ov)
 			if first, dup := seenMatcher[matcherFingerprint]; dup {
 				out = append(out, Finding{
 					Severity: SeverityWarn,
@@ -310,15 +347,40 @@ func checkReceiverShape(tenantID, fieldPath string, receiver map[string]any) []F
 	return out
 }
 
+// matcherValuePresent reports whether an override matcher value
+// counts as "set". It mirrors the generator's truthiness test in
+// _grar_routes.py::_validate_override_matcher
+// (`"alertname" in override and override["alertname"]`): an absent
+// key, a nil value, or an EMPTY STRING all read as unset, so
+// `alertname: ""` is indistinguishable from a missing alertname —
+// the generator would build no matcher from it and skip the override.
+//
+// Matcher values are strings in every shipping config; a non-string,
+// non-nil scalar is treated as present so the guard stays at least as
+// strict as the generator's Python truthiness (both-set / neither-set
+// detection can't be fooled by an odd value type).
+func matcherValuePresent(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return false
+	case string:
+		return t != ""
+	default:
+		return true
+	}
+}
+
 // canonicalMatcher reduces an override entry to a stable fingerprint
-// of its matcher keys + values, ignoring receiver / timing config.
-// Returns "" when no matcher fields are present (signals empty
-// matcher to checkOneTenantRouting).
+// of its matcher keys + values, ignoring receiver / timing config and
+// any empty-string matcher value (per matcherValuePresent). Used only
+// by the duplicate-matcher check now that the empty / conflicting
+// checks in checkOneTenantRouting test key presence directly. Returns
+// "" when no matcher key carries a non-empty value.
 func canonicalMatcher(ov map[string]any) string {
 	subset := make(map[string]any)
 	for k := range matcherKeys {
-		if v, ok := ov[k]; ok {
-			subset[k] = v
+		if matcherValuePresent(ov[k]) {
+			subset[k] = ov[k]
 		}
 	}
 	if len(subset) == 0 {

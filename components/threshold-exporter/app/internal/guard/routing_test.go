@@ -209,10 +209,15 @@ func TestRouting_DuplicateOverrideMatcherIsWarning(t *testing.T) {
 	}
 }
 
-func TestRouting_MatcherOrderIndependence(t *testing.T) {
-	// Two overrides whose matcher KEYS are the same set but listed
-	// in different YAML order should still hash to the same
-	// canonical fingerprint and trigger the duplicate finding.
+func TestRouting_NonMatcherKeysIgnoredInFingerprint(t *testing.T) {
+	// severity / component / db_type / environment are receiver/
+	// timing config, NOT matcher keys: the route generator builds a
+	// matcher solely from alertname or metric_group (see
+	// _grar_routes.py::_build_override_matchers). Two overrides with
+	// the SAME alertname but DIFFERING non-matcher keys therefore
+	// share the same matcher, so the second is dead code and must
+	// still trip the duplicate-matcher finding — proving those keys
+	// don't leak into the canonical fingerprint.
 	r := fixtureRouting()
 	r["overrides"] = []any{
 		map[string]any{
@@ -221,18 +226,90 @@ func TestRouting_MatcherOrderIndependence(t *testing.T) {
 			"receiver":  map[string]any{"type": "pagerduty", "service_key": "k"},
 		},
 		map[string]any{
-			"severity":  "critical", // keys reordered
 			"alertname": "X",
+			"severity":  "warning", // different non-matcher value…
+			"component": "storage", // …plus an extra non-matcher key
 			"receiver":  map[string]any{"type": "slack", "api_url": "https://x"},
 		},
 	}
 	got := runWithRouting(t, "t1", r)
 	for _, f := range got {
 		if f.Kind == FindingDuplicateOverrideMatcher {
-			return // success
+			return // success — non-matcher keys correctly ignored
 		}
 	}
-	t.Errorf("expected duplicate-matcher finding for reordered identical matchers; got %v", got)
+	t.Errorf("expected duplicate-matcher finding (non-matcher keys must not affect the fingerprint); got %v", got)
+}
+
+// TestRouting_MatcherContract locks the guard to the generator's
+// _grar_routes.py::_validate_override_matcher contract: EXACTLY ONE
+// of alertname / metric_group, with empty-string values treated as
+// unset. Each shape below is one the generator silently discards; the
+// guard must surface it as an error rather than let it merge as a
+// dead no-op (the false-negatives this fix closes).
+func TestRouting_MatcherContract(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		override map[string]any
+		wantKind FindingKind
+		wantMsg  string
+	}{
+		{
+			name: "severity_only_is_empty_matcher",
+			override: map[string]any{
+				// severity is not a matcher key → no matcher at all
+				"severity": "critical",
+				"receiver": map[string]any{"type": "pagerduty", "service_key": "abc"},
+			},
+			wantKind: FindingEmptyOverrideMatcher,
+			wantMsg:  "no matcher field",
+		},
+		{
+			name: "both_alertname_and_metric_group_conflict",
+			override: map[string]any{
+				"alertname":    "HighCPU",
+				"metric_group": "cpu",
+				"receiver":     map[string]any{"type": "pagerduty", "service_key": "abc"},
+			},
+			wantKind: FindingConflictingOverrideMatcher,
+			wantMsg:  "both alertname and metric_group",
+		},
+		{
+			name: "empty_string_alertname_is_absent",
+			override: map[string]any{
+				"alertname": "", // empty string = unset → empty matcher
+				"receiver":  map[string]any{"type": "pagerduty", "service_key": "abc"},
+			},
+			wantKind: FindingEmptyOverrideMatcher,
+			wantMsg:  "no matcher field",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := fixtureRouting()
+			r["overrides"] = []any{tc.override}
+			got := runWithRouting(t, "t1", r)
+			if len(got) != 1 {
+				t.Fatalf("got %d findings, want exactly 1: %v", len(got), got)
+			}
+			f := got[0]
+			if f.Kind != tc.wantKind {
+				t.Errorf("kind = %q, want %q", f.Kind, tc.wantKind)
+			}
+			if f.Severity != SeverityError {
+				t.Errorf("severity = %q, want error", f.Severity)
+			}
+			if f.Field != "overrides[0]" {
+				t.Errorf("field = %q, want overrides[0]", f.Field)
+			}
+			if !strings.Contains(f.Message, tc.wantMsg) {
+				t.Errorf("message %q should contain %q", f.Message, tc.wantMsg)
+			}
+		})
+	}
 }
 
 // --- check 5: redundant override receiver --------------------------
