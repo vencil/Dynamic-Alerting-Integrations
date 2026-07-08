@@ -713,3 +713,18 @@ def test_fault_window_metadata_lineage():
     assert meta["series"]
     for entry in meta["series"]:
         assert entry["fault_window_s"] == [wf.LEAD_STEPS * wf.STEP, 309 * wf.STEP]
+
+
+def test_fault_window_none_when_truncation_eats_whole_hold():
+    """value 變體的 fault-hold 段被 staleness_tail 完整截光（截斷後存活樣本
+    少於 onset 起點）→ _fault_window_s 回 None + 留痕，下游 scorer 據此判
+    indeterminate（不靜默計 hit/miss）。CodeRabbit #1045 nitpick：end_idx <
+    fw[0] 分支此前無測試。"""
+    notes: list = []
+    # fw=(10,20) 的 hold 段，但截斷後只剩 5 個樣本（n_samples=5）→ end_idx=4 < 10
+    fw = wf._fault_window_s("base", (10, 20), 5, notes)
+    assert fw is None
+    assert any("fault-hold" in n for n in notes)   # 留痕（no-silent-caps）
+    # sanity：未截斷（n_samples 夠）時同輸入回正常窗、不觸發 None 分支
+    assert wf._fault_window_s("base", (10, 20), 21, []) == (
+        wf.LEAD_STEPS * wf.STEP, 20 * wf.STEP)

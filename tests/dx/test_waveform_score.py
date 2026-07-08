@@ -526,6 +526,43 @@ def test_carve_out_missing_approved_by_fails_loud(tmp_path):
         ws.load_tolerances(str(tolfile), empty_schema, jsonschema)
 
 
+# ── CodeRabbit #1045 硬化：malformed 容差/報告輸入 fail-loud（非崩） ──────
+
+def test_duplicate_defaults_key_rejected(tmp_path):
+    """CR-1(a)：defaults 重複 severity key 被 yaml.safe_load 靜默取最後、可悄悄
+    抬高 D5 天花板 → strict loader 拒重複 key（exit 2）。"""
+    p = tmp_path / "dup.yaml"
+    p.write_text("defaults:\n  default: 300\n  critical: 300\n  critical: 999\n",
+                 encoding="utf-8")
+    with pytest.raises(ws.ScoreInputError, match="重複 key"):
+        _load_tol(p)
+
+
+def test_non_mapping_tolerances_doc_fails_loud_under_permissive_schema(tmp_path):
+    """CR-1(b)：寬鬆 --schema（{}）下非映射 YAML（[]/42/null）漏過 schema 驗證 →
+    code 層 isinstance(doc,dict) 擋、回 ScoreInputError（非 doc.get AttributeError 崩）。"""
+    for raw in ("[]", "42", "null"):
+        p = tmp_path / "nonmap.yaml"
+        p.write_text(raw, encoding="utf-8")
+        with pytest.raises(ws.ScoreInputError, match="頂層必須是映射"):
+            ws.load_tolerances(str(p), {}, jsonschema)   # {} = 全放行 schema
+
+
+def test_malformed_report_metadata_shape_exits_two(tmp_path):
+    """CR-2：手改報告的 metadata/series/entry 非預期形狀 → ScoreInputError
+    exit 2（非 AttributeError 未捕捉崩潰）。"""
+    def _set_meta(d): d["metadata"] = "x"
+    def _set_series(d): d["metadata"]["series"] = {"k": 1}
+    def _set_entry(d): d["metadata"]["series"][0] = 42
+    for mutate, tag in ((_set_meta, "meta-str"), (_set_series, "series-dict"),
+                        (_set_entry, "entry-int")):
+        rep_doc = _report([_record()], [_meta()])
+        mutate(rep_doc)
+        p = _write_report(tmp_path, rep_doc, name=f"bad_{tag}.json")
+        r = _run_score(str(p), "--tolerances", str(_TOL))
+        assert r.returncode == 2, tag
+
+
 # ── FIX-7：報告血緣最小完整性 ──────────────────────────────────────────
 
 def test_fault_window_shape_validation_exits_two(tmp_path):

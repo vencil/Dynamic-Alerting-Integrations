@@ -110,15 +110,42 @@ class ScoreToolBug(Exception):
 
 # ── tolerances loading（D5 機械化） ──────────────────────────────────
 
+class _DupKeyGuardLoader(yaml.SafeLoader):
+    """SafeLoader 拒絕重複 mapping key——``yaml.safe_load`` 靜默取最後一個，
+    偷塞的重複 `critical:` 能悄悄抬高 D5 天花板；CodeRabbit #1045 catch。"""
+
+
+def _no_duplicate_keys(loader: yaml.SafeLoader, node):
+    seen = set()
+    for key_node, _val in node.value:
+        key = loader.construct_object(key_node, deep=True)
+        if key in seen:
+            raise yaml.constructor.ConstructorError(
+                None, None, f"重複 key {key!r}（會靜默覆蓋、D5 天花板可被繞）",
+                key_node.start_mark)
+        seen.add(key)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep=True)
+
+
+_DupKeyGuardLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicate_keys)
+
+
 def load_tolerances(path: str, schema: dict, jsonschema_mod) -> dict:
     """載入 + schema 驗證 + 語義檢查（override≤ceiling / severity row 存在 /
     重複鍵 fail-loud）。回傳 {defaults, overrides(by alert_class), carve_outs(by
     fault_class)}。任何違規 → ScoreInputError（exit 2）。"""
     try:
         with open(path, encoding="utf-8") as fh:
-            doc = yaml.safe_load(fh)
+            doc = yaml.load(fh, Loader=_DupKeyGuardLoader)  # 拒重複 key
     except (OSError, yaml.YAMLError) as exc:
         raise ScoreInputError(f"容差矩陣檔讀取失敗 {path}: {exc}") from exc
+    # 頂層形狀 code 層自驗（非 mapping YAML—`[]`/`42`/`null`—在寬鬆 --schema 下
+    # 會漏過 schema 驗證直達 doc.get 而崩 AttributeError；CodeRabbit #1045 catch）。
+    if not isinstance(doc, dict):
+        raise ScoreInputError(
+            f"容差矩陣檔 {path} 頂層必須是映射（得到 {type(doc).__name__}）"
+            f"——code 層檢查，不依賴可抽換的 --schema")
     errors = sorted(jsonschema_mod.Draft7Validator(schema).iter_errors(doc),
                     key=lambda e: list(e.absolute_path))
     if errors:
@@ -231,7 +258,19 @@ def load_report(path: str) -> dict:
     missing = [k for k in _REPORT_REQUIRED_KEYS if k not in doc]
     if missing:
         raise ScoreInputError(f"inject 報告 {path} 缺必要欄位: {missing}")
-    for i, entry in enumerate(doc["metadata"].get("series") or []):
+    # metadata/series/entry 形狀 code 層自驗——非 dict 的 metadata 會令
+    # `.get` 丟 AttributeError（不在 main except tuple 內 → 崩、非 exit 2）；
+    # 手改報告與 FIX-7 同威脅模型（producer=consumer）。CodeRabbit #1045 catch。
+    metadata = doc.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ScoreInputError(f"inject 報告 {path} 的 metadata 必須是映射")
+    series = metadata.get("series") or []
+    if not isinstance(series, list):
+        raise ScoreInputError(f"inject 報告 {path} 的 metadata.series 必須是陣列")
+    for i, entry in enumerate(series):
+        if not isinstance(entry, dict):
+            raise ScoreInputError(
+                f"inject 報告 {path} 的 metadata series#{i} 必須是映射")
         if "fault_window_s" not in entry:
             raise ScoreInputError(
                 f"inject 報告 {path} 的 metadata 缺 fault_window_s——報告版本不容"
