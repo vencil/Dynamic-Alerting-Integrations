@@ -1,0 +1,63 @@
+# promtool behavioural test for TenantApiConfigReloadFailing (Gemini #1056
+# disposition 3a). Validates the contract:
+#   1) FIRES when a config manager's hot-reload keeps failing (broken YAML on
+#      disk → WatchLoop increments the counter every --reload-interval while it
+#      serves stale last-good). The {component} label must ride through to the
+#      firing alert so on-call knows WHICH config is stuck.
+#   2) does NOT fire when there are zero reload failures (healthy steady state).
+#   3) does NOT fire on a single transient blip (one failed reload that recovers
+#      on the next tick) — that is what the `> 2` (not `> 0`) noise floor buys;
+#      a lone mid-write read failure must not page.
+# Run: promtool test rules tests/rulepacks/platform-config-reload-failing_test.yaml
+rule_files:
+  - platform-config-reload-failing.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) Broken _rbac.yaml: the RBAC WatchLoop fails every tick, so the counter
+  #    climbs ~1/min. increase[15m] crosses 2 within ~3m; `for: 5m` fires it by
+  #    ~t8m. The component label must survive onto the alert.
+  - interval: 1m
+    name: sustained-reload-failure-fires-with-component-label
+    input_series:
+      - series: 'tenant_api_config_reload_failures_total{component="RBAC", job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '0+1x30'   # +1 every minute — WatchLoop keeps failing to parse
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantApiConfigReloadFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: RBAC
+              job: tenant-api
+              instance: 10.0.0.2:8080
+            exp_annotations:
+              summary: "tenant-api config hot-reload failing for RBAC — serving stale last-good"
+
+  # 2) Healthy: no reload failures ever — counter flat at 0. Must NOT fire.
+  - interval: 1m
+    name: no-failures-no-fire
+    input_series:
+      - series: 'tenant_api_config_reload_failures_total{component="RBAC", job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantApiConfigReloadFailing
+        exp_alerts: []
+
+  # 3) Single transient blip: exactly one failed reload (e.g. a mid-write read)
+  #    that recovers on the next tick — counter steps 0→1 once and stays flat.
+  #    increase[15m] peaks at 1 (< 2) → the `> 2` noise floor keeps this GREEN.
+  - interval: 1m
+    name: single-transient-blip-no-fire
+    input_series:
+      - series: 'tenant_api_config_reload_failures_total{component="policy", job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '0+0x4 1+0x25'   # 0 for t0-4, then 1 (one increment) and flat
+    alert_rule_test:
+      - eval_time: 8m            # right after the blip: increase[15m]=1 < 2
+        alertname: TenantApiConfigReloadFailing
+        exp_alerts: []
+      - eval_time: 25m           # blip long past
+        alertname: TenantApiConfigReloadFailing
+        exp_alerts: []

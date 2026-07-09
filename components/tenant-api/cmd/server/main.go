@@ -464,6 +464,19 @@ func main() {
 		BackfillTimeoutDur: *writeTimeout,
 	}
 
+	// Gemini #1056 disposition 3a: one shared reload-failure recorder wired into
+	// every WatchLoop-driven manager, so a silent hot-reload failure (parse
+	// error → keep last-good → edited config quietly inert) surfaces as
+	// tenant_api_config_reload_failures_total{component}. MUST be installed
+	// BEFORE the WatchLoop goroutines below start (the setter write must
+	// happen-before the loop reads it). groups/views are omitted — they Reload()
+	// on write, not via WatchLoop, so their errors reach the caller directly.
+	reloadFailRec := handler.NewConfigReloadFailureRecorder()
+	rbacMgr.SetReloadFailureRecorder(reloadFailRec)
+	policyMgr.SetReloadFailureRecorder(reloadFailRec)
+	tenantOrgMgr.SetReloadFailureRecorder(reloadFailRec)
+	federationPolicyMgr.SetReloadFailureRecorder(reloadFailRec)
+
 	// ── RBAC + policy hot-reload goroutines ───────────────────────────────────
 	stopCh := make(chan struct{})
 	go rbacMgr.WatchLoop(*reloadInterval, stopCh)
