@@ -25,7 +25,6 @@ package main
 import (
 	"bytes"
 	"log"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -344,19 +343,13 @@ func TestDetectConfigSource(t *testing.T) {
 				}
 				writeTestFile(t, dir, ".git-revision", commit+"\n")
 			}
-			oldEnv := os.Getenv("OPERATOR_CRD_SOURCE")
+			// t.Setenv codifies the save/restore the manual defer used to
+			// do, and self-guards against t.Parallel (panics if this test or
+			// a parent ever calls it) — so this test stays intentionally
+			// non-parallel.
 			if tt.withEnv {
-				os.Setenv("OPERATOR_CRD_SOURCE", "true")
+				t.Setenv("OPERATOR_CRD_SOURCE", "true")
 			}
-			defer func() {
-				if tt.withEnv {
-					if oldEnv == "" {
-						os.Unsetenv("OPERATOR_CRD_SOURCE")
-					} else {
-						os.Setenv("OPERATOR_CRD_SOURCE", oldEnv)
-					}
-				}
-			}()
 			mgr := NewConfigManager(configPath)
 			if err := mgr.Load(); err != nil {
 				t.Fatalf("Load failed: %v", err)
