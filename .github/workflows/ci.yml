@@ -104,6 +104,12 @@ jobs:
           # land a dbType/db_typ key or maraidb value that silently drops a tenant
           # from liveness. Hook venv carries jsonschema via additional_dependencies.
           pre-commit run confd-schema-check --all-files
+          # Gemini #1056 disposition 3b: admin meta-config (_rbac / _domain_policy /
+          # _tenant_orgs) structural schema validation. Backstops the local hook so a
+          # direct push / bypass cannot land a key-typo or bad-enum admin config that
+          # the strict runtime parser would reject (startup fatal / last-good masking).
+          # Hook venv carries jsonschema via additional_dependencies.
+          pre-commit run admin-config-schema-check --all-files
           pre-commit run bilingual-content-check --all-files
           pre-commit run bilingual-annotations-check --all-files
           # Manual-stage line-count regression gate from PR #TBD —

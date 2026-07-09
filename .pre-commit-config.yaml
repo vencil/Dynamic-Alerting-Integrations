@@ -520,6 +520,23 @@ repos:
         files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_confd_schema|docs/schemas/(tenant-config|platform-defaults)\.schema\.json)
         additional_dependencies: ['pyyaml', 'jsonschema']
 
+      # Gemini #1056 disposition 3b: pre-merge structural validation for the
+      # tenant-api ADMIN meta-config files (_rbac / _domain_policy / _tenant_orgs).
+      # These back authorization boundaries and parse STRICTLY (yaml KnownFields),
+      # so a typo'd key or bad permission enum is a runtime LOAD ERROR — startup
+      # fatal or (on hot-reload) last-good masking. This shifts that left so a
+      # broken admin config cannot merge. pass_filenames: true + a basename regex
+      # matches these files ANYWHERE in the repo (try-local seed, examples, future
+      # deployment overlays); the script maps each basename → its docs/schemas/
+      # schema. jsonschema is REQUIRED (in additional_dependencies). Also wired
+      # into ci.yml's Lint job (pre-commit run admin-config-schema-check).
+      - id: admin-config-schema-check
+        name: admin meta-config (_rbac / _domain_policy / _tenant_orgs) ↔ JSON schemas
+        entry: python3 -X utf8 scripts/tools/lint/check_admin_config_schema.py
+        language: python
+        files: '(^|/)(_rbac|_domain_policy|_tenant_orgs)\.ya?ml$'
+        additional_dependencies: ['pyyaml', 'jsonschema']
+
       # --- v2.4.0 Phase A: 防守工具補強 ---
       - id: build-completeness-check
         name: build.sh ↔ COMMAND_MAP bidirectional sync
