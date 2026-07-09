@@ -25,8 +25,8 @@ purpose: |
 
 import { useState, useCallback } from "react";  // TRK-233 ESM import
 
-// TRK-230e: ESM imports for sibling utilities. jsx-loader transformImports
-// rewrites to `const X = window.__X`; esbuild bundles natively.
+// TRK-230e: ESM imports for sibling utilities; esbuild bundles them
+// natively (TD-030z retired the old jsx-loader import transform).
 import { generateOperatorCommand, generateMigrationCommand, generateAlertmanagerConfigPreview } from '../utils/generators.js';
 import { useCopyToClipboard } from '../../_common/hooks/useCopyToClipboard.js';
 

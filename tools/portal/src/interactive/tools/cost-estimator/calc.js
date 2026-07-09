@@ -133,8 +133,9 @@ function calcTotalResources(tenants, packsPerTenant, scrapeInterval, retentionDa
   };
 }
 
-// Legacy jsx-loader path: expose as window globals (transformImports rewrites
-// `import { X }` → `const X = window.__X` on that path).
+// Vestigial window-global registration (the retired jsx-loader read path).
+// No live code reads these now — cost-estimator.jsx imports via ESM. Pruned
+// in TRK-230z along with the ESM exports' compat marker below.
 window.__PRICING = PRICING;
 window.__calcExporterResources = calcExporterResources;
 window.__calcPrometheusResources = calcPrometheusResources;
