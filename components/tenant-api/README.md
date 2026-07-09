@@ -258,6 +258,30 @@ Fail-closed 護欄:
 
 **Namespace 誠實界線**(單一 trusted-hop MVP):claim key 即命名空間單位——部署**不得**把兩個不同上游來源對映到同一個 claim key(平台無從區分);真正的 issuer namespace 待 JWT 驗簽(D2-A)時由 `iss` 天然提供。
 
+### RBAC 組織範圍(org-scope,身分綁定;LD-6 P4a)
+
+規則可加選配的 `org-scope: <claimKey>`,把該規則的租戶範圍**限縮到「使用者身分裡那個經驗證的組織 claim,落在該租戶所屬組織清單」的租戶**——組織清單來自平台管理層維護的 `_tenant_orgs.yaml`(admin-only、非租戶自屬性),以租戶 ID 反查。**一條規則涵蓋所有組織**,範圍由使用者身分動態決定(不在規則裡寫死組織代碼):
+
+```yaml
+# _rbac.yaml
+groups:
+  - name: 組織維運
+    match:
+      groups: [operators]
+    org-scope: org-code        # 限縮到「使用者 org-code ∈ 該租戶組織清單」的租戶
+    permissions: [read, write]
+
+# _tenant_orgs.yaml(平台管理層維護,admin-only,無寫入 API,GitOps/管理員直改)
+tenant_orgs:
+  team-alpha-01: [ORG-4821]              # 屬單一組織
+  team-alpha-02: [ORG-4821, ORG-5533]    # 1:N,屬多個組織
+  team-beta-01:  []                       # 已建但未指派(unlabeled)
+```
+
+- **opt-in、預設零行為變化**:沒有 `org-scope:` 的規則行為完全不變(如平台管理員 `tenants: ["*"]` 照樣看全部、不受影響)。`org-scope:` 引用的 claim key **必須在 `--identity-claim-headers` 宣告**,否則載入錯誤。
+- **fail-closed**:使用者無該 org claim、或 org 不在租戶清單 → 該規則不命中;**未指派組織(空清單)的租戶**在 enforce 下不可見(shadow 下仍可見+計數,供管理員補齊對應)。
+- **⚠️ 目前僅 list 可見性、且僅 shadow 模式**:P4a 只把 org-scope 接進租戶清單過濾(`GET /api/v1/tenants`),`tenant_api_scope_would_deny_total{axis="org"}` 記錄「enforce 會拒但 shadow 放行」的租戶;**enforce 開關與讀寫路徑強制留待 P4b**(避免「list 藏、寫入開」的假隔離)。`_tenant_orgs.yaml` 走 strict 解析(typo=載入錯誤),org **僅**從此檔以租戶 ID 反查、**絕不**讀租戶自己的 `_metadata`(組織是授權邊界、非租戶可改屬性)。
+
 ### 身分 claims 縫
 
 `--identity-claim-headers`(或 `TA_IDENTITY_CLAIM_HEADERS`;helm `--set identity.claimHeaders.<claimKey>=<Header-Name>`)以逗號分隔的 `claimKey=Header-Name` 對宣告「哪個 trusted-hop 標頭 → 哪個具名 claim」,例如 `org=X-Auth-Request-Org,region=X-Auth-Request-Region`。設定後請求 principal 會載運這些具名 claims,`GET /api/v1/me` 回應多出 `claims` 欄位;claims 在 `_rbac.yaml` 的 `match:` 規則引用時**參與授權**(見上節「RBAC match 規則」;ADR-027 / LD-6 P2+P3),未被任何規則引用的 claim 只載運、不影響決策。標頭與 `X-Forwarded-Groups` 同一信任邊界:必須由 trusted hop(oauth2-proxy)注入且對外 strip-and-set,不可被 client 偽造;空值 / 缺席的標頭不會成為 claim;同名標頭出現**多行**時該 claim 直接拒載並記警告(平台側 backstop:防 proxy 誤用 append 時的 first-value 劫持——Go `Header.Get` 只取第一行)。預設空 = 縫關閉,行為與 JSON 輸出完全不變;格式錯誤(缺 `=`、空 key、空 header 名、重複 key、key 超出 `[A-Za-z0-9_.-]`、header 名超出 `[A-Za-z0-9_-]`——含 `=`/空白的名字真實請求永遠帶不到,寧可啟動就擋)啟動即失敗(fail-loud)。

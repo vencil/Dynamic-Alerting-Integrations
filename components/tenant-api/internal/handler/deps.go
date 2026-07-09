@@ -31,6 +31,7 @@ import (
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/tenantorg"
 	"github.com/vencil/tenant-api/internal/views"
 )
 
@@ -60,7 +61,8 @@ func (wm WriteMode) IsPRMode() bool {
 // stable address so middleware closures can capture it.
 type Deps struct {
 	// ConfigDir is the directory containing tenant YAML files +
-	// _rbac.yaml / _groups.yaml / _views.yaml / _domain_policy.yaml.
+	// _rbac.yaml / _groups.yaml / _views.yaml / _domain_policy.yaml /
+	// _tenant_orgs.yaml (and other admin `_`-prefixed policy files).
 	ConfigDir string
 
 	// Writer commits configuration changes to the GitOps repo.
@@ -69,6 +71,14 @@ type Deps struct {
 	// RBAC enforces tenant-scoped permissions on every routed handler.
 	// Open-mode (no _rbac.yaml) returns "allow all" from Allowed.
 	RBAC *rbac.Manager
+
+	// TenantOrg maps tenants to their organizations (_tenant_orgs.yaml,
+	// ADR-027 / LD-6 P4). Read by the list/search RBAC filter to feed the
+	// org-scope axis of ScopeAllowed. Optional — nil when unwired (e.g. a
+	// handler test literal); OrgsForTenant is nil-receiver-safe and the filter
+	// then evaluates every tenant as unlabeled, which with no org-scoped rule is
+	// byte-identical to the pre-P4 metadata-only filter.
+	TenantOrg *tenantorg.Manager
 
 	// Policy enforces domain-level write policy. Optional — handlers
 	// that touch it MUST nil-check (`if d.Policy != nil { ... }`).

@@ -151,7 +151,7 @@ func SearchTenants(d *Deps) http.HandlerFunc {
 		// THIS user can see, not what exists globally. UI consumers
 		// expect total_matched to equal "rows the user could ever
 		// reach by paging".
-		visible := filterTenantsByRBAC(all, d.RBAC, p)
+		visible := filterTenantsByRBAC(all, d.RBAC, d.TenantOrg, p)
 		matched := applyFilters(visible, params)
 		sortTenants(matched, params.sort)
 
