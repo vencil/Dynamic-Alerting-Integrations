@@ -30,10 +30,10 @@ dependencies: [
 
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 
-// TRK-230 (Option C): orchestrator deps via ESM imports. Both browser
-// path (jsx-loader transforms relative imports → `const X = window.__X;`
-// reads — see jsx-loader.html transformImports) and dist-bundle path
-// (esbuild bundles them natively) work from the same source.
+// TRK-230 (Option C): orchestrator deps via ESM imports. esbuild bundles
+// them natively into docs/assets/dist/tenant-manager.js, which the host
+// jsx-loader.html page loads as a single `<script type="module">`
+// (TD-030z retired the old in-browser import-transform path).
 import { DEMO_TENANTS, DEMO_GROUPS } from './tenant-manager/fixtures/demo-tenants.js';
 import { styles } from './tenant-manager/styles.js';
 import { generateMaintenanceYaml, generateSilentModeYaml } from './tenant-manager/utils/yaml-generators.js';
@@ -55,8 +55,8 @@ import { Loading } from './_common/components/Loading.jsx';
 import { EmptyState } from './_common/components/EmptyState.jsx';
 
 // `t` and `__DA_LANG` stay as window globals (jsx-loader.html injects
-// them at host-page level for both legacy + dist-bundle paths — the
-// dist bundle inherits these from the host page that loaded it).
+// them at host-page level; the dist bundle inherits these from the host
+// page that loaded it).
 const t = window.__t || ((zh, en) => en);
 // PR-2b: tracked URL params. Module-level const so identity stays
 // stable across renders — passing `['q']` inline as a literal would

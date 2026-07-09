@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/tenantorg"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 	"gopkg.in/yaml.v3"
 )
@@ -50,16 +51,21 @@ func ListTenants(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// v2.5.0: Filter tenants by RBAC (tenant pattern + environment/domain metadata)
-		filtered := filterTenantsByRBAC(tenants, d.RBAC, p)
+		// v2.5.0: Filter by RBAC (tenant pattern + env/domain metadata).
+		// P4: also feeds the org-scope axis from _tenant_orgs.yaml (d.TenantOrg).
+		filtered := filterTenantsByRBAC(tenants, d.RBAC, d.TenantOrg, p)
 
 		writeJSON(w, http.StatusOK, filtered)
 	}
 }
 
-// filterTenantsByRBAC returns only the tenants the user has metadata access to.
-// If RBAC is in open mode (empty config), all tenants are returned.
-func filterTenantsByRBAC(tenants []TenantSummary, rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal) []TenantSummary {
+// filterTenantsByRBAC returns only the tenants the caller has scope access to
+// (metadata env/domain axis + org axis). If RBAC is in open mode (empty config),
+// all tenants are returned. tenantOrg supplies each tenant's org list for the
+// org axis; a nil manager is tolerated (OrgsForTenant is nil-receiver-safe) and
+// yields unlabeled orgs, which with no org-scoped rule is byte-identical to the
+// pre-P4 metadata-only filter.
+func filterTenantsByRBAC(tenants []TenantSummary, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p *rbac.VerifiedPrincipal) []TenantSummary {
 	cfg := rbacMgr.Get()
 	if len(cfg.Groups) == 0 {
 		// Path-less open mode only. A configured-but-empty _rbac.yaml never
@@ -70,7 +76,8 @@ func filterTenantsByRBAC(tenants []TenantSummary, rbacMgr *rbac.Manager, p *rbac
 
 	filtered := make([]TenantSummary, 0, len(tenants))
 	for _, t := range tenants {
-		if rbacMgr.MetadataAllowed(p, t.ID, t.Environment, t.Domain) {
+		orgs, _ := tenantOrg.OrgsForTenant(t.ID)
+		if rbacMgr.ScopeAllowed(p, t.ID, t.Environment, t.Domain, orgs) {
 			filtered = append(filtered, t)
 		}
 	}

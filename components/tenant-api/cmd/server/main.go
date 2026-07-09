@@ -42,6 +42,7 @@ import (
 	"github.com/vencil/tenant-api/internal/handler/federation"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/tenantorg"
 	"github.com/vencil/tenant-api/internal/views"
 	"github.com/vencil/tenant-api/internal/ws"
 )
@@ -336,6 +337,18 @@ func main() {
 	// v2.5.0: Domain policy enforcement at API layer
 	policyMgr := policy.NewManager(*configDir)
 
+	// ADR-027 / LD-6 P4: tenant→organization mapping (_tenant_orgs.yaml) backing
+	// the org-scope authorization axis. Admin-only (no write API) and strict-
+	// parsed: a malformed org-boundary file is FATAL (an unparseable file is not
+	// safe to serve, like _rbac.yaml), but a missing/empty file is the benign
+	// default (no tenant has any org — org-scope simply grants nothing extra).
+	// P4a is list-only + shadow: the org enforce flag is intentionally NOT wired
+	// here (EnableOrgScopeEnforce is a P4b concern), so nothing flips to enforce.
+	tenantOrgMgr, err := tenantorg.NewManager(*configDir)
+	if err != nil {
+		log.Fatalf("FATAL: tenantorg init: %v", err)
+	}
+
 	// v2.5.0: Saved Views for tenant-manager UI
 	viewMgr := views.NewManager(*configDir)
 
@@ -429,6 +442,7 @@ func main() {
 		ConfigDir:          *configDir,
 		Writer:             writer,
 		RBAC:               rbacMgr,
+		TenantOrg:          tenantOrgMgr,
 		Policy:             policyMgr,
 		Groups:             groupMgr,
 		Views:              viewMgr,
@@ -454,6 +468,7 @@ func main() {
 	stopCh := make(chan struct{})
 	go rbacMgr.WatchLoop(*reloadInterval, stopCh)
 	go policyMgr.WatchLoop(*reloadInterval, stopCh)
+	go tenantOrgMgr.WatchLoop(*reloadInterval, stopCh)
 	go federationPolicyMgr.WatchLoop(*reloadInterval, stopCh)
 	if prTracker != nil {
 		go prTracker.WatchLoop(stopCh)
