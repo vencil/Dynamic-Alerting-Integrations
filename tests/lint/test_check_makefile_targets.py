@@ -1,17 +1,27 @@
-"""Tests for check_makefile_targets.py — DX 工具 ↔ Makefile 聯動檢查。
+"""Tests for check_makefile_targets.py — DX tool ↔ automation reachability lint.
 
-重點是把 `_EXEMPT` 的**豁免理由釘成 assertion**（而非只留註解）：
-豁免 `generate_tenant_metadata.py` 的前提是「它被 generate_platform_data.py
-以 module 匯入呼叫」。若未來 refactor 把那條 import 拿掉，這個豁免就會
-悄悄變成 v2.4.0 事故的重演（工具不被任何自動化引用卻無人察覺）。
-比照 tests/ops/test_regression.py 的 _HELP_EXEMPT 釘法。
+兩條不變式：
+
+1. **dead-exemption hygiene**（本 PR）：`_EXEMPT` 的每個條目都必須「確實不可達」。
+   豁免會把工具從 `find_dx_generators()` 整個移除，所以一個**死豁免**（被豁免卻
+   其實仍被 Makefile / pre-commit 引用）會悄悄縮小 lint 的掃描範圍——那條引用日後
+   若被移除，lint 仍全綠、無人接住。`generate_changelog.py` 正是這樣在
+   `parse_automation_references()` 長出 pre-commit 掃描後死掉卻無人察覺。
+
+2. **exemption rationale pinning**（#1066）：`generate_tenant_metadata.py` 的豁免
+   前提是「它被 generate_platform_data.py 以 module 匯入呼叫」。若 refactor 把那條
+   import 拿掉，這個豁免就會腐爛成 v2.4.0 事故重演——`TestTenantMetadataExemptionRationale`
+   走 public 產生路徑行為性釘住它。
 """
 from __future__ import annotations
 
 import ast
 import os
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 _TOOLS_DIR = os.path.join(
     os.path.dirname(__file__), "..", "..", "scripts", "tools", "lint")
@@ -39,25 +49,123 @@ class TestCheckCoverage:
 
 
 # ---------------------------------------------------------------------------
-# _EXEMPT hygiene — 豁免不得腐爛
+# dead_exemptions — the hygiene predicate
+# ---------------------------------------------------------------------------
+class TestDeadExemptions:
+    """An exemption is dead iff the tool it exempts is reachable anyway."""
+
+    def test_unreachable_exemption_is_alive(self):
+        assert cmt.dead_exemptions(
+            {"generate_internal.py": "imported only"}, {"generate_other.py"}) == []
+
+    def test_reachable_exemption_is_dead(self):
+        assert cmt.dead_exemptions(
+            {"generate_foo.py": "stale reason"}, {"generate_foo.py"}) == [
+                "generate_foo.py"]
+
+    def test_empty_exemption_set_is_vacuously_clean(self):
+        assert cmt.dead_exemptions({}, {"generate_foo.py"}) == []
+
+    def test_reports_every_dead_entry_sorted(self):
+        exempt = {"generate_b.py": "r", "generate_a.py": "r", "generate_c.py": "r"}
+        refs = {"generate_a.py", "generate_c.py"}
+        assert cmt.dead_exemptions(exempt, refs) == [
+            "generate_a.py", "generate_c.py"]
+
+
+# ---------------------------------------------------------------------------
+# find_dx_generators — exemption really does remove a tool from scope
+# ---------------------------------------------------------------------------
+class TestFindDxGenerators:
+    def test_exempt_tool_is_dropped_from_scope(self, tmp_path):
+        for name in ("generate_a.py", "sync_b.py", "helper.py"):
+            (tmp_path / name).write_text("", encoding="utf-8")
+        assert cmt.find_dx_generators(tmp_path, {}) == {
+            "generate_a.py", "sync_b.py"}
+        assert cmt.find_dx_generators(
+            tmp_path, {"generate_a.py": "why"}) == {"sync_b.py"}
+
+    def test_missing_dir_yields_empty(self, tmp_path):
+        assert cmt.find_dx_generators(tmp_path / "nope", {}) == set()
+
+    def test_defaults_to_module_exempt(self):
+        """單參呼叫（#1066 慣例）沿用 module 級 _EXEMPT，被豁免的工具不出現在結果。"""
+        found = cmt.find_dx_generators(_DX_DIR)
+        assert found.isdisjoint(cmt._EXEMPT.keys())
+
+
+# ---------------------------------------------------------------------------
+# Exemption hygiene — the tripwire that would have caught generate_changelog.py
 # ---------------------------------------------------------------------------
 class TestExemptHygiene:
-    """dead-exemption 偵測：豁免的檔案必須still存在。"""
+    """Every `_EXEMPT` entry must be genuinely unreachable, carry a reason, and
+    name a file that exists.
 
-    def test_exempt_files_exist(self):
+    `test_live_tree_has_no_dead_exemption` is the tripwire proper; while it can
+    be vacuous (an empty `_EXEMPT`), `test_dogfood_*` proves the tripwire
+    actually fires, so it never degrades into a green decoration.
+    """
+
+    def test_live_tree_has_no_dead_exemption(self):
+        refs = cmt.parse_automation_references()
+        dead = cmt.dead_exemptions(cmt._EXEMPT, refs)
+        assert dead == [], (
+            f"dead exemption(s) in _EXEMPT: {dead} — these tools ARE reachable "
+            f"from Makefile / .pre-commit-config.yaml, so exempting them hides "
+            f"them from the lint. Remove them from _EXEMPT."
+        )
+
+    def test_dogfood_reachable_entry_is_flagged(self):
+        """Plant a known-reachable tool as an exemption → hygiene must flag it.
+
+        `generate_platform_data.py` is referenced by both the Makefile and
+        pre-commit, so it stands in for the historical `generate_changelog.py`
+        dead entry without mutating the live `_EXEMPT`.
+        """
+        refs = cmt.parse_automation_references()
+        planted = {"generate_platform_data.py": "pretend this is still needed"}
+
+        assert cmt.dead_exemptions(planted, refs) == [
+            "generate_platform_data.py"]
+
+        issues = cmt.check_exempt_hygiene(planted, refs)
+        assert len(issues) == 1
+        assert issues[0]["severity"] == "error"
+        assert issues[0]["tool"] == "generate_platform_data.py"
+
+    def test_every_exempt_entry_carries_a_reason(self):
+        """Rationale is data, not a comment — an entry without one is unreviewable."""
+        for name, reason in cmt._EXEMPT.items():
+            assert isinstance(reason, str) and reason.strip(), (
+                f"_EXEMPT[{name!r}] must carry a one-line justification")
+
+    def test_exempt_entries_name_files_that_exist(self):
+        """Keeps the list honest if a dx tool is deleted."""
         for name in cmt._EXEMPT:
             assert (_DX_DIR / name).is_file(), (
-                f"_EXEMPT 中的 {name} 不存在 → 死豁免，請移除。"
-            )
-
-    def test_exempt_tools_are_excluded_from_scan(self):
-        """被豁免的工具不應出現在 find_dx_generators() 結果裡。"""
-        found = cmt.find_dx_generators(_DX_DIR)
-        assert not (found & cmt._EXEMPT)
+                f"_EXEMPT names {name}, which no longer exists in dx/")
 
 
 # ---------------------------------------------------------------------------
-# Regression: 釘住 generate_tenant_metadata.py 豁免所依賴的 import 路徑
+# parse_automation_references — both sources are scanned
+# ---------------------------------------------------------------------------
+class TestParseAutomationReferences:
+    def test_scans_makefile_and_precommit(self):
+        refs = cmt.parse_automation_references()
+        # Makefile reference
+        assert "generate_platform_data.py" in refs
+        # pre-commit reference (the tool this lint used to exempt as dead)
+        assert "generate_changelog.py" in refs
+
+    def test_exempt_tenant_metadata_is_genuinely_unreachable(self):
+        """The one live exemption must be absent from both automation sources —
+        that is precisely what makes exempting it correct rather than dead."""
+        refs = cmt.parse_automation_references()
+        assert "generate_tenant_metadata.py" not in refs
+
+
+# ---------------------------------------------------------------------------
+# Regression: 釘住 generate_tenant_metadata.py 豁免所依賴的 import 路徑（#1066）
 # ---------------------------------------------------------------------------
 class TestTenantMetadataExemptionRationale:
     """豁免理由：generate_platform_data.py 以 module 匯入 build_tenant_metadata。
@@ -130,3 +238,26 @@ class TestTenantMetadataExemptionRationale:
             "Makefile 又直接呼叫 generate_tenant_metadata.py 了 — "
             "若那是刻意的，請把它從 _EXEMPT 移除。"
         )
+
+
+# ---------------------------------------------------------------------------
+# Real-repo integration — the wired repo must be clean
+# ---------------------------------------------------------------------------
+class TestRealRepo:
+    def test_repo_is_clean(self):
+        script = _REPO_ROOT / "scripts" / "tools" / "lint" / "check_makefile_targets.py"
+        result = subprocess.run(
+            [sys.executable, str(script), "--ci"],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=60, cwd=str(_REPO_ROOT),
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_ci_exits_nonzero_on_dead_exemption(self, monkeypatch):
+        """--ci must fail (not just warn) when a dead exemption is present."""
+        monkeypatch.setattr(
+            cmt, "_EXEMPT", {"generate_platform_data.py": "planted"})
+        monkeypatch.setattr(sys, "argv", ["check_makefile_targets.py", "--ci"])
+        with pytest.raises(SystemExit) as exc:
+            cmt.main()
+        assert exc.value.code == 1
