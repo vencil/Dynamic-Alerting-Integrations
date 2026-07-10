@@ -119,6 +119,28 @@ func TestReload_Failure_RecordsMetricAndKeepsLastGood(t *testing.T) {
 	}
 }
 
+// A failing Reload with NO recorder installed (the default) must not panic on the
+// nil sink — it just returns the error and keeps last-good.
+func TestReload_Failure_NilRecorderNoPanic(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := writeYAML(t, dir, "foo: good\n")
+
+	w, err := New(path, "test-comp", parseErrOnBoom, emptyTestConfig)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// Intentionally no SetReloadFailureRecorder → nil sink.
+
+	writeYAML(t, dir, "foo: boom\n")
+	if err := w.Reload(); err == nil {
+		t.Fatal("Reload on an unparseable file should return an error")
+	}
+	if got := w.Get().Items["foo"]; got != "good" {
+		t.Errorf("last-good not preserved after failed Reload: foo = %q, want good", got)
+	}
+}
+
 // A SUCCESSFUL Reload must not touch the counter (guards against counting every
 // post-write refresh, which would make the alert meaningless).
 func TestReload_Success_DoesNotRecord(t *testing.T) {
