@@ -6,26 +6,36 @@ Vibe wrapper). Pre-merge structural validation for the `_`-prefixed ADMIN
 meta-config files that define tenant-api authorization / policy boundaries —
 `_rbac.yaml`, `_domain_policy.yaml`, `_tenant_orgs.yaml`.
 
-WHY (the silent-failure this shifts left):
-  These files back authorization boundaries and are parsed STRICTLY (yaml
-  KnownFields) at runtime, so a typo'd key (`permissons:` / `tenant_org:`) or a
-  bad enum value (`permissions: [readonly]`) is a LOAD ERROR — but only DISCOVERED
-  in production: startup fatal for _rbac.yaml / _tenant_orgs.yaml, or (for a
-  hot-reload) configwatcher keeps the LAST-GOOD snapshot so the edited file
-  silently never takes effect (Gemini #1056 disposition 3b; the runtime
-  observability half is tenant_api_config_reload_failures_total). This lint
-  catches the same shape / key-typo / enum errors at author / CI time so a broken
-  admin config can never merge into main. SoT for each schema is the Go struct it
-  mirrors — keep docs/schemas/*.schema.json in sync when a field is added.
+WHY (the silent failures this shifts left) — the three files differ, deliberately:
+  * `_rbac.yaml` / `_tenant_orgs.yaml` are parsed STRICTLY (yaml KnownFields), so a
+    typo'd key (`permissons:` / `tenant_org:`) IS a runtime load error — but only
+    DISCOVERED in production: startup-fatal, or (on hot-reload) configwatcher keeps
+    the LAST-GOOD snapshot so the edited file silently never takes effect.
+  * `_domain_policy.yaml` is parsed LENIENTLY (policy.go uses plain yaml.Unmarshal,
+    NOT KnownFields), so a typo'd constraint key is SILENTLY IGNORED — the
+    constraint simply never applies and the runtime never complains at all. Here
+    this lint is the ONLY guard, which makes it more valuable, not less.
+  Note a bad permission VALUE (`permissions: [readonly]`) is likewise NOT a Go load
+  error — `Permission` is an unconstrained string and validateConfig has no enum
+  check; it just silently grants nothing. The schema's enum is a deliberately
+  stricter authoring guard: it can only reject typos, never a real permission.
+  (Gemini #1056 disposition 3b; the runtime observability half is the
+  tenant_api_config_reload_failures_total counter.)
+
+  SoT for each schema is the consumer it mirrors: the Go struct for rbac /
+  tenant-orgs, and for domain-policy the union of policy.go, ADR-007 and
+  check_routing_profiles.py. Keep docs/schemas/*.schema.json in sync — and keep
+  the schemas no STRICTER than the parser, or a legitimate config cannot land.
 
 SCOPE:
-  Validates each argument file whose basename is a known admin meta-config against
-  its schema (SCHEMA_MAP below). Files not in the map are SKIPPED (listed, never
-  silently capped). An empty / comment-only file is loader-LEGAL (rbac / tenantorg
-  decode io.EOF to the empty config) and is NOT flagged. A list / scalar top
-  document is malformed and IS flagged. Cross-field fail-closed rules (empty
-  `match: {}` = error, org-scope key must be declared) are NOT expressible in JSON
-  Schema and remain parser-enforced — this lint guards structure only.
+  Validates each argument file whose basename stem is a known admin meta-config
+  (SCHEMA_MAP) with a `.yaml`/`.yml` extension, against its schema. Other files are
+  SKIPPED (listed, never silently capped). An empty / comment-only file is
+  loader-LEGAL (rbac / tenantorg decode io.EOF to the empty config) and is NOT
+  flagged. A list / scalar top document is malformed and IS flagged. Cross-field
+  fail-closed rules (empty `match: {}` = error, org-scope key must be declared) are
+  NOT expressible in JSON Schema and remain parser-enforced — this lint guards
+  structure only.
 
 Exit codes (scripts/tools/_lib_exitcodes.py):
   0  all checked files valid (or no admin files among the arguments)
@@ -54,14 +64,31 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 _DEFAULT_SCHEMA_DIR = os.path.normpath(
     os.path.join(_THIS_DIR, "..", "..", "..", "docs", "schemas"))
 
-# Admin meta-config basename -> schema filename (under the schema dir). Each
-# schema mirrors the Go struct named in its `description`. Extend both this map
-# and docs/schemas/ together when a new admin meta-config manager is added.
+# Admin meta-config basename STEM -> schema filename (under the schema dir).
+# Each schema mirrors the Go struct named in its `description`. Extend both this
+# map and docs/schemas/ together when a new admin meta-config manager is added.
 SCHEMA_MAP = {
-    "_rbac.yaml": "rbac.schema.json",
-    "_domain_policy.yaml": "domain-policy.schema.json",
-    "_tenant_orgs.yaml": "tenant-orgs.schema.json",
+    "_rbac": "rbac.schema.json",
+    "_domain_policy": "domain-policy.schema.json",
+    "_tenant_orgs": "tenant-orgs.schema.json",
 }
+
+# Both spellings are recognized. This MUST stay in step with the pre-commit
+# hook's `files:` regex (`…\.ya?ml$`), or a file the hook SELECTS but this
+# script does not recognize would be silently skipped with exit 0 — a fail-open
+# gate that reports OK while validating nothing. `_rbac.yml` is not academic:
+# the rbac path is operator-chosen via `--rbac` (cmd/server/main.go), so a
+# `.yml` spelling really loads at runtime and rbac fails CLOSED on a bad parse.
+# tests/lint/test_check_admin_config_schema.py pins the regex <-> map agreement.
+ADMIN_EXTENSIONS = (".yaml", ".yml")
+
+
+def schema_for(path: str) -> str | None:
+    """Return the schema filename for an admin meta-config path, else None."""
+    stem, ext = os.path.splitext(os.path.basename(path))
+    if ext.lower() not in ADMIN_EXTENSIONS:
+        return None
+    return SCHEMA_MAP.get(stem)
 
 
 class _CallerError(Exception):
@@ -134,8 +161,7 @@ def main() -> int:
     to_check: list[tuple[str, str]] = []  # (path, schema_filename)
     skipped: list[str] = []
     for path in args.files:
-        base = os.path.basename(path)
-        schema_file = SCHEMA_MAP.get(base)
+        schema_file = schema_for(path)
         if schema_file is None:
             skipped.append(path)
             continue

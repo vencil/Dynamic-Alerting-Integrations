@@ -2,16 +2,16 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/vencil/Dynamic-Alerting-Integrations/docs/schemas/rbac.schema.json",
   "title": "Dynamic Alerting Platform — RBAC Schema (_rbac.yaml, ADR-027 / LD-6)",
-  "description": "JSON Schema (draft-07) for validating _rbac.yaml — the tenant-api authorization boundary. Mirrors the STRICT (yaml KnownFields) parser in components/tenant-api/internal/rbac/rbac.go (RBACConfig / GroupRule / MatchBlock): an unknown key (e.g. `permissons:` typo) or a non-{read,write,admin} permission value that the runtime rejects as a load error is caught here at author / CI time instead. SoT = the Go structs; keep this schema in sync when a GroupRule / MatchBlock field is added. NOTE: cross-field fail-closed rules (an empty `match: {}` is a load error, an org-scope / match.claims key must be declared in --identity-claim-headers) are NOT expressible in JSON Schema and stay enforced by the parser — this schema guards shape / key-typo / enum only.",
-  "version": "v1.0.0",
+  "description": "JSON Schema (draft-07) for validating _rbac.yaml — the tenant-api authorization boundary. Mirrors the STRICT (yaml KnownFields) parser in components/tenant-api/internal/rbac/rbac.go (RBACConfig / GroupRule / MatchBlock): an unknown key (e.g. `permissons:` typo) that the runtime rejects as a load error is caught here at author / CI time instead. The `permissions` enum is a deliberately STRICTER authoring guard than the parser (Permission is an unconstrained string and validateConfig has no enum check, so `[readonly]` would parse fine and silently grant nothing) — it can only reject typos, never a legitimate permission. Present-but-null values are accepted wherever the parser accepts them (yaml decodes `groups:` / `tenants:` to a nil slice WITHOUT a load error), so the schema is never stricter than the parser. SoT = the Go structs; keep this schema in sync when a GroupRule / MatchBlock field is added. Cross-field fail-closed rules (an empty `match: {}` is a load error; an org-scope / match.claims key must be declared in --identity-claim-headers) are NOT expressible in JSON Schema and stay enforced by the parser — this schema guards shape / key-typo / enum only.",
+  "version": "v1.1.0",
   "$comment": "Add to VS Code settings.json: \"yaml.schemas\": { \"./docs/schemas/rbac.schema.json\": \"**/_rbac.yaml\" }",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "groups": {
-      "type": "array",
+      "type": ["array", "null"],
       "title": "RBAC Group Rules",
-      "description": "List of group rules. An absent / empty list parses to zero groups (MED-8 fail-closed: all access denied unless --rbac-empty-open).",
+      "description": "List of group rules. An absent / null / empty list parses to zero groups (MED-8 fail-closed: all access denied unless --rbac-empty-open).",
       "items": { "$ref": "#/definitions/groupRule" }
     }
   },
@@ -23,38 +23,38 @@
       "description": "One authorization rule. Without `match` the `name` is the IdP-group matcher (legacy shape, byte-identical to pre-P3); with `match` the `name` becomes a pure label / audit identifier.",
       "properties": {
         "name": {
-          "type": "string",
+          "type": ["string", "null"],
           "title": "Group name / rule label"
         },
         "match": { "$ref": "#/definitions/matchBlock" },
         "tenants": {
-          "type": "array",
+          "type": ["array", "null"],
           "title": "Tenant IDs or patterns",
           "description": "Tenant IDs or patterns (\"*\", \"db-a-*\").",
           "items": { "type": "string", "minLength": 1 }
         },
         "permissions": {
-          "type": "array",
+          "type": ["array", "null"],
           "title": "Permissions",
           "items": { "type": "string", "enum": ["read", "write", "admin"] }
         },
         "environments": {
-          "type": "array",
+          "type": ["array", "null"],
           "title": "Environments",
           "description": "Empty / absent = all environments.",
           "items": { "type": "string", "minLength": 1 }
         },
         "domains": {
-          "type": "array",
+          "type": ["array", "null"],
           "title": "Domains",
           "description": "Empty / absent = all domains.",
           "items": { "type": "string", "minLength": 1 }
         },
         "org-scope": {
-          "type": "string",
+          "type": ["string", "null"],
           "minLength": 1,
           "title": "Org-scope claim key",
-          "description": "Opt-in org-scope axis (ADR-027 / LD-6 P4): the claim KEY whose caller value must be one of the target tenant's orgs (from _tenant_orgs.yaml). Must be declared in --identity-claim-headers (parser-enforced)."
+          "description": "Opt-in org-scope axis (ADR-027 / LD-6 P4): the claim KEY whose caller value must be one of the target tenant's orgs (from _tenant_orgs.yaml). Must be declared in --identity-claim-headers (parser-enforced). Null / absent = the rule places no org restriction; an empty string is rejected as a meaningless value."
         }
       }
     },
@@ -62,19 +62,19 @@
       "type": "object",
       "additionalProperties": false,
       "title": "Claims-aware matcher (LD-6 P3)",
-      "description": "AND across condition kinds, OR within a list. An empty match block is a LOAD ERROR at runtime (not match-all) — a cross-field rule this schema cannot express; the parser enforces it.",
+      "description": "AND across condition kinds, OR within a list. A present-but-null `match:` IS a load error (detectNullMatchBlocks) so null is not accepted here; an empty match block is likewise a load error — a cross-field rule this schema cannot express, enforced by the parser.",
       "properties": {
         "groups": {
-          "type": "array",
+          "type": ["array", "null"],
           "title": "IdP groups (OR-within)",
           "items": { "type": "string", "minLength": 1 }
         },
         "claims": {
-          "type": "object",
+          "type": ["object", "null"],
           "title": "Claim key → allowed values",
           "description": "Each claim key maps to a list of allowed values (exact string match, OR-within); keys AND-across.",
           "additionalProperties": {
-            "type": "array",
+            "type": ["array", "null"],
             "items": { "type": "string" }
           }
         }
