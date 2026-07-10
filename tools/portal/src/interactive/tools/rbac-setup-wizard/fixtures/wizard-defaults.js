@@ -10,10 +10,10 @@ purpose: |
   from PR-portal-4 + the other 2 sibling wizards in this PR.
 
   Public API:
-    window.__RBAC_STEPS                  ordered step metadata
-    window.__RBAC_PERMISSION_HIERARCHY   {read, write, admin} with level + i18n
-    window.__RBAC_ENVIRONMENTS           production / staging / development
-    window.__RBAC_DOMAIN_EXAMPLES        finance / ecommerce / analytics / ...
+    RBAC_STEPS                  ordered step metadata
+    RBAC_PERMISSION_HIERARCHY   {read, write, admin} with level + i18n
+    RBAC_ENVIRONMENTS           production / staging / development
+    RBAC_DOMAIN_EXAMPLES        finance / ecommerce / analytics / ...
 
   Closure deps: reads window.__t at consumer call time.
 ---
@@ -37,11 +37,4 @@ const RBAC_PERMISSION_HIERARCHY = {
 const RBAC_ENVIRONMENTS = ['production', 'staging', 'development'];
 const RBAC_DOMAIN_EXAMPLES = ['finance', 'ecommerce', 'analytics', 'mobile', 'streaming', 'cache'];
 
-window.__RBAC_STEPS = RBAC_STEPS;
-window.__RBAC_PERMISSION_HIERARCHY = RBAC_PERMISSION_HIERARCHY;
-window.__RBAC_ENVIRONMENTS = RBAC_ENVIRONMENTS;
-window.__RBAC_DOMAIN_EXAMPLES = RBAC_DOMAIN_EXAMPLES;
-
-// TRK-230e: ESM exports. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { RBAC_STEPS, RBAC_PERMISSION_HIERARCHY, RBAC_ENVIRONMENTS, RBAC_DOMAIN_EXAMPLES };

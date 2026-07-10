@@ -9,9 +9,8 @@ purpose: |
   input before passing as `q=` query param to /api/v1/tenants/search
   — avoids hammering the API on every keystroke.
 
-  Scaffolded by `scripts/tools/dx/scaffold_jsx_dep.py` (PR #160). See
-  `docs/internal/jsx-multi-file-pattern.md` for the indirect-eval /
-  `window.__X` self-registration rationale.
+  See `docs/internal/jsx-multi-file-pattern.md` for the multi-file split
+  pattern and the gates that enforce it.
 
   Behavior:
     - First render: returns the initial value immediately (no delay).
@@ -45,12 +44,4 @@ function useDebouncedValue(value, delayMs) {
   return debounced;
 }
 
-// Register on window for orchestrator pickup.
-window.__useDebouncedValue = useDebouncedValue;
-
-// TRK-230c: ESM export for esbuild bundle + Vitest. Browser jsx-loader
-// strips this line before script-mode eval (see jsx-loader.html). Both
-// `window.__X` and `export { X }` removed in TRK-230z when jsx-loader
-// retires entirely.
-// <!-- jsx-loader-compat: ignore -->
 export { useDebouncedValue };

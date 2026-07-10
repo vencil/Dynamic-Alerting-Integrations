@@ -1,7 +1,7 @@
 /**
  * Unit tests for `SavedViewsPanel` — TECH-DEBT-030b first-batch.
  *
- * RTL render. window.__styles + window.__t provided via test-setup.ts.
+ * RTL render. window.__t provided via test-setup.ts.
  * The panel takes `savedViews` as a prop (the hook return), so tests
  * pass plain objects rather than mocking the hook itself.
  */

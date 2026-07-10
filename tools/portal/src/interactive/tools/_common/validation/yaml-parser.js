@@ -15,7 +15,7 @@ purpose: |
 
   Public API:
     window.__parseDuration(str)   parse '30s' / '5m' / '2h' / '1d' to seconds (or null)
-    window.__parseYaml(text)      parse tenant YAML to {config, errors}
+    parseYaml(text)      parse tenant YAML to {config, errors}
 
   Behaviour notes:
     parseYaml hard-rejects > MAX_YAML_SIZE chars and returns errors
@@ -115,9 +115,10 @@ function parseYaml(text) {
   return { config, errors };
 }
 
+// LIVE registration — deliberately kept by TRK-230z. `_common/sim/alert-engine.js`
+// reads `window.__parseDuration` at call time rather than importing it.
+// Migrating that reader to an ESM import is TRK-230z Wave 2.
+// (`parseYaml` had no reader and its write was removed.)
 window.__parseDuration = parseDuration;
-window.__parseYaml = parseYaml;
 
-// TRK-230c: ESM exports for esbuild bundle + Vitest. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { parseDuration, parseYaml };

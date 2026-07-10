@@ -25,13 +25,11 @@ purpose: |
     - Out: view sharing / permissions UI (per-view ACL) — backend has
       no per-view RBAC; would need new endpoint contract first
 
-  Scaffolded by `scripts/tools/dx/scaffold_jsx_dep.py` (PR #160).
-  See `docs/internal/jsx-multi-file-pattern.md` for the indirect-eval
-  / `window.__X` self-registration rationale.
+  See `docs/internal/jsx-multi-file-pattern.md` for the multi-file split
+  pattern and the gates that enforce it.
 
   Deps:
-    - `styles`  ESM import from `../styles.js` (was `window.__styles`
-                pre-TRK-233; see the import note below)
+    - `styles`  ESM import from `../styles.js`
     - `t`       `window.__t` i18n helper (host-page global)
 
   Props:
@@ -47,7 +45,7 @@ purpose: |
 ---
 
 // TRK-233: ESM dist-bundle chunk order is non-deterministic;
-// `window.__styles` may be undefined when this module evaluates.
+// `styles` may be undefined when this module evaluates.
 // Import the canonical export instead. See tenant-manager/styles.js.
 import { styles } from '../styles.js';
 
@@ -396,11 +394,4 @@ function SavedViewsPanel({ currentFilters, onApplyView, canWrite, savedViews }) 
   );
 }
 
-// Register on window for orchestrator pickup.
-window.__SavedViewsPanel = SavedViewsPanel;
-
-// TRK-230b: ESM export. `filtersToViewMap` is the pure utility used by
-// the panel's "Save current..." flow — first-batch unit-test target.
-// Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { SavedViewsPanel, filtersToViewMap };

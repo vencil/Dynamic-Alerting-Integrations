@@ -70,12 +70,11 @@ const DEMO_GROUPS = {
   }
 };
 
-// Register on window so the orchestrator (loaded after this dep) can
-// pull these via `const X = window.__X;` — same pattern self-service-portal
-// uses for AlertPreviewTab / YamlValidatorTab / RoutingTraceTab.
+// LIVE registrations — deliberately kept by TRK-230z. `../hooks/useTenantData.js`
+// reads `window.__DEMO_TENANTS` / `window.__DEMO_GROUPS` inside its effect rather
+// than importing them, so deleting the writes would strip the docs-site demo
+// fallback. Migrating that reader to ESM imports is TRK-230z Wave 2.
 window.__DEMO_TENANTS = DEMO_TENANTS;
 window.__DEMO_GROUPS = DEMO_GROUPS;
 
-// TRK-230b: ESM exports. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { DEMO_TENANTS, DEMO_GROUPS };

@@ -12,11 +12,11 @@ purpose: |
   pull from the same canonical implementation.
 
   Public API:
-    window.__validateTenantName(name)               RFC 1123 char check
-    window.__generateOperatorCommand(config)        build da-tools CLI
-    window.__generateMigrationCommand(config)       null unless dual-stack
-    window.__generateAlertmanagerConfigPreview(c,i) sample CRD for tenant i
-    window.__getReceiverConfig(type, secretName)    YAML fragment per receiver
+    validateTenantName(name)               RFC 1123 char check
+    generateOperatorCommand(config)        build da-tools CLI
+    generateMigrationCommand(config)       null unless dual-stack
+    generateAlertmanagerConfigPreview(c,i) sample CRD for tenant i
+    getReceiverConfig(type, secretName)    YAML fragment per receiver
 
   Closure deps: none. Pure functions; receive config as arg.
 ---
@@ -94,12 +94,4 @@ spec:
   return yaml;
 }
 
-window.__validateTenantName = validateTenantName;
-window.__generateOperatorCommand = generateOperatorCommand;
-window.__generateMigrationCommand = generateMigrationCommand;
-window.__generateAlertmanagerConfigPreview = generateAlertmanagerConfigPreview;
-window.__getReceiverConfig = getReceiverConfig;
-
-// TRK-230e: ESM exports. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { validateTenantName, generateOperatorCommand, generateMigrationCommand, generateAlertmanagerConfigPreview, getReceiverConfig };

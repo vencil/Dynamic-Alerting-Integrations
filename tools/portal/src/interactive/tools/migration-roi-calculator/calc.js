@@ -12,11 +12,11 @@ purpose: |
   passes TOTAL_RULES at the call site — behavior is unchanged.
 
   Public API:
-    window.__estimatePlatformCoverage({ totalRules, platformRules })
-    window.__estimateMigrationEffort({ totalRules, recordingRules, alertRules })
-    window.__estimateMaintenanceSavings({ currentMonthlyHours, tenants })
-    window.__estimateBreakEven({ migrationHours, monthlySavingsHours })
-    window.__estimateAnnualSavings({ monthlySavingsHours, hourlyRate })
+    estimatePlatformCoverage({ totalRules, platformRules })
+    estimateMigrationEffort({ totalRules, recordingRules, alertRules })
+    estimateMaintenanceSavings({ currentMonthlyHours, tenants })
+    estimateBreakEven({ migrationHours, monthlySavingsHours })
+    estimateAnnualSavings({ monthlySavingsHours, hourlyRate })
 
   Closure deps: none. Pure functions; receive config (incl. platformRules) as args.
 ---
@@ -86,14 +86,7 @@ function estimateAnnualSavings({ monthlySavingsHours, hourlyRate }) {
 }
 
 // Legacy jsx-loader path: expose as window globals (see PR-portal-12 / TD-030z).
-window.__estimatePlatformCoverage = estimatePlatformCoverage;
-window.__estimateMigrationEffort = estimateMigrationEffort;
-window.__estimateMaintenanceSavings = estimateMaintenanceSavings;
-window.__estimateBreakEven = estimateBreakEven;
-window.__estimateAnnualSavings = estimateAnnualSavings;
 
-// TRK-230e: ESM exports (esbuild dist path). Removed with jsx-loader in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export {
   estimatePlatformCoverage,
   estimateMigrationEffort,

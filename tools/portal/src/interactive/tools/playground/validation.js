@@ -14,8 +14,8 @@ purpose: |
   preserve behavior; do not merge without reconciling contracts.
 
   Public API:
-    window.__validateTenantConfig(yamlText)  -> { valid, errors, warnings, ... }
-    window.__parseYAML(text)                 -> parsed object (lenient)
+    validateTenantConfig(yamlText)  -> { valid, errors, warnings, ... }
+    parseYAML(text)                 -> parsed object (lenient)
     window.__parseDuration(str)              -> {ms,value,unit} | null (playground-local)
 
   Closure deps: window.__t for bilingual error/warning messages (falls back to
@@ -385,11 +385,10 @@ function validateTenantConfig(yamlText) {
   };
 }
 
-// Legacy jsx-loader path: expose as window globals (see PR-portal-12 / TD-030z).
-window.__validateTenantConfig = validateTenantConfig;
-window.__parseYAML = parseYAML;
+// LIVE registration — deliberately kept by TRK-230z. `_common/sim/alert-engine.js`
+// reads `window.__parseDuration` at call time. (`_common/validation/yaml-parser.js`
+// registers the same global; collapsing the two writers into one ESM import is
+// TRK-230z Wave 2.)
 window.__parseDuration = parseDuration;
 
-// TRK-230e: ESM exports (esbuild dist path). Removed with jsx-loader in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { validateTenantConfig, parseYAML, parseDuration };

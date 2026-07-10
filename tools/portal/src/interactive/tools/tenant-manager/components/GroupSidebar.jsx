@@ -6,25 +6,26 @@ purpose: |
   when canWrite=true. Stateful only locally — keeps its own create-form
   expanded/collapsed state via useState.
 
-  Closes over `styles` and `t` globals (registered by jsx-loader before
-  this file evaluates). Pure functional component otherwise — accepts
-  props for groups + callbacks, doesn't reach into orchestrator state.
+  Closes over `t` (the host-page `window.__t` i18n global) and `styles`
+  (an ESM import from `../styles.js` — see the import note below). Pure
+  functional component otherwise — accepts props for groups + callbacks,
+  doesn't reach into orchestrator state.
 
   Extracted from tenant-manager.jsx in PR-2d (#153). Behavior identical;
   ARIA / keyboard nav semantics preserved.
 ---
 
 // TRK-233: ESM dist-bundle chunk order is non-deterministic;
-// `window.__styles` may be undefined when this module evaluates
+// `styles` may be undefined when this module evaluates
 // (the path `entry → tenant-manager.jsx → GroupSidebar.jsx` doesn't
 // guarantee styles.js evaluates first under esbuild's chunk
 // allocation). Import the canonical ESM export.
 //
 // History: PR-2d's `const styles = window.__styles;` worked under
 // Babel-standalone (the legacy jsx-loader runtime) because the
-// indirect-eval frame leaked `const styles` to global scope. After
-// TRK-230z retired the Babel runtime, the legacy reasoning no longer
-// applies and the lookup is exposed to chunk-arrival races.
+// indirect-eval frame leaked `const styles` to global scope. TD-030z
+// retired that runtime and TRK-230z removed the registration, so the
+// ESM import below is the only correct path.
 import { styles } from '../styles.js';
 
 import { useState } from "react";  // TRK-233 ESM import
@@ -167,9 +168,4 @@ function GroupSidebar({ groups, activeGroupId, onSelectGroup, onCreateGroup, onD
   );
 }
 
-// Register on window for orchestrator pickup.
-window.__GroupSidebar = GroupSidebar;
-
-// TRK-230b: ESM export. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { GroupSidebar };
