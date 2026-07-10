@@ -3,16 +3,17 @@ package handler
 // Config hot-reload failure metric (Gemini #1056 external-review disposition 3a).
 //
 // Every tenant-api YAML config manager (rbac / groups / views / policy /
-// federation-policy) embeds configwatcher.Watcher, whose WatchLoop keeps
-// serving the LAST-GOOD snapshot when a hot-reload parse fails — so an admin's
-// typo in _rbac.yaml / _domain_policy.yaml / etc. silently stops taking effect,
-// traceable today only via a WARN log. The Watcher records each such failure
-// through the configwatcher.ReloadFailureRecorder interface; the concrete
-// counter store lives here (the handler package owns /metrics exposition) and is
-// injected into each Manager at wiring time via SetReloadFailureRecorder —
-// instance-method DI, mirroring scope_metrics.go / the identity-audit recorder,
-// so metric state is not a bare package singleton and tests can assert against
-// their own instance.
+// tenantorg / federation-policy) embeds configwatcher.Watcher, which keeps
+// serving the LAST-GOOD snapshot when a reload parse fails — so an admin's typo
+// in _rbac.yaml / _domain_policy.yaml / etc. silently stops taking effect. Both
+// reload paths are silent: the periodic WatchLoop only logs a WARN, and the
+// post-write Reload returns an error that every caller discards. The Watcher
+// records both through the configwatcher.ReloadFailureRecorder interface; the
+// concrete counter store lives here (the handler package owns /metrics
+// exposition) and is injected into each Manager at wiring time via
+// SetReloadFailureRecorder — instance-method DI, mirroring scope_metrics.go /
+// the identity-audit recorder, so metric state is not a bare package singleton
+// and tests can assert against their own instance.
 //
 // Import direction: handler → configwatcher (a leaf package). configwatcher
 // never imports handler, so the recorder INTERFACE is declared in configwatcher
@@ -34,33 +35,43 @@ import (
 // values). The values MUST match the label each Watcher carries (the string
 // passed to configwatcher.New) — that string is what IncReloadFailure receives.
 //
-// Membership = exactly the managers that run a periodic WatchLoop, because the
-// counter records the SILENT masking path: WatchLoop logs a WARN and keeps
-// last-good on a parse error, so the edited config quietly does not take
-// effect. groups / views are intentionally EXCLUDED — they never WatchLoop;
-// they Reload() only after a write, and that error is returned to the handler
-// (surfaced to the caller, not silently masked), a different class this metric
-// does not claim to cover. A new WatchLoop-driven manager appends its label
-// here in the same commit that adds it (mirrors scope_metrics.go's
-// scopeWouldDenyAxes; tenantorg — the LD-6 P4a admin-org manager — follows the
-// policy WatchLoop pattern and is included below).
+// Membership = EVERY config manager, because BOTH reload paths mask a failure
+// silently and the Watcher records both (configwatcher.WatchLoop and
+// configwatcher.Reload):
+//   - rbac / policy / tenantorg / federation-policy run a periodic WatchLoop,
+//     which logs a WARN and keeps last-good on a parse error.
+//   - groups / views (and federation-policy again) are Reload()ed after a write,
+//     and every production caller DISCARDS that error — `_ = mgr.Reload()` in
+//     handler/group.go:236,317, handler/view.go:175,239 and
+//     handler/federation/policy.go:157 — then answers 200 OK. Equally silent.
+//
+// A new manager appends its label here in the same commit that adds it (mirrors
+// scope_metrics.go's scopeWouldDenyAxes). This is an ARRAY, not a slice, so the
+// `counters` store below is sized FROM it at compile time: appending a label
+// here grows the store automatically, and the two can never drift into a
+// silent mis-index or an out-of-range panic.
 //
 // Note the casing wart: rbac's label is "RBAC" (upper) while the others are
 // lower — this mirrors the existing log-tag values verbatim rather than
 // introducing a metric-vs-log drift.
-var configReloadComponents = []string{
+var configReloadComponents = [...]string{
 	"RBAC",
 	"policy",
 	"tenantorg",
 	"federation-policy",
+	"groups",
+	"views",
 }
 
 // ConfigReloadFailureMetrics holds the per-component reload-failure counters.
 // It satisfies configwatcher.ReloadFailureRecorder. Counters are atomic so
-// recording (which runs on each Watcher's WatchLoop goroutine) is lock-free.
+// recording is lock-free and safe from both writer goroutines: each Watcher's
+// WatchLoop ticker and the request goroutines that call Reload after a write.
 type ConfigReloadFailureMetrics struct {
-	// counters is a fixed-size parallel array to configReloadComponents.
-	counters [4]atomic.Int64
+	// counters is a fixed-size parallel array to configReloadComponents, sized
+	// FROM it at compile time (len of an array value is a constant expression),
+	// so the two can never drift out of sync.
+	counters [len(configReloadComponents)]atomic.Int64
 }
 
 // IncReloadFailure implements configwatcher.ReloadFailureRecorder. An
@@ -117,11 +128,11 @@ func writeConfigReloadFailureMetrics(w io.Writer) {
 	if m := activeConfigReloadFailure.Load(); m != nil {
 		snap = m.Snapshot()
 	}
-	_, _ = fmt.Fprintf(w, "# HELP tenant_api_config_reload_failures_total Hot-reload (WatchLoop) parse/read failures by config manager. On failure the manager keeps serving the LAST-GOOD snapshot, so the edited config silently does not take effect — alert on increase()>0 (monotonic counter).\n")
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_config_reload_failures_total Config reload failures by manager, from either reload path (periodic WatchLoop tick or post-write Reload). On failure the manager keeps serving the LAST-GOOD snapshot, so the edited config silently does not take effect — alert on a sustained increase() (monotonic counter).\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_config_reload_failures_total counter\n")
 	// Deterministic order for stable exposition / golden tests.
 	comps := make([]string, len(configReloadComponents))
-	copy(comps, configReloadComponents)
+	copy(comps, configReloadComponents[:])
 	sort.Strings(comps)
 	for _, c := range comps {
 		_, _ = fmt.Fprintf(w, "tenant_api_config_reload_failures_total{component=%q} %d\n", c, snap[c])

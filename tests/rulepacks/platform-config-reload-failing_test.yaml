@@ -46,9 +46,17 @@ tests:
         alertname: TenantApiConfigReloadFailing
         exp_alerts: []
 
-  # 3) Single transient blip: exactly one failed reload (e.g. a mid-write read)
-  #    that recovers on the next tick — counter steps 0→1 once and stays flat.
-  #    increase[15m] peaks at 1 (< 2) → the `> 2` noise floor keeps this GREEN.
+  # 3) Single transient blip: exactly one failed reload (e.g. a mid-write read,
+  #    or one discarded post-write Reload error) — counter steps 0→1 once and
+  #    stays flat. increase[15m] peaks at 1 (< 2) → the `> 2` noise floor keeps
+  #    this GREEN.
+  #
+  #    ⚠️ The eval at 13m is the DISCRIMINATOR for the noise floor, and must not
+  #    be removed. The 0→1 step at t5 sits in the [15m] window for t∈[5,20), so
+  #    a weakened `> 0` rule would be pending from t5 and FIRING from t10 to t20.
+  #    Probing only at 8m (still pending, 3m < for:5m) and 25m (blip aged out)
+  #    would pass under `> 0` too — i.e. would not test the threshold at all.
+  #    Verified by mutation: flipping the rule to `> 0` fails ONLY the 13m probe.
   - interval: 1m
     name: single-transient-blip-no-fire
     input_series:
@@ -56,6 +64,9 @@ tests:
         values: '0+0x4 1+0x25'   # 0 for t0-4, then 1 (one increment) and flat
     alert_rule_test:
       - eval_time: 8m            # right after the blip: increase[15m]=1 < 2
+        alertname: TenantApiConfigReloadFailing
+        exp_alerts: []
+      - eval_time: 13m           # DISCRIMINATOR: a `> 0` rule would be FIRING here
         alertname: TenantApiConfigReloadFailing
         exp_alerts: []
       - eval_time: 25m           # blip long past

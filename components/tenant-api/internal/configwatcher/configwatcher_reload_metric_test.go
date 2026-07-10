@@ -90,6 +90,61 @@ func TestWatchLoop_ReloadFailure_RecordsMetricAndKeepsLastGood(t *testing.T) {
 	}
 }
 
+// A post-write Reload that fails to parse must ALSO increment the recorder.
+// Every production caller discards Reload's returned error (`_ = mgr.Reload()`
+// in handler/group.go, handler/view.go, handler/federation/policy.go) and then
+// answers 200 OK, so the counter is the only signal that the manager silently
+// went stale. Without this, groups/views reload failures are invisible.
+func TestReload_Failure_RecordsMetricAndKeepsLastGood(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := writeYAML(t, dir, "foo: good\n")
+
+	w, err := New(path, "test-comp", parseErrOnBoom, emptyTestConfig)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	rec := &fakeReloadRecorder{}
+	w.SetReloadFailureRecorder(rec)
+
+	writeYAML(t, dir, "foo: boom\n")
+	if err := w.Reload(); err == nil {
+		t.Fatal("Reload on an unparseable file should return an error")
+	}
+	if got := rec.count("test-comp"); got != 1 {
+		t.Errorf("Reload failure not recorded: count = %d, want 1", got)
+	}
+	if got := w.Get().Items["foo"]; got != "good" {
+		t.Errorf("last-good not preserved after failed Reload: foo = %q, want good", got)
+	}
+}
+
+// A SUCCESSFUL Reload must not touch the counter (guards against counting every
+// post-write refresh, which would make the alert meaningless).
+func TestReload_Success_DoesNotRecord(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := writeYAML(t, dir, "foo: good\n")
+
+	w, err := New(path, "test-comp", parseErrOnBoom, emptyTestConfig)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	rec := &fakeReloadRecorder{}
+	w.SetReloadFailureRecorder(rec)
+
+	writeYAML(t, dir, "foo: better\n")
+	if err := w.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if got := rec.count("test-comp"); got != 0 {
+		t.Errorf("successful Reload recorded a failure: count = %d, want 0", got)
+	}
+	if got := w.Get().Items["foo"]; got != "better" {
+		t.Errorf("successful Reload did not apply: foo = %q, want better", got)
+	}
+}
+
 // With no recorder installed (the default), a failing reload must NOT panic on
 // a nil sink — it just logs the WARN and keeps last-good.
 func TestWatchLoop_ReloadFailure_NilRecorderNoPanic(t *testing.T) {

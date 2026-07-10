@@ -520,27 +520,32 @@ data:
                 re-trigger (TenantApiReadHANeeded, below) are documented in
                 docs/api/tenant-api-hardening.md. Dashboard: tenant_api_sse_clients.
 
-          # --- tenant-api config hot-reload failure (Gemini #1056 disposition 3a) ---
-          # Every tenant-api config manager that runs a periodic WatchLoop (rbac /
-          # policy / tenantorg / federation-policy) keeps serving the LAST-GOOD
-          # snapshot when a hot-reload parse fails (configwatcher.load() returns the
-          # error without Store-ing). So an admin who edits _rbac.yaml /
-          # _domain_policy.yaml / _tenant_orgs.yaml / _federation_policy.yaml with a
-          # typo gets NO behaviour change — the new
-          # (broken) config is silently ignored while the stale one keeps enforcing.
-          # The only other trace is a WARN log. tenant_api_config_reload_failures_
-          # total{component} (handler/config_reload_metrics.go) makes it alertable.
-          # groups/views are absent by design — they Reload() on write (error
-          # returned to the caller), not via the silent WatchLoop path.
+          # --- tenant-api config reload failure (Gemini #1056 disposition 3a) ---
+          # Every tenant-api config manager keeps serving the LAST-GOOD snapshot
+          # when a reload parse fails (configwatcher.load() returns the error
+          # without Store-ing). So an admin who edits _rbac.yaml /
+          # _domain_policy.yaml / _tenant_orgs.yaml / _federation_policy.yaml /
+          # _groups.yaml / _views.yaml with a typo gets NO behaviour change — the
+          # new (broken) config is silently ignored while the stale one keeps
+          # enforcing. BOTH reload paths are silent: the periodic WatchLoop only
+          # WARN-logs, and the post-write Reload returns an error that every
+          # handler discards (`_ = mgr.Reload()`) before answering 200 OK.
+          # tenant_api_config_reload_failures_total{component}
+          # (handler/config_reload_metrics.go) records both and makes them alertable.
           #
-          # `> 2` over [15m] (not `> 0`): at the 30s default --reload-interval a
-          # genuinely-broken file fails ~2x/min (~30 in 15m), so this fires fast on
-          # real breakage while ignoring BOTH (a) a single transient mid-write blip
-          # that recovers on the next tick and (b) increase() extrapolation noise
-          # from a counter reset on pod restart (the standard SRE guard, cf.
-          # ConfigParseFailure above). The {component} label rides through so
-          # on-call knows WHICH config is stuck. `for: 5m` debounces further —
-          # last-good is still being served, so there is no sub-5m urgency.
+          # `> 2` over [15m] (not `> 0`): a broken file on a WatchLoop-driven
+          # manager re-parses EVERY tick (load() only updates its dedup hash on
+          # success), so at the 30s default --reload-interval it fails ~2x/min
+          # (~30 in 15m) and this fires fast on real breakage — while ignoring BOTH
+          # (a) a single transient mid-write blip that recovers on the next tick and
+          # (b) increase() extrapolation noise from a counter reset on pod restart
+          # (the standard SRE guard, cf. ConfigParseFailure above). ⚠️ The threshold
+          # is therefore tuned to the TICK-driven path: a lone post-write Reload
+          # failure (groups / views) is COUNTED and visible on the dashboard but
+          # will not by itself trip this alert — that needs 3+ within 15m. The
+          # {component} label rides through so on-call knows WHICH config is stuck.
+          # `for: 5m` debounces further — last-good is still being served, so there
+          # is no sub-5m urgency.
           - alert: TenantApiConfigReloadFailing
             expr: increase(tenant_api_config_reload_failures_total{job="tenant-api"}[15m]) > 2
             for: 5m

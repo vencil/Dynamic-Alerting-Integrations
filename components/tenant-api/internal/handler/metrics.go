@@ -140,10 +140,10 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	// watch this to zero before flipping a scope axis to enforce.
 	writeScopeWouldDenyMetrics(w)
 
-	// Gemini #1056 disposition 3a: per-config-manager hot-reload failure
-	// counters. Non-zero ⇒ a WatchLoop-driven manager (rbac / policy /
-	// tenantorg / federation-policy) hit a parse error on reload and is serving
-	// stale last-good config; alert on increase()>0.
+	// Gemini #1056 disposition 3a: per-config-manager reload-failure counters.
+	// Non-zero ⇒ a manager hit a parse error on reload — either a periodic
+	// WatchLoop tick or a post-write Reload whose error the handler discarded —
+	// and is now serving stale last-good config; alert on a sustained increase().
 	writeConfigReloadFailureMetrics(w)
 
 	// ADR-022 Layer 2 tripwire: 1 ⇒ --dev-bypass-auth is ON (LOCAL DEV ONLY).

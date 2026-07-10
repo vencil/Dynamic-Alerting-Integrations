@@ -29,9 +29,11 @@ func TestConfigReloadFailureRecorder_IncAndExposition(t *testing.T) {
 	for _, want := range []string{
 		`tenant_api_config_reload_failures_total{component="RBAC"} 2`,
 		`tenant_api_config_reload_failures_total{component="policy"} 1`,
-		// tenantorg + federation-policy never incremented but still emit at 0.
+		// The never-incremented components still emit at 0 (stable metric shape).
 		`tenant_api_config_reload_failures_total{component="tenantorg"} 0`,
 		`tenant_api_config_reload_failures_total{component="federation-policy"} 0`,
+		`tenant_api_config_reload_failures_total{component="groups"} 0`,
+		`tenant_api_config_reload_failures_total{component="views"} 0`,
 		`# TYPE tenant_api_config_reload_failures_total counter`,
 	} {
 		if !strings.Contains(body, want) {
