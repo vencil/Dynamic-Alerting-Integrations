@@ -70,13 +70,24 @@ class TestTenantMetadataExemptionRationale:
     def test_generate_tenant_metadata_is_exempt(self):
         assert "generate_tenant_metadata.py" in cmt._EXEMPT
 
-    def test_platform_data_actually_loads_tenant_metadata(self):
-        """行為性釘法：真的跑 _load_tenant_metadata()，不是 grep 原始碼。
+    def test_platform_data_output_actually_embeds_tenant_metadata(self):
+        """行為性釘法：走 public 產生路徑 build_platform_data()，不是 grep 原始碼。
 
-        grep 會被 docstring / 註解裡的字串騙過（那些提及即使 import 被拿掉
-        也還在）。這裡直接執行 module 並要求它真的產出 tenant metadata。
-        `_load_tenant_metadata()` 內部 swallow 例外並回傳 ({}, {})，所以
-        import 一旦斷掉，這個 assertion 就會紅。
+        兩種較弱的寫法都會漏：
+        - grep 原始碼 → 被 docstring / 註解裡的字串騙過（import 拿掉了，
+          提及還在）。
+        - 只呼叫 `_load_tenant_metadata()` → loader 本身還活著，但若
+          `build_platform_data()` 不再把它的結果併進輸出，測試照樣綠、
+          而 platform-data.json 已經沒有 tenant metadata。
+
+        所以這裡斷言的是**最終產物**：build_platform_data() 的輸出必須
+        真的帶著非空的 tenant_metadata / tenant_groups。`_load_tenant_metadata()`
+        內部 swallow 例外並回傳 ({}, {})，而 build_platform_data() 在兩者
+        皆空時會整個略過這兩個 key——所以 import 斷掉或整合被拔掉，
+        這個 assertion 都會紅。
+
+        註：build_platform_data() 只組 dict、不寫檔（寫檔在 main()），
+        因此本測試不會汙染 docs/assets/platform-data.json。
         """
         import importlib.util
 
@@ -85,13 +96,23 @@ class TestTenantMetadataExemptionRationale:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
 
-        _groups, meta = mod._load_tenant_metadata()
-        assert meta, (
-            "generate_platform_data.py 已無法載入 tenant metadata —"
-            " _EXEMPT 對 generate_tenant_metadata.py 的豁免理由失效，"
+        data = mod.build_platform_data()
+
+        assert data.get("tenant_metadata"), (
+            "build_platform_data() 的輸出不含非空的 tenant_metadata —"
+            " generate_tenant_metadata.py 已不再被實際使用，"
+            " _EXEMPT 對它的豁免理由失效："
             " 請改回 Makefile target 或 pre-commit hook 直接引用它。"
         )
-        sample = next(iter(meta.values()))
+
+        # tenant_groups 只斷言「key 存在」，不斷言非空：它由 tenant 的
+        # environment 推導，而現行 conf.d 的租戶都沒宣告 environment
+        # （名稱也不帶 prod-/staging-/dev- 前綴），所以合法地是 {}。
+        # build_platform_data() 在 `if tenant_groups or tenant_metadata:`
+        # 下同時塞這兩個 key，故 key 存在本身即證明整合區塊有跑到。
+        assert "tenant_groups" in data
+
+        sample = next(iter(data["tenant_metadata"].values()))
         assert "rule_packs" in sample and "metric_count" in sample
 
     def test_build_tenant_metadata_is_still_defined(self):
