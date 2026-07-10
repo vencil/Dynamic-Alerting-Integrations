@@ -582,7 +582,10 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_makefile_targets.py --ci
         language: python
         pass_filenames: false
-        files: ^(Makefile|scripts/tools/dx/.*\.py|\.pre-commit-config\.yaml)$
+        # The lint itself is in scope: editing its `_EXEMPT` registry must re-run
+        # the reachability + dead-exemption self-check, else a dead exemption could
+        # be added by a commit touching nothing else and the hook would stay silent.
+        files: ^(Makefile|scripts/tools/dx/.*\.py|scripts/tools/lint/check_makefile_targets\.py|\.pre-commit-config\.yaml)$
 
       - id: metric-dictionary-check
         name: Metric Dictionary ↔ Rule Pack cross-validation
