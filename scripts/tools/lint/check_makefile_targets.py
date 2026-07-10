@@ -39,6 +39,14 @@ MAKEFILE = REPO_ROOT / "Makefile"
 _EXEMPT = {
     # generate_changelog.py 由 pre-commit hook 直接呼叫
     "generate_changelog.py",
+    # generate_tenant_metadata.py 非獨立 build step — 由 generate_platform_data.py
+    # 以 module 匯入呼叫（_load_tenant_metadata → build_tenant_metadata），tenant
+    # metadata 已嵌入 docs/assets/platform-data.json。drift 由 CI 無條件覆蓋
+    # （ci.yml 的 `pre-commit run platform-data-check --all-files` + 獨立的
+    # `generate_platform_data.py --check` step）；本地 platform-data-check hook 的
+    # files: filter 不含 conf.d/，故僅動 tenant YAML 時本地不觸發、CI 才擋。
+    # 此豁免所依賴的 import 路徑由 tests/lint/test_check_makefile_targets.py 釘住。
+    "generate_tenant_metadata.py",
 }
 
 
