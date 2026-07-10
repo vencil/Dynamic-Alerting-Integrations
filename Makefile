@@ -633,10 +633,8 @@ generate-rule-pack-readme: ## 從 Rule Pack YAML 產生（寫入）rule-packs/RE
 	@python3 ./scripts/tools/dx/generate_rule_pack_readme.py --update
 
 .PHONY: platform-data
-platform-data: ## 產生 docs/assets/platform-data.json 與 Tenant Metadata
+platform-data: ## 產生 docs/assets/platform-data.json（含嵌入的 Tenant Metadata）
 	@python3 ./scripts/tools/dx/generate_platform_data.py
-	@GIT_COMMIT=$$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") \
-	 python3 ./scripts/tools/dx/generate_tenant_metadata.py --commit $$GIT_COMMIT
 
 .PHONY: rulepack-configmaps
 rulepack-configmaps: ## 從 rule-packs/ 重生 k8s/03-monitoring/configmap-rules-*.yaml（ADR-024 PR3-pre-2）
