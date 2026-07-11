@@ -481,6 +481,123 @@ class TestSaturatedTokenAsText:
         assert len(issues) == 1
         assert issues[0]["suggestion"] == "--da-color-error-text"
 
+    # --- (c2) TERNARY / CONDITIONAL foreground coverage (the #1074 widening) ---
+    # The prior inline regex required a quote IMMEDIATELY after `color:`, so a bare
+    # saturated token inside a ternary/conditional VALUE slipped through. The value
+    # scan now catches a bare `var(--da-color-(error|warning))` anywhere in the
+    # foreground property's value, bounded to that property (stops at the next
+    # ,/;/}/newline) so a sibling non-foreground property is never mis-attributed.
+
+    def test_ternary_foreground_bare_error_flagged(self):
+        """Real #1074 regression shape (multi-tenant-comparison): a bare saturated
+        token in a ternary foreground value IS flagged — the widening's core job."""
+        issues = dtu.check_saturated_token_as_text(
+            "  const s = { color: isOutlier ? 'var(--da-color-error)' "
+            ": 'var(--da-color-tag-fg)' };",
+            "x.jsx",
+        )
+        assert [i["suggestion"] for i in issues] == ["--da-color-error-text"]
+
+    def test_nested_ternary_foreground_bare_flagged(self):
+        """Real #1074 regression shape (notification nesting): the bare true-branch
+        of a nested `over ? … : near ? … : …` foreground ternary is flagged."""
+        issues = dtu.check_saturated_token_as_text(
+            "  color: isOverLimit ? 'var(--da-color-error)' "
+            ": isNearLimit ? 'var(--da-color-warning)' "
+            ": 'var(--da-color-success)',",
+            "x.jsx",
+        )
+        # First bare saturated branch flags the property (one finding per property).
+        assert len(issues) == 1
+        assert issues[0]["suggestion"] == "--da-color-error-text"
+
+    def test_trap1_sibling_nonfg_property_not_misattributed(self):
+        """TRAP 1 (the critical false-positive + anti-tautology test). A saturated
+        token on a SIBLING non-foreground property on the SAME line must NOT be
+        attributed to the foreground key. BOTH orderings must be clean; the
+        `background`-AFTER-`color` case is load-bearing — it FALSE-POSITIVES the
+        moment the value-bounding char class is relaxed to `.`, so this test fails
+        if the bound is removed."""
+        # background BEFORE color: error token precedes the foreground key.
+        assert dtu.check_saturated_token_as_text(
+            "{ background: 'var(--da-color-error)', color: 'var(--da-color-tag-fg)' }",
+            "x.jsx",
+        ) == []
+        # background AFTER color: error token follows the key — only value-bounding
+        # (stop at the comma) keeps `color:` from swallowing the sibling's token.
+        assert dtu.check_saturated_token_as_text(
+            "{ color: 'var(--da-color-tag-fg)', background: 'var(--da-color-error)' }",
+            "x.jsx",
+        ) == []
+
+    def test_trap2_ternary_both_text_variants_not_flagged(self):
+        """TRAP 2. A ternary whose BOTH branches are AA `-text` variants is the fix,
+        not a violation — the trailing `\\)` bare-token anchor keeps `-text` out."""
+        assert dtu.check_saturated_token_as_text(
+            "color: cond ? 'var(--da-color-error-text)' "
+            ": 'var(--da-color-warning-text)',",
+            "x.jsx",
+        ) == []
+
+    def test_trap2_mixed_ternary_bare_true_branch_flagged(self):
+        """TRAP 2 (other half). A MIXED ternary — bare saturated true-branch, AA
+        `-text` false-branch — IS a real failure and must flag on the bare branch."""
+        issues = dtu.check_saturated_token_as_text(
+            "color: cond ? 'var(--da-color-error)' : 'var(--da-color-error-text)',",
+            "x.jsx",
+        )
+        assert [i["suggestion"] for i in issues] == ["--da-color-error-text"]
+
+    def test_trap3_classname_map_value_string_not_double_counted(self):
+        """TRAP 3 (map-value variant). A colors-map entry whose VALUE is a Tailwind
+        class STRING — `text: 'text-[color:var(--da-color-error)]'` or
+        `color: 'text-[…] bg-[…]'` (config-lint SEVERITY_COLORS / summary chips) —
+        is counted EXACTLY ONCE by (c1). The `(?<!color:)` guard stops the widened
+        inline regex from re-matching the inner `color:var(` and double-flagging."""
+        one = dtu.check_saturated_token_as_text(
+            "    text: 'text-[color:var(--da-color-error)]',", "x.jsx"
+        )
+        assert len(one) == 1
+        assert one[0]["suggestion"] == "--da-color-error-text"
+        two = dtu.check_saturated_token_as_text(
+            "color: 'text-[color:var(--da-color-error)] "
+            "bg-[color:var(--da-color-error-soft)]',",
+            "x.jsx",
+        )
+        assert len(two) == 1
+        assert two[0]["suggestion"] == "--da-color-error-text"
+
+    def test_trap4_nonfg_key_ternary_not_flagged(self):
+        """TRAP 4. Non-foreground keys carrying a saturated token in a ternary are
+        still correct (saturated hue belongs on paint/stroke/background) — widening
+        the value scan must not break the case-sensitive / capital-C key exclusion."""
+        assert dtu.check_saturated_token_as_text(
+            "background: cond ? 'var(--da-color-error)' : 'var(--da-color-success)',",
+            "x.jsx",
+        ) == []
+        assert dtu.check_saturated_token_as_text(
+            "borderColor: cond ? 'var(--da-color-error)' : 'var(--da-color-warning)',",
+            "x.jsx",
+        ) == []
+
+    def test_trap4_hyphenated_css_key_not_misattributed(self):
+        """TRAP 4 (hyphenated variant). The `(?<![\\w-])` key prefix stops the
+        `color` alternative from matching mid-identifier — a `-color` SUFFIX of a
+        hyphenated CSS property (`background-color:` / `border-color:` / a custom
+        `--brand-color:`), which the plain `\\b` anchor let through. These are NOT
+        foreground text and must stay clean; a standalone `color:` at a real boundary
+        still flags. Fails if the anchor regresses to `\\b`."""
+        for hyphenated in (
+            "background-color: 'var(--da-color-error)',",
+            "border-color: cond ? 'var(--da-color-error)' : 'var(--da-color-tag-fg)',",
+            "--brand-color: 'var(--da-color-warning)',",
+        ):
+            assert dtu.check_saturated_token_as_text(hyphenated, "x.jsx") == [], hyphenated
+        # standalone foreground `color:` at a `{`/space/comma boundary still flags.
+        assert [i["suggestion"] for i in dtu.check_saturated_token_as_text(
+            "{ color: 'var(--da-color-error)' }", "x.jsx"
+        )] == ["--da-color-error-text"]
+
 
 # ---------------------------------------------------------------------------
 # Tests for scan_jsx_files and exit logic
