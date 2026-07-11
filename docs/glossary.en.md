@@ -181,8 +181,11 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 **threshold-exporter**
 :   The platform's core component. Reads tenant YAML configurations and converts them to Prometheus metrics (`user_threshold` series). Supports HA deployment (×2), port 8080.
 
-**Three-State Model**
-:   Normal / Silent / Maintenance — three operational states. Each state is implemented via Sentinel Alert + Alertmanager Inhibit, all supporting `expires` auto-expiry.
+**Three-State Config Logic**
+:   The three **config-layer** values: Custom Value / Omitted (→ falls back to `_defaults.yaml`) / Disable (`"disable"` → no output). See [Config-Driven Design](design/config-driven.en.md) §2.1. ⚠️ A **distinct concept** from "Three-State Operational Model" below — don't conflate them under the bare word "three-state".
+
+**Three-State Operational Model**
+:   The three **operational-layer** states: Normal / Silent / Maintenance, implemented via Sentinel Alert + Alertmanager Inhibit, all supporting `expires` auto-expiry. See [Config-Driven Design](design/config-driven.en.md) §2.7.
 
 **TSDB (Time Series Database)**
 :   Prometheus's time series database. This platform's Severity Dedup design ensures TSDB always retains complete data (critical + warning); deduplication occurs only at the notification layer.

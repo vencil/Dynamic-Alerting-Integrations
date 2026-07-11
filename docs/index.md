@@ -71,83 +71,13 @@ graph LR
 
 ---
 
-## 運作原理
+## 為什麼不一樣
 
-=== "傳統做法 (❌)"
+傳統做法每個租戶一套規則（100 租戶 × 50 規則 = 5,000 條表達式）；本平台以 Prometheus `group_left` 向量匹配，**單一規則覆蓋所有租戶、規則數固定不隨租戶數增長**，租戶只宣告 YAML 閾值、零 PromQL。
 
-    ```yaml
-    # 每個租戶 = 獨立規則 — 100 租戶 × 50 規則 = 5,000 條表達式
-    - alert: MySQLHighConnections_db-a
-      expr: mysql_global_status_threads_connected{namespace="db-a"} > 100
-    - alert: MySQLHighConnections_db-b
-      expr: mysql_global_status_threads_connected{namespace="db-b"} > 80
-    # ... 每個租戶重複一次
-    ```
-
-=== "Dynamic Alerting (✅)"
-
-    ```yaml
-    # 1 條規則透過 group_left 匹配覆蓋所有租戶
-    - alert: MariaDBHighConnections
-      expr: |
-        tenant:mysql_threads_connected:max
-        > on(tenant) group_left
-        tenant:alert_threshold:mysql_connections
-
-    # 租戶只需宣告閾值（YAML，零 PromQL）：
-    tenants:
-      db-a: { mysql_connections: "100" }
-      db-b: { mysql_connections: "80" }
-    ```
-
----
-
-## 架構總覽
-
-```mermaid
-graph TB
-    A["租戶配置\n(conf.d/*.yaml)"] -->|per-tenant threshold| B["threshold-exporter\n(×2 HA)"]
-    B -->|"Prometheus metric\n(tenant:alert_threshold:*)"| C["Prometheus\n(16 Rule Packs)"]
-    C -->|group_left matching| D["Alert Rules\n(固定數量)"]
-    D -->|AlertGroup| E["Alertmanager"]
-    E -->|dynamic route| F["Receivers\nwebhook/email/slack/teams"]
-
-    G["Config-driven\nRouting"] -->|YAML| E
-    H["三態模式\n(Normal/Silent/Maintenance)"] -->|suppress| D
-
-    style A fill:#e8f5e9
-    style B fill:#fff3e0
-    style C fill:#e3f2fd
-    style D fill:#f3e5f5
-    style E fill:#fce4ec
-    style F fill:#e0f2f1
-```
-
-詳細架構見 [架構與設計](architecture-and-design.md)。效能數據見 [基準測試](benchmarks.md)。
-
----
-
-## 核心指標
-
-| 指標 | 傳統方案（100 租戶） | Dynamic Alerting |
-|------|---------------------|-----------------|
-| 規則數量 | 5,000+（隨租戶線性增長） | 237（固定，O(M)） |
-| 新租戶導入 | 1–3 天 | < 5 分鐘 |
-| Prometheus 記憶體 | ~600MB+ | ~154MB |
-| 規則評估時間 | 隨租戶線性增長 | 60ms（2 或 102 租戶皆同） |
-| 租戶所需知識 | PromQL + Alertmanager 配置 | YAML 閾值設定 |
-
----
-
-## 平台能力
-
-**規則引擎：** O(M) 複雜度（`group_left` 向量匹配）· 16 個 Rule Pack Projected Volume 獨立部署 · Severity Dedup via Alertmanager Inhibit（[ADR-001](adr/001-severity-dedup-via-inhibit.md)）
-
-**租戶管理：** 三態模式（Normal/Silent/Maintenance）· 四層路由合併（[ADR-007](adr/007-cross-domain-routing-profiles.md)）· 排程式閾值與維護窗口 · Schema Validation · Cardinality Guard
-
-**工具鏈：** `da-tools` CLI（scaffold → migrate → validate → cutover → diagnose）· [CLI 參考](cli-reference.md) · [速查表](cheat-sheet.md)
-
-**部署層級：** Tier 1（Git-Native / GitOps）或 Tier 2（Portal + API，含 RBAC）。對比詳見 [README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/README.md#部署層級)。
+- **運作原理與 before/after 對比** → [架構與設計](architecture-and-design.md)
+- **效能數據**（規則評估 60ms 不隨租戶數變、記憶體 profile）→ [基準測試](benchmarks.md)
+- **完整核心指標表、平台能力與設計決策（ADR）** → [架構與設計](architecture-and-design.md) · [GitHub README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/README.md#平台能力)
 
 ---
 

@@ -11,7 +11,7 @@ lang: en
 
 ## Introduction
 
-This is the **architecture Hub** for the "Multi-Tenant Dynamic Alerting Platform" — a single page to understand how the system is composed and what each design concept is, then route to the deeper spoke documents. Written at depth for Platform Engineers / SREs; the business-impact column and Design Concepts Overview also let decision-makers assess value quickly.
+This is the **architecture Hub** for the "Multi-Tenant Dynamic Alerting Platform" — a single page to understand how the system is composed and what each design concept is, then route to the deeper spoke documents. Written at depth for Platform Engineers / SREs; for a decision-maker's business-value assessment see the [Decision-Maker's Guide](getting-started/for-decision-makers.en.md) — the business-impact column here is just a per-concept purpose note.
 
 > 📖 **Unfamiliar term?** (`group_left`, Projected Volume, tri-state, Cardinality Guard, Sentinel Alert, etc.) — check the [Glossary](glossary.en.md) anytime.
 
@@ -19,7 +19,7 @@ This is the **architecture Hub** for the "Multi-Tenant Dynamic Alerting Platform
 
 | You are… | Start with | Drill into |
 |---|---|---|
-| Decision-maker | Introduction, [Design Concepts Overview](#design-concepts-overview) (business-impact) | [Benchmarks](benchmarks.en.md) |
+| Decision-maker | [Decision-Maker's Guide](getting-started/for-decision-makers.en.md) (business value + evidence) | [Design Concepts Overview](#design-concepts-overview), [Benchmarks](benchmarks.en.md) |
 | New / first-time reader | Introduction, [§1 System Architecture Diagram](#1-system-architecture-diagram) | Design Concepts Overview |
 | Platform / SRE | the whole doc + each spoke | — |
 | Domain Expert (DBA/Infra) | Design Concepts Overview, Tenant API | [Config-Driven Design](design/config-driven.en.md) |
@@ -192,7 +192,7 @@ graph LR
 
 ## Design Concepts Overview
 
-> **Why is this architecture worth investing in?** In a typical 50-tenant environment, the Config-Driven architecture reduces rule maintenance from O(N×M) to O(M), saving 40+ engineering hours per month; Severity Dedup combined with tri-state modes suppresses 60%+ alert noise, improving on-call quality of life. (**The 40+ hours / 60%+ are modeled estimates for a 50-tenant scenario, not a single-customer measurement**.)
+> For business value, ROI, and fit assessment, see the [Decision-Maker's Guide](getting-started/for-decision-makers.en.md); this page focuses on the technical mechanism.
 
 The table below indexes the **core design concepts** (timeless capabilities, not a per-release delivery list; version history in [§5](#5-roadmap)). Each has a standalone spoke document:
 

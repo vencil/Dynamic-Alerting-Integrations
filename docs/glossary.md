@@ -181,8 +181,11 @@ lang: zh
 **threshold-exporter**
 :   本平台的核心元件。讀取 tenant YAML 配置，轉換為 Prometheus metrics（`user_threshold` 系列）。支援 HA 部署（×2），端口 8080。
 
-**Three-State Model（三態模式）**
-:   Normal / Silent / Maintenance 三種運營狀態。每種狀態透過 Sentinel Alert + Alertmanager Inhibit 實現，均支援 `expires` 自動失效。
+**Three-State Config Logic（三態配置語意）**
+:   指**配置層**的三種取值：Custom Value（自訂值）/ Omitted（省略 → 採 `_defaults.yaml` 預設）/ Disable（`"disable"` → 不輸出）。詳見 [Config-Driven 設計](design/config-driven.md) §2.1。⚠️ 與「三態運營模式」是**不同概念**，勿以單詞「三態」混用。
+
+**Three-State Operational Model（三態運營模式）**
+:   指**運營層**的三種狀態：Normal / Silent / Maintenance，透過 Sentinel Alert + Alertmanager Inhibit 實現，均支援 `expires` 自動失效。詳見 [Config-Driven 設計](design/config-driven.md) §2.7。
 
 **TSDB (Time Series Database)**
 :   Prometheus 的時間序列資料庫。本平台的 Severity Dedup 設計確保 TSDB 永遠保留完整數據（critical + warning），只在通知層面去重。

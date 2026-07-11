@@ -13,7 +13,7 @@ lang: zh
 
 ## 簡介
 
-這是「多租戶動態警報平台」的**架構 Hub**——一頁看懂系統怎麼組成、各設計概念是什麼，再路由到深入的 spoke 文件。技術深度為 Platform Engineer / SRE 寫；業務影響欄與設計概念總覽也讓決策者快速評估價值。
+這是「多租戶動態警報平台」的**架構 Hub**——一頁看懂系統怎麼組成、各設計概念是什麼，再路由到深入的 spoke 文件。技術深度為 Platform Engineer / SRE 寫；決策者的商業價值評估請直接看 [決策者評估指南](getting-started/for-decision-makers.md)，本頁業務影響欄僅為各技術概念的用途註解。
 
 > 📖 **遇到不熟的術語**（`group_left`、Projected Volume、三態、Cardinality Guard、Sentinel Alert 等）？隨時查 [術語表](glossary.md)。
 
@@ -21,7 +21,7 @@ lang: zh
 
 | 你是… | 先看 | 想深入再看 |
 |---|---|---|
-| 企業決策者 | 簡介、[設計概念總覽](#設計概念總覽)（業務影響欄） | [性能基準](benchmarks.md) |
+| 企業決策者 | [決策者評估指南](getting-started/for-decision-makers.md)（商業價值 + 證據） | [設計概念總覽](#設計概念總覽)、[性能基準](benchmarks.md) |
 | 新讀者 / 初次了解 | 簡介、[§1 系統架構圖](#1-系統架構圖-system-architecture-diagram) | 設計概念總覽 |
 | Platform / SRE | 全文 + 各 spoke | — |
 | Domain Expert（DBA/Infra） | 設計概念總覽、Tenant API | [Config-Driven 設計](design/config-driven.md) |
@@ -194,7 +194,7 @@ graph LR
 
 ## 設計概念總覽
 
-> **為何這套架構值得投資？** 在典型的 50-tenant 環境中，Config-Driven 架構將規則維護從 O(N×M) 降至 O(M)，每月節省 40+ 小時工程時間；Severity Dedup 與三態模式組合壓制 60%+ 告警噪音，改善 On-call 工作品質。（**40+ 小時 / 60%+ 為 50-tenant 模型推估，非單一客戶實測**。）
+> 商業價值、ROI 與適配評估見 [決策者評估指南](getting-started/for-decision-makers.md)；本頁專注技術機制。
 
 下表是**核心設計概念**的索引（timeless 能力，非逐版交付清單；版本歷史見 [§5](#5-未來路線-roadmap)）。每項都有獨立 spoke 文件深入：
 
