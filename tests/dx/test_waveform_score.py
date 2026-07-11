@@ -987,6 +987,7 @@ def test_cli_redact_error_path_no_path_leak(tmp_path):
     assert r.returncode == 2
     assert "ACMEBANK" not in r.stderr and "tenant_ACMEBANK_prod" not in r.stderr
     assert "--redact 抑制" in r.stderr
+    assert "ERR_REPORT" in r.stderr        # G-4：去識別化錯誤碼供 triage、與路徑洩漏不衝突
     # (B) 版本 skew：缺 fault_window_s（code 明列的預期情境）
     rep = _report([_record(alerts=[_alert()])], [_meta()])
     del rep["metadata"]["series"][0]["fault_window_s"]
@@ -1008,6 +1009,7 @@ def test_cli_redact_argparse_error_no_path_leak(tmp_path):
     assert r.returncode == 2
     assert "LEAKYNAME" not in r.stderr and "unrecognized" not in r.stderr
     assert "--redact" in r.stderr        # 通用抑制訊息
+    assert "ERR_ARGS" in r.stderr        # G-4 錯誤碼
     # 對照：非 --redact 時完整訊息本地可見（含路徑）
     r2 = _run_score("rep1.json", "--tolerances", str(_TOL),
                     "tenant_LEAKYNAME_dc2.json")
@@ -1026,6 +1028,24 @@ def test_cli_redact_malformed_schema_no_traceback(tmp_path):
     assert r.returncode == 2
     assert "Traceback" not in r.stderr and "AttributeError" not in r.stderr
     assert "LEAKYSCHEMA" not in r.stderr
+    assert "ERR_UNEXPECTED" in r.stderr   # G-4 錯誤碼（malformed schema 逃 tuple → catch-all）
+
+
+def test_cli_redact_error_codes_distinguish_tolerances_vs_report(tmp_path):
+    """G-4：去識別化錯誤碼讓 Vibe 客服免 re-run 就能分辨問題在容差檔還是 inject 報告。
+    碼是靜態 enum、無客戶資料，redact/非-redact 都印。"""
+    good = _write_report(tmp_path, _report([_record(alerts=[_alert()])], [_meta()]),
+                         name="r.json")
+    # 容差檔壞（缺 default row）→ ERR_TOLERANCES
+    badtol = tmp_path / "t.yaml"
+    badtol.write_text("defaults:\n  warning: 600\n", encoding="utf-8")   # 無 default
+    rt = _run_score(str(good), "--tolerances", str(badtol), "--redact")
+    assert rt.returncode == 2 and "ERR_TOLERANCES" in rt.stderr
+    # inject 報告壞（缺欄）→ ERR_REPORT
+    badrep = tmp_path / "bad.json"
+    badrep.write_text(json.dumps({"tool": "inject-waveform"}), encoding="utf-8")
+    rr = _run_score(str(badrep), "--tolerances", str(_TOL), "--redact")
+    assert rr.returncode == 2 and "ERR_REPORT" in rr.stderr
 
 
 def test_redact_summary_whitelist_complete():
