@@ -131,6 +131,34 @@ SUPPORTED_SCOPES = {"tenant"}
 # here so a future build_map can round-trip it through a merge preserve).
 MODE_FIELD = "recommendation_mode"
 
+# #916 Item A — lower-bound (``<``) classification (code-level dicts, mirroring
+# KNOWN_DEFERRED). A ``<`` threshold is NOT a blanket needs_review anymore; it is
+# routed into one of three states by these two allowlists (any ``<`` key in
+# NEITHER dict falls through to the fail-loud needs_review path):
+#
+#   NOT_APPLICABLE_KEYS   -> ``recommendation_mode: not-applicable`` (no percentile
+#       recommendation is ever meaningful — an expected-value invariant or a
+#       topology floor). The value is a human rationale surfaced in the reason.
+#   LOWER_BOUND_RESOLVED  -> ``recommendation_mode: percentile-lower`` (a genuine
+#       lower percentile floor the engine can tune). The value is the observed
+#       series the ``<`` alert compares against; build_map validates it is among
+#       the freshly-extracted candidates (and ``<`` / not scaled) before honoring
+#       it, so a rule-pack rename falls back to needs_review (fail-loud).
+NOT_APPLICABLE_KEYS: dict[str, str] = {
+    "kafka_active_controllers": "期望值==1 不變量",
+    "kafka_broker_count": "拓撲下限",
+    "rabbitmq_consumers": "整數 count 下限",
+}
+LOWER_BOUND_RESOLVED: dict[str, str] = {
+    "db2_bufferpool_hit_ratio": "tenant:db2_bufferpool_hit_ratio:min",
+}
+
+# Reason marker for a by-design not-applicable ``<`` entry. MUST NOT contain the
+# ``lower-bound (<)`` substring (threshold_govern classifies the two apart by
+# marker; a collision would mis-route N/A keys into the ungoverned ``<`` list).
+# Pinned by test_observed_map_lib.TestStringSafety.FORBIDDEN.
+_NOT_APPLICABLE_MARKER = "by-design not-applicable"
+
 
 def scope_of(series: str) -> str:
     """Aggregation scope = the recording-rule prefix (``tenant`` / ``tenant_version``).
@@ -201,6 +229,37 @@ def build_map(pack_paths: list[str]) -> dict[str, Any]:
             # typed field (#916 Item B): numeric scaling detected in the alert
             # expr; consumed by check_consistency (scaled drift) + _revalidate.
             entry["scaled"] = True
+
+        # #916 Item A: lower-bound (``<``) three-state classification. A ``<`` key
+        # in NOT_APPLICABLE_KEYS / LOWER_BOUND_RESOLVED short-circuits here; any
+        # other ``<`` key falls through to the generic needs_review path below.
+        if dirs == ["<"] and scope in SUPPORTED_SCOPES:
+            if key in NOT_APPLICABLE_KEYS:
+                # Keep candidates + direction so the drift-guard's stale/scope
+                # checks still bind (else a pack that drops the key leaves a
+                # zombie N/A entry). No needs_review; fixed by-design reason.
+                entry["candidates"] = cands
+                entry[MODE_FIELD] = "not-applicable"
+                entry["reason"] = (
+                    f"{_NOT_APPLICABLE_MARKER} — {NOT_APPLICABLE_KEYS[key]} (#916)"
+                )
+                out[key] = entry
+                continue
+            if (
+                key in LOWER_BOUND_RESOLVED
+                and LOWER_BOUND_RESOLVED[key] in e["candidates"]
+                and not e["scaled"]
+            ):
+                # Symmetric with the ``>`` auto-resolve gate: a resolved series
+                # must be an actual candidate AND unscaled (a ``* N`` would make
+                # the bare series off by a factor). direction=='<' is guaranteed
+                # by ``dirs == ["<"]``.
+                entry["observed_series"] = LOWER_BOUND_RESOLVED[key]
+                entry[MODE_FIELD] = "percentile-lower"
+                out[key] = entry
+                continue
+            # else (``<`` not in either dict, or a resolved key whose series no
+            # longer matches the packs) -> fall through -> needs_review fail-loud.
 
         # Only auto-resolve a single observed_series for SUPPORTED (tenant) scope.
         # Unsupported-scope (e.g. tenant_version) alerts are often compound
@@ -551,13 +610,24 @@ def resolve_observed(entry: dict[str, Any]) -> tuple[Optional[str], Optional[str
             "(deferred #916)"
         )
     direction = entry.get("direction")
+    if direction == "<":
+        # #916 Item A: a lower-bound key is usable ONLY when it was classified
+        # ``percentile-lower`` with a resolved series (analyze_tenant then routes
+        # it to recommend_threshold_lower); ``not-applicable`` skips with the
+        # by-design marker; anything else (a bare/half-resolved ``<`` entry) is
+        # the fail-loud not-supported skip.
+        mode = entry.get(MODE_FIELD)
+        series = entry.get("observed_series")
+        if mode == "percentile-lower" and series:
+            return series, None
+        if mode == "not-applicable":
+            return None, f"{_NOT_APPLICABLE_MARKER} (#916) — no percentile recommendation"
+        return None, "lower-bound (<) metric — not supported (#916)"
     if direction != ">":
         # Require an explicit upper-bound direction. A missing/ambiguous
         # direction (e.g. a hand-edited or half-resolved entry) must NOT slip
         # through to a recommendation — the percentile strategy is only valid
         # for ``observed > threshold`` alerts.
-        if direction == "<":
-            return None, "lower-bound (<) metric — not supported (#916)"
         return None, "missing or ambiguous comparison direction — manual review required"
     series = entry.get("observed_series")
     if not series:
@@ -677,6 +747,23 @@ def check_consistency(
             errors.append(
                 f"{key}: alert now numerically scales the observed operand — the "
                 f"mapped series is off by a factor; regenerate"
+            )
+        # recommendation_mode authority closure (#916 Item A): a mode is only
+        # legal for a key in the corresponding code-level allowlist. A hand-edited
+        # map that stamps ``percentile-lower`` onto an integer-count key (to make
+        # it flow into the lower engine and produce garbage) is a hard error.
+        mode = entry.get(MODE_FIELD)
+        if mode == "percentile-lower" and key not in LOWER_BOUND_RESOLVED:
+            errors.append(
+                f"{key}: recommendation_mode 'percentile-lower' but key not in "
+                f"LOWER_BOUND_RESOLVED (_observed_map_lib.py) — mode spoofed; "
+                f"remove the mode or add the key to the allowlist"
+            )
+        if mode == "not-applicable" and key not in NOT_APPLICABLE_KEYS:
+            errors.append(
+                f"{key}: recommendation_mode 'not-applicable' but key not in "
+                f"NOT_APPLICABLE_KEYS (_observed_map_lib.py) — mode spoofed; "
+                f"remove the mode or add the key to the allowlist"
             )
 
     all_keys = all_threshold_keys(pack_paths)

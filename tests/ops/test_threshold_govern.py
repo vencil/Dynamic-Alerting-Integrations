@@ -338,10 +338,11 @@ def test_run_dry_run_makes_no_write_calls(monkeypatch):
     # tenant-api writes. (run_analysis is stubbed here, so this asserts no PUTs.)
     _stub_reports(monkeypatch, ["db-a", "db-b"])
     calls = _patch_http(monkeypatch)
-    plans, outcomes, ungoverned = tg.run(_args(apply=False))
-    assert len(plans) == 2
-    assert outcomes == []
-    assert ungoverned == []          # _stub_reports has no lower-bound `<` keys
+    res = tg.run(_args(apply=False))
+    assert len(res.plans) == 2
+    assert res.outcomes == []
+    assert res.ungoverned == []      # _stub_reports has no lower-bound `<` keys
+    assert res.not_applicable == [] and res.force_manual == []
     assert calls["put_count"] == 0
 
 
@@ -349,7 +350,7 @@ def test_run_apply_respects_max_prs(monkeypatch):
     _stub_reports(monkeypatch, ["db-a", "db-b", "db-c"])
     _patch_http(monkeypatch, per_tenant=True,
                 put_result=(200, {"status": "pending_review", "pr_url": "u", "pr_number": 1}, None))
-    plans, outcomes, _ung = tg.run(_args(apply=True, max_prs=2))
+    outcomes = tg.run(_args(apply=True, max_prs=2)).outcomes
     opened = [o for o in outcomes if o.status == "pr_opened"]
     skipped = [o for o in outcomes if o.status == "skipped"]
     assert len(opened) == 2
@@ -375,7 +376,7 @@ def test_run_apply_dedup_does_not_consume_cap(monkeypatch):
     monkeypatch.setattr(tg, "http_get_json", fake_get)
     monkeypatch.setattr(tg, "_http_put_yaml", fake_put)
 
-    plans, outcomes, _ung = tg.run(_args(apply=True, max_prs=1))
+    outcomes = tg.run(_args(apply=True, max_prs=1)).outcomes
     by_tenant = {o.tenant: o.status for o in outcomes}
     assert by_tenant["db-a"] == "already_pending"
     assert by_tenant["db-b"] == "pr_opened"
@@ -398,7 +399,7 @@ def test_run_apply_circuit_breaks_on_consecutive_errors(monkeypatch):
     n = tg.MAX_CONSECUTIVE_ERRORS + 3
     _stub_reports(monkeypatch, [f"db-{i}" for i in range(n)])
     calls = _patch_http(monkeypatch, per_tenant=True, put_result=(503, {"error": "overloaded"}, None))
-    plans, outcomes, _ung = tg.run(_args(apply=True, max_prs=100))
+    outcomes = tg.run(_args(apply=True, max_prs=100)).outcomes
     errors = [o for o in outcomes if o.status == "error"]
     aborted = [o for o in outcomes if o.status == "skipped" and "aborted" in o.message]
     assert len(errors) == tg.MAX_CONSECUTIVE_ERRORS          # stopped attempting after the cap
@@ -440,9 +441,9 @@ def test_run_surfaces_ungoverned_but_keeps_it_out_of_plans(monkeypatch):
             reason="skipped: lower-bound (<) metric — not supported (#916)"),
     ])]
     monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: reports)
-    plans, outcomes, ungoverned = tg.run(_args(apply=False))
-    assert [(u.tenant, u.key) for u in ungoverned] == [("db-a", "db2_hit_ratio")]
-    planned_keys = [c.key for p in plans for c in p.changes]
+    res = tg.run(_args(apply=False))
+    assert [(u.tenant, u.key) for u in res.ungoverned] == [("db-a", "db2_hit_ratio")]
+    planned_keys = [c.key for p in res.plans for c in p.changes]
     assert planned_keys == ["mysql_connections"]          # `<` never becomes actionable
 
 
@@ -497,12 +498,16 @@ def test_lower_bound_marker_is_substring_of_live_engine_skip_reason():
     assert [(u.tenant, u.key) for u in ung] == [("db-x", "hit_ratio")]
 
 
-def test_lower_bound_marker_matches_committed_observed_map():
-    # PRODUCTION path: a `<` metric is flagged needs_review in build_map with the
-    # line-226 reason, materialised in the committed metric_observed_map.yaml.
-    # Every committed `<` entry's reason must carry the marker → a regen that
-    # drifts the string fails here. (The test above is the deterministic guard;
-    # this tolerates zero `<` entries but in practice covers db2/kafka/rabbitmq.)
+def test_committed_lower_bound_entries_satisfy_three_state_invariant():
+    # PRODUCTION contract (#916 Item A, rewrites the old single-marker pin): every
+    # committed `<` entry must satisfy EXACTLY ONE of the three states —
+    #   T1 percentile-lower : mode==percentile-lower ∧ observed_series ∧
+    #                         ¬needs_review ∧ key∈LOWER_BOUND_RESOLVED
+    #   T2 not-applicable   : mode==not-applicable ∧ ¬needs_review ∧
+    #                         by-design marker in reason ∧ key∈NOT_APPLICABLE_KEYS
+    #   T3 needs_review     : needs_review ∧ "lower-bound (<)" in reason
+    # A regen that drifts a mode/marker, or a hand-edit that half-classifies a
+    # `<` key, fails here.
     import os
     import yaml
     import _observed_map_lib as oml
@@ -511,9 +516,21 @@ def test_lower_bound_marker_matches_committed_observed_map():
         keys = (yaml.safe_load(fh) or {}).get("keys", {})
     lower_bound = {k: v for k, v in keys.items()
                    if isinstance(v, dict) and v.get("direction") == "<"}
+    assert lower_bound, "expected committed `<` entries (db2/kafka/rabbitmq)"
+
+    def _state(k, e):
+        mode = e.get(oml.MODE_FIELD)
+        reason = e.get("reason") or ""
+        t1 = (mode == "percentile-lower" and bool(e.get("observed_series"))
+              and not e.get("needs_review") and k in oml.LOWER_BOUND_RESOLVED)
+        t2 = (mode == "not-applicable" and not e.get("needs_review")
+              and oml._NOT_APPLICABLE_MARKER in reason and k in oml.NOT_APPLICABLE_KEYS)
+        t3 = bool(e.get("needs_review")) and tg._LOWER_BOUND_SKIP_MARKER in reason
+        return [name for name, ok in (("T1", t1), ("T2", t2), ("T3", t3)) if ok]
+
     for k, entry in lower_bound.items():
-        assert tg._LOWER_BOUND_SKIP_MARKER in (entry.get("reason") or ""), \
-            f"{k}: committed observed-map reason drifted from marker"
+        states = _state(k, entry)
+        assert len(states) == 1, f"{k}: matched {states or 'no'} states (want exactly 1): {entry}"
 
 
 # ---------------------------------------------------------------------------
@@ -590,7 +607,7 @@ def test_systemic_failure_live_path_all_503(monkeypatch):
     # outcome is "error" → systemic.
     _stub_reports(monkeypatch, ["db-a", "db-b"])
     _patch_http(monkeypatch, per_tenant=True, put_result=(503, {"error": "overloaded"}, None))
-    _plans, outcomes, _ung = tg.run(_args(apply=True, max_prs=100))
+    outcomes = tg.run(_args(apply=True, max_prs=100)).outcomes
     assert outcomes and all(o.status == "error" for o in outcomes)
     assert tg._is_systemic_failure(outcomes, applied=True) is True
 
@@ -599,7 +616,7 @@ def test_systemic_failure_live_path_success_is_clean(monkeypatch):
     _stub_reports(monkeypatch, ["db-a", "db-b"])
     _patch_http(monkeypatch, per_tenant=True,
                 put_result=(200, {"status": "pending_review", "pr_url": "u", "pr_number": 1}, None))
-    _plans, outcomes, _ung = tg.run(_args(apply=True, max_prs=100))
+    outcomes = tg.run(_args(apply=True, max_prs=100)).outcomes
     assert outcomes and all(o.status == "pr_opened" for o in outcomes)
     assert tg._is_systemic_failure(outcomes, applied=True) is False
 
@@ -607,7 +624,7 @@ def test_systemic_failure_live_path_success_is_clean(monkeypatch):
 def test_main_exits_violation_on_total_apply_failure(monkeypatch, tmp_path):
     # END-TO-END wiring: main() must convert a systemic failure into a non-zero exit.
     monkeypatch.setattr(tg, "run",
-                        lambda args: ([], [tg.TenantOutcome("t", "error")], []))
+                        lambda args: tg.GovernanceResult([], [tg.TenantOutcome("t", "error")], []))
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args",
                         lambda self: _args(apply=True, config_dir=str(tmp_path)))
     with pytest.raises(SystemExit) as exc:
@@ -617,7 +634,7 @@ def test_main_exits_violation_on_total_apply_failure(monkeypatch, tmp_path):
 
 def test_main_exits_ok_on_successful_apply(monkeypatch, tmp_path):
     monkeypatch.setattr(tg, "run",
-                        lambda args: ([], [tg.TenantOutcome("t", "pr_opened")], []))
+                        lambda args: tg.GovernanceResult([], [tg.TenantOutcome("t", "pr_opened")], []))
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args",
                         lambda self: _args(apply=True, config_dir=str(tmp_path)))
     with pytest.raises(SystemExit) as exc:
@@ -635,7 +652,7 @@ def test_systemic_failure_live_path_circuit_breaker_many_tenants(monkeypatch):
     n = tg.MAX_CONSECUTIVE_ERRORS + 3
     _stub_reports(monkeypatch, [f"db-{i}" for i in range(n)])
     _patch_http(monkeypatch, per_tenant=True, put_result=(503, {"error": "down"}, None))
-    _plans, outcomes, _ung = tg.run(_args(apply=True, max_prs=100))
+    outcomes = tg.run(_args(apply=True, max_prs=100)).outcomes
     statuses = {o.status for o in outcomes}
     assert "error" in statuses and "skipped" in statuses   # breaker actually tripped
     assert tg._is_systemic_failure(outcomes, applied=True) is True
@@ -726,3 +743,119 @@ def test_auth_headers_no_token_still_has_identity(monkeypatch):
     h = tg._auth_headers(_args(auth_token=None, auth_token_file=None))
     assert "Authorization" not in h
     assert h["X-Forwarded-Groups"] == "threshold-governance"
+
+
+# ---------------------------------------------------------------------------
+# 8. #916 Item A — lower-bound integration: by-design N/A (INFO) + force_manual
+#    (manual-review section). N/A must LEAVE the ⚠ ungoverned list.
+# ---------------------------------------------------------------------------
+def _fm(key, tenant_reason, delta=None):
+    return recommend.KeyRecommendation(
+        key=key, current_value="0.95", recommended=None, delta_pct=delta,
+        force_manual=True, guardrail_reason=tenant_reason,
+        reason=f"lower-bound floor → manual review: {tenant_reason}")
+
+
+def test_collect_not_applicable_isolates_by_design():
+    reports = [
+        _report("db-a", [
+            _kr("mysql_connections", "2000", 100.0, -95.0, recommend.CONFIDENCE_HIGH),
+            _kr("kafka_active_controllers", "1",
+                reason="skipped: by-design not-applicable (#916) — no percentile recommendation"),
+        ]),
+        _report("db-b", [
+            _kr("rabbitmq_consumers", "2",
+                reason="skipped: by-design not-applicable (#916) — no percentile recommendation"),
+        ]),
+    ]
+    na = tg.collect_not_applicable(reports)
+    assert [(u.tenant, u.key) for u in na] == [
+        ("db-a", "kafka_active_controllers"), ("db-b", "rabbitmq_consumers")]
+    # and by-design N/A keys must NOT be caught by the ungoverned `<` detector
+    assert tg.collect_ungoverned_lower_bound(reports) == []
+
+
+def test_collect_force_manual_isolates_flagged_keys():
+    reports = [_report("db-a", [
+        _kr("mysql_connections", "2000", 100.0, -95.0, recommend.CONFIDENCE_HIGH),
+        _fm("db2_bufferpool_hit_ratio", "would relax the floor (lower it)", delta=40.0),
+    ])]
+    fm = tg.collect_force_manual(reports)
+    assert [(u.tenant, u.key) for u in fm] == [("db-a", "db2_bufferpool_hit_ratio")]
+    assert fm[0].guardrail_reason.startswith("would relax")
+    assert fm[0].delta_pct == 40.0
+
+
+def test_run_surfaces_not_applicable_and_force_manual(monkeypatch):
+    reports = [_report("db-a", [
+        _kr("mysql_connections", "2000", 100.0, -95.0, recommend.CONFIDENCE_HIGH, p95=100.0),
+        _kr("kafka_active_controllers", "1",
+            reason="skipped: by-design not-applicable (#916) — no percentile recommendation"),
+        _fm("db2_bufferpool_hit_ratio", "would relax the floor (lower it)", delta=40.0),
+    ])]
+    monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: reports)
+    res = tg.run(_args(apply=False))
+    assert [(u.tenant, u.key) for u in res.not_applicable] == [("db-a", "kafka_active_controllers")]
+    assert [(u.tenant, u.key) for u in res.force_manual] == [("db-a", "db2_bufferpool_hit_ratio")]
+    assert res.ungoverned == []                       # N/A left the ⚠ list
+    # force_manual / N/A never become an auto-PR plan
+    assert [c.key for p in res.plans for c in p.changes] == ["mysql_connections"]
+
+
+def test_text_report_shows_force_manual_section_and_na_info():
+    fm = [tg.ForceManualKey("db-a", "db2_bufferpool_hit_ratio",
+                            "would relax the floor (lower it)", 40.0)]
+    na = [tg.NotApplicableKey("db-b", "kafka_active_controllers", "by-design ...")]
+    out = tg.format_text_report([], [], applied=False, force_manual=fm, not_applicable=na)
+    # force_manual: a ⚠ manual-review detail line with the guardrail reason + miss delta
+    assert "db-a / db2_bufferpool_hit_ratio" in out
+    assert "would relax the floor" in out
+    assert "+40.0% miss" in out
+    assert ("需人工 review" in out) or ("manual review" in out.lower())
+    # N/A: an ℹ INFO line, NOT a ⚠
+    assert ("by-design" in out.lower()) or ("不適用" in out)
+
+
+def test_text_report_force_manual_count_folded_into_summary():
+    report = _report("db-a", [
+        _kr("mysql_connections", "2000", 100.0, -95.0, recommend.CONFIDENCE_HIGH, p95=100.0)])
+    plans = tg.build_governance_plan([report], 25.0)
+    fm = [tg.ForceManualKey("db-b", "db2_bufferpool_hit_ratio", "relax", None)]
+    lines = tg.format_text_report(plans, [], applied=False, force_manual=fm).splitlines()
+    summary_idx = next(i for i, ln in enumerate(lines) if ln.startswith("Summary:"))
+    detail_idx = next(i for i, ln in enumerate(lines) if "db-b / db2_bufferpool_hit_ratio" in ln)
+    assert detail_idx < summary_idx                   # detail above the bottom line
+    assert summary_idx == len(lines) - 1              # Summary is last
+    assert ("人工 review" in lines[summary_idx]) or ("manual review" in lines[summary_idx].lower())
+
+
+def test_json_report_includes_na_and_force_manual():
+    fm = [tg.ForceManualKey("db-a", "db2_bufferpool_hit_ratio", "relax", 40.0)]
+    na = [tg.NotApplicableKey("db-b", "kafka_active_controllers", "by-design ...")]
+    out = json.loads(tg.format_json_report([], [], applied=False,
+                                           not_applicable=na, force_manual=fm))
+    assert out["summary"]["force_manual"] == 1
+    assert out["summary"]["not_applicable"] == 1
+    assert out["force_manual"][0]["key"] == "db2_bufferpool_hit_ratio"
+    assert out["not_applicable"][0]["key"] == "kafka_active_controllers"
+
+
+def test_not_applicable_marker_bound_to_lib_constant():
+    # drift guard: govern's N/A marker must equal the lib constant build_map stamps.
+    assert tg._NOT_APPLICABLE_MARKER == recommend.observed_map_lib._NOT_APPLICABLE_MARKER
+
+
+def test_govern_plan_table_tags_lower_bound_delta_with_miss():
+    # item 2: a lower-bound tighten change (reason carries the engine's "miss-rate"
+    # marker) must show "+X% miss" in the plan/change table — govern's table is the
+    # operator's only automatic weekly surface, and a bare negative delta beside a
+    # RISING value reads as a mistake without the miss tag. cli-reference promises
+    # this; the code must actually do it (codified > documented).
+    rec = _kr("db2_bufferpool_hit_ratio", "0.95", recommended=0.97, delta=-40.0,
+              confidence=recommend.CONFIDENCE_HIGH, p95=0.97,
+              reason="lower-bound P5 floor → tighten (raise floor); miss-rate -40.0%")
+    plans = tg.build_governance_plan([_report("db-a", [rec])], 25.0)
+    assert plans and plans[0].changes                    # actionable tighten
+    out = tg.format_text_report(plans, [], applied=False)
+    assert any("db2_bufferpool_hit_ratio" in ln and "miss" in ln
+               for ln in out.splitlines())

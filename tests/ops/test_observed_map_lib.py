@@ -678,3 +678,141 @@ class TestStringSafety:
             + L.check_consistency(m, [p_scaled])["errors"]
         )
         self._assert_clean(errs)
+
+
+# ---------------------------------------------------------------------------
+# #916 Item A — lower-bound (<) three-state classification
+# ---------------------------------------------------------------------------
+
+# A ``<`` alert on a NOT_APPLICABLE_KEYS key (kafka_active_controllers).
+PACK_NA_KEY = """
+groups:
+  - name: g
+    rules:
+      - record: tenant:kafka_active_controllers:max
+        expr: max by(tenant) (kafka_active_controllers)
+      - record: tenant:alert_threshold:kafka_active_controllers
+        expr: max by(tenant) (user_threshold{metric="kafka_active_controllers"})
+      - alert: KafkaControllersLow
+        expr: |
+          tenant:kafka_active_controllers:max
+          < on(tenant) group_left tenant:alert_threshold:kafka_active_controllers
+"""
+
+# A ``<`` alert on the LOWER_BOUND_RESOLVED key with the dict-specified series.
+PACK_RESOLVED_KEY = """
+groups:
+  - name: g
+    rules:
+      - record: tenant:db2_bufferpool_hit_ratio:min
+        expr: min by(tenant) (db2_bufferpool_hit_ratio)
+      - record: tenant:alert_threshold:db2_bufferpool_hit_ratio
+        expr: max by(tenant) (user_threshold{metric="db2_bufferpool_hit_ratio"})
+      - alert: Db2HitRatioLow
+        expr: |
+          tenant:db2_bufferpool_hit_ratio:min
+          < on(tenant) group_left tenant:alert_threshold:db2_bufferpool_hit_ratio
+"""
+
+# Same key but the observed series was RENAMED away from the dict pick → the
+# resolved classification must NOT honor it (fail-loud needs_review).
+PACK_RESOLVED_KEY_RENAMED = """
+groups:
+  - name: g
+    rules:
+      - record: tenant:db2_bufferpool_hit_ratio:avg
+        expr: avg by(tenant) (db2_bufferpool_hit_ratio)
+      - record: tenant:alert_threshold:db2_bufferpool_hit_ratio
+        expr: max by(tenant) (user_threshold{metric="db2_bufferpool_hit_ratio"})
+      - alert: Db2HitRatioLow
+        expr: |
+          tenant:db2_bufferpool_hit_ratio:avg
+          < on(tenant) group_left tenant:alert_threshold:db2_bufferpool_hit_ratio
+"""
+
+
+class TestLowerBoundClassification:
+    def test_not_applicable_key_gets_mode_and_keeps_fields(self, tmp_path):
+        m = L.build_map([_write_pack(tmp_path, "rule-pack-kafka.yaml", PACK_NA_KEY)])
+        e = m["kafka_active_controllers"]
+        assert e[L.MODE_FIELD] == "not-applicable"
+        assert not e.get("needs_review")
+        assert e["direction"] == "<"                    # direction kept
+        assert e["candidates"] == ["tenant:kafka_active_controllers:max"]  # candidates kept
+        assert L._NOT_APPLICABLE_MARKER in e["reason"]
+        assert "lower-bound (<)" not in e["reason"]      # must not collide with T3 marker
+        assert "observed_series" not in e
+
+    def test_resolved_key_gets_series_and_percentile_lower(self, tmp_path):
+        m = L.build_map([_write_pack(tmp_path, "rule-pack-db2.yaml", PACK_RESOLVED_KEY)])
+        e = m["db2_bufferpool_hit_ratio"]
+        assert e[L.MODE_FIELD] == "percentile-lower"
+        assert e["observed_series"] == "tenant:db2_bufferpool_hit_ratio:min"
+        assert e["direction"] == "<"
+        assert not e.get("needs_review")
+        assert "candidates" not in e                     # resolved → series XOR candidates
+
+    def test_resolved_series_mismatch_falls_back_to_needs_review(self, tmp_path):
+        # the pack renamed the series away from LOWER_BOUND_RESOLVED's pick → the
+        # generator must NOT honor a stale pick; fail-loud to needs_review.
+        m = L.build_map([_write_pack(tmp_path, "rule-pack-db2.yaml",
+                                     PACK_RESOLVED_KEY_RENAMED)])
+        e = m["db2_bufferpool_hit_ratio"]
+        assert e.get("needs_review") is True
+        assert L.MODE_FIELD not in e
+        assert "observed_series" not in e
+        assert "lower-bound (<)" in e["reason"]
+
+    def test_committed_map_classification_pin(self):
+        # DATA-PIN: the committed map's four `<` entries carry exactly the #916
+        # classification (regen output pinned so a silent drift fails here).
+        m = L.load_observed_map()
+        if not m:
+            pytest.skip("committed observed-map not present")
+        db2 = m["db2_bufferpool_hit_ratio"]
+        assert db2[L.MODE_FIELD] == "percentile-lower"
+        assert db2["observed_series"] == "tenant:db2_bufferpool_hit_ratio:min"
+        assert not db2.get("needs_review")
+        for na in ("kafka_active_controllers", "kafka_broker_count", "rabbitmq_consumers"):
+            e = m[na]
+            assert e[L.MODE_FIELD] == "not-applicable", na
+            assert not e.get("needs_review"), na
+            assert L._NOT_APPLICABLE_MARKER in e["reason"], na
+
+    def test_regen_idempotent_over_committed_lower_bound(self):
+        # merge_maps(committed, build_map(real)) == committed for the `<` entries
+        # (the whole map is pinned by test_idempotent_pin_on_committed_map; this
+        # narrows the failure message to the lower-bound cohort).
+        committed = L.load_observed_map()
+        if not committed:
+            pytest.skip("committed observed-map not present")
+        fresh = L.build_map(L.default_pack_paths())
+        merged, _w, _s = L.merge_maps(committed, fresh)
+        for k in ("db2_bufferpool_hit_ratio", "kafka_active_controllers",
+                  "kafka_broker_count", "rabbitmq_consumers"):
+            assert merged[k] == committed[k], f"{k} not idempotent"
+
+
+class TestModeMembershipDriftGuard:
+    """recommendation_mode authority closure (#916 §2 point 2): a mode is only
+    legal for a key in the matching allowlist — a hand-edited spoof is an ERROR."""
+
+    def test_percentile_lower_on_non_allowlisted_key_is_error(self, tmp_path):
+        p = _write_pack(tmp_path, "rule-pack-clean.yaml", PACK_CLEAN)
+        m = L.build_map([p])                             # foo is a clean upper-bound key
+        m["foo"][L.MODE_FIELD] = "percentile-lower"      # spoof: foo ∉ LOWER_BOUND_RESOLVED
+        res = L.check_consistency(m, [p])
+        assert any("foo" in e and "percentile-lower" in e for e in res["errors"])
+
+    def test_not_applicable_on_non_allowlisted_key_is_error(self, tmp_path):
+        p = _write_pack(tmp_path, "rule-pack-clean.yaml", PACK_CLEAN)
+        m = L.build_map([p])
+        m["foo"][L.MODE_FIELD] = "not-applicable"        # spoof: foo ∉ NOT_APPLICABLE_KEYS
+        res = L.check_consistency(m, [p])
+        assert any("foo" in e and "not-applicable" in e for e in res["errors"])
+
+    def test_legit_modes_are_not_flagged(self, tmp_path):
+        p = _write_pack(tmp_path, "rule-pack-db2.yaml", PACK_RESOLVED_KEY)
+        m = L.build_map([p])
+        res = L.check_consistency(m, [p])
+        assert res["errors"] == []

@@ -2554,7 +2554,16 @@ da-tools threshold-recommend --generate-observed-map
 
 > **#720 STAGE-1（`--export-patch`）**：輸出一段 `tenants:`-rooted 的 conf.d override（只含有實際建議的 key，within-margin / 略過的 key 以註解列出）。operator review 後 merge 進對應 `conf.d/<tenant>.yaml` 並自開 PR → 既有 `backtest.yaml` CI 自動貼 old-vs-new 觸發次數風險報告（STAGE-1 價值基石）。本工具**不就地改檔**（in-place ruamel round-trip 為 defer，見 #721）。
 >
-> **#719 資料源**：推薦值取自每個閾值 key 在 rule-pack alert 中**實際比對**的觀測 recording rule（透過 `scripts/tools/ops/metric_observed_map.yaml`），而非已設定的 `user_threshold`。無對映 / 下界(<) / version-aware / 待人工解析的 key 會 fail-loud 略過並附原因。observed-map 由 `--generate-observed-map` 產生、CI drift-guard 把關。重新產生時採 **merge-preserve**（#916）：仍有效的人工 resolved `observed_series` 會跨 rule-pack 變更保留（pick 失效則降回 needs_review、已移除的 key 則 drop），摘要列出 preserved/demoted/dropped 計數、細節走 stderr WARN。
+> **#719 資料源**：推薦值取自每個閾值 key 在 rule-pack alert 中**實際比對**的觀測 recording rule（透過 `scripts/tools/ops/metric_observed_map.yaml`），而非已設定的 `user_threshold`。無對映 / version-aware / 待人工解析的 key 會 fail-loud 略過並附原因。observed-map 由 `--generate-observed-map` 產生、CI drift-guard 把關。重新產生時採 **merge-preserve**（#916）：仍有效的人工 resolved `observed_series` 會跨 rule-pack 變更保留（pick 失效則降回 needs_review、已移除的 key 則 drop），摘要列出 preserved/demoted/dropped 計數、細節走 stderr WARN。
+>
+> **#916 下界 (`<`) 三態**：下界閾值（hit-ratio / 可用度**下限**，腐敗＝下修 floor）不再一律 skip，而由 code-level allowlist 分三態：
+> - **`percentile-lower`**（可推薦）：opt-in 的下限 key（如 `db2_bufferpool_hit_ratio`）走專屬 **P5 floor 引擎**——完整 UTC 日分桶取 daily-P5，`min(daily-median, pooled)` 抗污染；4dp `ROUND_FLOOR`（floor 防捨入偷放鬆）；以 **miss-rate（互補空間 `1-value`）** 度量腐敗。護欄依序：**放鬆（下修 floor）一律 `force_manual` 交人（無幅度豁免）** → clamp（不把容忍 miss-rate 收到現值的 25% 以下）→ 收緊 within-10%-miss-margin 視為無變更。樣本不足 / current 或 candidate 超出 (0,1) 亦 `force_manual`。
+> - **`not-applicable`**（by-design 跳過）：期望值不變量 / 拓撲下限 / 整數 count 下限（如 `kafka_active_controllers` / `kafka_broker_count` / `rabbitmq_consumers`）——百分位推薦無意義，治理視為完成、列 INFO。
+> - **`needs_review`**（未分類）：不在任何 allowlist 的 `<` key，fail-loud 待人工分類。
+>
+> mode 權威由 drift-guard 把關：手編 map 對非 allowlist key 冒充 `percentile-lower` / `not-applicable` 是 CI 硬錯。**下界 delta 為 miss-rate**，export-patch / 治理表格以 `+X% miss` 標示，避免誤讀方向。此外估計量發散閘（pooled-P5 的 miss-rate ≥ 1.5× daily-median-P5）會擋下「週期低谷坐在現值之上」的假自動收緊（否則每週對低谷誤鳴）——交人工。
+>
+> **下界 lookback 指引**：percentile-lower key 需 **≥5 完整 UTC 日**；預設 `--lookback 7d` 排除兩端 partial 後僅約 6 完整日、邊際薄且對 scrape gap 脆弱，**建議下界 key 用 `--lookback 14d`**（不足 5 完整日時引擎 `force_manual` fail-loud，不出垃圾）。
 
 **信心等級**
 
@@ -2617,7 +2626,11 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 | `--throttle-seconds` | 開 PR 之間的間隔秒數 | `2` |
 | `--json` | JSON 輸出 | - |
 
-> **閘門**：只納 \|delta\| ≥ `--min-delta-pct` 且 confidence ∈ {HIGH, MEDIUM} 的推薦（樣本不足不開 PR，防破窗）。**Dedup**：tenant-api 對「該租戶已有 pending PR」回 409 → 視為已在處理、跳過，重跑不洗版。**通道隔離**：PUT 帶 `X-DA-Write-Source: threshold-governance` → PR 走獨立 label / 標題 / 來源，不冒充 tenant-manager UI、不污染告警平面。讀-改-寫只 surgical 取代被推薦的值行（保留註解，PR diff 乾淨）。推薦邏輯 / 資料源完全沿用 `threshold-recommend`（Day-N observed recording rule，#719）。
+> **閘門**：只納 \|delta\| ≥ `--min-delta-pct` 且 confidence ∈ {HIGH, MEDIUM} 的推薦（樣本不足不開 PR，防破窗），並**排除下界 `force_manual`**（放鬆 floor / 超出 domain / 樣本不足的下限推薦不自動開 PR）。**Dedup**：tenant-api 對「該租戶已有 pending PR」回 409 → 視為已在處理、跳過，重跑不洗版。**通道隔離**：PUT 帶 `X-DA-Write-Source: threshold-governance` → PR 走獨立 label / 標題 / 來源，不冒充 tenant-manager UI、不污染告警平面。讀-改-寫只 surgical 取代被推薦的值行（保留註解，PR diff 乾淨）。推薦邏輯 / 資料源完全沿用 `threshold-recommend`（Day-N observed recording rule，#719）。
+>
+> **#916 下界整合**：下界 `percentile-lower` 收緊推薦（拉高 floor）會正常經閘門開 PR；但 `force_manual`（放鬆 / domain / 樣本 / 估計量發散）另列 **manual-review section**（附 `guardrail_reason` + miss delta），`not-applicable` 列 **INFO**（治理完成）——皆計入 summary、JSON 輸出 `force_manual` / `not_applicable` 陣列與計數。治理表格對下界 change 亦標 `+X% miss`。
+>
+> **`--min-delta-pct` 空間不對稱**：此旋鈕對上界比的是 **value 空間** delta、對下界比的是 **miss-rate 空間** delta——同一數值敏感度差很多（0.95 floor 的 25% miss ≈ 1.3% value）。`--min-delta-pct` 下限 `5.0` 指的是上界 5% value 邊界（下界 no-change 邊界為 10% miss），故該下限為下界的必要非充分條件。下界 key 建議搭配 `--lookback 14d`（週跑 govern 對下界覆蓋亦然）。
 
 #### test-notification
 
