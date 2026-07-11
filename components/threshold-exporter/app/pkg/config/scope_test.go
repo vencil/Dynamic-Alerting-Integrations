@@ -10,6 +10,7 @@ package config
 // inherited from ResolveEffective and tested there.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -19,27 +20,9 @@ import (
 	"github.com/vencil/threshold-exporter/internal/testutil"
 )
 
-// writeTree renders a literal directory layout for a single test.
-// Keys are forward-slash repo-relative paths under tmpdir; values
-// are the file body. Empty value means "create the directory".
-func writeTree(t *testing.T, tmp string, files map[string]string) {
-	t.Helper()
-	for rel, body := range files {
-		clean := filepath.Join(tmp, filepath.FromSlash(rel))
-		if body == "" {
-			if err := os.MkdirAll(clean, 0o755); err != nil {
-				t.Fatalf("mkdir %q: %v", clean, err)
-			}
-			continue
-		}
-		// testutil.WriteFile handles the mkdir + write pair below.
-		testutil.WriteFile(t, clean, body)
-	}
-}
-
 func TestScopeEffective_WholeTree(t *testing.T) {
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml":        "defaults:\n  cpu: 70\n",
 		"conf.d/db/_defaults.yaml":     "defaults:\n  cpu: 80\n",
 		"conf.d/db/tenant-a.yaml":      "tenants:\n  tenant-a:\n    cpu: 85\n",
@@ -83,7 +66,7 @@ func TestScopeEffective_WholeTree(t *testing.T) {
 // merged defaults).
 func TestScopeEffective_ExposesPreMergeSnapshots(t *testing.T) {
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml":    "defaults:\n  cpu: 70\n",
 		"conf.d/db/_defaults.yaml": "defaults:\n  cpu: 80\n",
 		"conf.d/db/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n", // redundant! same as L1 db defaults
@@ -130,7 +113,7 @@ func TestScopeEffective_ExposesPreMergeSnapshots(t *testing.T) {
 // computeEffectiveConfigBytesDetailed promises.
 func TestScopeEffective_MergedDefaultsIsIndependentSnapshot(t *testing.T) {
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults:\n  cpu: 70\n  shared:\n    nested: 1\n",
 		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 99\n",
 	})
@@ -160,7 +143,7 @@ func TestScopeEffective_MergedDefaultsIsIndependentSnapshot(t *testing.T) {
 
 func TestScopeEffective_SubScope(t *testing.T) {
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml":    "defaults:\n  cpu: 70\n",
 		"conf.d/db/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 85\n",
 		"conf.d/web/tenant-c.yaml": "tenants:\n  tenant-c:\n    cpu: 95\n",
@@ -187,7 +170,7 @@ func TestScopeEffective_SubScope(t *testing.T) {
 
 func TestScopeEffective_ScopeOutsideRoot(t *testing.T) {
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml":  "defaults: {}\n",
 		"other/tenant-evil.yaml": "tenants:\n  evil:\n    cpu: 1\n",
 	})
@@ -204,7 +187,7 @@ func TestScopeEffective_ScopeOutsideRoot(t *testing.T) {
 
 func TestScopeEffective_DuplicateTenant(t *testing.T) {
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml":       "defaults: {}\n",
 		"conf.d/a/tenant-x.yaml":      "tenants:\n  tenant-x:\n    cpu: 1\n",
 		"conf.d/b/tenant-x-copy.yaml": "tenants:\n  tenant-x:\n    cpu: 2\n",
@@ -217,11 +200,25 @@ func TestScopeEffective_DuplicateTenant(t *testing.T) {
 	if !strings.Contains(err.Error(), "duplicate tenant ID") {
 		t.Errorf("error %q should call out duplicate", err.Error())
 	}
+	// C6-A (#127): the walker now returns a typed *DuplicateTenantError so
+	// library consumers can errors.As it instead of string-matching. Pin
+	// that the type unwraps at the pkg/config layer AND that its fields
+	// carry the offending tenant + both files (paths differ, non-empty).
+	var dupErr *DuplicateTenantError
+	if !errors.As(err, &dupErr) {
+		t.Fatalf("error should unwrap to *DuplicateTenantError, got %T: %v", err, err)
+	}
+	if dupErr.TenantID != "tenant-x" {
+		t.Errorf("DuplicateTenantError.TenantID = %q, want tenant-x", dupErr.TenantID)
+	}
+	if dupErr.PathA == "" || dupErr.PathB == "" || dupErr.PathA == dupErr.PathB {
+		t.Errorf("DuplicateTenantError paths malformed: A=%q B=%q", dupErr.PathA, dupErr.PathB)
+	}
 }
 
 func TestScopeEffective_EmptyScopeReturnsEmptySet(t *testing.T) {
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults: {}\n",
 		"conf.d/empty/":         "",
 	})
@@ -251,7 +248,7 @@ func TestScopeEffective_ConfigDirMissing(t *testing.T) {
 
 func TestScopeEffective_SkipsHiddenAndUnderscoredFiles(t *testing.T) {
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml":   "defaults: {}\n",
 		"conf.d/_profiles.yaml":   "tenants:\n  not-a-tenant:\n    cpu: 1\n",
 		"conf.d/.hidden.yaml":     "tenants:\n  hidden-tenant:\n    cpu: 1\n",
@@ -272,7 +269,7 @@ func TestScopeEffective_DeterministicAcrossRuns(t *testing.T) {
 	// the same alphabetical order regardless of filesystem
 	// enumeration whim.
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml":  "defaults: {}\n",
 		"conf.d/z/tenant-z.yaml": "tenants:\n  z:\n    cpu: 1\n",
 		"conf.d/m/tenant-m.yaml": "tenants:\n  m:\n    cpu: 1\n",
@@ -303,7 +300,7 @@ func TestScopeEffective_FileSymlink(t *testing.T) {
 		t.Skip("symlinks need admin privileges on Windows; covered by Linux CI")
 	}
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults: {}\n",
 		"actual/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 1\n",
 	})

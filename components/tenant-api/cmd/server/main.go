@@ -42,6 +42,7 @@ import (
 	"github.com/vencil/tenant-api/internal/handler/federation"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/tenantorg"
 	"github.com/vencil/tenant-api/internal/views"
 	"github.com/vencil/tenant-api/internal/ws"
 )
@@ -244,7 +245,24 @@ func main() {
 	}
 
 	// ── Dependencies ──────────────────────────────────────────────────────────
-	rbacMgr, err := rbac.NewManager(*rbacPath)
+	// ADR-027 / LD-6 P2+P3: identity-claims seam. The flag declares which
+	// trusted-hop headers load which named claims (claimKey=Header-Name);
+	// parsing is fail-loud — a misconfigured identity axis must never be
+	// silently absent. Default empty = no claim axes → byte-identical pre-P2
+	// behavior. Parsed BEFORE the RBAC manager because the declared claim
+	// keys participate in _rbac.yaml validation (a match.claims rule on an
+	// undeclared key is rejected at load — initial load fatal below,
+	// hot-reload keeps last-good). The INFO line logs claim keys and header
+	// NAMES only (startup config — request values never appear in logs).
+	claimHeaders, err := rbac.ParseClaimHeaders(*identityClaimHeaders)
+	if err != nil {
+		log.Fatalf("FATAL: --identity-claim-headers: %v", err)
+	}
+	if len(claimHeaders) > 0 {
+		log.Printf("INFO: identity claim headers configured: %s (claims ride the principal; _rbac.yaml match: rules may consume them)", formatClaimHeaders(claimHeaders))
+	}
+
+	rbacMgr, err := rbac.NewManager(*rbacPath, claimHeaders)
 	if err != nil {
 		log.Fatalf("FATAL: rbac init: %v", err)
 	}
@@ -272,21 +290,6 @@ func main() {
 		log.Printf("INFO: --rbac-metadata-scope-enforce set: unlabeled tenants on env/domain-restricted rules are DENIED (metadata scope fail-closed)")
 	} else {
 		log.Printf("INFO: metadata scope filter in SHADOW mode: unlabeled tenants still pass; watch increase(tenant_api_scope_would_deny_total{axis=\"metadata\"}[<soak-window>]) and flip --rbac-metadata-scope-enforce once it stays 0 across the window (monotonic counter — its rate, not its value, is the signal)")
-	}
-
-	// ADR-027 / LD-6 P2: identity-claims seam. The flag declares which
-	// trusted-hop headers load which named claims (claimKey=Header-Name);
-	// parsing is fail-loud — a misconfigured identity axis must never be
-	// silently absent. Default empty = no claim axes → byte-identical pre-P2
-	// behavior. The INFO line logs claim keys and header NAMES only (startup
-	// config — request values never appear in logs).
-	claimHeaders, err := rbac.ParseClaimHeaders(*identityClaimHeaders)
-	if err != nil {
-		log.Fatalf("FATAL: --identity-claim-headers: %v", err)
-	}
-	if len(claimHeaders) > 0 {
-		rbacMgr.SetClaimHeaders(claimHeaders)
-		log.Printf("INFO: identity claim headers configured: %s (claims ride the principal only; authz unchanged until P3)", formatClaimHeaders(claimHeaders))
 	}
 
 	// ADR-027 PR-1b-i: machine-identity audit side-channel. Built here so an
@@ -333,6 +336,18 @@ func main() {
 
 	// v2.5.0: Domain policy enforcement at API layer
 	policyMgr := policy.NewManager(*configDir)
+
+	// ADR-027 / LD-6 P4: tenant→organization mapping (_tenant_orgs.yaml) backing
+	// the org-scope authorization axis. Admin-only (no write API) and strict-
+	// parsed: a malformed org-boundary file is FATAL (an unparseable file is not
+	// safe to serve, like _rbac.yaml), but a missing/empty file is the benign
+	// default (no tenant has any org — org-scope simply grants nothing extra).
+	// P4a is list-only + shadow: the org enforce flag is intentionally NOT wired
+	// here (EnableOrgScopeEnforce is a P4b concern), so nothing flips to enforce.
+	tenantOrgMgr, err := tenantorg.NewManager(*configDir)
+	if err != nil {
+		log.Fatalf("FATAL: tenantorg init: %v", err)
+	}
 
 	// v2.5.0: Saved Views for tenant-manager UI
 	viewMgr := views.NewManager(*configDir)
@@ -427,6 +442,7 @@ func main() {
 		ConfigDir:          *configDir,
 		Writer:             writer,
 		RBAC:               rbacMgr,
+		TenantOrg:          tenantOrgMgr,
 		Policy:             policyMgr,
 		Groups:             groupMgr,
 		Views:              viewMgr,
@@ -448,10 +464,29 @@ func main() {
 		BackfillTimeoutDur: *writeTimeout,
 	}
 
+	// Gemini #1056 disposition 3a (+ current-state gauge follow-up): one shared
+	// reload observer wired into EVERY config manager, so a silent reload failure
+	// (parse error → keep last-good → edited config quietly inert) surfaces as
+	// tenant_api_config_reload_failures_total{component} (rate) AND
+	// tenant_api_config_last_reload_successful{component} (current state). Both
+	// reload paths are silent and both are observed: the periodic WatchLoop only
+	// WARN-logs, and the post-write Reload returns an error that every handler
+	// discards (`_ = mgr.Reload()`) before answering 200 OK. MUST be installed
+	// BEFORE the WatchLoop goroutines below start AND before the server serves
+	// (handlers reach the observer via Reload) — both hold at this point in startup.
+	reloadObs := handler.NewConfigReloadObserver()
+	rbacMgr.SetReloadObserver(reloadObs)
+	policyMgr.SetReloadObserver(reloadObs)
+	tenantOrgMgr.SetReloadObserver(reloadObs)
+	federationPolicyMgr.SetReloadObserver(reloadObs)
+	groupMgr.SetReloadObserver(reloadObs)
+	viewMgr.SetReloadObserver(reloadObs)
+
 	// ── RBAC + policy hot-reload goroutines ───────────────────────────────────
 	stopCh := make(chan struct{})
 	go rbacMgr.WatchLoop(*reloadInterval, stopCh)
 	go policyMgr.WatchLoop(*reloadInterval, stopCh)
+	go tenantOrgMgr.WatchLoop(*reloadInterval, stopCh)
 	go federationPolicyMgr.WatchLoop(*reloadInterval, stopCh)
 	if prTracker != nil {
 		go prTracker.WatchLoop(stopCh)

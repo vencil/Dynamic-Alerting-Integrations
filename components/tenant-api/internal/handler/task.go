@@ -45,8 +45,8 @@ func GetTask(d *Deps) http.HandlerFunc {
 		// Tenant-scope the Results array. Defensive copy of the
 		// task struct so we never mutate the in-memory copy that
 		// other concurrent pollers would observe.
-		idpGroups := rbac.RequestGroups(r)
-		filtered := filterTaskResults(d.RBAC, idpGroups, task.Results)
+		p := rbac.RequestPrincipal(r)
+		filtered := filterTaskResults(d.RBAC, p, task.Results)
 		if len(task.Results) > 0 && len(filtered) == 0 {
 			// Caller has zero access to any of the touched tenants.
 			// 403 (not 404) — the task exists, just none of its
@@ -65,10 +65,10 @@ func GetTask(d *Deps) http.HandlerFunc {
 
 // filterTaskResults returns the subset of results visible to the
 // caller. Open-mode RBAC (no _rbac.yaml) returns the input as-is
-// (HasPermission short-circuits). Mirrors filterAccessibleMembers /
+// (Allowed short-circuits). Mirrors filterAccessibleMembers /
 // filterAccessiblePRs via the shared filterByRBAC generic.
-func filterTaskResults(rbacMgr *rbac.Manager, idpGroups []string, results []async.TaskResult) []async.TaskResult {
-	return filterByRBAC(rbacMgr, idpGroups, results, tenantIDFromTaskResult, rbac.PermRead)
+func filterTaskResults(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal, results []async.TaskResult) []async.TaskResult {
+	return filterByRBAC(rbacMgr, p, results, tenantIDFromTaskResult, rbac.PermRead)
 }
 
 // tenantIDFromTaskResult is the per-element extractor for filterByRBAC

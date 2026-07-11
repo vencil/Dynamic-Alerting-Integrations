@@ -261,6 +261,50 @@ defaults:
 	}
 }
 
+// TestLoadThenIncrementalNoChange pins the first-tick no-spurious-reload
+// contract from the production entry point. Load() is what boots the exporter;
+// the watch loop's first tick then calls IncrementalLoad. Because Load now
+// shares fullDirLoad's composite-hash construction (hash-of-hashes) and
+// populates the flat cache, that first tick sees an unchanged hash and early
+// returns. Before the convergence Load built a byte composite that never
+// matched what the tick recomputed, forcing a full reload on every cold start.
+func TestLoadThenIncrementalNoChange(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeTestFile(t, dir, "_defaults.yaml", `
+defaults:
+  mysql_connections: 80
+`)
+	writeTestFile(t, dir, "acme.yaml", `
+tenants:
+  acme:
+    mysql_connections: "70"
+`)
+
+	mgr := NewConfigManager(dir)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	reload1 := mgr.LastReload()
+	hash1 := mgr.lastHash
+	if hash1 == "" {
+		t.Fatal("Load did not set a composite hash")
+	}
+
+	// Small delay so a spurious reload would move LastReload measurably.
+	time.Sleep(10 * time.Millisecond)
+
+	if err := mgr.IncrementalLoad(); err != nil {
+		t.Fatalf("no-change IncrementalLoad after Load failed: %v", err)
+	}
+	if !mgr.LastReload().Equal(reload1) {
+		t.Error("first IncrementalLoad after Load reloaded despite no file change (spurious first-tick reload regressed)")
+	}
+	if mgr.lastHash != hash1 {
+		t.Errorf("lastHash changed on a no-op reload: %q -> %q", hash1, mgr.lastHash)
+	}
+}
+
 func TestIncrementalLoad_SingleFileModeFallback(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

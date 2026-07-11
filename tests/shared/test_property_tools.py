@@ -1735,6 +1735,78 @@ class TestParseBuildShToolsProperties:
 
 
 # ---------------------------------------------------------------------------
+# parse_build_sh_tool_paths — path-preserving sibling of parse_build_sh_tools
+# ---------------------------------------------------------------------------
+# da-tools image packaging bugfix (#1044). Unlike parse_build_sh_tools
+# (basenames, for COMMAND_MAP set comparison), this keeps the
+# scripts/tools-relative path so check_build_completeness.py can OPEN each
+# shipped tool and scan its transitive underscore-lib imports. A regression
+# that dropped the dirname would break the ops/ vs dx/ vs root source lookup.
+
+class TestParseBuildShToolPathsProperties:
+
+    def test_keeps_relative_dirs(self, tmp_path):
+        # Property: `ops/foo.py` stays path-qualified (not flattened).
+        f = tmp_path / "build.sh"
+        f.write_text(
+            'TOOL_FILES=(\n'
+            '  _lib_python.py\n'
+            '  ops/threshold_recommend.py\n'
+            '  dx/tenant_verify.py\n'
+            ')\n',
+            encoding="utf-8",
+        )
+        result = lh.parse_build_sh_tool_paths(f)
+        assert result == {
+            "_lib_python.py",
+            "ops/threshold_recommend.py",
+            "dx/tenant_verify.py",
+        }
+
+    def test_empty_tool_files(self, tmp_path):
+        f = tmp_path / "build.sh"
+        f.write_text('TOOL_FILES=(\n)\n', encoding="utf-8")
+        assert lh.parse_build_sh_tool_paths(f) == set()
+
+    def test_skips_comments_and_blanks(self, tmp_path):
+        # Property: comment + blank lines inside the array are ignored,
+        # mirroring parse_build_sh_tools.
+        f = tmp_path / "build.sh"
+        f.write_text(
+            'TOOL_FILES=(\n'
+            '  # a comment\n'
+            '  ops/real.py\n'
+            '\n'
+            '  metric-dictionary.yaml\n'
+            ')\n',
+            encoding="utf-8",
+        )
+        result = lh.parse_build_sh_tool_paths(f)
+        assert result == {"ops/real.py", "metric-dictionary.yaml"}
+
+    def test_differs_from_basename_parser_only_by_dirname(self, tmp_path):
+        # Property: the two parsers agree modulo dirname.
+        f = tmp_path / "build.sh"
+        f.write_text('TOOL_FILES=(\n  ops/foo.py\n)\n', encoding="utf-8")
+        assert lh.parse_build_sh_tool_paths(f) == {"ops/foo.py"}
+        assert lh.parse_build_sh_tools(f) == {"foo.py"}
+
+    def test_strips_quotes(self, tmp_path):
+        # Property: single- and double-quoted entries are unquoted (the parser
+        # relies on `.strip("\"'(),")`); both APIs inherit this via delegation.
+        f = tmp_path / "build.sh"
+        f.write_text(
+            'TOOL_FILES=(\n'
+            '  "ops/foo.py"\n'
+            "  'dx/bar.py'\n"
+            ')\n',
+            encoding="utf-8",
+        )
+        assert lh.parse_build_sh_tool_paths(f) == {"ops/foo.py", "dx/bar.py"}
+        assert lh.parse_build_sh_tools(f) == {"foo.py", "bar.py"}
+
+
+# ---------------------------------------------------------------------------
 # latest_version_from_changelog — newest `## [vX.Y.Z]` heading from CHANGELOG
 # ---------------------------------------------------------------------------
 # Pilot batch 7. Drives the TRK-010 expire_at lifecycle gate (PR #328).

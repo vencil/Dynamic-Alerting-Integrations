@@ -1,0 +1,73 @@
+# promtool behavioural test for TenantApiConfigReloadStale. Validates the contract
+# that this gauge alert catches what the rate-based TenantApiConfigReloadFailing
+# cannot:
+#   1) FIRES when a manager's last reload failed and stays failed (gauge == 0
+#      sustained) — including a SINGLE-SHOT failure (groups/views: the gauge sits
+#      at 0 with no further events), which the rate alert's increase()>2 misses.
+#   2) does NOT fire when the manager is current (gauge == 1).
+#   3) does NOT fire on a transient mid-write blip (gauge dips to 0 for < the 2m
+#      hold-down then recovers to 1) — the `for: 2m` debounce.
+# The {component} label must ride through to the firing alert.
+# Run: promtool test rules tests/rulepacks/platform-config-reload-stale_test.yaml
+rule_files:
+  - platform-config-reload-stale.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) Single-shot stale: a post-write Reload for `groups` failed once and there
+  #    is no WatchLoop to retry, so the gauge sits at 0. The rate alert can't fire
+  #    (only one failure); this one must.
+  - interval: 1m
+    name: single-shot-stale-fires-with-component-label
+    input_series:
+      - series: 'tenant_api_config_last_reload_successful{component="groups", job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '0x30'   # stuck at 0 for 30m
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantApiConfigReloadStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: groups
+              job: tenant-api
+              instance: 10.0.0.2:8080
+            exp_annotations:
+              summary: "tenant-api groups config is stale — last reload failed"
+
+  # 2) Healthy: gauge at 1 — must NOT fire.
+  - interval: 1m
+    name: current-config-no-fire
+    input_series:
+      - series: 'tenant_api_config_last_reload_successful{component="RBAC", job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantApiConfigReloadStale
+        exp_alerts: []
+
+  # 3) Transient blip: gauge dips to 0 for 1m (one failed WatchLoop tick) then
+  #    recovers to 1 on the next good tick. `for: 2m` must keep this GREEN — the
+  #    dip never holds long enough to fire.
+  #
+  #    ⚠️ The eval at 6m is the DISCRIMINATOR for the `for: 2m` debounce and must
+  #    not be removed: at t6 the gauge IS 0, so a rule WITHOUT the hold-down would
+  #    already be FIRING there, whereas `for: 2m` keeps it merely pending (1m < 2m).
+  #    Probing only after recovery (8m/20m, gauge back to 1) would pass with or
+  #    without `for:` — i.e. would not test the debounce. Verified by mutation:
+  #    deleting `for: 2m` fails ONLY the 6m probe.
+  - interval: 1m
+    name: transient-blip-no-fire
+    input_series:
+      - series: 'tenant_api_config_last_reload_successful{component="policy", job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '1+0x5 0 1+0x24'   # 1 for t0-5, 0 at t6, back to 1 t7-30
+    alert_rule_test:
+      - eval_time: 6m    # DISCRIMINATOR: gauge==0 here; a rule with no `for` FIRES
+        alertname: TenantApiConfigReloadStale
+        exp_alerts: []
+      - eval_time: 8m    # 1m after the blip recovered — `== 0` no longer holds
+        alertname: TenantApiConfigReloadStale
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: TenantApiConfigReloadStale
+        exp_alerts: []

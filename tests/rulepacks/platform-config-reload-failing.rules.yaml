@@ -1,0 +1,20 @@
+# Bare-rules promtool target for the TenantApiConfigReloadFailing alert (Gemini
+# #1056 disposition 3a). promtool can't consume the deployed ConfigMap directly
+# (it needs a top-level `groups:` document, not `data: platform-alert.yml: |`),
+# so this is an EXTRACTED COPY of the alert from
+# k8s/03-monitoring/configmap-rules-platform.yaml.
+#
+# ⚠️ KEEP IN SYNC with that ConfigMap. The behavioural contract (fire on a
+# sustained hot-reload failure, no false-positive on zero failures or a single
+# transient blip) is exercised by platform-config-reload-failing_test.yaml
+# against this file.
+groups:
+  - name: platform-self-monitoring
+    rules:
+      - alert: TenantApiConfigReloadFailing
+        expr: increase(tenant_api_config_reload_failures_total{job="tenant-api"}[15m]) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "tenant-api config hot-reload failing for {{ $labels.component }} — serving stale last-good"

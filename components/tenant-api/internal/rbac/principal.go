@@ -153,14 +153,16 @@ type ScopeAuditRecorder interface {
 }
 
 // Scope axis labels for tenant_api_scope_would_deny_total{axis}. Fixed set
-// (bounded cardinality, no user-controlled values). P1 emits only
-// ScopeAxisMetadata; the org axis (P4) will add its own constant.
+// (bounded cardinality, no user-controlled values). Both are emitted by
+// ScopeAllowed (via recordScopeShadowGap) in this package; the handler's
+// exposition uses the same string literals for the {axis} label and MUST keep
+// its scopeWouldDenyAxes array in sync with this set (a compile-time guard in
+// scope_metrics.go binds the counter array length to the label count).
 const (
 	// scopeAxisMetadata is the environment/domain metadata scope filter axis.
-	// Unexported: the only emitter is HasMetadataAccess (via recordScopeShadowGap)
-	// in this package. The handler's exposition uses the same string literal for
-	// the {axis} label.
 	scopeAxisMetadata = "metadata"
+	// scopeAxisOrg is the org (tenant→organization) scope filter axis (P4).
+	scopeAxisOrg = "org"
 )
 
 // HeaderResolver wraps the pre-existing oauth2-proxy header-trust path in the

@@ -19,6 +19,7 @@ restricting ingress to that proxy. In try-local, dev-bypass (ADR-022) injects a
 demo identity instead. Forwarding arbitrary client headers would be a confused-
 deputy hole — hence only the two identity headers are ever forwarded.
 """
+import http.client
 import json
 import os
 import sys
@@ -119,6 +120,17 @@ _rate = RateLimiter(RATE_LIMIT_PER_MIN)
 
 
 # ── PEP: delegate the tenant-access decision to tenant-api (#876) ────────
+def _safe_stderr(msg):
+    """Emit a diagnostic line to stderr, swallowing ANY failure. A logging call must
+    never alter control flow: a non-UTF-8 stderr (e.g. cp950) with a non-ASCII tenant,
+    or a closed/broken stderr pipe, must not turn a fail-closed deny into a raised
+    exception, nor crash the fail-safe 500 handler. Diagnostics are best-effort."""
+    try:
+        print(msg, file=sys.stderr)
+    except Exception:
+        pass
+
+
 def _apply_dev_bypass(headers):
     """try-local only: inject a demo identity when none is present (mirrors
     tenant-api ADR-022). No-op in prod, where oauth2-proxy injects the real
@@ -146,9 +158,12 @@ def _read_auth_token():
         # OSError = I/O failure; UnicodeDecodeError = a non-UTF-8/corrupt file
         # (NOT an OSError subclass). Both degrade to no Bearer — the fail-open
         # contract is "a token problem never blocks a preview", so a malformed
-        # token file must not crash this request-path PEP.
-        print(f"warning: could not read PREVIEW_AUTH_TOKEN_FILE {AUTH_TOKEN_FILE!r}: {exc}; "
-              f"continuing without a Bearer (tenant-api audit records no_token)", file=sys.stderr)
+        # token file must not crash this request-path PEP. Log the exception CLASS
+        # only — NOT str(exc): a UnicodeDecodeError's message echoes a raw byte of
+        # the token file's content, and the token is a secret.
+        _safe_stderr(f"warning: could not read PREVIEW_AUTH_TOKEN_FILE {AUTH_TOKEN_FILE!r} "
+                     f"({type(exc).__name__}); continuing without a Bearer "
+                     f"(tenant-api audit records no_token)")
         return ""
 
 
@@ -168,13 +183,50 @@ def authorize_tenant(headers, tenant):
         fwd["Authorization"] = "Bearer " + token
     url = f"{TENANT_API_URL}/api/v1/tenants/{urllib.parse.quote(tenant, safe='')}/access"
     req = urllib.request.Request(url, headers=fwd, method="GET")
+    # Fail-closed on every error. We log only the ANOMALOUS cases — an operator
+    # debugging "why is every preview a 403?" needs to tell an authz-backend problem
+    # apart from a genuine deny. A genuine 401/403 deny is EXPECTED and already shows
+    # as a 403 in the access log, so we do NOT re-log it (that would be redundant and
+    # would let a deny-spamming caller flood the log). All log lines carry tenant id
+    # + host + status/class ONLY — NEVER the forwarded identity headers or the Bearer
+    # token; tenant is `!r`-quoted so a crafted value can't inject a log line; and every
+    # emission goes through _safe_stderr so a logging failure (non-UTF-8 stderr, broken
+    # pipe) can never turn a fail-closed deny into a raised exception.
     try:
         with urllib.request.urlopen(req, timeout=AUTHZ_TIMEOUT) as resp:
             return resp.status == 200
-    except urllib.error.HTTPError:
-        return False   # 401 / 403 / 4xx / 5xx → deny
-    except Exception:
-        return False   # unreachable / timeout → fail-closed deny
+    except urllib.error.HTTPError as exc:
+        # tenant-api answered. Its /access contract is 200 (allow) or 401/403 (deny).
+        # A 401/403 is a genuine deny — stay silent (the access log already has the
+        # 403). ANY OTHER status is anomalous and worth surfacing: 5xx = a tenant-api
+        # fault, and 4xx like 404/405/400 = a MISCONFIGURED tenant-api URL/route — a
+        # real "why is every preview a 403?" cause that a bare `>= 500` would miss.
+        if exc.code not in (401, 403):
+            _safe_stderr(f"preview authz: tenant-api returned unexpected HTTP {exc.code} "
+                         f"at {TENANT_API_URL}; failing closed for tenant {tenant!r}")
+        return False
+    except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
+        # the probe did not complete: unreachable / DNS / timeout / TLS handshake
+        # (SSLError ⊂ OSError) / a malformed or truncated HTTP response (BadStatusLine,
+        # IncompleteRead — http.client.HTTPException is NOT an OSError, so it must be
+        # listed explicitly or it would fall through to the "bug" branch below and be
+        # mislabeled a recipe-preview bug). All are tenant-api-side / network faults,
+        # not our bug. Log the exception CLASS + host (never str(exc), which can echo a
+        # URL); the class name distinguishes DNS vs TLS vs malformed-response.
+        _safe_stderr(f"preview authz: probe to tenant-api at {TENANT_API_URL} failed "
+                     f"({type(exc).__name__}); failing closed for tenant {tenant!r}")
+        return False
+    except Exception as exc:
+        # An UNEXPECTED error — most likely a bug in THIS code path, not the network
+        # (network / HTTP faults are caught above). Still fail closed; log a neutral
+        # message + traceback so it is never misdiagnosed as a tenant-api outage.
+        _safe_stderr(f"preview authz: unexpected error for tenant {tenant!r} "
+                     f"({type(exc).__name__}); failing closed")
+        try:
+            traceback.print_exc(file=sys.stderr)
+        except Exception:
+            pass
+        return False
 
 
 # ── request logic (testable seam: inject authorizer / evaluator) ─────────
@@ -287,7 +339,18 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             status, resp = handle_preview(body, self.headers)
         except Exception:  # never leak a traceback to the client; fail safe
-            traceback.print_exc(file=sys.stderr)
+            # Prefix the server-side trace with request context so a 500 is actionable.
+            # tenant + path ONLY — never the body (carries the recipe) or the identity
+            # headers; both are client-controlled → `!r`-quote to neutralise control/
+            # ANSI chars (log-injection defense; tenant has no charset guard). The whole
+            # emission is wrapped so a stderr encoding error / broken pipe can NEVER
+            # prevent the clean 500 response below (the fail-safe must not self-crash).
+            try:
+                t = body.get("tenant") if isinstance(body, dict) else None
+                sys.stderr.write(f"preview 500 on {self.path!r} for tenant {t!r}\n")
+                traceback.print_exc(file=sys.stderr)
+            except Exception:
+                pass
             status, resp = 500, {"error": "internal error"}
         self._send(status, resp)
 

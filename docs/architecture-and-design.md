@@ -162,7 +162,7 @@ graph TB
 graph LR
     subgraph Day0["Day-0: Customer Migration"]
         PR["PromRule corpus<br/>(CRD / YAML)"] -->|da-parser| JSON["Canonical JSON<br/>+ prom_portable flag"]
-        JSON -->|da-tools profile build| PB["Profile Builder<br/>(cluster + median ADR-018)"]
+        JSON -->|Profile Builder library| PB["Profile Builder<br/>(library-only, cluster + median, ADR-018)<br/>CLI 尚未出貨（規劃中）"]
     end
 
     subgraph Day1["Day-1: GitOps Hierarchy-Aware 治理"]

@@ -13,9 +13,10 @@ package handler
 // platform"). These helpers close that gap.
 //
 // Design contract:
-//   - Always check using the **request's** IDP groups (from the
-//     auth middleware context), not the route handler's idea of
-//     who the user is. Single source of truth.
+//   - Always check using the **request's** verified principal
+//     (rbac.RequestPrincipal — attached by the auth middleware),
+//     not the route handler's idea of who the user is. Single
+//     source of truth; never hand-build a principal from parts.
 //   - Return the FULL list of forbidden tenant IDs to the caller
 //     (not just the first). Operators fixing their permission
 //     misalignment shouldn't have to retry-and-discover.
@@ -29,14 +30,14 @@ import (
 )
 
 // tenantsLackingPermission returns the subset of `tenantIDs` for
-// which the caller (identified by `idpGroups`) does NOT have
+// which the caller (identified by principal `p`) does NOT have
 // `want` permission. An empty slice means "all good — caller may
-// proceed". A nil/empty `idpGroups` produces a forbidden list
-// equal to `tenantIDs` (caller is anonymous → cannot write
-// anything).
+// proceed". A nil principal is the anonymous caller (no groups) —
+// it produces a forbidden list equal to `tenantIDs` (anonymous →
+// cannot write anything).
 //
 // Open-read mode: when the RBAC manager is in open mode (no
-// `_rbac.yaml`), `HasPermission` returns true for every tenant.
+// `_rbac.yaml`), `Allowed` returns true for every tenant.
 // In that mode this helper returns an empty slice — no
 // restrictions. This matches existing behaviour elsewhere in the
 // handler package (e.g. `hasAccessibleMember`).
@@ -45,7 +46,7 @@ import (
 //   - tenantIDs is nil/empty → empty result (nothing to check)
 //   - duplicate ids in input → de-duplicated output (forbidden ids
 //     aren't repeated; matches what an operator wants to see)
-func tenantsLackingPermission(rbacMgr *rbac.Manager, idpGroups, tenantIDs []string, want rbac.Permission) []string {
+func tenantsLackingPermission(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal, tenantIDs []string, want rbac.Permission) []string {
 	if len(tenantIDs) == 0 {
 		return nil
 	}
@@ -56,7 +57,7 @@ func tenantsLackingPermission(rbacMgr *rbac.Manager, idpGroups, tenantIDs []stri
 			continue
 		}
 		seen[tid] = true
-		if !rbacMgr.HasPermission(idpGroups, tid, want) {
+		if !rbacMgr.Allowed(p, tid, want) {
 			forbidden = append(forbidden, tid)
 		}
 	}
@@ -71,7 +72,7 @@ func tenantsLackingPermission(rbacMgr *rbac.Manager, idpGroups, tenantIDs []stri
 // on a missing tag.
 //
 // Empty / nil input → returned as-is. Open-read mode (no
-// _rbac.yaml) → HasPermission returns true for every tenant, so
+// _rbac.yaml) → Allowed returns true for every tenant, so
 // this helper effectively becomes the identity transform — no
 // restrictions, allocation cost only.
 //
@@ -81,7 +82,7 @@ func tenantsLackingPermission(rbacMgr *rbac.Manager, idpGroups, tenantIDs []stri
 // the loop body.
 func filterByRBAC[T any](
 	rbacMgr *rbac.Manager,
-	idpGroups []string,
+	p *rbac.VerifiedPrincipal,
 	items []T,
 	tenantID func(T) string,
 	perm rbac.Permission,
@@ -92,7 +93,7 @@ func filterByRBAC[T any](
 	out := make([]T, 0, len(items))
 	for _, item := range items {
 		tid := tenantID(item)
-		if tid == "" || rbacMgr.HasPermission(idpGroups, tid, perm) {
+		if tid == "" || rbacMgr.Allowed(p, tid, perm) {
 			out = append(out, item)
 		}
 	}

@@ -23,21 +23,34 @@ import (
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
+// numScopeAxes binds the axis-label array and the counter array to a SINGLE
+// length so the two can never drift. A counters array SHORTER than the label
+// set would panic (index out of range) inside IncWouldDeny's range-store; a
+// label added without growing counters is exactly that hazard. Because both the
+// label array and the counter array are sized by this const, adding a label
+// forces a compile step: the array literal below rejects more elements than the
+// size, so a new axis must bump numScopeAxes (which grows counters in lockstep)
+// AND add its rbac.scopeAxis* constant. Bump all three together.
+const numScopeAxes = 2
+
 // scopeWouldDenyAxes is the fixed, known label set for
 // tenant_api_scope_would_deny_total{axis}. Fixing it means every series is
 // emitted from process start (value 0) so a dashboard/alert never sees a
 // missing series, and it bounds cardinality (no user-controlled label values).
-// P1 has only the metadata axis; the org axis (P4) appends here.
-var scopeWouldDenyAxes = []string{
+// Order must match the rbac.scopeAxis* string constants. P1 = metadata; P4 = org.
+var scopeWouldDenyAxes = [numScopeAxes]string{
 	"metadata",
+	"org",
 }
 
 // ScopeWouldDenyMetrics holds the per-axis would-deny counters. It satisfies
 // rbac.ScopeAuditRecorder. Counters are atomic so recording (which runs on
 // request goroutines) is lock-free.
 type ScopeWouldDenyMetrics struct {
-	// counters is a fixed-size parallel array to scopeWouldDenyAxes.
-	counters [1]atomic.Int64
+	// counters is a fixed-size parallel array to scopeWouldDenyAxes (same length
+	// by construction — both are sized by numScopeAxes, so a range-index store
+	// can never overflow).
+	counters [numScopeAxes]atomic.Int64
 }
 
 // IncWouldDeny implements rbac.ScopeAuditRecorder. An unrecognized axis label is
@@ -93,7 +106,7 @@ func writeScopeWouldDenyMetrics(w io.Writer) {
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_scope_would_deny_total counter\n")
 	// Deterministic order for stable exposition / golden tests.
 	axes := make([]string, len(scopeWouldDenyAxes))
-	copy(axes, scopeWouldDenyAxes)
+	copy(axes, scopeWouldDenyAxes[:])
 	sort.Strings(axes)
 	for _, a := range axes {
 		_, _ = fmt.Fprintf(w, "tenant_api_scope_would_deny_total{axis=%q} %d\n", a, snap[a])

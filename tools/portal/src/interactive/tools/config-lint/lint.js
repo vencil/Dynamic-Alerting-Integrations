@@ -12,9 +12,9 @@ purpose: |
   re-exported because the component also renders the rule list.
 
   Public API:
-    window.__lintConfig(yamlText) -> { ok, findings[], tenantCount, error? }
-    window.__LINT_RULES           (also rendered as the rule list)
-    window.__parseYaml(text)      (exposed for testing)
+    lintConfig(yamlText) -> { ok, findings[], tenantCount, error? }
+    LINT_RULES           (also rendered as the rule list)
+    parseYaml(text)      (exposed for testing)
 
   Closure deps: window.__t for bilingual rule categories/messages (falls back
   to English).
@@ -315,10 +315,5 @@ function lintConfig(yamlText) {
 }
 
 // Legacy jsx-loader path: expose as window globals (see PR-portal-12 / TD-030z).
-window.__parseYaml = parseYaml;
-window.__LINT_RULES = LINT_RULES;
-window.__lintConfig = lintConfig;
 
-// TRK-230e: ESM exports (esbuild dist path). Removed with jsx-loader in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { parseYaml, LINT_RULES, lintConfig };

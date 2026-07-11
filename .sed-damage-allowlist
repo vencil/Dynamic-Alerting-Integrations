@@ -68,3 +68,10 @@ docs/adr/024-version-aware-threshold-via-dimensional-label.en.md
 # (~59% shrink); the file becomes a thin orchestrator importing lintConfig + LINT_RULES
 # (re-exported for the rule-list render). Genuine refactor, not damage.
 tools/portal/src/interactive/tools/config-lint.jsx
+
+# ROI refactor Wave 5b: platform-health.jsx component split — StatusDot /
+# MetricCard / ComponentHealth / TenantOverview / RulePackDistribution /
+# ReloadTimeline + PLATFORM_HEALTH_DATA moved to platform-health/{components,
+# fixtures}/ so the orchestrator becomes a thin shell. 392 → 90 LOC (~77%
+# shrink). Genuine refactor, not damage.
+tools/portal/src/interactive/tools/platform-health.jsx

@@ -58,10 +58,4 @@ function useModalFocusTrap(modalType, setModalType) {
   return modalRef;
 }
 
-// Register on window for orchestrator pickup.
-window.__useModalFocusTrap = useModalFocusTrap;
-
-// TRK-230c: ESM export for esbuild bundle + Vitest. Both `window.__X`
-// and `export { X }` removed in TRK-230z when jsx-loader retires.
-// <!-- jsx-loader-compat: ignore -->
 export { useModalFocusTrap };

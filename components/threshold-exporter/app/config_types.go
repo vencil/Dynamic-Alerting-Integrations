@@ -41,6 +41,12 @@ type (
 	// app's scanDirHierarchical still owns the disk-walking implementation
 	// (it threads fileStat for mtime fast-path).
 	InheritanceGraph = config.InheritanceGraph
+
+	// C6-A (#127 library-side gap): cross-file duplicate-tenant error lowered
+	// into pkg/config so tenant-api / cmd/da-guard / simulate can errors.As it.
+	// app's scanDirHierarchical + config.go's errors.As keep compiling
+	// unchanged through this alias.
+	DuplicateTenantError = config.DuplicateTenantError
 )
 
 // NewInheritanceGraph re-exports the pkg/config constructor under its

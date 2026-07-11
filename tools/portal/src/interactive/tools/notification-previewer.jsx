@@ -6,7 +6,8 @@ version: v2.7.0
 lang: en
 related: [self-service-portal, alert-simulator, template-gallery]
 dependencies: [
-  "notification-previewer/template-engine.js"
+  "notification-previewer/template-engine.js",
+  "_common/hooks/useCopyToClipboard.js"
 ]
 ---
 
@@ -22,6 +23,7 @@ import {
   generateYAML,
   generateJSON,
 } from './notification-previewer/template-engine.js';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -191,11 +193,11 @@ const styles = {
   },
   badgeWarning: {
     backgroundColor: 'var(--da-color-warning-soft)',
-    color: 'var(--da-color-warning)',
+    color: 'var(--da-color-warning-text)',
   },
   badgeError: {
     backgroundColor: 'var(--da-color-error-soft)',
-    color: 'var(--da-color-error)',
+    color: 'var(--da-color-error-text)',
   },
   badgeInfo: {
     backgroundColor: 'var(--da-color-info-soft)',
@@ -240,12 +242,12 @@ const styles = {
   alertWarning: {
     backgroundColor: 'var(--da-color-warning-soft)',
     border: `1px solid var(--da-color-warning)`,
-    color: 'var(--da-color-warning)',
+    color: 'var(--da-color-warning-text)',
   },
   alertError: {
     backgroundColor: 'var(--da-color-error-soft)',
     border: `1px solid var(--da-color-error)`,
-    color: 'var(--da-color-error)',
+    color: 'var(--da-color-error-text)',
   },
   alertInfo: {
     backgroundColor: 'var(--da-color-info-soft)',
@@ -552,17 +554,14 @@ function TemplateEditorPanel({ receiverType, template, onTemplateChange }) {
 
 /* ── Export Panel ── */
 function ExportPanel({ receiverType, template }) {
-  const [copyFeedback, setCopyFeedback] = useState('');
+  const { copied, copy } = useCopyToClipboard();
   const yamlRef = useRef();
   const jsonRef = useRef();
   const receiverLabel = RECEIVER_TYPES[receiverType].label;
 
   const handleCopy = (format) => {
     const content = format === 'yaml' ? generateYAML(receiverType, template, receiverLabel) : generateJSON(receiverType, template, receiverLabel);
-    navigator.clipboard.writeText(content).then(() => {
-      setCopyFeedback(t('已複製！', 'Copied!'));
-      setTimeout(() => setCopyFeedback(''), 2000);
-    });
+    copy(content);
   };
 
   return (
@@ -583,7 +582,7 @@ function ExportPanel({ receiverType, template }) {
           style={{ ...styles.button, ...styles.buttonPrimary, width: '100%', marginTop: 'var(--da-space-2)' }}
           aria-label={t('複製 YAML', 'Copy YAML')}
         >
-          📋 {t('複製 YAML', 'Copy YAML')} {copyFeedback === t('已複製！', 'Copied!') && copyFeedback}
+          📋 {t('複製 YAML', 'Copy YAML')} {copied && t('已複製！', 'Copied!')}
         </button>
       </div>
 
@@ -599,7 +598,7 @@ function ExportPanel({ receiverType, template }) {
           style={{ ...styles.button, ...styles.buttonPrimary, width: '100%', marginTop: 'var(--da-space-2)' }}
           aria-label={t('複製 JSON', 'Copy JSON')}
         >
-          📋 {t('複製 JSON', 'Copy JSON')} {copyFeedback === t('已複製！', 'Copied!') && copyFeedback}
+          📋 {t('複製 JSON', 'Copy JSON')} {copied && t('已複製！', 'Copied!')}
         </button>
       </div>
     </div>
@@ -679,7 +678,7 @@ function LivePreview({ receiverType, template }) {
             <span
               style={{
                 marginLeft: 'var(--da-space-2)',
-                color: isOverLimit ? 'var(--da-color-error)' : isNearLimit ? 'var(--da-color-warning)' : 'var(--da-color-success)',
+                color: isOverLimit ? 'var(--da-color-error-text)' : isNearLimit ? 'var(--da-color-warning-text)' : 'var(--da-color-success)',
               }}
             >
               ({charCount}/{limit})

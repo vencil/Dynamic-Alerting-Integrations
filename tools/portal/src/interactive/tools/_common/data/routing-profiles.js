@@ -19,9 +19,9 @@ purpose: |
   + simulator surface.
 
   Public API:
-    window.__ROUTING_DEFAULTS
-    window.__ROUTING_PROFILES
-    window.__DOMAIN_POLICIES
+    ROUTING_DEFAULTS
+    ROUTING_PROFILES
+    DOMAIN_POLICIES
 
   Closure deps: none. Pure data.
 
@@ -68,10 +68,4 @@ const DOMAIN_POLICIES = {
   },
 };
 
-window.__ROUTING_DEFAULTS = ROUTING_DEFAULTS;
-window.__ROUTING_PROFILES = ROUTING_PROFILES;
-window.__DOMAIN_POLICIES = DOMAIN_POLICIES;
-
-// TRK-230c: ESM exports for esbuild bundle + Vitest. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { ROUTING_DEFAULTS, ROUTING_PROFILES, DOMAIN_POLICIES };

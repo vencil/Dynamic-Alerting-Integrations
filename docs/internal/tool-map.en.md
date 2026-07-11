@@ -129,6 +129,7 @@ lang: en
 | `sync_tool_registry.py` | 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP + JSX frontmatter |
 | `tenant_verify.py` | Verify a tenant's effective config — print merged_hash and source_hash. |
 | `waveform_compile.py` | fault-waveform pack 驗證 / 回讀 / 物化編譯器（ADR-030 決策層驗證 PR-1） |
+| `waveform_score.py` | temporal-match + episode 對帳 + catch-rate 報告器（ADR-030 PR-3） |
 
 ## Documentation Lint / CI Tools
 
@@ -138,6 +139,7 @@ lang: en
 | `_version_patterns.py` | Version pattern registry for validate_docs_versions.py |
 | `check_account_registry_monotonic.py` | guard _account_registry.yaml's |
 | `check_ad_hoc_git_scripts.py` | Ad-hoc Windows shell script guard (L1 pre-commit hook). |
+| `check_admin_config_schema.py` | validate tenant-api admin meta-config YAML against JSON Schemas. |
 | `check_bat_ascii_purity.py` | - L1 guard for pitfall #45 (CJK-in-.bat). |
 | `check_bilingual_annotations.py` | check_bilingual_annotations.py |
 | `check_bilingual_content.py` | 雙語內容一致性 lint |
@@ -182,7 +184,7 @@ lang: en
 | `check_lint_toolchain_fit.py` | meta-lint: stop reinventing ESLint/stylelint. |
 | `check_log_egress_policy.py` | #566 batch D (T4-1/T4-2) egress allowlist gate. |
 | `check_maintenance_symmetry.py` | check_maintenance_symmetry — per-arm maintenance-clause symmetry guard for rule-pack alerts. |
-| `check_makefile_targets.py` | Makefile target 與 DX 工具聯動檢查 |
+| `check_makefile_targets.py` | 自動化入口與 DX 工具聯動檢查 |
 | `check_md_yaml_drift.py` | Markdown 內 YAML 範例與 Schema 漂移偵測 |
 | `check_metric_dictionary.py` | Metric Dictionary 自動驗證 |
 | `check_open_encoding.py` | flag open() text-mode calls without encoding=. |

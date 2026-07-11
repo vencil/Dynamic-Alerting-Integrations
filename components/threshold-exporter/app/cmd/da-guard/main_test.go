@@ -30,29 +30,12 @@ func runOnce(t *testing.T, args ...string) (int, string, string) {
 	return code, stdout.String(), stderr.String()
 }
 
-// writeTree renders a literal directory layout for a single test.
-// (Previously replicated from pkg/config/scope_test.go; both now share
-// testutil.WriteFile for the body-write step.)
-func writeTree(t *testing.T, tmp string, files map[string]string) {
-	t.Helper()
-	for rel, body := range files {
-		clean := filepath.Join(tmp, filepath.FromSlash(rel))
-		if body == "" {
-			if err := os.MkdirAll(clean, 0o755); err != nil {
-				t.Fatalf("mkdir %q: %v", clean, err)
-			}
-			continue
-		}
-		testutil.WriteFile(t, clean, body)
-	}
-}
-
 // --- happy path / clean tree --------------------------------------
 
 func TestRun_CleanTree_ExitsZero(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults:\n  cpu: 70\n",
 		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",
 	})
@@ -82,7 +65,7 @@ func TestRun_CleanTree_ExitsZero(t *testing.T) {
 func TestRun_MissingRequired_ExitsOne(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults:\n  cpu: 70\n",
 		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",
 		// tenant-b has cpu null in its override → ADR-017 says null
@@ -110,7 +93,7 @@ func TestRun_MissingRequired_ExitsOne(t *testing.T) {
 func TestRun_UnknownReceiverType_ExitsOne(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults: {}\n",
 		"conf.d/tenant-a.yaml": `tenants:
   tenant-a:
@@ -138,7 +121,7 @@ func TestRun_CardinalityExceeded_ExitsOne(t *testing.T) {
 	t.Parallel()
 	// Build a tenant with 6 metrics; limit at 3 → tenant exceeds.
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": `defaults:
   m1: 1
   m2: 2
@@ -169,7 +152,7 @@ func TestRun_CardinalityWarn_DoesNotExitOne_ByDefault(t *testing.T) {
 	// 5 metrics, limit 6, warn-ratio default 0.8 → 4.8 → tenant at
 	// 5 trips warning but no error. Default exit is 0.
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": `defaults:
   m1: 1
   m2: 2
@@ -198,7 +181,7 @@ func TestRun_CardinalityWarn_DoesNotExitOne_ByDefault(t *testing.T) {
 func TestRun_CardinalityWarn_WithWarnAsError_ExitsOne(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": `defaults:
   m1: 1
   m2: 2
@@ -226,7 +209,7 @@ func TestRun_CardinalityWarn_WithWarnAsError_ExitsOne(t *testing.T) {
 func TestRun_EmptyScope_ExitsZero(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults: {}\n",
 		"conf.d/empty/":         "",
 	})
@@ -250,7 +233,7 @@ func TestRun_EmptyScope_ExitsZero(t *testing.T) {
 func TestRun_RedundantOverride_SurfacesAsWarning(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults:\n  cpu: 80\n",
 		// tenant-a explicitly sets cpu=80 — same as the inherited
 		// default → redundant override.
@@ -290,7 +273,7 @@ func TestRun_RedundantOverride_SurfacesAsWarning(t *testing.T) {
 func TestRun_RedundantOverride_WithWarnAsError_ExitsOne(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults:\n  cpu: 80\n",
 		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",
 	})
@@ -309,7 +292,7 @@ func TestRun_RedundantOverride_WithWarnAsError_ExitsOne(t *testing.T) {
 func TestRun_RedundantOverride_HonorsCascadingDefaults(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml":    "defaults:\n  cpu: 70\n",
 		"conf.d/db/_defaults.yaml": "defaults:\n  cpu: 80\n",
 		// tenant-db overrides cpu=80 — matches db/ inherited → redundant
@@ -352,7 +335,7 @@ func TestRun_RedundantOverride_HonorsCascadingDefaults(t *testing.T) {
 func TestRun_EmptyScope_BadOutputPath_ExitsTwo(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults: {}\n",
 		"conf.d/empty/":         "",
 	})
@@ -388,7 +371,7 @@ func TestRun_MissingConfigDir_ExitsTwo(t *testing.T) {
 func TestRun_BadFormat_ExitsTwo(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults: {}\n",
 	})
 	code, _, stderr := runOnce(t,
@@ -406,7 +389,7 @@ func TestRun_BadFormat_ExitsTwo(t *testing.T) {
 func TestRun_BadWarnRatio_ExitsTwo(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults: {}\n",
 	})
 	for _, ratio := range []string{"-0.1", "1.0", "1.5"} {
@@ -428,7 +411,7 @@ func TestRun_BadWarnRatio_ExitsTwo(t *testing.T) {
 func TestRun_ScopeOutsideRoot_ExitsTwo(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults: {}\n",
 		"other/x.yaml":          "tenants:\n  x: {}\n",
 	})
@@ -462,7 +445,7 @@ func TestRun_ConfigDirMissing_ExitsTwo(t *testing.T) {
 func TestRun_JSONOutput_IsValidJSON(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults:\n  cpu: 70\n",
 		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",
 	})
@@ -500,7 +483,7 @@ func TestRun_JSONOutput_IsValidJSON(t *testing.T) {
 func TestRun_OutputToFile_WritesAndAnnouncesOnStderr(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml": "defaults: {}\n",
 		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",
 	})
@@ -532,7 +515,7 @@ func TestRun_OutputToFile_WritesAndAnnouncesOnStderr(t *testing.T) {
 func TestRun_Determinism_TwoRunsByteIdentical(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml":  "defaults:\n  cpu: 70\n",
 		"conf.d/a/tenant-a.yaml": "tenants:\n  tenant-a:\n    cpu: 80\n",
 		"conf.d/b/tenant-b.yaml": "tenants:\n  tenant-b:\n    cpu: 90\n",
@@ -570,7 +553,7 @@ func TestRun_VersionFlag(t *testing.T) {
 func TestRun_DuplicateTenantID_ExitsTwo(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml":       "defaults: {}\n",
 		"conf.d/a/tenant-x.yaml":      "tenants:\n  tenant-x:\n    cpu: 1\n",
 		"conf.d/b/tenant-x-copy.yaml": "tenants:\n  tenant-x:\n    cpu: 2\n",
@@ -623,7 +606,7 @@ func TestRun_PathSeparators_OnAnyOS(t *testing.T) {
 		t.Skip("only relevant on Windows where filepath.Separator differs")
 	}
 	tmp := t.TempDir()
-	writeTree(t, tmp, map[string]string{
+	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/db/tenant-a.yaml": "tenants:\n  tenant-a:\n    cpu: 80\n",
 		"conf.d/_defaults.yaml":   "defaults: {}\n",
 	})

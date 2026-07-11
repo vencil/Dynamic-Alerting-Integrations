@@ -12,12 +12,12 @@ purpose: |
   both the cost math and the "AWS defaults" footnote in the UI.
 
   Public API:
-    window.__calcExporterResources(tenants, packsPerTenant, replicas)
-    window.__calcPrometheusResources(tenants, packsPerTenant, scrapeInterval, retentionDays)
-    window.__calcAlertmanagerResources(tenants, replicas)
-    window.__calcOperatorResources()
-    window.__calcTotalResources(tenants, packsPerTenant, scrapeInterval, retentionDays, replicas, mode)
-    window.__PRICING                                 AWS default unit prices
+    calcExporterResources(tenants, packsPerTenant, replicas)
+    calcPrometheusResources(tenants, packsPerTenant, scrapeInterval, retentionDays)
+    calcAlertmanagerResources(tenants, replicas)
+    calcOperatorResources()
+    calcTotalResources(tenants, packsPerTenant, scrapeInterval, retentionDays, replicas, mode)
+    PRICING                                 AWS default unit prices
 
   Closure deps: none. Pure functions; receive config as args.
 ---
@@ -133,17 +133,6 @@ function calcTotalResources(tenants, packsPerTenant, scrapeInterval, retentionDa
   };
 }
 
-// Legacy jsx-loader path: expose as window globals (transformImports rewrites
-// `import { X }` → `const X = window.__X` on that path).
-window.__PRICING = PRICING;
-window.__calcExporterResources = calcExporterResources;
-window.__calcPrometheusResources = calcPrometheusResources;
-window.__calcAlertmanagerResources = calcAlertmanagerResources;
-window.__calcOperatorResources = calcOperatorResources;
-window.__calcTotalResources = calcTotalResources;
-
-// TRK-230e: ESM exports (esbuild dist path). Removed with jsx-loader in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export {
   PRICING,
   calcExporterResources,

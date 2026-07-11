@@ -224,9 +224,67 @@ groups:
 
 支援以環境 / 域 metadata 做進一步過濾(細節見 `internal/rbac/` 註解)。**沒標記該 metadata 的租戶**在受限規則下預設**仍放行**(SHADOW,行為與過去一致),但每次會計入 `tenant_api_scope_would_deny_total{axis="metadata"}`(**單調遞增 counter**、僅重啟歸零)。待 `increase(tenant_api_scope_would_deny_total{axis="metadata"}[soak窗])` 在整個 soak 窗維持 **0**(看增長率非絕對值),並**掃過確認沒有落單租戶**(counter 是 traffic-driven:沒被 list 到的租戶不會觸發)後,設 `--rbac-metadata-scope-enforce`(或 `TA_RBAC_METADATA_SCOPE_ENFORCE=1`;helm `--set rbac.metadataScopeEnforce=true`)切成**沒標記就拒絕**(fail-closed,ADR-027 / LD-6 P1)。
 
+### RBAC match 規則(claims-aware)
+
+`_rbac.yaml` 規則可加選配的 `match:` 區塊(ADR-027 / LD-6 P3)。**沒有 `match:` 的規則行為完全不變**——`name` 即比對的 IdP group(同一條求值路徑的退化情形,非新分支);有 `match:` 時 `name` 變成純標籤 / 稽核識別:
+
+```yaml
+groups:
+  - name: platform-admins        # 無 match:name 即比對的 IdP group(既有行為)
+    tenants: ["*"]
+    permissions: [read, write, admin]
+
+  - name: org-4821-operators     # 有 match:name 只是標籤
+    match:
+      groups: [operators]        # OR-within:命中其一即可
+      claims:
+        org: [ORG-4821]          # claim key → 允許值清單(OR-within)
+    tenants: ["*"]
+    permissions: [read, write]
+```
+
+求值語意:**條件種類之間 AND**(`groups` 條件與每一個 claim key 條件都要成立)、**同一條件清單內 OR**(命中其一即可)。claim 比對是**精確字串相等**(tenants 的 `*` / prefix pattern 語意不外溢到 claims)。多規則命中時 permissions / scope 取**聯集**(與既有行為一致)。`match.groups` 與 `match.claims` 擇一即可(純 claim 規則 / 純 group 規則皆合法)。
+
+Fail-closed 護欄:
+
+- principal **缺少**規則引用的 claim、或值不在允許清單 → 該規則不命中(缺 claim fail-closed)。
+- **空的 `match: {}`**(或條件全空)→ 載入錯誤(空 match ≠ match-all)。
+- **null 的 `match:`**(裸 `match:`、`match: null`、或子條件全被註解掉)→ 載入錯誤:此形式在結構上與「沒有 `match:`」無法區分,若放行會靜默退化成 legacy group-name 規則、丟失 claim 收斂,故一律 fail-loud(要 legacy 行為就整段移除 `match:` key)。
+- `match.claims` 引用**未在 `--identity-claim-headers` 宣告**的 key → 載入錯誤(未宣告的 claim key 在執行期永遠不可能命中——沉默的死規則必須 fail-loud)。
+
+⚠️ **嚴格解析(breaking-for-invalid-configs)**:`_rbac.yaml` 改以 strict mode 解析——**未知欄位(如 `mach:` 打錯字)是載入錯誤**,不再被靜默忽略(靜默忽略會讓 match 規則退化成比作者意圖更寬的 group-name 規則 = 提權面)。合法的既有 config 完全不受影響;無效 config **啟動即 FATAL**,hot-reload 則**保留 last-good** 並記 WARN。
+
+⚠️ **遷移警語**:把既有規則「改寫」成 match 規則等於**立即收窄**(原本靠 name 命中的使用者若不滿足新條件會馬上失去存取)。建議先**並行新增** match 規則、確認命中面後再撤舊規則。
+
+**Namespace 誠實界線**(單一 trusted-hop MVP):claim key 即命名空間單位——部署**不得**把兩個不同上游來源對映到同一個 claim key(平台無從區分);真正的 issuer namespace 待 JWT 驗簽(D2-A)時由 `iss` 天然提供。
+
+### RBAC 組織範圍(org-scope,身分綁定;LD-6 P4a)
+
+規則可加選配的 `org-scope: <claimKey>`,把該規則的租戶範圍**限縮到「使用者身分裡那個經驗證的組織 claim,落在該租戶所屬組織清單」的租戶**——組織清單來自平台管理層維護的 `_tenant_orgs.yaml`(admin-only、非租戶自屬性),以租戶 ID 反查。**一條規則涵蓋所有組織**,範圍由使用者身分動態決定(不在規則裡寫死組織代碼):
+
+```yaml
+# _rbac.yaml
+groups:
+  - name: 組織維運
+    match:
+      groups: [operators]
+    org-scope: org-code        # 限縮到「使用者 org-code ∈ 該租戶組織清單」的租戶
+    permissions: [read, write]
+
+# _tenant_orgs.yaml(平台管理層維護,admin-only,無寫入 API,GitOps/管理員直改)
+tenant_orgs:
+  team-alpha-01: [ORG-4821]              # 屬單一組織
+  team-alpha-02: [ORG-4821, ORG-5533]    # 1:N,屬多個組織
+  team-beta-01:  []                       # 已建但未指派(unlabeled)
+```
+
+- **opt-in、預設零行為變化**:沒有 `org-scope:` 的規則行為完全不變(如平台管理員 `tenants: ["*"]` 照樣看全部、不受影響)。`org-scope:` 引用的 claim key **必須在 `--identity-claim-headers` 宣告**,否則載入錯誤。
+- **fail-closed**:使用者無該 org claim、或 org 不在租戶清單 → 該規則不命中;**未指派組織(空清單)的租戶**在 enforce 下不可見(shadow 下仍可見+計數,供管理員補齊對應)。
+- **⚠️ 目前僅 list 可見性、且僅 shadow 模式**:P4a 只把 org-scope 接進租戶清單過濾(`GET /api/v1/tenants`),`tenant_api_scope_would_deny_total{axis="org"}` 記錄「enforce 會拒但 shadow 放行」的租戶;**enforce 開關與讀寫路徑強制留待 P4b**(避免「list 藏、寫入開」的假隔離)。`_tenant_orgs.yaml` 走 strict 解析(typo=載入錯誤),org **僅**從此檔以租戶 ID 反查、**絕不**讀租戶自己的 `_metadata`(組織是授權邊界、非租戶可改屬性)。
+
 ### 身分 claims 縫
 
-`--identity-claim-headers`(或 `TA_IDENTITY_CLAIM_HEADERS`;helm `--set identity.claimHeaders.<claimKey>=<Header-Name>`)以逗號分隔的 `claimKey=Header-Name` 對宣告「哪個 trusted-hop 標頭 → 哪個具名 claim」,例如 `org=X-Auth-Request-Org,region=X-Auth-Request-Region`。設定後請求 principal 會載運這些具名 claims,`GET /api/v1/me` 回應多出 `claims` 欄位;**claims 只載運、不參與授權**(P3 的 match 求值才消費,ADR-027 / LD-6 P2)。標頭與 `X-Forwarded-Groups` 同一信任邊界:必須由 trusted hop(oauth2-proxy)注入且對外 strip-and-set,不可被 client 偽造;空值 / 缺席的標頭不會成為 claim;同名標頭出現**多行**時該 claim 直接拒載並記警告(平台側 backstop:防 proxy 誤用 append 時的 first-value 劫持——Go `Header.Get` 只取第一行)。預設空 = 縫關閉,行為與 JSON 輸出完全不變;格式錯誤(缺 `=`、空 key、空 header 名、重複 key、key 超出 `[A-Za-z0-9_.-]`、header 名超出 `[A-Za-z0-9_-]`——含 `=`/空白的名字真實請求永遠帶不到,寧可啟動就擋)啟動即失敗(fail-loud)。
+`--identity-claim-headers`(或 `TA_IDENTITY_CLAIM_HEADERS`;helm `--set identity.claimHeaders.<claimKey>=<Header-Name>`)以逗號分隔的 `claimKey=Header-Name` 對宣告「哪個 trusted-hop 標頭 → 哪個具名 claim」,例如 `org=X-Auth-Request-Org,region=X-Auth-Request-Region`。設定後請求 principal 會載運這些具名 claims,`GET /api/v1/me` 回應多出 `claims` 欄位;claims 在 `_rbac.yaml` 的 `match:` 規則引用時**參與授權**(見上節「RBAC match 規則」;ADR-027 / LD-6 P2+P3),未被任何規則引用的 claim 只載運、不影響決策。標頭與 `X-Forwarded-Groups` 同一信任邊界:必須由 trusted hop(oauth2-proxy)注入且對外 strip-and-set,不可被 client 偽造;空值 / 缺席的標頭不會成為 claim;同名標頭出現**多行**時該 claim 直接拒載並記警告(平台側 backstop:防 proxy 誤用 append 時的 first-value 劫持——Go `Header.Get` 只取第一行)。預設空 = 縫關閉,行為與 JSON 輸出完全不變;格式錯誤(缺 `=`、空 key、空 header 名、重複 key、key 超出 `[A-Za-z0-9_.-]`、header 名超出 `[A-Za-z0-9_-]`——含 `=`/空白的名字真實請求永遠帶不到,寧可啟動就擋)啟動即失敗(fail-loud)。
 
 ## 寫回模式
 

@@ -12,18 +12,16 @@ purpose: |
   PR-portal-4 pattern.
 
   Public API:
-    window.__deployGenerateHelmValues(config)   build full Helm values YAML
+    deployGenerateHelmValues(config)   build full Helm values YAML
 
-  Closure deps: reads window.__DEPLOY_TIERS, __DEPLOY_ENVIRONMENTS,
-  __DEPLOY_TENANT_SIZES at call time so the generator picks up the
-  catalog from the fixtures dep loaded earlier.
+  Data deps (DEPLOY_TIERS / DEPLOY_ENVIRONMENTS / DEPLOY_TENANT_SIZES) are
+  ESM-imported from ../fixtures/wizard-defaults.js — TRK-230z Wave 2 retired
+  the window.__X call-time reads.
 ---
 
-function deployGenerateHelmValues(config) {
-  const TIERS = window.__DEPLOY_TIERS || [];
-  const ENVIRONMENTS = window.__DEPLOY_ENVIRONMENTS || [];
-  const TENANT_SIZES = window.__DEPLOY_TENANT_SIZES || [];
+import { DEPLOY_TIERS as TIERS, DEPLOY_ENVIRONMENTS as ENVIRONMENTS, DEPLOY_TENANT_SIZES as TENANT_SIZES } from '../fixtures/wizard-defaults.js';
 
+function deployGenerateHelmValues(config) {
   const { tier, environment, tenantSize, auth, packs } = config;
   const size = TENANT_SIZES.find(s => s.id === tenantSize);
   const isTier2 = tier === 'tier2';
@@ -314,8 +312,4 @@ secrets:
   return yaml;
 }
 
-window.__deployGenerateHelmValues = deployGenerateHelmValues;
-
-// TRK-230e: ESM export. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { deployGenerateHelmValues };

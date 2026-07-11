@@ -36,10 +36,12 @@
 //     duplication is harmless at runtime.
 //
 //  3. Routing schema guardrails (PR-2; see routing.go)
-//     Five checks against each tenant's `_routing` block:
-//     unknown receiver type (error), missing receiver fields
-//     (error), empty override matcher (error), duplicate override
-//     matcher (warn), redundant override receiver (warn).
+//     Checks against each tenant's `_routing` block: unknown
+//     receiver type (error), missing receiver fields (error),
+//     override matcher contract — exactly one of alertname/
+//     metric_group, so both empty (error) and both set (error) are
+//     blocked — duplicate override matcher (warn), redundant
+//     override receiver (warn).
 //     Note: the planning row originally said "routing tree cycle
 //     detection" — the codebase's routing model is a flat
 //     per-tenant block with no cross-references, so cycles are
@@ -95,11 +97,12 @@ const (
 
 	// Routing-schema findings (PR-2; see routing.go for rationale on
 	// why this is not "routing_cycle"/"orphaned_route").
-	FindingUnknownReceiverType       FindingKind = "unknown_receiver_type"
-	FindingMissingReceiverField      FindingKind = "missing_receiver_field"
-	FindingEmptyOverrideMatcher      FindingKind = "empty_override_matcher"
-	FindingDuplicateOverrideMatcher  FindingKind = "duplicate_override_matcher"
-	FindingRedundantOverrideReceiver FindingKind = "redundant_override_receiver"
+	FindingUnknownReceiverType        FindingKind = "unknown_receiver_type"
+	FindingMissingReceiverField       FindingKind = "missing_receiver_field"
+	FindingEmptyOverrideMatcher       FindingKind = "empty_override_matcher"
+	FindingConflictingOverrideMatcher FindingKind = "conflicting_override_matcher"
+	FindingDuplicateOverrideMatcher   FindingKind = "duplicate_override_matcher"
+	FindingRedundantOverrideReceiver  FindingKind = "redundant_override_receiver"
 
 	// Cardinality findings (PR-3; see cardinality.go).
 	FindingCardinalityExceeded FindingKind = "cardinality_exceeded"

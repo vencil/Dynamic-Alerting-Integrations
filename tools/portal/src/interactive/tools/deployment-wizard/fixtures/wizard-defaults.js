@@ -11,12 +11,12 @@ purpose: |
   pattern from PR-portal-4.
 
   Public API:
-    window.__DEPLOY_STEPS              ordered step metadata
-    window.__DEPLOY_TIERS              Tier 1 / Tier 2 catalog
-    window.__DEPLOY_ENVIRONMENTS       local / staging / production
-    window.__DEPLOY_TENANT_SIZES       small / medium / large + replica recipes
-    window.__DEPLOY_OAUTH2_PROVIDERS   github / google / oidc / gitlab
-    window.__DEPLOY_RULE_PACKS         13 Rule Pack catalog
+    DEPLOY_STEPS              ordered step metadata
+    DEPLOY_TIERS              Tier 1 / Tier 2 catalog
+    DEPLOY_ENVIRONMENTS       local / staging / production
+    DEPLOY_TENANT_SIZES       small / medium / large + replica recipes
+    DEPLOY_OAUTH2_PROVIDERS   github / google / oidc / gitlab
+    DEPLOY_RULE_PACKS         13 Rule Pack catalog
 
   Closure deps: reads window.__t at consumer call time.
 ---
@@ -156,13 +156,4 @@ const DEPLOY_RULE_PACKS = [
   { id: 'kubernetes', label: 'Kubernetes', category: 'infrastructure', icon: '⎈' },
 ];
 
-window.__DEPLOY_STEPS = DEPLOY_STEPS;
-window.__DEPLOY_TIERS = DEPLOY_TIERS;
-window.__DEPLOY_ENVIRONMENTS = DEPLOY_ENVIRONMENTS;
-window.__DEPLOY_TENANT_SIZES = DEPLOY_TENANT_SIZES;
-window.__DEPLOY_OAUTH2_PROVIDERS = DEPLOY_OAUTH2_PROVIDERS;
-window.__DEPLOY_RULE_PACKS = DEPLOY_RULE_PACKS;
-
-// TRK-230e: ESM exports. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { DEPLOY_STEPS, DEPLOY_TIERS, DEPLOY_ENVIRONMENTS, DEPLOY_TENANT_SIZES, DEPLOY_OAUTH2_PROVIDERS, DEPLOY_RULE_PACKS };

@@ -93,3 +93,23 @@ func WriteFilePathMode(t testing.TB, path, content string, mode os.FileMode) str
 	}
 	return path
 }
+
+// WriteTree renders a literal directory layout under tmp. Keys are
+// forward-slash repo-relative paths joined onto tmp; an empty value means
+// "create the directory", a non-empty value writes it as a file (parent
+// dirs auto-created via WriteFile). Generic — no domain coupling; shared by
+// pkg/config/scope_test.go and cmd/da-guard/main_test.go, which each used to
+// carry an identical local copy.
+func WriteTree(t testing.TB, tmp string, files map[string]string) {
+	t.Helper()
+	for rel, body := range files {
+		clean := filepath.Join(tmp, filepath.FromSlash(rel))
+		if body == "" {
+			if err := os.MkdirAll(clean, 0o755); err != nil {
+				t.Fatalf("mkdir %q: %v", clean, err)
+			}
+			continue
+		}
+		WriteFile(t, clean, body)
+	}
+}

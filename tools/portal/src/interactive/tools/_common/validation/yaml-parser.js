@@ -14,8 +14,8 @@ purpose: |
   multi-doc, complex flows) belongs server-side.
 
   Public API:
-    window.__parseDuration(str)   parse '30s' / '5m' / '2h' / '1d' to seconds (or null)
-    window.__parseYaml(text)      parse tenant YAML to {config, errors}
+    parseDuration(str)   parse '30s' / '5m' / '2h' / '1d' to seconds (or null)
+    parseYaml(text)      parse tenant YAML to {config, errors}
 
   Behaviour notes:
     parseYaml hard-rejects > MAX_YAML_SIZE chars and returns errors
@@ -25,14 +25,15 @@ purpose: |
     Indented children of _routing / _metadata flatten one extra
     level — enough for `_routing.webhook_url` etc.
 
-  Closure deps:
-    Reads window.__t (i18n thunk), window.__UNSAFE_KEYS,
-    window.__MAX_YAML_SIZE. Pulled at call time so test harnesses
-    that swap globals between renders see updated values.
+  Closure deps: window.__t (host-page i18n thunk, per-call). UNSAFE_KEYS
+  + MAX_YAML_SIZE are ESM-imported from ./constants.js (TRK-230z Wave 2
+  retired the window.__X call-time reads).
 
   Consumers import parseDuration + parseYaml directly via ESM
   (dev-rules §S6).
 ---
+
+import { UNSAFE_KEYS, MAX_YAML_SIZE } from './constants.js';
 
 function parseDuration(str) {
   if (!str) return null;
@@ -44,8 +45,6 @@ function parseDuration(str) {
 
 function parseYaml(text) {
   const t = window.__t || ((zh, en) => en);
-  const UNSAFE_KEYS = window.__UNSAFE_KEYS || new Set(['__proto__', 'constructor', 'prototype']);
-  const MAX_YAML_SIZE = window.__MAX_YAML_SIZE || 100000;
 
   const errors = [];
   if (text.length > MAX_YAML_SIZE) {
@@ -115,9 +114,4 @@ function parseYaml(text) {
   return { config, errors };
 }
 
-window.__parseDuration = parseDuration;
-window.__parseYaml = parseYaml;
-
-// TRK-230c: ESM exports for esbuild bundle + Vitest. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { parseDuration, parseYaml };

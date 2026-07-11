@@ -27,7 +27,7 @@ type AccessResponse struct {
 //
 // A lightweight RBAC read-probe, purpose-built so a sibling service (the
 // recipe-preview service, #657) can reuse this tenant-isolation decision
-// WITHOUT re-implementing _rbac.yaml / HasPermission in a second language
+// WITHOUT re-implementing _rbac.yaml / rbac.Allowed in a second language
 // (which would risk authorization drift = a cross-tenant hole) and WITHOUT
 // over-fetching the tenant config (as probing GET /tenants/{id} would). The
 // route's rbac.Middleware(PermRead, TenantIDFromPath) makes the whole

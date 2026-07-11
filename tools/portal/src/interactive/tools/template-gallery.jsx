@@ -6,18 +6,18 @@ version: v2.7.0
 lang: en
 related: [playground, rule-pack-selector, threshold-calculator]
 dependencies: [
-  "_common/components/Loading.jsx"
+  "_common/components/Loading.jsx",
+  "_common/hooks/useCopyToClipboard.js"
 ]
 ---
 
 import React, { useState, useMemo, useEffect } from 'react';
-// TRK-232e fix: ESM dist-bundle path doesn't pre-populate window.__Loading
-// before this module evaluates (the entry imports TemplateGallery
-// directly, not Loading), so the legacy `window.__Loading` lookup
-// returned undefined and React threw #130 on first render. Import the
-// named ESM export instead. The jsx-loader fallback path is gone
-// (TRK-230z); window.__Loading is no longer authoritative.
+// TRK-232e fix: import the named ESM export. The entry imports
+// TemplateGallery directly (not Loading), so the pre-TD-030z global
+// lookup returned undefined and React threw #130 on first render.
+// That global-registration path is gone entirely (TRK-230z).
 import { Loading } from './_common/components/Loading.jsx';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -79,7 +79,7 @@ const PackBadge = ({ id, allPacks }) => {
 
 export default function TemplateGallery() {
   const [selected, setSelected] = useState(null);
-  const [copiedId, setCopiedId] = useState(null);
+  const { copiedKey, copy } = useCopyToClipboard();
   const [filter, setFilter] = useState('');
   const [packFilter, setPackFilter] = useState(null);
   const [viewMode, setViewMode] = useState('scenarios'); // 'scenarios' | 'quickstart' | 'all'
@@ -125,11 +125,7 @@ export default function TemplateGallery() {
     });
   }, [filter, packFilter, viewMode, TEMPLATES]);
 
-  const copyYaml = (tpl) => {
-    navigator.clipboard.writeText(tpl.yaml);
-    setCopiedId(tpl.id);
-    setTimeout(() => setCopiedId(null), 2000);
-  };
+  const copyYaml = (tpl) => copy(tpl.yaml, tpl.id);
 
   // Coverage stats
   const coveredPacks = useMemo(() => {
@@ -252,12 +248,12 @@ export default function TemplateGallery() {
                     <button
                       onClick={(e) => { e.stopPropagation(); copyYaml(tpl); }}
                       className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-                        copiedId === tpl.id
+                        copiedKey === tpl.id
                           ? 'bg-green-600 text-white'
                           : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
                       }`}
                     >
-                      {copiedId === tpl.id ? <><span aria-hidden="true">✓</span> {t('已複製', 'Copied')}</> : t('複製 YAML', 'Copy YAML')}
+                      {copiedKey === tpl.id ? <><span aria-hidden="true">✓</span> {t('已複製', 'Copied')}</> : t('複製 YAML', 'Copy YAML')}
                     </button>
                   </div>
                 </div>

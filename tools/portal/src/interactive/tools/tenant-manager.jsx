@@ -11,6 +11,7 @@ dependencies: [
   "tenant-manager/utils/yaml-generators.js",
   "tenant-manager/hooks/useTenantData.js",
   "_common/hooks/useModalFocusTrap.js",
+  "_common/hooks/useCopyToClipboard.js",
   "tenant-manager/components/GroupSidebar.jsx",
   "tenant-manager/components/ApiNotificationToast.jsx",
   "tenant-manager/components/OverflowBanner.jsx",
@@ -29,10 +30,10 @@ dependencies: [
 
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 
-// TRK-230 (Option C): orchestrator deps via ESM imports. Both browser
-// path (jsx-loader transforms relative imports → `const X = window.__X;`
-// reads — see jsx-loader.html transformImports) and dist-bundle path
-// (esbuild bundles them natively) work from the same source.
+// TRK-230 (Option C): orchestrator deps via ESM imports. esbuild bundles
+// them natively into docs/assets/dist/tenant-manager.js, which the host
+// jsx-loader.html page loads as a single `<script type="module">`
+// (TD-030z retired the old in-browser import-transform path).
 import { DEMO_TENANTS, DEMO_GROUPS } from './tenant-manager/fixtures/demo-tenants.js';
 import { styles } from './tenant-manager/styles.js';
 import { generateMaintenanceYaml, generateSilentModeYaml } from './tenant-manager/utils/yaml-generators.js';
@@ -47,14 +48,15 @@ import { IdentityStrip } from './tenant-manager/components/IdentityStrip.jsx';
 import { SavedViewsPanel } from './tenant-manager/components/SavedViewsPanel.jsx';
 import { useDebouncedValue } from './_common/hooks/useDebouncedValue.js';
 import { useModalFocusTrap } from './_common/hooks/useModalFocusTrap.js';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 import { useURLState } from './_common/hooks/useURLState.js';
 import { useVirtualGrid } from './_common/hooks/useVirtualGrid.js';
 import { Loading } from './_common/components/Loading.jsx';
 import { EmptyState } from './_common/components/EmptyState.jsx';
 
 // `t` and `__DA_LANG` stay as window globals (jsx-loader.html injects
-// them at host-page level for both legacy + dist-bundle paths — the
-// dist bundle inherits these from the host page that loaded it).
+// them at host-page level; the dist bundle inherits these from the host
+// page that loaded it).
 const t = window.__t || ((zh, en) => en);
 // PR-2b: tracked URL params. Module-level const so identity stays
 // stable across renders — passing `['q']` inline as a literal would
@@ -86,6 +88,7 @@ export default function TenantManager() {
   // with bulk-action / group-create / group-delete handlers below) but
   // useTenantData also writes it for the 429 retry toast.
   const [apiNotification, setApiNotification] = useState(null);
+  const { copy } = useCopyToClipboard();
 
   // PR-2b: URL state sync — bookmarkable filter state. Reads `?q=`
   // from URL on mount; setter writes back via history.replaceState
@@ -311,9 +314,7 @@ export default function TenantManager() {
     setModalType('silent');
   };
 
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(modalData);
-  };
+  const copyToClipboard = () => copy(modalData);
 
   const downloadYaml = () => {
     const blob = new Blob([modalData], { type: 'text/yaml' });
@@ -438,7 +439,7 @@ export default function TenantManager() {
       <div style={{ ...styles.container, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center', backgroundColor: 'white', padding: 'var(--da-space-6)', borderRadius: 'var(--da-radius-lg)' }}>
           <div style={{ fontSize: 'var(--da-font-size-3xl)', marginBottom: 'var(--da-space-4)' }} aria-hidden="true">&#10060;</div>
-          <div style={{ color: 'var(--da-color-error)', fontWeight: 'bold' }}>{t('錯誤', 'Error')}</div>
+          <div style={{ color: 'var(--da-color-error-text)', fontWeight: 'bold' }}>{t('錯誤', 'Error')}</div>
           <div style={{ color: 'var(--da-color-muted)', marginTop: 'var(--da-space-2)' }}>{error}</div>
         </div>
       </div>
@@ -876,7 +877,7 @@ export default function TenantManager() {
               </div>
               <button
                 onClick={() => handleDeleteGroup(activeGroupId)}
-                style={{ ...styles.button, ...styles.buttonSecondary, color: 'var(--da-color-error)' }}
+                style={{ ...styles.button, ...styles.buttonSecondary, color: 'var(--da-color-error-text)' }}
               >
                 {t('刪除群組', 'Delete Group')}
               </button>

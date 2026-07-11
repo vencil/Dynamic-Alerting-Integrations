@@ -66,14 +66,14 @@ func newTestWriter(configDir string) *gitops.Writer {
 func newRBACManager(t *testing.T, yaml string) *rbac.Manager {
 	t.Helper()
 	if yaml == "" {
-		mgr, err := rbac.NewManager("")
+		mgr, err := rbac.NewManager("", nil)
 		if err != nil {
 			t.Fatalf("rbac.NewManager: %v", err)
 		}
 		return mgr
 	}
 	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", yaml)
-	mgr, err := rbac.NewManager(rbacFile)
+	mgr, err := rbac.NewManager(rbacFile, nil)
 	if err != nil {
 		t.Fatalf("rbac.NewManager: %v", err)
 	}

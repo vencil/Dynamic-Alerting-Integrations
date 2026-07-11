@@ -13,11 +13,11 @@ purpose: |
   design); tests assert structure, not the timestamp.
 
   Public API:
-    window.__validateTemplate(template)             -> [{ line, msg }]
-    window.__extractVariables(template)             -> string[] of {{.Var}}
-    window.__renderTemplatePreview(template, data)  -> rendered string
-    window.__generateYAML(receiverType, template, receiverLabel)  -> string
-    window.__generateJSON(receiverType, template, receiverLabel)  -> string
+    validateTemplate(template)             -> [{ line, msg }]
+    extractVariables(template)             -> string[] of {{.Var}}
+    renderTemplatePreview(template, data)  -> rendered string
+    generateYAML(receiverType, template, receiverLabel)  -> string
+    generateJSON(receiverType, template, receiverLabel)  -> string
 
   Closure deps: window.__t for bilingual messages (falls back to English).
 ---
@@ -126,12 +126,5 @@ function generateJSON(receiverType, template, receiverLabel) {
 }
 
 // Legacy jsx-loader path: expose as window globals (see PR-portal-12 / TD-030z).
-window.__validateTemplate = validateTemplate;
-window.__extractVariables = extractVariables;
-window.__renderTemplatePreview = renderTemplatePreview;
-window.__generateYAML = generateYAML;
-window.__generateJSON = generateJSON;
 
-// TRK-230e: ESM exports (esbuild dist path). Removed with jsx-loader in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { validateTemplate, extractVariables, renderTemplatePreview, generateYAML, generateJSON };

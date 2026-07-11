@@ -200,8 +200,13 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 
 	for _, td := range decls {
 		if prev, exists := tenants[td.ID]; exists && prev != td.FilePath {
-			return nil, nil, nil, nil, fmt.Errorf(
-				"duplicate tenant ID %q: defined in both %s and %s", td.ID, prev, td.FilePath)
+			// Typed so simulate / library callers can errors.As it (#127
+			// C6-A); Error() string byte-identical to the former fmt.Errorf.
+			return nil, nil, nil, nil, &DuplicateTenantError{
+				TenantID: td.ID,
+				PathA:    prev,
+				PathB:    td.FilePath,
+			}
 		}
 		tenants[td.ID] = td.FilePath
 	}

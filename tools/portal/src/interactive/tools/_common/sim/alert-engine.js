@@ -17,29 +17,48 @@ purpose: |
     references to Rule Pack metric keys + DOMAIN_POLICIES. Returns
     {issues: [{level, field, msg}]}.
 
+  isFiring(current, threshold, inverted)
+    Canonical threshold-crossing primitive. Strict comparison to mirror
+    the real Prometheus alert rules in operator-manifests/*.yaml (e.g.
+    `... > 0.05`, or `< threshold` for inverted/lower-bound metrics): a
+    reading exactly equal to the threshold does NOT fire. Shared by
+    simulateAlerts + simulateWithDedup so the two simulator surfaces can
+    never diverge on the comparison operator.
+
   simulateAlerts(config, metricValues)
-    Given current metric readings, compute which alerts fire and at
-    what severity. Returns array of {metric, current, threshold,
-    critical_threshold, firing, critical_firing, severity, ...}.
+    Given current metric readings, compute which alerts fire and at what
+    severity (strict `>`, via isFiring). The `_critical` companion key
+    escalates the same reading. Returns array of {metric, current,
+    threshold, critical_threshold, firing, critical_firing, severity, ...}.
+
+  simulateWithDedup(config, metrics, dedupEnabled, alertDefs)
+    Alert-simulator model: each config key is an independent alert whose
+    definition comes from alertDefs (the ALERT_DEFS map, injected by the
+    caller — shape adapter). Buckets into {firing, suppressed, ok};
+    honours inverted defs (via isFiring) and severity-dedup (a firing
+    critical suppresses its matching warning). Behaviour relocated verbatim
+    from alert-simulator.jsx so it is shared + unit-tested.
 
   resolveRoutingLayers(config)
     Apply the four-layer routing model (ADR-007): L1 platform
     defaults → L2 routing profile → L3 tenant override → L4 platform-
     enforced. Returns {layers: [...], resolved: <final>}.
 
-  Closure deps: reads window.__t, window.__RULE_PACK_DATA,
-  window.__getAllMetricKeys, window.__RECEIVER_TYPES,
-  window.__RESERVED_KEYS, window.__RESERVED_PREFIXES,
-  window.__TIMING_GUARDRAILS, window.__ROUTING_DEFAULTS,
-  window.__ROUTING_PROFILES, window.__DOMAIN_POLICIES. Pulled at
-  call time so consumers loaded after the data files see them.
+  Data deps are ESM-imported from ../data/* and ../validation/*
+  (esbuild orders them ahead of this module — TRK-230z Wave 2 retired the
+  jsx-loader-era `window.__X || fallback` call-time reads). The only
+  runtime global left is window.__t (host-page i18n), read per-call.
 
   Consumers import these functions directly via ESM (dev-rules §S6).
 ---
 
+import { RULE_PACK_DATA, getAllMetricKeys } from '../data/rule-packs.js';
+import { ROUTING_DEFAULTS, ROUTING_PROFILES, DOMAIN_POLICIES } from '../data/routing-profiles.js';
+import { RECEIVER_TYPES, RESERVED_KEYS, RESERVED_PREFIXES, TIMING_GUARDRAILS } from '../validation/constants.js';
+import { parseDuration } from '../validation/yaml-parser.js';
+
 function generateSampleYaml(selectedPacks, withProfile) {
   const t = window.__t || ((zh, en) => en);
-  const RULE_PACK_DATA = window.__RULE_PACK_DATA || {};
 
   const lines = [`# ${t('從 Rule Pack 自動產生的 Tenant YAML', 'Auto-generated tenant YAML from Rule Packs')}`];
   for (const packId of selectedPacks) {
@@ -71,18 +90,10 @@ function generateSampleYaml(selectedPacks, withProfile) {
 
 function validateConfig(config, selectedPacks) {
   const t = window.__t || ((zh, en) => en);
-  const getAllMetricKeys = window.__getAllMetricKeys;
-  const RECEIVER_TYPES = window.__RECEIVER_TYPES || [];
-  const RESERVED_KEYS = window.__RESERVED_KEYS || new Set();
-  const RESERVED_PREFIXES = window.__RESERVED_PREFIXES || [];
-  const TIMING_GUARDRAILS = window.__TIMING_GUARDRAILS || {};
-  const ROUTING_PROFILES = window.__ROUTING_PROFILES || {};
-  const DOMAIN_POLICIES = window.__DOMAIN_POLICIES || {};
-  const parseDuration = window.__parseDuration;
 
   const issues = [];
   const info = [];
-  const knownMetrics = new Set((getAllMetricKeys ? getAllMetricKeys(selectedPacks) : []).map(m => m.key));
+  const knownMetrics = new Set(getAllMetricKeys(selectedPacks).map(m => m.key));
 
   for (const [key, val] of Object.entries(config)) {
     if (key.startsWith('_')) continue;
@@ -142,7 +153,7 @@ function validateConfig(config, selectedPacks) {
     for (const [param, guard] of Object.entries(TIMING_GUARDRAILS)) {
       const val = routing[param];
       if (val) {
-        const secs = parseDuration ? parseDuration(val) : null;
+        const secs = parseDuration(val);
         if (secs !== null) {
           if (secs < guard.min) {
             issues.push({ level: 'warning', field: `_routing.${param}`,
@@ -207,6 +218,16 @@ function validateConfig(config, selectedPacks) {
   return { issues: [...issues, ...info] };
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Threshold-crossing primitive — single source of truth for the operator.
+// Strict `>` (or `<` for inverted/lower-bound) to mirror the real
+// Prometheus rules in operator-manifests/*.yaml (e.g. `... > 0.05`): a
+// reading exactly at the threshold does NOT fire.
+// ─────────────────────────────────────────────────────────────────────
+function isFiring(current, threshold, inverted) {
+  return inverted ? current < threshold : current > threshold;
+}
+
 function simulateAlerts(config, metricValues) {
   const alerts = [];
 
@@ -225,11 +246,11 @@ function simulateAlerts(config, metricValues) {
     if (isNaN(thresholdNum)) continue;
 
     const currentVal = val.current;
-    const firing = currentVal >= thresholdNum;
+    const firing = isFiring(currentVal, thresholdNum);
 
     const critKey = `${metric}_critical`;
     const critThreshold = config[critKey] ? parseFloat(config[critKey]) : null;
-    const critFiring = critThreshold !== null && currentVal >= critThreshold;
+    const critFiring = critThreshold !== null && isFiring(currentVal, critThreshold);
 
     alerts.push({
       metric, current: currentVal, threshold: thresholdNum,
@@ -242,10 +263,55 @@ function simulateAlerts(config, metricValues) {
   return alerts;
 }
 
+// simulateWithDedup — alert-simulator's per-alert model + severity dedup.
+// Relocated verbatim from alert-simulator.jsx (Wave-3 convergence); the
+// only change is routing the crossing decision through isFiring so it
+// shares one operator with simulateAlerts. alertDefs is injected by the
+// caller (ALERT_DEFS) — keeps this module data-driven / tenant-agnostic.
+function simulateWithDedup(config, metrics, dedupEnabled, alertDefs) {
+  const defs = alertDefs || {};
+  const firing = [];
+  const suppressed = [];
+  const ok = [];
+
+  Object.entries(config).forEach(([key, thresholdStr]) => {
+    const def = defs[key];
+    if (!def) return;
+    const threshold = parseFloat(thresholdStr);
+    if (isNaN(threshold)) return;
+    const current = metrics[key];
+    if (current === undefined || current === '') return;
+    const val = parseFloat(current);
+
+    const wouldFire = isFiring(val, threshold, def.inverted);
+    if (wouldFire) {
+      firing.push({ key, def, threshold, current: val });
+    } else {
+      ok.push({ key, def, threshold, current: val });
+    }
+  });
+
+  // Severity dedup: if critical fires, suppress matching warning
+  if (dedupEnabled) {
+    const criticalFiring = new Set(firing.filter(f => f.def.severity === 'critical').map(f => f.key.replace('_critical', '')));
+    firing.forEach(f => {
+      if (f.def.severity === 'warning' && criticalFiring.has(f.key)) {
+        suppressed.push({ ...f, reason: 'Suppressed by severity dedup (critical alert active)' });
+      }
+    });
+    const suppressedKeys = new Set(suppressed.map(s => s.key));
+    return {
+      firing: firing.filter(f => !suppressedKeys.has(f.key)),
+      suppressed,
+      ok,
+    };
+  }
+
+  return { firing, suppressed: [], ok };
+}
+
 function resolveRoutingLayers(config) {
   const t = window.__t || ((zh, en) => en);
-  const ROUTING_DEFAULTS = window.__ROUTING_DEFAULTS || {};
-  const ROUTING_PROFILES = window.__ROUTING_PROFILES || {};
 
   const layers = [];
 
@@ -303,11 +369,4 @@ function resolveRoutingLayers(config) {
   return { layers, resolved: L3 };
 }
 
-window.__generateSampleYaml = generateSampleYaml;
-window.__validateConfig = validateConfig;
-window.__simulateAlerts = simulateAlerts;
-window.__resolveRoutingLayers = resolveRoutingLayers;
-
-// TRK-230c: ESM exports for esbuild bundle + Vitest. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
-export { generateSampleYaml, validateConfig, simulateAlerts, resolveRoutingLayers };
+export { generateSampleYaml, validateConfig, isFiring, simulateAlerts, simulateWithDedup, resolveRoutingLayers };

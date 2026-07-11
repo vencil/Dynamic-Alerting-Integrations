@@ -8,6 +8,7 @@ related: [playground, promql-tester, config-diff]
 ---
 
 import React, { useState, useMemo } from 'react';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -139,6 +140,7 @@ function convertRules(input) {
 export default function MigrationSimulator() {
   const [input, setInput] = useState(EXAMPLE_RULES);
   const [showResults, setShowResults] = useState(false);
+  const { copy } = useCopyToClipboard();
 
   const conversion = useMemo(() => convertRules(input), [input]);
 
@@ -269,7 +271,7 @@ export default function MigrationSimulator() {
                   </pre>
                   <div className="flex gap-2 mt-3">
                     <button
-                      onClick={() => navigator.clipboard.writeText(conversion.yaml)}
+                      onClick={() => copy(conversion.yaml)}
                       className="flex-1 px-3 py-2 bg-slate-700 text-white rounded-lg text-xs font-medium hover:bg-slate-600"
                     >
                       {t('複製 YAML', 'Copy YAML')}

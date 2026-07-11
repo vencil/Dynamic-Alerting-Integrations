@@ -10,10 +10,10 @@ package main
 // Functions:
 //
 //   loadFile(path)           — single YAML file → ThresholdConfig + hash.
-//   loadDir(dir)             — scan-and-merge all *.yaml in a directory
-//                              (eagerly used by Load; bypassed by
-//                              fullDirLoad which uses scanDirFileHashes
-//                              for the per-file cache).
+//                              Directory mode has no separate eager loader:
+//                              Load delegates to fullDirLoad (config.go) so
+//                              the initial load and the watch loop share one
+//                              composite-hash construction + per-file cache.
 //   scanDirFileHashes(...)   — per-file SHA-256 + mtime-fast-path stat.
 //                              Caches file bytes for the parse phase to
 //                              avoid double disk read. Used by
@@ -64,8 +64,8 @@ func loadFile(path string) (ThresholdConfig, string, error) {
 // archive §S#37d, cost 5+ hours at WARN) or WARN for tenant files — then
 // returns ok=false so the caller can skip the file. `name` is the base filename
 // (drives the underscore severity choice); `path` is the display path used for
-// logs and the metric basename. Shared by loadDirWithMetrics, IncrementalLoad,
-// and fullDirLoad so the three flat-mode parse paths report failures identically.
+// logs and the metric basename. Shared by IncrementalLoad and fullDirLoad so
+// the flat-mode parse paths report failures identically.
 func parsePartialConfig(name, path string, data []byte, metrics *configMetrics, logger *log.Logger) (ThresholdConfig, bool) {
 	var partial ThresholdConfig
 	if err := yaml.Unmarshal(data, &partial); err != nil {
@@ -78,82 +78,6 @@ func parsePartialConfig(name, path string, data []byte, metrics *configMetrics, 
 		return partial, false
 	}
 	return partial, true
-}
-
-// loadDirWithMetrics scans a directory for *.yaml files, parses and
-// deep-merges them (the flat path described in the package overview).
-// Metric observations + log lines route to the caller-supplied
-// *configMetrics + *log.Logger instead of the package singletons. Use
-// this from production code paths that own a ConfigManager. Either
-// argument may be nil → falls back to the package singleton (struct-
-// literal test shortcut).
-func loadDirWithMetrics(dir string, metrics *configMetrics, logger *log.Logger) (ThresholdConfig, string, error) {
-	// Defensive: see scanDirHierarchicalWithMetrics for the same
-	// nil-fallback rationale (struct-literal test shortcut).
-	if metrics == nil {
-		metrics = getConfigMetrics()
-	}
-	if logger == nil {
-		logger = log.Default()
-	}
-	merged := ThresholdConfig{
-		Defaults:     make(map[string]float64),
-		StateFilters: make(map[string]StateFilter),
-		Tenants:      make(map[string]map[string]ScheduledValue),
-		Profiles:     make(map[string]map[string]ScheduledValue),
-	}
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return merged, "", fmt.Errorf("read config dir %s: %w", dir, err)
-	}
-
-	// Collect *.yaml files, sorted (underscore prefix sorts first)
-	var files []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || strings.HasPrefix(name, ".") {
-			continue
-		}
-		if strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml") {
-			files = append(files, name)
-		}
-	}
-	sort.Strings(files)
-
-	if len(files) == 0 {
-		return merged, "", fmt.Errorf("no .yaml files found in %s", dir)
-	}
-
-	// Hash all file contents for change detection
-	hasher := sha256.New()
-
-	for _, name := range files {
-		path := filepath.Join(dir, name)
-		data, err := os.ReadFile(path)
-		if err != nil {
-			logger.Printf("WARN: skip unreadable file %s: %v", path, err)
-			continue
-		}
-		hasher.Write(data)
-
-		partial, ok := parsePartialConfig(name, path, data, metrics, logger)
-		if !ok {
-			continue
-		}
-
-		// Boundary enforcement: warn if tenant file contains state_filters,
-		// defaults, or profiles (shared with the incremental path via
-		// applyBoundaryRules — keep the two call sites byte-identical).
-		applyBoundaryRules(name, &partial, logger)
-
-		// Deep-merge this file's partial into the running result (shared
-		// flat-mode merge semantics — see mergePartialInto).
-		mergePartialInto(&merged, partial)
-	}
-
-	hash := fmt.Sprintf("%x", hasher.Sum(nil))
-	return merged, hash, nil
 }
 
 // scanDirFileHashes scans a directory and returns per-file SHA-256 hashes,
@@ -278,8 +202,8 @@ func applyBoundaryRules(name string, partial *ThresholdConfig, logger *log.Logge
 	}
 }
 
-// mergePartialConfigs merges all cached partial configs in sorted filename order.
-// Same merge semantics as loadDir: defaults/state_filters overwrite, tenants/profiles deep merge.
+// mergePartialConfigs merges all cached partial configs in sorted filename order
+// via mergePartialInto: defaults/state_filters overwrite, tenants/profiles deep merge.
 func mergePartialConfigs(configs map[string]ThresholdConfig) ThresholdConfig {
 	// Pre-scan to estimate map capacities, avoiding rehash during merge.
 	// In directory mode each tenant file has exactly 1 tenant, so
@@ -315,11 +239,11 @@ func mergePartialConfigs(configs map[string]ThresholdConfig) ThresholdConfig {
 }
 
 // mergePartialInto deep-merges one partial config into merged using the
-// flat-mode merge semantics shared by loadDirWithMetrics and
-// mergePartialConfigs: defaults and state_filters overwrite by key; profiles
-// and tenants deep-merge per name (later values win). Keeping this in one place
-// guarantees the eager (loadDir) and incremental (mergePartialConfigs) paths
-// can never drift in merge precedence.
+// flat-mode merge semantics shared by mergePartialConfigs (full rebuild) and
+// the IncrementalLoad diff path: defaults and state_filters overwrite by key;
+// profiles and tenants deep-merge per name (later values win). Keeping this in
+// one place guarantees the full-rebuild and incremental paths can never drift
+// in merge precedence.
 func mergePartialInto(merged *ThresholdConfig, partial ThresholdConfig) {
 	for k, v := range partial.Defaults {
 		merged.Defaults[k] = v

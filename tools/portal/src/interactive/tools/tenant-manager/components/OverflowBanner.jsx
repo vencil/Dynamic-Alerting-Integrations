@@ -46,9 +46,4 @@ function OverflowBanner({ overflow, t }) {
   );
 }
 
-// Register on window for orchestrator pickup.
-window.__OverflowBanner = OverflowBanner;
-
-// TRK-230b: ESM export. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { OverflowBanner };

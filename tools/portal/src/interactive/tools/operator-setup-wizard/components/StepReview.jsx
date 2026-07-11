@@ -15,30 +15,30 @@ purpose: |
             1-4 (operatorVersion / crdVersion / namespace / ruleMode /
             receiverType / receiverSecret / selectedTenants).
 
-  Closure deps: window.__t, window.__generateOperatorCommand,
-  window.__generateMigrationCommand,
-  window.__generateAlertmanagerConfigPreview. The 3 generators are
-  registered by `_common/.../utils/generators.js` (PR-portal-4
-  sibling extract); orchestrator front-matter dependencies block
-  loads them before this component.
+  Closure deps: window.__t (host-page i18n global). The 3 generators
+  (generateOperatorCommand / generateMigrationCommand /
+  generateAlertmanagerConfigPreview) are ESM-imported from
+  `../utils/generators.js`; esbuild orders them ahead of this module.
 ---
 
 import { useState, useCallback } from "react";  // TRK-233 ESM import
 
-// TRK-230e: ESM imports for sibling utilities. jsx-loader transformImports
-// rewrites to `const X = window.__X`; esbuild bundles natively.
+// TRK-230e: ESM imports for sibling utilities; esbuild bundles them
+// natively (TD-030z retired the old jsx-loader import transform).
 import { generateOperatorCommand, generateMigrationCommand, generateAlertmanagerConfigPreview } from '../utils/generators.js';
+import { useCopyToClipboard } from '../../_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
 function StepReview({ config }) {
   const [activeTab, setActiveTab] = useState('command');
   const selectedTenants = config.selectedTenants || [];
+  const { copy } = useCopyToClipboard();
 
   const copyToClipboard = useCallback((text, label) => {
-    navigator.clipboard.writeText(text);
+    copy(text);
     alert(t(`已複製${label}`, `Copied ${label}`));
-  }, []);
+  }, [copy]);
 
   const generatedCommand = generateOperatorCommand(config);
   const migrationCommand = generateMigrationCommand(config);
@@ -271,8 +271,4 @@ function StepReview({ config }) {
   );
 }
 
-window.__StepReview = StepReview;
-
-// TRK-230e: ESM export. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { StepReview };

@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/vencil/Dynamic-Alerting-Integrations/docs/schemas/rbac.schema.json",
+  "title": "Dynamic Alerting Platform — RBAC Schema (_rbac.yaml, ADR-027 / LD-6)",
+  "description": "JSON Schema (draft-07) for validating _rbac.yaml — the tenant-api authorization boundary. Mirrors the STRICT (yaml KnownFields) parser in components/tenant-api/internal/rbac/rbac.go (RBACConfig / GroupRule / MatchBlock): an unknown key (e.g. `permissons:` typo) that the runtime rejects as a load error is caught here at author / CI time instead. The `permissions` enum is a deliberately STRICTER authoring guard than the parser (Permission is an unconstrained string and validateConfig has no enum check, so `[readonly]` would parse fine and silently grant nothing) — it can only reject typos, never a legitimate permission. The guiding rule is: no LOOSER than the parser — the schema never accepts a config the parser load-REJECTS (so present-but-null values, which yaml decodes to nil slices without error, are accepted; and match.claims value lists carry the same non-empty/non-blank constraints validateConfig enforces). It may be deliberately STRICTER only as an authoring hygiene guard that can reject a typo but never a legitimate value: the permission enum, and non-blank list items (a blank org-scope / tenant / claim value is inert in Go but almost always a mistake). SoT = the Go structs; keep this schema in sync when a GroupRule / MatchBlock field is added. Cross-field fail-closed rules (an empty `match: {}` is a load error; an org-scope / match.claims key must be declared in --identity-claim-headers) are NOT expressible in JSON Schema and stay enforced by the parser — this schema guards shape / key-typo / enum only.",
+  "version": "v1.1.0",
+  "$comment": "Add to VS Code settings.json: \"yaml.schemas\": { \"./docs/schemas/rbac.schema.json\": \"**/_rbac.yaml\" }",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "groups": {
+      "type": ["array", "null"],
+      "title": "RBAC Group Rules",
+      "description": "List of group rules. An absent / null / empty list parses to zero groups (MED-8 fail-closed: all access denied unless --rbac-empty-open).",
+      "items": { "$ref": "#/definitions/groupRule" }
+    }
+  },
+  "definitions": {
+    "groupRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Group Rule",
+      "description": "One authorization rule. Without `match` the `name` is the IdP-group matcher (legacy shape, byte-identical to pre-P3); with `match` the `name` becomes a pure label / audit identifier.",
+      "properties": {
+        "name": {
+          "type": ["string", "null"],
+          "title": "Group name / rule label"
+        },
+        "match": { "$ref": "#/definitions/matchBlock" },
+        "tenants": {
+          "type": ["array", "null"],
+          "title": "Tenant IDs or patterns",
+          "description": "Tenant IDs or patterns (\"*\", \"db-a-*\").",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "permissions": {
+          "type": ["array", "null"],
+          "title": "Permissions",
+          "items": { "type": "string", "enum": ["read", "write", "admin"] }
+        },
+        "environments": {
+          "type": ["array", "null"],
+          "title": "Environments",
+          "description": "Empty / absent = all environments.",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "domains": {
+          "type": ["array", "null"],
+          "title": "Domains",
+          "description": "Empty / absent = all domains.",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "org-scope": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "title": "Org-scope claim key",
+          "description": "Opt-in org-scope axis (ADR-027 / LD-6 P4): the claim KEY whose caller value must be one of the target tenant's orgs (from _tenant_orgs.yaml). Must be declared in --identity-claim-headers (parser-enforced). Null / absent = the rule places no org restriction; an empty string is rejected as a meaningless value."
+        }
+      }
+    },
+    "matchBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Claims-aware matcher (LD-6 P3)",
+      "description": "AND across condition kinds, OR within a list. A present-but-null `match:` IS a load error (detectNullMatchBlocks) so null is not accepted here; an empty match block is likewise a load error — a cross-field rule this schema cannot express, enforced by the parser.",
+      "properties": {
+        "groups": {
+          "type": ["array", "null"],
+          "title": "IdP groups (OR-within)",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "claims": {
+          "type": ["object", "null"],
+          "title": "Claim key → allowed values",
+          "description": "Each claim key maps to a NON-EMPTY list of NON-BLANK allowed values (exact string match, OR-within); keys AND-across. validateConfig load-rejects an empty value list and a blank value (rbac.go), so the schema matches — mirroring the match.groups constraints.",
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

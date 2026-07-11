@@ -36,32 +36,12 @@ import (
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
-// DuplicateTenantError signals that the same tenant ID was discovered in two
-// different files during a hierarchical scan. This is a misconfig (e.g. forgot
-// to delete the old flat copy after `git mv` to the nested layout) that the
-// platform should reject hard rather than silently last-wins-merge.
-//
-// Returned by `scanDirHierarchical` and detected at higher layers via
-// `errors.As(err, &DuplicateTenantError{})` (issue #127, v2.8.x hardening).
-//
-// Before v2.8.x: scanDirHierarchical returned a generic fmt.Errorf, and Load()
-// swallowed it with a WARN log. Customers could deploy with a duplicate tenant
-// silently merged via map last-wins iteration — easy to miss in production.
-//
-// After v2.8.x: typed error lets Load() / fullDirLoad() reject the misconfig
-// at the boundary; other scan errors (permissions, malformed file) keep the
-// log-and-continue policy because hierarchical mode is opt-in and shouldn't
-// tear down a flat-only deploy.
-type DuplicateTenantError struct {
-	TenantID string
-	PathA    string // First-discovered file
-	PathB    string // Second-discovered file (the one rejected)
-}
-
-func (e *DuplicateTenantError) Error() string {
-	return fmt.Sprintf("duplicate tenant ID %q: defined in both %s and %s", e.TenantID, e.PathA, e.PathB)
-}
-
+// DuplicateTenantError (the typed cross-file duplicate-tenant error returned by
+// scanDirHierarchical below) now lives in pkg/config and is re-exported into
+// this package via a type alias in config_types.go. See pkg/config/errors.go
+// for the full #127 rationale. `&DuplicateTenantError{...}` here constructs the
+// pkg/config type, so callers' `errors.As(err, &DuplicateTenantError{})` unwrap
+// it identically whether the error came from this walker or a pkg/config one.
 
 // scanDirHierarchical walks a conf.d/ tree collecting every tenant file and
 // every _defaults.yaml file at every nesting depth. It supports flat layouts

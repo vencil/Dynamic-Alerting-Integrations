@@ -157,7 +157,7 @@ function BarChart({ data, maxVal, label }) {
           background: isOutlier ? 'var(--da-color-error)' : 'var(--da-color-accent)',
           transition: 'width 0.3s',
         };
-        const valueSpanStyle = { width: 45, fontSize: 11, color: isOutlier ? 'var(--da-color-error)' : 'var(--da-color-tag-fg)', textAlign: 'right', marginLeft: 8, fontWeight: isOutlier ? 700 : 400 };
+        const valueSpanStyle = { width: 45, fontSize: 11, color: isOutlier ? 'var(--da-color-error-text)' : 'var(--da-color-tag-fg)', textAlign: 'right', marginLeft: 8, fontWeight: isOutlier ? 700 : 400 };
         return (
           <div key={i} style={rowStyle}>
             <span style={labelSpanStyle}>{item.label}</span>
@@ -265,8 +265,8 @@ function MultiTenantComparison() {
   const inputRangeStyle = { width: 80, marginLeft: 6 };
   const sigmaTextStyle = { marginLeft: 4 };
   const outlierBoxStyle = { marginTop: 8, padding: '8px 12px', background: 'var(--da-color-error-soft)', borderRadius: 6, border: '1px solid var(--da-color-error)' };
-  const outlierLabelStyle = { fontSize: 12, fontWeight: 600, color: 'var(--da-color-error)' };
-  const outlierValueStyle = { fontSize: 12, color: 'var(--da-color-error)', marginLeft: 8 };
+  const outlierLabelStyle = { fontSize: 12, fontWeight: 600, color: 'var(--da-color-error-text)' };
+  const outlierValueStyle = { fontSize: 12, color: 'var(--da-color-error-text)', marginLeft: 8 };
   const divergenceBoxStyle = { border: '1px solid var(--da-color-section-border)', borderRadius: 8, overflow: 'hidden' };
   const commonSettingsBoxStyle = { padding: '8px 12px', background: 'var(--da-color-success-soft)', borderTop: '1px solid var(--da-color-section-border)' };
   const commonSettingsTextStyle = { fontSize: 12, color: 'var(--da-color-success)' };
@@ -305,7 +305,7 @@ function MultiTenantComparison() {
                 {t('指標', 'Metric')}
               </th>
               {tenants.map((tenant, i) => {
-                const maintenanceIconStyle = { color: 'var(--da-color-warning)' };
+                const maintenanceIconStyle = { color: 'var(--da-color-warning)' /* token-exempt: decorative aria-hidden warning icon, not informative text */ };
                 const silentIconStyle = { color: 'var(--da-color-mode-silent)' };
                 return (
                 <th key={i} style={tenantHeaderStyle}>

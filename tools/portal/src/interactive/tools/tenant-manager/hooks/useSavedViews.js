@@ -27,9 +27,8 @@ purpose: |
   what was missing was the FRONTEND integration. This hook + the
   SavedViewsPanel component close that gap.
 
-  Scaffolded by `scripts/tools/dx/scaffold_jsx_dep.py` (PR #160).
-  See `docs/internal/jsx-multi-file-pattern.md` for the indirect-
-  eval / `window.__X` self-registration rationale.
+  See `docs/internal/jsx-multi-file-pattern.md` for the multi-file split
+  pattern and the gates that enforce it.
 
   Closure deps: none (pure React hook, no window globals needed).
 
@@ -193,9 +192,4 @@ function useSavedViews(onError) {
   return { views, loading, reachable, reload, save, remove };
 }
 
-// Register on window for orchestrator pickup.
-window.__useSavedViews = useSavedViews;
-
-// TRK-230b: ESM export. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { useSavedViews };

@@ -8,7 +8,7 @@ purpose: |
 
   Usage in another tool:
     front-matter dependencies block lists this file path; pickup
-    line is `const Loading = window.__Loading;`. Render with
+    line is `const Loading = Loading;`. Render with
     `<Loading message="Fetching tenants…" />`.
 
   Props:
@@ -86,9 +86,4 @@ function Loading({ message, size, testid }) {
   );
 }
 
-window.__Loading = Loading;
-
-// TRK-230c: ESM export for esbuild bundle + Vitest. Both `window.__X`
-// and `export { X }` removed in TRK-230z when jsx-loader retires.
-// <!-- jsx-loader-compat: ignore -->
 export { Loading };

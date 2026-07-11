@@ -62,7 +62,11 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		}
 
 		email := rbac.RequestEmail(r)
-		idpGroups := rbac.RequestGroups(r)
+		// Capture the verified principal VALUE for the async path below —
+		// same discipline as email: the closure must never reach back into
+		// the request context (it outlives the HTTP request), so it captures
+		// the immutable principal snapshot, not r / r.Context().
+		p := rbac.RequestPrincipal(r)
 
 		g, ok := d.Groups.GetGroup(groupID)
 		if !ok {
@@ -91,7 +95,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		// v2.6.0: Async mode — submit to goroutine pool and return immediately
 		if r.URL.Query().Get("async") == "true" && d.Tasks != nil {
 			task := d.Tasks.Submit(taskID, func(ctx context.Context) ([]async.TaskResult, error) {
-				results := executeGroupBatchOps(ctx, d.Writer, d.ConfigDir, g.Members, req.Patch, email, idpGroups, d.RBAC)
+				results := executeGroupBatchOps(ctx, d.Writer, d.ConfigDir, g.Members, req.Patch, email, p, d.RBAC)
 				asyncResults := make([]async.TaskResult, len(results))
 				for i, br := range results {
 					asyncResults[i] = async.TaskResult{
@@ -112,7 +116,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		}
 
 		// Synchronous mode (default, backward compatible)
-		results := executeGroupBatchOps(r.Context(), d.Writer, d.ConfigDir, g.Members, req.Patch, email, idpGroups, d.RBAC)
+		results := executeGroupBatchOps(r.Context(), d.Writer, d.ConfigDir, g.Members, req.Patch, email, p, d.RBAC)
 
 		// Compute summary statistics
 		successes := 0
@@ -145,7 +149,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 
 // executeGroupBatchOps runs group batch operations synchronously and returns results.
 // This function is shared between sync and async paths to ensure consistency.
-func executeGroupBatchOps(ctx context.Context, writer *gitops.Writer, configDir string, members []string, patch map[string]string, email string, idpGroups []string, rbacMgr *rbac.Manager) []BatchResult {
+func executeGroupBatchOps(ctx context.Context, writer *gitops.Writer, configDir string, members []string, patch map[string]string, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager) []BatchResult {
 	results := make([]BatchResult, 0, len(members))
 	for _, tenantID := range members {
 		if err := ValidateTenantID(tenantID); err != nil {
@@ -155,7 +159,7 @@ func executeGroupBatchOps(ctx context.Context, writer *gitops.Writer, configDir 
 			continue
 		}
 
-		if !rbacMgr.HasPermission(idpGroups, tenantID, rbac.PermWrite) {
+		if !rbacMgr.Allowed(p, tenantID, rbac.PermWrite) {
 			results = append(results, BatchResult{
 				TenantID: tenantID, Status: "error",
 				Message: "insufficient permissions for tenant " + tenantID,

@@ -160,7 +160,7 @@ The customer migration pipeline strings together three lifecycle phases — "Day
 graph LR
     subgraph Day0["Day-0: Customer Migration"]
         PR["PromRule corpus<br/>(CRD / YAML)"] -->|da-parser| JSON["Canonical JSON<br/>+ prom_portable flag"]
-        JSON -->|da-tools profile build| PB["Profile Builder<br/>(cluster + median ADR-018)"]
+        JSON -->|Profile Builder library| PB["Profile Builder<br/>(library-only, cluster + median, ADR-018)<br/>CLI not yet shipped (planned)"]
     end
 
     subgraph Day1["Day-1: GitOps Hierarchy-Aware Governance"]

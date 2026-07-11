@@ -12,9 +12,9 @@ purpose: |
   timestamp is absent (callers pass startsAt/endsAt).
 
   Public API:
-    window.__analyzeAlerts(alerts)        -> { totalAlerts, bySeverity, byTenant, topNoisy, mttr, flapping, dedupRate, resolvedCount } | null
-    window.__formatDuration(minutes)      -> e.g. "45s" / "12m" / "1.5h"
-    window.__parseTime(ts)  window.__durationMinutes(startMs, endMs)
+    analyzeAlerts(alerts)        -> { totalAlerts, bySeverity, byTenant, topNoisy, mttr, flapping, dedupRate, resolvedCount } | null
+    formatDuration(minutes)      -> e.g. "45s" / "12m" / "1.5h"
+    parseTime(ts)  durationMinutes(startMs, endMs)
 
   Closure deps: none (analysis is i18n-free).
 ---
@@ -101,11 +101,5 @@ function analyzeAlerts(alerts) {
 }
 
 // Legacy jsx-loader path: expose as window globals (see PR-portal-12 / TD-030z).
-window.__parseTime = parseTime;
-window.__durationMinutes = durationMinutes;
-window.__formatDuration = formatDuration;
-window.__analyzeAlerts = analyzeAlerts;
 
-// TRK-230e: ESM exports (esbuild dist path). Removed with jsx-loader in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { parseTime, durationMinutes, formatDuration, analyzeAlerts };

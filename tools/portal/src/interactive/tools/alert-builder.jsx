@@ -6,7 +6,8 @@ version: v2.7.0
 lang: en
 related: [alert-simulator, threshold-calculator, master-onboarding, cicd-setup-wizard, deployment-wizard]
 dependencies: [
-  "alert-builder/builder.js"
+  "alert-builder/builder.js",
+  "_common/hooks/useCopyToClipboard.js"
 ]
 ---
 
@@ -22,6 +23,7 @@ import {
   buildYaml,
   canAdvance,
 } from './alert-builder/builder.js';
+import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 /* ── i18n + repo helpers ───────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
@@ -144,7 +146,7 @@ export default function AlertBuilder() {
     description: '',
     labels: getInitialLabelsFromUrl(),
   });
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopyToClipboard();
 
   const yaml = useMemo(() => buildYaml(config), [config]);
 
@@ -171,15 +173,7 @@ export default function AlertBuilder() {
   const advance = () => setStep((s) => Math.min(s + 1, STEPS.length - 1));
   const retreat = () => setStep((s) => Math.max(s - 1, 0));
 
-  const copyYaml = async () => {
-    try {
-      await navigator.clipboard.writeText(yaml);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('clipboard copy failed', err);
-    }
-  };
+  const copyYaml = () => copy(yaml);
 
   const inputClass =
     'w-full px-3 py-2 text-sm border border-[color:var(--da-color-surface-border)] rounded-md bg-[color:var(--da-color-surface)] text-[color:var(--da-color-fg)] focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-focus-ring)]';

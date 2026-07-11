@@ -14,9 +14,9 @@ purpose: |
   preserve behavior; do not merge without reconciling contracts.
 
   Public API:
-    window.__validateTenantConfig(yamlText)  -> { valid, errors, warnings, ... }
-    window.__parseYAML(text)                 -> parsed object (lenient)
-    window.__parseDuration(str)              -> {ms,value,unit} | null (playground-local)
+    validateTenantConfig(yamlText)  -> { valid, errors, warnings, ... }
+    parseYAML(text)                 -> parsed object (lenient)
+    parseDuration(str)              -> {ms,value,unit} | null (playground-local)
 
   Closure deps: window.__t for bilingual error/warning messages (falls back to
   English). Otherwise pure; receives text as args.
@@ -385,11 +385,4 @@ function validateTenantConfig(yamlText) {
   };
 }
 
-// Legacy jsx-loader path: expose as window globals (see PR-portal-12 / TD-030z).
-window.__validateTenantConfig = validateTenantConfig;
-window.__parseYAML = parseYAML;
-window.__parseDuration = parseDuration;
-
-// TRK-230e: ESM exports (esbuild dist path). Removed with jsx-loader in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { validateTenantConfig, parseYAML, parseDuration };

@@ -244,37 +244,53 @@ PACK_ORDER = [
 # ---------------------------------------------------------------------------
 # Tenant metadata integration (v2.3.0)
 # ---------------------------------------------------------------------------
+class TenantMetadataError(RuntimeError):
+    """Tenant metadata 真正載入/建構失敗（有別於「刻意缺席」的 fallback）。"""
+
+
 def _load_tenant_metadata() -> tuple:
     """Load tenant metadata via generate_tenant_metadata module.
 
     Returns (tenant_groups, tenant_metadata) dicts.
-    Falls back to empty dicts if generate_tenant_metadata.py is unavailable
-    or if no conf.d directory is found.
+
+    **刻意缺席** → 回傳空 dict，不視為錯誤（保留既有寬容行為）：
+      - 沒有 conf.d 目錄（例如只 checkout 文件子集）
+      - generate_tenant_metadata.py 不存在或取不到 loader
+      - 該 module 沒有 build_tenant_metadata()
+
+    **真正的失敗**（import error、build_tenant_metadata 拋例外……）→ 丟
+    TenantMetadataError。dev-rules #5 fail-loud：不可靜默吞掉，否則
+    build_platform_data() 會在 `if tenant_groups or tenant_metadata:` 下
+    整個略過這兩個 key，產出「缺 tenant metadata 卻 exit 0」的
+    platform-data.json——一旦這種產物被 commit 進來，drift gate 比對的
+    是同樣殘缺的輸出，就再也擋不住了。
     """
+    meta_path = SCRIPT_DIR / "generate_tenant_metadata.py"
+    if not meta_path.exists():
+        return {}, {}
+    spec = importlib.util.spec_from_file_location("generate_tenant_metadata", str(meta_path))
+    if spec is None or spec.loader is None:
+        return {}, {}
+
+    # conf.d 缺席是刻意 fallback：在載入 module 前就先判掉。
+    config_dir = REPO_ROOT / "components" / "threshold-exporter" / "config" / "conf.d"
+    if not config_dir.is_dir():
+        return {}, {}
+
     try:
-        meta_path = SCRIPT_DIR / "generate_tenant_metadata.py"
-        if not meta_path.exists():
-            return {}, {}
-        spec = importlib.util.spec_from_file_location("generate_tenant_metadata", str(meta_path))
-        if spec is None or spec.loader is None:
-            return {}, {}
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-
-        # Try default config dir
-        config_dir = REPO_ROOT / "components" / "threshold-exporter" / "config" / "conf.d"
-        if not config_dir.is_dir():
-            return {}, {}
 
         build_fn = getattr(mod, "build_tenant_metadata", None)
         if build_fn is None:
             return {}, {}
 
         data = build_fn(config_dir)
-        return data.get("tenant_groups", {}), data.get("tenant_metadata", {})
-    except Exception as e:
-        print(f"WARNING: tenant metadata generation skipped: {e}", file=sys.stderr)
-        return {}, {}
+    except Exception as exc:  # noqa: BLE001
+        raise TenantMetadataError(
+            f"tenant metadata generation failed: {exc}") from exc
+
+    return data.get("tenant_groups", {}), data.get("tenant_metadata", {})
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +385,13 @@ def main():
                         help="Print JSON to stdout without writing file")
     args = parser.parse_args()
 
-    data = build_platform_data()
+    try:
+        data = build_platform_data()
+    except TenantMetadataError as exc:
+        # fail-loud（dev-rules #5）：寧可讓 target / gate 紅，也不要靜默
+        # 產出缺 tenant metadata 的 platform-data.json。
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(EXIT_VIOLATION)
 
     def strip_volatile(d):
         """Remove fields that change between runs (timestamp, git commit)."""

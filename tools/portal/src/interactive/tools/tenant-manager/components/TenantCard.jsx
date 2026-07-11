@@ -13,13 +13,12 @@ purpose: |
   scaffold tool (`make jsx-extract`) made the cost trivial — Phase 3
   is the first PR using the scaffold from PR #160.
 
-  Scaffolded by `scripts/tools/dx/scaffold_jsx_dep.py` (PR #160).
-  See `docs/internal/jsx-multi-file-pattern.md` for the
-  indirect-eval / `window.__X` self-registration rationale.
+  See `docs/internal/jsx-multi-file-pattern.md` for the multi-file split
+  pattern and the gates that enforce it.
 
-  Closure deps (window globals):
-    - `styles`  (PR #156 — `window.__styles`)
-    - `t`       (jsx-loader's `window.__t` i18n helper)
+  Deps:
+    - `styles`  ESM import from `../styles.js`
+    - `t`       jsx-loader's `window.__t` i18n helper (host-page global)
 
   Props (per render):
     - name, data:      per-card (loop var from filtered)
@@ -33,7 +32,7 @@ purpose: |
 ---
 
 // TRK-233: ESM dist-bundle chunk order is non-deterministic;
-// `window.__styles` may be undefined when this module evaluates.
+// `styles` may be undefined when this module evaluates.
 // Import the canonical export instead. See tenant-manager/styles.js.
 import { styles } from '../styles.js';
 
@@ -206,9 +205,4 @@ function TenantCard({
   );
 }
 
-// Register on window for orchestrator pickup.
-window.__TenantCard = TenantCard;
-
-// TRK-230b: ESM export. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { TenantCard };

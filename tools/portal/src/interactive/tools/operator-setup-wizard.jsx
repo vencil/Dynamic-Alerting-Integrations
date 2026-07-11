@@ -8,6 +8,7 @@ related: [deployment-wizard, cicd-setup-wizard, config-lint]
 dependencies: [
   "operator-setup-wizard/fixtures/wizard-defaults.js",
   "operator-setup-wizard/utils/generators.js",
+  "_common/hooks/useCopyToClipboard.js",
   "operator-setup-wizard/components/StepReview.jsx",
   "_common/components/ErrorBoundary.jsx"
 ]
@@ -15,9 +16,8 @@ dependencies: [
 
 import React, { useState, useMemo, useCallback } from 'react';
 
-// TRK-230e: ESM imports. jsx-loader transformImports rewrites these to
-// `const X = window.__X` reads on legacy path; esbuild bundles them
-// natively on dist path.
+// TRK-230e: ESM imports; esbuild bundles them natively into the dist
+// file (TD-030z retired the old jsx-loader import-transform path).
 import { OSW_STEPS as STEPS, OSW_DEMO_TENANTS as DEMO_TENANTS, OSW_OPERATOR_VERSIONS as OPERATOR_VERSIONS, OSW_CLUSTER_TYPES as CLUSTER_TYPES, OSW_RECEIVER_TYPES as RECEIVER_TYPES, OSW_RULE_MODES as RULE_MODES } from './operator-setup-wizard/fixtures/wizard-defaults.js';
 import { validateTenantName } from './operator-setup-wizard/utils/generators.js';
 import { StepReview } from './operator-setup-wizard/components/StepReview.jsx';
@@ -331,7 +331,7 @@ function StepCRDConfig({ config, onChange, helpOpen, setHelpOpen }) {
                 {mode.desc()}
               </div>
               {mode.riskLevel === 'medium' && (
-                <div style={{ fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-warning)', marginTop: 'var(--da-space-1)' }}>
+                <div style={{ fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-warning-text)', marginTop: 'var(--da-space-1)' }}>
                   <span aria-hidden="true">⚠</span>️ {t('需要仔細測試', 'Requires careful testing')}
                 </div>
               )}
@@ -636,7 +636,7 @@ function StepTenants({ config, onChange, helpOpen, setHelpOpen }) {
           </button>
         </div>
         {customTenant.trim() && !validateTenantName(customTenant.trim()) && (
-          <p style={{ fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-error)', marginTop: 'var(--da-space-1)' }}>
+          <p style={{ fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-error-text)', marginTop: 'var(--da-space-1)' }}>
             <span aria-hidden="true">✗</span> {t('無效的 tenant 名稱。必須符合 RFC 1123', 'Invalid tenant name. Must comply with RFC 1123')}
           </p>
         )}
@@ -674,7 +674,7 @@ function StepTenants({ config, onChange, helpOpen, setHelpOpen }) {
                     border: 'none',
                     cursor: 'pointer',
                     fontSize: 'var(--da-font-size-sm)',
-                    color: 'var(--da-color-error)',
+                    color: 'var(--da-color-error)' /* token-exempt: control glyph (× close affordance), non-text 3:1 */,
                     padding: 0,
                   }}
                 >
