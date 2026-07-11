@@ -887,3 +887,113 @@ def test_e2e_never_fire_fn_exit1_not_crash(tmp_path):
     assert doc["verdict"] == "FAIL"
     assert doc["summary"]["false_negatives"] == 5     # 全 must_detect 都 FN
     assert all(c["fn_reason"] == "no_fire" for c in doc["false_negatives"])
+
+
+# ── --redact 出關安全（air-gapped / 受限 egress） ─────────────────────
+
+def test_redact_strips_all_planted_identifiers():
+    """出關安全鐵律：planted 識別項一個都不得出現在 redacted 序列化輸出——
+    alertname / metric / fault_class / labels 拓撲 / pack_id / 容差 approved_by /
+    檔案路徑全剝。allowlist 重建故未來新欄也不洩（denylist-after-merge 是 fail-open）。"""
+    a = _alert(name="SEKRETALERT")
+    a["labels"]["instance"] = "sekrethost01"
+    rec = _record(fault_class="SEKRETFAULTCLASS", alerts=[a])
+    rec["metric"] = "sekretmetric"
+    rep = _report([rec], [_meta()])
+    rep["pack_id"] = "SEKRETPACK"
+    tol = {"defaults": {"warning": 600, "default": 900},
+           "overrides": {"SEKRETALERT": {
+               "alert_class": "SEKRETALERT", "severity": "warning",
+               "tolerance_s": 100, "justification": "j",
+               "approved_by": "SEKRETAPPROVER"}},
+           "carve_outs": {}, "ignored_unattributed": {}}
+    full = ws.score([("SEKRETPATH.json", rep)], tol,
+                    tolerances_path="SEKRETPATH.yaml", schema_path="SEKRETSCHEMA.json")
+    planted = ["SEKRETALERT", "sekretmetric", "SEKRETFAULTCLASS", "sekrethost01",
+               "SEKRETPACK", "SEKRETAPPROVER", "SEKRETPATH", "SEKRETSCHEMA"]
+    # 前提健全：這些識別項確實在「完整」報告內（否則測試 vacuous）
+    blob_full = json.dumps(full, ensure_ascii=False)
+    assert all(s in blob_full for s in planted), "poison 前提失效：識別項未進完整報告"
+    redacted = ws.redact_report(full)
+    blob = json.dumps(redacted, ensure_ascii=False)
+    for s in planted:
+        assert s not in blob, f"LEAK: {s!r} 出現在 redacted 輸出"
+
+
+def test_redact_is_allowlist_rebuild_not_denylist():
+    """redacted 頂層鍵 ⊆ 白名單；完整報告被塞未知敏感頂層/summary 鍵也不外洩
+    （若改黑名單 del，未來新欄會預設洩）。"""
+    full = _score_one(_record(alerts=[_alert(fire=1000)]), _meta())
+    full["FUTURE_LEAKY_KEY"] = "sekret_future_infra"
+    full["summary"]["FUTURE_SUMMARY_LEAK"] = "sekret_summary_infra"
+    redacted = ws.redact_report(full)
+    allowed = {"tool", "schema_version", "redacted", "verdict",
+               "verdict_reason", "scope", "summary"}
+    assert set(redacted) <= allowed
+    blob = json.dumps(redacted, ensure_ascii=False)
+    assert "sekret_future_infra" not in blob
+    assert "sekret_summary_infra" not in blob
+
+
+def test_redact_preserves_verdict_and_counts():
+    """redact 不損失決策資訊：verdict + catch_rate + 計數逐一保留。"""
+    full = _score_one(_record(alerts=[_alert(fire=1000)]), _meta())
+    r = ws.redact_report(full)
+    assert r["redacted"] is True
+    assert r["verdict"] == full["verdict"]
+    assert r["verdict_reason"] == full["verdict_reason"]
+    assert r["summary"]["catch_rate"] == full["summary"]["catch_rate"]
+    assert r["summary"]["false_negatives"] == full["summary"]["false_negatives"]
+    assert r["scope"]["disclaimer"] == full["scope"]["disclaimer"]
+
+
+def test_cli_redact_json_has_no_identifiers(tmp_path):
+    """CLI --redact --json：stdout 無識別項、redacted:true、verdict 保留、exit 0。"""
+    a = _alert(name="SEKRETCLI", severity=None)   # 無 severity → 落 default row（避 FIX-5 fail-loud）
+    rec = _record(fault_class="SEKRETCLIFAULT", alerts=[a])
+    rec["metric"] = "sekretclimetric"
+    rep = _report([rec], [_meta()])
+    rep["pack_id"] = "SEKRETCLIPACK"
+    p = _write_report(tmp_path, rep, name="rep.json")
+    r = _run_score(str(p), "--tolerances", str(_TOL), "--json", "--redact")
+    assert r.returncode == 0, r.stderr
+    doc = json.loads(r.stdout)
+    assert doc["redacted"] is True and doc["verdict"] == "PASS"
+    for s in ("SEKRETCLI", "sekretclimetric", "SEKRETCLIFAULT", "SEKRETCLIPACK"):
+        assert s not in r.stdout, f"LEAK: {s}"
+
+
+def test_cli_redact_human_no_percase_detail(tmp_path):
+    """CLI --redact（human）：印 [REDACTED]、無 per-case 名字，stderr 也不洩。"""
+    rec = _record(fault_class="SEKRETHUMANFAULT", alerts=[])   # no fire → FN → FAIL
+    rep = _report([rec], [_meta()])
+    rep["pack_id"] = "SEKRETHUMANPACK"
+    p = _write_report(tmp_path, rep, name="rep.json")
+    r = _run_score(str(p), "--tolerances", str(_TOL), "--redact")
+    assert r.returncode == 1                       # FN → FAIL
+    assert "REDACTED" in r.stdout
+    combined = r.stdout + r.stderr
+    for s in ("SEKRETHUMANFAULT", "SEKRETHUMANPACK"):
+        assert s not in combined, f"LEAK: {s}"
+
+
+def test_cli_redact_error_path_no_path_leak(tmp_path):
+    """對抗 review HIGH：--redact 下 CLI 錯誤路徑（含版本 skew 缺 fault_window_s、
+    報告缺欄）的 stderr 不得夾客戶檔案路徑/pack_id——只印通用抑制訊息。"""
+    # (A) 缺必要欄位：報告路徑編了「客戶」名
+    bad = tmp_path / "tenant_ACMEBANK_prod.json"
+    bad.write_text(json.dumps({"tool": "inject-waveform"}), encoding="utf-8")
+    r = _run_score(str(bad), "--tolerances", str(_TOL), "--redact")
+    assert r.returncode == 2
+    assert "ACMEBANK" not in r.stderr and "tenant_ACMEBANK_prod" not in r.stderr
+    assert "--redact 抑制" in r.stderr
+    # (B) 版本 skew：缺 fault_window_s（code 明列的預期情境）
+    rep = _report([_record(alerts=[_alert()])], [_meta()])
+    del rep["metadata"]["series"][0]["fault_window_s"]
+    skew = _write_report(tmp_path, rep, name="site_TOKYO_DC_run.json")
+    r2 = _run_score(str(skew), "--tolerances", str(_TOL), "--redact")
+    assert r2.returncode == 2
+    assert "TOKYO_DC" not in r2.stderr and "synthetic-pack" not in r2.stderr
+    # 對照：不加 --redact 時完整訊息（含路徑）本地可見
+    r3 = _run_score(str(skew), "--tolerances", str(_TOL))
+    assert r3.returncode == 2 and "site_TOKYO_DC_run" in r3.stderr

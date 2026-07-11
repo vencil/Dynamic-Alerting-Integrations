@@ -659,7 +659,62 @@ def score(reports: list[tuple[str, dict]], tol: dict, *,
     }
 
 
+# ── egress-safe redaction（air-gapped / 受限 egress 環境） ────────────
+
+# redacted summary 的安全鍵白名單（全為計數/比率、我方常數，無客戶識別項）。
+_REDACT_SUMMARY_KEYS = (
+    "must_detect_total", "carved_out", "indeterminate", "scored_denominator",
+    "not_scored_probe_informational", "hits", "false_negatives",
+    "catch_rate", "fanout_ratio", "early_onset_fires", "flapping_suspected",
+)
+
+
+def redact_report(report: dict) -> dict:
+    """出關安全投影：只保留 verdict + 計數/比率 + 我方常數 scope/version，剝除
+    每一個客戶識別項——alertname / metric 名 / fault_class / labels 拓撲 /
+    檔案路徑 / 容差 class 名與審計欄（approved_by 等）/ per-case 明細 / warnings
+    （內夾 path+pack_id）。供 air-gapped / 受限 egress 環境出關前給客戶資安 review；
+    它不得透露任何 infra。
+
+    ⛔ **allowlist 重建、非黑名單 del**：新 dict 只放明列安全鍵——若改成「複製全報告
+    再刪已知敏感鍵」，未來報告新增的欄位會**預設洩漏**（denylist-after-merge 是
+    fail-open，[[feedback_denylist_after_merge_fail_open]]）。summary 亦逐鍵白名單，
+    同理防未來新增 summary 欄靜默出關。poison 測試釘死任何 planted 識別項都不外洩。"""
+    summary = report.get("summary") or {}
+    return {
+        "tool": report["tool"],
+        "schema_version": report["schema_version"],
+        "redacted": True,
+        "verdict": report["verdict"],
+        "verdict_reason": report["verdict_reason"],   # 全為計數/我方措辭，無名字
+        "scope": report["scope"],                     # 我方常數 disclaimer
+        "summary": {k: summary[k] for k in _REDACT_SUMMARY_KEYS if k in summary},
+    }
+
+
 # ── CLI ──────────────────────────────────────────────────────────────
+
+def _print_redacted_human(report: dict) -> None:
+    """redacted 報告的人類可讀摘要——只印 verdict + 計數 + scope，無 per-case 明細
+    /識別項（對應 redact_report 的白名單；本地看完整版不加 --redact）。"""
+    s = report.get("summary") or {}
+    rate = "" if s.get("catch_rate") is None else " = {:.1%}".format(s["catch_rate"])
+    print(f"verdict: {report['verdict']}  (catch {s.get('hits')}/"
+          f"{s.get('scored_denominator')}{rate}, FN={s.get('false_negatives')})  "
+          f"[REDACTED / 出關安全]")
+    print(f"  reason: {report['verdict_reason']}")
+    print(f"  must_detect {s.get('must_detect_total')} = scored "
+          f"{s.get('scored_denominator')} + indeterminate {s.get('indeterminate')} + "
+          f"carve-out {s.get('carved_out')}（守恆）")
+    if s.get("early_onset_fires"):
+        print(f"  early-onset 過敏開火 {s['early_onset_fires']} 筆（揭露不 gate）")
+    if s.get("flapping_suspected"):
+        print(f"  疑似 flapping {s['flapping_suspected']} 筆（揭露不 gate）")
+    fr = s.get("fanout_ratio") or {}
+    print(f"  fan-out ratio: p50={fr.get('p50')} p90={fr.get('p90')} max={fr.get('max')}")
+    print(f"  scope: {report['scope']['disclaimer']}")
+    print("  [識別項與 per-case 明細已剝除；本地完整版請不加 --redact 重跑]")
+
 
 def _print_human(report: dict) -> None:
     s = report["summary"]
@@ -698,6 +753,18 @@ def _print_human(report: dict) -> None:
     print(f"  scope: {report['scope']['disclaimer']}")
 
 
+def _emit_error(full: str, redact: bool) -> None:
+    """stderr 錯誤輸出。under --redact 抑制細節——錯誤訊息夾客戶檔案路徑 / pack_id /
+    對帳 key（air-gap 常態把 tenant/site/infra 名編進檔名），且版本 skew（缺
+    fault_window_s）是預期真實情境；SME 貼終端錯誤求助＝egress 事件。故 --redact 下
+    只印通用訊息、不夾 {exc}；本地不加 --redact 看完整。（對抗 review HIGH。）"""
+    if redact:
+        print("ERROR: 輸入/輸出處理失敗（--redact 抑制細節以防檔案路徑/識別項出關；"
+              "本地不加 --redact 重跑看完整訊息）", file=sys.stderr)
+    else:
+        print(f"ERROR: {full}", file=sys.stderr)
+
+
 def main() -> int:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
@@ -716,6 +783,11 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", dest="json_output",
                         help="stdout 輸出機器可讀 JSON（R2-4 結構化 baseline）")
     parser.add_argument("--out", help="另將 JSON 報告寫到檔案（write_text_secure）")
+    parser.add_argument("--redact", action="store_true",
+                        help="出關安全模式（air-gapped / 受限 egress）：所有輸出只含 "
+                             "verdict + 計數 + 比率 + scope，剝除全部識別項（alertname"
+                             "/metric/fault_class/labels/路徑/容差名/per-case 明細/"
+                             "warnings）。本地看完整明細請不加 --redact。")
     args = parser.parse_args()
 
     # Lazy import：--help / bad-flag 路徑在無 jsonschema 環境也要動（sweep 契約）。
@@ -730,7 +802,7 @@ def main() -> int:
         with open(args.schema, encoding="utf-8") as fh:
             schema = json.load(fh)
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"ERROR: cannot load schema {args.schema}: {exc}", file=sys.stderr)
+        _emit_error(f"cannot load schema {args.schema}: {exc}", args.redact)
         return EXIT_CALLER_ERROR
 
     try:
@@ -739,26 +811,37 @@ def main() -> int:
         result = score(reports, tol, tolerances_path=args.tolerances,
                        schema_path=args.schema)
     except (ScoreInputError, ScoreToolBug) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        _emit_error(str(exc), args.redact)
         return EXIT_CALLER_ERROR
     except (KeyError, TypeError, ValueError) as exc:
-        print(f"ERROR: inject 報告/容差檔 shape 異常（{type(exc).__name__}: {exc}）"
-              f"——報告版本不容或檔案損壞", file=sys.stderr)
+        _emit_error(f"inject 報告/容差檔 shape 異常（{type(exc).__name__}: {exc}）"
+                    f"——報告版本不容或檔案損壞", args.redact)
         return EXIT_CALLER_ERROR
 
-    for w in result.get("warnings") or []:
-        print(f"WARNING: {w}", file=sys.stderr)
+    # warnings（第 592 行的重複-pack 警示夾 path+pack_id）是本地診斷——under --redact
+    # 一律抑制、只印計數註記，確保「--redact 下沒有任何輸出會洩」；本地不加 --redact 可見。
+    if args.redact:
+        n_w = len(result.get("warnings") or [])
+        if n_w:
+            print(f"NOTE: --redact 抑制 {n_w} 筆本地診斷 warning（可能含路徑/pack_id）；"
+                  f"本地不加 --redact 重跑可見。", file=sys.stderr)
+    else:
+        for w in result.get("warnings") or []:
+            print(f"WARNING: {w}", file=sys.stderr)
 
+    emit = redact_report(result) if args.redact else result
     try:
-        report_json = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True)
+        report_json = json.dumps(emit, ensure_ascii=False, indent=2, sort_keys=True)
         if args.out:
             write_text_secure(args.out, report_json + "\n")
         if args.json_output:
             print(report_json)
+        elif args.redact:
+            _print_redacted_human(emit)
         else:
-            _print_human(result)
+            _print_human(emit)
     except OSError as exc:
-        print(f"ERROR: 報告輸出失敗: {exc}", file=sys.stderr)
+        _emit_error(f"報告輸出失敗: {exc}", args.redact)   # exc 可能含 --out 路徑
         return EXIT_CALLER_ERROR
 
     return EXIT_OK if result["verdict"] == "PASS" else EXIT_VIOLATION
