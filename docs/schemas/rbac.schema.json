@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/vencil/Dynamic-Alerting-Integrations/docs/schemas/rbac.schema.json",
   "title": "Dynamic Alerting Platform — RBAC Schema (_rbac.yaml, ADR-027 / LD-6)",
-  "description": "JSON Schema (draft-07) for validating _rbac.yaml — the tenant-api authorization boundary. Mirrors the STRICT (yaml KnownFields) parser in components/tenant-api/internal/rbac/rbac.go (RBACConfig / GroupRule / MatchBlock): an unknown key (e.g. `permissons:` typo) that the runtime rejects as a load error is caught here at author / CI time instead. The `permissions` enum is a deliberately STRICTER authoring guard than the parser (Permission is an unconstrained string and validateConfig has no enum check, so `[readonly]` would parse fine and silently grant nothing) — it can only reject typos, never a legitimate permission. Present-but-null values are accepted wherever the parser accepts them (yaml decodes `groups:` / `tenants:` to a nil slice WITHOUT a load error), so the schema is never stricter than the parser. SoT = the Go structs; keep this schema in sync when a GroupRule / MatchBlock field is added. Cross-field fail-closed rules (an empty `match: {}` is a load error; an org-scope / match.claims key must be declared in --identity-claim-headers) are NOT expressible in JSON Schema and stay enforced by the parser — this schema guards shape / key-typo / enum only.",
+  "description": "JSON Schema (draft-07) for validating _rbac.yaml — the tenant-api authorization boundary. Mirrors the STRICT (yaml KnownFields) parser in components/tenant-api/internal/rbac/rbac.go (RBACConfig / GroupRule / MatchBlock): an unknown key (e.g. `permissons:` typo) that the runtime rejects as a load error is caught here at author / CI time instead. The `permissions` enum is a deliberately STRICTER authoring guard than the parser (Permission is an unconstrained string and validateConfig has no enum check, so `[readonly]` would parse fine and silently grant nothing) — it can only reject typos, never a legitimate permission. The guiding rule is: no LOOSER than the parser — the schema never accepts a config the parser load-REJECTS (so present-but-null values, which yaml decodes to nil slices without error, are accepted; and match.claims value lists carry the same non-empty/non-blank constraints validateConfig enforces). It may be deliberately STRICTER only as an authoring hygiene guard that can reject a typo but never a legitimate value: the permission enum, and non-blank list items (a blank org-scope / tenant / claim value is inert in Go but almost always a mistake). SoT = the Go structs; keep this schema in sync when a GroupRule / MatchBlock field is added. Cross-field fail-closed rules (an empty `match: {}` is a load error; an org-scope / match.claims key must be declared in --identity-claim-headers) are NOT expressible in JSON Schema and stay enforced by the parser — this schema guards shape / key-typo / enum only.",
   "version": "v1.1.0",
   "$comment": "Add to VS Code settings.json: \"yaml.schemas\": { \"./docs/schemas/rbac.schema.json\": \"**/_rbac.yaml\" }",
   "type": "object",
@@ -72,10 +72,11 @@
         "claims": {
           "type": ["object", "null"],
           "title": "Claim key → allowed values",
-          "description": "Each claim key maps to a list of allowed values (exact string match, OR-within); keys AND-across.",
+          "description": "Each claim key maps to a NON-EMPTY list of NON-BLANK allowed values (exact string match, OR-within); keys AND-across. validateConfig load-rejects an empty value list and a blank value (rbac.go), so the schema matches — mirroring the match.groups constraints.",
           "additionalProperties": {
-            "type": ["array", "null"],
-            "items": { "type": "string" }
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
           }
         }
       }

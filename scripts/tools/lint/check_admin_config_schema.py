@@ -24,8 +24,11 @@ WHY (the silent failures this shifts left) — the three files differ, deliberat
 
   SoT for each schema is the consumer it mirrors: the Go struct for rbac /
   tenant-orgs, and for domain-policy the union of policy.go, ADR-007 and
-  check_routing_profiles.py. Keep docs/schemas/*.schema.json in sync — and keep
-  the schemas no STRICTER than the parser, or a legitimate config cannot land.
+  check_routing_profiles.py. Keep docs/schemas/*.schema.json in sync, and keep
+  each schema no LOOSER than its parser (never accept a config the parser
+  load-rejects) and no stricter than the parser EXCEPT as an authoring hygiene
+  guard that can only reject a typo (enum values, non-blank list items) — else a
+  legitimate config cannot land.
 
 SCOPE:
   Validates each argument file whose basename stem is a known admin meta-config

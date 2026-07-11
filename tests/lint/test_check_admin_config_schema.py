@@ -125,6 +125,22 @@ class TestValidateFile:
         viol = validate_file(p, rbac_schema, jsonschema)
         assert any("readonly" in v for v in viol), viol
 
+    def test_rbac_match_claims_value_non_empty_non_blank(self, tmp, rbac_schema):
+        # validateConfig (rbac.go) load-rejects a match.claims value list that is
+        # empty or contains a blank string, for a declared key — so the schema
+        # must too, mirroring the match.groups minLength constraint. A prior schema
+        # accepted these (schema looser than the parser in the dangerous direction).
+        for bad in ("      org-code: []\n", "      org-code: ['']\n"):
+            p = _write(tmp, "_rbac.yaml",
+                       "groups:\n  - name: x\n    match:\n      claims:\n" + bad +
+                       "    tenants: [\"*\"]\n    permissions: [read]\n")
+            assert validate_file(p, rbac_schema, jsonschema) != [], f"should reject claims {bad!r}"
+        # the well-formed form still passes
+        ok = _write(tmp, "_rbac.yaml",
+                    "groups:\n  - name: x\n    match:\n      claims:\n        org-code: [ORG-1]\n"
+                    "    tenants: [\"*\"]\n    permissions: [read]\n")
+        assert validate_file(ok, rbac_schema, jsonschema) == []
+
     def test_rbac_empty_match_shape_ok_semantics_parser_enforced(self, tmp, rbac_schema):
         # An empty `match: {}` is a LOAD ERROR at runtime, but that cross-field
         # rule is NOT expressible in JSON Schema — the schema accepts the shape
@@ -198,14 +214,30 @@ class TestGateIntegrity:
         hook = next(h for h in hooks if h.get("id") == "admin-config-schema-check")
         return re.compile(hook["files"])
 
-    def test_every_file_the_hook_selects_is_validated(self):
+    def test_no_fail_open__every_file_the_hook_selects_is_validated(self):
+        # THE fail-open invariant is regex ⊆ script: any path the hook SELECTS must
+        # be recognized by schema_for(). (The converse — script handles ⇒ hook
+        # selects — is the reverse direction and does not cause a fail-open.) So
+        # drive a broad candidate space through the ACTUAL hook regex and, for
+        # everything it selects, require the script to handle it. This would have
+        # caught the original `.yml` hole: the regex selected it, the script (keyed
+        # on `.yaml` basenames) skipped it → exit 0 on a broken authz config.
         pattern = self._hook_files_regex()
-        for stem in SCHEMA_MAP:
-            for ext in ADMIN_EXTENSIONS:
-                rel = f"conf.d/{stem}{ext}"
-                assert pattern.search(rel), f"hook regex does not select {rel}"
-                assert schema_for(rel) is not None, (
-                    f"FAIL-OPEN: hook selects {rel} but the script skips it (exit 0)")
+        stems = ["_rbac", "_domain_policy", "_tenant_orgs",
+                 "_groups", "_federation_policy", "notes", "rbac"]
+        exts = [".yaml", ".yml", ".YAML", ".YML", ".Yaml", ".json", ".txt", ".yaml.bak", ""]
+        selected = 0
+        for prefix in ("", "conf.d/", "deploy/overlays/prod/"):
+            for stem in stems:
+                for ext in exts:
+                    rel = f"{prefix}{stem}{ext}"
+                    if pattern.search(rel):
+                        selected += 1
+                        assert schema_for(rel) is not None, (
+                            f"FAIL-OPEN: hook regex selects {rel!r} but schema_for() "
+                            f"returns None → the script skips it and exits 0.")
+        assert selected >= len(SCHEMA_MAP), (
+            f"regex selected only {selected} candidate(s) — guard likely vacuous")
 
     def test_hook_does_not_select_files_we_cannot_validate(self):
         pattern = self._hook_files_regex()
