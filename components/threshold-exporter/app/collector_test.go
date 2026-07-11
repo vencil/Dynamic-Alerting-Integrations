@@ -809,7 +809,14 @@ func TestCollector_TenantExpectedExporter(t *testing.T) {
 	}
 }
 
-func TestCollector_SilentMode_Expired_EmitsConfigEvent(t *testing.T) {
+// A plain scalar silent-mode value (no structured YAML, no expires) resolves as
+// active. TestCollector_SilentMode_Warning already pins the user_silent_mode
+// series for this input, but it filters CollectAndCompare to that family and so
+// asserts nothing about da_config_event. This case complements it by pinning the
+// da_config_event==0 half of the invariant on the scalar path — the scalar
+// analogue of TestCollector_Collect_ActiveSilentModeStructured (structured input)
+// and the counterpart to TestCollector_Collect_ExpiredSilentMode (expired→event).
+func TestCollector_SilentMode_PlainScalar_NoConfigEvent(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{},
@@ -820,19 +827,14 @@ func TestCollector_SilentMode_Expired_EmitsConfigEvent(t *testing.T) {
 		},
 	}
 
-	// Manually set structured silent mode with expired state for testing.
-	// The SVScheduled helper creates a ScheduledValue; we need structured mode with expires.
-	// Instead, test via ResolveSilentModesAt by constructing the config with expires in the past.
 	manager := newTestManager(cfg)
 	collector := NewThresholdCollector(manager)
 
-	// This test verifies the collector handles expired silent modes.
-	// With a simple "warning" value (no expires), it should emit user_silent_mode, not da_config_event.
 	count := testutil.CollectAndCount(collector, "user_silent_mode")
 	if count != 1 {
 		t.Errorf("expected 1 user_silent_mode metric, got %d", count)
 	}
-	// No config event for non-expired
+	// No config event for a non-expired (active) silent mode.
 	eventCount := testutil.CollectAndCount(collector, "da_config_event")
 	if eventCount != 0 {
 		t.Errorf("expected 0 da_config_event metrics for non-expired, got %d", eventCount)

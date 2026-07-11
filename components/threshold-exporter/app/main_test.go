@@ -9,8 +9,6 @@ package main
 // defer-restore, so they are intentionally NOT t.Parallel.
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -80,33 +78,5 @@ func TestResolveConfigPath_AutoDetectDir(t *testing.T) {
 	// Result should be the default file since /etc/threshold-exporter/conf.d doesn't exist in tests
 	if result != "/etc/threshold-exporter/config.yaml" {
 		t.Errorf("expected /etc/threshold-exporter/config.yaml, got %s", result)
-	}
-}
-
-// ============================================================
-// resolveConfigPath — auto-detect directory
-// ============================================================
-
-func TestResolveConfigPath_AutoDetectDir_RealDir(t *testing.T) {
-	// Create a temp dir that mimics the default path
-	dir := t.TempDir()
-	confD := filepath.Join(dir, "conf.d")
-	os.MkdirAll(confD, 0700)
-
-	oldConfigDir := configDir
-	oldConfigPath := configPath
-	defer func() {
-		configDir = oldConfigDir
-		configPath = oldConfigPath
-	}()
-
-	configDir = ""
-	configPath = ""
-
-	// Can't test /etc path directly, but test flag behavior
-	result := resolveConfigPath()
-	// Should return default file since we can't inject the /etc path
-	if result == "" {
-		t.Error("resolveConfigPath should never return empty")
 	}
 }
