@@ -12,7 +12,7 @@ purpose: |
 
   Usage in another tool:
     front-matter dependencies block lists this file path; pickup
-    line is `const EmptyState = window.__EmptyState;`. Render with
+    line is `const EmptyState = EmptyState;`. Render with
     `<EmptyState icon="🔍" title={...} description={...}
     actionLabel={...} onAction={...} />`.
 
@@ -90,9 +90,4 @@ function EmptyState({ icon, title, description, actionLabel, onAction, testid })
   );
 }
 
-window.__EmptyState = EmptyState;
-
-// TRK-230c: ESM export for esbuild bundle + Vitest. Both `window.__X`
-// and `export { X }` removed in TRK-230z when jsx-loader retires.
-// <!-- jsx-loader-compat: ignore -->
 export { EmptyState };

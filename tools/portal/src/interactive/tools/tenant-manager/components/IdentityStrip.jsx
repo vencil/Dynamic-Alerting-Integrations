@@ -35,7 +35,7 @@ purpose: |
 ---
 
 // TRK-233: import the canonical ESM `styles` export rather than reading
-// `window.__styles` — esbuild chunk-arrival order isn't guaranteed, so a
+// `styles` — esbuild chunk-arrival order isn't guaranteed, so a
 // bare global read is exposed to a load-order race (see GroupSidebar.jsx
 // for the full history).
 import { styles } from '../styles.js';
@@ -173,9 +173,4 @@ function IdentityStrip({ authUser, activeFilters = [], activeGroupLabel = null, 
   );
 }
 
-// Register on window for orchestrator pickup (legacy jsx-loader path).
-window.__IdentityStrip = IdentityStrip;
-
-// TRK-230b: ESM export. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { IdentityStrip };

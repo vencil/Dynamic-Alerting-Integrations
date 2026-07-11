@@ -10,10 +10,10 @@ purpose: |
   matches the operator-setup-wizard pattern from PR-portal-4.
 
   Public API:
-    window.__cicdGenerateInitCommand(config)            build da-tools CLI
-    window.__cicdGenerateDockerCommand(config)          docker wrapper
-    window.__cicdGenerateFileTree(config)               ASCII repo tree
-    window.__cicdGenerateGitHubActionsPreview(config)   sample workflow YAML
+    cicdGenerateInitCommand(config)            build da-tools CLI
+    cicdGenerateDockerCommand(config)          docker wrapper
+    cicdGenerateFileTree(config)               ASCII repo tree
+    cicdGenerateGitHubActionsPreview(config)   sample workflow YAML
 
   Closure deps: none. Pure functions; receive config as arg.
 ---
@@ -131,11 +131,4 @@ jobs:
         run: argocd app sync dynamic-alerting --force`}`;
 }
 
-window.__cicdGenerateInitCommand = cicdGenerateInitCommand;
-window.__cicdGenerateDockerCommand = cicdGenerateDockerCommand;
-window.__cicdGenerateFileTree = cicdGenerateFileTree;
-window.__cicdGenerateGitHubActionsPreview = cicdGenerateGitHubActionsPreview;
-
-// TRK-230e: ESM exports. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { cicdGenerateInitCommand, cicdGenerateDockerCommand, cicdGenerateFileTree, cicdGenerateGitHubActionsPreview };

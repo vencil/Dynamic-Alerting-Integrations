@@ -11,12 +11,12 @@ purpose: |
   CLUSTER_TYPES + RECEIVER_TYPES tables in a follow-up.
 
   Public API:
-    window.__OSW_STEPS                ordered step metadata
-    window.__OSW_DEMO_TENANTS         pre-baked demo tenant ids
-    window.__OSW_OPERATOR_VERSIONS    Prometheus Operator version matrix
-    window.__OSW_CLUSTER_TYPES        K8s cluster type catalog
-    window.__OSW_RECEIVER_TYPES       Alertmanager receiver type catalog
-    window.__OSW_RULE_MODES           rule deployment mode catalog
+    OSW_STEPS                ordered step metadata
+    OSW_DEMO_TENANTS         pre-baked demo tenant ids
+    OSW_OPERATOR_VERSIONS    Prometheus Operator version matrix
+    OSW_CLUSTER_TYPES        K8s cluster type catalog
+    OSW_RECEIVER_TYPES       Alertmanager receiver type catalog
+    OSW_RULE_MODES           rule deployment mode catalog
 
   Closure deps: reads window.__t at consumer call time.
 ---
@@ -81,13 +81,4 @@ const OSW_RULE_MODES = [
   },
 ];
 
-window.__OSW_STEPS = OSW_STEPS;
-window.__OSW_DEMO_TENANTS = OSW_DEMO_TENANTS;
-window.__OSW_OPERATOR_VERSIONS = OSW_OPERATOR_VERSIONS;
-window.__OSW_CLUSTER_TYPES = OSW_CLUSTER_TYPES;
-window.__OSW_RECEIVER_TYPES = OSW_RECEIVER_TYPES;
-window.__OSW_RULE_MODES = OSW_RULE_MODES;
-
-// TRK-230e: ESM exports. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { OSW_STEPS, OSW_DEMO_TENANTS, OSW_OPERATOR_VERSIONS, OSW_CLUSTER_TYPES, OSW_RECEIVER_TYPES, OSW_RULE_MODES };

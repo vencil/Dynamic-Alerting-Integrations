@@ -12,11 +12,11 @@
  *   - window.__t       (i18n helper)
  *   - window.__DA_LANG (current language)
  *
- * Subtree globals (window.__styles, window.__DEMO_TENANTS, …) are set by
- * the bundled modules themselves: importing each subtree file re-runs its
- * `window.__X = X;` registration as an import side-effect, so the few
- * consumers that still read a global (e.g. useTenantData.js reads
- * window.__DEMO_TENANTS) get a populated value. TRK-230z prunes the rest.
+ * Subtree globals: TRK-230z removed the dead `window.__X = X;` registrations.
+ * The few that survive (e.g. demo-tenants.js sets window.__DEMO_TENANTS /
+ * window.__DEMO_GROUPS, which useTenantData.js reads) are still populated as
+ * an import side-effect of the bundled module. Each surviving write is
+ * annotated at its definition; migrating those readers to ESM is Wave 2.
  */
 // TRK-233/034: component files now use direct ESM React imports
 // (`import { useState } from 'react'`); no global side-effect setup

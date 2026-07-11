@@ -13,7 +13,7 @@ purpose: |
   the orchestrator filters RULE_PACKS by selectedPacks and passes the result.
 
   Public API:
-    window.__computeCapacityEstimates({ packs, tenantCount, instancesPerTenant, scrapeInterval, retentionDays })
+    computeCapacityEstimates({ packs, tenantCount, instancesPerTenant, scrapeInterval, retentionDays })
       packs: array of { recording, alerts, metrics, seriesPerInstance }
 
   Closure deps: none. Pure function; receives packs + scalars as args.
@@ -67,8 +67,5 @@ function computeCapacityEstimates({ packs, tenantCount, instancesPerTenant, scra
 }
 
 // Legacy jsx-loader path: expose as window global (see PR-portal-12 / TD-030z).
-window.__computeCapacityEstimates = computeCapacityEstimates;
 
-// TRK-230e: ESM exports (esbuild dist path). Removed with jsx-loader in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { computeCapacityEstimates };

@@ -328,9 +328,4 @@ function useTenantData({ setApiNotification, t, q = '' }) {
   };
 }
 
-// Register on window for orchestrator pickup.
-window.__useTenantData = useTenantData;
-
-// TRK-230b: ESM export. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { useTenantData };

@@ -138,9 +138,10 @@ class ErrorBoundary extends Component {
   }
 }
 
+// LIVE registration — deliberately kept by TRK-230z. `jsx-loader.html`
+// boot-guards on `window.__ErrorBoundary` (it installs its own fallback
+// boundary only while this is unset), so the host page, not the bundle,
+// is the consumer. Retiring it means changing that guard first.
 window.__ErrorBoundary = ErrorBoundary;
 
-// TRK-230c: ESM export for esbuild bundle + Vitest. Both `window.__X`
-// and `export { X }` removed in TRK-230z when jsx-loader retires.
-// <!-- jsx-loader-compat: ignore -->
 export { ErrorBoundary };

@@ -44,10 +44,4 @@ function generateSilentModeYaml(tenants) {
   return lines.join('\n');
 }
 
-// Register on window for orchestrator pickup.
-window.__generateMaintenanceYaml = generateMaintenanceYaml;
-window.__generateSilentModeYaml = generateSilentModeYaml;
-
-// TRK-230b: ESM exports. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { generateMaintenanceYaml, generateSilentModeYaml };

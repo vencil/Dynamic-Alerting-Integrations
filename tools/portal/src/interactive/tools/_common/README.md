@@ -70,11 +70,13 @@ sequence by hand.
 
 **Do not** add a `dependencies:` frontmatter entry, read
 `const X = window.__X;`, or register `window.__X = X;`. Those are the
-retired jsx-loader mechanism. Most `_common/` files still carry a tail
-`window.__X = X;` line sitting *next to* their real `export { X };` — that
-write is **dead code tracked for removal under TRK-230z**; do not copy it
-into new files. Frontmatter `dependencies:` blocks are likewise stripped
-at build time and carry no runtime meaning.
+retired jsx-loader mechanism. TRK-230z Wave 1 deleted the dead
+self-registration writes; a few `_common/` files still register a global,
+but only where a **live** call-time reader (`sim/alert-engine.js`, or the
+host `jsx-loader.html`) still depends on it — each is annotated in place
+and slated for the Wave 2 ESM migration. Don't add new ones. Frontmatter
+`dependencies:` blocks are likewise stripped at build time and carry no
+runtime meaning.
 
 > **Not the same thing** — host-page → bundle globals such as
 > `window.__t` (i18n) and `window.__PLATFORM_DATA` are set by

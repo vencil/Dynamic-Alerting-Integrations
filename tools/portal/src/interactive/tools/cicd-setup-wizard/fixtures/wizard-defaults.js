@@ -11,10 +11,10 @@ purpose: |
   (PR-portal-4) + the other 2 sibling wizards in this same PR.
 
   Public API:
-    window.__CICD_STEPS              ordered step metadata
-    window.__CICD_RULE_PACKS         13 Rule Pack catalog
-    window.__CICD_CI_OPTIONS         GitHub Actions / GitLab CI / both
-    window.__CICD_DEPLOY_OPTIONS     Kustomize / Helm / ArgoCD
+    CICD_STEPS              ordered step metadata
+    CICD_RULE_PACKS         13 Rule Pack catalog
+    CICD_CI_OPTIONS         GitHub Actions / GitLab CI / both
+    CICD_DEPLOY_OPTIONS     Kustomize / Helm / ArgoCD
 
   Closure deps: reads window.__t at consumer call time.
 ---
@@ -57,11 +57,4 @@ const CICD_DEPLOY_OPTIONS = [
   { id: 'argocd', label: 'ArgoCD', icon: '🔁', desc: () => t('GitOps 自動同步：ArgoCD Application 指向你的 repo', 'GitOps auto-sync: ArgoCD Application points to your repo.') },
 ];
 
-window.__CICD_STEPS = CICD_STEPS;
-window.__CICD_RULE_PACKS = CICD_RULE_PACKS;
-window.__CICD_CI_OPTIONS = CICD_CI_OPTIONS;
-window.__CICD_DEPLOY_OPTIONS = CICD_DEPLOY_OPTIONS;
-
-// TRK-230e: ESM exports. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { CICD_STEPS, CICD_RULE_PACKS, CICD_CI_OPTIONS, CICD_DEPLOY_OPTIONS };

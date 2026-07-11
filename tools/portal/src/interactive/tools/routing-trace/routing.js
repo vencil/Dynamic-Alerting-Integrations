@@ -12,10 +12,10 @@ purpose: |
   unit testing.
 
   Public API:
-    window.__computeTrace({ alert, defaultRoute, childRoutes }) -> { matchedRoute, receiver, reasons }
-    window.__canAdvance(step, state)        -> bool (wizard step gate)
-    window.__isValidAlertName(s)            -> bool
-    window.__isValidLabelKey(s)             -> bool
+    computeTrace({ alert, defaultRoute, childRoutes }) -> { matchedRoute, receiver, reasons }
+    canAdvance(step, state)        -> bool (wizard step gate)
+    isValidAlertName(s)            -> bool
+    isValidLabelKey(s)             -> bool
 
   Closure deps: window.__t for bilingual reason lines (falls back to English).
 ---
@@ -140,11 +140,5 @@ function canAdvance(step, state) {
 }
 
 // Legacy jsx-loader path: expose as window globals (see PR-portal-12 / TD-030z).
-window.__isValidAlertName = isValidAlertName;
-window.__isValidLabelKey = isValidLabelKey;
-window.__computeTrace = computeTrace;
-window.__canAdvance = canAdvance;
 
-// TRK-230e: ESM exports (esbuild dist path). Removed with jsx-loader in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { isValidAlertName, isValidLabelKey, computeTrace, canAdvance };

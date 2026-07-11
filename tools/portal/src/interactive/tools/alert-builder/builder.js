@@ -10,10 +10,10 @@ purpose: |
   module needs no window.__t fallback.
 
   Public API:
-    window.__isValidAlertName(s)  window.__isValidGroupName(s)
-    window.__isValidLabelKey(s)   window.__isValidThreshold(s)
-    window.__buildYaml(config)    -> PrometheusRule YAML string
-    window.__canAdvance(step, config) -> bool (wizard step gate)
+    isValidAlertName(s)  isValidGroupName(s)
+    isValidLabelKey(s)   isValidThreshold(s)
+    buildYaml(config)    -> PrometheusRule YAML string
+    canAdvance(step, config) -> bool (wizard step gate)
 
   Closure deps: none. Pure functions; receive config as args.
 ---
@@ -100,13 +100,5 @@ function canAdvance(step, config) {
 }
 
 // Legacy jsx-loader path: expose as window globals (see PR-portal-12 / TD-030z).
-window.__isValidAlertName = isValidAlertName;
-window.__isValidGroupName = isValidGroupName;
-window.__isValidLabelKey = isValidLabelKey;
-window.__isValidThreshold = isValidThreshold;
-window.__buildYaml = buildYaml;
-window.__canAdvance = canAdvance;
 
-// TRK-230e: ESM exports (esbuild dist path). Removed with jsx-loader in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { isValidAlertName, isValidGroupName, isValidLabelKey, isValidThreshold, buildYaml, canAdvance };

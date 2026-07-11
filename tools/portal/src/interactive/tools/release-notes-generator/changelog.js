@@ -14,9 +14,9 @@ purpose: |
   i18n-only.
 
   Public API:
-    window.__parseChangelogMarkdown(text)              -> { category: [{roles, description}] }
-    window.__filterChangesByRole(sections, roles)      -> filtered sections
-    window.__generateAutoSummary(filtered, roles)      -> summary string
+    parseChangelogMarkdown(text)              -> { category: [{roles, description}] }
+    filterChangesByRole(sections, roles)      -> filtered sections
+    generateAutoSummary(filtered, roles)      -> summary string
 
   Closure deps: window.__t for bilingual summary sentences (falls back to English).
 ---
@@ -136,10 +136,5 @@ function generateAutoSummary(filtered, selectedRoles) {
 }
 
 // Legacy jsx-loader path: expose as window globals (see PR-portal-12 / TD-030z).
-window.__parseChangelogMarkdown = parseChangelogMarkdown;
-window.__filterChangesByRole = filterChangesByRole;
-window.__generateAutoSummary = generateAutoSummary;
 
-// TRK-230e: ESM exports (esbuild dist path). Removed with jsx-loader in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { parseChangelogMarkdown, filterChangesByRole, generateAutoSummary };

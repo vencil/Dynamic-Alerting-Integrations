@@ -15,12 +15,10 @@ purpose: |
             1-4 (operatorVersion / crdVersion / namespace / ruleMode /
             receiverType / receiverSecret / selectedTenants).
 
-  Closure deps: window.__t, window.__generateOperatorCommand,
-  window.__generateMigrationCommand,
-  window.__generateAlertmanagerConfigPreview. The 3 generators are
-  registered by `_common/.../utils/generators.js` (PR-portal-4
-  sibling extract); orchestrator front-matter dependencies block
-  loads them before this component.
+  Closure deps: window.__t (host-page i18n global). The 3 generators
+  (generateOperatorCommand / generateMigrationCommand /
+  generateAlertmanagerConfigPreview) are ESM-imported from
+  `../utils/generators.js`; esbuild orders them ahead of this module.
 ---
 
 import { useState, useCallback } from "react";  // TRK-233 ESM import
@@ -273,8 +271,4 @@ function StepReview({ config }) {
   );
 }
 
-window.__StepReview = StepReview;
-
-// TRK-230e: ESM export. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { StepReview };

@@ -34,7 +34,7 @@ tools/portal/
 ├── manifest.json       # list of tool entries to bundle
 ├── build.mjs           # esbuild script — strips frontmatter, bundles per-entry
 ├── vitest.config.ts    # Vitest config — jsdom + frontmatter strip plugin
-├── test-setup.ts       # global mocks for window.__styles / window.__t / React
+├── test-setup.ts       # global mocks for window.__t / React
 ├── tsconfig.json       # TS config covering src/ + tests/
 ├── src/                # ★ JSX source (was docs/interactive/ + docs/getting-started/)
 │   ├── interactive/

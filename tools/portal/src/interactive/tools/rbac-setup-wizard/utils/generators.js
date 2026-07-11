@@ -11,8 +11,8 @@ purpose: |
   from PR-portal-4.
 
   Public API:
-    window.__rbacGenerateYaml(groups)     emit _rbac: YAML block
-    window.__rbacValidate(groups)         return [{level, msg}]
+    rbacGenerateYaml(groups)     emit _rbac: YAML block
+    rbacValidate(groups)         return [{level, msg}]
 
   Closure deps: validate uses window.__t for messages.
 ---
@@ -72,9 +72,4 @@ function rbacValidate(groups) {
   return warnings;
 }
 
-window.__rbacGenerateYaml = rbacGenerateYaml;
-window.__rbacValidate = rbacValidate;
-
-// TRK-230e: ESM exports. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { rbacGenerateYaml, rbacValidate };

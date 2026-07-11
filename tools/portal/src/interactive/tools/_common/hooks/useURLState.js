@@ -98,10 +98,4 @@ function useURLState(keys) {
   return { state, setKey, reset };
 }
 
-// Register on window for orchestrator pickup.
-window.__useURLState = useURLState;
-
-// TRK-230c: ESM export for esbuild bundle + Vitest. Both `window.__X`
-// and `export { X }` removed in TRK-230z when jsx-loader retires.
-// <!-- jsx-loader-compat: ignore -->
 export { useURLState };

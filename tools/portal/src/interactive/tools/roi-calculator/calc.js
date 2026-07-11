@@ -12,10 +12,10 @@ purpose: |
   directly unit-testable.
 
   Public API:
-    window.__calcRuleMaintenance({ tenants, packs, changeMinutes, changesPerMonth })
-    window.__calcAlertStormReduction({ stormsPerMonth, avgAlertsPerStorm })
-    window.__calcTimeToMarket({ tenants, manualOnboardMinutes })
-    window.__calcAnnualSavings({ ruleSavedHours, ttmSavedHours, hourlyRate, alertReduction, oncallStaff })
+    calcRuleMaintenance({ tenants, packs, changeMinutes, changesPerMonth })
+    calcAlertStormReduction({ stormsPerMonth, avgAlertsPerStorm })
+    calcTimeToMarket({ tenants, manualOnboardMinutes })
+    calcAnnualSavings({ ruleSavedHours, ttmSavedHours, hourlyRate, alertReduction, oncallStaff })
 
   Closure deps: none. Pure functions; receive config as args.
 ---
@@ -75,13 +75,7 @@ function calcAnnualSavings({ ruleSavedHours, ttmSavedHours, hourlyRate, alertRed
 }
 
 // Legacy jsx-loader path: expose as window globals (see PR-portal-12 / TD-030z).
-window.__calcRuleMaintenance = calcRuleMaintenance;
-window.__calcAlertStormReduction = calcAlertStormReduction;
-window.__calcTimeToMarket = calcTimeToMarket;
-window.__calcAnnualSavings = calcAnnualSavings;
 
-// TRK-230e: ESM exports (esbuild dist path). Removed with jsx-loader in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export {
   calcRuleMaintenance,
   calcAlertStormReduction,

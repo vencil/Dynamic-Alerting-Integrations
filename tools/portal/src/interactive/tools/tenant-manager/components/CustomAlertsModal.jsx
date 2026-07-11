@@ -292,9 +292,4 @@ function CustomAlertsModal(props) {
   );
 }
 
-// Dual registration (mirrors tenant-manager/components/TenantCard.jsx):
-// the `window.__X` line is a vestigial registration (the retired jsx-loader
-// used to read it; nothing does now), while the named export is what the
-// esbuild bundle consumes. Both pruned in TRK-230z.
-window.__CustomAlertsModal = CustomAlertsModal;
 export { CustomAlertsModal };

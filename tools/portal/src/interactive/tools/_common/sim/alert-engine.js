@@ -377,13 +377,4 @@ function resolveRoutingLayers(config) {
   return { layers, resolved: L3 };
 }
 
-window.__generateSampleYaml = generateSampleYaml;
-window.__validateConfig = validateConfig;
-window.__isFiring = isFiring;
-window.__simulateAlerts = simulateAlerts;
-window.__simulateWithDedup = simulateWithDedup;
-window.__resolveRoutingLayers = resolveRoutingLayers;
-
-// TRK-230c: ESM exports for esbuild bundle + Vitest. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { generateSampleYaml, validateConfig, isFiring, simulateAlerts, simulateWithDedup, resolveRoutingLayers };

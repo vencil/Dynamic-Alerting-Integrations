@@ -12,7 +12,7 @@ purpose: |
   PR-portal-4 pattern.
 
   Public API:
-    window.__deployGenerateHelmValues(config)   build full Helm values YAML
+    deployGenerateHelmValues(config)   build full Helm values YAML
 
   Closure deps: reads window.__DEPLOY_TIERS, __DEPLOY_ENVIRONMENTS,
   __DEPLOY_TENANT_SIZES at call time so the generator picks up the
@@ -314,8 +314,4 @@ secrets:
   return yaml;
 }
 
-window.__deployGenerateHelmValues = deployGenerateHelmValues;
-
-// TRK-230e: ESM export. Removed in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { deployGenerateHelmValues };

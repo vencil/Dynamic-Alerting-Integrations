@@ -12,12 +12,10 @@ dependencies: [
 ---
 
 import React, { useState, useMemo, useEffect } from 'react';
-// TRK-232e fix: ESM dist-bundle path doesn't pre-populate window.__Loading
-// before this module evaluates (the entry imports TemplateGallery
-// directly, not Loading), so the legacy `window.__Loading` lookup
-// returned undefined and React threw #130 on first render. Import the
-// named ESM export instead. The jsx-loader fallback path is gone
-// (TRK-230z); window.__Loading is no longer authoritative.
+// TRK-232e fix: import the named ESM export. The entry imports
+// TemplateGallery directly (not Loading), so the pre-TD-030z global
+// lookup returned undefined and React threw #130 on first render.
+// That global-registration path is gone entirely (TRK-230z).
 import { Loading } from './_common/components/Loading.jsx';
 import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 

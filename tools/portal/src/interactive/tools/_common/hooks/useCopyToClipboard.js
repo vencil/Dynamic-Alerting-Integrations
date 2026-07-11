@@ -6,10 +6,9 @@ purpose: |
   `setTimeout(() => setCopied(false), 2000)` block that had been
   re-implemented in 18 portal tools (portal ROI refactor, Wave 4).
 
-  Scaffolded convention matches the sibling `_common/hooks/*` modules
-  (frontmatter + `window.__X` self-registration + ESM export). See
-  `docs/internal/jsx-multi-file-pattern.md` for the indirect-eval /
-  self-registration rationale.
+  Matches the sibling `_common/hooks/*` convention: `purpose:` frontmatter
+  plus a single tail ESM export. See `docs/internal/jsx-multi-file-pattern.md`
+  for the multi-file split pattern and the gates that enforce it.
 
   Behavior:
     - copy(text, key?): writes `text` to the clipboard. ON SUCCESS,
@@ -28,8 +27,7 @@ purpose: |
       `useRef` and is cleared on unmount (useEffect cleanup) and before
       each new copy — no setState-on-unmounted-component warning.
 
-  Closure deps: none (pure React hook; only WRITES window.__X for
-  legacy pickup, reads no window globals).
+  Closure deps: none (pure React hook; reads no window globals).
   Params:
     - timeout: number — ms the "copied" indicator stays on (default 2000).
   Returns:
@@ -104,11 +102,4 @@ function useCopyToClipboard(timeout = 2000) {
   return { copied, copiedKey, copy, reset };
 }
 
-// Register on window for orchestrator pickup.
-window.__useCopyToClipboard = useCopyToClipboard;
-
-// TRK-230c: ESM export for esbuild bundle + Vitest. Browser jsx-loader
-// strips this line before script-mode eval. Both `window.__X` and
-// `export { X }` removed in TRK-230z when jsx-loader retires entirely.
-// <!-- jsx-loader-compat: ignore -->
 export { useCopyToClipboard };
