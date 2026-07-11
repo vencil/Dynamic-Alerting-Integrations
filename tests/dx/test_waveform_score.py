@@ -997,3 +997,43 @@ def test_cli_redact_error_path_no_path_leak(tmp_path):
     # 對照：不加 --redact 時完整訊息（含路徑）本地可見
     r3 = _run_score(str(skew), "--tolerances", str(_TOL))
     assert r3.returncode == 2 and "site_TOKYO_DC_run" in r3.stderr
+
+
+def test_cli_redact_argparse_error_no_path_leak(tmp_path):
+    """post-fix re-review HIGH：argparse 錯誤（interleaved positional）發生在 args.redact
+    存在前，繞過 _emit_error → 修 _RedactAwareParser。--redact 下 stderr 不得回顯客戶路徑。"""
+    # interleaved：flag 夾在兩個 report positional 之間 → argparse unrecognized arguments
+    r = _run_score("rep1.json", "--tolerances", str(_TOL),
+                   "tenant_LEAKYNAME_dc2.json", "--redact")
+    assert r.returncode == 2
+    assert "LEAKYNAME" not in r.stderr and "unrecognized" not in r.stderr
+    assert "--redact" in r.stderr        # 通用抑制訊息
+    # 對照：非 --redact 時完整訊息本地可見（含路徑）
+    r2 = _run_score("rep1.json", "--tolerances", str(_TOL),
+                    "tenant_LEAKYNAME_dc2.json")
+    assert r2.returncode == 2 and "LEAKYNAME" in r2.stderr
+
+
+def test_cli_redact_malformed_schema_no_traceback(tmp_path):
+    """post-fix re-review MEDIUM：--schema 指向語法合法但結構非法的 JSON-Schema，
+    jsonschema 內部 AttributeError 逃出 tuple → 修 except Exception。--redact 下不得吐
+    traceback、走通用訊息 exit 2。"""
+    bad = tmp_path / "LEAKYSCHEMA.json"
+    bad.write_text('{"type":"object","properties":"X"}', encoding="utf-8")
+    rec = _report([_record(alerts=[_alert()])], [_meta()])
+    p = _write_report(tmp_path, rec, name="r.json")
+    r = _run_score(str(p), "--tolerances", str(_TOL), "--schema", str(bad), "--redact")
+    assert r.returncode == 2
+    assert "Traceback" not in r.stderr and "AttributeError" not in r.stderr
+    assert "LEAKYSCHEMA" not in r.stderr
+
+
+def test_redact_summary_whitelist_complete():
+    """B4：白名單完整性——redacted summary 必須含全部 INCLUDE 計數且值不變。刪
+    _REDACT_SUMMARY_KEYS 任一鍵 → 該 INCLUDE 計數靜默不出關、此測試即紅（防 mutation
+    全綠）。"""
+    full = _score_one(_record(alerts=[_alert(fire=1000)]), _meta())
+    r = ws.redact_report(full)
+    assert r["summary"] == {k: full["summary"][k] for k in ws._REDACT_SUMMARY_KEYS}
+    # 且白名單確實涵蓋完整 summary（無遺漏 owner 要的計數）
+    assert set(r["summary"]) == set(full["summary"])

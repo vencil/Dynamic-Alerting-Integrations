@@ -765,9 +765,23 @@ def _emit_error(full: str, redact: bool) -> None:
         print(f"ERROR: {full}", file=sys.stderr)
 
 
+class _RedactAwareParser(argparse.ArgumentParser):
+    """argparse 錯誤（未識別參數 / interleaved positional / leading-dash 路徑）發生在
+    parse_args() 完成前——此時 args.redact 尚不存在、_emit_error 碰不到，預設 error()
+    會把 message 內回顯的完整報告路徑（air-gap 常編 tenant/site 名）印到 stderr。故覆寫
+    error()：偵測 sys.argv 有 --redact 就只印通用訊息、不回顯任何參數值。（post-fix
+    re-review HIGH——與例外訊息洩漏同類、不同通道。）"""
+
+    def error(self, message):
+        if "--redact" in sys.argv[1:]:
+            self.exit(2, "ERROR: 參數解析失敗（--redact 抑制細節以防路徑出關；"
+                         "本地不加 --redact 重跑看完整）\n")
+        super().error(message)
+
+
 def main() -> int:
     try_utf8_stdout()
-    parser = argparse.ArgumentParser(
+    parser = _RedactAwareParser(
         description="waveform catch-rate 計分器（ADR-030 PR-3）：inject JSON 報告 + "
                     "容差矩陣 → temporal-match → catch-rate + FN + verdict"
                     "（0=PASS / 1=FAIL / 2=operational）")
@@ -816,6 +830,13 @@ def main() -> int:
     except (KeyError, TypeError, ValueError) as exc:
         _emit_error(f"inject 報告/容差檔 shape 異常（{type(exc).__name__}: {exc}）"
                     f"——報告版本不容或檔案損壞", args.redact)
+        return EXIT_CALLER_ERROR
+    except Exception as exc:   # defense-in-depth：redact 契約下任何非預期例外（如
+        # 使用者 --schema 指向語法合法但結構非法的 JSON-Schema → jsonschema 內部
+        # re.error/AttributeError/SchemaError 逃出 tuple）都不得吐 traceback。
+        # post-fix re-review MEDIUM。
+        _emit_error(f"未預期錯誤（{type(exc).__name__}: {exc}）——"
+                    f"可能是 --schema 檔本身非法或環境異常", args.redact)
         return EXIT_CALLER_ERROR
 
     # warnings（第 592 行的重複-pack 警示夾 path+pack_id）是本地診斷——under --redact
