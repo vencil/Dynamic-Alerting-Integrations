@@ -251,6 +251,27 @@ class TestGateIntegrity:
         assert result.returncode == EXIT_VIOLATION, (
             f"a broken _rbac.yml must FAIL the gate, got exit {result.returncode}")
 
+    def test_duplicate_key_rejected(self, tmp):
+        # PyYAML silently keeps the LAST value on a duplicate key, but the strict
+        # Go parser (yaml.v3) load-REJECTS it — so a dup-key config that this lint
+        # accepted would pass CI and crash the manager at runtime (rbac is
+        # startup-fatal). The lint uses a duplicate-key-rejecting loader; this pins
+        # that it is a VIOLATION (exit 1), not a silent pass (Gemini #1061).
+        p = _write(tmp, "_rbac.yaml",
+                   "groups:\n  - name: ops\n    tenants: [\"*\"]\n"
+                   "    permissions: [read]\n    permissions: [admin]\n")
+        result = _run(p)
+        assert result.returncode == EXIT_VIOLATION, (
+            f"a duplicate-key _rbac.yaml must FAIL the gate, got exit {result.returncode}")
+        assert "duplicate key" in (result.stdout + result.stderr).lower(), \
+            (result.stdout + result.stderr)
+
+    def test_duplicate_toplevel_key_rejected(self, tmp):
+        p = _write(tmp, "_tenant_orgs.yaml",
+                   "tenant_orgs:\n  db-a: [ORG-1]\ntenant_orgs:\n  db-b: [ORG-2]\n")
+        result = _run(p)
+        assert result.returncode == EXIT_VIOLATION
+
 
 # --- parser parity: the schema must never be STRICTER than the parser ------
 

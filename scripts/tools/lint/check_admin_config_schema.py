@@ -15,6 +15,10 @@ WHY (the silent failures this shifts left) — the three files differ, deliberat
     NOT KnownFields), so a typo'd constraint key is SILENTLY IGNORED — the
     constraint simply never applies and the runtime never complains at all. Here
     this lint is the ONLY guard, which makes it more valuable, not less.
+  Additionally, a DUPLICATE key (writing `permissions:` twice) is silently
+  last-wins in PyYAML but a load error in the strict Go parser — so this lint uses
+  a duplicate-key-rejecting loader (below) to catch it, or it would be the reverse
+  of the intended gap: lint green, prod crash (Gemini #1061 review).
   Note a bad permission VALUE (`permissions: [readonly]`) is likewise NOT a Go load
   error — `Permission` is an unconstrained string and validateConfig has no enum
   check; it just silently grants nothing. The schema's enum is a deliberately
@@ -94,6 +98,39 @@ def schema_for(path: str) -> str | None:
     return SCHEMA_MAP.get(stem)
 
 
+class _DuplicateKeyError(yaml.constructor.ConstructorError):
+    """A YAML mapping has a duplicate key. PyYAML's default loader silently keeps
+    the LAST value (`permissions: [read]` then `permissions: [admin]` → just
+    `[admin]`, no error), but the tenant-api Go parser (yaml.v3, strict) REJECTS
+    a duplicate key at load. So a duplicate key this lint accepted would pass CI
+    and then crash the manager at runtime (rbac is startup-fatal). We reject it
+    here to stay aligned with the strict parser (Gemini #1061 review)."""
+
+
+class _StrictSafeLoader(yaml.SafeLoader):
+    """SafeLoader that rejects duplicate mapping keys (fail-loud), matching Go
+    yaml.v3 instead of PyYAML's silent last-wins."""
+
+
+def _construct_mapping_reject_dups(loader, node, deep=False):
+    loader.flatten_mapping(node)  # keep default merge-key (<<) handling
+    mapping: dict = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise _DuplicateKeyError(
+                "while constructing a mapping", node.start_mark,
+                f"found duplicate key {key!r} — PyYAML silently keeps the last "
+                f"value, but the strict tenant-api parser (yaml.v3) rejects it at "
+                f"load", key_node.start_mark)
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_StrictSafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping_reject_dups)
+
+
 class _CallerError(Exception):
     """Environment/invocation failure -> EXIT_CALLER_ERROR (2)."""
 
@@ -119,7 +156,14 @@ def validate_file(path: str, schema: dict, validator) -> list[str]:
     """
     try:
         with open(path, encoding="utf-8") as fh:
-            docs = list(yaml.safe_load_all(fh))
+            docs = list(yaml.load_all(fh, Loader=_StrictSafeLoader))
+    except _DuplicateKeyError as exc:
+        # A duplicate key is a config VIOLATION the author fixes (exit 1), not an
+        # environment error — and it is invisible without this loader (PyYAML
+        # would silently keep the last value while the Go parser crashes on it).
+        loc = exc.problem_mark
+        where = f" (line {loc.line + 1})" if loc is not None else ""
+        return [f"ERROR: {path}: {exc.problem}{where}"]
     except (OSError, yaml.YAMLError) as exc:
         raise _CallerError(f"{path}: cannot read/parse YAML: {exc}")
 
