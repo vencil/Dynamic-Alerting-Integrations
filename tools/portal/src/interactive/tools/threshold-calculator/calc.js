@@ -12,13 +12,13 @@ purpose: |
   is a behavior change and must be intentional.
 
   Public API:
-    window.__METRIC_PROFILES   per-metric { label, unit, desc, typical:{min,max,p50,p90,p95,p99}, inverted? }
-    window.__PERCENTILES       ['p50','p90','p95','p99'] — slider / target render order
-    window.__suggestThreshold(profile, percentile, customValues) -> { warning, critical }
+    METRIC_PROFILES   per-metric { label, unit, desc, typical:{min,max,p50,p90,p95,p99}, inverted? }
+    PERCENTILES       ['p50','p90','p95','p99'] — slider / target render order
+    suggestThreshold(profile, percentile, customValues) -> { warning, critical }
       base = customValues[percentile] (if defined) else profile.typical[percentile]
       normal metric  : warning = round(base * 1.15), critical = round(base * 1.4)
       inverted metric: warning = max(0, round(base * 0.85)), critical = max(0, round(base * 0.7))
-    window.__generateYAML(selections) -> string
+    generateYAML(selections) -> string
       selections: array of { metric, warning, critical }; emits
       `<metric>: "<warning>"` + `<metric>_critical: "<critical>"` under tenants.my-app
 
@@ -91,14 +91,4 @@ function generateYAML(selections) {
   return lines.join('\n');
 }
 
-// Vestigial window-global registration (the retired jsx-loader read path).
-// No live code reads these now — threshold-calculator.jsx imports via ESM.
-// Pruned in TRK-230z along with the ESM exports' compat marker below.
-window.__METRIC_PROFILES = METRIC_PROFILES;
-window.__PERCENTILES = PERCENTILES;
-window.__suggestThreshold = suggestThreshold;
-window.__generateYAML = generateYAML;
-
-// TRK-230e: ESM exports (esbuild dist path). Removed with jsx-loader in TRK-230z.
-// <!-- jsx-loader-compat: ignore -->
 export { METRIC_PROFILES, PERCENTILES, suggestThreshold, generateYAML };

@@ -31,10 +31,4 @@ function StatusDot({ status }) {
   );
 }
 
-// Vestigial window-global registration (the retired jsx-loader read path).
-// No live code reads it — platform-health.jsx imports via ESM. Pruned in
-// TRK-230z along with the ESM export's compat marker below.
-window.__StatusDot = StatusDot;
-
-// <!-- jsx-loader-compat: ignore -->
 export { StatusDot };

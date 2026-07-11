@@ -19,9 +19,9 @@ purpose: |
   + simulator surface.
 
   Public API:
-    window.__ROUTING_DEFAULTS
-    window.__ROUTING_PROFILES
-    window.__DOMAIN_POLICIES
+    ROUTING_DEFAULTS
+    ROUTING_PROFILES
+    DOMAIN_POLICIES
 
   Closure deps: none. Pure data.
 
@@ -67,13 +67,5 @@ const DOMAIN_POLICIES = {
     },
   },
 };
-
-// LIVE registrations — deliberately kept by TRK-230z. `_common/sim/alert-engine.js`
-// (and `tests/alert-engine.test.ts`, which injects data through them) read these off
-// `window` at call time rather than importing them. Migrating those readers to ESM
-// imports is TRK-230z Wave 2.
-window.__ROUTING_DEFAULTS = ROUTING_DEFAULTS;
-window.__ROUTING_PROFILES = ROUTING_PROFILES;
-window.__DOMAIN_POLICIES = DOMAIN_POLICIES;
 
 export { ROUTING_DEFAULTS, ROUTING_PROFILES, DOMAIN_POLICIES };

@@ -16,7 +16,7 @@ purpose: |
   Public API:
     validateTenantConfig(yamlText)  -> { valid, errors, warnings, ... }
     parseYAML(text)                 -> parsed object (lenient)
-    window.__parseDuration(str)              -> {ms,value,unit} | null (playground-local)
+    parseDuration(str)              -> {ms,value,unit} | null (playground-local)
 
   Closure deps: window.__t for bilingual error/warning messages (falls back to
   English). Otherwise pure; receives text as args.
@@ -384,11 +384,5 @@ function validateTenantConfig(yamlText) {
     }
   };
 }
-
-// LIVE registration — deliberately kept by TRK-230z. `_common/sim/alert-engine.js`
-// reads `window.__parseDuration` at call time. (`_common/validation/yaml-parser.js`
-// registers the same global; collapsing the two writers into one ESM import is
-// TRK-230z Wave 2.)
-window.__parseDuration = parseDuration;
 
 export { validateTenantConfig, parseYAML, parseDuration };

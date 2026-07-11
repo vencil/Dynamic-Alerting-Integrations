@@ -20,9 +20,9 @@ purpose: |
   surface along.
 
   Public API:
-    window.__RULE_PACK_DATA            map of packId to {label, category, defaults, metrics, ...}
+    RULE_PACK_DATA            map of packId to {label, category, defaults, metrics, ...}
     CATEGORY_LABELS           map of category to i18n thunk
-    window.__getAllMetricKeys(packs)   flatten defaults to [{key, pack, label, value, unit, desc}]
+    getAllMetricKeys(packs)   flatten defaults to [{key, pack, label, value, unit, desc}]
 
   Closure deps: none. Pure data + one helper.
 
@@ -72,12 +72,5 @@ function getAllMetricKeys(selectedPacks) {
   }
   return keys;
 }
-
-// LIVE registrations — deliberately kept by TRK-230z. `_common/sim/alert-engine.js`
-// reads these off `window` at call time instead of importing them, so deleting the
-// writes would silently degrade generateSampleYaml()/validateConfig() to empty data.
-// Migrating that reader to ESM imports is TRK-230z Wave 2.
-window.__RULE_PACK_DATA = RULE_PACK_DATA;
-window.__getAllMetricKeys = getAllMetricKeys;
 
 export { RULE_PACK_DATA, CATEGORY_LABELS, getAllMetricKeys };

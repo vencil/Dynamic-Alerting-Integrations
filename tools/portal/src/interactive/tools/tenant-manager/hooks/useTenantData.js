@@ -33,9 +33,8 @@ purpose: |
 ---
 
 import { useState, useEffect } from "react";  // TRK-233 ESM import
+import { DEMO_TENANTS, DEMO_GROUPS } from '../fixtures/demo-tenants.js';
 
-// Pull deps from window globals (registered by orchestrator's earlier
-// dependencies: DEMO_TENANTS / DEMO_GROUPS).
 function useTenantData({ setApiNotification, t, q = '' }) {
   const [tenants, setTenants] = useState({});
   const [groups, setGroups] = useState({});
@@ -44,9 +43,6 @@ function useTenantData({ setApiNotification, t, q = '' }) {
   const [dataSource, setDataSource] = useState(null);         // 'api' | 'static' | 'demo'
 
   useEffect(() => {
-    const DEMO_TENANTS = window.__DEMO_TENANTS;
-    const DEMO_GROUPS = window.__DEMO_GROUPS;
-
     const loadData = async () => {
       // ---- Step 1: try the live API ----
       try {

@@ -3,7 +3,7 @@
  * Wave 5b (token migration + component/fixture split).
  *
  * Covers:
- *   1. Fixture data integrity (PLATFORM_HEALTH_DATA) + window registration.
+ *   1. Fixture data integrity (PLATFORM_HEALTH_DATA) via ESM export.
  *   2. StatusDot — each status maps to the correct --da-color-* token class.
  *   3. MetricCard — each status tint + label/value/subtitle rendering.
  *   4. Orchestrator — renders all sections (window.__t = English via setup).
@@ -18,11 +18,13 @@ import { MetricCard } from '../src/interactive/tools/platform-health/components/
 import PlatformHealth from '../src/interactive/tools/platform-health.jsx';
 
 describe('PLATFORM_HEALTH_DATA fixture', () => {
-  it('registers on window under the collision-safe __PLATFORM_HEALTH_DATA key', () => {
-    // Must NOT reuse __PLATFORM_DATA (the platform-injected rule-pack global).
-    expect((window as unknown as Record<string, unknown>).__PLATFORM_HEALTH_DATA).toBe(
-      PLATFORM_HEALTH_DATA,
-    );
+  it('is an ESM export with no window global footprint', () => {
+    // TRK-230z Wave 2 retired the window.__PLATFORM_HEALTH_DATA registration;
+    // the fixture is now a plain ESM import. It must be usable and must not
+    // touch the platform-injected __PLATFORM_DATA rule-pack global.
+    expect(PLATFORM_HEALTH_DATA).toBeDefined();
+    expect(PLATFORM_HEALTH_DATA.exporter).toBeDefined();
+    expect((window as unknown as Record<string, unknown>).__PLATFORM_HEALTH_DATA).toBeUndefined();
     expect((window as unknown as Record<string, unknown>).__PLATFORM_DATA).toBeUndefined();
   });
 

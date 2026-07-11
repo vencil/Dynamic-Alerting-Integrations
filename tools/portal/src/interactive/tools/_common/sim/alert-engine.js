@@ -44,19 +44,21 @@ purpose: |
     defaults → L2 routing profile → L3 tenant override → L4 platform-
     enforced. Returns {layers: [...], resolved: <final>}.
 
-  Closure deps: reads window.__t, window.__RULE_PACK_DATA,
-  window.__getAllMetricKeys, window.__RECEIVER_TYPES,
-  window.__RESERVED_KEYS, window.__RESERVED_PREFIXES,
-  window.__TIMING_GUARDRAILS, window.__ROUTING_DEFAULTS,
-  window.__ROUTING_PROFILES, window.__DOMAIN_POLICIES. Pulled at
-  call time so consumers loaded after the data files see them.
+  Data deps are ESM-imported from ../data/* and ../validation/*
+  (esbuild orders them ahead of this module — TRK-230z Wave 2 retired the
+  jsx-loader-era `window.__X || fallback` call-time reads). The only
+  runtime global left is window.__t (host-page i18n), read per-call.
 
   Consumers import these functions directly via ESM (dev-rules §S6).
 ---
 
+import { RULE_PACK_DATA, getAllMetricKeys } from '../data/rule-packs.js';
+import { ROUTING_DEFAULTS, ROUTING_PROFILES, DOMAIN_POLICIES } from '../data/routing-profiles.js';
+import { RECEIVER_TYPES, RESERVED_KEYS, RESERVED_PREFIXES, TIMING_GUARDRAILS } from '../validation/constants.js';
+import { parseDuration } from '../validation/yaml-parser.js';
+
 function generateSampleYaml(selectedPacks, withProfile) {
   const t = window.__t || ((zh, en) => en);
-  const RULE_PACK_DATA = window.__RULE_PACK_DATA || {};
 
   const lines = [`# ${t('從 Rule Pack 自動產生的 Tenant YAML', 'Auto-generated tenant YAML from Rule Packs')}`];
   for (const packId of selectedPacks) {
@@ -88,18 +90,10 @@ function generateSampleYaml(selectedPacks, withProfile) {
 
 function validateConfig(config, selectedPacks) {
   const t = window.__t || ((zh, en) => en);
-  const getAllMetricKeys = window.__getAllMetricKeys;
-  const RECEIVER_TYPES = window.__RECEIVER_TYPES || [];
-  const RESERVED_KEYS = window.__RESERVED_KEYS || new Set();
-  const RESERVED_PREFIXES = window.__RESERVED_PREFIXES || [];
-  const TIMING_GUARDRAILS = window.__TIMING_GUARDRAILS || {};
-  const ROUTING_PROFILES = window.__ROUTING_PROFILES || {};
-  const DOMAIN_POLICIES = window.__DOMAIN_POLICIES || {};
-  const parseDuration = window.__parseDuration;
 
   const issues = [];
   const info = [];
-  const knownMetrics = new Set((getAllMetricKeys ? getAllMetricKeys(selectedPacks) : []).map(m => m.key));
+  const knownMetrics = new Set(getAllMetricKeys(selectedPacks).map(m => m.key));
 
   for (const [key, val] of Object.entries(config)) {
     if (key.startsWith('_')) continue;
@@ -159,7 +153,7 @@ function validateConfig(config, selectedPacks) {
     for (const [param, guard] of Object.entries(TIMING_GUARDRAILS)) {
       const val = routing[param];
       if (val) {
-        const secs = parseDuration ? parseDuration(val) : null;
+        const secs = parseDuration(val);
         if (secs !== null) {
           if (secs < guard.min) {
             issues.push({ level: 'warning', field: `_routing.${param}`,
@@ -318,8 +312,6 @@ function simulateWithDedup(config, metrics, dedupEnabled, alertDefs) {
 
 function resolveRoutingLayers(config) {
   const t = window.__t || ((zh, en) => en);
-  const ROUTING_DEFAULTS = window.__ROUTING_DEFAULTS || {};
-  const ROUTING_PROFILES = window.__ROUTING_PROFILES || {};
 
   const layers = [];
 
