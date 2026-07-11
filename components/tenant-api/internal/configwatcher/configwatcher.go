@@ -36,6 +36,31 @@ type ParseFunc[T any] func([]byte) (*T, error)
 // empty (open mode), the file doesn't exist, or initial load fails.
 type EmptyFunc[T any] func() *T
 
+// ReloadFailureRecorder is an optional sink for hot-reload failures. It is
+// declared here (configwatcher is a leaf package importing only stdlib) and
+// implemented in the handler package, which owns /metrics exposition —
+// mirroring how rbac declares ScopeAuditRecorder and handler implements it
+// (import direction handler → configwatcher; configwatcher never imports
+// handler).
+//
+// Why it exists: a reload failure keeps serving the LAST-GOOD snapshot (load()
+// returns the error without Store-ing), so a config an admin edited with a typo
+// silently stops taking effect. BOTH reload paths are silent today:
+//   - WatchLoop (periodic tick) logs a WARN and moves on.
+//   - Reload (post-write refresh) returns the error, but every production
+//     caller discards it — `_ = mgr.Reload()` in handler/group.go:236,317,
+//     handler/view.go:175,239 and handler/federation/policy.go:157 — and then
+//     answers 200 OK, so the caller never learns the snapshot went stale.
+//
+// This sink surfaces both as tenant_api_config_reload_failures_total{component}
+// so they can be alerted on (Gemini #1056 external-review disposition 3a).
+type ReloadFailureRecorder interface {
+	// IncReloadFailure records one reload failure — a WatchLoop tick or a
+	// post-write Reload — for the named component (the Watcher's label,
+	// e.g. "RBAC" / "policy" / "groups").
+	IncReloadFailure(component string)
+}
+
 // Watcher caches a parsed YAML config plus its SHA-256, reloads on
 // demand or via a periodic ticker, and serves snapshots lock-free.
 //
@@ -53,6 +78,15 @@ type Watcher[T any] struct {
 
 	value    atomic.Value // stores *T
 	lastHash string
+
+	// reloadFail is the optional hot-reload-failure metric sink
+	// (instance-method DI, mirroring rbac.Manager.scopeAudit). nil (the
+	// default) means no recording — WatchLoop still logs the WARN and keeps
+	// last-good, it just emits no counter. Installed once at startup via
+	// SetReloadFailureRecorder, BEFORE WatchLoop is launched, then read-only;
+	// the goroutine-start of WatchLoop provides the happens-before edge so no
+	// atomic is needed (matches how SetScopeAuditor sets a plain field).
+	reloadFail ReloadFailureRecorder
 }
 
 // New constructs a Watcher and runs an initial load. The initial
@@ -103,10 +137,30 @@ func (w *Watcher[T]) Get() *T {
 // Reload forces a re-read on the next call (clears the dedup hash).
 // Used after writes to pick up the just-written file before the
 // WatchLoop ticker fires.
+//
+// A failure is recorded on the reload-failure sink as well as returned: every
+// production caller discards the error (`_ = mgr.Reload()` — handler/group.go,
+// handler/view.go, handler/federation/policy.go) and still answers 200 OK, so
+// without the counter a post-write reload failure is just as silent as a
+// WatchLoop tick failure and leaves the manager serving the stale snapshot.
 func (w *Watcher[T]) Reload() error {
 	w.lastHash = ""
-	return w.load()
+	err := w.load()
+	if err != nil && w.reloadFail != nil {
+		w.reloadFail.IncReloadFailure(w.label)
+	}
+	return err
 }
+
+// SetReloadFailureRecorder installs the optional reload-failure metric sink.
+// Call once at startup BEFORE any WatchLoop goroutine is launched AND before
+// the HTTP server starts serving (handler goroutines reach it via Reload) — the
+// write must happen-before every reader. main.go satisfies both: the setters run
+// before `go …WatchLoop(…)` and long before ListenAndServe. Passing nil leaves
+// recording disabled (the reload still logs the WARN and keeps last-good).
+// Mirrors rbac.Manager.SetScopeAuditor. Promoted through the embed so every
+// domain Manager exposes it.
+func (w *Watcher[T]) SetReloadFailureRecorder(r ReloadFailureRecorder) { w.reloadFail = r }
 
 // WatchLoop polls the file every `interval` and stores any parsed
 // changes. No-op for empty path. Stops when stopCh is closed.
@@ -122,7 +176,14 @@ func (w *Watcher[T]) WatchLoop(interval time.Duration, stopCh <-chan struct{}) {
 			return
 		case <-ticker.C:
 			if err := w.load(); err != nil {
+				// Reload failed → load() did NOT Store, so we keep serving the
+				// last-good snapshot; the edited (broken) config is silently
+				// not in effect. Emit both the WARN log and the counter so an
+				// alert can catch the masking (Gemini #1056 disposition 3a).
 				slog.Warn("config reload failed", "component", w.label, "error", err)
+				if w.reloadFail != nil {
+					w.reloadFail.IncReloadFailure(w.label)
+				}
 			}
 		}
 	}

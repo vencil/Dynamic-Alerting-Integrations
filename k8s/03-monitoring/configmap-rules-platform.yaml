@@ -520,6 +520,51 @@ data:
                 re-trigger (TenantApiReadHANeeded, below) are documented in
                 docs/api/tenant-api-hardening.md. Dashboard: tenant_api_sse_clients.
 
+          # --- tenant-api config reload failure (Gemini #1056 disposition 3a) ---
+          # Every tenant-api config manager keeps serving the LAST-GOOD snapshot
+          # when a reload parse fails (configwatcher.load() returns the error
+          # without Store-ing). So an admin who edits _rbac.yaml /
+          # _domain_policy.yaml / _tenant_orgs.yaml / _federation_policy.yaml /
+          # _groups.yaml / _views.yaml with a typo gets NO behaviour change — the
+          # new (broken) config is silently ignored while the stale one keeps
+          # enforcing. BOTH reload paths are silent: the periodic WatchLoop only
+          # WARN-logs, and the post-write Reload returns an error that every
+          # handler discards (`_ = mgr.Reload()`) before answering 200 OK.
+          # tenant_api_config_reload_failures_total{component}
+          # (handler/config_reload_metrics.go) records both and makes them alertable.
+          #
+          # `> 2` over [15m] (not `> 0`): a broken file on a WatchLoop-driven
+          # manager re-parses EVERY tick (load() only updates its dedup hash on
+          # success), so at the 30s default --reload-interval it fails ~2x/min
+          # (~30 in 15m) and this fires fast on real breakage — while ignoring BOTH
+          # (a) a single transient mid-write blip that recovers on the next tick and
+          # (b) increase() extrapolation noise from a counter reset on pod restart
+          # (the standard SRE guard, cf. ConfigParseFailure above). ⚠️ The threshold
+          # is therefore tuned to the TICK-driven path: a lone post-write Reload
+          # failure (groups / views) is COUNTED and visible on the dashboard but
+          # will not by itself trip this alert — that needs 3+ within 15m. The
+          # {component} label rides through so on-call knows WHICH config is stuck.
+          # `for: 5m` debounces further — last-good is still being served, so there
+          # is no sub-5m urgency.
+          - alert: TenantApiConfigReloadFailing
+            expr: increase(tenant_api_config_reload_failures_total{job="tenant-api"}[15m]) > 2
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "tenant-api config hot-reload failing for {{ $labels.component }} — serving stale last-good"
+              description: |
+                The tenant-api `{{ $labels.component }}` config manager has failed
+                to hot-reload its YAML repeatedly over the last 15m. On each failure
+                it keeps serving the LAST-GOOD snapshot, so a just-edited _rbac.yaml
+                / _domain_policy.yaml / _tenant_orgs.yaml / _federation_policy.yaml
+                is NOT in effect — rules / policies silently lag the file on disk. Fix
+                the YAML (see the tenant-api WARN logs: "config reload failed" with
+                the parse error) and the alert clears automatically. The 15m sliding
+                window means it may stay Firing up to ~15m after the fix as old
+                failures age out. Pre-merge schema validation of the admin config
+                is the shift-left complement to this runtime signal.
+
           # --- tenant-api read-HA defer re-trigger (ADR-023 A4 / #678 / #788, CLOSED-deferred) ---
           # CODIFIED re-trigger for a CLOSED-deferred design item. #678 (TRK-325
           # read/write CQRS split) and its RFC duplicate #788 were closed deferred:
