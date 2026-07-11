@@ -39,11 +39,13 @@ purpose: |
   so it introduces no new pollution vector; its own top-level key is also
   UNSAFE_KEYS-guarded before use.
 
-  Closure deps (all read at call time with `|| fallback`, dev-rules §S6):
-    window.__t, window.__UNSAFE_KEYS, window.__MAX_YAML_SIZE.
+  Closure deps: window.__t (host-page i18n, per-call). UNSAFE_KEYS +
+  MAX_YAML_SIZE are ESM-imported from the shared validation constants
+  (TRK-230z Wave 2 retired the window.__X call-time reads).
 ---
 
 import { parseYaml } from '../_common/validation/yaml-parser.js';
+import { UNSAFE_KEYS, MAX_YAML_SIZE } from '../_common/validation/constants.js';
 
 // Collapse a parsed value into a single comparable string. Scalars pass
 // through; inline arrays join with ", "; nested objects (_routing /
@@ -90,8 +92,6 @@ function collectRawChildBlocks(dedentedLines, UNSAFE_KEYS) {
 // guards are inherited. Returns { tenants, errors }.
 function extractTenants(yaml) {
   const t = window.__t || ((zh, en) => en);
-  const UNSAFE_KEYS = window.__UNSAFE_KEYS || new Set(['__proto__', 'constructor', 'prototype']);
-  const MAX_YAML_SIZE = window.__MAX_YAML_SIZE || 100000;
 
   const tenants = {};
   const errors = [];

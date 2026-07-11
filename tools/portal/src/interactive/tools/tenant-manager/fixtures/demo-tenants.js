@@ -70,11 +70,4 @@ const DEMO_GROUPS = {
   }
 };
 
-// LIVE registrations — deliberately kept by TRK-230z. `../hooks/useTenantData.js`
-// reads `window.__DEMO_TENANTS` / `window.__DEMO_GROUPS` inside its effect rather
-// than importing them, so deleting the writes would strip the docs-site demo
-// fallback. Migrating that reader to ESM imports is TRK-230z Wave 2.
-window.__DEMO_TENANTS = DEMO_TENANTS;
-window.__DEMO_GROUPS = DEMO_GROUPS;
-
 export { DEMO_TENANTS, DEMO_GROUPS };

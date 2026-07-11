@@ -13,13 +13,13 @@ purpose: |
   validator surface.
 
   Public API:
-    window.__RESERVED_KEYS         Set of reserved tenant keys (_silent_mode, _metadata, ...)
-    window.__RESERVED_PREFIXES     Array of reserved key prefixes (_state_, _routing)
-    window.__RECEIVER_TYPES        Array of supported notification receiver types
+    RESERVED_KEYS         Set of reserved tenant keys (_silent_mode, _metadata, ...)
+    RESERVED_PREFIXES     Array of reserved key prefixes (_state_, _routing)
+    RECEIVER_TYPES        Array of supported notification receiver types
     RECEIVER_REQUIRED     map of receiver_type to required field names
-    window.__TIMING_GUARDRAILS     map of timing param to bounds {min, max, unit}
-    window.__UNSAFE_KEYS           Set of prototype-pollution keys parser must reject
-    window.__MAX_YAML_SIZE         Hard cap (100KB) on parser input length
+    TIMING_GUARDRAILS     map of timing param to bounds {min, max, unit}
+    UNSAFE_KEYS           Set of prototype-pollution keys parser must reject
+    MAX_YAML_SIZE         Hard cap (100KB) on parser input length
 
   Closure deps: none. Pure data.
 
@@ -48,17 +48,5 @@ const TIMING_GUARDRAILS = {
 
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const MAX_YAML_SIZE = 100000;
-
-// LIVE registrations — deliberately kept by TRK-230z. `_common/sim/alert-engine.js`,
-// `_common/validation/yaml-parser.js` and `config-diff/diff.js` read these off `window`
-// at call time (with fallbacks) rather than importing them, so deleting the writes would
-// silently swap in the fallback defaults. Migrating those readers is TRK-230z Wave 2.
-// (`RECEIVER_REQUIRED` had no reader and its write was removed.)
-window.__RESERVED_KEYS = RESERVED_KEYS;
-window.__RESERVED_PREFIXES = RESERVED_PREFIXES;
-window.__RECEIVER_TYPES = RECEIVER_TYPES;
-window.__TIMING_GUARDRAILS = TIMING_GUARDRAILS;
-window.__UNSAFE_KEYS = UNSAFE_KEYS;
-window.__MAX_YAML_SIZE = MAX_YAML_SIZE;
 
 export { RESERVED_KEYS, RESERVED_PREFIXES, RECEIVER_TYPES, RECEIVER_REQUIRED, TIMING_GUARDRAILS, UNSAFE_KEYS, MAX_YAML_SIZE };

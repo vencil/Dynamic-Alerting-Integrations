@@ -2,21 +2,40 @@
  * Unit tests for _common/sim/alert-engine.js — Vitest next-batch (PR-3).
  *
  * Focus on the pure / easily-testable surface:
- *   - simulateAlerts: pure (config + metricValues → alerts) — no globals
- *   - resolveRoutingLayers: 4-layer routing model (uses window.__ROUTING_*
- *     globals, mocked here)
+ *   - simulateAlerts: pure (config + metricValues → alerts) — no deps
+ *   - resolveRoutingLayers: 4-layer routing model; the routing data it
+ *     ESM-imports from routing-profiles.js is injected via vi.mock (below)
  *
- * Skipped (would need extensive global mocking, lower ROI):
- *   - generateSampleYaml: heavy on window.__t / window.__RULE_PACK_DATA
- *   - validateConfig: pulls 7+ globals; coverage better via E2E spec
+ * Skipped (would need mocking several data modules, lower ROI):
+ *   - generateSampleYaml: pulls RULE_PACK_DATA + window.__t
+ *   - validateConfig: pulls 7+ data modules; coverage better via E2E spec
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   isFiring,
   simulateAlerts,
   simulateWithDedup,
   resolveRoutingLayers,
 } from '../src/interactive/tools/_common/sim/alert-engine.js';
+
+// alert-engine.js ESM-imports ROUTING_DEFAULTS / ROUTING_PROFILES from
+// routing-profiles.js (TRK-230z Wave 2). Mock that module to inject the
+// routing fixtures these resolveRoutingLayers tests assert against — the
+// former window.__ROUTING_* beforeEach injection no longer reaches the engine.
+vi.mock('../src/interactive/tools/_common/data/routing-profiles.js', () => ({
+  ROUTING_DEFAULTS: {
+    receiver_type: 'webhook',
+    group_wait: '30s',
+    repeat_interval: '4h',
+  },
+  ROUTING_PROFILES: {
+    'team-sre-apac': {
+      receiver_type: 'pagerduty',
+      group_wait: '15s',
+    },
+  },
+  DOMAIN_POLICIES: {},
+}));
 
 // ─────────────────────────────────────────────────────────────────────
 // simulateAlerts — pure function, no globals
@@ -153,34 +172,10 @@ describe('simulateAlerts', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
-// resolveRoutingLayers — needs ROUTING_DEFAULTS / ROUTING_PROFILES globals
+// resolveRoutingLayers — routing data injected via vi.mock (top of file)
 // ─────────────────────────────────────────────────────────────────────
 
 describe('resolveRoutingLayers', () => {
-  let savedDefaults: any;
-  let savedProfiles: any;
-
-  beforeEach(() => {
-    savedDefaults = (globalThis as any).window?.__ROUTING_DEFAULTS;
-    savedProfiles = (globalThis as any).window?.__ROUTING_PROFILES;
-    (globalThis as any).window.__ROUTING_DEFAULTS = {
-      receiver_type: 'webhook',
-      group_wait: '30s',
-      repeat_interval: '4h',
-    };
-    (globalThis as any).window.__ROUTING_PROFILES = {
-      'team-sre-apac': {
-        receiver_type: 'pagerduty',
-        group_wait: '15s',
-      },
-    };
-  });
-
-  afterEach(() => {
-    (globalThis as any).window.__ROUTING_DEFAULTS = savedDefaults;
-    (globalThis as any).window.__ROUTING_PROFILES = savedProfiles;
-  });
-
   it('always returns 4 layers in order', () => {
     const out = resolveRoutingLayers({});
     expect(out.layers).toHaveLength(4);

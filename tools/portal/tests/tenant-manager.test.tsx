@@ -15,17 +15,28 @@
  *
  * The component fires several fetch() calls on mount (/api/v1/me,
  * /api/v1/prs, the tenants data-chain). We stub fetch to fail every
- * request so the data layer falls all the way through to DEMO_TENANTS
- * / DEMO_GROUPS (registered on window as an import side-effect of the
- * fixtures module) — a deterministic, backend-free render.
+ * request so the data layer falls all the way through to the DEMO_TENANTS
+ * / DEMO_GROUPS fixtures (ESM-imported by useTenantData) — a
+ * deterministic, backend-free render.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import TenantManager from '../src/interactive/tools/tenant-manager.jsx';
-// Import the fixtures for their window.__DEMO_* registration side-effect
-// (the orchestrator + useTenantData read window.__DEMO_TENANTS /
-// window.__DEMO_GROUPS at effect time).
 import { DEMO_TENANTS, DEMO_GROUPS } from '../src/interactive/tools/tenant-manager/fixtures/demo-tenants.js';
+
+// useTenantData ESM-imports DEMO_TENANTS / DEMO_GROUPS (TRK-230z Wave 2 — the
+// former window.__DEMO_* registration is gone). Mock the fixtures module so the
+// one "data-driven dropdown" test can inject a sentinel tenant per-test without
+// disturbing the real fixture the other tests assert against. A `null` override
+// makes the getter fall through to the real export.
+const demoOverride = vi.hoisted(() => ({ tenants: null as any, groups: null as any }));
+vi.mock('../src/interactive/tools/tenant-manager/fixtures/demo-tenants.js', async (importOriginal) => {
+  const actual = (await importOriginal()) as any;
+  return {
+    get DEMO_TENANTS() { return demoOverride.tenants ?? actual.DEMO_TENANTS; },
+    get DEMO_GROUPS() { return demoOverride.groups ?? actual.DEMO_GROUPS; },
+  };
+});
 
 // Demo fixture distinct domains / db_types, sorted — what the wired
 // dropdowns should render (the old hardcoded lists happened to match
@@ -41,6 +52,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  demoOverride.tenants = null;
+  demoOverride.groups = null;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -114,7 +127,7 @@ describe('TenantManager — last-mile activation', () => {
     // above cannot tell a regression-to-hardcoded apart. Override the data
     // with a SENTINEL domain/db_type the legacy lists never contained: only
     // a filterOptions-driven dropdown can surface it.
-    vi.stubGlobal('__DEMO_TENANTS', {
+    demoOverride.tenants = {
       'sentinel-01': {
         environment: 'production', region: 'x', tier: 'tier-1',
         domain: 'zzz-sentinel-domain', db_type: 'zzz-sentinel-db',
@@ -122,7 +135,7 @@ describe('TenantManager — last-mile activation', () => {
         operational_mode: 'normal', metric_count: 0,
         last_config_commit: 'x', tags: [], groups: [],
       },
-    });
+    };
     await renderAndSettle();
     const domainOpts = Array.from((document.getElementById('filter-domain') as HTMLSelectElement).options).map((o) => o.value);
     const dbOpts = Array.from((document.getElementById('filter-dbtype') as HTMLSelectElement).options).map((o) => o.value);

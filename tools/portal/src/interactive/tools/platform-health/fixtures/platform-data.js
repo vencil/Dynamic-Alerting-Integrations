@@ -11,11 +11,12 @@ purpose: |
   byte-identical to the inline `PLATFORM_DATA` const that lived in the
   orchestrator before decomposition.
 
-  NAMING: exported as `PLATFORM_HEALTH_DATA` (not `PLATFORM_DATA`) so it
-  registers as `window.__PLATFORM_HEALTH_DATA` and does NOT collide with
-  the platform-injected `window.__PLATFORM_DATA` global (real rule-pack
-  data consumed by threshold-heatmap / rule-pack tools). This demo is
-  unrelated to that contract.
+  NAMING: exported as `PLATFORM_HEALTH_DATA` (not `PLATFORM_DATA`). The
+  name predates the ESM migration, when this was a `window.__X` global and
+  had to avoid clashing with the platform-injected `window.__PLATFORM_DATA`
+  (real rule-pack data consumed by threshold-heatmap / rule-pack tools). It
+  is now a plain ESM export with no global footprint; the descriptive name
+  stays.
 
   Tenant names (prod-mariadb, prod-redis, …) are demo fixture ids per
   dev-rule #2's fixture-convention allowance — not hardcoded production
@@ -63,13 +64,4 @@ const PLATFORM_HEALTH_DATA = {
   ],
 };
 
-// Vestigial window-global registration (the retired jsx-loader read path).
-// No live code reads it — the components import it via ESM. Pruned in
-// TRK-230z along with the ESM export's compat marker below. The name is
-// deliberately NOT `__PLATFORM_DATA`: that global is the platform-injected
-// live rule-pack payload eight other tools read.
-window.__PLATFORM_HEALTH_DATA = PLATFORM_HEALTH_DATA;
-
-// ESM export for the esbuild dist-bundle path + vitest.
-// <!-- jsx-loader-compat: ignore -->
 export { PLATFORM_HEALTH_DATA };

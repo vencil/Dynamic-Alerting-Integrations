@@ -12,9 +12,9 @@ purpose: |
 
   Public API:
     DEPLOY_STEPS              ordered step metadata
-    window.__DEPLOY_TIERS              Tier 1 / Tier 2 catalog
-    window.__DEPLOY_ENVIRONMENTS       local / staging / production
-    window.__DEPLOY_TENANT_SIZES       small / medium / large + replica recipes
+    DEPLOY_TIERS              Tier 1 / Tier 2 catalog
+    DEPLOY_ENVIRONMENTS       local / staging / production
+    DEPLOY_TENANT_SIZES       small / medium / large + replica recipes
     DEPLOY_OAUTH2_PROVIDERS   github / google / oidc / gitlab
     DEPLOY_RULE_PACKS         13 Rule Pack catalog
 
@@ -155,13 +155,5 @@ const DEPLOY_RULE_PACKS = [
   { id: 'nginx', label: 'Nginx', category: 'webserver', icon: '🌐' },
   { id: 'kubernetes', label: 'Kubernetes', category: 'infrastructure', icon: '⎈' },
 ];
-
-// LIVE registrations — deliberately kept by TRK-230z. `../utils/generators.js`
-// reads these off `window` at call time (with `|| []` fallbacks), so deleting the
-// writes would silently emit an empty Helm values file. Migrating that reader to
-// ESM imports is TRK-230z Wave 2.
-window.__DEPLOY_TIERS = DEPLOY_TIERS;
-window.__DEPLOY_ENVIRONMENTS = DEPLOY_ENVIRONMENTS;
-window.__DEPLOY_TENANT_SIZES = DEPLOY_TENANT_SIZES;
 
 export { DEPLOY_STEPS, DEPLOY_TIERS, DEPLOY_ENVIRONMENTS, DEPLOY_TENANT_SIZES, DEPLOY_OAUTH2_PROVIDERS, DEPLOY_RULE_PACKS };

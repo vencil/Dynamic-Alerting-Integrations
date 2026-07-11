@@ -12,11 +12,11 @@
  *   - window.__t       (i18n helper)
  *   - window.__DA_LANG (current language)
  *
- * Subtree globals: TRK-230z removed the dead `window.__X = X;` registrations.
- * The few that survive (e.g. demo-tenants.js sets window.__DEMO_TENANTS /
- * window.__DEMO_GROUPS, which useTenantData.js reads) are still populated as
- * an import side-effect of the bundled module. Each surviving write is
- * annotated at its definition; migrating those readers to ESM is Wave 2.
+ * Subtree data flows by plain ESM import (TRK-230z). The former
+ * `window.__X = X;` registrations are gone — useTenantData.js now
+ * `import`s DEMO_TENANTS / DEMO_GROUPS from the fixtures module directly.
+ * The only window registrations left anywhere are __ErrorBoundary (read by
+ * the host jsx-loader.html boot-guard) and Loading.jsx's spinner once-flag.
  */
 // TRK-233/034: component files now use direct ESM React imports
 // (`import { useState } from 'react'`); no global side-effect setup
