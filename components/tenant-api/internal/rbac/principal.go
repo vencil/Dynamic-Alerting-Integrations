@@ -153,16 +153,25 @@ type ScopeAuditRecorder interface {
 }
 
 // Scope axis labels for tenant_api_scope_would_deny_total{axis}. Fixed set
-// (bounded cardinality, no user-controlled values). Both are emitted by
-// ScopeAllowed (via recordScopeShadowGap) in this package; the handler's
-// exposition uses the same string literals for the {axis} label and MUST keep
-// its scopeWouldDenyAxes array in sync with this set (a compile-time guard in
+// (bounded cardinality, no user-controlled values). All are emitted in this
+// package via recordScopeShadowGap — metadata/org by ScopeAllowed (list plane),
+// org_write by AllowedInOrg (write plane); the handler's exposition uses the
+// same string literals for the {axis} label and MUST keep its
+// scopeWouldDenyAxes array in sync with this set (a compile-time guard in
 // scope_metrics.go binds the counter array length to the label count).
 const (
 	// scopeAxisMetadata is the environment/domain metadata scope filter axis.
 	scopeAxisMetadata = "metadata"
-	// scopeAxisOrg is the org (tenant→organization) scope filter axis (P4).
+	// scopeAxisOrg is the org (tenant→organization) scope filter axis on the
+	// LIST plane (P4a: ScopeAllowed visibility filtering).
 	scopeAxisOrg = "org"
+	// scopeAxisOrgWrite is the org axis's WRITE-plane counterpart (ADR-027 /
+	// LD-6 P4b): recorded only by AllowedInOrg (per-tenant write/admin
+	// decisions), never by Allowed or ScopeAllowed. Kept a separate axis from
+	// scopeAxisOrg so the enforce-flip soak criterion can require
+	// increase(tenant_api_scope_would_deny_total{axis=...})==0 on BOTH the
+	// list and the write plane independently before flipping.
+	scopeAxisOrgWrite = "org_write"
 )
 
 // HeaderResolver wraps the pre-existing oauth2-proxy header-trust path in the

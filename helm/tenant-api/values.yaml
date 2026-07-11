@@ -184,6 +184,25 @@ rbac:
   # machineIdentity/humanSocket.
   metadataScopeEnforce: false
 
+  # ADR-027 / LD-6 P4b — org (tenant→organization) scope axis fail-mode.
+  # false (default) = SHADOW: a tenant with no orgs in _tenant_orgs.yaml still
+  # passes org-scoped rules, but is counted in
+  # tenant_api_scope_would_deny_total{axis="org"} (list) and {axis="org_write"}
+  # (write). Flip to true = ENFORCE, noting:
+  # (a) ATOMIC: one flag flips BOTH list visibility (ScopeAllowed) and write
+  #     authorization (AllowedInOrg) to fail-closed — there is no list-only or
+  #     write-only enforce.
+  # (b) read-by-id is NOT yet org-gated — it lands in P4c and is a HARD
+  #     prerequisite for the enforce flip (see #1040).
+  # (c) Flip criterion: increase(...{axis="org"}[soak]) AND
+  #     increase(...{axis="org_write"}[soak]) must BOTH stay 0 over the soak
+  #     window (monotonic counters — the rate is the signal), plus a scan for
+  #     still-unlabeled tenants (the counters are traffic-driven).
+  # (d) Reload ordering when labeling: ship _tenant_orgs.yaml BEFORE the
+  #     org-scoped rules in _rbac.yaml — the reverse order opens a window where
+  #     a rule restricts on orgs no tenant carries yet.
+  orgScopeEnforce: false
+
 # ── Tenant federation (ADR-020 IV-2m, issue #519) ───────────────────────────
 # Disabled by default. When enabled, tenant-api exposes
 # /api/v1/federation/tokens so a tenant can mint short-lived RS256 JWTs and

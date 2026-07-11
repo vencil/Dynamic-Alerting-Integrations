@@ -17,6 +17,7 @@ func TestScopeWouldDenyRecorder_IncAndExposition(t *testing.T) {
 	rec := NewScopeWouldDenyRecorder()
 	rec.IncWouldDeny("metadata")
 	rec.IncWouldDeny("metadata")
+	rec.IncWouldDeny("org_write")            // P4b write-plane axis counts independently
 	rec.IncWouldDeny("garbage-axis-ignored") // unknown axis must be a no-op
 
 	req := httptest.NewRequest("GET", "/metrics", nil)
@@ -26,6 +27,8 @@ func TestScopeWouldDenyRecorder_IncAndExposition(t *testing.T) {
 
 	for _, want := range []string{
 		`tenant_api_scope_would_deny_total{axis="metadata"} 2`,
+		`tenant_api_scope_would_deny_total{axis="org"} 0`,
+		`tenant_api_scope_would_deny_total{axis="org_write"} 1`,
 		`# TYPE tenant_api_scope_would_deny_total counter`,
 	} {
 		if !strings.Contains(body, want) {
@@ -60,7 +63,12 @@ func TestScopeWouldDenyMetrics_DisabledRendersZero(t *testing.T) {
 	w := httptest.NewRecorder()
 	MetricsHandler(w, req)
 	body := w.Body.String()
-	if !strings.Contains(body, `tenant_api_scope_would_deny_total{axis="metadata"} 0`) {
-		t.Errorf("/metrics with recorder unwired should still emit metadata=0; body:\n%s", body)
+	// Every known axis renders at 0 from process start (stable series shape —
+	// a dashboard/alert must never see a missing series).
+	for _, axis := range scopeWouldDenyAxes {
+		want := `tenant_api_scope_would_deny_total{axis="` + axis + `"} 0`
+		if !strings.Contains(body, want) {
+			t.Errorf("/metrics with recorder unwired should still emit %s=0; body:\n%s", axis, body)
+		}
 	}
 }

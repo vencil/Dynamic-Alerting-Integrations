@@ -64,6 +64,13 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
 			return
 		}
+		// ADR-027 / LD-6 P4b: org-scope-aware write gate, top of handler —
+		// BEFORE the body is read, so a denied caller triggers no side
+		// effect on either write path (direct commit or PR mode) and learns
+		// nothing from policy-violation details.
+		if !RequireOrgWrite(rw, r, d, tenantID, rbac.PermWrite) {
+			return
+		}
 		email := rbac.RequestEmail(r)
 
 		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))

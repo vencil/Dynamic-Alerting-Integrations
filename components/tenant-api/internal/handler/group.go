@@ -58,6 +58,10 @@ func ListGroups(d *Deps) http.HandlerFunc {
 }
 
 // hasAccessibleMember returns true if the user can access at least one member.
+// Deliberately org-blind (ADR-027 / LD-6 P4b): a read-plane filter — org
+// visibility on reads is ScopeAllowed's job, read-side org-scope lands in P4c.
+// This org-blind Allowed is a tripwire-allowlisted exemption (see
+// internal/rbac/org_write_guard_test.go).
 func hasAccessibleMember(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal, members []string) bool {
 	for _, m := range members {
 		if rbacMgr.Allowed(p, m, rbac.PermRead) {
@@ -191,7 +195,7 @@ func PutGroup(d *Deps) http.HandlerFunc {
 		// if any member is forbidden. List ALL forbidden ids in the
 		// error so the operator can fix in one round-trip rather
 		// than discovering them one-at-a-time.
-		if forbidden := tenantsLackingPermission(d.RBAC, p, req.Members, rbac.PermWrite); len(forbidden) > 0 {
+		if forbidden := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, req.Members, rbac.PermWrite); len(forbidden) > 0 {
 			WriteJSONError(w, r, http.StatusForbidden,
 				"insufficient permission to write group with forbidden member tenants: "+
 					strings.Join(forbidden, ", "))
@@ -279,7 +283,7 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 		// group whose members they don't own — a denial-of-
 		// service surface against teams who depend on dashboards
 		// keyed off that group.
-		if forbidden := tenantsLackingPermission(d.RBAC, p, existing.Members, rbac.PermWrite); len(forbidden) > 0 {
+		if forbidden := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, existing.Members, rbac.PermWrite); len(forbidden) > 0 {
 			WriteJSONError(w, r, http.StatusForbidden,
 				"insufficient permission to delete group with forbidden member tenants: "+
 					strings.Join(forbidden, ", "))
