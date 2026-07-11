@@ -1000,8 +1000,15 @@ def _skip_comment_body(r: KeyRecommendation) -> tuple[str, str]:
     every other non-exportable key stays ``skipped``.
     """
     if r.force_manual:
-        return "manual", (r.guardrail_reason or r.reason or "manual review required")
-    return "skipped", (r.reason or "no recommendation")
+        detail = r.guardrail_reason or r.reason or "manual review required"
+    else:
+        detail = r.reason or "no recommendation"
+    # Collapse embedded newlines/whitespace before this goes into a `#`-prefixed
+    # export-patch comment line: guardrail_reason can be str(exc)[:100] and some
+    # exception messages span lines — a raw \n would break out of the comment and
+    # corrupt the exported --export-patch YAML fragment when an operator applies it.
+    detail = " ".join(detail.split())
+    return ("manual" if r.force_manual else "skipped"), detail
 
 
 def _exportable(r: KeyRecommendation) -> bool:

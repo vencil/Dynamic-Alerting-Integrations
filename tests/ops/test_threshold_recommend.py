@@ -520,6 +520,23 @@ class TestExportPatch:
             assert "no actionable" in out
             assert yaml.safe_load(out) is None   # comments only → parses to None
 
+    def test_force_manual_reason_with_newline_is_sanitized(self):
+        """guardrail_reason 含換行（來自 str(exc)）不得破壞 export-patch 註解流。
+
+        未清洗時，內嵌的 `\\n` 會讓後半段脫離 `#` 註解、變成 YAML 裸文字
+        （safe_load 吐出 mapping 而非 None，operator apply 時 parse error）。
+        """
+        yaml = pytest.importorskip("yaml")
+        reports = [tr.TenantRecommendation(tenant="t", total_keys=1, keys=[
+            tr.KeyRecommendation("db2_bufferpool_hit_ratio", "0.95", recommended=None,
+                                 force_manual=True,
+                                 guardrail_reason="boom\nevil: injected\nmore"),
+        ])]
+        out = tr.format_export_patch(reports)
+        assert yaml.safe_load(out) is None            # 註入文字沒逃成 YAML mapping
+        assert all(l.lstrip().startswith("#")         # 每個非空行仍是註解
+                   for l in out.splitlines() if l.strip())
+
     def test_float_value_and_boundary_and_negative(self):
         """float 帶小數 / 邊界 5.0% 含入 / 負 delta（decrease）皆正確 emit。"""
         yaml = pytest.importorskip("yaml")

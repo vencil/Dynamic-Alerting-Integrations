@@ -736,11 +736,17 @@ def format_text_report(
         fm = force_manual or []
         if not fm:
             return []
+        # Direction-agnostic wording: force_manual is a generic flag — the common
+        # case is a lower-bound floor guardrail trip, but analyze_tenant's per-key
+        # except also sets it for ANY-direction key that throws. Each body line
+        # carries its own guardrail_reason (already direction-correct), so the
+        # header must not assume lower-bound or an upper-bound exception would be
+        # mislabelled as a floor issue.
         head = (
-            f"⚠ {len(fm)} 個 lower-bound 閾值需人工 review（floor 護欄觸發；#916）："
+            f"⚠ {len(fm)} 個閾值需人工 review（護欄觸發／推薦例外；#916）："
             if _LANG == "zh" else
-            f"⚠ {len(fm)} lower-bound threshold(s) need manual review "
-            "(floor guardrail tripped — #916):"
+            f"⚠ {len(fm)} threshold(s) need manual review "
+            "(guardrail tripped / recommender exception — #916):"
         )
         body = []
         for k in fm:
@@ -769,8 +775,8 @@ def format_text_report(
         parts: list[str] = []
         if n_fm:
             parts.append(
-                f" ⚠ 另有 {n_fm} 個 lower-bound 閾值需人工 review。" if _LANG == "zh"
-                else f" ⚠ {n_fm} lower-bound threshold(s) also need manual review.")
+                f" ⚠ 另有 {n_fm} 個閾值需人工 review。" if _LANG == "zh"
+                else f" ⚠ {n_fm} threshold(s) also need manual review.")
         if n_ung:
             parts.append(
                 f" ⚠ 另有 {n_ung} 個未分類 `<` 閾值未治理。" if _LANG == "zh"
