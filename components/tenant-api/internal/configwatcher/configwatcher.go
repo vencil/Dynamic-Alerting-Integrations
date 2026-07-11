@@ -104,11 +104,9 @@ type Watcher[T any] struct {
 	// no-WatchLoop manager that may never reload again. Defaults true (open mode
 	// / pre-load are healthy).
 	//
-	// Concurrency: written only inside loadLocked's defer — under loadMu, so it is
-	// serialised with lastHash (no separate race). The only READ (in
-	// SetReloadObserver) runs on the main goroutine before any WatchLoop goroutine
-	// starts and before the server serves, so it observes the initial load's value
-	// with no lock needed for that read.
+	// Concurrency: both the WRITE (loadLocked's defer) and the READ
+	// (SetReloadObserver's replay) hold loadMu, so lastOK is fully serialised with
+	// lastHash and with itself — no race and no dependence on startup ordering.
 	lastOK bool
 
 	// reloadObs is the optional reload-outcome metric sink (instance-method DI,
@@ -188,14 +186,16 @@ func (w *Watcher[T]) Reload() error {
 	return w.loadLocked()
 }
 
-// SetReloadObserver installs the optional reload-outcome metric sink. Call once
-// at startup BEFORE any WatchLoop goroutine is launched AND before the HTTP
-// server starts serving (handler goroutines reach it via Reload) — the write
-// must happen-before every reader. main.go satisfies both: the setters run
-// before `go …WatchLoop(…)` and long before ListenAndServe. Passing nil leaves
-// recording disabled (the reload still logs the WARN and keeps last-good).
-// Mirrors rbac.Manager.SetScopeAuditor. Promoted through the embed so every
-// domain Manager exposes it.
+// SetReloadObserver installs the optional reload-outcome metric sink. In
+// practice main.go calls it once at startup before `go …WatchLoop(…)` and long
+// before ListenAndServe, but correctness no longer DEPENDS on that ordering: the
+// body takes loadMu, so the reloadObs write, the lastOK read, and the replay are
+// atomic with respect to a concurrent loadLocked (which also holds loadMu). A
+// future refactor that reloads earlier therefore cannot race the replay or read a
+// torn lastOK (Gemini #1072 review pt3 — codify the assumption instead of relying
+// on temporal coupling). Passing nil leaves recording disabled (the reload still
+// logs the WARN and keeps last-good). Mirrors rbac.Manager.SetScopeAuditor.
+// Promoted through the embed so every domain Manager exposes it.
 //
 // On install it REPLAYS the initial-load outcome (w.lastOK): the initial load in
 // New() ran while reloadObs was nil, so without this replay a file that was
@@ -207,6 +207,11 @@ func (w *Watcher[T]) Reload() error {
 // once — a real load failure counted once; it stays below the
 // TenantApiConfigReloadFailing rate threshold, and the == 0 gauge is what fires.
 func (w *Watcher[T]) SetReloadObserver(o ReloadObserver) {
+	// loadMu makes {reloadObs write, lastOK read, replay} atomic vs a concurrent
+	// loadLocked — no reliance on startup ordering. No self-deadlock: this path
+	// never calls load()/loadLocked, and RecordReload is a lock-free atomic update.
+	w.loadMu.Lock()
+	defer w.loadMu.Unlock()
 	w.reloadObs = o
 	if o != nil {
 		o.RecordReload(w.label, w.lastOK)

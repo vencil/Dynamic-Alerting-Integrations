@@ -254,6 +254,55 @@ func TestSetReloadObserver_OpenModeReplaysOK(t *testing.T) {
 	}
 }
 
+// SetReloadObserver takes loadMu, so installing the observer is race-free even
+// against an in-flight load() — a future main.go refactor that reloads before the
+// observer is wired must not race the reloadObs write / lastOK read / replay
+// (Gemini #1072 pt3). Dogfood: drop the loadMu Lock/Unlock in SetReloadObserver
+// and `go test -race` flags the reloadObs (and lastOK) access here.
+func TestSetReloadObserver_RaceWithConcurrentLoad(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := writeYAML(t, dir, "foo: good\n")
+	w, err := New(path, "test-comp", parseErrOnBoom, emptyTestConfig)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ { // hammer Reload() throughout
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = w.Reload()
+				}
+			}
+		}()
+	}
+	obs := &fakeReloadObserver{}
+	// (Re)install repeatedly WHILE loads run, to make the write/read overlap
+	// actually occur — the race detector only flags a race that happens, so a
+	// single install could slip between ticks and hide an unlocked bug.
+	for i := 0; i < 2000; i++ {
+		w.SetReloadObserver(obs)
+	}
+	close(stop)
+	wg.Wait()
+
+	// Sanity: after wiring, a subsequent reload records on the live observer.
+	if err := w.Reload(); err != nil {
+		t.Fatalf("Reload after wiring: %v", err)
+	}
+	if _, recorded := obs.last("test-comp"); !recorded {
+		t.Error("observer did not record after being wired")
+	}
+}
+
 // With no observer installed (the default), a failing WatchLoop reload must NOT
 // panic on a nil sink — it just logs the WARN and keeps last-good.
 func TestWatchLoop_ReloadFailure_NilObserverNoPanic(t *testing.T) {

@@ -593,14 +593,17 @@ data:
               description: |
                 The tenant-api `{{ $labels.component }}` config manager's LAST
                 reload FAILED, so it is serving the LAST-GOOD snapshot and the
-                on-disk config is NOT in effect (memory diverged from disk). Fix
-                the YAML (see the tenant-api WARN log: "config reload failed" with
-                the parse error); a WatchLoop-driven manager (rbac / policy /
-                tenantorg / federation-policy) clears on the next good tick, while
-                a single-shot manager (groups / views, no WatchLoop) clears only on
-                the next successful write or a pod restart. This gauge catches the
-                single-shot failure that TenantApiConfigReloadFailing (a rate
-                alert) cannot.
+                on-disk config is NOT in effect (memory diverged from disk). Check
+                the tenant-api WARN log ("config reload failed") for the root cause,
+                which decides the remedy: a `parse ...` error means the on-disk YAML
+                is broken — fix it; a `read ...` (transient I/O) error means the
+                YAML is fine but a re-read failed — re-apply the config (re-PUT) or
+                restart the pod. A WatchLoop-driven manager (rbac / policy /
+                tenantorg / federation-policy) clears on the next good tick, while a
+                single-shot manager (groups / views, no WatchLoop) does NOT
+                self-heal — it clears only on the next successful write or a pod
+                restart. This gauge catches the single-shot failure that
+                TenantApiConfigReloadFailing (a rate alert) cannot.
 
           # --- tenant-api read-HA defer re-trigger (ADR-023 A4 / #678 / #788, CLOSED-deferred) ---
           # CODIFIED re-trigger for a CLOSED-deferred design item. #678 (TRK-325
