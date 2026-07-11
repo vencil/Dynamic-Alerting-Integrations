@@ -1,4 +1,4 @@
-import{a as C}from"./chunk-B7RYC3SZ.js";import{a as u,b as _,c as q,d as w,e as M}from"./chunk-IP76M35X.js";var h=u(_(),1),S=u(q(),1);var b=u(_(),1);var e=u(w(),1),t=window.__t||((r,a)=>a),k=`groups:
+import{a as C}from"./chunk-ZHLICTNA.js";import{a as u,b as _,c as q,d as w,e as M}from"./chunk-6CZKKW3I.js";var h=u(_(),1),S=u(q(),1);var b=u(_(),1);var e=u(w(),1),t=window.__t||((r,a)=>a),k=`groups:
   - name: mysql_alerts
     rules:
       - alert: HighMySQLConnections

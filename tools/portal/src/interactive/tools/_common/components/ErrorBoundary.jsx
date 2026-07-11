@@ -2,26 +2,23 @@
 title: "_common — ErrorBoundary"
 purpose: |
   React class-based error boundary that catches render-time errors in
-  any descendant. Mirrors the inline boundary that jsx-loader.html
-  installs at the root render; duplicating the implementation here
-  lets individual tools wrap subtrees (e.g. a single tab inside a
-  wizard) so one failing tab does not crash sibling tabs.
+  any descendant. This is the canonical (and only) portal error
+  boundary: every tool's dist entry (`tools/portal/entries/*.entry.jsx`)
+  imports it and wraps the mounted tool, so one tool's render error
+  shows a fallback instead of a blank page. Tools may also wrap subtrees
+  explicitly (e.g. a single tab inside a wizard) so one failing tab does
+  not crash sibling tabs.
 
-  Why a separate file when jsx-loader.html already has one: the
-  loader inline boundary is bootstrap-only; it must be defined in
-  vanilla JS (no JSX) before Babel boots and must work even if this
-  JSX file fails to fetch. This file is the canonical implementation
-  tools depend on via the front-matter dependencies block when they
-  want explicit subtree boundaries.
-
-  Both implementations register on the same window.__ErrorBoundary
-  global; this file's load is idempotent (last-write-wins, identical
-  semantics).
+  History: pre-TD-030z, jsx-loader.html carried a vanilla-JS bootstrap
+  copy that wrapped the loader's own root render and self-registered on
+  `window.__ErrorBoundary`. Post-TD-030z the loader only injects the dist
+  `<script type="module">` and the entry does the render, so that
+  bootstrap copy + the `window.__ErrorBoundary` handshake were retired
+  (TRK-230z); this ESM component is imported directly.
 
   Usage in another tool:
-    front-matter dependencies block lists this file path; pickup
-    line is `const ErrorBoundary = window.__ErrorBoundary;`. Wrap
-    children with `<ErrorBoundary scope="tab-1">...</ErrorBoundary>`.
+    `import { ErrorBoundary } from '…/_common/components/ErrorBoundary.jsx';`
+    then wrap children: `<ErrorBoundary scope="tab-1">...</ErrorBoundary>`.
 
   Props:
     children  React node, the subtree to protect.
@@ -137,11 +134,5 @@ class ErrorBoundary extends Component {
     );
   }
 }
-
-// LIVE registration — deliberately kept by TRK-230z. `jsx-loader.html`
-// boot-guards on `window.__ErrorBoundary` (it installs its own fallback
-// boundary only while this is unset), so the host page, not the bundle,
-// is the consumer. Retiring it means changing that guard first.
-window.__ErrorBoundary = ErrorBoundary;
 
 export { ErrorBoundary };

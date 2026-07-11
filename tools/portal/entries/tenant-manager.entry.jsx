@@ -14,9 +14,10 @@
  *
  * Subtree data flows by plain ESM import (TRK-230z). The former
  * `window.__X = X;` registrations are gone — useTenantData.js now
- * `import`s DEMO_TENANTS / DEMO_GROUPS from the fixtures module directly.
- * The only window registrations left anywhere are __ErrorBoundary (read by
- * the host jsx-loader.html boot-guard) and Loading.jsx's spinner once-flag.
+ * `import`s DEMO_TENANTS / DEMO_GROUPS from the fixtures module directly,
+ * and ErrorBoundary is imported (below) rather than picked off a global.
+ * The only window write left in portal src is Loading.jsx's spinner
+ * once-flag (a runtime dedup guard, not a symbol registration).
  */
 // TRK-233/034: component files now use direct ESM React imports
 // (`import { useState } from 'react'`); no global side-effect setup
