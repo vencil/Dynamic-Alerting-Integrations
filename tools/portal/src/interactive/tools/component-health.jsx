@@ -201,17 +201,26 @@ const styles = {
   },
 };
 
-/* ── Color mappings ── */
+/* ── Color mappings ──
+ * Each entry carries THREE colour slots because the badge text and the
+ * distribution-bar fill have different WCAG requirements:
+ *   bg   → the soft badge background (-soft token)
+ *   text → the badge FOREGROUND (Badge/TokenBadge `color:`) — must pass AA as
+ *          text, so warning/error use the darker `-text` variant.
+ *   fill → the SimpleBar chart FILL (applied as `background:` via colorFn) —
+ *          a graphical element (3:1), so it keeps the saturated token for
+ *          vivid chart bars. (success has no `-text` variant and passes AA, so
+ *          its text and fill are the same token.) */
 const TIER_COLORS = {
-  'Tier 1': { bg: 'var(--da-color-success-soft)', text: 'var(--da-color-success)' },
-  'Tier 2': { bg: 'var(--da-color-warning-soft)', text: 'var(--da-color-warning)' },
-  'Tier 3': { bg: 'var(--da-color-error-soft)', text: 'var(--da-color-error)' },
+  'Tier 1': { bg: 'var(--da-color-success-soft)', text: 'var(--da-color-success)', fill: 'var(--da-color-success)' },
+  'Tier 2': { bg: 'var(--da-color-warning-soft)', text: 'var(--da-color-warning-text)', fill: 'var(--da-color-warning)' },
+  'Tier 3': { bg: 'var(--da-color-error-soft)', text: 'var(--da-color-error-text)', fill: 'var(--da-color-error)' },
 };
 
 const GROUP_COLORS = {
-  A: { bg: 'var(--da-color-success-soft)', text: 'var(--da-color-success)', label: 'Mature' },
-  B: { bg: 'var(--da-color-warning-soft)', text: 'var(--da-color-warning)', label: 'Partial' },
-  C: { bg: 'var(--da-color-error-soft)', text: 'var(--da-color-error)', label: 'Unmigrated' },
+  A: { bg: 'var(--da-color-success-soft)', text: 'var(--da-color-success)', fill: 'var(--da-color-success)', label: 'Mature' },
+  B: { bg: 'var(--da-color-warning-soft)', text: 'var(--da-color-warning-text)', fill: 'var(--da-color-warning)', label: 'Partial' },
+  C: { bg: 'var(--da-color-error-soft)', text: 'var(--da-color-error-text)', fill: 'var(--da-color-error)', label: 'Unmigrated' },
 };
 
 /* ── Sub-components ── */
@@ -245,17 +254,17 @@ function TokenBadge({ group }) {
 
 function ProgressCell({ ratio }) {
   const pct = Math.round(ratio * 100);
-  const color = pct >= 95
-    ? 'var(--da-color-success)'
-    : pct >= 80
-    ? 'var(--da-color-warning)'
-    : 'var(--da-color-error)';
+  // Split the fill color from the label color: the bar fill is a background
+  // (saturated is correct), but the % label is text on a light td — so it must
+  // use the AA -text variant. success has no -text variant and already passes AA.
+  const barColor = pct >= 95 ? 'var(--da-color-success)' : pct >= 80 ? 'var(--da-color-warning)' : 'var(--da-color-error)';
+  const labelColor = pct >= 95 ? 'var(--da-color-success)' : pct >= 80 ? 'var(--da-color-warning-text)' : 'var(--da-color-error-text)';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--da-space-2)' }}>
       <div style={styles.progressBar} role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`i18n coverage ${pct}%`}>
-        <div style={{ ...styles.progressFill, width: `${pct}%`, background: color }} />
+        <div style={{ ...styles.progressFill, width: `${pct}%`, background: barColor }} />
       </div>
-      <span style={{ fontSize: 'var(--da-font-size-xs)', minWidth: '36px' /* token-exempt: fixed label width */, color }}>{pct}%</span>
+      <span style={{ fontSize: 'var(--da-font-size-xs)', minWidth: '36px' /* token-exempt: fixed label width */, color: labelColor }}>{pct}%</span>
     </div>
   );
 }
@@ -349,7 +358,7 @@ export default function ComponentHealth() {
         <KpiCard value={`${stats.pwCov}/${stats.total}`} label={t('Playwright 覆蓋', 'Playwright Coverage')} />
         <KpiCard value={`${Math.round(stats.avgI18n * 100)}%`} label={t('平均 i18n 覆蓋', 'Avg i18n Coverage')} accent="var(--da-color-info)" />
         <KpiCard value={`${stats.groupA}`} label={t('Token Group A', 'Token Group A')} accent="var(--da-color-success)" />
-        <KpiCard value={`${stats.groupC}`} label={t('Token Group C', 'Token Group C')} accent="var(--da-color-error)" />
+        <KpiCard value={`${stats.groupC}`} label={t('Token Group C', 'Token Group C')} accent="var(--da-color-error-text)" />
       </div>
 
       {/* Distribution Charts */}
@@ -359,7 +368,7 @@ export default function ComponentHealth() {
           <SimpleBar
             items={tierDist}
             maxVal={Math.max(...tierDist.map(d => d.value))}
-            colorFn={(label) => TIER_COLORS[label]?.text || 'var(--da-color-muted)'}
+            colorFn={(label) => TIER_COLORS[label]?.fill || 'var(--da-color-muted)'}
           />
         </div>
         <div style={styles.section}>
@@ -367,7 +376,7 @@ export default function ComponentHealth() {
           <SimpleBar
             items={tokenDist}
             maxVal={Math.max(...tokenDist.map(d => d.value))}
-            colorFn={(label) => GROUP_COLORS[label]?.text || 'var(--da-color-muted)'}
+            colorFn={(label) => GROUP_COLORS[label]?.fill || 'var(--da-color-muted)'}
           />
         </div>
       </div>
@@ -437,7 +446,7 @@ export default function ComponentHealth() {
                   <td style={styles.td}><TokenBadge group={tool.group} /></td>
                   <td style={styles.td}>{tool.tokens}</td>
                   <td style={styles.td}>
-                    <span style={{ color: tool.palette > 0 ? 'var(--da-color-error)' : 'var(--da-color-success)' }}>
+                    <span style={{ color: tool.palette > 0 ? 'var(--da-color-error-text)' : 'var(--da-color-success)' }}>
                       {tool.palette}
                     </span>
                   </td>

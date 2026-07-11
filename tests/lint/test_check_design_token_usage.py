@@ -386,6 +386,101 @@ class TestSaturatedTokenAsText:
             "x.jsx",
         ) == []
 
+    # --- (c2) inline / style-object FOREGROUND form (className regex's blind spot) ---
+
+    def test_inline_color_error_flagged(self):
+        """A bare saturated token on the `color:` inline foreground key IS flagged —
+        this is the className regex's blind spot the extension closes."""
+        issues = dtu.check_saturated_token_as_text(
+            "<span style={{ color: 'var(--da-color-error)' }}>bad</span>", "x.jsx"
+        )
+        assert len(issues) == 1
+        assert issues[0]["token"] == "--da-color-error"
+        assert issues[0]["suggestion"] == "--da-color-error-text"
+        assert issues[0]["line"] == 1
+
+    def test_colors_map_text_entry_warning_flagged(self):
+        """The `text:` key of a colors-map (TIER_COLORS/GROUP_COLORS convention),
+        applied downstream as `color: c.text`, IS flagged."""
+        issues = dtu.check_saturated_token_as_text(
+            "  B: { bg: 'var(--da-color-warning-soft)', "
+            "text: 'var(--da-color-warning)', label: 'Partial' },",
+            "x.jsx",
+        )
+        assert [i["suggestion"] for i in issues] == ["--da-color-warning-text"]
+
+    def test_textcolor_alias_key_flagged(self):
+        """`textColor:` (camelCase foreground alias) is in the allow-list."""
+        issues = dtu.check_saturated_token_as_text(
+            "const s = { textColor: 'var(--da-color-error)' };", "x.jsx"
+        )
+        assert [i["suggestion"] for i in issues] == ["--da-color-error-text"]
+
+    def test_inline_background_border_stroke_not_flagged(self):
+        """A saturated hue is CORRECT for backgrounds / borders / strokes / fills —
+        these foreground-key look-alikes must NOT be flagged."""
+        for prop in (
+            "background", "backgroundColor", "bg",
+            "border", "borderColor", "stroke", "fill",
+        ):
+            src = f"const s = {{ {prop}: 'var(--da-color-error)' }};"
+            assert dtu.check_saturated_token_as_text(src, "x.jsx") == [], (
+                f"{prop} must not be flagged (saturated is correct for it)"
+            )
+
+    def test_inline_text_and_soft_variants_not_flagged(self):
+        """The `-text` variant (the fix) and the `-soft` background on a foreground
+        key are both correct — never flagged (the trailing \\) anchors the bare token)."""
+        assert dtu.check_saturated_token_as_text(
+            "const s = { color: 'var(--da-color-error-text)' };", "x.jsx"
+        ) == []
+        assert dtu.check_saturated_token_as_text(
+            "const s = { color: 'var(--da-color-warning-text)' };", "x.jsx"
+        ) == []
+        # A -soft token would be an odd choice for text but must still not match
+        # the bare-token anchor (it is not the error/warning token this rule targets).
+        assert dtu.check_saturated_token_as_text(
+            "const s = { color: 'var(--da-color-error-soft)' };", "x.jsx"
+        ) == []
+
+    def test_inline_info_success_not_flagged(self):
+        """info/success as an inline foreground already pass AA and have no -text
+        variant — out of scope for this rule."""
+        assert dtu.check_saturated_token_as_text(
+            "const s = { color: 'var(--da-color-info)' };", "x.jsx"
+        ) == []
+        assert dtu.check_saturated_token_as_text(
+            "const s = { color: 'var(--da-color-success)' };", "x.jsx"
+        ) == []
+
+    def test_inline_token_exempt_marker_honored(self):
+        """`/* token-exempt */` suppresses the inline foreground finding too."""
+        assert dtu.check_saturated_token_as_text(
+            "const s = { color: 'var(--da-color-error)' }; "
+            "/* token-exempt: rendered on dark hero bg */",
+            "x.jsx",
+        ) == []
+
+    def test_inline_pattern_inside_comment_not_flagged(self):
+        """The inline bad pattern quoted in a // or /* */ comment is not real code."""
+        assert dtu.check_saturated_token_as_text(
+            "// e.g. color: 'var(--da-color-error)' — use the -text variant instead",
+            "x.jsx",
+        ) == []
+        assert dtu.check_saturated_token_as_text(
+            "/* legacy: color: 'var(--da-color-warning)' */\nconst ok = true;",
+            "x.jsx",
+        ) == []
+
+    def test_className_form_not_double_counted_by_inline(self):
+        """A line carrying only the (c1) className form yields exactly ONE finding —
+        the inline regex must not also match it (its `color:var` has no quote)."""
+        issues = dtu.check_saturated_token_as_text(
+            '<p className="text-[color:var(--da-color-error)]">bad</p>', "x.jsx"
+        )
+        assert len(issues) == 1
+        assert issues[0]["suggestion"] == "--da-color-error-text"
+
 
 # ---------------------------------------------------------------------------
 # Tests for scan_jsx_files and exit logic

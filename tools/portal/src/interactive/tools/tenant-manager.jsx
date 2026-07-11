@@ -439,7 +439,7 @@ export default function TenantManager() {
       <div style={{ ...styles.container, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center', backgroundColor: 'white', padding: 'var(--da-space-6)', borderRadius: 'var(--da-radius-lg)' }}>
           <div style={{ fontSize: 'var(--da-font-size-3xl)', marginBottom: 'var(--da-space-4)' }} aria-hidden="true">&#10060;</div>
-          <div style={{ color: 'var(--da-color-error)', fontWeight: 'bold' }}>{t('錯誤', 'Error')}</div>
+          <div style={{ color: 'var(--da-color-error-text)', fontWeight: 'bold' }}>{t('錯誤', 'Error')}</div>
           <div style={{ color: 'var(--da-color-muted)', marginTop: 'var(--da-space-2)' }}>{error}</div>
         </div>
       </div>
@@ -877,7 +877,7 @@ export default function TenantManager() {
               </div>
               <button
                 onClick={() => handleDeleteGroup(activeGroupId)}
-                style={{ ...styles.button, ...styles.buttonSecondary, color: 'var(--da-color-error)' }}
+                style={{ ...styles.button, ...styles.buttonSecondary, color: 'var(--da-color-error-text)' }}
               >
                 {t('刪除群組', 'Delete Group')}
               </button>
