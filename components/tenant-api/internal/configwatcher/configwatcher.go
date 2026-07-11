@@ -40,29 +40,36 @@ type ParseFunc[T any] func([]byte) (*T, error)
 // empty (open mode), the file doesn't exist, or initial load fails.
 type EmptyFunc[T any] func() *T
 
-// ReloadFailureRecorder is an optional sink for hot-reload failures. It is
-// declared here (configwatcher is a leaf package importing only stdlib) and
-// implemented in the handler package, which owns /metrics exposition —
+// ReloadObserver is an optional sink for the outcome of EVERY reload attempt.
+// It is declared here (configwatcher is a leaf package importing only stdlib)
+// and implemented in the handler package, which owns /metrics exposition —
 // mirroring how rbac declares ScopeAuditRecorder and handler implements it
 // (import direction handler → configwatcher; configwatcher never imports
 // handler).
 //
-// Why it exists: a reload failure keeps serving the LAST-GOOD snapshot (load()
+// Why it exists: a reload FAILURE keeps serving the LAST-GOOD snapshot (load()
 // returns the error without Store-ing), so a config an admin edited with a typo
-// silently stops taking effect. BOTH reload paths are silent today:
+// silently stops taking effect. BOTH reload paths are silent:
 //   - WatchLoop (periodic tick) logs a WARN and moves on.
 //   - Reload (post-write refresh) returns the error, but every production
-//     caller discards it — `_ = mgr.Reload()` in handler/group.go:236,317,
-//     handler/view.go:175,239 and handler/federation/policy.go:157 — and then
-//     answers 200 OK, so the caller never learns the snapshot went stale.
+//     caller discards it — `_ = mgr.Reload()` in handler/group.go, view.go and
+//     federation/policy.go — and then answers 200 OK, so the caller never
+//     learns the snapshot went stale.
 //
-// This sink surfaces both as tenant_api_config_reload_failures_total{component}
-// so they can be alerted on (Gemini #1056 external-review disposition 3a).
-type ReloadFailureRecorder interface {
-	// IncReloadFailure records one reload failure — a WatchLoop tick or a
-	// post-write Reload — for the named component (the Watcher's label,
-	// e.g. "RBAC" / "policy" / "groups").
-	IncReloadFailure(component string)
+// The observer records the outcome (ok) of each load so the handler can drive
+// TWO complementary metrics from one observation point:
+//   - a monotonic failure COUNTER (increment when !ok) — reload failure RATE,
+//     for dashboards/trend (Gemini #1056 disposition 3a).
+//   - a per-component STATE gauge (last-reload-successful) — answers "is this
+//     manager CURRENTLY serving stale config", which the counter structurally
+//     cannot: a single-shot Reload failure (groups/views never retry) leaves
+//     the counter at 1, below any rate threshold, yet the config IS stale.
+type ReloadObserver interface {
+	// RecordReload reports the outcome of one reload attempt (a WatchLoop tick
+	// or a post-write Reload) for the named component (the Watcher's label,
+	// e.g. "RBAC" / "policy" / "groups"). ok=false means load() returned an
+	// error and kept the last-good snapshot.
+	RecordReload(component string, ok bool)
 }
 
 // Watcher caches a parsed YAML config plus its SHA-256, reloads on
@@ -89,14 +96,29 @@ type Watcher[T any] struct {
 	loadMu   sync.Mutex
 	lastHash string
 
-	// reloadFail is the optional hot-reload-failure metric sink
-	// (instance-method DI, mirroring rbac.Manager.scopeAudit). nil (the
-	// default) means no recording — WatchLoop still logs the WARN and keeps
-	// last-good, it just emits no counter. Installed once at startup via
-	// SetReloadFailureRecorder, BEFORE WatchLoop is launched, then read-only;
-	// the goroutine-start of WatchLoop provides the happens-before edge so no
-	// atomic is needed (matches how SetScopeAuditor sets a plain field).
-	reloadFail ReloadFailureRecorder
+	// lastOK is the outcome (err == nil) of the most recent load(), captured
+	// unconditionally (even before an observer is installed). SetReloadObserver
+	// replays it so a startup parse failure — which happens while reloadObs is
+	// still nil — is reflected on the gauge the moment the observer is wired,
+	// instead of the gauge sitting at its assumed-current default forever for a
+	// no-WatchLoop manager that may never reload again. Defaults true (open mode
+	// / pre-load are healthy).
+	//
+	// Concurrency: written only inside loadLocked's defer — under loadMu, so it is
+	// serialised with lastHash (no separate race). The only READ (in
+	// SetReloadObserver) runs on the main goroutine before any WatchLoop goroutine
+	// starts and before the server serves, so it observes the initial load's value
+	// with no lock needed for that read.
+	lastOK bool
+
+	// reloadObs is the optional reload-outcome metric sink (instance-method DI,
+	// mirroring rbac.Manager.scopeAudit). nil (the default) means no recording —
+	// WatchLoop still logs the WARN and keeps last-good, it just emits no metric.
+	// Installed once at startup via SetReloadObserver, BEFORE WatchLoop is
+	// launched AND before the server serves (handlers reach it via Reload), then
+	// read-only; the goroutine-start / write-before-serve provides the
+	// happens-before edge so no atomic is needed (matches SetScopeAuditor).
+	reloadObs ReloadObserver
 }
 
 // New constructs a Watcher and runs an initial load. The initial
@@ -117,10 +139,11 @@ type Watcher[T any] struct {
 //	initial-load-failure paths so Get is never nil.
 func New[T any](path, label string, parse ParseFunc[T], empty EmptyFunc[T]) (*Watcher[T], error) {
 	w := &Watcher[T]{
-		path:  path,
-		label: label,
-		parse: parse,
-		empty: empty,
+		path:   path,
+		label:  label,
+		parse:  parse,
+		empty:  empty,
+		lastOK: true, // healthy until a load() proves otherwise (open mode stays true)
 	}
 	// Always start with empty so Get is non-nil even before load().
 	w.value.Store(empty())
@@ -148,34 +171,47 @@ func (w *Watcher[T]) Get() *T {
 // Used after writes to pick up the just-written file before the
 // WatchLoop ticker fires.
 //
-// A failure is recorded on the reload-failure sink as well as returned: every
-// production caller discards the error (`_ = mgr.Reload()` — handler/group.go,
-// handler/view.go, handler/federation/policy.go) and still answers 200 OK, so
-// without the counter a post-write reload failure is just as silent as a
-// WatchLoop tick failure and leaves the manager serving the stale snapshot.
+// The outcome is recorded on the reload observer (by load()) as well as
+// returned: every production caller discards the error (`_ = mgr.Reload()` —
+// handler/group.go, handler/view.go, handler/federation/policy.go) and still
+// answers 200 OK, so without the metric a post-write reload failure is just as
+// silent as a WatchLoop tick failure and leaves the manager serving the stale
+// snapshot.
 func (w *Watcher[T]) Reload() error {
 	w.loadMu.Lock()
 	defer w.loadMu.Unlock()
 	w.lastHash = ""
 	// loadLocked (not load) — we already hold loadMu; load() would re-lock and
-	// self-deadlock. Record on the failure sink under the lock: it is a cheap
-	// atomic counter increment (config_reload_metrics.go), no lock-ordering risk.
-	err := w.loadLocked()
-	if err != nil && w.reloadFail != nil {
-		w.reloadFail.IncReloadFailure(w.label)
-	}
-	return err
+	// self-deadlock. loadLocked's defer records the outcome (lastOK + observer)
+	// under the lock (a cheap atomic update in config_reload_metrics.go, no
+	// lock-ordering risk), so Reload's post-write failures are observed too.
+	return w.loadLocked()
 }
 
-// SetReloadFailureRecorder installs the optional reload-failure metric sink.
-// Call once at startup BEFORE any WatchLoop goroutine is launched AND before
-// the HTTP server starts serving (handler goroutines reach it via Reload) — the
-// write must happen-before every reader. main.go satisfies both: the setters run
+// SetReloadObserver installs the optional reload-outcome metric sink. Call once
+// at startup BEFORE any WatchLoop goroutine is launched AND before the HTTP
+// server starts serving (handler goroutines reach it via Reload) — the write
+// must happen-before every reader. main.go satisfies both: the setters run
 // before `go …WatchLoop(…)` and long before ListenAndServe. Passing nil leaves
 // recording disabled (the reload still logs the WARN and keeps last-good).
 // Mirrors rbac.Manager.SetScopeAuditor. Promoted through the embed so every
 // domain Manager exposes it.
-func (w *Watcher[T]) SetReloadFailureRecorder(r ReloadFailureRecorder) { w.reloadFail = r }
+//
+// On install it REPLAYS the initial-load outcome (w.lastOK): the initial load in
+// New() ran while reloadObs was nil, so without this replay a file that was
+// already broken at startup would leave the gauge at its assumed-current default
+// until the next reload — which, for a no-WatchLoop manager (groups/views) that
+// gets no write, may never come. Healthy and open-mode managers replay ok=true
+// (gauge stays 1), so there is no false positive. The replay goes through
+// RecordReload, so a replayed startup FAILURE also increments the failure counter
+// once — a real load failure counted once; it stays below the
+// TenantApiConfigReloadFailing rate threshold, and the == 0 gauge is what fires.
+func (w *Watcher[T]) SetReloadObserver(o ReloadObserver) {
+	w.reloadObs = o
+	if o != nil {
+		o.RecordReload(w.label, w.lastOK)
+	}
+}
 
 // WatchLoop polls the file every `interval` and stores any parsed
 // changes. No-op for empty path. Stops when stopCh is closed.
@@ -192,13 +228,11 @@ func (w *Watcher[T]) WatchLoop(interval time.Duration, stopCh <-chan struct{}) {
 		case <-ticker.C:
 			if err := w.load(); err != nil {
 				// Reload failed → load() did NOT Store, so we keep serving the
-				// last-good snapshot; the edited (broken) config is silently
-				// not in effect. Emit both the WARN log and the counter so an
-				// alert can catch the masking (Gemini #1056 disposition 3a).
+				// last-good snapshot; the edited (broken) config is silently not
+				// in effect. load() already records the outcome on the observer
+				// (failure counter + last-reload-successful gauge); the WARN log
+				// is for the operator (Gemini #1056 disposition 3a).
 				slog.Warn("config reload failed", "component", w.label, "error", err)
-				if w.reloadFail != nil {
-					w.reloadFail.IncReloadFailure(w.label)
-				}
 			}
 		}
 	}
@@ -229,7 +263,24 @@ func (w *Watcher[T]) load() error {
 // and fails again rather than silently deduping the failure away —
 // which is what lets the reload-failure counter keep climbing while
 // the snapshot stays stale.
-func (w *Watcher[T]) loadLocked() error {
+//
+// The outcome (err == nil) is captured at EVERY exit via a named-return + defer,
+// so success paths (dedup no-op, missing-file, parse OK) and failure paths are all
+// covered from ONE point (this is the single funnel every caller reaches: New→load,
+// WatchLoop→load, Reload→loadLocked), keeping the failure counter and the
+// last-reload-successful gauge consistent. The defer ALWAYS records w.lastOK — held
+// under loadMu, so its write is serialised with lastHash — and forwards to the
+// observer when one is present. During New()'s initial load reloadObs is nil (it is
+// installed post-construction), so that load emits no live metric — but its outcome
+// is preserved in lastOK and REPLAYED by SetReloadObserver (matters for
+// groups/views: no WatchLoop, may never reload again).
+func (w *Watcher[T]) loadLocked() (err error) {
+	defer func() {
+		w.lastOK = err == nil
+		if w.reloadObs != nil {
+			w.reloadObs.RecordReload(w.label, err == nil)
+		}
+	}()
 	if w.path == "" {
 		w.value.Store(w.empty())
 		return nil

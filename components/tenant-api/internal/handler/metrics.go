@@ -146,6 +146,11 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	// and is now serving stale last-good config; alert on a sustained increase().
 	writeConfigReloadFailureMetrics(w)
 
+	// Companion current-state gauge (0 ⇒ that manager's LAST reload failed and it
+	// is serving stale config right now). Catches a single-shot Reload failure the
+	// counter's rate threshold cannot; alert on == 0.
+	writeConfigReloadStateMetrics(w)
+
 	// ADR-022 Layer 2 tripwire: 1 ⇒ --dev-bypass-auth is ON (LOCAL DEV ONLY).
 	// MUST be 0 in production; alert if 1 outside a dev/compose environment.
 	devBypass := 0

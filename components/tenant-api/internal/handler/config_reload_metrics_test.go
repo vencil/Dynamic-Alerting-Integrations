@@ -13,8 +13,8 @@ import (
 )
 
 // configReloadComponents must contain the label of EVERY manager that constructs
-// a configwatcher.Watcher, or that manager's reload failures are silently DROPPED
-// — IncReloadFailure ignores an unrecognized label by design (so a stray label can
+// a configwatcher.Watcher, or that manager's reload outcomes are silently DROPPED
+// — RecordReload ignores an unrecognized label by design (so a stray label can
 // never panic a reload goroutine), which makes the omission invisible. The set's
 // doc comment says "a new manager appends its label here"; this test makes that
 // mechanical instead of aspirational.
@@ -59,7 +59,7 @@ func TestConfigReloadComponents_CoversEveryWatcherLabel(t *testing.T) {
 			found = append(found, label)
 			if !known[label] {
 				t.Errorf("%s: configwatcher.New label %q is NOT in configReloadComponents — "+
-					"its reload failures would be silently dropped by IncReloadFailure", p, label)
+					"its reload outcomes would be silently dropped by RecordReload", p, label)
 			}
 		}
 		return nil
@@ -79,18 +79,19 @@ func TestConfigReloadComponents_CoversEveryWatcherLabel(t *testing.T) {
 	}
 }
 
-// The recorder returned by NewConfigReloadFailureRecorder satisfies the
-// configwatcher sink, counts per component, and becomes the instance /metrics
-// renders.
-func TestConfigReloadFailureRecorder_IncAndExposition(t *testing.T) {
-	// NOT t.Parallel: mutates the package-level activeConfigReloadFailure
+// The observer returned by NewConfigReloadObserver satisfies the configwatcher
+// sink, drives BOTH families (failure counter + last-reload-successful gauge),
+// and becomes the instance /metrics renders.
+func TestConfigReloadObserver_RecordAndExposition(t *testing.T) {
+	// NOT t.Parallel: mutates the package-level activeConfigReloadMetrics
 	// pointer that MetricsHandler reads. Kept serial so the exposition
 	// assertion below reads this test's own store.
-	rec := NewConfigReloadFailureRecorder()
-	rec.IncReloadFailure("RBAC")
-	rec.IncReloadFailure("RBAC")
-	rec.IncReloadFailure("policy")
-	rec.IncReloadFailure("garbage-component-ignored") // unknown component → no-op
+	obs := NewConfigReloadObserver()
+	obs.RecordReload("RBAC", false)              // failure: counter 1, gauge 0
+	obs.RecordReload("RBAC", false)              // failure: counter 2, gauge 0
+	obs.RecordReload("policy", false)            // single failure: counter 1, gauge 0
+	obs.RecordReload("tenantorg", true)          // success: counter 0, gauge stays 1
+	obs.RecordReload("garbage-component", false) // unknown component → no-op
 
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	w := httptest.NewRecorder()
@@ -98,14 +99,20 @@ func TestConfigReloadFailureRecorder_IncAndExposition(t *testing.T) {
 	body := w.Body.String()
 
 	for _, want := range []string{
+		// --- failure counter ---
+		`# TYPE tenant_api_config_reload_failures_total counter`,
 		`tenant_api_config_reload_failures_total{component="RBAC"} 2`,
 		`tenant_api_config_reload_failures_total{component="policy"} 1`,
-		// The never-incremented components still emit at 0 (stable metric shape).
-		`tenant_api_config_reload_failures_total{component="tenantorg"} 0`,
-		`tenant_api_config_reload_failures_total{component="federation-policy"} 0`,
-		`tenant_api_config_reload_failures_total{component="groups"} 0`,
 		`tenant_api_config_reload_failures_total{component="views"} 0`,
-		`# TYPE tenant_api_config_reload_failures_total counter`,
+		// --- current-state gauge (default 1; a single failure flips to 0) ---
+		`# TYPE tenant_api_config_last_reload_successful gauge`,
+		`tenant_api_config_last_reload_successful{component="RBAC"} 0`,
+		// policy: ONE failure flips the gauge to 0 even though the counter (1) is
+		// below any rate threshold — this is exactly the single-shot gap the gauge
+		// closes for groups/views.
+		`tenant_api_config_last_reload_successful{component="policy"} 0`,
+		`tenant_api_config_last_reload_successful{component="tenantorg"} 1`,
+		`tenant_api_config_last_reload_successful{component="views"} 1`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("/metrics missing line:\n  %s\n--- body ---\n%s", want, body)
@@ -113,35 +120,64 @@ func TestConfigReloadFailureRecorder_IncAndExposition(t *testing.T) {
 	}
 }
 
-// The store type directly satisfies configwatcher.ReloadFailureRecorder and
-// Snapshot reflects IncReloadFailure — the configwatcher seam test relies on
-// this contract.
-func TestConfigReloadFailureMetrics_Snapshot(t *testing.T) {
+// A failed reload flips the gauge to 0; a LATER successful reload flips it back
+// to 1 (recovery), while the monotonic counter stays at its accumulated value.
+func TestConfigReloadObserver_GaugeRecovers(t *testing.T) {
 	t.Parallel()
-	var m ConfigReloadFailureMetrics
-	var _ configwatcher.ReloadFailureRecorder = &m
-	m.IncReloadFailure("policy")
-	m.IncReloadFailure("policy")
-	snap := m.Snapshot()
-	if snap["policy"] != 2 {
-		t.Errorf("snapshot[policy] = %d, want 2", snap["policy"])
+	var m ConfigReloadMetrics
+	var _ configwatcher.ReloadObserver = &m
+	// gauge starts at the zero value on a bare struct (0) — NewConfigReloadObserver
+	// is what initializes to 1; here we exercise the transitions directly.
+	m.RecordReload("groups", false)
+	if m.StateSnapshot()["groups"] != 0 {
+		t.Fatalf("after failure, state[groups] = %d, want 0", m.StateSnapshot()["groups"])
 	}
-	// Every known component is present even when zero (stable metric shape).
-	if len(snap) != len(configReloadComponents) {
-		t.Errorf("snapshot has %d keys, want %d (one per configReloadComponents)",
-			len(snap), len(configReloadComponents))
+	if m.Snapshot()["groups"] != 1 {
+		t.Fatalf("after failure, counter[groups] = %d, want 1", m.Snapshot()["groups"])
+	}
+	m.RecordReload("groups", true) // recovery
+	if m.StateSnapshot()["groups"] != 1 {
+		t.Errorf("after recovery, state[groups] = %d, want 1", m.StateSnapshot()["groups"])
+	}
+	if m.Snapshot()["groups"] != 1 {
+		t.Errorf("counter must not decrement on recovery: counter[groups] = %d, want 1",
+			m.Snapshot()["groups"])
 	}
 }
 
-// With no recorder ever installed, the series still renders at 0 (stable shape).
-// Runs serial and resets the pointer to nil to model the never-wired default.
-func TestConfigReloadFailureMetrics_DisabledRendersZero(t *testing.T) {
-	activeConfigReloadFailure.Store(nil)
+// The store directly satisfies configwatcher.ReloadObserver; Snapshot /
+// StateSnapshot cover every known component (stable metric shape).
+func TestConfigReloadMetrics_Snapshots(t *testing.T) {
+	t.Parallel()
+	var m ConfigReloadMetrics
+	m.RecordReload("policy", false)
+	m.RecordReload("policy", false)
+	if m.Snapshot()["policy"] != 2 {
+		t.Errorf("snapshot[policy] = %d, want 2", m.Snapshot()["policy"])
+	}
+	for _, snap := range []map[string]int64{m.Snapshot(), m.StateSnapshot()} {
+		if len(snap) != len(configReloadComponents) {
+			t.Errorf("snapshot has %d keys, want %d (one per configReloadComponents)",
+				len(snap), len(configReloadComponents))
+		}
+	}
+}
+
+// With no store ever installed, the counter renders at 0 and the gauge at 1
+// (assumed-current) — a never-wired / never-reloaded deployment must not
+// false-alarm the == 0 stale alert.
+func TestConfigReloadMetrics_DisabledDefaults(t *testing.T) {
+	activeConfigReloadMetrics.Store(nil)
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	w := httptest.NewRecorder()
 	MetricsHandler(w, req)
 	body := w.Body.String()
-	if !strings.Contains(body, `tenant_api_config_reload_failures_total{component="RBAC"} 0`) {
-		t.Errorf("/metrics with recorder unwired should still emit RBAC=0; body:\n%s", body)
+	for _, want := range []string{
+		`tenant_api_config_reload_failures_total{component="RBAC"} 0`,
+		`tenant_api_config_last_reload_successful{component="RBAC"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/metrics with store unwired missing:\n  %s\n--- body ---\n%s", want, body)
+		}
 	}
 }

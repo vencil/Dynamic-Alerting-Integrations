@@ -464,22 +464,23 @@ func main() {
 		BackfillTimeoutDur: *writeTimeout,
 	}
 
-	// Gemini #1056 disposition 3a: one shared reload-failure recorder wired into
-	// EVERY config manager, so a silent reload failure (parse error → keep
-	// last-good → edited config quietly inert) surfaces as
-	// tenant_api_config_reload_failures_total{component}. Both reload paths are
-	// silent and both are recorded: the periodic WatchLoop only WARN-logs, and
-	// the post-write Reload returns an error that every handler discards
-	// (`_ = mgr.Reload()`) before answering 200 OK. MUST be installed BEFORE the
-	// WatchLoop goroutines below start AND before the server serves (handlers
-	// reach the sink via Reload) — both hold at this point in startup.
-	reloadFailRec := handler.NewConfigReloadFailureRecorder()
-	rbacMgr.SetReloadFailureRecorder(reloadFailRec)
-	policyMgr.SetReloadFailureRecorder(reloadFailRec)
-	tenantOrgMgr.SetReloadFailureRecorder(reloadFailRec)
-	federationPolicyMgr.SetReloadFailureRecorder(reloadFailRec)
-	groupMgr.SetReloadFailureRecorder(reloadFailRec)
-	viewMgr.SetReloadFailureRecorder(reloadFailRec)
+	// Gemini #1056 disposition 3a (+ current-state gauge follow-up): one shared
+	// reload observer wired into EVERY config manager, so a silent reload failure
+	// (parse error → keep last-good → edited config quietly inert) surfaces as
+	// tenant_api_config_reload_failures_total{component} (rate) AND
+	// tenant_api_config_last_reload_successful{component} (current state). Both
+	// reload paths are silent and both are observed: the periodic WatchLoop only
+	// WARN-logs, and the post-write Reload returns an error that every handler
+	// discards (`_ = mgr.Reload()`) before answering 200 OK. MUST be installed
+	// BEFORE the WatchLoop goroutines below start AND before the server serves
+	// (handlers reach the observer via Reload) — both hold at this point in startup.
+	reloadObs := handler.NewConfigReloadObserver()
+	rbacMgr.SetReloadObserver(reloadObs)
+	policyMgr.SetReloadObserver(reloadObs)
+	tenantOrgMgr.SetReloadObserver(reloadObs)
+	federationPolicyMgr.SetReloadObserver(reloadObs)
+	groupMgr.SetReloadObserver(reloadObs)
+	viewMgr.SetReloadObserver(reloadObs)
 
 	// ── RBAC + policy hot-reload goroutines ───────────────────────────────────
 	stopCh := make(chan struct{})
