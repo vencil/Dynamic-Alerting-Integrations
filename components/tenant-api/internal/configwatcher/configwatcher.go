@@ -15,9 +15,12 @@
 // policy, ListGroups for groups, etc.). Get / Reload / WatchLoop
 // promote through the embed.
 //
-// Concurrency: reads are lock-free (atomic.Value). Writes happen
-// only inside load() (single-flight via the WatchLoop ticker or the
-// caller-driven Reload).
+// Concurrency: reads are lock-free (atomic.Value). Writes are
+// serialised by loadMu — load() can be entered concurrently by the
+// WatchLoop ticker and by a caller-driven Reload (federation-policy
+// has both), and the read+hash+store sequence must be atomic as a
+// whole, not merely race-free: two loads that read different file
+// generations outside the lock would let the older one win the store.
 package configwatcher
 
 import (
@@ -25,6 +28,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -76,7 +80,13 @@ type Watcher[T any] struct {
 	parse ParseFunc[T]
 	empty EmptyFunc[T]
 
-	value    atomic.Value // stores *T
+	value atomic.Value // stores *T
+
+	// loadMu guards lastHash and serialises the whole read+parse+store
+	// sequence in load(). Get() does not take it — reads stay lock-free
+	// off atomic.Value — so a slow (FUSE-stalled) ReadFile under this
+	// lock delays only other reloads, never request-path reads.
+	loadMu   sync.Mutex
 	lastHash string
 
 	// reloadFail is the optional hot-reload-failure metric sink
@@ -144,8 +154,13 @@ func (w *Watcher[T]) Get() *T {
 // without the counter a post-write reload failure is just as silent as a
 // WatchLoop tick failure and leaves the manager serving the stale snapshot.
 func (w *Watcher[T]) Reload() error {
+	w.loadMu.Lock()
+	defer w.loadMu.Unlock()
 	w.lastHash = ""
-	err := w.load()
+	// loadLocked (not load) — we already hold loadMu; load() would re-lock and
+	// self-deadlock. Record on the failure sink under the lock: it is a cheap
+	// atomic counter increment (config_reload_metrics.go), no lock-ordering risk.
+	err := w.loadLocked()
 	if err != nil && w.reloadFail != nil {
 		w.reloadFail.IncReloadFailure(w.label)
 	}
@@ -189,10 +204,32 @@ func (w *Watcher[T]) WatchLoop(interval time.Duration, stopCh <-chan struct{}) {
 	}
 }
 
-// load is the single-flight read+parse+store. Empty path or missing
-// file → store empty(). SHA-256 dedup avoids re-parsing unchanged
-// files on every WatchLoop tick.
+// load takes loadMu and performs one read+parse+store cycle.
 func (w *Watcher[T]) load() error {
+	w.loadMu.Lock()
+	defer w.loadMu.Unlock()
+	return w.loadLocked()
+}
+
+// loadLocked is the read+parse+store cycle. Caller must hold loadMu:
+// the whole sequence is serialised, not just the lastHash write, so a
+// load that reads an older file generation can never overwrite the
+// snapshot stored by a concurrent load that read a newer one.
+//
+// Empty path or missing file → store empty(). A missing file is NOT
+// an error: for rbac that empty snapshot is what makes a deleted
+// _rbac.yaml fail closed (ADR-027 MED-8, see rbac.failClosedOnEmpty),
+// and for every manager it is how a GitOps `git rm` of the config
+// takes effect. Do not "harden" this into an error — see
+// rbac_extra_test.go TestLoad_DeletedFile.
+//
+// SHA-256 dedup avoids re-parsing unchanged files on every WatchLoop
+// tick. On a parse failure lastHash is left untouched (holding the
+// last GOOD hash), so the next tick re-reads the still-broken file
+// and fails again rather than silently deduping the failure away —
+// which is what lets the reload-failure counter keep climbing while
+// the snapshot stays stale.
+func (w *Watcher[T]) loadLocked() error {
 	if w.path == "" {
 		w.value.Store(w.empty())
 		return nil
@@ -228,7 +265,11 @@ func (w *Watcher[T]) Path() string { return w.path }
 // content (empty string before any successful load). Intended for
 // observability and tests verifying the dedup-on-reload contract;
 // not part of the production hot-path.
-func (w *Watcher[T]) LastHash() string { return w.lastHash }
+func (w *Watcher[T]) LastHash() string {
+	w.loadMu.Lock()
+	defer w.loadMu.Unlock()
+	return w.lastHash
+}
 
 // Override stores cfg as the current snapshot and clears the dedup
 // hash so the next disk-driven load() runs uncached. Intended for
@@ -237,6 +278,8 @@ func (w *Watcher[T]) LastHash() string { return w.lastHash }
 // production code (the next WatchLoop tick or Reload() will
 // overwrite anything Override stored).
 func (w *Watcher[T]) Override(cfg *T) {
+	w.loadMu.Lock()
+	defer w.loadMu.Unlock()
 	w.lastHash = ""
 	w.value.Store(cfg)
 }
