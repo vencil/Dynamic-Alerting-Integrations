@@ -193,11 +193,11 @@ const styles = {
   },
   badgeWarning: {
     backgroundColor: 'var(--da-color-warning-soft)',
-    color: 'var(--da-color-warning)',
+    color: 'var(--da-color-warning-text)',
   },
   badgeError: {
     backgroundColor: 'var(--da-color-error-soft)',
-    color: 'var(--da-color-error)',
+    color: 'var(--da-color-error-text)',
   },
   badgeInfo: {
     backgroundColor: 'var(--da-color-info-soft)',
@@ -242,12 +242,12 @@ const styles = {
   alertWarning: {
     backgroundColor: 'var(--da-color-warning-soft)',
     border: `1px solid var(--da-color-warning)`,
-    color: 'var(--da-color-warning)',
+    color: 'var(--da-color-warning-text)',
   },
   alertError: {
     backgroundColor: 'var(--da-color-error-soft)',
     border: `1px solid var(--da-color-error)`,
-    color: 'var(--da-color-error)',
+    color: 'var(--da-color-error-text)',
   },
   alertInfo: {
     backgroundColor: 'var(--da-color-info-soft)',
@@ -678,7 +678,7 @@ function LivePreview({ receiverType, template }) {
             <span
               style={{
                 marginLeft: 'var(--da-space-2)',
-                color: isOverLimit ? 'var(--da-color-error)' : isNearLimit ? 'var(--da-color-warning)' : 'var(--da-color-success)',
+                color: isOverLimit ? 'var(--da-color-error-text)' : isNearLimit ? 'var(--da-color-warning-text)' : 'var(--da-color-success)',
               }}
             >
               ({charCount}/{limit})

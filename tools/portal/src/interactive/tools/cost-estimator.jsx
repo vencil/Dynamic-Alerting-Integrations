@@ -272,7 +272,7 @@ const styles = {
     color: 'var(--da-color-success)',
   },
   deltaNegative: {
-    color: 'var(--da-color-warning)',
+    color: 'var(--da-color-warning-text)',
   },
   recommendationSection: {
     backgroundColor: 'var(--da-color-bg)',

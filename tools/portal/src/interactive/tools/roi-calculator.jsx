@@ -185,7 +185,7 @@ const styles = {
   metricCardAmber: {
     backgroundColor: 'var(--da-color-warning-soft)',
     borderColor: 'var(--da-color-warning)',
-    color: 'var(--da-color-warning)',
+    color: 'var(--da-color-warning-text)',
   },
   metricCardPurple: {
     backgroundColor: 'var(--da-color-icon-rules-bg)',
