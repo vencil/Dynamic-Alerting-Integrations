@@ -520,6 +520,29 @@ repos:
         files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_confd_schema|docs/schemas/(tenant-config|platform-defaults)\.schema\.json)
         additional_dependencies: ['pyyaml', 'jsonschema']
 
+      # Gemini #1056 disposition 3b: pre-merge structural validation for the
+      # tenant-api ADMIN meta-config files (_rbac / _domain_policy / _tenant_orgs).
+      # _rbac / _tenant_orgs parse STRICTLY (yaml KnownFields), so a typo'd key is a
+      # runtime LOAD ERROR — startup-fatal, or last-good masking on hot-reload.
+      # _domain_policy parses LENIENTLY (policy.go uses plain yaml.Unmarshal), so a
+      # typo'd constraint key is SILENTLY IGNORED and this lint is its ONLY guard.
+      # Either way the failure is invisible until production; this shifts it left so
+      # a broken admin config cannot merge. pass_filenames: true + a stem regex
+      # matches these files ANYWHERE in the repo (try-local seed, examples, future
+      # deployment overlays); the script maps each basename STEM → its docs/schemas/
+      # schema. ⚠️ The `\.ya?ml$` below MUST stay in step with ADMIN_EXTENSIONS in the
+      # script: a file this regex SELECTS but the script does not recognize would be
+      # silently skipped with exit 0 (a fail-open gate). That invariant is pinned by
+      # tests/lint/test_check_admin_config_schema.py::TestGateIntegrity.
+      # jsonschema is REQUIRED (in additional_dependencies). Also wired into ci.yml's
+      # Lint job (pre-commit run admin-config-schema-check).
+      - id: admin-config-schema-check
+        name: admin meta-config (_rbac / _domain_policy / _tenant_orgs) ↔ JSON schemas
+        entry: python3 -X utf8 scripts/tools/lint/check_admin_config_schema.py
+        language: python
+        files: '(^|/)(_rbac|_domain_policy|_tenant_orgs)\.ya?ml$'
+        additional_dependencies: ['pyyaml', 'jsonschema']
+
       # --- v2.4.0 Phase A: 防守工具補強 ---
       - id: build-completeness-check
         name: build.sh ↔ COMMAND_MAP bidirectional sync
