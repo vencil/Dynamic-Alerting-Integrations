@@ -332,6 +332,56 @@ func (w *Writer) Diff(tenantID, proposedContent string) (string, error) {
 // WriteFederationPolicyFile / WriteFederationSubsetFile and their shared
 // writeSpecialFile helper) live in writer_special.go.
 
+// writeFileAtomic replaces filePath with content via a temp file in the
+// same directory plus os.Rename, mirroring federation/token.store.save.
+//
+// Why not os.WriteFile: it truncates in place, so anything reading the
+// file concurrently can observe a half-written, unparseable document.
+// That window is reachable in-process — a config manager's Reload()
+// runs OUTSIDE w.mu, so it can read _groups.yaml while another request
+// holds the lock mid-write — and out-of-process, since the
+// threshold-exporter's Directory Scanner reads conf.d on its own clock.
+// A torn read surfaces as "parse error" and is exactly the mid-flight
+// reload failure the hot-reload managers keep serving last-good for.
+//
+// The temp name must not end in .yaml: conf.d/*.yaml is globbed as the
+// tenant set, and a transiently-visible temp would register as a bogus
+// tenant. It also gets perm explicitly — os.CreateTemp makes 0600 and
+// the exporter reads these files as a different UID.
+//
+// No fsync: the goal here is atomicity against concurrent readers, not
+// crash durability. The commit that immediately follows is what makes
+// the change durable, and git restores the worktree from it.
+//
+// Atomicity of the swap is a POSIX rename(2) guarantee — the runtime is
+// a Linux container. On Windows os.Rename onto a path another handle has
+// open fails with a sharing violation instead; that only affects
+// dev-host tooling, never the deployed service.
+func writeFileAtomic(filePath string, content []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(filePath), filepath.Base(filePath)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	// No-op once the rename succeeds; cleans up on every error path.
+	defer func() { _ = os.Remove(tmpName) }()
+
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, filePath); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+	return nil
+}
+
 // commitFileChange is the shared write+commit+conflict-detect+notify
 // flow used by both Write (tenant YAML) and writeSpecialFile
 // (_groups.yaml / _views.yaml). Caller MUST hold w.mu before calling.
@@ -353,7 +403,7 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 			"commit_tag", commitTag, "error", err)
 	}
 
-	if err := os.WriteFile(filePath, content, 0644); err != nil {
+	if err := writeFileAtomic(filePath, content, 0644); err != nil {
 		return fmt.Errorf("write file: %w", err)
 	}
 
