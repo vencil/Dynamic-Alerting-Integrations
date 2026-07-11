@@ -6,7 +6,10 @@
   (b) hardcoded px 數值在 style object 中（應使用 --da-space-* 或 --da-font-size-* token）
   (c) 飽和語意 error/warning token 當「前景文字色」（--da-color-error/-warning）
       兩種形態：(c1) Tailwind className `text-[color:…]`；(c2) inline style /
-      colors-map 前景鍵（color: / text: / textColor:）直接吃裸 token。
+      colors-map 前景鍵（color: / text: / textColor:）吃裸 token — 含
+      ternary/conditional 值（如 `color: cond ? 'var(--da-color-error)' : …`），
+      值範圍 bound 在該屬性內（遇 `,`/`;`/`}`/換行 即止）以免誤扣鄰屬性；
+      變數間接（`color: c`）屬 #1075 範圍，line-based lint 不涵蓋。
       — 淺色主題對比 3.76:1 / 2.15:1 < AA 4.5:1（WCAG 1.4.3）；應改 AA 版
       `-error-text` / `-warning-text`。#885/#904 的 stroke-as-text 類，codify 防復發。
 
@@ -300,6 +303,26 @@ _SATURATED_TEXT_RE = re.compile(r"text-\[color:var\(--da-color-(error|warning)\)
 # `color: colors.text`. Same WCAG 1.4.3 failure on a light / `-soft` background,
 # same fix (`-text` variant), so it feeds the SAME token_issues stream.
 #
+# TERNARY / CONDITIONAL coverage (the widening — #1074 blind spot). The prior form
+# required a quote IMMEDIATELY after `color:`, so it caught only the literal
+# `color: 'var(--da-color-error)'` and MISSED the token when it sits inside a
+# conditional VALUE, e.g.
+#     color: isOutlier ? 'var(--da-color-error)' : 'var(--da-color-tag-fg)'
+#     color: over ? 'var(--da-color-error)' : near ? 'var(--da-color-warning)' : '…success'
+# The value scan now matches a bare `var(--da-color-(error|warning))` appearing
+# ANYWHERE in the foreground property's value — including any branch of a
+# ternary/conditional. NOTE (out of scope, tracked in #1075): variable / prop
+# INDIRECTION such as `const c = cond ? … ; …; color: c` stays uncaught — this is a
+# deliberately line-based regex lint, NOT an AST analysis.
+#
+# VALUE-BOUNDING (critical false-positive guard, trap 1). The scanned value is
+# bounded to the foreground property itself via the `[^,;}\n]` char class: the scan
+# stops at the first `,` / `;` / `}` / newline that separates one property from the
+# next. So a saturated token on a SIBLING non-foreground property on the SAME line —
+# `{ color: 'var(--da-color-tag-fg)', background: 'var(--da-color-error)' }` — is NOT
+# mis-attributed to `color:` (the `background` token lives past the comma). A ternary
+# value has no top-level comma, so it stays wholly within bounds.
+#
 # Foreground-key ALLOW-LIST (conservative — NOT "any key"): color / text / textColor.
 #   - color     — the canonical CSS/React inline foreground-color property.
 #   - text      — the established colors-map foreground key (TIER_COLORS/GROUP_COLORS),
@@ -310,17 +333,29 @@ _SATURATED_TEXT_RE = re.compile(r"text-\[color:var\(--da-color-(error|warning)\)
 # border / borderColor / stroke, AND `fill`. `fill` is an SVG paint used mostly for
 # decorative shapes / status marks where the vivid hue is intended; line-by-line we
 # cannot tell an SVG <text> fill from a shape fill, so flagging it would false-
-# positive on every status dot / chart mark — it stays out.
+# positive on every status dot / chart mark — it stays out. Key match is case-
+# sensitive and prefixed by `(?<![\w-])`, so the `color`/`text` alternatives cannot
+# begin mid-identifier: `backgroundColor:` / `borderColor:` (capital C) AND the
+# hyphenated CSS forms `background-color:` / `border-color:` / `--brand-color:` (the
+# `color` there is preceded by `-`) all fail to match — bare OR inside a ternary.
 #
-# Anchoring mirrors _SATURATED_TEXT_RE: the trailing `\)` binds the BARE token so
-# `-error-text` / `-error-soft` never match. Requiring a QUOTE right after the `:`
-# means the `text-[color:var(--da-color-error)]` className (which is `color:var`,
-# NO quote) is never re-matched here → no double-flag with (c1). Key match is case-
-# sensitive + word-boundary anchored, so `backgroundColor:` / `borderColor:` (capital
-# C, no boundary) do not match the `color` alternative. error/warning only: info /
-# success already pass AA as text and ship no `-text` variant.
+# Anchoring / no-double-flag guards:
+#   - trailing `\)` binds the BARE token so `-error-text` / `-error-soft` never match;
+#     a MIXED ternary `cond ? 'var(--da-color-error)' : 'var(--da-color-error-text)'`
+#     still flags on its bare true-branch. error/warning only: info / success already
+#     pass AA as text and ship no `-text` variant.
+#   - `(?<!color:)` before `var\(` is the SINGLE no-double-flag guard. It defers to
+#     (c1) any `var(` that is glued directly to `color:` — which is exactly the
+#     `text-[color:var(--da-color-error)]` Tailwind shape, whether it appears as a raw
+#     className OR as a colors-MAP entry whose value is a class STRING
+#     (`text: 'text-[color:var(--da-color-error)]'` / `color: 'text-[…] bg-…'`,
+#     config-lint SEVERITY_COLORS / summary chips). A genuine inline/ternary value's
+#     `var(` is preceded by a quote or space (not `color:`), so it is unaffected.
+#     (A front `(?!var\()` was tried but is fully redundant: `\s*` backtracks the space
+#     into the value scan, so this lookbehind alone already dedups every className form
+#     — mutation-tested, its removal breaks no test.)
 _SATURATED_INLINE_TEXT_RE = re.compile(
-    r"""\b(?:color|text|textColor)\s*:\s*['"`]var\(--da-color-(error|warning)\)['"`]"""
+    r"""(?<![\w-])(?:color|text|textColor)\s*:\s*[^,;}\n]*?(?<!color:)var\(--da-color-(error|warning)\)"""
 )
 
 
@@ -332,18 +367,27 @@ def check_saturated_token_as_text(content: str, filename: str) -> List[Dict]:
 
     (c1) Tailwind className ``text-[color:var(--da-color-error)]`` / ``…-warning)]``.
     (c2) inline style / colors-map foreground literal — a bare
-         ``var(--da-color-(error|warning))`` assigned to a foreground key
-         (``color:`` / ``text:`` / ``textColor:``), e.g.
-         ``color: 'var(--da-color-error)'`` or the ``text:`` entry of a
-         TIER_COLORS/GROUP_COLORS map later applied as ``color: c.text``.
+         ``var(--da-color-(error|warning))`` appearing ANYWHERE in the value of a
+         foreground key (``color:`` / ``text:`` / ``textColor:``), e.g.
+         ``color: 'var(--da-color-error)'``, the ``text:`` entry of a
+         TIER_COLORS/GROUP_COLORS map later applied as ``color: c.text``, OR a
+         ternary/conditional branch such as
+         ``color: isOutlier ? 'var(--da-color-error)' : 'var(--da-color-tag-fg)'``.
+         The value is bounded to the property itself (scan stops at the next
+         ``,``/``;``/``}``/newline) so a saturated token on a SIBLING non-foreground
+         property on the same line is not mis-attributed.
 
     NOT flagged (a saturated hue is correct there): ``border``/``borderColor``,
     ``background``/``backgroundColor``/``bg``, ``stroke``, ``fill`` (SVG paint), the
-    ``-soft`` background and ``-error-text``/``-warning-text`` variants (the fix);
-    and the (c1) className is never double-counted by (c2) (its ``color:var`` has no
-    quote). Honors the same ``/* token-exempt */`` marker and comment-stripping as
-    the other checks; only error/warning are in scope (info/success already pass AA
-    as text and ship no ``-text`` variant).
+    ``-soft`` background and ``-error-text``/``-warning-text`` variants (the fix, even
+    as a ternary branch); and the (c1) className is never double-counted by (c2) —
+    both the raw ``text-[color:var(…)]`` utility and a colors-map value that is itself
+    a class STRING (``text: 'text-[color:var(…)]'``) stay counted once by (c1).
+    Variable/prop indirection (``color: c``) is out of scope (#1075) — this is a
+    line-based regex lint, not an AST analysis. Honors the same
+    ``/* token-exempt */`` marker and comment-stripping as the other checks; only
+    error/warning are in scope (info/success already pass AA as text and ship no
+    ``-text`` variant).
 
     Returns list of {line, token, suggestion, context}.
     """
