@@ -565,6 +565,46 @@ data:
                 failures age out. Pre-merge schema validation of the admin config
                 is the shift-left complement to this runtime signal.
 
+          # --- tenant-api config reload STALE (current-state gauge) ---
+          # Companion to TenantApiConfigReloadFailing above. That one is a RATE
+          # alert (increase()>2) tuned to the WatchLoop tick path; it structurally
+          # CANNOT fire for a single-shot Reload failure — groups / views have no
+          # WatchLoop, so a post-write Reload that fails once leaves the counter at
+          # 1 (below the threshold) yet the config IS stale (memory != disk) until
+          # the next successful reload.
+          #
+          # tenant_api_config_last_reload_successful{component} (0 = last reload
+          # failed, serving stale last-good; 1 = current) closes that gap: it flips
+          # to 0 on ANY reload failure and stays 0 until a load succeeds, so `== 0`
+          # catches the single-shot case AND fires immediately/persistently for a
+          # stuck WatchLoop manager (no 15m-window masking). `for: 2m` debounces a
+          # transient mid-write blip on a WatchLoop manager (flips 0 one tick, back
+          # to 1 the next). The gauge defaults to 1 so a never-reloaded deployment
+          # does not false-alarm. Recovery: WatchLoop managers clear on the next
+          # good tick; a stuck single-shot manager (groups/views) clears on the
+          # next successful write-reload or a pod restart (startup re-reads).
+          - alert: TenantApiConfigReloadStale
+            expr: tenant_api_config_last_reload_successful{job="tenant-api"} == 0
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "tenant-api {{ $labels.component }} config is stale — last reload failed"
+              description: |
+                The tenant-api `{{ $labels.component }}` config manager's LAST
+                reload FAILED, so it is serving the LAST-GOOD snapshot and the
+                on-disk config is NOT in effect (memory diverged from disk). Check
+                the tenant-api WARN log ("config reload failed") for the root cause,
+                which decides the remedy: a `parse ...` error means the on-disk YAML
+                is broken — fix it; a `read ...` (transient I/O) error means the
+                YAML is fine but a re-read failed — re-apply the config (re-PUT) or
+                restart the pod. A WatchLoop-driven manager (rbac / policy /
+                tenantorg / federation-policy) clears on the next good tick, while a
+                single-shot manager (groups / views, no WatchLoop) does NOT
+                self-heal — it clears only on the next successful write or a pod
+                restart. This gauge catches the single-shot failure that
+                TenantApiConfigReloadFailing (a rate alert) cannot.
+
           # --- tenant-api read-HA defer re-trigger (ADR-023 A4 / #678 / #788, CLOSED-deferred) ---
           # CODIFIED re-trigger for a CLOSED-deferred design item. #678 (TRK-325
           # read/write CQRS split) and its RFC duplicate #788 were closed deferred:
