@@ -130,6 +130,45 @@ class TestEmailToCoercion:
 
 
 # ============================================================
+# #1092 0-pre — custom subtree per-tenant delivery (pure Python, no docker)
+# ============================================================
+def test_live_render_custom_route_carries_tenant_children(tmp_path):
+    """live render（--output-configmap 路徑）的 custom isolation route 必須帶
+    per-tenant children、每個 child 指向「已定義」的 tenant receiver（#1092
+    0-pre 顯式契約化）。live conf.d 因 _routing_defaults 繼承，所有租戶必有
+    tenant route → children 非空。"""
+    am = yaml.safe_load(_render_live_alertmanager_yml(tmp_path))
+    routes = am["route"]["routes"]
+    customs = [r for r in routes if 'component="custom"' in r.get("matchers", [])]
+    assert len(customs) == 1
+    custom = customs[0]
+    children = custom.get("routes", [])
+    assert children, "custom isolation route must carry per-tenant children"
+
+    # children mirror the live routing_configs tenant set, sorted, and each
+    # points at its own tenant-<name> receiver
+    routing_configs, _d, _sw, _er, _mc = load_tenant_configs(_CONF_D)
+    expected = sorted(routing_configs.keys())
+    child_tenants = []
+    for child in children:
+        hits = [m for m in (re.match(r'^tenant="(.+)"$', x)
+                            for x in child["matchers"]) if m]
+        assert len(hits) == 1, child
+        tenant = hits[0].group(1)
+        assert child["receiver"] == f"tenant-{tenant}"
+        child_tenants.append(tenant)
+    assert child_tenants == expected
+
+    # route → DEFINED receiver contract (else amtool rejects the raw file)
+    receiver_names = {r["name"] for r in am["receivers"]}
+    assert {c["receiver"] for c in children} <= receiver_names
+
+    # parent fallback + isolation semantics unchanged
+    assert custom["receiver"] == "custom-alerts-firehose"
+    assert custom["continue"] is False
+
+
+# ============================================================
 # amtool check-config — authoritative guard (docker)
 # ============================================================
 def _docker_available():
