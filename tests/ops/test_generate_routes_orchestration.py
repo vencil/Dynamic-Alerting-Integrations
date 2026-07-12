@@ -351,6 +351,131 @@ def _build_inhibit_for_test():
 
 
 # ============================================================
+# #1092 0-pre (ADR-031 hard prerequisite): custom subtree per-tenant delivery
+# ============================================================
+class TestCustomSubtreeTenantDelivery:
+    """The injected Custom Alerts isolation route (index 1) carries per-tenant
+    child routes pointing at the EXISTING tenant-<name> receivers (#1092 0-pre).
+    Tenants without a valid _routing get no child and fall back to the parent
+    custom-alerts-firehose; children carry ONLY matchers + receiver — grouping /
+    timing ride Alertmanager-native inheritance from the parent (restating them
+    would be a second SoT). Fixture tenant names (db-a/db-b) follow this file's
+    existing fixture convention."""
+
+    def _custom_route_of(self, cm_yaml):
+        parsed = yaml.safe_load(cm_yaml)
+        routes = yaml.safe_load(parsed["data"]["alertmanager.yml"])["route"]["routes"]
+        customs = [r for r in routes if 'component="custom"' in r.get("matchers", [])]
+        assert len(customs) == 1
+        return customs[0]
+
+    def test_children_injected_for_main_tenant_routes(self):
+        # unsorted input on purpose — children must come out tenant-sorted
+        routes = [
+            {"matchers": ['tenant="db-b"'], "receiver": "tenant-db-b"},
+            {"matchers": ['tenant="db-a"'], "receiver": "tenant-db-a"},
+        ]
+        receivers = [{"name": "tenant-db-a"}, {"name": "tenant-db-b"}]
+        cm_yaml = assemble_configmap(load_base_config(None), routes, receivers, [])
+        custom = self._custom_route_of(cm_yaml)
+        # parent semantics unchanged: firehose fallback + hard isolation
+        assert custom["receiver"] == "custom-alerts-firehose"
+        assert custom["continue"] is False
+        # children: sorted by tenant, pointing at the existing tenant receivers
+        assert custom["routes"] == [
+            {"matchers": ['tenant="db-a"'], "receiver": "tenant-db-a"},
+            {"matchers": ['tenant="db-b"'], "receiver": "tenant-db-b"},
+        ]
+        # inheritance lock: children must NOT restate grouping/timing knobs
+        for child in custom["routes"]:
+            assert set(child.keys()) == {"matchers", "receiver"}, child
+
+    def test_no_tenants_no_routes_key(self):
+        # REGRESSION-CRITICAL: with no tenants the route must stay the flat
+        # pre-#1092 shape — not even an empty `routes: []` key — because the
+        # committed-base drift guard compares dicts exactly
+        # (test_committed_base_configmap_watchdog_route_is_first).
+        flat = _build_custom_alert_routes()[0][0]
+        assert "routes" not in flat
+        assert _build_custom_alert_routes(None)[0][0] == flat
+        assert _build_custom_alert_routes([])[0][0] == flat
+        # assemble path with zero tenant routes: injected custom route stays flat
+        cm_yaml = assemble_configmap(load_base_config(None), [], [], [])
+        assert "routes" not in self._custom_route_of(cm_yaml)
+
+    def test_enforced_and_override_routes_not_promoted(self):
+        # platform-enforced-<t> and tenant-<t>-override-<idx> routes ALSO carry
+        # a tenant matcher; receiver-name equality must exclude both — promoting
+        # the enforced route would funnel custom alerts into the platform NOC,
+        # the exact leak the isolation subtree exists to prevent.
+        routes = [
+            {"matchers": ['tenant="db-a"'], "receiver": "platform-enforced-db-a",
+             "continue": True},
+            {"matchers": ['tenant="db-a"', 'alertname="SomeAlert"'],
+             "receiver": "tenant-db-a-override-0"},
+        ]
+        cm_yaml = assemble_configmap(load_base_config(None), routes, [], [])
+        assert "routes" not in self._custom_route_of(cm_yaml)
+
+    def test_apply_path_children_and_idempotency(self):
+        existing = {
+            "route": {"receiver": "default", "routes": []},
+            "receivers": [{"name": "default"}],
+            "inhibit_rules": [],
+        }
+        gen_routes = [
+            {"matchers": ['tenant="db-a"'], "receiver": "tenant-db-a"},
+            {"matchers": ['tenant="db-b"'], "receiver": "tenant-db-b"},
+        ]
+        merged = _merge_routes_receivers_inhibits(
+            existing, gen_routes, [{"name": "tenant-db-a"}, {"name": "tenant-db-b"}], [])
+        customs = [r for r in merged["route"]["routes"]
+                   if 'component="custom"' in r.get("matchers", [])]
+        assert len(customs) == 1
+        assert [c["receiver"] for c in customs[0]["routes"]] == \
+            ["tenant-db-a", "tenant-db-b"]
+        # Re-feed the ALREADY-INJECTED route list with tenant db-b removed: the
+        # stale custom route (children db-a+db-b) is dropped whole and rebuilt —
+        # still exactly one custom route, no duplicated children, and the
+        # removed tenant's stale child gone.
+        refeed = [r for r in merged["route"]["routes"]
+                  if r.get("receiver") != "tenant-db-b"]
+        merged2 = _merge_routes_receivers_inhibits(
+            merged, refeed, [{"name": "tenant-db-a"}], [])
+        customs2 = [r for r in merged2["route"]["routes"]
+                    if 'component="custom"' in r.get("matchers", [])]
+        assert len(customs2) == 1
+        assert customs2[0]["routes"] == [
+            {"matchers": ['tenant="db-a"'], "receiver": "tenant-db-a"}]
+
+    def test_disabled_tenant_falls_back_to_firehose(self, tmp_path):
+        # e2e: conf.d → load_tenant_configs → generate_routes → assemble. A
+        # tenant with _routing: "disable" has no main tenant route → no child
+        # (its custom alerts stay on the parent firehose); the routed tenant
+        # keeps its child.
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(
+            yaml.dump({"defaults": {"mysql_connections": 80}}), encoding="utf-8")
+        (d / "db-a.yaml").write_text(
+            make_tenant_yaml("db-a", routing=make_routing_config()), encoding="utf-8")
+        (d / "db-b.yaml").write_text(
+            make_tenant_yaml("db-b", routing="disable"), encoding="utf-8")
+        routing_configs, _dedup, _sw, enforced, _mc = load_tenant_configs(str(d))
+        routes, receivers, _rw = generate_routes(
+            routing_configs, enforced_routing=enforced)
+        cm_yaml = assemble_configmap(load_base_config(None), routes, receivers, [])
+        custom = self._custom_route_of(cm_yaml)
+        assert custom["routes"] == [
+            {"matchers": ['tenant="db-a"'], "receiver": "tenant-db-a"}]
+        # the disabled tenant contributes no child anywhere in the subtree
+        assert not any('tenant="db-b"' in c.get("matchers", [])
+                       for c in custom["routes"])
+        # parent fallback receiver unchanged
+        assert custom["receiver"] == "custom-alerts-firehose"
+
+
+# ============================================================
 # ADR-025 D1 (#838): Watchdog inhibition-immunity invariant
 # ============================================================
 class TestWatchdogInhibitImmunity:

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -34,6 +35,31 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _grar_routes import (  # noqa: E402
     _build_custom_alert_routes, _build_watchdog_route, _build_synthetic_probe_route)
 from _grar_validate import assert_watchdog_inhibit_immunity  # noqa: E402
+
+
+def _main_tenant_route_tenants(routes: list[dict]) -> list[str]:
+    """Extract tenant names that own a MAIN tenant route in *routes*.
+
+    #1092 0-pre: a route qualifies as a main tenant route only when BOTH hold —
+    it carries a matcher that is exactly ``tenant="<t>"`` (literal value, no
+    regex), AND its receiver is the string ``tenant-<t>``. The receiver equality
+    is load-bearing: ``platform-enforced-<t>`` and ``tenant-<t>-override-<idx>``
+    routes ALSO carry a tenant matcher, and promoting either would be wrong —
+    the enforced route would funnel custom alerts into the platform NOC (the
+    exact leak the isolation subtree exists to prevent), and an override route
+    only applies to a specific alertname/metric_group outside this subtree.
+
+    Returns sorted, de-duplicated tenant names.
+    """
+    tenants = set()
+    for route in routes or []:
+        receiver = route.get("receiver")
+        for matcher in route.get("matchers", []) or []:
+            m = re.match(r'^tenant="(.+)"$', matcher)
+            if m and receiver == f"tenant-{m.group(1)}":
+                tenants.add(m.group(1))
+                break
+    return sorted(tenants)
 
 
 def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -51,15 +77,22 @@ def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) ->
     vs component="synthetic-probe"), so none shadows another, but the positions are
     pinned for determinism and audit.
 
+    #1092 0-pre: the custom isolation route is rebuilt with per-tenant child
+    routes derived from the CURRENT main tenant routes (see
+    _main_tenant_route_tenants) — each child points at the existing
+    ``tenant-<name>`` receiver; tenants without a main tenant route get no child
+    and fall back to the parent's ``custom-alerts-firehose``.
+
     Idempotent: any pre-existing Watchdog / component="custom" / component=
-    "synthetic-probe" route is dropped and re-prepended canonically (so re-merging an
-    already-injected config does not duplicate or mis-order), and the name-only
-    placeholder receivers are added only if absent — a richer existing/base
-    definition (e.g. watchdog-heartbeat's url_file) is preserved, never duplicated or
-    clobbered, here.
+    "synthetic-probe" route is dropped and re-prepended canonically (for the
+    custom route this drops the WHOLE tree, stale children included — it is
+    rebuilt from this run's tenant routes, so removed tenants' children vanish
+    and re-merging an already-injected config does not duplicate or mis-order),
+    and the name-only placeholder receivers are added only if absent — a richer
+    existing/base definition (e.g. watchdog-heartbeat's url_file) is preserved,
+    never duplicated or clobbered, here.
     """
     wd_routes, wd_receivers = _build_watchdog_route()
-    cust_routes, cust_receivers = _build_custom_alert_routes()
     probe_routes, probe_receivers = _build_synthetic_probe_route()
 
     def _is_watchdog(r: dict) -> bool:
@@ -73,6 +106,11 @@ def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) ->
 
     rest = [r for r in (routes or [])
             if not _is_watchdog(r) and not _is_custom(r) and not _is_probe(r)]
+    # #1092 0-pre: rebuild the custom route AFTER filtering, from the surviving
+    # main tenant routes — the dropped stale custom route never contributes
+    # children, so the subtree always mirrors this run's tenant set.
+    cust_routes, cust_receivers = _build_custom_alert_routes(
+        _main_tenant_route_tenants(rest))
     # Order is load-bearing + pinned for determinism: Watchdog (0) → Custom (1) →
     # synthetic-probe (2), all ahead of the enforced NOC match-all. The three
     # matchers are mutually exclusive so none shadows another.
