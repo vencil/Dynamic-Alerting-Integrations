@@ -41,6 +41,7 @@ lang: zh
 | `docs/adr/028-federation-revocation-tamper-evidence.md` | Platform Engineers, 安全合規, SREs | ADR-028: Federation 撤銷儲存 tamper-evidence — off-cluster 對帳為主控 |
 | `docs/adr/029-custom-alert-cross-tenant-query-scoping.md` | Platform Engineers, 安全合規, SREs | ADR-029: 租戶自訂告警跨租戶查詢隔離 — 編譯期邊界中和為主、評估期 ruler 隔離延後 |
 | `docs/adr/030-decision-layer-migration-validation.md` | Platform Engineers, contributors | ADR-030: 決策層遷移驗證 — 製造 Oracle 而非觀測 |
+| `docs/adr/031-slo-burn-rate-recipe.md` | Platform Engineers, SREs, domain-experts | ADR-031: slo_burn_rate recipe — 宣告式 SLO 告警編譯 |
 | `docs/alerting-best-practices.md` (.en.md) | SREs, Platform Engineers | Actionable 之後：從告警決策到自動化動作的冪等光譜 |
 | `docs/alerting-design-fundamentals.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | 告警該響之前：從資源飽和到症狀導向的告警設計 |
 | `docs/alerting-slo-error-budget.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | 多嚴才算嚴：用 SLO 與錯誤預算決定告警門檻 |
