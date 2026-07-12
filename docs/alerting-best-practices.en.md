@@ -32,7 +32,7 @@ There is an even harder reason why the action side is required reading: **the de
 
 ## 1. The Decision Side: A Solved Domain
 
-On the question of "which conditions deserve an alert", the industry has reached mature consensus: alert on symptoms, rarely on causes; reserve pages for what is urgent and requires human intelligence, and demote the rest to tickets or records; every page should be actionable. These come from Rob Ewaschuk's [My Philosophy on Alerting](https://docs.google.com/document/d/199PqyG3UsyXlwieHaqbGiWVa8eMWi8zzAn0YfcApr8Q) and [Chapter 6 of the Google SRE Book](https://sre.google/sre-book/monitoring-distributed-systems/), and will not be restated here. (Team hasn't built up these concepts yet? The [first article](./alerting-design-fundamentals.en.md) in this series covers the decision side in introductory language.)
+On the question of "which conditions deserve an alert", the industry has reached mature consensus: alert on symptoms, rarely on causes; reserve pages for what is urgent and requires human intelligence, and demote the rest to tickets or records; every page should be actionable. These come from Rob Ewaschuk's [My Philosophy on Alerting](https://docs.google.com/document/d/199PqyG3UsyXlwieHaqbGiWVa8eMWi8zzAn0YfcApr8Q) and [Chapter 6 of the Google SRE Book](https://sre.google/sre-book/monitoring-distributed-systems/), and will not be restated here. (Team hasn't built up these concepts yet? The [first article](./alerting-design-fundamentals.en.md) in this series covers the decision side in introductory language; for "how strict should thresholds be", see the [second article](./alerting-slo-error-budget.en.md).)
 
 **This document starts where they stop**: the decision side tells you when the alert should fire; the action side asks — is the thing executed after it fires itself a passable engineering object?
 
@@ -118,7 +118,7 @@ flowchart TD
 | Progressive ladder | Going fully automatic too early on actions that have not yet earned trust |
 | Audit trail | Silence — the action went wrong and nobody knows |
 
-These guardrails have a payoff moment that is easy to overlook: **alerting system migration**. During a migration, replays, dual-runs, and re-sends all show up at once — invisible to declarative actions (replay-safe), but pure double-execution risk for imperative ones; the boundary idempotency gate is exactly the lifeline then. In-depth migration validation methodology is beyond this document's scope; see the [migration guide](migration-guide.en.md).
+These guardrails have a payoff moment that is easy to overlook: **alerting system migration**. During a migration, replays, dual-runs, and re-sends all show up at once — invisible to declarative actions (replay-safe), but pure double-execution risk for imperative ones; the boundary idempotency gate is exactly the lifeline then. In-depth migration validation methodology is beyond this document's scope; see the [migration guide](migration-guide.en.md) — and its intellectual foundation is worth one sentence here: **an alert's correctness must be validated by fault-injection experiments; syntax checks are not enough** (for the academic discussion, see [Validating Alerts in Cloud-Native Observability](https://arxiv.org/abs/2510.23970); this platform's migration validation implements exactly this via failure-waveform injection — see [ADR-030](adr/030-decision-layer-migration-validation.md)).
 
 ## 5. Destructive and Irreversible Actions: The Defense Must Move Upstream
 

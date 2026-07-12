@@ -89,7 +89,7 @@ graph LR
 | [遷移指南](migration-guide.md) | DevOps, Tenant | 導入流程、AST 引擎 |
 | [治理與安全](governance-security.md) | 合規、主管 | 三層治理模型、審計 |
 | [基準測試](benchmarks.md) | Platform Engineer | 效能數據與方法論 |
-| 告警最佳實務系列 | SRE, Domain Expert, Tenant | [設計入門](alerting-design-fundamentals.md)（該對什麼告警） · [動作與冪等](alerting-best-practices.md)（響了之後的動作及格嗎） |
+| 告警最佳實務系列 | SRE, Domain Expert, Tenant | [設計入門](alerting-design-fundamentals.md)（該對什麼告警） · [SLO 與錯誤預算](alerting-slo-error-budget.md)（該設多嚴） · [動作與冪等](alerting-best-practices.md)（響了之後的動作及格嗎） |
 | 整合指南 | Platform Engineer | [BYO Prometheus](integration/byo-prometheus-integration.md) · [BYO Alertmanager](integration/byo-alertmanager-integration.md) · [Federation](integration/federation-integration.md) · [GitOps](integration/gitops-deployment.md) · [VCS](vcs-integration-guide.md) |
 | [Rule Packs](rule-packs/README.md) | All | 16 個規則包 + [Alert 速查](rule-packs/ALERT-REFERENCE.md) |
 | [場景指南](scenarios/) | All | 9 個實戰場景 |

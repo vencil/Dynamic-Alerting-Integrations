@@ -32,7 +32,7 @@ lang: zh
 
 ## 1. 決策面：已解的領域
 
-「哪些條件該響告警」這一面，業界已有成熟共識：對症狀（symptom）告警、少對原因（cause）告警；page 留給緊急且需要人類智慧的事，其餘降級為 ticket 或紀錄；每一個 page 都該是 actionable 的。這些出自 Rob Ewaschuk 的 [My Philosophy on Alerting](https://docs.google.com/document/d/199PqyG3UsyXlwieHaqbGiWVa8eMWi8zzAn0YfcApr8Q) 與 [Google SRE Book 第 6 章](https://sre.google/sre-book/monitoring-distributed-systems/)，此處不重述。（團隊還沒建立這些概念？本系列[第一篇](alerting-design-fundamentals.md)用入門語言講決策面。）
+「哪些條件該響告警」這一面，業界已有成熟共識：對症狀（symptom）告警、少對原因（cause）告警；page 留給緊急且需要人類智慧的事，其餘降級為 ticket 或紀錄；每一個 page 都該是 actionable 的。這些出自 Rob Ewaschuk 的 [My Philosophy on Alerting](https://docs.google.com/document/d/199PqyG3UsyXlwieHaqbGiWVa8eMWi8zzAn0YfcApr8Q) 與 [Google SRE Book 第 6 章](https://sre.google/sre-book/monitoring-distributed-systems/)，此處不重述。（團隊還沒建立這些概念？本系列[第一篇](alerting-design-fundamentals.md)用入門語言講決策面；「閾值該設多嚴」見[第二篇](alerting-slo-error-budget.md)。）
 
 **本文從它們停下的地方開始**：決策面告訴你什麼時候該響；動作面問的是——響了之後執行的那件事，本身是不是一個及格的工程物件。
 
@@ -117,7 +117,7 @@ flowchart TD
 | Progressive ladder | 對還沒建立信任的動作過早全自動 |
 | Audit trail | 靜默性——動作錯了沒人知道 |
 
-這些護欄有一個常被忽略的回報時刻：**告警系統遷移**。遷移期間的重放、雙跑、重送會同時出現——對宣告式動作無感（replay-safe），對命令式動作全是 double-execution 風險，邊界冪等閘正是那時的救命索。深入的遷移驗證方法超出本文範圍，見[遷移指南](migration-guide.md)。
+這些護欄有一個常被忽略的回報時刻：**告警系統遷移**。遷移期間的重放、雙跑、重送會同時出現——對宣告式動作無感（replay-safe），對命令式動作全是 double-execution 風險，邊界冪等閘正是那時的救命索。深入的遷移驗證方法超出本文範圍，見[遷移指南](migration-guide.md)；其思想基礎值得記一句——**告警的正確性要靠注入故障的實驗驗證，語法檢查不夠**（學術討論見 [Validating Alerts in Cloud-Native Observability](https://arxiv.org/abs/2510.23970)；本平台的遷移驗證正是以故障波形注入實作這件事，見 [ADR-030](adr/030-decision-layer-migration-validation.md)）。
 
 ## 5. 破壞性／不可逆動作：防線必須前移
 

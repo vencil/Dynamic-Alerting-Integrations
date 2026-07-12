@@ -43,6 +43,7 @@ lang: en
 | `docs/adr/030-decision-layer-migration-validation.md` | Platform Engineers, contributors | ADR-030: 決策層遷移驗證 — 製造 Oracle 而非觀測 |
 | `docs/alerting-best-practices.md` (.en.md) | SREs, Platform Engineers | Beyond Actionable: From Alert Decisions to the Idempotency Spectrum of Automated Actions |
 | `docs/alerting-design-fundamentals.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | Before the Alert Fires: From Resource Saturation to Symptom-Based Alerting |
+| `docs/alerting-slo-error-budget.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | How Strict Is Strict Enough: Setting Alert Thresholds with SLOs and Error Budgets |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/api/tenant-api-hardening.md` (.en.md) | platform-ops, sre, security | Tenant API Hardening (v2.8.0) |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers, SREs, decision-maker | Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper |
