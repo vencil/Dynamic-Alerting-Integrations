@@ -38,6 +38,7 @@ from generate_alertmanager_routes import (
     _build_custom_alert_routes,
     _build_watchdog_route,
     _build_synthetic_probe_route,
+    _build_sentinel_sinkhole_route,
     _parse_config_files,
     write_text_secure,
 )
@@ -164,11 +165,11 @@ class TestAssembleConfigmap:
 
         am_config = yaml.safe_load(parsed["data"]["alertmanager.yml"])
         routes_out = am_config["route"]["routes"]
-        # ADR-025 D1 (#838) + S7/S8 (#741) + ADR-025 synthetic-probe: three platform-
-        # static routes are always injected at the FRONT — Watchdog liveness (0),
-        # Custom Alerts isolation (1), synthetic-probe sinkhole (2) — all
-        # continue:false; the tenant route follows.
-        assert len(routes_out) == 4
+        # ADR-025 D1 (#838) + S7/S8 (#741) + ADR-025 synthetic-probe + #1095: four
+        # platform-static routes are always injected at the FRONT — Watchdog
+        # liveness (0), Custom Alerts isolation (1), synthetic-probe sinkhole (2),
+        # sentinel sinkhole (3) — all continue:false; the tenant route follows.
+        assert len(routes_out) == 5
         assert routes_out[0]["matchers"] == ['alertname="Watchdog"']
         assert routes_out[0]["receiver"] == "watchdog-heartbeat"
         assert routes_out[0]["continue"] is False
@@ -178,14 +179,19 @@ class TestAssembleConfigmap:
         assert routes_out[2]["matchers"] == ['component="synthetic-probe"']
         assert routes_out[2]["receiver"] == "synthetic-receiver"
         assert routes_out[2]["continue"] is False
-        assert routes_out[3]["receiver"] == "tenant-db-a"
-        # Base receiver + tenant receiver + injected firehose + watchdog + synthetic
+        assert routes_out[3]["matchers"] == ['component="sentinel"']
+        assert routes_out[3]["receiver"] == "sentinel-sinkhole"
+        assert routes_out[3]["continue"] is False
+        assert routes_out[4]["receiver"] == "tenant-db-a"
+        # Base receiver + tenant receiver + injected firehose + watchdog +
+        # synthetic + sentinel sink
         names = {r["name"] for r in am_config["receivers"]}
         assert "default" in names
         assert "tenant-db-a" in names
         assert "custom-alerts-firehose" in names
         assert "watchdog-heartbeat" in names
         assert "synthetic-receiver" in names
+        assert "sentinel-sinkhole" in names
 
     def test_custom_namespace_and_name(self):
         base = load_base_config(None)
@@ -212,19 +218,20 @@ class TestAssembleConfigmap:
 # ADR-025 D1 (#838) + S7/S8 (#741): platform-static route injection
 # ============================================================
 class TestCustomAlertIsolationInjection:
-    """The three platform-static routes — Watchdog liveness (index 0), Custom
-    Alerts isolation (index 1), synthetic-probe sinkhole (index 2) — plus their
-    receivers must be present and pinned at the FRONT of the assembled ConfigMap,
-    across BOTH the --output-configmap (assemble_configmap) and --apply
-    (_merge_routes_receivers_inhibits) paths, and survive the route-REPLACE."""
+    """The four platform-static routes — Watchdog liveness (index 0), Custom
+    Alerts isolation (index 1), synthetic-probe sinkhole (index 2), sentinel
+    sinkhole (index 3, #1095) — plus their receivers must be present and pinned
+    at the FRONT of the assembled ConfigMap, across BOTH the --output-configmap
+    (assemble_configmap) and --apply (_merge_routes_receivers_inhibits) paths,
+    and survive the route-REPLACE."""
 
     def _routes_of(self, cm_yaml):
         parsed = yaml.safe_load(cm_yaml)
         return yaml.safe_load(parsed["data"]["alertmanager.yml"])["route"]["routes"]
 
     def test_injected_even_with_no_tenant_routes(self):
-        # empty generated routes (no tenants) → all three static routes still present
-        # and pinned: Watchdog index 0, custom index 1, synthetic-probe index 2.
+        # empty generated routes (no tenants) → all four static routes still present
+        # and pinned: Watchdog 0, custom 1, synthetic-probe 2, sentinel sink 3.
         cm_yaml = assemble_configmap(load_base_config(None), [], [], [])
         routes = self._routes_of(cm_yaml)
         assert routes[0]["matchers"] == ['alertname="Watchdog"']
@@ -236,17 +243,23 @@ class TestCustomAlertIsolationInjection:
         assert routes[2]["matchers"] == ['component="synthetic-probe"']
         assert routes[2]["receiver"] == "synthetic-receiver"
         assert routes[2]["continue"] is False
+        assert routes[3]["matchers"] == ['component="sentinel"']
+        assert routes[3]["receiver"] == "sentinel-sinkhole"
+        assert routes[3]["continue"] is False
 
     def test_idempotent_no_duplicate(self):
-        # if Watchdog / component="custom" / synthetic-probe routes are already
-        # present, do not add a second of any — re-merging an injected config is stable.
+        # if Watchdog / component="custom" / synthetic-probe / component="sentinel"
+        # routes are already present, do not add a second of any — re-merging an
+        # injected config is stable.
         existing = (_build_watchdog_route()[0] + _build_custom_alert_routes()[0]
-                    + _build_synthetic_probe_route()[0])
+                    + _build_synthetic_probe_route()[0]
+                    + _build_sentinel_sinkhole_route()[0])
         cm_yaml = assemble_configmap(load_base_config(None), list(existing), [], [])
         routes = self._routes_of(cm_yaml)
         assert sum(1 for r in routes if 'component="custom"' in r.get("matchers", [])) == 1
         assert sum(1 for r in routes if 'alertname="Watchdog"' in r.get("matchers", [])) == 1
         assert sum(1 for r in routes if 'component="synthetic-probe"' in r.get("matchers", [])) == 1
+        assert sum(1 for r in routes if 'component="sentinel"' in r.get("matchers", [])) == 1
 
     def test_static_routes_forced_to_front_even_when_not_first(self):
         # CodeRabbit gap (generalized to Watchdog): existing Watchdog/custom routes
@@ -257,9 +270,11 @@ class TestCustomAlertIsolationInjection:
         existing_custom = _build_custom_alert_routes()[0][0]
         existing_wd = _build_watchdog_route()[0][0]
         existing_probe = _build_synthetic_probe_route()[0][0]
+        existing_sentinel = _build_sentinel_sinkhole_route()[0][0]
         cm_yaml = assemble_configmap(
             load_base_config(None),
-            [enforced, existing_custom, existing_probe, existing_wd], [], [])
+            [enforced, existing_custom, existing_probe, existing_sentinel,
+             existing_wd], [], [])
         routes = self._routes_of(cm_yaml)
         wd_idx = [i for i, r in enumerate(routes)
                   if 'alertname="Watchdog"' in r.get("matchers", [])]
@@ -267,10 +282,13 @@ class TestCustomAlertIsolationInjection:
                       if 'component="custom"' in r.get("matchers", [])]
         probe_idx = [i for i, r in enumerate(routes)
                      if 'component="synthetic-probe"' in r.get("matchers", [])]
-        assert wd_idx == [0], routes      # Watchdog pinned to index 0
-        assert custom_idx == [1], routes  # custom pinned to index 1
-        assert probe_idx == [2], routes   # synthetic-probe pinned to index 2
-        assert routes[3]["receiver"] == "platform-enforced"
+        sentinel_idx = [i for i, r in enumerate(routes)
+                        if 'component="sentinel"' in r.get("matchers", [])]
+        assert wd_idx == [0], routes        # Watchdog pinned to index 0
+        assert custom_idx == [1], routes    # custom pinned to index 1
+        assert probe_idx == [2], routes     # synthetic-probe pinned to index 2
+        assert sentinel_idx == [3], routes  # sentinel sink pinned to index 3
+        assert routes[4]["receiver"] == "platform-enforced"
 
     def test_apply_path_prepends_and_preserves_silent_inhibit(self):
         # --apply replaces route.routes; Watchdog must lead (index 0), custom
@@ -294,7 +312,8 @@ class TestCustomAlertIsolationInjection:
         assert routes[1]["matchers"] == ['component="custom"']    # custom second
         assert any(r["receiver"] == "tenant-db-a" for r in routes)  # tenant route kept
         assert {r["name"] for r in merged["receivers"]} >= {
-            "default", "custom-alerts-firehose", "watchdog-heartbeat", "tenant-db-a"}
+            "default", "custom-alerts-firehose", "watchdog-heartbeat",
+            "sentinel-sinkhole", "tenant-db-a"}
         # the silent sentinel inhibit (no metric_group) is preserved
         assert any('alertname="CustomRecipeSilent"' in i.get("source_matchers", [])
                    for i in merged["inhibit_rules"])
@@ -608,18 +627,99 @@ class TestWatchdogInhibitImmunity:
         assert len(wd_recv) == 1
         wh = wd_recv[0]["webhook_configs"][0]
         assert "url" not in wh and wh["url_file"].endswith("watchdog-heartbeat-url")
-        # Same drift guard for the other two pinned static routes — custom (index 1)
-        # and synthetic-probe (index 2) — so a hand-edit to the committed base that
-        # forgets the builder (or vice-versa) fails loud here, not silently in prod.
+        # Same drift guard for the other three pinned static routes — custom (index
+        # 1), synthetic-probe (index 2), sentinel sinkhole (index 3, #1095) — so a
+        # hand-edit to the committed base that forgets the builder (or vice-versa)
+        # fails loud here, not silently in prod.
         assert routes[1] == _build_custom_alert_routes()[0][0]
         assert routes[1]["matchers"] == ['component="custom"']
         assert routes[2] == _build_synthetic_probe_route()[0][0]
         assert routes[2]["matchers"] == ['component="synthetic-probe"']
         assert routes[2]["receiver"] == "synthetic-receiver"
         assert routes[2]["continue"] is False
-        # synthetic-receiver must be DEFINED in the committed base (route → defined
-        # receiver; else amtool rejects the raw file).
+        assert routes[3] == _build_sentinel_sinkhole_route()[0][0]
+        assert routes[3]["matchers"] == ['component="sentinel"']
+        assert routes[3]["receiver"] == "sentinel-sinkhole"
+        assert routes[3]["continue"] is False
+        # synthetic-receiver / sentinel-sinkhole must be DEFINED in the committed
+        # base (route → defined receiver; else amtool rejects the raw file).
         assert any(r["name"] == "synthetic-receiver" for r in am["receivers"])
+        assert any(r["name"] == "sentinel-sinkhole" for r in am["receivers"])
+
+
+# ============================================================
+# #1095: sentinel label contract (fail-open guard)
+# ============================================================
+class TestSentinelLabelContract:
+    """Every severity=none alert rule is a sentinel and MUST carry the static
+    component="sentinel" discriminator — without it the sentinel (which carries a
+    tenant label) falls through to the tenant main routes / a matcher-less
+    enforced NOC route and notifies humans with severity=none noise (#1095, the
+    exact latent gap shipped between v1.2.0 and v2.9.x). Watchdog is the single
+    deliberate exception: severity=none but NO component — it rides its own
+    index-0 route, never the sentinel sink. Scans the SOURCE rule packs plus the
+    hand-authored platform rules configmap, so a future sentinel added without
+    the label fails loud here instead of silently regressing."""
+
+    _REPO_ROOT = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    def _iter_alert_rules(self):
+        packs_dir = os.path.join(self._REPO_ROOT, "rule-packs")
+        for fname in sorted(os.listdir(packs_dir)):
+            if not fname.endswith(".yaml"):
+                continue
+            with open(os.path.join(packs_dir, fname), encoding="utf-8") as f:
+                doc = yaml.safe_load(f.read())
+            for group in (doc or {}).get("groups", []):
+                for rule in group.get("rules", []):
+                    if "alert" in rule:
+                        yield fname, rule
+        # hand-authored platform rules (Watchdog lives here, outside rule-packs/)
+        cm_path = os.path.join(
+            self._REPO_ROOT, "k8s", "03-monitoring",
+            "configmap-rules-platform.yaml")
+        with open(cm_path, encoding="utf-8") as f:
+            cm = yaml.safe_load(f.read())
+        for fname, body in cm["data"].items():
+            doc = yaml.safe_load(body)
+            for group in (doc or {}).get("groups", []):
+                for rule in group.get("rules", []):
+                    if "alert" in rule:
+                        yield f"configmap-rules-platform.yaml:{fname}", rule
+
+    def test_severity_none_alerts_carry_sentinel_component(self):
+        seen = []
+        for where, rule in self._iter_alert_rules():
+            labels = rule.get("labels") or {}
+            if labels.get("severity") != "none":
+                continue
+            if rule["alert"] == "Watchdog":
+                assert "component" not in labels, (
+                    "Watchdog must NOT carry a component label — it rides its "
+                    "own index-0 route, not the sentinel sink (#1095)")
+                continue
+            seen.append(rule["alert"])
+            assert labels.get("component") == "sentinel", (
+                f"{where}: severity=none alert {rule['alert']!r} is missing "
+                f'component="sentinel" — it would fall through to tenant/NOC '
+                f"notification channels (#1095)")
+        # non-vacuous: the four known sentinels must actually have been scanned
+        assert set(seen) >= {
+            "TenantSilentWarning", "TenantSilentCritical",
+            "TenantSeverityDedupEnabled", "CustomRecipeSilent"}, seen
+
+    def test_component_sentinel_reserved_for_severity_none(self):
+        # The discriminator is RESERVED: a deliverable (severity != none) alert
+        # must never ride component="sentinel" or the sinkhole would eat it.
+        for where, rule in self._iter_alert_rules():
+            labels = rule.get("labels") or {}
+            if labels.get("component") == "sentinel":
+                assert labels.get("severity") == "none", (
+                    f"{where}: alert {rule['alert']!r} carries "
+                    f'component="sentinel" but severity='
+                    f"{labels.get('severity')!r} — the sentinel sink would "
+                    f"swallow a deliverable alert (#1095)")
 
 
 # ============================================================

@@ -93,12 +93,22 @@ def _silent_sentinel() -> dict:
     ADR-003 Sentinel+Inhibit silent paradigm (mirrors TenantSilentWarning/
     Critical) instead of an Alertmanager route-to-null receiver — more
     observable in the AM UI and consistent with the tenant-level tri-state.
+
+    Like every platform sentinel it carries the static component="sentinel"
+    routing discriminator (#1095): the sentinel is an inhibit source + AM-UI/
+    dashboard surface, NOT a notification, and it still carries a `tenant`
+    label — without the discriminator it would fall through to the tenant main
+    route (and a matcher-less enforced NOC route) and notify humans. The
+    platform-static sentinel-sinkhole route (continue:false, ahead of enforced/
+    tenant routes) swallows it; inhibition is unaffected (Alertmanager matches
+    inhibit sources against all active alerts regardless of routing).
     """
     return {
         "alert": "CustomRecipeSilent",
         "expr": 'max by(tenant, name) (user_threshold{component="custom", mode="silent"})',
         "labels": {
             "severity": "none",
+            "component": "sentinel",
             "tenant": "{{ $labels.tenant }}",
             "name": "{{ $labels.name }}",
         },

@@ -36,6 +36,14 @@
 #   - source: TenantSilentWarning         → target: severity="warning"
 #   - source: TenantSilentCritical        → target: severity="critical"
 #   - source: TenantSeverityDedupEnabled  → target: severity="warning" (同 metric_group)
+#
+# === Sentinel Routing (#1095) ===
+# Sentinel 是 inhibit source + AM UI/Grafana 狀態面，不是通知。但它帶 tenant
+# label，若無區分標籤會落入 tenant 主 route / matcher-less enforced NOC route
+# 而投遞給人。故 sentinel 一律帶靜態 component="sentinel"，由 Alertmanager 的
+# platform-static sentinel-sinkhole route（continue:false，在 enforced/tenant
+# route 之前）接走；inhibit 語意不受影響（inhibit source 比對所有 active
+# alerts，與路由無關）。新增 sentinel 時必帶此 label（guard 測試釘死）。
 # ============================================================
 groups:
   - name: operational-mode-sentinel
@@ -46,6 +54,7 @@ groups:
         expr: user_silent_mode{target_severity="warning"} == 1
         labels:
           severity: none
+          component: sentinel
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Silent mode (warning) active for {{ $labels.tenant }}"
@@ -59,6 +68,7 @@ groups:
         expr: user_silent_mode{target_severity="critical"} == 1
         labels:
           severity: none
+          component: sentinel
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Silent mode (critical) active for {{ $labels.tenant }}"
@@ -74,6 +84,7 @@ groups:
         expr: user_severity_dedup{mode="enable"} == 1
         labels:
           severity: none
+          component: sentinel
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Severity dedup enabled for {{ $labels.tenant }}"

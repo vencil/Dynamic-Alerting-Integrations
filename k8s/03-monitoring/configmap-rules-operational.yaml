@@ -15,29 +15,30 @@ metadata:
 data:
   operational-alert.yml: "groups:\n- name: operational-mode-sentinel\n  rules:\n \
     \ - alert: TenantSilentWarning\n    expr: user_silent_mode{target_severity=\"\
-    warning\"} == 1\n    labels:\n      severity: none\n      tenant: '{{ $labels.tenant\
-    \ }}'\n    annotations:\n      summary: Silent mode (warning) active for {{ $labels.tenant\
-    \ }}\n      summary_zh: '{{ $labels.tenant }} 的靜默模式（警告級別）已啟用'\n      description:\
-    \ Warning alerts for tenant {{ $labels.tenant }} will be recorded in TSDB but\
-    \ notifications suppressed.\n      description_zh: '{{ $labels.tenant }} 的警告等級告警將被記錄到\
-    \ TSDB 但通知會被抑制。'\n  - alert: TenantSilentCritical\n    expr: user_silent_mode{target_severity=\"\
-    critical\"} == 1\n    labels:\n      severity: none\n      tenant: '{{ $labels.tenant\
+    warning\"} == 1\n    labels:\n      severity: none\n      component: sentinel\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: Silent\
+    \ mode (warning) active for {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 的靜默模式（警告級別）已啟用'\n      description: Warning alerts for tenant {{ $labels.tenant\
+    \ }} will be recorded in TSDB but notifications suppressed.\n      description_zh:\
+    \ '{{ $labels.tenant }} 的警告等級告警將被記錄到 TSDB 但通知會被抑制。'\n  - alert: TenantSilentCritical\n\
+    \    expr: user_silent_mode{target_severity=\"critical\"} == 1\n    labels:\n\
+    \      severity: none\n      component: sentinel\n      tenant: '{{ $labels.tenant\
     \ }}'\n    annotations:\n      summary: Silent mode (critical) active for {{ $labels.tenant\
     \ }}\n      summary_zh: '{{ $labels.tenant }} 的靜默模式（嚴重級別）已啟用'\n      description:\
     \ Critical alerts for tenant {{ $labels.tenant }} will be recorded in TSDB but\
     \ notifications suppressed.\n      description_zh: '{{ $labels.tenant }} 的嚴重等級告警將被記錄到\
     \ TSDB 但通知會被抑制。'\n  - alert: TenantSeverityDedupEnabled\n    expr: user_severity_dedup{mode=\"\
-    enable\"} == 1\n    labels:\n      severity: none\n      tenant: '{{ $labels.tenant\
-    \ }}'\n    annotations:\n      summary: Severity dedup enabled for {{ $labels.tenant\
-    \ }}\n      summary_zh: '{{ $labels.tenant }} 已啟用嚴重等級去重'\n      description: Warning\
-    \ notifications for {{ $labels.tenant }} will be suppressed when critical fires\
-    \ for the same metric_group.\n      description_zh: 當相同指標群組的嚴重等級告警觸發時，{{ $labels.tenant\
-    \ }} 的警告通知會被抑制。\n  - alert: TenantConfigEvent\n    expr: da_config_event == 1\n\
-    \    for: 0s\n    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant\
-    \ }}'\n    annotations:\n      summary: 'Config expired for {{ $labels.tenant\
-    \ }}: {{ $labels.event }}'\n      summary_zh: '{{ $labels.tenant }} 的組態已過期：{{\
-    \ $labels.event }}'\n      description: 'Timed config for tenant {{ $labels.tenant\
-    \ }} has expired and auto-deactivated. Event: {{ $labels.event }}. Reason: {{\
-    \ $labels.reason }}. Please update or remove the expired config entry.'\n    \
-    \  description_zh: '{{ $labels.tenant }} 的定時組態已過期並自動停用。事件：{{ $labels.event }}。原因：{{\
-    \ $labels.reason }}。請更新或移除過期的組態項目。'\n"
+    enable\"} == 1\n    labels:\n      severity: none\n      component: sentinel\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: Severity\
+    \ dedup enabled for {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 已啟用嚴重等級去重'\n      description: Warning notifications for {{ $labels.tenant\
+    \ }} will be suppressed when critical fires for the same metric_group.\n     \
+    \ description_zh: 當相同指標群組的嚴重等級告警觸發時，{{ $labels.tenant }} 的警告通知會被抑制。\n  - alert:\
+    \ TenantConfigEvent\n    expr: da_config_event == 1\n    for: 0s\n    labels:\n\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      summary: 'Config expired for {{ $labels.tenant }}: {{ $labels.event }}'\n\
+    \      summary_zh: '{{ $labels.tenant }} 的組態已過期：{{ $labels.event }}'\n      description:\
+    \ 'Timed config for tenant {{ $labels.tenant }} has expired and auto-deactivated.\
+    \ Event: {{ $labels.event }}. Reason: {{ $labels.reason }}. Please update or remove\
+    \ the expired config entry.'\n      description_zh: '{{ $labels.tenant }} 的定時組態已過期並自動停用。事件：{{\
+    \ $labels.event }}。原因：{{ $labels.reason }}。請更新或移除過期的組態項目。'\n"

@@ -123,9 +123,12 @@ def test_s7s8_component_label_and_silent_sentinel(tmp_path):
     assert s["labels"]["severity"] == "none"
     assert '{component="custom", mode="silent"}' in s["expr"]
     assert "by(tenant, name)" in s["expr"]
-    # the sentinel does NOT carry component="custom" → it routes like other platform
-    # sentinels (to the default/log receiver), not into the custom firehose subtree.
-    assert "component" not in s["labels"]
+    # the sentinel carries component="sentinel" (NOT "custom"): it stays OUT of the
+    # custom firehose subtree, and the static discriminator routes it into the
+    # platform sentinel-sinkhole — never the tenant/NOC notification channels. It
+    # carries a tenant label, so without the discriminator it would fall through to
+    # the tenant main route and notify humans with severity=none noise (#1095).
+    assert s["labels"]["component"] == "sentinel"
 
 
 def test_same_name_different_metric_two_rules(tmp_path):

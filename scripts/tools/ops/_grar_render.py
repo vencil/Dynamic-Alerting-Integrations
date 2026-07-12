@@ -33,7 +33,8 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 
 from _grar_routes import (  # noqa: E402
-    _build_custom_alert_routes, _build_watchdog_route, _build_synthetic_probe_route)
+    _build_custom_alert_routes, _build_watchdog_route, _build_synthetic_probe_route,
+    _build_sentinel_sinkhole_route)
 from _grar_validate import assert_watchdog_inhibit_immunity  # noqa: E402
 
 
@@ -63,19 +64,20 @@ def _main_tenant_route_tenants(routes: list[dict]) -> list[str]:
 
 
 def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Prepend the three platform-static top-of-tree routes — the Watchdog liveness
+    """Prepend the four platform-static top-of-tree routes — the Watchdog liveness
     route (index 0, ADR-025 D1 / #838), the Custom Alerts isolation route (index 1,
-    #741 S7/S8), then the synthetic-probe sinkhole route (index 2, ADR-025 interop) —
-    plus their receivers, so the final ConfigMap always pins them AHEAD of the
-    enforced NOC route and they survive the route-REPLACE that --apply performs on
-    route.routes.
+    #741 S7/S8), the synthetic-probe sinkhole route (index 2, ADR-025 interop), then
+    the sentinel sinkhole route (index 3, #1095) — plus their receivers, so the
+    final ConfigMap always pins them AHEAD of the enforced NOC route and they
+    survive the route-REPLACE that --apply performs on route.routes.
 
     Order is load-bearing. Watchdog MUST be index 0 (highest priority) so its
     heartbeat can never be intercepted by a broader earlier route; the custom
-    isolation route follows at index 1, the synthetic-probe sink at index 2. The
-    three matchers are mutually exclusive (alertname="Watchdog" vs component="custom"
-    vs component="synthetic-probe"), so none shadows another, but the positions are
-    pinned for determinism and audit.
+    isolation route follows at index 1, the synthetic-probe sink at index 2, the
+    sentinel sink at index 3. The four matchers are mutually exclusive
+    (alertname="Watchdog" vs component="custom" vs component="synthetic-probe" vs
+    component="sentinel"), so none shadows another, but the positions are pinned
+    for determinism and audit.
 
     #1092 0-pre: the custom isolation route is rebuilt with per-tenant child
     routes derived from the CURRENT main tenant routes (see
@@ -84,16 +86,17 @@ def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) ->
     and fall back to the parent's ``custom-alerts-firehose``.
 
     Idempotent: any pre-existing Watchdog / component="custom" / component=
-    "synthetic-probe" route is dropped and re-prepended canonically (for the
-    custom route this drops the WHOLE tree, stale children included — it is
-    rebuilt from this run's tenant routes, so removed tenants' children vanish
-    and re-merging an already-injected config does not duplicate or mis-order),
-    and the name-only placeholder receivers are added only if absent — a richer
-    existing/base definition (e.g. watchdog-heartbeat's url_file) is preserved,
-    never duplicated or clobbered, here.
+    "synthetic-probe" / component="sentinel" route is dropped and re-prepended
+    canonically (for the custom route this drops the WHOLE tree, stale children
+    included — it is rebuilt from this run's tenant routes, so removed tenants'
+    children vanish and re-merging an already-injected config does not duplicate
+    or mis-order), and the name-only placeholder receivers are added only if
+    absent — a richer existing/base definition (e.g. watchdog-heartbeat's
+    url_file) is preserved, never duplicated or clobbered, here.
     """
     wd_routes, wd_receivers = _build_watchdog_route()
     probe_routes, probe_receivers = _build_synthetic_probe_route()
+    sent_routes, sent_receivers = _build_sentinel_sinkhole_route()
 
     def _is_watchdog(r: dict) -> bool:
         return 'alertname="Watchdog"' in r.get("matchers", [])
@@ -104,20 +107,25 @@ def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) ->
     def _is_probe(r: dict) -> bool:
         return 'component="synthetic-probe"' in r.get("matchers", [])
 
+    def _is_sentinel_sink(r: dict) -> bool:
+        return 'component="sentinel"' in r.get("matchers", [])
+
     rest = [r for r in (routes or [])
-            if not _is_watchdog(r) and not _is_custom(r) and not _is_probe(r)]
+            if not _is_watchdog(r) and not _is_custom(r) and not _is_probe(r)
+            and not _is_sentinel_sink(r)]
     # #1092 0-pre: rebuild the custom route AFTER filtering, from the surviving
     # main tenant routes — the dropped stale custom route never contributes
     # children, so the subtree always mirrors this run's tenant set.
     cust_routes, cust_receivers = _build_custom_alert_routes(
         _main_tenant_route_tenants(rest))
     # Order is load-bearing + pinned for determinism: Watchdog (0) → Custom (1) →
-    # synthetic-probe (2), all ahead of the enforced NOC match-all. The three
-    # matchers are mutually exclusive so none shadows another.
-    out_routes = wd_routes + cust_routes + probe_routes + rest
+    # synthetic-probe (2) → sentinel sink (3), all ahead of the enforced NOC
+    # match-all. The four matchers are mutually exclusive so none shadows another.
+    out_routes = wd_routes + cust_routes + probe_routes + sent_routes + rest
 
     have = {r["name"] for r in (receivers or [])}
-    add_recv = [r for r in (wd_receivers + cust_receivers + probe_receivers)
+    add_recv = [r for r in (wd_receivers + cust_receivers + probe_receivers
+                            + sent_receivers)
                 if r["name"] not in have]
     out_receivers = list(receivers or []) + add_recv
     return out_routes, out_receivers
@@ -304,8 +312,9 @@ def _merge_routes_receivers_inhibits(existing: dict, routes: list[dict],
     if receivers:
         # Generated tenant receivers REPLACE the existing same-named ones (they
         # are regenerated from conf.d each run). BUT the injected platform-static
-        # placeholders (custom-alerts-firehose / watchdog-heartbeat are emitted
-        # NAME-ONLY) must NOT clobber a richer base definition — most critically
+        # placeholders (custom-alerts-firehose / watchdog-heartbeat / synthetic-
+        # receiver / sentinel-sinkhole are emitted NAME-ONLY) must NOT clobber a
+        # richer base definition — most critically
         # watchdog-heartbeat's webhook_configs[].url_file, which lives only in the
         # base ConfigMap. For a name-only placeholder, defer to the existing
         # definition if one is present; otherwise add the placeholder so the route

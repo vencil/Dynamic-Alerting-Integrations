@@ -82,6 +82,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: none
+              component: sentinel
               tenant: db-b
               name: mariadb_slow_query_rate
             exp_annotations:

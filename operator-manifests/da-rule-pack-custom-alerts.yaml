@@ -62,6 +62,7 @@ spec:
       expr: max by(tenant, name) (user_threshold{component="custom", mode="silent"})
       labels:
         severity: none
+        component: sentinel
         tenant: '{{ $labels.tenant }}'
         name: '{{ $labels.name }}'
       annotations:

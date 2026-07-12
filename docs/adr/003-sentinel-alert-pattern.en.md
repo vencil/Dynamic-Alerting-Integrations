@@ -90,6 +90,7 @@ exporter (tenant_silent_mode)
 - Periodically verify that sentinel rules sync with actual state transitions
 - Alertmanager logs should record inhibit actions for auditing purposes
 - Documentation should clearly specify state priority (e.g., Silent takes precedence over Maintenance)
+- Every sentinel carries the static `component="sentinel"` label and is swallowed by the platform-static sentinel-sinkhole route ahead of the tenant/NOC notification channels — a sentinel is an inhibit source + AM UI/Grafana state surface, **not a notification**; a guard test pins this contract, so a new sentinel without the label fails loud ([#1095](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1095))
 
 ## Alternative Approaches Considered
 
