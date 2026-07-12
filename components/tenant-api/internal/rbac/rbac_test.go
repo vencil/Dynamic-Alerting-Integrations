@@ -17,6 +17,16 @@ func TestTenantMatches(t *testing.T) {
 		{"prefix no match", []string{"db-a-*"}, "db-b-prod", false},
 		{"multiple patterns", []string{"db-a-*", "db-b-*"}, "db-b-staging", true},
 		{"empty patterns", []string{}, "db-a", false},
+		// Malformed patterns must never match (fail-closed backstop for a rule
+		// that bypassed validateConfig). "**" is the fail-open case: it collapses
+		// to prefix "*" and MUST NOT pass a platform-scope "*" gate query while
+		// granting zero per-tenant access. "*a*"/"a**" are dead-rule cases.
+		{"double-star vs platform gate does not fail open", []string{"**"}, "*", false},
+		{"double-star vs real tenant does not match", []string{"**"}, "db-a", false},
+		{"embedded-star vs platform gate does not fail open", []string{"*a*"}, "*", false},
+		{"embedded-star vs real tenant does not match", []string{"*a*"}, "db-a", false},
+		{"trailing-double-star vs platform gate does not fail open", []string{"a**"}, "*", false},
+		{"trailing-double-star vs real tenant does not match", []string{"a**"}, "db-a", false},
 	}
 
 	for _, tt := range tests {
