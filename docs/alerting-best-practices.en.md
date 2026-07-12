@@ -118,7 +118,7 @@ flowchart TD
 | Progressive ladder | Going fully automatic too early on actions that have not yet earned trust |
 | Audit trail | Silence — the action went wrong and nobody knows |
 
-These guardrails have a payoff moment that is easy to overlook: **alerting system migration**. During a migration, replays, dual-runs, and re-sends all show up at once — invisible to declarative actions (replay-safe), but pure double-execution risk for imperative ones; the boundary idempotency gate is exactly the lifeline then. In-depth migration validation methodology is beyond this document's scope; see the [migration guide](migration-guide.en.md).
+These guardrails have a payoff moment that is easy to overlook: **alerting system migration**. During a migration, replays, dual-runs, and re-sends all show up at once — invisible to declarative actions (replay-safe), but pure double-execution risk for imperative ones; the boundary idempotency gate is exactly the lifeline then. In-depth migration validation methodology is beyond this document's scope; see the [migration guide](migration-guide.en.md) — and its intellectual foundation is worth one sentence here: **an alert's correctness must be validated by fault-injection experiments; syntax checks are not enough** (for the academic discussion, see [Validating Alerts in Cloud-Native Observability](https://arxiv.org/abs/2510.23970); this platform's migration validation implements exactly this via failure-waveform injection — see [ADR-030](adr/030-decision-layer-migration-validation.md)).
 
 ## 5. Destructive and Irreversible Actions: The Defense Must Move Upstream
 

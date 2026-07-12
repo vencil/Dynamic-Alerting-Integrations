@@ -52,6 +52,8 @@ An SLO (Service Level Objective) is your public commitment on an SLI: "Over the 
 
 Window choice: a **rolling 28 or 30 days** is the common starting point (28 days aligns with whole weeks, avoiding the "this month had more weekends" skew). Remember this window — every number below is anchored to it.
 
+One final honest boundary: **the more extreme the target, the less alerting can help you**. With a 99.999% SLO, a single total outage of 26 seconds burns the entire month's budget — faster than an alert can even propagate. Reliability at that level comes from deployment design that prevents total outages (canaries, progressive rollouts), not from alert-driven reaction.
+
 ## 3. Error Budget: Turning "How Much Failure Is Allowed" into a Currency
 
 > **Error budget = (1 − SLO) × window**
@@ -66,9 +68,15 @@ One honest boundary: **what happens once the budget is exhausted (freeze release
 
 Most SLO tutorials cover the first three sections; most of them **stop at the dashboard**. But you are still missing one last thing: **the alert rules**. This last mile has a standard answer, and it is worth walking through in full.
 
-### 4.1 The Dilemma of the Naive Approach
+### 4.1 Three Dead Ends
 
-"Alert when error rate > (1 − SLO)" looks reasonable but fails in both directions: too **sensitive** — with a 0.1% threshold, a single network blip fires it, and alert fatigue is back; too **sluggish** — if you flip it to "alert only once the SLO is already violated", you learn about it after the budget is gone, when nothing can be done.
+Try any of the naive approaches and you will find its fatal flaw:
+
+1. **A raw error-rate threshold** ("alert when error rate > (1 − SLO)"): too **sensitive** — with a 0.1% threshold, a single network blip fires it, and alert fatigue is back.
+2. **Lengthening the window**: fewer false positives, yes — but detection and recovery both go numb: the incident is long over and the alert is still hanging; the extreme version, "alert only once the SLO is already violated", means you learn about it after the budget is gone, when nothing can be done.
+3. **Adding a `for:` duration condition**: it requires the error state to be **continuously** true before firing — the moment errors oscillate, the timer resets, and a real incident may never fill a contiguous window. This is not purely theoretical: probe it with fault-injection experiments and the behavior of `for:`-style alerts turns out to be highly sensitive to the failure waveform, and hard to predict.
+
+Remember the failure mechanism of the third dead end — it and the advantage of the two-window design below are **two sides of the same coin**.
 
 ### 4.2 Burn Rate: Measure "How Fast It Burns", Not "Whether It Burned"
 
@@ -85,9 +93,9 @@ burn rate = 1 means burning the budget at exactly the planned pace — with a 30
 
 Three details that are easy to trip on:
 
-1. **Two windows ANDed, not one window.** With only the long window (1h), the alert keeps firing long after the incident ends (a long-window average comes down slowly); pair it with a short window (5m) ANDed in — the moment the short window goes quiet, the alert resets. This is the key to burn-rate alerts being "non-sticky".
+1. **Two windows ANDed, not one window.** With only the long window (1h), the alert keeps firing long after the incident ends (a long-window average comes down slowly); pair it with a short window (5m) ANDed in — the moment the short window goes quiet, the alert resets. This is the key to burn-rate alerts being "non-sticky". Contrast with the third dead end in §4.1: `for:` demands "**continuously** true" — so oscillation resets it and real incidents slip through; the short window demands "true **on recent average**" — robust to gaps, yet resetting the instant recovery is real. Two sides of the same coin.
 2. **The multiplier is bound to the budget window.** The derivation above is anchored to a 30-day (720h) window; change the window to 28 days and the same "2% in 1 hour" multiplier becomes 13.44. When copying formulas, remember: **the multiplier is a derived value, not a magic constant**.
-3. **Low traffic will lie to you.** Only 2 requests in 5 minutes with 1 failure = a 50% error rate = instant fast burn. Add an **absolute error-count floor** to the alert (e.g. "counts only if bad events in the short window ≥ N"); the value of N is itself an extension of the SLO negotiation — "how many errors do you tolerate at low traffic". For extremely low-traffic services, consider lengthening the windows or accepting lower detection confidence — this is a well-known hard problem across the industry; do not pretend it does not exist.
+3. **Low traffic will lie to you.** Only 2 requests in 5 minutes with 1 failure = a 50% error rate = instant fast burn. Add an **absolute error-count floor** to the alert (e.g. "counts only if bad events in the short window ≥ N"); the value of N is itself an extension of the SLO negotiation — "how many errors do you tolerate at low traffic". For extremely low-traffic services there are a few more routes: pad the denominator with synthetic traffic (e.g. existing blackbox probes), aggregate several related small services into a single SLI, or honestly lengthen the windows / accept lower detection confidence — this is a well-known hard problem across the industry; do not pretend it does not exist.
 
 ### 4.3 The Generic Shape (Tool-Agnostic Pseudo-PromQL)
 
@@ -105,6 +113,8 @@ and sum(increase(bad_events[5m])) > N_min
 
 Slow-burn has the same shape (6h/30m windows, 6× multiplier, ticket-level severity). Remember to guard the denominator against division by zero (a window with no traffic should not spray alerts). The above is an **illustrative form** — the real thing is the `record:`/`expr:` pair of fields in recording rule YAML, named according to your team's recording-rule conventions.
 
+A reminder for scale: if you run dozens of services, **do not tune parameters per service** — sort the services into a small number of tier buckets (for example five: critical / high-fast / high-slow / low / no-SLO), share one set of windows and multipliers within each bucket, and let each service set only its own objective. Parameter customization is cognitive debt; bucketing is how you pay it off.
+
 ### 4.4 How This Connects to the Previous Two Articles
 
 - Burn-rate alerting is the completed form of the first article's "symptom-oriented" alerting: the SLI itself is the quantification of a symptom, and the page condition is anchored directly to the speed at which users are being hurt.
@@ -119,6 +129,7 @@ This document is generic guidance; the platform-side mapping reuses the series' 
 |---|---|---|
 | SLI ratio declaration (zero PromQL for tenants) | ⚙️ | The `ratio` recipe in custom alerts — declare the numerator/denominator counters and it compiles into a ratio alert with a division-by-zero guard; **single window only** |
 | Multi-window burn-rate alerting | 📖 | The generic recipe in §4 of this document; multi-window AND and multiplier conversion currently must be assembled downstream yourself |
+| Threshold science (data-driven starting points) | ⚙️ | [`da-tools threshold-recommend`](cli-reference.en.md#threshold-recommend) — recommendation engine based on historical P50/P95/P99; works on resource-class pack thresholds — the starting point for an SLO objective still comes from querying your historical SLI (§2) |
 | Historical SLI performance queries (the scientific starting point for SLOs) | 📖 | Any Prometheus-compatible backend's range query will do; the platform does nothing special here |
 | Error-budget policy (freeze/release) | 📖 | An organizational decision — a tool can give you the balance, not the authority |
 

@@ -128,5 +128,6 @@ Take your existing alert list and ask, item by item:
 4. Do the alerts for **batch / scheduled worker machines** ask about "resources", or about "finished within the deadline"? Switch to the latter.
 5. Is any **automated action hanging off a saturation signal**? If so → detach it first, read the third article in this series, then decide the conditions for putting it back.
 6. Are signal semantics **defined by domain experts**, or guessed independently by each team?
+7. This checklist is not a one-off: **run it as a monthly routine** — any alert ignored more than twice in 30 days gets downgraded or deleted. The alert list is a living thing; and doing this requires no hunt for "who set this up in the first place" — a noisy alert is a defect in the system's design, not a question of some engineer's competence.
 
 Next step: once you are alerting on the right things, the next question is "how severe, and when to wake someone up" — that is the subject of SLOs and error budgets — see the second article in this series, [How Strict Is Strict Enough](alerting-slo-error-budget.en.md).

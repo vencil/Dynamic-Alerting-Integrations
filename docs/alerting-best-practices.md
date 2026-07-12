@@ -117,7 +117,7 @@ flowchart TD
 | Progressive ladder | 對還沒建立信任的動作過早全自動 |
 | Audit trail | 靜默性——動作錯了沒人知道 |
 
-這些護欄有一個常被忽略的回報時刻：**告警系統遷移**。遷移期間的重放、雙跑、重送會同時出現——對宣告式動作無感（replay-safe），對命令式動作全是 double-execution 風險，邊界冪等閘正是那時的救命索。深入的遷移驗證方法超出本文範圍，見[遷移指南](migration-guide.md)。
+這些護欄有一個常被忽略的回報時刻：**告警系統遷移**。遷移期間的重放、雙跑、重送會同時出現——對宣告式動作無感（replay-safe），對命令式動作全是 double-execution 風險，邊界冪等閘正是那時的救命索。深入的遷移驗證方法超出本文範圍，見[遷移指南](migration-guide.md)；其思想基礎值得記一句——**告警的正確性要靠注入故障的實驗驗證，語法檢查不夠**（學術討論見 [Validating Alerts in Cloud-Native Observability](https://arxiv.org/abs/2510.23970)；本平台的遷移驗證正是以故障波形注入實作這件事，見 [ADR-030](adr/030-decision-layer-migration-validation.md)）。
 
 ## 5. 破壞性／不可逆動作：防線必須前移
 
