@@ -59,6 +59,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_python import format_json_report  # noqa: E402
 
 # Current schema version — keep aligned with docs/schemas/migration-state.md.
 # Bump when introducing a breaking schema change AND adding a corresponding
@@ -211,7 +212,7 @@ def write_json(path: Path, data: dict) -> None:
     universal newlines, producing CRLF files in customer GitOps repos
     that read on Linux CI — causes constant merge noise.
     """
-    payload = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    payload = format_json_report(data) + "\n"
     # mkstemp returns (fd, abs_path). Same dir as target → same filesystem
     # → guaranteed atomic os.replace.
     fd, tmp_name = tempfile.mkstemp(
@@ -454,7 +455,7 @@ def main(argv: list[str] | None = None) -> int:
     report["dry_run"] = args.dry_run
 
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(format_json_report(report))
     else:
         render_text(report, dry_run=args.dry_run)
 

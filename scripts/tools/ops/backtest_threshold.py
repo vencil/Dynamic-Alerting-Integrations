@@ -30,7 +30,6 @@ Usage:
   - git available (for --git-diff mode)
 """
 import argparse
-import json
 import os
 import re
 import subprocess
@@ -50,6 +49,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import load_yaml_file, is_disabled, http_get_json, write_json_secure, write_text_secure  # noqa: E402
+from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -736,7 +736,7 @@ def main():
 
     # Output
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(format_json_report(report))
     else:
         print_text_report(report)
 

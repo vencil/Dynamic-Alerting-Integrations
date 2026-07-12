@@ -76,7 +76,6 @@ from __future__ import annotations
 
 import argparse
 import itertools
-import json
 import os
 import sys
 from collections import defaultdict
@@ -90,6 +89,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_python import format_json_report  # noqa: E402
 
 try:
     import yaml
@@ -533,7 +533,7 @@ def main(argv: list[str] | None = None) -> int:
         # so `label_values_changed: {key: (v1, v2)}` round-trips correctly
         # as `{"key": [v1, v2]}`. `default=str` is the safety net for any
         # label values that happen to be non-JSON-native (e.g. dates).
-        print(json.dumps(report, indent=2, ensure_ascii=False, default=str))
+        print(format_json_report(report, default=str))
     else:
         render_text(report, from_path=str(from_path), to_path=str(to_path))
 

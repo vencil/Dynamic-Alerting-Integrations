@@ -17,7 +17,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import textwrap
@@ -34,7 +33,7 @@ try:
 except ImportError:
     yaml = None
 
-from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
+from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import load_yaml_file, write_text_secure  # noqa: E402
 
@@ -817,7 +816,7 @@ def main():
             all_crds.append(result["service_monitor"]["crd"])
 
         if args.json:
-            print(json.dumps(all_crds, indent=2, ensure_ascii=False))
+            print(format_json_report(all_crds))
         else:
             if yaml:
                 for i, crd in enumerate(all_crds):
@@ -915,7 +914,7 @@ def main():
     }
 
     if args.json:
-        print(json.dumps(summary, indent=2, ensure_ascii=False))
+        print(format_json_report(summary))
     else:
         if args.kustomize:
             msg_zh = (

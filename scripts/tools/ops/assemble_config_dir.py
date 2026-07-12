@@ -18,7 +18,6 @@ Exit codes:
 
 import argparse
 import hashlib
-import json
 import os
 import shutil
 import stat
@@ -34,6 +33,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_python import format_json_report  # noqa: E402
 
 try:
     import yaml
@@ -268,14 +268,14 @@ def main() -> int:
 
     if real_conflicts:
         if args.json:
-            print(json.dumps({
+            print(format_json_report({
                 "status": "conflict",
                 "conflicts": {
                     n: [{"source": l, "sha256": _file_sha256(p)}
                         for l, p in entries]
                     for n, entries in real_conflicts.items()
                 },
-            }, indent=2, ensure_ascii=False))
+            }))
         return EXIT_VIOLATION
 
     # --check: just report, don't write
@@ -286,11 +286,11 @@ def main() -> int:
             for name in sorted(file_map):
                 print(f"   {name}")
         else:
-            print(json.dumps({
+            print(format_json_report({
                 "status": "ok",
                 "file_count": len(file_map),
                 "files": sorted(file_map.keys()),
-            }, indent=2, ensure_ascii=False))
+            }))
         return EXIT_OK
 
     # Assemble
@@ -310,7 +310,7 @@ def main() -> int:
         manifest = build_manifest(sources, file_map, conflicts)
         manifest_path = Path(args.manifest)
         manifest_path.write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+            format_json_report(manifest) + "\n",
             encoding="utf-8",
         )
         os.chmod(manifest_path,
@@ -326,7 +326,7 @@ def main() -> int:
         }
         if validation_issues:
             result["validation"] = validation_issues
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+        print(format_json_report(result))
     else:
         print(f"\n✅ Assembled {count} file(s) into {output_dir}")
         if validation_issues:

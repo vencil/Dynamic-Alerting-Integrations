@@ -15,7 +15,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import textwrap
@@ -32,7 +31,7 @@ try:
 except ImportError:
     yaml = None
 
-from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
+from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
 from _lib_io import load_yaml_file, write_text_secure  # noqa: E402
 
 # Reuse patterns from operator_generate
@@ -847,7 +846,7 @@ def main():
                 "alertmanager_configs": [item["crd"] for item in result.get("alertmanager_configs", [])],
                 "errors": result.get("errors", []),
             }
-            print(json.dumps(output_obj, indent=2, ensure_ascii=False))
+            print(format_json_report(output_obj))
         else:
             checklist = build_migration_checklist(source_dir, config_dir, output_dir, result)
             print("# MIGRATION CHECKLIST", file=sys.stdout)
@@ -907,7 +906,7 @@ def main():
     # Only print summary if not JSON + dry-run (in that case, JSON is the only output)
     if not (args.dry_run and args.json):
         if args.json:
-            print(json.dumps(summary, indent=2, ensure_ascii=False))
+            print(format_json_report(summary))
         else:
             print(
                 i18n_text(

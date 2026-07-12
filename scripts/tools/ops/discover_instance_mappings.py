@@ -44,6 +44,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import (  # noqa: E402
     detect_cli_lang,
+    format_json_report,
     http_get_json,
     write_text_secure,
 )
@@ -383,8 +384,7 @@ def main(argv: list[str] | None = None) -> int:
     draft = generate_mapping_draft(instance_id, best_label, best_values, db_type)
 
     if args.json:
-        import json
-        output = json.dumps(draft, indent=2, ensure_ascii=False, default=str)
+        output = format_json_report(draft, default=str)
     else:
         # Clean output: skip comment keys
         clean = {"instance_tenant_mapping": draft["instance_tenant_mapping"]}

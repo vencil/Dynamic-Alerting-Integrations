@@ -27,6 +27,7 @@ from typing import List, Optional
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import (  # noqa: E402
     detect_cli_lang,
+    format_json_report,
     http_get_json,
     parse_duration_seconds,
 )
@@ -403,11 +404,6 @@ def format_text_report(report: dict) -> str:
         lines.append("")
 
     return "\n".join(lines)
-
-
-def format_json_report(report: dict) -> str:
-    """Format JSON report."""
-    return json.dumps(report, indent=2, ensure_ascii=False)
 
 
 def format_markdown_report(report: dict) -> str:

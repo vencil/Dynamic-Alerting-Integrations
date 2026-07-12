@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import sys
@@ -33,6 +32,7 @@ from urllib.parse import quote
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import (  # noqa: E402
     detect_cli_lang,
+    format_json_report,
     http_get_json,
     parse_duration_seconds,
 )
@@ -715,7 +715,7 @@ def main() -> None:
 
     # 輸出
     if args.json_output:
-        print(json.dumps(asdict(report), indent=2, ensure_ascii=False))
+        print(format_json_report(asdict(report)))
     elif args.markdown:
         print(generate_markdown(report))
     else:

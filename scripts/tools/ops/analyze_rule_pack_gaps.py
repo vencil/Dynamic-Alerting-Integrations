@@ -24,7 +24,6 @@ Usage:
 """
 import argparse
 import glob
-import json
 import os
 import re
 import sys
@@ -34,7 +33,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import load_yaml_file, write_json_secure  # noqa: E402
+from _lib_python import format_json_report, load_yaml_file, write_json_secure  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -323,7 +322,7 @@ def main():
 
     # Output
     if args.json:
-        print(json.dumps(results, indent=2, ensure_ascii=False))
+        print(format_json_report(results))
     else:
         print_report(results)
 

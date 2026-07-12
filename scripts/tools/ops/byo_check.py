@@ -24,14 +24,13 @@ Usage:
 """
 
 import argparse
-import json
 import os
 import sys
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import http_get_json, query_prometheus_instant  # noqa: E402
+from _lib_python import format_json_report, http_get_json, query_prometheus_instant  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Alias for backward-compat within this module
@@ -582,7 +581,7 @@ def main():
             "status": "fail" if has_failure else "pass",
             "sections": all_results,
         }
-        print(json.dumps(output, indent=2, ensure_ascii=False))
+        print(format_json_report(output))
 
     if not args.json:
         print(f"\n{'='*60}")

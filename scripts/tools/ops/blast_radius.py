@@ -26,6 +26,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_python import format_json_report  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Tier classification constants
@@ -682,7 +683,7 @@ def main() -> None:
             artifact_hint=args.artifact_hint,
         )
     else:
-        output = json.dumps(report, indent=2, ensure_ascii=False)
+        output = format_json_report(report)
 
     # Write output
     if args.output:

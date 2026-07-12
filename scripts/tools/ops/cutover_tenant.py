@@ -49,6 +49,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_python import format_json_report  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +354,7 @@ def main():
     )
 
     if args.json_output:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(format_json_report(report))
 
     if report["success"]:
         print("\n✅ Cutover completed successfully.")

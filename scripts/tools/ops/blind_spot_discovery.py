@@ -11,7 +11,6 @@ Usage:
   python3 scripts/tools/blind_spot_discovery.py --config-dir conf.d/ --json-output
 """
 import argparse
-import json
 import os
 import re
 import sys
@@ -22,6 +21,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
+    format_json_report,
     http_get_json,
     load_tenant_configs,
     load_yaml_file,
@@ -272,7 +272,7 @@ def main():
 
     # 5. Output
     if args.json_output:
-        print(json.dumps(results, indent=2, ensure_ascii=False))
+        print(format_json_report(results))
     else:
         print(render_report(results))
 

@@ -38,6 +38,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant  # noqa: E402
+from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 
 # Language detection for bilingual help
@@ -367,8 +368,7 @@ if __name__ == "__main__":
             sys.exit(EXIT_CALLER_ERROR)  # #452: missing required arg
         inheritance = resolve_inheritance_chain(args.tenant, args.config_dir)
         if inheritance:
-            print(json.dumps(inheritance, indent=2, ensure_ascii=False,
-                             default=str))
+            print(format_json_report(inheritance, default=str))
         else:
             print(json.dumps({"error": "Could not resolve inheritance chain"},
                              indent=2))

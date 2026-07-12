@@ -41,7 +41,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from diagnose import check as diagnose_check  # noqa: E402
 from diagnose import query_prometheus  # noqa: E402
-from _lib_python import write_json_secure  # noqa: E402
+from _lib_python import format_json_report, write_json_secure  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
@@ -283,7 +283,7 @@ def main():
 
     # Output
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(format_json_report(report))
     else:
         print_text_report(report)
 
