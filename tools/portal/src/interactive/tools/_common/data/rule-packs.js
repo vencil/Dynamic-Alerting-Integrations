@@ -21,6 +21,7 @@ purpose: |
 
   Public API:
     RULE_PACK_DATA            map of packId to {label, category, defaults, metrics, ...}
+    PACK_ORDER                ordered packId list (window.__PLATFORM_DATA.packOrder || Object.keys(RULE_PACK_DATA))
     CATEGORY_LABELS           map of category to i18n thunk
     getAllMetricKeys(packs)   flatten defaults to [{key, pack, label, value, unit, desc}]
 
@@ -50,6 +51,12 @@ const RULE_PACK_DATA = window.__PLATFORM_DATA?.rulePacks || {
   platform: { label: 'Platform', category: 'infrastructure', required: true, defaults: {}, metrics: ['threshold_metric_count', 'recording_rule_health', 'scrape_success'] },
 };
 
+// Ordered packId list — mirrors RULE_PACK_DATA's layered resolution: the live
+// packOrder from platform-data when present, else the baked-in catalog's key
+// order (offline / standalone fallback). Consumed by tools that render packs in
+// a stable order (e.g. threshold-heatmap's Rule Pack filter).
+const PACK_ORDER = window.__PLATFORM_DATA?.packOrder || Object.keys(RULE_PACK_DATA);
+
 const CATEGORY_LABELS = {
   database: () => t('資料庫', 'Databases'),
   messaging: () => t('訊息佇列', 'Messaging'),
@@ -73,4 +80,4 @@ function getAllMetricKeys(selectedPacks) {
   return keys;
 }
 
-export { RULE_PACK_DATA, CATEGORY_LABELS, getAllMetricKeys };
+export { RULE_PACK_DATA, CATEGORY_LABELS, getAllMetricKeys, PACK_ORDER };
