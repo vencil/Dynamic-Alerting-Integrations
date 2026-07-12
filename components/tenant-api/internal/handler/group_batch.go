@@ -12,6 +12,7 @@ import (
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/tenantorg"
 )
 
 // GroupBatchRequest is the body for POST /api/v1/groups/{id}/batch.
@@ -95,7 +96,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		// v2.6.0: Async mode — submit to goroutine pool and return immediately
 		if r.URL.Query().Get("async") == "true" && d.Tasks != nil {
 			task := d.Tasks.Submit(taskID, func(ctx context.Context) ([]async.TaskResult, error) {
-				results := executeGroupBatchOps(ctx, d.Writer, d.ConfigDir, g.Members, req.Patch, email, p, d.RBAC)
+				results := executeGroupBatchOps(ctx, d.Writer, d.ConfigDir, g.Members, req.Patch, email, p, d.RBAC, d.TenantOrg)
 				asyncResults := make([]async.TaskResult, len(results))
 				for i, br := range results {
 					asyncResults[i] = async.TaskResult{
@@ -116,7 +117,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		}
 
 		// Synchronous mode (default, backward compatible)
-		results := executeGroupBatchOps(r.Context(), d.Writer, d.ConfigDir, g.Members, req.Patch, email, p, d.RBAC)
+		results := executeGroupBatchOps(r.Context(), d.Writer, d.ConfigDir, g.Members, req.Patch, email, p, d.RBAC, d.TenantOrg)
 
 		// Compute summary statistics
 		successes := 0
@@ -149,7 +150,13 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 
 // executeGroupBatchOps runs group batch operations synchronously and returns results.
 // This function is shared between sync and async paths to ensure consistency.
-func executeGroupBatchOps(ctx context.Context, writer *gitops.Writer, configDir string, members []string, patch map[string]string, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager) []BatchResult {
+//
+// The per-member permission check is org-scope-aware (ADR-027 / LD-6 P4b) and
+// each member's org list is resolved INSIDE this loop, at execution time — not
+// at submit time. The async path runs this closure after the HTTP request has
+// returned, so a submit-time snapshot could authorize against orgs that a
+// _tenant_orgs.yaml hot-reload has since changed (stale-orgs hazard).
+func executeGroupBatchOps(ctx context.Context, writer *gitops.Writer, configDir string, members []string, patch map[string]string, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager) []BatchResult {
 	results := make([]BatchResult, 0, len(members))
 	for _, tenantID := range members {
 		if err := ValidateTenantID(tenantID); err != nil {
@@ -159,7 +166,7 @@ func executeGroupBatchOps(ctx context.Context, writer *gitops.Writer, configDir 
 			continue
 		}
 
-		if !rbacMgr.Allowed(p, tenantID, rbac.PermWrite) {
+		if !OrgAllowed(rbacMgr, tenantOrg, p, tenantID, rbac.PermWrite) {
 			results = append(results, BatchResult{
 				TenantID: tenantID, Status: "error",
 				Message: "insufficient permissions for tenant " + tenantID,

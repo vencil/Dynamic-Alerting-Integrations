@@ -73,11 +73,13 @@ type Deps struct {
 	RBAC *rbac.Manager
 
 	// TenantOrg maps tenants to their organizations (_tenant_orgs.yaml,
-	// ADR-027 / LD-6 P4). Read by the list/search RBAC filter to feed the
-	// org-scope axis of ScopeAllowed. Optional — nil when unwired (e.g. a
-	// handler test literal); OrgsForTenant is nil-receiver-safe and the filter
-	// then evaluates every tenant as unlabeled, which with no org-scoped rule is
-	// byte-identical to the pre-P4 metadata-only filter.
+	// ADR-027 / LD-6 P4). Read on BOTH scope planes: by the list/search RBAC
+	// filter to feed the org-scope axis of ScopeAllowed (P4a), and by
+	// handler.OrgAllowed / RequireOrgWrite to feed AllowedInOrg on the
+	// write plane (P4b, incl. the federation handlers). Optional — nil when
+	// unwired (e.g. a handler test literal); OrgsForTenant is nil-receiver-safe
+	// and every tenant then evaluates as unlabeled, which with no org-scoped
+	// rule is byte-identical to the pre-P4 permission/metadata checks.
 	TenantOrg *tenantorg.Manager
 
 	// Policy enforces domain-level write policy. Optional — handlers

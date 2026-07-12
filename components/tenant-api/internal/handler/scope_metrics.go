@@ -31,16 +31,21 @@ import (
 // forces a compile step: the array literal below rejects more elements than the
 // size, so a new axis must bump numScopeAxes (which grows counters in lockstep)
 // AND add its rbac.scopeAxis* constant. Bump all three together.
-const numScopeAxes = 2
+const numScopeAxes = 3
 
 // scopeWouldDenyAxes is the fixed, known label set for
 // tenant_api_scope_would_deny_total{axis}. Fixing it means every series is
 // emitted from process start (value 0) so a dashboard/alert never sees a
 // missing series, and it bounds cardinality (no user-controlled label values).
-// Order must match the rbac.scopeAxis* string constants. P1 = metadata; P4 = org.
+// Order must match the rbac.scopeAxis* string constants. P1 = metadata;
+// P4a = org (list plane, ScopeAllowed); P4b = org_write (write plane,
+// AllowedInOrg). The org enforce-flip soak criterion requires increase()==0 on
+// BOTH the org and org_write series — they share one flag but observe
+// different call sites.
 var scopeWouldDenyAxes = [numScopeAxes]string{
 	"metadata",
 	"org",
+	"org_write",
 }
 
 // ScopeWouldDenyMetrics holds the per-axis would-deny counters. It satisfies

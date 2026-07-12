@@ -13,6 +13,7 @@ import (
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/tenantorg"
 	"gopkg.in/yaml.v3"
 )
 
@@ -120,7 +121,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 					batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
 					continue
 				}
-				if !d.RBAC.Allowed(p, op.TenantID, rbac.PermWrite) {
+				if !OrgAllowed(d.RBAC, d.TenantOrg, p, op.TenantID, rbac.PermWrite) {
 					batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: "insufficient permissions"})
 					continue
 				}
@@ -204,7 +205,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 		// v2.6.0: Async mode — submit to goroutine pool and return immediately
 		if r.URL.Query().Get("async") == "true" && d.Tasks != nil {
 			task := d.Tasks.Submit(taskID, func(ctx context.Context) ([]async.TaskResult, error) {
-				results := executeBatchOps(ctx, d.Writer, d.ConfigDir, req.Operations, email, p, d.RBAC, d.Policy)
+				results := executeBatchOps(ctx, d.Writer, d.ConfigDir, req.Operations, email, p, d.RBAC, d.TenantOrg, d.Policy)
 				asyncResults := make([]async.TaskResult, len(results))
 				for i, br := range results {
 					asyncResults[i] = async.TaskResult{
@@ -225,7 +226,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 		}
 
 		// Synchronous mode (default, backward compatible)
-		results := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, req.Operations, email, p, d.RBAC, d.Policy)
+		results := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, req.Operations, email, p, d.RBAC, d.TenantOrg, d.Policy)
 
 		// Compute summary
 		successes := 0
@@ -257,14 +258,20 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 
 // executeBatchOps runs batch operations synchronously and returns results.
 // This function is shared between sync and async paths to ensure consistency.
-func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, policyMgr *policy.Manager) []BatchResult {
+//
+// The per-op permission check is org-scope-aware (ADR-027 / LD-6 P4b) and the
+// tenant's org list is resolved INSIDE this loop, at execution time — not at
+// submit time. The async path runs this closure after the HTTP request has
+// returned, so a submit-time snapshot could authorize against orgs that a
+// _tenant_orgs.yaml hot-reload has since changed (stale-orgs hazard).
+func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, policyMgr *policy.Manager) []BatchResult {
 	results := make([]BatchResult, 0, len(ops))
 	for _, op := range ops {
 		if err := ValidateTenantID(op.TenantID); err != nil {
 			results = append(results, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
 			continue
 		}
-		if !rbacMgr.Allowed(p, op.TenantID, rbac.PermWrite) {
+		if !OrgAllowed(rbacMgr, tenantOrg, p, op.TenantID, rbac.PermWrite) {
 			results = append(results, BatchResult{TenantID: op.TenantID, Status: "error", Message: "insufficient permissions for tenant " + op.TenantID})
 			continue
 		}

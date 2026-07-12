@@ -32,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 
 	"github.com/vencil/tenant-api/internal/configwatcher"
@@ -160,12 +161,12 @@ type Manager struct {
 	// before flipping. true is ENFORCE (fail-closed). Per-axis by design so the
 	// metadata and org audit→enforce rollouts stay independent (ADR-027 D4).
 	//
-	// P4a NOTE: there is deliberately NO CLI flag / helm value wiring this on
-	// yet, and main.go never calls EnableOrgScopeEnforce. The flag lands with
-	// P4b (the write-plane wiring) so list-visibility and write-authz flip to
-	// enforce ATOMICALLY under one control — flipping list-only in P4a would be
-	// a false-safe isolation. The evaluation core reads it (default false =
-	// shadow); the setter exists only to drive the enforce branch in tests.
+	// P4b NOTE: this ONE flag governs BOTH decision surfaces of the org axis —
+	// list visibility (ScopeAllowed) and per-tenant write authorization
+	// (AllowedInOrg) — so they flip to enforce ATOMICALLY under one control
+	// (--rbac-org-scope-enforce / TA_RBAC_ORG_SCOPE_ENFORCE / helm
+	// rbac.orgScopeEnforce, wired in main.go via EnableOrgScopeEnforce).
+	// Flipping either surface alone would be a false-safe isolation.
 	orgScopeEnforce bool
 
 	// scopeAudit is the optional would-deny metric sink for scope filters
@@ -208,11 +209,13 @@ func (m *Manager) EnableMetadataScopeEnforce() { m.metadataScopeEnforce = true }
 
 // EnableOrgScopeEnforce switches the org-scope axis from SHADOW (default) to
 // ENFORCE: an unlabeled tenant on an org-scoped rule is DENIED instead of
-// allowed-with-would-deny-signal (ADR-027 / LD-6 P4). P4a ships NO caller — no
-// CLI flag, no helm value, and main.go never invokes it (see orgScopeEnforce);
-// the org enforce flip is a P4b concern so list + write authz flip atomically.
-// Kept a setter (not a NewManager arg) to mirror EnableMetadataScopeEnforce and
-// to drive the enforce branch from tests.
+// allowed-with-would-deny-signal (ADR-027 / LD-6 P4). Called from main when
+// --rbac-org-scope-enforce is set (P4b) — the single control that flips list
+// visibility (ScopeAllowed) and write authorization (AllowedInOrg) to enforce
+// atomically; flip only after the axis="org" AND axis="org_write" would-deny
+// counters both hold increase()==0 over the soak window. Kept a setter (not a
+// NewManager arg) to mirror EnableMetadataScopeEnforce and to drive the
+// enforce branch from tests.
 func (m *Manager) EnableOrgScopeEnforce() { m.orgScopeEnforce = true }
 
 // SetScopeAuditor installs the would-deny metric sink for scope filters
@@ -518,19 +521,52 @@ func (s matchSubject) ruleMatches(rule *GroupRule) bool {
 	return true
 }
 
-// Allowed checks whether the caller p is granted the wanted permission for
-// the given tenantID by any rule matching the principal.
+// ruleGrants reports whether a single rule's permission list covers the wanted
+// permission (admin ⊇ write ⊇ read). Extracted from Allowed's inner loop
+// (ADR-027 / LD-6 P4b) so every per-rule evaluation path shares the ONE
+// permission predicate — permission-coverage semantics must never be
+// re-implemented at a call site.
+func ruleGrants(rule *GroupRule, want Permission) bool {
+	for _, perm := range rule.Permissions {
+		if permCovers(perm, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// allowedOrgModes is the single per-tenant permission evaluation core
+// (ADR-027 / LD-6 P4b): it folds the org-scope axis into the SAME per-rule
+// loop as the permission check and evaluates BOTH org fail-modes in one pass,
+// returning (passShadow, passEnforce).
 //
-// Permission hierarchy: admin ⊇ write ⊇ read.
-// An "admin" grant satisfies "write" and "read" checks.
-func (m *Manager) Allowed(p *VerifiedPrincipal, tenantID string, want Permission) bool {
+// ⚠️ Correctness core — a rule grants iff ruleMatches && tenantMatches &&
+// ruleGrants && its OWN org restriction passes (per-rule fold). Unioning "any
+// rule grants the permission" and "any rule passes org" separately and AND'ing
+// the two unions at the top level would leak access no single rule grants —
+// the exact cross-rule hazard ScopeAllowed documents; see
+// TestAllowedInOrg_CrossRuleUnionNoLeak / TestScopeAllowed_CrossRuleUnionNoLeak.
+//
+// orgBlockedRule is the name of the first matching rule whose grant the org
+// axis curtailed (its org modes were not (true,true)) — the diagnostic handle
+// for AllowedInOrg's deny/would-deny log line. Rule NAMES only; claim values
+// never leave the evaluation (principal.go logging discipline). Empty when no
+// matching rule was org-restricted.
+//
+// Pure with respect to observability: no metric recording, no enforce-flag
+// read — the decision-site wrappers (Allowed / AllowedInOrg) own both, so the
+// read-plane wrapper can never pollute the org_write would-deny signal.
+//
+// Empty-config semantics are byte-identical to the historical Allowed:
+// failClosedOnEmpty denies both modes; open mode grants read-only in both.
+func (m *Manager) allowedOrgModes(p *VerifiedPrincipal, tenantID string, want Permission, tenantOrgs []string) (passShadow, passEnforce bool, orgBlockedRule string) {
 	cfg := m.Get()
 	if len(cfg.Groups) == 0 {
 		if m.failClosedOnEmpty {
-			return false // MED-8: configured but empty _rbac.yaml → deny
+			return false, false, "" // MED-8: configured but empty _rbac.yaml → deny
 		}
 		// Open mode — authenticated users have read access only
-		return want == PermRead
+		return want == PermRead, want == PermRead, ""
 	}
 
 	subject := subjectFor(p)
@@ -542,13 +578,87 @@ func (m *Manager) Allowed(p *VerifiedPrincipal, tenantID string, want Permission
 		if !tenantMatches(rule.Tenants, tenantID) {
 			continue
 		}
-		for _, perm := range rule.Permissions {
-			if permCovers(perm, want) {
-				return true
-			}
+		if !ruleGrants(rule, want) {
+			continue
+		}
+		orgShadow, orgEnforce := true, true // no org-scope on this rule = no org restriction
+		if rule.OrgScope != "" {
+			orgShadow, orgEnforce = scopeSetModes(subject.claims[rule.OrgScope], tenantOrgs)
+		}
+		if orgBlockedRule == "" && (!orgShadow || !orgEnforce) {
+			orgBlockedRule = rule.Name
+		}
+		passShadow = passShadow || orgShadow
+		passEnforce = passEnforce || orgEnforce
+		if passShadow && passEnforce {
+			break // both modes granted; further rules cannot change either
 		}
 	}
-	return false
+	return passShadow, passEnforce, orgBlockedRule
+}
+
+// Allowed checks whether the caller p is granted the wanted permission for
+// the given tenantID by any rule matching the principal.
+//
+// Permission hierarchy: admin ⊇ write ⊇ read.
+// An "admin" grant satisfies "write" and "read" checks.
+//
+// ⚠️ ORG-BLIND (ADR-027 / LD-6 P4b): Allowed is the org-scope-degenerate
+// wrapper over allowedOrgModes — with tenantOrgs=nil every org-scoped rule
+// passes shadow mode (scopeSetModes' unlabeled-tenant leniency is (true,false)),
+// so the shadow component returned here is byte-identical to the pre-P4b
+// permission check and the org axis is invisible. Any per-tenant WRITE-plane
+// authorization decision (PermWrite / PermAdmin gates) MUST go through
+// AllowedInOrg instead — via handler.OrgAllowed, which resolves the tenant's
+// orgs — never this method. The only legitimate Allowed callers are (1) the
+// platform-scope tenantID="*" checks (org-scope deliberately does not apply to
+// platform scope — an org-scoped rule is not a platform admin) and (2)
+// read-plane filtering (org visibility is ScopeAllowed's job; read-by-id lands
+// in P4c) — pinned by the go/ast tripwire, see org_write_guard_test.go.
+//
+// Allowed never records the org_write would-deny signal — recording lives in
+// AllowedInOrg only, so middleware/read call volume cannot pollute the
+// enforce-flip soak metric.
+func (m *Manager) Allowed(p *VerifiedPrincipal, tenantID string, want Permission) bool {
+	passShadow, _, _ := m.allowedOrgModes(p, tenantID, want, nil)
+	return passShadow
+}
+
+// AllowedInOrg is the org-scope-aware per-tenant permission check and the ONLY
+// write-plane authorization entry point (ADR-027 / LD-6 P4b). tenantOrgs is
+// the target tenant's organization list (tenantorg.OrgsForTenant), resolved by
+// the caller AT DECISION TIME — rbac does not import tenantorg, mirroring
+// ScopeAllowed; nil/empty means the tenant is unlabeled.
+//
+// Mode selection is governed by the SAME m.orgScopeEnforce flag as
+// ScopeAllowed (list visibility and write enforcement flip atomically — one
+// control, no split-brain): SHADOW (default) returns the lenient decision and
+// records a would-deny observation on the org_write axis whenever enforce
+// would have denied; ENFORCE returns the strict decision (the same observation
+// keeps counting as a "denied by org scope" signal). Monotonicity holds by
+// construction: AllowedInOrg(enforce) ⟹ AllowedInOrg(shadow) ⟹ Allowed —
+// the org axis only ever narrows a grant, never widens one.
+func (m *Manager) AllowedInOrg(p *VerifiedPrincipal, tenantID string, want Permission, tenantOrgs []string) bool {
+	passShadow, passEnforce, orgBlockedRule := m.allowedOrgModes(p, tenantID, want, tenantOrgs)
+	m.recordScopeShadowGap(passShadow, passEnforce, scopeAxisOrgWrite)
+	if m.orgScopeEnforce {
+		if !passEnforce && orgBlockedRule != "" {
+			// The org axis curtailed an otherwise-granting rule → loud enough to
+			// debug a 403. Tenant + rule NAME only; claim values never reach logs
+			// (principal.go multi-value-refusal discipline).
+			slog.Warn("org-scope denied write-plane permission",
+				"tenant", tenantID, "axis", scopeAxisOrgWrite, "rule", orgBlockedRule, "perm", string(want))
+		}
+		return passEnforce
+	}
+	if passShadow && !passEnforce {
+		// Shadow-mode migration gap: enforce would deny this grant. One line per
+		// observation (matches the org_write would-deny increment) so operators
+		// can attribute the soak counter to a tenant/rule; no claim values.
+		slog.Info("org-scope write-plane would-deny (shadow mode)",
+			"tenant", tenantID, "axis", scopeAxisOrgWrite, "rule", orgBlockedRule, "perm", string(want))
+	}
+	return passShadow
 }
 
 // MetadataAllowed checks whether the caller p is granted access for a tenant
@@ -782,7 +892,8 @@ func scopeFieldModes(allowList []string, value string) (passShadow, passEnforce 
 // a set-membership test of the caller's org value against the tenant's org list,
 // evaluated under BOTH scope modes at once, returning (passesShadow,
 // passesEnforce). Pure — the would-deny recording happens once per axis at the
-// decision site (recordScopeShadowGap in ScopeAllowed), not here.
+// decision site (recordScopeShadowGap in ScopeAllowed for the list plane,
+// AllowedInOrg for the write plane), not here.
 //
 //   - len(tenantOrgs)==0 (UNLABELED tenant) → (true, false): shadow allows
 //     (migration leniency, would-deny recorded), enforce denies. ⚠️ This is the

@@ -224,6 +224,8 @@ groups:
 
 支援以環境 / 域 metadata 做進一步過濾(細節見 `internal/rbac/` 註解)。**沒標記該 metadata 的租戶**在受限規則下預設**仍放行**(SHADOW,行為與過去一致),但每次會計入 `tenant_api_scope_would_deny_total{axis="metadata"}`(**單調遞增 counter**、僅重啟歸零)。待 `increase(tenant_api_scope_would_deny_total{axis="metadata"}[soak窗])` 在整個 soak 窗維持 **0**(看增長率非絕對值),並**掃過確認沒有落單租戶**(counter 是 traffic-driven:沒被 list 到的租戶不會觸發)後,設 `--rbac-metadata-scope-enforce`(或 `TA_RBAC_METADATA_SCOPE_ENFORCE=1`;helm `--set rbac.metadataScopeEnforce=true`)切成**沒標記就拒絕**(fail-closed,ADR-027 / LD-6 P1)。
 
+org 軸(租戶→組織,`_tenant_orgs.yaml`;ADR-027 / LD-6 P4)獨立於 metadata 軸、有**自己的 enforce 開關**:`--rbac-org-scope-enforce`(或 `TA_RBAC_ORG_SCOPE_ENFORCE=1`;helm `--set rbac.orgScopeEnforce=true`)。同一支開關**原子地**支配 org-scoped 規則的兩個判定面——list 可見性與 per-tenant 寫入 / admin 授權(含 federation token 簽發),不存在只翻其一的中間態。預設 SHADOW:沒掛 org 的租戶仍放行,但分別計入 `tenant_api_scope_would_deny_total{axis="org"}`(list 面)與 `{axis="org_write"}`(寫入面);翻 enforce 的判準是**兩軸** `increase(...[soak窗])` 皆維持 0(單調 counter、看增長率),並掃過確認沒有漏標租戶。⚠️ 過渡態:read-by-id(GET `/{id}`、`/access` 等單租戶讀取)尚未接 org 軸,P4c 補齊——那是 enforce 翻閘的硬前置(#1040)。
+
 ### RBAC match 規則(claims-aware)
 
 `_rbac.yaml` 規則可加選配的 `match:` 區塊(ADR-027 / LD-6 P3)。**沒有 `match:` 的規則行為完全不變**——`name` 即比對的 IdP group(同一條求值路徑的退化情形,非新分支);有 `match:` 時 `name` 變成純標籤 / 稽核識別:
@@ -258,7 +260,7 @@ Fail-closed 護欄:
 
 **Namespace 誠實界線**(單一 trusted-hop MVP):claim key 即命名空間單位——部署**不得**把兩個不同上游來源對映到同一個 claim key(平台無從區分);真正的 issuer namespace 待 JWT 驗簽(D2-A)時由 `iss` 天然提供。
 
-### RBAC 組織範圍(org-scope,身分綁定;LD-6 P4a)
+### RBAC 組織範圍(org-scope,身分綁定;LD-6 P4)
 
 規則可加選配的 `org-scope: <claimKey>`,把該規則的租戶範圍**限縮到「使用者身分裡那個經驗證的組織 claim,落在該租戶所屬組織清單」的租戶**——組織清單來自平台管理層維護的 `_tenant_orgs.yaml`(admin-only、非租戶自屬性),以租戶 ID 反查。**一條規則涵蓋所有組織**,範圍由使用者身分動態決定(不在規則裡寫死組織代碼):
 
@@ -280,7 +282,9 @@ tenant_orgs:
 
 - **opt-in、預設零行為變化**:沒有 `org-scope:` 的規則行為完全不變(如平台管理員 `tenants: ["*"]` 照樣看全部、不受影響)。`org-scope:` 引用的 claim key **必須在 `--identity-claim-headers` 宣告**,否則載入錯誤。
 - **fail-closed**:使用者無該 org claim、或 org 不在租戶清單 → 該規則不命中;**未指派組織(空清單)的租戶**在 enforce 下不可見(shadow 下仍可見+計數,供管理員補齊對應)。
-- **⚠️ 目前僅 list 可見性、且僅 shadow 模式**:P4a 只把 org-scope 接進租戶清單過濾(`GET /api/v1/tenants`),`tenant_api_scope_would_deny_total{axis="org"}` 記錄「enforce 會拒但 shadow 放行」的租戶;**enforce 開關與讀寫路徑強制留待 P4b**(避免「list 藏、寫入開」的假隔離)。`_tenant_orgs.yaml` 走 strict 解析(typo=載入錯誤),org **僅**從此檔以租戶 ID 反查、**絕不**讀租戶自己的 `_metadata`(組織是授權邊界、非租戶可改屬性)。
+- **判定面涵蓋(P4a+P4b)**:org 軸同時作用於 list 可見性(`GET /api/v1/tenants`,P4a)與 per-tenant 寫入 / admin 授權(PUT tenant、custom-alerts、batch、group batch、federation token 簽發 / 清單 / 撤銷,P4b),由**同一支** `--rbac-org-scope-enforce` 原子支配(見上方 org 軸段落)——不存在「list 藏、寫入開」的中間態。⚠️ **仍未接的過渡態**:read-by-id(GET `/{id}`、`/effective`、`/diff`、`/access` 等單租戶讀取)P4c 補齊,為 enforce 翻閘的硬前置(#1040);在它落地前,enforce 是「list 藏 + 寫入擋、直讀仍開」的過渡態。
+- **設定變更順序**:先落 `_tenant_orgs.yaml`(補齊 org 對應)、後落引用 org-scope 的 `_rbac.yaml`——兩者是各自 hot-reload 的檔,反序會有一個輪詢窗內 org-scoped 規則對尚未標記的租戶全 deny(fail-closed、非洩漏,但徒增 would-deny 噪音)。
+- `_tenant_orgs.yaml` 走 strict 解析(typo=載入錯誤),org **僅**從此檔以租戶 ID 反查、**絕不**讀租戶自己的 `_metadata`(組織是授權邊界、非租戶可改屬性)。
 
 ### 身分 claims 縫
 

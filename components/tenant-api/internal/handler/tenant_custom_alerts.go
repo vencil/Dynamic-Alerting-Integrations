@@ -70,6 +70,7 @@ type PutCustomAlertsResponse struct {
 // @Param       body  body     PutCustomAlertsRequest true "Desired recipe list + base_hash"
 // @Success     200   {object} PutCustomAlertsResponse
 // @Failure     400   {object} ErrorResponse
+// @Failure     403   {object} ErrorResponse
 // @Failure     404   {object} ErrorResponse
 // @Failure     409   {object} ErrorResponse
 // @Failure     500   {object} ErrorResponse
@@ -81,6 +82,13 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		tenantID := chi.URLParam(r, "id")
 		if err := ValidateTenantID(tenantID); err != nil {
 			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		// ADR-027 / LD-6 P4b: org-scope-aware write gate — authorization
+		// comes BEFORE feature availability (the PR-mode 501 below), so an
+		// unauthorized caller cannot probe the server's write-mode.
+		if !RequireOrgWrite(w, r, d, tenantID, rbac.PermWrite) {
 			return
 		}
 

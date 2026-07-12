@@ -388,7 +388,8 @@ func PutTenantFederation(d *handler.Deps) http.HandlerFunc {
 			handler.WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
-		if !d.RBAC.Allowed(rbac.RequestPrincipal(r), tenantID, rbac.PermAdmin) {
+		// Org-scope-aware (ADR-027 / LD-6 P4b) — same bar as token issuance.
+		if !handler.OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), tenantID, rbac.PermAdmin) {
 			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
 				"admin permission required on tenant "+tenantID+" to edit its federation subset")
 			return

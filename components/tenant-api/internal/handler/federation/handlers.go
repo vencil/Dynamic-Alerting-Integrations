@@ -129,8 +129,10 @@ func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 		}
 
 		// Federation token issuance is data egress — require admin on
-		// the target tenant (ADR-020 Wave-0 decision 5).
-		if !d.RBAC.Allowed(rbac.RequestPrincipal(r), req.TenantID, rbac.PermAdmin) {
+		// the target tenant (ADR-020 Wave-0 decision 5). Org-scope-aware
+		// (ADR-027 / LD-6 P4b): an org-scoped rule only grants admin on
+		// a tenant inside the caller's org.
+		if !handler.OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), req.TenantID, rbac.PermAdmin) {
 			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
 				"admin permission required on tenant "+req.TenantID+" to issue a federation token")
 			return
@@ -221,7 +223,10 @@ func ListFederationTokens(d *handler.Deps) http.HandlerFunc {
 			return
 		}
 
-		if !d.RBAC.Allowed(rbac.RequestPrincipal(r), tenantID, rbac.PermAdmin) {
+		// Org-scope-aware (ADR-027 / LD-6 P4b) even though this is a GET:
+		// token records are an enumeration oracle for federation activity,
+		// so the list gate matches the issue/revoke gates.
+		if !handler.OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), tenantID, rbac.PermAdmin) {
 			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
 				"admin permission required on tenant "+tenantID)
 			return
@@ -273,7 +278,8 @@ func DeleteFederationToken(d *handler.Deps) http.HandlerFunc {
 			return
 		}
 
-		if !d.RBAC.Allowed(rbac.RequestPrincipal(r), rec.TenantID, rbac.PermAdmin) {
+		// Org-scope-aware (ADR-027 / LD-6 P4b) — same bar as issuance.
+		if !handler.OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), rec.TenantID, rbac.PermAdmin) {
 			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
 				"admin permission required on tenant "+rec.TenantID)
 			return

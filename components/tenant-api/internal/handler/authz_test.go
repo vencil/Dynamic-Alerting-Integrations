@@ -41,10 +41,10 @@ import (
 func TestTenantsLackingPermission_EmptyInput(t *testing.T) {
 	t.Parallel()
 	rbacMgr := newRBACManager(t, "")
-	if got := tenantsLackingPermission(rbacMgr, principalWithGroups("any"), nil, rbac.PermWrite); len(got) != 0 {
+	if got := tenantsLackingPermission(rbacMgr, nil, principalWithGroups("any"), nil, rbac.PermWrite); len(got) != 0 {
 		t.Errorf("nil tenant list: got %v, want empty", got)
 	}
-	if got := tenantsLackingPermission(rbacMgr, principalWithGroups("any"), []string{}, rbac.PermWrite); len(got) != 0 {
+	if got := tenantsLackingPermission(rbacMgr, nil, principalWithGroups("any"), []string{}, rbac.PermWrite); len(got) != 0 {
 		t.Errorf("empty tenant list: got %v, want empty", got)
 	}
 }
@@ -54,7 +54,7 @@ func TestTenantsLackingPermission_OpenModeRead(t *testing.T) {
 	// Open-mode RBAC grants PermRead to any caller. tenantsLackingPermission
 	// for PermRead in open mode returns empty (no restrictions).
 	rbacMgr := newRBACManager(t, "")
-	got := tenantsLackingPermission(rbacMgr, principalWithGroups("any"), []string{"db-a", "db-b"}, rbac.PermRead)
+	got := tenantsLackingPermission(rbacMgr, nil, principalWithGroups("any"), []string{"db-a", "db-b"}, rbac.PermRead)
 	if len(got) != 0 {
 		t.Errorf("open-mode read: got %v, want empty", got)
 	}
@@ -65,7 +65,7 @@ func TestTenantsLackingPermission_OpenModeWriteRejectsAll(t *testing.T) {
 	// Open-mode RBAC does NOT grant PermWrite (intentional —
 	// missing _rbac.yaml is a pre-prod state, writes should fail).
 	rbacMgr := newRBACManager(t, "")
-	got := tenantsLackingPermission(rbacMgr, principalWithGroups("any"), []string{"db-a", "db-b"}, rbac.PermWrite)
+	got := tenantsLackingPermission(rbacMgr, nil, principalWithGroups("any"), []string{"db-a", "db-b"}, rbac.PermWrite)
 	if len(got) != 2 {
 		t.Errorf("open-mode write: got %v, want all 2 forbidden", got)
 	}
@@ -82,11 +82,11 @@ func TestTenantsLackingPermission_GrantedReadButNotWrite(t *testing.T) {
 `)
 	p := principalWithGroups("viewers")
 
-	read := tenantsLackingPermission(rbacMgr, p, []string{"db-a", "db-b"}, rbac.PermRead)
+	read := tenantsLackingPermission(rbacMgr, nil, p, []string{"db-a", "db-b"}, rbac.PermRead)
 	if len(read) != 0 {
 		t.Errorf("read check: got %v, want empty", read)
 	}
-	write := tenantsLackingPermission(rbacMgr, p, []string{"db-a", "db-b"}, rbac.PermWrite)
+	write := tenantsLackingPermission(rbacMgr, nil, p, []string{"db-a", "db-b"}, rbac.PermWrite)
 	if len(write) != 2 {
 		t.Errorf("write check: got %v, want both forbidden", write)
 	}
@@ -100,7 +100,7 @@ func TestTenantsLackingPermission_PartialAccess(t *testing.T) {
     tenants: ["db-a"]
     permissions: [admin]
 `)
-	got := tenantsLackingPermission(rbacMgr, principalWithGroups("dba-team-a"), []string{"db-a", "db-b"}, rbac.PermWrite)
+	got := tenantsLackingPermission(rbacMgr, nil, principalWithGroups("dba-team-a"), []string{"db-a", "db-b"}, rbac.PermWrite)
 	if len(got) != 1 || got[0] != "db-b" {
 		t.Errorf("partial access: got %v, want [db-b]", got)
 	}
@@ -110,7 +110,7 @@ func TestTenantsLackingPermission_DeduplicatesInput(t *testing.T) {
 	t.Parallel()
 	// Duplicate IDs in input → no duplicates in forbidden list.
 	rbacMgr := newRBACManager(t, "")
-	got := tenantsLackingPermission(rbacMgr, principalWithGroups("any"),
+	got := tenantsLackingPermission(rbacMgr, nil, principalWithGroups("any"),
 		[]string{"db-a", "db-a", "db-b", "db-a"}, rbac.PermWrite)
 	if len(got) != 2 {
 		t.Errorf("dedup: got %v, want 2 unique forbidden", got)
@@ -131,7 +131,7 @@ func TestTenantsLackingPermission_SkipsEmptyIDs(t *testing.T) {
 	// Empty-string IDs in input are silently skipped (defensive
 	// — shouldn't happen but caller may have stray "" entries).
 	rbacMgr := newRBACManager(t, "")
-	got := tenantsLackingPermission(rbacMgr, principalWithGroups("any"),
+	got := tenantsLackingPermission(rbacMgr, nil, principalWithGroups("any"),
 		[]string{"", "db-a", ""}, rbac.PermWrite)
 	if len(got) != 1 || got[0] != "db-a" {
 		t.Errorf("empty-skip: got %v, want [db-a]", got)

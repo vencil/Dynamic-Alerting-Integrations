@@ -118,6 +118,16 @@ spec:
             # tenant, mirroring the machineIdentity audit→enforce discipline.
             - --rbac-metadata-scope-enforce
             {{- end }}
+            {{- if .Values.rbac.orgScopeEnforce }}
+            # ADR-027 / LD-6 P4b: flip the org scope axis from SHADOW (default)
+            # to fail-closed — ONE flag atomically enforces both list visibility
+            # and write authorization for org-scoped rules. Flip ONLY after
+            # increase(tenant_api_scope_would_deny_total{axis="org"}[soak]) AND
+            # {axis="org_write"} BOTH stay 0 over the soak window, and P4c
+            # read-by-id gating has landed (#1040 hard prerequisite). Ship
+            # _tenant_orgs.yaml before the org-scoped _rbac.yaml rules.
+            - --rbac-org-scope-enforce
+            {{- end }}
             {{- if .Values.identity.claimHeaders }}
             # ADR-027 / LD-6 P2: named trusted-hop headers → principal claims
             # (identity.claimHeaders). Rendered as ONE flag, keys sorted (helm
