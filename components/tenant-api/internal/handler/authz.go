@@ -55,14 +55,12 @@ func OrgAllowed(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager,
 // LD-6 P4c): it resolves the tenant's org list and routes through
 // rbac.AllowedInOrgRead, which records its would-deny on axis="org" (the same
 // series the list-plane ScopeAllowed uses) rather than the write plane's
-// axis="org_write". Used by the collection read-LIST filters (filterByRBAC over
+// axis="org_write". Used by the collection read filters (filterByRBAC over
 // PR lists / task results, and hasAccessibleMember/filterAccessibleMembers for
-// the ListGroups member list) so those LISTS stop being a cross-org
-// tenant-reference oracle once the org flag flips — the read plane closes in
-// lockstep with read-by-id. (NOTE: the single-group GetGroup read returns its
-// members unfiltered on every axis — a pre-existing disclosure outside P4c's
-// org-scope mandate, tracked separately; not covered here.) Like OrgAllowed,
-// tenantOrg may be nil (nil-receiver-safe → unlabeled).
+// the ListGroups and GetGroup member lists) so those reads stop being a
+// cross-org tenant-reference oracle once the org flag flips — the read plane
+// closes in lockstep with read-by-id. Like OrgAllowed, tenantOrg may be nil
+// (nil-receiver-safe → unlabeled).
 func OrgAllowedRead(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager,
 	p *rbac.VerifiedPrincipal, tenantID string, want rbac.Permission) bool {
 	orgs, _ := tenantOrg.OrgsForTenant(tenantID)

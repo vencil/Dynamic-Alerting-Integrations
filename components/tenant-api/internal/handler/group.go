@@ -110,12 +110,32 @@ func GetGroup(d *Deps) http.HandlerFunc {
 			return
 		}
 
+		// LD-6 P4c follow-up (#962): mirror ListGroups' RBAC member
+		// filtering. Without it, GetGroup returned the FULL member tenant-id
+		// list to any reader who cleared the route's PermRead("*") gate — the
+		// read-by-id twin of the group-member enumeration oracle P4c closed for
+		// the list view. Hide the group entirely (an identical 404 to a missing
+		// group, so existence leaks nothing) when the caller can read none of
+		// its members, mirroring ListGroups' skip; otherwise return only the
+		// members they can read. Byte-identical for deployments with no
+		// org-scope rules and in open mode (filterAccessibleMembers is the
+		// identity transform there). Where org-scope rules label member
+		// tenants, this filters them on the org axis exactly as ListGroups
+		// already does — labeled cross-org members drop in both shadow and
+		// enforce; the enforce flag only governs unlabeled-tenant leniency.
+		p := rbac.RequestPrincipal(r)
+		rbacCfg := d.RBAC.Get()
+		if len(rbacCfg.Groups) > 0 && !hasAccessibleMember(d.RBAC, d.TenantOrg, p, g.Members) {
+			WriteJSONError(w, r, http.StatusNotFound, "group not found: "+groupID)
+			return
+		}
+
 		writeJSON(w, http.StatusOK, GroupResponse{
 			ID:          groupID,
 			Label:       g.Label,
 			Description: g.Description,
 			Filters:     g.Filters,
-			Members:     g.Members,
+			Members:     filterAccessibleMembers(d.RBAC, d.TenantOrg, p, g.Members),
 		})
 	}
 }
