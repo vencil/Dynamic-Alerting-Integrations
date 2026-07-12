@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -166,9 +167,9 @@ RULE_PACKS = {
         "default_on": True,
         "rule_pack_file": "rule-packs/rule-pack-kubernetes.yaml",
         "defaults": {
-            "container_cpu": {"value": 80, "unit": "%", "desc": "Container CPU % of limit (weakest link)"},
-            "container_cpu_throttle": {"value": 25, "unit": "%", "desc": "Chronic CFS throttle: % of ACTIVE 100ms periods throttled, NOT % CPU lost (critical tier opt-in via container_cpu_throttle_critical, suggest 50; #944)"},
-            "container_memory": {"value": 85, "unit": "%", "desc": "Container memory % of limit (weakest link)"},
+            "container_cpu": {"value": 80, "unit": "%", "desc": "Container CPU % of limit (weakest link)", "metric_class": "saturation"},
+            "container_cpu_throttle": {"value": 25, "unit": "%", "desc": "Chronic CFS throttle: % of ACTIVE 100ms periods throttled, NOT % CPU lost (critical tier opt-in via container_cpu_throttle_critical, suggest 50; #944)", "metric_class": "saturation"},
+            "container_memory": {"value": 85, "unit": "%", "desc": "Container memory % of limit (weakest link)", "metric_class": "saturation"},
         },
         "state_filters": {
             "container_crashloop": {
@@ -195,7 +196,7 @@ RULE_PACKS = {
         "default_on": False,
         "rule_pack_file": "rule-packs/rule-pack-postgresql.yaml",
         "defaults": {
-            "pg_connections": {"value": 80, "unit": "% of max_connections", "desc": "Connection usage % warning"},
+            "pg_connections": {"value": 80, "unit": "% of max_connections", "desc": "Connection usage % warning", "metric_class": "saturation"},
             "pg_replication_lag": {"value": 30, "unit": "seconds", "desc": "Replication lag warning"},
         },
         "optional_overrides": {
@@ -212,8 +213,8 @@ RULE_PACKS = {
         "default_on": True,
         "rule_pack_file": "rule-packs/rule-pack-mariadb.yaml",
         "defaults": {
-            "mysql_connections": {"value": 80, "unit": "count", "desc": "Max threads_connected warning"},
-            "mysql_cpu": {"value": 30, "unit": "threads", "desc": "Running-threads 1m-avg saturation warning; 80→30 = PMM/Nichter 'high' (#944). NOT host CPU% — key kept as mysql_cpu (config-contract stability; metric/alert renamed, #944 closed)"},
+            "mysql_connections": {"value": 80, "unit": "count", "desc": "Max threads_connected warning", "metric_class": "saturation"},
+            "mysql_cpu": {"value": 30, "unit": "threads", "desc": "Running-threads 1m-avg saturation warning; 80→30 = PMM/Nichter 'high' (#944). NOT host CPU% — key kept as mysql_cpu (config-contract stability; metric/alert renamed, #944 closed)", "metric_class": "saturation"},
         },
         "optional_overrides": {
             "mysql_connections_critical": {"value": 120, "unit": "count", "desc": "Critical tier (Scenario D)"},
@@ -226,8 +227,8 @@ RULE_PACKS = {
         "default_on": False,
         "rule_pack_file": "rule-packs/rule-pack-redis.yaml",
         "defaults": {
-            "redis_memory_used_bytes": {"value": 4294967296, "unit": "bytes (4GB)", "desc": "Memory usage warning"},
-            "redis_connected_clients": {"value": 200, "unit": "count", "desc": "Connected clients warning"},
+            "redis_memory_used_bytes": {"value": 4294967296, "unit": "bytes (4GB)", "desc": "Memory usage warning", "metric_class": "saturation"},
+            "redis_connected_clients": {"value": 200, "unit": "count", "desc": "Connected clients warning", "metric_class": "saturation"},
         },
         "optional_overrides": {
             "redis_evicted_keys_total": {"value": 100, "unit": "keys/s", "desc": "Key eviction rate"},
@@ -244,7 +245,7 @@ RULE_PACKS = {
         "default_on": False,
         "rule_pack_file": "rule-packs/rule-pack-mongodb.yaml",
         "defaults": {
-            "mongodb_connections_current": {"value": 300, "unit": "count", "desc": "Current connections warning"},
+            "mongodb_connections_current": {"value": 300, "unit": "count", "desc": "Current connections warning", "metric_class": "saturation"},
             "mongodb_repl_lag_seconds": {"value": 10, "unit": "seconds", "desc": "Replication lag warning"},
         },
         "optional_overrides": {
@@ -260,7 +261,7 @@ RULE_PACKS = {
         "default_on": False,
         "rule_pack_file": "rule-packs/rule-pack-elasticsearch.yaml",
         "defaults": {
-            "es_jvm_memory_used_percent": {"value": 85, "unit": "%", "desc": "JVM heap usage warning"},
+            "es_jvm_memory_used_percent": {"value": 85, "unit": "%", "desc": "JVM heap usage warning", "metric_class": "saturation"},
             "es_filesystem_free_percent": {"value": 15, "unit": "%", "desc": "Disk free space warning"},
         },
         "optional_overrides": {
@@ -276,7 +277,7 @@ RULE_PACKS = {
         "default_on": False,
         "rule_pack_file": "rule-packs/rule-pack-oracle.yaml",
         "defaults": {
-            "oracle_sessions_active": {"value": 200, "unit": "count", "desc": "Active sessions warning"},
+            "oracle_sessions_active": {"value": 200, "unit": "count", "desc": "Active sessions warning", "metric_class": "saturation"},
             "oracle_tablespace_used_percent": {"value": 85, "unit": "%", "desc": "Tablespace usage warning"},
         },
         "optional_overrides": {
@@ -295,7 +296,7 @@ RULE_PACKS = {
         "default_on": False,
         "rule_pack_file": "rule-packs/rule-pack-db2.yaml",
         "defaults": {
-            "db2_connections_active": {"value": 200, "unit": "count", "desc": "Active connections warning"},
+            "db2_connections_active": {"value": 200, "unit": "count", "desc": "Active connections warning", "metric_class": "saturation"},
             "db2_bufferpool_hit_ratio": {"value": 0.95, "unit": "ratio", "desc": "Bufferpool hit ratio warning"},
         },
         "optional_overrides": {
@@ -315,7 +316,7 @@ RULE_PACKS = {
         "rule_pack_file": "rule-packs/rule-pack-clickhouse.yaml",
         "defaults": {
             "clickhouse_queries_rate": {"value": 500, "unit": "qps", "desc": "Query rate warning (5m)"},
-            "clickhouse_active_connections": {"value": 200, "unit": "count", "desc": "Active TCP connections warning"},
+            "clickhouse_active_connections": {"value": 200, "unit": "count", "desc": "Active TCP connections warning", "metric_class": "saturation"},
         },
         "optional_overrides": {
             "clickhouse_max_part_count": {"value": 300, "unit": "count", "desc": "Max part count per partition"},
@@ -332,7 +333,7 @@ RULE_PACKS = {
         "default_on": False,
         "rule_pack_file": "rule-packs/rule-pack-kafka.yaml",
         "defaults": {
-            "kafka_consumer_lag": {"value": 1000, "unit": "messages", "desc": "Consumer lag warning"},
+            "kafka_consumer_lag": {"value": 1000, "unit": "messages", "desc": "Consumer lag warning", "metric_class": "saturation"},
             "kafka_under_replicated_partitions": {"value": 0, "unit": "count", "desc": "Under-replicated partitions (should be 0)"},
             "kafka_broker_count": {"value": 3, "unit": "count", "desc": "Minimum broker count warning"},
             "kafka_active_controllers": {"value": 1, "unit": "count", "desc": "Minimum active controllers (should be 1)"},
@@ -354,11 +355,11 @@ RULE_PACKS = {
         "default_on": False,
         "rule_pack_file": "rule-packs/rule-pack-rabbitmq.yaml",
         "defaults": {
-            "rabbitmq_queue_messages": {"value": 100000, "unit": "messages", "desc": "Queue depth warning"},
-            "rabbitmq_node_mem_percent": {"value": 80, "unit": "%", "desc": "Node memory usage warning"},
-            "rabbitmq_connections": {"value": 1000, "unit": "count", "desc": "Connection count warning"},
+            "rabbitmq_queue_messages": {"value": 100000, "unit": "messages", "desc": "Queue depth warning", "metric_class": "saturation"},
+            "rabbitmq_node_mem_percent": {"value": 80, "unit": "%", "desc": "Node memory usage warning", "metric_class": "saturation"},
+            "rabbitmq_connections": {"value": 1000, "unit": "count", "desc": "Connection count warning", "metric_class": "saturation"},
             "rabbitmq_consumers": {"value": 5, "unit": "count", "desc": "Minimum consumer count warning"},
-            "rabbitmq_unacked_messages": {"value": 10000, "unit": "messages", "desc": "Unacknowledged messages warning"},
+            "rabbitmq_unacked_messages": {"value": 10000, "unit": "messages", "desc": "Unacknowledged messages warning", "metric_class": "saturation"},
         },
         "optional_overrides": {
             "rabbitmq_queue_messages_critical": {"value": 500000, "unit": "messages", "desc": "Queue depth critical"},
@@ -377,8 +378,8 @@ RULE_PACKS = {
         "rule_pack_file": "rule-packs/rule-pack-jvm.yaml",
         "defaults": {
             "jvm_gc_pause": {"value": 0.5, "unit": "seconds/5m", "desc": "GC pause duration rate warning"},
-            "jvm_memory": {"value": 80, "unit": "%", "desc": "Heap memory usage warning"},
-            "jvm_threads": {"value": 500, "unit": "count", "desc": "Active thread count warning"},
+            "jvm_memory": {"value": 80, "unit": "%", "desc": "Heap memory usage warning", "metric_class": "saturation"},
+            "jvm_threads": {"value": 500, "unit": "count", "desc": "Active thread count warning", "metric_class": "saturation"},
         },
         "optional_overrides": {
             "jvm_gc_pause_critical": {"value": 1.0, "unit": "seconds/5m", "desc": "GC pause critical"},
@@ -393,9 +394,9 @@ RULE_PACKS = {
         "default_on": False,
         "rule_pack_file": "rule-packs/rule-pack-nginx.yaml",
         "defaults": {
-            "nginx_connections": {"value": 1000, "unit": "count", "desc": "Active connections warning"},
+            "nginx_connections": {"value": 1000, "unit": "count", "desc": "Active connections warning", "metric_class": "saturation"},
             "nginx_request_rate": {"value": 5000, "unit": "req/s", "desc": "Request rate warning"},
-            "nginx_waiting": {"value": 200, "unit": "count", "desc": "Waiting connections (backlog) warning"},
+            "nginx_waiting": {"value": 200, "unit": "count", "desc": "Waiting connections (backlog) warning", "metric_class": "saturation"},
         },
         "optional_overrides": {
             "nginx_connections_critical": {"value": 2000, "unit": "count", "desc": "Active connections critical"},
@@ -404,6 +405,43 @@ RULE_PACKS = {
         },
     },
 }
+
+# 飽和類指標（metric_class == "saturation"）的 _critical 教育註解——純顯示、
+# 不擋不驗。判準：有界資源用量 / backlog（容量行動）＋存在配對症狀指標。
+# 詳見 docs/alerting-design-fundamentals.md〈告警該響之前〉。
+SATURATION_CRITICAL_COMMENT = "# 飽和類指標的 critical 層：飽和=容量訊號，建議先確認配對症狀告警（如慢查詢），或 warning＋容量規劃"
+
+_SATURATION_CRITICAL_RE = re.compile(r"^(\s*)([A-Za-z0-9_]+)_critical:")
+
+
+def saturation_default_keys() -> set[str]:
+    """回傳 RULE_PACKS defaults 中標記為 saturation 的 base key set。"""
+    return {
+        key
+        for pack in RULE_PACKS.values()
+        for key, info in pack.get("defaults", {}).items()
+        if info.get("metric_class") == "saturation"
+    }
+
+
+def annotate_saturation_criticals(yaml_text: str) -> str:
+    """對飽和類 `<base>_critical:` 鍵行上方插入教育註解（確定性行插入）。
+
+    - base key 以 RULE_PACKS defaults 的 ``metric_class == "saturation"`` set 判定
+    - 逐行 regex 比對、保留原縮排；不引入 ruamel（safe_dump 後處理）
+    - 冪等：上一行已是同一註解時不重複插入
+    - 已註解行（``#`` 開頭）不會匹配 key 規則，不誤觸
+    """
+    saturation_keys = saturation_default_keys()
+    out: list[str] = []
+    for line in yaml_text.split("\n"):
+        m = _SATURATION_CRITICAL_RE.match(line)
+        if m and m.group(2) in saturation_keys:
+            comment_line = f"{m.group(1)}{SATURATION_CRITICAL_COMMENT}"
+            if not out or out[-1] != comment_line:
+                out.append(comment_line)
+        out.append(line)
+    return "\n".join(out)
 
 
 def prompt_choice(question: str, options: list[tuple[str, str]], default: str | None = None) -> str:
@@ -694,6 +732,23 @@ def generate_report(tenant_name: str, selected_dbs: list[str], output_dir: str, 
         if pack:
             lines.append(f"  ✅ {pack['display']} — 已預載")
 
+    # 飽和類指標教育段 — 僅當所選 pack 含 metric_class == saturation 的鍵時
+    saturation_keys = sorted({
+        key
+        for db in selected_dbs
+        for key, info in (RULE_PACKS.get(db) or {}).get("defaults", {}).items()
+        if info.get("metric_class") == "saturation"
+    })
+    if saturation_keys:
+        lines.extend([
+            "",
+            "## 飽和類指標的 critical 層（教育提示）",
+            "  飽和=容量訊號，建議先確認配對症狀告警（如慢查詢），或 warning＋容量規劃。",
+            "  詳見〈告警該響之前〉：docs/alerting-design-fundamentals.md",
+            "  本租戶可用的飽和類 _critical 鍵：",
+        ])
+        lines.extend(f"    - {key}_critical" for key in saturation_keys)
+
     # Helm deployment command (no rule pack overlays needed)
     lines.extend(["", "## 部署指令", ""])
 
@@ -769,6 +824,8 @@ def write_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant
         + yaml.safe_dump(tenant_data, default_flow_style=False,
                          allow_unicode=True, sort_keys=False)
     )
+    # 飽和類 _critical 鍵上方插入教育註解（純顯示；API 全檔重寫不保留）
+    tenant_content = annotate_saturation_criticals(tenant_content)
     write_text_secure(tenant_path, tenant_content)
     print(f"  📄 {tenant_path}")
 
@@ -1145,6 +1202,8 @@ def main() -> None:
             + yaml.safe_dump(profile_data, default_flow_style=False,
                              allow_unicode=True, sort_keys=False)
         )
+        # 飽和類 _critical 鍵上方插入教育註解（純顯示）
+        profiles_content = annotate_saturation_criticals(profiles_content)
         write_text_secure(profiles_path, profiles_content)
         print(f"✅ Profile skeleton generated: {profiles_path}")
         print(f"   Profile: {args.generate_profile} (tier={args.tier})")

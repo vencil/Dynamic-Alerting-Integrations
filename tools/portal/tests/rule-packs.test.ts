@@ -16,7 +16,12 @@
  * Because the global is read at module-eval time, each test resets the
  * module registry and dynamic-imports a fresh instance.
  */
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const LIVE_STUB = {
   rulePacks: {
@@ -70,5 +75,89 @@ describe('rule-packs accessor — platform-data resolution', () => {
     expect(keys).toEqual([
       expect.objectContaining({ key: 'live_metric', pack: 'livepack', label: 'Live Pack', value: 42 }),
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Saturation metricClass tagging — mirrors scaffold_tenant.py RULE_PACKS
+// `metric_class: saturation` (via platform-data `metricClass`). Display-only:
+// consumers show the `_critical` educational hint from this field.
+// ---------------------------------------------------------------------------
+
+// Expected saturation keys present in the INLINE FALLBACK catalog — the full
+// authoritative 22-key set (see tests/ops/test_scaffold_tenant.py
+// EXPECTED_SATURATION_KEYS). The fallback caught up with the source set when
+// #1099 backfilled kubernetes container_cpu_throttle into the offline catalog.
+const EXPECTED_FALLBACK_SATURATION_KEYS = [
+  'clickhouse_active_connections',
+  'container_cpu',
+  'container_cpu_throttle',
+  'container_memory',
+  'db2_connections_active',
+  'es_jvm_memory_used_percent',
+  'jvm_memory',
+  'jvm_threads',
+  'kafka_consumer_lag',
+  'mongodb_connections_current',
+  'mysql_connections',
+  'mysql_cpu',
+  'nginx_connections',
+  'nginx_waiting',
+  'oracle_sessions_active',
+  'pg_connections',
+  'rabbitmq_connections',
+  'rabbitmq_node_mem_percent',
+  'rabbitmq_queue_messages',
+  'rabbitmq_unacked_messages',
+  'redis_connected_clients',
+  'redis_memory_used_bytes',
+];
+
+describe('rule-packs fallback — saturation metricClass tagging', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    delete (window as any).__PLATFORM_DATA;
+  });
+
+  afterEach(() => {
+    delete (window as any).__PLATFORM_DATA;
+  });
+
+  it('fallback metricClass === saturation key set matches the expected set', async () => {
+    const { RULE_PACK_DATA } = await import('../src/interactive/tools/_common/data/rule-packs.js');
+    const tagged = Object.values(RULE_PACK_DATA)
+      .flatMap((pack: any) => Object.entries(pack.defaults ?? {})
+        .filter(([, meta]: [string, any]) => meta.metricClass === 'saturation')
+        .map(([key]) => key))
+      .sort();
+    expect(tagged).toEqual(EXPECTED_FALLBACK_SATURATION_KEYS);
+  });
+
+  it('metricClass values are only ever "saturation"', async () => {
+    const { RULE_PACK_DATA } = await import('../src/interactive/tools/_common/data/rule-packs.js');
+    for (const pack of Object.values(RULE_PACK_DATA) as any[]) {
+      for (const meta of Object.values(pack.defaults ?? {}) as any[]) {
+        if ('metricClass' in meta) expect(meta.metricClass).toBe('saturation');
+      }
+    }
+  });
+
+  it('fallback metricClass aligns with committed platform-data.json (fallback pack/keys only)', async () => {
+    // Only compare pack/keys the fallback carries — the fallback is allowed to
+    // be a smaller offline snapshot than platform-data.json; whole-entry parity
+    // (including key sets) is owned by rule-packs-fallback-drift.test.ts.
+    const raw = readFileSync(
+      resolve(__dirname, '../../../docs/assets/platform-data.json'), 'utf-8');
+    const platform = JSON.parse(raw);
+    const { RULE_PACK_DATA } = await import('../src/interactive/tools/_common/data/rule-packs.js');
+    for (const [packId, pack] of Object.entries(RULE_PACK_DATA) as [string, any][]) {
+      const jsonDefaults = platform.rulePacks?.[packId]?.defaults;
+      if (!jsonDefaults) continue;
+      for (const [key, meta] of Object.entries(pack.defaults ?? {}) as [string, any][]) {
+        if (!(key in jsonDefaults)) continue;
+        expect(jsonDefaults[key].metricClass, `${packId}.${key} metricClass drift`)
+          .toBe(meta.metricClass);
+      }
+    }
   });
 });

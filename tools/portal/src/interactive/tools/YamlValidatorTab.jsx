@@ -17,6 +17,7 @@ import { generateSampleYaml, validateConfig } from './_common/sim/alert-engine.j
 import { MetricAutocomplete, RulePackSelector } from './portal-shared.jsx';
 
 const t = window.__t || ((zh, en) => en);
+const REPO_BASE = "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main";
 
 function YamlValidatorTab() {
   const [selectedPacks, setSelectedPacks] = useState(['mariadb', 'kubernetes']);
@@ -31,6 +32,26 @@ function YamlValidatorTab() {
   }, []);
 
   const allMetrics = useMemo(() => getAllMetricKeys(selectedPacks), [selectedPacks]);
+
+  // Saturation `_critical` educational hint (display-only, never blocks
+  // validation): scan the textarea for `<base>_critical:` keys whose base
+  // metric is classed `saturation` in platform-data / fallback catalog.
+  const saturationCriticalHits = useMemo(() => {
+    const saturationKeys = new Set(
+      allMetrics.filter((m) => m.metricClass === 'saturation').map((m) => m.key));
+    if (saturationKeys.size === 0) return [];
+    const hits = [];
+    const seen = new Set();
+    for (const line of yaml.split('\n')) {
+      if (line.trim().startsWith('#')) continue;
+      const m = line.match(/^\s*([A-Za-z0-9_]+)_critical\s*:/);
+      if (m && saturationKeys.has(m[1]) && !seen.has(m[1])) {
+        seen.add(m[1]);
+        hits.push(`${m[1]}_critical`);
+      }
+    }
+    return hits;
+  }, [allMetrics, yaml]);
 
   const validate = useCallback(() => {
     const { config, errors } = parseYaml(yaml);
@@ -102,6 +123,25 @@ function YamlValidatorTab() {
           className="text-xs px-2 py-1 bg-gray-200 hover:bg-gray-300 rounded"
         >{t('產生範例：Routing Profile', 'Generate: Routing Profile')}</button>
       </div>
+
+      {saturationCriticalHits.length > 0 && (
+        <p
+          className="text-xs mt-1 mb-2 pl-2 border-l-2 border-[color:var(--da-color-warning)] text-[color:var(--da-color-warning-text)]"
+          data-testid="saturation-critical-hint"
+        >
+          <code className="font-mono">{saturationCriticalHits.join(', ')}</code>
+          {' — '}
+          {t('這是飽和類指標的 critical 層：飽和屬容量訊號，建議先確認有配對的症狀告警（如慢查詢），或考慮 warning＋容量規劃——詳見',
+             'This sets a critical tier on a saturation metric — saturation is a capacity signal; confirm a paired symptom alert (e.g. slow queries) exists first, or consider warning + capacity planning. See ')}
+          <a
+            href={`${REPO_BASE}/docs/alerting-design-fundamentals.md`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline"
+          >{t('〈告警該響之前〉', "'Before the Alert Fires'")}</a>
+          {t('。', '.')}
+        </p>
+      )}
 
       <textarea
         value={yaml}

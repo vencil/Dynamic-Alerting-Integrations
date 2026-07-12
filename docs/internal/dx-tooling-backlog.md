@@ -97,6 +97,10 @@ v2.6.0-final 發現 troubleshooting.en.md 缺少 Operator 章節（直到 final 
 
 ## 候選 — 互動工具
 
+### Threshold Calculator 真相統一到 platform-data
+
+**來源**：飽和類 `_critical` 教育提示 PR 的範圍決策。`threshold-calculator/calc.js` 的 `METRIC_PROFILES` 是 7 個 hardcode 指標，與 RULE_PACKS→platform-data 管線平行維護：鍵名已漂移（`redis_memory` vs `redis_memory_used_bytes`、`kafka_lag` vs `kafka_consumer_lag`）、單位/desc 各說各話，且其 `generateYAML` 無條件 emit `<metric>_critical` 卻拿不到 `metricClass` 教育語境。方向：label/unit/desc/metricClass 改從 `window.__PLATFORM_DATA.rulePacks` 解析（`typical` 百分位分佈留 local）、鍵名正名、data-integrity 測試釘死。ROI：消一個平行真相＋calculator 的 `_critical` 建議可掛同一教育提示。
+
 ### Config Diff Visualizer (JSX) — 完整版
 
 v2.2.0 在 Routing Trace Tab 加入 Copy JSON 匯出。完整版需要獨立工具：side-by-side 比較兩個 tenant 或兩個版本的 YAML 配置差異，利用 `config-diff --json` 輸出渲染 diff view（新增/移除/修改 highlight）。
