@@ -32,7 +32,7 @@ lang: zh
 
 ## 1. 決策面：已解的領域
 
-「哪些條件該響告警」這一面，業界已有成熟共識：對症狀（symptom）告警、少對原因（cause）告警；page 留給緊急且需要人類智慧的事，其餘降級為 ticket 或紀錄；每一個 page 都該是 actionable 的。這些出自 Rob Ewaschuk 的 [My Philosophy on Alerting](https://docs.google.com/document/d/199PqyG3UsyXlwieHaqbGiWVa8eMWi8zzAn0YfcApr8Q) 與 [Google SRE Book 第 6 章](https://sre.google/sre-book/monitoring-distributed-systems/)，此處不重述。（團隊還沒建立這些概念？本系列[第一篇](alerting-design-fundamentals.md)用入門語言講決策面。）
+「哪些條件該響告警」這一面，業界已有成熟共識：對症狀（symptom）告警、少對原因（cause）告警；page 留給緊急且需要人類智慧的事，其餘降級為 ticket 或紀錄；每一個 page 都該是 actionable 的。這些出自 Rob Ewaschuk 的 [My Philosophy on Alerting](https://docs.google.com/document/d/199PqyG3UsyXlwieHaqbGiWVa8eMWi8zzAn0YfcApr8Q) 與 [Google SRE Book 第 6 章](https://sre.google/sre-book/monitoring-distributed-systems/)，此處不重述。（團隊還沒建立這些概念？本系列[第一篇](alerting-design-fundamentals.md)用入門語言講決策面；「閾值該設多嚴」見[第二篇](alerting-slo-error-budget.md)。）
 
 **本文從它們停下的地方開始**：決策面告訴你什麼時候該響；動作面問的是——響了之後執行的那件事，本身是不是一個及格的工程物件。
 

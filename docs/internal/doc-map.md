@@ -43,6 +43,7 @@ lang: zh
 | `docs/adr/030-decision-layer-migration-validation.md` | Platform Engineers, contributors | ADR-030: 決策層遷移驗證 — 製造 Oracle 而非觀測 |
 | `docs/alerting-best-practices.md` (.en.md) | SREs, Platform Engineers | Actionable 之後：從告警決策到自動化動作的冪等光譜 |
 | `docs/alerting-design-fundamentals.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | 告警該響之前：從資源飽和到症狀導向的告警設計 |
+| `docs/alerting-slo-error-budget.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | 多嚴才算嚴：用 SLO 與錯誤預算決定告警門檻 |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/api/tenant-api-hardening.md` (.en.md) | platform-ops, sre, security | Tenant API Hardening (v2.8.0) |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers, SREs, decision-maker | 架構與設計 — 動態多租戶警報平台技術白皮書 |

@@ -236,6 +236,7 @@ nav:
     - 架構與設計: architecture-and-design.md
     - 性能基準: benchmarks.md
     - 告警設計入門: alerting-design-fundamentals.md
+    - 告警門檻與錯誤預算: alerting-slo-error-budget.md
     - 告警動作與冪等: alerting-best-practices.md
     - 架構決策 (ADR):
       - 總覽: adr/README.md

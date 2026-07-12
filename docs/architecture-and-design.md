@@ -41,7 +41,7 @@ lang: zh
 | [未來擴展路線](design/roadmap-future.md) | v2.9.0 已交付 + v2.10.0+ 長期探索 | Platform / 決策者 |
 | *專題* | | |
 | [性能基準](benchmarks.md) | 規模 / 速度 / 容量 / 穩定的實測數字 | Platform / SRE / 決策者 |
-| [告警設計入門](alerting-design-fundamentals.md) · [告警動作與冪等](alerting-best-practices.md) | 告警最佳實務系列：症狀導向設計、冪等光譜、動作層護欄、「準則 × 平台 enforce」對照 | SRE / Domain Expert / 租戶 |
+| [告警設計入門](alerting-design-fundamentals.md) · [SLO 與錯誤預算](alerting-slo-error-budget.md) · [告警動作與冪等](alerting-best-practices.md) | 告警最佳實務系列：症狀導向設計、SLO/burn-rate 門檻、冪等光譜、動作層護欄、「準則 × 平台 enforce」對照 | SRE / Domain Expert / 租戶 |
 | [治理與安全](governance-security.md) | 稽核、安全紀律 | Platform / Security |
 | [故障排查](troubleshooting.md) | 邊界案例、疑難排解 | Platform / SRE / 租戶 |
 | [驗證場景與平台行為](scenarios/verified-scenarios.md) | 場景矩陣 | Platform / SRE |

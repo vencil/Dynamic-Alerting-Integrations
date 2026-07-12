@@ -12,7 +12,7 @@ lang: en
 
 > **Audience**: Teams just starting to build out their alerting — tenant teams and domain experts alike. No SRE background required.
 > **What you'll take away**: one criterion for "when to wake someone up", one signal-tiering reference table, and one self-check checklist.
-> **Series**: This is the first article in the alerting best-practices series (**what to alert on**); the third article, [Beyond Actionable](alerting-best-practices.en.md), covers the actions an alert triggers. Readers who already have a mature alerting setup can skip straight to that one.
+> **Series**: This is the first article in the alerting best-practices series (**what to alert on**); the second, [How Strict Is Strict Enough](alerting-slo-error-budget.en.md), covers how strict to be (SLOs and error budgets); the third, [Beyond Actionable](alerting-best-practices.en.md), covers the actions an alert triggers. Readers who already have a mature alerting setup can skip straight to the later two.
 
 ---
 
@@ -129,4 +129,4 @@ Take your existing alert list and ask, item by item:
 5. Is any **automated action hanging off a saturation signal**? If so → detach it first, read the third article in this series, then decide the conditions for putting it back.
 6. Are signal semantics **defined by domain experts**, or guessed independently by each team?
 
-Next step: once you are alerting on the right things, the next question is "how severe, and when to wake someone up" — that is the subject of SLOs and error budgets, the second article in this series (in progress).
+Next step: once you are alerting on the right things, the next question is "how severe, and when to wake someone up" — that is the subject of SLOs and error budgets — see the second article in this series, [How Strict Is Strict Enough](alerting-slo-error-budget.en.md).

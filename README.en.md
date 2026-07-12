@@ -14,7 +14,7 @@ Config-driven multi-tenant alerting platform built on Prometheus `group_left` ve
 > **Managing 100 tenants: from 5,000 hand-written rules → 237 fixed rules.**
 > Tenants write YAML only — no PromQL, and even author their own alerts via parameterized recipes (v2.9.0 **Custom Alerts**). New-tenant **setup** in minutes (for rule-pack-covered metrics), changes in seconds; migrating an existing complex estate (custom exporters / topology metrics) depends on the metric shape — see the [Migration Guide](docs/migration-guide.en.md).
 
-![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.9.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-16-orange) ![Alerts](https://img.shields.io/badge/alerts-146-red) ![Bilingual](https://img.shields.io/badge/bilingual-93%20pairs-blue)
+![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.9.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-16-orange) ![Alerts](https://img.shields.io/badge/alerts-146-red) ![Bilingual](https://img.shields.io/badge/bilingual-94%20pairs-blue)
 
 ---
 
@@ -108,7 +108,7 @@ Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/
 | [`environments/`](environments/) | CI / local environment profiles | Cross-environment config |
 | [`scripts/`](scripts/) | Shell entrypoints + 200 Python tools under `scripts/tools/{ops,dx,lint}` | Run tools, linting, DX |
 | [`tests/`](tests/) | Python pytest (`test_*.py`), shell scenarios (`scenario-*.sh`), `e2e/` Playwright, `snapshots/` | Run / add tests |
-| [`docs/`](docs/) | 201 public documents (91 bilingual pairs). Lookup table: [doc-map](docs/internal/doc-map.en.md) | Design / integration / ops docs |
+| [`docs/`](docs/) | 203 public documents (92 bilingual pairs). Lookup table: [doc-map](docs/internal/doc-map.en.md) | Design / integration / ops docs |
 | [`operator-manifests/`](operator-manifests/) | `operator_generate.py` output samples (16 PrometheusRule rule-packs) | Reference output for operator mode |
 | [`CLAUDE.md`](CLAUDE.md) | AI Agent bootstrap + task-routing table | Required before starting an agent session |
 | [`docs/internal/`](docs/internal/) | Internal playbooks (testing / benchmark / windows-mcp / github-release) and maps | Debugging, releases, benchmarks |
