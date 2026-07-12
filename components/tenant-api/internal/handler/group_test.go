@@ -160,7 +160,9 @@ func TestGetGroup_Success(t *testing.T) {
 	setupGroupsFile(t, configDir, testGroupsYAML)
 	mgr := groups.NewManager(configDir)
 
-	h := GetGroup(&Deps{Groups: mgr})
+	// Open-mode RBAC (empty _rbac.yaml): filterAccessibleMembers is the
+	// identity transform, so this pins the byte-identical open-mode path.
+	h := GetGroup(&Deps{Groups: mgr, RBAC: newRBACManager(t, "")})
 	req := newRequestWithChiParam("GET", "/api/v1/groups/production-dba", "id", "production-dba", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -214,6 +216,114 @@ func TestGetGroup_InvalidID(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("GetGroup() status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+// TestGetGroup_OrgScopeFiltersMembers grounds the #962 LD-6 P4c follow-up: GetGroup mirrors
+// ListGroups' RBAC member filtering. Under org-scope enforce, an org-scoped
+// reader who clears the route's PermRead("*") gate still sees only the members
+// in its own org, and a group with no in-org member is hidden (404) — closing
+// the read-by-id twin of the group-member enumeration oracle P4c closed for the
+// list view. Fixture reused from org_read_enforce_test.go.
+func TestGetGroup_OrgScopeFiltersMembers(t *testing.T) {
+	t.Parallel()
+	const groupsYAML = `groups:
+  mixed-org:
+    label: Mixed Org
+    members:
+      - ` + orgReadTenantIn + `
+      - ` + orgReadTenantOut + `
+  outsiders-only:
+    label: Outsiders Only
+    members:
+      - ` + orgReadTenantOut + `
+  empty-grp:
+    label: Empty Group
+    members: []
+`
+	configDir := setupConfigDir(t, nil)
+	setupGroupsFile(t, configDir, groupsYAML)
+	groupMgr := groups.NewManager(configDir)
+
+	get := func(t *testing.T, groupID, callerOrg string) *httptest.ResponseRecorder {
+		t.Helper()
+		mgr, torg, _ := newOrgReadManager(t, orgReadRBACYAML, true) // enforce
+		d := &Deps{Groups: groupMgr, RBAC: mgr, TenantOrg: torg}
+		// GetGroup's route uses a nil tenantIDFn (the group id is not a tenant
+		// id), so the middleware gate is the org-blind Allowed(p, "*", read) —
+		// the org-scoped "*" reader clears it, and the per-member org filtering
+		// happens inside the handler.
+		wrapped := wrapWithRBACMiddleware(GetGroup(d), mgr, rbac.PermRead, nil)
+		req := newRequestWithChiParam("GET", "/api/v1/groups/"+groupID, "id", groupID, nil)
+		req = orgReadIdentity(req, callerOrg)
+		w := httptest.NewRecorder()
+		wrapped.ServeHTTP(w, req)
+		return w
+	}
+
+	// In-org caller: sees the group, but the cross-org member is filtered out.
+	w := get(t, "mixed-org", orgReadMemberOrg)
+	if w.Code != http.StatusOK {
+		t.Fatalf("in-org GetGroup status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp GroupResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Members) != 1 || resp.Members[0] != orgReadTenantIn {
+		t.Errorf("GetGroup members = %v, want [%s] (cross-org member must be filtered under enforce)", resp.Members, orgReadTenantIn)
+	}
+
+	// A group whose only member is cross-org is hidden — an identical 404 to a
+	// missing group, so existence leaks nothing (mirrors ListGroups' skip).
+	if w := get(t, "outsiders-only", orgReadMemberOrg); w.Code != http.StatusNotFound {
+		t.Errorf("cross-org-only GetGroup status = %d, want 404 (group with no accessible member must be hidden)", w.Code)
+	}
+
+	// Edge: a group with NO members has no accessible member either, so it is
+	// hidden (404) under configured RBAC — matching ListGroups' skip. This is a
+	// behavior change vs pre-fix (200 with empty members) that applies whenever
+	// RBAC groups are configured (not only under org-scope); pinned here so the
+	// parity with ListGroups is intentional, not incidental.
+	if w := get(t, "empty-grp", orgReadMemberOrg); w.Code != http.StatusNotFound {
+		t.Errorf("empty-member GetGroup status = %d, want 404 (group with no members is hidden, matching ListGroups)", w.Code)
+	}
+}
+
+// TestGetGroup_NoOrgRuleByteIdentical is the byte-identical control: with a
+// plain (non-org-scoped) read grant, enforce mode changes nothing — a "*"
+// reader sees every member, exactly as before this fix. Guards against the
+// filter over-restricting a deployment that has RBAC groups but no org-scope.
+func TestGetGroup_NoOrgRuleByteIdentical(t *testing.T) {
+	t.Parallel()
+	const groupsYAML = `groups:
+  mixed-org:
+    label: Mixed Org
+    members:
+      - ` + orgReadTenantIn + `
+      - ` + orgReadTenantOut + `
+`
+	configDir := setupConfigDir(t, nil)
+	setupGroupsFile(t, configDir, groupsYAML)
+	groupMgr := groups.NewManager(configDir)
+
+	mgr, torg, _ := newOrgReadManager(t, orgReadPlainRBACYAML, true) // enforce, but no org-scope rule
+	d := &Deps{Groups: groupMgr, RBAC: mgr, TenantOrg: torg}
+	wrapped := wrapWithRBACMiddleware(GetGroup(d), mgr, rbac.PermRead, nil)
+	req := newRequestWithChiParam("GET", "/api/v1/groups/mixed-org", "id", "mixed-org", nil)
+	req = orgReadIdentity(req, orgReadMemberOrg)
+	w := httptest.NewRecorder()
+	wrapped.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp GroupResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Members) != 2 {
+		t.Errorf("no-org-rule GetGroup members = %d, want 2 (no org-scope rule → org axis (true,true) → no filtering)", len(resp.Members))
 	}
 }
 

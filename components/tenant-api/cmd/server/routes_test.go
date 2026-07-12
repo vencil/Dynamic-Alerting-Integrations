@@ -128,7 +128,7 @@ var readRouteManifest = map[string]string{
 	"GET /api/v1/tenants":            gateReadListOrgBlind + " — ScopeAllowed filters each row (list plane, P4a)",
 	"GET /api/v1/tenants/search":     gateReadListOrgBlind + " — same ScopeAllowed row filter as the list",
 	"GET /api/v1/groups":             gateReadListOrgBlind + " — ListGroups filters members + skips inaccessible groups (hasAccessibleMember/filterAccessibleMembers, org-aware P4c)",
-	"GET /api/v1/groups/{id}/":       gateReadListOrgBlind + " — single group; GetGroup returns members UNFILTERED (pre-existing member-id disclosure on ALL axes, not P4c-scoped — tracked separately; middleware is org-blind '*')",
+	"GET /api/v1/groups/{id}/":       gateReadListOrgBlind + " — single group; GetGroup filters members + hides inaccessible groups in-handler (hasAccessibleMember/filterAccessibleMembers, org-aware P4c; mirrors ListGroups). Middleware org-blind '*'; in-handler org filter",
 	"GET /api/v1/views":              gateReadListOrgBlind + " — saved views are not tenant-scoped data",
 	"GET /api/v1/views/{id}/":        gateReadListOrgBlind + " — single view; not tenant-scoped data",
 	"GET /api/v1/tasks/{id}":         gateReadListOrgBlind + " — results org-filtered in-handler (filterTaskResults)",
