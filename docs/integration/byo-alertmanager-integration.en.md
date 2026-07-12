@@ -28,6 +28,8 @@ The four root causes of alert fatigue and their corresponding solutions:
 
 Both Silent Mode and Maintenance Mode support structured object configuration, including `expires` (ISO 8601) auto-expiry and `reason` field to prevent "set and forget".
 
+> The table above is the **quick-reference view for the BYO integration context**. For the full alerting best practices (what to alert on → notification → action-layer idempotency), see the series: [Alert Design Fundamentals](../alerting-design-fundamentals.en.md) · [Beyond Actionable](../alerting-best-practices.en.md).
+
 All Alertmanager configuration fragments are automatically generated from tenant YAML by `generate_alertmanager_routes.py`:
 
 ```mermaid

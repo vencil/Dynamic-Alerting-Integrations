@@ -38,12 +38,18 @@ lang: en
 | `docs/adr/024-version-aware-threshold-via-dimensional-label.md` (.en.md) | Platform Engineers, contributors, SREs | ADR-024: Declarative Dimensional Alerting Engine — Version-Aware Thresholds + Custom Alerts |
 | `docs/adr/025-alerting-plane-self-liveness.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-025: Alerting-Plane Self-Liveness — Detecting When the Alerting System Itself Dies |
 | `docs/adr/026-node-maintenance-liveness-suppression.md` | Platform Engineers, SREs | ADR-026: Node/Cluster 維護告警抑制 — 不需要子系統 |
+| `docs/adr/028-federation-revocation-tamper-evidence.md` | Platform Engineers, Security & Compliance, SREs | ADR-028: Federation 撤銷儲存 tamper-evidence — off-cluster 對帳為主控 |
+| `docs/adr/029-custom-alert-cross-tenant-query-scoping.md` | Platform Engineers, Security & Compliance, SREs | ADR-029: 租戶自訂告警跨租戶查詢隔離 — 編譯期邊界中和為主、評估期 ruler 隔離延後 |
+| `docs/adr/030-decision-layer-migration-validation.md` | Platform Engineers, contributors | ADR-030: 決策層遷移驗證 — 製造 Oracle 而非觀測 |
+| `docs/alerting-best-practices.md` (.en.md) | SREs, Platform Engineers | Beyond Actionable: From Alert Decisions to the Idempotency Spectrum of Automated Actions |
+| `docs/alerting-design-fundamentals.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | Before the Alert Fires: From Resource Saturation to Symptom-Based Alerting |
 | `docs/api/README.md` (.en.md) | Platform Engineers, SREs | Threshold Exporter API Reference |
 | `docs/api/tenant-api-hardening.md` (.en.md) | platform-ops, sre, security | Tenant API Hardening (v2.8.0) |
 | `docs/architecture-and-design.md` (.en.md) | Platform Engineers, SREs, decision-maker | Architecture and Design — Multi-Tenant Dynamic Alerting Platform Technical Whitepaper |
 | `docs/benchmarks.md` (.en.md) | Platform Engineers, SREs, decision-maker | Performance Benchmarks |
 | `docs/cheat-sheet.md` (.en.md) | All | da-tools Quick Reference |
 | `docs/cli-reference.md` (.en.md) | Platform Engineers, SREs, DevOps, Tenants | da-tools CLI Reference |
+| `docs/cross-tenant-configmap-hardening.md` (.en.md) | Platform Engineers, SREs, Security & Compliance | Cross-Tenant ConfigMap Hardening Baseline (operator RBAC + off-cluster audit) |
 | `docs/custom-rule-governance.md` (.en.md) | Platform Engineers | Multi-Tenant Custom Rule Governance Model |
 | `docs/design/config-driven.md` (.en.md) | Platform Engineers, DevOps | Config-Driven Architecture Design — Three-State Config, Dynamic Routing, Tenant API |
 | `docs/design/high-availability.md` (.en.md) | Platform Engineers, DevOps | High Availability (HA) Design — Replicas, PDB, Preventing Double-Counting |
@@ -67,6 +73,7 @@ lang: en
 | `docs/integration/byo-prometheus-integration.md` (.en.md) | Platform Engineers, SREs | Bring Your Own Prometheus (BYOP) — Existing Monitoring Infrastructure Integration Guide |
 | `docs/integration/deployment-sizing.md` (.en.md) | Platform Engineers, SREs, DevOps | Deployment Sizing Guide |
 | `docs/integration/federation-integration.md` (.en.md) | Platform Engineers | Federation Integration Guide |
+| `docs/integration/gitlab-ce-sso.md` (.en.md) | Platform Engineers, SREs | GitLab CE SSO Integration Guide |
 | `docs/integration/gitops-deployment.md` (.en.md) | Platform Engineers, DevOps | GitOps Deployment Guide |
 | `docs/integration/operator-alertmanager-integration.md` (.en.md) | Platform Engineers | Operator Alertmanager Integration Guide |
 | `docs/integration/operator-gitops-deployment.md` (.en.md) | Platform Engineers | Operator GitOps Deployment Guide |

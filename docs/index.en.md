@@ -89,6 +89,7 @@ The traditional approach needs one rule set per tenant (100 tenants × 50 rules 
 | [Migration Guide](migration-guide.en.md) | DevOps, Tenants | Onboarding flow, AST engine |
 | [Governance & Security](governance-security.en.md) | Compliance, Leads | Three-layer governance, audit |
 | [Benchmarks](benchmarks.en.md) | Platform Engineers | Performance data & methodology |
+| Alerting best-practices series | SREs, Domain Experts, Tenants | [Design fundamentals](alerting-design-fundamentals.en.md) (what to alert on) · [Actions & idempotency](alerting-best-practices.en.md) (is the action itself sound?) |
 | Integration guides | Platform Engineers | [BYO Prometheus](integration/byo-prometheus-integration.en.md) · [BYO Alertmanager](integration/byo-alertmanager-integration.en.md) · [Federation](integration/federation-integration.en.md) · [GitOps](integration/gitops-deployment.en.md) · [VCS](vcs-integration-guide.md) |
 | [Rule Packs](rule-packs/README.md) | All | 16 packs + [Alert Reference](rule-packs/ALERT-REFERENCE.md) |
 | [Scenarios](scenarios/) | All | 9 hands-on scenarios |
