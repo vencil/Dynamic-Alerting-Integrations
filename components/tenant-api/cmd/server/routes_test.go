@@ -109,6 +109,12 @@ const (
 	gateReadListOrgBlind = "list/wildcard read — middleware org-blind; row/collection org visibility handled downstream"
 	// gateReadNoAuth — infra endpoint mounted with no RBAC middleware.
 	gateReadNoAuth = "no-auth infra endpoint"
+	// gateReadPlatformAdmin — route middleware only authenticates (PermRead,
+	// nil); the LOCKED authorization bar (rbac.PlatformAdminNonOrgScoped) runs
+	// at the top of the handler with a constant 403 (ADR-027 / LD-6 P6).
+	// Deliberately tighter than the federation-policy platform-"*" precedent:
+	// an org-scoped wildcard admin fails this bar.
+	gateReadPlatformAdmin = "platform-admin bar in handler (non-org-scoped; federation-policy precedent, tightened)"
 )
 
 // readRouteManifest: GET pattern → its read-plane org-gate story. Same
@@ -136,6 +142,8 @@ var readRouteManifest = map[string]string{
 	"GET /api/v1/events":             gateReadListOrgBlind + " — SSE config-change stream (not per-tenant)",
 	"GET /api/v1/federation/policy/": gateReadListOrgBlind + " — platform-wide whitelist",
 	"GET /api/v1/federation/tokens/": gateReadListOrgBlind + " — token list; per-tenant admin enforced in-handler",
+	// audit surface — platform-admin bar inside the handler (P6)
+	"GET /api/v1/audit/tenants/{id}/access-report": gateReadPlatformAdmin + " — reverse access report; constant 403 for every non-admin caller (no enumeration oracle)",
 	// no-auth infra
 	"GET /health":  gateReadNoAuth,
 	"GET /ready":   gateReadNoAuth,

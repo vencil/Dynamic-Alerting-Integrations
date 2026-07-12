@@ -106,6 +106,217 @@ definitions:
         description: Browser-accessible URL
         type: string
     type: object
+  github_com_vencil_tenant-api_internal_rbac.BoolProvenance:
+    properties:
+      source:
+        type: string
+      value:
+        type: boolean
+    type: object
+  github_com_vencil_tenant-api_internal_rbac.CoverageGap:
+    properties:
+      status:
+        type: string
+      surface:
+        type: string
+    type: object
+  github_com_vencil_tenant-api_internal_rbac.EffectivePerms:
+    properties:
+      admin:
+        type: boolean
+      read:
+        type: boolean
+      write:
+        type: boolean
+    type: object
+  github_com_vencil_tenant-api_internal_rbac.Permission:
+    enum:
+    - read
+    - write
+    - admin
+    type: string
+    x-enum-varnames:
+    - PermRead
+    - PermWrite
+    - PermAdmin
+  github_com_vencil_tenant-api_internal_rbac.ReverseCompleteness:
+    properties:
+      covers:
+        items:
+          type: string
+        type: array
+      not_covered:
+        items:
+          $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.CoverageGap'
+        type: array
+    type: object
+  github_com_vencil_tenant-api_internal_rbac.ReverseConfigAnchor:
+    properties:
+      rbac_sha256:
+        $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.StringProvenance'
+      tenant_orgs_sha256:
+        $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.StringProvenance'
+    type: object
+  github_com_vencil_tenant-api_internal_rbac.ReverseFlags:
+    properties:
+      metadata_scope_enforce:
+        $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.BoolProvenance'
+      org_scope_enforce:
+        $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.BoolProvenance'
+    type: object
+  github_com_vencil_tenant-api_internal_rbac.ReverseGrant:
+    properties:
+      constraints_not_evaluated:
+        description: |-
+          ConstraintsNotEvaluated is the fixed machine-readable declaration that
+          this report transcribes environments/domains but never evaluates them
+          against the tenant's actual labels (axis-2 decision 2b) — a reader must
+          not treat a transcribed constraint as a verified restriction.
+        items:
+          type: string
+        type: array
+      domains:
+        items:
+          type: string
+        type: array
+      domains_count:
+        description: redacted view only
+        type: integer
+      effective:
+        allOf:
+        - $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.EffectivePerms'
+        description: ruleGrants expansion
+      environments:
+        description: |-
+          Environments/Domains transcribe the rule verbatim; NOT evaluated against
+          tenant labels (axis 2). The redacted view STRIPS the verbatim strings —
+          they are free-form text that can carry customer-recognizable markers, and
+          the redacted audience is wider than platform admins — keeping the keys
+          (emptied) and carrying the sizes in EnvironmentsCount/DomainsCount
+          (redacted view only, mirroring who.groups_count/claims_count).
+        items:
+          type: string
+        type: array
+      environments_count:
+        description: redacted view only
+        type: integer
+      index:
+        type: integer
+      org_gate:
+        $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseOrgGate'
+      pattern_kind:
+        description: 'redacted view only: literal|prefix|wildcard'
+        type: string
+      permissions:
+        description: rule verbatim
+        items:
+          $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.Permission'
+        type: array
+      platform_wide:
+        description: |-
+          PlatformWide is RULE-level: true iff ANY pattern in the rule's tenant
+          list is the literal "*" (the same tenantMatches(rule.Tenants, "*") borrow
+          the endpoint bar runs) — NOT a property of the first-hit TenantPattern,
+          which stays the narrower member on a mixed list like ["db-team-1","*"].
+        type: boolean
+      rule:
+        description: stripped in the redacted view
+        type: string
+      surfaces:
+        items:
+          type: string
+        type: array
+      tenant_pattern:
+        description: the pattern that hit X; stripped when redacted
+        type: string
+      who:
+        $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseWho'
+    type: object
+  github_com_vencil_tenant-api_internal_rbac.ReverseOrgGate:
+    properties:
+      claim_key:
+        type: string
+      outcome_enforce:
+        type: string
+      outcome_shadow:
+        type: string
+      passing_org_values:
+        description: opt-in (IncludeOrgValues); sorted
+        items:
+          type: string
+        type: array
+      required:
+        type: boolean
+      unsatisfiable:
+        type: boolean
+    type: object
+  github_com_vencil_tenant-api_internal_rbac.ReverseReport:
+    properties:
+      advisory:
+        type: string
+      completeness:
+        $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseCompleteness'
+      config_anchor:
+        $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseConfigAnchor'
+      flags:
+        $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseFlags'
+      generated_at:
+        type: string
+      grants:
+        items:
+          $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseGrant'
+        type: array
+      mode:
+        type: string
+      schema_version:
+        type: integer
+      tenant:
+        $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseTenant'
+      verdict:
+        type: string
+    type: object
+  github_com_vencil_tenant-api_internal_rbac.ReverseTenant:
+    properties:
+      id:
+        type: string
+      org_status:
+        type: string
+      orgs:
+        description: opt-in; sorted; absent by default
+        items:
+          type: string
+        type: array
+    type: object
+  github_com_vencil_tenant-api_internal_rbac.ReverseWho:
+    properties:
+      claims_all_of:
+        additionalProperties:
+          items:
+            type: string
+          type: array
+        type: object
+      claims_count:
+        description: redacted view only
+        type: integer
+      groups_any_of:
+        items:
+          type: string
+        type: array
+      groups_count:
+        description: redacted view only
+        type: integer
+      kind:
+        type: string
+      legacy_group:
+        type: string
+    type: object
+  github_com_vencil_tenant-api_internal_rbac.StringProvenance:
+    properties:
+      source:
+        type: string
+      value:
+        type: string
+    type: object
   internal_handler.AccessResponse:
     properties:
       allow:
@@ -581,6 +792,67 @@ info:
   title: Tenant API
   version: v2.8.0
 paths:
+  /api/v1/audit/tenants/{id}/access-report:
+    get:
+      description: |-
+        Enumerates the live RBAC config with the SAME predicates the
+        forward gates run and reports, per rule, who is granted what on
+        tenant {id} under which org-gate conditions (both shadow and
+        enforce outcomes). Audit-only: authorization decisions remain
+        with the forward gates. Requires a NON-org-scoped platform
+        admin grant; all other callers receive a constant 403
+        regardless of {id} (no tenant-enumeration oracle). Note the
+        redacted view cannot remove the org-membership inference carried
+        by a grant entry's mere existence: for a value-pinned org rule,
+        the grant entry itself is weakly identifying.
+      parameters:
+      - description: Tenant ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Opt-in expansions
+        enum:
+        - org_values
+        in: query
+        name: include
+        type: string
+      - default: full
+        description: Report projection
+        enum:
+        - full
+        - redacted
+        in: query
+        name: view
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseReport'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: 'Reverse access report: who can access this tenant (audit-only)'
+      tags:
+      - audit
   /api/v1/federation/accounts/backfill:
     post:
       description: Assigns a monotonic account_id (ADR-021) to every conf.d tenant
