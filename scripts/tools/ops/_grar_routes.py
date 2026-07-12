@@ -441,7 +441,7 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
     return routes, receivers, warnings
 
 
-def _build_custom_alert_routes() -> tuple[list[dict], list[dict]]:
+def _build_custom_alert_routes(tenant_names: list[str] | None = None) -> tuple[list[dict], list[dict]]:
     """Build the platform-static Custom Alerts isolation route + firehose receiver.
 
     #741 S7/S8. ALWAYS emitted (tenant-agnostic), and prepended AHEAD of all
@@ -457,8 +457,28 @@ def _build_custom_alert_routes() -> tuple[list[dict], list[dict]]:
          so without an earlier `continue: false` custom route, tenant custom alerts
          would leak into the platform NOC receiver (defeating the isolation gate).
 
+    #1092 0-pre (ADR-031 hard prerequisite): when *tenant_names* is provided,
+    the isolation route additionally carries per-tenant child routes — one per
+    tenant, sorted — each pointing at the EXISTING ``tenant-<name>`` receiver
+    (the compiled `_routing` product, defaults/profile inheritance included).
+    Page-mode custom alerts thus reach the tenant's own channel instead of the
+    firehose; tenants WITHOUT a valid `_routing` have no child and fall back to
+    ``custom-alerts-firehose`` (the parent receiver, unchanged — AM-UI-visible,
+    no notifier). Children carry ONLY matchers + receiver: group_by / group_wait
+    / group_interval ride Alertmanager's native inheritance from THIS route
+    (deliberately not restated — a second SoT would drift), and the tenant's
+    `_routing` timing / per-rule overrides are NOT honored inside the custom
+    subtree in v1 (deferred). The parent sets no repeat_interval → inherits the
+    root's 12h. When *tenant_names* is falsy the output stays the flat route,
+    byte-identical to the pre-#1092 shape (never an empty ``routes`` key) — the
+    committed-base drift guard compares dicts exactly.
+
     Silent mode is NOT handled here — it rides the CustomRecipeSilent sentinel +
-    inhibit (ADR-003), so this route only governs page-mode delivery + grouping.
+    inhibit (ADR-003). The sentinel itself does not carry component="custom", so
+    it never enters this subtree; the silent-mode target is suppressed by the
+    route-INDEPENDENT inhibit (equal: [tenant, name]), so per-tenant children do
+    not change silent semantics. This route only governs page-mode delivery +
+    grouping.
     """
     route = {
         "matchers": ['component="custom"'],
@@ -468,6 +488,11 @@ def _build_custom_alert_routes() -> tuple[list[dict], list[dict]]:
         "receiver": "custom-alerts-firehose",
         "continue": False,
     }
+    if tenant_names:
+        route["routes"] = [
+            {"matchers": [f'tenant="{t}"'], "receiver": f"tenant-{t}"}
+            for t in sorted(tenant_names)
+        ]
     return [route], [{"name": "custom-alerts-firehose"}]
 
 

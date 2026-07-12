@@ -84,14 +84,14 @@ describe('rule-packs accessor — platform-data resolution', () => {
 // consumers show the `_critical` educational hint from this field.
 // ---------------------------------------------------------------------------
 
-// Expected saturation keys present in the INLINE FALLBACK catalog. The
-// authoritative set has 22 keys (see tests/ops/test_scaffold_tenant.py
-// EXPECTED_SATURATION_KEYS); the fallback carries 21 — its kubernetes entry
-// predates container_cpu_throttle (existing drift, deliberately not backfilled
-// here).
+// Expected saturation keys present in the INLINE FALLBACK catalog — the full
+// authoritative 22-key set (see tests/ops/test_scaffold_tenant.py
+// EXPECTED_SATURATION_KEYS). The fallback caught up with the source set when
+// #1099 backfilled kubernetes container_cpu_throttle into the offline catalog.
 const EXPECTED_FALLBACK_SATURATION_KEYS = [
   'clickhouse_active_connections',
   'container_cpu',
+  'container_cpu_throttle',
   'container_memory',
   'db2_connections_active',
   'es_jvm_memory_used_percent',
@@ -143,10 +143,9 @@ describe('rule-packs fallback — saturation metricClass tagging', () => {
   });
 
   it('fallback metricClass aligns with committed platform-data.json (fallback pack/keys only)', async () => {
-    // Only compare pack/keys the fallback carries — the fallback is a
-    // deliberately smaller offline snapshot (e.g. kubernetes lacks
-    // container_cpu_throttle), so iterating the JSON side would flag
-    // pre-existing drift this test does not own.
+    // Only compare pack/keys the fallback carries — the fallback is allowed to
+    // be a smaller offline snapshot than platform-data.json; whole-entry parity
+    // (including key sets) is owned by rule-packs-fallback-drift.test.ts.
     const raw = readFileSync(
       resolve(__dirname, '../../../docs/assets/platform-data.json'), 'utf-8');
     const platform = JSON.parse(raw);

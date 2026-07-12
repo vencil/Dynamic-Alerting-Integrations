@@ -94,6 +94,8 @@ tenants:
             service_key: "abc123"
 ```
 
+`_routing` 通道現在同時遞送 custom alerts（`component="custom"`）：page-mode recipe 沿租戶自己的 receiver 送出，並繼承 custom 隔離子樹的 debounce（`group_wait` 30s／`group_interval` 5m、`group_by [tenant, alertname]`）；tenant `_routing` 的 timing／per-rule overrides 在 custom 子樹 v1 一律不套用。無**有效** `_routing` 的租戶（既無顯式 `_routing`、也無適用的 `_routing_defaults`／profile 繼承），其 custom alerts 留在平台 firehose（AM UI 可見、不發通知）；要讓租戶完全不收 custom 通知，正解是 `_routing: disable`——純繼承 defaults 的租戶同樣會收到投遞。
+
 > **工具支援**：`da-tools scaffold --tenant <name> --db <types>` 提供互動式引導，產出完整的 tenant.yaml（含 routing、silent mode、severity dedup 選項）。
 
 **Rule 複雜度**: O(M)，不隨 Tenant 數成長。

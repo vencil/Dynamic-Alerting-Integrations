@@ -165,6 +165,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-330 | [#985](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/985) | `TenantHAReplicasDegraded` or-LHS masking — 兩臂 `max by(tenant)` label set 相同、SS+Deploy 同時降級只見 StatefulSet（不漏 page、傷 triage 可見度；修法＝`or` 前注入 `workload_kind` label + mutation 回歸案；#982 Gemini ext-review 點 B） | [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) |
 | TRK-331 | [#916](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/916) | threshold_recommend 覆蓋缺口：下界 metric 語意分流 + observed-map merge-preserve | [#721](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/721) |
 | TRK-332 | [#1070](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1070) | SIGKILL 孤兒 `.tmp` 於 PVC 上累積 — boot-time stale-temp GC（defer-with-trigger；#1069 原子替換 review 揪出；emptyDir 部署自癒、PVC 才會累積；trigger＝conf.d 改用 PVC） | [#670](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/670) |
+| TRK-333 | [#1092](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1092) | `slo_burn_rate` recipe — 宣告式 SLO burn-rate 告警編譯 feature 線（ADR-031；0-pre custom 子樹 outbound delivery 硬前置 + Phase 0-2 gated） | — |
 
 ## 不在 mapping 範圍
 
