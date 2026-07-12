@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -135,8 +137,17 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 						continue
 					}
 				}
-				yamlContent := buildPatchYAML(op.TenantID, op.Patch)
-				batchOps = append(batchOps, gitops.PRBatchOp{TenantID: op.TenantID, YAMLContent: yamlContent})
+				// #1097: carry a merge closure, not pre-built content, so the
+				// authoritative partial merge runs under the writer lock against
+				// the fresh base (preserving untouched keys). op is per-iteration
+				// (Go 1.22+), so the closure binds this op's TenantID/Patch.
+				op := op
+				batchOps = append(batchOps, gitops.PRBatchOp{
+					TenantID: op.TenantID,
+					Merge: func(existing []byte) (string, error) {
+						return mergePatchYAML(existing, op.TenantID, op.Patch)
+					},
+				})
 				batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "included"})
 			}
 
@@ -292,11 +303,17 @@ func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, op
 }
 
 // applyPatch applies a single patch operation to a tenant config file.
+//
+// #1097: the patch is a PARTIAL update — it merges into the tenant's existing
+// keys via WriteMerged (read-merge-write under the writer lock), so keys the
+// patch does not name (other thresholds, `_metadata`, `_custom_alerts`) and the
+// file's comments survive. A whole-document overwrite here would silently drop
+// them.
 func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op BatchOperation, authorEmail string) BatchResult {
-	// Build minimal YAML content from the patch map
-	yamlContent := buildPatchYAML(op.TenantID, op.Patch)
-
-	if err := w.Write(ctx, op.TenantID, authorEmail, yamlContent); err != nil {
+	merge := func(existing []byte) (string, error) {
+		return mergePatchYAML(existing, op.TenantID, op.Patch)
+	}
+	if err := w.WriteMerged(ctx, op.TenantID, authorEmail, merge); err != nil {
 		msg := err.Error()
 		if errors.Is(err, gitops.ErrConflict) {
 			msg = "conflict: retry after refresh"
@@ -308,22 +325,115 @@ func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op Batc
 	return BatchResult{TenantID: op.TenantID, Status: "ok"}
 }
 
-// buildPatchYAML constructs a minimal YAML string for a tenant patch.
-// Uses yaml.Marshal for safe quoting of values containing special characters.
+// mergePatchYAML sets each patch key on `tenants.<tenantID>` in the existing
+// document, preserving every OTHER key AND all comments/blank lines via
+// yaml.Node surgery (mirroring the custom-alerts write path). This is the fix
+// for #1097: a partial batch patch must not clobber keys it did not name.
+//
+// existing empty (nil / whitespace) → a brand-new tenant: build the minimal doc
+// (buildPatchYAML). A non-empty but unparseable / structurally-wrong existing
+// file returns an error — the caller must NOT fall back to an overwrite, which
+// would reintroduce the very data loss this prevents.
+func mergePatchYAML(existing []byte, tenantID string, patch map[string]string) (string, error) {
+	if len(bytes.TrimSpace(existing)) == 0 {
+		return buildPatchYAML(tenantID, patch), nil
+	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(existing, &doc); err != nil {
+		return "", fmt.Errorf("parse current tenant yaml: %w", err)
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return "", fmt.Errorf("current tenant yaml is not a document")
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return "", fmt.Errorf("current tenant yaml root is not a mapping")
+	}
+	tenantsVal := yamlMapValue(root, "tenants")
+	if tenantsVal == nil || tenantsVal.Kind != yaml.MappingNode {
+		return "", fmt.Errorf("current tenant yaml has no `tenants:` mapping")
+	}
+	tenantVal := yamlMapValue(tenantsVal, tenantID)
+	if tenantVal == nil {
+		// File exists (perhaps other content) but not this tenant's section: add it.
+		tenantVal = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		yamlSetMapValue(tenantsVal, tenantID, tenantVal)
+	} else if tenantVal.Kind != yaml.MappingNode {
+		return "", fmt.Errorf("current tenant yaml `tenants.%s` is not a mapping", tenantID)
+	}
+
+	// Sort so newly-ADDED keys land deterministically (existing keys keep their
+	// authored position — setMapValue replaces in place).
+	keys := make([]string, 0, len(patch))
+	for k := range patch {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		var vn yaml.Node
+		if err := vn.Encode(patch[k]); err != nil { // string → correctly-quoted scalar (e.g. "50" stays a string)
+			return "", fmt.Errorf("encode patch value for %q: %w", k, err)
+		}
+		yamlSetMapValue(tenantVal, k, &vn)
+	}
+
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	// SetIndent(2) matches the conf.d 2-space convention, under which a file
+	// round-trips unchanged (see customalerts.MergeCustomAlerts). A file authored
+	// with a different indent reflows to 2-space — comments still survive.
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		return "", fmt.Errorf("re-encode tenant yaml: %w", err)
+	}
+	_ = enc.Close()
+	return buf.String(), nil
+}
+
+// buildPatchYAML constructs a minimal, full-document YAML for a tenant patch —
+// the new-tenant fallback for mergePatchYAML (no existing file to merge into).
+// Uses the yaml encoder for safe quoting of values with special characters.
 func buildPatchYAML(tenantID string, patch map[string]string) string {
 	doc := map[string]interface{}{
 		"tenants": map[string]interface{}{
 			tenantID: patch,
 		},
 	}
-	out, err := yaml.Marshal(doc)
-	if err != nil {
-		// Unreachable for map[string]string, but fallback gracefully
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2) // conf.d 2-space convention, consistent with mergePatchYAML
+	if err := enc.Encode(doc); err != nil {
+		// Unreachable for map[string]string, but fallback gracefully.
 		fallback := fmt.Sprintf("tenants:\n  %s:\n", tenantID)
 		for k, v := range patch {
 			fallback += fmt.Sprintf("    %s: %q\n", k, v)
 		}
 		return fallback
 	}
-	return string(out)
+	_ = enc.Close()
+	return buf.String()
+}
+
+// yamlMapValue returns the value node for key in a mapping node, or nil.
+func yamlMapValue(m *yaml.Node, key string) *yaml.Node {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			return m.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// yamlSetMapValue replaces the value node for key (preserving the key node and
+// its comments / position), or appends a new key/value pair if absent.
+func yamlSetMapValue(m *yaml.Node, key string, val *yaml.Node) {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			m.Content[i+1] = val
+			return
+		}
+	}
+	m.Content = append(m.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, val)
 }

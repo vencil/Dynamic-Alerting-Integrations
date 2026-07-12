@@ -78,7 +78,7 @@
 | `PUT` | `/api/v1/tenants/{id}` | write | 寫入(驗證 → policy → 寫入 → commit / PR);body 格式錯誤回 400 |
 | `POST` | `/api/v1/tenants/{id}/validate` | read | Dry-run 驗證,不寫入 |
 | `POST` | `/api/v1/tenants/{id}/diff` | read | 預覽 unified diff |
-| `POST` | `/api/v1/tenants/batch` | read + 逐租戶 write | 批次套用(逐筆 RBAC + policy;`?async=true` 走 task 池) |
+| `POST` | `/api/v1/tenants/batch` | read + 逐租戶 write | 批次**部分合併** patch(只改指定 key、保留其餘 key 與註解,非整檔取代;逐筆 RBAC + policy;`?async=true` 走 task 池) |
 
 > **寫入回應**:`PUT /{id}` 回 `{"status","tenant_id"}`;PR 模式另含 `pr_url` / `pr_number`(CI 可據此取得待審 PR)。request body 直接送租戶 YAML,不需特定 `Content-Type`。
 
@@ -99,7 +99,7 @@
 | `GET` | `/api/v1/groups/{id}` | read | 取得群組 |
 | `PUT` | `/api/v1/groups/{id}` | write + 逐成員 write | 寫入;對所有 `members` 都需 write,否則回 403 + 不足清單 |
 | `DELETE` | `/api/v1/groups/{id}` | write + 逐成員 write | 刪除(同上權限) |
-| `POST` | `/api/v1/groups/{id}/batch` | read + 逐成員 write | 對群組全成員套 patch(同步 / async) |
+| `POST` | `/api/v1/groups/{id}/batch` | read + 逐成員 write | 對群組全成員部分合併 patch(只改指定 key、保留其餘;同步 / async) |
 | `GET` | `/api/v1/views` | read | 列出 saved view |
 | `GET` `PUT` `DELETE` | `/api/v1/views/{id}` | read / write | Saved view CRUD |
 

@@ -164,7 +164,8 @@ func TestValidationFailuresWrapErrValidation(t *testing.T) {
 	if _, err := w.WritePR(ctx, "db-a", "e@x.com", bad); !errors.Is(err, ErrValidation) {
 		t.Errorf("WritePR: errors.Is(err, ErrValidation) = false; err = %v", err)
 	}
-	if _, err := w.WritePRBatch(ctx, []PRBatchOp{{TenantID: "db-a", YAMLContent: bad}}, "e@x.com"); !errors.Is(err, ErrValidation) {
+	badMerge := func([]byte) (string, error) { return bad, nil }
+	if _, err := w.WritePRBatch(ctx, []PRBatchOp{{TenantID: "db-a", Merge: badMerge}}, "e@x.com"); !errors.Is(err, ErrValidation) {
 		t.Errorf("WritePRBatch: errors.Is(err, ErrValidation) = false; err = %v", err)
 	}
 }

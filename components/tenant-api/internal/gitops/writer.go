@@ -285,6 +285,70 @@ func (w *Writer) Write(ctx context.Context, tenantID, authorEmail, yamlContent s
 	)
 }
 
+// MergeFunc computes a tenant file's full new content from its CURRENT on-disk
+// bytes (nil when the file does not exist yet — a brand-new tenant). It is
+// invoked while the writer holds w.mu, so the merge base can never go stale
+// between the read and the write.
+type MergeFunc func(existing []byte) (string, error)
+
+// readMergeValidate is the shared read-merge-validate core behind both the
+// direct (WriteMerged) and PR-mode (WritePRBatch) partial-write paths (#1097).
+// It reads the current on-disk tenant file, runs merge against it, and runs the
+// same schema/custom-alert/eol validator every write boundary uses. It does NOT
+// persist — the caller decides how (commit-on-write vs branch commit).
+//
+// existing is nil on ENOENT; MergeFunc is responsible for the new-tenant case.
+// A merge error means the on-disk file is unparseable/structurally wrong — the
+// caller must NOT fall back to an overwrite (that is exactly the silent
+// key-loss this path exists to prevent).
+func (w *Writer) readMergeValidate(tenantID string, merge MergeFunc) (string, error) {
+	existing, err := os.ReadFile(filepath.Join(w.configDir, tenantID+".yaml"))
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("read current tenant file for %s: %w", tenantID, err)
+	}
+	content, err := merge(existing)
+	if err != nil {
+		return "", fmt.Errorf("merge tenant config for %s: %w", tenantID, err)
+	}
+	if errs := validate(w.configDir, tenantID, content); len(errs) > 0 {
+		return "", fmt.Errorf("%w for %s: %s", ErrValidation, tenantID, strings.Join(errs, "; "))
+	}
+	return content, nil
+}
+
+// WriteMerged persists a tenant config whose content is computed, UNDER the
+// single-writer lock, from the current on-disk file. This is the race-free
+// read-merge-write the batch patch path needs (#1097): a partial patch must
+// preserve keys it did not name, and reading the merge base OUTSIDE the lock
+// would let a concurrent same-tenant write be silently lost (the in-process
+// conflict detector only catches EXTERNAL commits, not serialized in-process
+// writes onto a stale base).
+//
+// Unlike Write(), validation runs under the lock — the final content is not
+// known until the base is read. The merge + validate are CPU-only and
+// sub-millisecond, so the extra time holding the write token is negligible.
+func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, merge MergeFunc) error {
+	// Load-shedding admission (TRK-320) before w.mu, same as Write.
+	if err := w.acquireWrite(ctx); err != nil {
+		return err
+	}
+	defer w.releaseWrite()
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	content, err := w.readMergeValidate(tenantID, merge)
+	if err != nil {
+		return err
+	}
+	return w.commitFileChange(
+		filepath.Join(w.configDir, tenantID+".yaml"),
+		tenantID,
+		authorEmail,
+		[]byte(content),
+	)
+}
+
 // Diff returns the unified diff between the current file and proposed content.
 // Returns empty string if files are identical or no current file exists.
 func (w *Writer) Diff(tenantID, proposedContent string) (string, error) {
