@@ -308,6 +308,7 @@ func TestValidateConfig_TenantPatterns(t *testing.T) {
 		{"leading star (non-suffix) rejected", cfg("*a"), "invalid tenant pattern"},
 		{"mid star rejected", cfg("a*b"), "invalid tenant pattern"},
 		{"empty entry rejected", cfg(""), "invalid tenant pattern"},
+		{"whitespace-only entry rejected", cfg("   "), "invalid tenant pattern"},
 		{"one bad entry among good ones rejected", cfg("db-a-*", "**"), "invalid tenant pattern"},
 	}
 	for _, tc := range cases {

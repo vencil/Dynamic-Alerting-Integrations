@@ -1,6 +1,9 @@
 package rbac
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestTenantMatches(t *testing.T) {
 	t.Parallel()
@@ -18,9 +21,14 @@ func TestTenantMatches(t *testing.T) {
 		{"multiple patterns", []string{"db-a-*", "db-b-*"}, "db-b-staging", true},
 		{"empty patterns", []string{}, "db-a", false},
 		// Malformed patterns must never match (fail-closed backstop for a rule
-		// that bypassed validateConfig). "**" is the fail-open case: it collapses
-		// to prefix "*" and MUST NOT pass a platform-scope "*" gate query while
-		// granting zero per-tenant access. "*a*"/"a**" are dead-rule cases.
+		// that bypassed validateConfig). NOTE: of these, only the first case —
+		// ["**"] vs the platform-scope "*" gate — actually EXERCISES the guard:
+		// without it "**" collapses to prefix "*" and HasPrefix("*","*")==true
+		// would fail the rule OPEN (mutation-verified: removing the guard reddens
+		// exactly that case). The others already return false on their own merits
+		// (their derived prefix mismatches the id); they lock dead-rule behavior
+		// against a future tenantMatches change. See TestTenantPatternInvariants
+		// for the load-bearing, grammar-wide fail-open / matchability pins.
 		{"double-star vs platform gate does not fail open", []string{"**"}, "*", false},
 		{"double-star vs real tenant does not match", []string{"**"}, "db-a", false},
 		{"embedded-star vs platform gate does not fail open", []string{"*a*"}, "*", false},
@@ -34,6 +42,52 @@ func TestTenantMatches(t *testing.T) {
 			t.Parallel()
 			if got := tenantMatches(tt.patterns, tt.tenantID); got != tt.want {
 				t.Errorf("tenantMatches(%v, %q) = %v, want %v", tt.patterns, tt.tenantID, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestTenantPatternInvariants pins — across the whole small pattern grammar —
+// the two properties the "**" fail-open fix depends on, so a future edit to
+// validTenantPattern or tenantMatches that breaks allowlist↔matcher agreement
+// fails loudly. Unlike most TenantMatches rows (which return false on their own
+// merits and so never exercise the guard), EVERY case here is load-bearing:
+//
+//  1. NO FAIL-OPEN — only the literal "*" may pass a platform-scope "*" gate
+//     query (Allowed(p, "*", …)). Any other pattern, well-formed or malformed,
+//     must NOT match tenantID "*".
+//  2. ALLOWLIST↔MATCHER AGREEMENT — every pattern validTenantPattern accepts
+//     must be matchable by some id (a validateConfig-accepted rule is never a
+//     silently dead rule the guard refuses to match).
+func TestTenantPatternInvariants(t *testing.T) {
+	t.Parallel()
+	grammar := []string{
+		"*", "db-a", "db-a-*", "a*", "-*", "x", // well-formed
+		"**", "***", "*a", "*a*", "a**", "a*b", "", " ", "   ", // malformed
+	}
+	for _, pat := range grammar {
+		pat := pat
+		t.Run("pat="+pat, func(t *testing.T) {
+			t.Parallel()
+			// Invariant 1 — no fail-open at the platform-scope "*" gate.
+			if got := tenantMatches([]string{pat}, "*"); got != (pat == "*") {
+				t.Errorf("fail-open: tenantMatches([%q], \"*\") = %v, want %v (only \"*\" may pass a platform gate)", pat, got, pat == "*")
+			}
+			// Invariant 2 — an accepted pattern must be matchable by some id.
+			if !validTenantPattern(pat) {
+				return
+			}
+			var id string
+			switch {
+			case pat == "*":
+				id = "any-tenant"
+			case strings.HasSuffix(pat, "*"):
+				id = strings.TrimSuffix(pat, "*") + "x" // literal prefix + one char
+			default:
+				id = pat // exact
+			}
+			if !tenantMatches([]string{pat}, id) {
+				t.Errorf("accepted pattern %q not matchable: tenantMatches([%q], %q) = false", pat, pat, id)
 			}
 		})
 	}

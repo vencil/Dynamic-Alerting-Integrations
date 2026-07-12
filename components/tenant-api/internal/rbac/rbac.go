@@ -1062,7 +1062,9 @@ func validTenantPattern(pat string) bool {
 	}
 	switch strings.Count(pat, "*") {
 	case 0:
-		return pat != "" // exact id — must be non-empty
+		// exact id — reject blank / whitespace-only, mirroring the
+		// match.groups / match.claims blank-entry guards in validateConfig.
+		return strings.TrimSpace(pat) != ""
 	case 1:
 		// prefix pattern: the single "*" must be the trailing char, with a
 		// non-empty literal before it. The lone "*" is already handled above.
