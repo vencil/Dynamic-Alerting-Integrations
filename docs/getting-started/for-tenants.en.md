@@ -11,7 +11,7 @@ lang: en
 
 > **v2.9.0** | Audience: Tenant administrators, DBAs, SREs
 >
-> Related docs: [Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../rule-packs/README.md) · [Alert Design Fundamentals](../alerting-design-fundamentals.en.md)
+> Related docs: [Migration Guide](../migration-guide.en.md) · [Architecture](../architecture-and-design.en.md) §2 · [Rule Packs](../rule-packs/README.md) · [Alert Design Fundamentals](../alerting-design-fundamentals.en.md)
 
 > 💡 **Want to play first?** [`try-local/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) spins up a self-service sandbox in one command (Tenant Manager UI + 2 demo tenants) — try threshold edits and Saved Views without waiting for your Platform Team to deploy.
 

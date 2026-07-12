@@ -11,7 +11,7 @@ lang: en
 
 > **v2.9.0** | Audience: DBAs, Database Administrators, Domain Experts
 >
-> Related docs: [Rule Packs](../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.md) · [Alert Design Fundamentals](../alerting-design-fundamentals.en.md) · [Architecture](../architecture-and-design.md) §2.4 · [threshold-exporter config / recipe reference](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#4-配置參考)
+> Related docs: [Rule Packs](../rule-packs/README.md) · [Custom Rule Governance](../custom-rule-governance.en.md) · [Alert Design Fundamentals](../alerting-design-fundamentals.en.md) · [Architecture](../architecture-and-design.en.md) §2.4 · [threshold-exporter config / recipe reference](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#4-配置參考)
 
 > 💡 **Recommended first step: [`try-local/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) to watch an alert actually fire.** Start the Mode 0 core twins, then the full stack to see a Rule Pack turn a synthetic metric into a critical red light — the fastest way to grasp the threshold → alert chain.
 

@@ -84,7 +84,7 @@ lang: zh
 
 1. **邊界冪等閘：idempotency key + cooldown**。與其逐一改造每個動作，先在「告警 → 動作」的邊界上去重：以告警事件的指紋（哪條告警、哪個對象、哪一輪 episode——同一次 firing→resolve 週期）當 key，同一 key 在冷卻窗 T 內只放行一次。[§3](#3-為什麼動作面比決策面難驗) 那次踢掉新主節點的二次 failover，正是這道閘要擋的。兩個誠實註記：(a) episode 邊界在 flapping（狀態快速震盪）下沒有完美定義——key + cooldown 是工程折衷，不是數學解；(b) **閘丟棄了什麼，自己必須留痕**——否則「防止重複執行」的機制自己變成新的靜默源。
 
-    > **動手提示（以 Alertmanager webhook 為例）**：payload 裡現成的去重材料——`alerts[].fingerprint`（label 集合的雜湊，跨重送穩定）、`startsAt`（這一輪 episode 的身分）、`status`（firing／resolved）。最小可行的冪等閘：以 `fingerprint + startsAt` 當 key 寫入任何帶 TTL 的 KV 儲存（TTL 就是 cooldown），已存在就丟棄並留痕。注意 webhook 是**按分組**送達的（`groupKey`）——要對單一告警動作，得展開 `alerts[]` 逐筆處理，這也是 §3 fan-out 的第一道現場。
+    > **動手提示（以 Alertmanager webhook 為例）**：payload 裡現成的去重材料——`alerts[].fingerprint`（label 集合的雜湊，跨重送穩定）、`startsAt`（這一輪 episode 的身分）、`status`（firing／resolved）。最小可行的冪等閘：以 `fingerprint + startsAt` 當 key 寫入任何帶 TTL 的 KV 儲存（TTL 就是 cooldown），已存在就丟棄並留痕。TTL 的語意是**節流、不是完整去重**：episode 持續 firing 超過 T 後同一 key 會再次放行——對可重跑動作這是刻意的重試窗（何時停手交給 circuit breaker）；對**重複即傷害**的動作，key 應保留到 resolve 之後才回收、TTL 只作記憶體清理。另外注意 webhook 是**按分組**送達的（`groupKey`）——要對單一告警動作，得展開 `alerts[]` 逐筆處理，這也是 §3 fan-out 的第一道現場。
 2. **Circuit breaker**。同一動作連續 N 次未讓狀態好轉，就停手、升級給人。動作無效卻無限重錘，比不動作更糟。
 3. **Kill switch**。一個讓所有自動化動作立即全停的總開關——而且要演練過。Knight Capital（2012）：部署未完整覆蓋所有節點，一個被重用的旗標喚醒了殘留的舊邏輯，系統在約 45 分鐘內持續送出錯誤委託、損失超過四億美元；過程中沒有演練過的「立即全停」程序可用。
 4. **Progressive-automation ladder**。新動作不要直接全自動：人工執行 → 自動提案、人工核可 → 護欄內自動 → 全自動，隨信任爬階。兩個紀律：達到信賴門檻**就要**升階，否則 ladder 退化成永久 toil；**不可逆動作有天花板**，不升到全自動（[§5](#5-破壞性不可逆動作防線必須前移)）。
@@ -102,9 +102,11 @@ flowchart TD
     CB -->|已跳| A3["停手、升級給人<br/>+ audit 留痕"]
     CB -->|未跳| LD{"Ladder 階段?"}
     LD -->|"人工核可階"| PR["產生提案<br/>等人核可"]
+    PR --> AP{"核可?"}
+    AP -->|"是"| EX
+    AP -->|"否／逾期"| AU
     LD -->|"自動階"| EX["執行動作"]
     EX --> AU["audit：correlation id<br/>+ 結果回寫觀測面"]
-    PR --> AU
 ```
 
 | 護欄 | 針對的失效模式（[§3](#3-為什麼動作面比決策面難驗)） |

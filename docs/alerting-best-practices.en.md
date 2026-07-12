@@ -84,7 +84,7 @@ For actions that are **re-runnable and recoverable**, this division of labor hol
 
 1. **A boundary idempotency gate: idempotency key + cooldown**. Rather than retrofitting every action one by one, deduplicate first at the "alert → action" boundary: use the alert event's fingerprint (which alert, which target, which episode — the same firing→resolve cycle) as the key, and let a given key through only once within a cooldown window T. The second failover in [§3](#3-why-the-action-side-is-harder-to-verify-than-the-decision-side) — the one that kicked out the new primary — is exactly what this gate is there to stop. Two honest caveats: (a) episode boundaries are not perfectly defined under flapping (rapid state oscillation) — key + cooldown is an engineering compromise, not a mathematical solution; (b) **whatever the gate drops, the gate itself must leave a trace of** — otherwise the mechanism that "prevents duplicate execution" becomes a new source of silence.
 
-    > **Hands-on tip (using the Alertmanager webhook as the example)**: the payload already carries deduplication material — `alerts[].fingerprint` (a hash of the label set, stable across re-sends), `startsAt` (the identity of this episode), and `status` (firing / resolved). A minimum viable idempotency gate: write `fingerprint + startsAt` as a key into any KV store with TTL support (the TTL is the cooldown); if the key already exists, drop and leave a trace. Note that webhooks are delivered **per group** (`groupKey`) — to act on a single alert you must unroll `alerts[]` and process each entry, which is also where §3's fan-out first shows up in practice.
+    > **Hands-on tip (using the Alertmanager webhook as the example)**: the payload already carries deduplication material — `alerts[].fingerprint` (a hash of the label set, stable across re-sends), `startsAt` (the identity of this episode), and `status` (firing / resolved). A minimum viable idempotency gate: write `fingerprint + startsAt` as a key into any KV store with TTL support (the TTL is the cooldown); if the key already exists, drop and leave a trace. The TTL's semantics are **throttling, not complete deduplication**: once an episode keeps firing beyond T, the same key is let through again — for re-runnable actions this is a deliberate retry window (when to stop is the circuit breaker's job); for actions where **repetition means damage**, keep the key until after resolve and use the TTL only for memory cleanup. Also note that webhooks are delivered **per group** (`groupKey`) — to act on a single alert you must unroll `alerts[]` and process each entry, which is also where §3's fan-out first shows up in practice.
 
 2. **Circuit breaker**. If the same action fails to improve the state N consecutive times, stop and escalate to a human. Hammering on with an ineffective action is worse than not acting at all.
 3. **Kill switch**. A master switch that immediately halts all automated actions — and one that has been drilled. Knight Capital (2012): a deployment did not fully cover every node; a repurposed flag woke up residual old logic, and the system kept sending erroneous orders for roughly 45 minutes, losing over four hundred million dollars; along the way, no rehearsed "halt everything now" procedure was available.
@@ -103,9 +103,11 @@ flowchart TD
     CB -->|tripped| A3["Stop, escalate to human<br/>+ audit trace"]
     CB -->|not tripped| LD{"Ladder stage?"}
     LD -->|"human-approval stage"| PR["Generate proposal,<br/>await approval"]
+    PR --> AP{"Approved?"}
+    AP -->|"yes"| EX
+    AP -->|"no / expired"| AU
     LD -->|"automatic stage"| EX["Execute action"]
     EX --> AU["Audit: correlation id<br/>+ write result back to observability"]
-    PR --> AU
 ```
 
 | Guardrail | Failure mode it targets ([§3](#3-why-the-action-side-is-harder-to-verify-than-the-decision-side)) |
