@@ -11,6 +11,82 @@
     },
     "basePath": "/api/v1",
     "paths": {
+        "/api/v1/audit/tenants/{id}/access-report": {
+            "get": {
+                "description": "Enumerates the live RBAC config with the SAME predicates the\nforward gates run and reports, per rule, who is granted what on\ntenant {id} under which org-gate conditions (both shadow and\nenforce outcomes). Audit-only: authorization decisions remain\nwith the forward gates. Requires a NON-org-scoped platform\nadmin grant; all other callers receive a constant 403\nregardless of {id} (no tenant-enumeration oracle). Note the\nredacted view cannot remove the org-membership inference carried\nby a grant entry's mere existence: for a value-pinned org rule,\nthe grant entry itself is weakly identifying.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "audit"
+                ],
+                "summary": "Reverse access report: who can access this tenant (audit-only)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Tenant ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "enum": [
+                            "org_values"
+                        ],
+                        "type": "string",
+                        "description": "Opt-in expansions",
+                        "name": "include",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "full",
+                            "redacted"
+                        ],
+                        "type": "string",
+                        "default": "full",
+                        "description": "Report projection",
+                        "name": "view",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseReport"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/federation/accounts/backfill": {
             "post": {
                 "description": "Assigns a monotonic account_id (ADR-021) to every conf.d tenant lacking one, in one committed registry write. Idempotent. Requires platform admin.",
@@ -1689,6 +1765,301 @@
                 },
                 "web_url": {
                     "description": "Browser-accessible URL",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_vencil_tenant-api_internal_rbac.BoolProvenance": {
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "github_com_vencil_tenant-api_internal_rbac.CoverageGap": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string"
+                },
+                "surface": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_vencil_tenant-api_internal_rbac.EffectivePerms": {
+            "type": "object",
+            "properties": {
+                "admin": {
+                    "type": "boolean"
+                },
+                "read": {
+                    "type": "boolean"
+                },
+                "write": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "github_com_vencil_tenant-api_internal_rbac.Permission": {
+            "type": "string",
+            "enum": [
+                "read",
+                "write",
+                "admin"
+            ],
+            "x-enum-varnames": [
+                "PermRead",
+                "PermWrite",
+                "PermAdmin"
+            ]
+        },
+        "github_com_vencil_tenant-api_internal_rbac.ReverseCompleteness": {
+            "type": "object",
+            "properties": {
+                "covers": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "not_covered": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.CoverageGap"
+                    }
+                }
+            }
+        },
+        "github_com_vencil_tenant-api_internal_rbac.ReverseConfigAnchor": {
+            "type": "object",
+            "properties": {
+                "rbac_sha256": {
+                    "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.StringProvenance"
+                },
+                "tenant_orgs_sha256": {
+                    "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.StringProvenance"
+                }
+            }
+        },
+        "github_com_vencil_tenant-api_internal_rbac.ReverseFlags": {
+            "type": "object",
+            "properties": {
+                "metadata_scope_enforce": {
+                    "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.BoolProvenance"
+                },
+                "org_scope_enforce": {
+                    "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.BoolProvenance"
+                }
+            }
+        },
+        "github_com_vencil_tenant-api_internal_rbac.ReverseGrant": {
+            "type": "object",
+            "properties": {
+                "constraints_not_evaluated": {
+                    "description": "ConstraintsNotEvaluated is the fixed machine-readable declaration that\nthis report transcribes environments/domains but never evaluates them\nagainst the tenant's actual labels (axis-2 decision 2b) — a reader must\nnot treat a transcribed constraint as a verified restriction.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "domains": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "domains_count": {
+                    "description": "redacted view only",
+                    "type": "integer"
+                },
+                "effective": {
+                    "description": "ruleGrants expansion",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.EffectivePerms"
+                        }
+                    ]
+                },
+                "environments": {
+                    "description": "Environments/Domains transcribe the rule verbatim; NOT evaluated against\ntenant labels (axis 2). The redacted view STRIPS the verbatim strings —\nthey are free-form text that can carry customer-recognizable markers, and\nthe redacted audience is wider than platform admins — keeping the keys\n(emptied) and carrying the sizes in EnvironmentsCount/DomainsCount\n(redacted view only, mirroring who.groups_count/claims_count).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "environments_count": {
+                    "description": "redacted view only",
+                    "type": "integer"
+                },
+                "index": {
+                    "type": "integer"
+                },
+                "org_gate": {
+                    "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseOrgGate"
+                },
+                "pattern_kind": {
+                    "description": "redacted view only: literal|prefix|wildcard",
+                    "type": "string"
+                },
+                "permissions": {
+                    "description": "rule verbatim",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.Permission"
+                    }
+                },
+                "platform_wide": {
+                    "description": "PlatformWide is RULE-level: true iff ANY pattern in the rule's tenant\nlist is the literal \"*\" (the same tenantMatches(rule.Tenants, \"*\") borrow\nthe endpoint bar runs) — NOT a property of the first-hit TenantPattern,\nwhich stays the narrower member on a mixed list like [\"db-team-1\",\"*\"].",
+                    "type": "boolean"
+                },
+                "rule": {
+                    "description": "stripped in the redacted view",
+                    "type": "string"
+                },
+                "surfaces": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "tenant_pattern": {
+                    "description": "the pattern that hit X; stripped when redacted",
+                    "type": "string"
+                },
+                "who": {
+                    "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseWho"
+                }
+            }
+        },
+        "github_com_vencil_tenant-api_internal_rbac.ReverseOrgGate": {
+            "type": "object",
+            "properties": {
+                "claim_key": {
+                    "type": "string"
+                },
+                "outcome_enforce": {
+                    "type": "string"
+                },
+                "outcome_shadow": {
+                    "type": "string"
+                },
+                "passing_org_values": {
+                    "description": "opt-in (IncludeOrgValues); sorted",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "required": {
+                    "type": "boolean"
+                },
+                "unsatisfiable": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "github_com_vencil_tenant-api_internal_rbac.ReverseReport": {
+            "type": "object",
+            "properties": {
+                "advisory": {
+                    "type": "string"
+                },
+                "completeness": {
+                    "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseCompleteness"
+                },
+                "config_anchor": {
+                    "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseConfigAnchor"
+                },
+                "flags": {
+                    "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseFlags"
+                },
+                "generated_at": {
+                    "type": "string"
+                },
+                "grants": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseGrant"
+                    }
+                },
+                "mode": {
+                    "type": "string"
+                },
+                "schema_version": {
+                    "type": "integer"
+                },
+                "tenant": {
+                    "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseTenant"
+                },
+                "verdict": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_vencil_tenant-api_internal_rbac.ReverseTenant": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "org_status": {
+                    "type": "string"
+                },
+                "orgs": {
+                    "description": "opt-in; sorted; absent by default",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "github_com_vencil_tenant-api_internal_rbac.ReverseWho": {
+            "type": "object",
+            "properties": {
+                "claims_all_of": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "claims_count": {
+                    "description": "redacted view only",
+                    "type": "integer"
+                },
+                "groups_any_of": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "groups_count": {
+                    "description": "redacted view only",
+                    "type": "integer"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "legacy_group": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_vencil_tenant-api_internal_rbac.StringProvenance": {
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string"
+                },
+                "value": {
                     "type": "string"
                 }
             }

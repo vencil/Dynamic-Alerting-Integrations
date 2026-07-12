@@ -211,6 +211,17 @@ func buildRouter(rd routerDeps) *chi.Mux {
 				Put("/", federation.PutFederationPolicy(deps))
 		})
 
+		// Reverse access-report audit endpoint (ADR-027 / LD-6 P6). /audit is
+		// a deliberate NEW top-level segment — NOT under /tenants/{id} — so it
+		// does not inherit the read-by-id org middleware (an org-scoped reader
+		// must never unlock the platform-wide access map). Route middleware
+		// only confirms authentication (federation-policy precedent above);
+		// the real bar — PlatformAdminNonOrgScoped, tightened vs the bare
+		// platform-"*" admin check — lives at the top of the handler with a
+		// constant 403 (no tenant-enumeration oracle).
+		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+			Get("/audit/tenants/{id}/access-report", handler.GetTenantAccessReport(deps))
+
 		// Federation token endpoint (v2.9.0 — ADR-020 IV-2d).
 		// Registered only when a signing key is configured. Route-level
 		// middleware checks authentication; per-tenant admin permission
