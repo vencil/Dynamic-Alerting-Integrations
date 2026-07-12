@@ -64,7 +64,7 @@ describe('generateYAML', () => {
     expect(yaml).toContain('slack:');
     expect(yaml).toContain('T');
     expect(yaml).toContain('line1');
-    expect(yaml).toContain('team: sre');
+    expect(yaml).toContain('team: "sre"'); // Q7 fix: customLabels values are JSON.stringify-quoted
   });
 });
 
