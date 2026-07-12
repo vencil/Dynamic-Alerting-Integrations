@@ -331,6 +331,10 @@ def build_platform_data() -> dict:
                         "value": v["value"],
                         "unit": v.get("unit", ""),
                         "desc": v.get("desc", ""),
+                        # metric_class（如 saturation）僅 present 時透傳，
+                        # 供 portal 顯示 _critical 教育提示
+                        **({"metricClass": v["metric_class"]}
+                           if "metric_class" in v else {}),
                     }
                     for k, v in defaults.items()
                 }

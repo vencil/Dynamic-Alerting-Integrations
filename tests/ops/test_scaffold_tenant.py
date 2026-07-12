@@ -33,6 +33,7 @@ import pytest
 import yaml
 
 from scaffold_tenant import (
+    annotate_saturation_criticals,
     build_receiver_from_args,
     generate_defaults,
     generate_tenant,
@@ -42,8 +43,10 @@ from scaffold_tenant import (
     print_catalog,
     run_non_interactive,
     run_from_onboard,
+    saturation_default_keys,
     write_outputs,
     RULE_PACKS,
+    SATURATION_CRITICAL_COMMENT,
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
@@ -807,6 +810,192 @@ class TestRunFromOnboard:
             )
             with pytest.raises(SystemExit):
                 run_from_onboard(args)
+
+
+# ============================================================
+# 飽和類指標 _critical 教育註解（metric_class == saturation）
+# ============================================================
+
+# 被標 saturation 的 defaults 鍵（真 N=22；同步 CHANGELOG 與 portal 測試常數）
+EXPECTED_SATURATION_KEYS = {
+    # kubernetes
+    "container_cpu", "container_cpu_throttle", "container_memory",
+    # mariadb
+    "mysql_connections", "mysql_cpu",
+    # postgresql
+    "pg_connections",
+    # redis
+    "redis_memory_used_bytes", "redis_connected_clients",
+    # mongodb
+    "mongodb_connections_current",
+    # elasticsearch
+    "es_jvm_memory_used_percent",
+    # oracle
+    "oracle_sessions_active",
+    # db2
+    "db2_connections_active",
+    # clickhouse
+    "clickhouse_active_connections",
+    # kafka
+    "kafka_consumer_lag",
+    # rabbitmq
+    "rabbitmq_node_mem_percent", "rabbitmq_connections",
+    "rabbitmq_queue_messages", "rabbitmq_unacked_messages",
+    # jvm
+    "jvm_memory", "jvm_threads",
+    # nginx
+    "nginx_connections", "nginx_waiting",
+}
+
+
+class TestAnnotateSaturationCriticals:
+    """annotate_saturation_criticals() 行插入測試。"""
+
+    def test_inserts_comment_above_saturation_critical(self):
+        """飽和 _critical 鍵上方插入註解，縮排保留。"""
+        text = 'tenants:\n  db-x:\n    mysql_cpu_critical: "50"\n'
+        out = annotate_saturation_criticals(text)
+        lines = out.split("\n")
+        idx = next(i for i, l in enumerate(lines)
+                   if l.strip().startswith("mysql_cpu_critical:"))
+        assert lines[idx - 1] == f"    {SATURATION_CRITICAL_COMMENT}"
+
+    def test_non_saturation_critical_untouched(self):
+        """非飽和鍵（pg_replication_lag_critical）不插註解。"""
+        text = 'tenants:\n  db-x:\n    pg_replication_lag_critical: "60"\n'
+        out = annotate_saturation_criticals(text)
+        assert out == text
+
+    def test_commented_line_not_annotated(self):
+        """已註解行（# 開頭）不誤觸。"""
+        text = 'tenants:\n  db-x:\n    # mysql_cpu_critical: "50"\n'
+        out = annotate_saturation_criticals(text)
+        assert out == text
+
+    def test_idempotent(self):
+        """重複套用不重複插入。"""
+        text = 'tenants:\n  db-x:\n    mysql_cpu_critical: "50"\n'
+        once = annotate_saturation_criticals(text)
+        assert annotate_saturation_criticals(once) == once
+
+    def test_yaml_roundtrip_data_unchanged(self):
+        """插入註解後 safe_load 資料等值（純顯示、不改語義）。"""
+        text = yaml.safe_dump(
+            {"tenants": {"db-x": {
+                "mysql_cpu_critical": "50",
+                "container_memory_critical": "95",
+                "pg_replication_lag_critical": "60",
+            }}},
+            default_flow_style=False, sort_keys=False)
+        out = annotate_saturation_criticals(text)
+        assert yaml.safe_load(out) == yaml.safe_load(text)
+
+    def test_base_key_without_critical_suffix_untouched(self):
+        """飽和 base 鍵本身（無 _critical 後綴）不插註解。"""
+        text = 'tenants:\n  db-x:\n    mysql_cpu: "30"\n'
+        assert annotate_saturation_criticals(text) == text
+
+
+class TestSaturationWriteOutputs:
+    """write_outputs() 飽和註解整合測試。"""
+
+    def test_tenant_yaml_has_comment_above_saturation_critical(self):
+        """含 mysql_cpu_critical 的 tenant YAML 註解在該鍵上一行。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            defaults = {"defaults": {"mysql_cpu": 30}}
+            tenant = {"tenants": {"db-x": {"mysql_cpu_critical": "50"}}}
+            write_outputs(tmpdir, "db-x", defaults, tenant, "report")
+            with open(os.path.join(tmpdir, "db-x.yaml"), encoding="utf-8") as f:
+                lines = f.read().split("\n")
+            idx = next(i for i, l in enumerate(lines)
+                       if l.strip().startswith("mysql_cpu_critical:"))
+            assert lines[idx - 1].strip() == SATURATION_CRITICAL_COMMENT
+
+    def test_empty_tenant_noop(self):
+        """非互動空 tenant → 無任何飽和註解。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            defaults = generate_defaults(["kubernetes"])
+            tenant = generate_tenant("db-x", ["kubernetes"], interactive=False)
+            write_outputs(tmpdir, "db-x", defaults, tenant, "report")
+            with open(os.path.join(tmpdir, "db-x.yaml"), encoding="utf-8") as f:
+                content = f.read()
+            assert SATURATION_CRITICAL_COMMENT not in content
+
+
+class TestSaturationGenerateProfile:
+    """--generate-profile 的 _profiles.yaml 飽和註解測試。"""
+
+    def test_profiles_yaml_annotates_every_saturation_critical(self):
+        import scaffold_tenant
+        saturation = saturation_default_keys()
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch("sys.argv", [
+                "scaffold_tenant.py",
+                "--generate-profile", "standard-prod",
+                "--db", "mariadb,nginx",
+                "-o", d,
+            ]):
+                with pytest.raises(SystemExit) as exc_info:
+                    scaffold_tenant.main()
+                assert exc_info.value.code == 0
+            with open(os.path.join(d, "_profiles.yaml"), encoding="utf-8") as f:
+                lines = f.read().split("\n")
+            import re
+            found = 0
+            for i, line in enumerate(lines):
+                m = re.match(r"^(\s*)([A-Za-z0-9_]+)_critical:", line)
+                if m and m.group(2) in saturation:
+                    found += 1
+                    assert lines[i - 1] == f"{m.group(1)}{SATURATION_CRITICAL_COMMENT}", \
+                        f"line {i}: {line!r} 缺教育註解"
+            # mariadb 的 mysql_connections/mysql_cpu + nginx 的
+            # nginx_connections/nginx_waiting critical tiers 至少各一
+            assert found >= 4
+
+
+class TestSaturationGenerateReport:
+    """generate_report() 飽和教育段測試。"""
+
+    def test_mariadb_report_includes_education_section(self):
+        report = generate_report("db-x", ["kubernetes", "mariadb"], "/tmp/out")
+        assert "飽和類指標的 critical 層" in report
+        assert "mysql_cpu_critical" in report
+        assert "mysql_connections_critical" in report
+        assert "container_cpu_critical" in report
+        assert "docs/alerting-design-fundamentals.md" in report
+
+    def test_no_saturation_packs_no_section(self):
+        """無飽和鍵組合（空 selected_dbs）→ 無教育段。"""
+        report = generate_report("db-x", [], "/tmp/out")
+        assert "飽和類指標的 critical 層" not in report
+        assert "docs/alerting-design-fundamentals.md" not in report
+
+
+class TestSaturationRulePacksIntegrity:
+    """RULE_PACKS metric_class 完整性。"""
+
+    def test_metric_class_value_domain(self):
+        """metric_class 值域僅 {"saturation"}。"""
+        values = {
+            info["metric_class"]
+            for pack in RULE_PACKS.values()
+            for section in ("defaults", "optional_overrides")
+            for info in pack.get(section, {}).values()
+            if "metric_class" in info
+        }
+        assert values == {"saturation"}
+
+    def test_metric_class_only_in_defaults(self):
+        """metric_class 只出現在 defaults，不出現在 optional_overrides。"""
+        for name, pack in RULE_PACKS.items():
+            for key, info in pack.get("optional_overrides", {}).items():
+                assert "metric_class" not in info, \
+                    f"{name}.optional_overrides.{key} 不應有 metric_class"
+
+    def test_saturation_set_matches_expected(self):
+        """被標 set == 預期常數（真 N=22）。"""
+        assert saturation_default_keys() == EXPECTED_SATURATION_KEYS
+        assert len(EXPECTED_SATURATION_KEYS) == 22
 
 
 # ---------------------------------------------------------------------------
