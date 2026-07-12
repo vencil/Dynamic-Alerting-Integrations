@@ -69,7 +69,32 @@ func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) str
 			// evaluation core (ADR-027 / LD-6 P3): the principal's groups —
 			// and, for rules carrying a match: block, its named claims —
 			// feed the one shared ruleMatches predicate.
-			if !m.Allowed(bPrincipal, tenantID, want) {
+			//
+			// ADR-027 / LD-6 P4c: per-tenant READ routes additionally gate on the
+			// org axis. A read-by-id of another org's tenant is the read-only
+			// IDOR the enforce flip must close, so when this is a read on a
+			// concrete tenant (want == PermRead AND the resolved tenant is not the
+			// platform wildcard "*"), resolve the tenant's org list and route
+			// through AllowedInOrgRead (records the read/visibility would-deny on
+			// axis="org", flips atomically with list+write via the same
+			// orgScopeEnforce flag). The wildcard "*" (list routes, tenantIDFn==nil)
+			// stays org-blind by design — invariant I6: org-scope does not apply to
+			// platform scope. WRITE routes (PermWrite/PermAdmin middleware) stay
+			// org-blind here too; their org gate lives handler-side in
+			// RequireOrgWrite, one plane per site. The guard keys on the RESOLVED
+			// tenantID != "*" (not tenantIDFn != nil): TenantIDFromPath returns
+			// chi.URLParam, so a crafted id="*" must remain org-blind.
+			var authorized bool
+			if want == PermRead && tenantID != "*" {
+				var orgs []string
+				if m.orgResolver != nil {
+					orgs = m.orgResolver(tenantID)
+				}
+				authorized = m.AllowedInOrgRead(bPrincipal, tenantID, want, orgs)
+			} else {
+				authorized = m.Allowed(bPrincipal, tenantID, want)
+			}
+			if !authorized {
 				writeForbidden(w, tenantID, want)
 				return
 			}

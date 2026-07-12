@@ -38,10 +38,12 @@ const numScopeAxes = 3
 // emitted from process start (value 0) so a dashboard/alert never sees a
 // missing series, and it bounds cardinality (no user-controlled label values).
 // Order must match the rbac.scopeAxis* string constants. P1 = metadata;
-// P4a = org (list plane, ScopeAllowed); P4b = org_write (write plane,
-// AllowedInOrg). The org enforce-flip soak criterion requires increase()==0 on
-// BOTH the org and org_write series — they share one flag but observe
-// different call sites.
+// org = read/visibility plane (ScopeAllowed list P4a + AllowedInOrgRead
+// read-by-id/collection P4c); org_write = write plane (AllowedInOrg P4b). The
+// org enforce-flip soak criterion requires increase()==0 on BOTH the org and
+// org_write series — they share one flag but observe the read vs the write
+// plane, so read call volume can never mask a write-plane would-deny (or vice
+// versa).
 var scopeWouldDenyAxes = [numScopeAxes]string{
 	"metadata",
 	"org",

@@ -51,6 +51,24 @@ func OrgAllowed(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager,
 	return rbacMgr.AllowedInOrg(p, tenantID, want, orgs)
 }
 
+// OrgAllowedRead is the READ/VISIBILITY-plane sibling of OrgAllowed (ADR-027 /
+// LD-6 P4c): it resolves the tenant's org list and routes through
+// rbac.AllowedInOrgRead, which records its would-deny on axis="org" (the same
+// series the list-plane ScopeAllowed uses) rather than the write plane's
+// axis="org_write". Used by the collection read-LIST filters (filterByRBAC over
+// PR lists / task results, and hasAccessibleMember/filterAccessibleMembers for
+// the ListGroups member list) so those LISTS stop being a cross-org
+// tenant-reference oracle once the org flag flips — the read plane closes in
+// lockstep with read-by-id. (NOTE: the single-group GetGroup read returns its
+// members unfiltered on every axis — a pre-existing disclosure outside P4c's
+// org-scope mandate, tracked separately; not covered here.) Like OrgAllowed,
+// tenantOrg may be nil (nil-receiver-safe → unlabeled).
+func OrgAllowedRead(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager,
+	p *rbac.VerifiedPrincipal, tenantID string, want rbac.Permission) bool {
+	orgs, _ := tenantOrg.OrgsForTenant(tenantID)
+	return rbacMgr.AllowedInOrgRead(p, tenantID, want, orgs)
+}
+
 // RequireOrgWrite is the top-of-handler convenience wrapper over OrgAllowed
 // for single-tenant write handlers: it answers "may the request's verified
 // principal perform `want` on tenantID?" and, when the answer is no, writes
@@ -131,15 +149,17 @@ func tenantsLackingPermission(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manage
 // on a missing tag.
 //
 // Empty / nil input → returned as-is. Open-read mode (no
-// _rbac.yaml) → Allowed returns true for every tenant, so
+// _rbac.yaml) → OrgAllowedRead returns true for every tenant, so
 // this helper effectively becomes the identity transform — no
 // restrictions, allocation cost only.
 //
-// Deliberately org-blind (ADR-027 / LD-6 P4b): this is a read-plane filter,
-// and org visibility on the read plane is ScopeAllowed's job (list/search);
-// read-listing under org-scope lands in P4c. Calling the org-blind Allowed
-// here is one of the three exemptions the org_write_guard tripwire allowlists
-// — see internal/rbac/org_write_guard_test.go.
+// Org-aware read filter (ADR-027 / LD-6 P4c): each item's tenant is checked
+// through OrgAllowedRead, so a group-member / PR / task entry belonging to a
+// tenant outside the caller's org is filtered out once --rbac-org-scope-enforce
+// flips — the read plane closes in lockstep with read-by-id (P4c converted this
+// from the pre-P4c org-blind Allowed, removing its org_write_guard exemption).
+// The would-deny records on axis="org" (read/visibility plane). tenantOrg may be
+// nil (test literals) — OrgsForTenant is nil-receiver-safe → unlabeled.
 //
 // Generic over the slice element type so it covers the four
 // near-identical filter wrappers below (members []string,
@@ -147,6 +167,7 @@ func tenantsLackingPermission(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manage
 // the loop body.
 func filterByRBAC[T any](
 	rbacMgr *rbac.Manager,
+	tenantOrg *tenantorg.Manager,
 	p *rbac.VerifiedPrincipal,
 	items []T,
 	tenantID func(T) string,
@@ -158,7 +179,7 @@ func filterByRBAC[T any](
 	out := make([]T, 0, len(items))
 	for _, item := range items {
 		tid := tenantID(item)
-		if tid == "" || rbacMgr.Allowed(p, tid, perm) {
+		if tid == "" || OrgAllowedRead(rbacMgr, tenantOrg, p, tid, perm) {
 			out = append(out, item)
 		}
 	}

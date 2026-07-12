@@ -74,6 +74,47 @@ if DEV_BYPASS and os.environ.get("KUBERNETES_SERVICE_HOST"):
 
 _IDENTITY_HEADERS = ("X-Forwarded-Email", "X-Forwarded-Groups")
 
+# ADR-027 / LD-6 P4c: org-scope claim header(s) to forward to tenant-api's
+# /access probe. tenant-api's read-by-id gate now org-scopes access on a verified
+# claim (e.g. X-Auth-Request-Org) that rides a header SEPARATE from
+# X-Forwarded-Groups; if the PEP forwards only email+groups, a would-fire preview
+# of any org-LABELED tenant is denied (the claim is absent → the org axis can't
+# match) even for a legitimate same-org caller. So forward the gateway-injected
+# org-claim header(s) alongside identity. Comma-separated header NAMES, matching
+# tenant-api's --identity-claim-headers header names; default empty = no-op
+# (nothing labeled yet / claim transport not configured). Only NAMED, present
+# headers are forwarded — never arbitrary client headers (the confused-deputy
+# guard is preserved: these are gateway-injected identity attributes, not
+# client-supplied). The org claim is orthogonal to the machine-identity Bearer.
+#
+# Reserved names are stripped at parse time: the identity headers (already
+# forwarded), and Authorization / Cookie. Without this a misconfigured
+# PREVIEW_CLAIM_HEADERS=Authorization would, when no SA token is mounted
+# (_read_auth_token() → ""), let a CLIENT-supplied Authorization slip through to
+# tenant-api — the exact confused-deputy hole this forwarding otherwise avoids.
+_RESERVED_CLAIM_HEADERS = frozenset(
+    h.lower() for h in (*_IDENTITY_HEADERS, "Authorization", "Cookie")
+)
+
+
+def _parse_claim_headers(raw):
+    kept, dropped = [], []
+    for h in raw.split(","):
+        h = h.strip()
+        if not h:
+            continue
+        (dropped if h.lower() in _RESERVED_CLAIM_HEADERS else kept).append(h)
+    if dropped:
+        # Fail-loud on misconfiguration (a reserved name in the claim set is an
+        # operator error that would weaken the confused-deputy guard).
+        print(f"warning: PREVIEW_CLAIM_HEADERS ignoring reserved header name(s) "
+              f"{dropped} (identity/Authorization/Cookie are never client-forwardable)",
+              file=sys.stderr)
+    return tuple(kept)
+
+
+_CLAIM_HEADERS = _parse_claim_headers(os.environ.get("PREVIEW_CLAIM_HEADERS", ""))
+
 # ── §6 guardrails ────────────────────────────────────────────────────────
 _eval_slots = threading.BoundedSemaphore(MAX_CONCURRENCY)
 
@@ -171,13 +212,23 @@ def authorize_tenant(headers, tenant):
     """Forward the caller's identity to tenant-api `GET /tenants/{id}/access`.
 
     200 → allow; 401/403/any-other/unreachable/timeout → DENY (fail-closed).
-    Only the two gateway-injected identity headers are forwarded — never
-    arbitrary client headers (confused-deputy guard). The machine-identity Bearer
-    (audience-bound SA token) is attached ALONGSIDE the identity headers when
-    mounted; it feeds tenant-api's AUDIT only and is orthogonal to this authz
-    decision — a missing/unreadable token never flips the result.
+    Only the two gateway-injected identity headers, plus any configured org-scope
+    claim headers (_CLAIM_HEADERS, ADR-027 / LD-6 P4c), are forwarded — never
+    arbitrary client headers (confused-deputy guard; reserved names like
+    Authorization/Cookie are stripped from _CLAIM_HEADERS at parse time). The
+    machine-identity Bearer (audience-bound SA token) is attached ALONGSIDE the
+    identity headers when mounted; it feeds tenant-api's AUDIT only and is
+    orthogonal to this authz decision — a missing/unreadable token never flips
+    the result.
     """
     fwd = {h: headers[h] for h in _IDENTITY_HEADERS if headers.get(h)}
+    # ADR-027 / LD-6 P4c: forward the org-scope claim header(s) so tenant-api's
+    # read-by-id gate can org-scope the /access decision. Only present, named
+    # headers (confused-deputy guard). Absent header → not forwarded (no-op),
+    # which under shadow mode is byte-identical to pre-P4c.
+    for h in _CLAIM_HEADERS:
+        if headers.get(h):
+            fwd[h] = headers[h]
     token = _read_auth_token()
     if token:
         fwd["Authorization"] = "Bearer " + token

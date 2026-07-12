@@ -163,14 +163,19 @@ const (
 	// scopeAxisMetadata is the environment/domain metadata scope filter axis.
 	scopeAxisMetadata = "metadata"
 	// scopeAxisOrg is the org (tenant→organization) scope filter axis on the
-	// LIST plane (P4a: ScopeAllowed visibility filtering).
+	// READ/VISIBILITY plane: ScopeAllowed list filtering (P4a) AND the read-by-id
+	// middleware gate + collection read filters (P4c, AllowedInOrgRead). list and
+	// read-by-id track the identical phenomenon — the unlabeled-tenant leniency on
+	// "can this subject SEE this tenant" — with the identical remediation (label
+	// the tenant), so they share one axis; the write plane is the meaningfully
+	// different action and keeps its own axis below.
 	scopeAxisOrg = "org"
 	// scopeAxisOrgWrite is the org axis's WRITE-plane counterpart (ADR-027 /
 	// LD-6 P4b): recorded only by AllowedInOrg (per-tenant write/admin
-	// decisions), never by Allowed or ScopeAllowed. Kept a separate axis from
-	// scopeAxisOrg so the enforce-flip soak criterion can require
-	// increase(tenant_api_scope_would_deny_total{axis=...})==0 on BOTH the
-	// list and the write plane independently before flipping.
+	// decisions), never by Allowed / ScopeAllowed / AllowedInOrgRead. Kept a
+	// separate axis from scopeAxisOrg so the enforce-flip soak criterion can
+	// require increase(tenant_api_scope_would_deny_total{axis=...})==0 on BOTH the
+	// read/visibility and the write plane independently before flipping.
 	scopeAxisOrgWrite = "org_write"
 )
 

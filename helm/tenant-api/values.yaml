@@ -184,20 +184,25 @@ rbac:
   # machineIdentity/humanSocket.
   metadataScopeEnforce: false
 
-  # ADR-027 / LD-6 P4b — org (tenant→organization) scope axis fail-mode.
+  # ADR-027 / LD-6 P4 — org (tenant→organization) scope axis fail-mode.
   # false (default) = SHADOW: a tenant with no orgs in _tenant_orgs.yaml still
   # passes org-scoped rules, but is counted in
-  # tenant_api_scope_would_deny_total{axis="org"} (list) and {axis="org_write"}
-  # (write). Flip to true = ENFORCE, noting:
-  # (a) ATOMIC: one flag flips BOTH list visibility (ScopeAllowed) and write
-  #     authorization (AllowedInOrg) to fail-closed — there is no list-only or
-  #     write-only enforce.
-  # (b) read-by-id is NOT yet org-gated — it lands in P4c and is a HARD
-  #     prerequisite for the enforce flip (see #1040).
+  # tenant_api_scope_would_deny_total{axis="org"} (list + read-by-id/collection)
+  # and {axis="org_write"} (write). Flip to true = ENFORCE, noting:
+  # (a) ATOMIC: one flag flips list visibility (ScopeAllowed), write
+  #     authorization (AllowedInOrg) AND read-by-id (AllowedInOrgRead) to
+  #     fail-closed together — P4a+P4b+P4c, no list-only / write-only / read-only
+  #     enforce.
+  # (b) read-by-id is org-gated (P4c) — the read-only IDOR the enforce flip must
+  #     close (#1040) is closed; axis="org" is the read/visibility soak signal.
   # (c) Flip criterion: increase(...{axis="org"}[soak]) AND
   #     increase(...{axis="org_write"}[soak]) must BOTH stay 0 over the soak
   #     window (monotonic counters — the rate is the signal), plus a scan for
-  #     still-unlabeled tenants (the counters are traffic-driven).
+  #     still-unlabeled tenants (the counters are traffic-driven). NOTE: a
+  #     labeled tenant is already org-enforced in shadow on every plane — the
+  #     behavior-change trigger is LABELING, so verify the org claim reaches
+  #     tenant-api through every PEP (incl. recipe-preview, PREVIEW_CLAIM_HEADERS)
+  #     before labeling.
   # (d) Reload ordering when labeling: ship _tenant_orgs.yaml BEFORE the
   #     org-scoped rules in _rbac.yaml — the reverse order opens a window where
   #     a rule restricts on orgs no tenant carries yet.

@@ -291,16 +291,16 @@ func main() {
 		log.Printf("INFO: metadata scope filter in SHADOW mode: unlabeled tenants still pass; watch increase(tenant_api_scope_would_deny_total{axis=\"metadata\"}[<soak-window>]) and flip --rbac-metadata-scope-enforce once it stays 0 across the window (monotonic counter — its rate, not its value, is the signal)")
 	}
 
-	// ADR-027 / LD-6 P4b: org-scope axis fail-mode. ONE flag governs both the
-	// list-visibility side (ScopeAllowed) and the write-authorization side
-	// (AllowedInOrg) — they flip to enforce atomically so there is no
-	// split-brain window where a tenant is hidden from lists but still
-	// writable (or vice versa).
+	// ADR-027 / LD-6 P4: org-scope axis fail-mode. ONE flag governs the
+	// list-visibility side (ScopeAllowed, P4a), the write-authorization side
+	// (AllowedInOrg, P4b) AND read-by-id (AllowedInOrgRead, P4c) — they flip to
+	// enforce atomically so there is no split-brain window where a tenant is
+	// hidden from lists but still readable or writable (or any other combination).
 	if *rbacOrgScopeEnforce {
 		rbacMgr.EnableOrgScopeEnforce()
-		log.Printf("INFO: --rbac-org-scope-enforce set: org-scoped rules are fail-closed — an unlabeled tenant (no orgs in _tenant_orgs.yaml) is DENIED on both list visibility and write authorization")
+		log.Printf("INFO: --rbac-org-scope-enforce set: org-scoped rules are fail-closed — an unlabeled tenant (no orgs in _tenant_orgs.yaml) is DENIED on list visibility, write authorization AND read-by-id")
 	} else {
-		log.Printf("INFO: org scope axis in SHADOW mode: unlabeled tenants still pass; flip --rbac-org-scope-enforce only after increase(tenant_api_scope_would_deny_total{axis=\"org\"}[<soak-window>]) AND {axis=\"org_write\"} BOTH stay 0 across the window (monotonic counters — the rate is the signal), plus a scan for still-unlabeled tenants (the counters are traffic-driven), AND read-by-id gating is in place (P4c — a hard prerequisite, see #1040: until then enforce leaves single-tenant reads org-blind)")
+		log.Printf("INFO: org scope axis in SHADOW mode: unlabeled tenants still pass; flip --rbac-org-scope-enforce only after increase(tenant_api_scope_would_deny_total{axis=\"org\"}[<soak-window>]) AND {axis=\"org_write\"} BOTH stay 0 across the window (monotonic counters — the rate is the signal; axis=\"org\" now covers list AND read-by-id/collection reads, P4c closed the read IDOR #1040), plus a scan for still-unlabeled tenants (the counters are traffic-driven). A labeled tenant is already org-enforced in shadow on every plane — verify the org claim reaches tenant-api through every PEP (incl. recipe-preview) before labeling")
 	}
 
 	// ADR-027 PR-1b-i: machine-identity audit side-channel. Built here so an
@@ -353,13 +353,25 @@ func main() {
 	// parsed: a malformed org-boundary file is FATAL (an unparseable file is not
 	// safe to serve, like _rbac.yaml), but a missing/empty file is the benign
 	// default (no tenant has any org — org-scope simply grants nothing extra).
-	// The axis covers list visibility (P4a, ScopeAllowed) and per-tenant write
-	// authorization (P4b, AllowedInOrg via handler.OrgAllowed); its fail-mode is
-	// --rbac-org-scope-enforce above (default shadow). Read-by-id lands in P4c.
+	// The axis covers list visibility (P4a, ScopeAllowed), per-tenant write
+	// authorization (P4b, AllowedInOrg via handler.OrgAllowed) and read-by-id
+	// (P4c, AllowedInOrgRead via the resolver wired below); its fail-mode is
+	// --rbac-org-scope-enforce above (default shadow).
 	tenantOrgMgr, err := tenantorg.NewManager(*configDir)
 	if err != nil {
 		log.Fatalf("FATAL: tenantorg init: %v", err)
 	}
+
+	// ADR-027 / LD-6 P4c: wire the tenant→orgs resolver into the RBAC manager so
+	// the read-by-id middleware gate can evaluate the org axis (rbac does not
+	// import tenantorg — the resolver is a func value, mirroring SetScopeAuditor).
+	// Read-by-id thereby flips to enforce atomically with list + write under the
+	// single --rbac-org-scope-enforce flag; in SHADOW (default) it only records
+	// the read/visibility would-deny on axis="org".
+	rbacMgr.SetOrgResolver(func(tid string) []string {
+		orgs, _ := tenantOrgMgr.OrgsForTenant(tid)
+		return orgs
+	})
 
 	// v2.5.0: Saved Views for tenant-manager UI
 	viewMgr := views.NewManager(*configDir)

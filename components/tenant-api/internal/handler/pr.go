@@ -5,6 +5,7 @@ import (
 
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/tenantorg"
 )
 
 // PRListResponse is the response body for GET /api/v1/prs.
@@ -47,11 +48,11 @@ func ListPRs(d *Deps) http.HandlerFunc {
 
 		var prs []platform.PRInfo
 		if tenantFilter != "" {
-			// Tenant-specific query: respect RBAC. If caller can't
-			// read the tenant, return empty (don't 403 — that
-			// would leak existence). If they can, surface the PR
-			// (or empty if there isn't one).
-			if d.RBAC.Allowed(p, tenantFilter, rbac.PermRead) {
+			// Tenant-specific query: respect RBAC + org scope (ADR-027 / LD-6
+			// P4c). If caller can't read the tenant, return empty (don't 403 —
+			// that would leak existence). If they can, surface the PR (or empty
+			// if there isn't one). OrgAllowedRead records on axis="org".
+			if OrgAllowedRead(d.RBAC, d.TenantOrg, p, tenantFilter, rbac.PermRead) {
 				if pr, ok := d.PRTracker.PendingPRForTenant(tenantFilter); ok {
 					prs = []platform.PRInfo{pr}
 				} else {
@@ -63,7 +64,7 @@ func ListPRs(d *Deps) http.HandlerFunc {
 		} else {
 			// Bulk query: filter by per-PR tenant authz.
 			all := d.PRTracker.PendingPRs()
-			prs = filterAccessiblePRs(d.RBAC, p, all)
+			prs = filterAccessiblePRs(d.RBAC, d.TenantOrg, p, all)
 		}
 
 		writeJSON(w, http.StatusOK, PRListResponse{
@@ -78,8 +79,8 @@ func ListPRs(d *Deps) http.HandlerFunc {
 // through (administrative PRs not tied to a single tenant — these
 // shouldn't normally exist, but if they do they're surface-area
 // the caller already saw via other endpoints).
-func filterAccessiblePRs(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal, prs []platform.PRInfo) []platform.PRInfo {
-	return filterByRBAC(rbacMgr, p, prs, tenantIDFromPR, rbac.PermRead)
+func filterAccessiblePRs(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p *rbac.VerifiedPrincipal, prs []platform.PRInfo) []platform.PRInfo {
+	return filterByRBAC(rbacMgr, tenantOrg, p, prs, tenantIDFromPR, rbac.PermRead)
 }
 
 // tenantIDFromPR is the per-element extractor for filterByRBAC over

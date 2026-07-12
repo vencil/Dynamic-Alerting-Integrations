@@ -18,9 +18,12 @@ package rbac
 //     apply to platform scope (invariant I6: an org-scoped rule is not a
 //     platform admin), so these sites stay on the org-blind Allowed by
 //     design and need no allowlist entry.
-//   - Everything else must hit the annotated allowlist below (read-plane
-//     filtering only — org visibility is ScopeAllowed's job on the list
-//     plane; read-by-id lands in P4c).
+//   - Everything else must hit the annotated allowlist below. P4c end state:
+//     the allowlist is EMPTY. P4c converted the last three read-plane filters
+//     (filterByRBAC / hasAccessibleMember / ListPRs) to the org-aware
+//     handler.OrgAllowedRead, so outside internal/rbac the ONLY remaining
+//     org-blind Allowed calls are the "*"-literal platform gates (auto-exempt).
+//     A new non-"*" org-blind Allowed anywhere is now a hard violation.
 //
 // A stale allowlist entry (no longer matching any call site) FAILS the test:
 // an exemption must stay demonstrably necessary (#1067 discipline), or a
@@ -46,15 +49,14 @@ import (
 // orgWriteAllowlist enumerates the sanctioned org-blind `Allowed` call sites
 // outside internal/rbac (beyond the "*"-literal auto-exemption). Key is
 // "<module-relative file path>::<enclosing function>"; value is why the site
-// may stay org-blind. P4b end state: exactly the read-plane filters.
-var orgWriteAllowlist = map[string]string{
-	"internal/handler/authz.go::filterByRBAC": "read-plane generic filter (PermRead callers: task results, PR lists, " +
-		"group members) — org visibility on the list plane is ScopeAllowed's job; read-by-id hardening lands in P4c",
-	"internal/handler/group.go::hasAccessibleMember": "read-plane group visibility test (ListGroups skip) — " +
-		"same P4c read-plane deferral as filterByRBAC",
-	"internal/handler/pr.go::ListPRs": "read-plane PR list filter for ?tenant= — returns an empty list (never 403) " +
-		"to avoid the tenant-existence oracle; read-plane org filtering lands in P4c",
-}
+// may stay org-blind.
+//
+// P4c end state: EMPTY. The three P4b-era read-plane exemptions (filterByRBAC /
+// hasAccessibleMember / ListPRs) were converted to handler.OrgAllowedRead, so no
+// non-"*" org-blind Allowed call remains outside internal/rbac. The map stays
+// declared (not deleted) so a future read-plane filter that genuinely needs the
+// org-blind path can be added back with an explicit reason rather than silently.
+var orgWriteAllowlist = map[string]string{}
 
 func TestWritePlaneAllowedCallsConfinedToAllowlist(t *testing.T) {
 	t.Parallel()

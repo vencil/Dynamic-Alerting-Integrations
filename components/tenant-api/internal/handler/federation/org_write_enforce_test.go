@@ -187,9 +187,16 @@ func TestOrgWriteEnforce_PutTenantFederation(t *testing.T) {
 		writer := newTestWriter(configDir)
 		var writes atomic.Int32
 		writer.SetOnWrite(func(string) { writes.Add(1) })
+		tenantOrg := newFedOrgTenantOrg()
+		// PUT /tenants/{id}/federation mounts PermRead middleware (the handler does
+		// its own PermAdmin check), so the P4c read-by-id middleware gate applies.
+		// Mirror main.go: wire the same tenantorg the handler uses into the manager
+		// so the middleware read gate resolves the tenant's orgs (an unwired
+		// resolver would treat the labeled tenant as unlabeled → enforce-deny).
+		rbacMgr.SetOrgResolver(func(tid string) []string { orgs, _ := tenantOrg.OrgsForTenant(tid); return orgs })
 		d := &handler.Deps{
 			RBAC:             rbacMgr,
-			TenantOrg:        newFedOrgTenantOrg(),
+			TenantOrg:        tenantOrg,
 			ConfigDir:        configDir,
 			Writer:           writer,
 			FederationPolicy: fedpolicy.NewManager(configDir),
