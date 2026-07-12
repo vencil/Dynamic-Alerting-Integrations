@@ -21,6 +21,10 @@ import { ErrorBoundary } from './_common/components/ErrorBoundary.jsx';
 
 const t = window.__t || ((zh, en) => en);
 
+// --- Shared platform data (from platform-data.json via jsx-loader) ---
+const __PD = window.__PLATFORM_DATA || {};
+const PACK_COUNT = (__PD.packOrder || []).length || 16;
+
 /* ── Main Portal Component ── */
 const TABS = [
   { id: 'validate', label: () => t('YAML 驗證', 'YAML Validation'), icon: '🔍' },
@@ -38,8 +42,8 @@ export default function SelfServicePortal() {
           {t('租戶自助入口', 'Tenant Self-Service Portal')}
         </h1>
         <p className="text-gray-600 mt-1">
-          {t('驗證配置、預覽告警、追蹤路由 — 無需 CLI 或部署。支援 15 個 Rule Pack、四層路由合併 (ADR-007)、Severity Dedup。',
-             'Validate configs, preview alerts, trace routing — no CLI or deployment needed. Supports 15 Rule Packs, four-layer routing merge (ADR-007), severity dedup.')}
+          {t(`驗證配置、預覽告警、追蹤路由 — 無需 CLI 或部署。支援 ${PACK_COUNT} 個 Rule Pack、四層路由合併 (ADR-007)、Severity Dedup。`,
+             `Validate configs, preview alerts, trace routing — no CLI or deployment needed. Supports ${PACK_COUNT} Rule Packs, four-layer routing merge (ADR-007), severity dedup.`)}
         </p>
       </div>
 
@@ -89,8 +93,8 @@ export default function SelfServicePortal() {
         <ul className="text-sm text-blue-700 space-y-1">
           <li>{t('• 此工具在瀏覽器端執行，YAML 不會送往任何伺服器。',
                  '• This tool runs entirely in your browser — YAML is never sent to any server.')}</li>
-          <li>{t('• 工具自動載入 platform-data.json 中的 15 個 Rule Pack metric 定義。',
-                 '• Tool auto-loads 15 Rule Pack metric definitions from platform-data.json.')}</li>
+          <li>{t(`• 工具自動載入 platform-data.json 中的 ${PACK_COUNT} 個 Rule Pack metric 定義。`,
+                 `• Tool auto-loads ${PACK_COUNT} Rule Pack metric definitions from platform-data.json.`)}</li>
           <li>{t('• 完整驗證請使用 CLI: da-tools validate-config --config-dir conf.d/',
                  '• For full validation use CLI: da-tools validate-config --config-dir conf.d/')}</li>
           <li>{t('• Policy-as-Code 策略需透過 CLI 評估: da-tools evaluate-policy --config-dir conf.d/',

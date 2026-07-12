@@ -58,8 +58,8 @@ export default function PlatformHealth() {
             {t('平台運行正常', 'Platform Operational')}
           </span>
           <span className="text-xs text-[color:var(--da-color-muted)] ml-auto">
-            {t('所有元件健康 · 5 Tenant · 15 Rule Pack · 238 Rules',
-               'All components healthy · 5 Tenants · 15 Rule Packs · 238 Rules')}
+            {t('所有元件健康 · 5 Tenant · 16 Rule Pack · 301 Rules',
+               'All components healthy · 5 Tenants · 16 Rule Packs · 301 Rules')}
           </span>
         </div>
       </div>

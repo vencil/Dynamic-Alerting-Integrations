@@ -25,7 +25,7 @@ const t = window.__t || ((zh, en) => en);
 // --- Shared platform data (from platform-data.json via jsx-loader) ---
 const __PD = window.__PLATFORM_DATA || {};
 
-const PACK_COUNT = (__PD.packOrder || []).length || 15;
+const PACK_COUNT = (__PD.packOrder || []).length || 16;
 const TOTAL_RULES = (() => {
   if (__PD.rulePacks && __PD.packOrder) {
     return __PD.packOrder.reduce((sum, key) => {
@@ -33,7 +33,7 @@ const TOTAL_RULES = (() => {
       return sum + (p ? (p.recordingRules || 0) + (p.alertRules || 0) : 0);
     }, 0);
   }
-  return 238; // fallback: 139 rec + 99 alert
+  return 301; // fallback: 155 rec + 146 alert
 })();
 
 // ── Styles using design tokens (--da-*) from design-tokens.css ──

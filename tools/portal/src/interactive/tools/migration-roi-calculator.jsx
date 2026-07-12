@@ -27,7 +27,7 @@ const t = window.__t || ((zh, en) => en);
 // --- Shared platform data (from platform-data.json via jsx-loader) ---
 const __PD = window.__PLATFORM_DATA || {};
 
-const PACK_COUNT = (__PD.packOrder || []).length || 15;
+const PACK_COUNT = (__PD.packOrder || []).length || 16;
 const TOTAL_RULES = (() => {
   if (__PD.rulePacks && __PD.packOrder) {
     return __PD.packOrder.reduce((sum, key) => {
@@ -35,7 +35,7 @@ const TOTAL_RULES = (() => {
       return sum + (p ? (p.recordingRules || 0) + (p.alertRules || 0) : 0);
     }, 0);
   }
-  return 238; // fallback: 139 rec + 99 alert
+  return 301; // fallback: 155 rec + 146 alert
 })();
 
 const AVERAGE_RULES_PER_PACK = PACK_COUNT > 0 ? Math.round(TOTAL_RULES / PACK_COUNT) : 16;
@@ -573,8 +573,8 @@ export default function MigrationROICalculator() {
               <p style={styles.methodologyLine}>
                 <strong>{t('平台涵蓋率：', 'Platform Coverage: ')}</strong>
                 {t(
-                  '現有 Rule Pack 包含 238 條規則（15 個 pack），平均每 pack 16 條。針對常見 DB 監控場景，預估與用戶規則的重疊率 60~80%。',
-                  'Existing Rule Packs contain 238 rules (15 packs), ~16 rules per pack. For standard DB monitoring scenarios, we estimate 60-80% overlap with your rules.'
+                  `現有 Rule Pack 包含 ${TOTAL_RULES} 條規則（${PACK_COUNT} 個 pack），平均每 pack ${AVERAGE_RULES_PER_PACK} 條。針對常見 DB 監控場景，預估與用戶規則的重疊率 60~80%。`,
+                  `Existing Rule Packs contain ${TOTAL_RULES} rules (${PACK_COUNT} packs), ~${AVERAGE_RULES_PER_PACK} rules per pack. For standard DB monitoring scenarios, we estimate 60-80% overlap with your rules.`
                 )}
               </p>
               <p style={styles.methodologyLine}>
