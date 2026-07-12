@@ -22,13 +22,13 @@ tests:
         values: '0+99000x48'
       - series: 'http_requests_total{tenant="shop-a", method="POST", status="200", namespace="shop", pod="api-1"}'
         values: '0+99000x48'
-      - series: 'user_threshold{component="custom", metric="http_requests_total", recipe_id="rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m", tenant="shop-a", severity="warning", name="http_5xx_spike"}'
+      - series: 'user_threshold{component="custom", metric="http_requests_total", recipe_id="rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m__x38e5c05de00b3e8d", tenant="shop-a", severity="warning", name="http_5xx_spike"}'
         values: '50x48'
       - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
         values: '1x48'
     alert_rule_test:
       - eval_time: 11m
-        alertname: Custom_rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m
+        alertname: Custom_rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m__x38e5c05de00b3e8d
         exp_alerts:
           - exp_labels:
               component: custom
@@ -58,11 +58,11 @@ tests:
         values: '0+99000x48'
       - series: 'http_requests_total{tenant="shop-a", method="POST", status="200", namespace="shop", pod="api-1"}'
         values: '0+99000x48'
-      - series: 'user_threshold{component="custom", metric="http_requests_total", recipe_id="rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m", tenant="shop-a", severity="warning", name="http_5xx_spike"}'
+      - series: 'user_threshold{component="custom", metric="http_requests_total", recipe_id="rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m__x38e5c05de00b3e8d", tenant="shop-a", severity="warning", name="http_5xx_spike"}'
         values: '50x48'
       - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
         values: '1x48'
     alert_rule_test:
       - eval_time: 11m
-        alertname: Custom_rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m
+        alertname: Custom_rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m__x38e5c05de00b3e8d
         exp_alerts: []
