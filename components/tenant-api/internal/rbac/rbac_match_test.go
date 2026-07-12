@@ -277,6 +277,57 @@ func TestValidateConfig_Branches(t *testing.T) {
 	}
 }
 
+// TestValidateConfig_TenantPatterns: tenant match patterns are allowlist-checked
+// at load (independently of the match block). A well-formed pattern is "*", a
+// single-trailing-"*" prefix, or an exact id; everything else fails loud. The
+// load-bearing case is "**": it must be rejected here so it never reaches
+// tenantMatches, where it would collapse to prefix "*" and fail open onto a
+// platform-scope "*" gate (see TestTenantMatches).
+func TestValidateConfig_TenantPatterns(t *testing.T) {
+	t.Parallel()
+
+	cfg := func(tenants ...string) *RBACConfig {
+		return &RBACConfig{Groups: []GroupRule{
+			{Name: "r", Tenants: tenants, Permissions: []Permission{PermRead}},
+		}}
+	}
+
+	cases := []struct {
+		name    string
+		cfg     *RBACConfig
+		wantErr string // "" = valid
+	}{
+		{"full wildcard valid", cfg("*"), ""},
+		{"exact id valid", cfg("db-a"), ""},
+		{"prefix pattern valid", cfg("db-a-*"), ""},
+		{"multiple valid patterns", cfg("*", "db-a", "db-b-*"), ""},
+		{"absent tenants valid", &RBACConfig{Groups: []GroupRule{{Name: "r", Permissions: []Permission{PermRead}}}}, ""},
+		{"double star rejected", cfg("**"), "invalid tenant pattern"},
+		{"embedded star rejected", cfg("*a*"), "invalid tenant pattern"},
+		{"trailing double star rejected", cfg("a**"), "invalid tenant pattern"},
+		{"leading star (non-suffix) rejected", cfg("*a"), "invalid tenant pattern"},
+		{"mid star rejected", cfg("a*b"), "invalid tenant pattern"},
+		{"empty entry rejected", cfg(""), "invalid tenant pattern"},
+		{"whitespace-only entry rejected", cfg("   "), "invalid tenant pattern"},
+		{"one bad entry among good ones rejected", cfg("db-a-*", "**"), "invalid tenant pattern"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateConfig(tc.cfg, nil)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("validateConfig = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("validateConfig = %v, want error containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 // --- strict parsing (KnownFields) + load semantics ---
 
 const matchLoadYAML = `groups:
@@ -407,6 +458,7 @@ func TestNewManager_InvalidMatchConfigIsAnError(t *testing.T) {
 	}{
 		{"undeclared claim key", matchLoadYAML, nil, "not declared"},
 		{"empty match block", "groups:\n  - name: r\n    match: {}\n    tenants: [\"*\"]\n    permissions: [read]\n", nil, "empty match block"},
+		{"malformed tenant pattern", "groups:\n  - name: r\n    tenants: [\"**\"]\n    permissions: [read]\n", nil, "invalid tenant pattern"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

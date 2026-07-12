@@ -396,6 +396,22 @@ func detectNullMatchBlocks(data []byte) error {
 func validateConfig(cfg *RBACConfig, declaredClaimKeys map[string]string) error {
 	for i := range cfg.Groups {
 		rule := &cfg.Groups[i]
+		// Tenant patterns are validated for EVERY rule (independently of the
+		// match block, exactly like org-scope below): a rule can be legacy
+		// name-matched AND still carry tenants. The grammar is "*" (full
+		// wildcard), "<literal>-*" (single trailing "*") or an exact id. A
+		// malformed pattern must fail loud: "**" collapses to prefix "*" in
+		// tenantMatches and would HasPrefix-collide with the platform-scope "*"
+		// gate query — passing platform gates while granting zero per-tenant
+		// access (a fail-open-direction inconsistency) — while "*a*"/"a**"/""
+		// silently match nothing (a dead authorization rule). Same philosophy as
+		// the empty-match and undeclared-claim guards: a silently-unmatchable or
+		// direction-inconsistent authorization rule fails loud at load.
+		for _, pat := range rule.Tenants {
+			if !validTenantPattern(pat) {
+				return fmt.Errorf("rbac: rule %q: invalid tenant pattern %q (allowed: \"*\", a \"prefix-*\" with a single trailing \"*\", or an exact tenant id — no empty, embedded or repeated \"*\")", rule.Name, pat)
+			}
+		}
 		// Org-scope opt-in (ADR-027 / LD-6 P4): the claim key an org-scoped rule
 		// keys off MUST be declared in --identity-claim-headers, exactly like a
 		// match.claims key. Checked for EVERY rule — independently of the match
@@ -1011,6 +1027,16 @@ func tenantMatches(patterns []string, tenantID string) bool {
 		}
 		if strings.HasSuffix(pat, "*") {
 			prefix := strings.TrimSuffix(pat, "*")
+			// Fail-closed backstop for a malformed pattern that bypassed
+			// validateConfig (e.g. a rule built directly in a test, not parsed
+			// from YAML): a prefix that is empty or still contains "*" comes from
+			// "*", "**", "a**" etc. Never prefix-match it — otherwise "**" leaves
+			// prefix "*" and HasPrefix("*", "*") would fail the rule OPEN onto a
+			// platform-scope "*" gate query (Allowed(p, "*", …)) while granting
+			// zero per-tenant access. validateConfig rejects these at load.
+			if prefix == "" || strings.Contains(prefix, "*") {
+				continue
+			}
 			if strings.HasPrefix(tenantID, prefix) {
 				return true
 			}
@@ -1021,6 +1047,31 @@ func tenantMatches(patterns []string, tenantID string) bool {
 		}
 	}
 	return false
+}
+
+// validTenantPattern reports whether pat is a well-formed tenant match pattern:
+// the full wildcard "*", a prefix pattern "<literal>*" with a single trailing
+// "*" and a non-empty literal ("db-a-*"), or an exact tenant id (no "*"). It is
+// the allowlist counterpart to tenantMatches' grammar (the GroupRule.Tenants
+// struct comment): validateConfig rejects everything else at load so a typo
+// like "**" — which would otherwise collapse to prefix "*" and fail open onto
+// platform-scope "*" gates — never reaches the matcher.
+func validTenantPattern(pat string) bool {
+	if pat == "*" {
+		return true // full wildcard
+	}
+	switch strings.Count(pat, "*") {
+	case 0:
+		// exact id — reject blank / whitespace-only, mirroring the
+		// match.groups / match.claims blank-entry guards in validateConfig.
+		return strings.TrimSpace(pat) != ""
+	case 1:
+		// prefix pattern: the single "*" must be the trailing char, with a
+		// non-empty literal before it. The lone "*" is already handled above.
+		return strings.HasSuffix(pat, "*") && len(pat) > 1
+	default:
+		return false // repeated "*" ("**", "*a*", "a**") — malformed
+	}
 }
 
 // permCovers reports whether grant satisfies want (admin covers write and read).
