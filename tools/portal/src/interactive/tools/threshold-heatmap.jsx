@@ -23,12 +23,9 @@ dependencies: [
 
 import React, { useState, useMemo, useCallback } from 'react';
 import { useModalFocusTrap } from './_common/hooks/useModalFocusTrap.js';
+import { RULE_PACK_DATA as RULE_PACKS, PACK_ORDER } from './_common/data/rule-packs.js';
 
 const t = window.__t || ((zh, en) => en);
-
-const __PD = window.__PLATFORM_DATA || {};
-const RULE_PACKS = __PD.rulePacks || {};
-const PACK_ORDER = __PD.packOrder || [];
 
 // Color scale + non-color symbol encoding (WCAG 1.4.1 — don't rely on color alone).
 // Returns { colorClass, symbol, tier } so each cell carries dual encoding:
