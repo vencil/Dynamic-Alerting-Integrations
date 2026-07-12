@@ -12,7 +12,8 @@ type: application
 # 2.9.14 — ADR-027 / #962: opt-in rbac.metadataScopeEnforce (env/domain scope shadow→enforce flip; default shadow = no-op)
 # 2.9.15 — ADR-027 / #962: opt-in identity.claimHeaders (named trusted-hop headers → principal claims; default empty = no-op)
 # 2.9.16 — ADR-027 / #962: opt-in rbac.orgScopeEnforce (org scope shadow→enforce flip, atomic over list+write; default shadow = no-op)
-version: 2.9.16
+# 2.9.17 — ADR-027 / #962 P4c: org scope now covers read-by-id (atomic over list+write+read); values/deployment enforce-note refreshed (comment-only, behavior unchanged)
+version: 2.9.17
 # appVersion: Go binary 版本
 # ⚠ appVersion pins the image tag. The --human-socket binary flag ships in a NEW
 # tenant-api image; humanSocket.enabled=true REQUIRES that image (NOTES + values

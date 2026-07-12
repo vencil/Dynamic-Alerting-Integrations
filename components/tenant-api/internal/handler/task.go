@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/tenantorg"
 )
 
 // GetTask handles GET /api/v1/tasks/{id}
@@ -46,7 +47,7 @@ func GetTask(d *Deps) http.HandlerFunc {
 		// task struct so we never mutate the in-memory copy that
 		// other concurrent pollers would observe.
 		p := rbac.RequestPrincipal(r)
-		filtered := filterTaskResults(d.RBAC, p, task.Results)
+		filtered := filterTaskResults(d.RBAC, d.TenantOrg, p, task.Results)
 		if len(task.Results) > 0 && len(filtered) == 0 {
 			// Caller has zero access to any of the touched tenants.
 			// 403 (not 404) — the task exists, just none of its
@@ -65,10 +66,11 @@ func GetTask(d *Deps) http.HandlerFunc {
 
 // filterTaskResults returns the subset of results visible to the
 // caller. Open-mode RBAC (no _rbac.yaml) returns the input as-is
-// (Allowed short-circuits). Mirrors filterAccessibleMembers /
-// filterAccessiblePRs via the shared filterByRBAC generic.
-func filterTaskResults(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal, results []async.TaskResult) []async.TaskResult {
-	return filterByRBAC(rbacMgr, p, results, tenantIDFromTaskResult, rbac.PermRead)
+// (OrgAllowedRead short-circuits). Org-aware read (ADR-027 / LD-6 P4c):
+// mirrors filterAccessibleMembers / filterAccessiblePRs via the shared
+// filterByRBAC generic. tenantOrg may be nil (nil-receiver-safe → unlabeled).
+func filterTaskResults(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p *rbac.VerifiedPrincipal, results []async.TaskResult) []async.TaskResult {
+	return filterByRBAC(rbacMgr, tenantOrg, p, results, tenantIDFromTaskResult, rbac.PermRead)
 }
 
 // tenantIDFromTaskResult is the per-element extractor for filterByRBAC

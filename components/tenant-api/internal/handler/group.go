@@ -11,6 +11,7 @@ import (
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/tenantorg"
 )
 
 // GroupResponse is the response body for a single group.
@@ -42,7 +43,7 @@ func ListGroups(d *Deps) http.HandlerFunc {
 		resp := make([]GroupResponse, 0, len(list))
 		for _, g := range list {
 			// v2.5.0: Skip groups where user has no accessible members
-			if len(rbacCfg.Groups) > 0 && !hasAccessibleMember(d.RBAC, p, g.Members) {
+			if len(rbacCfg.Groups) > 0 && !hasAccessibleMember(d.RBAC, d.TenantOrg, p, g.Members) {
 				continue
 			}
 			resp = append(resp, GroupResponse{
@@ -50,7 +51,7 @@ func ListGroups(d *Deps) http.HandlerFunc {
 				Label:       g.Label,
 				Description: g.Description,
 				Filters:     g.Filters,
-				Members:     filterAccessibleMembers(d.RBAC, p, g.Members),
+				Members:     filterAccessibleMembers(d.RBAC, d.TenantOrg, p, g.Members),
 			})
 		}
 		writeJSON(w, http.StatusOK, resp)
@@ -58,13 +59,13 @@ func ListGroups(d *Deps) http.HandlerFunc {
 }
 
 // hasAccessibleMember returns true if the user can access at least one member.
-// Deliberately org-blind (ADR-027 / LD-6 P4b): a read-plane filter — org
-// visibility on reads is ScopeAllowed's job, read-side org-scope lands in P4c.
-// This org-blind Allowed is a tripwire-allowlisted exemption (see
-// internal/rbac/org_write_guard_test.go).
-func hasAccessibleMember(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal, members []string) bool {
+// Org-aware read (ADR-027 / LD-6 P4c): each member tenant is checked through
+// OrgAllowedRead, so a group with only other-org members is hidden from an
+// org-scoped caller once the org flag flips (records on axis="org"). tenantOrg
+// may be nil (nil-receiver-safe → unlabeled).
+func hasAccessibleMember(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p *rbac.VerifiedPrincipal, members []string) bool {
 	for _, m := range members {
-		if rbacMgr.Allowed(p, m, rbac.PermRead) {
+		if OrgAllowedRead(rbacMgr, tenantOrg, p, m, rbac.PermRead) {
 			return true
 		}
 	}
@@ -74,10 +75,10 @@ func hasAccessibleMember(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal, membe
 // filterAccessibleMembers returns only the members the user has read
 // access to. Members are tenant IDs themselves (so the identity
 // extractor `tenantIDFromString` is just `s -> s`). Open-mode RBAC
-// is handled inside filterByRBAC via Allowed's open-mode
+// is handled inside filterByRBAC via OrgAllowedRead's open-mode
 // short-circuit.
-func filterAccessibleMembers(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal, members []string) []string {
-	return filterByRBAC(rbacMgr, p, members, tenantIDFromString, rbac.PermRead)
+func filterAccessibleMembers(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p *rbac.VerifiedPrincipal, members []string) []string {
+	return filterByRBAC(rbacMgr, tenantOrg, p, members, tenantIDFromString, rbac.PermRead)
 }
 
 // tenantIDFromString is the identity extractor used when filtering a

@@ -222,6 +222,47 @@ class TestPEPFailClosed:
         assert "x-forwarded-email" in seen
         assert "x-evil" not in seen and "cookie" not in seen and "authorization" not in seen
 
+    def test_org_claim_header_forwarded_when_configured(self, monkeypatch):
+        """P4c: a configured org-claim header IS relayed so tenant-api's
+        read-by-id gate can org-scope /access. Only the NAMED header — arbitrary
+        client headers stay blocked (confused-deputy guard preserved)."""
+        monkeypatch.setattr(app, "_CLAIM_HEADERS", ("X-Auth-Request-Org",))
+        seen = {}
+
+        def capture(req, timeout=None):
+            seen.update({k.lower(): v for k, v in req.headers.items()})
+            return _Resp(200)
+        monkeypatch.setattr(app.urllib.request, "urlopen", capture)
+        app.authorize_tenant(
+            {"X-Forwarded-Email": "u@x", "X-Forwarded-Groups": "g",
+             "X-Auth-Request-Org": "ORG-ALPHA", "X-Evil": "1"}, "shop-a")
+        assert seen.get("x-auth-request-org") == "ORG-ALPHA"
+        assert "x-evil" not in seen
+
+    def test_claim_header_absent_is_noop(self, monkeypatch):
+        """A configured-but-absent claim header is not forwarded (no-op), and the
+        default (no PREVIEW_CLAIM_HEADERS) forwards nothing extra."""
+        monkeypatch.setattr(app, "_CLAIM_HEADERS", ("X-Auth-Request-Org",))
+        seen = {}
+
+        def capture(req, timeout=None):
+            seen.update({k.lower(): v for k, v in req.headers.items()})
+            return _Resp(200)
+        monkeypatch.setattr(app.urllib.request, "urlopen", capture)
+        app.authorize_tenant({"X-Forwarded-Email": "u@x", "X-Forwarded-Groups": "g"}, "shop-a")
+        assert "x-auth-request-org" not in seen
+
+    def test_claim_headers_env_parsing(self):
+        """PREVIEW_CLAIM_HEADERS parse: trim, drop empties, and strip reserved
+        names (identity headers + Authorization/Cookie) so a misconfigured value
+        can't smuggle a client-supplied Authorization/Cookie into the forward."""
+        assert app._parse_claim_headers(
+            " X-Auth-Request-Org , ,X-Foo,Authorization,Cookie,X-Forwarded-Email"
+        ) == ("X-Auth-Request-Org", "X-Foo")
+        assert app._parse_claim_headers("") == ()
+        # case-insensitive reserved match
+        assert app._parse_claim_headers("authorization, X-Ok") == ("X-Ok",)
+
 
 class TestPEPFailClosedLogsReason:
     """R7: authorize_tenant no longer swallows the failure silently — it logs the

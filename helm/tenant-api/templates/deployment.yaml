@@ -119,12 +119,14 @@ spec:
             - --rbac-metadata-scope-enforce
             {{- end }}
             {{- if .Values.rbac.orgScopeEnforce }}
-            # ADR-027 / LD-6 P4b: flip the org scope axis from SHADOW (default)
-            # to fail-closed — ONE flag atomically enforces both list visibility
-            # and write authorization for org-scoped rules. Flip ONLY after
+            # ADR-027 / LD-6 P4: flip the org scope axis from SHADOW (default) to
+            # fail-closed — ONE flag atomically enforces list visibility, write
+            # authorization AND read-by-id (P4a+P4b+P4c) for org-scoped rules; no
+            # split-brain. Flip ONLY after
             # increase(tenant_api_scope_would_deny_total{axis="org"}[soak]) AND
-            # {axis="org_write"} BOTH stay 0 over the soak window, and P4c
-            # read-by-id gating has landed (#1040 hard prerequisite). Ship
+            # {axis="org_write"} BOTH stay 0 over the soak window (axis="org" now
+            # covers list + read-by-id/collection reads — P4c closed the read
+            # IDOR, #1040) plus a scan for still-unlabeled tenants. Ship
             # _tenant_orgs.yaml before the org-scoped _rbac.yaml rules.
             - --rbac-org-scope-enforce
             {{- end }}

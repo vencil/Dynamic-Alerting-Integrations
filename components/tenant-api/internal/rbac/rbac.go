@@ -188,6 +188,17 @@ type Manager struct {
 	// never drift — which is why this is a constructor argument and no
 	// longer a post-construction setter.
 	claimHeaders map[string]string
+
+	// orgResolver (ADR-027 / LD-6 P4c) resolves a tenant ID to its organization
+	// list for the read-by-id middleware gate. rbac must NOT import tenantorg
+	// (import direction: handler → rbac), so the resolver is injected as a func
+	// value wired from tenantorg.OrgsForTenant in main.go — the same DI shape as
+	// SetScopeAuditor / SetMachineAuditor. nil (the default, e.g. a bare NewManager
+	// in tests) means the middleware read gate resolves no orgs → the tenant is
+	// treated as unlabeled, which with no org-scoped rule is byte-identical to the
+	// pre-P4c org-blind read path. Only the middleware read path uses it; the
+	// write plane resolves orgs handler-side via handler.OrgAllowed.
+	orgResolver func(tenantID string) []string
 }
 
 // SetMachineAuditor installs the machine-identity audit side-channel
@@ -222,6 +233,14 @@ func (m *Manager) EnableOrgScopeEnforce() { m.orgScopeEnforce = true }
 // (ADR-027 / LD-6 P1). Called once at startup. Passing nil leaves recording
 // disabled (the filter still behaves correctly). Mirrors SetMachineAuditor.
 func (m *Manager) SetScopeAuditor(a ScopeAuditRecorder) { m.scopeAudit = a }
+
+// SetOrgResolver installs the tenant→organization-list resolver used by the
+// read-by-id middleware gate (ADR-027 / LD-6 P4c). Called once at startup from
+// main, wired from tenantorg.OrgsForTenant. Passing nil leaves the read gate
+// org-blind (tenants resolve as unlabeled). Kept a func-value setter — rather
+// than importing tenantorg — so rbac stays free of the handler/tenantorg import
+// direction, mirroring SetScopeAuditor.
+func (m *Manager) SetOrgResolver(fn func(tenantID string) []string) { m.orgResolver = fn }
 
 // NewManager creates a Manager and loads the RBAC config from path.
 // If path is empty, the manager starts in open mode (all
@@ -603,22 +622,24 @@ func (m *Manager) allowedOrgModes(p *VerifiedPrincipal, tenantID string, want Pe
 // Permission hierarchy: admin ⊇ write ⊇ read.
 // An "admin" grant satisfies "write" and "read" checks.
 //
-// ⚠️ ORG-BLIND (ADR-027 / LD-6 P4b): Allowed is the org-scope-degenerate
-// wrapper over allowedOrgModes — with tenantOrgs=nil every org-scoped rule
-// passes shadow mode (scopeSetModes' unlabeled-tenant leniency is (true,false)),
-// so the shadow component returned here is byte-identical to the pre-P4b
-// permission check and the org axis is invisible. Any per-tenant WRITE-plane
-// authorization decision (PermWrite / PermAdmin gates) MUST go through
-// AllowedInOrg instead — via handler.OrgAllowed, which resolves the tenant's
-// orgs — never this method. The only legitimate Allowed callers are (1) the
-// platform-scope tenantID="*" checks (org-scope deliberately does not apply to
-// platform scope — an org-scoped rule is not a platform admin) and (2)
-// read-plane filtering (org visibility is ScopeAllowed's job; read-by-id lands
-// in P4c) — pinned by the go/ast tripwire, see org_write_guard_test.go.
+// ⚠️ ORG-BLIND (ADR-027 / LD-6 P4): Allowed is the org-scope-degenerate wrapper
+// over allowedOrgModes — with tenantOrgs=nil every org-scoped rule passes shadow
+// mode (scopeSetModes' unlabeled-tenant leniency is (true,false)), so the shadow
+// component returned here is byte-identical to the pre-P4 permission check and
+// the org axis is invisible. Every per-tenant authorization decision MUST route
+// through an org-aware method instead: WRITE/ADMIN gates via AllowedInOrg
+// (handler.OrgAllowed), and per-tenant READS via AllowedInOrgRead (the middleware
+// read-by-id gate + handler.OrgAllowedRead for the collection filters). The only
+// legitimate Allowed callers left are the platform-scope tenantID="*" checks
+// (org-scope deliberately does not apply to platform scope — an org-scoped rule
+// is not a platform admin) and the middleware's own write-mount branch (which
+// checks read on "*" or defers the per-tenant org decision to the handler's
+// RequireOrgWrite). Pinned by the go/ast tripwire, see org_write_guard_test.go
+// (P4c emptied its allowlist).
 //
-// Allowed never records the org_write would-deny signal — recording lives in
-// AllowedInOrg only, so middleware/read call volume cannot pollute the
-// enforce-flip soak metric.
+// Allowed records NO would-deny signal — recording lives in AllowedInOrg
+// (org_write) and AllowedInOrgRead (org) only, so nothing routed through the
+// org-blind path can pollute the enforce-flip soak metrics.
 func (m *Manager) Allowed(p *VerifiedPrincipal, tenantID string, want Permission) bool {
 	passShadow, _, _ := m.allowedOrgModes(p, tenantID, want, nil)
 	return passShadow
@@ -639,24 +660,51 @@ func (m *Manager) Allowed(p *VerifiedPrincipal, tenantID string, want Permission
 // construction: AllowedInOrg(enforce) ⟹ AllowedInOrg(shadow) ⟹ Allowed —
 // the org axis only ever narrows a grant, never widens one.
 func (m *Manager) AllowedInOrg(p *VerifiedPrincipal, tenantID string, want Permission, tenantOrgs []string) bool {
+	return m.allowedInOrgOnAxis(p, tenantID, want, tenantOrgs, scopeAxisOrgWrite, "write-plane")
+}
+
+// AllowedInOrgRead is the org-scope-aware per-tenant permission check for the
+// READ/VISIBILITY plane (ADR-027 / LD-6 P4c): the read-by-id middleware gate
+// and the collection read filters (filterByRBAC / hasAccessibleMember / ListPRs
+// via handler.OrgAllowedRead). It is byte-for-byte AllowedInOrg except it
+// records its would-deny on the scopeAxisOrg ("org") series — the SAME axis the
+// list-plane ScopeAllowed records — so the read/visibility plane and the list
+// plane share one soak signal (both answer "can this subject SEE this tenant",
+// both track only the unlabeled-tenant leniency), while the write plane keeps
+// its own scopeAxisOrgWrite series. The enforce-flip soak criterion's existing
+// increase({axis="org"})==0 clause therefore auto-covers read-by-id — no fourth
+// axis, no separate flip gate. Governed by the same m.orgScopeEnforce flag, so
+// list + write + read flip atomically.
+func (m *Manager) AllowedInOrgRead(p *VerifiedPrincipal, tenantID string, want Permission, tenantOrgs []string) bool {
+	return m.allowedInOrgOnAxis(p, tenantID, want, tenantOrgs, scopeAxisOrg, "read-plane")
+}
+
+// allowedInOrgOnAxis is the shared org-scope decision + would-deny recording for
+// AllowedInOrg (write plane) and AllowedInOrgRead (read plane). axis selects
+// which scope_would_deny series records the observation (scopeAxisOrgWrite vs
+// scopeAxisOrg); plane names the plane in the deny/would-deny log line. The
+// decision (allowedOrgModes) is axis-independent — only the observability label
+// differs — so a read call can never pollute the write-plane soak counter and
+// vice versa.
+func (m *Manager) allowedInOrgOnAxis(p *VerifiedPrincipal, tenantID string, want Permission, tenantOrgs []string, axis, plane string) bool {
 	passShadow, passEnforce, orgBlockedRule := m.allowedOrgModes(p, tenantID, want, tenantOrgs)
-	m.recordScopeShadowGap(passShadow, passEnforce, scopeAxisOrgWrite)
+	m.recordScopeShadowGap(passShadow, passEnforce, axis)
 	if m.orgScopeEnforce {
 		if !passEnforce && orgBlockedRule != "" {
 			// The org axis curtailed an otherwise-granting rule → loud enough to
 			// debug a 403. Tenant + rule NAME only; claim values never reach logs
 			// (principal.go multi-value-refusal discipline).
-			slog.Warn("org-scope denied write-plane permission",
-				"tenant", tenantID, "axis", scopeAxisOrgWrite, "rule", orgBlockedRule, "perm", string(want))
+			slog.Warn("org-scope denied "+plane+" permission",
+				"tenant", tenantID, "axis", axis, "rule", orgBlockedRule, "perm", string(want))
 		}
 		return passEnforce
 	}
 	if passShadow && !passEnforce {
 		// Shadow-mode migration gap: enforce would deny this grant. One line per
-		// observation (matches the org_write would-deny increment) so operators
-		// can attribute the soak counter to a tenant/rule; no claim values.
-		slog.Info("org-scope write-plane would-deny (shadow mode)",
-			"tenant", tenantID, "axis", scopeAxisOrgWrite, "rule", orgBlockedRule, "perm", string(want))
+		// observation (matches the would-deny increment) so operators can
+		// attribute the soak counter to a tenant/rule; no claim values.
+		slog.Info("org-scope "+plane+" would-deny (shadow mode)",
+			"tenant", tenantID, "axis", axis, "rule", orgBlockedRule, "perm", string(want))
 	}
 	return passShadow
 }

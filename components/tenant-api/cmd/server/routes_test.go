@@ -92,6 +92,56 @@ var writeRouteManifest = map[string]string{
 		" — fleet-wide AccountID backfill; same platform-admin bar as the whitelist",
 }
 
+// Read-plane gate-mechanism labels (ADR-027 / LD-6 P4c). Reads gate in the
+// SINGLE rbac.Middleware chokepoint, so — unlike the distributed write gates —
+// the manifest records which of two middleware paths a GET route takes.
+const (
+	// gateReadByIDOrg — per-tenant read (PermRead middleware + TenantIDFromPath):
+	// the middleware resolves the tenant's orgs and routes through
+	// AllowedInOrgRead, closing the read-by-id IDOR. Flips atomically with
+	// list+write under --rbac-org-scope-enforce.
+	gateReadByIDOrg = "read-by-id org gate (middleware AllowedInOrgRead)"
+	// gateReadListOrgBlind — list/wildcard read (nil tenantIDFn → tenant "*"):
+	// the middleware is org-blind by design (invariant I6). Row/collection org
+	// visibility is handled elsewhere — ScopeAllowed for the tenant list/search,
+	// the org-aware collection filter (OrgAllowedRead) for group members / PRs /
+	// task results, platform scope for federation policy/tokens.
+	gateReadListOrgBlind = "list/wildcard read — middleware org-blind; row/collection org visibility handled downstream"
+	// gateReadNoAuth — infra endpoint mounted with no RBAC middleware.
+	gateReadNoAuth = "no-auth infra endpoint"
+)
+
+// readRouteManifest: GET pattern → its read-plane org-gate story. Same
+// bidirectional discipline as writeRouteManifest — a new GET route missing here
+// (a read endpoint added without deciding its org-gate story) OR a stale entry
+// fails TestReadRoutesMatchOrgGateManifest. The five gateReadByIDOrg entries are
+// the read-by-id IDOR surface P4c closed.
+var readRouteManifest = map[string]string{
+	// per-tenant reads — org-gated by the middleware (P4c)
+	"GET /api/v1/tenants/{id}/":           gateReadByIDOrg + " — primary IDOR: full tenant config incl. thresholds",
+	"GET /api/v1/tenants/{id}/effective":  gateReadByIDOrg + " — merged effective config + hashes",
+	"GET /api/v1/tenants/{id}/metrics":    gateReadByIDOrg + " — metric discovery catalog (Prometheus proxy)",
+	"GET /api/v1/tenants/{id}/access":     gateReadByIDOrg + " — recipe-preview PEP probe (#657); 403 = DENY",
+	"GET /api/v1/tenants/{id}/federation": gateReadByIDOrg + " — per-tenant federation metric subset",
+	// list / wildcard reads — middleware org-blind by design
+	"GET /api/v1/me":                 gateReadListOrgBlind + " — caller's own identity",
+	"GET /api/v1/tenants":            gateReadListOrgBlind + " — ScopeAllowed filters each row (list plane, P4a)",
+	"GET /api/v1/tenants/search":     gateReadListOrgBlind + " — same ScopeAllowed row filter as the list",
+	"GET /api/v1/groups":             gateReadListOrgBlind + " — ListGroups filters members + skips inaccessible groups (hasAccessibleMember/filterAccessibleMembers, org-aware P4c)",
+	"GET /api/v1/groups/{id}/":       gateReadListOrgBlind + " — single group; GetGroup returns members UNFILTERED (pre-existing member-id disclosure on ALL axes, not P4c-scoped — tracked separately; middleware is org-blind '*')",
+	"GET /api/v1/views":              gateReadListOrgBlind + " — saved views are not tenant-scoped data",
+	"GET /api/v1/views/{id}/":        gateReadListOrgBlind + " — single view; not tenant-scoped data",
+	"GET /api/v1/tasks/{id}":         gateReadListOrgBlind + " — results org-filtered in-handler (filterTaskResults)",
+	"GET /api/v1/prs":                gateReadListOrgBlind + " — PR list org-filtered in-handler (filterAccessiblePRs / ?tenant=)",
+	"GET /api/v1/events":             gateReadListOrgBlind + " — SSE config-change stream (not per-tenant)",
+	"GET /api/v1/federation/policy/": gateReadListOrgBlind + " — platform-wide whitelist",
+	"GET /api/v1/federation/tokens/": gateReadListOrgBlind + " — token list; per-tenant admin enforced in-handler",
+	// no-auth infra
+	"GET /health":  gateReadNoAuth,
+	"GET /ready":   gateReadNoAuth,
+	"GET /metrics": gateReadNoAuth,
+}
+
 // routeStubTracker is the minimal platform.Tracker stub that makes the
 // conditional /prs registration fire. Handlers never execute under chi.Walk.
 type routeStubTracker struct{}
@@ -174,4 +224,70 @@ func TestWriteRoutesMatchOrgGateManifest(t *testing.T) {
 			strings.Join(stale, "\n  "))
 	}
 
+}
+
+// TestReadRoutesMatchOrgGateManifest is the read-plane sibling of the write
+// manifest (ADR-027 / LD-6 P4c): every GET route must declare, in
+// readRouteManifest, whether it is org-gated by the read-by-id middleware path
+// (gateReadByIDOrg) or org-blind by design (gateReadListOrgBlind / gateReadNoAuth).
+// A new GET route missing from the manifest — a read endpoint added without a
+// conscious org-gate decision, exactly the read-by-id IDOR shape P4c closed — or
+// a stale entry, fails the test in both directions.
+func TestReadRoutesMatchOrgGateManifest(t *testing.T) {
+	t.Parallel()
+
+	rbacMgr, err := rbac.NewManager("", nil)
+	if err != nil {
+		t.Fatalf("rbac.NewManager: %v", err)
+	}
+	deps := &handler.Deps{
+		RBAC:       rbacMgr,
+		Federation: &token.Manager{},
+		PRTracker:  routeStubTracker{},
+	}
+	r := buildRouter(routerDeps{
+		Deps:      deps,
+		RBAC:      rbacMgr,
+		Events:    func(http.ResponseWriter, *http.Request) {},
+		RateLimit: func(next http.Handler) http.Handler { return next },
+	})
+
+	seen := make(map[string]bool, len(readRouteManifest))
+	var unregistered []string
+	walkErr := chi.Walk(r, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if method != "GET" {
+			return nil
+		}
+		key := method + " " + route
+		if _, ok := readRouteManifest[key]; !ok {
+			unregistered = append(unregistered, key)
+			return nil
+		}
+		seen[key] = true
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("chi.Walk: %v", walkErr)
+	}
+
+	sort.Strings(unregistered)
+	if len(unregistered) > 0 {
+		t.Errorf("GET route(s) not in readRouteManifest — every read endpoint must declare its "+
+			"org-gate story (read-by-id org gate vs org-blind list/wildcard) in cmd/server/routes_test.go "+
+			"before it ships (ADR-027 / LD-6 P4c):\n  %s", strings.Join(unregistered, "\n  "))
+	}
+
+	var stale []string
+	for key := range readRouteManifest {
+		if !seen[key] {
+			stale = append(stale, key)
+		}
+	}
+	sort.Strings(stale)
+	if len(stale) > 0 {
+		t.Errorf("stale readRouteManifest entr%s (no such registered GET route — remove the entry "+
+			"or fix its pattern):\n  %s",
+			map[bool]string{true: "y", false: "ies"}[len(stale) == 1],
+			strings.Join(stale, "\n  "))
+	}
 }
