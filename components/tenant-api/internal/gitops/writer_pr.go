@@ -154,7 +154,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	// invalid op from creating a dangling branch and preserves the
 	// ErrValidation→400 mapping without requiring a git repo to reach it.
 	for _, op := range ops {
-		if _, err := w.readMergeValidate(op.TenantID, op.Merge); err != nil {
+		if _, _, err := w.readMergeValidate(op.TenantID, op.Merge); err != nil {
 			return nil, err
 		}
 	}
@@ -190,7 +190,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	// readMergeValidate re-reads the on-disk file per op, so a second op for the
 	// same tenant merges onto the first op's just-committed result (not the base).
 	for _, op := range ops {
-		content, err := w.readMergeValidate(op.TenantID, op.Merge)
+		content, _, err := w.readMergeValidate(op.TenantID, op.Merge)
 		if err != nil {
 			_ = w.checkoutBaseClean(base)
 			_ = w.gitExec("branch", "-D", branchName)

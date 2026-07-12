@@ -8,11 +8,13 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/gitops"
 	"gopkg.in/yaml.v3"
 )
 
@@ -92,6 +94,25 @@ func TestMergePatchYAML_MalformedExistingErrors(t *testing.T) {
 	// Existing file whose tenants.<id> is a scalar, not a mapping → error.
 	if _, err := mergePatchYAML([]byte("tenants:\n  db-a: oops\n"), "db-a", map[string]string{"_silent_mode": "warning"}); err == nil {
 		t.Error("expected error when tenants.db-a is not a mapping, got nil")
+	}
+}
+
+func TestMergePatchYAML_RefusesStructuredClobber(t *testing.T) {
+	t.Parallel()
+	// Patching a structured key (`_metadata` is a nested mapping in the fixture)
+	// with a scalar must be REJECTED, not silently clobber the nested data — and
+	// as an ErrValidation (client error), symmetric with the `_custom_alerts`
+	// downstream rejection.
+	_, err := mergePatchYAML([]byte(existingTenantYAML), "db-a", map[string]string{"_metadata": "oops"})
+	if err == nil {
+		t.Fatal("expected error clobbering structured _metadata with a scalar, got nil")
+	}
+	if !errors.Is(err, gitops.ErrValidation) {
+		t.Errorf("structured-clobber error should wrap ErrValidation (→400), got: %v", err)
+	}
+	// A normal scalar key is still patchable.
+	if _, err := mergePatchYAML([]byte(existingTenantYAML), "db-a", map[string]string{"mysql_cpu": "75"}); err != nil {
+		t.Errorf("scalar key patch should succeed, got: %v", err)
 	}
 }
 

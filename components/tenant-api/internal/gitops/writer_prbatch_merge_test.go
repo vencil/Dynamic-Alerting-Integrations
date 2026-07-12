@@ -64,6 +64,32 @@ func TestWriteMerged_PreservesKeys(t *testing.T) {
 	}
 }
 
+// TestWriteMerged_IdempotentNoOp_NotConflict guards the #1097 self-review fix:
+// a merge that changes nothing (an idempotent patch / a client retry after a
+// succeeded write) must be a no-op SUCCESS, not a spurious ErrConflict. The
+// pre-fix bug only fired when HEAD~1 existed (gitCommit no-ops → HEAD unmoved →
+// commitFileChange's parent check misfired), so the repo needs >=2 commits.
+func TestWriteMerged_IdempotentNoOp_NotConflict(t *testing.T) {
+	dir := seedTenantRepo(t) // commit #1
+	if err := os.WriteFile(filepath.Join(dir, "other.yaml"),
+		[]byte("tenants:\n  z:\n    mysql_cpu: \"1\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", ".")
+	gitRun(t, dir, "commit", "-m", "second") // commit #2 → HEAD~1 exists
+
+	w := NewWriter(dir, dir)
+	head0 := gitOut(t, dir, "rev-parse", "HEAD")
+	// Idempotent merge: return the file verbatim (byte-identical → nothing staged).
+	noop := func(existing []byte) (string, error) { return string(existing), nil }
+	if err := w.WriteMerged(context.Background(), "db-a", "op@example.com", noop); err != nil {
+		t.Fatalf("idempotent WriteMerged should be a no-op success, got: %v", err)
+	}
+	if head1 := gitOut(t, dir, "rev-parse", "HEAD"); head1 != head0 {
+		t.Errorf("idempotent WriteMerged moved HEAD %s → %s (should not commit)", head0, head1)
+	}
+}
+
 func TestWritePRBatch_MergesPreservingKeys(t *testing.T) {
 	dir := seedTenantRepo(t)
 	w := NewWriter(dir, dir)

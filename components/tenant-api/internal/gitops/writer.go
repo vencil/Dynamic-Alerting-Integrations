@@ -300,20 +300,21 @@ type MergeFunc func(existing []byte) (string, error)
 // existing is nil on ENOENT; MergeFunc is responsible for the new-tenant case.
 // A merge error means the on-disk file is unparseable/structurally wrong — the
 // caller must NOT fall back to an overwrite (that is exactly the silent
-// key-loss this path exists to prevent).
-func (w *Writer) readMergeValidate(tenantID string, merge MergeFunc) (string, error) {
-	existing, err := os.ReadFile(filepath.Join(w.configDir, tenantID+".yaml"))
-	if err != nil && !os.IsNotExist(err) {
-		return "", fmt.Errorf("read current tenant file for %s: %w", tenantID, err)
+// key-loss this path exists to prevent). The raw existing bytes are returned so
+// the caller can detect a byte-identical (no-op) merge.
+func (w *Writer) readMergeValidate(tenantID string, merge MergeFunc) (content string, existing []byte, err error) {
+	existing, rerr := os.ReadFile(filepath.Join(w.configDir, tenantID+".yaml"))
+	if rerr != nil && !os.IsNotExist(rerr) {
+		return "", nil, fmt.Errorf("read current tenant file for %s: %w", tenantID, rerr)
 	}
-	content, err := merge(existing)
-	if err != nil {
-		return "", fmt.Errorf("merge tenant config for %s: %w", tenantID, err)
+	content, merr := merge(existing)
+	if merr != nil {
+		return "", existing, fmt.Errorf("merge tenant config for %s: %w", tenantID, merr)
 	}
 	if errs := validate(w.configDir, tenantID, content); len(errs) > 0 {
-		return "", fmt.Errorf("%w for %s: %s", ErrValidation, tenantID, strings.Join(errs, "; "))
+		return "", existing, fmt.Errorf("%w for %s: %s", ErrValidation, tenantID, strings.Join(errs, "; "))
 	}
-	return content, nil
+	return content, existing, nil
 }
 
 // WriteMerged persists a tenant config whose content is computed, UNDER the
@@ -337,9 +338,20 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	content, err := w.readMergeValidate(tenantID, merge)
+	content, existing, err := w.readMergeValidate(tenantID, merge)
 	if err != nil {
 		return err
+	}
+	// No-op short-circuit (mirrors MutateConfigFile's `if next == nil`): when the
+	// merge changed nothing — an idempotent patch, or a client retry after a
+	// write whose response was lost — the content is byte-identical to disk, so
+	// gitCommit would stage nothing and NOT advance HEAD. commitFileChange's
+	// parent-based conflict check then misfires (HEAD~1 != unmoved HEAD) and
+	// returns a spurious, permanently-unrecoverable ErrConflict. Treat an
+	// unchanged merge as success (#1097 self-review). `existing == nil` (a new
+	// tenant) never matches non-empty content, so it still commits the new file.
+	if existing != nil && content == string(existing) {
+		return nil
 	}
 	return w.commitFileChange(
 		filepath.Join(w.configDir, tenantID+".yaml"),

@@ -371,6 +371,17 @@ func mergePatchYAML(existing []byte, tenantID string, patch map[string]string) (
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
+		// Refuse to clobber a structured (mapping/sequence) key like `_metadata`
+		// or `_custom_alerts` with a flat scalar patch value — that would silently
+		// destroy nested data, the exact loss this path exists to prevent. A flat
+		// batch patch only ever sets scalar keys. Classified as a CLIENT
+		// validation error (→ 400 / per-tenant "error"), not server-state
+		// corruption, so it maps like every other bad-patch rejection. (Before
+		// this, `_custom_alerts` was caught by the downstream validator but
+		// `_metadata` was silently overwritten — an inconsistency this closes.)
+		if cur := yamlMapValue(tenantVal, k); cur != nil && (cur.Kind == yaml.MappingNode || cur.Kind == yaml.SequenceNode) {
+			return "", fmt.Errorf("%w: batch patch cannot overwrite structured key %q with a scalar value", gitops.ErrValidation, k)
+		}
 		var vn yaml.Node
 		if err := vn.Encode(patch[k]); err != nil { // string → correctly-quoted scalar (e.g. "50" stays a string)
 			return "", fmt.Errorf("encode patch value for %q: %w", k, err)
