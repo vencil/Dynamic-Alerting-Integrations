@@ -657,9 +657,11 @@ class TestSentinelLabelContract:
     enforced NOC route and notifies humans with severity=none noise (#1095, the
     exact latent gap shipped between v1.2.0 and v2.9.x). Watchdog is the single
     deliberate exception: severity=none but NO component — it rides its own
-    index-0 route, never the sentinel sink. Scans the SOURCE rule packs plus the
-    hand-authored platform rules configmap, so a future sentinel added without
-    the label fails loud here instead of silently regressing."""
+    index-0 route, never the sentinel sink. Scans the SOURCE rule packs plus
+    EVERY k8s/03-monitoring/configmap-rules-*.yaml (the generated copies AND any
+    hand-authored rules configmap — Watchdog's platform CM today, plus whatever
+    is added later outside rule-packs/), so a future sentinel added without the
+    label fails loud here instead of silently regressing."""
 
     _REPO_ROOT = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -675,18 +677,23 @@ class TestSentinelLabelContract:
                 for rule in group.get("rules", []):
                     if "alert" in rule:
                         yield fname, rule
-        # hand-authored platform rules (Watchdog lives here, outside rule-packs/)
-        cm_path = os.path.join(
-            self._REPO_ROOT, "k8s", "03-monitoring",
-            "configmap-rules-platform.yaml")
-        with open(cm_path, encoding="utf-8") as f:
-            cm = yaml.safe_load(f.read())
-        for fname, body in cm["data"].items():
-            doc = yaml.safe_load(body)
-            for group in (doc or {}).get("groups", []):
-                for rule in group.get("rules", []):
-                    if "alert" in rule:
-                        yield f"configmap-rules-platform.yaml:{fname}", rule
+        # every deployed rules ConfigMap: the generated rule-pack copies (double
+        # coverage vs the source scan above — harmless) AND any hand-authored one
+        # outside rule-packs/ (configmap-rules-platform.yaml today; a future
+        # hand-written configmap-rules-<new>.yaml is covered automatically).
+        k8s_dir = os.path.join(self._REPO_ROOT, "k8s", "03-monitoring")
+        for cm_name in sorted(os.listdir(k8s_dir)):
+            if not (cm_name.startswith("configmap-rules-")
+                    and cm_name.endswith(".yaml")):
+                continue
+            with open(os.path.join(k8s_dir, cm_name), encoding="utf-8") as f:
+                cm = yaml.safe_load(f.read())
+            for fname, body in (cm.get("data") or {}).items():
+                doc = yaml.safe_load(body)
+                for group in (doc or {}).get("groups", []):
+                    for rule in group.get("rules", []):
+                        if "alert" in rule:
+                            yield f"{cm_name}:{fname}", rule
 
     def test_severity_none_alerts_carry_sentinel_component(self):
         seen = []
