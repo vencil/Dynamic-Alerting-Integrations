@@ -846,10 +846,28 @@ def write_prefix_mapping(results, output_dir, prefix):
 # 輸出引擎
 # ============================================================
 
-def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
-    """將遷移結果寫入分離的 YAML 檔案 (含合法 YAML 結構)。"""
-    os.makedirs(output_dir, exist_ok=True)
+def _dedup_recording_rules(results):
+    """依 record 名稱去重 recording rules，保留首見順序。
 
+    回傳 [(result, recording_rule_dict), ...]。純函式 (無 IO)，供
+    render_recording_rules 與 render_report 共用——兩者的收斂率必須一致。
+    """
+    seen_records = set()
+    deduplicated_rules = []
+    for r in results:
+        if r.status == "unparseable" or r.triage_action == "use_golden":
+            continue
+        for rr in r.recording_rules:
+            record_name = rr["record"]
+            if record_name in seen_records:
+                continue
+            seen_records.add(record_name)
+            deduplicated_rules.append((r, rr))
+    return deduplicated_rules
+
+
+def render_tenant_config(results):
+    """組出 tenant-config.yaml 內容字串 (純函式，無 IO)。"""
     # --- tenant-config.yaml (含 boilerplate 範例) ---
     tenant_configs = {}
     for r in results:
@@ -860,7 +878,6 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
         for k, v in r.tenant_config.items():
             tenant_configs[k] = v
 
-    tenant_config_path = str(Path(output_dir) / "tenant-config.yaml")
     buf = io.StringIO()
     buf.write("# ============================================================\n")
     buf.write("# Tenant Config — 複製到 conf.d/<tenant>.yaml\n")
@@ -887,28 +904,20 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
                 dim_key = f'{list(r.tenant_config.keys())[0].split("_critical")[0]}{{{label_pairs}}}'
                 buf.write(f'# "{dim_key}": "{list(r.tenant_config.values())[0]}"\n')
         buf.write("\n")
-    write_text_secure(tenant_config_path, buf.getvalue())
+    return buf.getvalue()
 
+
+def render_recording_rules(results, prefix="custom_"):
+    """組出 platform-recording-rules.yaml 內容字串 (純函式，無 IO)。"""
     # --- platform-recording-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
     # Deduplication: 追蹤已產出的 recording rule record 名稱
-    seen_records = set()
-    deduplicated_rules = []
-    for r in results:
-        if r.status == "unparseable" or r.triage_action == "use_golden":
-            continue
-        for rr in r.recording_rules:
-            record_name = rr["record"]
-            if record_name in seen_records:
-                continue
-            seen_records.add(record_name)
-            deduplicated_rules.append((r, rr))
+    deduplicated_rules = _dedup_recording_rules(results)
 
     # 計算收斂率
     total_input = len([r for r in results if r.status != "unparseable"])
     total_output = len(deduplicated_rules)
 
     group_name = f"{prefix}migrated-recording-rules" if prefix else "migrated-recording-rules"
-    recording_rules_path = str(Path(output_dir) / "platform-recording-rules.yaml")
     buf = io.StringIO()
     buf.write("# ============================================================\n")
     buf.write("# Platform Recording Rules — 可直接合併至 Prometheus ConfigMap\n")
@@ -940,11 +949,13 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
         buf.write(f"      - record: {rr['record']}\n")
         buf.write(f"        expr: {rr['expr']}\n")
         buf.write("\n")
-    write_text_secure(recording_rules_path, buf.getvalue())
+    return buf.getvalue()
 
+
+def render_alert_rules(results, prefix="custom_"):
+    """組出 platform-alert-rules.yaml 內容字串 (純函式，無 IO)。"""
     # --- platform-alert-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
     alert_group_name = f"{prefix}migrated-alert-rules" if prefix else "migrated-alert-rules"
-    alert_rules_path = str(Path(output_dir) / "platform-alert-rules.yaml")
     buf = io.StringIO()
     buf.write("# ============================================================\n")
     buf.write("# Platform Dynamic Alert Rules — 可直接合併至 Prometheus ConfigMap\n")
@@ -974,15 +985,24 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
                 for ak, av in ar['annotations'].items():
                     buf.write(f"          {ak}: \"{av}\"\n")
         buf.write("\n")
-    write_text_secure(alert_rules_path, buf.getvalue())
+    return buf.getvalue()
 
+
+def render_report(results):
+    """組出 migration-report.txt 內容字串 (純函式，無 IO)。
+
+    收斂率所需的 total_input / total_output 與 render_recording_rules 用同一個
+    _dedup_recording_rules 純函式計算，確保兩份輸出的數字一致。
+    """
     # --- migration-report.txt ---
     perfect = [r for r in results if r.status == "perfect"]
     complex_rules = [r for r in results if r.status == "complex"]
     unparseable = [r for r in results if r.status == "unparseable"]
     golden_matches = [r for r in results if r.triage_action == "use_golden"]
 
-    report_path = str(Path(output_dir) / "migration-report.txt")
+    total_input = len([r for r in results if r.status != "unparseable"])
+    total_output = len(_dedup_recording_rules(results))
+
     buf = io.StringIO()
     buf.write("=" * 60 + "\n")
     engine = "AST" if HAS_AST else "regex"
@@ -1054,7 +1074,31 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
             buf.write(f"\n### {r.alert_name} ###\n")
             buf.write(r.llm_prompt)
             buf.write("\n")
-    write_text_secure(report_path, buf.getvalue())
+    return buf.getvalue()
+
+
+def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
+    """將遷移結果寫入分離的 YAML 檔案 (含合法 YAML 結構)。
+
+    序列化邏輯已抽成 render_* 純函式；本函式僅負責路徑組裝與落盤 (thin writer)。
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    # --- tenant-config.yaml (含 boilerplate 範例) ---
+    tenant_config_path = str(Path(output_dir) / "tenant-config.yaml")
+    write_text_secure(tenant_config_path, render_tenant_config(results))
+
+    # --- platform-recording-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
+    recording_rules_path = str(Path(output_dir) / "platform-recording-rules.yaml")
+    write_text_secure(recording_rules_path, render_recording_rules(results, prefix))
+
+    # --- platform-alert-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
+    alert_rules_path = str(Path(output_dir) / "platform-alert-rules.yaml")
+    write_text_secure(alert_rules_path, render_alert_rules(results, prefix))
+
+    # --- migration-report.txt ---
+    report_path = str(Path(output_dir) / "migration-report.txt")
+    write_text_secure(report_path, render_report(results))
 
     # --- v3: Triage CSV ---
     csv_path = write_triage_csv(results, output_dir, dictionary)
@@ -1062,6 +1106,13 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
     # --- v3: Prefix Mapping ---
     mapping_path = write_prefix_mapping(results, output_dir, prefix)
 
+    # 桶計數 (回傳值) — 自 results 獨立純計算，與 render_report 內部一致。
+    perfect = [r for r in results if r.status == "perfect"]
+    complex_rules = [r for r in results if r.status == "complex"]
+    unparseable = [r for r in results if r.status == "unparseable"]
+    golden_parseable = len([r for r in results
+                            if r.triage_action == "use_golden"
+                            and r.status != "unparseable"])
     return len(perfect), len(complex_rules), len(unparseable), golden_parseable
 
 
