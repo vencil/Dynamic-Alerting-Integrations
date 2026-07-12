@@ -14,6 +14,7 @@ spec:
       expr: user_silent_mode{target_severity="warning"} == 1
       labels:
         severity: none
+        component: sentinel
         tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Silent mode (warning) active for {{ $labels.tenant }}
@@ -25,6 +26,7 @@ spec:
       expr: user_silent_mode{target_severity="critical"} == 1
       labels:
         severity: none
+        component: sentinel
         tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Silent mode (critical) active for {{ $labels.tenant }}
@@ -36,6 +38,7 @@ spec:
       expr: user_severity_dedup{mode="enable"} == 1
       labels:
         severity: none
+        component: sentinel
         tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Severity dedup enabled for {{ $labels.tenant }}

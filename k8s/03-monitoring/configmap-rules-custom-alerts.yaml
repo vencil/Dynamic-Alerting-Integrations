@@ -46,14 +46,15 @@ data:
     \      recipe: threshold\n      status: active\n"
   custom-alerts-alert.yml: "groups:\n- name: custom-alerts\n  rules:\n  - alert: CustomRecipeSilent\n\
     \    expr: max by(tenant, name) (user_threshold{component=\"custom\", mode=\"\
-    silent\"})\n    labels:\n      severity: none\n      tenant: '{{ $labels.tenant\
-    \ }}'\n      name: '{{ $labels.name }}'\n    annotations:\n      summary: Custom\
-    \ recipe [{{ $labels.name }}] is silent for {{ $labels.tenant }}\n      summary_zh:\
-    \ '{{ $labels.tenant }} 的自訂告警 [{{ $labels.name }}] 處於靜默模式'\n      description:\
-    \ The recipe is still evaluated and visible as an ALERTS series (dashboard-only);\
-    \ its notifications are suppressed via inhibit, not deleted.\n      description_zh:\
-    \ 此自訂告警仍會評估並可於監控面板（ALERTS series）查看，通知經 inhibit 抑制而非刪除。\n  - alert: Custom_rate__mysql_global_status_slow_queries__gt__w5m__for1m\n\
-    \    expr: \"(\\n  custom:rate__mysql_global_status_slow_queries__gt__w5m__for1m:warning:core\\\
+    silent\"})\n    labels:\n      severity: none\n      component: sentinel\n   \
+    \   tenant: '{{ $labels.tenant }}'\n      name: '{{ $labels.name }}'\n    annotations:\n\
+    \      summary: Custom recipe [{{ $labels.name }}] is silent for {{ $labels.tenant\
+    \ }}\n      summary_zh: '{{ $labels.tenant }} 的自訂告警 [{{ $labels.name }}] 處於靜默模式'\n\
+    \      description: The recipe is still evaluated and visible as an ALERTS series\
+    \ (dashboard-only); its notifications are suppressed via inhibit, not deleted.\n\
+    \      description_zh: 此自訂告警仍會評估並可於監控面板（ALERTS series）查看，通知經 inhibit 抑制而非刪除。\n\
+    \  - alert: Custom_rate__mysql_global_status_slow_queries__gt__w5m__for1m\n  \
+    \  expr: \"(\\n  custom:rate__mysql_global_status_slow_queries__gt__w5m__for1m:warning:core\\\
     n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
     n)\\nor\\n(\\n  custom:rate__mysql_global_status_slow_queries__gt__w5m__for1m:warning:core\\\
     n  unless on(tenant) tenant_metadata_info\\n)\"\n    for: 1m\n    labels:\n  \

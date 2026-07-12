@@ -474,11 +474,12 @@ def _build_custom_alert_routes(tenant_names: list[str] | None = None) -> tuple[l
     committed-base drift guard compares dicts exactly.
 
     Silent mode is NOT handled here — it rides the CustomRecipeSilent sentinel +
-    inhibit (ADR-003). The sentinel itself does not carry component="custom", so
-    it never enters this subtree; the silent-mode target is suppressed by the
-    route-INDEPENDENT inhibit (equal: [tenant, name]), so per-tenant children do
-    not change silent semantics. This route only governs page-mode delivery +
-    grouping.
+    inhibit (ADR-003). The sentinel itself carries component="sentinel" (not
+    "custom"), so it never enters this subtree — it is swallowed by the
+    sentinel-sinkhole route instead (see _build_sentinel_sinkhole_route, #1095);
+    the silent-mode target is suppressed by the route-INDEPENDENT inhibit
+    (equal: [tenant, name]), so per-tenant children do not change silent
+    semantics. This route only governs page-mode delivery + grouping.
     """
     route = {
         "matchers": ['component="custom"'],
@@ -573,6 +574,43 @@ def _build_synthetic_probe_route() -> tuple[list[dict], list[dict]]:
         "continue": False,
     }
     return [route], [{"name": "synthetic-receiver"}]
+
+
+def _build_sentinel_sinkhole_route() -> tuple[list[dict], list[dict]]:
+    """Build the platform-static sentinel sinkhole route + receiver (#1095).
+
+    Platform sentinels (TenantSilentWarning/Critical, TenantSeverityDedupEnabled,
+    CustomRecipeSilent) are inhibit SOURCES + AM-UI/Grafana state surfaces — not
+    notifications. But they carry a ``tenant`` label, so without this route they
+    fall through to the tenant main route (matcher ``tenant="<name>"``, no
+    severity filter) and, when a matcher-less enforced NOC route is enabled, to
+    the NOC receiver — e.g. a tenant with one silent recipe would get a recurring
+    severity=none "recipe is silent" notification on its core channel. Every
+    sentinel carries the static ``component="sentinel"`` discriminator
+    (rule-pack-operational.yaml + the custom-alerts compiler); this route pins
+    them into a name-only sink with ``continue:false`` AHEAD of the enforced /
+    tenant routes.
+
+    Watchdog is deliberately NOT part of this subtree: it has no ``component``
+    label and its own index-0 route, so the sinkhole neither depends on nor
+    affects the heartbeat. Inhibit semantics are also unaffected — Alertmanager
+    matches inhibit sources against all ACTIVE alerts regardless of routing, so a
+    sunk sentinel still suppresses its targets. AM-UI visibility (the ADR-003
+    observability rationale) is likewise routing-independent.
+
+    Pinned by _inject_custom_alert_isolation at index 3 (same durability +
+    correctness rationale as Watchdog/custom/synthetic-probe: survive the
+    ``--apply`` route-REPLACE; land ahead of the continue:true enforced NOC
+    match-all). ``group_by:[tenant, alertname]`` mirrors the custom-alerts
+    subtree so the AM UI groups sunk sentinels per tenant.
+    """
+    route = {
+        "matchers": ['component="sentinel"'],
+        "group_by": ["tenant", "alertname"],
+        "receiver": "sentinel-sinkhole",
+        "continue": False,
+    }
+    return [route], [{"name": "sentinel-sinkhole"}]
 
 
 def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str] | None = None, enforced_routing: dict | None = None) -> tuple[list[dict], list[dict], list[str]]:

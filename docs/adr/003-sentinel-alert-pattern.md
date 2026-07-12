@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-03-13
-updated_at: 2026-05-13
+updated_at: 2026-07-12
 ---
 # ADR-003: Sentinel Alert 模式
 
@@ -95,6 +95,7 @@ exporter (tenant_silent_mode)
 - 定期驗證 sentinel rules 與實際的狀態切換是否同步
 - Alertmanager 日誌應記錄 inhibit 動作，便於稽核
 - 文件應明確說明各狀態的優先級 (如 Silent 優先於 Maintenance)
+- Sentinel 一律帶靜態 `component="sentinel"` label，由 platform-static sentinel-sinkhole route 擋在 tenant/NOC 通知通道之前——sentinel 是 inhibit source 與 AM UI/Grafana 狀態面、**不是通知**；此契約由 guard 測試釘死，新增 sentinel 不帶 label 會 fail-loud（[#1095](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1095)）
 
 ## 替代方案考量
 

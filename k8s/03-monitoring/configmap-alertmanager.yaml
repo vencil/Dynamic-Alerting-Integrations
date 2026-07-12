@@ -83,6 +83,25 @@ data:
           repeat_interval: 1m
           receiver: "synthetic-receiver"
           continue: false
+        # ── #1095: sentinel sinkhole ─────────────────────────────────────
+        # Platform sentinels (TenantSilentWarning/Critical, TenantSeverityDedup-
+        # Enabled, CustomRecipeSilent) are inhibit SOURCES + AM-UI/Grafana state
+        # surfaces, NOT notifications — but they carry a tenant label, so without
+        # this route they fall through to the tenant main routes (tenant="<name>",
+        # no severity filter) and any matcher-less enforced NOC route, notifying
+        # humans with severity=none noise. Every sentinel carries the static
+        # component="sentinel" discriminator; this sink swallows them AHEAD of the
+        # enforced/tenant routes. Watchdog has NO component label + its own index-0
+        # route — unaffected. Inhibition + AM-UI visibility are routing-independent,
+        # so silent-mode suppression keeps working from inside the sink.
+        # ⚠️ generate_alertmanager_routes.py RE-INJECTS this at index 3 on every
+        # regen (route.routes is REPLACED on --apply); this hand-authored copy
+        # keeps the committed base self-consistent.
+        - matchers:
+            - component="sentinel"
+          group_by: ["tenant", "alertname"]
+          receiver: "sentinel-sinkhole"
+          continue: false
 
     receivers:
       - name: "default"
@@ -122,6 +141,13 @@ data:
         # no-op black hole — the contract guarantees test alerts are ISOLATED (never
         # page), not delivered. The route above (component="synthetic-probe",
         # continue:false) is what enforces the isolation.
+      - name: "sentinel-sinkhole"
+        # #1095 sentinel sink. NAME-ONLY on purpose (no notifier, permanently):
+        # sentinels surface in the AM UI + Grafana (ALERTS series) and act as
+        # inhibit sources — they must never notify a human channel. Do NOT attach
+        # a notifier here; if a "remind me while silent" feature is ever wanted,
+        # add a dedicated explicit severity=warning alert (TenantConfigEvent
+        # pattern), not sentinel delivery.
 
     inhibit_rules:
       # v1.2.0 Severity Dedup: per-tenant inhibit rules

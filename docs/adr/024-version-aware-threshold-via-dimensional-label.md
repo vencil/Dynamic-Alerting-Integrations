@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: threshold-exporter
 created_at: 2026-05-30
-updated_at: 2026-06-06
+updated_at: 2026-07-12
 ---
 
 # ADR-024: 宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts
@@ -131,8 +131,8 @@ user_threshold{tenant="db-a", component="container", metric="cpu", severity="war
 
 custom-alert 的 `mode`（page / silent）label 經 `group_left` 一路帶到 alert。Alertmanager 端的消費：
 
-- **Silent 走 sentinel + inhibit，不走 route-to-null**——這是刻意複用 [ADR-003](003-sentinel-alert-pattern.md) 既有的三態 silent 典範。編譯器注入一條全域 sentinel `CustomRecipeSilent`（severity=none，從 `user_threshold{mode="silent"}` 導出），Alertmanager inhibit 以 `equal:[tenant, name]` 只抑制該 (租戶, recipe) 的通知；靜音的告警仍是 Prometheus 的 `ALERTS{...}` series → **silent ≡ dashboard-only**。選 inhibit 而非 route-to-null：與平台一致、AM UI 可見抑制狀態、且 dict-keyed 的 route-to-null 在繼承上會破壞語意（見否決）。
-- **routing 隔離**：custom 告警帶靜態 `component="custom"` label（平台告警零此 label，精確 match 無歧義）；Alertmanager route **居首 + `continue:false`** 截在平台 NOC route 之前，避免租戶告警風暴灌進平台 NOC。`group_by` 用 `[tenant, alertname]`（alertname 已含 shape，不揉成一團）。page-mode 的 firehose receiver MVP 為隔離的空 receiver（outbound 接 log backend 而非限流的 IM，避 429→queue→OOM）。
+- **Silent 走 sentinel + inhibit，不走 route-to-null**——這是刻意複用 [ADR-003](003-sentinel-alert-pattern.md) 既有的三態 silent 典範。編譯器注入一條全域 sentinel `CustomRecipeSilent`（severity=none，從 `user_threshold{mode="silent"}` 導出），Alertmanager inhibit 以 `equal:[tenant, name]` 只抑制該 (租戶, recipe) 的通知；靜音的告警仍是 Prometheus 的 `ALERTS{...}` series → **silent ≡ dashboard-only**。選 inhibit 而非 route-to-null：與平台一致、AM UI 可見抑制狀態、且 dict-keyed 的 route-to-null 在繼承上會破壞語意（見否決）。sentinel **本身**帶靜態 `component="sentinel"` 判別標籤、由 platform-static sentinel-sinkhole route（`continue:false`，在 enforced/tenant route 之前）接走——sentinel 是 inhibit source 與儀表面、不是通知；無此標籤時它會因帶 `tenant` label 落入租戶主 route 產生 severity=none 通知噪音（[#1095](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1095) 修正，全平台 sentinel 一體適用）。
+- **routing 隔離**：custom 告警帶靜態 `component="custom"` label（`component` 值按子樹保留——custom／sentinel／synthetic-probe——且精確 match，無歧義）；Alertmanager route **居首 + `continue:false`** 截在平台 NOC route 之前，避免租戶告警風暴灌進平台 NOC。`group_by` 用 `[tenant, alertname]`（alertname 已含 shape，不揉成一團）。page-mode 的 firehose receiver MVP 為隔離的空 receiver（outbound 接 log backend 而非限流的 IM，避 429→queue→OOM）。
 
 ### 7. Forecast recipe：趨勢 / 耗盡預測（雙模式）
 
