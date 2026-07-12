@@ -82,7 +82,7 @@ export default function RulePackMatrix() {
       <div className="max-w-6xl mx-auto">
         <div className="mb-6">
           <h1 className="text-3xl font-bold text-slate-900 mb-2">{t('Rule Pack 比較矩陣', 'Rule Pack Comparison Matrix')}</h1>
-          <p className="text-slate-600">{t('所有 15 個 Rule Pack 並排比較', 'All 15 Rule Packs compared side by side')}</p>
+          <p className="text-slate-600">{t(`所有 ${PACKS.length} 個 Rule Pack 並排比較`, `All ${PACKS.length} Rule Packs compared side by side`)}</p>
         </div>
 
         <div className="flex flex-wrap gap-3 mb-6">

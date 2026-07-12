@@ -22,7 +22,7 @@ const t = window.__t || ((zh, en) => en);
 // --- Shared platform data (from platform-data.json via jsx-loader) ---
 const __PD = window.__PLATFORM_DATA || {};
 
-const PACK_COUNT = (__PD.packOrder || []).length || 15;
+const PACK_COUNT = (__PD.packOrder || []).length || 16;
 
 // --- Configuration Constants ---
 const SCRAPE_INTERVALS = [

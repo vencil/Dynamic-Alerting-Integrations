@@ -23,7 +23,7 @@ purpose: |
 
 /**
  * Platform coverage estimation.
- * Average rules per pack: 16 (238 total / 15 packs).
+ * Average rules per pack: ~19 (301 total / 16 packs).
  * For common DB monitoring: 60-80% overlap with platform rules.
  * `platformRules` is the platform's total rule count (TOTAL_RULES at the call site).
  */
