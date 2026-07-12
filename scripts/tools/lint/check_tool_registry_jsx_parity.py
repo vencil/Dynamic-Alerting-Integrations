@@ -25,6 +25,8 @@ Internal opt-out paths (not flagged as JSX-orphans)
   - `_common/`           — PR-portal-1 shared library
   - `tenant-manager/`    — PR-2d (#153) sub-component subdirectory
   - `operator-setup-wizard/` — PR-portal-4 sub-component subdirectory
+  - `platform-health/`   — sub-component subdirectory (mirrors
+    tenant-manager/; the tool entry is top-level platform-health.jsx)
   - top-level files matching `portal-shared.jsx` / `*Tab.jsx` —
     consumed via window.__portalShared by the Self-Service Portal
     tabs, not directly via the Hub
@@ -68,6 +70,7 @@ INTERNAL_DIR_PREFIXES = (
     "_common/",
     "tenant-manager/",
     "operator-setup-wizard/",
+    "platform-health/",
 )
 INTERNAL_FILE_PATTERNS = {
     "portal-shared.jsx",
