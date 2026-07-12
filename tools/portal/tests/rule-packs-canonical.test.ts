@@ -8,7 +8,7 @@
  *   const PACK_ORDER  = __PD.packOrder || [];   // [] offline → no packs
  * Offline (no window.__PLATFORM_DATA) the tool was BROKEN (empty). PR-1
  * converges it onto _common/data/rule-packs.js, whose layered fallback
- * bakes in 15 packs. This pins the new PACK_ORDER export + the offline win.
+ * bakes in 16 packs. This pins the new PACK_ORDER export + the offline win.
  *
  * PACK_ORDER resolves at module-eval time (window.__PLATFORM_DATA?.packOrder
  * || Object.keys(RULE_PACK_DATA)), so each test resets the module registry
@@ -40,16 +40,18 @@ describe('canonical rule-packs — PACK_ORDER export', () => {
     expect(PACK_ORDER).toEqual(Object.keys(RULE_PACK_DATA));
   });
 
-  it('offline: PACK_ORDER is a non-empty array of pack-id strings (15 fallback packs)', async () => {
+  it('offline: PACK_ORDER is a non-empty array of pack-id strings (16 fallback packs)', async () => {
     const { PACK_ORDER } = await import(MOD);
     expect(Array.isArray(PACK_ORDER)).toBe(true);
-    expect(PACK_ORDER.length).toBeGreaterThanOrEqual(15);
+    expect(PACK_ORDER.length).toBeGreaterThanOrEqual(16);
     for (const id of PACK_ORDER) {
       expect(typeof id).toBe('string');
       expect(id.length).toBeGreaterThan(0);
     }
     // Pin the baked-in fallback count (drift tripwire for the offline catalog).
-    expect(PACK_ORDER.length).toBe(15);
+    // Bumped 15→16 in PR-2 (the `liveness` pack was missing from the fallback);
+    // rule-packs-fallback-drift.test.ts now enforces full parity vs platform-data.json.
+    expect(PACK_ORDER.length).toBe(16);
   });
 
   it('online: PACK_ORDER passes through window.__PLATFORM_DATA.packOrder (byte-identity)', async () => {
