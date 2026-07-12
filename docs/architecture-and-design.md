@@ -353,6 +353,7 @@ spec:
 | ADR-028 | [Federation 撤銷儲存 tamper-evidence — off-cluster 對帳為主控](adr/028-federation-revocation-tamper-evidence.md) | ✅ Accepted | — |
 | ADR-029 | [租戶自訂告警跨租戶查詢隔離 — 編譯期邊界中和為主、評估期 ruler 隔離延後](adr/029-custom-alert-cross-tenant-query-scoping.md) | ✅ Accepted | — |
 | ADR-030 | [決策層遷移驗證 — 製造 Oracle 而非觀測](adr/030-decision-layer-migration-validation.md) | 🟡 Proposed | — |
+| ADR-031 | [slo_burn_rate recipe — 宣告式 SLO 告警編譯](adr/031-slo-burn-rate-recipe.md) | ✅ Accepted | — |
 
 <!-- ADR_INDEX_END -->
 
