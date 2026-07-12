@@ -19,7 +19,7 @@ const RULE_PACKS = {
     exporter: 'mysqld_exporter',
     recording: [
       { name: 'tenant:mysql_connections:ratio', expr: 'mysql_global_status_threads_connected / tenant:mysql_connections_threshold:value', desc: 'Current connections as ratio of threshold' },
-      { name: 'tenant:mysql_cpu:ratio', expr: 'rate(process_cpu_seconds_total{job=~".*mysql.*"}[5m]) * 100 / tenant:mysql_cpu_threshold:value', desc: 'CPU usage as ratio of threshold' },
+      { name: 'tenant:mysql_threads_running:avg1m', expr: 'max by(tenant) (avg_over_time(mysql_global_status_threads_running[1m]))', desc: 'Running-threads 1m-avg saturation (threads_running, NOT host CPU%)' },
       { name: 'tenant:mysql_memory:ratio', expr: 'mysql_global_status_innodb_buffer_pool_bytes_data / mysql_global_variables_innodb_buffer_pool_size * 100 / tenant:mysql_memory_threshold:value', desc: 'Buffer pool usage ratio' },
       { name: 'tenant:mysql_slow_queries:rate5m', expr: 'rate(mysql_global_status_slow_queries[5m])', desc: 'Slow query rate (5m)' },
       { name: 'tenant:mysql_replication_lag:seconds', expr: 'mysql_slave_status_seconds_behind_master', desc: 'Replication lag in seconds' },
@@ -27,7 +27,7 @@ const RULE_PACKS = {
     alerts: [
       { name: 'MariaDBHighConnections', severity: 'warning', expr: 'tenant:mysql_connections:ratio > 1', desc: 'Connections exceed warning threshold', action: 'Check connection pooling, consider raising max_connections' },
       { name: 'MariaDBHighConnectionsCritical', severity: 'critical', expr: 'tenant:mysql_connections_critical:ratio > 1', desc: 'Connections exceed critical threshold', action: 'Immediate: kill idle connections, investigate connection leaks' },
-      { name: 'MariaDBHighCPU', severity: 'warning', expr: 'tenant:mysql_cpu:ratio > 1 for 5m', desc: 'CPU usage above threshold for 5 minutes', action: 'Check slow queries, optimize heavy queries' },
+      { name: 'MariaDBHighThreadsRunning', severity: 'warning', expr: 'tenant:mysql_threads_running:avg1m > tenant:alert_threshold:mysql_cpu for 30s', desc: 'Running-threads saturation above threshold (threads_running, NOT host CPU%)', action: 'Investigate lock-wait pile-ups or heavy queries pinning threads; for host CPU see PodContainerHighCPU' },
       { name: 'MariaDBHighMemory', severity: 'warning', expr: 'tenant:mysql_memory:ratio > 1', desc: 'Buffer pool usage above threshold', action: 'Review buffer pool size, check for memory leaks' },
       { name: 'MariaDBSlowQueries', severity: 'warning', expr: 'tenant:mysql_slow_queries:rate5m > tenant:mysql_slow_queries_threshold:value', desc: 'Slow query rate exceeds threshold', action: 'Enable slow query log, analyze with pt-query-digest' },
       { name: 'MariaDBReplicationLag', severity: 'warning', expr: 'tenant:mysql_replication_lag:seconds > tenant:mysql_replication_lag_threshold:value', desc: 'Replication lag above threshold', action: 'Check replica I/O and SQL threads, network latency' },

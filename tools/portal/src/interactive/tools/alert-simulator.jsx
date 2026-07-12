@@ -15,7 +15,7 @@ const t = window.__t || ((zh, en) => en);
 const ALERT_DEFS = {
   mysql_connections:          { alert: 'MariaDBHighConnections',          severity: 'warning',  label: 'MySQL Connections' },
   mysql_connections_critical: { alert: 'MariaDBHighConnectionsCritical',  severity: 'critical', label: 'MySQL Connections (Critical)' },
-  mysql_cpu:                  { alert: 'MariaDBHighCPU',                  severity: 'warning',  label: 'MySQL CPU %' },
+  mysql_cpu:                  { alert: 'MariaDBHighThreadsRunning',       severity: 'warning',  label: 'MySQL Threads Running' },
   pg_connections:             { alert: 'PostgreSQLHighConnections',       severity: 'warning',  label: 'PG Connections' },
   pg_connections_critical:    { alert: 'PostgreSQLHighConnectionsCritical', severity: 'critical', label: 'PG Connections (Critical)' },
   pg_cache_hit_ratio:         { alert: 'PostgreSQLLowCacheHit',          severity: 'warning',  label: 'PG Cache Hit %', inverted: true },
@@ -29,14 +29,14 @@ const ALERT_DEFS = {
 const DEFAULT_CONFIG = {
   mysql_connections: '100',
   mysql_connections_critical: '200',
-  mysql_cpu: '80',
+  mysql_cpu: '30',
   redis_memory: '80',
   redis_memory_critical: '95',
 };
 
 const DEFAULT_METRICS = {
   mysql_connections: 120,
-  mysql_cpu: 45,
+  mysql_cpu: 18,
   redis_memory: 72,
 };
 
@@ -53,7 +53,7 @@ export default function AlertSimulator() {
   const updateMetric = (key, val) => setMetrics(prev => ({ ...prev, [key]: val }));
 
   const addMetric = (key) => {
-    if (!config[key]) updateConfig(key, '100');
+    if (!config[key]) updateConfig(key, DEFAULT_CONFIG[key] ?? '100');
     if (metrics[key] === undefined) updateMetric(key, 0);
   };
 

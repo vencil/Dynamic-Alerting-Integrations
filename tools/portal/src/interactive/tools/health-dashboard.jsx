@@ -20,13 +20,13 @@ const MOCK_TENANTS = {
     thresholds: {
       mysql_connections: { threshold: 70, current: 52, unit: 'conn' },
       mysql_connections_critical: { threshold: 95, current: 52, unit: 'conn' },
-      mysql_cpu: { threshold: 80, current: 43, unit: '%' },
+      mysql_cpu: { threshold: 30, current: 18, unit: 'threads' },
       mysql_slow_queries: { threshold: 10, current: 2.4, unit: '/s' },
     },
     alerts: [
       { name: 'MariaDBHighConnections', state: 'ok', severity: 'warning' },
       { name: 'MariaDBHighConnectionsCritical', state: 'ok', severity: 'critical' },
-      { name: 'MariaDBHighCPU', state: 'ok', severity: 'warning' },
+      { name: 'MariaDBHighThreadsRunning', state: 'ok', severity: 'warning' },
     ],
     maintenanceExpires: null,
   },

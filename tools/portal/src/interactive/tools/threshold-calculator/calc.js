@@ -33,9 +33,9 @@ const METRIC_PROFILES = {
     typical: { min: 10, max: 500, p50: 50, p90: 120, p95: 180, p99: 250 },
   },
   mysql_cpu: {
-    label: 'MySQL CPU',
-    unit: '%',
-    desc: 'CPU usage percentage of the database process',
+    label: 'MySQL Threads Running',
+    unit: 'threads',
+    desc: 'Running-threads saturation (threads_running, NOT host CPU%); Nichter tiers: busy 10–30, high 30–50, overloaded 50–100 (#944)',
     typical: { min: 2, max: 100, p50: 25, p90: 60, p95: 75, p99: 90 },
   },
   pg_connections: {

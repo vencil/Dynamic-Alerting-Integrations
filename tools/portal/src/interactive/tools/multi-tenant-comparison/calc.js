@@ -26,8 +26,11 @@ purpose: |
   Closure deps: none. Pure functions; receive tenants / metric as args.
 ---
 
+// mysql_cpu = running-threads SATURATION warning (threads_running, NOT host CPU%);
+// default 30 = PMM/Nichter "High" tier (#944). The threshold key is kept as
+// `mysql_cpu` for config-contract stability; the alert is MariaDBHighThreadsRunning.
 const DEFAULTS = {
-  mysql_connections: 80, mysql_cpu: 80, container_cpu: 80,
+  mysql_connections: 80, mysql_cpu: 30, container_cpu: 80,
   container_memory: 85, oracle_sessions_active: 200,
   oracle_tablespace_used_pct: 85, db2_connections_active: 200,
 };

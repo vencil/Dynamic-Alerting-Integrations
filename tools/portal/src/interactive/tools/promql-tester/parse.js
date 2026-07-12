@@ -48,7 +48,7 @@ const t = window.__t || ((zh, en) => en);
 /* ── Known recording rules from Rule Packs ── */
 const RECORDING_RULES = [
   { pack: 'mariadb', rule: 'da:mariadb_connections:current', expr: 'mysql_global_status_threads_connected', desc: t('當前 MariaDB 連線數', 'Current MariaDB connections') },
-  { pack: 'mariadb', rule: 'da:mariadb_cpu_usage:percent', expr: 'rate(process_cpu_seconds_total{job=~".*mysql.*"}[5m]) * 100', desc: t('MariaDB CPU 使用率', 'MariaDB CPU usage percent') },
+  { pack: 'mariadb', rule: 'da:mariadb_threads_running:avg1m', expr: 'max by(tenant)(avg_over_time(mysql_global_status_threads_running[1m]))', desc: t('MariaDB 執行緒飽和（1m 平均，threads_running 非 CPU%）', 'MariaDB running-threads saturation (1m avg; threads_running, NOT CPU%)') },
   { pack: 'mariadb', rule: 'da:mariadb_replication_lag:seconds', expr: 'mysql_slave_status_seconds_behind_master', desc: t('複製延遲秒數', 'Replication lag in seconds') },
   { pack: 'mariadb', rule: 'da:mariadb_slow_queries:rate5m', expr: 'rate(mysql_global_status_slow_queries[5m])', desc: t('慢查詢速率', 'Slow queries rate') },
   { pack: 'redis', rule: 'da:redis_memory_usage:percent', expr: 'redis_memory_used_bytes / redis_memory_max_bytes * 100', desc: t('Redis 記憶體使用率', 'Redis memory usage percent') },
