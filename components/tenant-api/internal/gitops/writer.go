@@ -48,6 +48,14 @@ var ErrForgeDegraded = errors.New("forge degradation: base fetch timed out — w
 // fmt.Errorf("%w: …", ErrValidation, …), so errors.Is(err, ErrValidation) holds.
 var ErrValidation = errors.New("validation failed")
 
+// ErrNoChanges is returned by WritePRBatch when EVERY op is a byte-identical
+// no-op (an idempotent batch / a client retry): the feature branch would carry
+// no commits beyond base, so pushing it and opening a PR/MR would yield a
+// change-free PR (or a forge 422). The handler maps this to a clean "no changes"
+// success — the PR-mode analogue of WriteMerged's direct-path no-op short-circuit
+// (#1097 / #1102 review).
+var ErrNoChanges = errors.New("no changes: batch produced no commits")
+
 // OnWriteFunc is called after a successful config write.
 // tenantID is the tenant or entity that was written (tenant ID, "groups", "views", etc.)
 type OnWriteFunc func(tenantID string)

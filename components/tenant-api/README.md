@@ -99,7 +99,7 @@
 | `GET` | `/api/v1/groups/{id}` | read | 取得群組 |
 | `PUT` | `/api/v1/groups/{id}` | write + 逐成員 write | 寫入;對所有 `members` 都需 write,否則回 403 + 不足清單 |
 | `DELETE` | `/api/v1/groups/{id}` | write + 逐成員 write | 刪除(同上權限) |
-| `POST` | `/api/v1/groups/{id}/batch` | read + 逐成員 write | 對群組全成員部分合併 patch(只改指定 key、保留其餘;同步 / async) |
+| `POST` | `/api/v1/groups/{id}/batch` | read + 逐成員 write | 對群組全成員部分合併 patch(只改指定 key、保留其餘;同步 / 非同步) |
 | `GET` | `/api/v1/views` | read | 列出 saved view |
 | `GET` `PUT` `DELETE` | `/api/v1/views/{id}` | read / write | Saved view CRUD |
 

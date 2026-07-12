@@ -168,6 +168,17 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 				if writeWriteFlowError(rw, r, err) {
 					return
 				}
+				// #1102: an all-no-op batch (idempotent patch / retry) produced no
+				// commits — return a clean "no changes" success, never a forge error.
+				if errors.Is(err, gitops.ErrNoChanges) {
+					writeJSON(rw, http.StatusOK, BatchResponse{
+						Status:  "completed",
+						Results: batchResults,
+						Summary: fmt.Sprintf("%d unchanged", len(batchOps)),
+						Message: "No changes to apply; no PR/MR created.",
+					})
+					return
+				}
 				// #795 F1: a malformed op body is a CLIENT error → 400, not a 500.
 				if errors.Is(err, gitops.ErrValidation) {
 					WriteJSONError(rw, r, http.StatusBadRequest, err.Error())

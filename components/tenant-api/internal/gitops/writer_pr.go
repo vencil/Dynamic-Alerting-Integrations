@@ -148,6 +148,17 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		return nil, fmt.Errorf("empty batch operations")
 	}
 
+	// Load-shedding admission (TRK-320) FIRST — the pre-flight below is per-op
+	// disk read + YAML merge + schema validation, real CPU/I/O that must queue
+	// behind the single-writer token, not bypass it (#1102 review). Acquiring the
+	// token here (before the pre-flight, not just before w.mu) also makes the
+	// pre-flight read race-free: the shared token is held for the whole write, so
+	// no other write path can mutate the working tree during the pre-flight.
+	if err := w.acquireWrite(ctx); err != nil {
+		return nil, err
+	}
+	defer w.releaseWrite()
+
 	// Pre-flight: merge + validate every op against the current on-disk base
 	// before cutting a branch. The authoritative merge re-runs under the lock
 	// below (against the fresh origin base), but rejecting here keeps a single
@@ -158,12 +169,6 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 			return nil, err
 		}
 	}
-
-	// Load-shedding admission (TRK-320) before w.mu.
-	if err := w.acquireWrite(ctx); err != nil {
-		return nil, err
-	}
-	defer w.releaseWrite()
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -189,12 +194,18 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	// Merge, write, and commit each op against the freshly-checked-out base.
 	// readMergeValidate re-reads the on-disk file per op, so a second op for the
 	// same tenant merges onto the first op's just-committed result (not the base).
+	// Byte-identical (no-op) merges are skipped so an idempotent patch/retry never
+	// churns an empty write; `changed` tracks whether ANY op mutated content.
+	changed := false
 	for _, op := range ops {
-		content, _, err := w.readMergeValidate(op.TenantID, op.Merge)
+		content, existing, err := w.readMergeValidate(op.TenantID, op.Merge)
 		if err != nil {
 			_ = w.checkoutBaseClean(base)
 			_ = w.gitExec("branch", "-D", branchName)
 			return nil, err
+		}
+		if existing != nil && string(existing) == content {
+			continue // no-op for this tenant — nothing to write or commit
 		}
 		filePath := filepath.Join(w.configDir, op.TenantID+".yaml")
 		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
@@ -207,6 +218,17 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 			_ = w.gitExec("branch", "-D", branchName)
 			return nil, fmt.Errorf("commit for %s: %w", op.TenantID, err)
 		}
+		changed = true
+	}
+
+	// Every op was a no-op → the branch has no commits beyond base. Don't push an
+	// empty branch or open a change-free PR/MR (a forge would 422). Roll the
+	// branch back and signal the handler to return a clean "no changes" result —
+	// the PR-mode analogue of WriteMerged's direct-path no-op success (#1102).
+	if !changed {
+		_ = w.checkoutBaseClean(base)
+		_ = w.gitExec("branch", "-D", branchName)
+		return nil, ErrNoChanges
 	}
 
 	pushed := true

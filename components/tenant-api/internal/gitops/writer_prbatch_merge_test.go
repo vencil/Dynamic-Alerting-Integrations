@@ -9,6 +9,7 @@ package gitops
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,6 +88,24 @@ func TestWriteMerged_IdempotentNoOp_NotConflict(t *testing.T) {
 	}
 	if head1 := gitOut(t, dir, "rev-parse", "HEAD"); head1 != head0 {
 		t.Errorf("idempotent WriteMerged moved HEAD %s → %s (should not commit)", head0, head1)
+	}
+}
+
+// TestWritePRBatch_AllNoOp_ReturnsErrNoChanges guards the #1102 review fix: a
+// batch whose every op is byte-identical (idempotent) must return ErrNoChanges
+// (→ clean "no changes" handler response) and leave NO feature branch behind,
+// rather than pushing an empty branch / opening a change-free PR.
+func TestWritePRBatch_AllNoOp_ReturnsErrNoChanges(t *testing.T) {
+	dir := seedTenantRepo(t)
+	w := NewWriter(dir, dir)
+	noop := func(existing []byte) (string, error) { return string(existing), nil } // identity
+	_, err := w.WritePRBatch(context.Background(), []PRBatchOp{{TenantID: "db-a", Merge: noop}}, "op@example.com")
+	if !errors.Is(err, ErrNoChanges) {
+		t.Fatalf("all-no-op batch: want ErrNoChanges, got: %v", err)
+	}
+	// No dangling feature branch may remain.
+	if b := gitOut(t, dir, "branch", "--format=%(refname:short)"); strings.Contains(b, "tenant-api/batch/") {
+		t.Errorf("all-no-op batch left a dangling branch:\n%s", b)
 	}
 }
 
