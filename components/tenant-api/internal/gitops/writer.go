@@ -48,6 +48,14 @@ var ErrForgeDegraded = errors.New("forge degradation: base fetch timed out — w
 // fmt.Errorf("%w: …", ErrValidation, …), so errors.Is(err, ErrValidation) holds.
 var ErrValidation = errors.New("validation failed")
 
+// ErrNoChanges is returned by WritePRBatch when EVERY op is a byte-identical
+// no-op (an idempotent batch / a client retry): the feature branch would carry
+// no commits beyond base, so pushing it and opening a PR/MR would yield a
+// change-free PR (or a forge 422). The handler maps this to a clean "no changes"
+// success — the PR-mode analogue of WriteMerged's direct-path no-op short-circuit
+// (#1097 / #1102 review).
+var ErrNoChanges = errors.New("no changes: batch produced no commits")
+
 // OnWriteFunc is called after a successful config write.
 // tenantID is the tenant or entity that was written (tenant ID, "groups", "views", etc.)
 type OnWriteFunc func(tenantID string)
@@ -282,6 +290,82 @@ func (w *Writer) Write(ctx context.Context, tenantID, authorEmail, yamlContent s
 		tenantID,
 		authorEmail,
 		[]byte(yamlContent),
+	)
+}
+
+// MergeFunc computes a tenant file's full new content from its CURRENT on-disk
+// bytes (nil when the file does not exist yet — a brand-new tenant). It is
+// invoked while the writer holds w.mu, so the merge base can never go stale
+// between the read and the write.
+type MergeFunc func(existing []byte) (string, error)
+
+// readMergeValidate is the shared read-merge-validate core behind both the
+// direct (WriteMerged) and PR-mode (WritePRBatch) partial-write paths (#1097).
+// It reads the current on-disk tenant file, runs merge against it, and runs the
+// same schema/custom-alert/eol validator every write boundary uses. It does NOT
+// persist — the caller decides how (commit-on-write vs branch commit).
+//
+// existing is nil on ENOENT; MergeFunc is responsible for the new-tenant case.
+// A merge error means the on-disk file is unparseable/structurally wrong — the
+// caller must NOT fall back to an overwrite (that is exactly the silent
+// key-loss this path exists to prevent). The raw existing bytes are returned so
+// the caller can detect a byte-identical (no-op) merge.
+func (w *Writer) readMergeValidate(tenantID string, merge MergeFunc) (content string, existing []byte, err error) {
+	existing, rerr := os.ReadFile(filepath.Join(w.configDir, tenantID+".yaml"))
+	if rerr != nil && !os.IsNotExist(rerr) {
+		return "", nil, fmt.Errorf("read current tenant file for %s: %w", tenantID, rerr)
+	}
+	content, merr := merge(existing)
+	if merr != nil {
+		return "", existing, fmt.Errorf("merge tenant config for %s: %w", tenantID, merr)
+	}
+	if errs := validate(w.configDir, tenantID, content); len(errs) > 0 {
+		return "", existing, fmt.Errorf("%w for %s: %s", ErrValidation, tenantID, strings.Join(errs, "; "))
+	}
+	return content, existing, nil
+}
+
+// WriteMerged persists a tenant config whose content is computed, UNDER the
+// single-writer lock, from the current on-disk file. This is the race-free
+// read-merge-write the batch patch path needs (#1097): a partial patch must
+// preserve keys it did not name, and reading the merge base OUTSIDE the lock
+// would let a concurrent same-tenant write be silently lost (the in-process
+// conflict detector only catches EXTERNAL commits, not serialized in-process
+// writes onto a stale base).
+//
+// Unlike Write(), validation runs under the lock — the final content is not
+// known until the base is read. The merge + validate are CPU-only and
+// sub-millisecond, so the extra time holding the write token is negligible.
+func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, merge MergeFunc) error {
+	// Load-shedding admission (TRK-320) before w.mu, same as Write.
+	if err := w.acquireWrite(ctx); err != nil {
+		return err
+	}
+	defer w.releaseWrite()
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	content, existing, err := w.readMergeValidate(tenantID, merge)
+	if err != nil {
+		return err
+	}
+	// No-op short-circuit (mirrors MutateConfigFile's `if next == nil`): when the
+	// merge changed nothing — an idempotent patch, or a client retry after a
+	// write whose response was lost — the content is byte-identical to disk, so
+	// gitCommit would stage nothing and NOT advance HEAD. commitFileChange's
+	// parent-based conflict check then misfires (HEAD~1 != unmoved HEAD) and
+	// returns a spurious, permanently-unrecoverable ErrConflict. Treat an
+	// unchanged merge as success (#1097 self-review). `existing == nil` (a new
+	// tenant) never matches non-empty content, so it still commits the new file.
+	if existing != nil && content == string(existing) {
+		return nil
+	}
+	return w.commitFileChange(
+		filepath.Join(w.configDir, tenantID+".yaml"),
+		tenantID,
+		authorEmail,
+		[]byte(content),
 	)
 }
 
