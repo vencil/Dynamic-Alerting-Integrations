@@ -15,6 +15,8 @@ lang: en
 >
 > **⚠️ Migration Safety Guarantee:** The flow is **incremental and rollback-friendly**. The `custom_` prefix isolates new rules from legacy ones; Projected Volume's `optional: true` lets you unmount any rule pack at any time without affecting Prometheus.
 >
+> **Alerts wired to automation (webhooks)?** Re-sends, replays, and dual-running during migration are double-execution risks for the **action layer** — read [Beyond Actionable §4–§5](alerting-best-practices.en.md) (idempotency gates and irreversible-action defenses) first.
+>
 > **Tip:** All `da-tools` commands can run directly via Docker (`docker run --rm --network=host ghcr.io/vencil/da-tools:v2.9.0 <cmd>`); examples below use the shorthand `da-tools <cmd>`.
 
 > **Audience**: tenant tech leads, Platform Engineers / DevOps / SREs, Domain Experts (DBAs)

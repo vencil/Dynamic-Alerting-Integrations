@@ -14,6 +14,8 @@ lang: en
 > 1. **Initial migration** — progressive consolidation after a large initial import of `custom_*` rules
 > 2. **New tenant onboarding** — a new team comes online six months later, takes the same "custom_ first, golden later" path
 > 3. **Rule Pack upgrade** — when the platform ships new golden rules, existing `custom_*` overrides are re-evaluated
+>
+> While curating rules, also review whether the **alert actions** they trigger (webhook automation) are safe to re-run → [Beyond Actionable](../alerting-best-practices.en.md).
 
 ---
 

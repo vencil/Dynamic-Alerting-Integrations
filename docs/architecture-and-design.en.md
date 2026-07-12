@@ -39,6 +39,7 @@ This is the **architecture Hub** for the "Multi-Tenant Dynamic Alerting Platform
 | [Future Roadmap](design/roadmap-future.en.md) | v2.9.0 delivered + v2.10.0+ exploration | Platform / decision-maker |
 | *Topics* | | |
 | [Benchmarks](benchmarks.en.md) | Scale / speed / capacity / stability measurements | Platform / SRE / decision-maker |
+| [Alert Design Fundamentals](alerting-design-fundamentals.en.md) · [Beyond Actionable](alerting-best-practices.en.md) | Alerting best-practices series: symptom-based design, the idempotency spectrum, action-layer guardrails, honest "practice × platform enforcement" mapping | SRE / Domain Expert / Tenant |
 | [Governance & Security](governance-security.en.md) | Audit, security discipline | Platform / Security |
 | [Troubleshooting](troubleshooting.en.md) | Edge cases, diagnostics | Platform / SRE / Tenant |
 | [Verified Scenarios](scenarios/verified-scenarios.en.md) | Scenario matrix | Platform / SRE |

@@ -11,7 +11,7 @@ lang: zh
 
 > **v2.9.0** | 適用對象：租戶（Tenant）管理者、DBA、SRE
 >
-> 相關文件：[Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../rule-packs/README.md)
+> 相關文件：[Migration Guide](../migration-guide.md) · [Architecture](../architecture-and-design.md) §2 · [Rule Packs](../rule-packs/README.md) · [告警設計入門](../alerting-design-fundamentals.md)
 
 > 💡 **想先玩玩看？** [`try-local/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) 一鍵起一個 self-service 試玩環境（Tenant Manager UI + 2 個 demo 租戶），不必等 Platform Team 部署就能體驗閾值調整 + Saved View。
 

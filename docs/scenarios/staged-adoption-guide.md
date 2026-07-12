@@ -14,6 +14,8 @@ lang: zh
 > 1. **Initial migration** — 大量 `custom_*` 規則初次導入後漸進收編
 > 2. **New tenant onboarding** — 半年後新團隊上線，同樣走「先 custom_、後 golden」路徑
 > 3. **Rule Pack upgrade** — 平台 ship 新 golden 規則時，既有 `custom_*` overrides 重新評估
+>
+> 收編規則的同時，同步檢視規則掛的**告警動作**（webhook 自動化）能否安全重跑 → [Actionable 之後](../alerting-best-practices.md)。
 
 ---
 
