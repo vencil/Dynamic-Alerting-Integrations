@@ -209,7 +209,9 @@ describe('findDivergent — filter stddev>0, sort by stddev DESC', () => {
 describe('DEFAULTS — the extracted default-threshold table', () => {
   it('exposes the 7 canonical metrics with their default values', () => {
     expect(DEFAULTS).toEqual({
-      mysql_connections: 80, mysql_cpu: 80, container_cpu: 80,
+      // mysql_cpu = 30 running-threads saturation (threads_running, NOT host CPU%; #944);
+      // key kept as mysql_cpu for config-contract stability.
+      mysql_connections: 80, mysql_cpu: 30, container_cpu: 80,
       container_memory: 85, oracle_sessions_active: 200,
       oracle_tablespace_used_pct: 85, db2_connections_active: 200,
     });

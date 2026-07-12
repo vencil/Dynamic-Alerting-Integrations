@@ -34,7 +34,7 @@ tenants:
   db-a:
     mysql_connections: "70"
     mysql_connections_critical: "95"
-    mysql_cpu: "80"
+    mysql_cpu: "40"
     _silent_mode: "disable"
     _routing:
       receiver_type: "webhook"

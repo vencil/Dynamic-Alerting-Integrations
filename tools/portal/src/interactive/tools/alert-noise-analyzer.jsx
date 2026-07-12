@@ -24,7 +24,7 @@ const SAMPLE_ALERTS = [
   { alertname: "MariaDBHighConnections", tenant: "db-a", severity: "warning",  startsAt: "2025-01-15T10:10:00Z", endsAt: "2025-01-15T10:12:00Z", status: "resolved" },
   { alertname: "MariaDBHighConnections", tenant: "db-a", severity: "warning",  startsAt: "2025-01-15T10:20:00Z", endsAt: "2025-01-15T10:22:00Z", status: "resolved" },
   { alertname: "MariaDBHighConnections", tenant: "db-a", severity: "warning",  startsAt: "2025-01-15T10:35:00Z", endsAt: "2025-01-15T10:40:00Z", status: "resolved" },
-  { alertname: "MariaDBHighCPU",         tenant: "db-a", severity: "warning",  startsAt: "2025-01-15T10:01:00Z", endsAt: "2025-01-15T10:30:00Z", status: "resolved" },
+  { alertname: "MariaDBHighThreadsRunning", tenant: "db-a", severity: "warning",  startsAt: "2025-01-15T10:01:00Z", endsAt: "2025-01-15T10:30:00Z", status: "resolved" },
   { alertname: "PostgreSQLHighConnections", tenant: "db-b", severity: "warning", startsAt: "2025-01-15T11:00:00Z", endsAt: "2025-01-15T11:45:00Z", status: "resolved" },
   { alertname: "RedisHighMemory",        tenant: "db-a", severity: "warning",  startsAt: "2025-01-15T12:00:00Z", endsAt: "2025-01-15T14:00:00Z", status: "resolved" },
   { alertname: "MariaDBHighConnectionsCritical", tenant: "db-a", severity: "critical", startsAt: "2025-01-15T10:03:00Z", endsAt: "2025-01-15T10:08:00Z", status: "resolved" },

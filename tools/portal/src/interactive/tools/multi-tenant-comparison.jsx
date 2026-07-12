@@ -20,12 +20,14 @@ const t = window.__t || ((zh, en) => en);
 
 // ── Sample Data ───────────────────────────────────────────────────
 // Simulates multiple tenant YAML configs with threshold overrides.
+// NOTE: mysql_cpu = running-threads SATURATION (threads_running, NOT host CPU%);
+// default warning 30 (#944). The values below are per-tenant override thresholds.
 const SAMPLE_TENANTS = [
   {
     name: "db-a",
     profile: "high-load",
     thresholds: {
-      mysql_connections: 70, mysql_cpu: 75, container_cpu: 80,
+      mysql_connections: 70, mysql_cpu: 25, container_cpu: 80,
       container_memory: 85, oracle_sessions_active: 250,
       oracle_tablespace_used_pct: 90, db2_connections_active: 200,
     },
@@ -35,7 +37,7 @@ const SAMPLE_TENANTS = [
     name: "db-b",
     profile: "standard",
     thresholds: {
-      mysql_connections: 80, mysql_cpu: 80, container_cpu: 80,
+      mysql_connections: 80, mysql_cpu: 30, container_cpu: 80,
       container_memory: 85, oracle_sessions_active: 200,
       oracle_tablespace_used_pct: 85, db2_connections_active: 200,
     },
@@ -45,7 +47,7 @@ const SAMPLE_TENANTS = [
     name: "db-c",
     profile: "high-load",
     thresholds: {
-      mysql_connections: 65, mysql_cpu: 70, container_cpu: 90,
+      mysql_connections: 65, mysql_cpu: 35, container_cpu: 90,
       container_memory: 95, oracle_sessions_active: 300,
       oracle_tablespace_used_pct: 88, db2_connections_active: 180,
     },
@@ -55,7 +57,7 @@ const SAMPLE_TENANTS = [
     name: "db-d",
     profile: "standard",
     thresholds: {
-      mysql_connections: 80, mysql_cpu: 80, container_cpu: 80,
+      mysql_connections: 80, mysql_cpu: 30, container_cpu: 80,
       container_memory: 85, oracle_sessions_active: 200,
       oracle_tablespace_used_pct: 85, db2_connections_active: 200,
     },
@@ -65,7 +67,7 @@ const SAMPLE_TENANTS = [
     name: "db-e",
     profile: "relaxed",
     thresholds: {
-      mysql_connections: 95, mysql_cpu: 95, container_cpu: 95,
+      mysql_connections: 95, mysql_cpu: 50, container_cpu: 95,
       container_memory: 98, oracle_sessions_active: 500,
       oracle_tablespace_used_pct: 95, db2_connections_active: 400,
     },
