@@ -77,6 +77,7 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "_build_custom_alert_routes",
         "_build_watchdog_route",
         "_build_synthetic_probe_route",
+        "_build_sentinel_sinkhole_route",
         "_build_per_tenant_enforced_route",
         "_build_single_enforced_route",
         "_build_tenant_routes",
