@@ -355,6 +355,8 @@ docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools \
 
 `--ci` mode 將 warning 也視為 exit 1。
 
+> **唯一例外 — `tenant-verify`**：此命令為 SSOT 前既有、且客戶 rollback runbook 已依賴其契約，故**反轉** `1`/`2` 語意——`2` = 驗證發現差異（mismatch / 租戶不存在，rollback checklist 的訊號），`1` = 呼叫錯誤。其餘所有命令一律遵循上表。詳見 [cli-reference.md](../../docs/cli-reference.md) §tenant-verify。
+
 ### 6.4 Bilingual Help
 
 所有命令支援雙語 help。預設依 `LANG` / `LC_ALL` 偵測（`zh*` → 中文，其他 → 英文），`DA_LANG` 顯式指定可覆蓋：
