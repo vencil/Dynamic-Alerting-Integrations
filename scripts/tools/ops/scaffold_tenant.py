@@ -551,8 +551,21 @@ def generate_defaults(selected_dbs: list[str]) -> dict:
     return {"defaults": defaults, "state_filters": state_filters}
 
 
-def generate_tenant(tenant_name: str, selected_dbs: list[str], interactive: bool = False) -> dict:
-    """Generate tenant YAML content."""
+def prompt_tenant_overrides(selected_dbs: list[str]) -> dict:
+    """互動式收集 tenant 覆寫（原 generate_tenant 內的 input()/print() 邏輯）。
+
+    逐項詢問並收集：metric 閾值覆寫 → 維護模式 → 靜音模式 → 嚴重度去重 →
+    告警路由。prompt 提示字串、預設值與詢問次序與抽出前逐字相同（互動 UX 為契約）。
+    僅在 ``generate_tenant(interactive=True)`` 路徑被呼叫。
+
+    Args:
+        selected_dbs: DB 型別 key 清單（決定 metric 覆寫 prompt 的數量與順序）。
+
+    Returns:
+        dict — 收集到的覆寫（metric key → 值字串，外加視答案而定的
+        ``_state_maintenance`` / ``_silent_mode`` / ``_severity_dedup`` /
+        ``_routing``）。未觸發任何覆寫時回傳空 dict。
+    """
     tenant_config = {}
 
     for db in selected_dbs:
@@ -562,115 +575,119 @@ def generate_tenant(tenant_name: str, selected_dbs: list[str], interactive: bool
 
         # Add default metric overrides
         for key, info in pack.get("defaults", {}).items():
-            if interactive:
-                val = prompt_value(key, info)
-                if val and val != "skip":
-                    tenant_config[key] = val
-            # Non-interactive: skip defaults (will inherit from _defaults.yaml)
+            val = prompt_value(key, info)
+            if val and val != "skip":
+                tenant_config[key] = val
 
         # Add optional overrides
         for key, info in pack.get("optional_overrides", {}).items():
-            if interactive:
-                val = prompt_value(key, info)
-                if val and val != "skip":
-                    tenant_config[key] = val
+            val = prompt_value(key, info)
+            if val and val != "skip":
+                tenant_config[key] = val
 
     # Always add maintenance state control (disabled by default)
     # v1.7.0: supports structured format with expires for auto-deactivation
-    if interactive:
-        enable_maint = input("\n  啟用維護模式? (y/N): ").strip().lower()
-        if enable_maint == "y":
-            expires_str = input("  設定到期時間 (ISO 8601, 如 2026-04-01T00:00:00Z, 空白=無期限): ").strip()
-            if expires_str:
-                reason_str = input("  原因 (選填): ").strip()
-                maint_obj = {"target": "enable", "expires": expires_str}
-                if reason_str:
-                    maint_obj["reason"] = reason_str
-                tenant_config["_state_maintenance"] = maint_obj
-            else:
-                tenant_config["_state_maintenance"] = "enable"
+    enable_maint = input("\n  啟用維護模式? (y/N): ").strip().lower()
+    if enable_maint == "y":
+        expires_str = input("  設定到期時間 (ISO 8601, 如 2026-04-01T00:00:00Z, 空白=無期限): ").strip()
+        if expires_str:
+            reason_str = input("  原因 (選填): ").strip()
+            maint_obj = {"target": "enable", "expires": expires_str}
+            if reason_str:
+                maint_obj["reason"] = reason_str
+            tenant_config["_state_maintenance"] = maint_obj
+        else:
+            tenant_config["_state_maintenance"] = "enable"
 
     # Silent mode: alerts fire (TSDB records) but notifications suppressed
     # v1.7.0: supports structured format with expires for auto-deactivation
-    if interactive:
-        print("\n  靜音模式 (Silent Mode):")
-        print("    1. Normal — 不靜音 (預設)")
-        print("    2. Warning — 只靜音 warning 通知")
-        print("    3. Critical — 只靜音 critical 通知")
-        print("    4. All — 靜音所有通知")
-        silent_choice = input("  選擇 [1-4] (預設 1): ").strip()
-        silent_map = {"2": "warning", "3": "critical", "4": "all"}
-        if silent_choice in silent_map:
-            expires_str = input("  設定到期時間 (ISO 8601, 如 2026-04-01T00:00:00Z, 空白=無期限): ").strip()
-            if expires_str:
-                reason_str = input("  原因 (選填): ").strip()
-                silent_obj = {"target": silent_map[silent_choice], "expires": expires_str}
-                if reason_str:
-                    silent_obj["reason"] = reason_str
-                tenant_config["_silent_mode"] = silent_obj
-            else:
-                tenant_config["_silent_mode"] = silent_map[silent_choice]
+    print("\n  靜音模式 (Silent Mode):")
+    print("    1. Normal — 不靜音 (預設)")
+    print("    2. Warning — 只靜音 warning 通知")
+    print("    3. Critical — 只靜音 critical 通知")
+    print("    4. All — 靜音所有通知")
+    silent_choice = input("  選擇 [1-4] (預設 1): ").strip()
+    silent_map = {"2": "warning", "3": "critical", "4": "all"}
+    if silent_choice in silent_map:
+        expires_str = input("  設定到期時間 (ISO 8601, 如 2026-04-01T00:00:00Z, 空白=無期限): ").strip()
+        if expires_str:
+            reason_str = input("  原因 (選填): ").strip()
+            silent_obj = {"target": silent_map[silent_choice], "expires": expires_str}
+            if reason_str:
+                silent_obj["reason"] = reason_str
+            tenant_config["_silent_mode"] = silent_obj
+        else:
+            tenant_config["_silent_mode"] = silent_map[silent_choice]
 
     # Severity dedup: control warning↔critical notification deduplication
-    if interactive:
-        print("\n  嚴重度去重 (Severity Dedup):")
-        print("    1. Enable — critical 觸發時壓制 warning 通知 (預設)")
-        print("    2. Disable — warning 和 critical 通知都發送")
-        dedup_choice = input("  選擇 [1-2] (預設 1): ").strip()
-        if dedup_choice == "2":
-            tenant_config["_severity_dedup"] = "disable"
+    print("\n  嚴重度去重 (Severity Dedup):")
+    print("    1. Enable — critical 觸發時壓制 warning 通知 (預設)")
+    print("    2. Disable — warning 和 critical 通知都發送")
+    dedup_choice = input("  選擇 [1-2] (預設 1): ").strip()
+    if dedup_choice == "2":
+        tenant_config["_severity_dedup"] = "disable"
 
     # Alert routing: tenant-managed notification destination
-    if interactive:
-        print("\n  告警路由 (Alert Routing):")
-        print("    設定通知目的地，空白跳過使用平台預設")
-        print("    支援類型: webhook | email | slack | teams | rocketchat | pagerduty")
-        receiver_type = input("  Receiver type (預設 webhook): ").strip().lower() or "webhook"
-        receiver_obj = None
-        if receiver_type == "webhook":
-            url = input("  Webhook URL: ").strip()
-            if url:
-                receiver_obj = {"type": "webhook", "url": url}
-        elif receiver_type == "email":
-            to = input("  Email to (逗號分隔): ").strip()
-            smarthost = input("  SMTP smarthost (例如 smtp.example.com:587): ").strip()
-            if to and smarthost:
-                receiver_obj = {"type": "email", "to": [t.strip() for t in to.split(",")],
-                                "smarthost": smarthost}
-        elif receiver_type == "slack":
-            api_url = input("  Slack API URL: ").strip()
-            if api_url:
-                receiver_obj = {"type": "slack", "api_url": api_url}
-                channel = input("  Channel (例如 #alerts，選填): ").strip()
-                if channel:
-                    receiver_obj["channel"] = channel
-        elif receiver_type == "teams":
-            webhook_url = input("  Teams Webhook URL: ").strip()
-            if webhook_url:
-                receiver_obj = {"type": "teams", "webhook_url": webhook_url}
-        elif receiver_type == "rocketchat":
-            url = input("  Rocket.Chat Webhook URL: ").strip()
-            if url:
-                receiver_obj = {"type": "rocketchat", "url": url}
-        elif receiver_type == "pagerduty":
-            service_key = input("  PagerDuty Service Key: ").strip()
-            if service_key:
-                receiver_obj = {"type": "pagerduty", "service_key": service_key}
-        else:
-            print(f"  WARN: unknown type '{receiver_type}', skipping routing")
+    print("\n  告警路由 (Alert Routing):")
+    print("    設定通知目的地，空白跳過使用平台預設")
+    print("    支援類型: webhook | email | slack | teams | rocketchat | pagerduty")
+    receiver_type = input("  Receiver type (預設 webhook): ").strip().lower() or "webhook"
+    receiver_obj = None
+    if receiver_type == "webhook":
+        url = input("  Webhook URL: ").strip()
+        if url:
+            receiver_obj = {"type": "webhook", "url": url}
+    elif receiver_type == "email":
+        to = input("  Email to (逗號分隔): ").strip()
+        smarthost = input("  SMTP smarthost (例如 smtp.example.com:587): ").strip()
+        if to and smarthost:
+            receiver_obj = {"type": "email", "to": [t.strip() for t in to.split(",")],
+                            "smarthost": smarthost}
+    elif receiver_type == "slack":
+        api_url = input("  Slack API URL: ").strip()
+        if api_url:
+            receiver_obj = {"type": "slack", "api_url": api_url}
+            channel = input("  Channel (例如 #alerts，選填): ").strip()
+            if channel:
+                receiver_obj["channel"] = channel
+    elif receiver_type == "teams":
+        webhook_url = input("  Teams Webhook URL: ").strip()
+        if webhook_url:
+            receiver_obj = {"type": "teams", "webhook_url": webhook_url}
+    elif receiver_type == "rocketchat":
+        url = input("  Rocket.Chat Webhook URL: ").strip()
+        if url:
+            receiver_obj = {"type": "rocketchat", "url": url}
+    elif receiver_type == "pagerduty":
+        service_key = input("  PagerDuty Service Key: ").strip()
+        if service_key:
+            receiver_obj = {"type": "pagerduty", "service_key": service_key}
+    else:
+        print(f"  WARN: unknown type '{receiver_type}', skipping routing")
 
-        if receiver_obj:
-            routing = {"receiver": receiver_obj}
+    if receiver_obj:
+        routing = {"receiver": receiver_obj}
 
-            group_by = input("  Group by labels (逗號分隔，預設 alertname,tenant): ").strip()
-            routing["group_by"] = ([g.strip() for g in group_by.split(",")]
-                                   if group_by else ["alertname", "tenant"])
-            routing["group_wait"] = input("  Group wait (預設 30s，範圍 5s-5m): ").strip() or "30s"
-            routing["group_interval"] = input("  Group interval (預設 5m，範圍 5s-5m): ").strip() or "5m"
-            routing["repeat_interval"] = input("  Repeat interval (預設 4h，範圍 1m-72h): ").strip() or "4h"
+        group_by = input("  Group by labels (逗號分隔，預設 alertname,tenant): ").strip()
+        routing["group_by"] = ([g.strip() for g in group_by.split(",")]
+                               if group_by else ["alertname", "tenant"])
+        routing["group_wait"] = input("  Group wait (預設 30s，範圍 5s-5m): ").strip() or "30s"
+        routing["group_interval"] = input("  Group interval (預設 5m，範圍 5s-5m): ").strip() or "5m"
+        routing["repeat_interval"] = input("  Repeat interval (預設 4h，範圍 1m-72h): ").strip() or "4h"
 
-            tenant_config["_routing"] = routing
+        tenant_config["_routing"] = routing
 
+    return tenant_config
+
+
+def generate_tenant(tenant_name: str, selected_dbs: list[str], interactive: bool = False) -> dict:
+    """Generate tenant YAML content.
+
+    純組裝：``interactive=True`` 時委派 ``prompt_tenant_overrides`` 逐項收集覆寫，
+    否則為空覆寫（non-interactive 一律繼承 _defaults.yaml，不寫 metric 覆寫）。
+    本函式本身不再直接呼叫 input()/print()——互動 I/O 全在 prompt_tenant_overrides。
+    """
+    tenant_config = prompt_tenant_overrides(selected_dbs) if interactive else {}
     return {"tenants": {tenant_name: tenant_config}} if tenant_config else {"tenants": {tenant_name: {}}}
 
 
