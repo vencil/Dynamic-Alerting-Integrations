@@ -377,12 +377,31 @@ COMMAND_MAP = {
     "parser": "parser_dispatch.py",
 }
 
-# Commands that accept --prometheus flag (inject env var fallback)
+# Commands that accept --prometheus flag (inject env var fallback).
+#
+# Two complementary $PROMETHEUS_URL fallback mechanisms exist and must
+# stay in sync (README §6.1 documents the single global fallback):
+#   1. `add_prometheus_arg` (scripts/tools/_lib_io.py) — argparse-layer
+#      default: `--prometheus` defaults to $PROMETHEUS_URL (else
+#      http://localhost:9090). This works for BOTH standalone invocation
+#      (`python3 <tool>.py`) and via the da-tools dispatcher.
+#   2. `inject_prometheus_env` below — dispatcher-layer argv injection:
+#      when a command runs THROUGH da-tools and argv omits `--prometheus`,
+#      it appends `--prometheus $PROMETHEUS_URL`.
+# For tools that already adopt add_prometheus_arg, the injection is
+# redundant but harmless (idempotent: it only fires when `--prometheus`
+# is absent, and injects the SAME env var the arg default reads). It is
+# kept as defence-in-depth and so tools NOT yet on add_prometheus_arg
+# still honour the env var through the dispatcher.
 PROMETHEUS_COMMANDS = {"check-alert", "baseline", "diagnose", "validate",
                        "batch-diagnose", "backtest", "cutover", "blind-spot",
                        "alert-quality", "alert-correlate",
                        "cardinality-forecast", "threshold-recommend",
-                       "threshold-govern", "discover-mappings"}
+                       "threshold-govern", "discover-mappings",
+                       # Adopted add_prometheus_arg + added here so the two
+                       # mechanisms agree (README §6.1 gap: previously these
+                       # honoured neither standalone env nor dispatcher inject).
+                       "federation-check", "byo-check", "shadow-verify"}
 
 
 # Usage examples shown after the help text. These command lines are

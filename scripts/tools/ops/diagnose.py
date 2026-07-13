@@ -37,7 +37,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant  # noqa: E402
+from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant, add_prometheus_arg  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 
@@ -346,8 +346,7 @@ if __name__ == "__main__":
         description=_h('description'),
     )
     parser.add_argument("tenant", help=_h('tenant'))
-    parser.add_argument("--prometheus", default="http://localhost:9090",
-                        help=_h('prometheus'))
+    add_prometheus_arg(parser, help_text=_h('prometheus'))
     parser.add_argument("--config-dir",
                         help=_h('config_dir'))
     parser.add_argument("--show-inheritance", action="store_true",

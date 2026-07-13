@@ -401,3 +401,35 @@ class TestMainCLI:
         out = capsys.readouterr().out
         assert "db-a" in out
         assert "db-b" in out
+
+    def test_prometheus_env_fallback(self, monkeypatch, cli_argv):
+        """--prometheus 省略 + $PROMETHEUS_URL 設定 → 讀 env（README §6.1、add_prometheus_arg）。
+
+        batch-diagnose 先前硬編 http://localhost:9090（standalone 直跑讀不到
+        env）；add_prometheus_arg 現在於 argparse 層 resolve $PROMETHEUS_URL。
+        """
+        monkeypatch.setenv("PROMETHEUS_URL", "http://test:1234")
+        cli_argv("batch_diagnose", "--tenants", "db-a", "--json")
+        captured = {}
+
+        def mock_run(tenant, prom_url, timeout=30):
+            captured["url"] = prom_url
+            return {"tenant": tenant, "status": "healthy", "elapsed_seconds": 0.1}
+
+        monkeypatch.setattr(bd, "run_diagnose_for_tenant", mock_run)
+        bd.main()
+        assert captured["url"] == "http://test:1234"
+
+    def test_prometheus_env_unset_fallback_localhost(self, monkeypatch, cli_argv):
+        """--prometheus 省略 + env 未設 → localhost（byte-identical 舊行為）。"""
+        monkeypatch.delenv("PROMETHEUS_URL", raising=False)
+        cli_argv("batch_diagnose", "--tenants", "db-a", "--json")
+        captured = {}
+
+        def mock_run(tenant, prom_url, timeout=30):
+            captured["url"] = prom_url
+            return {"tenant": tenant, "status": "healthy", "elapsed_seconds": 0.1}
+
+        monkeypatch.setattr(bd, "run_diagnose_for_tenant", mock_run)
+        bd.main()
+        assert captured["url"] == "http://localhost:9090"

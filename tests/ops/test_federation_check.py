@@ -329,3 +329,52 @@ class TestMain:
         assert exc_info.value.code == EXIT_CALLER_ERROR
         output = json.loads(capsys.readouterr().out)
         assert output["section"] == "e2e"
+
+
+# ---------------------------------------------------------------------------
+# --prometheus env-var fallback (add_prometheus_arg / README §6.1)
+# ---------------------------------------------------------------------------
+class TestPrometheusEnvFallback:
+    """`--prometheus` resolves $PROMETHEUS_URL at the argparse layer.
+
+    federation-check was previously hardcoded to http://localhost:9090 AND
+    absent from the dispatcher's PROMETHEUS_COMMANDS, so a standalone run
+    (`python3 federation_check.py ...`) ignored $PROMETHEUS_URL entirely.
+    add_prometheus_arg now resolves it as the argparse default (env → else
+    localhost), so the same env-var works standalone and via da-tools.
+    """
+
+    def _run_main_capture_url(self, monkeypatch, argv):
+        captured = {}
+
+        def fake_check_edge(prom_url):
+            captured["url"] = prom_url
+            return [{"check": "x", "status": "pass", "detail": ""}]
+
+        monkeypatch.setattr(fc, "check_edge", fake_check_edge)
+        monkeypatch.setattr(sys, "argv", argv)
+        with pytest.raises(SystemExit):
+            fc.main()
+        return captured["url"]
+
+    def test_uses_env_when_flag_absent(self, monkeypatch):
+        """--prometheus omitted + $PROMETHEUS_URL set → uses the env value."""
+        monkeypatch.setenv("PROMETHEUS_URL", "http://test:1234")
+        url = self._run_main_capture_url(
+            monkeypatch, ["federation_check.py", "edge"])
+        assert url == "http://test:1234"
+
+    def test_falls_back_to_localhost_when_env_unset(self, monkeypatch):
+        """--prometheus omitted + env unset → byte-identical old default."""
+        monkeypatch.delenv("PROMETHEUS_URL", raising=False)
+        url = self._run_main_capture_url(
+            monkeypatch, ["federation_check.py", "edge"])
+        assert url == "http://localhost:9090"
+
+    def test_explicit_flag_overrides_env(self, monkeypatch):
+        """Explicit --prometheus always wins over $PROMETHEUS_URL."""
+        monkeypatch.setenv("PROMETHEUS_URL", "http://test:1234")
+        url = self._run_main_capture_url(
+            monkeypatch,
+            ["federation_check.py", "edge", "--prometheus", "http://cli:9099"])
+        assert url == "http://cli:9099"

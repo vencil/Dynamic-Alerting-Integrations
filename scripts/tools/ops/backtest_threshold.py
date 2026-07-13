@@ -48,7 +48,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import load_yaml_file, is_disabled, http_get_json, write_json_secure, write_text_secure  # noqa: E402
+from _lib_python import load_yaml_file, is_disabled, http_get_json, write_json_secure, write_text_secure, add_prometheus_arg  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
@@ -640,9 +640,9 @@ def main():
     parser.add_argument("--old-value", help="Old threshold value (with --tenant)")
     parser.add_argument("--new-value", help="New threshold value (with --tenant)")
 
-    parser.add_argument(
-        "--prometheus", default="http://localhost:9090",
-        help="Prometheus Query API URL (default: http://localhost:9090)",
+    add_prometheus_arg(
+        parser,
+        help_text="Prometheus Query API URL (default: http://localhost:9090)",
     )
     parser.add_argument(
         "--lookback", default=DEFAULT_LOOKBACK,

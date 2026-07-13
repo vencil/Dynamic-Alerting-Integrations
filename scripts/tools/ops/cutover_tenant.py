@@ -49,7 +49,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_python import format_json_report  # noqa: E402
+from _lib_python import format_json_report, add_prometheus_arg  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -315,9 +315,9 @@ def build_parser():
         "--tenant", required=True,
         help="Tenant name for post-cutover health verification",
     )
-    parser.add_argument(
-        "--prometheus", default="http://localhost:9090",
-        help="Prometheus URL (default: http://localhost:9090)",
+    add_prometheus_arg(
+        parser,
+        help_text="Prometheus URL (default: http://localhost:9090)",
     )
     parser.add_argument(
         "--namespace", default="monitoring",

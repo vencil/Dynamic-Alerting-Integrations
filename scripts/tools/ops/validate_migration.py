@@ -63,7 +63,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import http_get_json, write_text_secure, write_json_secure, query_prometheus_instant  # noqa: E402
+from _lib_python import http_get_json, write_text_secure, write_json_secure, query_prometheus_instant, add_prometheus_arg  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Alias for backward-compat within this module
@@ -376,10 +376,10 @@ def main():
     group.add_argument("--old", help="舊 Recording Rule 的 PromQL 查詢")
 
     parser.add_argument("--new", help="新 Recording Rule 的 PromQL 查詢 (搭配 --old)")
-    parser.add_argument("--prometheus", default="http://localhost:9090",
-                        help="Prometheus Query API URL "
-                             "(預設: http://localhost:9090; "
-                             "叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)")
+    add_prometheus_arg(parser,
+                       help_text="Prometheus Query API URL "
+                                 "(預設: http://localhost:9090; "
+                                 "叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)")
     parser.add_argument("-o", "--output-dir", default="validation_output",
                         help="輸出目錄 (預設: validation_output)")
     parser.add_argument("--tolerance", type=float, default=0.001,

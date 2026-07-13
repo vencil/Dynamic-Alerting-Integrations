@@ -218,6 +218,13 @@ def add_prometheus_arg(
     """Add ``--prometheus`` argument with env-var fallback."""
     parser.add_argument(
         "--prometheus",
-        default=default or os.environ.get("PROMETHEUS_URL", "http://localhost:9090"),
+        # `... or "http://localhost:9090"` (not the get() default) so an
+        # empty $PROMETHEUS_URL falls back to localhost too. This aligns the
+        # empty-string semantics with entrypoint.py's inject_prometheus_env
+        # (`if prom_url:`), which also treats "" as unset — otherwise a
+        # deployment that sets PROMETHEUS_URL="" (e.g. a ConfigMap key that
+        # resolves empty) would get an empty URL here but localhost via the
+        # dispatcher, an inconsistency between the two fallback mechanisms.
+        default=default or os.environ.get("PROMETHEUS_URL") or "http://localhost:9090",
         help=help_text,
     )

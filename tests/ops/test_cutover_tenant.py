@@ -249,8 +249,12 @@ class TestApplyCutover:
 class TestCLI:
     """CLI argument parsing tests。"""
 
-    def test_parser_required_args(self):
-        """必要引數正確解析。"""
+    def test_parser_required_args(self, monkeypatch):
+        """必要引數正確解析；--prometheus 未設 env 時 fallback localhost（byte-identical）。"""
+        # add_prometheus_arg resolves $PROMETHEUS_URL at build_parser() time,
+        # so pin the env-unset default here (byte-identical to the old
+        # hardcoded default="http://localhost:9090").
+        monkeypatch.delenv("PROMETHEUS_URL", raising=False)
         parser = ct.build_parser()
         args = parser.parse_args([
             "--readiness-json", "r.json",
@@ -261,6 +265,27 @@ class TestCLI:
         assert args.prometheus == "http://localhost:9090"
         assert not args.dry_run
         assert not args.force
+
+    def test_parser_prometheus_env_fallback(self, monkeypatch):
+        """--prometheus 省略時讀 $PROMETHEUS_URL（README §6.1 全域 fallback）。"""
+        monkeypatch.setenv("PROMETHEUS_URL", "http://test:1234")
+        parser = ct.build_parser()
+        args = parser.parse_args([
+            "--readiness-json", "r.json",
+            "--tenant", "db-a",
+        ])
+        assert args.prometheus == "http://test:1234"
+
+    def test_parser_prometheus_flag_overrides_env(self, monkeypatch):
+        """顯式 --prometheus 蓋過 $PROMETHEUS_URL。"""
+        monkeypatch.setenv("PROMETHEUS_URL", "http://test:1234")
+        parser = ct.build_parser()
+        args = parser.parse_args([
+            "--readiness-json", "r.json",
+            "--tenant", "db-a",
+            "--prometheus", "http://cli:9099",
+        ])
+        assert args.prometheus == "http://cli:9099"
 
     def test_parser_all_flags(self):
         """所有旗標正確解析。"""

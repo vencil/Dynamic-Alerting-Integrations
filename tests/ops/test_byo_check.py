@@ -478,3 +478,51 @@ class TestStep5DiskIopsRecipePrereq:
         c = self._step5(checks)
         assert c["status"] == "warn"
         assert "could not query" in c["detail"]
+
+
+# ---------------------------------------------------------------------------
+# --prometheus env-var fallback (add_prometheus_arg / README §6.1)
+# ---------------------------------------------------------------------------
+class TestPrometheusEnvFallback:
+    """`--prometheus` resolves $PROMETHEUS_URL at the argparse layer.
+
+    byo-check was previously hardcoded to http://localhost:9090 AND absent
+    from the dispatcher's PROMETHEUS_COMMANDS, so a standalone run ignored
+    $PROMETHEUS_URL entirely. add_prometheus_arg now resolves it as the
+    argparse default (env → else localhost) for standalone + dispatcher.
+    """
+
+    def _run_main_capture_url(self, monkeypatch, argv):
+        captured = {}
+
+        def fake_check_prometheus(args):
+            captured["url"] = args.prometheus
+            return [{"check": "x", "status": "pass", "detail": ""}]
+
+        monkeypatch.setattr(bc, "check_prometheus", fake_check_prometheus)
+        monkeypatch.setattr(sys, "argv", argv)
+        with pytest.raises(SystemExit):
+            bc.main()
+        return captured["url"]
+
+    def test_uses_env_when_flag_absent(self, monkeypatch):
+        """--prometheus omitted + $PROMETHEUS_URL set → uses the env value."""
+        monkeypatch.setenv("PROMETHEUS_URL", "http://test:1234")
+        url = self._run_main_capture_url(
+            monkeypatch, ["byo_check.py", "prometheus"])
+        assert url == "http://test:1234"
+
+    def test_falls_back_to_localhost_when_env_unset(self, monkeypatch):
+        """--prometheus omitted + env unset → byte-identical old default."""
+        monkeypatch.delenv("PROMETHEUS_URL", raising=False)
+        url = self._run_main_capture_url(
+            monkeypatch, ["byo_check.py", "prometheus"])
+        assert url == "http://localhost:9090"
+
+    def test_explicit_flag_overrides_env(self, monkeypatch):
+        """Explicit --prometheus always wins over $PROMETHEUS_URL."""
+        monkeypatch.setenv("PROMETHEUS_URL", "http://test:1234")
+        url = self._run_main_capture_url(
+            monkeypatch,
+            ["byo_check.py", "prometheus", "--prometheus", "http://cli:9099"])
+        assert url == "http://cli:9099"

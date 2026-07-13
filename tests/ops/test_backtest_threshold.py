@@ -534,3 +534,49 @@ class TestCustomAlertDetection:
         assert "db-a" in note and "db-b" in note and "#657" in note
         md = bt.custom_alert_markdown(["db-b"])
         assert "#657" in md and "`db-b`" in md
+
+
+# ---------------------------------------------------------------------------
+# --prometheus env-var fallback (add_prometheus_arg / README §6.1)
+# ---------------------------------------------------------------------------
+class TestPrometheusEnvFallback:
+    """`--prometheus` resolves $PROMETHEUS_URL at the argparse layer.
+
+    backtest 先前硬編 http://localhost:9090（standalone 直跑讀不到 env）。
+    add_prometheus_arg 現在於 argparse 層 resolve（env → 否則 localhost）。
+    """
+
+    def _capture_prom_url(self, monkeypatch, cli_argv, argv):
+        captured = {}
+
+        def fake_available(prom_url, timeout=5):
+            captured["url"] = prom_url
+            return False  # unreachable → --skip-if-unavailable graceful exit(0)
+
+        monkeypatch.setattr(bt, "prometheus_available", fake_available)
+        cli_argv(*argv)
+        with pytest.raises(SystemExit):
+            bt.main()
+        return captured["url"]
+
+    def test_uses_env_when_flag_absent(self, monkeypatch, cli_argv):
+        """--prometheus omitted + $PROMETHEUS_URL set → uses the env value."""
+        monkeypatch.setenv("PROMETHEUS_URL", "http://test:1234")
+        url = self._capture_prom_url(
+            monkeypatch, cli_argv, ["backtest_threshold", "--skip-if-unavailable"])
+        assert url == "http://test:1234"
+
+    def test_falls_back_to_localhost_when_env_unset(self, monkeypatch, cli_argv):
+        """--prometheus omitted + env unset → byte-identical old default."""
+        monkeypatch.delenv("PROMETHEUS_URL", raising=False)
+        url = self._capture_prom_url(
+            monkeypatch, cli_argv, ["backtest_threshold", "--skip-if-unavailable"])
+        assert url == "http://localhost:9090"
+
+    def test_explicit_flag_overrides_env(self, monkeypatch, cli_argv):
+        """Explicit --prometheus always wins over $PROMETHEUS_URL."""
+        monkeypatch.setenv("PROMETHEUS_URL", "http://test:1234")
+        url = self._capture_prom_url(
+            monkeypatch, cli_argv,
+            ["backtest_threshold", "--skip-if-unavailable", "--prometheus", "http://cli:9099"])
+        assert url == "http://cli:9099"
