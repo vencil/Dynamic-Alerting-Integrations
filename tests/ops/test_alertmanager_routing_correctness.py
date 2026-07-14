@@ -131,8 +131,17 @@ def _assert_routed(etc_dir, labels: dict, expected_receivers: str):
 
 
 def _write_etc(tmp_path_factory, name: str, am_yml: str):
-    """把 rendered alertmanager.yml 放進一個可掛載的目錄。"""
+    """把 rendered alertmanager.yml 放進一個可掛載的目錄。
+
+    pytest 的 ``mktemp`` 建目錄為 0700，bind mount 進 container 後
+    prom/alertmanager 的非 root 使用者（nobody）無法穿越目錄 →
+    ``stat: permission denied``（Linux runner 才會炸；Windows Docker
+    Desktop 權限打平所以本機測不到）。chmod 0755 對齊 validity 測試
+    ``etc.mkdir()`` 的 umask 預設；檔案本身 ``write_text`` 依 umask
+    已是 0644，不需另處理。
+    """
     etc = tmp_path_factory.mktemp(name)
+    etc.chmod(0o755)
     (etc / "alertmanager.yml").write_text(am_yml, encoding="utf-8")
     return etc
 
