@@ -1478,6 +1478,12 @@ da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ -o 
 
 # Split output and apply directly
 da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ --split --apply --namespace monitoring
+
+# Dry-run JSON report — stdout is a single JSON document:
+#   {"crds": [...], "kustomization": {...}|null, "summary": {...}}
+# (progress/summary messages go to stderr, so it pipes cleanly into jq)
+da-tools operator-generate --dry-run --json | jq '.crds | length'
+da-tools operator-generate --dry-run --json | jq -r '.crds[].metadata.name'
 ```
 
 ---
