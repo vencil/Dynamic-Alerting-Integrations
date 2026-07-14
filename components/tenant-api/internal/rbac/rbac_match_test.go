@@ -33,28 +33,7 @@ import (
 	"github.com/vencil/tenant-api/internal/testutil"
 )
 
-// matchEvalConfig exercises every match shape next to a legacy rule.
-func matchEvalConfig() *RBACConfig {
-	return &RBACConfig{Groups: []GroupRule{
-		// Legacy rule: the name IS the matched IdP group.
-		{Name: "legacy-admins", Tenants: []string{"*"}, Permissions: []Permission{PermAdmin}},
-		// Groups-only match (OR-within the list).
-		{Name: "ops-rule", Match: &MatchBlock{Groups: []string{"operators", "sre"}},
-			Tenants: []string{"ops-*"}, Permissions: []Permission{PermRead}},
-		// Claims-only match, multi-value OR.
-		{Name: "org-readers", Match: &MatchBlock{Claims: map[string][]string{"org": {"ORG-A", "ORG-B"}}},
-			Tenants: []string{"*"}, Permissions: []Permission{PermRead}},
-		// Groups AND claims — both condition kinds must hold.
-		{Name: "org-a-operators", Match: &MatchBlock{
-			Groups: []string{"operators"},
-			Claims: map[string][]string{"org": {"ORG-A"}},
-		}, Tenants: []string{"alpha-*"}, Permissions: []Permission{PermRead, PermWrite}},
-		// Two claim keys — AND across keys, OR within each value list.
-		{Name: "org-a-eu", Match: &MatchBlock{
-			Claims: map[string][]string{"org": {"ORG-A"}, "region": {"eu-1", "eu-2"}},
-		}, Tenants: []string{"eu-*"}, Permissions: []Permission{PermWrite}},
-	}}
-}
+// matchEvalConfig lives in testhelpers_test.go.
 
 func TestMatch_Evaluation_Exhaustive(t *testing.T) {
 	t.Parallel()
@@ -330,15 +309,7 @@ func TestValidateConfig_TenantPatterns(t *testing.T) {
 
 // --- strict parsing (KnownFields) + load semantics ---
 
-const matchLoadYAML = `groups:
-  - name: org-a-operators
-    match:
-      groups: [operators]
-      claims:
-        org: [ORG-A]
-    tenants: ["*"]
-    permissions: [read, write]
-`
+// matchLoadYAML lives in testhelpers_test.go.
 
 func TestParse_StrictRejectsUnknownFields(t *testing.T) {
 	t.Parallel()

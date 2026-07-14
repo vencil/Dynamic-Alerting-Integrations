@@ -25,51 +25,8 @@ import (
 	"testing"
 )
 
-// equivConfig is a rule set that exercises every legacy matching feature:
-// wildcard tenants, prefix tenants, multi-permission rules, and
-// environment/domain-restricted rules.
-func equivConfig() *RBACConfig {
-	return &RBACConfig{Groups: []GroupRule{
-		{Name: "platform-admins", Tenants: []string{"*"}, Permissions: []Permission{PermAdmin}},
-		{Name: "db-ops", Tenants: []string{"db-a-*", "db-b-*"}, Permissions: []Permission{PermRead, PermWrite}},
-		{Name: "viewers", Tenants: []string{"*"}, Permissions: []Permission{PermRead}},
-		{
-			Name: "prod-finance", Tenants: []string{"*"}, Permissions: []Permission{PermRead},
-			Environments: []string{"production"}, Domains: []string{"finance"},
-		},
-	}}
-}
-
-// equivManagers returns the three manager modes the legacy matrix covered:
-// path-less open mode, configured-but-empty fail-closed mode (MED-8), and a
-// configured rule set.
-func equivManagers() map[string]*Manager {
-	failClosed := NewForTest(&RBACConfig{})
-	failClosed.failClosedOnEmpty = true
-	return map[string]*Manager{
-		"open":        NewForTest(&RBACConfig{}),
-		"fail-closed": failClosed,
-		"configured":  NewForTest(equivConfig()),
-	}
-}
-
-// equivGroupSets covers nil, empty, unknown, single, multi-group callers.
-func equivGroupSets() map[string][]string {
-	return map[string][]string{
-		"nil":            nil,
-		"empty":          {},
-		"unknown":        {"no-such-group"},
-		"viewers":        {"viewers"},
-		"db-ops":         {"db-ops"},
-		"admin":          {"platform-admins"},
-		"viewers+db-ops": {"viewers", "db-ops"},
-		"scoped":         {"prod-finance"},
-	}
-}
-
-var equivTenants = []string{"db-a-prod", "db-b-staging", "redis-01", "*", ""}
-
-var equivPerms = []Permission{PermRead, PermWrite, PermAdmin}
+// equivConfig / equivManagers / equivGroupSets / equivTenants / equivPerms
+// live in testhelpers_test.go.
 
 func TestAllowed_EquivalentToLegacyHasPermission(t *testing.T) {
 	t.Parallel()

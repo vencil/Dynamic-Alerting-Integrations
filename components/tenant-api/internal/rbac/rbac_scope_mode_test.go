@@ -2,15 +2,7 @@ package rbac
 
 import "testing"
 
-// fakeScopeRecorder is an in-test ScopeAuditRecorder capturing would-deny
-// observations per axis, so tests assert on their own isolated instance.
-type fakeScopeRecorder struct{ counts map[string]int }
-
-func newFakeScopeRecorder() *fakeScopeRecorder {
-	return &fakeScopeRecorder{counts: map[string]int{}}
-}
-
-func (f *fakeScopeRecorder) IncWouldDeny(axis string) { f.counts[axis]++ }
+// fakeScopeRecorder / newFakeScopeRecorder live in testhelpers_test.go.
 
 // TestScopeFieldModes pins the pure two-mode field evaluator: wildcard passes
 // both modes, an unlabeled value passes shadow but not enforce, and a labeled

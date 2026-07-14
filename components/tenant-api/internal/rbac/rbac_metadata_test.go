@@ -725,12 +725,3 @@ func TestHasMetadataAccess_BackwardCompatible(t *testing.T) {
 		})
 	}
 }
-
-// toSet converts a slice to a map for order-independent comparison
-func toSet(s []string) map[string]bool {
-	m := make(map[string]bool)
-	for _, v := range s {
-		m[v] = true
-	}
-	return m
-}

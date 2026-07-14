@@ -100,23 +100,3 @@ func TestVerifiedPrincipalConstructionConfinedToRBACAndTests(t *testing.T) {
 			strings.Join(violations, "\n  "))
 	}
 }
-
-// moduleRootForGuard walks up from the package directory (the test working
-// directory) to the nearest go.mod — the tenant-api module root.
-func moduleRootForGuard(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("go.mod not found above the rbac package directory")
-		}
-		dir = parent
-	}
-}
