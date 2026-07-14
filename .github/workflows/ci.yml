@@ -49,13 +49,21 @@ jobs:
       # scripts/tools/lint/check_iac_vibe_rules.py and .hadolint.yaml.
       #
       # Download-cache pattern (CI-ROI wave, shared by every pinned-binary
-      # install in this workflow): the artifact is stored in
-      # ~/.cache/vibe-ci-downloads under a VERSIONED filename and only
-      # curl'd on a miss. The SHA-256 verification ALWAYS runs — on cached
-      # bytes too — so a poisoned/stale cache entry fails the job instead of
-      # executing. The version in the cache KEY is best-effort freshness
-      # only: filenames carry the version, so a stale key merely re-downloads
-      # (never silently pins an old binary).
+      # install in this workflow): the artifact is stored in a cache dir
+      # under a VERSIONED filename and only curl'd on a miss. The SHA-256
+      # verification ALWAYS runs — on cached bytes too — so a poisoned/stale
+      # cache entry fails the job instead of executing. The version in the
+      # cache KEY must be kept in sync with the install step when re-pinning:
+      # a stale key still EXACT-HITS the old entry, and since an exact hit
+      # skips the post-save, the new versioned file never enters the cache —
+      # the job then re-downloads EVERY run until the key is fixed.
+      # Correctness is unaffected (versioned filenames + always-on checksum
+      # mean the old binary is never silently used); only the cache benefit
+      # is lost. Best-effort install steps (pint / kube-linter / vmutils)
+      # additionally keep their cache dir absent until a download fully
+      # succeeds — a job can go green around their failure, and post-save on
+      # a missing path is a no-op, so a flake can never freeze a partial
+      # entry under an exact-hit key.
       - name: Cache pinned binary downloads (hadolint)
         uses: actions/cache@v5
         with:
@@ -235,20 +243,41 @@ jobs:
         run: |
           python scripts/tools/lint/check_retire_drift.py --ci
 
-      # Download-cache for the 3 pinned tarballs this job curls every run
+      # Download-caches for the 3 pinned tarballs this job curls every run
       # (promtool / vmutils / pint — see the Lint job's hadolint step for the
-      # pattern rationale). Filenames are versioned, SHA-256 verification
-      # always runs on the cached bytes, so a stale key only costs a
-      # re-download and a poisoned entry fails the job. vmutils' version
-      # lives in the tests/rulepacks/vm_engine_version pins SSOT → hashFiles
-      # keeps the key honest there; promtool/pint versions are inline in the
-      # steps below (keep the key in sync when re-pinning — a mismatch is
-      # harmless, just a cache miss).
-      - name: Cache pinned binary downloads (promtool / vmutils / pint)
+      # full pattern rationale: versioned filenames, always-on SHA-256 on
+      # cached bytes, keep the key's version in sync when re-pinning).
+      #
+      # ONE CACHE ENTRY PER ARTIFACT, deliberately not a shared key: the
+      # vmutils and pint install steps are best-effort (continue-on-error /
+      # if-swallowed), so with a shared key a first-run download flake would
+      # let the job go green and post-save a PARTIAL entry — which an exact
+      # hit then never re-saves, leaving the flaked artifact re-downloading
+      # on every subsequent run until someone bumps the key. Separate keys +
+      # each best-effort step only materializing its cache dir on a fully
+      # successful download (post-save on a missing path is a no-op) make a
+      # flake cost exactly one run.
+      #
+      # promtool is a HARD step (its curl failure fails the job, so no
+      # post-save can capture a partial state). vmutils' version lives in
+      # the tests/rulepacks/vm_engine_version pins SSOT → hashFiles keys it.
+      - name: Cache pinned binary downloads (promtool)
         uses: actions/cache@v5
         with:
           path: ~/.cache/vibe-ci-downloads
-          key: ${{ runner.os }}-vibe-dl-rulepacks-prom-3.12.0-pint-0.86.0-vm-${{ hashFiles('tests/rulepacks/vm_engine_version') }}
+          key: ${{ runner.os }}-vibe-dl-promtool-3.12.0
+
+      - name: Cache pinned binary downloads (vmutils)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/vibe-dl-vmutils
+          key: ${{ runner.os }}-vibe-dl-vmutils-${{ hashFiles('tests/rulepacks/vm_engine_version') }}
+
+      - name: Cache pinned binary downloads (pint)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/vibe-dl-pint
+          key: ${{ runner.os }}-vibe-dl-pint-0.86.0
 
       - name: Install promtool
         run: |
@@ -285,27 +314,38 @@ jobs:
           pip install pytest
           python -m pytest tests/dx/test_recipe_preview.py tests/preview/ -q
 
-      # CI blind-spot fix (CI-ROI wave): these 4 modules are promtool-gated
-      # (`pytest.mark.skipif(shutil.which("promtool") is None)`), and the
-      # "Python Tests" job has no promtool — so until now they silently
-      # SKIPPED on every CI run and only the dev container ever executed
-      # them (a compiler slug/recipe_id change could rot the goldens with
-      # zero CI signal). This job installs promtool as a HARD step above, so
-      # here the skip-guard never triggers and the goldens are real gates:
+      # CI blind-spot fix (CI-ROI wave): these 5 modules are promtool-gated
+      # (`pytest.mark.skipif(shutil.which("promtool") is None)` or a
+      # per-test promtool skip), and the "Python Tests" job has no promtool
+      # — so until now they silently SKIPPED on every CI run and only the
+      # dev container ever executed them (a compiler slug/recipe_id change
+      # could rot the goldens with zero CI signal). This job installs
+      # promtool as a HARD step above, so here the skip-guards never
+      # trigger and the goldens are real gates:
       #   - test_custom_alerts_promtool.py — #741 S1+S2 compiler fire/no-fire
       #     behavioral goldens against the compiled example pack
       #   - test_federation_revocation_dashboard.py / test_fleet_threshold_
       #     dashboard.py / test_tenant_log_query_dashboard.py — Grafana
       #     dashboard PromQL regression goldens (queries read FROM the JSON)
+      #   - test_waveform_compile.py — ADR-030 waveform compiler incl. the
+      #     promtool round-trip tests; the module importorskips on
+      #     jsonschema (hence the explicit install below — pyyaml+pytest
+      #     alone would silently skip the WHOLE module), and
+      #     WAVEFORM_PROMTOOL_REQUIRE=1 flips its round-trip skip-guard to
+      #     hard-FAIL if promtool ever goes missing in this job.
       # -rs surfaces any residual skip in the log so a future re-gating of
       # these modules can't silently disarm the step again.
-      - name: Promtool-gated blind-spot goldens (custom-alerts compiler + dashboards)
+      - name: Promtool-gated blind-spot goldens (custom-alerts compiler + dashboards + waveform)
+        env:
+          WAVEFORM_PROMTOOL_REQUIRE: "1"
         run: |
+          pip install jsonschema
           python -m pytest \
             tests/dx/test_custom_alerts_promtool.py \
             tests/dx/test_federation_revocation_dashboard.py \
             tests/dx/test_fleet_threshold_dashboard.py \
             tests/dx/test_tenant_log_query_dashboard.py \
+            tests/dx/test_waveform_compile.py \
             -q -rs
 
       - name: Install vmalert-tool (VictoriaMetrics MetricsQL unit-test engine)
@@ -323,14 +363,17 @@ jobs:
           # Pinned SHA-256 of vmutils-linux-amd64-v${VM_VERSION}.tar.gz (upstream release);
           # a version/hash mismatch fails _verify_download.sh below (couples SHA <-> version).
           VMUTILS_SHA256=ec597bc2168d0792638ab0dc847e37041bace57a358bafa0da034c9fd438efac
-          DL="$HOME/.cache/vibe-ci-downloads"
-          mkdir -p "$DL"
-          # .part + mv (atomic): this step is continue-on-error, so the job —
-          # and the cache post-save — can succeed even when curl died
-          # mid-transfer; never let a truncated tarball land in the cache.
+          # Download to /tmp; mkdir+mv into the cache dir ONLY on full curl
+          # success. This step is continue-on-error, so the job — and the
+          # cache post-save — can go green even when curl fails: keeping the
+          # dir absent until success means the post-save no-ops on a flake
+          # (missing path) instead of freezing an empty/partial entry under
+          # an exact-hit key.
+          DL="$HOME/.cache/vibe-dl-vmutils"
           if [ ! -f "$DL/vmutils-v${VM_VERSION}.tgz" ]; then
-            curl -fsSL "https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v${VM_VERSION}/vmutils-linux-amd64-v${VM_VERSION}.tar.gz" -o "$DL/vmutils-v${VM_VERSION}.tgz.part"
-            mv "$DL/vmutils-v${VM_VERSION}.tgz.part" "$DL/vmutils-v${VM_VERSION}.tgz"
+            curl -fsSL "https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v${VM_VERSION}/vmutils-linux-amd64-v${VM_VERSION}.tar.gz" -o /tmp/vmutils.tgz.part
+            mkdir -p "$DL"
+            mv /tmp/vmutils.tgz.part "$DL/vmutils-v${VM_VERSION}.tgz"
           fi
           bash scripts/ops/_verify_download.sh "$DL/vmutils-v${VM_VERSION}.tgz" "$VMUTILS_SHA256"
           tar xzf "$DL/vmutils-v${VM_VERSION}.tgz" -C /tmp
@@ -369,15 +412,17 @@ jobs:
           # Best-effort: a download failure OR a checksum mismatch falls through to
           # check_pint.py's Docker fallback (the helper emits a ::error:: annotation
           # on a mismatch, so a tampered binary is surfaced and never executed here).
-          # Downloaded via .part + mv (atomic): this step is best-effort, so the
-          # job — and therefore the cache post-save — can succeed even when curl
-          # died mid-transfer; never let a truncated tarball land in the cache.
-          DL="$HOME/.cache/vibe-ci-downloads"
-          mkdir -p "$DL"
+          # Download to /tmp; mkdir+mv into the cache dir ONLY on full curl
+          # success: this step swallows failures, so the job — and the cache
+          # post-save — can go green around a flake; keeping the dir absent
+          # until success means the post-save no-ops (missing path) instead
+          # of freezing an empty/partial entry under an exact-hit key.
+          DL="$HOME/.cache/vibe-dl-pint"
           if { [ -f "$DL/pint-${PINT}.tar.gz" ] \
-                || { curl -fsSL -o "$DL/pint-${PINT}.tar.gz.part" \
+                || { curl -fsSL -o /tmp/pint.tar.gz.part \
                        "https://github.com/cloudflare/pint/releases/download/v${PINT}/pint-${PINT}-linux-amd64.tar.gz" \
-                     && mv "$DL/pint-${PINT}.tar.gz.part" "$DL/pint-${PINT}.tar.gz"; }; } \
+                     && mkdir -p "$DL" \
+                     && mv /tmp/pint.tar.gz.part "$DL/pint-${PINT}.tar.gz"; }; } \
               && bash scripts/ops/_verify_download.sh "$DL/pint-${PINT}.tar.gz" "$PINT_SHA256"; then
             tar -xzf "$DL/pint-${PINT}.tar.gz" -C /tmp
             # the tarball ships the binary as `pint-linux-amd64`, not `pint`.
@@ -469,12 +514,15 @@ jobs:
       # Download-cache for the kube-linter tarball (see the Lint job's
       # hadolint step for the pattern rationale): versioned filename +
       # always-on SHA-256 verification. Keep the version in the key in sync
-      # with KL below (a mismatch is harmless, just a cache miss).
+      # with KL below — a stale key exact-hits the old entry and the new
+      # versioned file never gets saved into it, so the job re-downloads
+      # every run until the key is fixed (correctness unaffected; only the
+      # cache benefit is lost).
       - name: Cache pinned binary downloads (kube-linter)
         uses: actions/cache@v5
         with:
-          path: ~/.cache/vibe-ci-downloads
-          key: ${{ runner.os }}-vibe-dl-iac-kube-linter-v0.7.4
+          path: ~/.cache/vibe-dl-kube-linter
+          key: ${{ runner.os }}-vibe-dl-kube-linter-v0.7.4
 
       - name: Set up kube-linter (best-effort; wrapper falls back to Docker)
         # Pin matches KUBE_LINTER_VERSION in scripts/tools/lint/check_iac_helm.py
@@ -488,16 +536,18 @@ jobs:
           # a download failure OR a checksum mismatch falls through to the wrapper's
           # Docker fallback (the helper still emits a ::error:: annotation on a
           # mismatch, so a tampered binary is surfaced and never executed here).
-          # .part + mv (atomic): the surrounding `if` swallows a curl failure, so
-          # the job — and the cache post-save — still succeeds; never let a
-          # truncated tarball land in the cache.
+          # Download to /tmp; mkdir+mv into the cache dir ONLY on full curl
+          # success: the surrounding `if` swallows a curl failure, so the job
+          # — and the cache post-save — can go green around a flake; keeping
+          # the dir absent until success means the post-save no-ops (missing
+          # path) instead of freezing an empty entry under an exact-hit key.
           KL_SHA256=1d050a5d03e3347cc1cf5b1513f646709c65d129f7aa6c2b1a6388ffb2694671
-          DL="$HOME/.cache/vibe-ci-downloads"
-          mkdir -p "$DL"
+          DL="$HOME/.cache/vibe-dl-kube-linter"
           if { [ -f "$DL/kube-linter-${KL}.tar.gz" ] \
-                || { curl -fsSL -o "$DL/kube-linter-${KL}.tar.gz.part" \
+                || { curl -fsSL -o /tmp/kl.tar.gz.part \
                        "https://github.com/stackrox/kube-linter/releases/download/${KL}/kube-linter-linux.tar.gz" \
-                     && mv "$DL/kube-linter-${KL}.tar.gz.part" "$DL/kube-linter-${KL}.tar.gz"; }; } \
+                     && mkdir -p "$DL" \
+                     && mv /tmp/kl.tar.gz.part "$DL/kube-linter-${KL}.tar.gz"; }; } \
               && bash scripts/ops/_verify_download.sh "$DL/kube-linter-${KL}.tar.gz" "$KL_SHA256"; then
             tar -xzf "$DL/kube-linter-${KL}.tar.gz" -C /tmp
             sudo install -m0755 /tmp/kube-linter /usr/local/bin/kube-linter
@@ -566,10 +616,14 @@ jobs:
       # Download-cache for the 2 pinned tarballs this job curls every run
       # (Vector ~50 MB is the single largest CI download; see the Lint job's
       # hadolint step for the pattern rationale). Versioned filenames +
-      # always-on SHA-256 verification: a stale key only re-downloads, a
-      # poisoned entry fails the job. Keep the versions in the key in sync
-      # with VECTOR_VERSION / MTAIL_VERSION below (a mismatch is harmless,
-      # just a cache miss).
+      # always-on SHA-256 verification: a poisoned entry fails the job, an
+      # old binary is never silently used. Keep the versions in the key in
+      # sync with VECTOR_VERSION / MTAIL_VERSION below — a stale key
+      # exact-hits the old entry and the new versioned files never get saved
+      # into it, so the job re-downloads every run until the key is fixed
+      # (correctness unaffected; only the cache benefit is lost). Both
+      # installs here are HARD steps, so a download flake fails the job and
+      # the post-save never captures a partial entry.
       - name: Cache pinned binary downloads (Vector / mtail)
         uses: actions/cache@v5
         with:
