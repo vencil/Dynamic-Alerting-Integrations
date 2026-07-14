@@ -153,6 +153,41 @@ func TestReload_InvalidKeepsLastGood(t *testing.T) {
 	}
 }
 
+// TestReload_UndeclaredOrgScopeKeepsLastGoodOrgEvaluation is the org-scoped
+// twin of the "undeclared org-scope key" row above: TestReload_InvalidKeepsLastGood
+// starts from a match-rule baseline and probes last-good via Allowed (the
+// group-match path), so it never exercises the org-scope evaluation path.
+// This test keeps the original guarantee (formerly the fifth
+// TestNewManager_OrgScopeValidation subtest): the baseline itself is an
+// org-scoped rule, and after the failed reload the last-good snapshot must
+// still grant through ScopeAllowed — the claim-key mapping + allowedOrgs
+// evaluation, not just the rule count.
+func TestReload_UndeclaredOrgScopeKeepsLastGoodOrgEvaluation(t *testing.T) {
+	t.Parallel()
+	declared := map[string]string{"org": "X-Auth-Request-Org"}
+	orgScopedYAML := "groups:\n  - name: ops\n    tenants: [\"*\"]\n    permissions: [read]\n    org-scope: org\n"
+
+	_, path := testutil.MkTempYAML(t, "_rbac.yaml", orgScopedYAML)
+	m, err := NewManager(path, declared)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	p := &VerifiedPrincipal{Groups: []string{"ops"}, Claims: map[string]string{"org": "ORG-A"}}
+	if !m.ScopeAllowed(p, "db-a", "", "", []string{"ORG-A"}) {
+		t.Fatal("precondition: initial config must grant the same-org tenant")
+	}
+	// Rewrite with an org-scope on an undeclared key → reload rejected.
+	if err := os.WriteFile(path, []byte("groups:\n  - name: ops\n    tenants: [\"*\"]\n    permissions: [read]\n    org-scope: region\n"), 0o600); err != nil {
+		t.Fatalf("write bad config: %v", err)
+	}
+	if err := m.Reload(); err == nil {
+		t.Fatal("Reload = nil, want an error for the undeclared org-scope key")
+	}
+	if !m.ScopeAllowed(p, "db-a", "", "", []string{"ORG-A"}) {
+		t.Error("after failed reload: last-good must still grant the tenant")
+	}
+}
+
 // --- WatchLoop tests ---
 
 func TestWatchLoop_EmptyPath(t *testing.T) {
