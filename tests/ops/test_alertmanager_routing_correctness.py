@@ -37,6 +37,7 @@ _grar_routes.py 的產生邏輯、_grar_render.py 的注入順序）時，下表
 「預期 receiver」欄就是要同步改的地方——每個測試 docstring 都標了它對應
 哪條路由分支。
 """
+import os
 import subprocess
 
 import pytest
@@ -60,10 +61,37 @@ from test_alertmanager_amtool_validity import (
     ensure_am_image,
 )
 
-pytestmark = pytest.mark.skipif(
+# Set to "1" by the CI job that is SUPPOSED to have docker (ci.yml python-tests
+# ``env:``). When set, a missing docker is a FAILURE, not a skip — see
+# test_docker_present_when_required（對齊 VIBE_REQUIRE_MTAIL pattern）。
+_REQUIRE_DOCKER = os.environ.get("VIBE_REQUIRE_DOCKER") == "1"
+
+# 刻意用 per-class mark 而非 module-level pytestmark：presence guard
+# （test_docker_present_when_required）必須留在 mark 之外，否則 docker 缺席時
+# 它自己也被 skip、fail-closed 訊號永遠發不出來。
+_needs_docker = pytest.mark.skipif(
     not _DOCKER,
     reason="docker not available — amtool `config routes test` guard needs the "
            "prom/alertmanager image")
+
+
+def test_docker_present_when_required() -> None:
+    """Fail-closed guard against silent disarmament（對齊 ci.yml python-tests 的
+    ``VIBE_REQUIRE_MTAIL`` / test_mtail_present_when_required 前例）。
+
+    本檔與 test_alertmanager_amtool_validity.py 的 amtool 防線都掛在
+    ``skipif(not _DOCKER)`` 之下——對本地無 docker 的開發機友善，但在「理應有
+    docker」的 CI job 裡（GitHub runner 換 image、docker daemon 壞掉），整層
+    路由正確性防線會靜默 skip、CI 照綠且無人察覺。該 CI job 設
+    ``VIBE_REQUIRE_DOCKER=1`` 後，docker 缺席在這裡變成紅燈而非 skip。
+    未設環境變數時本測試恆綠（不 skip——保持一顆常在的哨兵）。
+    """
+    if _REQUIRE_DOCKER:
+        assert _DOCKER, (
+            "VIBE_REQUIRE_DOCKER=1 but docker is not available — this CI job is "
+            "supposed to provide docker; without it the ENTIRE Alertmanager "
+            "routing-correctness + amtool validity layer silently skips (silent "
+            "disarmament). Fix the runner/daemon instead of removing this guard.")
 
 # Live conf.d 的 tenant 集合：動態導出（dev-rule #2 tenant-agnostic——不
 # hardcode tenant id），conf.d 增刪租戶時所有 per-tenant 案例自動跟進。
@@ -123,6 +151,7 @@ def live_etc(tmp_path_factory):
                       _render_live_alertmanager_yml(work))
 
 
+@_needs_docker
 class TestLiveRouteTreeRouting:
     """實際部署的 route tree，逐分支驗「告警 → receiver」。
 
@@ -311,6 +340,7 @@ def enforced_etc(tmp_path_factory):
                       _build_enforced_am_yml())
 
 
+@_needs_docker
 class TestEnforcedRoutingGuardrails:
     """Routing Guardrails：enforced NOC（continue:true）與 override 分支。
 

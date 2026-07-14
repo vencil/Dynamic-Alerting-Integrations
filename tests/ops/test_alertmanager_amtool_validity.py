@@ -187,11 +187,29 @@ def _docker_available():
 _DOCKER = _docker_available()
 
 
+def _skip_or_fail_closed(msg: str):
+    """Environmental degradation policy for the amtool guards.
+
+    Default: skip（本地離線開發機友善——缺 image 不是 config 缺陷）。
+    但在設了 ``VIBE_REQUIRE_DOCKER=1`` 的 CI job（理應有 docker + 能拉
+    registry），同一種缺席代表防線被靜默繳械（runner 換 image / daemon 壞 /
+    registry 持續 timeout）→ FAIL 而非 skip，對齊 ci.yml python-tests 的
+    ``VIBE_REQUIRE_MTAIL`` fail-closed 前例。"""
+    if os.environ.get("VIBE_REQUIRE_DOCKER") == "1":
+        pytest.fail(
+            f"VIBE_REQUIRE_DOCKER=1 but {msg} — this CI job is supposed to "
+            "provide docker + registry access; skipping here would silently "
+            "disarm the amtool config/routing guards.")
+    pytest.skip(msg)
+
+
 def ensure_am_image():
     """Make sure the pinned image is present; skip (don't fail) when an
     offline dev box can't pull it — a missing image is not a config defect.
     Mirrors _docker_available's exception policy: a docker hiccup (timeout /
-    OSError) on inspect-or-pull is an environmental skip, not a red test.
+    OSError) on inspect-or-pull is an environmental skip, not a red test —
+    EXCEPT under ``VIBE_REQUIRE_DOCKER=1`` where it fails closed (see
+    _skip_or_fail_closed).
 
     Module-level (not a TestAmtoolCheckConfig method) so the routing-correctness
     guard (test_alertmanager_routing_correctness.py) shares the SAME image
@@ -200,16 +218,16 @@ def ensure_am_image():
         inspect = subprocess.run(["docker", "image", "inspect", _AM_IMAGE],
                                  capture_output=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
-        pytest.skip(f"cannot inspect {_AM_IMAGE} (docker unavailable/offline)")
+        _skip_or_fail_closed(f"cannot inspect {_AM_IMAGE} (docker unavailable/offline)")
     if inspect.returncode == 0:
         return
     try:
         pull = subprocess.run(["docker", "pull", _AM_IMAGE],
                               capture_output=True, text=True, timeout=300)
     except (OSError, subprocess.SubprocessError):
-        pytest.skip(f"cannot obtain {_AM_IMAGE} (docker unavailable/offline)")
+        _skip_or_fail_closed(f"cannot obtain {_AM_IMAGE} (docker unavailable/offline)")
     if pull.returncode != 0:
-        pytest.skip(f"cannot obtain {_AM_IMAGE} (offline?): {pull.stderr.strip()}")
+        _skip_or_fail_closed(f"cannot obtain {_AM_IMAGE} (offline?): {pull.stderr.strip()}")
 
 
 @pytest.mark.skipif(
