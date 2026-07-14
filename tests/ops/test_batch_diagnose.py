@@ -320,6 +320,51 @@ class TestMainCLI:
         assert "db-a" in err
         assert "dry-run" in err.lower() or "without --dry-run" in err
 
+    def test_dry_run_json_envelope(self, monkeypatch, capsys, cli_argv):
+        """#1112: `--dry-run --json` 的 envelope 形狀（不只「能 parse」）。
+
+        釘住三件事，任一被改壞就紅：
+        1. discriminator 是 `status="dry_run"` / `reason="health_checks_skipped"`
+           的**確切值**——subprocess gate 只做 json.loads，把 dry_run 改成
+           dryrun 它照樣綠。
+        2. **未測量 ≠ 0**：`healthy_count` / `issue_count` / `health_score`
+           必須是 **None**，不是 0。若寫成 0，consumer 讀到 health_score=0
+           會以為「全部不健康」，而真相是「根本沒檢查」。`total_tenants`
+           反之是真實計數（租戶確實被探索到了），這個區別是刻意的。
+        3. key set 與 happy path 的 generate_report() **完全一致**（+ 兩個
+           discriminator）——同一個 consumer 兩條路徑都能吃。
+        """
+        cli_argv("batch_diagnose", "--tenants", "db-a,db-b",
+            "--prometheus", "http://prom:9090", "--dry-run", "--json")
+        bd.main()
+        captured = capsys.readouterr()
+
+        doc = json.loads(captured.out)          # 全文 parse ⇒ stdout 只有 JSON
+        assert doc["status"] == "dry_run"
+        assert doc["reason"] == "health_checks_skipped"
+
+        # 未測量的欄位必須是 None（不是 0）
+        assert doc["healthy_count"] is None
+        assert doc["issue_count"] is None
+        assert doc["health_score"] is None
+        # 已探索到的才是真計數
+        assert doc["total_tenants"] == 2
+        assert doc["prometheus_url"] == "http://prom:9090"
+        assert doc["recommendations"] == []
+        assert doc["tenants"] == {
+            "db-a": {"tenant": "db-a", "status": "not_checked"},
+            "db-b": {"tenant": "db-b", "status": "not_checked"},
+        }
+
+        # envelope 保留 happy-path 的全部 schema 鍵（drift-proof：generate_report
+        # 日後新增欄位而 dry-run envelope 沒跟上 → 這行紅）
+        happy_keys = set(bd.generate_report([], "http://prom:9090"))
+        assert set(doc) == happy_keys | {"status", "reason"}
+
+        # 人類訊息在 stderr，stdout 不含散文
+        assert "Discovered 2 tenants" in captured.err
+        assert "Discovered" not in captured.out
+
     def test_no_tenants_exits(self, monkeypatch, cli_argv):
         """沒有 tenant 時 exit 2 (caller error: nothing to act on, #452)。"""
         cli_argv("batch_diagnose", "--tenants", "")

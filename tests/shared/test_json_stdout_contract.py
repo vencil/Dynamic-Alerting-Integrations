@@ -39,6 +39,22 @@ SCOPE — WHAT THIS GATE ASSERTS
 * Multi-mode tools get one recipe **per distinct terminal path**, not one per
   tool — the known regressions all live in the non-default modes (skip / dry-run
   / early-return / write-to-file branches).
+* **Mode flags are also driven in COMBINATION, not just in isolation.**  The
+  first version of this table treated the modes of a tool as if they were
+  mutually exclusive.  They are not — argparse happily accepts
+  ``--checklist-only --dry-run`` — and ``migrate_to_operator`` combined them
+  into a silent data-loss bug (below) that sailed straight through this gate.
+  Any two orthogonal flags that each select a *payload* now get a combination
+  recipe.
+* **``doc_check``: one valid document is necessary, not sufficient.**
+  ``json.loads(stdout)`` proves the tool emitted *a* well-formed document; it
+  cannot prove it emitted the *right* one.  ``migrate_to_operator
+  --checklist-only --dry-run --json`` served a perfectly valid *empty CRD
+  preview* with no ``checklist`` field at all — the caller asked for a checklist
+  and silently got something else, and this gate was green the whole time.
+  Recipes whose mode identity is observable in the payload (a discriminator
+  field, a must-not-be-empty field, a precedence between two flags) now carry a
+  ``doc_check`` that asserts it.
 * **One recipe asserts an exit code instead of a document**: ``patch_config[apply]``
   (``--json`` without ``--diff``). That combination is contradictory on a
   mutating tool, so the contract there is "reject it" (exit 2, empty stdout),
@@ -93,6 +109,20 @@ SCOPE — WHAT THIS GATE DOES *NOT* ASSERT (honest boundaries)
    prose-printing branch that no recipe here reaches.
 4. **`--markdown` / `--export-patch` and other non-JSON output flags are not
    gated.**  They are a different contract; only the JSON flag is in scope.
+5. **KNOWN, UNGATED CONTRADICTION — `threshold_recommend --export-patch --json`.**
+   A flag-matrix sweep of all 37 tools (#1112) found exactly one place where a
+   competing stdout-format flag *beats* `--json`: `--export-patch` wins and
+   stdout carries a YAML patch fragment, so `json.loads(stdout)` fails and a
+   caller's `... --export-patch --json | jq` breaks.  Every other tool that owns
+   a competing format flag (`alert_correlate`, `alert_quality`,
+   `cardinality_forecasting`, `drift_detect`, `config_diff`, and
+   `threshold_recommend --markdown` itself) lets `--json` win, so this is an
+   outlier, not a convention.  It is deliberately **not** gated yet: two output
+   formats on one stdout is a genuine contradiction and the resolution
+   (fail-loud `EXIT_CALLER_ERROR` like `patch_config[apply]`, or an argparse
+   mutually-exclusive group) is a caller-facing behaviour decision for the
+   owner, not something this gate should decide by fiat.  Once decided, add the
+   recipe with `expect_caller_error=True`.
 
 FAILURES ARE EXPECTED (that is the point)
 -----------------------------------------
@@ -497,10 +527,85 @@ class Recipe:
     # for such a recipe is the exit code, not a JSON document on stdout — see
     # `patch_config[apply]` for the only case, and the exemption note there.
     expect_caller_error: bool = False
+    # OPTIONAL payload assertion, run after the document parses. Returns a
+    # reason string when the document is wrong, or None when it is fine.
+    #
+    # Why this exists (#1112, CodeRabbit): `json.loads(stdout)` proves the tool
+    # emitted ONE well-formed document — it does NOT prove it emitted the
+    # RIGHT one. `migrate_to_operator --checklist-only --dry-run --json` served
+    # a perfectly valid *empty CRD preview* with no `checklist` field at all,
+    # and this gate stayed green: the caller asked for a checklist and silently
+    # got something else. Use `doc_check` on any mode whose *identity* is
+    # observable in the payload (a discriminator field, a must-not-be-empty
+    # field) — especially where two modes are COMBINED and one could swallow
+    # the other. Keep it about mode identity, not report content (see SCOPE §3).
+    doc_check: Callable[[object], str | None] | None = None
 
     @property
     def id(self) -> str:
         return f"{self.tool}[{self.mode}]"
+
+
+def _checklist_doc(doc: object) -> str | None:
+    """`--checklist-only` must serve THE CHECKLIST, whatever else is combined with it.
+
+    Pins the payload identity that plain `json.loads` cannot: the mode's
+    discriminator, and the one field the mode exists to produce.
+    """
+    if not isinstance(doc, dict):
+        return f"expected a JSON object, got {type(doc).__name__}"
+    if "metadata" in doc and "checklist" not in doc:
+        return ("this is the DRY-RUN CRD-preview document, not the checklist "
+                "document — `--checklist-only` fell through to the dry-run branch")
+    if doc.get("status") != "checklist_only":
+        return f"status must be 'checklist_only', got {doc.get('status')!r}"
+    checklist = doc.get("checklist")
+    if not isinstance(checklist, str) or not checklist.strip():
+        return ("the `checklist` field is missing/empty — `--checklist-only` "
+                "served a document WITHOUT the checklist the caller asked for")
+    return None
+
+
+def _kustomization_doc(doc: object) -> str | None:
+    """`--kustomize` must put the kustomization INSIDE the one document.
+
+    The pre-#1112 shape emitted it as a second `---`-separated YAML/JSON blob.
+    Combined with `--dry-run` (a combination no recipe drove before) the
+    kustomization could just as easily have been dropped on the floor: the
+    document would still parse, and a `json.loads`-only assertion would still
+    be green. So assert it is actually THERE and counted.
+    """
+    if not isinstance(doc, dict):
+        return f"expected a JSON object, got {type(doc).__name__}"
+    if set(doc) != {"crds", "kustomization", "summary"}:
+        return f"top-level keys must be {{crds, kustomization, summary}}, got {sorted(doc)}"
+    kust = doc.get("kustomization")
+    if not isinstance(kust, dict) or kust.get("kind") != "Kustomization":
+        return ("`--kustomize` was passed but the `kustomization` field is not a "
+                f"Kustomization object (got {kust!r}) — it was dropped, not embedded")
+    if doc.get("summary", {}).get("kustomization") != 1:
+        return "summary.kustomization must count the kustomization (1)"
+    return None
+
+
+def _opa_input_doc(doc: object) -> str | None:
+    """`--dry-run` OUTRANKS `--opa-url`: the document is the OPA *input*, not a report.
+
+    Pins a PRECEDENCE that is currently implicit. Both flags are accepted
+    together and each selects a different payload (input document vs evaluation
+    report), so one necessarily wins. Here dry-run winning is correct by design
+    — dry-run means "show me what you WOULD send to that OPA" — but nothing
+    codified it, so a refactor could silently flip it and start firing real OPA
+    queries at a caller who asked for a dry run.
+    """
+    if not isinstance(doc, dict):
+        return f"expected a JSON object, got {type(doc).__name__}"
+    if "violations" in doc or "tenants_evaluated" in doc:
+        return ("this is the OPA evaluation REPORT — `--dry-run` must outrank "
+                "`--opa-url` and emit the OPA input document instead (no query sent)")
+    if "platform_version" not in doc or "tenants" not in doc:
+        return f"expected the OPA input document (platform_version/tenants), got {sorted(doc)}"
+    return None
 
 
 R = Recipe
@@ -528,6 +633,13 @@ RECIPES: list[Recipe] = [
     R("assemble_config_dir", "assemble",
       lambda t, s: ["--sources", str(SEED_CONF_D),
                     "--output", _out(t, "assembled"), "--json"]),
+    # COMBINATION recipe (#1112 flag-matrix sweep): `--check` returns early, so
+    # `--validate` is silently ignored when both are given (see the sweep notes
+    # in the PR — a semantics question for the owner, not a stdout-contract
+    # break). Gated here for the stdout contract only: the combined path must
+    # still emit exactly one document.
+    R("assemble_config_dir", "check-validate",
+      lambda t, s: ["--sources", str(SEED_CONF_D), "--check", "--validate", "--json"]),
 
     # ── backtest_threshold  (⚠ known multi-mode trap) ──────────────────────
     R("backtest_threshold", "single-tenant",
@@ -650,6 +762,13 @@ RECIPES: list[Recipe] = [
     R("grafana_import", "dry-run",
       lambda t, s: ["--dashboard", str(DASHBOARD_JSON), "--dry-run", "--json"]),
     R("grafana_import", "verify", lambda t, s: ["--verify", "--json"], needs_kubectl=True),
+    # COMBINATION recipe (#1112 flag-matrix sweep): `--dry-run` + `--verify`.
+    # `--verify` wins; it is read-only, so nothing is lost by `--dry-run` being
+    # vacuous here — but the combined path is a distinct branch and must still
+    # emit exactly one document.
+    R("grafana_import", "dry-run-verify",
+      lambda t, s: ["--dashboard", str(DASHBOARD_JSON), "--dry-run", "--verify", "--json"],
+      needs_kubectl=True),
 
     # ── maintenance_scheduler  (--json-output spelling; confirmed violator) ─
     R("maintenance_scheduler", "dry-run",
@@ -669,7 +788,20 @@ RECIPES: list[Recipe] = [
     R("migrate_to_operator", "checklist-only",
       lambda t, s: ["--source-dir", str(K8S_MONITORING),
                     "--config-dir", str(SEED_CONF_D),
-                    "--output-dir", _out(t, "crds2"), "--checklist-only", "--json"]),
+                    "--output-dir", _out(t, "crds2"), "--checklist-only", "--json"],
+      doc_check=_checklist_doc),
+    # THE COMBINATION RECIPE (#1112, CodeRabbit). The two mode flags above are
+    # orthogonal, not mutually exclusive — argparse accepts both — and the
+    # recipe table originally tested them only in isolation. Combined, the tool
+    # served an empty CRD preview and dropped the checklist entirely; valid
+    # JSON, so a `json.loads`-only assertion could never see it. Hence
+    # `doc_check`: this recipe is worthless without it.
+    R("migrate_to_operator", "checklist-only-dry-run",
+      lambda t, s: ["--source-dir", str(K8S_MONITORING),
+                    "--config-dir", str(SEED_CONF_D),
+                    "--output-dir", _out(t, "crds2b"),
+                    "--checklist-only", "--dry-run", "--json"],
+      doc_check=_checklist_doc),
     R("migrate_to_operator", "write",
       lambda t, s: ["--source-dir", str(K8S_MONITORING),
                     "--config-dir", str(SEED_CONF_D),
@@ -710,7 +842,18 @@ RECIPES: list[Recipe] = [
     R("operator_generate", "kustomize",
       lambda t, s: ["--rule-packs-dir", str(RULE_PACKS),
                     "--config-dir", str(SEED_CONF_D),
-                    "--output-dir", _out(t, "op3"), "--kustomize", "--json"]),
+                    "--output-dir", _out(t, "op3"), "--kustomize", "--json"],
+      doc_check=_kustomization_doc),
+    # COMBINATION recipe (#1112 flag-matrix sweep): `--dry-run` and `--kustomize`
+    # are orthogonal and were only ever driven in isolation. Verified correct —
+    # the kustomization IS embedded in the dry-run document — so this locks in
+    # working behaviour rather than fixing broken behaviour.
+    R("operator_generate", "dry-run-kustomize",
+      lambda t, s: ["--rule-packs-dir", str(RULE_PACKS),
+                    "--config-dir", str(SEED_CONF_D),
+                    "--output-dir", _out(t, "op4"),
+                    "--dry-run", "--kustomize", "--json"],
+      doc_check=_kustomization_doc),
 
     # ── patch_config  (⚠ known multi-mode trap: apply vs --diff) ───────────
     R("patch_config", "diff",
@@ -749,6 +892,14 @@ RECIPES: list[Recipe] = [
     R("policy_opa_bridge", "empty-config-dir",
       lambda t, s: ["--config-dir", _empty_dir(t, "empty_confd"),
                     "--dry-run", "--json"]),
+    # COMBINATION recipe (#1112 flag-matrix sweep): `--dry-run` + `--opa-url`.
+    # Two payload selectors accepted together — exactly the shape that bit
+    # migrate_to_operator. Here dry-run correctly wins (no query is sent), but
+    # nothing codified that precedence; `doc_check` now does.
+    R("policy_opa_bridge", "dry-run-outranks-opa-url",
+      lambda t, s: ["--config-dir", str(SEED_CONF_D),
+                    "--dry-run", "--opa-url", s, "--json"],
+      doc_check=_opa_input_doc),
 
     # ── rule_pack_diff ─────────────────────────────────────────────────────
     R("rule_pack_diff", "no-diff",
@@ -924,9 +1075,15 @@ def test_json_mode_emits_exactly_one_json_document(
     assert stdout.strip(), fail("stdout is EMPTY — no JSON document at all")
 
     try:
-        json.loads(stdout)
+        doc = json.loads(stdout)
     except json.JSONDecodeError as e:
         raise AssertionError(fail(
             f"stdout is not a single JSON document ({e}). Either prose is mixed "
             f"in with the JSON, or the path emits no JSON at all."
         )) from None
+
+    # ONE well-formed document is necessary, not sufficient: a mode can serve a
+    # valid document that is the WRONG one (see Recipe.doc_check).
+    if recipe.doc_check is not None:
+        reason = recipe.doc_check(doc)
+        assert reason is None, fail(f"wrong document for this mode — {reason}")
