@@ -588,6 +588,13 @@ jobs:
     # legitimately run pytest without mtail (validate.yaml) don't set this.
     env:
       VIBE_REQUIRE_MTAIL: "1"
+      # Same fail-closed pattern for docker-gated tests (amtool routing
+      # tests, in-flight on a sibling branch): ubuntu-latest ships docker,
+      # so if docker is missing at pytest time the runner image regressed —
+      # the guard test then FAILS instead of letting docker-gated tests
+      # silently skip. No-op until the consumer test lands (nothing reads
+      # this env var on this branch yet — verified by grep).
+      VIBE_REQUIRE_DOCKER: "1"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6

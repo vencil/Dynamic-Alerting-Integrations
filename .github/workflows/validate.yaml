@@ -131,17 +131,19 @@ jobs:
       # `curl | sh` — matching the hadolint download-then-verify pattern in
       # ci.yml. The verified script in turn checks the golangci-lint binary's
       # own checksum against the release.
-      # Download-cache for the golangci-lint BINARY (same versioned-name +
-      # always-verify cache pattern as ci.yml's pinned-binary installs; see
-      # ci.yml's Lint job hadolint step for the full rationale). Unlike the
-      # tarball caches, the installed binary itself is cached: the pinned,
-      # SHA-verified install.sh verifies the release archive's checksum at
-      # install time, and the binary lands in a VERSION-NAMED directory —
-      # so a version bump with a stale cache key can never silently reuse
-      # the old binary (the new versioned dir simply won't exist → clean
-      # reinstall, re-downloading every run until the key is fixed). This
-      # is a HARD step: an install failure fails the job, so the cache
-      # post-save can't capture a partial entry.
+      # Download-cache for the golangci-lint BINARY (versioned-name + cache
+      # pattern per ci.yml's Lint job hadolint step). Unlike the tarball
+      # caches, the installed binary itself is cached — and, upholding the
+      # workflow-wide "SHA-256 verification ALWAYS runs, on cached bytes
+      # too" invariant, the install step below verifies the binary against
+      # a pinned digest on EVERY run, cache hit and fresh install alike (a
+      # cache-poisoned entry fails the job; it is never executed). The
+      # binary lands in a VERSION-NAMED directory, so a version bump with a
+      # stale cache key can never silently reuse the old binary (the new
+      # versioned dir simply won't exist → clean reinstall, re-downloading
+      # every run until the key is fixed). This is a HARD step: an install
+      # or verification failure fails the job, so the cache post-save can't
+      # capture a partial entry.
       - name: Cache golangci-lint binary
         uses: actions/cache@v5
         with:
@@ -151,6 +153,16 @@ jobs:
       - name: Install golangci-lint
         run: |
           GOLANGCI_VERSION=v2.12.2
+          # Pinned SHA-256 of the `golangci-lint` ELF binary shipped inside
+          # golangci-lint-2.12.2-linux-amd64.tar.gz. Provenance chain (re-derivable
+          # independently): download that archive from the official
+          # github.com/golangci/golangci-lint release, check it against the same
+          # release's golangci-lint-2.12.2-checksums.txt entry
+          # (8df580d2670fed8fa984aac0507099af8df275e665215f5c7a2ae3943893a553),
+          # extract, then sha256sum the contained `golangci-lint` file. install.sh
+          # copies that binary byte-identically, so hit and miss paths verify
+          # against the same digest.
+          GOLANGCI_BIN_SHA256=e26335d9bd381a60e5769a13b0ccc7967db5b6fb9c39a896a1f6fd0befe0a661
           BIN="$HOME/.cache/vibe-dl-golangci/${GOLANGCI_VERSION}"
           if [ ! -x "$BIN/golangci-lint" ]; then
             GOLANGCI_INSTALL_SHA256=d32d3534af96cfd59546a084d22b213e8a47541cada5013aa8a84c4fa2589905
@@ -159,6 +171,14 @@ jobs:
             bash scripts/ops/_verify_download.sh /tmp/golangci-install.sh "$GOLANGCI_INSTALL_SHA256"
             sh /tmp/golangci-install.sh -b "$BIN" "$GOLANGCI_VERSION"
           fi
+          # ALWAYS verify — cache hit AND fresh install (the "SHA-256
+          # verification always runs on cached bytes" invariant). On mismatch
+          # the helper DELETES the untrusted binary and exits 1 → job red →
+          # no cache post-save → the next run is a clean miss that
+          # reinstalls. A poisoned entry already stored under this exact key
+          # keeps failing (loudly) until it is deleted or the key is bumped —
+          # safety over availability, same trade as the tarball caches.
+          bash scripts/ops/_verify_download.sh "$BIN/golangci-lint" "$GOLANGCI_BIN_SHA256"
           echo "$BIN" >> "$GITHUB_PATH"
           "$BIN/golangci-lint" version
       # standard linters + depguard dependency-direction ratchet (per-module
