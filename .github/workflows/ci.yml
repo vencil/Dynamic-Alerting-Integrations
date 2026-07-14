@@ -710,7 +710,18 @@ jobs:
         # Do NOT use --cov=<path> here — it overrides pyproject.toml source list
         # and would silently exclude components/da-tools/app from measurement.
         # -n auto: parallel execution via pytest-xdist (see Install step).
-        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e -x --tb=short -n auto --cov --cov-report=xml --cov-fail-under=75
+        # -x: explicit CI fail-fast (pyproject addopts no longer carries a
+        # global -x — CI opts in on the command line).
+        # --timeout=300: pytest-timeout was INSTALLED (see Install step
+        # rationale re PR #165 deadlock regressions) but never armed
+        # globally — a hung test still burned the whole workflow timeout.
+        # 300s is a per-test backstop (the entire CI suite finishes in a
+        # few minutes under -n auto; slow suites are --ignore'd); tighter
+        # per-test @pytest.mark.timeout marks still override it. Command
+        # line only, NOT pyproject addopts: local devs don't necessarily
+        # have pytest-timeout installed, and an addopts flag from a missing
+        # plugin makes bare `pytest` die with "unrecognized arguments".
+        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e -x --tb=short --timeout=300 -n auto --cov --cov-report=xml --cov-fail-under=75
 
       - name: Upload coverage artifact
         if: always()
