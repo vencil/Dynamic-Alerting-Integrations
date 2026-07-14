@@ -299,22 +299,26 @@ class TestMainCLI:
     """main() CLI 整合測試。"""
 
     def test_tenants_flag(self, monkeypatch, capsys, cli_argv):
-        """--tenants 直接指定 tenant 清單。"""
+        """--tenants 直接指定 tenant 清單。
+
+        #1112: 人類可讀的 dry-run 清單走 stderr（stdout 保留給 --json 的
+        單一 JSON 文件），故斷言 stderr。
+        """
         cli_argv("batch_diagnose", "--tenants", "db-a,db-b",
             "--prometheus", "http://prom:9090", "--dry-run")
         bd.main()
-        out = capsys.readouterr().out
-        assert "db-a" in out
-        assert "db-b" in out
-        assert "2 tenants" in out
+        err = capsys.readouterr().err
+        assert "db-a" in err
+        assert "db-b" in err
+        assert "2 tenants" in err
 
     def test_dry_run_single(self, monkeypatch, capsys, cli_argv):
-        """--dry-run 列出 tenant 但不執行檢查。"""
+        """--dry-run 列出 tenant 但不執行檢查（清單走 stderr，#1112）。"""
         cli_argv("batch_diagnose", "--tenants", "db-a", "--dry-run")
         bd.main()
-        out = capsys.readouterr().out
-        assert "db-a" in out
-        assert "dry-run" in out.lower() or "without --dry-run" in out
+        err = capsys.readouterr().err
+        assert "db-a" in err
+        assert "dry-run" in err.lower() or "without --dry-run" in err
 
     def test_no_tenants_exits(self, monkeypatch, cli_argv):
         """沒有 tenant 時 exit 2 (caller error: nothing to act on, #452)。"""
@@ -392,15 +396,15 @@ class TestMainCLI:
         assert data["issue_count"] == 1
 
     def test_auto_discover(self, monkeypatch, capsys, cli_argv):
-        """不指定 --tenants 時自動探索。"""
+        """不指定 --tenants 時自動探索（清單走 stderr，#1112）。"""
         cli_argv("batch_diagnose", "--prometheus", "http://prom:9090",
             "--dry-run")
         monkeypatch.setattr(bd, "discover_tenants",
                             lambda **kw: ["db-a", "db-b"])
         bd.main()
-        out = capsys.readouterr().out
-        assert "db-a" in out
-        assert "db-b" in out
+        err = capsys.readouterr().err
+        assert "db-a" in err
+        assert "db-b" in err
 
     def test_prometheus_env_fallback(self, monkeypatch, cli_argv):
         """--prometheus 省略 + $PROMETHEUS_URL 設定 → 讀 env（README §6.1、add_prometheus_arg）。

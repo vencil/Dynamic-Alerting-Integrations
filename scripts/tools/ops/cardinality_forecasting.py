@@ -24,6 +24,7 @@ import math
 import os
 import sys
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -226,8 +227,17 @@ def query_cardinality_range(
     start = end - lookback_secs
 
     query = 'count by (tenant)({__name__=~"tenant_threshold_.*"})'
-    url = (f"{prometheus_url}/api/v1/query_range?"
-           f"query={query}&start={start}&end={end}&step={step}")
+    # #1112: PromQL contains spaces/braces/quotes — it MUST be percent-encoded.
+    # An f-string interpolation raises `InvalidURL: URL can't contain control
+    # characters` against a real Prometheus. Same shape as
+    # `_lib_prometheus.query_prometheus_instant()`.
+    params = urllib.parse.urlencode({
+        "query": query,
+        "start": f"{start:.0f}",
+        "end": f"{end:.0f}",
+        "step": step,
+    })
+    url = f"{prometheus_url}/api/v1/query_range?{params}"
 
     data, err = http_get_json(url)
     if err or not data or data.get("status") != "success":
@@ -258,7 +268,9 @@ def query_scrape_series_added(
         {tenant: current_scrape_series_added}。
     """
     query = 'sum by (tenant)(scrape_series_added)'
-    url = f"{prometheus_url}/api/v1/query?query={query}"
+    # #1112: percent-encode — see query_cardinality_range() above.
+    url = (f"{prometheus_url}/api/v1/query?"
+           f"{urllib.parse.urlencode({'query': query})}")
 
     data, err = http_get_json(url)
     if err or not data or data.get("status") != "success":
@@ -574,6 +586,20 @@ def main(argv: Optional[list[str]] = None) -> int:
         else:
             print("No cardinality data retrieved. Check Prometheus endpoint "
                   "and tenant_threshold_* metrics.", file=sys.stderr)
+        if args.json_output:
+            # #1112: same schema as generate_json_report(), zero tenants, plus a
+            # status/reason discriminator. Exit code stays EXIT_CALLER_ERROR —
+            # only the output shape changes, not the exit semantics.
+            print(format_json_report({
+                "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "status": "no_data",
+                "reason": "no_cardinality_data",
+                "lookback_days": lookback_days,
+                "cardinality_limit": args.limit,
+                "warn_days": args.warn_days,
+                "summary": {"critical": 0, "warning": 0, "safe": 0, "total": 0},
+                "tenants": [],
+            }))
         return EXIT_CALLER_ERROR
 
     # Generate forecast

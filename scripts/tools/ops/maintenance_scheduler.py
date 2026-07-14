@@ -221,14 +221,16 @@ def create_silence(alertmanager_url, tenant, reason, ends_at, dry_run=False):
     }
 
     if dry_run:
-        print(f"  DRY-RUN: would create silence for {tenant} until {ends_at.isoformat()}")
+        print(f"  DRY-RUN: would create silence for {tenant} until {ends_at.isoformat()}",
+              file=sys.stderr)
         return None
 
     url = f"{alertmanager_url}/api/v2/silences"
     try:
         result = _api_request(url, method="POST", payload=payload)
         silence_id = result.get("silenceID", "unknown")
-        print(f"  Created silence {silence_id} for {tenant} until {ends_at.isoformat()}")
+        print(f"  Created silence {silence_id} for {tenant} until {ends_at.isoformat()}",
+              file=sys.stderr)
         return silence_id
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as e:
         print(f"  ERROR: failed to create silence for {tenant}: {e}", file=sys.stderr)
@@ -256,14 +258,15 @@ def extend_silence(alertmanager_url, silence_id, tenant, reason, ends_at,
 
     if dry_run:
         print(f"  DRY-RUN: would extend silence {silence_id} for {tenant} "
-              f"until {ends_at.isoformat()}")
+              f"until {ends_at.isoformat()}", file=sys.stderr)
         return silence_id
 
     url = f"{alertmanager_url}/api/v2/silences"
     try:
         result = _api_request(url, method="POST", payload=payload)
         new_id = result.get("silenceID", silence_id)
-        print(f"  Extended silence {new_id} for {tenant} until {ends_at.isoformat()}")
+        print(f"  Extended silence {new_id} for {tenant} until {ends_at.isoformat()}",
+              file=sys.stderr)
         return new_id
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as e:
         print(f"  ERROR: failed to extend silence {silence_id} for {tenant}: {e}",
@@ -289,11 +292,11 @@ def evaluate_and_apply(config_dir, alertmanager_url, dry_run=False, now=None):
     """
     schedules = load_recurring_schedules(config_dir)
     if not schedules:
-        print("No recurring maintenance schedules found.")
+        print("No recurring maintenance schedules found.", file=sys.stderr)
         return 0, 0, 0
 
     print(f"Found {sum(len(v) for v in schedules.values())} recurring schedule(s) "
-          f"across {len(schedules)} tenant(s)")
+          f"across {len(schedules)} tenant(s)", file=sys.stderr)
 
     # Get existing silences for idempotency / extend checks
     existing = {}
@@ -328,7 +331,8 @@ def evaluate_and_apply(config_dir, alertmanager_url, dry_run=False, now=None):
                     else:
                         errors += 1
                 else:
-                    print(f"  SKIP: {tenant} — silence already active for '{reason}'")
+                    print(f"  SKIP: {tenant} — silence already active for '{reason}'",
+                          file=sys.stderr)
                     skipped += 1
                 continue
 
@@ -340,7 +344,8 @@ def evaluate_and_apply(config_dir, alertmanager_url, dry_run=False, now=None):
                 else:
                     errors += 1
             else:
-                print(f"  ACTIVE: {tenant} — {reason} (window {start} → {end})")
+                print(f"  ACTIVE: {tenant} — {reason} (window {start} → {end})",
+                      file=sys.stderr)
                 created += 1
 
     return created, skipped, errors
@@ -378,7 +383,7 @@ def push_metrics(pushgateway_url, created, skipped, errors, duration_s):
         data = body.encode("utf-8")
         with urllib.request.urlopen(req, data=data, timeout=5) as resp:  # nosec B310  #see Request line above
             resp.read()
-        print(f"  Pushed metrics to {pushgateway_url}")
+        print(f"  Pushed metrics to {pushgateway_url}", file=sys.stderr)
     except (urllib.error.URLError, ValueError, OSError) as e:
         # Non-fatal: observability failure should not fail the CronJob
         print(f"  WARN: failed to push metrics to Pushgateway: {e}",
@@ -445,7 +450,8 @@ def main():
             "errors": errors,
         }))
 
-    print(f"\nSummary: {created} created, {skipped} skipped, {errors} errors")
+    print(f"\nSummary: {created} created, {skipped} skipped, {errors} errors",
+          file=sys.stderr)
 
     # Push observability metrics (non-fatal on failure)
     if args.pushgateway and not args.dry_run:

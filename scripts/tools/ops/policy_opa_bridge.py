@@ -481,10 +481,31 @@ def main(argv: Optional[list[str]] = None) -> int:
     defaults = load_defaults(args.config_dir)
 
     if not tenant_configs:
+        # #1112: prose → stderr; stdout still owes exactly one JSON document.
         if lang == "zh":
-            print(f"未找到 tenant 配置於 {args.config_dir}")
+            print(f"未找到 tenant 配置於 {args.config_dir}", file=sys.stderr)
         else:
-            print(f"No tenant configs found in {args.config_dir}")
+            print(f"No tenant configs found in {args.config_dir}", file=sys.stderr)
+        if args.dry_run:
+            # --dry-run's stdout IS the OPA input document (it is piped into
+            # `opa eval`, not read as a report) — so the zero-tenant answer is
+            # an OPA input with no tenants, NOT a report envelope. Same schema
+            # as the populated dry-run, so the same consumer keeps working.
+            print(format_json_report(build_opa_input(
+                args.config_dir, {}, defaults,
+                rule_packs=None, platform_version="v2.3.0",
+            )))
+        elif args.json_output:
+            # Report schema, zeroed, with a status/reason discriminator.
+            print(format_json_report({
+                "status": "no_tenant_configs",
+                "reason": "no_tenant_configs_found",
+                "tenants_evaluated": 0,
+                "error_count": 0,
+                "warning_count": 0,
+                "passed": True,
+                "violations": [],
+            }))
         return EXIT_OK
 
     # Build OPA input

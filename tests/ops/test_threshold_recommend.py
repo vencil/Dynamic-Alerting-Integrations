@@ -662,9 +662,35 @@ class TestCLI:
             tr.main()  # must NOT raise (no --config-dir required)
         captured = capsys.readouterr()
         assert called.get("yes") is True
-        assert "observed-map" in captured.out
-        assert "3" in captured.out  # total keys echoed
-        assert "preserved 1" in captured.out  # merge stats surfaced
+        # #1112: the summary is human-readable prose → stderr (stdout is reserved
+        # for the one JSON document `--json` promises; see the next test).
+        assert "observed-map" in captured.err
+        assert "3" in captured.err  # total keys echoed
+        assert "preserved 1" in captured.err  # merge stats surfaced
+        assert captured.out == ""
+
+    def test_generate_observed_map_json_envelope(self, tmp_path, capsys, monkeypatch):
+        """#1112: --generate-observed-map --json → stdout 恰好一份 JSON。
+
+        保留本工具的頂層 schema（tool / tenants / summary），寫檔結果放在
+        `observed_map`，並以 `status` 與推薦報告區分。
+        """
+        def fake_write(out_path=None, pack_paths=None):
+            return {
+                "path": str(tmp_path / "m.yaml"),
+                "total": 3, "clean": 2, "needs_review": 1,
+                "preserved": 1, "demoted": 0, "dropped": 0,
+            }
+
+        monkeypatch.setattr(tr.observed_map_lib, "write_observed_map", fake_write)
+        with patch("sys.argv",
+                   ["threshold_recommend.py", "--generate-observed-map", "--json"]):
+            tr.main()
+        doc = json.loads(capsys.readouterr().out)
+        assert doc["status"] == "observed_map_written"
+        assert doc["observed_map"]["total"] == 3
+        assert doc["tenants"] == []
+        assert doc["summary"]["recommended_changes"] == 0
 
 
 # ═══════════════════════════════════════════════════════════════════════

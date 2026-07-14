@@ -93,7 +93,7 @@ def _run_kubectl(args, dry_run=False):
     """
     cmd = ["kubectl"] + args
     if dry_run:
-        print(f"  [dry-run] {' '.join(cmd)}")
+        print(f"  [dry-run] {' '.join(cmd)}", file=sys.stderr)
         return True, "(dry-run)"
     try:
         result = subprocess.run(
@@ -187,7 +187,8 @@ def verify_health(tenant, prometheus_url, dry_run=False):
     are present and no critical alerts are unexpectedly missing.
     """
     if dry_run:
-        print(f"  [dry-run] query {prometheus_url} for tenant={tenant} health")
+        print(f"  [dry-run] query {prometheus_url} for tenant={tenant} health",
+              file=sys.stderr)
         return True, "(dry-run)"
 
     import urllib.parse
@@ -259,7 +260,7 @@ def apply_cutover(readiness_json, tenant, prometheus_url,
 
     if not readiness.get("ready") and force:
         print("⚠️  WARNING: Readiness check shows NOT READY — "
-              "proceeding due to --force")
+              "proceeding due to --force", file=sys.stderr)
 
     # ── Execute steps ─────────────────────────────────────────────────
     steps = [
@@ -276,10 +277,10 @@ def apply_cutover(readiness_json, tenant, prometheus_url,
     ]
 
     for name, step_fn in steps:
-        print(f"▸ {name}...")
+        print(f"▸ {name}...", file=sys.stderr)
         ok, msg = step_fn()
         if ok:
-            print(f"  ✓ {msg}")
+            print(f"  ✓ {msg}", file=sys.stderr)
             report["steps_completed"].append(name)
         else:
             # #452/#737: a step may flag a caller-error-class failure
@@ -287,7 +288,7 @@ def apply_cutover(readiness_json, tenant, prometheus_url,
             if msg.startswith(CALLER_ERROR_PREFIX):
                 report["caller_error"] = True
                 msg = msg[len(CALLER_ERROR_PREFIX):]
-            print(f"  ✗ {msg}")
+            print(f"  ✗ {msg}", file=sys.stderr)
             report["failed_step"] = name
             report["message"] = msg
             return report
@@ -357,14 +358,16 @@ def main():
         print(format_json_report(report))
 
     if report["success"]:
-        print("\n✅ Cutover completed successfully.")
-        print("Next: run 'da-tools batch-diagnose' for full health report.")
+        print("\n✅ Cutover completed successfully.", file=sys.stderr)
+        print("Next: run 'da-tools batch-diagnose' for full health report.",
+              file=sys.stderr)
     else:
         step = report.get("failed_step", "unknown")
         msg = report.get("message", "")
-        print(f"\n❌ Cutover failed at step: {step}")
-        print(f"   Reason: {msg}")
-        print("   See shadow-monitoring-sop.md §7.2 for rollback steps.")
+        print(f"\n❌ Cutover failed at step: {step}", file=sys.stderr)
+        print(f"   Reason: {msg}", file=sys.stderr)
+        print("   See shadow-monitoring-sop.md §7.2 for rollback steps.",
+              file=sys.stderr)
         # #452/#737: caller-error (bad/missing readiness JSON, unreachable
         # Prometheus, missing kubectl) → exit 2; genuine cutover-step failure
         # (rollback-worthy finding) → exit 1.

@@ -24,7 +24,7 @@ import sys
 import time
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 # ---------------------------------------------------------------------------
 # Imports from shared library
@@ -150,13 +150,19 @@ def query_prometheus_alerts(
         label_filter = f'{{alertstate="firing",tenant="{tenant}"}}'
 
     query = f"{metric}{label_filter}"
-    url = (
-        f"{prom_url}/api/v1/query_range"
-        f"?query={query}"
-        f"&start={start_ts:.0f}"
-        f"&end={end_ts:.0f}"
-        f"&step={step}"
-    )
+    # urlencode the whole param set (same pattern as _lib_prometheus.py and
+    # backtest_threshold.py). The raw PromQL carries `{`, `}` and `"`, which
+    # must not be interpolated into a URL unescaped — today's query happens to
+    # contain no space so it slips past http.client's control-character check,
+    # but that is luck, not correctness (see cardinality_forecasting, whose
+    # spaced PromQL crashed with InvalidURL for exactly this reason).
+    params = urlencode({
+        "query": query,
+        "start": f"{start_ts:.0f}",
+        "end": f"{end_ts:.0f}",
+        "step": step,
+    })
+    url = f"{prom_url}/api/v1/query_range?{params}"
 
     data, err = http_get_json(url, timeout=timeout)
     if err or not data:

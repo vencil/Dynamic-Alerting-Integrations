@@ -432,11 +432,38 @@ class TestBuildParser:
 class TestMain:
     def test_no_tenant_configs_returns_zero(self, monkeypatch, tmp_path, capsys):
         # Empty config-dir → no tenant configs → return 0 with informational msg.
+        # #1112: the message is prose → stderr; stdout stays clean for the JSON
+        # document (see the two envelope tests below).
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         rc = pob.main(["--config-dir", str(tmp_path)])
         assert rc == 0
-        out = capsys.readouterr().out
-        assert "No tenant configs found" in out
+        captured = capsys.readouterr()
+        assert "No tenant configs found" in captured.err
+        assert captured.out == ""
+
+    def test_no_tenant_configs_json_envelope(self, monkeypatch, tmp_path, capsys):
+        """#1112: --json + 空 config-dir → 一份歸零的 report（可被同一 consumer 消費）。"""
+        monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
+        rc = pob.main(["--config-dir", str(tmp_path), "--json"])
+        assert rc == 0
+        doc = json.loads(capsys.readouterr().out)
+        assert doc["status"] == "no_tenant_configs"
+        assert doc["tenants_evaluated"] == 0
+        assert doc["violations"] == []
+
+    def test_no_tenant_configs_dry_run_emits_opa_input(self, monkeypatch, tmp_path,
+                                                       capsys):
+        """#1112: --dry-run 的 stdout 契約是「OPA input 文件」，零租戶就是空 tenants。
+
+        故此路徑吐的是 opa_input（與有租戶時同 schema），不是 report envelope —
+        dry-run 的輸出是要餵給 `opa eval` 的，不是給人讀的報告。
+        """
+        monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
+        rc = pob.main(["--config-dir", str(tmp_path), "--dry-run", "--json"])
+        assert rc == 0
+        doc = json.loads(capsys.readouterr().out)
+        assert doc["tenants"] == {}
+        assert "platform_version" in doc
 
     def test_dry_run_prints_input_json(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
@@ -560,11 +587,11 @@ class TestMain:
         assert payload["passed"] is True
 
     def test_zh_no_tenants_message(self, monkeypatch, tmp_path, capsys):
+        # #1112: prose → stderr (see TestMain::test_no_tenant_configs_returns_zero).
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "zh")
         rc = pob.main(["--config-dir", str(tmp_path)])
         assert rc == 0
-        out = capsys.readouterr().out
-        assert "未找到 tenant 配置" in out
+        assert "未找到 tenant 配置" in capsys.readouterr().err
 
     def test_zh_no_url_no_path_error_message(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "zh")

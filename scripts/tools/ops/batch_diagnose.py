@@ -249,10 +249,32 @@ def main():
 
     # Dry-run: just list tenants
     if args.dry_run:
-        print(f"Discovered {len(tenants)} tenants:")
+        print(f"Discovered {len(tenants)} tenants:", file=sys.stderr)
         for t in tenants:
-            print(f"  - {t}")
-        print("\nUse without --dry-run to run health checks.")
+            print(f"  - {t}", file=sys.stderr)
+        print("\nUse without --dry-run to run health checks.", file=sys.stderr)
+        if args.json:
+            # #1112: same schema as generate_report(), with every MEASURED
+            # field null because nothing was checked — `healthy_count` /
+            # `issue_count` / `health_score` are all null rather than 0, so a
+            # consumer cannot mistake "not measured" for "everything
+            # unhealthy" (0/2 healthy would read as 0%). `total_tenants` stays
+            # a real count: the tenants WERE discovered, just not checked.
+            # `status` is the discriminator.
+            print(format_json_report({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "status": "dry_run",
+                "reason": "health_checks_skipped",
+                "prometheus_url": args.prometheus,
+                "total_tenants": len(tenants),
+                "healthy_count": None,
+                "issue_count": None,
+                "health_score": None,
+                "tenants": {
+                    t: {"tenant": t, "status": "not_checked"} for t in tenants
+                },
+                "recommendations": [],
+            }))
         return
 
     # Run diagnose in parallel

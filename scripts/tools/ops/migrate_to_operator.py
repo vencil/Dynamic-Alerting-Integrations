@@ -825,10 +825,18 @@ def main():
         )
 
     # Write or print output
+    checklist_for_json = None
     if args.checklist_only and not args.dry_run:
-        # For checklist-only mode (not dry-run), print checklist to stdout
         checklist = build_migration_checklist(source_dir, config_dir, output_dir, result)
-        print(checklist)
+        if args.json:
+            # #1112: stdout must be exactly ONE JSON document. The checklist is
+            # the whole point of --checklist-only, so it is carried INSIDE the
+            # summary document (as a string) rather than dumped as raw Markdown
+            # next to it — no information is lost from stdout, and the summary
+            # keys stay exactly where a consumer already expects them.
+            checklist_for_json = checklist
+        else:
+            print(checklist)
     elif args.dry_run:
         # Print to stdout
         if args.json:
@@ -906,6 +914,9 @@ def main():
     # Only print summary if not JSON + dry-run (in that case, JSON is the only output)
     if not (args.dry_run and args.json):
         if args.json:
+            if checklist_for_json is not None:
+                summary["status"] = "checklist_only"
+                summary["checklist"] = checklist_for_json
             print(format_json_report(summary))
         else:
             print(

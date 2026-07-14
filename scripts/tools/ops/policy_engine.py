@@ -679,20 +679,44 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.policy:
         rules.extend(load_policies(args.policy))
 
+    # #1112: an early return is still a `--json` terminal path — emit the report
+    # schema with everything zeroed (`passed: true`: nothing was evaluated, so
+    # nothing failed) plus a status/reason discriminator, and send the prose to
+    # stderr. A consumer reading `.error_count` / `.violations` works unchanged.
+    def _empty_report(status: str, reason: str, rules_evaluated: int = 0) -> dict:
+        return {
+            "status": status,
+            "reason": reason,
+            "tenants_evaluated": 0,
+            "rules_evaluated": rules_evaluated,
+            "error_count": 0,
+            "warning_count": 0,
+            "passed": True,
+            "violations": [],
+        }
+
     if not rules:
         if lang == "zh":
-            print("未找到策略規則。在 _defaults.yaml 新增 _policies 或指定 --policy。")
+            print("未找到策略規則。在 _defaults.yaml 新增 _policies 或指定 --policy。",
+                  file=sys.stderr)
         else:
-            print("No policy rules found. Add _policies to _defaults.yaml or specify --policy.")
+            print("No policy rules found. Add _policies to _defaults.yaml or specify --policy.",
+                  file=sys.stderr)
+        if args.json_output:
+            print(format_json_report(_empty_report("no_policies", "no_policy_rules_found")))
         return EXIT_OK
 
     # Load tenant configs
     tenant_configs = load_tenant_configs(args.config_dir)
     if not tenant_configs:
         if lang == "zh":
-            print(f"未找到 tenant 配置於 {args.config_dir}")
+            print(f"未找到 tenant 配置於 {args.config_dir}", file=sys.stderr)
         else:
-            print(f"No tenant configs found in {args.config_dir}")
+            print(f"No tenant configs found in {args.config_dir}", file=sys.stderr)
+        if args.json_output:
+            print(format_json_report(_empty_report(
+                "no_tenant_configs", "no_tenant_configs_found",
+                rules_evaluated=len(rules))))
         return EXIT_OK
 
     # Evaluate

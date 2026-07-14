@@ -804,6 +804,15 @@ def main():
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
+    # #1112: in `--json` mode stdout must be exactly ONE document, so the CRDs,
+    # the kustomization and the summary are collected here and emitted together
+    # as `{"crds": [...], "kustomization": {...}|null, "summary": {...}}` at the
+    # end of main() — instead of the old behaviour, which printed the CRD array
+    # and the summary as two back-to-back documents (`json.loads` on the full
+    # stdout raised). The YAML paths are unchanged.
+    json_crds: list = []
+    json_kustomization = None
+
     # Write or print CRDs
     if args.dry_run:
         # Print YAML to stdout
@@ -816,7 +825,7 @@ def main():
             all_crds.append(result["service_monitor"]["crd"])
 
         if args.json:
-            print(format_json_report(all_crds))
+            json_crds = all_crds
         else:
             if yaml:
                 for i, crd in enumerate(all_crds):
@@ -845,14 +854,17 @@ def main():
                 crd_files.append(f"{name}.yaml")
 
             kustomize_dict = build_kustomization(crd_files, args.namespace)
-            print("---")
-            if yaml:
+            if args.json:
+                json_kustomization = kustomize_dict
+            elif yaml:
+                print("---")
                 print(yaml.dump(
                     kustomize_dict,
                     default_flow_style=False,
                     allow_unicode=True,
                 ), end="")
             else:
+                print("---")
                 print(_dict_to_yaml(kustomize_dict))
     else:
         # Write CRD files
@@ -895,6 +907,15 @@ def main():
             write_yaml_crd(kustomize_path, kustomize_dict, gitops=args.gitops)
             print(f"Generated: {kustomize_path}", file=sys.stderr)
             count += 1
+            json_kustomization = kustomize_dict
+
+        if args.json:
+            # Same stdout schema as the dry-run path: the document reports what
+            # was generated (and, here, also written to --output-dir).
+            json_crds = [item["crd"] for item in result["prometheus_rules"]]
+            json_crds += [item["crd"] for item in result["alertmanager_configs"]]
+            if result["service_monitor"]:
+                json_crds.append(result["service_monitor"]["crd"])
 
     # Summary
     base_total = (
@@ -914,7 +935,16 @@ def main():
     }
 
     if args.json:
-        print(format_json_report(summary))
+        # ONE document, every mode (#1112): the CRDs that were generated, the
+        # kustomization (null unless --kustomize), and the counts. `--json` is a
+        # dry-run *report* flag (cli-reference §operator-generate) — the
+        # applyable artefacts are the YAML/`--output-dir` paths, which are
+        # untouched.
+        print(format_json_report({
+            "crds": json_crds,
+            "kustomization": json_kustomization,
+            "summary": summary,
+        }))
     else:
         if args.kustomize:
             msg_zh = (
