@@ -77,9 +77,9 @@ func TestReload_RacesWatchLoop(t *testing.T) {
 		}()
 	}
 
-	workWg.Wait()  // bounded workers done; the loop ran concurrently throughout
-	close(stopCh)  // now stop the loop
-	loopWg.Wait()  // clean shutdown
+	workWg.Wait() // bounded workers done; the loop ran concurrently throughout
+	close(stopCh) // now stop the loop
+	loopWg.Wait() // clean shutdown
 }
 
 // TestReload_MissingFile_StoresEmptyAndReturnsNil pins a contract that
@@ -88,7 +88,7 @@ func TestReload_RacesWatchLoop(t *testing.T) {
 //
 // This is load-bearing. For rbac it is the mechanism behind ADR-027
 // MED-8 fail-closed (an empty group set with failClosedOnEmpty denies
-// everything — see rbac_extra_test.go TestLoad_DeletedFile), and for
+// everything — see internal/rbac config_reload_test.go TestLoad_DeletedFile), and for
 // every manager it is how a GitOps `git rm` of the config takes effect.
 // "Hardening" this into an error would keep a deleted _rbac.yaml
 // granting permissions.

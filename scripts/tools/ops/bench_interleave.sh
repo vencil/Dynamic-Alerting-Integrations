@@ -33,7 +33,8 @@
 #
 # Control canaries (benchcanary module) run each round too, so the caller can
 # tell "this run's runner drifted" apart from "this PR is slower" — see
-# bench-canary/canary_test.go and the Compare step in bench-gate-pr.yaml.
+# bench-canary/canary_test.go and the verdict logic in bench_gate_compare.sh
+# (shared by bench-gate-pr / bench-attrib-main / bench-on-demand workflows).
 #
 # Inputs (environment)
 #   BASE_DIR           app dir of the base (merge-base) worktree
