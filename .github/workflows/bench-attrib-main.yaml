@@ -48,6 +48,8 @@ on:
       - 'components/threshold-exporter/app/go.sum'
       - 'scripts/tools/ops/bench_interleave.sh'
       - 'scripts/tools/ops/bench_gate_compare.sh'
+      - 'scripts/tools/ops/bench_render_summary.sh'
+      - 'scripts/tools/ops/bench_report_pr.sh'
       - 'scripts/tools/ops/bench-canary/**'
       - '.github/workflows/bench-attrib-main.yaml'
 
@@ -186,9 +188,16 @@ jobs:
           # open-issue query + body marker as identity key. Guards the "same
           # regression re-filed on every re-run" class problem the watchdog
           # solved for its nightly issue.
+          # startswith(), NOT contains(): the squash subject (PR title —
+          # AUTHOR-CONTROLLED text) is quoted verbatim later in the body, so a
+          # fake marker planted in a PR title could contains()-match another
+          # commit's marker and let a clean re-run close the WRONG issue. The
+          # real marker is always the FIRST line of the body (see the body
+          # heredoc below — keep it that way), so position-0 matching is
+          # injection-proof.
           existing=$(gh issue list --repo "$REPO" --label "$LABEL" --state open \
                        --json number,body \
-                       --jq ".[] | select(.body | contains(\"$marker\")) | .number" \
+                       --jq ".[] | select(.body | startswith(\"$marker\")) | .number" \
                      | head -1)
 
           if [ "$INCONCLUSIVE" = "true" ]; then
@@ -208,6 +217,8 @@ jobs:
             fi
             first_bench=$(printf '%s\n' "$REGRESSIONS_LIST" | awk 'NF {print $1; exit}')
             title="[bench-attrib] perf regression at $short — ${first_bench:-see body}"
+            # marker MUST be the first body line — the startswith() dedupe
+            # above depends on position 0 (injection defense, see that note).
             {
               echo "$marker"
               echo ""
@@ -229,8 +240,17 @@ jobs:
               echo "the same commit auto-closes this issue; a later commit's clean run does not._"
             } > /tmp/attrib_issue.md
             if [ -n "$existing" ]; then
+              # Concise confirmation only — don't re-paste the whole issue body
+              # on every re-run; the fresh numbers + run link are the news.
               echo "::notice::open attribution issue #$existing already exists for $short — appending re-run confirmation instead of filing a duplicate."
-              gh issue comment "$existing" --repo "$REPO" --body-file /tmp/attrib_issue.md
+              {
+                echo "Re-run of \`$HEAD_SHA\` confirms the regression (control canary stable):"
+                echo '```'
+                echo "$REGRESSIONS_LIST"
+                echo '```'
+                echo "Run: $RUN_URL"
+              } > /tmp/attrib_rerun.md
+              gh issue comment "$existing" --repo "$REPO" --body-file /tmp/attrib_rerun.md
             else
               gh label create "$LABEL" --repo "$REPO" --color "D93F0B" \
                 --description "Bench gate flagged a perf regression (informational)" --force

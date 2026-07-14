@@ -18,8 +18,22 @@ name: Bench On-Demand (/bench)
 # code inside the worktrees: the classic pwn-request shape, deliberately
 # contained instead of avoided:
 #   - The job only starts for comment author_association ∈ {OWNER, MEMBER}:
-#     a maintainer explicitly requests benching that head (the standard
-#     /ok-to-test pattern). Drive-by fork comments cannot trigger it.
+#     a maintainer explicitly requests a bench run (the standard /ok-to-test
+#     pattern). Drive-by fork comments cannot trigger it.
+#   - TOCTOU caveat: the head actually benched is resolved AT RUN TIME
+#     (`gh pr view`), which can differ from what the maintainer saw if the
+#     author force-pushes between the comment and the run. Mitigations: the
+#     ack comment echoes the exact benched SHA so the approver can audit
+#     after the fact, and a commit-date-vs-comment-date check warns when the
+#     benched head looks newer than the /bench comment (best-effort only —
+#     committer dates are author-controlled; the echoed SHA is the
+#     authoritative audit trail).
+#   - `persist-credentials: false` on checkout: the two bench worktrees share
+#     the checkout's .git, so a persisted token in .git/config would be
+#     readable by the PR-head test binaries the bench executes (e.g. a
+#     malicious TestMain). All authenticated calls go through the GH_TOKEN
+#     env on gh steps instead; the git fetch of the PR head is anonymous
+#     (public repo).
 #   - Workflow definition, harness scripts, and the canary always come from
 #     the DEFAULT-BRANCH checkout; PR code is only ever bench material.
 #   - Permissions are the same minimal set as the PR gate (contents: read +
@@ -58,18 +72,25 @@ jobs:
           REPO: ${{ github.repository }}
           COMMENT_ID: ${{ github.event.comment.id }}
         run: |
-          # Best-effort UX ping so the commenter knows the run started;
-          # never fail the bench over a reaction.
+          # Best-effort immediate UX ping; the AUDITABLE ack (a comment echoing
+          # the exact benched SHA) is posted after the refs resolve, below.
+          # Never fail the bench over a reaction.
           gh api "repos/$REPO/issues/comments/$COMMENT_ID/reactions" \
             -f content=eyes >/dev/null 2>&1 \
             || echo "::warning::could not add ack reaction (non-fatal)"
 
       # Default-branch checkout (issue_comment context) = TRUSTED harness;
       # full history so merge-base + fetched PR head both resolve.
+      # persist-credentials: false — the bench worktrees share this checkout's
+      # .git, and the bench EXECUTES PR-head test binaries; a token persisted
+      # in .git/config would be readable by a malicious TestMain. gh steps
+      # authenticate via their own GH_TOKEN env; the PR-head git fetch below
+      # is anonymous (public repo), so nothing here needs stored credentials.
       - name: Checkout default branch (trusted harness; full history)
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Go 1.26
         uses: actions/setup-go@v6
@@ -94,6 +115,7 @@ jobs:
           REPO: ${{ github.repository }}
           # Bound via env, not raw ${{ }} in run: (#1021 class house rule).
           PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_CREATED_AT: ${{ github.event.comment.created_at }}
         run: |
           set -euo pipefail
           head_sha=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq .headRefOid)
@@ -106,6 +128,18 @@ jobs:
             echo "::error::PR head $head_sha not found after fetch (push race?) — re-comment /bench."
             exit 2
           fi
+          # TOCTOU probe (best-effort): the head we resolved is "now", not
+          # "what the maintainer saw when they commented". If the head commit's
+          # committer date postdates the /bench comment, someone pushed in
+          # between — warn loudly so the approver re-checks. Committer dates
+          # are author-controlled (backdatable), so this can only catch the
+          # lazy case; the authoritative audit trail is the SHA-echo ack
+          # comment posted below.
+          commit_epoch=$(git show -s --format=%ct "$head_sha")
+          comment_epoch=$(date -d "$COMMENT_CREATED_AT" +%s)
+          if [ "$commit_epoch" -gt "$comment_epoch" ]; then
+            echo "::warning::PR head $head_sha is NEWER than the /bench comment (commit $(date -u -d "@$commit_epoch" +%FT%TZ) > comment $COMMENT_CREATED_AT) — the branch moved after approval; verify the benched SHA in the ack comment is what you meant to bench."
+          fi
           # Same virtual-merge trap as bench-gate-pr's preflight: never
           # merge-base against a checkout HEAD; use the explicit head SHA so
           # git walks the PR's real ancestry to the true divergence point.
@@ -117,6 +151,24 @@ jobs:
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
           echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
           echo "Merge-base: $base_sha vs PR head: $head_sha"
+
+      # Auditable ack (F2 TOCTOU mitigation): echo the EXACT SHA being benched
+      # back onto the PR before the bench starts, so the approving maintainer
+      # can compare it against the head they reviewed. Fail-loud on purpose —
+      # without this trail an on-demand run of attacker-swappable code is not
+      # auditable, so no comment ⇒ no bench (this step precedes the bench).
+      - name: Post auditable ack (exact benched SHA)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          HEAD_SHA: ${{ steps.refs.outputs.head_sha }}
+          BASE_SHA: ${{ steps.refs.outputs.base_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body \
+            "🏁 \`/bench\` started — benching PR head \`$HEAD_SHA\` vs merge-base \`$BASE_SHA\`. If the branch moved since you commented, this SHA is what actually gets measured. Run: $RUN_URL"
 
       - name: Run interleaved bench + verdict (shared core)
         id: compare

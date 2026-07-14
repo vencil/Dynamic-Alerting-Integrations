@@ -98,6 +98,13 @@ name: Bench Gate (PR-time, Tier 1)
 #   `pull_request` trigger block below. On-demand PR benching then lives in
 #   bench-on-demand.yaml (`/bench` comment, OWNER/MEMBER only), which already
 #   carries the full harness, so the flip is a one-block deletion here.
+# SOAK CHECKLIST (what "proven itself" means, before the flip):
+#   - attrib runs green on real merges; issue open/dedupe/auto-close behaves.
+#   - INCONCLUSIVE rate at 1s comparable to the historical 3s rate.
+#   - Noise floor at 1s: compare the benchstat "± N%" widths of 1s runs
+#     against historical 3s runs — if ± is commonly >5%, the 5% magnitude
+#     floor is effectively undetectable (noise ≥ signal) and BENCHTIME must
+#     go back up (external-review soak item).
 
 on:
   pull_request:
@@ -133,6 +140,8 @@ on:
       # this list in sync with bench-attrib-main.yaml's paths.
       - 'scripts/tools/ops/bench_interleave.sh'
       - 'scripts/tools/ops/bench_gate_compare.sh'
+      - 'scripts/tools/ops/bench_render_summary.sh'
+      - 'scripts/tools/ops/bench_report_pr.sh'
       - 'scripts/tools/ops/bench-canary/**'
       - '.github/workflows/bench-gate-pr.yaml'
 
