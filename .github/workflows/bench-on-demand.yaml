@@ -1,0 +1,284 @@
+name: Bench On-Demand (/bench)
+
+# `/bench` PR-comment trigger — the post-soak home of PR-time benching in the
+# two-stage C→B rework (2026-07). FULLY FUNCTIONAL now (not a stub): once
+# bench-attrib-main.yaml has soaked 2-4 weeks, the owner flips PR benching
+# from automatic to on-demand by deleting bench-gate-pr.yaml's `pull_request`
+# trigger block — zero changes needed here. Until then this coexists with the
+# auto-run gate (an extra manual knob, e.g. to re-measure after a re-run
+# request or on a PR whose paths didn't trigger the gate).
+#
+# Verdict semantics + PR reporting are IDENTICAL to bench-gate-pr.yaml — same
+# shared core (scripts/tools/ops/bench_gate_compare.sh) and same reporter
+# (bench_report_pr.sh: informational comment + `perf-regression` label,
+# never blocks).
+#
+# SECURITY MODEL — three-job PRIVILEGE SEPARATION (the GitHub-documented
+# pattern for issue_comment workflows that must execute untrusted PR code;
+# adopted after CodeQL `actions/untrusted-checkout-toctou` correctly flagged
+# the previous single-job layout — per-step GH_TOKEN + persist-credentials:
+# false is NOT sufficient isolation when privileged steps share one runner's
+# process space with steps that execute PR test binaries):
+#
+#   1. `gate` (privileged; ZERO PR code, zero PR git objects — pure gh api):
+#      author_association check (job `if`), resolves head/base SHAs ONCE,
+#      posts the fail-loud auditable ack comment echoing the exact benched
+#      SHA. This is the ONLY place the PR head is resolved.
+#   2. `bench` (UNPRIVILEGED; the only job that touches PR code):
+#      contents: read, NO GH_TOKEN anywhere in the job, default-branch
+#      checkout with persist-credentials: false. Fetches the PINNED SHA from
+#      gate's outputs — it never re-resolves the PR head, which roots out the
+#      TOCTOU: the SHA in the ack comment IS the SHA benched. Even a fully
+#      compromised runner here holds no credentials to exfiltrate.
+#   3. `report` (privileged; ZERO PR code): consumes bench's verdict via job
+#      outputs and posts the comment/label. If bench died before a verdict it
+#      says so on the PR (fail-visible, never a silent red).
+#
+#   - The chain only starts for comment author_association ∈ {OWNER, MEMBER}:
+#     a maintainer explicitly requests a bench run (the standard /ok-to-test
+#     pattern). Drive-by fork comments cannot trigger it.
+#   - TOCTOU residual: the head is resolved AT GATE TIME, which can differ
+#     from what the maintainer saw if the author force-pushes between the
+#     comment and the run. Mitigations: the ack comment echoes the exact
+#     benched SHA (authoritative audit trail), and a commit-date-vs-comment-
+#     date probe warns when the head looks newer than the /bench comment
+#     (best-effort — committer dates are author-controlled). If a force-push
+#     discards the audited SHA before bench fetches it, the run FAILS rather
+#     than silently benching something else.
+#   - Verdict transfer: only the compact fields (regression flag + flagged
+#     rows + inconclusive fields) cross the job boundary — far under the 1MB
+#     job-outputs cap. The full benchstat text never leaves the bench job;
+#     it is rendered into that job's step summary.
+
+on:
+  issue_comment:
+    types: [created]
+
+# Default for every job; the privileged jobs elevate explicitly below.
+permissions:
+  contents: read
+
+concurrency:
+  # Rapid repeat /bench on the same PR: only the latest matters.
+  group: bench-on-demand-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Job 1: privileged gate — resolve refs + auditable ack. No PR code. ─────
+  gate:
+    name: Gate + resolve refs (privileged, no PR code)
+    # Only PR comments (issue_comment also fires on plain issues), `/bench`
+    # command only, OWNER/MEMBER authors only (see SECURITY MODEL).
+    if: >-
+      github.event.issue.pull_request
+      && startsWith(github.event.comment.body, '/bench')
+      && contains(fromJSON('["OWNER", "MEMBER"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write  # auditable ack comment
+    outputs:
+      head_sha: ${{ steps.refs.outputs.head_sha }}
+      base_sha: ${{ steps.refs.outputs.base_sha }}
+    steps:
+      # Pure-API resolution — this job deliberately fetches / checks out NO
+      # git objects at all (not even the default branch): nothing here can
+      # ever execute PR code, so the CodeQL untrusted-checkout family is
+      # structurally impossible in the privileged context. Merge-base comes
+      # from the compare API instead of `git merge-base` (same answer, since
+      # it is computed against the explicit head SHA — the explicit-SHA form
+      # of bench-gate-pr's virtual-merge-trap defense).
+      - name: Resolve PR head + merge-base (single resolution point)
+        id: refs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          # Bound via env, not raw ${{ }} in run: (#1021 class house rule).
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_CREATED_AT: ${{ github.event.comment.created_at }}
+        run: |
+          set -euo pipefail
+          head_sha=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq .headRefOid)
+          base_ref=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json baseRefName --jq .baseRefName)
+          if [ -z "$head_sha" ] || [ -z "$base_ref" ]; then
+            echo "::error::could not resolve PR #$PR_NUMBER head/base via API"
+            exit 2
+          fi
+          base_sha=$(gh api "repos/$REPO/compare/${base_ref}...${head_sha}" \
+                       --jq .merge_base_commit.sha)
+          if [ -z "$base_sha" ]; then
+            echo "::error::Could not compute merge-base between $head_sha and $base_ref"
+            exit 2
+          fi
+          # TOCTOU probe (best-effort): the head we resolved is "now", not
+          # "what the maintainer saw when they commented". If the head
+          # commit's committer date postdates the /bench comment, someone
+          # pushed in between — warn loudly so the approver re-checks.
+          # Committer dates are author-controlled (backdatable), so this only
+          # catches the lazy case; the authoritative audit trail is the
+          # SHA-echo ack comment below.
+          commit_date=$(gh api "repos/$REPO/commits/$head_sha" --jq .commit.committer.date)
+          commit_epoch=$(date -d "$commit_date" +%s)
+          comment_epoch=$(date -d "$COMMENT_CREATED_AT" +%s)
+          if [ "$commit_epoch" -gt "$comment_epoch" ]; then
+            echo "::warning::PR head $head_sha is NEWER than the /bench comment (commit $commit_date > comment $COMMENT_CREATED_AT) — the branch moved after approval; verify the benched SHA in the ack comment is what you meant to bench."
+          fi
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "Resolved: head=$head_sha merge-base=$base_sha (base ref: $base_ref)"
+
+      # Auditable ack (TOCTOU mitigation): echo the EXACT SHA being benched
+      # back onto the PR before the bench starts, so the approving maintainer
+      # can compare it against the head they reviewed. Fail-loud on purpose —
+      # without this trail an on-demand run of attacker-swappable code is not
+      # auditable, so no comment ⇒ no bench (the bench job `needs` this one).
+      - name: Post auditable ack (exact benched SHA)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          HEAD_SHA: ${{ steps.refs.outputs.head_sha }}
+          BASE_SHA: ${{ steps.refs.outputs.base_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body \
+            "🏁 \`/bench\` started — benching PR head \`$HEAD_SHA\` vs merge-base \`$BASE_SHA\`. If the branch moved since you commented, this SHA is what actually gets measured. Run: $RUN_URL"
+
+  # ── Job 2: UNPRIVILEGED bench — the only job that touches PR code. ─────────
+  # contents: read only; NO GH_TOKEN in any step env; persist-credentials:
+  # false on checkout. A malicious TestMain in the PR's test binaries finds
+  # no credentials to steal anywhere in this job.
+  bench:
+    name: Interleaved bench vs merge-base (unprivileged, runs PR code)
+    needs: gate
+    runs-on: ubuntu-latest
+    # Same budget as bench-gate-pr (identical workload; ~8-10 min nominal).
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      regression: ${{ steps.compare.outputs.regression }}
+      regressions: ${{ steps.compare.outputs.regressions }}
+      inconclusive: ${{ steps.compare.outputs.inconclusive }}
+      inconclusive_reason: ${{ steps.compare.outputs.inconclusive_reason }}
+    steps:
+      # Default-branch checkout = TRUSTED harness (workflow, scripts, canary
+      # all come from main); full history so the merge-base commit resolves.
+      - name: Checkout default branch (trusted harness; full history)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Cache Go modules + build
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.26-
+            ${{ runner.os }}-go-
+
+      - name: Fetch the audited PR head SHA (pinned by gate; anonymous)
+        env:
+          # PINNED SHA from the gate job — bench NEVER re-resolves the PR head
+          # (a re-resolution here is exactly the CodeQL TOCTOU finding): the
+          # SHA the gate ack'd on the PR is byte-for-byte the SHA benched.
+          HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          # By-SHA fetch first (GitHub serves ref-reachable SHAs); fall back
+          # to the PR ref, then REQUIRE the pinned SHA to be present in what
+          # arrived. Both fetches are anonymous (public repo) — no token.
+          git fetch origin "$HEAD_SHA" \
+            || git fetch origin "pull/$PR_NUMBER/head" \
+            || true
+          if ! git rev-parse --verify -q "$HEAD_SHA^{commit}" >/dev/null; then
+            echo "::error::audited PR head $HEAD_SHA is no longer fetchable (force-push discarded it?) — re-comment /bench to audit and bench the new head."
+            exit 2
+          fi
+
+      - name: Run interleaved bench + verdict (shared core)
+        id: compare
+        # ROUNDS=6 — do NOT lower: Mann-Whitney U min two-sided p = 2/C(2n,n);
+        # below n=5 the α=0.01 gate is mathematically unreachable (full math
+        # note in the script header). BENCHTIME=1s (stage-C slimming).
+        env:
+          BASE_SHA: ${{ needs.gate.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+          ROUNDS: "6"
+          BENCHTIME: "1s"
+        run: bash scripts/tools/ops/bench_gate_compare.sh
+
+      # Full benchstat text is rendered HERE — it stays inside this job; only
+      # the compact verdict fields cross the job boundary as outputs.
+      - name: Render step summary
+        if: always()
+        env:
+          REGRESSION: ${{ steps.compare.outputs.regression }}
+          REGRESSIONS_LIST: ${{ steps.compare.outputs.regressions }}
+          INCONCLUSIVE: ${{ steps.compare.outputs.inconclusive }}
+          INCONCLUSIVE_REASON: ${{ steps.compare.outputs.inconclusive_reason }}
+          INCONCLUSIVE_CPUS: ${{ steps.compare.outputs.inconclusive_cpus }}
+          INCONCLUSIVE_CANARY: ${{ steps.compare.outputs.inconclusive_canary }}
+          BENCHSTAT_TXT: ${{ steps.compare.outputs.benchstat_txt }}
+          COMPARE_DESC: |
+            `/bench` on-demand run: compared PR HEAD (`${{ needs.gate.outputs.head_sha }}`)
+            against merge-base (`${{ needs.gate.outputs.base_sha }}`).
+          REGRESSION_NOTE: |
+            **Informational only — this does NOT block merge.** A `perf-regression` label
+            and a PR comment were applied. If the slowdown is a deliberate correctness/safety
+            trade-off, just note it in the PR; otherwise fix the perf and re-run `/bench` (the
+            label is removed automatically once the regression clears). The nightly
+            `bench-record` trend watchdog independently watches main for sustained drift.
+        run: bash scripts/tools/ops/bench_render_summary.sh
+
+  # ── Job 3: privileged report — comment + label from the verdict. No PR code.
+  report:
+    name: Report result on the PR (privileged, no PR code)
+    needs: [gate, bench]
+    # Run even when bench failed (fail-visible reporting), but only for runs
+    # the gate actually approved (gate skipped/failed ⇒ nothing to report).
+    if: always() && needs.gate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read        # default-branch checkout for the reporter script
+      pull-requests: write  # result comment
+      issues: write         # perf-regression label (PRs are issues underneath)
+    steps:
+      - name: Checkout default branch (reporter script only)
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Report verdict (informational — comment + label, never blocks)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          BENCH_RESULT: ${{ needs.bench.result }}
+          REGRESSION: ${{ needs.bench.outputs.regression }}
+          INCONCLUSIVE: ${{ needs.bench.outputs.inconclusive }}
+          REGRESSIONS_LIST: ${{ needs.bench.outputs.regressions }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "$BENCH_RESULT" != "success" ]; then
+            # Fail-visible: the requester saw the ack comment, so a dead bench
+            # must be announced on the PR too — never a silent red run.
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body \
+              "💥 \`/bench\` run failed before producing a verdict (bench job result: $BENCH_RESULT) — no regression judgement was made. See the job log: $RUN_URL"
+            exit 0
+          fi
+          bash scripts/tools/ops/bench_report_pr.sh
