@@ -1,17 +1,132 @@
 package rbac
 
-// Write-plane org-scope guard (ADR-027 / LD-6 P4b).
+// go/ast architecture guards for the identity/authorization seams (ADR-027 /
+// LD-6 P3 + P4b). Two tripwires, one file:
+//
+//  1. VerifiedPrincipal construction is confined to package rbac and tests.
+//  2. Org-blind `Allowed` calls outside internal/rbac are confined to the
+//     "*"-literal platform gates plus an annotated (currently EMPTY)
+//     allowlist.
+//
+// Why go/ast instead of golangci forbidigo (the hybrid-lint-policy default):
+// verified empirically on golangci-lint 2.12.2 — forbidigo matches
+// identifiers/selector expressions wherever they appear, so a pattern on
+// `rbac\.VerifiedPrincipal` also flags the TYPE usage every converted
+// signature needs (`p *rbac.VerifiedPrincipal` — false positives on the
+// exact API this refactor introduces), and it cannot anchor on the
+// composite-literal brace (its matched text is the selector, never `{`), so
+// `rbac\.VerifiedPrincipal\{` matches nothing at all. Likewise the org-write
+// guard must anchor on the CALL with a specific argument shape (tenant arg =
+// "*"), which a selector-pattern linter cannot express. The AST walks below
+// flag exactly the construction/call site and nothing else.
+//
+// moduleRootForGuard lives in testhelpers_test.go.
+
+import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+)
+
+// ── guard 1: principal construction (LD-6 P3) ────────────────────────────────
+//
+// The largest silent-failure surface of the principal refactor is a handler
+// hand-building a principal from parts — e.g.
+// &rbac.VerifiedPrincipal{Groups: rbac.RequestGroups(r)} — which compiles,
+// behaves identically today, and silently DROPS the verified claims the
+// moment they start participating in authorization. Production code must
+// obtain the principal only from a resolver (HeaderResolver.Resolve) or the
+// request context (rbac.RequestPrincipal); it must never construct one.
+//
+// This test parses (go/ast — parse, not grep) every non-test .go file in the
+// module outside this package and fails on any VerifiedPrincipal composite
+// literal. The rbac package itself (the resolvers that legitimately construct
+// principals) and *_test.go files (fixtures) are exempt.
+
+func TestVerifiedPrincipalConstructionConfinedToRBACAndTests(t *testing.T) {
+	t.Parallel()
+
+	root := moduleRootForGuard(t)
+	rbacDir := filepath.Join(root, "internal", "rbac")
+
+	var violations []string
+	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			name := d.Name()
+			// Skip dependency/artifact trees and this package (the one
+			// sanctioned construction site).
+			if name == "vendor" || name == "node_modules" || strings.HasPrefix(name, ".") {
+				return filepath.SkipDir
+			}
+			if filepath.Clean(path) == filepath.Clean(rbacDir) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+
+		fset := token.NewFileSet()
+		file, perr := parser.ParseFile(fset, path, nil, 0)
+		if perr != nil {
+			return perr
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			lit, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			// Match on the type name regardless of package qualifier so an
+			// aliased import (x "…/rbac"; x.VerifiedPrincipal{…}) or a
+			// dot-import cannot dodge the guard.
+			switch typ := lit.Type.(type) {
+			case *ast.SelectorExpr:
+				if typ.Sel.Name == "VerifiedPrincipal" {
+					violations = append(violations, fset.Position(lit.Pos()).String())
+				}
+			case *ast.Ident:
+				if typ.Name == "VerifiedPrincipal" {
+					violations = append(violations, fset.Position(lit.Pos()).String())
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("walking module source tree: %v", walkErr)
+	}
+
+	if len(violations) > 0 {
+		t.Errorf("VerifiedPrincipal composite literal in production code outside package rbac "+
+			"(hand-built principals silently drop verified claims — use rbac.RequestPrincipal(r), "+
+			"or a resolver; test fixtures belong in _test.go files):\n  %s",
+			strings.Join(violations, "\n  "))
+	}
+}
+
+// ── guard 2: write-plane org-scope (LD-6 P4b) ────────────────────────────────
 //
 // AllowedInOrg (via handler.OrgAllowed) is the ONLY legitimate per-tenant
 // write/admin authorization entry point after P4b: a handler that calls the
 // org-blind `Allowed` for a write decision compiles, behaves identically
 // today (shadow mode), and silently DROPS the org-scope axis the moment
-// --rbac-org-scope-enforce flips — the exact silent-failure shape the
-// principal guard pins for hand-built principals.
+// --rbac-org-scope-enforce flips — the exact silent-failure shape guard 1
+// pins for hand-built principals.
 //
-// This test parses (go/ast — parse, not grep) every non-test .go file in the
-// module outside internal/rbac (the package that legitimately implements the
-// check) and inspects every `Allowed` call:
+// This test parses every non-test .go file in the module outside
+// internal/rbac (the package that legitimately implements the check) and
+// inspects every `Allowed` call:
 //
 //   - AUTO-EXEMPT: a call whose tenant argument (2nd arg) is the basic
 //     literal "*" — the platform-scope gate. Org-scope deliberately does not
@@ -29,22 +144,6 @@ package rbac
 // an exemption must stay demonstrably necessary (#1067 discipline), or a
 // converted call site would leave a hole a future write-plane caller could
 // silently crawl through by reusing the entry's file+function.
-//
-// Same go/ast-over-forbidigo rationale as principal_guard_test.go: the guard
-// must anchor on the CALL with a specific argument shape (tenant arg = "*"),
-// which a selector-pattern linter cannot express.
-
-import (
-	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
-	"testing"
-)
 
 // orgWriteAllowlist enumerates the sanctioned org-blind `Allowed` call sites
 // outside internal/rbac (beyond the "*"-literal auto-exemption). Key is

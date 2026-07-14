@@ -6,11 +6,16 @@ import (
 	"testing"
 )
 
-// ADR-027 MED-8: a configured-but-empty _rbac.yaml (zero groups) must fail
-// closed — an authenticated identity with no group mapping gets NO access —
-// instead of the legacy open-read-to-all degrade. A path-less (bare) run
-// keeps open-read; the --rbac-empty-open flag (AllowOpenReadOnEmpty) restores
-// the legacy behavior for backward compat.
+// The empty-config three-mode semantics, pinned by ADR-027 MED-8 (#991):
+// a configured-but-empty _rbac.yaml (zero groups) must fail closed — an
+// authenticated identity with no group mapping gets NO access — instead of
+// the legacy open-read-to-all degrade. A path-less (bare) run keeps
+// open-read; the --rbac-empty-open flag (AllowOpenReadOnEmpty) restores the
+// legacy behavior for backward compat.
+//
+// The direct-field tests (writing failClosedOnEmpty) and the NewManager-wired
+// tests are a deliberate double insurance: the field tests pin the evaluation
+// semantics, the NewManager tests pin the `path != ""` wiring decision.
 
 func TestHasPermission_FailClosedOnEmpty(t *testing.T) {
 	t.Parallel()
@@ -49,6 +54,19 @@ func TestHasPermission_OpenReadPreservedWhenNotFailClosed(t *testing.T) {
 	}
 	if m.HasPermission(nil, "*", PermWrite) {
 		t.Error("open mode: write must still be DENIED on empty groups")
+	}
+}
+
+func TestOpenModeReadOnly(t *testing.T) {
+	t.Parallel()
+	// Empty config (open mode) allows read, denies write
+	m := NewForTest(&RBACConfig{})
+
+	if !m.HasPermission([]string{"any"}, "any-tenant", PermRead) {
+		t.Error("open mode should allow read")
+	}
+	if m.HasPermission([]string{"any"}, "any-tenant", PermWrite) {
+		t.Error("open mode should deny write")
 	}
 }
 
