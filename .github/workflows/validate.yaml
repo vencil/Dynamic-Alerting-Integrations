@@ -4,9 +4,9 @@
 #
 # The workflow itself triggers on EVERY pull_request to main (no top-level
 # `paths:` filter) — only individual jobs are gated, via the detect-changes
-# job's `validate_changed` output. Reason: all 5 job NAMES below (Python
-# Tests, Go Tests, Go Lint, Validate Tenant Config & Routes, Version
-# Consistency) are enrolled in main's branch protection
+# job's `validate_changed` output. Reason: all 3 job NAMES below (Go Lint,
+# Validate Tenant Config & Routes, Version Consistency) are enrolled in
+# main's branch protection
 # required_status_checks. A workflow suppressed entirely by a top-level
 # `paths:` filter reports NO status at all for a PR that doesn't touch those
 # paths, and GitHub treats a required check with no reported status as
@@ -20,13 +20,39 @@
 # contrast, reports `skipped`, which satisfies the requirement. See
 # detect-changes below.
 #
+# DEDUP (CI-ROI wave): the former `python-tests` ("Python Tests") and
+# `go-tests` ("Go Tests") jobs of this workflow were strict SUBSETS of
+# ci.yml's "Python Tests (3.13)" and "Go Tests (1.26)":
+#   - python-tests ran the SAME `pytest tests/` with the SAME --ignore list
+#     as ci.yml, but with fewer optional CLIs installed (no helm / vector /
+#     mtail / jsonschema) → strictly MORE silent skips, zero extra coverage.
+#   - go-tests ran threshold-exporter only, WITHOUT -race / -count=1 and
+#     without tenant-api at all — ci.yml runs both modules with the race
+#     detector.
+# Every PR paid for both duplicate runs; the two jobs are REMOVED and
+# ci.yml is the single source of Python/Go test coverage on PRs.
+#
+# ⛔ OWNER RUNBOOK — flip branch protection BEFORE merging the PR that
+# carries this change (Settings → Branches → main → required status
+# checks):
+#   - REMOVE "Python Tests" and "Go Tests"          (this workflow's
+#     deleted job names — once the jobs are gone these checks would sit
+#     "Expected" forever and hard-block EVERY PR)
+#   - ADD "Python Tests (3.13)" and "Go Tests (1.26)" (the ci.yml
+#     equivalents; ci.yml runs unfiltered on every PR + push to main, so
+#     the names are reported on every PR — verify they appear in the
+#     latest CI run before enrolling, per the iac-lint-baseline checklist
+#     caveat)
+# Until the flip, the PR carrying THIS change is itself blocked by the old
+# required checks — that is expected behavior, not a bug: flip first, then
+# merge.
+#
 # Checks:
-#   1. Python tests (450+ tests)
-#   2. Go tests (threshold-exporter)
-#   2b. Go lint (golangci standard + depguard dependency-direction; both modules)
-#   3. Tenant config validation (schema + routing + policy)
-#   4. Custom rule linting (deny-list)
-#   5. Version consistency (bump_docs --check)
+#   1. Go lint (golangci standard + depguard dependency-direction; both modules)
+#   2. Tenant config validation (schema + routing + policy)
+#   3. Custom rule linting (deny-list)
+#   4. Version consistency (bump_docs --check)
+# (Python/Go tests live in ci.yml — see DEDUP note above.)
 
 name: Validate
 
@@ -60,17 +86,16 @@ jobs:
             validate:
               - "components/threshold-exporter/config/**"
               - "components/threshold-exporter/app/**"
-              # tenant-api: branch-protection on `main` requires the four jobs
-              # in this workflow (Python Tests, Go Tests, Validate Tenant
-              # Config & Routes, Version Consistency). Pre-PR-216 the path
+              # tenant-api: branch-protection on `main` requires this
+              # workflow's jobs (today: Go Lint, Validate Tenant Config &
+              # Routes, Version Consistency — the Python/Go test jobs moved
+              # to ci.yml, see the DEDUP banner). Pre-PR-216 the path
               # filter excluded `components/tenant-api/**`, so any tenant-api-
               # only PR couldn't satisfy the required-checks contract and
               # merging fell back to admin override / artificial cross-touch
-              # in CHANGELOG. The included jobs don't actually exercise
-              # tenant-api code (Python tests + threshold-exporter Go tests
-              # + threshold-exporter config validation + version-bump check),
-              # but they're cheap to run and the symmetry with threshold-
-              # exporter PRs is the cleanest fix.
+              # in CHANGELOG. Go Lint DOES lint tenant-api; the other jobs
+              # are cheap to run and the symmetry with threshold-exporter
+              # PRs is the cleanest fix.
               - "components/tenant-api/**"
               - "rule-packs/**"
               - "scripts/tools/**"
@@ -87,41 +112,9 @@ jobs:
               - "helm/**"
               - "docs/**"
 
-  python-tests:
-    name: Python Tests
-    runs-on: ubuntu-latest
-    needs: detect-changes
-    if: needs.detect-changes.outputs.validate_changed == 'true'
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-      # Install the same deps as ci.yml's python-tests job. Previously
-      # this step only installed pyyaml, which made `python -m pytest`
-      # fail with "No module named pytest" on every run. The same
-      # ignores are applied to match ci.yml's test collection and
-      # keep the two workflows in sync.
-      # pathspec: check_iac_vibe_rules.py (Container SAST L1, #448/TRK-311)
-      # imports it; its unit tests in tests/lint/ need it. Keep in sync with
-      # ci.yml's Python Tests job and nightly-mutation-pilot.yaml.
-      - run: pip install pyyaml croniter pytest pytest-cov promql-parser hypothesis pathspec
-      - run: python -m pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e -v
-
-  go-tests:
-    name: Go Tests
-    runs-on: ubuntu-latest
-    needs: detect-changes
-    if: needs.detect-changes.outputs.validate_changed == 'true'
-    defaults:
-      run:
-        working-directory: components/threshold-exporter/app
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.26"
-      - run: go test -v ./...
+  # (python-tests / go-tests jobs removed — see the DEDUP + OWNER RUNBOOK
+  # banner at the top of this file. ci.yml's "Python Tests (3.13)" and
+  # "Go Tests (1.26)" are the required checks now.)
 
   go-lint:
     name: Go Lint
@@ -138,16 +131,36 @@ jobs:
       # `curl | sh` — matching the hadolint download-then-verify pattern in
       # ci.yml. The verified script in turn checks the golangci-lint binary's
       # own checksum against the release.
+      # Download-cache for the golangci-lint BINARY (same versioned-name +
+      # always-verify cache pattern as ci.yml's pinned-binary installs; see
+      # ci.yml's Lint job hadolint step for the full rationale). Unlike the
+      # tarball caches, the installed binary itself is cached: the pinned,
+      # SHA-verified install.sh verifies the release archive's checksum at
+      # install time, and the binary lands in a VERSION-NAMED directory —
+      # so a version bump with a stale cache key can never silently reuse
+      # the old binary (the new versioned dir simply won't exist → clean
+      # reinstall, re-downloading every run until the key is fixed). This
+      # is a HARD step: an install failure fails the job, so the cache
+      # post-save can't capture a partial entry.
+      - name: Cache golangci-lint binary
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/vibe-dl-golangci
+          key: ${{ runner.os }}-vibe-dl-golangci-v2.12.2
+
       - name: Install golangci-lint
         run: |
           GOLANGCI_VERSION=v2.12.2
-          GOLANGCI_INSTALL_SHA256=d32d3534af96cfd59546a084d22b213e8a47541cada5013aa8a84c4fa2589905
-          curl -fsSL -o /tmp/golangci-install.sh \
-            "https://raw.githubusercontent.com/golangci/golangci-lint/${GOLANGCI_VERSION}/install.sh"
-          bash scripts/ops/_verify_download.sh /tmp/golangci-install.sh "$GOLANGCI_INSTALL_SHA256"
-          sh /tmp/golangci-install.sh -b "$(go env GOPATH)/bin" "$GOLANGCI_VERSION"
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-          "$(go env GOPATH)/bin/golangci-lint" version
+          BIN="$HOME/.cache/vibe-dl-golangci/${GOLANGCI_VERSION}"
+          if [ ! -x "$BIN/golangci-lint" ]; then
+            GOLANGCI_INSTALL_SHA256=d32d3534af96cfd59546a084d22b213e8a47541cada5013aa8a84c4fa2589905
+            curl -fsSL -o /tmp/golangci-install.sh \
+              "https://raw.githubusercontent.com/golangci/golangci-lint/${GOLANGCI_VERSION}/install.sh"
+            bash scripts/ops/_verify_download.sh /tmp/golangci-install.sh "$GOLANGCI_INSTALL_SHA256"
+            sh /tmp/golangci-install.sh -b "$BIN" "$GOLANGCI_VERSION"
+          fi
+          echo "$BIN" >> "$GITHUB_PATH"
+          "$BIN/golangci-lint" version
       # standard linters + depguard dependency-direction ratchet (per-module
       # .golangci.yml: domain↛handler for tenant-api, logic↛net/http for exporter).
       - name: Lint tenant-api
