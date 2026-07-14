@@ -317,7 +317,7 @@ def build_parser():
     )
     add_prometheus_arg(
         parser,
-        help_text="Prometheus URL (default: http://localhost:9090)",
+        help_text="Prometheus URL (default: $PROMETHEUS_URL, else http://localhost:9090)",
     )
     parser.add_argument(
         "--namespace", default="monitoring",

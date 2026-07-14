@@ -456,8 +456,19 @@ def print_usage():
 
 
 def inject_prometheus_env(args):
-    """If --prometheus is not in args, inject PROMETHEUS_URL env var as default."""
-    if "--prometheus" not in args:
+    """If --prometheus is not in args, inject PROMETHEUS_URL env var as default.
+
+    Both argv spellings count as "already specified": the separate-token form
+    (``--prometheus URL``) and the inline form (``--prometheus=URL``). Matching
+    only the bare token would let the inline form slip through and still get an
+    env value appended — and since argparse keeps the LAST occurrence, the
+    injected env URL would then silently override the endpoint the caller
+    explicitly asked for. Explicit CLI always wins.
+    """
+    already_specified = any(
+        a == "--prometheus" or a.startswith("--prometheus=") for a in args
+    )
+    if not already_specified:
         prom_url = os.environ.get("PROMETHEUS_URL")
         if prom_url:
             args.extend(["--prometheus", prom_url])

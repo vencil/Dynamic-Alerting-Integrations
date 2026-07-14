@@ -330,7 +330,8 @@ def main():
         help="What to check (edge cluster, central cluster, or end-to-end)",
     )
     add_prometheus_arg(parser,
-                       help_text="Prometheus URL (central for e2e, or target for edge/central)")
+                       help_text="Prometheus URL (central for e2e, or target for edge/central; "
+                                 "default: $PROMETHEUS_URL, else http://localhost:9090)")
     parser.add_argument("--edge-urls",
                         help="Comma-separated edge Prometheus URLs (for e2e mode)")
     parser.add_argument("--json", action="store_true",

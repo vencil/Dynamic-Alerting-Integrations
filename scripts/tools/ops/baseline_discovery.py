@@ -181,7 +181,7 @@ def main():
     )
     parser.add_argument("--tenant", required=True, help="Tenant namespace (e.g. db-a)")
     add_prometheus_arg(parser,
-                       help_text="Prometheus URL (預設: http://localhost:9090)")
+                       help_text="Prometheus URL (預設: $PROMETHEUS_URL，否則 http://localhost:9090)")
     parser.add_argument("--duration", type=int, default=600,
                         help="觀測持續時間（秒，預設: 600 = 10 分鐘）")
     parser.add_argument("--interval", type=int, default=15,

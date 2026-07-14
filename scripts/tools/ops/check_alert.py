@@ -82,7 +82,7 @@ if __name__ == "__main__":
     parser.add_argument("tenant", help="Tenant ID (e.g. db-a)")
     add_prometheus_arg(parser,
                        help_text="Prometheus Query API URL "
-                                 "(預設: http://localhost:9090; "
+                                 "(預設: $PROMETHEUS_URL，否則 http://localhost:9090; "
                                  "叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)")
     # #452 Track C: this tool emits JSON by design (consumers like
     # tests/scenarios/scenario-d.sh parse stdout as JSON). --json is the

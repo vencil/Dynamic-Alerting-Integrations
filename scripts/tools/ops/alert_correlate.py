@@ -489,9 +489,13 @@ def main():
     if args.input:
         alerts = load_alerts_from_json(args.input)
     else:
+        # `... or "http://localhost:9090"` (not os.environ.get's default): a
+        # PROMETHEUS_URL that is SET BUT EMPTY (e.g. a ConfigMap key resolving
+        # to "") would satisfy get()'s key lookup and yield an empty URL. Same
+        # empty-string hardening as _lib_io.add_prometheus_arg.
         prom_url = (args.prometheus
-                    or os.environ.get("PROMETHEUS_URL",
-                                      "http://localhost:9090"))
+                    or os.environ.get("PROMETHEUS_URL")
+                    or "http://localhost:9090")
         alerts = load_alerts_from_alertmanager(prom_url)
 
     if not alerts:

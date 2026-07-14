@@ -647,7 +647,8 @@ def main():
         help="What to check",
     )
     add_prometheus_arg(parser,
-                       help_text="Prometheus Query API URL (default: http://localhost:9090)")
+                       help_text="Prometheus Query API URL "
+                                 "(default: $PROMETHEUS_URL, else http://localhost:9090)")
     parser.add_argument("--alertmanager", default="http://localhost:9093",
                         help="Alertmanager API URL (default: http://localhost:9093)")
     parser.add_argument("--json", action="store_true",

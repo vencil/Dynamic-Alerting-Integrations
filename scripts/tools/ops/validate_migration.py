@@ -378,7 +378,7 @@ def main():
     parser.add_argument("--new", help="新 Recording Rule 的 PromQL 查詢 (搭配 --old)")
     add_prometheus_arg(parser,
                        help_text="Prometheus Query API URL "
-                                 "(預設: http://localhost:9090; "
+                                 "(預設: $PROMETHEUS_URL，否則 http://localhost:9090; "
                                  "叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)")
     parser.add_argument("-o", "--output-dir", default="validation_output",
                         help="輸出目錄 (預設: validation_output)")

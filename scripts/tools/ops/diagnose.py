@@ -55,8 +55,8 @@ _HELP = {
         'en': 'Tenant ID (e.g. db-a)'
     },
     'prometheus': {
-        'zh': 'Prometheus Query API URL (預設: http://localhost:9090; 叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)',
-        'en': 'Prometheus Query API URL (default: http://localhost:9090; for in-cluster, use http://prometheus.monitoring.svc.cluster.local:9090)'
+        'zh': 'Prometheus Query API URL (預設: $PROMETHEUS_URL，否則 http://localhost:9090; 叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)',
+        'en': 'Prometheus Query API URL (default: $PROMETHEUS_URL, else http://localhost:9090; for in-cluster, use http://prometheus.monitoring.svc.cluster.local:9090)'
     },
     'config_dir': {
         'zh': '租戶配置目錄路徑 (conf.d/)，用於設定檔查詢',

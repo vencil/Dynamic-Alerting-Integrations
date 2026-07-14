@@ -101,6 +101,27 @@ class TestInjectPrometheusEnv:
         result = entrypoint.inject_prometheus_env(args)
         assert result.count("--prometheus") == 1
 
+    def test_no_inject_when_inline_flag_present(self, monkeypatch):
+        """--prometheus=URL（inline 形式）已存在時不注入。
+
+        回歸鎖：只比對裸 token 會漏掉 inline 形式 → 仍注入 env 值，而
+        argparse 取最後一個 → env 靜默蓋掉呼叫端明確指定的端點。
+        """
+        monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")
+        args = ["--prometheus=http://explicit:9090", "--tenant", "db-a"]
+        result = entrypoint.inject_prometheus_env(args)
+        assert result == ["--prometheus=http://explicit:9090", "--tenant", "db-a"]
+        assert "http://env:9090" not in result
+
+    def test_inline_flag_explicit_value_wins_in_argparse(self, monkeypatch):
+        """端到端：inline 形式經 argparse 解析後仍是呼叫端指定的值。"""
+        import argparse
+        monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")
+        args = entrypoint.inject_prometheus_env(["--prometheus=http://explicit:9090"])
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--prometheus")
+        assert parser.parse_args(args).prometheus == "http://explicit:9090"
+
     def test_no_inject_when_env_unset(self, monkeypatch):
         """PROMETHEUS_URL 未設定時不注入。"""
         monkeypatch.delenv("PROMETHEUS_URL", raising=False)
