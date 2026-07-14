@@ -260,7 +260,7 @@ func (w *Watcher[T]) load() error {
 // _rbac.yaml fail closed (ADR-027 MED-8, see rbac.failClosedOnEmpty),
 // and for every manager it is how a GitOps `git rm` of the config
 // takes effect. Do not "harden" this into an error — see
-// rbac_extra_test.go TestLoad_DeletedFile.
+// config_reload_test.go TestLoad_DeletedFile (internal/rbac).
 //
 // SHA-256 dedup avoids re-parsing unchanged files on every WatchLoop
 // tick. On a parse failure lastHash is left untouched (holding the

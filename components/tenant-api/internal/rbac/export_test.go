@@ -11,7 +11,7 @@ package rbac
 // pre-existing rbac test call sites keep compiling unchanged, and because
 // each delegate is exactly one line into the production entry point, that
 // historical test matrix doubles as the byte-identical oracle for the
-// refactor (see allowed_equiv_test.go for the explicit equivalence pin).
+// refactor (see legacy_equiv_test.go for the explicit equivalence pin).
 //
 // ⛔ Do NOT add logic here (no branching, no default-filling, no
 // normalisation): a delegate that diverges from the production entry point
