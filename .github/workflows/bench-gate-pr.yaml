@@ -44,6 +44,8 @@ name: Bench Gate (PR-time, Tier 1)
 #     invisible source of false regressions into an explicit INCONCLUSIVE verdict.
 #   - Wall-time stays ~20-25 min (same total benchtime as v5's count=6; the
 #     extra cost is process starts + tiny canaries, offset by pre-compiling once).
+#     (2026-07 stage C slimming: BENCHTIME 3s→1s later cut nominal wall to
+#     ~8-10 min — see the Run step and the timeout-minutes budget note.)
 #
 # Governance (Phase 2 — INFORMATIONAL):
 #   - The gate no longer blocks merge. A real regression posts a PR comment and
@@ -79,6 +81,22 @@ name: Bench Gate (PR-time, Tier 1)
 # See: issue #433, issue #67 (closed/superseded), bench-record.yaml (nightly),
 #      memory feedback `feedback_github_actions_workflow_gotchas.md`
 #      (Traps 7-12 codify the SRE defenses learned across v1-v5).
+#
+# ── Two-stage trigger rollout (C→B, 2026-07) ─────────────────────────────────
+# Stage C (now, this file): the PR-time auto-run STAYS but is slimmed —
+#   BENCHTIME 3s→1s (main loop ~12min→~4min) and the `rule-packs/**` path
+#   filter is removed (structurally zero-signal for recipe-only PRs; see the
+#   paths comment below).
+# Stage B (bench-attrib-main.yaml): the SAME interleaved harness runs
+#   post-merge on main (HEAD vs HEAD^; squash-merge policy ⇒ 1 commit = 1 PR,
+#   so attribution stays exact) and auto-files a `perf-regression` issue naming
+#   the offending commit.
+# FLIP (owner decision AFTER B has soaked 2-4 weeks — deliberately NOT in the
+#   commit that introduced B, to stage risk): once bench-attrib-main has proven
+#   itself, PRs stop auto-running the bench — delete this workflow's
+#   `pull_request` trigger block below. On-demand PR benching then lives in
+#   bench-on-demand.yaml (`/bench` comment, OWNER/MEMBER only), which already
+#   carries the full harness, so the flip is a one-block deletion here.
 
 on:
   pull_request:
@@ -91,7 +109,7 @@ on:
       # whole app dir fired the gate on PRs with no benchmarkable Go delta —
       # e.g. a `.dockerignore` change (#597) or a `*_test.go` deflake (#532),
       # both pure noise that a maintainer had to override. Limit to non-test
-      # Go + module files, keeping rule-packs and this workflow's own edits.
+      # Go + module files, keeping this workflow's own edits.
       # ORDER-SENSITIVE: GitHub Actions includes a path when a positive
       # pattern matches AND no *later* `!` pattern excludes it, so the
       # `*_test.go` exclusion must follow the `**/*.go` include. `**/*.go`
@@ -102,7 +120,12 @@ on:
       - '!components/threshold-exporter/app/**/*_test.go'
       - 'components/threshold-exporter/app/go.mod'
       - 'components/threshold-exporter/app/go.sum'
-      - 'rule-packs/**'
+      # 'rule-packs/**' REMOVED (2026-07 stage C, owner-verified): all 4 bench
+      # files (threshold-exporter app + pkg/config) reference ZERO rule-packs
+      # fixtures, so a recipe-only PR triggering a bench run was structurally
+      # zero-signal — nothing it changes sits on the measured path. If a future
+      # benchmark starts loading rule-packs fixtures, ADD THIS BACK:
+      #   - 'rule-packs/**'
       - '.github/workflows/bench-gate-pr.yaml'
 
 concurrency:
@@ -179,14 +202,15 @@ jobs:
     name: Bench + Compare (single-runner interleaved + canary)
     needs: preflight
     runs-on: ubuntu-latest
-    # Budget: ~6 interleaved rounds × (base+pr full set @3s) + pre-compile once +
-    # tiny canaries + benchstat = ~20-25 min nominal. 40 min cap gives headroom for
-    # slow runners + Go module download flakes + Azure pool variance, AND
-    # leaves enough buffer for the step summary + fail-gate steps to actually
-    # render before a hard-kill. A tighter 30 min budget risks hard-killing
-    # mid-output, which leaves the dev with a red check and no diagnostic.
-    # [Gemini round-12 timeout-tightrope catch.]
-    timeout-minutes: 40
+    # Budget: ~6 interleaved rounds × (base+pr full set @1s) + pre-compile once +
+    # tiny canaries + benchstat = ~8-10 min nominal (was ~20-25 min @3s before
+    # the 2026-07 stage-C slimming; cap lowered 40→20 keeping the same ~2×
+    # headroom ratio). The cap must cover slow runners + Go module download
+    # flakes + Azure pool variance, AND leave enough buffer for the step
+    # summary + fail-gate steps to actually render before a hard-kill — a cap
+    # that hard-kills mid-output leaves the dev with a red check and no
+    # diagnostic. [Gemini round-12 timeout-tightrope catch.]
+    timeout-minutes: 20
     steps:
       - name: Checkout repo (full history for both base + pr commits)
         uses: actions/checkout@v6
@@ -271,13 +295,25 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/bench-out"
+          # ROUNDS=6 — do NOT lower. benchstat's Mann-Whitney U per-side sample
+          # count IS ROUNDS; the two-sided minimum reachable p-value is
+          # 2/C(2n,n): n=6 → ≈0.0022 < α=0.01 ✓; n=4 → ≈0.029 ✗; n=2 → ≈0.33 ✗.
+          # With ROUNDS<5 the α=0.01 significance gate is MATHEMATICALLY
+          # unreachable — every run reads "no significant regression" and the
+          # gate degrades to a permanently-green ornament. Statistical power
+          # lives in the sample count; tune BENCHTIME for wall-time instead.
+          #
+          # BENCHTIME=1s (3s→1s, 2026-07 stage C): main loop ~12min→~4min.
+          # 1s still clears these benches' per-iteration cost comfortably;
+          # per-sample variance widens slightly but the α=0.01 + |Δ|≥5% dual
+          # threshold (below) already absorbs free-tier noise.
           BASE_DIR="$RUNNER_TEMP/wt-base/components/threshold-exporter/app" \
           PR_DIR="$RUNNER_TEMP/wt-pr/components/threshold-exporter/app" \
           CANARY_DIR="$RUNNER_TEMP/bench-harness/bench-canary" \
           BENCH_OUT_DIR="$RUNNER_TEMP/bench-out" \
           ROUNDS=6 \
           BENCH_RE='_1000(_|$)|MixedMode|Simulate_DeepChain' \
-          BENCHTIME=3s \
+          BENCHTIME=1s \
             bash "$RUNNER_TEMP/bench-harness/bench_interleave.sh"
 
       - name: Compare with benchstat
