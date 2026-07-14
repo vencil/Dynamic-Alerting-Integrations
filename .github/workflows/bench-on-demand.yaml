@@ -1,0 +1,163 @@
+name: Bench On-Demand (/bench)
+
+# `/bench` PR-comment trigger — the post-soak home of PR-time benching in the
+# two-stage C→B rework (2026-07). FULLY FUNCTIONAL now (not a stub): once
+# bench-attrib-main.yaml has soaked 2-4 weeks, the owner flips PR benching
+# from automatic to on-demand by deleting bench-gate-pr.yaml's `pull_request`
+# trigger block — zero changes needed here. Until then this coexists with the
+# auto-run gate (an extra manual knob, e.g. to re-measure after a re-run
+# request or on a PR whose paths didn't trigger the gate).
+#
+# Verdict semantics + PR reporting are IDENTICAL to bench-gate-pr.yaml — same
+# shared core (scripts/tools/ops/bench_gate_compare.sh) and same reporter
+# (bench_report_pr.sh: informational comment + `perf-regression` label,
+# never blocks).
+#
+# SECURITY MODEL — issue_comment runs in DEFAULT-BRANCH context with a
+# write-capable token, while the bench compiles and EXECUTES PR-head Go test
+# code inside the worktrees: the classic pwn-request shape, deliberately
+# contained instead of avoided:
+#   - The job only starts for comment author_association ∈ {OWNER, MEMBER}:
+#     a maintainer explicitly requests benching that head (the standard
+#     /ok-to-test pattern). Drive-by fork comments cannot trigger it.
+#   - Workflow definition, harness scripts, and the canary always come from
+#     the DEFAULT-BRANCH checkout; PR code is only ever bench material.
+#   - Permissions are the same minimal set as the PR gate (contents: read +
+#     comment/label writes) — no repo-mutating scopes.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write  # post the informational result comment
+  issues: write         # `perf-regression` label + ack reaction (PRs are issues underneath)
+
+concurrency:
+  # Rapid repeat /bench on the same PR: only the latest matters.
+  group: bench-on-demand-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    name: /bench — interleaved bench vs merge-base
+    # Gate: PR comments only (issue_comment also fires on plain issues),
+    # `/bench` command only, OWNER/MEMBER authors only (see SECURITY MODEL).
+    if: >-
+      github.event.issue.pull_request
+      && startsWith(github.event.comment.body, '/bench')
+      && contains(fromJSON('["OWNER", "MEMBER"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    # Same budget as bench-gate-pr (identical workload; ~8-10 min nominal).
+    timeout-minutes: 20
+    steps:
+      - name: Ack the command (eyes reaction)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          # Best-effort UX ping so the commenter knows the run started;
+          # never fail the bench over a reaction.
+          gh api "repos/$REPO/issues/comments/$COMMENT_ID/reactions" \
+            -f content=eyes >/dev/null 2>&1 \
+            || echo "::warning::could not add ack reaction (non-fatal)"
+
+      # Default-branch checkout (issue_comment context) = TRUSTED harness;
+      # full history so merge-base + fetched PR head both resolve.
+      - name: Checkout default branch (trusted harness; full history)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Cache Go modules + build
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.26-
+            ${{ runner.os }}-go-
+
+      - name: Resolve PR head + merge-base
+        id: refs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          # Bound via env, not raw ${{ }} in run: (#1021 class house rule).
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          head_sha=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq .headRefOid)
+          base_ref=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json baseRefName --jq .baseRefName)
+          # refs/pull/N/head works for fork PRs too. Verify the API-reported
+          # head actually arrived (guards a push racing between the API call
+          # and the fetch — fail loud, don't bench a stale head silently).
+          git fetch origin "pull/$PR_NUMBER/head"
+          if ! git rev-parse --verify -q "$head_sha^{commit}" >/dev/null; then
+            echo "::error::PR head $head_sha not found after fetch (push race?) — re-comment /bench."
+            exit 2
+          fi
+          # Same virtual-merge trap as bench-gate-pr's preflight: never
+          # merge-base against a checkout HEAD; use the explicit head SHA so
+          # git walks the PR's real ancestry to the true divergence point.
+          base_sha=$(git merge-base "$head_sha" "origin/$base_ref")
+          if [ -z "$base_sha" ]; then
+            echo "::error::Could not compute merge-base between $head_sha and origin/$base_ref"
+            exit 2
+          fi
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "Merge-base: $base_sha vs PR head: $head_sha"
+
+      - name: Run interleaved bench + verdict (shared core)
+        id: compare
+        # ROUNDS=6 — do NOT lower: Mann-Whitney U min two-sided p = 2/C(2n,n);
+        # below n=5 the α=0.01 gate is mathematically unreachable (full math
+        # note in the script header). BENCHTIME=1s (stage-C slimming).
+        env:
+          BASE_SHA: ${{ steps.refs.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.refs.outputs.head_sha }}
+          ROUNDS: "6"
+          BENCHTIME: "1s"
+        run: bash scripts/tools/ops/bench_gate_compare.sh
+
+      - name: Render step summary
+        if: always()
+        env:
+          REGRESSION: ${{ steps.compare.outputs.regression }}
+          REGRESSIONS_LIST: ${{ steps.compare.outputs.regressions }}
+          INCONCLUSIVE: ${{ steps.compare.outputs.inconclusive }}
+          INCONCLUSIVE_REASON: ${{ steps.compare.outputs.inconclusive_reason }}
+          INCONCLUSIVE_CPUS: ${{ steps.compare.outputs.inconclusive_cpus }}
+          INCONCLUSIVE_CANARY: ${{ steps.compare.outputs.inconclusive_canary }}
+          BENCHSTAT_TXT: ${{ steps.compare.outputs.benchstat_txt }}
+          COMPARE_DESC: |
+            `/bench` on-demand run: compared PR HEAD (`${{ steps.refs.outputs.head_sha }}`)
+            against merge-base (`${{ steps.refs.outputs.base_sha }}`).
+          REGRESSION_NOTE: |
+            **Informational only — this does NOT block merge.** A `perf-regression` label
+            and a PR comment were applied. If the slowdown is a deliberate correctness/safety
+            trade-off, just note it in the PR; otherwise fix the perf and re-run `/bench` (the
+            label is removed automatically once the regression clears). The nightly
+            `bench-record` trend watchdog independently watches main for sustained drift.
+        run: bash scripts/tools/ops/bench_render_summary.sh
+
+      - name: Report regression (informational — comment + label, never blocks)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          REGRESSION: ${{ steps.compare.outputs.regression }}
+          INCONCLUSIVE: ${{ steps.compare.outputs.inconclusive }}
+          REGRESSIONS_LIST: ${{ steps.compare.outputs.regressions }}
+        run: bash scripts/tools/ops/bench_report_pr.sh
