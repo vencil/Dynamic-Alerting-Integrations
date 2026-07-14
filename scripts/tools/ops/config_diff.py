@@ -27,6 +27,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
+    format_json_report,
     is_disabled as _is_disabled,
     iter_yaml_files,
     load_tenant_configs as _load_tenant_configs_raw,
@@ -642,7 +643,7 @@ def main():
             "profile_diffs": profile_diffs,
             "custom_alert_diffs": custom_alert_diffs,
         }
-        print(json.dumps(output, indent=2, ensure_ascii=False, default=str))
+        print(format_json_report(output, default=str))
     else:
         print(render_markdown(
             diffs, args.old_dir, args.new_dir,

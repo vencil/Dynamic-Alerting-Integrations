@@ -91,6 +91,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_python import format_json_report  # noqa: E402
 
 try:
     import yaml
@@ -565,7 +566,7 @@ def main(argv: list[str] | None = None) -> int:
     report["errors"] = errors
 
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False, default=str))
+        print(format_json_report(report, default=str))
     else:
         render_text(
             report,

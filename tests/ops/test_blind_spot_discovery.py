@@ -422,3 +422,24 @@ class TestMainIntegration:
         monkeypatch.setattr(bsd, "query_prometheus_targets", mock_targets)
         bsd.main()
         assert captured_url[0] == "http://env-prom:9090"
+
+    def test_prom_empty_env_falls_back_to_localhost(self, monkeypatch, capsys,
+                                                    tmp_path, cli_argv):
+        """PROMETHEUS_URL 設定但為空字串（如 ConfigMap 缺鍵）→ 回退 localhost。
+
+        回歸鎖：os.environ.get(key, default) 對 present-but-empty 會回空字串
+        （key 存在），把空 URL 送進請求。
+        """
+        conf_dir = tmp_path / "conf.d"
+        conf_dir.mkdir()
+        (conf_dir / "t1.yaml").write_text("redis:\n  x: {}\n", encoding="utf-8")
+        monkeypatch.setenv("PROMETHEUS_URL", "")
+        cli_argv("blind_spot_discovery", "--config-dir", str(conf_dir))
+        captured_url = []
+
+        def mock_targets(url):
+            captured_url.append(url)
+            return []
+        monkeypatch.setattr(bsd, "query_prometheus_targets", mock_targets)
+        bsd.main()
+        assert captured_url[0] == "http://localhost:9090"

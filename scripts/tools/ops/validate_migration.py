@@ -63,8 +63,8 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import http_get_json, write_text_secure, write_json_secure, query_prometheus_instant  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_python import http_get_json, write_text_secure, write_json_secure, query_prometheus_instant, add_prometheus_arg  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Alias for backward-compat within this module
 query_prometheus = query_prometheus_instant
@@ -205,6 +205,32 @@ def print_summary(all_results):
                           f"舊={d['old_value']} 新={d['new_value']} "
                           f"(差異={d['delta']:.4f})")
         print()
+
+
+def classify_results(all_results):
+    """將一輪比對結果歸類為 exit-code 訊號（README §6.3 / _lib_exitcodes 契約）。
+
+    回傳 (has_finding, has_query_error)：
+      - has_finding: 任一 diff 為 mismatch / old_missing / new_missing。
+        口徑刻意與 print_summary 的計數一致（both_empty 不計）。
+      - has_query_error: 任一 pair 查詢失敗（run_single_comparison 回傳
+        None——Prometheus 連線 / 查詢層錯誤）。沿用姊妹工具
+        shadow_verify.py 的 #452/#737 歸類：unreachable Prometheus /
+        query failure 屬 caller error（exit 2，system-actionable），
+        不是 violation。此維度只影響 exit code：print_summary 跳過
+        None result，摘要可能印「全數一致」卻 exit 2——摘要輸出的
+        gating 屬 pre-existing 行為，本波不改輸出、另案處理。
+    """
+    has_finding = False
+    has_query_error = False
+    for result in all_results:
+        if result is None:
+            has_query_error = True
+            continue
+        for d in result["diffs"]:
+            if d["status"] in ("mismatch", "old_missing", "new_missing"):
+                has_finding = True
+    return has_finding, has_query_error
 
 
 def write_csv_report(all_results, output_dir):
@@ -350,10 +376,10 @@ def main():
     group.add_argument("--old", help="舊 Recording Rule 的 PromQL 查詢")
 
     parser.add_argument("--new", help="新 Recording Rule 的 PromQL 查詢 (搭配 --old)")
-    parser.add_argument("--prometheus", default="http://localhost:9090",
-                        help="Prometheus Query API URL "
-                             "(預設: http://localhost:9090; "
-                             "叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)")
+    add_prometheus_arg(parser,
+                       help_text="Prometheus Query API URL "
+                                 "(預設: $PROMETHEUS_URL，否則 http://localhost:9090; "
+                                 "叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)")
     parser.add_argument("-o", "--output-dir", default="validation_output",
                         help="輸出目錄 (預設: validation_output)")
     parser.add_argument("--tolerance", type=float, default=0.001,
@@ -390,7 +416,7 @@ def main():
 
     if not pairs:
         print("No comparison pairs found.")
-        return
+        return EXIT_OK
 
     def run_once():
         all_results = []
@@ -415,6 +441,7 @@ def main():
             print(f"  Convergence detection: stability window = {args.stability_window} rounds\n")
 
         csv_path = None
+        all_results = []
         for i in range(args.rounds):
             print(f"\n--- Round {i+1}/{args.rounds} ({time.strftime('%H:%M:%S')}) ---")
             all_results = run_once()
@@ -451,12 +478,46 @@ def main():
 
         if csv_path:
             print(f"\n  CSV report: {csv_path}")
+
+        # Exit 語意（watch 以「收斂／最後一輪」判定；README §6.3）：
+        #   - --auto-detect-convergence 且 ready → EXIT_OK。收斂（連續
+        #     stability_window 輪全 match）即 shadow monitoring 成功；
+        #     早期輪的 mismatch 是等待收斂的常態，不算 violation。
+        #   - 有 tracker 但未收斂（跑滿 rounds 仍不穩定）→ EXIT_VIOLATION，
+        #     即使最後一輪碰巧全 match——單輪乾淨不足以推翻「未達
+        #     stability window」的判定。
+        #   - 無 tracker → 以最後一輪為準：有 mismatch / missing →
+        #     EXIT_VIOLATION，全 match → EXIT_OK。
+        #   - 判定輪（最後一輪）有查詢層失敗 → EXIT_CALLER_ERROR，優先於
+        #     violation（對齊 shadow_verify.py）；已收斂則不看——收斂本身
+        #     已證明查詢可用且數值穩定。
+        if tracker is not None and tracker.compute_report()["ready"]:
+            return EXIT_OK
+        has_finding, has_query_error = classify_results(all_results)
+        if has_query_error:
+            return EXIT_CALLER_ERROR
+        if tracker is not None:
+            return EXIT_VIOLATION  # 未收斂
+        return EXIT_VIOLATION if has_finding else EXIT_OK
     else:
         all_results = run_once()
         print_summary(all_results)
         csv_path = write_csv_report(all_results, args.output_dir)
         print(f"📁 CSV 報告: {csv_path}")
 
+        # Exit 語意（單次模式；README §6.3——修 silent-pass：mismatch /
+        # missing 此前一路 exit 0，客戶 cutover CI 的
+        # `da-tools validate && promote` 會在數值不符時誤放行）：
+        # 查詢層失敗 → EXIT_CALLER_ERROR（優先，對齊 shadow_verify.py）；
+        # mismatch / missing → EXIT_VIOLATION；全 match → EXIT_OK。
+        has_finding, has_query_error = classify_results(all_results)
+        if has_query_error:
+            return EXIT_CALLER_ERROR
+        return EXIT_VIOLATION if has_finding else EXIT_OK
+
 
 if __name__ == "__main__":
-    main()
+    # entrypoint.py 以 exec_module(__main__) 執行本檔，exit code 只能靠
+    # SystemExit 上傳——裸 main() 會把回傳值丟掉（正是 silent-pass bug 的
+    # 後半段）。main() 回傳 int、這裡統一轉成 process exit code。
+    sys.exit(main())

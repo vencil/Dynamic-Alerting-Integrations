@@ -33,6 +33,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_python import format_json_report  # noqa: E402
 
 
 def run_cmd(cmd):
@@ -292,7 +293,7 @@ def main():
         # Preview mode: show diff without applying
         diff = diff_preview(cm_data, mode, args.tenant, args.metric_key, args.value)
         if args.json:
-            print(json.dumps(diff, indent=2, ensure_ascii=False))
+            print(format_json_report(diff))
         else:
             print_diff(diff)
     else:

@@ -27,6 +27,7 @@ from typing import List, Optional
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import (  # noqa: E402
     detect_cli_lang,
+    format_json_report,
     http_get_json,
     parse_duration_seconds,
 )
@@ -405,11 +406,6 @@ def format_text_report(report: dict) -> str:
     return "\n".join(lines)
 
 
-def format_json_report(report: dict) -> str:
-    """Format JSON report."""
-    return json.dumps(report, indent=2, ensure_ascii=False)
-
-
 def format_markdown_report(report: dict) -> str:
     """Format Markdown report."""
     lines = []
@@ -493,9 +489,13 @@ def main():
     if args.input:
         alerts = load_alerts_from_json(args.input)
     else:
+        # `... or "http://localhost:9090"` (not os.environ.get's default): a
+        # PROMETHEUS_URL that is SET BUT EMPTY (e.g. a ConfigMap key resolving
+        # to "") would satisfy get()'s key lookup and yield an empty URL. Same
+        # empty-string hardening as _lib_io.add_prometheus_arg.
         prom_url = (args.prometheus
-                    or os.environ.get("PROMETHEUS_URL",
-                                      "http://localhost:9090"))
+                    or os.environ.get("PROMETHEUS_URL")
+                    or "http://localhost:9090")
         alerts = load_alerts_from_alertmanager(prom_url)
 
     if not alerts:

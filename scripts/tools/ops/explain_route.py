@@ -15,7 +15,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -36,7 +35,7 @@ from generate_alertmanager_routes import (  # noqa: E402
     _parse_config_files,
     merge_routing_with_defaults,
 )
-from _lib_python import detect_cli_lang  # noqa: E402
+from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 
 
@@ -521,7 +520,7 @@ def main(argv: list[str] | None = None) -> int:
                 parsed, t, args.alertname, args.severity)
             traces.append(trace)
         if args.json:
-            print(json.dumps(traces, indent=2, ensure_ascii=False))
+            print(format_json_report(traces))
         else:
             for trace in traces:
                 print(format_trace(trace, lang=lang))
@@ -531,7 +530,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.show_profile_expansion:
         expansion = explain_profile_expansion(parsed)
         if args.json:
-            print(json.dumps(expansion, indent=2, ensure_ascii=False))
+            print(format_json_report(expansion))
         else:
             print(format_profile_expansion(expansion, lang=lang))
         return EXIT_OK
@@ -555,7 +554,7 @@ def main(argv: list[str] | None = None) -> int:
         results.append(explanation)
 
     if args.json:
-        print(json.dumps(results, indent=2, ensure_ascii=False))
+        print(format_json_report(results))
     else:
         for explanation in results:
             print(format_explanation(explanation, lang=lang))

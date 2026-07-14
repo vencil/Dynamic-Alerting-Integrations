@@ -96,6 +96,54 @@ class TestDetectCliLang:
 
 
 # ============================================================
+# add_prometheus_arg (_lib_io, re-exported via _lib_python)
+# ============================================================
+
+class TestAddPrometheusArg:
+    """--prometheus $PROMETHEUS_URL fallback (README §6.1).
+
+    The env resolution happens at argparse-default time, so parse_args([])
+    reflects whatever the env said when add_prometheus_arg ran.
+    """
+
+    def _default(self):
+        import argparse
+        parser = argparse.ArgumentParser()
+        lib.add_prometheus_arg(parser)
+        return parser.parse_args([]).prometheus
+
+    def test_env_unset_falls_back_to_localhost(self, monkeypatch):
+        monkeypatch.delenv("PROMETHEUS_URL", raising=False)
+        assert self._default() == "http://localhost:9090"
+
+    def test_env_set_is_used(self, monkeypatch):
+        monkeypatch.setenv("PROMETHEUS_URL", "http://prom:1234")
+        assert self._default() == "http://prom:1234"
+
+    def test_env_empty_falls_back_to_localhost(self, monkeypatch):
+        # Empty PROMETHEUS_URL (e.g. a ConfigMap key that resolves empty)
+        # must fall back to localhost — aligning with inject_prometheus_env's
+        # `if prom_url:` truthiness so the two fallback mechanisms agree.
+        monkeypatch.setenv("PROMETHEUS_URL", "")
+        assert self._default() == "http://localhost:9090"
+
+    def test_explicit_default_wins_over_env(self, monkeypatch):
+        import argparse
+        monkeypatch.setenv("PROMETHEUS_URL", "http://prom:1234")
+        parser = argparse.ArgumentParser()
+        lib.add_prometheus_arg(parser, default="http://forced:9999")
+        assert parser.parse_args([]).prometheus == "http://forced:9999"
+
+    def test_explicit_flag_overrides_default(self, monkeypatch):
+        import argparse
+        monkeypatch.setenv("PROMETHEUS_URL", "http://prom:1234")
+        parser = argparse.ArgumentParser()
+        lib.add_prometheus_arg(parser)
+        assert parser.parse_args(
+            ["--prometheus", "http://cli:5678"]).prometheus == "http://cli:5678"
+
+
+# ============================================================
 # parse_duration_seconds
 # ============================================================
 

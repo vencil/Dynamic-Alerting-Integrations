@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
-import json
 import os
 import re
 import sys
@@ -51,12 +50,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 try:
     from _lib_python import (
         detect_cli_lang,
+        format_json_report,
         load_yaml_file,
         parse_duration_seconds,
     )
 except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
         detect_cli_lang,
+        format_json_report,
         load_yaml_file,
         parse_duration_seconds,
     )
@@ -699,7 +700,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # Output
     if args.json_output:
-        print(json.dumps(generate_json_report(result), indent=2, ensure_ascii=False))
+        print(format_json_report(generate_json_report(result)))
     else:
         print(generate_text_report(result, lang))
 

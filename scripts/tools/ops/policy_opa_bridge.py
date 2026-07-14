@@ -59,11 +59,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 try:
     from _lib_python import (
         detect_cli_lang,
+        format_json_report,
         load_yaml_file,
     )
 except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
         detect_cli_lang,
+        format_json_report,
         load_yaml_file,
     )
 
@@ -496,7 +498,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # Dry-run mode
     if args.dry_run:
-        print(json.dumps(opa_input, indent=2, ensure_ascii=False))
+        print(format_json_report(opa_input))
         return EXIT_OK
 
     # Evaluate via OPA
@@ -527,7 +529,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # Output
     if args.json_output:
-        print(json.dumps(generate_json_report(result), indent=2, ensure_ascii=False))
+        print(format_json_report(generate_json_report(result)))
     else:
         print(generate_text_report(result, lang))
 

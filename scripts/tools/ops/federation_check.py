@@ -25,7 +25,6 @@ Usage:
 """
 
 import argparse
-import json
 import os
 import sys
 import urllib.parse
@@ -33,7 +32,7 @@ import urllib.parse
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import http_get_json, query_prometheus_instant  # noqa: E402
+from _lib_python import format_json_report, http_get_json, query_prometheus_instant, add_prometheus_arg  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Alias for backward-compat within this module
@@ -330,8 +329,9 @@ def main():
         choices=["edge", "central", "e2e"],
         help="What to check (edge cluster, central cluster, or end-to-end)",
     )
-    parser.add_argument("--prometheus", default="http://localhost:9090",
-                        help="Prometheus URL (central for e2e, or target for edge/central)")
+    add_prometheus_arg(parser,
+                       help_text="Prometheus URL (central for e2e, or target for edge/central; "
+                                 "default: $PROMETHEUS_URL, else http://localhost:9090)")
     parser.add_argument("--edge-urls",
                         help="Comma-separated edge Prometheus URLs (for e2e mode)")
     parser.add_argument("--json", action="store_true",
@@ -362,12 +362,12 @@ def main():
     )
 
     if args.json:
-        print(json.dumps({
+        print(format_json_report({
             "tool": "federation-check",
             "section": section,
             "status": "fail" if has_failure else "pass",
             "checks": checks,
-        }, indent=2, ensure_ascii=False))
+        }))
     else:
         format_output(section, checks)
         print(f"\n{'='*60}")

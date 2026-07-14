@@ -37,7 +37,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
-from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
+from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -440,11 +440,6 @@ def format_text_report(summary: dict) -> str:
         lines.append("")
 
     return "\n".join(lines)
-
-
-def format_json_report(summary: dict) -> str:
-    """Format a JSON report."""
-    return json.dumps(summary, indent=2, ensure_ascii=False)
 
 
 def format_markdown_report(summary: dict) -> str:

@@ -60,7 +60,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
-from _lib_python import http_get_json, write_text_secure, query_prometheus_instant  # noqa: E402
+from _lib_python import http_get_json, write_text_secure, query_prometheus_instant, add_prometheus_arg  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 # Alias for backward-compat within this module
@@ -180,8 +180,8 @@ def main():
         description="Baseline Discovery — 負載觀測 + 閾值建議工具",
     )
     parser.add_argument("--tenant", required=True, help="Tenant namespace (e.g. db-a)")
-    parser.add_argument("--prometheus", default="http://localhost:9090",
-                        help="Prometheus URL (預設: http://localhost:9090)")
+    add_prometheus_arg(parser,
+                       help_text="Prometheus URL (預設: $PROMETHEUS_URL，否則 http://localhost:9090)")
     parser.add_argument("--duration", type=int, default=600,
                         help="觀測持續時間（秒，預設: 600 = 10 分鐘）")
     parser.add_argument("--interval", type=int, default=15,

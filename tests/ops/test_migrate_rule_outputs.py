@@ -315,6 +315,274 @@ class TestWriteOutputs:
 
 
 # ---------------------------------------------------------------------------
+# render_* pure serializers (extracted from write_outputs — ROI refactor W3)
+# Golden-string tests: the render_* functions build the exact file content with
+# no IO. Byte-identity vs the pre-refactor writer was verified out-of-band; here
+# we pin the golden strings + dedup/convergence behavior + prove write_outputs
+# is a thin writer (written file == render_*() output).
+# ---------------------------------------------------------------------------
+def _perfect_user_selected(name, **kw):
+    """_make_result perfect helper that also pins agg_mode/agg_reason (which
+    _make_result leaves as None) so the recording-rules comment line is stable."""
+    r = _make_result(name, status="perfect", **kw)
+    r.agg_mode = "max"
+    r.agg_reason = "使用者手動選擇"
+    return r
+
+
+class TestRenderTenantConfig:
+    def test_golden_simple_perfect(self):
+        r = _make_result("CPU", status="perfect", severity="warning",
+                         tenant_config={"custom_cpu": "0.9"})
+        expected = (
+            "# ============================================================\n"
+            "# Tenant Config — 複製到 conf.d/<tenant>.yaml\n"
+            "# ============================================================\n"
+            "# 請將以下內容縮排並貼入您專屬的 tenant 設定中，例如：\n"
+            "# tenants:\n"
+            "#   my-tenant-name:\n"
+            '#     custom_cpu: "0.9"\n'
+            "\n"
+            "# --- From: CPU (severity: warning) ---\n"
+            'custom_cpu: "0.9"\n'
+            "\n"
+        )
+        assert mr.render_tenant_config([r]) == expected
+
+    def test_excludes_unparseable_and_use_golden(self):
+        good = _make_result("Good", tenant_config={"custom_a": "1"})
+        bad = _make_result("Bad", status="unparseable")
+        gold = _make_result("Gold", tenant_config={"custom_g": "9"},
+                            triage_action="use_golden")
+        out = mr.render_tenant_config([good, bad, gold])
+        assert "custom_a" in out
+        assert "Bad" not in out       # unparseable excluded entirely
+        assert "custom_g" not in out  # use_golden excluded from tenant config
+        assert "Gold" not in out
+
+    def test_notes_and_dim_hints_rendered(self):
+        r = _make_result("CPU", tenant_config={"custom_cpu": "0.9"},
+                         notes=["a note"])
+        r.dim_hints = [{"labels": {"instance": "db01"}}]
+        out = mr.render_tenant_config([r])
+        assert "# 📖 a note\n" in out
+        assert "# 維度標籤替代語法:\n" in out
+        assert 'custom_cpu{instance="db01"}' in out
+
+
+class TestRenderRecordingRules:
+    def test_golden_simple_perfect(self):
+        r = _perfect_user_selected(
+            "CPU", recording_rules=[{"record": "tenant:cpu:max", "expr": "max(cpu)"}])
+        expected = (
+            "# ============================================================\n"
+            "# Platform Recording Rules — 可直接合併至 Prometheus ConfigMap\n"
+            "# ============================================================\n"
+            "# 收斂率: 1 條規則 → 1 條 Recording Rules (壓縮 50.0%)\n"
+            "# ============================================================\n\n"
+            "groups:\n"
+            "  - name: custom_migrated-recording-rules\n"
+            "    rules:\n"
+            "      # CPU | max — 使用者手動選擇\n"
+            "      - record: tenant:cpu:max\n"
+            "        expr: max(cpu)\n"
+            "\n"
+        )
+        assert mr.render_recording_rules([r], "custom_") == expected
+
+    def test_no_prefix_group_name(self):
+        r = _perfect_user_selected(
+            "CPU", recording_rules=[{"record": "r", "expr": "max(x)"}])
+        out = mr.render_recording_rules([r], "")
+        assert "  - name: migrated-recording-rules\n" in out
+
+    def test_dedup_skips_duplicate_record_preserving_first(self):
+        r1 = _perfect_user_selected(
+            "A", recording_rules=[{"record": "dup", "expr": "max(a)"}])
+        r2 = _perfect_user_selected(
+            "B", recording_rules=[{"record": "dup", "expr": "max(b)"},
+                                  {"record": "new", "expr": "max(c)"}])
+        out = mr.render_recording_rules([r1, r2], "custom_")
+        # dup collapses to one occurrence (first-seen expr wins).
+        assert out.count("- record: dup\n") == 1
+        assert "        expr: max(a)\n" in out      # first-seen kept
+        assert "        expr: max(b)\n" not in out  # duplicate dropped
+        assert out.count("- record: new\n") == 1
+
+    def test_ai_guess_warning_box_for_complex(self):
+        r = _make_result("Mem", status="complex",
+                         recording_rules=[{"record": "r", "expr": "sum(m)"}])
+        r.agg_mode = "sum"
+        r.agg_reason = "AI 猜測"
+        out = mr.render_recording_rules([r], "custom_")
+        assert "🚨🚨🚨 [AI 智能猜測注意] 🚨🚨🚨" in out
+        assert "聚合模式為 AI 自動猜測: sum" in out
+
+    def test_complex_user_selected_uses_else_branch(self):
+        r = _make_result("Mem", status="complex",
+                         recording_rules=[{"record": "r", "expr": "sum(m)"}])
+        r.agg_mode = "sum"
+        r.agg_reason = "使用者手動選擇"
+        out = mr.render_recording_rules([r], "custom_")
+        assert "[AI 智能猜測注意]" not in out
+        assert "      # Mem | sum — 使用者手動選擇\n" in out
+
+    def test_convergence_rate_reflects_dedup(self):
+        # 3 parseable inputs, 2 unique records -> total_input=3, total_output=2.
+        # compression = round((1 - 2/max(6,1))*100, 1) = 66.7
+        results = [
+            _perfect_user_selected("A", recording_rules=[{"record": "x", "expr": "1"}]),
+            _perfect_user_selected("B", recording_rules=[{"record": "x", "expr": "2"}]),
+            _perfect_user_selected("C", recording_rules=[{"record": "y", "expr": "3"}]),
+        ]
+        out = mr.render_recording_rules(results, "custom_")
+        assert "# 收斂率: 3 條規則 → 2 條 Recording Rules (壓縮 66.7%)\n" in out
+
+
+class TestDedupRecordingRulesHelper:
+    def test_order_preserved_and_golden_unparseable_excluded(self):
+        a = _make_result("A", recording_rules=[{"record": "x", "expr": "1"}])
+        dup = _make_result("Dup", recording_rules=[{"record": "x", "expr": "2"}])
+        b = _make_result("B", recording_rules=[{"record": "y", "expr": "3"}])
+        bad = _make_result("Bad", status="unparseable",
+                           recording_rules=[{"record": "z", "expr": "9"}])
+        gold = _make_result("Gold", triage_action="use_golden",
+                            recording_rules=[{"record": "g", "expr": "9"}])
+        dedup = mr._dedup_recording_rules([a, dup, b, bad, gold])
+        assert [rr["record"] for _, rr in dedup] == ["x", "y"]
+
+
+class TestRenderAlertRules:
+    def test_golden_with_for_labels_annotations(self):
+        r = _make_result("CPU", status="perfect", alert_rules=[{
+            "alert": "CPU",
+            "expr": "custom_cpu > 0.9",
+            "for": "5m",
+            "labels": {"severity": "warning"},
+            "annotations": {"summary": "hi"},
+        }])
+        expected = (
+            "# ============================================================\n"
+            "# Platform Dynamic Alert Rules — 可直接合併至 Prometheus ConfigMap\n"
+            "# ============================================================\n"
+            "groups:\n"
+            "  - name: custom_migrated-alert-rules\n"
+            "    rules:\n"
+            "      # --- CPU ---\n"
+            "      - alert: CPU\n"
+            "        expr: |\n"
+            "          custom_cpu > 0.9\n"
+            "        for: 5m\n"
+            "        labels:\n"
+            "          severity: warning\n"
+            "        annotations:\n"
+            '          summary: "hi"\n'
+            "\n"
+        )
+        assert mr.render_alert_rules([r], "custom_") == expected
+
+    def test_multiline_expr_literal_block(self):
+        r = _make_result("Multi", alert_rules=[{"alert": "M", "expr": "a\nand b"}])
+        out = mr.render_alert_rules([r], "custom_")
+        assert "        expr: |\n          a\n          and b\n" in out
+
+    def test_no_prefix_group_name(self):
+        r = _make_result("CPU", alert_rules=[{"alert": "C", "expr": "x"}])
+        out = mr.render_alert_rules([r], "")
+        assert "  - name: migrated-alert-rules\n" in out
+
+    def test_excludes_unparseable_and_use_golden(self):
+        good = _make_result("Good", alert_rules=[{"alert": "G", "expr": "x"}])
+        bad = _make_result("Bad", status="unparseable")
+        gold = _make_result("Gold", alert_rules=[{"alert": "Z", "expr": "z"}],
+                            triage_action="use_golden")
+        out = mr.render_alert_rules([good, bad, gold], "custom_")
+        assert "--- Good ---" in out
+        assert "Bad" not in out
+        assert "Gold" not in out
+
+
+class TestRenderReport:
+    def test_golden_single_perfect(self):
+        r = _perfect_user_selected(
+            "CPU", recording_rules=[{"record": "r1", "expr": "max(cpu)"}])
+        # engine label is environment-dependent (promql-parser present or not).
+        engine = "AST" if mr.HAS_AST else "regex"
+        expected = (
+            "=" * 60 + "\n"
+            + f"遷移報告 (Migration Report) — v4 ({engine} engine)\n"
+            + "=" * 60 + "\n\n"
+            + "總規則數: 1\n"
+            + "  ✅ 完美解析: 1\n"
+            + "  ⚠️  複雜表達式 (已自動猜測): 0\n"
+            + "  🚨 無法解析 (需 LLM 協助): 0\n"
+            + "  📖 建議使用黃金標準: 0\n\n"
+            + "📊 收斂率統計:\n"
+            + "  輸入: 1 條傳統規則\n"
+            + "  輸出: 1 條 Recording Rules + 1 條 Alert Rules\n"
+            + "  壓縮率: 50.0%\n"
+            + "\n"
+            + "-" * 40 + "\n"
+            + "✅ 完美解析的規則\n"
+            + "-" * 40 + "\n"
+            + "  • CPU: max (使用者手動選擇)\n"
+            + "\n"
+        )
+        assert mr.render_report([r]) == expected
+
+    def test_use_golden_section(self):
+        r = _make_result("Gold", status="perfect", triage_action="use_golden",
+                         dict_match={"golden_rule": "g.yaml#cpu",
+                                     "maps_to": "node_cpu",
+                                     "rule_pack": "infra",
+                                     "note": "exact"})
+        out = mr.render_report([r])
+        assert "📖 建議使用黃金標準 — 請用 scaffold_tenant.py 設定閾值\n" in out
+        assert "  • Gold\n" in out
+        assert "    → 黃金標準: g.yaml#cpu\n" in out
+        assert "    → Metric Key: node_cpu\n" in out
+        assert "    → Rule Pack: infra\n" in out
+
+    def test_unparseable_llm_prompt_section(self):
+        r = _make_result("Bad", status="unparseable", llm_prompt="PROMPT")
+        out = mr.render_report([r])
+        assert "🚨 無法自動解析" in out
+        assert "\n### Bad ###\nPROMPT\n" in out
+
+    def test_convergence_output_count_reflects_dedup(self):
+        a = _perfect_user_selected("A", recording_rules=[{"record": "x", "expr": "1"}])
+        b = _perfect_user_selected("B", recording_rules=[{"record": "x", "expr": "2"}])
+        out = mr.render_report([a, b])
+        # duplicate record collapses -> 1 Recording Rule reported.
+        assert "  輸出: 1 條 Recording Rules" in out
+
+
+class TestWriteOutputsIsThinWriter:
+    """Byte-identity protection: the old inline serialization path is gone, so
+    instead we assert each written file byte-equals its render_*() output —
+    proving write_outputs only persists the renderer strings (no extra
+    transform)."""
+    def test_written_files_equal_renderer_output(self, tmp_path):
+        results = [
+            _perfect_user_selected(
+                "P", tenant_config={"custom_a": "1"},
+                alert_rules=[{"alert": "P", "expr": "a > 1"}],
+                recording_rules=[{"record": "r1", "expr": "max(a)"}]),
+            _make_result("U", status="unparseable", llm_prompt="LLM"),
+        ]
+        dest = tmp_path / "out"
+        mr.write_outputs(results, str(dest), prefix="custom_", dictionary={})
+        assert (dest / "tenant-config.yaml").read_text(encoding="utf-8") == \
+            mr.render_tenant_config(results)
+        assert (dest / "platform-recording-rules.yaml").read_text(encoding="utf-8") == \
+            mr.render_recording_rules(results, "custom_")
+        assert (dest / "platform-alert-rules.yaml").read_text(encoding="utf-8") == \
+            mr.render_alert_rules(results, "custom_")
+        assert (dest / "migration-report.txt").read_text(encoding="utf-8") == \
+            mr.render_report(results)
+
+
+# ---------------------------------------------------------------------------
 # print_dry_run / print_triage
 # ---------------------------------------------------------------------------
 class TestPrintDryRun:
