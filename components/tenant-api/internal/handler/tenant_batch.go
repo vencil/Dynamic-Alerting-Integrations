@@ -73,7 +73,9 @@ type BatchResponse struct {
 // @Param       async query   string       false "Enable async mode (true/false)"
 // @Success     200  {object} BatchResponse
 // @Success     202  {object} map[string]interface{}
-// @Failure     400  {object} map[string]string
+// @Failure     400  {object} ErrorResponse
+// @Failure     500  {object} ErrorResponse
+// @Failure     503  {object} ErrorResponse
 // @Router      /api/v1/tenants/batch [post]
 func BatchTenants(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {

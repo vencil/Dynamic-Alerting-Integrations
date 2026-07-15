@@ -95,12 +95,12 @@ func toFederationTokenRecord(r token.Record) FederationTokenRecord {
 // @Produce     json
 // @Param       body body     CreateFederationTokenRequest true "Token request"
 // @Success     201  {object} CreateFederationTokenResponse
-// @Failure     400  {object} map[string]string
-// @Failure     403  {object} map[string]string
-// @Failure     409  {object} map[string]string
-// @Failure     429  {object} map[string]string
-// @Failure     500  {object} map[string]string
-// @Failure     503  {object} map[string]string
+// @Failure     400  {object} handler.ErrorResponse
+// @Failure     403  {object} handler.ErrorResponse
+// @Failure     409  {object} handler.ErrorResponse
+// @Failure     429  {object} handler.ErrorResponse
+// @Failure     500  {object} handler.ErrorResponse
+// @Failure     503  {object} handler.ErrorResponse
 // @Router      /api/v1/federation/tokens [post]
 func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -207,9 +207,9 @@ func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 // @Produce     json
 // @Param       tenant_id query string true "Tenant ID"
 // @Success     200 {array}  FederationTokenRecord
-// @Failure     400 {object} map[string]string
-// @Failure     403 {object} map[string]string
-// @Failure     500 {object} map[string]string
+// @Failure     400 {object} handler.ErrorResponse
+// @Failure     403 {object} handler.ErrorResponse
+// @Failure     500 {object} handler.ErrorResponse
 // @Router      /api/v1/federation/tokens [get]
 func ListFederationTokens(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -260,9 +260,9 @@ func ListFederationTokens(d *handler.Deps) http.HandlerFunc {
 // @Produce     json
 // @Param       id path string true "Token ID"
 // @Success     200 {object} map[string]string
-// @Failure     403 {object} map[string]string
-// @Failure     404 {object} map[string]string
-// @Failure     500 {object} map[string]string
+// @Failure     403 {object} handler.ErrorResponse
+// @Failure     404 {object} handler.ErrorResponse
+// @Failure     500 {object} handler.ErrorResponse
 // @Router      /api/v1/federation/tokens/{id} [delete]
 func DeleteFederationToken(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

@@ -39,7 +39,7 @@ type TenantSummary struct {
 // @Tags        tenants
 // @Produce     json
 // @Success     200 {array}  TenantSummary
-// @Failure     500 {object} map[string]string
+// @Failure     500 {object} ErrorResponse
 // @Router      /api/v1/tenants [get]
 func ListTenants(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

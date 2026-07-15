@@ -34,8 +34,8 @@ type DiffResponse struct {
 // @Param       id    path     string      true "Tenant ID"
 // @Param       body  body     DiffRequest true "Proposed YAML"
 // @Success     200   {object} DiffResponse
-// @Failure     400   {object} map[string]string
-// @Failure     500   {object} map[string]string
+// @Failure     400   {object} ErrorResponse
+// @Failure     500   {object} ErrorResponse
 // @Router      /api/v1/tenants/{id}/diff [post]
 func DiffTenant(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {

@@ -39,9 +39,9 @@ import (
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"
 // @Success     200  {object} cfg.EffectiveConfig
-// @Failure     400  {object} map[string]string
-// @Failure     404  {object} map[string]string
-// @Failure     500  {object} map[string]string
+// @Failure     400  {object} ErrorResponse
+// @Failure     404  {object} ErrorResponse
+// @Failure     500  {object} ErrorResponse
 // @Router      /api/v1/tenants/{id}/effective [get]
 func GetTenantEffective(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

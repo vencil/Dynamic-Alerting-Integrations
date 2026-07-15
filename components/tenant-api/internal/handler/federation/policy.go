@@ -86,9 +86,11 @@ type PutFederationPolicyRequest struct {
 // @Produce     json
 // @Param       body body     PutFederationPolicyRequest true "Whitelist + optional admission force/reason"
 // @Success     200  {object} map[string]any
-// @Failure     400  {object} map[string]any
-// @Failure     403  {object} map[string]string
-// @Failure     409  {object} map[string]string
+// @Failure     400  {object} handler.ErrorResponse
+// @Failure     403  {object} handler.ErrorResponse
+// @Failure     409  {object} handler.ErrorResponse
+// @Failure     500  {object} handler.ErrorResponse
+// @Failure     503  {object} handler.ErrorResponse
 // @Router      /api/v1/federation/policy [put]
 func PutFederationPolicy(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -343,7 +345,8 @@ func admissionMetrics(results []fedpolicy.AdmissionResult) []string {
 // @Produce     json
 // @Param       id path string true "Tenant ID"
 // @Success     200 {object} fedpolicy.Subset
-// @Failure     400 {object} map[string]string
+// @Failure     400 {object} handler.ErrorResponse
+// @Failure     500 {object} handler.ErrorResponse
 // @Router      /api/v1/tenants/{id}/federation [get]
 func GetTenantFederation(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -377,9 +380,11 @@ func GetTenantFederation(d *handler.Deps) http.HandlerFunc {
 // @Param       id   path string true "Tenant ID"
 // @Param       body body fedpolicy.Subset true "Metric subset"
 // @Success     200  {object} map[string]any
-// @Failure     400  {object} map[string]string
-// @Failure     403  {object} map[string]string
-// @Failure     409  {object} map[string]string
+// @Failure     400  {object} handler.ErrorResponse
+// @Failure     403  {object} handler.ErrorResponse
+// @Failure     409  {object} handler.ErrorResponse
+// @Failure     500  {object} handler.ErrorResponse
+// @Failure     503  {object} handler.ErrorResponse
 // @Router      /api/v1/tenants/{id}/federation [put]
 func PutTenantFederation(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

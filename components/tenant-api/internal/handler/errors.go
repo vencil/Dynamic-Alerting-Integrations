@@ -97,7 +97,13 @@ type ErrorResponse struct {
 	// custom MarshalJSON below — clients see them as siblings of
 	// `error`, not nested.
 	Extra map[string]any `json:"-"`
-}
+} //@name ErrorResponse
+// The swag @name above pins ONE canonical OpenAPI definition. Without it,
+// @Failure annotations referencing this type from this package (bare
+// `ErrorResponse`) and from the federation sub-package
+// (`handler.ErrorResponse`) generate two byte-identical definitions under
+// different package-qualified names (internal_handler.ErrorResponse vs
+// github_com_vencil_tenant-api_internal_handler.ErrorResponse).
 
 // MarshalJSON inlines Extra at the top level so clients reading
 // e.g. `existing_pr_url` find it next to `error`, matching the

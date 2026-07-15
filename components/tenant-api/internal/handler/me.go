@@ -46,7 +46,7 @@ type MeResponse struct {
 // @Tags        identity
 // @Produce     json
 // @Success     200 {object} MeResponse
-// @Failure     401 {object} map[string]string
+// @Failure     401 {object} ErrorResponse
 // @Router      /api/v1/me [get]
 func Me(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

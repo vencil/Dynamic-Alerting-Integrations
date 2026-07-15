@@ -40,8 +40,9 @@ type TenantDetail struct {
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"
 // @Success     200  {object} TenantDetail
-// @Failure     404  {object} map[string]string
-// @Failure     500  {object} map[string]string
+// @Failure     400  {object} ErrorResponse
+// @Failure     404  {object} ErrorResponse
+// @Failure     500  {object} ErrorResponse
 // @Router      /api/v1/tenants/{id} [get]
 func GetTenant(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -68,8 +69,11 @@ func GetTenant(d *Deps) http.HandlerFunc {
 		warnings := merged.ValidateTenantKeys()
 		resolved := merged.ResolveAt(time.Now())
 
-		// Filter to only this tenant's thresholds
-		var tenantResolved []cfg.ResolvedThreshold
+		// Filter to only this tenant's thresholds. Initialized non-nil so a
+		// tenant with zero thresholds serializes as [] (the spec declares an
+		// array; nil would serialize as null — caught by the contract fuzz,
+		// same class as the /me empty-slice normalization in #245).
+		tenantResolved := make([]cfg.ResolvedThreshold, 0)
 		for _, rt := range resolved {
 			if rt.Tenant == tenantID {
 				tenantResolved = append(tenantResolved, rt)

@@ -149,3 +149,8 @@ docs/rule-packs/
 # disable-hooks trick gets mangled to `dev/null`). Root-anchored `/dev/` so a nested
 # `<pkg>/dev/` elsewhere in the tree is NOT swept in.
 /dev/
+
+# schemathesis 4.x drops a report cache dir under the cwd it runs from
+# (tests/contract runner, `make contract-test`). Root-anchored: only the
+# repo-root litter from a local run is ignored.
+/.schemathesis/
