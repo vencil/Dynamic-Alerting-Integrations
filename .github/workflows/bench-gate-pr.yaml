@@ -168,10 +168,15 @@ jobs:
     steps:
       # CRITICAL: fetch-depth: 0 required for `git merge-base`. See
       # comments on the bench-job checkout for the same gotcha.
+      # persist-credentials: false — this job only runs LOCAL git reads
+      # (merge-base over already-fetched history), so the token has no
+      # reason to live on in .git/config. See the bench-job checkout for
+      # the threat-model note.
       - name: Checkout with full history
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # CRITICAL: compute merge-base ourselves. Two distinct gotchas:
       #
@@ -229,10 +234,20 @@ jobs:
     # diagnostic. [Gemini round-12 timeout-tightrope catch.]
     timeout-minutes: 20
     steps:
+      # persist-credentials: false (same hardening bench-on-demand.yaml
+      # carries): this job EXECUTES the PR's test binaries (a malicious
+      # TestMain is arbitrary code) and the bench worktrees share this
+      # checkout's .git — don't leave the job token sitting in .git/config
+      # for it to read. Residual risk was low anyway (fork PRs get a
+      # read-only token; same-repo PR authors already have write), but no
+      # later step needs persisted credentials: the compare step is pure
+      # local git (rev-parse/worktree over the full-history fetch) and the
+      # reporter step authenticates via its own explicit GH_TOKEN env.
       - name: Checkout repo (full history for both base + pr commits)
         uses: actions/checkout@v6
         with:
           fetch-depth: 0  # need history to walk to merge-base
+          persist-credentials: false
 
       - name: Set up Go 1.26
         uses: actions/setup-go@v6

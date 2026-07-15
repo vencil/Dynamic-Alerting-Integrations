@@ -74,10 +74,18 @@ jobs:
     # ~8-10 min nominal, ~2× headroom).
     timeout-minutes: 20
     steps:
+      # persist-credentials: false — weaker threat model than the PR gate
+      # (the test binaries executed here are built from commits already
+      # MERGED to main, i.e. reviewed code, not an open PR's), but the
+      # hardening is free: every later git op is local (rev-parse/worktree
+      # over the full-history fetch) and the issue-management step
+      # authenticates via its own explicit GH_TOKEN env, so nothing needs
+      # the token persisted in .git/config.
       - name: Checkout (full history — need HEAD^)
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Go 1.26
         uses: actions/setup-go@v6
