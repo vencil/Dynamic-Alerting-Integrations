@@ -415,6 +415,13 @@ definitions:
       tenant_id:
         type: string
     type: object
+  internal_handler.BoolDelta:
+    properties:
+      from:
+        type: boolean
+      to:
+        type: boolean
+    type: object
   internal_handler.DiffRequest:
     properties:
       proposed:
@@ -442,6 +449,84 @@ definitions:
           Truncated is true when the result hit the server-side cap; the
           caller should narrow with a longer prefix.
         type: boolean
+    type: object
+  internal_handler.DryRunAdded:
+    properties:
+      candidate_index:
+        type: integer
+      rule:
+        description: stripped in the redacted view
+        type: string
+    type: object
+  internal_handler.DryRunCandidate:
+    properties:
+      rbac_yaml:
+        type: string
+    type: object
+  internal_handler.DryRunChanged:
+    properties:
+      candidate_index:
+        type: integer
+      live_index:
+        type: integer
+      outcome_enforce:
+        $ref: '#/definitions/internal_handler.StringDelta'
+      outcome_shadow:
+        $ref: '#/definitions/internal_handler.StringDelta'
+      rule:
+        description: stripped in the redacted view
+        type: string
+      unsatisfiable:
+        $ref: '#/definitions/internal_handler.BoolDelta'
+    type: object
+  internal_handler.DryRunDiff:
+    properties:
+      added:
+        items:
+          $ref: '#/definitions/internal_handler.DryRunAdded'
+        type: array
+      alignment:
+        type: string
+      changed:
+        items:
+          $ref: '#/definitions/internal_handler.DryRunChanged'
+        type: array
+      removed:
+        items:
+          $ref: '#/definitions/internal_handler.DryRunRemoved'
+        type: array
+    type: object
+  internal_handler.DryRunRemoved:
+    properties:
+      live_index:
+        type: integer
+      rule:
+        description: stripped in the redacted view
+        type: string
+    type: object
+  internal_handler.DryRunRequest:
+    properties:
+      candidate:
+        $ref: '#/definitions/internal_handler.DryRunCandidate'
+    type: object
+  internal_handler.DryRunResponse:
+    properties:
+      baseline:
+        $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseReport'
+      candidate:
+        $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseReport'
+      candidate_sha256:
+        type: string
+      caveats:
+        items:
+          type: string
+        type: array
+      diff:
+        $ref: '#/definitions/internal_handler.DryRunDiff'
+      generated_at:
+        type: string
+      schema_version:
+        type: integer
     type: object
   internal_handler.GroupBatchRequest:
     properties:
@@ -513,6 +598,20 @@ definitions:
       email:
         type: string
       groups:
+        items:
+          type: string
+        type: array
+      org_claim_keys:
+        description: |-
+          OrgClaimKeys are the org-scope claim keys of the rules THIS caller
+          matches (ADR-027 / LD-6 P7) — a caller-relative fact ("which of my
+          claims act as an org axis for me"), NOT "does the platform run an org
+          axis". Intersected with the principal's present claims by construction:
+          the redacted reverse report strips claim keys as customer-recognizable
+          identifiers (they name the identity axes a deployment runs), so /me
+          must not reveal an org-scope key name the caller does not already
+          carry a value for. Sorted, de-duplicated; omitempty keeps the zero-org
+          (and pre-P7) response body byte-identical.
         items:
           type: string
         type: array
@@ -619,6 +718,13 @@ definitions:
     required:
     - filters
     - label
+    type: object
+  internal_handler.StringDelta:
+    properties:
+      from:
+        type: string
+      to:
+        type: string
     type: object
   internal_handler.TenantDetail:
     properties:
@@ -845,6 +951,75 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: 'Reverse access report: who can access this tenant (audit-only)'
+      tags:
+      - audit
+  /api/v1/audit/tenants/{id}/access-report/dry-run:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Evaluates an operator-supplied candidate _rbac.yaml through the
+        SAME strict parse+validation pipeline and reverse-report core
+        the live config runs, WITHOUT installing it, and reports what
+        would change for tenant {id}: the live baseline report, the
+        candidate report (config_anchor honestly unanchored; the
+        envelope's candidate_sha256 pins the submitted bytes), and a
+        structural diff paired by rule name before any redaction.
+        Mutates nothing. Requires the same NON-org-scoped platform
+        admin grant as the GET endpoint; all other callers receive the
+        byte-identical constant 403 (no tenant-enumeration oracle).
+      parameters:
+      - description: Tenant ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Opt-in expansions
+        enum:
+        - org_values
+        in: query
+        name: include
+        type: string
+      - default: full
+        description: Report projection
+        enum:
+        - full
+        - redacted
+        in: query
+        name: view
+        type: string
+      - description: Candidate config envelope
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_handler.DryRunRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.DryRunResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: 'What-if dry-run: diff a candidate _rbac.yaml''s access report (audit-only)'
       tags:
       - audit
   /api/v1/federation/accounts/backfill:

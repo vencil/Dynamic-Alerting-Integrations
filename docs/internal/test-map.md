@@ -145,7 +145,7 @@ if !waitFor(t, 2*time.Second, func() bool {
 | `shared/test_entrypoint.py` | da-tools CLI entrypoint | 24 | monkeypatch 完成 |
 | `ops/test_onboard_platform.py` | 完整 onboard 管線 | 71 | parametrize receiver types |
 | `ops/test_integration.py` | 跨模組 routing + PipelineBuilder | 17 | integration marker |
-| `shared/test_snapshot.py` | 18 個 JSON snapshot | 18 | snapshot marker |
+| `shared/test_help_contract.py` | 5 個 CLI `--help` 結構契約（flag 存在 / required / choices） | 5 | 取代全文 help 快照（py-version 無關） |
 | `ops/test_domain_policy.py` | webhook domain allowlist + fnmatch | 26 | |
 | `ops/test_error_consistency.py` | warning format 一致性 | 14 | |
 | `shared/test_mutation_guards.py` | 函式行為精確值 | 49 | |
@@ -216,10 +216,11 @@ if !waitFor(t, 2*time.Second, func() bool {
 
 ## Snapshot 工作流
 
-快照位於 `tests/snapshots/*.json`，首次執行自動建立。
+JSON 快照位於 `tests/snapshots/*.json`。
 
-- 更新快照：`UPDATE_SNAPSHOTS=1 pytest tests/lint/test_snapshot_v2.py tests/shared/test_snapshot.py`
+- 更新快照：`UPDATE_SNAPSHOTS=1 pytest tests/lint/test_snapshot_v2.py`
 - 結構化 diff：整合 deepdiff 顯示差異
+- CLI `--help` 已不用全文快照（churn 高、且 py-version 後綴在 CI py3.13 只會 auto-create+skip）；改用 `tests/shared/test_help_contract.py` 結構契約——新增 flag 時同步更新該檔 `HELP_CONTRACTS`
 
 ## Benchmark 基線
 

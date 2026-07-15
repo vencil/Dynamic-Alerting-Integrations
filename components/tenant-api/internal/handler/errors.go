@@ -69,6 +69,11 @@ const (
 	// the client should back off and retry rather than the server piling up
 	// unbounded goroutines.
 	CodeWriteOverloaded = "WRITE_OVERLOADED"
+	// CodeCandidateInvalid marks a 400 whose candidate _rbac.yaml failed the
+	// live parse/validation pipeline (POST …/access-report/dry-run, ADR-027 /
+	// LD-6 P7). Distinct from BAD_REQUEST so a client can render the echoed
+	// parse detail inline against the submitted document.
+	CodeCandidateInvalid = "CANDIDATE_INVALID"
 )
 
 // ErrorResponse is the canonical error envelope. All fields except
