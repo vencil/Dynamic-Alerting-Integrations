@@ -52,10 +52,11 @@ type PutTenantResponse struct {
 // @Param       body  body     string true  "Tenant YAML content"
 // @Param       X-DA-Write-Source header string false "Attribute the PR to a non-UI write source. Allowlisted: threshold-governance (#656). Omit for tenant-manager UI."
 // @Success     200   {object} PutTenantResponse
-// @Failure     400   {object} map[string]string
-// @Failure     403   {object} map[string]string
-// @Failure     409   {object} map[string]string
-// @Failure     500   {object} map[string]string
+// @Failure     400   {object} ErrorResponse
+// @Failure     403   {object} ErrorResponse
+// @Failure     409   {object} ErrorResponse
+// @Failure     500   {object} ErrorResponse
+// @Failure     503   {object} ErrorResponse
 // @Router      /api/v1/tenants/{id} [put]
 func PutTenant(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {

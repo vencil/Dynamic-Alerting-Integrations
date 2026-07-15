@@ -65,6 +65,32 @@ definitions:
       metric:
         type: string
     type: object
+  github_com_vencil_tenant-api_internal_handler.ErrorResponse:
+    properties:
+      action:
+        type: string
+      code:
+        type: string
+      error:
+        type: string
+      help:
+        type: string
+      request_id:
+        type: string
+      retry_after_s:
+        type: integer
+      violations:
+        items:
+          $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.Violation'
+        type: array
+    type: object
+  github_com_vencil_tenant-api_internal_handler.Violation:
+    properties:
+      field:
+        type: string
+      reason:
+        type: string
+    type: object
   github_com_vencil_tenant-api_internal_platform.MergeableState:
     enum:
     - ""
@@ -835,21 +861,15 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "401":
           description: Unauthorized
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "403":
           description: Forbidden
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: 'Reverse access report: who can access this tenant (audit-only)'
       tags:
       - audit
@@ -868,27 +888,19 @@ paths:
         "403":
           description: Forbidden
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
         "409":
           description: Conflict
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
         "503":
           description: Service Unavailable
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
       summary: Backfill account IDs for all existing tenants
       tags:
       - federation
@@ -925,20 +937,23 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties: true
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
         "403":
           description: Forbidden
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
         "409":
           description: Conflict
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
       summary: Replace the platform federation whitelist
       tags:
       - federation
@@ -965,21 +980,15 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
         "403":
           description: Forbidden
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
       summary: List a tenant's federation tokens
       tags:
       - federation
@@ -1008,39 +1017,27 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
         "403":
           description: Forbidden
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
         "409":
           description: Conflict
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
         "429":
           description: Too Many Requests
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
         "503":
           description: Service Unavailable
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
       summary: Issue a tenant federation token
       tags:
       - federation
@@ -1068,21 +1065,15 @@ paths:
         "403":
           description: Forbidden
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
         "404":
           description: Not Found
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
       summary: Revoke a federation token
       tags:
       - federation
@@ -1122,21 +1113,27 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "404":
           description: Not Found
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "409":
           description: Conflict
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_handler.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: Delete a group
       tags:
       - groups
@@ -1158,15 +1155,11 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "404":
           description: Not Found
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: Get a single group
       tags:
       - groups
@@ -1197,21 +1190,23 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "403":
           description: Forbidden
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "409":
           description: Conflict
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_handler.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: Create or update a group
       tags:
       - groups
@@ -1251,15 +1246,11 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "404":
           description: Not Found
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: Batch operation on group members
       tags:
       - groups
@@ -1277,9 +1268,7 @@ paths:
         "401":
           description: Unauthorized
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: Get current user identity and permissions
       tags:
       - identity
@@ -1318,9 +1307,7 @@ paths:
         "500":
           description: Internal Server Error
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: List tenants
       tags:
       - tenants
@@ -1340,18 +1327,18 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/internal_handler.TenantDetail'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "404":
           description: Not Found
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: Get tenant config
       tags:
       - tenants
@@ -1386,27 +1373,23 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "403":
           description: Forbidden
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "409":
           description: Conflict
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: Update tenant config
       tags:
       - tenants
@@ -1434,21 +1417,15 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "401":
           description: Unauthorized
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "403":
           description: Forbidden
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: Check whether the caller may read a tenant (RBAC probe)
       tags:
       - tenants
@@ -1538,15 +1515,11 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: Preview config diff
       tags:
       - tenants
@@ -1575,21 +1548,15 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "404":
           description: Not Found
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: Get tenant effective (merged) config
       tags:
       - tenants
@@ -1611,9 +1578,11 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
       summary: Get a tenant's effective federation metric subset
       tags:
       - federation
@@ -1643,21 +1612,23 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
         "403":
           description: Forbidden
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
         "409":
           description: Conflict
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_handler.ErrorResponse'
       summary: Replace a tenant's federation metric subset
       tags:
       - federation
@@ -1690,21 +1661,15 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "502":
           description: Bad Gateway
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "503":
           description: Service Unavailable
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: Discover a tenant's metric names
       tags:
       - tenants
@@ -1735,9 +1700,7 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: Validate tenant config
       tags:
       - tenants
@@ -1772,9 +1735,15 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_handler.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: Batch tenant operations
       tags:
       - tenants
@@ -1813,21 +1782,23 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "404":
           description: Not Found
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "409":
           description: Conflict
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_handler.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: Delete a saved view
       tags:
       - views
@@ -1848,15 +1819,11 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "404":
           description: Not Found
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: Get a single saved view
       tags:
       - views
@@ -1887,15 +1854,19 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
         "409":
           description: Conflict
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_handler.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/internal_handler.ErrorResponse'
       summary: Create or update a saved view
       tags:
       - views

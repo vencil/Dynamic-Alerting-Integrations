@@ -32,9 +32,13 @@ CONTRACT_MAX_EXAMPLES=50 make contract-test
 
 **全 method fuzz**：GET/PUT/POST/DELETE 全部下場。寫入落在 throwaway git repo fixture（runner 對 temp config dir `git init` + initial commit——tenant-api 是 commit-on-write，沒 repo 每個寫入都 500），跑完整個 workdir `rmtree`，不留垃圾。RBAC 用 wildcard fixture（`_rbac.yaml` 單一 group、`tenants: ["*"]`、read+write+admin），請求帶 `X-Forwarded-Email` + `X-Forwarded-Groups`；rate limiter 以 `TA_RATE_LIMIT_PER_MIN=0` 關閉（同一 caller 的 fuzz 流量會踩預設 100/min）。
 
-**排除的 operations**：`/federation/tokens*` + `/federation/accounts/backfill`（4 ops）——路由只在 `--federation-key` 設定時註冊，且 token store 需要 in-cluster Kubernetes ConfigMap，本機 fixture 起不來。reopen 條件：federation record store 有 file-backed / fake seam 後補測；現由 Go handler test（stub store）覆蓋。
+**排除的 operations**：
+- `/federation/tokens*` + `/federation/accounts/backfill`（4 ops）——路由只在 `--federation-key` 設定時註冊，且 token store 需要 in-cluster Kubernetes ConfigMap，本機 fixture 起不來。reopen 條件：federation record store 有 file-backed / fake seam 後補測；現由 Go handler test（stub store）覆蓋。
+- `GET /prs`（1 op）——路由只在 PR write-mode（需 forge token）註冊，fixture 跑 `write-mode=direct` 會 404。reopen 條件：fixture 長出 stub forge backend。
 
-**只測 conformance**：`status_code_conformance` 和 `content_type_conformance` 暫時關閉，因為 spec 還沒完整宣告所有 4xx/5xx 回應。等 spec 補齊後再打開（→ TODO 追蹤 issue）。
+**三個 check 全開**：`response_schema_conformance` + `status_code_conformance` + `content_type_conformance`。4xx/5xx 回應已全面宣告為 `handler.ErrorResponse`（統一 error envelope，PR-9）；新 handler 回了未宣告的 status code 會被 `status_code_conformance` 擋下——記得補 `@Failure` 標註 + `make api-docs`。
+
+**已知未涵蓋**（誠實記錄，非 gate 盲區造成的假綠）：RBAC middleware 的 401/403 與 rate limiter 的 429 是跨切面、每個 op 都可能回，但 fixture 用 wildcard RBAC + 關 rate limiter（否則 fuzz 打不進 handler 邏輯），spec 逐 op 宣告與否 fuzz 都觀測不到；domain policy 403（`violations` 為 `policy.Violation` 形狀）同理（fixture 無 `_domain_policy.yaml`）。
 
 ## 排錯
 

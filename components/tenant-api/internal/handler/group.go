@@ -93,8 +93,8 @@ func tenantIDFromString(s string) string { return s }
 // @Produce     json
 // @Param       id   path     string true "Group ID"
 // @Success     200  {object} GroupResponse
-// @Failure     400  {object} map[string]string
-// @Failure     404  {object} map[string]string
+// @Failure     400  {object} ErrorResponse
+// @Failure     404  {object} ErrorResponse
 // @Router      /api/v1/groups/{id} [get]
 func GetGroup(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -173,9 +173,11 @@ type PutGroupRequest struct {
 // @Param       id   path     string          true "Group ID"
 // @Param       body body     PutGroupRequest true "Group definition"
 // @Success     200  {object} map[string]string
-// @Failure     400  {object} map[string]string
-// @Failure     403  {object} map[string]string
-// @Failure     409  {object} map[string]string
+// @Failure     400  {object} ErrorResponse
+// @Failure     403  {object} ErrorResponse
+// @Failure     409  {object} ErrorResponse
+// @Failure     500  {object} ErrorResponse
+// @Failure     503  {object} ErrorResponse
 // @Router      /api/v1/groups/{id} [put]
 func PutGroup(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -276,9 +278,12 @@ func PutGroup(d *Deps) http.HandlerFunc {
 // @Produce     json
 // @Param       id path string true "Group ID"
 // @Success     200 {object} map[string]string
-// @Failure     400 {object} map[string]string
-// @Failure     404 {object} map[string]string
-// @Failure     409 {object} map[string]string
+// @Failure     400 {object} ErrorResponse
+// @Failure     403 {object} ErrorResponse
+// @Failure     404 {object} ErrorResponse
+// @Failure     409 {object} ErrorResponse
+// @Failure     500 {object} ErrorResponse
+// @Failure     503 {object} ErrorResponse
 // @Router      /api/v1/groups/{id} [delete]
 func DeleteGroup(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

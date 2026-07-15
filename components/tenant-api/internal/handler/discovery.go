@@ -70,9 +70,9 @@ type DiscoverMetricsResponse struct {
 // @Param       id  path     string true  "Tenant ID"
 // @Param       q   query    string false "Metric-name prefix filter ([a-zA-Z0-9_:]*)"
 // @Success     200 {object} DiscoverMetricsResponse
-// @Failure     400 {object} map[string]string
-// @Failure     502 {object} map[string]string
-// @Failure     503 {object} map[string]string
+// @Failure     400 {object} ErrorResponse
+// @Failure     502 {object} ErrorResponse
+// @Failure     503 {object} ErrorResponse
 // @Router      /api/v1/tenants/{id}/metrics [get]
 //
 // NB: a 429 (rate-limited) is possible via the global per-caller limiter

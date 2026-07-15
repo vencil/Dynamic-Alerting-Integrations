@@ -40,6 +40,10 @@ Excluded operations (known gaps + reopen conditions):
     in this local fixture. Reopen when a file-backed federation record
     store (or a fake ConfigMap seam) exists; until then these ops are
     covered by Go-level handler tests with a stubbed store.
+  - GET /api/v1/prs (1 op): registered only in PR write-mode
+    (`deps.PRTracker != nil`), which needs a forge token; the fixture
+    runs write-mode=direct so the op 404s. Reopen if the fixture grows
+    a stub forge backend.
 """
 
 from __future__ import annotations
@@ -241,12 +245,17 @@ def main() -> int:
             # /federation/accounts/* only — /federation/policy and
             # /tenants/{id}/federation stay fuzzed.
             #
-            # response_schema_conformance is the high-value check — it
-            # validates the JSON response body matches the spec. Other two
-            # checks (status_code / content_type) currently fail on a
-            # known set of operations because the spec hasn't been fully
-            # back-filled with all error responses yet (TODO: track in a
-            # follow-up to systematically declare every 4xx/5xx).
+            # --exclude-path /api/v1/prs: the route registers only in PR
+            # write-mode (cmd/server/routes.go `deps.PRTracker != nil`), which
+            # needs a forge token — this fixture runs write-mode=direct, so
+            # the op 404s and would (correctly) fail status_code_conformance.
+            # Reopen if the fixture ever grows a stub forge backend.
+            #
+            # Checks: response_schema_conformance (body matches declared
+            # schema) + status_code_conformance (no undocumented status
+            # codes) + content_type_conformance. The latter two were enabled
+            # after the 4xx responses were back-filled into the swag
+            # annotations (handler.ErrorResponse migration).
             result = subprocess.run(
                 [
                     "schemathesis", "run",
@@ -255,22 +264,17 @@ def main() -> int:
                     "-H", "X-Forwarded-Email: schemathesis@example.com",
                     "-H", f"X-Forwarded-Groups: {FUZZ_GROUP}",
                     "--exclude-path-regex", "^/api/v1/federation/(tokens|accounts)",
-                    # TEMP (removed by the 4xx-hardening follow-up commit):
-                    # full-method fuzz immediately caught 5 real spec/impl
-                    # mismatches — four 400 bodies carry a `violations` array
-                    # (handler.ErrorResponse) but the spec declares
-                    # map[string]string (POST /tenants/batch, PUT /groups/{id},
-                    # PUT /views/{id}, PUT /tenants/{id}/federation), and
-                    # GET /tenants/{id} 200 returns resolved_thresholds:null
-                    # against a declared array. Excluded here so this commit
-                    # stays green; the follow-up migrates the @Failure
-                    # annotations + fixes the null-vs-array and re-enables.
-                    "--exclude-path", "/api/v1/tenants/{id}",
-                    "--exclude-path", "/api/v1/tenants/batch",
-                    "--exclude-path", "/api/v1/groups/{id}",
-                    "--exclude-path", "/api/v1/views/{id}",
-                    "--exclude-path", "/api/v1/tenants/{id}/federation",
-                    "--checks", "response_schema_conformance",
+                    "--exclude-path", "/api/v1/prs",
+                    # filter_too_much is a hypothesis generation-efficiency
+                    # health check, not a contract check: on some seeds the
+                    # generated bodies for constraint-heavy ops (seen on
+                    # POST /tenants/batch) are mostly filtered out and the
+                    # whole run ERRORs flakily. Suppressing it only accepts
+                    # lower fuzz throughput on those ops — actual contract
+                    # violations still fail the run.
+                    "--suppress-health-check", "filter_too_much",
+                    "--checks",
+                    "response_schema_conformance,status_code_conformance,content_type_conformance",
                     "--max-examples", os.environ.get("CONTRACT_MAX_EXAMPLES", "10"),
                 ],
                 timeout=600,  # 10min cap; default fuzz is ~30s, deep fuzz can stretch

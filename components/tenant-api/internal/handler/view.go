@@ -53,8 +53,8 @@ func ListViews(d *Deps) http.HandlerFunc {
 // @Produce     json
 // @Param       id path string true "View ID"
 // @Success     200 {object} ViewResponse
-// @Failure     400 {object} map[string]string
-// @Failure     404 {object} map[string]string
+// @Failure     400 {object} ErrorResponse
+// @Failure     404 {object} ErrorResponse
 // @Router      /api/v1/views/{id} [get]
 func GetView(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -102,8 +102,10 @@ type PutViewRequest struct {
 // @Param       id   path     string         true "View ID"
 // @Param       body body     PutViewRequest true "View definition"
 // @Success     200  {object} map[string]string
-// @Failure     400  {object} map[string]string
-// @Failure     409  {object} map[string]string
+// @Failure     400  {object} ErrorResponse
+// @Failure     409  {object} ErrorResponse
+// @Failure     500  {object} ErrorResponse
+// @Failure     503  {object} ErrorResponse
 // @Router      /api/v1/views/{id} [put]
 func PutView(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -188,9 +190,11 @@ func PutView(d *Deps) http.HandlerFunc {
 // @Produce     json
 // @Param       id path string true "View ID"
 // @Success     200 {object} map[string]string
-// @Failure     400 {object} map[string]string
-// @Failure     404 {object} map[string]string
-// @Failure     409 {object} map[string]string
+// @Failure     400 {object} ErrorResponse
+// @Failure     404 {object} ErrorResponse
+// @Failure     409 {object} ErrorResponse
+// @Failure     500 {object} ErrorResponse
+// @Failure     503 {object} ErrorResponse
 // @Router      /api/v1/views/{id} [delete]
 func DeleteView(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
