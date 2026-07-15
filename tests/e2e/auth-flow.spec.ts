@@ -74,6 +74,9 @@ test.describe('Authentication Flow @critical', () => {
   });
 
   test('should display authenticated user email in UI when available', async ({ page }) => {
+    // LD-6 P7 (#962): the mock carries the new caller-relative org fields
+    // (`org_claim_keys` × `claims`) so this smoke also proves the strip
+    // renders them as a neutral org badge.
     const mockUser = {
       email: 'authenticated@example.com',
       user: 'authenticated',
@@ -81,6 +84,8 @@ test.describe('Authentication Flow @critical', () => {
       accessible_tenants: ['prod-mariadb-01'],
       accessible_domains: ['finance'],
       permissions: { 'production-dba': ['read', 'write', 'admin'] },
+      claims: { 'x-auth-request-team': 'payments-squad' },
+      org_claim_keys: ['x-auth-request-team'],
     };
 
     // Mock the identity endpoint
@@ -108,6 +113,72 @@ test.describe('Authentication Flow @critical', () => {
     await expect(strip).toContainText('authenticated@example.com');
     // With access (non-empty permissions) the empty-state notice is absent.
     await expect(page.getByTestId('identity-no-access')).toHaveCount(0);
+    // LD-6 P7: the surfaced org axis renders as a neutral「org: <value>」
+    // badge next to the identity.
+    await expect(page.getByTestId('org-badge-x-auth-request-team')).toHaveText('org: payments-squad');
+  });
+
+  test('LD-6 P7: first-visit callout + access-scope panel render the /me scope', async ({ page }) => {
+    const mockUser = {
+      email: 'orgster@example.com',
+      user: 'orgster',
+      groups: ['production-dba'],
+      accessible_tenants: ['prod-mariadb-01'],
+      accessible_domains: ['finance'],
+      permissions: { 'production-dba': ['read', 'write'] },
+      claims: { 'x-auth-request-team': 'payments-squad' },
+      org_claim_keys: ['x-auth-request-team'],
+    };
+
+    await page.route('**/api/v1/me', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(mockUser),
+      });
+    });
+
+    // Same tenant-manager surface as the tests above; tenant data falls
+    // back to the offline DEMO fixtures while authUser comes from the mock.
+    await page.goto('../assets/jsx-loader.html?component=../interactive/tools/tenant-manager.jsx');
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+
+    // Fresh browser context → no dismissal flag → the first-visit callout
+    // (role=status advisory) points at the access-scope panel.
+    await expect(page.getByTestId('scope-callout')).toBeVisible();
+
+    // The callout's CTA opens the panel and dismisses the callout. The
+    // panel renders entirely from the /me body fetched on mount — no
+    // further request needs mocking.
+    await page.getByTestId('scope-callout-open').click();
+    const panel = page.getByTestId('access-scope-panel');
+    await expect(panel).toBeVisible();
+    await expect(page.getByTestId('scope-callout')).toHaveCount(0);
+    // permissions + tenant patterns (labelled as patterns, not an expanded
+    // list) + the org-axis pill in the claims table. (CI headless Chromium
+    // reports `navigator.language` = en-US → English copy.)
+    await expect(page.getByTestId('scope-permissions')).toContainText('production-dba');
+    await expect(page.getByTestId('scope-tenants')).toHaveText('prod-mariadb-01');
+    await expect(panel).toContainText('rule patterns, not an expanded tenant list');
+    await expect(page.getByTestId('scope-org-key-x-auth-request-team')).toBeVisible();
+
+    // With the new P7 surfaces on screen (badge + open panel), run the
+    // WCAG 2.1 AA scan — spec §PR-B requires axe 0 Critical for them.
+    await waitForPageReady(page);
+    const results = await checkA11y(page);
+    if (results.violations.length > 0) {
+      console.error(`LD-6 P7 access-scope a11y violations:\n${formatA11yViolations(results.violations)}`);
+    }
+    expect(results.violations.length).toBe(0);
+
+    // Close and we're back on the grid; reload keeps the callout dismissed
+    // (localStorage persistence within the same context).
+    await page.getByTestId('scope-close').click();
+    await expect(panel).toHaveCount(0);
+    await page.reload();
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+    await expect(page.getByTestId('identity-strip')).toBeVisible();
+    await expect(page.getByTestId('scope-callout')).toHaveCount(0);
   });
 
   test('LD-7: empty permissions surfaces a soft no-access notice (real-bug guard)', async ({ page }) => {

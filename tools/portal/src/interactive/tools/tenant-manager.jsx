@@ -18,6 +18,7 @@ dependencies: [
   "tenant-manager/components/TenantCard.jsx",
   "tenant-manager/components/CustomAlertsModal.jsx",
   "tenant-manager/components/IdentityStrip.jsx",
+  "tenant-manager/components/AccessScopePanel.jsx",
   "_common/hooks/useDebouncedValue.js",
   "_common/hooks/useURLState.js",
   "_common/hooks/useVirtualGrid.js",
@@ -45,6 +46,7 @@ import { OverflowBanner } from './tenant-manager/components/OverflowBanner.jsx';
 import { TenantCard } from './tenant-manager/components/TenantCard.jsx';
 import { CustomAlertsModal } from './tenant-manager/components/CustomAlertsModal.jsx';
 import { IdentityStrip } from './tenant-manager/components/IdentityStrip.jsx';
+import { AccessScopePanel } from './tenant-manager/components/AccessScopePanel.jsx';
 import { SavedViewsPanel } from './tenant-manager/components/SavedViewsPanel.jsx';
 import { useDebouncedValue } from './_common/hooks/useDebouncedValue.js';
 import { useModalFocusTrap } from './_common/hooks/useModalFocusTrap.js';
@@ -82,6 +84,11 @@ const TENANT_MANAGER_URL_KEYS = ['q'];
 const VIRTUAL_GRID_THRESHOLD = 50;
 const VIRTUAL_GRID_ROW_HEIGHT = 380;
 const VIRTUAL_GRID_COLUMN_COUNT = 3;
+
+// LD-6 P7 (#962): first-visit callout dismissal flag. Versioned key — a
+// future copy/behavior change bumps _v1 so previously-dismissed users see
+// the new callout once.
+const SCOPE_CALLOUT_STORAGE_KEY = 'da_tm_scope_callout_v1';
 
 export default function TenantManager() {
   // PR-2d Phase 2 (#153): apiNotification owned by orchestrator (shared
@@ -176,6 +183,10 @@ export default function TenantManager() {
   // v2.6.0: Pending PR tracking (ADR-011)
   const [pendingPRs, setPendingPRs] = useState([]);
   const [prByTenant, setPrByTenant] = useState({});
+  // LD-6 P7 (#962): access-scope panel (opened from the IdentityStrip
+  // button) + first-visit callout pointing at it.
+  const [scopePanelOpen, setScopePanelOpen] = useState(false);
+  const [showScopeCallout, setShowScopeCallout] = useState(false);
 
   // Fetch user identity from /api/v1/me (auth-aware)
   useEffect(() => {
@@ -197,6 +208,30 @@ export default function TenantManager() {
       }
     };
     fetchMe();
+  }, []);
+
+  // LD-6 P7: first-visit callout — only for an authed user (demo mode
+  // never shows it) who hasn't dismissed it before. localStorage access
+  // is wrapped: an unavailable store (private mode / storage disabled)
+  // silently skips the callout rather than breaking the page.
+  useEffect(() => {
+    if (!authUser) return;
+    try {
+      if (!window.localStorage.getItem(SCOPE_CALLOUT_STORAGE_KEY)) {
+        setShowScopeCallout(true);
+      }
+    } catch (e) {
+      // storage unavailable — skip the callout
+    }
+  }, [authUser]);
+
+  const dismissScopeCallout = useCallback(() => {
+    setShowScopeCallout(false);
+    try {
+      window.localStorage.setItem(SCOPE_CALLOUT_STORAGE_KEY, '1');
+    } catch (e) {
+      // storage unavailable — dismissal just won't persist
+    }
   }, []);
 
   // v2.6.0: Fetch pending PRs (ADR-011 PR-based write-back)
@@ -487,7 +522,61 @@ export default function TenantManager() {
             ? groups[activeGroupId].label
             : null
         }
+        onViewScope={() => { setScopePanelOpen(true); dismissScopeCallout(); }}
       />
+
+      {/* LD-6 P7: first-visit callout — points a newly-authed user at the
+          access-scope panel before they wonder why the list looks the way
+          it does. Advisory only (role=status), dismissible, never shown
+          in demo mode (authUser gate) or after dismissal (localStorage). */}
+      {authUser && showScopeCallout && (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          data-testid="scope-callout"
+          style={{
+            maxWidth: '1600px',
+            margin: '0 auto var(--da-space-4)',
+            backgroundColor: 'var(--da-color-info-soft)',
+            border: '1px solid var(--da-color-accent)',
+            borderRadius: 'var(--da-radius-md)',
+            padding: 'var(--da-space-3) var(--da-space-4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 'var(--da-space-3)',
+            fontSize: 'var(--da-font-size-sm-md)',
+            color: 'var(--da-color-fg)',
+          }}
+        >
+          <span>
+            {t(
+              '第一次使用？先檢視自己的身分與存取範圍（/me），了解你能看到與操作哪些租戶。',
+              'First time here? Start by reviewing your identity and access scope (/me) to see which tenants you can view and manage.'
+            )}
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--da-space-2)', flexShrink: 0 }}>
+            <button
+              type="button"
+              style={styles.button}
+              data-testid="scope-callout-open"
+              onClick={() => { setScopePanelOpen(true); dismissScopeCallout(); }}
+            >
+              {t('檢視存取範圍', 'View access scope')}
+            </button>
+            <button
+              type="button"
+              style={{ ...styles.button, ...styles.buttonSecondary }}
+              aria-label={t('關閉提示', 'Dismiss notice')}
+              data-testid="scope-callout-dismiss"
+              onClick={dismissScopeCallout}
+            >
+              ✕
+            </button>
+          </span>
+        </div>
+      )}
 
       {/* Page-level context (stats + banners) spans the full centred
           width above the sidebar/table split below. */}
@@ -894,6 +983,16 @@ export default function TenantManager() {
         <CustomAlertsModal
           tenantId={customAlertsTenant}
           onClose={() => setCustomAlertsTenant(null)}
+        />
+      )}
+
+      {/* LD-6 P7: access-scope panel — renders entirely from the /me body
+          fetched on mount (zero fetches of its own). The authUser guard is
+          belt-and-braces: the only opening entry points are authUser-gated. */}
+      {scopePanelOpen && authUser && (
+        <AccessScopePanel
+          authUser={authUser}
+          onClose={() => setScopePanelOpen(false)}
         />
       )}
 
