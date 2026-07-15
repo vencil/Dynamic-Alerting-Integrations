@@ -28,7 +28,7 @@ tests/
 ├── e2e-bench/                    # Playwright E2E benchmark (有自己的 README)
 ├── fixtures/                     # Python 共用測試資料
 ├── golden/                       # Golden file 比對基準
-├── snapshots/                    # JSON / snap 快照
+├── snapshots/                    # JSON 快照（help 全文 .snap 已改結構契約）
 └── scenarios/                    # Shell 場景腳本（make test-scenario-* 入口）
 ```
 
