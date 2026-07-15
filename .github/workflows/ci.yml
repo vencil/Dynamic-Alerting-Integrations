@@ -748,6 +748,10 @@ jobs:
   go-tests-threshold-exporter:
     name: Go Tests — threshold-exporter (${{ matrix.go }})
     runs-on: ubuntu-latest
+    # Least-privilege token (CodeQL: workflow-missing-permissions). Tests +
+    # coverage-artifact upload need nothing beyond repo read.
+    permissions:
+      contents: read
     strategy:
       matrix:
         go: ["1.26"]
@@ -807,6 +811,10 @@ jobs:
   go-tests-tenant-api:
     name: Go Tests — tenant-api (${{ matrix.go }})
     runs-on: ubuntu-latest
+    # Least-privilege token (CodeQL: workflow-missing-permissions). Tests,
+    # swag drift check and schemathesis all run against the local checkout.
+    permissions:
+      contents: read
     strategy:
       matrix:
         go: ["1.26"]
@@ -919,6 +927,8 @@ jobs:
     # entry (owner action).
     name: Go Tests (1.26)
     runs-on: ubuntu-latest
+    # Pure result-aggregation gate — touches no repo content, needs no token.
+    permissions: {}
     needs: [go-tests-threshold-exporter, go-tests-tenant-api]
     # always(): without it a failed dependency SKIPS this job, and a skipped
     # check would satisfy branch protection — the gate must FAIL, not skip,
