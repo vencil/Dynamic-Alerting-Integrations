@@ -105,6 +105,123 @@ func TestMe_NoClaims_BodyOmitsClaimsKey(t *testing.T) {
 	}
 }
 
+// ── /me org_claim_keys (ADR-027 / LD-6 P7) ──────────────────────────────────
+//
+// The field is caller-relative AND intersected with the caller's present
+// claims: a matched org-scoped rule only surfaces its claim key when the
+// caller carries a value for it (the redacted reverse report strips claim
+// keys as identifiers; /me must not reveal key names the caller does not
+// hold). Absence is byte-level (omitempty), pinning pre-P7 body identity.
+
+// meOrgScopeRBACYaml: three rules the team-readers caller matches — two
+// org-scoped on `org` (dedup) and one on `region` (sort), so one request
+// exercises collection, de-duplication and ordering together.
+const meOrgScopeRBACYaml = `
+groups:
+  - name: team-readers
+    tenants: ["*"]
+    permissions: [read]
+    org-scope: org
+  - name: org-writers
+    match:
+      groups: [team-readers]
+    tenants: ["*"]
+    permissions: [read, write]
+    org-scope: org
+  - name: region-readers
+    match:
+      groups: [team-readers]
+    tenants: ["*"]
+    permissions: [read]
+    org-scope: region
+`
+
+var meOrgScopeClaimHeaders = map[string]string{
+	"org":    "X-Auth-Request-Org",
+	"region": "X-Auth-Request-Region",
+}
+
+func meOrgScopeRequest(t *testing.T, rbacYaml string, claimHeaders map[string]string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	rbacMgr := newRBACManagerWithClaims(t, rbacYaml, claimHeaders)
+	handler := Me(&Deps{RBAC: rbacMgr})
+
+	req := httptest.NewRequest("GET", "/api/v1/me", nil)
+	req.Header.Set("X-Forwarded-Email", "op@example.com")
+	req.Header.Set("X-Forwarded-Groups", "team-readers")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	w := httptest.NewRecorder()
+	rbacMgr.Middleware(rbac.PermRead, nil)(handler).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	return w
+}
+
+// A caller holding both claims sees the org-scope keys of every matched
+// rule — de-duplicated (two rules on `org`) and sorted.
+func TestMe_OrgClaimKeys_DedupedAndSorted(t *testing.T) {
+	t.Parallel()
+	w := meOrgScopeRequest(t, meOrgScopeRBACYaml, meOrgScopeClaimHeaders, map[string]string{
+		"X-Auth-Request-Org":    "org-alpha",
+		"X-Auth-Request-Region": "eu-1",
+	})
+
+	var resp MeResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if want := []string{"org", "region"}; !reflect.DeepEqual(resp.OrgClaimKeys, want) {
+		t.Errorf("OrgClaimKeys = %v, want %v", resp.OrgClaimKeys, want)
+	}
+}
+
+// A matched org-scoped rule whose claim the caller does NOT carry stays
+// invisible: `region` is declared and rule-matched but absent from the
+// request, so only `org` is returned.
+func TestMe_OrgClaimKeys_AbsentClaimNotReturned(t *testing.T) {
+	t.Parallel()
+	w := meOrgScopeRequest(t, meOrgScopeRBACYaml, meOrgScopeClaimHeaders, map[string]string{
+		"X-Auth-Request-Org": "org-alpha",
+		// X-Auth-Request-Region deliberately absent.
+	})
+
+	var resp MeResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if want := []string{"org"}; !reflect.DeepEqual(resp.OrgClaimKeys, want) {
+		t.Errorf("OrgClaimKeys = %v, want %v (region claim not carried → not revealed)", resp.OrgClaimKeys, want)
+	}
+}
+
+// With zero org-scoped rules the key is absent AT ALL (byte-level), even
+// when the caller carries a claim — org_claim_keys reports the org AXES of
+// matched rules, not the caller's claims.
+func TestMe_OrgClaimKeys_NoOrgRules_KeyAbsent(t *testing.T) {
+	t.Parallel()
+	w := meOrgScopeRequest(t, meClaimsRBACYaml, meOrgScopeClaimHeaders, map[string]string{
+		"X-Auth-Request-Org": "org-alpha",
+	})
+	if strings.Contains(w.Body.String(), `"org_claim_keys"`) {
+		t.Errorf("body must not contain org_claim_keys with no org-scoped rule; got: %s", w.Body.String())
+	}
+}
+
+// omitempty byte-identity: org-scoped rules exist but the caller carries no
+// claim at all → the collected set is empty → nil slice → the key must not
+// appear in the body (the pre-P7 rendering).
+func TestMe_OrgClaimKeys_OmitemptyByteIdentity(t *testing.T) {
+	t.Parallel()
+	w := meOrgScopeRequest(t, meOrgScopeRBACYaml, meOrgScopeClaimHeaders, nil)
+	if strings.Contains(w.Body.String(), `"org_claim_keys"`) {
+		t.Errorf("body must not contain org_claim_keys when no matched org-scope claim is held; got: %s", w.Body.String())
+	}
+}
+
 // (c) Mutation-proof drift fix: Me must read email/groups/claims off the
 // request PRINCIPAL. An interposed handler mutates the principal AFTER the
 // middleware attached it — the legacy context keys still hold the original

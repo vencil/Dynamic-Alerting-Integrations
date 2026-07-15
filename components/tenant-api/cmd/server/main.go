@@ -466,6 +466,7 @@ func main() {
 		ConfigDir:          *configDir,
 		Writer:             writer,
 		RBAC:               rbacMgr,
+		ClaimHeaders:       claimHeaders,
 		TenantOrg:          tenantOrgMgr,
 		Policy:             policyMgr,
 		Groups:             groupMgr,

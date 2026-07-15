@@ -24,6 +24,16 @@ type MeResponse struct {
 	// zero-config response body byte-identical to pre-P2. Go serialises map
 	// keys sorted, so the rendering is deterministic.
 	Claims map[string]string `json:"claims,omitempty"`
+	// OrgClaimKeys are the org-scope claim keys of the rules THIS caller
+	// matches (ADR-027 / LD-6 P7) — a caller-relative fact ("which of my
+	// claims act as an org axis for me"), NOT "does the platform run an org
+	// axis". Intersected with the principal's present claims by construction:
+	// the redacted reverse report strips claim keys as customer-recognizable
+	// identifiers (they name the identity axes a deployment runs), so /me
+	// must not reveal an org-scope key name the caller does not already
+	// carry a value for. Sorted, de-duplicated; omitempty keeps the zero-org
+	// (and pre-P7) response body byte-identical.
+	OrgClaimKeys []string `json:"org_claim_keys,omitempty"`
 }
 
 // Me handles GET /api/v1/me
@@ -111,6 +121,7 @@ func Me(d *Deps) http.HandlerFunc {
 		// is nil-safe regardless (anonymous matches no rule).
 		accessibleTenants := make(map[string]bool)
 		permsByRule := make(map[string]map[string]bool)
+		orgClaimKeys := make(map[string]bool)
 		for _, rule := range d.RBAC.RulesMatching(p) {
 			set, ok := permsByRule[rule.Name]
 			if !ok {
@@ -122,6 +133,14 @@ func Me(d *Deps) http.HandlerFunc {
 			}
 			for _, tenantPattern := range rule.Tenants {
 				accessibleTenants[tenantPattern] = true
+			}
+			// P7: collect the org-scope keys of matched rules, but only when
+			// the caller carries a value for the key (`claims` is the local
+			// principal-claims map, nil-safe) — the ∩ p.Claims guard above
+			// the OrgClaimKeys field doc. A matched org-scoped rule whose
+			// claim the caller lacks stays invisible here.
+			if rule.OrgScope != "" && claims[rule.OrgScope] != "" {
+				orgClaimKeys[rule.OrgScope] = true
 			}
 		}
 		for name, set := range permsByRule {
@@ -140,6 +159,12 @@ func Me(d *Deps) http.HandlerFunc {
 			resp.AccessibleTenants = append(resp.AccessibleTenants, tenant)
 		}
 		sort.Strings(resp.AccessibleTenants)
+
+		// Zero collected keys keep the nil slice → omitempty drops the field.
+		for key := range orgClaimKeys {
+			resp.OrgClaimKeys = append(resp.OrgClaimKeys, key)
+		}
+		sort.Strings(resp.OrgClaimKeys)
 
 		// v2.5.0: Accessible environments and domains for UI filtering hints
 		resp.AccessibleEnvironments = d.RBAC.AccessibleEnvironmentsFor(p)

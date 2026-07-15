@@ -222,6 +222,14 @@ func buildRouter(rd routerDeps) *chi.Mux {
 		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
 			Get("/audit/tenants/{id}/access-report", handler.GetTenantAccessReport(deps))
 
+		// P7 what-if dry-run: same /audit segment, same authentication-only
+		// route middleware, same in-handler bar with the byte-identical
+		// constant 403. POST because it carries a candidate _rbac.yaml body —
+		// it computes reports and commits NOTHING (see the write-route
+		// manifest's gateWriteOpPlatformAdmin entry).
+		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+			Post("/audit/tenants/{id}/access-report/dry-run", handler.DryRunTenantAccessReport(deps))
+
 		// Federation token endpoint (v2.9.0 — ADR-020 IV-2d).
 		// Registered only when a signing key is configured. Route-level
 		// middleware checks authentication; per-tenant admin permission
