@@ -163,13 +163,3 @@ def patch_repo_root(monkeypatch, tmp_path):
     return _patch
 
 
-# ── pytest configuration ──────────────────────────────────────────────
-
-def pytest_addoption(parser):
-    """Register custom command-line options."""
-    parser.addoption(
-        "--snapshot-update",
-        action="store_true",
-        default=False,
-        help="Update snapshot baselines"
-    )
