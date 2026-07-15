@@ -93,6 +93,8 @@ jobs:
           set -euo pipefail
           . tests/rulepacks/vm_engine_version
           IMAGE="docker.io/victoriametrics/victoria-metrics:v1.146.0@sha256:b8703ff12ed437effad4fc36492fec14824277f2890a5876b8a9e6cfe5139839"
+          # Guard 1 (tag ↔ pin SSOT): catches a vm_engine_version bump that
+          # forgot to update the image here.
           case "$IMAGE" in
             *":v${VM_VERSION}@"*) ;;
             *)
@@ -100,6 +102,22 @@ jobs:
               exit 1
               ;;
           esac
+          # Guard 2 (digest ↔ anchor workflow): guard 1 can't see a SAME-TAG
+          # digest re-pin (tag unchanged, digest updated in only one file).
+          # Extract the image string vm-anchor-on-pin-change.yml actually
+          # runs and require byte-for-byte equality — a hand-sync miss fails
+          # loudly instead of the two workflows silently benching different
+          # bytes under the same tag.
+          anchor_image=$(grep -ohE 'docker\.io/victoriametrics/victoria-metrics:v[0-9.]+@sha256:[0-9a-f]{64}' \
+                           .github/workflows/vm-anchor-on-pin-change.yml | head -1 || true)
+          if [ -z "$anchor_image" ]; then
+            echo "::error::could not extract the vmsingle image from vm-anchor-on-pin-change.yml (refactored?) — re-anchor this guard."
+            exit 1
+          fi
+          if [ "$anchor_image" != "$IMAGE" ]; then
+            echo "::error::vmsingle image drifted from vm-anchor-on-pin-change.yml: this=$IMAGE anchor=$anchor_image — the two pins are a hand-synced pair; update both."
+            exit 1
+          fi
           docker run -d --name vm-replay -p 8428:8428 "$IMAGE" -retentionPeriod=100y
           for i in $(seq 1 30); do
             curl -fsS http://localhost:8428/health >/dev/null 2>&1 && { echo "VM up"; exit 0; }
@@ -181,11 +199,21 @@ jobs:
           VM_REPLAY_REQUIRE: "1"
           VM_REPLAY_ENDPOINT: http://localhost:8428
         run: |
-          pip install pytest
+          # pyyaml is NOT used by the test module itself but IS a collection
+          # dependency: pytest loads the ancestor tests/conftest.py, which
+          # imports tests/factories.py → `import yaml` — pytest alone dies
+          # with a collection ImportError (verified in a clean venv).
+          pip install pytest pyyaml
           python -m pytest tests/rulepacks/test_vm_replay_staleness.py -v -rs
 
-      # Failure → auto-open a triage issue (nightly-race pattern). Schedule
-      # only: a manual dispatch failure is being watched live, no issue spam.
+      # Failure → auto-open a triage issue (nightly-race pattern, PLUS
+      # dedupe). Schedule only: a manual dispatch failure is being watched
+      # live, no issue spam. Dedupe rationale: nightly-race deliberately has
+      # NO dedupe (verified — it creates unconditionally) because each race
+      # flake is a distinct test's signal; HERE a rotted harness/pin fails
+      # for the SAME reason night after night, so re-filing would mint one
+      # duplicate P2 per night — an open issue with the same title prefix
+      # gets a "still failing" comment instead of a sibling.
       - name: Open issue on failure
         if: failure() && github.event_name == 'schedule'
         uses: actions/github-script@v7
@@ -193,7 +221,21 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
             const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
-            const title = `Nightly VM replay staleness bench failed (${new Date().toISOString().slice(0,10)})`;
+            const titlePrefix = 'Nightly VM replay staleness bench failed';
+            const open = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: 'bug,ci,P2', per_page: 100,
+            });
+            const existing = open.data.find(
+              (i) => !i.pull_request && i.title.startsWith(titlePrefix)
+            );
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: existing.number,
+                body: `Still failing on ${new Date().toISOString().slice(0,10)} — run: ${runUrl}`,
+              });
+              return;
+            }
+            const title = `${titlePrefix} (${new Date().toISOString().slice(0,10)})`;
             const body = [
               `Nightly \`vmalert -replay\` staleness bench (\`tests/rulepacks/test_vm_replay_staleness.py\`, VM_REPLAY_REQUIRE=1) failed.`,
               ``,
