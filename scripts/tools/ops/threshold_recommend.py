@@ -1181,22 +1181,49 @@ def main() -> None:
     # #719: regenerate the observed-map and exit (does not need --config-dir).
     if args.generate_observed_map:
         summary = observed_map_lib.write_observed_map()
+        # #1112: prose → stderr. `--generate-observed-map` is a maintenance
+        # sub-command (regenerate a repo data file and exit), not a
+        # recommendation run — so its `--json` document is the write summary
+        # itself (path + key counts + merge disposition), tagged with a `status`
+        # so a consumer can tell it apart from a recommendation report.
         if _LANG == 'zh':
-            print(f"已產生 observed-map: {summary['path']}")
+            print(f"已產生 observed-map: {summary['path']}", file=sys.stderr)
             print(f"  共 {summary['total']} 個 key："
-                  f"{summary['clean']} clean / {summary['needs_review']} needs_review")
+                  f"{summary['clean']} clean / {summary['needs_review']} needs_review",
+                  file=sys.stderr)
             print(f"  merge：preserved {summary.get('preserved', 0)} / "
                   f"demoted {summary.get('demoted', 0)} / dropped {summary.get('dropped', 0)}"
-                  "（人工 resolve 保留 / 失效降級 / 已移除；細節見 stderr WARN）")
-            print("  needs_review 項目須人工 resolve（挑 observed_series / 確認方向）後才會被推薦使用。")
+                  "（人工 resolve 保留 / 失效降級 / 已移除；細節見 stderr WARN）",
+                  file=sys.stderr)
+            print("  needs_review 項目須人工 resolve（挑 observed_series / 確認方向）後才會被推薦使用。",
+                  file=sys.stderr)
         else:
-            print(f"Wrote observed-map: {summary['path']}")
+            print(f"Wrote observed-map: {summary['path']}", file=sys.stderr)
             print(f"  {summary['total']} keys: "
-                  f"{summary['clean']} clean / {summary['needs_review']} needs_review")
+                  f"{summary['clean']} clean / {summary['needs_review']} needs_review",
+                  file=sys.stderr)
             print(f"  merge: preserved {summary.get('preserved', 0)} / "
                   f"demoted {summary.get('demoted', 0)} / dropped {summary.get('dropped', 0)} "
-                  "(see stderr WARN for details)")
-            print("  needs_review entries require manual resolution before use.")
+                  "(see stderr WARN for details)", file=sys.stderr)
+            print("  needs_review entries require manual resolution before use.",
+                  file=sys.stderr)
+        if args.json_output:
+            # NB `format_json_report` here is the tool-local one and takes a
+            # list[TenantRecommendation] — this path has no recommendations, so
+            # the document is assembled directly, keeping the tool's top-level
+            # shape (`tool` / `tenants` / `summary`) so the same consumer parses
+            # both paths, with the write result under `observed_map`.
+            print(json.dumps({
+                "tool": "threshold-recommend",
+                "status": "observed_map_written",
+                "observed_map": summary,
+                "tenants": [],
+                "summary": {
+                    "total_tenants": 0,
+                    "total_keys": 0,
+                    "recommended_changes": 0,
+                },
+            }, indent=2, ensure_ascii=False, default=str))
         return
 
     if not args.config_dir:

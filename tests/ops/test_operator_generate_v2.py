@@ -15,6 +15,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any, Dict
+from unittest.mock import patch
 
 import pytest
 
@@ -23,6 +24,7 @@ _REPO_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_REPO_ROOT / "scripts" / "tools" / "ops"))
 sys.path.insert(0, str(_REPO_ROOT / "scripts" / "tools"))
 
+import operator_generate as og
 from operator_generate import (
     _build_inhibit_rules_crd,
     _build_receiver_config,
@@ -387,3 +389,109 @@ class TestAlertmanagerConfigSnapshot:
         assert set(_RECEIVER_TEMPLATES) == {
             "slack", "pagerduty", "email", "teams", "opsgenie", "webhook"
         }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# main() --json：單一文件形狀 (#1112)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def gen_dirs(tmp_path: Path):
+    """最小可用的 (rule-packs, conf.d, output) 三件組。"""
+    packs = tmp_path / "rule-packs"
+    packs.mkdir()
+    (packs / "rule-pack-demo.yaml").write_text(
+        "groups:\n"
+        "  - name: demo_alerts\n"
+        "    rules:\n"
+        "      - alert: DemoHigh\n"
+        "        expr: demo_metric > 80\n"
+        "        for: 5m\n"
+        "        labels:\n"
+        "          severity: warning\n",
+        encoding="utf-8",
+    )
+    confd = tmp_path / "conf.d"
+    confd.mkdir()
+    (confd / "_defaults.yaml").write_text("defaults:\n  demo_metric: 80\n", encoding="utf-8")
+    (confd / "tenant-one.yaml").write_text(
+        "tenants:\n  tenant-one:\n    demo_metric: 90\n", encoding="utf-8")
+    out = tmp_path / "out"
+    return packs, confd, out
+
+
+class TestMainJsonSingleDocument:
+    """`--json` ⇒ stdout 恰好一個物件 `{crds, kustomization, summary}`。
+
+    舊行為在 `--dry-run --json` 印 **CRD 陣列**，接著再印一份 **summary 物件**
+    ——兩份背對背的文件，對整段 stdout 做 json.loads 會直接炸。`--kustomize`
+    更會在中間插一行 `---`。本測試釘住「一份、且 top-level 鍵就是這三個」，
+    而不只是「parse 得過」。
+    """
+
+    def _run_json(self, gen_dirs, capsys, *extra) -> dict:
+        packs, confd, out = gen_dirs
+        with patch("sys.argv", [
+            "operator_generate.py",
+            "--rule-packs-dir", str(packs),
+            "--config-dir", str(confd),
+            "--output-dir", str(out),
+            "--json", *extra,
+        ]):
+            og.main()
+        captured = capsys.readouterr()
+        assert "---" not in captured.out        # 沒有 YAML 文件分隔線混進來
+        return json.loads(captured.out)         # 全文 parse ⇒ 單一文件
+
+    def test_dry_run_json_shape(self, gen_dirs, capsys):
+        """`--dry-run --json` → 單一物件，top-level 鍵恰為 {crds, kustomization, summary}。"""
+        doc = self._run_json(gen_dirs, capsys, "--dry-run")
+
+        assert isinstance(doc, dict)                    # 不是 list（舊行為吐陣列）
+        assert set(doc) == {"crds", "kustomization", "summary"}
+
+        assert isinstance(doc["crds"], list)
+        kinds = [c["kind"] for c in doc["crds"]]
+        assert kinds == ["PrometheusRule", "AlertmanagerConfig", "ServiceMonitor"]
+
+        # 沒有 --kustomize ⇒ 該欄確實是 null（不是 {} 也不是缺鍵）
+        assert doc["kustomization"] is None
+
+        # summary 保留原本那些計數鍵
+        assert doc["summary"] == {
+            "prometheus_rules": 1,
+            "alertmanager_configs": 1,
+            "service_monitor": 1,
+            "kustomization": 0,
+            "total": 3,
+        }
+
+    def test_kustomize_json_is_still_one_document(self, gen_dirs, capsys):
+        """`--kustomize --json` → kustomization 進到**文件裡**，不是第二份 YAML/JSON。"""
+        doc = self._run_json(gen_dirs, capsys, "--kustomize")
+
+        assert set(doc) == {"crds", "kustomization", "summary"}
+        assert doc["kustomization"]["kind"] == "Kustomization"
+        assert doc["summary"]["kustomization"] == 1
+        assert doc["summary"]["total"] == 4      # 3 CRD + 1 kustomization
+        assert len(doc["crds"]) == 3
+
+    def test_dry_run_kustomize_combo_keeps_kustomization(self, gen_dirs, capsys):
+        """#1112 flag-matrix sweep: `--dry-run --kustomize` 是**獨立分支**，不能把
+        kustomization 掉在地上。
+
+        `--dry-run` 與 `--kustomize` 正交，先前只被分開測過（dry-run 那條的
+        kustomization 本來就是 null，kustomize 那條走的是 write path）——組合起來
+        走的是 dry-run 分支內的 kustomize 區塊，是一段誰都沒 in-process 行使過的碼。
+        這正是 migrate_to_operator 那個 bug 的形狀：兩個正交 flag 只被分開測。
+        """
+        doc = self._run_json(gen_dirs, capsys, "--dry-run", "--kustomize")
+
+        assert set(doc) == {"crds", "kustomization", "summary"}
+        # dry-run 也必須把 kustomization 嵌進**同一份**文件（不是 None、不是第二份 doc）
+        assert doc["kustomization"]["kind"] == "Kustomization"
+        assert doc["kustomization"]["namespace"] == "monitoring"
+        assert doc["summary"]["kustomization"] == 1
+        assert doc["summary"]["total"] == 4
+        assert len(doc["crds"]) == 3

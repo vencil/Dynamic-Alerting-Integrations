@@ -442,5 +442,108 @@ class TestDryRunMode:
         assert len(result["alertmanager_configs"]) == 2
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Test: main() --json envelope 形狀 (#1112)
+# ────────────────────────────────────────────────────────────────────────────
+
+class TestMainJsonEnvelope:
+    """`--checklist-only --json` 的 envelope 形狀 + checklist 必須真的送到 stdout。"""
+
+    def _run(self, argv_tail, configmap_dir, config_dir, output_dir):
+        with patch("sys.argv", [
+            "migrate_to_operator.py",
+            "--source-dir", str(configmap_dir),
+            "--config-dir", str(config_dir),
+            "--output-dir", str(output_dir),
+            *argv_tail,
+        ]):
+            mto.main()
+
+    def _assert_checklist_envelope(self, captured):
+        """checklist-only envelope 的共同形狀斷言。"""
+        doc = json.loads(captured.out)        # 全文 parse ⇒ stdout 只有 JSON
+
+        assert doc["status"] == "checklist_only"
+        # checklist 是 --checklist-only 的**全部意義**——它必須在文件裡且非空。
+        # 只做 json.loads 的 gate 擋不住「checklist 欄整個不見」，這正是
+        # CodeRabbit 抓到的 bug 溜過去的原因。
+        assert isinstance(doc["checklist"], str)
+        assert doc["checklist"].strip()
+        assert "Migration Checklist" in doc["checklist"] or "遷移檢核清單" in doc["checklist"]
+
+        # summary 的既有 schema 鍵都還在
+        assert set(doc) == {
+            "configmap_files", "rule_groups", "tenants",
+            "prometheus_rules", "alertmanager_configs", "total_crds",
+            "status", "checklist",
+        }
+        # checklist-only ⇒ 沒有產生任何 CRD，這三個計數確實是 0
+        assert doc["prometheus_rules"] == 0
+        assert doc["alertmanager_configs"] == 0
+        assert doc["total_crds"] == 0
+        # 但「掃到的東西」是真實計數（fixture: 2 個 ConfigMap、2 個租戶）
+        assert doc["configmap_files"] == 2
+        assert doc["tenants"] == 2
+
+        # 人類訊息在 stderr，stdout 不含散文（checklist 是 JSON 字串值，不是裸 Markdown）
+        assert "Analyzing migration scope" in captured.err
+        assert not captured.out.lstrip().startswith("#")
+
+    def test_checklist_only_json_envelope(
+        self, temp_configmap_dir, temp_config_dir, temp_output_dir, capsys,
+    ):
+        """#1112: `--checklist-only --json` → checklist 在 `checklist` 欄裡。"""
+        self._run(["--checklist-only", "--json"],
+                  temp_configmap_dir, temp_config_dir, temp_output_dir)
+        self._assert_checklist_envelope(capsys.readouterr())
+
+    def test_checklist_only_with_dry_run_json_envelope(
+        self, temp_configmap_dir, temp_config_dir, temp_output_dir, capsys,
+    ):
+        """#1112 (CodeRabbit): `--checklist-only --dry-run --json` 也必須給 checklist。
+
+        REGRESSION。舊碼的 `if args.checklist_only and not args.dry_run:` 讓這個
+        組合掉進 dry-run 分支，吐出一份**空的 CRD preview**（keys 是
+        metadata/prometheus_rules/alertmanager_configs/errors，兩個 list 都空），
+        `checklist` 欄根本不存在——但它是合法 JSON，所以 subprocess gate 全綠。
+        caller 要 checklist，拿到空預覽。
+
+        `--checklist-only` 本來就隱含「不寫檔」，`--dry-run` 疊上去不該改變
+        payload 的選擇。這條測試釘住「窄的 no-op flag 不得覆蓋選 payload 的 flag」。
+        """
+        self._run(["--checklist-only", "--dry-run", "--json"],
+                  temp_configmap_dir, temp_config_dir, temp_output_dir)
+        captured = capsys.readouterr()
+
+        doc = json.loads(captured.out)
+        # bug 的簽名：dry-run 的 CRD-preview 鍵出現在 checklist-only 的輸出裡
+        assert "metadata" not in doc, (
+            "--checklist-only --dry-run 掉回 dry-run 的 CRD-preview 分支了"
+        )
+        self._assert_checklist_envelope(captured)
+
+    def test_dry_run_json_is_crd_preview_not_summary(
+        self, temp_configmap_dir, temp_config_dir, temp_output_dir, capsys,
+    ):
+        """對照組：沒有 --checklist-only 時，`--dry-run --json` 仍是單一 CRD preview。
+
+        釘住修法的另一半——`checklist_for_json is not None` 這個 escape hatch
+        不能讓純 dry-run 也追加一份 summary（那會變成 stdout 兩份文件、
+        json.loads 直接炸）。
+        """
+        self._run(["--dry-run", "--json"],
+                  temp_configmap_dir, temp_config_dir, temp_output_dir)
+        captured = capsys.readouterr()
+
+        doc = json.loads(captured.out)        # 兩份文件的話這裡就炸了
+        assert set(doc) == {
+            "metadata", "prometheus_rules", "alertmanager_configs", "errors",
+        }
+        assert "checklist" not in doc
+        assert "status" not in doc
+        assert len(doc["prometheus_rules"]) == 2      # 真的有預覽內容
+        assert len(doc["alertmanager_configs"]) == 2
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

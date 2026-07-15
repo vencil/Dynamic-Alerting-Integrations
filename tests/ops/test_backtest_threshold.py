@@ -396,6 +396,88 @@ class TestPrometheusAvailable:
         assert bt.prometheus_available("http://prom") is False
 
 
+# ── --json envelope 形狀（#1112）─────────────────────────────────
+
+
+class TestJsonEnvelope:
+    """兩條「沒跑回測」的終端路徑，其 `--json` envelope 的**形狀**。
+
+    subprocess gate（tests/shared/test_json_stdout_contract.py）只斷言
+    json.loads(stdout) 成功——status 值被改一個字、reason 鍵被拿掉，它照樣
+    全綠。這裡逐鍵釘住 envelope，並用 key-set 比對 happy path 的
+    generate_report()，讓「新增欄位只加在 happy path、忘了加進 empty_report」
+    這種 drift 直接紅。
+    """
+
+    def _empty_report_keys(self, lookback):
+        """happy-path generate_report() 的 key set（zero results）。"""
+        return set(bt.generate_report([], lookback))
+
+    def test_skip_if_unavailable_json_envelope(self, monkeypatch, capsys, cli_argv):
+        """Prometheus 不可達 + --skip-if-unavailable + --json → skipped envelope、exit 0。"""
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
+        cli_argv("backtest_threshold",
+                 "--tenant", "tenant-one", "--metric", "max_connections",
+                 "--old-value", "100", "--new-value", "150",
+                 "--prometheus", "http://prom:9090",
+                 "--lookback", "3d",
+                 "--skip-if-unavailable", "--json")
+
+        with pytest.raises(SystemExit) as exc_info:
+            bt.main()
+        assert exc_info.value.code == 0          # graceful skip 仍是 EXIT_OK
+
+        captured = capsys.readouterr()
+        doc = json.loads(captured.out)           # 全文 parse ⇒ stdout 只有 JSON
+
+        assert doc["status"] == "skipped"
+        assert doc["reason"] == "prometheus_unavailable"
+        assert doc["lookback"] == "3d"           # 回音 caller 給的窗口
+        # 設計上歸零的計數確實是 0 / []
+        assert doc["total_changes"] == 0
+        assert doc["analyzed"] == 0
+        assert doc["no_data"] == 0
+        assert doc["risk_summary"] == {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        assert doc["changes"] == []
+        # 與 happy path 同 schema（consumer 讀 .risk_summary.HIGH 兩條路都通）
+        assert set(doc) == self._empty_report_keys("3d") | {"status", "reason"}
+
+        assert "Prometheus unavailable" in captured.err
+        assert "Prometheus" not in captured.out
+
+    def test_no_changes_json_envelope(self, monkeypatch, tmp_path, capsys, cli_argv):
+        """Prometheus 可達但零變更 + --json → no_changes envelope、exit 0。"""
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "tenant-one.yaml").write_text(
+            "tenants:\n  tenant-one:\n    mysql_connections: 100\n", encoding="utf-8")
+
+        # 同一個目錄同時當 current 與 baseline ⇒ 必然零變更
+        cli_argv("backtest_threshold",
+                 "--config-dir", str(conf_d), "--baseline", str(conf_d),
+                 "--prometheus", "http://prom:9090", "--json")
+
+        with pytest.raises(SystemExit) as exc_info:
+            bt.main()
+        assert exc_info.value.code == 0
+
+        captured = capsys.readouterr()
+        doc = json.loads(captured.out)
+
+        assert doc["status"] == "no_changes"
+        assert doc["reason"] == "no_threshold_changes_detected"
+        assert doc["total_changes"] == 0
+        assert doc["analyzed"] == 0
+        assert doc["no_data"] == 0
+        assert doc["risk_summary"] == {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        assert doc["changes"] == []
+        assert set(doc) == self._empty_report_keys(doc["lookback"]) | {"status", "reason"}
+
+        assert "No threshold changes found." in captured.err
+        assert "No threshold changes" not in captured.out
+
+
 # ── RISK_THRESHOLDS ──────────────────────────────────────────────
 
 

@@ -825,10 +825,27 @@ def main():
         )
 
     # Write or print output
-    if args.checklist_only and not args.dry_run:
-        # For checklist-only mode (not dry-run), print checklist to stdout
+    checklist_for_json = None
+    # #1112 (CodeRabbit): `--checklist-only` MUST win over `--dry-run`.
+    # The old guard was `if args.checklist_only and not args.dry_run:`, so the
+    # combination `--checklist-only --dry-run` fell through to the dry-run
+    # branch and served an (empty) CRD preview with NO `checklist` field at all
+    # — valid JSON, so the stdout-contract gate stayed green, but the caller
+    # asked for a checklist and silently got something else. `--checklist-only`
+    # already implies "write nothing" (it skips generate_migration and forces
+    # the CRD lists empty), so `--dry-run` adds nothing on top of it: the
+    # narrower, no-op flag must not override the one that selects the payload.
+    if args.checklist_only:
         checklist = build_migration_checklist(source_dir, config_dir, output_dir, result)
-        print(checklist)
+        if args.json:
+            # #1112: stdout must be exactly ONE JSON document. The checklist is
+            # the whole point of --checklist-only, so it is carried INSIDE the
+            # summary document (as a string) rather than dumped as raw Markdown
+            # next to it — no information is lost from stdout, and the summary
+            # keys stay exactly where a consumer already expects them.
+            checklist_for_json = checklist
+        else:
+            print(checklist)
     elif args.dry_run:
         # Print to stdout
         if args.json:
@@ -903,9 +920,17 @@ def main():
         "total_crds": total_crds,
     }
 
-    # Only print summary if not JSON + dry-run (in that case, JSON is the only output)
-    if not (args.dry_run and args.json):
+    # Only print summary if not JSON + dry-run (in that case the CRD-preview
+    # document above is the ONE document stdout is allowed to carry).
+    # `or checklist_for_json is not None` (#1112, CodeRabbit): in
+    # `--checklist-only --dry-run --json` no preview was printed above — the
+    # checklist summary IS this run's one document, so suppressing it here
+    # would leave stdout empty while `--json` was asked for.
+    if not (args.dry_run and args.json) or checklist_for_json is not None:
         if args.json:
+            if checklist_for_json is not None:
+                summary["status"] = "checklist_only"
+                summary["checklist"] = checklist_for_json
             print(format_json_report(summary))
         else:
             print(

@@ -427,6 +427,33 @@ class TestMainCLI:
         out = json.loads(capsys.readouterr().out)
         assert out["changed"] is True
 
+    @mock.patch("patch_config.run_cmd")
+    def test_json_without_diff_is_caller_error(self, mock_run, capsys):
+        """#1112: `--json` 無 `--diff` → exit 2、stdout 空、什麼都不套用。
+
+        這組 flag 在**會改東西**的工具上是矛盾的：`--json` 要的是 diff 預覽
+        文件（help 一直寫著 "requires --diff"），而沒有 `--diff` 意思是「真的
+        套下去」。舊行為是默默丟掉 `--json` 然後 **APPLY** ——要預覽的 caller
+        拿到的是一次真實 ConfigMap 寫入。契約因此是 fail-loud，不是「吐一份
+        文件」：沒有誠實的文件可吐，服務這個請求本身就是 bug。
+
+        `mock_run.assert_not_called()` 是本測試的核心：它釘住「**沒有套用**」，
+        而不只是「exit code 對」——若有人把檢查移到 run_cmd 之後，exit code
+        仍是 2，但 ConfigMap 已經被改了。
+        """
+        with mock.patch("sys.argv", [
+            "patch_config.py", "--json", "db-a", "cpu", "90",
+        ]):
+            with pytest.raises(SystemExit) as exc_info:
+                pc.main()
+
+        assert exc_info.value.code == 2          # EXIT_CALLER_ERROR
+        captured = capsys.readouterr()
+        assert captured.out == ""                # 被拒絕的請求不寫 stdout
+        assert "--diff" in captured.err          # 錯誤訊息說明矛盾何在
+        assert "ERROR" in captured.err
+        mock_run.assert_not_called()             # ⇒ kubectl 沒被叫，什麼都沒套用
+
     @mock.patch("patch_config.os.remove")
     @mock.patch("patch_config.run_cmd")
     def test_apply_mode(self, mock_run, mock_rm, capsys):

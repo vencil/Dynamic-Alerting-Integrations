@@ -281,6 +281,16 @@ def main():
     )
     args = parser.parse_args()
 
+    # #1112: `--json` without `--diff` used to be silently ignored — and the
+    # tool then went on to APPLY the change for real, while the caller believed
+    # it had asked for a preview document. A contradictory flag combination on a
+    # mutating tool must fail loudly, not mutate: caller error, nothing applied.
+    if args.json and not args.diff:
+        print("ERROR: --json requires --diff (it prints the diff preview as "
+              "JSON). Without --diff this command APPLIES the change; refusing "
+              "to apply while --json was requested.", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+
     # 1. Get existing ConfigMap
     cm_json = run_cmd(["kubectl", "get", "configmap", "threshold-config",
                        "-n", "monitoring", "-o", "json"])

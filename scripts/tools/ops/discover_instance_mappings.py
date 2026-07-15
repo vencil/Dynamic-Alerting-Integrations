@@ -325,8 +325,28 @@ def main(argv: list[str] | None = None) -> int:
     db_type = "unknown"
     instance_id = args.instance or "unknown"
 
+    # #1112: every human-readable line below goes to stderr — in `--json` mode
+    # stdout must carry exactly one JSON document and nothing else.
+    def _empty_mapping(reason: str) -> dict:
+        """Envelope for a run that discovered no usable partition label.
+
+        Deliberately carries ONLY the payload key shared with the happy path
+        (`instance_tenant_mapping`, here empty) plus the status/reason
+        discriminator — it does not invent `db_type` / `partition_label` /
+        `instance` keys, which the happy-path draft does not expose either
+        (generate_mapping_draft's remaining keys are `#`-prefixed YAML
+        comments for the `--output` artifact, not part of the machine
+        contract). A consumer reads `instance_tenant_mapping` on either path
+        and `.status` to tell them apart. Exit code stays EXIT_VIOLATION.
+        """
+        return {
+            "status": "no_mappings",
+            "reason": reason,
+            "instance_tenant_mapping": {},
+        }
+
     if args.endpoint:
-        print(f"Scraping {args.endpoint} ...")
+        print(f"Scraping {args.endpoint} ...", file=sys.stderr)
         raw, err = scrape_metrics_endpoint(args.endpoint)
         if err:
             print(f"ERROR: {err}", file=sys.stderr)
@@ -337,14 +357,15 @@ def main(argv: list[str] | None = None) -> int:
         instance_id = args.endpoint.split("//")[-1].split("/")[0]
         metric_count = sum(1 for line in raw.splitlines()
                           if line and not line.startswith('#'))
-        print(f"  Scraped {metric_count} metric samples, db_type={db_type}")
+        print(f"  Scraped {metric_count} metric samples, db_type={db_type}",
+              file=sys.stderr)
 
     elif args.prometheus:
         if not args.instance and not args.job:
             print("ERROR: --prometheus requires --instance or --job",
                   file=sys.stderr)
             return EXIT_CALLER_ERROR
-        print(f"Querying Prometheus at {args.prometheus} ...")
+        print(f"Querying Prometheus at {args.prometheus} ...", file=sys.stderr)
         label_values = query_prometheus_label_values(
             args.prometheus,
             instance=args.instance,
@@ -355,30 +376,36 @@ def main(argv: list[str] | None = None) -> int:
     if not label_values:
         msg = ("未發現可用於分區的標籤值" if lang == "zh"
                else "No partition-suitable label values discovered")
-        print(f"\n⚠ {msg}")
+        print(f"\n⚠ {msg}", file=sys.stderr)
         print("  " + ("檢查 exporter 是否暴露 schema/tablespace 等標籤" if lang == "zh"
-                       else "Check if the exporter exposes schema/tablespace labels"))
+                       else "Check if the exporter exposes schema/tablespace labels"),
+              file=sys.stderr)
+        if args.json:
+            print(format_json_report(_empty_mapping("no_label_values"), default=str))
         return EXIT_VIOLATION
 
     # ── Rank and display ──────────────────────────────────────────
     ranked = rank_partition_labels(label_values)
 
     header = "發現的分區標籤:" if lang == "zh" else "Discovered partition labels:"
-    print(f"\n{header}")
+    print(f"\n{header}", file=sys.stderr)
     for label, values, score in ranked:
         count = len(values)
         sample = sorted(values)[:5]
         more = f"  (+{count - 5} more)" if count > 5 else ""
-        print(f"  {label}: {count} values (score={score})")
-        print(f"    sample: {', '.join(sample)}{more}")
+        print(f"  {label}: {count} values (score={score})", file=sys.stderr)
+        print(f"    sample: {', '.join(sample)}{more}", file=sys.stderr)
 
     if not ranked:
-        print("  (none suitable for partitioning)")
+        print("  (none suitable for partitioning)", file=sys.stderr)
+        if args.json:
+            print(format_json_report(_empty_mapping("no_suitable_label"), default=str))
         return EXIT_VIOLATION
 
     # Use top-ranked label
     best_label, best_values, _ = ranked[0]
-    print(f"\n{'推薦分區標籤' if lang == 'zh' else 'Recommended partition label'}: {best_label}")
+    print(f"\n{'推薦分區標籤' if lang == 'zh' else 'Recommended partition label'}: {best_label}",
+          file=sys.stderr)
 
     # ── Generate mapping draft ────────────────────────────────────
     draft = generate_mapping_draft(instance_id, best_label, best_values, db_type)
@@ -399,8 +426,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.output:
         write_text_secure(args.output, output)
         saved_msg = "已儲存" if lang == "zh" else "Saved to"
-        print(f"\n{saved_msg}: {args.output}")
-    else:
+        print(f"\n{saved_msg}: {args.output}", file=sys.stderr)
+
+    if args.json:
+        # #1112: `--json` ⇒ stdout carries the mapping document, whether or not
+        # it was ALSO persisted with --output (same convention as
+        # analyze_rule_pack_gaps --output --json).
+        print(output)
+    elif not args.output:
         print(f"\n{'─' * 50}")
         print(output)
 

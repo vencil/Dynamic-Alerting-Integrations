@@ -1,6 +1,7 @@
 """Tests for discover_instance_mappings.py — auto-discover 1:N mappings."""
 from __future__ import annotations
 
+import json
 import os
 import sys
 import textwrap
@@ -12,7 +13,7 @@ sys.path.insert(0, _TOOLS_DIR)
 sys.path.insert(0, os.path.join(_TOOLS_DIR, '..'))
 
 import discover_instance_mappings as dim  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -159,3 +160,59 @@ class TestCliMain:
         assert rc == EXIT_CALLER_ERROR
         captured = capsys.readouterr()
         assert "requires" in captured.err.lower() or "requires" in captured.out.lower()
+
+
+# ---------------------------------------------------------------------------
+# --json empty envelope 形狀 (#1112)
+# ---------------------------------------------------------------------------
+class TestJsonEmptyEnvelope:
+    """沒發現可用分區標籤時，`--json` 仍須吐一份完整 envelope。
+
+    subprocess gate 只斷言 json.loads(stdout) 成功——status 值改一個字、
+    reason 鍵拿掉，它照樣全綠。這裡逐鍵釘住形狀，並區分兩種「空」的成因
+    （完全沒有標籤值 vs 有標籤值但沒有一個適合分區），因為 reason 是
+    consumer 唯一能拿來分辨的東西。
+    """
+
+    def test_no_label_values_envelope(self, monkeypatch, capsys):
+        """Prometheus 回不出任何標籤值 → reason=no_label_values、exit 1。"""
+        monkeypatch.setattr(dim, "query_prometheus_label_values",
+                            lambda *a, **kw: {})
+        rc = dim.main(["--prometheus", "http://prom:9090",
+                       "--instance", "stub:9104", "--json"])
+
+        assert rc == EXIT_VIOLATION              # 空結果 = violation，exit 語意不變
+        captured = capsys.readouterr()
+        doc = json.loads(captured.out)           # 全文 parse ⇒ stdout 只有 JSON
+
+        assert doc["status"] == "no_mappings"
+        assert doc["reason"] == "no_label_values"
+        assert doc["instance_tenant_mapping"] == {}     # 設計上清空的欄位確實是 {}
+        # envelope 只帶「與 happy path 共用的 payload 鍵」+ discriminator，
+        # 不憑空發明 db_type / partition_label（happy path 也沒有這些機器契約鍵）
+        assert set(doc) == {"status", "reason", "instance_tenant_mapping"}
+
+        # 人類訊息在 stderr，stdout 不含散文
+        assert "label values" in captured.err or "標籤值" in captured.err
+        assert "Querying" not in captured.out
+
+    def test_no_suitable_label_envelope(self, monkeypatch, capsys):
+        """有標籤值但沒一個適合分區（單值標籤）→ reason=no_suitable_label。
+
+        rank_partition_labels() 排除 count<2 的標籤，故此處 ranked 為空但
+        label_values 非空——與上一條是**不同的分支**，reason 必須分得開。
+        """
+        monkeypatch.setattr(dim, "query_prometheus_label_values",
+                            lambda *a, **kw: {"schemaname": {"only-one-value"}})
+        rc = dim.main(["--prometheus", "http://prom:9090",
+                       "--instance", "stub:9104", "--json"])
+
+        assert rc == EXIT_VIOLATION
+        captured = capsys.readouterr()
+        doc = json.loads(captured.out)
+
+        assert doc["status"] == "no_mappings"
+        assert doc["reason"] == "no_suitable_label"     # ≠ no_label_values
+        assert doc["instance_tenant_mapping"] == {}
+        assert set(doc) == {"status", "reason", "instance_tenant_mapping"}
+        assert "none suitable" in captured.err.lower()

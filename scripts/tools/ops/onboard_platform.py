@@ -1051,8 +1051,11 @@ def main():
     phase3_results = None
 
     # Phase 1: Alertmanager
+    # #1112: all phase progress lines go to stderr — stdout is reserved for the
+    # one JSON document `--json` promises (and for the text summary otherwise).
     if args.alertmanager_config:
-        print(f"Phase 1: Analyzing Alertmanager config: {args.alertmanager_config}")
+        print(f"Phase 1: Analyzing Alertmanager config: {args.alertmanager_config}",
+              file=sys.stderr)
         am_config = parse_alertmanager_config(args.alertmanager_config)
         if am_config is None:
             print(f"ERROR: Failed to parse Alertmanager config: {args.alertmanager_config}",
@@ -1063,15 +1066,16 @@ def main():
         phase1_results = (tenant_routings, summary)
 
         print(f"  Found {summary['tenant_routes']} tenant route(s) "
-              f"(of {summary['total_routes']} total)")
+              f"(of {summary['total_routes']} total)", file=sys.stderr)
         for w in summary["warnings"]:
             print(f"  WARN: {w}", file=sys.stderr)
         for s in summary["skipped_routes"]:
-            print(f"  SKIP: receiver='{s['receiver']}' — {s['reason']}")
+            print(f"  SKIP: receiver='{s['receiver']}' — {s['reason']}",
+                  file=sys.stderr)
 
     # Phase 2: Rule files
     if args.rule_files:
-        print(f"Phase 2: Analyzing rule files: {args.rule_files}")
+        print(f"Phase 2: Analyzing rule files: {args.rule_files}", file=sys.stderr)
         if not HAS_MIGRATE:
             print("  WARN: migrate_rule.py not available, Phase 2 will have limited analysis",
                   file=sys.stderr)
@@ -1087,16 +1091,18 @@ def main():
             phase2_results = (candidates, recording_rules, summary)
 
             print(f"  Scanned {summary['files_scanned']} file(s), "
-                  f"{summary['total_rules']} rule(s) in {summary['total_groups']} group(s)")
+                  f"{summary['total_rules']} rule(s) in {summary['total_groups']} group(s)",
+                  file=sys.stderr)
             print(f"  Alert rules: {summary['alert_rules']} "
-                  f"(parseable: {summary['parseable']}, unparseable: {summary['unparseable']})")
-            print(f"  Recording rules: {summary['recording_rules']}")
+                  f"(parseable: {summary['parseable']}, unparseable: {summary['unparseable']})",
+                  file=sys.stderr)
+            print(f"  Recording rules: {summary['recording_rules']}", file=sys.stderr)
             for e in summary["errors"]:
                 print(f"  ERROR: {e}", file=sys.stderr)
 
     # Phase 3: Scrape config
     if args.scrape_config:
-        print(f"Phase 3: Analyzing scrape config: {args.scrape_config}")
+        print(f"Phase 3: Analyzing scrape config: {args.scrape_config}", file=sys.stderr)
         scrape_configs = parse_scrape_configs(args.scrape_config)
         if not scrape_configs:
             print(f"  WARN: No scrape_configs found in: {args.scrape_config}",
@@ -1108,7 +1114,7 @@ def main():
 
             print(f"  Found {summary['total_jobs']} job(s): "
                   f"{summary['with_tenant_mapping']} with tenant mapping, "
-                  f"{summary['without_tenant_mapping']} without")
+                  f"{summary['without_tenant_mapping']} without", file=sys.stderr)
 
     # Generate outputs
     report = write_outputs(

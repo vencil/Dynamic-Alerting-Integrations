@@ -1388,8 +1388,11 @@ da-tools operator-generate \
 # 僅產出 AlertmanagerConfig
 da-tools operator-generate --components alertmanager --receiver-template email
 
-# Dry-run JSON 報告
-da-tools operator-generate --dry-run --json
+# Dry-run JSON 報告 — stdout 為單一 JSON 文件：
+#   {"crds": [...], "kustomization": {...}|null, "summary": {...}}
+# （進度／摘要訊息走 stderr，故可安全 pipe 進 jq）
+da-tools operator-generate --dry-run --json | jq '.crds | length'
+da-tools operator-generate --dry-run --json | jq -r '.crds[].metadata.name'
 ```
 
 ---

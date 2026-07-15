@@ -519,6 +519,43 @@ class TestCLI:
         assert exit_code == 2  # EXIT_CALLER_ERROR (#452: cannot reach Prometheus)
 
     @patch("cardinality_forecasting.http_get_json")
+    def test_main_no_data_json_envelope(self, mock_get, capsys):
+        """#1112: 無資料 + --json → no_data envelope 的**形狀**（exit 仍是 2）。
+
+        gate 只驗 json.loads 過得去；這裡逐鍵釘：discriminator 的確切值、
+        歸零的 summary 確實全 0、tenants 確實是 []、且 key set 與 happy path
+        的 generate_json_report() 一致（+ status/reason）——讓「happy path 新增
+        欄位、no-data envelope 沒跟上」直接紅。
+        """
+        mock_get.return_value = (None, "connection error")
+        exit_code = cf.main(["--prometheus", "http://prom:9090", "--json",
+                             "--limit", "1000", "--warn-days", "14",
+                             "--lookback", "30d"])
+
+        assert exit_code == 2                    # EXIT_CALLER_ERROR — 形狀變、exit 語意不變
+        captured = capsys.readouterr()
+        doc = json.loads(captured.out)           # 全文 parse ⇒ stdout 只有 JSON
+
+        assert doc["status"] == "no_data"
+        assert doc["reason"] == "no_cardinality_data"
+        # caller 給的參數被回音，不是憑空捏造
+        assert doc["cardinality_limit"] == 1000
+        assert doc["warn_days"] == 14
+        assert doc["lookback_days"] == 30
+        # 設計上歸零的欄位確實是 0 / []
+        assert doc["summary"] == {"critical": 0, "warning": 0, "safe": 0, "total": 0}
+        assert doc["tenants"] == []
+        assert doc["generated_at"]
+
+        happy_keys = set(cf.generate_json_report(
+            cf.generate_forecast({}, limit=1000, warn_days=14, lookback_days=30)))
+        assert set(doc) == happy_keys | {"status", "reason"}
+
+        # 人類訊息在 stderr，stdout 不含散文
+        assert "cardinality data" in captured.err or "基數資料" in captured.err
+        assert "Check Prometheus" not in captured.out
+
+    @patch("cardinality_forecasting.http_get_json")
     def test_main_tenant_filter(self, mock_get, capsys):
         """Tenant 過濾。"""
         now = time.time()

@@ -532,6 +532,27 @@ def backtest_change(prom_url, change, lookback_seconds):
     }
 
 
+def empty_report(lookback, status, reason):
+    """Report envelope for a terminal path that ran no backtest (#1112).
+
+    Same schema as :func:`generate_report` with every count zeroed, plus a
+    ``status`` / ``reason`` discriminator.  A `--json` consumer reading
+    ``.risk_summary.HIGH`` therefore works unchanged on the skip / no-change
+    paths (it sees 0), and can branch on ``.status`` when it cares.
+    """
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "lookback": lookback,
+        "status": status,
+        "reason": reason,
+        "total_changes": 0,
+        "analyzed": 0,
+        "no_data": 0,
+        "risk_summary": {"HIGH": 0, "MEDIUM": 0, "LOW": 0},
+        "changes": [],
+    }
+
+
 def generate_report(results, lookback):
     """Generate aggregate backtest report."""
     analyzed = [r for r in results if r["status"] == "analyzed"]
@@ -687,7 +708,11 @@ def main():
     # Check Prometheus availability
     if not prometheus_available(args.prometheus):
         if args.skip_if_unavailable:
-            print("Prometheus unavailable — skipping backtest (--skip-if-unavailable)")
+            print("Prometheus unavailable — skipping backtest (--skip-if-unavailable)",
+                  file=sys.stderr)
+            if args.json:
+                print(format_json_report(empty_report(
+                    args.lookback, "skipped", "prometheus_unavailable")))
             if recipe_tenants and args.markdown_output:
                 write_text_secure(args.markdown_output, custom_alert_markdown(recipe_tenants))
             sys.exit(EXIT_OK)
@@ -720,7 +745,10 @@ def main():
         sys.exit(EXIT_CALLER_ERROR)
 
     if not changes:
-        print("No threshold changes found.")
+        print("No threshold changes found.", file=sys.stderr)
+        if args.json:
+            print(format_json_report(empty_report(
+                args.lookback, "no_changes", "no_threshold_changes_detected")))
         if recipe_tenants and args.markdown_output:
             write_text_secure(args.markdown_output, custom_alert_markdown(recipe_tenants))
         sys.exit(EXIT_OK)

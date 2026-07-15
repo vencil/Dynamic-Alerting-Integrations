@@ -684,11 +684,22 @@ class TestCLI:
     """CLI 整合測試。"""
 
     def test_main_no_policies(self, tmp_path, capsys):
-        """無策略規則 → 正常退出。"""
+        """無策略規則 → 正常退出（訊息走 stderr，#1112）。"""
         (tmp_path / "db-a.yaml").write_text("mysql_cpu: '80'\n", encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path)])
         assert exit_code == 0
-        assert "No policy rules found" in capsys.readouterr().out
+        assert "No policy rules found" in capsys.readouterr().err
+
+    def test_main_no_policies_json_envelope(self, tmp_path, capsys):
+        """#1112: 無策略規則 + --json → stdout 仍是恰好一份 JSON（report schema 歸零）。"""
+        (tmp_path / "db-a.yaml").write_text("mysql_cpu: '80'\n", encoding="utf-8")
+        exit_code = pe.main(["--config-dir", str(tmp_path), "--json"])
+        assert exit_code == 0
+        doc = json.loads(capsys.readouterr().out)
+        assert doc["status"] == "no_policies"
+        assert doc["violations"] == []
+        assert doc["error_count"] == 0
+        assert doc["passed"] is True
 
     def test_main_all_pass(self, tmp_path, capsys):
         """所有策略通過 → exit 0。"""
