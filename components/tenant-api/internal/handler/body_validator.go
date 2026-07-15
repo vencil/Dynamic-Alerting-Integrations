@@ -48,7 +48,10 @@ import (
 type Violation struct {
 	Field  string `json:"field"`
 	Reason string `json:"reason"`
-}
+} //@name Violation
+// swag @name: referenced from ErrorResponse.violations — pinned to one
+// canonical definition for the same cross-package reason as ErrorResponse
+// (see errors.go).
 
 // validatorInstance is the singleton *validator.Validate used by all
 // handlers. Configured once at package init so each request doesn't
