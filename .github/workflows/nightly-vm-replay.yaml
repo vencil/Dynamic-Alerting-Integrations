@@ -1,0 +1,212 @@
+name: Nightly VM Replay Staleness
+
+# Nightly wiring for tests/rulepacks/test_vm_replay_staleness.py (#947 / ADR-025
+# Part 2) — until now the ONLY known test module with ZERO CI coverage: it needs
+# a live vmsingle + the vmalert binary + promtool, none of which the "Python
+# Tests" job provisions, so it silently skipped everywhere except a manually
+# provisioned dev container. A harness edit (vm_harness.py), a promtool re-pin,
+# or a VM engine bump could rot it with no signal until someone happened to run
+# it by hand.
+#
+# What a nightly run buys (and what it doesn't):
+#   - The staleness pins are a property of the PINNED engine version, so a green
+#     night mostly re-confirms the same pin (same argument that keeps the
+#     equivalence anchor out of the nightly calendar — see
+#     vm-anchor-on-pin-change.yml). The signal here is TEST HEALTH: the bench
+#     stays runnable (imports, replay plumbing, promtool reference fixtures)
+#     instead of rotting invisibly, and an engine-behavior drift inside the same
+#     tag (image re-pin, dependency bump) fails a pin loudly.
+#   - It does NOT replace the on-demand run on a VM-version bump — that stays
+#     part of the pin-bump SOP (docs/internal/backend-compat-baseline.md).
+#
+# Why a STANDALONE workflow (not bolted onto an existing nightly):
+#   - No existing nightly is thematically related (race = Go races, mutation =
+#     test-suite strength, image-scan = trivy, bench-record = perf baseline);
+#     sharing a file would couple unrelated failure domains and issue templates.
+#   - The provisioning set (docker vmsingle + vmalert + promtool) is unique to
+#     this job — nothing to share.
+#   - Runner contention (the weekly-fuzz header's concern about stacking
+#     nightlies): this job gets its own empty cron slot, 18:00 UTC = 02:00
+#     Asia/Taipei — clear of 02:00 (forge-e2e/try-local), 03:00 (bench-record),
+#     03:23 (image-scan), 06:17 (pages-health), 16:00 (race), 17:00 (mutation;
+#     45-min cap ends 17:45).
+#
+# Why `docker run` and NOT a GitHub Actions service container: services accept
+# image/ports/env/options but CANNOT pass command-line args to the entrypoint,
+# and vmsingle MUST run `-retentionPeriod=100y` (the bench ingests at a fixed
+# 2023 epoch; the default 1-month retention silently drops those samples —
+# import 204s but every query comes back empty). Same reasoning + same
+# digest-pinned image as vm-anchor-on-pin-change.yml.
+#
+# Fail-closed design (audited; no skip-to-green path):
+#   - vmsingle fails to start/health-check → the start step exits 1 → job RED.
+#   - promtool / vmalert install steps are HARD (no continue-on-error, unlike
+#     ci.yml's informational vmalert-tool install) → download flake → job RED.
+#   - VM_REPLAY_REQUIRE=1 → a missing dependency makes the module HARD-FAIL
+#     (pytest.fail) instead of skipping to green; `-rs` surfaces any residual
+#     skip in the log.
+#   - Failure handling mirrors nightly-race: a scheduled failure auto-opens a
+#     triage issue (manual dispatch failures don't spam issues).
+
+on:
+  schedule:
+    # 18:00 UTC = 02:00 Asia/Taipei — own slot, see the contention note above.
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+    # Manual trigger for pin bumps / harness-change verification.
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  # Schedule + dispatch on the same ref serialize rather than parallelize —
+  # two vmsingles racing for port 8428 on one runner would be nonsense anyway.
+  group: nightly-vm-replay-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  vm-replay:
+    name: vmalert -replay staleness bench (real vmsingle, fail-closed)
+    runs-on: ubuntu-latest
+    # Nominal run is a few minutes (the replay windows are SIMULATED time —
+    # ≤1800 s at 30 s step is ~60 evals per rule, wall-clock seconds); the cap
+    # covers docker pull + cold binary downloads.
+    timeout-minutes: 15
+    steps:
+      # persist-credentials: false — everything below is local (docker, pinned
+      # downloads, pytest against localhost); the issue-on-failure step uses
+      # github-script's own token plumbing, not git credentials.
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # Digest-pinned per the supply-chain policy (#851); image+digest are a
+      # HAND-SYNCED copy of vm-anchor-on-pin-change.yml's (bump both alongside
+      # tests/rulepacks/vm_engine_version + ci.yml VMUTILS_SHA256 — see
+      # docs/internal/backend-compat-baseline.md "版本 pin 單一 SSOT"). The tag
+      # guard below turns a forgotten sync into a loud failure instead of a
+      # night of benching the wrong engine.
+      - name: Start pinned VictoriaMetrics (vmsingle, -retentionPeriod=100y)
+        run: |
+          set -euo pipefail
+          . tests/rulepacks/vm_engine_version
+          IMAGE="docker.io/victoriametrics/victoria-metrics:v1.146.0@sha256:b8703ff12ed437effad4fc36492fec14824277f2890a5876b8a9e6cfe5139839"
+          case "$IMAGE" in
+            *":v${VM_VERSION}@"*) ;;
+            *)
+              echo "::error::vmsingle image tag does not match the vm_engine_version pin (VM_VERSION=${VM_VERSION}) — update the image+digest here alongside the pin."
+              exit 1
+              ;;
+          esac
+          docker run -d --name vm-replay -p 8428:8428 "$IMAGE" -retentionPeriod=100y
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8428/health >/dev/null 2>&1 && { echo "VM up"; exit 0; }
+            sleep 1
+          done
+          # Fail FAST with a direct signal instead of leaving a dead VM for the
+          # pytest step to trip over less legibly.
+          echo "vmsingle did not become healthy within 30s" >&2
+          docker logs vm-replay || true
+          exit 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      # Same versioned-name + always-verify-SHA-256 download-cache pattern as
+      # ci.yml (Lint Rule Packs job) — and the SAME cache keys, so this job
+      # usually restores the entries ci.yml runs already populated. Both
+      # install steps here are HARD on purpose (fail-closed; a partial cache
+      # post-save can't happen because a failed step fails the job before the
+      # post-job cache save).
+      - name: Cache pinned binary downloads (promtool)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/vibe-ci-downloads
+          key: ${{ runner.os }}-vibe-dl-promtool-3.12.0
+
+      - name: Cache pinned binary downloads (vmutils)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/vibe-dl-vmutils
+          key: ${{ runner.os }}-vibe-dl-vmutils-${{ hashFiles('tests/rulepacks/vm_engine_version') }}
+
+      - name: Install promtool
+        run: |
+          set -euo pipefail
+          PROM_VERSION=3.12.0
+          # Pinned SHA-256 of prometheus-3.12.0.linux-amd64.tar.gz (upstream
+          # sha256sums.txt) — keep in sync with ci.yml when re-pinning.
+          PROM_SHA256=20da47f8e5303f74aecb78edd7f7e39041dac08ac4939dba75efd7a900ae8867
+          DL="$HOME/.cache/vibe-ci-downloads"
+          mkdir -p "$DL"
+          if [ ! -f "$DL/prometheus-${PROM_VERSION}.tgz" ]; then
+            curl -fsSL "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz" -o "$DL/prometheus-${PROM_VERSION}.tgz"
+          fi
+          bash scripts/ops/_verify_download.sh "$DL/prometheus-${PROM_VERSION}.tgz" "$PROM_SHA256"
+          tar xzf "$DL/prometheus-${PROM_VERSION}.tgz" -C /tmp
+          sudo cp /tmp/prometheus-${PROM_VERSION}.linux-amd64/promtool /usr/local/bin/
+          promtool --version
+
+      - name: Install vmalert (from the pinned vmutils tarball)
+        run: |
+          set -euo pipefail
+          # VM engine version from the single pins SSOT (shared with the
+          # vmalert-tool gate + the equivalence anchor — pin-coupling guard).
+          . tests/rulepacks/vm_engine_version
+          # Pinned SHA-256 of vmutils-linux-amd64-v${VM_VERSION}.tar.gz — the
+          # SAME tarball ci.yml verifies for vmalert-tool; keep both in sync
+          # on a pin bump (a mismatch fails _verify_download.sh below).
+          VMUTILS_SHA256=ec597bc2168d0792638ab0dc847e37041bace57a358bafa0da034c9fd438efac
+          # Download to /tmp; mv into the cache dir only on full curl success
+          # (same discipline as ci.yml, though this step being HARD already
+          # prevents a partial post-save).
+          DL="$HOME/.cache/vibe-dl-vmutils"
+          if [ ! -f "$DL/vmutils-v${VM_VERSION}.tgz" ]; then
+            curl -fsSL "https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v${VM_VERSION}/vmutils-linux-amd64-v${VM_VERSION}.tar.gz" -o /tmp/vmutils.tgz.part
+            mkdir -p "$DL"
+            mv /tmp/vmutils.tgz.part "$DL/vmutils-v${VM_VERSION}.tgz"
+          fi
+          bash scripts/ops/_verify_download.sh "$DL/vmutils-v${VM_VERSION}.tgz" "$VMUTILS_SHA256"
+          tar xzf "$DL/vmutils-v${VM_VERSION}.tgz" -C /tmp
+          # find_vmalert() (vm_harness.py) probes PATH for vmalert/vmalert-prod.
+          sudo cp /tmp/vmalert-prod /usr/local/bin/vmalert
+          vmalert --version
+
+      - name: Run replay staleness bench (VM_REPLAY_REQUIRE=1 — never skip-to-green)
+        env:
+          VM_REPLAY_REQUIRE: "1"
+          VM_REPLAY_ENDPOINT: http://localhost:8428
+        run: |
+          pip install pytest
+          python -m pytest tests/rulepacks/test_vm_replay_staleness.py -v -rs
+
+      # Failure → auto-open a triage issue (nightly-race pattern). Schedule
+      # only: a manual dispatch failure is being watched live, no issue spam.
+      - name: Open issue on failure
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+            const title = `Nightly VM replay staleness bench failed (${new Date().toISOString().slice(0,10)})`;
+            const body = [
+              `Nightly \`vmalert -replay\` staleness bench (\`tests/rulepacks/test_vm_replay_staleness.py\`, VM_REPLAY_REQUIRE=1) failed.`,
+              ``,
+              `Run: ${runUrl}`,
+              ``,
+              `## Triage steps`,
+              `1. Check WHICH pin tripped in the run log — a staleness band assert means VM engine timing drifted (image re-pin? engine bump without re-characterizing?); a promtool reference assert means the Prometheus-side fixture drifted; a provisioning step failure means infra, not signal.`,
+              `2. Reproduce in a dev container: start a pinned vmsingle (\`docker run -d -p 8428:8428 victoriametrics/victoria-metrics:v$(. tests/rulepacks/vm_engine_version && echo $VM_VERSION) -retentionPeriod=100y\`), provide vmalert + promtool, then \`VM_REPLAY_REQUIRE=1 python -m pytest tests/rulepacks/test_vm_replay_staleness.py -v\`.`,
+              `3. A REAL timing drift = update the pinned bands AND docs/integration/victoriametrics-integration.md §3.2 together (the doc states the measured deltas).`,
+              ``,
+              `Auto-opened by [.github/workflows/nightly-vm-replay.yaml](https://github.com/${owner}/${repo}/blob/main/.github/workflows/nightly-vm-replay.yaml).`,
+            ].join('\n');
+            await github.rest.issues.create({
+              owner, repo, title, body,
+              labels: ['bug', 'ci', 'P2'],
+            });
