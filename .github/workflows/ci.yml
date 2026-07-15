@@ -47,15 +47,42 @@ jobs:
       # hadolint. Install the binary so the wrapper uses it directly (no docker
       # image pull on the runner). Pin matches HADOLINT_VERSION in
       # scripts/tools/lint/check_iac_vibe_rules.py and .hadolint.yaml.
+      #
+      # Download-cache pattern (CI-ROI wave, shared by every pinned-binary
+      # install in this workflow): the artifact is stored in a cache dir
+      # under a VERSIONED filename and only curl'd on a miss. The SHA-256
+      # verification ALWAYS runs — on cached bytes too — so a poisoned/stale
+      # cache entry fails the job instead of executing. The version in the
+      # cache KEY must be kept in sync with the install step when re-pinning:
+      # a stale key still EXACT-HITS the old entry, and since an exact hit
+      # skips the post-save, the new versioned file never enters the cache —
+      # the job then re-downloads EVERY run until the key is fixed.
+      # Correctness is unaffected (versioned filenames + always-on checksum
+      # mean the old binary is never silently used); only the cache benefit
+      # is lost. Best-effort install steps (pint / kube-linter / vmutils)
+      # additionally keep their cache dir absent until a download fully
+      # succeeds — a job can go green around their failure, and post-save on
+      # a missing path is a no-op, so a flake can never freeze a partial
+      # entry under an exact-hit key.
+      - name: Cache pinned binary downloads (hadolint)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/vibe-ci-downloads
+          key: ${{ runner.os }}-vibe-dl-lint-hadolint-v2.12.0
+
       - name: Set up hadolint
         run: |
           HADOLINT_VERSION=v2.12.0
           # Pinned SHA-256 of hadolint-Linux-x86_64 @ v2.12.0 (upstream .sha256).
           HADOLINT_SHA256=56de6d5e5ec427e17b74fa48d51271c7fc0d61244bf5c90e828aab8362d55010
-          curl -fsSL -o /tmp/hadolint \
-            "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64"
-          bash scripts/ops/_verify_download.sh /tmp/hadolint "$HADOLINT_SHA256"
-          sudo install -m0755 /tmp/hadolint /usr/local/bin/hadolint
+          DL="$HOME/.cache/vibe-ci-downloads"
+          mkdir -p "$DL"
+          if [ ! -f "$DL/hadolint-${HADOLINT_VERSION}" ]; then
+            curl -fsSL -o "$DL/hadolint-${HADOLINT_VERSION}" \
+              "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64"
+          fi
+          bash scripts/ops/_verify_download.sh "$DL/hadolint-${HADOLINT_VERSION}" "$HADOLINT_SHA256"
+          sudo install -m0755 "$DL/hadolint-${HADOLINT_VERSION}" /usr/local/bin/hadolint
           hadolint --version
 
       - name: Run pre-commit hooks
@@ -216,14 +243,54 @@ jobs:
         run: |
           python scripts/tools/lint/check_retire_drift.py --ci
 
+      # Download-caches for the 3 pinned tarballs this job curls every run
+      # (promtool / vmutils / pint — see the Lint job's hadolint step for the
+      # full pattern rationale: versioned filenames, always-on SHA-256 on
+      # cached bytes, keep the key's version in sync when re-pinning).
+      #
+      # ONE CACHE ENTRY PER ARTIFACT, deliberately not a shared key: the
+      # vmutils and pint install steps are best-effort (continue-on-error /
+      # if-swallowed), so with a shared key a first-run download flake would
+      # let the job go green and post-save a PARTIAL entry — which an exact
+      # hit then never re-saves, leaving the flaked artifact re-downloading
+      # on every subsequent run until someone bumps the key. Separate keys +
+      # each best-effort step only materializing its cache dir on a fully
+      # successful download (post-save on a missing path is a no-op) make a
+      # flake cost exactly one run.
+      #
+      # promtool is a HARD step (its curl failure fails the job, so no
+      # post-save can capture a partial state). vmutils' version lives in
+      # the tests/rulepacks/vm_engine_version pins SSOT → hashFiles keys it.
+      - name: Cache pinned binary downloads (promtool)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/vibe-ci-downloads
+          key: ${{ runner.os }}-vibe-dl-promtool-3.12.0
+
+      - name: Cache pinned binary downloads (vmutils)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/vibe-dl-vmutils
+          key: ${{ runner.os }}-vibe-dl-vmutils-${{ hashFiles('tests/rulepacks/vm_engine_version') }}
+
+      - name: Cache pinned binary downloads (pint)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/vibe-dl-pint
+          key: ${{ runner.os }}-vibe-dl-pint-0.86.0
+
       - name: Install promtool
         run: |
           PROM_VERSION=3.12.0
           # Pinned SHA-256 of prometheus-3.12.0.linux-amd64.tar.gz (upstream sha256sums.txt).
           PROM_SHA256=20da47f8e5303f74aecb78edd7f7e39041dac08ac4939dba75efd7a900ae8867
-          curl -fsSL "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz" -o /tmp/p.tgz
-          bash scripts/ops/_verify_download.sh /tmp/p.tgz "$PROM_SHA256"
-          tar xzf /tmp/p.tgz -C /tmp
+          DL="$HOME/.cache/vibe-ci-downloads"
+          mkdir -p "$DL"
+          if [ ! -f "$DL/prometheus-${PROM_VERSION}.tgz" ]; then
+            curl -fsSL "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz" -o "$DL/prometheus-${PROM_VERSION}.tgz"
+          fi
+          bash scripts/ops/_verify_download.sh "$DL/prometheus-${PROM_VERSION}.tgz" "$PROM_SHA256"
+          tar xzf "$DL/prometheus-${PROM_VERSION}.tgz" -C /tmp
           sudo cp /tmp/prometheus-${PROM_VERSION}.linux-amd64/promtool /usr/local/bin/
           promtool --version
 
@@ -247,6 +314,40 @@ jobs:
           pip install pytest
           python -m pytest tests/dx/test_recipe_preview.py tests/preview/ -q
 
+      # CI blind-spot fix (CI-ROI wave): these 5 modules are promtool-gated
+      # (`pytest.mark.skipif(shutil.which("promtool") is None)` or a
+      # per-test promtool skip), and the "Python Tests" job has no promtool
+      # — so until now they silently SKIPPED on every CI run and only the
+      # dev container ever executed them (a compiler slug/recipe_id change
+      # could rot the goldens with zero CI signal). This job installs
+      # promtool as a HARD step above, so here the skip-guards never
+      # trigger and the goldens are real gates:
+      #   - test_custom_alerts_promtool.py — #741 S1+S2 compiler fire/no-fire
+      #     behavioral goldens against the compiled example pack
+      #   - test_federation_revocation_dashboard.py / test_fleet_threshold_
+      #     dashboard.py / test_tenant_log_query_dashboard.py — Grafana
+      #     dashboard PromQL regression goldens (queries read FROM the JSON)
+      #   - test_waveform_compile.py — ADR-030 waveform compiler incl. the
+      #     promtool round-trip tests; the module importorskips on
+      #     jsonschema (hence the explicit install below — pyyaml+pytest
+      #     alone would silently skip the WHOLE module), and
+      #     WAVEFORM_PROMTOOL_REQUIRE=1 flips its round-trip skip-guard to
+      #     hard-FAIL if promtool ever goes missing in this job.
+      # -rs surfaces any residual skip in the log so a future re-gating of
+      # these modules can't silently disarm the step again.
+      - name: Promtool-gated blind-spot goldens (custom-alerts compiler + dashboards + waveform)
+        env:
+          WAVEFORM_PROMTOOL_REQUIRE: "1"
+        run: |
+          pip install jsonschema
+          python -m pytest \
+            tests/dx/test_custom_alerts_promtool.py \
+            tests/dx/test_federation_revocation_dashboard.py \
+            tests/dx/test_fleet_threshold_dashboard.py \
+            tests/dx/test_tenant_log_query_dashboard.py \
+            tests/dx/test_waveform_compile.py \
+            -q -rs
+
       - name: Install vmalert-tool (VictoriaMetrics MetricsQL unit-test engine)
         # continue-on-error: this provisioning serves the INFORMATIONAL gate below; a
         # vmutils download/verify flake must never redden the REQUIRED "Lint Rule Packs"
@@ -262,9 +363,20 @@ jobs:
           # Pinned SHA-256 of vmutils-linux-amd64-v${VM_VERSION}.tar.gz (upstream release);
           # a version/hash mismatch fails _verify_download.sh below (couples SHA <-> version).
           VMUTILS_SHA256=ec597bc2168d0792638ab0dc847e37041bace57a358bafa0da034c9fd438efac
-          curl -fsSL "https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v${VM_VERSION}/vmutils-linux-amd64-v${VM_VERSION}.tar.gz" -o /tmp/vmutils.tgz
-          bash scripts/ops/_verify_download.sh /tmp/vmutils.tgz "$VMUTILS_SHA256"
-          tar xzf /tmp/vmutils.tgz -C /tmp
+          # Download to /tmp; mkdir+mv into the cache dir ONLY on full curl
+          # success. This step is continue-on-error, so the job — and the
+          # cache post-save — can go green even when curl fails: keeping the
+          # dir absent until success means the post-save no-ops on a flake
+          # (missing path) instead of freezing an empty/partial entry under
+          # an exact-hit key.
+          DL="$HOME/.cache/vibe-dl-vmutils"
+          if [ ! -f "$DL/vmutils-v${VM_VERSION}.tgz" ]; then
+            curl -fsSL "https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v${VM_VERSION}/vmutils-linux-amd64-v${VM_VERSION}.tar.gz" -o /tmp/vmutils.tgz.part
+            mkdir -p "$DL"
+            mv /tmp/vmutils.tgz.part "$DL/vmutils-v${VM_VERSION}.tgz"
+          fi
+          bash scripts/ops/_verify_download.sh "$DL/vmutils-v${VM_VERSION}.tgz" "$VMUTILS_SHA256"
+          tar xzf "$DL/vmutils-v${VM_VERSION}.tgz" -C /tmp
           sudo cp /tmp/vmalert-tool-prod /usr/local/bin/vmalert-tool
           vmalert-tool --version
 
@@ -300,10 +412,19 @@ jobs:
           # Best-effort: a download failure OR a checksum mismatch falls through to
           # check_pint.py's Docker fallback (the helper emits a ::error:: annotation
           # on a mismatch, so a tampered binary is surfaced and never executed here).
-          if curl -fsSL -o /tmp/pint.tar.gz \
-              "https://github.com/cloudflare/pint/releases/download/v${PINT}/pint-${PINT}-linux-amd64.tar.gz" \
-              && bash scripts/ops/_verify_download.sh /tmp/pint.tar.gz "$PINT_SHA256"; then
-            tar -xzf /tmp/pint.tar.gz -C /tmp
+          # Download to /tmp; mkdir+mv into the cache dir ONLY on full curl
+          # success: this step swallows failures, so the job — and the cache
+          # post-save — can go green around a flake; keeping the dir absent
+          # until success means the post-save no-ops (missing path) instead
+          # of freezing an empty/partial entry under an exact-hit key.
+          DL="$HOME/.cache/vibe-dl-pint"
+          if { [ -f "$DL/pint-${PINT}.tar.gz" ] \
+                || { curl -fsSL -o /tmp/pint.tar.gz.part \
+                       "https://github.com/cloudflare/pint/releases/download/v${PINT}/pint-${PINT}-linux-amd64.tar.gz" \
+                     && mkdir -p "$DL" \
+                     && mv /tmp/pint.tar.gz.part "$DL/pint-${PINT}.tar.gz"; }; } \
+              && bash scripts/ops/_verify_download.sh "$DL/pint-${PINT}.tar.gz" "$PINT_SHA256"; then
+            tar -xzf "$DL/pint-${PINT}.tar.gz" -C /tmp
             # the tarball ships the binary as `pint-linux-amd64`, not `pint`.
             sudo install -m0755 /tmp/pint-linux-amd64 /usr/local/bin/pint
             pint --version
@@ -390,6 +511,19 @@ jobs:
         with:
           version: v3.16.4
 
+      # Download-cache for the kube-linter tarball (see the Lint job's
+      # hadolint step for the pattern rationale): versioned filename +
+      # always-on SHA-256 verification. Keep the version in the key in sync
+      # with KL below — a stale key exact-hits the old entry and the new
+      # versioned file never gets saved into it, so the job re-downloads
+      # every run until the key is fixed (correctness unaffected; only the
+      # cache benefit is lost).
+      - name: Cache pinned binary downloads (kube-linter)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/vibe-dl-kube-linter
+          key: ${{ runner.os }}-vibe-dl-kube-linter-v0.7.4
+
       - name: Set up kube-linter (best-effort; wrapper falls back to Docker)
         # Pin matches KUBE_LINTER_VERSION in scripts/tools/lint/check_iac_helm.py
         # + .kube-linter.yaml expectations. If the download ever 404s, the
@@ -402,11 +536,20 @@ jobs:
           # a download failure OR a checksum mismatch falls through to the wrapper's
           # Docker fallback (the helper still emits a ::error:: annotation on a
           # mismatch, so a tampered binary is surfaced and never executed here).
+          # Download to /tmp; mkdir+mv into the cache dir ONLY on full curl
+          # success: the surrounding `if` swallows a curl failure, so the job
+          # — and the cache post-save — can go green around a flake; keeping
+          # the dir absent until success means the post-save no-ops (missing
+          # path) instead of freezing an empty entry under an exact-hit key.
           KL_SHA256=1d050a5d03e3347cc1cf5b1513f646709c65d129f7aa6c2b1a6388ffb2694671
-          if curl -fsSL -o /tmp/kl.tar.gz \
-              "https://github.com/stackrox/kube-linter/releases/download/${KL}/kube-linter-linux.tar.gz" \
-              && bash scripts/ops/_verify_download.sh /tmp/kl.tar.gz "$KL_SHA256"; then
-            tar -xzf /tmp/kl.tar.gz -C /tmp
+          DL="$HOME/.cache/vibe-dl-kube-linter"
+          if { [ -f "$DL/kube-linter-${KL}.tar.gz" ] \
+                || { curl -fsSL -o /tmp/kl.tar.gz.part \
+                       "https://github.com/stackrox/kube-linter/releases/download/${KL}/kube-linter-linux.tar.gz" \
+                     && mkdir -p "$DL" \
+                     && mv /tmp/kl.tar.gz.part "$DL/kube-linter-${KL}.tar.gz"; }; } \
+              && bash scripts/ops/_verify_download.sh "$DL/kube-linter-${KL}.tar.gz" "$KL_SHA256"; then
+            tar -xzf "$DL/kube-linter-${KL}.tar.gz" -C /tmp
             sudo install -m0755 /tmp/kube-linter /usr/local/bin/kube-linter
             kube-linter version
           else
@@ -445,6 +588,13 @@ jobs:
     # legitimately run pytest without mtail (validate.yaml) don't set this.
     env:
       VIBE_REQUIRE_MTAIL: "1"
+      # Same fail-closed pattern for docker-gated tests (amtool routing
+      # tests, in-flight on a sibling branch): ubuntu-latest ships docker,
+      # so if docker is missing at pytest time the runner image regressed —
+      # the guard test then FAILS instead of letting docker-gated tests
+      # silently skip. No-op until the consumer test lands (nothing reads
+      # this env var on this branch yet — verified by grep).
+      VIBE_REQUIRE_DOCKER: "1"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -469,14 +619,36 @@ jobs:
       # on `vector` being on PATH (shutil.which); without it those 3 SILENTLY
       # SKIP and the security-critical fan-out behavior gets zero CI coverage.
       # Pinned + checksum-verified, mirroring the promtool install above.
+      #
+      # Download-cache for the 2 pinned tarballs this job curls every run
+      # (Vector ~50 MB is the single largest CI download; see the Lint job's
+      # hadolint step for the pattern rationale). Versioned filenames +
+      # always-on SHA-256 verification: a poisoned entry fails the job, an
+      # old binary is never silently used. Keep the versions in the key in
+      # sync with VECTOR_VERSION / MTAIL_VERSION below — a stale key
+      # exact-hits the old entry and the new versioned files never get saved
+      # into it, so the job re-downloads every run until the key is fixed
+      # (correctness unaffected; only the cache benefit is lost). Both
+      # installs here are HARD steps, so a download flake fails the job and
+      # the post-save never captures a partial entry.
+      - name: Cache pinned binary downloads (Vector / mtail)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/vibe-ci-downloads
+          key: ${{ runner.os }}-vibe-dl-pytests-vector-0.55.0-mtail-3.0.8
+
       - name: Install Vector
         run: |
           VECTOR_VERSION=0.55.0
           # Pinned SHA-256 of vector-0.55.0-x86_64-unknown-linux-gnu.tar.gz (upstream SHA256SUMS).
           VECTOR_SHA256=e0221681b1cd1f93c46008fde19c5ac5811718d10a803a4e320ff4e72ab9e4a9
-          curl -fsSL "https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSION}/vector-${VECTOR_VERSION}-x86_64-unknown-linux-gnu.tar.gz" -o /tmp/vector.tgz
-          bash scripts/ops/_verify_download.sh /tmp/vector.tgz "$VECTOR_SHA256"
-          tar xzf /tmp/vector.tgz -C /tmp
+          DL="$HOME/.cache/vibe-ci-downloads"
+          mkdir -p "$DL"
+          if [ ! -f "$DL/vector-${VECTOR_VERSION}.tgz" ]; then
+            curl -fsSL "https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSION}/vector-${VECTOR_VERSION}-x86_64-unknown-linux-gnu.tar.gz" -o "$DL/vector-${VECTOR_VERSION}.tgz"
+          fi
+          bash scripts/ops/_verify_download.sh "$DL/vector-${VECTOR_VERSION}.tgz" "$VECTOR_SHA256"
+          tar xzf "$DL/vector-${VECTOR_VERSION}.tgz" -C /tmp
           sudo cp /tmp/vector-x86_64-unknown-linux-gnu/bin/vector /usr/local/bin/
           vector --version
 
@@ -494,9 +666,13 @@ jobs:
           # sha256 of mtail_3.0.8_linux_amd64.tar.gz (upstream release
           # checksums.txt); identical pin to audit-sidecar/Dockerfile.
           MTAIL_SHA256=123c2ee5f48c3eff12ebccee38befd2233d715da736000ccde49e3d5607724e4
-          curl -fsSL "https://github.com/google/mtail/releases/download/v${MTAIL_VERSION}/mtail_${MTAIL_VERSION}_linux_amd64.tar.gz" -o /tmp/mtail.tgz
-          bash scripts/ops/_verify_download.sh /tmp/mtail.tgz "$MTAIL_SHA256"
-          tar xzf /tmp/mtail.tgz -C /tmp mtail
+          DL="$HOME/.cache/vibe-ci-downloads"
+          mkdir -p "$DL"
+          if [ ! -f "$DL/mtail-${MTAIL_VERSION}.tgz" ]; then
+            curl -fsSL "https://github.com/google/mtail/releases/download/v${MTAIL_VERSION}/mtail_${MTAIL_VERSION}_linux_amd64.tar.gz" -o "$DL/mtail-${MTAIL_VERSION}.tgz"
+          fi
+          bash scripts/ops/_verify_download.sh "$DL/mtail-${MTAIL_VERSION}.tgz" "$MTAIL_SHA256"
+          tar xzf "$DL/mtail-${MTAIL_VERSION}.tgz" -C /tmp mtail
           sudo install -m0755 /tmp/mtail /usr/local/bin/mtail
           mtail --version 2>&1 | head -n1 || true
           command -v mtail
@@ -541,7 +717,18 @@ jobs:
         # Do NOT use --cov=<path> here — it overrides pyproject.toml source list
         # and would silently exclude components/da-tools/app from measurement.
         # -n auto: parallel execution via pytest-xdist (see Install step).
-        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e -x --tb=short -n auto --cov --cov-report=xml --cov-fail-under=75
+        # -x: explicit CI fail-fast (pyproject addopts no longer carries a
+        # global -x — CI opts in on the command line).
+        # --timeout=300: pytest-timeout was INSTALLED (see Install step
+        # rationale re PR #165 deadlock regressions) but never armed
+        # globally — a hung test still burned the whole workflow timeout.
+        # 300s is a per-test backstop (the entire CI suite finishes in a
+        # few minutes under -n auto; slow suites are --ignore'd); tighter
+        # per-test @pytest.mark.timeout marks still override it. Command
+        # line only, NOT pyproject addopts: local devs don't necessarily
+        # have pytest-timeout installed, and an addopts flag from a missing
+        # plugin makes bare `pytest` die with "unrecognized arguments".
+        run: pytest tests/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e -x --tb=short --timeout=300 -n auto --cov --cov-report=xml --cov-fail-under=75
 
       - name: Upload coverage artifact
         if: always()
@@ -551,9 +738,20 @@ jobs:
           path: coverage.xml
           retention-days: 7
 
-  go-tests:
-    name: Go Tests (${{ matrix.go }})
+  # CI-ROI split: the former monolithic go-tests job serialized
+  # threshold-exporter `go test -race`, tenant-api `go test -race`, the swag
+  # OpenAPI drift check AND the schemathesis contract test in one ~10 min
+  # job — the single long pole of the whole CI run. The two module test
+  # suites share nothing at runtime, so they now run as two parallel jobs;
+  # the `go-tests` gate job below keeps reporting the historical
+  # "Go Tests (1.26)" check name for branch protection.
+  go-tests-threshold-exporter:
+    name: Go Tests — threshold-exporter (${{ matrix.go }})
     runs-on: ubuntu-latest
+    # Least-privilege token (CodeQL: workflow-missing-permissions). Tests +
+    # coverage-artifact upload need nothing beyond repo read.
+    permissions:
+      contents: read
     strategy:
       matrix:
         go: ["1.26"]
@@ -568,10 +766,9 @@ jobs:
           go-version: ${{ matrix.go }}
 
       - name: Cache Go modules + build cache
-        # path expanded to include ~/.cache/go-build so `go install swag@latest`
-        # below benefits from a warm build cache on cache-hit runs (saves ~5-8s
-        # on the swag CLI install step). Module cache (~/go/pkg/mod) is the
-        # primary key; build cache rides along.
+        # Module cache (~/go/pkg/mod) is the primary key; build cache rides
+        # along. Key is shared with the tenant-api split job (same go.sum
+        # hash) so both restore the same warm cache.
         uses: actions/cache@v5
         with:
           path: |
@@ -602,6 +799,56 @@ jobs:
         run: |
           python3 "$GITHUB_WORKSPACE/scripts/ops/ci_flake_retry.py" -- \
             go test ./... -race -count=1 -coverprofile=coverage.out
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-go${{ matrix.go }}-threshold-exporter
+          path: components/threshold-exporter/app/coverage.out
+          retention-days: 7
+
+  go-tests-tenant-api:
+    name: Go Tests — tenant-api (${{ matrix.go }})
+    runs-on: ubuntu-latest
+    # Least-privilege token (CodeQL: workflow-missing-permissions). Tests,
+    # swag drift check and schemathesis all run against the local checkout.
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        go: ["1.26"]
+      fail-fast: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go ${{ matrix.go }}
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: Cache Go modules + build cache
+        # path expanded to include ~/.cache/go-build so `go install swag@latest`
+        # below benefits from a warm build cache on cache-hit runs (saves ~5-8s
+        # on the swag CLI install step). Module cache (~/go/pkg/mod) is the
+        # primary key; build cache rides along.
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ matrix.go }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ matrix.go }}-
+            ${{ runner.os }}-go-
+
+      # ci_flake_retry.py (TRK-010) needs pyyaml to parse flaky-tests.yaml.
+      - name: Install pyyaml for flake-retry wrapper
+        run: |
+          if ! python3 -c 'import yaml' 2>/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
+          fi
 
       - name: Run tenant-api tests with race detector
         working-directory: components/tenant-api
@@ -661,15 +908,42 @@ jobs:
           CONTRACT_MAX_EXAMPLES: "5"
         run: python3 tests/contract/run_contract_tests.py
 
-      - name: Upload coverage artifacts
+      - name: Upload coverage artifact
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: coverage-go${{ matrix.go }}
-          path: |
-            components/threshold-exporter/app/coverage.out
-            components/tenant-api/coverage.out
+          name: coverage-go${{ matrix.go }}-tenant-api
+          path: components/tenant-api/coverage.out
           retention-days: 7
+
+  go-tests:
+    # Aggregation gate for the two split Go jobs above. The job name is kept
+    # EXACTLY "Go Tests (1.26)" — the check name the former matrix job
+    # reported — because branch protection required_status_checks matches by
+    # check-run name: if this name stopped being reported, any PR would hang
+    # forever on a permanently-pending required check (same failure class as
+    # the validate.yaml banner comment). If the Go matrix ever grows beyond
+    # 1.26, update this static name together with the branch-protection
+    # entry (owner action).
+    name: Go Tests (1.26)
+    runs-on: ubuntu-latest
+    # Pure result-aggregation gate — touches no repo content, needs no token.
+    permissions: {}
+    needs: [go-tests-threshold-exporter, go-tests-tenant-api]
+    # always(): without it a failed dependency SKIPS this job, and a skipped
+    # check would satisfy branch protection — the gate must FAIL, not skip,
+    # when either split job fails.
+    if: always()
+    steps:
+      - name: Verify both Go test jobs succeeded
+        run: |
+          echo "threshold-exporter: ${{ needs.go-tests-threshold-exporter.result }}"
+          echo "tenant-api:         ${{ needs.go-tests-tenant-api.result }}"
+          if [ "${{ needs.go-tests-threshold-exporter.result }}" != "success" ] || \
+             [ "${{ needs.go-tests-tenant-api.result }}" != "success" ]; then
+            echo "::error::one or more Go test jobs did not succeed"
+            exit 1
+          fi
 
   portal-tests:
     # TECH-DEBT-030a (#247): Vitest unit tests + esbuild build verification
