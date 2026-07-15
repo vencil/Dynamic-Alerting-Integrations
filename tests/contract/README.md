@@ -28,9 +28,11 @@ CONTRACT_MAX_EXAMPLES=50 make contract-test
 
 ## 它檢查什麼
 
-預設只跑 `response_schema_conformance`：每個 GET endpoint 的回應 body 必須符合 spec 宣告的 schema。
+預設只跑 `response_schema_conformance`：每個 endpoint 的回應 body 必須符合 spec 宣告的 schema。
 
-**只測 GET**：寫入路徑會改 state，會留垃圾。寫入路徑由 `internal/handler/*_test.go` 的 unit test 覆蓋。
+**全 method fuzz**：GET/PUT/POST/DELETE 全部下場。寫入落在 throwaway git repo fixture（runner 對 temp config dir `git init` + initial commit——tenant-api 是 commit-on-write，沒 repo 每個寫入都 500），跑完整個 workdir `rmtree`，不留垃圾。RBAC 用 wildcard fixture（`_rbac.yaml` 單一 group、`tenants: ["*"]`、read+write+admin），請求帶 `X-Forwarded-Email` + `X-Forwarded-Groups`；rate limiter 以 `TA_RATE_LIMIT_PER_MIN=0` 關閉（同一 caller 的 fuzz 流量會踩預設 100/min）。
+
+**排除的 operations**：`/federation/tokens*` + `/federation/accounts/backfill`（4 ops）——路由只在 `--federation-key` 設定時註冊，且 token store 需要 in-cluster Kubernetes ConfigMap，本機 fixture 起不來。reopen 條件：federation record store 有 file-backed / fake seam 後補測；現由 Go handler test（stub store）覆蓋。
 
 **只測 conformance**：`status_code_conformance` 和 `content_type_conformance` 暫時關閉，因為 spec 還沒完整宣告所有 4xx/5xx 回應。等 spec 補齊後再打開（→ TODO 追蹤 issue）。
 
@@ -44,7 +46,7 @@ CONTRACT_MAX_EXAMPLES=50 make contract-test
 3. 對照 `components/tenant-api/docs/swagger.json` 的對應 path
 4. 決定要修 handler 回應 or 修 swag 註解（通常修註解）然後 `make api-docs`
 
-**Server 啟不起來**：腳本 timeout 15s 內 `/health` 沒 200。看 `runner.py` 印出的 stdout/stderr。常見原因：port conflict（runner 已隨機選 port，照理不會碰到）/ config 路徑壞 / build 失敗。
+**Server 啟不起來**：腳本 timeout 15s 內 `/health` 沒 200。看 runner 在非預期退出時印的 server log tail（server 輸出寫到 workdir 的 `tenant-api.log`，不是 pipe——全 method fuzz 的 log 量會塞爆沒人讀的 64KB pipe buffer，讓所有請求 hang 死）。常見原因：port conflict（runner 已隨機選 port，照理不會碰到）/ config 路徑壞 / build 失敗。
 
 **Build VCS error**：dev container 內 `.git` 是檔案指向 Windows path——已經帶 `-buildvcs=false` 規避。
 
