@@ -40,8 +40,14 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      # persist-credentials: false — same rationale as bench-attrib-main:
+      # this runs main's (reviewed) benchmark binaries, so the threat is
+      # weaker than the PR gate's, but no step here touches the network via
+      # git after checkout — dropping the token from .git/config is free.
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up Go 1.26
         uses: actions/setup-go@v6
@@ -117,8 +123,12 @@ jobs:
       actions: read   # gh run list / gh run download (prior nights' artifacts)
       issues: write   # open / comment / close the perf-trend issue
     steps:
+      # persist-credentials: false — the watchdog script talks to GitHub via
+      # gh with its own explicit GH_TOKEN env, never via persisted git creds.
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
