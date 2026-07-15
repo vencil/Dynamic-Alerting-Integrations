@@ -55,6 +55,13 @@ const SAVED_VIEWS_FIXTURE = {
 };
 
 async function mockMe(page: Page) {
+  // LD-6 P7 (#962): an authed /me now triggers a first-visit callout on
+  // the tenant-manager surface. Pre-seed its dismissal flag so the frozen
+  // PNG baselines stay callout-free (the callout has its own functional
+  // coverage in auth-flow.spec.ts).
+  await page.addInitScript(() => {
+    try { localStorage.setItem('da_tm_scope_callout_v1', '1'); } catch { /* ignore */ }
+  });
   await page.route('**/api/v1/me', (route) =>
     route.fulfill({
       status: 200,

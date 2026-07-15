@@ -133,6 +133,7 @@ const CHECKLISTS = {
         icon: '🔧',
         steps: [
           { text: t('向平台團隊申請 tenant namespace', 'Request tenant namespace from platform team'), doc: 'docs/scenarios/tenant-lifecycle.md' },
+          { text: t('登入後到 Tenant Manager 檢視自己的身分與存取範圍（/me）', 'After logging in, open Tenant Manager to review your identity and access scope (/me)'), doc: null, tool: '../assets/jsx-loader.html?component=../tenant-manager.jsx' },
           { text: t('選擇需要的 Rule Pack 組合', 'Select the Rule Packs for your stack'), doc: null, tool: '../assets/jsx-loader.html?component=../rule-pack-selector.jsx' },
           { text: t('建立 tenant YAML 配置檔', 'Create tenant YAML config file'), doc: 'docs/getting-started/for-tenants.md' },
           { text: t('設定告警路由（Slack / Email / Webhook / PagerDuty）', 'Configure alert routing (Slack / Email / Webhook / PagerDuty)'), doc: 'docs/scenarios/alert-routing-split.md' },

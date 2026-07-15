@@ -278,3 +278,260 @@ describe('TenantManager — LD-7 IdentityStrip', () => {
     expect(within(sidebar).getByRole('button', { name: 'Create new group' })).toBeInTheDocument();
   });
 });
+
+/**
+ * LD-6 P7 (#962): org badges + AccessScopePanel + first-visit callout.
+ *
+ * Same fetch-stub shape as the LD-7 block above: /api/v1/me resolves with
+ * a MeResponse (now carrying the P7 `org_claim_keys` + `claims` fields),
+ * everything else stays offline → DEMO fixtures. The callout persists its
+ * dismissal in localStorage, so each test starts from a cleared store.
+ */
+describe('TenantManager — LD-6 P7 org badges / access scope / callout', () => {
+  const SCOPE_CALLOUT_KEY = 'da_tm_scope_callout_v1';
+
+  function stubFetchWithMe(meBody: any) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        const u = String(url);
+        if (u.includes('/api/v1/me')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve(meBody),
+          } as any);
+        }
+        return Promise.reject(new Error('offline test'));
+      })
+    );
+  }
+
+  const ME_BASE = {
+    email: 'alice@example.com',
+    user: 'alice',
+    groups: ['production-dba'],
+    accessible_tenants: ['prod-mariadb-01'],
+    accessible_domains: ['finance'],
+    permissions: { 'production-dba': ['read', 'write'] },
+  };
+
+  // The server surfaced ONE caller-relative org axis; a second verified
+  // claim exists but is NOT an org axis and must never badge (the strip
+  // shows org axes only — the full claims table belongs to the panel).
+  const ME_WITH_ORG = {
+    ...ME_BASE,
+    claims: {
+      'x-auth-request-team': 'payments-squad',
+      'x-auth-request-region': 'apac',
+    },
+    org_claim_keys: ['x-auth-request-team'],
+  };
+
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  function orgBadgeNodes() {
+    return document.querySelectorAll('[data-testid^="org-badge"]');
+  }
+
+  async function openScopePanel() {
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(await screen.findByTestId('view-access-scope'));
+    return screen.findByTestId('access-scope-panel');
+  }
+
+  it('renders an org badge (org: <value>) for surfaced org axes only', async () => {
+    stubFetchWithMe(ME_WITH_ORG);
+    await renderAndSettle();
+    const badge = await screen.findByTestId('org-badge-x-auth-request-team');
+    expect(badge.textContent).toBe('org: payments-squad');
+    // tooltip carries the key so the value isn't a floating mystery
+    expect(badge.getAttribute('title')).toBe('x-auth-request-team: payments-squad');
+    // the non-org claim must NOT badge — nor leak its value into the strip
+    expect(screen.queryByTestId('org-badge-x-auth-request-region')).toBeNull();
+    const strip = screen.getByTestId('identity-strip');
+    expect(within(strip).queryByText(/apac/)).toBeNull();
+  });
+
+  it('org_claim_keys absent (older server / zero org rules) → no badge segment', async () => {
+    stubFetchWithMe(ME_BASE);
+    await renderAndSettle();
+    await screen.findByTestId('identity-strip');
+    expect(orgBadgeNodes().length).toBe(0);
+    expect(screen.queryByTestId('org-badges-collapsed')).toBeNull();
+  });
+
+  it('org_claim_keys present but claims missing the values → no badges (no empty state)', async () => {
+    stubFetchWithMe({ ...ME_BASE, org_claim_keys: ['x-auth-request-team'] });
+    await renderAndSettle();
+    await screen.findByTestId('identity-strip');
+    expect(orgBadgeNodes().length).toBe(0);
+  });
+
+  it('a drifted prototype key in org_claim_keys resolves to nothing (own-property guard)', async () => {
+    // Defense in depth: org_claim_keys is server-supplied. A key like
+    // "constructor" is NOT an own property of the claims object, so it must
+    // not render an inherited prototype value as a badge.
+    stubFetchWithMe({ ...ME_BASE, claims: {}, org_claim_keys: ['constructor', 'toString'] });
+    await renderAndSettle();
+    await screen.findByTestId('identity-strip');
+    expect(orgBadgeNodes().length).toBe(0);
+    expect(screen.queryByTestId('org-badges-collapsed')).toBeNull();
+  });
+
+  it('more than 3 org axes collapse into a count with a full title tooltip', async () => {
+    const claims: Record<string, string> = {
+      'x-org-a': 'v-a', 'x-org-b': 'v-b', 'x-org-c': 'v-c', 'x-org-d': 'v-d',
+    };
+    stubFetchWithMe({ ...ME_BASE, claims, org_claim_keys: Object.keys(claims) });
+    await renderAndSettle();
+    const collapsed = await screen.findByTestId('org-badges-collapsed');
+    expect(collapsed.textContent).toContain('4');
+    for (const [k, v] of Object.entries(claims)) {
+      expect(collapsed.getAttribute('title')).toContain(`${k}: ${v}`);
+    }
+    // no individual badges alongside the collapsed count
+    expect(screen.queryByTestId('org-badge-x-org-a')).toBeNull();
+  });
+
+  it('「檢視存取範圍」 opens the panel rendering the full /me scope (zero extra fetches)', async () => {
+    stubFetchWithMe(ME_WITH_ORG);
+    await renderAndSettle();
+    const fetchMock = window.fetch as ReturnType<typeof vi.fn>;
+    const callsBefore = fetchMock.mock.calls.length;
+    const panel = await openScopePanel();
+
+    expect(panel.getAttribute('role')).toBe('dialog');
+    expect(panel.getAttribute('aria-modal')).toBe('true');
+    // permissions: rule → granted table
+    const perms = within(panel).getByTestId('scope-permissions');
+    expect(within(perms).getByText('production-dba')).toBeInTheDocument();
+    expect(within(perms).getByText('read, write')).toBeInTheDocument();
+    // accessible_tenants shown WITH the "rule patterns, not an expanded
+    // list" label — the one fact users misread most.
+    expect(within(panel).getByTestId('scope-tenants').textContent).toBe('prod-mariadb-01');
+    expect(within(panel).getByText(/rule patterns, not an expanded tenant list/)).toBeInTheDocument();
+    // omitempty semantics: absent environments → "All"; domains present
+    expect(within(panel).getByTestId('scope-environments').textContent).toBe('All');
+    expect(within(panel).getByTestId('scope-domains').textContent).toBe('finance');
+    expect(within(panel).getByTestId('scope-groups').textContent).toBe('production-dba');
+    // full claims table: org axis gets the pill, the other claim doesn't
+    const claimsTable = within(panel).getByTestId('scope-claims');
+    expect(within(claimsTable).getByText('payments-squad')).toBeInTheDocument();
+    expect(within(claimsTable).getByText('apac')).toBeInTheDocument();
+    expect(within(panel).getByTestId('scope-org-key-x-auth-request-team')).toBeInTheDocument();
+    expect(within(panel).queryByTestId('scope-org-key-x-auth-request-region')).toBeNull();
+    // everything above came from the already-fetched /me body
+    expect(fetchMock.mock.calls.length).toBe(callsBefore);
+
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(within(panel).getByTestId('scope-close'));
+    await waitFor(() => expect(screen.queryByTestId('access-scope-panel')).toBeNull());
+  });
+
+  it('panel traps focus (auto-focus + Tab wrap) and Esc closes it', async () => {
+    stubFetchWithMe(ME_WITH_ORG);
+    await renderAndSettle();
+    const panel = await openScopePanel();
+    const content = panel.querySelector('[tabindex="-1"]') as HTMLElement;
+    await waitFor(() => expect(document.activeElement).toBe(content));
+
+    const { fireEvent } = await import('@testing-library/react');
+    // single focusable (the close button): Tab from the last focusable
+    // wraps to the first — proves the trap is live on this modal
+    const closeBtn = within(panel).getByTestId('scope-close');
+    closeBtn.focus();
+    // fireEvent returns false when the handler preventDefault'ed — the
+    // trap intercepted the Tab at the edge (jsdom never moves focus on
+    // its own, so asserting activeElement alone would pass vacuously).
+    expect(fireEvent.keyDown(document, { key: 'Tab' })).toBe(false);
+    expect(document.activeElement).toBe(closeBtn);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('access-scope-panel')).toBeNull());
+  });
+
+  it('backdrop mousedown closes; content mousedown and a stray click do not (Reef 8)', async () => {
+    stubFetchWithMe(ME_WITH_ORG);
+    await renderAndSettle();
+    const panel = await openScopePanel();
+    const { fireEvent } = await import('@testing-library/react');
+    // A press that starts inside the content must not close.
+    fireEvent.mouseDown(panel.querySelector('[tabindex="-1"]') as HTMLElement);
+    expect(screen.getByTestId('access-scope-panel')).toBeInTheDocument();
+    // A stray click on the backdrop (the mouseup of a text-selection drag that
+    // began in the content) must NOT close — this is the bug the Reef-8
+    // mousedown+target guard fixes.
+    fireEvent.click(panel);
+    expect(screen.getByTestId('access-scope-panel')).toBeInTheDocument();
+    // A press that starts on the backdrop itself closes.
+    fireEvent.mouseDown(panel);
+    await waitFor(() => expect(screen.queryByTestId('access-scope-panel')).toBeNull());
+  });
+
+  it('first authed visit shows the callout; dismissal persists to localStorage', async () => {
+    stubFetchWithMe(ME_BASE);
+    await renderAndSettle();
+    const callout = await screen.findByTestId('scope-callout');
+    expect(callout.getAttribute('role')).toBe('status');
+
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(screen.getByTestId('scope-callout-dismiss'));
+    await waitFor(() => expect(screen.queryByTestId('scope-callout')).toBeNull());
+    expect(window.localStorage.getItem(SCOPE_CALLOUT_KEY)).toBe('1');
+  });
+
+  it('callout is not shown again once the dismissal flag is set', async () => {
+    window.localStorage.setItem(SCOPE_CALLOUT_KEY, '1');
+    stubFetchWithMe(ME_BASE);
+    await renderAndSettle();
+    await screen.findByTestId('identity-strip');
+    expect(screen.queryByTestId('scope-callout')).toBeNull();
+  });
+
+  it("callout's open button opens the panel AND dismisses the callout", async () => {
+    stubFetchWithMe(ME_BASE);
+    await renderAndSettle();
+    await screen.findByTestId('scope-callout');
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(screen.getByTestId('scope-callout-open'));
+    await screen.findByTestId('access-scope-panel');
+    expect(screen.queryByTestId('scope-callout')).toBeNull();
+    expect(window.localStorage.getItem(SCOPE_CALLOUT_KEY)).toBe('1');
+  });
+
+  it('opening the panel from the strip button also dismisses the callout', async () => {
+    // The strip button and the callout both point at the panel; using either
+    // means the callout has served its purpose, so both must dismiss it.
+    stubFetchWithMe(ME_BASE);
+    await renderAndSettle();
+    await screen.findByTestId('scope-callout');
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(screen.getByTestId('view-access-scope'));
+    await screen.findByTestId('access-scope-panel');
+    expect(screen.queryByTestId('scope-callout')).toBeNull();
+    expect(window.localStorage.getItem(SCOPE_CALLOUT_KEY)).toBe('1');
+  });
+
+  it('unavailable localStorage skips the callout without breaking the page', async () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage disabled');
+    });
+    stubFetchWithMe(ME_BASE);
+    await renderAndSettle();
+    // strip (and the rest of the page) render fine; callout silently skipped
+    await screen.findByTestId('identity-strip');
+    expect(screen.queryByTestId('scope-callout')).toBeNull();
+  });
+
+  it('demo mode (no authUser) renders none of it', async () => {
+    // default stub from the file-level beforeEach: every fetch fails
+    await renderAndSettle();
+    expect(screen.queryByTestId('identity-strip')).toBeNull();
+    expect(screen.queryByTestId('view-access-scope')).toBeNull();
+    expect(screen.queryByTestId('scope-callout')).toBeNull();
+    expect(screen.queryByTestId('access-scope-panel')).toBeNull();
+    expect(orgBadgeNodes().length).toBe(0);
+  });
+});
