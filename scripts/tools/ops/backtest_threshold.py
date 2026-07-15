@@ -34,7 +34,6 @@ import os
 import re
 import subprocess
 import sys
-import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -48,7 +47,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import load_yaml_file, is_disabled, http_get_json, write_json_secure, write_text_secure, add_prometheus_arg  # noqa: E402
+from _lib_python import load_yaml_file, is_disabled, http_get_json, query_prometheus_range, write_json_secure, write_text_secure, add_prometheus_arg  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
@@ -83,25 +82,21 @@ def prometheus_available(prom_url, timeout=5):
 
 
 def query_range(prom_url, query, lookback_seconds, step=DEFAULT_STEP):
-    """Execute a Prometheus range_query and return result data."""
+    """Execute a Prometheus range_query and return result data.
+
+    Thin wrapper over ``_lib_prometheus.query_prometheus_range`` (ROI r3 W1):
+    the fetch core lives in the lib; the "any error → []" collapse stays
+    here (tests monkeypatch this module attribute by name — keep it).
+    """
     import time
     end = time.time()
     start = end - lookback_seconds
 
-    params = urllib.parse.urlencode({
-        "query": query,
-        "start": f"{start:.0f}",
-        "end": f"{end:.0f}",
-        "step": step,
-    })
-    url = f"{prom_url}/api/v1/query_range?{params}"
-
-    data, err = http_get_json(url, timeout=30)
+    result, err = query_prometheus_range(
+        prom_url, query, start, end, step, timeout=30)
     if err:
         return []
-    if data.get("status") == "success":
-        return data.get("data", {}).get("result", [])
-    return []
+    return result
 
 
 def count_threshold_breaches(values, threshold, direction="above"):

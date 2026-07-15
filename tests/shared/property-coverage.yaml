@@ -76,6 +76,7 @@ modules:
       http_post_json: "I/O-bound; same as http_get_json"
       http_request_with_retry: "I/O + retry policy; covered by retry-specific integration tests"
       query_prometheus_instant: "I/O-bound; thin wrapper over http_get_json"
+      query_prometheus_range: "I/O-bound; thin wrapper over http_get_json (r3 W1 fetch-core consolidation)"
 
   scripts/tools/_lib_godispatch.py:
     # Note: members of this module are class methods on

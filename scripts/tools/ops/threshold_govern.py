@@ -73,6 +73,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 
 from _lib_python import (  # noqa: E402
+    add_prometheus_arg,
     detect_cli_lang,
     http_get_json,
     parse_duration_seconds,
@@ -997,9 +998,10 @@ def main() -> None:
     parser.add_argument("--config-dir", required=True,
                         help="租戶配置目錄路徑（conf.d/）" if _LANG == "zh"
                         else "Path to tenant config directory (conf.d/)")
-    parser.add_argument("--prometheus",
-                        default=os.environ.get("PROMETHEUS_URL", "http://localhost:9090"),
-                        help="Prometheus Query API URL")
+    # W1: canonical env fallback — `os.environ.get(k, default)` returned ""
+    # for a present-but-empty $PROMETHEUS_URL; add_prometheus_arg's `or`
+    # chain treats "" as unset (aligns with entrypoint.inject_prometheus_env).
+    add_prometheus_arg(parser, help_text="Prometheus Query API URL")
     parser.add_argument("--tenant", default=None,
                         help="只分析指定租戶" if _LANG == "zh" else "Analyze only this tenant")
     parser.add_argument("--lookback", default="7d",

@@ -239,6 +239,9 @@ class TestBacktestChange:
 
 
 # ── query_range（mock http_get_json）──────────────────────────────
+# W1: query_range 的 fetch core 收斂進 _lib_prometheus.query_prometheus_range，
+# 故 HTTP seam 改 patch _lib_prometheus.http_get_json（工具模組層的
+# http_get_json 已不在此路徑上）。
 
 
 class TestQueryRange:
@@ -251,7 +254,7 @@ class TestQueryRange:
                 "status": "success",
                 "data": {"result": [{"values": [[1, "42"]]}]},
             }, None
-        monkeypatch.setattr(bt, "http_get_json", mock_get)
+        monkeypatch.setattr("_lib_prometheus.http_get_json", mock_get)
         result = bt.query_range("http://prom", "up", 3600)
         assert len(result) == 1
 
@@ -259,7 +262,7 @@ class TestQueryRange:
         """HTTP 錯誤回傳空清單。"""
         def mock_get(url, timeout=30):
             return None, "connection refused"
-        monkeypatch.setattr(bt, "http_get_json", mock_get)
+        monkeypatch.setattr("_lib_prometheus.http_get_json", mock_get)
         result = bt.query_range("http://prom", "up", 3600)
         assert result == []
 
@@ -267,7 +270,7 @@ class TestQueryRange:
         """API 錯誤狀態回傳空清單。"""
         def mock_get(url, timeout=30):
             return {"status": "error"}, None
-        monkeypatch.setattr(bt, "http_get_json", mock_get)
+        monkeypatch.setattr("_lib_prometheus.http_get_json", mock_get)
         result = bt.query_range("http://prom", "bad{", 3600)
         assert result == []
 
