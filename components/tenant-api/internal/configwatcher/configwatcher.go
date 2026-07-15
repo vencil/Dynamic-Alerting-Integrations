@@ -346,6 +346,11 @@ func (w *Watcher[T]) Override(cfg *T) {
 // for unit tests that exercise permission / lookup logic against
 // an in-memory config without disk I/O.
 //
+// NOTE: rbac.NewCandidate is a PRODUCTION caller (the P7 dry-run builds an
+// in-memory candidate snapshot this way — no path, no watch, unanchored is
+// exactly what a candidate wants). Renaming or test-gating this must not
+// silently break that path; see internal/rbac/candidate.go.
+//
 // Caller is responsible for keeping `cfg` alive for the lifetime
 // of the returned Watcher; the snapshot is stored by pointer.
 func NewForTest[T any](label string, cfg *T) *Watcher[T] {
