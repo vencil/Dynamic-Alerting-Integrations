@@ -247,7 +247,11 @@ def _merge_tenant_routing(parsed: dict, routing_defaults: dict) -> dict[str, dic
     return routing_configs
 
 
-def load_tenant_configs(config_dir: str) -> tuple[dict[str, dict], dict[str, str], list[str], dict | None, dict[str, dict]]:
+def load_tenant_configs(
+    config_dir: str,
+    *,
+    strict_policies: bool = False,
+) -> tuple[dict[str, dict], dict[str, str], list[str], dict | None, dict[str, dict]]:
     """Load and parse all tenant YAML files from a config directory.
 
     Orchestrates the full configuration pipeline:
@@ -255,7 +259,9 @@ def load_tenant_configs(config_dir: str) -> tuple[dict[str, dict], dict[str, str
       2. Merge _routing_defaults with tenant _routing overrides (delegated to _merge_tenant_routing())
       3. Validate tenant keys against defaults (checks for typos)
       4. Resolve routing profile references (ADR-007)
-      5. Validate domain policies against resolved routes (ADR-007)
+      5. Validate domain policies against resolved routes (ADR-007);
+         with strict_policies=True violations are emitted as ERROR
+         (blocking for the --strict CLI/CI path) instead of WARN.
 
     Configuration Hierarchy (4 layers):
       - Layer 0: _routing_defaults from _ prefixed files
@@ -291,7 +297,8 @@ def load_tenant_configs(config_dir: str) -> tuple[dict[str, dict], dict[str, str
     # v2.1.0 ADR-007: Validate domain policies against resolved routing
     if parsed["domain_policies"]:
         schema_warnings.extend(
-            check_domain_policies(routing_configs, parsed["domain_policies"]))
+            check_domain_policies(routing_configs, parsed["domain_policies"],
+                                  strict=strict_policies))
 
     return (routing_configs, parsed["dedup_configs"], schema_warnings,
             parsed["enforced_routing"], parsed["metadata_configs"])

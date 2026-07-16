@@ -533,9 +533,9 @@ assembler-install-crd: ## CRD Assembler: 安裝 ThresholdConfig CRD + RBAC
 	@kubectl apply -f k8s/crd/assembler-rbac.yaml
 	@echo "✓ CRD + RBAC installed"
 
-validate-routes: ## 驗證 Alertmanager route config (CI lint 用)
+validate-routes: ## 驗證 Alertmanager route config (CI lint 用；--strict 同 CI，domain-policy 違規 blocking)
 	@python3 ./scripts/tools/ops/generate_alertmanager_routes.py \
-		--config-dir components/threshold-exporter/config/conf.d/ --validate
+		--config-dir components/threshold-exporter/config/conf.d/ --validate --strict
 
 validate-config: ## 一站式配置驗證 (YAML + schema + routes + policy + custom rules + versions)
 	@python3 ./scripts/tools/ops/validate_config.py \

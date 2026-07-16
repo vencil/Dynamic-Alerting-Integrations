@@ -331,12 +331,23 @@ def check_domain_policies(
     Args:
         routing_configs: {tenant: resolved_routing_config}
         domain_policies: {policy_name: {tenants, constraints, ...}}
-        strict: if True, return ERROR instead of WARN for violations.
+        strict: if True, return ERROR instead of WARN for violations,
+            and append a fix hint to each violation message. The CLI
+            (`generate_alertmanager_routes.py --strict`) treats these
+            ERROR lines as blocking (exit 1). Non-strict (WARN) message
+            text is unchanged for backward compatibility.
 
     Returns list of warning/error messages.
     """
     messages: list[str] = []
     severity = "ERROR" if strict else "WARN"
+
+    def _fmt(base: str, hint: str) -> str:
+        """Format one violation; strict mode appends the fix hint."""
+        msg = f"  {severity}: {base}"
+        if strict:
+            msg += f" — fix: {hint}"
+        return msg
 
     for policy_name, policy in sorted(domain_policies.items()):
         if not isinstance(policy, dict):
@@ -366,15 +377,20 @@ def check_domain_policies(
             recv_type = recv.get("type", "") if isinstance(recv, dict) else ""
             if recv_type:
                 if forbidden_types and recv_type in forbidden_types:
-                    messages.append(
-                        f"  {severity}: domain_policy '{policy_name}', "
+                    messages.append(_fmt(
+                        f"domain_policy '{policy_name}', "
                         f"tenant '{tenant}': receiver type '{recv_type}' "
-                        f"is forbidden")
+                        f"is forbidden",
+                        f"domain forbids {sorted(forbidden_types)}; switch "
+                        f"the tenant's receiver.type to a compliant type "
+                        f"or amend the domain policy"))
                 if allowed_types and recv_type not in allowed_types:
-                    messages.append(
-                        f"  {severity}: domain_policy '{policy_name}', "
+                    messages.append(_fmt(
+                        f"domain_policy '{policy_name}', "
                         f"tenant '{tenant}': receiver type '{recv_type}' "
-                        f"not in allowed types {sorted(allowed_types)}")
+                        f"not in allowed types {sorted(allowed_types)}",
+                        f"switch the tenant's receiver.type to one of "
+                        f"{sorted(allowed_types)} or amend the domain policy"))
 
             # Check max_repeat_interval
             if max_repeat:
@@ -383,10 +399,13 @@ def check_domain_policies(
                     max_sec = parse_duration_seconds(max_repeat)
                     tenant_sec = parse_duration_seconds(tenant_repeat)
                     if max_sec and tenant_sec and tenant_sec > max_sec:
-                        messages.append(
-                            f"  {severity}: domain_policy '{policy_name}', "
+                        messages.append(_fmt(
+                            f"domain_policy '{policy_name}', "
                             f"tenant '{tenant}': repeat_interval "
-                            f"'{tenant_repeat}' exceeds max '{max_repeat}'")
+                            f"'{tenant_repeat}' exceeds max '{max_repeat}'",
+                            f"lower the tenant's repeat_interval to "
+                            f"'{max_repeat}' or less, or raise the policy's "
+                            f"max_repeat_interval"))
 
             # Check min_group_wait
             if min_group_wait:
@@ -395,10 +414,13 @@ def check_domain_policies(
                     min_sec = parse_duration_seconds(min_group_wait)
                     tenant_sec = parse_duration_seconds(tenant_gw)
                     if min_sec and tenant_sec and tenant_sec < min_sec:
-                        messages.append(
-                            f"  {severity}: domain_policy '{policy_name}', "
+                        messages.append(_fmt(
+                            f"domain_policy '{policy_name}', "
                             f"tenant '{tenant}': group_wait "
-                            f"'{tenant_gw}' below minimum '{min_group_wait}'")
+                            f"'{tenant_gw}' below minimum '{min_group_wait}'",
+                            f"raise the tenant's group_wait to "
+                            f"'{min_group_wait}' or more, or lower the "
+                            f"policy's min_group_wait"))
 
             # Check enforce_group_by
             if enforce_group_by and isinstance(enforce_group_by, list):
@@ -406,9 +428,11 @@ def check_domain_policies(
                 if isinstance(tenant_gb, list):
                     missing = set(enforce_group_by) - set(tenant_gb)
                     if missing:
-                        messages.append(
-                            f"  {severity}: domain_policy '{policy_name}', "
+                        messages.append(_fmt(
+                            f"domain_policy '{policy_name}', "
                             f"tenant '{tenant}': group_by missing required "
-                            f"labels: {sorted(missing)}")
+                            f"labels: {sorted(missing)}",
+                            f"add {sorted(missing)} to the tenant's group_by "
+                            f"(policy requires {sorted(enforce_group_by)})"))
 
     return messages
