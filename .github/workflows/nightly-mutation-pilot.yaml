@@ -16,10 +16,14 @@ name: Nightly Mutation Pilot
 #   - Workflow does NOT block any PR. Surviving mutations are surfaced as a
 #     warning + artifact for human review.
 #
-# Floor scores at the time this workflow lands (PRs #329-#349 closed):
-#   - Python:  67 / 70 mutations caught (~96%); 3 known equivalent-mutation survivors
-#   - Go:      ~13 / 15 mutations caught; small ramp expected from PR #348/#349
+# Floor scores (re-verified 2026-07-16 after re-anchoring 6 rotted Python
+# catalog entries that had been silently reported as SETUP-FAIL):
+#   - Python:  67 / 70 mutations caught (~96%), 0 setup-failures;
+#              3 known equivalent-mutation survivors
+#   - Go:      14 / 15 mutations caught (~93%); 1 known equivalent survivor
 # These are the BASELINE — drift below this should prompt investigation.
+# Catalog rot (old_string no longer matching refactored source) is caught
+# at PR time by tests/shared/test_mutation_catalog.py, not just here.
 
 on:
   schedule:

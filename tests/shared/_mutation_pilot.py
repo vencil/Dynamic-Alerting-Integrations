@@ -19,8 +19,12 @@ Why hand-crafted vs `mutmut`/`cosmic-ray`:
 Usage:
   python tests/shared/_mutation_pilot.py [--target FUNC]
 
-Latest run (v2.8.0 audit ④ pilot): 67/70 caught (~96%) across 31
-functions. The 3 survivors are all equivalent mutations:
+Latest run (2026-07-16, after re-anchoring 6 entries whose old_string
+had rotted against refactored sources — pathlib migration in _lib_io /
+_lib_godispatch, delegation refactor in _lint_helpers, ADR-024 version
+label validation in _grar_validate): 67/70 caught (~96%) across 31
+functions, 0 setup-failures. The 3 survivors are all equivalent
+mutations:
   - parse_duration_seconds: drop type-check before m.match's str()
     coercion (str() catches the non-string case downstream).
   - strip_frontmatter: offset 3→0 in `find("\\n---", 3)` — opening
@@ -318,7 +322,7 @@ MUTATIONS: list[Mutation] = [
         test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
         label="load_yaml: drop isfile check (would attempt to open missing path)",
         fn_name="load_yaml_file",
-        old="    if not path or not os.path.isfile(path):\n        return default",
+        old="    if not path or not Path(path).is_file():\n        return default",
         new="    if not path:\n        return default",
     ),
     Mutation(
@@ -351,8 +355,8 @@ MUTATIONS: list[Mutation] = [
         test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
         label="iter_yaml: drop isfile filter (directories ending in .yaml leak through)",
         fn_name="iter_yaml_files",
-        old="        fpath = os.path.join(config_dir, fname)\n        if os.path.isfile(fpath):\n            result.append((fname, fpath))",
-        new="        fpath = os.path.join(config_dir, fname)\n        result.append((fname, fpath))",
+        old="        if entry.is_file():\n            result.append((fname, str(entry)))",
+        new="        result.append((fname, str(entry)))",
     ),
     # ── format_json_report (_lib_io) ─────────────────────────────
     Mutation(
@@ -442,7 +446,7 @@ MUTATIONS: list[Mutation] = [
         test_file="tests/shared/test_property_tools.py",
         label="resolve: drop isfile check on explicit (missing path returns string)",
         fn_name="_resolve_binary",
-        old="        if explicit:\n            return (\n                explicit if os.path.isfile(explicit) else None\n            ), cleaned",
+        old="        if explicit:\n            return (\n                explicit if Path(explicit).is_file() else None\n            ), cleaned",
         new="        if explicit:\n            return explicit, cleaned",
     ),
     Mutation(
@@ -458,7 +462,7 @@ MUTATIONS: list[Mutation] = [
         test_file="tests/shared/test_property_tools.py",
         label="resolve: drop env-var fallback (only flag + PATH consulted)",
         fn_name="_resolve_binary",
-        old='        env_override = os.environ.get(self.env_var, "").strip()\n        if env_override:\n            return (\n                env_override if os.path.isfile(env_override) else None\n            ), cleaned',
+        old='        env_override = os.environ.get(self.env_var, "").strip()\n        if env_override:\n            return (\n                env_override if Path(env_override).is_file() else None\n            ), cleaned',
         new='        env_override = ""\n        if env_override:\n            return None, cleaned',
     ),
     # ── _substitute_tenant (_grar_merge) ─────────────────────────
@@ -576,8 +580,8 @@ MUTATIONS: list[Mutation] = [
         test_file="tests/shared/test_property_tools.py",
         label="parse_build_sh: skip basename (full paths leak through)",
         fn_name="parse_build_sh_tools",
-        old="                if name:\n                    tools.add(os.path.basename(name))",
-        new="                if name:\n                    tools.add(name)",
+        old="    return {os.path.basename(p) for p in parse_build_sh_tool_paths(path)}",
+        new="    return {p for p in parse_build_sh_tool_paths(path)}",
     ),
     Mutation(
         target_file="scripts/tools/lint/_lint_helpers.py",
@@ -683,8 +687,8 @@ MUTATIONS: list[Mutation] = [
         test_file="tests/shared/test_property_tools.py",
         label="tenant_keys: drop dimensional-key resolution ({labels} keys warn)",
         fn_name="validate_tenant_keys",
-        old='        if "{" in key:\n            base = key.split("{")[0]\n            if base in defaults_keys:\n                continue',
-        new='        if False:\n            base = ""\n            if base in defaults_keys:\n                continue',
+        old='        if "{" in key:\n            base = key.split("{")[0]\n            if base in defaults_keys:\n                # ADR-024 OQ-6: validate any `version` dimensional label.\n                warnings.extend(_validate_version_label(tenant, key, base))\n                continue',
+        new='        if False:\n            base = ""\n            if base in defaults_keys:\n                warnings.extend(_validate_version_label(tenant, key, base))\n                continue',
     ),
 ]
 
