@@ -78,6 +78,9 @@ from _lib_python import (  # noqa: E402
     http_get_json,
     parse_duration_seconds,
 )
+# Aliased: the local format_json_report() below (domain report builder,
+# exercised directly by tests) delegates its final dump to the shared helper.
+from _lib_python import format_json_report as _dump_json  # noqa: E402
 from _lib_prometheus import _validate_url_scheme  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
@@ -877,7 +880,7 @@ def format_json_report(
             "force_manual": len(fm),
         },
     }
-    return json.dumps(out, indent=2, ensure_ascii=False)
+    return _dump_json(out)
 
 
 # ---------------------------------------------------------------------------

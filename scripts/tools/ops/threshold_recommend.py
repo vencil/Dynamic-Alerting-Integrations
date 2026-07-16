@@ -68,6 +68,9 @@ from _lib_python import (  # noqa: E402
     parse_duration_seconds,
     query_prometheus_instant,
 )
+# Aliased: the local format_json_report() below (domain report builder,
+# exercised directly by tests) delegates its final dump to the shared helper.
+from _lib_python import format_json_report as _dump_json  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 import _observed_map_lib as observed_map_lib  # noqa: E402
 
@@ -931,7 +934,7 @@ def format_json_report(reports: list[TenantRecommendation]) -> str:
             "recommended_changes": sum(r.recommended_changes for r in reports),
         },
     }
-    return json.dumps(output, indent=2, ensure_ascii=False)
+    return _dump_json(output)
 
 
 def format_markdown_report(reports: list[TenantRecommendation]) -> str:
