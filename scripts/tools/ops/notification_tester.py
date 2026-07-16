@@ -60,6 +60,9 @@ from _lib_python import (  # noqa: E402
     detect_cli_lang,
     load_tenant_configs,
 )
+# Aliased: the local format_json_report() below (domain report builder,
+# exercised directly by tests) delegates its final dump to the shared helper.
+from _lib_python import format_json_report as _dump_json  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 _LANG = detect_cli_lang()
@@ -691,7 +694,7 @@ def format_json_report(reports: list[TenantTestReport]) -> str:
             "skipped": sum(r.skipped for r in reports),
         },
     }
-    return json.dumps(output, indent=2, ensure_ascii=False)
+    return _dump_json(output)
 
 
 # ---------------------------------------------------------------------------

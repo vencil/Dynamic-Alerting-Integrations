@@ -27,6 +27,7 @@ import argparse
 import os
 import re
 import sys
+import urllib.parse
 from collections import defaultdict
 from typing import Any, Optional
 
@@ -177,27 +178,37 @@ def query_prometheus_label_values(
 
         # Use series API with matcher
         if matcher_str:
-            url = f"{base}/api/v1/series?match[]={{{matcher_str}}}"
+            # W1 bug fix: the matcher carries `{`, `}`, `"` and possibly
+            # spaces — it MUST be percent-encoded (#1112 InvalidURL
+            # bug-class; an f-string interpolation crashes http.client on
+            # any whitespace/control character).
+            params = urllib.parse.urlencode({"match[]": f"{{{matcher_str}}}"})
+            url = f"{base}/api/v1/series?{params}"
         else:
             url = f"{base}/api/v1/label/{label}/values"
 
         data, err = http_get_json(url, timeout=timeout)
-        if err or not data:
+        # isinstance guard: a top-level JSON list (e.g. --prometheus pointed
+        # at an Alertmanager v2 API) must skip, not AttributeError on .get().
+        if err or not isinstance(data, dict):
             continue
 
-        if "data" in data:
-            # /api/v1/series returns list of label sets
-            if isinstance(data["data"], list):
-                for series in data["data"]:
-                    if isinstance(series, dict) and label in series:
-                        val = series[label]
-                        if val:
-                            label_values[label].add(val)
-            # /api/v1/label/.../values returns list of strings
-            elif isinstance(data["data"], list):
-                for val in data["data"]:
-                    if val:
-                        label_values[label].add(val)
+        items = data.get("data")
+        if not isinstance(items, list):
+            continue
+        # W1 bug fix: the two branches previously tested the IDENTICAL
+        # condition (`isinstance(data["data"], list)` twice), so the
+        # /api/v1/label/<label>/values branch was unreachable and the
+        # no-matcher path never collected a value. Dispatch on the ELEMENT
+        # type instead: /api/v1/series returns a list of label-set dicts,
+        # /api/v1/label/.../values returns a list of plain strings.
+        for item in items:
+            if isinstance(item, dict):
+                val = item.get(label)
+                if val:
+                    label_values[label].add(val)
+            elif isinstance(item, str) and item:
+                label_values[label].add(item)
 
     return dict(label_values)
 

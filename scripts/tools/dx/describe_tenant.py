@@ -373,6 +373,8 @@ def main() -> None:
         if args.format == "yaml":
             if yaml:
                 return yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            print("⚠️  PyYAML not installed — falling back to JSON output "
+                  "(pip install pyyaml)", file=sys.stderr)
             return json.dumps(data, indent=2, ensure_ascii=False)
         return json.dumps(data, indent=2, ensure_ascii=False)
 

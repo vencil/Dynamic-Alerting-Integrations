@@ -60,12 +60,14 @@ try:
     from _lib_python import (
         detect_cli_lang,
         format_json_report,
+        load_tenant_configs,
         load_yaml_file,
     )
 except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
         detect_cli_lang,
         format_json_report,
+        load_tenant_configs,
         load_yaml_file,
     )
 
@@ -102,40 +104,13 @@ class PolicyResult:
 
 
 # ---------------------------------------------------------------------------
-# Config loading
+# Config loading — tenant-config loading is delegated to the shared
+# `_lib_io.load_tenant_configs` (imported via the `_lib_python` facade above;
+# da-tools ROI r3 W2 de-shadow). Behaviour deltas vs the former local copy
+# (both handled wrapper + flat): lib additionally skips dotfiles/non-files,
+# and an EMPTY/comment-only yaml now enters the OPA input as a `{}` tenant
+# (lib loads with default={}, local copy skipped None).
 # ---------------------------------------------------------------------------
-def load_tenant_configs(config_dir: str) -> dict[str, dict]:
-    """Load all tenant configs from config-dir (skip _ prefixed files)."""
-    configs: dict[str, dict] = {}
-
-    base = Path(config_dir)
-    if not base.is_dir():
-        return configs
-
-    for entry in sorted(base.iterdir(), key=lambda p: p.name):
-        fname = entry.name
-        if not fname.endswith((".yaml", ".yml")):
-            continue
-        if fname.startswith("_"):
-            continue
-
-        data = load_yaml_file(str(entry))
-        if not isinstance(data, dict):
-            continue
-
-        # Multi-tenant wrapper format
-        if "tenants" in data and isinstance(data["tenants"], dict):
-            for tenant_name, tenant_cfg in data["tenants"].items():
-                if isinstance(tenant_cfg, dict):
-                    configs[tenant_name] = tenant_cfg
-        else:
-            # Flat format — filename (sans extension) is tenant name
-            tenant_name = entry.stem
-            configs[tenant_name] = data
-
-    return configs
-
-
 def load_defaults(config_dir: str) -> dict[str, Any]:
     """Load _defaults.yaml."""
     defaults_path = Path(config_dir) / "_defaults.yaml"

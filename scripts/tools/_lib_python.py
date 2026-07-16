@@ -53,5 +53,7 @@ from _lib_prometheus import (  # noqa: F401
     http_get_json,
     http_post_json,
     http_request_with_retry,
+    probe_health,
     query_prometheus_instant,
+    query_prometheus_range,
 )
