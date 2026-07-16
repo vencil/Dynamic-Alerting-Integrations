@@ -23,7 +23,6 @@ Usage:
   - metric-dictionary.yaml (bundled in da-tools container)
 """
 import argparse
-import glob
 import os
 import re
 import sys
@@ -33,7 +32,12 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import format_json_report, load_yaml_file, write_json_secure  # noqa: E402
+from _lib_python import (  # noqa: E402
+    format_json_report,
+    load_tenant_configs as _load_tenant_configs_dir,
+    load_yaml_file,
+    write_json_secure,
+)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -61,22 +65,36 @@ RULE_PACK_PREFIXES = {
 def load_tenant_configs(config_dir=None, tenant_config=None):
     """Load tenant configs from directory or single file.
 
+    Both official conf.d formats are scanned (da-tools ROI r3 W2 bug fix):
+    the ``tenants:`` wrapper format and the flat single-tenant format.
+    The pre-fix local loader only globbed ``*.yaml`` (missing ``.yml``)
+    and never unwrapped ``tenants:`` — wrapper-format tenants were
+    silently invisible to gap analysis (`extract_custom_metrics` iterates
+    top-level keys, and ``tenants`` is not a ``custom_`` key).
+
+    - Directory branch: delegates to the shared
+      ``_lib_io.load_tenant_configs`` (wrapper + flat, ``.yaml`` + ``.yml``,
+      skips ``_``/``.`` reserved files).
+    - Single-file branch: keeps its signature; now also unwraps the
+      ``tenants:`` wrapper, and derives the flat-format tenant name via
+      ``splitext`` (so ``x.yml`` → ``x``, matching the lib's stem rule).
+
     Returns dict: {tenant_name: {metric_key: value, ...}}
     """
     configs = {}
 
     if tenant_config:
         data = load_yaml_file(tenant_config, default={})
-        name = os.path.basename(tenant_config).removesuffix(".yaml")
-        configs[name] = data or {}
-    elif config_dir:
-        for path in sorted(glob.glob(os.path.join(config_dir, "*.yaml"))):
-            basename = os.path.basename(path)
-            if basename.startswith("_"):
-                continue  # Skip _defaults.yaml etc.
-            data = load_yaml_file(path, default={})
-            name = basename.removesuffix(".yaml")
+        if isinstance(data, dict) and isinstance(data.get("tenants"), dict):
+            # Multi-tenant wrapper format (mirrors _lib_io.load_tenant_configs)
+            for t_name, t_data in data["tenants"].items():
+                if isinstance(t_data, dict):
+                    configs[t_name] = t_data
+        else:
+            name = os.path.splitext(os.path.basename(tenant_config))[0]
             configs[name] = data or {}
+    elif config_dir:
+        configs = _load_tenant_configs_dir(config_dir)
 
     return configs
 

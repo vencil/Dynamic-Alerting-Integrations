@@ -30,7 +30,7 @@ import sys
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import format_json_report, http_get_json, query_prometheus_instant, add_prometheus_arg  # noqa: E402
+from _lib_python import format_json_report, http_get_json, probe_health, query_prometheus_instant, add_prometheus_arg  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Alias for backward-compat within this module
@@ -50,8 +50,10 @@ query_prometheus = query_prometheus_instant
 def _judge_reachable(err):
     """Judge Step 0 (prometheus_reachable) from the /-/healthy probe.
 
-    `err` is the exception raised by the urllib health probe, or None on success.
-    The orchestrator owns the actual urllib call AND the early return (Prometheus
+    `err` is the health-probe failure (an error string from `probe_health`,
+    historically the raised exception — only its str() is used), or None on
+    success.
+    The orchestrator owns the actual probe call AND the early return (Prometheus
     down → append this fail then stop); this only forms the check dict.
     """
     if err is None:
@@ -397,18 +399,12 @@ def check_prometheus(args):
     checks = []
     prom_url = args.prometheus
 
-    # 0. Prometheus reachable (urllib direct probe — does NOT go through
-    #    query_prometheus). The judge forms the dict; the early return (stop when
-    #    Prometheus is down) stays here in the orchestrator.
-    import urllib.error
-    import urllib.request
-    reach_err = None
-    try:
-        req = urllib.request.Request(f"{prom_url}/-/healthy")  # nosec B310  #operator-supplied internal Prometheus URL
-        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310  #see Request line above
-            resp.read()
-    except (urllib.error.URLError, ValueError, OSError) as e:
-        reach_err = e
+    # 0. Prometheus reachable (shared probe_health — scheme-validated, does NOT
+    #    go through query_prometheus; r3 W2). The judge forms the dict; the
+    #    early return (stop when Prometheus is down) stays here in the
+    #    orchestrator. `reach_err` is now the error *string* from probe_health
+    #    (was the exception object) — _judge_reachable only ever str()s it.
+    _body, reach_err = probe_health(f"{prom_url}/-/healthy")
     checks.append(_judge_reachable(reach_err))
     if reach_err is not None:
         return checks  # No point continuing if Prometheus is down
@@ -534,24 +530,22 @@ def check_alertmanager(args):
     checks = []
     am_url = args.alertmanager
 
-    # 1. Alertmanager reachable + lifecycle API
-    import urllib.error
-    import urllib.request
-    try:
-        req = urllib.request.Request(f"{am_url}/-/ready")  # nosec B310  #operator-supplied internal Alertmanager URL
-        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310  #see Request line above
-            resp.read()
+    # 1. Alertmanager reachable + lifecycle API (shared probe_health —
+    #    scheme-validated; the probe target is Alertmanager /-/ready, the
+    #    helper is endpoint-agnostic; r3 W2)
+    _body, probe_err = probe_health(f"{am_url}/-/ready")
+    if probe_err is None:
         checks.append({
             "check": "alertmanager_ready",
             "status": "pass",
             "detail": "Alertmanager is ready",
         })
-    except (urllib.error.URLError, ValueError, OSError) as e:
+    else:
         checks.append({
             "check": "alertmanager_ready",
             "status": "fail",
             "caller_error": True,  # transport failure = caller-error (exit 2)
-            "detail": f"Cannot reach Alertmanager: {str(e)[:60]}",
+            "detail": f"Cannot reach Alertmanager: {probe_err[:60]}",
         })
         return checks
 

@@ -271,6 +271,54 @@ class TestLoadTenantConfigs:
         """不帶參數回傳空字典。"""
         assert ag.load_tenant_configs() == {}
 
+    # ── r3 W2 bug-fix regression：wrapper 格式此前對 gap 分析靜默隱形 ──
+
+    def test_load_directory_wrapper_format(self, config_dir):
+        """目錄載入解開 `tenants:` wrapper（兩種官方 conf.d 格式都要被掃到）。
+
+        修前的 local loader 完全不解 wrapper——wrapper 格式租戶被存成
+        {檔名: {"tenants": {...}}}，extract_custom_metrics 只迭代頂層
+        key、`tenants` 不是 custom_ key → wrapper 租戶對 gap 分析隱形。
+        """
+        write_yaml(config_dir, "team.yaml",
+                   "tenants:\n"
+                   "  db-a:\n"
+                   "    custom_mysql_uptime: 1\n"
+                   "  db-b:\n"
+                   "    mysql_cpu: 80\n")
+        configs = ag.load_tenant_configs(config_dir=config_dir)
+        assert set(configs) == {"db-a", "db-b"}
+        assert configs["db-a"]["custom_mysql_uptime"] == 1
+
+    def test_load_directory_yml_extension(self, config_dir):
+        """`.yml` 副檔名也要被掃到（修前只 glob `*.yaml`）。"""
+        write_yaml(config_dir, "db-c.yml", "mysql_connections: 50\n")
+        configs = ag.load_tenant_configs(config_dir=config_dir)
+        assert "db-c" in configs
+        assert configs["db-c"]["mysql_connections"] == 50
+
+    def test_load_single_file_wrapper_format(self, config_dir):
+        """單檔分支同樣解開 wrapper（簽名與 flat 語意保留）。"""
+        path = write_yaml(config_dir, "team.yaml",
+                          "tenants:\n"
+                          "  db-a:\n"
+                          "    custom_pg_conn: 100\n")
+        configs = ag.load_tenant_configs(tenant_config=path)
+        assert set(configs) == {"db-a"}
+        assert configs["db-a"]["custom_pg_conn"] == 100
+
+    def test_wrapper_tenants_reach_gap_analysis(self, config_dir):
+        """端到端：wrapper 租戶的 custom_ 指標真的進到 gap 分析。"""
+        write_yaml(config_dir, "team.yaml",
+                   "tenants:\n"
+                   "  db-a:\n"
+                   "    custom_mysql_uptime: 1\n")
+        configs = ag.load_tenant_configs(config_dir=config_dir)
+        metrics = ag.extract_custom_metrics(configs)
+        assert len(metrics) == 1
+        assert metrics[0]["tenant"] == "db-a"
+        assert metrics[0]["original_metric"] == "mysql_uptime"
+
 
 # ============================================================
 # load_metric_dictionary

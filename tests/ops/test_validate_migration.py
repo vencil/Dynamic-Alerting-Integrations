@@ -301,6 +301,53 @@ class TestPrintSummary:
         out = capsys.readouterr().out
         assert "比對組數: 2" in out
 
+    # ── r3 W2：查詢失敗（None result）不得印 🎉 誤導可安全切換 ──
+
+    def test_all_none_suppresses_celebration(self, capsys):
+        """查詢全失敗：mismatch/missing 均 0 但什麼都沒驗證 → 抑制 🎉 + 警示。
+
+        修前此案照印「🎉 …可以安全切換」卻 exit 2（摘要與 exit code 矛盾）。
+        """
+        vm.print_summary([None, None])
+        out = capsys.readouterr().out
+        assert "🎉" not in out
+        assert "查詢失敗" in out
+        assert "2/2" in out
+
+    def test_partial_none_suppresses_celebration(self, capsys):
+        """部分查詢失敗：成功組照常計數，但 🎉 仍抑制 + 警示。"""
+        ok_result = {
+            "label": "cpu",
+            "old_query": "q1",
+            "new_query": "q2",
+            "old_count": 1,
+            "new_count": 1,
+            "diffs": [{"tenant": "db-a", "old_value": 1.0, "new_value": 1.0,
+                        "status": "match", "delta": 0.0}],
+        }
+        vm.print_summary([ok_result, None])
+        out = capsys.readouterr().out
+        assert "🎉" not in out
+        assert "查詢失敗" in out
+        assert "1/2" in out
+        assert "數值一致: 1" in out
+
+    def test_no_failures_still_celebrates(self, capsys):
+        """守門反例：零查詢失敗 + 全 match 時 🎉 照常（不因本修誤傷）。"""
+        ok_result = {
+            "label": "cpu",
+            "old_query": "q1",
+            "new_query": "q2",
+            "old_count": 1,
+            "new_count": 1,
+            "diffs": [{"tenant": "db-a", "old_value": 1.0, "new_value": 1.0,
+                        "status": "match", "delta": 0.0}],
+        }
+        vm.print_summary([ok_result])
+        out = capsys.readouterr().out
+        assert "🎉" in out
+        assert "查詢失敗" not in out
+
 
 # ---------------------------------------------------------------------------
 # classify_results
@@ -568,14 +615,17 @@ class TestMain:
 
     @mock.patch("validate_migration.load_mapping_pairs")
     def test_main_empty_pairs(self, mock_load, capsys):
+        """r3 W2：零比對組 → 訊息走 stderr + EXIT_CALLER_ERROR（vacuous pass 封死）。"""
         mock_load.return_value = []
         with mock.patch("sys.argv", [
             "validate_migration.py",
             "--mapping", "fake.yaml",
         ]):
-            vm.main()
-        out = capsys.readouterr().out
-        assert "No comparison pairs" in out
+            rc = vm.main()
+        captured = capsys.readouterr()
+        assert rc == 2
+        assert "No comparison pairs" in captured.err
+        assert "No comparison pairs" not in captured.out
 
     @mock.patch("validate_migration.time.sleep")
     @mock.patch("validate_migration.run_single_comparison")
@@ -839,13 +889,17 @@ class TestMainExitCodes:
         assert rc == 2
 
     @mock.patch("validate_migration.load_mapping_pairs")
-    def test_empty_pairs_exits_ok(self, mock_load):
-        """既有行為保留（最小變更）：mapping 載入後零比對組 → 0。"""
+    def test_empty_pairs_exits_caller_error(self, mock_load):
+        """r3 W2 翻案（沿 #452/#737）：mapping 載入後零比對組 → 2。
+
+        零比對 = 什麼都沒驗證，vacuous pass 不得綠燈放行
+        `da-tools validate && promote`；空 mapping 屬 caller 可修輸入。
+        """
         mock_load.return_value = []
         with mock.patch("sys.argv", [
             "validate_migration.py", "--mapping", "fake.yaml",
         ]):
-            assert vm.main() == 0
+            assert vm.main() == 2
 
     def test_footer_propagates_exit_code_subprocess(self, tmp_path):
         """footer 回歸鎖：檔尾必須是 `sys.exit(main())`。

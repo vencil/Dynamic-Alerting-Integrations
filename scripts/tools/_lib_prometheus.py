@@ -171,6 +171,48 @@ def http_request_with_retry(
     raise last_error  # type: ignore[misc]
 
 
+def probe_health(
+    url: str,
+    *,
+    timeout: int = 10,
+) -> tuple[Optional[str], Optional[str]]:
+    """Probe a health/readiness endpoint with a plain GET.
+
+    Consolidates the hand-rolled ``urllib.request.urlopen(Request(url))``
+    liveness probes (da-tools ROI r3 W2): federation_check ×2 (`/-/healthy`),
+    byo_check ×2 (`/-/healthy` + Alertmanager `/-/ready`), shadow_verify ×1
+    (`/-/healthy`, reads the body). NOT Prometheus-specific — the caller
+    composes the full probe URL (base + path), so any HTTP health endpoint
+    works.
+
+    Unlike the pre-consolidation call sites, the URL scheme is validated
+    first (:func:`_validate_url_scheme`) — the hand-rolled probes had NO
+    scheme check, an SSRF-protection gap relative to every other HTTP
+    helper in this lib.
+
+    Args:
+        url: FULL probe URL (e.g. ``f"{prom_url}/-/healthy"``).
+        timeout: Socket timeout in seconds (default 10 — all five
+            consolidated sites used 10).
+
+    Returns:
+        ``(body_str, None)`` on success — decoded response body (UTF-8,
+        ``errors="replace"`` so a probe that answered 2xx never fails on
+        decode; may be ``""``). Reachability-only callers ignore the body.
+        ``(None, err_str)`` on failure — ``str(exception)``, matching the
+        detail strings the hand-rolled sites produced, or the scheme error.
+    """
+    try:
+        scheme_err = _validate_url_scheme(url)
+        if scheme_err:
+            return None, scheme_err
+        req = urllib.request.Request(url)  # nosec B310
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310  #scheme validated by _validate_url_scheme upstream
+            return resp.read().decode("utf-8", errors="replace"), None
+    except (urllib.error.URLError, ValueError, OSError) as exc:
+        return None, str(exc)
+
+
 def query_prometheus_instant(
     prom_url: str,
     promql: str,

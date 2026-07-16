@@ -3,7 +3,7 @@
 
 驗證:
   1. _sha256() — SHA-256 雜湊運算與截斷
-  2. _detect_lang() — 語言偵測（環境變數順序）
+  2. 語言偵測（canonical detect_cli_lang；環境變數順序 + DA_LANG=en 必勝 regression）
   3. _t() — 雙語文本 helper
   4. _scan_config_dir() — YAML 掃描與排序
   5. _scan_config_dir() 缺失目錄 → sys.exit()
@@ -26,6 +26,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from io import StringIO
@@ -78,19 +79,23 @@ class TestSha256:
         assert len(h) == 16
 
 
-# ── 2. _detect_lang ──────────────────────────────────────────────────
+# ── 2. 語言偵測（r3 W2 起走 canonical detect_cli_lang）───────────────
+#
+# rogue `_detect_lang`（只檢查 zh 前綴 → DA_LANG=en 輸給 LC_ALL=zh）已在
+# r3 W2 移除；模組現 import `_lib_python.detect_cli_lang`。本區改釘
+# 「config_history 模組取得的偵測結果」符合 canonical 契約。
 
 class TestDetectLang:
-    """_detect_lang() 語言偵測測試。"""
+    """config_history 的語言偵測（canonical detect_cli_lang）測試。"""
 
     def test_da_lang_priority(self):
         """DA_LANG 應優先檢查。"""
         with patch.dict(os.environ, {'DA_LANG': 'zh_TW', 'LANG': 'en_US.UTF-8'}):
-            # 必須重新加載模組以重新評估
+            # 必須重新加載模組以重新評估 _LANG
             import importlib
             import config_history
             importlib.reload(config_history)
-            assert config_history._detect_lang() == 'zh'
+            assert config_history.detect_cli_lang() == 'zh'
 
     def test_lc_all_second_priority(self):
         """LC_ALL 在 DA_LANG 不存在時檢查。"""
@@ -100,28 +105,59 @@ class TestDetectLang:
             import config_history
             orig_lang = config_history._LANG
             try:
-                config_history._LANG = config_history._detect_lang()
-                assert config_history._detect_lang() in ('zh', 'en')
+                config_history._LANG = config_history.detect_cli_lang()
+                assert config_history.detect_cli_lang() in ('zh', 'en')
             finally:
                 config_history._LANG = orig_lang
 
     def test_lang_fallback(self):
         """環境變數都不存在時預設英文。"""
         with patch.dict(os.environ, {}, clear=True):
-            result = ch._detect_lang()
+            result = ch.detect_cli_lang()
             assert result == 'en'
 
     def test_zh_startswith_prefix(self):
         """只檢查 'zh' 前綴。"""
         with patch.dict(os.environ, {'DA_LANG': 'zh_CN'}, clear=True):
-            result = ch._detect_lang()
+            result = ch.detect_cli_lang()
             assert result == 'zh'
 
     def test_non_zh_returns_en(self):
         """非 'zh' 前綴預設英文。"""
         with patch.dict(os.environ, {'DA_LANG': 'ja_JP', 'LC_ALL': 'fr_FR'}, clear=True):
-            result = ch._detect_lang()
+            result = ch.detect_cli_lang()
             assert result == 'en'
+
+    def test_da_lang_en_wins_over_lc_all_zh(self):
+        """r3 W2 regression：顯式 DA_LANG=en 必勝 LC_ALL=zh。
+
+        rogue 版對 DA_LANG=en 不 return、落到 LC_ALL → 錯回 'zh'。
+        """
+        with patch.dict(os.environ,
+                        {'DA_LANG': 'en', 'LC_ALL': 'zh_TW.UTF-8',
+                         'LANG': 'zh_TW.UTF-8'}, clear=True):
+            assert ch.detect_cli_lang() == 'en'
+
+    def test_da_lang_en_lc_all_zh_english_output(self, tmp_path):
+        """端到端 regression：DA_LANG=en + LC_ALL=zh_TW → CLI 錯誤訊息為英文。
+
+        走真實子行程（_LANG 在 import 時凍結，須以環境變數起新行程驗證），
+        用缺失 config-dir 的 caller-error 路徑取一行已知雙語訊息。
+        """
+        script = os.path.join(os.path.dirname(__file__), '..', '..',
+                              'scripts', 'tools', 'ops', 'config_history.py')
+        env = {**os.environ,
+               'DA_LANG': 'en', 'LC_ALL': 'zh_TW.UTF-8', 'LANG': 'zh_TW.UTF-8',
+               'PYTHONIOENCODING': 'utf-8'}
+        proc = subprocess.run(
+            [sys.executable, script,
+             '--config-dir', str(tmp_path / 'missing'), 'snapshot'],
+            env=env, capture_output=True, text=True, encoding='utf-8',
+            timeout=60,
+        )
+        assert proc.returncode == EXIT_CALLER_ERROR, (proc.stdout, proc.stderr)
+        assert 'Error: directory not found' in proc.stderr
+        assert '錯誤' not in proc.stderr
 
 
 # ── 3. _t() ──────────────────────────────────────────────────────────
