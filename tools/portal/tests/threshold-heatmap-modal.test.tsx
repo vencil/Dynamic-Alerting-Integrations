@@ -68,4 +68,23 @@ describe('ThresholdHeatmap detail modal — focus-trap wiring', () => {
     fireEvent.click(screen.getByText('✕'));
     expect(screen.queryByRole('dialog')).toBeNull();
   });
+
+  it('restores focus to the opener (grid region) when the detail dialog closes (TRK-335, WCAG 2.4.3)', () => {
+    render(<ThresholdHeatmap />);
+    // The cells themselves are not keyboard-focusable, so the realistic
+    // focus owner when the dialog opens is the grid region (tabIndex=0).
+    // Focus it, open a cell dialog, and assert focus returns here on close.
+    const region = screen.getByRole('region', { name: 'Threshold heatmap grid' });
+    region.focus();
+    expect(document.activeElement).toBe(region);
+
+    fireEvent.click(screen.getAllByRole('gridcell')[0]);
+    const dialog = screen.getByRole('dialog');
+    expect(document.activeElement).toBe(dialog); // hook stole focus into the dialog
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // focus returns to the opener region, not document.body
+    expect(document.activeElement).toBe(region);
+  });
 });
