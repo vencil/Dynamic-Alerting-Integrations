@@ -307,6 +307,18 @@ class TestLoadTenantConfigs:
         assert set(configs) == {"db-a"}
         assert configs["db-a"]["custom_pg_conn"] == 100
 
+    def test_load_single_file_non_dict_yaml_yields_empty_config(self, config_dir):
+        """單檔非 dict yaml（list/scalar）→ {}，對齊目錄分支的 lib 行為。
+
+        修前 `data or {}` 會把 truthy 的 list/scalar 原樣存入 →
+        extract_custom_metrics 對它 .items() 直接 AttributeError
+        （CodeRabbit PR#1126 inline finding）。
+        """
+        path = write_yaml(config_dir, "weird.yaml", "- a\n- b\n")
+        configs = ag.load_tenant_configs(tenant_config=path)
+        assert configs == {"weird": {}}
+        assert ag.extract_custom_metrics(configs) == []
+
     def test_wrapper_tenants_reach_gap_analysis(self, config_dir):
         """端到端：wrapper 租戶的 custom_ 指標真的進到 gap 分析。"""
         write_yaml(config_dir, "team.yaml",

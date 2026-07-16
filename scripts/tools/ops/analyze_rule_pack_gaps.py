@@ -92,7 +92,9 @@ def load_tenant_configs(config_dir=None, tenant_config=None):
                     configs[t_name] = t_data
         else:
             name = os.path.splitext(os.path.basename(tenant_config))[0]
-            configs[name] = data or {}
+            # Non-dict yaml (list/scalar) → {}, matching the dir branch
+            # (_lib_io skips non-dict); extract_custom_metrics needs .items().
+            configs[name] = data if isinstance(data, dict) else {}
     elif config_dir:
         configs = _load_tenant_configs_dir(config_dir)
 

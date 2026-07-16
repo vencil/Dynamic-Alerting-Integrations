@@ -106,7 +106,9 @@ class TestDetectLang:
             orig_lang = config_history._LANG
             try:
                 config_history._LANG = config_history.detect_cli_lang()
-                assert config_history.detect_cli_lang() in ('zh', 'en')
+                # DA_LANG 空字串視同未設 → LC_ALL=zh_TW 應勝出（斷具體值，
+                # 非恆真的 membership；CodeRabbit PR#1126 outside-diff）
+                assert config_history.detect_cli_lang() == 'zh'
             finally:
                 config_history._LANG = orig_lang
 
