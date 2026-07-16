@@ -318,6 +318,53 @@ def _validate_profile_refs(parsed: dict) -> list[str]:
     return warnings
 
 
+# ── ADR-007 --strict: blocking-error prefix (single source of truth) ──
+# Consumers (generate_alertmanager_routes._policy_errors, validate_config)
+# match warning-stream lines on this prefix to decide blocking. A pin test
+# in tests/ops/test_generate_alertmanager_routes.py asserts no other
+# _grar_* source can emit this prefix into the validate warning stream.
+POLICY_ERROR_PREFIX = "ERROR:"
+
+# Prometheus/Go-style duration grammar for domain-policy checks: one or
+# more <number><unit> tokens (multi-unit "1h30m", fractional "1.5h") or
+# the bare literal "0". Signs are rejected — a negative duration is never
+# a valid Alertmanager timing value.
+_POLICY_DURATION_UNITS: dict[str, float] = {
+    "ns": 1e-9, "us": 1e-6, "µs": 1e-6, "ms": 1e-3,
+    "s": 1.0, "m": 60.0, "h": 3600.0,
+    "d": 86400.0, "w": 604800.0, "y": 31536000.0,
+}
+_POLICY_DURATION_RE = re.compile(
+    r"^(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h|d|w|y))+$")
+_POLICY_DURATION_TOKEN_RE = re.compile(
+    r"(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h|d|w|y)")
+
+
+def _parse_policy_duration(value: object) -> float | None:
+    """Parse a duration for domain-policy checks; None if invalid.
+
+    Unlike the shared single-unit ``parse_duration_seconds`` (deliberately
+    left untouched — it backs the timing-guardrail clamps and other
+    consumers), this parser accepts Prometheus/Go multi-unit forms
+    ("1h30m") and fractional units ("1.5h"), and explicitly rejects
+    negative values. Bare non-negative numbers are treated as seconds
+    (matching the legacy parser's int/float handling).
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) if value >= 0 else None
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if s == "0":
+        return 0.0
+    if not _POLICY_DURATION_RE.match(s):
+        return None
+    return sum(float(num) * _POLICY_DURATION_UNITS[unit]
+               for num, unit in _POLICY_DURATION_TOKEN_RE.findall(s))
+
+
 def check_domain_policies(
     routing_configs: dict[str, dict],
     domain_policies: dict[str, dict],
@@ -332,15 +379,27 @@ def check_domain_policies(
         routing_configs: {tenant: resolved_routing_config}
         domain_policies: {policy_name: {tenants, constraints, ...}}
         strict: if True, return ERROR instead of WARN for violations,
-            and append a fix hint to each violation message. The CLI
-            (`generate_alertmanager_routes.py --strict`) treats these
-            ERROR lines as blocking (exit 1). Non-strict (WARN) message
-            text is unchanged for backward compatibility.
+            append a fix hint to each violation message, and fail LOUD on
+            every malformed input the lenient path silently skips:
+            unparseable/negative durations (policy or tenant side),
+            non-list receiver-type / enforce_group_by constraints,
+            non-mapping policy or constraints blocks, and a non-list
+            tenant group_by. The CLI (`generate_alertmanager_routes.py
+            --strict`) treats these ERROR lines as blocking (exit 1).
+            Non-strict (WARN) message text and skip behavior are
+            unchanged for backward compatibility — including the legacy
+            quirks (a falsy parsed duration like "0s" or a multi-unit
+            "1h30m" is silently skipped there).
+
+    Known limitation: a ``domain_policies:`` block in a wrongly named
+    file, or an unparseable ``_domain_policy.yaml``, never reaches this
+    function — those are surfaced (strict → ERROR) by
+    ``load_tenant_configs`` in ``_grar_parse``.
 
     Returns list of warning/error messages.
     """
     messages: list[str] = []
-    severity = "ERROR" if strict else "WARN"
+    severity = POLICY_ERROR_PREFIX.rstrip(":") if strict else "WARN"
 
     def _fmt(base: str, hint: str) -> str:
         """Format one violation; strict mode appends the fix hint."""
@@ -349,23 +408,83 @@ def check_domain_policies(
             msg += f" — fix: {hint}"
         return msg
 
+    def _constraint_list(policy_name: str, constraints: dict,
+                         field: str) -> list:
+        """Fetch a list-typed constraint; strict ERRORs on a wrong type.
+
+        None (explicit null, schema-legal) and absent both mean "not
+        constrained". Non-strict keeps the legacy silent-skip outcome.
+        """
+        raw = constraints.get(field)
+        if raw is None:
+            return []
+        if not isinstance(raw, list):
+            if strict:
+                messages.append(_fmt(
+                    f"domain_policy '{policy_name}': constraint '{field}' "
+                    f"must be a list, got {type(raw).__name__} — the "
+                    f"constraint cannot be enforced",
+                    f"define '{field}' as a YAML list"))
+            return []
+        return raw
+
     for policy_name, policy in sorted(domain_policies.items()):
         if not isinstance(policy, dict):
+            # Explicit null policy is schema-legal (inert); anything else
+            # non-mapping is fail-open — strict surfaces it.
+            if strict and policy is not None:
+                messages.append(_fmt(
+                    f"domain_policy '{policy_name}': policy must be a "
+                    f"mapping, got {type(policy).__name__} — the policy "
+                    f"cannot be enforced",
+                    "define the policy as a mapping with "
+                    "description/tenants/constraints keys"))
             continue
         tenants = policy.get("tenants", [])
         if not isinstance(tenants, list):
-            messages.append(f"  WARN: domain_policy '{policy_name}': "
-                            "'tenants' must be a list")
+            messages.append(_fmt(
+                f"domain_policy '{policy_name}': 'tenants' must be a list",
+                "define 'tenants' as a YAML list of tenant ids"))
             continue
         constraints = policy.get("constraints", {})
         if not isinstance(constraints, dict):
+            # Explicit null constraints is schema-legal (inert policy).
+            if strict and constraints is not None:
+                messages.append(_fmt(
+                    f"domain_policy '{policy_name}': 'constraints' must be "
+                    f"a mapping, got {type(constraints).__name__} — the "
+                    f"policy cannot be enforced",
+                    "define 'constraints' as a mapping of constraint keys"))
             continue
 
-        forbidden_types = set(constraints.get("forbidden_receiver_types", []))
-        allowed_types = set(constraints.get("allowed_receiver_types", []))
+        forbidden_types = set(_constraint_list(
+            policy_name, constraints, "forbidden_receiver_types"))
+        allowed_types = set(_constraint_list(
+            policy_name, constraints, "allowed_receiver_types"))
+        enforce_group_by = _constraint_list(
+            policy_name, constraints, "enforce_group_by")
         max_repeat = constraints.get("max_repeat_interval")
         min_group_wait = constraints.get("min_group_wait")
-        enforce_group_by = constraints.get("enforce_group_by")
+
+        # Strict: validate constraint-side durations once per policy —
+        # an unparseable bound (e.g. "banana", "-1h") means the constraint
+        # would never fire, which must be loud, not silent.
+        max_sec: float | None = None
+        min_sec: float | None = None
+        if strict:
+            for field, raw in (("max_repeat_interval", max_repeat),
+                               ("min_group_wait", min_group_wait)):
+                if raw is not None and _parse_policy_duration(raw) is None:
+                    messages.append(_fmt(
+                        f"domain_policy '{policy_name}': constraint "
+                        f"'{field}' value '{raw}' is not a valid duration "
+                        f"— the constraint cannot be enforced",
+                        "use Prometheus/Go duration syntax such as '30s', "
+                        "'1h' or '1h30m'; negative values are not allowed"))
+            if max_repeat is not None:
+                max_sec = _parse_policy_duration(max_repeat)
+            if min_group_wait is not None:
+                min_sec = _parse_policy_duration(min_group_wait)
 
         for tenant in tenants:
             if tenant not in routing_configs:
@@ -393,12 +512,37 @@ def check_domain_policies(
                         f"{sorted(allowed_types)} or amend the domain policy"))
 
             # Check max_repeat_interval
-            if max_repeat:
+            if strict:
+                if max_sec is not None:
+                    tenant_repeat = rc.get("repeat_interval")
+                    if tenant_repeat is not None:
+                        tenant_sec = _parse_policy_duration(tenant_repeat)
+                        if tenant_sec is None:
+                            messages.append(_fmt(
+                                f"domain_policy '{policy_name}', "
+                                f"tenant '{tenant}': repeat_interval "
+                                f"'{tenant_repeat}' is not a valid duration "
+                                f"— cannot check against max '{max_repeat}'",
+                                "use duration syntax such as '30m' or "
+                                "'1h30m'; negative values are not allowed"))
+                        elif tenant_sec > max_sec:
+                            messages.append(_fmt(
+                                f"domain_policy '{policy_name}', "
+                                f"tenant '{tenant}': repeat_interval "
+                                f"'{tenant_repeat}' exceeds max "
+                                f"'{max_repeat}'",
+                                f"lower the tenant's repeat_interval to "
+                                f"'{max_repeat}' or less, or raise the "
+                                f"policy's max_repeat_interval"))
+            elif max_repeat:
+                # Legacy lenient path — deliberately verbatim (truthiness
+                # skips and single-unit parser included) so non-strict
+                # output stays byte-identical.
                 tenant_repeat = rc.get("repeat_interval")
                 if tenant_repeat:
-                    max_sec = parse_duration_seconds(max_repeat)
-                    tenant_sec = parse_duration_seconds(tenant_repeat)
-                    if max_sec and tenant_sec and tenant_sec > max_sec:
+                    legacy_max = parse_duration_seconds(max_repeat)
+                    legacy_val = parse_duration_seconds(tenant_repeat)
+                    if legacy_max and legacy_val and legacy_val > legacy_max:
                         messages.append(_fmt(
                             f"domain_policy '{policy_name}', "
                             f"tenant '{tenant}': repeat_interval "
@@ -408,12 +552,36 @@ def check_domain_policies(
                             f"max_repeat_interval"))
 
             # Check min_group_wait
-            if min_group_wait:
+            if strict:
+                if min_sec is not None:
+                    tenant_gw = rc.get("group_wait")
+                    if tenant_gw is not None:
+                        tenant_sec = _parse_policy_duration(tenant_gw)
+                        if tenant_sec is None:
+                            messages.append(_fmt(
+                                f"domain_policy '{policy_name}', "
+                                f"tenant '{tenant}': group_wait "
+                                f"'{tenant_gw}' is not a valid duration "
+                                f"— cannot check against minimum "
+                                f"'{min_group_wait}'",
+                                "use duration syntax such as '30s' or "
+                                "'1m30s'; negative values are not allowed"))
+                        elif tenant_sec < min_sec:
+                            messages.append(_fmt(
+                                f"domain_policy '{policy_name}', "
+                                f"tenant '{tenant}': group_wait "
+                                f"'{tenant_gw}' below minimum "
+                                f"'{min_group_wait}'",
+                                f"raise the tenant's group_wait to "
+                                f"'{min_group_wait}' or more, or lower the "
+                                f"policy's min_group_wait"))
+            elif min_group_wait:
+                # Legacy lenient path — deliberately verbatim (see above).
                 tenant_gw = rc.get("group_wait")
                 if tenant_gw:
-                    min_sec = parse_duration_seconds(min_group_wait)
-                    tenant_sec = parse_duration_seconds(tenant_gw)
-                    if min_sec and tenant_sec and tenant_sec < min_sec:
+                    legacy_min = parse_duration_seconds(min_group_wait)
+                    legacy_val = parse_duration_seconds(tenant_gw)
+                    if legacy_min and legacy_val and legacy_val < legacy_min:
                         messages.append(_fmt(
                             f"domain_policy '{policy_name}', "
                             f"tenant '{tenant}': group_wait "
@@ -423,7 +591,7 @@ def check_domain_policies(
                             f"policy's min_group_wait"))
 
             # Check enforce_group_by
-            if enforce_group_by and isinstance(enforce_group_by, list):
+            if enforce_group_by:
                 tenant_gb = rc.get("group_by", [])
                 if isinstance(tenant_gb, list):
                     missing = set(enforce_group_by) - set(tenant_gb)
@@ -434,5 +602,13 @@ def check_domain_policies(
                             f"labels: {sorted(missing)}",
                             f"add {sorted(missing)} to the tenant's group_by "
                             f"(policy requires {sorted(enforce_group_by)})"))
+                elif strict:
+                    messages.append(_fmt(
+                        f"domain_policy '{policy_name}', "
+                        f"tenant '{tenant}': group_by must be a list, got "
+                        f"{type(tenant_gb).__name__} — cannot check "
+                        f"enforce_group_by",
+                        "define the tenant's group_by as a YAML list of "
+                        "label names"))
 
     return messages

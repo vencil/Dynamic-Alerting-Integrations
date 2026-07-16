@@ -49,6 +49,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 # ── Re-exports from _grar_validate ─────────────────────────────────
 from _grar_validate import (  # noqa: E402, F401
+    POLICY_ERROR_PREFIX,
     _extract_host,
     _validate_profile_refs,
     assert_watchdog_inhibit_immunity,
@@ -117,10 +118,13 @@ from _grar_render import (  # noqa: E402, F401
 def _policy_errors(all_warnings: list[str]) -> list[str]:
     """Extract blocking domain-policy ERROR lines (ADR-007 --strict).
 
-    Only check_domain_policies(strict=True) emits ERROR-prefixed lines into
-    the warning stream; everything else there is WARN-prefixed.
+    Only the strict domain-policy paths (check_domain_policies(strict=True)
+    plus the fail-open closures in load_tenant_configs) emit
+    POLICY_ERROR_PREFIX lines into the warning stream; everything else
+    there is WARN-prefixed (pinned by TestPolicyErrorPrefixPin).
     """
-    return [w for w in all_warnings if w.lstrip().startswith("ERROR:")]
+    return [w for w in all_warnings
+            if w.lstrip().startswith(POLICY_ERROR_PREFIX)]
 
 
 def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],

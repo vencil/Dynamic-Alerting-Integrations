@@ -29,10 +29,17 @@ from _grar_merge import (  # noqa: E402
     merge_routing_with_defaults,
 )
 from _grar_validate import (  # noqa: E402
+    POLICY_ERROR_PREFIX,
     _validate_profile_refs,
     check_domain_policies,
     validate_tenant_keys,
 )
+
+# ADR-007 --strict fail-open closure: filenames whose content carries the
+# domain policies. If such a file is unparseable, or a domain_policies
+# block sits in a differently named file, the policies silently vanish —
+# strict mode must surface that instead of staying green.
+_POLICY_FILENAMES = ("_domain_policy.yaml", "_domain_policy.yml")
 
 
 def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
@@ -88,7 +95,7 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
     # v2.1.0 ADR-007: Extract domain_policies (only from _domain_policy.yaml)
     if "domain_policies" in data:
         dp_fname = os.path.basename(fname)
-        if dp_fname in ("_domain_policy.yaml", "_domain_policy.yml"):
+        if dp_fname in _POLICY_FILENAMES:
             policies = data["domain_policies"]
             if isinstance(policies, dict):
                 result["domain_policies"].update(policies)
@@ -96,6 +103,8 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
                 print(f"  WARN: domain_policies in {fname} must be a dict, ignoring",
                       file=sys.stderr)
         else:
+            # setdefault: tests may call this helper with a hand-built dict.
+            result.setdefault("policy_misplacements", []).append(fname)
             print(f"  WARN: domain_policies in {fname} ignored "
                   "(only allowed in _domain_policy.yaml)", file=sys.stderr)
 
@@ -167,6 +176,8 @@ def _parse_config_files(config_dir: str) -> dict:
         "routing_profiles": {},      # v2.1.0 ADR-007: named routing configs
         "domain_policies": {},       # v2.1.0 ADR-007: domain compliance constraints
         "tenant_profile_refs": {},   # v2.1.0 ADR-007: tenant → profile name
+        "policy_misplacements": [],  # ADR-007 --strict: domain_policies in wrong file
+        "policy_file_errors": [],    # ADR-007 --strict: unparseable _domain_policy.yaml
     }
 
     if not os.path.isdir(config_dir):
@@ -183,6 +194,11 @@ def _parse_config_files(config_dir: str) -> dict:
             try:
                 data = yaml.safe_load(f)
             except yaml.YAMLError as e:
+                if fname in _POLICY_FILENAMES:
+                    # A broken policy file silently drops EVERY domain
+                    # policy — record it so --strict can fail loud.
+                    result["policy_file_errors"].append(
+                        f"{fname}: {e}".replace("\n", " "))
                 print(f"  WARN: skip unparseable {fname}: {e}", file=sys.stderr)
                 continue
 
@@ -299,6 +315,23 @@ def load_tenant_configs(
         schema_warnings.extend(
             check_domain_policies(routing_configs, parsed["domain_policies"],
                                   strict=strict_policies))
+
+    # ADR-007 --strict fail-open closures: an unparseable _domain_policy.yaml
+    # or a domain_policies block in a wrongly named file makes every policy
+    # silently vanish (validation stays green). Strict mode surfaces both as
+    # blocking ERRORs; non-strict keeps the legacy stderr WARN prints only.
+    if strict_policies:
+        for err in parsed.get("policy_file_errors", []):
+            schema_warnings.append(
+                f"  {POLICY_ERROR_PREFIX} domain policy file failed to "
+                f"parse — every domain policy is silently dropped: {err} "
+                f"— fix: repair the YAML syntax in _domain_policy.yaml")
+        for fname in parsed.get("policy_misplacements", []):
+            schema_warnings.append(
+                f"  {POLICY_ERROR_PREFIX} domain_policies block in "
+                f"'{fname}' is ignored (only _domain_policy.yaml is "
+                f"loaded), so those policies are not enforced — fix: move "
+                f"the domain_policies block into _domain_policy.yaml")
 
     return (routing_configs, parsed["dedup_configs"], schema_warnings,
             parsed["enforced_routing"], parsed["metadata_configs"])
