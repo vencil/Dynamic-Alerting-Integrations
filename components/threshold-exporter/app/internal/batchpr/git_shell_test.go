@@ -679,3 +679,158 @@ func TestShellGitClient_ForcePushWithLease(t *testing.T) {
 		}
 	})
 }
+
+// --- CreateBranch: validation + `checkout -B` args ----------------------
+//
+// git_shell.go:66-74. `-B` (create-or-reset) is the load-bearing detail:
+// re-running Apply() after a partial failure must not trip over a stale
+// local branch.
+
+func TestShellGitClient_CreateBranch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty_name_errors_without_shelling_out", func(t *testing.T) {
+		t.Parallel()
+		stub := newStubRunner()
+		g := &ShellGitClient{Workdir: t.TempDir(), run: stub}
+		if err := g.CreateBranch(context.Background(), "", "main"); err == nil {
+			t.Fatal("empty branch name must error")
+		}
+		if len(stub.calls) != 0 {
+			t.Errorf("must not shell out on empty name; calls = %v", gitVerbs(stub.calls))
+		}
+	})
+
+	t.Run("issues_checkout_dash_B_from_base", func(t *testing.T) {
+		t.Parallel()
+		stub := newStubRunner()
+		g := &ShellGitClient{Workdir: t.TempDir(), run: stub}
+		if err := g.CreateBranch(context.Background(), "da-tools/c10/t-abc", "main"); err != nil {
+			t.Fatalf("CreateBranch: %v", err)
+		}
+		if len(stub.calls) != 1 {
+			t.Fatalf("calls = %d, want 1", len(stub.calls))
+		}
+		// Exact arg order matters: -B <name> <base> (base LAST — swapping
+		// them would reset the base branch instead).
+		want := []string{"checkout", "-B", "da-tools/c10/t-abc", "main"}
+		if !reflect.DeepEqual(stub.calls[0].args, want) {
+			t.Errorf("args = %v, want %v", stub.calls[0].args, want)
+		}
+	})
+
+	t.Run("git_failure_is_wrapped", func(t *testing.T) {
+		t.Parallel()
+		stub := newStubRunner()
+		stub.responses["checkout -B"] = stubResponse{err: errors.New("fatal: not a git repository")}
+		g := &ShellGitClient{Workdir: t.TempDir(), run: stub}
+		err := g.CreateBranch(context.Background(), "feature", "main")
+		if err == nil || !strings.Contains(err.Error(), "git checkout -B feature main") {
+			t.Fatalf("err = %v, want wrapped checkout failure", err)
+		}
+	})
+}
+
+// --- Push: `--set-upstream origin <branch>` -----------------------------
+//
+// git_shell.go:129-134.
+
+func TestShellGitClient_Push(t *testing.T) {
+	t.Parallel()
+
+	t.Run("issues_set_upstream_push", func(t *testing.T) {
+		t.Parallel()
+		stub := newStubRunner()
+		g := &ShellGitClient{Workdir: t.TempDir(), run: stub}
+		if err := g.Push(context.Background(), "feature"); err != nil {
+			t.Fatalf("Push: %v", err)
+		}
+		if len(stub.calls) != 1 {
+			t.Fatalf("calls = %d, want 1", len(stub.calls))
+		}
+		want := []string{"push", "--set-upstream", "origin", "feature"}
+		if !reflect.DeepEqual(stub.calls[0].args, want) {
+			t.Errorf("args = %v, want %v", stub.calls[0].args, want)
+		}
+		// Plain push — never a force variant (force-push is a separate,
+		// deliberate API: ForcePushWithLease).
+		for _, a := range stub.calls[0].args {
+			if strings.Contains(a, "force") {
+				t.Errorf("Push must never force; args = %v", stub.calls[0].args)
+			}
+		}
+	})
+
+	t.Run("git_failure_is_wrapped", func(t *testing.T) {
+		t.Parallel()
+		stub := newStubRunner()
+		stub.responses["push --set-upstream"] = stubResponse{err: errors.New("remote: permission denied")}
+		g := &ShellGitClient{Workdir: t.TempDir(), run: stub}
+		err := g.Push(context.Background(), "feature")
+		if err == nil || !strings.Contains(err.Error(), "git push origin feature") {
+			t.Fatalf("err = %v, want wrapped push failure", err)
+		}
+	})
+}
+
+// --- CheckoutBranch: fetch-then-checkout, bare form ----------------------
+//
+// git_shell.go:173-184. The checkout is deliberately the bare form (no
+// -B): an existing branch with commits must be preserved, not reset.
+
+func TestShellGitClient_CheckoutBranch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty_name_errors_without_shelling_out", func(t *testing.T) {
+		t.Parallel()
+		stub := newStubRunner()
+		g := &ShellGitClient{Workdir: t.TempDir(), run: stub}
+		if err := g.CheckoutBranch(context.Background(), ""); err == nil {
+			t.Fatal("empty branch name must error")
+		}
+		if len(stub.calls) != 0 {
+			t.Errorf("must not shell out on empty name; calls = %v", gitVerbs(stub.calls))
+		}
+	})
+
+	t.Run("fetch_then_bare_checkout", func(t *testing.T) {
+		t.Parallel()
+		stub := newStubRunner()
+		g := &ShellGitClient{Workdir: t.TempDir(), run: stub}
+		if err := g.CheckoutBranch(context.Background(), "feature"); err != nil {
+			t.Fatalf("CheckoutBranch: %v", err)
+		}
+		if verbs := gitVerbs(stub.calls); !reflect.DeepEqual(verbs, []string{"fetch", "checkout"}) {
+			t.Fatalf("verbs = %v, want [fetch checkout]", verbs)
+		}
+		checkoutArgs := stub.calls[1].args
+		if !reflect.DeepEqual(checkoutArgs, []string{"checkout", "feature"}) {
+			t.Errorf("checkout args = %v, want bare [checkout feature] (a -B here would reset existing commits)", checkoutArgs)
+		}
+	})
+
+	t.Run("fetch_failure_stops_before_checkout", func(t *testing.T) {
+		t.Parallel()
+		stub := newStubRunner()
+		stub.responses["fetch origin"] = stubResponse{err: errors.New("no route to host")}
+		g := &ShellGitClient{Workdir: t.TempDir(), run: stub}
+		err := g.CheckoutBranch(context.Background(), "feature")
+		if err == nil || !strings.Contains(err.Error(), "git fetch origin") {
+			t.Fatalf("err = %v, want fetch failure", err)
+		}
+		if verbs := gitVerbs(stub.calls); !reflect.DeepEqual(verbs, []string{"fetch"}) {
+			t.Errorf("verbs = %v, want [fetch] only", verbs)
+		}
+	})
+
+	t.Run("checkout_failure_is_wrapped", func(t *testing.T) {
+		t.Parallel()
+		stub := newStubRunner()
+		stub.responses["checkout feature"] = stubResponse{err: errors.New("pathspec did not match")}
+		g := &ShellGitClient{Workdir: t.TempDir(), run: stub}
+		err := g.CheckoutBranch(context.Background(), "feature")
+		if err == nil || !strings.Contains(err.Error(), "git checkout feature") {
+			t.Fatalf("err = %v, want checkout failure", err)
+		}
+	})
+}

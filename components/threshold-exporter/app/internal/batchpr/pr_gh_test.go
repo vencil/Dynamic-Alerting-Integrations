@@ -232,6 +232,138 @@ func TestPRNumberFromURL(t *testing.T) {
 	}
 }
 
+// --- GetPR: gh pr view + state normalisation ----------------------------
+//
+// pr_gh.go:144-172. The MERGED/CLOSED distinction is what lets Refresh()
+// tell "landed" from "abandoned", so it gets its own assertions.
+
+func TestGHPRClient_GetPR_HappyPath(t *testing.T) {
+	t.Parallel()
+	stub := newStubRunner()
+	stub.responses["pr view"] = stubResponse{
+		stdout: `{"number":77,"state":"MERGED","headRefName":"da-tools/c10/t-abc","url":"https://github.com/o/r/pull/77"}` + "\n",
+	}
+	c := &GHPRClient{Repo: Repo{Owner: "o", Name: "r", BaseBranch: "main"}, run: stub}
+
+	got, err := c.GetPR(context.Background(), 77)
+	if err != nil {
+		t.Fatalf("GetPR: %v", err)
+	}
+	if got.Number != 77 || got.State != PRStateMerged || got.HeadBranch != "da-tools/c10/t-abc" {
+		t.Errorf("GetPR = %+v, want number=77 state=merged head=da-tools/c10/t-abc", got)
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(stub.calls))
+	}
+	args := stub.calls[0].args
+	for _, w := range []string{"pr", "view", "77", "--repo", "o/r", "--json", "number,state,headRefName,url"} {
+		if !contains(args, w) {
+			t.Errorf("args missing %q: %v", w, args)
+		}
+	}
+}
+
+func TestGHPRClient_GetPR_RunErrorPropagates(t *testing.T) {
+	t.Parallel()
+	stub := newStubRunner()
+	stub.responses["pr view"] = stubResponse{err: errors.New("gh: Not Found (HTTP 404)")}
+	c := &GHPRClient{Repo: Repo{Owner: "o", Name: "r", BaseBranch: "main"}, run: stub}
+	_, err := c.GetPR(context.Background(), 9)
+	if err == nil || !strings.Contains(err.Error(), "gh pr view 9") {
+		t.Errorf("err = %v, want wrapped gh-pr-view failure", err)
+	}
+}
+
+func TestGHPRClient_GetPR_ParseError(t *testing.T) {
+	t.Parallel()
+	stub := newStubRunner()
+	stub.responses["pr view"] = stubResponse{stdout: "not-json"}
+	c := &GHPRClient{Repo: Repo{Owner: "o", Name: "r", BaseBranch: "main"}, run: stub}
+	_, err := c.GetPR(context.Background(), 9)
+	if err == nil || !strings.Contains(err.Error(), "parse JSON") {
+		t.Errorf("err = %v, want parse-JSON failure", err)
+	}
+}
+
+// --- CommentPR ----------------------------------------------------------
+//
+// pr_gh.go:176-189.
+
+func TestGHPRClient_CommentPR(t *testing.T) {
+	t.Parallel()
+
+	t.Run("issues_pr_comment", func(t *testing.T) {
+		t.Parallel()
+		stub := newStubRunner()
+		c := &GHPRClient{Repo: Repo{Owner: "o", Name: "r", BaseBranch: "main"}, run: stub}
+		if err := c.CommentPR(context.Background(), 12, "rebase had conflicts"); err != nil {
+			t.Fatalf("CommentPR: %v", err)
+		}
+		if len(stub.calls) != 1 {
+			t.Fatalf("calls = %d, want 1", len(stub.calls))
+		}
+		args := stub.calls[0].args
+		for _, w := range []string{"pr", "comment", "12", "--repo", "o/r", "--body", "rebase had conflicts"} {
+			if !contains(args, w) {
+				t.Errorf("args missing %q: %v", w, args)
+			}
+		}
+	})
+
+	t.Run("run_error_propagates", func(t *testing.T) {
+		t.Parallel()
+		stub := newStubRunner()
+		stub.responses["pr comment"] = stubResponse{err: errors.New("gh: rate limited")}
+		c := &GHPRClient{Repo: Repo{Owner: "o", Name: "r", BaseBranch: "main"}, run: stub}
+		if err := c.CommentPR(context.Background(), 12, "x"); err == nil || !strings.Contains(err.Error(), "gh pr comment 12") {
+			t.Errorf("err = %v, want wrapped gh-pr-comment failure", err)
+		}
+	})
+}
+
+// GetPR / CommentPR join the missing-repo guard the other methods
+// already test in TestGHPRClient_MissingRepoErrors.
+func TestGHPRClient_GetPRCommentPR_MissingRepoErrors(t *testing.T) {
+	t.Parallel()
+	c := &GHPRClient{Repo: Repo{}, run: newStubRunner()}
+	if _, err := c.GetPR(context.Background(), 1); err == nil {
+		t.Errorf("GetPR with missing repo should error")
+	}
+	if err := c.CommentPR(context.Background(), 1, "x"); err == nil {
+		t.Errorf("CommentPR with missing repo should error")
+	}
+}
+
+// --- normalisePRState -----------------------------------------------------
+//
+// pr_gh.go:195-206. gh emits upper-case; unknown/future states must fall
+// through to PRStateUnknown (Refresh()'s conservative skip branch), never
+// to a known state.
+
+func TestNormalisePRState(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   string
+		want PRState
+	}{
+		{"OPEN", PRStateOpen},
+		{"CLOSED", PRStateClosed},
+		{"MERGED", PRStateMerged},
+		// Case / whitespace tolerance.
+		{"open", PRStateOpen},
+		{" Merged\n", PRStateMerged},
+		// Unknown / future / empty → unknown, never a known state.
+		{"DRAFT", PRStateUnknown},
+		{"", PRStateUnknown},
+		{"LOCKED", PRStateUnknown},
+	}
+	for _, tc := range cases {
+		if got := normalisePRState(tc.in); got != tc.want {
+			t.Errorf("normalisePRState(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 // --- helper ---
 
 func contains(args []string, want string) bool {
