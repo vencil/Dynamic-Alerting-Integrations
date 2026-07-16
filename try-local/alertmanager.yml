@@ -4,9 +4,10 @@
 # :9093) but nothing is sent outbound. The demo's value is SEEING the firing
 # state, not delivering a notification.
 #
-# The inhibit_rules mirror the platform's operational design: the sentinel
-# alerts emitted by rule-pack-operational (severity=none) suppress
-# notifications for the matching real alerts — Silent Mode + Severity Dedup.
+# The inhibit_rules mirror the platform's operational design: Silent Mode uses
+# the sentinel alerts emitted by rule-pack-operational (severity=none) as
+# inhibit sources; Severity Dedup uses a direct critical→warning rule (same
+# shape as the k8s config, minus the per-tenant generation).
 route:
   receiver: 'null'
   group_by: ['tenant', 'alertname']
@@ -27,8 +28,17 @@ inhibit_rules:
   - source_matchers: ['alertname = "TenantSilentCritical"']
     target_matchers: ['severity = "critical"']
     equal: ['tenant']
-  # Severity Dedup: when dedup is enabled and a critical fires, suppress the
-  # paired warning notification for the same tenant + metric_group.
-  - source_matchers: ['alertname = "TenantSeverityDedupEnabled"']
-    target_matchers: ['severity = "warning"']
+  # Severity Dedup: when a critical fires, suppress the paired warning for the
+  # same tenant + metric_group. Direct critical→warning inhibit, same shape as
+  # the k8s config — NOT the TenantSeverityDedupEnabled sentinel: the sentinel
+  # carries no metric_group label, so equal:['tenant','metric_group'] never
+  # matches a warning that has one, and (since AM treats a label missing from
+  # BOTH sides as equal) would wrongly suppress warnings that lack metric_group
+  # (e.g. TenantConfigEvent). The metric_group=~".+" gate on both sides keeps
+  # metric_group-less alerts out of this rule entirely. The k8s config gets
+  # per-tenant opt-out via generated rules; try-local is a static demo config
+  # and its demo tenants (cache-demo / db-demo) keep the default
+  # _severity_dedup: enable, so the sentinel gating is not needed here.
+  - source_matchers: ['severity = "critical"', 'metric_group =~ ".+"']
+    target_matchers: ['severity = "warning"', 'metric_group =~ ".+"']
     equal: ['tenant', 'metric_group']
