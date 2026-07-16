@@ -1,0 +1,79 @@
+# Recipe: slo_burn_rate — platform-authored (ADR-031, #1092).
+# Human governance contract for the `slo_burn_rate` recipe. The executable form is
+# scripts/tools/dx/custom_alerts/recipes.py::_slo_burn_records/_slo_core_record.
+recipe: slo_burn_rate
+status: active   # lifecycle: active|deprecated|eol (ADR-024 #6; SSOT = shape.py RECIPE_STATUS)
+summary: Multi-window SLO error-budget burn-rate alerting (SRE Workbook ch.5) from one declaration — fast burn pages, slow burn tickets.
+summary_zh: 一條宣告展開多窗 SLO 錯誤預算 burn-rate 告警（SRE Workbook ch.5）——fast 檔叫人、slow 檔開單。
+params:
+  metric:             {required: true,  desc: "BAD-events counter (e.g. http_requests_errors_total). v1 = availability/error-ratio SLI only (latency-quantile / freshness are deferred-with-trigger, ADR-031)"}
+  denominator_metric: {required: true,  desc: "TOTAL-events counter (e.g. http_requests_total). selectors apply to BOTH numerator and denominator — this is exactly why latency-`le` SLIs cannot be expressed in v1"}
+  objective:  {required: true,  desc: "SLO target percentage, STRING, OPEN interval (0,100) — e.g. \"99.9\". =100 (budget 0 → always fires) and =0 are rejected. \"disable\" = tri-state opt-out (declaration keeps compiling; the exporter never emits its user_threshold series). NOT a shape component: editing it never re-slugs"}
+  slo_period: {required: false, default: "30d", enum: ["28d", "30d"], desc: "error-budget window. Only scales the exporter-derived multipliers (30d→14.4/6, 28d→13.44/5.6) — NOT a shape component: switching the period never re-slugs and never forks the rule (the value rides the data plane)"}
+  min_events: {required: false, default: 10, desc: "positive integer; fast-window (5m) bad-event absolute floor (low-traffic guard). The slow tier's floor is compiler-derived = min_events×6 (30m = 5m×6). IS a shape component (literal in the rule text; `minev{N}` in the slug) — see the override cost note below"}
+  selectors:    {required: false, desc: "exact label filters (=), applied to numerator AND denominator"}
+  selectors_re: {required: false, desc: "regex label filters (=~), applied to numerator AND denominator"}
+  mode:       {required: false, default: page, enum: [page, silent]}
+  for:        {required: false, default: "1m", desc: "pending duration before firing; one of 0s/1m/5m/15m/30m/1h (enum-bounded, TRK-326)"}
+emitted_shape: |
+  # recording (6 metric-side + the standard threshold record; NO maintenance
+  # suppression here — measurement is never suppressed, budget burn stays fully
+  # recorded in TSDB through a maintenance window):
+  custom:metric:<id>:<win> = sum by(tenant)(rate(<bad><sel>[<win>]))
+                             / (sum by(tenant)(rate(<total><sel>[<win>])) > 0)
+                             # <win> ∈ 1h / 5m / 6h / 30m (fixed recipe semantics)
+  custom:bad:<id>:<win>    = sum by(tenant)(increase(<bad><sel>[<win>]))   # 5m / 30m
+  # per-severity cores (multi-window AND; threshold join = the EXISTING
+  # version exact-or-fallback + group_left(name, mode) idiom; maintenance
+  # `unless` tail on the ALERT promise only):
+  custom:<id>:critical:core =  (ratio:1h > thr_crit) and on(tenant)
+                               (ratio:5m > thr_crit) and on(tenant)
+                               (bad:5m  > <min_events>)          # fast burn
+  custom:<id>:warning:core  =  (ratio:6h > thr_warn) and on(tenant)
+                               (ratio:30m > thr_warn) and on(tenant)
+                               (bad:30m > <min_events>*6)        # slow burn
+  # thr_crit / thr_warn = the EXISTING user_threshold{severity} series: the Go
+  # exporter resolves M×(1−objective/100) at resolve time (M from slo_period:
+  # 30d→14.4 fast / 6 slow; 28d→13.44 / 5.6) — the rule text carries ZERO new
+  # expression classes. Alerts add two labels on top of the custom family:
+  #   metric_group: "slo_{name}"  → Severity Dedup inhibit works (critical
+  #        suppresses warning when fast+slow fire together — major-incident
+  #        normality) with zero new inhibit rules.
+  #   slo_burn: "true"            → infra-outage sentinel inhibit pattern can
+  #        target every SLO alert at once (notification fan-out guard).
+  #
+  # ⚠️ DELIBERATE DEPARTURE — severity is fixed by the recipe (fast→critical,
+  # slow→warning), NOT by a threshold value:severity tail. One declaration
+  # always expands to BOTH severities; `threshold` is rejected. (Also departs
+  # from the Workbook, where the 6× tier is still a page: demoting slow burn to
+  # warning/ticket is an on-ramp simplification — 6× ≈ a 30d budget gone in 5
+  # days, "handle today, don't wake anyone". A four-tier full spectrum is a
+  # deferred `tiers:` param, ADR-031.)
+  #
+  # ⚠️ CAP + OVERRIDE COST — one declaration counts 2 toward the own-recipe cap
+  # (it IS two alert rules: distinct (tenant, recipe_id, severity)). The
+  # recommended mode is domain-inherited (domain declares the recipe, tenants
+  # inherit → uncapped, vectorized, single shape). A tenant OVERRIDING an
+  # inherited default's min_events (or any shape param) is an OWN declaration:
+  # it spends 2 of the tenant's cap AND forks the shape (+~12 rules). There is
+  # no free override — expected to be rare; budget for it consciously.
+  #
+  # ⚠️ LOW-TRAFFIC BOUNDARY — with the default min_events=10 the fast tier
+  # needs >10 bad events in 5m and the slow tier >60 in 30m: the ×6 floor over
+  # a ×6 window is the SAME >2 bad-events/min rate, so a service SUSTAINED
+  # below ~2 req/min can NEVER trip EITHER tier even at 100% errors (2 req/min
+  # × 5m = 10, not >10; × 30m = 60, not >60). That is the guard working as
+  # designed (a 50% ratio on 2 requests must not page) — but be honest about
+  # what the slow tier adds: NOT sustained-low-traffic coverage; it covers
+  # BURSTY / INTERMITTENT failure shapes, where the 30m aggregate smooths the
+  # 5m gaps that keep resetting the fast gate. For genuinely tiny services,
+  # consciously lower min_events (best set once at the DOMAIN level so the
+  # shape stays single) — or accept that sustained low traffic is uncovered.
+example:
+  recipe: slo_burn_rate
+  name: checkout_availability
+  metric: checkout_requests_errors_total
+  denominator_metric: checkout_requests_total
+  objective: "99.9"
+  # slo_period: 30d   (default; switching to 28d never re-slugs)
+  # min_events: 10    (default; materialised into the slug as minev10)

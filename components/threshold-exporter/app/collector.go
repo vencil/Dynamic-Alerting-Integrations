@@ -70,6 +70,7 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 	// irrelevant (Prometheus sorts on Gather) but kept stable for diff clarity.
 	c.collectThresholds(ch, resolved)
 	c.collectCustomAlertErrors(ch, stats.PerTenantCustomAlertErrors)
+	c.collectSloObjectives(ch, stats.SloObjectives)
 	c.collectStateFilters(ch, cfg)
 	c.collectSilentModes(ch, cfg)
 	c.collectMaintenanceExpiries(ch, cfg)
@@ -150,6 +151,30 @@ func (c *ThresholdCollector) collectCustomAlertErrors(ch chan<- prometheus.Metri
 		m, err := prometheus.NewConstMetric(caErrDesc, prometheus.GaugeValue, float64(n), tenant)
 		if err != nil {
 			log.Printf("WARN: failed to create da_custom_alert_parse_errors metric for tenant=%s: %v", tenant, err)
+			continue
+		}
+		ch <- m
+	}
+}
+
+// collectSloObjectives emits user_slo_objective (ADR-031): the raw SLO target
+// percentage a tenant declared on each slo_burn_rate custom alert. The derived
+// per-severity burn thresholds ride user_threshold{component="custom"}; this
+// gauge echoes the tenant's INPUT so dashboards/rules can display or join the
+// objective without reverse-engineering it from the multipliers. ConstMetric per
+// scrape (like the user_* family) so a removed/disabled declaration simply stops
+// emitting — objective:"disable" produces no series by construction.
+func (c *ThresholdCollector) collectSloObjectives(ch chan<- prometheus.Metric, objectives []ResolvedSloObjective) {
+	sloDesc := prometheus.NewDesc(
+		"user_slo_objective",
+		"Tenant-declared SLO objective percentage for a slo_burn_rate custom alert (ADR-031). One series per active declaration; objective:\"disable\" emits none.",
+		[]string{"tenant", "recipe_id"},
+		nil,
+	)
+	for _, o := range objectives {
+		m, err := prometheus.NewConstMetric(sloDesc, prometheus.GaugeValue, o.Objective, o.Tenant, o.RecipeID)
+		if err != nil {
+			log.Printf("WARN: failed to create user_slo_objective metric for tenant=%s recipe_id=%s: %v", o.Tenant, o.RecipeID, err)
 			continue
 		}
 		ch <- m

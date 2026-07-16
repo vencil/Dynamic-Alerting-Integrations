@@ -82,3 +82,72 @@ func TestCollector_CustomAlerts_EmitAndParseErrorGauge(t *testing.T) {
 		t.Errorf("da_custom_alert_parse_errors{good-t} = %v (present=%v), want 0 (must emit 0, not omit)", v, ok)
 	}
 }
+
+// TestCollector_SloObjectiveGauge proves the ADR-031 user_slo_objective gauge
+// end-to-end at the collector level: an active slo_burn_rate declaration emits
+// exactly one user_slo_objective{tenant, recipe_id} series carrying the RAW
+// objective percentage (while its derived burn thresholds ride user_threshold
+// as the critical+warning fan-out), and objective:"disable" emits NO series.
+func TestCollector_SloObjectiveGauge(t *testing.T) {
+	cfg := &ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{
+			"slo-t": {"_custom_alerts": {Default: "- {recipe: slo_burn_rate, name: avail, metric: err_total, denominator_metric: req_total, objective: \"99.9\"}\n"}},
+			"off-t": {"_custom_alerts": {Default: "- {recipe: slo_burn_rate, name: avail, metric: err_total, denominator_metric: req_total, objective: \"disable\"}\n"}},
+		},
+	}
+	manager := newTestManager(cfg)
+	fresh, reg := freshMetrics(t)
+	manager.SetMetrics(fresh)
+
+	collector := NewThresholdCollector(manager)
+	reg.MustRegister(collector)
+
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+
+	wantRID := "slo_burn_rate__err_total__gt__den_req_total__minev10__for1m"
+	sloSeries := 0
+	thresholdRows := map[string]int{}
+	for _, mf := range mfs {
+		switch mf.GetName() {
+		case "user_slo_objective":
+			for _, m := range mf.GetMetric() {
+				sloSeries++
+				lbl := map[string]string{}
+				for _, lp := range m.GetLabel() {
+					lbl[lp.GetName()] = lp.GetValue()
+				}
+				if len(lbl) != 2 || lbl["tenant"] != "slo-t" || lbl["recipe_id"] != wantRID {
+					t.Errorf("user_slo_objective labels = %v, want exactly {tenant=slo-t, recipe_id=%s}", lbl, wantRID)
+				}
+				if v := m.GetGauge().GetValue(); v != 99.9 {
+					t.Errorf("user_slo_objective value = %v, want 99.9 (the RAW objective, not a derived threshold)", v)
+				}
+			}
+		case "user_threshold":
+			for _, m := range mf.GetMetric() {
+				lbl := map[string]string{}
+				for _, lp := range m.GetLabel() {
+					lbl[lp.GetName()] = lp.GetValue()
+				}
+				if lbl["component"] == "custom" {
+					thresholdRows[lbl["tenant"]+"|"+lbl["severity"]]++
+				}
+			}
+		}
+	}
+	if sloSeries != 1 {
+		t.Errorf("user_slo_objective series count = %d, want 1 (disable must emit none)", sloSeries)
+	}
+	// the fan-out companion rows: slo-t has critical+warning, off-t none
+	if thresholdRows["slo-t|critical"] != 1 || thresholdRows["slo-t|warning"] != 1 {
+		t.Errorf("slo-t user_threshold fan-out = %v, want 1 critical + 1 warning", thresholdRows)
+	}
+	for k := range thresholdRows {
+		if len(k) >= 5 && k[:5] == "off-t" {
+			t.Errorf("disabled slo declaration must emit no user_threshold rows, got %v", thresholdRows)
+		}
+	}
+}

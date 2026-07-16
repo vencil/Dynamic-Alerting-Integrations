@@ -1,0 +1,239 @@
+# promtool unit test — Custom Alerts (ADR-031), SLO_BURN_RATE recipe.
+# Driven by tests/dx/test_custom_alerts_promtool.py (compiles example → temp pack).
+#
+# The shop.yaml example declares objective "99.9" (min_events default 10). The
+# exporter resolves the per-severity thresholds at resolve time and feeds them
+# through the EXISTING user_threshold{severity} channel — here we feed the
+# resolved values directly: 30d period → fast thr = 14.4×(1−0.999) = 0.0144
+# (critical), slow thr = 6×(1−0.999) = 0.006 (warning).
+#
+# Proves: (1) a sustained 2% error ratio fires BOTH tiers (fast critical +
+# slow warning — major-incident normality; the metric_group label makes the
+# existing Severity Dedup inhibit suppress the warning notification);
+# (2) LOW TRAFFIC: a 50% error ratio on ~2 req/5m does NOT fire — bad:5m = 1
+# is not > min_events(10), the guard the whole tier exists for (and bad:30m =
+# 6 is not > 60, so slow stays quiet too); (3) a sustained 1% ratio fires the
+# SLOW tier only (0.006 < 0.01 < 0.0144).
+rule_files:
+  - rule-pack-custom-alerts.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── (1) sustained 2% error ratio → fast (critical) AND slow (warning) fire ──
+  - interval: 1m
+    input_series:
+      - series: 'checkout_requests_errors_total{tenant="shop-a", namespace="shop", pod="api-1"}'
+        values: '0+20x120'
+      - series: 'checkout_requests_total{tenant="shop-a", namespace="shop", pod="api-1"}'
+        values: '0+1000x120'
+      - series: 'user_threshold{component="custom", metric="checkout_requests_errors_total", recipe_id="slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m", tenant="shop-a", severity="critical", name="checkout_availability"}'
+        values: '0.0144x120'
+      - series: 'user_threshold{component="custom", metric="checkout_requests_errors_total", recipe_id="slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m", tenant="shop-a", severity="warning", name="checkout_availability"}'
+        values: '0.006x120'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x120'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: Custom_slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m
+        exp_alerts:
+          - exp_labels:
+              component: custom
+              severity: critical
+              tenant: shop-a
+              recipe: slo_burn_rate
+              name: checkout_availability
+              version: default
+              metric_group: slo_checkout_availability
+              slo_burn: "true"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+            exp_annotations:
+              summary: "CRITICAL Custom alert [checkout_availability] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [checkout_availability] 達臨界 觸發"
+              description: "slo_burn_rate on checkout_requests_errors_total: value 0.02 crossed the configured threshold"
+              description_zh: "checkout_requests_errors_total 的 slo_burn_rate: 值 0.02 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+          - exp_labels:
+              component: custom
+              severity: warning
+              tenant: shop-a
+              recipe: slo_burn_rate
+              name: checkout_availability
+              version: default
+              metric_group: slo_checkout_availability
+              slo_burn: "true"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+            exp_annotations:
+              summary: "Custom alert [checkout_availability] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [checkout_availability] 觸發"
+              description: "slo_burn_rate on checkout_requests_errors_total: value 0.02 crossed the configured threshold"
+              description_zh: "checkout_requests_errors_total 的 slo_burn_rate: 值 0.02 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+
+  # ── (2) LOW TRAFFIC no-fire: ~2 req / 1 error per 5m → ratio 0.5 blows FAR
+  # past both thresholds, but bad:5m = 1 is not > min_events(10) → fast gated;
+  # bad:30m = 6 is not > 60 → slow gated. exp_alerts MUST be empty — this is
+  # the false-positive guard the min_events tier exists for. The alertname is
+  # the REAL compiled one (same as the fire cases above), so this can never
+  # rot into an empty-vs-empty false green.
+  - interval: 1m
+    input_series:
+      - series: 'checkout_requests_errors_total{tenant="shop-a", namespace="shop", pod="api-1"}'
+        values: '0+0.2x90'
+      - series: 'checkout_requests_total{tenant="shop-a", namespace="shop", pod="api-1"}'
+        values: '0+0.4x90'
+      - series: 'user_threshold{component="custom", metric="checkout_requests_errors_total", recipe_id="slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m", tenant="shop-a", severity="critical", name="checkout_availability"}'
+        values: '0.0144x90'
+      - series: 'user_threshold{component="custom", metric="checkout_requests_errors_total", recipe_id="slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m", tenant="shop-a", severity="warning", name="checkout_availability"}'
+        values: '0.006x90'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: Custom_slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m
+        exp_alerts: []
+
+  # ── (4) RECOVERY ASYMMETRY: a 90m 2% burst, then errors STOP (requests
+  # continue). Mid-burst (80m) BOTH tiers fire (same as case 1). Ten minutes
+  # after the errors stop (100m) the FAST tier has already cleared — its 5m
+  # window is empty (ratio:5m = 0, bad:5m = 0 → the AND chain breaks even
+  # though ratio:1h at ~0.017 is still above thr_crit) — while the SLOW tier
+  # keeps burning: the 30m window still contains the burst tail (ratio:30m
+  # ≈ 0.013 > 0.006, bad:30m = 400 > 60) and ratio:6h = 1800/100000 = 0.018.
+  # This pins the multi-window design's recovery semantics: fast pages stop
+  # quickly once the bleeding stops; the slow ticket persists while the budget
+  # burn is still recent. NB the 100m description still reads "value 0.02":
+  # annotations are template-expanded when the alert ACTIVATES (goes pending,
+  # mid-burst core = 0.02) and are not re-rendered while it stays firing —
+  # the live core at 100m is 0.018 (verified via promql; the firing/clearing
+  # assertions, not the frozen annotation text, carry this case). ──
+  - interval: 1m
+    input_series:
+      - series: 'checkout_requests_errors_total{tenant="shop-a", namespace="shop", pod="api-1"}'
+        values: '0+20x90 1800+0x60'
+      - series: 'checkout_requests_total{tenant="shop-a", namespace="shop", pod="api-1"}'
+        values: '0+1000x150'
+      - series: 'user_threshold{component="custom", metric="checkout_requests_errors_total", recipe_id="slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m", tenant="shop-a", severity="critical", name="checkout_availability"}'
+        values: '0.0144x150'
+      - series: 'user_threshold{component="custom", metric="checkout_requests_errors_total", recipe_id="slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m", tenant="shop-a", severity="warning", name="checkout_availability"}'
+        values: '0.006x150'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x150'
+    alert_rule_test:
+      # mid-burst: both tiers firing (the case-1 major-incident normality)
+      - eval_time: 80m
+        alertname: Custom_slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m
+        exp_alerts:
+          - exp_labels:
+              component: custom
+              severity: critical
+              tenant: shop-a
+              recipe: slo_burn_rate
+              name: checkout_availability
+              version: default
+              metric_group: slo_checkout_availability
+              slo_burn: "true"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+            exp_annotations:
+              summary: "CRITICAL Custom alert [checkout_availability] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [checkout_availability] 達臨界 觸發"
+              description: "slo_burn_rate on checkout_requests_errors_total: value 0.02 crossed the configured threshold"
+              description_zh: "checkout_requests_errors_total 的 slo_burn_rate: 值 0.02 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+          - exp_labels:
+              component: custom
+              severity: warning
+              tenant: shop-a
+              recipe: slo_burn_rate
+              name: checkout_availability
+              version: default
+              metric_group: slo_checkout_availability
+              slo_burn: "true"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+            exp_annotations:
+              summary: "Custom alert [checkout_availability] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [checkout_availability] 觸發"
+              description: "slo_burn_rate on checkout_requests_errors_total: value 0.02 crossed the configured threshold"
+              description_zh: "checkout_requests_errors_total 的 slo_burn_rate: 值 0.02 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+      # 10m after the errors stop: fast (critical) has cleared, slow (warning)
+      # is still burning off the 30m/6h tail.
+      - eval_time: 100m
+        alertname: Custom_slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m
+        exp_alerts:
+          - exp_labels:
+              component: custom
+              severity: warning
+              tenant: shop-a
+              recipe: slo_burn_rate
+              name: checkout_availability
+              version: default
+              metric_group: slo_checkout_availability
+              slo_burn: "true"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+            exp_annotations:
+              summary: "Custom alert [checkout_availability] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [checkout_availability] 觸發"
+              description: "slo_burn_rate on checkout_requests_errors_total: value 0.02 crossed the configured threshold"
+              description_zh: "checkout_requests_errors_total 的 slo_burn_rate: 值 0.02 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+
+  # ── (3) sustained 1% error ratio → SLOW tier only (warning): 0.006 < 0.01 <
+  # 0.0144, and bad:30m = 300 > 60. The fast tier stays quiet (1h/5m ratio
+  # below its threshold) — the two-tier split working as designed. ──
+  - interval: 1m
+    input_series:
+      - series: 'checkout_requests_errors_total{tenant="shop-a", namespace="shop", pod="api-1"}'
+        values: '0+10x400'
+      - series: 'checkout_requests_total{tenant="shop-a", namespace="shop", pod="api-1"}'
+        values: '0+1000x400'
+      - series: 'user_threshold{component="custom", metric="checkout_requests_errors_total", recipe_id="slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m", tenant="shop-a", severity="critical", name="checkout_availability"}'
+        values: '0.0144x400'
+      - series: 'user_threshold{component="custom", metric="checkout_requests_errors_total", recipe_id="slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m", tenant="shop-a", severity="warning", name="checkout_availability"}'
+        values: '0.006x400'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x400'
+    alert_rule_test:
+      - eval_time: 390m
+        alertname: Custom_slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m
+        exp_alerts:
+          - exp_labels:
+              component: custom
+              severity: warning
+              tenant: shop-a
+              recipe: slo_burn_rate
+              name: checkout_availability
+              version: default
+              metric_group: slo_checkout_availability
+              slo_burn: "true"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+            exp_annotations:
+              summary: "Custom alert [checkout_availability] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [checkout_availability] 觸發"
+              description: "slo_burn_rate on checkout_requests_errors_total: value 0.01 crossed the configured threshold"
+              description_zh: "checkout_requests_errors_total 的 slo_burn_rate: 值 0.01 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold

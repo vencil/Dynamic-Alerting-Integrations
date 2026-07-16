@@ -923,12 +923,21 @@
       "type": "object",
       "title": "Custom Alert Recipe Instance",
       "description": "One parameterized custom alert. The compiler groups instances by shape signature (recipe, metric, op, window, quantile, denominator, selectors) and emits ONE vectorized rule per shape.",
-      "required": ["recipe", "name", "metric", "threshold"],
+      "required": ["recipe", "name", "metric"],
       "allOf": [
         {
+          "$comment": "Three-way recipe-shape branch (ADR-031 added slo_burn_rate). `threshold` moved from the instance-level required into the two non-slo branches: slo_burn_rate REPLACES it with `objective` (severity is fixed by the recipe: fast→critical, slow→warning) and FORBIDS a stray threshold; its burn windows are fixed recipe semantics so it requires no `window` either, and op is pinned to '>' (editor-guard, mirrored imperatively in shape.py/custom_alert.go).",
           "if": { "properties": { "recipe": { "const": "forecast" } }, "required": ["recipe"] },
-          "then": { "required": ["horizon"] },
-          "else": { "required": ["window"] }
+          "then": { "required": ["horizon", "threshold"] },
+          "else": {
+            "if": { "properties": { "recipe": { "const": "slo_burn_rate" } }, "required": ["recipe"] },
+            "then": {
+              "required": ["denominator_metric", "objective"],
+              "not": { "required": ["threshold"] },
+              "properties": { "op": { "const": ">" } }
+            },
+            "else": { "required": ["window", "threshold"] }
+          }
         },
         {
           "if": { "properties": { "op": { "const": "==" } }, "required": ["op"] },
@@ -939,8 +948,8 @@
         "recipe": {
           "type": "string",
           "title": "Recipe Type",
-          "description": "Which platform recipe to instantiate. forecast supplies `horizon` (not `window`); all others supply `window`.",
-          "enum": ["threshold", "rate", "ratio", "absence", "p99_latency", "forecast"]
+          "description": "Which platform recipe to instantiate. forecast supplies `horizon` (not `window`); slo_burn_rate supplies `objective` + `denominator_metric` (neither `window` nor `threshold` — its burn windows and severities are fixed recipe semantics, ADR-031); all others supply `window`.",
+          "enum": ["threshold", "rate", "ratio", "absence", "p99_latency", "forecast", "slo_burn_rate"]
         },
         "name": {
           "type": "string",
@@ -957,9 +966,31 @@
         },
         "denominator_metric": {
           "type": "string",
-          "title": "Denominator Metric (ratio recipe)",
-          "description": "Denominator counter for the ratio recipe.",
+          "title": "Denominator Metric (ratio / slo_burn_rate recipes)",
+          "description": "Denominator counter: the ratio recipe's denominator, or slo_burn_rate's TOTAL-events counter (`metric` is the BAD-events counter). Required for slo_burn_rate (ADR-031).",
           "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$"
+        },
+        "objective": {
+          "type": "string",
+          "title": "SLO Objective (slo_burn_rate recipe)",
+          "description": "SLO target percentage in the OPEN interval (0,100), e.g. \"99.9\" — =100 (error budget 0 → always fires) and =0 are rejected imperatively by the Python compiler + Go preflight (this pattern is the charset gate only). \"disable\" is the tri-state opt-out (the declaration keeps compiling; the exporter never emits its user_threshold series). STRING-ONLY, always quote it (the #1017 quantile lesson). NOT a shape component: it never enters recipe_id or the rule text — the exporter derives the per-severity burn thresholds (14.4×(1−obj) fast / 6×(1−obj) slow for a 30d period) at resolve time and feeds them through the existing user_threshold{severity} channel, so editing the objective never re-slugs (ADR-031).",
+          "pattern": "^([0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?|disable)$",
+          "examples": ["99.9", "99.5", "disable"]
+        },
+        "slo_period": {
+          "type": "string",
+          "title": "SLO Budget Period (slo_burn_rate recipe)",
+          "description": "Error-budget window the burn-rate multipliers are derived from (30d→14.4/6, 28d→13.44/5.6). NOT a shape component: it only scales the exporter-computed threshold VALUES — never enters recipe_id or the rule text, so changing it never re-slugs or forks the rule (ADR-031).",
+          "enum": ["28d", "30d"],
+          "default": "30d"
+        },
+        "min_events": {
+          "type": "integer",
+          "title": "Minimum Bad Events (slo_burn_rate recipe)",
+          "description": "Low-traffic false-positive guard (ADR-031): the fast (5m) window must contain MORE THAN this many bad events for the fast-burn alert to fire (the slow tier's floor is compiler-derived as ×6 for its 30m window). A shape component: the literal is written into the rule text and enters the recipe_id slug (`minev{N}`), so a tenant overriding a domain-inherited default forks the shape (+~12 rules) and spends 2 cap units — deliberate, documented in rule-packs/recipes/slo_burn_rate.yaml. NB with the default 10, a service SUSTAINED below ~2 req/min can never trip EITHER tier even at 100% errors — the slow floor (×6 over a ×6 window) is the same per-minute rate, so it does NOT cover sustained low traffic; what it adds is bursty/intermittent coverage (the 30m aggregate smooths 5m gaps). For genuinely tiny services, consciously lower min_events — best set once at the domain level so the shape stays single.",
+          "minimum": 1,
+          "maximum": 1000000,
+          "default": 10
         },
         "horizon": {
           "type": "string",

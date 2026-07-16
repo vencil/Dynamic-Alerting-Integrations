@@ -58,6 +58,18 @@ const FIELDS_BY_RECIPE = {
 
 const METRIC_FIELDS = ['metric', 'denominator_metric', 'capacity_metric'];
 
+/* A recipe in the schema enum but WITHOUT a FIELDS_BY_RECIPE entry (e.g.
+ * slo_burn_rate, ADR-031) has no form support yet. Rendering the generic
+ * name/threshold/window skeleton for it would be a dead end — threshold is
+ * REJECTED by that recipe and window is ignored, so `ready` could never go
+ * true (or worse, would emit an invalid recipe). Instead the builder disables
+ * the option for NEW alerts and shows a YAML-only callout (an existing
+ * declaration loaded via initialValue keeps its option selectable so the
+ * callout — not a wrong form — renders). */
+function formSupported(recipe) {
+  return Object.prototype.hasOwnProperty.call(FIELDS_BY_RECIPE, recipe);
+}
+
 const NAME_RE = new RegExp(ENUMS.patterns.name);
 const METRIC_RE = new RegExp(ENUMS.patterns.metric);
 const WINDOW_RE = new RegExp(ENUMS.patterns.window);
@@ -110,6 +122,7 @@ function isFieldValid(field, value) {
  * False until every required field is present and structurally valid, so
  * the plain-English summary never renders [undefined] (review Reef 4). */
 function allRequiredValid(recipe, f) {
+  if (!formSupported(recipe)) return false; // YAML-only recipe: never "ready"
   const required = requiredFields(recipe);
   // Required fields: must be present AND valid.
   for (const field of required) {
@@ -552,6 +565,9 @@ export default function RecipeBuilder(props) {
   // alert can never pick an eol recipe.
   const status = recipeStatus(recipe);
   const existingRecipe = initialValue ? initialValue.recipe : null;
+  // YAML-only recipe (no FIELDS_BY_RECIPE entry, e.g. slo_burn_rate): render
+  // the callout instead of a wrong required-field skeleton.
+  const supported = formSupported(recipe);
 
   const inputClass =
     'w-full px-3 py-2 text-sm border border-[color:var(--da-color-surface-border)] rounded-md '
@@ -619,11 +635,23 @@ export default function RecipeBuilder(props) {
             const st = recipeStatus(r);
             // An eol recipe can't be picked for a NEW alert; an existing instance
             // already on it keeps it selectable so its params stay editable (B2-wide).
-            const disabled = st === 'eol' && r !== existingRecipe;
-            const tag = st === 'deprecated' ? ' (deprecated)' : st === 'eol' ? ' (EOL — retired)' : '';
+            // Same rule for a recipe without form support (YAML-only): picking it
+            // fresh would be a dead-end form, but an existing declaration must stay
+            // selectable so the YAML-only callout (not a wrong form) renders.
+            const noForm = !formSupported(r);
+            const disabled = (st === 'eol' || noForm) && r !== existingRecipe;
+            const tag = st === 'deprecated' ? ' (deprecated)'
+              : st === 'eol' ? ' (EOL — retired)'
+                : noForm ? t('（暫僅支援 YAML 宣告）', ' (YAML-only for now)') : '';
             return <option key={r} value={r} disabled={disabled}>{r}{tag}</option>;
           })}
         </select>
+        {!supported && (
+          <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-info)] bg-[color:var(--da-color-info-soft)] text-[color:var(--da-color-muted)]" data-testid="recipe-form-unsupported">
+            {t('此 recipe 的表單精靈 Phase 1 支援中——請以 YAML 宣告（範例見 rule-packs/recipes/ 下的 recipe 文件）。',
+               'The form wizard for this recipe is coming in Phase 1 — declare it in YAML for now (examples in the recipe docs under rule-packs/recipes/).')}
+          </p>
+        )}
         {status === 'deprecated' && (
           <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-warning)] text-[color:var(--da-color-warning-text)]" data-testid="recipe-deprecated">
             {t('此 recipe 已標記 deprecated（已棄用），仍可使用，建議盡早改用支援中的 recipe。',
@@ -638,47 +666,54 @@ export default function RecipeBuilder(props) {
         )}
       </div>
 
-      <div className="mb-3">
-        <label className={labelClass}>{t('告警名稱', 'Alert name')} *</label>
-        <input className={inputClass} value={f.name} aria-label="name" data-testid="field-name"
-          onChange={(e) => set('name', e.target.value)} placeholder="queue_depth_high" />
-        {f.name && !isValidName(f.name) && (
-          <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-error)] text-[color:var(--da-color-error-text)]">
-            {t('名稱須符合 ^[a-z][a-z0-9_]*$', 'name must match ^[a-z][a-z0-9_]*$')}
-          </p>
-        )}
-      </div>
+      {/* YAML-only recipe: the callout above is the whole story — rendering the
+          generic name/threshold/window skeleton would be a dead-end form
+          (threshold is rejected by e.g. slo_burn_rate, window is ignored). */}
+      {supported && (
+        <>
+          <div className="mb-3">
+            <label className={labelClass}>{t('告警名稱', 'Alert name')} *</label>
+            <input className={inputClass} value={f.name} aria-label="name" data-testid="field-name"
+              onChange={(e) => set('name', e.target.value)} placeholder="queue_depth_high" />
+            {f.name && !isValidName(f.name) && (
+              <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-error)] text-[color:var(--da-color-error-text)]">
+                {t('名稱須符合 ^[a-z][a-z0-9_]*$', 'name must match ^[a-z][a-z0-9_]*$')}
+              </p>
+            )}
+          </div>
 
-      {fields.map((field) => renderField(field))}
+          {fields.map((field) => renderField(field))}
 
-      {/* plain-English summary state machine */}
-      <div className="my-4 p-3 rounded-md bg-[color:var(--da-color-accent-soft)]" data-testid="summary">
-        {summary
-          ? <span className="text-sm text-[color:var(--da-color-fg)]">{summary}</span>
-          : <span className="text-sm text-[color:var(--da-color-muted)]">
-              {t('等待填寫必填參數以生成規則摘要…', 'Waiting for required fields to generate the rule summary...')}
-            </span>}
-      </div>
+          {/* plain-English summary state machine */}
+          <div className="my-4 p-3 rounded-md bg-[color:var(--da-color-accent-soft)]" data-testid="summary">
+            {summary
+              ? <span className="text-sm text-[color:var(--da-color-fg)]">{summary}</span>
+              : <span className="text-sm text-[color:var(--da-color-muted)]">
+                  {t('等待填寫必填參數以生成規則摘要…', 'Waiting for required fields to generate the rule summary...')}
+                </span>}
+          </div>
 
-      {/* would-fire preview (#657): "will this fire?" answered in the same form */}
-      <WouldFirePanel recipeObj={recipeObj} tenantId={tenantId}
-        previewFetch={previewFetch} inputClass={inputClass} />
+          {/* would-fire preview (#657): "will this fire?" answered in the same form */}
+          <WouldFirePanel recipeObj={recipeObj} tenantId={tenantId}
+            previewFetch={previewFetch} inputClass={inputClass} />
 
-      {/* exit: onSubmit (tenant-manager) or YAML snippet (GitOps persona) */}
-      {onSubmit ? (
-        <button type="button" className="px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50"
-          data-testid="submit" disabled={!ready}
-          onClick={() => recipeObj && onSubmit(recipeObj, initialValue ? initialValue.name : undefined)}>
-          {initialValue ? t('更新此 recipe', 'Update this recipe') : t('加入此 recipe', 'Add this recipe')}
-        </button>
-      ) : (
-        <div data-testid="yaml-output">
-          <label className={labelClass}>{t('複製進你的 conf.d 租戶檔', 'Copy into your conf.d tenant file')}</label>
-          <pre className="text-xs p-3 rounded-md overflow-x-auto bg-[color:var(--da-color-surface)] border border-[color:var(--da-color-surface-border)]">
-            {ready ? yamlSnippet(tenantId, recipeObj)
-              : t('填妥必填參數後在此產生 YAML。', 'Fill the required fields to generate the YAML here.')}
-          </pre>
-        </div>
+          {/* exit: onSubmit (tenant-manager) or YAML snippet (GitOps persona) */}
+          {onSubmit ? (
+            <button type="button" className="px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50"
+              data-testid="submit" disabled={!ready}
+              onClick={() => recipeObj && onSubmit(recipeObj, initialValue ? initialValue.name : undefined)}>
+              {initialValue ? t('更新此 recipe', 'Update this recipe') : t('加入此 recipe', 'Add this recipe')}
+            </button>
+          ) : (
+            <div data-testid="yaml-output">
+              <label className={labelClass}>{t('複製進你的 conf.d 租戶檔', 'Copy into your conf.d tenant file')}</label>
+              <pre className="text-xs p-3 rounded-md overflow-x-auto bg-[color:var(--da-color-surface)] border border-[color:var(--da-color-surface-border)]">
+                {ready ? yamlSnippet(tenantId, recipeObj)
+                  : t('填妥必填參數後在此產生 YAML。', 'Fill the required fields to generate the YAML here.')}
+              </pre>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

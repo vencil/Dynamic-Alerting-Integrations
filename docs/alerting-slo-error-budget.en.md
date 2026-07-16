@@ -128,7 +128,7 @@ This document is generic guidance; the platform-side mapping reuses the series' 
 | Guideline | This platform | Mechanism and honest qualifier |
 |---|---|---|
 | SLI ratio declaration (zero PromQL for tenants) | ⚙️ | The `ratio` recipe in custom alerts — declare the numerator/denominator counters and it compiles into a ratio alert with a division-by-zero guard; **single window only** |
-| Multi-window burn-rate alerting | 📖 | The generic recipe in §4 of this document; multi-window AND and multiplier conversion currently must be assembled downstream yourself |
+| Multi-window burn-rate alerting | ⚙️ | The `slo_burn_rate` recipe in custom alerts ([ADR-031](adr/031-slo-burn-rate-recipe.md)) — declare an `objective` and it compiles into this document's §4 recipe: fast/slow two-tier multi-window AND alerts (multipliers derived from `slo_period`, with a low-traffic `min_events` floor); latency/freshness SLIs are not yet supported |
 | Threshold science (data-driven starting points) | ⚙️ | [`da-tools threshold-recommend`](cli-reference.en.md#threshold-recommend) — recommendation engine based on historical P50/P95/P99; works on resource-class pack thresholds — the starting point for an SLO objective still comes from querying your historical SLI (§2) |
 | Historical SLI performance queries (the scientific starting point for SLOs) | 📖 | Any Prometheus-compatible backend's range query will do; the platform does nothing special here |
 | Error-budget policy (freeze/release) | 📖 | An organizational decision — a tool can give you the balance, not the authority |
