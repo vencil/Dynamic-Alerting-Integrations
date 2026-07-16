@@ -72,6 +72,16 @@ type Deps struct {
 	// Open-mode (no _rbac.yaml) returns "allow all" from Allowed.
 	RBAC *rbac.Manager
 
+	// ClaimHeaders is the claimKey→headerName declaration parsed from
+	// --identity-claim-headers (rbac.ParseClaimHeaders), the SAME map the
+	// RBAC manager was constructed with (ADR-027 / LD-6 P7). Handlers that
+	// validate a candidate _rbac.yaml (rbac.ParseCandidateConfig) need it so
+	// the candidate is checked against the identity axes this deployment
+	// actually runs. nil — no claim axes declared — is a valid value and
+	// needs no accessor fallback: parse validation treats a nil declaration
+	// as "no claim keys are declared", exactly the live loader's behavior.
+	ClaimHeaders map[string]string
+
 	// TenantOrg maps tenants to their organizations (_tenant_orgs.yaml,
 	// ADR-027 / LD-6 P4). Read on BOTH scope planes: by the list/search RBAC
 	// filter to feed the org-scope axis of ScopeAllowed (P4a), and by

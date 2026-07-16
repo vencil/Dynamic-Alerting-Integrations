@@ -44,6 +44,8 @@ name: Bench Gate (PR-time, Tier 1)
 #     invisible source of false regressions into an explicit INCONCLUSIVE verdict.
 #   - Wall-time stays ~20-25 min (same total benchtime as v5's count=6; the
 #     extra cost is process starts + tiny canaries, offset by pre-compiling once).
+#     (2026-07 stage C slimming: BENCHTIME 3s→1s later cut nominal wall to
+#     ~8-10 min — see the Run step and the timeout-minutes budget note.)
 #
 # Governance (Phase 2 — INFORMATIONAL):
 #   - The gate no longer blocks merge. A real regression posts a PR comment and
@@ -68,7 +70,8 @@ name: Bench Gate (PR-time, Tier 1)
 #   - Metric scope (#608): `-filter` restricts detection to deterministic
 #     per-op metrics (sec/op, B/op, allocs/op). Non-deterministic process-
 #     level custom metrics (MB-sys, MB-heap-after-gc) are GC high-water
-#     noise that false-RED real Go PRs — excluded. See the Compare step.
+#     noise that false-RED real Go PRs — excluded. See bench_gate_compare.sh
+#     (the verdict logic moved there in the stage-B shared-core extraction).
 #   - INCONCLUSIVE (v6): the CPU control canary (BenchmarkControlCanaryCPU)
 #     runs identical work on both sides; a ≥4% significant base-vs-pr delta on
 #     it means the runner drifted this run → judged INCONCLUSIVE (re-run, NOT a
@@ -79,6 +82,29 @@ name: Bench Gate (PR-time, Tier 1)
 # See: issue #433, issue #67 (closed/superseded), bench-record.yaml (nightly),
 #      memory feedback `feedback_github_actions_workflow_gotchas.md`
 #      (Traps 7-12 codify the SRE defenses learned across v1-v5).
+#
+# ── Two-stage trigger rollout (C→B, 2026-07) ─────────────────────────────────
+# Stage C (now, this file): the PR-time auto-run STAYS but is slimmed —
+#   BENCHTIME 3s→1s (main loop ~12min→~4min) and the `rule-packs/**` path
+#   filter is removed (structurally zero-signal for recipe-only PRs; see the
+#   paths comment below).
+# Stage B (bench-attrib-main.yaml): the SAME interleaved harness runs
+#   post-merge on main (HEAD vs HEAD^; squash-merge policy ⇒ 1 commit = 1 PR,
+#   so attribution stays exact) and auto-files a `perf-regression` issue naming
+#   the offending commit.
+# FLIP (owner decision AFTER B has soaked 2-4 weeks — deliberately NOT in the
+#   commit that introduced B, to stage risk): once bench-attrib-main has proven
+#   itself, PRs stop auto-running the bench — delete this workflow's
+#   `pull_request` trigger block below. On-demand PR benching then lives in
+#   bench-on-demand.yaml (`/bench` comment, OWNER/MEMBER only), which already
+#   carries the full harness, so the flip is a one-block deletion here.
+# SOAK CHECKLIST (what "proven itself" means, before the flip):
+#   - attrib runs green on real merges; issue open/dedupe/auto-close behaves.
+#   - INCONCLUSIVE rate at 1s comparable to the historical 3s rate.
+#   - Noise floor at 1s: compare the benchstat "± N%" widths of 1s runs
+#     against historical 3s runs — if ± is commonly >5%, the 5% magnitude
+#     floor is effectively undetectable (noise ≥ signal) and BENCHTIME must
+#     go back up (external-review soak item).
 
 on:
   pull_request:
@@ -91,7 +117,7 @@ on:
       # whole app dir fired the gate on PRs with no benchmarkable Go delta —
       # e.g. a `.dockerignore` change (#597) or a `*_test.go` deflake (#532),
       # both pure noise that a maintainer had to override. Limit to non-test
-      # Go + module files, keeping rule-packs and this workflow's own edits.
+      # Go + module files, keeping this workflow's own edits.
       # ORDER-SENSITIVE: GitHub Actions includes a path when a positive
       # pattern matches AND no *later* `!` pattern excludes it, so the
       # `*_test.go` exclusion must follow the `**/*.go` include. `**/*.go`
@@ -102,7 +128,21 @@ on:
       - '!components/threshold-exporter/app/**/*_test.go'
       - 'components/threshold-exporter/app/go.mod'
       - 'components/threshold-exporter/app/go.sum'
-      - 'rule-packs/**'
+      # 'rule-packs/**' REMOVED (2026-07 stage C, owner-verified): all 4 bench
+      # files (threshold-exporter app + pkg/config) reference ZERO rule-packs
+      # fixtures, so a recipe-only PR triggering a bench run was structurally
+      # zero-signal — nothing it changes sits on the measured path. If a future
+      # benchmark starts loading rule-packs fixtures, ADD THIS BACK:
+      #   - 'rule-packs/**'
+      # Harness scripts (stage B extraction): the verdict logic used to live
+      # inline in this yaml (covered by the self-path entry below); now that it
+      # lives in scripts/, edits to it must still re-exercise the gate. Keep
+      # this list in sync with bench-attrib-main.yaml's paths.
+      - 'scripts/tools/ops/bench_interleave.sh'
+      - 'scripts/tools/ops/bench_gate_compare.sh'
+      - 'scripts/tools/ops/bench_render_summary.sh'
+      - 'scripts/tools/ops/bench_report_pr.sh'
+      - 'scripts/tools/ops/bench-canary/**'
       - '.github/workflows/bench-gate-pr.yaml'
 
 concurrency:
@@ -128,10 +168,15 @@ jobs:
     steps:
       # CRITICAL: fetch-depth: 0 required for `git merge-base`. See
       # comments on the bench-job checkout for the same gotcha.
+      # persist-credentials: false — this job only runs LOCAL git reads
+      # (merge-base over already-fetched history), so the token has no
+      # reason to live on in .git/config. See the bench-job checkout for
+      # the threat-model note.
       - name: Checkout with full history
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # CRITICAL: compute merge-base ourselves. Two distinct gotchas:
       #
@@ -179,19 +224,30 @@ jobs:
     name: Bench + Compare (single-runner interleaved + canary)
     needs: preflight
     runs-on: ubuntu-latest
-    # Budget: ~6 interleaved rounds × (base+pr full set @3s) + pre-compile once +
-    # tiny canaries + benchstat = ~20-25 min nominal. 40 min cap gives headroom for
-    # slow runners + Go module download flakes + Azure pool variance, AND
-    # leaves enough buffer for the step summary + fail-gate steps to actually
-    # render before a hard-kill. A tighter 30 min budget risks hard-killing
-    # mid-output, which leaves the dev with a red check and no diagnostic.
-    # [Gemini round-12 timeout-tightrope catch.]
-    timeout-minutes: 40
+    # Budget: ~6 interleaved rounds × (base+pr full set @1s) + pre-compile once +
+    # tiny canaries + benchstat = ~8-10 min nominal (was ~20-25 min @3s before
+    # the 2026-07 stage-C slimming; cap lowered 40→20 keeping the same ~2×
+    # headroom ratio). The cap must cover slow runners + Go module download
+    # flakes + Azure pool variance, AND leave enough buffer for the step
+    # summary + fail-gate steps to actually render before a hard-kill — a cap
+    # that hard-kills mid-output leaves the dev with a red check and no
+    # diagnostic. [Gemini round-12 timeout-tightrope catch.]
+    timeout-minutes: 20
     steps:
+      # persist-credentials: false (same hardening bench-on-demand.yaml
+      # carries): this job EXECUTES the PR's test binaries (a malicious
+      # TestMain is arbitrary code) and the bench worktrees share this
+      # checkout's .git — don't leave the job token sitting in .git/config
+      # for it to read. Residual risk was low anyway (fork PRs get a
+      # read-only token; same-repo PR authors already have write), but no
+      # later step needs persisted credentials: the compare step is pure
+      # local git (rev-parse/worktree over the full-history fetch) and the
+      # reporter step authenticates via its own explicit GH_TOKEN env.
       - name: Checkout repo (full history for both base + pr commits)
         uses: actions/checkout@v6
         with:
           fetch-depth: 0  # need history to walk to merge-base
+          persist-credentials: false
 
       - name: Set up Go 1.26
         uses: actions/setup-go@v6
@@ -215,236 +271,33 @@ jobs:
             ${{ runner.os }}-go-1.26-
             ${{ runner.os }}-go-
 
-      - name: Install benchstat (do early; cache the compiled binary)
-        run: |
-          # @latest acceptable: benchstat output format stable for ~2 years.
-          # Pin to a specific version if a future release ever breaks either
-          # the regression-detection grep/awk OR the `-filter` benchfilter
-          # unit syntax `.unit:(sec/op OR B/op OR allocs/op)` (#608) — the
-          # #611 shape-assertion in the Compare step fails loud and points
-          # here. golang.org/x/perf has NO semver tags (only pseudo-versions),
-          # so pin to the last known-good pseudo-version, e.g.:
-          #   go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260512194132-3cf34090a3db
-          go install golang.org/x/perf/cmd/benchstat@latest
-          benchstat -h 2>&1 | head -5 || true
-
-      # Stash the interleave runner AND the control-canary module OUTSIDE the
-      # checkout so both the base and pr sides use the SAME harness + SAME canary
-      # regardless of which commit's tree is being benched. A PR that modified
-      # either must not bench base with the old version and pr with the new one
-      # — that would be an unfair comparison. (The canary module is also
-      # version-independent by construction: its own go.mod, stdlib-only.)
-      - name: Stash bench harness + control canary (same version on both sides)
-        run: |
-          mkdir -p "$RUNNER_TEMP/bench-harness"
-          cp scripts/tools/ops/bench_interleave.sh "$RUNNER_TEMP/bench-harness/"
-          cp -r scripts/tools/ops/bench-canary "$RUNNER_TEMP/bench-harness/bench-canary"
-
-      # Two worktrees so base + pr are checked out SIMULTANEOUSLY — the
-      # interleave runner needs both trees alive at once to alternate between
-      # them. fetch-depth:0 (above) guarantees both SHAs are in history. Using
-      # worktrees instead of sequential `git checkout <sha>` also removes the
-      # old reset/clean-workspace dance: the main checkout is never mutated, so
-      # there is no dirty-tree-blocks-checkout failure mode.
-      - name: Create base + pr worktrees
+      # Interleaved bench + benchstat verdict, all in the shared core script
+      # (stage-B extraction — the exact logic that used to live inline here:
+      # install benchstat → stash harness/canary → base+pr worktrees →
+      # bench_interleave.sh → benchstat -alpha/-filter → #611 shape asserts →
+      # regression + canary-INCONCLUSIVE verdict). Shared verbatim with
+      # bench-attrib-main.yaml and bench-on-demand.yaml so the three
+      # consumers cannot drift; all design commentary moved into the script.
+      - name: Run interleaved bench + verdict (shared core)
+        id: compare
         # PR head SHA bound via env (#1021 class house rule); the merge-base
         # SHA is a needs.* output — derived context, a different class.
+        #
+        # ROUNDS=6 — do NOT lower. benchstat's Mann-Whitney U per-side sample
+        # count IS ROUNDS; two-sided min p = 2/C(2n,n): n=6 → ≈0.0022 < α=0.01
+        # ✓; n=4 → ≈0.029 ✗; n=2 → ≈0.33 ✗. ROUNDS<5 makes the α=0.01 gate
+        # MATHEMATICALLY unreachable — a permanently-green ornament. Tune
+        # BENCHTIME for wall-time instead (full note in the script header).
+        # BENCHTIME=1s (3s→1s, 2026-07 stage C): main loop ~12min→~4min.
         env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          git worktree add --detach "$RUNNER_TEMP/wt-base" ${{ needs.preflight.outputs.merge_base_sha }}
-          git worktree add --detach "$RUNNER_TEMP/wt-pr"   "$PR_HEAD_SHA"
-          echo "base worktree HEAD: $(git -C "$RUNNER_TEMP/wt-base" rev-parse HEAD)"
-          echo "pr   worktree HEAD: $(git -C "$RUNNER_TEMP/wt-pr" rev-parse HEAD)"
+          BASE_SHA: ${{ needs.preflight.outputs.merge_base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ROUNDS: "6"
+          BENCHTIME: "1s"
+        run: bash scripts/tools/ops/bench_gate_compare.sh
 
-      # Interleaved base/pr benchmark (base,pr,base,pr,…) with PRE-COMPILED
-      # binaries and NO mid-loop drop_caches. This structurally removes the
-      # time-correlated-drift false-RED that was the root cause of #502/#608/
-      # #611/#695 (the v5 "run all base, then all pr" sequential topology biased
-      # the pr batch whenever the runner drifted mid-run). See the header of
-      # bench_interleave.sh for the full rationale. The Drop-OS-caches step that
-      # used to sit between base and pr is GONE on purpose — in an interleaved
-      # loop a single drop_caches would be asymmetric (base warm / pr cold) and
-      # would REINTRODUCE a pr-slower bias.
-      - name: Run interleaved base/pr benchmark
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/bench-out"
-          BASE_DIR="$RUNNER_TEMP/wt-base/components/threshold-exporter/app" \
-          PR_DIR="$RUNNER_TEMP/wt-pr/components/threshold-exporter/app" \
-          CANARY_DIR="$RUNNER_TEMP/bench-harness/bench-canary" \
-          BENCH_OUT_DIR="$RUNNER_TEMP/bench-out" \
-          ROUNDS=6 \
-          BENCH_RE='_1000(_|$)|MixedMode|Simulate_DeepChain' \
-          BENCHTIME=3s \
-            bash "$RUNNER_TEMP/bench-harness/bench_interleave.sh"
-
-      - name: Compare with benchstat
-        id: compare
-        # IMPORTANT — benchstat has TWO distinct flags that look similar
-        # but do entirely different things:
-        #
-        #   -alpha α       (default 0.05)  → significance threshold for
-        #                                    the +/-/~ markers per-bench
-        #   -confidence c  (default 0.95)  → width of the displayed
-        #                                    geomean ± confidence interval
-        #
-        # Previous versions used `-confidence=0.99` thinking it tightened
-        # regression flagging — IT DID NOT. Use `-alpha=0.01` to actually
-        # tighten significance. Plus a 5% magnitude floor (industry-standard
-        # dual-threshold) to filter sub-noise FPs. [PR #437 round-6 catch.]
-        #
-        # METRIC SCOPE — `-filter '.unit:(sec/op OR B/op OR allocs/op)'` [#608].
-        # The detector greps the WHOLE benchstat output for `+N% (p<α)` rows,
-        # so it must never see non-deterministic metrics. The bench emits
-        # process-level custom metrics via b.ReportMetric (MB-sys, MB-heap-
-        # after-gc, goroutines, affected-tenants). MB-sys / MB-heap-after-gc
-        # are runtime/GC high-water readings that drift randomly BETWEEN
-        # processes (sign-flips across runs of identical code) and pseudo-
-        # replicate within a -count run → they read as "significant" and
-        # false-RED real Go PRs (root cause of #502; corroborated by #459/
-        # #606 finding sys_bytes creep is GC pacing, not code). Restrict the
-        # gate to DETERMINISTIC per-op work only. benchstat normalizes the
-        # time unit ns/op → sec/op, so the allowlist is `sec/op B/op
-        # allocs/op`; the OR-separated value list is benchfilter syntax. This
-        # allowlist auto-excludes any present/future non-deterministic custom
-        # metric. The excluded metrics remain emitted + visible in the nightly
-        # bench-record artifact (informational), just not gated.
-        run: |
-          set -euo pipefail
-          benchstat -alpha=0.01 \
-            -filter '.unit:(sec/op OR B/op OR allocs/op)' \
-            "$RUNNER_TEMP/bench-out/bench-base.txt" \
-            "$RUNNER_TEMP/bench-out/bench-pr.txt" \
-            | tee "$RUNNER_TEMP/bench-out/benchstat.txt"
-
-          # Fail-loud shape assertion (#611): the detector below greps for
-          # `+N% (p=...)` rows AND relies on the `-filter` unit names. benchstat
-          # is `@latest`, reinstalled every run — a future release that renames
-          # a unit or changes the row format would make every grep miss →
-          # regression=false → a GREEN gate that silently masks ALL regressions.
-          # The `^cpu:` INCONCLUSIVE check can't catch this (cpu headers survive).
-          # Require the filtered comparison to have produced recognizable output:
-          # ≥1 metric-section header AND ≥1 per-bench result row, else fail loud.
-          if ! grep -Eq 'sec/op|B/op|allocs/op' "$RUNNER_TEMP/bench-out/benchstat.txt"; then
-            echo "::error::benchstat output shape changed — no metric-section header (sec/op / B/op / allocs/op) in the filtered comparison. The regression detector may be silently passing; pin benchstat to a known-good version (see the Install benchstat step)."
-            exit 1
-          fi
-          if ! grep -Eq '±[[:space:]]*[0-9]+%' "$RUNNER_TEMP/bench-out/benchstat.txt"; then
-            echo "::error::benchstat output shape changed — no per-bench result row (matching '± N%') in the filtered comparison. The regression detector may be silently passing; pin benchstat to a known-good version (see the Install benchstat step)."
-            exit 1
-          fi
-
-          # Two-tier regression detection (metric scope already applied above
-          # via benchstat -filter, so the grep only sees deterministic rows):
-          # (1) benchstat already filters by α=0.01 (only `+` rows are
-          #     statistically significant slowdowns).
-          # (2) We additionally require |Δ| ≥ MAGNITUDE_FLOOR_PCT to
-          #     filter out noise-floor false positives.
-          # POSIX awk for portability. `|| true` tolerates "no matches"
-          # (the happy path — zero regressions) so pipefail doesn't
-          # crash the script.
-          # `grep -v ControlCanary` excludes BOTH control canaries — they are
-          # environment probes, not product benchmarks, and are handled by the
-          # INCONCLUSIVE check below (not the regression check). Without this a
-          # drifting canary could itself be counted as a "regression".
-          MAGNITUDE_FLOOR_PCT=5.0
-          regressions=$(grep -E '[[:space:]]\+[0-9]+\.[0-9]+%[[:space:]]*\(p=' \
-                          "$RUNNER_TEMP/bench-out/benchstat.txt" \
-                        | grep -v geomean \
-                        | grep -v ControlCanary \
-                        | awk -v floor="$MAGNITUDE_FLOOR_PCT" '{
-                            if (match($0, /\+[0-9]+\.[0-9]+%/)) {
-                              num = substr($0, RSTART + 1, RLENGTH - 2) + 0
-                              if (num >= floor) print
-                            }
-                          }' || true)
-
-          # INCONCLUSIVE — control-canary drift detection.
-          # The CPU canary (BenchmarkControlCanaryCPU) runs byte-identical work
-          # on both sides, so a statistically-significant base-vs-pr delta on it
-          # means THIS run's runner was drifting (thermal / frequency / noisy
-          # neighbour) — the whole comparison is untrustworthy. That is the real
-          # INCONCLUSIVE signal (it replaces the old hetero-CPU check, which
-          # interleaving-on-one-runner makes structurally impossible). When the
-          # CPU canary drifts ≥ floor we judge INCONCLUSIVE (re-run), NOT a
-          # regression. The Sleep canary is INFORMATIONAL ONLY: its ~µs-scale
-          # scheduler jitter would flap the gate, so it is never gated on (only
-          # rendered in the summary). Sign-agnostic: a -N% canary drift (PR
-          # unfairly favoured) is just as disqualifying as +N%.
-          CPU_CANARY_FLOOR_PCT=4.0
-          # Fail-safe: the canary is stashed and run EVERY time, independent of
-          # the base/pr trees, so it must always appear. If it doesn't, the
-          # environment-stability check silently lost its teeth — treat the run
-          # as INCONCLUSIVE rather than gating on data we can't vouch for.
-          canary_missing=false
-          if ! grep -q 'ControlCanaryCPU' "$RUNNER_TEMP/bench-out/benchstat.txt"; then
-            canary_missing=true
-            echo "::warning::CPU control canary row absent from benchstat output — cannot verify runner stability this run."
-          fi
-          canary_drift=$(grep -E 'ControlCanaryCPU' "$RUNNER_TEMP/bench-out/benchstat.txt" \
-                         | grep -E '[-+][0-9]+\.[0-9]+%[[:space:]]*\(p=' \
-                         | awk -v floor="$CPU_CANARY_FLOOR_PCT" '{
-                             if (match($0, /[-+][0-9]+\.[0-9]+%/)) {
-                               pct = substr($0, RSTART, RLENGTH - 1) + 0
-                               if (pct < 0) pct = -pct
-                               if (pct >= floor) print
-                             }
-                           }' || true)
-
-          # Defense-in-depth: heterogeneous CPU headers should be impossible on
-          # a single interleaved runner, but if runner provisioning ever changes
-          # this still surfaces it as INCONCLUSIVE rather than a silent FN.
-          cpu_lines=$(grep -E '^cpu:' "$RUNNER_TEMP/bench-out/benchstat.txt" 2>/dev/null | sort -u || true)
-
-          inconclusive=false
-          inconclusive_reason=""
-          if [ "$canary_missing" = "true" ]; then
-            inconclusive=true
-            inconclusive_reason="Control canary absent from output — cannot verify runner stability this run. Re-run."
-            echo "::warning::$inconclusive_reason"
-          fi
-          if [ -n "$canary_drift" ]; then
-            inconclusive=true
-            inconclusive_reason="CPU control canary drifted ≥ ${CPU_CANARY_FLOOR_PCT}% — this run's runner was unstable (thermal/frequency/neighbour). Comparison untrustworthy; re-run."
-            echo "::warning::$inconclusive_reason"
-            {
-              echo "inconclusive_canary<<__CANEOF__"
-              grep -E 'ControlCanary' "$RUNNER_TEMP/bench-out/benchstat.txt" || true
-              echo "__CANEOF__"
-            } >> "$GITHUB_OUTPUT"
-          fi
-          if [ -n "$cpu_lines" ] && [ "$(echo "$cpu_lines" | wc -l)" -gt 1 ]; then
-            inconclusive=true
-            inconclusive_reason="Heterogeneous CPUs in a single interleaved job — investigate runner provisioning."
-            cpu_count=$(echo "$cpu_lines" | wc -l)
-            echo "::error::Heterogeneous CPUs detected ($cpu_count distinct) IN A SINGLE INTERLEAVED JOB. This shouldn't be possible; investigate runner provisioning. CPUs observed:"
-            echo "$cpu_lines"
-            {
-              echo "inconclusive_cpus<<__CPUEOF__"
-              echo "$cpu_lines"
-              echo "__CPUEOF__"
-            } >> "$GITHUB_OUTPUT"
-          fi
-          echo "inconclusive=$inconclusive" >> "$GITHUB_OUTPUT"
-          {
-            echo "inconclusive_reason<<__REOF__"
-            echo "$inconclusive_reason"
-            echo "__REOF__"
-          } >> "$GITHUB_OUTPUT"
-
-          if [ -n "$regressions" ]; then
-            echo "regression=true" >> "$GITHUB_OUTPUT"
-            {
-              echo "regressions<<__EOF__"
-              echo "$regressions"
-              echo "__EOF__"
-            } >> "$GITHUB_OUTPUT"
-          else
-            echo "regression=false" >> "$GITHUB_OUTPUT"
-          fi
-
+      # Summary + PR report both delegate to the shared scripts (stage-B
+      # extraction); only the consumer-specific wording stays here.
       - name: Render step summary
         if: always()
         env:
@@ -454,75 +307,22 @@ jobs:
           INCONCLUSIVE_REASON: ${{ steps.compare.outputs.inconclusive_reason }}
           INCONCLUSIVE_CPUS: ${{ steps.compare.outputs.inconclusive_cpus }}
           INCONCLUSIVE_CANARY: ${{ steps.compare.outputs.inconclusive_canary }}
+          BENCHSTAT_TXT: ${{ steps.compare.outputs.benchstat_txt }}
           # PR head SHA bound via env (#1021 class house rule).
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          {
-            # INCONCLUSIVE takes precedence over REGRESSION: if the runner was
-            # drifting, the main-bench "regression" is itself untrustworthy.
-            if [ "$INCONCLUSIVE" = "true" ]; then
-              echo "## ⚠️ Bench Gate — INCONCLUSIVE (runner drift, re-run)"
-            elif [ "$REGRESSION" = "true" ]; then
-              echo "## ❌ Bench Gate — REGRESSION DETECTED"
-            else
-              echo "## ✅ Bench Gate — no statistically significant regression"
-            fi
-            echo ""
-            echo "Compared PR HEAD (\`$PR_HEAD_SHA\`)"
-            echo "against merge-base (\`${{ needs.preflight.outputs.merge_base_sha }}\`)."
-            echo "Gate threshold: **p < 0.01 AND |Δ| ≥ 5%** (statistical significance via \`benchstat -alpha=0.01\` + magnitude floor for free-tier-runner noise resistance)."
-            echo "Metric scope: **deterministic per-op metrics only** (\`sec/op\`, \`B/op\`, \`allocs/op\`) via \`benchstat -filter\`. Non-deterministic process-level metrics (\`MB-sys\`, \`MB-heap-after-gc\`, \`goroutines\`) are excluded — they are GC/runtime high-water noise, not per-op work (#608)."
-            echo "Topology: **single-runner INTERLEAVED** (base,pr,base,pr,… pre-compiled binaries, no mid-loop drop_caches) + **control canary**. Interleaving cancels time-correlated runner drift so benchstat's independent-samples assumption holds; the canary detects residual drift and judges the run INCONCLUSIVE rather than emitting a false regression (root-cause fix for #502/#608/#611/#695)."
-            echo ""
-            if [ "$INCONCLUSIVE" = "true" ]; then
-              echo "### ⚠️ Inconclusive — re-run recommended"
-              echo ""
-              echo "$INCONCLUSIVE_REASON"
-              echo ""
-              echo "This run is **not** counted as a regression — push again or re-run the job to get a clean comparison."
-              if [ -n "$INCONCLUSIVE_CANARY" ]; then
-                echo ""
-                echo "Control canary rows this run:"
-                echo '```'
-                echo "$INCONCLUSIVE_CANARY"
-                echo '```'
-              fi
-              if [ -n "$INCONCLUSIVE_CPUS" ]; then
-                echo ""
-                echo "Heterogeneous CPUs observed (unexpected on one runner):"
-                echo '```'
-                echo "$INCONCLUSIVE_CPUS"
-                echo '```'
-              fi
-              echo ""
-            fi
-            echo "### Full benchstat output"
-            echo "_\`BenchmarkControlCanaryCPU\` is the GATING drift probe; \`BenchmarkControlCanarySleep\` is informational only (scheduler jitter)._"
-            echo '```'
-            cat "$RUNNER_TEMP/bench-out/benchstat.txt"
-            echo '```'
-            if [ "$INCONCLUSIVE" != "true" ] && [ "$REGRESSION" = "true" ]; then
-              echo ""
-              echo "### Regressions flagged"
-              echo '```'
-              echo "$REGRESSIONS_LIST"
-              echo '```'
-              echo ""
-              echo "**Informational only — this does NOT block merge.** A \`perf-regression\` label"
-              echo "and a PR comment were applied. If the slowdown is a deliberate correctness/safety"
-              echo "trade-off, just note it in the PR; otherwise fix the perf and push again (the"
-              echo "label is removed automatically once the regression clears). The nightly"
-              echo "\`bench-record\` trend watchdog independently watches main for sustained drift."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          COMPARE_DESC: |
+            Compared PR HEAD (`${{ github.event.pull_request.head.sha }}`)
+            against merge-base (`${{ needs.preflight.outputs.merge_base_sha }}`).
+          REGRESSION_NOTE: |
+            **Informational only — this does NOT block merge.** A `perf-regression` label
+            and a PR comment were applied. If the slowdown is a deliberate correctness/safety
+            trade-off, just note it in the PR; otherwise fix the perf and push again (the
+            label is removed automatically once the regression clears). The nightly
+            `bench-record` trend watchdog independently watches main for sustained drift.
+        run: bash scripts/tools/ops/bench_render_summary.sh
 
-      # INFORMATIONAL report (Phase 2) — a real regression (significant ≥5%
-      # slowdown WHILE the control canary was stable) posts a PR comment + adds
-      # the `perf-regression` label, but NEVER blocks merge (exit 0). When the
-      # regression clears on a later push the label is removed. INCONCLUSIVE runs
-      # (canary drifted) are not regressions — they only annotate. Fork PRs get a
-      # read-only token so comment/label calls fail; we degrade to a warning +
-      # step summary rather than reach for `pull_request_target` (pwn-request).
+      # INFORMATIONAL report (Phase 2) — comment + `perf-regression` label,
+      # never blocks merge; fork-PR read-only tokens degrade to a warning.
+      # Full policy commentary in the shared script.
       - name: Report regression (informational — comment + label, never blocks)
         if: always()
         env:
@@ -532,43 +332,4 @@ jobs:
           REGRESSION: ${{ steps.compare.outputs.regression }}
           INCONCLUSIVE: ${{ steps.compare.outputs.inconclusive }}
           REGRESSIONS_LIST: ${{ steps.compare.outputs.regressions }}
-        run: |
-          set -uo pipefail
-          LABEL="perf-regression"
-          is_regression=false
-          if [ "$REGRESSION" = "true" ] && [ "$INCONCLUSIVE" != "true" ]; then
-            is_regression=true
-          fi
-
-          # gh write helper: on a fork PR the token is read-only and these fail;
-          # don't let that fail the job — warn and fall back to the step summary.
-          gh_try() {
-            if ! gh "$@" 2>/tmp/gh_err; then
-              echo "::warning::gh ${1:-} failed (likely fork-PR read-only token): $(cat /tmp/gh_err)"
-              return 1
-            fi
-          }
-
-          if [ "$is_regression" = "true" ]; then
-            # Ensure the label exists (idempotent), then apply it.
-            gh label create "$LABEL" --repo "$REPO" --color "D93F0B" \
-              --description "Bench gate flagged a perf regression (informational)" --force >/dev/null 2>&1 || true
-            gh_try pr edit "$PR_NUMBER" --repo "$REPO" --add-label "$LABEL" || true
-            {
-              echo "### ⚠️ Bench gate flagged a perf regression (informational — does not block merge)"
-              echo ""
-              echo "Significant ≥5% slowdown vs merge-base with a stable control canary:"
-              echo '```'
-              echo "$REGRESSIONS_LIST"
-              echo '```'
-              echo "Fix the perf and push again, or note the deliberate trade-off in the PR. The"
-              echo "\`$LABEL\` label clears automatically once the regression is gone."
-            } > /tmp/perf_comment.md
-            gh_try pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/perf_comment.md || true
-            echo "::notice::Perf regression reported (informational). Merge is NOT blocked."
-          else
-            # No regression (clean or inconclusive) → remove a stale label if present.
-            gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "$LABEL" >/dev/null 2>&1 || true
-          fi
-          # Always succeed — the gate is informational.
-          exit 0
+        run: bash scripts/tools/ops/bench_report_pr.sh

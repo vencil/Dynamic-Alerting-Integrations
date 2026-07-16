@@ -187,32 +187,55 @@ def _docker_available():
 _DOCKER = _docker_available()
 
 
+def _skip_or_fail_closed(msg: str):
+    """Environmental degradation policy for the amtool guards.
+
+    Default: skip（本地離線開發機友善——缺 image 不是 config 缺陷）。
+    但在設了 ``VIBE_REQUIRE_DOCKER=1`` 的 CI job（理應有 docker + 能拉
+    registry），同一種缺席代表防線被靜默繳械（runner 換 image / daemon 壞 /
+    registry 持續 timeout）→ FAIL 而非 skip，對齊 ci.yml python-tests 的
+    ``VIBE_REQUIRE_MTAIL`` fail-closed 前例。"""
+    if os.environ.get("VIBE_REQUIRE_DOCKER") == "1":
+        pytest.fail(
+            f"VIBE_REQUIRE_DOCKER=1 but {msg} — this CI job is supposed to "
+            "provide docker + registry access; skipping here would silently "
+            "disarm the amtool config/routing guards.")
+    pytest.skip(msg)
+
+
+def ensure_am_image():
+    """Make sure the pinned image is present; skip (don't fail) when an
+    offline dev box can't pull it — a missing image is not a config defect.
+    Mirrors _docker_available's exception policy: a docker hiccup (timeout /
+    OSError) on inspect-or-pull is an environmental skip, not a red test —
+    EXCEPT under ``VIBE_REQUIRE_DOCKER=1`` where it fails closed (see
+    _skip_or_fail_closed).
+
+    Module-level (not a TestAmtoolCheckConfig method) so the routing-correctness
+    guard (test_alertmanager_routing_correctness.py) shares the SAME image
+    acquisition policy — a single SOT that can't drift between the two suites."""
+    try:
+        inspect = subprocess.run(["docker", "image", "inspect", _AM_IMAGE],
+                                 capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        _skip_or_fail_closed(f"cannot inspect {_AM_IMAGE} (docker unavailable/offline)")
+    if inspect.returncode == 0:
+        return
+    try:
+        pull = subprocess.run(["docker", "pull", _AM_IMAGE],
+                              capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.SubprocessError):
+        _skip_or_fail_closed(f"cannot obtain {_AM_IMAGE} (docker unavailable/offline)")
+    if pull.returncode != 0:
+        _skip_or_fail_closed(f"cannot obtain {_AM_IMAGE} (offline?): {pull.stderr.strip()}")
+
+
 @pytest.mark.skipif(
     not _DOCKER,
     reason="docker not available — amtool check-config guard needs the "
            "prom/alertmanager image")
 class TestAmtoolCheckConfig:
     """把 render 出來的 config 交給 Alertmanager 自家 parser 驗證。"""
-
-    def _ensure_image(self):
-        """Make sure the pinned image is present; skip (don't fail) when an
-        offline dev box can't pull it — a missing image is not a config defect.
-        Mirrors _docker_available's exception policy: a docker hiccup (timeout /
-        OSError) on inspect-or-pull is an environmental skip, not a red test."""
-        try:
-            inspect = subprocess.run(["docker", "image", "inspect", _AM_IMAGE],
-                                     capture_output=True, timeout=30)
-        except (OSError, subprocess.SubprocessError):
-            pytest.skip(f"cannot inspect {_AM_IMAGE} (docker unavailable/offline)")
-        if inspect.returncode == 0:
-            return
-        try:
-            pull = subprocess.run(["docker", "pull", _AM_IMAGE],
-                                  capture_output=True, text=True, timeout=300)
-        except (OSError, subprocess.SubprocessError):
-            pytest.skip(f"cannot obtain {_AM_IMAGE} (docker unavailable/offline)")
-        if pull.returncode != 0:
-            pytest.skip(f"cannot obtain {_AM_IMAGE} (offline?): {pull.stderr.strip()}")
 
     def _amtool_check(self, am_yml, tmp_path):
         etc = tmp_path / "etc"
@@ -226,7 +249,7 @@ class TestAmtoolCheckConfig:
 
     def test_live_config_is_amtool_valid(self, tmp_path):
         """live conf.d → render → amtool check-config 必須 SUCCESS。"""
-        self._ensure_image()
+        ensure_am_image()
         am_yml = _render_live_alertmanager_yml(tmp_path)
         r = self._amtool_check(am_yml, tmp_path)
         assert r.returncode == 0, (
@@ -237,7 +260,7 @@ class TestAmtoolCheckConfig:
     def test_guard_catches_seq_to_regression(self, tmp_path):
         """守住守門員：amtool 確實會拒收 list 形態的 `to`（證明若 (A) 的
         coercion 退化，本 guard 會抓到，而非靜默放行）。"""
-        self._ensure_image()
+        ensure_am_image()
         bad = {
             "global": {"resolve_timeout": "5m"},
             "route": {"receiver": "x"},

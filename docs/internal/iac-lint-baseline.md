@@ -43,7 +43,7 @@ Critical → BLOCK 的最後一哩是 GitHub branch protection 的 required stat
 
 - [ ] **`Lint`** —— 含 L1 `iac-sast-check`（hadolint）+ L3 `helm-values-secrets-check`（secret-shape，含 raw k8s/）
 - [ ] **`Container SAST (Helm L2 + raw k8s L4)`** —— L2 + L4 kube-linter 的 Critical → BLOCK gate（本 job 在 TRK-314 由「L2 (Helm)」更名，涵蓋兩層）
-- [ ] 既有：`Lint Rule Packs` / `Python Tests` / `Go Tests` / `Lint Documentation`
+- [ ] 既有：`Lint Rule Packs` / `Python Tests (3.13)` / `Go Tests (1.26)` / `Lint Documentation`（後兩者為 ci.yml job name；validate.yaml 的舊 `Python Tests` / `Go Tests` job 已於 CI 去重移除，flip runbook 見 validate.yaml 頭部註解）
 
 > 勾選前先確認該 check 名稱在最近一次 CI run 出現過（rename 後舊名 `Container SAST L2 (Helm)` 不再回報，勿誤設為 required → 會卡在等不到的 check）。
 

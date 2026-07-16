@@ -97,7 +97,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_python import detect_cli_lang, http_get_json  # noqa: E402
+from _lib_python import detect_cli_lang, format_json_report, http_get_json  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK,
     EXIT_VIOLATION,
@@ -399,7 +399,7 @@ class RuntimeAuditor:
 
     def print_json_report(self) -> None:
         if self.caller_error:
-            print(json.dumps({"error": self.caller_error}, ensure_ascii=False, indent=2))
+            print(format_json_report({"error": self.caller_error}))
             return
         m, u, o = self._counts()
         report = {
@@ -411,7 +411,7 @@ class RuntimeAuditor:
                 "declared_groups": self.declared_group_count,
             },
         }
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+        print(format_json_report(report))
 
     def exit_code(self) -> int:
         if self.caller_error:

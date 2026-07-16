@@ -34,10 +34,16 @@ Allowed extensions
 ------------------
 A tool MAY define higher codes (>= 3) for finer-grained caller-error
 subtypes, as long as 0/1/2 keep the meanings above. The only sanctioned
-extension today is diag_pr_ci.py's EXIT_NETWORK_BLOCKED = 3 (documented
+>= 3 extension today is diag_pr_ci.py's EXIT_NETWORK_BLOCKED = 3 (documented
 in docs/internal/windows-mcp-playbook.md trap #64 — "switch host" hint,
-distinct from exit 2 "gh missing/unauthenticated"). Do NOT repurpose
-1 or 2 for anything other than violation / caller-error.
+distinct from exit 2 "gh missing/unauthenticated").
+
+One tool — dx/tenant_verify.py — INVERTS 1/2 (exit 2 = verification
+finding, exit 1 = caller error) as a sanctioned pre-SSOT exception: its
+codes are load-bearing in a shipped customer rollback runbook that keys on
+"exit 2 = mismatch" (see that file's header for the full rationale). It is
+the sole exception; do NOT repurpose 1 or 2 anywhere else — new tools MUST
+follow the base violation / caller-error meanings above.
 
 New subcommands MUST follow this contract — see docs/internal/dev-rules.md.
 """

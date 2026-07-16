@@ -50,7 +50,6 @@ import json
 import math
 import os
 import sys
-import urllib.parse
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from decimal import ROUND_FLOOR, Decimal
@@ -63,11 +62,15 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import (  # noqa: E402
     VALID_RESERVED_KEYS,
     VALID_RESERVED_PREFIXES,
+    add_prometheus_arg,
     detect_cli_lang,
-    http_get_json,
     load_tenant_configs,
     parse_duration_seconds,
+    query_prometheus_instant,
 )
+# Aliased: the local format_json_report() below (domain report builder,
+# exercised directly by tests) delegates its final dump to the shared helper.
+from _lib_python import format_json_report as _dump_json  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 import _observed_map_lib as observed_map_lib  # noqa: E402
 
@@ -608,18 +611,15 @@ def query_prometheus_range(
     Returns:
         (values_list, error_or_none)
     """
-    url = f"{prometheus_url}/api/v1/query"
-    params = urllib.parse.urlencode({"query": promql})
-    full_url = f"{url}?{params}"
-
-    data, err = http_get_json(full_url, timeout=timeout)
+    # Fetch core delegated to _lib_prometheus.query_prometheus_instant (ROI
+    # r3 W1) — this hits /api/v1/query with a range-vector PromQL, so the
+    # response is a matrix; the flatten logic below is unchanged. timeout is
+    # passed through (this site pre-dated the lib's default of 10).
+    results, err = query_prometheus_instant(
+        prometheus_url, promql, timeout=timeout)
     if err:
         return [], err
 
-    if data.get("status") != "success":
-        return [], data.get("error", "Unknown Prometheus error")
-
-    results = data.get("data", {}).get("result", [])
     values: list[float] = []
 
     for series in results:
@@ -657,15 +657,11 @@ def query_prometheus_range_ts(
     sort to an arbitrary index and yield a silently-wrong percentile. A filtered
     series that ends up too thin then hits the engine's own sample gate.
     """
-    url = f"{prometheus_url}/api/v1/query"
-    params = urllib.parse.urlencode({"query": promql})
-    full_url = f"{url}?{params}"
-
-    data, err = http_get_json(full_url, timeout=timeout)
+    # Same lib delegation as query_prometheus_range above (ROI r3 W1).
+    results, err = query_prometheus_instant(
+        prometheus_url, promql, timeout=timeout)
     if err:
         return [], err
-    if data.get("status") != "success":
-        return [], data.get("error", "Unknown Prometheus error")
 
     def _finite(ts_raw, v_raw) -> Optional[tuple[float, float]]:
         try:
@@ -676,7 +672,6 @@ def query_prometheus_range_ts(
             return None
         return (ts, v)
 
-    results = data.get("data", {}).get("result", [])
     pairs: list[tuple[float, float]] = []
     for series in results:
         for point in series.get("values", []):
@@ -939,7 +934,7 @@ def format_json_report(reports: list[TenantRecommendation]) -> str:
             "recommended_changes": sum(r.recommended_changes for r in reports),
         },
     }
-    return json.dumps(output, indent=2, ensure_ascii=False)
+    return _dump_json(output)
 
 
 def format_markdown_report(reports: list[TenantRecommendation]) -> str:
@@ -1128,11 +1123,10 @@ def main() -> None:
             "(#916); needs_review entries require manual resolution"
         ),
     )
-    parser.add_argument(
-        "--prometheus",
-        default=os.environ.get("PROMETHEUS_URL", "http://localhost:9090"),
-        help=_HELP['prometheus'][_LANG],
-    )
+    # W1: canonical env fallback — `os.environ.get(k, default)` returned ""
+    # for a present-but-empty $PROMETHEUS_URL; add_prometheus_arg's `or`
+    # chain treats "" as unset (aligns with entrypoint.inject_prometheus_env).
+    add_prometheus_arg(parser, help_text=_HELP['prometheus'][_LANG])
     parser.add_argument(
         "--tenant",
         default=None,
@@ -1181,22 +1175,49 @@ def main() -> None:
     # #719: regenerate the observed-map and exit (does not need --config-dir).
     if args.generate_observed_map:
         summary = observed_map_lib.write_observed_map()
+        # #1112: prose → stderr. `--generate-observed-map` is a maintenance
+        # sub-command (regenerate a repo data file and exit), not a
+        # recommendation run — so its `--json` document is the write summary
+        # itself (path + key counts + merge disposition), tagged with a `status`
+        # so a consumer can tell it apart from a recommendation report.
         if _LANG == 'zh':
-            print(f"已產生 observed-map: {summary['path']}")
+            print(f"已產生 observed-map: {summary['path']}", file=sys.stderr)
             print(f"  共 {summary['total']} 個 key："
-                  f"{summary['clean']} clean / {summary['needs_review']} needs_review")
+                  f"{summary['clean']} clean / {summary['needs_review']} needs_review",
+                  file=sys.stderr)
             print(f"  merge：preserved {summary.get('preserved', 0)} / "
                   f"demoted {summary.get('demoted', 0)} / dropped {summary.get('dropped', 0)}"
-                  "（人工 resolve 保留 / 失效降級 / 已移除；細節見 stderr WARN）")
-            print("  needs_review 項目須人工 resolve（挑 observed_series / 確認方向）後才會被推薦使用。")
+                  "（人工 resolve 保留 / 失效降級 / 已移除；細節見 stderr WARN）",
+                  file=sys.stderr)
+            print("  needs_review 項目須人工 resolve（挑 observed_series / 確認方向）後才會被推薦使用。",
+                  file=sys.stderr)
         else:
-            print(f"Wrote observed-map: {summary['path']}")
+            print(f"Wrote observed-map: {summary['path']}", file=sys.stderr)
             print(f"  {summary['total']} keys: "
-                  f"{summary['clean']} clean / {summary['needs_review']} needs_review")
+                  f"{summary['clean']} clean / {summary['needs_review']} needs_review",
+                  file=sys.stderr)
             print(f"  merge: preserved {summary.get('preserved', 0)} / "
                   f"demoted {summary.get('demoted', 0)} / dropped {summary.get('dropped', 0)} "
-                  "(see stderr WARN for details)")
-            print("  needs_review entries require manual resolution before use.")
+                  "(see stderr WARN for details)", file=sys.stderr)
+            print("  needs_review entries require manual resolution before use.",
+                  file=sys.stderr)
+        if args.json_output:
+            # NB `format_json_report` here is the tool-local one and takes a
+            # list[TenantRecommendation] — this path has no recommendations, so
+            # the document is assembled directly, keeping the tool's top-level
+            # shape (`tool` / `tenants` / `summary`) so the same consumer parses
+            # both paths, with the write result under `observed_map`.
+            print(json.dumps({
+                "tool": "threshold-recommend",
+                "status": "observed_map_written",
+                "observed_map": summary,
+                "tenants": [],
+                "summary": {
+                    "total_tenants": 0,
+                    "total_keys": 0,
+                    "recommended_changes": 0,
+                },
+            }, indent=2, ensure_ascii=False, default=str))
         return
 
     if not args.config_dir:

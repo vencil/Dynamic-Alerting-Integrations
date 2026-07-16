@@ -52,7 +52,7 @@ def run_cmd(cmd, dry_run=False):
     if not isinstance(cmd, list):
         raise TypeError(f"run_cmd() requires list argument, got {type(cmd).__name__}")
     if dry_run:
-        print(f"  [DRY RUN] {' '.join(cmd)}")
+        print(f"  [DRY RUN] {' '.join(cmd)}", file=sys.stderr)
         return "[dry-run]"
     try:
         return subprocess.check_output(cmd, text=True, stderr=subprocess.PIPE, timeout=120).strip()

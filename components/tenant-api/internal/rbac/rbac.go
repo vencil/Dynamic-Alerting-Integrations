@@ -650,7 +650,7 @@ func (m *Manager) allowedOrgModes(p *VerifiedPrincipal, tenantID string, want Pe
 // (org-scope deliberately does not apply to platform scope — an org-scoped rule
 // is not a platform admin) and the middleware's own write-mount branch (which
 // checks read on "*" or defers the per-tenant org decision to the handler's
-// RequireOrgWrite). Pinned by the go/ast tripwire, see org_write_guard_test.go
+// RequireOrgWrite). Pinned by the go/ast tripwire, see guards_ast_test.go
 // (P4c emptied its allowlist).
 //
 // Allowed records NO would-deny signal — recording lives in AllowedInOrg

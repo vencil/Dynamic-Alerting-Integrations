@@ -54,10 +54,10 @@ type BackfillAccountsResponse struct {
 // @Tags        federation
 // @Produce     json
 // @Success     200 {object} BackfillAccountsResponse
-// @Failure     403 {object} map[string]string
-// @Failure     409 {object} map[string]string
-// @Failure     500 {object} map[string]string
-// @Failure     503 {object} map[string]string
+// @Failure     403 {object} handler.ErrorResponse
+// @Failure     409 {object} handler.ErrorResponse
+// @Failure     500 {object} handler.ErrorResponse
+// @Failure     503 {object} handler.ErrorResponse
 // @Router      /api/v1/federation/accounts/backfill [post]
 func BackfillAccounts(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

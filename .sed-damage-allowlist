@@ -75,3 +75,11 @@ tools/portal/src/interactive/tools/config-lint.jsx
 # fixtures}/ so the orchestrator becomes a thin shell. 392 → 90 LOC (~77%
 # shrink). Genuine refactor, not damage.
 tools/portal/src/interactive/tools/platform-health.jsx
+
+# Two-stage C→B bench-trigger rework (stage B): bench-gate-pr.yaml's inline
+# verdict logic (install benchstat / stash harness / worktrees / interleave /
+# benchstat compare + INCONCLUSIVE detection, ~250 lines) extracted to
+# scripts/tools/ops/bench_gate_compare.sh so bench-attrib-main.yaml and
+# bench-on-demand.yaml share it verbatim. 35210 → ~17.5k bytes (~50% shrink).
+# Genuine refactor, not damage.
+.github/workflows/bench-gate-pr.yaml

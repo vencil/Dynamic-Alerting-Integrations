@@ -478,3 +478,401 @@ class TestStep5DiskIopsRecipePrereq:
         c = self._step5(checks)
         assert c["status"] == "warn"
         assert "could not query" in c["detail"]
+
+
+# ---------------------------------------------------------------------------
+# --prometheus env-var fallback (add_prometheus_arg / README §6.1)
+# ---------------------------------------------------------------------------
+class TestPrometheusEnvFallback:
+    """`--prometheus` resolves $PROMETHEUS_URL at the argparse layer.
+
+    byo-check was previously hardcoded to http://localhost:9090 AND absent
+    from the dispatcher's PROMETHEUS_COMMANDS, so a standalone run ignored
+    $PROMETHEUS_URL entirely. add_prometheus_arg now resolves it as the
+    argparse default (env → else localhost) for standalone + dispatcher.
+    """
+
+    def _run_main_capture_url(self, monkeypatch, argv):
+        captured = {}
+
+        def fake_check_prometheus(args):
+            captured["url"] = args.prometheus
+            return [{"check": "x", "status": "pass", "detail": ""}]
+
+        monkeypatch.setattr(bc, "check_prometheus", fake_check_prometheus)
+        monkeypatch.setattr(sys, "argv", argv)
+        with pytest.raises(SystemExit):
+            bc.main()
+        return captured["url"]
+
+    def test_uses_env_when_flag_absent(self, monkeypatch):
+        """--prometheus omitted + $PROMETHEUS_URL set → uses the env value."""
+        monkeypatch.setenv("PROMETHEUS_URL", "http://test:1234")
+        url = self._run_main_capture_url(
+            monkeypatch, ["byo_check.py", "prometheus"])
+        assert url == "http://test:1234"
+
+    def test_falls_back_to_localhost_when_env_unset(self, monkeypatch):
+        """--prometheus omitted + env unset → byte-identical old default."""
+        monkeypatch.delenv("PROMETHEUS_URL", raising=False)
+        url = self._run_main_capture_url(
+            monkeypatch, ["byo_check.py", "prometheus"])
+        assert url == "http://localhost:9090"
+
+    def test_explicit_flag_overrides_env(self, monkeypatch):
+        """Explicit --prometheus always wins over $PROMETHEUS_URL."""
+        monkeypatch.setenv("PROMETHEUS_URL", "http://test:1234")
+        url = self._run_main_capture_url(
+            monkeypatch,
+            ["byo_check.py", "prometheus", "--prometheus", "http://cli:9099"])
+        assert url == "http://cli:9099"
+
+
+# ---------------------------------------------------------------------------
+# Pure judge helpers (da-tools ROI refactor W5). Each takes an already-fetched
+# query result (+ error) and returns the check dict — no IO. These lock the
+# per-step pass/warn/fail/skip boundaries, the caller_error tagging (transport
+# failure → exit 2 downstream), and the detail-string formatting.
+# ---------------------------------------------------------------------------
+def _tenants(*names):
+    return [{"metric": {"tenant": t}, "value": [1, "1"]} for t in names]
+
+
+def _value(n):
+    return [{"value": [1, str(n)]}]
+
+
+class TestJudgeReachable:
+    def test_pass_on_no_error(self):
+        assert bc._judge_reachable(None) == {
+            "check": "prometheus_reachable",
+            "status": "pass",
+            "detail": "Prometheus is healthy",
+        }
+
+    def test_fail_carries_caller_error(self):
+        c = bc._judge_reachable(OSError("connection refused"))
+        assert c["check"] == "prometheus_reachable"
+        assert c["status"] == "fail"
+        assert c["caller_error"] is True  # transport failure → exit 2
+        assert c["detail"] == "Cannot reach Prometheus: connection refused"
+
+    def test_detail_truncated_to_60(self):
+        c = bc._judge_reachable(OSError("E" * 200))
+        # "Cannot reach Prometheus: " + first 60 chars of str(err)
+        assert c["detail"] == "Cannot reach Prometheus: " + "E" * 60
+
+
+class TestJudgeStep1TenantLabel:
+    def test_err_is_caller_error_fail(self):
+        c = bc._judge_step1_tenant_label(None, "boom" * 40)
+        assert c["status"] == "fail"
+        assert c["caller_error"] is True
+        assert c["detail"] == "Query failed: " + ("boom" * 40)[:60]
+
+    def test_results_pass_sorted_and_capped(self):
+        c = bc._judge_step1_tenant_label(_tenants("db-c", "db-a", "db-b"), None)
+        assert c["status"] == "pass"
+        assert "caller_error" not in c
+        assert c["detail"] == "tenant label found on 3 tenant(s): db-a, db-b, db-c"
+
+    def test_results_join_capped_at_10(self):
+        many = ["db-%02d" % i for i in range(15)]
+        c = bc._judge_step1_tenant_label(_tenants(*many), None)
+        assert c["status"] == "pass"
+        assert c["detail"].startswith("tenant label found on 15 tenant(s): ")
+        # only the first 10 (sorted) tenant ids appear in the joined tail
+        assert c["detail"].count("db-") == 10
+
+    def test_empty_results_warn(self):
+        c = bc._judge_step1_tenant_label([], None)
+        assert c["status"] == "warn"
+        assert "caller_error" not in c
+        assert "relabel_configs" in c["detail"]
+
+
+class TestJudgeStep2ThresholdExporterScrape:
+    def test_err_caller_error(self):
+        c = bc._judge_step2_threshold_exporter_scrape(None, "boom")
+        assert c["status"] == "fail"
+        assert c["caller_error"] is True
+
+    def test_all_up_pass(self):
+        c = bc._judge_step2_threshold_exporter_scrape(_value("1") + _value("1"), None)
+        assert c["status"] == "pass"
+        assert c["detail"] == "2 target(s), all UP"
+
+    def test_some_down_warn(self):
+        c = bc._judge_step2_threshold_exporter_scrape(_value("1") + _value("0"), None)
+        assert c["status"] == "warn"
+        assert c["detail"] == "2 target(s), some targets DOWN"
+
+    def test_empty_fail_no_caller_error(self):
+        c = bc._judge_step2_threshold_exporter_scrape([], None)
+        assert c["status"] == "fail"
+        assert "caller_error" not in c  # a missing scrape job is a real violation, not transport
+        assert c["detail"] == "No threshold-exporter scrape job found"
+
+
+class TestJudgeStep2UserThresholdMetrics:
+    def test_err_caller_error(self):
+        c = bc._judge_step2_user_threshold_metrics(None, "boom")
+        assert c["status"] == "fail"
+        assert c["caller_error"] is True
+
+    def test_positive_count_pass(self):
+        c = bc._judge_step2_user_threshold_metrics(_value("7"), None)
+        assert c["status"] == "pass"
+        assert c["detail"] == "7 user_threshold series found"
+
+    def test_zero_count_warn(self):
+        c = bc._judge_step2_user_threshold_metrics(_value("0"), None)
+        assert c["status"] == "warn"
+        assert c["detail"] == "0 user_threshold series found"
+
+    def test_empty_fail(self):
+        c = bc._judge_step2_user_threshold_metrics([], None)
+        assert c["status"] == "fail"
+        assert "caller_error" not in c
+
+
+class TestJudgeStep3RulePacksLoaded:
+    def test_err_caller_error(self):
+        c = bc._judge_step3_rule_packs_loaded(None, "rules boom")
+        assert c["status"] == "fail"
+        assert c["caller_error"] is True
+        assert c["detail"] == "Rules API failed: rules boom"
+
+    def test_da_groups_pass(self):
+        data = {"data": {"groups": [
+            {"name": "mariadb-alerts", "rules": [{"name": "r1", "lastError": ""},
+                                                 {"name": "r2", "lastError": ""}]},
+        ]}}
+        c = bc._judge_step3_rule_packs_loaded(data, None)
+        assert c["status"] == "pass"
+        assert c["detail"] == "1 rule groups, 2 rules"
+
+    def test_eval_errors_warn(self):
+        data = {"data": {"groups": [
+            {"name": "redis-alerts", "rules": [{"name": "r1", "lastError": "kaboom"}]},
+        ]}}
+        c = bc._judge_step3_rule_packs_loaded(data, None)
+        assert c["status"] == "warn"
+        assert c["detail"] == "1 rule groups, 1 rules, 1 evaluation error(s)"
+
+    def test_oversized_last_error_stays_out_of_detail(self):
+        """A huge lastError must not leak into the check detail.
+
+        The per-rule messages are collected internally with lastError[:40]
+        truncation but only COUNTED in the emitted detail — lock that
+        boundary so a refactor doesn't start dumping raw errors."""
+        data = {"data": {"groups": [
+            {"name": "redis-alerts", "rules": [{"name": "r1", "lastError": "E" * 200}]},
+        ]}}
+        c = bc._judge_step3_rule_packs_loaded(data, None)
+        assert c["status"] == "warn"
+        assert c["detail"] == "1 rule groups, 1 rules, 1 evaluation error(s)"
+        assert "E" * 41 not in c["detail"]
+
+    def test_no_da_groups_fail(self):
+        data = {"data": {"groups": [{"name": "unrelated", "rules": []}]}}
+        c = bc._judge_step3_rule_packs_loaded(data, None)
+        assert c["status"] == "fail"
+        assert "caller_error" not in c
+        assert c["detail"] == "No Dynamic Alerting rule groups found"
+
+
+class TestJudgeStep3bRecordingRulesOutput:
+    def test_err_returns_none(self):
+        """Query error → NO check appended (original had no else branch)."""
+        assert bc._judge_step3b_recording_rules_output(None, "boom") is None
+
+    def test_positive_count_pass(self):
+        c = bc._judge_step3b_recording_rules_output(_value("5"), None)
+        assert c["status"] == "pass"
+        assert "5 tenant:* recording rule" in c["detail"]
+
+    def test_zero_count_warn(self):
+        c = bc._judge_step3b_recording_rules_output(_value("0"), None)
+        assert c["status"] == "warn"
+
+    def test_empty_results_warn(self):
+        c = bc._judge_step3b_recording_rules_output([], None)
+        assert c["status"] == "warn"
+        assert "may not have evaluated yet" in c["detail"]
+
+
+class TestJudgeE2eVectorMatching:
+    def test_err_returns_none(self):
+        assert bc._judge_e2e_vector_matching(None, "boom") is None
+
+    def test_positive_count_pass(self):
+        c = bc._judge_e2e_vector_matching(_value("3"), None)
+        assert c["status"] == "pass"
+        assert c["detail"] == "3 tenant(s) have threshold normalization output"
+
+    def test_zero_count_warn(self):
+        c = bc._judge_e2e_vector_matching(_value("0"), None)
+        assert c["status"] == "warn"
+
+    def test_empty_results_warn(self):
+        c = bc._judge_e2e_vector_matching([], None)
+        assert c["status"] == "warn"
+
+
+class TestJudgeStep4DiskRecipePrereq:
+    def test_err_caller_error(self):
+        c = bc._judge_step4_disk_recipe_prereq(None, "boom", None, None, None)
+        assert c["status"] == "fail"
+        assert c["caller_error"] is True
+
+    def test_no_declaring_skip(self):
+        c = bc._judge_step4_disk_recipe_prereq([], None, None, None, None)
+        assert c["status"] == "skip"
+        assert "step N/A" in c["detail"]
+
+    def test_arriving_err_warn(self):
+        c = bc._judge_step4_disk_recipe_prereq(
+            _tenants("db-a"), None, None, "vol timeout", _tenants("db-a"))
+        assert c["status"] == "warn"
+        assert "could not query volume-stats" in c["detail"]
+
+    def test_no_running_candidates_warn(self):
+        c = bc._judge_step4_disk_recipe_prereq(
+            _tenants("db-a", "db-b"), None, [], None, [])
+        assert c["status"] == "warn"
+        assert "running pods yet" in c["detail"]
+
+    def test_platform_wide_fail(self):
+        c = bc._judge_step4_disk_recipe_prereq(
+            _tenants("db-a", "db-b"), None, [], None, _tenants("db-a", "db-b"))
+        assert c["status"] == "fail"
+        assert "NO" in c["detail"]
+        assert "caller_error" not in c  # a real absence, not a transport error
+
+    def test_partial_missing_warn(self):
+        c = bc._judge_step4_disk_recipe_prereq(
+            _tenants("db-a", "db-b"), None, _tenants("db-a"), None, _tenants("db-a", "db-b"))
+        assert c["status"] == "warn"
+        assert "db-b" in c["detail"]
+
+    def test_all_attributed_pass(self):
+        c = bc._judge_step4_disk_recipe_prereq(
+            _tenants("db-a"), None, _tenants("db-a"), None, _tenants("db-a"))
+        assert c["status"] == "pass"
+
+    def test_running_guard_excludes_unstarted(self):
+        """db-b declared but not running → excluded from candidates → pass."""
+        c = bc._judge_step4_disk_recipe_prereq(
+            _tenants("db-a", "db-b"), None, _tenants("db-a"), None, _tenants("db-a"))
+        assert c["status"] == "pass"
+
+    def test_arriving_err_truncated_to_50(self):
+        c = bc._judge_step4_disk_recipe_prereq(
+            _tenants("db-a"), None, None, "E" * 200, _tenants("db-a"))
+        assert c["status"] == "warn"
+        assert c["detail"] == (
+            "disk recipe(s) declared but could not query volume-stats: " + "E" * 50
+        )
+
+    def test_missing_join_capped_at_10(self):
+        many = ["db-%02d" % i for i in range(16)]
+        c = bc._judge_step4_disk_recipe_prereq(
+            _tenants(*many), None, _tenants(many[0]), None, _tenants(*many))
+        assert c["status"] == "warn"
+        # 15 missing tenants but only the first 10 (sorted) are joined
+        assert c["detail"].count("db-") == 10
+
+
+class TestJudgeStep5DiskIopsRecipePrereq:
+    def test_err_caller_error(self):
+        c = bc._judge_step5_disk_iops_recipe_prereq(None, "boom", None, None, None)
+        assert c["status"] == "fail"
+        assert c["caller_error"] is True
+
+    def test_no_declaring_skip(self):
+        c = bc._judge_step5_disk_iops_recipe_prereq([], None, None, None, None)
+        assert c["status"] == "skip"
+        assert "container_fs_*" in c["detail"]
+
+    def test_arriving_err_warn(self):
+        c = bc._judge_step5_disk_iops_recipe_prereq(
+            _tenants("db-a"), None, None, "cfs timeout", _tenants("db-a"))
+        assert c["status"] == "warn"
+        assert "could not query container_fs" in c["detail"]
+
+    def test_no_running_candidates_warn(self):
+        c = bc._judge_step5_disk_iops_recipe_prereq(
+            _tenants("db-a", "db-b"), None, [], None, [])
+        assert c["status"] == "warn"
+        assert "running pods yet" in c["detail"]
+
+    def test_blkio_bypass_fail(self):
+        c = bc._judge_step5_disk_iops_recipe_prereq(
+            _tenants("db-a", "db-b"), None, [], None, _tenants("db-a", "db-b"))
+        assert c["status"] == "fail"
+        assert "blkio" in c["detail"]
+
+    def test_partial_missing_warn(self):
+        c = bc._judge_step5_disk_iops_recipe_prereq(
+            _tenants("db-a", "db-b"), None, _tenants("db-a"), None, _tenants("db-a", "db-b"))
+        assert c["status"] == "warn"
+        assert "db-b" in c["detail"]
+
+    def test_all_attributed_pass(self):
+        c = bc._judge_step5_disk_iops_recipe_prereq(
+            _tenants("db-a"), None, _tenants("db-a"), None, _tenants("db-a"))
+        assert c["status"] == "pass"
+
+    def test_arriving_err_truncated_to_50(self):
+        c = bc._judge_step5_disk_iops_recipe_prereq(
+            _tenants("db-a"), None, None, "E" * 200, _tenants("db-a"))
+        assert c["status"] == "warn"
+        assert c["detail"] == (
+            "IOPS recipe(s) declared but could not query container_fs: " + "E" * 50
+        )
+
+    def test_missing_join_capped_at_10(self):
+        many = ["db-%02d" % i for i in range(16)]
+        c = bc._judge_step5_disk_iops_recipe_prereq(
+            _tenants(*many), None, _tenants(many[0]), None, _tenants(*many))
+        assert c["status"] == "warn"
+        # 15 missing tenants but only the first 10 (sorted) are joined
+        assert c["detail"].count("db-") == 10
+
+
+class TestCheckPrometheusControlFlow:
+    """Orchestrator-level guards: the refactor must preserve the Step-0 early
+    return and the append-nothing-on-error of Steps 3b / E2E."""
+
+    def test_step0_unreachable_early_returns_single_element(self):
+        """Prometheus down → exactly ONE check appended, then return (no later
+        step runs). Regression for the early-return short-circuit."""
+        with patch("urllib.request.urlopen", side_effect=OSError("refused")):
+            checks = bc.check_prometheus(_args())
+        assert len(checks) == 1
+        assert checks[0]["check"] == "prometheus_reachable"
+        assert checks[0]["status"] == "fail"
+        assert checks[0]["caller_error"] is True
+
+    def test_step3b_and_e2e_omitted_on_query_error(self):
+        """When every query errors, Steps 3b and E2E append no check dict — so
+        their check names are absent from the result set."""
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"OK"
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        def _all_err(prom_url, promql):
+            return None, "query error"
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            with patch.object(bc, "http_get_json", side_effect=lambda url: (None, "err")):
+                with patch.object(bc, "query_prometheus", side_effect=_all_err):
+                    checks = bc.check_prometheus(_args())
+        names = {c["check"] for c in checks}
+        assert "step3_recording_rules_output" not in names
+        assert "e2e_vector_matching" not in names
+        # but the caller_error steps ARE present
+        assert "step1_tenant_label" in names
+        assert "step4_disk_recipe_prereq" in names

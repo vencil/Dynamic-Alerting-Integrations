@@ -418,6 +418,31 @@ class TestCLI:
         out = capsys.readouterr().out
         assert "No correlated" in out
 
+    def test_main_prom_env_fallback(self, monkeypatch, capsys, cli_argv):
+        """--prometheus 省略時讀 $PROMETHEUS_URL。"""
+        monkeypatch.setenv("PROMETHEUS_URL", "http://env-prom:9090")
+        cli_argv("alert_correlate")
+        captured = []
+        monkeypatch.setattr(ac, "load_alerts_from_alertmanager",
+                            lambda url, *a, **k: (captured.append(url), [])[1])
+        ac.main()
+        assert captured[0] == "http://env-prom:9090"
+
+    def test_main_empty_env_falls_back_to_localhost(self, monkeypatch, capsys,
+                                                    cli_argv):
+        """PROMETHEUS_URL 設定但為空字串（如 ConfigMap 缺鍵）→ 回退 localhost。
+
+        回歸鎖：os.environ.get(key, default) 對 present-but-empty 會回空字串
+        （key 存在），把空 URL 送進請求。
+        """
+        monkeypatch.setenv("PROMETHEUS_URL", "")
+        cli_argv("alert_correlate")
+        captured = []
+        monkeypatch.setattr(ac, "load_alerts_from_alertmanager",
+                            lambda url, *a, **k: (captured.append(url), [])[1])
+        ac.main()
+        assert captured[0] == "http://localhost:9090"
+
     def test_main_invalid_window(self, monkeypatch, cli_argv):
         cli_argv("alert_correlate", "--window", "invalid")
         with pytest.raises(SystemExit) as exc_info:

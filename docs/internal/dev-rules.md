@@ -184,10 +184,10 @@ Status 處理 / hotfix 例外 / A vs B CI 分類細節見 [`github-release-playb
 
 **規則**：新增或修改 da-tools 子命令時，exit code 一律遵守 SSOT [`scripts/tools/_lib_exitcodes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/_lib_exitcodes.py) 的 `0/1/2`——`EXIT_OK`（乾淨）/ `EXIT_VIOLATION`（user-actionable 發現：違規、drift、`--ci` fail-on-finding）/ `EXIT_CALLER_ERROR`（bad args、檔案/路徑不存在、連線失敗、malformed 輸入、缺前置、crash）。**import 具名常數，不寫 magic number**。對齊 Go binary（da-guard / da-parser / da-batchpr）同款 0/1/2 註解。
 
-- **`--json`**：machine-readable 子命令須提供 `--json`，且 `da-tools <cmd> --json | jq` idiom 須在 cli-reference 文件化。
+- **`--json`（stdout 契約，#1112 收嚴）**：machine-readable 子命令須提供 `--json`（或既有的 `--json-output` 拼法），且 `da-tools <cmd> --json | jq` idiom 須在 cli-reference 文件化。**契約**：`--json` 模式下 **stdout 恰好一份 JSON 文件**，於**每一條終端路徑**——含 skip / 空輸入 / dry-run / 早退——**所有人類可讀訊息（進度、摘要、警告、狀態）一律走 stderr**。早退路徑亦須吐 JSON：慣例是**沿用該工具既有 schema 的鍵但歸零/清空，追加 `status`（discriminator）與 `reason`**；正常路徑 schema 不動（consumer 用 `.status // "ok"` 分辨）。矛盾的 flag 組合（如 `patch-config --json` 無 `--diff`）→ `EXIT_CALLER_ERROR`，不得靜默忽略旗標。
 - **`--ci`**：Python 工具用 `--ci` 控 fail-on-finding；**Go binary 不引入 `--ci`**（無跨 Python/Go 統一 wrapper 消費者，CI 對 Go 工具用其原生 flag）。
 - **認可例外**：`diag_pr_ci.py`（0/1/2/3，exit 3 = network-blocked，runbook 載明）、`tenant-verify`（倒置契約 2=驗證失敗，[cli-reference](../cli-reference.md) + rollback runbook 載明）——改動須連帶遷移文件 + CHANGELOG breaking note。
-- ✅ **Codified**：`tests/shared/test_tool_exit_codes.py` 驗 `--help`=0 + bad-flag=2 + SSOT 常數；exit-code 章節見 [`testing-playbook.md`](testing-playbook.md)。
+- ✅ **Codified**：exit code → `tests/shared/test_tool_exit_codes.py`（驗 `--help`=0 + bad-flag=2 + SSOT 常數）；**`--json` stdout 契約 → [`tests/shared/test_json_stdout_contract.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/shared/test_json_stdout_contract.py)**（83 個 `(tool, mode)` recipe 涵蓋全 37 支 `--json`/`--json-output` 工具，斷言 `json.loads(全 stdout)`；meta-test 硬斷言 scope，新工具無法靜默逃脫）。exit-code 章節見 [`testing-playbook.md`](testing-playbook.md)。**新增 `--json` 子命令或新增次要模式（`--dry-run` / `--skip-*` 等早退路徑）時，須在該 gate 補 recipe**——最陰險的違規都藏在次要模式。
 
 ## 互動工具變更 SOP
 

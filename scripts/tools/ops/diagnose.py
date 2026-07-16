@@ -37,7 +37,8 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant  # noqa: E402
+from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant, add_prometheus_arg  # noqa: E402
+from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 
 # Language detection for bilingual help
@@ -54,8 +55,8 @@ _HELP = {
         'en': 'Tenant ID (e.g. db-a)'
     },
     'prometheus': {
-        'zh': 'Prometheus Query API URL (預設: http://localhost:9090; 叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)',
-        'en': 'Prometheus Query API URL (default: http://localhost:9090; for in-cluster, use http://prometheus.monitoring.svc.cluster.local:9090)'
+        'zh': 'Prometheus Query API URL (預設: $PROMETHEUS_URL，否則 http://localhost:9090; 叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)',
+        'en': 'Prometheus Query API URL (default: $PROMETHEUS_URL, else http://localhost:9090; for in-cluster, use http://prometheus.monitoring.svc.cluster.local:9090)'
     },
     'config_dir': {
         'zh': '租戶配置目錄路徑 (conf.d/)，用於設定檔查詢',
@@ -345,8 +346,7 @@ if __name__ == "__main__":
         description=_h('description'),
     )
     parser.add_argument("tenant", help=_h('tenant'))
-    parser.add_argument("--prometheus", default="http://localhost:9090",
-                        help=_h('prometheus'))
+    add_prometheus_arg(parser, help_text=_h('prometheus'))
     parser.add_argument("--config-dir",
                         help=_h('config_dir'))
     parser.add_argument("--show-inheritance", action="store_true",
@@ -367,8 +367,7 @@ if __name__ == "__main__":
             sys.exit(EXIT_CALLER_ERROR)  # #452: missing required arg
         inheritance = resolve_inheritance_chain(args.tenant, args.config_dir)
         if inheritance:
-            print(json.dumps(inheritance, indent=2, ensure_ascii=False,
-                             default=str))
+            print(format_json_report(inheritance, default=str))
         else:
             print(json.dumps({"error": "Could not resolve inheritance chain"},
                              indent=2))

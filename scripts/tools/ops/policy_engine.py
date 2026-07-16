@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
-import json
 import os
 import re
 import sys
@@ -51,12 +50,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 try:
     from _lib_python import (
         detect_cli_lang,
+        format_json_report,
+        load_tenant_configs,
         load_yaml_file,
         parse_duration_seconds,
     )
 except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
         detect_cli_lang,
+        format_json_report,
+        load_tenant_configs,
         load_yaml_file,
         parse_duration_seconds,
     )
@@ -497,50 +500,14 @@ def evaluate_policies(
 
 
 # ---------------------------------------------------------------------------
-# Tenant config loading (from config-dir)
-# ---------------------------------------------------------------------------
-def load_tenant_configs(config_dir: str) -> dict[str, dict]:
-    """從 config-dir 載入所有 tenant 配置。
-
-    跳過 ``_`` 開頭的檔案（_defaults.yaml, _profiles.yaml 等）。
-    支援 flat 格式和 ``tenants:`` wrapper 格式。
-
-    Args:
-        config_dir: conf.d/ 目錄路徑。
-
-    Returns:
-        {tenant_name: config_dict}。
-    """
-    configs: dict[str, dict] = {}
-
-    base = Path(config_dir)
-    if not base.is_dir():
-        return configs
-
-    for entry in sorted(base.iterdir(), key=lambda p: p.name):
-        fname = entry.name
-        if not fname.endswith((".yaml", ".yml")):
-            continue
-        if fname.startswith("_"):
-            continue
-
-        data = load_yaml_file(str(entry))
-        if not isinstance(data, dict):
-            continue
-
-        # Multi-tenant wrapper format
-        if "tenants" in data and isinstance(data["tenants"], dict):
-            for tenant_name, tenant_cfg in data["tenants"].items():
-                if isinstance(tenant_cfg, dict):
-                    configs[tenant_name] = tenant_cfg
-        else:
-            # Flat format — filename (sans extension) is tenant name
-            tenant_name = entry.stem
-            configs[tenant_name] = data
-
-    return configs
-
-
+# Tenant config loading — delegated to the shared `_lib_io.load_tenant_configs`
+# (imported via the `_lib_python` facade above; da-tools ROI r3 W2 de-shadow).
+# Behaviour deltas vs the former local copy (both handled wrapper + flat):
+#   - lib additionally skips dotfiles and non-files (stricter);
+#   - an EMPTY/comment-only yaml now registers the tenant as `{}` (lib loads
+#     with default={}, local copy skipped None) — so `required`-style policies
+#     evaluate placeholder files instead of silently ignoring them (pinned in
+#     tests/ops/test_policy_engine.py::TestLoadTenantConfigs).
 # ---------------------------------------------------------------------------
 # Report generation
 # ---------------------------------------------------------------------------
@@ -678,20 +645,44 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.policy:
         rules.extend(load_policies(args.policy))
 
+    # #1112: an early return is still a `--json` terminal path — emit the report
+    # schema with everything zeroed (`passed: true`: nothing was evaluated, so
+    # nothing failed) plus a status/reason discriminator, and send the prose to
+    # stderr. A consumer reading `.error_count` / `.violations` works unchanged.
+    def _empty_report(status: str, reason: str, rules_evaluated: int = 0) -> dict:
+        return {
+            "status": status,
+            "reason": reason,
+            "tenants_evaluated": 0,
+            "rules_evaluated": rules_evaluated,
+            "error_count": 0,
+            "warning_count": 0,
+            "passed": True,
+            "violations": [],
+        }
+
     if not rules:
         if lang == "zh":
-            print("未找到策略規則。在 _defaults.yaml 新增 _policies 或指定 --policy。")
+            print("未找到策略規則。在 _defaults.yaml 新增 _policies 或指定 --policy。",
+                  file=sys.stderr)
         else:
-            print("No policy rules found. Add _policies to _defaults.yaml or specify --policy.")
+            print("No policy rules found. Add _policies to _defaults.yaml or specify --policy.",
+                  file=sys.stderr)
+        if args.json_output:
+            print(format_json_report(_empty_report("no_policies", "no_policy_rules_found")))
         return EXIT_OK
 
     # Load tenant configs
     tenant_configs = load_tenant_configs(args.config_dir)
     if not tenant_configs:
         if lang == "zh":
-            print(f"未找到 tenant 配置於 {args.config_dir}")
+            print(f"未找到 tenant 配置於 {args.config_dir}", file=sys.stderr)
         else:
-            print(f"No tenant configs found in {args.config_dir}")
+            print(f"No tenant configs found in {args.config_dir}", file=sys.stderr)
+        if args.json_output:
+            print(format_json_report(_empty_report(
+                "no_tenant_configs", "no_tenant_configs_found",
+                rules_evaluated=len(rules))))
         return EXIT_OK
 
     # Evaluate
@@ -699,7 +690,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # Output
     if args.json_output:
-        print(json.dumps(generate_json_report(result), indent=2, ensure_ascii=False))
+        print(format_json_report(generate_json_report(result)))
     else:
         print(generate_text_report(result, lang))
 

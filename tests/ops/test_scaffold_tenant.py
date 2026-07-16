@@ -1068,3 +1068,345 @@ class TestMainCLI:
         ]):
             with pytest.raises(SystemExit):
                 scaffold_tenant.main()
+
+
+# ============================================================
+# generate_tenant — 互動路徑 characterization（da-tools ROI 第六波）
+#
+# Pin 當前互動 prompt 行為，作為後續重構的安全網。generate_tenant 的
+# 詢問次序（一律 sequential）：
+#   metric 覆寫 → 維護模式 → 靜音模式 → 嚴重度去重 → 告警路由
+# 每個分支以 mock 的 input() 序列驅動，斷言回傳 dict 逐鍵相同（golden）。
+#
+# 分支耦合（某些 input 的答案決定後續問幾個 prompt）：
+#   - 維護：expires 空白 → 不再問 reason（純字串 "enable"）
+#   - 靜音：choice∈{2,3,4} 才問 expires；expires 空白 → 不問 reason
+#   - 路由：receiver_type 決定走哪個 receiver 分支（各吃不同數量 input）；
+#           receiver 必填欄位齊備（receiver_obj 為真）才問 4 個 timing prompt；
+#           slack 額外在 api_url 有值時才問 channel；未知型別只吃 receiver_type
+# ============================================================
+
+
+def _gen_tenant_interactive(tenant_name, selected_dbs, inputs):
+    """以 mock 的 input() 序列跑 generate_tenant(interactive=True)。
+
+    ``inputs`` 依 prompt 次序排列：metric 覆寫 → 維護 → 靜音 → dedup → 路由。
+    序列長度必須與實際消耗的 input() 次數相符（多給會忽略、少給會 StopIteration）。
+    """
+    with mock.patch("builtins.input", side_effect=list(inputs)):
+        return generate_tenant(tenant_name, selected_dbs, interactive=True)
+
+
+# Neutral（no-op）答案，讓「非受測」段落產生空覆寫，隔離出受測分支：
+_NEUTRAL_MAINT = "N"          # 維護：不啟用（1 個 input）
+_NEUTRAL_SILENT = "1"         # 靜音：Normal（1 個 input）
+_NEUTRAL_DEDUP = "1"          # dedup：Enable 預設不寫（1 個 input）
+_NEUTRAL_ROUTING = ["", ""]   # 路由：receiver_type 空→webhook，url 空→無 receiver（2 個 input）
+
+
+class TestGenerateTenantNonInteractiveGolden:
+    """non-interactive 路徑 golden dict：一律回傳空 tenant 覆寫。"""
+
+    @pytest.mark.parametrize("dbs", [
+        ["kubernetes"],
+        ["kubernetes", "mariadb"],
+        ["kubernetes", "postgresql", "redis"],
+        ["nonexistent"],
+        [],
+    ], ids=["single", "k8s+mariadb", "multi", "unknown", "empty"])
+    def test_returns_empty_tenant_dict(self, dbs):
+        """non-interactive 不論選哪些 DB 都回傳 {"tenants": {name: {}}}。"""
+        assert generate_tenant("db-c", dbs, interactive=False) == {"tenants": {"db-c": {}}}
+
+    def test_tenant_name_preserved_verbatim(self):
+        """Tenant 名稱逐字保留於 golden dict。"""
+        assert generate_tenant("prod-mysql-01", ["kubernetes"], interactive=False) == \
+            {"tenants": {"prod-mysql-01": {}}}
+
+
+class TestGenerateTenantInteractiveMetrics:
+    """互動 metric 覆寫 prompt（每個 metric 一個 input，順序 = pack 定義序）。"""
+
+    def test_value_variants_empty_disable_skip(self):
+        """空白→預設值字串保留、'disable'→保留、'skip'→省略。"""
+        # kubernetes defaults 序：container_cpu(80), container_cpu_throttle(25),
+        # container_memory(85)。
+        res = _gen_tenant_interactive("db-c", ["kubernetes"], [
+            "",         # container_cpu → str(80)
+            "disable",  # container_cpu_throttle → "disable"（保留）
+            "skip",     # container_memory → None（省略）
+            _NEUTRAL_MAINT, _NEUTRAL_SILENT, _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
+        ])
+        assert res == {"tenants": {"db-c": {
+            "container_cpu": "80",
+            "container_cpu_throttle": "disable",
+        }}}
+
+    def test_custom_values_kept_as_strings(self):
+        """自訂數值以字串保留。"""
+        res = _gen_tenant_interactive("db-c", ["kubernetes"], [
+            "75", "30", "90",
+            _NEUTRAL_MAINT, _NEUTRAL_SILENT, _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
+        ])
+        assert res == {"tenants": {"db-c": {
+            "container_cpu": "75",
+            "container_cpu_throttle": "30",
+            "container_memory": "90",
+        }}}
+
+    def test_optional_overrides_prompted_after_defaults(self):
+        """defaults 問完才問 optional_overrides（mariadb 的 _critical tiers）。"""
+        # 次序：k8s defaults(3) → mariadb defaults(2: mysql_connections, mysql_cpu)
+        #       → mariadb optional_overrides(2: mysql_connections_critical,
+        #         mysql_cpu_critical)。
+        res = _gen_tenant_interactive("db-c", ["kubernetes", "mariadb"], [
+            "skip", "skip", "skip",   # k8s 3 defaults
+            "skip", "skip",           # mariadb 2 defaults
+            "100",                    # mysql_connections_critical → 保留
+            "skip",                   # mysql_cpu_critical → 省略
+            _NEUTRAL_MAINT, _NEUTRAL_SILENT, _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
+        ])
+        assert res == {"tenants": {"db-c": {"mysql_connections_critical": "100"}}}
+
+
+class TestGenerateTenantInteractiveMaintenance:
+    """互動維護模式（維護 → 靜音 → dedup → 路由 的第一段）。"""
+
+    def test_enable_with_expires_and_reason(self):
+        res = _gen_tenant_interactive("db-c", [], [
+            "y", "2026-04-01T00:00:00Z", "quarterly patch",
+            _NEUTRAL_SILENT, _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
+        ])
+        assert res["tenants"]["db-c"] == {"_state_maintenance": {
+            "target": "enable", "expires": "2026-04-01T00:00:00Z",
+            "reason": "quarterly patch"}}
+
+    def test_enable_with_expires_no_reason(self):
+        res = _gen_tenant_interactive("db-c", [], [
+            "y", "2026-04-01T00:00:00Z", "",
+            _NEUTRAL_SILENT, _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
+        ])
+        assert res["tenants"]["db-c"] == {"_state_maintenance": {
+            "target": "enable", "expires": "2026-04-01T00:00:00Z"}}
+
+    def test_enable_no_expires_is_plain_string(self):
+        """空 expires → 純字串 "enable"，且【不】再問 reason（分支耦合）。"""
+        res = _gen_tenant_interactive("db-c", [], [
+            "y", "",  # 空 expires：此後不會有 reason prompt
+            _NEUTRAL_SILENT, _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
+        ])
+        assert res["tenants"]["db-c"] == {"_state_maintenance": "enable"}
+
+    @pytest.mark.parametrize("answer", ["N", "n", "", "no"])
+    def test_not_y_omits_maintenance(self, answer):
+        """非 'y'（strip+lower 後）→ 不寫 _state_maintenance，不問 expires。"""
+        res = _gen_tenant_interactive("db-c", [], [
+            answer, _NEUTRAL_SILENT, _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
+        ])
+        assert res == {"tenants": {"db-c": {}}}
+
+    @pytest.mark.parametrize("answer", ["y", "Y", "Y ", " y "])
+    def test_y_after_strip_lower_enables(self, answer):
+        """答案經 strip().lower()：'Y'/'Y '/' y ' 皆等同 'y' → 啟用維護。"""
+        res = _gen_tenant_interactive("db-c", [], [
+            answer, "",  # 啟用後空 expires → 純字串 "enable"
+            _NEUTRAL_SILENT, _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
+        ])
+        assert res["tenants"]["db-c"] == {"_state_maintenance": "enable"}
+
+
+class TestGenerateTenantInteractiveSilent:
+    """互動靜音模式（4 選項 + expires/reason 耦合）。"""
+
+    @pytest.mark.parametrize("choice,target", [
+        ("2", "warning"), ("3", "critical"), ("4", "all")])
+    def test_structured_with_expires_and_reason(self, choice, target):
+        res = _gen_tenant_interactive("db-c", [], [
+            _NEUTRAL_MAINT, choice, "2026-05-01T00:00:00Z", "load test",
+            _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
+        ])
+        assert res["tenants"]["db-c"] == {"_silent_mode": {
+            "target": target, "expires": "2026-05-01T00:00:00Z", "reason": "load test"}}
+
+    @pytest.mark.parametrize("choice,target", [
+        ("2", "warning"), ("3", "critical"), ("4", "all")])
+    def test_plain_string_when_no_expires(self, choice, target):
+        """空 expires → 純字串 target，且【不】問 reason。"""
+        res = _gen_tenant_interactive("db-c", [], [
+            _NEUTRAL_MAINT, choice, "",
+            _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
+        ])
+        assert res["tenants"]["db-c"] == {"_silent_mode": target}
+
+    def test_expires_no_reason(self):
+        res = _gen_tenant_interactive("db-c", [], [
+            _NEUTRAL_MAINT, "2", "2026-05-01T00:00:00Z", "",
+            _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
+        ])
+        assert res["tenants"]["db-c"] == {"_silent_mode": {
+            "target": "warning", "expires": "2026-05-01T00:00:00Z"}}
+
+    @pytest.mark.parametrize("choice", ["1", "", "9"])
+    def test_normal_or_invalid_omits_and_skips_expires(self, choice):
+        """choice∉{2,3,4} → 無 _silent_mode，且【不】問 expires（分支耦合）。"""
+        res = _gen_tenant_interactive("db-c", [], [
+            _NEUTRAL_MAINT, choice, _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
+        ])
+        assert res == {"tenants": {"db-c": {}}}
+
+
+class TestGenerateTenantInteractiveDedup:
+    """互動嚴重度去重（單一 input，無子分支）。"""
+
+    def test_choice_2_writes_disable(self):
+        res = _gen_tenant_interactive("db-c", [], [
+            _NEUTRAL_MAINT, _NEUTRAL_SILENT, "2", *_NEUTRAL_ROUTING,
+        ])
+        assert res["tenants"]["db-c"] == {"_severity_dedup": "disable"}
+
+    @pytest.mark.parametrize("choice", ["1", "", "x"])
+    def test_non_2_omits(self, choice):
+        """僅 '2' 觸發 disable；其餘（含預設 1）省略。"""
+        res = _gen_tenant_interactive("db-c", [], [
+            _NEUTRAL_MAINT, _NEUTRAL_SILENT, choice, *_NEUTRAL_ROUTING,
+        ])
+        assert res == {"tenants": {"db-c": {}}}
+
+
+class TestGenerateTenantInteractiveRouting:
+    """互動告警路由（6 receiver 型別 + receiver_obj 真偽門控 timing prompts）。"""
+
+    # 路由前置：維護 N、靜音 1、dedup 1（3 個 no-op input）
+    _PRE = [_NEUTRAL_MAINT, _NEUTRAL_SILENT, _NEUTRAL_DEDUP]
+
+    def test_webhook_default_timing(self):
+        res = _gen_tenant_interactive("db-c", [], self._PRE + [
+            "webhook", "https://hooks.example.com/x",
+            "", "", "", "",  # group_by, group_wait, group_interval, repeat_interval
+        ])
+        assert res["tenants"]["db-c"]["_routing"] == {
+            "receiver": {"type": "webhook", "url": "https://hooks.example.com/x"},
+            "group_by": ["alertname", "tenant"],
+            "group_wait": "30s", "group_interval": "5m", "repeat_interval": "4h",
+        }
+
+    def test_empty_type_defaults_to_webhook(self):
+        """receiver_type 空白 → "webhook"。"""
+        res = _gen_tenant_interactive("db-c", [], self._PRE + [
+            "", "https://h/x", "", "", "", "",
+        ])
+        assert res["tenants"]["db-c"]["_routing"]["receiver"] == {
+            "type": "webhook", "url": "https://h/x"}
+
+    def test_email_custom_timing(self):
+        res = _gen_tenant_interactive("db-c", [], self._PRE + [
+            "email", "a@x.com,b@x.com", "smtp.x.com:587",
+            "severity,tenant", "10s", "2m", "1h",
+        ])
+        assert res["tenants"]["db-c"]["_routing"] == {
+            "receiver": {"type": "email", "to": ["a@x.com", "b@x.com"],
+                         "smarthost": "smtp.x.com:587"},
+            "group_by": ["severity", "tenant"],
+            "group_wait": "10s", "group_interval": "2m", "repeat_interval": "1h",
+        }
+
+    def test_slack_with_channel(self):
+        res = _gen_tenant_interactive("db-c", [], self._PRE + [
+            "slack", "https://hooks.slack.com/T/B/X", "#alerts",
+            "", "", "", "",
+        ])
+        assert res["tenants"]["db-c"]["_routing"]["receiver"] == {
+            "type": "slack", "api_url": "https://hooks.slack.com/T/B/X",
+            "channel": "#alerts"}
+
+    def test_slack_without_channel(self):
+        """空 channel → 不寫 channel 鍵（channel prompt 在 api_url 有值時才問）。"""
+        res = _gen_tenant_interactive("db-c", [], self._PRE + [
+            "slack", "https://hooks.slack.com/T/B/X", "",
+            "", "", "", "",
+        ])
+        assert res["tenants"]["db-c"]["_routing"]["receiver"] == {
+            "type": "slack", "api_url": "https://hooks.slack.com/T/B/X"}
+
+    def test_teams(self):
+        res = _gen_tenant_interactive("db-c", [], self._PRE + [
+            "teams", "https://outlook.office.com/webhook/x",
+            "", "", "", "",
+        ])
+        assert res["tenants"]["db-c"]["_routing"]["receiver"] == {
+            "type": "teams", "webhook_url": "https://outlook.office.com/webhook/x"}
+
+    def test_rocketchat(self):
+        res = _gen_tenant_interactive("db-c", [], self._PRE + [
+            "rocketchat", "https://chat.x.com/hooks/x",
+            "", "", "", "",
+        ])
+        assert res["tenants"]["db-c"]["_routing"]["receiver"] == {
+            "type": "rocketchat", "url": "https://chat.x.com/hooks/x"}
+
+    def test_pagerduty(self):
+        res = _gen_tenant_interactive("db-c", [], self._PRE + [
+            "pagerduty", "abc123",
+            "", "", "", "",
+        ])
+        assert res["tenants"]["db-c"]["_routing"]["receiver"] == {
+            "type": "pagerduty", "service_key": "abc123"}
+
+    def test_type_lowercased(self):
+        """receiver_type 經 .lower() → "SLACK" 視為 slack。"""
+        res = _gen_tenant_interactive("db-c", [], self._PRE + [
+            "SLACK", "https://hooks.slack.com/T/B/X", "",
+            "", "", "", "",
+        ])
+        assert res["tenants"]["db-c"]["_routing"]["receiver"]["type"] == "slack"
+
+    def test_unknown_type_no_routing(self):
+        """未知型別 → 只吃 receiver_type，不問後續，無 _routing。"""
+        res = _gen_tenant_interactive("db-c", [], self._PRE + ["carrierpigeon"])
+        assert res == {"tenants": {"db-c": {}}}
+
+    def test_webhook_empty_url_no_routing(self):
+        """webhook 缺 URL → receiver_obj 為空 → 不問 timing，無 _routing。"""
+        res = _gen_tenant_interactive("db-c", [], self._PRE + ["webhook", ""])
+        assert res == {"tenants": {"db-c": {}}}
+
+    def test_email_missing_smarthost_no_routing(self):
+        """email 一律吃 to+smarthost 兩個 input；缺 smarthost → 無 receiver。"""
+        res = _gen_tenant_interactive("db-c", [], self._PRE + ["email", "a@x.com", ""])
+        assert res == {"tenants": {"db-c": {}}}
+
+    def test_custom_group_by_split(self):
+        res = _gen_tenant_interactive("db-c", [], self._PRE + [
+            "webhook", "https://h/x",
+            "alertname,severity,tenant", "", "", "",
+        ])
+        assert res["tenants"]["db-c"]["_routing"]["group_by"] == \
+            ["alertname", "severity", "tenant"]
+
+
+class TestGenerateTenantInteractiveOrder:
+    """一次跑滿全部段落，pin 詢問次序 + 各段落 golden 整合。"""
+
+    def test_full_sequence_pins_prompt_order(self):
+        # 次序：metric → 維護 → 靜音 → dedup → 路由
+        res = _gen_tenant_interactive("db-c", ["kubernetes"], [
+            "75",        # container_cpu
+            "",          # container_cpu_throttle → "25"
+            "skip",      # container_memory → 省略
+            "y", "2026-06-01T00:00:00Z", "",   # 維護 enable+expires,noreason
+            "2", "",     # 靜音 warning 純字串（空 expires）
+            "2",         # dedup disable
+            "webhook", "https://h/x", "", "", "", "",  # 路由
+        ])
+        assert res == {"tenants": {"db-c": {
+            "container_cpu": "75",
+            "container_cpu_throttle": "25",
+            "_state_maintenance": {"target": "enable", "expires": "2026-06-01T00:00:00Z"},
+            "_silent_mode": "warning",
+            "_severity_dedup": "disable",
+            "_routing": {
+                "receiver": {"type": "webhook", "url": "https://h/x"},
+                "group_by": ["alertname", "tenant"],
+                "group_wait": "30s", "group_interval": "5m", "repeat_interval": "4h",
+            },
+        }}}

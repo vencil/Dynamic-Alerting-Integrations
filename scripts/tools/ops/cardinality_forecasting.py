@@ -20,7 +20,6 @@ cardinality_forecasting.py — 基數預測工具（§5.8）。
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import os
 import sys
@@ -45,14 +44,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 try:
     from _lib_python import (
         detect_cli_lang,
-        http_get_json,
+        format_json_report,
         parse_duration_seconds,
+        query_prometheus_instant,
+        query_prometheus_range,
     )
 except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
         detect_cli_lang,
-        http_get_json,
+        format_json_report,
         parse_duration_seconds,
+        query_prometheus_instant,
+        query_prometheus_range,
     )
 
 # ---------------------------------------------------------------------------
@@ -225,15 +228,19 @@ def query_cardinality_range(
     start = end - lookback_secs
 
     query = 'count by (tenant)({__name__=~"tenant_threshold_.*"})'
-    url = (f"{prometheus_url}/api/v1/query_range?"
-           f"query={query}&start={start}&end={end}&step={step}")
-
-    data, err = http_get_json(url)
-    if err or not data or data.get("status") != "success":
+    # #1112: PromQL contains spaces/braces/quotes — it MUST be percent-encoded.
+    # An f-string interpolation raises `InvalidURL: URL can't contain control
+    # characters` against a real Prometheus. The encoding now lives in
+    # `_lib_prometheus.query_prometheus_range` (ROI r3 W1); the
+    # "any error → {}" collapse stays here. timeout=10 preserves the
+    # pre-consolidation behaviour (this site used http_get_json's default).
+    result, err = query_prometheus_range(
+        prometheus_url, query, start, end, step, timeout=10)
+    if err:
         return {}
 
     results: dict[str, list[tuple[float, float]]] = {}
-    for series in data.get("data", {}).get("result", []):
+    for series in result:
         tenant = series.get("metric", {}).get("tenant", "unknown")
         values = [
             (float(ts), float(val))
@@ -257,14 +264,15 @@ def query_scrape_series_added(
         {tenant: current_scrape_series_added}。
     """
     query = 'sum by (tenant)(scrape_series_added)'
-    url = f"{prometheus_url}/api/v1/query?query={query}"
-
-    data, err = http_get_json(url)
-    if err or not data or data.get("status") != "success":
+    # #1112: percent-encode — delegated to
+    # `_lib_prometheus.query_prometheus_instant` (ROI r3 W1; its default
+    # timeout=10 matches this site's pre-consolidation http_get_json default).
+    result, err = query_prometheus_instant(prometheus_url, query)
+    if err:
         return {}
 
     results: dict[str, float] = {}
-    for series in data.get("data", {}).get("result", []):
+    for series in result:
         tenant = series.get("metric", {}).get("tenant", "unknown")
         value = series.get("value", [None, "0"])
         if len(value) >= 2:
@@ -573,6 +581,20 @@ def main(argv: Optional[list[str]] = None) -> int:
         else:
             print("No cardinality data retrieved. Check Prometheus endpoint "
                   "and tenant_threshold_* metrics.", file=sys.stderr)
+        if args.json_output:
+            # #1112: same schema as generate_json_report(), zero tenants, plus a
+            # status/reason discriminator. Exit code stays EXIT_CALLER_ERROR —
+            # only the output shape changes, not the exit semantics.
+            print(format_json_report({
+                "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "status": "no_data",
+                "reason": "no_cardinality_data",
+                "lookback_days": lookback_days,
+                "cardinality_limit": args.limit,
+                "warn_days": args.warn_days,
+                "summary": {"critical": 0, "warning": 0, "safe": 0, "total": 0},
+                "tenants": [],
+            }))
         return EXIT_CALLER_ERROR
 
     # Generate forecast
@@ -586,8 +608,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # Output
     if args.json_output:
-        print(json.dumps(generate_json_report(report), indent=2,
-                         ensure_ascii=False))
+        print(format_json_report(generate_json_report(report)))
     elif args.markdown:
         print(generate_markdown(report))
     else:

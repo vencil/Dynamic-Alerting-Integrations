@@ -220,9 +220,13 @@ class TestBuildQuery:
 # query_prometheus_range (mocked)
 # ═══════════════════════════════════════════════════════════════════════
 class TestPrometheusQuery:
-    """Prometheus 查詢測試（mock HTTP）。"""
+    """Prometheus 查詢測試（mock HTTP）。
 
-    @patch("threshold_recommend.http_get_json")
+    W1: fetch core 收斂進 _lib_prometheus.query_prometheus_instant，
+    HTTP seam 改 patch ``_lib_prometheus.http_get_json``。
+    """
+
+    @patch("_lib_prometheus.http_get_json")
     def test_range_vector_extraction(self, mock_get):
         """Range vector 應提取所有 values。"""
         mock_get.return_value = ({
@@ -240,7 +244,7 @@ class TestPrometheusQuery:
         assert len(values) == 3
         assert values[0] == 80.5
 
-    @patch("threshold_recommend.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_instant_vector_extraction(self, mock_get):
         """Instant vector 應提取 value。"""
         mock_get.return_value = ({
@@ -254,7 +258,7 @@ class TestPrometheusQuery:
         assert err is None
         assert 85.0 in values
 
-    @patch("threshold_recommend.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_query_error(self, mock_get):
         """查詢錯誤應返回 error。"""
         mock_get.return_value = (None, "connection refused")
@@ -262,7 +266,7 @@ class TestPrometheusQuery:
         assert err is not None
         assert values == []
 
-    @patch("threshold_recommend.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_prometheus_error_status(self, mock_get):
         """Prometheus error 狀態應返回 error。"""
         mock_get.return_value = ({"status": "error", "error": "bad query"}, None)
@@ -662,9 +666,35 @@ class TestCLI:
             tr.main()  # must NOT raise (no --config-dir required)
         captured = capsys.readouterr()
         assert called.get("yes") is True
-        assert "observed-map" in captured.out
-        assert "3" in captured.out  # total keys echoed
-        assert "preserved 1" in captured.out  # merge stats surfaced
+        # #1112: the summary is human-readable prose → stderr (stdout is reserved
+        # for the one JSON document `--json` promises; see the next test).
+        assert "observed-map" in captured.err
+        assert "3" in captured.err  # total keys echoed
+        assert "preserved 1" in captured.err  # merge stats surfaced
+        assert captured.out == ""
+
+    def test_generate_observed_map_json_envelope(self, tmp_path, capsys, monkeypatch):
+        """#1112: --generate-observed-map --json → stdout 恰好一份 JSON。
+
+        保留本工具的頂層 schema（tool / tenants / summary），寫檔結果放在
+        `observed_map`，並以 `status` 與推薦報告區分。
+        """
+        def fake_write(out_path=None, pack_paths=None):
+            return {
+                "path": str(tmp_path / "m.yaml"),
+                "total": 3, "clean": 2, "needs_review": 1,
+                "preserved": 1, "demoted": 0, "dropped": 0,
+            }
+
+        monkeypatch.setattr(tr.observed_map_lib, "write_observed_map", fake_write)
+        with patch("sys.argv",
+                   ["threshold_recommend.py", "--generate-observed-map", "--json"]):
+            tr.main()
+        doc = json.loads(capsys.readouterr().out)
+        assert doc["status"] == "observed_map_written"
+        assert doc["observed_map"]["total"] == 3
+        assert doc["tenants"] == []
+        assert doc["summary"]["recommended_changes"] == 0
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -697,7 +727,7 @@ def _rho_target(current, rho):
 
 
 class TestQueryPrometheusRangeTs:
-    @patch("threshold_recommend.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_keeps_timestamps(self, mock_get):
         mock_get.return_value = ({
             "status": "success",
@@ -708,13 +738,13 @@ class TestQueryPrometheusRangeTs:
         assert err is None
         assert pairs == [(1000.0, 0.95), (1060.0, 0.96)]
 
-    @patch("threshold_recommend.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_error_propagates(self, mock_get):
         mock_get.return_value = (None, "connection refused")
         pairs, err = tr.query_prometheus_range_ts("http://prom:9090", "q")
         assert pairs == [] and err == "connection refused"
 
-    @patch("threshold_recommend.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_filters_nan_and_inf(self, mock_get):
         # a hit-ratio rule can emit NaN while idle (0/0); an unfiltered NaN would
         # sort to an arbitrary index and corrupt the percentile.
@@ -940,3 +970,50 @@ class TestAnalyzeTenantLowerBound:
         assert rec.force_manual is True
         assert "recommendation → manual review" in rec.reason
         assert "lower-bound" not in rec.reason
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# --prometheus env-var fallback (W1: add_prometheus_arg / README §6.1)
+# ═══════════════════════════════════════════════════════════════════════
+class TestPrometheusEnvFallback:
+    """`--prometheus` 走 _lib_io.add_prometheus_arg 的 canonical env fallback。
+
+    回歸鎖（形狀照 tests/ops/test_byo_check.py::TestPrometheusEnvFallback）：
+    修正前是 `os.environ.get("PROMETHEUS_URL", default)` —— 對
+    present-but-empty 的 $PROMETHEUS_URL 會回空字串（key 存在），把空 URL
+    塞進查詢，與 entrypoint.inject_prometheus_env 的 `if prom_url:` 語意
+    分歧。help 文字（_HELP dict）逐字保留。
+    """
+
+    def _run_main_capture_url(self, monkeypatch, tmp_path, extra=()):
+        captured = {}
+
+        def fake_run_analysis(config_dir, *, prometheus_url=None, **kwargs):
+            captured["url"] = prometheus_url
+            return []
+
+        monkeypatch.setattr(tr, "run_analysis", fake_run_analysis)
+        monkeypatch.setattr(tr, "format_text_report", lambda reports: "")
+        monkeypatch.setattr(sys, "argv", [
+            "threshold_recommend.py", "--config-dir", str(tmp_path), *extra])
+        tr.main()
+        return captured["url"]
+
+    def test_uses_env_when_flag_absent(self, monkeypatch, tmp_path):
+        """--prometheus 省略 + $PROMETHEUS_URL 有值 → 用 env 值。"""
+        monkeypatch.setenv("PROMETHEUS_URL", "http://env-prom:9090")
+        url = self._run_main_capture_url(monkeypatch, tmp_path)
+        assert url == "http://env-prom:9090"
+
+    def test_empty_env_falls_back_to_localhost(self, monkeypatch, tmp_path):
+        """PROMETHEUS_URL 設定但為空字串（如 ConfigMap 缺鍵）→ 回退 localhost。"""
+        monkeypatch.setenv("PROMETHEUS_URL", "")
+        url = self._run_main_capture_url(monkeypatch, tmp_path)
+        assert url == "http://localhost:9090"
+
+    def test_explicit_flag_overrides_env(self, monkeypatch, tmp_path):
+        """顯式 --prometheus 永遠蓋過 $PROMETHEUS_URL。"""
+        monkeypatch.setenv("PROMETHEUS_URL", "http://env-prom:9090")
+        url = self._run_main_capture_url(
+            monkeypatch, tmp_path, extra=("--prometheus", "http://cli:9099"))
+        assert url == "http://cli:9099"

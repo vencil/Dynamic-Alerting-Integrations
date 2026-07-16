@@ -1,0 +1,279 @@
+name: Bench Attribution (post-merge, main)
+
+# Stage B of the two-stage C→B bench-trigger rework (2026-07, owner-approved).
+#
+# Purpose: keep regression detection ALWAYS-ON by benching every merge to main
+# and attributing automatically. Squash-merge policy ⇒ every main commit has
+# exactly one parent and corresponds 1:1 to a PR (verified on recent history:
+# all recent main commits are single-parent), so HEAD vs HEAD^ is an exact
+# per-PR attribution — no bisecting needed. After this workflow has soaked
+# 2-4 weeks the owner may flip the PR gate to on-demand only (see the
+# two-stage rollout note in bench-gate-pr.yaml's header).
+#
+# Verdict semantics are IDENTICAL to bench-gate-pr.yaml — same shared core
+# (scripts/tools/ops/bench_gate_compare.sh: interleaved single-runner
+# topology, benchstat α=0.01 + |Δ|≥5% dual threshold, deterministic-metric
+# scope, control-canary INCONCLUSIVE). Differences are policy only:
+#
+#   - REGRESSION → open a `perf-regression` issue (label pre-exists; shared
+#     with the PR gate) naming the commit + PR. Issue management mirrors the
+#     nightly trend watchdog's open/update/auto-close closed loop
+#     (analyze_bench_history.py --trend-watch, wired in bench-record.yaml):
+#     label-scoped open-issue query for dedupe, a body marker as the identity
+#     key, auto-close when a re-run of the SAME commit comes back clean.
+#     Unlike the watchdog's single rolling issue, the dedupe key here is the
+#     COMMIT — one issue per offending commit; a later commit's clean run
+#     does NOT close an earlier commit's issue (its regression is still
+#     attributed there; sustained drift on main stays the watchdog's job).
+#   - INCONCLUSIVE (canary drift) → log + step summary only, NO issue —
+#     aligned with the PR gate: canary drift means "re-run", never a verdict.
+#
+# Fail-loud policy: gh/issue-management failures are NOT swallowed (a
+# push-to-main run always has a write token, so a failure is a real signal),
+# unlike the PR gate's deliberate fork-PR read-only-token degradation.
+# Compare-step failures likewise leave the job red — a broken harness must
+# never read as "main is clean".
+
+on:
+  push:
+    branches: [main]
+    # Same benchmarkable-path filter as bench-gate-pr.yaml — kept in sync BY
+    # HAND (a comment there points here). `rule-packs/**` intentionally
+    # absent (2026-07 stage C removal: the benches reference zero rule-packs
+    # fixtures; re-add in BOTH files if that ever changes).
+    paths:
+      - 'components/threshold-exporter/app/**/*.go'
+      - '!components/threshold-exporter/app/**/*_test.go'
+      - 'components/threshold-exporter/app/go.mod'
+      - 'components/threshold-exporter/app/go.sum'
+      - 'scripts/tools/ops/bench_interleave.sh'
+      - 'scripts/tools/ops/bench_gate_compare.sh'
+      - 'scripts/tools/ops/bench_render_summary.sh'
+      - 'scripts/tools/ops/bench_report_pr.sh'
+      - 'scripts/tools/ops/bench-canary/**'
+      - '.github/workflows/bench-attrib-main.yaml'
+
+# Per-SHA group ⇒ effectively NO queue-dedup: every merged commit must get its
+# own attribution verdict. A single shared group would keep only 1 pending run
+# during a merge train and SILENTLY drop the intermediate commits' verdicts —
+# a silent-degraded path. Runs are single-runner self-contained (worktrees +
+# per-run temp dirs), so concurrent runs don't interact.
+concurrency:
+  group: bench-attrib-main-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write  # open / comment / close the per-commit perf-regression issue
+
+jobs:
+  attrib:
+    name: Bench + attribute (HEAD vs HEAD^)
+    runs-on: ubuntu-latest
+    # Same budget as bench-gate-pr (identical workload: 6 rounds @1s ≈
+    # ~8-10 min nominal, ~2× headroom).
+    timeout-minutes: 20
+    steps:
+      # persist-credentials: false — weaker threat model than the PR gate
+      # (the test binaries executed here are built from commits already
+      # MERGED to main, i.e. reviewed code, not an open PR's), but the
+      # hardening is free: every later git op is local (rev-parse/worktree
+      # over the full-history fetch) and the issue-management step
+      # authenticates via its own explicit GH_TOKEN env, so nothing needs
+      # the token persisted in .git/config.
+      - name: Checkout (full history — need HEAD^)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Cache Go modules + build
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.26-
+            ${{ runner.os }}-go-
+
+      - name: Resolve parent commit (squash merge ⇒ single parent)
+        id: parent
+        env:
+          # Bound via env, not raw ${{ }} in run: (#1021 class house rule).
+          EVENT_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          # Squash-merge policy: 1 main commit = 1 PR. The guards below cover
+          # the exceptions, and each one is VISIBLE (notice/warning), never a
+          # silent mis-attribution.
+          if ! parent=$(git rev-parse --verify -q HEAD^); then
+            echo "::notice::HEAD has no parent (initial commit) — nothing to compare; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          parent_count=$(($(git rev-list --parents -n 1 HEAD | wc -w) - 1))
+          if [ "$parent_count" -ne 1 ]; then
+            # True merge commit (shouldn't happen under squash policy).
+            # HEAD vs first-parent still measures "what this merge did to
+            # main", but attribution is the whole merged branch, not one PR.
+            echo "::warning::HEAD has $parent_count parents (non-squash merge?) — HEAD vs first-parent attributes the whole merge, not a single PR."
+          fi
+          # Multi-commit push (e.g. an owner batch push): HEAD vs HEAD^ only
+          # attributes the TIP commit. Warn so the coverage gap is visible;
+          # the nightly trend watchdog remains the backstop for the middle.
+          if [ -n "$EVENT_BEFORE" ] \
+             && [ "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ] \
+             && [ "$EVENT_BEFORE" != "$parent" ]; then
+            echo "::warning::push contained more than one commit (before=$EVENT_BEFORE != HEAD^=$parent) — only the tip commit is attributed this run."
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "sha=$parent" >> "$GITHUB_OUTPUT"
+
+      - name: Run interleaved bench + verdict (shared core)
+        if: steps.parent.outputs.skip != 'true'
+        id: compare
+        # ROUNDS=6 — do NOT lower: Mann-Whitney U min two-sided p = 2/C(2n,n);
+        # below n=5 the α=0.01 gate is mathematically unreachable (full math
+        # note in the script header). BENCHTIME=1s (stage-C slimming).
+        env:
+          BASE_SHA: ${{ steps.parent.outputs.sha }}
+          HEAD_SHA: ${{ github.sha }}
+          ROUNDS: "6"
+          BENCHTIME: "1s"
+        run: bash scripts/tools/ops/bench_gate_compare.sh
+
+      - name: Render step summary
+        if: always() && steps.parent.outputs.skip != 'true'
+        env:
+          REGRESSION: ${{ steps.compare.outputs.regression }}
+          REGRESSIONS_LIST: ${{ steps.compare.outputs.regressions }}
+          INCONCLUSIVE: ${{ steps.compare.outputs.inconclusive }}
+          INCONCLUSIVE_REASON: ${{ steps.compare.outputs.inconclusive_reason }}
+          INCONCLUSIVE_CPUS: ${{ steps.compare.outputs.inconclusive_cpus }}
+          INCONCLUSIVE_CANARY: ${{ steps.compare.outputs.inconclusive_canary }}
+          BENCHSTAT_TXT: ${{ steps.compare.outputs.benchstat_txt }}
+          COMPARE_DESC: |
+            Post-merge attribution: compared main HEAD (`${{ github.sha }}`)
+            against its parent (`${{ steps.parent.outputs.sha }}`) — squash merge, so this delta IS one PR.
+          REGRESSION_NOTE: |
+            A `perf-regression` issue naming this commit was opened (or its existing issue
+            updated) by the next step. INCONCLUSIVE runs never file issues — re-run the job
+            for a clean verdict.
+        run: bash scripts/tools/ops/bench_render_summary.sh
+
+      # Issue management — mirrors the trend watchdog's closed loop (see the
+      # header note), keyed per commit. Deliberately NOT shared with
+      # bench_report_pr.sh: that script implements PR-comment+label policy,
+      # this one implements per-commit issue policy.
+      - name: Manage attribution issue (open / update / auto-close)
+        if: steps.parent.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+          REGRESSION: ${{ steps.compare.outputs.regression }}
+          INCONCLUSIVE: ${{ steps.compare.outputs.inconclusive }}
+          INCONCLUSIVE_REASON: ${{ steps.compare.outputs.inconclusive_reason }}
+          REGRESSIONS_LIST: ${{ steps.compare.outputs.regressions }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+          # `perf-regression` pre-exists (shared with the PR gate); the
+          # --force create below is only an idempotent safety net.
+          LABEL="perf-regression"
+          short="${HEAD_SHA:0:12}"
+          marker="<!-- bench-attrib-commit: $HEAD_SHA -->"
+
+          # Dedupe (trend-watchdog pattern, keyed per commit): label-scoped
+          # open-issue query + body marker as identity key. Guards the "same
+          # regression re-filed on every re-run" class problem the watchdog
+          # solved for its nightly issue.
+          # startswith(), NOT contains(): the squash subject (PR title —
+          # AUTHOR-CONTROLLED text) is quoted verbatim later in the body, so a
+          # fake marker planted in a PR title could contains()-match another
+          # commit's marker and let a clean re-run close the WRONG issue. The
+          # real marker is always the FIRST line of the body (see the body
+          # heredoc below — keep it that way), so position-0 matching is
+          # injection-proof.
+          existing=$(gh issue list --repo "$REPO" --label "$LABEL" --state open \
+                       --json number,body \
+                       --jq ".[] | select(.body | startswith(\"$marker\")) | .number" \
+                     | head -1)
+
+          if [ "$INCONCLUSIVE" = "true" ]; then
+            # Aligned with the PR gate: canary drift = re-run, never a verdict.
+            echo "::notice::INCONCLUSIVE (${INCONCLUSIVE_REASON:-canary drift}) — no issue filed; re-run this workflow for a clean verdict on $short."
+            exit 0
+          fi
+
+          if [ "$REGRESSION" = "true" ]; then
+            subject=$(git log -1 --format=%s "$HEAD_SHA")
+            # Squash subjects end with "(#NNNN)" — recover the PR link from it.
+            pr_num=$(printf '%s' "$subject" | grep -oE '\(#[0-9]+\)$' | tr -dc '0-9' || true)
+            if [ -n "$pr_num" ]; then
+              pr_line="PR: $SERVER_URL/$REPO/pull/$pr_num"
+            else
+              pr_line="_(no PR reference found in the squash subject)_"
+            fi
+            first_bench=$(printf '%s\n' "$REGRESSIONS_LIST" | awk 'NF {print $1; exit}')
+            title="[bench-attrib] perf regression at $short — ${first_bench:-see body}"
+            # marker MUST be the first body line — the startswith() dedupe
+            # above depends on position 0 (injection defense, see that note).
+            {
+              echo "$marker"
+              echo ""
+              echo "Post-merge bench attribution flagged a statistically significant slowdown"
+              echo "introduced by commit \`$HEAD_SHA\` (vs its parent):"
+              echo ""
+              echo "> $subject"
+              echo ""
+              echo "$pr_line"
+              echo ""
+              echo "benchstat rows (p<0.01 AND |Δ|≥5%, control canary stable):"
+              echo '```'
+              echo "$REGRESSIONS_LIST"
+              echo '```'
+              echo ""
+              echo "Run: $RUN_URL"
+              echo ""
+              echo "_Auto-filed by \`bench-attrib-main.yaml\` (HEAD vs HEAD^). A clean re-run of"
+              echo "the same commit auto-closes this issue; a later commit's clean run does not._"
+            } > /tmp/attrib_issue.md
+            if [ -n "$existing" ]; then
+              # Concise confirmation only — don't re-paste the whole issue body
+              # on every re-run; the fresh numbers + run link are the news.
+              echo "::notice::open attribution issue #$existing already exists for $short — appending re-run confirmation instead of filing a duplicate."
+              {
+                echo "Re-run of \`$HEAD_SHA\` confirms the regression (control canary stable):"
+                echo '```'
+                echo "$REGRESSIONS_LIST"
+                echo '```'
+                echo "Run: $RUN_URL"
+              } > /tmp/attrib_rerun.md
+              gh issue comment "$existing" --repo "$REPO" --body-file /tmp/attrib_rerun.md
+            else
+              gh label create "$LABEL" --repo "$REPO" --color "D93F0B" \
+                --description "Bench gate flagged a perf regression (informational)" --force
+              gh issue create --repo "$REPO" --title "$title" \
+                --label "$LABEL" --body-file /tmp/attrib_issue.md
+            fi
+          else
+            # Clean verdict for THIS commit → closed loop (watchdog pattern):
+            # if a previous run of this same commit filed an issue (noise that
+            # a re-run cleared), auto-close it. Other commits' issues untouched.
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --repo "$REPO" \
+                --body "Re-run of \`$HEAD_SHA\` came back clean (no significant ≥5% regression, control canary stable) — auto-closing. Run: $RUN_URL"
+              gh issue close "$existing" --repo "$REPO" --reason completed
+              echo "::notice::closed attribution issue #$existing (clean re-run of $short)."
+            fi
+            echo "No regression attributed to $short."
+          fi

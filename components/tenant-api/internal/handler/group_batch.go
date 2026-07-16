@@ -51,8 +51,8 @@ type GroupBatchResponse struct {
 // @Param       async query   string            false "Enable async mode (true/false)"
 // @Success     200   {object} GroupBatchResponse
 // @Success     202   {object} map[string]interface{}
-// @Failure     400   {object} map[string]string
-// @Failure     404   {object} map[string]string
+// @Failure     400   {object} ErrorResponse
+// @Failure     404   {object} ErrorResponse
 // @Router      /api/v1/groups/{id}/batch [post]
 func GroupBatch(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

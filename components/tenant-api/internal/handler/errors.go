@@ -69,6 +69,11 @@ const (
 	// the client should back off and retry rather than the server piling up
 	// unbounded goroutines.
 	CodeWriteOverloaded = "WRITE_OVERLOADED"
+	// CodeCandidateInvalid marks a 400 whose candidate _rbac.yaml failed the
+	// live parse/validation pipeline (POST …/access-report/dry-run, ADR-027 /
+	// LD-6 P7). Distinct from BAD_REQUEST so a client can render the echoed
+	// parse detail inline against the submitted document.
+	CodeCandidateInvalid = "CANDIDATE_INVALID"
 )
 
 // ErrorResponse is the canonical error envelope. All fields except
@@ -92,7 +97,13 @@ type ErrorResponse struct {
 	// custom MarshalJSON below — clients see them as siblings of
 	// `error`, not nested.
 	Extra map[string]any `json:"-"`
-}
+} //@name ErrorResponse
+// The swag @name above pins ONE canonical OpenAPI definition. Without it,
+// @Failure annotations referencing this type from this package (bare
+// `ErrorResponse`) and from the federation sub-package
+// (`handler.ErrorResponse`) generate two byte-identical definitions under
+// different package-qualified names (internal_handler.ErrorResponse vs
+// github_com_vencil_tenant-api_internal_handler.ErrorResponse).
 
 // MarshalJSON inlines Extra at the top level so clients reading
 // e.g. `existing_pr_url` find it next to `error`, matching the

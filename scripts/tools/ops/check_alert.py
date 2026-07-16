@@ -30,7 +30,7 @@ import argparse
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
-from _lib_python import http_get_json  # noqa: E402
+from _lib_python import http_get_json, add_prometheus_arg  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
@@ -80,10 +80,10 @@ if __name__ == "__main__":
     )
     parser.add_argument("alert_name", help="Alert name (e.g. HighConnectionCount)")
     parser.add_argument("tenant", help="Tenant ID (e.g. db-a)")
-    parser.add_argument("--prometheus", default="http://localhost:9090",
-                        help="Prometheus Query API URL "
-                             "(預設: http://localhost:9090; "
-                             "叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)")
+    add_prometheus_arg(parser,
+                       help_text="Prometheus Query API URL "
+                                 "(預設: $PROMETHEUS_URL，否則 http://localhost:9090; "
+                                 "叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)")
     # #452 Track C: this tool emits JSON by design (consumers like
     # tests/scenarios/scenario-d.sh parse stdout as JSON). --json is the
     # default and is accepted explicitly so the documented

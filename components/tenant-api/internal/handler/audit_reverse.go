@@ -80,9 +80,9 @@ const auditReverseForbiddenMsg = "platform admin (non-org-scoped) permission req
 // @Param       include query string false "Opt-in expansions"           Enums(org_values)
 // @Param       view    query string false "Report projection"           Enums(full, redacted) default(full)
 // @Success     200 {object} rbac.ReverseReport
-// @Failure     400 {object} map[string]string
-// @Failure     401 {object} map[string]string
-// @Failure     403 {object} map[string]string
+// @Failure     400 {object} ErrorResponse
+// @Failure     401 {object} ErrorResponse
+// @Failure     403 {object} ErrorResponse
 // @Router      /api/v1/audit/tenants/{id}/access-report [get]
 func GetTenantAccessReport(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

@@ -260,7 +260,7 @@ func (w *Watcher[T]) load() error {
 // _rbac.yaml fail closed (ADR-027 MED-8, see rbac.failClosedOnEmpty),
 // and for every manager it is how a GitOps `git rm` of the config
 // takes effect. Do not "harden" this into an error — see
-// rbac_extra_test.go TestLoad_DeletedFile.
+// config_reload_test.go TestLoad_DeletedFile (internal/rbac).
 //
 // SHA-256 dedup avoids re-parsing unchanged files on every WatchLoop
 // tick. On a parse failure lastHash is left untouched (holding the
@@ -345,6 +345,11 @@ func (w *Watcher[T]) Override(cfg *T) {
 // (just clears the hash), and Get returns cfg directly. Intended
 // for unit tests that exercise permission / lookup logic against
 // an in-memory config without disk I/O.
+//
+// NOTE: rbac.NewCandidate is a PRODUCTION caller (the P7 dry-run builds an
+// in-memory candidate snapshot this way — no path, no watch, unanchored is
+// exactly what a candidate wants). Renaming or test-gating this must not
+// silently break that path; see internal/rbac/candidate.go.
 //
 // Caller is responsible for keeping `cfg` alive for the lifetime
 // of the returned Watcher; the snapshot is stored by pointer.

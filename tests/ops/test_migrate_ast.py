@@ -29,14 +29,19 @@ import migrate_rule  # noqa: E402
 # Check if AST is available
 HAS_AST = migrate_rule.HAS_AST
 
+# 單一共用 skip 標記：需要 promql-parser 的測試掛 @requires_ast。
+# 注意不可改成 module-level pytestmark —— 本檔約半數測試（regex fallback、
+# dict lookup、suppression pairing 等）刻意在沒裝 promql-parser 時也要跑。
+requires_ast = pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+
+@requires_ast
 def test_ast_simple_metric():
     """測試簡單 metric 名稱。"""
     result = migrate_rule.extract_metrics_ast("mysql_up > 0")
     assert result == ["mysql_up"]
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_ast_metric_with_labels():
     """測試帶標籤的 metric。"""
     result = migrate_rule.extract_metrics_ast(
@@ -44,7 +49,7 @@ def test_ast_metric_with_labels():
     )
     assert result == ["mysql_up"]
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_ast_rate_wrapped():
     """測試 rate() 包裹的 metric（regex 容易誤取）。"""
     result = migrate_rule.extract_metrics_ast(
@@ -52,7 +57,7 @@ def test_ast_rate_wrapped():
     )
     assert result == ["http_requests_total"]
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_ast_nested_functions():
     """測試多層巢狀函式。"""
     result = migrate_rule.extract_metrics_ast(
@@ -60,7 +65,7 @@ def test_ast_nested_functions():
     )
     assert result == ["mysql_global_status_queries"]
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_ast_compound_and():
     """測試 and 複合表達式（多個 metric）。"""
     result = migrate_rule.extract_metrics_ast(
@@ -72,7 +77,7 @@ def test_ast_compound_and():
         "mysql_global_status_threads_running",
     ]
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_ast_compound_or_unless():
     """測試 or/unless 複合表達式。"""
     result = migrate_rule.extract_metrics_ast(
@@ -82,7 +87,7 @@ def test_ast_compound_or_unless():
     assert "metric_b" in result
     assert "metric_c" in result
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_ast_histogram_quantile():
     """測試 histogram_quantile 加 le 標籤。"""
     result = migrate_rule.extract_metrics_ast(
@@ -90,7 +95,7 @@ def test_ast_histogram_quantile():
     )
     assert result == ["http_request_duration_seconds_bucket"]
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_ast_binary_arithmetic():
     """測試算術運算中的 metric。"""
     result = migrate_rule.extract_metrics_ast(
@@ -114,7 +119,7 @@ def test_ast_extract_all_metrics_uses_ast():
     assert "rate" not in result
 
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_ast_dimension_labels():
     """測試維度標籤提取。"""
     result = migrate_rule.extract_label_matchers_ast(
@@ -125,7 +130,7 @@ def test_ast_dimension_labels():
     assert "db" in result[0]["labels"]
     assert "role" in result[0]["labels"]
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_ast_skip_infrastructure_labels():
     """測試跳過基礎設施標籤（job/instance/namespace）。"""
     result = migrate_rule.extract_label_matchers_ast(
@@ -138,21 +143,21 @@ def test_ast_skip_infrastructure_labels():
             assert "instance" not in r["labels"]
 
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_ast_absent_detected():
     """測試 absent 函數偵測。"""
     assert migrate_rule.detect_semantic_break_ast(
         'absent(mysql_up{job="mysql"})'
     ) is True
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_ast_predict_linear_detected():
     """測試 predict_linear 函數偵測。"""
     assert migrate_rule.detect_semantic_break_ast(
         'predict_linear(node_filesystem_free_bytes[1h], 4*3600) < 0'
     ) is True
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_ast_normal_not_detected():
     """測試正常表達式不偵測為語義中斷。"""
     assert migrate_rule.detect_semantic_break_ast(
@@ -194,7 +199,7 @@ def test_prefix_compound_expr():
     assert "custom_metric_a" in result
     assert "custom_metric_b" in result
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_prefix_validates_reparse():
     """測試改寫後的表達式仍可 parse。"""
     result = migrate_rule.rewrite_expr_prefix(
@@ -232,7 +237,7 @@ def test_tenant_inject_multiple_metrics():
     # Both metrics should have tenant label
     assert result.count('tenant=~".+"') == 2
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_tenant_inject_validates_reparse():
     """測試注入租戶標籤後仍可 parse。"""
     result = migrate_rule.rewrite_expr_tenant_label(
@@ -243,7 +248,7 @@ def test_tenant_inject_validates_reparse():
     ast = promql_parser.parse(result)
     assert ast is not None
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_tenant_inject_complex_nested():
     """測試巢狀函式中的租戶標籤注入。"""
     result = migrate_rule.rewrite_expr_tenant_label(
@@ -256,7 +261,7 @@ def test_tenant_inject_complex_nested():
     assert ast is not None
 
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_killer_compound_and_binary():
     """測試複合 and 運算（Case 1）。"""
     expr = ("(mysql_global_status_threads_connected > 100) "
@@ -266,7 +271,7 @@ def test_killer_compound_and_binary():
     assert "mysql_global_status_threads_connected" in metrics
     assert "mysql_global_status_threads_running" in metrics
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_killer_complex_label_regex():
     """測試複雜 label matcher（Case 2）。"""
     expr = 'mysql_up{job="mysql", instance=~"10.0.*:3306"} == 0'
@@ -280,7 +285,7 @@ def test_killer_complex_label_regex():
     ast = promql_parser.parse(rewritten)
     assert ast is not None
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_killer_aggregation_offset_time_window():
     """測試聚合 + 時間窗 + offset（Case 3）。"""
     expr = "sum by (user) (rate(mysql_global_status_queries[5m] offset 1h))"
@@ -298,7 +303,7 @@ def test_killer_aggregation_offset_time_window():
     assert "5m" in pretty
 
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_walk_unary_expr():
     """測試一元表達式走訪：-metric_a。"""
     import promql_parser
@@ -307,7 +312,7 @@ def test_walk_unary_expr():
     assert len(vs_list) == 1
     assert vs_list[0].name == "my_metric"
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_walk_paren_expr():
     """測試括號表達式走訪：(metric_a > 0)。"""
     import promql_parser
@@ -316,7 +321,7 @@ def test_walk_paren_expr():
     assert len(vs_list) == 1
     assert vs_list[0].name == "my_metric"
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_walk_matrix_selector():
     """測試矩陣選擇器走訪：metric[5m]。"""
     import promql_parser
@@ -412,14 +417,14 @@ def test_e2e_semantic_break_returns_none():
     assert result.status == "unparseable"
 
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_parse_all_metrics_simple():
     """測試簡單表達式的所有 metrics。"""
     parsed = migrate_rule.parse_expr("mysql_connections > 100", use_ast=True)
     assert parsed is not None
     assert parsed["all_metrics"] == ["mysql_connections"]
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_parse_all_metrics_compound():
     """測試複合表達式的所有 metrics。"""
     parsed = migrate_rule.parse_expr(
@@ -437,7 +442,7 @@ def test_parse_all_metrics_no_ast():
     assert parsed["all_metrics"] == []
 
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_write_outputs_ast_path():
     """測試 AST 引擎產出：recording rule LHS 應包含租戶標籤。"""
     import tempfile
@@ -490,7 +495,7 @@ def test_degrade_extract_all_metrics_fallback():
         migrate_rule.HAS_AST = orig
 
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_nested_absent_in_rate():
     """測試巢狀 Call 中的 absent：absent(rate(x[5m]))。"""
     # absent 接受 vector，rate 接受 matrix — 這不是合法 PromQL，
@@ -500,14 +505,14 @@ def test_nested_absent_in_rate():
         'absent(rate(http_requests_total[5m]))'
     ) is True
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_deeply_nested_predict_linear():
     """測試深層巢狀：sum(predict_linear(x[1h], 3600))。"""
     assert migrate_rule.detect_semantic_break_ast(
         'sum(predict_linear(node_filesystem_free_bytes[1h], 3600))'
     ) is True
 
-@pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+@requires_ast
 def test_no_break_in_nested_safe_funcs():
     """測試巢狀安全函數無中斷：sum(rate(x[5m]))。"""
     assert migrate_rule.detect_semantic_break_ast(

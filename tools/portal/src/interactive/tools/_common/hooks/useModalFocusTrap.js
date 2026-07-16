@@ -20,6 +20,13 @@ purpose: |
   Behavior contract: identical to the inline version. ARIA / keyboard
   semantics preserved — Esc closes, Tab cycles within focusable
   descendants of modalRef.current, focus auto-applies on open.
+
+  Focus restoration (TRK-335, WCAG 2.4.3 Focus Order): on open the hook
+  remembers the element that had focus (the trigger that launched the
+  modal), and on close/unmount it hands focus back to it — so keyboard
+  and screen-reader users return to where they were instead of being
+  dropped at the top of the document. The restore is guarded: if the
+  trigger unmounted while the modal was open it is skipped, never thrown.
 ---
 
 import { useRef, useEffect } from "react";  // TRK-233 ESM import
@@ -29,6 +36,9 @@ function useModalFocusTrap(modalType, setModalType) {
 
   useEffect(() => {
     if (modalType && modalRef.current) {
+      // Capture the trigger BEFORE we steal focus into the modal, so the
+      // cleanup can return focus to it on close (return-focus-on-close).
+      const trigger = document.activeElement;
       modalRef.current.focus();
       const handleKeyDown = (e) => {
         if (e.key === 'Escape') {
@@ -51,7 +61,21 @@ function useModalFocusTrap(modalType, setModalType) {
         }
       };
       document.addEventListener('keydown', handleKeyDown);
-      return () => document.removeEventListener('keydown', handleKeyDown);
+      return () => {
+        document.removeEventListener('keydown', handleKeyDown);
+        // WCAG 2.4.3: return focus to the launching trigger. Guard for the
+        // trigger having unmounted while the modal was open (e.g. the list
+        // row that opened it got filtered away) — only refocus a real,
+        // still-connected, focusable element, and never document.body.
+        if (
+          trigger &&
+          trigger !== document.body &&
+          typeof trigger.focus === 'function' &&
+          document.contains(trigger)
+        ) {
+          trigger.focus();
+        }
+      };
     }
   }, [modalType]);
 

@@ -54,6 +54,14 @@ const (
 	// gateNonTenantData — the resource is not per-tenant data, so there is no
 	// tenant whose org list could scope it; route-level "*" write gate applies.
 	gateNonTenantData = "non-tenant-data exemption"
+	// gateWriteOpPlatformAdmin — read-op semantics (the POST computes a
+	// report and commits nothing) behind the LOCKED platform-admin bar
+	// (rbac.PlatformAdminNonOrgScoped) at the top of the handler with a
+	// constant 403 — the write-method mirror of gateReadPlatformAdmin.
+	// Deliberately NOT gateReadOp: that label claims the route middleware
+	// enforces PermRead on {id}; here the middleware only authenticates and
+	// the real bar lives in the handler (ADR-027 / LD-6 P7).
+	gateWriteOpPlatformAdmin = "read-op semantics; platform-admin bar in handler (non-org-scoped, constant 403)"
 )
 
 // writeRouteManifest: method+pattern → org-gate mechanism + why that
@@ -90,6 +98,8 @@ var writeRouteManifest = map[string]string{
 		" — platform whitelist is platform-wide config; Allowed(p, \"*\", admin) is the intended org-blind gate",
 	"POST /api/v1/federation/accounts/backfill": gatePlatformStar +
 		" — fleet-wide AccountID backfill; same platform-admin bar as the whitelist",
+	"POST /api/v1/audit/tenants/{id}/access-report/dry-run": gateWriteOpPlatformAdmin +
+		" — what-if dry-run over a candidate _rbac.yaml; 403 byte-identical to the GET access-report bar (P7)",
 }
 
 // Read-plane gate-mechanism labels (ADR-027 / LD-6 P4c). Reads gate in the

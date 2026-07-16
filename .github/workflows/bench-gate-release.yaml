@@ -73,10 +73,17 @@ jobs:
     # diagnostic output even on slow runs).
     timeout-minutes: 40
     steps:
+      # persist-credentials: false — same free hardening as the rest of the
+      # bench family: this job runs released (reviewed) tag code, and no
+      # later step needs the token — every git op is local against the
+      # full-history fetch (describe/rev-parse/checkout/reset/clean),
+      # benchstat installs via the Go module proxy, and there is no gh
+      # usage anywhere in the job.
       - name: Checkout repo (full history for both tags)
         uses: actions/checkout@v6
         with:
           fetch-depth: 0  # need all tags + history
+          persist-credentials: false
 
       - name: Set up Go 1.26
         uses: actions/setup-go@v6

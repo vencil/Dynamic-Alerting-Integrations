@@ -67,6 +67,40 @@ class TestCommandMapConsistency:
         invalid = entrypoint.PROMETHEUS_COMMANDS - set(entrypoint.COMMAND_MAP.keys())
         assert invalid == set(), f"PROMETHEUS_COMMANDS 引用未知命令: {invalid}"
 
+    def test_add_prometheus_arg_adopters_in_prometheus_commands(self):
+        """工具原始碼呼叫 add_prometheus_arg 者必須列入 PROMETHEUS_COMMANDS。
+
+        兩個 $PROMETHEUS_URL fallback 機制（argparse-layer default vs
+        dispatcher-layer argv 注入，見 PROMETHEUS_COMMANDS 上方註解）須保持
+        同步：工具改採 add_prometheus_arg 卻漏加 PROMETHEUS_COMMANDS 時，
+        兩機制的涵蓋集合就此 drift（README §6.1 的單一全域 fallback 敘述
+        失真）。W1 收斂 threshold-recommend / threshold-govern 時加上此
+        同步 gate。
+        """
+        tools_root = os.path.join(
+            os.path.dirname(__file__), os.pardir, os.pardir, "scripts", "tools")
+        missing = []
+        scanned = adopters = 0
+        for cmd, script in entrypoint.COMMAND_MAP.items():
+            for cand in (os.path.join(tools_root, "ops", script),
+                         os.path.join(tools_root, script)):
+                if os.path.isfile(cand):
+                    scanned += 1
+                    with open(cand, encoding="utf-8") as fh:
+                        src = fh.read()
+                    # 呼叫點帶括號；import 行（不帶括號）不算採用
+                    if "add_prometheus_arg(" in src:
+                        adopters += 1
+                        if cmd not in entrypoint.PROMETHEUS_COMMANDS:
+                            missing.append(cmd)
+                    break
+        # anti-vacuous：路徑推導壞掉時掃到 0 檔會假綠——W4 已有 10+ 支採用，
+        # 掃描結果低於此下限代表本測試自身失效而非 repo 乾淨。
+        assert scanned > 0, f"掃不到任何工具原始碼（tools_root 推導錯誤？）: {tools_root}"
+        assert adopters >= 10, f"add_prometheus_arg 採用數異常偏低（{adopters}），掃描可能失效"
+        assert missing == [], (
+            f"採用 add_prometheus_arg 但不在 PROMETHEUS_COMMANDS: {missing}")
+
     def test_command_map_keys_are_kebab_case(self):
         """所有 command 名稱使用 kebab-case 格式。"""
         for cmd in entrypoint.COMMAND_MAP:
@@ -100,6 +134,27 @@ class TestInjectPrometheusEnv:
         args = ["--prometheus", "http://custom:9090", "--tenant", "db-a"]
         result = entrypoint.inject_prometheus_env(args)
         assert result.count("--prometheus") == 1
+
+    def test_no_inject_when_inline_flag_present(self, monkeypatch):
+        """--prometheus=URL（inline 形式）已存在時不注入。
+
+        回歸鎖：只比對裸 token 會漏掉 inline 形式 → 仍注入 env 值，而
+        argparse 取最後一個 → env 靜默蓋掉呼叫端明確指定的端點。
+        """
+        monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")
+        args = ["--prometheus=http://explicit:9090", "--tenant", "db-a"]
+        result = entrypoint.inject_prometheus_env(args)
+        assert result == ["--prometheus=http://explicit:9090", "--tenant", "db-a"]
+        assert "http://env:9090" not in result
+
+    def test_inline_flag_explicit_value_wins_in_argparse(self, monkeypatch):
+        """端到端：inline 形式經 argparse 解析後仍是呼叫端指定的值。"""
+        import argparse
+        monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")
+        args = entrypoint.inject_prometheus_env(["--prometheus=http://explicit:9090"])
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--prometheus")
+        assert parser.parse_args(args).prometheus == "http://explicit:9090"
 
     def test_no_inject_when_env_unset(self, monkeypatch):
         """PROMETHEUS_URL 未設定時不注入。"""

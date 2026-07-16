@@ -27,7 +27,7 @@ type ValidateResponse struct {
 // @Param       id    path     string true  "Tenant ID"
 // @Param       body  body     string true  "Tenant YAML content"
 // @Success     200   {object} ValidateResponse
-// @Failure     400   {object} map[string]string
+// @Failure     400   {object} ErrorResponse
 // @Router      /api/v1/tenants/{id}/validate [post]
 func ValidateTenant(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

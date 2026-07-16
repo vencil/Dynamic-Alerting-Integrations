@@ -41,7 +41,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from diagnose import check as diagnose_check  # noqa: E402
 from diagnose import query_prometheus  # noqa: E402
-from _lib_python import write_json_secure  # noqa: E402
+from _lib_python import format_json_report, write_json_secure, add_prometheus_arg  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
@@ -203,9 +203,10 @@ def main():
         "--tenants",
         help="Comma-separated tenant IDs (default: auto-discover from ConfigMap)",
     )
-    parser.add_argument(
-        "--prometheus", default="http://localhost:9090",
-        help="Prometheus Query API URL (default: http://localhost:9090)",
+    add_prometheus_arg(
+        parser,
+        help_text="Prometheus Query API URL "
+                  "(default: $PROMETHEUS_URL, else http://localhost:9090)",
     )
     parser.add_argument(
         "--workers", type=int, default=5,
@@ -248,10 +249,32 @@ def main():
 
     # Dry-run: just list tenants
     if args.dry_run:
-        print(f"Discovered {len(tenants)} tenants:")
+        print(f"Discovered {len(tenants)} tenants:", file=sys.stderr)
         for t in tenants:
-            print(f"  - {t}")
-        print("\nUse without --dry-run to run health checks.")
+            print(f"  - {t}", file=sys.stderr)
+        print("\nUse without --dry-run to run health checks.", file=sys.stderr)
+        if args.json:
+            # #1112: same schema as generate_report(), with every MEASURED
+            # field null because nothing was checked — `healthy_count` /
+            # `issue_count` / `health_score` are all null rather than 0, so a
+            # consumer cannot mistake "not measured" for "everything
+            # unhealthy" (0/2 healthy would read as 0%). `total_tenants` stays
+            # a real count: the tenants WERE discovered, just not checked.
+            # `status` is the discriminator.
+            print(format_json_report({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "status": "dry_run",
+                "reason": "health_checks_skipped",
+                "prometheus_url": args.prometheus,
+                "total_tenants": len(tenants),
+                "healthy_count": None,
+                "issue_count": None,
+                "health_score": None,
+                "tenants": {
+                    t: {"tenant": t, "status": "not_checked"} for t in tenants
+                },
+                "recommendations": [],
+            }))
         return
 
     # Run diagnose in parallel
@@ -283,7 +306,7 @@ def main():
 
     # Output
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(format_json_report(report))
     else:
         print_text_report(report)
 

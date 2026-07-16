@@ -299,22 +299,71 @@ class TestMainCLI:
     """main() CLI 整合測試。"""
 
     def test_tenants_flag(self, monkeypatch, capsys, cli_argv):
-        """--tenants 直接指定 tenant 清單。"""
+        """--tenants 直接指定 tenant 清單。
+
+        #1112: 人類可讀的 dry-run 清單走 stderr（stdout 保留給 --json 的
+        單一 JSON 文件），故斷言 stderr。
+        """
         cli_argv("batch_diagnose", "--tenants", "db-a,db-b",
             "--prometheus", "http://prom:9090", "--dry-run")
         bd.main()
-        out = capsys.readouterr().out
-        assert "db-a" in out
-        assert "db-b" in out
-        assert "2 tenants" in out
+        err = capsys.readouterr().err
+        assert "db-a" in err
+        assert "db-b" in err
+        assert "2 tenants" in err
 
     def test_dry_run_single(self, monkeypatch, capsys, cli_argv):
-        """--dry-run 列出 tenant 但不執行檢查。"""
+        """--dry-run 列出 tenant 但不執行檢查（清單走 stderr，#1112）。"""
         cli_argv("batch_diagnose", "--tenants", "db-a", "--dry-run")
         bd.main()
-        out = capsys.readouterr().out
-        assert "db-a" in out
-        assert "dry-run" in out.lower() or "without --dry-run" in out
+        err = capsys.readouterr().err
+        assert "db-a" in err
+        assert "dry-run" in err.lower() or "without --dry-run" in err
+
+    def test_dry_run_json_envelope(self, monkeypatch, capsys, cli_argv):
+        """#1112: `--dry-run --json` 的 envelope 形狀（不只「能 parse」）。
+
+        釘住三件事，任一被改壞就紅：
+        1. discriminator 是 `status="dry_run"` / `reason="health_checks_skipped"`
+           的**確切值**——subprocess gate 只做 json.loads，把 dry_run 改成
+           dryrun 它照樣綠。
+        2. **未測量 ≠ 0**：`healthy_count` / `issue_count` / `health_score`
+           必須是 **None**，不是 0。若寫成 0，consumer 讀到 health_score=0
+           會以為「全部不健康」，而真相是「根本沒檢查」。`total_tenants`
+           反之是真實計數（租戶確實被探索到了），這個區別是刻意的。
+        3. key set 與 happy path 的 generate_report() **完全一致**（+ 兩個
+           discriminator）——同一個 consumer 兩條路徑都能吃。
+        """
+        cli_argv("batch_diagnose", "--tenants", "db-a,db-b",
+            "--prometheus", "http://prom:9090", "--dry-run", "--json")
+        bd.main()
+        captured = capsys.readouterr()
+
+        doc = json.loads(captured.out)          # 全文 parse ⇒ stdout 只有 JSON
+        assert doc["status"] == "dry_run"
+        assert doc["reason"] == "health_checks_skipped"
+
+        # 未測量的欄位必須是 None（不是 0）
+        assert doc["healthy_count"] is None
+        assert doc["issue_count"] is None
+        assert doc["health_score"] is None
+        # 已探索到的才是真計數
+        assert doc["total_tenants"] == 2
+        assert doc["prometheus_url"] == "http://prom:9090"
+        assert doc["recommendations"] == []
+        assert doc["tenants"] == {
+            "db-a": {"tenant": "db-a", "status": "not_checked"},
+            "db-b": {"tenant": "db-b", "status": "not_checked"},
+        }
+
+        # envelope 保留 happy-path 的全部 schema 鍵（drift-proof：generate_report
+        # 日後新增欄位而 dry-run envelope 沒跟上 → 這行紅）
+        happy_keys = set(bd.generate_report([], "http://prom:9090"))
+        assert set(doc) == happy_keys | {"status", "reason"}
+
+        # 人類訊息在 stderr，stdout 不含散文
+        assert "Discovered 2 tenants" in captured.err
+        assert "Discovered" not in captured.out
 
     def test_no_tenants_exits(self, monkeypatch, cli_argv):
         """沒有 tenant 時 exit 2 (caller error: nothing to act on, #452)。"""
@@ -392,12 +441,44 @@ class TestMainCLI:
         assert data["issue_count"] == 1
 
     def test_auto_discover(self, monkeypatch, capsys, cli_argv):
-        """不指定 --tenants 時自動探索。"""
+        """不指定 --tenants 時自動探索（清單走 stderr，#1112）。"""
         cli_argv("batch_diagnose", "--prometheus", "http://prom:9090",
             "--dry-run")
         monkeypatch.setattr(bd, "discover_tenants",
                             lambda **kw: ["db-a", "db-b"])
         bd.main()
-        out = capsys.readouterr().out
-        assert "db-a" in out
-        assert "db-b" in out
+        err = capsys.readouterr().err
+        assert "db-a" in err
+        assert "db-b" in err
+
+    def test_prometheus_env_fallback(self, monkeypatch, cli_argv):
+        """--prometheus 省略 + $PROMETHEUS_URL 設定 → 讀 env（README §6.1、add_prometheus_arg）。
+
+        batch-diagnose 先前硬編 http://localhost:9090（standalone 直跑讀不到
+        env）；add_prometheus_arg 現在於 argparse 層 resolve $PROMETHEUS_URL。
+        """
+        monkeypatch.setenv("PROMETHEUS_URL", "http://test:1234")
+        cli_argv("batch_diagnose", "--tenants", "db-a", "--json")
+        captured = {}
+
+        def mock_run(tenant, prom_url, timeout=30):
+            captured["url"] = prom_url
+            return {"tenant": tenant, "status": "healthy", "elapsed_seconds": 0.1}
+
+        monkeypatch.setattr(bd, "run_diagnose_for_tenant", mock_run)
+        bd.main()
+        assert captured["url"] == "http://test:1234"
+
+    def test_prometheus_env_unset_fallback_localhost(self, monkeypatch, cli_argv):
+        """--prometheus 省略 + env 未設 → localhost（byte-identical 舊行為）。"""
+        monkeypatch.delenv("PROMETHEUS_URL", raising=False)
+        cli_argv("batch_diagnose", "--tenants", "db-a", "--json")
+        captured = {}
+
+        def mock_run(tenant, prom_url, timeout=30):
+            captured["url"] = prom_url
+            return {"tenant": tenant, "status": "healthy", "elapsed_seconds": 0.1}
+
+        monkeypatch.setattr(bd, "run_diagnose_for_tenant", mock_run)
+        bd.main()
+        assert captured["url"] == "http://localhost:9090"

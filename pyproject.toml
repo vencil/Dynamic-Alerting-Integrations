@@ -5,7 +5,12 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-x --tb=short"
+# -x (exit-first) removed from the GLOBAL default (CI-ROI wave, owner
+# decision): a repo-wide fail-fast hides every failure after the first,
+# forcing deselect-enumeration loops to attribute multi-failure runs
+# (burned in dx-tool CI sweeps). Fail-fast is opt-in per invocation now
+# (`pytest -x`); CI keeps its own explicit flags on the command line.
+addopts = "--tb=short"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: 跨模組整合測試",

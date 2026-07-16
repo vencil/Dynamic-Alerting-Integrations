@@ -25,7 +25,6 @@ Usage:
 """
 
 import argparse
-import json
 import os
 import sys
 import urllib.parse
@@ -33,7 +32,7 @@ import urllib.parse
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import http_get_json, query_prometheus_instant  # noqa: E402
+from _lib_python import format_json_report, http_get_json, probe_health, query_prometheus_instant, add_prometheus_arg  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Alias for backward-compat within this module
@@ -44,24 +43,20 @@ def check_edge(prom_url):
     """Verify edge cluster configuration (§6.1)."""
     checks = []
 
-    # 1. Prometheus reachable
-    import urllib.error
-    import urllib.request
-    try:
-        req = urllib.request.Request(f"{prom_url}/-/healthy")  # nosec B310  #operator-supplied internal Prometheus URL
-        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310  #see Request line above
-            resp.read()
+    # 1. Prometheus reachable (shared probe_health — scheme-validated; r3 W2)
+    _body, probe_err = probe_health(f"{prom_url}/-/healthy")
+    if probe_err is None:
         checks.append({
             "check": "edge_prometheus_reachable",
             "status": "pass",
             "detail": f"Prometheus at {prom_url} is healthy",
         })
-    except (urllib.error.URLError, ValueError, OSError) as e:
+    else:
         checks.append({
             "check": "edge_prometheus_reachable",
             "status": "fail",
             "caller_error": True,  # #452/#737: transport failure = caller-error (exit 2)
-            "detail": f"Cannot reach: {str(e)[:60]}",
+            "detail": f"Cannot reach: {probe_err[:60]}",
         })
         return checks
 
@@ -121,6 +116,8 @@ def check_edge(prom_url):
         })
 
     # 4. Federate endpoint accessible
+    import urllib.error
+    import urllib.request
     federate_url = f"{prom_url}/federate?match[]=" + urllib.parse.quote('{tenant!=""}')
     try:
         req = urllib.request.Request(federate_url)  # nosec B310  #operator-supplied internal Prometheus URL
@@ -146,24 +143,20 @@ def check_central(prom_url):
     """Verify central cluster configuration (§6.2)."""
     checks = []
 
-    # 1. Prometheus reachable
-    import urllib.error
-    import urllib.request
-    try:
-        req = urllib.request.Request(f"{prom_url}/-/healthy")  # nosec B310  #operator-supplied internal Prometheus URL
-        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310  #see Request line above
-            resp.read()
+    # 1. Prometheus reachable (shared probe_health — scheme-validated; r3 W2)
+    _body, probe_err = probe_health(f"{prom_url}/-/healthy")
+    if probe_err is None:
         checks.append({
             "check": "central_prometheus_reachable",
             "status": "pass",
             "detail": f"Prometheus at {prom_url} is healthy",
         })
-    except (urllib.error.URLError, ValueError, OSError) as e:
+    else:
         checks.append({
             "check": "central_prometheus_reachable",
             "status": "fail",
             "caller_error": True,  # #452/#737: transport failure = caller-error (exit 2)
-            "detail": f"Cannot reach: {str(e)[:60]}",
+            "detail": f"Cannot reach: {probe_err[:60]}",
         })
         return checks
 
@@ -330,8 +323,9 @@ def main():
         choices=["edge", "central", "e2e"],
         help="What to check (edge cluster, central cluster, or end-to-end)",
     )
-    parser.add_argument("--prometheus", default="http://localhost:9090",
-                        help="Prometheus URL (central for e2e, or target for edge/central)")
+    add_prometheus_arg(parser,
+                       help_text="Prometheus URL (central for e2e, or target for edge/central; "
+                                 "default: $PROMETHEUS_URL, else http://localhost:9090)")
     parser.add_argument("--edge-urls",
                         help="Comma-separated edge Prometheus URLs (for e2e mode)")
     parser.add_argument("--json", action="store_true",
@@ -362,12 +356,12 @@ def main():
     )
 
     if args.json:
-        print(json.dumps({
+        print(format_json_report({
             "tool": "federation-check",
             "section": section,
             "status": "fail" if has_failure else "pass",
             "checks": checks,
-        }, indent=2, ensure_ascii=False))
+        }))
     else:
         format_output(section, checks)
         print(f"\n{'='*60}")

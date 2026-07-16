@@ -59,11 +59,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 try:
     from _lib_python import (
         detect_cli_lang,
+        format_json_report,
+        load_tenant_configs,
         load_yaml_file,
     )
 except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
         detect_cli_lang,
+        format_json_report,
+        load_tenant_configs,
         load_yaml_file,
     )
 
@@ -100,40 +104,13 @@ class PolicyResult:
 
 
 # ---------------------------------------------------------------------------
-# Config loading
+# Config loading — tenant-config loading is delegated to the shared
+# `_lib_io.load_tenant_configs` (imported via the `_lib_python` facade above;
+# da-tools ROI r3 W2 de-shadow). Behaviour deltas vs the former local copy
+# (both handled wrapper + flat): lib additionally skips dotfiles/non-files,
+# and an EMPTY/comment-only yaml now enters the OPA input as a `{}` tenant
+# (lib loads with default={}, local copy skipped None).
 # ---------------------------------------------------------------------------
-def load_tenant_configs(config_dir: str) -> dict[str, dict]:
-    """Load all tenant configs from config-dir (skip _ prefixed files)."""
-    configs: dict[str, dict] = {}
-
-    base = Path(config_dir)
-    if not base.is_dir():
-        return configs
-
-    for entry in sorted(base.iterdir(), key=lambda p: p.name):
-        fname = entry.name
-        if not fname.endswith((".yaml", ".yml")):
-            continue
-        if fname.startswith("_"):
-            continue
-
-        data = load_yaml_file(str(entry))
-        if not isinstance(data, dict):
-            continue
-
-        # Multi-tenant wrapper format
-        if "tenants" in data and isinstance(data["tenants"], dict):
-            for tenant_name, tenant_cfg in data["tenants"].items():
-                if isinstance(tenant_cfg, dict):
-                    configs[tenant_name] = tenant_cfg
-        else:
-            # Flat format — filename (sans extension) is tenant name
-            tenant_name = entry.stem
-            configs[tenant_name] = data
-
-    return configs
-
-
 def load_defaults(config_dir: str) -> dict[str, Any]:
     """Load _defaults.yaml."""
     defaults_path = Path(config_dir) / "_defaults.yaml"
@@ -479,10 +456,31 @@ def main(argv: Optional[list[str]] = None) -> int:
     defaults = load_defaults(args.config_dir)
 
     if not tenant_configs:
+        # #1112: prose → stderr; stdout still owes exactly one JSON document.
         if lang == "zh":
-            print(f"未找到 tenant 配置於 {args.config_dir}")
+            print(f"未找到 tenant 配置於 {args.config_dir}", file=sys.stderr)
         else:
-            print(f"No tenant configs found in {args.config_dir}")
+            print(f"No tenant configs found in {args.config_dir}", file=sys.stderr)
+        if args.dry_run:
+            # --dry-run's stdout IS the OPA input document (it is piped into
+            # `opa eval`, not read as a report) — so the zero-tenant answer is
+            # an OPA input with no tenants, NOT a report envelope. Same schema
+            # as the populated dry-run, so the same consumer keeps working.
+            print(format_json_report(build_opa_input(
+                args.config_dir, {}, defaults,
+                rule_packs=None, platform_version="v2.3.0",
+            )))
+        elif args.json_output:
+            # Report schema, zeroed, with a status/reason discriminator.
+            print(format_json_report({
+                "status": "no_tenant_configs",
+                "reason": "no_tenant_configs_found",
+                "tenants_evaluated": 0,
+                "error_count": 0,
+                "warning_count": 0,
+                "passed": True,
+                "violations": [],
+            }))
         return EXIT_OK
 
     # Build OPA input
@@ -496,7 +494,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # Dry-run mode
     if args.dry_run:
-        print(json.dumps(opa_input, indent=2, ensure_ascii=False))
+        print(format_json_report(opa_input))
         return EXIT_OK
 
     # Evaluate via OPA
@@ -527,7 +525,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # Output
     if args.json_output:
-        print(json.dumps(generate_json_report(result), indent=2, ensure_ascii=False))
+        print(format_json_report(generate_json_report(result)))
     else:
         print(generate_text_report(result, lang))
 

@@ -49,11 +49,14 @@ class TestRunCmd:
             gi.run_cmd("kubectl get pods")
 
     def test_dry_run_returns_sentinel_without_executing(self, capsys):
+        # #1112: the echoed command is progress prose → stderr, so that
+        # `--dry-run --json` leaves stdout holding exactly one JSON document.
         result = gi.run_cmd(["kubectl", "get", "pods"], dry_run=True)
         assert result == "[dry-run]"
-        out = capsys.readouterr().out
-        assert "[DRY RUN]" in out
-        assert "kubectl get pods" in out
+        captured = capsys.readouterr()
+        assert "[DRY RUN]" in captured.err
+        assert "kubectl get pods" in captured.err
+        assert captured.out == ""
 
     def test_success_returns_stripped_stdout(self, monkeypatch):
         monkeypatch.setattr(

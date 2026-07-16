@@ -30,17 +30,14 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 
-def _detect_lang():
-    """Detect CLI language."""
-    for var in ('DA_LANG', 'LC_ALL', 'LANG'):
-        val = os.environ.get(var, '')
-        if val.startswith('zh'):
-            return 'zh'
-    return 'en'
-
-
-_LANG = _detect_lang()
+# Canonical lang detection (da-tools ROI r3 W2 bug fix): the former local
+# `_detect_lang` only checked the zh prefix per variable, so DA_LANG=en fell
+# through to LC_ALL — an explicit DA_LANG=en LOST to LC_ALL=zh, violating the
+# canonical contract ("DA_LANG=en wins over LC_ALL=zh"). `detect_cli_lang`
+# early-returns on BOTH zh and en prefixes.
+_LANG = detect_cli_lang()
 
 
 def _t(zh, en):
@@ -96,7 +93,7 @@ def _save_history(config_dir, history):
     """Save history to disk."""
     hdir = _history_dir(config_dir)
     history_file = hdir / 'history.json'
-    history_file.write_text(json.dumps(history, indent=2, ensure_ascii=False),
+    history_file.write_text(format_json_report(history),
                             encoding='utf-8')
 
 

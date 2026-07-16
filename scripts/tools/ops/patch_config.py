@@ -33,6 +33,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_python import format_json_report  # noqa: E402
 
 
 def run_cmd(cmd):
@@ -280,6 +281,16 @@ def main():
     )
     args = parser.parse_args()
 
+    # #1112: `--json` without `--diff` used to be silently ignored — and the
+    # tool then went on to APPLY the change for real, while the caller believed
+    # it had asked for a preview document. A contradictory flag combination on a
+    # mutating tool must fail loudly, not mutate: caller error, nothing applied.
+    if args.json and not args.diff:
+        print("ERROR: --json requires --diff (it prints the diff preview as "
+              "JSON). Without --diff this command APPLIES the change; refusing "
+              "to apply while --json was requested.", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+
     # 1. Get existing ConfigMap
     cm_json = run_cmd(["kubectl", "get", "configmap", "threshold-config",
                        "-n", "monitoring", "-o", "json"])
@@ -292,7 +303,7 @@ def main():
         # Preview mode: show diff without applying
         diff = diff_preview(cm_data, mode, args.tenant, args.metric_key, args.value)
         if args.json:
-            print(json.dumps(diff, indent=2, ensure_ascii=False))
+            print(format_json_report(diff))
         else:
             print_diff(diff)
     else:

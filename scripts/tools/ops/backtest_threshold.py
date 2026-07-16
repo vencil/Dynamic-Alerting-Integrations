@@ -30,12 +30,10 @@ Usage:
   - git available (for --git-diff mode)
 """
 import argparse
-import json
 import os
 import re
 import subprocess
 import sys
-import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -49,7 +47,8 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import load_yaml_file, is_disabled, http_get_json, write_json_secure, write_text_secure  # noqa: E402
+from _lib_python import load_yaml_file, is_disabled, http_get_json, query_prometheus_range, write_json_secure, write_text_secure, add_prometheus_arg  # noqa: E402
+from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -83,25 +82,21 @@ def prometheus_available(prom_url, timeout=5):
 
 
 def query_range(prom_url, query, lookback_seconds, step=DEFAULT_STEP):
-    """Execute a Prometheus range_query and return result data."""
+    """Execute a Prometheus range_query and return result data.
+
+    Thin wrapper over ``_lib_prometheus.query_prometheus_range`` (ROI r3 W1):
+    the fetch core lives in the lib; the "any error → []" collapse stays
+    here (tests monkeypatch this module attribute by name — keep it).
+    """
     import time
     end = time.time()
     start = end - lookback_seconds
 
-    params = urllib.parse.urlencode({
-        "query": query,
-        "start": f"{start:.0f}",
-        "end": f"{end:.0f}",
-        "step": step,
-    })
-    url = f"{prom_url}/api/v1/query_range?{params}"
-
-    data, err = http_get_json(url, timeout=30)
+    result, err = query_prometheus_range(
+        prom_url, query, start, end, step, timeout=30)
     if err:
         return []
-    if data.get("status") == "success":
-        return data.get("data", {}).get("result", [])
-    return []
+    return result
 
 
 def count_threshold_breaches(values, threshold, direction="above"):
@@ -532,6 +527,27 @@ def backtest_change(prom_url, change, lookback_seconds):
     }
 
 
+def empty_report(lookback, status, reason):
+    """Report envelope for a terminal path that ran no backtest (#1112).
+
+    Same schema as :func:`generate_report` with every count zeroed, plus a
+    ``status`` / ``reason`` discriminator.  A `--json` consumer reading
+    ``.risk_summary.HIGH`` therefore works unchanged on the skip / no-change
+    paths (it sees 0), and can branch on ``.status`` when it cares.
+    """
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "lookback": lookback,
+        "status": status,
+        "reason": reason,
+        "total_changes": 0,
+        "analyzed": 0,
+        "no_data": 0,
+        "risk_summary": {"HIGH": 0, "MEDIUM": 0, "LOW": 0},
+        "changes": [],
+    }
+
+
 def generate_report(results, lookback):
     """Generate aggregate backtest report."""
     analyzed = [r for r in results if r["status"] == "analyzed"]
@@ -640,9 +656,10 @@ def main():
     parser.add_argument("--old-value", help="Old threshold value (with --tenant)")
     parser.add_argument("--new-value", help="New threshold value (with --tenant)")
 
-    parser.add_argument(
-        "--prometheus", default="http://localhost:9090",
-        help="Prometheus Query API URL (default: http://localhost:9090)",
+    add_prometheus_arg(
+        parser,
+        help_text="Prometheus Query API URL "
+                  "(default: $PROMETHEUS_URL, else http://localhost:9090)",
     )
     parser.add_argument(
         "--lookback", default=DEFAULT_LOOKBACK,
@@ -686,7 +703,11 @@ def main():
     # Check Prometheus availability
     if not prometheus_available(args.prometheus):
         if args.skip_if_unavailable:
-            print("Prometheus unavailable — skipping backtest (--skip-if-unavailable)")
+            print("Prometheus unavailable — skipping backtest (--skip-if-unavailable)",
+                  file=sys.stderr)
+            if args.json:
+                print(format_json_report(empty_report(
+                    args.lookback, "skipped", "prometheus_unavailable")))
             if recipe_tenants and args.markdown_output:
                 write_text_secure(args.markdown_output, custom_alert_markdown(recipe_tenants))
             sys.exit(EXIT_OK)
@@ -719,7 +740,10 @@ def main():
         sys.exit(EXIT_CALLER_ERROR)
 
     if not changes:
-        print("No threshold changes found.")
+        print("No threshold changes found.", file=sys.stderr)
+        if args.json:
+            print(format_json_report(empty_report(
+                args.lookback, "no_changes", "no_threshold_changes_detected")))
         if recipe_tenants and args.markdown_output:
             write_text_secure(args.markdown_output, custom_alert_markdown(recipe_tenants))
         sys.exit(EXIT_OK)
@@ -736,7 +760,7 @@ def main():
 
     # Output
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(format_json_report(report))
     else:
         print_text_report(report)
 

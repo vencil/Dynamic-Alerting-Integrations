@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import os
+import subprocess
 import sys
 import textwrap
 from unittest import mock
@@ -300,6 +301,96 @@ class TestPrintSummary:
         out = capsys.readouterr().out
         assert "比對組數: 2" in out
 
+    # ── r3 W2：查詢失敗（None result）不得印 🎉 誤導可安全切換 ──
+
+    def test_all_none_suppresses_celebration(self, capsys):
+        """查詢全失敗：mismatch/missing 均 0 但什麼都沒驗證 → 抑制 🎉 + 警示。
+
+        修前此案照印「🎉 …可以安全切換」卻 exit 2（摘要與 exit code 矛盾）。
+        """
+        vm.print_summary([None, None])
+        out = capsys.readouterr().out
+        assert "🎉" not in out
+        assert "查詢失敗" in out
+        assert "2/2" in out
+
+    def test_partial_none_suppresses_celebration(self, capsys):
+        """部分查詢失敗：成功組照常計數，但 🎉 仍抑制 + 警示。"""
+        ok_result = {
+            "label": "cpu",
+            "old_query": "q1",
+            "new_query": "q2",
+            "old_count": 1,
+            "new_count": 1,
+            "diffs": [{"tenant": "db-a", "old_value": 1.0, "new_value": 1.0,
+                        "status": "match", "delta": 0.0}],
+        }
+        vm.print_summary([ok_result, None])
+        out = capsys.readouterr().out
+        assert "🎉" not in out
+        assert "查詢失敗" in out
+        assert "1/2" in out
+        assert "數值一致: 1" in out
+
+    def test_no_failures_still_celebrates(self, capsys):
+        """守門反例：零查詢失敗 + 全 match 時 🎉 照常（不因本修誤傷）。"""
+        ok_result = {
+            "label": "cpu",
+            "old_query": "q1",
+            "new_query": "q2",
+            "old_count": 1,
+            "new_count": 1,
+            "diffs": [{"tenant": "db-a", "old_value": 1.0, "new_value": 1.0,
+                        "status": "match", "delta": 0.0}],
+        }
+        vm.print_summary([ok_result])
+        out = capsys.readouterr().out
+        assert "🎉" in out
+        assert "查詢失敗" not in out
+
+
+# ---------------------------------------------------------------------------
+# classify_results
+# ---------------------------------------------------------------------------
+
+class TestClassifyResults:
+    """Tests for classify_results() — exit-code 訊號歸類。"""
+
+    def _result(self, status):
+        return {
+            "label": "cpu",
+            "old_query": "q1",
+            "new_query": "q2",
+            "old_count": 1,
+            "new_count": 1,
+            "diffs": [{"tenant": "db-a", "old_value": 1.0, "new_value": 1.0,
+                        "status": status, "delta": 0.0}],
+        }
+
+    def test_all_match(self):
+        assert vm.classify_results([self._result("match")]) == (False, False)
+
+    def test_mismatch_is_finding(self):
+        assert vm.classify_results([self._result("mismatch")]) == (True, False)
+
+    def test_missing_is_finding(self):
+        assert vm.classify_results([self._result("old_missing")]) == (True, False)
+        assert vm.classify_results([self._result("new_missing")]) == (True, False)
+
+    def test_both_empty_not_finding(self):
+        """both_empty 與 print_summary 計數口徑一致——不列入 finding。"""
+        assert vm.classify_results([self._result("both_empty")]) == (False, False)
+
+    def test_none_result_is_query_error(self):
+        assert vm.classify_results([None]) == (False, True)
+
+    def test_mixed_error_and_finding(self):
+        got = vm.classify_results([None, self._result("mismatch")])
+        assert got == (True, True)
+
+    def test_empty_results(self):
+        assert vm.classify_results([]) == (False, False)
+
 
 # ---------------------------------------------------------------------------
 # write_csv_report
@@ -524,14 +615,17 @@ class TestMain:
 
     @mock.patch("validate_migration.load_mapping_pairs")
     def test_main_empty_pairs(self, mock_load, capsys):
+        """r3 W2：零比對組 → 訊息走 stderr + EXIT_CALLER_ERROR（vacuous pass 封死）。"""
         mock_load.return_value = []
         with mock.patch("sys.argv", [
             "validate_migration.py",
             "--mapping", "fake.yaml",
         ]):
-            vm.main()
-        out = capsys.readouterr().out
-        assert "No comparison pairs" in out
+            rc = vm.main()
+        captured = capsys.readouterr()
+        assert rc == 2
+        assert "No comparison pairs" in captured.err
+        assert "No comparison pairs" not in captured.out
 
     @mock.patch("validate_migration.time.sleep")
     @mock.patch("validate_migration.run_single_comparison")
@@ -619,3 +713,209 @@ class TestMain:
             vm.main()
         out = capsys.readouterr().out
         assert "CSV report" in out
+
+
+# ---------------------------------------------------------------------------
+# main() exit-code contract (README §6.3 / #452)
+# ---------------------------------------------------------------------------
+
+class TestMainExitCodes:
+    """main() 的 exit-code 契約（README §6.3 / _lib_exitcodes）。
+
+    silent-pass bug 的回歸鎖：mismatch / missing 此前一路 exit 0。
+    main() 回傳 int，檔尾 `sys.exit(main())` 轉成 process exit code。
+    """
+
+    def _result(self, status, label="manual"):
+        # 比照 compare_vectors 的真實輸出：mismatch 兩值皆在故 delta 為數值，
+        # missing 類 delta 為 None（print_summary 對 mismatch 會格式化 delta）。
+        delta = 1.0 if status in ("match", "mismatch") else None
+        return {
+            "label": label,
+            "old_query": "old_q",
+            "new_query": "new_q",
+            "old_count": 1,
+            "new_count": 1,
+            "diffs": [{"tenant": "db-a", "old_value": 1.0, "new_value": 2.0,
+                        "status": status, "delta": delta}],
+        }
+
+    def _run_single(self, tmp_path, mock_run, return_value):
+        mock_run.return_value = return_value
+        with mock.patch("sys.argv", [
+            "validate_migration.py",
+            "--old", "old_metric", "--new", "new_metric",
+            "-o", str(tmp_path / "out"),
+        ]):
+            return vm.main()
+
+    @mock.patch("validate_migration.run_single_comparison")
+    def test_single_match_exits_ok(self, mock_run, tmp_path):
+        assert self._run_single(tmp_path, mock_run, self._result("match")) == 0
+
+    @mock.patch("validate_migration.run_single_comparison")
+    def test_single_mismatch_exits_violation(self, mock_run, tmp_path):
+        assert self._run_single(tmp_path, mock_run, self._result("mismatch")) == 1
+
+    @mock.patch("validate_migration.run_single_comparison")
+    def test_single_missing_exits_violation(self, mock_run, tmp_path):
+        assert self._run_single(tmp_path, mock_run, self._result("new_missing")) == 1
+
+    @mock.patch("validate_migration.run_single_comparison")
+    def test_single_query_failure_exits_caller_error(self, mock_run, tmp_path):
+        """Prometheus 查詢層失敗（run_single_comparison → None）＝ caller
+        error（2），對齊 shadow_verify.py 的 #452/#737 歸類。"""
+        assert self._run_single(tmp_path, mock_run, None) == 2
+
+    def test_old_without_new_exits_caller_error(self):
+        """既有 :389 caller-error 路徑：exit code 必須是 2。"""
+        with mock.patch("sys.argv", [
+            "validate_migration.py", "--old", "some_metric",
+        ]):
+            with pytest.raises(SystemExit) as exc:
+                vm.main()
+        assert exc.value.code == 2
+
+    def _run_watch(self, tmp_path, mock_load, mock_run, argv_extra):
+        mock_load.return_value = [
+            {"label": "cpu", "old_query": "oq", "new_query": "nq"},
+        ]
+        with mock.patch("sys.argv", [
+            "validate_migration.py",
+            "--mapping", "fake.yaml",
+            "--watch", "--interval", "1",
+            "-o", str(tmp_path / "out"),
+        ] + argv_extra):
+            return vm.main()
+
+    @mock.patch("validate_migration.time.sleep")
+    @mock.patch("validate_migration.run_single_comparison")
+    @mock.patch("validate_migration.load_mapping_pairs")
+    def test_watch_converged_exits_ok(self, mock_load, mock_run, mock_sleep, tmp_path):
+        mock_run.return_value = self._result("match", label="cpu")
+        rc = self._run_watch(tmp_path, mock_load, mock_run, [
+            "--rounds", "10", "--auto-detect-convergence", "--stability-window", "2",
+        ])
+        assert rc == 0
+
+    @mock.patch("validate_migration.time.sleep")
+    @mock.patch("validate_migration.run_single_comparison")
+    @mock.patch("validate_migration.load_mapping_pairs")
+    def test_watch_converged_after_early_mismatch_exits_ok(
+            self, mock_load, mock_run, mock_sleep, tmp_path):
+        """早期輪的 mismatch 是等待收斂的常態——收斂後仍為 0。"""
+        mock_run.side_effect = (
+            [self._result("mismatch", label="cpu")]
+            + [self._result("match", label="cpu")] * 9
+        )
+        rc = self._run_watch(tmp_path, mock_load, mock_run, [
+            "--rounds", "10", "--auto-detect-convergence", "--stability-window", "2",
+        ])
+        assert rc == 0
+
+    @mock.patch("validate_migration.time.sleep")
+    @mock.patch("validate_migration.run_single_comparison")
+    @mock.patch("validate_migration.load_mapping_pairs")
+    def test_watch_not_converged_exits_violation(
+            self, mock_load, mock_run, mock_sleep, tmp_path):
+        mock_run.return_value = self._result("mismatch", label="cpu")
+        rc = self._run_watch(tmp_path, mock_load, mock_run, [
+            "--rounds", "3", "--auto-detect-convergence", "--stability-window", "2",
+        ])
+        assert rc == 1
+
+    @mock.patch("validate_migration.time.sleep")
+    @mock.patch("validate_migration.run_single_comparison")
+    @mock.patch("validate_migration.load_mapping_pairs")
+    def test_watch_no_tracker_last_round_match_exits_ok(
+            self, mock_load, mock_run, mock_sleep, tmp_path):
+        mock_run.return_value = self._result("match", label="cpu")
+        rc = self._run_watch(tmp_path, mock_load, mock_run, ["--rounds", "2"])
+        assert rc == 0
+
+    @mock.patch("validate_migration.time.sleep")
+    @mock.patch("validate_migration.run_single_comparison")
+    @mock.patch("validate_migration.load_mapping_pairs")
+    def test_watch_no_tracker_last_round_mismatch_exits_violation(
+            self, mock_load, mock_run, mock_sleep, tmp_path):
+        mock_run.return_value = self._result("mismatch", label="cpu")
+        rc = self._run_watch(tmp_path, mock_load, mock_run, ["--rounds", "2"])
+        assert rc == 1
+
+    @mock.patch("validate_migration.time.sleep")
+    @mock.patch("validate_migration.run_single_comparison")
+    @mock.patch("validate_migration.load_mapping_pairs")
+    def test_watch_last_round_query_failure_exits_caller_error(
+            self, mock_load, mock_run, mock_sleep, tmp_path):
+        """判定輪（最後一輪）查詢失敗 → 2，不得靜默當成功。"""
+        mock_run.side_effect = [self._result("match", label="cpu"), None]
+        rc = self._run_watch(tmp_path, mock_load, mock_run, ["--rounds", "2"])
+        assert rc == 2
+
+    @mock.patch("validate_migration.time.sleep")
+    @mock.patch("validate_migration.run_single_comparison")
+    @mock.patch("validate_migration.load_mapping_pairs")
+    def test_watch_not_converged_last_round_match_exits_violation(
+            self, mock_load, mock_run, mock_sleep, tmp_path):
+        """最反直覺裁定 pin (a)：tracker 未收斂＋最後一輪碰巧全 match → 1。
+
+        單輪乾淨不足以推翻「未達 stability window」的判定——不得因
+        末輪 lucky match 而放行 cutover。"""
+        mock_run.side_effect = [
+            self._result("mismatch", label="cpu"),
+            self._result("match", label="cpu"),
+        ]
+        rc = self._run_watch(tmp_path, mock_load, mock_run, [
+            "--rounds", "2", "--auto-detect-convergence", "--stability-window", "2",
+        ])
+        assert rc == 1
+
+    @mock.patch("validate_migration.time.sleep")
+    @mock.patch("validate_migration.run_single_comparison")
+    @mock.patch("validate_migration.load_mapping_pairs")
+    def test_watch_not_converged_last_round_query_failure_exits_caller_error(
+            self, mock_load, mock_run, mock_sleep, tmp_path):
+        """最反直覺裁定 pin (b)：tracker 未收斂＋最後一輪查詢失敗 → 2。
+
+        caller error 優先於「未收斂」的 violation——整程連不上 Prometheus
+        時不得誤歸為 user-actionable 的 1。"""
+        mock_run.side_effect = [
+            self._result("mismatch", label="cpu"),
+            None,
+        ]
+        rc = self._run_watch(tmp_path, mock_load, mock_run, [
+            "--rounds", "2", "--auto-detect-convergence", "--stability-window", "2",
+        ])
+        assert rc == 2
+
+    @mock.patch("validate_migration.load_mapping_pairs")
+    def test_empty_pairs_exits_caller_error(self, mock_load):
+        """r3 W2 翻案（沿 #452/#737）：mapping 載入後零比對組 → 2。
+
+        零比對 = 什麼都沒驗證，vacuous pass 不得綠燈放行
+        `da-tools validate && promote`；空 mapping 屬 caller 可修輸入。
+        """
+        mock_load.return_value = []
+        with mock.patch("sys.argv", [
+            "validate_migration.py", "--mapping", "fake.yaml",
+        ]):
+            assert vm.main() == 2
+
+    def test_footer_propagates_exit_code_subprocess(self, tmp_path):
+        """footer 回歸鎖：檔尾必須是 `sys.exit(main())`。
+
+        entrypoint.py 以 exec_module(__main__) 執行本檔，exit code 只能靠
+        SystemExit 上傳——若退回裸 `main()`，上方 in-process 測試仍全綠、
+        CLI 層卻回退 silent-pass。故以真實子行程驗證 code 傳出 process：
+        連不上的 Prometheus（127.0.0.1:1 立即 connection refused）→
+        查詢層失敗 → returncode 2。"""
+        script = os.path.join(os.path.dirname(__file__), '..', '..',
+                              'scripts', 'tools', 'ops', 'validate_migration.py')
+        proc = subprocess.run(
+            [sys.executable, script,
+             "--old", "old_metric", "--new", "new_metric",
+             "--prometheus", "http://127.0.0.1:1",
+             "-o", str(tmp_path / "out")],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert proc.returncode == 2, (proc.stdout, proc.stderr)

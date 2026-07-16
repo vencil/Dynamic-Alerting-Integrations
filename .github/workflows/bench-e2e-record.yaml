@@ -60,8 +60,13 @@ jobs:
     timeout-minutes: 60
 
     steps:
+      # persist-credentials: false — free hardening (bench-family sweep):
+      # nothing after checkout touches git at all (docker compose + make +
+      # upload-artifact, which uses the runtime token, not git creds).
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v6

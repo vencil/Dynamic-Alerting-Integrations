@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import sys
@@ -33,8 +32,10 @@ from urllib.parse import quote
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import (  # noqa: E402
     detect_cli_lang,
+    format_json_report,
     http_get_json,
     parse_duration_seconds,
+    query_prometheus_range,
 )
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
@@ -150,20 +151,16 @@ def query_prometheus_alerts(
         label_filter = f'{{alertstate="firing",tenant="{tenant}"}}'
 
     query = f"{metric}{label_filter}"
-    url = (
-        f"{prom_url}/api/v1/query_range"
-        f"?query={query}"
-        f"&start={start_ts:.0f}"
-        f"&end={end_ts:.0f}"
-        f"&step={step}"
-    )
-
-    data, err = http_get_json(url, timeout=timeout)
-    if err or not data:
+    # Fetch core delegated to _lib_prometheus.query_prometheus_range (ROI r3
+    # W1): the lib percent-encodes the whole param set — the raw PromQL
+    # carries `{`, `}` and `"`, which must not be interpolated into a URL
+    # unescaped (#1112 InvalidURL bug-class). The "any error → []" collapse
+    # stays here.
+    result, err = query_prometheus_range(
+        prom_url, query, start_ts, end_ts, step, timeout=timeout)
+    if err:
         return []
-    if data.get("status") != "success":
-        return []
-    return data.get("data", {}).get("result", [])
+    return result
 
 
 def query_alertmanager_alerts(
@@ -715,7 +712,7 @@ def main() -> None:
 
     # 輸出
     if args.json_output:
-        print(json.dumps(asdict(report), indent=2, ensure_ascii=False))
+        print(format_json_report(asdict(report)))
     elif args.markdown:
         print(generate_markdown(report))
     else:
