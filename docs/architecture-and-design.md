@@ -302,7 +302,7 @@ spec:
 
 > 版本歷史（v2.7.0 → v2.9.0 各版交付了什麼）見 [CHANGELOG](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CHANGELOG.md)；本節只談現況與前瞻。
 
-**現況（v2.9.0 已交付的能力骨幹）**：租戶自助告警（Custom Alerts，6 種平台 authored recipe、不寫 PromQL）+ 租戶聯邦（讀路徑 proxy + 2-tier policy + 金鑰輪替 + offboarding）+ 寫入平面單寫者韌性 + 平台日誌彙整。
+**現況（v2.9.0 已交付的能力骨幹）**：租戶自助告警（Custom Alerts、不寫 PromQL；v2.9.0 交付 6 種平台 authored recipe，v2.10 增至 7 種——宣告式 SLO burn-rate，[ADR-031](adr/031-slo-burn-rate-recipe.md)）+ 租戶聯邦（讀路徑 proxy + 2-tier policy + 金鑰輪替 + offboarding）+ 寫入平面單寫者韌性 + 平台日誌彙整。
 
 **v2.10.0 規劃中**：租戶聯邦深化 × 反應式硬化延續。方向見 live milestone [v2.10.0](https://github.com/vencil/Dynamic-Alerting-Integrations/milestone/3)。
 

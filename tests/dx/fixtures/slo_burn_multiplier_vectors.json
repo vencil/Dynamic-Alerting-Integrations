@@ -1,0 +1,9 @@
+{
+  "_note": "slo_burn_rate multiplier lockstep vectors (ADR-031, LOCKED). fast = '1h burns 2% of the budget', slow = '6h burns 5%'; M = consumption ratio x period / detection window -> 30d (720h): fast 14.4 / slow 6; 28d (672h): fast 13.44 / slow 5.6. The emitted user_threshold VALUE is M x (1 - objective/100): critical uses fast M, warning uses slow M. Values below are shortest-repr float64 of exactly that expression (same IEEE-754 op order on both sides), so Go (custom_alert.go::resolveSloBurnRate, TestSloBurnRate_MultiplierVectors) and Python (tests/dx/test_compile_custom_alerts.py fixture-consistency test) must reproduce them BIT-IDENTICALLY. A drift here means the two sides derive different burn thresholds from the same declaration.",
+  "vectors": [
+    {"period": "30d", "objective": "99.9", "thr_critical": 0.014399999999998414, "thr_warning": 0.005999999999999339},
+    {"period": "30d", "objective": "95", "thr_critical": 0.7200000000000006, "thr_warning": 0.30000000000000027},
+    {"period": "28d", "objective": "99.9", "thr_critical": 0.013439999999998519, "thr_warning": 0.005599999999999383},
+    {"period": "28d", "objective": "95", "thr_critical": 0.6720000000000006, "thr_warning": 0.28000000000000025}
+  ]
+}

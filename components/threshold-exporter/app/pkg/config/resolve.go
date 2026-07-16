@@ -51,6 +51,11 @@ type ResolveStats struct {
 	// #741 S3a: per-tenant count of malformed _custom_alerts entries
 	// (dropped). Drives the da_custom_alert_parse_errors gauge.
 	PerTenantCustomAlertErrors map[string]int
+	// ADR-031: raw slo_burn_rate objectives (percentage) carried out of resolve
+	// time for the user_slo_objective{tenant, recipe_id} gauge. One entry per
+	// valid slo declaration; objective:"disable" contributes none (data-plane
+	// opt-out, matching its absent user_threshold rows).
+	SloObjectives []ResolvedSloObjective
 }
 
 // Resolve applies three-state logic using the current time.
@@ -109,6 +114,8 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 	// da_custom_alert_parse_errors gauge (fail-loud — a bad declaration is
 	// dropped but never silent: the gauge surfaces it for an operational alert).
 	perTenantCustomAlertErrors := make(map[string]int, len(c.Tenants))
+	// ADR-031: slo_burn_rate objectives for the user_slo_objective gauge.
+	var sloObjectives []ResolvedSloObjective
 
 	for tenant, overrides := range c.Tenants {
 		startIdx := len(result) // track where this tenant's metrics start
@@ -129,7 +136,8 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 		// deterministically alongside regular thresholds (truncationSortKey folds
 		// CustomLabels via canonicalLabelKey, so recipe_id/name/mode keep the
 		// ordering total + stable). Malformed entries are dropped + counted.
-		if caRows, caErrs := resolveTenantCustomAlerts(tenant, overrides); len(caRows) > 0 || caErrs > 0 {
+		caRows, caObjs, caErrs := resolveTenantCustomAlerts(tenant, overrides)
+		if len(caRows) > 0 || caErrs > 0 {
 			result = append(result, caRows...)
 			perTenantCustomAlertErrors[tenant] = caErrs
 		}
@@ -165,11 +173,38 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 			result = result[:startIdx+limit]
 		}
 		perTenantOverLimit[tenant] = overflow
+
+		// ADR-031: keep the user_slo_objective gauge aligned with the
+		// truncated threshold rows. caObjs was collected BEFORE the
+		// cardinality cut above, so for an over-cap tenant an slo shape whose
+		// user_threshold rows were just truncated away would still publish
+		// its objective gauge — a gauge for a rule that can never fire.
+		// Filter objectives down to shapes with >=1 SURVIVING custom row
+		// (recipe_id match within this tenant's post-truncation segment).
+		if len(caObjs) > 0 {
+			if overflow > 0 {
+				alive := make(map[string]bool)
+				for _, rt := range result[startIdx:] {
+					if rt.Component == "custom" {
+						alive[rt.CustomLabels["recipe_id"]] = true
+					}
+				}
+				kept := caObjs[:0]
+				for _, o := range caObjs {
+					if alive[o.RecipeID] {
+						kept = append(kept, o)
+					}
+				}
+				caObjs = kept
+			}
+			sloObjectives = append(sloObjectives, caObjs...)
+		}
 	}
 
 	return result, ResolveStats{
 		PerTenantOverLimit:         perTenantOverLimit,
 		PerTenantCustomAlertErrors: perTenantCustomAlertErrors,
+		SloObjectives:              sloObjectives,
 	}
 }
 

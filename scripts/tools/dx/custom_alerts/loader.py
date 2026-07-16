@@ -246,8 +246,14 @@ def build_shapes(config_dir: Path,
     # threshold carries the severity. The SHAPING duration is recipe-aware:
     # `forecast` supplies `horizon` (lookback is platform-derived from it, so it
     # never takes a `window`), every other recipe supplies `window` (an empty
-    # window emits invalid PromQL like `rate(m[])`).
+    # window emits invalid PromQL like `rate(m[])`) — EXCEPT `slo_burn_rate`
+    # (ADR-031), whose burn windows are fixed recipe semantics: it requires
+    # neither `window` nor `threshold` (it takes `objective` instead; the
+    # objective/denominator_metric requiredness + threshold rejection live in
+    # shape.recipe_id, the stateless per-recipe validation authority, so their
+    # error messages stay identical across loader / preflight / contract paths).
     base_required = ("recipe", "name", "metric", "threshold")
+    slo_required = ("recipe", "name", "metric")
 
     for tenant, inst, origin, is_own in triples:
         # FAIL-SOFT PER RECIPE (#1008 / F3 Part B). Validate each recipe in isolation;
@@ -262,8 +268,14 @@ def build_shapes(config_dir: Path,
                     f"{origin}: tenant={tenant}: _custom_alerts entry is not a mapping "
                     f"(got {type(inst).__name__}: {inst!r})"
                 )
-            shape_required = ("horizon",) if inst.get("recipe") == "forecast" else ("window",)
-            missing = [f for f in base_required + shape_required if f not in inst]
+            is_slo = inst.get("recipe") == "slo_burn_rate"
+            if is_slo:
+                required = slo_required
+            elif inst.get("recipe") == "forecast":
+                required = base_required + ("horizon",)
+            else:
+                required = base_required + ("window",)
+            missing = [f for f in required if f not in inst]
             if missing:
                 raise CustomAlertConfigError(
                     f"{origin}: tenant={tenant}: _custom_alerts entry missing "
@@ -273,8 +285,18 @@ def build_shapes(config_dir: Path,
             try:
                 rid = _shape.recipe_id(inst)
                 sig = _shape.shape_signature(inst)
-                _value, sev = _shape.parse_threshold(inst["threshold"])
-                _shape.validate_forecast_ratio_threshold(inst, _value)
+                if is_slo:
+                    # ADR-031: severity is decided by the RECIPE — one declaration
+                    # fans out to BOTH severities (fast→critical, slow→warning);
+                    # objective (incl. the "disable" tri-state, which still
+                    # compiles — opt-out happens on the data plane: the exporter
+                    # simply never emits user_threshold) was validated inside
+                    # recipe_id above. No threshold to parse.
+                    sevs = ("critical", "warning")
+                else:
+                    _value, sev = _shape.parse_threshold(inst["threshold"])
+                    _shape.validate_forecast_ratio_threshold(inst, _value)
+                    sevs = (sev,)
             except _shape.RecipeError as e:
                 raise CustomAlertConfigError(f"{origin}: tenant={tenant}: {e}") from e
 
@@ -298,14 +320,18 @@ def build_shapes(config_dir: Path,
                     f"(in {name_seen[nkey]} and {origin}); names must be unique per tenant"
                 )
 
-            # (tenant, recipe_id, severity) unique → keeps the group_left(name) join 1:1
-            skey = (tenant, rid, sev)
-            if skey in sev_seen:
-                raise CustomAlertConfigError(
-                    f"tenant={tenant}: two {sev} custom alerts share the same shape "
-                    f"{rid!r} (in {sev_seen[skey]} and {origin}); a tenant may declare "
-                    f"at most one {sev} alert per shape"
-                )
+            # (tenant, recipe_id, severity) unique → keeps the group_left(name) join 1:1.
+            # An slo_burn_rate declaration claims BOTH severities atomically (its
+            # fan-out is fixed), so each is checked — a second slo declaration on
+            # the same shape collides on both.
+            skeys = [(tenant, rid, s) for s in sevs]
+            for skey in skeys:
+                if skey in sev_seen:
+                    raise CustomAlertConfigError(
+                        f"tenant={tenant}: two {skey[2]} custom alerts share the same shape "
+                        f"{rid!r} (in {sev_seen[skey]} and {origin}); a tenant may declare "
+                        f"at most one {skey[2]} alert per shape"
+                    )
 
             # Cost guardrail (S4): cap TENANT-OWN recipes (inherited policy is vectorized,
             # O(1) in tenant count → uncapped). Enforced per-recipe — the OWN recipes
@@ -313,7 +339,11 @@ def build_shapes(config_dir: Path,
             # survivor set is deterministic: the FIRST `cap` own recipes in file-path +
             # in-file declaration order (triples come from sorted(rglob) + list order), so
             # `--check` stays stable. ADR-024 §Custom Alerts cost guardrail.
-            if is_own and own_per_tenant[tenant] >= max_custom_recipes:
+            # An slo_burn_rate declaration costs len(sevs)=2 cap units (it IS two alert
+            # rules — ADR-031 guardrail #1: distinct (tenant, recipe_id, severity)
+            # counting, no special case); for every other recipe len(sevs)=1 keeps
+            # this check bit-identical to the historical `count >= cap`.
+            if is_own and own_per_tenant[tenant] + len(sevs) > max_custom_recipes:
                 raise CustomAlertConfigError(
                     f"tenant={tenant}: own custom-alert recipe count would exceed the "
                     f"max_custom_recipes cap ({max_custom_recipes}); this recipe is "
@@ -327,12 +357,14 @@ def build_shapes(config_dir: Path,
         # ---- validation passed: commit shared state for this recipe ----
         sig_seen[rid] = sig
         name_seen[nkey] = origin
-        sev_seen[skey] = origin
+        for skey in skeys:
+            sev_seen[skey] = origin
         # Quota counts only VALIDATED, distinct (tenant, recipe_id, severity) instances
-        # (a multi-severity same-shape recipe legitimately counts as 2).
-        per_tenant[tenant] += 1
+        # (a multi-severity same-shape recipe legitimately counts as 2; an
+        # slo_burn_rate declaration's fixed critical+warning fan-out counts as 2).
+        per_tenant[tenant] += len(sevs)
         if is_own:
-            own_per_tenant[tenant] += 1
+            own_per_tenant[tenant] += len(sevs)
 
         if rid not in shapes:
             shapes[rid] = {
@@ -353,8 +385,13 @@ def build_shapes(config_dir: Path,
                 # without it the slug gets `gb_*` but the rule stays by(tenant) and
                 # the per-PVC masking fix silently no-ops.
                 "group_by": inst.get("group_by") or [],
+                # slo_burn_rate fast-window bad-event floor (ADR-031) — a shape
+                # component the emitter writes as a literal (slow tier = ×6).
+                # None for every other recipe.
+                "min_events": (_shape._normalize_min_events(inst)
+                               if is_slo else None),
             }
-        shape_sev[rid].add(sev)
+        shape_sev[rid].update(sevs)
 
     result: List[dict] = []
     for rid in sorted(shapes):

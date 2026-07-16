@@ -32,6 +32,7 @@ type (
 	ExpiryMeta                = config.ExpiryMeta
 	ThresholdConfig           = config.ThresholdConfig
 	ResolvedThreshold         = config.ResolvedThreshold
+	ResolvedSloObjective      = config.ResolvedSloObjective
 	ResolvedSeverityDedup     = config.ResolvedSeverityDedup
 	RoutingConfig             = config.RoutingConfig
 	ConfigInfo                = config.ConfigInfo

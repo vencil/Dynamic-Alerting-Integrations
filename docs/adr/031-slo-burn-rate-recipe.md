@@ -82,15 +82,15 @@ _custom_alerts:
   - **原始 objective 的可見性 = exporter 原生 gauge**：`user_slo_objective{tenant, recipe_id} 99.9`（命名落在既有 `user_*` 家族，最終名照 OQ-B 與 maintainer 定），供 Phase 2 儀表板與除錯。**禁用 recording rule 反推**：反推式（`1 − thr/M`）必須把 period 相依倍率寫進規則文本 → `slo_period` 變 shape-affecting，毀掉上一條性質。
   - 代價（明列）：倍率導出邏輯進 Go resolver、與 Python 編譯器的窗選擇跨語言 lockstep（golden vector 必涵蓋）。被拒的表達式側方案見選項表 E′。
 - Alert 標籤：沿用 custom 家族標籤 + **補 `metric_group: "slo_{name}"`**——沒有它 Severity Dedup 的 inhibit（source/target 均要求 `metric_group=~".+"`）對 custom alerts 永不匹配，fast+slow 同時 firing（大事故常態）會雙發通知；補上後 critical 抑制 warning 落回既有 dedup 機制，零新 inhibit 規則。
-- 每 shape 規則數 ≈ 11（1 threshold + 4 ratio 窗 + 2 事件數窗 + 1 info + 2 core + 2 alert；現行 recipe 約 4–5）——rule-group `limit` 餘裕需在實作期實測列帳（實作 checklist 項）。
+- 每 shape 規則數 = 12（1 threshold + 4 ratio 窗 + 2 事件數窗 + 1 info + 2 core + 2 alert；現行 recipe 約 4–5）——rule-group `limit` 餘裕需在實作期實測列帳（實作 checklist 項）。
 
 ### 3. 護欄
 
-1. **Cap 帳**：一條宣告固定展開 fast(critical)+slow(warning) → **loader 計 2**（沿用 distinct (tenant, recipe_id, severity) 計數，明定不另開特例）。domain-inherited 不吃 cap（既有行為）。**覆寫的代價誠實告知**：租戶覆寫 domain 預設的 `min_events`（或任何 shape 成分）＝自有宣告 → **計入自身 cap 額度（2）且 shape 分岔（+~11 條規則）**——架構上可接受（改動罕見），但 recipe 文件必須明寫，防「免費覆寫」的錯誤預期。
+1. **Cap 帳**：一條宣告固定展開 fast(critical)+slow(warning) → **loader 計 2**（沿用 distinct (tenant, recipe_id, severity) 計數，明定不另開特例）。domain-inherited 不吃 cap（既有行為）。**覆寫的代價誠實告知**：租戶覆寫 domain 預設的 `min_events`（或任何 shape 成分）＝自有宣告 → **計入自身 cap 額度（2）且 shape 分岔（+12 條規則）**——架構上可接受（改動罕見），但 recipe 文件必須明寫，防「免費覆寫」的錯誤預期。
 2. **Cardinality**：`group_by` 白名單、rule-group limit、promtool hard gate、fail-soft quarantine 全數繼承。
 3. **通知風暴（infra 全局震盪）**：**量測永不抑制**；抑制通知 fan-out——`vibe_slo_burn="true"` 標籤（命名照 pack 標籤慣例實作期覆核）+ 文件化 infra-outage sentinel inhibit pattern。
 4. **維護窗（三態）交互——刻意取捨**：SLO **alert** 沿用 pack 慣例，維護窗期間 `unless` 抑制（三態對租戶的承諾就是「維護窗零告警干擾」）；SLI **recording rules 不受 unless 影響、持續評估**——預算燒蝕在 TSDB 全程留痕，「量測永不抑制」哲學由 recording 層承擔，alert 層的抑制是通知承諾、不是量測缺口。此取捨明寫進 recipe 文件。
-5. **表達力邊界**：編譯期展開、輸入仍為受限參數（bare metric name、enum、已驗純量）——**不新增租戶查詢表達力類別、不觸發 ADR-029 T1**（T1 定義=「超出固定 recipe 模板+已驗純量參數」；objective/min_events 為新增已驗純量，經 ParseFloat 驗證、永不進規則文本）。objective/min_events 依 ADR-029 Consequences 慣例**於 Python/Go 兩側各自加驗證**。
+5. **表達力邊界**：編譯期展開、輸入仍為受限參數（bare metric name、enum、已驗純量）——**不新增租戶查詢表達力類別、不觸發 ADR-029 T1**（T1 定義=「超出固定 recipe 模板+已驗純量參數」；objective/min_events 為新增已驗純量——objective 經 ParseFloat 驗證、**永不進規則文本**；min_events 為**編譯期字面值**，經嚴格整數驗證（tag/charset/範圍）後寫入規則文本，無注入面，與 §1/§2 的編譯期換算語意一致）。objective/min_events 依 ADR-029 Consequences 慣例**於 Python/Go 兩側各自加驗證**。
 6. **誠實邊界**：SLI 源指標必須已存在——平台編譯宣告、不發明量測。v1 只接 counter-ratio 形；latency/freshness 的 instrumentation 指引在文件、recipe 支援在 deferred。
 
 ## 選項與取捨

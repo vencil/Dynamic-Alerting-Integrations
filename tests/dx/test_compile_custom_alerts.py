@@ -379,13 +379,15 @@ def test_domain_and_platform_inheritance(tmp_path):
 
 
 # --- 7. example fixture + --check ------------------------------------------
-def test_example_fixture_compiles_to_eleven_shapes():
+def test_example_fixture_compiles_to_twelve_shapes():
     pack = cc.build_pack(_EXAMPLES)
-    assert pack["_meta"]["shapes"] == 11
-    # shop-a: 9 own (threshold/rate/ratio/p99/absence/forecast + equals #810
-    # + Shape-X ==/absence liveness pair #832); pay-a: finance ratio + own threshold.
+    assert pack["_meta"]["shapes"] == 12
+    # shop-a: 10 own declarations (threshold/rate/ratio/p99/absence/forecast +
+    # equals #810 + Shape-X ==/absence liveness pair #832 + slo_burn_rate ADR-031)
+    # = 11 cap units (the slo declaration fans out to critical+warning → counts 2);
+    # pay-a: finance ratio + own threshold.
     # (absence moved off platform-L0 → no longer inherited by pay-a; see _defaults.yaml note.)
-    assert pack["_meta"]["per_tenant_counts"] == {"pay-a": 2, "shop-a": 9}
+    assert pack["_meta"]["per_tenant_counts"] == {"pay-a": 2, "shop-a": 11}
 
 
 def test_check_flags_stale(tmp_path, monkeypatch):
@@ -591,10 +593,14 @@ _VALIDATION_VECTORS = _REPO / "tests" / "dx" / "fixtures" / "custom_alert_valida
 def _py_validate_spec(spec: dict) -> bool:
     """Python's per-recipe accept/reject decision (the shared-contract subset:
     recipe/metric/op/horizon/selector-reserved/for via recipe_id + severity via
-    parse_threshold). Mirrors the Go side's resolveOneCustomAlert for these rules."""
+    parse_threshold). Mirrors the Go side's resolveOneCustomAlert for these rules.
+    slo_burn_rate (ADR-031) has NO threshold to parse — severity is fixed by the
+    recipe; objective/slo_period/min_events (and the threshold-present rejection)
+    are all validated inside recipe_id itself."""
     try:
         shp.recipe_id(spec)
-        shp.parse_threshold(spec["threshold"])
+        if spec.get("recipe") != "slo_burn_rate":
+            shp.parse_threshold(spec["threshold"])
         return True
     except shp.RecipeError:
         return False
@@ -611,6 +617,257 @@ def test_validation_contract_matches_go():
         assert accepted == c["valid"], (
             f"validation drift [{c['_note']}]: Python accepted={accepted}, contract valid={c['valid']}"
         )
+
+
+# --- 10b. slo_burn_rate recipe (ADR-031, #1092 Phase 0) ----------------------
+_SLO_DECL = ('{recipe: slo_burn_rate, name: co_avail, metric: co_errors_total, '
+             'denominator_metric: co_requests_total, objective: "99.9"}')
+
+
+def test_slo_one_declaration_fans_out_both_severities(tmp_path):
+    # severity is decided by the RECIPE (fast→critical, slow→warning): ONE
+    # declaration → ONE shape carrying BOTH severity branches.
+    _write_tree(tmp_path, {
+        "a.yaml": f'tenants:\n  ta:\n    _custom_alerts:\n      - {_SLO_DECL}\n',
+    })
+    shapes, per_tenant, skipped = ld.build_shapes(tmp_path)
+    assert skipped == []
+    assert len(shapes) == 1
+    assert shapes[0]["severities"] == ["critical", "warning"]
+    assert shapes[0]["min_events"] == 10                    # default materialised
+    # cap accounting: the declaration IS two alert rules → counts 2 (ADR-031 §guardrail 1)
+    assert per_tenant == {"ta": 2}
+
+
+def test_slo_counts_two_toward_own_cap(tmp_path):
+    # cap 1 cannot fit an slo declaration (it needs 2 units) → quarantined
+    # fail-soft; cap 2 fits exactly.
+    files = {"a.yaml": f'tenants:\n  ta:\n    _custom_alerts:\n      - {_SLO_DECL}\n'}
+    _write_tree(tmp_path, files)
+    shapes, per_tenant, skipped = ld.build_shapes(tmp_path, max_custom_recipes=1)
+    assert shapes == [] and per_tenant == {}
+    assert any("max_custom_recipes" in s["reason"] for s in skipped)
+    shapes, per_tenant, skipped = ld.build_shapes(tmp_path, max_custom_recipes=2)
+    assert len(shapes) == 1 and per_tenant == {"ta": 2} and skipped == []
+
+
+def test_slo_duplicate_same_shape_quarantined(tmp_path):
+    # a second slo declaration on the SAME shape collides on both fixed
+    # severities → quarantined (keeps the group_left(name) join 1:1).
+    _write_tree(tmp_path, {
+        "a.yaml": ('tenants:\n  ta:\n    _custom_alerts:\n'
+                   f'      - {_SLO_DECL}\n'
+                   '      - {recipe: slo_burn_rate, name: co_avail2, metric: co_errors_total, '
+                   'denominator_metric: co_requests_total, objective: "99.5"}\n'),
+    })
+    shapes, _per, skipped = ld.build_shapes(tmp_path)
+    assert len(shapes) == 1
+    assert any("same shape" in s["reason"] for s in skipped)
+
+
+@pytest.mark.parametrize("bad_obj", ["100", "0", "0.0", "100.0", "abc", "1e3", "-5", ""])
+def test_slo_objective_rejected(bad_obj):
+    # OPEN interval (0,100): =100 → budget 0 → always fires; =0 never fires;
+    # non-decimal charset rejected (Go ParseFloat lockstep).
+    with pytest.raises(shp.RecipeError, match="objective"):
+        shp.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
+                       "objective": bad_obj})
+
+
+@pytest.mark.parametrize("good_obj", ["99.9", "99", "0.5", "99.999", "disable"])
+def test_slo_objective_accepted(good_obj):
+    rid = shp.recipe_id({"recipe": "slo_burn_rate", "metric": "e",
+                         "denominator_metric": "t", "objective": good_obj})
+    # objective NEVER enters the slug — every accepted value yields the same rid
+    assert rid == "slo_burn_rate__e__gt__den_t__minev10__for1m"
+
+
+@pytest.mark.parametrize("bad_period", ["7d", "1w", "31d", "30"])
+def test_slo_period_rejected(bad_period):
+    with pytest.raises(shp.RecipeError, match="slo_period"):
+        shp.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
+                       "objective": "99.9", "slo_period": bad_period})
+
+
+def test_slo_period_not_a_shape_component():
+    # 28d vs 30d (and a different objective) → BYTE-IDENTICAL rid + equal
+    # shape_signature: switching the budget period never re-slugs (ADR-031).
+    a = {"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
+         "objective": "99.9", "slo_period": "30d"}
+    b = {"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
+         "objective": "95", "slo_period": "28d"}
+    assert shp.recipe_id(a) == shp.recipe_id(b)
+    assert shp.shape_signature(a) == shp.shape_signature(b)
+
+
+@pytest.mark.parametrize("bad_me", [0, -1, "10", 1.5, True, False])
+def test_slo_min_events_rejected(bad_me):
+    # positive YAML INTEGER only (bool is an int subclass — rejected explicitly;
+    # a quoted string must not slug differently between Go and Python).
+    with pytest.raises(shp.RecipeError, match="min_events"):
+        shp.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
+                       "objective": "99.9", "min_events": bad_me})
+
+
+def test_slo_min_events_is_a_shape_component():
+    base = {"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
+            "objective": "99.9"}
+    assert shp.recipe_id(base).endswith("__minev10__for1m")          # default materialised
+    other = dict(base, min_events=25)
+    assert shp.recipe_id(other).endswith("__minev25__for1m")
+    assert shp.shape_signature(base) != shp.shape_signature(other)   # forks the shape
+
+
+def test_slo_threshold_rejected():
+    with pytest.raises(shp.RecipeError, match="objective"):
+        shp.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
+                       "objective": "99.9", "threshold": "0.01:critical"})
+
+
+def test_slo_missing_denominator_rejected():
+    with pytest.raises(shp.RecipeError, match="denominator_metric"):
+        shp.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "objective": "99.9"})
+
+
+@pytest.mark.parametrize("bad_op", ["<", "<=", ">=", "=="])
+def test_slo_explicit_op_rejected(bad_op):
+    with pytest.raises(shp.RecipeError):
+        shp.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
+                       "objective": "99.9", "op": bad_op})
+
+
+def test_slo_group_by_rejected():
+    with pytest.raises(shp.RecipeError, match="group_by"):
+        shp.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
+                       "objective": "99.9", "group_by": ["persistentvolumeclaim"]})
+
+
+def test_slo_rule_count_ledger(tmp_path):
+    # ADR-031 §2 implementation checklist: the per-shape rule ledger. emit_shape
+    # yields 9 recording (1 threshold + 4 SLI ratio windows + 2 bad-event windows
+    # + 2 per-severity cores) + 2 alerts = 11; build_pack adds 1 custom_recipe_info
+    # → 12 rules total for one slo shape (plus the global silent sentinel).
+    _write_tree(tmp_path, {
+        "a.yaml": f'tenants:\n  ta:\n    _custom_alerts:\n      - {_SLO_DECL}\n',
+    })
+    pack = cc.build_pack(tmp_path)
+    rules = [r for g in pack["groups"] for r in g.get("rules", [])]
+    recording = [r for r in rules if "record" in r and r["record"] != "custom_recipe_info"]
+    info = [r for r in rules if r.get("record") == "custom_recipe_info"]
+    alerts = [r for r in rules if r.get("alert", "").startswith("Custom_")]
+    assert len(recording) == 9
+    assert len(info) == 1
+    assert len(alerts) == 2
+    rid = "slo_burn_rate__co_errors_total__gt__den_co_requests_total__minev10__for1m"
+    assert {r["record"] for r in recording} == {
+        f"custom:threshold:{rid}",
+        *{f"custom:metric:{rid}:{w}" for w in ("1h", "5m", "6h", "30m")},
+        *{f"custom:bad:{rid}:{w}" for w in ("5m", "30m")},
+        f"custom:{rid}:critical:core",
+        f"custom:{rid}:warning:core",
+    }
+
+
+def test_slo_burn_multiplier_vectors_lockstep():
+    # ADR-031 burn-threshold lockstep (Wave 2 companion): the Go exporter derives
+    # user_threshold values as M × (1 − objective/100) with LOCKED multipliers
+    # (fast = "1h burns 2%", slow = "6h burns 5%"; M = ratio × period ÷ window →
+    # 30d: 14.4/6, 28d: 13.44/5.6). The shared fixture pins the resulting float64
+    # BIT-IDENTICALLY on both sides (same IEEE-754 expression order); Go asserts
+    # its resolveSloBurnRate output (TestSloBurnRate_MultiplierVectors), Python
+    # re-computes here. The constants live in this TEST on purpose — the compiler
+    # never derives thresholds (they are exporter/data-plane), so this is a pure
+    # contract pin, not compiler logic.
+    multipliers = {"30d": (14.4, 6.0), "28d": (13.44, 5.6)}
+    fixture = _REPO / "tests" / "dx" / "fixtures" / "slo_burn_multiplier_vectors.json"
+    vectors = json.loads(fixture.read_text(encoding="utf-8"))["vectors"]
+    assert len(vectors) >= 4, "multiplier fixture undershot"
+    assert {v["period"] for v in vectors} == set(multipliers), "both periods must be pinned"
+    for v in vectors:
+        fast, slow = multipliers[v["period"]]
+        budget = 1 - float(v["objective"]) / 100
+        assert v["thr_critical"] == fast * budget, (
+            f"{v['period']}/{v['objective']}: thr_critical drifted from fast-M × budget"
+        )
+        assert v["thr_warning"] == slow * budget, (
+            f"{v['period']}/{v['objective']}: thr_warning drifted from slow-M × budget"
+        )
+
+
+def test_slo_core_structure_and_measurement_never_suppressed(tmp_path):
+    _write_tree(tmp_path, {
+        "a.yaml": f'tenants:\n  ta:\n    _custom_alerts:\n      - {_SLO_DECL}\n',
+    })
+    pack = cc.build_pack(tmp_path)
+    rid = "slo_burn_rate__co_errors_total__gt__den_co_requests_total__minev10__for1m"
+    rules = {r["record"]: r["expr"] for g in pack["groups"]
+             for r in g.get("rules", []) if "record" in r}
+    fast = rules[f"custom:{rid}:critical:core"]
+    slow = rules[f"custom:{rid}:warning:core"]
+    # fast burn: 1h & 5m ratio windows + bad:5m > min_events(10); maintenance unless tail
+    assert f"custom:metric:{rid}:1h" in fast and f"custom:metric:{rid}:5m" in fast
+    assert f"(custom:bad:{rid}:5m > 10)" in fast
+    assert fast.count("and on(tenant)") == 2
+    assert 'user_state_filter{filter="maintenance"}' in fast
+    # slow burn: 6h & 30m + bad:30m > min_events*6 (the ×6 linear window scaling
+    # is compiler-side, ADR-031 §1)
+    assert f"custom:metric:{rid}:6h" in slow and f"custom:metric:{rid}:30m" in slow
+    assert f"(custom:bad:{rid}:30m > 60)" in slow
+    # threshold join keeps the version exact-or-fallback + group_left(name, mode) idiom
+    assert 'version="default", severity="critical"' in fast
+    assert "group_left(name, mode)" in fast
+    # measurement is NEVER suppressed: no maintenance unless on any SLI/bad record
+    for name, expr in rules.items():
+        if ":core" in name or name == "custom_recipe_info":
+            continue
+        assert "maintenance" not in expr, f"recording {name} must not be suppressed"
+
+
+def test_slo_alert_labels_metric_group_and_slo_burn(tmp_path):
+    _write_tree(tmp_path, {
+        "a.yaml": f'tenants:\n  ta:\n    _custom_alerts:\n      - {_SLO_DECL}\n',
+    })
+    pack = cc.build_pack(tmp_path)
+    alerts = [r for g in pack["groups"] for r in g.get("rules", [])
+              if r.get("alert", "").startswith("Custom_")]
+    assert len(alerts) == 2
+    assert {a["labels"]["severity"] for a in alerts} == {"critical", "warning"}
+    for a in alerts:
+        # Severity Dedup inhibit needs metric_group on BOTH severities; slo_burn
+        # is the storm-fan-out discriminator (ADR-031 §2, OQ-B de-prefixed).
+        assert a["labels"]["metric_group"] == "slo_{{ $labels.name }}"
+        assert a["labels"]["slo_burn"] == "true"
+        assert a["labels"]["component"] == "custom"
+
+
+def test_slo_selectors_apply_to_both_sides(tmp_path):
+    _write_tree(tmp_path, {
+        "a.yaml": ('tenants:\n  ta:\n    _custom_alerts:\n'
+                   '      - {recipe: slo_burn_rate, name: co_avail, metric: co_errors_total, '
+                   'denominator_metric: co_requests_total, objective: "99.9", '
+                   'selectors: {service: checkout}}\n'),
+    })
+    pack = cc.build_pack(tmp_path)
+    ratio_exprs = [r["expr"] for g in pack["groups"] for r in g.get("rules", [])
+                   if r.get("record", "").startswith("custom:metric:")]
+    assert len(ratio_exprs) == 4
+    for expr in ratio_exprs:
+        assert 'co_errors_total{service="checkout"}' in expr        # numerator
+        assert 'co_requests_total{service="checkout"}' in expr      # denominator
+        assert "> 0)" in expr                                        # div-by-zero guard
+
+
+def test_slo_objective_disable_still_compiles(tmp_path):
+    # tri-state opt-out is DATA-PLANE (the exporter never emits user_threshold);
+    # the compiled rule set is unchanged — consistent with threshold "disable".
+    _write_tree(tmp_path, {
+        "a.yaml": ('tenants:\n  ta:\n    _custom_alerts:\n'
+                   '      - {recipe: slo_burn_rate, name: co_avail, metric: co_errors_total, '
+                   'denominator_metric: co_requests_total, objective: "disable"}\n'),
+    })
+    shapes, per_tenant, skipped = ld.build_shapes(tmp_path)
+    assert skipped == []
+    assert len(shapes) == 1 and per_tenant == {"ta": 2}
 
 
 # --- 11. A+ emit-time invariant gate (F2 annotation-injection backstop) -------

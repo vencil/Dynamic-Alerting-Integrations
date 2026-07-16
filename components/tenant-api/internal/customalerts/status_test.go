@@ -6,7 +6,7 @@ import "testing"
 // Every shipped recipe is active today, and an unknown recipe must report active
 // (never block on an unknown name).
 func TestRecipeStatus_EmbeddedAllActive(t *testing.T) {
-	for _, r := range []string{"threshold", "rate", "ratio", "absence", "p99_latency", "forecast"} {
+	for _, r := range []string{"threshold", "rate", "ratio", "absence", "p99_latency", "forecast", "slo_burn_rate"} {
 		if got := RecipeStatus(r); got != "active" {
 			t.Errorf("RecipeStatus(%q) = %q, want active", r, got)
 		}
