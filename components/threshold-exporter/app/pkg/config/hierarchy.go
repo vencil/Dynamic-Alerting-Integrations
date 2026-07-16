@@ -451,11 +451,6 @@ func DeepMerge(base, override map[string]any) map[string]any {
 	return deepMerge(base, override)
 }
 
-// DeepCopyMap clones a map and all nested maps/slices.
-func DeepCopyMap(m map[string]any) map[string]any {
-	return deepCopyMap(m)
-}
-
 // NormalizeYAMLToJSON walks a yaml.v3-decoded `any` tree and rewrites
 // `map[any]any` (yaml.v3 default for mappings) into `map[string]any`
 // so encoding/json can marshal it. Slice elements + scalar leaves are
