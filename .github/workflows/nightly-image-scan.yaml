@@ -195,7 +195,7 @@ jobs:
           - name: grafana # k8s/03-monitoring/deployment-grafana.yaml
             ref: "grafana/grafana:12.4.5@sha256:26b8f35a9e4e4431995cf64c3f396505a4faf17bcfc19f9ed84943ec6bfd5ecd"
           - name: prometheus # k8s/03-monitoring/deployment-prometheus.yaml
-            ref: "prom/prometheus:v3.13.0@sha256:c6b27ea434f8389bfe233fbc7be381cf50587c286e871bc842008f5a1b1908a7"
+            ref: "prom/prometheus:v3.13.1@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893"
           - name: alertmanager # k8s/03-monitoring/deployment-alertmanager.yaml
             ref: "prom/alertmanager:v0.33.1@sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d"
           - name: kube-state-metrics # k8s/03-monitoring/deployment-kube-state-metrics.yaml
@@ -203,7 +203,7 @@ jobs:
           - name: configmap-reload # k8s/03-monitoring/deployment-alertmanager.yaml (sidecar)
             ref: "ghcr.io/jimmidyson/configmap-reload:v0.15.0@sha256:b578b7599d65c0279f6e1aad201bba737b9b15e6a4f308281d9e26f765e6657f"
           - name: alpine-git # k8s/04-tenant-api/deployment.yaml (gitops sidecar)
-            ref: "alpine/git:v2.54.0@sha256:fac7bc2c12aa52bff1c78a26359990e149954a60cdd5d6e20e7e009666c73e0a"
+            ref: "alpine/git:v2.54.0@sha256:697cb1c85aefc5724febaec2202a974e0d66f6abb6be91a9a86d0c8757af692a"
     steps:
       # Authenticated Docker Hub pulls (rate-limit headroom); guarded no-op without creds.
       - name: Docker Hub login (no-op without creds)

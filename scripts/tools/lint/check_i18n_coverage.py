@@ -12,7 +12,7 @@ Scans all three i18n layers and reports coverage:
     - Checks for *_zh bilingual annotations
     - Uses existing check_bilingual_annotations.py logic
 
-  Layer 3: Python CLI tools (scripts/tools/*.py + entrypoint.py)
+  Layer 3: Python CLI tools (scripts/tools/{ops,dx,lint}/*.py + entrypoint.py)
     - Checks for detect_cli_lang() and bilingual _HELP dicts
     - Reports tool coverage
 
@@ -245,8 +245,18 @@ class PythonCLICoverageChecker:
         self.results: Dict[str, Dict] = {}
 
     def find_python_files(self) -> List[Path]:
-        """Find all Python files in scripts/tools and da-tools entrypoint."""
-        files = list(self.scripts_dir.glob("*.py"))
+        """Find all CLI tool files in scripts/tools/{ops,dx,lint} + da-tools entrypoint.
+
+        ``scripts_dir`` is the scripts/tools root; tools live in its ops/dx/lint
+        subdirectories (same corpus as tests/shared/test_tool_exit_codes.py's
+        collect_tools()). ``_``-prefixed shared libraries and __init__.py are
+        excluded — they are not user-facing CLIs.
+        """
+        files: List[Path] = []
+        for sub in ("ops", "dx", "lint"):
+            d = self.scripts_dir / sub
+            if d.is_dir():
+                files.extend(d.glob("*.py"))
 
         # Also check da-tools entrypoint
         if self.components_dir:
@@ -255,7 +265,10 @@ class PythonCLICoverageChecker:
                 files.append(entrypoint)
 
         # Filter out private libraries
-        files = [f for f in files if not f.name.startswith("_")]
+        files = [
+            f for f in files
+            if not f.name.startswith("_") and f.name != "__init__.py"
+        ]
 
         return sorted(files)
 
@@ -294,9 +307,10 @@ class PythonCLICoverageChecker:
             }
 
         for py_path in py_files:
-            rel_path = py_path.relative_to(py_path.parent.parent)
-            if rel_path.parts[0] == "components":
-                # For da-tools, use a nicer path
+            try:
+                rel_path = py_path.relative_to(self.scripts_dir)
+            except ValueError:
+                # Not under scripts/tools → the da-tools entrypoint
                 rel_path = Path("da-tools/entrypoint.py")
             result = self.check_file(py_path)
             self.results[str(rel_path)] = result
@@ -480,7 +494,10 @@ def main():
     # tools/portal/src/. Scan that subtree for the JSX coverage check.
     portal_src_dir = repo_root / "tools" / "portal" / "src"
     rule_pack_dir = repo_root / "rule-packs"
-    scripts_dir = script_dir
+    # L3 corpus root = scripts/tools (ops/dx/lint subdirs scanned inside the
+    # checker). Passing script_dir itself (= scripts/tools/lint) used to make
+    # L3 measure only the lint scripts and miss all ops/dx tools.
+    scripts_dir = script_dir.parent
     components_dir = repo_root / "components"
 
     # Check for required directories

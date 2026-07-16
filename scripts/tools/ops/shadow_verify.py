@@ -46,7 +46,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import format_json_report, http_get_json, query_prometheus_instant, add_prometheus_arg  # noqa: E402
+from _lib_python import format_json_report, http_get_json, probe_health, query_prometheus_instant, add_prometheus_arg  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Alias for backward-compat within this module
@@ -92,25 +92,26 @@ def check_preflight(args):
             "detail": "No --mapping provided",
         })
 
-    # 2. Prometheus reachable
+    # 2. Prometheus reachable (shared probe_health — scheme-validated; r3 W2).
+    # Success ⇒ probe answered 2xx (urlopen raises on 4xx/5xx), which subsumes
+    # the historical `"ok" in body or resp.status == 200` disjunction — real
+    # Prometheus answers 200 "Prometheus Server is Healthy." (no "ok"), so the
+    # status leg was the one that ever fired; probe success maps to "pass".
     prom_url = args.prometheus
-    import urllib.error
-    try:
-        import urllib.request
-        req = urllib.request.Request(f"{prom_url}/-/healthy")  # nosec B310  #operator-supplied internal Prometheus URL
-        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310  #see Request line above
-            healthy = resp.read().decode().strip()
+    body, probe_err = probe_health(f"{prom_url}/-/healthy")
+    if probe_err is None:
+        healthy = body.strip()
         checks.append({
             "check": "prometheus_healthy",
-            "status": "pass" if "ok" in healthy.lower() or resp.status == 200 else "warn",
+            "status": "pass",
             "detail": healthy[:80],
         })
-    except (urllib.error.URLError, ValueError, OSError) as e:
+    else:
         checks.append({
             "check": "prometheus_healthy",
             "status": "fail",
             "caller_error": True,  # #452/#737: transport failure = caller-error (exit 2)
-            "detail": str(e)[:80],
+            "detail": probe_err[:80],
         })
 
     # 3. Rule groups loaded

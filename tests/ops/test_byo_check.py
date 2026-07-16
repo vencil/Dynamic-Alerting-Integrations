@@ -660,6 +660,20 @@ class TestJudgeStep3RulePacksLoaded:
         assert c["status"] == "warn"
         assert c["detail"] == "1 rule groups, 1 rules, 1 evaluation error(s)"
 
+    def test_oversized_last_error_stays_out_of_detail(self):
+        """A huge lastError must not leak into the check detail.
+
+        The per-rule messages are collected internally with lastError[:40]
+        truncation but only COUNTED in the emitted detail — lock that
+        boundary so a refactor doesn't start dumping raw errors."""
+        data = {"data": {"groups": [
+            {"name": "redis-alerts", "rules": [{"name": "r1", "lastError": "E" * 200}]},
+        ]}}
+        c = bc._judge_step3_rule_packs_loaded(data, None)
+        assert c["status"] == "warn"
+        assert c["detail"] == "1 rule groups, 1 rules, 1 evaluation error(s)"
+        assert "E" * 41 not in c["detail"]
+
     def test_no_da_groups_fail(self):
         data = {"data": {"groups": [{"name": "unrelated", "rules": []}]}}
         c = bc._judge_step3_rule_packs_loaded(data, None)
@@ -753,6 +767,22 @@ class TestJudgeStep4DiskRecipePrereq:
             _tenants("db-a", "db-b"), None, _tenants("db-a"), None, _tenants("db-a"))
         assert c["status"] == "pass"
 
+    def test_arriving_err_truncated_to_50(self):
+        c = bc._judge_step4_disk_recipe_prereq(
+            _tenants("db-a"), None, None, "E" * 200, _tenants("db-a"))
+        assert c["status"] == "warn"
+        assert c["detail"] == (
+            "disk recipe(s) declared but could not query volume-stats: " + "E" * 50
+        )
+
+    def test_missing_join_capped_at_10(self):
+        many = ["db-%02d" % i for i in range(16)]
+        c = bc._judge_step4_disk_recipe_prereq(
+            _tenants(*many), None, _tenants(many[0]), None, _tenants(*many))
+        assert c["status"] == "warn"
+        # 15 missing tenants but only the first 10 (sorted) are joined
+        assert c["detail"].count("db-") == 10
+
 
 class TestJudgeStep5DiskIopsRecipePrereq:
     def test_err_caller_error(self):
@@ -793,6 +823,22 @@ class TestJudgeStep5DiskIopsRecipePrereq:
         c = bc._judge_step5_disk_iops_recipe_prereq(
             _tenants("db-a"), None, _tenants("db-a"), None, _tenants("db-a"))
         assert c["status"] == "pass"
+
+    def test_arriving_err_truncated_to_50(self):
+        c = bc._judge_step5_disk_iops_recipe_prereq(
+            _tenants("db-a"), None, None, "E" * 200, _tenants("db-a"))
+        assert c["status"] == "warn"
+        assert c["detail"] == (
+            "IOPS recipe(s) declared but could not query container_fs: " + "E" * 50
+        )
+
+    def test_missing_join_capped_at_10(self):
+        many = ["db-%02d" % i for i in range(16)]
+        c = bc._judge_step5_disk_iops_recipe_prereq(
+            _tenants(*many), None, _tenants(many[0]), None, _tenants(*many))
+        assert c["status"] == "warn"
+        # 15 missing tenants but only the first 10 (sorted) are joined
+        assert c["detail"].count("db-") == 10
 
 
 class TestCheckPrometheusControlFlow:
