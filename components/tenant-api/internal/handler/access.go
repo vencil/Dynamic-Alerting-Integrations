@@ -58,7 +58,7 @@ func CheckTenantAccess() http.HandlerFunc {
 		// handler has (e.g. GetTenant) so a consumer never receives allow:true
 		// for a non-tenant — fail closed, not open.
 		if err := ValidateTenantID(id); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, AccessResponse{

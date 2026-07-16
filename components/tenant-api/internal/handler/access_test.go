@@ -5,20 +5,49 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
 // accessRouter wires GET /api/v1/tenants/{id}/access behind the same read
 // middleware the real server uses, so these tests exercise the actual
-// authorization decision (not a stub).
+// authorization decision (not a stub). RequestID mirrors the router-wide
+// production chain (cmd/server/routes.go) so the envelope's request_id is
+// populated — the exact-key-set pins below cover it.
 func accessRouter(rbacMgr *rbac.Manager) chi.Router {
 	r := chi.NewRouter()
+	r.Use(chimw.RequestID)
 	r.With(rbacMgr.Middleware(rbac.PermRead, TenantIDFromPath)).
 		Get("/api/v1/tenants/{id}/access", CheckTenantAccess())
 	return r
+}
+
+// assertExactEnvelopeKeys pins the FULL JSON key set of an error body — not
+// subset-presence. The rbac middleware mirrors handler.ErrorResponse by value
+// (depguard forbids rbac → handler) and the contract fuzz cannot observe
+// middleware responses (wildcard-RBAC fixture), so a universally-emitted
+// field added to the handler envelope (or request_id flipping to required)
+// with the rbac mirror silently missing it must turn a test red HERE.
+func assertExactEnvelopeKeys(t *testing.T, body []byte, want ...string) {
+	t.Helper()
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	got := make([]string, 0, len(m))
+	for k := range m {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("envelope key set = %v, want exactly %v", got, want)
+	}
 }
 
 func TestCheckTenantAccess_Allow(t *testing.T) {
@@ -65,6 +94,29 @@ func TestCheckTenantAccess_Forbidden(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want %d, body: %s", w.Code, http.StatusForbidden, w.Body.String())
 	}
+	// Unified-envelope alignment pin (depguard forbids rbac → handler, so the
+	// rbac middleware mirrors the envelope shape/codes BY VALUE — this test,
+	// running the REAL middleware from the allowed direction, is what keeps
+	// the copy honest): the 403 key set is pinned EXACTLY (see
+	// assertExactEnvelopeKeys) and must carry the canonical error/code plus
+	// the pre-envelope help/action operator guidance.
+	assertExactEnvelopeKeys(t, w.Body.Bytes(), "error", "code", "request_id", "help", "action")
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode 403 body: %v", err)
+	}
+	if resp["code"] != CodeForbidden {
+		t.Errorf("403 code = %q, want %q (rbac middleware drifted from handler.ErrorResponse)", resp["code"], CodeForbidden)
+	}
+	if e, _ := resp["error"].(string); e == "" {
+		t.Error("403 error message missing")
+	}
+	if h, _ := resp["help"].(string); h == "" {
+		t.Error("403 help missing (pre-envelope field must be preserved)")
+	}
+	if a, _ := resp["action"].(string); a == "" {
+		t.Error("403 action missing (pre-envelope field must be preserved)")
+	}
 }
 
 func TestCheckTenantAccess_Unauthorized(t *testing.T) {
@@ -82,6 +134,20 @@ func TestCheckTenantAccess_Unauthorized(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+	// Envelope alignment pin for the middleware's 401 (see the 403 sibling
+	// above): exact key set + canonical code + unchanged human-readable
+	// message.
+	assertExactEnvelopeKeys(t, w.Body.Bytes(), "error", "code", "request_id")
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode 401 body: %v", err)
+	}
+	if resp["code"] != CodeUnauthorized {
+		t.Errorf("401 code = %q, want %q (rbac middleware drifted from handler.ErrorResponse)", resp["code"], CodeUnauthorized)
+	}
+	if resp["error"] != "missing identity: X-Forwarded-Email header required" {
+		t.Errorf("401 error = %q, want the pre-envelope message unchanged", resp["error"])
 	}
 }
 
@@ -138,5 +204,19 @@ func TestCheckTenantAccess_EmptyID_FailsClosed(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("empty-id status = %d, want %d (must fail closed), body: %s",
 			w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	// Unified envelope (was a bare {"error": ...} map before the migration).
+	// Direct handler invocation has no RequestID middleware → request_id is
+	// legitimately absent; the exact set is error+code only.
+	assertExactEnvelopeKeys(t, w.Body.Bytes(), "error", "code")
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode 400 body: %v", err)
+	}
+	if resp["code"] != CodeBadRequest {
+		t.Errorf("400 code = %q, want %q", resp["code"], CodeBadRequest)
+	}
+	if e, _ := resp["error"].(string); e == "" {
+		t.Error("400 error message missing")
 	}
 }

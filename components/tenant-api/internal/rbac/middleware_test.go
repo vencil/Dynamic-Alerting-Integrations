@@ -13,9 +13,11 @@ package rbac
 // side-channel lives in middleware_audit_test.go.
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/testutil"
@@ -340,12 +342,104 @@ func TestRequestGroups_NoContext(t *testing.T) {
 func TestWriteError(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
-	writeError(w, http.StatusForbidden, "access denied")
+	writeError(w, httptest.NewRequest("GET", "/", nil), http.StatusForbidden, "access denied")
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp["error"] != "access denied" {
+		t.Errorf("error = %q, want %q", resp["error"], "access denied")
+	}
+	// Unified-envelope migration: code is now always present (matches
+	// handler.ErrorResponse, whose OpenAPI schema declares it required).
+	if resp["code"] != codeForbidden {
+		t.Errorf("code = %q, want %q", resp["code"], codeForbidden)
+	}
+}
+
+// TestWriteError_CodeMappingComplete pins the status→code switch in
+// writeError: every status it is legally called with (401/403 — the only
+// two the middleware emits) must map to a NON-EMPTY code, because `code` is
+// a required field of the OpenAPI error schema and the contract fuzz cannot
+// observe middleware responses. An unmapped status panics by design
+// (fail-loud tripwire; contained by the router-wide chi Recoverer).
+func TestWriteError_CodeMappingComplete(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		w := httptest.NewRecorder()
+		writeError(w, httptest.NewRequest("GET", "/", nil), status, "x")
+		var resp map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("status %d: unmarshal: %v", status, err)
+		}
+		if code, _ := resp["code"].(string); code == "" {
+			t.Errorf("status %d: code missing/empty — required by the OpenAPI error schema", status)
+		}
+	}
+	// The tripwire itself: an unmapped status must fail loud, never emit a
+	// schema-violating envelope with the code key absent.
+	defer func() {
+		if recover() == nil {
+			t.Error("writeError with an unmapped status must panic (fail-loud tripwire)")
+		}
+	}()
+	writeError(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil), http.StatusTeapot, "x")
+}
+
+// TestWriteError_NilRequest pins the test-harness affordance: a nil request
+// must not panic and must simply omit request_id.
+func TestWriteError_NilRequest(t *testing.T) {
+	t.Parallel()
+	w := httptest.NewRecorder()
+	writeError(w, nil, http.StatusUnauthorized, "who are you")
+
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp["code"] != codeUnauthorized {
+		t.Errorf("code = %q, want %q", resp["code"], codeUnauthorized)
+	}
+	if _, has := resp["request_id"]; has {
+		t.Errorf("request_id should be omitted for nil request, got %v", resp["request_id"])
+	}
+}
+
+// TestWriteForbidden_EnvelopeShape locks the 403 wire shape after the
+// unified-envelope migration: the pre-existing error/help/action content is
+// preserved verbatim (portal reads body.error; help/action are the operator
+// guidance) and code is added.
+func TestWriteForbidden_EnvelopeShape(t *testing.T) {
+	t.Parallel()
+	w := httptest.NewRecorder()
+	writeForbidden(w, httptest.NewRequest("GET", "/", nil), "db-x", PermWrite)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", w.Code)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp["error"] != "insufficient permissions for tenant db-x" {
+		t.Errorf("error = %q", resp["error"])
+	}
+	if resp["code"] != codeForbidden {
+		t.Errorf("code = %q, want %q", resp["code"], codeForbidden)
+	}
+	help, _ := resp["help"].(string)
+	if !strings.Contains(help, "governance-security") {
+		t.Errorf("help = %q, want the governance-security doc link", help)
+	}
+	action, _ := resp["action"].(string)
+	if !strings.Contains(action, "'write'") || !strings.Contains(action, "'db-x'") {
+		t.Errorf("action = %q, want permission + tenant named", action)
 	}
 }

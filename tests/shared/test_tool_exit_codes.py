@@ -46,28 +46,6 @@ def test_help_exits_zero(tool_path):
     )
 
 
-@pytest.mark.parametrize("tool_path", ALL_TOOLS, ids=[t.name for t in ALL_TOOLS])
-def test_invalid_args_exits_nonzero(tool_path):
-    """Tools should exit non-zero on invalid arguments."""
-    result = subprocess.run(
-        [sys.executable, str(tool_path), "--this-flag-does-not-exist-xyz"],
-        capture_output=True, timeout=10
-    )
-    # argparse exits 2 on unrecognized args
-    assert result.returncode != 0, (
-        f"{tool_path.name} accepted invalid args (exit code {result.returncode})"
-    )
-
-
-# ── #452 Track A: 0/1/2 exit-code contract ────────────────────────────
-# The shared contract lives in scripts/tools/_lib_exitcodes.py:
-#   0 = EXIT_OK, 1 = EXIT_VIOLATION (finding), 2 = EXIT_CALLER_ERROR.
-# Below tightens the "invalid args" gate from "non-zero" to "exactly 2"
-# (caller error), which is the observable boundary of the convention every
-# tool must honour. Tools with a documented richer scheme (diag_pr_ci's
-# 0/1/2/3, tenant_verify's inverted contract) still exit 2 on bad *flags*
-# because argparse owns that path — so this holds for all of them.
-
 # Tools whose bad-flag handling legitimately does NOT go through argparse's
 # exit-2 path. Documented exceptions only (with rationale), so new drift is
 # caught rather than silently allowed.
@@ -81,6 +59,54 @@ INVALID_ARG_EXIT2_EXEMPT: set[str] = {
     "check_aria_references.py",
     "axe_lite_static.py",
 }
+
+# The argparse-exempt tools, resolved back to their Paths in ALL_TOOLS
+# (sorted by name so parametrize ids are deterministic).
+_ARGPARSE_EXEMPT_TOOLS = sorted(
+    (t for t in ALL_TOOLS if t.name in INVALID_ARG_EXIT2_EXEMPT),
+    key=lambda t: t.name,
+)
+
+
+def test_exempt_set_resolves_to_registered_tools():
+    """Every INVALID_ARG_EXIT2_EXEMPT name must exist in ALL_TOOLS.
+
+    Guards against a rename/move silently emptying the shrunk non-zero
+    sweep below (a stale exempt name would otherwise just vanish from
+    the parametrize list)."""
+    assert {t.name for t in _ARGPARSE_EXEMPT_TOOLS} == INVALID_ARG_EXIT2_EXEMPT
+
+
+@pytest.mark.parametrize(
+    "tool_path", _ARGPARSE_EXEMPT_TOOLS,
+    ids=[t.name for t in _ARGPARSE_EXEMPT_TOOLS],
+)
+def test_invalid_args_exits_nonzero(tool_path):
+    """Argparse-exempt tools should still exit non-zero on invalid arguments.
+
+    Deliberately runs ONLY on INVALID_ARG_EXIT2_EXEMPT: every other tool is
+    already covered by test_invalid_args_exits_caller_error below, which
+    asserts exit == 2 — and exit 2 implies non-zero, so a full-ALL_TOOLS
+    sweep here added ~186 redundant subprocess spawns with zero extra
+    coverage. This test only guards the two argparse-exempt tools that the
+    exit-2 sweep skips (they exit 1 via uncaught FileNotFoundError)."""
+    result = subprocess.run(
+        [sys.executable, str(tool_path), "--this-flag-does-not-exist-xyz"],
+        capture_output=True, timeout=10
+    )
+    assert result.returncode != 0, (
+        f"{tool_path.name} accepted invalid args (exit code {result.returncode})"
+    )
+
+
+# ── #452 Track A: 0/1/2 exit-code contract ────────────────────────────
+# The shared contract lives in scripts/tools/_lib_exitcodes.py:
+#   0 = EXIT_OK, 1 = EXIT_VIOLATION (finding), 2 = EXIT_CALLER_ERROR.
+# Below tightens the "invalid args" gate from "non-zero" to "exactly 2"
+# (caller error), which is the observable boundary of the convention every
+# tool must honour. Tools with a documented richer scheme (diag_pr_ci's
+# 0/1/2/3, tenant_verify's inverted contract) still exit 2 on bad *flags*
+# because argparse owns that path — so this holds for all of them.
 
 
 def test_lib_exitcodes_constants_are_canonical():

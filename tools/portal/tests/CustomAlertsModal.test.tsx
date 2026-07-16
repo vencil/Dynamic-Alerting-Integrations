@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { useState } from 'react';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { CustomAlertsModal } from '../src/interactive/tools/tenant-manager/components/CustomAlertsModal.jsx';
 
@@ -163,6 +164,45 @@ describe('CustomAlertsModal', () => {
     // *inside* the modal, not on document.body as before the adoption.
     const modal = screen.getByTestId('custom-alerts-modal');
     expect(modal.contains(document.activeElement)).toBe(true);
+  });
+
+  it('a11y: restores focus to the opener when the modal unmounts on close (TRK-335, WCAG 2.4.3)', async () => {
+    // CustomAlertsModal is a constant-`true` consumer of useModalFocusTrap:
+    // the parent mounts it on open and unmounts it on close, so focus
+    // restoration must fire in the hook's cleanup. Drive it through a real
+    // opener→mount→close cycle to pin the wiring (the hook unit test pins
+    // the mechanism; this pins that THIS component attaches the ref).
+    const ft = fetchTenant([]);
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button data-testid="open-ca" onClick={() => setOpen(true)}>open</button>
+          {open && (
+            <CustomAlertsModal
+              tenantId="db-a"
+              onClose={() => setOpen(false)}
+              fetchTenant={ft}
+              fetchMetrics={mockMetrics([])}
+            />
+          )}
+        </>
+      );
+    }
+    render(<Harness />);
+    const opener = screen.getByTestId('open-ca');
+    opener.focus();
+    expect(document.activeElement).toBe(opener);
+
+    fireEvent.click(opener);
+    await waitFor(() => expect(screen.getByTestId('add')).toBeInTheDocument());
+    // hook stole focus into the modal on open
+    expect(screen.getByTestId('custom-alerts-modal').contains(document.activeElement)).toBe(true);
+
+    // a clean modal closes without a confirm → unmounts → focus back to opener
+    fireEvent.click(screen.getByTestId('close'));
+    await waitFor(() => expect(screen.queryByTestId('custom-alerts-modal')).toBeNull());
+    expect(document.activeElement).toBe(opener);
   });
 
   it('a11y: the focused panel is a labelled dialog (role/aria-modal/aria-labelledby)', async () => {

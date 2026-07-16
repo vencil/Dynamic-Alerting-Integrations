@@ -324,6 +324,10 @@ class TestPrintTextReport:
 
 
 # ── Prometheus query mock ──────────────────────────────────────
+# W1: query_prometheus_alerts 的 fetch core 收斂進
+# _lib_prometheus.query_prometheus_range，HTTP seam 改 patch
+# _lib_prometheus.http_get_json（Alertmanager 路徑仍走 aq.http_get_json，
+# 那些測試不變）。
 
 class TestQueryPrometheusAlerts:
     """Prometheus 查詢 mock 測試。"""
@@ -335,19 +339,20 @@ class TestQueryPrometheusAlerts:
                 "status": "success",
                 "data": {"result": [{"metric": {"alertname": "X"}, "values": [[1, "1"]]}]},
             }, None
-        monkeypatch.setattr(aq, "http_get_json", mock_get)
+        monkeypatch.setattr("_lib_prometheus.http_get_json", mock_get)
         result = aq.query_prometheus_alerts("http://prom", "ALERTS", 86400)
         assert len(result) == 1
 
     def test_error_returns_empty(self, monkeypatch):
         """HTTP 錯誤回傳空清單。"""
-        monkeypatch.setattr(aq, "http_get_json", lambda url, timeout=10: (None, "refused"))
+        monkeypatch.setattr("_lib_prometheus.http_get_json",
+                            lambda url, timeout=10: (None, "refused"))
         result = aq.query_prometheus_alerts("http://prom", "ALERTS", 86400)
         assert result == []
 
     def test_api_error(self, monkeypatch):
         """API 錯誤狀態回傳空清單。"""
-        monkeypatch.setattr(aq, "http_get_json",
+        monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=10: ({"status": "error"}, None))
         result = aq.query_prometheus_alerts("http://prom", "ALERTS", 86400)
         assert result == []
@@ -408,7 +413,7 @@ class TestAnalyzeFromPrometheus:
                 "values": values,
             }]},
         }
-        monkeypatch.setattr(aq, "http_get_json",
+        monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=30: (result_data, None))
         metrics = aq.analyze_from_prometheus("http://prom", 86400)
         assert len(metrics) == 1
@@ -418,7 +423,7 @@ class TestAnalyzeFromPrometheus:
 
     def test_no_data(self, monkeypatch):
         """無資料回傳空清單。"""
-        monkeypatch.setattr(aq, "http_get_json",
+        monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=30: (None, "refused"))
         metrics = aq.analyze_from_prometheus("http://prom", 86400)
         assert metrics == []
@@ -466,7 +471,7 @@ class TestMain:
 
     def test_json_output(self, monkeypatch, capsys):
         """--json 輸出有效 JSON。"""
-        monkeypatch.setattr(aq, "http_get_json",
+        monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=30: ({"status": "success",
                                                       "data": {"result": []}}, None))
         monkeypatch.setattr("sys.argv", [
@@ -480,7 +485,7 @@ class TestMain:
 
     def test_markdown_output(self, monkeypatch, capsys):
         """--markdown 輸出包含表格。"""
-        monkeypatch.setattr(aq, "http_get_json",
+        monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=30: ({"status": "success",
                                                       "data": {"result": []}}, None))
         monkeypatch.setattr("sys.argv", [
@@ -492,7 +497,7 @@ class TestMain:
 
     def test_ci_mode_passes(self, monkeypatch):
         """CI 模式：無 BAD 時 exit code 0。"""
-        monkeypatch.setattr(aq, "http_get_json",
+        monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=30: ({"status": "success",
                                                       "data": {"result": []}}, None))
         monkeypatch.setattr("sys.argv", [
@@ -508,7 +513,7 @@ class TestMain:
         values = []
         for i in range(100):
             values.append([now - (100 - i) * 60, str(i % 2)])  # 交替 0/1
-        monkeypatch.setattr(aq, "http_get_json",
+        monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=30: ({"status": "success",
                                                       "data": {"result": [{
                                                           "metric": {"alertname": "Noisy", "tenant": "t"},
@@ -538,7 +543,7 @@ class TestMain:
             queries_made.append(url)
             return {"status": "success", "data": {"result": []}}, None
 
-        monkeypatch.setattr(aq, "http_get_json", mock_get)
+        monkeypatch.setattr("_lib_prometheus.http_get_json", mock_get)
         monkeypatch.setattr("sys.argv", [
             "alert_quality", "--prometheus", "http://prom",
             "--tenant", "db-a", "--json",

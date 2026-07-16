@@ -341,6 +341,178 @@ func keysOf(m map[string]string) []string {
 	return ks
 }
 
+// ── CreateBranch / DeleteBranch ─────────────────────────────────────────
+//
+// Branch operations were the untested half of the write path (the gitlab
+// client has the mirror-image tests); same depth here: happy path with
+// payload assertions, 404 semantics, 403 → ErrForbidden without leaking
+// the upstream body.
+
+// TestCreateBranch drives the two-step create: GET the base branch ref,
+// then POST the new fully-qualified ref carrying the base SHA.
+func TestCreateBranch(t *testing.T) {
+	t.Parallel()
+	const baseSHA = "abc123def456"
+	var createdRef struct {
+		Ref string `json:"ref"`
+		SHA string `json:"sha"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/git/ref/heads/main"):
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"ref":"refs/heads/main","object":{"sha":"%s","type":"commit"}}`, baseSHA)
+		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/git/refs"):
+			if err := json.NewDecoder(r.Body).Decode(&createdRef); err != nil {
+				t.Errorf("decode create-ref payload: %v", err)
+			}
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"ref":"refs/heads/tenant-api/db-a/20260716"}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient("token", "owner/repo", "main")
+	c.SetBaseURL(srv.URL)
+
+	if err := c.CreateBranch("tenant-api/db-a/20260716"); err != nil {
+		t.Fatalf("CreateBranch() error: %v", err)
+	}
+	if createdRef.Ref != "refs/heads/tenant-api/db-a/20260716" {
+		t.Errorf("created ref = %q, want fully-qualified refs/heads/... form", createdRef.Ref)
+	}
+	if createdRef.SHA != baseSHA {
+		t.Errorf("created ref sha = %q, want the base branch HEAD %q", createdRef.SHA, baseSHA)
+	}
+}
+
+// A missing base branch (404 on the ref lookup) fails the FIRST step —
+// the create-ref POST must never fire.
+func TestCreateBranch_BaseRefMissing(t *testing.T) {
+	t.Parallel()
+	var refPosts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			refPosts++
+		}
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"message":"Not Found"}`)
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient("token", "owner/repo", "main")
+	c.SetBaseURL(srv.URL)
+
+	err := c.CreateBranch("tenant-api/db-a/20260716")
+	if err == nil || !strings.Contains(err.Error(), "get base branch") {
+		t.Fatalf("err = %v, want get-base-branch failure", err)
+	}
+	var apiErr *platform.APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusNotFound {
+		t.Errorf("err = %v, want a wrapped APIError with StatusCode 404", err)
+	}
+	if refPosts != 0 {
+		t.Errorf("create-ref POST fired %d times after a failed base lookup, want 0", refPosts)
+	}
+}
+
+// An unparseable base-ref response fails before the create-ref POST.
+func TestCreateBranch_BaseRefUnparseable(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `not json at all`)
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient("token", "owner/repo", "main")
+	c.SetBaseURL(srv.URL)
+
+	if err := c.CreateBranch("b"); err == nil || !strings.Contains(err.Error(), "parse base ref") {
+		t.Fatalf("err = %v, want parse-base-ref failure", err)
+	}
+}
+
+// A 403 on the ref creation (token has contents:read only) surfaces as
+// platform.ErrForbidden and never leaks the upstream body — mirroring
+// TestCreatePR_Forbidden.
+func TestCreateBranch_CreateRefForbidden(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			fmt.Fprint(w, `{"object":{"sha":"abc123"}}`)
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"message":"Resource not accessible by personal access token"}`)
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient("read-only-token", "owner/repo", "main")
+	c.SetBaseURL(srv.URL)
+
+	err := c.CreateBranch("tenant-api/db-a/20260716")
+	if err == nil {
+		t.Fatal("expected error for 403 on ref creation")
+	}
+	if !errors.Is(err, platform.ErrForbidden) {
+		t.Errorf("expected errors.Is(err, ErrForbidden), got %v", err)
+	}
+	if strings.Contains(err.Error(), "Resource not accessible") {
+		t.Errorf("error leaked upstream body: %v", err)
+	}
+}
+
+func TestDeleteBranch(t *testing.T) {
+	t.Parallel()
+	var gotMethod, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient("token", "owner/repo", "main")
+	c.SetBaseURL(srv.URL)
+
+	if err := c.DeleteBranch("tenant-api/db-a/20260716"); err != nil {
+		t.Fatalf("DeleteBranch() error: %v", err)
+	}
+	if gotMethod != "DELETE" {
+		t.Errorf("method = %q, want DELETE", gotMethod)
+	}
+	if want := "/repos/owner/repo/git/refs/heads/tenant-api/db-a/20260716"; gotPath != want {
+		t.Errorf("path = %q, want %q", gotPath, want)
+	}
+}
+
+// Deleting a branch that is already gone is an error the caller sees
+// (cleanup flows log it); the status code must survive as an APIError.
+func TestDeleteBranch_NotFound(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		fmt.Fprint(w, `{"message":"Reference does not exist"}`)
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient("token", "owner/repo", "main")
+	c.SetBaseURL(srv.URL)
+
+	err := c.DeleteBranch("tenant-api/db-a/gone")
+	if err == nil || !strings.Contains(err.Error(), "delete branch") {
+		t.Fatalf("err = %v, want delete-branch failure", err)
+	}
+	var apiErr *platform.APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("err = %v, want a wrapped APIError with StatusCode 422", err)
+	}
+	if strings.Contains(err.Error(), "Reference does not exist") {
+		t.Errorf("error leaked upstream body: %v", err)
+	}
+}
+
 // TestClient_CircuitBreakerTripsThroughDo is the integration test for #632/#645:
 // it drives the REAL client.do() path (not the platform.CircuitBreaker in
 // isolation) against an httptest server that always returns 503, and asserts

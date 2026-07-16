@@ -859,3 +859,55 @@ def test_govern_plan_table_tags_lower_bound_delta_with_miss():
     out = tg.format_text_report(plans, [], applied=False)
     assert any("db2_bufferpool_hit_ratio" in ln and "miss" in ln
                for ln in out.splitlines())
+
+
+# ---------------------------------------------------------------------------
+# --prometheus env-var fallback (W1: add_prometheus_arg / README §6.1)
+# ---------------------------------------------------------------------------
+class TestPrometheusEnvFallback:
+    """`--prometheus` 走 _lib_io.add_prometheus_arg 的 canonical env fallback。
+
+    回歸鎖（形狀照 tests/ops/test_byo_check.py::TestPrometheusEnvFallback）：
+    修正前是 `os.environ.get("PROMETHEUS_URL", default)` —— 對
+    present-but-empty 的 $PROMETHEUS_URL 會回空字串（key 存在），把空 URL
+    塞進查詢。help 文字 "Prometheus Query API URL" 逐字保留。
+    """
+
+    def _run_main_capture_url(self, monkeypatch, tmp_path, extra=()):
+        import sys
+        from types import SimpleNamespace
+
+        captured = {}
+
+        def fake_run(args):
+            captured["url"] = args.prometheus
+            return SimpleNamespace(plans=[], outcomes=[], ungoverned=[],
+                                   not_applicable=[], force_manual=[])
+
+        monkeypatch.setattr(tg, "run", fake_run)
+        monkeypatch.setattr(tg, "format_text_report", lambda *a, **k: "")
+        monkeypatch.setattr(sys, "argv", [
+            "threshold_govern.py", "--config-dir", str(tmp_path), *extra])
+        with pytest.raises(SystemExit) as exc_info:
+            tg.main()
+        assert exc_info.value.code == 0     # 空 outcomes → EXIT_OK
+        return captured["url"]
+
+    def test_uses_env_when_flag_absent(self, monkeypatch, tmp_path):
+        """--prometheus 省略 + $PROMETHEUS_URL 有值 → 用 env 值。"""
+        monkeypatch.setenv("PROMETHEUS_URL", "http://env-prom:9090")
+        url = self._run_main_capture_url(monkeypatch, tmp_path)
+        assert url == "http://env-prom:9090"
+
+    def test_empty_env_falls_back_to_localhost(self, monkeypatch, tmp_path):
+        """PROMETHEUS_URL 設定但為空字串（如 ConfigMap 缺鍵）→ 回退 localhost。"""
+        monkeypatch.setenv("PROMETHEUS_URL", "")
+        url = self._run_main_capture_url(monkeypatch, tmp_path)
+        assert url == "http://localhost:9090"
+
+    def test_explicit_flag_overrides_env(self, monkeypatch, tmp_path):
+        """顯式 --prometheus 永遠蓋過 $PROMETHEUS_URL。"""
+        monkeypatch.setenv("PROMETHEUS_URL", "http://env-prom:9090")
+        url = self._run_main_capture_url(
+            monkeypatch, tmp_path, extra=("--prometheus", "http://cli:9099"))
+        assert url == "http://cli:9099"

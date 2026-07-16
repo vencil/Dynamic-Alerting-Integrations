@@ -366,9 +366,14 @@ class TestReports:
 # ═══════════════════════════════════════════════════════════════════
 
 class TestQueryPrometheus:
-    """Prometheus 查詢 mock 測試。"""
+    """Prometheus 查詢 mock 測試。
 
-    @patch("cardinality_forecasting.http_get_json")
+    W1: fetch core 收斂進 _lib_prometheus（query_prometheus_range /
+    query_prometheus_instant），全檔 HTTP seam 一律 patch
+    ``_lib_prometheus.http_get_json``。
+    """
+
+    @patch("_lib_prometheus.http_get_json")
     def test_query_range_success(self, mock_get):
         """正常查詢回傳 per-tenant 資料。"""
         mock_get.return_value = ({
@@ -391,21 +396,21 @@ class TestQueryPrometheus:
         assert "db-b" in result
         assert len(result["db-a"]) == 3
 
-    @patch("cardinality_forecasting.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_query_range_empty(self, mock_get):
         """查詢失敗回傳空 dict。"""
         mock_get.return_value = (None, "connection error")
         result = cf.query_cardinality_range("http://prom:9090")
         assert result == {}
 
-    @patch("cardinality_forecasting.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_query_range_error_status(self, mock_get):
         """查詢 status != success。"""
         mock_get.return_value = ({"status": "error", "error": "bad query"}, None)
         result = cf.query_cardinality_range("http://prom:9090")
         assert result == {}
 
-    @patch("cardinality_forecasting.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_query_scrape_series(self, mock_get):
         """scrape_series_added 查詢。"""
         mock_get.return_value = ({
@@ -419,7 +424,7 @@ class TestQueryPrometheus:
         result = cf.query_scrape_series_added("http://prom:9090")
         assert result["db-a"] == 42.0
 
-    @patch("cardinality_forecasting.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_query_scrape_series_empty(self, mock_get):
         """scrape_series_added 查詢失敗。"""
         mock_get.return_value = (None, "connection error")
@@ -453,7 +458,7 @@ class TestCLI:
             },
         }, None)
 
-    @patch("cardinality_forecasting.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_main_text_output(self, mock_get, capsys):
         """文字輸出。"""
         mock_get.return_value = self._make_mock_data()
@@ -462,7 +467,7 @@ class TestCLI:
         output = capsys.readouterr().out
         assert "db-a" in output
 
-    @patch("cardinality_forecasting.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_main_json_output(self, mock_get, capsys):
         """JSON 輸出。"""
         mock_get.return_value = self._make_mock_data()
@@ -472,7 +477,7 @@ class TestCLI:
         assert "tenants" in data
         assert data["tenants"][0]["tenant"] == "db-a"
 
-    @patch("cardinality_forecasting.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_main_markdown_output(self, mock_get, capsys):
         """Markdown 輸出。"""
         mock_get.return_value = self._make_mock_data()
@@ -481,14 +486,14 @@ class TestCLI:
         output = capsys.readouterr().out
         assert "# Cardinality Forecast Report" in output
 
-    @patch("cardinality_forecasting.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_main_ci_safe(self, mock_get, capsys):
         """CI 模式 — 安全 → exit 0。"""
         mock_get.return_value = self._make_mock_data()
         exit_code = cf.main(["--prometheus", "http://prom:9090", "--ci"])
         assert exit_code == 0
 
-    @patch("cardinality_forecasting.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_main_ci_critical(self, mock_get, capsys):
         """CI 模式 — critical → exit 1。"""
         now = time.time()
@@ -511,14 +516,14 @@ class TestCLI:
                             "--warn-days", "30"])
         assert exit_code == 1
 
-    @patch("cardinality_forecasting.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_main_no_data(self, mock_get, capsys):
         """無資料（連線失敗）→ exit 2 (caller error, #452)。"""
         mock_get.return_value = (None, "connection error")
         exit_code = cf.main(["--prometheus", "http://prom:9090"])
         assert exit_code == 2  # EXIT_CALLER_ERROR (#452: cannot reach Prometheus)
 
-    @patch("cardinality_forecasting.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_main_no_data_json_envelope(self, mock_get, capsys):
         """#1112: 無資料 + --json → no_data envelope 的**形狀**（exit 仍是 2）。
 
@@ -555,7 +560,7 @@ class TestCLI:
         assert "cardinality data" in captured.err or "基數資料" in captured.err
         assert "Check Prometheus" not in captured.out
 
-    @patch("cardinality_forecasting.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_main_tenant_filter(self, mock_get, capsys):
         """Tenant 過濾。"""
         now = time.time()
@@ -584,7 +589,7 @@ class TestCLI:
         assert len(data["tenants"]) == 1
         assert data["tenants"][0]["tenant"] == "db-a"
 
-    @patch("cardinality_forecasting.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_main_custom_limit(self, mock_get, capsys):
         """自訂基數上限。"""
         mock_get.return_value = self._make_mock_data()
