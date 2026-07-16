@@ -36,12 +36,11 @@ CONTRACT_MAX_EXAMPLES=50 make contract-test
 - `/federation/tokens*` + `/federation/accounts/backfill`（4 ops）——路由只在 `--federation-key` 設定時註冊，且 token store 需要 in-cluster Kubernetes ConfigMap，本機 fixture 起不來。reopen 條件：federation record store 有 file-backed / fake seam 後補測；現由 Go handler test（stub store）覆蓋。
 - `GET /prs`（1 op）——路由只在 PR write-mode（需 forge token）註冊，fixture 跑 `write-mode=direct` 會 404。reopen 條件：fixture 長出 stub forge backend。
 
-**4xx/5xx 宣告紀律**：error 回應已全面宣告為 `handler.ErrorResponse`（統一 error envelope，PR-9）；新 handler 回了未宣告的 status code 會被 `status_code_conformance` 擋下——記得補 `@Failure` 標註 + `make api-docs`。
+**4xx/5xx 宣告紀律**：error 回應已全面宣告為 `handler.ErrorResponse`（統一 error envelope，PR-9）；新 handler 回了未宣告的 status code 會被 `status_code_conformance` 擋下——記得補 `@Failure` 標註 + `make api-docs`。schema 已把 `error`/`code` 收成 **required**（`binding:"required"`），所以 `response_schema_conformance` 現在會真正咬住手寫裸 `{"error": ...}` map 的落差——新 error path 一律走 `WriteJSONError` / `WriteErrorEnvelope` 家族（`codeFromStatus` 未映射的 status 會產出無 `code` 的回應 → 契約測試紅，這是刻意的 tripwire）。原本記錄在此的三處 legacy 裸 map emitter（`access.go` 400 / `me.go` 401 / rbac middleware 的 `writeError`+`writeForbidden` 401/403）已全部遷移統一 envelope（message/status 不變，加 `code`+`request_id`；rbac 屬 domain 層不能 import handler，envelope 形狀以套件內 struct 鏡射、由 `internal/handler/access_test.go` 走真 middleware 釘住對齊）。
 
 **已知未涵蓋**（誠實記錄，非 gate 盲區造成的假綠）：
 
-- RBAC middleware 的 401/403 與 rate limiter 的 429 是跨切面、每個 op 都可能回，但 fixture 用 wildcard RBAC + 關 rate limiter（否則 fuzz 打不進 handler 邏輯），spec 逐 op 宣告與否 fuzz 都觀測不到；domain policy 403（`violations` 為 `policy.Violation` 形狀）同理（fixture 無 `_domain_policy.yaml`）。
-- 兩處 legacy 裸 map error emitter 未走統一 envelope：`access.go:61`（`writeJSON` 裸 map）與 `me.go:65`（401 裸 map）——與 rbac middleware 的 `writeError` 同批 follow-up 遷移 `WriteJSONError`。目前 conformance 過得了只因 ErrorResponse schema 沒有 `required` 欄位（所有欄位 optional，裸 map 剛好不違約）；未來若把 `error`/`code` 收成 required 就會曝。
+- RBAC middleware 的 401/403 與 rate limiter 的 429 是跨切面、每個 op 都可能回，但 fixture 用 wildcard RBAC + 關 rate limiter（否則 fuzz 打不進 handler 邏輯），spec 逐 op 宣告與否 fuzz 都觀測不到（middleware 的 wire shape 已同上遷移統一 envelope、由 Go 測試釘住，只是 fuzz 觀測不到）；domain policy 403（`violations` 為 `policy.Violation` 形狀）同理（fixture 無 `_domain_policy.yaml`）。
 - Windows host 直跑 runner 的兩個邊角（container/CI 無此問題）：`shutil.rmtree(ignore_errors=True)` 遇 git objects 唯讀檔可能留 temp 殘骸；`Popen` 若在啟動時 raise，`log_fh` 不會被 finally 關閉。走 `make contract-test`（dev container）不受影響。
 
 ## 排錯

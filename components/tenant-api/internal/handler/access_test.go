@@ -65,6 +65,27 @@ func TestCheckTenantAccess_Forbidden(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want %d, body: %s", w.Code, http.StatusForbidden, w.Body.String())
 	}
+	// Unified-envelope alignment pin (depguard forbids rbac → handler, so the
+	// rbac middleware mirrors the envelope shape/codes BY VALUE — this test,
+	// running the REAL middleware from the allowed direction, is what keeps
+	// the copy honest): the 403 must carry the canonical error/code plus the
+	// pre-envelope help/action operator guidance.
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode 403 body: %v", err)
+	}
+	if resp["code"] != CodeForbidden {
+		t.Errorf("403 code = %q, want %q (rbac middleware drifted from handler.ErrorResponse)", resp["code"], CodeForbidden)
+	}
+	if e, _ := resp["error"].(string); e == "" {
+		t.Error("403 error message missing")
+	}
+	if h, _ := resp["help"].(string); h == "" {
+		t.Error("403 help missing (pre-envelope field must be preserved)")
+	}
+	if a, _ := resp["action"].(string); a == "" {
+		t.Error("403 action missing (pre-envelope field must be preserved)")
+	}
 }
 
 func TestCheckTenantAccess_Unauthorized(t *testing.T) {
@@ -82,6 +103,18 @@ func TestCheckTenantAccess_Unauthorized(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+	// Envelope alignment pin for the middleware's 401 (see the 403 sibling
+	// above): canonical code + unchanged human-readable message.
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode 401 body: %v", err)
+	}
+	if resp["code"] != CodeUnauthorized {
+		t.Errorf("401 code = %q, want %q (rbac middleware drifted from handler.ErrorResponse)", resp["code"], CodeUnauthorized)
+	}
+	if resp["error"] != "missing identity: X-Forwarded-Email header required" {
+		t.Errorf("401 error = %q, want the pre-envelope message unchanged", resp["error"])
 	}
 }
 
@@ -138,5 +171,16 @@ func TestCheckTenantAccess_EmptyID_FailsClosed(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("empty-id status = %d, want %d (must fail closed), body: %s",
 			w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	// Unified envelope (was a bare {"error": ...} map before the migration).
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode 400 body: %v", err)
+	}
+	if resp["code"] != CodeBadRequest {
+		t.Errorf("400 code = %q, want %q", resp["code"], CodeBadRequest)
+	}
+	if e, _ := resp["error"].(string); e == "" {
+		t.Error("400 error message missing")
 	}
 }

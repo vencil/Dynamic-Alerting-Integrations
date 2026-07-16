@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+
+	chimw "github.com/go-chi/chi/v5/middleware"
 )
 
 // Middleware returns an HTTP middleware that reads IdP identity from
@@ -34,7 +36,7 @@ func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) str
 			// pre-P2 zero-value HeaderResolver{}.
 			bPrincipal, err := HeaderResolver{ClaimHeaders: m.claimHeaders}.Resolve(r)
 			if err != nil {
-				writeError(w, http.StatusUnauthorized, err.Error())
+				writeError(w, r, http.StatusUnauthorized, err.Error())
 				return
 			}
 
@@ -95,7 +97,7 @@ func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) str
 				authorized = m.Allowed(bPrincipal, tenantID, want)
 			}
 			if !authorized {
-				writeForbidden(w, tenantID, want)
+				writeForbidden(w, r, tenantID, want)
 				return
 			}
 
@@ -130,22 +132,69 @@ func observeSafely(a MachineIdentityAuditor, r *http.Request, header *VerifiedPr
 	a.Observe(r, header)
 }
 
-// writeError writes a JSON error response.
-func writeError(w http.ResponseWriter, status int, msg string) {
+// Machine-readable error codes for the middleware's own responses. The rbac
+// package sits in the domain layer and must NOT import the HTTP handler layer
+// (depguard domain-no-handler ratchet, .golangci.yml), so these mirror
+// handler.CodeUnauthorized / handler.CodeForbidden BY VALUE instead of by
+// reference. Alignment is pinned from the allowed dependency direction
+// (handler → rbac): the envelope-shape tests in
+// internal/handler/access_test.go route a request through this real
+// middleware and compare the emitted `code` against the handler constants.
+const (
+	codeUnauthorized = "UNAUTHORIZED"
+	codeForbidden    = "FORBIDDEN"
+)
+
+// errorEnvelope is a package-local copy of the wire shape of
+// handler.ErrorResponse, restricted to the fields this middleware emits
+// (error / code / request_id / help / action). Duplicated for the same
+// depguard reason as the codes above; the access_test.go assertions pin the
+// two shapes in sync. `error` and `code` are always set (the OpenAPI schema
+// declares them required); request_id comes from the chi RequestID
+// middleware, which runs router-wide before any RBAC middleware
+// (cmd/server/routes.go), and is omitted when absent (bare test harnesses).
+type errorEnvelope struct {
+	Error     string `json:"error"`
+	Code      string `json:"code,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
+	Help      string `json:"help,omitempty"`
+	Action    string `json:"action,omitempty"`
+}
+
+// writeEnvelope stamps the request ID and renders the envelope. Mirrors
+// handler.WriteErrorEnvelope (r may be nil in tests → request_id omitted).
+func writeEnvelope(w http.ResponseWriter, r *http.Request, status int, env errorEnvelope) {
+	if env.RequestID == "" && r != nil {
+		env.RequestID = chimw.GetReqID(r.Context())
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	_ = json.NewEncoder(w).Encode(env)
+}
+
+// writeError writes a JSON error response in the unified envelope shape.
+// The message content is unchanged from the pre-envelope bare
+// {"error": msg} map — the migration only ADDS code + request_id.
+func writeError(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	code := ""
+	switch status {
+	case http.StatusUnauthorized:
+		code = codeUnauthorized
+	case http.StatusForbidden:
+		code = codeForbidden
+	}
+	writeEnvelope(w, r, status, errorEnvelope{Error: msg, Code: code})
 }
 
 // writeForbidden writes a 403 response with a help link and suggested action.
 // v2.5.0: Enhanced error message with guidance for RBAC troubleshooting.
-func writeForbidden(w http.ResponseWriter, tenantID string, want Permission) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	resp := map[string]string{
-		"error":  "insufficient permissions for tenant " + tenantID,
-		"help":   "https://github.com/vencil/vibe-k8s-lab/blob/main/docs/governance-security.md",
-		"action": "Check your _rbac.yaml group rules. Ensure your IdP group has '" + string(want) + "' permission for tenant '" + tenantID + "', and that environments[]/domains[] constraints match the tenant metadata.",
-	}
-	_ = json.NewEncoder(w).Encode(resp)
+// Unified-envelope migration: help/action/message preserved verbatim;
+// code + request_id added.
+func writeForbidden(w http.ResponseWriter, r *http.Request, tenantID string, want Permission) {
+	writeEnvelope(w, r, http.StatusForbidden, errorEnvelope{
+		Error:  "insufficient permissions for tenant " + tenantID,
+		Code:   codeForbidden,
+		Help:   "https://github.com/vencil/vibe-k8s-lab/blob/main/docs/governance-security.md",
+		Action: "Check your _rbac.yaml group rules. Ensure your IdP group has '" + string(want) + "' permission for tenant '" + tenantID + "', and that environments[]/domains[] constraints match the tenant metadata.",
+	})
 }

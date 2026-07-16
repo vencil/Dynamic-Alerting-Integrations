@@ -1632,6 +1632,10 @@ const docTemplate = `{
     "definitions": {
         "ErrorResponse": {
             "type": "object",
+            "required": [
+                "code",
+                "error"
+            ],
             "properties": {
                 "action": {
                     "type": "string"
