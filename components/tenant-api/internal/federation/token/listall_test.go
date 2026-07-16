@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -75,22 +76,35 @@ func TestStore_ListAll(t *testing.T) {
 
 func TestConfigMapStore_ListAll(t *testing.T) {
 	t.Parallel()
-	st, _ := newFakeConfigMapStore(t)
+	st, client := newFakeConfigMapStore(t)
 	now := time.Now()
-	for _, r := range listAllFixture(now) {
-		if err := st.put(r); err != nil {
-			t.Fatalf("put %s: %v", r.TokenID, err)
-		}
+	// Seed by writing the store.json document DIRECTLY into the ConfigMap
+	// rather than via put(): mutate() prunes expired records on every
+	// write, so a put()-seeded fixture would never present ftk_exp to
+	// listAll and its own `!r.expired(now)` filter would go untested
+	// (a mutation dropping that filter survived exactly this way). An
+	// expired-but-unpruned record is a real production state — pruning
+	// only happens on WRITES, and the detector's listAll polling between
+	// writes must still filter it.
+	ctx := context.Background()
+	raw, err := json.Marshal(&storeDoc{SchemaVersion: storeSchemaVersion, Records: listAllFixture(now)})
+	if err != nil {
+		t.Fatalf("marshal seed doc: %v", err)
 	}
-	// NOTE: mutate() prunes expired records on every write, so ftk_exp is
-	// already gone from the document by the time listAll runs — the
-	// filter below is then exercised against the survivors, and the
-	// contract (only live records, oldest first) still holds either way.
+	cm, err := client.CoreV1().ConfigMaps(testCMNamespace).Get(ctx, testCMName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get ConfigMap: %v", err)
+	}
+	cm.Data[cmKeyStore] = string(raw)
+	if _, err := client.CoreV1().ConfigMaps(testCMNamespace).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("seed ConfigMap: %v", err)
+	}
+
 	got, err := st.listAll(now)
 	if err != nil {
 		t.Fatalf("listAll: %v", err)
 	}
-	assertListAll(t, got)
+	assertListAll(t, got) // ftk_exp filtered by listAll itself, not by a prior prune
 }
 
 // A corrupted store.json must surface as an ERROR from listAll — the

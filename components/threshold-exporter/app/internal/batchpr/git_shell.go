@@ -23,10 +23,11 @@ package batchpr
 //   - `git` must already be authenticated to push (SSH agent /
 //     credential helper / pre-set GH_TOKEN env). The impl does NOT
 //     manage auth — that's the caller's responsibility.
-//   - Force-push is intentionally NOT supported. Re-pushing to a
-//     branch that already has commits is an Apply() idempotency
-//     violation (see apply.go skip-existing path); if you need to
-//     rewrite, delete the remote branch first.
+//   - Push never forces. Re-pushing to a branch that already has
+//     commits is an Apply() idempotency violation (see apply.go
+//     skip-existing path). Rewriting a branch is a separate,
+//     deliberate API — ForcePushWithLease, used only by the
+//     Refresh() rebase flow.
 
 import (
 	"context"
