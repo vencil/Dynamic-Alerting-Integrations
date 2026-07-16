@@ -63,7 +63,10 @@ _CASES = [
     for m in _py_pilot.MUTATIONS
 ] + [
     pytest.param(
-        _go_pilot.GO_APP_DIR, m,
+        # Go mutations now span two modules (exporter, tenant-api); the base
+        # dir for target_file resolution is the mutation's own module_dir, not
+        # a single hard-coded GO_APP_DIR.
+        m.module_dir(), m,
         id=f"go::{m.fn_name}::{m.label[:48]}",
     )
     for m in _go_pilot.MUTATIONS
@@ -126,10 +129,11 @@ class TestKillTargetsExist:
       - Python: test_file is a space-separated list of pytest paths —
         assert every token is an existing FILE.
       - Go: test_target is a `go test` package selector (`./...`,
-        `./pkg/config/...`), not a file — assert the selector's base
-        DIRECTORY exists under GO_APP_DIR (filesystem level only; which
-        packages the pattern expands to is go-toolchain territory that
-        a static Python test can't see).
+        `./pkg/config/...`, `./internal/rbac/...`), not a file — assert the
+        selector's base DIRECTORY exists under the mutation's module root
+        (module_dir: exporter vs tenant-api), filesystem level only; which
+        packages the pattern expands to is go-toolchain territory that a
+        static Python test can't see.
     """
 
     @pytest.mark.parametrize(
@@ -160,7 +164,11 @@ class TestKillTargetsExist:
         if base.endswith("..."):
             base = base[:-3]
         base = base.rstrip("/")
-        target_dir = _go_pilot.GO_APP_DIR / base if base else _go_pilot.GO_APP_DIR
+        # Selector is resolved from the mutation's module root (module_dir),
+        # not a single hard-coded GO_APP_DIR — tenant-api entries live in a
+        # different Go module than the exporter entries.
+        module_dir = mutation.module_dir()
+        target_dir = module_dir / base if base else module_dir
         assert target_dir.is_dir(), (
             f"test_target {selector!r} (mutation {mutation.label!r}) points "
             f"at a non-existent directory {target_dir} — `go test` would "

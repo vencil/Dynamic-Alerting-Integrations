@@ -82,23 +82,45 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GO_APP_DIR = REPO_ROOT / "components" / "threshold-exporter" / "app"
+TENANT_API_DIR = REPO_ROOT / "components" / "tenant-api"
+
+# Module key → module root dir. The root is BOTH the base for a mutation's
+# target_file AND the cwd `go test` runs from (each is its own Go module with
+# its own go.mod, so the test package selector is resolved relative to it).
+# "exporter" stays the default so every pre-round-4 catalog entry — which
+# omits the module field — keeps resolving against threshold-exporter/app
+# byte-identically. Round 4 (ROI refactor) adds the "tenant-api" module to
+# cover the RBAC/identity pure functions (LD-6 security core).
+GO_MODULES: dict[str, Path] = {
+    "exporter": GO_APP_DIR,
+    "tenant-api": TENANT_API_DIR,
+}
 
 
 @dataclass
 class Mutation:
-    target_file: str        # source file relative to GO_APP_DIR
-    test_target: str        # `go test` package selector
+    target_file: str        # source file relative to the module root (module_dir)
+    test_target: str        # `go test` package selector (relative to module_dir)
     label: str              # short description
     old: str                # exact string to find
     new: str                # replacement
     fn_name: str            # which target function
+    # Which Go module the target lives in (key into GO_MODULES). Defaults to
+    # "exporter" so existing entries stay unchanged; tenant-api entries set it
+    # explicitly. Governs BOTH target_file resolution and the `go test` cwd.
+    module: str = "exporter"
     # True = documented equivalent mutation (survives by construction, no
     # behavioral test can kill it without overspecifying the impl). Known
     # equivalents do NOT fail the run — see main()'s exit contract.
     known_equivalent: bool = False
 
+    def module_dir(self) -> Path:
+        """Root dir of the Go module this mutation targets (base for
+        target_file resolution AND the `go test` cwd)."""
+        return GO_MODULES[self.module]
+
     def apply(self) -> None:
-        path = GO_APP_DIR / self.target_file
+        path = self.module_dir() / self.target_file
         with open(path, encoding="utf-8", newline="") as f:
             src = f.read()
         if self.old not in src:
@@ -113,7 +135,7 @@ class Mutation:
             f.write(src.replace(self.old, self.new))
 
     def revert(self, original: str) -> None:
-        path = GO_APP_DIR / self.target_file
+        path = self.module_dir() / self.target_file
         with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(original)
 
@@ -279,15 +301,22 @@ def _go_executable() -> str:
     return go
 
 
-def run_tests(test_target: str) -> tuple[int, str]:
-    """Run `go test` against the package; return (returncode, output_tail)."""
+def run_tests(test_target: str, cwd: Path) -> tuple[int, str]:
+    """Run `go test` against the package from cwd (the target's module root);
+    return (returncode, output_tail).
+
+    cwd is the mutation's module_dir — each Go module (threshold-exporter/app,
+    tenant-api) has its own go.mod, so the package selector must be resolved
+    from that module's root, not a single hard-coded app dir.
+    """
     go = _go_executable()
-    # `./...` from app/ runs the full Go test suite (parent `package
-    # main` + nested pkg/config). The integration tests use fsnotify
-    # debounce loops so allow several minutes per mutation.
+    # The exporter `./...` runs the full suite (parent `package main` + nested
+    # pkg/config); the tenant-api entries scope to `./internal/rbac/...` etc.
+    # The exporter integration tests use fsnotify debounce loops, so allow
+    # several minutes per mutation.
     cmd = [go, "test", test_target, "-count=1", "-timeout", "180s"]
     proc = subprocess.run(
-        cmd, capture_output=True, text=True, cwd=str(GO_APP_DIR),
+        cmd, capture_output=True, text=True, cwd=str(cwd),
         timeout=360, encoding="utf-8", errors="replace",
     )
     tail_lines = (proc.stdout + proc.stderr).splitlines()[-3:]
@@ -313,11 +342,11 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
-    print(f"Running {len(selected)} Go mutations from {GO_APP_DIR}\n")
+    print(f"Running {len(selected)} Go mutations across {len(GO_MODULES)} modules\n")
 
     results: list[tuple[Mutation, str]] = []
     for i, m in enumerate(selected, 1):
-        path = GO_APP_DIR / m.target_file
+        path = m.module_dir() / m.target_file
         with open(path, encoding="utf-8", newline="") as f:
             original = f.read()
 
@@ -330,7 +359,7 @@ def main() -> int:
             results.append((m, f"SETUP-FAIL: {e}"))
         else:
             try:
-                rc, tail = run_tests(m.test_target)
+                rc, tail = run_tests(m.test_target, m.module_dir())
                 if rc == 0:
                     results.append((m, f"SURVIVED (rc=0) :: {tail[:160]}"))
                 elif rc == 1:
