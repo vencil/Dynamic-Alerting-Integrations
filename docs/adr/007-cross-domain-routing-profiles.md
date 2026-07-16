@@ -134,7 +134,7 @@ domain_policies:
 
 ✅ 路由配置重複率大幅降低，N 個租戶共用 profile 後只需維護一份
 ✅ 團隊路由變更為原子操作（修改 profile → 所有引用租戶自動生效）
-✅ 域策略提供機器可驗證的合規約束，CI 可自動攔截違規
+✅ 域策略提供機器可驗證的合規約束，CI 以 `--validate --strict` 自動攔截違規（v2.10.0 起 blocking）
 ✅ 現有租戶完全向後相容，profile 和 policy 均為 opt-in
 ✅ 與 `_routing_enforced`（NOC 覆蓋）機制無衝突
 
@@ -267,8 +267,9 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 
 - **v2.1.0**（已完成）：四層合併管線、check_routing_profiles lint、explain_route 偵錯工具
 - **v2.3.0**（已完成）：OPA 整合——`da-tools opa-evaluate` 支援 Rego 定義域策略（routing-compliance / threshold-bounds / naming-convention 三個範例策略）
-- **v2.5.0**（已完成）：Domain Policy 從 CI-time validation 前移到 API-time enforcement（tenant-api 403 回應）
+- **v2.5.0**（已完成）：receiver-type 約束前移至 API-time enforcement（tenant-api 403 回應）；時序（`max_repeat_interval` / `min_group_wait`）與 `enforce_group_by` 約束仍於組譯期驗證
 - **v2.6.0**（已完成）：`generate_alertmanager_routes.py` 重構（21 helpers extracted），`_build_receiver_config()` 改為 strategy pattern
+- **v2.10.0**（開發中）：`--strict` 接線至 CLI 與 CI——組譯期 domain-policy 違規由 WARN 轉 ERROR 並 blocking（`--validate --strict` exit 1，違規訊息含實際值 vs 域限制 + 修法提示）
 
 **殘留**：
 - Profile 繼承鏈（profile extends another profile）— 排入 v2.7.0+ 候選

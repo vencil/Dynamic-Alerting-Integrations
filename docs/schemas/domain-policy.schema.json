@@ -24,7 +24,7 @@
     "domainPolicy": {
       "type": "object",
       "title": "Domain Policy",
-      "description": "Business domain compliance constraints. Violations are reported as WARN by default, or ERROR with --strict mode. All fields are optional: policy.go decodes into zero values and a policy that targets no tenant is simply inert.",
+      "description": "Business domain compliance constraints. Violations are reported as WARN by default, or ERROR with --strict mode (generate_alertmanager_routes.py; CI's validate-config job runs --validate --strict, so violations are BLOCKING there). All fields are optional: policy.go decodes into zero values and a policy that targets no tenant is simply inert.",
       "properties": {
         "description": {
           "type": ["string", "null"],
@@ -91,14 +91,14 @@
         "max_repeat_interval": {
           "type": ["string", "null"],
           "title": "Maximum Repeat Interval",
-          "description": "Upper bound for repeat_interval (Go duration). Violation if tenant's repeat_interval exceeds this value. Accepts the common Go-duration forms including fractional units (1.5h) and multi-unit (1h30m); an authoring hint only — policy.go stores the raw string and never ParseDurations it.",
+          "description": "Upper bound for repeat_interval (Go duration). Violation if tenant's repeat_interval exceeds this value. Accepts the common Go-duration forms including fractional units (1.5h) and multi-unit (1h30m). Enforced at assembly time by generate_alertmanager_routes.py's check_domain_policies() (--strict escalates to a blocking ERROR; CI runs --strict); policy.go stores the raw string and never ParseDurations it.",
           "pattern": "^(0|[+-]?([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+)$",
           "examples": ["1h", "15m", "12h", "1.5h"]
         },
         "min_group_wait": {
           "type": ["string", "null"],
           "title": "Minimum Group Wait",
-          "description": "Lower bound for group_wait (Go duration). Violation if tenant's group_wait is below this value. Accepts the common Go-duration forms including fractional units; an authoring hint only — policy.go stores the raw string and never ParseDurations it.",
+          "description": "Lower bound for group_wait (Go duration). Violation if tenant's group_wait is below this value. Accepts the common Go-duration forms including fractional units. Enforced at assembly time by generate_alertmanager_routes.py's check_domain_policies() (--strict escalates to a blocking ERROR; CI runs --strict); policy.go stores the raw string and never ParseDurations it.",
           "pattern": "^(0|[+-]?([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+)$",
           "examples": ["10s", "30s"]
         },

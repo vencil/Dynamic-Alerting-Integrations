@@ -244,7 +244,7 @@ domain_policies:
       max_repeat_interval: 1h
 ```
 
-Validate: `da-tools generate-routes --config-dir conf.d/ --validate` (covers `_routing_profile` references + domain policy constraints). Debug: `da-tools explain-route --config-dir conf.d/ --tenant <tenant-id>`. JSON Schema available in `docs/schemas/` for VS Code validation.
+Validate: `da-tools generate-routes --config-dir conf.d/ --validate` (covers `_routing_profile` references + domain policy constraints; violations are WARN by default — add `--strict` to escalate them to ERROR with a non-zero exit code. CI's validate-config job runs `--validate --strict`, making domain-policy violations blocking). Debug: `da-tools explain-route --config-dir conf.d/ --tenant <tenant-id>`. JSON Schema available in `docs/schemas/` for VS Code validation.
 
 ### Setting Up Webhook Domain Allowlist
 
