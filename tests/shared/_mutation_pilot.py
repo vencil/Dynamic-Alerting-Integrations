@@ -64,6 +64,16 @@ class Mutation:
     old: str                # exact string to find
     new: str                # replacement
     fn_name: str            # which target function
+    # Primary kill test OBSERVED red when this mutation was injection-verified
+    # (rot-triage attribution — mirrors the Go pilot's field; guarded by
+    # test_mutation_catalog.py's kill-test lane: a non-None name must exist as
+    # `def <name>(` in one of the test_file files). None = not attributed to a
+    # named test: the historical Python entries were verified at test-FILE
+    # scope (the test_file field IS the kill scope) and per-test names were
+    # not recorded in comments/run history, so backfilling them would be
+    # guesswork — fill only when an entry is (re-)verified with per-test
+    # attribution captured. Attribution only; test_file decides what runs.
+    kill_test: str | None = None
     # True = documented equivalent mutation (survives by construction, no
     # behavioral test can kill it without overspecifying the impl). Known
     # equivalents do NOT fail the run — see main()'s exit contract.

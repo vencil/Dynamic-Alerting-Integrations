@@ -175,3 +175,75 @@ class TestKillTargetsExist:
             "fail with a matched-no-packages error instead of running the "
             "kill suite."
         )
+
+
+def _go_selector_dir(mutation) -> tuple:
+    """Resolve a Go mutation's test_target selector to (dir, recursive)."""
+    base = mutation.test_target[2:]  # strip "./" (shape asserted elsewhere)
+    recursive = base.endswith("...")
+    if recursive:
+        base = base[:-3]
+    base = base.rstrip("/")
+    module_dir = mutation.module_dir()
+    return (module_dir / base if base else module_dir), recursive
+
+
+_KILL_TEST_CASES = [
+    pytest.param(
+        "py", m, id=f"py::{m.fn_name}::{m.kill_test}",
+    )
+    for m in _py_pilot.MUTATIONS if m.kill_test
+] + [
+    pytest.param(
+        "go", m, id=f"go::{m.fn_name}::{m.kill_test}",
+    )
+    for m in _go_pilot.MUTATIONS if m.kill_test
+]
+
+
+class TestKillTestNamesAnchored:
+    """Third catalog-rot half: the NAMED kill-test attribution.
+
+    A mutation's ``kill_test`` names the test observed red when the entry
+    was injection-verified — the rot-triage handle ("this survivor/rot maps
+    to THAT test"). Unlike ``old`` (whose drift breaks apply()) and
+    ``test_target`` (whose drift breaks the runner), a renamed kill test
+    keeps the nightly GREEN while the attribution silently rots into a
+    dangling name. This lane pins it statically: a non-None kill_test must
+    exist as a test definition within the entry's kill scope —
+
+      - Python: ``def <name>(`` in one of the mutation's test_file files;
+      - Go: ``func <name>(`` in a *_test.go under the test_target selector's
+        directory (recursive for ``...`` selectors).
+
+    kill_test=None entries (historical batches verified at file/package
+    scope without per-test attribution) are exempt by construction — the
+    field's doc comment in each pilot explains when to backfill.
+    """
+
+    @pytest.mark.parametrize("kind,mutation", _KILL_TEST_CASES)
+    def test_kill_test_definition_exists(self, kind, mutation):
+        if kind == "py":
+            files = [_py_pilot.REPO_ROOT / t for t in mutation.test_file.split()]
+            marker = f"def {mutation.kill_test}("
+        else:
+            target_dir, recursive = _go_selector_dir(mutation)
+            pattern = "*_test.go"
+            files = sorted(
+                target_dir.rglob(pattern) if recursive else target_dir.glob(pattern)
+            )
+            # Go tests are package-level funcs; methods never appear as tests.
+            marker = f"func {mutation.kill_test}("
+        assert files, (
+            f"kill scope for {mutation.label!r} contains no test files — "
+            "the kill_test attribution cannot be anchored"
+        )
+        assert any(
+            marker in f.read_text(encoding="utf-8") for f in files
+        ), (
+            f"kill_test {mutation.kill_test!r} (mutation {mutation.label!r}) "
+            f"not found as {marker!r} in the entry's kill scope. The test was "
+            "renamed/moved — re-point kill_test to the surviving name (re-run "
+            "the injection if unsure which test kills it now), so the rot-"
+            "triage attribution doesn't silently dangle."
+        )

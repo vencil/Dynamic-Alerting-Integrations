@@ -153,6 +153,17 @@ class Mutation:
     # "exporter" so existing entries stay unchanged; tenant-api entries set it
     # explicitly. Governs BOTH target_file resolution and the `go test` cwd.
     module: str = "exporter"
+    # Primary kill test OBSERVED red when this mutation was injection-verified
+    # (rot-triage attribution: when a rename/refactor drifts the catalog, this
+    # names where to look). Guarded by test_mutation_catalog.py's kill-test
+    # lane: a non-None name must exist as `func <name>(` in a *_test.go under
+    # the test_target scope, so a renamed kill test fails at PR time instead
+    # of the attribution silently rotting in a comment. None = not (yet)
+    # attributed: pre-round-4 exporter entries were verified per run history
+    # at package level, so only those whose docstring/run-history names a
+    # specific test carry one. Attribution only — the package-scope
+    # test_target, not this field, decides what the runner executes.
+    kill_test: str | None = None
     # True = documented equivalent mutation (survives by construction, no
     # behavioral test can kill it without overspecifying the impl). Known
     # equivalents do NOT fail the run — see main()'s exit contract.
@@ -211,6 +222,9 @@ MUTATIONS: list[Mutation] = [
         fn_name="parseHHMM",
         old="if err != nil || h < 0 || h > 23 {",
         new="if err != nil || h > 23 {",
+        # #349 gap closure added the "-5:00" case to TestParseHHMM
+        # specifically to kill this (former survivor) mutation.
+        kill_test="TestParseHHMM",
     ),
     Mutation(
         target_file="pkg/config/parse.go",
@@ -219,6 +233,9 @@ MUTATIONS: list[Mutation] = [
         fn_name="parseHHMM",
         old="if err != nil || m < 0 || m > 59 {",
         new="if err != nil || m > 59 {",
+        # #349 gap closure added the "12:-5" case to TestParseHHMM together
+        # with this symmetric mutation.
+        kill_test="TestParseHHMM",
     ),
     Mutation(
         target_file="pkg/config/parse.go",
@@ -353,6 +370,7 @@ MUTATIONS: list[Mutation] = [
         # "read not covers write".
         old="return grant == PermWrite || grant == PermAdmin",
         new="return grant == PermRead || grant == PermWrite || grant == PermAdmin",
+        kill_test="TestPermCovers",
     ),
     Mutation(
         target_file="internal/rbac/rbac.go",
@@ -365,6 +383,7 @@ MUTATIONS: list[Mutation] = [
         # "write not covers admin".
         old="return grant == PermAdmin",
         new="return grant == PermAdmin || grant == PermWrite",
+        kill_test="TestPermCovers",
     ),
 
     # ── tenantMatches (rbac.go) — tenant wildcard/prefix matcher ──────────
@@ -381,6 +400,7 @@ MUTATIONS: list[Mutation] = [
         # "double-star vs platform gate does not fail open".
         old='if prefix == "" || strings.Contains(prefix, "*") {\n\t\t\t\tcontinue\n\t\t\t}',
         new="if false {\n\t\t\t\tcontinue\n\t\t\t}",
+        kill_test="TestTenantMatches",
     ),
     Mutation(
         target_file="internal/rbac/rbac.go",
@@ -390,9 +410,14 @@ MUTATIONS: list[Mutation] = [
         fn_name="tenantMatches",
         # bug class: a "db-a-*" rule would match by suffix, granting unrelated
         # tenants whose id ENDS with the literal — matching semantics inverted.
-        # Kill: TestTenantMatches "prefix match".
+        # Kill (observed at injection): TestReverseAccessReport_SmokeHappyPath.
+        # TestTenantMatches' "prefix match" row also pins this semantic, but
+        # under this mutation the test binary panic-aborts first (index panic
+        # in TestReverseAccessReport_ModesAndRedact, reverse_smoke_test.go),
+        # so the smoke test is the red actually seen before the abort.
         old="if strings.HasPrefix(tenantID, prefix) {",
         new="if strings.HasSuffix(tenantID, prefix) {",
+        kill_test="TestReverseAccessReport_SmokeHappyPath",
     ),
 
     # ── validTenantPattern (rbac.go) — the allowlist keeping "**" out ─────
@@ -407,6 +432,7 @@ MUTATIONS: list[Mutation] = [
         # Kill: TestValidateConfig_TenantPatterns "double star rejected".
         old='return false // repeated "*"',
         new='return true // repeated "*"',
+        kill_test="TestValidateConfig_TenantPatterns",
     ),
     Mutation(
         target_file="internal/rbac/rbac.go",
@@ -419,6 +445,7 @@ MUTATIONS: list[Mutation] = [
         # Kill: TestValidateConfig_TenantPatterns "empty entry rejected".
         old="return strings.TrimSpace(pat) != \"\"",
         new="return true",
+        kill_test="TestValidateConfig_TenantPatterns",
     ),
 
     # ── scopeSetModes (rbac.go) — org-axis shadow/enforce membership ──────
@@ -434,6 +461,7 @@ MUTATIONS: list[Mutation] = [
         # "unlabeled (nil): shadow yes, enforce no".
         old="if len(tenantOrgs) == 0 {\n\t\treturn true, false",
         new="if len(tenantOrgs) == 0 {\n\t\treturn true, true",
+        kill_test="TestScopeSetModes",
     ),
     Mutation(
         target_file="internal/rbac/rbac.go",
@@ -446,6 +474,7 @@ MUTATIONS: list[Mutation] = [
         # TestScopeSetModes "labeled + no caller claim: both no".
         old='if userOrgVal == "" {\n\t\treturn false, false',
         new='if userOrgVal == "" {\n\t\treturn true, false',
+        kill_test="TestScopeSetModes",
     ),
     Mutation(
         target_file="internal/rbac/rbac.go",
@@ -458,6 +487,7 @@ MUTATIONS: list[Mutation] = [
         # Kill: TestScopeSetModes "labeled non-member: both no".
         old="if o == userOrgVal {",
         new="if o != userOrgVal {",
+        kill_test="TestScopeSetModes",
     ),
 
     # ── scopeFieldModes (rbac.go) — metadata-axis shadow/enforce ──────────
@@ -472,6 +502,7 @@ MUTATIONS: list[Mutation] = [
         # Kill: TestScopeFieldModes "unlabeled on restricted: shadow yes, enforce no".
         old='if value == "" {\n\t\treturn true, false',
         new='if value == "" {\n\t\treturn true, true',
+        kill_test="TestScopeFieldModes",
     ),
 
     # ── metadataMatches (rbac.go) — pure env/domain membership ────────────
@@ -486,6 +517,7 @@ MUTATIONS: list[Mutation] = [
         # TestMetadataMatches "value not in allowList".
         old="if allowed == value {",
         new="if allowed != value {",
+        kill_test="TestMetadataMatches",
     ),
 
     # ── parseForwardedGroups (context.go) — group header splitter ─────────
@@ -493,14 +525,22 @@ MUTATIONS: list[Mutation] = [
         target_file="internal/rbac/context.go",
         test_target="./internal/rbac/...",
         module="tenant-api",
-        label="parseForwardedGroups: keep empty group entries (empty-named rule matches everyone)",
+        label="parseForwardedGroups: keep empty group entries (empty group name enters the subject set)",
         fn_name="parseForwardedGroups",
-        # bug class: an empty group "" would enter the caller's group set, so a
-        # rule with an empty Name (groupSet[""]) matches every request — a
-        # broad fail-open. Kill: TestHeaderResolver_NoGroups (expects 0 groups
-        # for an absent header, which splits to [""]).
+        # bug class: an empty group "" would enter the caller's group set —
+        # e.g. an absent X-Forwarded-Groups header splits to [""] — so any
+        # config shape whose effective matched name is empty (groupSet[""])
+        # would match every request. Defense-in-depth framing: this is ONE
+        # layer of a two-layer guard — the config layer independently rejects
+        # a blank match.groups entry at load (validateConfig, pinned by
+        # TestValidateConfig_Branches), so full fail-open via THAT shape needs
+        # both layers wrong. The parser-layer invariant stands on its own:
+        # the subject set must never contain manufactured empty names,
+        # regardless of what config shapes could consume them. Kill:
+        # TestHeaderResolver_NoGroups (absent header must yield 0 groups).
         old='if g != "" {\n\t\t\tgroups = append(groups, g)\n\t\t}',
         new="if true {\n\t\t\tgroups = append(groups, g)\n\t\t}",
+        kill_test="TestHeaderResolver_NoGroups",
     ),
 
     # ── ParseClaimHeaders (principal.go) — fail-loud config parser ────────
@@ -515,6 +555,7 @@ MUTATIONS: list[Mutation] = [
         # one enforced. Kill: TestParseClaimHeaders_MalformedIsError "duplicate key".
         old="if _, dup := out[key]; dup {",
         new="if false {",
+        kill_test="TestParseClaimHeaders_MalformedIsError",
     ),
     Mutation(
         target_file="internal/rbac/principal.go",
@@ -528,6 +569,7 @@ MUTATIONS: list[Mutation] = [
         # TestParseClaimHeaders_MalformedIsError "space in header name".
         old="if !headerNameRe.MatchString(header) {",
         new="if false {",
+        kill_test="TestParseClaimHeaders_MalformedIsError",
     ),
 
     # ── audienceFor (federation/token/manager.go) — cross-plane replay ────
@@ -543,6 +585,7 @@ MUTATIONS: list[Mutation] = [
         # manager_test.go logs-plane `aud == audienceLogs` assertion.
         old="if c == CapLogs {\n\t\treturn audienceLogs\n\t}",
         new="if c == CapLogs {\n\t\treturn audienceMetrics\n\t}",
+        kill_test="TestIssueLogs_EmbedsAccountIDAndLogsAudience",
     ),
 ]
 
