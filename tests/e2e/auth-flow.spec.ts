@@ -219,12 +219,13 @@ test.describe('Authentication Flow @critical', () => {
   });
 
   test('should handle unauthorized access gracefully', async ({ page }) => {
-    // Mock unauthorized response
+    // Mock unauthorized response (unified ErrorResponse envelope shape:
+    // error + code are required, request_id always present in production)
     await page.route('**/api/v1/me', async (route) => {
       await route.fulfill({
         status: 401,
         contentType: 'application/json',
-        body: JSON.stringify({ error: 'Unauthorized' }),
+        body: JSON.stringify({ error: 'Unauthorized', code: 'UNAUTHORIZED', request_id: 'e2e-mock-req-1' }),
       });
     });
 
@@ -243,12 +244,12 @@ test.describe('Authentication Flow @critical', () => {
   });
 
   test('should disable restricted UI elements for unauthorized users', async ({ page }) => {
-    // Mock unauthorized response
+    // Mock unauthorized response (unified ErrorResponse envelope shape)
     await page.route('**/api/v1/me', async (route) => {
       await route.fulfill({
         status: 401,
         contentType: 'application/json',
-        body: JSON.stringify({ error: 'Unauthorized' }),
+        body: JSON.stringify({ error: 'Unauthorized', code: 'UNAUTHORIZED', request_id: 'e2e-mock-req-2' }),
       });
     });
 
@@ -286,11 +287,12 @@ test.describe('Authentication Flow @critical', () => {
           body: JSON.stringify(mockUser),
         });
       } else {
-        // Simulate session expiry on second call
+        // Simulate session expiry on second call (unified ErrorResponse
+        // envelope shape)
         await route.fulfill({
           status: 401,
           contentType: 'application/json',
-          body: JSON.stringify({ error: 'Session expired' }),
+          body: JSON.stringify({ error: 'Session expired', code: 'UNAUTHORIZED', request_id: 'e2e-mock-req-3' }),
         });
       }
     });

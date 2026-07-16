@@ -72,9 +72,8 @@ func Me(d *Deps) http.HandlerFunc {
 			groups = rbac.RequestGroups(r)
 		}
 		if email == "" {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{
-				"error": "missing identity: X-Forwarded-Email header required",
-			})
+			WriteJSONError(w, r, http.StatusUnauthorized,
+				"missing identity: X-Forwarded-Email header required")
 			return
 		}
 		// TRK-228: schemathesis caught nil-vs-array drift. Normalise so JSON

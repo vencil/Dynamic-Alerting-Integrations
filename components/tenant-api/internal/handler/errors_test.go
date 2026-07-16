@@ -169,12 +169,15 @@ func TestCodeFromStatus(t *testing.T) {
 		want   string
 	}{
 		{http.StatusBadRequest, CodeBadRequest},
+		{http.StatusUnauthorized, CodeUnauthorized},
 		{http.StatusForbidden, CodeForbidden},
 		{http.StatusNotFound, CodeNotFound},
 		{http.StatusConflict, CodeConflict},
+		{http.StatusNotImplemented, CodeNotImplemented},
+		{http.StatusBadGateway, CodeUpstream},
 		{http.StatusServiceUnavailable, CodeUpstream},
 		{http.StatusInternalServerError, CodeInternal},
-		{http.StatusTeapot, ""}, // unmapped → empty
+		{http.StatusTeapot, ""}, // unmapped → empty (deliberate: surfaces as a contract-test failure, see codeFromStatus doc)
 	}
 	for _, c := range cases {
 		if got := codeFromStatus(c.status); got != c.want {

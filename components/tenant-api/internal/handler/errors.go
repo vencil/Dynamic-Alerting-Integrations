@@ -59,6 +59,16 @@ const (
 	CodeBadRequest      = "BAD_REQUEST"
 	CodeInternal        = "INTERNAL_ERROR"
 	CodeUpstream        = "UPSTREAM_ERROR"
+	// CodeUnauthorized marks a 401 (missing/invalid caller identity). The RBAC
+	// middleware's 401 mirrors this value in its own package-local const
+	// (internal/rbac/middleware.go) — the depguard domain-no-handler ratchet
+	// forbids rbac importing this package, so the alignment is pinned by the
+	// envelope-shape assertions in access_test.go (which route through the
+	// real middleware).
+	CodeUnauthorized = "UNAUTHORIZED"
+	// CodeNotImplemented marks a 501 (feature disabled at deploy time, e.g.
+	// custom alerts without --custom-alerts-dir).
+	CodeNotImplemented = "NOT_IMPLEMENTED"
 	// CodeForgeUnavailable marks an HTTP 503 caused by the forge circuit
 	// breaker being open (#632 / #645) — the forge (GitHub/GitLab) is
 	// degraded and the breaker is fast-failing to avoid 30s-per-request
@@ -82,9 +92,16 @@ const (
 // fields that don't fit the standard shape (existing_pr_url,
 // pr_number, hint, etc.) — those are inlined at the top level of
 // the JSON output, NOT under an "extra" key.
+// `error` and `code` are declared REQUIRED in the OpenAPI schema
+// (binding:"required"): every emitter funnels through WriteErrorEnvelope
+// with a non-empty code, so the schemathesis conformance check
+// (tests/contract/) now BITES any new error path that hand-rolls a bare
+// {"error": ...} map instead of using these helpers — that exact gap
+// previously hid three legacy emitters (access.go / me.go / rbac
+// middleware, migrated in the same change that added the required marks).
 type ErrorResponse struct {
-	Error       string             `json:"error"`
-	Code        string             `json:"code,omitempty"`
+	Error       string             `json:"error" binding:"required"`
+	Code        string             `json:"code,omitempty" binding:"required"`
 	RequestID   string             `json:"request_id,omitempty"`
 	Violations  []Violation        `json:"violations,omitempty"`
 	PolicyV     []policy.Violation `json:"-"` // marshaled into "violations" key when set
@@ -196,16 +213,32 @@ func WriteJSONErrorWithCode(w http.ResponseWriter, r *http.Request, status int, 
 // a more-specific one provided. Keeps simple WriteJSONError calls
 // emitting useful machine-readable codes without forcing every
 // call site to think about it.
+//
+// Every status a WriteJSONError call site actually uses must have a
+// case here: `code` is a REQUIRED field of the OpenAPI ErrorResponse
+// schema, so an unmapped status (empty code → key omitted) fails the
+// schemathesis response_schema_conformance check. The "" fallthrough
+// is deliberately kept (not defaulted to INTERNAL_ERROR) so a new
+// unmapped status surfaces as a contract-test failure instead of
+// silently mislabeling the error class.
 func codeFromStatus(status int) string {
 	switch status {
 	case http.StatusBadRequest:
 		return CodeBadRequest
+	case http.StatusUnauthorized:
+		return CodeUnauthorized
 	case http.StatusForbidden:
 		return CodeForbidden
 	case http.StatusNotFound:
 		return CodeNotFound
 	case http.StatusConflict:
 		return CodeConflict
+	case http.StatusNotImplemented:
+		return CodeNotImplemented
+	case http.StatusBadGateway:
+		// 502 = a proxied upstream (e.g. federation Prometheus) answered
+		// badly; same client-facing class as the 503 mapping below.
+		return CodeUpstream
 	case http.StatusServiceUnavailable:
 		return CodeUpstream
 	case http.StatusInternalServerError:

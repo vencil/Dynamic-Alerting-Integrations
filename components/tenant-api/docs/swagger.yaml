@@ -18,6 +18,9 @@ definitions:
         items:
           $ref: '#/definitions/Violation'
         type: array
+    required:
+    - code
+    - error
     type: object
   Violation:
     properties:
