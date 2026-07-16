@@ -64,6 +64,10 @@ class Mutation:
     old: str                # exact string to find
     new: str                # replacement
     fn_name: str            # which target function
+    # True = documented equivalent mutation (survives by construction, no
+    # behavioral test can kill it without overspecifying the impl). Known
+    # equivalents do NOT fail the run — see main()'s exit contract.
+    known_equivalent: bool = False
 
     def apply(self) -> None:
         path = REPO_ROOT / self.target_file
@@ -128,6 +132,9 @@ MUTATIONS: list[Mutation] = [
         fn_name="_parse_front_matter",
         old='if not content.startswith("---"):\n        return {}',
         new='if False:\n        return {}',
+        # The subsequent re.match(r"^---\n…") already rejects non-frontmatter
+        # inputs, so this early return is redundant defensive code.
+        known_equivalent=True,
     ),
     Mutation(
         target_file="scripts/tools/dx/generate_doc_map.py",
@@ -211,6 +218,9 @@ MUTATIONS: list[Mutation] = [
         fn_name="parse_duration_seconds",
         old="    if not value or not isinstance(value, str):\n        return None",
         new="    if not value:\n        return None",
+        # str() coercion before m.match catches the non-string case downstream,
+        # so the explicit isinstance check is redundant.
+        known_equivalent=True,
     ),
     # ── format_duration (_lib_validation) ─────────────────────────
     Mutation(
@@ -271,6 +281,10 @@ MUTATIONS: list[Mutation] = [
         fn_name="strip_frontmatter",
         old='        end = src.find("\\n---", 3)',
         new='        end = src.find("\\n---", 0)',
+        # The opening `---` is always at index 0, so it can never contain a
+        # "\n---" match before index 3 — offset 0 finds the same closing tag
+        # for any valid frontmatter.
+        known_equivalent=True,
     ),
     Mutation(
         target_file="scripts/tools/dx/axe_lite_static.py",
@@ -723,30 +737,53 @@ def main() -> int:
         try:
             m.apply()
         except ValueError as e:
+            # Catalog rot (old_string drifted from source) — record AND print
+            # per-item, so a rotted entry is visible in the run log instead of
+            # being silently skipped (pre-2026-07 fail-open behavior).
             results.append((m, f"SETUP-FAIL: {e}"))
-            continue
-
-        try:
-            rc, tail = run_tests(m.test_file)
-            verdict = "CAUGHT" if rc != 0 else "SURVIVED"
-            results.append((m, f"{verdict} (rc={rc}) :: {tail[:160]}"))
-        finally:
-            m.revert(original)
+        else:
+            try:
+                rc, tail = run_tests(m.test_file)
+                verdict = "CAUGHT" if rc != 0 else "SURVIVED"
+                results.append((m, f"{verdict} (rc={rc}) :: {tail[:160]}"))
+            finally:
+                m.revert(original)
 
         print(f"[{i:2d}/{len(selected)}] {m.fn_name}: {m.label[:60]}")
         print(f"      → {results[-1][1]}\n")
 
     # Summary
     caught = sum(1 for _, v in results if v.startswith("CAUGHT"))
-    survived = sum(1 for _, v in results if v.startswith("SURVIVED"))
-    setup_fail = sum(1 for _, v in results if v.startswith("SETUP-FAIL"))
-    print(f"\n=== SUMMARY: {caught}/{len(results)} caught, {survived} survived, {setup_fail} setup-failures ===\n")
+    survivors = [(m, v) for m, v in results if v.startswith("SURVIVED")]
+    equivalent = [(m, v) for m, v in survivors if m.known_equivalent]
+    new_survivors = [(m, v) for m, v in survivors if not m.known_equivalent]
+    setup_fails = [(m, v) for m, v in results if v.startswith("SETUP-FAIL")]
+    print(
+        f"\n=== SUMMARY: {caught}/{len(results)} caught, "
+        f"{len(survivors)} survived "
+        f"({len(equivalent)} known-equivalent, {len(new_survivors)} NEW), "
+        f"{len(setup_fails)} setup-failures ===\n"
+    )
 
-    if survived:
-        print("SURVIVING MUTATIONS (test gaps):")
-        for m, v in results:
-            if v.startswith("SURVIVED"):
-                print(f"  - {m.fn_name}: {m.label}")
+    if equivalent:
+        print("KNOWN-EQUIVALENT SURVIVORS (documented noise bin, not failures):")
+        for m, _ in equivalent:
+            print(f"  - {m.fn_name}: {m.label}")
+    if new_survivors:
+        print("NEW SURVIVING MUTATIONS (real test gaps — close the gap or "
+              "document equivalence via known_equivalent=True):")
+        for m, _ in new_survivors:
+            print(f"  - {m.fn_name}: {m.label}")
+    if setup_fails:
+        print("SETUP FAILURES (catalog rot — re-anchor the entry's old=/new= "
+              "to the current source shape):")
+        for m, v in setup_fails:
+            print(f"  - {m.fn_name}: {m.label}\n      {v}")
+
+    # Exit contract (actionable-red): non-zero ONLY on a real signal — a NEW
+    # (non-equivalent) survivor or catalog rot. Known equivalents keep the
+    # nightly green so red always deserves investigation.
+    if new_survivors or setup_fails:
         return 1
     return 0
 

@@ -5,16 +5,19 @@ name: Nightly Mutation Pilot
 # for Go) so the mutation score has continuous observability instead of being
 # a one-shot snapshot.
 #
-# Why nightly + advisory:
+# Why nightly + actionable-red (fail-open removed, ROI refactor round 3):
 #   - Mutation pilots are slow (each mutation = re-run a focused pytest scope
 #     or `go test`); running on every PR multiplies CI time and offers low
 #     marginal value because the pilots don't change shape between PRs.
-#   - The signal we want is *trend*: if today's run drops from 96% caught to
-#     90%, a recent code change weakened test coverage. The job posts the
-#     count + survivor list to the workflow Step Summary so it's grep-able
-#     in the Actions UI.
-#   - Workflow does NOT block any PR. Surviving mutations are surfaced as a
-#     warning + artifact for human review.
+#   - The pilots exit non-zero ONLY on a real signal: a NEW (non-equivalent)
+#     surviving mutation, or a SETUP-FAIL (catalog rot that slipped past the
+#     PR-time gate in tests/shared/test_mutation_catalog.py). Known
+#     equivalent survivors are marked known_equivalent=True in the catalogs
+#     and keep the job green.
+#   - A red run is therefore always worth investigating — GitHub notifies
+#     the owner automatically when a scheduled workflow fails. The Step
+#     Summary + uploaded log artifact carry the survivor / rot list.
+#   - Workflow still does NOT block any PR (schedule/dispatch only).
 #
 # Floor scores (re-verified 2026-07-16 after re-anchoring 6 rotted Python
 # catalog entries that had been silently reported as SETUP-FAIL):
@@ -72,18 +75,18 @@ jobs:
           pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec
 
       - name: Run Python mutation pilot
-        id: pilot
-        # The pilot script exits 1 when ANY mutation survives. We capture
-        # both the exit code and the output for the summary; we DO NOT let
-        # a non-zero rc fail the workflow because survivors include known
-        # equivalent mutations (see _mutation_pilot.py docstring).
+        # The pilot exits non-zero only on a real signal (NEW survivor or
+        # catalog rot — see the header comment). Let that rc fail the job:
+        # pipefail is required because `| tee` would otherwise mask the
+        # pilot's exit code with tee's (the old `rc=$?` capture actually
+        # recorded tee's rc, always 0).
         run: |
-          set +e
+          set -o pipefail
           python tests/shared/_mutation_pilot.py 2>&1 | tee mutation-python.log
-          echo "rc=$?" >> "$GITHUB_OUTPUT"
 
       - name: Extract summary
         id: summary
+        if: always()
         run: |
           # Last 50 lines should include the SUMMARY block + survivor list.
           tail -n 50 mutation-python.log > mutation-python-summary.log
@@ -96,6 +99,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload full log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: mutation-python-${{ github.run_id }}
@@ -129,16 +133,15 @@ jobs:
             ${{ runner.os }}-go-1.26-
 
       - name: Run Go mutation pilot
-        id: pilot
-        # Same exit-code handling as the Python job — exit 1 means at least
-        # one mutation survived, but we want the workflow to remain green
-        # so the score keeps reporting in the Actions UI.
+        # Same exit contract as the Python job — non-zero rc means a NEW
+        # survivor or catalog rot, and the job goes red so the scheduled-run
+        # failure notification reaches the owner.
         run: |
-          set +e
+          set -o pipefail
           python tests/shared/_go_mutation_pilot.py 2>&1 | tee mutation-go.log
-          echo "rc=$?" >> "$GITHUB_OUTPUT"
 
       - name: Extract summary
+        if: always()
         run: |
           tail -n 50 mutation-go.log > mutation-go-summary.log
           {
@@ -150,6 +153,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload full log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: mutation-go-${{ github.run_id }}
