@@ -936,6 +936,10 @@ def main():
         result = analysis
         result["prometheus_rules"] = []
         result["alertmanager_configs"] = []
+        # analyze_migration() counts rule groups under "rule_groups", but the
+        # checklist/summary consumers read generate_migration()'s key
+        # "rule_group_count" — without this bridge the count is always 0.
+        result["rule_group_count"] = result.get("rule_groups", 0)
     else:
         print(
             i18n_text(

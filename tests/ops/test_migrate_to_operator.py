@@ -679,12 +679,10 @@ def _validate_json_checklist_envelope(out):
     # 掃描計數是真實的
     assert doc["configmap_files"] == 2
     assert doc["tenants"] == 2
-    # ⚠ SUSPECTED BUG（pin 現況，未修）：checklist-only 模式下 result 是
-    # analyze_migration() 的 analysis dict，rule group 計數放在鍵
-    # "rule_groups"；但 summary/checklist 讀的是 generate_migration() 的鍵
-    # "rule_group_count" ⇒ 永遠 fallback 到 0，即使 analysis 實際數到 2。
-    # 修法屬行為變更，不在本 refactor 範圍——這行只 pin 現況。
-    assert doc["rule_groups"] == 0
+    # 鍵名錯配 bug 已修（owner 拍板）：analyze_migration() 的 "rule_groups"
+    # 計數經 main() 橋接到消費端讀的 "rule_group_count"——fixture 有 2 個
+    # rule group，envelope 必須回報真實值而非恆 0。
+    assert doc["rule_groups"] == 2
 
 
 _PAYLOAD_VALIDATORS = {
