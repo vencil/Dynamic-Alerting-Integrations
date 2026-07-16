@@ -425,16 +425,18 @@ func sloMinEvents(spec CustomAlertSpec) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("min_events %q is not a parseable integer: %w", spec.MinEvents.raw, err)
 	}
-	n := int(n64)
-	if n < 1 {
+	// Range-check in the int64 domain BEFORE narrowing to int: on a 32-bit
+	// platform int(n64) can wrap (e.g. 2^32+5 → 5) and sneak past the bounds
+	// (CodeQL go/incorrect-integer-conversion).
+	if n64 < 1 {
 		return 0, fmt.Errorf("min_events %d must be >= 1 (0 would disable the low-traffic "+
-			"guard entirely; use objective:\"disable\" to opt out instead)", n)
+			"guard entirely; use objective:\"disable\" to opt out instead)", n64)
 	}
-	if n > sloMinEventsMax {
+	if n64 > sloMinEventsMax {
 		return 0, fmt.Errorf("min_events %d exceeds the maximum %d (schema maximum; an "+
-			"absurd floor silently disables the alert while looking configured)", n, sloMinEventsMax)
+			"absurd floor silently disables the alert while looking configured)", n64, sloMinEventsMax)
 	}
-	return n, nil
+	return int(n64), nil
 }
 
 type selectorItem struct {
@@ -526,7 +528,8 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 		}
 		parts = append(parts, slug)
 	}
-	if spec.Recipe == "forecast" {
+	switch spec.Recipe {
+	case "forecast":
 		// forecast: lookback derives from `horizon` (the compiler computes
 		// max(2·horizon,1h)), so the tenant supplies `horizon` (enum), NOT a
 		// window — `h{horizon}` takes the `w{window}` slot. capacity_metric
@@ -546,7 +549,7 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 			}
 			parts = append(parts, "den_"+spec.CapacityMetric)
 		}
-	} else if spec.Recipe == "slo_burn_rate" {
+	case "slo_burn_rate":
 		// ADR-031: the burn windows (1h/5m fast, 6h/30m slow) are FIXED recipe
 		// semantics — no `w{window}` slot (a stray authored `window` is ignored,
 		// like forecast). `objective` replaces `threshold` (its VALUE rides the
@@ -581,7 +584,7 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 			return "", err
 		}
 		parts = append(parts, "minev"+strconv.Itoa(minEv))
-	} else {
+	default:
 		parts = append(parts, "w"+spec.Window)
 		if spec.Recipe == "p99_latency" {
 			q := string(spec.Quantile)
@@ -631,10 +634,10 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 	}
 	if len(gb) > 0 && (spec.Recipe == "absence" || op == "==" || spec.Recipe == "slo_burn_rate") {
 		what := "op \"==\""
-		switch {
-		case spec.Recipe == "absence":
+		switch spec.Recipe {
+		case "absence":
 			what = "the absence recipe"
-		case spec.Recipe == "slo_burn_rate":
+		case "slo_burn_rate":
 			// the SLI is a per-tenant aggregate by design — a per-dimension SLO
 			// is a distinct declaration, not a group_by knob. Mirrors shape.py.
 			what = "the slo_burn_rate recipe"
