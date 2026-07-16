@@ -1,5 +1,14 @@
-"""Mutation-test pilot runner for Go-side pure functions in
-`components/threshold-exporter/app/pkg/config`.
+"""Mutation-test pilot runner for Go-side pure functions across two
+modules:
+  - `components/threshold-exporter/app/pkg/config` (the parse/merge
+    primitives — the original round-1/2 scope), and
+  - `components/tenant-api/internal/rbac` + `.../federation/token`
+    (the RBAC / identity permission-evaluation core — round 4, the
+    LD-6 security main battleground).
+
+Each is a separate Go module (its own go.mod), so a mutation declares
+which `module` it targets (GO_MODULES); that key selects BOTH the base
+dir for its `target_file` and the cwd `go test` runs from.
 
 Mirrors the design of `_mutation_pilot.py` (Python pilot, 67/70
 caught at 31 functions per #333). Underscored prefix → pytest does
@@ -22,24 +31,48 @@ Same rationale as the Python pilot:
 Targets
 -------
 
-`pkg/config/parse.go`
+MODULE "exporter" — `pkg/config/parse.go`
   - parseHHMM         — pure HH:MM parser, range-checked (6 muts)
   - matchTimeWindow   — same/cross-midnight branch (3 muts)
   - parsePromDuration — Prometheus-style "5m" / "4h" / "2d" parser (2 muts)
 
-`pkg/config/hierarchy.go`
+MODULE "exporter" — `pkg/config/hierarchy.go`
   - deepMerge         — ADR-017 inheritance, _metadata skip, nil-delete (3 muts)
   - extractDefaultsBlock — pulls `defaults:` sub-tree, falls back to root (1 mut)
 
-Total: 15 mutations across 5 functions. Existing Go tests in the
-parent `package main` (e.g., config_three_state_test.go for
-parseHHMM, config_hierarchy_test.go for deepMerge, golden-parity
-tests) are the kill targets — the lowercase functions in
-`pkg/config` are exercised indirectly via the lowercase wrappers
-in `app/config_inheritance.go`. That's why the runner uses
-`go test ./...` from `app/` instead of `./pkg/config/...`: the
-in-package tests for `pkg/config` only cover scope-resolution +
-benchmarks, not the parse/merge primitives.
+MODULE "tenant-api" — `internal/rbac/rbac.go` (LD-6 permission core)
+  - permCovers        — permission hierarchy admin⊇write⊇read (2 muts)
+  - tenantMatches     — tenant wildcard/prefix matcher + "**" fail-open backstop (2 muts)
+  - validTenantPattern— pattern allowlist that keeps "**" out of the matcher (2 muts)
+  - scopeSetModes     — org-axis shadow/enforce set membership (3 muts)
+  - scopeFieldModes   — metadata-axis shadow/enforce field match (1 mut)
+  - metadataMatches   — pure env/domain membership (1 mut)
+
+MODULE "tenant-api" — `internal/rbac/context.go` + `.../principal.go`
+  - parseForwardedGroups — X-Forwarded-Groups splitter, empty-entry drop (1 mut)
+  - ParseClaimHeaders — fail-loud --identity-claim-headers parser (2 muts)
+
+MODULE "tenant-api" — `internal/federation/token/manager.go`
+  - audienceFor       — capability→JWT audience (cross-plane replay guard) (1 mut)
+
+Total: 30 mutations across 14 functions (15 exporter + 15 tenant-api).
+
+Kill targets, exporter: existing Go tests in the parent `package main`
+(e.g., config_three_state_test.go for parseHHMM, config_hierarchy_test.go
+for deepMerge, golden-parity tests). The lowercase functions in
+`pkg/config` are exercised indirectly via the lowercase wrappers in
+`app/config_inheritance.go`, so the runner uses `go test ./...` from
+`app/` (the in-package pkg/config tests only cover scope-resolution +
+benchmarks, not the parse/merge primitives).
+
+Kill targets, tenant-api: the round-3-reorganised rbac test files
+(match_eval_test.go for tenantMatches/permCovers, org_scope_test.go for
+scopeSetModes, metadata_scope_test.go for scopeFieldModes/metadataMatches,
+principal_test.go for parseForwardedGroups/ParseClaimHeaders) and the
+token manager_test.go for audienceFor. These are in-package tests, so
+the runner scopes to `./internal/rbac/...` / `./internal/federation/token/...`.
+Every tenant-api mutation models a permission-WIDENS-unexpectedly (fail-open)
+bug class — the direction that leaks access — not a narrowing one.
 
 Run history
 -----------
@@ -48,7 +81,7 @@ Run history
     - parseHHMM: drop hour lower bound — REAL gap
     - parseHHMM: drop outer TrimSpace — equivalent (see below)
 
-  This PR (gap closure): expects 14/15 caught (~93%). Closes the
+  #349 (gap closure): expects 14/15 caught (~93%). Closes the
   hour-lower-bound gap by adding "-5:00" / "12:-5" cases to
   TestParseHHMM, plus adds a symmetric "drop minute lower bound"
   mutation that the new test cases also cover. The outer-TrimSpace
@@ -56,6 +89,15 @@ Run history
   noise-bin entry — no test can kill it without overspecifying
   redundant trimming behavior the inner `strings.TrimSpace(parts[i])`
   already provides.
+
+  Round 4 (ROI refactor, tenant-api scope): adds 15 mutations across
+  9 RBAC/identity/token pure functions, all modelling a fail-open
+  (permission-widens) bug class. Each was injection-verified in the Dev
+  Container against `go test ./internal/rbac/...` /
+  `./internal/federation/token/...`: mutation red -> revert green, all
+  15 caught (0 survivors, 0 known-equivalent). Combined catalog: 30
+  mutations, 29 caught + 1 known-equivalent survivor (the exporter
+  outer-TrimSpace entry).
 
 Usage
 -----
@@ -66,8 +108,10 @@ Usage
   # Local (requires Go installed at /usr/local/go or PATH):
   python tests/shared/_go_mutation_pilot.py [--target FUNC]
 
-The runner expects to be invoked from the repo root. It chdirs into
-`components/threshold-exporter/app/` to run `go test ./pkg/config/...`.
+The runner expects to be invoked from the repo root. For each mutation it
+runs `go test <test_target>` from the target's module root (module_dir):
+`components/threshold-exporter/app/` for exporter entries,
+`components/tenant-api/` for tenant-api entries.
 """
 from __future__ import annotations
 
@@ -285,6 +329,220 @@ MUTATIONS: list[Mutation] = [
         fn_name="extractDefaultsBlock",
         old='if inner, ok := m["defaults"].(map[string]any); ok {\n\t\treturn inner\n\t}\n\treturn m',
         new='if inner, ok := m["defaults"].(map[string]any); ok {\n\t\treturn inner\n\t}\n\treturn nil',
+    ),
+
+    # ══════════════════════════════════════════════════════════════════════
+    # MODULE "tenant-api" — RBAC / identity permission core (round 4)
+    #
+    # Every entry below models a FAIL-OPEN bug class: the mutation makes the
+    # gate grant access it should refuse (a widened permission, a defeated
+    # scope axis, an accepted malformed pattern, a cross-plane audience). The
+    # opposite direction (accidental narrowing) is a correctness bug too but
+    # not the one that leaks tenant data, so it is deliberately not the focus.
+    # ══════════════════════════════════════════════════════════════════════
+
+    # ── permCovers (rbac.go) — permission hierarchy admin ⊇ write ⊇ read ──
+    Mutation(
+        target_file="internal/rbac/rbac.go",
+        test_target="./internal/rbac/...",
+        module="tenant-api",
+        label="permCovers: write check accepts a read-only grant (read→write privesc)",
+        fn_name="permCovers",
+        # bug class: a read-only rule would satisfy a write gate — the caller
+        # mutates data with read credentials. Kill: TestPermCovers
+        # "read not covers write".
+        old="return grant == PermWrite || grant == PermAdmin",
+        new="return grant == PermRead || grant == PermWrite || grant == PermAdmin",
+    ),
+    Mutation(
+        target_file="internal/rbac/rbac.go",
+        test_target="./internal/rbac/...",
+        module="tenant-api",
+        label="permCovers: admin check accepts a write grant (write→admin privesc)",
+        fn_name="permCovers",
+        # bug class: a write rule would satisfy an admin gate — tenant operator
+        # gains platform-admin actions. Kill: TestPermCovers
+        # "write not covers admin".
+        old="return grant == PermAdmin",
+        new="return grant == PermAdmin || grant == PermWrite",
+    ),
+
+    # ── tenantMatches (rbac.go) — tenant wildcard/prefix matcher ──────────
+    Mutation(
+        target_file="internal/rbac/rbac.go",
+        test_target="./internal/rbac/...",
+        module="tenant-api",
+        label="tenantMatches: drop malformed-prefix backstop (\"**\" fails open onto platform gate)",
+        fn_name="tenantMatches",
+        # bug class: without the backstop a rule with tenants ["**"] collapses
+        # to prefix "*" and HasPrefix("*","*")==true, so the rule matches the
+        # platform-scope "*" gate query while granting zero real per-tenant
+        # access — a fail-open inconsistency. Kill: TestTenantMatches
+        # "double-star vs platform gate does not fail open".
+        old='if prefix == "" || strings.Contains(prefix, "*") {\n\t\t\t\tcontinue\n\t\t\t}',
+        new="if false {\n\t\t\t\tcontinue\n\t\t\t}",
+    ),
+    Mutation(
+        target_file="internal/rbac/rbac.go",
+        test_target="./internal/rbac/...",
+        module="tenant-api",
+        label="tenantMatches: prefix match uses HasSuffix instead of HasPrefix (wrong tenants match)",
+        fn_name="tenantMatches",
+        # bug class: a "db-a-*" rule would match by suffix, granting unrelated
+        # tenants whose id ENDS with the literal — matching semantics inverted.
+        # Kill: TestTenantMatches "prefix match".
+        old="if strings.HasPrefix(tenantID, prefix) {",
+        new="if strings.HasSuffix(tenantID, prefix) {",
+    ),
+
+    # ── validTenantPattern (rbac.go) — the allowlist keeping "**" out ─────
+    Mutation(
+        target_file="internal/rbac/rbac.go",
+        test_target="./internal/rbac/...",
+        module="tenant-api",
+        label="validTenantPattern: accept repeated-\"*\" patterns (\"**\"/\"*a*\" pass validation)",
+        fn_name="validTenantPattern",
+        # bug class: validateConfig would accept "**" at load, which then reaches
+        # tenantMatches and (per the entry above) fails open onto platform gates.
+        # Kill: TestValidateConfig_TenantPatterns "double star rejected".
+        old='return false // repeated "*"',
+        new='return true // repeated "*"',
+    ),
+    Mutation(
+        target_file="internal/rbac/rbac.go",
+        test_target="./internal/rbac/...",
+        module="tenant-api",
+        label="validTenantPattern: accept blank/whitespace exact id (empty tenant pattern valid)",
+        fn_name="validTenantPattern",
+        # bug class: a blank tenant entry would pass validation as a valid exact
+        # id — an authoring mistake silently accepted rather than failing loud.
+        # Kill: TestValidateConfig_TenantPatterns "empty entry rejected".
+        old="return strings.TrimSpace(pat) != \"\"",
+        new="return true",
+    ),
+
+    # ── scopeSetModes (rbac.go) — org-axis shadow/enforce membership ──────
+    Mutation(
+        target_file="internal/rbac/rbac.go",
+        test_target="./internal/rbac/...",
+        module="tenant-api",
+        label="scopeSetModes: unlabeled tenant passes ENFORCE (org scope defeated, the exact leak)",
+        fn_name="scopeSetModes",
+        # bug class: an org-unlabeled tenant would be granted even under enforce,
+        # so org-scope grants every unassigned tenant to every caller — the leak
+        # org-scope exists to prevent. Kill: TestScopeSetModes
+        # "unlabeled (nil): shadow yes, enforce no".
+        old="if len(tenantOrgs) == 0 {\n\t\treturn true, false",
+        new="if len(tenantOrgs) == 0 {\n\t\treturn true, true",
+    ),
+    Mutation(
+        target_file="internal/rbac/rbac.go",
+        test_target="./internal/rbac/...",
+        module="tenant-api",
+        label="scopeSetModes: caller with no org claim matches a LABELED tenant (shadow fail-open)",
+        fn_name="scopeSetModes",
+        # bug class: a caller carrying no org claim would still match a labeled
+        # tenant in shadow mode — no basis to match, yet granted. Kill:
+        # TestScopeSetModes "labeled + no caller claim: both no".
+        old='if userOrgVal == "" {\n\t\treturn false, false',
+        new='if userOrgVal == "" {\n\t\treturn true, false',
+    ),
+    Mutation(
+        target_file="internal/rbac/rbac.go",
+        test_target="./internal/rbac/...",
+        module="tenant-api",
+        label="scopeSetModes: org membership test inverted (== → !=; non-member matches)",
+        fn_name="scopeSetModes",
+        # bug class: the caller's org value would match every tenant org it is
+        # NOT a member of — a caller sees exactly the orgs it does not belong to.
+        # Kill: TestScopeSetModes "labeled non-member: both no".
+        old="if o == userOrgVal {",
+        new="if o != userOrgVal {",
+    ),
+
+    # ── scopeFieldModes (rbac.go) — metadata-axis shadow/enforce ──────────
+    Mutation(
+        target_file="internal/rbac/rbac.go",
+        test_target="./internal/rbac/...",
+        module="tenant-api",
+        label="scopeFieldModes: unlabeled tenant passes ENFORCE on a restricted field (fail-open)",
+        fn_name="scopeFieldModes",
+        # bug class: an env/domain-unlabeled tenant would stay visible even under
+        # enforce, so the metadata scope filter never actually hides anything.
+        # Kill: TestScopeFieldModes "unlabeled on restricted: shadow yes, enforce no".
+        old='if value == "" {\n\t\treturn true, false',
+        new='if value == "" {\n\t\treturn true, true',
+    ),
+
+    # ── metadataMatches (rbac.go) — pure env/domain membership ────────────
+    Mutation(
+        target_file="internal/rbac/rbac.go",
+        test_target="./internal/rbac/...",
+        module="tenant-api",
+        label="metadataMatches: membership test inverted (== → !=; non-members match)",
+        fn_name="metadataMatches",
+        # bug class: a tenant whose env/domain is NOT in the allow-list would
+        # pass the filter — the restriction becomes an anti-restriction. Kill:
+        # TestMetadataMatches "value not in allowList".
+        old="if allowed == value {",
+        new="if allowed != value {",
+    ),
+
+    # ── parseForwardedGroups (context.go) — group header splitter ─────────
+    Mutation(
+        target_file="internal/rbac/context.go",
+        test_target="./internal/rbac/...",
+        module="tenant-api",
+        label="parseForwardedGroups: keep empty group entries (empty-named rule matches everyone)",
+        fn_name="parseForwardedGroups",
+        # bug class: an empty group "" would enter the caller's group set, so a
+        # rule with an empty Name (groupSet[""]) matches every request — a
+        # broad fail-open. Kill: TestHeaderResolver_NoGroups (expects 0 groups
+        # for an absent header, which splits to [""]).
+        old='if g != "" {\n\t\t\tgroups = append(groups, g)\n\t\t}',
+        new="if true {\n\t\t\tgroups = append(groups, g)\n\t\t}",
+    ),
+
+    # ── ParseClaimHeaders (principal.go) — fail-loud config parser ────────
+    Mutation(
+        target_file="internal/rbac/principal.go",
+        test_target="./internal/rbac/...",
+        module="tenant-api",
+        label="ParseClaimHeaders: drop duplicate-key guard (later pair silently overwrites)",
+        fn_name="ParseClaimHeaders",
+        # bug class: a duplicate claim key would silently take its last value
+        # instead of failing loud, so the operator's declared axis is not the
+        # one enforced. Kill: TestParseClaimHeaders_MalformedIsError "duplicate key".
+        old="if _, dup := out[key]; dup {",
+        new="if false {",
+    ),
+    Mutation(
+        target_file="internal/rbac/principal.go",
+        test_target="./internal/rbac/...",
+        module="tenant-api",
+        label="ParseClaimHeaders: drop header-name charset guard (unreachable claim axis accepted)",
+        fn_name="ParseClaimHeaders",
+        # bug class: a header name a request can never carry (spaces, embedded
+        # '=') would be accepted, leaving the claim axis silently absent at
+        # runtime — a rule keyed on it can never match yet loads clean. Kill:
+        # TestParseClaimHeaders_MalformedIsError "space in header name".
+        old="if !headerNameRe.MatchString(header) {",
+        new="if false {",
+    ),
+
+    # ── audienceFor (federation/token/manager.go) — cross-plane replay ────
+    Mutation(
+        target_file="internal/federation/token/manager.go",
+        test_target="./internal/federation/token/...",
+        module="tenant-api",
+        label="audienceFor: logs token gets the metrics audience (cross-plane replay)",
+        fn_name="audienceFor",
+        # bug class: a logs-plane token would be signed with the metrics
+        # audience, so it could be replayed against the metrics proxy (the exact
+        # confusion the distinct audience exists to prevent). Kill:
+        # manager_test.go logs-plane `aud == audienceLogs` assertion.
+        old="if c == CapLogs {\n\t\treturn audienceLogs\n\t}",
+        new="if c == CapLogs {\n\t\treturn audienceMetrics\n\t}",
     ),
 ]
 
