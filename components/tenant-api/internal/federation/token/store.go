@@ -18,8 +18,10 @@ import (
 //
 // A pod restart that loses the file costs only the GET listing: the
 // signed JWTs remain valid (verification is stateless) until they
-// expire. For production the store path should point at a mounted
-// volume; see main.go's --federation-store flag.
+// expire. Production uses the ConfigMap-backed store instead
+// (configmap_store.go; main.go's --federation-store flag names the
+// ConfigMap) — this JSON-file store is the unit-test / local-dev
+// backend.
 //
 // MVP constraint: the store is pod-local. With tenant-api scaled past
 // one replica, GET listings become per-replica and inconsistent
@@ -67,6 +69,12 @@ func newStore(path string) (*store, error) {
 // live records — the cap check and the insert happen under the same
 // mutex, so the check cannot race the insert (the configMapStore makes
 // the equivalent guarantee inside its RetryOnConflict closure).
+//
+// Known divergence on flush failure: the in-memory map is mutated
+// BEFORE flushLocked, so a failed flush leaves memory ahead of disk
+// (same for revoke, in the opposite direction). Tolerated for this
+// unit-test backend — the impact is listing-only, token verification
+// is stateless.
 func (s *store) put(r Record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
