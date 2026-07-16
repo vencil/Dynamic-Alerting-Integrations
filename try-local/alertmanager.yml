@@ -6,8 +6,9 @@
 #
 # The inhibit_rules mirror the platform's operational design: Silent Mode uses
 # the sentinel alerts emitted by rule-pack-operational (severity=none) as
-# inhibit sources; Severity Dedup uses a direct critical→warning rule (same
-# shape as the k8s config, minus the per-tenant generation).
+# inhibit sources; Severity Dedup uses the direct critical→warning rule the
+# platform actually deploys, minus the per-tenant generation (see the rule's
+# own comment below for the one deliberate divergence that costs).
 route:
   receiver: 'null'
   group_by: ['tenant', 'alertname']
@@ -29,16 +30,24 @@ inhibit_rules:
     target_matchers: ['severity = "critical"']
     equal: ['tenant']
   # Severity Dedup: when a critical fires, suppress the paired warning for the
-  # same tenant + metric_group. Direct critical→warning inhibit, same shape as
-  # the k8s config — NOT the TenantSeverityDedupEnabled sentinel: the sentinel
-  # carries no metric_group label, so equal:['tenant','metric_group'] never
-  # matches a warning that has one, and (since AM treats a label missing from
-  # BOTH sides as equal) would wrongly suppress warnings that lack metric_group
-  # (e.g. TenantConfigEvent). The metric_group=~".+" gate on both sides keeps
-  # metric_group-less alerts out of this rule entirely. The k8s config gets
-  # per-tenant opt-out via generated rules; try-local is a static demo config
-  # and its demo tenants (cache-demo / db-demo) keep the default
-  # _severity_dedup: enable, so the sentinel gating is not needed here.
+  # same tenant + metric_group — the direct critical→warning form the platform
+  # actually deploys (docs/design/config-driven.md §2.8; k8s renders one such
+  # rule PER TENANT via generate_alertmanager_routes.py).
+  #
+  # NOT the TenantSeverityDedupEnabled sentinel: a sentinel source can only say
+  # "dedup is enabled for this tenant", never "a critical fired" — it cannot
+  # express dedup at all. As a source it failed both ways: it carries no
+  # metric_group, so equal:['tenant','metric_group'] never matched a warning
+  # that HAS one (dedup dead), while for warnings LACKING the label AM treats
+  # "missing from both sides" as equal and suppressed them whenever dedup was
+  # on (e.g. TenantConfigEvent). The metric_group=~".+" gate on both sides now
+  # keeps metric_group-less alerts out of this rule entirely.
+  #
+  # Deliberate divergence from k8s: the generated per-tenant rules honour
+  # _severity_dedup: "disable" by emitting no rule for that tenant. This static
+  # rule never consults _severity_dedup — dedup always applies. Both demo
+  # tenants use the default ("enable") so the demo matches prod, but a
+  # hand-edited "disable" would NOT take effect here.
   - source_matchers: ['severity = "critical"', 'metric_group =~ ".+"']
     target_matchers: ['severity = "warning"', 'metric_group =~ ".+"']
     equal: ['tenant', 'metric_group']

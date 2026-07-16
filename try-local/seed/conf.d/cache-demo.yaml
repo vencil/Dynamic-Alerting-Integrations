@@ -1,11 +1,15 @@
 # cache-demo — the "design-concept" tenant (the secondary signal).
 # It carries silent_mode + severity_dedup so the operational rule pack's
-# sentinel alerts fire (severity=none, inhibit sources) WITHOUT a real
-# breach: this showcases v2.8.0 Sentinel Alert + Severity Dedup.
+# sentinel alerts fire (severity=none) WITHOUT a real breach: this showcases
+# v2.8.0 Sentinel Alert + the per-tenant state surface.
 #   user_silent_mode{tenant=cache-demo,target_severity=warning}=1
-#       → TenantSilentWarning sentinel (severity=none)
+#       → TenantSilentWarning sentinel (severity=none) — Silent Mode's
+#         inhibit source (see try-local/alertmanager.yml)
 #   user_severity_dedup{tenant=cache-demo,mode=enable}=1
-#       → TenantSeverityDedupEnabled sentinel (severity=none)
+#       → TenantSeverityDedupEnabled sentinel (severity=none) — STATUS
+#         SURFACE ONLY (AM UI / Grafana). Severity Dedup itself is a direct
+#         critical→warning inhibit, not sentinel-driven, and is observable on
+#         db-demo (connections warning+critical) rather than here.
 # It is also the 2nd tenant the portal Tenant Manager lists.
 tenants:
   cache-demo:
