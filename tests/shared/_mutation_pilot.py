@@ -22,7 +22,7 @@ Usage:
 Latest run (2026-07-16, after re-anchoring 6 entries whose old_string
 had rotted against refactored sources — pathlib migration in _lib_io /
 _lib_godispatch, delegation refactor in _lint_helpers, ADR-024 version
-label validation in _grar_validate): 67/70 caught (~96%) across 31
+label validation in _grar_validate): 67/70 caught (~96%) across 32
 functions, 0 setup-failures. The 3 survivors are all equivalent
 mutations:
   - parse_duration_seconds: drop type-check before m.match's str()
@@ -163,7 +163,7 @@ MUTATIONS: list[Mutation] = [
     # ── parse_commit (generate_changelog) ──────────────────────────
     Mutation(
         target_file="scripts/tools/dx/generate_changelog.py",
-        test_file="tests/shared/test_property_tools.py tests/dx/test_generate_changelog_extra.py",
+        test_file="tests/shared/test_property_tools.py",
         label="commit: scope falls back to None (was '')",
         fn_name="parse_commit",
         old='"scope": m.group("scope") or "",',
@@ -171,7 +171,7 @@ MUTATIONS: list[Mutation] = [
     ),
     Mutation(
         target_file="scripts/tools/dx/generate_changelog.py",
-        test_file="tests/shared/test_property_tools.py tests/dx/test_generate_changelog_extra.py",
+        test_file="tests/shared/test_property_tools.py",
         label="commit: drop bool() wrapper on breaking",
         fn_name="parse_commit",
         old='"breaking": bool(m.group("breaking")),',
@@ -179,7 +179,7 @@ MUTATIONS: list[Mutation] = [
     ),
     Mutation(
         target_file="scripts/tools/dx/generate_changelog.py",
-        test_file="tests/shared/test_property_tools.py tests/dx/test_generate_changelog_extra.py",
+        test_file="tests/shared/test_property_tools.py",
         label="commit: invert m falsiness check (no-match returns dict)",
         fn_name="parse_commit",
         old="if not m:\n        return None",
@@ -726,6 +726,16 @@ def main() -> int:
     args = parser.parse_args()
 
     selected = [m for m in MUTATIONS if not args.target or args.target in m.fn_name]
+    if not selected:
+        # A typo'd --target used to yield "0/0 caught" + rc 0 — a silent
+        # no-op that looks green. Make it a hard, explained error instead.
+        print(
+            f"ERROR: --target {args.target!r} matched no mutation fn_name "
+            f"(catalog has {len(MUTATIONS)} mutations; check the spelling "
+            f"against MUTATIONS[].fn_name)",
+            file=sys.stderr,
+        )
+        return 2
     print(f"Running {len(selected)} mutations\n")
 
     results: list[tuple[Mutation, str]] = []
@@ -744,8 +754,22 @@ def main() -> int:
         else:
             try:
                 rc, tail = run_tests(m.test_file)
-                verdict = "CAUGHT" if rc != 0 else "SURVIVED"
-                results.append((m, f"{verdict} (rc={rc}) :: {tail[:160]}"))
+                if rc == 0:
+                    results.append((m, f"SURVIVED (rc=0) :: {tail[:160]}"))
+                elif rc == 1:
+                    results.append((m, f"CAUGHT (rc=1) :: {tail[:160]}"))
+                else:
+                    # pytest rc 2/4/5 = interrupted / usage error / no tests
+                    # collected — the kill suite never actually ran, so this
+                    # is NOT a kill. Bin it with SETUP-FAIL (stale test_file
+                    # is the same catalog-rot class as a stale old_string);
+                    # counting it as CAUGHT produced years-long fake kills
+                    # for entries pointing at a deleted test file.
+                    results.append((m, (
+                        f"SETUP-FAIL: test runner rc={rc} — kill suite did "
+                        f"not run (stale test_file? collection/usage error) "
+                        f":: {tail[:160]}"
+                    )))
             finally:
                 m.revert(original)
 
@@ -776,7 +800,7 @@ def main() -> int:
             print(f"  - {m.fn_name}: {m.label}")
     if setup_fails:
         print("SETUP FAILURES (catalog rot — re-anchor the entry's old=/new= "
-              "to the current source shape):")
+              "to the current source, or re-point a stale test reference):")
         for m, v in setup_fails:
             print(f"  - {m.fn_name}: {m.label}\n      {v}")
 

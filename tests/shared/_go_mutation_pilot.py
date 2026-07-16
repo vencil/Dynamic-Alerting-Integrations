@@ -303,6 +303,16 @@ def main() -> int:
     args = parser.parse_args()
 
     selected = [m for m in MUTATIONS if not args.target or args.target in m.fn_name]
+    if not selected:
+        # A typo'd --target used to yield "0/0 caught" + rc 0 — a silent
+        # no-op that looks green. Make it a hard, explained error instead.
+        print(
+            f"ERROR: --target {args.target!r} matched no mutation fn_name "
+            f"(catalog has {len(MUTATIONS)} mutations; check the spelling "
+            f"against MUTATIONS[].fn_name)",
+            file=sys.stderr,
+        )
+        return 2
     print(f"Running {len(selected)} Go mutations from {GO_APP_DIR}\n")
 
     results: list[tuple[Mutation, str]] = []
@@ -321,8 +331,23 @@ def main() -> int:
         else:
             try:
                 rc, tail = run_tests(m.test_target)
-                verdict = "CAUGHT" if rc != 0 else "SURVIVED"
-                results.append((m, f"{verdict} (rc={rc}) :: {tail[:160]}"))
+                if rc == 0:
+                    results.append((m, f"SURVIVED (rc=0) :: {tail[:160]}"))
+                elif rc == 1:
+                    results.append((m, f"CAUGHT (rc=1) :: {tail[:160]}"))
+                else:
+                    # `go test` rc other than 0/1 (e.g. 2) = the runner
+                    # itself failed — bad package selector, toolchain error —
+                    # so the kill suite never ran. Bin with SETUP-FAIL, same
+                    # catalog-rot class as a stale old_string. (A mutation
+                    # that merely breaks compilation still exits 1 and stays
+                    # a "caught for the wrong reason" case — see the
+                    # deepMerge recursive-merge mutation's note.)
+                    results.append((m, (
+                        f"SETUP-FAIL: test runner rc={rc} — kill suite did "
+                        f"not run (stale test_target? toolchain error) "
+                        f":: {tail[:160]}"
+                    )))
             finally:
                 m.revert(original)
 
@@ -353,7 +378,7 @@ def main() -> int:
             print(f"  - {m.fn_name}: {m.label}")
     if setup_fails:
         print("SETUP FAILURES (catalog rot — re-anchor the entry's old=/new= "
-              "to the current source shape):")
+              "to the current source, or re-point a stale test reference):")
         for m, v in setup_fails:
             print(f"  - {m.fn_name}: {m.label}\n      {v}")
 

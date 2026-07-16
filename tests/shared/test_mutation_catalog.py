@@ -110,3 +110,60 @@ class TestMutationCatalogAnchored:
         assert mutation.old != mutation.new, (
             f"mutation {mutation.label!r} has identical old/new — no-op"
         )
+
+
+class TestKillTargetsExist:
+    """The OTHER half of catalog rot: a stale kill-test reference.
+
+    A deleted/renamed test file makes pytest exit with a usage error
+    (rc=4) while running ZERO tests — which the pre-2026-07 pilots
+    counted as CAUGHT (rc != 0), i.e. a fake kill. Three parse_commit
+    entries pointed at a test file deleted in PR #350 for months this
+    way. The pilots now bin rc∉{0,1} as SETUP-FAIL at run time; this
+    gate catches the stale reference statically at PR time.
+
+    Validation depth per pilot:
+      - Python: test_file is a space-separated list of pytest paths —
+        assert every token is an existing FILE.
+      - Go: test_target is a `go test` package selector (`./...`,
+        `./pkg/config/...`), not a file — assert the selector's base
+        DIRECTORY exists under GO_APP_DIR (filesystem level only; which
+        packages the pattern expands to is go-toolchain territory that
+        a static Python test can't see).
+    """
+
+    @pytest.mark.parametrize(
+        "mutation",
+        _py_pilot.MUTATIONS,
+        ids=[f"py::{m.fn_name}::{m.label[:48]}" for m in _py_pilot.MUTATIONS],
+    )
+    def test_python_test_files_exist(self, mutation):
+        for token in mutation.test_file.split():
+            assert (_py_pilot.REPO_ROOT / token).is_file(), (
+                f"kill-test reference {token!r} (mutation {mutation.label!r}) "
+                "does not exist — pytest would rc=4 with zero tests run, "
+                "which the old runner mis-counted as CAUGHT. Re-point "
+                "test_file to the surviving test scope."
+            )
+
+    @pytest.mark.parametrize(
+        "mutation",
+        _go_pilot.MUTATIONS,
+        ids=[f"go::{m.fn_name}::{m.label[:48]}" for m in _go_pilot.MUTATIONS],
+    )
+    def test_go_test_target_dirs_exist(self, mutation):
+        selector = mutation.test_target
+        assert selector.startswith("./"), (
+            f"test_target {selector!r} is not a ./-rooted package selector"
+        )
+        base = selector[2:]
+        if base.endswith("..."):
+            base = base[:-3]
+        base = base.rstrip("/")
+        target_dir = _go_pilot.GO_APP_DIR / base if base else _go_pilot.GO_APP_DIR
+        assert target_dir.is_dir(), (
+            f"test_target {selector!r} (mutation {mutation.label!r}) points "
+            f"at a non-existent directory {target_dir} — `go test` would "
+            "fail with a matched-no-packages error instead of running the "
+            "kill suite."
+        )
