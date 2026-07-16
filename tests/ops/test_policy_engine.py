@@ -600,6 +600,19 @@ tenants:
         assert "db-a" in configs
         assert "_defaults" not in configs
 
+    def test_empty_yaml_registers_empty_tenant(self, tmp_path):
+        """Pin（r3 W2 de-shadow 行為差）：空/純註解 yaml 以 {} 進入評估。
+
+        舊 local 版對空檔載入得 None → 跳過（租戶對 policy 隱形）；
+        lib 版以 default={} 載入 → placeholder 空檔開始被 `required`
+        類策略評估。此測試釘住新語意，回退到「隱形」即紅。
+        """
+        (tmp_path / "placeholder.yaml").write_text(
+            "# tenant placeholder, no keys yet\n", encoding="utf-8"
+        )
+        configs = pe.load_tenant_configs(str(tmp_path))
+        assert configs == {"placeholder": {}}
+
     def test_nonexistent_dir(self):
         """不存在的目錄回傳空 dict。"""
         configs = pe.load_tenant_configs("/nonexistent/dir")

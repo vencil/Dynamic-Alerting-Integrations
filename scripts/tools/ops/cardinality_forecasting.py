@@ -24,7 +24,6 @@ import math
 import os
 import sys
 import time
-import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -46,15 +45,17 @@ try:
     from _lib_python import (
         detect_cli_lang,
         format_json_report,
-        http_get_json,
         parse_duration_seconds,
+        query_prometheus_instant,
+        query_prometheus_range,
     )
 except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
         detect_cli_lang,
         format_json_report,
-        http_get_json,
         parse_duration_seconds,
+        query_prometheus_instant,
+        query_prometheus_range,
     )
 
 # ---------------------------------------------------------------------------
@@ -229,22 +230,17 @@ def query_cardinality_range(
     query = 'count by (tenant)({__name__=~"tenant_threshold_.*"})'
     # #1112: PromQL contains spaces/braces/quotes — it MUST be percent-encoded.
     # An f-string interpolation raises `InvalidURL: URL can't contain control
-    # characters` against a real Prometheus. Same shape as
-    # `_lib_prometheus.query_prometheus_instant()`.
-    params = urllib.parse.urlencode({
-        "query": query,
-        "start": f"{start:.0f}",
-        "end": f"{end:.0f}",
-        "step": step,
-    })
-    url = f"{prometheus_url}/api/v1/query_range?{params}"
-
-    data, err = http_get_json(url)
-    if err or not data or data.get("status") != "success":
+    # characters` against a real Prometheus. The encoding now lives in
+    # `_lib_prometheus.query_prometheus_range` (ROI r3 W1); the
+    # "any error → {}" collapse stays here. timeout=10 preserves the
+    # pre-consolidation behaviour (this site used http_get_json's default).
+    result, err = query_prometheus_range(
+        prometheus_url, query, start, end, step, timeout=10)
+    if err:
         return {}
 
     results: dict[str, list[tuple[float, float]]] = {}
-    for series in data.get("data", {}).get("result", []):
+    for series in result:
         tenant = series.get("metric", {}).get("tenant", "unknown")
         values = [
             (float(ts), float(val))
@@ -268,16 +264,15 @@ def query_scrape_series_added(
         {tenant: current_scrape_series_added}。
     """
     query = 'sum by (tenant)(scrape_series_added)'
-    # #1112: percent-encode — see query_cardinality_range() above.
-    url = (f"{prometheus_url}/api/v1/query?"
-           f"{urllib.parse.urlencode({'query': query})}")
-
-    data, err = http_get_json(url)
-    if err or not data or data.get("status") != "success":
+    # #1112: percent-encode — delegated to
+    # `_lib_prometheus.query_prometheus_instant` (ROI r3 W1; its default
+    # timeout=10 matches this site's pre-consolidation http_get_json default).
+    result, err = query_prometheus_instant(prometheus_url, query)
+    if err:
         return {}
 
     results: dict[str, float] = {}
-    for series in data.get("data", {}).get("result", []):
+    for series in result:
         tenant = series.get("metric", {}).get("tenant", "unknown")
         value = series.get("value", [None, "0"])
         if len(value) >= 2:

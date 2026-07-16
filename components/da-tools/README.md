@@ -355,6 +355,8 @@ docker run --rm -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools \
 
 `--ci` mode 將 warning 也視為 exit 1。
 
+`validate`（Shadow Monitoring 比對）在 mapping 載入後**零比對組**時 exit `2`——什麼都沒驗證不得視為驗證通過（`da-tools validate && promote` 不會被 vacuous pass 放行）。
+
 > **唯一例外 — `tenant-verify`**：此命令為 SSOT 前既有、且客戶 rollback runbook 已依賴其契約，故**反轉** `1`/`2` 語意——`2` = 驗證發現差異（mismatch / 租戶不存在，rollback checklist 的訊號），`1` = 呼叫錯誤。其餘所有命令一律遵循上表。詳見 [cli-reference.md](../../docs/cli-reference.md) §tenant-verify。
 
 ### 6.4 Bilingual Help

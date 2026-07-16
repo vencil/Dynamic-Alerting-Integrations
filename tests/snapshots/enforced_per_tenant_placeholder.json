@@ -1,7 +1,0 @@
-{
-  "enforced_receiver_names": [
-    "platform-enforced-db-a",
-    "platform-enforced-db-b"
-  ],
-  "enforced_routes_count": 2
-}
