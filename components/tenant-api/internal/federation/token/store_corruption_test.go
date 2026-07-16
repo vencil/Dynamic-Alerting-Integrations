@@ -1,7 +1,9 @@
 package token
 
 // Corruption / IO-failure coverage for the JSON-file Record store (ROI
-// refactor R3, E4). The load-bearing behavior verified here: newStore on a
+// refactor R3, E4). Scope note: this store is the unit-test / local-dev
+// backend — production uses the ConfigMap-backed store (configmap_store.go).
+// The load-bearing behavior verified here: newStore on a
 // CORRUPTED store file must FAIL LOUD (return the parse error) — never
 // silently start empty, which would drop every live record's listing and
 // mask the corruption until an operator wonders where the tokens went.

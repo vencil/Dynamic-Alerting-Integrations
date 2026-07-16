@@ -9,8 +9,9 @@ package gitops
 // Fault injection follows writer_hardening_test.go's fixture style: real
 // local git repos (initRepoOnMain / seedTenantRepo / addBareRemote) with the
 // failure induced structurally — a configDir that does not exist (os.WriteFile
-// fails), a configDir outside the git repo (git add/commit fails), or a
-// MergeFunc that succeeds at pre-flight and fails under the lock.
+// fails), an empty commit ident (the in-repo `git commit` itself fails after
+// write + add succeeded), or a MergeFunc that succeeds at pre-flight and
+// fails under the lock.
 
 import (
 	"context"
@@ -55,21 +56,42 @@ func TestWritePR_WriteFileFailureRollsBack(t *testing.T) {
 	assertCleanOnBase(t, repo, "main", "tenant-api/")
 }
 
-// TestWritePR_CommitFailureRollsBack: the file write succeeds but the commit
-// fails (configDir lives OUTSIDE the git repo, so `git add` refuses) → same
-// rollback contract as the write-file failure.
+// TestWritePR_CommitFailureRollsBack: the IN-REPO commit-failure arm — the
+// file write AND `git add` both succeed inside the repo, then the commit
+// itself fails (empty author identity → git's "empty ident name" refusal,
+// which overrides repo-local config via the inline `-c user.name=`).
+//
+// Measured behavior this pins: the rollback IS fully clean here. gitCommit's
+// `git add` runs before the failure, so the new file is STAGED — and
+// checkoutBaseClean's `reset --hard` removes staged-but-uncommitted files
+// from the working tree along with the index. The residue seam therefore
+// does NOT open on this in-process path.
+//
+// KNOWN SEAM (not exercisable in-process, documented for the record): a
+// process crash BETWEEN os.WriteFile and gitCommit's `git add` leaves the
+// new file UNTRACKED — checkoutBaseClean has no `git clean`, so the next
+// write's re-anchor keeps it, and GET handlers (which read configDir
+// directly) can serve the residue of a write that never committed. Closing
+// it would need a `git clean` scoped to *.yaml in checkoutBaseClean — a
+// production decision, out of scope for this test-only pass.
 func TestWritePR_CommitFailureRollsBack(t *testing.T) {
 	repo := initRepoOnMain(t)
-	outsideConfigDir := t.TempDir() // a real dir, but not inside the repo
-	w := NewWriter(outsideConfigDir, repo)
+	w := NewWriter(repo, repo)
 
-	_, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
+	// Empty author email → gitCommit's inline `-c user.name=` / `-c
+	// user.email=` resolve to empty idents and the commit fails AFTER the
+	// in-repo write + add succeeded.
+	_, err := w.WritePR(context.Background(), "db-a", "", validTenantYAML)
 	if err == nil {
-		t.Fatal("expected WritePR to fail when the config file is outside the repo, got nil")
+		t.Fatal("expected WritePR to fail when the commit ident is empty, got nil")
 	}
 	if !strings.Contains(err.Error(), "git commit on branch") {
 		t.Errorf("error = %q, want the 'git commit on branch' failure semantics", err.Error())
 	}
+	// Full rollback contract, including a clean working tree: the staged
+	// file dies with the `reset --hard`. If this ever reports a dirty tree,
+	// the add-before-commit ordering (or the reset) changed — re-audit the
+	// crash-window seam note above alongside it.
 	assertCleanOnBase(t, repo, "main", "tenant-api/")
 }
 
