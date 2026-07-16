@@ -129,7 +129,7 @@ lang: zh
 
 **為什麼**：三層的載入時機、SSR / CSR 狀態、locale 來源都不同，共用會耦合炸鍋。
 
-**檢查方式**：pre-commit hook `check_bilingual_annotations`。
+**檢查方式**：pre-commit hook `check_bilingual_annotations`。Python CLI help 層另有行為型 gate [`tests/shared/test_bilingual_help_contract.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/shared/test_bilingual_help_contract.py)（實跑 `DA_LANG=zh/en --help` 斷言雙語切換；English-only / 中文-only 工具走顯式 allowlist + 只准縮 ratchet），與 coverage 軟性報表 `check_i18n_coverage.py` 互補。
 
 ### 9b. SSOT 語言策略（v2.8.0 S#101 policy lock）
 
