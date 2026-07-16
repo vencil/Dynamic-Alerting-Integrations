@@ -167,11 +167,18 @@ def load_mapping_pairs(mapping_path):
 
 
 def print_summary(all_results):
-    """印出比對摘要。"""
+    """印出比對摘要。
+
+    r3 W2 修正：查詢失敗的 pair（result 為 None）此前被 continue 靜默跳過
+    ——「查詢全失敗」時 mismatches/missing 均 0，照樣印 🎉「可以安全切換」
+    但 exit 2，摘要與 exit code 自相矛盾。現統計 None 數：任一查詢失敗即
+    印警示、抑制 🎉（未驗證 ≠ 一致）。
+    """
     total_pairs = len(all_results)
     total_matches = 0
     total_mismatches = 0
     total_missing = 0
+    failed_queries = sum(1 for r in all_results if r is None)
 
     for result in all_results:
         if result is None:
@@ -192,7 +199,11 @@ def print_summary(all_results):
     print(f"  ❌ 數值差異: {total_mismatches}")
     print(f"  ⚠️  缺少資料: {total_missing}\n")
 
-    if total_mismatches == 0 and total_missing == 0:
+    if failed_queries:
+        print(f"⚠️  {failed_queries}/{total_pairs} 組查詢失敗"
+              "（Prometheus 連線 / 查詢層錯誤），本輪結果不完整——"
+              "未驗證的比對組不得視為一致。\n")
+    if total_mismatches == 0 and total_missing == 0 and failed_queries == 0:
         print("🎉 所有 Recording Rule 數值完全一致！可以安全切換。\n")
     elif total_mismatches > 0:
         print("⚠️  發現數值差異，請檢查以下項目:\n")
@@ -217,9 +228,8 @@ def classify_results(all_results):
         None——Prometheus 連線 / 查詢層錯誤）。沿用姊妹工具
         shadow_verify.py 的 #452/#737 歸類：unreachable Prometheus /
         query failure 屬 caller error（exit 2，system-actionable），
-        不是 violation。此維度只影響 exit code：print_summary 跳過
-        None result，摘要可能印「全數一致」卻 exit 2——摘要輸出的
-        gating 屬 pre-existing 行為，本波不改輸出、另案處理。
+        不是 violation。（r3 W2 起 print_summary 也統計 None：任一
+        查詢失敗即印警示並抑制 🎉，摘要與 exit code 不再矛盾。）
     """
     has_finding = False
     has_query_error = False
@@ -415,8 +425,12 @@ def main():
         sys.exit(EXIT_CALLER_ERROR)
 
     if not pairs:
-        print("No comparison pairs found.")
-        return EXIT_OK
+        # r3 W2（沿 #452/#737 系譜）：零比對組 = 什麼都沒驗證，vacuous pass
+        # 不得綠燈放行 promote（`da-tools validate && promote` 會誤過）。
+        # 空 mapping 屬 caller 可修的輸入問題 → EXIT_CALLER_ERROR，訊息走
+        # stderr（stdout 留給驗證結果）。
+        print("No comparison pairs found.", file=sys.stderr)
+        return EXIT_CALLER_ERROR
 
     def run_once():
         all_results = []

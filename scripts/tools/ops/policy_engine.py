@@ -51,6 +51,7 @@ try:
     from _lib_python import (
         detect_cli_lang,
         format_json_report,
+        load_tenant_configs,
         load_yaml_file,
         parse_duration_seconds,
     )
@@ -58,6 +59,7 @@ except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
         detect_cli_lang,
         format_json_report,
+        load_tenant_configs,
         load_yaml_file,
         parse_duration_seconds,
     )
@@ -498,50 +500,14 @@ def evaluate_policies(
 
 
 # ---------------------------------------------------------------------------
-# Tenant config loading (from config-dir)
-# ---------------------------------------------------------------------------
-def load_tenant_configs(config_dir: str) -> dict[str, dict]:
-    """從 config-dir 載入所有 tenant 配置。
-
-    跳過 ``_`` 開頭的檔案（_defaults.yaml, _profiles.yaml 等）。
-    支援 flat 格式和 ``tenants:`` wrapper 格式。
-
-    Args:
-        config_dir: conf.d/ 目錄路徑。
-
-    Returns:
-        {tenant_name: config_dict}。
-    """
-    configs: dict[str, dict] = {}
-
-    base = Path(config_dir)
-    if not base.is_dir():
-        return configs
-
-    for entry in sorted(base.iterdir(), key=lambda p: p.name):
-        fname = entry.name
-        if not fname.endswith((".yaml", ".yml")):
-            continue
-        if fname.startswith("_"):
-            continue
-
-        data = load_yaml_file(str(entry))
-        if not isinstance(data, dict):
-            continue
-
-        # Multi-tenant wrapper format
-        if "tenants" in data and isinstance(data["tenants"], dict):
-            for tenant_name, tenant_cfg in data["tenants"].items():
-                if isinstance(tenant_cfg, dict):
-                    configs[tenant_name] = tenant_cfg
-        else:
-            # Flat format — filename (sans extension) is tenant name
-            tenant_name = entry.stem
-            configs[tenant_name] = data
-
-    return configs
-
-
+# Tenant config loading — delegated to the shared `_lib_io.load_tenant_configs`
+# (imported via the `_lib_python` facade above; da-tools ROI r3 W2 de-shadow).
+# Behaviour deltas vs the former local copy (both handled wrapper + flat):
+#   - lib additionally skips dotfiles and non-files (stricter);
+#   - an EMPTY/comment-only yaml now registers the tenant as `{}` (lib loads
+#     with default={}, local copy skipped None) — so `required`-style policies
+#     evaluate placeholder files instead of silently ignoring them (pinned in
+#     tests/ops/test_policy_engine.py::TestLoadTenantConfigs).
 # ---------------------------------------------------------------------------
 # Report generation
 # ---------------------------------------------------------------------------

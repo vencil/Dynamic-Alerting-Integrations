@@ -160,6 +160,26 @@ describe('TenantManager — last-mile activation', () => {
     expect(screen.queryByText('Compare Mode')).toBeNull();
     expect(screen.queryByText('Exit Compare Mode')).toBeNull();
   });
+
+  it('YAML modal restores focus to the「Maintenance YAML」opener on close (TRK-335, WCAG 2.4.3)', async () => {
+    await renderAndSettle();
+    const { fireEvent } = await import('@testing-library/react');
+    // Select tenants so the batch-action bar (with the YAML buttons) appears.
+    fireEvent.click(screen.getByRole('button', { name: 'Select All Filtered' }));
+    const opener = await screen.findByRole('button', { name: 'Maintenance YAML' });
+    opener.focus();
+    expect(document.activeElement).toBe(opener);
+
+    fireEvent.click(opener);
+    // the maintenance modal opens as a labelled dialog and steals focus into it
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+
+    // Esc closes (hook → setModalType(null)) → focus returns to the opener.
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(document.activeElement).toBe(opener);
+  });
 });
 
 /**
@@ -450,6 +470,27 @@ describe('TenantManager — LD-6 P7 org badges / access scope / callout', () => 
 
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByTestId('access-scope-panel')).toBeNull());
+  });
+
+  it('restores focus to the「檢視存取範圍」opener when the panel closes (TRK-335, WCAG 2.4.3)', async () => {
+    stubFetchWithMe(ME_WITH_ORG);
+    await renderAndSettle();
+    const opener = await screen.findByTestId('view-access-scope');
+    // Mirror a real click, which focuses the button before the modal opens —
+    // the element the hook must return focus to on close.
+    opener.focus();
+    expect(document.activeElement).toBe(opener);
+
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(opener);
+    const panel = await screen.findByTestId('access-scope-panel');
+    // the panel steals focus into its content on open
+    await waitFor(() => expect(panel.contains(document.activeElement)).toBe(true));
+
+    // Esc closes → focus returns to the launching trigger, not document.body.
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('access-scope-panel')).toBeNull());
+    expect(document.activeElement).toBe(opener);
   });
 
   it('backdrop mousedown closes; content mousedown and a stray click do not (Reef 8)', async () => {

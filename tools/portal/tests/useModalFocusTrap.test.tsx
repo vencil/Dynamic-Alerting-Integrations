@@ -9,6 +9,9 @@
  *     * Tab    → cycles forward (last → first if at end)
  *     * Shift+Tab → cycles backward (first → last if at start)
  *   - When modalType becomes falsy or hook unmounts, removes the listener.
+ *   - Focus restoration (TRK-335, WCAG 2.4.3): remembers the element that
+ *     had focus when the modal opened (the trigger) and returns focus to
+ *     it on close/unmount, guarded against the trigger having unmounted.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
@@ -188,6 +191,70 @@ describe('useModalFocusTrap', () => {
     // After modalType=null, Escape should be ignored (listener removed).
     pressKey('Escape');
     expect(setModalTypeSpy).not.toHaveBeenCalled();
+  });
+
+  // ─────────────────────────────────────────────────────────────────
+  // Focus restoration (TRK-335, WCAG 2.4.3 — return-focus-on-close)
+  // ─────────────────────────────────────────────────────────────────
+
+  it('restores focus to the triggering element when the modal closes (modalType → null)', () => {
+    // A real trigger holds focus, mimicking the button that opened the modal.
+    const trigger = document.createElement('button');
+    trigger.textContent = 'open modal';
+    document.body.appendChild(trigger);
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+
+    const { container } = buildModal(2);
+    const Hook = ({ open }: { open: string | null }) => {
+      const ref = useModalFocusTrap(open, setModalTypeSpy);
+      useLayoutEffect(() => {
+        (ref as any).current = container;
+      }, [ref]);
+      return ref;
+    };
+    const { rerender } = renderHook(({ open }: { open: string | null }) => Hook({ open }), {
+      initialProps: { open: 'maintenance' as string | null },
+    });
+
+    // On open, the hook steals focus into the modal container.
+    expect(document.activeElement).toBe(container);
+
+    // On close, focus returns to the trigger (WCAG 2.4.3).
+    rerender({ open: null });
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('restores focus to the triggering element on unmount (constant-modalType consumers)', () => {
+    // Mirrors CustomAlertsModal: modalType is a constant `true`, so the
+    // modal mounts on open and unmounts on close — restore fires in cleanup.
+    const trigger = document.createElement('button');
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const { container } = buildModal(2);
+    const { unmount } = renderHookWithRef('open', container, setModalTypeSpy);
+    expect(document.activeElement).toBe(container);
+
+    unmount();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('does not throw and does not refocus a detached trigger when it unmounted while open', () => {
+    const trigger = document.createElement('button');
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const { container } = buildModal(2);
+    const { unmount } = renderHookWithRef('open', container, setModalTypeSpy);
+    expect(document.activeElement).toBe(container);
+
+    // The trigger is removed from the DOM while the modal is still open.
+    trigger.remove();
+
+    // Cleanup must be crash-safe and must not focus the detached node.
+    expect(() => unmount()).not.toThrow();
+    expect(document.activeElement).not.toBe(trigger);
   });
 });
 
