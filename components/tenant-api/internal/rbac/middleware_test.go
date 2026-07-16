@@ -364,6 +364,35 @@ func TestWriteError(t *testing.T) {
 	}
 }
 
+// TestWriteError_CodeMappingComplete pins the status→code switch in
+// writeError: every status it is legally called with (401/403 — the only
+// two the middleware emits) must map to a NON-EMPTY code, because `code` is
+// a required field of the OpenAPI error schema and the contract fuzz cannot
+// observe middleware responses. An unmapped status panics by design
+// (fail-loud tripwire; contained by the router-wide chi Recoverer).
+func TestWriteError_CodeMappingComplete(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		w := httptest.NewRecorder()
+		writeError(w, httptest.NewRequest("GET", "/", nil), status, "x")
+		var resp map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("status %d: unmarshal: %v", status, err)
+		}
+		if code, _ := resp["code"].(string); code == "" {
+			t.Errorf("status %d: code missing/empty — required by the OpenAPI error schema", status)
+		}
+	}
+	// The tripwire itself: an unmapped status must fail loud, never emit a
+	// schema-violating envelope with the code key absent.
+	defer func() {
+		if recover() == nil {
+			t.Error("writeError with an unmapped status must panic (fail-loud tripwire)")
+		}
+	}()
+	writeError(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil), http.StatusTeapot, "x")
+}
+
 // TestWriteError_NilRequest pins the test-harness affordance: a nil request
 // must not panic and must simply omit request_id.
 func TestWriteError_NilRequest(t *testing.T) {

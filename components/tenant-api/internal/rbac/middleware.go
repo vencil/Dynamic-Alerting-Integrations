@@ -2,6 +2,7 @@ package rbac
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -176,12 +177,23 @@ func writeEnvelope(w http.ResponseWriter, r *http.Request, status int, env error
 // The message content is unchanged from the pre-envelope bare
 // {"error": msg} map — the migration only ADDS code + request_id.
 func writeError(w http.ResponseWriter, r *http.Request, status int, msg string) {
-	code := ""
+	var code string
 	switch status {
 	case http.StatusUnauthorized:
 		code = codeUnauthorized
 	case http.StatusForbidden:
 		code = codeForbidden
+	default:
+		// TRIPWIRE (fail-loud, dev-rules #5): `code` is a REQUIRED field of
+		// the OpenAPI ErrorResponse schema, and the contract fuzz CANNOT
+		// observe middleware responses (wildcard-RBAC fixture) — an empty
+		// code here would ship silently. A caller introducing a new status
+		// must add a code mapping above (keep it mirroring
+		// handler.codeFromStatus) AND extend the envelope pins in
+		// internal/handler/access_test.go. The panic is contained: the
+		// router-wide chi Recoverer (cmd/server/routes.go) turns it into a
+		// 500 instead of a schema-violating 4xx.
+		panic(fmt.Sprintf("rbac.writeError: no error-code mapping for status %d (code is required by the OpenAPI error schema)", status))
 	}
 	writeEnvelope(w, r, status, errorEnvelope{Error: msg, Code: code})
 }
