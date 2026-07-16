@@ -19,8 +19,12 @@ Why hand-crafted vs `mutmut`/`cosmic-ray`:
 Usage:
   python tests/shared/_mutation_pilot.py [--target FUNC]
 
-Latest run (v2.8.0 audit ④ pilot): 67/70 caught (~96%) across 31
-functions. The 3 survivors are all equivalent mutations:
+Latest run (2026-07-16, after re-anchoring 6 entries whose old_string
+had rotted against refactored sources — pathlib migration in _lib_io /
+_lib_godispatch, delegation refactor in _lint_helpers, ADR-024 version
+label validation in _grar_validate): 67/70 caught (~96%) across 32
+functions, 0 setup-failures. The 3 survivors are all equivalent
+mutations:
   - parse_duration_seconds: drop type-check before m.match's str()
     coercion (str() catches the non-string case downstream).
   - strip_frontmatter: offset 3→0 in `find("\\n---", 3)` — opening
@@ -60,6 +64,10 @@ class Mutation:
     old: str                # exact string to find
     new: str                # replacement
     fn_name: str            # which target function
+    # True = documented equivalent mutation (survives by construction, no
+    # behavioral test can kill it without overspecifying the impl). Known
+    # equivalents do NOT fail the run — see main()'s exit contract.
+    known_equivalent: bool = False
 
     def apply(self) -> None:
         path = REPO_ROOT / self.target_file
@@ -124,6 +132,9 @@ MUTATIONS: list[Mutation] = [
         fn_name="_parse_front_matter",
         old='if not content.startswith("---"):\n        return {}',
         new='if False:\n        return {}',
+        # The subsequent re.match(r"^---\n…") already rejects non-frontmatter
+        # inputs, so this early return is redundant defensive code.
+        known_equivalent=True,
     ),
     Mutation(
         target_file="scripts/tools/dx/generate_doc_map.py",
@@ -152,7 +163,7 @@ MUTATIONS: list[Mutation] = [
     # ── parse_commit (generate_changelog) ──────────────────────────
     Mutation(
         target_file="scripts/tools/dx/generate_changelog.py",
-        test_file="tests/shared/test_property_tools.py tests/dx/test_generate_changelog_extra.py",
+        test_file="tests/shared/test_property_tools.py",
         label="commit: scope falls back to None (was '')",
         fn_name="parse_commit",
         old='"scope": m.group("scope") or "",',
@@ -160,7 +171,7 @@ MUTATIONS: list[Mutation] = [
     ),
     Mutation(
         target_file="scripts/tools/dx/generate_changelog.py",
-        test_file="tests/shared/test_property_tools.py tests/dx/test_generate_changelog_extra.py",
+        test_file="tests/shared/test_property_tools.py",
         label="commit: drop bool() wrapper on breaking",
         fn_name="parse_commit",
         old='"breaking": bool(m.group("breaking")),',
@@ -168,7 +179,7 @@ MUTATIONS: list[Mutation] = [
     ),
     Mutation(
         target_file="scripts/tools/dx/generate_changelog.py",
-        test_file="tests/shared/test_property_tools.py tests/dx/test_generate_changelog_extra.py",
+        test_file="tests/shared/test_property_tools.py",
         label="commit: invert m falsiness check (no-match returns dict)",
         fn_name="parse_commit",
         old="if not m:\n        return None",
@@ -207,6 +218,9 @@ MUTATIONS: list[Mutation] = [
         fn_name="parse_duration_seconds",
         old="    if not value or not isinstance(value, str):\n        return None",
         new="    if not value:\n        return None",
+        # str() coercion before m.match catches the non-string case downstream,
+        # so the explicit isinstance check is redundant.
+        known_equivalent=True,
     ),
     # ── format_duration (_lib_validation) ─────────────────────────
     Mutation(
@@ -267,6 +281,10 @@ MUTATIONS: list[Mutation] = [
         fn_name="strip_frontmatter",
         old='        end = src.find("\\n---", 3)',
         new='        end = src.find("\\n---", 0)',
+        # The opening `---` is always at index 0, so it can never contain a
+        # "\n---" match before index 3 — offset 0 finds the same closing tag
+        # for any valid frontmatter.
+        known_equivalent=True,
     ),
     Mutation(
         target_file="scripts/tools/dx/axe_lite_static.py",
@@ -318,7 +336,7 @@ MUTATIONS: list[Mutation] = [
         test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
         label="load_yaml: drop isfile check (would attempt to open missing path)",
         fn_name="load_yaml_file",
-        old="    if not path or not os.path.isfile(path):\n        return default",
+        old="    if not path or not Path(path).is_file():\n        return default",
         new="    if not path:\n        return default",
     ),
     Mutation(
@@ -351,8 +369,8 @@ MUTATIONS: list[Mutation] = [
         test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
         label="iter_yaml: drop isfile filter (directories ending in .yaml leak through)",
         fn_name="iter_yaml_files",
-        old="        fpath = os.path.join(config_dir, fname)\n        if os.path.isfile(fpath):\n            result.append((fname, fpath))",
-        new="        fpath = os.path.join(config_dir, fname)\n        result.append((fname, fpath))",
+        old="        if entry.is_file():\n            result.append((fname, str(entry)))",
+        new="        result.append((fname, str(entry)))",
     ),
     # ── format_json_report (_lib_io) ─────────────────────────────
     Mutation(
@@ -442,7 +460,7 @@ MUTATIONS: list[Mutation] = [
         test_file="tests/shared/test_property_tools.py",
         label="resolve: drop isfile check on explicit (missing path returns string)",
         fn_name="_resolve_binary",
-        old="        if explicit:\n            return (\n                explicit if os.path.isfile(explicit) else None\n            ), cleaned",
+        old="        if explicit:\n            return (\n                explicit if Path(explicit).is_file() else None\n            ), cleaned",
         new="        if explicit:\n            return explicit, cleaned",
     ),
     Mutation(
@@ -458,7 +476,7 @@ MUTATIONS: list[Mutation] = [
         test_file="tests/shared/test_property_tools.py",
         label="resolve: drop env-var fallback (only flag + PATH consulted)",
         fn_name="_resolve_binary",
-        old='        env_override = os.environ.get(self.env_var, "").strip()\n        if env_override:\n            return (\n                env_override if os.path.isfile(env_override) else None\n            ), cleaned',
+        old='        env_override = os.environ.get(self.env_var, "").strip()\n        if env_override:\n            return (\n                env_override if Path(env_override).is_file() else None\n            ), cleaned',
         new='        env_override = ""\n        if env_override:\n            return None, cleaned',
     ),
     # ── _substitute_tenant (_grar_merge) ─────────────────────────
@@ -576,8 +594,8 @@ MUTATIONS: list[Mutation] = [
         test_file="tests/shared/test_property_tools.py",
         label="parse_build_sh: skip basename (full paths leak through)",
         fn_name="parse_build_sh_tools",
-        old="                if name:\n                    tools.add(os.path.basename(name))",
-        new="                if name:\n                    tools.add(name)",
+        old="    return {os.path.basename(p) for p in parse_build_sh_tool_paths(path)}",
+        new="    return {p for p in parse_build_sh_tool_paths(path)}",
     ),
     Mutation(
         target_file="scripts/tools/lint/_lint_helpers.py",
@@ -683,8 +701,8 @@ MUTATIONS: list[Mutation] = [
         test_file="tests/shared/test_property_tools.py",
         label="tenant_keys: drop dimensional-key resolution ({labels} keys warn)",
         fn_name="validate_tenant_keys",
-        old='        if "{" in key:\n            base = key.split("{")[0]\n            if base in defaults_keys:\n                continue',
-        new='        if False:\n            base = ""\n            if base in defaults_keys:\n                continue',
+        old='        if "{" in key:\n            base = key.split("{")[0]\n            if base in defaults_keys:\n                # ADR-024 OQ-6: validate any `version` dimensional label.\n                warnings.extend(_validate_version_label(tenant, key, base))\n                continue',
+        new='        if False:\n            base = ""\n            if base in defaults_keys:\n                warnings.extend(_validate_version_label(tenant, key, base))\n                continue',
     ),
 ]
 
@@ -708,6 +726,16 @@ def main() -> int:
     args = parser.parse_args()
 
     selected = [m for m in MUTATIONS if not args.target or args.target in m.fn_name]
+    if not selected:
+        # A typo'd --target used to yield "0/0 caught" + rc 0 — a silent
+        # no-op that looks green. Make it a hard, explained error instead.
+        print(
+            f"ERROR: --target {args.target!r} matched no mutation fn_name "
+            f"(catalog has {len(MUTATIONS)} mutations; check the spelling "
+            f"against MUTATIONS[].fn_name)",
+            file=sys.stderr,
+        )
+        return 2
     print(f"Running {len(selected)} mutations\n")
 
     results: list[tuple[Mutation, str]] = []
@@ -719,30 +747,67 @@ def main() -> int:
         try:
             m.apply()
         except ValueError as e:
+            # Catalog rot (old_string drifted from source) — record AND print
+            # per-item, so a rotted entry is visible in the run log instead of
+            # being silently skipped (pre-2026-07 fail-open behavior).
             results.append((m, f"SETUP-FAIL: {e}"))
-            continue
-
-        try:
-            rc, tail = run_tests(m.test_file)
-            verdict = "CAUGHT" if rc != 0 else "SURVIVED"
-            results.append((m, f"{verdict} (rc={rc}) :: {tail[:160]}"))
-        finally:
-            m.revert(original)
+        else:
+            try:
+                rc, tail = run_tests(m.test_file)
+                if rc == 0:
+                    results.append((m, f"SURVIVED (rc=0) :: {tail[:160]}"))
+                elif rc == 1:
+                    results.append((m, f"CAUGHT (rc=1) :: {tail[:160]}"))
+                else:
+                    # pytest rc 2/4/5 = interrupted / usage error / no tests
+                    # collected — the kill suite never actually ran, so this
+                    # is NOT a kill. Bin it with SETUP-FAIL (stale test_file
+                    # is the same catalog-rot class as a stale old_string);
+                    # counting it as CAUGHT produced years-long fake kills
+                    # for entries pointing at a deleted test file.
+                    results.append((m, (
+                        f"SETUP-FAIL: test runner rc={rc} — kill suite did "
+                        f"not run (stale test_file? collection/usage error) "
+                        f":: {tail[:160]}"
+                    )))
+            finally:
+                m.revert(original)
 
         print(f"[{i:2d}/{len(selected)}] {m.fn_name}: {m.label[:60]}")
         print(f"      → {results[-1][1]}\n")
 
     # Summary
     caught = sum(1 for _, v in results if v.startswith("CAUGHT"))
-    survived = sum(1 for _, v in results if v.startswith("SURVIVED"))
-    setup_fail = sum(1 for _, v in results if v.startswith("SETUP-FAIL"))
-    print(f"\n=== SUMMARY: {caught}/{len(results)} caught, {survived} survived, {setup_fail} setup-failures ===\n")
+    survivors = [(m, v) for m, v in results if v.startswith("SURVIVED")]
+    equivalent = [(m, v) for m, v in survivors if m.known_equivalent]
+    new_survivors = [(m, v) for m, v in survivors if not m.known_equivalent]
+    setup_fails = [(m, v) for m, v in results if v.startswith("SETUP-FAIL")]
+    print(
+        f"\n=== SUMMARY: {caught}/{len(results)} caught, "
+        f"{len(survivors)} survived "
+        f"({len(equivalent)} known-equivalent, {len(new_survivors)} NEW), "
+        f"{len(setup_fails)} setup-failures ===\n"
+    )
 
-    if survived:
-        print("SURVIVING MUTATIONS (test gaps):")
-        for m, v in results:
-            if v.startswith("SURVIVED"):
-                print(f"  - {m.fn_name}: {m.label}")
+    if equivalent:
+        print("KNOWN-EQUIVALENT SURVIVORS (documented noise bin, not failures):")
+        for m, _ in equivalent:
+            print(f"  - {m.fn_name}: {m.label}")
+    if new_survivors:
+        print("NEW SURVIVING MUTATIONS (real test gaps — close the gap or "
+              "document equivalence via known_equivalent=True):")
+        for m, _ in new_survivors:
+            print(f"  - {m.fn_name}: {m.label}")
+    if setup_fails:
+        print("SETUP FAILURES (catalog rot — re-anchor the entry's old=/new= "
+              "to the current source, or re-point a stale test reference):")
+        for m, v in setup_fails:
+            print(f"  - {m.fn_name}: {m.label}\n      {v}")
+
+    # Exit contract (actionable-red): non-zero ONLY on a real signal — a NEW
+    # (non-equivalent) survivor or catalog rot. Known equivalents keep the
+    # nightly green so red always deserves investigation.
+    if new_survivors or setup_fails:
         return 1
     return 0
 

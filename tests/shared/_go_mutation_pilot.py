@@ -92,6 +92,10 @@ class Mutation:
     old: str                # exact string to find
     new: str                # replacement
     fn_name: str            # which target function
+    # True = documented equivalent mutation (survives by construction, no
+    # behavioral test can kill it without overspecifying the impl). Known
+    # equivalents do NOT fail the run — see main()'s exit contract.
+    known_equivalent: bool = False
 
     def apply(self) -> None:
         path = GO_APP_DIR / self.target_file
@@ -172,6 +176,9 @@ MUTATIONS: list[Mutation] = [
         fn_name="parseHHMM",
         old="s = strings.TrimSpace(s)\n\tparts := strings.SplitN(s, \":\", 2)",
         new="parts := strings.SplitN(s, \":\", 2)",
+        # Inner strings.TrimSpace(parts[i]) already trims each token, so the
+        # outer TrimSpace is redundant for any whitespace-padded input.
+        known_equivalent=True,
     ),
     # ── matchTimeWindow (parse.go) ───────────────────────────────────
     Mutation(
@@ -296,6 +303,16 @@ def main() -> int:
     args = parser.parse_args()
 
     selected = [m for m in MUTATIONS if not args.target or args.target in m.fn_name]
+    if not selected:
+        # A typo'd --target used to yield "0/0 caught" + rc 0 — a silent
+        # no-op that looks green. Make it a hard, explained error instead.
+        print(
+            f"ERROR: --target {args.target!r} matched no mutation fn_name "
+            f"(catalog has {len(MUTATIONS)} mutations; check the spelling "
+            f"against MUTATIONS[].fn_name)",
+            file=sys.stderr,
+        )
+        return 2
     print(f"Running {len(selected)} Go mutations from {GO_APP_DIR}\n")
 
     results: list[tuple[Mutation, str]] = []
@@ -307,33 +324,68 @@ def main() -> int:
         try:
             m.apply()
         except ValueError as e:
+            # Catalog rot (old_string drifted from source) — record AND print
+            # per-item, so a rotted entry is visible in the run log instead of
+            # being silently skipped (pre-2026-07 fail-open behavior).
             results.append((m, f"SETUP-FAIL: {e}"))
-            continue
-
-        try:
-            rc, tail = run_tests(m.test_target)
-            verdict = "CAUGHT" if rc != 0 else "SURVIVED"
-            results.append((m, f"{verdict} (rc={rc}) :: {tail[:160]}"))
-        finally:
-            m.revert(original)
+        else:
+            try:
+                rc, tail = run_tests(m.test_target)
+                if rc == 0:
+                    results.append((m, f"SURVIVED (rc=0) :: {tail[:160]}"))
+                elif rc == 1:
+                    results.append((m, f"CAUGHT (rc=1) :: {tail[:160]}"))
+                else:
+                    # `go test` rc other than 0/1 (e.g. 2) = the runner
+                    # itself failed — bad package selector, toolchain error —
+                    # so the kill suite never ran. Bin with SETUP-FAIL, same
+                    # catalog-rot class as a stale old_string. (A mutation
+                    # that merely breaks compilation still exits 1 and stays
+                    # a "caught for the wrong reason" case — see the
+                    # deepMerge recursive-merge mutation's note.)
+                    results.append((m, (
+                        f"SETUP-FAIL: test runner rc={rc} — kill suite did "
+                        f"not run (stale test_target? toolchain error) "
+                        f":: {tail[:160]}"
+                    )))
+            finally:
+                m.revert(original)
 
         print(f"[{i:2d}/{len(selected)}] {m.fn_name}: {m.label[:60]}")
         print(f"      → {results[-1][1]}\n")
 
     # Summary
     caught = sum(1 for _, v in results if v.startswith("CAUGHT"))
-    survived = sum(1 for _, v in results if v.startswith("SURVIVED"))
-    setup_fail = sum(1 for _, v in results if v.startswith("SETUP-FAIL"))
+    survivors = [(m, v) for m, v in results if v.startswith("SURVIVED")]
+    equivalent = [(m, v) for m, v in survivors if m.known_equivalent]
+    new_survivors = [(m, v) for m, v in survivors if not m.known_equivalent]
+    setup_fails = [(m, v) for m, v in results if v.startswith("SETUP-FAIL")]
     print(
         f"\n=== SUMMARY: {caught}/{len(results)} caught, "
-        f"{survived} survived, {setup_fail} setup-failures ===\n"
+        f"{len(survivors)} survived "
+        f"({len(equivalent)} known-equivalent, {len(new_survivors)} NEW), "
+        f"{len(setup_fails)} setup-failures ===\n"
     )
 
-    if survived:
-        print("SURVIVING MUTATIONS (test gaps):")
-        for m, v in results:
-            if v.startswith("SURVIVED"):
-                print(f"  - {m.fn_name}: {m.label}")
+    if equivalent:
+        print("KNOWN-EQUIVALENT SURVIVORS (documented noise bin, not failures):")
+        for m, _ in equivalent:
+            print(f"  - {m.fn_name}: {m.label}")
+    if new_survivors:
+        print("NEW SURVIVING MUTATIONS (real test gaps — close the gap or "
+              "document equivalence via known_equivalent=True):")
+        for m, _ in new_survivors:
+            print(f"  - {m.fn_name}: {m.label}")
+    if setup_fails:
+        print("SETUP FAILURES (catalog rot — re-anchor the entry's old=/new= "
+              "to the current source, or re-point a stale test reference):")
+        for m, v in setup_fails:
+            print(f"  - {m.fn_name}: {m.label}\n      {v}")
+
+    # Exit contract (actionable-red): non-zero ONLY on a real signal — a NEW
+    # (non-equivalent) survivor or catalog rot. Known equivalents keep the
+    # nightly green so red always deserves investigation.
+    if new_survivors or setup_fails:
         return 1
     return 0
 
