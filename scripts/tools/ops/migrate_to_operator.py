@@ -713,6 +713,136 @@ def generate_migration(
     return result
 
 
+def plan_stdout(
+    *,
+    checklist_only: bool,
+    dry_run: bool,
+    json_mode: bool,
+    result: dict,
+    checklist: str,
+    namespace: str,
+    source_dir: Path,
+    config_dir: Path,
+) -> List[str]:
+    """Pure decision table for the (checklist_only × dry_run × json) matrix.
+
+    Returns the exact sequence of text chunks main() must emit to stdout, in
+    order; each chunk carries its own newlines, so the caller's only job is
+    ``print(chunk, end="")``.  Zero I/O happens here — the whole 8-combo
+    output matrix is decided in this one function, so any future regression
+    in mode precedence shows up at the unit level instead of only in
+    subprocess gates.
+
+    This matrix bit twice in one PR cycle (#1112 / CodeRabbit); both
+    historical fixes are explicit branches below:
+
+    * **bug 1** — ``--checklist-only`` MUST win over ``--dry-run``.  The old
+      guard ``if checklist_only and not dry_run:`` let the combination fall
+      through to the dry-run branch and serve an (empty) CRD preview with NO
+      ``checklist`` field at all — valid JSON, so the stdout-contract gate
+      stayed green while the caller silently got the wrong payload.
+      ``--checklist-only`` already implies "write nothing", so the narrower
+      no-op flag must not override the one that selects the payload.
+
+    * **bug 2** — in ``--checklist-only --dry-run --json`` the summary used
+      to be suppressed by the "dry-run + json already printed its one
+      document" rule, leaving stdout EMPTY while ``--json`` was asked for.
+      The checklist envelope IS that run's one document, so the suppression
+      only applies to the pure dry-run preview (see the summary condition).
+
+    Args:
+        checklist_only: ``--checklist-only`` flag
+        dry_run: ``--dry-run`` flag
+        json_mode: ``--json`` flag
+        result: migration result dict (from generate_migration(), or the
+            analysis dict with forced-empty CRD lists in checklist-only mode)
+        checklist: pre-rendered migration checklist markdown
+        namespace: target namespace (dry-run JSON preview metadata)
+        source_dir: resolved source dir (dry-run JSON preview metadata)
+        config_dir: resolved config dir (dry-run JSON preview metadata)
+
+    Returns:
+        List of text chunks to write to stdout, in order.
+    """
+    docs: List[str] = []
+
+    # ── Mode payload ────────────────────────────────────────────────────
+    # bug 1 (#1112, CodeRabbit): `--checklist-only` outranks `--dry-run` —
+    # this `if/elif` ORDER is the fix. Do not reorder.
+    if checklist_only:
+        if not json_mode:
+            docs.append(checklist + "\n")
+        # JSON mode: the checklist rides INSIDE the summary envelope below —
+        # stdout must stay exactly ONE JSON document.
+    elif dry_run:
+        if json_mode:
+            output_obj = {
+                "metadata": {
+                    "timestamp": result.get("timestamp"),
+                    "namespace": namespace,
+                    "source_dir": str(source_dir),
+                    "config_dir": str(config_dir),
+                    "configmap_files": result.get("configmap_files", 0),
+                    "rule_groups": result.get("rule_group_count", 0),
+                    "tenants": result.get("tenants", 0),
+                },
+                "prometheus_rules": [item["crd"] for item in result.get("prometheus_rules", [])],
+                "alertmanager_configs": [item["crd"] for item in result.get("alertmanager_configs", [])],
+                "errors": result.get("errors", []),
+            }
+            docs.append(format_json_report(output_obj) + "\n")
+        else:
+            docs.append("# MIGRATION CHECKLIST\n")
+            docs.append(checklist + "\n")
+            docs.append("\n# CRD PREVIEW\n\n")
+            all_crds = [item["crd"] for item in result["prometheus_rules"]]
+            all_crds += [item["crd"] for item in result["alertmanager_configs"]]
+            if yaml:
+                for i, crd in enumerate(all_crds):
+                    if i > 0:
+                        docs.append("---\n")
+                    docs.append(yaml.dump(crd, default_flow_style=False, allow_unicode=True))
+            else:
+                for crd in all_crds:
+                    docs.append(_dict_to_yaml(crd) + "\n")
+                    docs.append("---\n")
+    # else: write mode — CRDs + checklist go to files and progress lines go
+    # to stderr (both are main()'s job); stdout carries only the JSON summary
+    # below (text mode: nothing).
+
+    # ── Summary document ────────────────────────────────────────────────
+    # The human-readable "✓ ..." summary goes to stderr and stays in main();
+    # only the JSON summary is a stdout document.
+    #
+    # bug 2 (#1112, CodeRabbit): in dry-run JSON the CRD-preview above is
+    # already the ONE document stdout may carry — EXCEPT when checklist_only
+    # also holds: then no preview was emitted and the checklist envelope IS
+    # this run's one document, so suppressing it would leave stdout empty
+    # while `--json` was asked for. Hence `or checklist_only`.
+    if json_mode and (not dry_run or checklist_only):
+        total_crds = len(result["prometheus_rules"]) + len(result["alertmanager_configs"])
+        summary = {
+            "configmap_files": result.get("configmap_files", 0),
+            "rule_groups": result.get("rule_group_count", 0),
+            "tenants": result.get("tenants", 0),
+            "prometheus_rules": len(result["prometheus_rules"]),
+            "alertmanager_configs": len(result["alertmanager_configs"]),
+            "total_crds": total_crds,
+        }
+        if checklist_only:
+            # #1112: stdout must be exactly ONE JSON document. The checklist
+            # is the whole point of --checklist-only, so it is carried INSIDE
+            # the summary document (as a string) rather than dumped as raw
+            # Markdown next to it — no information is lost from stdout, and
+            # the summary keys stay exactly where a consumer already expects
+            # them.
+            summary["status"] = "checklist_only"
+            summary["checklist"] = checklist
+        docs.append(format_json_report(summary) + "\n")
+
+    return docs
+
+
 def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -824,68 +954,13 @@ def main():
             secret_key=args.secret_key,
         )
 
-    # Write or print output
-    checklist_for_json = None
-    # #1112 (CodeRabbit): `--checklist-only` MUST win over `--dry-run`.
-    # The old guard was `if args.checklist_only and not args.dry_run:`, so the
-    # combination `--checklist-only --dry-run` fell through to the dry-run
-    # branch and served an (empty) CRD preview with NO `checklist` field at all
-    # — valid JSON, so the stdout-contract gate stayed green, but the caller
-    # asked for a checklist and silently got something else. `--checklist-only`
-    # already implies "write nothing" (it skips generate_migration and forces
-    # the CRD lists empty), so `--dry-run` adds nothing on top of it: the
-    # narrower, no-op flag must not override the one that selects the payload.
-    if args.checklist_only:
-        checklist = build_migration_checklist(source_dir, config_dir, output_dir, result)
-        if args.json:
-            # #1112: stdout must be exactly ONE JSON document. The checklist is
-            # the whole point of --checklist-only, so it is carried INSIDE the
-            # summary document (as a string) rather than dumped as raw Markdown
-            # next to it — no information is lost from stdout, and the summary
-            # keys stay exactly where a consumer already expects them.
-            checklist_for_json = checklist
-        else:
-            print(checklist)
-    elif args.dry_run:
-        # Print to stdout
-        if args.json:
-            output_obj = {
-                "metadata": {
-                    "timestamp": result.get("timestamp"),
-                    "namespace": args.namespace,
-                    "source_dir": str(source_dir),
-                    "config_dir": str(config_dir),
-                    "configmap_files": result.get("configmap_files", 0),
-                    "rule_groups": result.get("rule_group_count", 0),
-                    "tenants": result.get("tenants", 0),
-                },
-                "prometheus_rules": [item["crd"] for item in result.get("prometheus_rules", [])],
-                "alertmanager_configs": [item["crd"] for item in result.get("alertmanager_configs", [])],
-                "errors": result.get("errors", []),
-            }
-            print(format_json_report(output_obj))
-        else:
-            checklist = build_migration_checklist(source_dir, config_dir, output_dir, result)
-            print("# MIGRATION CHECKLIST", file=sys.stdout)
-            print(checklist, file=sys.stdout)
-            print("\n# CRD PREVIEW\n", file=sys.stdout)
-            all_crds = []
-            for item in result["prometheus_rules"]:
-                all_crds.append(item["crd"])
-            for item in result["alertmanager_configs"]:
-                all_crds.append(item["crd"])
+    # The checklist is rendered once here (pure string) and reused by both the
+    # write-mode file and whatever stdout documents plan_stdout() selects.
+    checklist = build_migration_checklist(source_dir, config_dir, output_dir, result)
 
-            if yaml:
-                for i, crd in enumerate(all_crds):
-                    if i > 0:
-                        print("---")
-                    print(yaml.dump(crd, default_flow_style=False, allow_unicode=True), end="")
-            else:
-                for crd in all_crds:
-                    print(_dict_to_yaml(crd))
-                    print("---")
-    else:
-        # Write files
+    # Write mode: the only branch with filesystem side effects. Progress lines
+    # go to stderr (existing convention); stdout is decided below.
+    if not args.checklist_only and not args.dry_run:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Write CRD files
@@ -904,48 +979,46 @@ def main():
             print(f"Generated: {output_path}", file=sys.stderr)
 
         # Write checklist
-        checklist = build_migration_checklist(source_dir, config_dir, output_dir, result)
         checklist_path = output_dir / "MIGRATION-CHECKLIST.md"
         write_text_secure(str(checklist_path), checklist)
         print(f"Generated: {checklist_path}", file=sys.stderr)
 
-    # Summary (only for non-dry-run or non-JSON output)
-    total_crds = len(result["prometheus_rules"]) + len(result["alertmanager_configs"])
-    summary = {
-        "configmap_files": result.get("configmap_files", 0),
-        "rule_groups": result.get("rule_group_count", 0),
-        "tenants": result.get("tenants", 0),
-        "prometheus_rules": len(result["prometheus_rules"]),
-        "alertmanager_configs": len(result["alertmanager_configs"]),
-        "total_crds": total_crds,
-    }
+    # stdout: the whole 8-combo (checklist_only × dry_run × json) matrix is
+    # decided in plan_stdout() — main() only prints. See plan_stdout() for the
+    # two historical matrix bugs (#1112) whose fixes live there as explicit
+    # branches.
+    for doc in plan_stdout(
+        checklist_only=args.checklist_only,
+        dry_run=args.dry_run,
+        json_mode=args.json,
+        result=result,
+        checklist=checklist,
+        namespace=args.namespace,
+        source_dir=source_dir,
+        config_dir=config_dir,
+    ):
+        print(doc, end="")
 
-    # Only print summary if not JSON + dry-run (in that case the CRD-preview
-    # document above is the ONE document stdout is allowed to carry).
-    # `or checklist_for_json is not None` (#1112, CodeRabbit): in
-    # `--checklist-only --dry-run --json` no preview was printed above — the
-    # checklist summary IS this run's one document, so suppressing it here
-    # would leave stdout empty while `--json` was asked for.
-    if not (args.dry_run and args.json) or checklist_for_json is not None:
-        if args.json:
-            if checklist_for_json is not None:
-                summary["status"] = "checklist_only"
-                summary["checklist"] = checklist_for_json
-            print(format_json_report(summary))
-        else:
-            print(
-                i18n_text(
-                    f"\n✓ 遷移分析完成: {result.get('configmap_files', 0)} 個 ConfigMap → "
-                    f"{total_crds} 個 CRD ({summary['prometheus_rules']} PrometheusRules + "
-                    f"{summary['alertmanager_configs']} AlertmanagerConfigs，"
-                    f"{summary['tenants']} 個租戶)",
-                    f"\n✓ Migration analysis complete: {result.get('configmap_files', 0)} ConfigMaps → "
-                    f"{total_crds} CRDs ({summary['prometheus_rules']} PrometheusRules + "
-                    f"{summary['alertmanager_configs']} AlertmanagerConfigs, "
-                    f"{summary['tenants']} tenants)",
-                ),
-                file=sys.stderr,
-            )
+    # Human-readable summary → stderr, in every non-JSON mode (the JSON
+    # summary, when one is due, is a stdout document owned by plan_stdout()).
+    if not args.json:
+        pr_count = len(result["prometheus_rules"])
+        ac_count = len(result["alertmanager_configs"])
+        total_crds = pr_count + ac_count
+        tenants = result.get("tenants", 0)
+        print(
+            i18n_text(
+                f"\n✓ 遷移分析完成: {result.get('configmap_files', 0)} 個 ConfigMap → "
+                f"{total_crds} 個 CRD ({pr_count} PrometheusRules + "
+                f"{ac_count} AlertmanagerConfigs，"
+                f"{tenants} 個租戶)",
+                f"\n✓ Migration analysis complete: {result.get('configmap_files', 0)} ConfigMaps → "
+                f"{total_crds} CRDs ({pr_count} PrometheusRules + "
+                f"{ac_count} AlertmanagerConfigs, "
+                f"{tenants} tenants)",
+            ),
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":
