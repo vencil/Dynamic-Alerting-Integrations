@@ -202,12 +202,16 @@ jobs:
           python-version: "3.13"
       - run: pip install pyyaml
 
-      # Schema validation + routing validation + webhook domain allowlist
+      # Schema validation + routing validation + webhook domain allowlist.
+      # --strict (ADR-007): domain-policy violations are BLOCKING here —
+      # without it check_domain_policies() only ever emitted WARN and a
+      # violating config sailed through this required check.
       - name: Validate alertmanager routes
         run: |
           python scripts/tools/ops/generate_alertmanager_routes.py \
             --config-dir components/threshold-exporter/config/conf.d/ \
             --validate \
+            --strict \
             --policy .github/custom-rule-policy.yaml
 
       # Render the GitOps ConfigMap and validate it with Alertmanager's OWN

@@ -246,7 +246,7 @@ domain_policies:
       max_repeat_interval: 1h
 ```
 
-驗證指令：`da-tools generate-routes --config-dir conf.d/ --validate`（routing profile 引用 + domain policy 約束都在這支裡跑）。偵錯指令：`da-tools explain-route --config-dir conf.d/ --tenant <tenant-id>`。JSON Schema 可在 VS Code 中啟用即時驗證（見 `docs/schemas/`）。
+驗證指令：`da-tools generate-routes --config-dir conf.d/ --validate`（routing profile 引用 + domain policy 約束都在這支裡跑；預設違規只出 WARN，加 `--strict` 轉 ERROR 並 exit 非零——CI 的 validate-config job 跑 `--validate --strict`，domain policy 違規為 blocking）。偵錯指令：`da-tools explain-route --config-dir conf.d/ --tenant <tenant-id>`。JSON Schema 可在 VS Code 中啟用即時驗證（見 `docs/schemas/`）。
 
 ### 設定 Webhook Domain Allowlist
 

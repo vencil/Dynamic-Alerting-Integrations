@@ -278,7 +278,7 @@ _routing:
   webhook_url: https://hooks.slack.com/services/xxx
 ```
 
-重跑驗證 — 應該會看到 domain policy 警告：`finance` domain 禁止使用 `slack`。
+重跑驗證 — 應該會看到 domain policy 警告：`finance` domain 禁止使用 `slack`。加上 `--strict` 則警告升級為 ERROR 並以非零 exit code 失敗（CI 即以 `--validate --strict` 把這類違規擋在 merge 之前）。
 
 這就是 Policy-as-Code 的執行效果。
 

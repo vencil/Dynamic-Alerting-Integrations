@@ -46,6 +46,7 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "PLATFORM_DEFAULTS",
     ),
     "_grar_validate": (
+        "POLICY_ERROR_PREFIX",  # ADR-007 --strict blocking-prefix SSOT
         "_extract_host",
         "_validate_profile_refs",
         "assert_watchdog_inhibit_immunity",

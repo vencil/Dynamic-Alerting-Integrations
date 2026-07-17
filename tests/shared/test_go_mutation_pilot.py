@@ -60,7 +60,7 @@ class TestCatalog:
 
     def test_target_files_exist(self):
         for m in _pilot.MUTATIONS:
-            path = _pilot.GO_APP_DIR / m.target_file
+            path = m.module_dir() / m.target_file
             assert path.is_file(), (
                 f"target file {m.target_file} not found "
                 f"(referenced by mutation {m.label})"
@@ -84,12 +84,15 @@ class TestOldStringsExist:
 
     @pytest.fixture(scope="class")
     def file_contents(self):
-        # Pre-load each unique target file once.
-        cache: dict[str, str] = {}
+        # Pre-load each unique target file once. The cache key is
+        # (module, target_file) because the same relative path can exist in
+        # more than one module (both go modules have their own trees).
+        cache: dict[tuple[str, str], str] = {}
         for m in _pilot.MUTATIONS:
-            path = _pilot.GO_APP_DIR / m.target_file
-            if m.target_file not in cache:
-                cache[m.target_file] = path.read_text(encoding="utf-8")
+            key = (m.module, m.target_file)
+            if key not in cache:
+                path = m.module_dir() / m.target_file
+                cache[key] = path.read_text(encoding="utf-8")
         return cache
 
     @pytest.mark.parametrize(
@@ -98,7 +101,7 @@ class TestOldStringsExist:
         ids=[f"{m.fn_name}: {m.label[:40]}" for m in _pilot.MUTATIONS],
     )
     def test_old_string_present_and_unique(self, mutation, file_contents):
-        src = file_contents[mutation.target_file]
+        src = file_contents[(mutation.module, mutation.target_file)]
         count = src.count(mutation.old)
         assert count == 1, (
             f"old_string for {mutation.label!r} appears {count} times "
@@ -118,7 +121,7 @@ class TestApplyRevertRoundTrip:
         # Pick the first mutation (any will do — they all use the same
         # apply/revert plumbing).
         m = _pilot.MUTATIONS[0]
-        path = _pilot.GO_APP_DIR / m.target_file
+        path = m.module_dir() / m.target_file
         original = path.read_bytes()
 
         with open(path, encoding="utf-8", newline="") as f:
@@ -150,11 +153,12 @@ class TestReachableFunctions:
         ids=[f"{m.fn_name}: {m.label[:40]}" for m in _pilot.MUTATIONS],
     )
     def test_fn_name_findable_in_source(self, mutation):
-        path = _pilot.GO_APP_DIR / mutation.target_file
+        path = mutation.module_dir() / mutation.target_file
         src = path.read_text(encoding="utf-8")
         # Match either bare `func <name>(...)` or `func (recv) <name>(...)`.
-        # The pilot targets are all standalone funcs in pkg/config so the
-        # bare form is sufficient.
+        # Every pilot target is a standalone func (pkg/config primitives and
+        # the tenant-api rbac/identity/token pure functions), so the bare form
+        # is sufficient — methods would need the `func (recv) name(` form.
         marker = f"func {mutation.fn_name}("
         assert marker in src, (
             f"could not find {marker!r} in {mutation.target_file}. "

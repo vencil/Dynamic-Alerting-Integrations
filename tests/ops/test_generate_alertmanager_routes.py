@@ -1847,3 +1847,177 @@ class TestDomainPolicies:
             repeat_warns = [w for w in warnings if "repeat_interval" in w]
             assert len(slack_warns) >= 1
             assert len(repeat_warns) >= 1
+
+
+# ============================================================
+# ADR-007 --strict: violation message contract (unit level)
+# ============================================================
+class TestDomainPolicyStrictMessages:
+    """strict=True 訊息契約：含實際值 vs 域限制 + 修法提示；非 strict 訊息不變。"""
+
+    _ROUTING = {
+        "tenant-fin": {
+            "receiver": {"type": "slack", "api_url": "https://hooks.slack.com/x"},
+            "group_by": ["alertname"],
+            "group_wait": "5s",
+            "repeat_interval": "24h",
+        }
+    }
+    _POLICIES = {
+        "finance": {
+            "tenants": ["tenant-fin"],
+            "constraints": {
+                "forbidden_receiver_types": ["slack"],
+                "allowed_receiver_types": ["email", "pagerduty"],
+                "enforce_group_by": ["tenant", "alertname"],
+                "max_repeat_interval": "1h",
+                "min_group_wait": "30s",
+            },
+        }
+    }
+
+    def test_strict_messages_carry_fix_hint(self):
+        """strict 下每條違規都帶修法提示。"""
+        msgs = check_domain_policies(self._ROUTING, self._POLICIES, strict=True)
+        assert len(msgs) == 5
+        assert all(m.lstrip().startswith("ERROR:") for m in msgs)
+        assert all("fix:" in m for m in msgs)
+        # 每條都含 tenant + constraint 上下文
+        assert all("tenant-fin" in m and "finance" in m for m in msgs)
+
+    def test_strict_messages_show_actual_vs_limit(self):
+        """strict 訊息含實際值 vs 域限制。"""
+        msgs = check_domain_policies(self._ROUTING, self._POLICIES, strict=True)
+        joined = "\n".join(msgs)
+        # repeat_interval: 實際 24h vs 上限 1h
+        assert "'24h' exceeds max '1h'" in joined
+        # group_wait: 實際 5s vs 下限 30s
+        assert "'5s' below minimum '30s'" in joined
+        # group_by: 缺 tenant，並提示 policy 要求集合
+        assert "['tenant']" in joined
+        # receiver: 實際 slack vs forbidden/allowed 集合
+        assert "'slack' is forbidden" in joined
+        assert "['email', 'pagerduty']" in joined
+
+    def test_nonstrict_messages_unchanged(self):
+        """非 strict 訊息維持既有格式（無 fix 提示、WARN 前綴）——向後相容。"""
+        msgs = check_domain_policies(self._ROUTING, self._POLICIES)
+        assert len(msgs) == 5
+        assert all(m.lstrip().startswith("WARN:") for m in msgs)
+        assert all("fix:" not in m for m in msgs)
+
+
+# ============================================================
+# ADR-007 --strict: CLI-level exit-code contract
+# ============================================================
+class TestStrictValidateCLI:
+    """generate_alertmanager_routes.py --validate [--strict] CLI 契約。
+
+    strict 下 domain-policy 違規 exit 1（EXIT_VIOLATION）、合規 exit 0；
+    非 strict 行為完全不變（違規仍 WARN + exit 0）。
+    """
+
+    _SCRIPT = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "scripts", "tools", "ops", "generate_alertmanager_routes.py")
+
+    @staticmethod
+    def _write_confd(d, constraints, routing_defaults=None):
+        """建一個含 domain policy 的最小 conf.d。"""
+        defaults = routing_defaults or {
+            "receiver": {"type": "slack",
+                         "api_url": "https://hooks.slack.com/services/T/B/X"},
+            "group_by": ["alertname"],
+            "group_wait": "5s",
+            "repeat_interval": "24h",
+        }
+        _wy(d, "_defaults.yaml", {
+            "defaults": {"cpu": 80},
+            "_routing_defaults": defaults,
+        })
+        _wy(d, "_domain_policy.yaml", {
+            "domain_policies": {
+                "finance": {
+                    "tenants": ["tenant-fin"],
+                    "constraints": constraints,
+                }
+            }
+        })
+        _wy(d, "tenant-fin.yaml", {"tenants": {"tenant-fin": {"cpu": "90"}}})
+
+    def _run(self, config_dir, *extra_flags):
+        import subprocess
+        return subprocess.run(
+            [sys.executable, self._SCRIPT, "--config-dir", config_dir,
+             "--dry-run", *extra_flags],
+            capture_output=True, text=True, encoding="utf-8", timeout=60)
+
+    def test_nonstrict_validate_exit0_on_violation(self):
+        """向後相容：非 strict 下違規只 WARN，--validate 仍 exit 0。"""
+        with tempfile.TemporaryDirectory() as d:
+            self._write_confd(d, {"forbidden_receiver_types": ["slack"]})
+            result = self._run(d, "--validate")
+            assert result.returncode == 0, result.stderr
+            assert "WARN" in result.stderr
+            assert "ERROR" not in result.stderr
+            assert "OK: all configs valid" in result.stdout
+
+    def test_strict_validate_exit1_on_violation(self):
+        """strict 下違規變 ERROR 且 --validate exit 1。"""
+        with tempfile.TemporaryDirectory() as d:
+            self._write_confd(d, {"forbidden_receiver_types": ["slack"]})
+            result = self._run(d, "--validate", "--strict")
+            assert result.returncode == 1, result.stdout + result.stderr
+            assert "ERROR" in result.stderr
+            assert "fix:" in result.stderr
+            assert "FAIL" in result.stderr
+
+    def test_strict_validate_exit0_when_compliant(self):
+        """strict 下全 constraint 合規 exit 0。"""
+        with tempfile.TemporaryDirectory() as d:
+            self._write_confd(
+                d,
+                {
+                    "allowed_receiver_types": ["email"],
+                    "forbidden_receiver_types": ["slack", "webhook"],
+                    "enforce_group_by": ["tenant", "alertname"],
+                    "max_repeat_interval": "1h",
+                    "min_group_wait": "30s",
+                },
+                routing_defaults={
+                    "receiver": {"type": "email", "to": ["oncall@example.com"],
+                                 "from": "alerting@example.com",
+                                 "smarthost": "smtp.example.com:587"},
+                    "group_by": ["tenant", "alertname"],
+                    "group_wait": "30s",
+                    "repeat_interval": "30m",
+                })
+            result = self._run(d, "--validate", "--strict")
+            assert result.returncode == 0, result.stdout + result.stderr
+            assert "OK: all configs valid" in result.stdout
+
+    def test_strict_render_mode_aborts_on_violation(self):
+        """strict 不限 --validate：render 模式下違規也報錯終止（ADR-007）。"""
+        with tempfile.TemporaryDirectory() as d:
+            self._write_confd(d, {"forbidden_receiver_types": ["slack"]})
+            result = self._run(d, "--strict")
+            assert result.returncode == 1, result.stdout + result.stderr
+            assert "FAIL" in result.stderr
+
+    @pytest.mark.parametrize("constraints,expect", [
+        ({"forbidden_receiver_types": ["slack"]}, "is forbidden"),
+        ({"allowed_receiver_types": ["email", "pagerduty"]},
+         "not in allowed types"),
+        ({"enforce_group_by": ["tenant", "alertname"]},
+         "group_by missing required labels"),
+        ({"max_repeat_interval": "1h"}, "exceeds max"),
+        ({"min_group_wait": "30s"}, "below minimum"),
+    ], ids=["forbidden-type", "allowed-type", "enforce-group-by",
+            "max-repeat-interval", "min-group-wait"])
+    def test_strict_each_constraint_blocks(self, constraints, expect):
+        """三類 constraint（receiver types / group_by / 時序×2）各自可擋。"""
+        with tempfile.TemporaryDirectory() as d:
+            self._write_confd(d, constraints)
+            result = self._run(d, "--validate", "--strict")
+            assert result.returncode == 1, result.stdout + result.stderr
+            assert expect in result.stderr

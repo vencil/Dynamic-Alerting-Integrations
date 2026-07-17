@@ -86,6 +86,10 @@ _HELP = {
     'policy_dsl': {
         'zh': '獨立 Policy-as-Code DSL 檔案路徑（頂層 policies: key）',
         'en': 'Path to standalone Policy-as-Code DSL file (top-level policies: key)'
+    },
+    'strict': {
+        'zh': 'domain policy（ADR-007）違規由 WARN 升級為 FAIL（與 CI 的 generate-routes --strict 對齊）',
+        'en': 'Escalate domain-policy (ADR-007) violations from WARN to FAIL (matches CI generate-routes --strict)'
     }
 }
 
@@ -150,16 +154,26 @@ def check_yaml_syntax(config_dir: str) -> dict[str, object]:
 # ============================================================
 # Check 2: Schema validation
 # ============================================================
-def check_schema(config_dir: str) -> dict[str, object]:
-    """Validate tenant config keys against known defaults and reserved keys."""
+def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
+    """Validate tenant config keys against known defaults and reserved keys.
+
+    With strict=True, domain-policy (ADR-007) violations are escalated to
+    blocking ERROR lines by load_tenant_configs and reported as FAIL here —
+    matching `generate_alertmanager_routes.py --validate --strict` (CI).
+    """
     # Import generate_alertmanager_routes in-process
     tools_dir = os.path.dirname(os.path.abspath(__file__))
     if tools_dir not in sys.path:
         sys.path.insert(0, tools_dir)
     import generate_alertmanager_routes as gen
 
-    _routing, _dedup, schema_warnings, _er, _mc = gen.load_tenant_configs(config_dir)
+    _routing, _dedup, schema_warnings, _er, _mc = gen.load_tenant_configs(
+        config_dir, strict_policies=strict)
 
+    policy_errors = [w for w in schema_warnings
+                     if w.lstrip().startswith(gen.POLICY_ERROR_PREFIX)]
+    if policy_errors:
+        return _make_result("schema", FAIL, schema_warnings)
     if schema_warnings:
         return _make_result("schema", WARN, schema_warnings)
     return _make_result("schema", PASS, ["No schema warnings"])
@@ -594,6 +608,8 @@ def main() -> None:
                         help=_h('json'))
     parser.add_argument("--policy-dsl",
                         help=_h('policy_dsl'))
+    parser.add_argument("--strict", action="store_true",
+                        help=_h('strict'))
     args = parser.parse_args()
 
     if not os.path.isdir(args.config_dir):
@@ -611,8 +627,8 @@ def main() -> None:
     # 1. YAML syntax
     results.append(check_yaml_syntax(args.config_dir))
 
-    # 2. Schema validation
-    results.append(check_schema(args.config_dir))
+    # 2. Schema validation (--strict: domain-policy violations → FAIL)
+    results.append(check_schema(args.config_dir, strict=args.strict))
 
     # 3. Route validation
     results.append(check_routes(args.config_dir, args.policy))
