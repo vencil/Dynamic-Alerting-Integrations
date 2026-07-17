@@ -30,6 +30,12 @@ func TestValidateTenantID(t *testing.T) {
 		{".hidden", true},
 		{".git", true},
 
+		// Reserved control-file prefix (scanner skips "_" files)
+		{"_domain_policy", true},
+		{"_rbac", true},
+		{"_defaults", true},
+		{"_", true},
+
 		// filepath.Base mismatch
 		{".", true},
 	}

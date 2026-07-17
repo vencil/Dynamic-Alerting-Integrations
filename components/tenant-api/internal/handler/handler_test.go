@@ -708,6 +708,25 @@ func TestPutTenant_InvalidID(t *testing.T) {
 	}
 }
 
+func TestPutTenant_ReservedControlFileID(t *testing.T) {
+	t.Parallel()
+	// "_"-prefixed ids map onto scanner-reserved control files; a writable
+	// "_domain_policy" would overwrite conf.d/_domain_policy.yaml and blank
+	// out the domain policy gate.
+	configDir := setupConfigDir(t, nil)
+	gw := newTestWriter(configDir)
+
+	h := PutTenant(&Deps{Writer: gw, Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect})
+	body := bytes.NewBufferString("tenants:\n  _domain_policy:\n    x: \"1\"\n")
+	req := newRequestWithChiParam("PUT", "/api/v1/tenants/_domain_policy", "id", "_domain_policy", body)
+	w := httptest.NewRecorder()
+	h(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("PutTenant() status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
 func TestPutTenant_EmptyID(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
