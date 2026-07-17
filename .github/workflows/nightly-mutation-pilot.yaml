@@ -24,10 +24,13 @@ name: Nightly Mutation Pilot
 #   - Python:  67 / 70 mutations caught (~96%), 0 setup-failures;
 #              3 known equivalent-mutation survivors (full suite re-run
 #              2026-07-16)
-#   - Go:      14 / 15 mutations caught (~93%); 1 known equivalent survivor
-#              (derived: catalog statically re-verified 2026-07-16 — all 15
-#              old_strings anchor; score from the #348/#349 run history, not
-#              a fresh full run)
+#   - Go:      29 / 30 mutations caught (~97%); 1 known equivalent survivor
+#              (the exporter parseHHMM outer-TrimSpace entry). Two modules:
+#              15 exporter (threshold-exporter/app/pkg/config; 14 caught +
+#              1 known-equivalent, from #348/#349 run history) + 15 tenant-api
+#              (internal/rbac + federation/token RBAC/identity core; all 15
+#              caught, 施打-verified in Dev Container 2026-07-16, ROI refactor
+#              round 4). Every tenant-api entry models a fail-open bug class.
 # These are the BASELINE — drift below this should prompt investigation.
 # Catalog rot (old_string no longer matching refactored source) is caught
 # at PR time by tests/shared/test_mutation_catalog.py, not just here.

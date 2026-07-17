@@ -27,7 +27,9 @@ catalog — the one that actually rotted — gets identical coverage.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -63,7 +65,10 @@ _CASES = [
     for m in _py_pilot.MUTATIONS
 ] + [
     pytest.param(
-        _go_pilot.GO_APP_DIR, m,
+        # Go mutations now span two modules (exporter, tenant-api); the base
+        # dir for target_file resolution is the mutation's own module_dir, not
+        # a single hard-coded GO_APP_DIR.
+        m.module_dir(), m,
         id=f"go::{m.fn_name}::{m.label[:48]}",
     )
     for m in _go_pilot.MUTATIONS
@@ -126,10 +131,11 @@ class TestKillTargetsExist:
       - Python: test_file is a space-separated list of pytest paths —
         assert every token is an existing FILE.
       - Go: test_target is a `go test` package selector (`./...`,
-        `./pkg/config/...`), not a file — assert the selector's base
-        DIRECTORY exists under GO_APP_DIR (filesystem level only; which
-        packages the pattern expands to is go-toolchain territory that
-        a static Python test can't see).
+        `./pkg/config/...`, `./internal/rbac/...`), not a file — assert the
+        selector's base DIRECTORY exists under the mutation's module root
+        (module_dir: exporter vs tenant-api), filesystem level only; which
+        packages the pattern expands to is go-toolchain territory that a
+        static Python test can't see.
     """
 
     @pytest.mark.parametrize(
@@ -160,10 +166,106 @@ class TestKillTargetsExist:
         if base.endswith("..."):
             base = base[:-3]
         base = base.rstrip("/")
-        target_dir = _go_pilot.GO_APP_DIR / base if base else _go_pilot.GO_APP_DIR
+        # Selector is resolved from the mutation's module root (module_dir),
+        # not a single hard-coded GO_APP_DIR — tenant-api entries live in a
+        # different Go module than the exporter entries.
+        module_dir = mutation.module_dir()
+        target_dir = module_dir / base if base else module_dir
         assert target_dir.is_dir(), (
             f"test_target {selector!r} (mutation {mutation.label!r}) points "
             f"at a non-existent directory {target_dir} — `go test` would "
             "fail with a matched-no-packages error instead of running the "
             "kill suite."
+        )
+
+
+def _go_selector_dir(mutation) -> tuple:
+    """Resolve a Go mutation's test_target selector to (dir, recursive)."""
+    base = mutation.test_target[2:]  # strip "./" (shape asserted elsewhere)
+    recursive = base.endswith("...")
+    if recursive:
+        base = base[:-3]
+    base = base.rstrip("/")
+    module_dir = mutation.module_dir()
+    return (module_dir / base if base else module_dir), recursive
+
+
+_KILL_TEST_CASES = [
+    pytest.param(
+        "py", m, id=f"py::{m.fn_name}::{m.kill_test}",
+    )
+    for m in _py_pilot.MUTATIONS if m.kill_test
+] + [
+    pytest.param(
+        "go", m, id=f"go::{m.fn_name}::{m.kill_test}",
+    )
+    for m in _go_pilot.MUTATIONS if m.kill_test
+]
+
+
+class TestKillTestNamesAnchored:
+    """Third catalog-rot half: the NAMED kill-test attribution.
+
+    A mutation's ``kill_test`` names the test observed red when the entry
+    was injection-verified — the rot-triage handle ("this survivor/rot maps
+    to THAT test"). Unlike ``old`` (whose drift breaks apply()) and
+    ``test_target`` (whose drift breaks the runner), a renamed kill test
+    keeps the nightly GREEN while the attribution silently rots into a
+    dangling name. This lane pins it statically: a non-None kill_test must
+    exist as a test definition within the entry's kill scope —
+
+      - Python: a (sync or async) function DEFINITION named <name> in one of
+        the mutation's test_file files, collected via ast — not a substring
+        scan, so a name that survives only inside a comment/docstring cannot
+        satisfy the gate;
+      - Go: a line-anchored ``^func <name>(`` definition in a *_test.go under
+        the test_target selector's directory (recursive for ``...``
+        selectors). Line-anchoring rejects the same comment trick (`// func
+        TestX(` never starts a line at column 0 in gofmt'ed code; Go test
+        funcs are always top-level).
+
+    kill_test=None entries (historical batches verified at file/package
+    scope without per-test attribution) are exempt by construction — the
+    field's doc comment in each pilot explains when to backfill.
+    """
+
+    @pytest.mark.parametrize("kind,mutation", _KILL_TEST_CASES)
+    def test_kill_test_definition_exists(self, kind, mutation):
+        if kind == "py":
+            files = [_py_pilot.REPO_ROOT / t for t in mutation.test_file.split()]
+
+            def defines(path: Path) -> bool:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                return any(
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == mutation.kill_test
+                    for node in ast.walk(tree)
+                )
+
+            shape = f"def {mutation.kill_test}(...)"
+        else:
+            target_dir, recursive = _go_selector_dir(mutation)
+            glob_pat = "*_test.go"
+            files = sorted(
+                target_dir.rglob(glob_pat) if recursive else target_dir.glob(glob_pat)
+            )
+            # Go tests are package-level funcs; methods never appear as tests.
+            func_re = re.compile(
+                rf"^func {re.escape(mutation.kill_test)}\(", re.MULTILINE
+            )
+
+            def defines(path: Path) -> bool:
+                return bool(func_re.search(path.read_text(encoding="utf-8")))
+
+            shape = f"func {mutation.kill_test}("
+        assert files, (
+            f"kill scope for {mutation.label!r} contains no test files — "
+            "the kill_test attribution cannot be anchored"
+        )
+        assert any(defines(f) for f in files), (
+            f"kill_test {mutation.kill_test!r} (mutation {mutation.label!r}) "
+            f"not found as a real definition ({shape}) in the entry's kill "
+            "scope. The test was renamed/moved — re-point kill_test to the "
+            "surviving name (re-run the injection if unsure which test kills "
+            "it now), so the rot-triage attribution doesn't silently dangle."
         )
