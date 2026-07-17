@@ -35,7 +35,13 @@
 # 搭配的 Alertmanager inhibit_rules:
 #   - source: TenantSilentWarning         → target: severity="warning"
 #   - source: TenantSilentCritical        → target: severity="critical"
-#   - source: TenantSeverityDedupEnabled  → target: severity="warning" (同 metric_group)
+#
+# ⚠ Severity Dedup 不以 sentinel 為 inhibit source：sentinel 表達的是「該 tenant
+# 已啟用 dedup」而非「critical 已觸發」，當不了 dedup 的 source。實際規則是
+# per-tenant 的直接 critical→warning（generate_alertmanager_routes.py 依
+# _severity_dedup 產出，disable 的 tenant 不產規則 → 兩種通知都收到）；
+# TenantSeverityDedupEnabled 僅供 Grafana / AM UI 顯示各 tenant 的 dedup 狀態。
+# 規則範本與行為矩陣見 docs/design/config-driven.md §2.8。
 #
 # === Sentinel Routing (#1095) ===
 # Sentinel 是 inhibit source + AM UI/Grafana 狀態面，不是通知。但它帶 tenant

@@ -9,7 +9,9 @@ compile the example fixture → a temp pack → run `promtool test rules` agains
 
 Coverage: fire / no-version main path / version fallback / maintenance suppress
 / selector filtering / ratio division-by-zero / absence scope-isolation /
-p99 quantile / forecast (the 6 recipe goldens under fixtures/custom_alerts_promtool/).
+p99 quantile / forecast / eq-match / mode routing / slo burn-rate tiers (one
+golden per fixture file under fixtures/custom_alerts_promtool/ — all 7 recipes
+plus the equals/mode_routing behavioral goldens).
 
 Skips cleanly when promtool is absent (e.g. a CI job without it); runs fully in
 the dev container and any promtool-equipped environment.
@@ -63,7 +65,7 @@ def test_promtool_golden(golden, compiled_pack):
 
 def test_goldens_present():
     """Guard against an empty glob silently passing (echo-chamber)."""
-    assert len(_GOLDENS) == 8, f"expected 8 goldens (6 recipes + equals + mode_routing), found {[p.name for p in _GOLDENS]}"
+    assert len(_GOLDENS) == 9, f"expected 9 goldens (7 recipes + equals + mode_routing), found {[p.name for p in _GOLDENS]}"
 
 
 def test_adversarial_selector_value_compiles_to_valid_promql(tmp_path, compiled_pack):

@@ -101,6 +101,31 @@
       "_note": "#1008/F3 S2b: {region:x_1} flattens to the SAME s_region_x_1 — MUST differ from S2a (proves the hash is over the structured tuple, not the flat join)",
       "input": {"recipe": "threshold", "metric": "m", "op": ">", "window": "5m", "selectors": {"region": "x_1"}},
       "recipe_id": "threshold__m__s_region_x_1__gt__w5m__for1m__x90759469cc8214ce"
+    },
+    {
+      "_note": "slo_burn_rate (ADR-031), no selector: fixed op slot `gt`, NO window slot (burn windows are recipe semantics), `den_` slot = denominator_metric, then the NEW `minev{N}` slot (min_events, ALWAYS emitted — the default 10 is materialised so a later default change can never silently re-slug), then `for`. objective is REQUIRED for validation but NEVER enters the slug.",
+      "input": {"recipe": "slo_burn_rate", "metric": "http_requests_errors_total", "denominator_metric": "http_requests_total", "objective": "99.9"},
+      "recipe_id": "slo_burn_rate__http_requests_errors_total__gt__den_http_requests_total__minev10__for1m"
+    },
+    {
+      "_note": "slo_burn_rate with a selector: the standard #1008/F3 `__x{hash}` suffix applies; the hash's window field is EMPTY for slo (like forecast) and min_events is NOT a hash field (charset-bounded, already visible in the slug).",
+      "input": {"recipe": "slo_burn_rate", "metric": "http_requests_errors_total", "denominator_metric": "http_requests_total", "objective": "99.9", "selectors": {"service": "checkout"}},
+      "recipe_id": "slo_burn_rate__http_requests_errors_total__s_service_checkout__gt__den_http_requests_total__minev10__for1m__xd512941b7bfc99dd"
+    },
+    {
+      "_note": "slo_burn_rate with a non-default min_events: minev IS a shape component (the compiler writes the literal into the rule text; slow tier = ×6) → distinct slug from the minev10 twin above.",
+      "input": {"recipe": "slo_burn_rate", "metric": "http_requests_errors_total", "denominator_metric": "http_requests_total", "objective": "99.9", "min_events": 25},
+      "recipe_id": "slo_burn_rate__http_requests_errors_total__gt__den_http_requests_total__minev25__for1m"
+    },
+    {
+      "_note": "slo_burn_rate with a non-default for: the standard TRK-326 `for` slot follows minev.",
+      "input": {"recipe": "slo_burn_rate", "metric": "http_requests_errors_total", "denominator_metric": "http_requests_total", "objective": "99.9", "for": "5m"},
+      "recipe_id": "slo_burn_rate__http_requests_errors_total__gt__den_http_requests_total__minev10__for5m"
+    },
+    {
+      "_note": "slo_burn_rate: objective and slo_period are NOT shape components — a different objective + the 28d period yields a slug BYTE-IDENTICAL to the minev10/for1m vector above (editing them never re-slugs; the values ride the data plane via user_threshold).",
+      "input": {"recipe": "slo_burn_rate", "metric": "http_requests_errors_total", "denominator_metric": "http_requests_total", "objective": "95", "slo_period": "28d"},
+      "recipe_id": "slo_burn_rate__http_requests_errors_total__gt__den_http_requests_total__minev10__for1m"
     }
   ]
 }

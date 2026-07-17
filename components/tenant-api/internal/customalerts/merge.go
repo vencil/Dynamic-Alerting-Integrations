@@ -89,6 +89,7 @@ func MergeCustomAlerts(rawYAML, tenantID string, recipes []map[string]any) (stri
 var recipeFieldOrder = []string{
 	"recipe", "name", "metric", "denominator_metric", "capacity_metric",
 	"op", "window", "horizon", "quantile", "threshold",
+	"objective", "slo_period", "min_events",
 	"selectors", "selectors_re", "mode", "for",
 }
 
@@ -143,36 +144,56 @@ func valueNode(v any) *yaml.Node {
 	return &n
 }
 
-// QuantileStringViolations rejects any recipe whose `quantile` arrives as a
+// stringTypedContractFields are the recipe fields whose TEXT enters the
+// cross-language Go↔Python contract and therefore MUST arrive as JSON strings
+// (schema type: string): quantile (#1017, enters the recipe_id slug) and
+// objective (ADR-031, parsed independently by the Go resolver and the Python
+// compiler). The map value is the example quoted in the violation message.
+var stringTypedContractFields = map[string]string{
+	"quantile":  `"0.99"`,
+	"objective": `"99.9"`,
+}
+
+// QuantileStringViolations rejects any recipe whose string-typed contract
+// field (quantile, objective — see stringTypedContractFields) arrives as a
 // non-string JSON value (number/bool/null) — one violation per offending
-// recipe, carrying the same `_custom_alerts[N]` locator prefix the S5
-// validator uses so the portal modal can point at the offending card.
+// field, carrying the same `_custom_alerts[N]` locator prefix the S5
+// validator uses so the portal modal can point at the offending card. (Name
+// kept from the original #1017 quantile-only check; it now covers every
+// string-typed contract field so the handler call site is unchanged.)
 //
-// WHY reject instead of normalise (#1017): the quantile TEXT enters the
-// cross-language recipe_id slug that the Go exporter and the Python compiler
-// compute independently. A JSON number has already lost its authored text
-// (0.990 → float64 → "0.99"), and valueNode would emit it as a BARE YAML
-// scalar — which the two YAML readers can disagree on (PyYAML 1.1 reads a
-// dotless exponent like 95e-2 as a string, yaml.v3 as a float), silently
-// splitting the recipe_id join and muting the alert. The schema is
-// string-only (tenant-config.schema.json), so the write plane fails loud
-// here, symmetric with the conf.d schema CI gate (check_confd_schema.py).
+// WHY reject instead of normalise (#1017): the field TEXT is read
+// independently by the Go exporter and the Python compiler. A JSON number has
+// already lost its authored text (0.990 → float64 → "0.99"), and valueNode
+// would emit it as a BARE YAML scalar — which the two YAML readers can
+// disagree on (PyYAML 1.1 reads a dotless exponent like 95e-2 as a string,
+// yaml.v3 as a float), silently splitting the recipe_id join / the objective
+// lockstep and muting the alert. The schema is string-only
+// (tenant-config.schema.json), so the write plane fails loud here, symmetric
+// with the conf.d schema CI gate (check_confd_schema.py).
 func QuantileStringViolations(recipes []map[string]any) []string {
 	var viol []string
+	fields := make([]string, 0, len(stringTypedContractFields))
+	for f := range stringTypedContractFields {
+		fields = append(fields, f)
+	}
+	sort.Strings(fields) // deterministic violation order
 	for i, r := range recipes {
-		q, present := r["quantile"]
-		if !present {
-			continue
+		for _, field := range fields {
+			v, present := r[field]
+			if !present {
+				continue
+			}
+			if _, ok := v.(string); ok {
+				continue
+			}
+			name, _ := r["name"].(string)
+			viol = append(viol, fmt.Sprintf(
+				"_custom_alerts[%d] (name %q): %s must be a JSON string (e.g. %s), got %T — "+
+					"the %s text enters the cross-language Go/Python contract; a bare number is "+
+					"YAML-dialect-ambiguous and silently breaks the lockstep (#1017)",
+				i, name, field, stringTypedContractFields[field], v, field))
 		}
-		if _, ok := q.(string); ok {
-			continue
-		}
-		name, _ := r["name"].(string)
-		viol = append(viol, fmt.Sprintf(
-			"_custom_alerts[%d] (name %q): quantile must be a JSON string (e.g. \"0.99\"), got %T — "+
-				"the quantile text enters the cross-language recipe_id contract; a bare number is "+
-				"YAML-dialect-ambiguous and silently breaks the Go/Python join (#1017)",
-			i, name, q))
 	}
 	return viol
 }

@@ -6,6 +6,7 @@
     "p99_latency": "active",
     "rate": "active",
     "ratio": "active",
+    "slo_burn_rate": "active",
     "threshold": "active"
   }
 }

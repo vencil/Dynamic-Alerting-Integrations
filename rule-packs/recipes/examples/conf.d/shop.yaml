@@ -121,3 +121,17 @@ tenants:
         threshold: "0.15:warning"
         for: 30m
         group_by: [persistentvolumeclaim]
+
+      # slo_burn_rate (ADR-031): ONE declaration → multi-window burn-rate pair.
+      # `objective` REPLACES `threshold` (severity is fixed by the recipe:
+      # fast burn → critical page, slow burn → warning ticket — this single
+      # declaration counts as 2 toward the own-recipe cap because it IS two
+      # alert rules). The burn windows (1h/5m fast, 6h/30m slow) are recipe
+      # semantics, so there is no `window`. min_events (default 10) guards
+      # low traffic: a 50% error ratio on 2 requests must not page.
+      # objective/slo_period ride the data plane — editing them never re-slugs.
+      - recipe: slo_burn_rate
+        name: checkout_availability
+        metric: checkout_requests_errors_total
+        denominator_metric: checkout_requests_total
+        objective: "99.9"

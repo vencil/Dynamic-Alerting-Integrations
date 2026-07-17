@@ -1,4 +1,4 @@
-"""The 6 core recipe PromQL emitters (ADR-024 Capability B, #741).
+"""The 7 core recipe PromQL emitters (ADR-024 Capability B, #741; ADR-031 slo_burn_rate).
 
 Each recipe compiles to ONE vectorised rule per shape (recipe_id), structured
 exactly like the version-aware pilot (rule-pack-kubernetes.yaml:121-329):
@@ -123,6 +123,116 @@ def _forecast_records(rid: str, metric: str, sel: str, horizon: str,
         {"record": base, "expr": base_inner},
         {"record": f"custom:metric:{rid}", "expr": _norm_version(predict_inner)},
     ]
+
+
+def _slo_burn_records(rid: str, metric: str, sel: str, denom: str) -> List[dict]:
+    """slo_burn_rate metric-side emission (ADR-031 §2): 6 recording rules.
+
+      custom:metric:{rid}:<win>  SLI error ratio per burn window (1h/5m/6h/30m) —
+                                 the ratio-recipe idiom verbatim: by(tenant) only
+                                 (per-tenant aggregate, version-agnostic), and
+                                 `(den > 0)` drops no-traffic windows → empty
+                                 vector, never +Inf.
+      custom:bad:{rid}:<win>     ABSOLUTE bad-event count per short window
+                                 (5m/30m) — the min_events low-traffic guard's
+                                 operand (a 50% ratio on 2 requests must not page).
+
+    NO maintenance `unless` here — measurement is never suppressed (ADR-031
+    guardrail #4): budget burn stays fully recorded in TSDB through a maintenance
+    window; only the CORE (notification promise) is suppressed.
+    """
+    _shape.validate_metric_name(denom, "denominator_metric")
+    records: List[dict] = []
+    for win in ("1h", "5m", "6h", "30m"):
+        inner = (
+            f"sum by(tenant) (rate({metric}{sel}[{win}]))\n"
+            f"  /\n"
+            f"(sum by(tenant) (rate({denom}{sel}[{win}])) > 0)"
+        )
+        records.append({"record": f"custom:metric:{rid}:{win}",
+                        "expr": _norm_version(inner)})
+    for win in ("5m", "30m"):
+        inner = f"sum by(tenant) (increase({metric}{sel}[{win}]))"
+        records.append({"record": f"custom:bad:{rid}:{win}",
+                        "expr": _norm_version(inner)})
+    return records
+
+
+def _slo_core_record(rid: str, sev: str, min_events: int) -> dict:
+    """slo_burn_rate per-severity core (ADR-031 §2): the multi-window AND.
+
+      fast (critical): (ratio:1h > thr) and (ratio:5m > thr) and (bad:5m  > N)
+      slow (warning):  (ratio:6h > thr) and (ratio:30m > thr) and (bad:30m > N*6)
+
+    thr = the EXISTING custom:threshold:{rid}{severity} series — the exporter
+    resolves 14.4×(1−obj) / 6×(1−obj) into user_threshold at resolve time, so
+    the rule text carries ZERO new expression classes: each ratio-vs-threshold
+    comparison is the standard version exact-or-fallback join. Only the FIRST
+    (long-window) comparison carries group_left(name, mode) — `and on(tenant)`
+    keeps left-hand labels, so name/mode ride through from it; the short-window
+    gate joins the same threshold WITHOUT group_left (its labels are discarded).
+    The bad-event floor is a compile-time literal (min_events; slow = ×6, the
+    30m = 5m×6 linear window scaling — deliberately compiler-side, ADR-031 §1).
+    Maintenance `unless` tail per pack convention — the ALERT promise only;
+    the recording layer above stays unsuppressed (measurement never stops).
+    """
+    long_w, short_w, mult = _shape.SLO_BURN_WINDOWS[sev]
+    floor = min_events * mult
+    thr = f'custom:threshold:{rid}{{severity="{sev}"}}'
+    thr_default = f'custom:threshold:{rid}{{version="default", severity="{sev}"}}'
+
+    def _ratio_gate(win: str, carry: bool) -> str:
+        gl = " group_left(name, mode)" if carry else ""
+        return (
+            f'(\n'
+            f'  (\n'
+            f'    custom:metric:{rid}:{win}\n'
+            f'    > on(tenant, version){gl}\n'
+            f'      {thr}\n'
+            f'  )\n'
+            f'  or\n'
+            f'  (\n'
+            f'    (\n'
+            f'      custom:metric:{rid}:{win}\n'
+            f'      unless on(tenant, version)\n'
+            f'        {thr}\n'
+            f'    )\n'
+            f'    > on(tenant){gl}\n'
+            f'      {thr_default}\n'
+            f'  )\n'
+            f')'
+        )
+
+    expr = (
+        f'{_ratio_gate(long_w, True)}\n'
+        f'and on(tenant)\n'
+        f'{_ratio_gate(short_w, False)}\n'
+        f'and on(tenant)\n'
+        f'(custom:bad:{rid}:{short_w} > {floor})\n'
+        f'unless on(tenant)\n'
+        f'(user_state_filter{{filter="maintenance"}} == 1)'
+    )
+    return {"record": f"custom:{rid}:{sev}:core", "expr": expr}
+
+
+def _slo_alert_rule(rid: str, sev: str, metric: str, sel: str, for_: str) -> dict:
+    """slo_burn_rate alert = the standard custom alert + two labels (ADR-031 §2):
+
+      metric_group: "slo_{{ $labels.name }}"  — without it, Severity Dedup's
+          inhibit (source AND target require metric_group=~".+") never matches a
+          custom alert, so fast+slow firing together (major-incident normality)
+          double-notifies. With it, critical inhibits warning through the
+          EXISTING dedup machinery — zero new inhibit rules. `name` is already
+          slug-charset (^[a-z][a-z0-9_]*$) so the templated value needs no
+          sanitising, and both severities of one declaration share the value.
+      slo_burn: "true" — the notification-storm fan-out discriminator (ADR-031
+          guardrail #3; de-prefixed from vibe_slo_burn per OQ-B): lets an
+          infra-outage sentinel inhibit pattern target every SLO alert at once.
+    """
+    rule = _alert_rule(rid, "slo_burn_rate", sev, metric, sel, for_, ">")
+    rule["labels"]["metric_group"] = "slo_{{ $labels.name }}"
+    rule["labels"]["slo_burn"] = "true"
+    return rule
 
 
 def _threshold_record(rid: str, metric: str) -> dict:
@@ -342,6 +452,19 @@ def emit_shape(shape: dict) -> Tuple[List[dict], List[dict]]:
     gb = _shape._normalize_group_by(shape)
 
     recording: List[dict] = [_threshold_record(rid, metric)]
+    if recipe == "slo_burn_rate":
+        # ADR-031: 6 metric-side records (4 SLI ratio windows + 2 bad-event
+        # windows), then a DEDICATED per-severity multi-window core (the generic
+        # single-window core cannot express the AND) and the standard alert +
+        # metric_group/slo_burn labels. severities is always the fixed pair
+        # ["critical", "warning"] (fan-out in loader.py — severity is decided by
+        # the recipe, not a threshold tail).
+        recording.extend(_slo_burn_records(rid, metric, sel, denom))
+        for sev in severities:
+            recording.append(_slo_core_record(rid, sev, int(shape["min_events"])))
+        return recording, [
+            _slo_alert_rule(rid, sev, metric, sel, for_) for sev in severities
+        ]
     if recipe == "forecast":
         # forecast emits TWO metric-side records (base aggregate + predict_linear);
         # the standard _core_record then compares custom:metric {op} threshold.

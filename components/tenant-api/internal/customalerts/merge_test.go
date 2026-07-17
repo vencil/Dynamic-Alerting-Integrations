@@ -211,6 +211,16 @@ func TestQuantileStringViolations(t *testing.T) {
 		{"only the offending recipe flagged, with its index", []map[string]any{
 			{"recipe": "p99_latency", "name": "fine", "quantile": "0.95"},
 			{"recipe": "p99_latency", "name": "oops", "quantile": float64(0.95)}}, 1},
+		// ADR-031: objective joins the string-typed contract fields — same
+		// #1017 class (its text is parsed independently by Go + Python).
+		{"string objective passes", []map[string]any{
+			{"recipe": "slo_burn_rate", "name": "ok", "objective": "99.9"}}, 0},
+		{"JSON number objective rejected", []map[string]any{
+			{"recipe": "slo_burn_rate", "name": "bad", "objective": float64(99.9)}}, 1},
+		{"JSON null objective rejected", []map[string]any{
+			{"recipe": "slo_burn_rate", "name": "null_o", "objective": nil}}, 1},
+		{"number quantile AND number objective on one recipe → both flagged", []map[string]any{
+			{"recipe": "slo_burn_rate", "name": "twice", "quantile": float64(0.5), "objective": float64(99)}}, 2},
 	}
 	for _, c := range cases {
 		got := QuantileStringViolations(c.recipes)
@@ -226,6 +236,13 @@ func TestQuantileStringViolations(t *testing.T) {
 	})
 	if len(viol) != 1 || !strings.Contains(viol[0], "_custom_alerts[1]") || !strings.Contains(viol[0], `"oops"`) {
 		t.Errorf("violation must locate index 1 by name: %v", viol)
+	}
+	// The objective violation must NAME the field (the modal surfaces the text).
+	oviol := QuantileStringViolations([]map[string]any{
+		{"recipe": "slo_burn_rate", "name": "o_bad", "objective": float64(99.9)},
+	})
+	if len(oviol) != 1 || !strings.Contains(oviol[0], `objective must be a JSON string (e.g. "99.9")`) {
+		t.Errorf("objective violation must name the field with its example: %v", oviol)
 	}
 }
 

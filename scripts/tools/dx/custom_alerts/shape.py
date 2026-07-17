@@ -35,6 +35,16 @@ golden vector both implementations assert against).
 recipe_id grammar (parts joined by `__`, each part sanitised to [a-z0-9_]):
     {recipe}__{metric}[__{sorted selector parts}]__{op_slug}__w{window}
              [__q{quantile}][__den_{denominator_metric}]__for{for}
+  slo_burn_rate (ADR-031) has NO window slot (the burn windows 1h/5m/6h/30m are
+  recipe semantics, not tenant params) and a fixed op (gt); its den slot is
+  followed by a `minev{N}` slot (min_events, ALWAYS emitted — default 10 is
+  materialised into the slug; N is a charset-bounded positive integer, so it
+  needs no _shape_hash field):
+    slo_burn_rate__{metric}[__{sorted selector parts}]__gt
+             __den_{denominator_metric}__minev{min_events}__for{for}
+  (`objective` and `slo_period` are NOT shape components: they ride the data
+  plane / only scale the exporter-computed threshold VALUE — never in the slug,
+  the hash, or the rule text. Changing them never re-slugs.)
   selector part (exact):  s_{key}_{value}
   selector part (regex):  sre_{key}_{value}
   op_slug: >→gt  >=→ge  <→lt  <=→le  ==→eq  (absence → "absent")
@@ -117,6 +127,28 @@ ALLOWED_FOR = frozenset({"0s", "1m", "5m", "15m", "30m", "1h"})
 # (compile-time only — see recipes.py). MUST match the schema + Go customAlertHorizonValid.
 ALLOWED_HORIZON = frozenset({"1h", "2h", "4h", "12h", "24h", "48h"})
 
+# Permitted `slo_period` budget windows (ADR-031). NOT a shape component: it
+# only scales the burn-rate multipliers the Go exporter derives at resolve time
+# (30d→14.4/6, 28d→13.44/5.6) — never enters the slug/hash/rule text, so
+# changing the period never re-slugs or forks the rule. Python validates the
+# enum per the ADR-029 dual-side validation duty. MUST match the schema enum +
+# custom_alert.go (Wave 2).
+ALLOWED_SLO_PERIOD = frozenset({"28d", "30d"})
+
+# slo_burn_rate min_events default (ADR-031 OQ-A → 10): the fast-window (5m)
+# bad-event absolute floor. The slow tier's floor is compiler-derived as
+# min_events×6 (30m = 5m×6) — the linear window scaling lives HERE, not in Go.
+SLO_MIN_EVENTS_DEFAULT = 10
+
+# slo_burn_rate burn windows per severity (ADR-031 §2): (long, short, bad-floor
+# multiplier). FIXED recipe semantics — severity is decided by the recipe
+# (fast→critical, slow→warning), a deliberate departure from the threshold
+# value:severity tail, stated in rule-packs/recipes/slo_burn_rate.yaml.
+SLO_BURN_WINDOWS = {
+    "critical": ("1h", "5m", 1),    # fast burn: 1h & 5m ratio + bad:5m > minev
+    "warning": ("6h", "30m", 6),    # slow burn: 6h & 30m ratio + bad:30m > minev*6
+}
+
 # Permitted `group_by` dimensions (ADR-024 §Addendum disk recipes). A disk-fill
 # alert must fire PER PVC — a 99%-full 10GB volume must not be hidden by a 10%-full
 # 500GB one in a `by(tenant)` sum. group_by preserves the named label in the
@@ -125,7 +157,8 @@ ALLOWED_HORIZON = frozenset({"1h", "2h", "4h", "12h", "24h", "48h"})
 # recipe_id slug + shape_signature. MUST match the schema enum + custom_alert.go.
 ALLOWED_GROUP_BY = frozenset({"persistentvolumeclaim"})
 
-RECIPES = ("threshold", "rate", "ratio", "absence", "p99_latency", "forecast")
+RECIPES = ("threshold", "rate", "ratio", "absence", "p99_latency", "forecast",
+           "slo_burn_rate")
 
 # Recipe lifecycle status (ADR-024 §Custom Alerts cost/governance, #741 item #6).
 # A recipe is platform-authored; its status governs whether tenants may keep
@@ -188,7 +221,12 @@ def _shape_hash(inst: dict, nhex: int = 16) -> str:
         recipe,
         str(inst["metric"]),
         "" if recipe == "absence" else str(inst.get("op", ">")),
-        "" if is_forecast else str(inst.get("window", "")),
+        # slo_burn_rate has NO window slot (fixed burn windows are recipe
+        # semantics; a stray authored `window` is ignored — like forecast — so
+        # it must not fork the hash). Existing recipes' field list/order is
+        # UNCHANGED. min_events needs no field here: it is charset-bounded and
+        # always visible in the readable slug (`minev{N}`), so it cannot alias.
+        "" if recipe in ("forecast", "slo_burn_rate") else str(inst.get("window", "")),
         str(inst.get("quantile", "0.99")) if recipe == "p99_latency" else "",
         _normalize_horizon(inst) if is_forecast else "",
         str(den),
@@ -286,6 +324,98 @@ def _normalize_group_by(inst: dict) -> Tuple[str, ...]:
             )
         out.append(label)
     return tuple(sorted(set(out)))
+
+
+def _validate_objective(inst: dict) -> str:
+    """Validate the slo_burn_rate `objective` (ADR-031). REQUIRED — the SLO target
+    percentage in the OPEN interval (0,100): =100 → threshold 0 → always-fire, =0
+    → never-fire, both rejected loudly. "disable" is the existing tri-state
+    opt-out (the declaration still compiles; the exporter simply never emits the
+    user_threshold series). NOT a shape component (never enters slug/hash/rule
+    text — the exporter derives the burn thresholds from it at resolve time), but
+    validated on BOTH sides per ADR-029. Reuses the decimal-only charset shared
+    with quantile so the Go ParseFloat accept-set can never diverge (hex-float /
+    underscore poison-commit class). MUST match custom_alert.go (Wave 2)."""
+    value = inst.get("objective")
+    if value in (None, ""):
+        raise RecipeError(
+            'slo_burn_rate recipe requires `objective` (SLO target percentage in '
+            'the open interval (0,100), e.g. "99.9"; "disable" opts out tri-state)'
+        )
+    if not isinstance(value, str):
+        # STRING-ONLY, enforced by TYPE (never str()-coerced): a bare YAML/JSON
+        # number has already lost its authored text on this side of the
+        # cross-language contract, and str(99.9) would sail through the charset
+        # gate below while the Go side sees dialect-dependent text (the #1017
+        # quantile class). Mirrors custom_alert.go::validateSloObjective's tag check.
+        raise RecipeError(
+            f'objective {value!r} must be a quoted YAML string (e.g. "99.9") — a bare '
+            f"value is YAML-dialect-ambiguous and breaks the Go/Python lockstep "
+            f"(#1017 quantile class)"
+        )
+    v = value
+    if v == "disable":
+        return v
+    if not _QUANTILE_RE.fullmatch(v):
+        raise RecipeError(
+            f'objective {v!r} must be a decimal number in the open interval (0,100) '
+            f'or "disable" (decimal charset only — keeps Go/Python accept-sets in lockstep)'
+        )
+    o = float(v)
+    if not (0.0 < o < 100.0):
+        raise RecipeError(
+            f"objective {v!r} must be in the OPEN interval (0,100): 100 makes the "
+            f"error budget 0 (threshold 0 → always fires), 0 makes it never fire"
+        )
+    return v
+
+
+def _normalize_slo_period(inst: dict) -> str:
+    """Validate + normalize the slo_burn_rate `slo_period` (budget window). Falsy
+    (missing / null / empty) → default "30d". NOT a shape component — it only
+    scales the exporter-computed threshold values (30d→14.4/6, 28d→13.44/5.6), so
+    it never enters the slug/hash/rule text and changing it never re-slugs.
+    Python's duty is the enum check only (ADR-029 dual-side validation)."""
+    value = inst.get("slo_period", "30d")
+    value = "30d" if value in (None, "") else str(value)
+    if value not in ALLOWED_SLO_PERIOD:
+        raise RecipeError(
+            f"slo_period {value!r} must be one of {sorted(ALLOWED_SLO_PERIOD)}"
+        )
+    return value
+
+
+def _normalize_min_events(inst: dict) -> int:
+    """Validate + normalize the slo_burn_rate `min_events` (fast-window bad-event
+    absolute floor, low-traffic false-positive guard). Missing / null → default
+    10 (SLO_MIN_EVENTS_DEFAULT), which IS materialised into the slug (`minev10`)
+    — so a later default change can never silently re-slug existing shapes.
+    Must be a YAML INTEGER >= 1 (schema `type: integer`; integers are not
+    YAML-dialect-ambiguous, unlike floats — see the quantile #1017 note). bool is
+    an int subclass in Python; reject it explicitly (YAML `true` must not slug as
+    minev1). MUST match custom_alert.go (Wave 2)."""
+    value = inst.get("min_events", SLO_MIN_EVENTS_DEFAULT)
+    if value is None:
+        value = SLO_MIN_EVENTS_DEFAULT
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RecipeError(
+            f"min_events {value!r} must be a positive integer (a bare YAML int, "
+            f"not a string/float/bool) — it enters the recipe_id slug as minev{{N}}"
+        )
+    if value < 1:
+        raise RecipeError(
+            f"min_events {value} must be >= 1 (0 would disable the low-traffic "
+            f"guard entirely; use `objective: \"disable\"` to opt out instead)"
+        )
+    if value > 1_000_000:
+        # mirrors the schema `maximum` + custom_alert.go sloMinEventsMax: an
+        # absurd floor silently disables the alert while looking configured,
+        # and the literal enters the rule text.
+        raise RecipeError(
+            f"min_events {value} exceeds the maximum 1000000 (schema maximum; "
+            f"an absurd floor silently disables the alert while looking configured)"
+        )
+    return value
 
 
 def validate_metric_name(metric: str, field: str = "metric") -> None:
@@ -402,6 +532,15 @@ def recipe_id(inst: dict) -> str:
             f"op '==' is only allowed for the threshold recipe (exact match on a "
             f"raw-gauge status/error code, #810); {recipe!r} does not support it"
         )
+    # slo_burn_rate fixes op '>' (a burn RATE exceeding its budget threshold is
+    # the only meaningful direction). An explicit different op is a semantic
+    # error, not a knob — reject loudly rather than silently compile `gt`.
+    # MUST match custom_alert.go (Wave 2).
+    if recipe == "slo_burn_rate" and op != ">":
+        raise RecipeError(
+            f"op {op!r} is not settable for slo_burn_rate (the recipe fixes '>' — "
+            f"burn rate exceeding the objective-derived threshold); omit `op`"
+        )
     if recipe == "absence":
         parts.append("absent")
     else:
@@ -421,6 +560,33 @@ def recipe_id(inst: dict) -> str:
         if cap:
             validate_metric_name(cap, "capacity_metric")
             parts.append("den_" + cap)
+    elif recipe == "slo_burn_rate":
+        # ADR-031: the burn windows (1h/5m fast, 6h/30m slow) are FIXED recipe
+        # semantics — no `w{window}` slot (a stray authored `window` is ignored,
+        # like forecast). `objective` replaces `threshold` (its VALUE rides the
+        # data plane via user_threshold; the exporter derives the per-severity
+        # burn thresholds from it at resolve time) — so `threshold` present is a
+        # declaration error, rejected loudly, and objective/slo_period are
+        # validated here (ADR-029 dual-side duty) but NEVER enter the slug.
+        if "threshold" in inst:
+            raise RecipeError(
+                "slo_burn_rate takes `objective` (SLO target percentage), not "
+                "`threshold` — severity is fixed by the recipe (fast→critical, "
+                "slow→warning), so a value:severity threshold has no meaning here"
+            )
+        _validate_objective(inst)
+        _normalize_slo_period(inst)
+        den = inst.get("denominator_metric")
+        if not den:
+            raise RecipeError(
+                "slo_burn_rate recipe requires `denominator_metric` (the "
+                "TOTAL-events counter; `metric` is the BAD-events counter)"
+            )
+        validate_metric_name(den, "denominator_metric")
+        parts.append("den_" + str(den))
+        # min_events IS a shape component (the compiler writes the literal into
+        # the rule text): always emitted, default 10 materialised — see grammar.
+        parts.append("minev" + str(_normalize_min_events(inst)))
     else:
         window = str(inst.get("window", ""))
         if not _WINDOW_RE.fullmatch(window):
@@ -467,8 +633,11 @@ def recipe_id(inst: dict) -> str:
     #   — then relax this rejection AND thread group_by into _eq_core_record's
     #   `max by(...)`. MUST match custom_alert.go.
     group_by = _normalize_group_by(inst)
-    if group_by and (recipe == "absence" or op == "=="):
-        what = "the absence recipe" if recipe == "absence" else "op '=='"
+    if group_by and (recipe == "absence" or op == "==" or recipe == "slo_burn_rate"):
+        what = ("the absence recipe" if recipe == "absence"
+                else "the slo_burn_rate recipe (the SLI is a per-tenant aggregate "
+                     "by design — a per-dimension SLO is a distinct declaration)"
+                if recipe == "slo_burn_rate" else "op '=='")
         raise RecipeError(
             f"group_by (per-dimension eval) is not supported for {what} — it "
             f"applies only to value-crossing recipes (ADR-024 §Addendum)"
@@ -498,14 +667,16 @@ def shape_signature(inst: dict) -> Tuple:
     the data plane) — see ADR-024 §2b.
     """
     is_forecast = inst["recipe"] == "forecast"
+    is_slo = inst["recipe"] == "slo_burn_rate"
     return (
         inst["recipe"],
         inst["metric"],
-        # den slot: ratio's denominator_metric OR forecast's capacity_metric.
+        # den slot: ratio's/slo's denominator_metric OR forecast's capacity_metric.
         inst.get("capacity_metric") if is_forecast else inst.get("denominator_metric"),
         None if inst["recipe"] == "absence" else inst.get("op", ">"),
-        # forecast has no window (lookback derives from horizon); others do.
-        None if is_forecast else str(inst.get("window", "")),
+        # forecast has no window (lookback derives from horizon); slo_burn_rate
+        # has none either (fixed burn windows are recipe semantics); others do.
+        None if (is_forecast or is_slo) else str(inst.get("window", "")),
         str(inst.get("quantile", "0.99")) if inst["recipe"] == "p99_latency" else None,
         # forecast's horizon is a shaping param (predict-ahead distance).
         _normalize_horizon(inst) if is_forecast else None,
@@ -514,6 +685,10 @@ def shape_signature(inst: dict) -> Tuple:
         _normalize_for(inst),
         # group_by dimensions distinguish per-dimension shapes (ADR-024 §Addendum).
         _normalize_group_by(inst),
+        # slo_burn_rate's min_events is a shape component (the compiler writes
+        # the literal into the rule text); None for every other recipe, so their
+        # signatures stay content-identical (the tuple is in-memory only).
+        _normalize_min_events(inst) if is_slo else None,
     )
 
 
@@ -583,4 +758,5 @@ def known_recipes() -> Dict[str, str]:
         "absence": "a metric is absent over a window (per-tenant, self-scoped)",
         "p99_latency": "histogram p-quantile latency crosses a threshold",
         "forecast": "predict (linear) a gauge/ratio crossing a threshold within a horizon",
+        "slo_burn_rate": "multi-window SLO error-budget burn-rate (fast→critical, slow→warning)",
     }

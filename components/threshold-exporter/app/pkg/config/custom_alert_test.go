@@ -136,7 +136,7 @@ func TestCustomAlert_ListParseSurvivesAndResolves(t *testing.T) {
 	if sv := cfg.Tenants["shop-a"]["_custom_alerts"]; sv.Default == "" {
 		t.Fatal("_custom_alerts did not survive parse (empty Default)")
 	}
-	got, errs := resolveTenantCustomAlerts("shop-a", cfg.Tenants["shop-a"])
+	got, _, errs := resolveTenantCustomAlerts("shop-a", cfg.Tenants["shop-a"])
 	if errs != 0 {
 		t.Fatalf("unexpected parse errors: %d", errs)
 	}
@@ -164,7 +164,7 @@ func TestCustomAlert_ForecastResolves(t *testing.T) {
 	cfg := customAlertsConfig(t, "shop-a",
 		"      - {recipe: forecast, name: disk_low, metric: avail, capacity_metric: cap, "+
 			"op: \"<\", horizon: 4h, threshold: \"0.15:warning\"}\n")
-	got, errs := resolveTenantCustomAlerts("shop-a", cfg.Tenants["shop-a"])
+	got, _, errs := resolveTenantCustomAlerts("shop-a", cfg.Tenants["shop-a"])
 	if errs != 0 || len(got) != 1 {
 		t.Fatalf("forecast ratio resolve: errs=%d resolved=%d", errs, len(got))
 	}
@@ -179,7 +179,7 @@ func TestCustomAlert_ForecastResolves(t *testing.T) {
 func TestCustomAlert_ModeDefaultsToPage(t *testing.T) {
 	cfg := customAlertsConfig(t, "t1",
 		"      - {recipe: threshold, name: q, metric: qd, op: \">\", window: 5m, threshold: \"1:warning\"}\n")
-	got, _ := resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
+	got, _, _ := resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
 	if len(got) != 1 || got[0].CustomLabels["mode"] != "page" {
 		t.Fatalf("expected mode=page default, got %+v", got)
 	}
@@ -190,7 +190,7 @@ func TestCustomAlert_DisableSkipsCleanly(t *testing.T) {
 	// crucially do NOT count it as a parse error (gauge must stay 0).
 	cfg := customAlertsConfig(t, "t1",
 		"      - {recipe: threshold, name: off_alert, metric: m, op: \">\", window: 5m, threshold: \"disable\"}\n")
-	got, errs := resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
+	got, _, errs := resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
 	if errs != 0 {
 		t.Errorf("disable must NOT count as a parse error, got errs=%d", errs)
 	}
@@ -221,7 +221,7 @@ func TestCustomAlert_ValidationNegatives(t *testing.T) {
 	for name, listYAML := range cases {
 		t.Run(name, func(t *testing.T) {
 			cfg := customAlertsConfig(t, "t1", listYAML)
-			got, errs := resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
+			got, _, errs := resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
 			if errs != 1 || len(got) != 0 {
 				t.Errorf("expected 1 error + 0 resolved, got errs=%d resolved=%d", errs, len(got))
 			}
@@ -234,7 +234,7 @@ func TestCustomAlert_ForecastRatioBelowBandResolves(t *testing.T) {
 	// guards the W1 band guard against over-rejecting valid low disk-fill thresholds.
 	listYAML := "      - {recipe: forecast, name: disk, metric: avail, capacity_metric: cap, op: \"<\", horizon: 4h, threshold: \"0.15:warning\"}\n"
 	cfg := customAlertsConfig(t, "t1", listYAML)
-	got, errs := resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
+	got, _, errs := resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
 	if errs != 0 || len(got) != 1 {
 		t.Errorf("expected 0 errors + 1 resolved for a valid ratio forecast, got errs=%d resolved=%d", errs, len(got))
 	}
@@ -247,7 +247,7 @@ func TestCustomAlert_MalformedBlockCounted(t *testing.T) {
 	if err := yaml.Unmarshal([]byte("tenants:\n  t1:\n    _custom_alerts: \"oops not a list\"\n"), &cfg); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	got, errs := resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
+	got, _, errs := resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
 	if errs != 1 || len(got) != 0 {
 		t.Errorf("expected malformed block → 1 error, got errs=%d resolved=%d", errs, len(got))
 	}
@@ -387,5 +387,308 @@ func TestValidationContract_GoldenVectors(t *testing.T) {
 			t.Errorf("validation drift [%s]: Go accepted=%v, contract valid=%v (err=%v)",
 				c.Note, accepted, c.Valid, rerr)
 		}
+	}
+}
+
+// --- slo_burn_rate (ADR-031) ------------------------------------------------
+
+// TestSloBurnRate_FanOut pins the recipe's fixed severity fan-out: ONE
+// declaration resolves to TWO user_threshold rows sharing one recipe_id —
+// critical carries the fast-burn threshold (fastM × budget), warning the
+// slow-burn one (slowM × budget) — for both slo_period variants.
+func TestSloBurnRate_FanOut(t *testing.T) {
+	cases := []struct {
+		name               string
+		extra              string // extra YAML fields on the declaration
+		wantCrit, wantWarn float64
+	}{
+		// expected values = the slo_burn_multiplier_vectors.json 99.9 rows
+		// (30d: 14.4/6 × budget; 28d: 13.44/5.6 × budget).
+		{"default 30d", "", 0.014399999999998414, 0.005999999999999339},
+		{"explicit 28d", ", slo_period: 28d", 0.013439999999998519, 0.005599999999999383},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := customAlertsConfig(t, "t1",
+				"      - {recipe: slo_burn_rate, name: avail, metric: err_total, "+
+					"denominator_metric: req_total, objective: \"99.9\""+tc.extra+"}\n")
+			rows, objs, errs := resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
+			if errs != 0 || len(rows) != 2 {
+				t.Fatalf("expected 0 errors + 2 rows (fan-out), got errs=%d rows=%d", errs, len(rows))
+			}
+			wantRID := "slo_burn_rate__err_total__gt__den_req_total__minev10__for1m"
+			bySev := map[string]ResolvedThreshold{}
+			for _, r := range rows {
+				bySev[r.Severity] = r
+				if r.Component != "custom" || r.Metric != "err_total" {
+					t.Errorf("row %+v: want component=custom metric=err_total", r)
+				}
+				if r.CustomLabels["recipe_id"] != wantRID {
+					t.Errorf("recipe_id = %q, want %q", r.CustomLabels["recipe_id"], wantRID)
+				}
+				if r.CustomLabels["name"] != "avail" || r.CustomLabels["mode"] != "page" {
+					t.Errorf("labels = %v, want name=avail mode=page (default)", r.CustomLabels)
+				}
+			}
+			if bySev["critical"].Value != tc.wantCrit {
+				t.Errorf("critical (fast-burn) value = %v, want %v", bySev["critical"].Value, tc.wantCrit)
+			}
+			if bySev["warning"].Value != tc.wantWarn {
+				t.Errorf("warning (slow-burn) value = %v, want %v", bySev["warning"].Value, tc.wantWarn)
+			}
+			// objective echo for the user_slo_objective gauge: one entry, raw value.
+			if len(objs) != 1 || objs[0].Tenant != "t1" || objs[0].RecipeID != wantRID || objs[0].Objective != 99.9 {
+				t.Errorf("SloObjectives = %+v, want one {t1, %s, 99.9}", objs, wantRID)
+			}
+		})
+	}
+}
+
+// TestSloBurnRate_MultiplierVectors pins resolveSloBurnRate's derived thresholds
+// to the shared lockstep fixture (slo_burn_multiplier_vectors.json) that the
+// Python side re-computes bit-identically — the cross-language guarantee that
+// both implementations turn the same declaration into the same burn thresholds.
+func TestSloBurnRate_MultiplierVectors(t *testing.T) {
+	raw, err := os.ReadFile(findFixture(t, "slo_burn_multiplier_vectors.json"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	var doc struct {
+		Vectors []struct {
+			Period      string  `yaml:"period"`
+			Objective   string  `yaml:"objective"`
+			ThrCritical float64 `yaml:"thr_critical"`
+			ThrWarning  float64 `yaml:"thr_warning"`
+		} `yaml:"vectors"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal fixture: %v", err)
+	}
+	if len(doc.Vectors) < 4 {
+		t.Fatalf("expected >=4 multiplier vectors, got %d (scan undershot)", len(doc.Vectors))
+	}
+	for _, v := range doc.Vectors {
+		spec := CustomAlertSpec{
+			Recipe: "slo_burn_rate", Name: "avail", Metric: "err_total",
+			DenominatorMetric: "req_total",
+			Objective:         taggedScalar{value: v.Objective, tag: "!!str"}, SloPeriod: v.Period,
+		}
+		rows, err := resolveSloBurnRate("t1", spec)
+		if err != nil || len(rows) != 2 {
+			t.Errorf("period=%s objective=%s: err=%v rows=%d, want 2 rows", v.Period, v.Objective, err, len(rows))
+			continue
+		}
+		got := map[string]float64{}
+		for _, r := range rows {
+			got[r.Severity] = r.Value
+		}
+		// exact equality is deliberate: the fixture pins bit-identical float64.
+		if got["critical"] != v.ThrCritical {
+			t.Errorf("period=%s objective=%s: critical = %v, want %v (multiplier drift)",
+				v.Period, v.Objective, got["critical"], v.ThrCritical)
+		}
+		if got["warning"] != v.ThrWarning {
+			t.Errorf("period=%s objective=%s: warning = %v, want %v (multiplier drift)",
+				v.Period, v.Objective, got["warning"], v.ThrWarning)
+		}
+	}
+}
+
+// TestSloBurnRate_ValidationNegatives covers the slo-specific reject set beyond
+// the shared contract fixture. Each entry must drop exactly the one declaration
+// (errs=1, no rows). The `min_events` bool/float/string cases reject via the
+// strictInt deferred tag check at resolve time (never at unmarshal time — a
+// whole-block decode error would silently drop sibling declarations too).
+func TestSloBurnRate_ValidationNegatives(t *testing.T) {
+	base := "recipe: slo_burn_rate, name: avail, metric: err_total, denominator_metric: req_total"
+	cases := map[string]string{
+		"objective 100 (closed top)":    "      - {" + base + ", objective: \"100\"}\n",
+		"objective 0 (closed bottom)":   "      - {" + base + ", objective: \"0\"}\n",
+		"objective missing":             "      - {" + base + "}\n",
+		"objective hex-float charset":   "      - {" + base + ", objective: \"0x1p6\"}\n",
+		"slo_period non-enum":           "      - {" + base + ", objective: \"99.9\", slo_period: 7d}\n",
+		"min_events 0":                  "      - {" + base + ", objective: \"99.9\", min_events: 0}\n",
+		"min_events negative":           "      - {" + base + ", objective: \"99.9\", min_events: -3}\n",
+		"min_events bool (yaml type)":   "      - {" + base + ", objective: \"99.9\", min_events: true}\n",
+		"min_events float (yaml type)":  "      - {" + base + ", objective: \"99.9\", min_events: 2.5}\n",
+		"min_events string (yaml type)": "      - {" + base + ", objective: \"99.9\", min_events: \"10\"}\n",
+		"min_events over maximum":       "      - {" + base + ", objective: \"99.9\", min_events: 1000001}\n",
+		"objective bare number (yaml)":  "      - {" + base + ", objective: 99.9}\n",
+		"for non-enum (slo path)":       "      - {" + base + ", objective: \"99.9\", for: 2h}\n",
+		"explicit non-gt op":            "      - {" + base + ", objective: \"99.9\", op: \"<\"}\n",
+		"threshold present":             "      - {" + base + ", objective: \"99.9\", threshold: \"1:warning\"}\n",
+		"group_by rejected":             "      - {" + base + ", objective: \"99.9\", group_by: [persistentvolumeclaim]}\n",
+		"denominator missing":           "      - {recipe: slo_burn_rate, name: avail, metric: err_total, objective: \"99.9\"}\n",
+		"bad mode":                      "      - {" + base + ", objective: \"99.9\", mode: pager}\n",
+	}
+	for name, listYAML := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := customAlertsConfig(t, "t1", listYAML)
+			rows, objs, errs := resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
+			if errs != 1 || len(rows) != 0 {
+				t.Errorf("expected 1 error + 0 rows, got errs=%d rows=%d", errs, len(rows))
+			}
+			if len(objs) != 0 {
+				t.Errorf("a rejected declaration must emit no objective, got %+v", objs)
+			}
+		})
+	}
+}
+
+// TestSloBurnRate_DisableAndExplicitGtOp: objective:"disable" is the valid
+// tri-state opt-out (no rows, no objective, NOT an error), and an explicit
+// op:">" (the recipe's fixed op) is accepted — only a DIFFERENT op is rejected.
+func TestSloBurnRate_DisableAndExplicitGtOp(t *testing.T) {
+	base := "recipe: slo_burn_rate, name: avail, metric: err_total, denominator_metric: req_total"
+	cfg := customAlertsConfig(t, "t1", "      - {"+base+", objective: \"disable\"}\n")
+	rows, objs, errs := resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
+	if errs != 0 || len(rows) != 0 || len(objs) != 0 {
+		t.Errorf("disable: want clean opt-out (0/0/0), got errs=%d rows=%d objs=%d", errs, len(rows), len(objs))
+	}
+	cfg = customAlertsConfig(t, "t1", "      - {"+base+", objective: \"99.9\", op: \">\"}\n")
+	rows, _, errs = resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
+	if errs != 0 || len(rows) != 2 {
+		t.Errorf("explicit op '>': want accepted fan-out, got errs=%d rows=%d", errs, len(rows))
+	}
+}
+
+// TestSloBurnRate_DeferredTypeErrorKeepsSiblings: a min_events/objective TYPE
+// error is deferred to resolve time (strictInt/taggedScalar capture, validate
+// later), so it drops ONLY its own declaration — the sibling valid declaration
+// still resolves. Previously the *int decode failed the whole
+// []CustomAlertSpec block, silently dropping every other declaration too.
+func TestSloBurnRate_DeferredTypeErrorKeepsSiblings(t *testing.T) {
+	list := "      - {recipe: threshold, name: ok, metric: m, op: \">\", window: 5m, threshold: \"1:warning\"}\n" +
+		"      - {recipe: slo_burn_rate, name: bad, metric: err_total, denominator_metric: req_total, objective: \"99.9\", min_events: 2.5}\n"
+	cfg := customAlertsConfig(t, "t1", list)
+	rows, _, errs := resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
+	if errs != 1 || len(rows) != 1 || rows[0].CustomLabels["name"] != "ok" {
+		t.Errorf("expected sibling to survive a deferred type error (errs=1, 1 row 'ok'), got errs=%d rows=%+v", errs, rows)
+	}
+}
+
+// TestSloBurnRate_MinEventsLeadingZeroOctalParity: `min_events: 010` is YAML
+// 1.1 octal — PyYAML resolves the same text to 8, and the Go side's base-0
+// ParseInt does too, so BOTH slug minev8 (never minev10/minev010). Pinning this
+// keeps the digit-only-raw rule from silently diverging the cross-language slug.
+func TestSloBurnRate_MinEventsLeadingZeroOctalParity(t *testing.T) {
+	cfg := customAlertsConfig(t, "t1",
+		"      - {recipe: slo_burn_rate, name: oct, metric: err_total, denominator_metric: req_total, objective: \"99.9\", min_events: 010}\n")
+	rows, _, errs := resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
+	if errs != 0 || len(rows) != 2 {
+		t.Fatalf("expected octal min_events to resolve (0 errs, 2 rows), got errs=%d rows=%d", errs, len(rows))
+	}
+	if rid := rows[0].CustomLabels["recipe_id"]; !strings.Contains(rid, "__minev8__") {
+		t.Errorf("min_events 010 must slug minev8 (PyYAML 1.1 octal parity), got %q", rid)
+	}
+}
+
+// TestSloBurnRate_MinEventsRawCharsetGate pins the digit-only RAW gate on the
+// direct-spec path (tenant-api preflight structs / the JSON contract fixture).
+// NB the conf.d path can't reach this gate for 0x/0o/underscore forms — the
+// parse.go ScheduledValue passthrough (Decode→Marshal) re-canonicalises them
+// to plain digits first — so this is defense-in-depth for non-passthrough
+// callers, keeping ParseInt(base 0)'s wider accept-set fenced off.
+func TestSloBurnRate_MinEventsRawCharsetGate(t *testing.T) {
+	for _, raw := range []string{"0o10", "0x10", "0b101", "1_000", "-3", "+5"} {
+		me := strictInt{raw: raw, tag: "!!int"}
+		spec := CustomAlertSpec{Recipe: "slo_burn_rate", Name: "avail", Metric: "err_total",
+			DenominatorMetric: "req_total", Objective: taggedScalar{value: "99.9", tag: "!!str"},
+			MinEvents: &me}
+		if _, err := RecipeID(spec); err == nil {
+			t.Errorf("min_events raw %q must be rejected by the digit-only gate", raw)
+		}
+	}
+}
+
+// TestSloBurnRate_MinEventsDefaultSlug: omitted min_events materialises the
+// default into the slug (minev10) — identical to an explicit 10, distinct from 25.
+func TestSloBurnRate_MinEventsDefaultSlug(t *testing.T) {
+	spec := CustomAlertSpec{Recipe: "slo_burn_rate", Name: "avail", Metric: "err_total",
+		DenominatorMetric: "req_total", Objective: taggedScalar{value: "99.9", tag: "!!str"}}
+	idDefault := mustRecipeID(t, spec)
+	ten := strictInt{raw: "10", tag: "!!int"}
+	spec.MinEvents = &ten
+	idTen := mustRecipeID(t, spec)
+	twentyFive := strictInt{raw: "25", tag: "!!int"}
+	spec.MinEvents = &twentyFive
+	id25 := mustRecipeID(t, spec)
+	if idDefault != idTen {
+		t.Errorf("omitted min_events must equal explicit 10: %q vs %q", idDefault, idTen)
+	}
+	if !strings.Contains(idDefault, "__minev10__") {
+		t.Errorf("default slug must carry minev10: %q", idDefault)
+	}
+	if id25 == idTen || !strings.Contains(id25, "__minev25__") {
+		t.Errorf("min_events must be a shape component: %q vs %q", id25, idTen)
+	}
+}
+
+// TestSloBurnRate_ObjectiveGaugeFollowsTruncation pins the ADR-031 gauge/row
+// alignment: when the per-tenant cardinality cap truncates an slo shape's
+// user_threshold rows, its user_slo_objective entry must be dropped too (no
+// gauge for a rule that can never fire). Under the cap, the gauge stays.
+// truncationSortKey orders this tenant's custom rows by metric, so the
+// lexicographically-later slo rows (zzz_*) are the ones cut at limit=1.
+func TestSloBurnRate_ObjectiveGaugeFollowsTruncation(t *testing.T) {
+	list := "      - {recipe: threshold, name: keepme, metric: aaa_metric, op: \">\", window: 5m, threshold: \"1:warning\"}\n" +
+		"      - {recipe: slo_burn_rate, name: avail, metric: zzz_err_total, denominator_metric: zzz_req_total, objective: \"99.9\"}\n"
+
+	cfg := customAlertsConfig(t, "t1", list)
+	cfg.MaxMetricsPerTenant = 1 // 3 rows resolved → keep 1 (the threshold row)
+	resolved, stats := cfg.ResolveAtWithStats(time.Now())
+	if len(resolved) != 1 || resolved[0].CustomLabels["name"] != "keepme" {
+		t.Fatalf("expected truncation to keep only the threshold row, got %+v", resolved)
+	}
+	if len(stats.SloObjectives) != 0 {
+		t.Errorf("truncated slo rows must not publish an objective gauge, got %+v", stats.SloObjectives)
+	}
+
+	cfg = customAlertsConfig(t, "t1", list)
+	cfg.MaxMetricsPerTenant = 3 // everything fits → gauge stays
+	resolved, stats = cfg.ResolveAtWithStats(time.Now())
+	if len(resolved) != 3 {
+		t.Fatalf("expected all 3 rows under the cap, got %d", len(resolved))
+	}
+	if len(stats.SloObjectives) != 1 || stats.SloObjectives[0].Objective != 99.9 {
+		t.Errorf("surviving slo rows must keep their objective gauge, got %+v", stats.SloObjectives)
+	}
+}
+
+// TestValidateTenantCustomAlerts_SloBurnRate: the preflight counts one slo
+// declaration as TWO toward the own-recipe cap (its fixed critical+warning
+// fan-out is two data-plane rows), and two same-shape slo declarations collide
+// on BOTH severities.
+func TestValidateTenantCustomAlerts_SloBurnRate(t *testing.T) {
+	v := func(listYAML string, cap int) []string {
+		cfg := customAlertsConfig(t, "t1", listYAML)
+		return ValidateTenantCustomAlerts("t1", cfg.Tenants["t1"], cap)
+	}
+	slo := "      - {recipe: slo_burn_rate, name: avail, metric: err_total, denominator_metric: req_total, objective: \"99.9\"}\n"
+
+	if got := v(slo, 2); got != nil {
+		t.Errorf("one slo declaration under cap 2 should pass, got %v", got)
+	}
+	// cap 1: the single declaration's fan-out (2 rows) exceeds it
+	if got := v(slo, 1); len(got) == 0 || !strings.Contains(strings.Join(got, ";"), "exceeds the per-tenant cap") {
+		t.Errorf("slo must count as 2 toward the cap (cap=1 → blocked), got %v", got)
+	}
+	// same shape twice (different names, different objectives — objective is NOT
+	// a shape component) → shape+severity collision, flagged for both severities
+	dup := slo + "      - {recipe: slo_burn_rate, name: avail2, metric: err_total, denominator_metric: req_total, objective: \"95\"}\n"
+	got := v(dup, 20)
+	collisions := 0
+	for _, g := range got {
+		if strings.Contains(g, "same shape") {
+			collisions++
+		}
+	}
+	if collisions != 2 {
+		t.Errorf("same-shape slo pair must collide on both severities (want 2 violations), got %v", got)
+	}
+	// disable opt-out: valid + not counted toward the cap
+	disabled := slo + "      - {recipe: slo_burn_rate, name: off, metric: other_err_total, denominator_metric: other_req_total, objective: \"disable\"}\n"
+	if got := v(disabled, 2); got != nil {
+		t.Errorf("disabled slo must be valid and uncounted (cap=2 with 1 active), got %v", got)
 	}
 }

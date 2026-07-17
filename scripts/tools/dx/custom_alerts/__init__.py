@@ -8,6 +8,7 @@ write PromQL (the declarative-only bedrock).
 Modules:
   shape   — recipe_id slug (Go↔Python cross-language contract) + shape grouping
             + strict metric/label validation + safe selector assembly
-  recipes — the 6 core recipe PromQL emitters (threshold/rate/ratio/absence/p99/forecast)
+  recipes — the 7 core recipe PromQL emitters
+            (threshold/rate/ratio/absence/p99/forecast/slo_burn_rate)
   loader  — conf.d tree walk + _custom_alerts inheritance + per-tenant cap count
 """
