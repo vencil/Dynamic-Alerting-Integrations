@@ -24,6 +24,7 @@ import pytest
 _REPO = Path(__file__).resolve().parents[2]
 _DOCKERFILE = _REPO / "components" / "recipe-preview" / "Dockerfile"
 _CI_YML = _REPO / ".github" / "workflows" / "ci.yml"
+_DEVCONTAINER_SH = _REPO / ".devcontainer" / "install-promtool.sh"
 
 
 def _one(pattern: str, text: str, what: str) -> str:
@@ -72,6 +73,37 @@ def test_promtool_amd64_digest_matches_ci() -> None:
     assert df_sha == ci_sha, (
         f"promtool amd64 SHA-256 skew: Dockerfile pins {df_sha} but ci.yml pins "
         f"{ci_sha}. Both download the same prometheus-<ver>.linux-amd64 tarball — "
+        f"the digests MUST match."
+    )
+
+
+def test_devcontainer_promtool_pin_matches_ci() -> None:
+    """Dev-container install script must pin the SAME promtool version+digest as ci.yml.
+
+    Root cause #1134: a hand-installed dev-container promtool 2.53.2 diverged from the
+    CI pin 3.x — Prometheus 3.0's left-open lookback flips boundary-sample semantics, so
+    fixtures verified locally against 2.x failed the pinned CI promtool. The dev-container
+    install is now codified (.devcontainer/install-promtool.sh) and this guard keeps it
+    from silently drifting off the CI pin again.
+    """
+    assert _DEVCONTAINER_SH.is_file(), f"missing {_DEVCONTAINER_SH}"
+    dc = _DEVCONTAINER_SH.read_text(encoding="utf-8")
+    ci = _CI_YML.read_text(encoding="utf-8")
+
+    dc_ver = _one(r"""^PROM_VERSION=["']?([^\s"'#]+)""", dc,
+                  "install-promtool.sh PROM_VERSION")
+    ci_ver = _one(r"""^\s*PROM_VERSION=["']?([^\s"'#]+)""", ci, "ci.yml PROM_VERSION")
+    assert dc_ver == ci_ver, (
+        f"promtool VERSION skew: .devcontainer/install-promtool.sh pins {dc_ver!r} but "
+        f"ci.yml pins {ci_ver!r}. Lookback/verdict semantics are version-bound — bump "
+        f"BOTH together (and refresh the SHA-256)."
+    )
+
+    dc_sha = _one(r"^PROM_SHA256=([0-9a-f]{64})", dc, "install-promtool.sh PROM_SHA256")
+    ci_sha = _one(r"^\s*PROM_SHA256=([0-9a-f]{64})", ci, "ci.yml PROM_SHA256")
+    assert dc_sha == ci_sha, (
+        f"promtool amd64 SHA-256 skew: install-promtool.sh pins {dc_sha} but ci.yml "
+        f"pins {ci_sha}. Both download the same prometheus-<ver>.linux-amd64 tarball — "
         f"the digests MUST match."
     )
 
