@@ -40,8 +40,10 @@
   //      要求 docs/**.md push 前必跑此 lint；缺它就只能等 CI 回報 site-root
   //      vs filesystem path 語意衝突）。PR #375 從踩到的痛中加進來。
   // 2. 安裝 Kind
-  // 3. 建立 Cluster
-  "postCreateCommand": "pip3 install --user pyyaml pytest-benchmark mkdocs-material mkdocs-static-i18n pymdown-extensions && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind",
+  // 3. 安裝 promtool（pinned，與 ci.yml 同版——手裝 2.x vs CI pin 3.x 的
+  //    lookback 語意 skew 燒過 #1134；pin parity 由
+  //    tests/preview/test_promtool_pin_parity.py 顧）
+  "postCreateCommand": "pip3 install --user pyyaml pytest-benchmark mkdocs-material mkdocs-static-i18n pymdown-extensions && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && bash .devcontainer/install-promtool.sh",
 
   "customizations": {
     "vscode": {

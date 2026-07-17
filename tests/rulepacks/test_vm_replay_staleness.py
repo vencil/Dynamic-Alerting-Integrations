@@ -32,8 +32,9 @@ interval grows (measured VM absent() first-fire after a last sample at +300s: 15
 Cases (materialization parity: one logical history -> vmsingle import AND promtool fixture)
   TC2 Staleness    : a gauge stops reporting (end gap). VM resolves the value-alert &
                      fires ``absent()`` ≈1–2 scrape intervals after the last sample (~+360s
-                     at 30s); Prometheus holds ~5m (~+600-660s). => VM ~240-300s EARLIER at
-                     30s (absence sentinels like the ADR-025 watchdog are "noisier" on VM).
+                     at 30s); Prometheus holds ~5m (~+600s — the 3.x left-open lookback
+                     drops the +300s last sample exactly at +600). => VM ~240-270s EARLIER
+                     at 30s (absence sentinels like the ADR-025 watchdog are "noisier" on VM).
                      MITIGATION control: ``absent_over_time(X[5m])`` fires ~+600s on VM too —
                      i.e. a customer who finds ``absent(X)`` too noisy on VM can restore
                      Prometheus-parity by changing the alert syntax (Gemini #968; documented).
@@ -61,6 +62,13 @@ Determinism / faithfulness
 * promtool ``_`` = a MISSING sample (Prometheus 5m lookback carries the last value across
   it) — NOT a stale marker; so a mid-series gap (TC1) and a series that simply ends (TC2)
   are both faithful Prometheus references.
+* The promtool reference fixtures are aligned to **promtool 3.x lookback semantics** (the
+  CI pin — see the nightly workflow's ``PROM_VERSION``): Prometheus 3.0 made the 5m
+  lookback window left-open, so a sample sitting EXACTLY on the window's lower boundary is
+  excluded. TC2's flip therefore lands exactly at +600s (last sample +300s + 5m). On
+  promtool **2.x** the boundary sample is still included → the +600s (10m) expectations
+  are INVERTED (2.x still sees the series at 10m; flip only at +630/+660) — a 2.x run
+  failing TC2's Prometheus-reference assert is EXPECTED version skew, not fixture drift.
 
 Provisioning: needs a real vmsingle at ``$VM_REPLAY_ENDPOINT`` (default
 ``http://localhost:8428``), the ``vmalert`` binary (``$VMALERT`` / PATH / the
@@ -183,8 +191,13 @@ def test_tc2_staleness_resolve_and_absence(tmp_path):
         f"VM ProbeHigh last-firing @+{vm_high[-1]}s > 420 — value-alert held longer than "
         f"the pinned VM staleness band; staleness timing drifted.")
 
-    # Prometheus reference (promtool, 5m lookback): STILL firing high & quiet on absent at
-    # +360 (where VM already flipped) and at +600; flips only by +660.
+    # Prometheus reference (promtool 3.x, 5m LEFT-OPEN lookback): STILL firing high & quiet
+    # on absent at +360 (where VM already flipped) and at +570 (the last pre-flip eval: the
+    # (+270,+570] window still holds the +300s sample); the left-open (+300,+600] window
+    # excludes the boundary sample exactly at +600 -> both alerts flip AT +600 (10m). The
+    # 9m30s/10m pair brackets the flip to one eval step, so no probe beyond 10m is needed
+    # (the state is monotone after the flip — the old 11m probe carried no extra boundary
+    # information once 10m itself asserts the flipped state).
     prom_fix = ("rule_files:\n  - tc2_pr_rules.yml\nevaluation_interval: 30s\n"
                 "tests:\n  - interval: 30s\n    input_series:\n"
                 "      - series: 'probe{instance=\"t\"}'\n        values: '100x10'\n"
@@ -192,10 +205,11 @@ def test_tc2_staleness_resolve_and_absence(tmp_path):
                 "      - eval_time: 6m\n        alertname: ProbeHigh\n"
                 "        exp_alerts:\n          - exp_labels: {instance: \"t\"}\n"
                 "      - eval_time: 6m\n        alertname: ProbeAbsent\n        exp_alerts: []\n"
-                "      - eval_time: 10m\n        alertname: ProbeHigh\n"
+                "      - eval_time: 9m30s\n        alertname: ProbeHigh\n"
                 "        exp_alerts:\n          - exp_labels: {instance: \"t\"}\n"
-                "      - eval_time: 10m\n        alertname: ProbeAbsent\n        exp_alerts: []\n"
-                "      - eval_time: 11m\n        alertname: ProbeAbsent\n"
+                "      - eval_time: 9m30s\n        alertname: ProbeAbsent\n        exp_alerts: []\n"
+                "      - eval_time: 10m\n        alertname: ProbeHigh\n        exp_alerts: []\n"
+                "      - eval_time: 10m\n        alertname: ProbeAbsent\n"
                 "        exp_alerts:\n          - exp_labels: {}\n")
     prom_rules = ("groups:\n  - name: tc2\n    rules:\n"
                   "      - alert: ProbeHigh\n        expr: probe > 80\n        for: 1m\n"
@@ -205,8 +219,10 @@ def test_tc2_staleness_resolve_and_absence(tmp_path):
         f"Prometheus reference drifted — promtool no longer holds the 5m-lookback timeline "
         f"(materialization parity broken?):\n{r.stdout}\n{r.stderr}")
 
-    # The divergence: Prometheus fires absent only by ~+660; VM fired by +{vm_absent[0]}.
-    PROM_ABSENT_FIRE = 660
+    # The divergence: Prometheus fires absent only at +600 (the left-open lookback boundary
+    # pinned by the fixture above); VM fired by +{vm_absent[0]}. Margin holds even at the
+    # loosest VM pin: the band above caps vm_absent[0] at 420, and 600 - 420 >= 180.
+    PROM_ABSENT_FIRE = 600
     assert PROM_ABSENT_FIRE - vm_absent[0] >= 180, (
         f"expected VM absent() to fire >=180s EARLIER than Prometheus at 30s; got VM "
         f"@+{vm_absent[0]}s vs Prometheus ~+{PROM_ABSENT_FIRE}s")
