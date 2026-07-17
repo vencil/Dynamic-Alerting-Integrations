@@ -628,7 +628,7 @@ python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ --apply --yes
 ```
 
-`--validate` 檢查 YAML 合法性 + webhook domain allowlist（exit 0/1，供 CI 消費）。`--apply` 直接合併 fragment 至 Alertmanager ConfigMap 並觸發 reload。產出支援 webhook、email、slack、teams、rocketchat、pagerduty 六種 receiver type。
+`--validate` 檢查 YAML 合法性 + webhook domain allowlist（exit 0/1，供 CI 消費）；搭配 `--strict` 時 domain policy（ADR-007）違規由 WARN 升級為 ERROR 並 fail（CI 跑 `--validate --strict`）。`--apply` 直接合併 fragment 至 Alertmanager ConfigMap 並觸發 reload。產出支援 webhook、email、slack、teams、rocketchat、pagerduty 六種 receiver type。
 
 ### 2.10 Per-rule Routing Overrides
 

@@ -129,7 +129,7 @@ A three-layer model that surfaced during design discussion (Contact Profile → 
 
 ✅ Routing configuration duplication dramatically reduced; N tenants sharing a profile maintain only one copy
 ✅ Team routing changes become atomic operations (modify profile → all referencing tenants automatically updated)
-✅ Domain policies provide machine-verifiable compliance constraints; CI can automatically block violations
+✅ Domain policies provide machine-verifiable compliance constraints; CI automatically blocks violations via `--validate --strict` (blocking since v2.10.0)
 ✅ Fully backward compatible with existing tenants; both profiles and policies are opt-in
 ✅ No conflict with `_routing_enforced` (NOC override) mechanism
 
@@ -262,8 +262,9 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 
 - **v2.1.0** (completed): Four-layer merge pipeline, `check_routing_profiles` lint, `explain_route` debug tool
 - **v2.3.0** (completed): OPA integration — `da-tools opa-evaluate` supports Rego-defined domain policies (routing-compliance, threshold-bounds, naming-convention example policies)
-- **v2.5.0** (completed): Domain Policy enforcement moved from CI-time validation to API-time enforcement (tenant-api 403 responses)
+- **v2.5.0** (completed): receiver-type constraints moved forward to API-time enforcement (tenant-api 403 responses); timing (`max_repeat_interval` / `min_group_wait`) and `enforce_group_by` constraints remain validated at assembly time
 - **v2.6.0** (completed): `generate_alertmanager_routes.py` refactored (21 helpers extracted), `_build_receiver_config()` converted to strategy pattern
+- **v2.10.0** (in development): `--strict` wired into the CLI and CI — assembly-time domain-policy violations escalate from WARN to ERROR and become blocking (`--validate --strict` exits 1; violation messages include actual value vs domain limit + a fix hint)
 
 **Remaining**:
 - Profile inheritance chain (profile extends another profile) — v2.7.0+ candidate

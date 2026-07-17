@@ -286,7 +286,7 @@ _routing:
   webhook_url: https://hooks.slack.com/services/xxx
 ```
 
-Run validation again — you should see a domain policy warning: `finance` domain forbids `slack`.
+Run validation again — you should see a domain policy warning: `finance` domain forbids `slack`. Add `--strict` and the warning escalates to an ERROR with a non-zero exit code (CI runs `--validate --strict`, blocking such violations before merge).
 
 This is the Policy-as-Code enforcement at work.
 

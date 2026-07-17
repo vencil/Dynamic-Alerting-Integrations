@@ -49,6 +49,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 # ── Re-exports from _grar_validate ─────────────────────────────────
 from _grar_validate import (  # noqa: E402, F401
+    POLICY_ERROR_PREFIX,
     _extract_host,
     _validate_profile_refs,
     assert_watchdog_inhibit_immunity,
@@ -114,10 +115,26 @@ from _grar_render import (  # noqa: E402, F401
 # CLI Mode Handlers (--validate, --apply, --output-configmap, default render)
 # ============================================================
 
+def _policy_errors(all_warnings: list[str]) -> list[str]:
+    """Extract blocking domain-policy ERROR lines (ADR-007 --strict).
+
+    Only the strict domain-policy paths (check_domain_policies(strict=True)
+    plus the fail-open closures in load_tenant_configs) emit
+    POLICY_ERROR_PREFIX lines into the warning stream; everything else
+    there is WARN-prefixed (pinned by TestPolicyErrorPrefixPin).
+    """
+    return [w for w in all_warnings
+            if w.lstrip().startswith(POLICY_ERROR_PREFIX)]
+
+
 def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
                    all_warnings: list[str]) -> None:
     """Handle --validate mode: check for errors and exit."""
+    # Legacy fail category: config entries that were skipped as unusable.
     errors = [w for w in all_warnings if "WARN" in w and "skipping" in w]
+    # ADR-007 --strict: domain-policy violations escalated to ERROR are
+    # blocking. (Without --strict these surface as WARN and never fail.)
+    errors.extend(_policy_errors(all_warnings))
     # ADR-025 D1 regression tripwire: a generated inhibit rule must never target
     # the Watchdog heartbeat. (The full base+generated set is enforced fail-closed
     # at the render paths; this catches a generator-side regression early.)
@@ -246,6 +263,10 @@ def main() -> None:
                         help="Preview output without writing file")
     parser.add_argument("--validate", action="store_true",
                         help="Validate generated config (exit 0 if valid, 1 if errors)")
+    parser.add_argument("--strict", action="store_true",
+                        help="Escalate domain-policy violations (ADR-007) from WARN "
+                             "to ERROR and fail (exit 1) in every mode; CI runs "
+                             "--validate --strict")
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument("--apply", action="store_true",
                             help="Apply: merge into Alertmanager ConfigMap + reload")
@@ -271,7 +292,7 @@ def main() -> None:
 
     # Load tenant configs (routing + dedup + schema warnings + enforced routing + metadata)
     routing_configs, dedup_configs, schema_warnings, enforced_routing, metadata_configs = \
-        load_tenant_configs(args.config_dir)
+        load_tenant_configs(args.config_dir, strict_policies=args.strict)
 
     has_routing = bool(routing_configs)
     has_dedup = bool(dedup_configs)
@@ -302,6 +323,17 @@ def main() -> None:
     # Validate mode
     if args.validate:
         _validate_mode(routes, receivers, inhibit_rules, all_warnings)
+
+    # ADR-007 --strict outside --validate: abort before rendering/applying a
+    # config that violates a domain policy ("--strict 模式：報錯終止").
+    if args.strict:
+        policy_errors = _policy_errors(all_warnings)
+        if policy_errors:
+            print(f"FAIL: {len(policy_errors)} domain-policy violation(s) "
+                  "under --strict:", file=sys.stderr)
+            for e in policy_errors:
+                print(e, file=sys.stderr)
+            sys.exit(EXIT_VIOLATION)
 
     # Apply mode
     if args.apply:

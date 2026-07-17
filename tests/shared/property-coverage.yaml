@@ -165,7 +165,8 @@ modules:
     excluded:
       load_policy: "I/O-bound; thin wrapper over load_yaml_file (covered)"
       _validate_profile_refs: "Covered by test_e2e_routing_profile.py integration"
-      check_domain_policies: "Multi-branch policy validator; covered by test_e2e_routing_profile.py + test_domain_policy.py"
+      check_domain_policies: "Multi-branch policy validator; covered by test_e2e_routing_profile.py + test_domain_policy.py + test_grar_strict_hardening.py (strict fail-open closures)"
+      _parse_policy_duration: "Pure duration parser (multi-unit/fractional/negative-reject); table-covered by test_grar_strict_hardening.py::TestParsePolicyDuration (23 example cases)"
       _validate_version_label: "ADR-024 OQ-6 version-label guard; fully branch-covered by test_generate_alertmanager_routes.py::TestValidateVersionLabel (8 example cases)"
       find_watchdog_suppressing_inhibits: "ADR-025 D1 inhibit-immunity validator; fully covered by test_generate_routes_orchestration.py::TestWatchdogInhibitImmunity (exact/regex/match-all/empty/severity/legacy-map cases)"
       assert_watchdog_inhibit_immunity: "Raises-wrapper over find_watchdog_suppressing_inhibits; covered by TestWatchdogInhibitImmunity + the assemble fail-closed test"

@@ -318,7 +318,7 @@ domain_policies:
       max_repeat_interval: 1h
 ```
 
-執行：`da-tools generate-routes --config-dir conf.d/ --validate`（routing profile 引用 + domain policy 約束都會驗）。偵錯工具：`da-tools explain-route --config-dir conf.d/ --tenant <tenant-id>`。
+執行：`da-tools generate-routes --config-dir conf.d/ --validate`（routing profile 引用 + domain policy 約束都會驗；預設違規只出 WARN，加 `--strict` 則轉 ERROR 並以非零 exit code 失敗——CI 跑的是 `--validate --strict`，domain policy 違規會擋下 PR）。偵錯工具：`da-tools explain-route --config-dir conf.d/ --tenant <tenant-id>`。
 
 ### Cardinality Forecasting (v2.1.0)
 
