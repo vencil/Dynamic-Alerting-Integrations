@@ -32,6 +32,8 @@ CONTRACT_MAX_EXAMPLES=50 make contract-test
 
 **全 method fuzz**：GET/PUT/POST/DELETE 全部下場。寫入落在 throwaway git repo fixture（runner 對 temp config dir `git init` + initial commit——tenant-api 是 commit-on-write，沒 repo 每個寫入都 500），跑完整個 workdir `rmtree`，不留垃圾。RBAC 用 wildcard fixture（`_rbac.yaml` 單一 group、`tenants: ["*"]`、read+write+admin），請求帶 `X-Forwarded-Email` + `X-Forwarded-Groups`；rate limiter 以 `TA_RATE_LIMIT_PER_MIN=0` 關閉（同一 caller 的 fuzz 流量會踩預設 100/min）。
 
+**Domain policy gate（含 deterministic case）**：fixture 的 conf.d 內帶一份 `_domain_policy.yaml`（policy manager 硬讀 `configDir/_domain_policy.yaml`，無獨立 flag——`cmd/server/main.go` → `internal/policy`），把 seed tenant 綁進一個 forbidden/allowed receiver-type 都有的 domain，讓 API 層 policy gate（`CheckWrite` → 403 `POLICY_VIOLATION`）在 fuzz 環境是**武裝狀態**。但 domain→tenant 是 exact-list match、schemathesis 產生的 body 幾乎不會恰好對 seed tenant 命中 `_routing.receiver.type`，所以 runner 在 fuzz 前先跑 **deterministic smoke**（`run_policy_gate_smoke`）：固定 violating PUT 斷 403 + `POLICY_VIOLATION` + `violations[]`（`policy.Violation` 的 domain/constraint/message shape），再一發 allowed-receiver control PUT 斷 200（防 policy 誤擋一切的假綠）——這條 403 路徑不靠 fuzz 運氣。
+
 **排除的 operations**：
 - `/federation/tokens*` + `/federation/accounts/backfill`（4 ops）——路由只在 `--federation-key` 設定時註冊，且 token store 需要 in-cluster Kubernetes ConfigMap，本機 fixture 起不來。reopen 條件：federation record store 有 file-backed / fake seam 後補測；現由 Go handler test（stub store）覆蓋。
 - `GET /prs`（1 op）——路由只在 PR write-mode（需 forge token）註冊，fixture 跑 `write-mode=direct` 會 404。reopen 條件：fixture 長出 stub forge backend。
@@ -40,7 +42,7 @@ CONTRACT_MAX_EXAMPLES=50 make contract-test
 
 **已知未涵蓋**（誠實記錄，非 gate 盲區造成的假綠）：
 
-- RBAC middleware 的 401/403 與 rate limiter 的 429 是跨切面、每個 op 都可能回，但 fixture 用 wildcard RBAC + 關 rate limiter（否則 fuzz 打不進 handler 邏輯），spec 逐 op 宣告與否 fuzz 都觀測不到（middleware 的 wire shape 已同上遷移統一 envelope、由 Go 測試釘住，只是 fuzz 觀測不到）；domain policy 403（`violations` 為 `policy.Violation` 形狀）同理（fixture 無 `_domain_policy.yaml`）。
+- RBAC middleware 的 401/403 與 rate limiter 的 429 是跨切面、每個 op 都可能回，但 fixture 用 wildcard RBAC + 關 rate limiter（否則 fuzz 打不進 handler 邏輯），spec 逐 op 宣告與否 fuzz 都觀測不到（middleware 的 wire shape 已同上遷移統一 envelope、由 Go 測試釘住，只是 fuzz 觀測不到）。domain policy 403 原本同屬此類（fixture 無 `_domain_policy.yaml`、gate 從不啟動），現已收口：fixture 帶 policy 檔 + fuzz 前的 deterministic smoke 釘住 403 shape（見上）。
 - Windows host 直跑 runner 的兩個邊角（container/CI 無此問題）：`shutil.rmtree(ignore_errors=True)` 遇 git objects 唯讀檔可能留 temp 殘骸；`Popen` 若在啟動時 raise，`log_fh` 不會被 finally 關閉。走 `make contract-test`（dev container）不受影響。
 
 ## 排錯
