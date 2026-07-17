@@ -643,7 +643,11 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
-    print(f"Running {len(selected)} Go mutations across {len(GO_MODULES)} modules\n")
+    # Count the DISTINCT modules of the selected set — a --target filter can
+    # narrow the run to one module, and printing the full GO_MODULES count
+    # there would misreport the run's actual scope.
+    n_modules = len({m.module for m in selected})
+    print(f"Running {len(selected)} Go mutations across {n_modules} module(s)\n")
 
     results: list[tuple[Mutation, str]] = []
     for i, m in enumerate(selected, 1):

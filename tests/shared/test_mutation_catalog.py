@@ -27,7 +27,9 @@ catalog — the one that actually rotted — gets identical coverage.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -212,9 +214,15 @@ class TestKillTestNamesAnchored:
     dangling name. This lane pins it statically: a non-None kill_test must
     exist as a test definition within the entry's kill scope —
 
-      - Python: ``def <name>(`` in one of the mutation's test_file files;
-      - Go: ``func <name>(`` in a *_test.go under the test_target selector's
-        directory (recursive for ``...`` selectors).
+      - Python: a (sync or async) function DEFINITION named <name> in one of
+        the mutation's test_file files, collected via ast — not a substring
+        scan, so a name that survives only inside a comment/docstring cannot
+        satisfy the gate;
+      - Go: a line-anchored ``^func <name>(`` definition in a *_test.go under
+        the test_target selector's directory (recursive for ``...``
+        selectors). Line-anchoring rejects the same comment trick (`// func
+        TestX(` never starts a line at column 0 in gofmt'ed code; Go test
+        funcs are always top-level).
 
     kill_test=None entries (historical batches verified at file/package
     scope without per-test attribution) are exempt by construction — the
@@ -225,25 +233,39 @@ class TestKillTestNamesAnchored:
     def test_kill_test_definition_exists(self, kind, mutation):
         if kind == "py":
             files = [_py_pilot.REPO_ROOT / t for t in mutation.test_file.split()]
-            marker = f"def {mutation.kill_test}("
+
+            def defines(path: Path) -> bool:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                return any(
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == mutation.kill_test
+                    for node in ast.walk(tree)
+                )
+
+            shape = f"def {mutation.kill_test}(...)"
         else:
             target_dir, recursive = _go_selector_dir(mutation)
-            pattern = "*_test.go"
+            glob_pat = "*_test.go"
             files = sorted(
-                target_dir.rglob(pattern) if recursive else target_dir.glob(pattern)
+                target_dir.rglob(glob_pat) if recursive else target_dir.glob(glob_pat)
             )
             # Go tests are package-level funcs; methods never appear as tests.
-            marker = f"func {mutation.kill_test}("
+            func_re = re.compile(
+                rf"^func {re.escape(mutation.kill_test)}\(", re.MULTILINE
+            )
+
+            def defines(path: Path) -> bool:
+                return bool(func_re.search(path.read_text(encoding="utf-8")))
+
+            shape = f"func {mutation.kill_test}("
         assert files, (
             f"kill scope for {mutation.label!r} contains no test files — "
             "the kill_test attribution cannot be anchored"
         )
-        assert any(
-            marker in f.read_text(encoding="utf-8") for f in files
-        ), (
+        assert any(defines(f) for f in files), (
             f"kill_test {mutation.kill_test!r} (mutation {mutation.label!r}) "
-            f"not found as {marker!r} in the entry's kill scope. The test was "
-            "renamed/moved — re-point kill_test to the surviving name (re-run "
-            "the injection if unsure which test kills it now), so the rot-"
-            "triage attribution doesn't silently dangle."
+            f"not found as a real definition ({shape}) in the entry's kill "
+            "scope. The test was renamed/moved — re-point kill_test to the "
+            "surviving name (re-run the injection if unsure which test kills "
+            "it now), so the rot-triage attribution doesn't silently dangle."
         )
