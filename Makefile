@@ -380,6 +380,13 @@ dc-test: ## 在 Dev Container 內跑 pytest（可選 ARGS="-k foo"）
 dc-go-test: ## 在 Dev Container 內跑 go test ./...（Go 僅在 container 內可用）
 	@bash scripts/ops/dx-run.sh go test ./...
 
+.PHONY: test-am-inhibit
+test-am-inhibit: ## 驗手寫 Alertmanager config 的 inhibit 語意（#1132 防再犯；Go 僅在 container 內可用）
+	@# amtool check-config 只驗語法，對「抑制規則語意錯誤」全綠——#1132 的
+	@# dedup 規則因此壞了兩年沒被發現。這支用 Alertmanager 自己的 matcher
+	@# 實作評估 try-local/alertmanager.yml + k8s configmap 的實際抑制行為。
+	@bash scripts/ops/dx-run.sh bash -c 'cd tests/alertmanager-inhibit && go test ./... -count=1'
+
 .PHONY: api-docs
 api-docs: ## Generate OpenAPI spec from tenant-api swag annotations (TRK-221)
 	@# swag CLI installs lazily inside the Dev Container. Generated artefacts

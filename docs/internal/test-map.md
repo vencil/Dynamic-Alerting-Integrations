@@ -25,8 +25,11 @@ tests/
 ├── e2e/                 # Playwright E2E 測試
 ├── fixtures/            # 共用測試資料
 ├── snapshots/           # 快照基線（JSON / snap）
-└── scenarios/           # Shell 場景腳本
+├── scenarios/           # Shell 場景腳本
+└── alertmanager-inhibit/ # 手寫 AM config 的抑制語意 gate（獨立 Go module）
 ```
+
+`alertmanager-inhibit/` 是唯一的 Go 測試 module（自帶 `go.mod`，把 alertmanager 依賴隔離在兩個 production module 之外）。它用 Alertmanager 自己的 matcher 實作評估 `try-local/alertmanager.yml` 與 `k8s/03-monitoring/configmap-alertmanager.yaml` 的**實際抑制行為**——`amtool check-config` 只驗語法，對 #1132 那種「語法合法但語意錯、且靜默吃掉通知」的規則全綠。入口 `make test-am-inhibit`；CI 走 `Go Tests (1.26)` 聚合閘。新增 sentinel／inhibit 規則時（ADR-003 Sentinel+Inhibit paradigm）應同步補一組斷言。
 
 v2.7.0 將 98 個 `test_*.py` 從 `tests/` 根目錄搬入 `ops/` / `dx/` / `lint/` / `shared/` 四個子目錄，與 `scripts/tools/` 的分類對齊。`conftest.py` 和 `factories.py` 留在根目錄，pytest 自動遞迴收集子目錄測試。
 

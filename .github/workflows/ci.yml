@@ -918,8 +918,42 @@ jobs:
           path: components/tenant-api/coverage.out
           retention-days: 7
 
+  go-tests-am-inhibit:
+    name: Go Tests — alertmanager inhibit semantics
+    runs-on: ubuntu-latest
+    # Evaluates the two HAND-WRITTEN Alertmanager configs against Alertmanager's
+    # own matcher implementation (#1132: amtool check-config is green on an
+    # inhibit rule that silently eats notifications). Pure file parsing — no
+    # services, no network beyond the module download, ~1s.
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Cache Go modules + build cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          # Own key: this module's go.sum shares nothing with the two component
+          # modules, so it must not collide with their warm cache.
+          key: ${{ runner.os }}-go-am-inhibit-${{ hashFiles('tests/alertmanager-inhibit/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-am-inhibit-
+
+      - name: Run Alertmanager inhibit-semantics tests
+        working-directory: tests/alertmanager-inhibit
+        run: go test ./... -count=1
+
   go-tests:
-    # Aggregation gate for the two split Go jobs above. The job name is kept
+    # Aggregation gate for the split Go jobs above. The job name is kept
     # EXACTLY "Go Tests (1.26)" — the check name the former matrix job
     # reported — because branch protection required_status_checks matches by
     # check-run name: if this name stopped being reported, any PR would hang
@@ -927,22 +961,29 @@ jobs:
     # the validate.yaml banner comment). If the Go matrix ever grows beyond
     # 1.26, update this static name together with the branch-protection
     # entry (owner action).
+    #
+    # New split jobs join HERE rather than getting their own required check:
+    # branch protection is owner-managed, so a new required name would sit
+    # permanently pending until the owner adds it. Aggregating keeps the gate
+    # enforcing from the first green run.
     name: Go Tests (1.26)
     runs-on: ubuntu-latest
     # Pure result-aggregation gate — touches no repo content, needs no token.
     permissions: {}
-    needs: [go-tests-threshold-exporter, go-tests-tenant-api]
+    needs: [go-tests-threshold-exporter, go-tests-tenant-api, go-tests-am-inhibit]
     # always(): without it a failed dependency SKIPS this job, and a skipped
     # check would satisfy branch protection — the gate must FAIL, not skip,
-    # when either split job fails.
+    # when any split job fails.
     if: always()
     steps:
-      - name: Verify both Go test jobs succeeded
+      - name: Verify all Go test jobs succeeded
         run: |
           echo "threshold-exporter: ${{ needs.go-tests-threshold-exporter.result }}"
           echo "tenant-api:         ${{ needs.go-tests-tenant-api.result }}"
+          echo "am-inhibit:         ${{ needs.go-tests-am-inhibit.result }}"
           if [ "${{ needs.go-tests-threshold-exporter.result }}" != "success" ] || \
-             [ "${{ needs.go-tests-tenant-api.result }}" != "success" ]; then
+             [ "${{ needs.go-tests-tenant-api.result }}" != "success" ] || \
+             [ "${{ needs.go-tests-am-inhibit.result }}" != "success" ]; then
             echo "::error::one or more Go test jobs did not succeed"
             exit 1
           fi
