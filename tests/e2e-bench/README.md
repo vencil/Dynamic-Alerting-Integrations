@@ -75,6 +75,90 @@ cat bench-results/e2e-*.json | jq
 docker compose down -v
 ```
 
+## Windows host direct run (Docker Desktop gRPC-FUSE)
+
+Running the harness directly on a Windows host (no dev container) works,
+but the default bind mounts are a trap: `fixture/active/conf.d` is
+mounted through Docker Desktop's gRPC-FUSE layer, which costs ~0.6s per
+file on first read. The exporter's initial scan of a 1000-tenant fixture
+then takes **~11 minutes**, far past the driver's pre-flight deadline
+(`wait_for_services`, default 60s) — the driver aborts with
+`upstream exporter not ready` before the stack ever becomes usable.
+
+Two knobs fix this:
+
+1. **Named-volume fixture** —
+   [`docker-compose.volume-override.yml`](docker-compose.volume-override.yml)
+   replaces the fixture bind mount (exporter read side + driver write
+   side) with a pre-populated named volume, moving fixture I/O to
+   native speed inside the Docker Desktop VM.
+2. **`WAIT_SERVICES_TIMEOUT_S`** — env-tunable pre-flight deadline
+   (default 60, same as before; CI unaffected). Even with the named
+   volume, first build + cold image pulls on a laptop justify headroom.
+
+Sequence (after staging the fixture into `fixture/active/conf.d/` per
+Quick start steps 1–3). Pick the variant for your shell — the two traps
+are MSYS path mangling (Git Bash rewrites `/src`-style container paths
+unless `MSYS_NO_PATHCONV=1`) and PowerShell not supporting inline
+`VAR=x cmd` env prefixes.
+
+**Git Bash**:
+
+```bash
+cd tests/e2e-bench
+
+# One-time: create + pre-populate the named volume from the staged
+# fixture. MSYS_NO_PATHCONV=1 stops MSYS from rewriting the /dst and
+# /src container paths; `pwd -W` yields a C:/... host path Docker
+# accepts verbatim.
+docker volume create e2ebench-fixture
+MSYS_NO_PATHCONV=1 docker run --rm \
+    -v e2ebench-fixture:/dst \
+    -v "$(pwd -W)/fixture/active/conf.d:/src" \
+    alpine sh -c 'cp -r /src/. /dst/'
+
+# Run with the override + a generous pre-flight budget.
+WAIT_SERVICES_TIMEOUT_S=900 COUNT=30 docker compose \
+    -f docker-compose.yml -f docker-compose.volume-override.yml \
+    up --build --abort-on-container-exit driver
+
+# Aggregate + cleanup. (`py` — the Windows launcher; `python3` on a
+# Windows host is often just the Microsoft Store alias.)
+py aggregate.py
+docker compose -f docker-compose.yml -f docker-compose.volume-override.yml down -v
+docker volume rm e2ebench-fixture
+```
+
+**PowerShell**:
+
+```powershell
+cd tests\e2e-bench
+
+# One-time: create + pre-populate the named volume from the staged fixture.
+docker volume create e2ebench-fixture
+docker run --rm -v e2ebench-fixture:/dst -v "${PWD}\fixture\active\conf.d:/src" alpine sh -c 'cp -r /src/. /dst/'
+
+# Run with the override + a generous pre-flight budget (no inline
+# VAR=x prefix in PowerShell — set $env: first).
+$env:WAIT_SERVICES_TIMEOUT_S = '900'; $env:COUNT = '30'
+docker compose -f docker-compose.yml -f docker-compose.volume-override.yml up --build --abort-on-container-exit driver
+
+# Aggregate + cleanup.
+py aggregate.py
+docker compose -f docker-compose.yml -f docker-compose.volume-override.yml down -v
+docker volume rm e2ebench-fixture
+```
+
+Caveats:
+
+- The named volume is a **snapshot** of the staged fixture — restage
+  (re-run the `docker run … cp` step) after regenerating or switching
+  fixture kinds, or the exporter scans stale tenants.
+- `aggregate.py` is safe on legacy cp950/cp936 consoles (UTF-8 stdout
+  guard); no code page fiddling needed.
+- Bind-mount mode still works on Windows for tiny fixtures (tens of
+  tenants) — the FUSE cost only dominates at 1000-tenant scale.
+
 ## Fixture kinds
 
 Three kinds, controlled by `E2E_FIXTURE_KIND` env (default `synthetic-v2`):
@@ -172,10 +256,12 @@ absorbs CI runner-noise without admitting genuine regressions.
 Two GitHub Actions workflows touch this harness:
 
 - **[`bench-e2e-record.yaml`](../../.github/workflows/bench-e2e-record.yaml)**
-  — manually-dispatched (`workflow_dispatch`); runs `make bench-e2e` and
-  uploads aggregate JSON as workflow artifact. Inputs: `fixture_kind` /
-  `count`. Use to refresh baselines or to capture a new measurement
-  on `main`.
+  — manually-dispatched (`workflow_dispatch`) plus a monthly `schedule`
+  (rot prevention: a 2.8-month manual-dispatch gap once outlived the
+  artifact retention, leaving no live baseline); runs `make bench-e2e`
+  and uploads aggregate JSON as a workflow artifact (90-day retention).
+  Inputs: `fixture_kind` / `count`; scheduled runs use the defaults.
+  Use to refresh baselines or to capture a new measurement on `main`.
 - **[`release-attach-bench-baseline.yaml`](../../.github/workflows/release-attach-bench-baseline.yaml)**
   — attaches the latest `bench-baseline.txt` artifact to GitHub Releases
   on tag push.

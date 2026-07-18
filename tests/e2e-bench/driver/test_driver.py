@@ -333,6 +333,42 @@ def test_anchor_keys_constant_matches_design_doc(driver):
     )
 
 
+# ============================================================
+# WAIT_SERVICES_TIMEOUT_S — env-tunable pre-flight deadline
+# ============================================================
+#
+# The wait_for_services deadline was hard-coded 60s; Windows hosts
+# bind-mounting the fixture through Docker Desktop gRPC-FUSE need ~11
+# min for a 1000-tenant initial load. The deadline is now env-tunable
+# (default 60 — CI behavior unchanged). Loaded fresh (NOT via the
+# module-scoped `driver` fixture) because the constant is read at
+# import time.
+
+
+def _load_driver_fresh(name: str):
+    spec = importlib.util.spec_from_file_location(name, DRIVER_PATH)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_wait_services_timeout_default_is_60(monkeypatch):
+    """Env unset → default 60.0 (matches the historical hard-coded
+    deadline; CI runs never set the variable so behavior is identical)."""
+    monkeypatch.delenv("WAIT_SERVICES_TIMEOUT_S", raising=False)
+    mod = _load_driver_fresh("driver_env_default")
+    assert mod.WAIT_SERVICES_TIMEOUT_S == 60.0
+
+
+def test_wait_services_timeout_env_override(monkeypatch):
+    """WAIT_SERVICES_TIMEOUT_S=900 (the documented Windows-host value)
+    is read as a float at import time."""
+    monkeypatch.setenv("WAIT_SERVICES_TIMEOUT_S", "900")
+    mod = _load_driver_fresh("driver_env_override")
+    assert mod.WAIT_SERVICES_TIMEOUT_S == 900.0
+
+
 def test_resolve_required_anchors_constant(driver):
     """Lock the resolve-phase smoke contract: T0 (driver mark) + T3
     (Prom resolve) + T4 (receiver resolve POST). T1/T2 are skipped

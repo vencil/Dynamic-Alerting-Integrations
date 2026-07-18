@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import random
+import subprocess
 import sys
 from pathlib import Path
 
@@ -290,6 +292,47 @@ def test_aggregate_end_to_end(aggregate_module, tmp_path):
     assert p95_lo <= p95 <= p95_hi
     # ci_too_wide should be False here (range 290 / median 4145 = ~7%).
     assert fire["e2e_ms"]["ci_too_wide"] is False
+
+
+# ============================================================
+# cp950 console regression — UTF-8 stdout guard (subprocess-level)
+# ============================================================
+#
+# The gate banner carries emoji (✅ / ❌ / ⚠️ / 🟡) that legacy Windows
+# consoles (cp950 zh-TW / cp936 zh-CN) cannot encode. Without the
+# try_utf8_stdout guard at the top of main(), print() raises
+# UnicodeEncodeError AFTER the aggregate JSON is written — main() exits
+# non-zero and `make bench-e2e` step 5 reports an otherwise-successful
+# run as failed. cp950 is a built-in Python codec, so PYTHONIOENCODING
+# simulates the console on Linux CI too (no Windows required). Removing
+# the guard or reordering the import must turn this test red.
+
+
+def test_cp950_console_simulation_exits_zero(tmp_path):
+    for i in range(3):
+        _write_run(tmp_path, i + 1, warm_up=False,
+                   fire_e2e=4000 + i * 10, resolve_e2e=5000 + i * 10)
+    out_path = tmp_path / "agg.json"
+    env = dict(os.environ, PYTHONIOENCODING="cp950")
+    result = subprocess.run(
+        [
+            sys.executable, str(AGGREGATE_PATH),
+            "--results-dir", str(tmp_path),
+            "--out", str(out_path),
+            "--bootstrap", "50",
+        ],
+        capture_output=True,
+        env=env,
+        timeout=120,
+    )
+    assert result.returncode == 0, (
+        "aggregate.py crashed under cp950 console simulation:\n"
+        + result.stderr.decode("utf-8", errors="replace")
+    )
+    # JSON landed AND the banner made it to stdout (guard reconfigures
+    # the stream to UTF-8, so the emoji survives as UTF-8 bytes).
+    assert out_path.exists()
+    assert "pending" in result.stdout.decode("utf-8", errors="replace")
 
 
 def test_aggregate_with_baseline_passes_gate(aggregate_module, tmp_path):
