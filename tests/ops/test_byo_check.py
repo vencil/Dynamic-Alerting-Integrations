@@ -891,71 +891,21 @@ class TestCheckPrometheusControlFlow:
 # ---------------------------------------------------------------------------
 # Inhibit-rule semantic analysis (#1132 防再犯)
 # ---------------------------------------------------------------------------
-class TestInhibitMatcherHelpers:
-    """The pure structural helpers that read a config's declared matcher gates."""
-
-    @pytest.mark.parametrize("s,expected", [
-        ('severity = "critical"', ("severity", "=", "critical")),
-        ('metric_group =~ ".+"', ("metric_group", "=~", ".+")),
-        ("tenant='db-a'", ("tenant", "=", "db-a")),
-        ('alertname != "X"', ("alertname", "!=", "X")),
-        ('name !~ ".*"', ("name", "!~", ".*")),
-        ('severity="critical"', ("severity", "=", "critical")),  # no spaces
-    ])
-    def test_parse_matcher(self, s, expected):
-        assert bc._parse_matcher(s) == expected
-
-    @pytest.mark.parametrize("bad", ["", "not a matcher", "  ", 123, None])
-    def test_parse_matcher_unparseable(self, bad):
-        assert bc._parse_matcher(bad) is None
-
-    @pytest.mark.parametrize("pattern,matches_empty", [
-        (".+", False), (".*", True), ("", True), ("foo", False),
-        ("a?", True), ("a|", True), ("[", True),  # a? and a| both match ""; invalid -> conservative True
-    ])
-    def test_regex_matches_empty(self, pattern, matches_empty):
-        assert bc._regex_matches_empty(pattern) is matches_empty
-
-    @pytest.mark.parametrize("name,op,val,label,gated", [
-        ("metric_group", "=~", ".+", "metric_group", True),   # =~".+" excludes empty
-        ("metric_group", "=~", ".*", "metric_group", False),  # =~".*" allows empty
-        ("tenant", "=", "db-a", "tenant", True),              # exact non-empty
-        ("tenant", "=", "", "tenant", False),                 # exact empty
-        ("x", "!=", "", "x", True),                           # !="" excludes empty
-        ("x", "!~", ".*", "x", True),                         # !~ matches-empty regex
-        ("x", "!~", ".+", "x", False),                        # !~ non-empty regex
-        ("other", "=~", ".+", "metric_group", False),         # different label
-    ])
-    def test_matcher_guarantees_present(self, name, op, val, label, gated):
-        assert bc._matcher_guarantees_present(name, op, val, label) is gated
-
-    def test_side_gates_label_matchers_form(self):
-        rule = {"source_matchers": ['metric_group =~ ".+"']}
-        assert bc._side_gates_label(rule, "source", "metric_group") is True
-        assert bc._side_gates_label(rule, "source", "tenant") is False
-
-    def test_side_gates_label_deprecated_exact_form(self):
-        rule = {"source_match": {"metric_group": "connections"}}
-        assert bc._side_gates_label(rule, "source", "metric_group") is True
-
-    def test_side_gates_label_deprecated_regex_form(self):
-        assert bc._side_gates_label({"target_match_re": {"mg": ".+"}}, "target", "mg") is True
-        assert bc._side_gates_label({"target_match_re": {"mg": ".*"}}, "target", "mg") is False
-
-    def test_ungated_equal_labels(self):
-        rule = {
-            "source_matchers": ['severity="critical"', 'metric_group=~".+"'],
-            "target_matchers": ['severity="warning"', 'metric_group=~".+"'],
-            "equal": ["tenant", "metric_group"],
-        }
-        # metric_group is gated on both sides; tenant on neither
-        assert bc._ungated_equal_labels(rule) == ["tenant"]
+class TestSourcePinnedAlertname:
+    """The one bit of matcher reading unique to the live layer (identifying which
+    firing alerts are a rule's source). The structural gate-predicate is NOT
+    tested here — it lives in _grar_validate.py (the generator's single
+    implementation) and is covered by test_generate_routes_orchestration.py::
+    TestEqualLabelGatedInvariant, which this check now reuses."""
 
     @pytest.mark.parametrize("rule,expected", [
         ({"source_matchers": ['alertname = "Sentinel"']}, "Sentinel"),
+        ({"source_matchers": ['alertname="Sentinel"']}, "Sentinel"),   # no spaces
         ({"source_match": {"alertname": "Sentinel"}}, "Sentinel"),
         ({"source_matchers": ['severity = "critical"']}, None),   # not alertname-pinned
         ({"source_matchers": ['alertname =~ "S.*"']}, None),      # regex, not exact
+        ({"source_matchers": ['alertname != "X"']}, None),        # negation, not a pin
+        ({"source_matchers": 'not-a-list'}, None),                # malformed
         ({}, None),
     ])
     def test_source_pinned_alertname(self, rule, expected):

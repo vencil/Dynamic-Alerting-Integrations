@@ -35,6 +35,10 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import format_json_report, http_get_json, probe_health, query_prometheus_instant, add_prometheus_arg  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+# #1132 structural check is the SINGLE implementation in _grar_validate.py (the
+# generator's fail-closed invariant); reuse it here so the BYO runtime check and
+# the generation-time guard can never disagree on "is this equal-label gated".
+from _grar_validate import find_ungated_equal_label_inhibits  # noqa: E402
 
 # Alias for backward-compat within this module
 query_prometheus = query_prometheus_instant
@@ -539,121 +543,41 @@ def check_prometheus(args):
 # and if the SOURCE structurally cannot carry the label, the dedup never fires.
 #
 # The repo-side gate (tests/alertmanager-inhibit) proves this against the repo's
-# own configs using Alertmanager's real matcher. A BYO customer hand-writes their
-# OWN Alertmanager config (byo-alertmanager-integration.md), which that gate can
-# never see — so the same trap is reproduced here against the customer's live
-# config, structurally.
+# own configs using Alertmanager's real matcher; the generator's
+# assert_equal_labels_gated PREVENTS it at config-generation time. This BYO check
+# is the runtime complement: it verifies the config ACTUALLY LOADED in a
+# customer's live Alertmanager (which the generator never sees — hand-written,
+# hand-edited, drifted, or produced by another tool).
 #
-# This is NOT a re-implementation of Alertmanager's alert-matching engine (which
-# the hybrid lint policy forbids): it only inspects the config's own declared
-# matcher gates to answer one question per `equal:` label — "does either side
-# guarantee this label is present?" Whether a given alert matches is never
-# decided here; live alerts, when available, only supply advisory evidence.
+# The structural "which equal-labels are ungated" decision is NOT re-implemented
+# here: it reuses the generator's single find_ungated_equal_label_inhibits, so
+# this check and the generation-time guard can never disagree. What this adds on
+# top is LIVE confirmation — using the customer's real firing alerts to tell a
+# genuine trap from a benign-but-ungated rule (the platform's own Silent Mode /
+# Custom silence leave labels ungated yet are safe because every alert carries
+# them).
 # ---------------------------------------------------------------------------
 
-# Alertmanager matcher string: `name op value`, value optionally quoted.
-# `name` follows the Prometheus label-name grammar. Longest ops are listed first
-# in the alternation so `=~`/`!=` win over a bare `=`.
-_MATCHER_RE = re.compile(r'^\s*([a-zA-Z_]\w*)\s*(=~|!~|!=|=)\s*(.*?)\s*$')
-
-
-def _parse_matcher(s):
-    """Parse one matcher string into (name, op, value), or None if unparseable.
-
-    Surrounding single/double quotes on the value are stripped. This reads the
-    config's declared structure; it does not evaluate the matcher against alerts.
-    """
-    if not isinstance(s, str):
-        return None
-    m = _MATCHER_RE.match(s)
-    if not m:
-        return None
-    name, op, val = m.group(1), m.group(2), m.group(3)
-    if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
-        val = val[1:-1]
-    return (name, op, val)
-
-
-def _regex_matches_empty(pattern):
-    """Would this Alertmanager regex match the EMPTY string (fully anchored)?
-
-    Alertmanager anchors regex matchers, so the question is `fullmatch("")`. On a
-    pattern Python cannot compile, return True — the conservative answer: it makes
-    the caller treat the matcher as NOT presence-gating, i.e. an advisory warning
-    rather than a false all-clear.
-    """
-    try:
-        return re.fullmatch(pattern, "") is not None
-    except re.error:
-        return True
-
-
-def _matcher_guarantees_present(name, op, val, label):
-    """Does matcher (`name op val`) guarantee `label` is present (non-empty)?
-
-    A missing label reads as the empty string in Alertmanager, so "guarantees
-    present" == "cannot match the empty string" for the label in question.
-    """
-    if name != label:
-        return False
-    if op == "=":
-        return val != ""            # name="x" (x non-empty) excludes empty
-    if op == "=~":
-        return not _regex_matches_empty(val)
-    if op == "!=":
-        return val == ""            # name!="" excludes empty
-    if op == "!~":
-        return _regex_matches_empty(val)   # excludes empty iff regex matches it
-    return False
-
-
-def _side_gates_label(rule, side, label):
-    """Does `side` ('source'/'target') of an inhibit rule guarantee `label` present?
-
-    Covers the modern `*_matchers` list form and the deprecated `*_match` (exact)
-    and `*_match_re` (regex) map forms, so a config using the old syntax is
-    analysed rather than silently passed.
-    """
-    matchers = rule.get(f"{side}_matchers")
-    for s in matchers if isinstance(matchers, list) else []:
-        parsed = _parse_matcher(s)
-        if parsed and _matcher_guarantees_present(parsed[0], parsed[1], parsed[2], label):
-            return True
-    exact = rule.get(f"{side}_match", {})
-    if isinstance(exact, dict) and exact.get(label, "") != "":
-        return True
-    mre = rule.get(f"{side}_match_re", {})
-    if isinstance(mre, dict) and label in mre and not _regex_matches_empty(str(mre[label])):
-        return True
-    return False
-
-
-def _ungated_equal_labels(rule):
-    """Equal-labels a rule presence-gates on NEITHER side (the candidate risks)."""
-    equal = rule.get("equal")
-    if not isinstance(equal, list):
-        return []
-    return [
-        lbl for lbl in equal
-        if isinstance(lbl, str)
-        and not _side_gates_label(rule, "source", lbl)
-        and not _side_gates_label(rule, "target", lbl)
-    ]
+# A source pinned to an EXACT alertname (`alertname="X"`, NOT `=~`/`!=`) lets us
+# look the source's real alerts up in the live list by label. This is the one
+# tiny bit of matcher reading unique to the live layer — the negative lookahead
+# `=(?!~)` keeps it from mistaking `alertname=~"..."` for an exact pin.
+_ALERTNAME_PIN_RE = re.compile(r'^\s*alertname\s*=(?!~)\s*"?([^"]*?)"?\s*$')
 
 
 def _source_pinned_alertname(rule):
     """The exact `alertname` a rule's SOURCE is pinned to, or None.
 
     Sentinel-source rules (Silent Mode, Severity Dedup, Custom silence) pin
-    `alertname="X"`; that lets us look the source's real alerts up in the live
-    alert list by an exact label lookup — NOT a re-implementation of Alertmanager
-    matching, just how we identify which firing alerts are this rule's source.
+    `alertname="X"`; identifying which firing alerts are this rule's source is an
+    exact label lookup, NOT a re-implementation of Alertmanager matching.
     """
     matchers = rule.get("source_matchers")
     for s in matchers if isinstance(matchers, list) else []:
-        parsed = _parse_matcher(s)
-        if parsed and parsed[0] == "alertname" and parsed[1] == "=" and parsed[2]:
-            return parsed[2]
+        if isinstance(s, str):
+            m = _ALERTNAME_PIN_RE.match(s)
+            if m and m.group(1):
+                return m.group(1)
     exact = rule.get("source_match", {})
     if isinstance(exact, dict) and exact.get("alertname"):
         return exact["alertname"]
@@ -702,17 +626,17 @@ def _judge_inhibit_semantics(inhibit_rules, alerts_by_alertname):
     if not isinstance(inhibit_rules, list):
         return {"check": key, "status": "warn",
                 "detail": "inhibit_rules is not a list — cannot analyze equal-label safety"}
-    analyzed = confirmed = unverified = 0
+    analyzed = sum(1 for r in inhibit_rules if isinstance(r, dict))
+    if analyzed == 0:
+        return {"check": key, "status": "warn",
+                "detail": "No parseable inhibit rules to analyze for equal-label safety"}
+
     confirmed_parts, unverified_parts = [], []
-
-    for i, rule in enumerate(inhibit_rules):
-        if not isinstance(rule, dict):
-            continue
-        analyzed += 1
-        ungated = _ungated_equal_labels(rule)
-        if not ungated:
-            continue
-
+    # Structural pass = the generator's own find_ungated_equal_label_inhibits
+    # (single source of truth); it returns only the rules with an equal-label
+    # gated on NEITHER side. The live confirmation below is what this BYO check
+    # adds on top of the generation-time guard.
+    for i, rule, ungated in find_ungated_equal_label_inhibits(inhibit_rules):
         source_alertname = _source_pinned_alertname(rule)
         source_sets = None
         if alerts_by_alertname is not None and source_alertname is not None:
@@ -722,13 +646,11 @@ def _judge_inhibit_semantics(inhibit_rules, alerts_by_alertname):
             missing = [lbl for lbl in ungated
                        if any(lbl not in ks for ks in source_sets)]
             if missing:
-                confirmed += 1
                 confirmed_parts.append(
-                    f"rule[{i}] source=\"{source_alertname}\" cannot carry {missing} "
+                    f'rule[{i}] source="{source_alertname}" cannot carry {missing} '
                     f"(equal={ungated})")
             # else: every source alert carries them -> verified safe, no finding
         else:
-            unverified += 1
             if not source_alertname:
                 why = "source not alertname-pinned"
             elif alerts_by_alertname is None:
@@ -737,11 +659,7 @@ def _judge_inhibit_semantics(inhibit_rules, alerts_by_alertname):
                 why = "source not firing"
             unverified_parts.append(f"rule[{i}] equal={ungated} ({why})")
 
-    if analyzed == 0:
-        return {"check": key, "status": "warn",
-                "detail": "No parseable inhibit rules to analyze for equal-label safety"}
-
-    if confirmed:
+    if confirmed_parts:
         detail = (
             "inhibit rule(s) whose source alert cannot carry an ungated equal-label: "
             "Alertmanager treats that label as equal-when-missing, so the rule is dead "
@@ -752,7 +670,7 @@ def _judge_inhibit_semantics(inhibit_rules, alerts_by_alertname):
             detail += " | Unverified (confirm manually): " + "; ".join(unverified_parts)
         return {"check": key, "status": "warn", "detail": detail}
 
-    if unverified:
+    if unverified_parts:
         return {
             "check": key, "status": "pass",
             "detail": (f"{analyzed} inhibit rule(s) checked; no confirmed trap. Advisory — "

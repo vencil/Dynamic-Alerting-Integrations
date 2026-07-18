@@ -138,17 +138,27 @@ def _inhibit_side_matchers(rule: dict, side: str) -> list[str] | None:
     form and the legacy `*_match` / `*_match_re` map form. Returns None when the
     rule has NO specification for that side at all (malformed — not our concern);
     returns an empty list only when `*_matchers: []` is explicitly a match-all.
+
+    Defensive against malformed shapes (a live Alertmanager's schema forbids them,
+    but this runs on customer-supplied config via byo_check): a non-list
+    `*_matchers` or non-dict `*_match*` degrades to empty rather than raising, and
+    non-string matcher elements are dropped.
     """
     if f"{side}_matchers" in rule:
-        return list(rule.get(f"{side}_matchers") or [])
+        matchers = rule.get(f"{side}_matchers")
+        return [m for m in matchers if isinstance(m, str)] if isinstance(matchers, list) else []
     out: list[str] = []
     has_legacy = False
-    for k, v in (rule.get(f"{side}_match") or {}).items():
-        out.append(f'{k}="{v}"')
-        has_legacy = True
-    for k, v in (rule.get(f"{side}_match_re") or {}).items():
-        out.append(f'{k}=~"{v}"')
-        has_legacy = True
+    exact = rule.get(f"{side}_match")
+    if isinstance(exact, dict):
+        for k, v in exact.items():
+            out.append(f'{k}="{v}"')
+            has_legacy = True
+    mre = rule.get(f"{side}_match_re")
+    if isinstance(mre, dict):
+        for k, v in mre.items():
+            out.append(f'{k}=~"{v}"')
+            has_legacy = True
     return out if has_legacy else None
 
 
