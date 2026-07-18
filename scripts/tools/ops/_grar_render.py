@@ -35,7 +35,31 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _grar_routes import (  # noqa: E402
     _build_custom_alert_routes, _build_watchdog_route, _build_synthetic_probe_route,
     _build_sentinel_sinkhole_route)
-from _grar_validate import assert_watchdog_inhibit_immunity  # noqa: E402
+from _grar_validate import (  # noqa: E402
+    assert_watchdog_inhibit_immunity,
+    assert_equal_labels_gated,
+    find_ungated_equal_label_inhibits,
+)
+
+
+def _enforce_equal_labels_gated(inhibit_rules: list[dict] | None, strict: bool) -> None:
+    """Apply the #1132 equal-label-gated invariant to a merged inhibit set.
+
+    strict → hard-fail (raise); otherwise → emit a WARN per offending rule so a
+    BYO customer's pipeline degrades to a warning rather than breaking. Platform
+    CI passes strict=True (see the --strict render paths). Kept a notch softer
+    than the unconditional Watchdog guard: a silent-suppression footgun is
+    serious but not catastrophic like a suppressed dead-man's-switch."""
+    if strict:
+        assert_equal_labels_gated(inhibit_rules)
+        return
+    for i, _r, lbls in find_ungated_equal_label_inhibits(inhibit_rules):
+        print(
+            f"  WARN: inhibit_rules[{i}] equal={lbls} not presence-gated on either "
+            "side — Alertmanager treats missing-on-both-sides as equal, so this rule "
+            'may silently suppress unrelated alerts (#1132). Gate `<label>=~".+"` on '
+            "source_matchers AND target_matchers, or drop it from equal:.",
+            file=sys.stderr)
 
 
 def _main_tenant_route_tenants(routes: list[dict]) -> list[str]:
@@ -199,7 +223,8 @@ def load_base_config(path: str | None) -> dict:
 
 
 def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
-                       namespace: str = "monitoring", configmap_name: str = "alertmanager-config") -> str:
+                       namespace: str = "monitoring", configmap_name: str = "alertmanager-config",
+                       strict: bool = False) -> str:
     """Merge tenant routing fragments into base Alertmanager config and wrap as K8s ConfigMap.
 
     Merges generated routes, receivers, and inhibit_rules into a base Alertmanager
@@ -245,6 +270,11 @@ def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], in
     # ADR-025 D1: fail-closed if any inhibit rule (base or generated) would
     # suppress the always-firing Watchdog heartbeat — it must always egress.
     assert_watchdog_inhibit_immunity(merged["inhibit_rules"])
+
+    # #1132: every equal-label must be presence-gated on some side (strict → fail,
+    # else → warn). Runs on the base+generated merge, so a hand-written base rule
+    # (Silent Mode / Custom silence) is guarded here too.
+    _enforce_equal_labels_gated(merged["inhibit_rules"], strict)
 
     # Render alertmanager.yml content
     am_yml = yaml.dump(merged, default_flow_style=False,
@@ -295,7 +325,8 @@ def _read_existing_configmap(namespace: str, configmap_name: str) -> tuple[dict 
 
 
 def _merge_routes_receivers_inhibits(existing: dict, routes: list[dict],
-                                     receivers: list[dict], inhibit_rules: list[dict]) -> dict:
+                                     receivers: list[dict], inhibit_rules: list[dict],
+                                     strict: bool = False) -> dict:
     """Merge generated routes, receivers, and inhibit rules into existing config.
 
     Returns merged config dict.
@@ -342,6 +373,8 @@ def _merge_routes_receivers_inhibits(existing: dict, routes: list[dict],
     # inhibit rules were generated this run) — the Watchdog heartbeat must never
     # be inhibited before it reaches the external dead-man's-switch.
     assert_watchdog_inhibit_immunity(existing.get("inhibit_rules", []))
+    # #1132: same equal-label-gated invariant on the --apply merge path.
+    _enforce_equal_labels_gated(existing.get("inhibit_rules", []), strict)
 
     return existing
 
@@ -393,7 +426,7 @@ def _reload_alertmanager(namespace: str) -> bool:
     return True
 
 
-def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict], namespace: str, configmap_name: str) -> bool:
+def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict], namespace: str, configmap_name: str, strict: bool = False) -> bool:
     """Merge generated routing config into existing Alertmanager ConfigMap and reload.
 
     Applies tenant routing configuration directly to a running Alertmanager cluster.
@@ -428,7 +461,7 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
         return False
 
     # 2. Merge fragment into existing config
-    existing = _merge_routes_receivers_inhibits(existing, routes, receivers, inhibit_rules)
+    existing = _merge_routes_receivers_inhibits(existing, routes, receivers, inhibit_rules, strict=strict)
     merged_yml = yaml.dump(existing, default_flow_style=False,
                            allow_unicode=True, sort_keys=False)
 

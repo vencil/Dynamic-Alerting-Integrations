@@ -49,8 +49,10 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "POLICY_ERROR_PREFIX",  # ADR-007 --strict blocking-prefix SSOT
         "_extract_host",
         "_validate_profile_refs",
+        "assert_equal_labels_gated",  # #1132 equal-label-gated invariant
         "assert_watchdog_inhibit_immunity",
         "check_domain_policies",
+        "find_ungated_equal_label_inhibits",  # #1132 finder
         "find_watchdog_suppressing_inhibits",
         "load_policy",
         "validate_receiver_domains",
