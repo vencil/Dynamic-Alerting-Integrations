@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
@@ -95,14 +95,13 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 
 	for _, e := range entries {
 		name := e.Name()
-		if e.IsDir() || strings.HasPrefix(name, "_") || strings.HasPrefix(name, ".") {
+		if e.IsDir() {
 			continue
 		}
-		if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+		tenantID, ok := confd.TenantIDFromFile(name)
+		if !ok {
 			continue
 		}
-
-		tenantID := strings.TrimSuffix(strings.TrimSuffix(name, ".yaml"), ".yml")
 
 		data, err := os.ReadFile(filepath.Join(configDir, name))
 		if err != nil {
