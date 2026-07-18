@@ -622,7 +622,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "3e0b8f8a01066ac865649bddb75354ba4551461d8ed3c1f1528603a84bae4fdc",
+ "source_digest": "4bfd2500524d140b3c92d712d2a0dad4c2e9fbdea7ca7a4599b3798b817ab2b7",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -898,22 +898,6 @@
   ".doclinkignore": [
    "tests/lint/test_check_doc_links.py"
   ],
-  ".git": [
-   "tests/dx/test_bump_playbook_versions.py",
-   "tests/dx/test_fuse_plumbing_commit.py",
-   "tests/dx/test_pr_preflight_checks.py",
-   "tests/dx/test_preflight_marker.py",
-   "tests/dx/test_preflight_pass_gate.py",
-   "tests/dx/test_recover_index.py",
-   "tests/dx/test_session_init.py",
-   "tests/lint/test_check_cross_ns_url_consistency.py",
-   "tests/lint/test_check_devrules_size.py",
-   "tests/lint/test_check_path_metadata_consistency.py",
-   "tests/lint/test_check_repo_name.py",
-   "tests/lint/test_check_single_writer_invariant.py",
-   "tests/ops/test_git_check_lock.py",
-   "tests/shared/test_entrypoint.py"
-  ],
   ".github/custom-rule-policy.yaml": [
    "tests/ops/test_lint_custom_rules.py"
   ],
@@ -975,6 +959,7 @@
   "README.md": [
    "tests/dx/test_add_frontmatter.py",
    "tests/dx/test_generate_adr_index.py",
+   "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_bilingual_structure.py",
    "tests/lint/test_check_cli_coverage.py",
    "tests/lint/test_check_doc_links.py",
@@ -1131,9 +1116,6 @@
   ],
   "docs/internal/platform-log-aggregation-runbook.md": [
    "tests/shared/test_helm_chart_log_aggregation.py"
-  ],
-  "docs/readme.md": [
-   "tests/lint/test_check_head_blob_hygiene.py"
   ],
   "docs/scenarios": [
    "tests/dx/test_bump_docs.py"
@@ -1361,10 +1343,6 @@
   ],
   "mkdocs.yml": [
    "tests/lint/test_check_head_blob_hygiene.py"
-  ],
-  "readme.md": [
-   "tests/dx/test_run_chaos_soak.py",
-   "tests/ops/test_policy_opa_bridge.py"
   ],
   "renovate.json": [
    "tests/ops/test_renovate_config.py"

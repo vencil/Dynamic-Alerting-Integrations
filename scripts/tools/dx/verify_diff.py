@@ -223,7 +223,55 @@ def _iter_py_files(root: Path):
                 yield Path(dirpath) / fn
 
 
-def build_module_index(repo_root: Path) -> dict:
+def git_tracked_paths(repo_root: Path):
+    """git tracked 檔案集合 (files, dirs)；非 git 環境回 None。
+
+    映射建置的存在性判定一律以此為準，不用檔案系統 .exists()——後者有
+    平台相依性（PR #1156 CI 實證，F5 dict-compare 抓到）：
+      - worktree 的 .git 是檔案、normal checkout 是目錄 → `ROOT/".git"/"HEAD"`
+        類 joined-chain 兩邊收進不同的垃圾 entries；
+      - Windows FS 大小寫不敏感 → "readme.md" 誤判存在（實檔 README.md）；
+      - host 的 untracked 產物（bench-results、scratch 檔）只在本機存在。
+    git tracked 集合跨平台決定性、且語義更正確（untracked 本就不該進映射）。
+
+    回 None 的 fallback 僅供非 git 環境（單元測試的合成 repo、container 對
+    worktree 的 Windows gitdir 邊角）——呼叫端會警告「非決定性」。
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "ls-files", "-z"], capture_output=True,
+            cwd=str(repo_root), timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    files = {f for f in proc.stdout.decode("utf-8", "replace").split("\0") if f}
+    if not files:
+        return None
+    dirs: set = set()
+    for f in files:
+        parts = f.split("/")[:-1]
+        for i in range(1, len(parts) + 1):
+            dirs.add("/".join(parts[:i]))
+    return files, dirs
+
+
+def _is_repo_file(cand: str, repo_root: Path, tracked) -> bool:
+    """cand 是否為 repo 檔案（tracked 集合優先；fallback 檔案系統）。"""
+    if tracked is not None:
+        return cand in tracked[0]
+    return (repo_root / cand).is_file()
+
+
+def _is_repo_path(cand: str, repo_root: Path, tracked) -> bool:
+    """cand 是否為 repo 檔案或目錄（tracked 集合優先；fallback 檔案系統）。"""
+    if tracked is not None:
+        return cand in tracked[0] or cand in tracked[1]
+    return (repo_root / cand).exists()
+
+
+def build_module_index(repo_root: Path, tracked=None) -> dict:
     """裸模組名 → repo 內候選 .py 路徑（posix 相對路徑）list。
 
     來源：scripts/**（tools/ops/dx/lint + session-guards + ops）、
@@ -239,6 +287,8 @@ def build_module_index(repo_root: Path) -> dict:
             continue
         for py in _iter_py_files(r):
             rel = _posix(str(py.relative_to(repo_root)))
+            if tracked is not None and rel not in tracked[0]:
+                continue  # untracked .py 不進索引（決定性）
             index.setdefault(py.stem, []).append(rel)
     for k in index:
         index[k] = sorted(set(index[k]))
@@ -267,7 +317,8 @@ def _extract_imports(tree: ast.AST) -> set:
     return names
 
 
-def _extract_joined_path_refs(tree: ast.AST, repo_root: Path) -> set:
+def _extract_joined_path_refs(tree: ast.AST, repo_root: Path,
+                              tracked=None) -> set:
     """段接式路徑（`ROOT / "scripts" / "tools" / "x.py"`、os.path.join(...)）。
 
     動態載入（spec_from_file_location / subprocess 以 Path 物件組路徑）常用
@@ -308,7 +359,7 @@ def _extract_joined_path_refs(tree: ast.AST, repo_root: Path) -> set:
         if not segs:
             return
         cand = _posix("/".join(segs))
-        if cand and (repo_root / cand).is_file():
+        if cand and _is_repo_file(cand, repo_root, tracked):
             refs.add(cand)
 
     for node in ast.walk(tree):
@@ -324,32 +375,36 @@ def _extract_joined_path_refs(tree: ast.AST, repo_root: Path) -> set:
     return refs
 
 
-def _extract_text_refs(source: str, repo_root: Path) -> set:
-    """test 原始碼中的 repo 路徑字串（檔案或目錄，需實際存在）。"""
+def _extract_text_refs(source: str, repo_root: Path, tracked=None) -> set:
+    """test 原始碼中的 repo 路徑字串（檔案或目錄，需為 repo tracked 路徑）。"""
     refs: set = set()
     for m in _PATH_REF_RE.finditer(source):
         cand = m.group(0).rstrip("./")
         if "/" not in cand:
             continue
-        if (repo_root / cand).exists():
+        if _is_repo_path(cand, repo_root, tracked):
             refs.add(cand)
     for base, repo_path in _SPECIAL_BASENAMES.items():
-        if base in source and (repo_root / repo_path).exists():
+        if base in source and _is_repo_file(repo_path, repo_root, tracked):
             refs.add(repo_path)
     return refs
 
 
-def collect_test_files(repo_root: Path) -> list:
+def collect_test_files(repo_root: Path, tracked=None) -> list:
     """tests/ 下所有 pytest 可收集的 test_*.py（排除 federation-e2e / fixtures）。"""
     out = []
     tests_root = repo_root / "tests"
     for py in _iter_py_files(tests_root):
         if py.name.startswith("test_"):
-            out.append(_posix(str(py.relative_to(repo_root))))
+            rel = _posix(str(py.relative_to(repo_root)))
+            if tracked is not None and rel not in tracked[0]:
+                continue  # untracked scratch test 不掃（決定性）
+            out.append(rel)
     return sorted(out)
 
 
-def compute_source_digest(repo_root: Path, module_index: dict) -> str:
+def compute_source_digest(repo_root: Path, module_index: dict,
+                          tracked=None) -> str:
     """映射輸入的 content-hash：全部 test 檔內容 + 模組索引路徑清單。
 
     test 檔內容變 → import/文字掃描結果可能變；模組索引路徑集合變
@@ -360,7 +415,7 @@ def compute_source_digest(repo_root: Path, module_index: dict) -> str:
     誤判 stale（test_repo_check_is_green 會假紅）。
     """
     h = hashlib.sha256()
-    for rel in collect_test_files(repo_root):
+    for rel in collect_test_files(repo_root, tracked):
         h.update(rel.encode("utf-8"))
         h.update((repo_root / rel).read_bytes().replace(b"\r\n", b"\n"))
     for name in sorted(module_index):
@@ -370,11 +425,19 @@ def compute_source_digest(repo_root: Path, module_index: dict) -> str:
 
 
 def build_map(repo_root: Path) -> dict:
-    """全量建置映射（import_map / text_map / tests_scanned / digest）。"""
-    module_index = build_module_index(repo_root)
+    """全量建置映射（import_map / text_map / tests_scanned / digest）。
+
+    存在性判定以 git tracked 集合為準（跨平台決定性）；非 git 環境警告後
+    退回檔案系統判定（僅供合成測試 repo 等場景，產物不應 commit）。
+    """
+    tracked = git_tracked_paths(repo_root)
+    if tracked is None:
+        _warn("非 git 環境（git ls-files 不可用）——存在性判定退回檔案系統，"
+              "建置結果不具跨平台決定性，產物不應 commit")
+    module_index = build_module_index(repo_root, tracked)
     import_map: dict = {}
     text_map: dict = {}
-    tests_scanned = collect_test_files(repo_root)
+    tests_scanned = collect_test_files(repo_root, tracked)
     parse_errors = []
 
     for rel in tests_scanned:
@@ -389,8 +452,8 @@ def build_map(repo_root: Path) -> dict:
                 if source_path == rel:
                     continue  # 自己 import 自己名（不會發生，防衛）
                 import_map.setdefault(source_path, set()).add(rel)
-        refs = _extract_text_refs(src, repo_root)
-        refs |= _extract_joined_path_refs(tree, repo_root)
+        refs = _extract_text_refs(src, repo_root, tracked)
+        refs |= _extract_joined_path_refs(tree, repo_root, tracked)
         for ref in refs:
             if ref == rel:
                 continue
@@ -398,7 +461,7 @@ def build_map(repo_root: Path) -> dict:
 
     return {
         "version": MAP_VERSION,
-        "source_digest": compute_source_digest(repo_root, module_index),
+        "source_digest": compute_source_digest(repo_root, module_index, tracked),
         "import_map": {k: sorted(v) for k, v in sorted(import_map.items())},
         "text_map": {k: sorted(v) for k, v in sorted(text_map.items())},
         "tests_scanned": tests_scanned,
@@ -427,8 +490,9 @@ def load_or_rebuild_map(repo_root: Path, map_path: Path) -> tuple:
             on_disk = None
 
     if on_disk is not None and on_disk.get("version") == MAP_VERSION:
-        current_digest = compute_source_digest(repo_root,
-                                               build_module_index(repo_root))
+        tracked = git_tracked_paths(repo_root)
+        current_digest = compute_source_digest(
+            repo_root, build_module_index(repo_root, tracked), tracked)
         if on_disk.get("source_digest") == current_digest:
             return on_disk, False
         _warn("映射檔陳舊（tests/ 或工具集已變），現場重生。"

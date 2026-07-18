@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -485,6 +486,88 @@ class TestCli:
 # ============================================================
 # 真實 repo 煙霧測試
 # ============================================================
+
+# ============================================================
+# 映射建置決定性（PR #1156 CI 紅根治：tracked-set 為準的存在性判定）
+# ============================================================
+
+class TestTrackedSetDeterminism:
+    """存在性判定以 git tracked 集合為準——三類平台相依差異的 regression。
+
+    事故（PR #1156，F5 dict-compare 抓到）：host（Windows worktree）建的
+    map 與 CI（Linux normal checkout）現場重建 text_map 不符。三類元凶全是
+    檔案系統 .exists() 的平台相依：
+      1. `.git` 在 worktree 是檔案、normal checkout 是目錄 → `X/".git"/"HEAD"`
+         類 joined-chain 兩邊收進方向相反的垃圾 entries；
+      2. Windows FS 大小寫不敏感 → "readme.md" 誤中 README.md；
+      3. host-only untracked 產物被收進映射。
+    """
+
+    @pytest.fixture
+    def git_repo(self, tmp_path):
+        """真 git repo（init + add，不需 commit——ls-files 讀 index）。"""
+        root = tmp_path / "grepo"
+        _write(root / "scripts" / "tools" / "dx" / "mytool.py", "X = 1\n")
+        _write(root / "rule-packs" / "pack-a.yaml", "groups: []\n")
+        _write(root / "README.md", "# readme\n")
+        _write(root / "tests" / "dx" / "test_mytool.py",
+               "from pathlib import Path\n"
+               "import mytool\n"
+               "_ROOT = Path(__file__).resolve().parents[2]\n"
+               'P1 = "rule-packs/pack-a.yaml"\n'
+               'P2 = "rule-packs/untracked.yaml"\n'
+               '_GIT_HEAD = _ROOT / ".git" / "HEAD"\n'
+               '_LOWER = _ROOT / "readme.md"\n'
+               "def test_x():\n    assert mytool.X == 1\n")
+        subprocess.run(["git", "init", "-q"], cwd=str(root), timeout=30,
+                       check=True)
+        subprocess.run(["git", "add", "-A"], cwd=str(root), timeout=30,
+                       check=True)
+        # tracked 集合定案後才落地的 host-only 檔（模擬 bench-results 類）
+        _write(root / "rule-packs" / "untracked.yaml", "groups: []\n")
+        return root
+
+    def test_tracked_ref_in_untracked_ref_out(self, git_repo):
+        vmap = vd.build_map(git_repo)
+        assert "rule-packs/pack-a.yaml" in vmap["text_map"]
+        # 磁碟上存在但 untracked → 不進映射（host-only 產物類）
+        assert "rule-packs/untracked.yaml" not in vmap["text_map"]
+
+    def test_git_metadata_chain_never_mapped(self, git_repo):
+        """`X/".git"/"HEAD"` chain：.git/HEAD 在磁碟真實存在仍不得入映射。"""
+        assert (git_repo / ".git" / "HEAD").is_file()  # 前提成立
+        vmap = vd.build_map(git_repo)
+        assert ".git" not in vmap["text_map"]
+        assert ".git/HEAD" not in vmap["text_map"]
+
+    def test_case_exact_no_lowercase_alias(self, git_repo):
+        """`X/"readme.md"` chain：tracked 是 README.md，大小寫必須精確。
+
+        Windows FS 大小寫不敏感時 .is_file() 會誤判存在——tracked 集合
+        查表天然 case-exact，本測試在 Windows host 上才是真反例。
+        """
+        vmap = vd.build_map(git_repo)
+        assert "readme.md" not in vmap["text_map"]
+
+    def test_build_map_is_deterministic(self, git_repo):
+        m1 = vd.build_map(git_repo)
+        _write(git_repo / "scratch-not-tracked.bin", "x\n")  # 干擾檔
+        m2 = vd.build_map(git_repo)
+        assert m1 == m2
+
+    def test_non_git_falls_back_with_warning(self, synth_repo, capsys):
+        assert vd.git_tracked_paths(synth_repo) is None
+        vd.build_map(synth_repo)
+        assert "非 git 環境" in capsys.readouterr().err
+
+    def test_real_repo_tracked_set_available(self):
+        tracked = vd.git_tracked_paths(vd.REPO_ROOT)
+        assert tracked is not None
+        files, dirs = tracked
+        assert "scripts/tools/dx/verify_diff.py" in files
+        assert "scripts/tools/dx" in dirs
+        assert not any(p.startswith(".git/") or p == ".git" for p in files)
+
 
 @pytest.fixture(scope="module")
 def real_map():
