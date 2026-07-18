@@ -180,6 +180,8 @@ lang: zh
 **執行入口**（三條等價）：`make pr-preflight` ｜ `win_git_escape.bat pr-preflight [PR#]` ｜ `win_git_escape.ps1 pr-preflight [PR#]`。
 Status 處理 / hotfix 例外 / A vs B CI 分類細節見 [`github-release-playbook.md`](github-release-playbook.md)。
 
+**快速路徑（ROI r6 D 波 codified）**：剛 commit 完、pre-commit hooks 已在 commit 時證綠 → 用 `make pr-preflight-quick`（`--skip-hooks`）。對 pre-push gate **完全等價**——`--skip-hooks` 的 Local hooks 檢查記為 SKIP 非 FAIL，一樣寫 `.git/.preflight-ok.<SHA>` marker——省掉 hooks 的第二次全跑（commit→preflight→CI 三重執行去掉一重）。commit 後又改過 working tree、或 hooks 綠的是別的 SHA → 回頭跑完整 `make pr-preflight`。
+
 ### 13. da-tools 子命令 exit-code / `--json` / `--ci` 約定（#452）
 
 **規則**：新增或修改 da-tools 子命令時，exit code 一律遵守 SSOT [`scripts/tools/_lib_exitcodes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/_lib_exitcodes.py) 的 `0/1/2`——`EXIT_OK`（乾淨）/ `EXIT_VIOLATION`（user-actionable 發現：違規、drift、`--ci` fail-on-finding）/ `EXIT_CALLER_ERROR`（bad args、檔案/路徑不存在、連線失敗、malformed 輸入、缺前置、crash）。**import 具名常數，不寫 magic number**。對齊 Go binary（da-guard / da-parser / da-batchpr）同款 0/1/2 註解。

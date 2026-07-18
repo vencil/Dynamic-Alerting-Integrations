@@ -243,9 +243,10 @@ JSON 快照位於 `tests/snapshots/*.json`。
 ## 常用指令
 
 ```bash
-make test                           # 全量測試（自動遞迴 ops/dx/lint/shared）
+make test                           # 全量測試（-n auto 平行；CI 同設定；自動遞迴 ops/dx/lint/shared）
+make test-serial                    # 循序 + -v（pdb / 確定性順序 debug 用）
 make test ARGS="-m 'not slow'"     # 跳過慢速測試
-pytest tests/ops/                   # 僅跑 ops 測試
+pytest tests/ops/                   # 僅跑 ops 測試（單目錄小子集：serial 就好，見下）
 pytest tests/lint/                  # 僅跑 lint 測試
 pytest tests/dx/                    # 僅跑 dx 測試
 pytest tests/shared/                # 僅跑 shared 測試
@@ -253,3 +254,23 @@ make coverage                       # 覆蓋率報告
 pytest -m integration              # 僅跑整合測試
 pytest -m regression               # 僅跑回歸測試
 ```
+
+### 平行 vs 循序判斷規則（ROI r6 D 波）
+
+- **全套（或跨多目錄大子集）→ `-n auto`**（`make test` 已是預設）：host 實測全套 serial ~491s vs `-n auto` ~131s（3.8×）。
+- **單檔 / 單測試 / 單目錄小子集 → serial**：xdist 啟動開銷 ~2s，小子集平行反而更慢；直接 `pytest tests/ops/test_foo.py` 或 `make test-serial ARGS="-k foo"`。
+- **需要 pdb / 確定性測試順序 → `make test-serial`**（xdist 與 pdb 不相容）。
+- host 效能門檻類測試（`tests/ops/test_performance.py`）在 Windows host 門檻 ×4（`_SCALE`）——`-n auto` 滿載 CPU 爭用的 wall-clock 噪音不該當假紅；CI ubuntu 門檻不變。
+
+### Go tests（Dev Container；`make dc-go-test`）
+
+Repo root **沒有 go.work**——`go test ./...` 必須逐 module 跑；module 對照表（exporter / tenant-api / am-inhibit，與 ci.yml `go-tests-*` jobs 同步）維護在 `scripts/ops/dc_go_test.sh`。
+
+```bash
+make dc-go-test                          # 全部 CI module（exporter + tenant-api + am-inhibit）
+make dc-go-test MOD=tenant-api           # 單 module
+make dc-go-test PKG=./internal/rbac/...  # 單 package（module 自動推斷；實測 ~7s vs 整 module ~147s）
+make dc-go-test MOD=tenant-api ARGS="-run TestX -v"
+```
+
+**增量原則**：本機（container）go test 靠 Go build/test cache 天然增量——只重跑受改動影響的 package，**勿加 `-count=1`**。`-count=1` 是 CI-only flag（ci.yml 用它防 cache 遮 flake）；本機加了會放棄增量、每次全量重跑。

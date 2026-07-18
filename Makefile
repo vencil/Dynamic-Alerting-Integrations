@@ -215,10 +215,14 @@ git-preflight: ## Git 操作前自動降噪（關閉 VS Code Git + 清理 stale 
 
 .PHONY: pr-preflight
 pr-preflight: ## PR 收尾前檢查（branch / conflict / hooks / scope-drift / CI / mergeable）
+	@# 剛 commit 完（pre-commit hooks 已在 commit 時證綠）→ 用
+	@# make pr-preflight-quick：--skip-hooks 對 pre-push gate 完全等價
+	@# （SKIP 非 FAIL，一樣寫 .git/.preflight-ok.<SHA> marker），省掉
+	@# hooks 的第二次全跑（commit→preflight→CI 三重執行去掉一重）。
 	@python3 scripts/tools/dx/pr_preflight.py $(ARGS)
 
 .PHONY: pr-preflight-quick
-pr-preflight-quick: ## PR 快速檢查（跳過 local hooks）
+pr-preflight-quick: ## PR 快速檢查（--skip-hooks；commit 已證 hooks 綠時的預設路徑，marker 等價）
 	@python3 scripts/tools/dx/pr_preflight.py --skip-hooks $(ARGS)
 
 .PHONY: diag-pr
@@ -377,8 +381,16 @@ dc-test: ## 在 Dev Container 內跑 pytest（可選 ARGS="-k foo"）
 	@bash scripts/ops/dx-run.sh pytest $(ARGS)
 
 .PHONY: dc-go-test
-dc-go-test: ## 在 Dev Container 內跑 go test ./...（Go 僅在 container 內可用）
-	@bash scripts/ops/dx-run.sh go test ./...
+dc-go-test: ## 在 Dev Container 內跑 Go tests（預設全 CI module；MOD= / PKG= 縮小範圍；Go 僅在 container 內可用）
+	@# Root 無 go.work——go test 必須逐 module 跑；module 對照表（與 ci.yml
+	@# go-tests-* jobs 同步）維護在 scripts/ops/dc_go_test.sh。用法：
+	@#   make dc-go-test                          # exporter + tenant-api + am-inhibit 全跑
+	@#   make dc-go-test MOD=tenant-api           # 單 module
+	@#   make dc-go-test PKG=./internal/rbac/...  # 單 package（module 自動推斷，秒級）
+	@#   make dc-go-test MOD=tenant-api ARGS="-run TestX -v"
+	@# 增量：本機 go test 靠 Go build/test cache 天然增量（只重跑受改動影響的
+	@# package）——勿加 -count=1（CI-only：防 cache 遮 flake，ci.yml 已有）。
+	@bash scripts/ops/dx-run.sh bash scripts/ops/dc_go_test.sh $(if $(MOD),--mod $(MOD)) $(if $(PKG),--pkg $(PKG)) $(if $(ARGS),-- $(ARGS))
 
 .PHONY: test-am-inhibit
 test-am-inhibit: ## 驗手寫 Alertmanager config 的 inhibit 語意（#1132 防再犯；Go 僅在 container 內可用）
@@ -825,20 +837,20 @@ bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0
 # Python 測試 & 覆蓋率
 # ----------------------------------------------------------
 .PHONY: test
-test: ## 執行 Python 單元測試 (pytest)
+test: ## 執行 Python 單元測試（pytest -n auto 平行；CI 同設定。debug → make test-serial）
+	## Parallel (xdist -n auto) IS the default（ROI r6 D 波實測：host 全套
+	## serial ~491s vs -n auto ~131s，3.8x）。Matches CI's ci.yml (-n auto).
+	## 判斷規則：單檔 / 單目錄小子集 serial 反而快——xdist 啟動 ~2s 蓋過
+	## 收益，直接 `pytest tests/ops/` 或用 make test-serial。
+	@python3 -m pytest tests/ --ignore=tests/federation-e2e -n auto --tb=short $(ARGS)
+
+.PHONY: test-serial
+test-serial: ## pytest 循序版（pdb / 確定性順序 / 單檔小子集 debug 用）
 	@python3 -m pytest tests/ --ignore=tests/federation-e2e -v --tb=short $(ARGS)
 
 .PHONY: test-fast
-test-fast: ## 全套 pytest 平行加速（xdist -n auto，~2-3x；CI 同設定）
-	## Local full-suite run with pytest-xdist parallelism. Matches CI's
-	## .github/workflows/ci.yml step (-n auto). Typical wall-clock on a
-	## 4-core dev box: ~50-60s vs ~130s sequential. Skip for targeted
-	## runs (single-test / single-file) — xdist startup overhead (~2s)
-	## makes those slower, not faster.
-	##
-	## Sequential default (`make test`) stays as the friendly path for
-	## debugging (works with pdb, deterministic test order).
-	@python3 -m pytest tests/ --ignore=tests/federation-e2e -n auto --tb=short $(ARGS)
+test-fast: ## (alias) 同 make test——歷史名稱保留，肌肉記憶用
+	@$(MAKE) test ARGS="$(ARGS)"
 
 .PHONY: coverage
 coverage: ## 測試覆蓋率報告 (使用: make coverage ARGS="--html" 產生 HTML)
