@@ -47,6 +47,12 @@ func (w *Writer) WriteFederationPolicyFile(ctx context.Context, authorEmail, yam
 // concurrent edits across tenants cannot conflict. The _federation/
 // directory is created on first write.
 func (w *Writer) WriteFederationSubsetFile(ctx context.Context, tenantID, authorEmail, yamlContent string) error {
+	// Reserved-id backstop: the subset path also writes {tenantID}.yaml, so a
+	// reserved id would land a _*/.* file inside _federation/ (defense-in-depth;
+	// see guardTenantID).
+	if err := guardTenantID(tenantID); err != nil {
+		return err
+	}
 	// Basic YAML validity check (the schema check is the caller's job).
 	var raw map[string]interface{}
 	if err := yaml.Unmarshal([]byte(yamlContent), &raw); err != nil {

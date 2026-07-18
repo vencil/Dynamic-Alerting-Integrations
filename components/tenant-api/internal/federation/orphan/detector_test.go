@@ -65,7 +65,8 @@ func TestScanKnownTenants(t *testing.T) {
 	dir := t.TempDir()
 	for _, f := range []string{
 		"db-a.yaml", "db-b.yml", // tenants
-		"_defaults.yaml", "_rbac.yaml", "_federation_policy.yaml", // specials — skipped
+		"_defaults.yaml", "_rbac.yaml", "_federation_policy.yaml", // "_" specials — skipped
+		".hidden.yaml", ".gitkeep", // "." hidden files — skipped (regression: scanKnownTenants once skipped only "_")
 		"notes.txt", // non-YAML — skipped
 	} {
 		if err := os.WriteFile(filepath.Join(dir, f), []byte("{}"), 0o600); err != nil {
