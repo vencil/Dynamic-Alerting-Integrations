@@ -1,0 +1,1861 @@
+{
+ "import_map": {
+  "components/da-tools/app/entrypoint.py": [
+   "tests/ops/test_regression.py",
+   "tests/shared/test_entrypoint.py"
+  ],
+  "scripts/dx/generate_adr_index.py": [
+   "tests/dx/test_generate_adr_index.py"
+  ],
+  "scripts/dx/generate_planning_index.py": [
+   "tests/dx/test_generate_planning_index.py",
+   "tests/lint/test_check_planning_status_sync.py"
+  ],
+  "scripts/tools/_lib_constants.py": [
+   "tests/lint/test_check_confd_schema.py",
+   "tests/shared/test_property_tools.py",
+   "tests/shared/test_reserved_key_py_go_parity.py"
+  ],
+  "scripts/tools/_lib_exitcodes.py": [
+   "tests/dx/test_add_frontmatter.py",
+   "tests/dx/test_coverage_gap_analysis.py",
+   "tests/dx/test_describe_tenant.py",
+   "tests/dx/test_doc_coverage.py",
+   "tests/dx/test_generate_alert_reference.py",
+   "tests/dx/test_generate_changelog.py",
+   "tests/dx/test_preflight_msg_validator.py",
+   "tests/dx/test_run_chaos_soak.py",
+   "tests/lint/test_check_admin_config_schema.py",
+   "tests/lint/test_check_bilingual_annotations.py",
+   "tests/lint/test_check_confd_schema.py",
+   "tests/lint/test_check_devrules_size.py",
+   "tests/lint/test_check_frontmatter_versions.py",
+   "tests/lint/test_check_includes_sync.py",
+   "tests/lint/test_check_routing_profiles.py",
+   "tests/lint/test_validate_mermaid.py",
+   "tests/ops/test_config_history.py",
+   "tests/ops/test_da_assembler.py",
+   "tests/ops/test_discover_instance_mappings.py",
+   "tests/ops/test_drift_detect.py",
+   "tests/ops/test_explain_route.py",
+   "tests/ops/test_federation_check.py",
+   "tests/ops/test_gitops_check.py",
+   "tests/ops/test_grafana_import.py",
+   "tests/ops/test_init_project.py",
+   "tests/ops/test_inject_metadata_join.py",
+   "tests/ops/test_migrate_rule_outputs.py",
+   "tests/ops/test_notification_tester.py",
+   "tests/ops/test_policy_opa_bridge.py",
+   "tests/ops/test_scaffold_tenant.py",
+   "tests/ops/test_threshold_recommend.py",
+   "tests/ops/test_validate_config.py",
+   "tests/shared/test_tool_exit_codes.py"
+  ],
+  "scripts/tools/_lib_godispatch.py": [
+   "tests/shared/test_lib_godispatch.py",
+   "tests/shared/test_property_tools.py"
+  ],
+  "scripts/tools/_lib_io.py": [
+   "tests/ops/test_policy_opa_bridge.py",
+   "tests/shared/test_property_tools.py"
+  ],
+  "scripts/tools/_lib_prometheus.py": [
+   "tests/shared/test_probe_health.py",
+   "tests/shared/test_property_tools.py"
+  ],
+  "scripts/tools/_lib_python.py": [
+   "tests/ops/test_benchmark.py",
+   "tests/ops/test_check_alert.py",
+   "tests/ops/test_integration.py",
+   "tests/ops/test_regression.py",
+   "tests/shared/test_lib_python.py",
+   "tests/shared/test_mutation_guards.py",
+   "tests/shared/test_property.py"
+  ],
+  "scripts/tools/_lib_validation.py": [
+   "tests/shared/test_property_tools.py"
+  ],
+  "scripts/tools/dx/_recipe_preview.py": [
+   "tests/dx/test_recipe_preview.py"
+  ],
+  "scripts/tools/dx/_waveform_lib.py": [
+   "tests/dx/test_inject_waveform.py",
+   "tests/dx/test_waveform_compile.py"
+  ],
+  "scripts/tools/dx/add_frontmatter.py": [
+   "tests/dx/test_add_frontmatter.py"
+  ],
+  "scripts/tools/dx/analyze_bench_history.py": [
+   "tests/dx/test_analyze_bench_history.py"
+  ],
+  "scripts/tools/dx/axe_lite_static.py": [
+   "tests/dx/test_axe_lite_static.py",
+   "tests/shared/test_property_tools.py"
+  ],
+  "scripts/tools/dx/bump_docs.py": [
+   "tests/dx/test_bump_docs.py",
+   "tests/shared/test_entrypoint.py"
+  ],
+  "scripts/tools/dx/bump_playbook_versions.py": [
+   "tests/dx/test_bump_playbook_versions.py"
+  ],
+  "scripts/tools/dx/compile_custom_alerts.py": [
+   "tests/dx/test_compile_custom_alerts.py",
+   "tests/dx/test_custom_alerts_promtool.py",
+   "tests/dx/test_recipe_lifecycle.py",
+   "tests/ops/test_lint_custom_rules.py"
+  ],
+  "scripts/tools/dx/coverage_delta.py": [
+   "tests/dx/test_coverage_delta.py"
+  ],
+  "scripts/tools/dx/coverage_gap_analysis.py": [
+   "tests/dx/test_coverage_gap_analysis.py"
+  ],
+  "scripts/tools/dx/describe_tenant.py": [
+   "tests/dx/test_describe_tenant.py",
+   "tests/ops/test_blast_radius.py"
+  ],
+  "scripts/tools/dx/diag_pr_ci.py": [
+   "tests/dx/test_diag_pr_ci.py"
+  ],
+  "scripts/tools/dx/doc_coverage.py": [
+   "tests/dx/test_doc_coverage.py"
+  ],
+  "scripts/tools/dx/gen_recipe_status_json.py": [
+   "tests/dx/test_gen_recipe_status_json.py"
+  ],
+  "scripts/tools/dx/generate_alert_reference.py": [
+   "tests/dx/test_generate_alert_reference.py"
+  ],
+  "scripts/tools/dx/generate_changelog.py": [
+   "tests/dx/test_generate_changelog.py",
+   "tests/shared/test_property_tools.py"
+  ],
+  "scripts/tools/dx/generate_doc_map.py": [
+   "tests/dx/test_generate_doc_map.py",
+   "tests/shared/test_property_tools.py"
+  ],
+  "scripts/tools/dx/generate_rule_pack_readme.py": [
+   "tests/dx/test_generate_rule_pack_readme.py"
+  ],
+  "scripts/tools/dx/generate_rulepack_configmaps.py": [
+   "tests/dx/test_generate_rulepack_configmaps.py"
+  ],
+  "scripts/tools/dx/generate_tool_map.py": [
+   "tests/dx/test_generate_tool_map.py",
+   "tests/dx/test_generate_tool_map_encoding.py"
+  ],
+  "scripts/tools/dx/inject_waveform.py": [
+   "tests/dx/test_inject_waveform.py"
+  ],
+  "scripts/tools/dx/migrate_conf_d.py": [
+   "tests/dx/test_migrate_conf_d.py"
+  ],
+  "scripts/tools/dx/pr_preflight.py": [
+   "tests/dx/test_pr_preflight_checks.py",
+   "tests/dx/test_pr_preflight_orchestrator.py"
+  ],
+  "scripts/tools/dx/run_chaos_soak.py": [
+   "tests/dx/test_run_chaos_soak.py"
+  ],
+  "scripts/tools/dx/scaffold_jsx_dep.py": [
+   "tests/dx/test_scaffold_jsx_dep.py"
+  ],
+  "scripts/tools/dx/scaffold_lint.py": [
+   "tests/dx/test_scaffold_lint.py"
+  ],
+  "scripts/tools/dx/scan_component_health.py": [
+   "tests/dx/test_scan_component_health.py"
+  ],
+  "scripts/tools/dx/suggest_related.py": [
+   "tests/dx/test_suggest_related.py"
+  ],
+  "scripts/tools/dx/sync_schema.py": [
+   "tests/dx/test_sync_schema.py"
+  ],
+  "scripts/tools/dx/sync_tool_registry.py": [
+   "tests/dx/test_sync_tool_registry.py"
+  ],
+  "scripts/tools/dx/verify_diff.py": [
+   "tests/dx/test_verify_diff.py"
+  ],
+  "scripts/tools/dx/waveform_score.py": [
+   "tests/dx/test_waveform_score.py"
+  ],
+  "scripts/tools/lint/_lint_helpers.py": [
+   "tests/lint/test_check_build_completeness.py",
+   "tests/lint/test_check_cli_coverage.py",
+   "tests/lint/test_check_codename_leak.py",
+   "tests/lint/test_check_repo_name.py",
+   "tests/shared/test_entrypoint.py",
+   "tests/shared/test_property_tools.py"
+  ],
+  "scripts/tools/lint/check_account_registry_monotonic.py": [
+   "tests/lint/test_check_account_registry_monotonic.py"
+  ],
+  "scripts/tools/lint/check_admin_config_schema.py": [
+   "tests/lint/test_check_admin_config_schema.py"
+  ],
+  "scripts/tools/lint/check_bilingual_annotations.py": [
+   "tests/lint/test_check_bilingual_annotations.py"
+  ],
+  "scripts/tools/lint/check_bilingual_content.py": [
+   "tests/lint/test_check_bilingual_content.py",
+   "tests/lint/test_snapshot_v2.py"
+  ],
+  "scripts/tools/lint/check_changelog_no_tbd.py": [
+   "tests/lint/test_check_changelog_no_tbd.py"
+  ],
+  "scripts/tools/lint/check_cli_coverage.py": [
+   "tests/lint/test_check_cli_coverage.py"
+  ],
+  "scripts/tools/lint/check_codename_leak.py": [
+   "tests/lint/test_check_codename_leak.py"
+  ],
+  "scripts/tools/lint/check_commit_scope_doc.py": [
+   "tests/lint/test_check_commit_scope_doc.py"
+  ],
+  "scripts/tools/lint/check_confd_schema.py": [
+   "tests/lint/test_check_confd_schema.py"
+  ],
+  "scripts/tools/lint/check_cross_ns_url_consistency.py": [
+   "tests/lint/test_check_cross_ns_url_consistency.py"
+  ],
+  "scripts/tools/lint/check_design_token_usage.py": [
+   "tests/lint/test_check_design_token_usage.py"
+  ],
+  "scripts/tools/lint/check_dev_bypass_manifest.py": [
+   "tests/lint/test_check_dev_bypass_manifest.py"
+  ],
+  "scripts/tools/lint/check_dev_rules_enforcement.py": [
+   "tests/lint/test_check_dev_rules_enforcement.py"
+  ],
+  "scripts/tools/lint/check_devrules_size.py": [
+   "tests/lint/test_check_devrules_size.py"
+  ],
+  "scripts/tools/lint/check_doc_freshness.py": [
+   "tests/lint/test_check_doc_freshness.py"
+  ],
+  "scripts/tools/lint/check_doc_links.py": [
+   "tests/lint/test_check_doc_links.py"
+  ],
+  "scripts/tools/lint/check_flaky_registry.py": [
+   "tests/shared/test_property_tools.py"
+  ],
+  "scripts/tools/lint/check_frontmatter_versions.py": [
+   "tests/lint/test_check_frontmatter_versions.py"
+  ],
+  "scripts/tools/lint/check_ha_threshold_aggregation.py": [
+   "tests/lint/test_check_ha_threshold_aggregation.py"
+  ],
+  "scripts/tools/lint/check_hardcode_tenant.py": [
+   "tests/lint/test_check_hardcode_tenant.py"
+  ],
+  "scripts/tools/lint/check_head_blob_hygiene.py": [
+   "tests/lint/test_check_head_blob_hygiene.py"
+  ],
+  "scripts/tools/lint/check_helm_values_secrets.py": [
+   "tests/lint/test_check_helm_values_secrets.py"
+  ],
+  "scripts/tools/lint/check_hub_badge_drift.py": [
+   "tests/lint/test_check_hub_badge_drift.py"
+  ],
+  "scripts/tools/lint/check_iac_helm.py": [
+   "tests/lint/test_check_iac_helm.py",
+   "tests/lint/test_fallback_image_digest_pin.py"
+  ],
+  "scripts/tools/lint/check_iac_vibe_rules.py": [
+   "tests/lint/test_check_iac_vibe_rules.py",
+   "tests/lint/test_fallback_image_digest_pin.py"
+  ],
+  "scripts/tools/lint/check_includes_sync.py": [
+   "tests/lint/test_check_includes_sync.py"
+  ],
+  "scripts/tools/lint/check_jsx_loader_compat.py": [
+   "tests/lint/test_check_jsx_loader_compat.py"
+  ],
+  "scripts/tools/lint/check_k8s_manifests.py": [
+   "tests/lint/test_check_k8s_manifests.py",
+   "tests/lint/test_fallback_image_digest_pin.py"
+  ],
+  "scripts/tools/lint/check_ksm_version_allowlist.py": [
+   "tests/lint/test_check_ksm_version_allowlist.py"
+  ],
+  "scripts/tools/lint/check_leftouterjoin_enrichment.py": [
+   "tests/lint/test_check_leftouterjoin_enrichment.py"
+  ],
+  "scripts/tools/lint/check_lint_toolchain_fit.py": [
+   "tests/lint/test_check_lint_toolchain_fit.py"
+  ],
+  "scripts/tools/lint/check_maintenance_symmetry.py": [
+   "tests/lint/test_check_maintenance_symmetry.py"
+  ],
+  "scripts/tools/lint/check_makefile_targets.py": [
+   "tests/lint/test_check_makefile_targets.py"
+  ],
+  "scripts/tools/lint/check_orphan_lint.py": [
+   "tests/lint/test_check_orphan_lint.py"
+  ],
+  "scripts/tools/lint/check_path_metadata_consistency.py": [
+   "tests/lint/test_check_path_metadata_consistency.py"
+  ],
+  "scripts/tools/lint/check_pint.py": [
+   "tests/lint/test_fallback_image_digest_pin.py"
+  ],
+  "scripts/tools/lint/check_planning_status_sync.py": [
+   "tests/lint/test_check_planning_status_sync.py"
+  ],
+  "scripts/tools/lint/check_playwright_rtl_drift.py": [
+   "tests/lint/test_check_playwright_rtl_drift.py"
+  ],
+  "scripts/tools/lint/check_pr_scope_drift.py": [
+   "tests/lint/test_check_pr_scope_drift.py"
+  ],
+  "scripts/tools/lint/check_repo_name.py": [
+   "tests/lint/test_check_repo_name.py"
+  ],
+  "scripts/tools/lint/check_routing_profiles.py": [
+   "tests/lint/test_check_routing_profiles.py"
+  ],
+  "scripts/tools/lint/check_rulepack_sync.py": [
+   "tests/dx/test_generate_rulepack_configmaps.py",
+   "tests/lint/test_check_rulepack_sync.py"
+  ],
+  "scripts/tools/lint/check_single_writer_invariant.py": [
+   "tests/lint/test_check_single_writer_invariant.py"
+  ],
+  "scripts/tools/lint/check_structure.py": [
+   "tests/lint/test_check_structure.py"
+  ],
+  "scripts/tools/lint/check_subprocess_timeout.py": [
+   "tests/lint/test_check_subprocess_timeout.py"
+  ],
+  "scripts/tools/lint/check_translation.py": [
+   "tests/lint/test_check_translation.py"
+  ],
+  "scripts/tools/lint/check_undefined_tokens.py": [
+   "tests/lint/test_check_undefined_tokens.py"
+  ],
+  "scripts/tools/lint/check_vmalert_coverage.py": [
+   "tests/lint/test_check_vmalert_coverage.py"
+  ],
+  "scripts/tools/lint/check_window_x_no_fallback.py": [
+   "tests/lint/test_check_window_x_no_fallback.py"
+  ],
+  "scripts/tools/lint/check_workflow_git_push_permissions.py": [
+   "tests/lint/test_check_workflow_git_push_permissions.py"
+  ],
+  "scripts/tools/lint/detect_sed_damage.py": [
+   "tests/lint/test_detect_sed_damage.py"
+  ],
+  "scripts/tools/lint/fix_doc_links.py": [
+   "tests/lint/test_fix_doc_links.py"
+  ],
+  "scripts/tools/lint/fix_file_hygiene.py": [
+   "tests/lint/test_fix_file_hygiene.py"
+  ],
+  "scripts/tools/lint/lint_jsx_babel.py": [
+   "tests/lint/test_lint_jsx_babel_frontmatter.py",
+   "tests/lint/test_lint_jsx_babel_linecount.py"
+  ],
+  "scripts/tools/lint/lint_tool_consistency.py": [
+   "tests/lint/test_lint_tool_consistency.py"
+  ],
+  "scripts/tools/lint/trufflehog_to_sarif.py": [
+   "tests/lint/test_trufflehog_to_sarif.py"
+  ],
+  "scripts/tools/lint/validate_docs_versions.py": [
+   "tests/dx/test_generate_rule_pack_readme.py"
+  ],
+  "scripts/tools/lint/validate_mermaid.py": [
+   "tests/lint/test_validate_mermaid.py"
+  ],
+  "scripts/tools/lint/validate_planning_session_row.py": [
+   "tests/lint/test_validate_planning_session_row.py"
+  ],
+  "scripts/tools/ops/_federation_revocation_reconciler.py": [
+   "tests/ops/test_federation_revocation_reconciler.py"
+  ],
+  "scripts/tools/ops/_grar_merge.py": [
+   "tests/shared/test_property_tools.py"
+  ],
+  "scripts/tools/ops/_grar_render.py": [
+   "tests/ops/test_generate_routes_orchestration.py"
+  ],
+  "scripts/tools/ops/_grar_validate.py": [
+   "tests/ops/test_grar_strict_hardening.py",
+   "tests/shared/test_property_tools.py"
+  ],
+  "scripts/tools/ops/_observed_map_lib.py": [
+   "tests/ops/test_observed_map_lib.py",
+   "tests/ops/test_threshold_govern.py"
+  ],
+  "scripts/tools/ops/alert_correlate.py": [
+   "tests/lint/test_snapshot_v2.py",
+   "tests/ops/test_alert_correlate.py"
+  ],
+  "scripts/tools/ops/alert_quality.py": [
+   "tests/ops/test_alert_quality.py"
+  ],
+  "scripts/tools/ops/analyze_rule_pack_gaps.py": [
+   "tests/ops/test_analyze_gaps.py"
+  ],
+  "scripts/tools/ops/assemble_config_dir.py": [
+   "tests/ops/test_assemble_config_dir.py"
+  ],
+  "scripts/tools/ops/backtest_threshold.py": [
+   "tests/ops/test_backtest_threshold.py"
+  ],
+  "scripts/tools/ops/baseline_discovery.py": [
+   "tests/ops/test_baseline_discovery.py"
+  ],
+  "scripts/tools/ops/batch_diagnose.py": [
+   "tests/ops/test_batch_diagnose.py"
+  ],
+  "scripts/tools/ops/batchpr_dispatch.py": [
+   "tests/shared/test_dispatch_contract.py"
+  ],
+  "scripts/tools/ops/blast_radius.py": [
+   "tests/ops/test_blast_radius.py"
+  ],
+  "scripts/tools/ops/blind_spot_discovery.py": [
+   "tests/ops/test_blind_spot_discovery.py"
+  ],
+  "scripts/tools/ops/byo_check.py": [
+   "tests/ops/test_byo_check.py"
+  ],
+  "scripts/tools/ops/cardinality_forecasting.py": [
+   "tests/ops/test_cardinality_forecasting.py"
+  ],
+  "scripts/tools/ops/check_alert.py": [
+   "tests/ops/test_check_alert.py"
+  ],
+  "scripts/tools/ops/config_diff.py": [
+   "tests/ops/test_config_diff.py"
+  ],
+  "scripts/tools/ops/config_history.py": [
+   "tests/ops/test_config_history.py"
+  ],
+  "scripts/tools/ops/cutover_tenant.py": [
+   "tests/ops/test_cutover_tenant.py"
+  ],
+  "scripts/tools/ops/da_assembler.py": [
+   "tests/ops/test_da_assembler.py"
+  ],
+  "scripts/tools/ops/deprecate_rule.py": [
+   "tests/ops/test_offboard_deprecate.py"
+  ],
+  "scripts/tools/ops/diagnose.py": [
+   "tests/ops/test_diagnose.py",
+   "tests/ops/test_diagnose_inheritance.py"
+  ],
+  "scripts/tools/ops/discover_instance_mappings.py": [
+   "tests/ops/test_discover_instance_mappings.py"
+  ],
+  "scripts/tools/ops/drift_detect.py": [
+   "tests/lint/test_snapshot_v2.py",
+   "tests/ops/test_drift_detect.py",
+   "tests/ops/test_property_based.py"
+  ],
+  "scripts/tools/ops/explain_route.py": [
+   "tests/ops/test_e2e_routing_profile.py",
+   "tests/ops/test_explain_route.py",
+   "tests/ops/test_explain_route_trace.py"
+  ],
+  "scripts/tools/ops/federation_check.py": [
+   "tests/ops/test_federation_check.py"
+  ],
+  "scripts/tools/ops/federation_keygen.py": [
+   "tests/ops/test_federation_keygen.py"
+  ],
+  "scripts/tools/ops/generate_alertmanager_routes.py": [
+   "tests/ops/test_alertmanager_amtool_validity.py",
+   "tests/ops/test_alertmanager_routing_correctness.py",
+   "tests/ops/test_benchmark.py",
+   "tests/ops/test_domain_policy.py",
+   "tests/ops/test_e2e_routing_profile.py",
+   "tests/ops/test_error_consistency.py",
+   "tests/ops/test_explain_route.py",
+   "tests/ops/test_generate_alertmanager_routes.py",
+   "tests/ops/test_generate_routes_orchestration.py",
+   "tests/ops/test_grar_facade_reexports.py",
+   "tests/ops/test_grar_strict_hardening.py",
+   "tests/ops/test_integration.py",
+   "tests/ops/test_parse_platform_config.py",
+   "tests/ops/test_performance.py",
+   "tests/ops/test_regression.py"
+  ],
+  "scripts/tools/ops/generate_rule_pack_split.py": [
+   "tests/ops/test_generate_rule_pack_split.py",
+   "tests/shared/test_property_tools.py"
+  ],
+  "scripts/tools/ops/generate_tenant_mapping_rules.py": [
+   "tests/ops/test_generate_tenant_mapping_rules.py"
+  ],
+  "scripts/tools/ops/gitops_check.py": [
+   "tests/ops/test_gitops_check.py"
+  ],
+  "scripts/tools/ops/grafana_import.py": [
+   "tests/ops/test_grafana_import.py"
+  ],
+  "scripts/tools/ops/guard_dispatch.py": [
+   "tests/shared/test_dispatch_contract.py"
+  ],
+  "scripts/tools/ops/init_project.py": [
+   "tests/ops/test_init_project.py"
+  ],
+  "scripts/tools/ops/inject_metadata_join.py": [
+   "tests/ops/test_inject_metadata_join.py"
+  ],
+  "scripts/tools/ops/lint_custom_rules.py": [
+   "tests/ops/test_lint_custom_rules.py"
+  ],
+  "scripts/tools/ops/maintenance_scheduler.py": [
+   "tests/ops/test_maintenance_scheduler.py"
+  ],
+  "scripts/tools/ops/migrate_rule.py": [
+   "tests/ops/test_migrate_ast.py",
+   "tests/ops/test_migrate_rule_outputs.py",
+   "tests/ops/test_migrate_v3.py"
+  ],
+  "scripts/tools/ops/migrate_to_operator.py": [
+   "tests/ops/test_migrate_to_operator.py",
+   "tests/ops/test_property_based.py"
+  ],
+  "scripts/tools/ops/notification_tester.py": [
+   "tests/ops/test_notification_tester.py"
+  ],
+  "scripts/tools/ops/offboard_tenant.py": [
+   "tests/ops/test_offboard_deprecate.py",
+   "tests/ops/test_offboard_tenant.py"
+  ],
+  "scripts/tools/ops/onboard_platform.py": [
+   "tests/ops/test_error_consistency.py",
+   "tests/ops/test_integration.py",
+   "tests/ops/test_onboard_platform.py",
+   "tests/ops/test_regression.py"
+  ],
+  "scripts/tools/ops/operator_check.py": [
+   "tests/ops/test_operator_check.py"
+  ],
+  "scripts/tools/ops/operator_generate.py": [
+   "tests/ops/test_operator_generate_v2.py",
+   "tests/ops/test_property_based.py"
+  ],
+  "scripts/tools/ops/parser_dispatch.py": [
+   "tests/shared/test_dispatch_contract.py"
+  ],
+  "scripts/tools/ops/patch_config.py": [
+   "tests/ops/test_patch_config.py"
+  ],
+  "scripts/tools/ops/policy_engine.py": [
+   "tests/ops/test_policy_engine.py"
+  ],
+  "scripts/tools/ops/policy_opa_bridge.py": [
+   "tests/ops/test_policy_opa_bridge.py"
+  ],
+  "scripts/tools/ops/rule_pack_diff.py": [
+   "tests/ops/test_rule_pack_diff.py"
+  ],
+  "scripts/tools/ops/runtime_audit.py": [
+   "tests/ops/test_runtime_audit.py"
+  ],
+  "scripts/tools/ops/scaffold_tenant.py": [
+   "tests/ops/test_integration.py",
+   "tests/ops/test_regression.py",
+   "tests/ops/test_scaffold_db.py",
+   "tests/ops/test_scaffold_tenant.py"
+  ],
+  "scripts/tools/ops/shadow_verify.py": [
+   "tests/ops/test_shadow_verify.py"
+  ],
+  "scripts/tools/ops/silencer_drift_check.py": [
+   "tests/ops/test_silencer_drift_check.py"
+  ],
+  "scripts/tools/ops/state_reconcile.py": [
+   "tests/ops/test_state_reconcile.py"
+  ],
+  "scripts/tools/ops/threshold_govern.py": [
+   "tests/ops/test_threshold_govern.py"
+  ],
+  "scripts/tools/ops/threshold_recommend.py": [
+   "tests/ops/test_threshold_govern.py",
+   "tests/ops/test_threshold_recommend.py"
+  ],
+  "scripts/tools/ops/validate_config.py": [
+   "tests/ops/test_validate_config.py"
+  ],
+  "scripts/tools/ops/validate_migration.py": [
+   "tests/ops/test_offboard_deprecate.py",
+   "tests/ops/test_validate_migration.py"
+  ],
+  "scripts/tools/validate_all.py": [
+   "tests/shared/test_validate_all.py"
+  ],
+  "tests/factories.py": [
+   "tests/ops/test_analyze_gaps.py",
+   "tests/ops/test_benchmark.py",
+   "tests/ops/test_domain_policy.py",
+   "tests/ops/test_error_consistency.py",
+   "tests/ops/test_generate_alertmanager_routes.py",
+   "tests/ops/test_generate_routes_orchestration.py",
+   "tests/ops/test_grar_strict_hardening.py",
+   "tests/ops/test_integration.py",
+   "tests/ops/test_maintenance_scheduler.py",
+   "tests/ops/test_notification_tester.py",
+   "tests/ops/test_onboard_platform.py",
+   "tests/ops/test_performance.py",
+   "tests/ops/test_regression.py",
+   "tests/ops/test_threshold_recommend.py",
+   "tests/shared/test_lib_python.py",
+   "tests/shared/test_mutation_guards.py"
+  ],
+  "tests/ops/test_alertmanager_amtool_validity.py": [
+   "tests/ops/test_alertmanager_routing_correctness.py"
+  ],
+  "tests/rulepacks/vm_harness.py": [
+   "tests/dx/test_inject_waveform.py",
+   "tests/dx/test_waveform_score.py",
+   "tests/rulepacks/test_vm_alert_parity.py",
+   "tests/rulepacks/test_vm_backend_parity.py",
+   "tests/rulepacks/test_vm_replay_staleness.py"
+  ]
+ },
+ "parse_errors": [],
+ "source_digest": "b1fd180e00676303529cf5bb05add2a6752475cd11a283343808834ff9711545",
+ "tests_scanned": [
+  "tests/dx/test_add_frontmatter.py",
+  "tests/dx/test_analyze_bench_history.py",
+  "tests/dx/test_atomic_write.py",
+  "tests/dx/test_axe_lite_static.py",
+  "tests/dx/test_bat_label_integrity.py",
+  "tests/dx/test_bump_docs.py",
+  "tests/dx/test_bump_playbook_versions.py",
+  "tests/dx/test_compile_custom_alerts.py",
+  "tests/dx/test_coverage_delta.py",
+  "tests/dx/test_coverage_gap_analysis.py",
+  "tests/dx/test_custom_alerts_promtool.py",
+  "tests/dx/test_describe_tenant.py",
+  "tests/dx/test_diag_pr_ci.py",
+  "tests/dx/test_doc_coverage.py",
+  "tests/dx/test_federation_revocation_dashboard.py",
+  "tests/dx/test_fleet_threshold_dashboard.py",
+  "tests/dx/test_fuse_plumbing_commit.py",
+  "tests/dx/test_gen_recipe_status_json.py",
+  "tests/dx/test_generate_adr_index.py",
+  "tests/dx/test_generate_alert_reference.py",
+  "tests/dx/test_generate_changelog.py",
+  "tests/dx/test_generate_doc_map.py",
+  "tests/dx/test_generate_planning_index.py",
+  "tests/dx/test_generate_platform_data.py",
+  "tests/dx/test_generate_rule_pack_readme.py",
+  "tests/dx/test_generate_rulepack_configmaps.py",
+  "tests/dx/test_generate_tenant_fixture.py",
+  "tests/dx/test_generate_tool_map.py",
+  "tests/dx/test_generate_tool_map_encoding.py",
+  "tests/dx/test_inject_waveform.py",
+  "tests/dx/test_log_visibility_catalogue.py",
+  "tests/dx/test_migrate_conf_d.py",
+  "tests/dx/test_pr_preflight_checks.py",
+  "tests/dx/test_pr_preflight_orchestrator.py",
+  "tests/dx/test_preflight_bash.py",
+  "tests/dx/test_preflight_marker.py",
+  "tests/dx/test_preflight_msg_validator.py",
+  "tests/dx/test_preflight_pass_gate.py",
+  "tests/dx/test_recipe_lifecycle.py",
+  "tests/dx/test_recipe_preview.py",
+  "tests/dx/test_recover_index.py",
+  "tests/dx/test_run_chaos_soak.py",
+  "tests/dx/test_scaffold_jsx_dep.py",
+  "tests/dx/test_scaffold_lint.py",
+  "tests/dx/test_scan_component_health.py",
+  "tests/dx/test_session_init.py",
+  "tests/dx/test_suggest_related.py",
+  "tests/dx/test_sync_schema.py",
+  "tests/dx/test_sync_tool_registry.py",
+  "tests/dx/test_tenant_log_query_dashboard.py",
+  "tests/dx/test_tenant_verify.py",
+  "tests/dx/test_verify_diff.py",
+  "tests/dx/test_verify_release.py",
+  "tests/dx/test_waveform_compile.py",
+  "tests/dx/test_waveform_score.py",
+  "tests/e2e-bench/driver/test_driver.py",
+  "tests/e2e-bench/test_aggregate.py",
+  "tests/golden/test_merge_parity.py",
+  "tests/helm/test_human_socket_guard.py",
+  "tests/helm/test_identity_claim_headers_guard.py",
+  "tests/helm/test_image_tag_derivation.py",
+  "tests/helm/test_machine_identity_guard.py",
+  "tests/helm/test_oauth2_gitlab_profile.py",
+  "tests/helm/test_portal_relay_token_guard.py",
+  "tests/helm/test_portal_static_tier_guard.py",
+  "tests/helm/test_single_writer_guard.py",
+  "tests/helm/test_victorialogs_gateway_guard.py",
+  "tests/lint/test_check_account_registry_monotonic.py",
+  "tests/lint/test_check_admin_config_schema.py",
+  "tests/lint/test_check_bilingual_annotations.py",
+  "tests/lint/test_check_bilingual_content.py",
+  "tests/lint/test_check_bilingual_structure.py",
+  "tests/lint/test_check_build_completeness.py",
+  "tests/lint/test_check_changelog_no_tbd.py",
+  "tests/lint/test_check_cli_coverage.py",
+  "tests/lint/test_check_codename_gate.py",
+  "tests/lint/test_check_codename_leak.py",
+  "tests/lint/test_check_commit_scope_doc.py",
+  "tests/lint/test_check_confd_schema.py",
+  "tests/lint/test_check_cross_ns_url_consistency.py",
+  "tests/lint/test_check_design_token_usage.py",
+  "tests/lint/test_check_dev_bypass_manifest.py",
+  "tests/lint/test_check_dev_rules_enforcement.py",
+  "tests/lint/test_check_devrules_size.py",
+  "tests/lint/test_check_doc_datools_cmds.py",
+  "tests/lint/test_check_doc_freshness.py",
+  "tests/lint/test_check_doc_k8s_refs.py",
+  "tests/lint/test_check_doc_links.py",
+  "tests/lint/test_check_flaky_registry.py",
+  "tests/lint/test_check_frontmatter_versions.py",
+  "tests/lint/test_check_ha_threshold_aggregation.py",
+  "tests/lint/test_check_hardcode_tenant.py",
+  "tests/lint/test_check_head_blob_hygiene.py",
+  "tests/lint/test_check_helm_values_secrets.py",
+  "tests/lint/test_check_hub_badge_drift.py",
+  "tests/lint/test_check_iac_helm.py",
+  "tests/lint/test_check_iac_vibe_rules.py",
+  "tests/lint/test_check_includes_sync.py",
+  "tests/lint/test_check_jsx_i18n.py",
+  "tests/lint/test_check_jsx_loader_compat.py",
+  "tests/lint/test_check_k8s_manifests.py",
+  "tests/lint/test_check_ksm_version_allowlist.py",
+  "tests/lint/test_check_leftouterjoin_enrichment.py",
+  "tests/lint/test_check_lint_toolchain_fit.py",
+  "tests/lint/test_check_maintenance_symmetry.py",
+  "tests/lint/test_check_makefile_targets.py",
+  "tests/lint/test_check_metric_dictionary.py",
+  "tests/lint/test_check_orphan_lint.py",
+  "tests/lint/test_check_path_metadata_consistency.py",
+  "tests/lint/test_check_pint.py",
+  "tests/lint/test_check_planning_status_sync.py",
+  "tests/lint/test_check_playwright_rtl_drift.py",
+  "tests/lint/test_check_pr_scope_drift.py",
+  "tests/lint/test_check_property_coverage.py",
+  "tests/lint/test_check_repo_name.py",
+  "tests/lint/test_check_routing_profiles.py",
+  "tests/lint/test_check_rulepack_sync.py",
+  "tests/lint/test_check_session_guard_liveness.py",
+  "tests/lint/test_check_single_writer_invariant.py",
+  "tests/lint/test_check_structure.py",
+  "tests/lint/test_check_subprocess_timeout.py",
+  "tests/lint/test_check_translation.py",
+  "tests/lint/test_check_undefined_tokens.py",
+  "tests/lint/test_check_vmalert_coverage.py",
+  "tests/lint/test_check_window_x_no_fallback.py",
+  "tests/lint/test_check_workflow_git_push_permissions.py",
+  "tests/lint/test_detect_sed_damage.py",
+  "tests/lint/test_fallback_image_digest_pin.py",
+  "tests/lint/test_fix_doc_links.py",
+  "tests/lint/test_fix_file_hygiene.py",
+  "tests/lint/test_lint_jsx_babel_frontmatter.py",
+  "tests/lint/test_lint_jsx_babel_linecount.py",
+  "tests/lint/test_lint_tool_consistency.py",
+  "tests/lint/test_snapshot_v2.py",
+  "tests/lint/test_trufflehog_to_sarif.py",
+  "tests/lint/test_validate_docs_versions.py",
+  "tests/lint/test_validate_mermaid.py",
+  "tests/lint/test_validate_planning_session_row.py",
+  "tests/ops/test_alert_correlate.py",
+  "tests/ops/test_alert_quality.py",
+  "tests/ops/test_alertmanager_amtool_validity.py",
+  "tests/ops/test_alertmanager_routing_correctness.py",
+  "tests/ops/test_analyze_gaps.py",
+  "tests/ops/test_assemble_config_dir.py",
+  "tests/ops/test_backtest_threshold.py",
+  "tests/ops/test_baseline_discovery.py",
+  "tests/ops/test_batch_diagnose.py",
+  "tests/ops/test_benchmark.py",
+  "tests/ops/test_blast_radius.py",
+  "tests/ops/test_blind_spot_discovery.py",
+  "tests/ops/test_byo_check.py",
+  "tests/ops/test_cardinality_forecasting.py",
+  "tests/ops/test_check_alert.py",
+  "tests/ops/test_check_image_refs_resolve.py",
+  "tests/ops/test_ci_flake_retry.py",
+  "tests/ops/test_commit_helper.py",
+  "tests/ops/test_config_diff.py",
+  "tests/ops/test_config_history.py",
+  "tests/ops/test_cutover_tenant.py",
+  "tests/ops/test_da_assembler.py",
+  "tests/ops/test_diagnose.py",
+  "tests/ops/test_diagnose_inheritance.py",
+  "tests/ops/test_discover_instance_mappings.py",
+  "tests/ops/test_domain_policy.py",
+  "tests/ops/test_drift_detect.py",
+  "tests/ops/test_dx_run.py",
+  "tests/ops/test_e2e_routing_profile.py",
+  "tests/ops/test_error_consistency.py",
+  "tests/ops/test_explain_route.py",
+  "tests/ops/test_explain_route_trace.py",
+  "tests/ops/test_federation_check.py",
+  "tests/ops/test_federation_keygen.py",
+  "tests/ops/test_federation_revocation_reconciler.py",
+  "tests/ops/test_generate_alertmanager_routes.py",
+  "tests/ops/test_generate_routes_orchestration.py",
+  "tests/ops/test_generate_rule_pack_split.py",
+  "tests/ops/test_generate_tenant_mapping_rules.py",
+  "tests/ops/test_git_check_lock.py",
+  "tests/ops/test_gitops_check.py",
+  "tests/ops/test_grafana_import.py",
+  "tests/ops/test_grar_facade_reexports.py",
+  "tests/ops/test_grar_strict_hardening.py",
+  "tests/ops/test_init_project.py",
+  "tests/ops/test_inject_default_key.py",
+  "tests/ops/test_inject_metadata_join.py",
+  "tests/ops/test_integration.py",
+  "tests/ops/test_lint_custom_rules.py",
+  "tests/ops/test_maintenance_scheduler.py",
+  "tests/ops/test_migrate_ast.py",
+  "tests/ops/test_migrate_rule_outputs.py",
+  "tests/ops/test_migrate_to_operator.py",
+  "tests/ops/test_migrate_v3.py",
+  "tests/ops/test_nightly_scan_matrix_drift.py",
+  "tests/ops/test_notification_tester.py",
+  "tests/ops/test_observed_map_lib.py",
+  "tests/ops/test_offboard_deprecate.py",
+  "tests/ops/test_offboard_tenant.py",
+  "tests/ops/test_onboard_platform.py",
+  "tests/ops/test_operator_check.py",
+  "tests/ops/test_operator_generate_v2.py",
+  "tests/ops/test_parse_platform_config.py",
+  "tests/ops/test_patch_config.py",
+  "tests/ops/test_performance.py",
+  "tests/ops/test_policy_engine.py",
+  "tests/ops/test_policy_opa_bridge.py",
+  "tests/ops/test_property_based.py",
+  "tests/ops/test_regression.py",
+  "tests/ops/test_renovate_config.py",
+  "tests/ops/test_rule_pack_diff.py",
+  "tests/ops/test_runtime_audit.py",
+  "tests/ops/test_scaffold_db.py",
+  "tests/ops/test_scaffold_tenant.py",
+  "tests/ops/test_shadow_verify.py",
+  "tests/ops/test_silencer_drift_check.py",
+  "tests/ops/test_state_reconcile.py",
+  "tests/ops/test_threshold_govern.py",
+  "tests/ops/test_threshold_govern_manifest.py",
+  "tests/ops/test_threshold_recommend.py",
+  "tests/ops/test_validate_config.py",
+  "tests/ops/test_validate_migration.py",
+  "tests/ops/test_verify_download.py",
+  "tests/preview/test_app.py",
+  "tests/preview/test_promtool_pin_parity.py",
+  "tests/rulepacks/test_platform_rules_extract_sync.py",
+  "tests/rulepacks/test_vm_alert_parity.py",
+  "tests/rulepacks/test_vm_backend_parity.py",
+  "tests/rulepacks/test_vm_replay_staleness.py",
+  "tests/shared/test_dispatch_contract.py",
+  "tests/shared/test_entrypoint.py",
+  "tests/shared/test_federation_audit_mtail.py",
+  "tests/shared/test_go_mutation_pilot.py",
+  "tests/shared/test_helm_chart_log_aggregation.py",
+  "tests/shared/test_helm_portal.py",
+  "tests/shared/test_help_contract.py",
+  "tests/shared/test_json_stdout_contract.py",
+  "tests/shared/test_lang_detection_guard.py",
+  "tests/shared/test_lib_godispatch.py",
+  "tests/shared/test_lib_helpers.py",
+  "tests/shared/test_lib_python.py",
+  "tests/shared/test_mutation_catalog.py",
+  "tests/shared/test_mutation_guards.py",
+  "tests/shared/test_nginx_proxy.py",
+  "tests/shared/test_pipeline_integration.py",
+  "tests/shared/test_probe_health.py",
+  "tests/shared/test_projection_gate_exposer.py",
+  "tests/shared/test_projection_gate_vap.py",
+  "tests/shared/test_prometheus_url_fallback_guard.py",
+  "tests/shared/test_property.py",
+  "tests/shared/test_property_tools.py",
+  "tests/shared/test_reserved_key_py_go_parity.py",
+  "tests/shared/test_roi_calculator.py",
+  "tests/shared/test_sast.py",
+  "tests/shared/test_tenant_projection_gate.py",
+  "tests/shared/test_tool_exit_codes.py",
+  "tests/shared/test_validate_all.py",
+  "tests/shared/test_vector_projection_vrl.py"
+ ],
+ "text_map": {
+  ".changelog-lint-ignore": [
+   "tests/dx/test_generate_changelog.py"
+  ],
+  ".claude/settings.json": [
+   "tests/lint/test_check_session_guard_liveness.py"
+  ],
+  ".commitlintrc.yaml": [
+   "tests/dx/test_preflight_msg_validator.py",
+   "tests/lint/test_check_commit_scope_doc.py"
+  ],
+  ".devcontainer/install-promtool.sh": [
+   "tests/preview/test_promtool_pin_parity.py"
+  ],
+  ".doclinkignore": [
+   "tests/lint/test_check_doc_links.py"
+  ],
+  ".github/custom-rule-policy.yaml": [
+   "tests/ops/test_lint_custom_rules.py"
+  ],
+  ".github/workflows": [
+   "tests/lint/test_check_workflow_git_push_permissions.py"
+  ],
+  ".github/workflows/ci.yml": [
+   "tests/dx/test_compile_custom_alerts.py",
+   "tests/lint/test_check_admin_config_schema.py",
+   "tests/lint/test_check_pint.py",
+   "tests/preview/test_promtool_pin_parity.py"
+  ],
+  ".github/workflows/nightly-image-scan.yaml": [
+   "tests/ops/test_nightly_scan_matrix_drift.py"
+  ],
+  ".github/workflows/release.yaml": [
+   "tests/dx/test_verify_release.py"
+  ],
+  ".github/workflows/renovate.yaml": [
+   "tests/ops/test_renovate_config.py"
+  ],
+  ".pre-commit-config.yaml": [
+   "tests/dx/test_bump_docs.py",
+   "tests/dx/test_compile_custom_alerts.py",
+   "tests/dx/test_scaffold_lint.py",
+   "tests/lint/test_check_admin_config_schema.py",
+   "tests/lint/test_check_dev_rules_enforcement.py",
+   "tests/lint/test_check_makefile_targets.py",
+   "tests/lint/test_check_orphan_lint.py"
+  ],
+  "CHANGELOG.md": [
+   "tests/dx/test_add_frontmatter.py",
+   "tests/dx/test_bump_docs.py",
+   "tests/dx/test_generate_changelog.py",
+   "tests/lint/test_check_bilingual_structure.py",
+   "tests/lint/test_check_changelog_no_tbd.py",
+   "tests/lint/test_check_flaky_registry.py",
+   "tests/lint/test_validate_docs_versions.py",
+   "tests/shared/test_property_tools.py",
+   "tests/shared/test_validate_all.py"
+  ],
+  "CLAUDE.md": [
+   "tests/dx/test_add_frontmatter.py",
+   "tests/lint/test_check_doc_freshness.py",
+   "tests/lint/test_check_frontmatter_versions.py",
+   "tests/lint/test_validate_docs_versions.py"
+  ],
+  "Makefile": [
+   "tests/dx/test_compile_custom_alerts.py",
+   "tests/lint/test_check_makefile_targets.py",
+   "tests/lint/test_check_orphan_lint.py",
+   "tests/ops/test_git_check_lock.py",
+   "tests/rulepacks/test_vm_alert_parity.py"
+  ],
+  "README.en.md": [
+   "tests/lint/test_check_bilingual_structure.py",
+   "tests/lint/test_validate_docs_versions.py"
+  ],
+  "README.md": [
+   "tests/dx/test_add_frontmatter.py",
+   "tests/dx/test_generate_adr_index.py",
+   "tests/dx/test_verify_diff.py",
+   "tests/lint/test_check_bilingual_structure.py",
+   "tests/lint/test_check_cli_coverage.py",
+   "tests/lint/test_check_doc_links.py",
+   "tests/lint/test_check_planning_status_sync.py",
+   "tests/lint/test_validate_docs_versions.py",
+   "tests/ops/test_gitops_check.py",
+   "tests/ops/test_inject_metadata_join.py",
+   "tests/ops/test_state_reconcile.py"
+  ],
+  "components/da-portal/Dockerfile": [
+   "tests/helm/test_portal_relay_token_guard.py"
+  ],
+  "components/da-portal/nginx-main.conf": [
+   "tests/helm/test_portal_relay_token_guard.py"
+  ],
+  "components/da-portal/nginx.conf": [
+   "tests/helm/test_portal_relay_token_guard.py",
+   "tests/lint/test_check_cross_ns_url_consistency.py",
+   "tests/shared/test_nginx_proxy.py"
+  ],
+  "components/da-portal/relay_token.js": [
+   "tests/helm/test_portal_relay_token_guard.py"
+  ],
+  "components/da-tools": [
+   "tests/lint/test_check_subprocess_timeout.py"
+  ],
+  "components/da-tools/app/Dockerfile": [
+   "tests/lint/test_check_iac_vibe_rules.py"
+  ],
+  "components/da-tools/app/build.sh": [
+   "tests/shared/test_entrypoint.py"
+  ],
+  "components/da-tools/app/entrypoint.py": [
+   "tests/dx/test_verify_diff.py"
+  ],
+  "components/recipe-preview/Dockerfile": [
+   "tests/preview/test_promtool_pin_parity.py"
+  ],
+  "components/recipe-preview/app.py": [
+   "tests/preview/test_app.py"
+  ],
+  "components/threshold-exporter": [
+   "tests/ops/test_operator_generate_v2.py"
+  ],
+  "components/threshold-exporter/app/config.go": [
+   "tests/lint/test_check_hardcode_tenant.py"
+  ],
+  "components/threshold-exporter/app/pkg/config/types.go": [
+   "tests/shared/test_reserved_key_py_go_parity.py"
+  ],
+  "components/threshold-exporter/config/conf.d": [
+   "tests/dx/test_compile_custom_alerts.py"
+  ],
+  "components/threshold-exporter/config/conf.d/_defaults.yaml": [
+   "tests/ops/test_backtest_threshold.py"
+  ],
+  "components/threshold-exporter/config/conf.d/db-b.yaml": [
+   "tests/ops/test_backtest_threshold.py"
+  ],
+  "components/threshold-exporter/config/conf.d/examples/_domain_policy.yaml": [
+   "tests/lint/test_check_admin_config_schema.py"
+  ],
+  "docs/CHANGELOG.md": [
+   "tests/dx/test_bump_docs.py",
+   "tests/dx/test_doc_coverage.py"
+  ],
+  "docs/README-root.md": [
+   "tests/lint/test_fix_file_hygiene.py"
+  ],
+  "docs/README.en.md": [
+   "tests/dx/test_add_frontmatter.py"
+  ],
+  "docs/README.md": [
+   "tests/dx/test_add_frontmatter.py",
+   "tests/lint/test_check_doc_freshness.py"
+  ],
+  "docs/adr": [
+   "tests/dx/test_generate_adr_index.py",
+   "tests/lint/test_fix_doc_links.py"
+  ],
+  "docs/adr/020-tenant-federation.md": [
+   "tests/dx/test_generate_planning_index.py"
+  ],
+  "docs/alerting-design-fundamentals.md": [
+   "tests/ops/test_scaffold_tenant.py"
+  ],
+  "docs/architecture-and-design.md": [
+   "tests/dx/test_generate_adr_index.py"
+  ],
+  "docs/assets": [
+   "tests/lint/test_lint_tool_consistency.py",
+   "tests/shared/test_validate_all.py"
+  ],
+  "docs/assets/jsx-loader.html": [
+   "tests/lint/test_lint_jsx_babel_frontmatter.py"
+  ],
+  "docs/assets/platform-data.json": [
+   "tests/lint/test_check_makefile_targets.py"
+  ],
+  "docs/assets/tool-registry.yaml": [
+   "tests/dx/test_bump_docs.py",
+   "tests/dx/test_scan_component_health.py",
+   "tests/dx/test_sync_tool_registry.py"
+  ],
+  "docs/getting-started/for-tenants.en.md": [
+   "tests/dx/test_add_frontmatter.py"
+  ],
+  "docs/getting-started/for-tenants.md": [
+   "tests/dx/test_add_frontmatter.py",
+   "tests/lint/test_lint_tool_consistency.py"
+  ],
+  "docs/glossary.en.md": [
+   "tests/lint/test_check_codename_gate.py"
+  ],
+  "docs/glossary.md": [
+   "tests/lint/test_check_codename_gate.py"
+  ],
+  "docs/integration/victoriametrics-integration.md": [
+   "tests/rulepacks/test_vm_alert_parity.py",
+   "tests/rulepacks/test_vm_replay_staleness.py"
+  ],
+  "docs/interactive/index.html": [
+   "tests/dx/test_verify_diff.py",
+   "tests/lint/test_check_hub_badge_drift.py"
+  ],
+  "docs/internal": [
+   "tests/dx/test_add_frontmatter.py",
+   "tests/dx/test_bump_playbook_versions.py",
+   "tests/dx/test_doc_coverage.py",
+   "tests/dx/test_generate_doc_map.py",
+   "tests/dx/test_generate_planning_index.py",
+   "tests/lint/test_check_bilingual_structure.py"
+  ],
+  "docs/internal/backend-compat-baseline.md": [
+   "tests/rulepacks/test_vm_backend_parity.py"
+  ],
+  "docs/internal/dev-rules.md": [
+   "tests/dx/test_bump_docs.py",
+   "tests/dx/test_verify_diff.py",
+   "tests/lint/test_check_devrules_size.py",
+   "tests/shared/test_json_stdout_contract.py"
+  ],
+  "docs/internal/doc-map.en.md": [
+   "tests/dx/test_generate_doc_map.py"
+  ],
+  "docs/internal/doc-map.md": [
+   "tests/dx/test_generate_doc_map.py"
+  ],
+  "docs/internal/log-visibility-2tier-catalogue.md": [
+   "tests/dx/test_log_visibility_catalogue.py"
+  ],
+  "docs/internal/planning-index.md": [
+   "tests/dx/test_generate_planning_index.py"
+  ],
+  "docs/internal/platform-log-aggregation-runbook.md": [
+   "tests/shared/test_helm_chart_log_aggregation.py"
+  ],
+  "docs/scenarios": [
+   "tests/dx/test_bump_docs.py"
+  ],
+  "docs/scenarios/incremental-migration-playbook.md": [
+   "tests/dx/test_tenant_verify.py"
+  ],
+  "docs/schemas/platform-defaults.schema.json": [
+   "tests/lint/test_check_confd_schema.py"
+  ],
+  "docs/schemas/tenant-config.schema.json": [
+   "tests/dx/test_sync_schema.py",
+   "tests/lint/test_check_confd_schema.py"
+  ],
+  "docs/schemas/waveform-pack.schema.json": [
+   "tests/dx/test_waveform_compile.py"
+  ],
+  "docs/schemas/waveform-tolerances.schema.json": [
+   "tests/dx/test_waveform_score.py"
+  ],
+  "docs/tags.md": [
+   "tests/dx/test_generate_doc_map.py"
+  ],
+  "environments/local": [
+   "tests/helm/test_image_tag_derivation.py"
+  ],
+  "environments/local/threshold-exporter.yaml": [
+   "tests/helm/test_image_tag_derivation.py"
+  ],
+  "flaky-tests.yaml": [
+   "tests/dx/test_generate_planning_index.py"
+  ],
+  "helm/chargeback-aggregator": [
+   "tests/shared/test_helm_chart_log_aggregation.py"
+  ],
+  "helm/chargeback-aggregator/Chart.yaml": [
+   "tests/shared/test_helm_chart_log_aggregation.py"
+  ],
+  "helm/chargeback-aggregator/templates/pvc.yaml": [
+   "tests/shared/test_helm_chart_log_aggregation.py"
+  ],
+  "helm/da-portal": [
+   "tests/helm/test_image_tag_derivation.py",
+   "tests/helm/test_oauth2_gitlab_profile.py",
+   "tests/helm/test_portal_relay_token_guard.py",
+   "tests/helm/test_portal_static_tier_guard.py",
+   "tests/lint/test_check_iac_helm.py",
+   "tests/shared/test_helm_portal.py"
+  ],
+  "helm/da-portal/files/relay_token.js": [
+   "tests/helm/test_portal_relay_token_guard.py"
+  ],
+  "helm/da-portal/templates/configmap-nginx.yaml": [
+   "tests/helm/test_portal_relay_token_guard.py"
+  ],
+  "helm/da-portal/templates/deployment.yaml": [
+   "tests/helm/test_oauth2_gitlab_profile.py"
+  ],
+  "helm/da-portal/values.yaml": [
+   "tests/helm/test_portal_relay_token_guard.py",
+   "tests/lint/test_check_admin_config_schema.py",
+   "tests/lint/test_check_cross_ns_url_consistency.py"
+  ],
+  "helm/federation-gateway": [
+   "tests/helm/test_victorialogs_gateway_guard.py"
+  ],
+  "helm/federation-gateway/audit-sidecar/Dockerfile": [
+   "tests/shared/test_federation_audit_mtail.py"
+  ],
+  "helm/federation-gateway/files/envoy.yaml": [
+   "tests/helm/test_victorialogs_gateway_guard.py"
+  ],
+  "helm/federation-gateway/files/federation-audit.mtail": [
+   "tests/shared/test_federation_audit_mtail.py"
+  ],
+  "helm/federation-gateway/templates/_helpers.tpl": [
+   "tests/helm/test_victorialogs_gateway_guard.py"
+  ],
+  "helm/mariadb-instance": [
+   "tests/lint/test_check_iac_helm.py"
+  ],
+  "helm/mariadb-instance/values.yaml": [
+   "tests/lint/test_check_helm_values_secrets.py"
+  ],
+  "helm/recipe-preview": [
+   "tests/helm/test_image_tag_derivation.py"
+  ],
+  "helm/recipe-preview/templates/deployment.yaml": [
+   "tests/lint/test_check_dev_bypass_manifest.py"
+  ],
+  "helm/tenant-api": [
+   "tests/helm/test_human_socket_guard.py",
+   "tests/helm/test_identity_claim_headers_guard.py",
+   "tests/helm/test_image_tag_derivation.py",
+   "tests/helm/test_machine_identity_guard.py",
+   "tests/helm/test_oauth2_gitlab_profile.py",
+   "tests/helm/test_single_writer_guard.py"
+  ],
+  "helm/tenant-api/templates/configmap-rbac.yaml": [
+   "tests/lint/test_check_admin_config_schema.py"
+  ],
+  "helm/tenant-api/templates/deployment.yaml": [
+   "tests/helm/test_human_socket_guard.py",
+   "tests/helm/test_identity_claim_headers_guard.py",
+   "tests/helm/test_machine_identity_guard.py",
+   "tests/helm/test_oauth2_gitlab_profile.py",
+   "tests/helm/test_single_writer_guard.py",
+   "tests/lint/test_check_dev_bypass_manifest.py",
+   "tests/lint/test_check_single_writer_invariant.py"
+  ],
+  "helm/tenant-api/templates/rbac-machine-identity.yaml": [
+   "tests/helm/test_machine_identity_guard.py"
+  ],
+  "helm/tenant-api/values.yaml": [
+   "tests/helm/test_human_socket_guard.py",
+   "tests/helm/test_identity_claim_headers_guard.py",
+   "tests/helm/test_machine_identity_guard.py",
+   "tests/lint/test_check_admin_config_schema.py",
+   "tests/lint/test_check_dev_bypass_manifest.py",
+   "tests/lint/test_check_single_writer_invariant.py"
+  ],
+  "helm/threshold-exporter": [
+   "tests/helm/test_image_tag_derivation.py",
+   "tests/ops/test_operator_generate_v2.py"
+  ],
+  "helm/vector": [
+   "tests/dx/test_log_visibility_catalogue.py",
+   "tests/lint/test_check_iac_helm.py",
+   "tests/shared/test_helm_chart_log_aggregation.py",
+   "tests/shared/test_vector_projection_vrl.py"
+  ],
+  "helm/vector/Chart.yaml": [
+   "tests/shared/test_helm_chart_log_aggregation.py"
+  ],
+  "helm/vector/projection-gate/serve_metrics.py": [
+   "tests/shared/test_projection_gate_exposer.py"
+  ],
+  "helm/vector/projection-gate/verify_tenant_projections.py": [
+   "tests/shared/test_tenant_projection_gate.py"
+  ],
+  "helm/vector/templates/configmap.yaml": [
+   "tests/dx/test_log_visibility_catalogue.py"
+  ],
+  "helm/vector/templates/daemonset.yaml": [
+   "tests/shared/test_projection_gate_vap.py"
+  ],
+  "helm/vector/tests": [
+   "tests/shared/test_vector_projection_vrl.py"
+  ],
+  "helm/vector/tests/projection_tests.yaml": [
+   "tests/shared/test_vector_projection_vrl.py"
+  ],
+  "helm/vector/values.yaml": [
+   "tests/dx/test_log_visibility_catalogue.py",
+   "tests/lint/test_check_admin_config_schema.py"
+  ],
+  "helm/victorialogs": [
+   "tests/shared/test_helm_chart_log_aggregation.py",
+   "tests/shared/test_vector_projection_vrl.py"
+  ],
+  "helm/victorialogs/Chart.yaml": [
+   "tests/shared/test_helm_chart_log_aggregation.py"
+  ],
+  "helm/victorialogs/values.yaml": [
+   "tests/shared/test_helm_chart_log_aggregation.py"
+  ],
+  "k8s/03-monitoring": [
+   "tests/ops/test_scaffold_db.py"
+  ],
+  "k8s/03-monitoring/configmap-alertmanager.yaml": [
+   "tests/dx/test_verify_diff.py",
+   "tests/ops/test_alertmanager_amtool_validity.py",
+   "tests/ops/test_generate_routes_orchestration.py"
+  ],
+  "k8s/03-monitoring/configmap-grafana.yaml": [
+   "tests/dx/test_federation_revocation_dashboard.py"
+  ],
+  "k8s/03-monitoring/configmap-rules-platform.yaml": [
+   "tests/rulepacks/test_platform_rules_extract_sync.py"
+  ],
+  "k8s/03-monitoring/cronjob-maintenance-scheduler.yaml": [
+   "tests/lint/test_check_k8s_manifests.py"
+  ],
+  "k8s/03-monitoring/cronjob-threshold-govern.yaml": [
+   "tests/ops/test_threshold_govern_manifest.py"
+  ],
+  "k8s/03-monitoring/deployment-alertmanager.yaml": [
+   "tests/ops/test_alertmanager_amtool_validity.py"
+  ],
+  "k8s/03-monitoring/deployment-grafana.yaml": [
+   "tests/lint/test_check_k8s_manifests.py"
+  ],
+  "k8s/03-monitoring/deployment-prometheus.yaml": [
+   "tests/lint/test_check_doc_k8s_refs.py",
+   "tests/lint/test_check_k8s_manifests.py"
+  ],
+  "k8s/03-monitoring/federation-revocation-dashboard.json": [
+   "tests/dx/test_federation_revocation_dashboard.py"
+  ],
+  "k8s/03-monitoring/fleet-threshold-distribution.json": [
+   "tests/dx/test_fleet_threshold_dashboard.py"
+  ],
+  "k8s/03-monitoring/secret-grafana.yaml": [
+   "tests/lint/test_check_helm_values_secrets.py",
+   "tests/lint/test_check_k8s_manifests.py"
+  ],
+  "k8s/03-monitoring/shadow-monitoring-dashboard.json": [
+   "tests/shared/test_json_stdout_contract.py"
+  ],
+  "k8s/03-monitoring/tenant-log-query-dashboard.json": [
+   "tests/dx/test_tenant_log_query_dashboard.py"
+  ],
+  "k8s/03-monitoring/validatingadmissionpolicy-projection-gate.yaml": [
+   "tests/shared/test_projection_gate_vap.py"
+  ],
+  "k8s/04-tenant-api/configmap-rbac.yaml": [
+   "tests/lint/test_check_admin_config_schema.py"
+  ],
+  "k8s/04-tenant-api/deployment.yaml": [
+   "tests/lint/test_check_k8s_manifests.py",
+   "tests/lint/test_check_single_writer_invariant.py"
+  ],
+  "k8s/crd": [
+   "tests/lint/test_check_k8s_manifests.py"
+  ],
+  "mkdocs.yml": [
+   "tests/lint/test_check_head_blob_hygiene.py"
+  ],
+  "renovate.json": [
+   "tests/ops/test_renovate_config.py"
+  ],
+  "rule-packs/README.md": [
+   "tests/dx/test_generate_rule_pack_readme.py"
+  ],
+  "rule-packs/recipes": [
+   "tests/dx/test_recipe_lifecycle.py"
+  ],
+  "rule-packs/rule-pack-custom-alerts.yaml": [
+   "tests/ops/test_lint_custom_rules.py"
+  ],
+  "rule-packs/rule-pack-mariadb.yaml": [
+   "tests/lint/test_check_hardcode_tenant.py",
+   "tests/shared/test_json_stdout_contract.py"
+  ],
+  "rule-packs/rule-pack-redis.yaml": [
+   "tests/shared/test_json_stdout_contract.py"
+  ],
+  "scripts/_lib.sh": [
+   "tests/shared/test_lib_helpers.py"
+  ],
+  "scripts/dx/generate_adr_index.py": [
+   "tests/dx/test_generate_adr_index.py"
+  ],
+  "scripts/dx/generate_planning_index.py": [
+   "tests/dx/test_generate_planning_index.py"
+  ],
+  "scripts/ops": [
+   "tests/dx/test_bat_label_integrity.py",
+   "tests/ops/test_ci_flake_retry.py"
+  ],
+  "scripts/ops/_verify_download.sh": [
+   "tests/ops/test_verify_download.py"
+  ],
+  "scripts/ops/check_image_refs_resolve.py": [
+   "tests/ops/test_check_image_refs_resolve.py",
+   "tests/ops/test_nightly_scan_matrix_drift.py"
+  ],
+  "scripts/ops/ci_flake_retry.py": [
+   "tests/ops/test_ci_flake_retry.py"
+  ],
+  "scripts/ops/commit_helper.py": [
+   "tests/ops/test_commit_helper.py"
+  ],
+  "scripts/ops/dx_run.py": [
+   "tests/ops/test_dx_run.py"
+  ],
+  "scripts/ops/fuse_plumbing_commit.py": [
+   "tests/dx/test_fuse_plumbing_commit.py"
+  ],
+  "scripts/ops/inject_default_key.py": [
+   "tests/ops/test_inject_default_key.py"
+  ],
+  "scripts/ops/recover_index.sh": [
+   "tests/dx/test_recover_index.py"
+  ],
+  "scripts/ops/require_preflight_pass.sh": [
+   "tests/dx/test_preflight_marker.py",
+   "tests/dx/test_preflight_pass_gate.py"
+  ],
+  "scripts/ops/verify_release_digest.sh": [
+   "tests/helm/test_image_tag_derivation.py"
+  ],
+  "scripts/ops/win_gh.bat": [
+   "tests/dx/test_bat_label_integrity.py",
+   "tests/dx/test_preflight_bash.py"
+  ],
+  "scripts/ops/win_git_escape.bat": [
+   "tests/dx/test_bat_label_integrity.py",
+   "tests/dx/test_preflight_bash.py"
+  ],
+  "scripts/session-guards/git_check_lock.sh": [
+   "tests/ops/test_git_check_lock.py"
+  ],
+  "scripts/session-guards/preflight_bash.py": [
+   "tests/dx/test_preflight_bash.py"
+  ],
+  "scripts/session-guards/run-hooks.sh": [
+   "tests/lint/test_check_session_guard_liveness.py"
+  ],
+  "scripts/session-guards/session-init.py": [
+   "tests/dx/test_session_init.py",
+   "tests/lint/test_check_session_guard_liveness.py"
+  ],
+  "scripts/tools": [
+   "tests/dx/test_bump_docs.py",
+   "tests/dx/test_generate_rule_pack_readme.py",
+   "tests/dx/test_verify_diff.py",
+   "tests/lint/test_check_structure.py",
+   "tests/ops/test_ci_flake_retry.py",
+   "tests/ops/test_grar_facade_reexports.py",
+   "tests/ops/test_lint_custom_rules.py",
+   "tests/ops/test_migrate_ast.py",
+   "tests/ops/test_operator_generate_v2.py",
+   "tests/ops/test_property_based.py",
+   "tests/shared/test_dispatch_contract.py",
+   "tests/shared/test_entrypoint.py",
+   "tests/shared/test_json_stdout_contract.py",
+   "tests/shared/test_prometheus_url_fallback_guard.py",
+   "tests/shared/test_property_tools.py",
+   "tests/shared/test_sast.py",
+   "tests/shared/test_validate_all.py"
+  ],
+  "scripts/tools/_lib_constants.py": [
+   "tests/dx/test_sync_schema.py",
+   "tests/shared/test_reserved_key_py_go_parity.py"
+  ],
+  "scripts/tools/_lib_exitcodes.py": [
+   "tests/dx/test_verify_diff.py",
+   "tests/shared/test_json_stdout_contract.py",
+   "tests/shared/test_tool_exit_codes.py"
+  ],
+  "scripts/tools/_lib_io.py": [
+   "tests/dx/test_verify_diff.py"
+  ],
+  "scripts/tools/_lib_python.py": [
+   "tests/lint/test_check_structure.py"
+  ],
+  "scripts/tools/dx": [
+   "tests/dx/test_generate_tenant_fixture.py",
+   "tests/dx/test_verify_diff.py",
+   "tests/ops/test_property_based.py"
+  ],
+  "scripts/tools/dx/_atomic_write.py": [
+   "tests/dx/test_atomic_write.py",
+   "tests/dx/test_verify_diff.py"
+  ],
+  "scripts/tools/dx/axe_lite_static.py": [
+   "tests/dx/test_axe_lite_static.py"
+  ],
+  "scripts/tools/dx/bump_docs.py": [
+   "tests/dx/test_coverage_gap_analysis.py",
+   "tests/dx/test_verify_diff.py",
+   "tests/lint/test_check_structure.py"
+  ],
+  "scripts/tools/dx/coverage_delta.py": [
+   "tests/dx/test_coverage_delta.py"
+  ],
+  "scripts/tools/dx/describe_tenant.py": [
+   "tests/dx/test_describe_tenant.py",
+   "tests/golden/test_merge_parity.py",
+   "tests/ops/test_property_based.py"
+  ],
+  "scripts/tools/dx/generate_doc_map.py": [
+   "tests/dx/test_atomic_write.py"
+  ],
+  "scripts/tools/dx/generate_platform_data.py": [
+   "tests/dx/test_generate_platform_data.py",
+   "tests/lint/test_check_makefile_targets.py"
+  ],
+  "scripts/tools/dx/generate_rule_pack_readme.py": [
+   "tests/dx/test_generate_rule_pack_readme.py"
+  ],
+  "scripts/tools/dx/generate_tenant_fixture.py": [
+   "tests/dx/test_generate_tenant_fixture.py",
+   "tests/shared/test_sast.py"
+  ],
+  "scripts/tools/dx/generate_tenant_metadata.py": [
+   "tests/lint/test_check_makefile_targets.py"
+  ],
+  "scripts/tools/dx/generate_tool_map.py": [
+   "tests/dx/test_atomic_write.py",
+   "tests/dx/test_generate_tool_map_encoding.py"
+  ],
+  "scripts/tools/dx/inject_waveform.py": [
+   "tests/dx/test_inject_waveform.py",
+   "tests/dx/test_waveform_score.py"
+  ],
+  "scripts/tools/dx/pr_preflight.py": [
+   "tests/dx/test_preflight_marker.py",
+   "tests/dx/test_preflight_msg_validator.py"
+  ],
+  "scripts/tools/dx/run_chaos_soak.py": [
+   "tests/shared/test_sast.py"
+  ],
+  "scripts/tools/dx/scaffold_lint.py": [
+   "tests/lint/test_check_changelog_no_tbd.py",
+   "tests/lint/test_check_hardcode_tenant.py",
+   "tests/lint/test_check_jsx_loader_compat.py",
+   "tests/lint/test_check_undefined_tokens.py"
+  ],
+  "scripts/tools/dx/sync_schema.py": [
+   "tests/shared/test_reserved_key_py_go_parity.py"
+  ],
+  "scripts/tools/dx/tenant_verify.py": [
+   "tests/dx/test_tenant_verify.py"
+  ],
+  "scripts/tools/dx/verify_diff.py": [
+   "tests/dx/test_verify_diff.py"
+  ],
+  "scripts/tools/dx/verify_release.sh": [
+   "tests/dx/test_verify_release.py"
+  ],
+  "scripts/tools/dx/waveform_compile.py": [
+   "tests/dx/test_waveform_compile.py"
+  ],
+  "scripts/tools/dx/waveform_score.py": [
+   "tests/dx/test_waveform_score.py"
+  ],
+  "scripts/tools/lint": [
+   "tests/lint/test_check_cross_ns_url_consistency.py",
+   "tests/lint/test_check_lint_toolchain_fit.py",
+   "tests/shared/test_property_tools.py"
+  ],
+  "scripts/tools/lint/check_admin_config_schema.py": [
+   "tests/lint/test_check_admin_config_schema.py"
+  ],
+  "scripts/tools/lint/check_bilingual_structure.py": [
+   "tests/lint/test_check_bilingual_structure.py"
+  ],
+  "scripts/tools/lint/check_build_completeness.py": [
+   "tests/lint/test_check_build_completeness.py"
+  ],
+  "scripts/tools/lint/check_codename_gate.py": [
+   "tests/lint/test_check_codename_gate.py"
+  ],
+  "scripts/tools/lint/check_confd_schema.py": [
+   "tests/lint/test_check_confd_schema.py"
+  ],
+  "scripts/tools/lint/check_doc_datools_cmds.py": [
+   "tests/lint/test_check_doc_datools_cmds.py"
+  ],
+  "scripts/tools/lint/check_doc_k8s_refs.py": [
+   "tests/lint/test_check_doc_k8s_refs.py"
+  ],
+  "scripts/tools/lint/check_doc_links.py": [
+   "tests/dx/test_coverage_gap_analysis.py"
+  ],
+  "scripts/tools/lint/check_flaky_registry.py": [
+   "tests/lint/test_check_flaky_registry.py"
+  ],
+  "scripts/tools/lint/check_jsx_i18n.py": [
+   "tests/lint/test_check_jsx_i18n.py"
+  ],
+  "scripts/tools/lint/check_log_egress_policy.py": [
+   "tests/shared/test_helm_chart_log_aggregation.py"
+  ],
+  "scripts/tools/lint/check_makefile_targets.py": [
+   "tests/lint/test_check_makefile_targets.py"
+  ],
+  "scripts/tools/lint/check_metric_dictionary.py": [
+   "tests/lint/test_check_metric_dictionary.py"
+  ],
+  "scripts/tools/lint/check_orphan_lint.py": [
+   "tests/lint/test_check_orphan_lint.py"
+  ],
+  "scripts/tools/lint/check_pint.py": [
+   "tests/lint/test_check_pint.py"
+  ],
+  "scripts/tools/lint/check_planning_status_sync.py": [
+   "tests/lint/test_check_planning_status_sync.py"
+  ],
+  "scripts/tools/lint/check_playwright_rtl_drift.py": [
+   "tests/lint/test_check_playwright_rtl_drift.py"
+  ],
+  "scripts/tools/lint/check_property_coverage.py": [
+   "tests/lint/test_check_property_coverage.py"
+  ],
+  "scripts/tools/lint/check_routing_profiles.py": [
+   "tests/lint/test_check_routing_profiles.py"
+  ],
+  "scripts/tools/lint/check_rulepack_sync.py": [
+   "tests/rulepacks/test_platform_rules_extract_sync.py"
+  ],
+  "scripts/tools/lint/check_session_guard_liveness.py": [
+   "tests/lint/test_check_session_guard_liveness.py"
+  ],
+  "scripts/tools/lint/check_structure.py": [
+   "tests/lint/test_check_structure.py"
+  ],
+  "scripts/tools/lint/check_subprocess_timeout.py": [
+   "tests/lint/test_check_subprocess_timeout.py"
+  ],
+  "scripts/tools/lint/check_vmalert_coverage.py": [
+   "tests/rulepacks/test_platform_rules_extract_sync.py"
+  ],
+  "scripts/tools/lint/fix_file_hygiene.py": [
+   "tests/shared/test_sast.py"
+  ],
+  "scripts/tools/lint/validate_docs_versions.py": [
+   "tests/lint/test_validate_docs_versions.py"
+  ],
+  "scripts/tools/metric-dictionary.yaml": [
+   "tests/lint/test_check_structure.py"
+  ],
+  "scripts/tools/ops": [
+   "tests/ops/test_grar_facade_reexports.py",
+   "tests/shared/test_dispatch_contract.py",
+   "tests/shared/test_entrypoint.py",
+   "tests/shared/test_lang_detection_guard.py"
+  ],
+  "scripts/tools/ops/alert_correlate.py": [
+   "tests/dx/test_coverage_gap_analysis.py"
+  ],
+  "scripts/tools/ops/alert_quality.py": [
+   "tests/shared/test_help_contract.py"
+  ],
+  "scripts/tools/ops/blast_radius.py": [
+   "tests/ops/test_blast_radius.py"
+  ],
+  "scripts/tools/ops/check_alert.py": [
+   "tests/lint/test_check_hardcode_tenant.py",
+   "tests/shared/test_entrypoint.py"
+  ],
+  "scripts/tools/ops/config_diff.py": [
+   "tests/shared/test_help_contract.py"
+  ],
+  "scripts/tools/ops/drift_detect.py": [
+   "tests/dx/test_coverage_gap_analysis.py"
+  ],
+  "scripts/tools/ops/generate_alertmanager_routes.py": [
+   "tests/ops/test_generate_alertmanager_routes.py"
+  ],
+  "scripts/tools/ops/generate_rule_pack_split.py": [
+   "tests/shared/test_sast.py"
+  ],
+  "scripts/tools/ops/generate_tenant_mapping_rules.py": [
+   "tests/ops/test_generate_tenant_mapping_rules.py"
+  ],
+  "scripts/tools/ops/metric_observed_map.yaml": [
+   "tests/shared/test_json_stdout_contract.py"
+  ],
+  "scripts/tools/ops/operator_generate.py": [
+   "tests/shared/test_help_contract.py"
+  ],
+  "scripts/tools/ops/scaffold_tenant.py": [
+   "tests/lint/test_check_structure.py",
+   "tests/shared/test_help_contract.py",
+   "tests/shared/test_pipeline_integration.py"
+  ],
+  "scripts/tools/ops/validate_config.py": [
+   "tests/shared/test_help_contract.py",
+   "tests/shared/test_pipeline_integration.py"
+  ],
+  "scripts/tools/validate_all.py": [
+   "tests/lint/test_check_doc_freshness.py",
+   "tests/lint/test_check_orphan_lint.py",
+   "tests/lint/test_check_structure.py"
+  ],
+  "scripts/tools/vendor_download.sh": [
+   "tests/lint/test_check_structure.py"
+  ],
+  "tests/alertmanager-inhibit": [
+   "tests/dx/test_verify_diff.py"
+  ],
+  "tests/conftest.py": [
+   "tests/dx/test_inject_waveform.py",
+   "tests/dx/test_verify_diff.py",
+   "tests/dx/test_waveform_compile.py",
+   "tests/dx/test_waveform_score.py",
+   "tests/golden/test_merge_parity.py",
+   "tests/ops/test_gitops_check.py",
+   "tests/ops/test_grar_facade_reexports.py"
+  ],
+  "tests/contract": [
+   "tests/dx/test_verify_diff.py"
+  ],
+  "tests/contract/run_contract_tests.py": [
+   "tests/dx/test_verify_diff.py"
+  ],
+  "tests/dx/fixtures/custom_alert_validation_vectors.json": [
+   "tests/dx/test_compile_custom_alerts.py"
+  ],
+  "tests/dx/fixtures/diag_pr_ci": [
+   "tests/dx/test_diag_pr_ci.py"
+  ],
+  "tests/dx/fixtures/recipe_id_vectors.json": [
+   "tests/dx/test_compile_custom_alerts.py"
+  ],
+  "tests/dx/fixtures/slo_burn_multiplier_vectors.json": [
+   "tests/dx/test_compile_custom_alerts.py"
+  ],
+  "tests/dx/test_bump_docs.py": [
+   "tests/dx/test_verify_diff.py"
+  ],
+  "tests/dx/test_custom_alerts_promtool.py": [
+   "tests/dx/test_fleet_threshold_dashboard.py",
+   "tests/dx/test_tenant_log_query_dashboard.py"
+  ],
+  "tests/dx/test_fleet_threshold_dashboard.py": [
+   "tests/dx/test_federation_revocation_dashboard.py",
+   "tests/dx/test_tenant_log_query_dashboard.py"
+  ],
+  "tests/dx/test_tenant_log_query_dashboard.py": [
+   "tests/dx/test_federation_revocation_dashboard.py"
+  ],
+  "tests/e2e": [
+   "tests/lint/test_check_playwright_rtl_drift.py"
+  ],
+  "tests/e2e-bench/aggregate.py": [
+   "tests/e2e-bench/test_aggregate.py"
+  ],
+  "tests/e2e-bench/driver/driver.py": [
+   "tests/e2e-bench/driver/test_driver.py"
+  ],
+  "tests/federation-e2e": [
+   "tests/dx/test_verify_diff.py"
+  ],
+  "tests/golden/build_and_capture.py": [
+   "tests/golden/test_merge_parity.py"
+  ],
+  "tests/helm": [
+   "tests/dx/test_verify_diff.py"
+  ],
+  "tests/helm/test_image_tag_derivation.py": [
+   "tests/shared/test_helm_portal.py"
+  ],
+  "tests/helm/test_portal_static_tier_guard.py": [
+   "tests/shared/test_helm_portal.py"
+  ],
+  "tests/lint": [
+   "tests/dx/test_scaffold_lint.py"
+  ],
+  "tests/lint/test_check_cli_coverage.py": [
+   "tests/dx/test_verify_diff.py"
+  ],
+  "tests/lint/test_check_dev_rules_enforcement.py": [
+   "tests/dx/test_verify_diff.py"
+  ],
+  "tests/lint/test_check_hub_badge_drift.py": [
+   "tests/dx/test_verify_diff.py"
+  ],
+  "tests/ops": [
+   "tests/dx/test_verify_diff.py",
+   "tests/ops/test_grar_facade_reexports.py"
+  ],
+  "tests/ops/test_byo_check.py": [
+   "tests/ops/test_threshold_govern.py",
+   "tests/ops/test_threshold_recommend.py"
+  ],
+  "tests/ops/test_check_alert.py": [
+   "tests/shared/test_json_stdout_contract.py"
+  ],
+  "tests/rulepacks": [
+   "tests/dx/test_custom_alerts_promtool.py",
+   "tests/dx/test_inject_waveform.py",
+   "tests/lint/test_check_vmalert_coverage.py",
+   "tests/rulepacks/test_vm_alert_parity.py"
+  ],
+  "tests/rulepacks/vm_deviation_catalog.yaml": [
+   "tests/rulepacks/test_vm_alert_parity.py"
+  ],
+  "tests/rulepacks/vm_engine_version": [
+   "tests/rulepacks/test_vm_backend_parity.py"
+  ],
+  "tests/shared": [
+   "tests/shared/test_lang_detection_guard.py"
+  ],
+  "tests/shared/_go_mutation_pilot.py": [
+   "tests/shared/test_go_mutation_pilot.py"
+  ],
+  "tests/shared/_mutation_pilot.py": [
+   "tests/shared/test_mutation_catalog.py",
+   "tests/shared/test_property_tools.py"
+  ],
+  "tests/shared/property-coverage.yaml": [
+   "tests/lint/test_check_property_coverage.py"
+  ],
+  "tests/shared/test_go_mutation_pilot.py": [
+   "tests/shared/test_mutation_catalog.py"
+  ],
+  "tests/shared/test_helm_portal.py": [
+   "tests/helm/test_portal_static_tier_guard.py"
+  ],
+  "tests/shared/test_json_stdout_contract.py": [
+   "tests/ops/test_backtest_threshold.py"
+  ],
+  "tests/shared/test_lib_godispatch.py": [
+   "tests/shared/test_dispatch_contract.py"
+  ],
+  "tests/shared/test_property.py": [
+   "tests/shared/test_property_tools.py"
+  ],
+  "tests/shared/test_property_tools.py": [
+   "tests/lint/test_check_build_completeness.py",
+   "tests/lint/test_check_property_coverage.py"
+  ],
+  "tests/shared/test_reserved_key_py_go_parity.py": [
+   "tests/dx/test_sync_schema.py"
+  ],
+  "tests/shared/test_tool_exit_codes.py": [
+   "tests/lint/test_check_admin_config_schema.py",
+   "tests/lint/test_check_confd_schema.py",
+   "tests/shared/test_json_stdout_contract.py"
+  ],
+  "tests/shared/test_vector_projection_vrl.py": [
+   "tests/dx/test_log_visibility_catalogue.py"
+  ],
+  "tests/snapshots": [
+   "tests/shared/test_help_contract.py"
+  ],
+  "tools/portal/src": [
+   "tests/dx/test_scan_component_health.py",
+   "tests/lint/test_check_design_token_usage.py",
+   "tests/lint/test_check_jsx_i18n.py",
+   "tests/lint/test_check_jsx_loader_compat.py",
+   "tests/lint/test_lint_tool_consistency.py"
+  ],
+  "tools/portal/src/getting-started": [
+   "tests/lint/test_check_jsx_loader_compat.py"
+  ],
+  "try-local/alertmanager.yml": [
+   "tests/dx/test_verify_diff.py",
+   "tests/shared/test_json_stdout_contract.py"
+  ],
+  "try-local/docker-compose.yaml": [
+   "tests/lint/test_check_cross_ns_url_consistency.py"
+  ],
+  "try-local/seed/conf.d/_rbac.yaml": [
+   "tests/lint/test_check_admin_config_schema.py"
+  ]
+ },
+ "version": 1
+}
