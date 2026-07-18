@@ -897,6 +897,22 @@ test-skip-audit: ## 審計 skipped tests 數量（超過 budget 則失敗）
 		echo "  ✅ PASS"; \
 	fi
 
+# ----------------------------------------------------------
+# verify-diff — diff-scoped Python 測試選擇（測試 ROI 第六輪 W6-E）
+# ----------------------------------------------------------
+.PHONY: verify-diff
+verify-diff: ## 由 diff 選出該跑的 Python 測試並執行（BASE=origin/main 可調；ARGS 傳額外旗標）
+	@python3 scripts/tools/dx/verify_diff.py --base $(or $(BASE),origin/main) --run $(ARGS)
+
+.PHONY: verify-diff-dry
+verify-diff-dry: ## 只列 verify-diff 選集與理由，不執行（BASE=origin/main 可調）
+	@python3 scripts/tools/dx/verify_diff.py --base $(or $(BASE),origin/main) --dry-run $(ARGS)
+
+.PHONY: verify-diff-check
+verify-diff-check: ## 映射保鮮 lint：verify_diff_map.json stale 或有未映射 test 檔 → fail
+	@python3 scripts/tools/dx/verify_diff.py --check || \
+		(echo "Hint: run 'python3 scripts/tools/dx/verify_diff.py --write-map' 更新映射檔" && exit 1)
+
 .PHONY: hook-profile
 hook-profile: ## Pre-commit hook 逐一計時 profiling
 	@echo "=== Pre-commit Hook Profile (--all-files) ==="
