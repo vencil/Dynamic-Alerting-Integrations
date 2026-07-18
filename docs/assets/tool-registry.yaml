@@ -982,6 +982,29 @@ tools:
   hub_section: interactive
   appears_in: []
   journey_phase: configure
+- key: access-report-dryrun
+  title:
+    en: Access Report Dry-Run
+    zh: 存取報告試算
+  file: interactive/tools/access-report-dryrun.jsx
+  audience:
+  - platform
+  - sre
+  icon: validation
+  tags:
+  - rbac
+  - audit
+  - access
+  - dry-run
+  desc:
+    en: What-if diff of a candidate _rbac.yaml's access report for one tenant (audit-only)
+    zh: 對單一租戶試算候選 _rbac.yaml 的存取報告差異（僅稽核）
+  related:
+  - tenant-manager
+  - config-diff
+  hub_section: interactive
+  appears_in: []
+  journey_phase: configure
 - key: deployment-wizard
   title:
     en: Deployment Profile Wizard
