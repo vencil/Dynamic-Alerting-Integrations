@@ -65,24 +65,27 @@ describe('parseDuration — property-based', () => {
     );
   });
 
-  it('rejects strings with no recognized single-letter unit', () => {
-    // Random alphanumeric strings without trailing s/m/h/d should null.
-    // We exclude pure digits (which the current parser also rejects)
-    // and any string ending in a valid unit char.
+  it('rejects any string whose final character is not a recognized unit', () => {
+    // "No recognized unit suffix → null" is the actual invariant. We fuzz
+    // strings whose LAST char is not one of s/m/h/d; the parser regex ends
+    // in [smhd], so every such string must return null. This asserts the
+    // result directly (no fc.pre discard) so a parser that ever accepted a
+    // unit-less string would fail the property instead of silently passing.
     fc.assert(
       fc.property(
-        fc
-          .string({ minLength: 1, maxLength: 20 })
-          .filter((s) => !/^\d+(\.\d+)?[smhd]$/.test(s)),
-        (junk) => {
-          const result = parseDuration(junk);
-          // Either null OR the string happened to match a numeric-suffix
-          // form (extremely rare given the filter); skip those.
-          fc.pre(result !== null ? false : true);
-          return result === null;
-        },
+        fc.string({ minLength: 1, maxLength: 20 }).filter((s) => !'smhd'.includes(s[s.length - 1])),
+        (noUnit) => parseDuration(noUnit) === null,
       ),
-      { numRuns: 100 },
+      { numRuns: 200 },
     );
+  });
+
+  it('rejects a unit char that is not preceded by a number', () => {
+    // Bare/garbled unit strings ('s', 'xh', '-m') have a valid trailing unit
+    // but no leading number → null. This is the case the old fc.pre bypass
+    // could have masked; assert it directly.
+    for (const junk of ['s', 'm', 'h', 'd', 'xh', '-m', 'abcd', '..s']) {
+      expect(parseDuration(junk)).toBeNull();
+    }
   });
 });
