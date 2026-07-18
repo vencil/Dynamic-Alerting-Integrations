@@ -20,14 +20,21 @@ receivers:
   - name: 'null'
 
 inhibit_rules:
+  # #1132 invariant: every `equal:` label is presence-gated (`=~".+"`) on both
+  # sides. Alertmanager treats a label missing from source AND target as equal, so
+  # an ungated equal-label silently over-suppresses alerts that lack it. Gating is
+  # behaviour-preserving here (every demo alert carries tenant) and is enforced by
+  # the same generator invariant (assert_equal_labels_gated) that guards k8s, plus
+  # the Go gate's TestEveryEqualLabelIsGated.
+
   # Silent Mode (warning): TenantSilentWarning suppresses warning notifications
   # for the same tenant.
-  - source_matchers: ['alertname = "TenantSilentWarning"']
-    target_matchers: ['severity = "warning"']
+  - source_matchers: ['alertname = "TenantSilentWarning"', 'tenant =~ ".+"']
+    target_matchers: ['severity = "warning"', 'tenant =~ ".+"']
     equal: ['tenant']
   # Silent Mode (critical).
-  - source_matchers: ['alertname = "TenantSilentCritical"']
-    target_matchers: ['severity = "critical"']
+  - source_matchers: ['alertname = "TenantSilentCritical"', 'tenant =~ ".+"']
+    target_matchers: ['severity = "critical"', 'tenant =~ ".+"']
     equal: ['tenant']
   # Severity Dedup: when a critical fires, suppress the paired warning for the
   # same tenant + metric_group — the direct critical→warning form the platform
@@ -48,6 +55,6 @@ inhibit_rules:
   # rule never consults _severity_dedup — dedup always applies. Both demo
   # tenants use the default ("enable") so the demo matches prod, but a
   # hand-edited "disable" would NOT take effect here.
-  - source_matchers: ['severity = "critical"', 'metric_group =~ ".+"']
-    target_matchers: ['severity = "warning"', 'metric_group =~ ".+"']
+  - source_matchers: ['severity = "critical"', 'metric_group =~ ".+"', 'tenant =~ ".+"']
+    target_matchers: ['severity = "warning"', 'metric_group =~ ".+"', 'tenant =~ ".+"']
     equal: ['tenant', 'metric_group']

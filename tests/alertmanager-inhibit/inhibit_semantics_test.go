@@ -352,6 +352,43 @@ func TestEveryInhibitRuleIsTenantScoped(t *testing.T) {
 	}
 }
 
+// TestEveryEqualLabelIsGated asserts the #1132 invariant structurally over EVERY
+// rule in both hand-written configs: every `equal:` label must be presence-gated
+// (a matcher excluding the empty string, e.g. `label=~".+"`) on source OR target.
+//
+// An ungated equal-label is the #1132 footgun: Alertmanager treats a label
+// missing from BOTH sides as equal, so the rule silently over-suppresses alerts
+// that lack it. The generator PREVENTS this for its output (assert_equal_labels_
+// gated); this is the structural guard for the repo's HAND-WRITTEN configs
+// (try-local, and the k8s base rules), covering rules that do not exist yet — a
+// fixture-based test cannot. It uses Alertmanager's own matcher (see
+// sideGatesLabel), so it can never disagree with the generator invariant.
+func TestEveryEqualLabelIsGated(t *testing.T) {
+	for _, cfg := range []struct {
+		label string
+		rules []common.InhibitRule
+	}{
+		{"try-local/alertmanager.yml", loadPlainAM(t, "try-local/alertmanager.yml")},
+		{"k8s configmap-alertmanager.yaml", loadConfigMapAM(t,
+			"k8s/03-monitoring/configmap-alertmanager.yaml", "alertmanager.yml")},
+	} {
+		t.Run(cfg.label, func(t *testing.T) {
+			for i, r := range cfg.rules {
+				for _, lbl := range r.Equal {
+					if sideGatesLabel(r.SourceMatchers, lbl) || sideGatesLabel(r.TargetMatchers, lbl) {
+						continue
+					}
+					t.Errorf("rule[%d] equal-label %q is presence-gated on NEITHER side — "+
+						"Alertmanager treats it as equal-when-missing, so this rule can silently "+
+						"suppress alerts that lack it (#1132). Gate it (`%s=~\".+\"`) on "+
+						"source_matchers or target_matchers.\n  source_matchers: %v\n  target_matchers: %v",
+						i, lbl, lbl, r.SourceMatchers, r.TargetMatchers)
+				}
+			}
+		})
+	}
+}
+
 // TestTwoSidedMatchExclusionMirrorsAlertmanager pins the excludeTwoSidedMatch
 // clause in inhibits().
 //

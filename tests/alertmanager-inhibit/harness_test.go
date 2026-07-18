@@ -188,6 +188,21 @@ func pinnedTenant(ms common.Matchers) (string, bool) {
 	return "", false
 }
 
+// sideGatesLabel reports whether this matcher set GUARANTEES `label` is present
+// (non-empty). A missing label reads as "" in Alertmanager, so "guarantees
+// present" == "some matcher on `label` does NOT match the empty string" —
+// decided by Alertmanager's OWN matcher (m.Matches), not a re-derivation. This
+// is the Go mirror of _grar_validate._matchers_gate_label_present (the generator
+// invariant), so the repo gate and the generator agree by construction.
+func sideGatesLabel(ms common.Matchers, label string) bool {
+	for _, m := range ms {
+		if m.Name == label && !m.Matches("") {
+			return true
+		}
+	}
+	return false
+}
+
 // matcherScopedTenants returns the tenant ids pinned by rules that scope
 // themselves via MATCHER PINS rather than via `equal:`, in config order.
 //
