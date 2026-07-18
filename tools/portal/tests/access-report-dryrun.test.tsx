@@ -86,6 +86,21 @@ async function renderSelectRun(dryRunResponder: (u: string, o: any) => Promise<a
   fireEvent.click(runBtn);
 }
 
+// Like renderSelectRun, but flips the opt-in org-value toggle ON before Run —
+// the shared preamble for the ?include=org_values disclosure tests.
+async function renderToggleRun(dryRunResponder: (u: string, o: any) => Promise<any>) {
+  stubFetch(dryRunResponder);
+  render(<AccessReportDryRun />);
+  const select = (await screen.findByLabelText('Select tenant')) as HTMLSelectElement;
+  await waitFor(() => expect(select.disabled).toBe(false));
+  await waitFor(() => expect(select.querySelector('option[value="acme"]')).not.toBeNull());
+  fireEvent.change(select, { target: { value: 'acme' } });
+  fireEvent.click(screen.getByRole('checkbox', { name: /Reveal org values/ }));
+  const runBtn = screen.getByRole('button', { name: 'Run dry-run' });
+  await waitFor(() => expect(runBtn).not.toBeDisabled());
+  fireEvent.click(runBtn);
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -268,5 +283,150 @@ describe('AccessReportDryRun — POST outcomes', () => {
     // the redacted 403 sets the shared forbidden lock → copy becomes disabled
     // (same lock that disables Run), so a locked tool cannot be hammered.
     await waitFor(() => expect(copyBtn).toBeDisabled());
+  });
+});
+
+describe('AccessReportDryRun — org-values disclosure (?include=org_values)', () => {
+  // A 200 whose candidate carries ONE added grant on a REQUIRED org gate, so the
+  // added-grant enrichment renders OrgGateValues when the toggle is on.
+  const ORG_RESP = (orgGate: any, tenantOrgs?: string[]) => ({
+    schema_version: 1,
+    generated_at: '2026-07-18T00:00:00Z',
+    candidate_sha256: 'org123',
+    baseline: {
+      verdict: 'grants_found',
+      mode: 'rules',
+      grants: [],
+      tenant: tenantOrgs
+        ? { id: 'acme', org_status: 'labeled', orgs: tenantOrgs }
+        : { id: 'acme', org_status: 'labeled' },
+    },
+    candidate: {
+      verdict: 'grants_found',
+      mode: 'rules',
+      grants: [
+        { index: 0, rule: 'g', permissions: ['read'], effective: { read: true }, org_gate: orgGate },
+      ],
+    },
+    diff: { alignment: 'exact', changed: [], added: [{ rule: 'g', candidate_index: 0 }], removed: [], unchanged: [] },
+    caveats: CAVEATS,
+  });
+
+  it('toggle ON → Run URL carries ?include=org_values and renders server passing values', async () => {
+    const urls: string[] = [];
+    await renderToggleRun((u) => {
+      urls.push(u);
+      return Promise.resolve(makeResp(200, ORG_RESP({ required: true, passing_org_values: ['sre', 'dba'] })));
+    });
+    // Opt-in disclosure lands in the URL (server-evaluated; ⛔ NOT client-derived).
+    expect(urls.some((u) => /[?&]include=org_values/.test(u))).toBe(true);
+    expect(await screen.findByText(/caller org values that pass this gate/i)).toBeInTheDocument();
+    expect(screen.getByText('sre, dba')).toBeInTheDocument();
+  });
+
+  it('unsatisfiable gate → renders the ⚠ "no org value can pass" warning (highest-value signal)', async () => {
+    await renderToggleRun(() =>
+      Promise.resolve(makeResp(200, ORG_RESP({ required: true, unsatisfiable: true, passing_org_values: [] }))));
+    expect(
+      await screen.findByText(/No org value can pass this gate \(unsatisfiable\)/i),
+    ).toBeInTheDocument();
+  });
+
+  it('toggle OFF (default) → URL omits include and org values are not shown', async () => {
+    const urls: string[] = [];
+    await renderSelectRun((u) => {
+      urls.push(u);
+      return Promise.resolve(makeResp(200, ORG_RESP({ required: true, passing_org_values: ['sre'] })));
+    });
+    await screen.findByText(/org123/); // candidate_sha256 → the diff has rendered
+    expect(urls.every((u) => !/include=org_values/.test(u))).toBe(true);
+    expect(screen.queryByText(/caller org values that pass this gate/i)).toBeNull();
+  });
+
+  it('redacted / no org values present → renders the fallback, never crashes on .join', async () => {
+    // gate.required but passing_org_values ABSENT (redacted view / not included) —
+    // must degrade to the "(no org values)" fallback, ⛔ not throw / show undefined.
+    await renderToggleRun(() => Promise.resolve(makeResp(200, ORG_RESP({ required: true }))));
+    expect(await screen.findByText(/no org values provided by server/i)).toBeInTheDocument();
+  });
+
+  it('toggling the checkbox AFTER Run does NOT change the shown org values (snapshot, ⛔ no UI tearing)', async () => {
+    // Run with the toggle ON → org values render. The result carries the
+    // Run-time orgValuesRequested snapshot; the render MUST read that snapshot,
+    // ⛔ not the live checkbox. If it read live state, flipping the checkbox
+    // after Run (no re-fetch) would make the on-screen org values appear/vanish
+    // — a UI tear that lies about which request produced the shown diff.
+    let calls = 0;
+    await renderToggleRun(() => {
+      calls += 1;
+      return Promise.resolve(makeResp(200, ORG_RESP({ required: true, passing_org_values: ['sre', 'dba'] })));
+    });
+    expect(await screen.findByText('sre, dba')).toBeInTheDocument();
+    // Flip the toggle OFF WITHOUT clicking Run again.
+    const checkbox = screen.getByRole('checkbox', { name: /Reveal org values/ }) as HTMLInputElement;
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(checkbox.checked).toBe(false));
+    // ⛔ No new request fired, and the shown result still reflects the ON snapshot.
+    expect(calls).toBe(1);
+    expect(screen.getByText('sre, dba')).toBeInTheDocument();
+    expect(screen.getByText(/caller org values that pass this gate/i)).toBeInTheDocument();
+  });
+});
+
+describe('AccessReportDryRun — coarse alignment (same-source iron law)', () => {
+  // When two rules share a name the server cannot align them 1:1: it downgrades
+  // to alignment='coarse' and dumps BOTH sides into added[]+removed[] (changed
+  // stays empty). The UI MUST render them as two independent lists + a warning
+  // and MUST NEVER re-pair same-name added/removed into a 'changed' card —
+  // client-side pairing would violate the same-source iron law (server holds the
+  // truth) and could invert a permission-widen into a narrow, misleading an
+  // auditor. This guards the constraint the code already honors (findByIndex is
+  // index-only, single-directional) so a future refactor cannot regress it.
+  const COARSE_RESP = {
+    schema_version: 1,
+    generated_at: '2026-07-18T00:00:00Z',
+    candidate_sha256: 'coarse1',
+    baseline: {
+      verdict: 'grants_found',
+      mode: 'rules',
+      grants: [
+        { index: 0, rule: 'db-ops', permissions: ['read'], effective: { read: true, write: false, admin: false } },
+      ],
+    },
+    candidate: {
+      verdict: 'grants_found',
+      mode: 'rules',
+      grants: [
+        { index: 1, rule: 'db-ops', permissions: ['read', 'admin'], effective: { read: true, write: false, admin: true } },
+      ],
+    },
+    // Same rule name on both sides → server left them UNaligned (coarse).
+    diff: {
+      alignment: 'coarse',
+      changed: [],
+      added: [{ rule: 'db-ops', candidate_index: 1 }],
+      removed: [{ rule: 'db-ops', live_index: 0 }],
+    },
+    caveats: CAVEATS,
+  };
+
+  it('coarse → warning banner + separate Added/Removed, ⛔ NEVER a re-paired "Changed" card', async () => {
+    await renderSelectRun(() => Promise.resolve(makeResp(200, COARSE_RESP)));
+
+    // R3 coarse banner warns without pointing at a side.
+    expect(await screen.findByText(/could not align exactly/i)).toBeInTheDocument();
+    // Both sides render as their OWN list — never merged.
+    expect(screen.getByText('Added grants (candidate only)')).toBeInTheDocument();
+    expect(screen.getByText('Removed grants (live only)')).toBeInTheDocument();
+    expect(screen.getByText('ADDED')).toBeInTheDocument();
+    expect(screen.getByText('REMOVED')).toBeInTheDocument();
+    // The same-name rule appears TWICE — once per side, independently (⛔ the UI
+    // did not collapse the ambiguous pair into a single entry).
+    expect(screen.getAllByText('db-ops')).toHaveLength(2);
+    // ⛔ same-source iron law: with server changed=[], the client must NOT invent
+    // a 'changed' card by re-pairing the same-name add/remove.
+    expect(screen.queryByText('Changed rules')).toBeNull();
+    // added/removed are non-empty → this is NOT the empty-diff "no change" path.
+    expect(screen.queryByText('No change on the three org-gate axes')).toBeNull();
   });
 });

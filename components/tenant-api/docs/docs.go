@@ -2300,6 +2300,14 @@ const docTemplate = `{
                 "candidate_index": {
                     "type": "integer"
                 },
+                "claim_key": {
+                    "description": "ClaimKey is the fourth axis: org_gate.claim_key (rule.OrgScope). A\nsame-name pair that re-scopes to a different declared claim key changes\nhere even when the three outcome axes are identical (e.g. an unlabeled\ntenant, where every required gate reads pass/fail_unlabeled regardless of\nwhich key). The claim key IS a claim identifier, so it is DROPPED in the\nredacted view (mirroring ReverseOrgGate.ClaimKey) — the redact rebuild's\nallowlist simply never copies it forward.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_handler.StringDelta"
+                        }
+                    ]
+                },
                 "live_index": {
                     "type": "integer"
                 },
@@ -2340,6 +2348,12 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/internal_handler.DryRunRemoved"
+                    }
+                },
+                "unchanged": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_handler.DryRunUnchanged"
                     }
                 }
             }
@@ -2390,6 +2404,21 @@ const docTemplate = `{
                 },
                 "schema_version": {
                     "type": "integer"
+                }
+            }
+        },
+        "internal_handler.DryRunUnchanged": {
+            "type": "object",
+            "properties": {
+                "candidate_index": {
+                    "type": "integer"
+                },
+                "live_index": {
+                    "type": "integer"
+                },
+                "rule": {
+                    "description": "stripped in the redacted view",
+                    "type": "string"
                 }
             }
         },
