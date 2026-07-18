@@ -5,7 +5,7 @@ TRK-232a (#TBD). After TRK-230 Option C migrated all 43 portal JSX tools
 to ESM dist-bundle, the dist directory has no upstream gate against
 silent dependency bloat. This script enforces three budgets:
 
-  1. Per-tool entry bundle:    <= 100 KB    (current max tenant-manager.js = 54 KB)
+  1. Per-tool entry bundle:    <= 100 KB    (current max tenant-manager.js = 66 KB)
   2. Shared chunk (chunk-*.js): <= 200 KB   (current max = 142 KB react chunk)
   3. Total dist directory:      <= 4 MB     (current = 0.86 MB across 47 .js files;
                                               .map source maps excluded — they don't
