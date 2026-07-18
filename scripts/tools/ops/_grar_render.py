@@ -58,7 +58,8 @@ def _enforce_equal_labels_gated(inhibit_rules: list[dict] | None, strict: bool) 
             f"  WARN: inhibit_rules[{i}] equal={lbls} not presence-gated on either "
             "side — Alertmanager treats missing-on-both-sides as equal, so this rule "
             'may silently suppress unrelated alerts (#1132). Gate `<label>=~".+"` on '
-            "source_matchers AND target_matchers, or drop it from equal:.",
+            "source_matchers OR target_matchers (either side suffices; both = defence "
+            "in depth), or drop it from equal:.",
             file=sys.stderr)
 
 

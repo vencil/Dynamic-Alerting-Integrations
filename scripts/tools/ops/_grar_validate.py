@@ -228,7 +228,8 @@ def assert_equal_labels_gated(inhibit_rules: list[dict] | None) -> None:
         f"matcher guarantees present ({details}). Alertmanager treats a label "
         "missing from BOTH source and target as equal, so the rule silently "
         'suppresses unrelated alerts. Fix: gate the label (`<label>=~".+"`) on '
-        "source_matchers AND target_matchers, or remove it from `equal:`.")
+        "source_matchers OR target_matchers (either side satisfies the invariant; "
+        "gating both is defence in depth), or remove it from `equal:`.")
 
 
 def find_watchdog_suppressing_inhibits(inhibit_rules: list[dict] | None) -> list[tuple[int, dict]]:

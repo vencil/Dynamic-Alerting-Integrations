@@ -726,7 +726,8 @@ class TestEqualLabelGatedInvariant:
             os.path.join(os.path.dirname(__file__), "..", ".."))
         cm_path = os.path.join(
             repo_root, "k8s", "03-monitoring", "configmap-alertmanager.yaml")
-        cm = yaml.safe_load(open(cm_path, encoding="utf-8").read())
+        with open(cm_path, encoding="utf-8") as f:
+            cm = yaml.safe_load(f)
         am = yaml.safe_load(cm["data"]["alertmanager.yml"])
         offending = find_ungated_equal_label_inhibits(am.get("inhibit_rules", []))
         assert offending == [], (
