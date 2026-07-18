@@ -171,7 +171,11 @@ modules:
       find_watchdog_suppressing_inhibits: "ADR-025 D1 inhibit-immunity validator; fully covered by test_generate_routes_orchestration.py::TestWatchdogInhibitImmunity (exact/regex/match-all/empty/severity/legacy-map cases)"
       assert_watchdog_inhibit_immunity: "Raises-wrapper over find_watchdog_suppressing_inhibits; covered by TestWatchdogInhibitImmunity + the assemble fail-closed test"
       _matcher_matches_labels: "Pure AM-matcher evaluator; branch-covered transitively via find_watchdog_suppressing_inhibits cases (=, !=, =~, !~, invalid-regex → conservative match)"
-      _inhibit_target_matchers: "Target-side normalizer (target_matchers list vs legacy target_match/target_match_re maps); covered transitively via find_watchdog_suppressing_inhibits legacy-map + empty-list cases"
+      _inhibit_target_matchers: "Target-side normalizer (thin delegate to _inhibit_side_matchers); covered transitively via find_watchdog_suppressing_inhibits legacy-map + empty-list cases"
+      _inhibit_side_matchers: "Source/target-side matcher normalizer (list vs legacy match/match_re maps); covered by TestEqualLabelGatedInvariant (legacy-map form) + TestWatchdogInhibitImmunity (delegated target side)"
+      _matchers_gate_label_present: "#1132 presence-gate predicate (does a side exclude the empty string for a label); fully covered by test_generate_routes_orchestration.py::TestEqualLabelGatedInvariant (matchall/exact/neg-empty/legacy-map cases)"
+      find_ungated_equal_label_inhibits: "#1132 ungated-equal-label finder; covered by TestEqualLabelGatedInvariant (gated/ungated/partial/legacy-map/malformed) + the committed-configmap regression guard"
+      assert_equal_labels_gated: "Raises-wrapper over find_ungated_equal_label_inhibits; covered by TestEqualLabelGatedInvariant + the strict-raise/warn enforce test"
 
   # ── Lint helpers (small but load-bearing) ─────────────────────────
 

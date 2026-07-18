@@ -111,6 +111,14 @@ jobs:
               # relevant to docs changes. Surfaced by GHSA-3g2h-rf85-5rrv hardening (#972).
               - "helm/**"
               - "docs/**"
+              # k8s manifests: the "Validate rendered Alertmanager config (amtool)"
+              # step extracts configmap-alertmanager.yaml as the base and runs the
+              # generator --strict (the #1132 equal-label-gated fail-closed guard).
+              # Without k8s/** here, a configmap-only edit that un-gates an inhibit
+              # rule would skip that step (the python-tests regression guard in
+              # ci.yml still backstops it, but this makes the amtool --strict step
+              # fire where it is meant to).
+              - "k8s/**"
 
   # (python-tests / go-tests jobs removed — see the DEDUP + OWNER RUNBOOK
   # banner at the top of this file. ci.yml's "Python Tests (3.13)" and
@@ -233,10 +241,15 @@ jobs:
           fi
           echo "amtool image (from deployment manifest): $AM_IMAGE"
           python -c "import yaml,pathlib;d=yaml.safe_load(open('k8s/03-monitoring/configmap-alertmanager.yaml',encoding='utf-8'));pathlib.Path('/tmp/am-base.yml').write_text(d['data']['alertmanager.yml'],encoding='utf-8')"
+          # --strict: fail-closed on the #1132 equal-label-gated invariant over
+          # the base (committed Silent/Custom rules) + generated dedup merge, in
+          # addition to amtool's syntax check. (amtool is green on an ungated
+          # equal-label that silently drops notifications; --strict is not.)
           python scripts/tools/ops/generate_alertmanager_routes.py \
             --config-dir components/threshold-exporter/config/conf.d/ \
             --output-configmap \
             --base-config /tmp/am-base.yml \
+            --strict \
             -o /tmp/am-cm.yml
           python -c "import yaml,pathlib;d=yaml.safe_load(open('/tmp/am-cm.yml',encoding='utf-8'));pathlib.Path('/tmp/am-etc/alertmanager.yml').write_text(d['data']['alertmanager.yml'],encoding='utf-8')"
           docker run --rm --entrypoint amtool \
