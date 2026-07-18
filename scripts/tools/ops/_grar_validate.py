@@ -131,25 +131,105 @@ def _matcher_matches_labels(matcher: str, labels: dict[str, str]) -> bool:
         return True
 
 
-def _inhibit_target_matchers(rule: dict) -> list[str] | None:
-    """Normalize a rule's target side to a list of matcher strings.
+def _inhibit_side_matchers(rule: dict, side: str) -> list[str] | None:
+    """Normalize a rule's source/target side to a list of matcher strings.
 
-    Handles both the current `target_matchers` list form and the legacy
-    `target_match` / `target_match_re` map form. Returns None when the rule has
-    NO target specification at all (malformed — not our concern); returns an
-    empty list only when `target_matchers: []` is explicitly a match-all.
+    `side` is "source" or "target". Handles both the current `*_matchers` list
+    form and the legacy `*_match` / `*_match_re` map form. Returns None when the
+    rule has NO specification for that side at all (malformed — not our concern);
+    returns an empty list only when `*_matchers: []` is explicitly a match-all.
     """
-    if "target_matchers" in rule:
-        return list(rule.get("target_matchers") or [])
+    if f"{side}_matchers" in rule:
+        return list(rule.get(f"{side}_matchers") or [])
     out: list[str] = []
     has_legacy = False
-    for k, v in (rule.get("target_match") or {}).items():
+    for k, v in (rule.get(f"{side}_match") or {}).items():
         out.append(f'{k}="{v}"')
         has_legacy = True
-    for k, v in (rule.get("target_match_re") or {}).items():
+    for k, v in (rule.get(f"{side}_match_re") or {}).items():
         out.append(f'{k}=~"{v}"')
         has_legacy = True
     return out if has_legacy else None
+
+
+def _inhibit_target_matchers(rule: dict) -> list[str] | None:
+    """Target side of an inhibit rule as matcher strings (see _inhibit_side_matchers)."""
+    return _inhibit_side_matchers(rule, "target")
+
+
+def _matchers_gate_label_present(matchers: list[str], label: str) -> bool:
+    """Does this matcher set GUARANTEE `label` is present (non-empty)?
+
+    True iff some matcher NAMES `label` and excludes the empty string for it —
+    i.e. an alert whose `label` is missing/empty would NOT match. Reuses
+    _matcher_matches_labels so the regex/operator semantics are the SAME code
+    the Watchdog guard uses: `label=~".+"` and `label="x"` gate; `label=~".*"`
+    does not. An unnamed label is not gated by that matcher.
+    """
+    for m in matchers or []:
+        parsed = _INHIBIT_MATCHER_RE.match(m)
+        if not parsed or parsed.group(1) != label:
+            continue
+        if not _matcher_matches_labels(m, {label: ""}):
+            return True
+    return False
+
+
+def find_ungated_equal_label_inhibits(
+        inhibit_rules: list[dict] | None) -> list[tuple[int, dict, list[str]]]:
+    """Return [(index, rule, [ungated_labels]), ...] for every inhibit rule that
+    lists an `equal:` label which is presence-gated on NEITHER side.
+
+    Such a label is the PR #1132 footgun: Alertmanager treats a label missing
+    from BOTH the source and target alert as EQUAL, so the rule silently
+    suppresses unrelated alerts (and dedup dies when the source cannot carry it).
+    A label gated on EITHER side (source OR target) is safe — an alert lacking it
+    cannot match that side, so the missing==missing comparison never arises.
+
+    Empty result = invariant holds.
+    """
+    out: list[tuple[int, dict, list[str]]] = []
+    for i, rule in enumerate(inhibit_rules or []):
+        if not isinstance(rule, dict):
+            continue
+        equal = rule.get("equal")
+        if not isinstance(equal, list):
+            continue
+        src = _inhibit_side_matchers(rule, "source") or []
+        tgt = _inhibit_side_matchers(rule, "target") or []
+        ungated = [
+            lbl for lbl in equal
+            if isinstance(lbl, str)
+            and not _matchers_gate_label_present(src, lbl)
+            and not _matchers_gate_label_present(tgt, lbl)
+        ]
+        if ungated:
+            out.append((i, rule, ungated))
+    return out
+
+
+def assert_equal_labels_gated(inhibit_rules: list[dict] | None) -> None:
+    """Fail-closed guard: raise ValueError if any inhibit rule lists an `equal:`
+    label that is presence-gated on neither side (the PR #1132 silent-suppression
+    footgun). Run on the FINAL merged inhibit set in --strict render paths.
+
+    Unlike the Watchdog guard (unconditional — a suppressed dead-man's-switch is
+    catastrophic), this is invoked only in --strict so a BYO customer's existing
+    pipeline degrades to a WARNING rather than hard-breaking on a latent config
+    smell; the platform's own CI runs --strict and thus hard-fails."""
+    offending = find_ungated_equal_label_inhibits(inhibit_rules)
+    if not offending:
+        return
+    details = "; ".join(
+        f"inhibit_rules[{i}] equal={lbls} not presence-gated on either side"
+        for i, _r, lbls in offending)
+    raise ValueError(
+        "#1132 invariant violated: inhibit rule(s) list an equal-label that no "
+        f"matcher guarantees present ({details}). Alertmanager treats a label "
+        "missing from BOTH source and target as equal, so the rule silently "
+        'suppresses unrelated alerts. Fix: gate the label (`<label>=~".+"`) on '
+        "source_matchers OR target_matchers (either side satisfies the invariant; "
+        "gating both is defence in depth), or remove it from `equal:`.")
 
 
 def find_watchdog_suppressing_inhibits(inhibit_rules: list[dict] | None) -> list[tuple[int, dict]]:

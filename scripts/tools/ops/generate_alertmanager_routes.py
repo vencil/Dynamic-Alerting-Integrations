@@ -52,8 +52,10 @@ from _grar_validate import (  # noqa: E402, F401
     POLICY_ERROR_PREFIX,
     _extract_host,
     _validate_profile_refs,
+    assert_equal_labels_gated,
     assert_watchdog_inhibit_immunity,
     check_domain_policies,
+    find_ungated_equal_label_inhibits,
     find_watchdog_suppressing_inhibits,
     load_policy,
     validate_receiver_domains,
@@ -155,7 +157,7 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
 
 
 def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
-                namespace: str, configmap_name: str, yes_flag: bool) -> None:
+                namespace: str, configmap_name: str, yes_flag: bool, strict: bool = False) -> None:
     """Handle --apply mode: merge into ConfigMap and reload."""
     route_count = len(routes)
     inhibit_count = len(inhibit_rules)
@@ -167,18 +169,18 @@ def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[d
         if confirm not in ("y", "yes"):
             print("Aborted.")
             sys.exit(EXIT_OK)
-    success = apply_to_configmap(routes, receivers, inhibit_rules, namespace, configmap_name)
+    success = apply_to_configmap(routes, receivers, inhibit_rules, namespace, configmap_name, strict=strict)
     sys.exit(EXIT_OK if success else EXIT_VIOLATION)
 
 
 def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
                            base_config: str | None, namespace: str, configmap_name: str,
-                           dry_run: bool, output: str | None) -> None:
+                           dry_run: bool, output: str | None, strict: bool = False) -> None:
     """Handle --output-configmap mode: produce complete ConfigMap YAML."""
     base = load_base_config(base_config)
     cm_yaml = assemble_configmap(
         base, routes, receivers, inhibit_rules,
-        namespace=namespace, configmap_name=configmap_name)
+        namespace=namespace, configmap_name=configmap_name, strict=strict)
 
     route_count = len(routes)
     inhibit_count = len(inhibit_rules)
@@ -264,9 +266,11 @@ def main() -> None:
     parser.add_argument("--validate", action="store_true",
                         help="Validate generated config (exit 0 if valid, 1 if errors)")
     parser.add_argument("--strict", action="store_true",
-                        help="Escalate domain-policy violations (ADR-007) from WARN "
-                             "to ERROR and fail (exit 1) in every mode; CI runs "
-                             "--validate --strict")
+                        help="Escalate to ERROR and fail (exit 1): domain-policy "
+                             "violations (ADR-007) and, on the --apply/--output-configmap "
+                             "merge, any inhibit rule with an ungated `equal:` label "
+                             "(#1132). Without --strict these surface as WARN. CI runs "
+                             "--strict.")
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument("--apply", action="store_true",
                             help="Apply: merge into Alertmanager ConfigMap + reload")
@@ -338,12 +342,13 @@ def main() -> None:
     # Apply mode
     if args.apply:
         _apply_mode(routes, receivers, inhibit_rules, args.namespace,
-                    args.configmap, args.yes)
+                    args.configmap, args.yes, strict=args.strict)
 
     # Output-configmap mode
     if args.output_configmap:
         _output_configmap_mode(routes, receivers, inhibit_rules, args.base_config,
-                              args.namespace, args.configmap, args.dry_run, args.output)
+                              args.namespace, args.configmap, args.dry_run, args.output,
+                              strict=args.strict)
         return
 
     # Default render mode
