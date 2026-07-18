@@ -44,6 +44,20 @@ SCOPE:
   NOT expressible in JSON Schema and remain parser-enforced — this lint guards
   structure only.
 
+  EMBEDDED SOURCES (production RBAC): the tenant-api RBAC config also ships EMBEDDED
+  as a YAML block-scalar string inside a larger document — `data._rbac.yaml` in the
+  raw k8s ConfigMap (k8s/04-tenant-api/configmap-rbac.yaml) and `rbac._rbacYaml` in
+  the Helm chart values (helm/tenant-api/values.yaml). Those basenames are NOT
+  `_rbac.yaml`, so the whole-file path above never reaches the production authz
+  config. EMBEDDED_RBAC_SOURCES maps each (by repo-relative path, NOT basename —
+  there are 11 other values.yaml) to the key to EXTRACT → parse → validate against
+  the SAME rbac schema. The Helm TEMPLATE
+  (helm/tenant-api/templates/configmap-rbac.yaml) carries Go `{{ }}` markers and
+  cannot be parsed as plain YAML, so it is DEFERRED (skipped) — its rendered RBAC is
+  the values.yaml `_rbacYaml`, which IS validated. A registered embedded source
+  MISSING its expected key is a VIOLATION (fail-loud), not a silent skip, so a
+  renamed embedding key cannot silently re-open the fail-open hole this closes.
+
 Exit codes (scripts/tools/_lib_exitcodes.py):
   0  all checked files valid (or no admin files among the arguments)
   1  >=1 schema violation (user fixes the YAML or the schema)
@@ -96,6 +110,41 @@ def schema_for(path: str) -> str | None:
     if ext.lower() not in ADMIN_EXTENSIONS:
         return None
     return SCHEMA_MAP.get(stem)
+
+
+# Production RBAC embedded as a block-scalar string inside a larger document.
+# Keyed by repo-relative path SUFFIX (never basename — there are 11 other
+# values.yaml and a second configmap-rbac.yaml, the Helm template, which must
+# NOT match). Each value = (dotted key-path to extract, schema filename). This
+# MUST stay in step with the pre-commit hook's `files:` regex, which pins these
+# exact paths; a path the hook selects but this map does not know would be
+# silently skipped (fail-open). Pinned by TestGateIntegrity.
+EMBEDDED_RBAC_SOURCES = {
+    "k8s/04-tenant-api/configmap-rbac.yaml": (("data", "_rbac.yaml"), "rbac.schema.json"),
+    "helm/tenant-api/values.yaml": (("rbac", "_rbacYaml"), "rbac.schema.json"),
+}
+
+
+def embedded_source_for(path: str):
+    """Return (key_path_tuple, schema_filename) if `path` is a registered
+    embedded-RBAC source (matched by repo-relative path suffix), else None."""
+    norm = path.replace("\\", "/")
+    for suffix, spec in EMBEDDED_RBAC_SOURCES.items():
+        if norm == suffix or norm.endswith("/" + suffix):
+            return spec
+    return None
+
+
+def _navigate(doc: dict, key_path: tuple):
+    """Walk `key_path` into a nested mapping. Returns (value, None) if present,
+    or (None, dotted_prefix_where_it_stopped) if any level is missing / not a
+    mapping."""
+    cur = doc
+    for i, key in enumerate(key_path):
+        if not isinstance(cur, dict) or key not in cur:
+            return None, ".".join(key_path[:i + 1])
+        cur = cur[key]
+    return cur, None
 
 
 class _DuplicateKeyError(yaml.constructor.ConstructorError):
@@ -167,6 +216,13 @@ def validate_file(path: str, schema: dict, validator) -> list[str]:
     except (OSError, yaml.YAMLError) as exc:
         raise _CallerError(f"{path}: cannot read/parse YAML: {exc}")
 
+    return _validate_docs(docs, path, schema, validator)
+
+
+def _validate_docs(docs, path: str, schema: dict, validator, where: str = "") -> list[str]:
+    """Validate each parsed YAML document (a mapping) against `schema`. `where`
+    is an optional message prefix used to point at an EMBEDDED block-scalar
+    source (e.g. "embedded 'data._rbac.yaml': ") vs. the whole file."""
     violations: list[str] = []
     for doc in docs:
         if doc is None:
@@ -176,14 +232,112 @@ def validate_file(path: str, schema: dict, validator) -> list[str]:
             continue
         if not isinstance(doc, dict):
             violations.append(
-                f"ERROR: {path}: top-level YAML document must be a mapping "
+                f"ERROR: {path}: {where}top-level YAML document must be a mapping "
                 f"(got {type(doc).__name__})")
             continue
         try:
             validator.validate(doc, schema)
         except validator.ValidationError as exc:
             loc = "/".join(str(p) for p in exc.absolute_path)
-            violations.append(f"ERROR: {path}: {exc.message} @ /{loc}")
+            violations.append(f"ERROR: {path}: {where}{exc.message} @ /{loc}")
+    return violations
+
+
+def validate_embedded_file(path: str, key_path: tuple, schema: dict, validator):
+    """Validate an RBAC config EMBEDDED as a YAML block-scalar string inside a
+    larger document (k8s ConfigMap `data._rbac.yaml` / Helm `rbac._rbacYaml`).
+
+    Returns a list of violation messages (empty if the embedded RBAC is valid).
+    The Helm TEMPLATE configmap-rbac.yaml (Go `{{ }}`) is NOT handled here — it is
+    excluded by the hook's path-anchored files regex; its rendered RBAC is the
+    values.yaml `_rbacYaml`, validated directly as a registered embedded source.
+    An unparseable outer document raises _CallerError (exit 2) rather than being
+    silently skipped — a REGISTERED source is never deferred (fail-closed).
+
+    Uses the same duplicate-key-rejecting strict loader as validate_file, applied
+    to BOTH the outer document and the extracted block scalar, so a dup-key that
+    the Go parser would reject at load is caught in the embedded RBAC too.
+    """
+    dotted = ".".join(key_path)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = fh.read()
+    except OSError as exc:
+        raise _CallerError(f"{path}: cannot read: {exc}")
+
+    # ⛔ NO whole-file `{{` defer. A REGISTERED embedded source is plain YAML by
+    # contract — the Helm TEMPLATE (which does carry Go `{{ }}`) is excluded by
+    # the hook's path-anchored files regex, NOT handled here. Scanning the whole
+    # raw file for `{{` was a FAIL-OPEN: an unrelated tpl-passthrough value
+    # (e.g. podAnnotations: "{{ .Release.Name }}") would silently defer — and so
+    # SKIP — validation of the embedded production RBAC, reopening the very hole
+    # this check closes. A legitimately quoted `{{ }}` parses fine as a YAML
+    # string below; an unparseable one raises a CallerError (exit 2, blocks)
+    # rather than passing.
+    try:
+        outer_docs = list(yaml.load_all(raw, Loader=_StrictSafeLoader))
+    except _DuplicateKeyError as exc:
+        loc = exc.problem_mark
+        where = f" (line {loc.line + 1})" if loc is not None else ""
+        return [f"ERROR: {path}: {exc.problem}{where}"]
+    except (yaml.YAMLError, TypeError) as exc:
+        # TypeError: an unquoted document-level `{{ }}` parses as a flow mapping
+        # with an unhashable dict key. Either way the OUTER document is not plain
+        # YAML — a registered source must be (the Helm template is excluded by the
+        # files regex). Block (exit 2) rather than silently pass.
+        raise _CallerError(f"{path}: cannot parse YAML "
+                           f"(document-level Go template markers unsupported): {exc}")
+
+    violations: list[str] = []
+    found = False
+    for doc in outer_docs:
+        if not isinstance(doc, dict):
+            continue
+        embedded, missing_at = _navigate(doc, key_path)
+        if missing_at is not None:
+            continue  # this document does not carry the key; another might
+        found = True
+        if embedded is None:
+            # present-but-null block scalar → empty RBAC (rbac decodes io.EOF to
+            # the empty config); loader-legal, not a violation.
+            continue
+        if not isinstance(embedded, str):
+            violations.append(
+                f"ERROR: {path}: embedded RBAC at '{dotted}' must be a YAML "
+                f"block-scalar string (got {type(embedded).__name__})")
+            continue
+        if "{{" in embedded:
+            # The embedded RBAC block ITSELF is a Go-template indirection (its real
+            # RBAC is rendered elsewhere, e.g. `_rbacYaml: |{{ .Values.rbacBody }}`)
+            # — defer THIS block, it has no concrete RBAC to validate here. ⛔ This
+            # check is SCOPED to the extracted block, NOT the whole file: an
+            # unrelated `{{ }}` value elsewhere in the document must never suppress
+            # validation of a plain-RBAC block (that was the fail-open this closes).
+            continue
+        try:
+            inner_docs = list(yaml.load_all(embedded, Loader=_StrictSafeLoader))
+        except _DuplicateKeyError as exc:
+            loc = exc.problem_mark
+            at = f" line {loc.line + 1}" if loc is not None else ""
+            violations.append(
+                f"ERROR: {path}: {exc.problem} (embedded '{dotted}'{at})")
+            continue
+        except yaml.YAMLError as exc:
+            # A malformed embedded RBAC string is an author-fixable content bug
+            # (exit 1), not an environment error.
+            violations.append(
+                f"ERROR: {path}: embedded '{dotted}' is not valid YAML: {exc}")
+            continue
+        violations.extend(
+            _validate_docs(inner_docs, path, schema, validator,
+                           where=f"embedded '{dotted}': "))
+
+    if not found:
+        violations.append(
+            f"ERROR: {path}: expected embedded RBAC key '{dotted}' not found — "
+            f"this file is a registered embedded-RBAC source, so a missing or "
+            f"renamed key silently skips authz schema validation (fail-open). "
+            f"Fix the key, or update EMBEDDED_RBAC_SOURCES if the embedding moved.")
     return violations
 
 
@@ -204,17 +358,24 @@ def main() -> int:
         print(f"ERROR: schema-dir not found: {args.schema_dir}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
-    # Partition arguments into admin files we own vs. everything else (skipped).
-    to_check: list[tuple[str, str]] = []  # (path, schema_filename)
+    # Partition arguments into: whole-file admin configs (SCHEMA_MAP by stem),
+    # embedded-RBAC sources (EMBEDDED_RBAC_SOURCES by path), everything else.
+    direct_to_check: list[tuple[str, str]] = []          # (path, schema_filename)
+    embedded_to_check: list[tuple[str, tuple, str]] = []  # (path, key_path, schema)
     skipped: list[str] = []
     for path in args.files:
         schema_file = schema_for(path)
-        if schema_file is None:
-            skipped.append(path)
+        if schema_file is not None:
+            direct_to_check.append((path, schema_file))
             continue
-        to_check.append((path, schema_file))
+        emb = embedded_source_for(path)
+        if emb is not None:
+            key_path, emb_schema = emb
+            embedded_to_check.append((path, key_path, emb_schema))
+            continue
+        skipped.append(path)
 
-    if not to_check:
+    if not direct_to_check and not embedded_to_check:
         if skipped:
             print(f"OK: no admin meta-config among {len(skipped)} file(s) "
                   f"(skipped: {', '.join(sorted(skipped))})")
@@ -235,10 +396,18 @@ def main() -> int:
     violations: list[str] = []
     checked = 0
     try:
-        for path, schema_file in sorted(to_check):
+        for path, schema_file in sorted(direct_to_check):
             schema = _load_schema(args.schema_dir, schema_file, schema_cache)
             checked += 1
             violations.extend(validate_file(path, schema, jsonschema))
+        for path, key_path, schema_file in sorted(embedded_to_check):
+            schema = _load_schema(args.schema_dir, schema_file, schema_cache)
+            # A REGISTERED embedded source is ALWAYS validated, never deferred —
+            # the Helm TEMPLATE (Go `{{ }}`) is excluded by the files regex, not
+            # skipped here. An unparseable outer YAML raises _CallerError (exit 2,
+            # blocks) rather than silently passing.
+            checked += 1
+            violations.extend(validate_embedded_file(path, key_path, schema, jsonschema))
     except _CallerError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
