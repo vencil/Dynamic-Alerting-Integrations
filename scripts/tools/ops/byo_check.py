@@ -614,7 +614,8 @@ def _side_gates_label(rule, side, label):
     and `*_match_re` (regex) map forms, so a config using the old syntax is
     analysed rather than silently passed.
     """
-    for s in rule.get(f"{side}_matchers", []) or []:
+    matchers = rule.get(f"{side}_matchers")
+    for s in matchers if isinstance(matchers, list) else []:
         parsed = _parse_matcher(s)
         if parsed and _matcher_guarantees_present(parsed[0], parsed[1], parsed[2], label):
             return True
@@ -629,8 +630,11 @@ def _side_gates_label(rule, side, label):
 
 def _ungated_equal_labels(rule):
     """Equal-labels a rule presence-gates on NEITHER side (the candidate risks)."""
+    equal = rule.get("equal")
+    if not isinstance(equal, list):
+        return []
     return [
-        lbl for lbl in (rule.get("equal", []) or [])
+        lbl for lbl in equal
         if isinstance(lbl, str)
         and not _side_gates_label(rule, "source", lbl)
         and not _side_gates_label(rule, "target", lbl)
@@ -645,7 +649,8 @@ def _source_pinned_alertname(rule):
     alert list by an exact label lookup — NOT a re-implementation of Alertmanager
     matching, just how we identify which firing alerts are this rule's source.
     """
-    for s in rule.get("source_matchers", []) or []:
+    matchers = rule.get("source_matchers")
+    for s in matchers if isinstance(matchers, list) else []:
         parsed = _parse_matcher(s)
         if parsed and parsed[0] == "alertname" and parsed[1] == "=" and parsed[2]:
             return parsed[2]
@@ -694,6 +699,9 @@ def _judge_inhibit_semantics(inhibit_rules, alerts_by_alertname):
         fails safe (no lost notifications) and is out of scope for this warn.
     """
     key = "alertmanager_inhibit_semantics"
+    if not isinstance(inhibit_rules, list):
+        return {"check": key, "status": "warn",
+                "detail": "inhibit_rules is not a list — cannot analyze equal-label safety"}
     analyzed = confirmed = unverified = 0
     confirmed_parts, unverified_parts = [], []
 
@@ -721,8 +729,12 @@ def _judge_inhibit_semantics(inhibit_rules, alerts_by_alertname):
             # else: every source alert carries them -> verified safe, no finding
         else:
             unverified += 1
-            why = ("source not firing" if source_alertname
-                   else "source not alertname-pinned")
+            if not source_alertname:
+                why = "source not alertname-pinned"
+            elif alerts_by_alertname is None:
+                why = "no live alert data"
+            else:
+                why = "source not firing"
             unverified_parts.append(f"rule[{i}] equal={ungated} ({why})")
 
     if analyzed == 0:
@@ -838,7 +850,9 @@ def check_alertmanager(args):
             for a in data:
                 if not isinstance(a, dict):
                     continue
-                labels = a.get("labels") or {}
+                labels = a.get("labels")
+                if not isinstance(labels, dict):
+                    continue
                 name = labels.get("alertname")
                 if name:
                     alerts_by_alertname.setdefault(name, []).append(set(labels.keys()))

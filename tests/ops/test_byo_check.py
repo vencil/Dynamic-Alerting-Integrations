@@ -1051,6 +1051,31 @@ class TestJudgeInhibitSemantics:
         assert r["status"] == "warn"
         assert "No parseable" in r["detail"]
 
+    def test_no_alert_data_reason_distinguished_from_not_firing(self):
+        # When there is NO alert data at all, the advisory must not claim the
+        # source "not firing" (we cannot know); it says "no live alert data".
+        rules = [{
+            "source_matchers": ['alertname = "TenantSeverityDedupEnabled"'],
+            "target_matchers": ['severity = "warning"'],
+            "equal": ["metric_group"],
+        }]
+        r = self._judge(rules, None)
+        assert r["status"] == "pass"
+        assert "no live alert data" in r["detail"]
+        assert "not firing" not in r["detail"]
+
+    @pytest.mark.parametrize("malformed", [
+        42,                                                  # inhibit_rules not a list
+        [{"equal": 42, "source_matchers": ['a="b"']}],       # equal not a list
+        [{"equal": ["x"], "source_matchers": 42}],           # matchers not a list
+        [{"equal": ["x"], "source_matchers": "sev=1"}],      # matchers a bare string
+    ])
+    def test_malformed_rule_shapes_do_not_crash(self, malformed):
+        # A live AM cannot emit these (it validates on load), but the judge must
+        # degrade rather than raise — symmetry with the config-envelope hardening.
+        r = self._judge(malformed, self.ABN)   # must not raise
+        assert r["status"] in ("warn", "pass")
+
     def test_confirmed_when_only_some_source_instances_lack_label(self):
         # The core is `any`: a trap exists if EVEN ONE firing instance of the
         # source lacks the equal-label. Two TenantSeverityDedupEnabled instances,
