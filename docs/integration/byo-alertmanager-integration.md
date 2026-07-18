@@ -310,6 +310,8 @@ curl -sf http://localhost:9093/api/v2/alerts | python3 -m json.tool
 ```
 
 > **自動化驗證**：`da-tools byo-check alertmanager` 可一鍵執行上述所有 Alertmanager 驗證項目。
+>
+> 其中 `alertmanager_inhibit_semantics` 檢查會分析你的 `inhibit_rules` 的**抑制語意**（非只是語法——`amtool check-config` 對語意錯誤全綠）：對每條規則，若 `equal:` 列的 label 在 source／target matcher 都未被 presence-gate（如 `metric_group=~".+"`），且該規則的 source 告警**實際不帶**該 label，就會告警。這正是 [#1132](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1132) 的坑：Alertmanager 把「兩側皆缺該 label」視為相等，會讓抑制規則失效並**靜默吃掉**不相干的通知。此檢查以你 Alertmanager 當下的**實際告警 label** 佐證，故最好在有代表性告警觸發時執行；查無佐證時只給 advisory 提示、不影響 exit code。修法：讓 source 帶該 label、從 `equal:` 移除、或在兩側 matcher 加 `<label>=~".+"` 閘門。
 
 ### 功能驗證
 

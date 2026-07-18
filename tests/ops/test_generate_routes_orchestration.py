@@ -677,6 +677,14 @@ class TestEqualLabelGatedInvariant:
         with pytest.raises(ValueError, match="#1132"):
             assert_equal_labels_gated(bad)
 
+    def test_invalid_regex_matcher_does_not_gate(self):
+        # An uncompilable regex is treated conservatively as matching empty (so it
+        # does NOT presence-gate) — flag rather than give a false all-clear. This
+        # is the single-implementation coverage the BYO runtime check relies on.
+        bad = [{"source_matchers": ['tenant=~"["'],
+                "target_matchers": ['tenant=~"["'], "equal": ["tenant"]}]
+        assert len(find_ungated_equal_label_inhibits(bad)) == 1
+
     def test_matchall_regex_does_not_gate(self):
         # `=~".*"` matches the empty string, so it does NOT guarantee presence.
         bad = [{"source_matchers": ['tenant=~".*"'],
