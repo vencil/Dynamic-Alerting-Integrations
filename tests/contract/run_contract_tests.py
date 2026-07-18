@@ -26,6 +26,16 @@ Fixture design (full-method fuzz):
   - TA_RATE_LIMIT_PER_MIN=0 disables the per-caller rate limiter
     (cmd/server/main.go); hundreds of fuzz requests/minute from one
     caller identity would otherwise trip 429s unrelated to the spec.
+  - `_domain_policy.yaml` lives INSIDE conf.d/ (unlike _rbac.yaml there
+    is no flag: policy.NewManager hard-joins configDir — cmd/server/main.go
+    → internal/policy/policy.go) and binds the seed tenant to a domain
+    that forbids one receiver type. This arms the API-layer policy gate
+    (CheckWrite → 403 POLICY_VIOLATION, internal/handler/tenant_put.go)
+    so the declared 403 contract is reachable in this fixture. Because
+    domain→tenant matching is an exact tenant list (no wildcard) and a
+    fuzzed body rarely hits `_routing.receiver.type` on the seed tenant,
+    a DETERMINISTIC smoke (run_policy_gate_smoke) fires the gate before
+    the fuzz — the 403 path never depends on fuzz luck.
 
 Skipped checks (and why — see also docs/internal/testing-playbook.md):
   - `auth-required`: tenant-api auth is via X-Forwarded-* headers from
@@ -48,6 +58,7 @@ Excluded operations (known gaps + reopen conditions):
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
@@ -109,6 +120,24 @@ def wait_for_health(url: str, timeout: float = 30.0) -> None:
 # X-Forwarded-Groups header sent with every schemathesis request.
 FUZZ_GROUP = "contract-fuzz-admins"
 
+# Caller identity for every request (schemathesis AND the deterministic
+# policy smoke) — one identity, so TA_RATE_LIMIT_PER_MIN=0 stays required.
+FUZZ_EMAIL = "schemathesis@example.com"
+
+# Neutral fixture tenant (dev-rule #2: no real tenant ids in fixtures).
+# Seeded in conf.d so list endpoints have ≥1 tenant, and listed in the
+# domain policy fixture so the policy gate can actually match a tenant
+# (policy.go isTenantInPolicy is an exact-list match, no wildcard).
+SEED_TENANT = "db-seed"
+
+# Domain policy fixture knobs. webhook is forbidden / email is allowed —
+# both are real receiver types from tenant-config.schema.json, so the
+# violating body is schema-valid and only the policy gate can reject it
+# (a 400 would mean the smoke broke, not the policy).
+POLICY_DOMAIN = "contract-fixture-domain"
+POLICY_FORBIDDEN_RECEIVER = "webhook"
+POLICY_ALLOWED_RECEIVER = "email"
+
 
 def run_git(config_dir: Path, *args: str) -> None:
     """Run a git command inside the temp config dir (check=True)."""
@@ -153,6 +182,134 @@ def write_rbac_fixture(workdir: Path) -> Path:
     return rbac_path
 
 
+def write_domain_policy_fixture(config_dir: Path) -> None:
+    """Write conf.d/_domain_policy.yaml binding SEED_TENANT to a domain.
+
+    Shape mirrors the real example
+    (components/threshold-exporter/config/conf.d/examples/_domain_policy.yaml):
+    forbidden_receiver_types + allowed_receiver_types on one domain. Must
+    live INSIDE conf.d — policy.NewManager joins configDir directly
+    (cmd/server/main.go), there is no -policy flag. The scanner skips
+    `_`-prefixed files (internal/handler/tenant_list.go), so the file
+    never shows up as a tenant.
+    """
+    (config_dir / "_domain_policy.yaml").write_text(
+        "domain_policies:\n"
+        f"  {POLICY_DOMAIN}:\n"
+        "    description: \"Contract-test fixture: arms the API-layer policy gate\"\n"
+        f"    tenants: [{SEED_TENANT}]\n"
+        "    constraints:\n"
+        f"      allowed_receiver_types: [{POLICY_ALLOWED_RECEIVER}, pagerduty]\n"
+        f"      forbidden_receiver_types: [{POLICY_FORBIDDEN_RECEIVER}, slack]\n"
+    )
+
+
+def _tenant_body(receiver_yaml: str) -> bytes:
+    """Tenant-only PUT body (conf.d/{id}.yaml shape) with a _routing receiver.
+
+    Deliberately ONLY `_routing`: the write validation resolves plain
+    metric keys (cpu, ...) against the merged _defaults.yaml, and this
+    fixture ships no defaults — a metric key would 400 with "unknown key
+    not in defaults" before proving anything about the policy gate.
+    `_`-prefixed structural keys skip that resolution.
+    """
+    return (
+        "tenants:\n"
+        f"  {SEED_TENANT}:\n"
+        "    _routing:\n"
+        "      receiver:\n"
+        f"{receiver_yaml}"
+    ).encode()
+
+
+def _put_tenant(base_url: str, body: bytes) -> tuple[int, str, bytes]:
+    """PUT the seed tenant with fuzz-identity headers; never raises on 4xx/5xx."""
+    req = urllib.request.Request(
+        f"{base_url}/api/v1/tenants/{SEED_TENANT}",
+        data=body,
+        method="PUT",
+        headers={
+            "X-Forwarded-Email": FUZZ_EMAIL,
+            "X-Forwarded-Groups": FUZZ_GROUP,
+            "Content-Type": "application/yaml",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10.0) as resp:
+            return resp.status, resp.headers.get("Content-Type", ""), resp.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers.get("Content-Type", ""), e.read()
+
+
+def run_policy_gate_smoke(base_url: str) -> bool:
+    """Deterministic contract case for the domain-policy 403 path.
+
+    schemathesis almost never generates a body that sets
+    `_routing.receiver.type` on the seed tenant, so without this the
+    policy gate's declared 403 would only be exercised by fuzz luck.
+    Two fixed requests, run BEFORE the fuzz (fail fast, and immune to
+    whatever state the fuzz leaves behind):
+
+      1. violating PUT (forbidden receiver type) → MUST be 403 with the
+         ErrorResponse envelope: code=POLICY_VIOLATION + violations[]
+         carrying the policy.Violation shape (domain/constraint/message).
+         The body is schema-valid apart from the policy, so a 400 here
+         means the smoke itself broke — not a pass.
+      2. control PUT (allowed receiver type) → MUST be 200. Guards
+         against a miswired fixture where the policy (or the file's mere
+         presence in conf.d) blocks every write and the fuzz would
+         silently degrade into an all-403 run.
+    """
+    ok = True
+
+    status, ctype, raw = _put_tenant(base_url, _tenant_body(
+        f"        type: {POLICY_FORBIDDEN_RECEIVER}\n"
+        "        url: https://alerts.invalid/contract-fixture\n"
+    ))
+    detail = f"status={status} content-type={ctype} body={raw[:400]!r}"
+    if status != 403:
+        print(f"[contract] FAIL policy smoke: violating PUT expected 403, got {detail}")
+        ok = False
+    else:
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            print(f"[contract] FAIL policy smoke: 403 body is not JSON: {detail}")
+            return False
+        violations = body.get("violations") or []
+        if body.get("code") != "POLICY_VIOLATION":
+            print(f"[contract] FAIL policy smoke: expected code=POLICY_VIOLATION, got {detail}")
+            ok = False
+        elif not body.get("error") or not violations:
+            print(f"[contract] FAIL policy smoke: 403 missing error/violations: {detail}")
+            ok = False
+        elif not any(
+            v.get("domain") == POLICY_DOMAIN
+            and v.get("constraint") == "forbidden_receiver_types"
+            and v.get("message")
+            for v in violations
+        ):
+            print(f"[contract] FAIL policy smoke: violations lack the policy.Violation shape: {detail}")
+            ok = False
+        elif not ctype.startswith("application/json"):
+            print(f"[contract] FAIL policy smoke: 403 content-type not JSON: {detail}")
+            ok = False
+
+    status, _, raw = _put_tenant(base_url, _tenant_body(
+        f"        type: {POLICY_ALLOWED_RECEIVER}\n"
+        "        to: oncall@example.com\n"
+        "        smarthost: smtp.example.invalid:587\n"
+    ))
+    if status != 200:
+        print(f"[contract] FAIL policy smoke: control PUT (allowed receiver) expected 200, "
+              f"got status={status} body={raw[:400]!r}")
+        ok = False
+
+    if ok:
+        print("[contract] policy-gate smoke OK: violating PUT → 403 POLICY_VIOLATION, control PUT → 200")
+    return ok
+
+
 def build_tenant_api(workdir: Path) -> Path:
     """Build the tenant-api binary into workdir/tenant-api. Returns path."""
     binary = workdir / "tenant-api"
@@ -183,12 +340,15 @@ def main() -> int:
     config_dir = workdir / "conf.d"
     config_dir.mkdir()
     # Minimal seed file so list endpoints have at least one tenant.
-    (config_dir / "db-seed.yaml").write_text(
+    (config_dir / f"{SEED_TENANT}.yaml").write_text(
         "tenants:\n"
-        "  db-seed:\n"
+        f"  {SEED_TENANT}:\n"
         "    cpu: \"80\"\n"
         "    environment: production\n"
     )
+    # Domain policy fixture — written before the initial commit so the
+    # policy file is part of the repo's baseline state.
+    write_domain_policy_fixture(config_dir)
     # Commit-on-write needs a real repo; see init_git_repo docstring.
     init_git_repo(config_dir)
     rbac_path = write_rbac_fixture(workdir)
@@ -226,7 +386,14 @@ def main() -> int:
 
         try:
             wait_for_health(f"{base_url}/health", timeout=15.0)
-            print("[contract] tenant-api ready, running schemathesis")
+            print("[contract] tenant-api ready, running policy-gate smoke")
+
+            # Deterministic policy-gate contract case — BEFORE the fuzz so a
+            # dead gate fails fast and the checks run against pristine state.
+            if not run_policy_gate_smoke(base_url):
+                return 1
+
+            print("[contract] running schemathesis")
 
             # Schemathesis 4.x: run against the spec, base URL is our local
             # server. ALL methods are fuzzed — writes land in the throwaway
@@ -261,7 +428,7 @@ def main() -> int:
                     "schemathesis", "run",
                     str(SWAGGER_JSON),
                     "--url", base_url,
-                    "-H", "X-Forwarded-Email: schemathesis@example.com",
+                    "-H", f"X-Forwarded-Email: {FUZZ_EMAIL}",
                     "-H", f"X-Forwarded-Groups: {FUZZ_GROUP}",
                     "--exclude-path-regex", "^/api/v1/federation/(tokens|accounts)",
                     "--exclude-path", "/api/v1/prs",
