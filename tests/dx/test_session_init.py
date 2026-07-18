@@ -263,10 +263,14 @@ class TestCLIIntegration:
     def test_status_exits_zero(self, tmp_path, monkeypatch):
         env = os.environ.copy()
         env["CLAUDE_SESSION_ID"] = "subprocess-test-session"
+        # encoding= 必須顯式指定：child 經 try_utf8_stdout() 輸出 UTF-8，
+        # Windows host locale (cp950) 預設解碼會在 reader thread 內炸掉
+        # （host 假紅；CI ubuntu locale 本來就是 UTF-8 所以看不到）。
         result = subprocess.run(
             [sys.executable, str(_SCRIPT), "--status"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=10,
             env=env,
         )
@@ -274,10 +278,12 @@ class TestCLIIntegration:
         assert "session_id=subprocess-test-session" in result.stdout
 
     def test_help_exits_zero(self):
+        # encoding= 同上（--help 文案含非 ASCII，cp950 解碼必炸）。
         result = subprocess.run(
             [sys.executable, str(_SCRIPT), "--help"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=10,
         )
         assert result.returncode == 0

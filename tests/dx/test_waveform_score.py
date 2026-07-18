@@ -568,7 +568,9 @@ def test_malformed_report_metadata_shape_exits_two(tmp_path):
 # ── FIX-7：報告血緣最小完整性 ──────────────────────────────────────────
 
 def test_fault_window_shape_validation_exits_two(tmp_path):
-    for bad_fw, tag in (([300], "len1"), ([500, 300], "start>end"),
+    # tag 會進檔名（bad_{tag}.json）——不可含 `>` 等 Windows 非法檔名字元
+    # （原 "start>end" 在 host 直接 OSError Errno 22，host 假紅）。
+    for bad_fw, tag in (([300], "len1"), ([500, 300], "start_gt_end"),
                         (["x", 500], "non-num"), ({"s": 1}, "not-list")):
         rep_doc = _report([_record()], [_meta()])
         rep_doc["metadata"]["series"][0]["fault_window_s"] = bad_fw
