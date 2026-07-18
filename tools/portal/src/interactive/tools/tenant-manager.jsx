@@ -180,6 +180,13 @@ export default function TenantManager() {
   // Auth state
   const [authUser, setAuthUser] = useState(null);
   const [canWrite, setCanWrite] = useState(true); // default true for demo/no-auth mode
+  // P7c follow-up #6 (#962): server-driven auth posture from /api/v1/me.
+  // 'unknown' until the fetch settles, then one of:
+  //   'ok'             — authenticated, has an identity payload (authUser set)
+  //   'forbidden'      — 403: authenticated but no tenant access (RBAC)
+  //   'unauthenticated'— 401: not signed in (oauth2-proxy should redirect)
+  //   'demo'           — no /me endpoint reachable (offline / try-local)
+  const [authState, setAuthState] = useState('unknown');
   // v2.6.0: Pending PR tracking (ADR-011)
   const [pendingPRs, setPendingPRs] = useState([]);
   const [prByTenant, setPrByTenant] = useState({});
@@ -201,9 +208,24 @@ export default function TenantManager() {
             perms => perms.includes('write') || perms.includes('admin')
           );
           setCanWrite(hasWrite);
+          setAuthState('ok');
+        } else if (resp.status === 403) {
+          // Authenticated but no tenant access — RBAC / PlatformAdminNonOrgScoped
+          // returns 403. This carries NO identity payload, so we deliberately do
+          // NOT setAuthUser (authUser-gated UI must stay off). We degrade exactly
+          // as the server said: no write access, show a "no access" notice.
+          setCanWrite(false);
+          setAuthState('forbidden');
+        } else if (resp.status === 401) {
+          // Unauthenticated — oauth2-proxy normally redirects, but a dev/bypass
+          // deployment can surface a bare 401. No identity, no write.
+          setCanWrite(false);
+          setAuthState('unauthenticated');
         }
+        // Any other non-ok status: leave demo defaults untouched (fail-soft).
       } catch (e) {
         // No auth endpoint available — demo mode, allow all
+        setAuthState('demo');
         console.info('No /api/v1/me endpoint — running in demo mode');
       }
     };
@@ -524,6 +546,49 @@ export default function TenantManager() {
         }
         onViewScope={() => { setScopePanelOpen(true); dismissScopeCallout(); }}
       />
+
+      {/* P7c follow-up #6 (#962): server-driven access notice. A non-wildcard
+          reader who is authenticated but has NO tenant access gets a 403 from
+          /api/v1/me (RBAC / PlatformAdminNonOrgScoped); a bare 401 means
+          unauthenticated. This is shown ONLY because the SERVER said so
+          (403/401) — never a client-side guess — and by then canWrite is
+          already false, so no write controls render. Demo mode (no /me
+          endpoint → authState 'demo') never reaches this branch, so the
+          one-click try-local experience is unchanged. */}
+      {(authState === 'forbidden' || authState === 'unauthenticated') && (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          data-testid="access-forbidden-notice"
+          style={{
+            maxWidth: '1600px',
+            margin: '0 auto var(--da-space-4)',
+            backgroundColor: 'var(--da-color-warning-soft)',
+            border: '1px solid var(--da-color-warning)',
+            borderRadius: 'var(--da-radius-md)',
+            padding: 'var(--da-space-3) var(--da-space-4)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--da-space-2)',
+            fontSize: 'var(--da-font-size-sm-md)',
+            color: 'var(--da-color-fg)',
+          }}
+        >
+          <span style={{ fontSize: 'var(--da-font-size-md)' }} aria-hidden="true">{'🔒'}</span>
+          <span style={{ fontWeight: 'var(--da-font-weight-medium)' }}>
+            {authState === 'forbidden'
+              ? t(
+                  '您已登入，但沒有任何租戶的存取權限——請聯絡平台管理員。',
+                  'You are signed in, but you do not have access to any tenant. Please contact your platform administrator.'
+                )
+              : t(
+                  '您尚未登入——請重新登入以存取租戶。',
+                  'You are not signed in. Please sign in again to access tenants.'
+                )}
+          </span>
+        </div>
+      )}
 
       {/* LD-6 P7: first-visit callout — points a newly-authed user at the
           access-scope panel before they wonder why the list looks the way
