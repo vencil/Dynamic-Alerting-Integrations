@@ -728,6 +728,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: detect-changes
     if: needs.detect-changes.outputs.python_changed == 'true'
+    # Least-privilege token (CodeQL: workflow-missing-permissions, same
+    # class as the Go split jobs): tests + coverage-artifact upload need
+    # nothing beyond repo read.
+    permissions:
+      contents: read
     strategy:
       matrix:
         python: ["3.13"]
