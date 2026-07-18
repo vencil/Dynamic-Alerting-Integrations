@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""verify_diff.py — diff-scoped Python 測試選擇器（測試 ROI 第六輪 W6-E MVP）
+"""verify_diff.py — diff-scoped Python test selector (rule mapping + fail-closed; testing-ROI W6-E MVP)
 
 給一組 changed files（`git diff --name-only` 輸出），選出「該跑哪些 Python
 測試檔」並附理由。設計結論（方案 (a) 規則映射，owner 拍板）：
@@ -663,6 +663,16 @@ def run_pytest(result: dict, xdist_threshold: int, timeout_s: int,
     if result["mode"] == "empty":
         return EXIT_OK
 
+    # external-only diff（mode=subset 但沒有任何 pytest target）：組空 target 的
+    # pytest 會退化成「收集整個 repo」全跑——與 external fail-closed 精神相反
+    # （CodeRabbit #3608510380）。此處 return 只表示「不代跑 pytest」；external
+    # 受影響的 fail-closed exit 1 由 main() 的 unacked_external 分支負責，不受
+    # 這個 early-return 影響（本函式回 EXIT_OK，main 會再據 unacked 升 1）。
+    if not result["selected"]:
+        _warn("無 pytest target（僅外部套件受影響）→ 不代跑 pytest"
+              "（避免退化成全 repo 收集）。")
+        return EXIT_OK
+
     argv = build_pytest_argv(result, xdist_threshold)
     env = dict(os.environ)
     env.setdefault("PYTHONIOENCODING", "utf-8")  # zh-TW Windows cp950 防線
@@ -688,6 +698,14 @@ def check_map(repo_root: Path, map_path: Path, rules: dict) -> tuple:
     problems: list = []
     fresh = build_map(repo_root)
 
+    # AST 解析失敗的 test 檔（fail-closed；CodeRabbit #3608510382）：這些檔的
+    # import/text 反查全數落空，若又被 dir-rule/override 覆蓋，覆蓋率檢查會
+    # 假綠——解析不了就映射不到，是 gate 該擋的事，不是可忽略的 warning。
+    for rel in fresh["parse_errors"]:
+        problems.append(
+            f"test 檔 AST 解析失敗: {rel} —— import/文字反查全數落空，映射"
+            "不可靠（且該檔本來就會 fail pytest collection；修語法錯誤）")
+
     if not map_path.exists():
         problems.append(f"映射檔缺失: {map_path.name}（跑 --write-map 產生）")
     else:
@@ -703,7 +721,8 @@ def check_map(repo_root: Path, map_path: Path, rules: dict) -> tuple:
                 # digest 未覆蓋的輸入（fixture 後補）都可能讓 committed map
                 # 缺 ref 卻「永遠新鮮」。fresh 已經 build 好，dict 相等比對
                 # 成本近零，直接收掉這個洞。
-                for key in ("import_map", "text_map", "tests_scanned"):
+                for key in ("import_map", "text_map", "tests_scanned",
+                            "parse_errors"):
                     if on_disk.get(key) != fresh[key]:
                         problems.append(
                             f"映射內容不符: {map_path.name} 的 {key} 與現場重建"

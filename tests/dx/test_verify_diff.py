@@ -383,6 +383,25 @@ class TestFreshness:
         problems, _ = vd.check_map(synth_repo, map_path, _rules())
         assert any("映射內容不符" in p for p in problems)
 
+    def test_check_flags_syntax_broken_test(self, synth_repo, tmp_path):
+        """F2（CodeRabbit #3608510382）：語法壞的 test 檔 → --check 必紅。
+
+        解析失敗的 test 其 import/text 反查全落空；若被 dir-rule/override
+        覆蓋，覆蓋率檢查會假綠——parse_errors 無條件 fail-closed 補這個洞。
+        """
+        _write(synth_repo / "tests" / "ops" / "test_broken.py",
+               "def test_x(:\n    pass\n")  # 故意語法錯
+        map_path = tmp_path / "map.json"
+        vd.write_map(vd.build_map(synth_repo), map_path)
+        problems, _ = vd.check_map(synth_repo, map_path, _rules())
+        assert any("AST 解析失敗" in p and "test_broken.py" in p
+                   for p in problems)
+
+    def test_build_map_records_parse_errors(self, synth_repo):
+        _write(synth_repo / "tests" / "ops" / "test_bad.py", "def f(:\n")
+        vmap = vd.build_map(synth_repo)
+        assert "tests/ops/test_bad.py" in vmap["parse_errors"]
+
 
 # ============================================================
 # CLI（main）
@@ -481,6 +500,51 @@ class TestCli:
         with open(map_path, encoding="utf-8") as f:
             on_disk = json.load(f)
         assert on_disk["version"] == vd.MAP_VERSION
+
+    def test_run_external_only_no_full_collection(self, cli_argv, synth_cli,
+                                                  monkeypatch):
+        """F1（CodeRabbit #3608510380）：external-only diff + --run 不得退化成
+        全 repo 收集，且 exit code 仍走 fail-closed（1）。
+
+        監視 subprocess.run——external-only 時**完全不該**呼叫 pytest（空
+        target 的 pytest 會收集整個 repo）。exit 1 由 unacked_external 負責。
+        """
+        calls = []
+        real_run = subprocess.run
+
+        def _spy(argv, *a, **kw):
+            calls.append(argv)
+            # 若真的組出 pytest 就攔下（不讓它真跑全 repo）——但本測試預期
+            # 根本走不到這裡。
+            if isinstance(argv, list) and "pytest" in argv:
+                raise AssertionError(f"不該呼叫 pytest: {argv}")
+            return real_run(argv, *a, **kw)
+
+        monkeypatch.setattr(vd.subprocess, "run", _spy)
+        code = self._run_main(
+            cli_argv, [*synth_cli, "--run",
+                       "tests/contract/run_contract_tests.py"])
+        assert code == 1  # unacked external → fail-closed
+        assert not any(isinstance(c, list) and "pytest" in c for c in calls)
+
+    def test_run_external_only_acked_exits_ok(self, cli_argv, synth_cli,
+                                             monkeypatch):
+        """external-only + --run + --ack-external → 不跑 pytest、exit 0。
+
+        （只攔 pytest；git ls-files 等保鮮探測仍需放行。）
+        """
+        real_run = subprocess.run
+
+        def _spy(argv, *a, **kw):
+            if isinstance(argv, list) and "pytest" in argv:
+                raise AssertionError(f"不該呼叫 pytest: {argv}")
+            return real_run(argv, *a, **kw)
+
+        monkeypatch.setattr(vd.subprocess, "run", _spy)
+        code = self._run_main(
+            cli_argv, [*synth_cli, "--run", "--ack-external",
+                       "tests/contract/run_contract_tests.py"])
+        assert code == 0
 
 
 # ============================================================
