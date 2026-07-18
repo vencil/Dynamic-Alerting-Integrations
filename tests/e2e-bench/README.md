@@ -140,7 +140,7 @@ verdict (`passed` / `failed` / `voided`); see
 | `threshold-exporter` | `build: ../../components/threshold-exporter/app` | Watches `fixture/active/conf.d/`, emits `user_threshold` + `da_config_last_{scan,reload}_complete_unixtime_seconds` gauges (T1/T2 anchors) |
 | `prometheus` | `prom/prometheus:v3.11.2` | Scrapes exporter + pushgateway; evaluates `actual_metric_value > user_threshold` rule |
 | `pushgateway` | `prom/pushgateway:v1.10.0` | Receives driver-injected `actual_metric_value{tenant=bench-run-N}` |
-| `alertmanager` | `prom/alertmanager:v0.32.0` | Routes firing/resolved alerts to receiver (`send_resolved: true`) |
+| `alertmanager` | `prom/alertmanager:v0.33.1` | Routes firing/resolved alerts to receiver (`send_resolved: true`) |
 | `receiver` | `build: ./receiver` | Custom Go ring-buffer webhook target; `/posts?since=...&tenant_id=...` query API |
 | `driver` | `build: ./driver` | Python orchestrator; runs **inside** compose so all timestamps share the host kernel clock (no skew) |
 

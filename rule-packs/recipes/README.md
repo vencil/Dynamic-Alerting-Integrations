@@ -47,6 +47,20 @@ _custom_alerts:
 - **向量化（O(M)）**：相同 shape signature `(recipe, metric, op, window/horizon, quantile, denominator/capacity, selectors, for, min_events)` 的多租戶**共用一條規則**（`on(tenant) group_left`）；規則數 = shape 數，非租戶數。`for` 入 signature（控制平面靜態屬性）；`forecast` 用 `horizon`（推導 lookback）取代 `window`；`slo_burn_rate` 無 `window`（burn 窗固定屬 recipe 語意）、`objective`/`slo_period` 走資料平面**不入 shape**（改值不 re-slug），`min_events` 入 shape（字面值寫進規則）。
 - **shape slug = `recipe_id`**：去重鍵 + recording-rule 名 + alertname + `user_threshold` 上的選擇 label，是 Go↔Python 跨語言契約（見 [`tests/dx/fixtures/recipe_id_vectors.json`](../../tests/dx/fixtures/recipe_id_vectors.json)）。
 
+## slo_burn_rate 補充
+
+### 運營：通知風暴抑制與吵度回顧
+
+- **infra 事故時的通知風暴抑制（選用）**：`slo_burn="true"` 標籤是為此準備的 inhibit target discriminator——可操作範本與「為什麼不預設出貨」的取捨見[設計文件 §Alertmanager inhibit_rules 範本](../../docs/design/config-driven.md#27-三態運營模式-operational-modes)。量測永不抑制：inhibit 只擋通知，recording 與 `ALERTS` 評估照常。
+- **告警吵度回顧**：讀 `ALERTS` 歷史的三條 documented queries（吵度排行／episode 數／風暴群聚）見[告警系列篇三 §6.1](../../docs/alerting-best-practices.md#61-告警吵度回顧三條-documented-queries)；SLO burn 告警可用 `{slo_burn="true"}` 過濾單看。
+
+### latency / freshness 型 SLI：instrumentation 先行（recipe 支援 deferred）
+
+v1 的 `slo_burn_rate` 只接 availability／error-ratio 型（兩個 counter 的比率）。latency 與 freshness 型的 **recipe 支援是 defer-with-trigger**（首個客戶需求觸發，見 [ADR-031 §Deferred](../../docs/adr/031-slo-burn-rate-recipe.md#deferred附-trigger)），但 instrumentation 可以現在就鋪——等 recipe 到位時資料已在：
+
+- **latency 型（如「95% 請求 < 300ms」）**：宣告介面的 `selectors` 同時套用分子分母，histogram 的 `le` 會污染分母——正解不是等 recipe 吃 histogram，而是**在源頭產出 counter 對**：instrument 一個 `*_slow_requests_total`（超過門檻的請求數）counter，與既有 `*_requests_total` 配對。**這其實是今天就能用的 workaround**：把「慢」定義成「壞事件」，availability 型宣告（`metric: *_slow_requests_total` / `denominator_metric: *_requests_total`、`objective: "95"`）現在就能算 latency SLO 的 burn rate——代價是門檻（300ms）燒死在 instrumentation、改門檻要改 code。
+- **freshness 型（如「資料不超過 N 分鐘未更新」）**：本質是 timestamp 差值、非 counter 比率。鋪法三選一：K8s 內 batch job 完成時寫 completion-timestamp gauge 到 node-exporter **textfile collector**（job 寫 `.prom` 檔）；無常駐 exporter 的短命 job 用 **Pushgateway**；log-only 系統用 **Vector `log_to_metric`** transform 從完成 log 派生 gauge。**誠實邊界：completion-timestamp gauge 今天接不上任何 recipe**——「太舊」語意需要 `time() - gauge > N` 的時間差運算，recipe 宣告介面沒有它（這正是 freshness 型被 deferred 的原因；epoch timestamp 對靜態閾值恆真或恆假＝死告警）。過渡期要告警，得由平台側 raw rule 承接 `time() - gauge > N`，或改鋪「持續刷新的 age gauge」（值＝現在−完成時刻，需常駐程序計算）再配 `threshold` recipe。先鋪 timestamp gauge 的價值在於**資料先落 TSDB**——未來 freshness recipe 會直接消費同一 gauge。
+
 ## 編譯
 
 ```bash
