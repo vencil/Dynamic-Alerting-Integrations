@@ -5,6 +5,16 @@
 # 判定優先序見 verify_diff.py select_tests docstring：
 #   full_run_triggers → identity → overrides → import_map → text_map →
 #   dir_rules → (additive: always_run) → safe_ignore → fail-closed 全跑。
+#
+# ── 映射紀律（外審 F1-F3 固化；給未來作者）──────────────────────────────
+# 1. 測試經 **module 常數** 讀 live repo 檔（cdre.DEV_RULES_PATH、
+#    cc.ENTRYPOINT_PATH 這類 live-file dogfood）→ 三層自動映射都構不到，
+#    **必須進 overrides**（AST 只解析 import 名、文字掃描只看字面路徑）。
+# 2. text_map 命中若唯一來源是 **docstring / 錯誤訊息 prose** → 視為脆弱
+#    （改寫註解就斷鏈），應 overrides 化固化。
+# 3. **非 pytest gate（Go / vitest / schemathesis）的受測輸入檔** → 用
+#    dir_rules 指到對應 external runner（如 make test-am-inhibit）；
+#    external 套件不代跑、預設 exit 1（--ack-external 顯式確認後降 0）。
 version: 1
 
 # ── 恆選集：任何工具變更都受 cross-cutting sweep 影響（glob 收集所有工具）──
@@ -82,16 +92,26 @@ dir_rules:
   - name: alertmanager-inhibit-self
     source: "tests/alertmanager-inhibit/**"
     suite: tests/alertmanager-inhibit
-    runner: pytest
-    justification: "#1132 inhibit 語意 gate 套件自身附屬檔變更重跑（Go 部分在 container 內自行 gate）"
+    runner: "make test-am-inhibit"
+    justification: "#1132 inhibit 語意 gate 為 Go-only 套件（無 test_*.py，pytest 會空收集）；Go 僅 container 內可用"
+  - name: am-inhibit-input-trylocal
+    source: "try-local/alertmanager.yml"
+    suite: tests/alertmanager-inhibit
+    runner: "make test-am-inhibit"
+    justification: harness_test.go 明列的受測輸入①——手寫 AM config 變更必須重跑 #1132 inhibit 語意 gate（外審 F1）
+  - name: am-inhibit-input-k8s
+    source: "k8s/03-monitoring/configmap-alertmanager.yaml"
+    suite: tests/alertmanager-inhibit
+    runner: "make test-am-inhibit"
+    justification: harness_test.go 明列的受測輸入②——手貼 generator 輸出的 checked-in 結果（外審 F1）
   - name: portal-vitest
     source: "tools/portal/**"
-    suite: tests/portal
+    suite: tools/portal/tests
     runner: "make test-portal"
-    justification: portal JSX/vitest 非 pytest（TRK-230）；Python 側無收集面
+    justification: portal JSX/vitest 非 pytest（TRK-230；vitest 測試實際位於 tools/portal/tests）
   - name: portal-dist
     source: "docs/assets/dist/**"
-    suite: tests/portal
+    suite: tools/portal/tests
     runner: "make test-portal"
     justification: esbuild 產物，源頭在 tools/portal；以 vitest 驗源碼
   - name: portal-e2e
@@ -147,6 +167,15 @@ overrides:
   - source: "scripts/tools/dx/verify_diff_map.json"
     tests: [tests/dx/test_verify_diff.py]
     justification: 工具自身的預生成映射檔（同上；test_repo_check_is_green 驗其保鮮）
+  - source: "docs/internal/dev-rules.md"
+    tests: [tests/lint/test_check_dev_rules_enforcement.py]
+    justification: live-file dogfood via 模組常數（cdre.DEV_RULES_PATH，test_live_dev_rules_has_no_drift 讀 live 檔）；紀律 #1（外審 F2）
+  - source: "components/da-tools/app/entrypoint.py"
+    tests: [tests/lint/test_check_cli_coverage.py]
+    justification: live-file dogfood via 模組常數（cc.ENTRYPOINT_PATH，live COMMAND_MAP 覆蓋斷言）；紀律 #1（外審 F2）
+  - source: "docs/interactive/index.html"
+    tests: [tests/lint/test_check_hub_badge_drift.py]
+    justification: shipped index.html live 斷言；原 text_map 命中唯一來源是 docstring prose，脆弱 → 固化；紀律 #2（外審 F3）
 
 # ── --check 例外表：解析不到映射但「確認無 source→test 反向需求」的 test 檔──
 # 進這張表需要 justification；--check 會抓殭屍條目（檔案已不存在）。

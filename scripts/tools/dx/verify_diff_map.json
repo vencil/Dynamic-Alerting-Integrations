@@ -622,7 +622,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "8f4aca31357007c8c94aaed0f9ca20fbed0ba0e93862d8f98e523d2f1ae950ec",
+ "source_digest": "bf4bf2388a2b10bbdb4fd30f031d11f05cf522c3600859c8bacbce4d17c97ee8",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1007,6 +1007,9 @@
   "components/da-tools/app/build.sh": [
    "tests/shared/test_entrypoint.py"
   ],
+  "components/da-tools/app/entrypoint.py": [
+   "tests/dx/test_verify_diff.py"
+  ],
   "components/recipe-preview/Dockerfile": [
    "tests/preview/test_promtool_pin_parity.py"
   ],
@@ -1094,6 +1097,7 @@
    "tests/rulepacks/test_vm_replay_staleness.py"
   ],
   "docs/interactive/index.html": [
+   "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_hub_badge_drift.py"
   ],
   "docs/internal": [
@@ -1109,6 +1113,7 @@
   ],
   "docs/internal/dev-rules.md": [
    "tests/dx/test_bump_docs.py",
+   "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_devrules_size.py",
    "tests/shared/test_json_stdout_contract.py"
   ],
@@ -1293,6 +1298,7 @@
    "tests/ops/test_scaffold_db.py"
   ],
   "k8s/03-monitoring/configmap-alertmanager.yaml": [
+   "tests/dx/test_verify_diff.py",
    "tests/ops/test_alertmanager_amtool_validity.py",
    "tests/ops/test_generate_routes_orchestration.py"
   ],
@@ -1694,6 +1700,9 @@
   "scripts/tools/vendor_download.sh": [
    "tests/lint/test_check_structure.py"
   ],
+  "tests/alertmanager-inhibit": [
+   "tests/dx/test_verify_diff.py"
+  ],
   "tests/conftest.py": [
    "tests/dx/test_inject_waveform.py",
    "tests/dx/test_verify_diff.py",
@@ -1761,6 +1770,15 @@
   ],
   "tests/lint": [
    "tests/dx/test_scaffold_lint.py"
+  ],
+  "tests/lint/test_check_cli_coverage.py": [
+   "tests/dx/test_verify_diff.py"
+  ],
+  "tests/lint/test_check_dev_rules_enforcement.py": [
+   "tests/dx/test_verify_diff.py"
+  ],
+  "tests/lint/test_check_hub_badge_drift.py": [
+   "tests/dx/test_verify_diff.py"
   ],
   "tests/ops": [
    "tests/dx/test_verify_diff.py",
@@ -1842,6 +1860,7 @@
    "tests/lint/test_check_jsx_loader_compat.py"
   ],
   "try-local/alertmanager.yml": [
+   "tests/dx/test_verify_diff.py",
    "tests/shared/test_json_stdout_contract.py"
   ],
   "try-local/docker-compose.yaml": [

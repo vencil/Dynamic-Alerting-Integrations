@@ -368,6 +368,20 @@ class TestFreshness:
         problems, _ = vd.check_map(synth_repo, map_path, _rules())
         assert any("陳舊" in p for p in problems)
 
+    def test_check_flags_tampered_map_content(self, synth_repo, tmp_path):
+        """F5：digest 相同但 import_map 被手改（缺 ref）→ --check 必抓。
+
+        digest 只蓋輸入（test 檔內容 + 模組索引路徑），不蓋 map 內容——
+        手改 committed map 可以在 digest 檢查下「永遠新鮮」。內容相等比對
+        收掉這個洞。
+        """
+        map_path = tmp_path / "map.json"
+        vmap = vd.build_map(synth_repo)
+        del vmap["import_map"]["scripts/tools/dx/mytool.py"]  # 假裝缺 ref
+        vd.write_map(vmap, map_path)
+        problems, _ = vd.check_map(synth_repo, map_path, _rules())
+        assert any("映射內容不符" in p for p in problems)
+
 
 # ============================================================
 # CLI（main）
@@ -431,6 +445,30 @@ class TestCli:
             "--repo-root", str(synth_repo), "--rules", str(bad), "x.py"])
         assert code == 2
 
+    def test_external_unacked_exits_violation(self, cli_argv, synth_cli,
+                                              capsys):
+        """F4 fail-closed：外部套件未跑且未 --ack-external → exit 1。"""
+        code = self._run_main(
+            cli_argv, [*synth_cli, "tests/contract/run_contract_tests.py"])
+        assert code == 1
+        out = capsys.readouterr().out
+        assert "外部套件未跑" in out
+
+    def test_external_acked_exits_ok(self, cli_argv, synth_cli):
+        code = self._run_main(
+            cli_argv, [*synth_cli, "--ack-external",
+                       "tests/contract/run_contract_tests.py"])
+        assert code == 0
+
+    def test_json_carries_unrun_external(self, cli_argv, synth_cli, capsys):
+        code = self._run_main(
+            cli_argv, [*synth_cli, "--json",
+                       "tests/contract/run_contract_tests.py"])
+        assert code == 1
+        doc = json.loads(capsys.readouterr().out)
+        assert doc["unrun_external"] == [
+            {"suite": "tests/contract", "runner": "make contract-test"}]
+
     def test_write_map_roundtrip(self, cli_argv, synth_repo, tmp_path):
         rules_path = _write(tmp_path / "r3.yaml",
                             yaml.safe_dump(_rules(), allow_unicode=True))
@@ -448,14 +486,60 @@ class TestCli:
 # 真實 repo 煙霧測試
 # ============================================================
 
-class TestRealRepoSmoke:
-    def test_bump_docs_maps_to_its_test(self):
-        vmap = vd.build_map(vd.REPO_ROOT)
-        assert "tests/dx/test_bump_docs.py" in \
-            vmap["import_map"]["scripts/tools/dx/bump_docs.py"]
+@pytest.fixture(scope="module")
+def real_map():
+    """真實 repo 的映射（module scope——build 一次 ~1.5s，多測試共用）。"""
+    return vd.build_map(vd.REPO_ROOT)
 
-    def test_repo_check_is_green(self):
+
+@pytest.fixture(scope="module")
+def real_rules():
+    return vd.load_rules(vd.DEFAULT_RULES_PATH)
+
+
+class TestRealRepoSmoke:
+    def test_bump_docs_maps_to_its_test(self, real_map):
+        assert "tests/dx/test_bump_docs.py" in \
+            real_map["import_map"]["scripts/tools/dx/bump_docs.py"]
+
+    def test_repo_check_is_green(self, real_rules):
         """映射檔新鮮 + 全 test 檔可達（--check 的 repo 守門）。"""
-        rules = vd.load_rules(vd.DEFAULT_RULES_PATH)
-        problems, _ = vd.check_map(vd.REPO_ROOT, vd.DEFAULT_MAP_PATH, rules)
+        problems, _ = vd.check_map(vd.REPO_ROOT, vd.DEFAULT_MAP_PATH,
+                                   real_rules)
         assert problems == [], problems
+
+    # ── 外審 F1-F3 反例釘死：非 pytest gate 輸入 / module 常數間接依賴 ──
+
+    @pytest.mark.parametrize("changed", [
+        "try-local/alertmanager.yml",
+        "k8s/03-monitoring/configmap-alertmanager.yaml",
+    ])
+    def test_am_config_change_flags_inhibit_gate(self, real_map, real_rules,
+                                                 changed):
+        """F1：手寫 AM config 變更必須提示 #1132 inhibit 語意 gate。"""
+        r = vd.select_tests([changed], real_map, real_rules, vd.REPO_ROOT)
+        ext = r["external_suites"]
+        assert "tests/alertmanager-inhibit" in ext
+        assert ext["tests/alertmanager-inhibit"]["runner"] == \
+            "make test-am-inhibit"
+
+    @pytest.mark.parametrize("changed,expected_test", [
+        # F2：live-file dogfood via module 常數（三層自動映射構不到）
+        ("docs/internal/dev-rules.md",
+         "tests/lint/test_check_dev_rules_enforcement.py"),
+        ("components/da-tools/app/entrypoint.py",
+         "tests/lint/test_check_cli_coverage.py"),
+        # F3：docstring 承重的 text-ref 固化為 override
+        ("docs/interactive/index.html",
+         "tests/lint/test_check_hub_badge_drift.py"),
+    ])
+    def test_module_constant_dependencies_selected(self, real_map, real_rules,
+                                                   changed, expected_test):
+        r = vd.select_tests([changed], real_map, real_rules, vd.REPO_ROOT)
+        # 可能被併進已選 suite 目錄；檢查單檔或其所屬 suite 任一在選集
+        hit = expected_test in r["selected"] or any(
+            expected_test.startswith(d.rstrip("/") + "/")
+            for d in r["selected"] if not d.endswith(".py"))
+        assert hit, (changed, sorted(r["selected"]))
+        reasons = r["selected"].get(expected_test, [])
+        assert any(x.startswith("override") for x in reasons), reasons

@@ -901,11 +901,11 @@ test-skip-audit: ## 審計 skipped tests 數量（超過 budget 則失敗）
 # verify-diff — diff-scoped Python 測試選擇（測試 ROI 第六輪 W6-E）
 # ----------------------------------------------------------
 .PHONY: verify-diff
-verify-diff: ## 由 diff 選出該跑的 Python 測試並執行（BASE=origin/main 可調；ARGS 傳額外旗標）
+verify-diff: ## 由 diff 選跑 Python 測試（外部套件 Go/vitest/contract 只提示不代跑，未 ack 則 exit 1；BASE/ARGS 可調）
 	@python3 scripts/tools/dx/verify_diff.py --base $(or $(BASE),origin/main) --run $(ARGS)
 
 .PHONY: verify-diff-dry
-verify-diff-dry: ## 只列 verify-diff 選集與理由，不執行（BASE=origin/main 可調）
+verify-diff-dry: ## 只列 verify-diff 的 Python 測試選集與外部套件提示，不執行（BASE=origin/main 可調）
 	@python3 scripts/tools/dx/verify_diff.py --base $(or $(BASE),origin/main) --dry-run $(ARGS)
 
 .PHONY: verify-diff-check
