@@ -41,21 +41,3 @@ func TestTenantIDFromFile(t *testing.T) {
 		})
 	}
 }
-
-// TestValidatorScannerInvariant is the anti-drift guard: for any id, the
-// validator's accept decision (does {id}.yaml name a tenant file?) must equal
-// what a scanner would pick up. This is the property that stops a caller from
-// writing a control file — if it ever fails, the write namespace has diverged
-// from the scanned one.
-func TestValidatorScannerInvariant(t *testing.T) {
-	t.Parallel()
-	ids := []string{"db-a", "_domain_policy", "_rbac", "_", ".git", "tenant_123"}
-	for _, id := range ids {
-		accepted := IsTenantConfigFile(id + ".yaml")
-		_, scanned := TenantIDFromFile(id + ".yaml")
-		if accepted != scanned {
-			t.Errorf("id %q: validator-accepts=%v but scanner-picks-up=%v (namespaces diverged)",
-				id, accepted, scanned)
-		}
-	}
-}

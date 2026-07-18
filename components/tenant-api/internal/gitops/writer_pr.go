@@ -34,6 +34,10 @@ type PRWriteResult struct {
 //
 // The caller (handler) is responsible for creating the GitHub PR using the returned branch name.
 func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent string) (*PRWriteResult, error) {
+	// Step 0: reserved-id backstop (defense-in-depth; see guardTenantID).
+	if err := guardTenantID(tenantID); err != nil {
+		return nil, err
+	}
 	// Step 1: validate schema before anything
 	if errs := validate(w.configDir, tenantID, yamlContent); len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
@@ -165,6 +169,10 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	// invalid op from creating a dangling branch and preserves the
 	// ErrValidation→400 mapping without requiring a git repo to reach it.
 	for _, op := range ops {
+		// Reserved-id backstop per op (defense-in-depth; see guardTenantID).
+		if err := guardTenantID(op.TenantID); err != nil {
+			return nil, err
+		}
 		if _, _, err := w.readMergeValidate(op.TenantID, op.Merge); err != nil {
 			return nil, err
 		}

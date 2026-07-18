@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/customalerts"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 	"gopkg.in/yaml.v3"
@@ -55,6 +56,28 @@ var ErrValidation = errors.New("validation failed")
 // success — the PR-mode analogue of WriteMerged's direct-path no-op short-circuit
 // (#1097 / #1102 review).
 var ErrNoChanges = errors.New("no changes: batch produced no commits")
+
+// ErrReservedTenantID is a defense-in-depth backstop for the tenant write
+// methods: it fires when an id's {id}.yaml is a reserved conf.d control file
+// (_*, .*) — i.e. an id that ValidateTenantID rejects at the handler. Every
+// current write path validates the id first, so reaching this means a caller
+// bypassed that gate (a programming error): the writer refuses rather than let
+// a tenant write clobber platform config, mirroring MutateConfigFile's own
+// filepath.Base defense on the control-file write path. See internal/confd for
+// the single "what counts as a tenant file" predicate shared with the scanners.
+var ErrReservedTenantID = errors.New("reserved tenant id: names a conf.d control file")
+
+// guardTenantID rejects an id whose {id}.yaml would not be a tenant config
+// file. It is the writer-side second enforcement of the same confd predicate
+// the handler's ValidateTenantID uses — so no tenant write method can overwrite
+// a reserved control file even if a future caller forgets to validate first
+// (single-choke-point fragility is the exact bug class this change closes).
+func guardTenantID(tenantID string) error {
+	if !confd.IsTenantConfigFile(tenantID + ".yaml") {
+		return fmt.Errorf("%w: %q", ErrReservedTenantID, tenantID)
+	}
+	return nil
+}
 
 // OnWriteFunc is called after a successful config write.
 // tenantID is the tenant or entity that was written (tenant ID, "groups", "views", etc.)
@@ -269,6 +292,10 @@ func (w *Writer) originRefExists(base string) bool {
 //  6. Check HEAD again (conflict detection)
 //  7. onWrite callback (e.g. SSE broadcast)
 func (w *Writer) Write(ctx context.Context, tenantID, authorEmail, yamlContent string) error {
+	// Step 0: reserved-id backstop (defense-in-depth; see guardTenantID).
+	if err := guardTenantID(tenantID); err != nil {
+		return err
+	}
 	// Step 1: validate schema before touching disk (and before taking an
 	// admission slot — validation is cheap, CPU-only, and must not consume the
 	// single-writer token).
@@ -337,6 +364,10 @@ func (w *Writer) readMergeValidate(tenantID string, merge MergeFunc) (content st
 // known until the base is read. The merge + validate are CPU-only and
 // sub-millisecond, so the extra time holding the write token is negligible.
 func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, merge MergeFunc) error {
+	// Reserved-id backstop (defense-in-depth; see guardTenantID).
+	if err := guardTenantID(tenantID); err != nil {
+		return err
+	}
 	// Load-shedding admission (TRK-320) before w.mu, same as Write.
 	if err := w.acquireWrite(ctx); err != nil {
 		return err
