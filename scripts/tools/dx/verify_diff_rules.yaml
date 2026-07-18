@@ -1,0 +1,182 @@
+# verify_diff_rules.yaml — verify_diff.py 的規則層（W6-E）
+#
+# 三類規則補 AST import 反查 + 文字掃描抓不到的映射；每條都要 justification
+# （schema 由 verify_diff.py load_rules 驗證，缺欄位 → exit 2）。
+# 判定優先序見 verify_diff.py select_tests docstring：
+#   full_run_triggers → identity → overrides → import_map → text_map →
+#   dir_rules → (additive: always_run) → safe_ignore → fail-closed 全跑。
+#
+# ── 映射紀律（外審 F1-F3 固化；給未來作者）──────────────────────────────
+# 1. 測試經 **module 常數** 讀 live repo 檔（cdre.DEV_RULES_PATH、
+#    cc.ENTRYPOINT_PATH 這類 live-file dogfood）→ 三層自動映射都構不到，
+#    **必須進 overrides**（AST 只解析 import 名、文字掃描只看字面路徑）。
+# 2. text_map 命中若唯一來源是 **docstring / 錯誤訊息 prose** → 視為脆弱
+#    （改寫註解就斷鏈），應 overrides 化固化。
+# 3. **非 pytest gate（Go / vitest / schemathesis）的受測輸入檔** → 用
+#    dir_rules 指到對應 external runner（如 make test-am-inhibit）；
+#    external 套件不代跑、預設 exit 1（--ack-external 顯式確認後降 0）。
+version: 1
+
+# ── 恆選集：任何工具變更都受 cross-cutting sweep 影響（glob 收集所有工具）──
+# additive：不抵免 fail-closed——沒有專屬測試的新工具變更仍會保守全跑。
+always_run:
+  trigger: "scripts/tools/**/*.py"
+  tests:
+    - path: tests/shared/test_tool_exit_codes.py
+      justification: glob 收集 ops/dx/lint 全部工具的 0/1/2 exit-code sweep（#452 Track A）
+    - path: tests/shared/test_sast.py
+      justification: 遞迴掃 scripts/tools 全部 .py 的 SAST 合規（encoding/shell=True/chmod）
+    - path: tests/shared/test_help_contract.py
+      justification: CLI help 結構契約；工具旗標變更會動到 HELP_CONTRACTS 斷言
+    - path: tests/shared/test_json_stdout_contract.py
+      justification: ops 工具 --json stdout 契約 gate（#1112），collect_json_tools 用 glob 收集
+
+# ── 全跑觸發：共用 seam/lib 變更，選擇不可靠 → 保守全跑 ──────────────────
+full_run_triggers:
+  - pattern: "tests/conftest.py"
+    justification: 全套共用 fixture + sys.path 注入，影響所有測試
+  - pattern: "tests/factories.py"
+    justification: conftest 直接 import 的共用 factory，影響所有測試
+  - pattern: "tests/fixtures/**"
+    justification: 跨套件共用 fixture 資料，使用面無法靜態界定
+  - pattern: "pyproject.toml"
+    justification: pytest/coverage 設定 SSOT，影響收集與門檻
+  - pattern: "scripts/tools/_lib_*.py"
+    justification: 工具共用 lib；transitive import 不在映射範圍（設計取捨），保守全跑
+  - pattern: "scripts/tools/*/_*.py"
+    justification: 子目錄共用 helper（_atomic_write/_recipe_preview/_grar_* 等）同上，保守全跑
+
+# ── 目錄規則：AST/文字掃描覆蓋不到的「來源目錄 → 測試套件」對映 ───────────
+# runner=pytest 的 suite 直接進 pytest argv；其餘列為外部套件提示（不代跑）。
+dir_rules:
+  - name: helm-guards
+    source: "helm/**"
+    suite: tests/helm
+    runner: pytest
+    justification: tests/helm 為 chart render/static guard，任何 chart 變更都應重驗
+  - name: rule-packs
+    source: "rule-packs/**"
+    suite: tests/rulepacks
+    runner: pytest
+    justification: promtool goldens/parity 以 rule-packs 為輸入（部分需 container promtool，測試自帶 skip）
+  - name: recipe-preview
+    source: "components/recipe-preview/**"
+    suite: tests/preview
+    runner: pytest
+    justification: preview 編譯器測試集中在 tests/preview
+  - name: tenant-api-contract
+    source: "components/tenant-api/**"
+    suite: tests/contract
+    runner: "make contract-test"
+    justification: Go 側不做 pytest 選擇（W6-D），但 tenant-api 變更應跑 schemathesis 契約測試
+  - name: contract-self
+    source: "tests/contract/**"
+    suite: tests/contract
+    runner: "make contract-test"
+    justification: contract runner（run_contract_tests.py）非 pytest 收集，自身變更走 make contract-test
+  - name: da-tools-dispatch
+    source: "components/da-tools/**"
+    suite: tests/shared
+    runner: pytest
+    justification: dispatcher/entrypoint 契約測試集中在 tests/shared（test_entrypoint / test_dispatch_contract 等）
+  - name: exporter-golden
+    source: "components/threshold-exporter/**"
+    suite: tests/golden
+    runner: pytest
+    justification: merge parity golden 以 exporter 為輸入（host 無 Go 時測試自行 skip）；Go 單測本身走 dc-go-test
+  - name: e2e-bench-self
+    source: "tests/e2e-bench/**"
+    suite: tests/e2e-bench
+    runner: pytest
+    justification: harness 附屬檔（compose/README/driver）變更重跑該套件的 pytest
+  - name: alertmanager-inhibit-self
+    source: "tests/alertmanager-inhibit/**"
+    suite: tests/alertmanager-inhibit
+    runner: "make test-am-inhibit"
+    justification: "#1132 inhibit 語意 gate 為 Go-only 套件（無 test_*.py，pytest 會空收集）；Go 僅 container 內可用"
+  - name: am-inhibit-input-trylocal
+    source: "try-local/alertmanager.yml"
+    suite: tests/alertmanager-inhibit
+    runner: "make test-am-inhibit"
+    justification: harness_test.go 明列的受測輸入①——手寫 AM config 變更必須重跑 #1132 inhibit 語意 gate（外審 F1）
+  - name: am-inhibit-input-k8s
+    source: "k8s/03-monitoring/configmap-alertmanager.yaml"
+    suite: tests/alertmanager-inhibit
+    runner: "make test-am-inhibit"
+    justification: harness_test.go 明列的受測輸入②——手貼 generator 輸出的 checked-in 結果（外審 F1）
+  - name: portal-vitest
+    source: "tools/portal/**"
+    suite: tools/portal/tests
+    runner: "make test-portal"
+    justification: portal JSX/vitest 非 pytest（TRK-230；vitest 測試實際位於 tools/portal/tests）
+  - name: portal-dist
+    source: "docs/assets/dist/**"
+    suite: tools/portal/tests
+    runner: "make test-portal"
+    justification: esbuild 產物，源頭在 tools/portal；以 vitest 驗源碼
+  - name: portal-e2e
+    source: "tests/e2e/**"
+    suite: tests/e2e
+    runner: "make test-e2e"
+    justification: Playwright spec 非 pytest
+  - name: scenario-shell
+    source: "tests/scenarios/**"
+    suite: tests/scenarios
+    runner: "K8s scenario shell scripts（make test-scenario-*）"
+    justification: shell 腳本非 pytest 收集
+  - name: federation-e2e-self
+    source: "tests/federation-e2e/**"
+    suite: tests/federation-e2e
+    runner: "make federation-e2e"
+    justification: docker-compose E2E，明確排除在 make test 之外（--ignore）
+
+# ── 安全忽略：無 Python 測試面的變更（只在完全映射不到時才適用）──────────
+safe_ignore:
+  - pattern: "**/*.md"
+    justification: 文件由 make lint-docs / pre-commit doc gate 把關，無 pytest 收集面（若測試以文字引用某 .md，text_map 會先命中）
+  - pattern: ".github/**"
+    justification: CI wiring 無 pytest 收集面；workflow 離線驗證另有流程（scheduled-workflow offline validation）；guard 測試若引用 workflow 路徑會先被 text_map 命中
+  - pattern: "**/*.go"
+    justification: Go 側不做選擇（W6-D：build cache 已增量、dc-go-test 全跑）；tenant-api 已由 dir_rule 先攔 contract suite
+  - pattern: "**/go.mod"
+    justification: 同 Go 側不做選擇
+  - pattern: "**/go.sum"
+    justification: 同 Go 側不做選擇
+  - pattern: "docs/**"
+    justification: 文件/靜態資產（tool-registry.yaml 與 dist/** 已由 special-basename text_map 與 dir_rule 先攔）
+  - pattern: "LICENSE"
+    justification: 法務文件無測試面
+  - pattern: ".gitignore"
+    justification: git 行為設定無 pytest 收集面
+  - pattern: ".gitattributes"
+    justification: 同上
+  - pattern: ".devcontainer/**"
+    justification: dev container 設定；session-guard 測試以文字路徑引用時 text_map 先命中
+  - pattern: ".claude/**"
+    justification: agent 設定/skills，無 pytest 收集面
+  - pattern: ".vscode/**"
+    justification: 編輯器設定無測試面
+  - pattern: "_*.md"
+    justification: repo 根 scratch 草稿（未追蹤工作檔慣例），無測試面
+
+# ── 人工映射：AST/文字掃描與目錄規則都構不到的個案 ────────────────────────
+overrides:
+  - source: "scripts/tools/dx/verify_diff_rules.yaml"
+    tests: [tests/dx/test_verify_diff.py]
+    justification: 工具自身的規則檔（測試經 DEFAULT_RULES_PATH 常數引用，非字面路徑，掃描構不到）
+  - source: "scripts/tools/dx/verify_diff_map.json"
+    tests: [tests/dx/test_verify_diff.py]
+    justification: 工具自身的預生成映射檔（同上；test_repo_check_is_green 驗其保鮮）
+  - source: "docs/internal/dev-rules.md"
+    tests: [tests/lint/test_check_dev_rules_enforcement.py]
+    justification: live-file dogfood via 模組常數（cdre.DEV_RULES_PATH，test_live_dev_rules_has_no_drift 讀 live 檔）；紀律 #1（外審 F2）
+  - source: "components/da-tools/app/entrypoint.py"
+    tests: [tests/lint/test_check_cli_coverage.py]
+    justification: live-file dogfood via 模組常數（cc.ENTRYPOINT_PATH，live COMMAND_MAP 覆蓋斷言）；紀律 #1（外審 F2）
+  - source: "docs/interactive/index.html"
+    tests: [tests/lint/test_check_hub_badge_drift.py]
+    justification: shipped index.html live 斷言；原 text_map 命中唯一來源是 docstring prose，脆弱 → 固化；紀律 #2（外審 F3）
+
+# ── --check 例外表：解析不到映射但「確認無 source→test 反向需求」的 test 檔──
+# 進這張表需要 justification；--check 會抓殭屍條目（檔案已不存在）。
+unmapped_test_ok: []
