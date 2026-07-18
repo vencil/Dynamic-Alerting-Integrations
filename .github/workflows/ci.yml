@@ -11,6 +11,117 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # CI-ROI wave 6C: path-scope the two critical-path test pillars (Go /
+  # Python) so a provably-unrelated PR (docs-only, portal-only) stops
+  # paying the full ~4 min Go+Python wall time AND frees their runner
+  # slots for the queue. Same dorny/paths-filter REST-mode pattern as
+  # validate.yaml's "Detect Validate Path Changes" job.
+  #
+  # Required-check safety (the "required check skipped → Expected forever"
+  # trap, see validate.yaml's banner + memory Trap 17): the two names
+  # branch protection requires — "Go Tests (1.26)" and "Python Tests
+  # (3.13)" — are BOTH reported by always-run aggregate gate jobs below
+  # (`if: always()`), never by a path-skipped job directly. A skipped leg
+  # counts as PASS only when detect-changes said it was not needed; a leg
+  # that RAN and failed, or a failed/cancelled detect job, fails the gate
+  # (fail-closed). No branch-protection flip is needed: both check names
+  # keep reporting on every PR and every push to main.
+  #
+  # Filter philosophy: CONSERVATIVE — skip only what is provably
+  # unrelated; when in doubt, run. The path lists below include every
+  # real-repo-tree path the suites actually read (verified by grep, see
+  # the per-filter comments), and a change to THIS workflow file always
+  # runs everything.
+  detect-changes:
+    name: Detect CI Path Changes
+    runs-on: ubuntu-latest
+    # pull-requests: read is for dorny/paths-filter@v3 REST-API mode
+    # (same grant + rationale as validate.yaml's detect job).
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      # push events (main) carry no PR file list — treat as "everything
+      # changed" so main always runs the full suite (this also keeps the
+      # coverage-py3.13 baseline artifact flowing for coverage-delta).
+      go_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.go }}
+      python_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.python }}
+    steps:
+      # No actions/checkout: REST-API mode queries the changed-file list
+      # via the GitHub API (see validate.yaml's identical note).
+      - name: Filter changed paths
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            # Go legs (threshold-exporter / tenant-api / am-inhibit):
+            #   - components/{threshold-exporter,tenant-api}/** — the two
+            #     module trees (code, go.mod/sum, embedded config/goldens;
+            #     conf.d lives under threshold-exporter/config/**).
+            #   - **/go.mod, **/go.sum — any module manifest, incl.
+            #     tests/alertmanager-inhibit's own module.
+            #   - tests/contract/** — schemathesis runner + fixtures run
+            #     inside the tenant-api leg.
+            #   - tests/alertmanager-inhibit/** — the am-inhibit leg; its
+            #     tests also parse k8s/03-monitoring/configmap-alertmanager
+            #     .yaml and try-local/alertmanager.yml (grep-verified) →
+            #     those trees are in the filter too.
+            #   - rule-packs/** — custom-alerts pack ↔ tenant-api goldens.
+            #   - ci_flake_retry.py + flaky-tests.yaml — the retry wrapper
+            #     both Go legs run under.
+            go:
+              - "components/threshold-exporter/**"
+              - "components/tenant-api/**"
+              - "**/go.mod"
+              - "**/go.sum"
+              - "tests/contract/**"
+              - "tests/alertmanager-inhibit/**"
+              - "rule-packs/**"
+              - "k8s/03-monitoring/**"
+              - "try-local/**"
+              - "scripts/ops/ci_flake_retry.py"
+              - "flaky-tests.yaml"
+              - ".github/workflows/ci.yml"
+            # Python Tests: pytest over tests/ + scripts/tools/ with real-
+            # repo-tree reads well beyond *.py (grep-verified):
+            #   - helm/** — tests/helm/* + tests/shared/test_helm_* render
+            #     the real charts; the mtail gate compiles
+            #     helm/federation-gateway/files/federation-audit.mtail.
+            #   - k8s/** / try-local/** — routing-correctness + manifest
+            #     tests parse the real manifests/compose files.
+            #   - components/** — da-tools app is Python (coverage source),
+            #     conf.d + exporter/tenant-api fixtures are read by tests.
+            #   - rule-packs/** + operator-manifests/** — sync/parity
+            #     suites read all three rule copies.
+            #   - Makefile — test_check_makefile_targets reads the real
+            #     Makefile; docs/glossary*.md — codename-gate tests read
+            #     the real glossary. .pre-commit-config.yaml — hook-
+            #     registration lint tests.
+            #   - .github/workflows/** — several tests scan the REAL
+            #     workflow tree (test_check_workflow_git_push_permissions
+            #     scan_repo, nightly-scan matrix drift, promtool pin
+            #     parity, release-tools entrypoint), so ANY workflow edit
+            #     must run Python Tests.
+            python:
+              - "**/*.py"
+              - "tests/**"
+              - "scripts/**"
+              - "components/**"
+              - "rule-packs/**"
+              - "operator-manifests/**"
+              - "helm/**"
+              - "k8s/**"
+              - "try-local/**"
+              - "pyproject.toml"
+              - "Makefile"
+              - ".pre-commit-config.yaml"
+              - ".github/custom-rule-policy.yaml"
+              - "docs/glossary.md"
+              - "docs/glossary.en.md"
+              - "flaky-tests.yaml"
+              - ".github/workflows/**"
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -574,9 +685,15 @@ jobs:
         # Also runs the native, WARN-only PSS namespace-label rule (#1018).
         run: python3 scripts/tools/lint/check_k8s_manifests.py --ci
 
-  python-tests:
-    name: Python Tests (${{ matrix.python }})
+  python-tests-run:
+    # CI-ROI 6C: renamed from the required-check name "Python Tests
+    # (3.13)" — that name is now reported by the always-run python-tests
+    # gate job below (same pattern as go-tests), so this job can be
+    # path-skipped without ever leaving the required check un-reported.
+    name: Python Tests — run (${{ matrix.python }})
     runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.python_changed == 'true'
     strategy:
       matrix:
         python: ["3.13"]
@@ -738,6 +855,52 @@ jobs:
           path: coverage.xml
           retention-days: 7
 
+  python-tests:
+    # Aggregation gate mirroring go-tests below: keeps reporting the
+    # EXACT branch-protection required-check name "Python Tests (3.13)"
+    # on every PR/push, whether the run job ran or was path-skipped.
+    # Semantics (CI-ROI 6C):
+    #   - run job succeeded              → PASS
+    #   - run job skipped AND detect-changes said python not needed
+    #                                    → PASS (skip-as-not-needed)
+    #   - run job failed/cancelled, or skipped while detect said needed,
+    #     or detect-changes itself did not succeed
+    #                                    → FAIL (fail-closed: a broken
+    #     detect job must never let tests silently skip to green).
+    # If the Python matrix ever grows beyond 3.13, update this static
+    # name together with the branch-protection entry (owner action).
+    name: Python Tests (3.13)
+    runs-on: ubuntu-latest
+    # Pure result-aggregation gate — touches no repo content, needs no token.
+    permissions: {}
+    needs: [detect-changes, python-tests-run]
+    # always(): without it a failed/skipped dependency SKIPS this job, and
+    # a skipped check would satisfy branch protection unconditionally —
+    # the gate must decide pass/fail itself.
+    if: always()
+    steps:
+      - name: Verify Python test job succeeded or was skipped as not-needed
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          PY_CHANGED: ${{ needs.detect-changes.outputs.python_changed }}
+          RUN_RESULT: ${{ needs.python-tests-run.result }}
+        run: |
+          echo "detect-changes: $DETECT_RESULT (python_changed=$PY_CHANGED)"
+          echo "python-tests-run: $RUN_RESULT"
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::detect-changes did not succeed — refusing to treat skipped tests as green"
+            exit 1
+          fi
+          if [ "$RUN_RESULT" = "success" ]; then
+            exit 0
+          fi
+          if [ "$RUN_RESULT" = "skipped" ] && [ "$PY_CHANGED" != "true" ]; then
+            echo "Python tests skipped: no Python-relevant paths changed."
+            exit 0
+          fi
+          echo "::error::Python test job did not succeed (result=$RUN_RESULT)"
+          exit 1
+
   # CI-ROI split: the former monolithic go-tests job serialized
   # threshold-exporter `go test -race`, tenant-api `go test -race`, the swag
   # OpenAPI drift check AND the schemathesis contract test in one ~10 min
@@ -748,6 +911,11 @@ jobs:
   go-tests-threshold-exporter:
     name: Go Tests — threshold-exporter (${{ matrix.go }})
     runs-on: ubuntu-latest
+    # CI-ROI 6C: path-gated — the go-tests aggregate gate below (the
+    # required check) treats this skip as PASS only when detect-changes
+    # said Go was not needed.
+    needs: detect-changes
+    if: needs.detect-changes.outputs.go_changed == 'true'
     # Least-privilege token (CodeQL: workflow-missing-permissions). Tests +
     # coverage-artifact upload need nothing beyond repo read.
     permissions:
@@ -811,6 +979,9 @@ jobs:
   go-tests-tenant-api:
     name: Go Tests — tenant-api (${{ matrix.go }})
     runs-on: ubuntu-latest
+    # CI-ROI 6C: path-gated (see go-tests-threshold-exporter note).
+    needs: detect-changes
+    if: needs.detect-changes.outputs.go_changed == 'true'
     # Least-privilege token (CodeQL: workflow-missing-permissions). Tests,
     # swag drift check and schemathesis all run against the local checkout.
     permissions:
@@ -921,6 +1092,11 @@ jobs:
   go-tests-am-inhibit:
     name: Go Tests — alertmanager inhibit semantics
     runs-on: ubuntu-latest
+    # CI-ROI 6C: path-gated (see go-tests-threshold-exporter note). The
+    # go filter includes k8s/03-monitoring/** + try-local/** because this
+    # leg parses both hand-written Alertmanager configs.
+    needs: detect-changes
+    if: needs.detect-changes.outputs.go_changed == 'true'
     # Evaluates the two HAND-WRITTEN Alertmanager configs against Alertmanager's
     # own matcher implementation (#1132: amtool check-config is green on an
     # inhibit rule that silently eats notifications). Pure file parsing — no
@@ -970,23 +1146,45 @@ jobs:
     runs-on: ubuntu-latest
     # Pure result-aggregation gate — touches no repo content, needs no token.
     permissions: {}
-    needs: [go-tests-threshold-exporter, go-tests-tenant-api, go-tests-am-inhibit]
+    needs: [detect-changes, go-tests-threshold-exporter, go-tests-tenant-api, go-tests-am-inhibit]
     # always(): without it a failed dependency SKIPS this job, and a skipped
     # check would satisfy branch protection — the gate must FAIL, not skip,
     # when any split job fails.
     if: always()
     steps:
-      - name: Verify all Go test jobs succeeded
+      - name: Verify all Go test jobs succeeded (or were path-skipped as not-needed)
+        # CI-ROI 6C semantics (mirrors the python-tests gate):
+        #   success                                → PASS
+        #   skipped AND detect said go not needed  → PASS
+        #   anything else (failure/cancelled, or skipped while detect said
+        #   needed, or detect-changes itself not green) → FAIL. A broken
+        #   detect job must never let tests silently skip to green.
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          GO_CHANGED: ${{ needs.detect-changes.outputs.go_changed }}
+          R_TE: ${{ needs.go-tests-threshold-exporter.result }}
+          R_TA: ${{ needs.go-tests-tenant-api.result }}
+          R_AM: ${{ needs.go-tests-am-inhibit.result }}
         run: |
-          echo "threshold-exporter: ${{ needs.go-tests-threshold-exporter.result }}"
-          echo "tenant-api:         ${{ needs.go-tests-tenant-api.result }}"
-          echo "am-inhibit:         ${{ needs.go-tests-am-inhibit.result }}"
-          if [ "${{ needs.go-tests-threshold-exporter.result }}" != "success" ] || \
-             [ "${{ needs.go-tests-tenant-api.result }}" != "success" ] || \
-             [ "${{ needs.go-tests-am-inhibit.result }}" != "success" ]; then
-            echo "::error::one or more Go test jobs did not succeed"
+          echo "detect-changes:     $DETECT_RESULT (go_changed=$GO_CHANGED)"
+          echo "threshold-exporter: $R_TE"
+          echo "tenant-api:         $R_TA"
+          echo "am-inhibit:         $R_AM"
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::detect-changes did not succeed — refusing to treat skipped tests as green"
             exit 1
           fi
+          for r in "$R_TE" "$R_TA" "$R_AM"; do
+            if [ "$r" = "success" ]; then
+              continue
+            fi
+            if [ "$r" = "skipped" ] && [ "$GO_CHANGED" != "true" ]; then
+              continue
+            fi
+            echo "::error::a Go test job did not succeed (result=$r)"
+            exit 1
+          done
+          echo "Go test gate satisfied."
 
   portal-tests:
     # TECH-DEBT-030a (#247): Vitest unit tests + esbuild build verification
