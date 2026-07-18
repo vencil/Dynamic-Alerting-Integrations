@@ -160,6 +160,38 @@ Runtime 護欄有個共同的結構性弱點：**它們是反應式的**。Circu
 
 > 附註：「拆開觸發決策與動作執行」不在表內給三值——平台止於 webhook 契約，決策與執行 by-construction 分離；那是架構性質，不是可開關的功能。
 
+### 6.1 告警吵度回顧：三條 documented queries
+
+上表講「防線在哪」，這一小節給「回顧怎麼做」——並且回到**通用層**：平台在此刻意不添工具，材料是任何 Prometheus 相容後端本來就有的（上表 📖 式誠實的延伸）。[§2](#2-actionable的完整定義冪等光譜) 的三問是**事前**自檢；事後要回答「哪些告警在吵」，材料就在 TSDB 裡——Prometheus 對每條評估中的告警內建輸出 `ALERTS`（值恆為 1、僅於 pending/firing 期間存在的 series）與 `ALERTS_FOR_STATE`（值＝本輪 episode 的 activeAt 時間戳）。三條可直接貼的查詢：
+
+**吵度排行——30 天 firing 總時長（小時），per 租戶×告警：**
+
+```promql
+sort_desc(
+  sum by (tenant, alertname) (
+    sum_over_time(ALERTS{alertstate="firing"}[30d])
+  ) * 15 / 3600   # 15 = 該 rule group 的評估間隔秒數，照你的環境調
+)
+```
+
+**episode 數（含 pending）近似——每次新 episode，activeAt 值會變：**
+
+```promql
+sort_desc(sum by (tenant, alertname) (changes(ALERTS_FOR_STATE[30d])))
+```
+
+**風暴群聚——單租戶同時 firing 的告警數 30 天高水位（5m 解析度 subquery）：**
+
+```promql
+max_over_time(count by (tenant) (ALERTS{alertstate="firing"})[30d:5m])
+```
+
+SLO burn 告警可加 `{slo_burn="true"}` matcher 單看（本平台 `slo_burn_rate` recipe 產出的告警帶此標籤，見[第二篇 §5.1](alerting-slo-error-budget.md)）。三個誠實限定：
+
+1. **這是給人看的 ad-hoc／dashboard 查詢，不是告警規則的輸入**——拿 `ALERTS` 當 rule 依賴會做出自我指涉、staleness 語意難驗證的告警鏈路（本平台的規則庫刻意零 `ALERTS{}` 依賴）。
+2. **量級對、個位數不必當真**——時長是「樣本數 × 評估間隔」的近似；episode 計數兩個方向都會失真：pending-only 的 flap 與 restart 拆段會**高估**、停機盲區與窗界 off-by-one 會**低估**。它足以回答「誰最吵、有多吵」，不足以當 SLA 證據。
+3. **量得到「吵」，量不到「被忽視」**——fire 頻率／時長／群聚都在 TSDB；「通知有沒有被人看」不在。那要靠下游 on-call 工具的 ack 數據，屬上表 #13 的動作側 audit——兩者相接，不互相替代。
+
 ## 7. 帶走的 checklist
 
 1. 評一條告警，先評它的動作：**動作的價值是告警價值的天花板**。

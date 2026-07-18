@@ -161,6 +161,38 @@ The table below is this platform's declaration of where that boundary lies. The 
 
 > Note: "separating the trigger decision from action execution" is deliberately not given a three-value rating in this table — the platform stops at the webhook contract, so decision and execution are separated by construction; that is an architectural property, not a feature you can toggle.
 
+### 6.1 Alert-Noise Retrospective: Three Documented Queries
+
+The table above says where the guardrails are; this subsection says how to look back — and it returns to the **generic layer**: the platform deliberately adds no tooling here, because the material is native to any Prometheus-compatible backend (an extension of the table's 📖-style honesty). The three questions of [§2](#2-the-full-definition-of-actionable-the-idempotency-spectrum) are a **before-the-fact** self-check; to answer "which alerts are noisy" **after the fact**, the material is already in the TSDB — Prometheus emits `ALERTS` (a series with constant value 1 that exists only while an alert is pending/firing) and `ALERTS_FOR_STATE` (value = the current episode's activeAt timestamp) for every evaluated alert. Three paste-ready queries:
+
+**Noise ranking — total firing hours over 30 days, per tenant × alertname:**
+
+```promql
+sort_desc(
+  sum by (tenant, alertname) (
+    sum_over_time(ALERTS{alertstate="firing"}[30d])
+  ) * 15 / 3600   # 15 = your rule group's evaluation interval in seconds; adjust to your environment
+)
+```
+
+**Episode count (including pending), approximate — the activeAt value changes on each new episode:**
+
+```promql
+sort_desc(sum by (tenant, alertname) (changes(ALERTS_FOR_STATE[30d])))
+```
+
+**Storm clustering — 30-day high-water mark of simultaneously-firing alerts per tenant (5m-resolution subquery):**
+
+```promql
+max_over_time(count by (tenant) (ALERTS{alertstate="firing"})[30d:5m])
+```
+
+Add a `{slo_burn="true"}` matcher to look at SLO burn alerts alone (alerts produced by this platform's `slo_burn_rate` recipe carry that label — see [part two §5.1](alerting-slo-error-budget.en.md)). Three honest qualifications:
+
+1. **These are ad-hoc / dashboard queries for humans, not inputs to alert rules** — building rules on `ALERTS` creates self-referential alerting chains with hard-to-verify staleness semantics (this platform's rule packs deliberately carry zero `ALERTS{}` dependencies).
+2. **Trust the magnitude, not the last digit** — duration is a "samples × evaluation interval" approximation; episode counts distort in both directions: pending-only flaps and restart-split episodes **overcount**, downtime blind spots and the window-edge off-by-one **undercount**. Good enough for "who is noisiest and how noisy"; not evidence for an SLA.
+3. **You can measure "noisy"; you cannot measure "ignored"** — firing frequency/duration/clustering are all in the TSDB; whether a notification was ever looked at is not. That comes from your on-call tool's ack data, which is the action-side audit of row #13 above — the two connect, neither replaces the other.
+
 ## 7. The Takeaway Checklist
 
 1. To evaluate an alert, evaluate its action first: **the action's value is the ceiling on the alert's value**.
