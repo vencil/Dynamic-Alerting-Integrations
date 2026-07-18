@@ -15,6 +15,11 @@
 # 增量原則：本機（container）go test 靠 Go build/test cache 天然增量——
 # 只重跑受改動影響的 package（單 package 通常秒級）。**勿在此加 -count=1**：
 # 那是 CI-only flag（CI 用它防 cache 遮 flake；ci.yml 已有）。
+#
+# 與 CI 的其餘刻意 delta（皆 CI-only、不進本 script 預設）：
+#   - -race：CI 兩個 component job 都帶；本機需要時 ARGS="-race"。
+#   - tenant-api 的 `-tags forge_e2e` compile-check（ci.yml 獨立 step）：
+#     build-tag gated E2E 包，本 script 不涵蓋。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

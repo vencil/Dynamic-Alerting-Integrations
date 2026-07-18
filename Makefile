@@ -219,6 +219,8 @@ pr-preflight: ## PR 收尾前檢查（branch / conflict / hooks / scope-drift / 
 	@# make pr-preflight-quick：--skip-hooks 對 pre-push gate 完全等價
 	@# （SKIP 非 FAIL，一樣寫 .git/.preflight-ok.<SHA> marker），省掉
 	@# hooks 的第二次全跑（commit→preflight→CI 三重執行去掉一重）。
+	@# ⚠️ scope 差異：commit hooks 只掃 staged、完整版跑 --all-files——
+	@# 適用邊界見 dev-rules.md §12「快速路徑」段。
 	@python3 scripts/tools/dx/pr_preflight.py $(ARGS)
 
 .PHONY: pr-preflight-quick
@@ -390,6 +392,11 @@ dc-go-test: ## 在 Dev Container 內跑 Go tests（預設全 CI module；MOD= / 
 	@#   make dc-go-test MOD=tenant-api ARGS="-run TestX -v"
 	@# 增量：本機 go test 靠 Go build/test cache 天然增量（只重跑受改動影響的
 	@# package）——勿加 -count=1（CI-only：防 cache 遮 flake，ci.yml 已有）。
+	@# 同理 -race 與 tenant-api 的 -tags forge_e2e compile-check 亦為 CI-only；
+	@# 本機需要時 ARGS="-race"。
+	@# ⚠️ Trap #62：dx-run 恆定作用於主 worktree 掛載——在 claude worktree
+	@# 編輯後直接跑會測到主 worktree 的舊 code（假綠）；同步工作流見
+	@# testing-playbook.md §7（Dev Container mount scope）。
 	@bash scripts/ops/dx-run.sh bash scripts/ops/dc_go_test.sh $(if $(MOD),--mod $(MOD)) $(if $(PKG),--pkg $(PKG)) $(if $(ARGS),-- $(ARGS))
 
 .PHONY: test-am-inhibit

@@ -181,6 +181,7 @@ lang: zh
 Status 處理 / hotfix 例外 / A vs B CI 分類細節見 [`github-release-playbook.md`](github-release-playbook.md)。
 
 **快速路徑（ROI r6 D 波 codified）**：剛 commit 完、pre-commit hooks 已在 commit 時證綠 → 用 `make pr-preflight-quick`（`--skip-hooks`）。對 pre-push gate **完全等價**——`--skip-hooks` 的 Local hooks 檢查記為 SKIP 非 FAIL，一樣寫 `.git/.preflight-ok.<SHA>` marker——省掉 hooks 的第二次全跑（commit→preflight→CI 三重執行去掉一重）。commit 後又改過 working tree、或 hooks 綠的是別的 SHA → 回頭跑完整 `make pr-preflight`。
+⚠️ **Scope 差異與適用邊界**：commit 時的 hooks 只掃 **staged 檔**，完整版 `pr-preflight` 的 Local hooks 跑 **`--all-files`**——「commit 剛證綠」≠「all-files 綠」。file-scoped hooks（如 `bump_docs --check`，staged-vs-all 是燒過的坑）對本次沒動到的檔的 pre-existing drift，只有 all-files 掃得到；quick 路徑下這類 drift 由 CI 的 all-files 兜底（push 後才知道）。連續多 commit 迭代的 branch 建議週期性（至少 PR 收尾前一次）跑完整 `make pr-preflight` 補 all-files 掃描。
 
 ### 13. da-tools 子命令 exit-code / `--json` / `--ci` 約定（#452）
 
