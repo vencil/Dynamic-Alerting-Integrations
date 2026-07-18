@@ -49,6 +49,10 @@ jobs:
     steps:
       # No actions/checkout: REST-API mode queries the changed-file list
       # via the GitHub API (see validate.yaml's identical note).
+      # Accepted risk (same as validate.yaml's detect job): the REST
+      # changed-files list caps at 3000 entries; a larger PR could
+      # under-report. Isomorphic to the existing validate.yaml gate and
+      # far beyond this repo's PR sizes — not mitigated here.
       - name: Filter changed paths
         id: filter
         if: github.event_name == 'pull_request'
@@ -103,6 +107,11 @@ jobs:
             #     scan_repo, nightly-scan matrix drift, promtool pin
             #     parity, release-tools entrypoint), so ANY workflow edit
             #     must run Python Tests.
+            #   - renovate.json — test_renovate_config.py is its only
+            #     offline safety net (customManager regex ↔ pin parity).
+            #   - .devcontainer/** — promtool pin parity compares
+            #     install-promtool.sh against ci.yml/Dockerfile; a
+            #     devcontainer-side-only bump must not skip the guard.
             python:
               - "**/*.py"
               - "tests/**"
@@ -120,6 +129,8 @@ jobs:
               - "docs/glossary.md"
               - "docs/glossary.en.md"
               - "flaky-tests.yaml"
+              - "renovate.json"
+              - ".devcontainer/**"
               - ".github/workflows/**"
 
   lint:
@@ -234,6 +245,20 @@ jobs:
           pre-commit run bat-ascii-purity-check --all-files
           pre-commit run design-token-usage --all-files
           pre-commit run tool-consistency-check --all-files
+          # CI-ROI 6C blind-spot fix: these 4 lints' live-dogfood pytest
+          # twins (tests/lint/*::TestLiveRepo*) had "Python Tests" as
+          # their ONLY CI enforcement point — but their scan surfaces
+          # (tools/portal/src/**, docs/** jsx/js/css, dev-rules.md) are
+          # exactly the path classes the detect-changes gate now skips
+          # Python Tests for. Wiring them here (all four scripts scan
+          # their FULL fixed surface on every run — none is diff-only)
+          # keeps portal-only / docs-only PRs gated without paying the
+          # whole pytest suite. Same hoisting rationale as
+          # design-token-usage above.
+          pre-commit run undefined-tokens-check --all-files
+          pre-commit run jsx-loader-compat-check --all-files
+          pre-commit run window-x-no-fallback-check --all-files
+          pre-commit run dev-rules-enforcement-check --all-files
           pre-commit run portal-audience-enum-check --all-files
           pre-commit run structure-check --all-files
           pre-commit run routing-profiles-check --all-files
@@ -288,6 +313,15 @@ jobs:
           # no-ops. Wired here (not path-filtered) so editing ANY workflow file
           # is covered, matching the "Lint Rule Packs" hoisting rationale above.
           pre-commit run workflow-git-push-permission-check --all-files
+          # CI-ROI 6C blind-spot fix, same class as the 4 lints hoisted
+          # above: check_hub_badge_drift.py has NO pre-commit hook — its
+          # live pytest twin (tests/lint/test_check_hub_badge_drift.py::
+          # TestLiveRepoIsClean, reading docs/interactive/index.html) was
+          # enforced only by "Python Tests", which docs-only PRs now
+          # skip. Direct CLI call (stdlib-only, exit 0/1) mirroring the
+          # check_retire_drift.py direct-step precedent in Lint Rule
+          # Packs.
+          python3 -X utf8 scripts/tools/lint/check_hub_badge_drift.py
           # GHA workflow lint (actionlint, OSS engine; #1021 follow-up).
           # Blocks the script-injection class (raw untrusted expression
           # interpolation spliced into run: scripts — GHA evaluates the
