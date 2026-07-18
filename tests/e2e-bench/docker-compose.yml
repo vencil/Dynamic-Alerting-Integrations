@@ -118,6 +118,10 @@ services:
       RESULTS_DIR: "/results"
       E2E_FIXTURE_KIND: "${E2E_FIXTURE_KIND:-synthetic-v2}"
       COUNT: "${COUNT:-30}"
+      # Pre-flight wait budget for wait_for_services (default keeps CI
+      # behavior identical). Windows hosts with gRPC-FUSE bind-mount I/O
+      # need this much larger — see README §Windows host direct run.
+      WAIT_SERVICES_TIMEOUT_S: "${WAIT_SERVICES_TIMEOUT_S:-60}"
     volumes:
       - ./fixture/active/conf.d:/fixture/active/conf.d:rw
       - ./bench-results:/results:rw

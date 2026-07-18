@@ -1,0 +1,43 @@
+# Named-volume override for Docker Desktop hosts (Windows / macOS).
+#
+# The base compose file bind-mounts fixture/active/conf.d from the host.
+# On Docker Desktop that path goes through gRPC-FUSE, which costs
+# ~0.6s/file on first read — the exporter's initial scan of a
+# 1000-tenant fixture takes ~11 minutes and blows the driver's
+# pre-flight deadline (WAIT_SERVICES_TIMEOUT_S, default 60s). Linux
+# hosts and CI (native overlayfs) don't need this file.
+#
+# This override replaces the fixture bind mount on BOTH sides
+# (exporter read path + driver write path) with a pre-populated named
+# volume — native I/O inside the Docker Desktop VM. Compose merge
+# semantics: a mount with the same container target in the override
+# file replaces the base one; bench-results stays a bind mount
+# (few files, host needs the JSONs).
+#
+# Usage (full sequence in README.md §Windows host direct run):
+#
+#   docker volume create e2ebench-fixture
+#   docker run --rm \
+#       -v e2ebench-fixture:/dst \
+#       -v ./fixture/active/conf.d:/src \
+#       alpine sh -c 'cp -r /src/. /dst/'
+#   WAIT_SERVICES_TIMEOUT_S=900 COUNT=30 docker compose \
+#       -f docker-compose.yml -f docker-compose.volume-override.yml \
+#       up --build --abort-on-container-exit driver
+#   docker compose -f docker-compose.yml -f docker-compose.volume-override.yml down -v
+#   docker volume rm e2ebench-fixture
+services:
+  threshold-exporter:
+    volumes:
+      - benchfix:/etc/threshold-exporter/conf.d:rw
+  driver:
+    volumes:
+      - benchfix:/fixture/active/conf.d:rw
+
+volumes:
+  benchfix:
+    # External: created + pre-populated by the operator before `up`
+    # (compose-managed volumes start empty; the exporter needs the
+    # staged fixture present at first scan).
+    external: true
+    name: e2ebench-fixture

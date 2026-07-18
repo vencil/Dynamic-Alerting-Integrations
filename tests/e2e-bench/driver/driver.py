@@ -52,6 +52,19 @@ FIXTURE_KIND = os.environ.get("E2E_FIXTURE_KIND", "synthetic-v2")
 POLL_INTERVAL_S = float(os.environ.get("POLL_INTERVAL_S", "0.5"))
 POLL_TIMEOUT_S = float(os.environ.get("POLL_TIMEOUT_S", "60"))
 
+# Pre-flight service-wait budget (wait_for_services). Separate from
+# POLL_TIMEOUT_S because the two bound different things: per-run polling
+# is bounded by scrape cadence, while the pre-flight wait is dominated by
+# the exporter's INITIAL config load, which scales with fixture size AND
+# storage backend. Default 60 matches the historical hard-coded value —
+# CI (ubuntu-latest, native overlayfs) behavior is unchanged. On Windows
+# hosts, Docker Desktop's gRPC-FUSE bind mount costs ~0.6s/file on first
+# read, so a 1000-tenant fixture takes ~11 min to load — set
+# WAIT_SERVICES_TIMEOUT_S=900 and prefer the named-volume override
+# (tests/e2e-bench/docker-compose.volume-override.yml; see README
+# §Windows host direct run).
+WAIT_SERVICES_TIMEOUT_S = float(os.environ.get("WAIT_SERVICES_TIMEOUT_S", "60"))
+
 # Fire / resolve threshold values for the actual_metric_value push.
 # Tenant fixture sets bench_trigger threshold to 100; pushing 200 fires,
 # 50 resolves.
@@ -385,7 +398,7 @@ def run_one(run_id: int, warm_up: bool) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def wait_for_services(deadline_s: float = 60.0) -> None:
+def wait_for_services(deadline_s: float | None = None) -> None:
     """Pre-flight: poll each upstream service until its HTTP endpoint
     responds. Compose's `service_started` only means the container is
     up — NOT that the process inside is listening on its port. At
@@ -394,11 +407,21 @@ def wait_for_services(deadline_s: float = 60.0) -> None:
     seconds, producing `Connection refused` for runs 0..N if driver
     pushes immediately on boot.
 
+    `deadline_s` defaults to WAIT_SERVICES_TIMEOUT_S (env-tunable,
+    default 60s — CI behavior unchanged). Raise it when the exporter's
+    initial load is slow by nature rather than by bug: the canonical
+    case is a Windows host bind-mounting the fixture through Docker
+    Desktop gRPC-FUSE (~0.6s/file → ~11 min for 1000 tenants); set
+    WAIT_SERVICES_TIMEOUT_S=900 there, ideally combined with the
+    named-volume override (docker-compose.volume-override.yml).
+
     Use stdout `print(..., flush=True)` so progress is visible even
     if the workflow gets cancelled mid-wait (Python `print` block-
     buffers when piped, masking driver activity from `gh run view
     --log` output otherwise).
     """
+    if deadline_s is None:
+        deadline_s = WAIT_SERVICES_TIMEOUT_S
     targets = [
         ("exporter", f"{EXPORTER_URL}/metrics"),
         ("prometheus", f"{PROMETHEUS_URL}/-/ready"),
