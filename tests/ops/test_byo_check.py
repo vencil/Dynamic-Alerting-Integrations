@@ -191,13 +191,22 @@ class TestCheckAlertmanager:
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
 
+        # A realistic per-tenant dedup rule: metric_group is presence-gated on
+        # both sides, so the semantic check has nothing to flag.
+        config_yaml = (
+            "route:\n"
+            "  receiver: 'null'\n"
+            "  match:\n"
+            "    tenant: db-a\n"
+            "inhibit_rules:\n"
+            "  - source_matchers: ['severity=\"critical\"', 'metric_group=~\".+\"', 'tenant=\"db-a\"']\n"
+            "    target_matchers: ['severity=\"warning\"', 'metric_group=~\".+\"', 'tenant=\"db-a\"']\n"
+            "    equal: ['metric_group']\n"
+        )
         mapping = {
-            "status": (
-                {"config": {"original": "route:\n  match:\n    tenant: db-a\ninhibit_rules:\n  - ..."}},
-                None,
-            ),
+            "status": ({"config": {"original": config_yaml}}, None),
             "alerts": (
-                [{"labels": {"alertname": "Test"}}], None,
+                [{"labels": {"alertname": "Test", "tenant": "db-a"}}], None,
             ),
             "silences": (
                 [{"status": {"state": "active"}, "id": "1"}], None,
@@ -212,6 +221,7 @@ class TestCheckAlertmanager:
         assert statuses["alertmanager_ready"] == "pass"
         assert statuses["alertmanager_tenant_routes"] == "pass"
         assert statuses["alertmanager_inhibit_rules"] == "pass"
+        assert statuses["alertmanager_inhibit_semantics"] == "pass"
         assert statuses["alertmanager_alerts"] == "pass"
         assert statuses["alertmanager_silences"] == "pass"
 
@@ -876,3 +886,265 @@ class TestCheckPrometheusControlFlow:
         # but the caller_error steps ARE present
         assert "step1_tenant_label" in names
         assert "step4_disk_recipe_prereq" in names
+
+
+# ---------------------------------------------------------------------------
+# Inhibit-rule semantic analysis (#1132 防再犯)
+# ---------------------------------------------------------------------------
+class TestInhibitMatcherHelpers:
+    """The pure structural helpers that read a config's declared matcher gates."""
+
+    @pytest.mark.parametrize("s,expected", [
+        ('severity = "critical"', ("severity", "=", "critical")),
+        ('metric_group =~ ".+"', ("metric_group", "=~", ".+")),
+        ("tenant='db-a'", ("tenant", "=", "db-a")),
+        ('alertname != "X"', ("alertname", "!=", "X")),
+        ('name !~ ".*"', ("name", "!~", ".*")),
+        ('severity="critical"', ("severity", "=", "critical")),  # no spaces
+    ])
+    def test_parse_matcher(self, s, expected):
+        assert bc._parse_matcher(s) == expected
+
+    @pytest.mark.parametrize("bad", ["", "not a matcher", "  ", 123, None])
+    def test_parse_matcher_unparseable(self, bad):
+        assert bc._parse_matcher(bad) is None
+
+    @pytest.mark.parametrize("pattern,matches_empty", [
+        (".+", False), (".*", True), ("", True), ("foo", False),
+        ("a?", True), ("a|", True), ("[", True),  # a? and a| both match ""; invalid -> conservative True
+    ])
+    def test_regex_matches_empty(self, pattern, matches_empty):
+        assert bc._regex_matches_empty(pattern) is matches_empty
+
+    @pytest.mark.parametrize("name,op,val,label,gated", [
+        ("metric_group", "=~", ".+", "metric_group", True),   # =~".+" excludes empty
+        ("metric_group", "=~", ".*", "metric_group", False),  # =~".*" allows empty
+        ("tenant", "=", "db-a", "tenant", True),              # exact non-empty
+        ("tenant", "=", "", "tenant", False),                 # exact empty
+        ("x", "!=", "", "x", True),                           # !="" excludes empty
+        ("x", "!~", ".*", "x", True),                         # !~ matches-empty regex
+        ("x", "!~", ".+", "x", False),                        # !~ non-empty regex
+        ("other", "=~", ".+", "metric_group", False),         # different label
+    ])
+    def test_matcher_guarantees_present(self, name, op, val, label, gated):
+        assert bc._matcher_guarantees_present(name, op, val, label) is gated
+
+    def test_side_gates_label_matchers_form(self):
+        rule = {"source_matchers": ['metric_group =~ ".+"']}
+        assert bc._side_gates_label(rule, "source", "metric_group") is True
+        assert bc._side_gates_label(rule, "source", "tenant") is False
+
+    def test_side_gates_label_deprecated_exact_form(self):
+        rule = {"source_match": {"metric_group": "connections"}}
+        assert bc._side_gates_label(rule, "source", "metric_group") is True
+
+    def test_side_gates_label_deprecated_regex_form(self):
+        assert bc._side_gates_label({"target_match_re": {"mg": ".+"}}, "target", "mg") is True
+        assert bc._side_gates_label({"target_match_re": {"mg": ".*"}}, "target", "mg") is False
+
+    def test_ungated_equal_labels(self):
+        rule = {
+            "source_matchers": ['severity="critical"', 'metric_group=~".+"'],
+            "target_matchers": ['severity="warning"', 'metric_group=~".+"'],
+            "equal": ["tenant", "metric_group"],
+        }
+        # metric_group is gated on both sides; tenant on neither
+        assert bc._ungated_equal_labels(rule) == ["tenant"]
+
+    @pytest.mark.parametrize("rule,expected", [
+        ({"source_matchers": ['alertname = "Sentinel"']}, "Sentinel"),
+        ({"source_match": {"alertname": "Sentinel"}}, "Sentinel"),
+        ({"source_matchers": ['severity = "critical"']}, None),   # not alertname-pinned
+        ({"source_matchers": ['alertname =~ "S.*"']}, None),      # regex, not exact
+        ({}, None),
+    ])
+    def test_source_pinned_alertname(self, rule, expected):
+        assert bc._source_pinned_alertname(rule) == expected
+
+
+class TestJudgeInhibitSemantics:
+    """The verdict combining structural gates with live-alert confirmation."""
+
+    # Live alert label-key sets, keyed by alertname.
+    ABN = {
+        "TenantSeverityDedupEnabled": [{"alertname", "severity", "component", "tenant"}],
+        "TenantSilentWarning":        [{"alertname", "severity", "component", "tenant"}],
+        "CustomRecipeSilent":         [{"alertname", "severity", "component", "tenant", "name"}],
+    }
+
+    def _judge(self, rules, abn):
+        return bc._judge_inhibit_semantics(rules, abn)
+
+    def test_confirmed_trap_warns(self):
+        # #1132: sentinel source firing, cannot carry metric_group used in equal.
+        rules = [{
+            "source_matchers": ['alertname = "TenantSeverityDedupEnabled"'],
+            "target_matchers": ['severity = "warning"'],
+            "equal": ["tenant", "metric_group"],
+        }]
+        r = self._judge(rules, self.ABN)
+        assert r["status"] == "warn"
+        assert "metric_group" in r["detail"]
+        assert "#1132" in r["detail"]
+
+    def test_fully_gated_rule_passes_clean(self):
+        rules = [{
+            "source_matchers": ['severity="critical"', 'metric_group=~".+"', 'tenant="db-a"'],
+            "target_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant="db-a"'],
+            "equal": ["metric_group"],
+        }]
+        r = self._judge(rules, self.ABN)
+        assert r["status"] == "pass"
+
+    def test_silent_mode_verified_safe_no_false_warn(self):
+        # equal:[tenant] ungated, but the sentinel source DOES carry tenant.
+        rules = [{
+            "source_matchers": ['alertname = "TenantSilentWarning"'],
+            "target_matchers": ['severity = "warning"'],
+            "equal": ["tenant"],
+        }]
+        assert self._judge(rules, self.ABN)["status"] == "pass"
+
+    def test_custom_silent_verified_safe_no_false_warn(self):
+        # equal:[tenant,name] ungated; source carries both -> no false positive.
+        rules = [{
+            "source_matchers": ['alertname = "CustomRecipeSilent"'],
+            "target_matchers": ['component = "custom"'],
+            "equal": ["tenant", "name"],
+        }]
+        assert self._judge(rules, self.ABN)["status"] == "pass"
+
+    def test_unverified_when_no_alert_data_is_advisory_not_warn(self):
+        rules = [{
+            "source_matchers": ['alertname = "TenantSeverityDedupEnabled"'],
+            "target_matchers": ['severity = "warning"'],
+            "equal": ["tenant", "metric_group"],
+        }]
+        r = self._judge(rules, None)
+        assert r["status"] == "pass"          # advisory only, never fails exit code
+        assert "Advisory" in r["detail"]
+
+    def test_unverified_when_source_not_firing(self):
+        rules = [{
+            "source_matchers": ['alertname = "TenantSeverityDedupEnabled"'],
+            "target_matchers": ['severity = "warning"'],
+            "equal": ["tenant", "metric_group"],
+        }]
+        abn_without_sentinel = {k: v for k, v in self.ABN.items()
+                                if k != "TenantSeverityDedupEnabled"}
+        assert self._judge(rules, abn_without_sentinel)["status"] == "pass"
+
+    def test_non_alertname_pinned_source_is_unverified(self):
+        # try-local fixed form: tenant ungated, source is severity=critical (not pinned).
+        rules = [{
+            "source_matchers": ['severity = "critical"', 'metric_group =~ ".+"'],
+            "target_matchers": ['severity = "warning"', 'metric_group =~ ".+"'],
+            "equal": ["tenant", "metric_group"],
+        }]
+        r = self._judge(rules, self.ABN)
+        assert r["status"] == "pass"
+        assert "tenant" in r["detail"]
+
+    def test_non_dict_rules_are_skipped(self):
+        # Degenerate config parsed to a bare string element.
+        r = self._judge(["...", 42, None], self.ABN)
+        assert r["status"] == "warn"
+        assert "No parseable" in r["detail"]
+
+    def test_confirmed_when_only_some_source_instances_lack_label(self):
+        # The core is `any`: a trap exists if EVEN ONE firing instance of the
+        # source lacks the equal-label. Two TenantSeverityDedupEnabled instances,
+        # one carrying metric_group and one not -> must still warn. Pins the
+        # conservative `any` (an `all` regression would pass this to "safe").
+        abn = {"TenantSeverityDedupEnabled": [
+            {"alertname", "severity", "tenant", "metric_group"},  # this one carries it
+            {"alertname", "severity", "tenant"},                  # this one does NOT
+        ]}
+        rules = [{
+            "source_matchers": ['alertname = "TenantSeverityDedupEnabled"'],
+            "target_matchers": ['severity = "warning"'],
+            "equal": ["metric_group"],
+        }]
+        r = self._judge(rules, abn)
+        assert r["status"] == "warn"
+        assert "metric_group" in r["detail"]
+
+    def test_confirmed_wins_over_unverified(self):
+        rules = [
+            {  # confirmed trap
+                "source_matchers": ['alertname = "TenantSeverityDedupEnabled"'],
+                "target_matchers": ['severity = "warning"'],
+                "equal": ["metric_group"],
+            },
+            {  # unverified
+                "source_matchers": ['severity = "critical"'],
+                "target_matchers": ['severity = "warning"'],
+                "equal": ["tenant"],
+            },
+        ]
+        r = self._judge(rules, self.ABN)
+        assert r["status"] == "warn"
+        assert "Unverified" in r["detail"]   # unverified surfaced alongside the warn
+
+
+class TestCheckAlertmanagerInhibitSemantics:
+    """End-to-end wiring of the semantic check through check_alertmanager."""
+
+    def _run(self, config_yaml, alerts):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"OK"
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mapping = {
+            "status": ({"config": {"original": config_yaml}}, None),
+            "alerts": (alerts, None),
+            "silences": ([], None),
+        }
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            with patch.object(bc, "http_get_json", side_effect=_mock_http_get_json(mapping)):
+                checks = bc.check_alertmanager(_args())
+        return {c["check"]: c for c in checks}
+
+    def test_confirmed_1132_trap_surfaces_as_warn(self):
+        config = (
+            "inhibit_rules:\n"
+            "  - source_matchers: ['alertname=\"TenantSeverityDedupEnabled\"']\n"
+            "    target_matchers: ['severity=\"warning\"']\n"
+            "    equal: ['tenant', 'metric_group']\n"
+        )
+        alerts = [{"labels": {"alertname": "TenantSeverityDedupEnabled",
+                              "severity": "none", "tenant": "db-a"}}]  # no metric_group
+        checks = self._run(config, alerts)
+        assert checks["alertmanager_inhibit_semantics"]["status"] == "warn"
+
+    def test_no_inhibit_rules_skips_semantic_check(self):
+        checks = self._run("route:\n  receiver: default\n", [])
+        assert "alertmanager_inhibit_semantics" not in checks
+        # the presence check still fires
+        assert checks["alertmanager_inhibit_rules"]["status"] == "warn"
+
+    def test_unparseable_config_warns(self):
+        # Substring check sees "inhibit_rules" but the YAML is malformed.
+        bad = "inhibit_rules:\n  - source_matchers: ['a: b: c'\n    equal: [\n"
+        checks = self._run(bad, [])
+        sem = checks.get("alertmanager_inhibit_semantics")
+        assert sem is not None and sem["status"] == "warn"
+        assert "parse" in sem["detail"].lower()
+
+    def test_malformed_status_payload_does_not_crash(self):
+        # A status API returning config.original as a non-string (or config null)
+        # must not raise — the check degrades, it does not crash.
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"OK"
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        for bad_config in ({"original": {"not": "a string"}}, None, "just a string"):
+            mapping = {
+                "status": ({"config": bad_config}, None),
+                "alerts": ([], None),
+                "silences": ([], None),
+            }
+            with patch("urllib.request.urlopen", return_value=mock_resp):
+                with patch.object(bc, "http_get_json", side_effect=_mock_http_get_json(mapping)):
+                    checks = bc.check_alertmanager(_args())   # must not raise
+            assert any(c["check"] == "alertmanager_ready" for c in checks)

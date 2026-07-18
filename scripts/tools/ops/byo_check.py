@@ -25,7 +25,10 @@ Usage:
 
 import argparse
 import os
+import re
 import sys
+
+import yaml
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -525,6 +528,232 @@ def check_prometheus(args):
     return checks
 
 
+# ---------------------------------------------------------------------------
+# Alertmanager inhibit-rule semantic analysis (#1132 防再犯).
+#
+# `amtool check-config` validates inhibit rules SYNTACTICALLY and is green on a
+# rule that silently drops notifications. The bug class (PR #1132): an
+# inhibit_rule lists a label in `equal:` that its matched alerts may not carry.
+# Alertmanager treats a label MISSING FROM BOTH source and target as EQUAL
+# (prometheus/alertmanager#1727, #507), so such alerts get silently suppressed;
+# and if the SOURCE structurally cannot carry the label, the dedup never fires.
+#
+# The repo-side gate (tests/alertmanager-inhibit) proves this against the repo's
+# own configs using Alertmanager's real matcher. A BYO customer hand-writes their
+# OWN Alertmanager config (byo-alertmanager-integration.md), which that gate can
+# never see — so the same trap is reproduced here against the customer's live
+# config, structurally.
+#
+# This is NOT a re-implementation of Alertmanager's alert-matching engine (which
+# the hybrid lint policy forbids): it only inspects the config's own declared
+# matcher gates to answer one question per `equal:` label — "does either side
+# guarantee this label is present?" Whether a given alert matches is never
+# decided here; live alerts, when available, only supply advisory evidence.
+# ---------------------------------------------------------------------------
+
+# Alertmanager matcher string: `name op value`, value optionally quoted.
+# `name` follows the Prometheus label-name grammar. Longest ops are listed first
+# in the alternation so `=~`/`!=` win over a bare `=`.
+_MATCHER_RE = re.compile(r'^\s*([a-zA-Z_]\w*)\s*(=~|!~|!=|=)\s*(.*?)\s*$')
+
+
+def _parse_matcher(s):
+    """Parse one matcher string into (name, op, value), or None if unparseable.
+
+    Surrounding single/double quotes on the value are stripped. This reads the
+    config's declared structure; it does not evaluate the matcher against alerts.
+    """
+    if not isinstance(s, str):
+        return None
+    m = _MATCHER_RE.match(s)
+    if not m:
+        return None
+    name, op, val = m.group(1), m.group(2), m.group(3)
+    if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+        val = val[1:-1]
+    return (name, op, val)
+
+
+def _regex_matches_empty(pattern):
+    """Would this Alertmanager regex match the EMPTY string (fully anchored)?
+
+    Alertmanager anchors regex matchers, so the question is `fullmatch("")`. On a
+    pattern Python cannot compile, return True — the conservative answer: it makes
+    the caller treat the matcher as NOT presence-gating, i.e. an advisory warning
+    rather than a false all-clear.
+    """
+    try:
+        return re.fullmatch(pattern, "") is not None
+    except re.error:
+        return True
+
+
+def _matcher_guarantees_present(name, op, val, label):
+    """Does matcher (`name op val`) guarantee `label` is present (non-empty)?
+
+    A missing label reads as the empty string in Alertmanager, so "guarantees
+    present" == "cannot match the empty string" for the label in question.
+    """
+    if name != label:
+        return False
+    if op == "=":
+        return val != ""            # name="x" (x non-empty) excludes empty
+    if op == "=~":
+        return not _regex_matches_empty(val)
+    if op == "!=":
+        return val == ""            # name!="" excludes empty
+    if op == "!~":
+        return _regex_matches_empty(val)   # excludes empty iff regex matches it
+    return False
+
+
+def _side_gates_label(rule, side, label):
+    """Does `side` ('source'/'target') of an inhibit rule guarantee `label` present?
+
+    Covers the modern `*_matchers` list form and the deprecated `*_match` (exact)
+    and `*_match_re` (regex) map forms, so a config using the old syntax is
+    analysed rather than silently passed.
+    """
+    for s in rule.get(f"{side}_matchers", []) or []:
+        parsed = _parse_matcher(s)
+        if parsed and _matcher_guarantees_present(parsed[0], parsed[1], parsed[2], label):
+            return True
+    exact = rule.get(f"{side}_match", {})
+    if isinstance(exact, dict) and exact.get(label, "") != "":
+        return True
+    mre = rule.get(f"{side}_match_re", {})
+    if isinstance(mre, dict) and label in mre and not _regex_matches_empty(str(mre[label])):
+        return True
+    return False
+
+
+def _ungated_equal_labels(rule):
+    """Equal-labels a rule presence-gates on NEITHER side (the candidate risks)."""
+    return [
+        lbl for lbl in (rule.get("equal", []) or [])
+        if isinstance(lbl, str)
+        and not _side_gates_label(rule, "source", lbl)
+        and not _side_gates_label(rule, "target", lbl)
+    ]
+
+
+def _source_pinned_alertname(rule):
+    """The exact `alertname` a rule's SOURCE is pinned to, or None.
+
+    Sentinel-source rules (Silent Mode, Severity Dedup, Custom silence) pin
+    `alertname="X"`; that lets us look the source's real alerts up in the live
+    alert list by an exact label lookup — NOT a re-implementation of Alertmanager
+    matching, just how we identify which firing alerts are this rule's source.
+    """
+    for s in rule.get("source_matchers", []) or []:
+        parsed = _parse_matcher(s)
+        if parsed and parsed[0] == "alertname" and parsed[1] == "=" and parsed[2]:
+            return parsed[2]
+    exact = rule.get("source_match", {})
+    if isinstance(exact, dict) and exact.get("alertname"):
+        return exact["alertname"]
+    return None
+
+
+def _judge_inhibit_semantics(inhibit_rules, alerts_by_alertname):
+    """Judge inhibit rules for the #1132 missing-label suppression trap.
+
+    Every label in `equal:` must be presence-gated on at least one side (source
+    OR target). A label gated on neither side lets alerts that lack it compare
+    equal (missing == missing) — dedup dies and, worse, unrelated alerts get
+    silently suppressed. That is exactly PR #1132.
+
+    A raw structural check over-warns: the platform's own Silent Mode
+    (`equal:[tenant]`) and Custom silence (`equal:[tenant,name]`) rules leave
+    those labels ungated yet are correct, because every alert they touch really
+    does carry them. So we CONFIRM against live data: `alerts_by_alertname` maps
+    each firing alertname to the label-key sets observed on it (None when no
+    alert data is available). For a sentinel-source rule we look up the source's
+    own alerts and check whether they actually carry each ungated equal-label:
+
+      - carried by every source alert            -> verified safe (no finding)
+      - missing from a source alert              -> CONFIRMED trap (warn, #1132)
+      - source not firing / not alertname-pinned -> unverified (advisory note)
+
+    Verdict is advisory only: `warn` on a confirmed trap, else `pass` (an
+    unverified shape is surfaced in the detail but does not flip the exit code —
+    this tool must not fail a customer's pipeline on an unconfirmed heuristic).
+
+    Known limitations (deliberate scope; live confirmation is exact only for the
+    sentinel shapes the platform documents, which are the common BYO configs):
+      - A source that is NOT alertname-pinned (e.g. a hand-written dedup rule
+        whose source is just `severity="critical"`) is reported as UNVERIFIED
+        even when the live alerts would confirm the trap. Confirming it would
+        require matching alerts against the full source matcher set — delegate
+        that to Alertmanager's own `/api/v2/alerts?filter=` rather than
+        re-implementing matching here. The ungated label is still surfaced in
+        the advisory, so the customer is told to gate or verify it.
+      - Because a label gated on EITHER side is treated as safe, a rule that
+        gates a label on the TARGET only while its source cannot carry it is a
+        DEAD (never-fires) dedup rather than a silent-suppression trap; that
+        fails safe (no lost notifications) and is out of scope for this warn.
+    """
+    key = "alertmanager_inhibit_semantics"
+    analyzed = confirmed = unverified = 0
+    confirmed_parts, unverified_parts = [], []
+
+    for i, rule in enumerate(inhibit_rules):
+        if not isinstance(rule, dict):
+            continue
+        analyzed += 1
+        ungated = _ungated_equal_labels(rule)
+        if not ungated:
+            continue
+
+        source_alertname = _source_pinned_alertname(rule)
+        source_sets = None
+        if alerts_by_alertname is not None and source_alertname is not None:
+            source_sets = alerts_by_alertname.get(source_alertname)
+
+        if source_sets:
+            missing = [lbl for lbl in ungated
+                       if any(lbl not in ks for ks in source_sets)]
+            if missing:
+                confirmed += 1
+                confirmed_parts.append(
+                    f"rule[{i}] source=\"{source_alertname}\" cannot carry {missing} "
+                    f"(equal={ungated})")
+            # else: every source alert carries them -> verified safe, no finding
+        else:
+            unverified += 1
+            why = ("source not firing" if source_alertname
+                   else "source not alertname-pinned")
+            unverified_parts.append(f"rule[{i}] equal={ungated} ({why})")
+
+    if analyzed == 0:
+        return {"check": key, "status": "warn",
+                "detail": "No parseable inhibit rules to analyze for equal-label safety"}
+
+    if confirmed:
+        detail = (
+            "inhibit rule(s) whose source alert cannot carry an ungated equal-label: "
+            "Alertmanager treats that label as equal-when-missing, so the rule is dead "
+            "and/or silently suppresses unrelated alerts (PR #1132). Fix: make the source "
+            'carry the label, drop it from equal:, or gate it (`<label>=~".+"`) on both '
+            "sides. " + "; ".join(confirmed_parts))
+        if unverified_parts:
+            detail += " | Unverified (confirm manually): " + "; ".join(unverified_parts)
+        return {"check": key, "status": "warn", "detail": detail}
+
+    if unverified:
+        return {
+            "check": key, "status": "pass",
+            "detail": (f"{analyzed} inhibit rule(s) checked; no confirmed trap. Advisory — "
+                       "equal-label(s) not presence-gated and not verifiable against live "
+                       "alerts (confirm the label is always present or gate it, PR #1132): "
+                       + "; ".join(unverified_parts)),
+        }
+
+    return {"check": key, "status": "pass",
+            "detail": f"All {analyzed} inhibit rule(s): equal-labels are gated or "
+                      "confirmed present on their source alerts (no #1132 trap)"}
+
+
 def check_alertmanager(args):
     """Verify BYO Alertmanager integration."""
     checks = []
@@ -550,6 +779,8 @@ def check_alertmanager(args):
         return checks
 
     # 2. Check AM config for tenant routes
+    inhibit_rules = None       # None = config unavailable; [] = none configured
+    inhibit_parse_err = None
     data, err = http_get_json(f"{am_url}/api/v2/status")
     if err:
         checks.append({
@@ -559,7 +790,13 @@ def check_alertmanager(args):
             "detail": f"Status API failed: {err[:60]}",
         })
     else:
-        config_str = data.get("config", {}).get("original", "")
+        # config.original is normally the raw YAML string; harden against a
+        # malformed status payload (config null, or original a non-string) so the
+        # membership checks and the safe_load below cannot raise.
+        cfg_obj = data.get("config") if isinstance(data, dict) else None
+        config_str = cfg_obj.get("original") if isinstance(cfg_obj, dict) else ""
+        if not isinstance(config_str, str):
+            config_str = ""
         has_tenant_routes = "tenant" in config_str
         has_inhibit = "inhibit_rules" in config_str
         checks.append({
@@ -576,8 +813,17 @@ def check_alertmanager(args):
                       if has_inhibit
                       else "No inhibit_rules found",
         })
+        # Parse the config for the semantic inhibit check appended after step 3
+        # (it enriches with live-alert data fetched there). safe_load only —
+        # never execute the customer's config.
+        try:
+            parsed_cfg = yaml.safe_load(config_str) or {}
+            inhibit_rules = parsed_cfg.get("inhibit_rules", []) if isinstance(parsed_cfg, dict) else []
+        except yaml.YAMLError as exc:
+            inhibit_parse_err = str(exc)
 
     # 3. Check current alerts
+    alerts_by_alertname = None   # {alertname: [set(label keys), ...]}; None = no data
     data, err = http_get_json(f"{am_url}/api/v2/alerts")
     if err:
         checks.append({
@@ -587,11 +833,34 @@ def check_alertmanager(args):
         })
     else:
         alert_count = len(data) if isinstance(data, list) else 0
+        if isinstance(data, list):
+            alerts_by_alertname = {}
+            for a in data:
+                if not isinstance(a, dict):
+                    continue
+                labels = a.get("labels") or {}
+                name = labels.get("alertname")
+                if name:
+                    alerts_by_alertname.setdefault(name, []).append(set(labels.keys()))
         checks.append({
             "check": "alertmanager_alerts",
             "status": "pass",
             "detail": f"{alert_count} active alert(s) in Alertmanager",
         })
+
+    # 3b. Inhibit-rule semantic safety (#1132 防再犯). Skipped silently when the
+    # config was unreachable or carries no inhibit rules (the presence check at
+    # step 2 already covers "none configured"); flagged when the config would not
+    # parse (a real problem the string-existence check used to miss).
+    if inhibit_parse_err is not None:
+        checks.append({
+            "check": "alertmanager_inhibit_semantics",
+            "status": "warn",
+            "detail": f"Could not parse Alertmanager config YAML to analyze inhibit rules: "
+                      f"{inhibit_parse_err[:80]}",
+        })
+    elif inhibit_rules:
+        checks.append(_judge_inhibit_semantics(inhibit_rules, alerts_by_alertname))
 
     # 4. Check silences (maintenance windows)
     data, err = http_get_json(f"{am_url}/api/v2/silences")
