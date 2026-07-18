@@ -39,8 +39,15 @@ const CAVEAT_GLOSS = {
 // diff — the most dangerous lie here). It returns a discriminated union and
 // implements the FULL degradation matrix (spec §3). It NEVER pre-judges admin:
 // a 403 comes only from the server.
-async function runDryRun(tenantId, rbacYaml, view) {
-  const query = view === 'redacted' ? '?view=redacted' : '';
+async function runDryRun(tenantId, rbacYaml, view, includeOrgValues) {
+  // ⛔ ONLY the coarse projection flags (view / include) go in the URL — never
+  // client redaction, never the candidate identity (that stays in the POST
+  // body). Multiple params join with '&'. `include=org_values` opts into the
+  // server-evaluated org-value expansion (tenant.orgs + passing_org_values).
+  const params = [];
+  if (view === 'redacted') params.push('view=redacted');
+  if (includeOrgValues) params.push('include=org_values');
+  const query = params.length ? `?${params.join('&')}` : '';
   const url = `/api/v1/audit/tenants/${encodeURIComponent(tenantId)}/access-report/dry-run${query}`;
   let resp;
   try {
@@ -142,10 +149,44 @@ function BucketTag({ label }) {
   );
 }
 
+// OrgGateValues reveals a grant's SERVER-EVALUATED org-value expansion, opt-in
+// via ?include=org_values (D: ⛔ the UI never re-derives org matching and never
+// fills values in a view the server withheld them from). Every field is
+// omitempty / undefined on the wire (redacted view drops them; non-required
+// gates have none) — a missing field renders nothing, never a blank row or an
+// error. The unsatisfiable case is the highest-value admin signal (⭐): it means
+// no caller org value can ever pass this rule's org gate for this tenant.
+function OrgGateValues({ gate }) {
+  // A non-required org gate has no org values to reveal → render nothing.
+  if (!gate || !gate.required) return null;
+  const passing = Array.isArray(gate.passing_org_values) ? gate.passing_org_values : [];
+  return (
+    <div className="mt-2 pt-2 border-t border-slate-200">
+      <div className="text-slate-400 mb-1">
+        {t('可通過此 org 閘門的 caller org 值', 'caller org values that pass this gate')}
+      </div>
+      {gate.unsatisfiable ? (
+        <div className="text-amber-700 font-medium">
+          <span aria-hidden="true">⚠ </span>
+          {t('無 org 值可通過此 gate（unsatisfiable）——任何 caller org 值都無法滿足此規則的 org 範圍。',
+            'No org value can pass this gate (unsatisfiable) — no caller org value can satisfy this rule\'s org scope.')}
+        </div>
+      ) : passing.length > 0 ? (
+        <div className="font-mono text-slate-700 break-words">{passing.join(', ')}</div>
+      ) : (
+        <div className="text-slate-500 italic">
+          {t('（伺服器未提供 org 值）', '(no org values provided by server)')}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Enrichment line for one grant resolved by findByIndex (R11). Renders
-// effective / platform_wide / permissions. Handles an undefined grant (R5/R11:
-// findByIndex may miss) without subscripting.
-function GrantEnrichment({ grant }) {
+// effective / platform_wide / permissions, plus (opt-in) the org-value
+// expansion. Handles an undefined grant (R5/R11: findByIndex may miss) without
+// subscripting.
+function GrantEnrichment({ grant, showOrgValues }) {
   if (!grant) {
     return (
       <div className="mt-1 text-xs text-slate-500">
@@ -182,6 +223,7 @@ function GrantEnrichment({ grant }) {
             'This grant is a platform-wide admin — the highest-impact object; verify against the report.')}
         </div>
       )}
+      {showOrgValues && <OrgGateValues gate={grant.org_gate} />}
     </div>
   );
 }
@@ -196,6 +238,10 @@ export default function AccessReportDryRun() {
 
   const [selected, setSelected] = useState('');
   const [yamlText, setYamlText] = useState('');
+  // Org-value reveal is opt-in and OFF by default — org values are sensitive
+  // (customer-identifying). Checked → Run adds ?include=org_values. ⛔ NOT
+  // persisted; a session fact, not durable.
+  const [includeOrgValues, setIncludeOrgValues] = useState(false);
   const [result, setResult] = useState(null);
   const [running, setRunning] = useState(false);
   const [countdown, setCountdown] = useState(0);
@@ -234,8 +280,11 @@ export default function AccessReportDryRun() {
     setRunning(true);
     setResult(null);
     setCopyState(null);
-    const r = await runDryRun(selected, yamlText, 'full');
-    setResult(r);
+    const r = await runDryRun(selected, yamlText, 'full', includeOrgValues);
+    // Snapshot the org-value toggle AS OF this run onto the result, so the diff
+    // renders org values iff this run requested them — never following a later
+    // toggle flip (mirrors the `submitted` candidate snapshot, CR-3).
+    setResult(r.kind === 'ok' ? { ...r, orgValuesRequested: includeOrgValues } : r);
     if (r.kind === 'forbidden') setForbidden(true);
     // Pin the candidate that produced this result for the redacted-copy re-fetch.
     if (r.kind === 'ok') setSubmitted({ tenant: selected, yaml: yamlText });
@@ -340,6 +389,31 @@ export default function AccessReportDryRun() {
                 spellCheck="false"
               />
             </div>
+          </div>
+
+          {/* Opt-in org-value reveal (default OFF): org values are sensitive
+              (customer-identifying), so the disclosure is explicit and its
+              reason is stated inline. */}
+          <div className="mt-4">
+            <label htmlFor="dryrun-include-org" className="flex items-start gap-2 cursor-pointer">
+              <input
+                id="dryrun-include-org"
+                type="checkbox"
+                checked={includeOrgValues}
+                onChange={(e) => setIncludeOrgValues(e.target.checked)}
+                disabled={!apiReady}
+                className="mt-0.5"
+              />
+              <span className="text-sm text-slate-700">
+                <span className="font-semibold">
+                  {t('顯示 org 值（org_values）', 'Reveal org values (org_values)')}
+                </span>
+                <span className="block text-xs text-slate-500">
+                  {t('揭露租戶 org 標記與各 grant 可通過其 org 閘門的 caller org 值。org 值敏感（可識別客戶）——預設關閉。',
+                    'Reveals the tenant\'s org labels and, per grant, the caller org values that pass its org gate. Org values are sensitive (customer-identifying) — off by default.')}
+                </span>
+              </span>
+            </label>
           </div>
 
           <div className="mt-4 flex items-center gap-3">
@@ -494,15 +568,23 @@ function ResultView({ result, onCopyRedacted, copyState, copyDisabled }) {
       );
 
     case 'ok':
-      return <DiffReport data={result.data} onCopyRedacted={onCopyRedacted} copyState={copyState} copyDisabled={copyDisabled} />;
+      return <DiffReport data={result.data} orgValuesRequested={result.orgValuesRequested} onCopyRedacted={onCopyRedacted} copyState={copyState} copyDisabled={copyDisabled} />;
 
     default:
       return null;
   }
 }
 
-function DiffReport({ data, onCopyRedacted, copyState, copyDisabled }) {
+function DiffReport({ data, orgValuesRequested, onCopyRedacted, copyState, copyDisabled }) {
   const { baseline, candidate, diff, caveats, candidate_sha256: candidateSha } = data;
+  // tenant.orgs is opt-in + omitempty: present only under ?include=org_values on
+  // a LABELED tenant. Org labeling is a tenant fact (taken from the live
+  // _tenant_orgs.yaml), so baseline is the SSOT. Guarded so an unlabeled tenant
+  // or a non-org-values run simply omits the block (never blank/error).
+  const tenantOrgs =
+    orgValuesRequested && baseline && baseline.tenant && Array.isArray(baseline.tenant.orgs)
+      ? baseline.tenant.orgs
+      : [];
   const emptyDiff = isEmptyDiff(diff);
   const grantsDiffer = !grantSetIdentical(
     baseline && baseline.grants,
@@ -531,6 +613,20 @@ function DiffReport({ data, onCopyRedacted, copyState, copyDisabled }) {
           <span className="font-mono">{glossVerdict(baseline && baseline.verdict, t)}</span>
         </div>
       </div>
+
+      {/* Tenant org labels (opt-in ?include=org_values, labeled tenant only). */}
+      {tenantOrgs.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-6">
+          <div className="text-xs uppercase tracking-wide text-slate-400 mb-1">
+            {t('租戶 org 標記', 'Tenant org labels')}
+          </div>
+          <div className="text-sm font-mono text-slate-800 break-words">{tenantOrgs.join(', ')}</div>
+          <div className="text-xs text-slate-500 mt-1">
+            {t('取自線上 _tenant_orgs.yaml——org 值敏感（可識別客戶）。',
+              'From the live _tenant_orgs.yaml — org values are sensitive (customer-identifying).')}
+          </div>
+        </div>
+      )}
 
       {/* R1 + §0: mandatory, non-dismissable scope caveat band. */}
       <div className="bg-amber-50 border border-amber-300 rounded-xl p-5 mb-6">
@@ -628,11 +724,11 @@ function DiffReport({ data, onCopyRedacted, copyState, copyDisabled }) {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
                     <div>
                       <div className="text-xs font-semibold text-slate-500">{t('線上', 'live')}</div>
-                      <GrantEnrichment grant={liveGrant} />
+                      <GrantEnrichment grant={liveGrant} showOrgValues={orgValuesRequested} />
                     </div>
                     <div>
                       <div className="text-xs font-semibold text-slate-500">{t('候選', 'candidate')}</div>
-                      <GrantEnrichment grant={candGrant} />
+                      <GrantEnrichment grant={candGrant} showOrgValues={orgValuesRequested} />
                     </div>
                   </div>
                 </div>
@@ -658,7 +754,7 @@ function DiffReport({ data, onCopyRedacted, copyState, copyDisabled }) {
                     </span>
                     <span className="text-xs text-slate-400 font-mono">cand#{a.candidate_index}</span>
                   </div>
-                  <GrantEnrichment grant={g} />
+                  <GrantEnrichment grant={g} showOrgValues={orgValuesRequested} />
                 </div>
               );
             })}
@@ -682,7 +778,7 @@ function DiffReport({ data, onCopyRedacted, copyState, copyDisabled }) {
                     </span>
                     <span className="text-xs text-slate-400 font-mono">live#{rm.live_index}</span>
                   </div>
-                  <GrantEnrichment grant={g} />
+                  <GrantEnrichment grant={g} showOrgValues={orgValuesRequested} />
                 </div>
               );
             })}
