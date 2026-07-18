@@ -174,21 +174,32 @@ data:
           - tenant="db-b"
         equal: ["metric_group"]
 
+      # #1132 invariant: every `equal:` label is presence-gated (`=~".+"`) on BOTH
+      # sides. Alertmanager treats a label missing from source AND target as
+      # equal, so an ungated equal-label silently over-suppresses alerts that lack
+      # it. Gating is behavior-preserving here (every real alert carries tenant /
+      # name) and is enforced fail-closed by generate_alertmanager_routes.py
+      # --strict (assert_equal_labels_gated).
+
       # v1.2.0 Silent Mode: 壓制 warning 通知
       # TenantSilentWarning sentinel 觸發時，該 tenant 的 warning alert 不通知
       # alert 仍寫入 TSDB（Grafana 可查），僅攔截 Alertmanager 通知
       - source_matchers:
           - alertname="TenantSilentWarning"
+          - tenant=~".+"
         target_matchers:
           - severity="warning"
+          - tenant=~".+"
         equal: ["tenant"]
 
       # v1.2.0 Silent Mode: 壓制 critical 通知
       # TenantSilentCritical sentinel 觸發時，該 tenant 的 critical alert 不通知
       - source_matchers:
           - alertname="TenantSilentCritical"
+          - tenant=~".+"
         target_matchers:
           - severity="critical"
+          - tenant=~".+"
         equal: ["tenant"]
 
       # v2.9.0 #741 S7/S8: per-recipe Custom Alert silent mode.
@@ -201,8 +212,12 @@ data:
       # Silent rules above (NOT an Alertmanager route-to-null receiver).
       - source_matchers:
           - alertname="CustomRecipeSilent"
+          - tenant=~".+"
+          - name=~".+"
         target_matchers:
           - component="custom"
+          - tenant=~".+"
+          - name=~".+"
         equal: ["tenant", "name"]
 
   # v2.0.0 Bilingual Notification Templates (i18n)

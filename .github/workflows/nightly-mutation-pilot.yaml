@@ -19,11 +19,15 @@ name: Nightly Mutation Pilot
 #     Summary + uploaded log artifact carry the survivor / rot list.
 #   - Workflow still does NOT block any PR (schedule/dispatch only).
 #
-# Floor scores (re-verified 2026-07-16 after re-anchoring 6 rotted Python
-# catalog entries that had been silently reported as SETUP-FAIL):
-#   - Python:  67 / 70 mutations caught (~96%), 0 setup-failures;
+# Floor scores (Python re-verified 2026-07-17 after ROI-refactor round 5
+# extended the catalog into the _grar_validate policy semantic core that
+# #1136 promoted to the CI blocking gate — 8 fail-open entries across
+# _parse_policy_duration + check_domain_policies, injection-verified on
+# host; one survivor became a real finding, killed by the new
+# test_bare_zero_group_wait_strict_violates):
+#   - Python:  75 / 78 mutations caught (~96%), 0 setup-failures;
 #              3 known equivalent-mutation survivors (full suite re-run
-#              2026-07-16)
+#              2026-07-16; round-5 delta injection-verified 2026-07-17)
 #   - Go:      29 / 30 mutations caught (~97%); 1 known equivalent survivor
 #              (the exporter parseHHMM outer-TrimSpace entry). Two modules:
 #              15 exporter (threshold-exporter/app/pkg/config; 14 caught +

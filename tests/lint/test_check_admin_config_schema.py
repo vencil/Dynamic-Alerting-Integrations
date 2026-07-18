@@ -35,8 +35,12 @@ sys.path.insert(0, os.path.join(_REPO, "scripts", "tools"))
 
 from check_admin_config_schema import (  # noqa: E402
     ADMIN_EXTENSIONS,
+    EMBEDDED_RBAC_SOURCES,
     SCHEMA_MAP,
+    _CallerError,
+    embedded_source_for,
     schema_for,
+    validate_embedded_file,
     validate_file,
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
@@ -46,11 +50,25 @@ _SCHEMA_DIR = os.path.join(_REPO, "docs", "schemas")
 _REAL_RBAC = os.path.join(_REPO, "try-local", "seed", "conf.d", "_rbac.yaml")
 _REAL_DOMAIN_POLICY = os.path.join(
     _REPO, "components", "threshold-exporter", "config", "conf.d", "examples", "_domain_policy.yaml")
+# Production RBAC embedded as a block-scalar string (the fail-open hole this closes).
+_REAL_K8S_CONFIGMAP = os.path.join(_REPO, "k8s", "04-tenant-api", "configmap-rbac.yaml")
+_REAL_HELM_VALUES = os.path.join(_REPO, "helm", "tenant-api", "values.yaml")
+_REAL_HELM_TEMPLATE = os.path.join(_REPO, "helm", "tenant-api", "templates", "configmap-rbac.yaml")
 
 
 def _load(name: str) -> dict:
     with open(os.path.join(_SCHEMA_DIR, name), encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def _write_at(d: str, relpath: str, text: str) -> str:
+    """Write a fixture at a nested repo-relative-looking path (so path-anchored
+    EMBEDDED_RBAC_SOURCES matching fires) and return the absolute path."""
+    path = os.path.join(d, *relpath.split("/"))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    return path
 
 
 @pytest.fixture(scope="module")
@@ -197,6 +215,196 @@ class TestRealFiles:
             assert os.path.exists(os.path.join(_SCHEMA_DIR, fn)), fn
 
 
+# --- embedded RBAC (production authz shipped as a block-scalar string) -------
+
+# A k8s ConfigMap with a GOOD RBAC embedded at data._rbac.yaml.
+_CONFIGMAP_TMPL = (
+    "apiVersion: v1\n"
+    "kind: ConfigMap\n"
+    "metadata:\n"
+    "  name: rbac-config\n"
+    "data:\n"
+    "  _rbac.yaml: |\n"
+    "{body}"
+)
+# A Helm values.yaml with an RBAC embedded at rbac._rbacYaml.
+_VALUES_TMPL = (
+    "replicaCount: 1\n"
+    "rbac:\n"
+    "  _rbacYaml: |\n"
+    "{body}"
+)
+
+
+def _indent(text: str, spaces: int) -> str:
+    pad = " " * spaces
+    return "".join(pad + line if line.strip() else line
+                   for line in text.splitlines(keepends=True))
+
+
+class TestEmbeddedRbac:
+    """The P7c-review blind spot: production RBAC ships EMBEDDED as a block-scalar
+    string (k8s data._rbac.yaml / Helm rbac._rbacYaml), whose file basename is NOT
+    _rbac.yaml — so the whole-file gate never reached it. These pin that the
+    extractor validates it against the SAME rbac schema, and that a BAD embedded
+    RBAC actually fails."""
+
+    def test_real_k8s_configmap_clean(self, rbac_schema):
+        assert os.path.exists(_REAL_K8S_CONFIGMAP), _REAL_K8S_CONFIGMAP
+        assert validate_embedded_file(
+            _REAL_K8S_CONFIGMAP, ("data", "_rbac.yaml"), rbac_schema, jsonschema) == []
+
+    def test_real_helm_values_clean(self, rbac_schema):
+        assert os.path.exists(_REAL_HELM_VALUES), _REAL_HELM_VALUES
+        assert validate_embedded_file(
+            _REAL_HELM_VALUES, ("rbac", "_rbacYaml"), rbac_schema, jsonschema) == []
+
+    def test_bad_permission_enum_in_embedded_rbac_rejected(self, tmp, rbac_schema):
+        # THE core proof: a bad permission value hidden inside the block scalar
+        # (invisible to a whole-file _rbac.yaml gate that never sees this file).
+        body = _indent("groups:\n  - name: x\n    tenants: [\"*\"]\n"
+                       "    permissions: [readonly]\n", 4)
+        p = _write(tmp, "configmap-rbac.yaml", _CONFIGMAP_TMPL.format(body=body))
+        viol = validate_embedded_file(p, ("data", "_rbac.yaml"), rbac_schema, jsonschema)
+        assert any("readonly" in v for v in viol), viol
+
+    def test_key_typo_in_embedded_rbac_rejected(self, tmp, rbac_schema):
+        body = _indent("groups:\n  - name: x\n    permissons: [read]\n"
+                       "    tenants: [\"*\"]\n", 4)
+        p = _write(tmp, "values.yaml", _VALUES_TMPL.format(body=body))
+        viol = validate_embedded_file(p, ("rbac", "_rbacYaml"), rbac_schema, jsonschema)
+        assert any("permissons" in v for v in viol), viol
+
+    def test_missing_embedded_key_is_fail_loud(self, tmp, rbac_schema):
+        # A registered embedded source whose key is renamed / absent must be a
+        # VIOLATION, not a silent skip — else a typo'd key silently re-opens the
+        # fail-open hole (validates nothing, exits 0).
+        p = _write(tmp, "values.yaml", "replicaCount: 1\nrbac:\n  _rbacYamlTYPO: |\n    groups: []\n")
+        viol = validate_embedded_file(p, ("rbac", "_rbacYaml"), rbac_schema, jsonschema)
+        assert any("not found" in v for v in viol), viol
+
+    def test_embedded_non_string_rejected(self, tmp, rbac_schema):
+        # data._rbac.yaml authored as a nested mapping (forgot the `|`) is not a
+        # block scalar → flagged, not silently accepted.
+        p = _write(tmp, "configmap-rbac.yaml",
+                   "data:\n  _rbac.yaml:\n    groups: []\n")
+        viol = validate_embedded_file(p, ("data", "_rbac.yaml"), rbac_schema, jsonschema)
+        assert any("block-scalar" in v for v in viol), viol
+
+    def test_embedded_null_block_tolerated(self, tmp, rbac_schema):
+        # present-but-null block scalar = empty RBAC (rbac io.EOF), loader-legal.
+        p = _write(tmp, "values.yaml", "rbac:\n  _rbacYaml:\n")
+        assert validate_embedded_file(p, ("rbac", "_rbacYaml"), rbac_schema, jsonschema) == []
+
+    def test_embedded_duplicate_key_rejected(self, tmp, rbac_schema):
+        # Duplicate key INSIDE the block scalar: PyYAML last-wins, Go yaml.v3
+        # load-rejects. The strict loader must catch it in the embedded RBAC too.
+        body = _indent("groups:\n  - name: ops\n    tenants: [\"*\"]\n"
+                       "    permissions: [read]\n    permissions: [admin]\n", 4)
+        p = _write(tmp, "configmap-rbac.yaml", _CONFIGMAP_TMPL.format(body=body))
+        viol = validate_embedded_file(p, ("data", "_rbac.yaml"), rbac_schema, jsonschema)
+        assert any("duplicate key" in v.lower() for v in viol), viol
+
+    def test_helm_template_not_plain_yaml_raises(self, rbac_schema):
+        # The Helm TEMPLATE (document-level Go `{{ }}`) is EXCLUDED by the hook's
+        # files regex (see test_embedded_source_classifier_is_path_anchored), so it
+        # never reaches this function via the CLI. If forced through, it is NOT plain
+        # YAML → raises _CallerError (exit 2), never silently deferred — a registered
+        # source is fail-CLOSED (the old None-defer was a fail-open).
+        assert os.path.exists(_REAL_HELM_TEMPLATE), _REAL_HELM_TEMPLATE
+        with pytest.raises(_CallerError):
+            validate_embedded_file(
+                _REAL_HELM_TEMPLATE, ("data", "_rbac.yaml"), rbac_schema, jsonschema)
+
+    def test_embedded_source_classifier_is_path_anchored(self):
+        # Only the two exact production files classify as embedded sources; a bare
+        # basename or another chart's values.yaml must NOT (avoids false positives
+        # on the 10 other values.yaml).
+        assert embedded_source_for("k8s/04-tenant-api/configmap-rbac.yaml") is not None
+        assert embedded_source_for("repo/helm/tenant-api/values.yaml") is not None
+        assert embedded_source_for("helm/da-portal/values.yaml") is None
+        assert embedded_source_for("values.yaml") is None
+        assert embedded_source_for("helm/tenant-api/templates/configmap-rbac.yaml") is None
+
+
+class TestEmbeddedCLI:
+    """End-to-end exit codes for the embedded-RBAC path (path-anchored matching,
+    so fixtures live under the real repo-relative subpaths)."""
+
+    def test_real_embedded_files_exit_zero(self):
+        result = _run(_REAL_K8S_CONFIGMAP, _REAL_HELM_VALUES)
+        assert result.returncode == EXIT_OK, result.stderr
+        assert "OK:" in result.stdout
+
+    def test_bad_embedded_rbac_exit_one(self, tmp):
+        # Prove the GATE (not just the function) blocks a bad embedded RBAC.
+        body = _indent("groups:\n  - name: x\n    tenants: [\"*\"]\n"
+                       "    permissions: [readonly]\n", 4)
+        p = _write_at(tmp, "helm/tenant-api/values.yaml",
+                      _VALUES_TMPL.format(body=body))
+        result = _run(p)
+        assert result.returncode == EXIT_VIOLATION, (
+            f"a bad embedded RBAC must FAIL the gate, got exit {result.returncode}\n"
+            f"{result.stdout}\n{result.stderr}")
+        assert "readonly" in result.stderr, result.stderr
+
+    def test_missing_key_exit_one(self, tmp):
+        p = _write_at(tmp, "k8s/04-tenant-api/configmap-rbac.yaml",
+                      "data:\n  _rbac_TYPO.yaml: |\n    groups: []\n")
+        result = _run(p)
+        assert result.returncode == EXIT_VIOLATION, result.stdout + result.stderr
+        assert "not found" in result.stderr, result.stderr
+
+    def test_templated_rbac_block_is_deferred_not_errored(self, tmp):
+        # A registered source whose embedded RBAC BLOCK is itself a Go-template
+        # indirection (`_rbacYaml: |{{ .Values.rbacBody }}`) has no concrete RBAC to
+        # validate here — the BLOCK is deferred (skipped), never a spurious error.
+        # (Defensive: the real values.yaml embeds plain RBAC.)
+        p = _write_at(tmp, "helm/tenant-api/values.yaml",
+                      "rbac:\n  _rbacYaml: |\n    {{ .Values.rbacBody | nindent 4 }}\n")
+        result = _run(p)
+        assert result.returncode == EXIT_OK, result.stdout + result.stderr
+
+    def test_unrelated_template_marker_does_not_defer_bad_rbac(self, tmp):
+        # FAIL-OPEN regression (adversarial review): an UNRELATED quoted Go-template
+        # value elsewhere in a registered values.yaml must NOT suppress validation of
+        # the plain embedded RBAC. The old whole-file `{{` scan deferred the ENTIRE
+        # file → a bad RBAC shipped silently (exit 0). The scoped block-level check
+        # must let the plain-RBAC block through and FAIL it.
+        body = _indent("groups:\n  - name: x\n    tenants: [\"*\"]\n"
+                       "    permissions: [readonly]\n", 4)
+        content = (
+            "replicaCount: 1\n"
+            "podAnnotations:\n"
+            "  example.com/rendered: \"{{ .Release.Name }}\"\n"
+            "rbac:\n"
+            "  _rbacYaml: |\n" + body
+        )
+        p = _write_at(tmp, "helm/tenant-api/values.yaml", content)
+        result = _run(p)
+        assert result.returncode == EXIT_VIOLATION, (
+            f"an unrelated {{{{ }}}} must NOT defer a bad plain-RBAC block, got exit "
+            f"{result.returncode}\n{result.stdout}\n{result.stderr}")
+        assert "readonly" in result.stderr, result.stderr
+
+    def test_real_embedded_files_are_validated_not_deferred(self):
+        # Tripwire (adversarial MINOR): the two real registered sources must be
+        # VALIDATED (counted), not silently deferred — a regression that pushes a
+        # registered source into a skipped/deferred branch would fail this.
+        result = _run(_REAL_K8S_CONFIGMAP, _REAL_HELM_VALUES)
+        assert result.returncode == EXIT_OK, result.stderr
+        assert "2 admin meta-config file(s) valid" in result.stdout, result.stdout
+        assert "deferred" not in result.stdout.lower(), result.stdout
+
+    def test_helm_template_path_skipped_not_error(self):
+        # The real Helm template is NOT a registered embedded source (deferred at
+        # the regex level); passing it to the CLI must be a clean skip, never a
+        # parse ERROR from the `{{ }}` markers.
+        result = _run(_REAL_HELM_TEMPLATE)
+        assert result.returncode == EXIT_OK, result.stdout + result.stderr
+        assert "ERROR" not in result.stderr, result.stderr
+
+
 # --- gate integrity: the hook must never select a file the script skips ----
 
 class TestGateIntegrity:
@@ -214,35 +422,62 @@ class TestGateIntegrity:
         hook = next(h for h in hooks if h.get("id") == "admin-config-schema-check")
         return re.compile(hook["files"])
 
+    @staticmethod
+    def _handled(rel: str) -> bool:
+        # A path is handled (not fail-open) if EITHER the whole-file classifier
+        # (schema_for, by stem) OR the embedded-RBAC classifier
+        # (embedded_source_for, by path suffix) recognizes it.
+        return schema_for(rel) is not None or embedded_source_for(rel) is not None
+
     def test_no_fail_open__every_file_the_hook_selects_is_validated(self):
         # THE fail-open invariant is regex ⊆ script: any path the hook SELECTS must
-        # be recognized by schema_for(). (The converse — script handles ⇒ hook
-        # selects — is the reverse direction and does not cause a fail-open.) So
-        # drive a broad candidate space through the ACTUAL hook regex and, for
-        # everything it selects, require the script to handle it. This would have
-        # caught the original `.yml` hole: the regex selected it, the script (keyed
-        # on `.yaml` basenames) skipped it → exit 0 on a broken authz config.
+        # be recognized by the script (schema_for OR embedded_source_for). Drive a
+        # broad candidate space through the ACTUAL hook regex and, for everything it
+        # selects, require the script to handle it. This would have caught the
+        # original `.yml` hole (regex selected it, script skipped it → exit 0 on a
+        # broken authz config), and now also the embedded production RBAC paths.
         pattern = self._hook_files_regex()
         stems = ["_rbac", "_domain_policy", "_tenant_orgs",
                  "_groups", "_federation_policy", "notes", "rbac"]
         exts = [".yaml", ".yml", ".YAML", ".YML", ".Yaml", ".json", ".txt", ".yaml.bak", ""]
-        selected = 0
+        candidates = []
         for prefix in ("", "conf.d/", "deploy/overlays/prod/"):
             for stem in stems:
                 for ext in exts:
-                    rel = f"{prefix}{stem}{ext}"
-                    if pattern.search(rel):
-                        selected += 1
-                        assert schema_for(rel) is not None, (
-                            f"FAIL-OPEN: hook regex selects {rel!r} but schema_for() "
-                            f"returns None → the script skips it and exits 0.")
-        assert selected >= len(SCHEMA_MAP), (
+                    candidates.append(f"{prefix}{stem}{ext}")
+        # The embedded production-RBAC sources must be in the candidate space too.
+        candidates += list(EMBEDDED_RBAC_SOURCES) + [
+            f"repo/{p}" for p in EMBEDDED_RBAC_SOURCES]
+        selected = 0
+        for rel in candidates:
+            if pattern.search(rel):
+                selected += 1
+                assert self._handled(rel), (
+                    f"FAIL-OPEN: hook regex selects {rel!r} but the script does not "
+                    f"recognize it (schema_for + embedded_source_for both None) → "
+                    f"the script skips it and exits 0.")
+        # >= stems + the 2 embedded sources ensures the guard isn't vacuous.
+        assert selected >= len(SCHEMA_MAP) + len(EMBEDDED_RBAC_SOURCES), (
             f"regex selected only {selected} candidate(s) — guard likely vacuous")
+
+    def test_embedded_sources_are_selected_by_the_hook(self):
+        # The regex MUST select the two production embedded-RBAC files (that is the
+        # whole point of this follow-up), from repo root and nested.
+        pattern = self._hook_files_regex()
+        for suffix in EMBEDDED_RBAC_SOURCES:
+            assert pattern.search(suffix), f"hook regex must select {suffix}"
+            assert pattern.search(f"some/prefix/{suffix}"), suffix
 
     def test_hook_does_not_select_files_we_cannot_validate(self):
         pattern = self._hook_files_regex()
         for rel in ("conf.d/_rbac.txt", "conf.d/notes.yaml",
-                    "conf.d/rbac.yaml", "conf.d/_rbac.yaml.bak"):
+                    "conf.d/rbac.yaml", "conf.d/_rbac.yaml.bak",
+                    # 10 OTHER chart values.yaml must NOT be selected (path-anchored):
+                    "helm/da-portal/values.yaml", "helm/vector/values.yaml",
+                    "values.yaml",
+                    # the Helm TEMPLATE configmap-rbac.yaml (Go `{{ }}`) is DEFERRED,
+                    # so it must not be selected — its RBAC is validated via values.yaml:
+                    "helm/tenant-api/templates/configmap-rbac.yaml"):
             assert not pattern.search(rel), f"hook regex unexpectedly selects {rel}"
 
     def test_yml_variant_is_validated_not_skipped(self, tmp):

@@ -138,6 +138,27 @@ describe('useModalFocusTrap', () => {
     expect(ev.defaultPrevented).toBe(false);
   });
 
+  it('excludes DISABLED controls from the cycle (regression: trap must not leak past a disabled last element)', () => {
+    const { container, buttons } = buildModal(3);
+    // Give it an explicit tabindex so it ALSO matches the `[tabindex]` branch —
+    // this proves BOTH the `button:not([disabled])` and the `[tabindex]…
+    // :not([disabled])` alternatives exclude it, not just the button one (CR).
+    buttons[2].tabIndex = 0;
+    buttons[2].disabled = true; // disabled → not focusable via either branch
+    renderHookWithRef('open', container, setModalTypeSpy);
+
+    buttons[1].focus(); // the LAST *enabled* focusable
+    expect(document.activeElement).toBe(buttons[1]);
+
+    const ev = pressKey('Tab');
+    // With :not([disabled]), buttons[1] is treated as the last focusable and Tab
+    // wraps to first. WITHOUT the fix, buttons[2](disabled) counts as last,
+    // document.activeElement never equals it, preventDefault never fires, and
+    // Tab escapes the modal — the trap leaks.
+    expect(ev.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(buttons[0]);
+  });
+
   it('Tab is no-op when modal contains no focusable elements', () => {
     // Build a modal with just text — no buttons / inputs / etc.
     const container = document.createElement('div');

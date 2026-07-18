@@ -1,24 +1,54 @@
-name: Bench E2E Record (manual dispatch)
+name: Bench E2E Record (manual dispatch + monthly)
 
-# B-1 Phase 2 e2e alert fire-through harness — manual-dispatch only.
+# B-1 Phase 2 e2e alert fire-through harness — manual-dispatch + monthly.
 #
 # Per design §8.1: cold start (compose up + healthcheck + COUNT runs ×
 # 2 phases + teardown) is ~5-8 min wall-clock. Running on every PR is
 # inappropriate; this workflow is invoked from the GitHub UI / CLI by
-# maintainer when fresh baseline is needed.
+# maintainer when fresh baseline is needed, plus a monthly schedule.
+#
+# Why the monthly schedule (rot prevention): manual-only dispatch went
+# 2.8 months without an invocation while the artifacts expired after 30
+# days — leaving ZERO live synthetic-v2 baseline to compare a
+# customer-anon run (or a regression investigation) against. Monthly
+# cadence + 90-day retention guarantees at least one live baseline
+# artifact at all times without normalizing per-PR cost.
 #
 # Scope:
-#   - main only (workflow_dispatch from main).
-#   - Bench artifacts retained 30 days (synthetic-v* results lose
-#     relevance after a few releases; customer-anon results are
+#   - main only (workflow_dispatch + schedule both run on main).
+#   - Bench artifacts retained 90 days (must exceed the monthly cadence
+#     or baselines still gap between runs; synthetic-v* results lose
+#     relevance after a few releases anyway; customer-anon results are
 #     out-of-band so workflow doesn't store them).
 #   - Default fixture_kind: synthetic-v2 (the post-PR-1 baseline).
+#     Scheduled runs have empty `inputs.*` — every consumer below
+#     falls back via `|| '<default>'`.
 #
 # Acceptance criterion check is the gate_status field in the aggregate
 # JSON; this workflow uploads the artifact + surfaces the banner in
 # the GitHub Actions summary, leaving go/no-go to maintainer review.
+#
+# TODO(baseline persistence): release-attach-bench-baseline.yaml already
+# attaches the latest bench-record (micro-bench) artifact to Releases at
+# `release: published`, making that baseline immune to artifact expiry.
+# Extending it to also attach the latest e2e aggregate JSON would do the
+# same here, but needs its own artifact-name plumbing (this workflow's
+# artifact is `e2e-bench-<kind>-<run_id>`, holds per-run JSONs + logs,
+# and can be red on gate) — deferred until the monthly schedule proves
+# insufficient (trigger: a release lands with no live e2e-bench artifact
+# to reference).
 
 on:
+  schedule:
+    # Monthly baseline refresh — day 2, 04:45 UTC. Slot chosen clear of
+    # the existing repo crons (nightlies at 02:00 ×3 / 03:00 / 03:23 /
+    # 16:00 / 17:00 / 18:00, weeklies at 06:17 Mon / 12:00 Sun, daily
+    # 06:17). GitHub-hosted jobs each run on their own VM, so this is
+    # NOT about runner contention — a clear slot just stays under the
+    # org-level concurrent-job cap during cron bursts and keeps
+    # scheduled-run timelines easy to read (conservative convention,
+    # not a hard requirement).
+    - cron: '45 4 2 * *'
   workflow_dispatch:
     inputs:
       fixture_kind:
@@ -47,7 +77,9 @@ permissions:
 
 jobs:
   bench-e2e:
-    name: e2e harness (${{ inputs.fixture_kind }} × ${{ inputs.count }} runs)
+    # `inputs.*` are empty on `schedule:` — fall back to the dispatch
+    # defaults everywhere they're consumed (here, env, summary, artifact).
+    name: e2e harness (${{ inputs.fixture_kind || 'synthetic-v2' }} × ${{ inputs.count || '30' }} runs)
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     # 60 min budget: 1000-tenant typically finishes in ~5-8 min after the
@@ -78,9 +110,9 @@ jobs:
 
       - name: Run e2e harness
         env:
-          COUNT: ${{ inputs.count }}
-          E2E_FIXTURE_KIND: ${{ inputs.fixture_kind }}
-          FIXTURE_TENANT_COUNT: ${{ inputs.fixture_tenant_count }}
+          COUNT: ${{ inputs.count || '30' }}
+          E2E_FIXTURE_KIND: ${{ inputs.fixture_kind || 'synthetic-v2' }}
+          FIXTURE_TENANT_COUNT: ${{ inputs.fixture_tenant_count || '1000' }}
         run: make bench-e2e
 
       - name: Capture compose logs (always, for diagnostics)
@@ -107,7 +139,7 @@ jobs:
         run: |
           echo "### B-1 Phase 2 e2e — $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Fixture kind**: \`${{ inputs.fixture_kind }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Fixture kind**: \`${{ inputs.fixture_kind || 'synthetic-v2' }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           latest=$(ls -t tests/e2e-bench/bench-results/e2e-*.json 2>/dev/null | head -1)
           if [ -n "$latest" ]; then
@@ -124,10 +156,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-bench-${{ inputs.fixture_kind }}-${{ github.run_id }}
+          name: e2e-bench-${{ inputs.fixture_kind || 'synthetic-v2' }}-${{ github.run_id }}
           path: |
             tests/e2e-bench/bench-results/per-run-*.json
             tests/e2e-bench/bench-results/e2e-*.json
             tests/e2e-bench/bench-results/*.log
-          retention-days: 30
+          # 90 > monthly cadence — see rot-prevention rationale in the
+          # header comment (30-day retention gapped between manual runs).
+          retention-days: 90
           if-no-files-found: warn

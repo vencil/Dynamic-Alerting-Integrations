@@ -47,8 +47,11 @@ function useModalFocusTrap(modalType, setModalType) {
         }
         // Focus trap: cycle Tab within modal
         if (e.key === 'Tab' && modalRef.current) {
+          // :not([disabled]) on the disable-able elements — a disabled control
+          // is not focusable, so including it would make document.activeElement
+          // never equal `last`/`first` and let Tab escape the trap.
           const focusable = modalRef.current.querySelectorAll(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+            'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])'
           );
           if (focusable.length === 0) return;
           const first = focusable[0];

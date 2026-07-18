@@ -45,7 +45,7 @@ Windows MCP Shell 執行 `docker exec` 時，**stdout 被 PowerShell 吞掉**。
 
 ```bash
 make dc-test                          # pytest in container
-make dc-go-test                       # go test ./...
+make dc-go-test                       # Go tests（全 CI module；MOD=/PKG= 縮小範圍，見 test-map.md）
 make dc-run CMD="kubectl get pods -A" # arbitrary command
 make dc-status                        # is container running?
 make dc-up                            # start container if stopped

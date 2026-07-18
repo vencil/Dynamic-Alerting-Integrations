@@ -42,9 +42,11 @@ from generate_alertmanager_routes import (
     _parse_config_files,
     write_text_secure,
 )
-from _grar_render import _merge_routes_receivers_inhibits
+from _grar_render import _merge_routes_receivers_inhibits, _enforce_equal_labels_gated
 from generate_alertmanager_routes import (
+    assert_equal_labels_gated,
     assert_watchdog_inhibit_immunity,
+    find_ungated_equal_label_inhibits,
     find_watchdog_suppressing_inhibits,
 )
 
@@ -645,6 +647,92 @@ class TestWatchdogInhibitImmunity:
         # base (route → defined receiver; else amtool rejects the raw file).
         assert any(r["name"] == "synthetic-receiver" for r in am["receivers"])
         assert any(r["name"] == "sentinel-sinkhole" for r in am["receivers"])
+
+
+# ============================================================
+# #1132: equal-label-gated invariant (silent-suppression guard)
+# ============================================================
+class TestEqualLabelGatedInvariant:
+    """Every `equal:` label must be presence-gated on some side. An ungated
+    equal-label is the #1132 footgun: Alertmanager treats a label missing from
+    BOTH source and target as equal, silently suppressing unrelated alerts."""
+
+    def test_gated_rules_pass(self):
+        ok = [
+            {"source_matchers": ['severity="critical"', 'metric_group=~".+"'],
+             "target_matchers": ['severity="warning"', 'metric_group=~".+"'],
+             "equal": ["metric_group"]},
+            # gated on ONE side is sufficient (target lacks it → cannot match)
+            {"source_matchers": ['alertname="X"', 'tenant=~".+"'],
+             "target_matchers": ['severity="warning"'], "equal": ["tenant"]},
+        ]
+        assert find_ungated_equal_label_inhibits(ok) == []
+        assert_equal_labels_gated(ok)  # does not raise
+
+    def test_ungated_equal_label_flagged(self):
+        bad = [{"source_matchers": ['alertname="TenantSilentWarning"'],
+                "target_matchers": ['severity="warning"'], "equal": ["tenant"]}]
+        found = find_ungated_equal_label_inhibits(bad)
+        assert len(found) == 1 and found[0][2] == ["tenant"]
+        with pytest.raises(ValueError, match="#1132"):
+            assert_equal_labels_gated(bad)
+
+    def test_matchall_regex_does_not_gate(self):
+        # `=~".*"` matches the empty string, so it does NOT guarantee presence.
+        bad = [{"source_matchers": ['tenant=~".*"'],
+                "target_matchers": ['tenant=~".*"'], "equal": ["tenant"]}]
+        assert len(find_ungated_equal_label_inhibits(bad)) == 1
+
+    def test_exact_and_negempty_matchers_gate(self):
+        # tenant="x" and tenant!="" both exclude the empty string → gate.
+        for m in ('tenant="x"', 'tenant!=""'):
+            ok = [{"source_matchers": [m], "target_matchers": ['severity="warning"'],
+                   "equal": ["tenant"]}]
+            assert find_ungated_equal_label_inhibits(ok) == [], m
+
+    def test_legacy_match_map_form_gates(self):
+        # Deprecated source_match / target_match_re dict forms are analysed too.
+        ok = [{"source_match": {"metric_group": "connections"},
+               "target_match_re": {"metric_group": ".+"}, "equal": ["metric_group"]}]
+        assert find_ungated_equal_label_inhibits(ok) == []
+
+    def test_multiple_equal_labels_partial_gate(self):
+        # Only the ungated subset is reported.
+        bad = [{"source_matchers": ['alertname="X"', 'name=~".+"'],
+                "target_matchers": ['component="custom"', 'name=~".+"'],
+                "equal": ["tenant", "name"]}]
+        found = find_ungated_equal_label_inhibits(bad)
+        assert len(found) == 1 and found[0][2] == ["tenant"]  # name gated, tenant not
+
+    def test_non_dict_and_non_list_equal_skipped(self):
+        # Malformed shapes degrade, don't raise (a live AM can't emit these, but
+        # the finder is defensive like the Watchdog one).
+        assert find_ungated_equal_label_inhibits([42, {"equal": 7}, {"no": "equal"}]) == []
+
+    def test_enforce_strict_raises_else_warns(self, capsys):
+        bad = [{"source_matchers": ['alertname="X"'],
+                "target_matchers": ['severity="warning"'], "equal": ["tenant"]}]
+        # strict → raise
+        with pytest.raises(ValueError, match="#1132"):
+            _enforce_equal_labels_gated(bad, strict=True)
+        # not strict → warn to stderr, no raise
+        _enforce_equal_labels_gated(bad, strict=False)
+        assert "#1132" in capsys.readouterr().err
+
+    def test_committed_base_configmap_is_gated(self):
+        # Regression guard on the REAL deployed base: no hand-edit may reintroduce
+        # an ungated equal-label. Mirrors the Watchdog committed-base guard.
+        repo_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", ".."))
+        cm_path = os.path.join(
+            repo_root, "k8s", "03-monitoring", "configmap-alertmanager.yaml")
+        with open(cm_path, encoding="utf-8") as f:
+            cm = yaml.safe_load(f)
+        am = yaml.safe_load(cm["data"]["alertmanager.yml"])
+        offending = find_ungated_equal_label_inhibits(am.get("inhibit_rules", []))
+        assert offending == [], (
+            "configmap-alertmanager.yaml has inhibit rule(s) with an ungated "
+            f"equal-label (#1132): {[(i, lbls) for i, _r, lbls in offending]}")
 
 
 # ============================================================

@@ -40,6 +40,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# UTF-8 stdout guard — the gate banner printed by main() carries emoji
+# (✅ / ❌ / ⚠️ / 🟡) that legacy Windows consoles (cp950 zh-TW / cp936
+# zh-CN / cp1252) cannot encode: print() raises UnicodeEncodeError AFTER
+# the aggregate JSON is already written, so `make bench-e2e` step 5 exits
+# non-zero on an otherwise-successful run. Same bug class as #824
+# (session-guards sweep); reuse scripts/tools/_lib_compat with a local
+# no-op fallback in case the repo-relative path is unreachable (e.g.
+# file copied out of tree).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "tools"))
+try:
+    from _lib_compat import try_utf8_stdout
+except Exception:  # pragma: no cover — standalone fallback, never block
+    def try_utf8_stdout() -> None:  # type: ignore
+        return None
+
 DEFAULT_BOOTSTRAP_N = 1000
 DEFAULT_GATE_THRESHOLD_PCT = 30  # design §6.5 placeholder for v2.8.0
 STAGE_C_HISTOGRAM_BUCKETS = [0, 1000, 2000, 3000, 4000, 5000, 6000, 7500, 10000, 15000]
@@ -352,6 +367,7 @@ def aggregate(
 
 
 def main() -> int:
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--results-dir", type=str, default="bench-results",

@@ -91,6 +91,18 @@ class TestStrictFailOpenClosures:
         assert any("below minimum" in m for m in strict), strict
         assert check_domain_policies(routing, policies) == []  # 非 strict 不變
 
+    def test_bare_zero_group_wait_strict_violates(self):
+        """裸 int 0 的 group_wait（falsy 但可 parse）不得被 truthiness 跳過。
+
+        mutation pilot round 5 的存活 mutant（`is not None` → truthiness）
+        揭露的缺口：既有測試只蓋 "0s"（truthy 字串），裸 0 走 falsy 分支。
+        """
+        routing = {"tenant-x": {"group_wait": 0}}
+        policies = self._one_policy({"min_group_wait": "30s"})
+        strict = check_domain_policies(routing, policies, strict=True)
+        assert any("below minimum" in m for m in strict), strict
+        assert check_domain_policies(routing, policies) == []  # 非 strict 不變
+
     def test_zero_repeat_interval_not_skipped(self):
         """0（裸 int）repeat_interval：parse 得出來、對 max 合規＝零訊息。"""
         routing = {"tenant-x": {"repeat_interval": 0}}

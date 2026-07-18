@@ -346,13 +346,15 @@ class TestHelmChartThresholdExporter:
     def test_servicemonitor_template_conditional(self, chart_dir: Path):
         """ServiceMonitor template is conditional on operator mode."""
         sm_template = chart_dir / "templates" / "servicemonitor.yaml"
-        content = sm_template.read_text()
+        content = sm_template.read_text(encoding="utf-8")
         assert 'eq .Values.rules.mode "operator"' in content
 
     def test_deployment_template_handles_both_modes(self, chart_dir: Path):
         """Deployment template handles configmap and operator mode."""
         deployment = chart_dir / "templates" / "deployment.yaml"
-        content = deployment.read_text()
+        # encoding= 顯式 UTF-8：template 含非 ASCII（em-dash 註解），
+        # Windows host cp950 預設解碼會炸（host 假紅）。
+        content = deployment.read_text(encoding="utf-8")
         assert 'eq .Values.rules.mode "configmap"' in content
 
 

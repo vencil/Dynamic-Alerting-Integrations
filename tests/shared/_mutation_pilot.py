@@ -4,10 +4,11 @@ Underscored prefix → pytest does NOT collect this module; it's a
 re-runnable research artifact, not part of the test suite. Sits beside
 test_property_tools.py for context.
 
-Applies a hand-crafted set of mutations to 4 pure functions; for each
-mutation, runs the relevant pytest scope and records whether the suite
-caught the mutation (test failed → caught) or missed it (tests still
-passed → SURVIVED, gap).
+Applies a hand-crafted catalog of mutations to pure helper functions
+across scripts/tools (see the floor paragraph below for current counts);
+for each mutation, runs the relevant pytest scope and records whether
+the suite caught the mutation (test failed → caught) or missed it
+(tests still passed → SURVIVED, gap).
 
 Why hand-crafted vs `mutmut`/`cosmic-ray`:
   - mutmut would be a new project dependency for a one-off audit pilot.
@@ -19,12 +20,22 @@ Why hand-crafted vs `mutmut`/`cosmic-ray`:
 Usage:
   python tests/shared/_mutation_pilot.py [--target FUNC]
 
-Latest run (2026-07-16, after re-anchoring 6 entries whose old_string
-had rotted against refactored sources — pathlib migration in _lib_io /
-_lib_godispatch, delegation refactor in _lint_helpers, ADR-024 version
-label validation in _grar_validate): 67/70 caught (~96%) across 32
-functions, 0 setup-failures. The 3 survivors are all equivalent
-mutations:
+Current floor: 75/78 caught (~96%) across 34 functions, 0
+setup-failures — composed of the 2026-07-16 full-suite baseline (67/70
+caught after re-anchoring 6 entries whose old_string had rotted against
+refactored sources) plus ROI-refactor round 5 (2026-07-17): 8 new
+entries covering the _grar_validate policy semantic core that #1136
+promoted from dead code to the CI blocking gate (_parse_policy_duration
+sign/bool/grammar drops + check_domain_policies strict→WARN downgrade,
+silent constraint skip, comparison flip, truthiness regression,
+subset-direction flip — all fail-open bug classes), each
+injection-verified per entry on the host (apply → kill scope red →
+revert green). The round-5 injection run also produced one real
+finding: the group_wait is-not-None → truthiness mutant survived the
+51-test strict hardening suite (only "0s" was covered; bare int 0
+slipped the truthiness branch) and is now killed by
+test_bare_zero_group_wait_strict_violates.
+The 3 survivors are all equivalent mutations:
   - parse_duration_seconds: drop type-check before m.match's str()
     coercion (str() catches the non-string case downstream).
   - strip_frontmatter: offset 3→0 in `find("\\n---", 3)` — opening
@@ -713,6 +724,91 @@ MUTATIONS: list[Mutation] = [
         fn_name="validate_tenant_keys",
         old='        if "{" in key:\n            base = key.split("{")[0]\n            if base in defaults_keys:\n                # ADR-024 OQ-6: validate any `version` dimensional label.\n                warnings.extend(_validate_version_label(tenant, key, base))\n                continue',
         new='        if False:\n            base = ""\n            if base in defaults_keys:\n                warnings.extend(_validate_version_label(tenant, key, base))\n                continue',
+    ),
+    # ── _parse_policy_duration (_grar_validate) ──────────────────
+    # ROI refactor round 5: #1136 promoted check_domain_policies +
+    # _parse_policy_duration from dead code to the CI blocking gate's
+    # semantic core (--strict → ERROR → exit 1). These entries verify the
+    # 51-test hardening suite (tests/ops/test_grar_strict_hardening.py)
+    # actually kills the fail-open bug classes the blind review chased:
+    # sign/bool/grammar validation drops, strict→WARN downgrade, silent
+    # constraint skips, comparison flips, is-not-None → truthiness
+    # regressions (the "0s hole" direction).
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/ops/test_grar_strict_hardening.py",
+        label="policy_duration: negative bare number accepted (sign guard dropped)",
+        fn_name="_parse_policy_duration",
+        old="        return float(value) if value >= 0 else None",
+        new="        return float(value)",
+        kill_test="test_rejected",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/ops/test_grar_strict_hardening.py",
+        label="policy_duration: bool leaks through int branch (True parses as 1.0s)",
+        fn_name="_parse_policy_duration",
+        old="    if isinstance(value, bool):\n        return None",
+        new="    if False:\n        return None",
+        kill_test="test_rejected",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/ops/test_grar_strict_hardening.py",
+        label="policy_duration: grammar gate dropped (garbage sums found tokens, 'banana'→0.0)",
+        fn_name="_parse_policy_duration",
+        old="    if not _POLICY_DURATION_RE.match(s):\n        return None",
+        new="    if False:\n        return None",
+        kill_test="test_rejected",
+    ),
+    # ── check_domain_policies (_grar_validate) ───────────────────
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/ops/test_grar_strict_hardening.py",
+        label="domain_policies: strict severity downgraded to WARN (blocking gate goes advisory)",
+        fn_name="check_domain_policies",
+        old='    severity = POLICY_ERROR_PREFIX.rstrip(":") if strict else "WARN"',
+        new='    severity = "WARN"',
+        kill_test="test_tenants_not_list_strict_becomes_error",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/ops/test_grar_strict_hardening.py",
+        label="domain_policies: strict constraint-side duration pre-validation dropped (unenforceable bound goes silent)",
+        fn_name="check_domain_policies",
+        old="                if raw is not None and _parse_policy_duration(raw) is None:",
+        new="                if False:",
+        kill_test="test_garbage_constraint_value_strict_fails_loud",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/ops/test_grar_strict_hardening.py",
+        label="domain_policies: strict max_repeat comparison flipped (violators pass, compliant flagged)",
+        fn_name="check_domain_policies",
+        old="                        elif tenant_sec > max_sec:",
+        new="                        elif tenant_sec < max_sec:",
+        kill_test="test_zero_repeat_interval_not_skipped",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/ops/test_grar_strict_hardening.py",
+        label="domain_policies: strict group_wait is-not-None regressed to truthiness (bare 0 skipped)",
+        fn_name="check_domain_policies",
+        old='                    tenant_gw = rc.get("group_wait")\n                    if tenant_gw is not None:',
+        new='                    tenant_gw = rc.get("group_wait")\n                    if tenant_gw:',
+        # Round-5 SURVIVOR turned finding: the hardening suite only covered
+        # "0s" (truthy string); bare int 0 slipped the truthiness branch.
+        # Killed by the test added for it (asserts correct behavior).
+        kill_test="test_bare_zero_group_wait_strict_violates",
+    ),
+    Mutation(
+        target_file="scripts/tools/ops/_grar_validate.py",
+        test_file="tests/ops/test_generate_alertmanager_routes.py",
+        label="domain_policies: enforce_group_by subset direction flipped (missing labels pass)",
+        fn_name="check_domain_policies",
+        old="                    missing = set(enforce_group_by) - set(tenant_gb)",
+        new="                    missing = set(tenant_gb) - set(enforce_group_by)",
+        kill_test="test_enforce_group_by_missing_labels",
     ),
 ]
 

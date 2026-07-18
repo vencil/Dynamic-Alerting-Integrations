@@ -41,11 +41,16 @@ package handler
 //     reports first; redaction is applied to the already-paired structure.
 //     Cross-report indexes are each config's own order, so pairing redacted
 //     reports by index would misalign the moment a rule is inserted.
-//   - "changed" compares exactly three axes: outcome_shadow, outcome_enforce,
-//     unsatisfiable — the flag-agnostic surface. generated_at and flags are
-//     excluded by the P6 contract; config_anchor is presented side by side,
-//     never diffed. Permission/WHO changes are visible in the two embedded
-//     reports, not classified here.
+//   - "changed" compares exactly four axes: outcome_shadow, outcome_enforce,
+//     unsatisfiable — the flag-agnostic outcome surface — plus
+//     org_gate.claim_key (the declared claim key the gate scopes on).
+//     generated_at and flags are excluded by the P6 contract; config_anchor is
+//     presented side by side, never diffed. Permission/WHO changes are visible
+//     in the two embedded reports, not classified here.
+//   - a 1:1 pair identical on all four axes is NOT dropped: it lands in
+//     "unchanged" (rule + live/candidate index only) so the front end can
+//     find-by-index and compare the un-classified axes (permissions / WHO)
+//     for a grant the org-gate diff did not flag.
 //   - a rename is removed+added by definition (the pairing key is the name).
 //   - duplicated rule names (legal in config) make that name's pairing
 //     ambiguous: ALL its entries degrade to added+removed and the alignment
@@ -123,6 +128,14 @@ type DryRunChanged struct {
 	OutcomeShadow  *StringDelta `json:"outcome_shadow,omitempty"`
 	OutcomeEnforce *StringDelta `json:"outcome_enforce,omitempty"`
 	Unsatisfiable  *BoolDelta   `json:"unsatisfiable,omitempty"`
+	// ClaimKey is the fourth axis: org_gate.claim_key (rule.OrgScope). A
+	// same-name pair that re-scopes to a different declared claim key changes
+	// here even when the three outcome axes are identical (e.g. an unlabeled
+	// tenant, where every required gate reads pass/fail_unlabeled regardless of
+	// which key). The claim key IS a claim identifier, so it is DROPPED in the
+	// redacted view (mirroring ReverseOrgGate.ClaimKey) — the redact rebuild's
+	// allowlist simply never copies it forward.
+	ClaimKey *StringDelta `json:"claim_key,omitempty"`
 }
 
 // DryRunAdded is one grant present only in the candidate report.
@@ -137,13 +150,26 @@ type DryRunRemoved struct {
 	LiveIndex int    `json:"live_index"`
 }
 
+// DryRunUnchanged is one rule granted in BOTH reports, paired 1:1, whose
+// diffable axes are ALL identical. It carries no delta — only the pairing
+// coordinates — so the front end can find-by-index the grants the org-gate
+// diff dropped and place their two embedded-report entries side by side to
+// compare the axes this diff does NOT classify (permissions / WHO). Emitted
+// in live config order, same as Removed/Changed.
+type DryRunUnchanged struct {
+	Rule           string `json:"rule,omitempty"` // stripped in the redacted view
+	LiveIndex      int    `json:"live_index"`
+	CandidateIndex int    `json:"candidate_index"`
+}
+
 // DryRunDiff is the structural diff between the baseline and candidate
 // reports' grants for the queried tenant.
 type DryRunDiff struct {
-	Alignment string          `json:"alignment"`
-	Changed   []DryRunChanged `json:"changed"`
-	Added     []DryRunAdded   `json:"added"`
-	Removed   []DryRunRemoved `json:"removed"`
+	Alignment string            `json:"alignment"`
+	Changed   []DryRunChanged   `json:"changed"`
+	Added     []DryRunAdded     `json:"added"`
+	Removed   []DryRunRemoved   `json:"removed"`
+	Unchanged []DryRunUnchanged `json:"unchanged"`
 }
 
 // DryRunResponse is the dry-run envelope (the endpoint's @Success schema).
@@ -340,6 +366,7 @@ func DryRunTenantAccessReport(d *Deps) http.HandlerFunc {
 			"changed", len(diff.Changed),
 			"added", len(diff.Added),
 			"removed", len(diff.Removed),
+			"unchanged", len(diff.Unchanged),
 		)
 
 		writeJSON(w, http.StatusOK, resp)
@@ -349,13 +376,15 @@ func DryRunTenantAccessReport(d *Deps) http.HandlerFunc {
 // diffReverseReports pairs the two reports' grants BY RULE NAME on the FULL
 // (pre-redaction) structures — structure-then-redact. A name granted exactly
 // once on each side pairs; the pair is "changed" iff any diffable axis
-// differs (changedEntry). A name granted on one side only is added/removed —
-// which covers both a rule edited out of the config AND a rule whose tenant
-// patterns stopped hitting the queried tenant (the same thing, seen from
-// this tenant's access map). A duplicated name on both sides cannot be
-// paired faithfully: all its entries degrade to added+removed and the
-// alignment drops to coarse. Emission order is deterministic: removed/
-// changed in live config order, added in candidate config order.
+// differs (changedEntry), otherwise it lands in "unchanged" (recorded, not
+// dropped, so the front end can find-by-index the un-classified axes). A name
+// granted on one side only is added/removed — which covers both a rule edited
+// out of the config AND a rule whose tenant patterns stopped hitting the
+// queried tenant (the same thing, seen from this tenant's access map). A
+// duplicated name on both sides cannot be paired faithfully: all its entries
+// degrade to added+removed and the alignment drops to coarse. Emission order
+// is deterministic: removed/changed/unchanged in live config order, added in
+// candidate config order.
 func diffReverseReports(live, cand rbac.ReverseReport) DryRunDiff {
 	liveByName := grantsByRule(live.Grants)
 	candByName := grantsByRule(cand.Grants)
@@ -365,6 +394,7 @@ func diffReverseReports(live, cand rbac.ReverseReport) DryRunDiff {
 		Changed:   make([]DryRunChanged, 0),
 		Added:     make([]DryRunAdded, 0),
 		Removed:   make([]DryRunRemoved, 0),
+		Unchanged: make([]DryRunUnchanged, 0),
 	}
 	for i := range live.Grants {
 		g := &live.Grants[i]
@@ -377,6 +407,12 @@ func diffReverseReports(live, cand rbac.ReverseReport) DryRunDiff {
 		case len(lg) == 1 && len(cg) == 1:
 			if c := changedEntry(lg[0], cg[0]); c != nil {
 				diff.Changed = append(diff.Changed, *c)
+			} else {
+				// Paired 1:1 and identical on every diffable axis: not dropped
+				// but recorded so the front end can find-by-index the two
+				// embedded-report entries and compare the un-classified axes.
+				diff.Unchanged = append(diff.Unchanged, DryRunUnchanged{
+					Rule: g.Rule, LiveIndex: lg[0].Index, CandidateIndex: cg[0].Index})
 			}
 		default:
 			// Name on both sides with >1 grant on either: ambiguous pairing.
@@ -412,9 +448,13 @@ func grantsByRule(grants []rbac.ReverseGrant) map[string][]*rbac.ReverseGrant {
 	return byName
 }
 
-// changedEntry compares one exactly-paired grant across the three diffable
-// axes — outcome_shadow / outcome_enforce / unsatisfiable, the flag-agnostic
-// surface — and returns nil when the pair is identical on all three.
+// changedEntry compares one exactly-paired grant across the four diffable
+// axes — outcome_shadow / outcome_enforce / unsatisfiable (the flag-agnostic
+// outcome surface) plus org_gate.claim_key (which declared claim key the gate
+// scopes on) — and returns nil when the pair is identical on all four. The
+// claim_key axis catches a re-scope that leaves every outcome unchanged (e.g.
+// on an unlabeled tenant, where any required gate reads pass/fail_unlabeled
+// regardless of key) — which the outcome axes alone would silently drop.
 func changedEntry(live, cand *rbac.ReverseGrant) *DryRunChanged {
 	c := DryRunChanged{Rule: live.Rule, LiveIndex: live.Index, CandidateIndex: cand.Index}
 	hit := false
@@ -430,6 +470,15 @@ func changedEntry(live, cand *rbac.ReverseGrant) *DryRunChanged {
 		c.Unsatisfiable = &BoolDelta{From: live.OrgGate.Unsatisfiable, To: cand.OrgGate.Unsatisfiable}
 		hit = true
 	}
+	// Compared only when BOTH sides declare an org-scope key: a re-scope
+	// org→team is a genuine fourth-axis change. Adding/removing org-scope (one
+	// side empty) is already fully expressed by the outcome deltas, so an
+	// empty-side claim_key delta ("" → "org") would double-signal — skip it.
+	if live.OrgGate.ClaimKey != "" && cand.OrgGate.ClaimKey != "" &&
+		live.OrgGate.ClaimKey != cand.OrgGate.ClaimKey {
+		c.ClaimKey = &StringDelta{From: live.OrgGate.ClaimKey, To: cand.OrgGate.ClaimKey}
+		hit = true
+	}
 	if !hit {
 		return nil
 	}
@@ -442,13 +491,15 @@ func changedEntry(live, cand *rbac.ReverseGrant) *DryRunChanged {
 // through any identifier field a future edit adds to these structs (the
 // denylist-after-merge fail-open class this repo has been burned by). Only the
 // index/outcome-delta fields — which carry no identifiers — are copied
-// forward; Rule is dropped by construction.
+// forward; Rule AND the claim_key delta (a claim identifier) are dropped by
+// construction, never appearing in the rebuilt allowlist.
 func redactDryRunDiff(diff DryRunDiff) DryRunDiff {
 	out := DryRunDiff{
 		Alignment: diff.Alignment,
 		Changed:   make([]DryRunChanged, len(diff.Changed)),
 		Added:     make([]DryRunAdded, len(diff.Added)),
 		Removed:   make([]DryRunRemoved, len(diff.Removed)),
+		Unchanged: make([]DryRunUnchanged, len(diff.Unchanged)),
 	}
 	for i, c := range diff.Changed {
 		out.Changed[i] = DryRunChanged{
@@ -457,6 +508,7 @@ func redactDryRunDiff(diff DryRunDiff) DryRunDiff {
 			OutcomeShadow:  c.OutcomeShadow,
 			OutcomeEnforce: c.OutcomeEnforce,
 			Unsatisfiable:  c.Unsatisfiable,
+			// ClaimKey deliberately NOT copied: it is a claim identifier.
 		}
 	}
 	for i, a := range diff.Added {
@@ -464,6 +516,9 @@ func redactDryRunDiff(diff DryRunDiff) DryRunDiff {
 	}
 	for i, rm := range diff.Removed {
 		out.Removed[i] = DryRunRemoved{LiveIndex: rm.LiveIndex}
+	}
+	for i, u := range diff.Unchanged {
+		out.Unchanged[i] = DryRunUnchanged{LiveIndex: u.LiveIndex, CandidateIndex: u.CandidateIndex}
 	}
 	return out
 }

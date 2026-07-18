@@ -576,3 +576,76 @@ describe('TenantManager — LD-6 P7 org badges / access scope / callout', () => 
     expect(orgBadgeNodes().length).toBe(0);
   });
 });
+
+/**
+ * P7c follow-up #6 (#962): /api/v1/me non-ok posture → server-driven notice.
+ *
+ * A non-wildcard reader is authenticated but has no tenant access → the RBAC
+ * middleware (PlatformAdminNonOrgScoped) answers /api/v1/me with 403. Before
+ * this fix `fetchMe` only had an `if (resp.ok)` branch, so a 403 was
+ * indistinguishable from demo mode: authUser stayed null AND canWrite kept its
+ * demo default `true`, so write controls showed and only failed on click.
+ *
+ * These lock the three server-driven outcomes: 403 → "no access" notice +
+ * write controls hidden (canWrite=false); 401 → unauthenticated notice; and a
+ * rejected fetch (no endpoint) → demo mode UNCHANGED (no notice, canWrite
+ * stays true). The stub keys on URL and returns a non-ok Response shape
+ * ({ ok:false, status }) that `fetchMe` inspects — mirroring the real handler.
+ */
+describe('TenantManager — P7c /me access posture (#962 follow-up #6)', () => {
+  // /api/v1/me answers with the given HTTP status (ok=false); everything else
+  // rejects → DEMO fixtures render so the page still boots.
+  function stubFetchMeStatus(status: number) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        const u = String(url);
+        if (u.includes('/api/v1/me')) {
+          return Promise.resolve({
+            ok: false,
+            status,
+            json: () => Promise.resolve({}),
+          } as any);
+        }
+        return Promise.reject(new Error('offline test'));
+      })
+    );
+  }
+
+  it('403 → "no access" notice + write controls hidden (canWrite=false)', async () => {
+    stubFetchMeStatus(403);
+    await renderAndSettle();
+    // The server-driven notice appears (role=status), authenticated-but-no-access.
+    const notice = await screen.findByTestId('access-forbidden-notice');
+    expect(notice.getAttribute('role')).toBe('status');
+    expect(notice.textContent).toMatch(/access to any tenant|沒有任何租戶的存取權限/);
+    // 403 carries no identity payload → the authUser-gated IdentityStrip stays off.
+    expect(screen.queryByTestId('identity-strip')).toBeNull();
+    // canWrite is false → GroupSidebar's create affordance (canWrite-gated) is gone,
+    // so we never dangle a write control the caller can't actually use.
+    const sidebar = screen.getByRole('complementary', { name: 'Group management sidebar' });
+    expect(within(sidebar).queryByRole('button', { name: 'Create new group' })).toBeNull();
+  });
+
+  it('401 → unauthenticated notice (not the forbidden copy) + no write controls', async () => {
+    stubFetchMeStatus(401);
+    await renderAndSettle();
+    const notice = await screen.findByTestId('access-forbidden-notice');
+    expect(notice.getAttribute('role')).toBe('status');
+    expect(notice.textContent).toMatch(/not signed in|尚未登入/);
+    // must NOT show the "no tenant access" (403) copy — the two are distinct
+    expect(notice.textContent).not.toMatch(/access to any tenant/);
+    const sidebar = screen.getByRole('complementary', { name: 'Group management sidebar' });
+    expect(within(sidebar).queryByRole('button', { name: 'Create new group' })).toBeNull();
+  });
+
+  it('demo mode (fetch rejects) → NO notice + write controls intact (no regression)', async () => {
+    // File-level beforeEach already stubs every fetch to reject → demo mode.
+    await renderAndSettle();
+    // No server said 403/401, so the notice must not appear…
+    expect(screen.queryByTestId('access-forbidden-notice')).toBeNull();
+    // …and the demo default canWrite=true keeps the write affordances live.
+    const sidebar = screen.getByRole('complementary', { name: 'Group management sidebar' });
+    expect(within(sidebar).getByRole('button', { name: 'Create new group' })).toBeInTheDocument();
+  });
+});

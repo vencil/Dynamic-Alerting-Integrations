@@ -13,6 +13,6 @@
     "rule-pack-detail", "rule-pack-matrix", "rule-pack-selector",
     "runbook-viewer", "schema-explorer", "self-service-portal",
     "simulate-preview", "template-gallery", "threshold-calculator", "threshold-heatmap",
-    "recipe-builder"
+    "recipe-builder", "access-report-dryrun"
   ]
 }
