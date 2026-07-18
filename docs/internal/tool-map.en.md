@@ -128,6 +128,7 @@ lang: en
 | `sync_schema.py` | Check tenant reserved-key drift across Schema / Go / Python. |
 | `sync_tool_registry.py` | 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP + JSX frontmatter |
 | `tenant_verify.py` | Verify a tenant's effective config — print merged_hash and source_hash. |
+| `verify_diff.py` | diff-scoped Python 測試選擇器（測試 ROI 第六輪 W6-E MVP） |
 | `waveform_compile.py` | fault-waveform pack 驗證 / 回讀 / 物化編譯器（ADR-030 決策層驗證 PR-1） |
 | `waveform_score.py` | temporal-match + episode 對帳 + catch-rate 報告器（ADR-030 PR-3） |
 
