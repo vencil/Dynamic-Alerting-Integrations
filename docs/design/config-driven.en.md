@@ -542,7 +542,23 @@ inhibit_rules:
     target_matchers:
       - severity="critical"
     equal: ["tenant"]
+
+  # Infra-outage → SLO burn notification-storm suppression (opt-in pattern, NOT
+  # shipped by default; ADR-031 guardrail 3). During a global infra incident the
+  # per-tenant SLO burn alerts are symptoms — use the infra alert as the source
+  # to suppress their notification fan-out. Measurement is unaffected: inhibit
+  # only blocks notifications; recording rules and ALERTS evaluation continue,
+  # so error-budget burn stays fully recorded in the TSDB.
+  - source_matchers:
+      - alertname="MassExporterOutage"   # substitute your environment's infra-outage alert/sentinel
+    target_matchers:
+      - slo_burn="true"                  # discriminator label emitted by the slo_burn_rate recipe
+    # deliberately NO equal: a global infra incident suppresses burn notifications for ALL tenants
 ```
+
+> **Why the infra-outage suppression is not shipped by default**: whether SLO pages should go quiet during an infra incident is an **organizational decision** — some teams want them firing regardless (an SLO is the user's perspective; users keep suffering until the infra is fixed), others treat them as duplicate noise. The platform's stance is to document the pattern and structurally provide the `slo_burn="true"` discriminator label ([ADR-031](../adr/031-slo-burn-rate-recipe.md) guardrail 3), leaving the mounting to the operator per organizational policy. The source alert need not be a sentinel — any alert with "global infra incident" semantics (such as `MassExporterOutage`) works as the source.
+>
+> ⚠️ **Interaction with the inhibit-semantics gate**: the two gated AM configs in this repo (try-local and the k8s configmap) are enforced by `tests/alertmanager-inhibit` to have **every inhibit rule tenant-scoped** (`tenant` in `equal:`, or both sides pinning the same tenant literal). This pattern is deliberately global, and its source is a platform-level alert **without a `tenant` label** — `equal: ["tenant"]` would never hold (Alertmanager's equal semantics: source lacks the label while the target has it), and same-tenant pins on both sides are impossible — so it is **structurally inexpressible in tenant-scoped form**. Use it as-is in your own Alertmanager deployment; mounting it into this repo's gated configs first requires an explicit (audited) exemption in that gate — which is precisely the "not shipped by default, mount only after an organizational decision" stance, mechanically enforced.
 
 ### 2.8 Severity Dedup
 

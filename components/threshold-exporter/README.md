@@ -206,15 +206,17 @@ tenants:
 | `absence` | metric 在窗口內消失（不需 threshold） |
 | `p99_latency` | p99 延遲超過閾值 |
 | `forecast` | 線性預測在 `horizon` 內會跨過閾值（容量耗盡預警） |
+| `slo_burn_rate` | SLO burn-rate：宣告 `objective` 即編譯出 fast(critical)/slow(warning) 雙檔多窗告警（需 `denominator_metric`；[ADR-031](../../docs/adr/031-slo-burn-rate-recipe.md)） |
 
 要點：
 
 - 嚴重度用 `threshold: "值:severity"`（`warning` / `critical`，省略為 warning）。
+- `slo_burn_rate` 例外：**不填 `threshold`、不填 `window`**，改填 `objective: "99.9"`（SLO 目標百分比，字串、(0,100) 開區間；`"disable"` 三態關閉）；severity 由 recipe 固定（fast→critical、slow→warning）。選用 `slo_period: 28d|30d`（預設 30d，只影響倍率、改值不換 shape）與 `min_events`（預設 10，fast 短窗壞事件絕對數下限——低流量防誤報樓層）。
 - 選用 `selectors:`（精確）/ `selectors_re:`（regex）加 label 過濾；保留 label（`tenant` / `severity` / `__name__` 等）不可用。
 - 輸出為 `user_threshold{component="custom", …}`；解析失敗的項目會被丟棄並計入 `da_custom_alert_parse_errors`（fail-loud）。
-- 每租戶有 recipe 數量上限（成本護欄）。
+- 每租戶有 recipe 數量上限（成本護欄；`slo_burn_rate` 一條宣告展開 critical+warning 兩個 severity、計 2）。
 
-> 用 portal 的 Recipe Builder 可用表單產生上面這段 YAML，不必手寫。完整 recipe 參數與生命週期見 [架構與設計](../../docs/architecture-and-design.md) 及 [ADR-024](../../docs/adr/024-version-aware-threshold-via-dimensional-label.md)。
+> 用 portal 的 Recipe Builder 可用表單產生上面這段 YAML，不必手寫（`slo_burn_rate` 表單精靈規劃中，目前走 YAML）。完整 recipe 參數與生命週期見 [架構與設計](../../docs/architecture-and-design.md)、[ADR-024](../../docs/adr/024-version-aware-threshold-via-dimensional-label.md) 及 [ADR-031](../../docs/adr/031-slo-burn-rate-recipe.md)（slo_burn_rate）。
 
 ---
 

@@ -128,10 +128,28 @@ This document is generic guidance; the platform-side mapping reuses the series' 
 | Guideline | This platform | Mechanism and honest qualifier |
 |---|---|---|
 | SLI ratio declaration (zero PromQL for tenants) | ⚙️ | The `ratio` recipe in custom alerts — declare the numerator/denominator counters and it compiles into a ratio alert with a division-by-zero guard; **single window only** |
-| Multi-window burn-rate alerting | ⚙️ | The `slo_burn_rate` recipe in custom alerts ([ADR-031](adr/031-slo-burn-rate-recipe.md)) — declare an `objective` and it compiles into this document's §4 recipe: fast/slow two-tier multi-window AND alerts (multipliers derived from `slo_period`, with a low-traffic `min_events` floor); latency/freshness SLIs are not yet supported |
+| Multi-window burn-rate alerting | ⚙️ | The `slo_burn_rate` recipe in custom alerts ([ADR-031](adr/031-slo-burn-rate-recipe.md)) — declare an `objective` and it compiles into this document's §4 recipe: fast/slow two-tier multi-window AND alerts (multipliers derived from `slo_period`, with a low-traffic `min_events` floor); latency/freshness SLIs are not yet supported. Expanded in §5.1 |
 | Threshold science (data-driven starting points) | ⚙️ | [`da-tools threshold-recommend`](cli-reference.en.md#threshold-recommend) — recommendation engine based on historical P50/P95/P99; works on resource-class pack thresholds — the starting point for an SLO objective still comes from querying your historical SLI (§2) |
 | Historical SLI performance queries (the scientific starting point for SLOs) | 📖 | Any Prometheus-compatible backend's range query will do; the platform does nothing special here |
 | Error-budget policy (freeze/release) | 📖 | An organizational decision — a tool can give you the balance, not the authority |
+
+### 5.1 Turning the §4 Recipe into One Declaration: `slo_burn_rate`
+
+On this platform, the generic shape of [§4.3](#43-the-generic-shape-tool-agnostic-pseudo-promql) collapses into a single declaration — the tenant supplies only the SLO's **semantics** (which ratio, what target); the mechanical parts (multi-window expansion, multiplier conversion, AND composition) are the compiler's job:
+
+```yaml
+_custom_alerts:
+  - recipe: slo_burn_rate
+    name: checkout_availability
+    metric: checkout_requests_errors_total        # bad-events counter
+    denominator_metric: checkout_requests_total   # total-events counter
+    objective: "99.9"                             # SLO target (percentage, string)
+    slo_period: 30d                               # budget window (28d|30d, default 30d)
+```
+
+The compiler expands it into the full §4 recipe: 4-window SLI recordings (1h / 5m / 6h / 30m) plus fast (1h∧5m, 14.4×, critical) / slow (6h∧30m, 6×, warning) two-tier alerts, with the multipliers derived from `slo_period` automatically (28d → 13.44× / 5.6×, per the derivation in §4.2). The `N_min` line of the §4.3 pseudo-PromQL gets a name, a default, and a slow-tier conversion here: `min_events` (default 10) — the fast tier's 5m short window must exceed it in absolute bad events before firing, and the slow-tier floor is derived by the compiler proportionally to window length (×6 over 30m, which is why both tiers share the same event rate) — 1 error out of 2 requests is a 50% error rate, but it should not wake anyone up.
+
+Three honest boundaries: v1 supports availability / error-ratio SLIs only (the declaration interface cannot express latency/freshness — forcing them in would produce alerts that silently never fire; the instrumentation-first path is in the [recipe docs](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/recipes/README.md), in Chinese); both tiers share the same event-rate floor of >2 bad events/min, so a **sustained** low-traffic service triggers neither tier — lower `min_events` (best set once at the domain layer, avoiding the cap and shape-fork cost of per-tenant overrides) or use the alternative paths of §4.2; and neither changing `objective` nor switching `slo_period` changes the rule shape — "adjusting the target" is a **shape**-zero-risk operation (the firing surface of course follows the value), which is precisely the declarative dividend.
 
 ## 6. The Takeaway Checklist
 

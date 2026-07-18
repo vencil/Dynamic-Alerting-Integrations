@@ -522,7 +522,21 @@ inhibit_rules:
     target_matchers:
       - severity="critical"
     equal: ["tenant"]
+
+  # Infra-outage → SLO burn 通知風暴抑制（選用 pattern，平台不預設出貨；ADR-031 護欄 3）
+  # infra 全局事故時，per-tenant 的 SLO burn 告警是「症狀」——以 infra 告警為 source
+  # 抑制它們的通知 fan-out。量測不受影響：inhibit 只擋通知，recording rules 與
+  # ALERTS 評估照常，錯誤預算燒蝕在 TSDB 全程留痕。
+  - source_matchers:
+      - alertname="MassExporterOutage"   # 換成你環境的 infra-outage 告警／哨兵
+    target_matchers:
+      - slo_burn="true"                  # slo_burn_rate recipe 產出的 discriminator 標籤
+    # 刻意不設 equal：infra 全局事故抑制「所有租戶」的 burn 通知
 ```
+
+> **為什麼 infra-outage 抑制不預設出貨**：infra 事故期間 SLO page 該不該靜音是**組織決策**——有的團隊要它照響（SLO 是使用者視角，infra 修好前使用者仍在受害）；有的團隊視它為重複噪音。平台的立場是把 pattern 文件化、把 `slo_burn="true"` discriminator 標籤結構化備好（[ADR-031](../adr/031-slo-burn-rate-recipe.md) 護欄 3），由 operator 依組織政策自行掛載。source 告警不必是 sentinel——任何「infra 全局事故」語意的告警（如 `MassExporterOutage`）都可當 source。
+>
+> ⚠️ **與抑制語意 gate 的交互**：本 repo 內兩份被 gate 的 AM config（try-local 與 k8s configmap）由 `tests/alertmanager-inhibit` 強制「每條 inhibit rule 必須 tenant-scoped」（`tenant` 入 `equal:`，或兩側釘同一租戶）。本 pattern 刻意全域、且 source 為平台級告警**沒有 `tenant` label**——`equal: ["tenant"]` 會因 source 缺該 label 而永不成立（Alertmanager 的 equal 語意）、兩側同租戶 pin 亦不可能——故它**結構上無法以 tenant-scoped 形式表達**。在你自己的 Alertmanager 部署照用即可；要掛進本 repo 的 gated config，須先為此 pattern 在該 gate 加上顯式（audited）豁免——這正是「不預設出貨、組織拍板後才掛」的另一層機械強制。
 
 ### 2.8 Severity Dedup（嚴重度去重）
 
