@@ -25,7 +25,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"github.com/vencil/tenant-api/internal/confd"
 )
 
 // ListTenantIDs returns the tenant IDs in configDir — one per non-hidden,
@@ -34,8 +35,9 @@ import (
 // set of files that count as tenants (and skip _defaults.yaml, _groups.yaml, the
 // _account_registry.yaml itself, etc.).
 //
-// Shared by the backfill handler and the startup integrity guard so the
-// "what counts as a tenant" rule lives in one place (no second copy to drift).
+// Shared by the backfill handler and the startup integrity guard; the
+// "what counts as a tenant file" rule itself lives once in package confd,
+// which every scanner and ValidateTenantID share (no copy to drift).
 func ListTenantIDs(configDir string) ([]string, error) {
 	entries, err := os.ReadDir(configDir)
 	if err != nil {
@@ -43,14 +45,13 @@ func ListTenantIDs(configDir string) ([]string, error) {
 	}
 	ids := make([]string, 0, len(entries))
 	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || strings.HasPrefix(name, "_") || strings.HasPrefix(name, ".") {
+		if e.IsDir() {
 			continue
 		}
-		if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+		id, ok := confd.TenantIDFromFile(e.Name())
+		if !ok {
 			continue
 		}
-		id := strings.TrimSuffix(strings.TrimSuffix(name, ".yaml"), ".yml")
 		ids = append(ids, id)
 	}
 	return ids, nil

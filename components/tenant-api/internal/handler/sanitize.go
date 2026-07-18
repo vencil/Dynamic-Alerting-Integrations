@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/vencil/tenant-api/internal/confd"
 )
 
 // ValidateTenantID checks that a tenant ID is safe for use as a filename.
@@ -22,9 +24,15 @@ func ValidateTenantID(id string) error {
 	if filepath.Base(id) != id {
 		return fmt.Errorf("tenant ID must be a simple filename")
 	}
-	// Reject hidden files and reserved prefixes handled by the scanner
-	if strings.HasPrefix(id, ".") {
-		return fmt.Errorf("tenant ID must not start with '.'")
+	// The id must name a file the conf.d scanners would pick up as a tenant.
+	// Gating on the SAME predicate the scanners skip on (confd) keeps the
+	// write-accepted namespace structurally equal to the scanned one: a
+	// reserved control file (_defaults.yaml, _rbac.yaml, _domain_policy.yaml,
+	// ...) can never be addressed as a tenant — a writable "_" id would let a
+	// caller overwrite platform config (e.g. blank out the domain policy gate)
+	// — and any future scanner skip rule propagates here for free.
+	if !confd.IsTenantConfigFile(id + ".yaml") {
+		return fmt.Errorf("tenant ID must not name a reserved control file")
 	}
 	return nil
 }

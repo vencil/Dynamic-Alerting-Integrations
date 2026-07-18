@@ -5,10 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/federation/token"
 )
 
@@ -81,8 +81,8 @@ func scanKnownTenants(configDir string) (map[string]struct{}, error) {
 		if e.IsDir() {
 			continue
 		}
-		id, ok := tenantIDFromFile(e.Name())
-		if !ok || strings.HasPrefix(e.Name(), "_") {
+		id, ok := confd.TenantIDFromFile(e.Name())
+		if !ok {
 			continue
 		}
 		known[id] = struct{}{}
@@ -107,25 +107,13 @@ func scanSubsetTenants(configDir string) ([]string, error) {
 		if e.IsDir() {
 			continue
 		}
-		if id, ok := tenantIDFromFile(e.Name()); ok {
+		if id, ok := confd.TenantIDFromFile(e.Name()); ok {
 			out = append(out, id)
 		}
 	}
 	return out, nil
 }
 
-// tenantIDFromFile maps a YAML filename to its tenant id (filename minus
-// the .yaml/.yml extension), reporting false for non-YAML files.
-func tenantIDFromFile(name string) (string, bool) {
-	switch {
-	case strings.HasSuffix(name, ".yaml"):
-		return strings.TrimSuffix(name, ".yaml"), true
-	case strings.HasSuffix(name, ".yml"):
-		return strings.TrimSuffix(name, ".yml"), true
-	default:
-		return "", false
-	}
-}
 
 // Detector periodically reports federation artifacts left behind
 // by an incomplete tenant offboarding — live token Records and
