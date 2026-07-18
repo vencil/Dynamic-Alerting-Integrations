@@ -634,3 +634,234 @@ func TestDryRun_MetaAudit(t *testing.T) {
 		}
 	}
 }
+
+// TestDryRun_UnchangedBucket pins the closed empty-diff blind spot: a rule
+// granted 1:1 on BOTH sides and identical on every diffable axis is NOT
+// dropped — it lands in diff.unchanged with its live/candidate index so the
+// front end can find-by-index and compare the un-classified axes (WHO /
+// permissions). On the labeled tenant the three untouched rules
+// (platform-admins, org-admins, readers — config order 0,1,2) are unchanged
+// while ops/pinned still land in changed and old/new-reader in removed/added.
+func TestDryRun_UnchangedBucket(t *testing.T) {
+	t.Parallel()
+	d := newDryRunFixture(t)
+
+	w := serveDryRun(t, d, dryrunTenantLabeled, "", "dryrun-platform-admins", "",
+		dryRunBody(t, dryrunCandidateRBACYAML))
+	resp := decodeDryRun(t, w)
+
+	want := []DryRunUnchanged{
+		{Rule: "dryrun-platform-admins", LiveIndex: 0, CandidateIndex: 0},
+		{Rule: "dryrun-org-admins", LiveIndex: 1, CandidateIndex: 1},
+		{Rule: "dryrun-readers", LiveIndex: 2, CandidateIndex: 2},
+	}
+	if len(resp.Diff.Unchanged) != len(want) {
+		t.Fatalf("unchanged = %d entries, want %d (untouched rules, live order): %+v",
+			len(resp.Diff.Unchanged), len(want), resp.Diff.Unchanged)
+	}
+	for i, u := range want {
+		if resp.Diff.Unchanged[i] != u {
+			t.Errorf("unchanged[%d] = %+v, want %+v", i, resp.Diff.Unchanged[i], u)
+		}
+	}
+	// The unchanged rules must NOT also appear as changed (no double-classify).
+	for _, c := range resp.Diff.Changed {
+		if c.Rule == "dryrun-platform-admins" || c.Rule == "dryrun-org-admins" || c.Rule == "dryrun-readers" {
+			t.Errorf("rule %q double-classified as changed AND unchanged", c.Rule)
+		}
+	}
+}
+
+// TestDryRun_ChangedGolden_ClaimKeyAxis pins the fourth diffable axis
+// (org_gate.claim_key): a same-name pair re-scoped from one declared claim key
+// to another, evaluated against an UNLABELED tenant, leaves the three outcome
+// axes identical (both read pass/fail_unlabeled, unsatisfiable false) — so the
+// claim_key axis is the ONLY thing that marks the pair changed. Without it the
+// re-scope would silently drop into unchanged.
+func TestDryRun_ChangedGolden_ClaimKeyAxis(t *testing.T) {
+	t.Parallel()
+	const liveYAML = `groups:
+  - name: dryrun-platform-admins
+    tenants: ["*"]
+    permissions: [admin]
+  - name: dryrun-scoped
+    tenants: ["db-dryrun-*"]
+    permissions: [read]
+    org-scope: org
+`
+	const candYAML = `groups:
+  - name: dryrun-platform-admins
+    tenants: ["*"]
+    permissions: [admin]
+  - name: dryrun-scoped
+    tenants: ["db-dryrun-*"]
+    permissions: [read]
+    org-scope: team
+`
+	claimHeaders := map[string]string{"org": dryrunOrgClaimHeader, "team": "X-Dryrun-Team"}
+	d := &Deps{
+		RBAC: newRBACManagerWithClaims(t, liveYAML, claimHeaders),
+		TenantOrg: tenantorg.NewForTest(&tenantorg.Config{TenantOrgs: map[string][]string{
+			dryrunTenantUnlabeled: {},
+		}}),
+		ClaimHeaders: claimHeaders,
+	}
+
+	w := serveDryRun(t, d, dryrunTenantUnlabeled, "", "dryrun-platform-admins", "",
+		dryRunBody(t, candYAML))
+	resp := decodeDryRun(t, w)
+
+	if len(resp.Diff.Changed) != 1 {
+		t.Fatalf("changed = %d entries, want 1 (dryrun-scoped claim-key flip): %+v",
+			len(resp.Diff.Changed), resp.Diff.Changed)
+	}
+	c := resp.Diff.Changed[0]
+	if c.Rule != "dryrun-scoped" || c.LiveIndex != 1 || c.CandidateIndex != 1 {
+		t.Errorf("changed entry = %+v, want dryrun-scoped live_index=1 candidate_index=1", c)
+	}
+	if c.ClaimKey == nil || c.ClaimKey.From != "org" || c.ClaimKey.To != "team" {
+		t.Errorf("claim_key delta = %+v, want org → team", c.ClaimKey)
+	}
+	if c.OutcomeShadow != nil || c.OutcomeEnforce != nil || c.Unsatisfiable != nil {
+		t.Errorf("outcome deltas = %+v/%+v/%+v, want all absent (only claim_key changed on an unlabeled tenant)",
+			c.OutcomeShadow, c.OutcomeEnforce, c.Unsatisfiable)
+	}
+}
+
+// TestDryRun_RedactedStripsClaimKey pins that claim_key (a claim identifier) is
+// stripped from the redacted view. The full view must first carry the delta, or
+// the redacted assertion would be vacuous (the exact gap the adversarial review
+// flagged: the redact rebuild omits ClaimKey by construction, but no test drove a
+// populated one, so a regression that copied it forward would stay green).
+func TestDryRun_RedactedStripsClaimKey(t *testing.T) {
+	t.Parallel()
+	const liveYAML = `groups:
+  - name: dryrun-platform-admins
+    tenants: ["*"]
+    permissions: [admin]
+  - name: dryrun-scoped
+    tenants: ["db-dryrun-*"]
+    permissions: [read]
+    org-scope: org
+`
+	const candYAML = `groups:
+  - name: dryrun-platform-admins
+    tenants: ["*"]
+    permissions: [admin]
+  - name: dryrun-scoped
+    tenants: ["db-dryrun-*"]
+    permissions: [read]
+    org-scope: team
+`
+	claimHeaders := map[string]string{"org": dryrunOrgClaimHeader, "team": "X-Dryrun-Team"}
+	d := &Deps{
+		RBAC: newRBACManagerWithClaims(t, liveYAML, claimHeaders),
+		TenantOrg: tenantorg.NewForTest(&tenantorg.Config{TenantOrgs: map[string][]string{
+			dryrunTenantUnlabeled: {},
+		}}),
+		ClaimHeaders: claimHeaders,
+	}
+	// Full view must carry the claim_key delta, else the redacted check is vacuous.
+	full := decodeDryRun(t, serveDryRun(t, d, dryrunTenantUnlabeled, "",
+		"dryrun-platform-admins", "", dryRunBody(t, candYAML)))
+	if len(full.Diff.Changed) != 1 || full.Diff.Changed[0].ClaimKey == nil {
+		t.Fatalf("full view must carry a claim_key delta: %+v", full.Diff.Changed)
+	}
+	// Redacted: claim_key MUST be stripped; index survives.
+	red := decodeDryRun(t, serveDryRun(t, d, dryrunTenantUnlabeled, "?view=redacted",
+		"dryrun-platform-admins", "", dryRunBody(t, candYAML)))
+	if len(red.Diff.Changed) != 1 {
+		t.Fatalf("redacted changed = %d, want 1", len(red.Diff.Changed))
+	}
+	if red.Diff.Changed[0].ClaimKey != nil {
+		t.Errorf("redacted claim_key = %+v, want nil (claim identifier must be stripped)",
+			red.Diff.Changed[0].ClaimKey)
+	}
+	if red.Diff.Changed[0].Rule != "" {
+		t.Errorf("redacted rule = %q, want empty (stripped)", red.Diff.Changed[0].Rule)
+	}
+	if red.Diff.Changed[0].LiveIndex != 1 {
+		t.Errorf("redacted live_index = %d, want 1 (index survives redaction)", red.Diff.Changed[0].LiveIndex)
+	}
+}
+
+// TestDryRun_UnchangedIndexIsConfigPosition pins that unchanged entries carry the
+// cfg.Groups CONFIG position (what the front end find-by-indexes the embedded
+// report by), NOT the grants-slice offset. The adversarial review flagged that
+// every existing fixture has all rules matching the tenant (offset == config
+// index), so a regression to the live-loop counter would ship undetected.
+func TestDryRun_UnchangedIndexIsConfigPosition(t *testing.T) {
+	t.Parallel()
+	// dryrun-other-tenant (cfg[1]) does NOT grant db-dryrun-* → skipped, so
+	// dryrun-reader is cfg.Groups[2] but grants[1] — offset diverges from index.
+	const yaml = `groups:
+  - name: dryrun-platform-admins
+    tenants: ["*"]
+    permissions: [admin]
+  - name: dryrun-other-tenant
+    tenants: ["other-team-*"]
+    permissions: [read]
+  - name: dryrun-reader
+    tenants: ["db-dryrun-*"]
+    permissions: [read]
+`
+	d := &Deps{
+		RBAC: newRBACManagerWithClaims(t, yaml, nil),
+		TenantOrg: tenantorg.NewForTest(&tenantorg.Config{TenantOrgs: map[string][]string{
+			dryrunTenantUnlabeled: {},
+		}}),
+	}
+	// candidate == live → matching rules are all UNCHANGED.
+	resp := decodeDryRun(t, serveDryRun(t, d, dryrunTenantUnlabeled, "",
+		"dryrun-platform-admins", "", dryRunBody(t, yaml)))
+	var reader *DryRunUnchanged
+	for i := range resp.Diff.Unchanged {
+		if resp.Diff.Unchanged[i].Rule == "dryrun-reader" {
+			reader = &resp.Diff.Unchanged[i]
+		}
+	}
+	if reader == nil {
+		t.Fatalf("no dryrun-reader in unchanged: %+v", resp.Diff.Unchanged)
+	}
+	if reader.LiveIndex != 2 || reader.CandidateIndex != 2 {
+		t.Errorf("unchanged dryrun-reader index = live %d/cand %d, want 2/2 "+
+			"(config position, NOT slice offset 1)", reader.LiveIndex, reader.CandidateIndex)
+	}
+}
+
+// TestDryRun_RedactedUnchanged pins the redacted projection of the unchanged
+// bucket: the rule name is stripped (like every other bucket) while the
+// find-by-index coordinates survive — the whole reason unchanged exists is to
+// let the redacted-audience front end line up the two embedded reports.
+func TestDryRun_RedactedUnchanged(t *testing.T) {
+	t.Parallel()
+	d := newDryRunFixture(t)
+
+	w := serveDryRun(t, d, dryrunTenantLabeled, "?view=redacted", "dryrun-platform-admins", "",
+		dryRunBody(t, dryrunCandidateRBACYAML))
+	resp := decodeDryRun(t, w)
+
+	want := []DryRunUnchanged{
+		{LiveIndex: 0, CandidateIndex: 0},
+		{LiveIndex: 1, CandidateIndex: 1},
+		{LiveIndex: 2, CandidateIndex: 2},
+	}
+	if len(resp.Diff.Unchanged) != len(want) {
+		t.Fatalf("redacted unchanged = %d entries, want %d: %+v",
+			len(resp.Diff.Unchanged), len(want), resp.Diff.Unchanged)
+	}
+	for i, u := range want {
+		if resp.Diff.Unchanged[i].Rule != "" {
+			t.Errorf("redacted unchanged[%d] still carries rule %q", i, resp.Diff.Unchanged[i].Rule)
+		}
+		if resp.Diff.Unchanged[i] != u {
+			t.Errorf("redacted unchanged[%d] = %+v, want %+v (indexes must survive)", i, resp.Diff.Unchanged[i], u)
+		}
+	}
+	// No unchanged rule name leaks into the serialized body.
+	for _, tok := range []string{"dryrun-platform-admins", "dryrun-org-admins", "dryrun-readers"} {
+		if strings.Contains(w.Body.String(), tok) {
+			t.Errorf("redacted body leaks unchanged rule identifier %q", tok)
+		}
+	}
+}
