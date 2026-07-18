@@ -916,6 +916,9 @@ class TestMainExitCodes:
              "--old", "old_metric", "--new", "new_metric",
              "--prometheus", "http://127.0.0.1:1",
              "-o", str(tmp_path / "out")],
-            capture_output=True, text=True, timeout=60,
+            # encoding= 顯式 UTF-8：child 經 try_utf8_stdout() 輸出 UTF-8
+            # （✅/❌ emoji），Windows host cp950 預設解碼會讓 reader thread
+            # 拋 PytestUnhandledThreadExceptionWarning。
+            capture_output=True, text=True, encoding="utf-8", timeout=60,
         )
         assert proc.returncode == 2, (proc.stdout, proc.stderr)
