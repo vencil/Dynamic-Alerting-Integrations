@@ -43,8 +43,11 @@ on:
     # Monthly baseline refresh — day 2, 04:45 UTC. Slot chosen clear of
     # the existing repo crons (nightlies at 02:00 ×3 / 03:00 / 03:23 /
     # 16:00 / 17:00 / 18:00, weeklies at 06:17 Mon / 12:00 Sun, daily
-    # 06:17) so the compose-heavy job never contends for runners with
-    # another scheduled workflow.
+    # 06:17). GitHub-hosted jobs each run on their own VM, so this is
+    # NOT about runner contention — a clear slot just stays under the
+    # org-level concurrent-job cap during cron bursts and keeps
+    # scheduled-run timelines easy to read (conservative convention,
+    # not a hard requirement).
     - cron: '45 4 2 * *'
   workflow_dispatch:
     inputs:

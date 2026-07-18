@@ -14,18 +14,23 @@
 # file replaces the base one; bench-results stays a bind mount
 # (few files, host needs the JSONs).
 #
-# Usage (full sequence in README.md §Windows host direct run):
+# Usage — Git Bash shown; PowerShell variant (no inline env prefix,
+# `${PWD}\...` host path) in README.md §Windows host direct run:
 #
 #   docker volume create e2ebench-fixture
-#   docker run --rm \
+#   MSYS_NO_PATHCONV=1 docker run --rm \
 #       -v e2ebench-fixture:/dst \
-#       -v ./fixture/active/conf.d:/src \
+#       -v "$(pwd -W)/fixture/active/conf.d:/src" \
 #       alpine sh -c 'cp -r /src/. /dst/'
 #   WAIT_SERVICES_TIMEOUT_S=900 COUNT=30 docker compose \
 #       -f docker-compose.yml -f docker-compose.volume-override.yml \
 #       up --build --abort-on-container-exit driver
 #   docker compose -f docker-compose.yml -f docker-compose.volume-override.yml down -v
 #   docker volume rm e2ebench-fixture
+#
+# (MSYS_NO_PATHCONV=1: Git Bash otherwise rewrites the /dst and /src
+# container paths into Windows paths; `pwd -W` yields C:/... which
+# Docker accepts verbatim.)
 services:
   threshold-exporter:
     volumes:
