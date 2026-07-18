@@ -470,6 +470,17 @@ definitions:
     properties:
       candidate_index:
         type: integer
+      claim_key:
+        allOf:
+        - $ref: '#/definitions/internal_handler.StringDelta'
+        description: |-
+          ClaimKey is the fourth axis: org_gate.claim_key (rule.OrgScope). A
+          same-name pair that re-scopes to a different declared claim key changes
+          here even when the three outcome axes are identical (e.g. an unlabeled
+          tenant, where every required gate reads pass/fail_unlabeled regardless of
+          which key). The claim key IS a claim identifier, so it is DROPPED in the
+          redacted view (mirroring ReverseOrgGate.ClaimKey) — the redact rebuild's
+          allowlist simply never copies it forward.
       live_index:
         type: integer
       outcome_enforce:
@@ -497,6 +508,10 @@ definitions:
       removed:
         items:
           $ref: '#/definitions/internal_handler.DryRunRemoved'
+        type: array
+      unchanged:
+        items:
+          $ref: '#/definitions/internal_handler.DryRunUnchanged'
         type: array
     type: object
   internal_handler.DryRunRemoved:
@@ -530,6 +545,16 @@ definitions:
         type: string
       schema_version:
         type: integer
+    type: object
+  internal_handler.DryRunUnchanged:
+    properties:
+      candidate_index:
+        type: integer
+      live_index:
+        type: integer
+      rule:
+        description: stripped in the redacted view
+        type: string
     type: object
   internal_handler.GroupBatchRequest:
     properties:
