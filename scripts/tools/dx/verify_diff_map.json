@@ -622,7 +622,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "bf4bf2388a2b10bbdb4fd30f031d11f05cf522c3600859c8bacbce4d17c97ee8",
+ "source_digest": "3e0b8f8a01066ac865649bddb75354ba4551461d8ed3c1f1528603a84bae4fdc",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1194,6 +1194,7 @@
   ],
   "helm/da-portal/values.yaml": [
    "tests/helm/test_portal_relay_token_guard.py",
+   "tests/lint/test_check_admin_config_schema.py",
    "tests/lint/test_check_cross_ns_url_consistency.py"
   ],
   "helm/federation-gateway": [
@@ -1231,6 +1232,9 @@
    "tests/helm/test_oauth2_gitlab_profile.py",
    "tests/helm/test_single_writer_guard.py"
   ],
+  "helm/tenant-api/templates/configmap-rbac.yaml": [
+   "tests/lint/test_check_admin_config_schema.py"
+  ],
   "helm/tenant-api/templates/deployment.yaml": [
    "tests/helm/test_human_socket_guard.py",
    "tests/helm/test_identity_claim_headers_guard.py",
@@ -1247,6 +1251,7 @@
    "tests/helm/test_human_socket_guard.py",
    "tests/helm/test_identity_claim_headers_guard.py",
    "tests/helm/test_machine_identity_guard.py",
+   "tests/lint/test_check_admin_config_schema.py",
    "tests/lint/test_check_dev_bypass_manifest.py",
    "tests/lint/test_check_single_writer_invariant.py"
   ],
@@ -1282,7 +1287,8 @@
    "tests/shared/test_vector_projection_vrl.py"
   ],
   "helm/vector/values.yaml": [
-   "tests/dx/test_log_visibility_catalogue.py"
+   "tests/dx/test_log_visibility_catalogue.py",
+   "tests/lint/test_check_admin_config_schema.py"
   ],
   "helm/victorialogs": [
    "tests/shared/test_helm_chart_log_aggregation.py",
@@ -1342,6 +1348,9 @@
   ],
   "k8s/03-monitoring/validatingadmissionpolicy-projection-gate.yaml": [
    "tests/shared/test_projection_gate_vap.py"
+  ],
+  "k8s/04-tenant-api/configmap-rbac.yaml": [
+   "tests/lint/test_check_admin_config_schema.py"
   ],
   "k8s/04-tenant-api/deployment.yaml": [
    "tests/lint/test_check_k8s_manifests.py",
