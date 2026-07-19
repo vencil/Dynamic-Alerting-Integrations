@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"time"
 
@@ -237,7 +236,7 @@ func (s *configMapStore) list(tenantID string, now time.Time) ([]Record, error) 
 			out = append(out, r)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].IssuedAt.Before(out[j].IssuedAt) })
+	sortRecordsByIssuedAt(out)
 	return out, nil
 }
 
@@ -256,7 +255,7 @@ func (s *configMapStore) listAll(now time.Time) ([]Record, error) {
 			out = append(out, r)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].IssuedAt.Before(out[j].IssuedAt) })
+	sortRecordsByIssuedAt(out)
 	return out, nil
 }
 

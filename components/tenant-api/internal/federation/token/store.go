@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"sort"
 	"sync"
 	"time"
 )
@@ -115,7 +114,7 @@ func (s *store) list(tenantID string, now time.Time) ([]Record, error) {
 			out = append(out, r)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].IssuedAt.Before(out[j].IssuedAt) })
+	sortRecordsByIssuedAt(out)
 	return out, nil
 }
 
@@ -131,7 +130,7 @@ func (s *store) listAll(now time.Time) ([]Record, error) {
 			out = append(out, r)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].IssuedAt.Before(out[j].IssuedAt) })
+	sortRecordsByIssuedAt(out)
 	return out, nil
 }
 
@@ -172,7 +171,7 @@ func (s *store) flushLocked() error {
 	for _, r := range s.recs {
 		recs = append(recs, r)
 	}
-	sort.Slice(recs, func(i, j int) bool { return recs[i].IssuedAt.Before(recs[j].IssuedAt) })
+	sortRecordsByIssuedAt(recs)
 	data, err := json.MarshalIndent(recs, "", "  ")
 	if err != nil {
 		return err

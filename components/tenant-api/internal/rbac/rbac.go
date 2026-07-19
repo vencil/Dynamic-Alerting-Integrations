@@ -395,57 +395,70 @@ func detectNullMatchBlocks(data []byte) error {
 //     from an authoring mistake and would otherwise be silently unmatchable.
 func validateConfig(cfg *RBACConfig, declaredClaimKeys map[string]string) error {
 	for i := range cfg.Groups {
-		rule := &cfg.Groups[i]
-		// Tenant patterns are validated for EVERY rule (independently of the
-		// match block, exactly like org-scope below): a rule can be legacy
-		// name-matched AND still carry tenants. The grammar is "*" (full
-		// wildcard), "<literal>-*" (single trailing "*") or an exact id. A
-		// malformed pattern must fail loud: "**" collapses to prefix "*" in
-		// tenantMatches and would HasPrefix-collide with the platform-scope "*"
-		// gate query — passing platform gates while granting zero per-tenant
-		// access (a fail-open-direction inconsistency) — while "*a*"/"a**"/""
-		// silently match nothing (a dead authorization rule). Same philosophy as
-		// the empty-match and undeclared-claim guards: a silently-unmatchable or
-		// direction-inconsistent authorization rule fails loud at load.
-		for _, pat := range rule.Tenants {
-			if !validTenantPattern(pat) {
-				return fmt.Errorf("rbac: rule %q: invalid tenant pattern %q (allowed: \"*\", a \"prefix-*\" with a single trailing \"*\", or an exact tenant id — no empty, embedded or repeated \"*\")", rule.Name, pat)
-			}
+		if err := validateRule(&cfg.Groups[i], declaredClaimKeys); err != nil {
+			return err
 		}
-		// Org-scope opt-in (ADR-027 / LD-6 P4): the claim key an org-scoped rule
-		// keys off MUST be declared in --identity-claim-headers, exactly like a
-		// match.claims key. Checked for EVERY rule — independently of the match
-		// block — because a rule can be legacy name-matched AND org-scoped. An
-		// org-scope on an undeclared claim could never carry a value at runtime,
-		// so it would silently deny (shadow) / hide (enforce) every tenant; that
-		// dead authorization rule must fail loud at load, not deny in silence.
-		if rule.OrgScope != "" {
-			if _, declared := declaredClaimKeys[rule.OrgScope]; !declared {
-				return fmt.Errorf("rbac: rule %q: org-scope key %q is not declared in --identity-claim-headers (an undeclared claim key can never match at runtime; declare the axis or remove org-scope)", rule.Name, rule.OrgScope)
-			}
+	}
+	return nil
+}
+
+// validateRule enforces the per-rule fail-closed guarantees of validateConfig
+// for a single rule (ADR-027 / LD-6 P3/P4). It returns nil when THIS rule
+// passes every guard — tenant patterns, org-scope declaration, and (when
+// present) the match block — and a fail-loud error otherwise. The guards and
+// their messages are byte-identical to the inline loop body they were
+// extracted from: the historical `continue` on a nil match block becomes a
+// `return nil` here (this rule is done, no error).
+func validateRule(rule *GroupRule, declaredClaimKeys map[string]string) error {
+	// Tenant patterns are validated for EVERY rule (independently of the
+	// match block, exactly like org-scope below): a rule can be legacy
+	// name-matched AND still carry tenants. The grammar is "*" (full
+	// wildcard), "<literal>-*" (single trailing "*") or an exact id. A
+	// malformed pattern must fail loud: "**" collapses to prefix "*" in
+	// tenantMatches and would HasPrefix-collide with the platform-scope "*"
+	// gate query — passing platform gates while granting zero per-tenant
+	// access (a fail-open-direction inconsistency) — while "*a*"/"a**"/""
+	// silently match nothing (a dead authorization rule). Same philosophy as
+	// the empty-match and undeclared-claim guards: a silently-unmatchable or
+	// direction-inconsistent authorization rule fails loud at load.
+	for _, pat := range rule.Tenants {
+		if !validTenantPattern(pat) {
+			return fmt.Errorf("rbac: rule %q: invalid tenant pattern %q (allowed: \"*\", a \"prefix-*\" with a single trailing \"*\", or an exact tenant id — no empty, embedded or repeated \"*\")", rule.Name, pat)
 		}
-		if rule.Match == nil {
-			continue
+	}
+	// Org-scope opt-in (ADR-027 / LD-6 P4): the claim key an org-scoped rule
+	// keys off MUST be declared in --identity-claim-headers, exactly like a
+	// match.claims key. Checked for EVERY rule — independently of the match
+	// block — because a rule can be legacy name-matched AND org-scoped. An
+	// org-scope on an undeclared claim could never carry a value at runtime,
+	// so it would silently deny (shadow) / hide (enforce) every tenant; that
+	// dead authorization rule must fail loud at load, not deny in silence.
+	if rule.OrgScope != "" {
+		if _, declared := declaredClaimKeys[rule.OrgScope]; !declared {
+			return fmt.Errorf("rbac: rule %q: org-scope key %q is not declared in --identity-claim-headers (an undeclared claim key can never match at runtime; declare the axis or remove org-scope)", rule.Name, rule.OrgScope)
 		}
-		if len(rule.Match.Groups) == 0 && len(rule.Match.Claims) == 0 {
-			return fmt.Errorf("rbac: rule %q: empty match block (an empty match is a config error, NOT match-all — remove the block for legacy name matching, or add groups:/claims: conditions)", rule.Name)
+	}
+	if rule.Match == nil {
+		return nil
+	}
+	if len(rule.Match.Groups) == 0 && len(rule.Match.Claims) == 0 {
+		return fmt.Errorf("rbac: rule %q: empty match block (an empty match is a config error, NOT match-all — remove the block for legacy name matching, or add groups:/claims: conditions)", rule.Name)
+	}
+	for _, g := range rule.Match.Groups {
+		if strings.TrimSpace(g) == "" {
+			return fmt.Errorf("rbac: rule %q: match.groups contains an empty entry", rule.Name)
 		}
-		for _, g := range rule.Match.Groups {
-			if strings.TrimSpace(g) == "" {
-				return fmt.Errorf("rbac: rule %q: match.groups contains an empty entry", rule.Name)
-			}
+	}
+	for key, values := range rule.Match.Claims {
+		if _, declared := declaredClaimKeys[key]; !declared {
+			return fmt.Errorf("rbac: rule %q: match.claims key %q is not declared in --identity-claim-headers (an undeclared claim key can never match at runtime; declare the axis or remove the condition)", rule.Name, key)
 		}
-		for key, values := range rule.Match.Claims {
-			if _, declared := declaredClaimKeys[key]; !declared {
-				return fmt.Errorf("rbac: rule %q: match.claims key %q is not declared in --identity-claim-headers (an undeclared claim key can never match at runtime; declare the axis or remove the condition)", rule.Name, key)
-			}
-			if len(values) == 0 {
-				return fmt.Errorf("rbac: rule %q: match.claims[%q] has an empty value list", rule.Name, key)
-			}
-			for _, v := range values {
-				if strings.TrimSpace(v) == "" {
-					return fmt.Errorf("rbac: rule %q: match.claims[%q] contains an empty value", rule.Name, key)
-				}
+		if len(values) == 0 {
+			return fmt.Errorf("rbac: rule %q: match.claims[%q] has an empty value list", rule.Name, key)
+		}
+		for _, v := range values {
+			if strings.TrimSpace(v) == "" {
+				return fmt.Errorf("rbac: rule %q: match.claims[%q] contains an empty value", rule.Name, key)
 			}
 		}
 	}
@@ -838,9 +851,14 @@ func visAt(visSS, visSE, visES, visEE, metaEnforce, orgEnforce bool) bool {
 	}
 }
 
-// AccessibleEnvironmentsFor returns the set of environments the caller p
-// can access (empty set means "all" — no restriction).
-func (m *Manager) AccessibleEnvironmentsFor(p *VerifiedPrincipal) []string {
+// accessibleFieldFor is the shared implementation behind AccessibleEnvironmentsFor
+// and AccessibleDomainsFor: the two differ ONLY in which per-rule string slice
+// they collect, supplied here by selector. It preserves that pair's semantics
+// byte-for-byte — open mode (no groups) returns nil, a matched rule with an
+// EMPTY selected slice is the wildcard that short-circuits to nil ("no
+// restriction"), and otherwise the union of the selected values across every
+// matched rule is returned (map-collected, so unordered and de-duplicated).
+func (m *Manager) accessibleFieldFor(p *VerifiedPrincipal, selector func(*GroupRule) []string) []string {
 	cfg := m.Get()
 	if len(cfg.Groups) == 0 {
 		return nil // open mode
@@ -848,62 +866,42 @@ func (m *Manager) AccessibleEnvironmentsFor(p *VerifiedPrincipal) []string {
 
 	subject := subjectFor(p)
 	hasWildcard := false
-	envs := make(map[string]bool)
+	values := make(map[string]bool)
 	for i := range cfg.Groups {
 		rule := &cfg.Groups[i]
 		if !subject.ruleMatches(rule) {
 			continue
 		}
-		if len(rule.Environments) == 0 {
+		field := selector(rule)
+		if len(field) == 0 {
 			hasWildcard = true
 			break
 		}
-		for _, e := range rule.Environments {
-			envs[e] = true
+		for _, v := range field {
+			values[v] = true
 		}
 	}
 	if hasWildcard {
 		return nil // no restriction
 	}
-	result := make([]string, 0, len(envs))
-	for e := range envs {
-		result = append(result, e)
+	result := make([]string, 0, len(values))
+	for v := range values {
+		result = append(result, v)
 	}
 	return result
 }
 
-// AccessibleDomainsFor returns the set of domains the caller p can access
-// (empty set means "all" — no restriction).
-func (m *Manager) AccessibleDomainsFor(p *VerifiedPrincipal) []string {
-	cfg := m.Get()
-	if len(cfg.Groups) == 0 {
-		return nil
-	}
+// AccessibleEnvironmentsFor returns the set of environments the caller p
+// can access (nil means "all" — no restriction; a non-nil empty slice means
+// no access).
+func (m *Manager) AccessibleEnvironmentsFor(p *VerifiedPrincipal) []string {
+	return m.accessibleFieldFor(p, func(r *GroupRule) []string { return r.Environments })
+}
 
-	subject := subjectFor(p)
-	hasWildcard := false
-	doms := make(map[string]bool)
-	for i := range cfg.Groups {
-		rule := &cfg.Groups[i]
-		if !subject.ruleMatches(rule) {
-			continue
-		}
-		if len(rule.Domains) == 0 {
-			hasWildcard = true
-			break
-		}
-		for _, d := range rule.Domains {
-			doms[d] = true
-		}
-	}
-	if hasWildcard {
-		return nil
-	}
-	result := make([]string, 0, len(doms))
-	for d := range doms {
-		result = append(result, d)
-	}
-	return result
+// AccessibleDomainsFor returns the set of domains the caller p can access
+// (nil means "all" — no restriction; a non-nil empty slice means no access).
+func (m *Manager) AccessibleDomainsFor(p *VerifiedPrincipal) []string {
+	return m.accessibleFieldFor(p, func(r *GroupRule) []string { return r.Domains })
 }
 
 // RulesMatching returns (shallow value copies of) every rule that applies to
