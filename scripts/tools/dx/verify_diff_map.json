@@ -490,6 +490,7 @@
   ],
   "scripts/tools/ops/generate_rule_pack_split.py": [
    "tests/ops/test_generate_rule_pack_split.py",
+   "tests/ops/test_rule_pack_split_real_packs.py",
    "tests/shared/test_property_tools.py"
   ],
   "scripts/tools/ops/generate_tenant_mapping_rules.py": [
@@ -632,7 +633,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "68edbbba0dfaa87958e609dccf4282c045174bc6ddbf66063e6f10304fabac8b",
+ "source_digest": "7c9c5a8377d07628ab8dbb9afedc933cce40823d37b818e3528912ad8f80ebe2",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -844,6 +845,7 @@
   "tests/ops/test_regression.py",
   "tests/ops/test_renovate_config.py",
   "tests/ops/test_rule_pack_diff.py",
+  "tests/ops/test_rule_pack_split_real_packs.py",
   "tests/ops/test_runtime_audit.py",
   "tests/ops/test_scaffold_db.py",
   "tests/ops/test_scaffold_tenant.py",
@@ -1375,6 +1377,9 @@
   "rule-packs/rule-pack-custom-alerts.yaml": [
    "tests/ops/test_lint_custom_rules.py"
   ],
+  "rule-packs/rule-pack-kubernetes.yaml": [
+   "tests/ops/test_rule_pack_split_real_packs.py"
+  ],
   "rule-packs/rule-pack-mariadb.yaml": [
    "tests/lint/test_check_hardcode_tenant.py",
    "tests/shared/test_ci_flag_contract.py",
@@ -1691,6 +1696,7 @@
    "tests/ops/test_generate_alertmanager_routes.py"
   ],
   "scripts/tools/ops/generate_rule_pack_split.py": [
+   "tests/ops/test_rule_pack_split_real_packs.py",
    "tests/shared/test_sast.py"
   ],
   "scripts/tools/ops/generate_tenant_mapping_rules.py": [

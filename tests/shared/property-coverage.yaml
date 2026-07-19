@@ -144,6 +144,8 @@ modules:
       extract_recording_outputs: "Pure but tightly coupled to PrometheusRule CRD shape; covered by tests/ops/test_generate_rule_pack_split.py with realistic fixtures"
       to_prometheus_rule_crd: "Output-shape transformation; covered by snapshot tests"
       validate_central_references_edge: "Multi-rule validator; covered by tests/ops/test_generate_rule_pack_split.py"
+      _is_external_pipeline_input: "Pure string classifier for federated external inputs (liveness/injected/per-tenant-exporter); covered by explicit unit tests in tests/ops/test_generate_rule_pack_split.py"
+      _group_follows_suffix: "Boolean suffix-convention predicate driving the fail-loud routing WARN; covered by tests/ops/test_generate_rule_pack_split.py"
       split_rule_pack: "Orchestrator combining extract_metrics_from_expr + extract_recording_outputs + to_prometheus_rule_crd"
       process_rule_packs: "Top-level orchestrator over directory walk + split_rule_pack"
       main: "CLI entry point"
