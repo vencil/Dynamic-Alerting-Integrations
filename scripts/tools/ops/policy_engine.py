@@ -40,7 +40,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility (stripped in Docker build)
@@ -632,6 +632,29 @@ def main(argv: Optional[list[str]] = None) -> int:
     lang = detect_cli_lang()
     parser = build_parser(lang)
     args = parser.parse_args(argv)
+
+    # A non-existent --config-dir is a caller error, not a vacuous pass:
+    # without this guard a typo'd path silently yields no rules AND no tenant
+    # configs, both of which return EXIT_OK below — so `policy-engine
+    # --config-dir <typo> --ci && promote` would fail open. (Note: a dir that
+    # EXISTS but has no _policies is a separate, legitimate no-op handled at
+    # the `if not rules` path and left at EXIT_OK.)
+    if not Path(args.config_dir).is_dir():
+        msg = (f"設定目錄不存在: {args.config_dir}" if lang == "zh"
+               else f"config directory not found: {args.config_dir}")
+        print(msg, file=sys.stderr)
+        if args.json_output:
+            print(format_json_report({
+                "status": "caller_error",
+                "reason": "config_dir_not_found",
+                "tenants_evaluated": 0,
+                "rules_evaluated": 0,
+                "error_count": 0,
+                "warning_count": 0,
+                "passed": False,
+                "violations": [],
+            }))
+        return EXIT_CALLER_ERROR
 
     # Load policies
     rules: list[PolicyRule] = []
