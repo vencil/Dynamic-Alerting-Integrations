@@ -12,8 +12,18 @@
 # version-drift class. Freezing the version makes the contract-fuzz
 # behavior reproducible and pushes every upgrade through an explicit,
 # reviewable PR. See issue #1158.
+schemathesis==4.23.0
+#
+# hypothesis is pinned EXPLICITLY, not left to schemathesis's transitive
+# range (`hypothesis<7,>=6.130.12`). This is the load-bearing pin for the
+# flake: `filter_too_much` is a *hypothesis* HealthCheck, and hypothesis
+# owns the data-generation / health-check behavior that drives the seed
+# flake. Pinning schemathesis alone would still let hypothesis float to
+# latest at install time — the actual flake source would drift. Freeze
+# both together; Renovate / an explicit PR bumps them in lockstep.
+hypothesis==6.156.9
 #
 # Upgrade trigger: bump deliberately (and re-verify the health-check /
 # flag names still hold) when schemathesis crosses a major version
-# (5.x) or when the filter_too_much flake recurs on this pinned version.
-schemathesis==4.23.0
+# (5.x), when hypothesis crosses a major (7.x), or when the
+# filter_too_much flake recurs on these pinned versions.
