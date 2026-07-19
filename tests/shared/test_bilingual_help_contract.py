@@ -39,7 +39,7 @@ allowlist — there is no silent escape (``test_partition_is_exact``).
   may ship English-only help. RATCHET: shrink-only — the gate runs each one
   under ``DA_LANG=zh`` and turns RED the moment its help gains CJK, forcing
   the entry OUT of the allowlist and INTO the bilingual contract.
-* ``CHINESE_ONLY_HELP`` (26) — help text is Chinese(-mixed) with NO
+* ``CHINESE_ONLY_HELP`` (27) — help text is Chinese(-mixed) with NO
   ``detect_cli_lang`` wiring at all: single-language by construction, legal
   under the ZH-primary SSOT policy (dev-rules §9b) for internal tooling.
   RATCHET: the gate asserts the wiring stays absent — the moment one of
@@ -293,6 +293,7 @@ CHINESE_ONLY_HELP: dict[str, str] = {
     "migrate_ssot_language.py": _R_ZH,
     "pr_preflight.py": _R_ZH,
     "scan_component_health.py": _R_ZH,
+    "verify_diff.py": _R_ZH,  # upstream #1156 (rebase r4): 中文-only help, no wiring
     "waveform_compile.py": _R_ZH,
     "waveform_score.py": _R_ZH,
     # ── scripts/tools/lint ─────────────────────────────────────────────
@@ -403,8 +404,10 @@ def test_allowlists_shrink_only_count_pin():
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )
-    assert len(CHINESE_ONLY_HELP) <= 26, (
-        f"CHINESE_ONLY_HELP grew to {len(CHINESE_ONLY_HELP)} (pin=26). "
+    # pin 27: bumped from 26 for verify_diff.py, an upstream Chinese-only-help
+    # dx CLI added by #1156 and surfaced when this gate rebased onto it.
+    assert len(CHINESE_ONLY_HELP) <= 27, (
+        f"CHINESE_ONLY_HELP grew to {len(CHINESE_ONLY_HELP)} (pin=27). "
         "New tools should be bilingual (dev-rules §9); bump only with "
         "explicit justification."
     )
