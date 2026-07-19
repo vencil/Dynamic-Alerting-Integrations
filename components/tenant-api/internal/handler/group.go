@@ -2,13 +2,11 @@ package handler
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
@@ -247,15 +245,7 @@ func PutGroup(d *Deps) http.HandlerFunc {
 		}
 
 		if err := d.Writer.WriteGroupsFile(r.Context(), email, string(yamlBytes)); err != nil {
-			if errors.Is(err, gitops.ErrWriteOverloaded) {
-				WriteOverloaded(w, r)
-				return
-			}
-			if errors.Is(err, gitops.ErrConflict) {
-				WriteJSONError(w, r, http.StatusConflict, err.Error())
-				return
-			}
-			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
+			writeConfigFileError(w, r, err)
 			return
 		}
 
@@ -332,15 +322,7 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 		}
 
 		if err := d.Writer.WriteGroupsFile(r.Context(), email, string(yamlBytes)); err != nil {
-			if errors.Is(err, gitops.ErrWriteOverloaded) {
-				WriteOverloaded(w, r)
-				return
-			}
-			if errors.Is(err, gitops.ErrConflict) {
-				WriteJSONError(w, r, http.StatusConflict, err.Error())
-				return
-			}
-			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
+			writeConfigFileError(w, r, err)
 			return
 		}
 
