@@ -6,10 +6,10 @@ version: v2.9.0
 lang: zh
 id: ADR-030
 tracking_kind: adr
-status: proposed
+status: accepted
 domain: rule-packs
 created_at: 2026-07-04
-updated_at: 2026-07-05
+updated_at: 2026-07-19
 ---
 # ADR-030: 決策層遷移驗證 — 製造 Oracle 而非觀測
 
@@ -22,7 +22,7 @@ updated_at: 2026-07-05
 
 ## 狀態
 
-🟡 **Proposed**（2026-07-05）。MVP（fault-waveform 注入 harness）鎖定可建；三-oracle 全貌列 Future Work with defer-trigger。內部 fresh-eyes + 外部三輪對抗 review（含 2026-07-05 第二輪 R2-1..R2-5、第三輪 R3-1..R3-2）已全數 fold-in。**昇 `accepted` trigger**：OQ1（合規 carve-out 清單）消化 **AND** MVP 首份 catch-rate 報告產出（以 field data 驗證方向後定案）。
+🟢 **Accepted**（2026-07-19）。MVP fault-waveform 注入 harness 三 PR 全 merged（[#1039](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1039) 波形編譯 ／ [#1043](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1043) 注入執行 ／ [#1045](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1045) catch-rate 計分 ＋ air-gap 自助 [#1079](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1079)），並產出首份 Oracle/DB2/Linux-on-K8s 參考 catch-rate 報告（vendor-doc 盲寫庫、n=2 獨立作者、含 precision/recall/F1 與 8 項 rule-pack 覆蓋/校準發現）→ 「製造 oracle（非觀測）＋ outcome/catch-rate」的設計方向經實測驗證。內部 fresh-eyes + 外部三輪對抗 review（2026-07-05 R2/R3）已全數 fold-in。**依 ADR lifecycle（`accepted` = 決策生效、非 rollout 完成，見 Martin Fowler / AWS Prescriptive Guidance），OQ1（合規 carve-out 清單）等客戶項維持列於 [§Open Questions](#open-questions) 作 rollout 前置，不再作為 `accepted` 的 gate。** 本 ADR 自此 immutable（僅修 typo / 連結）。
 
 > 依語言政策（自 ADR-019 預設 ZH-only），本 ADR 不另製 `.en.md`。
 
