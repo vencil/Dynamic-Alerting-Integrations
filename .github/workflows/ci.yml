@@ -163,7 +163,7 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: pip install pre-commit pyyaml
+        run: pip install pre-commit pyyaml -c requirements/ci-constraints.txt
 
       # Container SAST Layer 1 (#448 / TRK-311): the iac-sast-check hook drives
       # hadolint. Install the binary so the wrapper uses it directly (no docker
@@ -372,7 +372,7 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: pip install pyyaml
+        run: pip install pyyaml -c requirements/ci-constraints.txt
 
       - name: Lint custom rules (deny-list + required labels)
         run: |
@@ -456,7 +456,7 @@ jobs:
         # skips there. A promtool re-pin that changes the output format fails HERE, not
         # in front of a Domain Expert.
         run: |
-          pip install pytest
+          pip install pytest -c requirements/ci-constraints.txt
           python -m pytest tests/dx/test_recipe_preview.py tests/preview/ -q
 
       # CI blind-spot fix (CI-ROI wave): these 5 modules are promtool-gated
@@ -484,7 +484,7 @@ jobs:
         env:
           WAVEFORM_PROMTOOL_REQUIRE: "1"
         run: |
-          pip install jsonschema
+          pip install jsonschema -c requirements/ci-constraints.txt
           python -m pytest \
             tests/dx/test_custom_alerts_promtool.py \
             tests/dx/test_federation_revocation_dashboard.py \
@@ -500,7 +500,7 @@ jobs:
         # PATH). Promote to a dedicated required job when the gate graduates (PR2).
         continue-on-error: true
         run: |
-          pip install pytest
+          pip install pytest -c requirements/ci-constraints.txt
           # VM engine version comes from the single pins SSOT (tests/rulepacks/
           # vm_engine_version) shared with the equivalence anchor (test_vm_backend_parity.py)
           # so the gate's engine and the anchor-verified engine can't drift (pin-coupling guard).
@@ -709,7 +709,7 @@ jobs:
         # PyYAML; setup-python builds don't bundle it. Without this the rule
         # degrades to an explicit WARN (never a silent skip) — installing it
         # here makes the informational findings actually visible in CI logs.
-        run: python3 -m pip install --quiet pyyaml
+        run: python3 -m pip install --quiet pyyaml -c requirements/ci-constraints.txt
 
       - name: Run Container SAST Layer 4 (raw k8s manifests)
         # Real layer (NOT a stub): k8s/ holds 42 raw manifests. kube-linter
@@ -858,7 +858,7 @@ jobs:
         # jsonschema: waveform_compile.py (ADR-030 fault-waveform packs) —
         # without it tests/dx/test_waveform_compile.py importorskips and the
         # governance-gate negative tests silently drop out of CI.
-        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema
+        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema -c requirements/ci-constraints.txt
 
       - name: Collect tests
         # CI skips 3 slow/benchmark test suites for speed:
@@ -1081,7 +1081,11 @@ jobs:
       # with the swag annotations in handler/*. Drift = annotation
       # changed but `make api-docs` not run + committed.
       - name: Install swag CLI
-        run: go install github.com/swaggo/swag/cmd/swag@latest
+        # Pinned (was @latest) — swag generates swagger.json, which feeds
+        # both the api-docs drift check AND the schemathesis contract test;
+        # a swag bump could silently drift the spec (#1158). Keep in sync
+        # with the Makefile api-docs target's pin (check_unpinned_deps gate).
+        run: go install github.com/swaggo/swag/cmd/swag@v1.16.6
 
       - name: Generate OpenAPI spec from swag annotations
         working-directory: components/tenant-api
@@ -1320,7 +1324,7 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: pip install pyyaml
+        run: pip install pyyaml -c requirements/ci-constraints.txt
 
       - name: Check platform-data integrity
         run: python3 scripts/tools/dx/generate_platform_data.py --check

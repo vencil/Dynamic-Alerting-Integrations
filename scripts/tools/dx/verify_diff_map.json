@@ -336,6 +336,9 @@
   "scripts/tools/lint/check_undefined_tokens.py": [
    "tests/lint/test_check_undefined_tokens.py"
   ],
+  "scripts/tools/lint/check_unpinned_deps.py": [
+   "tests/lint/test_check_unpinned_deps.py"
+  ],
   "scripts/tools/lint/check_vmalert_coverage.py": [
    "tests/lint/test_check_vmalert_coverage.py"
   ],
@@ -629,7 +632,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "7f6faf93b9faaac28e8165d413b4bcfa9d92992358cf31d0dc7ae9c32c561920",
+ "source_digest": "37108bb9d8d18b9a036e41acbf2549464c049f9bcef42e8e9b72627f97030c33",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -754,6 +757,7 @@
   "tests/lint/test_check_subprocess_timeout.py",
   "tests/lint/test_check_translation.py",
   "tests/lint/test_check_undefined_tokens.py",
+  "tests/lint/test_check_unpinned_deps.py",
   "tests/lint/test_check_vmalert_coverage.py",
   "tests/lint/test_check_window_x_no_fallback.py",
   "tests/lint/test_check_workflow_git_push_permissions.py",
@@ -960,6 +964,7 @@
    "tests/dx/test_compile_custom_alerts.py",
    "tests/lint/test_check_makefile_targets.py",
    "tests/lint/test_check_orphan_lint.py",
+   "tests/lint/test_check_unpinned_deps.py",
    "tests/ops/test_git_check_lock.py",
    "tests/rulepacks/test_vm_alert_parity.py"
   ],
@@ -1730,6 +1735,9 @@
   ],
   "tests/contract": [
    "tests/dx/test_verify_diff.py"
+  ],
+  "tests/contract/requirements.txt": [
+   "tests/lint/test_check_unpinned_deps.py"
   ],
   "tests/contract/run_contract_tests.py": [
    "tests/dx/test_verify_diff.py"

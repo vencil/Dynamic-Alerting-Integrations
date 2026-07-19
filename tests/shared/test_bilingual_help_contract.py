@@ -35,7 +35,7 @@ allowlist — there is no silent escape (``test_partition_is_exact``).
 
 * BILINGUAL (derived complement, 26 incl. 1 known-broken) — the behavioral
   assertions above run per tool.
-* ``ENGLISH_ONLY`` (136) — dx convention: non-customer-facing internal tools
+* ``ENGLISH_ONLY`` (137) — dx convention: non-customer-facing internal tools
   may ship English-only help. RATCHET: shrink-only — the gate runs each one
   under ``DA_LANG=zh`` and turns RED the moment its help gains CJK, forcing
   the entry OUT of the allowlist and INTO the bilingual contract.
@@ -51,7 +51,7 @@ allowlist — there is no silent escape (``test_partition_is_exact``).
 COST DESIGN (why not a blind full-matrix sweep)
 -----------------------------------------------
 Subprocess budget = 2×|BILINGUAL| + 1×|ENGLISH_ONLY| + 1×|CHINESE_ONLY|
-= 2×26 + 136 + 26 = 214 (vs 376 already spent by test_tool_exit_codes).
+= 2×26 + 137 + 26 = 215 (vs 376 already spent by test_tool_exit_codes).
 The allowlists are known-conclusion sets: one zh-help run suffices to verify
 "still no CJK" / "still has CJK" — an en-side run there would prove nothing
 this gate asserts. The CHINESE_ONLY wiring ratchet is a source-text check
@@ -251,6 +251,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_tool_registry_jsx_parity.py": _R_LINT,
     "check_translation.py": _R_LINT,
     "check_undefined_tokens.py": _R_LINT,
+    "check_unpinned_deps.py": _R_LINT,
     "check_vmalert_coverage.py": _R_LINT,
     "check_window_x_no_fallback.py": _R_LINT,
     "check_workflow_git_push_permissions.py": _R_LINT,
@@ -399,8 +400,8 @@ def test_allowlists_shrink_only_count_pin():
     任何成長都必須顯式 bump 這裡的數字——這正是想要的 review 摩擦；
     縮減（工具畢業成雙語）不需 bump。
     """
-    assert len(ENGLISH_ONLY) <= 136, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=136). Adding an "
+    assert len(ENGLISH_ONLY) <= 137, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=137). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )

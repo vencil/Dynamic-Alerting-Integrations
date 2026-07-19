@@ -105,7 +105,7 @@ jobs:
           python-version: "3.13"
       - name: Install deps
         if: steps.scope.outputs.run == 'true'
-        run: pip install pyyaml pytest
+        run: pip install pyyaml pytest -c requirements/ci-constraints.txt
       - name: Run equivalence anchor (VM_PARITY_REQUIRE=1 → unreachable VM hard-fails, never skip-to-green)
         if: steps.scope.outputs.run == 'true'
         env:

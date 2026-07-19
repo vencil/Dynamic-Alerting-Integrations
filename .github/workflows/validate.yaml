@@ -208,7 +208,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - run: pip install pyyaml
+      - run: pip install pyyaml -c requirements/ci-constraints.txt
 
       # Schema validation + routing validation + webhook domain allowlist.
       # --strict (ADR-007): domain-policy violations are BLOCKING here —
@@ -275,5 +275,5 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - run: pip install pyyaml
+      - run: pip install pyyaml -c requirements/ci-constraints.txt
       - run: python scripts/tools/dx/bump_docs.py --check

@@ -214,6 +214,7 @@ lang: zh
 | `check_tool_registry_jsx_parity.py` | every tool-registry.yaml entry must have a backing .jsx file (and vice versa). |
 | `check_translation.py` | 自動化翻譯品質檢查 |
 | `check_undefined_tokens.py` | Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css (with --report-orphans discovery mode). |
+| `check_unpinned_deps.py` | block unpinned dependency-acquisition in CI/build. |
 | `check_vmalert_coverage.py` | check_vmalert_coverage — rule-pack alert FIRING-decision coverage baseline guard. |
 | `check_window_x_no_fallback.py` | Forbid module-scope `const X = window.__X;` no-fallback reads (dev-rules.md §S6). |
 | `check_workflow_git_push_permissions.py` | guard against a silently no-op `git push`. |

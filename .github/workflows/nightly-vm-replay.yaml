@@ -203,7 +203,7 @@ jobs:
           # dependency: pytest loads the ancestor tests/conftest.py, which
           # imports tests/factories.py → `import yaml` — pytest alone dies
           # with a collection ImportError (verified in a clean venv).
-          pip install pytest pyyaml
+          pip install pytest pyyaml -c requirements/ci-constraints.txt
           python -m pytest tests/rulepacks/test_vm_replay_staleness.py -v -rs
 
       # Failure → auto-open a triage issue (nightly-race pattern, PLUS

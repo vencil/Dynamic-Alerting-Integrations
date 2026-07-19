@@ -22,7 +22,7 @@ jobs:
           python-version: '3.13'
 
       - name: Install dependencies
-        run: pip install pyyaml
+        run: pip install pyyaml -c requirements/ci-constraints.txt
 
       - name: Run backtest
         id: backtest

@@ -1161,6 +1161,20 @@ repos:
         # the dead auto-commit step was removed). This hook makes a future
         # instance of the same mistake fail loudly instead of silently.
 
+      - id: unpinned-deps-check
+        name: "Block unpinned pip/go/npm dependency installs in CI/build (#1158)"
+        entry: python3 -X utf8 scripts/tools/lint/check_unpinned_deps.py --ci
+        language: python
+        pass_filenames: false
+        files: ^(\.github/workflows/.*\.ya?ml|Makefile|\.devcontainer/devcontainer\.json|(.*/)?Dockerfile|requirements/ci-constraints\.txt|scripts/tools/lint/check_unpinned_deps\.py)$
+        # #1158 root-solve: `pip install <pkg>` / `go install <mod>@latest`
+        # with no version tracks *latest* on every CI run — the schemathesis
+        # `filter_too_much` seed-flake was one instance of ~24. CI Python deps
+        # are pinned in requirements/ci-constraints.txt (applied via pip -c);
+        # go tools are pinned to an explicit @version. This gate blocks a NEW
+        # unpinned install from silently reintroducing the drift. Exceptions
+        # are the BASELINE_ALLOWLIST in the script (a short, justified list).
+
   # --- GHA workflow linter (actionlint; #1021 follow-up) ---
   # Hybrid policy (lint-policy / iac-lint-baseline): official OSS engine via
   # the upstream pre-commit hook — no Vibe wrapper, because the first full
