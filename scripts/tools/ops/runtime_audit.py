@@ -126,6 +126,14 @@ STRINGS = {
         "err_runtime_json": "cannot read --runtime-json file",
         "err_rule_packs": "rule-packs dir not found or empty",
         "err_parse": "malformed input",
+        "cli_desc": "Read-only Git rule-packs ↔ Prometheus runtime reconciliation (#747)",
+        "cli_src_group": "runtime source (one required)",
+        "h_rule_packs_dir": "Directory with rule pack YAML files (default: rule-packs/)",
+        "h_prometheus": "Prometheus API URL, e.g. http://localhost:9090",
+        "h_runtime_json": "Path to a saved /api/v1/rules JSON response (offline / fixtures)",
+        "h_strict_orphan": "Treat ORPHAN (stale loaded rule) as a --ci gate failure too",
+        "h_json": "Output results as JSON",
+        "h_ci": "Exit 1 if drift is found (MISSING/UNHEALTHY; ORPHAN with --strict-orphan)",
     },
     "zh": {
         "title": "Dynamic Alerting — Runtime 規則對帳 (#747)",
@@ -142,6 +150,14 @@ STRINGS = {
         "err_runtime_json": "無法讀取 --runtime-json 檔",
         "err_rule_packs": "rule-packs 目錄不存在或為空",
         "err_parse": "輸入格式錯誤",
+        "cli_desc": "唯讀 Git rule-packs ↔ Prometheus runtime 對帳 (#747)",
+        "cli_src_group": "runtime 來源（擇一必填）",
+        "h_rule_packs_dir": "rule pack YAML 檔目錄（預設 rule-packs/）",
+        "h_prometheus": "Prometheus API URL，例如 http://localhost:9090",
+        "h_runtime_json": "已存的 /api/v1/rules JSON 回應路徑（離線 / fixture）",
+        "h_strict_orphan": "將 ORPHAN（孤兒殘留規則）也視為 --ci 閘門失敗",
+        "h_json": "以 JSON 輸出結果",
+        "h_ci": "偵測到漂移即 exit 1（MISSING/UNHEALTHY；加 --strict-orphan 含 ORPHAN）",
     },
 }
 
@@ -425,33 +441,28 @@ class RuntimeAuditor:
 
 def main():
     try_utf8_stdout()
+    # Help text responds to DA_LANG (dev-rules §9 bilingual-help contract).
+    # epilog keeps the English design-rationale docstring (supplementary
+    # appendix); the description + option help are what switch language.
+    lang = detect_cli_lang()
     parser = argparse.ArgumentParser(
-        description="Read-only Git rule-packs ↔ Prometheus runtime reconciliation (#747)",
+        description=i18n("cli_desc", lang),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     parser.add_argument(
         "--rule-packs-dir", default="rule-packs/",
-        help="Directory with rule pack YAML files (default: rule-packs/)",
+        help=i18n("h_rule_packs_dir", lang),
     )
-    src = parser.add_argument_group("runtime source (one required)")
-    src.add_argument(
-        "--prometheus",
-        help="Prometheus API URL, e.g. http://localhost:9090",
-    )
-    src.add_argument(
-        "--runtime-json",
-        help="Path to a saved /api/v1/rules JSON response (offline / fixtures)",
-    )
+    src = parser.add_argument_group(i18n("cli_src_group", lang))
+    src.add_argument("--prometheus", help=i18n("h_prometheus", lang))
+    src.add_argument("--runtime-json", help=i18n("h_runtime_json", lang))
     parser.add_argument(
         "--strict-orphan", action="store_true",
-        help="Treat ORPHAN (stale loaded rule) as a --ci gate failure too",
+        help=i18n("h_strict_orphan", lang),
     )
-    parser.add_argument("--json", action="store_true", help="Output results as JSON")
-    parser.add_argument(
-        "--ci", action="store_true",
-        help="Exit 1 if drift is found (MISSING/UNHEALTHY; ORPHAN with --strict-orphan)",
-    )
+    parser.add_argument("--json", action="store_true", help=i18n("h_json", lang))
+    parser.add_argument("--ci", action="store_true", help=i18n("h_ci", lang))
 
     args = parser.parse_args()
 

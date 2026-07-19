@@ -33,8 +33,8 @@ allowlist below lands in the BILINGUAL bucket by default and must therefore
 either really implement bilingual help or add itself (with a reason) to an
 allowlist — there is no silent escape (``test_partition_is_exact``).
 
-* BILINGUAL (derived complement, 26 incl. 1 known-broken) — the behavioral
-  assertions above run per tool.
+* BILINGUAL (derived complement, 26 — all pass; repair queue empty) — the
+  behavioral assertions above run per tool.
 * ``ENGLISH_ONLY`` (137) — dx convention: non-customer-facing internal tools
   may ship English-only help. RATCHET: shrink-only — the gate runs each one
   under ``DA_LANG=zh`` and turns RED the moment its help gains CJK, forcing
@@ -44,9 +44,10 @@ allowlist — there is no silent escape (``test_partition_is_exact``).
   under the ZH-primary SSOT policy (dev-rules §9b) for internal tooling.
   RATCHET: the gate asserts the wiring stays absent — the moment one of
   these adopts ``detect_cli_lang`` it must graduate to BILINGUAL.
-* ``KNOWN_BROKEN_BILINGUAL`` (1) — has the wiring but ``--help`` does not
-  respond to it. Fixing is a behavior change owned by the PM, NOT this
-  gate-only wave; entries are xfail(strict) so a fix forces de-listing.
+* ``KNOWN_BROKEN_BILINGUAL`` (0) — repair queue for tools that have the
+  wiring but whose ``--help`` does not respond to it. Now EMPTY: its sole
+  entry (runtime_audit.py) had its help routed through i18n() and graduated
+  to BILINGUAL. Entries are xfail(strict) so a fix forces de-listing.
 
 COST DESIGN (why not a blind full-matrix sweep)
 -----------------------------------------------
@@ -314,17 +315,12 @@ CHINESE_ONLY_HELP: dict[str, str] = {
 # PM). xfail(strict): once fixed, the XPASS turns this gate red and forces
 # the entry's removal — the list can only shrink.
 # ═══════════════════════════════════════════════════════════════════════════
-KNOWN_BROKEN_BILINGUAL: dict[str, str] = {
-    "runtime_audit.py": (
-        "has detect_cli_lang wiring, but only for RUNTIME report strings "
-        "(runtime_audit.py:306 self.lang, :372-395 i18n(...) prints); the "
-        "argparse help strings are hardcoded zh/en-mixed, so "
-        "DA_LANG=zh_TW.UTF-8 and DA_LANG=en_US.UTF-8 --help outputs are "
-        "byte-identical (and CJK-bearing). TODO: route the help strings "
-        "through i18n() — behavior change, needs an owner decision; on fix, "
-        "delete this entry."
-    ),
-}
+# Repair queue is now EMPTY: runtime_audit.py's argparse help was routed
+# through its existing i18n() table (DA_LANG-responsive), so it graduated to
+# full BILINGUAL enforcement. A future genuine wiring bug would be listed here
+# with a phenomenon description + xfail(strict); the count pin below (<=0)
+# forces that addition to be a deliberate, reviewed bump.
+KNOWN_BROKEN_BILINGUAL: dict[str, str] = {}
 
 # Derived complement: everything not explicitly allowlisted must behave
 # bilingually. A brand-new tool lands here by default — no silent escape.
@@ -412,9 +408,11 @@ def test_allowlists_shrink_only_count_pin():
         "New tools should be bilingual (dev-rules §9); bump only with "
         "explicit justification."
     )
-    assert len(KNOWN_BROKEN_BILINGUAL) <= 1, (
+    # pin 0: repair queue emptied (runtime_audit.py graduated to BILINGUAL).
+    # A future known-broken tool must be a deliberate, reviewed bump.
+    assert len(KNOWN_BROKEN_BILINGUAL) <= 0, (
         f"KNOWN_BROKEN_BILINGUAL grew to {len(KNOWN_BROKEN_BILINGUAL)} "
-        "(pin=1). This list is a repair queue, not an escape hatch — "
+        "(pin=0). This list is a repair queue, not an escape hatch — "
         "fix the tool instead of listing it."
     )
 
