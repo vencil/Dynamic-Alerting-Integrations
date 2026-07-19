@@ -129,7 +129,7 @@ lang: zh
 
 **為什麼**：三層的載入時機、SSR / CSR 狀態、locale 來源都不同，共用會耦合炸鍋。
 
-**檢查方式**：pre-commit hook `check_bilingual_annotations`。
+**檢查方式**：pre-commit hook `check_bilingual_annotations`。Python CLI help 層另有行為型 gate [`tests/shared/test_bilingual_help_contract.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/shared/test_bilingual_help_contract.py)（實跑 `DA_LANG=zh/en --help` 斷言雙語切換；English-only / 中文-only 工具走顯式 allowlist + 只准縮 ratchet），與 coverage 軟性報表 `check_i18n_coverage.py` 互補。
 
 ### 9b. SSOT 語言策略（v2.8.0 S#101 policy lock）
 
@@ -189,8 +189,8 @@ Status 處理 / hotfix 例外 / A vs B CI 分類細節見 [`github-release-playb
 
 - **`--json`（stdout 契約，#1112 收嚴）**：machine-readable 子命令須提供 `--json`（或既有的 `--json-output` 拼法），且 `da-tools <cmd> --json | jq` idiom 須在 cli-reference 文件化。**契約**：`--json` 模式下 **stdout 恰好一份 JSON 文件**，於**每一條終端路徑**——含 skip / 空輸入 / dry-run / 早退——**所有人類可讀訊息（進度、摘要、警告、狀態）一律走 stderr**。早退路徑亦須吐 JSON：慣例是**沿用該工具既有 schema 的鍵但歸零/清空，追加 `status`（discriminator）與 `reason`**；正常路徑 schema 不動（consumer 用 `.status // "ok"` 分辨）。矛盾的 flag 組合（如 `patch-config --json` 無 `--diff`）→ `EXIT_CALLER_ERROR`，不得靜默忽略旗標。
 - **`--ci`**：Python 工具用 `--ci` 控 fail-on-finding；**Go binary 不引入 `--ci`**（無跨 Python/Go 統一 wrapper 消費者，CI 對 Go 工具用其原生 flag）。
-- **認可例外**：`diag_pr_ci.py`（0/1/2/3，exit 3 = network-blocked，runbook 載明）、`tenant-verify`（倒置契約 2=驗證失敗，[cli-reference](../cli-reference.md) + rollback runbook 載明）——改動須連帶遷移文件 + CHANGELOG breaking note。
-- ✅ **Codified**：exit code → `tests/shared/test_tool_exit_codes.py`（驗 `--help`=0 + bad-flag=2 + SSOT 常數）；**`--json` stdout 契約 → [`tests/shared/test_json_stdout_contract.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/shared/test_json_stdout_contract.py)**（83 個 `(tool, mode)` recipe 涵蓋全 37 支 `--json`/`--json-output` 工具，斷言 `json.loads(全 stdout)`；meta-test 硬斷言 scope，新工具無法靜默逃脫）。exit-code 章節見 [`testing-playbook.md`](testing-playbook.md)。**新增 `--json` 子命令或新增次要模式（`--dry-run` / `--skip-*` 等早退路徑）時，須在該 gate 補 recipe**——最陰險的違規都藏在次要模式。
+- **認可例外**：`diag_pr_ci.py`（0/1/2/3，exit 3 = network-blocked，runbook 載明）、`tenant-verify`（倒置契約 2=驗證失敗，[cli-reference](../cli-reference.md) + rollback runbook 載明）、`init_project.py`（`--ci` 同名異義：`choices=['github','gitlab','both']` 選 CI config 產出對象，非 fail-on-finding）——改動須連帶遷移文件 + CHANGELOG breaking note。
+- ✅ **Codified**：exit code → `tests/shared/test_tool_exit_codes.py`（驗 `--help`=0 + bad-flag=2 + SSOT 常數）；**`--json` stdout 契約 → [`tests/shared/test_json_stdout_contract.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/shared/test_json_stdout_contract.py)**（83 個 `(tool, mode)` recipe 涵蓋全 37 支 `--json`/`--json-output` 工具，斷言 `json.loads(全 stdout)`；meta-test 硬斷言 scope，新工具無法靜默逃脫）；**`--ci` fail-on-finding 契約 → `tests/shared/test_ci_flag_contract.py`**（每支一份保證產 finding 的 fixture、同 argv ± `--ci` 跑兩次斷言 exit-code 翻轉——no-op 即 fail-open 直接紅；同名異義 `init_project` 走 meta-asserted allowlist）。exit-code 章節見 [`testing-playbook.md`](testing-playbook.md)。**新增 `--json` 子命令或新增次要模式（`--dry-run` / `--skip-*` 等早退路徑）時，須在該 gate 補 recipe**——最陰險的違規都藏在次要模式。
 
 ## 互動工具變更 SOP
 

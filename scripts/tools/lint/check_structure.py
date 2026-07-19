@@ -26,6 +26,13 @@ import os
 import sys
 from pathlib import Path
 
+# cp950-console --help hardening (da-tools ROI r4 W7): importing a root lib
+# reconfigures stdout errors at import time — before argparse can print
+# --help — so unencodable help chars degrade instead of crashing on a
+# legacy Windows console. scripts/tools is one level up from lint/.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
+
 # ── Config ──────────────────────────────────────────────────────────
 
 # Files allowed directly in scripts/tools/ (not in a subdirectory)

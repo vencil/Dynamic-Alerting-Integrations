@@ -13,6 +13,7 @@ Verifies:
   9. ConfigMap → CRD end-to-end conversion
 """
 
+import dataclasses
 import json
 import os
 import sys
@@ -543,6 +544,316 @@ class TestMainJsonEnvelope:
         assert "status" not in doc
         assert len(doc["prometheus_rules"]) == 2      # 真的有預覽內容
         assert len(doc["alertmanager_configs"]) == 2
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Test: 輸出模式矩陣 characterization — (checklist_only × dry_run × json) 全 8 組
+# ────────────────────────────────────────────────────────────────────────────
+#
+# 同一個 PR 週期內這張矩陣咬過兩次（#1112 / CodeRabbit）：
+#   bug 1: `--checklist-only --dry-run` 掉進 dry-run 分支 → 合法 JSON 但沒
+#          checklist 欄（stdout 契約 gate 全綠——合法 JSON ≠ 對的 payload）
+#   bug 2: `--checklist-only --dry-run --json` 下 summary 被抑制 → stdout 空白
+# 兩個修補都是往 main() 加條件。這張表把 8 組合的**現行為**全部 pin 死：
+# 每列斷言 stdout 的 payload 種類（不只 json.loads 成功）、stderr 訊息面、
+# exit code、檔案寫入副作用。之後任何矩陣決策的改動都會在這裡現形。
+
+
+@dataclasses.dataclass(frozen=True)
+class ComboRow:
+    """一列 = 一個 flag 組合的預期現況。"""
+    checklist_only: bool
+    dry_run: bool
+    json_mode: bool
+    # stdout payload 種類 discriminator（詳 _PAYLOAD_VALIDATORS）：
+    #   empty                   — stdout 完全空白（write 文字模式）
+    #   json_summary            — 單一 JSON：6 鍵 summary（無 status/checklist）
+    #   text_checklist_preview  — "# MIGRATION CHECKLIST" + "# CRD PREVIEW" + YAML
+    #   json_crd_preview        — 單一 JSON：{metadata, prometheus_rules,
+    #                             alertmanager_configs, errors}
+    #   text_checklist          — 裸 checklist markdown（無 CRD preview）
+    #   json_checklist_envelope — 單一 JSON：6 鍵 summary + status + checklist
+    payload: str
+    writes_files: bool          # output_dir 是否寫出檔案（CRD ×4 + checklist）
+
+
+# 8 列全矩陣。fixture 現況：2 個 ConfigMap（各 1 rule group）、2 個租戶
+# ⇒ 生成模式下 2 PrometheusRules + 2 AlertmanagerConfigs = 4 CRDs。
+OUTPUT_MODE_MATRIX = [
+    ComboRow(False, False, False, "empty", True),
+    ComboRow(False, False, True, "json_summary", True),
+    ComboRow(False, True, False, "text_checklist_preview", False),
+    ComboRow(False, True, True, "json_crd_preview", False),
+    ComboRow(True, False, False, "text_checklist", False),
+    ComboRow(True, False, True, "json_checklist_envelope", False),
+    # bug-1 pin：--checklist-only 勝過 --dry-run（窄的 no-op flag 不得覆蓋
+    # 選 payload 的 flag）⇒ 與 (True, False, *) 兩列同 payload。
+    ComboRow(True, True, False, "text_checklist", False),
+    # bug-2 pin：combo + --json 時 summary envelope 不得被 dry-run 抑制
+    # ⇒ stdout 是非空的單一 checklist envelope，不是空白。
+    ComboRow(True, True, True, "json_checklist_envelope", False),
+]
+
+_MATRIX_IDS = [
+    f"C{int(r.checklist_only)}-D{int(r.dry_run)}-J{int(r.json_mode)}-{r.payload}"
+    for r in OUTPUT_MODE_MATRIX
+]
+
+_SUMMARY_KEYS = {
+    "configmap_files", "rule_groups", "tenants",
+    "prometheus_rules", "alertmanager_configs", "total_crds",
+}
+
+
+def _checklist_header_in(text):
+    return "# Migration Checklist" in text or "# 遷移檢核清單" in text
+
+
+def _validate_empty(out):
+    assert out == ""
+
+
+def _validate_json_summary(out):
+    doc = json.loads(out)                      # 全文 parse ⇒ stdout 恰一份文件
+    assert set(doc) == _SUMMARY_KEYS
+    assert doc["configmap_files"] == 2
+    assert doc["rule_groups"] == 2
+    assert doc["tenants"] == 2
+    assert doc["prometheus_rules"] == 2
+    assert doc["alertmanager_configs"] == 2
+    assert doc["total_crds"] == 4
+
+
+def _validate_text_checklist_preview(out):
+    # dry-run 文字模式的 banner 是 hardcode 英文，語言無關
+    assert out.startswith("# MIGRATION CHECKLIST\n")
+    assert _checklist_header_in(out)
+    assert "# CRD PREVIEW" in out
+    # preview 真的載有兩種 CRD 的 YAML（不是空殼）
+    assert out.count("kind: PrometheusRule") == 2
+    assert out.count("kind: AlertmanagerConfig") == 2
+
+
+def _validate_json_crd_preview(out):
+    doc = json.loads(out)
+    assert set(doc) == {
+        "metadata", "prometheus_rules", "alertmanager_configs", "errors",
+    }
+    # 不是 checklist envelope（bug-1 的反向保證：純 dry-run 不長出 checklist）
+    assert "checklist" not in doc
+    assert "status" not in doc
+    assert len(doc["prometheus_rules"]) == 2
+    assert len(doc["alertmanager_configs"]) == 2
+    assert doc["errors"] == []
+    assert doc["metadata"]["configmap_files"] == 2
+    assert doc["metadata"]["rule_groups"] == 2
+    assert doc["metadata"]["tenants"] == 2
+    assert doc["metadata"]["namespace"] == "monitoring"
+
+
+def _validate_text_checklist(out):
+    # 裸 checklist markdown：以 checklist 標題開頭（zh/en 依環境）
+    assert out.startswith("# Migration Checklist") or out.startswith("# 遷移檢核清單")
+    # 不得帶 dry-run 的 CRD preview 尾巴（bug-1 的行為面）
+    assert "# MIGRATION CHECKLIST" not in out      # dry-run banner（全大寫）
+    assert "# CRD PREVIEW" not in out
+    assert "kind: PrometheusRule" not in out
+    assert "kind: AlertmanagerConfig" not in out
+    # 6 個 phase 都在
+    for phase in range(1, 7):
+        assert f"Phase {phase}" in out
+
+
+def _validate_json_checklist_envelope(out):
+    doc = json.loads(out)
+    assert set(doc) == _SUMMARY_KEYS | {"status", "checklist"}
+    assert doc["status"] == "checklist_only"
+    # checklist 是 --checklist-only 的全部意義：必須在、必須非空、必須是 checklist
+    assert isinstance(doc["checklist"], str)
+    assert doc["checklist"].strip()
+    assert _checklist_header_in(doc["checklist"])
+    # checklist-only ⇒ 未生成任何 CRD
+    assert doc["prometheus_rules"] == 0
+    assert doc["alertmanager_configs"] == 0
+    assert doc["total_crds"] == 0
+    # 掃描計數是真實的
+    assert doc["configmap_files"] == 2
+    assert doc["tenants"] == 2
+    # 鍵名錯配 bug 已修（owner 拍板）：analyze_migration() 的 "rule_groups"
+    # 計數經 main() 橋接到消費端讀的 "rule_group_count"——fixture 有 2 個
+    # rule group，envelope 必須回報真實值而非恆 0。
+    assert doc["rule_groups"] == 2
+
+
+_PAYLOAD_VALIDATORS = {
+    "empty": _validate_empty,
+    "json_summary": _validate_json_summary,
+    "text_checklist_preview": _validate_text_checklist_preview,
+    "json_crd_preview": _validate_json_crd_preview,
+    "text_checklist": _validate_text_checklist,
+    "json_checklist_envelope": _validate_json_checklist_envelope,
+}
+
+
+class TestOutputModeMatrix:
+    """(checklist_only × dry_run × json) 8 組合的 table-driven characterization。"""
+
+    @pytest.mark.parametrize("row", OUTPUT_MODE_MATRIX, ids=_MATRIX_IDS)
+    def test_output_mode_matrix(
+        self, row, temp_configmap_dir, temp_config_dir, temp_output_dir, capsys,
+    ):
+        argv = [
+            "migrate_to_operator.py",
+            "--source-dir", str(temp_configmap_dir),
+            "--config-dir", str(temp_config_dir),
+            "--output-dir", str(temp_output_dir),
+        ]
+        if row.checklist_only:
+            argv.append("--checklist-only")
+        if row.dry_run:
+            argv.append("--dry-run")
+        if row.json_mode:
+            argv.append("--json")
+
+        # exit code：main() 正常 return（無 sys.exit）⇒ process exit 0
+        with patch("sys.argv", argv):
+            try:
+                ret = mto.main()
+            except SystemExit as exc:  # pragma: no cover - 只為診斷訊息
+                pytest.fail(f"main() raised SystemExit({exc.code}); expected exit 0")
+        assert ret is None
+
+        captured = capsys.readouterr()
+
+        # ── stdout payload 種類 ────────────────────────────────────────────
+        _PAYLOAD_VALIDATORS[row.payload](captured.out)
+
+        # ── stderr 訊息面（進度走 stderr 的既有慣例；zh/en 依環境擇一）──────
+        err = captured.err
+        assert "Analyzing migration scope" in err or "正在分析遷移範圍" in err
+        # "Generating CRDs" 只在非 checklist-only（checklist-only 跳過生成）
+        has_generating = "Generating CRDs" in err or "正在生成 CRD" in err
+        assert has_generating == (not row.checklist_only)
+        # "Generated: <path>" 只在 write 模式：4 CRD + 1 checklist = 5 行
+        assert err.count("Generated: ") == (5 if row.writes_files else 0)
+        # 人類 ✓ summary 走 stderr，且只在非 JSON 模式
+        assert ("✓" in err) == (not row.json_mode)
+
+        # ── 檔案寫入副作用 ─────────────────────────────────────────────────
+        written = sorted(p.name for p in temp_output_dir.glob("*"))
+        if row.writes_files:
+            assert "MIGRATION-CHECKLIST.md" in written
+            assert len(written) == 5           # 2 PrometheusRule + 2 AMConfig + checklist
+        else:
+            assert written == []
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Test: plan_stdout() — 矩陣決策的純函式單元層
+# ────────────────────────────────────────────────────────────────────────────
+#
+# TestOutputModeMatrix 從 process 面 pin 8 組合；這裡直接打純函式，讓未來的
+# 矩陣回歸（改 precedence、動 summary 條件）在單元層現形、不用等 subprocess
+# gate。表格重用 OUTPUT_MODE_MATRIX——同一張表、兩個觀測層。
+
+
+class TestPlanStdout:
+    """plan_stdout() 的文件序列選擇（io=0 純函式）。"""
+
+    _CHK = "# Migration Checklist\n\nfake checklist body"
+
+    def _fake_result(self):
+        return {
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "namespace": "monitoring",
+            "prometheus_rules": [
+                {"name": "da-rule-pack-x", "file": "x.yaml",
+                 "crd": {"kind": "PrometheusRule", "metadata": {"name": "da-rule-pack-x"}}},
+            ],
+            "alertmanager_configs": [
+                {"name": "da-tenant-t", "tenant": "t",
+                 "crd": {"kind": "AlertmanagerConfig", "metadata": {"name": "da-tenant-t"}}},
+            ],
+            "configmap_files": 1,
+            "rule_group_count": 1,
+            "tenants": 1,
+            "errors": [],
+        }
+
+    def _plan(self, row, result=None):
+        return mto.plan_stdout(
+            checklist_only=row.checklist_only,
+            dry_run=row.dry_run,
+            json_mode=row.json_mode,
+            result=result if result is not None else self._fake_result(),
+            checklist=self._CHK,
+            namespace="monitoring",
+            source_dir=Path("/src"),
+            config_dir=Path("/conf"),
+        )
+
+    @pytest.mark.parametrize("row", OUTPUT_MODE_MATRIX, ids=_MATRIX_IDS)
+    def test_plan_shape_matches_matrix(self, row):
+        """8 組合各自的文件序列形狀（與 process 層同一張表）。"""
+        docs = self._plan(row)
+
+        if row.payload == "empty":
+            assert docs == []
+        elif row.payload == "json_summary":
+            assert len(docs) == 1
+            doc = json.loads(docs[0])
+            assert set(doc) == _SUMMARY_KEYS
+        elif row.payload == "text_checklist_preview":
+            assert docs[0] == "# MIGRATION CHECKLIST\n"
+            assert docs[1] == self._CHK + "\n"
+            assert docs[2] == "\n# CRD PREVIEW\n\n"
+            preview = "".join(docs[3:])
+            assert "kind: PrometheusRule" in preview
+            assert "kind: AlertmanagerConfig" in preview
+        elif row.payload == "json_crd_preview":
+            assert len(docs) == 1
+            doc = json.loads(docs[0])
+            assert set(doc) == {
+                "metadata", "prometheus_rules", "alertmanager_configs", "errors",
+            }
+        elif row.payload == "text_checklist":
+            assert docs == [self._CHK + "\n"]
+        elif row.payload == "json_checklist_envelope":
+            assert len(docs) == 1
+            doc = json.loads(docs[0])
+            assert set(doc) == _SUMMARY_KEYS | {"status", "checklist"}
+            assert doc["status"] == "checklist_only"
+            assert doc["checklist"] == self._CHK
+        else:  # pragma: no cover - 表格新增 payload 種類時強制補分支
+            pytest.fail(f"unknown payload kind: {row.payload}")
+
+        # 每個 JSON 模式 payload 都是「恰一份文件」——stdout 契約的單元層鏡像
+        if row.json_mode:
+            json.loads("".join(docs))
+
+    def test_bug1_checklist_only_outranks_dry_run(self):
+        """bug-1 pin（單元層）：C+D+J 選 checklist envelope，不是 CRD preview。"""
+        row = ComboRow(True, True, True, "json_checklist_envelope", False)
+        docs = self._plan(row)
+        doc = json.loads("".join(docs))
+        assert "metadata" not in doc          # CRD preview 的 discriminator
+        assert doc.get("status") == "checklist_only"
+
+    def test_bug2_combo_summary_not_suppressed(self):
+        """bug-2 pin（單元層）：C+D+J 的文件序列非空（stdout 不得空白）。"""
+        row = ComboRow(True, True, True, "json_checklist_envelope", False)
+        assert self._plan(row) != []
+
+    def test_pure_no_result_mutation_and_deterministic(self):
+        """io=0 純函式：不改 result、同輸入同輸出。"""
+        import copy
+        for row in OUTPUT_MODE_MATRIX:
+            result = self._fake_result()
+            snapshot = copy.deepcopy(result)
+            first = self._plan(row, result=result)
+            second = self._plan(row, result=result)
+            assert result == snapshot, f"plan_stdout mutated result for {row}"
+            assert first == second
 
 
 if __name__ == "__main__":
