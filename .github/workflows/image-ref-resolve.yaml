@@ -49,5 +49,5 @@ jobs:
 
       - name: Resolve image refs
         run: |
-          python3 -m pip install --quiet pyyaml
+          python3 -m pip install --quiet pyyaml -c requirements/ci-constraints.txt
           python3 scripts/ops/check_image_refs_resolve.py

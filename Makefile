@@ -415,8 +415,8 @@ api-docs: ## Generate OpenAPI spec from tenant-api swag annotations (TRK-221)
 	@# annotations in handler/* — never edit the generated files by hand.
 	@bash scripts/ops/dx-run.sh bash -c '\
 		if ! command -v swag >/dev/null 2>&1; then \
-			echo "Installing github.com/swaggo/swag/cmd/swag@latest..."; \
-			GOBIN=$$HOME/go/bin go install github.com/swaggo/swag/cmd/swag@latest && \
+			echo "Installing github.com/swaggo/swag/cmd/swag@v1.16.6..."; \
+			GOBIN=$$HOME/go/bin go install github.com/swaggo/swag/cmd/swag@v1.16.6 && \
 				export PATH=$$HOME/go/bin:$$PATH; \
 		fi; \
 		cd components/tenant-api && \

@@ -103,14 +103,12 @@ jobs:
 
       - name: Install benchstat
         run: |
-          # @latest acceptable (output format stable ~2 years). Pin a version
-          # if a future release breaks the regression grep/awk OR the
+          # Pinned (was @latest) — golang.org/x/perf has NO semver tags, so this
+          # is the last known-good pseudo-version (#1158 check_unpinned_deps gate).
+          # Bump deliberately if a release breaks the regression grep/awk OR the
           # `-filter` benchfilter unit syntax `.unit:(... OR ...)` (#608) — the
           # #611 shape-assertion in the Compare step fails loud and points here.
-          # golang.org/x/perf has NO semver tags (only pseudo-versions), so pin
-          # to the last known-good pseudo-version, e.g.:
-          #   go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260512194132-3cf34090a3db
-          go install golang.org/x/perf/cmd/benchstat@latest
+          go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260709024250-82a0b07e230d
           benchstat -h 2>&1 | head -5 || true
 
       # Stash bench harness outside the checkout — same Trap 13a defense

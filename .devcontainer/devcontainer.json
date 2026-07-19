@@ -45,7 +45,7 @@
   // 3. 安裝 promtool（pinned，與 ci.yml 同版——手裝 2.x vs CI pin 3.x 的
   //    lookback 語意 skew 燒過 #1134；pin parity 由
   //    tests/preview/test_promtool_pin_parity.py 顧）
-  "postCreateCommand": "pip3 install --user pyyaml pytest-benchmark pytest-xdist mkdocs-material mkdocs-static-i18n pymdown-extensions && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && bash .devcontainer/install-promtool.sh",
+  "postCreateCommand": "pip3 install --user pyyaml pytest-benchmark pytest-xdist mkdocs-material mkdocs-static-i18n pymdown-extensions -c requirements/ci-constraints.txt && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && bash .devcontainer/install-promtool.sh",
 
   "customizations": {
     "vscode": {

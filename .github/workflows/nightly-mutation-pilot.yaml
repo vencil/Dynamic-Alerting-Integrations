@@ -83,7 +83,7 @@ jobs:
           # pathspec: check_iac_vibe_rules.py (Container SAST L1, #448/TRK-311)
           # imports it; tests/lint/ unit tests need it. Sync with ci.yml +
           # validate.yaml.
-          pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec
+          pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec -c requirements/ci-constraints.txt
 
       - name: Run Python mutation pilot
         # The pilot exits non-zero only on a real signal (NEW survivor or
