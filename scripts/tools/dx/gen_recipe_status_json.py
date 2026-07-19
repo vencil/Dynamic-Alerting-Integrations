@@ -23,6 +23,11 @@ from pathlib import Path
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
+# cp950-console --help hardening (da-tools ROI r4 W7): import a root lib so
+# stdout errors are reconfigured at import time, before argparse prints
+# --help. scripts/tools is the parent of dx/.
+sys.path.insert(0, os.path.dirname(_THIS_DIR))
+import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
 from custom_alerts import shape as _shape  # noqa: E402
 
 # Two committed derivations of the same SSOT (shape.py RECIPE_STATUS), one per

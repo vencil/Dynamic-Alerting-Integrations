@@ -619,10 +619,17 @@
    "tests/rulepacks/test_vm_alert_parity.py",
    "tests/rulepacks/test_vm_backend_parity.py",
    "tests/rulepacks/test_vm_replay_staleness.py"
+  ],
+  "tests/shared/test_json_stdout_contract.py": [
+   "tests/shared/test_ci_flag_contract.py",
+   "tests/shared/test_dry_run_no_write.py"
+  ],
+  "tests/shared/test_tool_exit_codes.py": [
+   "tests/shared/test_bilingual_help_contract.py"
   ]
  },
  "parse_errors": [],
- "source_digest": "b1fd180e00676303529cf5bb05add2a6752475cd11a283343808834ff9711545",
+ "source_digest": "7f6faf93b9faaac28e8165d413b4bcfa9d92992358cf31d0dc7ae9c32c561920",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -851,7 +858,11 @@
   "tests/rulepacks/test_vm_alert_parity.py",
   "tests/rulepacks/test_vm_backend_parity.py",
   "tests/rulepacks/test_vm_replay_staleness.py",
+  "tests/shared/test_bilingual_help_contract.py",
+  "tests/shared/test_ci_flag_contract.py",
+  "tests/shared/test_console_encoding_resilience.py",
   "tests/shared/test_dispatch_contract.py",
+  "tests/shared/test_dry_run_no_write.py",
   "tests/shared/test_entrypoint.py",
   "tests/shared/test_federation_audit_mtail.py",
   "tests/shared/test_go_mutation_pilot.py",
@@ -1100,6 +1111,8 @@
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_devrules_size.py",
+   "tests/shared/test_bilingual_help_contract.py",
+   "tests/shared/test_ci_flag_contract.py",
    "tests/shared/test_json_stdout_contract.py"
   ],
   "docs/internal/doc-map.en.md": [
@@ -1323,6 +1336,7 @@
    "tests/lint/test_check_k8s_manifests.py"
   ],
   "k8s/03-monitoring/shadow-monitoring-dashboard.json": [
+   "tests/shared/test_dry_run_no_write.py",
    "tests/shared/test_json_stdout_contract.py"
   ],
   "k8s/03-monitoring/tenant-log-query-dashboard.json": [
@@ -1358,9 +1372,11 @@
   ],
   "rule-packs/rule-pack-mariadb.yaml": [
    "tests/lint/test_check_hardcode_tenant.py",
+   "tests/shared/test_ci_flag_contract.py",
    "tests/shared/test_json_stdout_contract.py"
   ],
   "rule-packs/rule-pack-redis.yaml": [
+   "tests/shared/test_ci_flag_contract.py",
    "tests/shared/test_json_stdout_contract.py"
   ],
   "scripts/_lib.sh": [
@@ -1440,6 +1456,7 @@
    "tests/ops/test_migrate_ast.py",
    "tests/ops/test_operator_generate_v2.py",
    "tests/ops/test_property_based.py",
+   "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_dispatch_contract.py",
    "tests/shared/test_entrypoint.py",
    "tests/shared/test_json_stdout_contract.py",
@@ -1448,12 +1465,16 @@
    "tests/shared/test_sast.py",
    "tests/shared/test_validate_all.py"
   ],
+  "scripts/tools/_lib_compat.py": [
+   "tests/shared/test_console_encoding_resilience.py"
+  ],
   "scripts/tools/_lib_constants.py": [
    "tests/dx/test_sync_schema.py",
    "tests/shared/test_reserved_key_py_go_parity.py"
   ],
   "scripts/tools/_lib_exitcodes.py": [
    "tests/dx/test_verify_diff.py",
+   "tests/shared/test_ci_flag_contract.py",
    "tests/shared/test_json_stdout_contract.py",
    "tests/shared/test_tool_exit_codes.py"
   ],
@@ -1466,7 +1487,8 @@
   "scripts/tools/dx": [
    "tests/dx/test_generate_tenant_fixture.py",
    "tests/dx/test_verify_diff.py",
-   "tests/ops/test_property_based.py"
+   "tests/ops/test_property_based.py",
+   "tests/shared/test_bilingual_help_contract.py"
   ],
   "scripts/tools/dx/_atomic_write.py": [
    "tests/dx/test_atomic_write.py",
@@ -1547,6 +1569,7 @@
   "scripts/tools/lint": [
    "tests/lint/test_check_cross_ns_url_consistency.py",
    "tests/lint/test_check_lint_toolchain_fit.py",
+   "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_property_tools.py"
   ],
   "scripts/tools/lint/check_admin_config_schema.py": [
@@ -1575,6 +1598,9 @@
   ],
   "scripts/tools/lint/check_flaky_registry.py": [
    "tests/lint/test_check_flaky_registry.py"
+  ],
+  "scripts/tools/lint/check_i18n_coverage.py": [
+   "tests/shared/test_bilingual_help_contract.py"
   ],
   "scripts/tools/lint/check_jsx_i18n.py": [
    "tests/lint/test_check_jsx_i18n.py"
@@ -1632,6 +1658,7 @@
   ],
   "scripts/tools/ops": [
    "tests/ops/test_grar_facade_reexports.py",
+   "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_dispatch_contract.py",
    "tests/shared/test_entrypoint.py",
    "tests/shared/test_lang_detection_guard.py"
@@ -1697,7 +1724,9 @@
    "tests/dx/test_waveform_score.py",
    "tests/golden/test_merge_parity.py",
    "tests/ops/test_gitops_check.py",
-   "tests/ops/test_grar_facade_reexports.py"
+   "tests/ops/test_grar_facade_reexports.py",
+   "tests/shared/test_bilingual_help_contract.py",
+   "tests/shared/test_console_encoding_resilience.py"
   ],
   "tests/contract": [
    "tests/dx/test_verify_diff.py"
@@ -1820,7 +1849,8 @@
   ],
   "tests/shared/test_property_tools.py": [
    "tests/lint/test_check_build_completeness.py",
-   "tests/lint/test_check_property_coverage.py"
+   "tests/lint/test_check_property_coverage.py",
+   "tests/shared/test_bilingual_help_contract.py"
   ],
   "tests/shared/test_reserved_key_py_go_parity.py": [
    "tests/dx/test_sync_schema.py"
@@ -1848,10 +1878,14 @@
   ],
   "try-local/alertmanager.yml": [
    "tests/dx/test_verify_diff.py",
+   "tests/shared/test_dry_run_no_write.py",
    "tests/shared/test_json_stdout_contract.py"
   ],
   "try-local/docker-compose.yaml": [
    "tests/lint/test_check_cross_ns_url_consistency.py"
+  ],
+  "try-local/seed/conf.d": [
+   "tests/shared/test_dry_run_no_write.py"
   ],
   "try-local/seed/conf.d/_rbac.yaml": [
    "tests/lint/test_check_admin_config_schema.py"
