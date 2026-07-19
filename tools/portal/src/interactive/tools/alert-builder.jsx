@@ -120,10 +120,10 @@ function Field({ label, hint, error, children }) {
 // `tenant: '<id>'` only when query param present (graceful no-op when
 // alert-builder loaded standalone).
 function getInitialLabelsFromUrl() {
-  var labels = { team: '' };
+  const labels = { team: '' };
   try {
-    var params = new URLSearchParams(window.location.search);
-    var tenantId = params.get('tenant_id');
+    const params = new URLSearchParams(window.location.search);
+    const tenantId = params.get('tenant_id');
     if (tenantId) labels.tenant = tenantId;
   } catch (_err) {
     // window.location may be unavailable in some test envs — fall back

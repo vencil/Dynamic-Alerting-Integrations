@@ -141,6 +141,27 @@ describe('recipeSummary', () => {
       'fires critical when cpu_usage > 80 over 5m',
     );
   });
+  it('renders the correct summary for every non-threshold branch (CodeRabbit PR #1160)', () => {
+    // guards against a copy/paste slip in any of the switch templates
+    expect(
+      recipeSummary('rate', { name: 'r', metric: 'reqs', threshold: '100', severity: 'warning', op: '>', window: '5m' }),
+    ).toBe('fires warning when the per-second rate of reqs > 100 over 5m');
+    expect(
+      recipeSummary('ratio', { name: 'ra', metric: 'err', denominator_metric: 'total', threshold: '0.1', severity: 'critical', op: '>', window: '10m' }),
+    ).toBe('fires critical when err / total > 0.1 over 10m');
+    expect(
+      recipeSummary('absence', { name: 'ab', metric: 'heartbeat', threshold: '1', severity: 'warning', window: '15m' }),
+    ).toBe('fires warning when heartbeat has no data for 15m');
+    expect(
+      recipeSummary('p99_latency', { name: 'p', metric: 'latency', threshold: '0.5', severity: 'critical', op: '>', window: '5m', quantile: '0.99' }),
+    ).toBe('fires critical when the p0.99 latency of latency > 0.5s over 5m');
+    expect(
+      recipeSummary('forecast', { name: 'f', metric: 'disk', threshold: '0.9', severity: 'warning', op: '>', horizon: '4h' }),
+    ).toBe('fires warning when disk is predicted to > 0.9 within 4h');
+    expect(
+      recipeSummary('forecast', { name: 'fc', metric: 'used', capacity_metric: 'total', threshold: '0.8', severity: 'critical', op: '>', horizon: '4h' }),
+    ).toBe('fires critical when used / total is predicted to > 0.8 within 4h');
+  });
 });
 
 describe('buildRecipeObject', () => {
@@ -172,6 +193,16 @@ describe('yamlValue', () => {
   it('quotes values containing YAML-special chars', () => {
     expect(yamlValue('80:critical')).toBe('"80:critical"');
     expect(yamlValue('>')).toBe('">"');
+  });
+  it('quotes YAML 1.1 boolean/null keywords (CodeRabbit PR #1160, same class as #1017)', () => {
+    // name/metric regexes accept these bare, but PyYAML (YAML 1.1) would read
+    // `name: true` as a boolean vs Go yaml.v3 → cross-language recipe_id drift.
+    for (const kw of ['true', 'false', 'yes', 'no', 'on', 'off', 'null', 'TRUE', 'Yes', 'On']) {
+      expect(yamlValue(kw)).toBe(JSON.stringify(kw));
+    }
+    // identifiers that merely CONTAIN a keyword substring stay bare (no over-quoting)
+    expect(yamlValue('online')).toBe('online');
+    expect(yamlValue('notes')).toBe('notes');
   });
 });
 

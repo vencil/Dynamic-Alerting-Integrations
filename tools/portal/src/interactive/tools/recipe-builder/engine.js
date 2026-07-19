@@ -208,9 +208,22 @@ function buildRecipeObject(recipe, f) {
  * covers every form the quantile field validator accepts. Other fields are
  * never number-like (metric/name are identifiers, window/horizon carry a unit
  * suffix, threshold is composed as "value:severity" → quoted by the charset
- * test below). */
+ * test below).
+ *
+ * Keyword scalars (CodeRabbit PR #1160): the same cross-language drift also
+ * hits YAML 1.1 boolean/null keywords. `name` (^[a-z][a-z0-9_]*$) and `metric`
+ * (^[a-zA-Z_][a-zA-Z0-9_]*$) both accept `true`/`yes`/`no`/`on`/`off`/`null`,
+ * which PyYAML (YAML 1.1) reads as bool/null while Go yaml.v3 differs — so an
+ * alert literally named `true` would emit `name: true` and split the recipe_id
+ * join. Quote these too (case-insensitive; metric allows uppercase). */
+const YAML_KEYWORD_RE = /^(true|false|yes|no|on|off|null|~)$/i;
+
 function yamlValue(v) {
-  if (/[^a-zA-Z0-9_.]/.test(v) || (v !== '' && !Number.isNaN(Number(v)))) return JSON.stringify(v);
+  if (
+    /[^a-zA-Z0-9_.]/.test(v)
+    || (v !== '' && !Number.isNaN(Number(v)))
+    || YAML_KEYWORD_RE.test(v)
+  ) return JSON.stringify(v);
   return v;
 }
 
