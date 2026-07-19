@@ -8,6 +8,7 @@ related: [alert-simulator, alert-timeline, health-dashboard]
 ---
 
 import React, { useState, useMemo } from 'react';
+import { severityBadgeClass } from './_common/format/severity.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -210,7 +211,7 @@ export default function RunbookViewer() {
                 <button onClick={() => setExpandedId(isOpen ? null : rb.id)}
                   className="w-full text-left px-6 py-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
                   <div className="flex items-center gap-3">
-                    <span className={`px-2 py-0.5 rounded text-xs font-bold ${rb.severity === 'critical' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                    <span className={`px-2 py-0.5 rounded text-xs font-bold ${severityBadgeClass(rb.severity)}`}>
                       {rb.severity}
                     </span>
                     <div>

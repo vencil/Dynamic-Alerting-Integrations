@@ -83,3 +83,10 @@ tools/portal/src/interactive/tools/platform-health.jsx
 # bench-on-demand.yaml share it verbatim. 35210 → ~17.5k bytes (~50% shrink).
 # Genuine refactor, not damage.
 .github/workflows/bench-gate-pr.yaml
+
+# tools/portal ROI refactor Cycle 4a: cli-playground.jsx COMMANDS catalog
+# (~300 LOC) + NETWORK_MODES → cli-playground/commands.js, and initCommandState
+# / readHashCmd / buildCommand → cli-playground/engine.js (buildCommand
+# refactored from an inline component closure to a pure function). Orchestrator
+# becomes a thin render shell. 688 → 317 LOC (~46%). Genuine refactor, not damage.
+tools/portal/src/interactive/tools/cli-playground.jsx

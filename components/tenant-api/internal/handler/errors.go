@@ -345,6 +345,34 @@ func writeWriteFlowError(w http.ResponseWriter, r *http.Request, err error) bool
 	return true
 }
 
+// writeConfigFileError maps the sentinel errors returned by the config-file
+// writers (Writer.WriteViewsFile / WriteGroupsFile) to their canonical HTTP
+// responses, unifying the ladder the view and group PUT/DELETE handlers
+// duplicated verbatim across four sites. Unlike writeWriteFlowError (which
+// reports handled/unhandled and leaves the generic case to the caller), this
+// covers the config-file ladder's exact three branches and ALWAYS writes a
+// response:
+//
+//   - gitops.ErrWriteOverloaded → 503 + Retry-After (admission queue full, TRK-320)
+//   - gitops.ErrConflict        → 409 with the error text
+//   - anything else             → 500 with the error text
+//
+// The default is 500 — deliberately distinct from tenant_put.go /
+// tenant_custom_alerts.go, whose unrecognized-write case is a 400. This helper
+// is ONLY for the views/groups config-file writers; do not route the tenant
+// write paths through it.
+func writeConfigFileError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, gitops.ErrWriteOverloaded) {
+		WriteOverloaded(w, r)
+		return
+	}
+	if errors.Is(err, gitops.ErrConflict) {
+		WriteJSONError(w, r, http.StatusConflict, err.Error())
+		return
+	}
+	WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
+}
+
 // writeForgeCreateError renders the canonical response for a failure from
 // createPRAndRegister (forge PR/MR creation), unifying the dispatch PutTenant
 // and BatchTenants previously duplicated. Always writes a response.

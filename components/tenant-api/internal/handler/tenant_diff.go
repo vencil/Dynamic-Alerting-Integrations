@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"strings"
 
@@ -45,9 +44,8 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
-		if err != nil {
-			WriteJSONError(rw, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
+		body, ok := readLimitedBody(rw, r, d)
+		if !ok {
 			return
 		}
 
