@@ -7,7 +7,7 @@ lang: en
 related: [alert-simulator, threshold-calculator, master-onboarding, cicd-setup-wizard, deployment-wizard]
 dependencies: [
   "alert-builder/builder.js",
-  "_common/hooks/useCopyToClipboard.js"
+  "_common/components/CopyButton.jsx"
 ]
 ---
 
@@ -23,7 +23,7 @@ import {
   buildYaml,
   canAdvance,
 } from './alert-builder/builder.js';
-import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
+import { CopyButton } from './_common/components/CopyButton.jsx';
 
 /* ── i18n + repo helpers ───────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
@@ -146,7 +146,6 @@ export default function AlertBuilder() {
     description: '',
     labels: getInitialLabelsFromUrl(),
   });
-  const { copied, copy } = useCopyToClipboard();
 
   const yaml = useMemo(() => buildYaml(config), [config]);
 
@@ -172,8 +171,6 @@ export default function AlertBuilder() {
 
   const advance = () => setStep((s) => Math.min(s + 1, STEPS.length - 1));
   const retreat = () => setStep((s) => Math.max(s - 1, 0));
-
-  const copyYaml = () => copy(yaml);
 
   const inputClass =
     'w-full px-3 py-2 text-sm border border-[color:var(--da-color-surface-border)] rounded-md bg-[color:var(--da-color-surface)] text-[color:var(--da-color-fg)] focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-focus-ring)]';
@@ -467,14 +464,13 @@ export default function AlertBuilder() {
               <h3 className="text-base font-semibold text-[color:var(--da-color-fg)]">
                 {t('PrometheusRule YAML', 'PrometheusRule YAML')}
               </h3>
-              <button
-                type="button"
-                onClick={copyYaml}
-                data-testid="alert-builder-copy"
+              <CopyButton
+                text={yaml}
+                labelZh="複製 YAML"
+                labelEn="Copy YAML"
+                testId="alert-builder-copy"
                 className="px-3 py-1.5 text-xs font-medium rounded bg-[color:var(--da-color-accent)] text-[color:var(--da-color-accent-fg)] hover:bg-[color:var(--da-color-accent-hover)]"
-              >
-                {copied ? <><span aria-hidden="true">✓</span> {t('已複製', 'Copied')}</> : t('複製 YAML', 'Copy YAML')}
-              </button>
+              />
             </div>
             <pre
               data-testid="alert-builder-yaml"
