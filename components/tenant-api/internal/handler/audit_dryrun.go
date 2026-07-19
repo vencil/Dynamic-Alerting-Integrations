@@ -62,7 +62,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -256,9 +255,8 @@ func DryRunTenantAccessReport(d *Deps) http.HandlerFunc {
 
 		// 4. Bounded body read (tenant_validate.go precedent). An oversized
 		// body truncates at the limit and fails the JSON shell below.
-		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
-		if err != nil {
-			WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
+		body, ok := readLimitedBody(w, r, d)
+		if !ok {
 			return
 		}
 

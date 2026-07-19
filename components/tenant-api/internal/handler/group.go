@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"strings"
 
@@ -188,9 +187,8 @@ func PutGroup(d *Deps) http.HandlerFunc {
 		email := rbac.RequestEmail(r)
 		p := rbac.RequestPrincipal(r)
 
-		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
-		if err != nil {
-			WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
+		body, ok := readLimitedBody(w, r, d)
+		if !ok {
 			return
 		}
 

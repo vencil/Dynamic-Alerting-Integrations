@@ -20,7 +20,6 @@ package handler
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -102,9 +101,8 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
-		if err != nil {
-			WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
+		body, ok := readLimitedBody(w, r, d)
+		if !ok {
 			return
 		}
 		var req PutCustomAlertsRequest

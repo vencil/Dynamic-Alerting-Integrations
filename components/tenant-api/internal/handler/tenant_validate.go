@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"io"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -37,9 +36,8 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
-		if err != nil {
-			WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
+		body, ok := readLimitedBody(w, r, d)
+		if !ok {
 			return
 		}
 
