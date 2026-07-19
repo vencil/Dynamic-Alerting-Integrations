@@ -119,6 +119,7 @@ class TestExtractMetricsFromExprProperties:
             "rate", "sum", "max", "min", "avg", "count", "topk", "bottomk",
             "histogram_quantile", "increase", "delta", "irate", "group",
             "on", "ignoring", "group_left", "group_right", "unless", "by",
+            "or", "and",  # defect i: set/logical operators also filtered
         }
         assert builtins.isdisjoint(result), (
             f"builtin leaked: {builtins & result!r} for input {expr!r}"

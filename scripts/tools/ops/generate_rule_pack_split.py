@@ -30,7 +30,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 try:
     import yaml
@@ -100,6 +100,16 @@ def extract_metrics_from_expr(expr: str) -> Set[str]:
         "rate", "sum", "max", "min", "avg", "count", "topk", "bottomk",
         "histogram_quantile", "increase", "delta", "irate", "group",
         "on", "ignoring", "group_left", "group_right", "unless", "by",
+        # Set/logical operators (defect i). When written un-parenthesised —
+        # `metric_a or metric_b`, `x and on(...)` — the extractor's
+        # `word(?=[{[\s])` capture treats the trailing-whitespace `or`/`and`
+        # as a metric name. `unless`/`on`/`by`/`group_*`/`ignoring` were
+        # already excused; `or`/`and` complete the binary-set-op set. (PromQL
+        # FUNCTIONS — vector/label_replace/changes/absent/clamp_min/time/
+        # avg_over_time — are always written `fn(`, i.e. followed by `(` not
+        # `{[`/whitespace, so the regex never captures them; verified across
+        # every rule-pack, so they need no listing here.)
+        "or", "and",
     }
 
     # Match word followed by { or [ or whitespace
@@ -127,42 +137,199 @@ def extract_recording_outputs(rules: List[Dict[str, Any]]) -> Set[str]:
 # ─ Validation ───────────────────────────────────────────────────────────
 
 
+# Metrics a CENTRAL rule may legitimately read that are NOT produced by the
+# edge→central recording pipeline (defect ii — the validator used to compare
+# central inputs against edge recording outputs ONLY, flagging every
+# self-produced / federated-external input).
+#
+# ⚠ FEDERATION-ALIGNED SCOPE (ADR-004 pull-aggregate). The federation match[]
+# selector is `{tenant!=""}` (docs/…/federation-integration.md §fed) — the central
+# cluster federates ONLY series that CARRY A TENANT LABEL. That draws the decisive
+# line for "may a central rule read this raw series":
+#   • PER-TENANT exporter raw (one exporter per tenant; the scrape relabel stamps
+#     `tenant`) IS tenant-labeled → federated → legal on central. This covers the
+#     DB liveness / topology family every pack's *Down / *ExporterAbsent /
+#     *NoPrimary alert depends on: `up` / `<x>_up`, and the db-exporter raws
+#     (mysql_/mongodb_/pg_/redis_/oracledb_/kafka_/clickhouse_/rabbitmq_ …).
+#   • CLUSTER-LEVEL kube-state-metrics / kubelet raw (`kube_*` / `kubelet_*`) is
+#     NAMESPACE-labeled, NOT tenant-labeled (pack evidence: refs use
+#     `{namespace=~"db-.+"}` and recordings do `label_replace(...,"tenant","$1",
+#     "namespace",...)` to DERIVE tenant) → NOT federated → absent on central. A
+#     central rule reading it is a genuine federation topology bug, so `kube_` /
+#     `kubelet_` are the ONLY raw families NOT excused here (see
+#     KNOWN_CENTRAL_RAW_EXEMPTIONS for the 2 pre-existing offenders).
+#
+# External inputs recognised:
+#   1. Platform-synthesised config — threshold-exporter / conf.d injection
+#      (ADR-024), never a rule-pack recording: user_* (user_threshold /
+#      user_state_filter / user_severity_dedup / user_silent_mode),
+#      tenant_metadata_info, tenant_expected_exporter, da_config_event.
+#   2. Exporter liveness `up` / `<x>_up` (tenant-labeled, single 0/1 per target).
+#   3. Per-tenant db-exporter raw families (tenant-labeled, federated).
+#
+# NARROW BY CONSTRUCTION — a recording-namespace metric (contains ':') is NEVER
+# external: it must be pipeline-produced, so a dropped recording group is still
+# caught (defect iii guard). A bare reference matching none of these (a typo
+# `missing_metric`, OR namespace-only kube_*/kubelet_* on central) is reported.
+_PLATFORM_CONFIG_METRICS = frozenset({
+    "tenant_metadata_info",
+    "tenant_expected_exporter",
+    "da_config_event",
+})
+_PLATFORM_CONFIG_PREFIXES = ("user_",)
+# Per-tenant exporter families (tenant-labeled → federated → legal on central).
+# Deliberately EXCLUDES kube_/kubelet_ (namespace-labeled → not federated). A new
+# per-tenant exporter that reads raw on central would be added here; a new
+# kube_/kubelet_ on central is a bug caught by KNOWN_CENTRAL_RAW_EXEMPTIONS.
+_FEDERATED_EXPORTER_PREFIXES = (
+    "mysql_", "mongodb_", "pg_", "redis_", "oracledb_",
+    "kafka_", "clickhouse_", "rabbitmq_", "db2_", "elasticsearch_",
+    "jvm_", "nginx_",
+)
+
+
+def _is_external_pipeline_input(metric: str) -> bool:
+    """True if *metric* is a federated external input a central rule may read.
+
+    Federation-aligned (ADR-004, match[]=`{tenant!=""}`): recording-namespace
+    (excused elsewhere as pipeline-produced), platform-injected config, exporter
+    liveness (`up`/`*_up`), and per-tenant db-exporter raw — all tenant-labeled
+    and federated. Namespace-labeled kube_*/kubelet_* is NOT federated → NOT
+    external here.
+    """
+    if ":" in metric:
+        return False
+    if metric == "up" or metric.endswith("_up"):
+        return True
+    if metric in _PLATFORM_CONFIG_METRICS:
+        return True
+    if metric.startswith(_PLATFORM_CONFIG_PREFIXES):
+        return True
+    if metric.startswith(_FEDERATED_EXPORTER_PREFIXES):
+        return True
+    return False
+
+
+# ─ Known central-side raw-KSM references (pre-existing pack topology bugs) ─────
+#
+# Central ALERT rules that read a raw CLUSTER-LEVEL kube-state-metrics / kubelet
+# series directly. Those series are namespace-labeled (not tenant-labeled), so
+# federation's `match[]={tenant!=""}` does NOT pull them → they are absent on the
+# central cluster → the alert is permanently inert there. This is a PACK-AUTHORING
+# topology bug (the pack must add an EDGE normalisation recording that derives a
+# tenant-labeled `tenant:*`/`:core` signal and federate THAT, as the container /
+# node-health / ha-replicas groups already do). Grandfathered so the split tool
+# reports exit 0 on the current repo while the fixes are tracked — every entry
+# prints a fail-loud WARN, and a NEW (unlisted) kube_/kubelet_-on-central makes
+# the tool exit 1 (audited ledger, NOT a blanket escape hatch).
+#
+# Scope note: per-tenant exporter raw (db liveness/topology: `up`, mysql_global_*,
+# kafka_brokers, mongodb_mongod_replset_member_state, rabbitmq_identity_info, …)
+# IS tenant-labeled → federated → legal on central (see _FEDERATED_EXPORTER_*),
+# so those *Down/*ExporterAbsent/*NoPrimary alerts are NOT topology bugs. Only the
+# 2 kube-state-metrics sentinels below genuinely reference non-federated raw.
+# TODO(#1168: rule-pack KSM-federation topology audit): give each sentinel an
+# edge normalisation recording (or platform-scoped alternative), then remove
+# from this ledger.
+#   file → { raw_metric: "alert + why it reads raw" }
+KNOWN_CENTRAL_RAW_EXEMPTIONS: Dict[str, Dict[str, str]] = {
+    "rule-pack-kubernetes.yaml": {
+        "kube_pod_info": "VersionAwareThresholdInert: raw kube-state-metrics (namespace-labeled), not federated",
+        "kube_pod_labels": "VersionAwareThresholdInert: raw kube-state-metrics (namespace-labeled), not federated",
+        "kube_pod_status_phase": "CustomRecipeDiskInert: raw kube-state-metrics (namespace-labeled), not federated",
+        "kubelet_volume_stats_available_bytes": "CustomRecipeDiskInert: raw kubelet volume-stats (namespace-labeled), not federated",
+        "kubelet_volume_stats_capacity_bytes": "CustomRecipeDiskInert: raw kubelet volume-stats (namespace-labeled), not federated",
+    },
+}
+
+
 def validate_central_references_edge(
     edge_outputs: Set[str],
     central_inputs: Set[str],
     filename: str,
+    central_outputs: Optional[Set[str]] = None,
 ) -> Tuple[bool, List[str]]:
-    """Check that every metric in central Part 2 has corresponding edge output.
+    """Check that every federated metric a central rule reads is produced upstream.
+
+    A central input is a genuine dangling reference iff it is NONE of:
+    (a) produced by an edge recording rule (``edge_outputs``);
+    (b) produced by a central recording rule in the SAME bundle
+        (``central_outputs`` — e.g. ``tenant_version:alert_threshold:*`` recorded
+        by the ``-threshold-normalization`` group and consumed by that bundle's
+        own ``-alerts`` group; defect ii-a);
+    (c) a recognised external pipeline input — raw exporter / liveness /
+        platform-injected config (defect ii-b; see _is_external_pipeline_input).
 
     Returns:
         (is_valid, missing_metrics)
     """
-    missing = central_inputs - edge_outputs
-    if missing:
-        return False, sorted(missing)
-    return True, []
+    available = set(edge_outputs)
+    if central_outputs:
+        available |= set(central_outputs)
+    missing = sorted(
+        m for m in central_inputs
+        if m not in available and not _is_external_pipeline_input(m)
+    )
+    return (not missing), missing
 
 
 # ─ Rule Pack Splitting ──────────────────────────────────────────────────
 
 
-def split_rule_pack(groups: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Split groups into edge and central.
+_CENTRAL_SUFFIXES = ("-threshold-normalization", "-alerts")
+_EDGE_SUFFIX = "-normalization"
 
-    Rules:
-    - Groups ending with '-normalization' (not '-threshold-normalization') → edge
-    - Groups ending with '-threshold-normalization' or '-alerts' → central
+
+def _group_follows_suffix(name: str) -> bool:
+    """True if *name* follows the -normalization / -threshold-normalization /
+    -alerts naming convention (so it routes as a whole group by suffix).
+
+    Non-suffix groups route per-rule by data-locality instead (see
+    split_rule_pack) — used to drive the fail-loud routing WARN.
     """
-    edge_groups = []
-    central_groups = []
+    return name.endswith(_CENTRAL_SUFFIXES) or name.endswith(_EDGE_SUFFIX)
+
+
+def split_rule_pack(groups: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Split groups into edge (Part 1) and central (Parts 2+3).
+
+    Data-locality rule (ADR-004): every rule runs on the plane where its inputs
+    live. edge = recording rules that normalise RAW exporter series; central =
+    threshold + alert rules over FEDERATED ``tenant:*`` / ``:core`` / ``up`` /
+    injected series.
+
+    - Groups ending ``-threshold-normalization`` / ``-alerts`` → central (whole).
+    - Groups ending ``-normalization`` → edge (whole). (Checked first, since
+      ``-threshold-normalization`` also ends with ``-normalization``.)
+    - Groups following NO suffix convention → routed PER RULE (defect iii): a
+      recording rule reads raw exporter series → edge; an alerting rule reads its
+      own group's federated ``:core`` recording → central. A MIXED group
+      (kubernetes-node-health / -ha-replicas: raw-reading recordings + an alert
+      over their ``:core`` output) is thus split across BOTH planes. Nothing is
+      dropped — the old ``# else: skip`` discarded whole groups (state-matching's
+      ``tenant:container_waiting_reason:count`` recording, the node-health /
+      ha-replicas / sentinel groups, and the ENTIRE liveness + operational packs).
+    """
+    edge_groups: List[Dict[str, Any]] = []
+    central_groups: List[Dict[str, Any]] = []
 
     for group in groups:
         name = group.get("name", "")
-        if name.endswith("-threshold-normalization") or name.endswith("-alerts"):
+        rules = group.get("rules", [])
+        if name.endswith(_CENTRAL_SUFFIXES):
             central_groups.append(group)
-        elif name.endswith("-normalization"):
+        elif name.endswith(_EDGE_SUFFIX):
             edge_groups.append(group)
-        # else: unknown group, skip
+        else:
+            # Non-suffix: per-rule data-locality. Alerts → central; everything
+            # else (recording rules; also any malformed rule, so nothing drops)
+            # → edge. A mixed group emits a subset-copy on each plane.
+            central_rules = [r for r in rules if "alert" in r]
+            edge_rules = [r for r in rules if "alert" not in r]
+            if edge_rules:
+                edge_groups.append({**group, "rules": edge_rules})
+            if central_rules:
+                central_groups.append({**group, "rules": central_rules})
 
     return edge_groups, central_groups
 
@@ -294,32 +461,69 @@ def process_rule_packs(
             # Split into edge and central
             edge_groups, central_groups = split_rule_pack(groups)
 
+            # Fail-loud (defect iii): surface any group that does not follow the
+            # -normalization / -threshold-normalization / -alerts naming
+            # convention. Such groups were previously SILENTLY DROPPED; they are
+            # now routed PER RULE by data-locality — record the fact so the drift
+            # is visible rather than data silently vanishing from the split.
+            for group in groups:
+                name = group.get("name", "")
+                if not _group_follows_suffix(name):
+                    report["warnings"].append(
+                        f"{filename}: group '{name}' has no "
+                        "-normalization/-threshold-normalization/-alerts suffix "
+                        "→ routed per-rule by data-locality "
+                        "(recordings→edge, alerts→central; previously silently dropped)"
+                    )
+
             # Validation: extract metrics
             edge_outputs = set()
+            central_outputs = set()
             central_inputs = set()
 
             for group in edge_groups:
-                rules = group.get("rules", [])
-                edge_outputs.update(extract_recording_outputs(rules))
+                edge_outputs.update(extract_recording_outputs(group.get("rules", [])))
 
             for group in central_groups:
                 rules = group.get("rules", [])
+                # Central bundles produce their own recording outputs
+                # (tenant_version:alert_threshold:* etc.) consumed by their own
+                # alerts — count them as available (defect ii-a).
+                central_outputs.update(extract_recording_outputs(rules))
                 for rule in rules:
                     expr = rule.get("expr", "")
                     central_inputs.update(extract_metrics_from_expr(expr))
 
-            # Check metric references
+            # Check metric references (defect ii): available = edge ∪ central
+            # recording outputs; federated external inputs (up/*_up, injected)
+            # excused. Raw exporter series are NOT excused → land in `missing`.
             is_valid, missing = validate_central_references_edge(
-                edge_outputs, central_inputs, filename
+                edge_outputs, central_inputs, filename, central_outputs
             )
 
-            if not is_valid:
+            # Partition `missing` into (a) grandfathered raw-on-central pack
+            # topology bugs — fail-loud WARN, do NOT fail the run; (b) genuine
+            # violations (a new/unlisted raw-on-central, or a real dangling
+            # reference) — recorded as a mismatch → exit 1.
+            exemptions = KNOWN_CENTRAL_RAW_EXEMPTIONS.get(filename, {})
+            real_missing = []
+            for m in missing:
+                if m in exemptions:
+                    report["warnings"].append(
+                        f"{filename}: KNOWN raw-on-central (federation topology bug, "
+                        f"grandfathered): '{m}' — {exemptions[m]}"
+                    )
+                else:
+                    real_missing.append(m)
+
+            is_valid = not real_missing
+            if real_missing:
                 report["validation"]["metric_mismatches"].append({
                     "file": filename,
-                    "missing_in_edge": missing,
+                    "missing_in_edge": real_missing,
                 })
                 report["warnings"].append(
-                    f"{filename}: {t('中央規則缺少邊緣輸出', 'central rules reference missing edge outputs')}: {missing}"
+                    f"{filename}: {t('中央規則缺少邊緣輸出', 'central rules reference missing edge outputs')}: {real_missing}"
                 )
 
             # Write edge rules

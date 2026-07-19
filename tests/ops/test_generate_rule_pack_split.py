@@ -111,6 +111,25 @@ class TestExtractMetricsFromExpr:
         assert "metric_a" in metrics
         assert "metric_b" in metrics
 
+    def test_set_operators_or_and_filtered(self):
+        # Defect i: un-parenthesised `or`/`and` set operators must NOT be
+        # extracted as metric names. Tokens are captured only when followed by
+        # `{`, `[`, or whitespace, so lay the operands out with trailing spaces
+        # (mirrors the multi-line `metric_a \n or \n metric_b` rule-pack shape).
+        expr = "metric_a \n or \n metric_b \n and on(x) metric_c "
+        metrics = grps.extract_metrics_from_expr(expr)
+        assert metrics == {"metric_a", "metric_b", "metric_c"}
+        assert "or" not in metrics
+        assert "and" not in metrics
+
+    def test_promql_functions_not_captured(self):
+        # Functions are always written `fn(` (followed by `(`), so the regex
+        # never captures them — they need no builtin listing.
+        expr = "label_replace(vector(0), \"t\", \"$1\", \"ns\", \"(.*)\")"
+        metrics = grps.extract_metrics_from_expr(expr)
+        assert "label_replace" not in metrics
+        assert "vector" not in metrics
+
 
 # ---------------------------------------------------------------------------
 # extract_recording_outputs — pure
@@ -156,6 +175,116 @@ class TestValidateCentralReferencesEdge:
         )
         assert is_valid is True
 
+    def test_central_recording_output_covers_own_reference(self):
+        # Defect ii-a: a metric produced by a CENTRAL recording rule and
+        # consumed by that same bundle's alert is available — not "missing in
+        # edge". Here the tenant_version:* threshold is a central output.
+        is_valid, missing = grps.validate_central_references_edge(
+            edge_outputs={"tenant:pod_weakest_cpu_percent:max"},
+            central_inputs={
+                "tenant:pod_weakest_cpu_percent:max",
+                "tenant_version:alert_threshold:container_cpu",
+            },
+            filename="rule-pack-kubernetes.yaml",
+            central_outputs={"tenant_version:alert_threshold:container_cpu"},
+        )
+        assert is_valid is True
+        assert missing == []
+
+    def test_federated_external_inputs_excused(self):
+        # Defect ii-b (federation match[]={tenant!=""}): tenant-labeled series are
+        # federated so a central rule may read them — liveness up/*_up, platform-
+        # injected config, AND per-tenant db-exporter raw (mysql_global_* /
+        # kafka_brokers / mongodb_* / rabbitmq_* — every *Down/*NoPrimary alert
+        # relies on these).
+        is_valid, missing = grps.validate_central_references_edge(
+            edge_outputs=set(),
+            central_inputs={
+                "up", "mysql_up", "oracledb_up",
+                "tenant_metadata_info", "tenant_expected_exporter",
+                "user_threshold", "user_state_filter", "da_config_event",
+                "kafka_brokers", "mysql_global_status_uptime",
+                "mongodb_mongod_replset_member_state", "rabbitmq_identity_info",
+            },
+            filename="rule-pack-x.yaml",
+        )
+        assert is_valid is True
+        assert missing == []
+
+    def test_raw_kube_on_central_flagged(self):
+        # ONLY cluster-level kube-state-metrics/kubelet raw is namespace-labeled
+        # (not tenant-labeled) → not federated → a central reference to it is a
+        # genuine topology bug. Per-tenant exporter raw stays excused (above).
+        is_valid, missing = grps.validate_central_references_edge(
+            edge_outputs=set(),
+            central_inputs={"kube_pod_info", "kubelet_volume_stats_available_bytes"},
+            filename="rule-pack-x.yaml",
+        )
+        assert is_valid is False
+        assert missing == ["kube_pod_info", "kubelet_volume_stats_available_bytes"]
+
+    def test_bare_dangling_reference_still_caught(self):
+        # The allowlist stays NARROW: a bare reference that matches no external
+        # pattern (typo / lost recording group) is still a genuine dangling ref.
+        is_valid, missing = grps.validate_central_references_edge(
+            edge_outputs={"only_metric"},
+            central_inputs={"only_metric", "missing_metric"},
+            filename="rule-pack-x.yaml",
+        )
+        assert is_valid is False
+        assert missing == ["missing_metric"]
+
+    def test_recording_namespace_metric_never_treated_as_external(self):
+        # Colon (recording-namespace) metrics must always be pipeline-produced,
+        # so a dropped recording group is still caught (defect iii guard) — a
+        # `tenant:` metric produced by nobody is flagged even though it shares a
+        # prefix family with injected metrics.
+        is_valid, missing = grps.validate_central_references_edge(
+            edge_outputs=set(),
+            central_inputs={"tenant:container_waiting_reason:count"},
+            filename="rule-pack-kubernetes.yaml",
+        )
+        assert is_valid is False
+        assert missing == ["tenant:container_waiting_reason:count"]
+
+
+class TestIsExternalPipelineInput:
+    def test_liveness_metrics_external(self):
+        assert grps._is_external_pipeline_input("up") is True
+        assert grps._is_external_pipeline_input("mysql_up") is True
+        assert grps._is_external_pipeline_input("oracledb_up") is True
+
+    def test_platform_config_metrics_external(self):
+        for m in ("tenant_metadata_info", "tenant_expected_exporter",
+                  "da_config_event", "user_threshold", "user_state_filter",
+                  "user_severity_dedup", "user_silent_mode"):
+            assert grps._is_external_pipeline_input(m) is True, m
+
+    def test_per_tenant_exporter_raw_external(self):
+        # Per-tenant exporters are tenant-labeled → federated → excused.
+        for m in ("mysql_global_status_uptime", "mongodb_up", "kafka_brokers",
+                  "rabbitmq_identity_info", "pg_stat_database_deadlocks",
+                  "redis_up", "db2_up", "clickhouse_replication_queue"):
+            assert grps._is_external_pipeline_input(m) is True, m
+
+    def test_cluster_ksm_raw_not_external(self):
+        # kube-state-metrics / kubelet raw is namespace-labeled → NOT federated
+        # → NOT external (the only raw families the validator flags on central).
+        for m in ("kube_pod_info", "kube_pod_labels", "kube_pod_status_phase",
+                  "kubelet_volume_stats_available_bytes",
+                  "kubelet_volume_stats_capacity_bytes"):
+            assert grps._is_external_pipeline_input(m) is False, m
+
+    def test_recording_namespace_not_external(self):
+        for m in ("tenant:container_cpu_percent:by_container",
+                  "tenant_version:alert_threshold:container_cpu",
+                  "rule_pack_kubernetes:node_not_ready:core"):
+            assert grps._is_external_pipeline_input(m) is False, m
+
+    def test_bare_dangling_not_external(self):
+        assert grps._is_external_pipeline_input("missing_metric") is False
+        assert grps._is_external_pipeline_input("only_metric") is False
+
 
 # ---------------------------------------------------------------------------
 # split_rule_pack — pure
@@ -182,21 +311,62 @@ class TestSplitRulePack:
         assert edge == []
         assert len(central) == 1
 
-    def test_unknown_suffix_silently_skipped(self):
-        groups = [{"name": "weird-name", "rules": []}]
-        edge, central = grps.split_rule_pack(groups)
-        assert edge == []
-        assert central == []
+    def test_unknown_suffix_routed_per_rule_not_dropped(self):
+        # Defect iii: non-suffix groups are NO LONGER silently dropped. They are
+        # routed PER RULE by data-locality — alerting rule → central, recording
+        # rule → edge.
+        alert_group = {"name": "weird-alerts-x",
+                       "rules": [{"alert": "A", "expr": "x > 0"}]}
+        record_group = {"name": "weird-state-matching",
+                        "rules": [{"record": "tenant:foo:count", "expr": "x"}]}
+        edge, central = grps.split_rule_pack([alert_group, record_group])
+        assert alert_group in central
+        assert record_group in edge
+
+    def test_mixed_non_suffix_group_split_across_planes(self):
+        # A MIXED non-suffix group (raw-reading recordings + an alert over their
+        # :core output, e.g. kubernetes-node-health) is split: recordings → edge,
+        # alert → central (both carry the same group name). This is a CORRECTNESS
+        # fix — sending the whole group to central would make the recordings
+        # (reading namespace-labeled raw kube) produce nothing there → the alert
+        # never fires.
+        mixed = {
+            "name": "node-health",
+            "rules": [
+                {"record": "tenant:node_owner:info", "expr": "kube_pod_info"},
+                {"record": "rule_pack_x:node_not_ready:core",
+                 "expr": "tenant:node_owner:info and kube_node_status_condition"},
+                {"alert": "NodeNotReady",
+                 "expr": "rule_pack_x:node_not_ready:core * tenant_metadata_info"},
+            ],
+        }
+        edge, central = grps.split_rule_pack([mixed])
+        assert len(edge) == 1 and len(central) == 1
+        edge_records = [r.get("record") for r in edge[0]["rules"]]
+        central_alerts = [r.get("alert") for r in central[0]["rules"]]
+        assert edge_records == ["tenant:node_owner:info",
+                                "rule_pack_x:node_not_ready:core"]
+        assert central_alerts == ["NodeNotReady"]
+
+    def test_group_follows_suffix_predicate(self):
+        # Drives the fail-loud routing WARN.
+        assert grps._group_follows_suffix("x-alerts") is True
+        assert grps._group_follows_suffix("x-normalization") is True
+        assert grps._group_follows_suffix("x-threshold-normalization") is True
+        assert grps._group_follows_suffix("kubernetes-state-matching") is False
+        assert grps._group_follows_suffix("node-health") is False
 
     def test_mixed_pack_distributes_correctly(self):
         groups = [
-            {"name": "mysql-normalization"},
-            {"name": "mysql-threshold-normalization"},
-            {"name": "mysql-alerts"},
-            {"name": "unknown"},
+            {"name": "mysql-normalization", "rules": [{"record": "m"}]},
+            {"name": "mysql-threshold-normalization", "rules": [{"record": "t"}]},
+            {"name": "mysql-alerts", "rules": [{"alert": "A"}]},
+            {"name": "sidecar-recording",  # no suffix, recording-only → edge
+             "rules": [{"record": "custom_info"}]},
         ]
         edge, central = grps.split_rule_pack(groups)
-        assert len(edge) == 1
+        # sidecar-recording lands on edge instead of being dropped.
+        assert len(edge) == 2
         assert len(central) == 2
 
 
