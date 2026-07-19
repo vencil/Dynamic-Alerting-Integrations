@@ -42,6 +42,14 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from pathlib import Path as _P
+
+# cp950-console --help hardening (da-tools ROI r4 W7): importing a root lib
+# reconfigures stdout errors at import time — before argparse can print
+# --help — so unencodable help chars degrade instead of crashing on a
+# legacy Windows console. scripts/tools is one level up from ops/.
+sys.path.insert(0, str(_P(__file__).resolve().parents[1]))
+import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
 
 # ── pure domain logic (unit-tested without a cluster) ──────────────────────────
 

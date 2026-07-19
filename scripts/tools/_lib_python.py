@@ -10,6 +10,11 @@ Direct imports from sub-modules are preferred for new code:
 """
 from __future__ import annotations
 
+# Import-time stdout hardening (cp950-class consoles): chain-import so any
+# tool importing this facade is protected before argparse.parse_args() can
+# print --help. Gate: tests/shared/test_console_encoding_resilience.py
+import _lib_compat  # noqa: F401  (import-time side effect; see _lib_compat)
+
 # Re-export all public symbols for backward compatibility
 from _lib_constants import (  # noqa: F401
     VALID_RESERVED_KEYS,

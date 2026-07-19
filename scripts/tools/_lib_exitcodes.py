@@ -52,6 +52,14 @@ from __future__ import annotations
 import sys
 from typing import Final, NoReturn
 
+# Import-time stdout hardening (cp950-class consoles): every da-tools CLI
+# imports at least one of the four root libs (_lib_compat / _lib_python /
+# _lib_godispatch / this module) at module level — i.e. before
+# argparse.parse_args() can print --help — so chain-importing _lib_compat
+# here guarantees unencodable characters degrade instead of crashing.
+# Gate: tests/shared/test_console_encoding_resilience.py
+import _lib_compat  # noqa: F401  (import-time side effect; see _lib_compat)
+
 EXIT_OK: Final[int] = 0
 EXIT_VIOLATION: Final[int] = 1
 EXIT_CALLER_ERROR: Final[int] = 2

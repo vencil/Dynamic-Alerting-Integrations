@@ -91,3 +91,80 @@ def try_utf8_stdout() -> None:
         # Older Python, non-stream stdout, or pytest capture wrapper.
         # Output may degrade but won't crash. Defensive fallthrough.
         pass
+
+
+def harden_stdout_errors() -> None:
+    """Best-effort: make stdout degrade (not crash) on unencodable chars.
+
+    Why this exists (Wave 7, da-tools ROI round 4):
+        `try_utf8_stdout()` above is called as the first line of `main()`,
+        but argparse's `--help` prints (and exits) inside
+        `parser.parse_args()` — i.e. BEFORE any main()-body call runs.
+        On a zh-TW Windows console (cp950) a help text containing e.g.
+        '≥' (U+2265) therefore crashed with UnicodeEncodeError and a
+        non-zero exit, breaking the "--help always exits 0" contract on
+        the exact consoles our customer base uses. The only spot that
+        is guaranteed to run before parse_args() is module import — so
+        this helper is invoked at import time of the shared root libs
+        (_lib_compat itself, plus _lib_exitcodes / _lib_python /
+        _lib_godispatch chain-import it). Every ops tool imports at
+        least one of those four at module level (gate:
+        tests/shared/test_console_encoding_resilience.py).
+
+    What this does (and deliberately does NOT do):
+        sys.stdout.reconfigure(errors="backslashreplace")
+        - errors only, encoding UNTOUCHED: the console's native codec
+          (cp950 / cp936 / cp1252 / utf-8) keeps rendering everything it
+          CAN encode — Traditional Chinese help stays readable on cp950
+          — and only the rare unencodable char degrades to '\\uXXXX'.
+          (Contrast try_utf8_stdout(), which forces UTF-8 bytes: right
+          for tools that opted in, but as an import-time default it
+          would mojibake ALL Chinese text on legacy consoles.)
+        - "backslashreplace" over "replace": info-preserving ('\\u2265'
+          instead of '?') and matches Python's own stderr default.
+          JSON-safety note: for BMP chars U+0100–U+FFFF the artifact is
+          '\\uXXXX', which is itself a valid JSON escape — so the common
+          case (this repo's status symbols ✓ ⚠ ➕ → ≥ ≤ are all BMP)
+          keeps non-ensure_ascii --json output parseable on a legacy
+          console. Latin-1 (U+0080–U+00FF → '\\xXX') and astral
+          (→ '\\UXXXXXXXX') artifacts are NOT valid JSON; those --json
+          outputs would need `| jq` to fail rather than parse a garbled
+          char — still a strict improvement over the previous hard crash,
+          just not silently-correct. (This window is invisible to the
+          #1112 --json gate, which runs under utf-8 where this hook is a
+          no-op.)
+        - On UTF-8 stdout this is a byte-for-byte no-op (UTF-8 encodes
+          everything), so CI / modern terminals / piped-to-file output
+          are unchanged.
+
+    Interaction with try_utf8_stdout():
+        Independent and compatible. Tools that call try_utf8_stdout()
+        in main() still get their historical UTF-8-forced stdout; this
+        hook only covers the import→parse_args window and tools that
+        never adopted the main() call.
+
+    Why best-effort (the try/except):
+        Guards genuinely non-reconfigurable stdout: Python <3.7 (no
+        .reconfigure), plain StringIO stand-ins, or detached streams.
+        NOTE — modern pytest capture (CaptureIO / fd-capture TextIOWrapper)
+        DOES support .reconfigure(); under pytest this call succeeds and
+        flips the capture stream's error mode. Verified harmless: capsys is
+        function-scoped (no cross-test bleed) and encoding-sensitive tests
+        use their own monkeypatched fake streams — the full suite passes
+        with this side effect live. Idempotent: _lib_compat's module body
+        runs once per process (sys.modules cache) however many carriers
+        chain-import it, and reconfigure() is itself idempotent.
+    """
+    try:
+        sys.stdout.reconfigure(errors="backslashreplace")
+    except (AttributeError, OSError):
+        # Non-reconfigurable stdout (pytest capture, StringIO, old
+        # Python). Defensive fallthrough — worst case is the historical
+        # behavior, never worse.
+        pass
+
+
+# Import-time side effect (intentional; see harden_stdout_errors docstring):
+# hardening must land before argparse.parse_args() can print --help, and
+# module import of a shared root lib is the only guaranteed pre-parse hook.
+harden_stdout_errors()

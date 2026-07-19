@@ -49,6 +49,10 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+# Import-time stdout hardening (also reached transitively via _lib_python /
+# _lib_exitcodes below; explicit so a future refactor of those imports can't
+# silently drop it). Gate: tests/shared/test_console_encoding_resilience.py
+import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
