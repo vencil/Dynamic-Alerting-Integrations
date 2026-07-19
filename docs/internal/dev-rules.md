@@ -231,15 +231,15 @@ Status 處理 / hotfix 例外 / A vs B CI 分類細節見 [`github-release-playb
 
 Phase .a0 token 遷移期間確立的慣例，適用所有 JSX 互動工具。
 
-### S1. 中性色禁 slate，用 `--da-neutral-*` 或 `gray-*`
+### S1. 中性色禁 raw `slate-*` class，用 `--da-color-*` token 或 `gray-*`
 
-**規則**：`tools/portal/src/interactive/tools/` 下的 JSX 禁止使用 Tailwind `slate-*` 類別。中性色統一走 `--da-neutral-*` token 或對應的 `gray-*` shade。
+**規則**：`tools/portal/src/interactive/tools/` 下的 JSX 禁止使用 Tailwind `slate-*` 色票類別（`bg-slate-*` / `text-slate-*` / `border-slate-*` 等）。中性色統一走 `--da-color-*` design token（`--da-color-fg` / `--da-color-muted` / `--da-color-surface` / `--da-color-surface-border` / `--da-color-tile-muted`），無對映時退 `gray-*` shade。
 
-**為什麼**：`design-tokens.css` 的 `--da-neutral-*` 色值是 Tailwind `gray` scale（暖中性灰）。`slate` 是冷藍灰，兩者色調不同。混用會導致同頁面兩種中性灰色調。Day 3 deployment-wizard 遷移時確立（commit `8634ea2`）。
+**為什麼**：raw `slate-*`（及任何寫死的 Tailwind 色票 class）**不會隨主題翻色**——`text-slate-600` 在 dark mode 仍是 slate-600，破壞 portal 明/暗主題。`--da-color-*` token 才會在 `[data-theme="dark"]` 下 flip（如 `--da-color-muted` 光 `#475569` → 暗 `#94a3b8`）。重點在「用會翻色的 token 取代寫死的 class」，而非避開 slate 色調本身——`--da-color-muted` 本身即 Slate 600。（本節取代原引用**不存在**的 `--da-neutral-*` 家族與已失準的「暖/冷灰」rationale；Day 3 deployment-wizard 遷移 commit `8634ea2` 為原始 context。）
 
 **Waiver**：IDE / code preview 情境可保留 `bg-slate-900 text-slate-100`（深底等寬字型視覺），需在 JSX 註解中標明。
 
-**收束驗收**：`grep -rE '(bg|text|border)-slate-[0-9]+' tools/portal/src/interactive/tools/` 僅剩 waiver。
+**強制**：新增的 `slate-*` class 由 pre-commit `design-token-usage`（diff-only）攔截（`scripts/tools/lint/check_design_token_usage.py`）。存量（500+ 處、多為早期工具）為 grandfathered baseline，隨 [S1-migration / #3 MetricCard 跨工具收斂] 逐工具遷移；因存量未清，不再宣稱「收束驗收 grep 僅剩 waiver」。
 
 ### S2. Playwright spec 含 `assertNoAbsoluteRootHrefs` 守門
 

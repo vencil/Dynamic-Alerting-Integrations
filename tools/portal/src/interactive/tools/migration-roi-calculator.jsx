@@ -6,11 +6,13 @@ version: v2.7.0
 lang: en
 related: [roi-calculator, operator-setup-wizard, migration-simulator]
 dependencies: [
-  "migration-roi-calculator/calc.js"
+  "migration-roi-calculator/calc.js",
+  "_common/components/MetricCard.jsx"
 ]
 ---
 
 import React, { useState, useMemo } from 'react';
+import { MetricCard as MetricCardBase } from './_common/components/MetricCard.jsx';
 
 // PR-portal-14: estimation models extracted to a unit-testable module.
 // estimatePlatformCoverage now takes platformRules (TOTAL_RULES) as an arg.
@@ -160,36 +162,11 @@ const styles = {
     gap: 'var(--da-space-4)',
     marginBottom: 'var(--da-space-8)',
   },
-  metricCard: {
-    backgroundColor: 'var(--da-color-surface)',
-    border: '1px solid var(--da-color-surface-border)',
-    borderRadius: 'var(--da-radius-lg)',
-    padding: 'var(--da-space-4)',
-    boxShadow: 'var(--da-shadow-subtle)',
-  },
-  metricLabel: {
-    fontSize: 'var(--da-font-size-xs)',
-    color: 'var(--da-color-muted)',
-    fontWeight: 'var(--da-font-weight-medium)',
-    marginBottom: 'var(--da-space-1)',
-  },
-  metricValue: {
-    fontSize: 'var(--da-font-size-2xl)',
-    fontWeight: 'var(--da-font-weight-bold)',
-    color: 'var(--da-color-accent)',
-    marginBottom: 'var(--da-space-1)',
-    fontFamily: 'monospace',
-  },
   metricUnit: {
     fontSize: 'var(--da-font-size-sm-md)',
     color: 'var(--da-color-muted)',
     fontWeight: 'var(--da-font-weight-normal)',
     marginLeft: 'var(--da-space-1)',
-  },
-  metricSubtitle: {
-    fontSize: 'var(--da-font-size-xs)',
-    color: 'var(--da-color-muted)',
-    marginTop: 'var(--da-space-1)',
   },
   detailsPanel: {
     backgroundColor: 'var(--da-color-surface)',
@@ -338,17 +315,11 @@ function RadioGroup({ label, value, onChange, options }) {
   );
 }
 
-function MetricCard({ label, value, unit, subtitle }) {
-  return (
-    <div style={styles.metricCard}>
-      <div style={styles.metricLabel}>{label}</div>
-      <div>
-        <span style={styles.metricValue}>{typeof value === 'number' ? value.toLocaleString() : value}</span>
-        <span style={styles.metricUnit}>{unit}</span>
-      </div>
-      {subtitle && <div style={styles.metricSubtitle}>{subtitle}</div>}
-    </div>
-  );
+// Converged to the shared _common MetricCard (portal deferred-followups
+// Phase B2). Thin adapter preserves this tool's thousands-separator value
+// formatting; the card's rendering + styling now come from the shared card.
+function MetricCard({ value, ...rest }) {
+  return <MetricCardBase value={typeof value === 'number' ? value.toLocaleString() : value} {...rest} />;
 }
 
 function DetailsPanel({ title, items }) {

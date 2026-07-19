@@ -413,18 +413,71 @@ def check_saturated_token_as_text(content: str, filename: str) -> List[Dict]:
     return issues
 
 
-def scan_jsx_files(diff_base: str | None = None) -> Tuple[Dict[str, List[Dict]], Dict[str, List[Dict]], Dict[str, List[Dict]]]:
+# (d) Raw Tailwind `slate-*` color classes (dev-rules.md S1). A raw `slate-*`
+# utility is hardcoded and does NOT flip in dark mode — `text-slate-600` stays
+# slate-600 under `[data-theme="dark"]`, breaking the portal's light/dark
+# theming — whereas the `--da-color-*` tokens flip (e.g. --da-color-muted
+# #475569 → #94a3b8). The point is "use a token that re-themes", not avoiding
+# the slate hue itself (--da-color-muted IS slate-600). A leading utility prefix
+# (bg-/text-/border-/…, incl. responsive/state prefixes like `md:`/`hover:` via
+# the `(?<![\w-])` boundary) is required so bare words like "translate" or
+# "context" never match. Case-sensitive. Shade captured to honor the S1 Waiver.
+_SLATE_CLASS_RE = re.compile(
+    r"(?<![\w-])(?:bg|text|border|ring|ring-offset|from|to|via|divide|placeholder|"
+    r"outline|decoration|accent|caret|fill|stroke|shadow)-slate-(\d{2,3})(?![\w-])"
+)
+# S1 Waiver: the dark IDE / code-preview surface pair (`bg-slate-900` +
+# `text-slate-100`) is allowed — those extreme shades ARE the dark chrome and
+# don't participate in the light/dark neutral flip. Any other shade on a
+# non-exempt line is a finding.
+_SLATE_WAIVER_SHADES = {"900", "100"}
+
+
+def check_hardcoded_slate_classes(content: str, filename: str) -> List[Dict]:
+    """Scan for raw Tailwind ``slate-*`` color classes (dev-rules.md S1).
+
+    ``slate-*`` utilities are hardcoded and do not re-theme in dark mode; portal
+    neutrals must use theme-aware ``--da-color-*`` tokens (or a ``gray-*`` shade).
+    Diff-only by default (see ``scan_jsx_files``), so the pre-existing ~500
+    occurrences are grandfathered — this only stops NEW additions ("codified
+    beats documented"; S1 previously had no enforcement). The S1 Waiver shades
+    ``slate-900`` / ``slate-100`` (dark code-preview chrome) are allowed, as is
+    any line carrying ``/* token-exempt */``. Honors the same comment-stripping
+    as the other checks (a slate class inside a comment is not flagged).
+
+    Returns list of {line, cls, context}.
+    """
+    issues = []
+    lines = content.splitlines()
+    code_lines = _strip_comments(content)
+    for i, line in enumerate(lines, 1):
+        if _is_exempt(line):
+            continue
+        code_part = code_lines[i - 1]
+        for m in _SLATE_CLASS_RE.finditer(code_part):
+            if m.group(1) in _SLATE_WAIVER_SHADES:
+                continue
+            issues.append({
+                "line": i,
+                "cls": m.group(0),
+                "context": line.strip()[:80],
+            })
+    return issues
+
+
+def scan_jsx_files(diff_base: str | None = None) -> Tuple[Dict[str, List[Dict]], Dict[str, List[Dict]], Dict[str, List[Dict]], Dict[str, List[Dict]]]:
     """Scan JSX files for design token violations.
 
     If ``diff_base`` is None: full-scan all JSX files in JSX_TOOLS_DIR + WIZARD_DIR.
     If ``diff_base`` is a ref: only flag findings on lines ADDED in the current
     diff vs that base. Existing pre-existing violations are not re-emitted.
 
-    Returns (hex_issues_by_file, px_issues_by_file, token_issues_by_file).
+    Returns (hex_issues, px_issues, token_issues, slate_issues) by file.
     """
     hex_issues = defaultdict(list)
     px_issues = defaultdict(list)
     token_issues = defaultdict(list)
+    slate_issues = defaultdict(list)
 
     jsx_dirs = [JSX_TOOLS_DIR, WIZARD_DIR]
 
@@ -448,6 +501,7 @@ def scan_jsx_files(diff_base: str | None = None) -> Tuple[Dict[str, List[Dict]],
             hex_found = check_hardcoded_hex_colors(content, jsx_file.name)
             px_found = check_hardcoded_px_values(content, jsx_file.name)
             token_found = check_saturated_token_as_text(content, jsx_file.name)
+            slate_found = check_hardcoded_slate_classes(content, jsx_file.name)
 
             # If diff-only, filter findings to lines actually added in current diff
             if diff_base is not None:
@@ -460,6 +514,7 @@ def scan_jsx_files(diff_base: str | None = None) -> Tuple[Dict[str, List[Dict]],
                     hex_found = [h for h in hex_found if h["line"] in added_lines]
                     px_found = [h for h in px_found if h["line"] in added_lines]
                     token_found = [h for h in token_found if h["line"] in added_lines]
+                    slate_found = [h for h in slate_found if h["line"] in added_lines]
 
             if hex_found:
                 hex_issues[rel_path] = hex_found
@@ -467,8 +522,10 @@ def scan_jsx_files(diff_base: str | None = None) -> Tuple[Dict[str, List[Dict]],
                 px_issues[rel_path] = px_found
             if token_found:
                 token_issues[rel_path] = token_found
+            if slate_found:
+                slate_issues[rel_path] = slate_found
 
-    return dict(hex_issues), dict(px_issues), dict(token_issues)
+    return dict(hex_issues), dict(px_issues), dict(token_issues), dict(slate_issues)
 
 
 def _read_pr_body(pr_body_file: str | None) -> str | None:
@@ -521,9 +578,9 @@ def main():
             sys.exit(EXIT_CALLER_ERROR)
         scan_mode = f"diff vs {diff_base}"
 
-    hex_issues, px_issues, token_issues = scan_jsx_files(diff_base=diff_base)
+    hex_issues, px_issues, token_issues, slate_issues = scan_jsx_files(diff_base=diff_base)
 
-    all_files = set(hex_issues.keys()) | set(px_issues.keys()) | set(token_issues.keys())
+    all_files = set(hex_issues.keys()) | set(px_issues.keys()) | set(token_issues.keys()) | set(slate_issues.keys())
     total_violations = 0
 
     if not all_files:
@@ -555,6 +612,13 @@ def main():
                       f"— fails WCAG AA contrast in light theme; use var({issue['suggestion']})")
                 total_violations += 1
 
+        # Raw slate-* Tailwind class — not theme-aware (dev-rules S1)
+        if filename in slate_issues:
+            for issue in slate_issues[filename]:
+                print(f"  L{issue['line']}: raw Tailwind '{issue['cls']}' is not theme-aware "
+                      f"(dev-rules S1) — use a --da-color-* token (or gray-* shade)")
+                total_violations += 1
+
         print()
 
     # Summary
@@ -576,8 +640,10 @@ def main():
         print(
             "\nFix: replace hardcoded values with --da-* tokens; for a saturated\n"
             "  error/warning token used as text, switch to its -text variant\n"
-            "  (--da-color-error-text / --da-color-warning-text). OR add\n"
-            "  /* token-exempt */ on the line if intentional (e.g. on a dark bg).\n"
+            "  (--da-color-error-text / --da-color-warning-text); for a raw\n"
+            "  slate-* class use a --da-color-* token (or gray-* shade) so it\n"
+            "  re-themes in dark mode (dev-rules S1). OR add /* token-exempt */\n"
+            "  on the line if intentional (e.g. on a dark bg).\n"
             "Or add to PR description (per lint-policy.md §4):\n"
             "  bypass-lint: design-token-usage\n"
             "  reason: <≥30 words explaining why this is legitimate>",

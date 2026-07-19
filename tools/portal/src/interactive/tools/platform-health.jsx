@@ -8,7 +8,6 @@ related: [health-dashboard, self-service-portal, alert-simulator]
 dependencies: [
   "platform-health/fixtures/platform-data.js",
   "platform-health/components/StatusDot.jsx",
-  "platform-health/components/MetricCard.jsx",
   "platform-health/components/ComponentHealth.jsx",
   "platform-health/components/TenantOverview.jsx",
   "platform-health/components/RulePackDistribution.jsx",

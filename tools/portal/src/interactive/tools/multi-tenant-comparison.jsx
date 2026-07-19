@@ -9,6 +9,7 @@ related: [capacity-planner, roi-calculator, alert-noise-analyzer]
 
 import React, { useState, useMemo } from 'react';
 import { computeStats, detectOutliers, findCommonSettings, findDivergent, DEFAULTS } from './multi-tenant-comparison/calc.js';
+import { MetricCard as MetricCardBase } from './_common/components/MetricCard.jsx';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -77,18 +78,10 @@ const SAMPLE_TENANTS = [
 
 // ── Components ────────────────────────────────────────────────────
 
-function MetricCard({ label, value, sub }) {
-  const containerStyle = { background: 'var(--da-color-surface-hover)', border: '1px solid var(--da-color-section-border)', borderRadius: 8, padding: '12px 16px', textAlign: 'center', minWidth: 100 };
-  const labelStyle = { fontSize: 12, color: 'var(--da-color-muted)', marginBottom: 4 };
-  const valueStyle = { fontSize: 24, fontWeight: 700, color: 'var(--da-color-fg)' };
-  const subStyle = { fontSize: 11, color: 'var(--da-color-hero-muted)', marginTop: 2 };
-  return (
-    <div style={containerStyle}>
-      <div style={labelStyle}>{label}</div>
-      <div style={valueStyle}>{value}</div>
-      {sub && <div style={subStyle}>{sub}</div>}
-    </div>
-  );
+// Converged to the shared _common MetricCard (Phase B2); `sub` maps to the
+// shared card's `subtitle` slot.
+function MetricCard({ sub, ...rest }) {
+  return <MetricCardBase subtitle={sub} {...rest} />;
 }
 
 function BarChart({ data, maxVal, label }) {

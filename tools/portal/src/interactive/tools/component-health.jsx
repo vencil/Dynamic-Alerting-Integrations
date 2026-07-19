@@ -8,6 +8,7 @@ related: [threshold-heatmap, config-lint]
 ---
 
 import React, { useState, useMemo } from 'react';
+import { MetricCard as MetricCardBase } from './_common/components/MetricCard.jsx';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -81,23 +82,6 @@ const styles = {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
     gap: 'var(--da-space-4)',
-  },
-  kpiCard: {
-    background: 'var(--da-color-surface)',
-    border: '1px solid var(--da-color-surface-border)',
-    borderRadius: 'var(--da-radius-lg)',
-    padding: 'var(--da-space-4)',
-    textAlign: 'center',
-  },
-  kpiValue: {
-    fontSize: 'var(--da-font-size-2xl)',
-    fontWeight: 'var(--da-font-weight-bold)',
-    color: 'var(--da-color-fg)',
-  },
-  kpiLabel: {
-    fontSize: 'var(--da-font-size-xs)',
-    color: 'var(--da-color-muted)',
-    marginTop: 'var(--da-space-1)',
   },
   section: {
     background: 'var(--da-color-surface)',
@@ -224,13 +208,11 @@ const GROUP_COLORS = {
 };
 
 /* ── Sub-components ── */
+// Converged to the shared _common MetricCard (Phase B2). `accent` maps to the
+// shared card's value-tone slot, preserving this tool's semantic health colour
+// (success / info / error on the value).
 function KpiCard({ value, label, accent }) {
-  return (
-    <div style={styles.kpiCard} role="group" aria-label={label}>
-      <div style={{ ...styles.kpiValue, color: accent || styles.kpiValue.color }}>{value}</div>
-      <div style={styles.kpiLabel}>{label}</div>
-    </div>
-  );
+  return <MetricCardBase value={value} label={label} accent={accent} />;
 }
 
 function Badge({ tier }) {

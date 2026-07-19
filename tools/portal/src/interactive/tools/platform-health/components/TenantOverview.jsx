@@ -25,7 +25,7 @@ purpose: |
   Behavior contract: identical to the inline section.
 ---
 
-import { MetricCard } from './MetricCard.jsx';
+import { MetricCard } from '../../_common/components/MetricCard.jsx';
 import { PLATFORM_HEALTH_DATA } from '../fixtures/platform-data.js';
 
 const t = window.__t || ((zh, en) => en);

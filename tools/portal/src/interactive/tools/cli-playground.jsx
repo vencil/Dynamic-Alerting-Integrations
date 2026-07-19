@@ -8,7 +8,7 @@ related: [wizard, onboarding-checklist, glossary]
 ---
 
 import React, { useState, useCallback } from 'react';
-import { Copy, RefreshCw } from 'lucide-react';
+import { Copy } from 'lucide-react';
 import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 import { COMMANDS, NETWORK_MODES } from './cli-playground/commands.js';

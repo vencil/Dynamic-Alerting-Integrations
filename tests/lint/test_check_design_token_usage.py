@@ -600,16 +600,57 @@ class TestSaturatedTokenAsText:
 
 
 # ---------------------------------------------------------------------------
+# Tests for check_hardcoded_slate_classes (dev-rules S1)
+# ---------------------------------------------------------------------------
+
+class TestSlateClasses:
+    """Raw slate-* Tailwind classes are not theme-aware (dev-rules S1)."""
+
+    def test_flags_common_slate_shades(self):
+        content = '<div className="bg-white text-slate-600 border-slate-200" />'
+        found = {i["cls"] for i in dtu.check_hardcoded_slate_classes(content, "x.jsx")}
+        assert found == {"text-slate-600", "border-slate-200"}
+
+    def test_waiver_shades_900_100_allowed(self):
+        # S1 Waiver: dark IDE / code-preview chrome pair
+        content = '<pre className="bg-slate-900 text-slate-100" />'
+        assert dtu.check_hardcoded_slate_classes(content, "x.jsx") == []
+
+    def test_responsive_and_state_prefixes_still_flagged(self):
+        content = '<div className="md:text-slate-500 hover:bg-slate-50" />'
+        found = {i["cls"] for i in dtu.check_hardcoded_slate_classes(content, "x.jsx")}
+        assert found == {"text-slate-500", "bg-slate-50"}
+
+    def test_token_exempt_marker_allows_slate(self):
+        content = '<div className="text-slate-600" /> {/* token-exempt: legacy */}'
+        assert dtu.check_hardcoded_slate_classes(content, "x.jsx") == []
+
+    def test_slate_inside_comment_not_flagged(self):
+        content = "// avoid text-slate-500 here\nconst x = 1;"
+        assert dtu.check_hardcoded_slate_classes(content, "x.jsx") == []
+
+    def test_no_false_match_on_translate(self):
+        # "translate" contains "slate" but has no `-slate-` boundary
+        content = '<div className="translate-x-4 select-none" />'
+        assert dtu.check_hardcoded_slate_classes(content, "x.jsx") == []
+
+    def test_clean_token_based_file_no_slate(self):
+        content = '<div className="bg-[color:var(--da-color-surface)] text-[color:var(--da-color-fg)]" />'
+        assert dtu.check_hardcoded_slate_classes(content, "x.jsx") == []
+
+
+# ---------------------------------------------------------------------------
 # Tests for scan_jsx_files and exit logic
 # ---------------------------------------------------------------------------
 
 class TestScanResults:
     def test_scan_jsx_files_returns_tuple(self):
-        """scan_jsx_files returns (hex, px, token) issue dicts."""
-        hex_issues, px_issues, token_issues = dtu.scan_jsx_files()
+        """scan_jsx_files returns (hex, px, token, slate) issue dicts."""
+        hex_issues, px_issues, token_issues, slate_issues = dtu.scan_jsx_files()
         assert isinstance(hex_issues, dict)
         assert isinstance(px_issues, dict)
         assert isinstance(token_issues, dict)
+        assert isinstance(slate_issues, dict)
 
     def test_direct_function_hex_detection(self, jsx_file_hex_violation):
         """Direct test of hex detection logic."""

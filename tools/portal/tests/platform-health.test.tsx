@@ -14,7 +14,7 @@ import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { PLATFORM_HEALTH_DATA } from '../src/interactive/tools/platform-health/fixtures/platform-data.js';
 import { StatusDot } from '../src/interactive/tools/platform-health/components/StatusDot.jsx';
-import { MetricCard } from '../src/interactive/tools/platform-health/components/MetricCard.jsx';
+import { MetricCard } from '../src/interactive/tools/_common/components/MetricCard.jsx';
 import PlatformHealth from '../src/interactive/tools/platform-health.jsx';
 
 describe('PLATFORM_HEALTH_DATA fixture', () => {
