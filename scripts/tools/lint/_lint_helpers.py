@@ -30,6 +30,9 @@ BUILD_EXEMPT = frozenset({
     "_lib_validation.py",
     "_lib_prometheus.py",
     "_lib_io.py",
+    # v2.10.0 (da-tools ROI r5) — minimal CRD YAML serializer shared by
+    # operator_generate + migrate_to_operator. Library, not CLI.
+    "_lib_yaml.py",
     # v2.8.0 PR-2 — shared dispatcher absorbs ~95% of guard /
     # batchpr / parser dispatcher boilerplate. Library, not CLI.
     "_lib_godispatch.py",
