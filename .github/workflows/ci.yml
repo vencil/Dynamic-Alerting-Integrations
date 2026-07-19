@@ -1107,13 +1107,17 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-go-tests-schemathesis-v1
+          # Key on the pinned-requirements hash so the cache invalidates
+          # automatically whenever the schemathesis pin is bumped (#1158),
+          # instead of relying on a manual -vN suffix bump.
+          key: ${{ runner.os }}-pip-go-tests-schemathesis-${{ hashFiles('tests/contract/requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-go-tests-
             ${{ runner.os }}-pip-
 
       - name: Install schemathesis
-        run: pip install schemathesis
+        # Pinned version — see tests/contract/requirements.txt (#1158).
+        run: pip install -r tests/contract/requirements.txt
 
       - name: Run schemathesis contract tests
         env:

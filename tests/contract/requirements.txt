@@ -1,0 +1,19 @@
+# Contract-test (schemathesis) pinned dependency — SSOT for CI, Makefile
+# and README. Install with: pip install -r tests/contract/requirements.txt
+#
+# Why pinned (the repo otherwise installs CI Python tools unpinned):
+# run_contract_tests.py depends on schemathesis 4.x CLI semantics
+# (`--url`, `--max-examples`, `--checks <name,...>`, and the
+# `--suppress-health-check filter_too_much` used to absorb the
+# seed-dependent generation-efficiency flake on constraint-heavy ops).
+# An unpinned `pip install schemathesis` tracked *latest* on every CI
+# run, so a new release could silently drift the flake rate, rename a
+# health check, or break a flag — the "local green, CI first-run red"
+# version-drift class. Freezing the version makes the contract-fuzz
+# behavior reproducible and pushes every upgrade through an explicit,
+# reviewable PR. See issue #1158.
+#
+# Upgrade trigger: bump deliberately (and re-verify the health-check /
+# flag names still hold) when schemathesis crosses a major version
+# (5.x) or when the filter_too_much flake recurs on this pinned version.
+schemathesis==4.23.0

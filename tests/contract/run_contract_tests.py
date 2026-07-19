@@ -333,7 +333,7 @@ def main() -> int:
         return 2
 
     if not shutil.which("schemathesis"):
-        print("[contract] FATAL: schemathesis not in PATH. `pip install schemathesis`.")
+        print("[contract] FATAL: schemathesis not in PATH. `pip install -r tests/contract/requirements.txt`.")
         return 2
 
     workdir = Path(tempfile.mkdtemp(prefix="tenant-api-contract-"))

@@ -23,8 +23,10 @@ CONTRACT_MAX_EXAMPLES=50 make contract-test
 ```
 
 需要：
-- Dev container（`make dc-up`）或 host 端有 Go 1.26 + Python 3.13 + `pip install schemathesis`
+- Dev container（`make dc-up`）或 host 端有 Go 1.26 + Python 3.13 + `pip install -r tests/contract/requirements.txt`
 - `components/tenant-api/docs/swagger.json` 是最新的（如不確定先 `make api-docs`）
+
+> **schemathesis 版本已 pin**（[`requirements.txt`](requirements.txt)，#1158）。runner 依賴 4.x CLI 語意與 `filter_too_much` 壓制的生成器行為，未 pin 的 `pip install schemathesis` 會隨最新版漂移 flake 率／旗標語意（「本地綠 CI 首跑紅」那類）。升版走顯式 PR：改 `requirements.txt` 的版號、複驗 health-check／旗標名仍成立，CI cache key 綁該檔 hash 會自動失效重裝。
 
 ## 它檢查什麼
 
@@ -66,7 +68,8 @@ CONTRACT_MAX_EXAMPLES=50 make contract-test
 當前 CI step:
 ```yaml
 - name: Install schemathesis
-  run: pip install schemathesis
+  # Pinned version — see tests/contract/requirements.txt (#1158).
+  run: pip install -r tests/contract/requirements.txt
 - name: Run schemathesis contract tests
   env:
     CONTRACT_MAX_EXAMPLES: "5"
