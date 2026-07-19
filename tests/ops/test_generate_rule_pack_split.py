@@ -323,6 +323,23 @@ class TestSplitRulePack:
         assert alert_group in central
         assert record_group in edge
 
+    def test_empty_non_suffix_group_preserved_not_dropped(self):
+        # CodeRabbit #1171: an EMPTY non-suffix group has no rules to route, but
+        # suffix groups preserve empty groups whole — so the per-rule branch must
+        # preserve it too (on edge), keeping the "nothing dropped" invariant
+        # symmetric. Guards a future empty non-suffix group from silently
+        # vanishing.
+        empty = {"name": "weird-empty", "rules": []}
+        missing_rules = {"name": "weird-no-rules-key"}
+        edge, central = grps.split_rule_pack([empty, missing_rules])
+        edge_names = {g["name"] for g in edge}
+        central_names = {g["name"] for g in central}
+        assert "weird-empty" in edge_names
+        assert "weird-no-rules-key" in edge_names
+        # every input group appears exactly once, nowhere duplicated
+        assert "weird-empty" not in central_names
+        assert "weird-no-rules-key" not in central_names
+
     def test_mixed_non_suffix_group_split_across_planes(self):
         # A MIXED non-suffix group (raw-reading recordings + an alert over their
         # :core output, e.g. kubernetes-node-health) is split: recordings → edge,

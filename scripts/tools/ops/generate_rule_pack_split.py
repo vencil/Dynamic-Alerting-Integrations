@@ -326,10 +326,14 @@ def split_rule_pack(groups: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]],
             # → edge. A mixed group emits a subset-copy on each plane.
             central_rules = [r for r in rules if "alert" in r]
             edge_rules = [r for r in rules if "alert" not in r]
-            if edge_rules:
-                edge_groups.append({**group, "rules": edge_rules})
             if central_rules:
                 central_groups.append({**group, "rules": central_rules})
+            # ``or not rules``: an EMPTY non-suffix group has nothing to route,
+            # but suffix groups preserve empty groups whole — so preserve it on
+            # edge (the non-alert default) too, keeping the "nothing dropped"
+            # invariant symmetric for a future empty group (CodeRabbit #1171).
+            if edge_rules or not rules:
+                edge_groups.append({**group, "rules": edge_rules})
 
     return edge_groups, central_groups
 
