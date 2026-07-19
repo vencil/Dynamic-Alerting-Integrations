@@ -697,11 +697,32 @@ class TestCLI:
     """CLI 整合測試。"""
 
     def test_main_no_policies(self, tmp_path, capsys):
-        """無策略規則 → 正常退出（訊息走 stderr，#1112）。"""
+        """無策略規則（目錄存在但空）→ 正常退出（訊息走 stderr，#1112）。"""
         (tmp_path / "db-a.yaml").write_text("mysql_cpu: '80'\n", encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path)])
         assert exit_code == 0
         assert "No policy rules found" in capsys.readouterr().err
+
+    def test_main_nonexistent_config_dir_exits_caller_error(self, tmp_path, capsys):
+        """不存在的 --config-dir → EXIT_CALLER_ERROR（2），非 vacuous pass。
+
+        對照 test_main_no_policies（存在但空 = 0）：typo 掉的路徑不該讓
+        `policy-engine --config-dir <typo> --ci && promote` 靜默放行。
+        """
+        missing = tmp_path / "does-not-exist"
+        exit_code = pe.main(["--config-dir", str(missing)])
+        assert exit_code == 2
+        assert "config directory not found" in capsys.readouterr().err
+
+    def test_main_nonexistent_config_dir_json_envelope(self, tmp_path, capsys):
+        """不存在的 --config-dir + --json → stdout 仍恰一份 JSON（caller_error 信封）。"""
+        missing = tmp_path / "does-not-exist"
+        exit_code = pe.main(["--config-dir", str(missing), "--json"])
+        assert exit_code == 2
+        doc = json.loads(capsys.readouterr().out)
+        assert doc["status"] == "caller_error"
+        assert doc["reason"] == "config_dir_not_found"
+        assert doc["passed"] is False
 
     def test_main_no_policies_json_envelope(self, tmp_path, capsys):
         """#1112: 無策略規則 + --json → stdout 仍是恰好一份 JSON（report schema 歸零）。"""
