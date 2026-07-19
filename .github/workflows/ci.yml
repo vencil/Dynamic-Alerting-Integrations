@@ -494,11 +494,12 @@ jobs:
             -q -rs
 
       - name: Install vmalert-tool (VictoriaMetrics MetricsQL unit-test engine)
-        # continue-on-error: this provisioning serves the INFORMATIONAL gate below; a
-        # vmutils download/verify flake must never redden the REQUIRED "Lint Rule Packs"
-        # job. If install is skipped the gate's pytest self-skips (no vmalert-tool on
-        # PATH). Promote to a dedicated required job when the gate graduates (PR2).
-        continue-on-error: true
+        # REQUIRED provisioning for the promoted parity gate below (soak (a) met, #947).
+        # NOT continue-on-error: a missing vmalert-tool makes the gate's pytest module
+        # self-skip (skipif) → silent green → toothless. Fail-closed instead, so an absent
+        # tool reddens the required job HERE, before the gate can vacuously pass. The curl
+        # below carries --retry so a transient upstream blip doesn't flake the required
+        # job; steady state is a cache hit (no download at all).
         run: |
           pip install pytest -c requirements/ci-constraints.txt
           # VM engine version comes from the single pins SSOT (tests/rulepacks/
@@ -508,15 +509,15 @@ jobs:
           # Pinned SHA-256 of vmutils-linux-amd64-v${VM_VERSION}.tar.gz (upstream release);
           # a version/hash mismatch fails _verify_download.sh below (couples SHA <-> version).
           VMUTILS_SHA256=ec597bc2168d0792638ab0dc847e37041bace57a358bafa0da034c9fd438efac
-          # Download to /tmp; mkdir+mv into the cache dir ONLY on full curl
-          # success. This step is continue-on-error, so the job — and the
-          # cache post-save — can go green even when curl fails: keeping the
-          # dir absent until success means the post-save no-ops on a flake
-          # (missing path) instead of freezing an empty/partial entry under
-          # an exact-hit key.
+          # Download to /tmp; mkdir+mv into the cache dir ONLY on full curl success —
+          # keeps the cache post-save from freezing an empty/partial entry under an
+          # exact-hit key if the download is interrupted (the dir stays absent until
+          # success, so the post-save no-ops rather than caching a corrupt tarball).
+          # A hard curl/verify failure now reddens the required job (fail-closed;
+          # --retry rides out transient blips first).
           DL="$HOME/.cache/vibe-dl-vmutils"
           if [ ! -f "$DL/vmutils-v${VM_VERSION}.tgz" ]; then
-            curl -fsSL "https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v${VM_VERSION}/vmutils-linux-amd64-v${VM_VERSION}.tar.gz" -o /tmp/vmutils.tgz.part
+            curl -fsSL --retry 3 --retry-connrefused --retry-delay 5 "https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v${VM_VERSION}/vmutils-linux-amd64-v${VM_VERSION}.tar.gz" -o /tmp/vmutils.tgz.part
             mkdir -p "$DL"
             mv /tmp/vmutils.tgz.part "$DL/vmutils-v${VM_VERSION}.tgz"
           fi
@@ -525,20 +526,20 @@ jobs:
           sudo cp /tmp/vmalert-tool-prod /usr/local/bin/vmalert-tool
           vmalert-tool --version
 
-      - name: Rule-pack vmalert (MetricsQL) parity + deviation-catalog gate (informational)
+      - name: Rule-pack vmalert (MetricsQL) parity + deviation-catalog gate
         # VM-backend tenants run rules on vmalert (MetricsQL), which deviates from PromQL
         # by design (range-function cold-start; see docs/integration/victoriametrics-
         # integration.md §3.1). Runs EVERY promtool fixture through vmalert-tool; an
         # UNCATALOGUED divergence fails this step (catalog: tests/rulepacks/
-        # vm_deviation_catalog.yaml). INFORMATIONAL for now — the ADR-025 "first customer
-        # on their own backend" defer-trigger just fired (VM-migration customers).
-        # PROMOTE TO REQUIRED (drop this continue-on-error + the install step's) when EITHER:
-        # (a) >=2 weeks soak with zero unexplained NEW (catalog-uncovered) divergences, OR
-        # (b) the first VM-backend customer cuts over. Tracked as a defer-with-trigger issue
-        # (PR2) — without a concrete trigger an informational gate rots into ignored CI noise.
-        # Scope: rule-eval (MetricsQL math + for:), NOT real-TSDB staleness — see the test
-        # module docstring; full storage-layer parity = vmalert -replay (Phase 2).
-        continue-on-error: true
+        # vm_deviation_catalog.yaml). PROMOTED TO REQUIRED 2026-07-19 (#947): soak trigger
+        # (a) met — >=2 weeks (2026-07-01 catalog freeze → 07-15) with zero unexplained NEW
+        # divergences; the gate ran non-vacuously throughout (vmalert-tool install + the
+        # teeth-test test_gate_detects_a_known_divergence verified green at head/mid/tail of
+        # the window). "Lint Rule Packs" is a required status check, so a new uncatalogued
+        # divergence now blocks merge until it is explained in vm_deviation_catalog.yaml.
+        # Scope (unchanged): rule-eval parity (MetricsQL math + for:), NOT real-TSDB
+        # staleness — see the test module docstring; storage-layer staleness parity is
+        # characterized on-demand by test_vm_replay_staleness.py (vmalert -replay, Phase 2).
         run: python -m pytest tests/rulepacks/test_vm_alert_parity.py -v
 
       # pint (ADR-025 deferred item): static analysis of the rule-pack SOURCE.
