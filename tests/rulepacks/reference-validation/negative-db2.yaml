@@ -1,0 +1,173 @@
+# =====================================================================
+# IBM Db2 LUW NEGATIVE waveform pack (ADR-030 decision-layer validation)
+# ---------------------------------------------------------------------
+# PRECISION / FALSE-ALARM library — the complement of the catch-rate
+# fault pack. Every signature is REAL *healthy or benign* Db2 behaviour
+# that a well-tuned alerting rule must NOT fire on. All must_detect:
+# false — any alert firing on these is a FALSE POSITIVE.
+#
+# Authored independently from VM alerting-rule conversion. Parameters
+# describe genuine healthy behaviour grounded in vendor docs + DBA
+# domain knowledge — NONE reverse-engineered from, or dialled to sit
+# just under, any alert threshold. If a rule fires on one of these,
+# that is a real over-fire finding, not a pack defect.
+# Metric names taken from the db2 exporter catalog. Note
+# db2_bufferpool_hit_ratio is a 0-1, HIGH-is-healthy gauge, so its
+# benign excursion sits slightly BELOW normal.
+# =====================================================================
+
+pack:
+  id: db2-luw-negative
+  domain: db2-luw-dba
+  author_role: db2-database-reliability-sme
+  independent_of_rule_conversion: true
+  readback_signed_off: true
+
+signatures:
+  # 1) Healthy steady-state buffer-pool hit ratio (~0.975) with a benign
+  #    dip during a routine report scan. HIGH is healthy -> dip is below normal.
+  - description: >-
+      A well-sized buffer pool runs at a healthy ~97.5% hit ratio all day.
+      During a large but routine reporting scan the ratio dips benignly to
+      ~96.5% for a while as cold pages are read, then recovers as the
+      working set re-warms. This is nowhere near the low-70s collapse of an
+      undersized-pool fault — it is normal steady-state with a small,
+      self-healing dip. HIGH is healthy for this metric, so the benign
+      excursion sits just below normal.
+    source: vendor-doc
+    normal_level: 0.975
+    fault_level: 0.965
+    onset_duration: 10m
+    hold_duration: 40m
+    typical_wobble: 0.004
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: db2_bufferpool_hit_ratio
+    metric_kind: gauge
+    shape_class: plateau
+    noise_kind: gaussian
+    fault_class: healthy-bufferpool-hit-ratio
+    labels:
+      instance: db2-neg-01
+      database: SAMPLE
+      bufferpool: IBMDEFAULTBP
+    min_value: 0
+
+  # 2) Benign transient — short single batch lock-wait burst, recovers fast
+  #    (counter rate is native units).
+  - description: >-
+      A single short nightly batch job briefly holds escalated locks; OLTP
+      lock-wait time accrues from ~1.5 to ~18 wait-seconds/sec for about 7
+      minutes, then the batch commits and waits subside straight back to
+      baseline. One short, self-clearing burst — not the sustained,
+      repeated blocking of a real contention incident — that recovers well
+      within any reasonable alert `for:` window.
+    source: vendor-doc
+    normal_level: 1.5
+    fault_level: 18
+    onset_duration: 1m
+    hold_duration: 7m
+    typical_wobble: 1.0
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: db2_lock_wait_time_seconds_total
+    metric_kind: counter
+    shape_class: spike
+    noise_kind: gaussian
+    fault_class: batch-lock-wait-transient
+    labels:
+      instance: db2-neg-01
+      database: SAMPLE
+
+  # 3) Planned-maintenance — log usage rises during a scheduled reorg /
+  #    large load, then drains back on commit + archive. Self-resolves.
+  - description: >-
+      A scheduled table REORG plus a large batch load during the
+      maintenance window drives active-log utilisation from ~30% up to
+      ~68% while the unit of work is open, then it drains back to baseline
+      on commit and log archive. It never approaches the SQL0964C
+      "transaction log full" (100%) state. Expected, planned, benign, and
+      self-resolving within the maintenance window — a review item, not a page.
+    source: vendor-doc
+    normal_level: 30
+    fault_level: 68
+    onset_duration: 8m
+    hold_duration: 25m
+    typical_wobble: 2.0
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: db2_log_usage_percent
+    metric_kind: gauge
+    shape_class: plateau
+    noise_kind: gaussian
+    fault_class: planned-reorg-log-usage
+    labels:
+      instance: db2-neg-01
+      database: SAMPLE
+    min_value: 0
+
+  # 4) Busy-but-fine — connections ride to a high daytime/peak level,
+  #    still healthy. Precision probe for connection-count alerts near peak.
+  - description: >-
+      At the daily peak (and heavier at month-end), active connections
+      climb from ~90 to a busy but safe ~360 and hold through the peak
+      period before receding. MAXAPPLS is 1000, so ~360 is ~36%
+      utilisation with no connection refusals (no SQL1040N). Busy-but-fine
+      near a realistic operating peak — the kind of high-but-healthy level
+      that tempts an over-eager rule to fire, but should not page.
+    source: vendor-doc
+    normal_level: 90
+    fault_level: 360
+    onset_duration: 1h
+    hold_duration: 4h
+    typical_wobble: 14
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: db2_connections_active
+    metric_kind: gauge
+    shape_class: ramp
+    noise_kind: gaussian
+    fault_class: peak-hour-connections-busy
+    labels:
+      instance: db2-neg-01
+      database: SAMPLE
+    min_value: 0
+
+  # 5) Benign low-grade — small steady sort-overflow fraction reviewed in
+  #    daily monitoring, not paged. Ratio-shaped (counter over counter denom).
+  - description: >-
+      Under normal mixed workload a modest fraction of sorts spill to the
+      temporary tablespace: overflow rate creeps around ~1.8-2.2/sec
+      against ~50 total sorts/sec, i.e. roughly a 4% overflow fraction that
+      stays flat across the working day. This is a well-within-tolerance
+      SORTHEAP capacity signal a DBA reviews in daily monitoring (perhaps
+      tuning next sprint), not a 3am page — deliberately must_detect:false
+      to probe whether ratio rules over-fire on a benign, exported
+      degradation. (An occasional single deadlock is the sibling benign
+      low-grade probe on db2_deadlocks_total.)
+    source: vendor-doc
+    normal_level: 1.8
+    fault_level: 2.2
+    onset_duration: 1h
+    hold_duration: 4h
+    typical_wobble: 0.3
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: db2_sort_overflows
+    metric_kind: counter
+    companion_series:
+      - metric: db2_total_sorts
+        role: denominator
+        metric_kind: counter
+        level: 50
+    shape_class: plateau
+    noise_kind: gaussian
+    fault_class: benign-sort-overflow-fraction
+    labels:
+      instance: db2-neg-01
+      database: SAMPLE

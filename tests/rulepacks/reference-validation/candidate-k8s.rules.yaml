@@ -1,0 +1,36 @@
+# Reference candidate rules — Linux-on-K8s. DIRECT-PREDICATE form of the shipped
+# rule-pack-kubernetes.yaml alerting logic (see candidate-oracle-min header for why).
+# The shipped rules are version-aware (per-version thresholds, weakest-pod aggregation,
+# exact-or-fallback) — this evaluates the CORE firing predicate on the raw series,
+# which is fire/no-fire equivalent for a single injected fault. Thresholds are the
+# SHIPPED _defaults.yaml values (container_cpu:80 / container_memory:85 /
+# container_cpu_throttle:25 — these DO ship, unlike Oracle/DB2). Boolean alerts
+# (crashloop / imagepull / node-not-ready) carry no threshold.
+groups:
+  - name: k8s-linux-ref
+    interval: 30s
+    rules:
+      - alert: PodContainerHighCPU
+        expr: rate(container_cpu_usage_seconds_total[5m]) / ignoring(resource) kube_pod_container_resource_limits{resource="cpu"} * 100 > 80
+        for: 6m
+        labels: {severity: warning}
+      - alert: PodContainerHighMemory
+        expr: container_memory_working_set_bytes / ignoring(resource) kube_pod_container_resource_limits{resource="memory"} * 100 > 85
+        for: 6m
+        labels: {severity: warning}
+      - alert: PodContainerCPUThrottled
+        expr: rate(container_cpu_cfs_throttled_periods_total[5m]) / ignoring(resource) rate(container_cpu_cfs_periods_total[5m]) * 100 > 25
+        for: 15m
+        labels: {severity: warning}
+      - alert: ContainerCrashLoop
+        expr: kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"} > 0
+        for: 5m
+        labels: {severity: warning}
+      - alert: ContainerImagePullFailure
+        expr: kube_pod_container_status_waiting_reason{reason="ImagePullBackOff"} > 0
+        for: 5m
+        labels: {severity: warning}
+      - alert: NodeNotReady
+        expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+        for: 5m
+        labels: {severity: critical}

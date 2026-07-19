@@ -1,0 +1,169 @@
+# =====================================================================
+# Oracle NEGATIVE waveform pack (ADR-030 decision-layer validation)
+# ---------------------------------------------------------------------
+# PRECISION / FALSE-ALARM library — the complement of the catch-rate
+# fault pack. Every signature is REAL *healthy or benign* Oracle
+# behaviour that a well-tuned alerting rule must NOT fire on. All
+# must_detect: false — any alert firing on these is a FALSE POSITIVE.
+#
+# Authored independently from VM alerting-rule conversion. Parameters
+# describe genuine healthy behaviour grounded in vendor docs + DBA
+# domain knowledge — NONE reverse-engineered from, or dialled to sit
+# just under, any alert threshold. If a rule fires on one of these,
+# that is a real over-fire finding, not a pack defect.
+# Metric names taken from the oracledb_exporter (iamseth) catalog.
+# =====================================================================
+
+pack:
+  id: oracle-dba-negative
+  domain: oracle-dba
+  author_role: oracle-database-reliability-sme
+  independent_of_rule_conversion: true
+  readback_signed_off: true
+
+signatures:
+  # 1) Healthy steady-state active sessions with normal diurnal variation.
+  - description: >-
+      Healthy OLTP instance over a normal business day: active sessions
+      sit around 90 overnight, ramp gently to a comfortable daytime
+      working level near 240 as users log on, and hold there through
+      business hours. The configured session ceiling (resource_limit) is
+      1000, so this is ~24% utilisation — textbook healthy daily rhythm,
+      not a leak. No on-call would want a page for this.
+    source: vendor-doc
+    normal_level: 90
+    fault_level: 240
+    onset_duration: 3h
+    hold_duration: 8h
+    typical_wobble: 12
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: oracledb_sessions_active
+    metric_kind: gauge
+    companion_series:
+      - metric: oracledb_resource_limit
+        labels:
+          resource: sessions
+        role: denominator
+        metric_kind: gauge
+        level: 1000
+    shape_class: ramp
+    noise_kind: gaussian
+    fault_class: healthy-session-diurnal
+    labels:
+      instance: oracle-neg-01
+    min_value: 0
+
+  # 2) Benign transient — nightly backup/batch process spike, recovers fast.
+  - description: >-
+      Scheduled nightly RMAN backup plus a parallel ETL job briefly spawn
+      extra server processes: the process count jumps from ~210 to ~560
+      for roughly 8 minutes while the jobs run, then falls straight back
+      as they finish. The PROCESSES ceiling on this instance is ~2000, so
+      560 is well inside headroom. A short, self-clearing bump that
+      recovers well within any reasonable alert `for:` window.
+    source: vendor-doc
+    normal_level: 210
+    fault_level: 560
+    onset_duration: 2m
+    hold_duration: 8m
+    typical_wobble: 15
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: oracledb_process_count
+    metric_kind: gauge
+    shape_class: spike
+    noise_kind: gaussian
+    fault_class: backup-batch-process-spike
+    labels:
+      instance: oracle-neg-01
+    min_value: 0
+
+  # 3) Planned-maintenance PGA spike (nightly stats gather / index rebuild),
+  #    self-resolves when the job completes.
+  - description: >-
+      Scheduled overnight DBMS_STATS gather plus an index rebuild use
+      large sort/hash workareas, so PGA allocation rises from ~6.5 GB to
+      ~22 GB for about 25 minutes while the maintenance runs, then
+      releases back to baseline once the job completes. PGA_AGGREGATE_TARGET
+      is 32 GB, so 22 GB is within target — expected, planned, benign, and
+      self-resolving. Reviewed on the maintenance dashboard, never paged.
+    source: vendor-doc
+    normal_level: 6500000000
+    fault_level: 22000000000
+    onset_duration: 5m
+    hold_duration: 25m
+    typical_wobble: 300000000
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: oracledb_pga_allocated_bytes
+    metric_kind: gauge
+    shape_class: spike
+    noise_kind: gaussian
+    fault_class: planned-stats-gather-pga-spike
+    labels:
+      instance: oracle-neg-01
+    min_value: 0
+
+  # 4) Busy-but-fine — mature tablespace steady at a high-but-safe ~80%
+  #    with autoextend on. Sharpest precision probe for absolute-level alerts.
+  - description: >-
+      A mature, well-managed permanent tablespace (USERS) with autoextend
+      enabled and a weekly reorg sits steadily around 80% used. It wiggles
+      gently with daily load — nudging to ~83% during a data load and
+      settling back after archival — but never runs away toward
+      saturation. DBAs routinely operate autoextend tablespaces at 80-85%
+      and do NOT page on absolute used-percent alone; free datafile
+      autoextend headroom remains. The sharpest false-alarm probe here.
+    source: vendor-doc
+    normal_level: 80
+    fault_level: 83
+    onset_duration: 30m
+    hold_duration: 3h
+    typical_wobble: 0.6
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: oracledb_tablespace_used_percent
+    metric_kind: gauge
+    shape_class: plateau
+    noise_kind: gaussian
+    fault_class: mature-tablespace-steady-high
+    labels:
+      instance: oracle-neg-01
+      tablespace: USERS
+    min_value: 0
+
+  # 5) Benign low-grade — normal background waits with occasional
+  #    checkpoint / log-switch micro-bursts (counter rate is native units).
+  - description: >-
+      Ordinary physics of a healthy OLTP instance: cumulative DB wait time
+      accrues at a low steady aggregate rate (~3 wait-seconds/sec across
+      all sessions, dominated by log file sync / db file sequential read).
+      At commit-heavy checkpoint and log-switch boundaries there are brief
+      micro-bursts up to ~8/sec that subside within a minute or two. A
+      good on-call reviews these in dashboards but is never paged — this is
+      normal background wait, not enqueue contention.
+    source: vendor-doc
+    normal_level: 3
+    fault_level: 8
+    onset_duration: 1m
+    hold_duration: 40m
+    typical_wobble: 0.5
+    dips_back: true
+    dip_detail:
+      depth: 4
+      period: 10m
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: oracledb_wait_time_seconds_total
+    metric_kind: counter
+    shape_class: plateau
+    noise_kind: gaussian
+    fault_class: normal-background-wait-microbursts
+    labels:
+      instance: oracle-neg-01
+      wait_class: Commit

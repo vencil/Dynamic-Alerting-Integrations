@@ -1,0 +1,208 @@
+# =====================================================================
+# IBM Db2 LUW fault-waveform reference pack (ADR-030 decision-layer validation)
+# ---------------------------------------------------------------------
+# Authored independently from VM alerting-rule conversion. Every parameter
+# describes REAL Db2 fault behaviour grounded in vendor docs + DBA domain
+# knowledge — NONE reverse-engineered from any alert threshold.
+# Metric names taken from the db2 exporter catalog. Note db2_bufferpool_hit_ratio
+# is a HIGH-is-healthy gauge, so its fault_level sits BELOW normal_level.
+# =====================================================================
+
+pack:
+  id: db2-luw-reference
+  domain: db2-luw-dba
+  author_role: db2-database-reliability-sme
+  independent_of_rule_conversion: true
+  readback_signed_off: true
+
+signatures:
+  # 1) db2sysc failure / deactivation — boolean up->0, sustained down.
+  - description: >-
+      db2sysc failure or database deactivation: the exporter's connection is
+      refused, so db2_up flips 1->0 and holds down until the instance /
+      database is reactivated. Classic hard outage.
+    source: vendor-doc
+    normal_level: 1
+    fault_level: 0
+    onset_duration: 30s
+    hold_duration: 20m
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: db2_up
+    metric_kind: boolean
+    shape_class: step
+    noise_kind: gaussian
+    fault_class: database-down
+    labels:
+      instance: db2-ref-01
+      database: SAMPLE
+
+  # 2) Connection-pool leak / login storm — slow gauge ramp toward MAXAPPLS.
+  - description: >-
+      Connection-pool leak or login storm drives active connections up toward
+      MAXAPPLS; once the limit is hit new connections are refused (SQL1040N
+      "maximum number of applications"). Monotonic climb, no self-heal until
+      the leaking application is recycled.
+    source: vendor-doc
+    normal_level: 90
+    fault_level: 480
+    onset_duration: 40m
+    hold_duration: 1h
+    typical_wobble: 12
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: db2_connections_active
+    metric_kind: gauge
+    shape_class: ramp
+    noise_kind: gaussian
+    fault_class: connection-saturation
+    labels:
+      instance: db2-ref-01
+      database: SAMPLE
+    min_value: 0
+
+  # 3) Buffer-pool hit-ratio collapse — gauge DROPS below normal, held step.
+  - description: >-
+      An undersized buffer pool (a bad ALTER BUFFERPOOL, or a large table scan
+      flooding pages) collapses the hit ratio from a healthy ~97% down into
+      the low-70s; synchronous reads surge and I/O saturates. HIGH is healthy
+      for this metric, so the fault level sits BELOW normal and holds until
+      the pool is resized.
+    # VERIFIER-SIDE UNIT RECONCILIATION (not anti-circularity-breaking — a unit
+    # conversion, not a threshold-derived value): the SME authored the hit ratio in
+    # the conventional 0–100 % (97→72), but our rule-pack + threshold-exporter
+    # default treat db2_bufferpool_hit_ratio as a 0–1 ratio (default 0.95). Rescaled
+    # to 0–1 so the fault is evaluated at the exporter scale our rule assumes; the
+    # relative drop (healthy→~25% below) is preserved. NB: the exporter-scale
+    # ambiguity is itself a real engagement finding (a scale mismatch = silent FN).
+    source: vendor-doc
+    normal_level: 0.97
+    fault_level: 0.72
+    onset_duration: 10m
+    hold_duration: 1h30m
+    typical_wobble: 0.01
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: db2_bufferpool_hit_ratio
+    metric_kind: gauge
+    shape_class: step
+    noise_kind: gaussian
+    fault_class: bufferpool-hit-ratio-collapse
+    labels:
+      instance: db2-ref-01
+      database: SAMPLE
+      bufferpool: IBMDEFAULTBP
+    min_value: 0
+
+  # 4) Transaction log full (SQL0964C) -> DB hang -> exporter goes STALE.
+  - description: >-
+      A large uncommitted transaction pins the active log; log utilisation
+      ramps to ~100% and Db2 enters the SQL0964C "transaction log full" state.
+      In-flight transactions block and roll back, and the exporter's own
+      monitoring query hangs — so metrics go stale until the log clears. Db2
+      holds in the log-full state until the offending rollback completes.
+    source: vendor-doc
+    normal_level: 35
+    fault_level: 99
+    onset_duration: 12m
+    hold_duration: 40m
+    typical_wobble: 2.0
+    dips_back: false
+    agent_keeps_reporting: false
+    must_detect: true
+    metric: db2_log_usage_percent
+    metric_kind: gauge
+    shape_class: ramp
+    noise_kind: gaussian
+    time_axis:
+      staleness_tail: 15m
+    fault_class: transaction-log-full
+    labels:
+      instance: db2-ref-01
+      database: SAMPLE
+    min_value: 0
+
+  # 5) Deadlock storm — fast counter rate, sharp burst.
+  - description: >-
+      A deployment introduced a lock-order inversion; the deadlock detector
+      rolls back victims repeatedly and deadlocks_total accrues in a sharp
+      burst at tens of times baseline until the offending code path is
+      disabled. Rate is native units here.
+    source: vendor-doc
+    normal_level: 0.02
+    fault_level: 1.5
+    onset_duration: 2m
+    hold_duration: 30m
+    typical_wobble: 0.02
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: db2_deadlocks_total
+    metric_kind: counter
+    shape_class: spike
+    noise_kind: gaussian
+    fault_class: deadlock-storm
+    labels:
+      instance: db2-ref-01
+      database: SAMPLE
+
+  # 6) Lock-wait surge — intermittent counter rate (batch bursts, dips back).
+  - description: >-
+      A batch job holds escalated table locks in bursts: each burst blocks
+      OLTP sessions and lock-wait time accrues at a high rate, then the batch
+      commits and waits briefly subside before the next burst. An intermittent
+      dips-back pattern rather than a clean sustained plateau.
+    source: vendor-doc
+    normal_level: 1.5
+    fault_level: 60
+    onset_duration: 3m
+    hold_duration: 50m
+    typical_wobble: 1.0
+    dips_back: true
+    dip_detail:
+      depth: 45
+      period: 8m
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: db2_lock_wait_time_seconds_total
+    metric_kind: counter
+    shape_class: plateau
+    noise_kind: gaussian
+    fault_class: lock-wait-burst
+    labels:
+      instance: db2-ref-01
+      database: SAMPLE
+
+  # 7) Sort-overflow pressure — ratio fault, slow ramp, must_detect FALSE probe.
+  - description: >-
+      SORTHEAP too small for a shifted workload: sorts increasingly spill to
+      the temporary tablespace, so the sort-overflow rate creeps up relative
+      to total sorts over the working day (companion denominator). This is a
+      performance/capacity tuning signal reviewed in daily monitoring, not a
+      3am page — deliberately must_detect:false to probe whether the rules
+      over-fire on a benign-but-exported degradation.
+    source: vendor-doc
+    normal_level: 0.2
+    fault_level: 8
+    onset_duration: 2h
+    hold_duration: 3h
+    typical_wobble: 0.15
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: db2_sort_overflows
+    metric_kind: counter
+    companion_series:
+      - metric: db2_total_sorts
+        role: denominator
+        metric_kind: counter
+        level: 40
+    shape_class: ramp
+    noise_kind: gaussian
+    fault_class: sort-overflow-pressure
+    labels:
+      instance: db2-ref-01
+      database: SAMPLE

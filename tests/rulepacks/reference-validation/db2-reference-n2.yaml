@@ -1,0 +1,195 @@
+# DB2 (LUW) fault-waveform pack — independent second-author reference set (n2).
+# Authored from DB2 DBA domain knowledge (real-incident / vendor-doc / expert-experience
+# provenance) WITHOUT reading any Vibe rule-pack / threshold file. Every normal_level /
+# fault_level / onset_duration / hold_duration / dip_detail below reflects how the real
+# fault behaves in production, not a reverse-engineered alert threshold.
+pack:
+  id: db2-reference-n2
+  domain: db2-dba
+  author_role: db2-dba
+  independent_of_rule_conversion: true
+  readback_signed_off: true
+
+signatures:
+  # ── 1. Bufferpool thrash from a full-table-scan report batch ────────────
+  - description: >
+      夜間報表批次對大型交易表進行全表掃描，大量分頁被讀入緩衝集區又立即
+      被置換出去，命中率從平常的高檔明顯滑落；批次每完成一階段查詢、暫停
+      交接下一支 SQL 時命中率會短暫回升，下一階段掃描一開始又再度下滑，
+      直到整個報表批次結束才恢復正常。
+    source: real-incident
+    normal_level: 0.97
+    fault_level: 0.58
+    onset_duration: 8m
+    hold_duration: 50m
+    typical_wobble: 0.01
+    dips_back: true
+    dip_detail:
+      depth: 0.85
+      period: 10m
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: db2_bufferpool_hit_ratio
+    metric_kind: gauge
+    shape_class: plateau
+    fault_class: bufferpool-thrash-fullscan
+    min_value: 0
+    labels: {instance: db2-ref2-01, database: SAMPLE}
+
+  # ── 2. Month-end deadlock storm (lock-order mismatch) ───────────────────
+  - description: >
+      月結批次與線上交易同時對同一組客戶帳務表進行更新，兩邊鎖定資源的
+      順序不一致，短時間內連續發生多起死結，死結發生速率是平常背景噪音
+      的數十倍，相關交易被強制回滾並需要應用端重試。
+    source: real-incident
+    normal_level: 0.002
+    fault_level: 0.08
+    onset_duration: 2m
+    hold_duration: 18m
+    typical_wobble: 0.001
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: db2_deadlocks_total
+    metric_kind: counter
+    shape_class: spike
+    fault_class: month-end-deadlock-storm
+    labels: {instance: db2-ref2-01, database: SAMPLE}
+
+  # ── 3. Long uncommitted transaction fills the active log ────────────────
+  - description: >
+      一支忘記加上定期 COMMIT 的批次程式在單一長交易中連續寫入數百萬筆
+      異動，交易日誌使用率隨交易時間拉長持續攀升；若未即時介入會耗盡
+      active log 空間，導致後續交易全部因 SQL0964C（transaction log full）失敗。
+    source: real-incident
+    normal_level: 35
+    fault_level: 94
+    onset_duration: 2h
+    hold_duration: 3h
+    typical_wobble: 3
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: db2_log_usage_percent
+    metric_kind: gauge
+    shape_class: ramp
+    fault_class: long-txn-log-fill
+    min_value: 0
+    labels: {instance: db2-ref2-01, database: SAMPLE}
+
+  # ── 4. ETL sort-heap exhaustion causes sort overflows (bursty plateau) ──
+  - description: >
+      夜間 ETL 對大型維度表做多欄位排序時，SORTHEAP 設定不足以容納中繼
+      結果，排序大量溢出到臨時資料表空間；批次分段執行、job step 之間短暫
+      停頓時溢出速率會回落，下一個 step 開始又再度升高，整體維持在高檔
+      直到 ETL 結束。
+    source: expert-experience
+    normal_level: 0.01
+    fault_level: 0.35
+    onset_duration: 10m
+    hold_duration: 55m
+    typical_wobble: 0.005
+    dips_back: true
+    dip_detail:
+      depth: 0.05
+      period: 8m
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: db2_sort_overflows
+    metric_kind: counter
+    companion_series:
+      - metric: db2_total_sorts
+        labels: {}
+        role: denominator
+        metric_kind: counter
+        level: 4.2
+    shape_class: plateau
+    fault_class: etl-sort-overflow
+    labels: {instance: db2-ref2-01, database: SAMPLE}
+
+  # ── 5. Hot-row lock contention (fast spike, intermittent) ───────────────
+  - description: >
+      一支未加索引的更新語句意外鎖住熱門主檔資料列，造成大量交易排隊等待
+      鎖定釋放，鎖定等待時間累積速率瞬間飆高；應用程式的重試邏輯讓等待
+      速率一波波起伏，直到根因語句被找出並終止才恢復正常。
+    source: real-incident
+    normal_level: 1.5
+    fault_level: 25
+    onset_duration: 90s
+    hold_duration: 22m
+    typical_wobble: 0.4
+    dips_back: true
+    dip_detail:
+      depth: 6
+      period: 4m
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: db2_lock_wait_time_seconds_total
+    metric_kind: counter
+    shape_class: spike
+    fault_class: hot-row-lock-contention
+    labels: {instance: db2-ref2-01, database: SAMPLE}
+
+  # ── 6. Database instance down (boolean up→0, sustained) ─────────────────
+  - description: >
+      儲存子系統對 DB2 執行個體所在檔案系統的一次寫入逾時，觸發實例異常
+      結束（相當於非預期的 db2stop force）；監控代理本身仍存活並持續嘗試
+      連線，但直到 crash recovery 完成前執行個體都無法連線。
+    source: real-incident
+    normal_level: 1
+    fault_level: 0
+    onset_duration: 30s
+    hold_duration: 15m
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: db2_up
+    metric_kind: boolean
+    shape_class: step
+    fault_class: instance-crash-recovery
+    labels: {instance: db2-ref2-01, database: SAMPLE}
+
+  # ── 7. Exporter staleness during a connection leak (agent dies) ─────────
+  - description: >
+      應用程式連線池設定錯誤造成連線緩慢洩漏，active connection 數量正在
+      悄悄爬升的同時，負責量測的監控 sidecar 所在節點發生網路分區與
+      Prometheus 失聯；此後完全沒有新的量測值進來，屬於資料斷尾而非數值
+      歸零，與資料庫本身down是不同的故障模式。
+    source: expert-experience
+    normal_level: 60
+    fault_level: 145
+    onset_duration: 40m
+    hold_duration: 15m
+    typical_wobble: 6
+    dips_back: false
+    agent_keeps_reporting: false
+    must_detect: true
+    metric: db2_connections_active
+    metric_kind: gauge
+    shape_class: ramp
+    time_axis:
+      staleness_tail: 25m
+    fault_class: exporter-staleness-connection-leak
+    min_value: 0
+    labels: {instance: db2-ref2-01, database: SAMPLE}
+
+  # ── 8. Benign probe: scheduled REORG/RUNSTATS maintenance blip ──────────
+  - description: >
+      排定的線上表格重組（online REORG）與 RUNSTATS 維護作業執行期間，
+      緩衝集區命中率出現預期中的短暫下滑，作業結束後迅速回復正常水準；
+      屬於已知的維護窗口行為，不需要告警。
+    source: expert-experience
+    normal_level: 0.97
+    fault_level: 0.88
+    onset_duration: 2m
+    hold_duration: 12m
+    typical_wobble: 0.01
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: db2_bufferpool_hit_ratio
+    metric_kind: gauge
+    shape_class: spike
+    fault_class: reorg-maintenance-blip
+    min_value: 0
+    labels: {instance: db2-ref2-01, database: SAMPLE}

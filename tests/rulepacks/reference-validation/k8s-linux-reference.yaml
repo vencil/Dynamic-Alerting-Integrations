@@ -1,0 +1,211 @@
+# =====================================================================
+# Fault-waveform reference pack — Linux workloads monitored VIA Kubernetes
+# (container + node signals from cAdvisor + kube-state-metrics)
+# =====================================================================
+# Authored by a K8s + Linux workload-reliability SME directly from real
+# fault behaviour (cAdvisor / kube-state-metrics domain knowledge + vendor
+# docs). ⛔ Anti-circularity: NO rule pack / threshold / conf.d file was
+# read or consulted; every level, duration and shape is the REAL observed
+# fault magnitude, never reverse-engineered from an alert threshold.
+# Validate: python3 scripts/tools/dx/waveform_compile.py --check <this file>
+# ---------------------------------------------------------------------
+
+pack:
+  id: k8s-linux-reference
+  domain: kubernetes-linux-workload-reliability
+  author_role: k8s-sre-sme
+  independent_of_rule_conversion: true
+  readback_signed_off: false          # authored directly by SME; no separate human read-back sign-off in this path
+
+signatures:
+
+  # 1 ── container CPU saturation (counter rate → cores; pinned near limit)
+  - description: >-
+      Runaway hot-loop / traffic surge pins a container's CPU usage from a
+      light steady baseline up to just under its 1-core CFS limit within a
+      couple of minutes and holds there for the rest of the incident. Usage
+      rate can approach but never exceed the limit (the kernel throttles it).
+    source: vendor-doc
+    normal_level: 0.15                 # ~0.15 cores steady (rate of container_cpu_usage_seconds_total)
+    fault_level: 0.97                  # pinned just under the 1000m limit
+    onset_duration: 2m                 # fast: surge/hot-loop pins CPU quickly
+    hold_duration: 1h                  # sustained saturation
+    typical_wobble: 0.05               # everyday ~0.05-core jitter in usage rate
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: container_cpu_usage_seconds_total
+    metric_kind: counter               # SME level is a per-second RATE (cores); compiler integrates
+    companion_series:
+      - metric: kube_pod_container_resource_limits
+        labels: {namespace: workload-ref, pod: app-ref-0, container: app, resource: cpu}
+        role: static
+        level: 1.0                     # static 1-core (1000m) CPU limit
+    shape_class: ramp
+    fault_class: container-cpu-saturation
+    labels: {namespace: workload-ref, pod: app-ref-0, container: app}
+
+  # 2 ── container memory working-set saturation, pre-OOMKill (gauge, slow leak)
+  - description: >-
+      A slow memory leak grows the container working set from ~180 MB toward
+      its 512 Mi limit over ~25 minutes, then sits pressed against the limit
+      until the kernel OOM-kills it. Working set is what the OOM killer
+      accounts, so it climbs monotonically with no meaningful dip.
+    source: vendor-doc
+    normal_level: 180000000            # ~180 MB working set, healthy
+    fault_level: 510000000             # ~510 MB, sitting just under the 512Mi limit, about to OOM
+    onset_duration: 25m                # slow: gradual leak
+    hold_duration: 45m                 # holds against the limit before the kill
+    typical_wobble: 8000000            # ~8 MB GC/alloc churn in native bytes
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: container_memory_working_set_bytes
+    metric_kind: gauge
+    companion_series:
+      - metric: kube_pod_container_resource_limits
+        labels: {namespace: workload-ref, pod: app-ref-0, container: app, resource: memory}
+        role: static
+        level: 536870912               # 512Mi limit in bytes
+    shape_class: plateau               # climbs, then stays at the limit (no recovery — ends in OOM)
+    fault_class: container-memory-saturation
+    labels: {namespace: workload-ref, pod: app-ref-0, container: app}
+    min_value: 0                       # bytes are non-negative
+
+  # 3 ── OOMKill restart storm (counter; restarts climb in steps)
+  - description: >-
+      After the OOMKill the container enters a crash/restart storm: the
+      restart counter climbs in rapid steps (roughly one restart every ~50 s
+      during active back-off) instead of staying flat. Modelled as a restart
+      RATE that jumps from zero to storm level and holds.
+    source: vendor-doc
+    normal_level: 0.0                  # no restarts/sec when healthy
+    fault_level: 0.02                  # ~1 restart per 50 s during the storm (per-second rate)
+    onset_duration: 30s                # near-instant onset of the storm
+    hold_duration: 30m                 # storm persists through the back-off window
+    typical_wobble: 0.0                # a stable container has an exactly flat restart counter
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: kube_pod_container_status_restarts_total
+    metric_kind: counter               # cumulative restart count; SME gives the restart rate
+    shape_class: step                  # rate steps to storm level in one sample → linear cumulative climb
+    fault_class: oomkill-restart-storm
+    labels: {namespace: workload-ref, pod: app-ref-0, container: app}
+
+  # 4 ── CPU CFS throttling ratio rising (counter numerator + counter denominator)
+  - description: >-
+      The container repeatedly hits its CPU quota, so the fraction of CFS
+      periods that get throttled climbs from a few percent to ~90%. Expressed
+      as the throttled-periods rate against the total-periods rate (~10
+      periods/s at the default 100 ms quota window).
+    source: vendor-doc
+    normal_level: 0.3                  # ~0.3 throttled periods/s (~3% of periods) — mild, normal
+    fault_level: 9.0                   # ~9 throttled periods/s (~90% of periods) — severe throttling
+    onset_duration: 3m                 # ramps up as load rises
+    hold_duration: 40m
+    typical_wobble: 0.2                # throttle-rate jitter
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: container_cpu_cfs_throttled_periods_total
+    metric_kind: counter
+    companion_series:
+      - metric: container_cpu_cfs_periods_total
+        labels: {namespace: workload-ref, pod: app-ref-0, container: app}
+        role: denominator
+        metric_kind: counter           # integrated ramp so rate(denominator) is non-zero in the ratio
+        level: 10.0                    # ~10 CFS periods/s (100 ms period)
+    shape_class: ramp
+    fault_class: cpu-cfs-throttling
+    labels: {namespace: workload-ref, pod: app-ref-0, container: app}
+
+  # 5 ── pod crash-loop, CrashLoopBackOff (boolean, intermittent/flapping)
+  - description: >-
+      A container that keeps crashing cycles through CrashLoopBackOff: the
+      waiting-reason gauge flaps between 1 (backing off) and 0 (briefly
+      Running before the next crash) as the back-off timer cycles. Intermittent
+      by nature, not a clean sustained 1.
+    source: vendor-doc
+    normal_level: 0                    # not waiting on CrashLoopBackOff
+    fault_level: 1                     # waiting reason == CrashLoopBackOff
+    onset_duration: 30s                # crash-loop appears quickly after the bad rollout
+    hold_duration: 40m                 # keeps cycling
+    dips_back: false                   # boolean flapping is generated by the compiler, not analog dips
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: kube_pod_container_status_waiting_reason
+    metric_kind: boolean
+    shape_class: step
+    fault_class: pod-crashloopbackoff
+    labels: {namespace: workload-ref, pod: app-ref-0, container: app, reason: CrashLoopBackOff}
+
+  # 6 ── node NotReady (boolean; fault is BELOW normal, 1 → 0)
+  - description: >-
+      A node stops posting healthy status (kubelet hang, network partition,
+      resource exhaustion): the Ready=true condition series flips from 1 to 0
+      and stays 0 for the outage. kube-state-metrics keeps exporting from the
+      API server, so the series is present and reads 0 — it does not go stale.
+    source: vendor-doc
+    normal_level: 1                    # Ready=true
+    fault_level: 0                     # NotReady (Ready=true condition drops to 0)
+    onset_duration: 30s                # flips fast once the node stops heart-beating
+    hold_duration: 20m                 # outage window
+    dips_back: false
+    agent_keeps_reporting: true        # kube-state-metrics still exports (control-plane sourced)
+    must_detect: true
+    metric: kube_node_status_condition
+    metric_kind: boolean
+    shape_class: step
+    fault_class: node-notready
+    labels: {node: node-ref-01, condition: Ready, status: "true"}
+
+  # 7 ── EXPORTER-STALE: kubelet/cAdvisor death → container metrics go dark mid-incident
+  - description: >-
+      CPU is climbing under load when the node's kubelet (and its embedded
+      cAdvisor) dies, so every container_* series from that node simply stops
+      updating and goes stale — you lose all container visibility partway
+      through the incident. The agent stops reporting; this is a silent
+      monitoring blind spot that must still page.
+    source: vendor-doc
+    normal_level: 0.4                  # ~0.4 cores under normal load (usage rate)
+    fault_level: 0.9                   # climbing under load right before the exporter dies
+    onset_duration: 3m
+    hold_duration: 30m                 # would hold, but the exporter dies partway (see staleness_tail)
+    typical_wobble: 0.05
+    dips_back: false
+    agent_keeps_reporting: false       # kubelet/cAdvisor death — series goes stale
+    must_detect: true
+    metric: container_cpu_usage_seconds_total
+    metric_kind: counter
+    shape_class: ramp
+    time_axis:
+      staleness_tail: 20m              # agent death: last 20 min of the series never arrives
+    fault_class: cadvisor-scrape-stale
+    labels: {namespace: workload-ref, pod: app-ref-0, container: app, node: node-ref-01}
+
+  # 8 ── BENIGN PROBE (must_detect: false): expected nightly batch CPU bump, well under limit
+  - description: >-
+      A scheduled nightly batch/cron container legitimately drives CPU up to a
+      moderate level for a few minutes, well below its 2-core limit, then
+      returns to idle. This is expected, benign behaviour — nobody should be
+      paged for it. Included to catch rules that over-fire on normal load.
+    source: vendor-doc
+    normal_level: 0.1                  # idle between runs (usage rate, cores)
+    fault_level: 0.6                   # batch peak ~0.6 cores — ~30% of a 2-core limit, plenty of headroom
+    onset_duration: 1m
+    hold_duration: 5m                  # short batch window
+    typical_wobble: 0.05
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false                 # benign — must NOT page
+    metric: container_cpu_usage_seconds_total
+    metric_kind: counter
+    companion_series:
+      - metric: kube_pod_container_resource_limits
+        labels: {namespace: workload-ref, pod: app-ref-0, container: app, resource: cpu}
+        role: static
+        level: 2.0                     # 2-core limit — shows the bump stays well within budget
+    shape_class: spike                 # rises, brief hold, instant recovery to idle
+    fault_class: benign-batch-cpu-bump
+    labels: {namespace: workload-ref, pod: app-ref-0, container: app}

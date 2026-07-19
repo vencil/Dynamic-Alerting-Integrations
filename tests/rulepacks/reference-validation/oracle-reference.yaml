@@ -1,0 +1,195 @@
+# =====================================================================
+# Oracle fault-waveform reference pack (ADR-030 decision-layer validation)
+# ---------------------------------------------------------------------
+# Authored independently from VM alerting-rule conversion. Every parameter
+# describes REAL Oracle fault behaviour grounded in vendor docs + DBA
+# domain knowledge — NONE reverse-engineered from any alert threshold.
+# Metric names taken from the oracledb_exporter (iamseth) exporter catalog.
+# =====================================================================
+
+pack:
+  id: oracle-dba-reference
+  domain: oracle-dba
+  author_role: oracle-database-reliability-sme
+  independent_of_rule_conversion: true
+  readback_signed_off: true
+
+signatures:
+  # 1) Instance crash / node failure — boolean up->0, sustained down.
+  - description: >-
+      Instance crash or node failure: the exporter is still scraped on
+      schedule but v$instance is unreachable, so oracledb_up flips 1->0 and
+      stays down until the DBA restarts the instance. Classic hard outage.
+    source: vendor-doc
+    normal_level: 1
+    fault_level: 0
+    onset_duration: 30s
+    hold_duration: 25m
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_up
+    metric_kind: boolean
+    shape_class: step
+    noise_kind: gaussian
+    fault_class: instance-down
+    labels:
+      instance: oracle-ref-01
+
+  # 2) Connection-pool leak — slow gauge ramp toward the session ceiling.
+  - description: >-
+      Application connection-pool leak: active sessions climb steadily as
+      connections are borrowed and never returned, marching toward the
+      configured session ceiling (ORA-00018 "maximum number of sessions
+      exceeded" territory). No self-heal until the pool is bounced.
+    source: vendor-doc
+    normal_level: 120
+    fault_level: 900
+    onset_duration: 45m
+    hold_duration: 1h
+    typical_wobble: 15
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_sessions_active
+    metric_kind: gauge
+    companion_series:
+      - metric: oracledb_resource_limit
+        labels:
+          resource: sessions
+        role: denominator
+        metric_kind: gauge
+        level: 1000
+    shape_class: ramp
+    noise_kind: gaussian
+    fault_class: session-pool-leak
+    labels:
+      instance: oracle-ref-01
+    min_value: 0
+
+  # 3) Runaway parallel-execution processes — intermittent plateau (dips back).
+  - description: >-
+      Runaway parallel-execution (PX) processes: successive PX-heavy batch
+      jobs spawn slaves faster than they release, so server processes ratchet
+      up toward the PROCESSES ceiling (ORA-00020). Each batch boundary dips
+      the count back partway before the next batch pushes it higher again.
+    source: vendor-doc
+    normal_level: 220
+    fault_level: 1350
+    onset_duration: 8m
+    hold_duration: 50m
+    typical_wobble: 25
+    dips_back: true
+    dip_detail:
+      depth: 500
+      period: 9m
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_process_count
+    metric_kind: gauge
+    shape_class: plateau
+    noise_kind: gaussian
+    fault_class: parallel-process-exhaustion
+    labels:
+      instance: oracle-ref-01
+    min_value: 0
+
+  # 4) Tablespace fill — very slow monotonic gauge ramp over hours.
+  - description: >-
+      Unbounded segment growth (or a stuck purge/archival job) slowly fills a
+      permanent tablespace toward 100%. At saturation new extents fail with
+      ORA-01653 "unable to extend" and DML errors out. Monotonic over hours
+      with only tiny wobble — the slowest of the headline faults.
+    source: vendor-doc
+    normal_level: 68
+    fault_level: 97
+    onset_duration: 6h
+    hold_duration: 2h
+    typical_wobble: 0.4
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_tablespace_used_percent
+    metric_kind: gauge
+    shape_class: ramp
+    noise_kind: gaussian
+    fault_class: tablespace-fill
+    labels:
+      instance: oracle-ref-01
+      tablespace: USERS
+    min_value: 0
+
+  # 5) Row-lock (TX enqueue) contention storm — fast counter rate, held plateau.
+  - description: >-
+      Row-lock (TX enqueue) contention storm after a bad release: a long-held
+      uncommitted transaction pins a hot row, hundreds of sessions serialize
+      behind it, and cumulative DB wait time accrues at a sharply elevated
+      rate until the blocking session is killed. Rate is native units here.
+    source: vendor-doc
+    normal_level: 2
+    fault_level: 130
+    onset_duration: 1m
+    hold_duration: 25m
+    typical_wobble: 0.6
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_wait_time_seconds_total
+    metric_kind: counter
+    shape_class: plateau
+    noise_kind: gaussian
+    fault_class: enqueue-lock-storm
+    labels:
+      instance: oracle-ref-01
+      wait_class: Application
+
+  # 6) PGA bloat -> shared-pool starvation -> exporter goes STALE.
+  - description: >-
+      Runaway hash/sort workareas from a bad execution plan balloon PGA far
+      past PGA_AGGREGATE_TARGET (ORA-04030 "out of process memory" territory).
+      As the server starves for memory the shared pool thrashes, new hard
+      parses — including the exporter's own scrape query — fail, and the
+      exporter falls silent partway through the fault (metrics go stale).
+    source: vendor-doc
+    normal_level: 8000000000
+    fault_level: 42000000000
+    onset_duration: 20m
+    hold_duration: 40m
+    typical_wobble: 250000000
+    dips_back: false
+    agent_keeps_reporting: false
+    must_detect: true
+    metric: oracledb_pga_allocated_bytes
+    metric_kind: gauge
+    shape_class: ramp
+    noise_kind: gaussian
+    time_axis:
+      staleness_tail: 18m
+    fault_class: pga-bloat-exporter-starved
+    labels:
+      instance: oracle-ref-01
+    min_value: 0
+
+  # 7) Hard-parse storm — extra-catalog metric (activity parse count), fast spike.
+  - description: >-
+      A release that dropped bind variables turns every execution into a hard
+      parse; parse-count-total accrues at ~30x baseline, library-cache mutex
+      and shared-pool latch contention spike, and CPU saturates. Exported by
+      the activity metric group but frequently NOT alerted — a valuable
+      coverage probe for the harness.
+    source: vendor-doc
+    normal_level: 60
+    fault_level: 1800
+    onset_duration: 2m
+    hold_duration: 45m
+    typical_wobble: 25
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_activity_parse_count_total
+    metric_kind: counter
+    shape_class: spike
+    noise_kind: gaussian
+    fault_class: hard-parse-storm
+    labels:
+      instance: oracle-ref-01
