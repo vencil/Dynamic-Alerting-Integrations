@@ -19,11 +19,9 @@ package federation
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 
 	"github.com/vencil/tenant-api/internal/federation/account"
-	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -99,15 +97,7 @@ func BackfillAccounts(d *handler.Deps) http.HandlerFunc {
 
 		res, err := d.Accounts.Backfill(ctx, tenantIDs, rbac.RequestEmail(r))
 		if err != nil {
-			if errors.Is(err, gitops.ErrWriteOverloaded) || errors.Is(err, gitops.ErrForgeDegraded) {
-				handler.WriteOverloaded(w, r)
-				return
-			}
-			if errors.Is(err, gitops.ErrConflict) {
-				handler.WriteJSONError(w, r, http.StatusConflict, err.Error())
-				return
-			}
-			handler.WriteJSONError(w, r, http.StatusInternalServerError, "backfill account ids: "+err.Error())
+			writeFederationGitError(w, r, err, "backfill account ids: ")
 			return
 		}
 

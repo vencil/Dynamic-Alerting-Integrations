@@ -9,7 +9,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/federation/token"
-	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -162,16 +161,7 @@ func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 			}
 			accountID, aerr := d.Accounts.EnsureAccountID(r.Context(), req.TenantID, email)
 			if aerr != nil {
-				if errors.Is(aerr, gitops.ErrWriteOverloaded) || errors.Is(aerr, gitops.ErrForgeDegraded) {
-					handler.WriteOverloaded(w, r)
-					return
-				}
-				if errors.Is(aerr, gitops.ErrConflict) {
-					handler.WriteJSONError(w, r, http.StatusConflict, aerr.Error())
-					return
-				}
-				handler.WriteJSONError(w, r, http.StatusInternalServerError,
-					"allocate account id: "+aerr.Error())
+				writeFederationGitError(w, r, aerr, "allocate account id: ")
 				return
 			}
 			jwt, rec, err = d.Federation.IssueLogs(req.TenantID, email, req.Description, accountID)
