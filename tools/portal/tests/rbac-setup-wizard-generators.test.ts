@@ -78,12 +78,13 @@ describe('rbacGenerateYaml', () => {
     expect(yaml).not.toContain('DROPPED-desc');
   });
 
-  it('property: output always starts with the _rbac: header for any group set', () => {
+  it('property: emits exactly one group block per NAMED group (empty-name groups skipped)', () => {
     fc.assert(
       fc.property(
         fc.array(
           fc.record({
-            name: fc.string(),
+            // mix of empty and non-empty names so the skip branch is exercised
+            name: fc.constantFrom('', 'team-a', 'team-b', 'sre', 'ops'),
             description: fc.string(),
             permission: fc.constantFrom('viewer', 'editor', 'admin'),
             tenantMode: fc.constant('all'),
@@ -92,9 +93,17 @@ describe('rbacGenerateYaml', () => {
             environments: fc.constant([]),
             domains: fc.constant([]),
           }),
-          { maxLength: 5 },
+          { maxLength: 6 },
         ),
-        (groups) => rbacGenerateYaml(groups).startsWith('_rbac:\n'),
+        (groups) => {
+          const yaml = rbacGenerateYaml(groups);
+          const namedCount = groups.filter((g) => g.name).length;
+          const emittedCount = (yaml.match(/\n {4}permission: /g) || []).length;
+          // header present AND one permission line per named group — this fails
+          // if the loop body ever drops/duplicates a named group, unlike the
+          // old `startsWith('_rbac:\n')` tautology.
+          return yaml.startsWith('_rbac:\n') && emittedCount === namedCount;
+        },
       ),
     );
   });

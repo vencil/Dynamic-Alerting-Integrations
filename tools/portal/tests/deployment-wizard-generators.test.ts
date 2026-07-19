@@ -41,6 +41,13 @@ describe('deployGenerateHelmValues — shape & determinism', () => {
 describe('deployGenerateHelmValues — tenant size drives replicas/cardinality/retention', () => {
   it('medium size → 2/2/3 replicas, 2000 cardinality, 14d retention', () => {
     const yaml = deployGenerateHelmValues(config({ tenantSize: 'medium' }));
+    // The header label (`# Tenant count: ${size?.label}`) has NO `|| fallback`,
+    // so this proves the 'medium' entry was actually looked up — the replica /
+    // cardinality / retention values below happen to equal the source's
+    // `|| N` fallbacks, so on their own they'd stay green even if the lookup
+    // returned undefined. This assertion is what distinguishes the two.
+    expect(yaml).toContain('Tenant count: Medium');
+    expect(yaml).not.toContain('Tenant count: undefined');
     expect(yaml).toContain('thresholdExporter:\n  replicaCount: 2');
     expect(yaml).toContain('prometheus:\n  replicaCount: 2');
     expect(yaml).toContain('alertmanager:\n  replicaCount: 3');
