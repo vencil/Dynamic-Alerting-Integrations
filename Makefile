@@ -426,13 +426,11 @@ api-docs: ## Generate OpenAPI spec from tenant-api swag annotations (TRK-221)
 contract-test: ## 跑 schemathesis 契約測試 (TRK-222) — build → start tenant-api → fuzz spec
 	@# Runner builds tenant-api, starts it on a random port, runs schemathesis
 	@# against components/tenant-api/docs/swagger.json, tears down. CONTRACT_MAX_EXAMPLES
-	@# defaults to 10 (CI-friendly); bump for local investigation. Requires
-	@# schemathesis (pip install schemathesis) — handled inside dev container.
+	@# defaults to 10 (CI-friendly); bump for local investigation. schemathesis
+	@# is pinned in tests/contract/requirements.txt (SSOT with CI, #1158) so
+	@# local runs match CI exactly; pip no-ops when the pin is already satisfied.
 	@bash scripts/ops/dx-run.sh bash -c '\
-		if ! command -v schemathesis >/dev/null 2>&1; then \
-			echo "Installing schemathesis..."; \
-			pip install schemathesis 2>&1 | tail -3; \
-		fi; \
+		pip install -q -r tests/contract/requirements.txt 2>&1 | tail -3; \
 		REPO_ROOT=/workspaces/vibe-k8s-lab python3 tests/contract/run_contract_tests.py'
 
 .PHONY: fuse-reset

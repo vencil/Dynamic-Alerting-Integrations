@@ -54,6 +54,13 @@ Excluded operations (known gaps + reopen conditions):
     (`deps.PRTracker != nil`), which needs a forge token; the fixture
     runs write-mode=direct so the op 404s. Reopen if the fixture grows
     a stub forge backend.
+  - POST /api/v1/tenants/batch (1 op): its body is generation-hostile —
+    hypothesis filters out nearly every example and raises
+    `filter_too_much`, which schemathesis 4.x reports as an engine-level
+    error (exit 1) that `--suppress-health-check` does not cover, so the
+    op flakily reds the run without ever fuzzing (#1158). Covered by
+    Go handler tests + the deterministic policy-gate smoke. Reopen when
+    the batch schema is widened / given examples so it is fuzzable.
 """
 
 from __future__ import annotations
@@ -333,7 +340,7 @@ def main() -> int:
         return 2
 
     if not shutil.which("schemathesis"):
-        print("[contract] FATAL: schemathesis not in PATH. `pip install schemathesis`.")
+        print("[contract] FATAL: schemathesis not in PATH. `pip install -r tests/contract/requirements.txt`.")
         return 2
 
     workdir = Path(tempfile.mkdtemp(prefix="tenant-api-contract-"))
@@ -432,13 +439,26 @@ def main() -> int:
                     "-H", f"X-Forwarded-Groups: {FUZZ_GROUP}",
                     "--exclude-path-regex", "^/api/v1/federation/(tokens|accounts)",
                     "--exclude-path", "/api/v1/prs",
-                    # filter_too_much is a hypothesis generation-efficiency
-                    # health check, not a contract check: on some seeds the
-                    # generated bodies for constraint-heavy ops (seen on
-                    # POST /tenants/batch) are mostly filtered out and the
-                    # whole run ERRORs flakily. Suppressing it only accepts
-                    # lower fuzz throughput on those ops — actual contract
-                    # violations still fail the run.
+                    # POST /tenants/batch is excluded from fuzzing: its body
+                    # (operations[] of tenant_id+patch) is generation-hostile
+                    # enough that hypothesis filters out nearly every example
+                    # and raises `filter_too_much`. Schemathesis 4.x surfaces
+                    # that as an ENGINE-level error and exits 1 even WITH
+                    # `--suppress-health-check filter_too_much` below (that flag
+                    # only governs hypothesis's own health check, not the 4.x
+                    # engine report — verified on CI seed 3258…9317, #1158). So
+                    # the op flakily reds the run without ever effectively
+                    # fuzzing. It stays covered by Go handler tests + the
+                    # deterministic policy-gate smoke, and the Coverage phase
+                    # still exercises every OTHER op. Reopen (re-include) when
+                    # the batch body schema is widened / given examples so it
+                    # is actually fuzzable.
+                    "--exclude-path", "/api/v1/tenants/batch",
+                    # Best-effort for any OTHER constraint-heavy op: governs
+                    # hypothesis's own filter_too_much check (actual contract
+                    # violations still fail the run). Kept because it is free
+                    # insurance even though it does not cover the 4.x engine
+                    # report that made /tenants/batch above need exclusion.
                     "--suppress-health-check", "filter_too_much",
                     "--checks",
                     "response_schema_conformance,status_code_conformance,content_type_conformance",

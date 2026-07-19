@@ -23,8 +23,10 @@ CONTRACT_MAX_EXAMPLES=50 make contract-test
 ```
 
 需要：
-- Dev container（`make dc-up`）或 host 端有 Go 1.26 + Python 3.13 + `pip install schemathesis`
+- Dev container（`make dc-up`）或 host 端有 Go 1.26 + Python 3.13 + `pip install -r tests/contract/requirements.txt`
 - `components/tenant-api/docs/swagger.json` 是最新的（如不確定先 `make api-docs`）
+
+> **schemathesis + hypothesis 版本已 pin**（[`requirements.txt`](requirements.txt)，#1158）。runner 依賴 4.x CLI 語意與 `filter_too_much` 壓制的生成器行為，未 pin 的 `pip install schemathesis` 會隨最新版漂移 flake 率／旗標語意（「本地綠 CI 首跑紅」那類）。**`hypothesis` 一起顯式釘**——`filter_too_much` 是 hypothesis 的 HealthCheck、且 hypothesis 才是 flake 生成源，只釘 schemathesis 會讓它的 transitive `hypothesis<7,>=…` 浮動、真正的變數沒鎖住。升版走顯式 PR：改 `requirements.txt` 版號、複驗 health-check／旗標名仍成立，CI cache key 綁該檔 hash 會自動失效重裝。
 
 ## 它檢查什麼
 
@@ -37,6 +39,7 @@ CONTRACT_MAX_EXAMPLES=50 make contract-test
 **排除的 operations**：
 - `/federation/tokens*` + `/federation/accounts/backfill`（4 ops）——路由只在 `--federation-key` 設定時註冊，且 token store 需要 in-cluster Kubernetes ConfigMap，本機 fixture 起不來。reopen 條件：federation record store 有 file-backed / fake seam 後補測；現由 Go handler test（stub store）覆蓋。
 - `GET /prs`（1 op）——路由只在 PR write-mode（需 forge token）註冊，fixture 跑 `write-mode=direct` 會 404。reopen 條件：fixture 長出 stub forge backend。
+- `POST /tenants/batch`（1 op）——body（`operations[]` of tenant_id+patch）對 hypothesis 生成太不友善，幾乎每個例都被濾掉並丟 `filter_too_much`；schemathesis 4.x 把它報成 **engine-level error（exit 1）**，`--suppress-health-check filter_too_much` 蓋不住（那旗標只管 hypothesis 自己的 health check），所以此 op 從不真正 fuzz 卻零星把整跑弄紅（[#1158](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1158)）。由 Go handler test + deterministic policy-gate smoke 覆蓋。reopen 條件：batch body schema 放寬 / 加 `example` 使其可 fuzz 後再納回。
 
 **4xx/5xx 宣告紀律**：error 回應已全面宣告為 `handler.ErrorResponse`（統一 error envelope，PR-9）；新 handler 回了未宣告的 status code 會被 `status_code_conformance` 擋下——記得補 `@Failure` 標註 + `make api-docs`。schema 已把 `error`/`code` 收成 **required**（`binding:"required"`），所以 `response_schema_conformance` 現在會真正咬住手寫裸 `{"error": ...}` map 的落差——新 error path 一律走 `WriteJSONError` / `WriteErrorEnvelope` 家族（`codeFromStatus` 未映射的 status 會產出無 `code` 的回應 → 契約測試紅，這是刻意的 tripwire）。原本記錄在此的三處 legacy 裸 map emitter（`access.go` 400 / `me.go` 401 / rbac middleware 的 `writeError`+`writeForbidden` 401/403）已全部遷移統一 envelope（message/status 不變，加 `code`+`request_id`；rbac 屬 domain 層不能 import handler，envelope 形狀以套件內 struct 鏡射、由 `internal/handler/access_test.go` 走真 middleware 釘住對齊）。
 
@@ -66,7 +69,8 @@ CONTRACT_MAX_EXAMPLES=50 make contract-test
 當前 CI step:
 ```yaml
 - name: Install schemathesis
-  run: pip install schemathesis
+  # Pinned version — see tests/contract/requirements.txt (#1158).
+  run: pip install -r tests/contract/requirements.txt
 - name: Run schemathesis contract tests
   env:
     CONTRACT_MAX_EXAMPLES: "5"
