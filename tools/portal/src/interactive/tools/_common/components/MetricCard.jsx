@@ -32,7 +32,7 @@ import React from 'react';
 
 function MetricCard({ label, value, unit, subtitle, status, accent }) {
   return (
-    <div className={`p-3 rounded-lg border ${
+    <div role="group" aria-label={label} className={`p-3 rounded-lg border ${
       status === 'warning' ? 'bg-[color:var(--da-color-warning-soft)] border-[color:var(--da-color-warning)]' :
       status === 'error' ? 'bg-[color:var(--da-color-error-soft)] border-[color:var(--da-color-error)]' :
       'bg-[color:var(--da-color-card-bg)] border-[color:var(--da-color-card-border)]'

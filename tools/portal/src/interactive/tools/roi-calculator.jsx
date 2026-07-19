@@ -6,7 +6,8 @@ version: v2.7.0
 lang: en
 related: [capacity-planner, health-dashboard, alert-simulator]
 dependencies: [
-  "roi-calculator/calc.js"
+  "roi-calculator/calc.js",
+  "_common/components/MetricCard.jsx"
 ]
 ---
 

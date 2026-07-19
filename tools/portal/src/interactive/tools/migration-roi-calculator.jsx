@@ -6,7 +6,8 @@ version: v2.7.0
 lang: en
 related: [roi-calculator, operator-setup-wizard, migration-simulator]
 dependencies: [
-  "migration-roi-calculator/calc.js"
+  "migration-roi-calculator/calc.js",
+  "_common/components/MetricCard.jsx"
 ]
 ---
 

@@ -424,7 +424,7 @@ def check_saturated_token_as_text(content: str, filename: str) -> List[Dict]:
 # "context" never match. Case-sensitive. Shade captured to honor the S1 Waiver.
 _SLATE_CLASS_RE = re.compile(
     r"(?<![\w-])(?:bg|text|border|ring|ring-offset|from|to|via|divide|placeholder|"
-    r"outline|decoration|accent|caret|fill|stroke)-slate-(\d{2,3})(?![\w-])"
+    r"outline|decoration|accent|caret|fill|stroke|shadow)-slate-(\d{2,3})(?![\w-])"
 )
 # S1 Waiver: the dark IDE / code-preview surface pair (`bg-slate-900` +
 # `text-slate-100`) is allowed — those extreme shades ARE the dark chrome and
