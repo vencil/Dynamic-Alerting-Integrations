@@ -230,52 +230,21 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 		if r.URL.Query().Get("async") == "true" && d.Tasks != nil {
 			task := d.Tasks.Submit(taskID, func(ctx context.Context) ([]async.TaskResult, error) {
 				results := executeBatchOps(ctx, d.Writer, d.ConfigDir, req.Operations, email, p, d.RBAC, d.TenantOrg, d.Policy)
-				asyncResults := make([]async.TaskResult, len(results))
-				for i, br := range results {
-					asyncResults[i] = async.TaskResult{
-						TenantID: br.TenantID,
-						Status:   br.Status,
-						Message:  br.Message,
-					}
-				}
-				return asyncResults, nil
+				return toTaskResults(results), nil
 			})
 
-			writeJSON(rw, http.StatusAccepted, map[string]interface{}{
-				"status":   "pending",
-				"task_id":  task.ID,
-				"poll_url": fmt.Sprintf("/api/v1/tasks/%s", task.ID),
-			})
+			write202Pending(rw, task)
 			return
 		}
 
 		// Synchronous mode (default, backward compatible)
 		results := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, req.Operations, email, p, d.RBAC, d.TenantOrg, d.Policy)
 
-		// Compute summary
-		successes := 0
-		failures := 0
-		for _, result := range results {
-			if result.Status == "ok" {
-				successes++
-			} else {
-				failures++
-			}
-		}
-		var summary string
-		if failures == 0 {
-			summary = fmt.Sprintf("%d succeeded", successes)
-		} else if successes == 0 {
-			summary = fmt.Sprintf("%d failed", failures)
-		} else {
-			summary = fmt.Sprintf("%d succeeded, %d failed", successes, failures)
-		}
-
 		writeJSON(rw, http.StatusOK, BatchResponse{
 			Status:  "completed",
 			TaskID:  taskID,
 			Results: results,
-			Summary: summary,
+			Summary: summarizeBatchResults(results),
 		})
 	}
 }
@@ -291,12 +260,8 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, policyMgr *policy.Manager) []BatchResult {
 	results := make([]BatchResult, 0, len(ops))
 	for _, op := range ops {
-		if err := ValidateTenantID(op.TenantID); err != nil {
-			results = append(results, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
-			continue
-		}
-		if !OrgAllowed(rbacMgr, tenantOrg, p, op.TenantID, rbac.PermWrite) {
-			results = append(results, BatchResult{TenantID: op.TenantID, Status: "error", Message: "insufficient permissions for tenant " + op.TenantID})
+		if res, failed := gateBatchOp(op.TenantID, p, rbacMgr, tenantOrg); failed {
+			results = append(results, res)
 			continue
 		}
 		if policyMgr != nil {

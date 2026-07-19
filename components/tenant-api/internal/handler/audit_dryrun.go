@@ -62,7 +62,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -248,30 +247,16 @@ func DryRunTenantAccessReport(d *Deps) http.HandlerFunc {
 		// 3. Query params — strict, mirroring the GET endpoint: a typo'd
 		// ?view=redcated silently answering FULL would be a fail-open
 		// projection choice.
-		includeOrgValues := false
-		switch r.URL.Query().Get("include") {
-		case "":
-		case "org_values":
-			includeOrgValues = true
-		default:
-			WriteJSONError(w, r, http.StatusBadRequest, "unsupported include value: only org_values is recognized")
-			return
-		}
-		redacted := false
-		switch r.URL.Query().Get("view") {
-		case "", "full":
-		case "redacted":
-			redacted = true
-		default:
-			WriteJSONError(w, r, http.StatusBadRequest, "unsupported view value: full or redacted")
+		includeOrgValues, redacted, err := parseAccessReportProjection(r)
+		if err != nil {
+			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 
 		// 4. Bounded body read (tenant_validate.go precedent). An oversized
 		// body truncates at the limit and fails the JSON shell below.
-		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
-		if err != nil {
-			WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
+		body, ok := readLimitedBody(w, r, d)
+		if !ok {
 			return
 		}
 

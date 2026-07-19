@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
@@ -74,9 +73,8 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		}
 		email := rbac.RequestEmail(r)
 
-		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
-		if err != nil {
-			WriteJSONError(rw, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
+		body, ok := readLimitedBody(rw, r, d)
+		if !ok {
 			return
 		}
 
