@@ -8,6 +8,7 @@ related: [alert-simulator, runbook-viewer, alert-timeline]
 ---
 
 import React, { useState, useEffect } from 'react';
+import { severityBadgeClass } from './_common/format/severity.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -203,7 +204,7 @@ export default function HealthDashboard() {
                         <span className="font-mono text-sm font-medium text-slate-900">{a.name}</span>
                       </div>
                       <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${
-                        a.severity === 'critical' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                        severityBadgeClass(a.severity)
                       }`}>{a.severity}</span>
                     </div>
                     {a.state === 'firing' && (

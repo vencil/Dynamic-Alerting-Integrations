@@ -9,6 +9,7 @@ related: [playground, promql-tester, config-diff]
 
 import React, { useState, useMemo } from 'react';
 import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
+import { severityBadgeClass } from './_common/format/severity.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -226,7 +227,7 @@ export default function MigrationSimulator() {
                             <span className="text-green-500 text-xs font-bold"><span aria-hidden="true">✓</span></span>
                             <span className="font-mono text-sm font-semibold text-slate-900">{r.alertName}</span>
                             <span className={`text-xs px-1.5 py-0.5 rounded ${
-                              r.severity === 'critical' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                              severityBadgeClass(r.severity)
                             }`}>{r.severity}</span>
                           </div>
                           <div className="grid grid-cols-2 gap-2 text-xs">

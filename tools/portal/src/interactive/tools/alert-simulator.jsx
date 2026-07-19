@@ -9,6 +9,7 @@ related: [alert-timeline, runbook-viewer, config-lint]
 
 import React, { useState, useMemo } from 'react';
 import { simulateWithDedup } from './_common/sim/alert-engine.js';
+import { severityBadgeClass } from './_common/format/severity.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -86,7 +87,7 @@ export default function AlertSimulator() {
                         aria-label={t('閾值', 'Threshold') + ` — ${key}`}
                         className="w-24 px-2 py-1 text-sm border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-400"
                       />
-                      <span className={`text-xs px-1.5 py-0.5 rounded ${def?.severity === 'critical' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${severityBadgeClass(def?.severity)}`}>
                         {def?.severity || '?'}
                       </span>
                       <button onClick={() => removeConfig(key)} className="text-slate-400 hover:text-red-500 text-xs">✕</button>

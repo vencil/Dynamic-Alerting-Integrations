@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../../../tools/portal/src/interactive/tools/_common/format/severity.js"],
+  "sourcesContent": ["/**\n * severityBadgeClass \u2014 the Tailwind colour-pair for a severity badge.\n *\n * Extracted verbatim from the four tools that hand-duplicated the exact same\n * binary ternary (alert-simulator / health-dashboard / migration-simulator /\n * runbook-viewer): `severity === 'critical' ? 'bg-red-100 text-red-700'\n * : 'bg-amber-100 text-amber-700'`.\n *\n * Behaviour is preserved verbatim \u2014 'critical' \u2192 red, every other value\n * (warning / info / undefined) \u2192 amber. The warning-and-info-both-amber\n * limitation is intentional here: giving them distinct colours is a\n * visual/design change, not a refactor, and is tracked separately.\n *\n * Returns ONLY the colour classes; callers keep their own padding / rounding\n * / font wrappers (they differ per site), so this helper never dictates\n * layout.\n */\nfunction severityBadgeClass(severity) {\n  return severity === 'critical' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700';\n}\n\nexport { severityBadgeClass };\n"],
+  "mappings": "AAiBA,SAASA,EAAmBC,EAAU,CACpC,OAAOA,IAAa,WAAa,0BAA4B,6BAC/D",
+  "names": ["severityBadgeClass", "severity"]
+}
