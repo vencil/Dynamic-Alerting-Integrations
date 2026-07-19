@@ -892,13 +892,14 @@ func (m *Manager) accessibleFieldFor(p *VerifiedPrincipal, selector func(*GroupR
 }
 
 // AccessibleEnvironmentsFor returns the set of environments the caller p
-// can access (empty set means "all" — no restriction).
+// can access (nil means "all" — no restriction; a non-nil empty slice means
+// no access).
 func (m *Manager) AccessibleEnvironmentsFor(p *VerifiedPrincipal) []string {
 	return m.accessibleFieldFor(p, func(r *GroupRule) []string { return r.Environments })
 }
 
 // AccessibleDomainsFor returns the set of domains the caller p can access
-// (empty set means "all" — no restriction).
+// (nil means "all" — no restriction; a non-nil empty slice means no access).
 func (m *Manager) AccessibleDomainsFor(p *VerifiedPrincipal) []string {
 	return m.accessibleFieldFor(p, func(r *GroupRule) []string { return r.Domains })
 }
