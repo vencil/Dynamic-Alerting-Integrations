@@ -1,0 +1,2 @@
+import{a as e}from"./chunk-ZHLICTNA.js";import{a as n,b,d as a}from"./chunk-6CZKKW3I.js";var m=n(b(),1);var o=n(a(),1),r=window.__t||((p,t)=>t);function l({text:p,labelZh:t,labelEn:c,className:d,testId:i,type:u="button"}){let{copied:s,copy:C}=e();return(0,o.jsx)("button",{type:u,onClick:()=>C(p),className:d,...i?{"data-testid":i}:{},children:s?(0,o.jsxs)(o.Fragment,{children:[(0,o.jsx)("span",{"aria-hidden":"true",children:"\u2713"})," ",r("\u5DF2\u8907\u88FD","Copied")]}):r(t,c)})}export{l as a};
+//# sourceMappingURL=chunk-7GUUN22A.js.map

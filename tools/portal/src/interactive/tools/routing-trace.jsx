@@ -7,7 +7,7 @@ lang: en
 related: [alert-builder, alert-simulator, master-onboarding, cicd-setup-wizard, deployment-wizard]
 dependencies: [
   "routing-trace/routing.js",
-  "_common/hooks/useCopyToClipboard.js"
+  "_common/components/CopyButton.jsx"
 ]
 ---
 
@@ -21,7 +21,7 @@ import {
   computeTrace,
   canAdvance,
 } from './routing-trace/routing.js';
-import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
+import { CopyButton } from './_common/components/CopyButton.jsx';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -122,7 +122,6 @@ export default function RoutingTrace() {
       { match: { team: 'database' }, receiver: 'team-database' },
     ],
   });
-  const { copied, copy } = useCopyToClipboard();
 
   const trace = useMemo(() => computeTrace(state), [state]);
 
@@ -206,8 +205,6 @@ export default function RoutingTrace() {
     );
     return lines.join('\n');
   }, [trace]);
-
-  const copyTrace = () => copy(traceText);
 
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-6">
@@ -521,14 +518,13 @@ export default function RoutingTrace() {
                       `Matched Child Route #${trace.matchedRoute + 1}`
                     )}
               </span>
-              <button
-                type="button"
-                onClick={copyTrace}
-                data-testid="routing-trace-copy"
+              <CopyButton
+                text={traceText}
+                labelZh="複製追蹤結果"
+                labelEn="Copy Trace"
+                testId="routing-trace-copy"
                 className="px-3 py-1.5 text-xs font-medium rounded bg-[color:var(--da-color-accent)] text-[color:var(--da-color-accent-fg)] hover:bg-[color:var(--da-color-accent-hover)]"
-              >
-                {copied ? <><span aria-hidden="true">✓</span> {t('已複製', 'Copied')}</> : t('複製追蹤結果', 'Copy Trace')}
-              </button>
+              />
             </div>
             <p className="text-base font-bold text-[color:var(--da-color-fg)]">
               <span className="text-xs font-normal text-[color:var(--da-color-muted)]">
