@@ -14,12 +14,23 @@ purpose: |
   caller that omits `unit` gets byte-identical output to the pre-promotion
   platform-health card).
 
-  Props: { label, value, unit?, subtitle?, status? }.
+  Two color slots, each optional and serving a distinct visual concern
+  (NOT a kitchen-sink — a container state tint and a value-emphasis colour
+  are orthogonal):
+    - status: 'warning' | 'error' → soft container bg + border tint.
+    - accent: a --da-color-* token string → value text colour (for a
+      SEMANTIC value tone, e.g. a health success/error signal). Default fg.
+
+  Numeric values render with `tabular-nums` so digits align in a grid of
+  cards without needing a monospace font (the alignment benefit that the
+  calculator tools previously used a monospace value for).
+
+  Props: { label, value, unit?, subtitle?, status?, accent? }.
 ---
 
 import React from 'react';
 
-function MetricCard({ label, value, unit, subtitle, status }) {
+function MetricCard({ label, value, unit, subtitle, status, accent }) {
   return (
     <div className={`p-3 rounded-lg border ${
       status === 'warning' ? 'bg-[color:var(--da-color-warning-soft)] border-[color:var(--da-color-warning)]' :
@@ -27,7 +38,7 @@ function MetricCard({ label, value, unit, subtitle, status }) {
       'bg-[color:var(--da-color-card-bg)] border-[color:var(--da-color-card-border)]'
     }`}>
       <div className="text-xs text-[color:var(--da-color-muted)]">{label}</div>
-      <div className="text-xl font-bold text-[color:var(--da-color-fg)]">
+      <div className="text-xl font-bold tabular-nums" style={{ color: accent || 'var(--da-color-fg)' }}>
         {value}{unit ? <span className="text-sm font-normal text-[color:var(--da-color-muted)] ml-1">{unit}</span> : null}
       </div>
       {subtitle && <div className="text-xs text-[color:var(--da-color-muted)]">{subtitle}</div>}

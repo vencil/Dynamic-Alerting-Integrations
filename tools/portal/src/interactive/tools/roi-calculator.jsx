@@ -11,6 +11,7 @@ dependencies: [
 ---
 
 import React, { useState, useMemo } from 'react';
+import { MetricCard as MetricCardBase } from './_common/components/MetricCard.jsx';
 
 // PR-portal-13: savings/reduction math extracted to a unit-testable module.
 import {
@@ -167,52 +168,6 @@ const styles = {
     gridTemplateColumns: '1fr 1fr 1fr 1fr',
     gap: 'var(--da-space-4)',
   },
-  metricCard: {
-    borderRadius: 'var(--da-radius-lg)',
-    border: '1px solid',
-    padding: 'var(--da-space-4)',
-  },
-  metricCardBlue: {
-    backgroundColor: 'var(--da-color-info-soft)',
-    borderColor: 'var(--da-color-accent)',
-    color: 'var(--da-color-accent)',
-  },
-  metricCardGreen: {
-    backgroundColor: 'var(--da-color-success-soft)',
-    borderColor: 'var(--da-color-success)',
-    color: 'var(--da-color-success)',
-  },
-  metricCardAmber: {
-    backgroundColor: 'var(--da-color-warning-soft)',
-    borderColor: 'var(--da-color-warning)',
-    color: 'var(--da-color-warning-text)',
-  },
-  metricCardPurple: {
-    backgroundColor: 'var(--da-color-icon-rules-bg)',
-    borderColor: 'var(--da-color-icon-rules)',
-    color: 'var(--da-color-icon-rules)',
-  },
-  metricTitle: {
-    fontSize: 'var(--da-font-size-xs)',
-    fontWeight: 'var(--da-font-weight-medium)',
-    opacity: 0.7,
-    marginBottom: 'var(--da-space-1)',
-  },
-  metricValue: {
-    fontSize: 'var(--da-font-size-xl)',
-    fontWeight: 'var(--da-font-weight-bold)',
-    fontFamily: 'var(--da-font-mono)',
-  },
-  metricUnit: {
-    fontSize: 'var(--da-font-size-sm)',
-    fontWeight: 'var(--da-font-weight-normal)',
-    marginLeft: 'var(--da-space-1)',
-  },
-  metricSubtitle: {
-    fontSize: 'var(--da-font-size-xs)',
-    marginTop: 'var(--da-space-1)',
-    opacity: 0.6,
-  },
   chartSection: {
     backgroundColor: 'var(--da-color-surface)',
     border: '1px solid var(--da-color-surface-border)',
@@ -334,23 +289,12 @@ function Slider({ label, value, onChange, min, max, step = 1, unit = '' }) {
   );
 }
 
-function MetricCard({ title, value, unit, subtitle, color = 'blue' }) {
-  const colorMap = {
-    blue: styles.metricCardBlue,
-    green: styles.metricCardGreen,
-    amber: styles.metricCardAmber,
-    purple: styles.metricCardPurple,
-  };
-  return (
-    <div style={{...styles.metricCard, ...colorMap[color]}}>
-      <div style={styles.metricTitle}>{title}</div>
-      <div style={styles.metricValue}>
-        {typeof value === 'number' ? value.toLocaleString(undefined, { maximumFractionDigits: 1 }) : value}
-        <span style={styles.metricUnit}>{unit}</span>
-      </div>
-      {subtitle && <div style={styles.metricSubtitle}>{subtitle}</div>}
-    </div>
-  );
+// Converged to the shared _common MetricCard (Phase B2). `title` maps to the
+// shared card's `label`; the decorative 4-colour `color` axis (blue/green/amber/
+// purple) is dropped for a uniform look; the 1-decimal thousands formatting is
+// preserved.
+function MetricCard({ title, value, color, ...rest }) {
+  return <MetricCardBase label={title} value={typeof value === 'number' ? value.toLocaleString(undefined, { maximumFractionDigits: 1 }) : value} {...rest} />;
 }
 
 function BarChart({ data }) {
