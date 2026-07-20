@@ -46,6 +46,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_compat.py",      # v2.8.0 PR #432: cross-platform compat helpers (try_utf8_stdout)
     "_lib_exitcodes.py",   # #452 Track A: canonical 0/1/2 exit-code contract (SSOT)
     "_lib_versions.py",    # platform / da-tools version SSOT readers for doc generators
+    "_lib_yaml.py",        # v2.10.0 ROI r5 W2: minimal CRD YAML serializer (operator_generate + migrate_to_operator)
     "metric-dictionary.yaml",
     "validate_all.py",
     "vendor_download.sh",

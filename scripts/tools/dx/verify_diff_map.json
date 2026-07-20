@@ -75,6 +75,9 @@
   "scripts/tools/_lib_validation.py": [
    "tests/shared/test_property_tools.py"
   ],
+  "scripts/tools/_lib_yaml.py": [
+   "tests/ops/test_lib_yaml.py"
+  ],
   "scripts/tools/dx/_recipe_preview.py": [
    "tests/dx/test_recipe_preview.py"
   ],
@@ -523,6 +526,7 @@
    "tests/ops/test_migrate_v3.py"
   ],
   "scripts/tools/ops/migrate_to_operator.py": [
+   "tests/ops/test_lib_yaml.py",
    "tests/ops/test_migrate_to_operator.py",
    "tests/ops/test_property_based.py"
   ],
@@ -543,6 +547,7 @@
    "tests/ops/test_operator_check.py"
   ],
   "scripts/tools/ops/operator_generate.py": [
+   "tests/ops/test_lib_yaml.py",
    "tests/ops/test_operator_generate_v2.py",
    "tests/ops/test_property_based.py"
   ],
@@ -633,7 +638,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "b369f6b99b307c26393b604ad37ea248e441abca468ba4432e4961d8f6f8241d",
+ "source_digest": "2dbdd0cb570cbe6034aa7a9f7fe6753dfe5634c6cb5728697d4aafbb6c317c2e",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -649,6 +654,7 @@
   "tests/dx/test_describe_tenant.py",
   "tests/dx/test_diag_pr_ci.py",
   "tests/dx/test_doc_coverage.py",
+  "tests/dx/test_dx_json_stdout_contract.py",
   "tests/dx/test_federation_revocation_dashboard.py",
   "tests/dx/test_fleet_threshold_dashboard.py",
   "tests/dx/test_fuse_plumbing_commit.py",
@@ -822,6 +828,7 @@
   "tests/ops/test_inject_default_key.py",
   "tests/ops/test_inject_metadata_join.py",
   "tests/ops/test_integration.py",
+  "tests/ops/test_lib_yaml.py",
   "tests/ops/test_lint_custom_rules.py",
   "tests/ops/test_maintenance_scheduler.py",
   "tests/ops/test_migrate_ast.py",
@@ -1065,6 +1072,7 @@
    "tests/ops/test_scaffold_tenant.py"
   ],
   "docs/architecture-and-design.md": [
+   "tests/dx/test_dx_json_stdout_contract.py",
    "tests/dx/test_generate_adr_index.py"
   ],
   "docs/assets": [
@@ -1483,6 +1491,7 @@
    "tests/shared/test_reserved_key_py_go_parity.py"
   ],
   "scripts/tools/_lib_exitcodes.py": [
+   "tests/dx/test_dx_json_stdout_contract.py",
    "tests/dx/test_verify_diff.py",
    "tests/shared/test_ci_flag_contract.py",
    "tests/shared/test_json_stdout_contract.py",
@@ -1495,6 +1504,7 @@
    "tests/lint/test_check_structure.py"
   ],
   "scripts/tools/dx": [
+   "tests/dx/test_dx_json_stdout_contract.py",
    "tests/dx/test_generate_tenant_fixture.py",
    "tests/dx/test_verify_diff.py",
    "tests/ops/test_property_based.py",
@@ -1752,7 +1762,8 @@
    "tests/dx/test_compile_custom_alerts.py"
   ],
   "tests/dx/fixtures/diag_pr_ci": [
-   "tests/dx/test_diag_pr_ci.py"
+   "tests/dx/test_diag_pr_ci.py",
+   "tests/dx/test_dx_json_stdout_contract.py"
   ],
   "tests/dx/fixtures/recipe_id_vectors.json": [
    "tests/dx/test_compile_custom_alerts.py"
@@ -1760,8 +1771,17 @@
   "tests/dx/fixtures/slo_burn_multiplier_vectors.json": [
    "tests/dx/test_compile_custom_alerts.py"
   ],
+  "tests/dx/fixtures/waveform/selftest_service_up.yaml": [
+   "tests/dx/test_dx_json_stdout_contract.py"
+  ],
+  "tests/dx/fixtures/waveform/tolerances/selftest_tolerances.yaml": [
+   "tests/dx/test_dx_json_stdout_contract.py"
+  ],
   "tests/dx/test_bump_docs.py": [
    "tests/dx/test_verify_diff.py"
+  ],
+  "tests/dx/test_coverage_delta.py": [
+   "tests/dx/test_dx_json_stdout_contract.py"
   ],
   "tests/dx/test_custom_alerts_promtool.py": [
    "tests/dx/test_fleet_threshold_dashboard.py",
@@ -1773,6 +1793,9 @@
   ],
   "tests/dx/test_tenant_log_query_dashboard.py": [
    "tests/dx/test_federation_revocation_dashboard.py"
+  ],
+  "tests/dx/test_waveform_score.py": [
+   "tests/dx/test_dx_json_stdout_contract.py"
   ],
   "tests/e2e": [
    "tests/lint/test_check_playwright_rtl_drift.py"
@@ -1853,6 +1876,7 @@
    "tests/helm/test_portal_static_tier_guard.py"
   ],
   "tests/shared/test_json_stdout_contract.py": [
+   "tests/dx/test_dx_json_stdout_contract.py",
    "tests/ops/test_backtest_threshold.py"
   ],
   "tests/shared/test_lib_godispatch.py": [
@@ -1870,6 +1894,7 @@
    "tests/dx/test_sync_schema.py"
   ],
   "tests/shared/test_tool_exit_codes.py": [
+   "tests/dx/test_dx_json_stdout_contract.py",
    "tests/lint/test_check_admin_config_schema.py",
    "tests/lint/test_check_confd_schema.py",
    "tests/shared/test_json_stdout_contract.py"

@@ -68,6 +68,11 @@ modules:
       add_ci_arg: "argparse boilerplate"
       add_prometheus_arg: "argparse boilerplate"
 
+  scripts/tools/_lib_yaml.py:
+    excluded:
+      write_yaml_crd: "Side-effecting I/O (writes YAML to disk via write_text_secure); same SAST-guard rationale as _lib_io.write_text_secure/write_json_secure"
+      _dict_to_yaml: "Pure minimal-YAML fallback emitter; byte-output locked by golden characterization tests in tests/ops/test_lib_yaml.py (nested/list/bool/quote/unicode/empty-container cases)"
+
   scripts/tools/_lib_prometheus.py:
     covered:
       - _validate_url_scheme

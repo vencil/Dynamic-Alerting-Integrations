@@ -20,7 +20,7 @@ import sys
 import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
@@ -33,6 +33,7 @@ except ImportError:
 
 from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
 from _lib_io import load_yaml_file, write_text_secure  # noqa: E402
+from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 
 # Reuse patterns from operator_generate
 import re
@@ -106,51 +107,6 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
                     file=sys.stderr,
                 )
     return sorted(tenants)
-
-
-def write_yaml_crd(output_path: Path, crd: dict, gitops: bool = False) -> None:
-    """Write CRD to YAML file."""
-    if yaml:
-        yaml_str = yaml.dump(
-            crd,
-            default_flow_style=False,
-            sort_keys=gitops,
-            allow_unicode=True,
-        )
-    else:
-        yaml_str = _dict_to_yaml(crd)
-
-    write_text_secure(str(output_path), yaml_str)
-
-
-def _dict_to_yaml(obj: Any, indent: int = 0) -> str:
-    """Minimal YAML serialization (fallback when yaml module unavailable)."""
-    if isinstance(obj, dict):
-        lines = []
-        for k, v in obj.items():
-            val_str = _dict_to_yaml(v, indent + 2)
-            if "\n" in val_str:
-                lines.append(f"{' ' * indent}{k}:\n{val_str}")
-            else:
-                lines.append(f"{' ' * indent}{k}: {val_str}")
-        return "\n".join(lines)
-    elif isinstance(obj, list):
-        lines = []
-        for item in obj:
-            item_str = _dict_to_yaml(item, indent + 2)
-            if "\n" in item_str:
-                lines.append(f"{' ' * indent}-\n{item_str}")
-            else:
-                lines.append(f"{' ' * indent}- {item_str}")
-        return "\n".join(lines)
-    elif isinstance(obj, bool):
-        return "true" if obj else "false"
-    elif isinstance(obj, str):
-        if any(c in obj for c in ":[]{},'\""):
-            return f'"{obj}"'
-        return obj
-    else:
-        return str(obj)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

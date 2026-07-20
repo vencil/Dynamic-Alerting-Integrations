@@ -35,7 +35,8 @@ except ImportError:
 
 from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import load_yaml_file, write_text_secure  # noqa: E402
+from _lib_io import load_yaml_file  # noqa: E402
+from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants and Help Text
@@ -518,64 +519,6 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
     return sorted(tenants)
 
 
-def write_yaml_crd(
-    output_path: Path,
-    crd: dict,
-    gitops: bool = False,
-) -> None:
-    """Write CRD to YAML file.
-
-    Args:
-        output_path: Output file path
-        crd: CRD dict to serialize
-        gitops: If True, use sorted keys and exclude timestamps
-    """
-    if yaml:
-        # Use yaml module if available
-        yaml_str = yaml.dump(
-            crd,
-            default_flow_style=False,
-            sort_keys=gitops,
-            allow_unicode=True,
-        )
-    else:
-        # Fallback: minimal YAML serialization
-        yaml_str = _dict_to_yaml(crd)
-
-    write_text_secure(str(output_path), yaml_str)
-
-
-def _dict_to_yaml(obj: Any, indent: int = 0) -> str:
-    """Minimal YAML serialization (fallback when yaml module unavailable)."""
-    if isinstance(obj, dict):
-        lines = []
-        for k, v in obj.items():
-            val_str = _dict_to_yaml(v, indent + 2)
-            if "\n" in val_str:
-                lines.append(f"{' ' * indent}{k}:\n{val_str}")
-            else:
-                lines.append(f"{' ' * indent}{k}: {val_str}")
-        return "\n".join(lines)
-    elif isinstance(obj, list):
-        lines = []
-        for item in obj:
-            item_str = _dict_to_yaml(item, indent + 2)
-            if "\n" in item_str:
-                lines.append(f"{' ' * indent}-\n{item_str}")
-            else:
-                lines.append(f"{' ' * indent}- {item_str}")
-        return "\n".join(lines)
-    elif isinstance(obj, bool):
-        return "true" if obj else "false"
-    elif isinstance(obj, str):
-        # Quote strings that need it
-        if any(c in obj for c in ":[]{},'\""):
-            return f'"{obj}"'
-        return obj
-    else:
-        return str(obj)
-
-
 # ---------------------------------------------------------------------------
 # Main Logic
 # ---------------------------------------------------------------------------
@@ -691,8 +634,11 @@ def build_kustomization(crd_files: List[str], namespace: str) -> dict:
     }
 
 
-def main():
-    """CLI entry point."""
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Construct the operator-generate argument parser (construction only, no parse).
+
+    Extracted from main() so the CLI surface is independently testable.
+    """
     parser = argparse.ArgumentParser(
         description=i18n_text(_HELP["zh"]["desc"], _HELP["en"]["desc"]),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -771,7 +717,199 @@ def main():
         action="store_true",
         help=i18n_text(_HELP["zh"]["kustomize"], _HELP["en"]["kustomize"]),
     )
+    return parser
 
+
+def _ordered_crds(result: Dict[str, Any]) -> List[dict]:
+    """CRD dicts in canonical emit order: PrometheusRules, AlertmanagerConfigs, ServiceMonitor."""
+    crds = [item["crd"] for item in result["prometheus_rules"]]
+    crds += [item["crd"] for item in result["alertmanager_configs"]]
+    if result["service_monitor"]:
+        crds.append(result["service_monitor"]["crd"])
+    return crds
+
+
+def _crd_filenames(result: Dict[str, Any]) -> List[str]:
+    """`{name}.yaml` for every CRD, in the same order as _ordered_crds()."""
+    return [f'{crd["metadata"]["name"]}.yaml' for crd in _ordered_crds(result)]
+
+
+def emit_dry_run(
+    result: Dict[str, Any],
+    kustomize: bool,
+    namespace: str,
+    as_json: bool,
+) -> tuple:
+    """Dry-run output path: print CRD (and optional kustomization) YAML to stdout.
+
+    In ``--json`` mode nothing is printed here — the documents are collected and
+    returned so main() can emit the single #1112 envelope once at the end.
+
+    Returns (json_crds, json_kustomization).
+    """
+    all_crds = _ordered_crds(result)
+    json_crds: list = []
+    json_kustomization = None
+
+    if as_json:
+        json_crds = all_crds
+    else:
+        if yaml:
+            for i, crd in enumerate(all_crds):
+                if i > 0:
+                    print("---")
+                print(yaml.dump(crd, default_flow_style=False, allow_unicode=True), end="")
+        else:
+            for crd in all_crds:
+                print(_dict_to_yaml(crd))
+                print("---")
+
+    # Print kustomization.yaml if requested
+    if kustomize:
+        crd_files = _crd_filenames(result)
+        kustomize_dict = build_kustomization(crd_files, namespace)
+        if as_json:
+            json_kustomization = kustomize_dict
+        elif yaml:
+            print("---")
+            print(yaml.dump(
+                kustomize_dict,
+                default_flow_style=False,
+                allow_unicode=True,
+            ), end="")
+        else:
+            print("---")
+            print(_dict_to_yaml(kustomize_dict))
+
+    return json_crds, json_kustomization
+
+
+def write_crds(
+    result: Dict[str, Any],
+    output_dir: Path,
+    gitops: bool,
+    kustomize: bool,
+    namespace: str,
+    as_json: bool,
+) -> tuple:
+    """Write CRD (and optional kustomization) files to output_dir.
+
+    Emits one ``Generated: <path>`` line per file to stderr. Returns
+    (json_crds, json_kustomization) for the #1112 envelope — the same stdout
+    schema as the dry-run path (a report of what was generated / written).
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    crd_files: List[str] = []
+
+    for item in result["prometheus_rules"]:
+        crd = item["crd"]
+        name = crd["metadata"]["name"]
+        output_path = output_dir / f"{name}.yaml"
+        write_yaml_crd(output_path, crd, gitops=gitops)
+        print(f"Generated: {output_path}", file=sys.stderr)
+        crd_files.append(f"{name}.yaml")
+
+    for item in result["alertmanager_configs"]:
+        crd = item["crd"]
+        name = crd["metadata"]["name"]
+        output_path = output_dir / f"{name}.yaml"
+        write_yaml_crd(output_path, crd, gitops=gitops)
+        print(f"Generated: {output_path}", file=sys.stderr)
+        crd_files.append(f"{name}.yaml")
+
+    if result["service_monitor"]:
+        crd = result["service_monitor"]["crd"]
+        name = crd["metadata"]["name"]
+        output_path = output_dir / f"{name}.yaml"
+        write_yaml_crd(output_path, crd, gitops=gitops)
+        print(f"Generated: {output_path}", file=sys.stderr)
+        crd_files.append(f"{name}.yaml")
+
+    # Write kustomization.yaml if requested
+    json_kustomization = None
+    if kustomize:
+        kustomize_dict = build_kustomization(crd_files, namespace)
+        kustomize_path = output_dir / "kustomization.yaml"
+        write_yaml_crd(kustomize_path, kustomize_dict, gitops=gitops)
+        print(f"Generated: {kustomize_path}", file=sys.stderr)
+        json_kustomization = kustomize_dict
+
+    json_crds: list = []
+    if as_json:
+        # Same stdout schema as the dry-run path: the document reports what was
+        # generated (and, here, also written to --output-dir).
+        json_crds = _ordered_crds(result)
+
+    return json_crds, json_kustomization
+
+
+def build_summary(result: Dict[str, Any], kustomize: bool) -> Dict[str, int]:
+    """Count generated artefacts — shared by the --json envelope and the stderr line."""
+    base_total = (
+        len(result["prometheus_rules"]) +
+        len(result["alertmanager_configs"]) +
+        (1 if result["service_monitor"] else 0)
+    )
+    kustomize_count = 1 if kustomize else 0
+    return {
+        "prometheus_rules": len(result["prometheus_rules"]),
+        "alertmanager_configs": len(result["alertmanager_configs"]),
+        "service_monitor": 1 if result["service_monitor"] else 0,
+        "kustomization": kustomize_count,
+        "total": base_total + kustomize_count,
+    }
+
+
+def render_json_envelope(
+    json_crds: list,
+    json_kustomization,
+    summary: Dict[str, int],
+) -> str:
+    """#1112 single-document envelope: ``{"crds", "kustomization", "summary"}``."""
+    return format_json_report({
+        "crds": json_crds,
+        "kustomization": json_kustomization,
+        "summary": summary,
+    })
+
+
+def _summary_message(summary: Dict[str, int], kustomize: bool) -> str:
+    """Human-readable (stderr) success line — bilingual, kustomize-aware."""
+    if kustomize:
+        msg_zh = (
+            f"\n✓ 已產出 {summary['total']} 個檔案: "
+            f"{summary['prometheus_rules']} PrometheusRules, "
+            f"{summary['alertmanager_configs']} AlertmanagerConfigs, "
+            f"{summary['service_monitor']} ServiceMonitor, "
+            f"1 kustomization.yaml"
+        )
+        msg_en = (
+            f"\n✓ Generated {summary['total']} files: "
+            f"{summary['prometheus_rules']} PrometheusRules, "
+            f"{summary['alertmanager_configs']} AlertmanagerConfigs, "
+            f"{summary['service_monitor']} ServiceMonitor, "
+            f"1 kustomization.yaml"
+        )
+    else:
+        msg_zh = (
+            f"\n✓ 已產出 {summary['total']} 個 CRD: "
+            f"{summary['prometheus_rules']} PrometheusRules, "
+            f"{summary['alertmanager_configs']} AlertmanagerConfigs, "
+            f"{summary['service_monitor']} ServiceMonitor"
+        )
+        msg_en = (
+            f"\n✓ Generated {summary['total']} CRDs: "
+            f"{summary['prometheus_rules']} PrometheusRules, "
+            f"{summary['alertmanager_configs']} AlertmanagerConfigs, "
+            f"{summary['service_monitor']} ServiceMonitor"
+        )
+    return i18n_text(msg_zh, msg_en)
+
+
+def main():
+    """CLI entry point (thin orchestration: parse → validate → generate → emit → exit)."""
+    parser = build_arg_parser()
     args = parser.parse_args()
 
     # Resolve paths relative to current directory
@@ -804,135 +942,21 @@ def main():
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    # #1112: in `--json` mode stdout must be exactly ONE document, so the CRDs,
-    # the kustomization and the summary are collected here and emitted together
-    # as `{"crds": [...], "kustomization": {...}|null, "summary": {...}}` at the
-    # end of main() — instead of the old behaviour, which printed the CRD array
-    # and the summary as two back-to-back documents (`json.loads` on the full
-    # stdout raised). The YAML paths are unchanged.
-    json_crds: list = []
-    json_kustomization = None
-
-    # Write or print CRDs
+    # Emit CRDs. dry-run prints YAML to stdout; the write path writes files and
+    # logs `Generated:` lines to stderr. Both hand back the documents the #1112
+    # single-document JSON envelope needs (empty list / None unless --json), so
+    # in `--json` mode stdout stays exactly ONE document (emitted at the end).
     if args.dry_run:
-        # Print YAML to stdout
-        all_crds = []
-        for item in result["prometheus_rules"]:
-            all_crds.append(item["crd"])
-        for item in result["alertmanager_configs"]:
-            all_crds.append(item["crd"])
-        if result["service_monitor"]:
-            all_crds.append(result["service_monitor"]["crd"])
-
-        if args.json:
-            json_crds = all_crds
-        else:
-            if yaml:
-                for i, crd in enumerate(all_crds):
-                    if i > 0:
-                        print("---")
-                    print(yaml.dump(crd, default_flow_style=False, allow_unicode=True), end="")
-            else:
-                for crd in all_crds:
-                    print(_dict_to_yaml(crd))
-                    print("---")
-
-        # Print kustomization.yaml if requested
-        if args.kustomize:
-            crd_files = []
-            for item in result["prometheus_rules"]:
-                crd = item["crd"]
-                name = crd["metadata"]["name"]
-                crd_files.append(f"{name}.yaml")
-            for item in result["alertmanager_configs"]:
-                crd = item["crd"]
-                name = crd["metadata"]["name"]
-                crd_files.append(f"{name}.yaml")
-            if result["service_monitor"]:
-                crd = result["service_monitor"]["crd"]
-                name = crd["metadata"]["name"]
-                crd_files.append(f"{name}.yaml")
-
-            kustomize_dict = build_kustomization(crd_files, args.namespace)
-            if args.json:
-                json_kustomization = kustomize_dict
-            elif yaml:
-                print("---")
-                print(yaml.dump(
-                    kustomize_dict,
-                    default_flow_style=False,
-                    allow_unicode=True,
-                ), end="")
-            else:
-                print("---")
-                print(_dict_to_yaml(kustomize_dict))
+        json_crds, json_kustomization = emit_dry_run(
+            result, args.kustomize, args.namespace, args.json,
+        )
     else:
-        # Write CRD files
-        output_dir.mkdir(parents=True, exist_ok=True)
+        json_crds, json_kustomization = write_crds(
+            result, output_dir, args.gitops, args.kustomize,
+            args.namespace, args.json,
+        )
 
-        count = 0
-        crd_files = []
-
-        for item in result["prometheus_rules"]:
-            crd = item["crd"]
-            name = crd["metadata"]["name"]
-            output_path = output_dir / f"{name}.yaml"
-            write_yaml_crd(output_path, crd, gitops=args.gitops)
-            print(f"Generated: {output_path}", file=sys.stderr)
-            crd_files.append(f"{name}.yaml")
-            count += 1
-
-        for item in result["alertmanager_configs"]:
-            crd = item["crd"]
-            name = crd["metadata"]["name"]
-            output_path = output_dir / f"{name}.yaml"
-            write_yaml_crd(output_path, crd, gitops=args.gitops)
-            print(f"Generated: {output_path}", file=sys.stderr)
-            crd_files.append(f"{name}.yaml")
-            count += 1
-
-        if result["service_monitor"]:
-            crd = result["service_monitor"]["crd"]
-            name = crd["metadata"]["name"]
-            output_path = output_dir / f"{name}.yaml"
-            write_yaml_crd(output_path, crd, gitops=args.gitops)
-            print(f"Generated: {output_path}", file=sys.stderr)
-            crd_files.append(f"{name}.yaml")
-            count += 1
-
-        # Write kustomization.yaml if requested
-        if args.kustomize:
-            kustomize_dict = build_kustomization(crd_files, args.namespace)
-            kustomize_path = output_dir / "kustomization.yaml"
-            write_yaml_crd(kustomize_path, kustomize_dict, gitops=args.gitops)
-            print(f"Generated: {kustomize_path}", file=sys.stderr)
-            count += 1
-            json_kustomization = kustomize_dict
-
-        if args.json:
-            # Same stdout schema as the dry-run path: the document reports what
-            # was generated (and, here, also written to --output-dir).
-            json_crds = [item["crd"] for item in result["prometheus_rules"]]
-            json_crds += [item["crd"] for item in result["alertmanager_configs"]]
-            if result["service_monitor"]:
-                json_crds.append(result["service_monitor"]["crd"])
-
-    # Summary
-    base_total = (
-        len(result["prometheus_rules"]) +
-        len(result["alertmanager_configs"]) +
-        (1 if result["service_monitor"] else 0)
-    )
-    kustomize_count = 1 if args.kustomize else 0
-    total = base_total + kustomize_count
-
-    summary = {
-        "prometheus_rules": len(result["prometheus_rules"]),
-        "alertmanager_configs": len(result["alertmanager_configs"]),
-        "service_monitor": 1 if result["service_monitor"] else 0,
-        "kustomization": kustomize_count,
-        "total": total,
-    }
+    summary = build_summary(result, args.kustomize)
 
     if args.json:
         # ONE document, every mode (#1112): the CRDs that were generated, the
@@ -940,41 +964,9 @@ def main():
         # dry-run *report* flag (cli-reference §operator-generate) — the
         # applyable artefacts are the YAML/`--output-dir` paths, which are
         # untouched.
-        print(format_json_report({
-            "crds": json_crds,
-            "kustomization": json_kustomization,
-            "summary": summary,
-        }))
+        print(render_json_envelope(json_crds, json_kustomization, summary))
     else:
-        if args.kustomize:
-            msg_zh = (
-                f"\n✓ 已產出 {summary['total']} 個檔案: "
-                f"{summary['prometheus_rules']} PrometheusRules, "
-                f"{summary['alertmanager_configs']} AlertmanagerConfigs, "
-                f"{summary['service_monitor']} ServiceMonitor, "
-                f"1 kustomization.yaml"
-            )
-            msg_en = (
-                f"\n✓ Generated {summary['total']} files: "
-                f"{summary['prometheus_rules']} PrometheusRules, "
-                f"{summary['alertmanager_configs']} AlertmanagerConfigs, "
-                f"{summary['service_monitor']} ServiceMonitor, "
-                f"1 kustomization.yaml"
-            )
-        else:
-            msg_zh = (
-                f"\n✓ 已產出 {summary['total']} 個 CRD: "
-                f"{summary['prometheus_rules']} PrometheusRules, "
-                f"{summary['alertmanager_configs']} AlertmanagerConfigs, "
-                f"{summary['service_monitor']} ServiceMonitor"
-            )
-            msg_en = (
-                f"\n✓ Generated {summary['total']} CRDs: "
-                f"{summary['prometheus_rules']} PrometheusRules, "
-                f"{summary['alertmanager_configs']} AlertmanagerConfigs, "
-                f"{summary['service_monitor']} ServiceMonitor"
-            )
-        print(i18n_text(msg_zh, msg_en), file=sys.stderr)
+        print(_summary_message(summary, args.kustomize), file=sys.stderr)
 
 
 if __name__ == "__main__":
