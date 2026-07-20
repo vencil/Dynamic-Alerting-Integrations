@@ -242,13 +242,19 @@ def _sig_levels(sig: dict):
     """(label, value) for the magnitudes ``unit`` governs — i.e. those on the
     signature's OWN metric only.
 
+    Includes ``typical_wobble`` (a noise AMPLITUDE, but expressed in the metric's
+    own unit — a ±2 wobble on a 0–1 gauge swamps the signal) and ``min_value``
+    (a clamp floor applied directly to synthesized samples), because both are
+    load-bearing in synthesis and both silently corrupt the waveform when they
+    are authored on the wrong scale.
+
     ⚠️ ``companion_series`` levels are deliberately EXCLUDED: a companion is a
     DIFFERENT metric with its own scale (a ratio signature's denominator is
     typically a rate or a count), so applying the parent's ``unit`` to it is a
     category error and produces false positives. Checking companions would need a
     per-companion ``unit`` field — documented limitation, not built yet.
     """
-    for key in ("normal_level", "fault_level"):
+    for key in ("normal_level", "fault_level", "typical_wobble", "min_value"):
         v = sig.get(key)
         if isinstance(v, (int, float)) and not isinstance(v, bool):
             yield key, float(v)
@@ -272,12 +278,39 @@ def unit_scale_issues(pack: dict) -> list[dict]:
 
     ``unit`` is OPTIONAL: absent = unchecked (backward compatible). Declaring it is
     what buys the guard.
+
+    ⚠️ DELIBERATE NON-DETECTION — the REVERSE mis-scale (declaring
+    ``percent_0_to_100`` while answering in 0–1 ratio form) is NOT flagged. It is
+    irreducibly ambiguous: ``0.2`` under a percent unit is equally consistent with a
+    genuine 0.2%-scale metric (error rate, packet loss, 5xx ratio — sub-1% ranges are
+    common and legitimate) and with a ratio-form answer. A heuristic here fails loud
+    on correct input, and the only escape is deleting ``unit``, which disarms the
+    guard entirely on exactly the metric class it exists for. So the guard covers the
+    UNAMBIGUOUS direction only: a value outside the declared unit's range is always
+    wrong. The motivating db2_bufferpool_hit_ratio case is in that direction.
     """
     issues = []
     for i, sig in enumerate(pack.get("signatures") or []):
         if not isinstance(sig, dict):
             continue
         unit = sig.get("unit")
+        if unit is None:
+            continue
+        # metric_kind ↔ unit compatibility. For `counter`, the SME's levels are
+        # RATES (per-second), so a fraction-shaped unit does not describe them —
+        # applying a [0,1] / [0,100] bound to "5 events/sec" is the same category
+        # error that companion levels are excluded for. Reject the combination
+        # explicitly instead of silently bounding a rate.
+        if sig.get("metric_kind") == "counter" and unit in ("ratio_0_to_1",
+                                                            "percent_0_to_100"):
+            issues.append({
+                "tier": "platform", "field": "unit",
+                "message": (f"平台補填: signatures/{i}: metric_kind=counter 的水位是"
+                            f"「速率（每秒）」，與 unit={unit}（分數型尺度）不相容——"
+                            f"對速率套用 [0,1]/[0,100] 界是類別錯誤。counter 請用 "
+                            f"per_second / count，分數型 unit 僅適用 gauge"),
+            })
+            continue
         bounds = _UNIT_BOUNDS.get(unit)
         if bounds is None:
             continue
@@ -300,18 +333,6 @@ def unit_scale_issues(pack: dict) -> list[dict]:
                         "message": (f"平台補填: signatures/{i}: unit=boolean 但 "
                                     f"{label}={val} 非 0/1"),
                     })
-        elif unit == "percent_0_to_100":
-            # Reverse mis-scale: everything <= 1 on a 0-100 metric almost always
-            # means the SME answered in ratio form (0.97) under a percent header.
-            lv = [v for _, v in _sig_levels(sig)]
-            if lv and max(lv) <= 1.0 and any(v > 0 for v in lv):
-                issues.append({
-                    "tier": "platform", "field": "unit",
-                    "message": (f"平台補填: signatures/{i}: unit=percent_0_to_100 但所有水位 "
-                                f"≤ 1（{lv}）→ 疑似以 0-1 比例作答。確認尺度："
-                                f"若 exporter 輸出 0-1 應改 unit=ratio_0_to_1，"
-                                f"否則請把數值改為百分比"),
-                })
     return issues
 
 
