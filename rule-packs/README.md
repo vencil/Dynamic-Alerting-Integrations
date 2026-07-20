@@ -18,7 +18,7 @@ lang: zh
 | Rule Pack | File | Recording Rules | Alert Rules | Total |
 |-----------|------|-----------------|-------------|-------|
 | Clickhouse | rule-pack-clickhouse.yaml | 12 | 7 | 19 |
-| DB2 | rule-pack-db2.yaml | 12 | 7 | 19 |
+| DB2 | rule-pack-db2.yaml | 13 | 8 | 21 |
 | Elasticsearch | rule-pack-elasticsearch.yaml | 11 | 7 | 18 |
 | JVM | rule-pack-jvm.yaml | 9 | 7 | 16 |
 | Kafka | rule-pack-kafka.yaml | 13 | 9 | 22 |
@@ -32,7 +32,7 @@ lang: zh
 | Postgresql | rule-pack-postgresql.yaml | 11 | 9 | 20 |
 | Rabbitmq | rule-pack-rabbitmq.yaml | 12 | 8 | 20 |
 | Redis | rule-pack-redis.yaml | 11 | 6 | 17 |
-| **TOTAL** | | **158** | **114** | **272** |
+| **TOTAL** | | **159** | **115** | **274** |
 
 ## 架構說明
 
