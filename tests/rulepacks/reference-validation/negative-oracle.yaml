@@ -1,17 +1,15 @@
 # =====================================================================
-# Oracle NEGATIVE waveform pack (ADR-030 decision-layer validation)
+# Oracle 負向（NEGATIVE）波形 pack（ADR-030 決策層驗證）
 # ---------------------------------------------------------------------
-# PRECISION / FALSE-ALARM library — the complement of the catch-rate
-# fault pack. Every signature is REAL *healthy or benign* Oracle
-# behaviour that a well-tuned alerting rule must NOT fire on. All
-# must_detect: false — any alert firing on these is a FALSE POSITIVE.
+# 精確度／誤報函式庫 —— 與 catch-rate 故障 pack 互補。每一個 signature
+# 都是真實的「健康或良性」Oracle 行為，調校良好的告警規則不應該對它們
+# 觸發。全部 must_detect: false —— 任何在這些情境觸發的告警都是誤報。
 #
-# Authored independently from VM alerting-rule conversion. Parameters
-# describe genuine healthy behaviour grounded in vendor docs + DBA
-# domain knowledge — NONE reverse-engineered from, or dialled to sit
-# just under, any alert threshold. If a rule fires on one of these,
-# that is a real over-fire finding, not a pack defect.
-# Metric names taken from the oracledb_exporter (iamseth) catalog.
+# 獨立於 VM 告警規則轉換而撰寫。參數描述的是真正健康的行為，依據為
+# vendor 文件 + DBA 領域知識 —— 沒有任何一項是從告警門檻反推、或被刻意
+# 調到剛好貼在門檻下方。如果有規則對其中之一觸發，那就是一個真實的
+# 過度觸發發現，而不是這個 pack 的缺陷。
+# metric 名稱取自 oracledb_exporter（iamseth）catalog。
 # =====================================================================
 
 pack:
@@ -22,14 +20,13 @@ pack:
   readback_signed_off: true
 
 signatures:
-  # 1) Healthy steady-state active sessions with normal diurnal variation.
+  # 1) 健康的穩態 active session，帶有正常的日夜變化。
   - description: >-
-      Healthy OLTP instance over a normal business day: active sessions
-      sit around 90 overnight, ramp gently to a comfortable daytime
-      working level near 240 as users log on, and hold there through
-      business hours. The configured session ceiling (resource_limit) is
-      1000, so this is ~24% utilisation — textbook healthy daily rhythm,
-      not a leak. No on-call would want a page for this.
+      正常營業日下的健康 OLTP 實例：active session 數在夜間維持在 90 左右，
+      隨著使用者陸續登入平緩爬升到約 240 這個舒適的日間工作水位，並在
+      營業時段維持在該水位。設定的 session 上限（resource_limit）是 1000，
+      所以這只是約 24% 使用率 —— 教科書等級的健康日常節奏，不是洩漏。
+      沒有任何 on-call 會希望為這種情況被叫起來。
     source: vendor-doc
     normal_level: 90
     fault_level: 240
@@ -55,14 +52,13 @@ signatures:
       instance: oracle-neg-01
     min_value: 0
 
-  # 2) Benign transient — nightly backup/batch process spike, recovers fast.
+  # 2) 良性瞬態 —— 夜間備份／批次的 process 尖峰，很快回復。
   - description: >-
-      Scheduled nightly RMAN backup plus a parallel ETL job briefly spawn
-      extra server processes: the process count jumps from ~210 to ~560
-      for roughly 8 minutes while the jobs run, then falls straight back
-      as they finish. The PROCESSES ceiling on this instance is ~2000, so
-      560 is well inside headroom. A short, self-clearing bump that
-      recovers well within any reasonable alert `for:` window.
+      排定的夜間 RMAN 備份加上一支平行 ETL 作業短暫產生額外的 server
+      process：process 數在作業執行的大約 8 分鐘內從約 210 跳到約 560，
+      作業結束後立刻掉回來。這個實例的 PROCESSES 上限約為 2000，所以
+      560 仍在充裕的餘裕之內。這是一個短暫、會自行消退的隆起，在任何
+      合理的告警 `for:` 窗口內就已經回復。
     source: vendor-doc
     normal_level: 210
     fault_level: 560
@@ -81,15 +77,14 @@ signatures:
       instance: oracle-neg-01
     min_value: 0
 
-  # 3) Planned-maintenance PGA spike (nightly stats gather / index rebuild),
-  #    self-resolves when the job completes.
+  # 3) 計畫性維護造成的 PGA 尖峰（夜間統計收集／索引重建），
+  #    作業完成後自行消解。
   - description: >-
-      Scheduled overnight DBMS_STATS gather plus an index rebuild use
-      large sort/hash workareas, so PGA allocation rises from ~6.5 GB to
-      ~22 GB for about 25 minutes while the maintenance runs, then
-      releases back to baseline once the job completes. PGA_AGGREGATE_TARGET
-      is 32 GB, so 22 GB is within target — expected, planned, benign, and
-      self-resolving. Reviewed on the maintenance dashboard, never paged.
+      排定的夜間 DBMS_STATS 收集加上索引重建會使用大量的 sort／hash 工作
+      區，因此在維護執行的大約 25 分鐘內，PGA 配置量從約 6.5 GB 上升到
+      約 22 GB，作業完成後就釋放回基線。PGA_AGGREGATE_TARGET 為 32 GB，
+      所以 22 GB 仍在目標之內 —— 這是預期中、計畫內、良性且會自行消解的
+      行為。在維護儀表板上檢視即可，絕不該叫人。
     source: vendor-doc
     normal_level: 6500000000
     fault_level: 22000000000
@@ -108,16 +103,15 @@ signatures:
       instance: oracle-neg-01
     min_value: 0
 
-  # 4) Busy-but-fine — mature tablespace steady at a high-but-safe ~80%
-  #    with autoextend on. Sharpest precision probe for absolute-level alerts.
+  # 4) 忙碌但沒問題 —— 成熟的資料表空間穩定停在偏高但安全的約 80%，
+  #    且已開啟 autoextend。對絕對水位型告警而言是最銳利的精確度探針。
   - description: >-
-      A mature, well-managed permanent tablespace (USERS) with autoextend
-      enabled and a weekly reorg sits steadily around 80% used. It wiggles
-      gently with daily load — nudging to ~83% during a data load and
-      settling back after archival — but never runs away toward
-      saturation. DBAs routinely operate autoextend tablespaces at 80-85%
-      and do NOT page on absolute used-percent alone; free datafile
-      autoextend headroom remains. The sharpest false-alarm probe here.
+      一個成熟、管理良好的 permanent tablespace（USERS），已啟用 autoextend
+      並有每週重組，穩定停在約 80% 使用率。它會隨每日負載輕微擺動 ——
+      資料載入期間推到約 83%，封存後又回落 —— 但從不會失控奔向飽和。
+      DBA 例行地讓 autoextend 資料表空間運作在 80-85%，而且不會單憑絕對
+      使用率百分比就叫人；資料檔的 autoextend 餘裕仍然存在。這是這裡
+      最銳利的誤報探針。
     source: vendor-doc
     normal_level: 80
     fault_level: 83
@@ -137,16 +131,15 @@ signatures:
       tablespace: USERS
     min_value: 0
 
-  # 5) Benign low-grade — normal background waits with occasional
-  #    checkpoint / log-switch micro-bursts (counter rate is native units).
+  # 5) 良性低度訊號 —— 正常的背景等待，偶爾出現 checkpoint／log switch
+  #    的微爆發（counter 速率為原生單位）。
   - description: >-
-      Ordinary physics of a healthy OLTP instance: cumulative DB wait time
-      accrues at a low steady aggregate rate (~3 wait-seconds/sec across
-      all sessions, dominated by log file sync / db file sequential read).
-      At commit-heavy checkpoint and log-switch boundaries there are brief
-      micro-bursts up to ~8/sec that subside within a minute or two. A
-      good on-call reviews these in dashboards but is never paged — this is
-      normal background wait, not enqueue contention.
+      健康 OLTP 實例的日常物理現象：累積的 DB 等待時間以低而穩定的整體
+      速率累積（跨所有 session 約每秒 3 個等待秒，主要由 log file sync／
+      db file sequential read 構成）。在 commit 密集的 checkpoint 與 log
+      switch 交界處會出現短暫的微爆發，最高到約每秒 8，一兩分鐘內就消退。
+      稱職的 on-call 會在儀表板上檢視這些，但絕不會被叫起來 —— 這是正常
+      的背景等待，不是 enqueue 競爭。
     source: vendor-doc
     normal_level: 3
     fault_level: 8

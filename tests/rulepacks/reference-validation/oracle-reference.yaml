@@ -1,10 +1,10 @@
 # =====================================================================
-# Oracle fault-waveform reference pack (ADR-030 decision-layer validation)
+# Oracle 故障波形參考 pack（ADR-030 決策層驗證）
 # ---------------------------------------------------------------------
-# Authored independently from VM alerting-rule conversion. Every parameter
-# describes REAL Oracle fault behaviour grounded in vendor docs + DBA
-# domain knowledge — NONE reverse-engineered from any alert threshold.
-# Metric names taken from the oracledb_exporter (iamseth) exporter catalog.
+# 獨立於 VM 告警規則轉換而撰寫。每一個參數描述的都是真實的 Oracle 故障
+# 行為，依據為 vendor 文件 + DBA 領域知識 —— 沒有任何一項是從任何告警
+# 門檻反推而來。
+# metric 名稱取自 oracledb_exporter（iamseth）的 exporter catalog。
 # =====================================================================
 
 pack:
@@ -15,11 +15,11 @@ pack:
   readback_signed_off: true
 
 signatures:
-  # 1) Instance crash / node failure — boolean up->0, sustained down.
+  # 1) 實例當機／節點失效 —— boolean up->0，持續維持在 down。
   - description: >-
-      Instance crash or node failure: the exporter is still scraped on
-      schedule but v$instance is unreachable, so oracledb_up flips 1->0 and
-      stays down until the DBA restarts the instance. Classic hard outage.
+      實例當機或節點失效：exporter 仍然依排程被抓取，但 v$instance 無法
+      連通，因此 oracledb_up 由 1->0 翻轉，並一直維持在 down，直到 DBA
+      重啟實例為止。典型的硬性中斷。
     source: vendor-doc
     normal_level: 1
     fault_level: 0
@@ -36,12 +36,11 @@ signatures:
     labels:
       instance: oracle-ref-01
 
-  # 2) Connection-pool leak — slow gauge ramp toward the session ceiling.
+  # 2) 連線池洩漏 —— gauge 緩慢爬升逼近 session 上限。
   - description: >-
-      Application connection-pool leak: active sessions climb steadily as
-      connections are borrowed and never returned, marching toward the
-      configured session ceiling (ORA-00018 "maximum number of sessions
-      exceeded" territory). No self-heal until the pool is bounced.
+      應用程式連線池洩漏：連線被借出後從未歸還，active session 數穩定
+      攀升，一路朝設定的 session 上限逼近（進入 ORA-00018 "maximum number
+      of sessions exceeded" 的範圍）。在連線池被重啟之前不會自行恢復。
     source: vendor-doc
     normal_level: 120
     fault_level: 900
@@ -67,12 +66,12 @@ signatures:
       instance: oracle-ref-01
     min_value: 0
 
-  # 3) Runaway parallel-execution processes — intermittent plateau (dips back).
+  # 3) 失控的平行執行進程 —— 間歇性 plateau（會回落）。
   - description: >-
-      Runaway parallel-execution (PX) processes: successive PX-heavy batch
-      jobs spawn slaves faster than they release, so server processes ratchet
-      up toward the PROCESSES ceiling (ORA-00020). Each batch boundary dips
-      the count back partway before the next batch pushes it higher again.
+      失控的平行執行（PX）進程：一連串大量使用 PX 的批次作業產生從屬進程
+      的速度快過釋放速度，因此 server process 數量一階一階朝 PROCESSES
+      上限逼近（ORA-00020）。每個批次交界處計數會回落一部分，接著下一個
+      批次又把它推得更高。
     source: vendor-doc
     normal_level: 220
     fault_level: 1350
@@ -94,12 +93,12 @@ signatures:
       instance: oracle-ref-01
     min_value: 0
 
-  # 4) Tablespace fill — very slow monotonic gauge ramp over hours.
+  # 4) 資料表空間填滿 —— 歷時數小時、極緩慢的單調 gauge 爬升。
   - description: >-
-      Unbounded segment growth (or a stuck purge/archival job) slowly fills a
-      permanent tablespace toward 100%. At saturation new extents fail with
-      ORA-01653 "unable to extend" and DML errors out. Monotonic over hours
-      with only tiny wobble — the slowest of the headline faults.
+      無節制的 segment 成長（或卡住的清除／封存作業）緩慢地把一個 permanent
+      tablespace 填向 100%。飽和時新的 extent 會以 ORA-01653 "unable to
+      extend" 失敗，DML 隨之報錯。歷時數小時單調上升、僅有極小的抖動 ——
+      是這幾個主要故障中最慢的一個。
     source: vendor-doc
     normal_level: 68
     fault_level: 97
@@ -119,12 +118,12 @@ signatures:
       tablespace: USERS
     min_value: 0
 
-  # 5) Row-lock (TX enqueue) contention storm — fast counter rate, held plateau.
+  # 5) 資料列鎖定（TX enqueue）競爭風暴 —— counter 速率飆快，維持 plateau。
   - description: >-
-      Row-lock (TX enqueue) contention storm after a bad release: a long-held
-      uncommitted transaction pins a hot row, hundreds of sessions serialize
-      behind it, and cumulative DB wait time accrues at a sharply elevated
-      rate until the blocking session is killed. Rate is native units here.
+      一次不良改版後的資料列鎖定（TX enqueue）競爭風暴：一筆長時間未 commit
+      的交易占住熱門資料列，數百個 session 在它後面被迫串行化，累積的 DB
+      等待時間以明顯拉高的速率累積，直到阻擋的 session 被終止為止。此處
+      速率為原生單位。
     source: vendor-doc
     normal_level: 2
     fault_level: 130
@@ -143,13 +142,13 @@ signatures:
       instance: oracle-ref-01
       wait_class: Application
 
-  # 6) PGA bloat -> shared-pool starvation -> exporter goes STALE.
+  # 6) PGA 膨脹 -> shared pool 枯竭 -> exporter 進入 STALE。
   - description: >-
-      Runaway hash/sort workareas from a bad execution plan balloon PGA far
-      past PGA_AGGREGATE_TARGET (ORA-04030 "out of process memory" territory).
-      As the server starves for memory the shared pool thrashes, new hard
-      parses — including the exporter's own scrape query — fail, and the
-      exporter falls silent partway through the fault (metrics go stale).
+      錯誤執行計畫造成失控的 hash／sort 工作區，使 PGA 遠遠膨脹超過
+      PGA_AGGREGATE_TARGET（進入 ORA-04030 "out of process memory" 的範圍）。
+      當伺服器記憶體枯竭時 shared pool 開始 thrash，新的 hard parse ——
+      包含 exporter 自己的 scrape 查詢 —— 都會失敗，exporter 在故障進行到
+      一半時陷入沉默（metric 變成 stale）。
     source: vendor-doc
     normal_level: 8000000000
     fault_level: 42000000000
@@ -170,13 +169,13 @@ signatures:
       instance: oracle-ref-01
     min_value: 0
 
-  # 7) Hard-parse storm — extra-catalog metric (activity parse count), fast spike.
+  # 7) Hard-parse 風暴 —— catalog 之外的 metric（activity parse count），快速尖峰。
   - description: >-
-      A release that dropped bind variables turns every execution into a hard
-      parse; parse-count-total accrues at ~30x baseline, library-cache mutex
-      and shared-pool latch contention spike, and CPU saturates. Exported by
-      the activity metric group but frequently NOT alerted — a valuable
-      coverage probe for the harness.
+      一次拿掉 bind variable 的改版讓每一次執行都變成 hard parse；
+      parse-count-total 以約 30 倍於基線的速率累積，library cache mutex
+      與 shared pool latch 競爭飆高，CPU 也隨之飽和。這個值由 activity
+      metric group 匯出，但經常沒有被納入告警 —— 對這套 harness 而言是
+      很有價值的覆蓋率探針。
     source: vendor-doc
     normal_level: 60
     fault_level: 1800

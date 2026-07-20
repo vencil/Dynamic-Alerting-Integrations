@@ -1,8 +1,8 @@
-# Oracle fault-waveform pack — independent second-author reference set (n2).
-# Authored from Oracle DBA domain knowledge (real-incident / vendor-doc / expert-experience
-# provenance) WITHOUT reading any Vibe rule-pack / threshold file. Every normal_level /
-# fault_level / onset_duration / hold_duration / dip_detail below reflects how the real
-# fault behaves in production, not a reverse-engineered alert threshold.
+# Oracle 故障波形包 —— 獨立第二作者參考集（n2）。
+# 由 Oracle DBA 領域知識撰寫（provenance 為 real-incident / vendor-doc / expert-experience），
+# 過程中未讀取任何 Vibe rule-pack / threshold 檔案。以下每個 normal_level /
+# fault_level / onset_duration / hold_duration / dip_detail 都反映該故障在生產環境的
+# 真實行為，而非從告警閾值反推而來。
 pack:
   id: oracle-reference-n2
   domain: oracle-dba
