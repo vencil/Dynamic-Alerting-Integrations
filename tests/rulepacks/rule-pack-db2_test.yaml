@@ -1,8 +1,8 @@
-# promtool unit test — DB2 rule-pack FIRING coverage (#947 Splunk→VM migration burn-down).
+# promtool unit test — DB2 rule-pack FIRING coverage (#947 firing-coverage burn-down).
 # Run: promtool test rules tests/rulepacks/rule-pack-db2_test.yaml
 #
 # Burns down the rule-pack-db2.yaml entries in vmalert_coverage_baseline.yaml (#969):
-# the DB2 pack is an active Splunk→VM migration target, and until now only its threshold
+# the DB2 pack is one of the cross-engine migration reference packs, and until now only its threshold
 # VALUE contract was tested (rule-pack-db2-threshold_test.yaml) — the firing decision,
 # `for:` state machine and label/annotation rendering escaped both promtool and the
 # vmalert-tool gate A. Every alert gets, at minimum:

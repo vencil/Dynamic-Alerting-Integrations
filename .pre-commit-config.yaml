@@ -409,6 +409,17 @@ repos:
         # commits don't pay the cost.
         files: ^(README(\.en)?\.md|components/(da-tools|da-portal|threshold-exporter|tenant-api)/README\.md|components/da-tools/app/entrypoint\.py)$
 
+      - id: engagement-disclosure-check
+        name: Engagement disclosure guard (dev-rules §E — in-flight engagement assertions)
+        entry: python3 -X utf8 scripts/tools/lint/check_engagement_disclosure.py
+        language: python
+        pass_filenames: false
+        # BACKSTOP only — the primary control is the pre-publication human check
+        # (the tuple rule in dev-rules §E is semantic and cannot be linted).
+        # Deliberately NOT a keyword denylist: it fires only on the narrow
+        # "<source platform> ... <in-flight marker>" conjunction on one line.
+        files: ^(CHANGELOG\.md|README(\.en)?\.md|docs/.*\.md|rule-packs/.*\.ya?ml|tests/.*\.(ya?ml|py)|scripts/.*\.py)$
+
       - id: commit-scope-doc-drift
         name: Commit scope drift (commit-convention.md vs .commitlintrc.yaml)
         entry: python3 -X utf8 scripts/tools/lint/check_commit_scope_doc.py --ci

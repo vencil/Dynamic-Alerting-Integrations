@@ -192,9 +192,13 @@ Status 處理 / hotfix 例外 / A vs B CI 分類細節見 [`github-release-playb
 - **認可例外**：`diag_pr_ci.py`（0/1/2/3，exit 3 = network-blocked，runbook 載明）、`tenant-verify`（倒置契約 2=驗證失敗，[cli-reference](../cli-reference.md) + rollback runbook 載明）、`init_project.py`（`--ci` 同名異義：`choices=['github','gitlab','both']` 選 CI config 產出對象，非 fail-on-finding）——改動須連帶遷移文件 + CHANGELOG breaking note。
 - ✅ **Codified**：exit code → `tests/shared/test_tool_exit_codes.py`（驗 `--help`=0 + bad-flag=2 + SSOT 常數）；**`--json` stdout 契約 → [`tests/shared/test_json_stdout_contract.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/shared/test_json_stdout_contract.py)**（83 個 `(tool, mode)` recipe 涵蓋全 37 支 `--json`/`--json-output` 工具，斷言 `json.loads(全 stdout)`；meta-test 硬斷言 scope，新工具無法靜默逃脫）；**`--ci` fail-on-finding 契約 → `tests/shared/test_ci_flag_contract.py`**（每支一份保證產 finding 的 fixture、同 argv ± `--ci` 跑兩次斷言 exit-code 翻轉——no-op 即 fail-open 直接紅；同名異義 `init_project` 走 meta-asserted allowlist）。exit-code 章節見 [`testing-playbook.md`](testing-playbook.md)。**新增 `--json` 子命令或新增次要模式（`--dry-run` / `--skip-*` 等早退路徑）時，須在該 gate 補 recipe**——最陰險的違規都藏在次要模式。
 
+## §E Engagement 去識別化（public repo 前提）
+
+repo 與 issues 皆 **PUBLIC**、公開寫入**不可逆**（索引/fork/存檔，事後塗改不可靠）。**合取規則**：`{案量, 產品組合, 被退役的來源平台, air-gap 姿態, 時程}` **任兩項不得同時出現在同一公開處**（單項皆通用，合取在小市場可能 k=1）；**踩線的不是詞彙，是「斷言存在一個進行中的特定案子」**。私有素材放 repo 樹**外**、不版控（保留＝決策+30d／1Q 兜底）。完整政策＋為何刻意不做關鍵字 denylist見 [engagement-deid-policy.md](engagement-deid-policy.md)。✅ **Codified**：`check_engagement_disclosure.py`（窄 backstop；主控制是發布前人工語意檢查），行級 opt-out `<!-- deid-ok: 理由 -->`。
+
 ## 互動工具變更 SOP
 
-專案有 **44 個 JSX 互動工具**（v2.8.0 Phase .c 期間自 39 增至 43：master-onboarding / alert-builder / routing-trace / simulate-preview），Source of Truth 檔案：
+專案有 **45 個 JSX 互動工具**（v2.8.0 Phase .c 期間自 39 增至 43：master-onboarding / alert-builder / routing-trace / simulate-preview），Source of Truth 檔案：
 
 | 檔案 | 用途 |
 |------|------|
