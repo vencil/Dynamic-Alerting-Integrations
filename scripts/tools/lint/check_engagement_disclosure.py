@@ -139,8 +139,8 @@ def main() -> int:
     # finding when given absolute paths — a fail-open waiting to be wired up.)
     findings = scan(REPO_ROOT)
 
-    # Report POSIX paths on every platform so CI output and local output match.
-    rows = [(f.replace("\\", "/"), n, t) for f, n, t in findings]
+    # Already POSIX — scan() normalises via .as_posix() at the source.
+    rows = findings
     if args.json_output:
         print(json.dumps({
             "tool": "check-engagement-disclosure",
