@@ -86,6 +86,7 @@ except Exception:  # pragma: no cover - compat shim optional
     def try_utf8_stdout() -> None:  # type: ignore
         pass
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_validation import i18n_text  # noqa: E402
 
 PORTAL_REL = "tools/portal/src/interactive/tools/rule-pack-detail.jsx"
 
@@ -296,11 +297,17 @@ def check(repo: Path) -> Tuple[List[dict], dict]:
 
 def main() -> int:
     try_utf8_stdout()
+    # Bilingual --help is a repo-wide behavioural contract
+    # (tests/shared/test_bilingual_help_contract.py, dev-rules §9 L3): the help
+    # text must actually switch on DA_LANG, not merely contain some CJK.
     parser = argparse.ArgumentParser(
-        description="Portal rule-pack claim guard (alert name + severity vs shipped rules)"
-    )
-    parser.add_argument("--ci", action="store_true", help="exit 1 on any bogus claim")
-    parser.add_argument("--json", action="store_true", help="machine-readable output")
+        description=i18n_text(
+            "Portal rule-pack 宣稱守衛（告警名 + severity + 記錄規則名 vs 出貨規則）",
+            "Portal rule-pack claim guard (alert name + severity + recording name vs shipped rules)"))
+    parser.add_argument("--ci", action="store_true",
+                        help=i18n_text("有任何假宣稱即 exit 1", "exit 1 on any bogus claim"))
+    parser.add_argument("--json", action="store_true",
+                        help=i18n_text("機器可讀輸出", "machine-readable output"))
     args = parser.parse_args()
 
     repo = _repo_root()
