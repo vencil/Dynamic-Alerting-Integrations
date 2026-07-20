@@ -73,7 +73,7 @@ SME_FIELDS = frozenset({
     "dips_back", "dip_detail", "agent_keeps_reporting", "must_detect",
 })
 PLATFORM_FIELDS = frozenset({
-    "metric", "metric_kind", "companion_series", "shape_class",
+    "metric", "metric_kind", "unit", "companion_series", "shape_class",
     "noise_kind", "time_axis", "fault_class", "labels",
     # pack-level platform bookkeeping
     "id", "domain", "author_role", "readback_signed_off",
@@ -228,11 +228,98 @@ def selftest_gate_issues(pack: dict, allow_selftest: bool) -> list[dict]:
     return issues
 
 
+# Declared exporter scale -> the closed interval the SME's levels must fall in.
+# Units without a natural bound (bytes / count / seconds / per_second) are absent
+# on purpose: any non-negative magnitude is legitimate, so a bound would be noise.
+_UNIT_BOUNDS = {
+    "ratio_0_to_1": (0.0, 1.0),
+    "percent_0_to_100": (0.0, 100.0),
+    "boolean": (0.0, 1.0),
+}
+
+
+def _sig_levels(sig: dict):
+    """(label, value) for the magnitudes ``unit`` governs — i.e. those on the
+    signature's OWN metric only.
+
+    ⚠️ ``companion_series`` levels are deliberately EXCLUDED: a companion is a
+    DIFFERENT metric with its own scale (a ratio signature's denominator is
+    typically a rate or a count), so applying the parent's ``unit`` to it is a
+    category error and produces false positives. Checking companions would need a
+    per-companion ``unit`` field — documented limitation, not built yet.
+    """
+    for key in ("normal_level", "fault_level"):
+        v = sig.get(key)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            yield key, float(v)
+    dip = sig.get("dip_detail")
+    if isinstance(dip, dict):
+        v = dip.get("depth")
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            yield "dip_detail.depth", float(v)
+
+
+def unit_scale_issues(pack: dict) -> list[dict]:
+    """Fail loud when a signature's levels contradict its declared ``unit``.
+
+    WHY (ADR-030 field finding): a scale mismatch is a SILENT false-negative. An
+    SME answers "the hit ratio drops from 97% to 72%" while the exporter emits a
+    0–1 ratio and the rule threshold is 0.95 — the injected 97 never crosses it,
+    the alert never fires, and the report reads as a coverage gap that is really a
+    unit bug. This was hit for real on db2_bufferpool_hit_ratio; the reconciliation
+    was done by hand, which does not scale to an air-gapped SME filling the template
+    without PromQL knowledge.
+
+    ``unit`` is OPTIONAL: absent = unchecked (backward compatible). Declaring it is
+    what buys the guard.
+    """
+    issues = []
+    for i, sig in enumerate(pack.get("signatures") or []):
+        if not isinstance(sig, dict):
+            continue
+        unit = sig.get("unit")
+        bounds = _UNIT_BOUNDS.get(unit)
+        if bounds is None:
+            continue
+        lo, hi = bounds
+        for label, val in _sig_levels(sig):
+            if not (lo <= val <= hi):
+                issues.append({
+                    "tier": "platform", "field": "unit",
+                    "message": (f"平台補填: signatures/{i}: unit={unit} 宣告的範圍是 "
+                                f"[{lo}, {hi}]，但 {label}={val} 超出 → 尺度不符。"
+                                f"SME 若以另一種尺度作答（如 0-100% vs 0-1 比例），"
+                                f"注入值將永遠跨不過該尺度的告警閾值＝靜默漏報；"
+                                f"請確認 exporter 實際輸出的尺度後改正 unit 或數值"),
+                })
+        if unit == "boolean":
+            for label, val in _sig_levels(sig):
+                if val not in (0.0, 1.0):
+                    issues.append({
+                        "tier": "platform", "field": "unit",
+                        "message": (f"平台補填: signatures/{i}: unit=boolean 但 "
+                                    f"{label}={val} 非 0/1"),
+                    })
+        elif unit == "percent_0_to_100":
+            # Reverse mis-scale: everything <= 1 on a 0-100 metric almost always
+            # means the SME answered in ratio form (0.97) under a percent header.
+            lv = [v for _, v in _sig_levels(sig)]
+            if lv and max(lv) <= 1.0 and any(v > 0 for v in lv):
+                issues.append({
+                    "tier": "platform", "field": "unit",
+                    "message": (f"平台補填: signatures/{i}: unit=percent_0_to_100 但所有水位 "
+                                f"≤ 1（{lv}）→ 疑似以 0-1 比例作答。確認尺度："
+                                f"若 exporter 輸出 0-1 應改 unit=ratio_0_to_1，"
+                                f"否則請把數值改為百分比"),
+                })
+    return issues
+
+
 def semantic_issues(pack: dict) -> list[dict]:
     """Cross-field semantic checks JSON Schema (draft-07) cannot express. Runs
     after schema validation; defensively skips signatures whose fields are
     missing/mistyped (the schema layer catches those)."""
-    issues = []
+    issues = unit_scale_issues(pack)
     for i, sig in enumerate(pack.get("signatures") or []):
         if not isinstance(sig, dict):
             continue

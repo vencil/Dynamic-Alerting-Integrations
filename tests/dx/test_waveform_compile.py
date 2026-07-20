@@ -773,3 +773,67 @@ def test_hold_start_s_metadata_lineage():
     assert meta["series"]
     for entry in meta["series"]:
         assert entry["hold_start_s"] == 70 * wf.STEP
+
+
+# ── unit 尺度守衛（Gemini 外審盲區 3；真實踩過 db2_bufferpool_hit_ratio）──────
+
+def test_unit_ratio_with_percent_values_flags_scale_mismatch(tmp_path):
+    """unit=ratio_0_to_1 但水位是百分比 → 尺度不符必須 fail-loud。
+
+    這是「靜默漏報」的來源：SME 照常識答 95%，exporter 其實輸出 0-1，
+    注入值永遠跨不過 0-1 尺度的閾值，報告上看起來像覆蓋缺口、實為單位 bug。
+    """
+    bad = _mutate_fixture(
+        tmp_path, _RATIO,
+        lambda p: p["signatures"][0].__setitem__("unit", "ratio_0_to_1"))
+    r = _run("--check", "--allow-selftest", str(bad))
+    assert r.returncode == 1
+    assert "平台補填" in r.stderr
+    assert "unit" in r.stderr
+
+
+def test_unit_percent_matching_values_passes(tmp_path):
+    """unit 與水位尺度一致 → 不得誤報（防守衛過度敏感）。"""
+    ok = _mutate_fixture(
+        tmp_path, _RATIO,
+        lambda p: p["signatures"][0].__setitem__("unit", "percent_0_to_100"))
+    r = _run("--check", "--allow-selftest", str(ok))
+    assert r.returncode == 0, r.stderr
+
+
+def test_unit_percent_with_ratio_values_flags_reverse_mismatch(tmp_path):
+    """反向錯置：宣告 percent 但所有水位 ≤ 1 → 疑似以比例作答，同樣要抓。"""
+    def mutate(p):
+        sig = p["signatures"][0]
+        sig["unit"] = "percent_0_to_100"
+        sig["normal_level"] = 0.95
+        sig["fault_level"] = 0.40
+        sig["typical_wobble"] = 0.02
+        sig["dip_detail"]["depth"] = 0.30
+    bad = _mutate_fixture(tmp_path, _RATIO, mutate)
+    r = _run("--check", "--allow-selftest", str(bad))
+    assert r.returncode == 1
+    assert "unit" in r.stderr
+
+
+def test_unit_absent_is_backward_compatible(tmp_path):
+    """unit 為選填：不填不得報錯（已 merge 的參考庫都沒有此欄）。"""
+    ok = _mutate_fixture(
+        tmp_path, _RATIO, lambda p: p["signatures"][0].pop("unit", None))
+    r = _run("--check", "--allow-selftest", str(ok))
+    assert r.returncode == 0, r.stderr
+
+
+def test_unit_guard_is_not_vacuous():
+    """teeth：守衛對矛盾輸入必須真的產出 issue，對一致輸入必須沉默。"""
+    def pack(unit, normal, fault):
+        return {"pack": {"id": "t", "domain": "t", "author_role": "t",
+                         "independent_of_rule_conversion": True,
+                         "readback_signed_off": True},
+                "signatures": [{"unit": unit, "normal_level": normal,
+                                "fault_level": fault, "metric_kind": "gauge"}]}
+    assert wf.unit_scale_issues(pack("ratio_0_to_1", 97, 72)), "矛盾輸入應產出 issue"
+    assert not wf.unit_scale_issues(pack("ratio_0_to_1", 0.97, 0.72))
+    assert wf.unit_scale_issues(pack("percent_0_to_100", 0.97, 0.72)), "反向錯置應產出 issue"
+    assert not wf.unit_scale_issues(pack("percent_0_to_100", 97, 72))
+    assert not wf.unit_scale_issues(pack(None, 97, 72)), "未宣告 unit 不得報錯"
