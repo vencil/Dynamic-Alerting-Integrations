@@ -177,11 +177,11 @@ jobs:
         # alert (NOT a silent clean) — add a docker/login-action step then.
         include:
           - name: vector # helm/vector/values.yaml
-            ref: "timberio/vector:0.56.0-distroless-libc@sha256:58c37f908648388a8a771426451476d60ebbd393fe52cc08a94573bcbb1c629a"
+            ref: "timberio/vector:0.57.0-distroless-libc@sha256:bb5968aa63f3bf7cf77f8cd7548c1442cc91f2a8c20d7ef5c5a03e2a37fbf205"
           - name: victoria-logs # helm/victorialogs/values.yaml
-            ref: "victoriametrics/victoria-logs:v1.51.0@sha256:e16dd33a95623cc21730cf5285344ed9f97419eeaff7d24b039c135beb85ee7e"
+            ref: "victoriametrics/victoria-logs:v1.52.0@sha256:47b820890d64c4575a2a0a46415dcd8a4fd59a0f1fcd6a377693d7aea639442e"
           - name: chargeback-python # helm/chargeback-aggregator/values.yaml
-            ref: "python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1"
+            ref: "python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6"
           - name: envoy # helm/federation-gateway/values.yaml
             ref: "envoyproxy/envoy:distroless-v1.38.0@sha256:a7a56545102f7a682e0cafea2c9b8448af1b09ebb710eab688dfb931e3ec7ff6"
           - name: oauth2-proxy # helm/da-portal + helm/tenant-api values.yaml
@@ -203,7 +203,7 @@ jobs:
           - name: configmap-reload # k8s/03-monitoring/deployment-alertmanager.yaml (sidecar)
             ref: "ghcr.io/jimmidyson/configmap-reload:v0.15.0@sha256:b578b7599d65c0279f6e1aad201bba737b9b15e6a4f308281d9e26f765e6657f"
           - name: alpine-git # k8s/04-tenant-api/deployment.yaml (gitops sidecar)
-            ref: "alpine/git:v2.54.0@sha256:697cb1c85aefc5724febaec2202a974e0d66f6abb6be91a9a86d0c8757af692a"
+            ref: "alpine/git:v2.54.0@sha256:77418e6e7c7f434c4a98eaff04ef16840cf03649c881c03948e3e213923e3136"
     steps:
       # Authenticated Docker Hub pulls (rate-limit headroom); guarded no-op without creds.
       - name: Docker Hub login (no-op without creds)
