@@ -26,7 +26,7 @@ lang: zh
 | `TRK-006` | dx | TRK-006: Skip budget CI gate | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-010` | dx | TRK-010: Flake 自動重試 CI Policy（不是盲目全域 retry） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 
-### accepted (28)
+### accepted (29)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
@@ -57,14 +57,14 @@ lang: zh
 | `ADR-025` | adr | ADR-025: 告警平面自我存活性 — 讓告警系統能偵測自己的死亡 | observability | — | [docs/adr/025-alerting-plane-self-liveness.md](../adr/025-alerting-plane-self-liveness.md) |
 | `ADR-028` | adr | ADR-028: Federation 撤銷儲存 tamper-evidence — off-cluster 對帳為主控 | tenant-api | — | [docs/adr/028-federation-revocation-tamper-evidence.md](../adr/028-federation-revocation-tamper-evidence.md) |
 | `ADR-029` | adr | ADR-029: 租戶自訂告警跨租戶查詢隔離 — 編譯期邊界中和為主、評估期 ruler 隔離延後 | threshold-exporter | — | [docs/adr/029-custom-alert-cross-tenant-query-scoping.md](../adr/029-custom-alert-cross-tenant-query-scoping.md) |
+| `ADR-030` | adr | ADR-030: 決策層遷移驗證 — 製造 Oracle 而非觀測 | rule-packs | — | [docs/adr/030-decision-layer-migration-validation.md](../adr/030-decision-layer-migration-validation.md) |
 | `ADR-031` | adr | ADR-031: slo_burn_rate recipe — 宣告式 SLO 告警編譯 | threshold-exporter | — | [docs/adr/031-slo-burn-rate-recipe.md](../adr/031-slo-burn-rate-recipe.md) |
 
-### proposed (17)
+### proposed (16)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
 | `ADR-026` | adr | ADR-026: Node/Cluster 維護告警抑制 — 不需要子系統 | k8s | — | [docs/adr/026-node-maintenance-liveness-suppression.md](../adr/026-node-maintenance-liveness-suppression.md) |
-| `ADR-030` | adr | ADR-030: 決策層遷移驗證 — 製造 Oracle 而非觀測 | rule-packs | — | [docs/adr/030-decision-layer-migration-validation.md](../adr/030-decision-layer-migration-validation.md) |
 | `TRK-001` | dx | TRK-001: `check_noqa_hygiene.py` — noqa/nosec 必要性驗證 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-002` | dx | TRK-002: `make test-impact` — 變更影響測試自動縮減 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-003` | dx | TRK-003: Pre-commit hook CI gate | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
