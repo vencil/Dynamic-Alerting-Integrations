@@ -66,6 +66,11 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:db2_deadlocks:rate5m
+  db2_lock_wait_time:
+    pack: rule-pack-db2.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:db2_lock_wait_time:rate5m
   db2_log_usage_percent:
     pack: rule-pack-db2.yaml
     scope: tenant

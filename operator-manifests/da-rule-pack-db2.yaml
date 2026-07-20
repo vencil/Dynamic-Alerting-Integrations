@@ -47,6 +47,9 @@ spec:
     - record: tenant:alert_threshold:db2_tablespace_used_percent
       expr: max by(tenant) (user_threshold{component="db2", metric="tablespace_used_percent",
         severity="warning"})
+    - record: tenant:alert_threshold:db2_lock_wait_time
+      expr: max by(tenant) (user_threshold{component="db2", metric="lock_wait_time",
+        severity="warning"})
   - name: db2-alerts
     rules:
     - alert: DB2DatabaseDown
@@ -182,6 +185,31 @@ spec:
           即將滿容 — 儲存審查'
         description: 'Tablespace usage: {{ $value | printf "%.1f" }}%'
         description_zh: Tablespace 使用率：{{ $value | printf "%.1f" }}%
+        runbook_url: '{{ $labels.runbook_url }}'
+        owner: '{{ $labels.owner }}'
+        tier: '{{ $labels.tier }}'
+    - alert: DB2HighLockWaitTime
+      expr: "(\n  (\n    (\n      tenant:db2_lock_wait_time:rate5m\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:db2_lock_wait_time\n    )\n   \
+        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:db2_lock_wait_time:rate5m\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:db2_lock_wait_time\n    )\n   \
+        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
+        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+      for: 5m
+      labels:
+        severity: warning
+        tenant: '{{ $labels.tenant }}'
+      annotations:
+        summary: DB2 high lock wait time on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 上 DB2 鎖等待時間過高'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: DB2 lock wait
+          time high — lock contention review'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：DB2 鎖等待時間過高
+          — 鎖爭用審查'
+        description: '{{ $value | printf "%.1f" }}s of lock wait accrued per second'
+        description_zh: 每秒累積 {{ $value | printf "%.1f" }} 秒的鎖等待
         runbook_url: '{{ $labels.runbook_url }}'
         owner: '{{ $labels.owner }}'
         tier: '{{ $labels.tier }}'

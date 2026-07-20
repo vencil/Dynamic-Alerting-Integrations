@@ -33,6 +33,8 @@ data:
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"deadlock_rate\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_tablespace_used_percent\n\
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"tablespace_used_percent\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_lock_wait_time\n\
+    \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"lock_wait_time\"\
     , severity=\"warning\"})\n"
   db2-alert.yml: "groups:\n- name: db2-alerts\n  rules:\n  - alert: DB2DatabaseDown\n\
     \    expr: db2_up == 0\n    for: 15s\n    labels:\n      severity: critical\n\
@@ -123,20 +125,37 @@ data:
     \ }}：DB2 tablespace 即將滿容 — 儲存審查'\n      description: 'Tablespace usage: {{ $value\
     \ | printf \"%.1f\" }}%'\n      description_zh: Tablespace 使用率：{{ $value | printf\
     \ \"%.1f\" }}%\n      runbook_url: '{{ $labels.runbook_url }}'\n      owner: '{{\
-    \ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n  - alert: DB2HighSortOverflow\n\
-    \    expr: \"(\\n  (\\n    tenant:db2_sort_overflow_ratio:avg > 0.05\\n    unless\
+    \ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n  - alert: DB2HighLockWaitTime\n\
+    \    expr: \"(\\n  (\\n    (\\n      tenant:db2_lock_wait_time:rate5m\\n     \
+    \ > on(tenant) group_left\\n      tenant:alert_threshold:db2_lock_wait_time\\\
+    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      tenant:db2_lock_wait_time:rate5m\\n      > on(tenant)\
+    \ group_left\\n      tenant:alert_threshold:db2_lock_wait_time\\n    )\\n    unless\
     \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
-    n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
-    n)\\nor\\n(\\n  (\\n    tenant:db2_sort_overflow_ratio:avg > 0.05\\n    unless\
-    \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
-    n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 10m\n    labels:\n\
+    n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 5m\n    labels:\n\
     \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      summary: DB2 high sort overflow ratio on {{ $labels.tenant }}\n      summary_zh:\
-    \ '{{ $labels.tenant }} 上 DB2 sort overflow 比率過高'\n      platform_summary: '[{{\
-    \ $labels.tier }}] {{ $labels.tenant }}: DB2 sort overflow ratio high — SORTHEAP\
-    \ tuning review'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}：DB2 sort overflow 比率過高 — SORTHEAP 調優審查'\n      description: 'Sort overflow\
-    \ ratio: {{ $value | printf \"%.2f\" }} — consider increasing SORTHEAP'\n    \
-    \  description_zh: Sort overflow 比率：{{ $value | printf \"%.2f\" }} — 考慮增加 SORTHEAP\n\
+    \      summary: DB2 high lock wait time on {{ $labels.tenant }}\n      summary_zh:\
+    \ '{{ $labels.tenant }} 上 DB2 鎖等待時間過高'\n      platform_summary: '[{{ $labels.tier\
+    \ }}] {{ $labels.tenant }}: DB2 lock wait time high — lock contention review'\n\
+    \      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：DB2 鎖等待時間過高\
+    \ — 鎖爭用審查'\n      description: '{{ $value | printf \"%.1f\" }}s of lock wait accrued\
+    \ per second'\n      description_zh: 每秒累積 {{ $value | printf \"%.1f\" }} 秒的鎖等待\n\
     \      runbook_url: '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner\
-    \ }}'\n      tier: '{{ $labels.tier }}'\n"
+    \ }}'\n      tier: '{{ $labels.tier }}'\n  - alert: DB2HighSortOverflow\n    expr:\
+    \ \"(\\n  (\\n    tenant:db2_sort_overflow_ratio:avg > 0.05\\n    unless on(tenant)\\\
+    n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  * on(tenant)\
+    \ group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\n)\\nor\\n(\\\
+    n  (\\n    tenant:db2_sort_overflow_ratio:avg > 0.05\\n    unless on(tenant)\\\
+    n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant)\
+    \ tenant_metadata_info\\n)\\n\"\n    for: 10m\n    labels:\n      severity: warning\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: DB2 high\
+    \ sort overflow ratio on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 上 DB2 sort overflow 比率過高'\n      platform_summary: '[{{ $labels.tier }}]\
+    \ {{ $labels.tenant }}: DB2 sort overflow ratio high — SORTHEAP tuning review'\n\
+    \      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：DB2 sort\
+    \ overflow 比率過高 — SORTHEAP 調優審查'\n      description: 'Sort overflow ratio: {{\
+    \ $value | printf \"%.2f\" }} — consider increasing SORTHEAP'\n      description_zh:\
+    \ Sort overflow 比率：{{ $value | printf \"%.2f\" }} — 考慮增加 SORTHEAP\n      runbook_url:\
+    \ '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner }}'\n      tier:\
+    \ '{{ $labels.tier }}'\n"

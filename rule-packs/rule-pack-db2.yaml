@@ -11,6 +11,11 @@
 #   db2_log_usage_percent: 70
 #   db2_deadlock_rate: 5
 #   db2_tablespace_used_percent: 85
+#   db2_lock_wait_time: (無預設 — 見下)
+#
+# db2_lock_wait_time 刻意不出預設值：合理的鎖等待累積速率高度依賴工作負載
+# （批次 / OLTP 差一個數量級），沒有能通用的預設。租戶在 conf.d 設了
+# user_threshold 才會生效，否則 DB2HighLockWaitTime 保持 dormant。
 #
 # Tenant config 範例 (conf.d/db2-prod.yaml):
 #   tenants:
@@ -90,6 +95,9 @@ groups:
 
       - record: tenant:alert_threshold:db2_tablespace_used_percent
         expr: max by(tenant) (user_threshold{component="db2", metric="tablespace_used_percent", severity="warning"})
+
+      - record: tenant:alert_threshold:db2_lock_wait_time
+        expr: max by(tenant) (user_threshold{component="db2", metric="lock_wait_time", severity="warning"})
 
   # -------------------------------------------------------
   # Alert Rules: DB2
@@ -319,6 +327,57 @@ groups:
           platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：DB2 tablespace 即將滿容 — 儲存審查"
           description: "Tablespace usage: {{ $value | printf \"%.1f\" }}%"
           description_zh: "Tablespace 使用率：{{ $value | printf \"%.1f\" }}%"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+      # Lock wait contention. The `tenant:db2_lock_wait_time:rate5m` recording rule
+      # shipped WITHOUT any consumer — no threshold normalization, no alert — so a real
+      # lock-contention incident produced a populated series that paged nobody. Two
+      # independent blind-written reference waveforms both reproduced the miss.
+      # `for: 5m` matches DB2HighDeadlockRate: both are rate() over a cumulative
+      # contention counter (as opposed to the 10m efficiency-ratio gauges), and the
+      # rate5m window already absorbs short lock convoys, so 5m means ~10m of
+      # sustained contention before anyone is paged.
+      - alert: DB2HighLockWaitTime
+        expr: |
+          (
+            (
+              (
+                tenant:db2_lock_wait_time:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:db2_lock_wait_time
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
+          )
+          or
+          (
+            (
+              (
+                tenant:db2_lock_wait_time:rate5m
+                > on(tenant) group_left
+                tenant:alert_threshold:db2_lock_wait_time
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
+        for: 5m
+        labels:
+          severity: warning
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "DB2 high lock wait time on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 上 DB2 鎖等待時間過高"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: DB2 lock wait time high — lock contention review"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：DB2 鎖等待時間過高 — 鎖爭用審查"
+          description: "{{ $value | printf \"%.1f\" }}s of lock wait accrued per second"
+          description_zh: "每秒累積 {{ $value | printf \"%.1f\" }} 秒的鎖等待"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
