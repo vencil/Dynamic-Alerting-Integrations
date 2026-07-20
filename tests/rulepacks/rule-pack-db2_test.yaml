@@ -188,23 +188,34 @@ tests:
       - series: 'user_threshold{tenant="db-d", component="db2", metric="tablespace_used_percent", severity="warning"}'
         values: '85x48'
 
-      # Sort overflow ratio (hardcoded > 0.05): 8/100 = 0.08 breaches; db-d 2/100 = 0.02.
+      # Sort overflow RATE ratio (hardcoded > 0.05). ⚠️ This block is DISCRIMINATING
+      # by construction (#1181) — it must FAIL against the pre-fix rule:
+      #   * Both metrics are CUMULATIVE counters → must be monotonically increasing.
+      #     A flat `Nx48` has rate() == 0 and makes the alert vacuous (the old fixture
+      #     was flat, which is why it pinned the buggy lifetime-ratio behaviour green).
+      #   * They carry a LARGE BASELINE (1000 / 100000) representing a long-running
+      #     instance with a healthy history, then accrue at the fault rate.
+      #     - lifetime-cumulative ratio ≈ 1000/100000 = 0.01  → BELOW 0.05 (pre-fix
+      #       rule sees no breach at all → nobody fires → this fixture goes red)
+      #     - recent RATE ratio = 8/100 = 0.08                → ABOVE 0.05 (post-fix)
+      #     That gap IS the bug: a real recent episode diluted by lifetime history.
+      #   * db-d keeps the below-threshold contrast at rate 2/100 = 0.02.
       - series: 'db2_sort_overflows{tenant="db-a"}'
-        values: '8x48'
+        values: '1000+8x48'
       - series: 'db2_sort_overflows{tenant="db-b"}'
-        values: '8x48'
+        values: '1000+8x48'
       - series: 'db2_sort_overflows{tenant="db-c"}'
-        values: '8x48'
+        values: '1000+8x48'
       - series: 'db2_sort_overflows{tenant="db-d"}'
-        values: '2x48'
+        values: '1000+2x48'
       - series: 'db2_total_sorts{tenant="db-a"}'
-        values: '100x48'
+        values: '100000+100x48'
       - series: 'db2_total_sorts{tenant="db-b"}'
-        values: '100x48'
+        values: '100000+100x48'
       - series: 'db2_total_sorts{tenant="db-c"}'
-        values: '100x48'
+        values: '100000+100x48'
       - series: 'db2_total_sorts{tenant="db-d"}'
-        values: '100x48'
+        values: '100000+100x48'
 
       # db-e: BARE-arm maintenance control — breaches EVERY metric, is in maintenance,
       # has NO tenant_metadata_info. Only the bare arm's hand-copied
@@ -231,9 +242,9 @@ tests:
       - series: 'user_threshold{tenant="db-e", component="db2", metric="tablespace_used_percent", severity="warning"}'
         values: '85x48'
       - series: 'db2_sort_overflows{tenant="db-e"}'
-        values: '8x48'
+        values: '0+8x48'
       - series: 'db2_total_sorts{tenant="db-e"}'
-        values: '100x48'
+        values: '0+100x48'
 
     alert_rule_test:
       # ── DB2HighConnections (for: 5m) ──
