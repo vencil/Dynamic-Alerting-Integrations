@@ -1,0 +1,192 @@
+# Oracle 故障波形包 —— 獨立第二作者參考集（n2）。
+# 由 Oracle DBA 領域知識撰寫（provenance 為 real-incident / vendor-doc / expert-experience），
+# 過程中未讀取任何 Vibe rule-pack / threshold 檔案。以下每個 normal_level /
+# fault_level / onset_duration / hold_duration / dip_detail 都反映該故障在生產環境的
+# 真實行為，而非從告警閾值反推而來。
+pack:
+  id: oracle-reference-n2
+  domain: oracle-dba
+  author_role: oracle-dba
+  independent_of_rule_conversion: true
+  readback_signed_off: true
+
+signatures:
+  # ── 1. Session/process-limit exhaustion (connection-pool leak) ──────────
+  - description: >
+      應用程式連線池發生 connection leak，session 數在營業時段內持續攀升，
+      逐漸逼近 SESSIONS 上限；達到上限後新連線開始被拒絕（ORA-00018/ORA-00020），
+      直到應用重啟或 DBA 手動清除異常連線為止才會回落。
+    source: expert-experience
+    normal_level: 85
+    fault_level: 295
+    onset_duration: 20m
+    hold_duration: 45m
+    typical_wobble: 8
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_sessions_active
+    metric_kind: gauge
+    companion_series:
+      - metric: oracledb_resource_limit
+        labels: {resource: sessions}
+        role: denominator
+        metric_kind: gauge
+        level: 300
+    shape_class: ramp
+    fault_class: session-limit-exhaustion
+    min_value: 0
+    labels: {instance: oracle-ref2-01, database: SAMPLE}
+
+  # ── 2. Tablespace slow fill (runaway batch load) ─────────────────────────
+  - description: >
+      夜間批次載入作業寫入量遠超預期，使用者資料表空間用量在數小時內從約
+      七成緩步爬升到逼近滿載；若未及時擴充資料檔會在插入時觸發
+      ORA-01653（unable to extend table）。
+    source: real-incident
+    normal_level: 68
+    fault_level: 97
+    onset_duration: 6h
+    hold_duration: 4h
+    typical_wobble: 1.2
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_tablespace_used_percent
+    metric_kind: gauge
+    shape_class: ramp
+    fault_class: tablespace-fill
+    min_value: 0
+    labels: {instance: oracle-ref2-01, database: SAMPLE}
+
+  # ── 3. PGA runaway from a bad execution plan (fast spike, intermittent) ──
+  - description: >
+      一支缺乏正確索引的報表查詢因 optimizer plan flip 觸發大量 hash join /
+      sort 運算，PGA 配置量在幾分鐘內暴衝到平常的五、六倍；DBA 嘗試 kill
+      該 session 時配置量會短暫回落，但同一查詢被應用程式自動重送後又再度衝高。
+    source: real-incident
+    normal_level: 1073741824
+    fault_level: 6442450944
+    onset_duration: 3m
+    hold_duration: 40m
+    typical_wobble: 104857600
+    dips_back: true
+    dip_detail:
+      depth: 3221225472
+      period: 12m
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_pga_allocated_bytes
+    metric_kind: gauge
+    shape_class: spike
+    fault_class: pga-runaway-query
+    min_value: 0
+    labels: {instance: oracle-ref2-01, database: SAMPLE}
+
+  # ── 4. Storage latency wait-event surge (plateau, intermittent) ─────────
+  - description: >
+      後端儲存陣列一顆控制器效能降級，造成單一熱點 LUN 的 I/O 延遲飆高，
+      大量 session 卡在 db file sequential read / log file sync 等待事件，
+      等待時間累積速率是平常的十倍以上；儲存陣列自動負載平衡時等待速率
+      會短暫下降，平衡結束後又再度回升，持續整個降級窗口。
+    source: expert-experience
+    normal_level: 4.5
+    fault_level: 55
+    onset_duration: 5m
+    hold_duration: 90m
+    typical_wobble: 0.8
+    dips_back: true
+    dip_detail:
+      depth: 15
+      period: 15m
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_wait_time_seconds_total
+    metric_kind: counter
+    shape_class: plateau
+    fault_class: storage-latency-wait-surge
+    labels: {instance: oracle-ref2-01, database: SAMPLE}
+
+  # ── 5. Parallel-query slave process leak (very slow ramp) ───────────────
+  - description: >
+      平行查詢（Parallel Query）從屬進程在多次大型報表查詢後未被正確回收，
+      process 數量以緩慢但穩定的速度連續數日攀升，最終逼近作業系統層級的
+      process 上限，新連線陸續出現 ORA-00020 或 OS 層 fork 失敗，直到實例
+      重啟才會回到正常水位。
+    source: expert-experience
+    normal_level: 180
+    fault_level: 940
+    onset_duration: 3d
+    hold_duration: 12h
+    typical_wobble: 15
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_process_count
+    metric_kind: gauge
+    shape_class: ramp
+    fault_class: pq-process-leak
+    min_value: 0
+    labels: {instance: oracle-ref2-01, database: SAMPLE}
+
+  # ── 6. Database instance down (boolean up→0, sustained) ─────────────────
+  - description: >
+      資料庫實例因未處理的內部錯誤（ORA-00600）觸發 PMON 強制中止實例；
+      監控代理本身仍存活並持續嘗試連線，但每次都連線失敗，直到 DBA 完成
+      instance recovery 為止實例都無法連線。
+    source: real-incident
+    normal_level: 1
+    fault_level: 0
+    onset_duration: 30s
+    hold_duration: 25m
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_up
+    metric_kind: boolean
+    shape_class: step
+    fault_class: instance-down
+    labels: {instance: oracle-ref2-01, database: SAMPLE}
+
+  # ── 7. Exporter/monitoring staleness during a session leak (agent dies) ──
+  - description: >
+      oracledb_exporter 所在容器在一次 session 數緩慢攀升（尚未達到危險水位）
+      期間，因所在節點記憶體壓力被 OOMKilled；此後不再有任何新的量測值送達，
+      時序資料直接斷尾，而不是數值歸零——這與資料庫本身down是不同的故障模式。
+    source: expert-experience
+    normal_level: 90
+    fault_level: 210
+    onset_duration: 25m
+    hold_duration: 10m
+    typical_wobble: 7
+    dips_back: false
+    agent_keeps_reporting: false
+    must_detect: true
+    metric: oracledb_sessions_active
+    metric_kind: gauge
+    shape_class: ramp
+    time_axis:
+      staleness_tail: 20m
+    fault_class: exporter-staleness-session-leak
+    min_value: 0
+    labels: {instance: oracle-ref2-01, database: SAMPLE}
+
+  # ── 8. Benign probe: deploy rolling-restart connection blip ─────────────
+  - description: >
+      應用程式滾動重啟造成連線池瞬間重建，active session 數出現預期中的短暫
+      尖峰，一兩分鐘內自行回復正常；這是已知的部署行為，不需要告警。
+    source: expert-experience
+    normal_level: 82
+    fault_level: 140
+    onset_duration: 30s
+    hold_duration: 90s
+    typical_wobble: 8
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: oracledb_sessions_active
+    metric_kind: gauge
+    shape_class: spike
+    fault_class: deploy-restart-blip
+    min_value: 0
+    labels: {instance: oracle-ref2-01, database: SAMPLE}

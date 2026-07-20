@@ -1,0 +1,202 @@
+# =====================================================================
+# IBM Db2 LUW 故障波形參考 pack（ADR-030 決策層驗證）
+# ---------------------------------------------------------------------
+# 獨立於 VM 告警規則轉換而撰寫。每一個參數描述的都是真實的 Db2 故障行為，
+# 依據為 vendor 文件 + DBA 領域知識 —— 沒有任何一項是從任何告警門檻反推
+# 而來。
+# metric 名稱取自 db2 exporter catalog。注意 db2_bufferpool_hit_ratio 是
+# 「高即健康」的 gauge，因此它的 fault_level 會低於 normal_level。
+# =====================================================================
+
+pack:
+  id: db2-luw-reference
+  domain: db2-luw-dba
+  author_role: db2-database-reliability-sme
+  independent_of_rule_conversion: true
+  readback_signed_off: true
+
+signatures:
+  # 1) db2sysc 失效／deactivation —— boolean up->0，持續維持在 down。
+  - description: >-
+      db2sysc 失效或資料庫被 deactivate：exporter 的連線被拒絕，因此
+      db2_up 由 1->0 翻轉，並一直維持在 down，直到執行個體／資料庫被
+      重新啟用為止。典型的硬性中斷。
+    source: vendor-doc
+    normal_level: 1
+    fault_level: 0
+    onset_duration: 30s
+    hold_duration: 20m
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: db2_up
+    metric_kind: boolean
+    shape_class: step
+    noise_kind: gaussian
+    fault_class: database-down
+    labels:
+      instance: db2-ref-01
+      database: SAMPLE
+
+  # 2) 連線池洩漏／登入風暴 —— gauge 緩慢爬升逼近 MAXAPPLS。
+  - description: >-
+      連線池洩漏或登入風暴把 active connection 數推向 MAXAPPLS；一旦碰到
+      上限，新連線就會被拒絕（SQL1040N "maximum number of applications"）。
+      單調攀升，在洩漏的應用程式被重啟之前不會自行恢復。
+    source: vendor-doc
+    normal_level: 90
+    fault_level: 480
+    onset_duration: 40m
+    hold_duration: 1h
+    typical_wobble: 12
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: db2_connections_active
+    metric_kind: gauge
+    shape_class: ramp
+    noise_kind: gaussian
+    fault_class: connection-saturation
+    labels:
+      instance: db2-ref-01
+      database: SAMPLE
+    min_value: 0
+
+  # 3) 緩衝集區命中率崩落 —— gauge 跌到低於正常值，並維持在該 step。
+  - description: >-
+      緩衝集區配置過小（一次錯誤的 ALTER BUFFERPOOL，或大型表格掃描灌入
+      大量分頁）使命中率從健康的約 97% 崩落到 70 出頭；同步讀取激增、
+      I/O 飽和。這個 metric 是「高即健康」，因此故障水位低於正常值，並
+      一直維持到緩衝集區被重新調整大小為止。
+    # 驗證端單位對齊（這不算破壞 anti-circularity —— 是單位換算，不是從門檻
+    # 推導出來的值）：SME 是以慣用的 0–100 % 撰寫命中率（97→72），但我們的
+    # rule-pack + threshold-exporter 預設把 db2_bufferpool_hit_ratio 當成 0–1
+    # 的比例（預設 0.95）。因此重新縮放到 0–1，讓故障在我們規則所假設的
+    # exporter 尺度下被評估；相對跌幅（健康→約低 25%）維持不變。註：exporter
+    # 尺度的歧義本身就是一個真實的案場發現（尺度不一致 = 靜默的 FN）。
+    source: vendor-doc
+    normal_level: 0.97
+    fault_level: 0.72
+    onset_duration: 10m
+    hold_duration: 1h30m
+    typical_wobble: 0.01
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: db2_bufferpool_hit_ratio
+    metric_kind: gauge
+    shape_class: step
+    noise_kind: gaussian
+    fault_class: bufferpool-hit-ratio-collapse
+    labels:
+      instance: db2-ref-01
+      database: SAMPLE
+      bufferpool: IBMDEFAULTBP
+    min_value: 0
+
+  # 4) 交易日誌滿（SQL0964C）-> DB 卡住 -> exporter 進入 STALE。
+  - description: >-
+      一筆大型未 commit 的交易占住 active log；日誌使用率攀升到約 100%，
+      Db2 進入 SQL0964C "transaction log full" 狀態。進行中的交易被阻擋
+      並回滾，exporter 自己的監控查詢也卡住 —— 因此 metric 會變成 stale，
+      直到日誌被清空為止。Db2 會一直停在 log-full 狀態，直到那筆肇事交易
+      的回滾完成。
+    source: vendor-doc
+    normal_level: 35
+    fault_level: 99
+    onset_duration: 12m
+    hold_duration: 40m
+    typical_wobble: 2.0
+    dips_back: false
+    agent_keeps_reporting: false
+    must_detect: true
+    metric: db2_log_usage_percent
+    metric_kind: gauge
+    shape_class: ramp
+    noise_kind: gaussian
+    time_axis:
+      staleness_tail: 15m
+    fault_class: transaction-log-full
+    labels:
+      instance: db2-ref-01
+      database: SAMPLE
+    min_value: 0
+
+  # 5) 死結風暴 —— counter 速率飆快、尖銳爆發。
+  - description: >-
+      一次部署引入了鎖定順序反轉；死結偵測器不斷回滾犧牲者，deadlocks_total
+      以數十倍於基線的速率尖銳爆發式累積，直到那條肇事的程式路徑被停用
+      為止。此處速率為原生單位。
+    source: vendor-doc
+    normal_level: 0.02
+    fault_level: 1.5
+    onset_duration: 2m
+    hold_duration: 30m
+    typical_wobble: 0.02
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: db2_deadlocks_total
+    metric_kind: counter
+    shape_class: spike
+    noise_kind: gaussian
+    fault_class: deadlock-storm
+    labels:
+      instance: db2-ref-01
+      database: SAMPLE
+
+  # 6) 鎖定等待激增 —— 間歇性 counter 速率（批次爆發，會回落）。
+  - description: >-
+      批次作業一波波持有升級後的表格鎖定：每一波都阻擋 OLTP session，鎖定
+      等待時間以高速率累積，接著批次 commit、等待短暫消退，然後下一波又
+      開始。屬於間歇性的回落型態，而不是乾淨的持續 plateau。
+    source: vendor-doc
+    normal_level: 1.5
+    fault_level: 60
+    onset_duration: 3m
+    hold_duration: 50m
+    typical_wobble: 1.0
+    dips_back: true
+    dip_detail:
+      depth: 45
+      period: 8m
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: db2_lock_wait_time_seconds_total
+    metric_kind: counter
+    shape_class: plateau
+    noise_kind: gaussian
+    fault_class: lock-wait-burst
+    labels:
+      instance: db2-ref-01
+      database: SAMPLE
+
+  # 7) 排序溢出壓力 —— 比例型故障、緩慢爬升、must_detect FALSE 探針。
+  - description: >-
+      SORTHEAP 對於改變後的工作負載而言太小：排序越來越常溢出到臨時資料
+      表空間，因此在整個工作日中，排序溢出速率相對於總排序數（companion
+      denominator）緩緩上升。這是在日常監控中檢視的效能／容量調校訊號，
+      不是凌晨三點該叫人的事 —— 這裡刻意設成 must_detect:false，用來探測
+      規則會不會對一個良性但仍被匯出的劣化過度觸發。
+    source: vendor-doc
+    normal_level: 0.2
+    fault_level: 8
+    onset_duration: 2h
+    hold_duration: 3h
+    typical_wobble: 0.15
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: db2_sort_overflows
+    metric_kind: counter
+    companion_series:
+      - metric: db2_total_sorts
+        role: denominator
+        metric_kind: counter
+        level: 40
+    shape_class: ramp
+    noise_kind: gaussian
+    fault_class: sort-overflow-pressure
+    labels:
+      instance: db2-ref-01
+      database: SAMPLE

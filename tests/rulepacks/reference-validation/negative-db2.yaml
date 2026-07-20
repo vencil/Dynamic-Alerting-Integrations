@@ -1,0 +1,165 @@
+# =====================================================================
+# IBM Db2 LUW 負向（NEGATIVE）波形 pack（ADR-030 決策層驗證）
+# ---------------------------------------------------------------------
+# 精確度／誤報函式庫 —— 與 catch-rate 故障 pack 互補。每一個 signature
+# 都是真實的「健康或良性」Db2 行為，調校良好的告警規則不應該對它們觸發。
+# 全部 must_detect: false —— 任何在這些情境觸發的告警都是誤報。
+#
+# 獨立於 VM 告警規則轉換而撰寫。參數描述的是真正健康的行為，依據為
+# vendor 文件 + DBA 領域知識 —— 沒有任何一項是從告警門檻反推、或被刻意
+# 調到剛好貼在門檻下方。如果有規則對其中之一觸發，那就是一個真實的
+# 過度觸發發現，而不是這個 pack 的缺陷。
+# metric 名稱取自 db2 exporter catalog。注意
+# db2_bufferpool_hit_ratio 是 0-1 範圍、「高即健康」的 gauge，因此它的
+# 良性偏移會略低於正常值。
+# =====================================================================
+
+pack:
+  id: db2-luw-negative
+  domain: db2-luw-dba
+  author_role: db2-database-reliability-sme
+  independent_of_rule_conversion: true
+  readback_signed_off: true
+
+signatures:
+  # 1) 健康穩態的緩衝集區命中率（約 0.975），在例行報表掃描期間出現
+  #    良性下滑。高即健康 -> 下滑會落在正常值以下。
+  - description: >-
+      大小配置得當的緩衝集區整天維持在健康的約 97.5% 命中率。在一次大型
+      但屬例行的報表掃描期間，因為要讀入冷分頁，命中率會良性地下滑到
+      約 96.5% 一段時間，接著隨著工作集重新暖起來而回復。這距離配置過小
+      的故障那種掉到 70 出頭的崩落還差得很遠 —— 這只是帶有小幅、可自癒
+      下滑的正常穩態。這個 metric 是「高即健康」，因此良性偏移落在正常值
+      略下方。
+    source: vendor-doc
+    normal_level: 0.975
+    fault_level: 0.965
+    onset_duration: 10m
+    hold_duration: 40m
+    typical_wobble: 0.004
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: db2_bufferpool_hit_ratio
+    metric_kind: gauge
+    shape_class: plateau
+    noise_kind: gaussian
+    fault_class: healthy-bufferpool-hit-ratio
+    labels:
+      instance: db2-neg-01
+      database: SAMPLE
+      bufferpool: IBMDEFAULTBP
+    min_value: 0
+
+  # 2) 良性瞬態 —— 單次短暫的批次鎖定等待爆發，很快回復
+  #    （counter 速率為原生單位）。
+  - description: >-
+      一支短暫的夜間批次作業短時間持有升級後的鎖定；OLTP 的鎖定等待時間
+      在約 7 分鐘內從每秒約 1.5 個等待秒累積到約 18，接著批次 commit，
+      等待就直接消退回基線。這是單次短暫、會自行消退的爆發 —— 不是真實
+      競爭事故那種持續、反覆的阻擋 —— 而且在任何合理的告警 `for:` 窗口
+      內就已經回復。
+    source: vendor-doc
+    normal_level: 1.5
+    fault_level: 18
+    onset_duration: 1m
+    hold_duration: 7m
+    typical_wobble: 1.0
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: db2_lock_wait_time_seconds_total
+    metric_kind: counter
+    shape_class: spike
+    noise_kind: gaussian
+    fault_class: batch-lock-wait-transient
+    labels:
+      instance: db2-neg-01
+      database: SAMPLE
+
+  # 3) 計畫性維護 —— 日誌使用率在排定的重組／大量載入期間上升，
+  #    之後隨 commit + 封存排空回落。自行消解。
+  - description: >-
+      維護窗口期間排定的表格 REORG 加上一次大量批次載入，在該工作單元
+      開著的時候把 active log 使用率從約 30% 推到約 68%，接著隨著 commit
+      與日誌封存排空回到基線。它從未接近 SQL0964C "transaction log full"
+      （100%）狀態。這是預期中、計畫內、良性且會在維護窗口內自行消解的
+      行為 —— 屬於檢視事項，不該叫人。
+    source: vendor-doc
+    normal_level: 30
+    fault_level: 68
+    onset_duration: 8m
+    hold_duration: 25m
+    typical_wobble: 2.0
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: db2_log_usage_percent
+    metric_kind: gauge
+    shape_class: plateau
+    noise_kind: gaussian
+    fault_class: planned-reorg-log-usage
+    labels:
+      instance: db2-neg-01
+      database: SAMPLE
+    min_value: 0
+
+  # 4) 忙碌但沒問題 —— 連線數在日間／尖峰爬到偏高水位，但仍然健康。
+  #    針對尖峰附近連線數告警的精確度探針。
+  - description: >-
+      在每日尖峰（月結時更重）時，active connection 從約 90 爬升到忙碌
+      但安全的約 360，並在整個尖峰時段維持在該水位，之後才回落。MAXAPPLS
+      是 1000，所以約 360 只是約 36% 使用率，而且沒有任何連線被拒絕
+      （沒有 SQL1040N）。這是貼近真實營運尖峰的「忙碌但沒問題」 —— 正是
+      那種會誘使過度積極的規則觸發、但不該叫人的偏高卻健康的水位。
+    source: vendor-doc
+    normal_level: 90
+    fault_level: 360
+    onset_duration: 1h
+    hold_duration: 4h
+    typical_wobble: 14
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: db2_connections_active
+    metric_kind: gauge
+    shape_class: ramp
+    noise_kind: gaussian
+    fault_class: peak-hour-connections-busy
+    labels:
+      instance: db2-neg-01
+      database: SAMPLE
+    min_value: 0
+
+  # 5) 良性低度訊號 —— 小而穩定的排序溢出比例，在日常監控中檢視，不叫人。
+  #    比例形狀（counter 除以 counter 分母）。
+  - description: >-
+      在正常的混合工作負載下，有一小部分排序會溢出到臨時資料表空間：溢出
+      速率在每秒約 1.8-2.2 之間游移，對應到每秒約 50 次總排序，也就是大約
+      4% 的溢出比例，且在整個工作日中維持平穩。這是一個遠在容忍範圍內的
+      SORTHEAP 容量訊號，DBA 會在日常監控中檢視（也許下個 sprint 再調校），
+      不是凌晨三點該叫人的事 —— 這裡刻意設成 must_detect:false，用來探測
+      比例型規則會不會對一個良性但仍被匯出的劣化過度觸發。（偶發的單一
+      死結則是 db2_deadlocks_total 上對應的良性低度訊號探針。）
+    source: vendor-doc
+    normal_level: 1.8
+    fault_level: 2.2
+    onset_duration: 1h
+    hold_duration: 4h
+    typical_wobble: 0.3
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: db2_sort_overflows
+    metric_kind: counter
+    companion_series:
+      - metric: db2_total_sorts
+        role: denominator
+        metric_kind: counter
+        level: 50
+    shape_class: plateau
+    noise_kind: gaussian
+    fault_class: benign-sort-overflow-fraction
+    labels:
+      instance: db2-neg-01
+      database: SAMPLE

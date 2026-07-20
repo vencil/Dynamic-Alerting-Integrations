@@ -1,0 +1,194 @@
+# =====================================================================
+# Oracle 故障波形參考 pack（ADR-030 決策層驗證）
+# ---------------------------------------------------------------------
+# 獨立於 VM 告警規則轉換而撰寫。每一個參數描述的都是真實的 Oracle 故障
+# 行為，依據為 vendor 文件 + DBA 領域知識 —— 沒有任何一項是從任何告警
+# 門檻反推而來。
+# metric 名稱取自 oracledb_exporter（iamseth）的 exporter catalog。
+# =====================================================================
+
+pack:
+  id: oracle-dba-reference
+  domain: oracle-dba
+  author_role: oracle-database-reliability-sme
+  independent_of_rule_conversion: true
+  readback_signed_off: true
+
+signatures:
+  # 1) 實例當機／節點失效 —— boolean up->0，持續維持在 down。
+  - description: >-
+      實例當機或節點失效：exporter 仍然依排程被抓取，但 v$instance 無法
+      連通，因此 oracledb_up 由 1->0 翻轉，並一直維持在 down，直到 DBA
+      重啟實例為止。典型的硬性中斷。
+    source: vendor-doc
+    normal_level: 1
+    fault_level: 0
+    onset_duration: 30s
+    hold_duration: 25m
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_up
+    metric_kind: boolean
+    shape_class: step
+    noise_kind: gaussian
+    fault_class: instance-down
+    labels:
+      instance: oracle-ref-01
+
+  # 2) 連線池洩漏 —— gauge 緩慢爬升逼近 session 上限。
+  - description: >-
+      應用程式連線池洩漏：連線被借出後從未歸還，active session 數穩定
+      攀升，一路朝設定的 session 上限逼近（進入 ORA-00018 "maximum number
+      of sessions exceeded" 的範圍）。在連線池被重啟之前不會自行恢復。
+    source: vendor-doc
+    normal_level: 120
+    fault_level: 900
+    onset_duration: 45m
+    hold_duration: 1h
+    typical_wobble: 15
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_sessions_active
+    metric_kind: gauge
+    companion_series:
+      - metric: oracledb_resource_limit
+        labels:
+          resource: sessions
+        role: denominator
+        metric_kind: gauge
+        level: 1000
+    shape_class: ramp
+    noise_kind: gaussian
+    fault_class: session-pool-leak
+    labels:
+      instance: oracle-ref-01
+    min_value: 0
+
+  # 3) 失控的平行執行進程 —— 間歇性 plateau（會回落）。
+  - description: >-
+      失控的平行執行（PX）進程：一連串大量使用 PX 的批次作業產生從屬進程
+      的速度快過釋放速度，因此 server process 數量一階一階朝 PROCESSES
+      上限逼近（ORA-00020）。每個批次交界處計數會回落一部分，接著下一個
+      批次又把它推得更高。
+    source: vendor-doc
+    normal_level: 220
+    fault_level: 1350
+    onset_duration: 8m
+    hold_duration: 50m
+    typical_wobble: 25
+    dips_back: true
+    dip_detail:
+      depth: 500
+      period: 9m
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_process_count
+    metric_kind: gauge
+    shape_class: plateau
+    noise_kind: gaussian
+    fault_class: parallel-process-exhaustion
+    labels:
+      instance: oracle-ref-01
+    min_value: 0
+
+  # 4) 資料表空間填滿 —— 歷時數小時、極緩慢的單調 gauge 爬升。
+  - description: >-
+      無節制的 segment 成長（或卡住的清除／封存作業）緩慢地把一個 permanent
+      tablespace 填向 100%。飽和時新的 extent 會以 ORA-01653 "unable to
+      extend" 失敗，DML 隨之報錯。歷時數小時單調上升、僅有極小的抖動 ——
+      是這幾個主要故障中最慢的一個。
+    source: vendor-doc
+    normal_level: 68
+    fault_level: 97
+    onset_duration: 6h
+    hold_duration: 2h
+    typical_wobble: 0.4
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_tablespace_used_percent
+    metric_kind: gauge
+    shape_class: ramp
+    noise_kind: gaussian
+    fault_class: tablespace-fill
+    labels:
+      instance: oracle-ref-01
+      tablespace: USERS
+    min_value: 0
+
+  # 5) 資料列鎖定（TX enqueue）競爭風暴 —— counter 速率飆快，維持 plateau。
+  - description: >-
+      一次不良改版後的資料列鎖定（TX enqueue）競爭風暴：一筆長時間未 commit
+      的交易占住熱門資料列，數百個 session 在它後面被迫串行化，累積的 DB
+      等待時間以明顯拉高的速率累積，直到阻擋的 session 被終止為止。此處
+      速率為原生單位。
+    source: vendor-doc
+    normal_level: 2
+    fault_level: 130
+    onset_duration: 1m
+    hold_duration: 25m
+    typical_wobble: 0.6
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_wait_time_seconds_total
+    metric_kind: counter
+    shape_class: plateau
+    noise_kind: gaussian
+    fault_class: enqueue-lock-storm
+    labels:
+      instance: oracle-ref-01
+      wait_class: Application
+
+  # 6) PGA 膨脹 -> shared pool 枯竭 -> exporter 進入 STALE。
+  - description: >-
+      錯誤執行計畫造成失控的 hash／sort 工作區，使 PGA 遠遠膨脹超過
+      PGA_AGGREGATE_TARGET（進入 ORA-04030 "out of process memory" 的範圍）。
+      當伺服器記憶體枯竭時 shared pool 開始 thrash，新的 hard parse ——
+      包含 exporter 自己的 scrape 查詢 —— 都會失敗，exporter 在故障進行到
+      一半時陷入沉默（metric 變成 stale）。
+    source: vendor-doc
+    normal_level: 8000000000
+    fault_level: 42000000000
+    onset_duration: 20m
+    hold_duration: 40m
+    typical_wobble: 250000000
+    dips_back: false
+    agent_keeps_reporting: false
+    must_detect: true
+    metric: oracledb_pga_allocated_bytes
+    metric_kind: gauge
+    shape_class: ramp
+    noise_kind: gaussian
+    time_axis:
+      staleness_tail: 18m
+    fault_class: pga-bloat-exporter-starved
+    labels:
+      instance: oracle-ref-01
+    min_value: 0
+
+  # 7) Hard-parse 風暴 —— catalog 之外的 metric（activity parse count），快速尖峰。
+  - description: >-
+      一次拿掉 bind variable 的改版讓每一次執行都變成 hard parse；
+      parse-count-total 以約 30 倍於基線的速率累積，library cache mutex
+      與 shared pool latch 競爭飆高，CPU 也隨之飽和。這個值由 activity
+      metric group 匯出，但經常沒有被納入告警 —— 對這套 harness 而言是
+      很有價值的覆蓋率探針。
+    source: vendor-doc
+    normal_level: 60
+    fault_level: 1800
+    onset_duration: 2m
+    hold_duration: 45m
+    typical_wobble: 25
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: oracledb_activity_parse_count_total
+    metric_kind: counter
+    shape_class: spike
+    noise_kind: gaussian
+    fault_class: hard-parse-storm
+    labels:
+      instance: oracle-ref-01

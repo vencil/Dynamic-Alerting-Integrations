@@ -1,0 +1,203 @@
+# =====================================================================
+# 故障波形參考 pack —— 透過 Kubernetes 監控的 Linux 工作負載
+#（來自 cAdvisor + kube-state-metrics 的 container + node 訊號）
+# =====================================================================
+# 由 K8s + Linux 工作負載可靠性 SME 直接依據真實故障行為撰寫（cAdvisor／
+# kube-state-metrics 領域知識 + vendor 文件）。⛔ Anti-circularity：沒有
+# 讀取或參考任何 rule pack／threshold／conf.d 檔案；每一個水位、持續時間
+# 與形狀都是真實觀察到的故障量級，絕非從告警門檻反推而來。
+# 驗證：python3 scripts/tools/dx/waveform_compile.py --check <this file>
+# ---------------------------------------------------------------------
+
+pack:
+  id: k8s-linux-reference
+  domain: kubernetes-linux-workload-reliability
+  author_role: k8s-sre-sme
+  independent_of_rule_conversion: true
+  readback_signed_off: false          # 由 SME 直接撰寫；此路徑沒有另外的人工回讀簽核
+
+signatures:
+
+  # 1 ── 容器 CPU 飽和（counter 速率 → cores；緊貼在 limit 下方）
+  - description: >-
+      失控的 hot loop／流量暴增讓容器的 CPU 使用量在幾分鐘內從輕量的穩定
+      基線一路頂到剛好低於它 1 核的 CFS limit，並在事故其餘時間都維持在
+      那裡。使用速率可以逼近但永遠不會超過 limit（核心會對它進行節流）。
+    source: vendor-doc
+    normal_level: 0.15                 # 穩定約 0.15 核（container_cpu_usage_seconds_total 的速率）
+    fault_level: 0.97                  # 緊貼在 1000m limit 下方
+    onset_duration: 2m                 # 快速：暴增／hot loop 很快就把 CPU 頂住
+    hold_duration: 1h                  # 持續飽和
+    typical_wobble: 0.05               # 使用速率日常約 0.05 核的抖動
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: container_cpu_usage_seconds_total
+    metric_kind: counter               # SME 給的水位是每秒速率（核），由 compiler 做積分
+    companion_series:
+      - metric: kube_pod_container_resource_limits
+        labels: {namespace: workload-ref, pod: app-ref-0, container: app, resource: cpu}
+        role: static
+        level: 1.0                     # 固定的 1 核（1000m）CPU limit
+    shape_class: ramp
+    fault_class: container-cpu-saturation
+    labels: {namespace: workload-ref, pod: app-ref-0, container: app}
+
+  # 2 ── 容器記憶體 working set 飽和，OOMKill 前（gauge，緩慢洩漏）
+  - description: >-
+      緩慢的記憶體洩漏在約 25 分鐘內把容器的 working set 從約 180 MB 推向
+      它的 512 Mi limit，接著就緊壓在 limit 上，直到核心把它 OOM-kill 掉。
+      OOM killer 計算的正是 working set，所以它單調攀升，沒有明顯的回落。
+    source: vendor-doc
+    normal_level: 180000000            # 約 180 MB working set，健康
+    fault_level: 510000000             # 約 510 MB，緊貼在 512Mi limit 下方，即將 OOM
+    onset_duration: 25m                # 緩慢：漸進式洩漏
+    hold_duration: 45m                 # 在被 kill 之前一直頂著 limit
+    typical_wobble: 8000000            # 約 8 MB 的 GC／配置變動，單位為原生 bytes
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: container_memory_working_set_bytes
+    metric_kind: gauge
+    companion_series:
+      - metric: kube_pod_container_resource_limits
+        labels: {namespace: workload-ref, pod: app-ref-0, container: app, resource: memory}
+        role: static
+        level: 536870912               # 512Mi limit，單位為 bytes
+    shape_class: plateau               # 先攀升，然後停在 limit（不會恢復 —— 最後以 OOM 收場）
+    fault_class: container-memory-saturation
+    labels: {namespace: workload-ref, pod: app-ref-0, container: app}
+    min_value: 0                       # bytes 不會是負值
+
+  # 3 ── OOMKill 重啟風暴（counter；重啟次數以階梯狀攀升）
+  - description: >-
+      在 OOMKill 之後容器進入當機／重啟風暴：重啟計數器不再保持平坦，而是
+      以快速的階梯往上爬（在 back-off 活躍期間大約每 50 秒重啟一次）。這裡
+      模型化為一個從零跳到風暴水位並維持住的重啟速率。
+    source: vendor-doc
+    normal_level: 0.0                  # 健康時每秒沒有任何重啟
+    fault_level: 0.02                  # 風暴期間約每 50 秒 1 次重啟（每秒速率）
+    onset_duration: 30s                # 風暴幾乎是瞬間開始
+    hold_duration: 30m                 # 風暴持續整個 back-off 窗口
+    typical_wobble: 0.0                # 穩定的容器其重啟計數器是完全平坦的
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: kube_pod_container_status_restarts_total
+    metric_kind: counter               # 累積的重啟次數；SME 給的是重啟速率
+    shape_class: step                  # 速率在一個取樣內就階躍到風暴水位 → 累積值線性攀升
+    fault_class: oomkill-restart-storm
+    labels: {namespace: workload-ref, pod: app-ref-0, container: app}
+
+  # 4 ── CPU CFS 節流比例上升（counter 分子 + counter 分母）
+  - description: >-
+      容器反覆撞到它的 CPU quota，因此被節流的 CFS period 佔比從百分之
+      幾爬升到約 90%。這裡以被節流的 period 速率對總 period 速率來表達
+      （在預設 100 ms 的 quota 窗口下約為每秒 10 個 period）。
+    source: vendor-doc
+    normal_level: 0.3                  # 每秒約 0.3 個被節流的 period（約 3% 的 period）—— 輕微、正常
+    fault_level: 9.0                   # 每秒約 9 個被節流的 period（約 90% 的 period）—— 嚴重節流
+    onset_duration: 3m                 # 隨著負載上升而爬升
+    hold_duration: 40m
+    typical_wobble: 0.2                # 節流速率的抖動
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: container_cpu_cfs_throttled_periods_total
+    metric_kind: counter
+    companion_series:
+      - metric: container_cpu_cfs_periods_total
+        labels: {namespace: workload-ref, pod: app-ref-0, container: app}
+        role: denominator
+        metric_kind: counter           # 積分後的 ramp，讓比例中的 rate(denominator) 不為零
+        level: 10.0                    # 每秒約 10 個 CFS period（100 ms 的 period）
+    shape_class: ramp
+    fault_class: cpu-cfs-throttling
+    labels: {namespace: workload-ref, pod: app-ref-0, container: app}
+
+  # 5 ── pod crash-loop、CrashLoopBackOff（boolean，間歇／擺盪）
+  - description: >-
+      不斷當機的容器會在 CrashLoopBackOff 中循環：隨著 back-off 計時器
+      循環，waiting-reason gauge 在 1（正在 back off）與 0（下一次當機前
+      短暫 Running）之間擺盪。本質上是間歇的，不是乾淨持續的 1。
+    source: vendor-doc
+    normal_level: 0                    # 沒有卡在 CrashLoopBackOff 等待
+    fault_level: 1                     # waiting reason == CrashLoopBackOff
+    onset_duration: 30s                # 錯誤的 rollout 之後 crash-loop 很快就出現
+    hold_duration: 40m                 # 持續循環
+    dips_back: false                   # boolean 的擺盪由 compiler 產生，不是類比式的回落
+    agent_keeps_reporting: true
+    must_detect: true
+    metric: kube_pod_container_status_waiting_reason
+    metric_kind: boolean
+    shape_class: step
+    fault_class: pod-crashloopbackoff
+    labels: {namespace: workload-ref, pod: app-ref-0, container: app, reason: CrashLoopBackOff}
+
+  # 6 ── node NotReady（boolean；故障值低於正常值，1 → 0）
+  - description: >-
+      節點停止回報健康狀態（kubelet 卡住、網路分區、資源耗盡）：Ready=true
+      的 condition 時序由 1 翻轉為 0，並在整個中斷期間維持 0。
+      kube-state-metrics 仍持續從 API server 匯出，所以這條時序依然存在
+      且讀出 0 —— 它不會變成 stale。
+    source: vendor-doc
+    normal_level: 1                    # Ready=true
+    fault_level: 0                     # NotReady（Ready=true 的 condition 掉到 0）
+    onset_duration: 30s                # 節點一停止心跳就很快翻轉
+    hold_duration: 20m                 # 中斷窗口
+    dips_back: false
+    agent_keeps_reporting: true        # kube-state-metrics 仍在匯出（來源是控制平面）
+    must_detect: true
+    metric: kube_node_status_condition
+    metric_kind: boolean
+    shape_class: step
+    fault_class: node-notready
+    labels: {node: node-ref-01, condition: Ready, status: "true"}
+
+  # 7 ── EXPORTER-STALE：kubelet／cAdvisor 死亡 → 容器 metric 在事故中途變黑
+  - description: >-
+      CPU 正在負載下攀升時，該節點的 kubelet（以及它內嵌的 cAdvisor）死亡，
+      於是那個節點上所有 container_* 時序就停止更新並變成 stale —— 你在
+      事故進行到一半時失去了全部的容器可見性。代理停止回報；這是一個必須
+      照樣叫人的靜默監控盲點。
+    source: vendor-doc
+    normal_level: 0.4                  # 正常負載下約 0.4 核（使用速率）
+    fault_level: 0.9                   # 在 exporter 死亡前正於負載下攀升
+    onset_duration: 3m
+    hold_duration: 30m                 # 本來會維持，但 exporter 中途死亡（見 staleness_tail）
+    typical_wobble: 0.05
+    dips_back: false
+    agent_keeps_reporting: false       # kubelet／cAdvisor 死亡 —— 時序變成 stale
+    must_detect: true
+    metric: container_cpu_usage_seconds_total
+    metric_kind: counter
+    shape_class: ramp
+    time_axis:
+      staleness_tail: 20m              # 代理死亡：時序最後 20 分鐘的資料永遠不會送達
+    fault_class: cadvisor-scrape-stale
+    labels: {namespace: workload-ref, pod: app-ref-0, container: app, node: node-ref-01}
+
+  # 8 ── 良性探針（must_detect: false）：預期中的夜間批次 CPU 隆起，遠低於 limit
+  - description: >-
+      排定的夜間批次／cron 容器合理地把 CPU 推到中等水位幾分鐘，遠低於它
+      的 2 核 limit，然後回到閒置。這是預期中的良性行為 —— 不該有任何人
+      為它被叫起來。放進來是為了抓出那些會對正常負載過度觸發的規則。
+    source: vendor-doc
+    normal_level: 0.1                  # 兩次執行之間的閒置（使用速率，單位為核）
+    fault_level: 0.6                   # 批次尖峰約 0.6 核 —— 約為 2 核 limit 的 30%，餘裕充足
+    onset_duration: 1m
+    hold_duration: 5m                  # 短暫的批次窗口
+    typical_wobble: 0.05
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false                 # 良性 —— 絕不該叫人
+    metric: container_cpu_usage_seconds_total
+    metric_kind: counter
+    companion_series:
+      - metric: kube_pod_container_resource_limits
+        labels: {namespace: workload-ref, pod: app-ref-0, container: app, resource: cpu}
+        role: static
+        level: 2.0                     # 2 核的 limit —— 顯示這個隆起仍充分留在預算之內
+    shape_class: spike                 # 上升、短暫維持、立即回復到閒置
+    fault_class: benign-batch-cpu-bump
+    labels: {namespace: workload-ref, pod: app-ref-0, container: app}

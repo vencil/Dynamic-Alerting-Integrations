@@ -1,0 +1,44 @@
+# Reference candidate rules — DB2. DIRECT-PREDICATE form of the shipped
+# rule-pack-db2.yaml alerting logic (see candidate-oracle-min.rules.yaml header for
+# rationale). Thresholds are the SHIPPED DEFAULTS inlined (_defaults.yaml, documented
+# in the rule-pack header): connections 200 / bufferpool 0.95 (LOW-is-bad, `<`) /
+# log 70 / deadlock_rate 5 (per-second, rate over 5m). `for:` are shipped values.
+#
+# NOT covered here (each surfaces as a finding in the report):
+#   - db2_lock_wait_time_seconds_total → shipped pack has a RECORDING rule
+#     (tenant:db2_lock_wait_time:rate5m) but NO alert consumes it = real coverage gap.
+#   - db2_tablespace_used_percent → the blind library authored no tablespace fault.
+#
+# DB2HighSortOverflow (ratio): the db2_total_sorts companion inherits the injection
+# identity labels with no extra label, so db2_sort_overflows/db2_total_sorts matches
+# one-to-one and keeps attribution. Threshold 0.05 is HARD-CODED in the shipped rule.
+# NB the sort-overflow signature is must_detect:false — this alert firing on it = an
+# OVER-FIRE finding (rule pages on a benign daily-tuning signal).
+groups:
+  - name: db2-ref
+    interval: 30s
+    rules:
+      - alert: DB2DatabaseDown
+        expr: db2_up == 0
+        for: 15s
+        labels: {severity: critical}
+      - alert: DB2HighConnections
+        expr: db2_connections_active > 200
+        for: 5m
+        labels: {severity: warning}
+      - alert: DB2LowBufferpoolHitRatio
+        expr: db2_bufferpool_hit_ratio < 0.95
+        for: 10m
+        labels: {severity: warning}
+      - alert: DB2HighLogUsage
+        expr: db2_log_usage_percent > 70
+        for: 5m
+        labels: {severity: warning}
+      - alert: DB2HighDeadlockRate
+        expr: rate(db2_deadlocks_total[5m]) > 5
+        for: 5m
+        labels: {severity: warning}
+      - alert: DB2HighSortOverflow
+        expr: db2_sort_overflows / db2_total_sorts > 0.05
+        for: 10m
+        labels: {severity: warning}
