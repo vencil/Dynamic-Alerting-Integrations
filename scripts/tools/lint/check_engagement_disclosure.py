@@ -29,6 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_validation import i18n_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -112,10 +113,17 @@ def scan(root: Path) -> list[tuple[str, int, str]]:
 
 
 def main() -> int:
+    # Bilingual --help is a repo-wide behavioural contract
+    # (tests/shared/test_bilingual_help_contract.py): the help text must actually
+    # switch on DA_LANG, not merely contain some CJK.
     parser = argparse.ArgumentParser(
-        description="Block in-flight engagement assertions in the public repo (dev-rules §E)")
+        description=i18n_text(
+            "阻擋公開 repo 中「進行中 engagement」的斷言（dev-rules §E）",
+            "Block in-flight engagement assertions in the public repo (dev-rules §E)"))
     parser.add_argument("--json", action="store_true", dest="json_output",
-                        help="stdout 輸出機器可讀 JSON（人類訊息一律走 stderr）")
+                        help=i18n_text(
+                            "stdout 輸出機器可讀 JSON（人類訊息一律走 stderr）",
+                            "emit machine-readable JSON on stdout (human messages go to stderr)"))
     args = parser.parse_args()
 
     if not REPO_ROOT.is_dir():
@@ -144,11 +152,15 @@ def main() -> int:
             print(f"{f}:{n}: {t}", file=sys.stderr)
 
     if findings:
-        print(
+        print(i18n_text(
+            f"\n{len(findings)} 筆 engagement-disclosure 違規 — dev-rules.md §E。\n"
+            "這是「合取」gate：點名平台沒問題，斷言遷移正在進行中才是問題。\n"
+            "改寫為能力敘述，例如：\n"
+            "  'an active <X>->VM migration target'  ->  'a cross-engine migration reference pack'",
             f"\n{len(findings)} engagement-disclosure violation(s) — dev-rules.md §E.\n"
             "This is the CONJUNCTION gate: naming the platform is fine, asserting an\n"
             "in-flight migration is not. Reword to capability framing, e.g.\n"
-            "  'an active <X>->VM migration target'  ->  'a cross-engine migration reference pack'",
+            "  'an active <X>->VM migration target'  ->  'a cross-engine migration reference pack'"),
             file=sys.stderr)
         return EXIT_VIOLATION
     return EXIT_OK
