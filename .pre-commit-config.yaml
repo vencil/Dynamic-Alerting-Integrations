@@ -961,6 +961,20 @@ repos:
         # `python scripts/tools/ops/operator_generate.py --components rules
         # --output-dir operator-manifests/`, then commit all three copies.
 
+      - id: portal-rulepack-claims
+        name: "Portal rule-pack viewer must not advertise alerts we don't ship (name + severity)"
+        entry: python3 -X utf8 scripts/tools/lint/check_portal_rulepack_claims.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        files: ^(tools/portal/src/interactive/tools/rule-pack-detail\.jsx|rule-packs/rule-pack-.*\.yaml|k8s/03-monitoring/configmap-rules-.*\.yaml|operator-manifests/da-rule-pack-.*\.yaml)$
+        # rule-pack-detail.jsx is HAND-maintained customer-facing copy with no
+        # generator behind it. It had drifted to 28 alert names that exist in no
+        # rule tree — invented capability claims a prospect can read. Note the
+        # `files:` list includes the RULE trees, not just the portal file: the
+        # likelier drift direction is a rule rename landing while the portal
+        # file is untouched, and a portal-only trigger would sleep through that.
+
       - id: custom-alerts-compile-check
         name: "#741 S3b: rule-pack-custom-alerts.yaml must match the live conf.d _custom_alerts source"
         entry: python3 -X utf8 scripts/tools/dx/compile_custom_alerts.py --check --config-dir components/threshold-exporter/config/conf.d

@@ -200,6 +200,7 @@ lang: en
 | `check_portal_audience_enum.py` | portal `audience` values must come from a closed vocabulary. |
 | `check_portal_bundle_size.py` | Portal dist bundle size budget gate. |
 | `check_portal_i18n.py` | Portal JSX i18n hardcoded string detector |
+| `check_portal_rulepack_claims.py` | Portal rule-pack claim guard — the portal must not advertise alerts we don't ship. |
 | `check_pr_scope_drift.py` | PR scope drift 偵測（pr-preflight 級）。 |
 | `check_property_coverage.py` | Property-pilot coverage drift detector. |
 | `check_repo_name.py` | Prevent wrong repository name in source files. |
