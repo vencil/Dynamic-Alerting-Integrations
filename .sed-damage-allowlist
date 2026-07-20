@@ -90,3 +90,16 @@ tools/portal/src/interactive/tools/platform-health.jsx
 # refactored from an inline component closure to a pure function). Orchestrator
 # becomes a thin render shell. 688 → 317 LOC (~46%). Genuine refactor, not damage.
 tools/portal/src/interactive/tools/cli-playground.jsx
+
+# tools/portal ROI refactor (wizard 收 golden): getting-started/wizard.jsx split
+# into the tenant-manager golden shape — 7 pure functions (docUrl / pathsForRole
+# / diffDocPaths / readHash / writeHash / recommendationKeyFor / REPO_BASE) to
+# wizard/engine.js, and the whole static data catalog (GLOSSARY / ROLES / GOALS /
+# DATABASES / NEEDS / BUCKET_LABELS / ROLE_AXIS / HANDOFF_TARGETS /
+# RECOMMENDATIONS + internal constants) moved verbatim to wizard/fixtures.js.
+# Orchestrator becomes a thin render shell. 931 → 583 LOC (59470 → 27210 bytes,
+# ~46%). The verbatim move was machine-verified (233 bilingual t() pairs zero
+# delta both ways; all 9 data blocks IDENTICAL after normalisation) and the
+# existing component test (wizard.test.tsx) is unchanged and green.
+# Genuine refactor, not damage.
+tools/portal/src/getting-started/wizard.jsx
