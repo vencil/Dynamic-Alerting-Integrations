@@ -165,6 +165,7 @@ lang: en
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
 | `check_doc_reading_time.py` | 文件閱讀時間檢查工具。 |
 | `check_doc_template.py` | 文件模板合規性檢查工具。 |
+| `check_engagement_disclosure.py` | Engagement-disclosure gate — block "active engagement" assertions in the PUBLIC repo. |
 | `check_flaky_registry.py` | Validate `flaky-tests.yaml` schema + expire_at. |
 | `check_frontmatter_versions.py` | Frontmatter version global scan |
 | `check_glossary_coverage.py` | 術語表覆蓋率檢查 |
@@ -214,6 +215,7 @@ lang: en
 | `check_tool_registry_jsx_parity.py` | every tool-registry.yaml entry must have a backing .jsx file (and vice versa). |
 | `check_translation.py` | 自動化翻譯品質檢查 |
 | `check_undefined_tokens.py` | Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css (with --report-orphans discovery mode). |
+| `check_unpinned_deps.py` | block unpinned dependency-acquisition in CI/build. |
 | `check_vmalert_coverage.py` | check_vmalert_coverage — rule-pack alert FIRING-decision coverage baseline guard. |
 | `check_window_x_no_fallback.py` | Forbid module-scope `const X = window.__X;` no-fallback reads (dev-rules.md §S6). |
 | `check_workflow_git_push_permissions.py` | guard against a silently no-op `git push`. |
@@ -239,4 +241,5 @@ lang: en
 - `scripts/tools/_lib_python.py`: Shared library for Dynamic Alerting Python tools.
 - `scripts/tools/_lib_validation.py`: Validation and parsing helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_versions.py`: Version SSOT readers for the dx doc-generation tools.
+- `scripts/tools/_lib_yaml.py`: Minimal CRD YAML serialization helpers for operator tooling.
 - `scripts/_lib.sh`: Shared across shell scenario/benchmark scripts

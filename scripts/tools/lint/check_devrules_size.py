@@ -44,8 +44,15 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 #   --ci 約定——這是 Track A 0/1/2 SSOT (_lib_exitcodes.py) 的工具作者面
 #   規範，無法純 code-enforce（新工具是否守約定要 review + test gate），
 #   屬正當的規範成長；對應 codified gate 為 test_tool_exit_codes.py。
+# v2.10.0：535 → 540。新增 §E Engagement 去識別化——已先照本 hook 的建議
+#   做完 Promote + Prune：規則本體 codify 成 check_engagement_disclosure.py
+#   （窄合取 gate + teeth-test），完整政策與論證 prune 到獨立文件
+#   engagement-deid-policy.md，dev-rules 內只留 4 行指標（標題+空行+內容+
+#   空行＝一個區塊的數學下限）。放寬 5 行的真正原因是本檔動工前已在
+#   533/535＝98% 滿，任何新規範（哪怕只是指標）都塞不進去；不放寬等同
+#   凍結規範集。合取規則是語意的、linter 判不了，故 L4 指標無可再 promote。
 # 調整門檻時需同時修改 CHANGELOG 並在 PR body 寫理由（不可偷偷放寬）。
-MAX_LINES = 535
+MAX_LINES = 540
 
 # 相對於 repo root
 DEV_RULES_PATH = "docs/internal/dev-rules.md"

@@ -11,7 +11,7 @@ Prometheus OR on VictoriaMetrics. At gate introduction 90 of 113 rule-pack alert
 in that state
 (mostly OPTIONAL DB reference packs whose threshold VALUE contract IS tested via
 rule-pack-<db>-threshold_test.yaml, but whose firing decision is not) — including the
-Oracle / DB2 packs that are the active Splunk→VM migration targets (#947).
+Oracle / DB2 packs used as cross-engine migration reference packs (#947).
 
 What this guards (NOT "every alert must be tested")
 ---------------------------------------------------
@@ -73,8 +73,8 @@ _BASELINE_HEADER = """\
 # Listing an alert here is NOT an endorsement — it is TRACKED coverage debt. Most entries are
 # firing-decision gaps in OPTIONAL DB reference packs (their threshold VALUE contract is tested
 # via rule-pack-<db>-threshold_test.yaml).
-# ⚠️ MIGRATION BURN-DOWN (Gemini #969): the Oracle/DB2 entries are the active Splunk→VM migration
-# targets (#947) — without a firing test we cannot verify their for:/group_by/label rendering on
+# ⚠️ MIGRATION BURN-DOWN (Gemini #969): the Oracle/DB2 entries are cross-engine migration
+# reference packs (#947) — without a firing test we cannot verify their for:/group_by/label rendering on
 # vmalert before soak. Treat THIS list as the soak burn-down: clear Oracle/DB2 first.
 # Regenerate after an intentional change: python scripts/tools/lint/check_vmalert_coverage.py --generate
 """

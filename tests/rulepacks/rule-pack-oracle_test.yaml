@@ -1,8 +1,8 @@
-# promtool unit test — Oracle rule-pack FIRING coverage (#947 Splunk→VM migration burn-down).
+# promtool unit test — Oracle rule-pack FIRING coverage (#947 firing-coverage burn-down).
 # Run: promtool test rules tests/rulepacks/rule-pack-oracle_test.yaml
 #
 # Burns down the rule-pack-oracle.yaml entries in vmalert_coverage_baseline.yaml (#969):
-# the Oracle pack is an active Splunk→VM migration target, and until now only its
+# the Oracle pack is one of the cross-engine migration reference packs, and until now only its
 # threshold VALUE contract was tested (rule-pack-oracle-threshold_test.yaml) — the firing
 # decision, `for:` state machine and label/annotation rendering escaped both promtool and
 # the vmalert-tool gate A. Every alert gets, at minimum:
