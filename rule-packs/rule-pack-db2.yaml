@@ -11,11 +11,23 @@
 #   db2_log_usage_percent: 70
 #   db2_deadlock_rate: 5
 #   db2_tablespace_used_percent: 85
-#   db2_lock_wait_time: (無預設 — 見下)
+#   db2_lock_wait_time: 10   ← 起始建議值，須依租戶校準（推導見下）
 #
-# db2_lock_wait_time 刻意不出預設值：合理的鎖等待累積速率高度依賴工作負載
-# （批次 / OLTP 差一個數量級），沒有能通用的預設。租戶在 conf.d 設了
-# user_threshold 才會生效，否則 DB2HighLockWaitTime 保持 dormant。
+# ⛔ 啟用前提（別跳過）：threshold-exporter 只對「**存在於 defaults 的 key**」
+# 發射 user_threshold —— resolveBaseRows 迭代的是 c.Defaults
+# （components/threshold-exporter/app/pkg/config/resolve.go:233），
+# resolveCriticalRows 也要求 base key 在 defaults 才處理 _critical 覆寫（:320）。
+# 換言之：**只在 conf.d 幫租戶填一個不在 defaults 的 key，永遠不會生效**
+# ——那不是 dormant，是永久無法啟用。上面每個 key 都必須先進
+# _defaults.yaml / Helm values，租戶才有東西可覆寫。
+#
+# db2_lock_wait_time 起始值 10（秒/秒，跨該租戶所有 instance 加總）的推導：
+# tests/rulepacks/reference-validation/ 兩個獨立盲寫參考庫對此指標給出
+# normal_level 1.5（兩者一致）、fault_level 25（real-incident）與 60（vendor-doc）。
+# 10 落在「約 6.7 倍於觀測到的正常水位」與「低於兩個故障水位」之間。
+# ⚠️ 這是起始點不是通用值：鎖等待累積速率在批次與 OLTP 工作負載之間差一個
+# 數量級，正式採用前應以該租戶實際 baseline 校準（da-tools baseline-discovery
+# 做 Day 0 粗估、threshold-recommend 做 Day N 微調）。
 #
 # Tenant config 範例 (conf.d/db2-prod.yaml):
 #   tenants:
@@ -57,7 +69,16 @@ groups:
       - record: tenant:db2_tablespace_used_percent:max
         expr: max by(tenant) (db2_tablespace_used_percent)
 
-      # Lock wait time (seconds per 5m window)
+      # Lock wait accrual RATE — seconds of lock wait accrued PER SECOND, averaged
+      # over a 5m window. ⚠️ NOT "seconds per 5m window": rate() divides by the
+      # window, so the unit is s/s (dimensionless — 1.0 means one second of waiting
+      # accrues every second, i.e. one connection blocked full-time). The old comment
+      # said "per 5m window", which is the same number scaled by 300 — an operator
+      # who sized the threshold from it would set a value 300x too high and the alert
+      # would never fire. This became load-bearing once the threshold key below made
+      # it a knob operators actually fill in.
+      # Aggregation note: sum by(tenant) ADDS across DB2 instances, so the threshold's
+      # meaning scales with instance count (same convention as db2_deadlocks:rate5m).
       - record: tenant:db2_lock_wait_time:rate5m
         expr: sum by(tenant) (rate(db2_lock_wait_time_seconds_total[5m]))
 
