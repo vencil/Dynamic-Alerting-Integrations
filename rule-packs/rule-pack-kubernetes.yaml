@@ -226,6 +226,62 @@ groups:
             and on(namespace, pod, container)
             (tenant:container_cpu_percent:by_container > 20)
           )
+  # -------------------------------------------------------
+  # Normalization: OOM events (deliberately a SLOWER group)
+  # -------------------------------------------------------
+  # ⚠ interval 60s, NOT the 15s the sibling normalization groups use. This is the
+  # only [1h]-window record in the pack (every other one is [5m]); at a 15s cAdvisor
+  # scrape that window is ~240 samples per series, and the max/min pair scans it
+  # TWICE. Re-evaluating that every 15s buys nothing for an hour-scale, sparse-event
+  # signal — 60s cuts the work 4x, which more than offsets the second scan. The cost
+  # is up to 60s of extra detection lag on top of the alert's `for:`, immaterial
+  # against a 1h rolling window. Rule COUNT is unchanged, so the O(M) property
+  # (fixed M rules, independent of tenant count N) is untouched.
+  - name: kubernetes-oom-normalization
+    interval: 60s
+    rules:
+      # OOM kills — rolling 1h event count per container. cAdvisor's
+      # container_oom_events_total is the ONLY faithful cgroup-OOM signal: the
+      # kube-state-metrics alternatives (kube_pod_container_status_last_terminated_reason
+      # {reason="OOMKilled"} / kube_pod_container_status_restarts_total) under-report BY
+      # CONSTRUCTION — the kubelet marks OOMKilled only when the OOM killer picks the
+      # container's PID 1, so a killed CHILD process (a query worker, a forked backup)
+      # leaves the pod Running and is invisible to the K8s API. That systematic blind
+      # spot is why upstream kubernetes-mixin deliberately ships NO OOM alert; this pack
+      # closes the gap on the cAdvisor counter instead of inheriting the blind one.
+      # ⛔ Scrape prerequisite: container_oom_events_total must be in the kubelet-cadvisor
+      # metric_relabel keep-list (k8s/03-monitoring/configmap-prometheus.yaml) — that
+      # list is an ALLOWLIST, so without the entry this record is permanently empty and
+      # both OOM alerts are silently inert.
+      # ⛔ NOT increase(): this counts DISCRETE EVENTS, and increase() extrapolates to the
+      # window edges. A restarted container is a NEW cgroup with a fresh counter, so an
+      # OOM/restart loop produces a SERIES OF SHORT-LIVED series — and per-series
+      # extrapolation error then COMPOUNDS across them. Measured on promtool: two cgroups
+      # each seen twice with one real kill apiece (2 REAL kills) reads as exactly 3.0 and
+      # trips the storm threshold — in precisely the scenario the threshold comment below
+      # calls normal. It also mis-reports the count to on-call ("3 OOM kills" when there
+      # were 2). An earlier revision estimated the inflation at ~2.2 and judged 3 "clear
+      # of the noise"; that estimate silently assumed a SINGLE long-lived series.
+      # max_over_time - min_over_time is exact for both shapes (verified): per short-lived
+      # cgroup it yields the true delta (0→1 = 1), and for a long-lived container it
+      # subtracts the pre-window baseline (5 before, 7 now = 2) instead of extrapolating.
+      # Summing the per-series deltas is still the reset-safe order — a restart shows up
+      # as a separate series with its own 0-based delta, never as a counter reset.
+      # Per-CONTAINER granularity is kept for drill-down; the alert cores collapse to
+      # `max by(tenant)` (weakest-link convention — the worst single container, NOT a
+      # tenant-wide sum, so many unrelated one-off kills across a large fleet cannot
+      # manufacture a storm).
+      - record: tenant:container_oom_events_1h:by_container
+        expr: |
+          label_replace(
+            sum by(namespace, pod, container) (
+              max_over_time(container_oom_events_total{namespace=~"db-.+", container!="", container!="POD"}[1h])
+              -
+              min_over_time(container_oom_events_total{namespace=~"db-.+", container!="", container!="POD"}[1h])
+            ),
+            "tenant", "$1", "namespace", "(.*)"
+          )
+
 
   # -------------------------------------------------------
   # Normalization: Pod state matching (kube-state-metrics)
@@ -460,6 +516,43 @@ groups:
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
 
+      # OOM cores — deliberately NOT routed through the user_threshold pipeline.
+      # Every other core in this group resolves a tenant-tunable percentage; an OOM kill
+      # is not a utilisation percentage but a hard kernel event whose correct default is
+      # structural ("any" / "repeated"), and gating it on a conf.d threshold key would
+      # ship the whole capability DORMANT for every tenant that never declares one — the
+      # exact silent-failure class this coverage exists to close. The two constants are
+      # therefore inline; a tenant that wants a different OOM policy has the
+      # maintenance opt-out and (for bespoke shapes) the custom-alerts route.
+      # Maintenance suppression is factored HERE, once, so both alert bodies below carry
+      # ZERO maintenance clauses (the 0-copy shape check_maintenance_symmetry expects).
+      # No `version` dimension: unlike cpu/memory these cores are not part of the
+      # ADR-024 version pilot (no threshold to resolve per version), so the alert labels
+      # stay (tenant) only and Alertmanager groups one OOM notification per tenant.
+      - record: rule_pack_kubernetes:container_oom_killed_warning:core
+        expr: |
+          (
+            max by(tenant) (tenant:container_oom_events_1h:by_container) > 0
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+
+      # Storm tier: ≥3 OOM kills on the SAME container within the rolling hour is an
+      # OOM→restart loop, not the single kill a tenant sees while right-sizing a new
+      # workload's memory limit. Why 3 and not 2: 1 = the kill itself, 2 = one bad retry
+      # (both are normal inside a "raise the limit and restart" tuning cycle, which the
+      # warning tier already surfaces); 3+ means the container is NOT converging and a
+      # human must intervene. It is also a rate — 3 per rolling hour — so a workload that
+      # OOMs once a day never accumulates into critical (each event ages out of the
+      # window long before the next arrives).
+      - record: rule_pack_kubernetes:container_oom_killed_critical:core
+        expr: |
+          (
+            max by(tenant) (tenant:container_oom_events_1h:by_container) >= 3
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+
   # -------------------------------------------------------
   # Alert Rules: Container resources (Weakest Link)
   # -------------------------------------------------------
@@ -645,6 +738,72 @@ groups:
           platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: CFS 掐頸達臨界 — 緊急緩解可先提高 cpu limit，事後請右調容量並攤平突發（limit 膨脹會侵蝕節點餘裕）；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
           description: "{{ $value | printf \"%.1f\" }}% of the container's active CFS periods were throttled (critical threshold exceeded; quota enforcement, see also PodContainerHighCPU)"
           description_zh: "容器活躍 CFS 週期中有 {{ $value | printf \"%.1f\" }}% 被核心限流（超過臨界閾值；配額壓制，另見 PodContainerHighCPU）"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+      # OOM coverage (warning tier). Distinct from PodContainerHighMemory: that one is a
+      # PREDICTIVE %-of-limit signal and can be blind to the kill entirely (a working set
+      # that spikes and dies between two 15s scrapes never shows a high percentage), while
+      # this one is the POST-HOC ground truth that the kernel already killed something.
+      # A single OOM kill is warning-worthy on its own: the tenant lost in-flight work and
+      # the pod may not even look unhealthy afterwards.
+      # `for: 30s` matches the pod-state alerts (ContainerCrashLoop), not the 60s/15m
+      # utilisation tiers: the 1h increase() window IS the debounce here (a discrete past
+      # event, already smoothed), so `for:` only needs to survive one eval cycle — a longer
+      # value would purely delay paging on something that has already happened.
+      - alert: ContainerOOMKilled
+        expr: |
+          (
+            rule_pack_kubernetes:container_oom_killed_warning:core
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
+          )
+          or
+          (
+            rule_pack_kubernetes:container_oom_killed_warning:core
+            unless on(tenant) tenant_metadata_info
+          )
+        for: 30s
+        labels:
+          severity: warning
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Container OOM-killed in {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 有容器遭 OOM 終止"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: kernel OOM-killed a container in the last hour — compare the memory limit against the real working set (PodContainerHighMemory may be clean: a spike-and-die never shows up in a 15s scrape); drill down via tenant:container_oom_events_1h:by_container"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 過去一小時內有容器被核心 OOM 終止 — 請比對記憶體 limit 與實際工作集（PodContainerHighMemory 可能無異常：瞬間暴衝在 15s 取樣間隔中看不到）；以 tenant:container_oom_events_1h:by_container 定位容器"
+          description: "{{ $value | printf \"%.0f\" }} OOM kill(s) in the last hour on the worst-affected container. Note this counts cgroup OOM events: if the kernel killed a CHILD process the pod stays Running and kubectl shows no OOMKilled reason."
+          description_zh: "過去一小時內受影響最嚴重的容器發生 {{ $value | printf \"%.0f\" }} 次 OOM 終止。此處計的是 cgroup OOM 事件：若核心殺掉的是子行程，Pod 仍為 Running，kubectl 也看不到 OOMKilled。"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+      # Critical mirror (distinct alertname per severity, platform convention). Storm =
+      # ≥3 kills on one container in the rolling hour; see the :core rule above for why 3.
+      - alert: ContainerOOMKilledCritical
+        expr: |
+          (
+            rule_pack_kubernetes:container_oom_killed_critical:core
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
+          )
+          or
+          (
+            rule_pack_kubernetes:container_oom_killed_critical:core
+            unless on(tenant) tenant_metadata_info
+          )
+        for: 30s
+        labels:
+          severity: critical
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "CRITICAL repeated OOM kills in {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 反覆遭 OOM 終止達臨界"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: >=3 OOM kills on one container within 1h — it is not converging on its memory limit. Raise the limit as emergency mitigation, then find the real driver (leak / unbounded query / cache sizing); check ContainerCrashLoop too, and drill down via tenant:container_oom_events_1h:by_container"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 單一容器 1 小時內遭 OOM 終止 >=3 次 — 容器無法收斂在現有記憶體 limit 內。緊急緩解可先提高 limit，事後務必找出真因（記憶體洩漏／無界查詢／快取設定）；並一併查看 ContainerCrashLoop，以 tenant:container_oom_events_1h:by_container 定位容器"
+          description: "{{ $value | printf \"%.0f\" }} OOM kills in the last hour on a single container — this is a repeating kill/restart loop, not a one-off tuning event."
+          description_zh: "過去一小時內單一容器發生 {{ $value | printf \"%.0f\" }} 次 OOM 終止 — 這是反覆的終止／重啟迴圈，並非一次性的調校事件。"
 
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"

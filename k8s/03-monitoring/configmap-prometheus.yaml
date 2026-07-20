@@ -164,9 +164,22 @@ data:
           # keep above + the container=""/POD drop below. Collected AHEAD of the PR-2c alert
           # rules so threshold tuning has history to look at. NOT kept (no consumer, stays
           # dropped): container_cpu_load_average_10s and the rest of the cfs family.
+          # container_oom_events_total (OOM coverage): the ONLY faithful cgroup-OOM signal.
+          # The kube-state-metrics alternatives (kube_pod_container_status_last_terminated_
+          # reason{reason="OOMKilled"} / restarts_total) under-report by construction — the
+          # kubelet marks OOMKilled only when the OOM killer picks the container's PID 1, so
+          # a killed CHILD process (query worker, forked backup) is invisible to the K8s API
+          # while the pod stays Running. That blind spot is why upstream kubernetes-mixin
+          # ships no OOM alert at all, and why this keep-list must carry the cAdvisor counter.
+          # Cardinality-checked (structural, same test as the cfs pair above): a plain
+          # per-container counter with the SAME label shape as container_cpu_usage_seconds_total
+          # (no extra dimension — unlike the container_fs × device trap), emitted for every
+          # container cgroup → worst case +1 series per db container, and it is a rare-event
+          # counter (flat at 0 for healthy workloads, so it costs ~nothing after compression).
+          # Inherits the db-.+ namespace keep above + the container=""/POD drop below.
           - source_labels: [__name__]
             action: keep
-            regex: "container_cpu_usage_seconds_total|container_cpu_cfs_throttled_periods_total|container_cpu_cfs_periods_total|container_memory_working_set_bytes|container_memory_usage_bytes|container_fs_reads_total|container_fs_writes_total|container_fs_reads_bytes_total|container_fs_writes_bytes_total"
+            regex: "container_cpu_usage_seconds_total|container_cpu_cfs_throttled_periods_total|container_cpu_cfs_periods_total|container_memory_working_set_bytes|container_memory_usage_bytes|container_oom_events_total|container_fs_reads_total|container_fs_writes_total|container_fs_reads_bytes_total|container_fs_writes_bytes_total"
           # Drop the cgroup-root (container="") and pause (container="POD") series.
           # The root series is a per-POD aggregate, so summing it ALONGSIDE the
           # per-container series double-counts a pod's I/O (#692 P0④ adversarial
