@@ -188,6 +188,43 @@ tests:
       - series: 'user_threshold{tenant="db-d", component="db2", metric="tablespace_used_percent", severity="warning"}'
         values: '85x48'
 
+      # Lock wait time: CUMULATIVE seconds counter ⇒ must be monotonically increasing
+      # (`0+Nx48`, never a flat `Nx48` — flat has rate() == 0 and would make the alert
+      # vacuous / falsely green). +60s per 15s scrape ⇒ steady rate5m = 4.0 s/s, i.e.
+      # four seconds of session lock wait accrued per wall-clock second — well above the
+      # 1.0 threshold. db-d accrues +3/15s ⇒ 0.2 s/s, the below-threshold control.
+      # Same rate() cold-start caveat as the deadlock block: Prom's extrapolatedRate
+      # divides by the full 5m window, so 4.0 vs 1.0 crosses at ~1m15s (⇒ for: 5m fires
+      # at ~6m15s) while MetricsQL reads 4.0 from the first ticks. The firing assertion
+      # sits at 9m — past both engines, window fully covered ⇒ $value is exactly 4.0.
+      - series: 'db2_lock_wait_time_seconds_total{tenant="db-a"}'
+        values: '0+60x48'
+      - series: 'db2_lock_wait_time_seconds_total{tenant="db-b"}'
+        values: '0+60x48'
+      - series: 'db2_lock_wait_time_seconds_total{tenant="db-c"}'
+        values: '0+60x48'
+      - series: 'db2_lock_wait_time_seconds_total{tenant="db-d"}'
+        values: '0+3x48'
+      - series: 'user_threshold{tenant="db-a", component="db2", metric="lock_wait_time", severity="warning"}'
+        values: '1x48'
+      - series: 'user_threshold{tenant="db-b", component="db2", metric="lock_wait_time", severity="warning"}'
+        values: '1x48'
+      - series: 'user_threshold{tenant="db-c", component="db2", metric="lock_wait_time", severity="warning"}'
+        values: '1x48'
+      - series: 'user_threshold{tenant="db-d", component="db2", metric="lock_wait_time", severity="warning"}'
+        values: '1x48'
+
+      # db-f: DORMANCY control for DB2HighLockWaitTime. Breaches at the same 4.0 s/s as
+      # db-a AND has tenant_metadata_info — the ONLY thing it lacks is a
+      # user_threshold{metric="lock_wait_time"}. It must produce no alert: that is the
+      # shipped-dormant contract (the pack ships no default for this key, so the alert
+      # stays inert until a tenant opts in via conf.d). Give this alert a hardcoded
+      # threshold and db-f's implicit no-fire assertion turns red.
+      - series: 'tenant_metadata_info{tenant="db-f", runbook_url="http://rb/f", owner="team-f", tier="gold"}'
+        values: '1x48'
+      - series: 'db2_lock_wait_time_seconds_total{tenant="db-f"}'
+        values: '0+60x48'
+
       # Sort overflow RATE ratio (hardcoded > 0.05). ⚠️ This block is DISCRIMINATING
       # by construction (#1181) — it must FAIL against the pre-fix rule:
       #   * Both metrics are CUMULATIVE counters → must be monotonically increasing.
@@ -241,6 +278,10 @@ tests:
         values: '92x48'
       - series: 'user_threshold{tenant="db-e", component="db2", metric="tablespace_used_percent", severity="warning"}'
         values: '85x48'
+      - series: 'db2_lock_wait_time_seconds_total{tenant="db-e"}'
+        values: '0+60x48'
+      - series: 'user_threshold{tenant="db-e", component="db2", metric="lock_wait_time", severity="warning"}'
+        values: '1x48'
       - series: 'db2_sort_overflows{tenant="db-e"}'
         values: '0+8x48'
       - series: 'db2_total_sorts{tenant="db-e"}'
@@ -439,6 +480,47 @@ tests:
               owner: ""
               tier: ""
         # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (below threshold) produce NO alert.
+
+      # ── DB2HighLockWaitTime (for: 5m, rate-based — firing eval at 9m for the same
+      #    cold-start reason as the deadlock alert; 3m is inside BOTH engines' pending
+      #    window) ──
+      - eval_time: 3m
+        alertname: DB2HighLockWaitTime
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: DB2HighLockWaitTime
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "DB2 high lock wait time on db-a"
+              summary_zh: "db-a 上 DB2 鎖等待時間過高"
+              platform_summary: "[gold] db-a: DB2 lock wait time high — lock contention review"
+              platform_summary_zh: "[gold] db-a：DB2 鎖等待時間過高 — 鎖爭用審查"
+              description: "4.0s of lock wait accrued per second"
+              description_zh: "每秒累積 4.0 秒的鎖等待"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+            exp_annotations:
+              summary: "DB2 high lock wait time on db-b"
+              summary_zh: "db-b 上 DB2 鎖等待時間過高"
+              platform_summary: "[] db-b: DB2 lock wait time high — lock contention review"
+              platform_summary_zh: "[] db-b：DB2 鎖等待時間過高 — 鎖爭用審查"
+              description: "4.0s of lock wait accrued per second"
+              description_zh: "每秒累積 4.0 秒的鎖等待"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.), db-d (0.2 < 1.0) and
+        # db-f (DORMANT — breaching + metadata but no user_threshold) produce NO alert.
 
       # ── DB2HighSortOverflow (for: 10m, hardcoded ratio > 0.05) ──
       - eval_time: 6m

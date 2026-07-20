@@ -4,7 +4,7 @@
 | Rule Pack | Exporter | Recording | Alert |
 |-----------|----------|-----------|-------|
 | clickhouse | clickhouse_exporter | 12 | 7 |
-| db2 | db2_exporter | 12 | 7 |
+| db2 | db2_exporter | 13 | 8 |
 | elasticsearch | elasticsearch_exporter | 11 | 7 |
 | jvm | jmx_exporter | 9 | 7 |
 | kafka | kafka_exporter | 13 | 9 |
@@ -19,4 +19,4 @@
 | rabbitmq | rabbitmq_exporter | 12 | 8 |
 | redis | redis_exporter | 11 | 6 |
 | platform | threshold-exporter self-monitoring | 0 | 34 |
-| **Total** | | **158** | **148** |
+| **Total** | | **159** | **149** |

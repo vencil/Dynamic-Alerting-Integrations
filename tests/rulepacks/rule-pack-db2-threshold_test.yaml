@@ -19,3 +19,20 @@ tests:
         exp_samples:
           - labels: 'tenant:alert_threshold:db2_connections_active{tenant="t1"}'
             value: 200
+
+  # Same contract for the lock-wait threshold. DB2HighLockWaitTime ships DORMANT
+  # (no _defaults.yaml entry), so a typo in the `metric=` selector would resolve to
+  # an empty vector and stay silent EXACTLY like the intended dormant state — the
+  # firing fixture in rule-pack-db2_test.yaml feeds the threshold and so cannot
+  # distinguish "correct selector" from "wrong selector + tenant hasn't opted in".
+  # This test pins the short-name shape (`lock_wait_time`, NOT `db2_lock_wait_time`).
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="t1", component="db2", metric="lock_wait_time", severity="warning"}'
+        values: '1x5'
+    promql_expr_test:
+      - expr: tenant:alert_threshold:db2_lock_wait_time
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:alert_threshold:db2_lock_wait_time{tenant="t1"}'
+            value: 1
