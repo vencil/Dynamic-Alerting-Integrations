@@ -56,11 +56,19 @@ groups:
       - record: tenant:db2_lock_wait_time:rate5m
         expr: sum by(tenant) (rate(db2_lock_wait_time_seconds_total[5m]))
 
-      # Sort overflow ratio
+      # Sort overflow ratio — RATE ratio, NOT lifetime-cumulative ratio (#1181).
+      # db2_sort_overflows / db2_total_sorts are both CUMULATIVE counters. Dividing
+      # them raw yields the all-time overflow fraction, which progressively
+      # desensitises as the instance ages: on a long-running database a severe
+      # recent episode (say 50% of sorts overflowing for an hour) is diluted by the
+      # lifetime denominator and may never cross the threshold. Taking rate() of
+      # both over a common window keeps the ratio scoped to recent behaviour.
+      # The ratio itself is window-length-independent (numerator and denominator
+      # scale together), so the 0.05 threshold semantics are unchanged.
       - record: tenant:db2_sort_overflow_ratio:avg
         expr: |
-          sum by(tenant) (db2_sort_overflows)
-          / (sum by(tenant) (db2_total_sorts) > 0)
+          sum by(tenant) (rate(db2_sort_overflows[5m]))
+          / (sum by(tenant) (rate(db2_total_sorts[5m])) > 0)
 
   # -------------------------------------------------------
   # Threshold normalization: DB2

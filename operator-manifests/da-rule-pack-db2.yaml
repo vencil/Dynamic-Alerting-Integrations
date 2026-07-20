@@ -24,9 +24,9 @@ spec:
     - record: tenant:db2_lock_wait_time:rate5m
       expr: sum by(tenant) (rate(db2_lock_wait_time_seconds_total[5m]))
     - record: tenant:db2_sort_overflow_ratio:avg
-      expr: 'sum by(tenant) (db2_sort_overflows)
+      expr: 'sum by(tenant) (rate(db2_sort_overflows[5m]))
 
-        / (sum by(tenant) (db2_total_sorts) > 0)
+        / (sum by(tenant) (rate(db2_total_sorts[5m])) > 0)
 
         '
   - name: db2-threshold-normalization
