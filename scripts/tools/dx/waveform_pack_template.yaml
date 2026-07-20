@@ -63,6 +63,15 @@ signatures:
                                       # （取自 exporter catalog、非 rule pack）
     metric_kind: gauge                # 平台填：gauge | counter | boolean
                                       # counter＝SME 講的是速率，編譯器積分
+    # unit: ratio_0_to_1              # 平台填（選填但強烈建議）：exporter「實際輸出」的尺度
+                                      # ratio_0_to_1 | percent_0_to_100 | bytes
+                                      # | count | seconds | per_second | boolean
+                                      # ⚠️ 為什麼重要：尺度不符是「靜默漏報」。SME 照常識
+                                      # 答「命中率從 97% 掉到 72%」，但 exporter 其實輸出
+                                      # 0-1 比例、告警閾值是 0.95 → 注入的 97 永遠跨不過
+                                      # 0.95，波形注了也永遠不會開火，報告上看起來像覆蓋
+                                      # 缺口、實際是單位 bug。填了 unit，編譯器會把這種
+                                      # 矛盾變成 fail-loud 錯誤（真實踩過：db2_bufferpool_hit_ratio）
     # companion_series:               # 平台填：比值/join 型的分母與伴隨 series
     #   - metric: example_denominator_total
     #     labels: {resource: sessions}

@@ -147,6 +147,10 @@
           "enum": ["gauge", "counter", "boolean"],
           "description": "Platform field: compile semantics. gauge=direct level; counter=levels are RATES, integrated into a monotone cumulative series; boolean=noise exemption + flapping/staleness-absence/fan-out variants."
         },
+        "unit": {
+          "enum": ["ratio_0_to_1", "percent_0_to_100", "bytes", "count", "seconds", "per_second", "boolean"],
+          "description": "Platform field (OPTIONAL, backward-compatible): the scale the EXPORTER actually emits. Declaring it turns a silent scale mismatch into a fail-loud compile error — an SME who answers '97%' for a metric the exporter emits as 0.97 would otherwise produce a library that can never fire (the injected 97 never crosses a 0.95 threshold). SCOPE: checked against this signature's OWN magnitudes only — normal_level, fault_level, typical_wobble, min_value, dip_detail.depth. NOT checked: companion_series levels (a companion is a different metric with its own scale — a ratio's denominator is typically a rate or count, so the parent's unit does not govern it; per-companion units are not implemented). Fraction-shaped units (ratio_0_to_1 / percent_0_to_100) are rejected on metric_kind=counter, whose levels are per-second rates. The reverse mis-scale (percent unit answered in ratio form) is deliberately NOT flagged — it is ambiguous with legitimate sub-1% metrics. Absent = unchecked."
+        },
         "companion_series": {
           "type": "array",
           "items": {
