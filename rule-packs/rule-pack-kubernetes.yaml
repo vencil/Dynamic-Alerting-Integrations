@@ -226,7 +226,20 @@ groups:
             and on(namespace, pod, container)
             (tenant:container_cpu_percent:by_container > 20)
           )
-
+  # -------------------------------------------------------
+  # Normalization: OOM events (deliberately a SLOWER group)
+  # -------------------------------------------------------
+  # ⚠ interval 60s, NOT the 15s the sibling normalization groups use. This is the
+  # only [1h]-window record in the pack (every other one is [5m]); at a 15s cAdvisor
+  # scrape that window is ~240 samples per series, and the max/min pair scans it
+  # TWICE. Re-evaluating that every 15s buys nothing for an hour-scale, sparse-event
+  # signal — 60s cuts the work 4x, which more than offsets the second scan. The cost
+  # is up to 60s of extra detection lag on top of the alert's `for:`, immaterial
+  # against a 1h rolling window. Rule COUNT is unchanged, so the O(M) property
+  # (fixed M rules, independent of tenant count N) is untouched.
+  - name: kubernetes-oom-normalization
+    interval: 60s
+    rules:
       # OOM kills — rolling 1h event count per container. cAdvisor's
       # container_oom_events_total is the ONLY faithful cgroup-OOM signal: the
       # kube-state-metrics alternatives (kube_pod_container_status_last_terminated_reason
@@ -268,6 +281,7 @@ groups:
             ),
             "tenant", "$1", "namespace", "(.*)"
           )
+
 
   # -------------------------------------------------------
   # Normalization: Pod state matching (kube-state-metrics)

@@ -62,8 +62,9 @@ data:
     \", \\\"(.*)\\\"\\n)\\n\"\n  - record: tenant:pod_weakest_cpu_throttle_percent:max\n\
     \    expr: \"max by(tenant, pod, version) (\\n  tenant:container_cpu_throttle_percent:by_container\\\
     n  and on(namespace, pod, container)\\n  (tenant:container_cpu_percent:by_container\
-    \ > 20)\\n)\\n\"\n  - record: tenant:container_oom_events_1h:by_container\n  \
-    \  expr: \"label_replace(\\n  sum by(namespace, pod, container) (\\n    max_over_time(container_oom_events_total{namespace=~\\\
+    \ > 20)\\n)\\n\"\n- name: kubernetes-oom-normalization\n  interval: 60s\n  rules:\n\
+    \  - record: tenant:container_oom_events_1h:by_container\n    expr: \"label_replace(\\\
+    n  sum by(namespace, pod, container) (\\n    max_over_time(container_oom_events_total{namespace=~\\\
     \"db-.+\\\", container!=\\\"\\\", container!=\\\"POD\\\"}[1h])\\n    -\\n    min_over_time(container_oom_events_total{namespace=~\\\
     \"db-.+\\\", container!=\\\"\\\", container!=\\\"POD\\\"}[1h])\\n  ),\\n  \\\"\
     tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.*)\\\"\\n)\\n\"\n- name: kubernetes-state-matching\n\
