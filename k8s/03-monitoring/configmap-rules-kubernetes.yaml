@@ -63,7 +63,8 @@ data:
     \    expr: \"max by(tenant, pod, version) (\\n  tenant:container_cpu_throttle_percent:by_container\\\
     n  and on(namespace, pod, container)\\n  (tenant:container_cpu_percent:by_container\
     \ > 20)\\n)\\n\"\n  - record: tenant:container_oom_events_1h:by_container\n  \
-    \  expr: \"label_replace(\\n  sum by(namespace, pod, container) (\\n    increase(container_oom_events_total{namespace=~\\\
+    \  expr: \"label_replace(\\n  sum by(namespace, pod, container) (\\n    max_over_time(container_oom_events_total{namespace=~\\\
+    \"db-.+\\\", container!=\\\"\\\", container!=\\\"POD\\\"}[1h])\\n    -\\n    min_over_time(container_oom_events_total{namespace=~\\\
     \"db-.+\\\", container!=\\\"\\\", container!=\\\"POD\\\"}[1h])\\n  ),\\n  \\\"\
     tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.*)\\\"\\n)\\n\"\n- name: kubernetes-state-matching\n\
     \  interval: 15s\n  rules:\n  - record: tenant:container_waiting_reason:count\n\
@@ -251,11 +252,12 @@ data:
     \ critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary:\
     \ CRITICAL repeated OOM kills in {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
     \ }} 反覆遭 OOM 終止達臨界'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}: OOM/restart loop — the container is not converging on its memory limit.\
-    \ Raise the limit as emergency mitigation, then find the real driver (leak / unbounded\
-    \ query / cache sizing); check ContainerCrashLoop too, and drill down via tenant:container_oom_events_1h:by_container'\n\
-    \      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: OOM／重啟迴圈\
-    \ — 容器無法收斂在現有記憶體 limit 內。緊急緩解可先提高 limit，事後務必找出真因（記憶體洩漏／無界查詢／快取設定）；並一併查看 ContainerCrashLoop，以\
+    \ }}: >=3 OOM kills on one container within 1h — it is not converging on its memory\
+    \ limit. Raise the limit as emergency mitigation, then find the real driver (leak\
+    \ / unbounded query / cache sizing); check ContainerCrashLoop too, and drill down\
+    \ via tenant:container_oom_events_1h:by_container'\n      platform_summary_zh:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: 單一容器 1 小時內遭 OOM 終止 >=3 次 — 容器無法收斂在現有記憶體\
+    \ limit 內。緊急緩解可先提高 limit，事後務必找出真因（記憶體洩漏／無界查詢／快取設定）；並一併查看 ContainerCrashLoop，以\
     \ tenant:container_oom_events_1h:by_container 定位容器'\n      description: '{{ $value\
     \ | printf \"%.0f\" }} OOM kills in the last hour on a single container — this\
     \ is a repeating kill/restart loop, not a one-off tuning event.'\n      description_zh:\

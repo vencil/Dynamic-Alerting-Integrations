@@ -98,7 +98,7 @@ lang: zh
 | PodContainerCPUThrottled | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: sustained CFS throttling  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:pod_cpu_throttled_warning:core |
 | PodContainerCPUThrottledCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: CFS throttling CRITICAL  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:pod_cpu_throttled_critical:core |
 | ContainerOOMKilled | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: kernel OOM-killed a container in the last hour  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:container_oom_killed_warning:core |
-| ContainerOOMKilledCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: OOM/restart loop  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:container_oom_killed_critical:core |
+| ContainerOOMKilledCritical | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: >=3 OOM kills on one container within 1h  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:container_oom_killed_critical:core |
 | ContainerCrashLoop | critical | [{{ $labels.tier }}] {{ $labels.tenant }}: crash loop detected  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:container_waiting_reason:count |
 | ContainerImagePullFailure | warning | [{{ $labels.tier }}] {{ $labels.tenant }}: image pull failing  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:container_waiting_reason:count |
 | VersionAwareThresholdInert | warning | {{ $value \| printf "%.0f" }} version-specific container CPU threshold(s) declared and tenant pods ar | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | user_threshold |

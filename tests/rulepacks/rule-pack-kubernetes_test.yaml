@@ -155,6 +155,16 @@ tests:
         values: '1x60'
       - series: 'user_state_filter{tenant="db-d", filter="maintenance"}'
         values: '1x60'
+      # db-e: RESTART-LOOP SHAPE — the case a single long-lived series cannot express.
+      # Two SHORT-LIVED cgroups (a container that was OOM-killed, restarted, and
+      # OOM-killed again) carrying 2 REAL kills between them. With increase() the
+      # per-series window-edge extrapolation COMPOUNDS across them and reads 3.0,
+      # tripping the storm tier on what the design calls a normal tuning cycle —
+      # this tenant is the regression pin for that (must fire warning, NOT critical).
+      - series: 'container_oom_events_total{namespace="db-e", pod="app-1", container="app", id="/cg1"}'
+        values: '_x9 0 1 _x47'
+      - series: 'container_oom_events_total{namespace="db-e", pod="app-1", container="app", id="/cg2"}'
+        values: '_x13 0 1 _x43'
 
     alert_rule_test:
       - eval_time: 50m
@@ -191,6 +201,20 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
+          # db-e: 2 real kills across two short-lived cgroups — warning only.
+          - exp_labels:
+              severity: warning
+              tenant: db-e
+            exp_annotations:
+              summary: "Container OOM-killed in db-e"
+              summary_zh: "db-e 有容器遭 OOM 終止"
+              platform_summary: "[] db-e: kernel OOM-killed a container in the last hour — compare the memory limit against the real working set (PodContainerHighMemory may be clean: a spike-and-die never shows up in a 15s scrape); drill down via tenant:container_oom_events_1h:by_container"
+              platform_summary_zh: "[] db-e: 過去一小時內有容器被核心 OOM 終止 — 請比對記憶體 limit 與實際工作集（PodContainerHighMemory 可能無異常：瞬間暴衝在 15s 取樣間隔中看不到）；以 tenant:container_oom_events_1h:by_container 定位容器"
+              description: "2 OOM kill(s) in the last hour on the worst-affected container. Note this counts cgroup OOM events: if the kernel killed a CHILD process the pod stays Running and kubectl shows no OOMKilled reason."
+              description_zh: "過去一小時內受影響最嚴重的容器發生 2 次 OOM 終止。此處計的是 cgroup OOM 事件：若核心殺掉的是子行程，Pod 仍為 Running，kubectl 也看不到 OOMKilled。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
         # db-c (flat counter) and db-d (maintenance) produce NO alert.
 
       - eval_time: 50m
@@ -207,8 +231,8 @@ tests:
             exp_annotations:
               summary: "CRITICAL repeated OOM kills in db-a"
               summary_zh: "db-a 反覆遭 OOM 終止達臨界"
-              platform_summary: "[gold] db-a: OOM/restart loop — the container is not converging on its memory limit. Raise the limit as emergency mitigation, then find the real driver (leak / unbounded query / cache sizing); check ContainerCrashLoop too, and drill down via tenant:container_oom_events_1h:by_container"
-              platform_summary_zh: "[gold] db-a: OOM／重啟迴圈 — 容器無法收斂在現有記憶體 limit 內。緊急緩解可先提高 limit，事後務必找出真因（記憶體洩漏／無界查詢／快取設定）；並一併查看 ContainerCrashLoop，以 tenant:container_oom_events_1h:by_container 定位容器"
+              platform_summary: "[gold] db-a: >=3 OOM kills on one container within 1h — it is not converging on its memory limit. Raise the limit as emergency mitigation, then find the real driver (leak / unbounded query / cache sizing); check ContainerCrashLoop too, and drill down via tenant:container_oom_events_1h:by_container"
+              platform_summary_zh: "[gold] db-a: 單一容器 1 小時內遭 OOM 終止 >=3 次 — 容器無法收斂在現有記憶體 limit 內。緊急緩解可先提高 limit，事後務必找出真因（記憶體洩漏／無界查詢／快取設定）；並一併查看 ContainerCrashLoop，以 tenant:container_oom_events_1h:by_container 定位容器"
               description: "5 OOM kills in the last hour on a single container — this is a repeating kill/restart loop, not a one-off tuning event."
               description_zh: "過去一小時內單一容器發生 5 次 OOM 終止 — 這是反覆的終止／重啟迴圈，並非一次性的調校事件。"
               runbook_url: "http://rb/a"

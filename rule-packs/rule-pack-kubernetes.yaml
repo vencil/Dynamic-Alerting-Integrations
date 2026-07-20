@@ -240,23 +240,31 @@ groups:
       # metric_relabel keep-list (k8s/03-monitoring/configmap-prometheus.yaml) — that
       # list is an ALLOWLIST, so without the entry this record is permanently empty and
       # both OOM alerts are silently inert.
-      # increase-then-sum (NOT sum-then-increase): a restarted container is a NEW cgroup
-      # with a fresh counter, so summing raw counters across a restart reads as a reset
-      # and loses the events; per-series increase() then sum is the reset-safe order
-      # (same idiom as the cpu/fs counters above) and is exactly what an OOM/restart loop
-      # exercises. Per-CONTAINER granularity is kept for drill-down; the alert cores
-      # collapse to `max by(tenant)` (weakest-link convention — the worst single
-      # container, NOT a tenant-wide sum, so many unrelated one-off kills across a large
-      # fleet cannot manufacture a storm).
-      # ⚠ increase() extrapolates over the window edges: a container that lived only a
-      # fraction of the hour can read slightly ABOVE its integer event count (2 events →
-      # ~2.2). The storm threshold (3, in the core below) sits clear of that noise and
-      # the warning is a bare `> 0`, so neither predicate is extrapolation-sensitive.
+      # ⛔ NOT increase(): this counts DISCRETE EVENTS, and increase() extrapolates to the
+      # window edges. A restarted container is a NEW cgroup with a fresh counter, so an
+      # OOM/restart loop produces a SERIES OF SHORT-LIVED series — and per-series
+      # extrapolation error then COMPOUNDS across them. Measured on promtool: two cgroups
+      # each seen twice with one real kill apiece (2 REAL kills) reads as exactly 3.0 and
+      # trips the storm threshold — in precisely the scenario the threshold comment below
+      # calls normal. It also mis-reports the count to on-call ("3 OOM kills" when there
+      # were 2). An earlier revision estimated the inflation at ~2.2 and judged 3 "clear
+      # of the noise"; that estimate silently assumed a SINGLE long-lived series.
+      # max_over_time - min_over_time is exact for both shapes (verified): per short-lived
+      # cgroup it yields the true delta (0→1 = 1), and for a long-lived container it
+      # subtracts the pre-window baseline (5 before, 7 now = 2) instead of extrapolating.
+      # Summing the per-series deltas is still the reset-safe order — a restart shows up
+      # as a separate series with its own 0-based delta, never as a counter reset.
+      # Per-CONTAINER granularity is kept for drill-down; the alert cores collapse to
+      # `max by(tenant)` (weakest-link convention — the worst single container, NOT a
+      # tenant-wide sum, so many unrelated one-off kills across a large fleet cannot
+      # manufacture a storm).
       - record: tenant:container_oom_events_1h:by_container
         expr: |
           label_replace(
             sum by(namespace, pod, container) (
-              increase(container_oom_events_total{namespace=~"db-.+", container!="", container!="POD"}[1h])
+              max_over_time(container_oom_events_total{namespace=~"db-.+", container!="", container!="POD"}[1h])
+              -
+              min_over_time(container_oom_events_total{namespace=~"db-.+", container!="", container!="POD"}[1h])
             ),
             "tenant", "$1", "namespace", "(.*)"
           )
@@ -778,8 +786,8 @@ groups:
         annotations:
           summary: "CRITICAL repeated OOM kills in {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 反覆遭 OOM 終止達臨界"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: OOM/restart loop — the container is not converging on its memory limit. Raise the limit as emergency mitigation, then find the real driver (leak / unbounded query / cache sizing); check ContainerCrashLoop too, and drill down via tenant:container_oom_events_1h:by_container"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: OOM／重啟迴圈 — 容器無法收斂在現有記憶體 limit 內。緊急緩解可先提高 limit，事後務必找出真因（記憶體洩漏／無界查詢／快取設定）；並一併查看 ContainerCrashLoop，以 tenant:container_oom_events_1h:by_container 定位容器"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: >=3 OOM kills on one container within 1h — it is not converging on its memory limit. Raise the limit as emergency mitigation, then find the real driver (leak / unbounded query / cache sizing); check ContainerCrashLoop too, and drill down via tenant:container_oom_events_1h:by_container"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 單一容器 1 小時內遭 OOM 終止 >=3 次 — 容器無法收斂在現有記憶體 limit 內。緊急緩解可先提高 limit，事後務必找出真因（記憶體洩漏／無界查詢／快取設定）；並一併查看 ContainerCrashLoop，以 tenant:container_oom_events_1h:by_container 定位容器"
           description: "{{ $value | printf \"%.0f\" }} OOM kills in the last hour on a single container — this is a repeating kill/restart loop, not a one-off tuning event."
           description_zh: "過去一小時內單一容器發生 {{ $value | printf \"%.0f\" }} 次 OOM 終止 — 這是反覆的終止／重啟迴圈，並非一次性的調校事件。"
 
