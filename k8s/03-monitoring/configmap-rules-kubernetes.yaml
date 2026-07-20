@@ -62,9 +62,12 @@ data:
     \", \\\"(.*)\\\"\\n)\\n\"\n  - record: tenant:pod_weakest_cpu_throttle_percent:max\n\
     \    expr: \"max by(tenant, pod, version) (\\n  tenant:container_cpu_throttle_percent:by_container\\\
     n  and on(namespace, pod, container)\\n  (tenant:container_cpu_percent:by_container\
-    \ > 20)\\n)\\n\"\n- name: kubernetes-state-matching\n  interval: 15s\n  rules:\n\
-    \  - record: tenant:container_waiting_reason:count\n    expr: \"label_replace(\\\
-    n  count by(namespace, reason) (\\n    kube_pod_container_status_waiting_reason{namespace=~\\\
+    \ > 20)\\n)\\n\"\n  - record: tenant:container_oom_events_1h:by_container\n  \
+    \  expr: \"label_replace(\\n  sum by(namespace, pod, container) (\\n    increase(container_oom_events_total{namespace=~\\\
+    \"db-.+\\\", container!=\\\"\\\", container!=\\\"POD\\\"}[1h])\\n  ),\\n  \\\"\
+    tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.*)\\\"\\n)\\n\"\n- name: kubernetes-state-matching\n\
+    \  interval: 15s\n  rules:\n  - record: tenant:container_waiting_reason:count\n\
+    \    expr: \"label_replace(\\n  count by(namespace, reason) (\\n    kube_pod_container_status_waiting_reason{namespace=~\\\
     \"db-.+\\\"} > 0\\n  ),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"\
     (.*)\\\"\\n)\\n\"\n- name: kubernetes-threshold-normalization\n  interval: 15s\n\
     \  rules:\n  - record: tenant_version:alert_threshold:container_cpu\n    expr:\
@@ -127,7 +130,13 @@ data:
     n      unless on(tenant, version)\\n        tenant_version:alert_threshold:container_cpu_throttle{severity=\\\
     \"critical\\\"}\\n    )\\n    > on(tenant) group_left()\\n      tenant_version:alert_threshold:container_cpu_throttle{version=\\\
     \"default\\\", severity=\\\"critical\\\"}\\n  )\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
-    \"maintenance\\\"} == 1)\\n\"\n"
+    \"maintenance\\\"} == 1)\\n\"\n  - record: rule_pack_kubernetes:container_oom_killed_warning:core\n\
+    \    expr: \"(\\n  max by(tenant) (tenant:container_oom_events_1h:by_container)\
+    \ > 0\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"\
+    } == 1)\\n\"\n  - record: rule_pack_kubernetes:container_oom_killed_critical:core\n\
+    \    expr: \"(\\n  max by(tenant) (tenant:container_oom_events_1h:by_container)\
+    \ >= 3\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"\
+    } == 1)\\n\"\n"
   kubernetes-alert.yml: "groups:\n- name: kubernetes-container-alerts\n  rules:\n\
     \  - alert: PodContainerHighCPU\n    expr: \"(\\n  rule_pack_kubernetes:pod_container_high_cpu_warning:core\\\
     n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
@@ -216,36 +225,73 @@ data:
     \ also PodContainerHighCPU)'\n      description_zh: 容器活躍 CFS 週期中有 {{ $value |\
     \ printf \"%.1f\" }}% 被核心限流（超過臨界閾值；配額壓制，另見 PodContainerHighCPU）\n      runbook_url:\
     \ '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner }}'\n      tier:\
-    \ '{{ $labels.tier }}'\n- name: kubernetes-pod-state-alerts\n  rules:\n  - alert:\
-    \ ContainerCrashLoop\n    expr: \"(\\n  (\\n    (\\n      (\\n        tenant:container_waiting_reason:count{reason=\\\
-    \"CrashLoopBackOff\\\"}\\n        * on(tenant) group_left\\n        user_state_filter{filter=\\\
-    \"container_crashloop\\\"}\\n      ) > 0\\n    )\\n    unless on(tenant)\\n  \
-    \  (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  * on(tenant)\
-    \ group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\n)\\nor\\n(\\\
-    n  (\\n    (\\n      (\\n        tenant:container_waiting_reason:count{reason=\\\
-    \"CrashLoopBackOff\\\"}\\n        * on(tenant) group_left\\n        user_state_filter{filter=\\\
-    \"container_crashloop\\\"}\\n      ) > 0\\n    )\\n    unless on(tenant)\\n  \
-    \  (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant)\
-    \ tenant_metadata_info\\n)\\n\"\n    for: 30s\n    labels:\n      severity: critical\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: Container\
-    \ crash loop detected in {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
-    \ }} 偵測到容器崩潰迴圈'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}: crash loop detected — check deployment and image health'\n      platform_summary_zh:\
-    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態'\n      description:\
-    \ '{{ $value }} container(s) in CrashLoopBackOff state'\n      description_zh:\
-    \ '{{ $value }} 個容器處於 CrashLoopBackOff 狀態'\n      runbook_url: '{{ $labels.runbook_url\
+    \ '{{ $labels.tier }}'\n  - alert: ContainerOOMKilled\n    expr: \"(\\n  rule_pack_kubernetes:container_oom_killed_warning:core\\\
+    n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  rule_pack_kubernetes:container_oom_killed_warning:core\\n  unless\
+    \ on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 30s\n    labels:\n      severity:\
+    \ warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary:\
+    \ Container OOM-killed in {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 有容器遭 OOM 終止'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}: kernel OOM-killed a container in the last hour — compare the memory limit\
+    \ against the real working set (PodContainerHighMemory may be clean: a spike-and-die\
+    \ never shows up in a 15s scrape); drill down via tenant:container_oom_events_1h:by_container'\n\
+    \      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: 過去一小時內有容器被核心\
+    \ OOM 終止 — 請比對記憶體 limit 與實際工作集（PodContainerHighMemory 可能無異常：瞬間暴衝在 15s 取樣間隔中看不到）；以\
+    \ tenant:container_oom_events_1h:by_container 定位容器'\n      description: '{{ $value\
+    \ | printf \"%.0f\" }} OOM kill(s) in the last hour on the worst-affected container.\
+    \ Note this counts cgroup OOM events: if the kernel killed a CHILD process the\
+    \ pod stays Running and kubectl shows no OOMKilled reason.'\n      description_zh:\
+    \ 過去一小時內受影響最嚴重的容器發生 {{ $value | printf \"%.0f\" }} 次 OOM 終止。此處計的是 cgroup OOM 事件：若核心殺掉的是子行程，Pod\
+    \ 仍為 Running，kubectl 也看不到 OOMKilled。\n      runbook_url: '{{ $labels.runbook_url\
     \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
-    \  - alert: ContainerImagePullFailure\n    expr: \"(\\n  (\\n    (\\n      (\\\
-    n        tenant:container_waiting_reason:count{reason=~\\\"ImagePullBackOff|InvalidImageName\\\
+    \  - alert: ContainerOOMKilledCritical\n    expr: \"(\\n  rule_pack_kubernetes:container_oom_killed_critical:core\\\
+    n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  rule_pack_kubernetes:container_oom_killed_critical:core\\n  unless\
+    \ on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 30s\n    labels:\n      severity:\
+    \ critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary:\
+    \ CRITICAL repeated OOM kills in {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 反覆遭 OOM 終止達臨界'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}: OOM/restart loop — the container is not converging on its memory limit.\
+    \ Raise the limit as emergency mitigation, then find the real driver (leak / unbounded\
+    \ query / cache sizing); check ContainerCrashLoop too, and drill down via tenant:container_oom_events_1h:by_container'\n\
+    \      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: OOM／重啟迴圈\
+    \ — 容器無法收斂在現有記憶體 limit 內。緊急緩解可先提高 limit，事後務必找出真因（記憶體洩漏／無界查詢／快取設定）；並一併查看 ContainerCrashLoop，以\
+    \ tenant:container_oom_events_1h:by_container 定位容器'\n      description: '{{ $value\
+    \ | printf \"%.0f\" }} OOM kills in the last hour on a single container — this\
+    \ is a repeating kill/restart loop, not a one-off tuning event.'\n      description_zh:\
+    \ 過去一小時內單一容器發生 {{ $value | printf \"%.0f\" }} 次 OOM 終止 — 這是反覆的終止／重啟迴圈，並非一次性的調校事件。\n\
+    \      runbook_url: '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner\
+    \ }}'\n      tier: '{{ $labels.tier }}'\n- name: kubernetes-pod-state-alerts\n\
+    \  rules:\n  - alert: ContainerCrashLoop\n    expr: \"(\\n  (\\n    (\\n     \
+    \ (\\n        tenant:container_waiting_reason:count{reason=\\\"CrashLoopBackOff\\\
     \"}\\n        * on(tenant) group_left\\n        user_state_filter{filter=\\\"\
-    container_imagepull\\\"}\\n      ) > 0\\n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\
+    container_crashloop\\\"}\\n      ) > 0\\n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\
     \"maintenance\\\"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner,\
     \ tier)\\n    tenant_metadata_info\\n)\\nor\\n(\\n  (\\n    (\\n      (\\n   \
-    \     tenant:container_waiting_reason:count{reason=~\\\"ImagePullBackOff|InvalidImageName\\\
-    \"}\\n        * on(tenant) group_left\\n        user_state_filter{filter=\\\"\
-    container_imagepull\\\"}\\n      ) > 0\\n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\
+    \     tenant:container_waiting_reason:count{reason=\\\"CrashLoopBackOff\\\"}\\\
+    n        * on(tenant) group_left\\n        user_state_filter{filter=\\\"container_crashloop\\\
+    \"}\\n      ) > 0\\n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\
     \"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\\
-    n\"\n    for: 30s\n    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant\
+    n\"\n    for: 30s\n    labels:\n      severity: critical\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      summary: Container crash loop detected in {{ $labels.tenant\
+    \ }}\n      summary_zh: '{{ $labels.tenant }} 偵測到容器崩潰迴圈'\n      platform_summary:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: crash loop detected — check deployment\
+    \ and image health'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態'\n      description: '{{ $value }} container(s) in\
+    \ CrashLoopBackOff state'\n      description_zh: '{{ $value }} 個容器處於 CrashLoopBackOff\
+    \ 狀態'\n      runbook_url: '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner\
+    \ }}'\n      tier: '{{ $labels.tier }}'\n  - alert: ContainerImagePullFailure\n\
+    \    expr: \"(\\n  (\\n    (\\n      (\\n        tenant:container_waiting_reason:count{reason=~\\\
+    \"ImagePullBackOff|InvalidImageName\\\"}\\n        * on(tenant) group_left\\n\
+    \        user_state_filter{filter=\\\"container_imagepull\\\"}\\n      ) > 0\\\
+    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      (\\n        tenant:container_waiting_reason:count{reason=~\\\
+    \"ImagePullBackOff|InvalidImageName\\\"}\\n        * on(tenant) group_left\\n\
+    \        user_state_filter{filter=\\\"container_imagepull\\\"}\\n      ) > 0\\\
+    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
+    \ 30s\n    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant\
     \ }}'\n    annotations:\n      summary: Image pull failure detected in {{ $labels.tenant\
     \ }}\n      summary_zh: '{{ $labels.tenant }} 偵測到映像檔案拉取失敗'\n      platform_summary:\
     \ '[{{ $labels.tier }}] {{ $labels.tenant }}: image pull failing — verify registry\

@@ -101,3 +101,116 @@ tests:
               owner: ""
               tier: ""
         # db-c (below threshold) and db-d (maintenance) produce NO alert.
+
+  # ---------------------------------------------------------------------
+  # OOM coverage (ContainerOOMKilled / ContainerOOMKilledCritical).
+  #
+  # DISCRIMINATING BY CONSTRUCTION — every case below fails if the rules are
+  # removed or mis-tuned, not just if they are absent:
+  #   db-a (5 kills)  -> BOTH tiers fire, enriched. Deleting either alert, the
+  #                      :core rules, or the tenant:container_oom_events_1h
+  #                      record turns this into a miss (verified by ablation).
+  #   db-b (2 kills)  -> warning ONLY, and via the metadata-vacuum arm. This is
+  #                      the THRESHOLD test: raise the storm bar and db-a stops
+  #                      firing critical; lower it to <=2 and db-b starts.
+  #   db-c (0 kills)  -> negative: the series EXISTS and is flat, so this proves
+  #                      `> 0` is a real predicate and not an absent-vector pass.
+  #   db-d (5 kills)  -> negative: maintenance opt-out suppresses BOTH tiers
+  #                      (strip the `unless` from the cores and db-d fires).
+  #
+  # ⛔ OUT OF SCOPE for promtool: this fixture INJECTS container_oom_events_total,
+  # so it cannot prove the cAdvisor scrape keep-list actually collects it. If the
+  # `container_oom_events_total` entry is dropped from the kubelet-cadvisor
+  # metric_relabel allowlist (k8s/03-monitoring/configmap-prometheus.yaml) every
+  # rule here stays green while going permanently inert in production — there is
+  # no automated gate on that coupling today (byo_check probes container_fs only),
+  # so it rests on review. Treat the keep-list entry and this pack as one change.
+  #
+  # ⚠ counter syntax: `0x9` is FLAT (rate/increase = 0). The kill counts are
+  # therefore written as explicit step sequences (`0x9 1x1 2x1 ...`), which is
+  # also what a real OOM/restart loop looks like — discrete jumps, not a ramp.
+  # 1m interval so the [1h] increase window has ~50 real samples; $value is
+  # rendered with %.0f so increase()'s window-edge extrapolation (a few percent)
+  # cannot flake the assertion.
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      # db-a: 5 OOM kills (t=10,12,14,16,18), metadata present, no maintenance.
+      - series: 'container_oom_events_total{namespace="db-a", pod="app-1", container="app"}'
+        values: '0x9 1x1 2x1 3x1 4x1 5x42'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x60'
+      # db-b: 2 OOM kills (t=10,12) — under the storm bar; NO tenant_metadata_info.
+      - series: 'container_oom_events_total{namespace="db-b", pod="app-1", container="app"}'
+        values: '0x9 1x1 2x49'
+      # db-c: counter present but FLAT at 0 (healthy) — must not fire.
+      - series: 'container_oom_events_total{namespace="db-c", pod="app-1", container="app"}'
+        values: '0x60'
+      - series: 'tenant_metadata_info{tenant="db-c", runbook_url="http://rb/c", owner="team-c", tier="silver"}'
+        values: '1x60'
+      # db-d: 5 OOM kills but maintenance active — must not fire (either tier).
+      - series: 'container_oom_events_total{namespace="db-d", pod="app-1", container="app"}'
+        values: '0x9 1x1 2x1 3x1 4x1 5x42'
+      - series: 'tenant_metadata_info{tenant="db-d", runbook_url="http://rb/d", owner="team-d", tier="bronze"}'
+        values: '1x60'
+      - series: 'user_state_filter{tenant="db-d", filter="maintenance"}'
+        values: '1x60'
+
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: ContainerOOMKilled
+        exp_alerts:
+          # db-a: enriched arm (branch A).
+          - exp_labels:
+              severity: warning
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "Container OOM-killed in db-a"
+              summary_zh: "db-a 有容器遭 OOM 終止"
+              platform_summary: "[gold] db-a: kernel OOM-killed a container in the last hour — compare the memory limit against the real working set (PodContainerHighMemory may be clean: a spike-and-die never shows up in a 15s scrape); drill down via tenant:container_oom_events_1h:by_container"
+              platform_summary_zh: "[gold] db-a: 過去一小時內有容器被核心 OOM 終止 — 請比對記憶體 limit 與實際工作集（PodContainerHighMemory 可能無異常：瞬間暴衝在 15s 取樣間隔中看不到）；以 tenant:container_oom_events_1h:by_container 定位容器"
+              description: "5 OOM kill(s) in the last hour on the worst-affected container. Note this counts cgroup OOM events: if the kernel killed a CHILD process the pod stays Running and kubectl shows no OOMKilled reason."
+              description_zh: "過去一小時內受影響最嚴重的容器發生 5 次 OOM 終止。此處計的是 cgroup OOM 事件：若核心殺掉的是子行程，Pod 仍為 Running，kubectl 也看不到 OOMKilled。"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          # db-b: VACUUM-FIRE (branch B) — warning tier only.
+          - exp_labels:
+              severity: warning
+              tenant: db-b
+            exp_annotations:
+              summary: "Container OOM-killed in db-b"
+              summary_zh: "db-b 有容器遭 OOM 終止"
+              platform_summary: "[] db-b: kernel OOM-killed a container in the last hour — compare the memory limit against the real working set (PodContainerHighMemory may be clean: a spike-and-die never shows up in a 15s scrape); drill down via tenant:container_oom_events_1h:by_container"
+              platform_summary_zh: "[] db-b: 過去一小時內有容器被核心 OOM 終止 — 請比對記憶體 limit 與實際工作集（PodContainerHighMemory 可能無異常：瞬間暴衝在 15s 取樣間隔中看不到）；以 tenant:container_oom_events_1h:by_container 定位容器"
+              description: "2 OOM kill(s) in the last hour on the worst-affected container. Note this counts cgroup OOM events: if the kernel killed a CHILD process the pod stays Running and kubectl shows no OOMKilled reason."
+              description_zh: "過去一小時內受影響最嚴重的容器發生 2 次 OOM 終止。此處計的是 cgroup OOM 事件：若核心殺掉的是子行程，Pod 仍為 Running，kubectl 也看不到 OOMKilled。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c (flat counter) and db-d (maintenance) produce NO alert.
+
+      - eval_time: 50m
+        alertname: ContainerOOMKilledCritical
+        exp_alerts:
+          # ONLY db-a clears the storm bar. db-b (2 kills) is the near-miss that
+          # pins the threshold; db-d is suppressed by maintenance.
+          - exp_labels:
+              severity: critical
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "CRITICAL repeated OOM kills in db-a"
+              summary_zh: "db-a 反覆遭 OOM 終止達臨界"
+              platform_summary: "[gold] db-a: OOM/restart loop — the container is not converging on its memory limit. Raise the limit as emergency mitigation, then find the real driver (leak / unbounded query / cache sizing); check ContainerCrashLoop too, and drill down via tenant:container_oom_events_1h:by_container"
+              platform_summary_zh: "[gold] db-a: OOM／重啟迴圈 — 容器無法收斂在現有記憶體 limit 內。緊急緩解可先提高 limit，事後務必找出真因（記憶體洩漏／無界查詢／快取設定）；並一併查看 ContainerCrashLoop，以 tenant:container_oom_events_1h:by_container 定位容器"
+              description: "5 OOM kills in the last hour on a single container — this is a repeating kill/restart loop, not a one-off tuning event."
+              description_zh: "過去一小時內單一容器發生 5 次 OOM 終止 — 這是反覆的終止／重啟迴圈，並非一次性的調校事件。"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
