@@ -33,12 +33,19 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Text surfaces that are published (docs site, repo browse, release notes).
+# ⚠️ These MUST cover everything the pre-commit `files:` pattern triggers on —
+# a file that fires the hook but is not scanned is the worst shape of silent
+# failure for an irreversible-publication guard. `README*.md` (not `README.md`)
+# because the English README is the more externally-consumed surface, and
+# `ya?ml` because `.yml` files do exist under tests/.
 SCAN_GLOBS = (
     "docs/**/*.md",
     "CHANGELOG.md",
-    "README.md",
+    "README*.md",
     "rule-packs/**/*.yaml",
+    "rule-packs/**/*.yml",
     "tests/**/*.yaml",
+    "tests/**/*.yml",
     "tests/**/*.py",
     "scripts/**/*.py",
 )
@@ -47,13 +54,23 @@ SCAN_GLOBS = (
 _PLATFORM = re.compile(r"splunk|scheduled-search", re.IGNORECASE)
 
 # An assertion that such a migration is CURRENTLY UNDERWAY for us.
+# NOTE the English/Chinese symmetry: every ZH in-flight marker needs an EN
+# counterpart or the gate silently under-covers the English surfaces.
 _IN_FLIGHT = re.compile(
-    r"active\s+\S{0,20}\s*migration"      # "active ... migration"
-    r"|migration\s+target"                 # "migration target(s)"
-    r"|遷移目標|遷移前置|進行中"
+    r"active\s+[^.\n]{0,40}?migration"     # "active ... migration" (spaces allowed)
+    r"|migration\s+target"                  # "migration target(s)"
+    r"|migration[^.\n]{0,20}?in\s+progress"  # "migration ... in progress"
+    r"|migration[^.\n]{0,20}?under\s?way"    # "migration is underway"
+    r"|migrating\s+(?:from|off)"             # "migrating from/off <platform>"
+    r"|遷移目標|遷移前置|進行中|遷移中"
     r"|dual-run\s+soak|雙活\s*soak",
     re.IGNORECASE,
 )
+
+# Inline code spans are stripped before the opt-out marker is looked for, so a
+# doc that *quotes* the marker (e.g. this file's own policy page showing
+# `<!-- deid-ok: reason -->` as an example) cannot accidentally exempt itself.
+_CODE_SPAN_RE = re.compile(r"`[^`]*`")
 
 # Explicit inline opt-out for lines that must SHOW the anti-pattern (policy docs, tests).
 # A marker beats a per-file allowlist: it is line-scoped, greppable, and reviewable in the
@@ -62,7 +79,7 @@ _IN_FLIGHT = re.compile(
 # ⚠️ The marker must be COMMENT-ANCHORED AND carry a rationale (`<!-- deid-ok: why -->`
 # or `# deid-ok: why`). A bare substring test was fail-open: prose that merely *mentions*
 # the marker (e.g. a CHANGELOG bullet describing this gate) silently exempted itself.
-DEID_OK_RE = re.compile(r"(?:<!--|#)\s*deid-ok:")
+DEID_OK_RE = re.compile(r"(?:<!--|#)\s*deid-ok:\s*(?!-->)\S")
 
 # The gate must not flag its own pattern definitions / help text.
 SELF_PATH = Path(__file__).resolve()
@@ -85,9 +102,12 @@ def scan(root: Path) -> list[tuple[str, int, str]]:
             for lineno, line in enumerate(text.splitlines(), 1):
                 if not (_PLATFORM.search(line) and _IN_FLIGHT.search(line)):
                     continue
-                if DEID_OK_RE.search(line):
+                if DEID_OK_RE.search(_CODE_SPAN_RE.sub("", line)):
                     continue
-                findings.append((str(path.relative_to(root)), lineno, line.strip()[:160]))
+                # POSIX-normalised at the source so the whole API (scan / --json /
+                # stderr) is platform-identical — local Windows output must match CI.
+                rel = path.relative_to(root).as_posix()
+                findings.append((rel, lineno, line.strip()[:160]))
     return sorted(findings)
 
 
@@ -96,26 +116,31 @@ def main() -> int:
         description="Block in-flight engagement assertions in the public repo (dev-rules §E)")
     parser.add_argument("--json", action="store_true", dest="json_output",
                         help="stdout 輸出機器可讀 JSON（人類訊息一律走 stderr）")
-    parser.add_argument("paths", nargs="*", help="(optional) files to scan; default = repo scan")
     args = parser.parse_args()
 
     if not REPO_ROOT.is_dir():
         print(f"ERROR: repo root not found: {REPO_ROOT}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
+    # Deliberately repo-wide, never narrowed to changed files. A published
+    # violation is irreversible, so the question this gate answers is "is the
+    # repo clean right now", not "did THIS commit add one" — an existing
+    # violation must keep blocking until it is actually fixed. (An earlier
+    # revision narrowed by `args.paths`; with `pass_filenames: false` that
+    # branch was unreachable, and its path comparison silently dropped every
+    # finding when given absolute paths — a fail-open waiting to be wired up.)
     findings = scan(REPO_ROOT)
-    if args.paths:  # pre-commit passes changed files; narrow the report to them
-        wanted = {str(Path(p).as_posix()) for p in args.paths}
-        findings = [f for f in findings if f[0].replace("\\", "/") in wanted]
 
+    # Report POSIX paths on every platform so CI output and local output match.
+    rows = [(f.replace("\\", "/"), n, t) for f, n, t in findings]
     if args.json_output:
         print(json.dumps({
             "tool": "check-engagement-disclosure",
-            "violations": [{"file": f, "line": n, "text": t} for f, n, t in findings],
-            "count": len(findings),
+            "violations": [{"file": f, "line": n, "text": t} for f, n, t in rows],
+            "count": len(rows),
         }, ensure_ascii=False, indent=2))
     else:
-        for f, n, t in findings:
+        for f, n, t in rows:
             print(f"{f}:{n}: {t}", file=sys.stderr)
 
     if findings:
