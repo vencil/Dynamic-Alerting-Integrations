@@ -1,0 +1,6 @@
+groups:
+  - name: platform-admins
+    tenants: ["*"]
+    permissions: [admin]
+    environments: ["production", "staging"]
+    domains: ["finance"]

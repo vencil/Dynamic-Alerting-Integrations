@@ -1,0 +1,8 @@
+groups:
+  - name: sre-oncall
+    match:
+      groups: ["sre-oncall"]
+      claims:
+        "region": ["emea"]
+    tenants: ["alpha", "beta"]
+    permissions: [read]
