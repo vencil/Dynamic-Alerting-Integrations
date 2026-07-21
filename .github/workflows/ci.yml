@@ -1261,6 +1261,10 @@ jobs:
     # pending whenever it path-skips.
     name: Portal Tests Run
     runs-on: ubuntu-latest
+    # Least-privilege token (CodeQL: workflow-missing-permissions). Checkout +
+    # local npm build/test/dist-diff only — no writes, no PR/API access.
+    permissions:
+      contents: read
     needs: detect-changes
     if: needs.detect-changes.outputs.portal_changed == 'true'
     steps:
