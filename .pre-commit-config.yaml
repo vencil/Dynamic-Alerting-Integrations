@@ -224,7 +224,7 @@ repos:
       # --- Fast drift checks (< 5s each) ---
       - id: tool-map-check
         name: Tool map coverage
-        entry: python3 -X utf8 scripts/tools/dx/generate_tool_map.py --check
+        entry: python3 -X utf8 scripts/tools/dx/generate_tool_map.py --check --lang all
         language: python
         pass_filenames: false
         files: ^scripts/tools/.*\.py$
@@ -252,7 +252,7 @@ repos:
 
       - id: doc-map-check
         name: Doc map coverage
-        entry: python3 -X utf8 scripts/tools/dx/generate_doc_map.py --check
+        entry: python3 -X utf8 scripts/tools/dx/generate_doc_map.py --check --lang all
         language: python
         pass_filenames: false
         files: ^docs/.*\.(md|jsx)$
