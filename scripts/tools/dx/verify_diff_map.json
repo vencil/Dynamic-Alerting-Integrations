@@ -311,6 +311,9 @@
   "scripts/tools/lint/check_playwright_rtl_drift.py": [
    "tests/lint/test_check_playwright_rtl_drift.py"
   ],
+  "scripts/tools/lint/check_portal_rulepack_claims.py": [
+   "tests/lint/test_check_portal_rulepack_claims.py"
+  ],
   "scripts/tools/lint/check_pr_scope_drift.py": [
    "tests/lint/test_check_pr_scope_drift.py"
   ],
@@ -638,7 +641,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "3b182d93d7084da9913e00640aee4ed3b3f2f04ebc067afdf9556e8e16c16cc7",
+ "source_digest": "833d7c104cb1e82b84c2e1736dcd508d207d83097eaf3e93d6bed962c9d79a6b",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -754,6 +757,7 @@
   "tests/lint/test_check_pint.py",
   "tests/lint/test_check_planning_status_sync.py",
   "tests/lint/test_check_playwright_rtl_drift.py",
+  "tests/lint/test_check_portal_rulepack_claims.py",
   "tests/lint/test_check_pr_scope_drift.py",
   "tests/lint/test_check_property_coverage.py",
   "tests/lint/test_check_repo_name.py",
