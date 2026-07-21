@@ -39,6 +39,8 @@ function StepGroups({ groups, onChange }) {
         tenantPrefix: '',
         environments: [],
         domains: [],
+        claims: [],
+        orgScope: '',
       }]);
       setNewGroup('');
     }
@@ -94,7 +96,7 @@ function StepGroups({ groups, onChange }) {
                 type="text"
                 value={group.description}
                 onChange={(e) => updateGroup(idx, { description: e.target.value })}
-                placeholder={t('描述 (選填)', 'Description (optional)')}
+                placeholder={t('描述（選填，僅供填寫時參考，不會匯出至 YAML）', 'Description (optional — a local note for you, not exported to YAML)')}
                 aria-label={t('群組描述', 'Group description')}
                 className="w-full px-3 py-2 border border-[color:var(--da-color-surface-border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-focus-ring)]"
               />
@@ -443,6 +445,171 @@ function StepFilters({ groups, onChange }) {
   );
 }
 
+function StepIdentity({ groups, onChange }) {
+  const updateGroup = useCallback((idx, updates) => {
+    const newGroups = [...groups];
+    newGroups[idx] = { ...newGroups[idx], ...updates };
+    onChange(newGroups);
+  }, [onChange, groups]);
+
+  const addClaim = useCallback((groupIdx) => {
+    const claims = [...(groups[groupIdx].claims || []), { key: '', values: [] }];
+    updateGroup(groupIdx, { claims });
+  }, [groups, updateGroup]);
+
+  const updateClaimKey = useCallback((groupIdx, claimIdx, key) => {
+    const claims = (groups[groupIdx].claims || []).map((c, i) => (i === claimIdx ? { ...c, key } : c));
+    updateGroup(groupIdx, { claims });
+  }, [groups, updateGroup]);
+
+  const removeClaim = useCallback((groupIdx, claimIdx) => {
+    const claims = (groups[groupIdx].claims || []).filter((_, i) => i !== claimIdx);
+    updateGroup(groupIdx, { claims });
+  }, [groups, updateGroup]);
+
+  const addClaimValue = useCallback((groupIdx, claimIdx, value) => {
+    const v = value.trim();
+    if (!v) return;
+    const claims = (groups[groupIdx].claims || []).map((c, i) => {
+      if (i !== claimIdx || c.values.includes(v)) return c;
+      return { ...c, values: [...c.values, v] };
+    });
+    updateGroup(groupIdx, { claims });
+  }, [groups, updateGroup]);
+
+  const removeClaimValue = useCallback((groupIdx, claimIdx, value) => {
+    const claims = (groups[groupIdx].claims || []).map((c, i) => (
+      i === claimIdx ? { ...c, values: c.values.filter(v => v !== value) } : c
+    ));
+    updateGroup(groupIdx, { claims });
+  }, [groups, updateGroup]);
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-lg font-semibold mb-2">{t('第五步：身分條件（選填）', 'Step 5: Identity Conditions (optional)')}</h3>
+        <p className="text-sm text-[color:var(--da-color-muted)] mb-2">
+          {t(
+            '選填。留空則群組僅以 IdP 群組名稱匹配（今日行為，不變）。加入條件會進一步「收窄」誰能匹配——只會更嚴、不會更寬。',
+            'Optional. Leave empty to match the group purely by IdP group name (today\'s behavior, unchanged). Adding conditions only NARROWS who matches — it can never widen access.',
+          )}
+        </p>
+        {/* This tool EMITS policy; it does not enforce it. No value here is verified. */}
+        <div className="p-3 mb-2 text-sm bg-[color:var(--da-color-info-soft)] border border-[color:var(--da-color-info)]/30 rounded-lg text-[color:var(--da-color-fg)]" role="note">
+          {t(
+            '這些條件只有在檔案被 commit 且 tenant-api 載入後才生效；精靈無法驗證任何值是否正確。宣告鍵採「完全字串比對、區分大小寫、不支援萬用字元」。',
+            'These conditions only take effect once the file is committed and loaded by tenant-api; the wizard cannot verify any value. Claim keys use exact, case-sensitive string matching with no wildcards.',
+          )}
+        </div>
+      </div>
+
+      <div className="space-y-5">
+        {groups.map((group, groupIdx) => (
+          <div key={groupIdx} className="p-4 border border-[color:var(--da-color-surface-border)] rounded-lg bg-[color:var(--da-color-surface)]">
+            <h4 className="font-medium text-[color:var(--da-color-fg)] mb-3">{group.name}</h4>
+
+            {/* Claim conditions */}
+            <div className="mb-5">
+              <label className="text-sm font-medium text-[color:var(--da-color-fg)] mb-2 block">{t('宣告條件（claims）', 'Claim conditions')}</label>
+              <p className="text-xs text-[color:var(--da-color-muted)] mb-3">
+                {t(
+                  '每個宣告鍵須已在部署的 --identity-claim-headers 宣告，否則整份 _rbac.yaml 載入失敗。多個鍵之間為「且」，同鍵多值之間為「或」。',
+                  'Each claim key must be declared in the deployment\'s --identity-claim-headers, or the whole _rbac.yaml fails to load. Keys are AND-ed; values within a key are OR-ed.',
+                )}
+              </p>
+
+              {(group.claims || []).map((claim, claimIdx) => (
+                <div key={claimIdx} className="p-3 mb-2 border border-[color:var(--da-color-surface-border)] rounded-lg bg-[color:var(--da-color-surface-hover)]">
+                  <div className="flex items-center gap-2 mb-2">
+                    <label htmlFor={`rbac-claim-key-${groupIdx}-${claimIdx}`} className="sr-only">{t('宣告鍵', 'Claim key')}</label>
+                    <input
+                      id={`rbac-claim-key-${groupIdx}-${claimIdx}`}
+                      type="text"
+                      value={claim.key}
+                      onChange={(e) => updateClaimKey(groupIdx, claimIdx, e.target.value)}
+                      placeholder={t('宣告鍵（如 org-code）', 'Claim key (e.g. org-code)')}
+                      aria-label={t('宣告鍵', 'Claim key')}
+                      className="flex-1 px-3 py-2 border border-[color:var(--da-color-surface-border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-focus-ring)]"
+                    />
+                    <button
+                      onClick={() => removeClaim(groupIdx, claimIdx)}
+                      aria-label={t(`移除宣告 ${claim.key || claimIdx + 1}`, `Remove claim ${claim.key || claimIdx + 1}`)}
+                      className="px-2 py-1 text-[color:var(--da-color-muted)] hover:text-[color:var(--da-color-error-text)] hover:bg-[color:var(--da-color-error-soft)] rounded text-sm"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {claim.values.map(value => (
+                      <span key={value} className="inline-flex items-center gap-1.5 px-3 py-1 bg-[color:var(--da-color-tag-bg)] text-[color:var(--da-color-fg)] rounded-full text-sm">
+                        {value}
+                        <button
+                          onClick={() => removeClaimValue(groupIdx, claimIdx, value)}
+                          className="text-[color:var(--da-color-muted)] hover:text-[color:var(--da-color-error-text)] font-bold"
+                          aria-label={t(`移除值 ${value}`, `Remove value ${value}`)}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <label htmlFor={`rbac-claim-val-${groupIdx}-${claimIdx}`} className="sr-only">{t('允許的值', 'Allowed value')}</label>
+                  <input
+                    id={`rbac-claim-val-${groupIdx}-${claimIdx}`}
+                    type="text"
+                    placeholder={t('輸入允許的值後按 Enter', 'Type an allowed value, press Enter')}
+                    aria-label={t('允許的值', 'Allowed value')}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        addClaimValue(groupIdx, claimIdx, e.currentTarget.value);
+                        e.currentTarget.value = '';
+                      }
+                    }}
+                    className="w-full px-3 py-2 border border-[color:var(--da-color-surface-border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-focus-ring)]"
+                  />
+                </div>
+              ))}
+
+              <button
+                onClick={() => addClaim(groupIdx)}
+                className="px-3 py-1.5 bg-[color:var(--da-color-tag-bg)] text-[color:var(--da-color-fg)] rounded-lg text-sm font-medium hover:bg-[color:var(--da-color-surface-hover)]"
+              >
+                + {t('新增宣告條件', 'Add claim condition')}
+              </button>
+            </div>
+
+            {/* org-scope axis */}
+            <div>
+              <label htmlFor={`rbac-orgscope-${groupIdx}`} className="text-sm font-medium text-[color:var(--da-color-fg)] mb-2 block">{t('組織範圍（org-scope，選填）', 'Org-scope (optional)')}</label>
+              <input
+                id={`rbac-orgscope-${groupIdx}`}
+                type="text"
+                value={group.orgScope || ''}
+                onChange={(e) => updateGroup(groupIdx, { orgScope: e.target.value })}
+                placeholder={t('組織宣告鍵（如 org-code）', 'Org claim key (e.g. org-code)')}
+                aria-label={t('組織範圍宣告鍵', 'Org-scope claim key')}
+                className="w-full px-3 py-2 border border-[color:var(--da-color-surface-border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-focus-ring)]"
+              />
+              {group.orgScope && (
+                <div className="mt-2 p-3 text-sm bg-[color:var(--da-color-warning-soft)] border border-[color:var(--da-color-warning)]/30 rounded-lg text-[color:var(--da-color-fg)]" role="alert" aria-live="polite">
+                  <p className="font-semibold mb-1">{t('開啟 org-scope 前請確認：', 'Before enabling org-scope, confirm:')}</p>
+                  <ul className="list-disc list-inside space-y-1 text-xs">
+                    <li>{t(`宣告鍵 "${group.orgScope}" 必須已在部署宣告，否則整份檔案載入失敗。`, `Claim key "${group.orgScope}" must be declared in the deployment, or the whole file fails to load.`)}</li>
+                    <li>{t('這條規則涵蓋的每個租戶都須在 _tenant_orgs.yaml 標記，且組織值與 caller 的宣告值完全字串相等。', 'Every tenant this rule covers must be labeled in _tenant_orgs.yaml, with an org value string-equal to the caller\'s claim value.')}</li>
+                    <li>{t('Shadow 模式不保護「caller 缺少或不匹配該宣告值」——這兩種情況在 shadow 與 enforce 下都會拒絕。', 'Shadow mode does NOT protect "caller missing or mismatched claim value" — both are denied under shadow AND enforce.')}</li>
+                    <li>{t('上述拒絕不會計入 would-deny 觀測指標，soak 觀察期看不出來。', 'Those denials are invisible to the would-deny soak metric.')}</li>
+                  </ul>
+                  <p className="mt-2 text-xs">{t('下一步：commit 前先用租戶管理員的稽核（dry-run）驗證這份設定。', 'Next: verify this config with the admin audit (dry-run) before committing.')}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function StepReview({ groups }) {
   const yaml = useMemo(() => generateRbacYaml(groups), [groups]);
   const warnings = useMemo(() => validateRbac(groups), [groups]);
@@ -468,7 +635,7 @@ function StepReview({ groups }) {
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="text-lg font-semibold mb-2">{t('第五步：檢視與匯出', 'Step 5: Review & Export')}</h3>
+        <h3 className="text-lg font-semibold mb-2">{t('第六步：檢視與匯出', 'Step 6: Review & Export')}</h3>
         <p className="text-sm text-[color:var(--da-color-muted)] mb-4">
           {t('檢查生成的 YAML 配置。複製或下載為 _rbac.yaml', 'Review the generated YAML. Copy or download as _rbac.yaml')}
         </p>
@@ -555,6 +722,7 @@ export default function RBACSetupWizard() {
     tenants: <StepTenants groups={groups} onChange={setGroups} />,
     permissions: <StepPermissions groups={groups} onChange={setGroups} />,
     filters: <StepFilters groups={groups} onChange={setGroups} />,
+    identity: <StepIdentity groups={groups} onChange={setGroups} />,
     review: <StepReview groups={groups} />,
   };
 

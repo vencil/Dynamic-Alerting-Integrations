@@ -1,0 +1,9 @@
+groups:
+  - name: org-ops
+    match:
+      groups: ["org-ops"]
+      claims:
+        "org-code": ["006000J", "006001K"]
+    tenants: ["acme-*"]
+    permissions: [write]
+    org-scope: org-code

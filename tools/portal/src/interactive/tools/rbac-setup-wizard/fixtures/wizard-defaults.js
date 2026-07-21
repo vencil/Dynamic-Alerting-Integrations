@@ -25,6 +25,7 @@ const RBAC_STEPS = [
   { id: 'tenants', label: () => t('分配租戶', 'Assign Tenants') },
   { id: 'permissions', label: () => t('設定權限', 'Set Permissions') },
   { id: 'filters', label: () => t('環境/域名篩選', 'Environment/Domain Filters') },
+  { id: 'identity', label: () => t('身分條件（選填）', 'Identity Conditions (optional)') },
   { id: 'review', label: () => t('檢視與匯出', 'Review & Export') },
 ];
 

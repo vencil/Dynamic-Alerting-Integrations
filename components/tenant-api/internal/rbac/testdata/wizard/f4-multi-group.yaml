@@ -1,0 +1,16 @@
+groups:
+  - name: platform-admins
+    tenants: ["*"]
+    permissions: [admin]
+    domains: ["finance"]
+  - name: org-ops
+    match:
+      groups: ["org-ops"]
+      claims:
+        "org-code": ["006000J"]
+    tenants: ["acme-*"]
+    permissions: [write]
+    org-scope: org-code
+  - name: sre-oncall
+    tenants: ["alpha"]
+    permissions: [read]
