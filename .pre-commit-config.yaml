@@ -967,7 +967,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: ^(tools/portal/src/interactive/tools/rule-pack-detail\.jsx|rule-packs/rule-pack-.*\.yaml|k8s/03-monitoring/configmap-rules-.*\.yaml|operator-manifests/da-rule-pack-.*\.yaml)$
+        files: ^(scripts/tools/lint/check_portal_rulepack_claims\.py|tools/portal/src/interactive/tools/rule-pack-detail\.jsx|rule-packs/rule-pack-.*\.yaml|k8s/03-monitoring/configmap-rules-.*\.yaml|operator-manifests/da-rule-pack-.*\.yaml)$
         # rule-pack-detail.jsx is HAND-maintained customer-facing copy with no
         # generator behind it. It had drifted to 28 alert names that exist in no
         # rule tree — invented capability claims a prospect can read. Note the

@@ -243,6 +243,59 @@ def test_pack_missing_recording_array_entirely_raises(tmp_path: Path):
         guard.parse_portal_claims(portal)
 
 
+def test_pack_with_brace_not_at_line_end_fails_loud(tmp_path: Path):
+    """Probe D: a pack whose opening `{` is merged onto the label line escapes
+    _PACK_RE and the whole pack silently vanishes (the per-pack raises never fire
+    — other packs still parse). The structural completeness cross-check must catch
+    the partial loss, making the docstring's "FAILS LOUD" claim true for it too."""
+    portal = tmp_path / guard.PORTAL_REL
+    portal.parent.mkdir(parents=True, exist_ok=True)
+    portal.write_text(
+        "const RULE_PACKS = {\n"
+        "  mariadb: {\n"
+        "    label: 'x',\n"
+        "    recording: [],\n"
+        "    alerts: [\n"
+        "      { name: 'A1', severity: 'warning', expr: 'x', desc: 'd', action: 'a' },\n"
+        "    ]\n"
+        "  },\n"
+        "  redis: { label: 'y',\n"
+        "    recording: [],\n"
+        "    alerts: [\n"
+        "      { name: 'R1', severity: 'warning', expr: 'x', desc: 'd', action: 'a' },\n"
+        "    ]\n"
+        "  },\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="silently dropped"):
+        guard.parse_portal_claims(portal)
+
+
+def test_field_reordered_entry_fails_loud(tmp_path: Path):
+    """Probe E: an entry with `severity` before `name` is skipped by the
+    name-first _ALERT_ENTRY_RE, so a bogus name hidden in it would escape (the
+    pack still has a valid entry, so the per-pack raise never fires). The
+    structural cross-check (file `name:` count vs parsed) catches it."""
+    portal = tmp_path / guard.PORTAL_REL
+    portal.parent.mkdir(parents=True, exist_ok=True)
+    portal.write_text(
+        "const RULE_PACKS = {\n"
+        "  mariadb: {\n"
+        "    label: 'x',\n"
+        "    recording: [],\n"
+        "    alerts: [\n"
+        "      { name: 'A1', severity: 'warning', expr: 'x', desc: 'd', action: 'a' },\n"
+        "      { severity: 'critical', name: 'BOGUS', expr: 'x', desc: 'd', action: 'a' },\n"
+        "    ]\n"
+        "  },\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="silently dropped"):
+        guard.parse_portal_claims(portal)
+
+
 def test_parser_reads_every_pack_in_the_real_file(repo: Path):
     claims = guard.parse_portal_claims(repo / guard.PORTAL_REL)
     # Guards against a regex that silently matches only the first pack.

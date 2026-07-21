@@ -235,6 +235,26 @@ def parse_portal_claims(path: Path) -> Dict[str, Dict[str, List]]:
 
         claims[pack] = {"alerts": alert_entries, "recording": recording_names}
 
+    # Structural completeness — the guard that makes the "FAILS LOUD" claim above
+    # TRUE for PARTIAL loss, not just total loss. Two silent-drop paths exist:
+    #   (D) a pack whose opening `{` is not at line end → _PACK_RE misses it → the
+    #       whole pack (and every claim in it) vanishes; the loop above never sees it.
+    #   (E) an entry with `severity` before `name` → _ALERT_ENTRY_RE (name-first)
+    #       skips it → a bogus name inside it escapes.
+    # Both leave the per-pack raises above unhit (other packs/entries still parse),
+    # so the guard would report success while silently unchecking real claims —
+    # the exact fail-open this guard exists to prevent. Cross-check every
+    # `name: '...'` token in the file against what we actually consumed.
+    total_in_file = len(re.findall(r"name: '[^']+'", src))
+    total_parsed = sum(len(v["alerts"]) + len(v["recording"]) for v in claims.values())
+    if total_parsed != total_in_file:
+        raise ValueError(
+            f"{PORTAL_REL}: parsed {total_parsed} entries but the file has "
+            f"{total_in_file} `name: '...'` tokens — {total_in_file - total_parsed} "
+            "were silently dropped (a pack whose `{` is not at line end, or an entry "
+            "with fields reordered). Every entry must be consumed; fix the file shape "
+            "or the parser, do not ignore."
+        )
     return claims
 
 
