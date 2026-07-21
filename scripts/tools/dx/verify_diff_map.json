@@ -641,7 +641,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "833d7c104cb1e82b84c2e1736dcd508d207d83097eaf3e93d6bed962c9d79a6b",
+ "source_digest": "87bb0c6476258c1a72c30299e56e8335dfa7106c4855682dad3e48d31ed51813",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -767,6 +767,7 @@
   "tests/lint/test_check_single_writer_invariant.py",
   "tests/lint/test_check_structure.py",
   "tests/lint/test_check_subprocess_timeout.py",
+  "tests/lint/test_check_threshold_reachability.py",
   "tests/lint/test_check_translation.py",
   "tests/lint/test_check_undefined_tokens.py",
   "tests/lint/test_check_unpinned_deps.py",
@@ -1671,6 +1672,9 @@
   ],
   "scripts/tools/lint/check_subprocess_timeout.py": [
    "tests/lint/test_check_subprocess_timeout.py"
+  ],
+  "scripts/tools/lint/check_threshold_reachability.py": [
+   "tests/lint/test_check_threshold_reachability.py"
   ],
   "scripts/tools/lint/check_vmalert_coverage.py": [
    "tests/rulepacks/test_platform_rules_extract_sync.py"
