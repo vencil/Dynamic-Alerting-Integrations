@@ -69,8 +69,8 @@
       "Bash(pre-commit --version)",
       "Bash(pre-commit run:*)",
       "Bash(grep \"^Passed\\\\|^Failed\\\\|Failed$\\\\|Passed$\")",
-      "Bash(python scripts/tools/dx/generate_tool_map.py --generate)",
-      "Bash(python scripts/tools/dx/generate_doc_map.py --generate)"
+      "Bash(python scripts/tools/dx/generate_tool_map.py --generate --lang all)",
+      "Bash(python scripts/tools/dx/generate_doc_map.py --generate --lang all)"
     ],
     "additionalDirectories": [
       "/tmp"

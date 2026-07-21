@@ -70,8 +70,9 @@ def check_tool_map(repo: Path) -> tuple[bool, str]:
 
     generate_tool_map.py --check prints a clear "outdated" line and is tightly
     scoped to scripts/tools/**/*.py vs docs/internal/tool-map.md consistency.
-    Caveat: exits 0 even on drift (known issue with that script). We parse
-    stdout for the failure sentinel instead of relying on exit code.
+    The child exits 1 on drift; we ALSO parse stdout for the "outdated"
+    sentinel so a drift is distinguished from a crash (a Traceback also
+    yields a non-zero exit) and attributed to the right lang file.
 
     We pass `-X utf8` to the child so it inherits PEP 540 UTF-8 mode — the
     script prints emoji (✅ / ❌) and would otherwise crash on Windows
@@ -90,7 +91,7 @@ def check_tool_map(repo: Path) -> tuple[bool, str]:
     # passes CreateProcess lookup but exits 49 with "Python was not found".
     # See windows-mcp-playbook trap #63.
     rc, stdout, stderr = run(
-        [sys.executable, "-X", "utf8", "scripts/tools/dx/generate_tool_map.py", "--check"],
+        [sys.executable, "-X", "utf8", "scripts/tools/dx/generate_tool_map.py", "--check", "--lang", "all"],
         repo,
     )
     combined = (stdout + stderr).strip()

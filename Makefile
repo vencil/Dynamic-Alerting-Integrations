@@ -822,7 +822,7 @@ lint-new-script: ## Run all CLI/SAST conventions on a single new lint script (PR
 	@echo "==> [2/3] SAST conventions (encoding / shell=True / yaml-safe-load / stderr-routing / etc.)"
 	@python3 -m pytest tests/shared/test_sast.py -k "$$(basename $(SCRIPT))" -v --no-header
 	@echo "==> [3/3] tool-map registration check"
-	@python3 scripts/tools/dx/generate_tool_map.py --check || \
+	@python3 scripts/tools/dx/generate_tool_map.py --check --lang all || \
 		(echo "Hint: run 'python3 scripts/tools/dx/generate_tool_map.py --generate --lang all' to regenerate" && exit 1)
 	@echo ""
 	@echo "✓ All convention gates pass for $(SCRIPT)"
