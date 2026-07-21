@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Threshold-key reachability gate — every alert-consumed threshold key must be
-producible by the platform-defaults path (TRK-337 / #1189).
+"""Threshold-key reachability gate — every alert-consumed threshold key must be producible by the platform-defaults path (TRK-337 / #1189).
 
 WHY: a rule-pack alert reads its threshold from `tenant:alert_threshold:<key>`,
 which is populated from `user_threshold{component,metric}` — emitted by the
@@ -165,8 +164,8 @@ def main(argv: list[str] | None = None) -> int:
             "producible by the platform-defaults path (TRK-337)"))
     parser.add_argument(
         "--ci", action="store_true",
-        help=i18n_text("僅在出現新的不可達 key 時 exit 1（已知的 18 個為 INFO）",
-                       "exit 1 only on NEW unreachable keys (the known 18 are INFO)"))
+        help=i18n_text("新增不可達 key 或 KNOWN_UNWIRED exit-lock 破口即 exit 1（已知的 18 個為 INFO）",
+                       "exit 1 on NEW unreachable keys or a KNOWN_UNWIRED exit-lock breach (the known 18 are INFO)"))
     args = parser.parse_args(argv)
 
     try:

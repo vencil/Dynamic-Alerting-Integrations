@@ -125,3 +125,29 @@ def test_grandfathered_key_no_longer_demanded_is_a_stale_exemption():
     )
     assert any("STALE-EXEMPTION" in e and "demands it" in e
                for e in result["errors"]), result
+
+
+# ── the CLI exit-code contract (main), independent of the real artifacts ──────
+
+def test_main_without_ci_is_report_only(monkeypatch):
+    """Bare `main([])` never fails on errors — it is report-only, so a green
+    local commit is not gated on the (grandfathered) unwired set."""
+    monkeypatch.setattr(gate, "run_check",
+                        lambda: {"errors": ["some drift"], "infos": []})
+    assert gate.main([]) == gate.EXIT_OK
+
+
+def test_main_ci_fails_on_errors(monkeypatch):
+    """`--ci` escalates any error (new unreachable OR exit-lock breach) to
+    EXIT_VIOLATION — this is what the CI hook relies on."""
+    monkeypatch.setattr(gate, "run_check",
+                        lambda: {"errors": ["a breach"], "infos": []})
+    assert gate.main(["--ci"]) == gate.EXIT_VIOLATION
+
+
+def test_main_ci_passes_when_clean(monkeypatch):
+    """`--ci` returns 0 when there are no errors, even with INFO-level
+    grandfathered entries present."""
+    monkeypatch.setattr(gate, "run_check",
+                        lambda: {"errors": [], "infos": ["18 known-unwired"]})
+    assert gate.main(["--ci"]) == gate.EXIT_OK
