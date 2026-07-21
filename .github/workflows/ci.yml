@@ -46,6 +46,7 @@ jobs:
       # coverage-py3.13 baseline artifact flowing for coverage-delta).
       go_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.go }}
       python_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.python }}
+      portal_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.portal }}
     steps:
       # No actions/checkout: REST-API mode queries the changed-file list
       # via the GitHub API (see validate.yaml's identical note).
@@ -132,6 +133,19 @@ jobs:
               - "renovate.json"
               - ".devcontainer/**"
               - ".github/workflows/**"
+            # Portal Tests: Vitest + esbuild build verification + committed-dist
+            # freshness + the RBAC wizard drift byte-clamp. Runs when portal
+            # source or its committed dist change, AND when the wizard testdata
+            # fixtures change: those fixtures live under components/tenant-api/**
+            # but the byte-clamp that binds them to the JS generator is a Vitest,
+            # so a hand-edited fixture must run THIS leg or the JS end of the
+            # two-ended tripwire is silently skipped. (ci.yml itself is included
+            # so a change to this job's own config re-runs it — same as `go`.)
+            portal:
+              - "tools/portal/**"
+              - "docs/assets/dist/**"
+              - "components/tenant-api/internal/rbac/testdata/wizard/**"
+              - ".github/workflows/ci.yml"
 
   lint:
     name: Lint
@@ -1234,13 +1248,21 @@ jobs:
           done
           echo "Go test gate satisfied."
 
-  portal-tests:
+  portal-tests-run:
     # TECH-DEBT-030a (#247): Vitest unit tests + esbuild build verification
     # for portal JSX tools. Foundation PR creates the harness with empty
     # manifest; subsequent PRs (TRK-230b..f) add tools to the manifest as
     # they migrate to ESM.
-    name: Portal Tests
+    #
+    # CI-ROI: path-gated (mirrors the go-tests / python-tests split) so it does
+    # not burn ~1 min on PRs that touch no portal file. The REQUIRED check is
+    # the "Portal Tests" AGGREGATE GATE below (job key `portal-tests`), NOT this
+    # job — a required check matched to a path-gated job would sit permanently
+    # pending whenever it path-skips.
+    name: Portal Tests Run
     runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.portal_changed == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -1292,6 +1314,55 @@ jobs:
       - name: Run Vitest unit tests
         working-directory: tools/portal
         run: npm run test
+
+  portal-tests:
+    # Aggregation gate for the path-gated portal-tests-run job above. The job
+    # name is kept EXACTLY "Portal Tests" — the check-run name that branch
+    # protection matches on — so it ALWAYS reports (even when the run job
+    # path-skips) and CAN be made a required status check without the
+    # permanently-pending deadlock a skipped path-gated required check causes.
+    # Mirrors the go-tests / python-tests aggregation gates. If this name ever
+    # changes, update the branch-protection required-checks entry together
+    # (owner action). New portal test jobs should join HERE (add to needs +
+    # the loop) rather than each getting their own required check.
+    name: Portal Tests
+    runs-on: ubuntu-latest
+    # Pure result-aggregation gate — touches no repo content, needs no token.
+    permissions: {}
+    needs: [detect-changes, portal-tests-run]
+    # always(): without it a skipped/failed dependency would SKIP this job, and
+    # a skipped check would satisfy branch protection — the gate must run and
+    # FAIL, not skip, when the run job did not succeed.
+    if: always()
+    steps:
+      - name: Verify the portal test job succeeded (or was path-skipped as not-needed)
+        # Mirrors the go-tests gate semantics exactly:
+        #   success                                    → PASS
+        #   skipped AND detect said portal not needed  → PASS
+        #   anything else (failure/cancelled, or skipped while detect said
+        #   needed, or detect-changes itself not green) → FAIL. A broken detect
+        #   job must never let the test silently skip to green.
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          PORTAL_CHANGED: ${{ needs.detect-changes.outputs.portal_changed }}
+          R_PORTAL: ${{ needs.portal-tests-run.result }}
+        run: |
+          echo "detect-changes:   $DETECT_RESULT (portal_changed=$PORTAL_CHANGED)"
+          echo "portal-tests-run: $R_PORTAL"
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::detect-changes did not succeed — refusing to treat a skipped portal test as green"
+            exit 1
+          fi
+          if [ "$R_PORTAL" = "success" ]; then
+            echo "Portal test gate satisfied."
+            exit 0
+          fi
+          if [ "$R_PORTAL" = "skipped" ] && [ "$PORTAL_CHANGED" != "true" ]; then
+            echo "Portal test gate satisfied (path-skipped as not-needed)."
+            exit 0
+          fi
+          echo "::error::the portal test job did not succeed (result=$R_PORTAL)"
+          exit 1
 
   lint-docs:
     name: Lint Documentation
