@@ -213,6 +213,7 @@ lang: zh
 | `check_structure.py` | Project structure enforcement. |
 | `check_subprocess_timeout.py` | flag subprocess calls without explicit timeout. |
 | `check_threshold_observed_map.py` | Drift-guard for the threshold observed-map (#719). |
+| `check_threshold_reachability.py` | Threshold-key reachability gate — every alert-consumed threshold key must be producible by the platform-defaults path (TRK-337 / #1189). |
 | `check_tool_registry_jsx_parity.py` | every tool-registry.yaml entry must have a backing .jsx file (and vice versa). |
 | `check_translation.py` | 自動化翻譯品質檢查 |
 | `check_undefined_tokens.py` | Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css (with --report-orphans discovery mode). |

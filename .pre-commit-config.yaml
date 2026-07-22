@@ -1068,6 +1068,18 @@ repos:
         # --generate-observed-map` + re-resolve needs_review, then commit the map.
         files: ^(scripts/tools/ops/metric_observed_map\.yaml|rule-packs/rule-pack-.*\.yaml|scripts/tools/(ops/_observed_map_lib|lint/check_threshold_observed_map)\.py)$
 
+      - id: threshold-reachability-check
+        name: "threshold key reachability — every alert-demanded key must be producible by platform defaults (TRK-337)"
+        entry: python3 -X utf8 scripts/tools/lint/check_threshold_reachability.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        # Fires when the DEMAND side (a rule-pack alert's user_threshold), the
+        # SUPPLY side (scaffold_tenant.generate_defaults), the shared extractor,
+        # or the gate itself changes. FAIL only on NEW unreachable keys or a
+        # KNOWN_UNWIRED exit-lock breach; the 18 grandfathered keys are INFO.
+        files: ^(rule-packs/rule-pack-.*\.yaml|scripts/tools/ops/(scaffold_tenant|_observed_map_lib)\.py|scripts/tools/lint/check_threshold_reachability\.py)$
+
       - id: vmalert-coverage-check
         name: rule-pack alert firing-coverage baseline (#947 gate A/replay gap guard)
         entry: python3 -X utf8 scripts/tools/lint/check_vmalert_coverage.py --ci
