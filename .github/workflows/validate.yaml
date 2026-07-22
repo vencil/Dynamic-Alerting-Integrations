@@ -102,6 +102,13 @@ jobs:
               - "tests/**"
               - ".github/custom-rule-policy.yaml"
               - ".github/workflows/validate.yaml"
+              # .pre-commit-config.yaml is the source-of-truth for the pre-commit
+              # hook count that the "Count consistency" step (bump_docs
+              # --sync-counts --check) enforces against CLAUDE.md. Without it here,
+              # a hook add/remove/stage-flip touching ONLY this file skips
+              # version-check → the hook-count drift the step exists to catch slips
+              # through (the silent 84→86 drift happened exactly this way).
+              - ".pre-commit-config.yaml"
               # helm/** and docs/** PRs (chart hardening, governance docs) hit the SAME
               # required-checks-contract gap the tenant-api note above describes: main's
               # branch protection requires this workflow's jobs, but the path filter
@@ -277,3 +284,5 @@ jobs:
           python-version: "3.13"
       - run: pip install pyyaml -c requirements/ci-constraints.txt
       - run: python scripts/tools/dx/bump_docs.py --check
+      - name: Count consistency (hooks / tools / rule packs / JSX)
+        run: python scripts/tools/dx/bump_docs.py --sync-counts --check

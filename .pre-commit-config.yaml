@@ -289,6 +289,18 @@ repos:
         files: ^rule-packs/.*\.ya?ml$
         additional_dependencies: ['pyyaml']
 
+      - id: verify-diff-check
+        name: verify_diff map freshness (source→test mapping)
+        entry: python3 -X utf8 scripts/tools/dx/verify_diff.py --check
+        language: python
+        pass_filenames: false
+        # 觸發面須對齊 verify_diff 的 source_digest 輸入（build_module_index
+        # 掃 scripts/** + components/da-tools/app/** + tests/**）。窄於此 →
+        # 一個只改 scripts/{ops,dx,session-guards}/*.py 的 commit 會 stale 映射
+        # 卻不觸發本 hook，只在 CI 尾端才紅（本 PR 要消滅的那種 push cycle）。
+        files: ^(scripts/|components/da-tools/app/|tests/)
+        additional_dependencies: ['pyyaml']
+
       - id: glossary-check
         name: Glossary abbreviation sync
         entry: python3 -X utf8 scripts/tools/dx/sync_glossary_abbr.py --check
