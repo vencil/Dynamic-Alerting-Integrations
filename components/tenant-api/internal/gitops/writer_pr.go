@@ -24,6 +24,16 @@ type PRWriteResult struct {
 	FilePath   string // the path of the written file
 }
 
+// abortFeatureBranch best-effort rolls back a failed PR write: force the
+// worktree back to a clean base FIRST, then drop the feature branch.
+// The ordering is load-bearing (branch -D refuses to delete the branch we
+// are still on / with dirty state). Errors are intentionally ignored —
+// callers are already returning the primary failure. Callers hold w.mu.
+func (w *Writer) abortFeatureBranch(base, branchName string) {
+	_ = w.checkoutBaseClean(base)
+	_ = w.gitExec("branch", "-D", branchName)
+}
+
 // WritePR validates and writes a tenant config to a feature branch for PR creation.
 //
 // Unlike Write(), this method:
@@ -84,15 +94,13 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	if err := os.WriteFile(filePath, []byte(yamlContent), 0644); err != nil {
 		// Rollback: force back to a clean base (the file we just wrote is now a
 		// dirty tracked change) + drop the branch.
-		_ = w.checkoutBaseClean(base)
-		_ = w.gitExec("branch", "-D", branchName)
+		w.abortFeatureBranch(base, branchName)
 		return nil, fmt.Errorf("write file: %w", err)
 	}
 
 	// Step 5: commit on feature branch
 	if err := w.gitCommit(filePath, tenantID, authorEmail); err != nil {
-		_ = w.checkoutBaseClean(base)
-		_ = w.gitExec("branch", "-D", branchName)
+		w.abortFeatureBranch(base, branchName)
 		return nil, fmt.Errorf("git commit on branch: %w", err)
 	}
 
@@ -208,8 +216,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	for _, op := range ops {
 		content, existing, err := w.readMergeValidate(op.TenantID, op.Merge)
 		if err != nil {
-			_ = w.checkoutBaseClean(base)
-			_ = w.gitExec("branch", "-D", branchName)
+			w.abortFeatureBranch(base, branchName)
 			return nil, err
 		}
 		if existing != nil && string(existing) == content {
@@ -217,13 +224,11 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		}
 		filePath := filepath.Join(w.configDir, op.TenantID+".yaml")
 		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
-			_ = w.checkoutBaseClean(base)
-			_ = w.gitExec("branch", "-D", branchName)
+			w.abortFeatureBranch(base, branchName)
 			return nil, fmt.Errorf("write file for %s: %w", op.TenantID, err)
 		}
 		if err := w.gitCommit(filePath, op.TenantID, authorEmail); err != nil {
-			_ = w.checkoutBaseClean(base)
-			_ = w.gitExec("branch", "-D", branchName)
+			w.abortFeatureBranch(base, branchName)
 			return nil, fmt.Errorf("commit for %s: %w", op.TenantID, err)
 		}
 		changed = true
@@ -234,8 +239,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	// branch back and signal the handler to return a clean "no changes" result —
 	// the PR-mode analogue of WriteMerged's direct-path no-op success (#1102).
 	if !changed {
-		_ = w.checkoutBaseClean(base)
-		_ = w.gitExec("branch", "-D", branchName)
+		w.abortFeatureBranch(base, branchName)
 		return nil, ErrNoChanges
 	}
 

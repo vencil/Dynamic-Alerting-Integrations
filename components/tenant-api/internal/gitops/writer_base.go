@@ -132,15 +132,11 @@ func (w *Writer) fetchOriginBase(base string) error {
 // hasOriginRemote reports whether an "origin" remote is configured. Used to skip
 // the base fetch in dev/local/unit-test setups that have no forge.
 func (w *Writer) hasOriginRemote() bool {
-	cmd, _, cancel := w.gitCmd("-C", w.gitDir, "remote", "get-url", "origin")
-	defer cancel()
-	return cmd.Run() == nil
+	return w.gitCheck("remote", "get-url", "origin")
 }
 
 // originRefExists reports whether the remote-tracking ref refs/remotes/origin/<base>
 // exists locally (i.e. a successful fetch/clone has populated it at least once).
 func (w *Writer) originRefExists(base string) bool {
-	cmd, _, cancel := w.gitCmd("-C", w.gitDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+base)
-	defer cancel()
-	return cmd.Run() == nil
+	return w.gitCheck("rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+base)
 }
