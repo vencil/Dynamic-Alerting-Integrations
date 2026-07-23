@@ -117,112 +117,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 		// All operations are consolidated into a single PR/MR.
 		// Supports both GitHub PRs and GitLab MRs via platform interfaces.
 		if d.WriteMode.IsPRMode() && d.PRClient != nil && d.PRTracker != nil {
-			// Pre-validate all ops (RBAC + policy) before creating any branch
-			var batchOps []gitops.PRBatchOp
-			var batchResults []BatchResult
-			for _, op := range req.Operations {
-				if err := ValidateTenantID(op.TenantID); err != nil {
-					batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
-					continue
-				}
-				if !OrgAllowed(d.RBAC, d.TenantOrg, p, op.TenantID, rbac.PermWrite) {
-					batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: "insufficient permissions"})
-					continue
-				}
-				if d.Policy != nil {
-					if violations := d.Policy.CheckWrite(op.TenantID, op.Patch); len(violations) > 0 {
-						msgs := make([]string, len(violations))
-						for i, v := range violations {
-							msgs[i] = v.Message
-						}
-						batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: "policy violation: " + strings.Join(msgs, "; ")})
-						continue
-					}
-				}
-				// #1097: carry a merge closure, not pre-built content, so the
-				// authoritative partial merge runs under the writer lock against
-				// the fresh base (preserving untouched keys). op is per-iteration
-				// (Go 1.22+), so the closure binds this op's TenantID/Patch.
-				op := op
-				batchOps = append(batchOps, gitops.PRBatchOp{
-					TenantID: op.TenantID,
-					Merge: func(existing []byte) (string, error) {
-						return mergePatchYAML(existing, op.TenantID, op.Patch)
-					},
-				})
-				batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "included"})
-			}
-
-			if len(batchOps) == 0 {
-				writeJSON(rw, http.StatusOK, BatchResponse{
-					Status:  "completed",
-					Results: batchResults,
-					Summary: fmt.Sprintf("%d failed", len(batchResults)),
-					Message: "No valid operations to create PR/MR.",
-				})
-				return
-			}
-
-			result, err := d.Writer.WritePRBatch(r.Context(), batchOps, email)
-			if err != nil {
-				// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
-				// retry-hinting 503s (shared with the single-write path).
-				if writeWriteFlowError(rw, r, err) {
-					return
-				}
-				// #1102: an all-no-op batch (idempotent patch / retry) produced no
-				// commits — return a clean "no changes" success, never a forge error.
-				if errors.Is(err, gitops.ErrNoChanges) {
-					writeJSON(rw, http.StatusOK, BatchResponse{
-						Status:  "completed",
-						Results: batchResults,
-						Summary: fmt.Sprintf("%d unchanged", len(batchOps)),
-						Message: "No changes to apply; no PR/MR created.",
-					})
-					return
-				}
-				// #795 F1: a malformed op body is a CLIENT error → 400, not a 500.
-				if errors.Is(err, gitops.ErrValidation) {
-					WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
-					return
-				}
-				// Anything else is an unexpected git failure → generic 500.
-				WriteJSONError(rw, r, http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
-				return
-			}
-
-			// PR-6/11: shared post-write flow via createPRAndRegister.
-			// Per-tenant tracker entries get every field of the PR
-			// response (Title / HeadRef / CreatedAt) preserved
-			// consistently with the single-tenant path.
-			prTitle := fmt.Sprintf("[tenant-api] Batch update %d tenants", len(batchOps))
-			tenantList := make([]string, len(batchOps))
-			for i, op := range batchOps {
-				tenantList[i] = op.TenantID
-			}
-			prBody := fmt.Sprintf("**Operator:** %s\n**Source:** tenant-manager UI (batch)\n**Tenants:** %s",
-				email, strings.Join(tenantList, ", "))
-			pr, err := createPRAndRegister(d,
-				prTitle, prBody, result.BranchName,
-				[]string{"tenant-api", "auto-generated", "batch"},
-				tenantList,
-			)
-			if err != nil {
-				// Shared with the single-write path: forbidden → clean 403 (previously
-				// the batch path was missing this and leaked a generic 503),
-				// circuit-open → sanitized 503, else generic 503.
-				writeForgeCreateError(rw, r, d.PRClient.ProviderName(), err)
-				return
-			}
-
-			writeJSON(rw, http.StatusOK, BatchResponse{
-				Status:   "pending_review",
-				PRURL:    pr.WebURL,
-				PRNumber: pr.Number,
-				Results:  batchResults,
-				Summary:  fmt.Sprintf("%d included in PR/MR, %d failed", len(batchOps), len(batchResults)-len(batchOps)),
-				Message:  fmt.Sprintf("Batch PR/MR created with %d tenant changes.", len(batchOps)),
-			})
+			batchTenantsPRMode(d, rw, r, req, email, p)
 			return
 		}
 
@@ -247,6 +142,121 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 			Summary: summarizeBatchResults(results),
 		})
 	}
+}
+
+// batchTenantsPRMode handles a batch request in PR write-back mode (ADR-011):
+// all operations are consolidated into a single PR/MR (GitHub or GitLab via
+// the platform interfaces). Split out of BatchTenants (Cycle 10 refactor) to
+// keep the handler readable — behavior is unchanged. The caller must have
+// verified IsPRMode && PRClient != nil && PRTracker != nil. Always writes a
+// response.
+func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req BatchRequest, email string, p *rbac.VerifiedPrincipal) {
+	// Pre-validate all ops (RBAC + policy) before creating any branch
+	var batchOps []gitops.PRBatchOp
+	var batchResults []BatchResult
+	for _, op := range req.Operations {
+		if err := ValidateTenantID(op.TenantID); err != nil {
+			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
+			continue
+		}
+		if !OrgAllowed(d.RBAC, d.TenantOrg, p, op.TenantID, rbac.PermWrite) {
+			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: "insufficient permissions"})
+			continue
+		}
+		if d.Policy != nil {
+			if violations := d.Policy.CheckWrite(op.TenantID, op.Patch); len(violations) > 0 {
+				msgs := make([]string, len(violations))
+				for i, v := range violations {
+					msgs[i] = v.Message
+				}
+				batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: "policy violation: " + strings.Join(msgs, "; ")})
+				continue
+			}
+		}
+		// #1097: carry a merge closure, not pre-built content, so the
+		// authoritative partial merge runs under the writer lock against
+		// the fresh base (preserving untouched keys). op is per-iteration
+		// (Go 1.22+), so the closure binds this op's TenantID/Patch.
+		op := op
+		batchOps = append(batchOps, gitops.PRBatchOp{
+			TenantID: op.TenantID,
+			Merge: func(existing []byte) (string, error) {
+				return mergePatchYAML(existing, op.TenantID, op.Patch)
+			},
+		})
+		batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "included"})
+	}
+
+	if len(batchOps) == 0 {
+		writeJSON(rw, http.StatusOK, BatchResponse{
+			Status:  "completed",
+			Results: batchResults,
+			Summary: fmt.Sprintf("%d failed", len(batchResults)),
+			Message: "No valid operations to create PR/MR.",
+		})
+		return
+	}
+
+	result, err := d.Writer.WritePRBatch(r.Context(), batchOps, email)
+	if err != nil {
+		// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
+		// retry-hinting 503s (shared with the single-write path).
+		if writeWriteFlowError(rw, r, err) {
+			return
+		}
+		// #1102: an all-no-op batch (idempotent patch / retry) produced no
+		// commits — return a clean "no changes" success, never a forge error.
+		if errors.Is(err, gitops.ErrNoChanges) {
+			writeJSON(rw, http.StatusOK, BatchResponse{
+				Status:  "completed",
+				Results: batchResults,
+				Summary: fmt.Sprintf("%d unchanged", len(batchOps)),
+				Message: "No changes to apply; no PR/MR created.",
+			})
+			return
+		}
+		// #795 F1: a malformed op body is a CLIENT error → 400, not a 500.
+		if errors.Is(err, gitops.ErrValidation) {
+			WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
+			return
+		}
+		// Anything else is an unexpected git failure → generic 500.
+		WriteJSONError(rw, r, http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
+		return
+	}
+
+	// PR-6/11: shared post-write flow via createPRAndRegister.
+	// Per-tenant tracker entries get every field of the PR
+	// response (Title / HeadRef / CreatedAt) preserved
+	// consistently with the single-tenant path.
+	prTitle := fmt.Sprintf("[tenant-api] Batch update %d tenants", len(batchOps))
+	tenantList := make([]string, len(batchOps))
+	for i, op := range batchOps {
+		tenantList[i] = op.TenantID
+	}
+	prBody := fmt.Sprintf("**Operator:** %s\n**Source:** tenant-manager UI (batch)\n**Tenants:** %s",
+		email, strings.Join(tenantList, ", "))
+	pr, err := createPRAndRegister(d,
+		prTitle, prBody, result.BranchName,
+		[]string{"tenant-api", "auto-generated", "batch"},
+		tenantList,
+	)
+	if err != nil {
+		// Shared with the single-write path: forbidden → clean 403 (previously
+		// the batch path was missing this and leaked a generic 503),
+		// circuit-open → sanitized 503, else generic 503.
+		writeForgeCreateError(rw, r, d.PRClient.ProviderName(), err)
+		return
+	}
+
+	writeJSON(rw, http.StatusOK, BatchResponse{
+		Status:   "pending_review",
+		PRURL:    pr.WebURL,
+		PRNumber: pr.Number,
+		Results:  batchResults,
+		Summary:  fmt.Sprintf("%d included in PR/MR, %d failed", len(batchOps), len(batchResults)-len(batchOps)),
+		Message:  fmt.Sprintf("Batch PR/MR created with %d tenant changes.", len(batchOps)),
+	})
 }
 
 // executeBatchOps runs batch operations synchronously and returns results.
