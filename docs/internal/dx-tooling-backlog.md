@@ -20,6 +20,26 @@ version: v2.9.0
 
 ## 候選 — DX 工具改善
 
+### TRK-336: 補齊本地 gate 覆蓋（CI-only / 單邊 gate 執行點判準）
+```yaml
+id: TRK-336
+tracking_kind: dx
+status: in-progress
+domain: ci
+created_at: 2026-07-20
+updated_at: 2026-07-22
+```
+
+**來源**：[#1185](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1185)。一類品質 gate 唯一攔截點在 CI——本地 commit / `pr-preflight` 全綠、push 後才紅，修一輪一個 push cycle（如 `verify_diff_map.json` 保鮮 gate 自 #1156 已被 11 個 PR 撞紅）。issue 用「本地成本（<~3s、純 Python、無外部相依）/ 跳閘頻率 / 可限縮性（`files:` 能否綁窄路徑）」三軸判準決定 gate 放本地或維持 CI-only，並列四類確證缺口：A 有 `--check` 沒呼叫者、B 單邊 gate（雙產物只驗其一）、C 文件假宣稱、D 分類法缺 CI-only 類。
+
+**工項切分（三 PR）**：
+
+- **PR1（gap B）✅ [#1191](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1191)**：`tool-map-check` / `doc-map-check` 補 `--lang all`，en 檔納入 gate。
+- **PR2（gap A）本項**：新增 `verify-diff-check` pre-commit hook（`files: ^(scripts/|components/da-tools/app/|tests/)`、`pass_filenames: false`），補上 `verify_diff --check` 的本地防線（原唯一防線是 CI pytest 尾端的 `test_repo_check_is_green`）。並把 `bump_docs --sync-counts --check` 接進 CI 的 Version Consistency job——recon 發現這是 gap A 的另一實例（count 對帳 `--check` 存在但無 CI/pre-commit 呼叫者，致 hook count 84→86 靜默漂移），同時推進 TRK-016 的 README / CLAUDE.md count 面向。接上時修 3 筆既有漂移使 gate 轉綠（CLAUDE.md hook 84→87、README/README.en Python-tools 203→205）。
+- **PR3（gap C+D）待做**：修 `governance-security.md`（+`.en`）的 SAST 假宣稱（路徑錯 + 「每次 commit」不實＝實為 CI-only）；`hook-vs-skill-coverage.md` 加 ⚙️ CI-only 第四類 + 逐條重分類 + 重數 hook + 修第 168 行「信任 hook 會擋」誤導。
+
+**follow-up（不進 PR2）**：bump_docs `_build_count_rules` 有 7 條對 CLAUDE.md 的 count 規則已 `no match`（count phrase 早搬離 CLAUDE.md）＝死規則 cruft；接 count gate 不受影響（要保護的字串已不在 CLAUDE.md），但值得另開清理。
+
 ### win-escape-helpers PR #29 follow-ups
 
 **來源**：PR #29（`chore/sandbox-hook-runner`）code review 的七點建議裡，除了 #1/#2（已在同 PR 內修完 doc label 對齊）以外的五個非阻擋項目。全部屬於 polish / 韌性增強，不影響當前 `make win-commit` 正確性。
@@ -594,6 +614,8 @@ updated_at: 2026-05-13
 **前置**：盤點 CHANGELOG 中「機械性可驗證計數」vs「敘述性計數」的分界（例如「新增 6 個場景文件」中的 6 就不該是全域計數，只是 release-local）。
 
 **驗收**：故意把 CHANGELOG v2.7.0 的 `112 個 Python 工具` 改成 117 → lint 報錯；改回 112 → lint pass。
+
+**部分推進（TRK-336 PR2，2026-07-22）**：README.md / CLAUDE.md 的 count 面向已由 `bump_docs --sync-counts --check` 接進 CI Version Consistency job 強制（本項「搭配」段所述）；剩 **CHANGELOG 各 section 內數字解析**（本項主目標）未做。
 
 ### TRK-017: Desktop Commander 長命令 Watchdog Wrapper
 ```yaml
