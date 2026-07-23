@@ -15,17 +15,18 @@ lang: zh
 
 ---
 
-## TL;DR — AI 起手式只要記三類 owner
+## TL;DR — AI 起手式只要記四類 owner
 
 | Owner 類型 | 意思 | AI 該怎麼做 |
 |---|---|---|
 | 🔧 **hook-enforced** | 機械自動擋（commit / push / PreToolUse 時） | **不要重做** hook 會跑的檢查；信任它擋。失敗時讀 stderr 修 |
+| ⚙️ **CI-only** | 只在 CI 跑，**本地無 hook**（pre-commit / pre-push 都不攔） | **本地看不到、push 才紅**；別「信任 hook 會擋」。改到對應輸入時本地手動跑該 gate（清單見 §4.5） |
 | 🧠 **skill-advised** | skill / 文件層有規則，但**無機械強制** | **必須自覺套用**；沒人會擋，漏做 = 進 repo |
 | 👁️ **reviewer-only** | 純人工 review convention，無 hook 無 skill | **必須自覺**；最容易漏，review 才被退 |
 
-死亡組合：以為某事是 hook-enforced（其實是 reviewer-only）→ 不做 → reviewer 退件 / 進 repo。本表就是消除這種誤判。
+死亡組合：以為某事是 hook-enforced（其實是 ⚙️ CI-only 或 👁️ reviewer-only）→ 不做 / 信任 hook 會擋 → **push 吃 CI 紅燈** / reviewer 退件。本表就是消除這種誤判。
 
-> **📊 Count reconciliation**：pre-commit hook 為 **69 auto + 14 manual + 3 pre-push = 86**（YAML parse 重數於 2026-06-12；#824 新增 `session-guard-liveness-check`、TRK-242 residue 清理退役 `flow-e2e-check` — 守備與 auto-run `tool-consistency-check` 完全重複，增量已併入），與 CLAUDE.md 宣告一致。下文 §3/§4 的職能分組表為 v2.8.1 盤點時的快照、其後新 hook 僅逐案補列——**計數以 `.pre-commit-config.yaml` YAML parse 為準**，分組表供職能導覽不做計數依據。
+> **📊 Count reconciliation**：pre-commit hook 為 **87 auto + 14 manual + 3 pre-push = 104**（YAML parse 重數於 2026-07-23；先前快照 2026-06-12 為 69/14/3，其間逐案增量含 #1185 PR2 新增 `verify-diff-check`、#1195 `threshold-reachability-check` 等），與 CLAUDE.md 宣告一致。CLAUDE.md 的 hook 計數自 #1185 PR2 起由 CI `bump_docs --sync-counts --check` gate（本身即 ⚙️ CI-only，見 §4.5）。下文 §3/§4 的職能分組表為 v2.8.1 盤點時的快照、其後新 hook 僅逐案補列——**計數以 `.pre-commit-config.yaml` YAML parse 為準**，分組表供職能導覽不做計數依據。
 >
 > **更正（TRK-307，時值 v2.8.1 = 51/13/3）**：本表初版（PR #582）曾誤記「50 auto + 14 manual」並反指 CLAUDE.md 計數漂移——那是用 grep `stages:\s*\[manual\]` 數的結果，**配到了 `jsx-babel-check-strict-linecount` 的註解行**（該 hook 註解明寫 "Auto-stage (NOT manual)"，曾被提議 manual 但 PR #162 改回 auto）。TRK-307 的 `audit_rules_drift.py` 用 **YAML parse**（非 grep）重數，確認當時為 51/13/3，CLAUDE.md 一直是對的。**教訓：hook 計數要 YAML parse，grep 會配到註解 / 文字**——audit 工具上線首次執行即抓出此自埋誤差。
 
@@ -69,7 +70,7 @@ lang: zh
 
 ---
 
-## 3. Pre-commit auto hooks（69）— 🔧 機械，commit 時自動
+## 3. Pre-commit auto hooks（87）— 🔧 機械，commit 時自動
 
 > 完整定義見 [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml)。下表按職能分組；**AI 不需在 review 階段重做這些**——commit 時自動跑，失敗會擋。
 
@@ -80,7 +81,7 @@ lang: zh
 | **doc 連結 / 雙語** | `doc-links-check` `html-doc-links-check` `structure-check` `bilingual-structure-check` `bilingual-content-check` `bilingual-annotations-check` `includes-sync` | #9 #10 雙語政策、#4 | 連結有效性、ZH/EN 結構同步、CJK 純度 |
 | **JSX / portal** | `design-token-usage` `axe-lite-static` `jsx-i18n-check` `jsx-babel-check` `undefined-tokens-check` `jsx-loader-compat-check` `dist-source-consistency-check` `skip-a11y-justification-check` `playwright-lint` `playwright-rtl-drift-check` `tool-consistency-check` `cli-coverage-check` `build-completeness-check` | #9 i18n、TRK-237/239 | token 合規、a11y、ESM、dist↔source |
 | **平台資料 / routing** | `platform-data-check` `routing-profiles-check` `metric-dictionary-check` | 四層路由、Cardinality | Rule Pack ↔ metric 交叉驗證 |
-| **測試治理** | `flaky-registry-check` `property-coverage-check` | TRK-010、property-pilot | flaky registry schema、coverage drift |
+| **測試治理** | `flaky-registry-check` `property-coverage-check` `verify-diff-check` | TRK-010、property-pilot、#1185 PR2 | flaky registry schema、coverage drift、source→test 映射保鮮（`verify_diff --check`；原 ⚙️ CI-only，#1185 PR2 接成 hook） |
 | **Python 安全 / 可攜** | `subprocess-timeout-audit`（FATAL）`open-encoding-audit`（warn） | S#74、PR-2.5 | timeout kwarg、encoding kwarg |
 | **可達性** | `makefile-targets-check` | — | DX tools ↔ Makefile/pre-commit 可達 |
 
@@ -111,16 +112,33 @@ lang: zh
 
 ---
 
-## 5. 本地 skills（6）— 🧠 advisory，AI 自覺觸發
+## 4.5 ⚙️ CI-only gates（無 pre-commit / pre-push hook，只 CI 攔）
+
+> **根因級盲點**：這些 gate **沒有任何本地 hook**——commit / push 全綠、**只有 CI 會紅**。本表 v2.8.1 初版把「CI」維度折疊進 hook-enforced，導致 AI 誤以為「信任 hook 會擋」而在 push 後吃紅燈（一輪一個 push cycle）。改到對應輸入時**本地手動跑**該 gate。清單非窮舉，收錄 AI 最常誤判為 hook-enforced 的幾支。
+
+| Gate | 本地手動跑 | 涵蓋 | 何時該手動跑 |
+|---|---|---|---|
+| **AST SAST 契約**（`tests/shared/test_sast.py`，1500+ tests） | `pytest tests/shared/test_sast.py` | `scripts/tools/` 全檔 AST 掃描（open-encoding / subprocess-timeout / eval 等 7 規則） | 改 `scripts/tools/**` 後 |
+| **工具 exit-code / bilingual-help 契約**（`test_tool_exit_codes.py`、`test_bilingual_help_contract.py`，數百 subprocess） | `pytest tests/shared/test_tool_exit_codes.py tests/shared/test_bilingual_help_contract.py` | da-tools 子命令 exit 0/1/2 約定（#452）、`--help` 雙語 | 改工具 CLI / help 後 |
+| **pre-commit hook 計數一致性**（`bump_docs --sync-counts --check`） | `python scripts/tools/dx/bump_docs.py --sync-counts --check` | CLAUDE.md 的 pre-commit hook 計數——**唯一無本地 hook 的計數維度**（version / rulepack / tool / badge 計數已由 §3 auto hook `version-consistency` 本地攔） | 增刪 pre-commit hook 後（#1185 PR2 接進 CI Version Consistency job） |
+| **OpenAPI spec drift** | `make api-docs` | tenant-api handler `@Router`/`@Param` 標註 ↔ 產出的 OpenAPI spec | 改 handler swag 標註後 |
+| **契約測試**（schemathesis） | `make contract-test` | tenant-api 全 method fuzz（TRK-222/228） | 改 tenant-api API 後 |
+
+> **遷移範例**：`verify_diff --check`（source→test 映射保鮮）**曾是本類**（唯一防線在 CI pytest 尾端的 `test_repo_check_is_green`），#1185 PR2 已接成 pre-commit hook `verify-diff-check` → 現屬 §3 hook-enforced，不在此表。判準「CI-only gate 若本地成本低、跳閘頻繁、可用 `files:` 限縮，就升為 hook」見 #1185（TRK-336）。
+
+---
+
+## 5. 本地 skills（7）— 🧠 advisory，AI 自覺觸發
 
 | Skill | 涵蓋 | owner 性質 | 與 hook 關係 |
 |---|---|---|---|
 | `vibe-workflow` | 起手式、7 陷阱、FUSE/docker/port-forward | advisory（起手式部分已被 session-init hook 機械化） | **補集**：hook 做機械起手式，skill 講「卡住時怎麼救」 |
-| `vibe-dev-rules` | 12 規範 + Top 4 | advisory（多數規範有對應 hook，但 commit 前提醒靠 skill） | **前置**：在 hook 擋下之前先自覺（省 push cycle） |
+| `vibe-dev-rules` | 13 規範 + Top 4 | advisory（多數規範有對應 hook，但 commit 前提醒靠 skill） | **前置**：在 hook 擋下之前先自覺（省 push cycle） |
 | `vibe-playbook-nav` | 任務→Playbook 章節路由 | advisory | 無對應 hook（純導航） |
 | `vibe-subagent-review` | IaC-aware 兩階段 review（code spec→quality / IaC blast-radius） | advisory（cross-file 語義層，機械 SAST 抓不到） | **補集 #448**：機械層單檔 SAST 由 #448；本 skill 顧跨檔 cascade（TRK-305） |
 | `vibe-release` | 六線版號 release 收尾 SOP（pre-tag / project-face / milestone-link） | advisory（release 紀律；docker+Trivy 部分已被 #474 機械化進 pre-tag） | **延伸**：#474 把 Layer 1/2 機械化，本 skill 系統化 Layer 3 discipline（TRK-306） |
 | `vibe-brainstorm` | 設計階段 Socratic ideation（MVP / trade-off / defer-trigger + 外審） | advisory（純設計流程） | 無對應 hook（設計階段，無 code 可機械驗）（TRK-308） |
+| `vibe-security-audit` | 週期性深度安全稽核 harness（Recon→平行 Hunt→對抗式 Validate→Synthesize，跑隔離 worktree 快照） | advisory（新信任邊界 GA 前 / incident 後 / 季度觸發） | **補集**：與 diff-scoped `/security-review` 互補、**不進 CI**（#1001） |
 
 > 優先級仲裁見 [CLAUDE.md §Skill 優先級宣告](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md)（TRK-301）：衝突時 `vibe-*` supersede 環境層 generic skill。
 
@@ -130,7 +148,7 @@ lang: zh
 
 | engineering: skill | Vibe 對應 owner | 結論 |
 |---|---|---|
-| `engineering:code-review` | `vibe-dev-rules` + 51 pre-commit + commit-msg hook | git/commit/trailer 部分以 vibe-dev-rules 為準（TRK-301） |
+| `engineering:code-review` | `vibe-dev-rules` + 87 pre-commit + commit-msg hook | git/commit/trailer 部分以 vibe-dev-rules 為準（TRK-301） |
 | `engineering:debug` | `vibe-playbook-nav`（debug 章節） | 互補：reproduce 方法用 engineering，環境 trap 用 playbook |
 | `engineering:testing-strategy` | `test-map.md` + vibe-dev-rules（測試 seam） | 策略用 engineering，Vibe 專屬 seam 用 test-map |
 | `engineering:deploy-checklist` | `github-release-playbook` + `make pre-tag` + #474 | Vibe release 用 playbook + TRK-306（規劃中） |
@@ -165,7 +183,7 @@ lang: zh
 ## 8. AI agent 使用指引
 
 1. **Commit / push 前**：先掃本表「🕳️ 漏接」+「🧠 skill-advised」——這些沒人機械擋，必須自覺做。
-2. **不要重做 🔧 hook-enforced 的事**（51 auto + 3 pre-push + 2 PreToolUse）——浪費 token，hook 會擋。
+2. **不要重做 🔧 hook-enforced 的事**（87 auto + 3 pre-push + 2 PreToolUse）——浪費 token，hook 會擋。**但 ⚙️ CI-only gate（§4.5：`test_sast` / `bump_docs` hook 計數 / OpenAPI drift / 契約測試）本地不跑、push 才紅**——別把它們當 hook-enforced；改到對應輸入時本地手動跑（否則吃一輪 CI 紅燈）。
 3. **記得手動跑 §4 manual hooks**（改對應檔後）——它們不在 commit 自動跑，漏了 CI 才擋。
 4. **trailer 規則**信任 commit-msg hook 會擋，但格式自覺照 CLAUDE.md 高頻地雷 #2 寫對（省一輪 commit 重試）。
 
@@ -174,7 +192,7 @@ lang: zh
 ## 關聯
 
 - [CLAUDE.md §Pre-commit 品質閘門](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/CLAUDE.md)
-- [`dev-rules.md`](dev-rules.md)（12 規範 + §P trailer 紀律）
+- [`dev-rules.md`](dev-rules.md)（13 規範 + §P trailer 紀律）
 - [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml)（hook SSOT）
 - [`skill-system-feature-requests.md`](skill-system-feature-requests.md)（本表是 Vibe 內部能做的；upstream 需 Anthropic/Cowork 做的見該表，TRK-309）
 - epic [#570](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/570) / TRK-307（季度 audit 消費本表）/ TRK-310（CLAUDE.md 瘦身參考本表 overlap 段）

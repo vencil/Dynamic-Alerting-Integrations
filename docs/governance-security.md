@@ -125,7 +125,7 @@ da-tools validate-config --config-dir conf.d/ --json
 
 ### SAST 自動化測試（7 條規則）
 
-`tests/test_sast.py` 對 `scripts/tools/` 全部 Python 檔案進行 AST 層掃描，每次 commit 自動執行（426+ tests）。
+`tests/shared/test_sast.py` 對 `scripts/tools/` 全部 Python 檔案進行 AST 層掃描（1500+ tests），**在 CI（`ci.yml`）執行、非 pre-commit hook**——改 `scripts/tools/**` 後本地以 `pytest tests/shared/test_sast.py` 驗證。
 
 | # | 規則 | 偵測方式 | 嚴重度 |
 |---|------|---------|--------|
