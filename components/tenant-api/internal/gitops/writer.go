@@ -420,26 +420,25 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 	return nil
 }
 
-// currentHEAD returns the current HEAD commit hash of the git repository.
-func (w *Writer) currentHEAD() (string, error) {
-	cmd, ctx, cancel := w.gitCmd("-C", w.gitDir, "rev-parse", "HEAD")
+// revParse resolves a git rev (e.g. "HEAD", "HEAD~1") to its commit hash.
+func (w *Writer) revParse(ref string) (string, error) {
+	cmd, ctx, cancel := w.gitCmd("-C", w.gitDir, "rev-parse", ref)
 	defer cancel()
 	out, err := cmd.Output()
 	if err != nil {
-		return "", w.gitErr(ctx, "rev-parse HEAD", err, out)
+		return "", w.gitErr(ctx, "rev-parse "+ref, err, out)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
+// currentHEAD returns the current HEAD commit hash of the git repository.
+func (w *Writer) currentHEAD() (string, error) {
+	return w.revParse("HEAD")
+}
+
 // commitParent returns the parent commit hash of HEAD (i.e. HEAD~1).
 func (w *Writer) commitParent() (string, error) {
-	cmd, ctx, cancel := w.gitCmd("-C", w.gitDir, "rev-parse", "HEAD~1")
-	defer cancel()
-	out, err := cmd.Output()
-	if err != nil {
-		return "", w.gitErr(ctx, "rev-parse HEAD~1", err, out)
-	}
-	return strings.TrimSpace(string(out)), nil
+	return w.revParse("HEAD~1")
 }
 
 // gitCommit stages filePath and creates a commit with the operator's email as author.
