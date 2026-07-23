@@ -265,6 +265,13 @@ So a disk-capacity recipe **evaluates each PVC and fires if any one crosses**: t
 
 v2.9.0 once shipped a disk-forecast example that referenced `kubelet_volume_stats_*` — which nothing scraped at the time. It looked fine on the test fixtures but never fired in a real cluster. The scrape enablement plus these two guards fix it.
 
+## Update Notes (post-acceptance)
+
+> This section records changes brought in by later ADRs / PRs after acceptance; the text above is the decision record, kept as the as-accepted (v2.9.0) snapshot and not retro-edited.
+
+- **Recipe library 6 → 7 (added by ADR-031)** — ADR-031 added the 7th recipe, `slo_burn_rate` (multi-window SLO error-budget burn rate; [#1092](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1092)); the current list is threshold / rate / ratio / absence / p99_latency / forecast / **slo_burn_rate**. The "6 recipes" in §3 and "the 6th recipe" in §7 are the as-accepted snapshot; the living state is the compiler `scripts/tools/dx/custom_alerts/recipes.py` (whose header reads "The 7 core recipe PromQL emitters") and the governance contract `rule-packs/recipes/slo_burn_rate.yaml`.
+- **The version pilot's third family, `cpu_throttle`, has its machinery laid; the exact branch stays inert per the pilot allowlist** — the §2 pilot scope (`container_cpu` + `container_memory`) is unchanged, but [#944](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/944) PR-2c laid the same version machinery for `cpu_throttle` (the normalize pair + Route-2 exact-or-fallback per-severity cores in `rule-packs/rule-pack-kubernetes.yaml`). `cpu_throttle` is not yet in the version pilot allowlist (`resolve.go`'s `pilotVersionMetrics` covers container/cpu + container/memory only), so tenants cannot declare per-version throttle thresholds and the exact-match branch is **inert by design** — everything takes the `version="default"` fallback; a future pilot expansion is a one-line allowlist change, not a rule rewrite.
+
 ## Cross-Reference
 
 - [ADR-006: Tenant Mapping Topologies](006-tenant-mapping-topologies.md) — the 1:1 infrastructure-attribution policy + N:1/1:N defer.

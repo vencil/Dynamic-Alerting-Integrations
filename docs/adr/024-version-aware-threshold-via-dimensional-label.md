@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: threshold-exporter
 created_at: 2026-05-30
-updated_at: 2026-07-12
+updated_at: 2026-07-24
 ---
 
 # ADR-024: 宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts
@@ -270,6 +270,13 @@ count by(recipe_id)(count by(recipe_id, tenant)(user_threshold{component="custom
 - **執行期看門告警 `CustomRecipeDiskInert`**：租戶設了磁碟告警、Pod 也在跑，但歸屬後的磁碟指標一直沒出現，就觸發。這把「拓撲不支援」「漏設歸屬」「租戶根本沒掛 PVC」這幾種情況，從悄悄失效變成有人會看到的告警。
 
 v2.9.0 曾隨範例附過一條磁碟預測告警，引用的正是當時沒人抓取的 `kubelet_volume_stats_*`——它在測試夾具上看起來正常、在真實叢集裡卻從不觸發。本次的抓取啟用加上這兩道防線一併修掉。
+
+## 更新註記（post-acceptance）
+
+> 本節記錄 accepted 之後由後續 ADR / PR 帶入的現況變化；上文為 decision record，保留當時（v2.9.0）快照、不回改。
+
+- **Recipe 庫 6 → 7（由 ADR-031 增補）**——ADR-031 新增第 7 個 recipe `slo_burn_rate`（多窗 SLO 錯誤預算 burn-rate；[#1092](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1092)），現行清單為 threshold / rate / ratio / absence / p99_latency / forecast / **slo_burn_rate**。§3 的「6 個」與 §7 的「第 6 個 recipe」是 accepted 當時的快照；現況以編譯器 `scripts/tools/dx/custom_alerts/recipes.py`（檔頭自述 "The 7 core recipe PromQL emitters"）與治理契約 `rule-packs/recipes/slo_burn_rate.yaml` 為準。
+- **Version pilot 第三族 `cpu_throttle` 機械已鋪、exact branch 依 pilot allowlist 暫 inert**——§2 的 pilot 範圍（`container_cpu` + `container_memory`）不變，但 [#944](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/944) PR-2c 已為 `cpu_throttle` 鋪好同款 version 機械（`rule-packs/rule-pack-kubernetes.yaml` 的 normalize pair + Route-2 exact-or-fallback per-severity cores）。`cpu_throttle` 尚不在 version pilot allowlist（`resolve.go` 的 `pilotVersionMetrics` 僅 container/cpu + container/memory），租戶無法宣告 per-version throttle 閾值，exact-match branch **依設計暫 inert**、一律走 `version="default"` fallback；未來納入 pilot 是一行 allowlist 變更、非規則重寫。
 
 ## Cross-Reference
 
