@@ -135,12 +135,33 @@ class TestKubernetesGoldenPreservation:
         # alerts — its loss made those alerts dangling.
         assert "tenant:container_waiting_reason:count" in records
 
-    def test_pure_alert_sentinels_on_central(self):
+    def test_sentinel_groups_split_recordings_to_edge_alerts_to_central(self):
+        # #1168: the 2 KSM sentinels are MIXED groups now — their edge
+        # normalisation recordings (tenant-labeled → federated) land on edge,
+        # the alerts stay central and read ONLY those recordings.
         edge, central = self._kube_split()
-        central_names = {g["name"] for g in central}
-        for name in ("kubernetes-version-aware-sentinel",
-                     "kubernetes-custom-disk-recipe-sentinel"):
-            assert name in central_names, name
+
+        def rules_for(groups, gname, kind):
+            return [
+                r[kind] for g in groups if g["name"] == gname
+                for r in g.get("rules", []) if kind in r
+            ]
+
+        assert rules_for(edge, "kubernetes-version-aware-sentinel", "record") == [
+            "tenant:kube_pod_info:count", "tenant:kube_pod_labels:count",
+        ]
+        assert rules_for(central, "kubernetes-version-aware-sentinel", "alert") == [
+            "VersionAwareThresholdInert",
+        ]
+        assert rules_for(central, "kubernetes-version-aware-sentinel", "record") == []
+
+        assert rules_for(edge, "kubernetes-custom-disk-recipe-sentinel", "record") == [
+            "tenant:kube_pods_running:count", "tenant:kubelet_volume_stats:count",
+        ]
+        assert rules_for(central, "kubernetes-custom-disk-recipe-sentinel", "alert") == [
+            "CustomRecipeDiskInert",
+        ]
+        assert rules_for(central, "kubernetes-custom-disk-recipe-sentinel", "record") == []
 
     def test_mixed_groups_split_recordings_to_edge_alerts_to_central(self):
         # Correctness fix (per-rule data-locality): node-health / ha-replicas
@@ -172,34 +193,63 @@ class TestKubernetesGoldenPreservation:
         ]
 
 
-class TestCentralRawExemptionLedger:
-    def test_only_two_kube_sentinels_grandfathered(self):
-        # The ledger is exactly the 2 namespace-labeled KSM sentinels — per-tenant
-        # exporter raw (db liveness) is federated and must NOT be listed.
-        assert set(grps.KNOWN_CENTRAL_RAW_EXEMPTIONS) == {"rule-pack-kubernetes.yaml"}
-        assert set(grps.KNOWN_CENTRAL_RAW_EXEMPTIONS["rule-pack-kubernetes.yaml"]) == {
-            "kube_pod_info", "kube_pod_labels", "kube_pod_status_phase",
-            "kubelet_volume_stats_available_bytes",
-            "kubelet_volume_stats_capacity_bytes",
-        }
+_SYNTHETIC_RAW_ON_CENTRAL_PACK = (
+    "groups:\n"
+    "- name: synthetic-alerts\n"
+    "  rules:\n"
+    "  - alert: BadCentralRawKube\n"
+    "    expr: count(kube_pod_info{namespace=~\"db-.+\"}) > 0\n"
+)
 
-    def test_grandfathered_kube_sentinels_do_not_fail_the_run(self, monkeypatch):
+
+class TestCentralRawExemptionLedger:
+    def test_ledger_is_empty_after_sentinel_edge_normalisation(self):
+        # #1168 exit-lock: both grandfathered KSM sentinels
+        # (VersionAwareThresholdInert / CustomRecipeDiskInert) got edge
+        # normalisation recordings, so NOTHING is exempt anymore. Growing this
+        # ledger again is a reviewed, issue-tracked decision — not a convenience.
+        assert grps.KNOWN_CENTRAL_RAW_EXEMPTIONS == {}
+
+    def test_real_packs_emit_no_raw_on_central_warnings(self):
+        # Ledger empty AND packs fixed → the run must be clean on BOTH channels:
+        # no mismatches (exit-lock) and no grandfather WARNs left.
         report = grps.process_rule_packs(
             str(_RULE_PACKS), str(_REPO_ROOT / "_never_written"), dry_run=True,
         )
         assert report["validation"]["metric_mismatches"] == []
-        # …but each exemption is announced fail-loud.
-        assert any("KNOWN raw-on-central" in w for w in report["warnings"])
+        assert not any("KNOWN raw-on-central" in w for w in report["warnings"])
 
-    def test_new_unlisted_kube_on_central_fails(self, monkeypatch):
-        # Meta-test / mutation guard: the ledger is NOT a blanket escape hatch.
-        # Emptying it makes the (now unlisted) kube sentinels genuine violations
-        # → exit 1. Proves a NEW kube_/kubelet_-on-central reference is caught.
-        monkeypatch.setattr(grps, "KNOWN_CENTRAL_RAW_EXEMPTIONS", {})
+    def test_new_kube_on_central_fails(self, tmp_path):
+        # Meta-test / mutation guard: a NEW central alert reading raw
+        # kube_*/kubelet_* (namespace-labeled → not federated) is a genuine
+        # violation → metric mismatch → exit 1. Uses a synthetic pack because
+        # the real packs no longer contain the defect (#1168 fixed both).
+        (tmp_path / "rule-pack-synthetic.yaml").write_text(
+            _SYNTHETIC_RAW_ON_CENTRAL_PACK, encoding="utf-8",
+        )
         report = grps.process_rule_packs(
-            str(_RULE_PACKS), str(_REPO_ROOT / "_never_written"), dry_run=True,
+            str(tmp_path), str(tmp_path / "_never_written"), dry_run=True,
         )
         mismatches = report["validation"]["metric_mismatches"]
-        assert any(m["file"] == "rule-pack-kubernetes.yaml" for m in mismatches)
-        kube = next(m for m in mismatches if m["file"] == "rule-pack-kubernetes.yaml")
+        kube = next(m for m in mismatches if m["file"] == "rule-pack-synthetic.yaml")
         assert "kube_pod_info" in kube["missing_in_edge"]
+
+    def test_ledger_mechanism_still_grandfathers_listed_entries(
+        self, tmp_path, monkeypatch,
+    ):
+        # The WARN-not-fail path must stay alive for a future audited entry:
+        # the same synthetic defect, once LISTED, downgrades to a fail-loud
+        # WARN with no mismatch (audited-ledger semantics preserved).
+        (tmp_path / "rule-pack-synthetic.yaml").write_text(
+            _SYNTHETIC_RAW_ON_CENTRAL_PACK, encoding="utf-8",
+        )
+        monkeypatch.setattr(grps, "KNOWN_CENTRAL_RAW_EXEMPTIONS", {
+            "rule-pack-synthetic.yaml": {
+                "kube_pod_info": "test-only: audited grandfather entry",
+            },
+        })
+        report = grps.process_rule_packs(
+            str(tmp_path), str(tmp_path / "_never_written"), dry_run=True,
+        )
+        assert report["validation"]["metric_mismatches"] == []
+        assert any("KNOWN raw-on-central" in w for w in report["warnings"])

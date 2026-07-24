@@ -559,7 +559,7 @@
       "category": "infrastructure",
       "exporter": "cAdvisor + kube-state-metrics",
       "configMap": "prometheus-rules-kubernetes",
-      "recordingRules": 26,
+      "recordingRules": 30,
       "alertRules": 14,
       "required": false,
       "defaultOn": true,
@@ -660,9 +660,9 @@
   },
   "totals": {
     "packs": 16,
-    "recordingRules": 159,
+    "recordingRules": 163,
     "alertRules": 149,
-    "total": 308
+    "total": 312
   },
   "tenant_groups": {},
   "tenant_metadata": {

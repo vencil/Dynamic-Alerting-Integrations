@@ -930,15 +930,44 @@ groups:
   # zero edge — which leg 3 now does NOT false-fire on). KNOWN LIMITATION: an allowlist
   # set WITHOUT app.kubernetes.io/version (a different label only) won't fire this — that
   # rarer partial-misconfig is accepted; the dominant "no allowlist at all" is covered.
+  #
+  # Edge normalization (#1168): legs 2+3 used to read the raw namespace-labeled KSM
+  # series directly — but federation's match[]={tenant!=""} does NOT pull those to
+  # the central plane, so evaluated there both legs were permanently empty and the
+  # sentinel inert. Same fix as node-health / ha-replicas: derive tenant-labeled
+  # per-tenant recordings at the EDGE (label_replace namespace→tenant, the
+  # established idiom), federate THOSE, and let the alert read only recordings.
+  # The recordings carry per-tenant series COUNTS but the alert consumes PRESENCE
+  # only (count()>0 / ==0), so the 3-leg semantics — incl. the scale-to-zero
+  # guard — are unchanged (promtool cases A–E pin this). Records + alert share
+  # one group (sequential same-cycle eval, as node-health does).
   - name: kubernetes-version-aware-sentinel
     rules:
+      # Leg-2 signal: per-tenant kube_pod_info series count (ALL phases — the
+      # original leg deliberately counted every pod series, not just Running).
+      - record: tenant:kube_pod_info:count
+        expr: |
+          count by(tenant) (
+            label_replace(kube_pod_info{namespace=~"db-.+"}, "tenant", "$1", "namespace", "(.+)")
+          )
+
+      # Leg-3 signal: per-tenant kube_pod_labels series count. With the KSM
+      # allowlist OFF, KSM emits NO kube_pod_labels at all → this recording emits
+      # NO series → absent after federation → the alert's `or vector(0)` turns
+      # that absence into 0 (the fire condition), exactly as the raw leg behaved.
+      - record: tenant:kube_pod_labels:count
+        expr: |
+          count by(tenant) (
+            label_replace(kube_pod_labels{namespace=~"db-.+"}, "tenant", "$1", "namespace", "(.+)")
+          )
+
       - alert: VersionAwareThresholdInert
         expr: |
           (count(max by(tenant, version, severity) (user_threshold{component="container", metric="cpu", version=~".+"})) or vector(0)) > 0
           and
-          (count(kube_pod_info{namespace=~"db-.+"}) or vector(0)) > 0
+          (count(tenant:kube_pod_info:count) or vector(0)) > 0
           and
-          (count(kube_pod_labels{namespace=~"db-.+"}) or vector(0)) == 0
+          (count(tenant:kube_pod_labels:count) or vector(0)) == 0
         for: 10m
         labels:
           severity: warning
@@ -1001,19 +1030,49 @@ groups:
   # presence legs stay keyed on available/capacity: kubelet emits the whole
   # volume-stats family together, so their absence is a faithful proxy for "no
   # volume-stats arrive" regardless of which primary the recipe declared.
-  # #9 NOTE: the pods leg's `namespace=~"db-.+"` deliberately SCOPES this sentinel to
-  # the platform tenant-namespace convention (the same db-* keep node-health uses below
-  # + the kubelet-volume-stats scrape relabel in configmap-prometheus.yaml). It is a
-  # chosen scope, NOT the only db-* gate: user_threshold's `tenant` is the conf.d id
-  # (collector.go emits `t.Tenant`; the monitoring-components scrape that reads the
-  # exporter has no tenant relabel), so the declared leg CAN carry a non-db id. Such a
-  # tenant is suppressed HERE by this filter — broadening it alone would START firing for
-  # non-db tenants (whose volume-stats are dropped scrape-side anyway), so it is not a
-  # free knob. A BYO deployment that renames tenant namespaces must change the
-  # volume-stats relabel keep, this leg, and node-health together (#692 Option E).
+  # #9 NOTE: the pods-leg recording's `namespace=~"db-.+"` deliberately SCOPES this
+  # sentinel to the platform tenant-namespace convention (the same db-* keep
+  # node-health uses below + the kubelet-volume-stats scrape relabel in
+  # configmap-prometheus.yaml). It is a chosen scope, NOT the only db-* gate:
+  # user_threshold's `tenant` is the conf.d id (collector.go emits `t.Tenant`; the
+  # monitoring-components scrape that reads the exporter has no tenant relabel), so
+  # the declared leg CAN carry a non-db id. Such a tenant is suppressed HERE by this
+  # filter — broadening it alone would START firing for non-db tenants (whose
+  # volume-stats are dropped scrape-side anyway), so it is not a free knob. A BYO
+  # deployment that renames tenant namespaces must change the volume-stats relabel
+  # keep, this leg, and node-health together (#692 Option E).
+  #
+  # Edge normalization (#1168): the pods leg used to read raw namespace-labeled
+  # kube_pod_status_phase inline — not federated (match[]={tenant!=""}) → empty on
+  # the central plane → the whole positive branch empty → sentinel inert there.
+  # Fix mirrors node-health / ha-replicas: both non-config legs are now EDGE
+  # recordings (tenant-labeled → federated) and the central alert reads ONLY
+  # recordings + injected config (platform policy: no raw kube_*/kubelet_* on the
+  # central plane — rule-pack-split's federation validation enforces it). The
+  # alert consumes per-tenant PRESENCE only, so fire/no-fire semantics are
+  # unchanged (promtool cases A–K pin this, incl. either-absent + #9 scope).
   # ─────────────────────────────────────────────────────────────────────
   - name: kubernetes-custom-disk-recipe-sentinel
     rules:
+      # Per-tenant RUNNING-pod presence (the #9 db-.+ scope note above lives in
+      # THIS selector now; broadening it is still not a free knob).
+      - record: tenant:kube_pods_running:count
+        expr: |
+          count by(tenant) (
+            label_replace(kube_pod_status_phase{namespace=~"db-.+", phase="Running"} == 1, "tenant", "$1", "namespace", "(.+)")
+          )
+
+      # Per-tenant volume-stats presence: a series exists iff BOTH families
+      # (available AND capacity) arrive tenant-attributed — the `and` keeps the
+      # EITHER-absent semantics (one family missing → no series → the alert's
+      # `unless` subtrahend empty → fire). Value (available-series count) is
+      # unused; the alert consumes presence only.
+      - record: tenant:kubelet_volume_stats:count
+        expr: |
+          count by(tenant) (kubelet_volume_stats_available_bytes{tenant=~".+"})
+          and on(tenant)
+          count by(tenant) (kubelet_volume_stats_capacity_bytes{tenant=~".+"})
+
       - alert: CustomRecipeDiskInert
         expr: |
           (
@@ -1023,16 +1082,10 @@ groups:
               user_threshold{component="custom", metric="kubelet_volume_stats_used_bytes"}
             )
             and on(tenant)
-            count by(tenant) (
-              label_replace(kube_pod_status_phase{namespace=~"db-.+", phase="Running"} == 1, "tenant", "$1", "namespace", "(.+)")
-            )
+            tenant:kube_pods_running:count
           )
           unless on(tenant)
-          (
-            count by(tenant) (kubelet_volume_stats_available_bytes{tenant=~".+"})
-            and on(tenant)
-            count by(tenant) (kubelet_volume_stats_capacity_bytes{tenant=~".+"})
-          )
+          tenant:kubelet_volume_stats:count
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
         for: 15m
