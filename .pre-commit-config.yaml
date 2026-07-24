@@ -1092,6 +1092,20 @@ repos:
         # KNOWN_UNWIRED exit-lock breach; the 18 grandfathered keys are INFO.
         files: ^(rule-packs/rule-pack-.*\.yaml|scripts/tools/ops/(scaffold_tenant|_observed_map_lib)\.py|scripts/tools/lint/check_threshold_reachability\.py)$
 
+      - id: threshold-registry-check
+        name: "threshold registry SoT — schema + transition-period scaffold equivalence (TRK-339 WS1a / #1200)"
+        entry: python3 -X utf8 scripts/tools/lint/check_threshold_registry.py --ci
+        language: python
+        additional_dependencies: ['pyyaml', 'jsonschema']
+        pass_filenames: false
+        # The #1200 D2 standalone registry (rule-packs/threshold-registry.yaml)
+        # coexists with the still-operative scaffold_tenant.RULE_PACKS until the
+        # rewire PR. Two live contract copies = the #1189 disease, so BOTH are
+        # gated: JSON-Schema shape (pre-generation hard gate) + semantic
+        # equivalence in either direction (no grandfather — born equal). Fix:
+        # edit RULE_PACKS, then `check_threshold_registry.py --regen` + commit.
+        files: ^(rule-packs/threshold-registry\.yaml|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib)\.py|scripts/tools/lint/check_threshold_registry\.py)$
+
       - id: vmalert-coverage-check
         name: rule-pack alert firing-coverage baseline (#947 gate A/replay gap guard)
         entry: python3 -X utf8 scripts/tools/lint/check_vmalert_coverage.py --ci
