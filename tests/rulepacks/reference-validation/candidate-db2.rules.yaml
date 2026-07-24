@@ -1,17 +1,26 @@
 # Reference candidate rules — DB2. DIRECT-PREDICATE form of the shipped
-# rule-pack-db2.yaml alerting logic (see candidate-oracle-min.rules.yaml header for
-# rationale). Thresholds are the SHIPPED DEFAULTS inlined (_defaults.yaml, documented
-# in the rule-pack header): connections 200 / bufferpool 0.95 (LOW-is-bad, `<`) /
-# log 70 / deadlock_rate 5 (per-second, rate over 5m). `for:` are shipped values.
+# rule-pack-db2.yaml alerting logic (see candidate-oracle.rules.yaml header for
+# rationale). Thresholds are the DOCUMENTED rule-pack-header example values inlined
+# (Oracle/DB2 ship no _defaults — #1175): connections 200 / bufferpool 0.95
+# (LOW-is-bad, `<`) / log 70 / deadlock_rate 5 (per-second, rate over 5m) /
+# tablespace 85 / lock_wait_time 10. `for:` are shipped values (sync-gated by
+# tests/rulepacks/test_reference_validation_sync.py; deliberate divergences live in
+# divergence-ledger.yaml).
 #
-# NOT covered here (each surfaces as a finding in the report):
-#   - db2_lock_wait_time_seconds_total → shipped pack has a RECORDING rule
-#     (tenant:db2_lock_wait_time:rate5m) but NO alert consumes it = real coverage gap.
-#   - db2_tablespace_used_percent → the blind library authored no tablespace fault.
+# Post-run#1 shipped-pack changes tracked here (fidelity, TRK-339 WS4a-1):
+#   - DB2HighLockWaitTime (#1188): shipped pack NOW alerts on
+#     db2_lock_wait_time_seconds_total (run#1 found the orphaned recording rule);
+#     mirrored below with the header-documented starting value 10.
+#   - DB2HighSortOverflow (#1184): shipped ratio is now rate/rate over 5m with a
+#     `> 0` denominator guard (NOT lifetime-cumulative division); mirrored below.
+#
+# NOT covered here (declared in divergence-ledger.yaml):
+#   - DB2TablespaceAlmostFull → the blind library authored no tablespace fault, so
+#     the rule would be inert in this harness (still a real coverage gap finding).
 #
 # DB2HighSortOverflow (ratio): the db2_total_sorts companion inherits the injection
-# identity labels with no extra label, so db2_sort_overflows/db2_total_sorts matches
-# one-to-one and keeps attribution. Threshold 0.05 is HARD-CODED in the shipped rule.
+# identity labels with no extra label, so the rate/rate division matches one-to-one
+# and keeps attribution. Threshold 0.05 is HARD-CODED in the shipped rule.
 # NB the sort-overflow signature is must_detect:false — this alert firing on it = an
 # OVER-FIRE finding (rule pages on a benign daily-tuning signal).
 groups:
@@ -38,7 +47,11 @@ groups:
         expr: rate(db2_deadlocks_total[5m]) > 5
         for: 5m
         labels: {severity: warning}
+      - alert: DB2HighLockWaitTime
+        expr: rate(db2_lock_wait_time_seconds_total[5m]) > 10
+        for: 5m
+        labels: {severity: warning}
       - alert: DB2HighSortOverflow
-        expr: db2_sort_overflows / db2_total_sorts > 0.05
+        expr: rate(db2_sort_overflows[5m]) / (rate(db2_total_sorts[5m]) > 0) > 0.05
         for: 10m
         labels: {severity: warning}

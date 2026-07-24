@@ -641,7 +641,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "ee1810bd62e0f0d1b7c1725824e59bd528ddc1ef7adf91df717bcbf28d8a7308",
+ "source_digest": "25fbfb26c72e593b1e25f1df192a84ac10b3fbe92caefd8654b6108186e6706f",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -874,6 +874,7 @@
   "tests/preview/test_app.py",
   "tests/preview/test_promtool_pin_parity.py",
   "tests/rulepacks/test_platform_rules_extract_sync.py",
+  "tests/rulepacks/test_reference_validation_sync.py",
   "tests/rulepacks/test_vm_alert_parity.py",
   "tests/rulepacks/test_vm_backend_parity.py",
   "tests/rulepacks/test_vm_replay_staleness.py",
@@ -1391,13 +1392,20 @@
   "rule-packs/rule-pack-custom-alerts.yaml": [
    "tests/ops/test_lint_custom_rules.py"
   ],
+  "rule-packs/rule-pack-db2.yaml": [
+   "tests/rulepacks/test_reference_validation_sync.py"
+  ],
   "rule-packs/rule-pack-kubernetes.yaml": [
-   "tests/ops/test_rule_pack_split_real_packs.py"
+   "tests/ops/test_rule_pack_split_real_packs.py",
+   "tests/rulepacks/test_reference_validation_sync.py"
   ],
   "rule-packs/rule-pack-mariadb.yaml": [
    "tests/lint/test_check_hardcode_tenant.py",
    "tests/shared/test_ci_flag_contract.py",
    "tests/shared/test_json_stdout_contract.py"
+  ],
+  "rule-packs/rule-pack-oracle.yaml": [
+   "tests/rulepacks/test_reference_validation_sync.py"
   ],
   "rule-packs/rule-pack-redis.yaml": [
    "tests/shared/test_ci_flag_contract.py",

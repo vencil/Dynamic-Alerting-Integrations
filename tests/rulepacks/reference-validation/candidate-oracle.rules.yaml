@@ -1,10 +1,12 @@
 # Reference candidate rules — Oracle. DIRECT-PREDICATE form of the shipped
-# rule-pack-oracle.yaml alerting logic (see candidate-oracle-min.rules.yaml header
-# for why: production `max by(tenant)` aggregation strips the harness attribution
-# labels; the direct predicate on the raw series preserves them and is fire/no-fire
-# identical for single-signature injection). Thresholds are the SHIPPED DEFAULTS
-# (_defaults.yaml, documented in the rule-pack header) inlined = a tenant with no
-# custom override. `for:` durations are the shipped values.
+# rule-pack-oracle.yaml alerting logic. Why direct-predicate: production
+# `max by(tenant)` aggregation strips the harness attribution labels; the direct
+# predicate on the raw series preserves them and is fire/no-fire identical for
+# single-signature injection. Thresholds are the DOCUMENTED rule-pack-header example
+# values inlined (Oracle ships no _defaults — #1175) = a tenant with no custom
+# override. `for:` durations are the shipped values (sync-gated by
+# tests/rulepacks/test_reference_validation_sync.py; deliberate divergences live in
+# divergence-ledger.yaml).
 #
 # NOT covered here (deliberate — surfaces as MISS/FN in the report = coverage gaps):
 #   - oracledb_activity_parse_count_total  → no shipped alert (exported-but-unalerted probe)
@@ -12,7 +14,9 @@
 # OracleHighSessionUtilization (ratio): the companion oracledb_resource_limit inherits
 # the injection identity labels + carries its own resource="sessions" label, so the
 # division matches with `ignoring(resource)` and keeps the numerator's attribution labels.
-# Threshold 0.85 is HARD-CODED in the shipped rule (not user_threshold).
+# Threshold 0.85 is HARD-CODED in the shipped rule (not user_threshold). The shipped
+# denominator guard `> 0` is reproduced (a zero session limit would otherwise divide
+# to +Inf and over-fire; shipped drops the series instead).
 groups:
   - name: oracle-ref
     interval: 30s
@@ -42,6 +46,6 @@ groups:
         for: 10m
         labels: {severity: warning}
       - alert: OracleHighSessionUtilization
-        expr: oracledb_sessions_active / ignoring(resource) oracledb_resource_limit{resource="sessions"} > 0.85
+        expr: oracledb_sessions_active / ignoring(resource) (oracledb_resource_limit{resource="sessions"} > 0) > 0.85
         for: 5m
         labels: {severity: warning}

@@ -1,36 +1,62 @@
 # Reference candidate rules — Linux-on-K8s. DIRECT-PREDICATE form of the shipped
-# rule-pack-kubernetes.yaml alerting logic (see candidate-oracle-min header for why).
-# The shipped rules are version-aware (per-version thresholds, weakest-pod aggregation,
-# exact-or-fallback) — this evaluates the CORE firing predicate on the raw series,
-# which is fire/no-fire equivalent for a single injected fault. Thresholds are the
-# SHIPPED _defaults.yaml values (container_cpu:80 / container_memory:85 /
-# container_cpu_throttle:25 — these DO ship, unlike Oracle/DB2). Boolean alerts
-# (crashloop / imagepull / node-not-ready) carry no threshold.
+# rule-pack-kubernetes.yaml alerting logic (see candidate-oracle.rules.yaml header for
+# why: production `max by(tenant)` aggregation strips the harness attribution labels;
+# the direct predicate on the raw series preserves them and is fire/no-fire equivalent
+# for a single injected fault). Thresholds are the SHIPPED _defaults.yaml values
+# (container_cpu:80 / container_memory:85 / container_cpu_throttle:25 — these DO ship,
+# unlike Oracle/DB2). Boolean alerts (crashloop / imagepull / node-not-ready) carry no
+# threshold.
+#
+# FIDELITY CONTRACT (TRK-339 WS4a-1): `for:` / severity / raw-metric selectors below
+# mirror the SHIPPED values verbatim — enforced by
+# tests/rulepacks/test_reference_validation_sync.py against
+# rule-packs/rule-pack-kubernetes.yaml. Every deliberate divergence (shipped alerts
+# not mirrored here, the throttle working-hard floor, the NodeNotReady tenant-
+# ownership join, group interval) is declared in divergence-ledger.yaml — do NOT add
+# an undeclared divergence; the sync gate fails on both undeclared drift AND stale
+# ledger entries.
+#
+# Selector note: the shipped pack scopes every cAdvisor/KSM container metric with
+# {namespace=~"db-.+"} (matching the cadvisor scrape keep-list) plus
+# {container!="", container!="POD"} on cAdvisor series — reproduced here so a
+# waveform injected outside the shipped scrape/selector face is (correctly) invisible,
+# exactly as it would be in production.
 groups:
   - name: k8s-linux-ref
     interval: 30s
     rules:
       - alert: PodContainerHighCPU
-        expr: rate(container_cpu_usage_seconds_total[5m]) / ignoring(resource) kube_pod_container_resource_limits{resource="cpu"} * 100 > 80
-        for: 6m
+        expr: rate(container_cpu_usage_seconds_total{namespace=~"db-.+", container!="", container!="POD"}[5m]) / ignoring(resource) kube_pod_container_resource_limits{resource="cpu", namespace=~"db-.+"} * 100 > 80
+        for: 60s
         labels: {severity: warning}
       - alert: PodContainerHighMemory
-        expr: container_memory_working_set_bytes / ignoring(resource) kube_pod_container_resource_limits{resource="memory"} * 100 > 85
-        for: 6m
+        expr: container_memory_working_set_bytes{namespace=~"db-.+", container!="", container!="POD"} / ignoring(resource) kube_pod_container_resource_limits{resource="memory", namespace=~"db-.+"} * 100 > 85
+        for: 60s
         labels: {severity: warning}
+      # Shipped denominator guard `> 0` reproduced (frozen counters → NaN, throttled-
+      # while-frozen → +Inf; the filter drops those series instead of poisoning max()).
+      # The shipped working-hard floor (`and cpu% > 20`) is NOT reproduced — declared
+      # in divergence-ledger.yaml (the cfs waveform injects no companion usage/limit
+      # series, so the floor join would void the signal the harness is measuring).
       - alert: PodContainerCPUThrottled
-        expr: rate(container_cpu_cfs_throttled_periods_total[5m]) / ignoring(resource) rate(container_cpu_cfs_periods_total[5m]) * 100 > 25
+        expr: rate(container_cpu_cfs_throttled_periods_total{namespace=~"db-.+", container!="", container!="POD"}[5m]) / (rate(container_cpu_cfs_periods_total{namespace=~"db-.+", container!="", container!="POD"}[5m]) > 0) * 100 > 25
         for: 15m
         labels: {severity: warning}
+      # reason matchers inlined from the shipped record/alert-level filter
+      # (tenant:container_waiting_reason:count{reason=...}) — fire/no-fire equivalent;
+      # declared in divergence-ledger.yaml `inlined_matchers`.
       - alert: ContainerCrashLoop
-        expr: kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"} > 0
-        for: 5m
-        labels: {severity: warning}
-      - alert: ContainerImagePullFailure
-        expr: kube_pod_container_status_waiting_reason{reason="ImagePullBackOff"} > 0
-        for: 5m
-        labels: {severity: warning}
-      - alert: NodeNotReady
-        expr: kube_node_status_condition{condition="Ready",status="true"} == 0
-        for: 5m
+        expr: kube_pod_container_status_waiting_reason{namespace=~"db-.+", reason="CrashLoopBackOff"} > 0
+        for: 30s
         labels: {severity: critical}
+      - alert: ContainerImagePullFailure
+        expr: kube_pod_container_status_waiting_reason{namespace=~"db-.+", reason=~"ImagePullBackOff|InvalidImageName"} > 0
+        for: 30s
+        labels: {severity: warning}
+      # Shipped scopes node-down to nodes OWNING tenant pods (kube_pod_info and-join);
+      # the direct predicate fires on any NotReady node — declared in the ledger (the
+      # library injects no kube_pod_info series; ownership is tenant plumbing).
+      - alert: NodeNotReady
+        expr: kube_node_status_condition{condition="Ready", status="true"} == 0
+        for: 3m
+        labels: {severity: warning}

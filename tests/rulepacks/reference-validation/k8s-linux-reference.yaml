@@ -7,6 +7,11 @@
 # 讀取或參考任何 rule pack／threshold／conf.d 檔案；每一個水位、持續時間
 # 與形狀都是真實觀察到的故障量級，絕非從告警門檻反推而來。
 # 驗證：python3 scripts/tools/dx/waveform_compile.py --check <this file>
+#
+# ⚠️ 注入 namespace 紀律（TRK-339 WS4a-1 保真度修復）：容器訊號一律注入
+# `namespace: db-ref` —— 必須落在出貨 selector／cadvisor scrape keep-list 的
+# `namespace=~"db-.+"` 面之內，否則 candidate（已對齊出貨 selector）看不到
+# 波形、整軸假 MISS。`db-ref` 是參考 fixture 識別子，非真實租戶 id。
 # ---------------------------------------------------------------------
 
 pack:
@@ -36,12 +41,12 @@ signatures:
     metric_kind: counter               # SME 給的水位是每秒速率（核），由 compiler 做積分
     companion_series:
       - metric: kube_pod_container_resource_limits
-        labels: {namespace: workload-ref, pod: app-ref-0, container: app, resource: cpu}
+        labels: {namespace: db-ref, pod: app-ref-0, container: app, resource: cpu}
         role: static
         level: 1.0                     # 固定的 1 核（1000m）CPU limit
     shape_class: ramp
     fault_class: container-cpu-saturation
-    labels: {namespace: workload-ref, pod: app-ref-0, container: app}
+    labels: {namespace: db-ref, pod: app-ref-0, container: app}
 
   # 2 ── 容器記憶體 working set 飽和，OOMKill 前（gauge，緩慢洩漏）
   - description: >-
@@ -61,12 +66,12 @@ signatures:
     metric_kind: gauge
     companion_series:
       - metric: kube_pod_container_resource_limits
-        labels: {namespace: workload-ref, pod: app-ref-0, container: app, resource: memory}
+        labels: {namespace: db-ref, pod: app-ref-0, container: app, resource: memory}
         role: static
         level: 536870912               # 512Mi limit，單位為 bytes
     shape_class: plateau               # 先攀升，然後停在 limit（不會恢復 —— 最後以 OOM 收場）
     fault_class: container-memory-saturation
-    labels: {namespace: workload-ref, pod: app-ref-0, container: app}
+    labels: {namespace: db-ref, pod: app-ref-0, container: app}
     min_value: 0                       # bytes 不會是負值
 
   # 3 ── OOMKill 重啟風暴（counter；重啟次數以階梯狀攀升）
@@ -87,7 +92,7 @@ signatures:
     metric_kind: counter               # 累積的重啟次數；SME 給的是重啟速率
     shape_class: step                  # 速率在一個取樣內就階躍到風暴水位 → 累積值線性攀升
     fault_class: oomkill-restart-storm
-    labels: {namespace: workload-ref, pod: app-ref-0, container: app}
+    labels: {namespace: db-ref, pod: app-ref-0, container: app}
 
   # 4 ── CPU CFS 節流比例上升（counter 分子 + counter 分母）
   - description: >-
@@ -107,13 +112,13 @@ signatures:
     metric_kind: counter
     companion_series:
       - metric: container_cpu_cfs_periods_total
-        labels: {namespace: workload-ref, pod: app-ref-0, container: app}
+        labels: {namespace: db-ref, pod: app-ref-0, container: app}
         role: denominator
         metric_kind: counter           # 積分後的 ramp，讓比例中的 rate(denominator) 不為零
         level: 10.0                    # 每秒約 10 個 CFS period（100 ms 的 period）
     shape_class: ramp
     fault_class: cpu-cfs-throttling
-    labels: {namespace: workload-ref, pod: app-ref-0, container: app}
+    labels: {namespace: db-ref, pod: app-ref-0, container: app}
 
   # 5 ── pod crash-loop、CrashLoopBackOff（boolean，間歇／擺盪）
   - description: >-
@@ -132,7 +137,7 @@ signatures:
     metric_kind: boolean
     shape_class: step
     fault_class: pod-crashloopbackoff
-    labels: {namespace: workload-ref, pod: app-ref-0, container: app, reason: CrashLoopBackOff}
+    labels: {namespace: db-ref, pod: app-ref-0, container: app, reason: CrashLoopBackOff}
 
   # 6 ── node NotReady（boolean；故障值低於正常值，1 → 0）
   - description: >-
@@ -175,7 +180,7 @@ signatures:
     time_axis:
       staleness_tail: 20m              # 代理死亡：時序最後 20 分鐘的資料永遠不會送達
     fault_class: cadvisor-scrape-stale
-    labels: {namespace: workload-ref, pod: app-ref-0, container: app, node: node-ref-01}
+    labels: {namespace: db-ref, pod: app-ref-0, container: app, node: node-ref-01}
 
   # 8 ── 良性探針（must_detect: false）：預期中的夜間批次 CPU 隆起，遠低於 limit
   - description: >-
@@ -195,9 +200,9 @@ signatures:
     metric_kind: counter
     companion_series:
       - metric: kube_pod_container_resource_limits
-        labels: {namespace: workload-ref, pod: app-ref-0, container: app, resource: cpu}
+        labels: {namespace: db-ref, pod: app-ref-0, container: app, resource: cpu}
         role: static
         level: 2.0                     # 2 核的 limit —— 顯示這個隆起仍充分留在預算之內
     shape_class: spike                 # 上升、短暫維持、立即回復到閒置
     fault_class: benign-batch-cpu-bump
-    labels: {namespace: workload-ref, pod: app-ref-0, container: app}
+    labels: {namespace: db-ref, pod: app-ref-0, container: app}
