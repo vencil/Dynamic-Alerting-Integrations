@@ -212,3 +212,12 @@ func (w *Writer) gitExec(args ...string) error {
 	}
 	return nil
 }
+
+// gitCheck runs a git command and reports only whether it succeeded.
+// Used for existence-style probes where output and error detail are irrelevant.
+func (w *Writer) gitCheck(args ...string) bool {
+	fullArgs := append([]string{"-C", w.gitDir}, args...)
+	cmd, _, cancel := w.gitCmd(fullArgs...)
+	defer cancel()
+	return cmd.Run() == nil
+}
