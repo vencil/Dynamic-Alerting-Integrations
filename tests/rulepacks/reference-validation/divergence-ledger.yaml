@@ -1,0 +1,107 @@
+# =====================================================================
+# Divergence ledger — reference-validation candidate rules vs shipped rule packs
+# (TRK-339 WS4a-1 fidelity contract; enforced by
+#  tests/rulepacks/test_reference_validation_sync.py)
+# =====================================================================
+# 每一條 candidate 與出貨規則的「刻意分歧」都必須在這裡有宣告條目——
+# sync gate 對「未宣告的漂移」與「失效的 ledger 條目」都會 FAIL（exit-lock：
+# 條目描述的分歧一旦在現實中消失／改變，必須同步移除或更新條目）。
+# pack key ↔ 出貨檔案：oracle/db2/kubernetes → rule-packs/rule-pack-<key>.yaml
+version: 1
+
+# ---------------------------------------------------------------------
+# Pack 層分歧（適用所有 candidate 檔）
+# ---------------------------------------------------------------------
+pack_level:
+  - id: group-interval-30s
+    packs: [oracle, db2, kubernetes]
+    field: group_interval
+    candidate_value: 30s
+    shipped_value: "alert groups 無顯式 interval（engine 預設 1m）；normalization records 15s/60s"
+    reason: >-
+      candidate 把多層 recording-rule 管線塌縮成單層 direct predicate，無法同時
+      重現 15s（record）與 1m（alert）兩種 cadence；30s = 注入 harness 讀回網格
+      （inject_waveform STEP），偏差方向是 candidate 偵測 offset 粒度略細。
+      eval cadence 屬受測遷移保真的一部分（inject_waveform 報告
+      rules.groups[].interval_s 供對帳）。
+  - id: direct-predicate-form
+    packs: [oracle, db2, kubernetes]
+    field: predicate_structure
+    reason: >-
+      README §「Candidate rules 不是生產規則的 proxy」——recording-rule 管線
+      （max/sum by(tenant) 聚合、user_threshold 解析、user_state_filter
+      maintenance gate、tenant_metadata_info enrichment）刻意不重現：聚合會剝除
+      注入歸因 label。管線層由 rule-pack-*_test.yaml promtool fixture 與
+      vmalert parity gate A 補償（對真規則測）。
+
+# ---------------------------------------------------------------------
+# 出貨 alert 不在 candidate 內（exit-lock：alert 一旦加進 candidate，條目必須移除）
+# ---------------------------------------------------------------------
+absent_from_candidate:
+  oracle: []
+  db2:
+    - alert: DB2TablespaceAlmostFull
+      reason: >-
+        盲寫函式庫沒有 tablespace 故障 signature（anti-circularity：不回頭照規則
+        補寫），規則放進 candidate 也永遠 inert；維持為 coverage-gap finding。
+      tracking: "#1174"
+  kubernetes:
+    - alert: PodContainerHighCPUCritical
+      reason: critical 級門檻走 user_threshold{severity="critical"}，租戶 opt-in、無出貨預設值可 inline。
+    - alert: PodContainerHighMemoryCritical
+      reason: 同 PodContainerHighCPUCritical——critical 級無出貨預設值可 inline。
+    - alert: PodContainerCPUThrottledCritical
+      reason: critical 級為租戶 opt-in（建議起始值 50、無平台預設），無出貨預設值可 inline。
+    - alert: ContainerOOMKilled
+      reason: >-
+        波形庫沒有 container_oom_events_total signature（run#1 的 oomkill-restart
+        signature 用的是 kube_pod_container_status_restarts_total，而出貨 #1187
+        刻意選 cAdvisor 事件源）；補 signature 屬 #1177 剩餘範圍。
+      tracking: "#1177"
+    - alert: ContainerOOMKilledCritical
+      reason: 同 ContainerOOMKilled。
+      tracking: "#1177"
+    - alert: VersionAwareThresholdInert
+      reason: 平台設定失誤哨兵（user_threshold/kube_pod_labels meta series），非故障偵測謂詞，harness 不建模。
+    - alert: CustomRecipeDiskInert
+      reason: 平台/租戶設定失誤哨兵（#692 P0③），非故障偵測謂詞，harness 不建模。
+    - alert: TenantHAReplicasDegraded
+      reason: KSM replica gauge 的 vanish 偵測（#875/#888），波形庫無 replica-degradation signature；#985 masking defer 脈絡。
+
+# ---------------------------------------------------------------------
+# 單條 alert 的欄位級分歧（field: for / severity / predicate_structure）
+# exit-lock：shipped_evidence 子字串必須仍存在於出貨 pack 原文
+# ---------------------------------------------------------------------
+alert_divergence:
+  kubernetes:
+    - alert: PodContainerCPUThrottled
+      field: predicate_structure
+      divergence: 出貨 working-hard floor（and on(ns,pod,container) cpu% > 20）未重現
+      reason: >-
+        cfs 波形（signature 4）沒有共注入 usage/limit companion series，floor join
+        會把 harness 要量的訊號整個清空成假 MISS；真實故障中 usage≈quota 必然
+        滿足 floor，故對真故障 fire/no-fire 等價。觸發重審：波形庫新增含
+        companion-usage 的 cfs signature、或新增 idle-sidecar 良性節流探針時。
+      shipped_evidence: "tenant:container_cpu_percent:by_container > 20"
+    - alert: NodeNotReady
+      field: predicate_structure
+      divergence: 出貨的租戶歸屬 join（tenant:node_owner:info and on(node) …）未重現——candidate 對任何 NotReady 節點開火
+      reason: >-
+        節點歸屬是租戶 plumbing（需要 kube_pod_info fixture，波形庫未注入）；
+        對單節點 library signature 而言 fire/no-fire 等價。
+      shipped_evidence: "tenant:node_owner:info"
+
+# ---------------------------------------------------------------------
+# Record/alert 層 selector 內聯到 base metric（fire/no-fire 等價）
+# exit-lock：matcher 原文必須同時存在於出貨 pack 原文與 candidate expr
+# ---------------------------------------------------------------------
+inlined_matchers:
+  kubernetes:
+    - alert: ContainerCrashLoop
+      metric: kube_pod_container_status_waiting_reason
+      matcher: reason="CrashLoopBackOff"
+      note: 出貨在 record 之上的 alert 層過濾（tenant:container_waiting_reason:count{reason=…}）；內聯至 base metric。
+    - alert: ContainerImagePullFailure
+      metric: kube_pod_container_status_waiting_reason
+      matcher: reason=~"ImagePullBackOff|InvalidImageName"
+      note: 同上——alert 層 reason regex 內聯；regex 值鎖定出貨原文（出貨改 regex 時 gate 會咬）。
