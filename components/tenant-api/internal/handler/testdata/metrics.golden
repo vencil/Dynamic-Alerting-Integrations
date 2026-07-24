@@ -1,0 +1,62 @@
+# HELP tenant_api_up Whether the tenant-api is up.
+# TYPE tenant_api_up gauge
+tenant_api_up 1
+# HELP tenant_api_uptime_seconds Seconds since tenant-api started.
+# TYPE tenant_api_uptime_seconds gauge
+tenant_api_uptime_seconds 0.0
+# HELP tenant_api_requests_total Total API requests.
+# TYPE tenant_api_requests_total counter
+tenant_api_requests_total 42
+# HELP tenant_api_errors_total Total API errors.
+# TYPE tenant_api_errors_total counter
+tenant_api_errors_total 7
+# HELP tenant_api_writes_total Total write operations (git commits).
+# TYPE tenant_api_writes_total counter
+tenant_api_writes_total 3
+# HELP tenant_api_rate_limit_rejections_total Total requests denied by the per-caller rate limiter.
+# TYPE tenant_api_rate_limit_rejections_total counter
+tenant_api_rate_limit_rejections_total 0
+# HELP tenant_api_rate_limit_active_callers Number of callers with at least one request inside the rolling window.
+# TYPE tenant_api_rate_limit_active_callers gauge
+tenant_api_rate_limit_active_callers 0
+# HELP tenant_api_federation_orphaned_tokens Live federation token records whose tenant is no longer in conf.d.
+# TYPE tenant_api_federation_orphaned_tokens gauge
+tenant_api_federation_orphaned_tokens 0
+# HELP tenant_api_federation_orphaned_subset_files Stale conf.d/_federation/<tenant>.yaml subset files whose tenant is no longer in conf.d.
+# TYPE tenant_api_federation_orphaned_subset_files gauge
+tenant_api_federation_orphaned_subset_files 0
+# HELP tenant_api_identity_audit_total Machine-identity (KSA/TokenReview) audit observations by result (ADR-027; audit-only, does not affect authz).
+# TYPE tenant_api_identity_audit_total counter
+tenant_api_identity_audit_total{result="mismatch"} 0
+tenant_api_identity_audit_total{result="no_token"} 0
+tenant_api_identity_audit_total{result="unknown_issuer"} 0
+tenant_api_identity_audit_total{result="unknown_workload"} 0
+tenant_api_identity_audit_total{result="verified"} 0
+tenant_api_identity_audit_total{result="verify_failed"} 0
+# HELP tenant_api_scope_would_deny_total Scope-filter would-deny observations by axis: an unlabeled subject that shadow mode allows but enforce mode would deny (ADR-027; monotonic counter — watch its rate/increase reach 0 over the soak window, not its absolute value, before flipping enforce).
+# TYPE tenant_api_scope_would_deny_total counter
+tenant_api_scope_would_deny_total{axis="metadata"} 0
+tenant_api_scope_would_deny_total{axis="org"} 0
+tenant_api_scope_would_deny_total{axis="org_write"} 0
+# HELP tenant_api_config_reload_failures_total Config reload failures by manager, from either reload path (periodic WatchLoop tick or post-write Reload). On failure the manager keeps serving the LAST-GOOD snapshot, so the edited config silently does not take effect — alert on a sustained increase() (monotonic counter).
+# TYPE tenant_api_config_reload_failures_total counter
+tenant_api_config_reload_failures_total{component="RBAC"} 0
+tenant_api_config_reload_failures_total{component="federation-policy"} 0
+tenant_api_config_reload_failures_total{component="groups"} 0
+tenant_api_config_reload_failures_total{component="policy"} 0
+tenant_api_config_reload_failures_total{component="tenantorg"} 0
+tenant_api_config_reload_failures_total{component="views"} 0
+# HELP tenant_api_config_last_reload_successful Whether each config manager's LAST reload succeeded (1) or failed and is serving stale last-good config (0). Unlike the failure counter this catches a single-shot Reload failure (groups/views do not retry) and stays 0 until a load succeeds — alert on == 0.
+# TYPE tenant_api_config_last_reload_successful gauge
+tenant_api_config_last_reload_successful{component="RBAC"} 1
+tenant_api_config_last_reload_successful{component="federation-policy"} 1
+tenant_api_config_last_reload_successful{component="groups"} 1
+tenant_api_config_last_reload_successful{component="policy"} 1
+tenant_api_config_last_reload_successful{component="tenantorg"} 1
+tenant_api_config_last_reload_successful{component="views"} 1
+# HELP tenant_api_dev_auth_bypass_active 1 if --dev-bypass-auth is enabled (LOCAL DEV ONLY; must be 0 in production).
+# TYPE tenant_api_dev_auth_bypass_active gauge
+tenant_api_dev_auth_bypass_active 0
+# HELP tenant_api_human_socket_up 1 if the human-plane Unix socket answered the readiness self-dial (ADR-027 D2-B; only present when --human-socket is set).
+# TYPE tenant_api_human_socket_up gauge
+tenant_api_human_socket_up 1
