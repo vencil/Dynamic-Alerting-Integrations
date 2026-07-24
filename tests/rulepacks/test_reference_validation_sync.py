@@ -99,6 +99,10 @@ def _candidate_metrics(expr):
     """Raw metric names referenced by a candidate expr (brace/range bodies stripped)."""
     stripped = re.sub(r"\{[^}]*\}", "", expr)
     stripped = re.sub(r"\[[^\]]*\]", "", stripped)
+    # Vector-matching clause arguments are label names, not metrics: without this
+    # strip, `ignoring(resource)` leaks `resource` into the shipped-metric lookup
+    # (benign-empty today, but the gate would claim alignment it never checked).
+    stripped = re.sub(r"\b(?:ignoring|on|group_left|group_right)\s*\([^)]*\)", "", stripped)
     names = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", stripped))
     return {n for n in names if n not in _NON_METRIC and not n.isdigit()}
 
