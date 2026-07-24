@@ -27,6 +27,7 @@
 | `k8s-linux-reference.yaml` | Linux-on-K8s 故障函式庫（容器／節點） |
 | `negative-oracle.yaml`, `negative-db2.yaml` | 良性函式庫（精確度探針） |
 | `candidate-{oracle,db2,k8s}.rules.yaml` | 出貨告警邏輯的 direct-predicate 形式（見各檔標頭） |
+| `divergence-ledger.yaml` | candidate ↔ 出貨規則的**宣告式分歧帳本**（sync gate 的輸入，見下節） |
 | `tolerances.yaml` | ⚠️ **示意性質**的偵測時間上限 —— 並非由客戶 MTTA 推導而來 |
 
 ## ⛔ Candidate rules 不是生產規則的 proxy
@@ -51,6 +52,39 @@
 的 promtool fixture 與 vmalert parity gate A **是對真規則（含 recording rule 與聚合）測的**。
 兩者互補，缺一不可：本 harness 測「門檻對不對」，那組 gate 測「管線接得對不對」。
 
+## Candidate ↔ 出貨規則同步契約（TRK-339 WS4a-1）
+
+candidate 的 `for:` / severity / raw-metric selector 與出貨 pack **逐條鎖定**，由
+`tests/rulepacks/test_reference_validation_sync.py` 強制。刻意分歧（direct-predicate
+結構、group interval、未鏡射的出貨 alert、內聯的 record 層 matcher）全部宣告在
+[`divergence-ledger.yaml`](divergence-ledger.yaml)——條目本身帶 exit-lock：分歧在
+現實中消失或改變時 gate 會咬，必須同步移除／更新條目。兩側都不能靜默漂移
+（run#1 就是被靜默漂移咬到：candidate `for:` 自創 5m/6m、零 namespace selector，
+而出貨是 30s/60s/3m + `namespace=~"db-.+"`）。
+
+**注入 namespace 紀律**：K8s 波形一律注入 `namespace: db-ref`（落在出貨 selector
+／cadvisor scrape keep-list 的 `namespace=~"db-.+"` 面內）；`db-ref` 是參考 fixture
+識別子，非真實租戶 id。
+
+**本目錄（tests/）是唯一 canonical 副本**。`dev/waveform-ref/`（未版控 scratch）只
+保留 run 產物（inject 報告 JSON、CATCH-RATE-REPORT 等）；規則與波形 fixture 的重複
+副本已於 2026-07-24 移除（該批為 prose 翻譯前的英文原稿，語意層經 parse 比對零分岔）。
+
+## Threshold 注入政策（epic F1 決議）
+
+三段量測、各自的門檻來源與身分——**絕不混用**：
+
+| Run | 注入門檻 | 身分 | 用途 |
+|---|---|---|---|
+| **run#1** | rule-pack 標頭**文件範例值**（Oracle/DB2 不出貨 `_defaults` —— #1175） | **fidelity-corrected 基線，非校準數據** | 保真度修復（WS4a-1）後重跑；只回答「出貨謂詞邏輯接得對不對」 |
+| **run#2** | WS3 產出的**候選 defaults** | 候選值驗證 | 加髒語料變體（2–5% dropout + timestamp jitter，外審 F5）；通過才解 #1196-A／#1175 |
+| **run#3** | post-migration 實際生效值 | 遷移後重量測 | WS3 遷移落地後的回歸基線 |
+
+⚠️ **波形庫 ≠ spec（防 Goodhart，外審 F5 決議）**：本函式庫是偵測能力的**抽樣
+探針**，不是告警行為的規格書。針對「讓某條波形過」去調規則或門檻＝優化到量測
+本身，量測即失效；規則變更的正當性只能來自故障語意（vendor 行為、SRE 領域
+知識），波形庫只負責事後量測它。
+
 ## 重跑（迴歸基線）
 
 需要 dev-container 內的 `vmsingle`（`:8428`）+ `vmalert-tool`/`vmalert`（見 ADR-030
@@ -65,7 +99,11 @@ python3 scripts/tools/dx/inject_waveform.py --vm-url http://localhost:8428 \
 python3 scripts/tools/dx/waveform_score.py /tmp/<lib>-inject.json --tolerances tolerances.yaml
 ```
 
-## 結果摘要（首次執行，2026-07-19）
+## 結果摘要（首次執行，2026-07-19；⚠️ 先於 WS4a-1 保真度修復）
+
+> ⚠️ 下表數字是**保真度修復前**（candidate `for:`/selector 漂移、K8s 波形 ns 在
+> 出貨 selector 面之外、#1184/#1188 出貨修正未回鏡）量出來的——僅供歷史對照，
+> 不作為基線；基線＝修復後依上節政策重跑的 run#1。
 
 | 指標 | 數值 |
 |---|---|
