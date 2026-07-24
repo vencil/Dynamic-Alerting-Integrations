@@ -47,6 +47,7 @@ data:
                 a fixed cadence and alarms when it STOPS. Do NOT Silence this
                 alert, and do NOT add an inhibit rule whose target_matchers match
                 alertname="Watchdog" (ADR-025).
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/alerting-plane-self-liveness.md"
 
           # --- Watchdog egress health (ADR-025 §4 / #838) ---
           # Internal complement to the EXTERNAL dead-man's-switch. If Alertmanager
@@ -76,6 +77,7 @@ data:
                 watchdog-heartbeat url_file Secret (populated? valid URL? token
                 live?) and the egress/firewall path to the heartbeat endpoint. If
                 the url_file is still the deploy placeholder, populate the Secret.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/alerting-plane-self-liveness.md"
 
           # --- Platform governance loop liveness (#656) ---
           # The weekly threshold-governance CronJob (`threshold-govern`, Mondays
@@ -132,6 +134,9 @@ data:
                 silent all-fail too — not only when the scheduler stops. A
                 CronJob deleted entirely is not caught here (its KSM series
                 vanishes); that surfaces at deploy/review time.
+              # Anchor = the ASCII '#### threshold-govern' heading in cli-reference.md — a
+              # CONTRACT (renaming the heading rots this link; rule-YAML URLs are not linted).
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#threshold-govern"
 
           # --- Exporter Health ---
           - alert: ThresholdExporterDown
@@ -142,6 +147,7 @@ data:
             annotations:
               summary: "Threshold exporter instance {{ $labels.instance }} is DOWN"
               description: "up=0 for 1m — partial HA degradation"
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/high-availability.md"
 
           - alert: ThresholdExporterAbsent
             expr: absent(up{job="threshold-exporter"} == 1)
@@ -151,6 +157,7 @@ data:
             annotations:
               summary: "All threshold-exporter instances are unreachable"
               description: "No healthy threshold-exporter target found for 1m — alerting pipeline broken"
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/high-availability.md"
 
           # --- HA Replica Health ---
           - alert: ThresholdExporterTooFewReplicas
@@ -161,6 +168,7 @@ data:
             annotations:
               summary: "Threshold exporter HA degraded"
               description: "Only {{ $value }} healthy replica(s) — expected at least 2"
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/high-availability.md"
 
           # --- Pod Restart Storm ---
           - alert: ThresholdExporterHighRestarts
@@ -177,6 +185,7 @@ data:
             annotations:
               summary: "Threshold exporter {{ $labels.pod }} restarting frequently"
               description: "{{ $value | printf \"%.0f\" }} restarts in the last hour"
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/high-availability.md"
 
           # --- Config Blast Radius (v2.8.0, Issue #61) ---
           # Fires when a defaults change ripples to >500 tenants in p99
@@ -204,6 +213,7 @@ data:
                 (planned global rollout) or accidental (operator pushed
                 wrong-scope edit). Dashboard: blast-radius heatmap by
                 (reason, scope, effect).
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md"
 
           # --- Config Override-Shadow Surge (v2.8.0, Issue #61) ---
           # Info-level signal: lots of defaults edits being absorbed by
@@ -222,6 +232,7 @@ data:
                 global defaults are diverging from how tenants actually
                 consume them — investigate which defaults are being touched
                 without effect.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md"
 
           # --- Config Parse Failure (issue #643) ---
           # An invalid tenant or _defaults YAML increments
@@ -255,6 +266,9 @@ data:
                 alert may stay Firing for up to ~1h after the YAML is
                 fixed (the old failures only drop out of the window as
                 time passes) — that's expected, not a stuck alert.
+              # Anchor = the ASCII '#### validate-config' heading in cli-reference.md — a
+              # CONTRACT (renaming the heading rots this link; rule-YAML URLs are not linted).
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#validate-config"
 
           # `> 0.5` (not `> 0`) is the standard SRE-grade defence against
           # Prometheus `increase()` extrapolation noise: scrape misalignment
@@ -275,6 +289,7 @@ data:
                 depends on this chain — those tenants quietly lose any
                 rule pulled from defaults. Fix the YAML immediately
                 (see the exporter ERROR logs).
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md"
 
           # --- Config Reload Stuck (issue #631 H2) ---
           # Complements ConfigParseFailure: that pair catches BAD YAML
@@ -338,6 +353,7 @@ data:
                 (Git says X, Prometheus still emits Y). Inspect the
                 exporter logs for a `diffAndReload` ERROR / panic /
                 lock contention; restart the pod if no obvious cause.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md"
 
           # --- Tenant Cardinality Cap Truncation (issue #652) ---
           # Companion to the v1.5.0 runtime per-tenant cardinality cap
@@ -388,6 +404,9 @@ data:
                 `_defaults.yaml` change adding metric keys across the
                 ADR-017 inheritance chain, not single-tenant
                 overgrowth.
+              # Anchor = the ASCII '#### cardinality-forecast' heading in cli-reference.md — a
+              # CONTRACT (renaming the heading rots this link; rule-YAML URLs are not linted).
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#cardinality-forecast"
 
           # `count without (tenant)` (NOT bare `count()`) is load-bearing.
           # Same lesson as PR #651: bare aggregations strip ALL labels
@@ -423,6 +442,7 @@ data:
                 change FIRST — remediating individual tenants without
                 addressing the defaults change will just re-fire the
                 same storm next reload.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md"
 
           # --- Prometheus Rule Evaluation Health (ADR-020 IV-2c, #508) ---
           # The federation blast-radius caps (--query.max-samples /
@@ -448,6 +468,7 @@ data:
                 IV-2c); inspect the failing rule on /rules and either
                 optimise it or raise the cap + the Prometheus memory
                 limit together.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/020-tenant-federation.md"
 
           # --- tenant-api SSE reconnect-after-deploy guard (#740 / TRK-326) ---
           # #677 (TRK-324) set the tenant-api Deployment to `strategy: Recreate`
@@ -519,6 +540,7 @@ data:
                 deploys. Expected reconnect behaviour + the read/write-split
                 re-trigger (TenantApiReadHANeeded, below) are documented in
                 docs/api/tenant-api-hardening.md. Dashboard: tenant_api_sse_clients.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md"
 
           # --- tenant-api config reload failure (Gemini #1056 disposition 3a) ---
           # Every tenant-api config manager keeps serving the LAST-GOOD snapshot
@@ -564,6 +586,7 @@ data:
                 window means it may stay Firing up to ~15m after the fix as old
                 failures age out. Pre-merge schema validation of the admin config
                 is the shift-left complement to this runtime signal.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md"
 
           # --- tenant-api config reload STALE (current-state gauge) ---
           # Companion to TenantApiConfigReloadFailing above. That one is a RATE
@@ -604,6 +627,7 @@ data:
                 self-heal — it clears only on the next successful write or a pod
                 restart. This gauge catches the single-shot failure that
                 TenantApiConfigReloadFailing (a rate alert) cannot.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md"
 
           # --- tenant-api read-HA defer re-trigger (ADR-023 A4 / #678 / #788, CLOSED-deferred) ---
           # CODIFIED re-trigger for a CLOSED-deferred design item. #678 (TRK-325
@@ -667,6 +691,7 @@ data:
                 sequence it WITH the write-plane K8s Lease (#787 / A3) — A4 alone
                 leaves writes (Save) dropping on deploy. Details:
                 docs/api/tenant-api-hardening.md §5.6. Dashboard: tenant_api_sse_clients.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md"
 
           # --- tenant-api single-writer RUNTIME breach (ADR-023 L3 / A3 / #787) ---
           # The DETECTIVE control for the one residual vector ADR-023 leaves open.
@@ -749,6 +774,7 @@ data:
                 Lease (ADR-023 Deferred A3 / #787): if multi-writer is now a real
                 operational need, build leader-election — do NOT raise replicaCount.
                 Details: docs/api/tenant-api-hardening.md §5.7.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md"
 
           # --- Federation revocation tamper-evidence (ADR-028 D1 / #924) ---
           # Metrics from the federation-reconciler Deployment's /metrics
@@ -775,6 +801,7 @@ data:
                 ADR-028 D3), diff against the live store, and if malicious restore
                 the revocation from git. Details:
                 docs/adr/028-federation-revocation-tamper-evidence.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
 
           - alert: FederationRevocationReconcileStale
             expr: |
@@ -796,6 +823,7 @@ data:
                 federation-reconciler`), its recent logs for fail-closed messages,
                 and VictoriaLogs reachability. Details:
                 docs/adr/028-federation-revocation-tamper-evidence.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
 
           - alert: FederationGatewayRevocationLoadFailure
             expr: federation_gateway_revocation_load_errors > 0
@@ -815,6 +843,7 @@ data:
                 pod-start / remount blip) may indicate mount tampering (a DoS of the
                 defence). Details:
                 docs/adr/028-federation-revocation-tamper-evidence.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
 
           # --- Tenant-exporter liveness: catastrophic fallback (#869) ---
           # Per-tenant TenantExporterAbsent (rule-pack-liveness.yaml) anti-joins
@@ -846,6 +875,7 @@ data:
                 (its anti-join LHS is empty), so this catastrophic fallback is the
                 only signal. Check Prometheus /targets for the tenant-exporters job
                 and the threshold-exporter Deployment.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/federation-integration.md"
 
           # --- Mass exporter outage: page-storm sentinel (#869, scale guard) ---
           # When a shared dependency (node pool, network partition, registry
@@ -980,6 +1010,7 @@ data:
                 for 15m. Check the federation-audit dashboard — likely a
                 leaked or misconfigured token, a tenant exceeding its rate
                 limit, or whitelist / subset drift.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-federation.md"
 
           # Platform-fault signal — 5xx from the storage backend, kept
           # separate from the tenant-side rejections above (a backend
@@ -999,6 +1030,7 @@ data:
                 {{ $labels.tenant }} (>3/min for 10m). This is a platform
                 fault, not a tenant rejection — check the Layer 3 proxy and
                 the storage backend.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/020-tenant-federation.md"
 
           # ── Audit pipeline liveness (#566 X-4) ──────────────────────
           # `tenant_federation_requests_total` is emitted by the gateway
@@ -1023,6 +1055,7 @@ data:
                 Prometheus scrape target. If both gateway + sidecar are
                 healthy the silence may indicate genuine zero traffic
                 (suppress the alert during planned maintenance).
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/020-tenant-federation.md"
 
           # ── Vector buffer overflow → audit row loss (#566 T1-4) ─────
           # Requires Vector chart `metrics.enabled=true` + a Prometheus
@@ -1103,6 +1136,7 @@ data:
                 audience token 401s at jwt_authn BEFORE account_id is stamped,
                 so it is NOT counted here (attack noise; see jwt_authn stats,
                 per ADR-020).
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md"
 
           # ── Tenant-projection fan-out discard spike (ADR-021 #609 PR-4) ──
           # ⛔ COARSE ANOMALY TRIPWIRE, not a precise gap detector — read the
@@ -1165,6 +1199,7 @@ data:
                 flood. This is a COARSE signal — it cannot name the affected
                 account; correlate with the Vector logs and the account
                 registry. See platform-log-aggregation-runbook §8.7.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md"
 
           # ── Projection gate: unique-but-wrong accountId, DEGRADED (#908 PR-3a) ──
           # The fail-closed projection gate (verify_tenant_projections.py init-container)
@@ -1215,6 +1250,7 @@ data:
                 The exact offending pair is in the projection-gate
                 init-container logs (`kubectl logs <vector-pod> -c
                 projection-gate`). See platform-log-aggregation-runbook §8.9.1.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md"
 
           # ── Projection gate: registry unreadable at boot / GHOST RACE (#908 PR-3a) ──
           # The gate could not TRUST the conf.d account registry at boot, so it degraded
