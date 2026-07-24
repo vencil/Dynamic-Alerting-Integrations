@@ -61,6 +61,11 @@ _NON_METRIC = {
     "sum_over_time", "count_over_time", "last_over_time", "changes",
     "clamp_max", "clamp_min", "time", "histogram_quantile", "predict_linear",
 }
+# Extensibility note: this set covers the PromQL functions today's candidate
+# packs use. If a future pack scan fails on a "metric that doesn't exist",
+# FIRST check whether it's a newer PromQL keyword (stddev, stddev_over_time,
+# deriv, sort, sort_desc, day_of_month, histogram_fraction, ...) leaking past
+# this filter — extend the set rather than chasing a phantom metric.
 
 _DUR = {"ms": 0.001, "s": 1, "m": 60, "h": 3600, "d": 86400}
 
@@ -77,6 +82,14 @@ def _norm_matchers(braces_text):
     inner = braces_text.strip()[1:-1].strip()
     if not inner:
         return frozenset()
+    # Lite-parser contract: comma splits matchers, so a comma INSIDE a quoted
+    # label value would silently shred the matcher into garbage — fail loud
+    # instead. Pack convention: use regex alternation `|` in values, never `,`.
+    # (Pair quotes left-to-right first; a bare `"...,..."` scan can't tell
+    # inside from outside and false-positives on legitimate separators.)
+    assert not any("," in q for q in re.findall(r'"[^"]*"', inner)), (
+        f"comma inside a quoted label value is not supported by this lite parser: {braces_text!r}"
+    )
     parts = [p.strip() for p in inner.split(",") if p.strip()]
     return frozenset(re.sub(r'\s*(=~|!~|!=|=)\s*', r"\1", p) for p in parts)
 
@@ -325,3 +338,10 @@ def test_ledger_pack_keys_valid():
     for e in led["pack_level"]:
         for pack in e["packs"]:
             assert pack in PACKS, f"ledger pack_level {e['id']}: unknown pack key {pack!r}"
+
+
+def test_norm_matchers_rejects_comma_in_quoted_value():
+    """Lite-parser contract guard: comma inside a quoted label value must fail
+    loud (silent mis-split shreds the matcher — Gemini review of #1208)."""
+    with pytest.raises(AssertionError, match="comma inside a quoted label value"):
+        _norm_matchers('{reason=~"Error|OOM,Killed"}')

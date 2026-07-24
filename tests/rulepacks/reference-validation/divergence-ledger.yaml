@@ -7,6 +7,10 @@
 # sync gate 對「未宣告的漂移」與「失效的 ledger 條目」都會 FAIL（exit-lock：
 # 條目描述的分歧一旦在現實中消失／改變，必須同步移除或更新條目）。
 # pack key ↔ 出貨檔案：oracle/db2/kubernetes → rule-packs/rule-pack-<key>.yaml
+#
+# Phase-2 想法（Gemini review of #1208；defer——lint job 不引入網路依賴）：
+# 帶 tracking issue 的條目（如 absent_from_candidate 的 #1174）可在「非 lint
+# 的排程 job」查 issue 狀態——issue 已關而條目未清即告警，強化債務回收。
 version: 1
 
 # ---------------------------------------------------------------------
