@@ -156,8 +156,8 @@ def extract_recording_outputs(rules: List[Dict[str, Any]]) -> Set[str]:
 #     `{namespace=~"db-.+"}` and recordings do `label_replace(...,"tenant","$1",
 #     "namespace",...)` to DERIVE tenant) → NOT federated → absent on central. A
 #     central rule reading it is a genuine federation topology bug, so `kube_` /
-#     `kubelet_` are the ONLY raw families NOT excused here (see
-#     KNOWN_CENTRAL_RAW_EXEMPTIONS for the 2 pre-existing offenders).
+#     `kubelet_` are the ONLY raw families NOT excused here (audited ledger:
+#     KNOWN_CENTRAL_RAW_EXEMPTIONS — empty since the #1168 sentinel fix).
 #
 # External inputs recognised:
 #   1. Platform-synthesised config — threshold-exporter / conf.d injection
@@ -210,7 +210,7 @@ def _is_external_pipeline_input(metric: str) -> bool:
     return False
 
 
-# ─ Known central-side raw-KSM references (pre-existing pack topology bugs) ─────
+# ─ Known central-side raw-KSM references (pack topology-bug ledger) ────────────
 #
 # Central ALERT rules that read a raw CLUSTER-LEVEL kube-state-metrics / kubelet
 # series directly. Those series are namespace-labeled (not tenant-labeled), so
@@ -218,29 +218,23 @@ def _is_external_pipeline_input(metric: str) -> bool:
 # central cluster → the alert is permanently inert there. This is a PACK-AUTHORING
 # topology bug (the pack must add an EDGE normalisation recording that derives a
 # tenant-labeled `tenant:*`/`:core` signal and federate THAT, as the container /
-# node-health / ha-replicas groups already do). Grandfathered so the split tool
-# reports exit 0 on the current repo while the fixes are tracked — every entry
-# prints a fail-loud WARN, and a NEW (unlisted) kube_/kubelet_-on-central makes
+# node-health / ha-replicas groups already do). A listed entry prints a fail-loud
+# WARN without failing the run; a NEW (unlisted) kube_/kubelet_-on-central makes
 # the tool exit 1 (audited ledger, NOT a blanket escape hatch).
 #
 # Scope note: per-tenant exporter raw (db liveness/topology: `up`, mysql_global_*,
 # kafka_brokers, mongodb_mongod_replset_member_state, rabbitmq_identity_info, …)
 # IS tenant-labeled → federated → legal on central (see _FEDERATED_EXPORTER_*),
-# so those *Down/*ExporterAbsent/*NoPrimary alerts are NOT topology bugs. Only the
-# 2 kube-state-metrics sentinels below genuinely reference non-federated raw.
-# TODO(#1168: rule-pack KSM-federation topology audit): give each sentinel an
-# edge normalisation recording (or platform-scoped alternative), then remove
-# from this ledger.
+# so those *Down/*ExporterAbsent/*NoPrimary alerts are NOT topology bugs.
+#
+# EMPTY since #1168: the 2 grandfathered KSM sentinels
+# (VersionAwareThresholdInert / CustomRecipeDiskInert) got edge normalisation
+# recordings (tenant:kube_pod_info:count / tenant:kube_pod_labels:count /
+# tenant:kube_pods_running:count / tenant:kubelet_volume_stats:count) and their
+# alerts now read only federated recordings. Keep the mechanism: any future
+# raw-on-central lands here ONLY with an issue-tracked justification.
 #   file → { raw_metric: "alert + why it reads raw" }
-KNOWN_CENTRAL_RAW_EXEMPTIONS: Dict[str, Dict[str, str]] = {
-    "rule-pack-kubernetes.yaml": {
-        "kube_pod_info": "VersionAwareThresholdInert: raw kube-state-metrics (namespace-labeled), not federated",
-        "kube_pod_labels": "VersionAwareThresholdInert: raw kube-state-metrics (namespace-labeled), not federated",
-        "kube_pod_status_phase": "CustomRecipeDiskInert: raw kube-state-metrics (namespace-labeled), not federated",
-        "kubelet_volume_stats_available_bytes": "CustomRecipeDiskInert: raw kubelet volume-stats (namespace-labeled), not federated",
-        "kubelet_volume_stats_capacity_bytes": "CustomRecipeDiskInert: raw kubelet volume-stats (namespace-labeled), not federated",
-    },
-}
+KNOWN_CENTRAL_RAW_EXEMPTIONS: Dict[str, Dict[str, str]] = {}
 
 
 def validate_central_references_edge(

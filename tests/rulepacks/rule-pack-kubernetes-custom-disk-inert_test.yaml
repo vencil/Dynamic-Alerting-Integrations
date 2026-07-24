@@ -7,6 +7,14 @@
 # metrics must NOT mask an inert tenant — the `unless on(tenant)` is the fix for the
 # global-aggregation masking bug an early draft had; case C is its regression guard).
 # `for: 15m` → eval at 16m. tenant=db-* (must match the namespace=~"db-.+" keep).
+#
+# #1168 edge-normalization layering: the pods leg and the volume-stats presence
+# legs are now EDGE recordings (tenant:kube_pods_running:count /
+# tenant:kubelet_volume_stats:count, tenant-labeled → federated) and the alert
+# reads only recordings + injected config. Alert cases A–K below are the
+# UNCHANGED fire/no-fire contract (behaviour-equivalence regression); the added
+# promql_expr_test samples pin the recordings' tenant-labeled shape — the
+# federation-visibility property whose absence WAS the #1168 inert bug.
 #   A) INERT (no PVC)  → fires (db-a): declared + pods + NO volume-stats. [full annotations]
 #   B) HEALTHY         → silent: declared + pods + BOTH volume-stats present.
 #   C) MULTI-TENANT    → ONLY db-b fires: db-a healthy + db-b inert in ONE eval (no masking).
@@ -32,6 +40,20 @@ tests:
       - series: 'kube_pod_status_phase{namespace="db-a", pod="app-1", phase="Running"}'
         values: '1x80'
       # NO kubelet_volume_stats_* series for db-a → inert.
+    promql_expr_test:
+      # #1168: pods-leg recording is tenant-labeled (federated); volume-stats
+      # presence recording emits NO series → the alert's `unless` subtrahend is
+      # empty → fire (absence semantics preserved through the recording layer).
+      - expr: tenant:kube_pods_running:count
+        eval_time: 5m
+        exp_samples:
+          - labels: 'tenant:kube_pods_running:count{tenant="db-a"}'
+            value: 1
+      - expr: count(tenant:kubelet_volume_stats:count) or vector(0)
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 0
     alert_rule_test:
       - eval_time: 16m
         alertname: CustomRecipeDiskInert
@@ -59,6 +81,14 @@ tests:
         values: '800x80'
       - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-a", persistentvolumeclaim="data"}'
         values: '1000x80'
+    promql_expr_test:
+      # #1168: BOTH families present → the presence recording exists per tenant
+      # (tenant-labeled → federated) → `unless` removes db-a → silent.
+      - expr: tenant:kubelet_volume_stats:count
+        eval_time: 5m
+        exp_samples:
+          - labels: 'tenant:kubelet_volume_stats:count{tenant="db-a"}'
+            value: 1
     alert_rule_test:
       - eval_time: 16m
         alertname: CustomRecipeDiskInert
