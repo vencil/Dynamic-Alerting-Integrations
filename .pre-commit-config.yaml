@@ -1133,6 +1133,36 @@ repos:
         # `unless`), or 2 copies one-per-arm and byte-canonical.
         files: ^(rule-packs/rule-pack-.*\.ya?ml|scripts/tools/lint/check_maintenance_symmetry\.py)$
 
+      - id: orphan-recordings-check
+        name: "orphan recording rules — every record must have a consumer across trees/dashboards/observed-map (TRK-339 WS2a / #1200)"
+        entry: python3 -X utf8 scripts/tools/lint/check_orphan_recordings.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        # Fires when a rule tree, a dashboard (standalone or embedded), the
+        # observed map, or the lint changes. Consumption is exact full-token
+        # identity (colon-in-token — no substring/prefix false matches). FAIL
+        # only on NEW orphans or a KNOWN_ORPHANS exit-lock breach; the 12
+        # grandfathered orphans are INFO (dispositions tracked in #1204).
+        # or-masking (WS2a S2) is deliberately NOT gated — heuristic, stays a
+        # periodic script (see the lint docstring).
+        files: ^(rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/(configmap-rules-.*\.ya?ml|configmap-grafana-.*\.ya?ml|.*\.json)|try-local/grafana/dashboards/.*\.json|scripts/tools/ops/metric_observed_map\.yaml|scripts/tools/lint/check_orphan_recordings\.py)$
+
+      - id: metric-group-pairs-check
+        name: "metric_group upgrade pairs — X/XCritical must share the severity-dedup label (TRK-339 WS2a / #1200; bug #1199)"
+        entry: python3 -X utf8 scripts/tools/lint/check_metric_group_pairs.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        # Fires when either rule tree or the lint changes. A detected X/XCritical
+        # pair (exact name + severity corroboration) missing `labels.metric_group`
+        # on either side — or with mismatched values — double-notifies (ADR-001
+        # severity-dedup inert). FAIL only on NEW violating pairs or a
+        # KNOWN_UNGROUPED exit-lock breach; the 4 kubernetes pairs are INFO
+        # (#1199). Differently-named conceptual pairs and single alerts are out
+        # of detection scope by design (see the lint docstring).
+        files: ^(rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/configmap-rules-.*\.ya?ml|scripts/tools/lint/check_metric_group_pairs\.py)$
+
       - id: undefined-tokens-check
         name: Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css
         entry: python3 -X utf8 scripts/tools/lint/check_undefined_tokens.py --ci
