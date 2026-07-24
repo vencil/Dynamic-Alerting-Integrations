@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/vencil/Dynamic-Alerting-Integrations/docs/schemas/threshold-registry.schema.json",
+  "title": "Threshold registry — threshold-contract SoT shape (TRK-339 WS1a / #1200 D2)",
+  "version": "v2.9.0",
+  "description": "Shape contract for rule-packs/threshold-registry.yaml, the standalone threshold-contract SoT decided by epic #1200 D2 (standalone YAML registry: language-neutral, schema-validatable). STRICT at every level (additionalProperties:false) — this file is a hand-carried contract during the transition period, so a typo'd field or a mis-typed value must fail at author/CI time, not surface later as a silently-dropped threshold identity. Enforcement note: extraction is FULL (all packs/keys — mechanical), but the enforcement path this registry first serves is the 18-key repair line (#1196 / TRK-337). Validated BEFORE any generation stage by scripts/tools/lint/check_threshold_registry.py (pre-commit + CI).",
+  "$comment": "Cross-entry constraints that JSON Schema cannot express — every keys.<k>.pack must exist under packs, every critical_of must name a key in the same pack, and the whole document must stay semantically equal to scaffold_tenant.RULE_PACKS during the transition — are enforced by the equivalence assertion in check_threshold_registry.py (diff_vs_scaffold in _registry_lib.py). metric_class is an enum on purpose: adding a new class is a deliberate contract change and must touch this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "packs", "keys"],
+  "properties": {
+    "version": {
+      "const": 1,
+      "$comment": "Registry FORMAT version (not the platform release). Bump only with a migration note in the file header."
+    },
+    "packs": {
+      "type": "object",
+      "title": "Pack-level metadata (one entry per rule pack, kubernetes included)",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["display", "exporter", "default_on", "rule_pack_file"],
+          "properties": {
+            "display": { "type": "string", "minLength": 1 },
+            "exporter": { "type": "string", "minLength": 1 },
+            "default_on": { "type": "boolean" },
+            "rule_pack_file": {
+              "type": "string",
+              "pattern": "^rule-packs/rule-pack-[a-z0-9-]+\\.yaml$"
+            }
+          }
+        }
+      }
+    },
+    "keys": {
+      "type": "object",
+      "title": "Flat threshold-key identity map (the contract body)",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pack", "tier", "value", "unit", "desc"],
+          "properties": {
+            "pack": {
+              "type": "string",
+              "minLength": 1,
+              "$comment": "Must name an entry under packs (cross-checked by the gate, not expressible here)."
+            },
+            "tier": {
+              "enum": ["defaults", "optional_overrides"],
+              "$comment": "defaults = emitted by the platform-defaults path (reachable per TRK-337); optional_overrides = documented-but-dormant until wired. The A-class of the 18 dead keys is exactly 'alert demands it but it sits in optional_overrides' — tier is therefore a load-bearing field, not decoration."
+            },
+            "value": { "type": "number" },
+            "unit": { "type": "string", "minLength": 1 },
+            "desc": { "type": "string", "minLength": 1 },
+            "metric_class": {
+              "enum": ["saturation"],
+              "$comment": "Only 'saturation' exists today (drives the educational _critical annotation + saturation_default_keys()). New classes are a contract change: extend this enum deliberately."
+            },
+            "critical_of": {
+              "type": "string",
+              "minLength": 1,
+              "$comment": "DERIVED, never authored: present iff the key ends in _critical and its base key exists in the same pack. Names the base key."
+            }
+          }
+        }
+      }
+    }
+  }
+}

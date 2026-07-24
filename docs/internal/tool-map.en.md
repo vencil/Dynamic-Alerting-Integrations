@@ -22,6 +22,7 @@ lang: en
 | `_grar_routes.py` | Route generation: tenant routes, override expansion, enforced routes, inhibit rules. |
 | `_grar_validate.py` | URL / domain / schema validation for generate_alertmanager_routes. |
 | `_observed_map_lib.py` | Shared SoT extractor for the threshold observed-map (#719). |
+| `_registry_lib.py` | threshold-registry SoT loader / validator / query lib (TRK-339 WS1a / #1200). |
 | `alert_correlate.py` | 告警關聯分析引擎（離線 CLI 模式）。 |
 | `alert_quality.py` | 警報品質評估工具。 |
 | `analyze_rule_pack_gaps.py` | Rule Pack gap analysis for custom rules. |
@@ -214,6 +215,7 @@ lang: en
 | `check_subprocess_timeout.py` | flag subprocess calls without explicit timeout. |
 | `check_threshold_observed_map.py` | Drift-guard for the threshold observed-map (#719). |
 | `check_threshold_reachability.py` | Threshold-key reachability gate — every alert-consumed threshold key must be producible by the platform-defaults path (TRK-337 / #1189). |
+| `check_threshold_registry.py` | Threshold-registry gate — schema validation + scaffold equivalence (TRK-339 WS1a / #1200). |
 | `check_tool_registry_jsx_parity.py` | every tool-registry.yaml entry must have a backing .jsx file (and vice versa). |
 | `check_translation.py` | 自動化翻譯品質檢查 |
 | `check_undefined_tokens.py` | Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css (with --report-orphans discovery mode). |

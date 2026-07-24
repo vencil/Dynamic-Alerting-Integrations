@@ -1,0 +1,504 @@
+# threshold-registry.yaml — threshold 契約 SoT（TRK-339 WS1a / #1200 D2）
+#
+# 地位：epic #1200 D2（2026-07-23 LOCKED）拍板 threshold 契約收斂到本檔——
+# 語言中立（helm/docs/portal 直讀）、schema 可驗證
+# （docs/schemas/threshold-registry.schema.json）。
+#
+# ⚠️ 過渡期（本 skeleton PR）：生成消費者「尚未」接線——
+# scaffold_tenant.RULE_PACKS 仍是運作中的契約副本，本檔由它機械萃取
+# （scripts/tools/ops/_registry_lib.py build_registry_doc()）。兩者的語意等價
+# 由 pre-commit gate check_threshold_registry.py 強制（防雙 SoT 漂移）。
+# 改閾值請改 scaffold_tenant.RULE_PACKS，再跑：
+#   python3 scripts/tools/lint/check_threshold_registry.py --regen
+# 下一個 PR 起方向反轉：本檔為 SoT、scaffold RULE_PACKS 降為生成物/runtime 載入。
+#
+# 範圍：threshold 身分（defaults / optional_overrides 兩層）。state_filters 與
+# dimensional_example 仍歸 scaffold（非閾值身分）。萃取為全量；本 registry 首要
+# 服務的 enforcement 路徑是 18-key 修復線（#1196 / TRK-337）。
+version: 1
+packs:
+  kubernetes:
+    display: Kubernetes (cAdvisor + KSM)
+    exporter: cAdvisor + kube-state-metrics
+    default_on: true
+    rule_pack_file: rule-packs/rule-pack-kubernetes.yaml
+  postgresql:
+    display: PostgreSQL (postgres_exporter)
+    exporter: prometheus-community/postgres_exporter
+    default_on: false
+    rule_pack_file: rule-packs/rule-pack-postgresql.yaml
+  mariadb:
+    display: MariaDB / MySQL (mysqld_exporter)
+    exporter: prom/mysqld-exporter or Percona
+    default_on: true
+    rule_pack_file: rule-packs/rule-pack-mariadb.yaml
+  redis:
+    display: Redis (oliver006/redis_exporter)
+    exporter: oliver006/redis_exporter
+    default_on: false
+    rule_pack_file: rule-packs/rule-pack-redis.yaml
+  mongodb:
+    display: MongoDB (percona/mongodb_exporter)
+    exporter: percona/mongodb_exporter
+    default_on: false
+    rule_pack_file: rule-packs/rule-pack-mongodb.yaml
+  elasticsearch:
+    display: Elasticsearch (elasticsearch_exporter)
+    exporter: justwatchcom/elasticsearch_exporter
+    default_on: false
+    rule_pack_file: rule-packs/rule-pack-elasticsearch.yaml
+  oracle:
+    display: Oracle Database (oracledb_exporter)
+    exporter: iamseth/oracledb_exporter
+    default_on: false
+    rule_pack_file: rule-packs/rule-pack-oracle.yaml
+  db2:
+    display: IBM DB2 (ibm_db2_exporter)
+    exporter: ibm_db2_exporter (community)
+    default_on: false
+    rule_pack_file: rule-packs/rule-pack-db2.yaml
+  clickhouse:
+    display: ClickHouse (built-in /metrics)
+    exporter: ClickHouse built-in Prometheus endpoint
+    default_on: false
+    rule_pack_file: rule-packs/rule-pack-clickhouse.yaml
+  kafka:
+    display: Apache Kafka (danielqsj/kafka-exporter)
+    exporter: danielqsj/kafka-exporter
+    default_on: false
+    rule_pack_file: rule-packs/rule-pack-kafka.yaml
+  rabbitmq:
+    display: RabbitMQ (kbudde/rabbitmq_exporter)
+    exporter: kbudde/rabbitmq_exporter or built-in Prometheus plugin
+    default_on: false
+    rule_pack_file: rule-packs/rule-pack-rabbitmq.yaml
+  jvm:
+    display: JVM (jmx_exporter / Micrometer)
+    exporter: prometheus/jmx_exporter or Spring Boot Actuator
+    default_on: false
+    rule_pack_file: rule-packs/rule-pack-jvm.yaml
+  nginx:
+    display: Nginx (nginx-prometheus-exporter)
+    exporter: nginxinc/nginx-prometheus-exporter
+    default_on: false
+    rule_pack_file: rule-packs/rule-pack-nginx.yaml
+keys:
+  container_cpu:
+    pack: kubernetes
+    tier: defaults
+    value: 80
+    unit: '%'
+    desc: Container CPU % of limit (weakest link)
+    metric_class: saturation
+  container_cpu_throttle:
+    pack: kubernetes
+    tier: defaults
+    value: 25
+    unit: '%'
+    desc: 'Chronic CFS throttle: % of ACTIVE 100ms periods throttled, NOT % CPU lost
+      (critical tier opt-in via container_cpu_throttle_critical, suggest 50; #944)'
+    metric_class: saturation
+  container_memory:
+    pack: kubernetes
+    tier: defaults
+    value: 85
+    unit: '%'
+    desc: Container memory % of limit (weakest link)
+    metric_class: saturation
+  pg_connections:
+    pack: postgresql
+    tier: defaults
+    value: 80
+    unit: '% of max_connections'
+    desc: Connection usage % warning
+    metric_class: saturation
+  pg_replication_lag:
+    pack: postgresql
+    tier: defaults
+    value: 30
+    unit: seconds
+    desc: Replication lag warning
+  pg_connections_critical:
+    pack: postgresql
+    tier: optional_overrides
+    value: 90
+    unit: '% of max_connections'
+    desc: Critical tier connections
+    critical_of: pg_connections
+  pg_replication_lag_critical:
+    pack: postgresql
+    tier: optional_overrides
+    value: 60
+    unit: seconds
+    desc: Critical tier replication lag
+    critical_of: pg_replication_lag
+  mysql_connections:
+    pack: mariadb
+    tier: defaults
+    value: 80
+    unit: count
+    desc: Max threads_connected warning
+    metric_class: saturation
+  mysql_cpu:
+    pack: mariadb
+    tier: defaults
+    value: 30
+    unit: threads
+    desc: 'Running-threads 1m-avg saturation warning; 80→30 = PMM/Nichter ''high''
+      (#944). NOT host CPU% — key kept as mysql_cpu (config-contract stability; metric/alert
+      renamed, #944 closed)'
+    metric_class: saturation
+  mysql_connections_critical:
+    pack: mariadb
+    tier: optional_overrides
+    value: 120
+    unit: count
+    desc: Critical tier (Scenario D)
+    critical_of: mysql_connections
+  mysql_cpu_critical:
+    pack: mariadb
+    tier: optional_overrides
+    value: 50
+    unit: threads
+    desc: Critical tier (running-threads saturation); 120→50 = PMM critical-load /
+      Nichter 'overloaded' (#944)
+    critical_of: mysql_cpu
+  redis_memory_used_bytes:
+    pack: redis
+    tier: defaults
+    value: 4294967296
+    unit: bytes (4GB)
+    desc: Memory usage warning
+    metric_class: saturation
+  redis_connected_clients:
+    pack: redis
+    tier: defaults
+    value: 200
+    unit: count
+    desc: Connected clients warning
+    metric_class: saturation
+  redis_evicted_keys_total:
+    pack: redis
+    tier: optional_overrides
+    value: 100
+    unit: keys/s
+    desc: Key eviction rate
+  redis_keyspace_misses_ratio:
+    pack: redis
+    tier: optional_overrides
+    value: 0.3
+    unit: ratio
+    desc: Cache miss ratio (30%)
+  mongodb_connections_current:
+    pack: mongodb
+    tier: defaults
+    value: 300
+    unit: count
+    desc: Current connections warning
+    metric_class: saturation
+  mongodb_repl_lag_seconds:
+    pack: mongodb
+    tier: defaults
+    value: 10
+    unit: seconds
+    desc: Replication lag warning
+  mongodb_opcounters_total:
+    pack: mongodb
+    tier: optional_overrides
+    value: 10000
+    unit: ops/s
+    desc: Total operations rate
+  es_jvm_memory_used_percent:
+    pack: elasticsearch
+    tier: defaults
+    value: 85
+    unit: '%'
+    desc: JVM heap usage warning
+    metric_class: saturation
+  es_filesystem_free_percent:
+    pack: elasticsearch
+    tier: defaults
+    value: 15
+    unit: '%'
+    desc: Disk free space warning
+  es_cluster_health:
+    pack: elasticsearch
+    tier: optional_overrides
+    value: 1
+    unit: 0=green,1=yellow,2=red
+    desc: Cluster health threshold
+  oracle_sessions_active:
+    pack: oracle
+    tier: defaults
+    value: 200
+    unit: count
+    desc: Active sessions warning
+    metric_class: saturation
+  oracle_tablespace_used_percent:
+    pack: oracle
+    tier: defaults
+    value: 85
+    unit: '%'
+    desc: Tablespace usage warning
+  oracle_wait_time_rate:
+    pack: oracle
+    tier: optional_overrides
+    value: 50
+    unit: s/s
+    desc: Wait time rate (5m)
+  oracle_process_count:
+    pack: oracle
+    tier: optional_overrides
+    value: 300
+    unit: count
+    desc: Active processes warning
+  oracle_pga_allocated_bytes:
+    pack: oracle
+    tier: optional_overrides
+    value: 4294967296
+    unit: bytes (4GB)
+    desc: PGA allocation warning
+  db2_connections_active:
+    pack: db2
+    tier: defaults
+    value: 200
+    unit: count
+    desc: Active connections warning
+    metric_class: saturation
+  db2_bufferpool_hit_ratio:
+    pack: db2
+    tier: defaults
+    value: 0.95
+    unit: ratio
+    desc: Bufferpool hit ratio warning
+  db2_log_usage_percent:
+    pack: db2
+    tier: optional_overrides
+    value: 70
+    unit: '%'
+    desc: Transaction log usage warning
+  db2_deadlock_rate:
+    pack: db2
+    tier: optional_overrides
+    value: 5
+    unit: count/s
+    desc: Deadlock rate (5m)
+  db2_tablespace_used_percent:
+    pack: db2
+    tier: optional_overrides
+    value: 85
+    unit: '%'
+    desc: Tablespace usage warning
+  clickhouse_queries_rate:
+    pack: clickhouse
+    tier: defaults
+    value: 500
+    unit: qps
+    desc: Query rate warning (5m)
+  clickhouse_active_connections:
+    pack: clickhouse
+    tier: defaults
+    value: 200
+    unit: count
+    desc: Active TCP connections warning
+    metric_class: saturation
+  clickhouse_max_part_count:
+    pack: clickhouse
+    tier: optional_overrides
+    value: 300
+    unit: count
+    desc: Max part count per partition
+  clickhouse_replication_queue:
+    pack: clickhouse
+    tier: optional_overrides
+    value: 50
+    unit: count
+    desc: Replication queue size
+  clickhouse_memory_tracking_bytes:
+    pack: clickhouse
+    tier: optional_overrides
+    value: 8589934592
+    unit: bytes (8GB)
+    desc: Memory tracking warning
+  kafka_consumer_lag:
+    pack: kafka
+    tier: defaults
+    value: 1000
+    unit: messages
+    desc: Consumer lag warning
+    metric_class: saturation
+  kafka_under_replicated_partitions:
+    pack: kafka
+    tier: defaults
+    value: 0
+    unit: count
+    desc: Under-replicated partitions (should be 0)
+  kafka_broker_count:
+    pack: kafka
+    tier: defaults
+    value: 3
+    unit: count
+    desc: Minimum broker count warning
+  kafka_active_controllers:
+    pack: kafka
+    tier: defaults
+    value: 1
+    unit: count
+    desc: Minimum active controllers (should be 1)
+  kafka_request_rate:
+    pack: kafka
+    tier: defaults
+    value: 10000
+    unit: msg/s
+    desc: Message rate warning (5m)
+  kafka_consumer_lag_critical:
+    pack: kafka
+    tier: optional_overrides
+    value: 10000
+    unit: messages
+    desc: Consumer lag critical
+    critical_of: kafka_consumer_lag
+  kafka_under_replicated_partitions_critical:
+    pack: kafka
+    tier: optional_overrides
+    value: 1
+    unit: count
+    desc: Under-replicated critical
+    critical_of: kafka_under_replicated_partitions
+  kafka_request_rate_critical:
+    pack: kafka
+    tier: optional_overrides
+    value: 50000
+    unit: msg/s
+    desc: Message rate critical
+    critical_of: kafka_request_rate
+  rabbitmq_queue_messages:
+    pack: rabbitmq
+    tier: defaults
+    value: 100000
+    unit: messages
+    desc: Queue depth warning
+    metric_class: saturation
+  rabbitmq_node_mem_percent:
+    pack: rabbitmq
+    tier: defaults
+    value: 80
+    unit: '%'
+    desc: Node memory usage warning
+    metric_class: saturation
+  rabbitmq_connections:
+    pack: rabbitmq
+    tier: defaults
+    value: 1000
+    unit: count
+    desc: Connection count warning
+    metric_class: saturation
+  rabbitmq_consumers:
+    pack: rabbitmq
+    tier: defaults
+    value: 5
+    unit: count
+    desc: Minimum consumer count warning
+  rabbitmq_unacked_messages:
+    pack: rabbitmq
+    tier: defaults
+    value: 10000
+    unit: messages
+    desc: Unacknowledged messages warning
+    metric_class: saturation
+  rabbitmq_queue_messages_critical:
+    pack: rabbitmq
+    tier: optional_overrides
+    value: 500000
+    unit: messages
+    desc: Queue depth critical
+    critical_of: rabbitmq_queue_messages
+  rabbitmq_node_mem_percent_critical:
+    pack: rabbitmq
+    tier: optional_overrides
+    value: 95
+    unit: '%'
+    desc: Node memory critical
+    critical_of: rabbitmq_node_mem_percent
+  jvm_gc_pause:
+    pack: jvm
+    tier: defaults
+    value: 0.5
+    unit: seconds/5m
+    desc: GC pause duration rate warning
+  jvm_memory:
+    pack: jvm
+    tier: defaults
+    value: 80
+    unit: '%'
+    desc: Heap memory usage warning
+    metric_class: saturation
+  jvm_threads:
+    pack: jvm
+    tier: defaults
+    value: 500
+    unit: count
+    desc: Active thread count warning
+    metric_class: saturation
+  jvm_gc_pause_critical:
+    pack: jvm
+    tier: optional_overrides
+    value: 1.0
+    unit: seconds/5m
+    desc: GC pause critical
+    critical_of: jvm_gc_pause
+  jvm_memory_critical:
+    pack: jvm
+    tier: optional_overrides
+    value: 95
+    unit: '%'
+    desc: Heap memory critical
+    critical_of: jvm_memory
+  jvm_threads_critical:
+    pack: jvm
+    tier: optional_overrides
+    value: 800
+    unit: count
+    desc: Thread count critical
+    critical_of: jvm_threads
+  nginx_connections:
+    pack: nginx
+    tier: defaults
+    value: 1000
+    unit: count
+    desc: Active connections warning
+    metric_class: saturation
+  nginx_request_rate:
+    pack: nginx
+    tier: defaults
+    value: 5000
+    unit: req/s
+    desc: Request rate warning
+  nginx_waiting:
+    pack: nginx
+    tier: defaults
+    value: 200
+    unit: count
+    desc: Waiting connections (backlog) warning
+    metric_class: saturation
+  nginx_connections_critical:
+    pack: nginx
+    tier: optional_overrides
+    value: 2000
+    unit: count
+    desc: Active connections critical
+    critical_of: nginx_connections
+  nginx_request_rate_critical:
+    pack: nginx
+    tier: optional_overrides
+    value: 10000
+    unit: req/s
+    desc: Request rate critical
+    critical_of: nginx_request_rate
+  nginx_waiting_critical:
+    pack: nginx
+    tier: optional_overrides
+    value: 500
+    unit: count
+    desc: Waiting connections critical
+    critical_of: nginx_waiting
