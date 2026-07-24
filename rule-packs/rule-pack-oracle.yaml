@@ -10,7 +10,25 @@
 #   oracle_tablespace_used_percent: 85
 #   oracle_wait_time_rate: 50
 #   oracle_process_count: 300
-#   oracle_pga_allocated_bytes: 4294967296   # 4 GB
+#   oracle_pga_allocated_bytes: 4294967296   # 4 GiB (4 × 2^30 bytes)
+#
+# ⚠️ 上列是「Day 0 起始 floor 範例」，不是通用安全值 —— 忙碌 / 大型庫的正常
+# 水位常高於這些數字，照抄到忙庫會 over-fire。ADR-030 盲寫良性參考庫實測
+# (tests/rulepacks/reference-validation/negative-oracle.yaml，全部應不告警)
+# 就有三個被這組範例值誤觸：
+#   健康日夜週期      active sessions 峰值 240 > 200
+#   備份批次期間      process count 560 > 300
+#   計畫性 stats-gather  PGA 22 GB (≈20.5 GiB) > 4 GiB
+# 三個良性高原都比對應告警的 for:(5m / 5m / 10m)長，for: 擋不掉。
+#
+# ⛔ 正式採用前必須以該租戶實際 baseline 校準，不要照抄：
+#   Day N：da-tools threshold-recommend —— P95/P99 + alert_quality Noise Score，
+#          已涵蓋本 pack 全部閾值 key（scripts/tools/ops/metric_observed_map.yaml）
+#   Day 0：直接查該租戶的 oracledb_* 原始 metric 取正常水位分布。
+#          ⚠️ 不要用 `da-tools baseline`——它的 DEFAULT_METRICS 目前只有
+#          MariaDB / container 查詢，未涵蓋 Oracle/DB2，未知 metric 會被跳過（#1176）
+# 閾值是 per-tenant 的：同一組數字對大庫過低、對小庫過高，沒有通用解。
+# 相關：#1176(precision 校準)、#1175(這些 key 須先進 _defaults.yaml 才會發射)
 #
 # Tenant config 範例 (conf.d/oracle-prod.yaml):
 #   tenants:

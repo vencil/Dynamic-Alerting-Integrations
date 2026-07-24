@@ -7,11 +7,32 @@
 #
 # 對應的 threshold-exporter defaults (加入 _defaults.yaml):
 #   db2_connections_active: 200
-#   db2_bufferpool_hit_ratio: 0.95
+#   db2_bufferpool_hit_ratio: 0.95   # 尺度 0–1（0.95＝95%），不是 0–100
 #   db2_log_usage_percent: 70
-#   db2_deadlock_rate: 5
+#   db2_deadlock_rate: 5             # 單位＝死鎖/秒（rate[5m]）；5/s＝300/min
 #   db2_tablespace_used_percent: 85
 #   db2_lock_wait_time: 10   ← 起始建議值，須依租戶校準（推導見下）
+#
+# ⚠️ 上列都是「Day 0 起始範例」不是通用安全值，每個 key 都須依該租戶實際 baseline
+# 校準（校準工作流見下方 db2_lock_wait_time 段，**適用上列每一個 key、不只
+# lock_wait_time**）。閾值是 per-tenant 的，沒有通用解。相關：#1176（precision 校準）
+#
+# 失效模式**依方向而不同**，別一概而論：
+#   • 4 個「越高越糟」的 key（connections_active / log_usage_percent /
+#     tablespace_used_percent / lock_wait_time）—— 忙碌 / 大型庫的正常水位常高於
+#     範例值，照抄會 over-fire。ADR-030 良性參考庫實測
+#     tests/rulepacks/reference-validation/negative-db2.yaml：尖峰時段 connections
+#     360 > 200 誤觸，且 4h 高原遠長於 for: 5m，for: 擋不掉。
+#   • bufferpool_hit_ratio 方向相反（`<`，越低越糟）—— 正常水位高於 0.95 只會讓它
+#     更不發射；它的 over-fire 是良性維護（如 REORG）短暫跌破門檻。
+#   • deadlock_rate 實測是**偏高漏抓**（under-fire）不是 over-fire，見下方語意陷阱。
+#
+# ⛔ 兩個會靜默失效 / 漏抓的語意陷阱：
+#   1. bufferpool_hit_ratio 尺度是 0–1。exporter 若輸出百分數（95 而非 0.95），
+#      `< 0.95` 永遠不成立 → 告警永不發射＝靜默 FN；onboarding 必須確認尺度。
+#   2. deadlock_rate 比的是 rate() ＝每秒值：範例 5 ＝ 5/s ＝ 300/min，對多數
+#      工作負載偏高——實測 ~90/min（1.5/s）的真實 deadlock storm 不會觸發，
+#      要抓住較小的 storm 須依 baseline 往下調。
 #
 # ⛔ 啟用前提（別跳過）：threshold-exporter 只對「**存在於 defaults 的 key**」
 # 發射 user_threshold —— resolveBaseRows 迭代的是 c.Defaults
@@ -26,8 +47,12 @@
 # normal_level 1.5（兩者一致）、fault_level 25（real-incident）與 60（vendor-doc）。
 # 10 落在「約 6.7 倍於觀測到的正常水位」與「低於兩個故障水位」之間。
 # ⚠️ 這是起始點不是通用值：鎖等待累積速率在批次與 OLTP 工作負載之間差一個
-# 數量級，正式採用前應以該租戶實際 baseline 校準（da-tools baseline-discovery
-# 做 Day 0 粗估、threshold-recommend 做 Day N 微調）。
+# 數量級，正式採用前應以該租戶實際 baseline 校準：
+#   Day N：da-tools threshold-recommend —— P95/P99 + alert_quality Noise Score，
+#          已涵蓋本 pack 全部閾值 key（scripts/tools/ops/metric_observed_map.yaml）
+#   Day 0：直接查該租戶的 db2_* 原始 metric 取正常水位分布。
+#          ⚠️ 不要用 `da-tools baseline`——它的 DEFAULT_METRICS 目前只有
+#          MariaDB / container 查詢，未涵蓋 Oracle/DB2，未知 metric 會被跳過（#1176）
 #
 # Tenant config 範例 (conf.d/db2-prod.yaml):
 #   tenants:
@@ -91,6 +116,14 @@ groups:
       # both over a common window keeps the ratio scoped to recent behaviour.
       # The ratio itself is window-length-independent (numerator and denominator
       # scale together), so the 0.05 threshold semantics are unchanged.
+      #
+      # ⚠️ 低 sort 量時本比值噪訊高：分母守衛只有 `> 0`，只排除「完全沒排序」，
+      # 不排除「排序極少」。閒置庫 5 分鐘內 3 次排序、1 次溢位＝33% 遠高於 0.05
+      # 門檻——此低量模式**持續 ≥ DB2HighSortOverflow 的 for: 10m** 才會誤警；
+      # 單次 5 分鐘叢發會滑出 rate 窗、撐不滿 for: 而不 page（ADR-030 precision
+      # 面向）。要加最小樣本量 floor（分母改 `> N`）或改 0.05 門檻，都需該租戶
+      # 真實 sort 速率分布才有依據，否則只是換一個沒根據的猜測值 → 見 #1176，
+      # defer 到首個 DB2 客戶的實際流量分布。
       - record: tenant:db2_sort_overflow_ratio:avg
         expr: |
           sum by(tenant) (rate(db2_sort_overflows[5m]))
