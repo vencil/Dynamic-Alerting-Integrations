@@ -330,6 +330,9 @@
    "tests/dx/test_generate_rulepack_configmaps.py",
    "tests/lint/test_check_rulepack_sync.py"
   ],
+  "scripts/tools/lint/check_scrape_reachability.py": [
+   "tests/lint/test_check_scrape_reachability.py"
+  ],
   "scripts/tools/lint/check_single_writer_invariant.py": [
    "tests/lint/test_check_single_writer_invariant.py"
   ],
@@ -644,7 +647,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "3f7acdc095451a8c54f9310e0317e1a3c580a6ec13d711b0b86f4c5327798f34",
+ "source_digest": "1d0f7200519d51e6f9257e651912a0280224d898fc1e91d2737472c4ef76b36a",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",

@@ -323,3 +323,13 @@ def test_main_ci_passes_when_clean(monkeypatch):
                         lambda: {"errors": [], "infos": ["5 ledgered"],
                                  "classes": {}, "counts": {}})
     assert gate.main(["--ci"]) == gate.EXIT_OK
+
+
+def test_extract_metrics_compact_operator_writing():
+    """Metric directly followed by an operator (no whitespace) must still be
+    extracted; only function names (followed by `(`) are excluded
+    (Gemini review of #1221 — `tenant_api_uptime_seconds>60` was missed)."""
+    from check_scrape_reachability import extract_metrics
+    assert "tenant_api_uptime_seconds" in extract_metrics("tenant_api_uptime_seconds>60")
+    assert "foo_total" in extract_metrics("rate(foo_total[5m])*100")
+    assert "rate" not in extract_metrics("rate(foo_total[5m])*100")

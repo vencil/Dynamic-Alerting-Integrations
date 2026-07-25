@@ -171,7 +171,16 @@ _EXTRA_KEYWORDS = frozenset({
 })
 _GROUPING_CLAUSE_RE = re.compile(
     r"\b(by|without|on|ignoring|group_left|group_right)\s*\([^)]*\)")
-_TOKEN_RE = re.compile(r"\b([a-zA-Z_:][a-zA-Z0-9_:]*)\b(?=[{\[\s)]|$)")
+# Lookahead allowlist = what may legally follow a METRIC reference: selector
+# `{`, range `[`, whitespace, `)`, EOF — plus compact-writing operators like
+# `metric>60` (Gemini review of #1221 — verified miss). Two DELIBERATE
+# exclusions, both verified regressions when attempted: `,` / bare
+# negative-lookahead-on-`(` leak function-argument labels (label_replace/
+# group_left args); `=` and `!` leak selector label-matcher names (this
+# extractor does NOT strip brace interiors — the lookahead IS the brace
+# filter: `{condition="Ready"}` must not yield `condition`). Compact `a==1`
+# therefore stays unextracted — documented limitation, spaced form works.
+_TOKEN_RE = re.compile(r"\b([a-zA-Z_:][a-zA-Z0-9_:]*)\b(?=[{\[\s)+\-*/<>^%]|$)")
 _ABSENT_RE = re.compile(r"absent(?:_over_time)?\(\s*([a-zA-Z_:][a-zA-Z0-9_:]*)")
 _STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
 
