@@ -18,9 +18,11 @@ spec:
   tenants:
     db-a:
       mysql_connections: "70"
-      # threads_running 1m-avg 飽和警告（併發執行緒數，NOT host CPU%）；平台預設 30、
-      # critical tier 建議 50（#944 語意校準）。key 保留 mysql_cpu 是為 config 契約穩定性。
-      mysql_cpu: "30"
+      # threads_running 1m-avg saturation (concurrent threads, NOT host CPU%); platform
+      # default 30, suggested critical tier 50 (#944). Key stays mysql_cpu for
+      # config-contract stability. 25 = a deliberate tightening for this payment-domain
+      # tenant (pt-osc throttle tier), matching the stricter mysql_connections above.
+      mysql_cpu: "25"
       container_memory: "85"
       _silent_mode: "disable"
       _routing:

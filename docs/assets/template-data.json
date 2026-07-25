@@ -23,7 +23,7 @@
       "category": "scenario",
       "packs": ["mariadb", "redis", "nginx", "kubernetes"],
       "desc": { "zh": "經典網店：MariaDB 用於訂單/庫存，Redis 用於會話/快取，Nginx 作反向代理，Kubernetes 容器監控", "en": "Classic web store: MariaDB for orders/inventory, Redis for sessions/cache, Nginx as reverse proxy, Kubernetes container monitoring." },
-      "yaml": "# E-Commerce Platform — MariaDB + Redis + Nginx + Kubernetes\nmysql_connections: \"150\"\nmysql_connections_critical: \"200\"\n# mysql_cpu = threads_running 飽和（併發執行緒數，NOT host CPU%）；平台預設 30\nmysql_cpu: \"40\"\n\nredis_memory_used_bytes: \"3221225472\"\nredis_memory_used_bytes_critical: \"4294967296\"\nredis_connected_clients: \"3000\"\n\nnginx_connections: \"2000\"\nnginx_request_rate: \"8000\"\nnginx_waiting: \"300\"\n\ncontainer_cpu: \"75\"\ncontainer_memory: \"80\"\n\n_routing:\n  receiver_type: slack\n  webhook_url: https://hooks.slack.com/services/xxx/yyy/zzz\n  group_by: [alertname, severity]\n  group_wait: \"30s\"\n  repeat_interval: \"4h\"\n\n_metadata:\n  owner: ecommerce-team\n  tier: production"
+      "yaml": "# E-Commerce Platform — MariaDB + Redis + Nginx + Kubernetes\nmysql_connections: \"150\"\nmysql_connections_critical: \"200\"\n# mysql_cpu = threads_running saturation (concurrent threads, NOT host CPU%); platform default 30\nmysql_cpu: \"40\"\n\nredis_memory_used_bytes: \"3221225472\"\nredis_memory_used_bytes_critical: \"4294967296\"\nredis_connected_clients: \"3000\"\n\nnginx_connections: \"2000\"\nnginx_request_rate: \"8000\"\nnginx_waiting: \"300\"\n\ncontainer_cpu: \"75\"\ncontainer_memory: \"80\"\n\n_routing:\n  receiver_type: slack\n  webhook_url: https://hooks.slack.com/services/xxx/yyy/zzz\n  group_by: [alertname, severity]\n  group_wait: \"30s\"\n  repeat_interval: \"4h\"\n\n_metadata:\n  owner: ecommerce-team\n  tier: production"
     },
     {
       "id": "iot-pipeline",
@@ -86,7 +86,7 @@
       "category": "quickstart",
       "packs": ["mariadb"],
       "desc": { "zh": "最小 MariaDB 監控配置", "en": "Minimal MariaDB monitoring config." },
-      "yaml": "# MariaDB Quick Start\nmysql_connections: \"80\"\n# threads_running 飽和警告（併發執行緒數，NOT host CPU%）— 這裡就是平台預設值\nmysql_cpu: \"30\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
+      "yaml": "# MariaDB Quick Start\nmysql_connections: \"80\"\n# threads_running saturation warning (concurrent threads, NOT host CPU%) — this is the platform default\nmysql_cpu: \"30\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
     },
     {
       "id": "quick-postgresql",
@@ -203,7 +203,7 @@
       "category": "advanced",
       "packs": ["mariadb"],
       "desc": { "zh": "展示如何設定臨時維護窗口、自動過期和靜默模式", "en": "Shows how to set up a temporary maintenance window with auto-expiry and silent mode." },
-      "yaml": "# Maintenance Window Demo\nmysql_connections: \"200\"\n# 維護期放寬 threads_running 飽和警告（平台預設 30，critical tier 建議 50）\nmysql_cpu: \"50\"\n\n_state_maintenance:\n  expires: \"2026-03-20T06:00:00Z\"\n\n_silent_mode:\n  expires: \"2026-03-15T12:00:00Z\"\n\n_routing:\n  receiver_type: teams\n  webhook_url: https://teams.example.com/webhook\n  group_wait: \"1m\"\n  repeat_interval: \"12h\""
+      "yaml": "# Maintenance Window Demo\nmysql_connections: \"200\"\n# relaxed for the maintenance window (platform default 30, suggested critical tier 50)\nmysql_cpu: \"50\"\n\n_state_maintenance:\n  expires: \"2026-03-20T06:00:00Z\"\n\n_silent_mode:\n  expires: \"2026-03-15T12:00:00Z\"\n\n_routing:\n  receiver_type: teams\n  webhook_url: https://teams.example.com/webhook\n  group_wait: \"1m\"\n  repeat_interval: \"12h\""
     },
     {
       "id": "routing-profile",

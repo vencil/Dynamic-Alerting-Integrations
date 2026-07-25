@@ -46,7 +46,7 @@ thresholdConfig:
       container_cpu: "70"
     db-b:
       mysql_connections: "100"
-      mysql_cpu: "60"
+      mysql_cpu: "45"      # 放寬（平台預設 30）；刻意不超過 critical tier 建議值 50
       container_memory: "90"
       _state_container_crashloop: "disable"
 

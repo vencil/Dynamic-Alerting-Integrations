@@ -196,7 +196,7 @@ profiles:
     container_memory: "85"
   high-load-db:
     mysql_connections: "60"     # Stricter
-    mysql_cpu: "20"
+    mysql_cpu: "45"             # looser on purpose: threads_running is a saturation signal — a high-load DB's normal concurrency is higher
     container_memory: "80"
 ```
 

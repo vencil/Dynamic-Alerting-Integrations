@@ -198,7 +198,7 @@ profiles:
     container_memory: "85"
   high-load-db:
     mysql_connections: "60"     # 更嚴格
-    mysql_cpu: "20"
+    mysql_cpu: "45"             # 反而放寬：threads_running 是飽和訊號，高負載庫的正常併發本就較高
     container_memory: "80"
 ```
 
