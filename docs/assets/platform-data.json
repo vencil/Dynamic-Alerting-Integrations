@@ -26,8 +26,8 @@
       "category": "database",
       "exporter": "mysqld_exporter",
       "configMap": "prometheus-rules-mariadb",
-      "recordingRules": 11,
-      "alertRules": 14,
+      "recordingRules": 14,
+      "alertRules": 18,
       "required": false,
       "defaultOn": true,
       "metrics": [
@@ -52,6 +52,11 @@
           "unit": "threads",
           "desc": "Running-threads 1m-avg saturation warning; 80→30 = PMM/Nichter 'high' (#944). NOT host CPU% — key kept as mysql_cpu (config-contract stability; metric/alert renamed, #944 closed)",
           "metricClass": "saturation"
+        },
+        "mysql_replication_lag": {
+          "value": 30,
+          "unit": "seconds",
+          "desc": "Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 = APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's lag-template family default is 600s warning). Enabled by default (#1200 WS5-P0-a Q3=C)"
         }
       },
       "dependencies": {
@@ -660,9 +665,9 @@
   },
   "totals": {
     "packs": 16,
-    "recordingRules": 163,
-    "alertRules": 149,
-    "total": 312
+    "recordingRules": 166,
+    "alertRules": 153,
+    "total": 319
   },
   "tenant_groups": {},
   "tenant_metadata": {

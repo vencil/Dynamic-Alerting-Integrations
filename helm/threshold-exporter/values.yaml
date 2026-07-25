@@ -59,7 +59,8 @@ thresholdConfig:
   defaults:
     # Scenario A: MySQL thresholds
     mysql_connections: 80
-    mysql_cpu: 80
+    mysql_cpu: 30      # running-thread SATURATION warning (threads_running, NOT host CPU%); 80→30 = PMM/Nichter "high" tier (#944 — this chart copy was the last one missed in that calibration, fixed via #1200 WS1a reverse-audit)
+    mysql_replication_lag: 30  # async replication lag warning (seconds behind primary, sql_delay-adjusted); APA/mysqld-mixin trigger point, critical tier opt-in via mysql_replication_lag_critical (suggest 120) (#1200 WS5-P0-a, enabled by default per Q3=C)
     # Scenario B: Container resource thresholds (% of limit)
     container_cpu: 80
     # Chronic CFS throttle: % of ACTIVE 100ms periods throttled (#944 PR-2c)

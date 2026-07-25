@@ -4,8 +4,8 @@
 defaults:
   # --- MySQL/MariaDB ---
   mysql_connections: 80
-  mysql_cpu: 80
-  mysql_slave_lag: 30
+  mysql_cpu: 30              # 80→30 = #944 threads_running 飽和語意校準（此範例檔為漏改副本，隨 #1200 WS5-P0-a 對齊）
+  mysql_replication_lag: 30  # 原 aspirational key `mysql_slave_lag` 轉正——#1200 WS5-P0-a 落地為真實 threshold key
 
   # --- Redis ---
   redis_memory_used_bytes: 4294967296    # 4GB

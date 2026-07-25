@@ -216,6 +216,16 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:mysql_threads_running:avg1m
+  mysql_replication_lag:
+    pack: rule-pack-mariadb.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:mysql_replication_lag:max
+  mysql_replication_lag_critical:
+    pack: rule-pack-mariadb.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:mysql_replication_lag:max
   nginx_connections:
     pack: rule-pack-nginx.yaml
     scope: tenant

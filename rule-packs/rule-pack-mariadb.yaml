@@ -9,6 +9,7 @@
 # 對應的 threshold-exporter defaults:
 #   mysql_connections: 80
 #   mysql_cpu: 30      # running-thread SATURATION (NOT host CPU%); warning≈30/critical≈50 (PMM/Nichter). key kept mysql_cpu (config-contract stability, #944 closed)
+#   mysql_replication_lag: 30   # async replication lag warning (seconds behind primary, sql_delay-adjusted); critical tier opt-in via mysql_replication_lag_critical (suggest 120). Enabled by default (epic #1200 WS5-P0-a, Q3=C owner decision)
 #
 # Tenant config 範例 (conf.d/db-a.yaml):
 #   tenants:
@@ -16,6 +17,8 @@
 #       mysql_connections: "70"        # 自訂連線數警告閾值
 #       mysql_connections_critical: "120"  # Critical 閾值
 #       mysql_cpu: "60"               # 自訂執行緒飽和警告閾值（key 保留 mysql_cpu；config 契約穩定性，#944 結案）
+#       mysql_replication_lag: "20"           # 自訂複寫延遲警告閾值 (秒)
+#       mysql_replication_lag_critical: "120" # Critical 閾值 (秒，opt-in)
 # ============================================================
 groups:
   # -------------------------------------------------------
@@ -64,6 +67,34 @@ groups:
           sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_data)
           / sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_total)
 
+      # ── Async replication lag (#1200 WS5-P0-a) ──────────────────────────────
+      # Seconds behind primary, SQL_Delay-ADJUSTED: an intentionally delayed
+      # replica (CHANGE MASTER ... MASTER_DELAY=N) reports seconds_behind≈N
+      # forever — both corpus references subtract sql_delay for exactly this
+      # (APA MysqlSlaveReplicationLag: `seconds_behind_master - sql_delay`;
+      # mysqld-mixin recording rule instance:mysql_slave_lag_seconds: same).
+      # ⛔ ABSENT-GUARD `or 0*seconds_behind`: sql_delay comes from the same
+      # SHOW SLAVE STATUS collector, but the column only exists on MariaDB
+      # ≥10.2.3 — a bare subtraction against an ABSENT sql_delay yields an
+      # EMPTY vector and the lag alerts go silently dead (empty-set-silence,
+      # epic #1200 母題 1). The guard substitutes 0 with seconds_behind's own
+      # label set, keeping the pipeline alive on older/leaner exporters.
+      # max by(tenant): per-tenant WORST replica (topology-aware — the most
+      # lagged replica pages, not an average diluted by healthy ones).
+      # Non-replica deployments emit NO mysql_slave_status_* series → this
+      # record is empty → the lag alerts below are naturally quiet.
+      # NOTE: seconds_behind_master goes NULL (metric ABSENT) when the SQL
+      # thread stops — a DEAD replication is INVISIBLE to this record; the
+      # state-based ReplicaIOThreadDown / ReplicaSQLThreadDown alerts below are
+      # the mandatory companions (they also cover the classic "SBM=0 lie":
+      # IO thread stopped + SQL caught up on relay log reads as lag 0).
+      - record: tenant:mysql_replication_lag:max
+        expr: |
+          max by(tenant) (
+            mysql_slave_status_seconds_behind_master
+            - (mysql_slave_status_sql_delay or 0 * mysql_slave_status_seconds_behind_master)
+          )
+
   # -------------------------------------------------------
   # Threshold normalization: MySQL
   # -------------------------------------------------------
@@ -76,12 +107,18 @@ groups:
       - record: tenant:alert_threshold:mysql_cpu
         expr: max by(tenant) (user_threshold{component="mysql", metric="cpu", severity="warning"})
 
+      - record: tenant:alert_threshold:mysql_replication_lag
+        expr: max by(tenant) (user_threshold{component="mysql", metric="replication_lag", severity="warning"})
+
       # Multi-tier severity (Scenario D)
       - record: tenant:alert_threshold:mysql_connections_critical
         expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="critical"})
 
       - record: tenant:alert_threshold:mysql_cpu_critical
         expr: max by(tenant) (user_threshold{component="mysql", metric="cpu", severity="critical"})
+
+      - record: tenant:alert_threshold:mysql_replication_lag_critical
+        expr: max by(tenant) (user_threshold{component="mysql", metric="replication_lag", severity="critical"})
 
   # -------------------------------------------------------
   # Alert Rules: MariaDB
@@ -239,6 +276,200 @@ groups:
           description: "Tenant {{ $labels.tenant }} has semi-sync enabled but ZERO semi-sync replicas connected (rpl_semi_sync_master_clients=0) — durability redundancy is gone, no self-recovery until a replica reconnects. By the time this pages, the ~10s write-stall (wait_no_slave) has usually auto-recovered to async — the live risk is LOST DURABILITY (a primary failure now risks data loss), so the runbook's first step is to find WHY all replicas disconnected, not to chase the stall."
           description_zh: "租戶 {{ $labels.tenant }} 啟用了 semi-sync 但連線的 semi-sync replica 數為 0（clients=0）— 持久性備援歸零、replica 重連前無法自癒。此告警響起時 ~10s 寫入 stall（wait_no_slave）通常已自動 fallback async — 真正風險是失去持久性（此時 primary 故障會資料遺失），故 runbook 第一步是追查為何所有 replica 斷線、而非修 stall。"
 
+      # ── Async replication suite (#1200 WS5-P0-a; WS2a corpus top gap) ────────
+      # DEPLOYMENT-SHAPE NOTE vs the semi-sync rules above: async (this suite,
+      # mysql_slave_status_*) and semi-sync (rpl_semi_sync_*) are DIFFERENT
+      # deployment shapes, not competing rules — they don't conflict. A
+      # semi-sync replica still runs IO/SQL threads, so the two thread-down
+      # rules cover BOTH shapes; the lag pair is the async-side health signal
+      # (semi-sync ack ≠ applied — seconds_behind still measures apply lag).
+      # Non-replica tenants emit NO mysql_slave_status_* series → the whole
+      # suite is naturally quiet (series-existence gate, same philosophy as the
+      # semi-sync enabled==1 intent gate).
+      # CORPUS (verbatim-verified 2026-07-25, #944 header discipline):
+      #  - APA (samber/awesome-prometheus-alerts, dist/rules/mysql/mysqld-exporter.yml):
+      #    MysqlSlaveIoThreadNotRunning / MysqlSlaveSqlThreadNotRunning =
+      #    `(mysql_slave_status_slave_{io,sql}_running and ON(instance)
+      #    mysql_slave_status_master_server_id > 0) == 0`, for:1m, critical
+      #    ("1m delay allows a restart without triggering an alert").
+      #  - mysqld-mixin (prometheus/mysqld_exporter, mysqld-mixin/alerts/galera.yaml):
+      #    MySQLReplicationNotRunning = io==0 or sql==0, for:2m, critical.
+      #  - PMM (percona/pmm, managed/data/alerting-templates/
+      #    mysql_replication_{io,sql}_running.yml): for:1m, critical; expr is
+      #    DUAL-SHAPE — old names (slave_io_running + master_server_id, what
+      #    MariaDB emits) OR'd with the MySQL ≥8.0.22 rename
+      #    (replica_io_running + source_server_id).
+      # Corpus consensus = state-based, critical, ~1m debounce → we ship
+      # for:1m critical (also matches this file's SemiSyncReplicasGone tier).
+      # ⛔ INTENT-GATE master_server_id > 0 (all three corpus sources carry it):
+      # a server whose replica config was RESET/never connected still returns a
+      # SHOW SLAVE STATUS row with io_running=0 but master_server_id=0 — the
+      # gate keeps that non-replica edge quiet. MariaDB (all 10.x/11.x) emits
+      # the slave_*/master_* metric names used here; ENGINE-EXPANSION
+      # (defer-with-trigger): first MySQL ≥8.0.22 tenant → add the
+      # replica_*/source_server_id arms (PMM dual-shape above is the template).
+      # NO maintenance opt-out (matches ClusterDown/NoPrimary/ReplicasGone):
+      # a stopped replication thread = the DR/read copy is going stale =
+      # async durability erosion — the async analog of SemiSyncReplicasGone,
+      # which pages through maintenance by design ("a real durability outage
+      # must always page"). Planned STOP SLAVE → Alertmanager Silence API
+      # (same guidance as MariaDBClusterDown); a tenant's silent-critical
+      # sentinel still suppresses notification.
+      # metric_group replication_lag (NOT liveness): joins the lag pair's
+      # severity-dedup family — during an IO-thread outage MariaDB can keep
+      # reporting/growing seconds_behind (relay-log apply continues), so the
+      # thread-down critical must inhibit the lag WARNING (same tenant, same
+      # group) instead of cross-inhibiting the unrelated MariaDBDown warning
+      # (which liveness grouping would).
+      - alert: MariaDBReplicaIOThreadDown
+        expr: |
+          max by(tenant) (
+            mysql_slave_status_slave_io_running{job="tenant-exporters"} == 0
+            and on(tenant, instance)
+            mysql_slave_status_master_server_id{job="tenant-exporters"} > 0
+          )
+        for: 1m
+        labels:
+          severity: critical
+          metric_group: replication_lag
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "MariaDB replica IO thread not running for tenant {{ $labels.tenant }}"
+          summary_zh: "MariaDB 租戶 {{ $labels.tenant }} 的 replica IO 執行緒未運行"
+          description: "Replica IO thread is stopped (Slave_IO_Running=No) for tenant {{ $labels.tenant }} — the replica is no longer receiving events from the primary, so the DR/read copy is going stale. seconds_behind_master turns NULL/absent (or lies at 0) in this state, so MariaDBReplicationLag CANNOT see it. Check SHOW SLAVE STATUS Last_IO_Error (network / credentials / primary binlog purged)."
+          description_zh: "租戶 {{ $labels.tenant }} 的 replica IO 執行緒已停止（Slave_IO_Running=No）— replica 不再接收 primary 的事件，DR／讀取副本正在過期。此狀態下 seconds_behind_master 會變 NULL/absent（或誤報 0），MariaDBReplicationLag 看不到。請查 SHOW SLAVE STATUS 的 Last_IO_Error（網路／憑證／primary binlog 已清除）。"
+
+      - alert: MariaDBReplicaSQLThreadDown
+        expr: |
+          max by(tenant) (
+            mysql_slave_status_slave_sql_running{job="tenant-exporters"} == 0
+            and on(tenant, instance)
+            mysql_slave_status_master_server_id{job="tenant-exporters"} > 0
+          )
+        for: 1m
+        labels:
+          severity: critical
+          metric_group: replication_lag
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "MariaDB replica SQL thread not running for tenant {{ $labels.tenant }}"
+          summary_zh: "MariaDB 租戶 {{ $labels.tenant }} 的 replica SQL 執行緒未運行"
+          description: "Replica SQL thread is stopped (Slave_SQL_Running=No) for tenant {{ $labels.tenant }} — events are still being received (relay log grows) but NOT applied, usually a replication error (duplicate key / row not found). The replica diverges until the error is resolved; seconds_behind_master is NULL/absent in this state so MariaDBReplicationLag CANNOT see it. Check SHOW SLAVE STATUS Last_SQL_Error."
+          description_zh: "租戶 {{ $labels.tenant }} 的 replica SQL 執行緒已停止（Slave_SQL_Running=No）— 事件仍在接收（relay log 持續成長）但不再套用，通常是複寫錯誤（duplicate key／row not found）。錯誤解決前 replica 會持續偏離；此狀態下 seconds_behind_master 為 NULL/absent，MariaDBReplicationLag 看不到。請查 SHOW SLAVE STATUS 的 Last_SQL_Error。"
+
+      # Threshold-driven lag pair (standard four-layer plumbing — the shape of
+      # MariaDBHighConnections above: user_threshold join + maintenance opt-out
+      # + metadata-enrichment dual-arm). Key mysql_replication_lag ENABLED BY
+      # DEFAULT (epic #1200 WS5-P0-a Q3 = owner decision C); critical tier is
+      # tenant opt-in via mysql_replication_lag_critical (Scenario D, same as
+      # mysql_connections_critical).
+      # THRESHOLDS (corpus verbatim-verified 2026-07-25 — sources DIVERGE, so
+      # the resolution is recorded here, #944 discipline):
+      #  - APA MysqlSlaveReplicationLag: (seconds_behind - sql_delay) > 30,
+      #    for:1m, critical.
+      #  - mysqld-mixin MySQLReplicationLag: instance:mysql_slave_lag_seconds
+      #    (= seconds_behind - sql_delay) > 30 AND predict_linear(...[5m], 2m)
+      #    > 0 (still growing), for:1m, critical.
+      #  - PMM ships NO MySQL lag template; its replication-lag template
+      #    family default (pmm_mongodb_replication_lag) is 600s, WARNING.
+      # Resolution: warning=30 — the APA+mixin consensus TRIGGER POINT, but
+      # demoted from their critical to WARNING (both hedge their critical with
+      # extra debounce / a still-growing trend gate; PMM's family default is
+      # 20× looser — paging critical on a bare 30s breach over-fires).
+      # critical=120 (opt-in suggested value) — minutes-level sustained lag =
+      # a real failover data-loss window; 4× the corpus trigger point, 5×
+      # below the PMM family default. for:30s matches this file's other
+      # threshold alerts + PostgreSQLHighReplicationLag (platform parity;
+      # corpus uses 1m — the tenant-tunable threshold is the primary knob).
+      - alert: MariaDBReplicationLag
+        expr: |
+          (
+            (
+              (
+                tenant:mysql_replication_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:mysql_replication_lag
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
+          )
+          or
+          (
+            (
+              (
+                tenant:mysql_replication_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:mysql_replication_lag
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
+        for: 30s
+        labels:
+          severity: warning
+          metric_group: "replication_lag"
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "High replication lag on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 複寫延遲過高"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: replication lag threshold breached — check replica IO/apply health and primary write load"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：複寫延遲超出閾值 — 檢查 replica 接收／套用狀態與 primary 寫入負載"
+          description: "{{ $value | printf \"%.0f\" }}s behind primary (warning threshold exceeded)"
+          description_zh: "落後 primary {{ $value | printf \"%.0f\" }} 秒（超過警告閾值）"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
+      # Critical tier
+      - alert: MariaDBReplicationLagCritical
+        expr: |
+          (
+            (
+              (
+                tenant:mysql_replication_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:mysql_replication_lag_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            * on(tenant) group_left(runbook_url, owner, tier)
+              tenant_metadata_info
+          )
+          or
+          (
+            (
+              (
+                tenant:mysql_replication_lag:max
+                > on(tenant) group_left
+                tenant:alert_threshold:mysql_replication_lag_critical
+              )
+              unless on(tenant)
+              (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
+        for: 30s
+        labels:
+          severity: critical
+          metric_group: "replication_lag"
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Critical replication lag on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 複寫延遲嚴重過高"
+          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: CRITICAL replication lag — failover now risks losing this much data; escalate"
+          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：複寫延遲達臨界 — 此時 failover 將損失等量資料；需升級處理"
+          description: "{{ $value | printf \"%.0f\" }}s behind primary (critical threshold exceeded)"
+          description_zh: "落後 primary {{ $value | printf \"%.0f\" }} 秒（超過嚴重閾值）"
+
+          runbook_url: "{{ $labels.runbook_url }}"
+          owner: "{{ $labels.owner }}"
+          tier: "{{ $labels.tier }}"
       # DEPRECATED (#869): superseded by TenantExporterAbsent in rule-pack-liveness.yaml.
       # This GLOBAL absent() fires only when EVERY tenant's mysql_up is gone (one live
       # tenant masks another's outage) and its `tenant` label is always empty (absent()

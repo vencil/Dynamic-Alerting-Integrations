@@ -215,10 +215,12 @@ RULE_PACKS = {
         "defaults": {
             "mysql_connections": {"value": 80, "unit": "count", "desc": "Max threads_connected warning", "metric_class": "saturation"},
             "mysql_cpu": {"value": 30, "unit": "threads", "desc": "Running-threads 1m-avg saturation warning; 80→30 = PMM/Nichter 'high' (#944). NOT host CPU% — key kept as mysql_cpu (config-contract stability; metric/alert renamed, #944 closed)", "metric_class": "saturation"},
+            "mysql_replication_lag": {"value": 30, "unit": "seconds", "desc": "Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 = APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's lag-template family default is 600s warning). Enabled by default (#1200 WS5-P0-a Q3=C)"},
         },
         "optional_overrides": {
             "mysql_connections_critical": {"value": 120, "unit": "count", "desc": "Critical tier (Scenario D)"},
             "mysql_cpu_critical": {"value": 50, "unit": "threads", "desc": "Critical tier (running-threads saturation); 120→50 = PMM critical-load / Nichter 'overloaded' (#944)"},
+            "mysql_replication_lag_critical": {"value": 120, "unit": "seconds", "desc": "Critical tier replication lag; 120 = 4x the APA/mixin 30s trigger, 5x below PMM family 600s — sustained minutes-level lag is a failover data-loss window (#1200 WS5-P0-a)"},
         },
     },
     "redis": {
