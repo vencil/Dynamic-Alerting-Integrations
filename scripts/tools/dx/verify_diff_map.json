@@ -299,6 +299,9 @@
   "scripts/tools/lint/check_orphan_lint.py": [
    "tests/lint/test_check_orphan_lint.py"
   ],
+  "scripts/tools/lint/check_orphan_recordings.py": [
+   "tests/lint/test_check_orphan_recordings.py"
+  ],
   "scripts/tools/lint/check_path_metadata_consistency.py": [
    "tests/lint/test_check_path_metadata_consistency.py"
   ],
@@ -641,7 +644,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "bae9c8ce86f03ce530fd10fa69d6cf6c8955ffeffda71dda6239bf80ee2b8b9c",
+ "source_digest": "1173f3dd864cd31ed6ec2beb83d2432172e9fa29f1f959560ecd651cfa68f29d",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",

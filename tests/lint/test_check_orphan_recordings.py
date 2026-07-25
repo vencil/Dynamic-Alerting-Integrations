@@ -196,3 +196,11 @@ def test_main_ci_passes_when_clean(monkeypatch):
     monkeypatch.setattr(gate, "run_check",
                         lambda: {"errors": [], "infos": ["12 known-orphan"]})
     assert gate.main(["--ci"]) == gate.EXIT_OK
+
+
+def test_strip_strings_removes_backtick_raw_strings():
+    """PromQL backtick raw strings must not leak tokens (Gemini review of #1214)."""
+    from check_orphan_recordings import metric_tokens
+    toks = metric_tokens('label_replace(kube_pod_info, "tenant", `some_fake_metric`, "ns", `(.+)`)')
+    assert "some_fake_metric" not in toks
+    assert "kube_pod_info" in toks

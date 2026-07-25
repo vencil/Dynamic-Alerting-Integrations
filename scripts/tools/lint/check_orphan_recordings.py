@@ -138,6 +138,9 @@ STOP_TOKENS = _AGGS | _KWS | _FUNCS | _GRAFANA | _UNITS
 def _strip_strings(s: str) -> str:
     s = re.sub(r'"(?:\\.|[^"\\])*"', '""', s)
     s = re.sub(r"'(?:\\.|[^'\\])*'", "''", s)
+    # PromQL also accepts Go-style backtick raw strings (no escapes inside);
+    # without this strip their contents would leak into TOKEN_RE (Gemini #1214).
+    s = re.sub(r'`[^`]*`', '``', s)
     return s
 
 
