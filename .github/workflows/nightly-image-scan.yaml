@@ -15,6 +15,13 @@ name: Nightly Image CVE Scan
 # they surface days early. NON-BLOCKING by construction — it gates nothing
 # (release.yaml stays the last line of defense); it only raises a heads-up.
 #
+# Alerting is DELTA-based, not level-based: the tracking issue's body and title
+# refresh silently every night, and a notifying comment fires only when a CVE id
+# appears that was not in the previous run (or more images fail to scan). The
+# third-party bucket sits at ~120 standing findings that upstream has not rebuilt
+# for — a nightly ping on that number trains the reader to ignore the issue, which
+# is the same outcome as no alert at all. See scripts/ops/file_cve_report.sh.
+#
 # Scope honesty: da-tools is built with STUBBED Go binaries (zero-byte, mirroring
 # component-docker-build.yaml's COPY-path stub) — its OS/base-image CVEs ARE
 # scanned, but its Go binaries' module CVEs are NOT here (covered by release.yaml's
@@ -278,15 +285,35 @@ jobs:
           set -euo pipefail
           rc=0
           # Self-built (5) — feeds the release.yaml Trivy gate; keep this signal clean.
+          # These we genuinely own: the fix is a rebuild or a dependency bump in
+          # this repo, so "patch it" is honest advice here.
           bash scripts/ops/file_cve_report.sh frags-sb \
             nightly-cve \
             "🛡️ Nightly image scan — self-built component CVEs / build failures on main" \
             5 "self-built component" \
-            "The release-time Trivy gate (release.yaml) blocks a tag until these are 0 (security-audit-runbook §37)." || rc=1
-          # Third-party (14) — informational; remediation is an upstream image bump.
+            "we build these, so a rebuild or a pinned-dependency bump clears them; the release-time Trivy gate (release.yaml) blocks a tag until they are 0 (security-audit-runbook §37)." || rc=1
+          # Third-party (14) — informational. The remediation sentence below is
+          # deliberately blunt: the ORIGINAL wording ("bump the pinned upstream
+          # tag") is false for most of this bucket. Renovate (#902 L3) already
+          # re-pins every ref weekly, so anything still listed is usually an
+          # image whose UPSTREAM has not rebuilt — e.g. prom/mysqld-exporter
+          # v0.19.0 and ghcr.io/jimmidyson/configmap-reload v0.15.0 are the
+          # newest releases that exist and still carry fixable HIGHs. Telling
+          # the reader to "bump the tag" sends them to do nothing and teaches
+          # them the issue is noise; naming the two real levers keeps it useful.
           bash scripts/ops/file_cve_report.sh frags-tp \
             nightly-cve-thirdparty \
             "🛡️ Nightly image scan — third-party upstream image CVEs on main" \
             14 "third-party upstream image" \
-            "Remediation = bump the pinned upstream image tag (tracked toward #902 L2 digest-pin + L3 auto-bump)." || rc=1
+            "these are mostly UPSTREAM-owned — Renovate (#902 L3) already keeps each ref at its newest approved tag, so a bump will not clear a CVE the upstream image has not rebuilt for. The two levers that DO move this number: tick a gated major on the Renovate Dependency Dashboard (#929), or replace the image with a maintained alternative." || rc=1
           exit $rc
+
+      # A cron nobody watches degrades into background noise once it is red for
+      # a few nights — this job was red for 33 consecutive runs before anyone
+      # looked, and the actual cause (a 422 on the label API) was four scrolls
+      # into a step log. Mirror renovate.yaml's self-explanatory-failure step so
+      # the run page itself says what broke and what it cost.
+      - name: Explain a likely failure cause
+        if: ${{ failure() }}
+        run: |
+          echo "::error title=Nightly CVE report failed::The scans may well have SUCCEEDED — this job is the alerting step, so a failure here means findings were computed but the tracking issue was NOT updated. Most likely causes: (1) a GitHub API validation error (label description >100 chars, issue title >256) — see the 422 in the step log; (2) the issues:write permission or GH_TOKEN scope changed; (3) the 'nightly-cve' / 'nightly-cve-thirdparty' label was deleted. Findings are still in the step summary above and in the cve-frag-* artifacts."
