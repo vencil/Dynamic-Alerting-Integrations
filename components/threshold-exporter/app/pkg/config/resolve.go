@@ -904,8 +904,35 @@ func (c *ThresholdConfig) ValidateTenantKeys() []string {
 				continue
 			}
 
-			// _critical suffix → skip (base validation done by ResolveAt)
+			// `<metric>_critical` → the BASE metric must be in defaults.
+			//
+			// This used to skip unconditionally, deferring to "base validation
+			// done by ResolveAt". ResolveAt does check — but it only
+			// `log.Printf`s at scrape time (resolveCriticalRows), and nobody
+			// authoring a config reads the exporter's log: the tenant author, CI
+			// (`generate_alertmanager_routes.py --validate`) and the tenant-api
+			// write path all read THIS function's output. So the critical tier
+			// was the ONLY key shape with no author-visible signal — and it is
+			// also the shape that fails hardest: a base key missing from defaults
+			// still resolves to the platform default, whereas a dangling
+			// `_critical` produces NO row at all. The tenant's critical alert
+			// silently never materialises.
+			//
+			// The base key already warns a few lines below, so this is a
+			// CONSISTENCY fix, not new strictness — and it restores parity with
+			// the Python validator (`_grar_validate.validate_tenant_keys`), which
+			// has always fallen through to a warning here.
 			if strings.HasSuffix(key, "_critical") {
+				baseKey := strings.TrimSuffix(key, "_critical")
+				if _, exists := c.Defaults[baseKey]; exists {
+					continue
+				}
+				warnings = append(warnings, fmt.Sprintf(
+					"WARN: tenant=%s: %q has no base metric %q in defaults — the critical "+
+						"tier is silently DROPPED (not defaulted): resolveCriticalRows only "+
+						"emits a critical row when the base key exists. Add %q to the platform "+
+						"defaults, or remove this override.",
+					tenant, key, baseKey, baseKey))
 				continue
 			}
 
