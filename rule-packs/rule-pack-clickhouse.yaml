@@ -6,12 +6,23 @@
 #   - ClickHouse 內建 Prometheus endpoint (/metrics)
 #   - 或 clickhouse_exporter (https://github.com/ClickHouse/clickhouse_exporter)
 #
-# 對應的 threshold-exporter defaults (加入 _defaults.yaml):
-#   clickhouse_queries_rate: 500
-#   clickhouse_active_connections: 200
-#   clickhouse_max_part_count: 300
-#   clickhouse_replication_queue: 50
-#   clickhouse_memory_tracking_bytes: 8589934592   # 8 GB
+# >>> GENERATED:threshold-registry:pack-clickhouse — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
+#   clickhouse_queries_rate: 500   # qps — Query rate warning (5m)
+#   clickhouse_active_connections: 200   # count — Active TCP connections warning
+#
+# optional_overrides（documented-but-dormant——登錄有案、平台預設不出貨）：
+# ⛔ 啟用前提（別跳過）：threshold-exporter 只對「存在於 defaults 的 key」
+# 發射 user_threshold——resolveBaseRows 迭代的是 c.Defaults，resolveCriticalRows
+# 也要求 base key 在 defaults 才處理 _critical 覆寫（components/
+# threshold-exporter/app/pkg/config/resolve.go）。下列 key 必須先進
+# _defaults.yaml / Helm values 的 defaults，租戶 conf.d 才有東西可覆寫——
+# 只在租戶檔填一個不在 defaults 的 key 永遠不會生效：那不是 dormant，
+# 是永久無法啟用。
+#   clickhouse_max_part_count: 300   # count — Max part count per partition
+#   clickhouse_replication_queue: 50   # count — Replication queue size
+#   clickhouse_memory_tracking_bytes: 8589934592   # bytes (8GB) — Memory tracking warning
+# <<< GENERATED:threshold-registry:pack-clickhouse
 #
 # Tenant config 範例 (conf.d/clickhouse-prod.yaml):
 #   tenants:

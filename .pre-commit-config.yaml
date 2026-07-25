@@ -1093,18 +1093,40 @@ repos:
         files: ^(rule-packs/rule-pack-.*\.yaml|scripts/tools/ops/(scaffold_tenant|_observed_map_lib)\.py|scripts/tools/lint/check_threshold_reachability\.py)$
 
       - id: threshold-registry-check
-        name: "threshold registry SoT — schema + transition-period scaffold equivalence (TRK-339 WS1a / #1200)"
+        name: "threshold registry SoT — schema + scaffold equivalence + generated-surface freshness + prose membership (TRK-339 WS1a / #1200)"
         entry: python3 -X utf8 scripts/tools/lint/check_threshold_registry.py --ci
         language: python
         additional_dependencies: ['pyyaml', 'jsonschema']
         pass_filenames: false
         # The #1200 D2 standalone registry (rule-packs/threshold-registry.yaml)
-        # coexists with the still-operative scaffold_tenant.RULE_PACKS until the
-        # rewire PR. Two live contract copies = the #1189 disease, so BOTH are
-        # gated: JSON-Schema shape (pre-generation hard gate) + semantic
-        # equivalence in either direction (no grandfather — born equal). Fix:
-        # edit RULE_PACKS, then `check_threshold_registry.py --regen` + commit.
-        files: ^(rule-packs/threshold-registry\.yaml|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib)\.py|scripts/tools/lint/check_threshold_registry\.py)$
+        # coexists with the still-operative scaffold_tenant.RULE_PACKS until
+        # PR-3. Two live contract copies = the #1189 disease, so every copy
+        # relationship is gated: JSON-Schema shape (pre-generation hard gate)
+        # + semantic equivalence in either direction (no grandfather — born
+        # equal) + freshness of the three GENERATED surfaces (pack header
+        # threshold sections / helm values thresholdConfig.defaults / dev
+        # conf.d _defaults.yaml) + header-prose key membership (F6). Fix: edit
+        # RULE_PACKS, then `check_threshold_registry.py --regen` + commit.
+        # (check_threshold_reachability.py is in the filter because its
+        # KNOWN_UNWIRED list feeds the membership universe.)
+        files: ^(rule-packs/(threshold-registry|rule-pack-.*)\.yaml|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib)\.py|scripts/tools/lint/check_threshold_(registry|reachability)\.py|helm/threshold-exporter/values\.yaml|components/threshold-exporter/config/conf\.d/_defaults\.yaml)$
+
+      - id: threshold-unit-sanity-check
+        name: "threshold unit sanity — declared units match the registry + values lie in their dimension (#992 promise / #1217 follow-up)"
+        entry: python3 -X utf8 scripts/tools/lint/check_threshold_unit_sanity.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        # #992 accepted keeping the `mysql_cpu` misnomer and named the cheaper
+        # mitigation for its residual footgun: "value-range validation ... if it
+        # ever materialises". It materialised (#1217 cleaned 11 surfaces) and the
+        # mitigation was never built. This is it — and deliberately not
+        # mysql_cpu-shaped: the same class, WORSE, was live on `pg_connections`
+        # (recommended 300 "count" against a 0-100 ratio → one portal button
+        # silently disabled PostgresHighConnections). Registry `unit` is the SoT.
+        # Fires on the SoT, on any artifact carrying threshold values, or on the
+        # gate itself.
+        files: ^(rule-packs/threshold-registry\.yaml|docs/assets/(platform|recommendation|template)-data\.json|helm/threshold-exporter/values\.yaml|environments/.*/threshold-exporter\.yaml|k8s/crd/examples/.*\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/.*\.ya?ml|docs/.*\.md|scripts/tools/lint/check_threshold_unit_sanity\.py)$
 
       - id: scrape-reachability-check
         name: "scrape-face reachability — every rule-consumed leaf metric must be admitted by a scrape job (TRK-340 / #1203)"

@@ -113,6 +113,18 @@ jobs:
             #   - .devcontainer/** — promtool pin parity compares
             #     install-promtool.sh against ci.yml/Dockerfile; a
             #     devcontainer-side-only bump must not skip the guard.
+            #   - tools/portal/tests/** — the ONLY non-Python source this
+            #     job's tests read: test_portal_path_filter_coverage SCANS
+            #     that directory to assert every out-of-tree file a portal
+            #     Vitest reads is listed in the `portal` filter below. That
+            #     guard is a pytest, so without this line a PR adding a
+            #     portal Vitest with a new out-of-tree read touches no
+            #     `python` path, skips Python Tests, and the missing
+            #     `portal` entry merges — the guard committing the exact
+            #     omission it exists to catch. Self-enforced: the guard
+            #     asserts its own inputs are covered by THIS filter, so
+            #     tightening this list reds instead of silently disarming it.
+            #     (Caught by CodeRabbit on PR #1229.)
             python:
               - "**/*.py"
               - "tests/**"
@@ -133,6 +145,7 @@ jobs:
               - "renovate.json"
               - ".devcontainer/**"
               - ".github/workflows/**"
+              - "tools/portal/tests/**"
             # Portal Tests: Vitest + esbuild build verification + committed-dist
             # freshness + the RBAC wizard drift byte-clamp. Runs when portal
             # source or its committed dist change, AND when the wizard testdata
@@ -141,20 +154,36 @@ jobs:
             # so a hand-edited fixture must run THIS leg or the JS end of the
             # two-ended tripwire is silently skipped. (ci.yml itself is included
             # so a change to this job's own config re-runs it — same as `go`.)
+            # platform-data.json is the GENERATED source of truth that the
+            # hand-maintained offline fallback in
+            # tools/portal/.../_common/data/rule-packs.js mirrors, and
+            # tests/rule-packs-fallback-drift.test.ts (a Vitest) is the only
+            # gate on that pair. Without this path a rule-pack PR that only
+            # regenerates platform-data.json never runs the gate: 9 of the
+            # last 10 commits touching this file matched no portal path, and
+            # PR #1215 landed a real mariadb-defaults drift that way.
+            # tenant-config.schema.json is the same shape, one gate over:
+            # recipe-enums.drift.test.ts binds the portal's recipe-enums.json
+            # to it (the cross-language enum contract the Python compiler and
+            # the Go preflight also read). Not yet burned — 3 schema edits
+            # since that test was added matched no portal path, none of them
+            # happened to touch a MIRRORED property — but the only thing
+            # keeping it green is that editing an enum usually makes the
+            # author edit recipe-enums.json too, i.e. the failure mode IS
+            # "author forgot", which is exactly when no portal path matches.
+            # ALERT-REFERENCE.md is the third: count-literals-drift.test.ts
+            # reads it (and platform-data.json) to pin the pack/alert counts
+            # the portal advertises, so a doc regen that touches no portal
+            # file must run this leg too.
             #
-            # The two generated SOURCES OF TRUTH below are here for the same
-            # reason as the wizard fixtures: the portal's drift gates
-            # (rule-packs-fallback-drift, count-literals-drift) compare the
-            # offline catalog and the count literals AGAINST these files, so a
-            # PR that regenerates them while touching no portal file must still
-            # run this leg. Omitting them made those gates structurally unable
-            # to fire for the exact change class they guard — #1215 regenerated
-            # platform-data.json, drifted the offline catalog, and merged green
-            # because this filter skipped Portal Tests entirely.
+            # INVARIANT (enforced by tests/ops/test_portal_path_filter_
+            # coverage.py, not by this comment): every out-of-tree file a
+            # portal Vitest reads must be listed here.
             portal:
               - "tools/portal/**"
               - "docs/assets/dist/**"
               - "docs/assets/platform-data.json"
+              - "docs/schemas/tenant-config.schema.json"
               - "rule-packs/ALERT-REFERENCE.md"
               - "components/tenant-api/internal/rbac/testdata/wizard/**"
               - ".github/workflows/ci.yml"
@@ -286,6 +315,15 @@ jobs:
           pre-commit run window-x-no-fallback-check --all-files
           pre-commit run dev-rules-enforcement-check --all-files
           pre-commit run portal-audience-enum-check --all-files
+          # Same 6C shape, missed by that sweep: portal-rulepack-claims is
+          # named in NO workflow, and its live-dogfood twin
+          # (tests/lint/test_check_portal_rulepack_claims.py::
+          # test_repo_portal_claims_all_resolve) only runs under Python
+          # Tests — which a portal-only PR skips, since the `python` filter
+          # covers neither tools/portal/** nor docs/assets/**. So the guard
+          # against the portal advertising alerts we don't ship had ZERO CI
+          # enforcement for exactly the PR shape it exists to police.
+          pre-commit run portal-rulepack-claims --all-files
           pre-commit run structure-check --all-files
           pre-commit run routing-profiles-check --all-files
           # #880: conf.d tenant YAML vs tenant-config schema (db_type-typo guard).

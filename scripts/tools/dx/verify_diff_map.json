@@ -342,6 +342,9 @@
   "scripts/tools/lint/check_subprocess_timeout.py": [
    "tests/lint/test_check_subprocess_timeout.py"
   ],
+  "scripts/tools/lint/check_threshold_unit_sanity.py": [
+   "tests/lint/test_check_threshold_unit_sanity.py"
+  ],
   "scripts/tools/lint/check_translation.py": [
    "tests/lint/test_check_translation.py"
   ],
@@ -404,6 +407,9 @@
   "scripts/tools/ops/_observed_map_lib.py": [
    "tests/ops/test_observed_map_lib.py",
    "tests/ops/test_threshold_govern.py"
+  ],
+  "scripts/tools/ops/_registry_lib.py": [
+   "tests/lint/test_check_threshold_registry.py"
   ],
   "scripts/tools/ops/alert_correlate.py": [
    "tests/lint/test_snapshot_v2.py",
@@ -647,7 +653,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "1d0f7200519d51e6f9257e651912a0280224d898fc1e91d2737472c4ef76b36a",
+ "source_digest": "e9234e88db44074028025f4b3fbeded9ad809f7680a789c90c497aa14bbc725f",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -779,6 +785,7 @@
   "tests/lint/test_check_subprocess_timeout.py",
   "tests/lint/test_check_threshold_reachability.py",
   "tests/lint/test_check_threshold_registry.py",
+  "tests/lint/test_check_threshold_unit_sanity.py",
   "tests/lint/test_check_translation.py",
   "tests/lint/test_check_undefined_tokens.py",
   "tests/lint/test_check_unpinned_deps.py",
@@ -865,6 +872,7 @@
   "tests/ops/test_performance.py",
   "tests/ops/test_policy_engine.py",
   "tests/ops/test_policy_opa_bridge.py",
+  "tests/ops/test_portal_path_filter_coverage.py",
   "tests/ops/test_property_based.py",
   "tests/ops/test_registry_lib.py",
   "tests/ops/test_regression.py",
@@ -945,12 +953,14 @@
    "tests/ops/test_lint_custom_rules.py"
   ],
   ".github/workflows": [
-   "tests/lint/test_check_workflow_git_push_permissions.py"
+   "tests/lint/test_check_workflow_git_push_permissions.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   ".github/workflows/ci.yml": [
    "tests/dx/test_compile_custom_alerts.py",
    "tests/lint/test_check_admin_config_schema.py",
    "tests/lint/test_check_pint.py",
+   "tests/ops/test_portal_path_filter_coverage.py",
    "tests/preview/test_promtool_pin_parity.py"
   ],
   ".github/workflows/nightly-image-scan.yaml": [
@@ -1046,6 +1056,9 @@
   "components/recipe-preview/app.py": [
    "tests/preview/test_app.py"
   ],
+  "components/tenant-api/internal/rbac/testdata/wizard": [
+   "tests/ops/test_portal_path_filter_coverage.py"
+  ],
   "components/threshold-exporter": [
    "tests/ops/test_operator_generate_v2.py"
   ],
@@ -1059,6 +1072,7 @@
    "tests/dx/test_compile_custom_alerts.py"
   ],
   "components/threshold-exporter/config/conf.d/_defaults.yaml": [
+   "tests/lint/test_check_threshold_unit_sanity.py",
    "tests/ops/test_backtest_threshold.py"
   ],
   "components/threshold-exporter/config/conf.d/db-b.yaml": [
@@ -1103,7 +1117,15 @@
    "tests/lint/test_lint_jsx_babel_frontmatter.py"
   ],
   "docs/assets/platform-data.json": [
-   "tests/lint/test_check_makefile_targets.py"
+   "tests/lint/test_check_makefile_targets.py",
+   "tests/lint/test_check_threshold_unit_sanity.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
+  ],
+  "docs/assets/recommendation-data.json": [
+   "tests/lint/test_check_threshold_unit_sanity.py"
+  ],
+  "docs/assets/template-data.json": [
+   "tests/lint/test_check_threshold_unit_sanity.py"
   ],
   "docs/assets/tool-registry.yaml": [
    "tests/dx/test_bump_docs.py",
@@ -1176,7 +1198,8 @@
   ],
   "docs/schemas/tenant-config.schema.json": [
    "tests/dx/test_sync_schema.py",
-   "tests/lint/test_check_confd_schema.py"
+   "tests/lint/test_check_confd_schema.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "docs/schemas/waveform-pack.schema.json": [
    "tests/dx/test_waveform_compile.py"
@@ -1963,6 +1986,9 @@
   "tests/snapshots": [
    "tests/shared/test_help_contract.py"
   ],
+  "tools/portal": [
+   "tests/ops/test_portal_path_filter_coverage.py"
+  ],
   "tools/portal/src": [
    "tests/dx/test_scan_component_health.py",
    "tests/lint/test_check_design_token_usage.py",
@@ -1972,6 +1998,9 @@
   ],
   "tools/portal/src/getting-started": [
    "tests/lint/test_check_jsx_loader_compat.py"
+  ],
+  "tools/portal/tests": [
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "try-local/alertmanager.yml": [
    "tests/dx/test_verify_diff.py",

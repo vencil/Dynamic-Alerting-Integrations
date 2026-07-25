@@ -24,18 +24,18 @@
       "unit": "threads"
     },
     "pg_connections": {
-      "p50": 120, "p95": 280, "p99": 340,
-      "recommended": 300,
+      "p50": 42, "p95": 71, "p99": 86,
+      "recommended": 80,
       "confidence": "medium",
       "sample_size": 360,
-      "unit": "count"
+      "unit": "% of max_connections"
     },
     "pg_connections_critical": {
-      "p50": 120, "p95": 280, "p99": 340,
-      "recommended": 450,
+      "p50": 42, "p95": 71, "p99": 86,
+      "recommended": 90,
       "confidence": "medium",
       "sample_size": 360,
-      "unit": "count"
+      "unit": "% of max_connections"
     },
     "pg_cache_hit_ratio": {
       "p50": 98, "p95": 95, "p99": 90,

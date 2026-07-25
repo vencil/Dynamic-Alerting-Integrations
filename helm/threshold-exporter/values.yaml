@@ -55,17 +55,39 @@ extraEnvFrom: []
 # See config/conf.d/ directory for the reference multi-file format.
 # For multi-DB examples (Redis, MongoDB, Elasticsearch), see:
 #   config/conf.d/examples/ and migration-guide.md §7 (維度標籤)
+#
+# defaults 為生成段（#1200 WS1a PR-2）：內容＝threshold-registry 的
+# chart_default 集——kubernetes pack＝Scenario B container 閾值、mariadb pack
+# ＝Scenario A MySQL 閾值。改值走 scaffold_tenant.RULE_PACKS ＋
+# check_threshold_registry.py --regen；出貨集增減（如 pg_* 是否升
+# chart_default）是 D4 家族產品拍板，勿在此手改。
+# 史料：mysql_cpu 80→30 校準（#944）時本 chart 副本是最後被漏掉的一份
+# （#1200 WS1a 反向稽核補正）；改為生成段後該類漂移由 gate 根除。
 thresholdConfig:
   defaults:
-    # Scenario A: MySQL thresholds
-    mysql_connections: 80
-    mysql_cpu: 30      # running-thread SATURATION warning (threads_running, NOT host CPU%); 80→30 = PMM/Nichter "high" tier (#944 — this chart copy was the last one missed in that calibration, fixed via #1200 WS1a reverse-audit)
-    mysql_replication_lag: 30  # async replication lag warning (seconds behind primary, sql_delay-adjusted); APA/mysqld-mixin trigger point, critical tier opt-in via mysql_replication_lag_critical (suggest 120) (#1200 WS5-P0-a, enabled by default per Q3=C)
-    # Scenario B: Container resource thresholds (% of limit)
+    # >>> GENERATED:threshold-registry:helm-defaults — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+    # ── kubernetes：Kubernetes (cAdvisor + KSM) ──
+    # % — Container CPU % of limit (weakest link)
     container_cpu: 80
-    # Chronic CFS throttle: % of ACTIVE 100ms periods throttled (#944 PR-2c)
+    # % — Chronic CFS throttle: % of ACTIVE 100ms periods throttled, NOT % CPU lost (critical tier
+    # opt-in via container_cpu_throttle_critical, suggest 50; #944)
     container_cpu_throttle: 25
+    # % — Container memory % of limit (weakest link)
     container_memory: 85
+    # ── mariadb：MariaDB / MySQL (mysqld_exporter) ──
+    # count — Max threads_connected warning（critical 加嚴 opt-in：mysql_connections_critical，registry
+    # 建議 120）
+    mysql_connections: 80
+    # threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30 =
+    # PMM/Nichter 'high' (#944); key kept as mysql_cpu (config-contract stability; metric/alert
+    # renamed, #944 closed)（critical 加嚴 opt-in：mysql_cpu_critical，registry 建議 50）
+    mysql_cpu: 30
+    # seconds — Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 =
+    # APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's lag-
+    # template family default is 600s warning). Enabled by default (#1200 WS5-P0-a Q3=C)（critical 加嚴
+    # opt-in：mysql_replication_lag_critical，registry 建議 120）
+    mysql_replication_lag: 30
+    # <<< GENERATED:threshold-registry:helm-defaults
 
   # Scenario C: State-based monitoring filters
   # Each filter maps to kube_pod_container_status_waiting_reason values.
