@@ -85,7 +85,7 @@ kustomize/base/kustomization.yaml
 ```yaml
 mysql_connections: "150"
 mysql_connections_critical: "200"
-mysql_cpu: "75"
+mysql_cpu: "40"
 container_cpu: "75"
 container_memory: "80"
 

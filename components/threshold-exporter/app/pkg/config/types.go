@@ -188,7 +188,7 @@ const DefaultMaxMetricsPerTenant = 500
 //
 //	defaults:
 //	  mysql_connections: 80
-//	  mysql_cpu: 80
+//	  mysql_cpu: 30                          # threads_running saturation, NOT host CPU% (#944)
 //	state_filters:
 //	  container_crashloop:
 //	    reasons: ["CrashLoopBackOff"]
