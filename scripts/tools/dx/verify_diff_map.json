@@ -644,7 +644,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "6280cb9700c0bc2795345d3e54956450ae3bd0fd00c29e83dd1be418c8bcc321",
+ "source_digest": "3f7acdc095451a8c54f9310e0317e1a3c580a6ec13d711b0b86f4c5327798f34",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -769,6 +769,7 @@
   "tests/lint/test_check_repo_name.py",
   "tests/lint/test_check_routing_profiles.py",
   "tests/lint/test_check_rulepack_sync.py",
+  "tests/lint/test_check_scrape_reachability.py",
   "tests/lint/test_check_session_guard_liveness.py",
   "tests/lint/test_check_single_writer_invariant.py",
   "tests/lint/test_check_structure.py",
@@ -1344,6 +1345,9 @@
   "k8s/03-monitoring/configmap-grafana.yaml": [
    "tests/dx/test_federation_revocation_dashboard.py"
   ],
+  "k8s/03-monitoring/configmap-prometheus.yaml": [
+   "tests/lint/test_check_scrape_reachability.py"
+  ],
   "k8s/03-monitoring/configmap-rules-platform.yaml": [
    "tests/rulepacks/test_platform_rules_extract_sync.py"
   ],
@@ -1693,6 +1697,9 @@
   ],
   "scripts/tools/lint/check_rulepack_sync.py": [
    "tests/rulepacks/test_platform_rules_extract_sync.py"
+  ],
+  "scripts/tools/lint/check_scrape_reachability.py": [
+   "tests/lint/test_check_scrape_reachability.py"
   ],
   "scripts/tools/lint/check_session_guard_liveness.py": [
    "tests/lint/test_check_session_guard_liveness.py"

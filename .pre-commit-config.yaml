@@ -1106,6 +1106,22 @@ repos:
         # edit RULE_PACKS, then `check_threshold_registry.py --regen` + commit.
         files: ^(rule-packs/threshold-registry\.yaml|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib)\.py|scripts/tools/lint/check_threshold_registry\.py)$
 
+      - id: scrape-reachability-check
+        name: "scrape-face reachability — every rule-consumed leaf metric must be admitted by a scrape job (TRK-340 / #1203)"
+        entry: python3 -X utf8 scripts/tools/lint/check_scrape_reachability.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        # Fires when the DEMAND side (either rule tree), the SCRAPE face
+        # (configmap-prometheus / any k8s Service manifest carrying the target
+        # annotations), the shared extractor, or the gate itself changes. FAIL
+        # on DEAD (no job admits a consumed metric — the #1203 tenant-api /
+        # alertmanager disease), a NEW unknown-source metric, or a
+        # KNOWN_UNKNOWN_SOURCE exit-lock breach; the 5 helm-only unknowns are
+        # INFO. Single-cluster face only — federation plane assignment is the
+        # split tool's contract, not this gate's (see module docstring).
+        files: ^(k8s/.*\.ya?ml|rule-packs/rule-pack-.*\.ya?ml|scripts/tools/(ops/generate_rule_pack_split|lint/check_scrape_reachability)\.py)$
+
       - id: vmalert-coverage-check
         name: rule-pack alert firing-coverage baseline (#947 gate A/replay gap guard)
         entry: python3 -X utf8 scripts/tools/lint/check_vmalert_coverage.py --ci
