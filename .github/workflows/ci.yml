@@ -141,9 +141,18 @@ jobs:
             # so a hand-edited fixture must run THIS leg or the JS end of the
             # two-ended tripwire is silently skipped. (ci.yml itself is included
             # so a change to this job's own config re-runs it — same as `go`.)
+            # platform-data.json is the GENERATED source of truth that the
+            # hand-maintained offline fallback in
+            # tools/portal/.../_common/data/rule-packs.js mirrors, and
+            # tests/rule-packs-fallback-drift.test.ts (a Vitest) is the only
+            # gate on that pair. Without this path a rule-pack PR that only
+            # regenerates platform-data.json never runs the gate: 9 of the
+            # last 10 commits touching this file matched no portal path, and
+            # PR #1215 landed a real mariadb-defaults drift that way.
             portal:
               - "tools/portal/**"
               - "docs/assets/dist/**"
+              - "docs/assets/platform-data.json"
               - "components/tenant-api/internal/rbac/testdata/wizard/**"
               - ".github/workflows/ci.yml"
 
@@ -274,6 +283,15 @@ jobs:
           pre-commit run window-x-no-fallback-check --all-files
           pre-commit run dev-rules-enforcement-check --all-files
           pre-commit run portal-audience-enum-check --all-files
+          # Same 6C shape, missed by that sweep: portal-rulepack-claims is
+          # named in NO workflow, and its live-dogfood twin
+          # (tests/lint/test_check_portal_rulepack_claims.py::
+          # test_repo_portal_claims_all_resolve) only runs under Python
+          # Tests — which a portal-only PR skips, since the `python` filter
+          # covers neither tools/portal/** nor docs/assets/**. So the guard
+          # against the portal advertising alerts we don't ship had ZERO CI
+          # enforcement for exactly the PR shape it exists to police.
+          pre-commit run portal-rulepack-claims --all-files
           pre-commit run structure-check --all-files
           pre-commit run routing-profiles-check --all-files
           # #880: conf.d tenant YAML vs tenant-config schema (db_type-typo guard).
