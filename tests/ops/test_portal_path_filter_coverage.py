@@ -80,12 +80,16 @@ READER = re.compile(r"\breadFileSync\b")
 TEST_SUFFIXES = {".ts", ".tsx", ".js", ".jsx"}
 
 
-def _portal_filter_patterns() -> list[str]:
+def _filter_patterns(name: str) -> list[str]:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["detect-changes"]["steps"]
     filter_step = next(s for s in steps if s.get("id") == "filter")
     filters = yaml.safe_load(filter_step["with"]["filters"])
-    return filters["portal"]
+    return filters[name]
+
+
+def _portal_filter_patterns() -> list[str]:
+    return _filter_patterns("portal")
 
 
 def _out_of_tree_reads() -> dict[str, list[str]]:
@@ -148,6 +152,35 @@ def test_portal_filter_covers_every_out_of_tree_test_input() -> None:
             f"  - {path!r}  (read by {', '.join(sorted(set(srcs)))})"
             for path, srcs in sorted(uncovered.items())
         )
+    )
+
+
+def test_this_guard_is_not_itself_path_skippable() -> None:
+    """Turn the invariant on this guard.
+
+    This guard is a pytest, so it only runs when `detect-changes` says the
+    `python` filter matched. Its own inputs are the workflow file and the
+    portal test tree — and the failure it exists to catch (a PR adding a
+    portal Vitest with a new out-of-tree read) touches ONLY the latter. If
+    `tools/portal/tests/**` is not in the `python` filter, such a PR skips
+    Python Tests, this guard never runs, and the missing `portal` entry
+    merges: the guard committing the exact omission it guards against.
+    Caught by CodeRabbit on PR #1229 — the first version had this hole.
+    """
+    python_patterns = _filter_patterns("python")
+    own_inputs = [
+        PORTAL_TESTS.relative_to(ROOT).as_posix(),
+        WORKFLOW.relative_to(ROOT).as_posix(),
+    ]
+    uncovered = [
+        path
+        for path in own_inputs
+        if not any(_covers(p, path) for p in python_patterns)
+    ]
+    assert not uncovered, (
+        "this guard reads paths that are NOT in ci.yml's `python` filter, so "
+        "a PR touching only those paths would skip Python Tests and silently "
+        f"disarm the guard: {uncovered}. Add them to the `python` filter."
     )
 
 

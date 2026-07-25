@@ -113,6 +113,18 @@ jobs:
             #   - .devcontainer/** — promtool pin parity compares
             #     install-promtool.sh against ci.yml/Dockerfile; a
             #     devcontainer-side-only bump must not skip the guard.
+            #   - tools/portal/tests/** — the ONLY non-Python source this
+            #     job's tests read: test_portal_path_filter_coverage SCANS
+            #     that directory to assert every out-of-tree file a portal
+            #     Vitest reads is listed in the `portal` filter below. That
+            #     guard is a pytest, so without this line a PR adding a
+            #     portal Vitest with a new out-of-tree read touches no
+            #     `python` path, skips Python Tests, and the missing
+            #     `portal` entry merges — the guard committing the exact
+            #     omission it exists to catch. Self-enforced: the guard
+            #     asserts its own inputs are covered by THIS filter, so
+            #     tightening this list reds instead of silently disarming it.
+            #     (Caught by CodeRabbit on PR #1229.)
             python:
               - "**/*.py"
               - "tests/**"
@@ -133,6 +145,7 @@ jobs:
               - "renovate.json"
               - ".devcontainer/**"
               - ".github/workflows/**"
+              - "tools/portal/tests/**"
             # Portal Tests: Vitest + esbuild build verification + committed-dist
             # freshness + the RBAC wizard drift byte-clamp. Runs when portal
             # source or its committed dist change, AND when the wizard testdata
