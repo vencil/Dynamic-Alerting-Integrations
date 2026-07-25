@@ -177,20 +177,51 @@ def test_issue_titles_fit_the_github_api_cap() -> None:
         )
 
 
+def _swallowed_label_create(source: str) -> list[str]:
+    """Lines where a `gh label create` has its failure discarded.
+
+    Continuations are folded FIRST. The real call site already spans two lines
+    via `\\`, so a line-scoped scan would let `... --force \\` / `|| true` through
+    — passing vacuously on precisely the shape it exists to catch.
+    """
+    # Comment lines are excluded on purpose: file_cve_report.sh's header narrates
+    # the original `|| true` bug verbatim, and that prose must not trip its own guard.
+    body = "\n".join(ln for ln in source.splitlines() if not ln.lstrip().startswith("#"))
+    folded = re.sub(r"\\\n\s*", " ", body)
+    return [
+        ln.strip()
+        for ln in folded.splitlines()
+        # `|| :` is the same fail-open idiom spelled differently.
+        if "label create" in ln and ("|| true" in ln or "|| :" in ln)
+    ]
+
+
 def test_label_creation_failure_is_not_swallowed() -> None:
     """`gh label create ... || true` is what turned a 422 into a month of silence.
 
     The label is the dedup key for the tracking issue, so its absence has to be
     handled explicitly (title-based fallback + a red run), never discarded.
     """
-    offenders = [
-        ln.strip()
-        for ln in _report_sh().splitlines()
-        # Comment lines are excluded on purpose: the file's header narrates the
-        # original `|| true` bug verbatim, and that prose must not trip its own guard.
-        if not ln.lstrip().startswith("#") and "label create" in ln and "|| true" in ln
-    ]
+    offenders = _swallowed_label_create(_report_sh())
     assert not offenders, (
         "`gh label create` must not be `|| true`-swallowed — the label is the issue "
         f"dedup key and its absence breaks filing entirely. Offending line(s): {offenders}"
+    )
+
+
+def test_swallow_guard_catches_the_multiline_form() -> None:
+    """Discriminability: the guard must catch the shape the real call site uses.
+
+    Without folding, the two-line spelling below reads as one line with
+    `label create` and another with `|| true` — the guard would report clean.
+    """
+    multiline = (
+        'if ! gh label create "$LABEL" --repo "$REPO" \\\n'
+        '       --description "$d" --force || true; then\n'
+    )
+    assert _swallowed_label_create(multiline), "guard missed the backslash-continued form"
+    assert _swallowed_label_create('gh label create "$L" --force || :\n'), "guard missed `|| :`"
+    # And it must not fire on the current, correct call site.
+    assert not _swallowed_label_create(
+        'if ! gh label create "$LABEL" --repo "$REPO" \\\n       --force; then\n'
     )
