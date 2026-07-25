@@ -5,7 +5,19 @@
 # key absent from defaults is silently ignored — so every demo threshold key
 # below must be declared. Values are numbers (float64), tenant overrides are
 # strings ("70", "70:critical", "disable").
+#
+# SUPPLY CONTRACT: this list must cover every threshold key the packs in
+# prometheus.yml `rule_files` demand (rule-pack-mariadb reads mysql_connections
+# / mysql_cpu / mysql_replication_lag via tenant:alert_threshold:*). A demanded
+# key missing here leaves its alert loaded but unable to fire even with data
+# present — the empty-set silence this repo keeps re-learning (#1200).
+# Values track the platform defaults. This is one of several hand-maintained
+# copies of that map (helm/threshold-exporter/values.yaml, the scaffold
+# components/threshold-exporter/config/conf.d/_defaults.yaml, environments/*/
+# threshold-exporter.yaml) and NO gate covers this one — a threshold
+# recalibration has to land in all of them by hand (#944 missed this file).
 defaults:
   mysql_connections: 80      # db-demo overrides → drives the headline critical alert
-  mysql_cpu: 80
+  mysql_cpu: 30      # running-thread SATURATION warning (threads_running, NOT host CPU%); 80→30 = PMM/Nichter "high" tier (#944)
+  mysql_replication_lag: 30  # async replication lag warning (seconds behind primary, sql_delay-adjusted); quiet here — the seed pushes no mysql_slave_status_* series (#1200 WS5-P0-a)
   redis_connected_clients: 8000  # cache-demo (sentinel/dedup concept demo)
