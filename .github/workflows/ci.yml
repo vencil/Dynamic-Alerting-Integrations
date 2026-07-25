@@ -928,6 +928,29 @@ jobs:
         # These run locally via `make test` and are tracked in test-map.md.
         run: pytest tests/ scripts/tools/ --ignore=tests/shared/test_property.py --ignore=tests/ops/test_benchmark.py --ignore=tests/shared/test_pipeline_integration.py --ignore=tests/federation-e2e --tb=short -q --co -q
 
+      # tests/ops/*.sh are BASH tests — pytest does not collect them, and nothing
+      # else did either, so they had never run in CI since being written. That
+      # blind spot is why the file_cve_report.sh alerting break survived 33
+      # nightly failures unnoticed. Run them here (seconds, no deps) so the
+      # existing "Python Tests (3.13)" required check covers them; the shell
+      # scripts they exercise live under scripts/ops/**, already in this job's
+      # path filter. Explicit loop over a glob rather than `find -exec`: a new
+      # test file is picked up automatically, but an empty glob fails loudly
+      # instead of passing vacuously.
+      - name: Run ops shell tests
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tests=(tests/ops/test_*.sh)
+          if [ "${#tests[@]}" -eq 0 ]; then
+            echo "::error::no tests/ops/test_*.sh found — the glob or the tests moved"
+            exit 1
+          fi
+          for t in "${tests[@]}"; do
+            echo "── $t"
+            bash "$t"
+          done
+
       - name: Run pytest with coverage
         # Coverage source is defined in pyproject.toml [tool.coverage.run]
         # Do NOT use --cov=<path> here — it overrides pyproject.toml source list
