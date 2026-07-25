@@ -6,10 +6,24 @@
 #   - https://github.com/prometheus/jmx_exporter
 #   - 或 Micrometer Prometheus (Spring Boot Actuator)
 #
-# 對應的 threshold-exporter defaults:
-#   jvm_gc_pause: 0.5       # seconds/5m — GC pause duration rate
-#   jvm_memory: 80          # percent — heap usage
-#   jvm_threads: 500        # count — active threads
+# >>> GENERATED:threshold-registry:pack-jvm — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
+#   jvm_gc_pause: 0.5   # seconds/5m — GC pause duration rate warning
+#   jvm_memory: 80   # % — Heap memory usage warning
+#   jvm_threads: 500   # count — Active thread count warning
+#
+# optional_overrides（documented-but-dormant——登錄有案、平台預設不出貨）：
+# ⛔ 啟用前提（別跳過）：threshold-exporter 只對「存在於 defaults 的 key」
+# 發射 user_threshold——resolveBaseRows 迭代的是 c.Defaults，resolveCriticalRows
+# 也要求 base key 在 defaults 才處理 _critical 覆寫（components/
+# threshold-exporter/app/pkg/config/resolve.go）。下列 key 必須先進
+# _defaults.yaml / Helm values 的 defaults，租戶 conf.d 才有東西可覆寫——
+# 只在租戶檔填一個不在 defaults 的 key 永遠不會生效：那不是 dormant，
+# 是永久無法啟用。
+#   jvm_gc_pause_critical: 1.0   # seconds/5m — GC pause critical
+#   jvm_memory_critical: 95   # % — Heap memory critical
+#   jvm_threads_critical: 800   # count — Thread count critical
+# <<< GENERATED:threshold-registry:pack-jvm
 #
 # Tenant config 範例 (conf.d/db-a.yaml):
 #   tenants:

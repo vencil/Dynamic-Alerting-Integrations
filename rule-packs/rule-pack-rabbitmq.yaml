@@ -6,10 +6,25 @@
 #   - kbudde/rabbitmq_exporter (https://github.com/kbudde/rabbitmq_exporter)
 #   - 或 Prometheus 內建 RabbitMQ 外掛
 #
-# 對應的 threshold-exporter defaults:
-#   rabbitmq_queue_messages: 100000        (messages in queue)
-#   rabbitmq_node_mem_percent: 80          (% of memory limit)
-#   rabbitmq_connections: 1000             (concurrent connections)
+# >>> GENERATED:threshold-registry:pack-rabbitmq — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
+#   rabbitmq_queue_messages: 100000   # messages — Queue depth warning
+#   rabbitmq_node_mem_percent: 80   # % — Node memory usage warning
+#   rabbitmq_connections: 1000   # count — Connection count warning
+#   rabbitmq_consumers: 5   # count — Minimum consumer count warning
+#   rabbitmq_unacked_messages: 10000   # messages — Unacknowledged messages warning
+#
+# optional_overrides（documented-but-dormant——登錄有案、平台預設不出貨）：
+# ⛔ 啟用前提（別跳過）：threshold-exporter 只對「存在於 defaults 的 key」
+# 發射 user_threshold——resolveBaseRows 迭代的是 c.Defaults，resolveCriticalRows
+# 也要求 base key 在 defaults 才處理 _critical 覆寫（components/
+# threshold-exporter/app/pkg/config/resolve.go）。下列 key 必須先進
+# _defaults.yaml / Helm values 的 defaults，租戶 conf.d 才有東西可覆寫——
+# 只在租戶檔填一個不在 defaults 的 key 永遠不會生效：那不是 dormant，
+# 是永久無法啟用。
+#   rabbitmq_queue_messages_critical: 500000   # messages — Queue depth critical
+#   rabbitmq_node_mem_percent_critical: 95   # % — Node memory critical
+# <<< GENERATED:threshold-registry:pack-rabbitmq
 #
 # Tenant config 範例 (conf.d/messaging-b.yaml):
 #   tenants:
