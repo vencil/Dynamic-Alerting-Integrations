@@ -6,18 +6,27 @@
 # below must be declared. Values are numbers (float64), tenant overrides are
 # strings ("70", "70:critical", "disable").
 #
-# SUPPLY CONTRACT: this list must cover every threshold key the packs in
-# prometheus.yml `rule_files` demand (rule-pack-mariadb reads mysql_connections
-# / mysql_cpu / mysql_replication_lag via tenant:alert_threshold:*). A demanded
-# key missing here leaves its alert loaded but unable to fire even with data
-# present — the empty-set silence this repo keeps re-learning (#1200).
-# Values track the platform defaults. This is one of several hand-maintained
-# copies of that map (helm/threshold-exporter/values.yaml, the scaffold
-# components/threshold-exporter/config/conf.d/_defaults.yaml, environments/*/
-# threshold-exporter.yaml) and NO gate covers this one — a threshold
-# recalibration has to land in all of them by hand (#944 missed this file).
+# SUPPLY CONTRACT: every WARNING-tier key the packs in prometheus.yml
+# `rule_files` demand must be listed below — rule-pack-mariadb reads
+# mysql_connections / mysql_cpu / mysql_replication_lag via
+# tenant:alert_threshold:*. A demanded key missing here leaves its alert
+# loaded but unable to fire even with data present (#1200's empty-set silence).
+# The `_critical` tier canNOT be supplied here: resolveCriticalRows scans
+# TENANT OVERRIDES only (app/pkg/config/resolve.go), so a `<key>_critical` line
+# in defaults falls through to the base resolver and emits a junk
+# user_threshold{metric="<key>_critical", severity="warning"} that no recording
+# rule reads. Critical tiers belong in a tenant file (see db-demo.yaml's
+# mysql_connections_critical) — which is why this pack's *Critical alerts have
+# no supply in the demo.
+# The mysql_* values mirror the platform defaults (operating SoT:
+# scripts/tools/ops/scaffold_tenant.py RULE_PACKS → the gated extract
+# rule-packs/threshold-registry.yaml; hand-maintained copies: helm values,
+# components/threshold-exporter/config/conf.d/, environments/*). No gate
+# compares THIS copy's values against those — guard-defaults-impact.yml does
+# trigger on `**/_defaults.yaml`, but it checks blast radius, not cross-copy
+# drift — so a recalibration has to land here by hand (#944 missed this file).
 defaults:
   mysql_connections: 80      # db-demo overrides → drives the headline critical alert
   mysql_cpu: 30      # running-thread SATURATION warning (threads_running, NOT host CPU%); 80→30 = PMM/Nichter "high" tier (#944)
   mysql_replication_lag: 30  # async replication lag warning (seconds behind primary, sql_delay-adjusted); quiet here — the seed pushes no mysql_slave_status_* series (#1200 WS5-P0-a)
-  redis_connected_clients: 8000  # cache-demo (sentinel/dedup concept demo)
+  redis_connected_clients: 8000  # cache-demo (sentinel/dedup concept demo). DEMO-ONLY value — the platform default is 200 (threshold-registry.yaml); no redis pack is loaded here anyway

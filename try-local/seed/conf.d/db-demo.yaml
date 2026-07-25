@@ -17,8 +17,11 @@ tenants:
     # mysql_global_status_threads_running, so MariaDBHighThreadsRunning stays quiet and the
     # single connections-critical red light remains the headline. 40 against the platform
     # default of 30 (_defaults.yaml, #944 calibration) = a tenant that tolerates more
-    # concurrency than the baseline — an override that LOOSENS, which is the inheritance
-    # the effective-config view (GET /api/v1/tenants/db-demo/effective) exists to show.
+    # concurrency than the baseline — an override that LOOSENS. Note that
+    # GET /api/v1/tenants/db-demo/effective returns only the MERGED result (40) plus the
+    # defaults_chain file list: the 30 it overrode is not in the response (EffectiveConfig
+    # keeps MergedDefaults `json:"-"`), so the inheritance is readable in these files,
+    # not in the API payload.
     mysql_cpu: "40"
     _metadata:
       owner: "platform-db-team"
