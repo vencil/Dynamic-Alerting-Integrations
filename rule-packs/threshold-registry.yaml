@@ -130,12 +130,14 @@ keys:
     value: 30
     unit: seconds
     desc: Replication lag warning
+    metric_class: replication
   pg_connections_critical:
     pack: postgresql
     tier: optional_overrides
     value: 90
     unit: '% of max_connections'
     desc: Critical tier connections
+    metric_class: saturation
     critical_of: pg_connections
   pg_replication_lag_critical:
     pack: postgresql
@@ -143,6 +145,7 @@ keys:
     value: 60
     unit: seconds
     desc: Critical tier replication lag
+    metric_class: replication
     critical_of: pg_replication_lag
   mysql_connections:
     pack: mariadb
@@ -171,6 +174,7 @@ keys:
       30 = APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted
       to warning — PMM's lag-template family default is 600s warning). Enabled by
       default (#1200 WS5-P0-a Q3=C)
+    metric_class: replication
     chart_default: true
   mysql_connections_critical:
     pack: mariadb
@@ -178,6 +182,7 @@ keys:
     value: 120
     unit: count
     desc: Critical tier (Scenario D)
+    metric_class: saturation
     critical_of: mysql_connections
   mysql_cpu_critical:
     pack: mariadb
@@ -186,6 +191,7 @@ keys:
     unit: threads
     desc: Critical tier (running-threads saturation); 120→50 = PMM critical-load /
       Nichter 'overloaded' (#944)
+    metric_class: saturation
     critical_of: mysql_cpu
   mysql_replication_lag_critical:
     pack: mariadb
@@ -195,6 +201,7 @@ keys:
     desc: Critical tier replication lag; 120 = 4x the APA/mixin 30s trigger, 5x below
       PMM family 600s — sustained minutes-level lag is a failover data-loss window
       (#1200 WS5-P0-a)
+    metric_class: replication
     critical_of: mysql_replication_lag
   redis_memory_used_bytes:
     pack: redis
@@ -216,12 +223,14 @@ keys:
     value: 100
     unit: keys/s
     desc: Key eviction rate
+    metric_class: efficiency
   redis_keyspace_misses_ratio:
     pack: redis
     tier: optional_overrides
     value: 0.3
     unit: ratio
     desc: Cache miss ratio (30%)
+    metric_class: efficiency
   mongodb_connections_current:
     pack: mongodb
     tier: defaults
@@ -235,12 +244,14 @@ keys:
     value: 10
     unit: seconds
     desc: Replication lag warning
+    metric_class: replication
   mongodb_opcounters_total:
     pack: mongodb
     tier: optional_overrides
     value: 10000
     unit: ops/s
     desc: Total operations rate
+    metric_class: throughput
   es_jvm_memory_used_percent:
     pack: elasticsearch
     tier: defaults
@@ -254,12 +265,14 @@ keys:
     value: 15
     unit: '%'
     desc: Disk free space warning
+    metric_class: capacity
   es_cluster_health:
     pack: elasticsearch
     tier: optional_overrides
     value: 1
     unit: 0=green,1=yellow,2=red
     desc: Cluster health threshold
+    metric_class: state
   oracle_sessions_active:
     pack: oracle
     tier: defaults
@@ -273,24 +286,28 @@ keys:
     value: 85
     unit: '%'
     desc: Tablespace usage warning
+    metric_class: capacity
   oracle_wait_time_rate:
     pack: oracle
     tier: optional_overrides
     value: 50
     unit: s/s
     desc: Wait time rate (5m)
+    metric_class: latency
   oracle_process_count:
     pack: oracle
     tier: optional_overrides
     value: 300
     unit: count
     desc: Active processes warning
+    metric_class: capacity
   oracle_pga_allocated_bytes:
     pack: oracle
     tier: optional_overrides
     value: 4294967296
     unit: bytes (4GB)
     desc: PGA allocation warning
+    metric_class: capacity
   db2_connections_active:
     pack: db2
     tier: defaults
@@ -304,30 +321,35 @@ keys:
     value: 0.95
     unit: ratio
     desc: Bufferpool hit ratio warning
+    metric_class: efficiency
   db2_log_usage_percent:
     pack: db2
     tier: optional_overrides
     value: 70
     unit: '%'
     desc: Transaction log usage warning
+    metric_class: capacity
   db2_deadlock_rate:
     pack: db2
     tier: optional_overrides
     value: 5
     unit: count/s
     desc: Deadlock rate (5m)
+    metric_class: errors
   db2_tablespace_used_percent:
     pack: db2
     tier: optional_overrides
     value: 85
     unit: '%'
     desc: Tablespace usage warning
+    metric_class: capacity
   clickhouse_queries_rate:
     pack: clickhouse
     tier: defaults
     value: 500
     unit: qps
     desc: Query rate warning (5m)
+    metric_class: throughput
   clickhouse_active_connections:
     pack: clickhouse
     tier: defaults
@@ -341,18 +363,21 @@ keys:
     value: 300
     unit: count
     desc: Max part count per partition
+    metric_class: capacity
   clickhouse_replication_queue:
     pack: clickhouse
     tier: optional_overrides
     value: 50
     unit: count
     desc: Replication queue size
+    metric_class: replication
   clickhouse_memory_tracking_bytes:
     pack: clickhouse
     tier: optional_overrides
     value: 8589934592
     unit: bytes (8GB)
     desc: Memory tracking warning
+    metric_class: capacity
   kafka_consumer_lag:
     pack: kafka
     tier: defaults
@@ -366,30 +391,35 @@ keys:
     value: 0
     unit: count
     desc: Under-replicated partitions (should be 0)
+    metric_class: replication
   kafka_broker_count:
     pack: kafka
     tier: defaults
     value: 3
     unit: count
     desc: Minimum broker count warning
+    metric_class: state
   kafka_active_controllers:
     pack: kafka
     tier: defaults
     value: 1
     unit: count
     desc: Minimum active controllers (should be 1)
+    metric_class: state
   kafka_request_rate:
     pack: kafka
     tier: defaults
     value: 10000
     unit: msg/s
     desc: Message rate warning (5m)
+    metric_class: throughput
   kafka_consumer_lag_critical:
     pack: kafka
     tier: optional_overrides
     value: 10000
     unit: messages
     desc: Consumer lag critical
+    metric_class: saturation
     critical_of: kafka_consumer_lag
   kafka_under_replicated_partitions_critical:
     pack: kafka
@@ -397,6 +427,7 @@ keys:
     value: 1
     unit: count
     desc: Under-replicated critical
+    metric_class: replication
     critical_of: kafka_under_replicated_partitions
   kafka_request_rate_critical:
     pack: kafka
@@ -404,6 +435,7 @@ keys:
     value: 50000
     unit: msg/s
     desc: Message rate critical
+    metric_class: throughput
     critical_of: kafka_request_rate
   rabbitmq_queue_messages:
     pack: rabbitmq
@@ -432,6 +464,7 @@ keys:
     value: 5
     unit: count
     desc: Minimum consumer count warning
+    metric_class: state
   rabbitmq_unacked_messages:
     pack: rabbitmq
     tier: defaults
@@ -445,6 +478,7 @@ keys:
     value: 500000
     unit: messages
     desc: Queue depth critical
+    metric_class: saturation
     critical_of: rabbitmq_queue_messages
   rabbitmq_node_mem_percent_critical:
     pack: rabbitmq
@@ -452,6 +486,7 @@ keys:
     value: 95
     unit: '%'
     desc: Node memory critical
+    metric_class: saturation
     critical_of: rabbitmq_node_mem_percent
   jvm_gc_pause:
     pack: jvm
@@ -459,6 +494,7 @@ keys:
     value: 0.5
     unit: seconds/5m
     desc: GC pause duration rate warning
+    metric_class: latency
   jvm_memory:
     pack: jvm
     tier: defaults
@@ -479,6 +515,7 @@ keys:
     value: 1.0
     unit: seconds/5m
     desc: GC pause critical
+    metric_class: latency
     critical_of: jvm_gc_pause
   jvm_memory_critical:
     pack: jvm
@@ -486,6 +523,7 @@ keys:
     value: 95
     unit: '%'
     desc: Heap memory critical
+    metric_class: saturation
     critical_of: jvm_memory
   jvm_threads_critical:
     pack: jvm
@@ -493,6 +531,7 @@ keys:
     value: 800
     unit: count
     desc: Thread count critical
+    metric_class: saturation
     critical_of: jvm_threads
   nginx_connections:
     pack: nginx
@@ -507,6 +546,7 @@ keys:
     value: 5000
     unit: req/s
     desc: Request rate warning
+    metric_class: throughput
   nginx_waiting:
     pack: nginx
     tier: defaults
@@ -520,6 +560,7 @@ keys:
     value: 2000
     unit: count
     desc: Active connections critical
+    metric_class: saturation
     critical_of: nginx_connections
   nginx_request_rate_critical:
     pack: nginx
@@ -527,6 +568,7 @@ keys:
     value: 10000
     unit: req/s
     desc: Request rate critical
+    metric_class: throughput
     critical_of: nginx_request_rate
   nginx_waiting_critical:
     pack: nginx
@@ -534,4 +576,5 @@ keys:
     value: 500
     unit: count
     desc: Waiting connections critical
+    metric_class: saturation
     critical_of: nginx_waiting

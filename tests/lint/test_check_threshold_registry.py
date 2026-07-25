@@ -55,6 +55,17 @@ def test_schema_violation_is_an_error(tmp_path):
     assert any(e.startswith("schema:") for e in result["errors"]), result
 
 
+def test_missing_metric_class_is_a_schema_error(tmp_path):
+    """metric_class is REQUIRED on every key (PR-2 schema promotion)."""
+    def drop_class(doc):
+        key = next(iter(doc["keys"]))
+        doc["keys"][key].pop("metric_class", None)
+    path = _write_registry_variant(tmp_path, drop_class)
+    result = gate.run_check(registry_path=path)
+    assert any(e.startswith("schema:") and "metric_class" in e
+               for e in result["errors"]), result
+
+
 def test_value_drift_is_an_error(tmp_path):
     def bump_value(doc):
         key = next(iter(doc["keys"]))

@@ -38,8 +38,11 @@ SYNTH_PACKS = {
         "optional_overrides": {
             "alpha_conn_critical": {"value": 120, "unit": "count",
                                     "desc": "conn critical"},
+            # no base key in this pack -> no critical_of, no inheritance, so
+            # it must be classified explicitly (schema requires metric_class)
             "alpha_orphan_critical": {"value": 9, "unit": "count",
-                                      "desc": "no base key in this pack"},
+                                      "desc": "no base key in this pack",
+                                      "metric_class": "state"},
         },
     },
     "beta": {
@@ -48,7 +51,8 @@ SYNTH_PACKS = {
         "default_on": False,
         "rule_pack_file": "rule-packs/rule-pack-beta.yaml",
         "defaults": {
-            "beta_lag": {"value": 0.5, "unit": "seconds", "desc": "lag warning"},
+            "beta_lag": {"value": 0.5, "unit": "seconds", "desc": "lag warning",
+                         "metric_class": "replication"},
         },
     },
 }
@@ -79,6 +83,55 @@ def test_critical_of_derived_only_when_base_exists_in_pack():
     assert doc["keys"]["alpha_conn_critical"]["critical_of"] == "alpha_conn"
     # _critical WITHOUT a same-pack base key gets NO critical_of (never guess)
     assert "critical_of" not in doc["keys"]["alpha_orphan_critical"]
+
+
+# ── metric_class: inheritance / backfill / strict completeness ────────────
+
+def test_critical_inherits_base_metric_class():
+    doc = lib.build_registry_doc(SYNTH_PACKS)
+    assert doc["keys"]["alpha_conn_critical"]["metric_class"] == "saturation"
+
+
+def test_backfill_classifies_unclassified_key():
+    packs = copy.deepcopy(SYNTH_PACKS)
+    del packs["beta"]["defaults"]["beta_lag"]["metric_class"]
+    doc = lib.build_registry_doc(
+        packs, metric_class_backfill={"beta_lag": "latency"})
+    assert doc["keys"]["beta_lag"]["metric_class"] == "latency"
+
+
+def test_backfill_shadowing_scaffold_class_fails_loud():
+    with pytest.raises(ValueError, match="shadows scaffold-authored"):
+        lib.build_registry_doc(
+            SYNTH_PACKS, metric_class_backfill={"beta_lag": "latency"})
+
+
+def test_backfill_unknown_key_fails_loud():
+    with pytest.raises(ValueError, match="not found in RULE_PACKS"):
+        lib.build_registry_doc(
+            SYNTH_PACKS, metric_class_backfill={"ghost": "latency"})
+
+
+def test_strict_unclassified_key_fails_loud():
+    packs = copy.deepcopy(SYNTH_PACKS)
+    del packs["beta"]["defaults"]["beta_lag"]["metric_class"]
+    with pytest.raises(ValueError, match="unclassified threshold keys"):
+        lib.build_registry_doc(packs, strict_metric_class=True)
+
+
+def test_real_extraction_every_key_classified_and_enum_bounded():
+    """65/65 keys carry a metric_class from the schema taxonomy; the curated
+    saturation set stays exactly the 22 scaffold-authored bases (+ inherited
+    _critical) — the backfill adds NO new saturation (behavior-preserving)."""
+    doc = lib.build_registry_doc()
+    classes = {k: e["metric_class"] for k, e in doc["keys"].items()}
+    assert len(classes) == len(doc["keys"])  # no key unclassified
+    assert "saturation" not in set(lib.METRIC_CLASS_BACKFILL.values())
+    saturation_bases = {
+        k for k, e in doc["keys"].items()
+        if e["metric_class"] == "saturation" and "critical_of" not in e
+    }
+    assert len(saturation_bases) == 22
 
 
 def test_same_key_in_both_tiers_of_one_pack_fails_loud():

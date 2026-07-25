@@ -103,6 +103,78 @@ CHART_DEFAULT_KEYS: frozenset[str] = frozenset({
     "mysql_replication_lag",
 })
 
+# ---------------------------------------------------------------------------
+# metric_class backfill — semantic classification of every threshold key
+# (#1200 WS1a PR-2; schema now REQUIRES metric_class on every registry key).
+#
+# Taxonomy (definitions live in threshold-registry.schema.json):
+#   saturation  — bounded-resource usage/backlog + paired symptom metric.
+#                 ⚠️ CURATED, PRODUCT-FACING set: it drives scaffold's
+#                 saturation_default_keys() educational _critical annotation
+#                 and the portal metricClass hints, so the 22 scaffold-authored
+#                 labels are NOT re-curated here — this table deliberately
+#                 assigns NO new 'saturation' (behavior-preserving; upgrade
+#                 candidates flagged for owner review in the PR report).
+#   capacity    — fill level of a bounded space/allocation (disk, tablespace,
+#                 log, parts, memory budget) without the paired-symptom
+#                 curation; capacity-planning signal.
+#   throughput  — work-rate volume (qps / ops/s / req/s / msg/s).
+#   latency     — time-to-complete or stall accumulation (GC pause, wait-time).
+#   replication — replica sync health (lag seconds, under-replication, queue).
+#   state       — discrete expected-value / topology invariant (cluster color,
+#                 broker count, active controllers, consumers present).
+#   efficiency  — cache/buffer effectiveness & waste (hit/miss ratio, evictions).
+#   errors      — undesirable-event rate (deadlocks).
+#
+# Authoring rules (fail-loud in build_registry_doc):
+#   - only keys NOT already classified in scaffold may appear here;
+#   - ``_critical`` derivatives are never listed — they inherit the base class;
+#   - after backfill + inheritance every key must be classified (strict path).
+# PR-3 folds this table into the authored registry file.
+# ---------------------------------------------------------------------------
+METRIC_CLASS_BACKFILL: dict[str, str] = {
+    # replication
+    "pg_replication_lag": "replication",
+    "mysql_replication_lag": "replication",
+    "mongodb_repl_lag_seconds": "replication",
+    "kafka_under_replicated_partitions": "replication",
+    "clickhouse_replication_queue": "replication",
+    # capacity
+    "es_filesystem_free_percent": "capacity",
+    "oracle_tablespace_used_percent": "capacity",
+    "oracle_process_count": "capacity",
+    "oracle_pga_allocated_bytes": "capacity",
+    "db2_log_usage_percent": "capacity",
+    "db2_tablespace_used_percent": "capacity",
+    "clickhouse_max_part_count": "capacity",
+    "clickhouse_memory_tracking_bytes": "capacity",
+    # throughput
+    "clickhouse_queries_rate": "throughput",
+    "kafka_request_rate": "throughput",
+    "nginx_request_rate": "throughput",
+    "mongodb_opcounters_total": "throughput",
+    # latency
+    "jvm_gc_pause": "latency",
+    "oracle_wait_time_rate": "latency",
+    # state
+    "es_cluster_health": "state",
+    "kafka_broker_count": "state",
+    "kafka_active_controllers": "state",
+    "rabbitmq_consumers": "state",
+    # efficiency
+    "db2_bufferpool_hit_ratio": "efficiency",
+    "redis_evicted_keys_total": "efficiency",
+    "redis_keyspace_misses_ratio": "efficiency",
+    # errors
+    "db2_deadlock_rate": "errors",
+}
+
+# Canonical per-key field order for the emitted registry document.
+_FIELD_ORDER = (
+    "pack", "tier", "value", "unit", "desc", "metric_class", "chart_default",
+    "critical_of",
+)
+
 _REGISTRY_HEADER = (
     "# threshold-registry.yaml — threshold 契約 SoT（TRK-339 WS1a / #1200 D2）\n"
     "#\n"
@@ -149,6 +221,8 @@ def build_registry_doc(
     rule_packs: Optional[dict] = None,
     *,
     chart_default_keys: Optional[frozenset[str]] = None,
+    metric_class_backfill: Optional[dict[str, str]] = None,
+    strict_metric_class: Optional[bool] = None,
 ) -> dict:
     """Mechanically extract the registry document from RULE_PACKS.
 
@@ -160,19 +234,33 @@ def build_registry_doc(
     enrichment table (CHART_DEFAULT_KEYS — see module docstring); emitted
     sparsely (present only when true, like metric_class).
 
+    ``metric_class`` is REQUIRED on every registry key (schema-enforced):
+    scaffold-authored classes pass through; unclassified keys are backfilled
+    from ``METRIC_CLASS_BACKFILL``; ``_critical`` derivatives inherit the base
+    key's class. On the real extraction path any key left unclassified after
+    that is a hard error (``strict_metric_class``) — a new threshold key
+    cannot land without a deliberate classification.
+
     Enrichment defaults are applied only on the REAL extraction path
     (``rule_packs is None``); synthetic packs stay pure unless the caller
     injects a table — hermetic tests depend on that.
 
     Fails loudly on identity collisions (same key in two tiers of one pack, or
-    in two packs) — a collision would silently shadow a contract entry — and
-    on a chart_default table entry that is unknown or not defaults-tier (a
-    typo'd table would silently un-ship a chart key).
+    in two packs) — a collision would silently shadow a contract entry — on a
+    chart_default table entry that is unknown or not defaults-tier (a typo'd
+    table would silently un-ship a chart key), and on a backfill entry that is
+    unknown or shadows a scaffold-authored class.
     """
     if chart_default_keys is None:
         chart_default_keys = (
             CHART_DEFAULT_KEYS if rule_packs is None else frozenset()
         )
+    if metric_class_backfill is None:
+        metric_class_backfill = (
+            METRIC_CLASS_BACKFILL if rule_packs is None else {}
+        )
+    if strict_metric_class is None:
+        strict_metric_class = rule_packs is None
     if rule_packs is None:
         rule_packs = _load_scaffold().RULE_PACKS
 
@@ -230,6 +318,43 @@ def build_registry_doc(
             f"{sorted(missing_chart)} — a typo here would silently un-ship a "
             "chart key"
         )
+
+    # metric_class: backfill (never shadow scaffold) -> _critical inheritance
+    # -> strict completeness.
+    unknown_backfill = set(metric_class_backfill) - set(keys)
+    if unknown_backfill:
+        raise ValueError(
+            "METRIC_CLASS_BACKFILL entries not found in RULE_PACKS: "
+            f"{sorted(unknown_backfill)} — a typo here would leave the real "
+            "key unclassified"
+        )
+    for key, cls in metric_class_backfill.items():
+        if "metric_class" in keys[key]:
+            raise ValueError(
+                f"METRIC_CLASS_BACKFILL shadows scaffold-authored class for "
+                f"{key!r} — remove it from the table (scaffold wins)"
+            )
+        keys[key]["metric_class"] = cls
+    for key, entry in keys.items():
+        if "metric_class" not in entry and "critical_of" in entry:
+            base = keys.get(entry["critical_of"], {})
+            if "metric_class" in base:
+                entry["metric_class"] = base["metric_class"]
+    if strict_metric_class:
+        unclassified = sorted(
+            k for k, e in keys.items() if "metric_class" not in e
+        )
+        if unclassified:
+            raise ValueError(
+                f"unclassified threshold keys {unclassified} — author "
+                "metric_class in scaffold RULE_PACKS or METRIC_CLASS_BACKFILL "
+                "(schema requires it on every key)"
+            )
+
+    # canonical field order (stable YAML emission).
+    keys = {
+        k: {f: e[f] for f in _FIELD_ORDER if f in e} for k, e in keys.items()
+    }
     return {"version": 1, "packs": packs, "keys": keys}
 
 
