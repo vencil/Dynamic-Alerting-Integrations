@@ -85,7 +85,7 @@ kustomize/base/kustomization.yaml
 ```yaml
 mysql_connections: "150"
 mysql_connections_critical: "200"
-mysql_cpu: "75"
+mysql_cpu: "40"                # threads_running 飽和（併發執行緒數，NOT host CPU%）；平台預設 30
 container_cpu: "75"
 container_memory: "80"
 

@@ -239,7 +239,7 @@ defaults:
   pg_connections: 80
   pg_replication_lag: 30
   mysql_connections: 80
-  mysql_cpu: 80
+  mysql_cpu: 30              # threads_running 飽和（併發執行緒數，NOT host CPU%）
 
 # conf.d/db-a.yaml (edge-asia-1 tenant)
 tenants:

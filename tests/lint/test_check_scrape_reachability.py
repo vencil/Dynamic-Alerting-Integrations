@@ -1,0 +1,335 @@
+"""Tests for scripts/tools/lint/check_scrape_reachability.py (TRK-340 / #1203).
+
+The gate asserts every rule-consumed leaf metric is admitted by at least one
+scrape job of k8s/03-monitoring/configmap-prometheus.yaml. Each test pins one
+branch of that contract:
+  - the live repo is green (0 DEAD, the 5 helm-only unknowns ledgered)
+  - sanity anchors: the cadvisor job's three filter layers parse correctly,
+    and the PRE-#1203 scrape face (tenant-api ns absent from the SD list /
+    alertmanager unannotated) classifies the victim metrics DEAD — injected,
+    so the regression pin survives the repo fix
+  - each classification branch (REACHABLE / REACHABLE-IF-EXPORTED /
+    UNKNOWN-SOURCE / DEAD) and the KNOWN_UNKNOWN_SOURCE exit-lock
+  - the CLI exit-code contract (--ci escalates, bare run is report-only)
+"""
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+_SCRIPT = REPO_ROOT / "scripts" / "tools" / "lint" / "check_scrape_reachability.py"
+
+_spec = importlib.util.spec_from_file_location("check_scrape_reachability", _SCRIPT)
+gate = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(gate)
+
+
+# ── synthetic scrape faces (exercise parse_scrape_jobs on the way in) ────────
+
+# The scrape face as it stood BEFORE the #1203 fix: monitoring-components SD
+# list lacks tenant-api. Used by the regression pins below.
+_PRE_FIX_PROM_YML = """
+scrape_configs:
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+  - job_name: "tenant-exporters"
+    kubernetes_sd_configs:
+      - role: service
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_namespace]
+        action: keep
+        regex: "db-.+"
+  - job_name: "monitoring-components"
+    kubernetes_sd_configs:
+      - role: service
+        namespaces:
+          names: ["monitoring", "vector"]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+  - job_name: "kubelet-cadvisor"
+    kubernetes_sd_configs:
+      - role: node
+    metric_relabel_configs:
+      - source_labels: [namespace]
+        action: keep
+        regex: "db-.+"
+      - source_labels: [__name__]
+        action: keep
+        regex: "container_cpu_usage_seconds_total|container_memory_working_set_bytes"
+      - source_labels: [container]
+        action: drop
+        regex: "|POD"
+"""
+
+_TENANT_API_SVC = {"name": "tenant-api", "namespace": "tenant-api",
+                   "annotations": {"prometheus.io/scrape": "true",
+                                   "prometheus.io/port": "8080"}}
+_ALERTMANAGER_SVC_BARE = {"name": "alertmanager", "namespace": "monitoring",
+                          "annotations": {}}
+_ALERTMANAGER_SVC_ANNOTATED = {"name": "alertmanager", "namespace": "monitoring",
+                               "annotations": {"prometheus.io/scrape": "true",
+                                               "prometheus.io/port": "9093"}}
+
+
+def _pre_fix_jobs():
+    return gate.parse_scrape_jobs(_PRE_FIX_PROM_YML)
+
+
+def _check(consumed, jobs, services, known_unknown=None):
+    return gate.run_check(
+        consumed=consumed, outputs=set(), jobs=jobs, services=services,
+        known_unknown=known_unknown or {})
+
+
+# ── the live repo ─────────────────────────────────────────────────────────
+
+def test_real_repo_is_green():
+    """Post-#1203: 0 DEAD, 0 new unknown-source, 0 stale exemptions."""
+    result = gate.run_check()
+    assert result["errors"] == [], result["errors"]
+    assert result["counts"].get(gate.DEAD, 0) == 0
+
+
+def test_ledger_is_exactly_the_live_unknown_source_set():
+    """Every KNOWN_UNKNOWN_SOURCE entry must still be demanded AND still be
+    unknown-source (exit-lock keeps the ledger honest on the real artifacts)."""
+    result = gate.run_check()
+    assert len(result["infos"]) == len(gate.KNOWN_UNKNOWN_SOURCE) == 5
+    assert not any("STALE-EXEMPTION" in e for e in result["errors"])
+
+
+def test_repo_victim_metrics_are_reachable_after_fix():
+    """The five #1203 victim metrics are REACHABLE on the fixed manifests."""
+    classes = gate.run_check()["classes"]
+    for m in ("tenant_api_sse_clients", "tenant_api_uptime_seconds",
+              "tenant_api_config_reload_failures_total",
+              "tenant_api_config_last_reload_successful",
+              "alertmanager_notifications_failed_total"):
+        assert classes[m][0] == gate.REACHABLE, (m, classes[m])
+
+
+# ── sanity anchor: cadvisor three-layer parse ─────────────────────────────
+
+def test_cadvisor_three_filter_layers_parse_from_real_configmap():
+    """The repo cadvisor job must parse into its three load-bearing layers:
+    namespace keep db-.+, a __name__ keep allowlist, and the container ''|POD
+    drop. If the parser stops seeing any of them, every container_* verdict
+    from this gate is untrustworthy."""
+    jobs = gate.load_repo_jobs()
+    cad = next(j for j in jobs if j["job"] == "kubelet-cadvisor")
+    assert ("keep", ["namespace"], "db-.+") in cad["label_rules"]
+    assert ("drop", ["container"], "|POD") in cad["label_rules"]
+    keeps = [rx for action, rx in cad["name_rules"] if action == "keep"]
+    assert len(keeps) == 1
+    # the tight-on-purpose allowlist (see configmap comments): 10 entries
+    assert len(keeps[0].split("|")) == 10
+
+
+# ── sanity anchor: the pre-#1203 face classifies the victims DEAD ─────────
+
+def test_pre_fix_tenant_api_is_dead():
+    """Injected pre-fix scrape face: tenant-api svc is annotated but its ns is
+    in no SD list → DEAD. This is the regression pin for the #1203 bug."""
+    result = _check(
+        consumed={"tenant_api_sse_clients": {"platform::TenantApiReadHANeeded"}},
+        jobs=_pre_fix_jobs(),
+        services=[_TENANT_API_SVC],
+    )
+    assert result["classes"]["tenant_api_sse_clients"][0] == gate.DEAD
+    assert any("tenant_api_sse_clients" in e and "DEAD" in e
+               for e in result["errors"]), result["errors"]
+
+
+def test_pre_fix_unannotated_alertmanager_is_dead():
+    result = _check(
+        consumed={"alertmanager_notifications_failed_total": {"platform::AmFailing"}},
+        jobs=_pre_fix_jobs(),
+        services=[_ALERTMANAGER_SVC_BARE],
+    )
+    cls, reason = result["classes"]["alertmanager_notifications_failed_total"]
+    assert cls == gate.DEAD
+    assert "annotation" in reason
+
+
+def test_annotated_alertmanager_is_reachable_even_on_pre_fix_face():
+    """The alertmanager fix is annotation-side only — the monitoring ns was
+    always in the SD list, so annotating the Service alone revives it."""
+    result = _check(
+        consumed={"alertmanager_notifications_failed_total": {"platform::AmFailing"}},
+        jobs=_pre_fix_jobs(),
+        services=[_ALERTMANAGER_SVC_ANNOTATED],
+    )
+    assert (result["classes"]["alertmanager_notifications_failed_total"][0]
+            == gate.REACHABLE)
+
+
+# ── classification branches ───────────────────────────────────────────────
+
+def test_static_family_is_reachable():
+    result = _check(
+        consumed={"prometheus_rule_evaluation_failures_total": {"p::x"}},
+        jobs=_pre_fix_jobs(), services=[])
+    assert (result["classes"]["prometheus_rule_evaluation_failures_total"][0]
+            == gate.REACHABLE)
+
+
+def test_name_filtered_allowlisted_metric_is_reachable():
+    result = _check(
+        consumed={"container_cpu_usage_seconds_total": {"k::rec"}},
+        jobs=_pre_fix_jobs(), services=[])
+    assert (result["classes"]["container_cpu_usage_seconds_total"][0]
+            == gate.REACHABLE)
+
+
+def test_name_filtered_rejected_metric_is_dead():
+    """A container_* metric outside the cadvisor __name__ allowlist has no
+    other source — DEAD (this is what catches an allowlist/consumer drift)."""
+    result = _check(
+        consumed={"container_network_receive_bytes_total": {"k::rec"}},
+        jobs=_pre_fix_jobs(), services=[])
+    cls, reason = result["classes"]["container_network_receive_bytes_total"]
+    assert cls == gate.DEAD
+    assert "allowlist" in reason
+
+
+def test_tenant_exporter_family_is_reachable_if_exported():
+    result = _check(consumed={"mysql_up": {"mariadb::MariaDBClusterDown"}},
+                    jobs=_pre_fix_jobs(), services=[])
+    assert result["classes"]["mysql_up"][0] == gate.REACHABLE_IF_EXPORTED
+    assert result["errors"] == []
+
+
+def test_tenant_exporter_family_dead_without_exporter_face():
+    """No job admits an annotated db-* Service → even the runtime-optimistic
+    class collapses to DEAD."""
+    jobs = [j for j in _pre_fix_jobs() if j["job"] != "tenant-exporters"]
+    result = _check(consumed={"mysql_up": {"mariadb::MariaDBClusterDown"}},
+                    jobs=jobs, services=[])
+    assert result["classes"]["mysql_up"][0] == gate.DEAD
+
+
+def test_kubelet_prefix_wins_over_kube_prefix():
+    """Longest-prefix matching: kubelet_* routes to the volume-stats name
+    filter, NOT the kube-state-metrics Service (substring trap pin)."""
+    prefix, kind, spec = gate._resolve_family("kubelet_volume_stats_available_bytes")
+    assert (kind, spec) == ("name-filtered", "kubelet-volume-stats")
+    prefix, kind, spec = gate._resolve_family("kube_pod_info")
+    assert kind == "service" and spec == ("monitoring", "kube-state-metrics")
+
+
+def test_vector_family_reachable_via_pinned_ns():
+    result = _check(
+        consumed={"vector_buffer_discarded_events_total": {"p::VectorBufferEventsDropped"}},
+        jobs=_pre_fix_jobs(), services=[])
+    cls, reason = result["classes"]["vector_buffer_discarded_events_total"]
+    assert cls == gate.REACHABLE
+    assert "single-cluster" in reason  # federation plane explicitly out of scope
+
+
+# ── UNKNOWN-SOURCE + exit-lock ────────────────────────────────────────────
+
+def test_new_unknown_source_is_an_error():
+    result = _check(consumed={"somepack_brand_new_metric": {"x::A"}},
+                    jobs=_pre_fix_jobs(), services=[])
+    assert any("NEW-UNKNOWN-SOURCE" in e and "somepack_brand_new_metric" in e
+               for e in result["errors"]), result["errors"]
+
+
+def test_ledgered_unknown_source_is_info_only():
+    result = _check(
+        consumed={"tenant_federation_requests_total": {"p::FederationAuditPipelineSilent"}},
+        jobs=_pre_fix_jobs(), services=[],
+        known_unknown={"tenant_federation_requests_total": "helm-only (#1203)"})
+    assert result["errors"] == []
+    assert any("tenant_federation_requests_total" in i for i in result["infos"])
+
+
+def test_ledger_entry_no_longer_demanded_is_stale():
+    result = _check(consumed={}, jobs=_pre_fix_jobs(), services=[],
+                    known_unknown={"tenant_log_query_requests_total": "helm-only"})
+    assert any("STALE-EXEMPTION" in e and "demands it" in e
+               for e in result["errors"]), result["errors"]
+
+
+def test_ledger_entry_that_got_pinned_is_stale():
+    """A ledgered metric that now classifies (e.g. its family got pinned in
+    _FAMILY_TABLE) must leave the ledger — the exit-lock forces shrinkage."""
+    result = _check(
+        consumed={"vector_tenant_projection_gate_info": {"p::VectorProjectionGateMismatch"}},
+        jobs=_pre_fix_jobs(), services=[],
+        known_unknown={"vector_tenant_projection_gate_info": "stale ledger row"})
+    assert any("STALE-EXEMPTION" in e and "got pinned" in e
+               for e in result["errors"]), result["errors"]
+
+
+# ── leaf boundary (injected series belong to other gates) ────────────────
+
+def test_injected_and_recording_series_are_not_leaves():
+    leaves = gate.leaf_metrics(
+        {"user_threshold": {"a"}, "da_config_event": {"b"}, "up": {"c"},
+         "tenant:mysql_connection_usage:ratio": {"d"},
+         "produced_by_tree": {"e"}, "mysql_up": {"f"}},
+        outputs={"produced_by_tree"})
+    assert set(leaves) == {"mysql_up"}
+
+
+# ── extractor patch (blind spots of the split-tool base) ──────────────────
+
+def test_extractor_catches_metric_before_closing_paren():
+    got = gate.extract_metrics(
+        "(time() - da_config_last_reload_complete_unixtime_seconds) > 600")
+    assert got == {"da_config_last_reload_complete_unixtime_seconds"}
+
+
+def test_extractor_catches_bare_absent():
+    got = gate.extract_metrics(
+        "absent(federation_revocation_last_reconcile_timestamp_seconds)")
+    assert got == {"federation_revocation_last_reconcile_timestamp_seconds"}
+
+
+def test_extractor_does_not_leak_grouping_labels_or_keywords():
+    got = gate.extract_metrics(
+        'max by (mode, namespace) (vector_tenant_projection_gate_info'
+        '{category="mismatch"}) > 0')
+    assert got == {"vector_tenant_projection_gate_info"}
+    assert gate.extract_metrics("vector(1)") == set()
+
+
+# ── the CLI exit-code contract (main), independent of the real artifacts ──
+
+def test_main_without_ci_is_report_only(monkeypatch):
+    monkeypatch.setattr(gate, "run_check",
+                        lambda: {"errors": ["some drift"], "infos": [],
+                                 "classes": {}, "counts": {}})
+    assert gate.main([]) == gate.EXIT_OK
+
+
+def test_main_ci_fails_on_errors(monkeypatch):
+    monkeypatch.setattr(gate, "run_check",
+                        lambda: {"errors": ["a breach"], "infos": [],
+                                 "classes": {}, "counts": {}})
+    assert gate.main(["--ci"]) == gate.EXIT_VIOLATION
+
+
+def test_main_ci_passes_when_clean(monkeypatch):
+    monkeypatch.setattr(gate, "run_check",
+                        lambda: {"errors": [], "infos": ["5 ledgered"],
+                                 "classes": {}, "counts": {}})
+    assert gate.main(["--ci"]) == gate.EXIT_OK
+
+
+def test_extract_metrics_compact_operator_writing():
+    """Metric directly followed by an operator (no whitespace) must still be
+    extracted; only function names (followed by `(`) are excluded
+    (Gemini review of #1221 — `tenant_api_uptime_seconds>60` was missed)."""
+    from check_scrape_reachability import extract_metrics
+    assert "tenant_api_uptime_seconds" in extract_metrics("tenant_api_uptime_seconds>60")
+    assert "foo_total" in extract_metrics("rate(foo_total[5m])*100")
+    assert "rate" not in extract_metrics("rate(foo_total[5m])*100")

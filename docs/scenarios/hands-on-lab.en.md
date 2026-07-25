@@ -86,7 +86,7 @@ Edit each tenant file to set realistic thresholds.
 # E-Commerce MariaDB — tighter connection threshold for high-traffic
 mysql_connections: "150"
 mysql_connections_critical: "200"
-mysql_cpu: "75"
+mysql_cpu: "40"                # threads_running saturation (concurrent threads, NOT host CPU%); platform default 30
 container_cpu: "75"
 container_memory: "80"
 

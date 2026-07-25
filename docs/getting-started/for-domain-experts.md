@@ -351,8 +351,8 @@ thresholds:
   mysql_cpu:
     type: "scheduled"
     default:
-      during_business_hours: "80"
-      after_hours: "90"
+      during_business_hours: "30"   # threads_running 飽和（併發執行緒數，NOT host CPU%）
+      after_hours: "50"             # 夜間批次放寬（＝critical tier 建議值）
     range: ["09:00", "18:00"]     # 工作時間
 ```
 

@@ -83,7 +83,7 @@ data:
           - target_label: env
             replacement: "test"
 
-      # Platform-component services (monitoring + vector namespaces)
+      # Platform-component services (monitoring + vector + tenant-api namespaces)
       # Auto-discovers: kube-state-metrics, threshold-exporter,
       # and any future component with the annotation.
       # `vector` was added when the Vector log-agent DaemonSet moved to its
@@ -91,12 +91,20 @@ data:
       # vector-metrics + projection-gate-metrics headless Services carry the
       # same prometheus.io/scrape annotation and would silently drop off
       # this job without the extra namespace here.
+      # `tenant-api` closes the same declared-but-unwired hole one more time
+      # (#1203/TRK-340): the tenant-api Service carries the full scrape
+      # annotation set AND its NetworkPolicy explicitly admits Prometheus on
+      # 8080, but its namespace was in NO job's SD list — so the 4
+      # TenantApi* platform alerts (tenant_api_* consumers) were
+      # structurally inert. Label face checked: unlike tenant-exporters,
+      # this job stamps NO `tenant` label (only job ← service name), so
+      # scraping tenant-api here cannot pollute the tenant dimension.
       - job_name: "monitoring-components"
         scrape_interval: 15s
         kubernetes_sd_configs:
           - role: service
             namespaces:
-              names: ["monitoring", "vector"]
+              names: ["monitoring", "vector", "tenant-api"]
         relabel_configs:
           # Only keep annotated services
           - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]

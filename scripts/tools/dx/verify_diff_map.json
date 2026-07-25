@@ -330,6 +330,9 @@
    "tests/dx/test_generate_rulepack_configmaps.py",
    "tests/lint/test_check_rulepack_sync.py"
   ],
+  "scripts/tools/lint/check_scrape_reachability.py": [
+   "tests/lint/test_check_scrape_reachability.py"
+  ],
   "scripts/tools/lint/check_single_writer_invariant.py": [
    "tests/lint/test_check_single_writer_invariant.py"
   ],
@@ -644,7 +647,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "6c2da4eba4451111b2badf60210fef3b881c2a33b9b719687661c8bd4c769295",
+ "source_digest": "1d0f7200519d51e6f9257e651912a0280224d898fc1e91d2737472c4ef76b36a",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -705,6 +708,7 @@
   "tests/e2e-bench/driver/test_driver.py",
   "tests/e2e-bench/test_aggregate.py",
   "tests/golden/test_merge_parity.py",
+  "tests/helm/test_environments_overlay_sync.py",
   "tests/helm/test_human_socket_guard.py",
   "tests/helm/test_identity_claim_headers_guard.py",
   "tests/helm/test_image_tag_derivation.py",
@@ -768,6 +772,7 @@
   "tests/lint/test_check_repo_name.py",
   "tests/lint/test_check_routing_profiles.py",
   "tests/lint/test_check_rulepack_sync.py",
+  "tests/lint/test_check_scrape_reachability.py",
   "tests/lint/test_check_session_guard_liveness.py",
   "tests/lint/test_check_single_writer_invariant.py",
   "tests/lint/test_check_structure.py",
@@ -961,6 +966,7 @@
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_compile_custom_alerts.py",
    "tests/dx/test_scaffold_lint.py",
+   "tests/helm/test_environments_overlay_sync.py",
    "tests/lint/test_check_admin_config_schema.py",
    "tests/lint/test_check_dev_rules_enforcement.py",
    "tests/lint/test_check_makefile_targets.py",
@@ -1181,10 +1187,14 @@
   "docs/tags.md": [
    "tests/dx/test_generate_doc_map.py"
   ],
+  "environments/ci/threshold-exporter.yaml": [
+   "tests/helm/test_environments_overlay_sync.py"
+  ],
   "environments/local": [
    "tests/helm/test_image_tag_derivation.py"
   ],
   "environments/local/threshold-exporter.yaml": [
+   "tests/helm/test_environments_overlay_sync.py",
    "tests/helm/test_image_tag_derivation.py"
   ],
   "flaky-tests.yaml": [
@@ -1283,6 +1293,9 @@
    "tests/helm/test_image_tag_derivation.py",
    "tests/ops/test_operator_generate_v2.py"
   ],
+  "helm/threshold-exporter/values.yaml": [
+   "tests/helm/test_environments_overlay_sync.py"
+  ],
   "helm/vector": [
    "tests/dx/test_log_visibility_catalogue.py",
    "tests/lint/test_check_iac_helm.py",
@@ -1334,6 +1347,9 @@
   ],
   "k8s/03-monitoring/configmap-grafana.yaml": [
    "tests/dx/test_federation_revocation_dashboard.py"
+  ],
+  "k8s/03-monitoring/configmap-prometheus.yaml": [
+   "tests/lint/test_check_scrape_reachability.py"
   ],
   "k8s/03-monitoring/configmap-rules-platform.yaml": [
    "tests/rulepacks/test_platform_rules_extract_sync.py"
@@ -1684,6 +1700,9 @@
   ],
   "scripts/tools/lint/check_rulepack_sync.py": [
    "tests/rulepacks/test_platform_rules_extract_sync.py"
+  ],
+  "scripts/tools/lint/check_scrape_reachability.py": [
+   "tests/lint/test_check_scrape_reachability.py"
   ],
   "scripts/tools/lint/check_session_guard_liveness.py": [
    "tests/lint/test_check_session_guard_liveness.py"
