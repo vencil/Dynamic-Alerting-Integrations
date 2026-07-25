@@ -18,7 +18,9 @@ spec:
   tenants:
     db-a:
       mysql_connections: "70"
-      mysql_cpu: "80"
+      # threads_running 1m-avg 飽和警告（併發執行緒數，NOT host CPU%）；平台預設 30、
+      # critical tier 建議 50（#944 語意校準）。key 保留 mysql_cpu 是為 config 契約穩定性。
+      mysql_cpu: "30"
       container_memory: "85"
       _silent_mode: "disable"
       _routing:

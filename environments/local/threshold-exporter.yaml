@@ -18,10 +18,13 @@ exporter:
   reloadInterval: "15s"    # Faster reload for local dev
 
 # Threshold config for local testing
+# ⚠️ 這裡的 defaults 會 deep-merge 覆蓋 helm/threshold-exporter/values.yaml 的同名 key，
+#    所以必須與 chart 預設同步 — 否則 `-f environments/local/...` 會把已校準的預設靜默蓋回舊值。
 thresholdConfig:
   defaults:
     mysql_connections: 80
-    mysql_cpu: 80
+    mysql_cpu: 30      # running-thread SATURATION warning (threads_running, NOT host CPU%); 80→30 = PMM/Nichter "high" tier (#944)
+    mysql_replication_lag: 30  # async replication lag warning (seconds behind primary, sql_delay-adjusted) (#1200 WS5-P0-a)
     container_cpu: 80
     container_cpu_throttle: 25
     container_memory: 85
