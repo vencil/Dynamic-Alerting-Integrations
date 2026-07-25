@@ -16,7 +16,7 @@
 #     db-a:
 #       mysql_connections: "70"        # 自訂連線數警告閾值
 #       mysql_connections_critical: "120"  # Critical 閾值
-#       mysql_cpu: "60"               # 自訂執行緒飽和警告閾值（key 保留 mysql_cpu；config 契約穩定性，#944 結案）
+#       mysql_cpu: "45"               # 自訂執行緒飽和警告閾值（平台預設 30；key 保留 mysql_cpu＝config 契約穩定性，#944 結案）
 #       mysql_replication_lag: "20"           # 自訂複寫延遲警告閾值 (秒)
 #       mysql_replication_lag_critical: "120" # Critical 閾值 (秒，opt-in)
 # ============================================================

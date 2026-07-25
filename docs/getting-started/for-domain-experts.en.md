@@ -351,8 +351,8 @@ thresholds:
   mysql_cpu:
     type: "scheduled"
     default:
-      during_business_hours: "80"
-      after_hours: "90"
+      during_business_hours: "30"   # threads_running saturation (concurrent threads, NOT host CPU%)
+      after_hours: "50"             # relaxed for nightly batch (= suggested critical tier)
     range: ["09:00", "18:00"]     # Business hours
 ```
 

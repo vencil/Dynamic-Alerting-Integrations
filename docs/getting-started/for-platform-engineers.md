@@ -50,7 +50,7 @@ lang: zh
 # conf.d/_defaults.yaml
 defaults:
   mysql_connections: "80"
-  mysql_cpu: "75"
+  mysql_cpu: "30"            # threads_running 飽和（併發執行緒數，NOT host CPU%）
   mysql_memory: "85"
   # 其他預設閾值...
 ```
@@ -194,11 +194,11 @@ defaults:
 profiles:
   standard-db:
     mysql_connections: "80"
-    mysql_cpu: "75"
+    mysql_cpu: "30"
     container_memory: "85"
   high-load-db:
     mysql_connections: "60"     # 更嚴格
-    mysql_cpu: "60"
+    mysql_cpu: "45"             # 反而放寬：threads_running 是飽和訊號，高負載庫的正常併發本就較高
     container_memory: "80"
 ```
 

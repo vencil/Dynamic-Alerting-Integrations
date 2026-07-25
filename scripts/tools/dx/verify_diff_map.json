@@ -644,7 +644,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "6c2da4eba4451111b2badf60210fef3b881c2a33b9b719687661c8bd4c769295",
+ "source_digest": "6280cb9700c0bc2795345d3e54956450ae3bd0fd00c29e83dd1be418c8bcc321",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -705,6 +705,7 @@
   "tests/e2e-bench/driver/test_driver.py",
   "tests/e2e-bench/test_aggregate.py",
   "tests/golden/test_merge_parity.py",
+  "tests/helm/test_environments_overlay_sync.py",
   "tests/helm/test_human_socket_guard.py",
   "tests/helm/test_identity_claim_headers_guard.py",
   "tests/helm/test_image_tag_derivation.py",
@@ -961,6 +962,7 @@
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_compile_custom_alerts.py",
    "tests/dx/test_scaffold_lint.py",
+   "tests/helm/test_environments_overlay_sync.py",
    "tests/lint/test_check_admin_config_schema.py",
    "tests/lint/test_check_dev_rules_enforcement.py",
    "tests/lint/test_check_makefile_targets.py",
@@ -1181,10 +1183,14 @@
   "docs/tags.md": [
    "tests/dx/test_generate_doc_map.py"
   ],
+  "environments/ci/threshold-exporter.yaml": [
+   "tests/helm/test_environments_overlay_sync.py"
+  ],
   "environments/local": [
    "tests/helm/test_image_tag_derivation.py"
   ],
   "environments/local/threshold-exporter.yaml": [
+   "tests/helm/test_environments_overlay_sync.py",
    "tests/helm/test_image_tag_derivation.py"
   ],
   "flaky-tests.yaml": [
@@ -1282,6 +1288,9 @@
   "helm/threshold-exporter": [
    "tests/helm/test_image_tag_derivation.py",
    "tests/ops/test_operator_generate_v2.py"
+  ],
+  "helm/threshold-exporter/values.yaml": [
+   "tests/helm/test_environments_overlay_sync.py"
   ],
   "helm/vector": [
    "tests/dx/test_log_visibility_catalogue.py",
