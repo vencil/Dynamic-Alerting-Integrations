@@ -342,6 +342,9 @@
   "scripts/tools/lint/check_subprocess_timeout.py": [
    "tests/lint/test_check_subprocess_timeout.py"
   ],
+  "scripts/tools/lint/check_threshold_unit_sanity.py": [
+   "tests/lint/test_check_threshold_unit_sanity.py"
+  ],
   "scripts/tools/lint/check_translation.py": [
    "tests/lint/test_check_translation.py"
   ],
@@ -647,7 +650,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "1d0f7200519d51e6f9257e651912a0280224d898fc1e91d2737472c4ef76b36a",
+ "source_digest": "a79dd0d0a690b2fc47f11d52a7d649bb1396fd219dfe8a74ab404fa17fee006d",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -779,6 +782,7 @@
   "tests/lint/test_check_subprocess_timeout.py",
   "tests/lint/test_check_threshold_reachability.py",
   "tests/lint/test_check_threshold_registry.py",
+  "tests/lint/test_check_threshold_unit_sanity.py",
   "tests/lint/test_check_translation.py",
   "tests/lint/test_check_undefined_tokens.py",
   "tests/lint/test_check_unpinned_deps.py",
@@ -1059,6 +1063,7 @@
    "tests/dx/test_compile_custom_alerts.py"
   ],
   "components/threshold-exporter/config/conf.d/_defaults.yaml": [
+   "tests/lint/test_check_threshold_unit_sanity.py",
    "tests/ops/test_backtest_threshold.py"
   ],
   "components/threshold-exporter/config/conf.d/db-b.yaml": [
@@ -1104,6 +1109,9 @@
   ],
   "docs/assets/platform-data.json": [
    "tests/lint/test_check_makefile_targets.py"
+  ],
+  "docs/assets/recommendation-data.json": [
+   "tests/lint/test_check_threshold_unit_sanity.py"
   ],
   "docs/assets/tool-registry.yaml": [
    "tests/dx/test_bump_docs.py",
