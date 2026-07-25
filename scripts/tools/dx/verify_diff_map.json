@@ -299,6 +299,9 @@
   "scripts/tools/lint/check_orphan_lint.py": [
    "tests/lint/test_check_orphan_lint.py"
   ],
+  "scripts/tools/lint/check_orphan_recordings.py": [
+   "tests/lint/test_check_orphan_recordings.py"
+  ],
   "scripts/tools/lint/check_path_metadata_consistency.py": [
    "tests/lint/test_check_path_metadata_consistency.py"
   ],
@@ -641,7 +644,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "c5ae0b2e6e62446bb07aa3e6186287cbe7d2d0ddb7918600eb42cdbe35fdaeca",
+ "source_digest": "1173f3dd864cd31ed6ec2beb83d2432172e9fa29f1f959560ecd651cfa68f29d",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -752,7 +755,9 @@
   "tests/lint/test_check_maintenance_symmetry.py",
   "tests/lint/test_check_makefile_targets.py",
   "tests/lint/test_check_metric_dictionary.py",
+  "tests/lint/test_check_metric_group_pairs.py",
   "tests/lint/test_check_orphan_lint.py",
+  "tests/lint/test_check_orphan_recordings.py",
   "tests/lint/test_check_path_metadata_consistency.py",
   "tests/lint/test_check_pint.py",
   "tests/lint/test_check_planning_status_sync.py",
@@ -1653,8 +1658,14 @@
   "scripts/tools/lint/check_metric_dictionary.py": [
    "tests/lint/test_check_metric_dictionary.py"
   ],
+  "scripts/tools/lint/check_metric_group_pairs.py": [
+   "tests/lint/test_check_metric_group_pairs.py"
+  ],
   "scripts/tools/lint/check_orphan_lint.py": [
    "tests/lint/test_check_orphan_lint.py"
+  ],
+  "scripts/tools/lint/check_orphan_recordings.py": [
+   "tests/lint/test_check_orphan_recordings.py"
   ],
   "scripts/tools/lint/check_pint.py": [
    "tests/lint/test_check_pint.py"

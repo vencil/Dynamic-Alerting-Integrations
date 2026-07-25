@@ -166,6 +166,12 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-331 | [#916](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/916) | threshold_recommend 覆蓋缺口：下界 metric 語意分流 + observed-map merge-preserve | [#721](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/721) |
 | TRK-332 | [#1070](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1070) | SIGKILL 孤兒 `.tmp` 於 PVC 上累積 — boot-time stale-temp GC（defer-with-trigger；#1069 原子替換 review 揪出；emptyDir 部署自癒、PVC 才會累積；trigger＝conf.d 改用 PVC） | [#670](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/670) |
 | TRK-333 | [#1092](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1092) | `slo_burn_rate` recipe — 宣告式 SLO burn-rate 告警編譯 feature 線（ADR-031；0-pre custom 子樹 outbound delivery 硬前置 + Phase 0-2 gated） | — |
+| TRK-338 | [#1199](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1199) | ADR-001 severity-dedup 對 kubernetes pack 升級對失效 — 4 對 warning/critical 缺 `metric_group` → 雙發通知（gate＝`check_metric_group_pairs.py`，KNOWN_UNGROUPED exit-locked） | [#1200](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1200) |
+| TRK-339 | [#1200](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1200) | [Epic] Rule-Pack 統整治理 — 契約 SSOT × 可達性 × 閾值體質 × 驗證體質（WS1a registry gate、WS2a 孤兒/配對 gate 等 workstreams） | — |
+| TRK-340 | [#1203](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1203) | scrape 面選不到 target：tenant-api ×4 + Alertmanager 守護者告警結構性 inert | [#1200](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1200) |
+| TRK-341 | [#1204](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1204) | 12 個孤兒 recording rule — series 有值、無人消費（gate＝`check_orphan_recordings.py`，KNOWN_ORPHANS exit-locked；逐條 disposition 追修） | [#1200](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1200) |
+| TRK-342 | [#1205](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1205) | platform-defaults 繼承路徑 `_custom_alerts` 無深層 schema — 裸 scalar 繞過 #1017 type 鎖 | [#1200](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1200) |
+| TRK-343 | [#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211) | custom 子樹 delivery fail-silent ×2：page-mode 無 delivery 零警示＋fragment 模式缺 custom 子樹 | [#1200](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1200) |
 
 ## 不在 mapping 範圍
 

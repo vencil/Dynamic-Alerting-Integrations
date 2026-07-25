@@ -190,9 +190,11 @@ lang: en
 | `check_makefile_targets.py` | 自動化入口與 DX 工具聯動檢查 |
 | `check_md_yaml_drift.py` | Markdown 內 YAML 範例與 Schema 漂移偵測 |
 | `check_metric_dictionary.py` | Metric Dictionary 自動驗證 |
+| `check_metric_group_pairs.py` | Metric-group upgrade-pair gate — every X/XCritical alert pair must carry a shared `metric_group` label (TRK-339 WS2a / #1200; bug #1199). |
 | `check_open_encoding.py` | flag open() text-mode calls without encoding=. |
 | `check_orphan_docs.py` | 孤兒文件偵測 |
 | `check_orphan_lint.py` | orphan / dead-lint detector (#717; supersedes #456 residue). |
+| `check_orphan_recordings.py` | Orphan recording-rule gate — every recording rule must have a consumer somewhere in the platform (TRK-339 WS2a / #1200). |
 | `check_path_metadata_consistency.py` | Warn when conf.d/ hierarchical path disagrees with tenant `_metadata`. |
 | `check_pint.py` | Prometheus rule linting (pint engine + thin Vibe wrapper). |
 | `check_planning_status_sync.py` | CI-time PR-trailer ↔ frontmatter sync gate. |
