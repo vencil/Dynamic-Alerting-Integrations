@@ -4,17 +4,26 @@
 # 語言中立（helm/docs/portal 直讀）、schema 可驗證
 # （docs/schemas/threshold-registry.schema.json）。
 #
-# ⚠️ 過渡期（本 skeleton PR）：生成消費者「尚未」接線——
-# scaffold_tenant.RULE_PACKS 仍是運作中的契約副本，本檔由它機械萃取
-# （scripts/tools/ops/_registry_lib.py build_registry_doc()）。兩者的語意等價
-# 由 pre-commit gate check_threshold_registry.py 強制（防雙 SoT 漂移）。
+# ✅ PR-2（rewire）後本檔已是真 SoT：三個原手抄面改為由本檔生成（定界符內），
+# 定界符外手寫 prose 照舊——
+#   1. rule-pack header 閾值段（defaults tier + optional_overrides ⛔ 警語段）
+#   2. helm/threshold-exporter/values.yaml thresholdConfig.defaults
+#      （chart_default 集）
+#   3. components/threshold-exporter/config/conf.d/_defaults.yaml defaults 段
+# 新鮮度由 check_threshold_registry.py --check 面強制（stale＝硬錯）。
+#
+# ⚠️ 過渡期殘留：scaffold_tenant.RULE_PACKS 仍是 config 生成路徑的運作副本，
+# 本檔由它機械萃取（scripts/tools/ops/_registry_lib.py build_registry_doc()，
+# 外加 registry-scope 附掛表 CHART_DEFAULT_KEYS）。兩者的語意等價由 pre-commit
+# gate check_threshold_registry.py 強制（防雙 SoT 漂移）。
 # 改閾值請改 scaffold_tenant.RULE_PACKS，再跑：
 #   python3 scripts/tools/lint/check_threshold_registry.py --regen
-# 下一個 PR 起方向反轉：本檔為 SoT、scaffold RULE_PACKS 降為生成物/runtime 載入。
+# （會同時重產本檔＋三個生成面。）PR-3 起 scaffold RULE_PACKS 降為生成物/
+# runtime 載入，附掛表併回本檔。
 #
-# 範圍：threshold 身分（defaults / optional_overrides 兩層）。state_filters 與
-# dimensional_example 仍歸 scaffold（非閾值身分）。萃取為全量；本 registry 首要
-# 服務的 enforcement 路徑是 18-key 修復線（#1196 / TRK-337）。
+# 範圍：threshold 身分（defaults / optional_overrides 兩層＋chart_default）。
+# state_filters 與 dimensional_example 仍歸 scaffold（非閾值身分）。萃取為全量；
+# 本 registry 首要服務的 enforcement 路徑是 18-key 修復線（#1196 / TRK-337）。
 version: 1
 packs:
   kubernetes:
@@ -90,6 +99,7 @@ keys:
     unit: '%'
     desc: Container CPU % of limit (weakest link)
     metric_class: saturation
+    chart_default: true
   container_cpu_throttle:
     pack: kubernetes
     tier: defaults
@@ -98,6 +108,7 @@ keys:
     desc: 'Chronic CFS throttle: % of ACTIVE 100ms periods throttled, NOT % CPU lost
       (critical tier opt-in via container_cpu_throttle_critical, suggest 50; #944)'
     metric_class: saturation
+    chart_default: true
   container_memory:
     pack: kubernetes
     tier: defaults
@@ -105,6 +116,7 @@ keys:
     unit: '%'
     desc: Container memory % of limit (weakest link)
     metric_class: saturation
+    chart_default: true
   pg_connections:
     pack: postgresql
     tier: defaults
@@ -139,6 +151,7 @@ keys:
     unit: count
     desc: Max threads_connected warning
     metric_class: saturation
+    chart_default: true
   mysql_cpu:
     pack: mariadb
     tier: defaults
@@ -148,6 +161,7 @@ keys:
       (#944). NOT host CPU% — key kept as mysql_cpu (config-contract stability; metric/alert
       renamed, #944 closed)'
     metric_class: saturation
+    chart_default: true
   mysql_replication_lag:
     pack: mariadb
     tier: defaults
@@ -157,6 +171,7 @@ keys:
       30 = APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted
       to warning — PMM's lag-template family default is 600s warning). Enabled by
       default (#1200 WS5-P0-a Q3=C)
+    chart_default: true
   mysql_connections_critical:
     pack: mariadb
     tier: optional_overrides

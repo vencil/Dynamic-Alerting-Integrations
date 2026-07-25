@@ -7,31 +7,53 @@ read it directly, no Python import), JSON-Schema validatable (confd-schema
 family gate). ``rule-packs/threshold-registry.yaml`` is that registry;
 ``docs/schemas/threshold-registry.schema.json`` is its shape contract.
 
-TRANSITION STATE (this PR is the skeleton — WS1a step 1): the registry content
-is MECHANICALLY EXTRACTED from ``scaffold_tenant.RULE_PACKS`` via
-``build_registry_doc()`` (never hand-copied), and NO generator consumes it yet.
-``scaffold_tenant.RULE_PACKS`` remains the operative contract until the rewire
-PR flips the direction (scaffold becomes a generated artifact / runtime loader
-of the registry — D2 migration shape, 31 import sites keep their API surface).
-During the transition the two copies MUST stay semantically equal — that is
-enforced by ``scripts/tools/lint/check_threshold_registry.py`` (schema
-validation + equivalence assertion), wired as a pre-commit gate. On drift the
-fix is: edit ``scaffold_tenant.RULE_PACKS`` (still operative), then run
-``check_threshold_registry.py --regen`` to refresh the registry.
+TRANSITION STATE (WS1a step 2 — the PR-2 rewire): the registry content is
+still MECHANICALLY EXTRACTED from ``scaffold_tenant.RULE_PACKS`` via
+``build_registry_doc()`` (never hand-copied), but the registry is now a REAL
+SoT: three previously hand-copied surfaces are GENERATED from it inside
+delimited blocks (everything outside the delimiters stays hand-written):
 
-SCOPE (WS1a skeleton): threshold identity only — ``defaults`` +
-``optional_overrides`` tiers ({pack, tier, value, unit, desc, metric_class,
-critical variant}). ``state_filters`` / ``dimensional_example`` stay
-scaffold-owned (they are state/config surface, not threshold identity; absorb
-later if a consumer needs them). Extraction is FULL (all packs, all keys —
-mechanical and cheap); the enforcement path this registry exists to serve
-first is the 18-key repair line (#1196 / TRK-337).
+  1. rule-pack header threshold sections (the "對應的 threshold-exporter
+     defaults" block of every threshold pack, defaults tier + a separate
+     optional_overrides block carrying the ⛔ activation-precondition warning);
+  2. ``helm/threshold-exporter/values.yaml`` ``thresholdConfig.defaults``
+     (the ``chart_default`` key set);
+  3. ``components/threshold-exporter/config/conf.d/_defaults.yaml``
+     ``defaults`` section (same ``chart_default`` set).
+
+``scaffold_tenant.RULE_PACKS`` remains the operative contract for config
+GENERATION until PR-3 flips the direction (scaffold becomes a generated
+artifact / runtime loader of the registry — D2 migration shape, 31 import
+sites keep their API surface). During the transition the two copies MUST stay
+semantically equal AND the three generated surfaces must stay fresh — both
+enforced by ``scripts/tools/lint/check_threshold_registry.py`` (schema +
+equivalence + surface-freshness + header-prose key membership), wired as a
+pre-commit gate. On drift the fix is: edit ``scaffold_tenant.RULE_PACKS``
+(still operative), then run ``check_threshold_registry.py --regen`` to refresh
+the registry AND all generated surfaces in one shot.
+
+REGISTRY-SCOPE ENRICHMENT TABLES (authored HERE during the transition):
+``CHART_DEFAULT_KEYS`` (which defaults-tier keys the Helm chart ships enabled)
+is a registry-scope fact that scaffold's operative role never consumes, so it
+is authored in this lib and merged during extraction rather than widening the
+scaffold contract right before PR-3 demotes it. PR-3 folds it into the
+authored registry file.
+
+SCOPE (WS1a): threshold identity — ``defaults`` + ``optional_overrides`` tiers
+({pack, tier, value, unit, desc, metric_class, chart_default, critical
+variant}). ``state_filters`` / ``dimensional_example`` stay scaffold-owned
+(they are state/config surface, not threshold identity; absorb later if a
+consumer needs them). Extraction is FULL (all packs, all keys — mechanical and
+cheap); the enforcement path this registry exists to serve first is the 18-key
+repair line (#1196 / TRK-337).
 """
 from __future__ import annotations
 
 import os
+import re
 import sys
-from typing import Any, Optional
+import textwrap
+from typing import Any, Callable, Optional
 
 try:
     import yaml
@@ -59,6 +81,28 @@ CRITICAL_SUFFIX = "_critical"
 # contract bug (build_registry_doc fails loudly on it).
 TIERS = ("defaults", "optional_overrides")
 
+# ---------------------------------------------------------------------------
+# chart_default — the "the Helm chart ships this key enabled" set (#1200 WS1a
+# PR-2). BEHAVIOR-PRESERVING by construction: this is exactly the key set the
+# hand-written helm/threshold-exporter/values.yaml thresholdConfig.defaults
+# carried before the rewire. Flipping more keys on (the D4 family — e.g.
+# promoting pg_connections / pg_replication_lag, which the dev template used
+# to carry but the chart never did) is a deliberate owner decision, NOT a
+# mechanical edit — see the D4 shadow/would-fire policy in epic #1200.
+# Only defaults-tier keys are eligible (build_registry_doc fails loudly
+# otherwise): optional_overrides keys are dormant by definition.
+# ---------------------------------------------------------------------------
+CHART_DEFAULT_KEYS: frozenset[str] = frozenset({
+    # Scenario B: container resource thresholds (kubernetes pack)
+    "container_cpu",
+    "container_cpu_throttle",
+    "container_memory",
+    # Scenario A: MySQL thresholds (mariadb pack)
+    "mysql_connections",
+    "mysql_cpu",
+    "mysql_replication_lag",
+})
+
 _REGISTRY_HEADER = (
     "# threshold-registry.yaml — threshold 契約 SoT（TRK-339 WS1a / #1200 D2）\n"
     "#\n"
@@ -66,17 +110,26 @@ _REGISTRY_HEADER = (
     "# 語言中立（helm/docs/portal 直讀）、schema 可驗證\n"
     "# （docs/schemas/threshold-registry.schema.json）。\n"
     "#\n"
-    "# ⚠️ 過渡期（本 skeleton PR）：生成消費者「尚未」接線——\n"
-    "# scaffold_tenant.RULE_PACKS 仍是運作中的契約副本，本檔由它機械萃取\n"
-    "# （scripts/tools/ops/_registry_lib.py build_registry_doc()）。兩者的語意等價\n"
-    "# 由 pre-commit gate check_threshold_registry.py 強制（防雙 SoT 漂移）。\n"
+    "# ✅ PR-2（rewire）後本檔已是真 SoT：三個原手抄面改為由本檔生成（定界符內），\n"
+    "# 定界符外手寫 prose 照舊——\n"
+    "#   1. rule-pack header 閾值段（defaults tier + optional_overrides ⛔ 警語段）\n"
+    "#   2. helm/threshold-exporter/values.yaml thresholdConfig.defaults\n"
+    "#      （chart_default 集）\n"
+    "#   3. components/threshold-exporter/config/conf.d/_defaults.yaml defaults 段\n"
+    "# 新鮮度由 check_threshold_registry.py --check 面強制（stale＝硬錯）。\n"
+    "#\n"
+    "# ⚠️ 過渡期殘留：scaffold_tenant.RULE_PACKS 仍是 config 生成路徑的運作副本，\n"
+    "# 本檔由它機械萃取（scripts/tools/ops/_registry_lib.py build_registry_doc()，\n"
+    "# 外加 registry-scope 附掛表 CHART_DEFAULT_KEYS）。兩者的語意等價由 pre-commit\n"
+    "# gate check_threshold_registry.py 強制（防雙 SoT 漂移）。\n"
     "# 改閾值請改 scaffold_tenant.RULE_PACKS，再跑：\n"
     "#   python3 scripts/tools/lint/check_threshold_registry.py --regen\n"
-    "# 下一個 PR 起方向反轉：本檔為 SoT、scaffold RULE_PACKS 降為生成物/runtime 載入。\n"
+    "# （會同時重產本檔＋三個生成面。）PR-3 起 scaffold RULE_PACKS 降為生成物/\n"
+    "# runtime 載入，附掛表併回本檔。\n"
     "#\n"
-    "# 範圍：threshold 身分（defaults / optional_overrides 兩層）。state_filters 與\n"
-    "# dimensional_example 仍歸 scaffold（非閾值身分）。萃取為全量；本 registry 首要\n"
-    "# 服務的 enforcement 路徑是 18-key 修復線（#1196 / TRK-337）。\n"
+    "# 範圍：threshold 身分（defaults / optional_overrides 兩層＋chart_default）。\n"
+    "# state_filters 與 dimensional_example 仍歸 scaffold（非閾值身分）。萃取為全量；\n"
+    "# 本 registry 首要服務的 enforcement 路徑是 18-key 修復線（#1196 / TRK-337）。\n"
 )
 
 
@@ -92,17 +145,34 @@ def _load_scaffold():
 # Extraction (scaffold RULE_PACKS -> registry doc) — mechanical, never hand-copy
 # ---------------------------------------------------------------------------
 
-def build_registry_doc(rule_packs: Optional[dict] = None) -> dict:
+def build_registry_doc(
+    rule_packs: Optional[dict] = None,
+    *,
+    chart_default_keys: Optional[frozenset[str]] = None,
+) -> dict:
     """Mechanically extract the registry document from RULE_PACKS.
 
     Per pack: {display, exporter, default_on, rule_pack_file}.
-    Per key : {pack, tier, value, unit, desc[, metric_class][, critical_of]}.
-    ``critical_of`` is derived (never authored): key ends with ``_critical`` AND
-    its base key exists in the same pack -> the base key name.
+    Per key : {pack, tier, value, unit, desc[, metric_class][, chart_default]
+    [, critical_of]}. ``critical_of`` is derived (never authored): key ends
+    with ``_critical`` AND its base key exists in the same pack -> the base
+    key name. ``chart_default: true`` is merged from the registry-scope
+    enrichment table (CHART_DEFAULT_KEYS — see module docstring); emitted
+    sparsely (present only when true, like metric_class).
+
+    Enrichment defaults are applied only on the REAL extraction path
+    (``rule_packs is None``); synthetic packs stay pure unless the caller
+    injects a table — hermetic tests depend on that.
 
     Fails loudly on identity collisions (same key in two tiers of one pack, or
-    in two packs) — a collision would silently shadow a contract entry.
+    in two packs) — a collision would silently shadow a contract entry — and
+    on a chart_default table entry that is unknown or not defaults-tier (a
+    typo'd table would silently un-ship a chart key).
     """
+    if chart_default_keys is None:
+        chart_default_keys = (
+            CHART_DEFAULT_KEYS if rule_packs is None else frozenset()
+        )
     if rule_packs is None:
         rule_packs = _load_scaffold().RULE_PACKS
 
@@ -140,11 +210,26 @@ def build_registry_doc(rule_packs: Optional[dict] = None) -> dict:
             }
             if "metric_class" in info:
                 entry["metric_class"] = info["metric_class"]
+            if key in chart_default_keys:
+                if tier != "defaults":
+                    raise ValueError(
+                        f"chart_default key {key!r} sits in tier {tier!r} — "
+                        "only defaults-tier keys are chart-shippable"
+                    )
+                entry["chart_default"] = True
             if key.endswith(CRITICAL_SUFFIX):
                 base = key[: -len(CRITICAL_SUFFIX)]
                 if base in combined:
                     entry["critical_of"] = base
             keys[key] = entry
+
+    missing_chart = set(chart_default_keys) - set(keys)
+    if missing_chart:
+        raise ValueError(
+            "CHART_DEFAULT_KEYS entries not found in RULE_PACKS: "
+            f"{sorted(missing_chart)} — a typo here would silently un-ship a "
+            "chart key"
+        )
     return {"version": 1, "packs": packs, "keys": keys}
 
 
@@ -287,3 +372,333 @@ def diff_docs(committed: dict, fresh: dict) -> list[str]:
 def diff_vs_scaffold(doc: dict, rule_packs: Optional[dict] = None) -> list[str]:
     """Diff a loaded registry doc against a fresh RULE_PACKS extraction."""
     return diff_docs(doc, build_registry_doc(rule_packs))
+
+
+# ---------------------------------------------------------------------------
+# Generated surfaces (PR-2 rewire) — renderers, delimiter splice, freshness
+# ---------------------------------------------------------------------------
+# Three previously hand-copied surfaces are generated from the registry inside
+# delimited blocks. The delimiters are load-bearing: --check compares the
+# whole block (markers included) against a fresh render, --regen splices a
+# fresh render between them. Hand-written prose OUTSIDE the block is never
+# touched (and is separately covered by the header-prose membership lint).
+
+HELM_VALUES_PATH = os.path.join(
+    _REPO_ROOT, "helm", "threshold-exporter", "values.yaml"
+)
+DEV_DEFAULTS_PATH = os.path.join(
+    _REPO_ROOT, "components", "threshold-exporter", "config", "conf.d",
+    "_defaults.yaml",
+)
+
+_MARKER_STEM = "GENERATED:threshold-registry:"
+
+
+def begin_marker(surface_id: str, indent: str = "") -> str:
+    return (
+        f"{indent}# >>> {_MARKER_STEM}{surface_id} — generated block, DO NOT "
+        "EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py "
+        "--regen）"
+    )
+
+
+def end_marker(surface_id: str, indent: str = "") -> str:
+    return f"{indent}# <<< {_MARKER_STEM}{surface_id}"
+
+
+def _fmt_value(v: Any) -> str:
+    """Deterministic YAML-comment-safe scalar rendering (int stays int)."""
+    if isinstance(v, bool):  # bool is an int subclass — guard first
+        return "true" if v else "false"
+    return repr(v) if isinstance(v, float) else str(v)
+
+
+def _entry_lines(
+    key: str, entry: dict, prefix: str = "#   ", cont: str = "#       "
+) -> list[str]:
+    """One registry key as pack-header comment lines (inline when short)."""
+    tag = "   [chart-default]" if entry.get("chart_default") else ""
+    keyline = f"{prefix}{key}: {_fmt_value(entry['value'])}{tag}"
+    meta = f"{entry['unit']} — {entry['desc']}"
+    inline = f"{keyline}   # {meta}"
+    if len(inline) <= 100:
+        return [inline]
+    return [keyline] + [
+        f"{cont}{seg}" for seg in textwrap.wrap(meta, 100 - len(cont))
+    ]
+
+
+# The ⛔ activation-precondition warning generated above every pack's
+# optional_overrides block (shape lifted from the hand-written rule-pack-db2
+# header that first documented the failure mode — now generated everywhere so
+# no pack header can claim a dormant key is a shipped default again).
+_OPTIONAL_WARNING_LINES = (
+    "#",
+    "# optional_overrides（documented-but-dormant——登錄有案、平台預設不出貨）：",
+    "# ⛔ 啟用前提（別跳過）：threshold-exporter 只對「存在於 defaults 的 key」",
+    "# 發射 user_threshold——resolveBaseRows 迭代的是 c.Defaults，resolveCriticalRows",
+    "# 也要求 base key 在 defaults 才處理 _critical 覆寫（components/",
+    "# threshold-exporter/app/pkg/config/resolve.go）。下列 key 必須先進",
+    "# _defaults.yaml / Helm values 的 defaults，租戶 conf.d 才有東西可覆寫——",
+    "# 只在租戶檔填一個不在 defaults 的 key 永遠不會生效：那不是 dormant，",
+    "# 是永久無法啟用。",
+)
+
+
+def render_pack_header_lines(doc: dict, pack_name: str) -> list[str]:
+    """The generated threshold section of one rule-pack header (body only)."""
+    by_pack = keys_by_pack(doc).get(pack_name, {})
+    defaults = {k: e for k, e in by_pack.items() if e.get("tier") == "defaults"}
+    optional = {
+        k: e for k, e in by_pack.items() if e.get("tier") == "optional_overrides"
+    }
+    lines = [
+        "# 對應的 threshold-exporter defaults"
+        "（defaults tier——平台預設路徑會發射、告警可達）:",
+    ]
+    for key, entry in defaults.items():
+        lines += _entry_lines(key, entry)
+    if optional:
+        lines += list(_OPTIONAL_WARNING_LINES)
+        for key, entry in optional.items():
+            lines += _entry_lines(key, entry)
+    return lines
+
+
+def _critical_sibling(doc: dict, key: str) -> Optional[tuple[str, dict]]:
+    crit = registry_keys(doc).get(key + CRITICAL_SUFFIX)
+    if crit is not None and crit.get("critical_of") == key:
+        return key + CRITICAL_SUFFIX, crit
+    return None
+
+
+def render_chart_defaults_lines(doc: dict, indent: int) -> list[str]:
+    """The chart-shipped ``defaults`` mapping body (helm values / dev template).
+
+    Only ``chart_default: true`` keys, grouped by pack in registry order.
+    unit+desc render as comment lines above each key; when the registry
+    carries a ``<key>_critical`` sibling, an opt-in hint (with the registry's
+    suggested value) is appended so the hand-written hints the old copies
+    carried are reproduced mechanically.
+    """
+    ind = " " * indent
+    lines: list[str] = []
+    grouped = keys_by_pack(doc)
+    for pack_name, pack_meta in (doc.get("packs", {}) or {}).items():
+        chart_keys = [
+            (k, e)
+            for k, e in grouped.get(pack_name, {}).items()
+            if e.get("chart_default")
+        ]
+        if not chart_keys:
+            continue
+        lines.append(f"{ind}# ── {pack_name}：{pack_meta['display']} ──")
+        for key, entry in chart_keys:
+            meta = f"{entry['unit']} — {entry['desc']}"
+            sibling = _critical_sibling(doc, key)
+            if sibling is not None:
+                crit_key, crit = sibling
+                meta += (
+                    f"（critical 加嚴 opt-in：{crit_key}，"
+                    f"registry 建議 {_fmt_value(crit['value'])}）"
+                )
+            for seg in textwrap.wrap(meta, 100 - indent - 2):
+                lines.append(f"{ind}# {seg}")
+            lines.append(f"{ind}{key}: {_fmt_value(entry['value'])}")
+    return lines
+
+
+def render_block(surface_id: str, body_lines: list[str], indent: str = "") -> str:
+    """Full generated block text (markers + body), newline-joined."""
+    return "\n".join(
+        [begin_marker(surface_id, indent), *body_lines, end_marker(surface_id, indent)]
+    )
+
+
+def surface_specs(doc: dict) -> list[dict]:
+    """Every generated surface: id, absolute path, indent, rendered block.
+
+    Order: helm values, dev template, then one per threshold pack (packs
+    without threshold keys — liveness/operational/custom-alerts — carry no
+    generated block).
+    """
+    specs = [
+        {
+            "id": "helm-defaults",
+            "path": HELM_VALUES_PATH,
+            "indent": " " * 4,
+            "body": render_chart_defaults_lines(doc, 4),
+        },
+        {
+            "id": "dev-defaults",
+            "path": DEV_DEFAULTS_PATH,
+            "indent": " " * 2,
+            "body": render_chart_defaults_lines(doc, 2),
+        },
+    ]
+    grouped = keys_by_pack(doc)
+    for pack_name, pack_meta in (doc.get("packs", {}) or {}).items():
+        if not grouped.get(pack_name):
+            continue
+        specs.append({
+            "id": f"pack-{pack_name}",
+            "path": os.path.join(_REPO_ROOT, *pack_meta["rule_pack_file"].split("/")),
+            "indent": "",
+            "body": render_pack_header_lines(doc, pack_name),
+        })
+    for spec in specs:
+        spec["block"] = render_block(spec["id"], spec["body"], spec["indent"])
+    return specs
+
+
+def _find_block(lines: list[str], surface_id: str, indent: str):
+    """(begin_idx, end_idx) of the marker lines, or an error string."""
+    b, e = begin_marker(surface_id, indent), end_marker(surface_id, indent)
+    b_idx = [i for i, ln in enumerate(lines) if ln == b]
+    e_idx = [i for i, ln in enumerate(lines) if ln == e]
+    if len(b_idx) != 1 or len(e_idx) != 1:
+        return (
+            f"markers for surface {surface_id!r} not found exactly once "
+            f"(begin×{len(b_idx)}, end×{len(e_idx)}) — the delimiters are "
+            "load-bearing; restore them (git checkout) or re-carve the block"
+        )
+    if e_idx[0] <= b_idx[0]:
+        return f"markers for surface {surface_id!r} are out of order"
+    return b_idx[0], e_idx[0]
+
+
+def check_surface(text: str, spec: dict) -> Optional[str]:
+    """None if the file's generated block is byte-fresh, else an error."""
+    lines = text.split("\n")
+    found = _find_block(lines, spec["id"], spec["indent"])
+    if isinstance(found, str):
+        return f"{spec['path']}: {found}"
+    b, e = found
+    current = "\n".join(lines[b : e + 1])
+    if current != spec["block"]:
+        return (
+            f"{spec['path']}: generated block {spec['id']!r} is STALE vs the "
+            "registry — run check_threshold_registry.py --regen"
+        )
+    return None
+
+
+def splice_surface(text: str, spec: dict) -> str:
+    """Replace the delimited block with a fresh render (idempotent)."""
+    lines = text.split("\n")
+    found = _find_block(lines, spec["id"], spec["indent"])
+    if isinstance(found, str):
+        raise ValueError(f"{spec['path']}: {found}")
+    b, e = found
+    return "\n".join(lines[:b] + spec["block"].split("\n") + lines[e + 1 :])
+
+
+def regen_surfaces(doc: Optional[dict] = None) -> list[str]:
+    """Splice every generated surface in place. Returns touched paths."""
+    sys.path.insert(0, _THIS_DIR)
+    sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
+    from _lib_python import write_text_secure  # noqa: E402
+
+    if doc is None:
+        doc = load_registry()
+    touched = []
+    for spec in surface_specs(doc):
+        with open(spec["path"], encoding="utf-8") as fh:
+            old = fh.read()
+        new = splice_surface(old, spec)
+        if new != old:
+            write_text_secure(spec["path"], new)
+            touched.append(spec["path"])
+    return touched
+
+
+# ---------------------------------------------------------------------------
+# Header-prose key membership (F6) — hand-written pack-header prose may only
+# name conf.d threshold keys that actually exist somewhere in the contract
+# ---------------------------------------------------------------------------
+# The disease this kills: a pack header hand-claiming keys that exist nowhere
+# (the pre-rewire elasticsearch header listed four demand-side names absent
+# from the platform-defaults contract). Scanned region: the leading comment
+# header of each rule-pack file, MINUS the generated block. Dimensional
+# tokens (``key{selector=...}``) are exempt — the dimensional-threshold
+# contract is scaffold's dimensional_example domain, not registry identity.
+
+# YAML-ish structure words that legitimately appear in `key:` position inside
+# header prose but are not conf.d threshold keys.
+STRUCTURAL_PROSE_TOKENS: frozenset[str] = frozenset({
+    "state_filters",
+    "default_state",
+    "group_by",
+    "group_wait",
+    "group_interval",
+    "repeat_interval",
+    "rule_pack_file",
+    "default_on",
+    "metric_class",
+    "chart_default",
+    "critical_of",
+    "optional_overrides",
+    "runbook_url",
+    "metric_group",
+    "alert_threshold",
+    "user_threshold",
+    # Alertmanager config vocabulary (operational pack header prose)
+    "inhibit_rules",
+})
+
+# candidate: snake_case token (≥1 underscore) in key position, not glued to a
+# preceding identifier char or a recording-rule ':' segment.
+_PROSE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_:])([a-z][a-z0-9]*(?:_[a-z0-9]+)+)")
+
+
+def iter_header_prose_lines(text: str):
+    """(lineno, line) for the hand-written leading comment header.
+
+    Stops at the first non-comment, non-blank line; skips the generated block
+    (its key lines are registry-owned, not prose claims).
+    """
+    in_generated = False
+    for i, line in enumerate(text.split("\n"), start=1):
+        stripped = line.strip()
+        if not stripped.startswith("#"):
+            if stripped == "":
+                continue
+            return
+        if f"# >>> {_MARKER_STEM}" in line:
+            in_generated = True
+            continue
+        if f"# <<< {_MARKER_STEM}" in line:
+            in_generated = False
+            continue
+        if not in_generated:
+            yield i, line
+
+
+def prose_key_tokens(text: str):
+    """(lineno, token) for every conf.d-key-shaped claim in header prose."""
+    for lineno, line in iter_header_prose_lines(text):
+        for m in _PROSE_TOKEN_RE.finditer(line):
+            rest = line[m.end():]
+            if rest.startswith("{"):
+                continue  # dimensional token — out of registry identity scope
+            if re.match(r"[\"']?\s*:", rest) is None:
+                continue  # not in key position
+            yield lineno, m.group(1)
+
+
+def membership_universe(
+    doc: dict, extra_allowed: Optional[set[str]] = None
+) -> set[str]:
+    """Every token a pack header may legitimately claim as a conf.d key.
+
+    Registry keys + their derived ``_critical`` opt-ins (the exporter accepts
+    ``<base>_critical`` for any shipped base), plus caller-supplied extras
+    (the #1196 KNOWN_UNWIRED pending line, scaffold state-filter names), plus
+    structural prose tokens.
+    """
+    keys = set(registry_keys(doc))
+    uni = keys | {k + CRITICAL_SUFFIX for k in keys}
+    if extra_allowed:
+        uni |= set(extra_allowed)
+        uni |= {k + CRITICAL_SUFFIX for k in extra_allowed}
+    return uni | STRUCTURAL_PROSE_TOKENS

@@ -62,6 +62,10 @@
               "enum": ["saturation"],
               "$comment": "Only 'saturation' exists today (drives the educational _critical annotation + saturation_default_keys()). New classes are a contract change: extend this enum deliberately."
             },
+            "chart_default": {
+              "const": true,
+              "$comment": "The Helm chart ships this key enabled (thresholdConfig.defaults + the dev conf.d template are GENERATED from this set — #1200 WS1a PR-2). Sparse: present iff true, like metric_class. Only meaningful on tier:defaults (build_registry_doc fails loudly otherwise). Widening the set (e.g. promoting pg_*) is a deliberate D4-family product decision, not a mechanical edit."
+            },
             "critical_of": {
               "type": "string",
               "minLength": 1,
