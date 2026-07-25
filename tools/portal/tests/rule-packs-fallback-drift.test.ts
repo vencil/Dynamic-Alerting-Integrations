@@ -7,13 +7,22 @@
  *      from docs/assets/platform-data.json (production path)
  *   2. baked-in inline catalog — offline / standalone fallback
  *
- * The baked-in catalog is a HAND-MAINTAINED SUBSET of the generated source of
+ * The baked-in catalog is a HAND-MAINTAINED MIRROR of the generated source of
  * truth docs/assets/platform-data.json (produced by `make platform-data` /
- * generate_platform_data.py). It carries only the fields the in-browser tools
- * need offline — label / category / required / defaults ({value,unit,desc}) /
- * metrics — and intentionally OMITS the derived fields (configMap /
- * recordingRules / alertRules / exporter / display / dependencies /
- * exporterFull / defaultOn).
+ * generate_platform_data.py). It carries label / category / exporter /
+ * configMap / recordingRules / alertRules / required / defaults
+ * ({value,unit,desc}) / metrics / dependencies. Only the presentation-derived
+ * fields the in-browser tools never read are omitted (display / exporterFull /
+ * defaultOn).
+ *
+ * PR-2 carried a strict SUBSET and intentionally skipped the derived fields,
+ * on the premise that no offline tool needed them. That premise expired:
+ * rule-pack-matrix, rule-pack-selector, capacity-planner and dependency-graph
+ * each kept their OWN offline count table instead, and all four rotted to a
+ * v2.7.0-era snapshot — mariadb 11/8 vs 14/18, kubernetes 7/4 vs 30/14,
+ * platform 0/4 vs 0/34, `liveness` absent, 139/99 rules against a shipped
+ * 166/153. PR-3 converged all four onto this module and widened the mirror to
+ * cover exactly what they read, so the omission no longer hides anything.
  *
  * Nothing else guarantees the two stay in sync: someone can regenerate
  * platform-data.json (new pack, renamed metric, re-tuned threshold/desc —
@@ -21,12 +30,17 @@
  * result is a silent offline/online divergence (offline tools show stale
  * packs/thresholds). PR-2 fixed a confirmed instance of exactly this: the
  * `liveness` pack was missing and 9 packs had `defaults` desc/unit/value drift.
+ * PR-3 fixed another: #1215 added `mysql_replication_lag` to the MariaDB
+ * defaults and the fallback never got it — this gate would have caught that at
+ * the time, but its CI leg is path-gated on tools/portal/** and #1215 touched
+ * no portal file, so it never ran. ci.yml's `portal` filter now also watches
+ * docs/assets/platform-data.json; without that this gate cannot fire for the
+ * very change class it exists to guard.
  *
- * This gate FAILS if the carried-subset ever drifts again. It reads the
- * fallback OFFLINE (window.__PLATFORM_DATA unset → the baked-in object) and
- * the generated platform-data.json, then asserts pack-id set/order parity and
- * per-pack deep-equality of the carried fields ONLY. It deliberately does NOT
- * assert the derived fields the fallback omits.
+ * This gate FAILS if the mirror ever drifts again. It reads the fallback
+ * OFFLINE (window.__PLATFORM_DATA unset → the baked-in object) and the
+ * generated platform-data.json, then asserts pack-id set/order parity and
+ * per-pack deep-equality of the carried fields.
  *
  * RULE_PACK_DATA resolves at module-eval time, so each test resets the module
  * registry and dynamic-imports a fresh instance (same discipline as
@@ -50,19 +64,30 @@ const PD_PACKS: Record<string, any> = platformData.rulePacks;
 const PD_ORDER: string[] = platformData.packOrder;
 
 /**
- * Project a pack down to the carried subset the offline fallback mirrors.
+ * Project a pack down to the fields the offline fallback mirrors.
  * `required` is normalized (missing => false) so packs that omit it in the
  * fallback still match platform-data's explicit `required: false`. `defaults`
  * missing (liveness/operational/platform in platform-data.json) normalizes to
- * {}. Derived fields are intentionally dropped and NOT compared.
+ * {}. `dependencies` missing (the 4 packs that declare none) normalizes to
+ * null. Only display / exporterFull / defaultOn are dropped — no in-browser
+ * tool reads them.
+ *
+ * recordingRules / alertRules are load-bearing: rule-pack-matrix, capacity-
+ * planner and the ROI calculators render and sum them, so a stale count is a
+ * wrong number in front of a customer, not a cosmetic nit.
  */
 function carried(pack: any) {
   return {
     label: pack.label,
     category: pack.category,
+    exporter: pack.exporter,
+    configMap: pack.configMap,
+    recordingRules: pack.recordingRules,
+    alertRules: pack.alertRules,
     required: pack.required ?? false,
     defaults: pack.defaults ?? {},
     metrics: pack.metrics ?? [],
+    dependencies: pack.dependencies ?? null,
   };
 }
 

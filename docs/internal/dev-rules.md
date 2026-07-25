@@ -203,7 +203,7 @@ repo 與 issues 皆 **PUBLIC**、公開寫入**不可逆**（索引/fork/存檔�
 | 檔案 | 用途 |
 |------|------|
 | `docs/assets/tool-registry.yaml` | 工具 metadata（id, title, 分類, 路徑） |
-| `docs/assets/platform-data.json` | Rule Pack 數據（count 為 15，以此為準） |
+| `docs/assets/platform-data.json` | Rule Pack 數據（目前 16 packs，以此為準；勿手寫數字，由 `make platform-data` 產生） |
 | `docs/assets/flows.json` | Guided Flow 編排（工具之間的引導順序） |
 | `docs/assets/jsx-loader.html` | JSX 載入器 + `CUSTOM_FLOW_MAP` |
 | `docs/interactive/index.html` | 互動工具 Hub 頁 |

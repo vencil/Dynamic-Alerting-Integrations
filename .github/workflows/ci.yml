@@ -171,6 +171,10 @@ jobs:
             # keeping it green is that editing an enum usually makes the
             # author edit recipe-enums.json too, i.e. the failure mode IS
             # "author forgot", which is exactly when no portal path matches.
+            # ALERT-REFERENCE.md is the third: count-literals-drift.test.ts
+            # reads it (and platform-data.json) to pin the pack/alert counts
+            # the portal advertises, so a doc regen that touches no portal
+            # file must run this leg too.
             #
             # INVARIANT (enforced by tests/ops/test_portal_path_filter_
             # coverage.py, not by this comment): every out-of-tree file a
@@ -180,6 +184,7 @@ jobs:
               - "docs/assets/dist/**"
               - "docs/assets/platform-data.json"
               - "docs/schemas/tenant-config.schema.json"
+              - "rule-packs/ALERT-REFERENCE.md"
               - "components/tenant-api/internal/rbac/testdata/wizard/**"
               - ".github/workflows/ci.yml"
 
