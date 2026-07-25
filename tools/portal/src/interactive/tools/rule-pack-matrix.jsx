@@ -8,50 +8,33 @@ related: [rule-pack-detail, dependency-graph, rule-pack-selector]
 ---
 
 import React, { useState, useMemo } from 'react';
+import { RULE_PACK_DATA, PACK_ORDER } from './_common/data/rule-packs.js';
 
 const t = window.__t || ((zh, en) => en);
-
-// --- Shared platform data (from platform-data.json via jsx-loader) ---
-const __PD = window.__PLATFORM_DATA || {};
 
 // Category display name mapping
 const CAT_DISPLAY = { database: 'Database', messaging: 'Messaging', runtime: 'Runtime', webserver: 'Web Server', infrastructure: 'Infra' };
 
-const PACKS = (() => {
-  if (__PD.rulePacks && __PD.packOrder) {
-    return __PD.packOrder.map(key => {
-      const p = __PD.rulePacks[key];
-      return {
-        key,
-        label: p.label,
-        cat: CAT_DISPLAY[p.category] || p.category,
-        rec: p.recordingRules,
-        alert: p.alertRules,
-        exporter: p.exporter,
-        metrics: p.metrics || [],
-        ...(p.required && { required: true }),
-      };
-    });
-  }
-  // Fallback
-  return [
-    { key: 'mariadb', label: 'MariaDB/MySQL', cat: 'Database', rec: 11, alert: 8, exporter: 'mysqld_exporter', metrics: ['connections', 'cpu', 'memory', 'slow_queries', 'replication_lag', 'query_errors'] },
-    { key: 'postgresql', label: 'PostgreSQL', cat: 'Database', rec: 11, alert: 9, exporter: 'postgres_exporter', metrics: ['connections', 'cache_hit', 'query_time', 'disk_usage', 'replication_lag'] },
-    { key: 'redis', label: 'Redis', cat: 'Database', rec: 11, alert: 6, exporter: 'redis_exporter', metrics: ['memory', 'evictions', 'connected_clients', 'keyspace_hits'] },
-    { key: 'mongodb', label: 'MongoDB', cat: 'Database', rec: 10, alert: 6, exporter: 'mongodb_exporter', metrics: ['connections', 'memory', 'page_faults', 'replication'] },
-    { key: 'elasticsearch', label: 'Elasticsearch', cat: 'Database', rec: 11, alert: 7, exporter: 'elasticsearch_exporter', metrics: ['heap', 'unassigned_shards', 'cluster_health', 'indexing_rate'] },
-    { key: 'oracle', label: 'Oracle', cat: 'Database', rec: 11, alert: 7, exporter: 'oracledb_exporter', metrics: ['sessions', 'tablespace', 'wait_events', 'redo_log'] },
-    { key: 'db2', label: 'DB2', cat: 'Database', rec: 12, alert: 7, exporter: 'db2_exporter', metrics: ['connections', 'bufferpool', 'tablespace', 'lock_waits'] },
-    { key: 'clickhouse', label: 'ClickHouse', cat: 'Database', rec: 12, alert: 7, exporter: 'clickhouse_exporter', metrics: ['queries', 'merges', 'replicated_lag', 'memory'] },
-    { key: 'kafka', label: 'Kafka', cat: 'Messaging', rec: 13, alert: 9, exporter: 'kafka_exporter', metrics: ['consumer_lag', 'broker_active', 'controller', 'isr_shrink', 'under_replicated'] },
-    { key: 'rabbitmq', label: 'RabbitMQ', cat: 'Messaging', rec: 12, alert: 8, exporter: 'rabbitmq_exporter', metrics: ['queue_depth', 'consumers', 'memory', 'disk_free', 'connections'] },
-    { key: 'jvm', label: 'JVM', cat: 'Runtime', rec: 9, alert: 7, exporter: 'jmx_exporter', metrics: ['gc_pause', 'heap_usage', 'thread_pool', 'class_loading'] },
-    { key: 'nginx', label: 'Nginx', cat: 'Web Server', rec: 9, alert: 6, exporter: 'nginx-prometheus-exporter', metrics: ['active_connections', 'request_rate', 'connection_backlog'] },
-    { key: 'kubernetes', label: 'Kubernetes', cat: 'Infra', rec: 7, alert: 4, exporter: 'cAdvisor + kube-state-metrics', metrics: ['pod_restart', 'cpu_limit', 'memory_limit', 'pvc_usage'] },
-    { key: 'operational', label: 'Operational', cat: 'Infra', rec: 0, alert: 4, exporter: 'threshold-exporter', metrics: ['exporter_health', 'config_reload'], required: true },
-    { key: 'platform', label: 'Platform', cat: 'Infra', rec: 0, alert: 4, exporter: 'threshold-exporter', metrics: ['threshold_metric_count', 'recording_rule_health', 'scrape_success'], required: true },
-  ];
-})();
+// Rule Pack rows from the canonical accessor (canonicalize PR-3). Online this
+// resolves to window.__PLATFORM_DATA.rulePacks; offline to the baked-in mirror
+// in _common/data/rule-packs.js. Either way the counts come from ONE catalog
+// that rule-packs-fallback-drift.test.ts pins to platform-data.json — this file
+// used to bake its own table, which had drifted to a v2.7.0 snapshot.
+const PACKS = PACK_ORDER
+  .filter(key => RULE_PACK_DATA[key])
+  .map(key => {
+    const p = RULE_PACK_DATA[key];
+    return {
+      key,
+      label: p.label,
+      cat: CAT_DISPLAY[p.category] || p.category,
+      rec: p.recordingRules,
+      alert: p.alertRules,
+      exporter: p.exporter,
+      metrics: p.metrics || [],
+      ...(p.required && { required: true }),
+    };
+  });
 
 const CATEGORIES = [...new Set(PACKS.map(p => p.cat))];
 const ALL_METRIC_TYPES = [...new Set(PACKS.flatMap(p => p.metrics))].sort();

@@ -10,45 +10,37 @@ related: [rule-pack-detail, dependency-graph, threshold-calculator]
 import React, { useState, useCallback } from 'react';
 import { Copy, ChevronDown } from 'lucide-react';
 import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
+import { RULE_PACK_DATA, PACK_ORDER } from './_common/data/rule-packs.js';
 
 const t = window.__t || ((zh, en) => en);
 
 // --- Shared platform data (from platform-data.json via jsx-loader) ---
+// Still used for the `categories` slice, which is not part of the per-pack
+// catalog. Pack data itself now comes from the canonical accessor below.
 const __PD = window.__PLATFORM_DATA || {};
 
+// Rule Pack catalog from the canonical accessor (canonicalize PR-3). Online
+// this resolves to window.__PLATFORM_DATA.rulePacks; offline to the baked-in
+// mirror in _common/data/rule-packs.js — one catalog, drift-gated against
+// platform-data.json. This file used to bake its own count table, which had
+// drifted to a v2.7.0 snapshot. Deriving the "(Always included)" suffix here
+// (rather than baking it into the offline labels) also makes it translate
+// offline, which the old hard-coded English fallback labels did not.
 const RULE_PACKS = (() => {
-  if (__PD.rulePacks) {
-    const packs = {};
-    for (const [key, p] of Object.entries(__PD.rulePacks)) {
-      packs[key] = {
-        configMap: p.configMap,
-        label: p.required ? `${p.label} (${t('始終包含', 'Always included')})` : p.label,
-        recordingRules: p.recordingRules,
-        alertRules: p.alertRules,
-        category: p.category,
-        ...(p.required && { required: true }),
-      };
-    }
-    return packs;
+  const packs = {};
+  for (const key of PACK_ORDER) {
+    const p = RULE_PACK_DATA[key];
+    if (!p) continue;
+    packs[key] = {
+      configMap: p.configMap,
+      label: p.required ? `${p.label} (${t('始終包含', 'Always included')})` : p.label,
+      recordingRules: p.recordingRules,
+      alertRules: p.alertRules,
+      category: p.category,
+      ...(p.required && { required: true }),
+    };
   }
-  // Fallback: minimal inline data (should not normally be reached)
-  return {
-    mariadb: { configMap: 'prometheus-rules-mariadb', label: 'MariaDB/MySQL', recordingRules: 11, alertRules: 8, category: 'database' },
-    postgresql: { configMap: 'prometheus-rules-postgresql', label: 'PostgreSQL', recordingRules: 11, alertRules: 9, category: 'database' },
-    redis: { configMap: 'prometheus-rules-redis', label: 'Redis', recordingRules: 11, alertRules: 6, category: 'database' },
-    mongodb: { configMap: 'prometheus-rules-mongodb', label: 'MongoDB', recordingRules: 10, alertRules: 6, category: 'database' },
-    elasticsearch: { configMap: 'prometheus-rules-elasticsearch', label: 'Elasticsearch', recordingRules: 11, alertRules: 7, category: 'database' },
-    oracle: { configMap: 'prometheus-rules-oracle', label: 'Oracle', recordingRules: 11, alertRules: 7, category: 'database' },
-    db2: { configMap: 'prometheus-rules-db2', label: 'DB2', recordingRules: 12, alertRules: 7, category: 'database' },
-    clickhouse: { configMap: 'prometheus-rules-clickhouse', label: 'ClickHouse', recordingRules: 12, alertRules: 7, category: 'database' },
-    kafka: { configMap: 'prometheus-rules-kafka', label: 'Kafka', recordingRules: 13, alertRules: 9, category: 'messaging' },
-    rabbitmq: { configMap: 'prometheus-rules-rabbitmq', label: 'RabbitMQ', recordingRules: 12, alertRules: 8, category: 'messaging' },
-    jvm: { configMap: 'prometheus-rules-jvm', label: 'JVM', recordingRules: 9, alertRules: 7, category: 'runtime' },
-    nginx: { configMap: 'prometheus-rules-nginx', label: 'Nginx', recordingRules: 9, alertRules: 6, category: 'webserver' },
-    kubernetes: { configMap: 'prometheus-rules-kubernetes', label: 'Kubernetes', recordingRules: 7, alertRules: 4, category: 'infrastructure' },
-    operational: { configMap: 'prometheus-rules-operational', label: 'Operational (Always included)', recordingRules: 0, alertRules: 4, category: 'infrastructure', required: true },
-    platform: { configMap: 'prometheus-rules-platform', label: 'Platform (Always included)', recordingRules: 0, alertRules: 4, category: 'infrastructure', required: true },
-  };
+  return packs;
 })();
 
 const CATEGORIES = (() => {
@@ -63,27 +55,22 @@ const CATEGORIES = (() => {
   return { database: 'Databases', messaging: 'Messaging', runtime: 'Runtime Environments', webserver: 'Web Servers', infrastructure: 'Infrastructure' };
 })();
 
-// Dependency hints from platform-data.json
+// Dependency hints, also from the canonical accessor. The old offline fallback
+// carried only 4 of the 12 packs that declare dependencies (and English-only
+// reasons), so offline users silently lost the hints for redis / mongodb /
+// oracle / db2 / clickhouse / rabbitmq / jvm / nginx.
 const DEPENDENCIES = (() => {
-  if (__PD.rulePacks) {
-    const deps = {};
-    const lang = window.__DA_LANG || 'en';
-    for (const [key, p] of Object.entries(__PD.rulePacks)) {
-      if (p.dependencies) {
-        deps[key] = {
-          suggests: p.dependencies.suggests,
-          reason: typeof p.dependencies.reason === 'object' ? (p.dependencies.reason[lang] || p.dependencies.reason.en) : p.dependencies.reason,
-        };
-      }
+  const deps = {};
+  const lang = window.__DA_LANG || 'en';
+  for (const [key, p] of Object.entries(RULE_PACK_DATA)) {
+    if (p.dependencies) {
+      deps[key] = {
+        suggests: p.dependencies.suggests,
+        reason: typeof p.dependencies.reason === 'object' ? (p.dependencies.reason[lang] || p.dependencies.reason.en) : p.dependencies.reason,
+      };
     }
-    return deps;
   }
-  return {
-    mariadb: { suggests: ['kubernetes'], reason: 'Container resource alerts complement DB monitoring' },
-    postgresql: { suggests: ['kubernetes'], reason: 'Container resource alerts complement DB monitoring' },
-    elasticsearch: { suggests: ['kubernetes', 'jvm'], reason: 'ES runs on JVM; K8s monitors container resources' },
-    kafka: { suggests: ['kubernetes', 'jvm'], reason: 'Kafka brokers run on JVM; K8s monitors pods' },
-  };
+  return deps;
 })();
 
 export default function RulePackSelector() {

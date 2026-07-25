@@ -8,51 +8,42 @@ related: [rule-pack-matrix, rule-pack-selector, capacity-planner]
 ---
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { RULE_PACK_DATA } from './_common/data/rule-packs.js';
 
 const t = window.__t || ((zh, en) => en);
-
-// --- Shared platform data (from platform-data.json via jsx-loader) ---
-const __PD = window.__PLATFORM_DATA || {};
 
 // Category mapping for dependency graph (uses broader categories for visual grouping)
 const DEP_GRAPH_CAT = { database: 'database', messaging: 'middleware', runtime: 'runtime', webserver: 'middleware', infrastructure: 'infra' };
 
+// Conceptual nodes the graph draws but the platform does not ship as Rule Packs.
+// Counts here are illustrative, not derived from platform-data.json.
+const CONCEPTUAL_NODES = [
+  { id: 'node', label: 'Node Exporter', category: 'infra', exporter: 'node_exporter', metrics: 25, alerts: 12 },
+  { id: 'etcd', label: 'etcd', category: 'infra', exporter: 'etcd', metrics: 10, alerts: 6 },
+  { id: 'coredns', label: 'CoreDNS', category: 'infra', exporter: 'coredns', metrics: 8, alerts: 5 },
+  { id: 'blackbox', label: 'Blackbox', category: 'infra', exporter: 'blackbox_exporter', metrics: 6, alerts: 4 },
+  { id: 'custom', label: 'Custom', category: 'custom', exporter: 'user-defined', metrics: 10, alerts: 5 },
+];
+
+// Real Rule Pack nodes from the canonical accessor (canonicalize PR-3). Online
+// this resolves to window.__PLATFORM_DATA.rulePacks; offline to the baked-in
+// mirror in _common/data/rule-packs.js — one catalog, drift-gated against
+// platform-data.json. The old offline table had drifted to a v2.7.0 snapshot,
+// omitted 6 packs entirely, and filed Elasticsearch under `middleware` while
+// the online path filed it under `database`.
 const PACKS = (() => {
-  if (__PD.rulePacks) {
-    const packs = Object.entries(__PD.rulePacks).map(([key, p]) => ({
-      id: key,
-      label: p.label,
-      category: DEP_GRAPH_CAT[p.category] || p.category,
-      exporter: p.exporter,
-      metrics: (p.metrics || []).length,
-      alerts: p.alertRules,
-    }));
-    // Add non-registry conceptual packs for the dependency graph
-    if (!__PD.rulePacks.node) packs.push({ id: 'node', label: 'Node Exporter', category: 'infra', exporter: 'node_exporter', metrics: 25, alerts: 12 });
-    if (!__PD.rulePacks.etcd) packs.push({ id: 'etcd', label: 'etcd', category: 'infra', exporter: 'etcd', metrics: 10, alerts: 6 });
-    if (!__PD.rulePacks.coredns) packs.push({ id: 'coredns', label: 'CoreDNS', category: 'infra', exporter: 'coredns', metrics: 8, alerts: 5 });
-    if (!__PD.rulePacks.blackbox) packs.push({ id: 'blackbox', label: 'Blackbox', category: 'infra', exporter: 'blackbox_exporter', metrics: 6, alerts: 4 });
-    if (!__PD.rulePacks.custom) packs.push({ id: 'custom', label: 'Custom', category: 'custom', exporter: 'user-defined', metrics: 10, alerts: 5 });
-    return packs;
+  const packs = Object.entries(RULE_PACK_DATA).map(([key, p]) => ({
+    id: key,
+    label: p.label,
+    category: DEP_GRAPH_CAT[p.category] || p.category,
+    exporter: p.exporter,
+    metrics: (p.metrics || []).length,
+    alerts: p.alertRules,
+  }));
+  for (const node of CONCEPTUAL_NODES) {
+    if (!RULE_PACK_DATA[node.id]) packs.push(node);
   }
-  // Fallback
-  return [
-    { id: 'kubernetes', label: 'Kubernetes', category: 'infra', exporter: 'kube-state-metrics', metrics: 4, alerts: 4 },
-    { id: 'node', label: 'Node Exporter', category: 'infra', exporter: 'node_exporter', metrics: 25, alerts: 12 },
-    { id: 'etcd', label: 'etcd', category: 'infra', exporter: 'etcd', metrics: 10, alerts: 6 },
-    { id: 'coredns', label: 'CoreDNS', category: 'infra', exporter: 'coredns', metrics: 8, alerts: 5 },
-    { id: 'mariadb', label: 'MariaDB', category: 'database', exporter: 'mysqld_exporter', metrics: 6, alerts: 8 },
-    { id: 'postgresql', label: 'PostgreSQL', category: 'database', exporter: 'postgres_exporter', metrics: 5, alerts: 9 },
-    { id: 'redis', label: 'Redis', category: 'database', exporter: 'redis_exporter', metrics: 4, alerts: 6 },
-    { id: 'mongodb', label: 'MongoDB', category: 'database', exporter: 'mongodb_exporter', metrics: 4, alerts: 6 },
-    { id: 'kafka', label: 'Kafka', category: 'middleware', exporter: 'kafka_exporter', metrics: 5, alerts: 9 },
-    { id: 'elasticsearch', label: 'Elasticsearch', category: 'middleware', exporter: 'elasticsearch_exporter', metrics: 4, alerts: 7 },
-    { id: 'rabbitmq', label: 'RabbitMQ', category: 'middleware', exporter: 'rabbitmq_exporter', metrics: 5, alerts: 8 },
-    { id: 'nginx', label: 'Nginx', category: 'middleware', exporter: 'nginx-prometheus-exporter', metrics: 3, alerts: 6 },
-    { id: 'jvm', label: 'JVM', category: 'runtime', exporter: 'jmx_exporter', metrics: 4, alerts: 7 },
-    { id: 'blackbox', label: 'Blackbox', category: 'infra', exporter: 'blackbox_exporter', metrics: 6, alerts: 4 },
-    { id: 'custom', label: 'Custom', category: 'custom', exporter: 'user-defined', metrics: 10, alerts: 5 },
-  ];
+  return packs;
 })();
 
 const EDGES = [

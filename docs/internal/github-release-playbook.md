@@ -430,7 +430,7 @@ bash smoke.sh   # 需 curl + jq
 | 14 | Re-tag 完整 SOP（同版號新 commit） | ① push main → ② 逐一刪遠端 tag → ③ 刪本地 tag → ④ 建新 tag on HEAD → ⑤ **逐一** push tag → ⑥ 重建 Release（因 #13 刪 tag 會刪 Release）→ ⑦ 重部署 GitHub Pages |
 | 15 | ~~`mkdocs gh-deploy` 連續失敗~~ | 🗄️ 已歸檔（workaround 已轉移至 Windows-MCP #29-30）。詳見 [archive/lessons-learned.md](archive/lessons-learned.md) |
 | 16 | `bump_docs.py` 漏網規則 | 每次 release 前先跑 `bump_docs.py --what-if` 審計所有規則。新增 component 時須同步加入版號線（`--tenant-api` 等） |
-| 17 | Rule Pack 計數 14 vs 15 混淆 | `rule-packs/` yaml 檔案 = 14（optional Projected Volume），`platform-data.json` = 15（含 platform ConfigMap）。**總數以 `platform-data.json` 為準（15）** |
+| 17 | Rule Pack 計數混淆 | `rule-packs/` yaml 檔案數 ≠ pack 總數（後者另含 platform / liveness 等 ConfigMap-only pack）。**一律以 `platform-data.json` 的 `totals.packs` 為準，勿在文件寫死數字**（曾寫死 15，liveness 加入後即過期） |
 | 18 | Cowork VM mount 製造 phantom lock | 詳見 [Windows-MCP Playbook #27](windows-mcp-playbook.md)。Release 場景的 workaround：fresh `git clone --depth 1` 到暫存目錄做 tag 操作 |
 | 19 | 新 component 上線遺漏版號工具 | 新增 component 時，除了 `release.yaml` 加 job，還須：① `bump_docs.py` 加版號線 ② `validate_docs_versions.py` 加規則 ③ Dockerfile base image 驗證 |
 

@@ -141,9 +141,21 @@ jobs:
             # so a hand-edited fixture must run THIS leg or the JS end of the
             # two-ended tripwire is silently skipped. (ci.yml itself is included
             # so a change to this job's own config re-runs it — same as `go`.)
+            #
+            # The two generated SOURCES OF TRUTH below are here for the same
+            # reason as the wizard fixtures: the portal's drift gates
+            # (rule-packs-fallback-drift, count-literals-drift) compare the
+            # offline catalog and the count literals AGAINST these files, so a
+            # PR that regenerates them while touching no portal file must still
+            # run this leg. Omitting them made those gates structurally unable
+            # to fire for the exact change class they guard — #1215 regenerated
+            # platform-data.json, drifted the offline catalog, and merged green
+            # because this filter skipped Portal Tests entirely.
             portal:
               - "tools/portal/**"
               - "docs/assets/dist/**"
+              - "docs/assets/platform-data.json"
+              - "rule-packs/ALERT-REFERENCE.md"
               - "components/tenant-api/internal/rbac/testdata/wizard/**"
               - ".github/workflows/ci.yml"
 

@@ -15,11 +15,9 @@ import React, { useState, useMemo } from 'react';
 // PR-portal-15: sizing math extracted from the inline useMemo to a pure,
 // unit-testable function. Orchestrator filters RULE_PACKS and passes packs in.
 import { computeCapacityEstimates } from './capacity-planner/calc.js';
+import { RULE_PACK_DATA, PACK_ORDER } from './_common/data/rule-packs.js';
 
 const t = window.__t || ((zh, en) => en);
-
-// --- Shared platform data (from platform-data.json via jsx-loader) ---
-const __PD = window.__PLATFORM_DATA || {};
 
 // Estimated series per instance for capacity planning (heuristic: ~3x metric count)
 const SERIES_ESTIMATE = {
@@ -29,39 +27,24 @@ const SERIES_ESTIMATE = {
   node: 50, etcd: 30, coredns: 20, blackbox: 15, custom: 25,
 };
 
-const RULE_PACKS = (() => {
-  if (__PD.rulePacks && __PD.packOrder) {
-    return __PD.packOrder.map(key => {
-      const p = __PD.rulePacks[key];
-      return {
-        id: key,
-        label: p.label,
-        recording: p.recordingRules,
-        alerts: p.alertRules,
-        metrics: (p.metrics || []).length,
-        seriesPerInstance: SERIES_ESTIMATE[key] || 30,
-      };
-    });
-  }
-  // Fallback
-  return [
-    { id: 'mariadb', label: 'MariaDB', recording: 11, alerts: 8, metrics: 6, seriesPerInstance: 80 },
-    { id: 'postgresql', label: 'PostgreSQL', recording: 11, alerts: 9, metrics: 5, seriesPerInstance: 65 },
-    { id: 'redis', label: 'Redis', recording: 11, alerts: 6, metrics: 4, seriesPerInstance: 45 },
-    { id: 'mongodb', label: 'MongoDB', recording: 10, alerts: 6, metrics: 4, seriesPerInstance: 55 },
-    { id: 'kafka', label: 'Kafka', recording: 13, alerts: 9, metrics: 5, seriesPerInstance: 70 },
-    { id: 'elasticsearch', label: 'Elasticsearch', recording: 11, alerts: 7, metrics: 4, seriesPerInstance: 60 },
-    { id: 'kubernetes', label: 'Kubernetes', recording: 7, alerts: 4, metrics: 4, seriesPerInstance: 40 },
-    { id: 'jvm', label: 'JVM', recording: 9, alerts: 7, metrics: 4, seriesPerInstance: 35 },
-    { id: 'nginx', label: 'Nginx', recording: 9, alerts: 6, metrics: 3, seriesPerInstance: 30 },
-    { id: 'rabbitmq', label: 'RabbitMQ', recording: 12, alerts: 8, metrics: 5, seriesPerInstance: 40 },
-    { id: 'oracle', label: 'Oracle', recording: 11, alerts: 7, metrics: 4, seriesPerInstance: 60 },
-    { id: 'db2', label: 'DB2', recording: 12, alerts: 7, metrics: 4, seriesPerInstance: 55 },
-    { id: 'clickhouse', label: 'ClickHouse', recording: 12, alerts: 7, metrics: 4, seriesPerInstance: 55 },
-    { id: 'operational', label: 'Operational', recording: 0, alerts: 4, metrics: 2, seriesPerInstance: 10 },
-    { id: 'platform', label: 'Platform', recording: 0, alerts: 4, metrics: 3, seriesPerInstance: 15 },
-  ];
-})();
+// Rule Pack sizing rows from the canonical accessor (canonicalize PR-3). Online
+// this resolves to window.__PLATFORM_DATA.rulePacks; offline to the baked-in
+// mirror in _common/data/rule-packs.js — one catalog, drift-gated against
+// platform-data.json. This file used to bake its own count table, which had
+// drifted to a v2.7.0 snapshot and so under-sized every offline estimate.
+const RULE_PACKS = PACK_ORDER
+  .filter(key => RULE_PACK_DATA[key])
+  .map(key => {
+    const p = RULE_PACK_DATA[key];
+    return {
+      id: key,
+      label: p.label,
+      recording: p.recordingRules,
+      alerts: p.alertRules,
+      metrics: (p.metrics || []).length,
+      seriesPerInstance: SERIES_ESTIMATE[key] || 30,
+    };
+  });
 
 function GaugeBar({ value, max, label, unit, color }) {
   const pct = Math.min((value / max) * 100, 100);

@@ -13,6 +13,7 @@ dependencies: [
 
 import React, { useState, useMemo } from 'react';
 import { MetricCard as MetricCardBase } from './_common/components/MetricCard.jsx';
+import { RULE_PACK_DATA, PACK_ORDER } from './_common/data/rule-packs.js';
 
 // PR-portal-14: estimation models extracted to a unit-testable module.
 // estimatePlatformCoverage now takes platformRules (TOTAL_RULES) as an arg.
@@ -26,19 +27,15 @@ import {
 
 const t = window.__t || ((zh, en) => en);
 
-// --- Shared platform data (from platform-data.json via jsx-loader) ---
-const __PD = window.__PLATFORM_DATA || {};
-
-const PACK_COUNT = (__PD.packOrder || []).length || 16;
-const TOTAL_RULES = (() => {
-  if (__PD.rulePacks && __PD.packOrder) {
-    return __PD.packOrder.reduce((sum, key) => {
-      const p = __PD.rulePacks[key];
-      return sum + (p ? (p.recordingRules || 0) + (p.alertRules || 0) : 0);
-    }, 0);
-  }
-  return 301; // fallback: 155 rec + 146 alert
-})();
+// Pack/rule totals from the canonical accessor (canonicalize PR-3) — one
+// catalog for both the online and offline paths, drift-gated against
+// platform-data.json. The old offline literal (301 = 155 rec + 146 alert) had
+// gone stale against the shipped 319 and nothing caught it.
+const PACK_COUNT = PACK_ORDER.length;
+const TOTAL_RULES = PACK_ORDER.reduce((sum, key) => {
+  const p = RULE_PACK_DATA[key];
+  return sum + (p ? (p.recordingRules || 0) + (p.alertRules || 0) : 0);
+}, 0);
 
 const AVERAGE_RULES_PER_PACK = PACK_COUNT > 0 ? Math.round(TOTAL_RULES / PACK_COUNT) : 16;
 
