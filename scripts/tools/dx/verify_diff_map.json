@@ -653,7 +653,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "baeff09e9a5ef7d57fae69cc9a504416aa3e8747fae01ef1435f92ca2e5a5d81",
+ "source_digest": "aa44dfc43f741b3f8c8d78782831eea9e46e47e2b257e31c19aa445f1c75a349",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1111,9 +1111,13 @@
    "tests/lint/test_lint_jsx_babel_frontmatter.py"
   ],
   "docs/assets/platform-data.json": [
-   "tests/lint/test_check_makefile_targets.py"
+   "tests/lint/test_check_makefile_targets.py",
+   "tests/lint/test_check_threshold_unit_sanity.py"
   ],
   "docs/assets/recommendation-data.json": [
+   "tests/lint/test_check_threshold_unit_sanity.py"
+  ],
+  "docs/assets/template-data.json": [
    "tests/lint/test_check_threshold_unit_sanity.py"
   ],
   "docs/assets/tool-registry.yaml": [

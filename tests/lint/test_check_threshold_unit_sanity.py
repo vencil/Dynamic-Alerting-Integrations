@@ -205,6 +205,74 @@ def test_tier_ordering_is_per_surface(tmp_path):
     assert errs == [], errs
 
 
+# ------------------------------------------------------- per-surface parsing
+
+# `_collect` has five surface branches. conf.d YAML and recommendation-data are
+# exercised throughout the tests above; these three pin the rest. Without them a
+# regression in one parser (a broken `tpl.get("yaml")`, a changed surface label,
+# the markdown fence regex) would only surface if the REAL repo happened to hold
+# a violating example that day — green-on-present-corpus, which is precisely
+# where omission bugs hide.
+
+
+def test_template_data_embedded_yaml_is_scanned(tmp_path):
+    """Each template's `yaml` string is parsed and labelled per template id.
+
+    This is the branch that caught the shipped `pg_connections` defect in
+    `saas-backend` / `event-driven` / `finance-compliance`.
+    """
+    _write(tmp_path, "docs/assets/template-data.json", json.dumps(
+        {"templates": [
+            {"id": "demo", "yaml": 'pg_connections: "300"'},
+            {"id": "fine", "yaml": 'pg_connections: "80"'},
+        ]}))
+    errs = _errors(_registry(pg_connections=_spec(80, "% of max_connections")), tmp_path)
+    assert any("template-data.json[demo]" in e and "OUT-OF-DOMAIN" in e for e in errs), errs
+    assert not any("[fine]" in e for e in errs), errs
+
+
+def test_template_data_unparseable_yaml_is_skipped_not_fatal(tmp_path):
+    """A malformed template must not take the whole gate down with it."""
+    _write(tmp_path, "docs/assets/template-data.json", json.dumps(
+        {"templates": [
+            {"id": "broken", "yaml": "key: [unclosed"},
+            {"id": "demo", "yaml": 'pg_connections: "300"'},
+        ]}))
+    errs = _errors(_registry(pg_connections=_spec(80, "% of max_connections")), tmp_path)
+    assert any("template-data.json[demo]" in e for e in errs), errs
+
+
+def test_platform_data_value_and_declared_unit_are_scanned(tmp_path):
+    """platform-data is the portal's RUNTIME rule-pack source — it carries both
+    a value and a unit, so both invariants must reach it."""
+    _write(tmp_path, "docs/assets/platform-data.json", json.dumps(
+        {"rulePacks": {"pg": {"defaults": {
+            "pg_connections": {"value": 300, "unit": "count"}}}}}))
+    errs = _errors(_registry(pg_connections=_spec(80, "% of max_connections")), tmp_path)
+    assert any("UNIT-DRIFT" in e and "platform-data.json" in e for e in errs), errs
+    assert any("OUT-OF-DOMAIN" in e and "platform-data.json" in e for e in errs), errs
+
+
+def test_markdown_fenced_yaml_is_scanned(tmp_path):
+    """Doc examples are a real surface: #1217's residue lived mostly in them."""
+    _write(tmp_path, "docs/getting-started/example.md",
+           "設定範例：\n\n```yaml\ndefaults:\n  pct: 300\n```\n")
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert any("example.md" in e and "OUT-OF-DOMAIN" in e for e in errs), errs
+
+
+def test_markdown_non_yaml_and_fragment_blocks_are_tolerated(tmp_path):
+    """Docs legitimately contain YAML fragments that are not standalone
+    documents, and fences in other languages. Neither may crash the gate nor
+    stop the scan from reaching a later, valid block."""
+    _write(tmp_path, "docs/getting-started/example.md",
+           "```bash\nkubectl apply -f x.yaml\n```\n\n"
+           "```yaml\n  - broken: [unclosed\n```\n\n"
+           "```yaml\ndefaults:\n  pct: 300\n```\n")
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert any("example.md" in e for e in errs), errs
+
+
 # -------------------------------------------------------------- real repo
 
 
