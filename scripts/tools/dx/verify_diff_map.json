@@ -653,7 +653,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "e9234e88db44074028025f4b3fbeded9ad809f7680a789c90c497aa14bbc725f",
+ "source_digest": "c87c3a6037896687fc301810eda459bc542ea8e9f2ddceb6f4dd71fc7ecc6798",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1485,6 +1485,9 @@
   ],
   "scripts/ops/dx_run.py": [
    "tests/ops/test_dx_run.py"
+  ],
+  "scripts/ops/file_cve_report.sh": [
+   "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   "scripts/ops/fuse_plumbing_commit.py": [
    "tests/dx/test_fuse_plumbing_commit.py"
