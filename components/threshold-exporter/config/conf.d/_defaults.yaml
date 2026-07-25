@@ -6,6 +6,7 @@
 defaults:
   mysql_connections: 80
   mysql_cpu: 30      # running-thread SATURATION warning (threads_running, NOT host CPU%); 80→30 = PMM/Nichter "high" tier (#944)
+  mysql_replication_lag: 30  # async replication lag warning (seconds behind primary, sql_delay-adjusted); APA/mysqld-mixin trigger point, critical opt-in via mysql_replication_lag_critical (suggest 120) (#1200 WS5-P0-a)
   pg_connections: 80
   pg_replication_lag: 30
   container_cpu: 80

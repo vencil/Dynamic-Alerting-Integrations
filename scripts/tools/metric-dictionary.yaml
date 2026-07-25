@@ -31,10 +31,22 @@ mysql_global_status_slow_queries:
   note: "rate() 指標 — 使用黃金標準的 sum by(tenant) 聚合"
 
 mysql_slave_status_seconds_behind_master:
-  maps_to: mysql_slave_lag
-  golden_rule: MariaDBSlaveLag
+  maps_to: mysql_replication_lag
+  golden_rule: MariaDBReplicationLag
   rule_pack: mariadb
-  note: "Replication lag — 使用黃金標準的 max by(tenant) 聚合"
+  note: "Replication lag — 黃金標準 max by(tenant) 聚合並已扣 sql_delay（原 aspirational mysql_slave_lag/MariaDBSlaveLag 於 #1200 WS5-P0-a 落地為此名）"
+
+mysql_slave_status_slave_io_running:
+  maps_to: null
+  golden_rule: MariaDBReplicaIOThreadDown
+  rule_pack: mariadb
+  note: "State-based（==0 即 critical、無 threshold key）— 黃金標準已帶 master_server_id>0 intent gate，非 replica 自然安靜"
+
+mysql_slave_status_slave_sql_running:
+  maps_to: null
+  golden_rule: MariaDBReplicaSQLThreadDown
+  rule_pack: mariadb
+  note: "State-based（==0 即 critical、無 threshold key）— 黃金標準已帶 master_server_id>0 intent gate，非 replica 自然安靜"
 
 mysql_global_status_innodb_buffer_pool_pages_data:
   maps_to: mysql_innodb_buffer_pool

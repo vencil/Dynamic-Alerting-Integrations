@@ -1156,14 +1156,16 @@ class TestGenerateTenantInteractiveMetrics:
 
     def test_optional_overrides_prompted_after_defaults(self):
         """defaults 問完才問 optional_overrides（mariadb 的 _critical tiers）。"""
-        # 次序：k8s defaults(3) → mariadb defaults(2: mysql_connections, mysql_cpu)
-        #       → mariadb optional_overrides(2: mysql_connections_critical,
-        #         mysql_cpu_critical)。
+        # 次序：k8s defaults(3) → mariadb defaults(3: mysql_connections, mysql_cpu,
+        #         mysql_replication_lag)
+        #       → mariadb optional_overrides(3: mysql_connections_critical,
+        #         mysql_cpu_critical, mysql_replication_lag_critical)。
         res = _gen_tenant_interactive("db-c", ["kubernetes", "mariadb"], [
             "skip", "skip", "skip",   # k8s 3 defaults
-            "skip", "skip",           # mariadb 2 defaults
+            "skip", "skip", "skip",   # mariadb 3 defaults
             "100",                    # mysql_connections_critical → 保留
             "skip",                   # mysql_cpu_critical → 省略
+            "skip",                   # mysql_replication_lag_critical → 省略
             _NEUTRAL_MAINT, _NEUTRAL_SILENT, _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
         ])
         assert res == {"tenants": {"db-c": {"mysql_connections_critical": "100"}}}

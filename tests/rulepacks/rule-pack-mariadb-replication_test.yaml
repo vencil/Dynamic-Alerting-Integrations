@@ -1,0 +1,277 @@
+# promtool unit test — MariaDB async replication suite (#1200 WS5-P0-a; WS2a corpus top gap).
+# Run: promtool test rules tests/rulepacks/rule-pack-mariadb-replication_test.yaml
+#
+# Four alerts: MariaDBReplicaIOThreadDown / MariaDBReplicaSQLThreadDown (state-based
+# critical, series-existence + master_server_id>0 intent gate, NO maintenance opt-out —
+# async sibling of SemiSyncReplicasGone) + MariaDBReplicationLag / Critical (threshold
+# pair, key mysql_replication_lag ENABLED BY DEFAULT per Q3=C, critical opt-in).
+# Load-bearing blocks:
+#   - reset-edge quiet: io_running=0 BUT master_server_id=0 (RESET SLAVE / never
+#     connected) must NOT fire — the intent gate all three corpus sources carry.
+#   - absent-guard: a tenant with NO sql_delay series must still resolve lag (the
+#     `or 0*seconds_behind` guard); deleting the guard empties the vector → silent
+#     dead alert (empty-set-silence, epic #1200 母題 1) → this block turns red.
+#   - selector contract (DB2HighLockWaitTime precedent, #731 shape): pins the
+#     user_threshold short-name `metric="replication_lag"` — a typo'd selector
+#     resolves empty and looks exactly like "tenant hasn't opted in", so the firing
+#     fixtures alone cannot catch it.
+rule_files:
+  - ../../rule-packs/rule-pack-mariadb.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── Thread-down fires + non-replica / reset-edge quiet + maintenance does NOT
+  #    suppress (critical, no opt-out — pins the asymmetry vs the lag warning). ──
+  - interval: 15s
+    name: thread-down-fire-and-intent-gate-quiet
+    input_series:
+      # db-a — IO thread stopped (Slave_IO_Running=No), real replica (master_server_id>0) → fires.
+      - series: 'mysql_slave_status_slave_io_running{job="tenant-exporters", tenant="db-a", instance="db-a-0"}'
+        values: '0x20'
+      - series: 'mysql_slave_status_slave_sql_running{job="tenant-exporters", tenant="db-a", instance="db-a-0"}'
+        values: '1x20'
+      - series: 'mysql_slave_status_master_server_id{job="tenant-exporters", tenant="db-a", instance="db-a-0"}'
+        values: '101x20'
+      # db-b — SQL thread stopped, real replica → fires.
+      - series: 'mysql_slave_status_slave_io_running{job="tenant-exporters", tenant="db-b", instance="db-b-0"}'
+        values: '1x20'
+      - series: 'mysql_slave_status_slave_sql_running{job="tenant-exporters", tenant="db-b", instance="db-b-0"}'
+        values: '0x20'
+      - series: 'mysql_slave_status_master_server_id{job="tenant-exporters", tenant="db-b", instance="db-b-0"}'
+        values: '102x20'
+      # db-c — healthy replica (both threads running) → quiet.
+      - series: 'mysql_slave_status_slave_io_running{job="tenant-exporters", tenant="db-c", instance="db-c-0"}'
+        values: '1x20'
+      - series: 'mysql_slave_status_slave_sql_running{job="tenant-exporters", tenant="db-c", instance="db-c-0"}'
+        values: '1x20'
+      - series: 'mysql_slave_status_master_server_id{job="tenant-exporters", tenant="db-c", instance="db-c-0"}'
+        values: '103x20'
+      # db-y — the RESET edge: SHOW SLAVE STATUS row exists with io/sql=0 but
+      # master_server_id=0 (replica config reset / never connected) → intent gate
+      # keeps it QUIET. Without the gate this tenant storms forever.
+      - series: 'mysql_slave_status_slave_io_running{job="tenant-exporters", tenant="db-y", instance="db-y-0"}'
+        values: '0x20'
+      - series: 'mysql_slave_status_slave_sql_running{job="tenant-exporters", tenant="db-y", instance="db-y-0"}'
+        values: '0x20'
+      - series: 'mysql_slave_status_master_server_id{job="tenant-exporters", tenant="db-y", instance="db-y-0"}'
+        values: '0x20'
+      # db-z — NON-replica deployment: NO mysql_slave_status_* series at all
+      # (mysql_up proves the tenant exists) → naturally quiet.
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-z", instance="db-z-0"}'
+        values: '1x20'
+      # db-m — IO down + maintenance flag ON → STILL fires (critical has NO
+      # maintenance opt-out; planned STOP SLAVE goes through the Silence API).
+      - series: 'mysql_slave_status_slave_io_running{job="tenant-exporters", tenant="db-m", instance="db-m-0"}'
+        values: '0x20'
+      - series: 'mysql_slave_status_slave_sql_running{job="tenant-exporters", tenant="db-m", instance="db-m-0"}'
+        values: '1x20'
+      - series: 'mysql_slave_status_master_server_id{job="tenant-exporters", tenant="db-m", instance="db-m-0"}'
+        values: '104x20'
+      - series: 'user_state_filter{tenant="db-m", filter="maintenance"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MariaDBReplicaIOThreadDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              metric_group: replication_lag
+              tenant: db-a
+            exp_annotations:
+              summary: "MariaDB replica IO thread not running for tenant db-a"
+              summary_zh: "MariaDB 租戶 db-a 的 replica IO 執行緒未運行"
+              description: "Replica IO thread is stopped (Slave_IO_Running=No) for tenant db-a — the replica is no longer receiving events from the primary, so the DR/read copy is going stale. seconds_behind_master turns NULL/absent (or lies at 0) in this state, so MariaDBReplicationLag CANNOT see it. Check SHOW SLAVE STATUS Last_IO_Error (network / credentials / primary binlog purged)."
+              description_zh: "租戶 db-a 的 replica IO 執行緒已停止（Slave_IO_Running=No）— replica 不再接收 primary 的事件，DR／讀取副本正在過期。此狀態下 seconds_behind_master 會變 NULL/absent（或誤報 0），MariaDBReplicationLag 看不到。請查 SHOW SLAVE STATUS 的 Last_IO_Error（網路／憑證／primary binlog 已清除）。"
+          - exp_labels:
+              severity: critical
+              metric_group: replication_lag
+              tenant: db-m
+            exp_annotations:
+              summary: "MariaDB replica IO thread not running for tenant db-m"
+              summary_zh: "MariaDB 租戶 db-m 的 replica IO 執行緒未運行"
+              description: "Replica IO thread is stopped (Slave_IO_Running=No) for tenant db-m — the replica is no longer receiving events from the primary, so the DR/read copy is going stale. seconds_behind_master turns NULL/absent (or lies at 0) in this state, so MariaDBReplicationLag CANNOT see it. Check SHOW SLAVE STATUS Last_IO_Error (network / credentials / primary binlog purged)."
+              description_zh: "租戶 db-m 的 replica IO 執行緒已停止（Slave_IO_Running=No）— replica 不再接收 primary 的事件，DR／讀取副本正在過期。此狀態下 seconds_behind_master 會變 NULL/absent（或誤報 0），MariaDBReplicationLag 看不到。請查 SHOW SLAVE STATUS 的 Last_IO_Error（網路／憑證／primary binlog 已清除）。"
+      - eval_time: 3m
+        alertname: MariaDBReplicaSQLThreadDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              metric_group: replication_lag
+              tenant: db-b
+            exp_annotations:
+              summary: "MariaDB replica SQL thread not running for tenant db-b"
+              summary_zh: "MariaDB 租戶 db-b 的 replica SQL 執行緒未運行"
+              description: "Replica SQL thread is stopped (Slave_SQL_Running=No) for tenant db-b — events are still being received (relay log grows) but NOT applied, usually a replication error (duplicate key / row not found). The replica diverges until the error is resolved; seconds_behind_master is NULL/absent in this state so MariaDBReplicationLag CANNOT see it. Check SHOW SLAVE STATUS Last_SQL_Error."
+              description_zh: "租戶 db-b 的 replica SQL 執行緒已停止（Slave_SQL_Running=No）— 事件仍在接收（relay log 持續成長）但不再套用，通常是複寫錯誤（duplicate key／row not found）。錯誤解決前 replica 會持續偏離；此狀態下 seconds_behind_master 為 NULL/absent，MariaDBReplicationLag 看不到。請查 SHOW SLAVE STATUS 的 Last_SQL_Error。"
+
+  # ── for:1m de-flap: a 45s IO-thread blip (restart window — APA's stated reason
+  #    for the 1m delay) recovers before the for: elapses → must NEVER fire.
+  #    Mid-window assert at 45s catches a for:0s regression. ──
+  - interval: 15s
+    name: thread-down-deflap
+    input_series:
+      - series: 'mysql_slave_status_slave_io_running{job="tenant-exporters", tenant="db-a", instance="db-a-0"}'
+        values: '0 0 0 1x17'
+      - series: 'mysql_slave_status_master_server_id{job="tenant-exporters", tenant="db-a", instance="db-a-0"}'
+        values: '101x20'
+    alert_rule_test:
+      # 45s: down since t=0 but < for:1m → pending, not firing (a for:0s mutant fires here).
+      - eval_time: 45s
+        alertname: MariaDBReplicaIOThreadDown
+        exp_alerts: []
+      # after recovery (3m) → not firing.
+      - eval_time: 3m
+        alertname: MariaDBReplicaIOThreadDown
+        exp_alerts: []
+
+  # ── Lag warning tier: enriched fire / bare fire (+ absent-guard) / maintenance
+  #    suppressed / below threshold / sql_delay-adjusted quiet. ──
+  - interval: 15s
+    name: lag-warning-tier
+    input_series:
+      # db-a: 100s behind (sql_delay=0) > 30 warning, metadata present → enriched fire.
+      - series: 'mysql_slave_status_seconds_behind_master{job="tenant-exporters", tenant="db-a", instance="db-a-0"}'
+        values: '100x40'
+      - series: 'mysql_slave_status_sql_delay{job="tenant-exporters", tenant="db-a", instance="db-a-0"}'
+        values: '0x40'
+      - series: 'user_threshold{tenant="db-a", component="mysql", metric="replication_lag", severity="warning"}'
+        values: '30x40'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x40'
+      # db-b: 100 > 30, NO metadata → VACUUM-FIRE (branch B). Also the ABSENT-GUARD
+      # pin: db-b has NO sql_delay series — dropping the `or 0*seconds_behind` guard
+      # empties the recording rule for db-b and this firing assertion turns red.
+      - series: 'mysql_slave_status_seconds_behind_master{job="tenant-exporters", tenant="db-b", instance="db-b-0"}'
+        values: '100x40'
+      - series: 'user_threshold{tenant="db-b", component="mysql", metric="replication_lag", severity="warning"}'
+        values: '30x40'
+      # db-c: 100 > 30, metadata present, BUT maintenance active → suppressed
+      # (the lag WARNING keeps the maintenance opt-out — asymmetric with the
+      # thread-down criticals pinned above).
+      - series: 'mysql_slave_status_seconds_behind_master{job="tenant-exporters", tenant="db-c", instance="db-c-0"}'
+        values: '100x40'
+      - series: 'user_threshold{tenant="db-c", component="mysql", metric="replication_lag", severity="warning"}'
+        values: '30x40'
+      - series: 'tenant_metadata_info{tenant="db-c", runbook_url="http://rb/c", owner="team-c", tier="silver"}'
+        values: '1x40'
+      - series: 'user_state_filter{tenant="db-c", filter="maintenance"}'
+        values: '1x40'
+      # db-d: 20 < 30 → below threshold, no fire.
+      - series: 'mysql_slave_status_seconds_behind_master{job="tenant-exporters", tenant="db-d", instance="db-d-0"}'
+        values: '20x40'
+      - series: 'user_threshold{tenant="db-d", component="mysql", metric="replication_lag", severity="warning"}'
+        values: '30x40'
+      # db-f: intentionally DELAYED replica (MASTER_DELAY): raw seconds_behind=100
+      # but sql_delay=90 → adjusted lag 10 < 30 → quiet. Pins the sql_delay
+      # subtraction (both corpus sources adjust; an unadjusted rule pages forever).
+      - series: 'mysql_slave_status_seconds_behind_master{job="tenant-exporters", tenant="db-f", instance="db-f-0"}'
+        values: '100x40'
+      - series: 'mysql_slave_status_sql_delay{job="tenant-exporters", tenant="db-f", instance="db-f-0"}'
+        values: '90x40'
+      - series: 'user_threshold{tenant="db-f", component="mysql", metric="replication_lag", severity="warning"}'
+        values: '30x40'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MariaDBReplicationLag
+        exp_alerts:
+          # db-a: enriched (branch A) — carries runbook_url/owner/tier.
+          - exp_labels:
+              severity: warning
+              metric_group: replication_lag
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "High replication lag on db-a"
+              summary_zh: "db-a 複寫延遲過高"
+              platform_summary: "[gold] db-a: replication lag threshold breached — check replica IO/apply health and primary write load"
+              platform_summary_zh: "[gold] db-a：複寫延遲超出閾值 — 檢查 replica 接收／套用狀態與 primary 寫入負載"
+              description: "100s behind primary (warning threshold exceeded)"
+              description_zh: "落後 primary 100 秒（超過警告閾值）"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+          # db-b: VACUUM-FIRE (branch B) — fires bare; also proves the absent-guard.
+          - exp_labels:
+              severity: warning
+              metric_group: replication_lag
+              tenant: db-b
+            exp_annotations:
+              summary: "High replication lag on db-b"
+              summary_zh: "db-b 複寫延遲過高"
+              platform_summary: "[] db-b: replication lag threshold breached — check replica IO/apply health and primary write load"
+              platform_summary_zh: "[] db-b：複寫延遲超出閾值 — 檢查 replica 接收／套用狀態與 primary 寫入負載"
+              description: "100s behind primary (warning threshold exceeded)"
+              description_zh: "落後 primary 100 秒（超過警告閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-c (maintenance), db-d (below threshold), db-f (sql_delay-adjusted) → quiet.
+
+  # ── Lag critical tier (opt-in key mysql_replication_lag_critical, Scenario D). ──
+  - interval: 15s
+    name: lag-critical-tier
+    input_series:
+      # db-a: 150s behind > 120 critical, metadata present → enriched critical fire.
+      - series: 'mysql_slave_status_seconds_behind_master{job="tenant-exporters", tenant="db-a", instance="db-a-0"}'
+        values: '150x40'
+      - series: 'mysql_slave_status_sql_delay{job="tenant-exporters", tenant="db-a", instance="db-a-0"}'
+        values: '0x40'
+      - series: 'user_threshold{tenant="db-a", component="mysql", metric="replication_lag", severity="critical"}'
+        values: '120x40'
+      - series: 'tenant_metadata_info{tenant="db-a", runbook_url="http://rb/a", owner="team-a", tier="gold"}'
+        values: '1x40'
+      # db-d: 100 < 120 → below critical threshold, no critical fire.
+      - series: 'mysql_slave_status_seconds_behind_master{job="tenant-exporters", tenant="db-d", instance="db-d-0"}'
+        values: '100x40'
+      - series: 'user_threshold{tenant="db-d", component="mysql", metric="replication_lag", severity="critical"}'
+        values: '120x40'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MariaDBReplicationLagCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              metric_group: replication_lag
+              tenant: db-a
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+            exp_annotations:
+              summary: "Critical replication lag on db-a"
+              summary_zh: "db-a 複寫延遲嚴重過高"
+              platform_summary: "[gold] db-a: CRITICAL replication lag — failover now risks losing this much data; escalate"
+              platform_summary_zh: "[gold] db-a：複寫延遲達臨界 — 此時 failover 將損失等量資料；需升級處理"
+              description: "150s behind primary (critical threshold exceeded)"
+              description_zh: "落後 primary 150 秒（超過嚴重閾值）"
+              runbook_url: "http://rb/a"
+              owner: team-a
+              tier: gold
+
+  # ── Threshold selector CONTRACT (DB2HighLockWaitTime precedent, #731 shape):
+  #    the recording rules must resolve under the REAL exporter shape
+  #    user_threshold{component="mysql", metric="replication_lag"} — the SHORT
+  #    name, NOT "mysql_replication_lag". A typo'd selector resolves empty and is
+  #    indistinguishable from "tenant hasn't opted in" (the critical tier ships
+  #    opt-in, so its firing fixture above feeds the threshold and cannot catch
+  #    a wrong selector on the default-enabled path either). ──
+  - interval: 15s
+    name: threshold-selector-contract
+    input_series:
+      - series: 'user_threshold{tenant="t1", component="mysql", metric="replication_lag", severity="warning"}'
+        values: '30x5'
+      - series: 'user_threshold{tenant="t1", component="mysql", metric="replication_lag", severity="critical"}'
+        values: '120x5'
+    promql_expr_test:
+      - expr: tenant:alert_threshold:mysql_replication_lag
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:alert_threshold:mysql_replication_lag{tenant="t1"}'
+            value: 30
+      - expr: tenant:alert_threshold:mysql_replication_lag_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:alert_threshold:mysql_replication_lag_critical{tenant="t1"}'
+            value: 120

@@ -233,7 +233,7 @@ tenants:
 | 場景 | 原始指標 | Recording Rule | Tenant Config 範例 | 特殊說明 |
 |------|---------|----------------|-------------------|---------|
 | **多層嚴重度** | `mysql_global_status_threads_connected` | `max by(tenant) (...)` | `mysql_connections: "100"` + `mysql_connections_critical: "150"` | Alert Rule 自動處理 `_critical` 降級邏輯 |
-| **Replication Lag** | `mysql_slave_status_seconds_behind_master` | `max by(tenant) (...)` | `mysql_slave_lag: "30"` 或 `"disable"` | Max 用於「最弱環節」(最落後的 slave) |
+| **Replication Lag** | `mysql_slave_status_seconds_behind_master` | `max by(tenant) (...)` | `mysql_replication_lag: "30"` 或 `"disable"` | Max 用於「最弱環節」(最落後的 slave) |
 | **Rate 指標** | `rate(mysql_global_status_slow_queries[5m])` | `sum by(tenant) (rate(...))` | `mysql_slow_queries: "0.1"` | Sum 用於「叢集總量」 |
 | **百分比計算** | `buffer_pool_pages_data / buffer_pool_pages_total * 100` | `max by(...) (...) / max by(...) (...) * 100` | `mysql_innodb_buffer_pool: "95"` | 百分比計算在 Recording Rule 完成 |
 

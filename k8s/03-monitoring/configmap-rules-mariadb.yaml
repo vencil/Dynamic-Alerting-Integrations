@@ -25,14 +25,21 @@ data:
     \    expr: sum by(tenant) (rate(mysql_global_status_aborted_connects[5m]))\n \
     \ - record: tenant:mysql_buffer_pool_usage:ratio\n    expr: 'sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_data)\n\
     \n      / sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_total)\n\
-    \n      '\n- name: mariadb-threshold-normalization\n  interval: 15s\n  rules:\n\
-    \  - record: tenant:alert_threshold:mysql_connections\n    expr: max by(tenant)\
-    \ (user_threshold{component=\"mysql\", metric=\"connections\", severity=\"warning\"\
-    })\n  - record: tenant:alert_threshold:mysql_cpu\n    expr: max by(tenant) (user_threshold{component=\"\
-    mysql\", metric=\"cpu\", severity=\"warning\"})\n  - record: tenant:alert_threshold:mysql_connections_critical\n\
+    \n      '\n  - record: tenant:mysql_replication_lag:max\n    expr: \"max by(tenant)\
+    \ (\\n  mysql_slave_status_seconds_behind_master\\n  - (mysql_slave_status_sql_delay\
+    \ or 0 * mysql_slave_status_seconds_behind_master)\\n)\\n\"\n- name: mariadb-threshold-normalization\n\
+    \  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:mysql_connections\n\
+    \    expr: max by(tenant) (user_threshold{component=\"mysql\", metric=\"connections\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:mysql_cpu\n    expr:\
+    \ max by(tenant) (user_threshold{component=\"mysql\", metric=\"cpu\", severity=\"\
+    warning\"})\n  - record: tenant:alert_threshold:mysql_replication_lag\n    expr:\
+    \ max by(tenant) (user_threshold{component=\"mysql\", metric=\"replication_lag\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:mysql_connections_critical\n\
     \    expr: max by(tenant) (user_threshold{component=\"mysql\", metric=\"connections\"\
     , severity=\"critical\"})\n  - record: tenant:alert_threshold:mysql_cpu_critical\n\
     \    expr: max by(tenant) (user_threshold{component=\"mysql\", metric=\"cpu\"\
+    , severity=\"critical\"})\n  - record: tenant:alert_threshold:mysql_replication_lag_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"mysql\", metric=\"replication_lag\"\
     , severity=\"critical\"})\n"
   mariadb-alert.yml: "groups:\n- name: mariadb-alerts\n  rules:\n  - alert: MariaDBDown\n\
     \    expr: '(mysql_up == 0)\n\n      unless on(tenant)\n\n      (user_state_filter{filter=\"\
@@ -98,24 +105,92 @@ data:
     \ not to chase the stall.\n      description_zh: 租戶 {{ $labels.tenant }} 啟用了 semi-sync\
     \ 但連線的 semi-sync replica 數為 0（clients=0）— 持久性備援歸零、replica 重連前無法自癒。此告警響起時 ~10s\
     \ 寫入 stall（wait_no_slave）通常已自動 fallback async — 真正風險是失去持久性（此時 primary 故障會資料遺失），故\
-    \ runbook 第一步是追查為何所有 replica 斷線、而非修 stall。\n  - alert: MariaDBExporterAbsent\n\
-    \    expr: absent(mysql_up{job=\"tenant-exporters\"})\n    for: 30s\n    labels:\n\
-    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      summary: mysqld-exporter target missing\n      summary_zh: mysqld-exporter\
-    \ 目標缺失\n      description: No mysql_up metric found for 30s\n      description_zh:\
-    \ 找不到 mysql_up 指標，持續 30 秒\n  - alert: MariaDBHighConnections\n    expr: \"(\\\
-    n  (\\n    (\\n      tenant:mysql_threads_connected:max\\n      > on(tenant) group_left\\\
-    n      tenant:alert_threshold:mysql_connections\\n    )\\n    unless on(tenant)\\\
-    n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  * on(tenant)\
-    \ group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\n)\\nor\\n(\\\
-    n  (\\n    (\\n      tenant:mysql_threads_connected:max\\n      > on(tenant) group_left\\\
-    n      tenant:alert_threshold:mysql_connections\\n    )\\n    unless on(tenant)\\\
-    n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant)\
-    \ tenant_metadata_info\\n)\\n\"\n    for: 30s\n    labels:\n      severity: warning\n\
-    \      metric_group: connections\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      summary: High connections on {{ $labels.tenant }}\n      summary_zh: '{{\
-    \ $labels.tenant }} 連線數過高'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}: connection threshold breached — review connection pool sizing'\n      platform_summary_zh:\
+    \ runbook 第一步是追查為何所有 replica 斷線、而非修 stall。\n  - alert: MariaDBReplicaIOThreadDown\n\
+    \    expr: \"max by(tenant) (\\n  mysql_slave_status_slave_io_running{job=\\\"\
+    tenant-exporters\\\"} == 0\\n  and on(tenant, instance)\\n  mysql_slave_status_master_server_id{job=\\\
+    \"tenant-exporters\\\"} > 0\\n)\\n\"\n    for: 1m\n    labels:\n      severity:\
+    \ critical\n      metric_group: replication_lag\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      summary: MariaDB replica IO thread not running\
+    \ for tenant {{ $labels.tenant }}\n      summary_zh: MariaDB 租戶 {{ $labels.tenant\
+    \ }} 的 replica IO 執行緒未運行\n      description: Replica IO thread is stopped (Slave_IO_Running=No)\
+    \ for tenant {{ $labels.tenant }} — the replica is no longer receiving events\
+    \ from the primary, so the DR/read copy is going stale. seconds_behind_master\
+    \ turns NULL/absent (or lies at 0) in this state, so MariaDBReplicationLag CANNOT\
+    \ see it. Check SHOW SLAVE STATUS Last_IO_Error (network / credentials / primary\
+    \ binlog purged).\n      description_zh: 租戶 {{ $labels.tenant }} 的 replica IO\
+    \ 執行緒已停止（Slave_IO_Running=No）— replica 不再接收 primary 的事件，DR／讀取副本正在過期。此狀態下 seconds_behind_master\
+    \ 會變 NULL/absent（或誤報 0），MariaDBReplicationLag 看不到。請查 SHOW SLAVE STATUS 的 Last_IO_Error（網路／憑證／primary\
+    \ binlog 已清除）。\n  - alert: MariaDBReplicaSQLThreadDown\n    expr: \"max by(tenant)\
+    \ (\\n  mysql_slave_status_slave_sql_running{job=\\\"tenant-exporters\\\"} ==\
+    \ 0\\n  and on(tenant, instance)\\n  mysql_slave_status_master_server_id{job=\\\
+    \"tenant-exporters\\\"} > 0\\n)\\n\"\n    for: 1m\n    labels:\n      severity:\
+    \ critical\n      metric_group: replication_lag\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      summary: MariaDB replica SQL thread not running\
+    \ for tenant {{ $labels.tenant }}\n      summary_zh: MariaDB 租戶 {{ $labels.tenant\
+    \ }} 的 replica SQL 執行緒未運行\n      description: Replica SQL thread is stopped (Slave_SQL_Running=No)\
+    \ for tenant {{ $labels.tenant }} — events are still being received (relay log\
+    \ grows) but NOT applied, usually a replication error (duplicate key / row not\
+    \ found). The replica diverges until the error is resolved; seconds_behind_master\
+    \ is NULL/absent in this state so MariaDBReplicationLag CANNOT see it. Check SHOW\
+    \ SLAVE STATUS Last_SQL_Error.\n      description_zh: 租戶 {{ $labels.tenant }}\
+    \ 的 replica SQL 執行緒已停止（Slave_SQL_Running=No）— 事件仍在接收（relay log 持續成長）但不再套用，通常是複寫錯誤（duplicate\
+    \ key／row not found）。錯誤解決前 replica 會持續偏離；此狀態下 seconds_behind_master 為 NULL/absent，MariaDBReplicationLag\
+    \ 看不到。請查 SHOW SLAVE STATUS 的 Last_SQL_Error。\n  - alert: MariaDBReplicationLag\n\
+    \    expr: \"(\\n  (\\n    (\\n      tenant:mysql_replication_lag:max\\n     \
+    \ > on(tenant) group_left\\n      tenant:alert_threshold:mysql_replication_lag\\\
+    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      tenant:mysql_replication_lag:max\\n      > on(tenant)\
+    \ group_left\\n      tenant:alert_threshold:mysql_replication_lag\\n    )\\n \
+    \   unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} ==\
+    \ 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 30s\n\
+    \    labels:\n      severity: warning\n      metric_group: replication_lag\n \
+    \     tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: High replication\
+    \ lag on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 複寫延遲過高'\n\
+    \      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: replication\
+    \ lag threshold breached — check replica IO/apply health and primary write load'\n\
+    \      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：複寫延遲超出閾值\
+    \ — 檢查 replica 接收／套用狀態與 primary 寫入負載'\n      description: '{{ $value | printf\
+    \ \"%.0f\" }}s behind primary (warning threshold exceeded)'\n      description_zh:\
+    \ 落後 primary {{ $value | printf \"%.0f\" }} 秒（超過警告閾值）\n      runbook_url: '{{\
+    \ $labels.runbook_url }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{\
+    \ $labels.tier }}'\n  - alert: MariaDBReplicationLagCritical\n    expr: \"(\\\
+    n  (\\n    (\\n      tenant:mysql_replication_lag:max\\n      > on(tenant) group_left\\\
+    n      tenant:alert_threshold:mysql_replication_lag_critical\\n    )\\n    unless\
+    \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
+    n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      tenant:mysql_replication_lag:max\\n      > on(tenant)\
+    \ group_left\\n      tenant:alert_threshold:mysql_replication_lag_critical\\n\
+    \    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
+    \ 30s\n    labels:\n      severity: critical\n      metric_group: replication_lag\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: Critical\
+    \ replication lag on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 複寫延遲嚴重過高'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}: CRITICAL replication lag — failover now risks losing this much data; escalate'\n\
+    \      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：複寫延遲達臨界\
+    \ — 此時 failover 將損失等量資料；需升級處理'\n      description: '{{ $value | printf \"%.0f\"\
+    \ }}s behind primary (critical threshold exceeded)'\n      description_zh: 落後\
+    \ primary {{ $value | printf \"%.0f\" }} 秒（超過嚴重閾值）\n      runbook_url: '{{ $labels.runbook_url\
+    \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
+    \  - alert: MariaDBExporterAbsent\n    expr: absent(mysql_up{job=\"tenant-exporters\"\
+    })\n    for: 30s\n    labels:\n      severity: critical\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      summary: mysqld-exporter target missing\n     \
+    \ summary_zh: mysqld-exporter 目標缺失\n      description: No mysql_up metric found\
+    \ for 30s\n      description_zh: 找不到 mysql_up 指標，持續 30 秒\n  - alert: MariaDBHighConnections\n\
+    \    expr: \"(\\n  (\\n    (\\n      tenant:mysql_threads_connected:max\\n   \
+    \   > on(tenant) group_left\\n      tenant:alert_threshold:mysql_connections\\\
+    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      tenant:mysql_threads_connected:max\\n      >\
+    \ on(tenant) group_left\\n      tenant:alert_threshold:mysql_connections\\n  \
+    \  )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
+    \ 30s\n    labels:\n      severity: warning\n      metric_group: connections\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: High connections\
+    \ on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 連線數過高'\n  \
+    \    platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: connection\
+    \ threshold breached — review connection pool sizing'\n      platform_summary_zh:\
     \ '[{{ $labels.tier }}] {{ $labels.tenant }}：連線數閾值超出 — 檢查連線集區大小設定'\n      description:\
     \ '{{ $value }} threads connected (warning threshold exceeded)'\n      description_zh:\
     \ '{{ $value }} 個執行緒已連接（超過警告閾值）'\n      runbook_url: '{{ $labels.runbook_url }}'\n\

@@ -24,7 +24,7 @@ lang: zh
 | Kafka | rule-pack-kafka.yaml | 13 | 9 | 22 |
 | Kubernetes | rule-pack-kubernetes.yaml | 30 | 14 | 44 |
 | Liveness | rule-pack-liveness.yaml | 0 | 1 | 1 |
-| Mariadb | rule-pack-mariadb.yaml | 11 | 14 | 25 |
+| Mariadb | rule-pack-mariadb.yaml | 14 | 18 | 32 |
 | Mongodb | rule-pack-mongodb.yaml | 10 | 8 | 18 |
 | Nginx | rule-pack-nginx.yaml | 9 | 6 | 15 |
 | Operational | rule-pack-operational.yaml | 0 | 4 | 4 |
@@ -32,7 +32,7 @@ lang: zh
 | Postgresql | rule-pack-postgresql.yaml | 11 | 9 | 20 |
 | Rabbitmq | rule-pack-rabbitmq.yaml | 12 | 8 | 20 |
 | Redis | rule-pack-redis.yaml | 11 | 6 | 17 |
-| **TOTAL** | | **163** | **115** | **278** |
+| **TOTAL** | | **166** | **119** | **285** |
 
 ## 架構說明
 
