@@ -5,6 +5,15 @@ metadata:
   namespace: monitoring
   labels:
     app: alertmanager
+  annotations:
+    # Admit Alertmanager into the annotation-based `monitoring-components`
+    # scrape job (#1203/TRK-340). Without these the ADR-025 self-liveness
+    # guardian AlertmanagerWebhookNotificationsFailing could never fire —
+    # alertmanager_notifications_failed_total was never scraped.
+    # No prometheus.io/path: Alertmanager serves the default /metrics
+    # (same shape as the kube-state-metrics Service).
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9093"
 spec:
   selector:
     app: alertmanager

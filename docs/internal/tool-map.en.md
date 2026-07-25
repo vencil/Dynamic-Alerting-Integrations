@@ -210,6 +210,7 @@ lang: en
 | `check_retire_drift.py` | RETIRE-ordering hard gate (#869 design item 7; matrix Gap #2). |
 | `check_routing_profiles.py` | Lint routing profiles and domain policies (ADR-007). |
 | `check_rulepack_sync.py` | Rule-pack copy drift guard (ADR-024 PR3-pre). |
+| `check_scrape_reachability.py` | Scrape-face reachability gate — every rule-consumed leaf metric must be admitted by at least one scrape job (TRK-340 / #1203, epic #1200 WS2b S6). |
 | `check_session_guard_liveness.py` | PreToolUse session-guard 可執行性 gate（#824 方案 B）。 |
 | `check_single_writer_invariant.py` | Single-writer invariant lint for the tenant-api write plane (ADR-023). |
 | `check_skip_a11y_justification.py` | Require ticket-justification for `skipA11y: true` in E2E specs (testing-playbook §LL §5, TD-039). |
