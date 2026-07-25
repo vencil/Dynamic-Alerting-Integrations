@@ -149,10 +149,24 @@ jobs:
             # regenerates platform-data.json never runs the gate: 9 of the
             # last 10 commits touching this file matched no portal path, and
             # PR #1215 landed a real mariadb-defaults drift that way.
+            # tenant-config.schema.json is the same shape, one gate over:
+            # recipe-enums.drift.test.ts binds the portal's recipe-enums.json
+            # to it (the cross-language enum contract the Python compiler and
+            # the Go preflight also read). Not yet burned — 3 schema edits
+            # since that test was added matched no portal path, none of them
+            # happened to touch a MIRRORED property — but the only thing
+            # keeping it green is that editing an enum usually makes the
+            # author edit recipe-enums.json too, i.e. the failure mode IS
+            # "author forgot", which is exactly when no portal path matches.
+            #
+            # INVARIANT (enforced by tests/ops/test_portal_path_filter_
+            # coverage.py, not by this comment): every out-of-tree file a
+            # portal Vitest reads must be listed here.
             portal:
               - "tools/portal/**"
               - "docs/assets/dist/**"
               - "docs/assets/platform-data.json"
+              - "docs/schemas/tenant-config.schema.json"
               - "components/tenant-api/internal/rbac/testdata/wizard/**"
               - ".github/workflows/ci.yml"
 

@@ -653,7 +653,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "aa44dfc43f741b3f8c8d78782831eea9e46e47e2b257e31c19aa445f1c75a349",
+ "source_digest": "adc990a109c1fb7b6d7f0c156431c7e0f7933252cf2f881ee85cb6b18e78989c",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -872,6 +872,7 @@
   "tests/ops/test_performance.py",
   "tests/ops/test_policy_engine.py",
   "tests/ops/test_policy_opa_bridge.py",
+  "tests/ops/test_portal_path_filter_coverage.py",
   "tests/ops/test_property_based.py",
   "tests/ops/test_registry_lib.py",
   "tests/ops/test_regression.py",
@@ -952,12 +953,14 @@
    "tests/ops/test_lint_custom_rules.py"
   ],
   ".github/workflows": [
-   "tests/lint/test_check_workflow_git_push_permissions.py"
+   "tests/lint/test_check_workflow_git_push_permissions.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   ".github/workflows/ci.yml": [
    "tests/dx/test_compile_custom_alerts.py",
    "tests/lint/test_check_admin_config_schema.py",
    "tests/lint/test_check_pint.py",
+   "tests/ops/test_portal_path_filter_coverage.py",
    "tests/preview/test_promtool_pin_parity.py"
   ],
   ".github/workflows/nightly-image-scan.yaml": [
@@ -1053,6 +1056,9 @@
   "components/recipe-preview/app.py": [
    "tests/preview/test_app.py"
   ],
+  "components/tenant-api/internal/rbac/testdata/wizard": [
+   "tests/ops/test_portal_path_filter_coverage.py"
+  ],
   "components/threshold-exporter": [
    "tests/ops/test_operator_generate_v2.py"
   ],
@@ -1112,7 +1118,8 @@
   ],
   "docs/assets/platform-data.json": [
    "tests/lint/test_check_makefile_targets.py",
-   "tests/lint/test_check_threshold_unit_sanity.py"
+   "tests/lint/test_check_threshold_unit_sanity.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "docs/assets/recommendation-data.json": [
    "tests/lint/test_check_threshold_unit_sanity.py"
@@ -1191,7 +1198,8 @@
   ],
   "docs/schemas/tenant-config.schema.json": [
    "tests/dx/test_sync_schema.py",
-   "tests/lint/test_check_confd_schema.py"
+   "tests/lint/test_check_confd_schema.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "docs/schemas/waveform-pack.schema.json": [
    "tests/dx/test_waveform_compile.py"
@@ -1978,6 +1986,9 @@
   "tests/snapshots": [
    "tests/shared/test_help_contract.py"
   ],
+  "tools/portal": [
+   "tests/ops/test_portal_path_filter_coverage.py"
+  ],
   "tools/portal/src": [
    "tests/dx/test_scan_component_health.py",
    "tests/lint/test_check_design_token_usage.py",
@@ -1987,6 +1998,9 @@
   ],
   "tools/portal/src/getting-started": [
    "tests/lint/test_check_jsx_loader_compat.py"
+  ],
+  "tools/portal/tests": [
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "try-local/alertmanager.yml": [
    "tests/dx/test_verify_diff.py",
