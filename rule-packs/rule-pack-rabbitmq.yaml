@@ -7,7 +7,7 @@
 #   - 或 Prometheus 內建 RabbitMQ 外掛
 #
 # >>> GENERATED:threshold-registry:pack-rabbitmq — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-# 對應的 threshold-exporter defaults（defaults tier——平台預設路徑會發射、告警可達）:
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
 #   rabbitmq_queue_messages: 100000   # messages — Queue depth warning
 #   rabbitmq_node_mem_percent: 80   # % — Node memory usage warning
 #   rabbitmq_connections: 1000   # count — Connection count warning

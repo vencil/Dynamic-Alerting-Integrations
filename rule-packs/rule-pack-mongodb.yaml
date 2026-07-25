@@ -6,7 +6,7 @@
 #   - mongodb_exporter (https://github.com/percona/mongodb_exporter)
 #
 # >>> GENERATED:threshold-registry:pack-mongodb — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-# 對應的 threshold-exporter defaults（defaults tier——平台預設路徑會發射、告警可達）:
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
 #   mongodb_connections_current: 300   # count — Current connections warning
 #   mongodb_repl_lag_seconds: 10   # seconds — Replication lag warning
 #

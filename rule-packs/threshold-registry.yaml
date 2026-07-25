@@ -160,9 +160,9 @@ keys:
     tier: defaults
     value: 30
     unit: threads
-    desc: 'Running-threads 1m-avg saturation warning; 80→30 = PMM/Nichter ''high''
-      (#944). NOT host CPU% — key kept as mysql_cpu (config-contract stability; metric/alert
-      renamed, #944 closed)'
+    desc: 'threads_running saturation, NOT host CPU% — running-threads 1m-avg warning;
+      80→30 = PMM/Nichter ''high'' (#944); key kept as mysql_cpu (config-contract
+      stability; metric/alert renamed, #944 closed)'
     metric_class: saturation
     chart_default: true
   mysql_replication_lag:

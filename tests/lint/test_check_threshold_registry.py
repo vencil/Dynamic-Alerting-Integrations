@@ -231,3 +231,14 @@ def test_regen_writes_registry_and_surfaces(monkeypatch, tmp_path):
     monkeypatch.setattr(gate.registry_lib, "regen_surfaces", fake_surfaces)
     assert gate.main(["--regen"]) == gate.EXIT_OK
     assert calls.get("write") and calls.get("surfaces")
+
+
+def test_regen_surfaces_rejects_path_escaping_repo_root(tmp_path):
+    """A registry-derived surface path carrying `..` must fail loud, not
+    splice a file outside the repo (CodeRabbit review of #1222)."""
+    import pytest
+    from _registry_lib import regen_surfaces, load_registry
+    doc = load_registry()
+    doc["packs"][next(iter(doc["packs"]))]["rule_pack_file"] = "../../outside.yaml"
+    with pytest.raises(ValueError, match="escapes repo root"):
+        regen_surfaces(doc)

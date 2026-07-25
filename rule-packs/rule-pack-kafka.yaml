@@ -6,7 +6,7 @@
 #   - danielqsj/kafka-exporter (https://github.com/danielqsj/kafka-exporter)
 #
 # >>> GENERATED:threshold-registry:pack-kafka — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-# 對應的 threshold-exporter defaults（defaults tier——平台預設路徑會發射、告警可達）:
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
 #   kafka_consumer_lag: 1000   # messages — Consumer lag warning
 #   kafka_under_replicated_partitions: 0   # count — Under-replicated partitions (should be 0)
 #   kafka_broker_count: 3   # count — Minimum broker count warning

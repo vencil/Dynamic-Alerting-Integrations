@@ -23,9 +23,9 @@ defaults:
   # count — Max threads_connected warning（critical 加嚴 opt-in：mysql_connections_critical，registry 建議
   # 120）
   mysql_connections: 80
-  # threads — Running-threads 1m-avg saturation warning; 80→30 = PMM/Nichter 'high' (#944). NOT host
-  # CPU% — key kept as mysql_cpu (config-contract stability; metric/alert renamed, #944
-  # closed)（critical 加嚴 opt-in：mysql_cpu_critical，registry 建議 50）
+  # threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30 =
+  # PMM/Nichter 'high' (#944); key kept as mysql_cpu (config-contract stability; metric/alert
+  # renamed, #944 closed)（critical 加嚴 opt-in：mysql_cpu_critical，registry 建議 50）
   mysql_cpu: 30
   # seconds — Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 =
   # APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's lag-

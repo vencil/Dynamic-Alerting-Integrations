@@ -579,7 +579,7 @@ def render_pack_header_lines(doc: dict, pack_name: str) -> list[str]:
     }
     lines = [
         "# 對應的 threshold-exporter defaults"
-        "（defaults tier——平台預設路徑會發射、告警可達）:",
+        "（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:",
     ]
     for key, entry in defaults.items():
         lines += _entry_lines(key, entry)
@@ -727,11 +727,27 @@ def regen_surfaces(doc: Optional[dict] = None) -> list[str]:
     if doc is None:
         doc = load_registry()
     touched = []
+    repo_root = os.path.realpath(_REPO_ROOT)
     for spec in surface_specs(doc):
+        # Containment: surface paths derive from committed registry fields
+        # (e.g. rule_pack_file) that --regen consumes WITHOUT schema
+        # validation — a `..`-carrying value must fail loud, not splice a
+        # file outside the repo (CodeRabbit #1222 nitpick).
+        real = os.path.realpath(spec["path"])
+        if not real.startswith(repo_root + os.sep):
+            raise ValueError(
+                f"generated-surface path escapes repo root: {spec['path']!r}"
+            )
         with open(spec["path"], encoding="utf-8") as fh:
             old = fh.read()
         new = splice_surface(old, spec)
         if new != old:
+            # A spliced block that breaks the host document must fail loud
+            # BEFORE the write: the freshness gate string-compares and would
+            # not catch invalid YAML (burned once — a two-element heading
+            # emitted a bare comment continuation line into 13 packs).
+            if spec["path"].endswith((".yaml", ".yml")):
+                yaml.safe_load(new)
             write_text_secure(spec["path"], new)
             touched.append(spec["path"])
     return touched

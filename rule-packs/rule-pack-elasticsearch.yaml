@@ -7,7 +7,7 @@
 #     (https://github.com/prometheus-community/elasticsearch_exporter)
 #
 # >>> GENERATED:threshold-registry:pack-elasticsearch — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-# 對應的 threshold-exporter defaults（defaults tier——平台預設路徑會發射、告警可達）:
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
 #   es_jvm_memory_used_percent: 85   # % — JVM heap usage warning
 #   es_filesystem_free_percent: 15   # % — Disk free space warning
 #

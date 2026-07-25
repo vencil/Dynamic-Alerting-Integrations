@@ -7,12 +7,12 @@
 #   - 或 Percona PMM exporter
 #
 # >>> GENERATED:threshold-registry:pack-mariadb — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-# 對應的 threshold-exporter defaults（defaults tier——平台預設路徑會發射、告警可達）:
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
 #   mysql_connections: 80   [chart-default]   # count — Max threads_connected warning
 #   mysql_cpu: 30   [chart-default]
-#       threads — Running-threads 1m-avg saturation warning; 80→30 = PMM/Nichter 'high' (#944). NOT
-#       host CPU% — key kept as mysql_cpu (config-contract stability; metric/alert renamed, #944
-#       closed)
+#       threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30
+#       = PMM/Nichter 'high' (#944); key kept as mysql_cpu (config-contract stability; metric/alert
+#       renamed, #944 closed)
 #   mysql_replication_lag: 30   [chart-default]
 #       seconds — Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 =
 #       APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's
