@@ -583,6 +583,24 @@ class TestValidateTenantKeys:
         warnings = validate_tenant_keys("db-a", keys, set())
         assert any("_unknown_flag" in w for w in warnings)
 
+    def test_dangling_critical_warns_python_side_of_the_go_parity(self):
+        """`<metric>_critical` 的 base 不在 defaults → 警告（Python↔Go 對稱）。
+
+        Go 的 `ValidateTenantKeys` 過去對 `_critical` 是無條件 `continue`，
+        於是最危險的那一層（懸空 critical 產不出任何 row，不像 base key 還會
+        回落平台預設）反而是唯一沒有作者可見訊號的。Python 這側一直都會警告；
+        本測試把這半釘住，避免將來只有一邊被改回去。
+        """
+        warnings = validate_tenant_keys(
+            "db-a", {"oracle_wait_time_rate_critical"}, {"mysql_connections"})
+        assert any("oracle_wait_time_rate_critical" in w for w in warnings)
+
+    def test_critical_with_base_default_is_silent(self):
+        """base 在 defaults 時不得警告——否則「讓它變紅」會被誤當成修好。"""
+        warnings = validate_tenant_keys(
+            "db-a", {"mysql_connections_critical"}, {"mysql_connections"})
+        assert warnings == []
+
     def test_defaults_keys_excluded(self):
         """defaults 中定義的 key 不在 tenant 驗證範圍。"""
         keys = {"custom_metric"}
