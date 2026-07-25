@@ -6,10 +6,34 @@
 #   - mysqld_exporter (https://github.com/prometheus/mysqld_exporter)
 #   - 或 Percona PMM exporter
 #
-# 對應的 threshold-exporter defaults:
-#   mysql_connections: 80
-#   mysql_cpu: 30      # running-thread SATURATION (NOT host CPU%); warning≈30/critical≈50 (PMM/Nichter). key kept mysql_cpu (config-contract stability, #944 closed)
-#   mysql_replication_lag: 30   # async replication lag warning (seconds behind primary, sql_delay-adjusted); critical tier opt-in via mysql_replication_lag_critical (suggest 120). Enabled by default (epic #1200 WS5-P0-a, Q3=C owner decision)
+# >>> GENERATED:threshold-registry:pack-mariadb — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
+#   mysql_connections: 80   [chart-default]   # count — Max threads_connected warning
+#   mysql_cpu: 30   [chart-default]
+#       threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30
+#       = PMM/Nichter 'high' (#944); key kept as mysql_cpu (config-contract stability; metric/alert
+#       renamed, #944 closed)
+#   mysql_replication_lag: 30   [chart-default]
+#       seconds — Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 =
+#       APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's
+#       lag-template family default is 600s warning). Enabled by default (#1200 WS5-P0-a Q3=C)
+#
+# optional_overrides（documented-but-dormant——登錄有案、平台預設不出貨）：
+# ⛔ 啟用前提（別跳過）：threshold-exporter 只對「存在於 defaults 的 key」
+# 發射 user_threshold——resolveBaseRows 迭代的是 c.Defaults，resolveCriticalRows
+# 也要求 base key 在 defaults 才處理 _critical 覆寫（components/
+# threshold-exporter/app/pkg/config/resolve.go）。下列 key 必須先進
+# _defaults.yaml / Helm values 的 defaults，租戶 conf.d 才有東西可覆寫——
+# 只在租戶檔填一個不在 defaults 的 key 永遠不會生效：那不是 dormant，
+# 是永久無法啟用。
+#   mysql_connections_critical: 120   # count — Critical tier (Scenario D)
+#   mysql_cpu_critical: 50
+#       threads — Critical tier (running-threads saturation); 120→50 = PMM critical-load / Nichter
+#       'overloaded' (#944)
+#   mysql_replication_lag_critical: 120
+#       seconds — Critical tier replication lag; 120 = 4x the APA/mixin 30s trigger, 5x below PMM
+#       family 600s — sustained minutes-level lag is a failover data-loss window (#1200 WS5-P0-a)
+# <<< GENERATED:threshold-registry:pack-mariadb
 #
 # Tenant config 範例 (conf.d/db-a.yaml):
 #   tenants:

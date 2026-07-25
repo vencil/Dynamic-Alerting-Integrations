@@ -38,8 +38,11 @@ SYNTH_PACKS = {
         "optional_overrides": {
             "alpha_conn_critical": {"value": 120, "unit": "count",
                                     "desc": "conn critical"},
+            # no base key in this pack -> no critical_of, no inheritance, so
+            # it must be classified explicitly (schema requires metric_class)
             "alpha_orphan_critical": {"value": 9, "unit": "count",
-                                      "desc": "no base key in this pack"},
+                                      "desc": "no base key in this pack",
+                                      "metric_class": "state"},
         },
     },
     "beta": {
@@ -48,7 +51,8 @@ SYNTH_PACKS = {
         "default_on": False,
         "rule_pack_file": "rule-packs/rule-pack-beta.yaml",
         "defaults": {
-            "beta_lag": {"value": 0.5, "unit": "seconds", "desc": "lag warning"},
+            "beta_lag": {"value": 0.5, "unit": "seconds", "desc": "lag warning",
+                         "metric_class": "replication"},
         },
     },
 }
@@ -79,6 +83,55 @@ def test_critical_of_derived_only_when_base_exists_in_pack():
     assert doc["keys"]["alpha_conn_critical"]["critical_of"] == "alpha_conn"
     # _critical WITHOUT a same-pack base key gets NO critical_of (never guess)
     assert "critical_of" not in doc["keys"]["alpha_orphan_critical"]
+
+
+# ── metric_class: inheritance / backfill / strict completeness ────────────
+
+def test_critical_inherits_base_metric_class():
+    doc = lib.build_registry_doc(SYNTH_PACKS)
+    assert doc["keys"]["alpha_conn_critical"]["metric_class"] == "saturation"
+
+
+def test_backfill_classifies_unclassified_key():
+    packs = copy.deepcopy(SYNTH_PACKS)
+    del packs["beta"]["defaults"]["beta_lag"]["metric_class"]
+    doc = lib.build_registry_doc(
+        packs, metric_class_backfill={"beta_lag": "latency"})
+    assert doc["keys"]["beta_lag"]["metric_class"] == "latency"
+
+
+def test_backfill_shadowing_scaffold_class_fails_loud():
+    with pytest.raises(ValueError, match="shadows scaffold-authored"):
+        lib.build_registry_doc(
+            SYNTH_PACKS, metric_class_backfill={"beta_lag": "latency"})
+
+
+def test_backfill_unknown_key_fails_loud():
+    with pytest.raises(ValueError, match="not found in RULE_PACKS"):
+        lib.build_registry_doc(
+            SYNTH_PACKS, metric_class_backfill={"ghost": "latency"})
+
+
+def test_strict_unclassified_key_fails_loud():
+    packs = copy.deepcopy(SYNTH_PACKS)
+    del packs["beta"]["defaults"]["beta_lag"]["metric_class"]
+    with pytest.raises(ValueError, match="unclassified threshold keys"):
+        lib.build_registry_doc(packs, strict_metric_class=True)
+
+
+def test_real_extraction_every_key_classified_and_enum_bounded():
+    """65/65 keys carry a metric_class from the schema taxonomy; the curated
+    saturation set stays exactly the 22 scaffold-authored bases (+ inherited
+    _critical) — the backfill adds NO new saturation (behavior-preserving)."""
+    doc = lib.build_registry_doc()
+    classes = {k: e["metric_class"] for k, e in doc["keys"].items()}
+    assert len(classes) == len(doc["keys"])  # no key unclassified
+    assert "saturation" not in set(lib.METRIC_CLASS_BACKFILL.values())
+    saturation_bases = {
+        k for k, e in doc["keys"].items()
+        if e["metric_class"] == "saturation" and "critical_of" not in e
+    }
+    assert len(saturation_bases) == 22
 
 
 def test_same_key_in_both_tiers_of_one_pack_fails_loud():
@@ -190,3 +243,159 @@ def test_query_helpers():
     assert set(lib.keys_by_pack(doc)) == {"alpha", "beta"}
     assert set(lib.keys_in_tier(doc, "defaults")) == {"alpha_conn", "beta_lag"}
     assert "alpha_conn_critical" in lib.keys_in_tier(doc, "optional_overrides")
+
+
+# ── chart_default (PR-2 rewire) ───────────────────────────────────────────
+
+def test_synthetic_extraction_stays_pure():
+    """Injected packs get NO enrichment unless the caller passes a table."""
+    doc = lib.build_registry_doc(SYNTH_PACKS)
+    assert all("chart_default" not in e for e in doc["keys"].values())
+
+
+def test_chart_default_injected_table():
+    doc = lib.build_registry_doc(
+        SYNTH_PACKS, chart_default_keys=frozenset({"alpha_conn"}))
+    assert doc["keys"]["alpha_conn"]["chart_default"] is True
+    assert "chart_default" not in doc["keys"]["beta_lag"]
+
+
+def test_chart_default_non_defaults_tier_fails_loud():
+    with pytest.raises(ValueError, match="chart-shippable"):
+        lib.build_registry_doc(
+            SYNTH_PACKS, chart_default_keys=frozenset({"alpha_conn_critical"}))
+
+
+def test_chart_default_unknown_key_fails_loud():
+    with pytest.raises(ValueError, match="not found in RULE_PACKS"):
+        lib.build_registry_doc(
+            SYNTH_PACKS, chart_default_keys=frozenset({"ghost"}))
+
+
+def test_real_extraction_chart_default_set_matches_table():
+    """The real doc carries chart_default on exactly CHART_DEFAULT_KEYS —
+    the behavior-preserving 6-key set the chart shipped before the rewire."""
+    doc = lib.build_registry_doc()
+    tagged = {k for k, e in doc["keys"].items() if e.get("chart_default")}
+    assert tagged == set(lib.CHART_DEFAULT_KEYS)
+    assert len(tagged) == 6
+
+
+# ── generated surfaces: render / splice / freshness ───────────────────────
+
+def _synth_doc_with_chart():
+    return lib.build_registry_doc(
+        SYNTH_PACKS, chart_default_keys=frozenset({"alpha_conn"}))
+
+
+def test_render_chart_defaults_only_chart_keys():
+    doc = _synth_doc_with_chart()
+    body = lib.render_chart_defaults_lines(doc, 4)
+    text = "\n".join(body)
+    assert "    alpha_conn: 80" in text
+    # non-chart keys never render into the chart surfaces
+    assert "beta_lag" not in text
+    # the registry's critical sibling renders as an opt-in hint
+    assert "alpha_conn_critical" in text and "120" in text
+
+
+def test_render_pack_header_defaults_and_optional_sections():
+    doc = _synth_doc_with_chart()
+    text = "\n".join(lib.render_pack_header_lines(doc, "alpha"))
+    assert "#   alpha_conn: 80" in text
+    assert "[chart-default]" in text
+    # optional tier renders under the ⛔ activation-precondition warning
+    assert "optional_overrides" in text and "⛔ 啟用前提" in text
+    assert "alpha_orphan_critical: 9" in text
+    # a pack with no optional tier renders no warning
+    beta = "\n".join(lib.render_pack_header_lines(doc, "beta"))
+    assert "⛔" not in beta
+
+
+def test_splice_check_roundtrip_and_staleness():
+    doc = _synth_doc_with_chart()
+    spec = {
+        "id": "unit-test",
+        "path": "unit-test.yaml",
+        "indent": "  ",
+        "body": lib.render_chart_defaults_lines(doc, 2),
+    }
+    spec["block"] = lib.render_block(spec["id"], spec["body"], spec["indent"])
+    text = "\n".join([
+        "defaults:",
+        lib.begin_marker("unit-test", "  "),
+        "  stale_content: 1",
+        lib.end_marker("unit-test", "  "),
+        "rest: true",
+    ])
+    assert lib.check_surface(text, spec) is not None  # stale
+    fresh = lib.splice_surface(text, spec)
+    assert lib.check_surface(fresh, spec) is None
+    # idempotent
+    assert lib.splice_surface(fresh, spec) == fresh
+    # hand-written lines outside the block survive
+    assert fresh.startswith("defaults:") and fresh.endswith("rest: true")
+
+
+def test_missing_markers_is_reported_not_silent():
+    doc = _synth_doc_with_chart()
+    spec = lib.surface_specs(doc)[0]
+    assert "markers" in (lib.check_surface("no markers here", spec) or "")
+    with pytest.raises(ValueError, match="markers"):
+        lib.splice_surface("no markers here", spec)
+
+
+def test_surface_specs_cover_helm_dev_and_threshold_packs():
+    doc = lib.build_registry_doc()
+    ids = [s["id"] for s in lib.surface_specs(doc)]
+    assert ids[0] == "helm-defaults" and ids[1] == "dev-defaults"
+    assert "pack-mariadb" in ids and "pack-kubernetes" in ids
+    assert len(ids) == 2 + 13  # 13 threshold packs, non-threshold packs none
+
+
+# ── header-prose key membership (F6) ──────────────────────────────────────
+
+HEADER = """# ============================================================
+# Rule Pack: demo
+#
+# 手寫 prose：
+#   alpha_conn: 80
+#   alpha_conn_critical: "120"
+#   totally_bogus_key: 1
+#   "alpha_dim_metric{label=\\"x\\"}": "5"
+# recording 名 tenant:alert_threshold:alpha_conn 不算 key claim
+# >>> GENERATED:threshold-registry:pack-demo — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+#   generated_only_key: 9
+# <<< GENERATED:threshold-registry:pack-demo
+# ============================================================
+groups:
+  - name: below-header
+    rules: []
+#   after_groups_token: 1
+"""
+
+
+def test_prose_key_tokens_extraction_rules():
+    tokens = {t for _, t in lib.prose_key_tokens(HEADER)}
+    assert "alpha_conn" in tokens
+    assert "alpha_conn_critical" in tokens
+    assert "totally_bogus_key" in tokens
+    # dimensional tokens are exempt
+    assert "alpha_dim_metric" not in tokens
+    # generated block is not prose
+    assert "generated_only_key" not in tokens
+    # scan stops at the first non-comment line
+    assert "after_groups_token" not in tokens
+    # recording-rule segments are not key claims
+    assert "alert_threshold" not in tokens
+
+
+def test_membership_universe_composition():
+    doc = _valid_doc()
+    uni = lib.membership_universe(doc, extra_allowed={"pending_key"})
+    assert "alpha_conn" in uni
+    assert "alpha_conn_critical" in uni          # explicit registry entry
+    assert "beta_lag_critical" in uni            # derived _critical opt-in
+    assert "pending_key" in uni and "pending_key_critical" in uni
+    assert "state_filters" in uni                # structural prose token
+    assert "totally_bogus_key" not in uni

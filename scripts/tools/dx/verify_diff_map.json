@@ -408,6 +408,9 @@
    "tests/ops/test_observed_map_lib.py",
    "tests/ops/test_threshold_govern.py"
   ],
+  "scripts/tools/ops/_registry_lib.py": [
+   "tests/lint/test_check_threshold_registry.py"
+  ],
   "scripts/tools/ops/alert_correlate.py": [
    "tests/lint/test_snapshot_v2.py",
    "tests/ops/test_alert_correlate.py"
@@ -650,7 +653,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "a79dd0d0a690b2fc47f11d52a7d649bb1396fd219dfe8a74ab404fa17fee006d",
+ "source_digest": "baeff09e9a5ef7d57fae69cc9a504416aa3e8747fae01ef1435f92ca2e5a5d81",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",

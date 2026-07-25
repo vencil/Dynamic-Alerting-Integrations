@@ -50,7 +50,7 @@
         "mysql_cpu": {
           "value": 30,
           "unit": "threads",
-          "desc": "Running-threads 1m-avg saturation warning; 80→30 = PMM/Nichter 'high' (#944). NOT host CPU% — key kept as mysql_cpu (config-contract stability; metric/alert renamed, #944 closed)",
+          "desc": "threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30 = PMM/Nichter 'high' (#944); key kept as mysql_cpu (config-contract stability; metric/alert renamed, #944 closed)",
           "metricClass": "saturation"
         },
         "mysql_replication_lag": {
@@ -687,7 +687,7 @@
       "routing_channel": "",
       "operational_mode": "normal",
       "metric_count": 2,
-      "last_config_commit": "b408b5a",
+      "last_config_commit": "",
       "tags": [],
       "groups": []
     },
@@ -707,7 +707,7 @@
       "routing_channel": "webhook:https://webhook.db-b.example.com/alerts",
       "operational_mode": "silent",
       "metric_count": 3,
-      "last_config_commit": "b408b5a",
+      "last_config_commit": "",
       "tags": [],
       "groups": []
     }
