@@ -214,7 +214,7 @@ RULE_PACKS = {
         "rule_pack_file": "rule-packs/rule-pack-mariadb.yaml",
         "defaults": {
             "mysql_connections": {"value": 80, "unit": "count", "desc": "Max threads_connected warning", "metric_class": "saturation"},
-            "mysql_cpu": {"value": 30, "unit": "threads", "desc": "Running-threads 1m-avg saturation warning; 80→30 = PMM/Nichter 'high' (#944). NOT host CPU% — key kept as mysql_cpu (config-contract stability; metric/alert renamed, #944 closed)", "metric_class": "saturation"},
+            "mysql_cpu": {"value": 30, "unit": "threads", "desc": "threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30 = PMM/Nichter 'high' (#944); key kept as mysql_cpu (config-contract stability; metric/alert renamed, #944 closed)", "metric_class": "saturation"},
             "mysql_replication_lag": {"value": 30, "unit": "seconds", "desc": "Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 = APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's lag-template family default is 600s warning). Enabled by default (#1200 WS5-P0-a Q3=C)"},
         },
         "optional_overrides": {

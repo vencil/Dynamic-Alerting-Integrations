@@ -5,13 +5,27 @@
 # 需要的 exporter:
 #   - ibm_db2_exporter (community) or custom Prometheus exporter
 #
-# 對應的 threshold-exporter defaults (加入 _defaults.yaml):
-#   db2_connections_active: 200
-#   db2_bufferpool_hit_ratio: 0.95   # 尺度 0–1（0.95＝95%），不是 0–100
-#   db2_log_usage_percent: 70
-#   db2_deadlock_rate: 5             # 單位＝死鎖/秒（rate[5m]）；5/s＝300/min
-#   db2_tablespace_used_percent: 85
-#   db2_lock_wait_time: 10   ← 起始建議值，須依租戶校準（推導見下）
+# >>> GENERATED:threshold-registry:pack-db2 — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
+#   db2_connections_active: 200   # count — Active connections warning
+#   db2_bufferpool_hit_ratio: 0.95   # ratio — Bufferpool hit ratio warning
+#
+# optional_overrides（documented-but-dormant——登錄有案、平台預設不出貨）：
+# ⛔ 啟用前提（別跳過）：threshold-exporter 只對「存在於 defaults 的 key」
+# 發射 user_threshold——resolveBaseRows 迭代的是 c.Defaults，resolveCriticalRows
+# 也要求 base key 在 defaults 才處理 _critical 覆寫（components/
+# threshold-exporter/app/pkg/config/resolve.go）。下列 key 必須先進
+# _defaults.yaml / Helm values 的 defaults，租戶 conf.d 才有東西可覆寫——
+# 只在租戶檔填一個不在 defaults 的 key 永遠不會生效：那不是 dormant，
+# 是永久無法啟用。
+#   db2_log_usage_percent: 70   # % — Transaction log usage warning
+#   db2_deadlock_rate: 5   # count/s — Deadlock rate (5m)
+#   db2_tablespace_used_percent: 85   # % — Tablespace usage warning
+# <<< GENERATED:threshold-registry:pack-db2
+#
+# ⚠️ db2_lock_wait_time（起始建議值 10）目前是 18-key 修復線的 D 類 pending key
+# （#1196 / TRK-337——alert 需求它、平台 defaults 尚未供給），故不在上方生成段；
+# 校準推導見下，identity 實修落地後會自動進入生成段。
 #
 # ⚠️ 上列都是「Day 0 起始範例」不是通用安全值，每個 key 都須依該租戶實際 baseline
 # 校準（校準工作流見下方 db2_lock_wait_time 段，**適用上列每一個 key、不只
@@ -34,13 +48,9 @@
 #      工作負載偏高——實測 ~90/min（1.5/s）的真實 deadlock storm 不會觸發，
 #      要抓住較小的 storm 須依 baseline 往下調。
 #
-# ⛔ 啟用前提（別跳過）：threshold-exporter 只對「**存在於 defaults 的 key**」
-# 發射 user_threshold —— resolveBaseRows 迭代的是 c.Defaults
-# （components/threshold-exporter/app/pkg/config/resolve.go:233），
-# resolveCriticalRows 也要求 base key 在 defaults 才處理 _critical 覆寫（:320）。
-# 換言之：**只在 conf.d 幫租戶填一個不在 defaults 的 key，永遠不會生效**
-# ——那不是 dormant，是永久無法啟用。上面每個 key 都必須先進
-# _defaults.yaml / Helm values，租戶才有東西可覆寫。
+# ⛔ 啟用前提已隨 optional_overrides 段生成（見上方生成段警語；細節
+# resolveBaseRows 迭代 c.Defaults＝resolve.go:233、resolveCriticalRows 要求
+# base 在 defaults＝:320）。
 #
 # db2_lock_wait_time 起始值 10（秒/秒，跨該租戶所有 instance 加總）的推導：
 # tests/rulepacks/reference-validation/ 兩個獨立盲寫參考庫對此指標給出

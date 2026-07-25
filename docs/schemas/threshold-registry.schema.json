@@ -44,7 +44,7 @@
         "^[a-z][a-z0-9_]*$": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["pack", "tier", "value", "unit", "desc"],
+          "required": ["pack", "tier", "value", "unit", "desc", "metric_class"],
           "properties": {
             "pack": {
               "type": "string",
@@ -59,8 +59,13 @@
             "unit": { "type": "string", "minLength": 1 },
             "desc": { "type": "string", "minLength": 1 },
             "metric_class": {
-              "enum": ["saturation"],
-              "$comment": "Only 'saturation' exists today (drives the educational _critical annotation + saturation_default_keys()). New classes are a contract change: extend this enum deliberately."
+              "enum": ["saturation", "capacity", "throughput", "latency", "replication", "state", "efficiency", "errors"],
+              "description": "Semantic class of the threshold key (REQUIRED on every key — #1200 WS1a PR-2). saturation = bounded-resource usage/backlog with a paired symptom metric (CURATED, product-facing: drives scaffold's educational _critical annotation + portal metricClass hints — membership changes are deliberate product decisions, not mechanical edits). capacity = fill level of a bounded space/allocation (disk, tablespace, log, parts, memory budget) without the paired-symptom curation. throughput = work-rate volume (qps, ops/s, req/s, msg/s). latency = time-to-complete or stall accumulation (GC pause, wait-time rate). replication = replica sync health (lag, under-replication, replication queue). state = discrete expected-value/topology invariant (cluster color, broker count, active controllers, consumers present). efficiency = cache/buffer effectiveness & waste (hit/miss ratio, evictions). errors = undesirable-event rate (deadlocks).",
+              "$comment": "_critical derivatives inherit the base key's class (build_registry_doc, never authored per-key). Adding a new class is a contract change: extend this enum deliberately and define it in the description."
+            },
+            "chart_default": {
+              "const": true,
+              "$comment": "The Helm chart ships this key enabled (thresholdConfig.defaults + the dev conf.d template are GENERATED from this set — #1200 WS1a PR-2). Sparse: present iff true, like metric_class. Only meaningful on tier:defaults (build_registry_doc fails loudly otherwise). Widening the set (e.g. promoting pg_*) is a deliberate D4-family product decision, not a mechanical edit."
             },
             "critical_of": {
               "type": "string",

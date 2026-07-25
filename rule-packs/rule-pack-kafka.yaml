@@ -5,12 +5,26 @@
 # 需要的 exporter:
 #   - danielqsj/kafka-exporter (https://github.com/danielqsj/kafka-exporter)
 #
-# 對應的 threshold-exporter defaults:
-#   kafka_consumer_lag: 1000       (lag threshold)
-#   kafka_under_replicated_partitions: 0  (expected 0)
-#   kafka_broker_count: 3          (minimum brokers)
-#   kafka_active_controllers: 1    (expected 1)
-#   kafka_request_rate: 10000      (msg/s)
+# >>> GENERATED:threshold-registry:pack-kafka — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
+#   kafka_consumer_lag: 1000   # messages — Consumer lag warning
+#   kafka_under_replicated_partitions: 0   # count — Under-replicated partitions (should be 0)
+#   kafka_broker_count: 3   # count — Minimum broker count warning
+#   kafka_active_controllers: 1   # count — Minimum active controllers (should be 1)
+#   kafka_request_rate: 10000   # msg/s — Message rate warning (5m)
+#
+# optional_overrides（documented-but-dormant——登錄有案、平台預設不出貨）：
+# ⛔ 啟用前提（別跳過）：threshold-exporter 只對「存在於 defaults 的 key」
+# 發射 user_threshold——resolveBaseRows 迭代的是 c.Defaults，resolveCriticalRows
+# 也要求 base key 在 defaults 才處理 _critical 覆寫（components/
+# threshold-exporter/app/pkg/config/resolve.go）。下列 key 必須先進
+# _defaults.yaml / Helm values 的 defaults，租戶 conf.d 才有東西可覆寫——
+# 只在租戶檔填一個不在 defaults 的 key 永遠不會生效：那不是 dormant，
+# 是永久無法啟用。
+#   kafka_consumer_lag_critical: 10000   # messages — Consumer lag critical
+#   kafka_under_replicated_partitions_critical: 1   # count — Under-replicated critical
+#   kafka_request_rate_critical: 50000   # msg/s — Message rate critical
+# <<< GENERATED:threshold-registry:pack-kafka
 #
 # Tenant config 範例 (conf.d/messaging-a.yaml):
 #   tenants:
