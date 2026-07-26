@@ -112,7 +112,12 @@ function convertRules(input) {
     lines.forEach(line => {
       const trimmed = line.trim();
       if (trimmed.startsWith('expr:')) expr = trimmed.replace('expr:', '').trim();
-      if (trimmed.startsWith('severity:')) severity = trimmed.replace('severity:', '').trim();
+      // severity labels are free-form ('CRITICAL', '"critical"') — normalize so
+      // the critical-tier routing can't be bypassed by case or quoting
+      if (trimmed.startsWith('severity:')) {
+        severity = trimmed.replace('severity:', '').trim()
+          .replace(/^['"]|['"]$/g, '').toLowerCase();
+      }
       if (trimmed.startsWith('for:')) forDur = trimmed.replace('for:', '').trim();
     });
 

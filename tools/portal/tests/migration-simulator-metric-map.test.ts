@@ -33,7 +33,10 @@ import {
 } from '../src/interactive/tools/migration-simulator.jsx';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(__dirname, '../../..');
+// Trailing slash matters: tests/ops/test_portal_path_filter_coverage.py only
+// recognizes the '../../../' repo-root idiom — with '../../..' this file's
+// out-of-tree reads would be invisible to the ci.yml portal-filter guard.
+const repoRoot = resolve(__dirname, '../../../');
 
 /** Union of shipped platform-default threshold keys across all rule packs. */
 function platformDefaultKeys(): Set<string> {
@@ -140,6 +143,21 @@ describe('convertRules — emitted keys stay inside the contract', () => {
       rule('CritRedis', 'redis_connected_clients > 5000', 'critical'));
     expect(out.results).toHaveLength(0);
     expect(out.thresholdCount).toBe(0);
+    expect(out.unconverted).toHaveLength(1);
+    expect(out.unconverted[0].reason).toContain('no critical tier');
+  });
+
+  it('uppercase CRITICAL still routes through the critical path (no case bypass)', () => {
+    const out = convertRules(
+      rule('CritConnUpper', 'mysql_global_status_threads_connected > 200', 'CRITICAL'));
+    expect(out.results).toHaveLength(1);
+    expect(out.results[0].mappedKey).toBe('mysql_connections_critical');
+  });
+
+  it('quoted "critical" on a non-capable key still hits the guard (no quoting bypass)', () => {
+    const out = convertRules(
+      rule('CritRedisQuoted', 'redis_memory_used_bytes > 4000000000', '"critical"'));
+    expect(out.results).toHaveLength(0);
     expect(out.unconverted).toHaveLength(1);
     expect(out.unconverted[0].reason).toContain('no critical tier');
   });
