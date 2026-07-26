@@ -97,7 +97,7 @@ func writeMixedBenchFixtureContent(root string, flatTenants, hierTenants int) er
 	// numbers are comparable.
 	if err := writeYAMLFile(filepath.Join(root, "_defaults.yaml"), `defaults:
   mysql_connections: 80
-  mysql_cpu: 80
+  mysql_threads_running: 80
   container_cpu: 80
   container_memory: 85
   oracle_sessions_active: 200
@@ -114,7 +114,7 @@ func writeMixedBenchFixtureContent(root string, flatTenants, hierTenants int) er
 		content := fmt.Sprintf(`tenants:
   %s:
     mysql_connections: "%d"
-    mysql_cpu: "%d"
+    mysql_threads_running: "%d"
     container_cpu: "%d"
 `,
 			tenantName,
@@ -167,7 +167,7 @@ func writeMixedBenchFixtureContent(root string, flatTenants, hierTenants int) er
 		content := fmt.Sprintf(`tenants:
   %s:
     mysql_connections: "%d"
-    mysql_cpu: "%d"
+    mysql_threads_running: "%d"
     container_cpu: "%d"
     container_memory: "%d"
     oracle_sessions_active: "%d"

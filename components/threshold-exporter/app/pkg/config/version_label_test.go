@@ -29,17 +29,18 @@ func cfgWithVersionKey(key string) *ThresholdConfig {
 }
 
 func warningsJoined(c *ThresholdConfig) string {
-	return strings.Join(c.ValidateTenantKeys(), "\n")
+	// #1231 c2: version-label violations ride the blocking Errors channel.
+	return strings.Join(c.ValidateTenantKeys().Errors, "\n")
 }
 
 func TestValidateVersionLabel_ValidPilotVersion_NoWarning(t *testing.T) {
 	t.Parallel()
-	w := cfgWithVersionKey(`container_cpu{version="v2"}`).ValidateTenantKeys()
+	w := cfgWithVersionKey(`container_cpu{version="v2"}`).ValidateTenantKeys().Errors
 	if len(w) != 0 {
 		t.Fatalf("valid pilot version must produce no warnings, got: %v", w)
 	}
 	// memory pilot metric too
-	if w := cfgWithVersionKey(`container_memory{version="v2-rc1"}`).ValidateTenantKeys(); len(w) != 0 {
+	if w := cfgWithVersionKey(`container_memory{version="v2-rc1"}`).ValidateTenantKeys().Errors; len(w) != 0 {
 		t.Fatalf("valid pilot version (memory) must produce no warnings, got: %v", w)
 	}
 }
@@ -96,7 +97,7 @@ func TestValidateVersionLabel_NonVersionDimensional_Unaffected(t *testing.T) {
 			"t": {`container_cpu{env="prod"}`: {Default: "60"}},
 		},
 	}
-	if w := cfg.ValidateTenantKeys(); len(w) != 0 {
+	if w := cfg.ValidateTenantKeys().Errors; len(w) != 0 { // #1231 c2 accessor
 		t.Fatalf("non-version dimensional label must not warn, got: %v", w)
 	}
 }

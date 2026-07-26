@@ -54,7 +54,10 @@ var ErrValidation = errors.New("validation failed")
 // no commits beyond base, so pushing it and opening a PR/MR would yield a
 // change-free PR (or a forge 422). The handler maps this to a clean "no changes"
 // success — the PR-mode analogue of WriteMerged's direct-path no-op short-circuit
-// (#1097 / #1102 review).
+// (#1097 / #1102 review). Unusually for a Go error return, the accompanying
+// *PRWriteResult is NON-nil in this case: it carries the per-op deprecation
+// notices (#1231 F5) so the no-changes 200 keeps the migration signal, matching
+// WriteMerged's "no-op still returns notices" invariant.
 var ErrNoChanges = errors.New("no changes: batch produced no commits")
 
 // ErrReservedTenantID is a defense-in-depth backstop for the tenant write
@@ -163,33 +166,42 @@ func (w *Writer) SetOnWrite(fn OnWriteFunc) {
 //  5. git add + git commit --author="<authorEmail>"
 //  6. Check HEAD again (conflict detection)
 //  7. onWrite callback (e.g. SSE broadcast)
-func (w *Writer) Write(ctx context.Context, tenantID, authorEmail, yamlContent string) error {
+//
+// notices carries the advisory deprecation channel (#1231 1b): non-blocking
+// deprecated-key alias advisories from validate(), meaningful ONLY when err is
+// nil — handlers surface them in the 200 response so the author sees the
+// migration signal on the very write that succeeded with an old spelling.
+func (w *Writer) Write(ctx context.Context, tenantID, authorEmail, yamlContent string) (notices []string, err error) {
 	// Step 0: reserved-id backstop (defense-in-depth; see guardTenantID).
 	if err := guardTenantID(tenantID); err != nil {
-		return err
+		return nil, err
 	}
 	// Step 1: validate schema before touching disk (and before taking an
 	// admission slot — validation is cheap, CPU-only, and must not consume the
 	// single-writer token).
-	if errs := validate(w.configDir, tenantID, yamlContent); len(errs) > 0 {
-		return fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
+	errs, notices := validate(w.configDir, tenantID, yamlContent)
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
 	// Step 2: load-shedding admission (TRK-320) before w.mu.
 	if err := w.acquireWrite(ctx); err != nil {
-		return err
+		return nil, err
 	}
 	defer w.releaseWrite()
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	return w.commitFileChange(
+	if err := w.commitFileChange(
 		filepath.Join(w.configDir, tenantID+".yaml"),
 		tenantID,
 		authorEmail,
 		[]byte(yamlContent),
-	)
+	); err != nil {
+		return nil, err
+	}
+	return notices, nil
 }
 
 // MergeFunc computes a tenant file's full new content from its CURRENT on-disk
@@ -208,20 +220,22 @@ type MergeFunc func(existing []byte) (string, error)
 // A merge error means the on-disk file is unparseable/structurally wrong — the
 // caller must NOT fall back to an overwrite (that is exactly the silent
 // key-loss this path exists to prevent). The raw existing bytes are returned so
-// the caller can detect a byte-identical (no-op) merge.
-func (w *Writer) readMergeValidate(tenantID string, merge MergeFunc) (content string, existing []byte, err error) {
+// the caller can detect a byte-identical (no-op) merge. notices is validate()'s
+// advisory deprecation channel (#1231 1b), meaningful only when err is nil.
+func (w *Writer) readMergeValidate(tenantID string, merge MergeFunc) (content string, existing []byte, notices []string, err error) {
 	existing, rerr := os.ReadFile(filepath.Join(w.configDir, tenantID+".yaml"))
 	if rerr != nil && !os.IsNotExist(rerr) {
-		return "", nil, fmt.Errorf("read current tenant file for %s: %w", tenantID, rerr)
+		return "", nil, nil, fmt.Errorf("read current tenant file for %s: %w", tenantID, rerr)
 	}
 	content, merr := merge(existing)
 	if merr != nil {
-		return "", existing, fmt.Errorf("merge tenant config for %s: %w", tenantID, merr)
+		return "", existing, nil, fmt.Errorf("merge tenant config for %s: %w", tenantID, merr)
 	}
-	if errs := validate(w.configDir, tenantID, content); len(errs) > 0 {
-		return "", existing, fmt.Errorf("%w for %s: %s", ErrValidation, tenantID, strings.Join(errs, "; "))
+	errs, notices := validate(w.configDir, tenantID, content)
+	if len(errs) > 0 {
+		return "", existing, nil, fmt.Errorf("%w for %s: %s", ErrValidation, tenantID, strings.Join(errs, "; "))
 	}
-	return content, existing, nil
+	return content, existing, notices, nil
 }
 
 // WriteMerged persists a tenant config whose content is computed, UNDER the
@@ -235,23 +249,28 @@ func (w *Writer) readMergeValidate(tenantID string, merge MergeFunc) (content st
 // Unlike Write(), validation runs under the lock — the final content is not
 // known until the base is read. The merge + validate are CPU-only and
 // sub-millisecond, so the extra time holding the write token is negligible.
-func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, merge MergeFunc) error {
+//
+// notices is validate()'s advisory deprecation channel (#1231 1b), meaningful
+// only when err is nil — note it is populated even on the no-op short-circuit
+// below (the merged body still carries the deprecated spelling; the author
+// should hear about it whether or not this particular patch changed bytes).
+func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, merge MergeFunc) (notices []string, err error) {
 	// Reserved-id backstop (defense-in-depth; see guardTenantID).
 	if err := guardTenantID(tenantID); err != nil {
-		return err
+		return nil, err
 	}
 	// Load-shedding admission (TRK-320) before w.mu, same as Write.
 	if err := w.acquireWrite(ctx); err != nil {
-		return err
+		return nil, err
 	}
 	defer w.releaseWrite()
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	content, existing, err := w.readMergeValidate(tenantID, merge)
+	content, existing, notices, err := w.readMergeValidate(tenantID, merge)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// No-op short-circuit (mirrors MutateConfigFile's `if next == nil`): when the
 	// merge changed nothing — an idempotent patch, or a client retry after a
@@ -262,14 +281,17 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	// unchanged merge as success (#1097 self-review). `existing == nil` (a new
 	// tenant) never matches non-empty content, so it still commits the new file.
 	if existing != nil && content == string(existing) {
-		return nil
+		return notices, nil
 	}
-	return w.commitFileChange(
+	if err := w.commitFileChange(
 		filepath.Join(w.configDir, tenantID+".yaml"),
 		tenantID,
 		authorEmail,
 		[]byte(content),
-	)
+	); err != nil {
+		return nil, err
+	}
+	return notices, nil
 }
 
 // Diff returns the unified diff between the current file and proposed content.
@@ -539,21 +561,32 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 //
 // configDir == "" falls back to structural-only key validation (unit tests
 // that exercise YAML shape without a defaults fixture).
-func validate(configDir, tenantID, yamlContent string) []string {
+//
+// Returns two channels (#1231 1b, mirroring cfg.KeyValidation): errs is the
+// blocking set every write gate turns into ErrValidation; notices is the
+// advisory set (deprecated-key alias advisories) that must NEVER block a
+// write — callers thread it up to the handler responses so the config author
+// sees the migration signal on the write path itself, not only via GET /
+// POST /validate. Structural failures (bad YAML / root keys / missing tenant
+// section) return nil notices: key validation never ran.
+func validate(configDir, tenantID, yamlContent string) (errs, notices []string) {
 	var tcfg cfg.ThresholdConfig
 	if err := yaml.Unmarshal([]byte(yamlContent), &tcfg); err != nil {
-		return []string{"invalid YAML: " + err.Error()}
+		return []string{"invalid YAML: " + err.Error()}, nil
 	}
 	// Reject any non-`tenants` top-level key before anything else (#705).
 	if rootErrs := cfg.CheckTenantRootKeys([]byte(yamlContent)); len(rootErrs) > 0 {
-		return rootErrs
+		return rootErrs, nil
 	}
 	if _, ok := tcfg.Tenants[tenantID]; !ok {
-		return []string{fmt.Sprintf("YAML must contain tenants.%s section", tenantID)}
+		return []string{fmt.Sprintf("YAML must contain tenants.%s section", tenantID)}, nil
 	}
-	var keyErrs []string
+	// #1231 c2: the write gate consumes KeyValidation.Errors ONLY — Notices
+	// (deprecated-key alias advisories) must never block a write; they ride
+	// the second return value instead (1b author-facing wiring).
+	var kv cfg.KeyValidation
 	if configDir == "" {
-		keyErrs = tcfg.ValidateTenantKeys()
+		kv = tcfg.ValidateTenantKeys()
 	} else {
 		// Reuse the body we already decoded into tcfg above instead of handing
 		// raw bytes to MergeTenantWithRootDefaults, which would Unmarshal the
@@ -561,15 +594,17 @@ func validate(configDir, tenantID, yamlContent string) []string {
 		// present by the check above, so the byte variant's flat-KV fallback —
 		// the only behavior the parsed sibling omits — is unreachable here.
 		merged := cfg.MergeParsedTenantWithRootDefaults(configDir, tcfg)
-		keyErrs = merged.ValidateTenantKeys()
+		kv = merged.ValidateTenantKeys()
 	}
+	keyErrs := kv.Errors
+	notices = kv.Notices
 	// S5 shift-left preflight (ADR-024 §S5): validate the tenant's OWN `_custom_alerts`
 	// recipes in-process (Go-native, no promtool/Python). Stateless per-tenant —
 	// cross-inheritance collisions + compiler template bugs stay the CI compiler's
 	// authority. Runs on the raw body (tcfg), not the merged config: the PUT body is
 	// a full overlay, so it carries the tenant's complete own recipe set.
 	caViol := cfg.ValidateTenantCustomAlerts(tenantID, tcfg.Tenants[tenantID], cfg.MaxCustomRecipesDefault)
-	errs := append(keyErrs, caViol...)
+	errs = append(keyErrs, caViol...)
 
 	// B2-wide eol-expansion guard (ADR-024 §8) at the SHARED write choke point, so
 	// PutTenant + batch full-config writes are covered, not just the /custom-alerts
@@ -586,16 +621,16 @@ func validate(configDir, tenantID, yamlContent string) []string {
 		case rerr == nil:
 			oldAlerts, err := customalerts.Extract(string(oldRaw), tenantID)
 			if err != nil {
-				return append(errs, "internal error: cannot read current custom alerts: "+err.Error())
+				return append(errs, "internal error: cannot read current custom alerts: "+err.Error()), notices
 			}
 			newAlerts, err := customalerts.Extract(yamlContent, tenantID)
 			if err != nil {
-				return append(errs, "internal error: cannot read requested custom alerts: "+err.Error())
+				return append(errs, "internal error: cannot read requested custom alerts: "+err.Error()), notices
 			}
 			errs = append(errs, customalerts.EolExpansionViolations(oldAlerts, newAlerts)...)
 		case !os.IsNotExist(rerr):
-			return append(errs, "internal error: cannot read current custom alerts: "+rerr.Error())
+			return append(errs, "internal error: cannot read current custom alerts: "+rerr.Error()), notices
 		}
 	}
-	return errs
+	return errs, notices
 }

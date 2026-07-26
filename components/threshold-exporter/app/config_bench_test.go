@@ -26,7 +26,7 @@ func silenceLogs(b *testing.B) {
 func buildScalarConfig(numTenants int) *ThresholdConfig {
 	defaults := map[string]float64{
 		"mysql_connections":          80,
-		"mysql_cpu":                  80,
+		"mysql_threads_running":      80,
 		"container_cpu":              80,
 		"container_memory":           85,
 		"oracle_sessions_active":     200,
@@ -39,7 +39,7 @@ func buildScalarConfig(numTenants int) *ThresholdConfig {
 		name := fmt.Sprintf("tenant-%04d", i)
 		tenants[name] = map[string]ScheduledValue{
 			"mysql_connections":          SV(fmt.Sprintf("%d", 50+i%100)),
-			"mysql_cpu":                  SV(fmt.Sprintf("%d", 60+i%40)),
+			"mysql_threads_running":      SV(fmt.Sprintf("%d", 60+i%40)),
 			"oracle_sessions_active":     SV(fmt.Sprintf("%d", 100+i%200)),
 			"oracle_tablespace_used_pct": SV(fmt.Sprintf("%d", 75+i%20)),
 			"db2_connections_active":     SV(fmt.Sprintf("%d", 100+i%150)),
@@ -53,7 +53,7 @@ func buildScalarConfig(numTenants int) *ThresholdConfig {
 func buildMixedConfig(numTenants int) *ThresholdConfig {
 	defaults := map[string]float64{
 		"mysql_connections":          80,
-		"mysql_cpu":                  80,
+		"mysql_threads_running":      80,
 		"container_cpu":              80,
 		"container_memory":           85,
 		"oracle_sessions_active":     200,
@@ -67,7 +67,7 @@ func buildMixedConfig(numTenants int) *ThresholdConfig {
 		t := map[string]ScheduledValue{
 			// Scalar
 			"mysql_connections":      SV(fmt.Sprintf("%d", 50+i%100)),
-			"mysql_cpu":              SV(fmt.Sprintf("%d", 60+i%40)),
+			"mysql_threads_running":  SV(fmt.Sprintf("%d", 60+i%40)),
 			"oracle_sessions_active": SV(fmt.Sprintf("%d", 100+i%200)),
 			"db2_connections_active": SV(fmt.Sprintf("%d", 100+i%150)),
 			// Regex dimensional
@@ -186,7 +186,7 @@ func buildDirConfig(b *testing.B, numTenants int) string {
 
 	defaults := `defaults:
   mysql_connections: 80
-  mysql_cpu: 80
+  mysql_threads_running: 80
   container_cpu: 80
   container_memory: 85
   oracle_sessions_active: 200
@@ -201,7 +201,7 @@ func buildDirConfig(b *testing.B, numTenants int) string {
 		content := fmt.Sprintf(`tenants:
   tenant-%04d:
     mysql_connections: "%d"
-    mysql_cpu: "%d"
+    mysql_threads_running: "%d"
     container_cpu:
       default: "%d"
       overrides:
@@ -215,7 +215,7 @@ func buildDirConfig(b *testing.B, numTenants int) string {
 `,
 			i,
 			50+i%100,  // mysql_connections
-			60+i%40,   // mysql_cpu
+			60+i%40,   // mysql_threads_running
 			70+i%30,   // container_cpu
 			80+i%15,   // container_memory
 			100+i%200, // oracle_sessions_active
@@ -271,7 +271,7 @@ func BenchmarkIncrementalLoad_100_OneFileChanged(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		// Modify one file each iteration (full 8-metric content)
-		content := fmt.Sprintf("tenants:\n  tenant-0050:\n    mysql_connections: \"%d\"\n    mysql_cpu: \"%d\"\n    container_cpu: \"%d\"\n    container_memory: \"%d\"\n",
+		content := fmt.Sprintf("tenants:\n  tenant-0050:\n    mysql_connections: \"%d\"\n    mysql_threads_running: \"%d\"\n    container_cpu: \"%d\"\n    container_memory: \"%d\"\n",
 			50+i%100, 60+i%40, 70+i%30, 80+i%15)
 		os.WriteFile(targetFile, []byte(content), 0600)
 		if err := mgr.IncrementalLoad(); err != nil {
@@ -387,7 +387,7 @@ func BenchmarkIncrementalLoad_1000_OneFileChanged(b *testing.B) {
 	targetFile := filepath.Join(dir, "tenant-0500.yaml")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		content := fmt.Sprintf("tenants:\n  tenant-0500:\n    mysql_connections: \"%d\"\n    mysql_cpu: \"%d\"\n    container_cpu: \"%d\"\n    container_memory: \"%d\"\n",
+		content := fmt.Sprintf("tenants:\n  tenant-0500:\n    mysql_connections: \"%d\"\n    mysql_threads_running: \"%d\"\n    container_cpu: \"%d\"\n    container_memory: \"%d\"\n",
 			50+i%100, 60+i%40, 70+i%30, 80+i%15)
 		os.WriteFile(targetFile, []byte(content), 0600)
 		if err := mgr.IncrementalLoad(); err != nil {

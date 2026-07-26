@@ -76,9 +76,9 @@ func TestExtractPatchKeys_Table(t *testing.T) {
 	}{
 		{
 			name:     "flat string values",
-			body:     "tenants:\n  fin-db:\n    _silent_mode: \"warning\"\n    mysql_cpu: \"70\"\n",
+			body:     "tenants:\n  fin-db:\n    _silent_mode: \"warning\"\n    mysql_threads_running: \"70\"\n",
 			tenantID: "fin-db",
-			want:     map[string]string{"_silent_mode": "warning", "mysql_cpu": "70"},
+			want:     map[string]string{"_silent_mode": "warning", "mysql_threads_running": "70"},
 		},
 		{
 			name:     "non-string scalars stringified",
@@ -87,8 +87,8 @@ func TestExtractPatchKeys_Table(t *testing.T) {
 			want:     map[string]string{"_timeout_ms": "500", "_enabled": "true"},
 		},
 		{
-			name: "nested routing map flattened to dot keys",
-			body: "tenants:\n  fin-db:\n    _routing:\n      receiver:\n        type: slack\n        url: \"https://example.com/hook\"\n",
+			name:     "nested routing map flattened to dot keys",
+			body:     "tenants:\n  fin-db:\n    _routing:\n      receiver:\n        type: slack\n        url: \"https://example.com/hook\"\n",
 			tenantID: "fin-db",
 			want: map[string]string{
 				"_routing.receiver.type": "slack",
@@ -115,7 +115,7 @@ func TestExtractPatchKeys_Table(t *testing.T) {
 		},
 		{
 			name:     "no tenants block → empty",
-			body:     "defaults:\n  mysql_cpu: 80\n",
+			body:     "defaults:\n  mysql_threads_running: 80\n",
 			tenantID: "fin-db",
 			want:     map[string]string{},
 		},

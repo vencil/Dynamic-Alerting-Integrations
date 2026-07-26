@@ -183,6 +183,8 @@ modules:
       _matchers_gate_label_present: "#1132 presence-gate predicate (does a side exclude the empty string for a label); fully covered by test_generate_routes_orchestration.py::TestEqualLabelGatedInvariant (matchall/exact/neg-empty/legacy-map cases)"
       find_ungated_equal_label_inhibits: "#1132 ungated-equal-label finder; covered by TestEqualLabelGatedInvariant (gated/ungated/partial/legacy-map/malformed) + the committed-configmap regression guard"
       assert_equal_labels_gated: "Raises-wrapper over find_ungated_equal_label_inhibits; covered by TestEqualLabelGatedInvariant + the strict-raise/warn enforce test"
+      _canonical_tenant_key: "#1231 alias canonicalizer, exact-match mirror of Go canonicalKeyFor; example-covered by test_generate_alertmanager_routes.py::TestDeprecatedKeyAliases (exact/_critical/dimensional/prefix-typo-reject) + pinned to the registry SSOT by test_check_threshold_registry.py::test_python_alias_mirror_pinned_to_registry"
+      _canonicalize_alias_keys: "#1231 alias pre-pass (canonical view + NOTICE lines); covered by TestDeprecatedKeyAliases (old/new defaults, both-spellings dedup, notice wording pins) via validate_tenant_keys"
 
   # ── Lint helpers (small but load-bearing) ─────────────────────────
 

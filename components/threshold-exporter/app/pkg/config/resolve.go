@@ -51,6 +51,14 @@ type ResolveStats struct {
 	// #741 S3a: per-tenant count of malformed _custom_alerts entries
 	// (dropped). Drives the da_custom_alert_parse_errors gauge.
 	PerTenantCustomAlertErrors map[string]int
+	// #1231: per-tenant count of deprecated (aliased) key spellings still
+	// present in the tenant's own config (e.g. mysql_cpu after the
+	// mysql_threads_running rename). Drives the da_config_deprecated_keys
+	// gauge — migration-progress observability only, deliberately NOT wired
+	// to any alert. Tenants with zero deprecated keys have no entry (the
+	// gauge simply doesn't emit for them, mirroring the ConstMetric
+	// per-scrape pattern of da_custom_alert_parse_errors).
+	PerTenantDeprecatedKeys map[string]int
 	// ADR-031: raw slo_burn_rate objectives (percentage) carried out of resolve
 	// time for the user_slo_objective{tenant, recipe_id} gauge. One entry per
 	// valid slo declaration; objective:"disable" contributes none (data-plane
@@ -116,9 +124,27 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 	perTenantCustomAlertErrors := make(map[string]int, len(c.Tenants))
 	// ADR-031: slo_burn_rate objectives for the user_slo_objective gauge.
 	var sloObjectives []ResolvedSloObjective
+	// #1231: per-tenant deprecated-spelling counts for the
+	// da_config_deprecated_keys gauge (only tenants with >=1 entry appear).
+	perTenantDeprecatedKeys := make(map[string]int)
+
+	// #1231 alias canonicalization happens HERE, at the resolve boundary,
+	// before any key→label derivation (parseMetricKey is untouched). Both
+	// maps get a canonical VIEW — the customer-managed _defaults.yaml may
+	// still carry the old spelling too — and the parsed config is never
+	// mutated, so raw views (GET /{id}) keep showing the file verbatim.
+	// canonicalizeDefaults/Overrides also dedup "both spellings present"
+	// (canonical wins), the explicit guard against emitting two rows with
+	// identical label sets, which would 500 the whole Prometheus Gather.
+	canonDefaults := canonicalizeDefaults(c.Defaults)
 
 	for tenant, overrides := range c.Tenants {
 		startIdx := len(result) // track where this tenant's metrics start
+
+		canonOverrides, deprecatedCount := canonicalizeOverrides(overrides)
+		if deprecatedCount > 0 {
+			perTenantDeprecatedKeys[tenant] = deprecatedCount
+		}
 
 		// Phase 2A: base thresholds (three-state + inline severity suffix),
 		// Phase 2A-crit: <metric>_critical variants, Phase 2B: dimensional
@@ -126,9 +152,9 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 		// extraction appended in the original order; intra-segment order is
 		// otherwise governed by Go map iteration (non-deterministic, as before)
 		// and the cardinality sort below.
-		result = append(result, c.resolveBaseRows(tenant, overrides, now)...)
-		result = append(result, c.resolveCriticalRows(tenant, overrides, now)...)
-		result = append(result, c.resolveDimensionalRows(tenant, overrides, now)...)
+		result = append(result, c.resolveBaseRows(tenant, canonDefaults, canonOverrides, now)...)
+		result = append(result, c.resolveCriticalRows(tenant, canonDefaults, canonOverrides, now)...)
+		result = append(result, c.resolveDimensionalRows(tenant, canonOverrides, now)...)
 
 		// #741 S3a: tenant-authored custom alerts → user_threshold{component="custom",
 		// recipe_id,name,mode}. Appended into this tenant's segment BEFORE the
@@ -204,6 +230,7 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 	return result, ResolveStats{
 		PerTenantOverLimit:         perTenantOverLimit,
 		PerTenantCustomAlertErrors: perTenantCustomAlertErrors,
+		PerTenantDeprecatedKeys:    perTenantDeprecatedKeys,
 		SloObjectives:              sloObjectives,
 	}
 }
@@ -223,14 +250,19 @@ func isThresholdExpired(sv ScheduledValue, now time.Time) bool {
 	return now.After(t)
 }
 
-// resolveBaseRows resolves a tenant's base thresholds from c.Defaults using the
-// three-state contract (custom value / omitted→default / disable) plus the
-// inline "value:severity" suffix. Extracted verbatim from the
-// ResolveAtWithStats per-tenant loop (Phase 2A) — see that method for the
-// full contract; behavior is unchanged.
-func (c *ThresholdConfig) resolveBaseRows(tenant string, overrides map[string]ScheduledValue, now time.Time) []ResolvedThreshold {
+// resolveBaseRows resolves a tenant's base thresholds from the given defaults
+// view using the three-state contract (custom value / omitted→default /
+// disable) plus the inline "value:severity" suffix. Extracted verbatim from
+// the ResolveAtWithStats per-tenant loop (Phase 2A) — see that method for the
+// full contract.
+//
+// #1231: both maps arrive pre-canonicalized (deprecated alias spellings folded
+// onto their canonical key), and every append goes through appendWithLegacyTwin
+// so alias targets dual-emit a legacy-identity row during the transition
+// window. disable still suppresses BOTH rows (no canonical row → no twin).
+func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time) []ResolvedThreshold {
 	var rows []ResolvedThreshold
-	for metricKey, defaultValue := range c.Defaults {
+	for metricKey, defaultValue := range defaults {
 		// Skip _state_ / _silent_ / _severity_dedup / _routing keys — handled
 		// by ResolveStateFilters() / ResolveSilentModes() / ResolveSeverityDedup()
 		// / ResolveRouting() respectively.
@@ -267,7 +299,7 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, overrides map[string]Sc
 
 			// State 1: custom value
 			if v, err := strconv.ParseFloat(valueStr, 64); err == nil {
-				rows = append(rows, ResolvedThreshold{
+				rows = appendWithLegacyTwin(rows, metricKey, ResolvedThreshold{
 					Tenant:    tenant,
 					Metric:    metric,
 					Value:     v,
@@ -282,7 +314,7 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, overrides map[string]Sc
 		}
 
 		// State 2: use default
-		rows = append(rows, ResolvedThreshold{
+		rows = appendWithLegacyTwin(rows, metricKey, ResolvedThreshold{
 			Tenant:    tenant,
 			Metric:    metric,
 			Value:     defaultValue,
@@ -296,8 +328,13 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, overrides map[string]Sc
 // resolveCriticalRows resolves a tenant's <metric>_critical override variants,
 // each producing an additional severity=critical threshold for an existing
 // default metric. Extracted verbatim from the ResolveAtWithStats per-tenant
-// loop (multi-tier severity scan); behavior is unchanged.
-func (c *ThresholdConfig) resolveCriticalRows(tenant string, overrides map[string]ScheduledValue, now time.Time) []ResolvedThreshold {
+// loop (multi-tier severity scan).
+//
+// #1231: both maps arrive pre-canonicalized, so an old-spelled
+// `mysql_cpu_critical` is already `mysql_threads_running_critical` here and
+// its base lookup hits the canonical defaults view; the emit goes through
+// appendWithLegacyTwin for the transition-window legacy critical row.
+func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time) []ResolvedThreshold {
 	var rows []ResolvedThreshold
 	for key, sv := range overrides {
 		if !strings.HasSuffix(key, "_critical") || strings.HasPrefix(key, "_state_") || strings.HasPrefix(key, "_silent_") {
@@ -317,14 +354,14 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, overrides map[strin
 		// Derive the base metric key: "mysql_connections_critical" → "mysql_connections"
 		baseKey := strings.TrimSuffix(key, "_critical")
 		// Verify that the base metric exists in defaults (otherwise ignore)
-		if _, exists := c.Defaults[baseKey]; !exists {
+		if _, exists := defaults[baseKey]; !exists {
 			log.Printf("WARN: _critical key %q has no matching default %q, skipping", key, baseKey)
 			continue
 		}
 
 		component, metric := parseMetricKey(baseKey)
 		if v, err := strconv.ParseFloat(strings.TrimSpace(override), 64); err == nil {
-			rows = append(rows, ResolvedThreshold{
+			rows = appendWithLegacyTwin(rows, baseKey, ResolvedThreshold{
 				Tenant:    tenant,
 				Metric:    metric,
 				Value:     v,
@@ -342,7 +379,16 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, overrides map[strin
 // `metric{label="v"}` / `{label=~"re"}` syntax. These are tenant-only (no
 // default inheritance) and use the "value:severity" suffix for severity.
 // Extracted verbatim from the ResolveAtWithStats per-tenant loop
-// (Phase 2B / Phase 11 B1); behavior is unchanged.
+// (Phase 2B / Phase 11 B1).
+//
+// #1231: the overrides map arrives pre-canonicalized (an old-spelled
+// dimensional key is already `mysql_threads_running{...}` here, deduped on the
+// FULL canonical key including the label segment), and the emit goes through
+// appendWithLegacyTwin keyed on the dimensional key's BASE — so a dimensional
+// override on an alias target dual-emits its legacy twin with the identical
+// label set, closing the transition-window gap the base/_critical shapes
+// already covered (review F1: without this, upgrading a plain override to a
+// dimensional one made the legacy-identity series vanish mid-window).
 func (c *ThresholdConfig) resolveDimensionalRows(tenant string, overrides map[string]ScheduledValue, now time.Time) []ResolvedThreshold {
 	var rows []ResolvedThreshold
 	for key, sv := range overrides {
@@ -385,7 +431,7 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, overrides map[st
 			continue
 		}
 
-		rows = append(rows, ResolvedThreshold{
+		rows = appendWithLegacyTwin(rows, baseKey, ResolvedThreshold{
 			Tenant:       tenant,
 			Metric:       metric,
 			Value:        v,
@@ -414,6 +460,18 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, overrides map[st
 // The remainder of the key (component, metric, severity, sorted dimensional
 // labels) makes the order total and stable so the sort result is identical
 // across processes regardless of map iteration order.
+//
+// #1231 twin sub-ordering (review F3, WITHIN the tier contract above, which is
+// unchanged): a transition-window legacy twin sorts under its CANONICAL
+// identity plus a trailing twin rank — i.e. immediately after the canonical
+// row it shadows. A cardinality cut landing inside the pair therefore drops
+// the twin first (the only row rule packs no longer consume); a cut above the
+// pair drops both together. Without this, the twin's legacy identity (e.g.
+// "cpu" < "threads_running") sorted AHEAD of its canonical within the same
+// tier, so an over-cap boundary could keep the unconsumed shadow and kill the
+// only row with a consumer. Tier itself needs no twin handling: the twin
+// copies its canonical row's labels, so their version tier is identical by
+// construction.
 func truncationSortKey(r ResolvedThreshold) string {
 	version := r.CustomLabels["version"]
 	if version == "" {
@@ -424,17 +482,26 @@ func truncationSortKey(r ResolvedThreshold) string {
 		tier = "1"
 	}
 
+	component, metric := r.Component, r.Metric
+	twinRank := "0"
+	if r.legacyTwinOf != "" {
+		component, metric = parseMetricKey(r.legacyTwinOf)
+		twinRank = "1"
+	}
+
 	var b strings.Builder
 	b.Grow(64) // pre-size: tier+component+metric+severity+labels rarely exceeds this
 	b.WriteString(tier)
 	b.WriteByte(0)
-	b.WriteString(r.Component)
+	b.WriteString(component)
 	b.WriteByte(0)
-	b.WriteString(r.Metric)
+	b.WriteString(metric)
 	b.WriteByte(0)
 	b.WriteString(r.Severity)
 	b.WriteByte(0)
 	b.WriteString(canonicalLabelKey(r.CustomLabels, r.RegexLabels))
+	b.WriteByte(0)
+	b.WriteString(twinRank)
 	return b.String()
 }
 
@@ -690,6 +757,12 @@ func (c *ThresholdConfig) ResolveThresholdExpiries() []ResolvedThresholdExpiry {
 // ResolveThresholdExpiriesAt is the time-parameterized version for testability.
 func (c *ThresholdConfig) ResolveThresholdExpiriesAt(now time.Time) []ResolvedThresholdExpiry {
 	var result []ResolvedThresholdExpiry
+	// #1231: membership goes through the same canonical view as
+	// ResolveAtWithStats — an old-spelled override whose default has already
+	// been renamed still HAS its expiry honored by resolveBaseRows, so the
+	// da_config_event for it must keep emitting too (skipping here would be a
+	// silent gap: value reverts, cleanup alert never fires).
+	canonDefaults := canonicalizeDefaults(c.Defaults)
 	for tenant, overrides := range c.Tenants {
 		for metricKey, sv := range overrides {
 			if sv.Expiry == nil || sv.Expiry.Expires == "" {
@@ -698,11 +771,24 @@ func (c *ThresholdConfig) ResolveThresholdExpiriesAt(now time.Time) []ResolvedTh
 			// v1 scope: expires is honored only on base standard metrics — those
 			// with a platform default to fail-safe back to (resolveBaseRows is the
 			// only resolution path with the expiry hook). Reserved keys, dimensional
-			// ({...}), _critical variants and custom alerts are NOT in c.Defaults →
+			// ({...}), _critical variants and custom alerts are NOT in defaults →
 			// skipped here so we never emit an expiry event for a threshold whose
-			// value won't actually revert. ValidateTenantKeys warns on out-of-scope
-			// expires so it isn't a silent no-op.
-			if _, isDefault := c.Defaults[metricKey]; !isDefault {
+			// value won't actually revert. The same promise covers the dedup-loser
+			// case below: a deprecated-spelled entry whose canonical sibling is
+			// ALSO set never governed the value at all. ValidateTenantKeys warns on
+			// out-of-scope expires so it isn't a silent no-op.
+			canonKey, wasAlias := canonicalKeyFor(metricKey)
+			// #1231 review F2: same-map conflict — resolve's canonical-wins dedup
+			// ignores this entry entirely, so its lapsed expires reverts nothing.
+			// Emitting "expired and auto-reverted" here would page the tenant
+			// about a value that was never in effect. Mirrors ValidateTenantKeys'
+			// conflict notice, which already tells the author to delete the entry.
+			if wasAlias {
+				if _, canonAlsoSet := overrides[canonKey]; canonAlsoSet {
+					continue
+				}
+			}
+			if _, isDefault := canonDefaults[canonKey]; !isDefault {
 				continue
 			}
 			t, err := time.Parse(time.RFC3339, sv.Expiry.Expires)
@@ -836,11 +922,54 @@ func (c *ThresholdConfig) ResolveMetadata() []ResolvedMetadata {
 	return result
 }
 
+// KeyValidation is the two-channel result of ValidateTenantKeys (#1231 c2).
+//
+// Errors carries the pre-existing warning kinds — everything that gates a
+// tenant-api write (gitops/writer.go turns any entry into ErrValidation) and
+// that CI's Python validator mirrors. Notices carries advisory,
+// never-blocking messages (currently: deprecated-key alias notices), so a
+// tenant whose config still uses an old spelling keeps writing successfully
+// during the transition window while being told to migrate.
+//
+// A named struct (not a bare ([]string, []string) pair) on purpose: a
+// positional swap at a call site would compile clean and silently invert the
+// gate semantics.
+type KeyValidation struct {
+	Errors  []string // blocking channel: unknown keys, bad expires, version-label violations, dangling _critical, ...
+	Notices []string // advisory channel: #1231 deprecation notices; MUST never block a write
+}
+
 // ValidateTenantKeys checks all tenant config keys against known defaults and
-// reserved patterns. Returns a list of warning messages for unknown keys.
-// This helps catch typos like "_silence_mode" that would be silently ignored.
-func (c *ThresholdConfig) ValidateTenantKeys() []string {
-	var warnings []string
+// reserved patterns. Errors lists warning messages for unknown/invalid keys
+// (this helps catch typos like "_silence_mode" that would be silently
+// ignored); Notices lists non-blocking deprecation advisories (#1231).
+//
+// Alias handling mirrors the resolve boundary: each key is canonicalized
+// first (exact-match table, never prefix-match) and validated under its
+// canonical spelling against a canonical defaults view — so messages for
+// aliased keys name the NEW key, and the paired notice ties old→new. When
+// both spellings appear in the same map, the canonical entry wins and the
+// deprecated one is reported as ignored (matching resolve's dedup).
+func (c *ThresholdConfig) ValidateTenantKeys() KeyValidation {
+	var v KeyValidation
+	canonDefaults := canonicalizeDefaults(c.Defaults)
+
+	// Defaults-side conflict: both spellings of the same threshold present.
+	// Resolve lets the canonical entry win and ignores the deprecated one —
+	// say so, or the losing value would just silently never apply.
+	// (A defaults map carrying ONLY the old spelling is the expected
+	// pre-migration state during the transition window — no notice for that;
+	// the platform-side rename is its own tracked commit in #1231.)
+	for legacy, canon := range deprecatedKeyAliases {
+		if _, hasLegacy := c.Defaults[legacy]; !hasLegacy {
+			continue
+		}
+		if _, hasCanon := c.Defaults[canon]; hasCanon {
+			v.Notices = append(v.Notices, fmt.Sprintf(
+				"NOTICE: defaults: deprecated key %q is ignored because its replacement %q is also set — remove %q (#1231 rename)",
+				legacy, canon, legacy))
+		}
+	}
 
 	for tenant, overrides := range c.Tenants {
 		// Validate _profile reference (v1.12.0)
@@ -850,36 +979,55 @@ func (c *ThresholdConfig) ValidateTenantKeys() []string {
 			profileName := strings.TrimSpace(sv.Default)
 			if profileName != "" {
 				if _, found := c.Profiles[profileName]; !found {
-					warnings = append(warnings, fmt.Sprintf(
+					v.Errors = append(v.Errors, fmt.Sprintf(
 						"WARN: tenant=%s: _profile references unknown profile %q", tenant, profileName))
 				}
 			}
 		}
 
 		for key, sv := range overrides {
+			// #1231 alias canonicalization — BEFORE any other check, mirroring
+			// the resolve boundary. Aliased keys get a notice (never an error);
+			// validation below then runs on the canonical spelling.
+			canonKey, wasAlias := canonicalKeyFor(key)
+			if wasAlias {
+				if _, canonAlsoSet := overrides[canonKey]; canonAlsoSet {
+					// Same-map conflict: resolve ignores this entry entirely
+					// (canonical wins), so don't validate it either — the
+					// canonical sibling gets validated on its own turn.
+					v.Notices = append(v.Notices, fmt.Sprintf(
+						"NOTICE: tenant=%s: deprecated key %q is ignored because its replacement %q is also set — remove %q (#1231 rename)",
+						tenant, key, canonKey, key))
+					continue
+				}
+				v.Notices = append(v.Notices, fmt.Sprintf(
+					"NOTICE: tenant=%s: key %q was renamed to %q (#1231) — the old name still resolves during the 2-release transition window; please update this override to %q",
+					tenant, key, canonKey, canonKey))
+			}
+
 			// PREVENT #656 v1: `expires:` is honored only on base standard metrics
 			// (resolveBaseRows is the only resolution path with the fail-safe hook).
 			// Warn when it appears elsewhere (silent no-op) or is malformed (would
 			// never auto-revert) — fail-loud per dev-rule #5.
 			if sv.Expiry != nil && sv.Expiry.Expires != "" {
-				if _, isDefault := c.Defaults[key]; !isDefault {
-					warnings = append(warnings, fmt.Sprintf(
-						"WARN: tenant=%s: `expires:` on %q is ignored — only base standard metrics (in _defaults.yaml) support time-boxed thresholds in v1", tenant, key))
+				if _, isDefault := canonDefaults[canonKey]; !isDefault {
+					v.Errors = append(v.Errors, fmt.Sprintf(
+						"WARN: tenant=%s: `expires:` on %q is ignored — only base standard metrics (in _defaults.yaml) support time-boxed thresholds in v1", tenant, canonKey))
 				} else if _, err := time.Parse(time.RFC3339, sv.Expiry.Expires); err != nil {
-					warnings = append(warnings, fmt.Sprintf(
-						"WARN: tenant=%s: invalid `expires:` %q on %q (need RFC3339 e.g. 2026-07-01T00:00:00Z) — override will NOT auto-revert", tenant, sv.Expiry.Expires, key))
+					v.Errors = append(v.Errors, fmt.Sprintf(
+						"WARN: tenant=%s: invalid `expires:` %q on %q (need RFC3339 e.g. 2026-07-01T00:00:00Z) — override will NOT auto-revert", tenant, sv.Expiry.Expires, canonKey))
 				}
 			}
 
 			// Known reserved key
-			if validReservedKeys[key] {
+			if validReservedKeys[canonKey] {
 				continue
 			}
 
 			// Known reserved prefix
 			reserved := false
 			for _, prefix := range validReservedPrefixes {
-				if strings.HasPrefix(key, prefix) {
+				if strings.HasPrefix(canonKey, prefix) {
 					reserved = true
 					break
 				}
@@ -889,18 +1037,18 @@ func (c *ThresholdConfig) ValidateTenantKeys() []string {
 			}
 
 			// Dimensional key with {labels}
-			if strings.Contains(key, "{") {
-				baseKey, customLabels, regexLabels := parseKeyWithLabels(key)
-				if _, exists := c.Defaults[baseKey]; exists {
+			if strings.Contains(canonKey, "{") {
+				baseKey, customLabels, regexLabels := parseKeyWithLabels(canonKey)
+				if _, exists := canonDefaults[baseKey]; exists {
 					// ADR-024 OQ-6: validate any `version` dimensional label.
-					warnings = append(warnings,
-						validateVersionLabel(tenant, key, baseKey, customLabels, regexLabels)...)
+					v.Errors = append(v.Errors,
+						validateVersionLabel(tenant, canonKey, baseKey, customLabels, regexLabels)...)
 					continue
 				}
 				// Unknown base key in dimensional key
-				warnings = append(warnings, fmt.Sprintf(
+				v.Errors = append(v.Errors, fmt.Sprintf(
 					"WARN: tenant=%s: unknown base metric %q in dimensional key %q",
-					tenant, baseKey, key))
+					tenant, baseKey, canonKey))
 				continue
 			}
 
@@ -922,48 +1070,57 @@ func (c *ThresholdConfig) ValidateTenantKeys() []string {
 			// CONSISTENCY fix, not new strictness — and it restores parity with
 			// the Python validator (`_grar_validate.validate_tenant_keys`), which
 			// has always fallen through to a warning here.
-			if strings.HasSuffix(key, "_critical") {
-				baseKey := strings.TrimSuffix(key, "_critical")
-				if _, exists := c.Defaults[baseKey]; exists {
+			//
+			// #1231: the lookup runs on canonical spellings, so an old-spelled
+			// `mysql_cpu_critical` whose (renamed) base exists gets only the
+			// rename notice above — no dangling error; a truly base-less
+			// `_critical` still errors, naming the NEW key.
+			if strings.HasSuffix(canonKey, "_critical") {
+				baseKey := strings.TrimSuffix(canonKey, "_critical")
+				if _, exists := canonDefaults[baseKey]; exists {
 					continue
 				}
-				warnings = append(warnings, fmt.Sprintf(
+				v.Errors = append(v.Errors, fmt.Sprintf(
 					"WARN: tenant=%s: %q has no base metric %q in defaults — the critical "+
 						"tier is silently DROPPED (not defaulted): resolveCriticalRows only "+
 						"emits a critical row when the base key exists. Add %q to the platform "+
 						"defaults, or remove this override.",
-					tenant, key, baseKey, baseKey))
+					tenant, canonKey, baseKey, baseKey))
 				continue
 			}
 
 			// Normal metric key → must exist in defaults
-			if _, exists := c.Defaults[key]; exists {
+			if _, exists := canonDefaults[canonKey]; exists {
 				continue
 			}
 
 			// Underscore-prefixed but not reserved → likely typo
-			if strings.HasPrefix(key, "_") {
-				warnings = append(warnings, fmt.Sprintf(
-					"WARN: tenant=%s: unknown reserved key %q (typo?)", tenant, key))
+			if strings.HasPrefix(canonKey, "_") {
+				v.Errors = append(v.Errors, fmt.Sprintf(
+					"WARN: tenant=%s: unknown reserved key %q (typo?)", tenant, canonKey))
 				continue
 			}
 
 			// Not in defaults, not reserved → unknown metric key
-			warnings = append(warnings, fmt.Sprintf(
-				"WARN: tenant=%s: unknown key %q not in defaults", tenant, key))
+			v.Errors = append(v.Errors, fmt.Sprintf(
+				"WARN: tenant=%s: unknown key %q not in defaults", tenant, canonKey))
 		}
 	}
 
-	return warnings
+	return v
 }
 
 // validateVersionLabel enforces the ADR-024 OQ-6 rules on a dimensional
 // `version` label found in a tenant key: a documented charset, no reserved
 // values (empty / literal "default"), Phase-1 component scoping, and exact
-// (non-regex) selectors. It returns advisory warnings — consistent with
-// ValidateTenantKeys' contract; the CI da-guard escalates these to a hard
-// reject (e.g. via --warn-as-error / its Python schema gate) so a bad
-// version label never reaches the shared user_threshold series.
+// (non-regex) selectors. It returns warning strings that ride
+// KeyValidation.Errors; the actual consumers are (1) the exporter's
+// config-load log (logConfigStats), (2) the tenant-api write path —
+// gitops/writer.go treats any Errors entry as ErrValidation, so a bad
+// version label is hard-rejected at the write boundary — and (3) the CI
+// Python validator parity path (generate_alertmanager_routes.py --validate).
+// NOTE: da-guard does NOT consume or escalate these (an earlier version of
+// this comment claimed it did).
 //
 // The Go side is intentionally observability-grade: the exporter logs these
 // at config load so operators see violations even if a tenant bypasses CI.
@@ -1058,9 +1215,27 @@ func (c *ThresholdConfig) ApplyProfiles() {
 			continue
 		}
 
-		// Fill-in: copy profile keys that the tenant has NOT overridden
-		for key, profileValue := range profile {
-			if _, tenantHas := overrides[key]; !tenantHas {
+		// Fill-in: copy profile keys that the tenant has NOT overridden.
+		// #1231: "overridden" is checked across alias spellings — a tenant's
+		// old-spelled mysql_cpu override must still beat a profile's
+		// mysql_threads_running value (and vice versa), otherwise resolve's
+		// canonical-wins dedup would let the profile displace the tenant's
+		// own setting (four-layer priority inversion).
+		//
+		// #1231 review F4: the PROFILE side is canonicalized FIRST (same
+		// canonical-wins dedup as tenant overrides), for two reasons:
+		// (a) a dual-spelled profile must not flip its effective value with
+		//     Go's randomized map iteration — this was the only
+		//     order-dependent layer in the four-layer chain;
+		// (b) the fill-in lands under the CANONICAL spelling, so a clean
+		//     tenant is never handed a deprecated key it did not write (no
+		//     false tenant-facing rename notice, no phantom
+		//     da_config_deprecated_keys count). The dropped deprecated-count
+		//     signal belongs to the profile AUTHOR's surface, which has no
+		//     notification channel today — deliberately not invented here.
+		canonProfile, _ := canonicalizeOverrides(profile)
+		for key, profileValue := range canonProfile {
+			if !tenantHasAliasEquivalent(overrides, key) {
 				overrides[key] = profileValue
 			}
 		}

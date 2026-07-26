@@ -27,7 +27,7 @@ func TestBatchTenants_PRMode_PreservesExistingKeys(t *testing.T) {
 	// _defaults so the whole merged doc validates; an existing multi-key tenant
 	// file with a comment; both committed on main so WritePRBatch branches from them.
 	if err := os.WriteFile(filepath.Join(configDir, "_defaults.yaml"),
-		[]byte("defaults:\n  mysql_connections: 80\n  mysql_cpu: 90\n"), 0o644); err != nil {
+		[]byte("defaults:\n  mysql_connections: 80\n  mysql_threads_running: 90\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(configDir, "db-a.yaml"), []byte(existingTenantYAML), 0o644); err != nil {
@@ -91,7 +91,7 @@ func TestBatchTenants_PRMode_PreservesExistingKeys(t *testing.T) {
 		t.Fatalf("git show %s:db-a.yaml: %v", branch, err)
 	}
 	got := string(committed)
-	for _, want := range []string{"_silent_mode", "mysql_connections", "mysql_connections_critical", "mysql_cpu", "_metadata", "platform-db-team", "# warning threshold"} {
+	for _, want := range []string{"_silent_mode", "mysql_connections", "mysql_connections_critical", "mysql_threads_running", "_metadata", "platform-db-team", "# warning threshold"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("#1097 PR-mode wiring regression: committed branch file missing %q:\n%s", want, got)
 		}

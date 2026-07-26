@@ -407,6 +407,15 @@ definitions:
       task_id:
         description: async task ID
         type: string
+      warnings:
+        description: |-
+          Warnings is the batch-level advisory list for PR mode (#1231): the
+          per-op notices aggregated by WritePRBatch. Batch-level (not per-result)
+          because PR-mode Results are frozen at "included" BEFORE the write runs;
+          each notice self-identifies its tenant (`tenant=<id>` in the wording).
+        items:
+          type: string
+        type: array
     type: object
   internal_handler.BatchResult:
     properties:
@@ -417,6 +426,14 @@ definitions:
         type: string
       tenant_id:
         type: string
+      warnings:
+        description: |-
+          Warnings carries non-blocking advisories for an op that SUCCEEDED
+          (#1231 deprecated-key alias notices from the direct WriteMerged path).
+          Error results never carry warnings — Message owns the failure text.
+        items:
+          type: string
+        type: array
     type: object
   internal_handler.BoolDelta:
     properties:
@@ -691,6 +708,17 @@ definitions:
         type: string
       tenant_id:
         type: string
+      warnings:
+        description: |-
+          Warnings carries non-blocking advisories for a write that SUCCEEDED —
+          the #1231 deprecated-key alias notices from the shared write-boundary
+          validation. They concern the tenant file's THRESHOLD keys (the write
+          re-validates the whole merged document), not the recipes being saved:
+          this endpoint is the portal's only tenant-file write path, so it is
+          where a mysql_cpu-era file gets its author-facing migration signal.
+        items:
+          type: string
+        type: array
     type: object
   internal_handler.PutGroupRequest:
     properties:
@@ -726,6 +754,12 @@ definitions:
       tenant_id:
         type: string
       warnings:
+        description: |-
+          Warnings carries NON-BLOCKING advisories for a write that SUCCEEDED —
+          currently the #1231 deprecated-key alias notices (e.g. a body still
+          spelling mysql_threads_running as mysql_cpu). The write went through;
+          these tell the author what to migrate before the transition window
+          closes. Never populated on error responses.
         items:
           type: string
         type: array
@@ -781,7 +815,17 @@ definitions:
           concurrency (ADR-024 §S6b-2): the write 409s if the file changed
           underneath them.
         type: string
+      validation_notices:
+        items:
+          type: string
+        type: array
       validation_warnings:
+        description: |-
+          Warnings is the BLOCKING validation set (KeyValidation.Errors) — what a
+          write of this exact file would be rejected on. Notices is the advisory
+          set (#1231 deprecated-key alias notices): the file keeps resolving and
+          writing, but carries a spelling the author should migrate. Split fields
+          so a client never has to text-parse severity out of one list.
         items:
           type: string
         type: array
@@ -819,6 +863,10 @@ definitions:
     type: object
   internal_handler.ValidateResponse:
     properties:
+      notices:
+        items:
+          type: string
+        type: array
       valid:
         type: boolean
       warnings:

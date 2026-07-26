@@ -31,7 +31,7 @@ import (
 func BenchmarkSimulate_DeepChain_L4(b *testing.B) {
 	defaultsL0 := []byte(`defaults:
   mysql_connections: 80
-  mysql_cpu: 80
+  mysql_threads_running: 80
   container_cpu: 80
   container_memory: 85
   oracle_sessions_active: 200
@@ -41,7 +41,7 @@ func BenchmarkSimulate_DeepChain_L4(b *testing.B) {
 `)
 	defaultsL1 := []byte(`defaults:
   mysql_connections: 75
-  mysql_cpu: 75
+  mysql_threads_running: 75
   container_cpu: 75
   container_memory: 80
   oracle_sessions_active: 180
@@ -51,7 +51,7 @@ func BenchmarkSimulate_DeepChain_L4(b *testing.B) {
 `)
 	defaultsL2 := []byte(`defaults:
   mysql_connections: 70
-  mysql_cpu: 70
+  mysql_threads_running: 70
   container_cpu: 70
   container_memory: 75
   oracle_sessions_active: 160
@@ -61,7 +61,7 @@ func BenchmarkSimulate_DeepChain_L4(b *testing.B) {
 `)
 	defaultsL3 := []byte(`defaults:
   mysql_connections: 65
-  mysql_cpu: 65
+  mysql_threads_running: 65
   container_cpu: 65
   container_memory: 70
   oracle_sessions_active: 140
@@ -72,7 +72,7 @@ func BenchmarkSimulate_DeepChain_L4(b *testing.B) {
 	tenantYAML := []byte(`tenants:
   tenant-deep:
     mysql_connections: "60"
-    mysql_cpu: "55:critical"
+    mysql_threads_running: "55:critical"
     container_cpu: "50"
     redis_memory: "70"
     es_index_store_size_bytes: "42949672960"
@@ -118,7 +118,7 @@ func BenchmarkScanFromConfigSource_1000_InMemory(b *testing.B) {
 	envs := []string{"prod", "staging", "dev"}
 
 	files := make(map[string][]byte, tenantCount+50)
-	files["/sim/_defaults.yaml"] = []byte("defaults:\n  mysql_connections: 80\n  mysql_cpu: 80\n")
+	files["/sim/_defaults.yaml"] = []byte("defaults:\n  mysql_connections: 80\n  mysql_threads_running: 80\n")
 
 	leafCardinality := len(domains) * len(regions) * len(envs)
 	for di, d := range domains {
@@ -126,7 +126,7 @@ func BenchmarkScanFromConfigSource_1000_InMemory(b *testing.B) {
 		files[domainPath+"/_defaults.yaml"] = []byte(fmt.Sprintf("defaults:\n  mysql_connections: %d\n", 75-di))
 		for ri, r := range regions {
 			regionPath := domainPath + "/" + r
-			files[regionPath+"/_defaults.yaml"] = []byte(fmt.Sprintf("defaults:\n  mysql_cpu: %d\n", 70-ri))
+			files[regionPath+"/_defaults.yaml"] = []byte(fmt.Sprintf("defaults:\n  mysql_threads_running: %d\n", 70-ri))
 			for ei, e := range envs {
 				envPath := regionPath + "/" + e
 				files[envPath+"/_defaults.yaml"] = []byte(fmt.Sprintf("defaults:\n  container_cpu: %d\n", 65-ei))

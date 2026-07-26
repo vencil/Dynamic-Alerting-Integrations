@@ -27,7 +27,7 @@ func TestScheduledValue_UnmarshalYAML_Scalar(t *testing.T) {
 tenants:
   db-a:
     mysql_connections: "70"
-    mysql_cpu: "disable"
+    mysql_threads_running: "disable"
 `
 	var cfg ThresholdConfig
 	if err := yaml.Unmarshal([]byte(content), &cfg); err != nil {
@@ -82,7 +82,7 @@ func TestScheduledValue_UnmarshalYAML_MixedFormats(t *testing.T) {
 tenants:
   db-a:
     mysql_connections: "70"
-    mysql_cpu:
+    mysql_threads_running:
       default: "80"
       overrides:
         - window: "01:00-09:00"
@@ -96,10 +96,10 @@ tenants:
 	if cfg.Tenants["db-a"]["mysql_connections"].Default != "70" {
 		t.Error("scalar format broken")
 	}
-	if cfg.Tenants["db-a"]["mysql_cpu"].Default != "80" {
+	if cfg.Tenants["db-a"]["mysql_threads_running"].Default != "80" {
 		t.Error("structured format default broken")
 	}
-	if len(cfg.Tenants["db-a"]["mysql_cpu"].Overrides) != 1 {
+	if len(cfg.Tenants["db-a"]["mysql_threads_running"].Overrides) != 1 {
 		t.Error("structured format overrides broken")
 	}
 }
@@ -347,12 +347,12 @@ func TestMatchTimeWindow(t *testing.T) {
 		want   bool
 	}{
 		// Same-day window 01:00-09:00
-		{"01:00-09:00", 0, 30, false},  // before
-		{"01:00-09:00", 1, 0, true},    // start (inclusive)
-		{"01:00-09:00", 5, 30, true},   // middle
-		{"01:00-09:00", 8, 59, true},   // just before end
-		{"01:00-09:00", 9, 0, false},   // end (exclusive)
-		{"01:00-09:00", 12, 0, false},  // after
+		{"01:00-09:00", 0, 30, false}, // before
+		{"01:00-09:00", 1, 0, true},   // start (inclusive)
+		{"01:00-09:00", 5, 30, true},  // middle
+		{"01:00-09:00", 8, 59, true},  // just before end
+		{"01:00-09:00", 9, 0, false},  // end (exclusive)
+		{"01:00-09:00", 12, 0, false}, // after
 
 		// Cross-midnight window 22:00-06:00
 		{"22:00-06:00", 21, 59, false}, // before
@@ -417,10 +417,10 @@ func TestParseHHMM(t *testing.T) {
 		// Lower-bound rejection — surfaced as a real test gap by the
 		// Go mutation pilot (#348). Without these cases, dropping the
 		// `h < 0` / `m < 0` checks in parseHHMM doesn't fail any test.
-		{"-5:00", 0, 0, false},  // invalid hour (below lower bound)
-		{"12:-5", 0, 0, false},  // invalid minute (below lower bound)
-		{"abc", 0, 0, false},    // garbage
-		{"12", 0, 0, false},     // no colon
+		{"-5:00", 0, 0, false}, // invalid hour (below lower bound)
+		{"12:-5", 0, 0, false}, // invalid minute (below lower bound)
+		{"abc", 0, 0, false},   // garbage
+		{"12", 0, 0, false},    // no colon
 	}
 
 	for _, tt := range tests {
@@ -471,7 +471,7 @@ func TestConfigManager_LoadDir_ScheduledValueMerge(t *testing.T) {
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
   mysql_connections: 80
-  mysql_cpu: 80
+  mysql_threads_running: 80
 `)
 
 	// db-a.yaml: tenant with mixed scalar + structured ScheduledValue
@@ -483,7 +483,7 @@ tenants:
       overrides:
         - window: "01:00-09:00"
           value: "1000"
-    mysql_cpu: "90"
+    mysql_threads_running: "90"
 `)
 
 	// db-b.yaml: tenant with regex dimensional (scalar only, using double quotes for consistency)
@@ -525,8 +525,8 @@ tenants:
 	}
 
 	// Verify db-a scalar ScheduledValue
-	if dbA["mysql_cpu"].Default != "90" {
-		t.Errorf("expected db-a mysql_cpu=90, got %q", dbA["mysql_cpu"].Default)
+	if dbA["mysql_threads_running"].Default != "90" {
+		t.Errorf("expected db-a mysql_threads_running=90, got %q", dbA["mysql_threads_running"].Default)
 	}
 
 	// Verify db-b regex dimensional

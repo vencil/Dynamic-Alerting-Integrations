@@ -15,11 +15,16 @@ import (
 
 // PutTenantResponse is the response body for PUT /api/v1/tenants/{id}.
 type PutTenantResponse struct {
-	Status   string   `json:"status"`
-	TenantID string   `json:"tenant_id"`
-	PRURL    string   `json:"pr_url,omitempty"`
-	PRNumber int      `json:"pr_number,omitempty"`
-	Message  string   `json:"message,omitempty"`
+	Status   string `json:"status"`
+	TenantID string `json:"tenant_id"`
+	PRURL    string `json:"pr_url,omitempty"`
+	PRNumber int    `json:"pr_number,omitempty"`
+	Message  string `json:"message,omitempty"`
+	// Warnings carries NON-BLOCKING advisories for a write that SUCCEEDED —
+	// currently the #1231 deprecated-key alias notices (e.g. a body still
+	// spelling mysql_threads_running as mysql_cpu). The write went through;
+	// these tell the author what to migrate before the transition window
+	// closes. Never populated on error responses.
 	Warnings []string `json:"warnings,omitempty"`
 }
 
@@ -94,7 +99,8 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		}
 
 		// Default: direct commit-on-write (ADR-009)
-		if err := d.Writer.Write(r.Context(), tenantID, email, string(body)); err != nil {
+		notices, err := d.Writer.Write(r.Context(), tenantID, email, string(body))
+		if err != nil {
 			if errors.Is(err, gitops.ErrWriteOverloaded) {
 				WriteOverloaded(rw, r)
 				return
@@ -110,6 +116,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		writeJSON(rw, http.StatusOK, PutTenantResponse{
 			Status:   "ok",
 			TenantID: tenantID,
+			Warnings: notices,
 		})
 	}
 }
@@ -216,6 +223,7 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 		PRURL:    pr.WebURL,
 		PRNumber: pr.Number,
 		Message:  "PR/MR created. Configuration will take effect after merge.",
+		Warnings: result.Notices,
 	})
 }
 

@@ -35,7 +35,8 @@ func gateBatchOp(tenantID string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manag
 }
 
 // toTaskResults converts batch results into the async pool's TaskResult shape
-// (TenantID/Status/Message), for the async submission path in both handlers.
+// (TenantID/Status/Message/Warnings), for the async submission path in both
+// handlers.
 func toTaskResults(results []BatchResult) []async.TaskResult {
 	asyncResults := make([]async.TaskResult, len(results))
 	for i, br := range results {
@@ -43,6 +44,7 @@ func toTaskResults(results []BatchResult) []async.TaskResult {
 			TenantID: br.TenantID,
 			Status:   br.Status,
 			Message:  br.Message,
+			Warnings: br.Warnings,
 		}
 	}
 	return asyncResults

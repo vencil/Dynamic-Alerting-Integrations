@@ -58,13 +58,13 @@ func TestConfigManager_LoadFile(t *testing.T) {
 	content := `
 defaults:
   mysql_connections: 80
-  mysql_cpu: 80
+  mysql_threads_running: 80
 tenants:
   db-a:
     mysql_connections: "70"
   db-b:
     mysql_connections: "disable"
-    mysql_cpu: "40"
+    mysql_threads_running: "40"
 `
 	dir := t.TempDir()
 	path := testutil.WriteFileMode(t, dir, "config.yaml", content, 0600)
@@ -100,18 +100,18 @@ tenants:
 func TestLogConfigStats_Format(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
-		Defaults:     map[string]float64{"mysql_connections": 80, "mysql_cpu": 75},
+		Defaults:     map[string]float64{"mysql_connections": 80, "mysql_threads_running": 75},
 		Profiles:     map[string]map[string]ScheduledValue{"gold": {"mysql_connections": {Default: "100"}}},
 		StateFilters: map[string]StateFilter{"_state_maintenance": {Reasons: []string{"CrashLoopBackOff"}, Severity: "warning"}},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"mysql_connections": {Default: "90"},
-				"_silent_mode":     {Default: "warning"},
+				"mysql_connections":  {Default: "90"},
+				"_silent_mode":       {Default: "warning"},
 				"_state_maintenance": {Default: "1"},
 			},
 			"db-b": {
-				"mysql_connections": {Default: "85"},
-				"mysql_cpu":        {Default: "70"},
+				"mysql_connections":     {Default: "85"},
+				"mysql_threads_running": {Default: "70"},
 			},
 		},
 	}
@@ -139,7 +139,7 @@ func TestLogConfigStats_Format(t *testing.T) {
 		t.Errorf("expected '2 tenants', got: %s", output)
 	}
 	if !strings.Contains(output, "~3 threshold overrides") {
-		t.Errorf("expected '~3 threshold overrides' (mysql_connections×2 + mysql_cpu×1), got: %s", output)
+		t.Errorf("expected '~3 threshold overrides' (mysql_connections×2 + mysql_threads_running×1), got: %s", output)
 	}
 	if !strings.Contains(output, "1 state entries") {
 		t.Errorf("expected '1 state entries', got: %s", output)
@@ -158,9 +158,9 @@ func TestLogConfigStats_Format(t *testing.T) {
 
 func TestParsePromDuration(t *testing.T) {
 	tests := []struct {
-		input    string
-		wantDur  time.Duration
-		wantErr  bool
+		input   string
+		wantDur time.Duration
+		wantErr bool
 	}{
 		{"30s", 30 * time.Second, false},
 		{"5m", 5 * time.Minute, false},
@@ -320,9 +320,9 @@ tenants:
 
 func TestDetectConfigSource(t *testing.T) {
 	tests := []struct {
-		name      string
+		name       string
 		withGitRev bool
-		withEnv   bool
+		withEnv    bool
 		wantSource string
 		wantCommit string
 	}{

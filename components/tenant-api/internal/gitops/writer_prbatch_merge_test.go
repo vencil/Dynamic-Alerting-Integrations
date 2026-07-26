@@ -22,13 +22,13 @@ func seedTenantRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "_defaults.yaml"),
-		[]byte("defaults:\n  mysql_connections: 80\n  mysql_cpu: 90\n"), 0o644); err != nil {
+		[]byte("defaults:\n  mysql_connections: 80\n  mysql_threads_running: 90\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	const seed = "tenants:\n" +
 		"  db-a:\n" +
 		"    mysql_connections: \"50\"  # warning threshold\n" +
-		"    mysql_cpu: \"40\"\n" +
+		"    mysql_threads_running: \"40\"\n" +
 		"    _metadata:\n" +
 		"      owner: \"team-x\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "db-a.yaml"), []byte(seed), 0o644); err != nil {
@@ -51,14 +51,14 @@ func TestWriteMerged_PreservesKeys(t *testing.T) {
 	merge := func(existing []byte) (string, error) {
 		return string(existing) + "    _silent_mode: warning\n", nil
 	}
-	if err := w.WriteMerged(context.Background(), "db-a", "op@example.com", merge); err != nil {
+	if _, err := w.WriteMerged(context.Background(), "db-a", "op@example.com", merge); err != nil {
 		t.Fatalf("WriteMerged: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "db-a.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"mysql_connections", "mysql_cpu", "_metadata", "team-x", "# warning threshold", "_silent_mode"} {
+	for _, want := range []string{"mysql_connections", "mysql_threads_running", "_metadata", "team-x", "# warning threshold", "_silent_mode"} {
 		if !strings.Contains(string(got), want) {
 			t.Errorf("#1097 regression: committed file missing %q:\n%s", want, got)
 		}
@@ -73,7 +73,7 @@ func TestWriteMerged_PreservesKeys(t *testing.T) {
 func TestWriteMerged_IdempotentNoOp_NotConflict(t *testing.T) {
 	dir := seedTenantRepo(t) // commit #1
 	if err := os.WriteFile(filepath.Join(dir, "other.yaml"),
-		[]byte("tenants:\n  z:\n    mysql_cpu: \"1\"\n"), 0o644); err != nil {
+		[]byte("tenants:\n  z:\n    mysql_threads_running: \"1\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitRun(t, dir, "add", ".")
@@ -83,7 +83,7 @@ func TestWriteMerged_IdempotentNoOp_NotConflict(t *testing.T) {
 	head0 := gitOut(t, dir, "rev-parse", "HEAD")
 	// Idempotent merge: return the file verbatim (byte-identical → nothing staged).
 	noop := func(existing []byte) (string, error) { return string(existing), nil }
-	if err := w.WriteMerged(context.Background(), "db-a", "op@example.com", noop); err != nil {
+	if _, err := w.WriteMerged(context.Background(), "db-a", "op@example.com", noop); err != nil {
 		t.Fatalf("idempotent WriteMerged should be a no-op success, got: %v", err)
 	}
 	if head1 := gitOut(t, dir, "rev-parse", "HEAD"); head1 != head0 {
@@ -139,7 +139,7 @@ func TestWritePRBatch_MergesPreservingKeys(t *testing.T) {
 	}
 
 	committed := gitOut(t, dir, "show", branch+":db-a.yaml")
-	for _, want := range []string{"mysql_connections", "mysql_cpu", "_metadata", "team-x", "# warning threshold", "_silent_mode"} {
+	for _, want := range []string{"mysql_connections", "mysql_threads_running", "_metadata", "team-x", "# warning threshold", "_silent_mode"} {
 		if !strings.Contains(committed, want) {
 			t.Errorf("#1097 PR-mode regression: committed file missing %q:\n%s", want, committed)
 		}

@@ -19,7 +19,13 @@ type TenantDetail struct {
 	ID       string                  `json:"id"`
 	RawYAML  string                  `json:"raw_yaml"`
 	Resolved []cfg.ResolvedThreshold `json:"resolved_thresholds"`
-	Warnings []string                `json:"validation_warnings,omitempty"`
+	// Warnings is the BLOCKING validation set (KeyValidation.Errors) — what a
+	// write of this exact file would be rejected on. Notices is the advisory
+	// set (#1231 deprecated-key alias notices): the file keeps resolving and
+	// writing, but carries a spelling the author should migrate. Split fields
+	// so a client never has to text-parse severity out of one list.
+	Warnings []string `json:"validation_warnings,omitempty"`
+	Notices  []string `json:"validation_notices,omitempty"`
 	// SourceHash is SHA-256[:16] of the raw tenant file. Clients echo it
 	// back as `base_hash` on PUT .../custom-alerts for optimistic-
 	// concurrency (ADR-024 §S6b-2): the write 409s if the file changed
@@ -66,7 +72,9 @@ func GetTenant(d *Deps) http.HandlerFunc {
 		// Parse defaults from _defaults.yaml if it exists
 		merged := loadMergedConfig(d.ConfigDir, tenantID, data)
 
-		warnings := merged.ValidateTenantKeys()
+		// #1231 1b: two-channel split — validation_warnings stays Errors-only
+		// (the blocking set), deprecation notices get their own field.
+		kv := merged.ValidateTenantKeys()
 		resolved := merged.ResolveAt(time.Now())
 
 		// Filter to only this tenant's thresholds. Initialized non-nil so a
@@ -95,7 +103,8 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			ID:           tenantID,
 			RawYAML:      string(data),
 			Resolved:     tenantResolved,
-			Warnings:     warnings,
+			Warnings:     kv.Errors,
+			Notices:      kv.Notices,
 			SourceHash:   cfg.ComputeSourceHash(data),
 			CustomAlerts: customAlerts,
 		}

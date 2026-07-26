@@ -24,7 +24,7 @@ const existingTenantYAML = `tenants:
   db-a:
     mysql_connections: "50"            # warning threshold
     mysql_connections_critical: "120"  # critical threshold
-    mysql_cpu: "40"
+    mysql_threads_running: "40"
     _metadata:
       owner: "platform-db-team"
       tier: "tier-1"
@@ -45,7 +45,7 @@ func TestMergePatchYAML_PreservesKeysAndComments(t *testing.T) {
 		t.Errorf("patched key _silent_mode missing:\n%s", out)
 	}
 	// ...and every pre-existing key survives.
-	for _, key := range []string{"mysql_connections", "mysql_connections_critical", "mysql_cpu", "_metadata", "owner", "tier-1"} {
+	for _, key := range []string{"mysql_connections", "mysql_connections_critical", "mysql_threads_running", "_metadata", "owner", "tier-1"} {
 		if !strings.Contains(out, key) {
 			t.Errorf("pre-existing content %q lost after partial patch:\n%s", key, out)
 		}
@@ -111,7 +111,7 @@ func TestMergePatchYAML_RefusesStructuredClobber(t *testing.T) {
 		t.Errorf("structured-clobber error should wrap ErrValidation (→400), got: %v", err)
 	}
 	// A normal scalar key is still patchable.
-	if _, err := mergePatchYAML([]byte(existingTenantYAML), "db-a", map[string]string{"mysql_cpu": "75"}); err != nil {
+	if _, err := mergePatchYAML([]byte(existingTenantYAML), "db-a", map[string]string{"mysql_threads_running": "75"}); err != nil {
 		t.Errorf("scalar key patch should succeed, got: %v", err)
 	}
 }
@@ -121,7 +121,7 @@ func TestMergePatchYAML_ValueStaysQuotedString(t *testing.T) {
 	// A numeric-looking string value must round-trip as a STRING (quoted), not
 	// leak into the file as a bare int that changes type on the next read.
 	out, err := mergePatchYAML([]byte(existingTenantYAML), "db-a", map[string]string{
-		"mysql_cpu": "75",
+		"mysql_threads_running": "75",
 	})
 	if err != nil {
 		t.Fatalf("mergePatchYAML: %v", err)
@@ -132,12 +132,12 @@ func TestMergePatchYAML_ValueStaysQuotedString(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(out), &cfg); err != nil {
 		t.Fatalf("unparseable: %v", err)
 	}
-	cpu := cfg.Tenants["db-a"]["mysql_cpu"]
+	cpu := cfg.Tenants["db-a"]["mysql_threads_running"]
 	if cpu.Value != "75" {
-		t.Errorf("mysql_cpu = %q, want \"75\"", cpu.Value)
+		t.Errorf("mysql_threads_running = %q, want \"75\"", cpu.Value)
 	}
 	if cpu.Tag != "" && cpu.Tag != "!!str" {
-		t.Errorf("mysql_cpu tag = %q, want a string tag (value must not become an int)", cpu.Tag)
+		t.Errorf("mysql_threads_running tag = %q, want a string tag (value must not become an int)", cpu.Tag)
 	}
 }
 
@@ -153,7 +153,7 @@ func TestApplyPatch_PreservesExistingKeys(t *testing.T) {
 	configDir := setupConfigDir(t, map[string]string{
 		// conf.d always ships _defaults.yaml; the whole merged doc is validated,
 		// so the tenant's pre-existing metric keys must resolve against it.
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_cpu: 90\n",
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_threads_running: 90\n",
 		"db-a.yaml":      existingTenantYAML,
 	})
 	initGitRepo(t, configDir)
@@ -173,7 +173,7 @@ func TestApplyPatch_PreservesExistingKeys(t *testing.T) {
 	if !strings.Contains(got, "_silent_mode") {
 		t.Errorf("patched key missing from committed file:\n%s", got)
 	}
-	for _, key := range []string{"mysql_connections", "mysql_connections_critical", "mysql_cpu", "_metadata", "platform-db-team"} {
+	for _, key := range []string{"mysql_connections", "mysql_connections_critical", "mysql_threads_running", "_metadata", "platform-db-team"} {
 		if !strings.Contains(got, key) {
 			t.Errorf("#1097 regression: pre-existing content %q dropped by partial patch:\n%s", key, got)
 		}

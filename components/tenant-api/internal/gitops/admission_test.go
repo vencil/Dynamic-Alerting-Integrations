@@ -126,7 +126,7 @@ func TestWrite_CancelledCtxDoesNotWrite(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already done before the call
 
-	err := w.Write(ctx, "db-a", "alice@example.com", "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n")
+	_, err := w.Write(ctx, "db-a", "alice@example.com", "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Write with cancelled ctx = %v, want context.Canceled", err)
 	}

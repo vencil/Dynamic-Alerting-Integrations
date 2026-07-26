@@ -69,14 +69,14 @@ func TestResolveThresholdExpiriesAt_ScopeAndState(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 6, 18, 0, 0, 0, 0, time.UTC)
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{"mysql_connections": 80, "mysql_cpu": 80},
+		Defaults: map[string]float64{"mysql_connections": 80, "mysql_threads_running": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"mysql_connections":  {Default: "2000", Expiry: &ExpiryMeta{Expires: "2020-01-01T00:00:00Z", Reason: "old incident"}}, // expired (in Defaults)
-				"mysql_cpu":          {Default: "95", Expiry: &ExpiryMeta{Expires: "2999-01-01T00:00:00Z"}},                           // active (in Defaults)
-				"unmapped_widget":    {Default: "5", Expiry: &ExpiryMeta{Expires: "2020-01-01T00:00:00Z"}},                            // NOT in Defaults → excluded (v1)
-				"mysql_cpu_critical": {Default: "99", Expiry: &ExpiryMeta{Expires: "2020-01-01T00:00:00Z"}},                           // _critical → not in Defaults → excluded
-				"_custom_alerts":     SV("- recipe: x\n"),                                                                             // reserved → excluded
+				"mysql_connections":              {Default: "2000", Expiry: &ExpiryMeta{Expires: "2020-01-01T00:00:00Z", Reason: "old incident"}}, // expired (in Defaults)
+				"mysql_threads_running":          {Default: "95", Expiry: &ExpiryMeta{Expires: "2999-01-01T00:00:00Z"}},                           // active (in Defaults)
+				"unmapped_widget":                {Default: "5", Expiry: &ExpiryMeta{Expires: "2020-01-01T00:00:00Z"}},                            // NOT in Defaults → excluded (v1)
+				"mysql_threads_running_critical": {Default: "99", Expiry: &ExpiryMeta{Expires: "2020-01-01T00:00:00Z"}},                           // _critical → not in Defaults → excluded
+				"_custom_alerts":                 SV("- recipe: x\n"),                                                                             // reserved → excluded
 			},
 		},
 	}
@@ -85,15 +85,15 @@ func TestResolveThresholdExpiriesAt_ScopeAndState(t *testing.T) {
 		byKey[e.MetricKey] = e
 	}
 	if len(byKey) != 2 {
-		t.Fatalf("expected 2 in-scope expiry entries (mysql_connections, mysql_cpu), got %d: %+v", len(byKey), byKey)
+		t.Fatalf("expected 2 in-scope expiry entries (mysql_connections, mysql_threads_running), got %d: %+v", len(byKey), byKey)
 	}
 	if e := byKey["mysql_connections"]; !e.Expired || e.Reason != "old incident" {
 		t.Errorf("mysql_connections should be expired w/ reason, got %+v", e)
 	}
-	if byKey["mysql_cpu"].Expired {
-		t.Errorf("mysql_cpu (future expires) should NOT be expired, got %+v", byKey["mysql_cpu"])
+	if byKey["mysql_threads_running"].Expired {
+		t.Errorf("mysql_threads_running (future expires) should NOT be expired, got %+v", byKey["mysql_threads_running"])
 	}
-	for _, excluded := range []string{"unmapped_widget", "mysql_cpu_critical", "_custom_alerts"} {
+	for _, excluded := range []string{"unmapped_widget", "mysql_threads_running_critical", "_custom_alerts"} {
 		if _, ok := byKey[excluded]; ok {
 			t.Errorf("%q is out of v1 scope and must be excluded", excluded)
 		}
@@ -110,14 +110,15 @@ func TestValidateTenantKeys_ExpiresFailLoud(t *testing.T) {
 			"db-scope":     {"unmapped_widget": {Default: "5", Expiry: &ExpiryMeta{Expires: "2026-07-01T00:00:00Z"}}},      // out of scope → warn
 		},
 	}
-	all := strings.Join(cfg.ValidateTenantKeys(), "\n")
+	// #1231 c2: expires misuse is a blocking warning → Errors channel.
+	all := strings.Join(cfg.ValidateTenantKeys().Errors, "\n")
 	if !strings.Contains(all, "invalid `expires:`") || !strings.Contains(all, "db-malformed") {
 		t.Errorf("expected malformed-expires warning for db-malformed, got:\n%s", all)
 	}
 	if !strings.Contains(all, "is ignored") || !strings.Contains(all, "db-scope") {
 		t.Errorf("expected out-of-scope warning for db-scope, got:\n%s", all)
 	}
-	for _, line := range cfg.ValidateTenantKeys() {
+	for _, line := range cfg.ValidateTenantKeys().Errors {
 		if strings.Contains(line, "db-ok") && strings.Contains(line, "expires") {
 			t.Errorf("valid in-scope expires should not warn: %s", line)
 		}

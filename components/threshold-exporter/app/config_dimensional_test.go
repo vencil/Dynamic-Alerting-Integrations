@@ -22,10 +22,10 @@ import (
 func TestParseKeyWithLabels(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		input       string
-		wantBase    string
-		wantLabels  map[string]string
-		wantRegex   map[string]string
+		input      string
+		wantBase   string
+		wantLabels map[string]string
+		wantRegex  map[string]string
 	}{
 		// No labels
 		{"redis_memory", "redis_memory", nil, nil},
@@ -92,7 +92,7 @@ func TestResolve_DimensionalBasic(t *testing.T) {
 		},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"redis_memory": SV("75"),
+				"redis_memory":                                        SV("75"),
 				`redis_queue_length{queue="tasks"}`:                   SV("500"),
 				`redis_queue_length{queue="events", priority="high"}`: SV("1000:critical"),
 			},
@@ -179,12 +179,12 @@ func TestResolve_DimensionalBackwardCompat(t *testing.T) {
 	// Non-dimensional config should still work identically
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{
-			"mysql_connections": 80,
-			"mysql_cpu":         80,
+			"mysql_connections":     80,
+			"mysql_threads_running": 80,
 		},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {"mysql_connections": SV("70")},
-			"db-b": {"mysql_connections": SV("disable"), "mysql_cpu": SV("40")},
+			"db-b": {"mysql_connections": SV("disable"), "mysql_threads_running": SV("40")},
 		},
 	}
 
@@ -202,8 +202,11 @@ func TestResolve_DimensionalBackwardCompat(t *testing.T) {
 		return resolved[i].Metric < resolved[j].Metric
 	})
 
-	if len(resolved) != 3 {
-		t.Fatalf("expected 3, got %d", len(resolved))
+	// #1231: mysql_threads_running dual-emits a legacy cpu twin during the
+	// alias transition window — db-a gets 3 rows (connections +
+	// threads_running + cpu twin), db-b gets 2 (threads_running + cpu twin).
+	if len(resolved) != 5 {
+		t.Fatalf("expected 5, got %d", len(resolved))
 	}
 }
 
@@ -295,10 +298,10 @@ func TestResolve_RegexDimensional(t *testing.T) {
 		},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"oracle_tablespace":                              SV("75"),
-				`oracle_tablespace{tablespace=~"SYS.*"}`:         SV("95"),
-				`oracle_tablespace{tablespace=~"USER.*"}`:        SV("500:critical"),
-				`oracle_tablespace{env="prod", ts=~"TEMP.*"}`:    SV("200"),
+				"oracle_tablespace":                           SV("75"),
+				`oracle_tablespace{tablespace=~"SYS.*"}`:      SV("95"),
+				`oracle_tablespace{tablespace=~"USER.*"}`:     SV("500:critical"),
+				`oracle_tablespace{env="prod", ts=~"TEMP.*"}`: SV("200"),
 			},
 		},
 	}
@@ -437,9 +440,9 @@ func TestResolve_RegexDimensionalCriticalNotSupported(t *testing.T) {
 		},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"oracle_tablespace":                                   SV("85"),
-				`oracle_tablespace{tablespace=~"SYS.*"}`:             SV("95"),
-				`oracle_tablespace{tablespace=~"SYS.*"}_critical`:    SV("99"),
+				"oracle_tablespace":                               SV("85"),
+				`oracle_tablespace{tablespace=~"SYS.*"}`:          SV("95"),
+				`oracle_tablespace{tablespace=~"SYS.*"}_critical`: SV("99"),
 			},
 		},
 	}

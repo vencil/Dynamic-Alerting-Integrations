@@ -336,8 +336,8 @@ func TestListTenants_MultipleTenants(t *testing.T) {
 func TestListTenants_SkipsHiddenAndDefaults(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
-		"db-a.yaml":      "tenants:\n  db-a:\n    mysql_cpu: \"80\"\n",
-		"_defaults.yaml": "defaults:\n  mysql_cpu: 90\n",
+		"db-a.yaml":      "tenants:\n  db-a:\n    mysql_threads_running: \"80\"\n",
+		"_defaults.yaml": "defaults:\n  mysql_threads_running: 90\n",
 		".hidden.yaml":   "tenants:\n  hidden:\n    x: \"1\"\n",
 		"not-yaml.txt":   "not yaml",
 	})
@@ -359,7 +359,7 @@ func TestListTenants_SkipsHiddenAndDefaults(t *testing.T) {
 func TestListTenants_WithYmlExtension(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
-		"db-c.yml": "tenants:\n  db-c:\n    mysql_cpu: \"75\"\n",
+		"db-c.yml": "tenants:\n  db-c:\n    mysql_threads_running: \"75\"\n",
 	})
 
 	h := ListTenants(&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")})
@@ -383,7 +383,7 @@ func TestListTenants_MalformedYAML(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"bad.yaml":  "{{not valid yaml",
-		"db-a.yaml": "tenants:\n  db-a:\n    mysql_cpu: \"80\"\n",
+		"db-a.yaml": "tenants:\n  db-a:\n    mysql_threads_running: \"80\"\n",
 	})
 
 	h := ListTenants(&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")})
@@ -814,7 +814,7 @@ func TestValidateAndWrite_AgreeOnTenantOnlyMetricBody(t *testing.T) {
 
 	// Path 2 — the real write path → must commit (agree with the dry-run), not
 	// fail validation on the body /validate just blessed.
-	if err := newTestWriter(configDir).Write(context.Background(), "db-a", "op@example.com", body); err != nil {
+	if _, err := newTestWriter(configDir).Write(context.Background(), "db-a", "op@example.com", body); err != nil {
 		t.Fatalf("write rejected a body that /validate blessed (validate/write disagree): %v", err)
 	}
 }
@@ -848,7 +848,7 @@ func TestValidateAndWrite_AgreeRejectingFullConfigBody(t *testing.T) {
 	}
 
 	// Path 2 — the real write path → must also reject (agree with the dry-run).
-	if err := newTestWriter(configDir).Write(context.Background(), "db-a", "op@example.com", body); err == nil {
+	if _, err := newTestWriter(configDir).Write(context.Background(), "db-a", "op@example.com", body); err == nil {
 		t.Fatal("write accepted a full-config body the dry-run rejected (validate/write disagree)")
 	}
 }
@@ -1006,7 +1006,7 @@ func TestBuildPatchYAML_MultipleKeys(t *testing.T) {
 func TestLoadMergedConfig_NoDefaults(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	tenantData := []byte("tenants:\n  db-a:\n    mysql_cpu: \"70\"\n")
+	tenantData := []byte("tenants:\n  db-a:\n    mysql_threads_running: \"70\"\n")
 	merged := loadMergedConfig(configDir, "db-a", tenantData)
 
 	if _, ok := merged.Tenants["db-a"]; !ok {
@@ -1017,25 +1017,25 @@ func TestLoadMergedConfig_NoDefaults(t *testing.T) {
 func TestLoadMergedConfig_WithDefaults(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_cpu: 90\n",
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_threads_running: 90\n",
 	})
-	tenantData := []byte("tenants:\n  db-a:\n    mysql_cpu: \"70\"\n")
+	tenantData := []byte("tenants:\n  db-a:\n    mysql_threads_running: \"70\"\n")
 	merged := loadMergedConfig(configDir, "db-a", tenantData)
 
 	if merged.Defaults["mysql_connections"] != 80 {
 		t.Errorf("expected mysql_connections default 80, got %v", merged.Defaults["mysql_connections"])
 	}
-	if merged.Defaults["mysql_cpu"] != 90 {
-		t.Errorf("expected mysql_cpu default 90, got %v", merged.Defaults["mysql_cpu"])
+	if merged.Defaults["mysql_threads_running"] != 90 {
+		t.Errorf("expected mysql_threads_running default 90, got %v", merged.Defaults["mysql_threads_running"])
 	}
 }
 
 func TestLoadMergedConfig_WithStateFilters(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
-		"_defaults.yaml": "defaults:\n  mysql_cpu: 90\nstate_filters:\n  container_crashloop:\n    reasons: [CrashLoopBackOff]\n    severity: critical\n",
+		"_defaults.yaml": "defaults:\n  mysql_threads_running: 90\nstate_filters:\n  container_crashloop:\n    reasons: [CrashLoopBackOff]\n    severity: critical\n",
 	})
-	tenantData := []byte("tenants:\n  db-a:\n    mysql_cpu: \"70\"\n")
+	tenantData := []byte("tenants:\n  db-a:\n    mysql_threads_running: \"70\"\n")
 	merged := loadMergedConfig(configDir, "db-a", tenantData)
 
 	if _, ok := merged.StateFilters["container_crashloop"]; !ok {
@@ -1177,7 +1177,7 @@ func TestFullRouter_GetTenant_Forbidden(t *testing.T) {
 func TestFullRouter_ListTenants(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
-		"db-a.yaml": "tenants:\n  db-a:\n    mysql_cpu: \"80\"\n",
+		"db-a.yaml": "tenants:\n  db-a:\n    mysql_threads_running: \"80\"\n",
 	})
 
 	rbacMgr := newRBACManager(t, `groups:

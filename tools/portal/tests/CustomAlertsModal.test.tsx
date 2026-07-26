@@ -66,6 +66,27 @@ describe('CustomAlertsModal', () => {
     await waitFor(() => expect(screen.getByTestId('notice')).toBeInTheDocument());
     expect(save).toHaveBeenCalledWith('db-a', expect.objectContaining({ base_hash: 'h1' }));
     expect(save.mock.calls[0][1].custom_alerts).toHaveLength(1);
+    // no warnings in the response → the advisory block never renders
+    expect(screen.queryByTestId('deprecation-warnings')).toBeNull();
+  });
+
+  it('#1231: a 200 with warnings shows the advisory block verbatim (not error-red)', async () => {
+    const ft = fetchTenant([{ recipe: 'threshold', name: 'a', metric: 'm', threshold: '1', window: '5m' }], 'h1');
+    const apiWarning = 'NOTICE: tenant=db-a: key "mysql_cpu" was renamed to "mysql_threads_running" (#1231)';
+    const save = vi.fn(() => Promise.resolve({
+      ok: true, status: 200,
+      data: { source_hash: 'h2', warnings: [apiWarning] },
+    }));
+    render(<CustomAlertsModal tenantId="db-a" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
+    await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('save'));
+    await waitFor(() => expect(screen.getByTestId('deprecation-warnings')).toBeInTheDocument());
+    // save still reads as a SUCCESS: the green notice renders alongside
+    expect(screen.getByTestId('notice')).toBeInTheDocument();
+    // API text is passed through verbatim (backend owns the wording)
+    expect(screen.getByTestId('deprecation-warnings').textContent).toContain(apiWarning);
+    // and it is NOT the blocking-violations surface
+    expect(screen.queryByTestId('violations')).toBeNull();
   });
 
   it('Reef 6: a 409 is non-destructive — conflict shown, recipes preserved', async () => {

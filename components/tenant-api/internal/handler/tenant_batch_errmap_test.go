@@ -74,7 +74,7 @@ func TestApplyPatch_WriteOverloadedMapsToRetryMessage(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_ = gw.WriteMerged(context.Background(), "db-a", "op@example.com",
+		_, _ = gw.WriteMerged(context.Background(), "db-a", "op@example.com",
 			func(existing []byte) (string, error) {
 				close(started)
 				<-release
@@ -151,7 +151,7 @@ func TestMergePatchYAML_StructuralErrorBranches(t *testing.T) {
 		wantErr  string
 	}{
 		{"root is a sequence, not a mapping", "- a\n- b\n", "root is not a mapping"},
-		{"no tenants mapping", "defaults:\n  mysql_cpu: 80\n", "no `tenants:` mapping"},
+		{"no tenants mapping", "defaults:\n  mysql_threads_running: 80\n", "no `tenants:` mapping"},
 		{"tenants is a scalar", "tenants: oops\n", "no `tenants:` mapping"},
 	}
 	for _, tc := range errCases {
@@ -170,12 +170,12 @@ func TestMergePatchYAML_StructuralErrorBranches(t *testing.T) {
 
 	t.Run("tenant section absent → added, siblings preserved", func(t *testing.T) {
 		t.Parallel()
-		existing := "tenants:\n  other-db:\n    mysql_cpu: \"40\"\n"
+		existing := "tenants:\n  other-db:\n    mysql_threads_running: \"40\"\n"
 		out, err := mergePatchYAML([]byte(existing), "db-a", patch)
 		if err != nil {
 			t.Fatalf("mergePatchYAML: %v", err)
 		}
-		for _, want := range []string{"other-db", "mysql_cpu", "db-a", "_silent_mode"} {
+		for _, want := range []string{"other-db", "mysql_threads_running", "db-a", "_silent_mode"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("merged doc missing %q:\n%s", want, out)
 			}

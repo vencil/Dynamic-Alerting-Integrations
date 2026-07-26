@@ -20,7 +20,7 @@ func TestMergeTenantWithRootDefaults_PopulatesDefaults(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "_defaults.yaml"),
-		[]byte("defaults:\n  container_cpu: 80\n  mysql_cpu: 80\n"), 0o644); err != nil {
+		[]byte("defaults:\n  container_cpu: 80\n  mysql_threads_running: 80\n"), 0o644); err != nil {
 		t.Fatalf("write defaults: %v", err)
 	}
 
@@ -33,7 +33,7 @@ func TestMergeTenantWithRootDefaults_PopulatesDefaults(t *testing.T) {
 	if _, ok := merged.Tenants["db-a"]["container_cpu"]; !ok {
 		t.Error("tenant override container_cpu should be present in merged.Tenants")
 	}
-	if warnings := merged.ValidateTenantKeys(); len(warnings) != 0 {
+	if warnings := merged.ValidateTenantKeys().Errors; len(warnings) != 0 { // #1231 c2 accessor
 		t.Errorf("tenant-only metric body should validate clean against merged defaults, got: %v", warnings)
 	}
 }
@@ -52,7 +52,7 @@ func TestMergeTenantWithRootDefaults_NoDefaultsFile(t *testing.T) {
 	if len(merged.Defaults) != 0 {
 		t.Errorf("expected empty Defaults without a _defaults.yaml, got: %v", merged.Defaults)
 	}
-	if warnings := merged.ValidateTenantKeys(); len(warnings) == 0 {
+	if warnings := merged.ValidateTenantKeys().Errors; len(warnings) == 0 { // #1231 c2 accessor
 		t.Error("an unmatched metric key should warn when no defaults are present")
 	}
 }
@@ -106,7 +106,7 @@ func TestMergeTenantWithRootDefaults_FlatKVFallback(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir() // no _defaults.yaml needed
 
-	body := []byte("container_cpu: \"70\"\nmysql_cpu: \"60\"\n")
+	body := []byte("container_cpu: \"70\"\nmysql_threads_running: \"60\"\n")
 	merged := MergeTenantWithRootDefaults(dir, "db-a", body)
 
 	tenant, ok := merged.Tenants["db-a"]
@@ -116,8 +116,8 @@ func TestMergeTenantWithRootDefaults_FlatKVFallback(t *testing.T) {
 	if got := tenant["container_cpu"].Default; got != "70" {
 		t.Errorf("container_cpu = %q, want \"70\"", got)
 	}
-	if got := tenant["mysql_cpu"].Default; got != "60" {
-		t.Errorf("mysql_cpu = %q, want \"60\"", got)
+	if got := tenant["mysql_threads_running"].Default; got != "60" {
+		t.Errorf("mysql_threads_running = %q, want \"60\"", got)
 	}
 	if len(merged.Tenants) != 1 {
 		t.Errorf("only the requested tenant should be present, got: %v", merged.Tenants)
@@ -161,8 +161,8 @@ func TestMergeTenantWithRootDefaults_BodyShapes(t *testing.T) {
 		{
 			name:     "multi-tenant block merges all tenants",
 			tenantID: "db-a",
-			body:     "tenants:\n  db-a:\n    container_cpu: \"70\"\n  db-b:\n    mysql_cpu: \"60\"\n",
-			want:     map[string][]string{"db-a": {"container_cpu"}, "db-b": {"mysql_cpu"}},
+			body:     "tenants:\n  db-a:\n    container_cpu: \"70\"\n  db-b:\n    mysql_threads_running: \"60\"\n",
+			want:     map[string][]string{"db-a": {"container_cpu"}, "db-b": {"mysql_threads_running"}},
 		},
 		{
 			name:     "empty body merges nothing",
@@ -265,7 +265,7 @@ func TestMergeTenantWithRootDefaults_MalformedDefaultsTolerated(t *testing.T) {
 func TestMergeParsedTenantWithRootDefaults_MatchesByteVariant(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	defaults := "defaults:\n  container_cpu: 80\n  mysql_cpu: 80\n" +
+	defaults := "defaults:\n  container_cpu: 80\n  mysql_threads_running: 80\n" +
 		"state_filters:\n" +
 		"  container_crashloop:\n" +
 		"    reasons: [\"CrashLoopBackOff\"]\n" +
@@ -280,7 +280,7 @@ func TestMergeParsedTenantWithRootDefaults_MatchesByteVariant(t *testing.T) {
 		body     string
 	}{
 		{"single tenant", "db-a", "tenants:\n  db-a:\n    container_cpu: \"70\"\n"},
-		{"multi tenant block", "db-a", "tenants:\n  db-a:\n    container_cpu: \"70\"\n  db-b:\n    mysql_cpu: \"60\"\n"},
+		{"multi tenant block", "db-a", "tenants:\n  db-a:\n    container_cpu: \"70\"\n  db-b:\n    mysql_threads_running: \"60\"\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -325,7 +325,7 @@ func TestMergeParsedTenantWithRootDefaults_OmitsFlatKVFallback(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir() // no _defaults.yaml needed
 
-	flat := "container_cpu: \"70\"\nmysql_cpu: \"60\"\n" // no tenants: wrapper
+	flat := "container_cpu: \"70\"\nmysql_threads_running: \"60\"\n" // no tenants: wrapper
 	var tcfg ThresholdConfig
 	if err := yaml.Unmarshal([]byte(flat), &tcfg); err != nil {
 		t.Fatalf("decode body: %v", err)

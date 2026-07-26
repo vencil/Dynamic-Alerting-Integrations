@@ -31,7 +31,7 @@ func TestValidateTenantKeys_CriticalWithoutBaseDefaultWarns(t *testing.T) {
 		},
 	}
 
-	warnings := cfg.ValidateTenantKeys()
+	warnings := cfg.ValidateTenantKeys().Errors // #1231 c2: dangling _critical is a blocking Error
 
 	if len(warnings) != 1 {
 		t.Fatalf("expected exactly 1 warning, got %d: %v", len(warnings), warnings)
@@ -61,7 +61,7 @@ func TestValidateTenantKeys_CriticalWithBaseDefaultIsSilent(t *testing.T) {
 		},
 	}
 
-	if w := cfg.ValidateTenantKeys(); len(w) != 0 {
+	if w := cfg.ValidateTenantKeys().Errors; len(w) != 0 { // #1231 c2 accessor
 		t.Fatalf("expected no warnings for a critical override with a base default, got %v", w)
 	}
 }
@@ -84,10 +84,10 @@ func TestValidateTenantKeys_BaseAndCriticalAreConsistentlyValidated(t *testing.T
 		},
 	}
 
-	if got := len(base.ValidateTenantKeys()); got != 1 {
+	if got := len(base.ValidateTenantKeys().Errors); got != 1 { // #1231 c2 accessor
 		t.Fatalf("unknown BASE key should warn once, got %d", got)
 	}
-	if got := len(critical.ValidateTenantKeys()); got != 1 {
+	if got := len(critical.ValidateTenantKeys().Errors); got != 1 { // #1231 c2 accessor
 		t.Fatalf("unknown key via `_critical` should warn once too, got %d", got)
 	}
 }
@@ -109,7 +109,7 @@ func TestValidateTenantKeys_CriticalOnReservedPrefixIsUnaffected(t *testing.T) {
 		},
 	}
 
-	if w := cfg.ValidateTenantKeys(); len(w) != 0 {
+	if w := cfg.ValidateTenantKeys().Errors; len(w) != 0 { // #1231 c2 accessor
 		t.Fatalf("reserved keys must not be affected by the `_critical` branch, got %v", w)
 	}
 }

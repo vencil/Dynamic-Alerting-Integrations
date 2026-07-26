@@ -38,6 +38,10 @@ type BatchResult struct {
 	TenantID string `json:"tenant_id"`
 	Status   string `json:"status"` // "ok" | "error"
 	Message  string `json:"message,omitempty"`
+	// Warnings carries non-blocking advisories for an op that SUCCEEDED
+	// (#1231 deprecated-key alias notices from the direct WriteMerged path).
+	// Error results never carry warnings — Message owns the failure text.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // BatchResponse is the full response for POST /api/v1/tenants/batch.
@@ -49,6 +53,11 @@ type BatchResponse struct {
 	Results  []BatchResult `json:"results"`
 	Summary  string        `json:"summary"`           // e.g., "5 succeeded, 1 failed"
 	Message  string        `json:"message,omitempty"` // v2.6.0: human-readable message
+	// Warnings is the batch-level advisory list for PR mode (#1231): the
+	// per-op notices aggregated by WritePRBatch. Batch-level (not per-result)
+	// because PR-mode Results are frozen at "included" BEFORE the write runs;
+	// each notice self-identifies its tenant (`tenant=<id>` in the wording).
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // BatchTenants handles POST /api/v1/tenants/batch
@@ -206,12 +215,22 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 		}
 		// #1102: an all-no-op batch (idempotent patch / retry) produced no
 		// commits — return a clean "no changes" success, never a forge error.
+		// #1231 F5: ErrNoChanges is the one error WritePRBatch pairs with a
+		// non-nil result — it carries the per-op deprecation notices, and the
+		// no-changes 200 must keep that migration signal (the file still
+		// carries the deprecated spelling whether or not this patch changed
+		// bytes; same invariant as WriteMerged's no-op path).
 		if errors.Is(err, gitops.ErrNoChanges) {
+			var warnings []string
+			if result != nil {
+				warnings = result.Notices
+			}
 			writeJSON(rw, http.StatusOK, BatchResponse{
-				Status:  "completed",
-				Results: batchResults,
-				Summary: fmt.Sprintf("%d unchanged", len(batchOps)),
-				Message: "No changes to apply; no PR/MR created.",
+				Status:   "completed",
+				Results:  batchResults,
+				Summary:  fmt.Sprintf("%d unchanged", len(batchOps)),
+				Message:  "No changes to apply; no PR/MR created.",
+				Warnings: warnings,
 			})
 			return
 		}
@@ -256,6 +275,7 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 		Results:  batchResults,
 		Summary:  fmt.Sprintf("%d included in PR/MR, %d failed", len(batchOps), len(batchResults)-len(batchOps)),
 		Message:  fmt.Sprintf("Batch PR/MR created with %d tenant changes.", len(batchOps)),
+		Warnings: result.Notices,
 	})
 }
 
@@ -301,7 +321,8 @@ func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op Batc
 	merge := func(existing []byte) (string, error) {
 		return mergePatchYAML(existing, op.TenantID, op.Patch)
 	}
-	if err := w.WriteMerged(ctx, op.TenantID, authorEmail, merge); err != nil {
+	notices, err := w.WriteMerged(ctx, op.TenantID, authorEmail, merge)
+	if err != nil {
 		msg := err.Error()
 		if errors.Is(err, gitops.ErrConflict) {
 			msg = "conflict: retry after refresh"
@@ -310,7 +331,10 @@ func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op Batc
 		}
 		return BatchResult{TenantID: op.TenantID, Status: "error", Message: msg}
 	}
-	return BatchResult{TenantID: op.TenantID, Status: "ok"}
+	// #1231 1b: a successful op surfaces its non-blocking deprecation notices
+	// per tenant, so the operator sees exactly which member of the batch still
+	// carries an old key spelling.
+	return BatchResult{TenantID: op.TenantID, Status: "ok", Warnings: notices}
 }
 
 // mergePatchYAML sets each patch key on `tenants.<tenantID>` in the existing

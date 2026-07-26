@@ -2199,6 +2199,13 @@
                 "task_id": {
                     "description": "async task ID",
                     "type": "string"
+                },
+                "warnings": {
+                    "description": "Warnings is the batch-level advisory list for PR mode (#1231): the\nper-op notices aggregated by WritePRBatch. Batch-level (not per-result)\nbecause PR-mode Results are frozen at \"included\" BEFORE the write runs;\neach notice self-identifies its tenant (`tenant=\u003cid\u003e` in the wording).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -2214,6 +2221,13 @@
                 },
                 "tenant_id": {
                     "type": "string"
+                },
+                "warnings": {
+                    "description": "Warnings carries non-blocking advisories for an op that SUCCEEDED\n(#1231 deprecated-key alias notices from the direct WriteMerged path).\nError results never carry warnings — Message owns the failure text.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -2580,6 +2594,13 @@
                 },
                 "tenant_id": {
                     "type": "string"
+                },
+                "warnings": {
+                    "description": "Warnings carries non-blocking advisories for a write that SUCCEEDED —\nthe #1231 deprecated-key alias notices from the shared write-boundary\nvalidation. They concern the tenant file's THRESHOLD keys (the write\nre-validates the whole merged document), not the recipes being saved:\nthis endpoint is the portal's only tenant-file write path, so it is\nwhere a mysql_cpu-era file gets its author-facing migration signal.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -2632,6 +2653,7 @@
                     "type": "string"
                 },
                 "warnings": {
+                    "description": "Warnings carries NON-BLOCKING advisories for a write that SUCCEEDED —\ncurrently the #1231 deprecated-key alias notices (e.g. a body still\nspelling mysql_threads_running as mysql_cpu). The write went through;\nthese tell the author what to migrate before the transition window\ncloses. Never populated on error responses.",
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -2701,7 +2723,14 @@
                     "description": "SourceHash is SHA-256[:16] of the raw tenant file. Clients echo it\nback as `base_hash` on PUT .../custom-alerts for optimistic-\nconcurrency (ADR-024 §S6b-2): the write 409s if the file changed\nunderneath them.",
                     "type": "string"
                 },
+                "validation_notices": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "validation_warnings": {
+                    "description": "Warnings is the BLOCKING validation set (KeyValidation.Errors) — what a\nwrite of this exact file would be rejected on. Notices is the advisory\nset (#1231 deprecated-key alias notices): the file keeps resolving and\nwriting, but carries a spelling the author should migrate. Split fields\nso a client never has to text-parse severity out of one list.",
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -2759,6 +2788,12 @@
         "internal_handler.ValidateResponse": {
             "type": "object",
             "properties": {
+                "notices": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "valid": {
                     "type": "boolean"
                 },

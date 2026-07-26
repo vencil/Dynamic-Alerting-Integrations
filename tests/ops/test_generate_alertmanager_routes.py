@@ -621,6 +621,113 @@ class TestValidateTenantKeys:
         assert warnings == []
 
 
+# ============================================================
+# #1231 deprecated key aliases（Python ↔ Go alias boundary 對稱）
+# ============================================================
+class TestDeprecatedKeyAliases:
+    """#1231：舊拼寫（mysql_cpu）在 2-release 過渡窗內以 canonical key
+    通過驗證，發非阻擋 NOTICE 取代 unknown-key 警告。fixture 覆蓋兩態：
+    「舊名 defaults」（現態，platform rename 在 commit 2）與
+    「新名 defaults＋舊 key override」（rename 後的出貨態）。"""
+
+    _OLD_DEFAULTS = {"mysql_cpu", "container_cpu"}
+    _NEW_DEFAULTS = {"mysql_threads_running", "container_cpu"}
+
+    def _notices(self, warnings):
+        return [w for w in warnings if w.lstrip().startswith("NOTICE:")]
+
+    def test_old_key_with_new_defaults_notice_not_unknown(self):
+        """出貨態：舊 override 對新名 defaults → 只有 NOTICE，無 unknown-key。"""
+        warnings = validate_tenant_keys("t", {"mysql_cpu"}, self._NEW_DEFAULTS)
+        assert len(warnings) == 1, warnings
+        n = warnings[0]
+        assert n.lstrip().startswith("NOTICE:")
+        assert "mysql_cpu" in n and "mysql_threads_running" in n
+        assert "not in defaults" not in n
+
+    def test_old_key_with_old_defaults_still_notices(self):
+        """現態：defaults 仍是舊名——alias 表已生效，照樣提示改名。"""
+        warnings = validate_tenant_keys("t", {"mysql_cpu"}, self._OLD_DEFAULTS)
+        assert self._notices(warnings), warnings
+        assert not [w for w in warnings if "WARN" in w], warnings
+
+    def test_old_critical_not_dangling_after_alias(self):
+        """舊拼寫 _critical 的 base 經 alias 後在 defaults → 不落 dangling。"""
+        for defaults in (self._OLD_DEFAULTS, self._NEW_DEFAULTS):
+            warnings = validate_tenant_keys(
+                "t", {"mysql_cpu_critical"}, defaults)
+            assert not [w for w in warnings if "WARN" in w], (defaults, warnings)
+            assert self._notices(warnings), (defaults, warnings)
+
+    def test_dimensional_old_base_canonicalizes(self):
+        """dimensional 舊 base canonicalize 後照走 version-label 驗證。"""
+        warnings = validate_tenant_keys(
+            "t", {'mysql_cpu{version="v2"}'}, self._NEW_DEFAULTS)
+        assert self._notices(warnings), warnings
+        # mysql_threads_running 非 pilot metric → version-label 警告照發，
+        # 且訊息以 canonical 拼寫呈現（aliased key 的訊息一律點名新 key）。
+        pilot = [w for w in warnings if "non-pilot" in w]
+        assert pilot and "mysql_threads_running" in pilot[0], warnings
+
+    def test_prefix_typo_still_unknown(self):
+        """⛔ 禁 prefix-match：mysql_cpu_util 仍是 unknown-key，無 NOTICE。"""
+        warnings = validate_tenant_keys(
+            "t", {"mysql_cpu_util"}, self._NEW_DEFAULTS)
+        assert not self._notices(warnings), warnings
+        assert any("mysql_cpu_util" in w and "not in defaults" in w
+                   for w in warnings), warnings
+
+    def test_both_spellings_conflict_reports_ignored(self):
+        """兩拼寫並存 → canonical 勝出，舊 key 回報 ignored（同 Go dedup）。"""
+        warnings = validate_tenant_keys(
+            "t", {"mysql_cpu", "mysql_threads_running"}, self._NEW_DEFAULTS)
+        assert len(warnings) == 1, warnings
+        assert "ignored" in warnings[0] and "mysql_cpu" in warnings[0]
+        assert not [w for w in warnings if "WARN" in w], warnings
+
+
+class TestDeprecationNoticePin:
+    """措辭 pin（仿 TestPolicyErrorPrefixPin 的鎖法）：NOTICE 行不得踩到
+    兩份 fatal 判定——generate_alertmanager_routes._validate_mode:136 的
+    `"WARN" in w and "skipping" in w` 與 validate_config.py:220 的手抄副本，
+    以及 _policy_errors 的 `ERROR:` 前綴。兩份判定都在此直接執行驗證。"""
+
+    def _all_notices(self):
+        out = []
+        out += validate_tenant_keys("t", {"mysql_cpu"},
+                                    {"mysql_threads_running"})
+        out += validate_tenant_keys("t", {"mysql_cpu_critical"},
+                                    {"mysql_threads_running"})
+        out += validate_tenant_keys(
+            "t", {"mysql_cpu", "mysql_threads_running"},
+            {"mysql_threads_running"})
+        assert out, "fixture 應產出至少一則 NOTICE"
+        return out
+
+    def test_notice_never_matches_legacy_fatal_predicate(self):
+        """直接執行 --validate 的 legacy fatal 述詞：必須全空。"""
+        notices = self._all_notices()
+        fatal = [w for w in notices if "WARN" in w and "skipping" in w]
+        assert fatal == []
+        # 更嚴：連個別子字串都不許出現，杜絕未來措辭 drift 慢慢靠近述詞。
+        assert not [w for w in notices if "skipping" in w]
+        assert not [w for w in notices if "WARN" in w]
+
+    def test_notice_never_matches_policy_error_prefix(self):
+        """_policy_errors 的 blocking 前綴判定：必須全空。"""
+        from _grar_validate import POLICY_ERROR_PREFIX
+        notices = self._all_notices()
+        assert not [w for w in notices
+                    if w.lstrip().startswith(POLICY_ERROR_PREFIX)]
+
+    def test_alias_table_mirrors_go_side(self):
+        """alias 表雙點名內容 pin：commit 2 改接 registry 前，Python↔Go
+        兩份手 pin 表必須同內容（Go 側在 pkg/config/aliases.go）。"""
+        from _grar_validate import DEPRECATED_KEY_ALIASES
+        assert DEPRECATED_KEY_ALIASES == {
+            "mysql_cpu": "mysql_threads_running"}
+
+
 class TestValidateVersionLabel:
     """ADR-024 OQ-6 dimensional `version` label guard (Python side of the
     雙語 da-guard; mirrors Go config.validateVersionLabel)."""
