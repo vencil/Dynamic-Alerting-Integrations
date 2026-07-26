@@ -98,6 +98,28 @@ PILOT_SETTINGS_MONKEYPATCH = settings(
     deadline=500,
 )
 
+# Variant for the handful of properties that actually touch the FILESYSTEM
+# (mktemp + write_text + read back). A wall-clock deadline cannot express
+# a property about those: it measures the host's I/O scheduler, not the
+# code under test. The 500ms above was already too tight in practice —
+# `TestLoadYamlFileProperties::test_round_trip` and
+# `TestLatestVersionFromChangelogProperties::test_round_trip` were
+# observed failing with `DeadlineExceeded: Test took 916.75ms, which
+# exceeds the deadline of 500.00ms` on a Windows dev host, which is a
+# timing artefact rather than a falsified property.
+#
+# Raising the number would just move the goalpost, so these opt out of the
+# deadline entirely — matching the repo-wide default in tests/conftest.py.
+# The other ~79 properties in this file are PURE FUNCTIONS and keep
+# deadline=500, where a deadline does express something real (algorithmic
+# regression). Rule of thumb: pure function → deadline is fine; touches
+# I/O → deadline=None.
+PILOT_SETTINGS_IO = settings(
+    max_examples=50,
+    suppress_health_check=[HealthCheck.too_slow],
+    deadline=None,
+)
+
 
 # ---------------------------------------------------------------------------
 # extract_metrics_from_expr — pure regex over PromQL identifiers
@@ -764,7 +786,7 @@ class TestLoadYamlFileProperties:
         values=st.text(alphabet=string.ascii_letters, min_size=1, max_size=20),
         min_size=1, max_size=5,
     ))
-    @PILOT_SETTINGS
+    @PILOT_SETTINGS_IO
     def test_round_trip(self, tmp_path_factory, kv):
         # Hypothesis fixture-ordering rule: pytest fixtures BEFORE
         # @given strategy params.
@@ -802,7 +824,7 @@ class TestIterYamlFilesProperties:
         st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=8),
         min_size=1, max_size=10, unique=True,
     ))
-    @PILOT_SETTINGS
+    @PILOT_SETTINGS_IO
     def test_output_sorted_by_filename(self, tmp_path_factory, names):
         # Property: returned list is sorted by filename ascending.
         d = tmp_path_factory.mktemp("yaml")
@@ -1854,7 +1876,7 @@ class TestLatestVersionFromChangelogProperties:
         st.integers(min_value=0, max_value=99),
         st.integers(min_value=0, max_value=99),
     )
-    @PILOT_SETTINGS
+    @PILOT_SETTINGS_IO
     def test_round_trip(self, tmp_path_factory, major, minor, patch):
         # Property: writing a single version heading and parsing it back
         # gives that exact version.
