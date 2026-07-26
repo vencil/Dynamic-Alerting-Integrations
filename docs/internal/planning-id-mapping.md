@@ -178,6 +178,13 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-343 | [#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211) | custom 子樹 delivery fail-silent ×2：page-mode 無 delivery 零警示＋fragment 模式缺 custom 子樹 | [#1200](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1200) |
 | TRK-344 | [#1218](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1218) | `init_project` 產生的 `_defaults.yaml` 把 16 個 `*_critical` key 放進 `defaults:` — critical 層只認租戶 override，故該層告警全數不可開火＋每租戶 16 條無人消費的 series | [#1200](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1200) |
 | TRK-345 | [#1219](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1219) | Defaults Impact Guard 從未檢查觸發它的檔案 — shallow clone 使 `git diff` fatal 被 `\|\| true` 吞掉、scope 靜默退回未改動目錄後貼綠（fail-open） | [#1200](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1200) |
+| TRK-346 | [#1231](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1231) | `mysql_cpu` → `mysql_threads_running` 底層 key 改名 — owner 終審推翻 #992 ACCEPTED AS-IS（名字非病灶、但雙 series 並發／`_critical` 防線需實修） | [#1200](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1200) |
+| TRK-347 | [#1233](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1233) | [Epic] ADR-028 federation 撤銷 tamper-evidence 偵測面 revalidation — 偵測鏈路從未端到端驗證（vibe-security-audit re-audit 收斂，5 子項） | — |
+| TRK-348 | [#1234](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1234) | 撤銷事件從未進入 VictoriaLogs — Vector 不 tail tenant-api，reconciler 恆對帳空集合、三告警恆綠（主控失效） | [#1233](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1233) |
+| TRK-349 | [#1235](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1235) | revoked-set 解析契約：gateway（Lua）與 reconciler（Python）需 byte-exact 一致 + `token_id` charset 驗證（技術細節走私密 advisory） | [#1233](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1233) |
+| TRK-350 | [#1236](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1236) | `revoked.txt` missing 時 gateway fail-open 不發 log — `FederationGatewayRevocationLoadFailure` 抓不到 ADR 自己點名的攻擊（文件↔碼矛盾） | [#1233](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1233) |
+| TRK-351 | [#1237](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1237) | reconciler 兩支 LogsQL 查詢無來源限定 — 非權威來源可灌入假訊號（alert fatigue → 偵測失能） | [#1233](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1233) |
+| TRK-352 | [#1238](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1238) | `FederationRevocationTamperSuspected` `for:5m` 等於 reconcile interval（300s）＋gauge 每輪歸零 → 短窗 un-revoke 結構上不可 page | [#1233](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1233) |
 
 ## 不在 mapping 範圍
 
