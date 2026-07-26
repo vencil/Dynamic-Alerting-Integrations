@@ -83,12 +83,17 @@ TIERS = ("defaults", "optional_overrides")
 
 # ---------------------------------------------------------------------------
 # chart_default — the "the Helm chart ships this key enabled" set (#1200 WS1a
-# PR-2). BEHAVIOR-PRESERVING by construction: this is exactly the key set the
-# hand-written helm/threshold-exporter/values.yaml thresholdConfig.defaults
-# carried before the rewire. Flipping more keys on (the D4 family — e.g.
-# promoting pg_connections / pg_replication_lag, which the dev template used
-# to carry but the chart never did) is a deliberate owner decision, NOT a
-# mechanical edit — see the D4 shadow/would-fire policy in epic #1200.
+# PR-2). The initial 6-key set was BEHAVIOR-PRESERVING by construction:
+# exactly the key set the hand-written helm/threshold-exporter/values.yaml
+# thresholdConfig.defaults carried before the rewire. Flipping more keys on
+# is a deliberate owner decision, NOT a mechanical edit — see the D4
+# shadow/would-fire policy in epic #1200.
+# Owner-decided promotions so far:
+#   - pg_connections / pg_replication_lag (postgresql pack) — D4
+#     definite-imminent 折衷落地（#1200 Q3=C；Gemini #1222 review 同向建議；
+#     owner 2026-07-25 核可）。the dev template historically carried these
+#     but the chart never did; their _critical variants stay opt-in
+#     (mysql_replication_lag precedent).
 # Only defaults-tier keys are eligible (build_registry_doc fails loudly
 # otherwise): optional_overrides keys are dormant by definition.
 # ---------------------------------------------------------------------------
@@ -101,6 +106,10 @@ CHART_DEFAULT_KEYS: frozenset[str] = frozenset({
     "mysql_connections",
     "mysql_cpu",
     "mysql_replication_lag",
+    # PostgreSQL warning tier (postgresql pack) — owner-decided promotion,
+    # #1200 Q3=C / D4 folding, 2026-07-25.
+    "pg_connections",
+    "pg_replication_lag",
 })
 
 # ---------------------------------------------------------------------------
