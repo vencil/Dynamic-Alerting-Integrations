@@ -109,7 +109,7 @@ groups:
 
 ✅ threshold-exporter remains completely unaware of topology complexity, staying simple
 ✅ All three topologies converge via a unified `tenant` label; downstream rules and Dashboards require zero changes
-✅ Recording Rules support hot reload (configmap-reload), no Prometheus restart needed
+✅ Recording Rules support hot reload (config-reloader sidecar), no Prometheus restart needed
 ✅ TSDB retains both original and mapped metrics, supporting multi-dimensional retrospective analysis
 ✅ Integrates seamlessly with existing Rule Pack architecture (ADR-005 Projected Volume)
 

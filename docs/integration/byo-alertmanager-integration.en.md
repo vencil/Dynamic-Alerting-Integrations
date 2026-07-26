@@ -69,22 +69,42 @@ graph LR
 
 ## 2. Integration Steps
 
-### Step 1: Enable Alertmanager Lifecycle API
+### Step 1: Confirm the Alertmanager Reload Endpoint Is Reachable
 
-Add the `--web.enable-lifecycle` flag to the Alertmanager deployment:
+**No flag is required.** Alertmanager's `/-/reload` is enabled unconditionally (POST;
+GET returns 405) — there is no switch for it.
 
 ```yaml
 args:
   - "--config.file=/etc/alertmanager/alertmanager.yml"
   - "--storage.path=/alertmanager"
-  - "--web.enable-lifecycle"
 ```
+
+> ⛔ **Do NOT add `--web.enable-lifecycle`** (an earlier revision of this page said to;
+> corrected in #1243). That flag belongs to **Prometheus**; Alertmanager does not have
+> it, and v0.33.1 exits immediately with
+> `alertmanager: error: unknown long flag '--web.enable-lifecycle'` — adding it means
+> Alertmanager never starts.
+>
+> ⚠️ The flip side: because `/-/reload` cannot be turned off and carries **no
+> authentication**, use a NetworkPolicy to keep **other pods** off port 9093, or front
+> it with an auth proxy. ⛔ Mind where a NetworkPolicy actually applies: the sidecar
+> talks to Alertmanager over loopback inside the same pod (shared network namespace),
+> so that traffic never passes a NetworkPolicy — it governs pod-to-pod traffic and
+> cannot admit "only this one container in this pod".
+>
+> ⚠️ The other half of the same misconception: **Alertmanager has no `/-/quit`
+> either** (v0.33.1 returns 404 and keeps running) — that is also a Prometheus
+> endpoint. `/-/reload` is the only thing exposed on this side.
 
 Verify:
 
 ```bash
 kubectl port-forward svc/alertmanager 9093:9093 -n monitoring &
-curl -sf http://localhost:9093/-/ready && echo "OK"
+curl -sf http://localhost:9093/-/ready && echo "ready OK"
+# What this step actually has to prove is the reload path — a green /-/ready does
+# not mean /-/reload is reachable:
+curl -sf -X POST http://localhost:9093/-/reload && echo "reload OK"
 ```
 
 ### Step 2: Ensure Prometheus is Connected to Alertmanager
@@ -178,7 +198,7 @@ Best for: Formal GitOps workflow. The generated ConfigMap YAML is in complete `k
 ### Step 6: Reload Alertmanager
 
 ```bash
-# HTTP reload (requires Step 1's --web.enable-lifecycle)
+# HTTP reload (Alertmanager exposes this endpoint unconditionally — no flag needed)
 curl -X POST http://localhost:9093/-/reload
 
 # Verify reload success
@@ -221,7 +241,7 @@ Platform-enforced timing ranges, automatically clamped when exceeded:
 
 ### Mechanism
 
-v1.3.0 implements HTTP reload via Alertmanager's native `--web.enable-lifecycle` flag:
+HTTP reload works through Alertmanager's native, always-on `/-/reload` endpoint (no flag):
 
 ```bash
 # After ConfigMap update

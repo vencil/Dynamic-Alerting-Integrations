@@ -19,7 +19,7 @@ lang: zh
 :   記錄架構設計決策的標準化文件格式，說明問題背景、方案選項、最終決策與理由。見 `docs/adr/`。
 
 **Alertmanager**
-:   Prometheus 生態系的告警路由與通知元件。本平台使用其 `inhibit_rules` 實現 Severity Dedup，並透過 `configmap-reload` sidecar 自動載入配置變更。
+:   Prometheus 生態系的告警路由與通知元件。本平台使用其 `inhibit_rules` 實現 Severity Dedup，並透過 `config-reloader` sidecar（prometheus-operator 的 prometheus-config-reloader）自動載入配置變更。
 
 **AST 遷移引擎 (AST Migration Engine)**
 :   `migrate_rule.py` 的核心——將傳統 PromQL alert rule 解析為抽象語法樹（AST），自動轉換為 Dynamic Alerting 的 YAML 閾值格式。支援 Triage、Prefix、Dictionary 三種推斷模式。
@@ -41,7 +41,7 @@ lang: zh
 :   per-tenant 500 指標上限保護機制。超過上限時自動截斷（truncate）並記錄 ERROR 日誌，防止單一租戶的配置錯誤影響整個 TSDB。
 
 **ConfigMap Reload**
-:   Kubernetes ConfigMap 變更後的自動重載機制。threshold-exporter 使用 SHA-256 hash 偵測變更，Alertmanager 使用 `configmap-reload` sidecar。
+:   Kubernetes ConfigMap 變更後的自動重載機制。threshold-exporter 使用 SHA-256 hash 偵測變更，Alertmanager 使用 `config-reloader` sidecar。
 
 **Config Drift**
 :   配置飄移——實際執行中的配置與 Git 版本庫中的配置不一致。`config_diff.py` 用於 CI 中偵測此問題。

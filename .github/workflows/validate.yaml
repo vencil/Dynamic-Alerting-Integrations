@@ -237,7 +237,7 @@ jobs:
       # The amtool image is DERIVED from the deployment manifest (single source
       # of truth) so a cluster Alertmanager version bump can't leave this guard
       # validating against a stale parser. Matches `prom/alertmanager:<tag>`
-      # specifically → the configmap-reload sidecar image is ignored.
+      # specifically → the config-reloader sidecar image is ignored.
       - name: Validate rendered Alertmanager config (amtool)
         run: |
           mkdir -p /tmp/am-etc

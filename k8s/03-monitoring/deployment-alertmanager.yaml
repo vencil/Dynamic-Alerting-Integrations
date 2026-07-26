@@ -38,10 +38,17 @@ spec:
           args:
             - "--config.file=/etc/alertmanager/alertmanager.yml"
             - "--storage.path=/alertmanager"
-            # ⚠️ 安全注意：啟用 lifecycle 會暴露 /-/reload 和 /-/quit 端點（無認證）。
-            # 生產環境請搭配 NetworkPolicy 限制僅允許 configmap-reload sidecar 存取，
-            # 或使用 auth proxy 保護。
-            - "--web.enable-lifecycle"
+            # ⛔ 這裡曾有 `--web.enable-lifecycle`（#1243 移除）。**Alertmanager 沒有這個
+            # flag**——那是 Prometheus 的；v0.33.1 實跑會 `unknown long flag` 直接退出，
+            # 這個 Deployment 帶著它根本起不來。Alertmanager 的 `/-/reload` 是**無條件
+            # 啟用**的（POST，GET 回 405），不需要任何 flag。
+            # ⚠️ 安全注意：`/-/reload` 因此關不掉且無認證。生產環境用 NetworkPolicy 擋掉
+            # **叢集內其他 Pod** 對 9093 的存取，或用 auth proxy 擋在前面。
+            # ⛔ 別誤解 NetworkPolicy 的作用點：同 Pod 內的 config-reloader 走 loopback、
+            # 共用同一個 network namespace，那段流量**不經 NetworkPolicy**（也不需要）——
+            # NetworkPolicy 能保護的是 pod-to-pod，做不到「只放行本 Pod 內某個容器」。
+            # ⚠️ 另一個常見誤解：Alertmanager **沒有 `/-/quit`**（v0.33.1 實測 404、行程續活），
+            # 那同樣是 Prometheus 的端點——別把 Prometheus 的 lifecycle 威脅模型抄過來。
           ports:
             - containerPort: 9093
               name: http
@@ -77,16 +84,28 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
         - name: config-reloader
-          image: ghcr.io/jimmidyson/configmap-reload:v0.15.0@sha256:b578b7599d65c0279f6e1aad201bba737b9b15e6a4f308281d9e26f765e6657f
+          # #1243: was ghcr.io/jimmidyson/configmap-reload:v0.15.0 — release-dormant
+          # (last release 2025-04-09; CVE issues #188/#210 unanswered) and carrying 16
+          # fixable Go-stdlib HIGHs. prometheus-operator's reloader is the maintained
+          # equivalent (monthly cadence) and is a plain directory watcher: it builds NO
+          # Kubernetes client and needs no CRD, RBAC or --config-file. Flag mapping:
+          #   --volume-dir      -> --watched-dir   (repeatable)
+          #   --webhook-url     -> --reload-url    (default is Prometheus' :9090 — MUST override)
+          #   --webhook-method  -> dropped; the POST verb is hardcoded upstream
+          # Net reduction in exposed surface: configmap-reload defaulted
+          # `-web.listen-address` to :9533, whereas this one's --listen-address is
+          # empty-by-default = metrics listener disabled, so the sidecar now opens NO
+          # port at all. It also polls every 3m by default (--watch-interval) as a
+          # backstop for fsnotify, which configmap-reload had no equivalent of.
+          image: quay.io/prometheus-operator/prometheus-config-reloader:v0.92.1@sha256:74550ba3e8bf93f47bc574231090d340ae9c01d25cd11ff74799e65f9fdb9a48
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           args:
-            - "--volume-dir=/etc/alertmanager"
-            - "--webhook-url=http://localhost:9093/-/reload"
-            - "--webhook-method=POST"
+            - "--watched-dir=/etc/alertmanager"
+            - "--reload-url=http://localhost:9093/-/reload"
           volumeMounts:
             - name: config
               mountPath: /etc/alertmanager

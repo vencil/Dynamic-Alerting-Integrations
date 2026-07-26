@@ -67,7 +67,7 @@ volumes:
 
 **Isolation and Fault Tolerance**: Each Rule Pack is independently controlled. If Rule Pack-JVM has configuration errors, only JVM rules are affected; other packs and core rules are not impacted.
 
-**Dynamic Management**: Prometheus configmap-reload sidecar monitors ConfigMap changes and automatically reloads rules. Tenants can quickly adjust Rule Pack combinations.
+**Dynamic Management**: a config-reloader sidecar monitors ConfigMap changes and automatically reloads rules. Tenants can quickly adjust Rule Pack combinations.
 
 **Operational Simplicity**: No need for custom controllers or complex initialization logic. Pure Kubernetes native features, easy to understand and maintain.
 

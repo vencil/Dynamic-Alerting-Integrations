@@ -4,9 +4,11 @@ description: Tenant federation label-injection proxy (ADR-020 Layer 3) — prom-
 type: application
 # version: Helm Chart 版本（隨 Chart 結構/模板變更升級）
 # 0.1.2 — #902 L2: pin prom-label-proxy by digest (image.digest knob) — supply-chain
-version: 0.1.2
+# 0.1.3 — #1243: v0.13.0 -> v0.14.0 and quay.io -> docker.io (upstream never pushed
+#         v0.14.0 to quay; quay's tags are frozen at the 2026-04-21 build)
+version: 0.1.3
 # appVersion: pinned prom-label-proxy release
-appVersion: "v0.13.0"
+appVersion: "v0.14.0"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle
 # action, beta-on-by-default since Kubernetes 1.29.
 kubeVersion: ">=1.29.0-0"

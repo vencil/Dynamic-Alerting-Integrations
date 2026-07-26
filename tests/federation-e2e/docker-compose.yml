@@ -59,7 +59,7 @@ services:
   # and metadata request. Args mirror helm/federation-proxy (the SoT);
   # --enable-label-apis covers /series /labels /label/<n>/values.
   federation-proxy:
-    image: quay.io/prometheuscommunity/prom-label-proxy:v0.13.0
+    image: prometheuscommunity/prom-label-proxy:v0.14.0
     # Args mirror helm/federation-proxy/templates/deployment.yaml (the
     # SoT) verbatim — single-dash flags, same order.
     command:

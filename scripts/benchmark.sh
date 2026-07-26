@@ -15,7 +15,7 @@
 #   --alertmanager-bench  Alertmanager notification latency under load — measure
 #                         route matching + inhibit rule evaluation overhead
 #   --reload-bench     Alertmanager config reload E2E latency — ConfigMap patch
-#                      → configmap-reload detect → /-/reload → new routes active
+#                      → config-reloader detect → /-/reload → new routes active
 # ============================================================
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -701,7 +701,7 @@ if [[ "${RELOAD_BENCH}" == true ]]; then
       # Trigger explicit reload via lifecycle API
       curl -sf -X POST http://localhost:9093/-/reload >/dev/null 2>&1
 
-      # Poll for reload success (configmap-reload sidecar or explicit reload)
+      # Poll for reload success (config-reloader sidecar or explicit reload)
       RL_RELOAD_OK=false
       for poll in $(seq 1 20); do
         RL_AFTER_TS=$(curl -sf http://localhost:9093/metrics 2>/dev/null | \

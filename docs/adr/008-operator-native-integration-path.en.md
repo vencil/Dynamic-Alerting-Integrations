@@ -51,7 +51,7 @@ graph TB
         PA1["projected volume"]
         PA2["configMapGenerator"]
         PA3["generate-routes.py"]
-        PA4["configmap-reload sidecar"]
+        PA4["config-reloader sidecar"]
     end
 
     subgraph PB["Path B: Operator CRD (new in v2.3.0)"]
@@ -101,7 +101,7 @@ def detect_deployment_mode(kubeconfig=None):
 |------|-------------------|-------------------|
 | Rule Pack mount | projected volume ConfigMap | PrometheusRule CRD |
 | Route generation | `generate_alertmanager_routes.py` | `operator-generate` AlertmanagerConfig |
-| Config reload | configmap-reload sidecar | Operator auto-reconcile |
+| Config reload | config-reloader sidecar | Operator auto-reconcile |
 | Validation tool | `validate_config.py` | `operator-check` |
 
 **Strict exclusion**: A single cluster's Alertmanager must not use both ConfigMap and AlertmanagerConfig CRD for route management simultaneously. `operator-generate` detects and warns.

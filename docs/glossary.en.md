@@ -19,7 +19,7 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 :   A standardized document format for recording architectural design decisions, including problem context, options considered, final decision, and rationale. See `docs/adr/`.
 
 **Alertmanager**
-:   The alert routing and notification component in the Prometheus ecosystem. This platform uses its `inhibit_rules` for Severity Dedup and a `configmap-reload` sidecar for automatic configuration reloading.
+:   The alert routing and notification component in the Prometheus ecosystem. This platform uses its `inhibit_rules` for Severity Dedup and a `config-reloader` sidecar (prometheus-operator's prometheus-config-reloader) for automatic configuration reloading.
 
 **AST Migration Engine**
 :   The core of `migrate_rule.py` — parses traditional PromQL alert rules into an Abstract Syntax Tree (AST) and automatically converts them to Dynamic Alerting's YAML threshold format. Supports Triage, Prefix, and Dictionary inference modes.
@@ -41,7 +41,7 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 :   Per-tenant 500-metric upper limit protection. Automatically truncates when exceeded and logs ERROR, preventing a single tenant's misconfiguration from impacting the entire TSDB.
 
 **ConfigMap Reload**
-:   Automatic reload mechanism after Kubernetes ConfigMap changes. threshold-exporter uses SHA-256 hash detection; Alertmanager uses a `configmap-reload` sidecar.
+:   Automatic reload mechanism after Kubernetes ConfigMap changes. threshold-exporter uses SHA-256 hash detection; Alertmanager uses a `config-reloader` sidecar.
 
 **Config Drift**
 :   Configuration drift — inconsistency between the running configuration and the Git repository version. `config_diff.py` detects this in CI pipelines.

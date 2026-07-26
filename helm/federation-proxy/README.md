@@ -108,7 +108,11 @@ enforced by the chart's `kubeVersion` constraint.
 | `terminationGracePeriodSeconds` | `45` | Must exceed `preStopSleepSeconds` + the 30s max query |
 | `podDisruptionBudget.enabled` | `true` | Voluntary-disruption protection |
 
-prom-label-proxy image is pinned: `quay.io/prometheuscommunity/prom-label-proxy:v0.13.0`.
+prom-label-proxy image is pinned **by digest** — the tag alone is not the pin. `values.yaml`
+carries `repository: prometheuscommunity/prom-label-proxy` + `tag: v0.14.0` +
+`digest: sha256:e314c38621614b33dde314d0fd6635d7362f311aaa68325f24ff933b324c00d1`,
+and the digest is authoritative (setting `image.tag` alone does NOT upgrade). Docker Hub,
+not quay.io — upstream never pushed v0.14.0 to quay; see #1243.
 
 ## Known limitation — `/federate`
 

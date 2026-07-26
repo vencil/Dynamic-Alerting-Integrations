@@ -374,7 +374,7 @@ kubectl create secret generic grafana-credentials \
 
 ### Lifecycle 端點保護
 
-Prometheus 和 Alertmanager 的 `/-/quit` 端點可關閉服務。應透過 NetworkPolicy 限制存取，僅允許 `configmap-reload` sidecar 呼叫管理埠。
+Prometheus 的 `/-/quit` 端點可關閉服務（需 `--web.enable-lifecycle`）。**Alertmanager 沒有 `/-/quit`**（v0.33.1 實測 404），但它的 `/-/reload` 無條件啟用且關不掉。兩者都應透過 NetworkPolicy 擋掉**叢集內其他 Pod** 對管理埠的存取（同 Pod 內的 `config-reloader` sidecar 走 loopback，不經 NetworkPolicy，也不需要放行）。
 
 ### Secrets Management — Migrating from ConfigMap to K8s Secret
 
@@ -438,9 +438,9 @@ spec:
 
 ### Config Reload 端點安全
 
-Prometheus 的 `/-/reload` 和 Alertmanager 的 `/-/reload` 是用於觸發設定重新載入的 HTTP POST 端點。本專案使用 `configmap-reload` sidecar 自動呼叫這些端點。
+Prometheus 的 `/-/reload` 和 Alertmanager 的 `/-/reload` 是用於觸發設定重新載入的 HTTP POST 端點。本專案使用 `config-reloader` sidecar 自動呼叫 Alertmanager 的該端點。
 
-**安全影響：** 這些端點不需認證。如果攻擊者可以到達 Prometheus/Alertmanager 埠，他們可以重複觸發重新載入造成效能衝擊，或透過 `/-/quit` 關閉服務（如啟用）。
+**安全影響：** 這些端點不需認證。如果攻擊者可以到達 Prometheus/Alertmanager 埠，他們可以重複觸發重新載入造成效能衝擊；Prometheus 若啟用了 `--web.enable-lifecycle`，還可以透過 `/-/quit` 關閉服務（Alertmanager 無此端點）。
 
 **生產環境建議：** 使用上面「Lifecycle Endpoint Protection」章節的 NetworkPolicy 限制存取。確保 Prometheus 和 Alertmanager 使用 ClusterIP Services（不是 NodePort/LoadBalancer），僅在叢集內可達。
 
