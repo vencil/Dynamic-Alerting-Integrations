@@ -30,6 +30,25 @@
 # component-docker-build Trivy steps via the `trivyignores:` input. The hard
 # gate (exit-code 1) is unchanged — only these entries are waived.
 #
+# ⚠️ govulncheck AND Trivy DISAGREE ON THIS BINARY, BY DESIGN. The committed
+# promtool.openvex.json marks four findings `affected` that Trivy does not
+# report at all. Measured on the 3.13.1 image (full scan, NO severity filter —
+# 7 findings total), the split is:
+#   * GO-2026-5264 / -5381 / -5662 (prometheus web-UI XSS + remote-read DoS,
+#     aliases GHSA-8rm2-7qqf-34qm / -fw8g-cg8f-9j28 / -vffh-x6r8-xx99):
+#     ABSENT from Trivy at every severity. They live in
+#     github.com/prometheus/prometheus — promtool's OWN main module, stamped
+#     v0.0.0-<date>-<sha>+dirty — and Trivy cannot match a pseudo-version
+#     against an advisory range. Not a gap in this file; a different matcher.
+#   * GO-2026-5970 (alias CVE-2026-56852, x/text v0.38.0 -> 0.39.0): PRESENT
+#     in Trivy but scored UNKNOWN, so `--severity CRITICAL,HIGH` filters it
+#     out. ⏰ WATCH: this is a latent tripwire — if it is later re-scored
+#     HIGH, the release gate starts failing with no change on our side. The
+#     fix then is a promtool re-pin (x/text is upstream's dependency), not a
+#     new entry here.
+# Do not add waiver entries for findings the gate does not actually see:
+# pre-emptive waivers are how a governed register rots into a blanket mute.
+#
 # WHY NOT a repo-local OpenVEX file + `trivy --vex` (which is what the Trivy
 # project itself does for its own unreachable grpc findings): `--vex` is still
 # flagged [EXPERIMENTAL] by Trivy, and `aquasecurity/trivy-action` exposes no
