@@ -124,6 +124,7 @@ keys:
     unit: '% of max_connections'
     desc: Connection usage % warning
     metric_class: saturation
+    chart_default: true
   pg_replication_lag:
     pack: postgresql
     tier: defaults
@@ -131,6 +132,7 @@ keys:
     unit: seconds
     desc: Replication lag warning
     metric_class: replication
+    chart_default: true
   pg_connections_critical:
     pack: postgresql
     tier: optional_overrides

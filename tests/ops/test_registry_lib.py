@@ -274,11 +274,13 @@ def test_chart_default_unknown_key_fails_loud():
 
 def test_real_extraction_chart_default_set_matches_table():
     """The real doc carries chart_default on exactly CHART_DEFAULT_KEYS —
-    the behavior-preserving 6-key set the chart shipped before the rewire."""
+    the behavior-preserving 6-key pre-rewire set plus the owner-decided
+    pg_connections / pg_replication_lag promotion (#1200 Q3=C / D4 folding,
+    2026-07-25)."""
     doc = lib.build_registry_doc()
     tagged = {k for k, e in doc["keys"].items() if e.get("chart_default")}
     assert tagged == set(lib.CHART_DEFAULT_KEYS)
-    assert len(tagged) == 6
+    assert len(tagged) == 8
 
 
 # ── generated surfaces: render / splice / freshness ───────────────────────

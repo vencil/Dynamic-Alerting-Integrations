@@ -7,8 +7,8 @@
 #
 # >>> GENERATED:threshold-registry:pack-postgresql — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
 # 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
-#   pg_connections: 80   # % of max_connections — Connection usage % warning
-#   pg_replication_lag: 30   # seconds — Replication lag warning
+#   pg_connections: 80   [chart-default]   # % of max_connections — Connection usage % warning
+#   pg_replication_lag: 30   [chart-default]   # seconds — Replication lag warning
 #
 # optional_overrides（documented-but-dormant——登錄有案、平台預設不出貨）：
 # ⛔ 啟用前提（別跳過）：threshold-exporter 只對「存在於 defaults 的 key」

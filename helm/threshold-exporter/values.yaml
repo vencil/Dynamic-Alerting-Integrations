@@ -58,9 +58,10 @@ extraEnvFrom: []
 #
 # defaults 為生成段（#1200 WS1a PR-2）：內容＝threshold-registry 的
 # chart_default 集——kubernetes pack＝Scenario B container 閾值、mariadb pack
-# ＝Scenario A MySQL 閾值。改值走 scaffold_tenant.RULE_PACKS ＋
-# check_threshold_registry.py --regen；出貨集增減（如 pg_* 是否升
-# chart_default）是 D4 家族產品拍板，勿在此手改。
+# ＝Scenario A MySQL 閾值、postgresql pack＝pg warning 兩鍵（#1200 Q3=C /
+# D4 folding 拍板升格，2026-07-25）。改值走 scaffold_tenant.RULE_PACKS ＋
+# check_threshold_registry.py --regen；出貨集增減是 D4 家族產品拍板，
+# 勿在此手改。
 # 史料：mysql_cpu 80→30 校準（#944）時本 chart 副本是最後被漏掉的一份
 # （#1200 WS1a 反向稽核補正）；改為生成段後該類漂移由 gate 根除。
 thresholdConfig:
@@ -74,6 +75,13 @@ thresholdConfig:
     container_cpu_throttle: 25
     # % — Container memory % of limit (weakest link)
     container_memory: 85
+    # ── postgresql：PostgreSQL (postgres_exporter) ──
+    # % of max_connections — Connection usage % warning（critical 加嚴 opt-
+    # in：pg_connections_critical，registry 建議 90）
+    pg_connections: 80
+    # seconds — Replication lag warning（critical 加嚴 opt-in：pg_replication_lag_critical，registry 建議
+    # 60）
+    pg_replication_lag: 30
     # ── mariadb：MariaDB / MySQL (mysqld_exporter) ──
     # count — Max threads_connected warning（critical 加嚴 opt-in：mysql_connections_critical，registry
     # 建議 120）
