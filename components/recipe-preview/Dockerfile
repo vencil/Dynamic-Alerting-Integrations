@@ -23,9 +23,9 @@ RUN pip install --no-cache-dir --upgrade pip \
 # injects TARGETARCH (amd64 / arm64) per platform; pick the matching tarball +
 # its OWN pinned digest. busybox wget/sha256sum/tar (no apk add).
 ARG TARGETARCH
-ARG PROM_VERSION=3.12.0
-ARG PROM_SHA256_amd64=20da47f8e5303f74aecb78edd7f7e39041dac08ac4939dba75efd7a900ae8867
-ARG PROM_SHA256_arm64=281492bf04ed171cb09d24377e9777f56e55ccb6445ef197b66bd1693bd9b7f1
+ARG PROM_VERSION=3.13.1
+ARG PROM_SHA256_amd64=962b812371aff838d152b6ff2d56fdb7a6396f5542f48ebf73421b9721f0d103
+ARG PROM_SHA256_arm64=fbd8e5e0f6ad2e7d053e717739186caee4fd0cab2cf9335bfc86c292fe2a2bfe
 RUN set -eu; \
     case "${TARGETARCH}" in \
       amd64) PROM_SHA256="${PROM_SHA256_amd64}" ;; \

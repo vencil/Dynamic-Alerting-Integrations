@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "govulncheck/vex:414d3e4d8f979e133508859ed02e9f5bb1222b740deaebf91d3107bfc9c0ae6e",
+  "@id": "govulncheck/vex:23e0da5ca8cb1534881e56b6f121f723a69f3830f15fdc87e4d95e047d20b193",
   "author": "Unknown Author",
-  "timestamp": "2026-06-27T13:48:53.4405871Z",
+  "timestamp": "2026-07-26T12:27:20.842713882Z",
   "version": 1,
   "tooling": "https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck",
   "statements": [
@@ -56,368 +56,6 @@
     },
     {
       "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5005",
-        "name": "GO-2026-5005",
-        "description": "Invoking key constraints not enforced in golang.org/x/crypto/ssh/agent",
-        "aliases": [
-          "CVE-2026-39833"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.51.0"
-            }
-          ]
-        }
-      ],
-      "status": "not_affected",
-      "justification": "vulnerable_code_not_present",
-      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5006",
-        "name": "GO-2026-5006",
-        "description": "Invoking agent constraints dropped when forwarding keys in golang.org/x/crypto/ssh/agent",
-        "aliases": [
-          "CVE-2026-39832"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.51.0"
-            }
-          ]
-        }
-      ],
-      "status": "not_affected",
-      "justification": "vulnerable_code_not_present",
-      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5013",
-        "name": "GO-2026-5013",
-        "description": "Invoking byte arithmetic causes underflow and panic in golang.org/x/crypto/ssh",
-        "aliases": [
-          "CVE-2026-46597"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.51.0"
-            }
-          ]
-        }
-      ],
-      "status": "not_affected",
-      "justification": "vulnerable_code_not_present",
-      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5014",
-        "name": "GO-2026-5014",
-        "description": "Invoking bypass of certificate restrictions in golang.org/x/crypto/ssh",
-        "aliases": [
-          "CVE-2026-39828"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.51.0"
-            }
-          ]
-        }
-      ],
-      "status": "not_affected",
-      "justification": "vulnerable_code_not_present",
-      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5015",
-        "name": "GO-2026-5015",
-        "description": "Invoking server panic during CheckHostKey/Authenticate in golang.org/x/crypto/ssh",
-        "aliases": [
-          "CVE-2026-39835"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.51.0"
-            }
-          ]
-        }
-      ],
-      "status": "not_affected",
-      "justification": "vulnerable_code_not_present",
-      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5016",
-        "name": "GO-2026-5016",
-        "description": "Invoking memory leak when rejecting channels can lead to DoS in golang.org/x/crypto/ssh",
-        "aliases": [
-          "CVE-2026-39827"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.51.0"
-            }
-          ]
-        }
-      ],
-      "status": "not_affected",
-      "justification": "vulnerable_code_not_present",
-      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5017",
-        "name": "GO-2026-5017",
-        "description": "Invoking client can cause server deadlock on unexpected responses in golang.org/x/crypto/ssh",
-        "aliases": [
-          "CVE-2026-39830"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.51.0"
-            }
-          ]
-        }
-      ],
-      "status": "not_affected",
-      "justification": "vulnerable_code_not_present",
-      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5018",
-        "name": "GO-2026-5018",
-        "description": "Invoking pathological RSA/DSA parameters may cause DoS in golang.org/x/crypto/ssh",
-        "aliases": [
-          "CVE-2026-39829"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.51.0"
-            }
-          ]
-        }
-      ],
-      "status": "not_affected",
-      "justification": "vulnerable_code_not_present",
-      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5019",
-        "name": "GO-2026-5019",
-        "description": "Invoking bypass of FIDO/U2F security keys physical interaction in golang.org/x/crypto/ssh",
-        "aliases": [
-          "CVE-2026-39831"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.51.0"
-            }
-          ]
-        }
-      ],
-      "status": "not_affected",
-      "justification": "vulnerable_code_not_present",
-      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5020",
-        "name": "GO-2026-5020",
-        "description": "Invoking infinite loop on large channel writes in golang.org/x/crypto/ssh",
-        "aliases": [
-          "CVE-2026-39834"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.51.0"
-            }
-          ]
-        }
-      ],
-      "status": "not_affected",
-      "justification": "vulnerable_code_not_present",
-      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5021",
-        "name": "GO-2026-5021",
-        "description": "Invoking auth bypass via unenforced @revoked status in golang.org/x/crypto/ssh/knownhosts",
-        "aliases": [
-          "CVE-2026-42508"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.51.0"
-            }
-          ]
-        }
-      ],
-      "status": "not_affected",
-      "justification": "vulnerable_code_not_present",
-      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5023",
-        "name": "GO-2026-5023",
-        "description": "Invoking VerifiedPublicKeyCallback permissions skip enforcement in golang.org/x/crypto/ssh",
-        "aliases": [
-          "CVE-2026-46595"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.51.0"
-            }
-          ]
-        }
-      ],
-      "status": "not_affected",
-      "justification": "vulnerable_code_not_present",
-      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5033",
-        "name": "GO-2026-5033",
-        "description": "Invoking pathological inputs can lead to client panic in golang.org/x/crypto/ssh/agent",
-        "aliases": [
-          "CVE-2026-46598"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.51.0"
-            }
-          ]
-        }
-      ],
-      "status": "not_affected",
-      "justification": "vulnerable_code_not_present",
-      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5037",
-        "name": "GO-2026-5037",
-        "description": "Inefficient candidate hostname parsing in crypto/x509",
-        "aliases": [
-          "CVE-2026-27145"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/stdlib@v1.26.3"
-            }
-          ]
-        }
-      ],
-      "status": "affected"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5038",
-        "name": "GO-2026-5038",
-        "description": "Quadratic complexity in WordDecoder.DecodeHeader in mime",
-        "aliases": [
-          "CVE-2026-42504"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/stdlib@v1.26.3"
-            }
-          ]
-        }
-      ],
-      "status": "affected"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-5039",
-        "name": "GO-2026-5039",
-        "description": "Arbitrary inputs are included in errors without any escaping in net/textproto",
-        "aliases": [
-          "CVE-2026-42507"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/stdlib@v1.26.3"
-            }
-          ]
-        }
-      ],
-      "status": "affected"
-    },
-    {
-      "vulnerability": {
         "@id": "https://pkg.go.dev/vuln/GO-2026-5264",
         "name": "GO-2026-5264",
         "description": "Prometheus: Remote read endpoint allows denial of service via crafted snappy payload in github.com/prometheus/prometheus",
@@ -431,7 +69,7 @@
           "@id": "Unknown Product",
           "subcomponents": [
             {
-              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20260528153132-9f27dffc1f93+dirty"
+              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20260710080347-73ff57ce2b81+dirty"
             }
           ]
         }
@@ -453,7 +91,7 @@
           "@id": "Unknown Product",
           "subcomponents": [
             {
-              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20260528153132-9f27dffc1f93+dirty"
+              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20260710080347-73ff57ce2b81+dirty"
             }
           ]
         }
@@ -464,7 +102,7 @@
       "vulnerability": {
         "@id": "https://pkg.go.dev/vuln/GO-2026-5662",
         "name": "GO-2026-5662",
-        "description": "Prometheus has Stored XSS via metric names and label values in Prometheus web UI tooltips and metrics explorer in github.com/prometheus/prometheus",
+        "description": "Prometheus has Stored XSS via metric names and label values in Prometheus web UI in github.com/prometheus/prometheus",
         "aliases": [
           "CVE-2026-40179",
           "GHSA-vffh-x6r8-xx99"
@@ -475,7 +113,71 @@
           "@id": "Unknown Product",
           "subcomponents": [
             {
-              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20260528153132-9f27dffc1f93+dirty"
+              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20260710080347-73ff57ce2b81+dirty"
+            }
+          ]
+        }
+      ],
+      "status": "affected"
+    },
+    {
+      "vulnerability": {
+        "@id": "https://pkg.go.dev/vuln/GO-2026-5932",
+        "name": "GO-2026-5932",
+        "description": "The golang.org/x/crypto/openpgp package is unmaintained, unsafe by design, and has known security issues"
+      },
+      "products": [
+        {
+          "@id": "Unknown Product",
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.52.0"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
+    },
+    {
+      "vulnerability": {
+        "@id": "https://pkg.go.dev/vuln/GO-2026-5942",
+        "name": "GO-2026-5942",
+        "description": "Parsing an invalid SVCB or HTTPS RR can panic in golang.org/x/net/dns/dnsmessage",
+        "aliases": [
+          "CVE-2026-46600"
+        ]
+      },
+      "products": [
+        {
+          "@id": "Unknown Product",
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/golang.org%2Fx%2Fnet@v0.55.0"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
+    },
+    {
+      "vulnerability": {
+        "@id": "https://pkg.go.dev/vuln/GO-2026-5970",
+        "name": "GO-2026-5970",
+        "description": "Infinite loop on invalid input in golang.org/x/text",
+        "aliases": [
+          "CVE-2026-56852"
+        ]
+      },
+      "products": [
+        {
+          "@id": "Unknown Product",
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/golang.org%2Fx%2Ftext@v0.38.0"
             }
           ]
         }

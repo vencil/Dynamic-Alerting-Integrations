@@ -296,13 +296,18 @@ jobs:
           set -euo pipefail
           rc=0
           # Self-built (5) — feeds the release.yaml Trivy gate; keep this signal clean.
-          # These we genuinely own: the fix is a rebuild or a dependency bump in
-          # this repo, so "patch it" is honest advice here.
+          # "We own these, so patch it" is honest for 4 of the 5 — but NOT blanket
+          # true, and the same wrong-advice failure the third-party sentence below
+          # was rewritten for (#1243) applies here in miniature: recipe-preview is a
+          # Python service whose findings all live in a BUNDLED upstream promtool
+          # binary, so no first-party rebuild or dependency bump can clear them. The
+          # sentence names that exception rather than sending the reader to do
+          # something that cannot work (#1058).
           bash scripts/ops/file_cve_report.sh frags-sb \
             nightly-cve \
             "🛡️ Nightly image scan — self-built component CVEs / build failures on main" \
             5 "self-built component" \
-            "we build these, so a rebuild or a pinned-dependency bump clears them; the release-time Trivy gate (release.yaml) blocks a tag until they are 0 (security-audit-runbook §37)." || rc=1
+            "for the Go/JS components we compile, a rebuild or a pinned-dependency bump clears these — start by checking whether the Dockerfile builder pins an older toolchain than CI does (that exact split hid a stdlib CVE from every green CI run in #1058). ONE EXCEPTION: recipe-preview is a Python service and its findings live in the BUNDLED upstream promtool binary, so no first-party bump touches them — the levers there are re-pinning PROM_VERSION or an evidence-backed, time-boxed entry in components/recipe-preview/.trivyignore.yaml. The release-time Trivy gate (release.yaml) blocks a tag until this bucket is 0 (security-audit-runbook §37)." || rc=1
           # Third-party (14) — informational. The remediation sentence is the part
           # of this alert that decides whether a reader acts or learns to ignore it,
           # so it names the levers that have ACTUALLY cleared findings here (#1243
