@@ -408,6 +408,7 @@
    "tests/ops/test_generate_routes_orchestration.py"
   ],
   "scripts/tools/ops/_grar_validate.py": [
+   "tests/ops/test_generate_alertmanager_routes.py",
    "tests/ops/test_grar_strict_hardening.py",
    "tests/shared/test_property_tools.py"
   ],
@@ -660,7 +661,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "f36ad5dba626e482ba130fd16c76d59397e62173d383a51957dd0a7e0ffca993",
+ "source_digest": "29132db8b2244f345654571f050825b580f458c0c74efe77bd3ebe455e8ffd90",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1082,6 +1083,9 @@
   ],
   "components/threshold-exporter/app/config.go": [
    "tests/lint/test_check_hardcode_tenant.py"
+  ],
+  "components/threshold-exporter/app/pkg/config/aliases_registry_test.go": [
+   "tests/lint/test_check_threshold_registry.py"
   ],
   "components/threshold-exporter/app/pkg/config/types.go": [
    "tests/shared/test_reserved_key_py_go_parity.py"
@@ -1810,6 +1814,9 @@
    "tests/shared/test_dispatch_contract.py",
    "tests/shared/test_entrypoint.py",
    "tests/shared/test_lang_detection_guard.py"
+  ],
+  "scripts/tools/ops/_grar_validate.py": [
+   "tests/lint/test_check_threshold_registry.py"
   ],
   "scripts/tools/ops/_registry_lib.py": [
    "tests/ops/test_registry_lib.py"
