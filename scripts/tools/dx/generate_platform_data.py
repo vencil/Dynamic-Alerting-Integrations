@@ -296,6 +296,120 @@ def _load_tenant_metadata() -> tuple:
 # ---------------------------------------------------------------------------
 # Build platform-data.json
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Container images the Deployment Wizard emits into a customer's values.yaml
+# ---------------------------------------------------------------------------
+# WHY THIS IS GENERATED (#1245): the wizard used to carry these as literals and
+# they rotted to a v2.7.0-era snapshot nobody noticed — prom/prometheus v2.52.0
+# against a shipped v3.13.1 (a whole MAJOR, and 2.x has the pre-3.0 left-CLOSED
+# lookback our rule-pack fixtures are calibrated against), alertmanager v0.27.0
+# vs v0.33.1, `jimmidyson/configmap-reload` after that component was replaced
+# outright, and `oauth2-proxy/oauth2-proxy:v7.6.0` which does not even EXIST on
+# Docker Hub (the ref is missing its `quay.io/` registry, so the emitted YAML
+# ImagePullBackOffs). Same failure shape as the four hand-maintained rule-pack
+# count tables that PR-3 converged (#1224) — a duplicate view with no gate.
+#
+# TAG ONLY, never a digest: this is a customer's STARTING values.yaml. A digest
+# would freeze it at the instant we generated it, and — worse — silently defeat
+# the customer's own `--set image.tag=` bump, because the digest wins. That is
+# the exact footgun helm/*/values.yaml carries a ⛔ warning about.
+#
+# Third-party tags come from the deploy SSOT (check_image_refs_resolve.py reads
+# the real helm values / k8s manifests); first-party tags from each chart's
+# appVersion. A mapped repo that vanishes from the SSOT is a HARD ERROR, not a
+# silently dropped key — that is precisely how the configmap-reload replacement
+# would have slipped through again.
+IMAGE_REFS_EXTRACTOR = SCRIPT_DIR.parent.parent / "ops" / "check_image_refs_resolve.py"
+
+WIZARD_THIRD_PARTY = {
+    "prometheus": "prom/prometheus",
+    "alertmanager": "prom/alertmanager",
+    "configReloader": "quay.io/prometheus-operator/prometheus-config-reloader",
+    "oauth2Proxy": "quay.io/oauth2-proxy/oauth2-proxy",
+}
+
+WIZARD_FIRST_PARTY = {
+    "thresholdExporter": ("ghcr.io/vencil/threshold-exporter", "threshold-exporter"),
+    "daPortal": ("ghcr.io/vencil/da-portal", "da-portal"),
+    "tenantApi": ("ghcr.io/vencil/tenant-api", "tenant-api"),
+}
+
+
+def _deployed_third_party_tags() -> dict:
+    """repo -> tag, from the deploy SSOT (digest stripped)."""
+    spec = importlib.util.spec_from_file_location(
+        "_check_image_refs_resolve", IMAGE_REFS_EXTRACTOR)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    out = {}
+    for ref in sorted(mod.discover_refs(REPO_ROOT)):
+        without_digest = ref.split("@", 1)[0]
+        repo, _, tag = without_digest.rpartition(":")
+        if not (repo and tag):
+            continue
+        # discover_refs returns a SET, so iteration order is not stable. If the
+        # same repo were pinned at two tags (mid-migration, or one manifest left
+        # behind), a plain `out[repo] = tag` would let whichever entry came last
+        # win — silently, and differently between runs. That is the exact silent
+        # drift this module exists to prevent, so make it a hard error instead.
+        if repo in out and out[repo] != tag:
+            raise SystemExit(
+                f"ERROR: {repo!r} is pinned at two different tags in the deploy "
+                f"SSOT: {out[repo]!r} and {tag!r}. The wizard cannot pick one for "
+                f"the customer — reconcile the manifests/values first."
+            )
+        out[repo] = tag
+    return out
+
+
+def _chart_app_version(chart_dir: str) -> str:
+    chart = REPO_ROOT / "helm" / chart_dir / "Chart.yaml"
+    # Same fail-loud contract as the third-party path above: a renamed/removed
+    # chart must say so, not surface as a bare FileNotFoundError traceback.
+    if not chart.is_file():
+        raise SystemExit(
+            f"ERROR: {chart} not found — a wizard first-party image maps to "
+            f"chart {chart_dir!r}. Update WIZARD_FIRST_PARTY if it was renamed."
+        )
+    data = yaml.safe_load(chart.read_text(encoding="utf-8"))
+    app = str(data.get("appVersion", "")).strip()
+    if not app:
+        raise SystemExit(f"ERROR: helm/{chart_dir}/Chart.yaml has no appVersion")
+    # The caller prefixes "v". A chart that already carries one would yield
+    # "vv2.9.0" — reject it rather than silently lstrip()-ing, because the repo
+    # convention is a bare appVersion and a stray "v" is worth surfacing.
+    if app.startswith("v"):
+        raise SystemExit(
+            f"ERROR: helm/{chart_dir}/Chart.yaml appVersion is {app!r}; the repo "
+            f"convention is a bare version (the 'v' is added when composing the "
+            f"image tag). Drop the leading 'v' or adjust build_wizard_images()."
+        )
+    return app
+
+
+def build_wizard_images() -> dict:
+    """Image refs (repo:tag, no digest) for the Deployment Wizard."""
+    deployed = _deployed_third_party_tags()
+    images = {}
+
+    for key, repo in WIZARD_THIRD_PARTY.items():
+        tag = deployed.get(repo)
+        if tag is None:
+            raise SystemExit(
+                f"ERROR: wizard image {key!r} maps to {repo!r}, which the deploy "
+                f"SSOT no longer contains. The image was probably replaced or "
+                f"renamed — update WIZARD_THIRD_PARTY (and the wizard's offline "
+                f"mirror) instead of letting the wizard emit a dead ref.\n"
+                f"       SSOT currently holds: {sorted(deployed)}"
+            )
+        images[key] = f"{repo}:{tag}"
+
+    for key, (repo, chart_dir) in WIZARD_FIRST_PARTY.items():
+        images[key] = f"{repo}:v{_chart_app_version(chart_dir)}"
+
+    return images
+
+
 def build_platform_data() -> dict:
     """Build the complete platform-data.json structure."""
     rule_counts = gather_rule_counts()
@@ -357,6 +471,7 @@ def build_platform_data() -> dict:
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "generator": "scripts/tools/generate_platform_data.py",
         "packOrder": PACK_ORDER,
+        "images": build_wizard_images(),
         "rulePacks": rule_packs,
         "categories": CATEGORIES,
         "totals": {

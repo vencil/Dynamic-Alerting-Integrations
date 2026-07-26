@@ -20,6 +20,10 @@ purpose: |
 ---
 
 import { DEPLOY_TIERS as TIERS, DEPLOY_ENVIRONMENTS as ENVIRONMENTS, DEPLOY_TENANT_SIZES as TENANT_SIZES } from '../fixtures/wizard-defaults.js';
+// #1245: image refs come from the generated platform data (tag only, never a
+// digest — see _common/data/images.js). They used to be literals here and
+// rotted to a v2.7.0-era snapshot, one of them to a ref that does not exist.
+import { PLATFORM_IMAGES, imageRepository, imageTag } from '../../_common/data/images.js';
 
 function deployGenerateHelmValues(config) {
   const { tier, environment, tenantSize, auth, packs } = config;
@@ -38,8 +42,8 @@ function deployGenerateHelmValues(config) {
 thresholdExporter:
   replicaCount: ${size?.replicas.exporter || 2}
   image:
-    repository: ghcr.io/vencil/threshold-exporter
-    tag: v2.7.0
+    repository: ${imageRepository('thresholdExporter')}
+    tag: ${imageTag('thresholdExporter')}
     pullPolicy: IfNotPresent
 
   resources:
@@ -68,8 +72,8 @@ thresholdExporter:
 prometheus:
   replicaCount: ${size?.replicas.prometheus || 2}
   image:
-    repository: prom/prometheus
-    tag: v2.52.0
+    repository: ${imageRepository('prometheus')}
+    tag: ${imageTag('prometheus')}
 
   resources:
     requests:
@@ -97,8 +101,8 @@ prometheus:
 alertmanager:
   replicaCount: ${size?.replicas.alertmanager || 3}
   image:
-    repository: prom/alertmanager
-    tag: v0.27.0
+    repository: ${imageRepository('alertmanager')}
+    tag: ${imageTag('alertmanager')}
 
   resources:
     requests:
@@ -108,10 +112,10 @@ alertmanager:
       cpu: ${environment === 'local' ? '200m' : environment === 'staging' ? '500m' : '1000m'}
       memory: ${environment === 'local' ? '256Mi' : environment === 'staging' ? '512Mi' : '1Gi'}
 
-  # Dynamic route generation + configmap-reload
+  # Dynamic route generation + config reload sidecar
   configReload:
     enabled: true
-    image: jimmidyson/configmap-reload:v0.5.0
+    image: ${PLATFORM_IMAGES.configReloader}
 
   # Cluster mode for HA
   clustering:
@@ -148,8 +152,8 @@ daPortal:
   enabled: true
   replicaCount: ${environment === 'local' ? 1 : size?.replicas.exporter || 2}
   image:
-    repository: ghcr.io/vencil/da-portal
-    tag: v2.7.0
+    repository: ${imageRepository('daPortal')}
+    tag: ${imageTag('daPortal')}
 
   resources:
     requests:
@@ -173,8 +177,8 @@ tenantAPI:
   enabled: true
   replicaCount: ${environment === 'local' ? 1 : 2}
   image:
-    repository: ghcr.io/vencil/tenant-api
-    tag: v2.7.0
+    repository: ${imageRepository('tenantApi')}
+    tag: ${imageTag('tenantApi')}
 
   resources:
     requests:
@@ -203,8 +207,8 @@ oauth2Proxy:
   enabled: true
   replicaCount: ${environment === 'local' ? 1 : 2}
   image:
-    repository: oauth2-proxy/oauth2-proxy
-    tag: v7.6.0
+    repository: ${imageRepository('oauth2Proxy')}
+    tag: ${imageTag('oauth2Proxy')}
 
   resources:
     requests:
