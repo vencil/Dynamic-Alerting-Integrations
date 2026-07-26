@@ -827,6 +827,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          # tests/lint/test_check_image_pin_capability.py resolves the pinned
+          # `tools/v*` tag's tree (`git show <tag>:...`) to assert what a
+          # released image actually contains. The default fetch-depth: 1
+          # shallow clone has no tags, and the gate is fail-closed by design —
+          # it RAISES rather than silently passing — so those tests error out
+          # instead of quietly degrading. Same reason the `lint` job above
+          # takes the full history.
+          fetch-depth: 0
 
       - name: Set up Python ${{ matrix.python }}
         uses: actions/setup-python@v6
