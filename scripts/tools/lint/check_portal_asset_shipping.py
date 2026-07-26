@@ -123,11 +123,6 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
 
-# Was a hand-rolled sys.stdout.reconfigure block; `_lib_compat` is the shared
-# implementation of the same guard (legacy Windows consoles are cp950/cp936 and
-# cannot encode the CJK this tool's --help now carries).
-try_utf8_stdout()
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DOCKERFILE = REPO_ROOT / "components" / "da-portal" / "Dockerfile"
 
@@ -491,6 +486,13 @@ def main(argv: list[str] | None = None) -> int:
     # exits 0; unknown flags exit 2 (argparse default). argv defaults to []
     # (not sys.argv) so importers/tests calling main() are not handed pytest's
     # own argv → argparse SystemExit(2).
+    # Was a module-scope call (and, before that, a hand-rolled
+    # sys.stdout.reconfigure block). Kept inside main() so importing this module
+    # has no side effect on the caller's stdout, and so the guard applies to
+    # whatever stream is live when main(argv) actually runs — this main() is
+    # callable as a library function, unlike its sibling gate's. Legacy Windows
+    # consoles are cp950/cp936 and cannot encode the CJK --help now carries.
+    try_utf8_stdout()
     argparse.ArgumentParser(
         description=i18n_text(
             "驗證 portal 在 runtime 從 /assets/ URL 命名空間載入的每個資產，"
