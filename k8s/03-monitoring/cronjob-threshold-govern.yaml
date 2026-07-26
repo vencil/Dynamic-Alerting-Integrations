@@ -27,6 +27,37 @@
 #      build.sh TOOL_FILES). The tag below is bumped per-release alongside
 #      cronjob-maintenance-scheduler.
 #
+#      ⛔ NOT SATISFIED TODAY — this Job cannot run as pinned. `threshold-govern`
+#      landed AFTER `tools/v2.9.0` was cut, and v2.9.0 is still the newest
+#      da-tools tag, so NO released image has the subcommand: every weekly run
+#      exits 1 on `Unknown command` (the entrypoint never reaches the tool, so
+#      this is NOT the #1044 _observed_map_lib.py ImportError — see the errata
+#      on that CHANGELOG entry). Bumping the tag below to the next tools/v*
+#      release is the whole fix.
+#
+#      ⚠️ THERE IS NO RUNTIME DETECTOR FOR THIS STATE. ThresholdGovernanceStale
+#      (configmap-rules-platform.yaml) alerts on
+#      `time() - kube_cronjob_status_last_successful_time > 8d`, and a CronJob
+#      that has NEVER succeeded never produces that series — so the alert is
+#      structurally incapable of firing for this outage. That is deliberate
+#      cold-start safety, pinned by tests/rulepacks/platform-watchdog_test.yaml
+#      (`governance-cold-start-absent-no-fire`), not an oversight; and the repo
+#      ships no job-failure alert (`kube_job_failed` / `kube_job_status_failed`
+#      appear nowhere). The image-pin capability gate below IS the only signal
+#      this outage has. (Adding a live detector is a separate decision — an
+#      absent()-armed alert would page every fresh install; out of scope here.)
+#
+#      Left ENABLED rather than `suspend: true`-ed anyway, for two reasons that
+#      do hold: `suspend: true` asserts a DELIBERATE pause, which misrepresents
+#      a broken-and-awaiting-release workload; and un-suspending immediately
+#      schedules a catch-up run for the most recent missed slot (no
+#      `startingDeadlineSeconds` is set), which is a surprise nobody needs
+#      during a release. Registered in EXEMPTIONS in
+#      scripts/tools/lint/check_image_pin_capability.py — the key includes the
+#      TAG, so bumping this pin to any other tag that still lacks the
+#      subcommand fails CI rather than inheriting the exemption, and shipping a
+#      release that does contain it makes the gate demand the entry's deletion.
+#
 # ── Safe rollout ────────────────────────────────────────────────────────────
 #   The args run in --apply mode (opens PRs). For a first rollout, REMOVE the
 #   `- --apply` line: the Job then only logs which tenants WOULD get a PR (no

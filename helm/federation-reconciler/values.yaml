@@ -2,6 +2,31 @@
 
 # The da-tools image bakes the reconciler script (scripts/tools/ops/
 # _federation_revocation_reconciler.py) via build.sh. Pure stdlib — no extra deps.
+#
+# ⛔ NOT SATISFIED TODAY — the tag below cannot run this chart. The reconciler
+# was added to build.sh TOOL_FILES AFTER `tools/v2.9.0` was cut, and v2.9.0 is
+# still the newest da-tools tag, so NO released image contains
+# /opt/da-tools/_federation_revocation_reconciler.py: the Deployment's
+# `command:` (templates/deployment.yaml) fails on a missing file. Bumping `tag`
+# below (and Chart.yaml `appVersion`) to the next tools/v* release is the whole
+# fix. The chart is deliberately left DEPLOYABLE rather than disabled:
+# FederationRevocationReconcileStale (k8s/03-monitoring/configmap-rules-
+# platform.yaml) is severity:critical / for:10m with an `or absent(...)` arm, so
+# scaling to zero would page on-call within 10 minutes. (That `absent(...)` arm
+# is what makes this reasoning hold HERE and not for the sibling case: the
+# threshold-govern CronJob's staleness alert has no such arm, so that outage has
+# no runtime detector at all — see k8s/03-monitoring/cronjob-threshold-govern.yaml.)
+# Registered in EXEMPTIONS in scripts/tools/lint/check_image_pin_capability.py.
+# The exemption key includes the TAG (`helm/federation-reconciler`,
+# `_federation_revocation_reconciler.py`, `v2.9.0`), so moving this pin to
+# another tag that still lacks the script fails CI instead of inheriting the
+# licence — and shipping a release that does contain it makes the gate demand
+# the entry's deletion.
+#
+# ⚠️ Keep `tag:` EXPLICIT here. Dropping it (letting the template fall back to
+# `.Chart.AppVersion`) is an error in that gate, not a pass: it cannot verify a
+# tag the values file does not state. `bump_docs.py --tools` rewrites this pin
+# and Chart.yaml `appVersion` together, so the two cannot drift apart.
 image:
   repository: ghcr.io/vencil/da-tools
   tag: "v2.9.0"
