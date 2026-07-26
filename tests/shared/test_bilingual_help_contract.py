@@ -33,9 +33,9 @@ allowlist below lands in the BILINGUAL bucket by default and must therefore
 either really implement bilingual help or add itself (with a reason) to an
 allowlist — there is no silent escape (``test_partition_is_exact``).
 
-* BILINGUAL (derived complement, 26 — all pass; repair queue empty) — the
+* BILINGUAL (derived complement, 28 — all pass; repair queue empty) — the
   behavioral assertions above run per tool.
-* ``ENGLISH_ONLY`` (139) — dx convention: non-customer-facing internal tools
+* ``ENGLISH_ONLY`` (137) — dx convention: non-customer-facing internal tools
   may ship English-only help. RATCHET: shrink-only — the gate runs each one
   under ``DA_LANG=zh`` and turns RED the moment its help gains CJK, forcing
   the entry OUT of the allowlist and INTO the bilingual contract.
@@ -52,7 +52,7 @@ allowlist — there is no silent escape (``test_partition_is_exact``).
 COST DESIGN (why not a blind full-matrix sweep)
 -----------------------------------------------
 Subprocess budget = 2×|BILINGUAL| + 1×|ENGLISH_ONLY| + 1×|CHINESE_ONLY|
-= 2×26 + 139 + 26 = 217 (vs 376 already spent by test_tool_exit_codes).
+= 2×28 + 137 + 26 = 219 (vs 376 already spent by test_tool_exit_codes).
 The allowlists are known-conclusion sets: one zh-help run suffices to verify
 "still no CJK" / "still has CJK" — an en-side run there would prove nothing
 this gate asserts. The CHINESE_ONLY wiring ratchet is a source-text check
@@ -217,7 +217,6 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_hub_badge_drift.py": _R_LINT,
     "check_i18n_coverage.py": _R_SELF,
     "check_iac_helm.py": _R_LINT,
-    "check_image_pin_capability.py": _R_LINT,
     "check_iac_vibe_rules.py": _R_LINT,
     "check_includes_sync.py": _R_LINT,
     "check_jsx_loader_compat.py": _R_LINT,
@@ -235,7 +234,6 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_pint.py": _R_LINT,
     "check_planning_status_sync.py": _R_LINT,
     "check_playwright_rtl_drift.py": _R_LINT,
-    "check_portal_asset_shipping.py": _R_LINT,
     "check_portal_audience_enum.py": _R_LINT,
     "check_portal_bundle_size.py": _R_LINT,
     "check_portal_i18n.py": _R_LINT,
@@ -398,16 +396,15 @@ def test_allowlists_shrink_only_count_pin():
     任何成長都必須顯式 bump 這裡的數字——這正是想要的 review 摩擦；
     縮減（工具畢業成雙語）不需 bump。
     """
-    # pin 138: bumped from 137 for check_image_pin_capability.py (#1040 G2) —
-    # a CI-only structural gate over k8s/helm image pins. It has no flags and
-    # no operator-facing runtime output; its findings are read by whoever is
-    # looking at a red CI job, i.e. exactly the "non-customer-facing internal
-    # tool" the dx convention above carves out.
-    # pin 139: bumped from 138 for check_portal_asset_shipping.py — an
-    # internal CI lint (da-portal Dockerfile COPY coverage), English-only per
-    # the same dx convention as its sibling check_portal_audience_enum.py.
-    assert len(ENGLISH_ONLY) <= 139, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=139). Adding an "
+    # pin 137: back DOWN from 139. check_image_pin_capability.py and
+    # check_portal_asset_shipping.py were briefly allowlisted when they landed
+    # (#1240 / #1241) and have since graduated to the bilingual contract — the
+    # direction this ratchet exists to encourage. Re-tightening rather than
+    # leaving the pin at 139 matters: unclaimed headroom lets the NEXT
+    # English-only tool slip in without the explicit, reviewed bump the
+    # docstring above promises.
+    assert len(ENGLISH_ONLY) <= 137, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=137). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )
