@@ -108,7 +108,7 @@ enforced by the chart's `kubeVersion` constraint.
 | `terminationGracePeriodSeconds` | `45` | Must exceed `preStopSleepSeconds` + the 30s max query |
 | `podDisruptionBudget.enabled` | `true` | Voluntary-disruption protection |
 
-prom-label-proxy image is pinned: `quay.io/prometheuscommunity/prom-label-proxy:v0.13.0`.
+prom-label-proxy image is pinned: `prometheuscommunity/prom-label-proxy:v0.14.0` (Docker Hub — upstream never pushed v0.14.0 to quay.io; see #1243).
 
 ## Known limitation — `/federate`
 

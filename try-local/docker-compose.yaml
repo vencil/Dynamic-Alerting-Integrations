@@ -206,7 +206,7 @@ services:
     # "Act 2" after the MariaDB red light (see README). Pinned to the SAME image
     # tag as the k8s Deployment (k8s/03-monitoring/deployment-grafana.yaml) so
     # what you see here matches prod.
-    image: grafana/grafana:12.4.5
+    image: grafana/grafana:12.4.6
     environment:
       # Anonymous Admin + no login form: a one-command laptop demo shouldn't ask
       # for a password. Safe ONLY because the port is loopback-only (below); the

@@ -30,7 +30,7 @@ name: Nightly Image CVE Scan
 #
 # Third-party images our helm charts AND k8s/ manifests pull (vector, victoria-logs,
 # envoy, oauth2-proxy, prom-label-proxy, python, mariadb, mysqld-exporter, grafana,
-# prometheus, alertmanager, kube-state-metrics, configmap-reload, alpine/git) are NOT
+# prometheus, alertmanager, kube-state-metrics, prometheus-config-reloader, alpine/git) are NOT
 # built here — the scan-thirdparty job pulls each ref and Trivy-scans it directly. They
 # had ZERO automated CVE detection before #902 (PR/release/this job's build path
 # all scan only self-built images). Keep each ref in sync with the chart values /
@@ -193,24 +193,35 @@ jobs:
             ref: "envoyproxy/envoy:distroless-v1.38.0@sha256:a7a56545102f7a682e0cafea2c9b8448af1b09ebb710eab688dfb931e3ec7ff6"
           - name: oauth2-proxy # helm/da-portal + helm/tenant-api values.yaml
             ref: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.3@sha256:10a1165743a192e1940b4708fb9647027185ce11a681a1c5519b442ff7f1f561"
+          # docker.io, NOT quay.io: upstream released v0.14.0 on 2026-06-23 but never
+          # pushed it to quay — quay's v0.13.0/latest/v0 all still resolve to the April
+          # build. Staying on quay freezes x/net + prometheus lib at April versions.
           - name: prom-label-proxy # helm/federation-proxy/values.yaml
-            ref: "quay.io/prometheuscommunity/prom-label-proxy:v0.13.0@sha256:11ccecc8f08d0ff8f978ada9de7f3a31518c9bb0ce8e15e6cf97dd5251b84f59"
+            ref: "prometheuscommunity/prom-label-proxy:v0.14.0@sha256:e314c38621614b33dde314d0fd6635d7362f311aaa68325f24ff933b324c00d1"
           - name: mariadb # helm/mariadb-instance/values.yaml
             ref: "mariadb:11.8.8@sha256:efb4959ef2c835cd735dbc388eb9ad6aab0c78dd64febcd51bc17481111890c4"
           - name: mysqld-exporter # helm/mariadb-instance/values.yaml
             ref: "prom/mysqld-exporter:v0.19.0@sha256:eacb4b18e2ec1e0abdf2d64851b68526c964f6d9cb3e9458fb5d5f5062ea94c1"
           - name: grafana # k8s/03-monitoring/deployment-grafana.yaml
-            ref: "grafana/grafana:12.4.5@sha256:26b8f35a9e4e4431995cf64c3f396505a4faf17bcfc19f9ed84943ec6bfd5ecd"
+            ref: "grafana/grafana:12.4.6@sha256:dc91df727e7a90043b74ed4e2df7e4302f0eb3ad8f1e9fe278b0f7a7689d3432"
           - name: prometheus # k8s/03-monitoring/deployment-prometheus.yaml
             ref: "prom/prometheus:v3.13.1@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893"
           - name: alertmanager # k8s/03-monitoring/deployment-alertmanager.yaml
             ref: "prom/alertmanager:v0.33.1@sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d"
           - name: kube-state-metrics # k8s/03-monitoring/deployment-kube-state-metrics.yaml
             ref: "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.1@sha256:85108987d044b18a098126732f98602df408888c0f7d456241f5abefb9744bc1"
-          - name: configmap-reload # k8s/03-monitoring/deployment-alertmanager.yaml (sidecar)
-            ref: "ghcr.io/jimmidyson/configmap-reload:v0.15.0@sha256:b578b7599d65c0279f6e1aad201bba737b9b15e6a4f308281d9e26f765e6657f"
+          # Replaced ghcr.io/jimmidyson/configmap-reload (#1243): its last release is
+          # v0.15.0 / 2025-04-09 and two CVE issues (#188, #210) sat unanswered for
+          # months while its 16 Go-stdlib findings accrued. prometheus-operator ships
+          # a monthly-cadence equivalent.
+          - name: config-reloader # k8s/03-monitoring/deployment-alertmanager.yaml (sidecar)
+            ref: "quay.io/prometheus-operator/prometheus-config-reloader:v0.92.1@sha256:74550ba3e8bf93f47bc574231090d340ae9c01d25cd11ff74799e65f9fdb9a48"
+          # NOTE: alpine/git's VERSION tags are mutable — upstream's Sunday cron
+          # re-pushes v<X.Y.Z> from a fresh `apk add` (alpine-docker/git build.yml), so
+          # the same tag silently gains OS fixes. Only the digest pins it; a digest-only
+          # Renovate refresh is what clears this image's CVEs, not a tag bump.
           - name: alpine-git # k8s/04-tenant-api/deployment.yaml (gitops sidecar)
-            ref: "alpine/git:v2.54.0@sha256:77418e6e7c7f434c4a98eaff04ef16840cf03649c881c03948e3e213923e3136"
+            ref: "alpine/git:v2.54.0@sha256:b4d933c7185b5cc9da7704f2c6e19d477f935ea31a50d9a017ffce2bbd1109a3"
     steps:
       # Authenticated Docker Hub pulls (rate-limit headroom); guarded no-op without creds.
       - name: Docker Hub login (no-op without creds)
@@ -292,20 +303,21 @@ jobs:
             "🛡️ Nightly image scan — self-built component CVEs / build failures on main" \
             5 "self-built component" \
             "we build these, so a rebuild or a pinned-dependency bump clears them; the release-time Trivy gate (release.yaml) blocks a tag until they are 0 (security-audit-runbook §37)." || rc=1
-          # Third-party (14) — informational. The remediation sentence below is
-          # deliberately blunt: the ORIGINAL wording ("bump the pinned upstream
-          # tag") is false for most of this bucket. Renovate (#902 L3) already
-          # re-pins every ref weekly, so anything still listed is usually an
-          # image whose UPSTREAM has not rebuilt — e.g. prom/mysqld-exporter
-          # v0.19.0 and ghcr.io/jimmidyson/configmap-reload v0.15.0 are the
-          # newest releases that exist and still carry fixable HIGHs. Telling
-          # the reader to "bump the tag" sends them to do nothing and teaches
-          # them the issue is noise; naming the two real levers keeps it useful.
+          # Third-party (14) — informational. The remediation sentence is the part
+          # of this alert that decides whether a reader acts or learns to ignore it,
+          # so it names the levers that have ACTUALLY cleared findings here (#1243
+          # triaged all 14 and cleared 58 of 120) instead of a generic "bump the tag".
+          # Two earlier wordings were wrong: "bump the pinned tag" (false for the
+          # release-stalled majority) and then "tick a gated major" (false in the
+          # other direction — #1243 evaluated both pending majors, grafana v13 and
+          # mariadb v12, and REJECTED both: v13 buys 2 findings for ~11 breaking
+          # changes incl. a one-way storage migration, and mariadb's 15 findings all
+          # come from a PRE-COMPILED gosu binary that 12.x ships identically).
           bash scripts/ops/file_cve_report.sh frags-tp \
             nightly-cve-thirdparty \
             "🛡️ Nightly image scan — third-party upstream image CVEs on main" \
             14 "third-party upstream image" \
-            "these are mostly UPSTREAM-owned — Renovate (#902 L3) already keeps each ref at its newest approved tag, so a bump will not clear a CVE the upstream image has not rebuilt for. The two levers that DO move this number: tick a gated major on the Renovate Dependency Dashboard (#929), or replace the image with a maintained alternative." || rc=1
+            "triage each image before assuming it is unfixable — #1243 cleared 58 of 120 this way. Four levers, in the order worth checking: (1) a DIGEST-only refresh, for images whose version tag is mutable and gets re-pushed from a fresh base (alpine/git rebuilds every Sunday); (2) a patch tag published AFTER Renovate's last weekly run — Renovate runs Mondays at 06:17 UTC, so anything released later that day waits nearly a full week (grafana 12.4.6 was built 8 hours after that run); (3) the same release published to a registry we do not pin (prom-label-proxy v0.14.0 shipped to Docker Hub, never to quay); (4) replacing a release-dormant image with a maintained equivalent (configmap-reload, last released 2025-04-09, -> prometheus-config-reloader). What is usually NOT the lever: a gated major on the Renovate Dashboard (#929) — verify it actually carries the fix first. Whatever is left is genuinely upstream-stalled: the fix exists on the project's main branch but no release carries it yet." || rc=1
           exit $rc
 
       # A cron nobody watches degrades into background noise once it is red for

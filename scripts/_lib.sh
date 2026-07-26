@@ -258,7 +258,8 @@ require_services() {
 }
 
 # ── Alertmanager Reload ─────────────────────────────────────────
-# Requires --web.enable-lifecycle flag on Alertmanager (v1.3.0+)
+# No Alertmanager flag needed: /-/reload is unconditional (--web.enable-lifecycle
+# is a PROMETHEUS flag; Alertmanager rejects it and refuses to start). #1243
 # and port-forward to localhost:9093.
 reload_alertmanager() {
   local url="${1:-http://localhost:9093}"
@@ -266,7 +267,7 @@ reload_alertmanager() {
   if curl -sf -X POST "${url}/-/reload"; then
     log "✓ Alertmanager reloaded"
   else
-    err "✗ Alertmanager reload failed (is --web.enable-lifecycle enabled?)"
+    err "✗ Alertmanager reload failed (unreachable, blocked by NetworkPolicy, or config rejected)"
     return 1
   fi
 }

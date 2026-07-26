@@ -38,7 +38,7 @@ Does your cluster have kube-prometheus-stack installed?
 | **Prerequisites** | Any Prometheus environment | kube-prometheus-stack installed |
 | **Rule Pack Loading** | projected volume / configMapGenerator | PrometheusRule CRD |
 | **Route Configuration** | `generate_alertmanager_routes.py` → ConfigMap | `operator-generate` → AlertmanagerConfig CRD |
-| **Config Reload** | configmap-reload sidecar | Operator auto-reconcile |
+| **Config Reload** | config-reloader sidecar | Operator auto-reconcile |
 | **GitOps Support** | Manual ConfigMap YAML management | `--gitops` produces deterministic YAML |
 | **Multiple Prometheus** | Complex (manual ConfigMap distribution) | Native support (namespace-scoped CRD) |
 | **Migration Complexity** | Low (direct mount) | Medium (CRD format conversion needed) |

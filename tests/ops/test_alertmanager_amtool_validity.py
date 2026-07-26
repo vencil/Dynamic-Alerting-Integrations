@@ -45,7 +45,7 @@ def _deployed_am_image():
     """The amtool image, DERIVED from the deployment manifest (the SSOT) rather
     than hardcoded — so a cluster Alertmanager version bump can't leave this
     guard silently validating against a stale parser (false SUCCESS, prod crash).
-    Matches `prom/alertmanager:<tag>` specifically, so the configmap-reload
+    Matches `prom/alertmanager:<tag>` specifically, so the config-reloader
     sidecar image is ignored."""
     text = open(_AM_DEPLOYMENT, encoding="utf-8").read()
     m = re.search(r'prom/alertmanager:[^\s"\']+', text)

@@ -355,12 +355,12 @@ kubectl get alerts -n monitoring | grep platform
 
 ### Lifecycle Endpoint Protection
 
-Prometheus and Alertmanager's `--web.enable-lifecycle` exposes `/-/reload` and `/-/quit` endpoints **without any authentication**. Anyone with access to the port can shut down the service via `POST /-/quit`.
+Prometheus's `--web.enable-lifecycle` exposes `/-/reload` and `/-/quit` **without any authentication** — anyone who can reach the port can shut Prometheus down via `POST /-/quit`. Alertmanager is different on both counts: it has no such flag, its `/-/reload` is always on and cannot be disabled, and it has **no `/-/quit` at all** (v0.33.1 returns 404). So on Alertmanager the exposure is repeated reloads, not remote shutdown.
 
 Recommended approach:
 
 ```yaml
-# NetworkPolicy: restrict lifecycle endpoints to configmap-reload sidecar only
+# NetworkPolicy: restrict lifecycle endpoints to the config-reloader sidecar only
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -584,9 +584,9 @@ receivers:
 
 ### Config Reload Endpoint Security
 
-Prometheus's `/-/reload` and Alertmanager's `/-/reload` are HTTP POST endpoints for triggering configuration reload. This project uses `configmap-reload` sidecar to automatically call these endpoints.
+Prometheus's `/-/reload` and Alertmanager's `/-/reload` are HTTP POST endpoints for triggering configuration reload. This project uses a `config-reloader` sidecar to call Alertmanager's endpoint automatically.
 
-**Security implications:** These endpoints require no authentication. If an attacker can reach the Prometheus/Alertmanager port, they can repeatedly trigger reloads causing performance impact, or shut down the service via `/-/quit` if enabled.
+**Security implications:** These endpoints require no authentication. If an attacker can reach the Prometheus/Alertmanager port, they can repeatedly trigger reloads causing performance impact; on Prometheus with `--web.enable-lifecycle` they can also shut the service down via `/-/quit` (Alertmanager has no such endpoint).
 
 **Production recommendation:** Use the NetworkPolicy from the "Lifecycle Endpoint Protection" section above to restrict access. Ensure Prometheus and Alertmanager use ClusterIP Services (not NodePort/LoadBalancer), reachable only within the cluster.
 

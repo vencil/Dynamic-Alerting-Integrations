@@ -418,7 +418,11 @@ def _reload_alertmanager(namespace: str) -> bool:
         capture_output=True, text=True, timeout=60, encoding='utf-8',
     )
     if reload_result.returncode != 0:
-        print(f"WARN: Alertmanager reload failed (is --web.enable-lifecycle enabled?)",
+        # NOT a missing flag: Alertmanager's /-/reload is unconditional (it has no
+        # --web.enable-lifecycle — that is Prometheus'). A failure here is network
+        # reachability, a NetworkPolicy, or a rejected config. (#1243)
+        print("WARN: Alertmanager reload failed (service unreachable, blocked by "
+              "NetworkPolicy, or the new config was rejected)",
               file=sys.stderr)
         print("ConfigMap was updated — Alertmanager will pick up changes on next restart")
         return True
@@ -442,7 +446,7 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
     Notes:
       - Keeps existing base routes/receivers, appends tenant-generated ones
       - Preserves non-generated inhibit rules (e.g., Silent Mode sentinel rules)
-      - Requires Alertmanager --web.enable-lifecycle flag for /-/reload to work
+      - /-/reload needs no Alertmanager flag; it is always enabled (#1243)
 
     Args:
         routes: generated tenant route dicts

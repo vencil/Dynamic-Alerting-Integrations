@@ -72,7 +72,7 @@ volumes:
 
 **隔離與容錯**：每個 Rule Pack 獨立受控。若 Rule Pack-JVM 的配置有誤，只影響 JVM rules，不波及其他 pack 或核心 rules。
 
-**動態管理**：Prometheus configmap-reload sidecar 監視 ConfigMap 變更，自動 reload rules。租戶可快速調整 Rule Pack 組合。
+**動態管理**：config-reloader sidecar 監視 ConfigMap 變更，自動 reload rules。租戶可快速調整 Rule Pack 組合。
 
 **運維簡潔**：無需自定義 controller 或複雜的初始化邏輯。純 K8s 原生功能，易於理解與維護。
 

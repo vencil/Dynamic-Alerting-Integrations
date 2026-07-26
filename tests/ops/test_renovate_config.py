@@ -36,7 +36,8 @@ _SKIP_DIRS = {".git", "node_modules", ".claude", "site", "__pycache__", ".mypy_c
 EXPECTED_DEPNAMES = {
     "envoyproxy/envoy",
     "quay.io/oauth2-proxy/oauth2-proxy",
-    "quay.io/prometheuscommunity/prom-label-proxy",
+    # docker.io, not quay: upstream never pushed v0.14.0 to quay (#1243).
+    "prometheuscommunity/prom-label-proxy",
     "timberio/vector",
     "victoriametrics/victoria-logs",
     "python",
@@ -46,7 +47,8 @@ EXPECTED_DEPNAMES = {
     "prom/prometheus",
     "prom/alertmanager",
     "registry.k8s.io/kube-state-metrics/kube-state-metrics",
-    "ghcr.io/jimmidyson/configmap-reload",
+    # replaced ghcr.io/jimmidyson/configmap-reload (release-dormant; #1243).
+    "quay.io/prometheus-operator/prometheus-config-reloader",
     "alpine/git",
 }
 

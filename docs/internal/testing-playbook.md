@@ -55,9 +55,9 @@ configmap-rules-{mariadb,kubernetes,redis,mongodb,elasticsearch,oracle,db2,click
 
 修改單個 Rule Pack 只需 apply 對應 ConfigMap。刪除後 Prometheus 自動移除規則（volume 同步延遲 30-90s）。
 
-## configmap-reload Sidecar 行為
+## config-reloader Sidecar 行為
 
-**關鍵洞察：** configmap-reload sidecar 監聽的是 Projected Volume 的**檔案內容變更**，不是 ConfigMap annotation 或 metadata。
+**關鍵洞察：** config-reloader sidecar 監聽的是 Projected Volume 的**檔案內容變更**，不是 ConfigMap annotation 或 metadata。
 
 - `--apply` 模式：直接更新 ConfigMap `data` → 觸發 `/-/reload` API → **不依賴 sidecar 輪詢週期**
 - 僅修改 annotation 而 data 不變 → sidecar **不會偵測到變更**

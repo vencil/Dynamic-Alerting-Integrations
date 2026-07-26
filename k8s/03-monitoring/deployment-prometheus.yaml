@@ -36,7 +36,7 @@ spec:
             - "--storage.tsdb.path=/prometheus"
             - "--storage.tsdb.retention.time=7d"
             # ⚠️ 安全注意：啟用 lifecycle 會暴露 /-/reload 和 /-/quit 端點（無認證）。
-            # 生產環境請搭配 NetworkPolicy 限制僅允許 configmap-reload sidecar 存取，
+            # 生產環境請搭配 NetworkPolicy 限制僅允許 config-reloader sidecar 存取，
             # 或使用 auth proxy 保護。
             - "--web.enable-lifecycle"
             # ── Federation blast-radius Layer 1 (ADR-020 IV-2c, #508) ──

@@ -16,16 +16,22 @@
 replicaCount: 2
 
 image:
-  # renovate: datasource=docker depName=quay.io/prometheuscommunity/prom-label-proxy
-  repository: quay.io/prometheuscommunity/prom-label-proxy
-  tag: "v0.13.0"
+  # docker.io, NOT quay.io (#1243): prometheus-community released v0.14.0 on
+  # 2026-06-23 to Docker Hub but never pushed it to quay — quay's v0.13.0, `latest`
+  # and `v0` all still resolve to the 2026-04-21 build, which freezes x/net and the
+  # vendored prometheus lib at April versions (13 fixable HIGHs on v0.13.0 vs 1 on
+  # v0.14.0). Same upstream org, same digest discipline; switch back if/when quay
+  # catches up.
+  # renovate: datasource=docker depName=prometheuscommunity/prom-label-proxy
+  repository: prometheuscommunity/prom-label-proxy
+  tag: "v0.14.0"
   # Pinned by digest (#902 L2 supply-chain). MUST stay in sync with the
   # scan-thirdparty matrix (drift-guard enforces). Bump via
   # `docker buildx imagetools inspect <repo>:<tag> --format '{{ .Manifest.Digest }}'`.
   # ⛔ Digest is AUTHORITATIVE: `--set image.tag=…` ALONE does NOT upgrade — k8s
   #    silently keeps running THIS digest (tag becomes a lie). To upgrade you MUST
   #    also `--set image.digest=<new>` (or `=""`). L3/Renovate will automate both.
-  digest: "sha256:11ccecc8f08d0ff8f978ada9de7f3a31518c9bb0ce8e15e6cf97dd5251b84f59"
+  digest: "sha256:e314c38621614b33dde314d0fd6635d7362f311aaa68325f24ff933b324c00d1"
   pullPolicy: IfNotPresent
 
 # Upstream backend — any Prometheus-HTTP-API-compatible endpoint
