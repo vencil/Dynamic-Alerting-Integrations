@@ -65,17 +65,36 @@ function parsePromQLExpr(expr) {
   return null;
 }
 
-// Map common Prometheus metric names to Dynamic Alerting threshold keys
+// Map common Prometheus metric names to Dynamic Alerting threshold keys.
+// Values MUST be shipped platform-default keys (rule-packs/threshold-registry.yaml
+// tier=defaults, mirrored in docs/assets/platform-data.json) — a tenant override
+// of any other key is silently never emitted (#1189), so an invented key here
+// generates config that looks migrated but never fires.
+// Drift-gated by tests/migration-simulator-metric-map.test.ts.
+// Deliberately unmapped (no live threshold key today — rules flow to Manual Review):
+//   mysql_global_status_slow_queries — no slow-query threshold key exists
+//   redis_evicted_keys_total — registry key is optional-tier/unwired today
+//     (#1196 rewires it as redis_evicted_keys_rate; remap once it ships in defaults)
 const METRIC_MAP = {
   mysql_global_status_threads_connected: 'mysql_connections',
-  mysql_global_status_slow_queries: 'mysql_slow_queries',
   mysql_slave_status_seconds_behind_master: 'mysql_replication_lag',
   pg_stat_activity_count: 'pg_connections',
-  redis_memory_used_bytes: 'redis_memory',
+  redis_memory_used_bytes: 'redis_memory_used_bytes',
   redis_connected_clients: 'redis_connected_clients',
-  redis_evicted_keys_total: 'redis_evictions',
-  kafka_consumergroup_lag: 'kafka_lag',
+  kafka_consumergroup_lag: 'kafka_consumer_lag',
 };
+
+// Threshold keys that ship a critical tier (`<key>_critical` exists in
+// threshold-registry.yaml). Critical-severity rules mapping to any other key
+// flow to Manual Review — a `<key>_critical` override with no consuming
+// critical-tier alert is dead config (same disease, critical shape).
+// Drift-gated by the same test file.
+const CRITICAL_CAPABLE = new Set([
+  'mysql_connections',
+  'mysql_replication_lag',
+  'pg_connections',
+  'kafka_consumer_lag',
+]);
 
 function convertRules(input) {
   const results = [];
@@ -106,6 +125,15 @@ function convertRules(input) {
     const mappedKey = METRIC_MAP[parsed.metric];
     if (!mappedKey) {
       unconverted.push({ alertName, expr, reason: `Unknown metric "${parsed.metric}" — not in standard Rule Pack metrics` });
+      return;
+    }
+
+    if (severity === 'critical' && !CRITICAL_CAPABLE.has(mappedKey)) {
+      unconverted.push({
+        alertName,
+        expr,
+        reason: `"${mappedKey}" has no critical tier (no ${mappedKey}_critical threshold key) — keep this rule in Prometheus or map it to the warning tier manually`,
+      });
       return;
     }
 
@@ -293,3 +321,7 @@ export default function MigrationSimulator() {
     </div>
   );
 }
+
+// Tail export clause (jsx-loader-compat: no inline named exports) — test seam for
+// tests/migration-simulator-metric-map.test.ts.
+export { METRIC_MAP, CRITICAL_CAPABLE, convertRules };

@@ -184,6 +184,7 @@ jobs:
               - "docs/assets/dist/**"
               - "docs/assets/platform-data.json"
               - "docs/schemas/tenant-config.schema.json"
+              - "rule-packs/threshold-registry.yaml"
               - "rule-packs/ALERT-REFERENCE.md"
               - "components/tenant-api/internal/rbac/testdata/wizard/**"
               - ".github/workflows/ci.yml"
