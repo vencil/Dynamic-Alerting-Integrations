@@ -14,7 +14,12 @@
 # #463 multi-arch: builder pinned to the native BUILDPLATFORM, cross-compiles
 # to TARGETARCH below (CGO_ENABLED=0 → no cross-toolchain, no QEMU for the Go
 # compile). The final alpine stage's `apk add` still runs under QEMU for arm64.
-FROM --platform=$BUILDPLATFORM golang:1.26.4-alpine3.22 AS builder
+# Go 1.26.5 clears CVE-2026-39822 in the SHIPPED binary (#1058): Trivy reads the
+# toolchain version embedded by the compiler, so the fix is purely which builder
+# compiles it. The alpine3.22 -> alpine3.23 move is forced (no 1.26.5-alpine3.22
+# tag exists upstream) and is INERT here: CGO_ENABLED=0 below, and this stage is
+# discarded — the runtime base stays `alpine:3.22` in the final stage.
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine3.23 AS builder
 
 WORKDIR /src
 
