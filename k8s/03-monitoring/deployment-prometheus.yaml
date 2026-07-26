@@ -35,9 +35,11 @@ spec:
             - "--config.file=/etc/prometheus/prometheus.yml"
             - "--storage.tsdb.path=/prometheus"
             - "--storage.tsdb.retention.time=7d"
-            # ⚠️ 安全注意：啟用 lifecycle 會暴露 /-/reload 和 /-/quit 端點（無認證）。
-            # 生產環境請搭配 NetworkPolicy 限制僅允許 config-reloader sidecar 存取，
-            # 或使用 auth proxy 保護。
+            # ⚠️ 安全注意：啟用 lifecycle 會暴露 /-/reload 和 /-/quit 端點（無認證）——
+            # `/-/quit` 可被任何搆得到此埠的人用來關閉 Prometheus。生產環境請用
+            # NetworkPolicy 擋掉**叢集內其他 Pod** 對 9090 的存取，或用 auth proxy 保護。
+            # ⛔ NetworkPolicy 選取的單位是 Pod，做不到「只放行本 Pod 內某個容器」；
+            # 同 Pod 內的流量走 loopback、根本不經 NetworkPolicy（#1243 更正）。
             - "--web.enable-lifecycle"
             # ── Federation blast-radius Layer 1 (ADR-020 IV-2c, #508) ──
             # Hard query caps so a tenant federation read cannot OOM or

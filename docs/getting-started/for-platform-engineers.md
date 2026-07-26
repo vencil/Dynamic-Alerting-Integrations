@@ -374,7 +374,7 @@ kubectl create secret generic grafana-credentials \
 
 ### Lifecycle 端點保護
 
-Prometheus 的 `/-/quit` 端點可關閉服務（需 `--web.enable-lifecycle`）。**Alertmanager 沒有 `/-/quit`**（v0.33.1 實測 404），但它的 `/-/reload` 無條件啟用且關不掉。兩者都應透過 NetworkPolicy 限制存取，僅允許 `config-reloader` sidecar 呼叫管理埠。
+Prometheus 的 `/-/quit` 端點可關閉服務（需 `--web.enable-lifecycle`）。**Alertmanager 沒有 `/-/quit`**（v0.33.1 實測 404），但它的 `/-/reload` 無條件啟用且關不掉。兩者都應透過 NetworkPolicy 擋掉**叢集內其他 Pod** 對管理埠的存取（同 Pod 內的 `config-reloader` sidecar 走 loopback，不經 NetworkPolicy，也不需要放行）。
 
 ### Secrets Management — Migrating from ConfigMap to K8s Secret
 

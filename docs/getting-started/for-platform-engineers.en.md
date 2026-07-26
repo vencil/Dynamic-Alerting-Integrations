@@ -360,7 +360,8 @@ Prometheus's `--web.enable-lifecycle` exposes `/-/reload` and `/-/quit` **withou
 Recommended approach:
 
 ```yaml
-# NetworkPolicy: restrict lifecycle endpoints to the config-reloader sidecar only
+# NetworkPolicy: keep other pods off the lifecycle endpoints. (An in-pod sidecar
+# reaches them over loopback and is unaffected — NetworkPolicy is pod-to-pod.)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

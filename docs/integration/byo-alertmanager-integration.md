@@ -84,8 +84,10 @@ args:
 > `alertmanager: error: unknown long flag '--web.enable-lifecycle'` 退出——加了它，
 > Alertmanager 根本起不來。
 >
-> ⚠️ 反過來說，`/-/reload` 既然關不掉且**無認證**，就必須靠 NetworkPolicy 只放行
-> config-reloader sidecar，或用 auth proxy 擋在前面。
+> ⚠️ 反過來說，`/-/reload` 既然關不掉且**無認證**，就必須用 NetworkPolicy 擋掉**叢集內
+> 其他 Pod** 對 9093 的存取，或用 auth proxy 擋在前面。⛔ 注意 NetworkPolicy 的作用點：
+> 同 Pod 內的 sidecar 走 loopback、共用同一個 network namespace，那段流量不經
+> NetworkPolicy——它保護的是 pod-to-pod，做不到「只放行本 Pod 內某個容器」。
 >
 > ⚠️ 同一個誤解的另一半：**Alertmanager 也沒有 `/-/quit`**（v0.33.1 實測回 404、行程續活），
 > 那同樣是 Prometheus 的端點。Alertmanager 這側真正暴露的只有 `/-/reload`。
@@ -94,7 +96,9 @@ args:
 
 ```bash
 kubectl port-forward svc/alertmanager 9093:9093 -n monitoring &
-curl -sf http://localhost:9093/-/ready && echo "OK"
+curl -sf http://localhost:9093/-/ready && echo "ready OK"
+# 本步驟真正要證的是 reload 通路——/-/ready 綠不代表 /-/reload 打得通：
+curl -sf -X POST http://localhost:9093/-/reload && echo "reload OK"
 ```
 
 ### Step 2: Ensure Prometheus is Connected to Alertmanager

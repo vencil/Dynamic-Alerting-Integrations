@@ -424,7 +424,12 @@ def _reload_alertmanager(namespace: str) -> bool:
         print("WARN: Alertmanager reload failed (service unreachable, blocked by "
               "NetworkPolicy, or the new config was rejected)",
               file=sys.stderr)
-        print("ConfigMap was updated — Alertmanager will pick up changes on next restart")
+        # ⚠️ Only true for the reachability failures: if the reload was refused
+        # because the NEW CONFIG IS INVALID, a restart will not save you either —
+        # Alertmanager will fail to start on it. Verify before relying on a restart.
+        print("ConfigMap was updated. If Alertmanager was merely unreachable it will "
+              "load the new config on next restart; if the config was REJECTED, fix or "
+              "roll it back first — a restart would fail too.")
         return True
 
     print("Alertmanager reloaded")

@@ -42,8 +42,11 @@ spec:
             # flag**——那是 Prometheus 的；v0.33.1 實跑會 `unknown long flag` 直接退出，
             # 這個 Deployment 帶著它根本起不來。Alertmanager 的 `/-/reload` 是**無條件
             # 啟用**的（POST，GET 回 405），不需要任何 flag。
-            # ⚠️ 安全注意：`/-/reload` 因此關不掉且無認證，生產環境請搭配 NetworkPolicy
-            # 限制僅允許 config-reloader sidecar 存取，或用 auth proxy 保護。
+            # ⚠️ 安全注意：`/-/reload` 因此關不掉且無認證。生產環境用 NetworkPolicy 擋掉
+            # **叢集內其他 Pod** 對 9093 的存取，或用 auth proxy 擋在前面。
+            # ⛔ 別誤解 NetworkPolicy 的作用點：同 Pod 內的 config-reloader 走 loopback、
+            # 共用同一個 network namespace，那段流量**不經 NetworkPolicy**（也不需要）——
+            # NetworkPolicy 能保護的是 pod-to-pod，做不到「只放行本 Pod 內某個容器」。
             # ⚠️ 另一個常見誤解：Alertmanager **沒有 `/-/quit`**（v0.33.1 實測 404、行程續活），
             # 那同樣是 Prometheus 的端點——別把 Prometheus 的 lifecycle 威脅模型抄過來。
           ports:
