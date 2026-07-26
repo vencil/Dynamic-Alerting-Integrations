@@ -103,3 +103,14 @@ tools/portal/src/interactive/tools/cli-playground.jsx
 # existing component test (wizard.test.tsx) is unchanged and green.
 # Genuine refactor, not damage.
 tools/portal/src/getting-started/wizard.jsx
+
+# #1058: components/recipe-preview/promtool.openvex.json is a GENERATED
+# evidence artifact (govulncheck -mode binary -format openvex against the
+# bundled promtool). Its size tracks how many advisories the Go vuln DB
+# matches against that binary, so every promtool re-pin legitimately grows
+# OR shrinks it — the 3.12.0 -> 3.13.1 re-pin cut it 14443 -> 5691 bytes
+# (-61%) purely because the newer build cleared most findings. Regenerating
+# it is the governance requirement in .trivyignore.yaml, not a refactor, so
+# this exemption is permanent rather than one-off. NUL-byte detection still
+# applies (the allowlist only suppresses the truncation heuristic).
+components/recipe-preview/promtool.openvex.json

@@ -15,9 +15,9 @@
 # components/recipe-preview/Dockerfile, and this script.
 set -euo pipefail
 
-PROM_VERSION=3.12.0
+PROM_VERSION=3.13.1
 # SHA-256 of prometheus-${PROM_VERSION}.linux-amd64.tar.gz (upstream sha256sums.txt).
-PROM_SHA256=20da47f8e5303f74aecb78edd7f7e39041dac08ac4939dba75efd7a900ae8867
+PROM_SHA256=962b812371aff838d152b6ff2d56fdb7a6396f5542f48ebf73421b9721f0d103
 
 if [ "$(uname -m)" != "x86_64" ]; then
     # Only the amd64 tarball digest is pinned here. Refuse to install an
