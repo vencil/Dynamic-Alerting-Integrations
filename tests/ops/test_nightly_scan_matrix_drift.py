@@ -137,6 +137,33 @@ def test_report_call_sites_are_parseable() -> None:
         assert len(args) >= 5, f"call site missing positional args: {args}"
 
 
+def test_remediation_text_names_only_real_components() -> None:
+    """Remediation prose must not name a component the scan matrix no longer has.
+
+    The self-built advice singles out `recipe-preview` as the one image whose
+    findings a first-party bump CANNOT clear (its CVEs live in a bundled upstream
+    promtool binary — #1058). That is a semantic claim about a specific component,
+    and a rename/removal would silently turn it into a ghost reference telling the
+    reader to reason about something that no longer exists.
+
+    Scoped deliberately: only hyphenated tokens that correspond to a real
+    `components/<name>/` directory are checked, so ordinary prose ("first-party",
+    "pinned-dependency") cannot trip it.
+    """
+    matrix_names = {e["name"] for e in _matrix_include("scan")}
+    for args in _report_calls():
+        remediation = args[-1]
+        for token in set(re.findall(r"\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+\b", remediation)):
+            if not (ROOT / "components" / token).is_dir():
+                continue  # not a component name at all — ordinary prose
+            assert token in matrix_names, (
+                f"remediation text names component {token!r}, but the self-built scan "
+                f"matrix holds {sorted(matrix_names)}. Either the component was "
+                f"renamed/removed from the matrix or the advice is stale — a reader "
+                f"following it would reason about an image that is no longer scanned."
+            )
+
+
 def test_label_descriptions_fit_the_github_api_cap() -> None:
     """The composed label description must fit GitHub's 100-char limit.
 

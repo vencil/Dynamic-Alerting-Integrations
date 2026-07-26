@@ -7,13 +7,18 @@
 #
 # EVIDENCE, two independent kinds:
 #   (1) govulncheck (binary mode) against the ACTUAL bundled binary — committed
-#       alongside as ./promtool.openvex.json. Regenerate after any re-pin:
-#         docker create --name t <recipe-preview-image>
-#         docker cp t:/usr/local/bin/promtool ./promtool
-#         govulncheck -mode binary -format openvex ./promtool \
+#       alongside as ./promtool.openvex.json. Regenerate after any re-pin.
+#       Paste-safe by construction: no fixed container name to collide on a
+#       second run, the container is removed, and the ~110 MB binary lands in
+#       /tmp instead of sitting untracked in the repo root:
+#         cid=$(docker create <recipe-preview-image>)
+#         docker cp "$cid:/usr/local/bin/promtool" /tmp/promtool
+#         docker rm "$cid"
+#         govulncheck -mode binary -format openvex /tmp/promtool \
 #           > components/recipe-preview/promtool.openvex.json
+#         rm /tmp/promtool
 #   (2) symbol-presence in the same binary, when (1) has no rule to match:
-#         go tool nm ./promtool | grep -c '<vulnerable package path>'
+#         go tool nm /tmp/promtool | grep -c '<vulnerable package path>'
 #       0 hits == the linker dead-code-eliminated it; a non-zero count is a
 #       positive result and FORBIDS a `vulnerable_code_not_present` claim.
 #
@@ -76,7 +81,8 @@ vulnerabilities:
   # the weaker `vulnerable_code_not_in_execute_path`:
   # recipe-preview spawns promtool with exactly two argv shapes —
   # `promtool check rules <file>` and `promtool test rules preview_test.yaml`
-  # (scripts/tools/dx/_recipe_preview.py:348 and :358) — both offline,
+  # (scripts/tools/dx/_recipe_preview.py, preview_recipe(): currently :348 and
+  # :358 — anchor on the FUNCTION, line numbers drift) — both offline,
   # file-only. Nothing ever calls Serve/HandleStreams, so no client HTTP/2
   # connection is ever accepted, and no xDS control plane is ever contacted.
   #
@@ -93,5 +99,5 @@ vulnerabilities:
   # golang/vulndb#6061 lands a GO-2026-* id, re-run govulncheck for a real
   # symbol-level verdict and replace this prose with it.
   - id: GHSA-hrxh-6v49-42gf
-    statement: "promtool: xDS halves absent from binary (0 symbols in grpc/internal/xds/rbac); HTTP/2 server transport IS linked but recipe-preview runs only offline `promtool check rules` / `test rules` (_recipe_preview.py:348,358) so no connection is ever served -> vulnerable_code_not_in_execute_path. No upstream fix exists (prometheus main still on grpc v1.81.1). No govulncheck verdict: absent from Go vuln DB (golang/vulndb#6061)."
+    statement: "promtool: xDS halves absent from binary (0 symbols in grpc/internal/xds/rbac); HTTP/2 server transport IS linked but recipe-preview runs only offline `promtool check rules` / `test rules` (_recipe_preview.py preview_recipe(), :348/:358 at time of writing) so no connection is ever served -> vulnerable_code_not_in_execute_path. No upstream fix exists (prometheus main still on grpc v1.81.1). No govulncheck verdict: absent from Go vuln DB (golang/vulndb#6061)."
     expired_at: 2026-09-24
