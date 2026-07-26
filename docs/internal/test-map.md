@@ -106,9 +106,42 @@ if !waitFor(t, 2*time.Second, func() bool {
 
 | 檔案 | 職責 |
 |------|------|
-| `tests/conftest.py` | sys.path 設定 + pytest fixtures（session + function scope） |
+| `tests/conftest.py` | sys.path 設定 + pytest fixtures（session + function scope）+ Hypothesis profile（見下） |
 | `tests/factories.py` | 所有 factory helpers + PipelineBuilder + mock_http_response（含完整 docstring） |
 | `pyproject.toml` | pytest markers + coverage config（`testpaths = ["tests"]` 自動遞迴） |
+
+### Hypothesis deadline 慣例（property-based 測試）
+
+**預設不設 deadline。** `tests/conftest.py` 註冊並載入 `vibe` profile（`deadline=None`），所有 `@settings` 未顯式指定 deadline 者一律繼承。
+
+**為什麼**：Hypothesis 預設的 200ms per-example deadline，對**任何碰檔案系統的 example** 量到的是**宿主 I/O 排程**、不是待測性質，而每輪**第一個 example** 還要多付暖機成本；第一次超過門檻、重放時沒有，Hypothesis 就丟 `FlakyFailure: ... Falsified on the first call but did not on a subsequent one`——**時序假象，不是性質被推翻**。`TestFileSha256::test_same_content_same_hash` 斷言「相同內容產生相同 hash」（不可能被證偽）卻會間歇性紅，就是此症狀的證據（實測 290.92ms vs 200ms，重放 2.11ms）。
+
+> 📐 **比例要講清楚，別過度推論**：repo 內共 **116 個 `@given` property**，碰檔案系統或 YAML 的只有 **12 個（約 10%）**。所以「deadline 對本 repo 普遍無意義」是**錯的**——預設不設，是因為出問題的那 10% 沒辦法靠調數字解決，而不是因為多數測試都碰 I/O。
+>
+> ⚠️ **重現性也要誠實**：此 flake **只在 Windows 開發機、且機器有負載時**重現；同一台機器閒置時曾連 **14 輪全綠**（原廠 deadline）。Linux 容器 5 輪安靜 + 3 輪 `-n 16` 壓力（各 7235 tests）全綠。**不要把它當成該測試的固定失敗率**。
+
+**deadline 仍然有意義的地方要自己寫上去**：顯式 `@settings(deadline=...)` **會覆蓋** profile（已實測）。`shared/test_property_tools.py` 就靠這點讓 82 個 property 中的 79 個保留 `deadline=500`（其中 75 個純函式、4 個是 `monkeypatch` 環境變數測試），deadline 在那裡表達的是「演算法退化」這個真實性質。
+
+判準（**逐測試套用、不是逐檔案**）：
+
+- **碰 I/O** → 不要設 deadline（吃 profile 預設）
+- **純函式且想要效能 tripwire** → 顯式 `@settings(deadline=...)` opt-in
+
+⚠️ 注意這是「**預設不設、想要才 opt-in**」，不是「純函式一律要設」。`tests/ops/test_property_based.py` 的 19 個 property（含 15 個純函式）就**全部**吃預設、不設 deadline——那支檔案從來沒有為了效能而設 deadline 的需求。
+
+⚠️ `shared/test_property_tools.py` 的 `PILOT_SETTINGS`（`deadline=500`）原本是**整檔通用**，其中 3 個 property 其實會 `mktemp` + `write_text` + 讀回（`TestLoadYamlFileProperties::test_round_trip`、`TestIterYamlFilesProperties::test_output_sorted_by_filename`、`TestLatestVersionFromChangelogProperties::test_round_trip`），其中一個實測以 `DeadlineExceeded: Test took 916.75ms, which exceeds the deadline of 500.00ms` 紅過——**同一個根因，只是門檻從 200ms 換成 500ms**（916.75ms 是**單一次量測**，歸屬於該次紅的那一個；另兩個是 AST 掃描識別出的同類別）。這 3 個已改用同檔的 `PILOT_SETTINGS_IO`（`deadline=None`）。
+
+**deadline 移除後還剩什麼**：CI 的 `pytest-timeout`（`--timeout=300`，僅 `ci.yml` 跑 pytest 那一個 step）是 **per-test hang backstop**——粒度比 per-example deadline 粗約 1500 倍、抓不到 deadline 想抓的演算法退化，**是不同保證、不是等價替代**。未 suppress 的測試仍受 `HealthCheck.too_slow` 保護。
+
+**臨時要抓時序問題**：`HYPOTHESIS_PROFILE=strict pytest ...` 還原原廠 200ms。
+
+> ⛔ **strict 只對「沒有顯式 deadline」的測試有效。** `test_property_tools.py` 的 82 個 property **全部**都設了 deadline，所以 strict 對該檔是 no-op——**別把該檔在 strict 下全綠讀成「沒有時序問題」**。
+>
+> 亂填 / 空字串的 `HYPOTHESIS_PROFILE` 會印警告並回退 `vibe`，不會打爛 collection（修正前會讓整棵 `tests/` 中止）。
+
+> ⚠️ conftest 裡的 `from hypothesis import settings` 是**包住的**——有數個 CI job 只裝 `pytest [pyyaml]` 就跑 `pytest tests/...`（`ci.yml` 的 recipe-preview／promtool-goldens／vm-alert-parity step、`vm-anchor-on-pin-change.yml`、`nightly-vm-replay.yaml`、`scripts/ops/federation_e2e_run.sh` 的 venv；**此清單非窮舉，要依賴前請自行複驗**），這支 conftest 對它們一樣會載入，未包住的 import 會直接打爛它們的 collection。
+>
+> guard 刻意**只吞「hypothesis 本身不存在」**（`ModuleNotFoundError` 且 `name == "hypothesis"`）：若是裝了但相依破損，例外會往上拋，而不是悄悄留在原廠 200ms——後者才是真的 fail-open。
 
 ## Factory 清單
 

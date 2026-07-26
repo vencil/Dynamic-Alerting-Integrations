@@ -36,6 +36,98 @@ if _DA_TOOLS_DIR not in sys.path:
 from factories import populate_routing_dir  # noqa: E402
 
 
+# ── Hypothesis: repo-wide settings profile ───────────────────────────
+#
+# Repo default: NO per-example deadline. A deadline is an OPT-IN tripwire
+# a test may add for itself (see the rule at the bottom of this block).
+#
+# Why: Hypothesis's stock 200ms per-example deadline measures the HOST'S
+# I/O SCHEDULER, not the property under test, for any example that touches
+# the filesystem — and the FIRST example of a run additionally pays warm-up
+# cost. When that first call crosses the budget but the replay does not,
+# Hypothesis raises `FlakyFailure: ... Falsified on the first call but did
+# not on a subsequent one`. That is a timing artefact, not a property
+# violation.
+#
+# The giveaway: tests/ops/test_property_based.py::TestFileSha256::
+# test_same_content_same_hash asserts "identical content produces an
+# identical hash" — a property that CANNOT be falsified — yet it failed at
+# 290.92ms against the 200ms deadline (replay: 2.11ms).
+#
+# Measured scope, stated honestly so nobody over-reads it:
+#   - Reproduces on a Windows dev host, but only UNDER LOAD. It is not
+#     reliably reproducible: a later idle sweep on the same host ran 14
+#     consecutive green runs at the stock deadline. Treat it as a
+#     load-dependent flake, NOT a fixed failure rate of the test.
+#   - A Linux container stayed green over 5 quiet runs and 3 full `-n 16`
+#     contention runs (7235 tests each) at the stock deadline, and recent
+#     CI "Python Tests" failures were traced to unrelated causes.
+# So this is a DX fix that also removes a LATENT CI risk, not a fix for an
+# active CI fire. The latent risk is real: the module is NOT in the
+# --ignore list of the job that actually runs pytest — `Python Tests —
+# run (3.13)` (ci.yml; "Python Tests (3.13)" is the aggregation gate that
+# runs no tests) — and that job uses `-n auto` with `-x`, so if the timing
+# margin ever closes there, one trip reddens a required check.
+#
+# What this does NOT replace: CI's `pytest-timeout --timeout=300` is a
+# per-test HANG backstop only. It is 1500x coarser than a per-example
+# deadline and cannot catch the algorithmic regression a deadline is meant
+# to catch — it is a different guarantee, not an equivalent substitute.
+# `HealthCheck.too_slow` does still apply to tests that don't suppress it.
+#
+# THE RULE (apply per test, never per file):
+#   - touches I/O            -> no deadline (this profile's default)
+#   - pure function, and you
+#     want a perf tripwire   -> opt in with an explicit
+#                               `@settings(deadline=...)`, which OVERRIDES
+#                               this profile.
+# tests/shared/test_property_tools.py does exactly that: 79 pure-function
+# properties opt into deadline=500, while its 3 filesystem-touching ones
+# opt back out via PILOT_SETTINGS_IO — one of those was observed failing
+# at 916.75ms against that same 500ms budget.
+#
+# Escape hatch: `HYPOTHESIS_PROFILE=strict` restores the stock 200ms.
+# CAVEAT: it only affects tests with NO explicit deadline. Every property
+# in test_property_tools.py sets one, so `strict` is a no-op there —
+# don't read a green run under `strict` as "no timing problem".
+#
+# The import is guarded because several CI jobs run `pytest tests/...`
+# with only `pip install pytest [pyyaml]` and no hypothesis — e.g. ci.yml's
+# recipe-preview, promtool-goldens and vm-alert-parity steps,
+# vm-anchor-on-pin-change.yml, nightly-vm-replay.yaml, and
+# scripts/ops/federation_e2e_run.sh's venv. (Non-exhaustive: verify before
+# relying on this list.) This conftest loads for those runs too, so an
+# unguarded import would break their collection.
+#
+# The guard is deliberately narrow — it swallows ONLY "hypothesis itself
+# is absent". A broken install (hypothesis present but raising ImportError
+# from its own dependencies) propagates instead of silently leaving the
+# stock deadline in place, which would be a fail-open.
+try:
+    from hypothesis import settings as _hypothesis_settings  # noqa: E402
+except ModuleNotFoundError as _exc:  # pragma: no cover - env-dependent
+    if _exc.name != "hypothesis":
+        raise  # broken dependency, not "hypothesis not installed"
+else:
+    _hypothesis_settings.register_profile("vibe", deadline=None)
+    _hypothesis_settings.register_profile("strict", deadline=200)
+    # `or "vibe"`: an env var set-but-empty (common with `docker run -e VAR`
+    # when VAR is unset on the host) must not brick collection. An unknown
+    # name falls back with a warning rather than raising, because
+    # load_profile() raising here aborts the ENTIRE tests/ tree with a
+    # traceback pointing at conftest — and "ci"/"dev" are names a developer
+    # may already export globally for an unrelated project.
+    _profile = os.environ.get("HYPOTHESIS_PROFILE") or "vibe"
+    if _profile not in ("vibe", "strict"):
+        print(
+            f"[conftest] unknown HYPOTHESIS_PROFILE={_profile!r}; "
+            f"falling back to 'vibe' (valid: vibe, strict)",
+            file=sys.stderr,
+        )
+        _profile = "vibe"
+    _hypothesis_settings.load_profile(_profile)
+
+
 # ── Session-scoped subprocess UTF-8 setup ────────────────────────────
 #
 # When tests use `subprocess.run([sys.executable, ...], capture_output=True,
