@@ -201,6 +201,7 @@ lang: en
 | `check_planning_status_sync.py` | CI-time PR-trailer ↔ frontmatter sync gate. |
 | `check_playbook_freshness.py` | Playbook 知識退火檢查工具。 |
 | `check_playwright_rtl_drift.py` | Detect React Testing Library API names in Playwright specs (S#96, mechanical safety net for testing-playbook §LL §10). |
+| `check_portal_asset_shipping.py` | runtime-loaded portal assets must ship in the da-portal image. |
 | `check_portal_audience_enum.py` | portal `audience` values must come from a closed vocabulary. |
 | `check_portal_bundle_size.py` | Portal dist bundle size budget gate. |
 | `check_portal_i18n.py` | Portal JSX i18n hardcoded string detector |

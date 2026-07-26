@@ -90,6 +90,9 @@ ALLOWLIST: dict[str, str] = {
         "already invokes @babel/node to validate parse-ability; IS the toolchain",
     "lint_tool_consistency.py":
         "cross-checks tool-registry.yaml ↔ JSX ↔ markdown; registry-graph lint, not single-file JS",
+    "check_portal_asset_shipping.py":
+        "asserts against the da-portal Dockerfile COPY set — the JSX side is "
+        "only where the URL is read; ESLint cannot see a container build",
     "validate_docs_versions.py":
         "version-literal consistency across many file types incl .jsx; version governance, not a JS rule",
     # --- migratable to ESLint someday (lint-policy.md §8) — Migratable=YES

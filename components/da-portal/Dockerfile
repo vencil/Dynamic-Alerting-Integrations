@@ -72,10 +72,22 @@ COPY --chown=nginx:nginx docs/assets/dist/ /usr/share/nginx/html/assets/dist/
 COPY --chown=nginx:nginx tools/portal/src/getting-started/wizard.jsx /usr/share/nginx/html/getting-started/wizard.jsx
 
 # ── Shared assets (loader, data, registry, flows) ─────────────
+# ⛔ This is an ALLOWLIST: an asset the portal fetches at runtime but that is
+# missing here 404s in the image while still working on GitHub Pages (mkdocs
+# publishes docs/ wholesale) — a defect visible only to self-hosters. Pinned by
+# scripts/tools/lint/check_portal_asset_shipping.py; add the COPY, don't
+# silence the lint.
 COPY --chown=nginx:nginx docs/assets/jsx-loader.html     /usr/share/nginx/html/assets/jsx-loader.html
 COPY --chown=nginx:nginx docs/assets/platform-data.json  /usr/share/nginx/html/assets/platform-data.json
 COPY --chown=nginx:nginx docs/assets/tool-registry.yaml  /usr/share/nginx/html/assets/tool-registry.yaml
 COPY --chown=nginx:nginx docs/assets/flows.json          /usr/share/nginx/html/assets/flows.json
+# design-tokens.css — <link> of BOTH shells (jsx-loader.html:7,
+# interactive/index.html:7); every --da-* token resolves through it.
+COPY --chown=nginx:nginx docs/assets/design-tokens.css   /usr/share/nginx/html/assets/design-tokens.css
+# recommendation-data.json — self-service-portal's Alert Preview tab.
+COPY --chown=nginx:nginx docs/assets/recommendation-data.json /usr/share/nginx/html/assets/recommendation-data.json
+# template-data.json — Config Template Gallery.
+COPY --chown=nginx:nginx docs/assets/template-data.json  /usr/share/nginx/html/assets/template-data.json
 
 # ── Vendor JS (offline mode) ───────────────────────────────────
 # Run `make vendor-download` before build for air-gapped deployments.
