@@ -120,12 +120,13 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_validation import i18n_text  # noqa: E402
 
-if hasattr(sys.stdout, "reconfigure"):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):
-        pass
+# Was a hand-rolled sys.stdout.reconfigure block; `_lib_compat` is the shared
+# implementation of the same guard (legacy Windows consoles are cp950/cp936 and
+# cannot encode the CJK this tool's --help now carries).
+try_utf8_stdout()
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DOCKERFILE = REPO_ROOT / "components" / "da-portal" / "Dockerfile"
@@ -491,9 +492,11 @@ def main(argv: list[str] | None = None) -> int:
     # (not sys.argv) so importers/tests calling main() are not handed pytest's
     # own argv → argparse SystemExit(2).
     argparse.ArgumentParser(
-        description=(
+        description=i18n_text(
+            "驗證 portal 在 runtime 從 /assets/ URL 命名空間載入的每個資產，"
+            "都確實被 da-portal image 出貨（Dockerfile 的 COPY 涵蓋集合）。",
             "Validate that every asset the portal loads at runtime from the "
-            "/assets/ URL namespace is shipped by the da-portal image."
+            "/assets/ URL namespace is shipped by the da-portal image.",
         ),
     ).parse_args([] if argv is None else argv)
 

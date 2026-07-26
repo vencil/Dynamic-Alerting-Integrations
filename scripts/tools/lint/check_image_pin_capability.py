@@ -132,6 +132,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_validation import i18n_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -664,9 +666,16 @@ def main() -> int:
     # argparse with no flags — enforces the repo-wide CLI contract
     # (test_help_exits_zero / test_invalid_args_exits_nonzero): `--help`
     # exits 0; unknown flags exit 2 (argparse default).
+    # CJK in --help would raise UnicodeEncodeError on a legacy Windows console
+    # (cp950/cp936), killing the tool before argparse ever prints.
+    try_utf8_stdout()
     parser = argparse.ArgumentParser(
-        description=("Assert that every pinned da-tools image actually contains "
-                     "the program the workload pinned to it runs."),
+        description=i18n_text(
+            "斷言每個 pin 住的 da-tools image 真的含有該 workload 要跑的程式"
+            "（entrypoint 子命令或 /opt/da-tools 下的 script）。",
+            "Assert that every pinned da-tools image actually contains "
+            "the program the workload pinned to it runs.",
+        ),
     )
     parser.parse_args()
 
