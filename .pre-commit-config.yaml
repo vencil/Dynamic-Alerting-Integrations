@@ -479,7 +479,10 @@ repos:
         # (recommendation-data.json / template-data.json / design-tokens.css).
         # Reads fixed paths → pass_filenames:false. Both ENDS must trigger it:
         # the load sites (portal src + the two HTML shells) and the COPY set.
-        files: ^(tools/portal/(src|entries)/.*\.(js|jsx)|docs/assets/[^/]+\.html|docs/interactive/.*\.html|components/da-portal/Dockerfile)$
+        # Suffixes MUST stay in sync with _SOURCE_EXTS in the gate: a .ts/.tsx
+        # load site would otherwise skip the local hook and only be caught by
+        # CI's unconditional --all-files run (CodeRabbit #1241).
+        files: ^(tools/portal/(src|entries)/.*\.(js|jsx|ts|tsx)|docs/assets/[^/]+\.html|docs/interactive/.*\.html|components/da-portal/Dockerfile)$
 
       - id: structure-check
         name: Project structure enforcement

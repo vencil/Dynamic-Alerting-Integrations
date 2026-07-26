@@ -337,6 +337,40 @@ class TestLiveRepoIsClean:
             }
             assert url in urls, f"{rel} no longer yields {url}: saw {sorted(urls)}"
 
+    def test_precommit_files_regex_covers_every_scanned_suffix(self):
+        """The hook's `files:` regex must admit every suffix the gate scans.
+
+        A suffix the gate reads but the hook does not match creates a gate that
+        exists and is wired, yet never fires locally on the change that needs
+        it — CI's unconditional `--all-files` run then masks the gap entirely.
+        That is exactly how `.ts`/`.tsx` slipped through (CodeRabbit #1241), so
+        pin the relationship instead of leaving it to a comment.
+        """
+        import re
+
+        import yaml
+
+        cfg = yaml.safe_load(
+            (gate.REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+        )
+        patterns = [
+            hook["files"]
+            for repo in cfg["repos"]
+            for hook in repo.get("hooks", [])
+            if hook.get("id") == "portal-asset-shipping-check"
+        ]
+        assert len(patterns) == 1, f"expected exactly one hook, got {patterns}"
+        rx = re.compile(patterns[0])
+
+        for glob in gate._SOURCE_EXTS:
+            suffix = glob.lstrip("*")
+            probe = f"tools/portal/src/probe{suffix}"
+            assert rx.match(probe), (
+                f"the gate scans {glob} but the pre-commit `files:` regex does "
+                f"not match {probe!r} — a {suffix} load site would skip the "
+                "local hook. Keep the regex and _SOURCE_EXTS in sync."
+            )
+
     def test_dist_directory_reference_is_seen_and_covered(self):
         """The one live dynamic-prefix path: `'../assets/dist/' + name + '.js'`
         assigned to `script.src` must resolve to the DIRECTORY requirement."""

@@ -657,7 +657,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "c107b3b8670ee584ce4dc07bbe34646f78dee20cbbb31b55d5b72697a0344b93",
+ "source_digest": "5958ce4e10a6f299923e9ba9fe71becc74c2ea0f46af2f17510f8cfdfbedb4a2",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -986,7 +986,8 @@
    "tests/lint/test_check_admin_config_schema.py",
    "tests/lint/test_check_dev_rules_enforcement.py",
    "tests/lint/test_check_makefile_targets.py",
-   "tests/lint/test_check_orphan_lint.py"
+   "tests/lint/test_check_orphan_lint.py",
+   "tests/lint/test_check_portal_asset_shipping.py"
   ],
   "CHANGELOG.md": [
    "tests/dx/test_add_frontmatter.py",
