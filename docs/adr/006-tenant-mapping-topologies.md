@@ -114,7 +114,7 @@ groups:
 
 ✅ threshold-exporter 完全不感知拓撲複雜度，保持簡潔
 ✅ 三種拓撲透過統一的 `tenant` label 收斂，下游規則和 Dashboard 零修改
-✅ Recording Rule 支援熱更新（config-reloader sidecar），無需重啟 Prometheus
+✅ Recording Rule 支援熱更新（config-reloader sidecar，#1246 才真正補上部署；在那之前需人工 reload），無需重啟 Prometheus
 ✅ TSDB 同時保留原始與映射後指標，支援多維度回溯分析
 ✅ 與現有 Rule Pack 架構（ADR-005 Projected Volume）完美整合
 

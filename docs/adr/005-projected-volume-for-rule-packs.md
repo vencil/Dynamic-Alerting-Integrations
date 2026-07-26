@@ -72,7 +72,7 @@ volumes:
 
 **隔離與容錯**：每個 Rule Pack 獨立受控。若 Rule Pack-JVM 的配置有誤，只影響 JVM rules，不波及其他 pack 或核心 rules。
 
-**動態管理**：config-reloader sidecar 監視 ConfigMap 變更，自動 reload rules。租戶可快速調整 Rule Pack 組合。
+**動態管理**：config-reloader sidecar 監視 projected volume 的**檔案內容**變更，自動 POST `/-/reload`，租戶可快速調整 Rule Pack 組合、無需重啟 Prometheus。（#1246 更正：此 sidecar 原本**只寫在文件裡、從未實際部署** —— Prometheus 不監看 rule 檔，在補上 sidecar 之前，ConfigMap 同步進 volume 後規則要等人工 reload 或 Pod 重啟才生效。sidecar 已於 #1246 補進 `deployment-prometheus.yaml`。**範圍限 Rule Pack**：主設定 `prometheus.yml` 以 `subPath` 掛載，而 Kubernetes 對 subPath 掛載**不傳播** ConfigMap 更新，改它仍須重啟 Pod。）
 
 **運維簡潔**：無需自定義 controller 或複雜的初始化邏輯。純 K8s 原生功能，易於理解與維護。
 

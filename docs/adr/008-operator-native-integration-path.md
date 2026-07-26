@@ -106,7 +106,7 @@ def detect_deployment_mode(kubeconfig=None):
 |------|-------------------|-------------------|
 | Rule Pack 掛載 | projected volume ConfigMap | PrometheusRule CRD |
 | 路由產生 | `generate_alertmanager_routes.py` | `operator-generate` AlertmanagerConfig |
-| 配置重載 | config-reloader sidecar | Operator 自動 reconcile |
+| 配置重載 | config-reloader sidecar（Rule Pack；`prometheus.yml` 因 subPath 掛載仍須重啟） | Operator 自動 reconcile |
 | 驗證工具 | `validate_config.py` | `operator-check` |
 
 **嚴格互斥**：同一叢集的 Alertmanager 不可同時使用 ConfigMap 和 AlertmanagerConfig CRD 管理路由。`operator-generate` 會偵測並警告。

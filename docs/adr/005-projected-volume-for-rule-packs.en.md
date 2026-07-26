@@ -67,7 +67,7 @@ volumes:
 
 **Isolation and Fault Tolerance**: Each Rule Pack is independently controlled. If Rule Pack-JVM has configuration errors, only JVM rules are affected; other packs and core rules are not impacted.
 
-**Dynamic Management**: a config-reloader sidecar monitors ConfigMap changes and automatically reloads rules. Tenants can quickly adjust Rule Pack combinations.
+**Dynamic Management**: a config-reloader sidecar watches the projected volume's **file contents** and POSTs `/-/reload`, so tenants can adjust Rule Pack combinations without restarting Prometheus. (Corrected in #1246: this sidecar was **documented but never actually deployed** — Prometheus does not watch rule files, so before it existed a synced ConfigMap only took effect after a manual reload or a pod restart. The sidecar landed in `deployment-prometheus.yaml` in #1246. **Rule Packs only**: `prometheus.yml` is mounted via `subPath`, and Kubernetes does **not** propagate ConfigMap updates to subPath mounts, so changing it still requires a pod restart.)
 
 **Operational Simplicity**: No need for custom controllers or complex initialization logic. Pure Kubernetes native features, easy to understand and maintain.
 

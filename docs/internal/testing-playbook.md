@@ -53,15 +53,18 @@ configmap-rules-{mariadb,kubernetes,redis,mongodb,elasticsearch,oracle,db2,click
 
 每個 DB Rule Pack 含 `*-recording.yml` + `*-alert.yml`；Platform 含 `platform-alert.yml`。全部設定 `optional: true`（Zero-Crash Opt-Out）。
 
-修改單個 Rule Pack 只需 apply 對應 ConfigMap。刪除後 Prometheus 自動移除規則（volume 同步延遲 30-90s）。
+修改單個 Rule Pack 只需 apply 對應 ConfigMap。刪除後 Prometheus 會移除規則，總延遲 = kubelet 同步 projected volume（30–90s）+ config-reloader sidecar 偵測並 POST `/-/reload`。（#1246 更正：舊版寫「自動移除」但當時 **Prometheus 側根本沒有 sidecar**，volume 同步完規則仍留在記憶體、要人工 reload 或重啟才消失。）
 
 ## config-reloader Sidecar 行為
 
-**關鍵洞察：** config-reloader sidecar 監聽的是 Projected Volume 的**檔案內容變更**，不是 ConfigMap annotation 或 metadata。
+平台有**兩個** config-reloader sidecar，行為相同但守的東西不同：Prometheus 側守 `/etc/prometheus/rules`（Rule Pack，#1246 補上），Alertmanager 側守 `/etc/alertmanager`（路由設定，#1251 由 `configmap-reload` 換成 `prometheus-config-reloader`）。
 
-- `--apply` 模式：直接更新 ConfigMap `data` → 觸發 `/-/reload` API → **不依賴 sidecar 輪詢週期**
+**關鍵洞察：** sidecar 監聽的是 Projected Volume 的**檔案內容變更**，不是 ConfigMap annotation 或 metadata。
+
+- `--apply` 模式（Alertmanager）：直接更新 ConfigMap `data` → 自己 POST `/-/reload` → **不依賴 sidecar 偵測**
 - 僅修改 annotation 而 data 不變 → sidecar **不會偵測到變更**
 - 測試 reload 時，必須改變實際 config 內容；kubectl annotate 無法觸發 sidecar
+- ⚠️ **`prometheus.yml` 不在此機制內**：它以 `subPath: prometheus.yml` 掛載，而 Kubernetes 對 subPath 掛載**不傳播** ConfigMap 更新——檔案在 Pod 內永遠不會變，sidecar 就算 reload 也是重讀同一份。改主設定必須重啟 Pod。
 
 ## 負載注入 (Load Injection)
 
