@@ -91,12 +91,82 @@ describe('images offline fallback — drift gate vs platform-data.json', () => {
     }
   });
 
-  it('prefers window.__PLATFORM_DATA.images over the inline mirror', async () => {
-    // Proves the live path is actually wired — otherwise the mirror would be
-    // the only thing anyone ever sees and this whole gate would be theatre.
+  it('lets live data override PER KEY without dropping the others', async () => {
+    // Proves the live path is wired (otherwise the mirror is all anyone ever
+    // sees and this gate is theatre) AND that a PARTIAL live map cannot shadow
+    // the rest. `A || B` used to do exactly that: da-portal ships
+    // platform-data.json inside its image, so a portal one release behind a
+    // newly added wizard key would serve a truthy-but-partial map and the
+    // missing keys would render as blank `repository:` / `tag:` lines in the
+    // customer's values.yaml.
     (window as any).__PLATFORM_DATA = { images: { prometheus: 'live/only:v9.9.9' } };
     const { PLATFORM_IMAGES } = await import(MOD);
-    expect(PLATFORM_IMAGES).toEqual({ prometheus: 'live/only:v9.9.9' });
+    expect(PLATFORM_IMAGES.prometheus).toBe('live/only:v9.9.9');
+    expect(Object.keys(PLATFORM_IMAGES).sort()).toEqual(Object.keys(PD_IMAGES).sort());
+    for (const [k, v] of Object.entries(PLATFORM_IMAGES as Record<string, string>)) {
+      expect(v, `${k} must never resolve empty`).toBeTruthy();
+    }
+  });
+
+  it('throws on an unknown image key instead of emitting a blank ref', async () => {
+    const { imageRepository } = await import(MOD);
+    expect(() => imageRepository('doesNotExist')).toThrow(/unknown image key/);
+  });
+
+  it('the WIZARD actually renders every image from this module', async () => {
+    // Without this, the gate is only half a gate: the assertions above prove
+    // the mirror matches platform-data and that the accessor parses refs, but
+    // nothing ties either to the artifact a customer receives. Someone could
+    // re-hardcode `prom/prometheus:v2.52.0` straight back into generators.js —
+    // the exact regression this PR exists to undo — and every other test here
+    // would stay green. Rendering the real YAML is what closes that loop.
+    const { PLATFORM_IMAGES } = await import(MOD);
+    const { deployGenerateHelmValues } = await import(
+      '../src/interactive/tools/deployment-wizard/utils/generators.js'
+    );
+    const yaml: string = deployGenerateHelmValues({
+      tier: 'tier2',
+      environment: 'production',
+      tenantSize: 'medium',
+      auth: 'github',
+      packs: ['mariadb', 'redis'],
+    });
+
+    for (const [key, ref] of Object.entries(PLATFORM_IMAGES as Record<string, string>)) {
+      const i = ref.lastIndexOf(':');
+      const repository = ref.slice(0, i);
+      const tag = ref.slice(i + 1);
+      expect(yaml, `${key} repository missing from rendered values.yaml`).toContain(repository);
+      expect(yaml, `${key} tag missing from rendered values.yaml`).toContain(tag);
+      // Nothing may render blank — a stray `repository:` with no value is
+      // valid YAML and silently unusable.
+      expect(yaml).not.toContain('repository: \n');
+      expect(yaml).not.toContain('tag: \n');
+    }
+    // configReloader is emitted as one `image: <full ref>` line, not a
+    // repository/tag pair, so pin the whole ref for that one.
+    expect(yaml).toContain(`image: ${PLATFORM_IMAGES.configReloader}`);
+  });
+
+  it('never re-emits the refs this PR removed', async () => {
+    // Regression pin on the concrete v2.7.0-era snapshot, including the ref
+    // that does not exist on Docker Hub at all (missing quay.io/ prefix) and
+    // the component that was replaced outright in #1251.
+    const { deployGenerateHelmValues } = await import(
+      '../src/interactive/tools/deployment-wizard/utils/generators.js'
+    );
+    const yaml: string = deployGenerateHelmValues({
+      tier: 'tier2', environment: 'production', tenantSize: 'medium',
+      auth: 'github', packs: ['mariadb'],
+    });
+    for (const dead of [
+      'prom/prometheus:v2.52.0',
+      'prom/alertmanager:v0.27.0',
+      'jimmidyson/configmap-reload',
+      'oauth2-proxy/oauth2-proxy:v7.6.0',
+    ]) {
+      expect(yaml, `${dead} came back`).not.toContain(dead);
+    }
   });
 
   it('splits repository/tag on the LAST colon (registry ports survive)', async () => {

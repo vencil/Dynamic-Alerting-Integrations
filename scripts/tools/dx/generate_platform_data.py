@@ -342,20 +342,48 @@ def _deployed_third_party_tags() -> dict:
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     out = {}
-    for ref in mod.discover_refs(REPO_ROOT):
+    for ref in sorted(mod.discover_refs(REPO_ROOT)):
         without_digest = ref.split("@", 1)[0]
         repo, _, tag = without_digest.rpartition(":")
-        if repo and tag:
-            out[repo] = tag
+        if not (repo and tag):
+            continue
+        # discover_refs returns a SET, so iteration order is not stable. If the
+        # same repo were pinned at two tags (mid-migration, or one manifest left
+        # behind), a plain `out[repo] = tag` would let whichever entry came last
+        # win — silently, and differently between runs. That is the exact silent
+        # drift this module exists to prevent, so make it a hard error instead.
+        if repo in out and out[repo] != tag:
+            raise SystemExit(
+                f"ERROR: {repo!r} is pinned at two different tags in the deploy "
+                f"SSOT: {out[repo]!r} and {tag!r}. The wizard cannot pick one for "
+                f"the customer — reconcile the manifests/values first."
+            )
+        out[repo] = tag
     return out
 
 
 def _chart_app_version(chart_dir: str) -> str:
     chart = REPO_ROOT / "helm" / chart_dir / "Chart.yaml"
+    # Same fail-loud contract as the third-party path above: a renamed/removed
+    # chart must say so, not surface as a bare FileNotFoundError traceback.
+    if not chart.is_file():
+        raise SystemExit(
+            f"ERROR: {chart} not found — a wizard first-party image maps to "
+            f"chart {chart_dir!r}. Update WIZARD_FIRST_PARTY if it was renamed."
+        )
     data = yaml.safe_load(chart.read_text(encoding="utf-8"))
     app = str(data.get("appVersion", "")).strip()
     if not app:
         raise SystemExit(f"ERROR: helm/{chart_dir}/Chart.yaml has no appVersion")
+    # The caller prefixes "v". A chart that already carries one would yield
+    # "vv2.9.0" — reject it rather than silently lstrip()-ing, because the repo
+    # convention is a bare appVersion and a stray "v" is worth surfacing.
+    if app.startswith("v"):
+        raise SystemExit(
+            f"ERROR: helm/{chart_dir}/Chart.yaml appVersion is {app!r}; the repo "
+            f"convention is a bare version (the 'v' is added when composing the "
+            f"image tag). Drop the leading 'v' or adjust build_wizard_images()."
+        )
     return app
 
 

@@ -39,7 +39,16 @@ purpose: |
     imageTag(key)             tag half (for `image.tag:` in YAML)
 ---
 
-const PLATFORM_IMAGES = window.__PLATFORM_DATA?.images || {
+// The inline mirror is the FLOOR, not an either/or alternative: live data
+// overrides PER KEY rather than wholesale. `A || B` would let any truthy live
+// object — including a PARTIAL one — shadow the mirror entirely, and a missing
+// key would then render as an empty `repository:` / `tag:` in the customer's
+// values.yaml. That is a live scenario, not a hypothetical: da-portal ships
+// docs/assets/platform-data.json inside its image, so a portal deployed one
+// release behind a newly added wizard key would serve exactly such a partial
+// map. Merging per key keeps the output complete no matter how stale the
+// deployed data is.
+const IMAGE_MIRROR = {
   prometheus: 'prom/prometheus:v3.13.1',
   alertmanager: 'prom/alertmanager:v0.33.1',
   configReloader: 'quay.io/prometheus-operator/prometheus-config-reloader:v0.92.1',
@@ -49,11 +58,21 @@ const PLATFORM_IMAGES = window.__PLATFORM_DATA?.images || {
   tenantApi: 'ghcr.io/vencil/tenant-api:v2.7.0',
 };
 
+const PLATFORM_IMAGES = { ...IMAGE_MIRROR, ...(window.__PLATFORM_DATA?.images || {}) };
+
 // Split on the LAST colon: a ref may carry a registry port
 // (registry.example.com:5000/foo:v1) and only the trailing segment is the tag.
 function _split(key) {
   const ref = PLATFORM_IMAGES[key];
-  if (!ref) return { repository: '', tag: '' };
+  // An unknown key is a CODING error (typo'd accessor / renamed image), not a
+  // data condition — the merge above guarantees every mirrored key resolves.
+  // Returning '' here would emit a blank `repository:` into the customer's
+  // values.yaml and look like it worked, so refuse loudly instead.
+  if (!ref) {
+    throw new Error(
+      `images.js: unknown image key '${key}'. Known keys: ${Object.keys(PLATFORM_IMAGES).join(', ')}`,
+    );
+  }
   const i = ref.lastIndexOf(':');
   if (i < 0 || ref.indexOf('/', i) !== -1) return { repository: ref, tag: '' };
   return { repository: ref.slice(0, i), tag: ref.slice(i + 1) };
