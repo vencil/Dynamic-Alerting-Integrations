@@ -372,6 +372,14 @@ jobs:
           # fetch-depth: 0 above gives the base ref); no-ops when the registry
           # is absent/untracked (runtime conf.d state, not committed).
           pre-commit run account-registry-monotonic --all-files
+          # A pinned da-tools image must CONTAIN the program the workload runs.
+          # Crosses the manifest plane with the git-TAG plane (does
+          # tools/vX.Y.Z's tree hold this entrypoint subcommand / this
+          # /opt/da-tools script?), which needs TAGS — the fetch-depth: 0
+          # checkout at the top of this job is what makes that possible, and
+          # is why the gate lives here rather than only in local pre-commit.
+          # Fail-closed: an unfetched tag is exit 2, never a silent pass.
+          pre-commit run image-pin-capability-check --all-files
           # Guards against the docs-ci.yaml dead-auto-commit bug (PR #983 review):
           # a `git push` in any workflow with no `contents: write` grant silently
           # no-ops. Wired here (not path-filtered) so editing ANY workflow file
@@ -819,6 +827,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          # tests/lint/test_check_image_pin_capability.py resolves the pinned
+          # `tools/v*` tag's tree (`git show <tag>:...`) to assert what a
+          # released image actually contains. The default fetch-depth: 1
+          # shallow clone has no tags, and the gate is fail-closed by design —
+          # it RAISES rather than silently passing — so those tests error out
+          # instead of quietly degrading. Same reason the `lint` job above
+          # takes the full history.
+          fetch-depth: 0
 
       - name: Set up Python ${{ matrix.python }}
         uses: actions/setup-python@v6

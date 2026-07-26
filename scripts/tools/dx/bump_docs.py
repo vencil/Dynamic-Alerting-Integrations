@@ -180,6 +180,37 @@ def _build_tools_rules():
             "replacement": lambda v: f"ghcr.io/vencil/da-tools:v{v}",
         })
 
+    # helm/federation-reconciler — the chart RUNS a da-tools image, so its pin
+    # is on the da-tools release line, not the chart's own `version:`.
+    #
+    # This pin was invisible to bump_docs for two releases: a Helm values pin is
+    # `repository:` + `tag:` on TWO lines, and every rule here is line-oriented.
+    # The consequence was not merely a stale doc — it was structural: the
+    # image-pin capability gate (scripts/tools/lint/
+    # check_image_pin_capability.py) exempts this chart *because* v2.9.0 lacks
+    # the reconciler script, and that exemption's exit condition is "the pin
+    # gets bumped". With nothing mechanically bumping the pin, the exemption
+    # could never go stale, so a critical ADR-028 control would stay broken
+    # with the gate green forever. These two rules ARE that exit driver.
+    #
+    # Both are `require_match`: if the shape moves, they must die LOUDLY.
+    rules.append({
+        "file": "helm/federation-reconciler/values.yaml",
+        "desc": "da-tools image tag in helm/federation-reconciler/values.yaml (two-line repository/tag pin)",
+        "pair_anchor": r"^[ \t]*repository:[ \t]*ghcr\.io/vencil/da-tools[ \t]*$",
+        "pair_key": "tag",
+        "pattern": r'"v?' + _SEMVER_STRICT + r'"',
+        "replacement": lambda v: f'"v{v}"',
+        "require_match": True,
+    })
+    rules.append({
+        "file": "helm/federation-reconciler/Chart.yaml",
+        "desc": "federation-reconciler Chart.yaml appVersion (the da-tools image it ships)",
+        "pattern": r'^appVersion:\s*"v?' + _SEMVER_STRICT + '"',
+        "replacement": lambda v: f'appVersion: "v{v}"',
+        "require_match": True,
+    })
+
     # mkdocs.yml tools_version
     rules.append({
         "file": "mkdocs.yml",
@@ -1214,6 +1245,77 @@ def _split_at_released_changelog(content):
     return content[:m.start()], content[m.start():]
 
 
+def _indent_width(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def _rewrite_anchored_pair(content: str, rule: dict, new_value: str):
+    """Rewrite `<pair_key>: <value>` in the mapping that carries `pair_anchor`.
+
+    Exists because a Helm image pin is a TWO-LINE shape —
+
+        image:
+          repository: ghcr.io/vencil/da-tools
+          tag: "v2.9.0"
+
+    — that no single line-oriented rule can address safely. Matching `tag:`
+    alone would rewrite the wrong image the moment a chart gains a second one
+    (a sidecar), and matching both lines with one regex would have to hardcode
+    the indentation into the replacement (silently re-indenting, i.e. breaking,
+    a chart that uses 4 spaces). So: find the anchor LINE, then rewrite the
+    sibling key at exactly the anchor's indentation, reusing that indentation
+    verbatim. `helm/federation-reconciler/values.yaml` is precisely the pin
+    that went unbumped for two releases because no rule could see it.
+
+    Returns (new_content, old_values). `old_values == []` means the shape was
+    not found at all — the caller reports that as DEAD rather than "no match,
+    already up to date", because a silently-dead rule is the whole failure mode
+    this exists to end.
+    """
+    anchor_re = re.compile(rule["pair_anchor"])
+    value_re = re.compile(rule["pattern"])
+    key = rule["pair_key"]
+    lines = content.split("\n")
+    old_values: list[str] = []
+
+    for index, line in enumerate(lines):
+        if not anchor_re.match(line):
+            continue
+        indent = _indent_width(line)
+        # The anchor's siblings: contiguous lines that are blank, comments, or
+        # at least as deeply indented. A line at a SHALLOWER indent ends the
+        # mapping (it belongs to the parent), which bounds the rewrite.
+        start = index
+        while start > 0:
+            prev = lines[start - 1]
+            if not prev.strip() or prev.lstrip().startswith("#") or _indent_width(prev) >= indent:
+                start -= 1
+            else:
+                break
+        end = index + 1
+        while end < len(lines):
+            nxt = lines[end]
+            if not nxt.strip() or nxt.lstrip().startswith("#") or _indent_width(nxt) >= indent:
+                end += 1
+            else:
+                break
+
+        for j in range(start, end):
+            sibling = lines[j]
+            if _indent_width(sibling) != indent:
+                continue
+            stripped = sibling.strip()
+            if not stripped.startswith(f"{key}:"):
+                continue
+            value = stripped[len(key) + 1:].strip()
+            if not value_re.fullmatch(value):
+                continue
+            old_values.append(value)
+            lines[j] = f"{' ' * indent}{key}: {new_value}"
+
+    return "\n".join(lines), old_values
+
+
 def apply_rules(rules, new_version, check_only=False, dry_run=False):
     """Apply a set of replacement rules. Returns list of (status, desc, detail) tuples.
 
@@ -1226,6 +1328,20 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
     A rule may set `skip_released_changelog: True` to exclude frozen
     `## [vX.Y.Z]` CHANGELOG entries from its scan (see
     _split_at_released_changelog).
+
+    Two options govern rules whose target must never quietly disappear:
+
+      `pair_anchor` / `pair_key`  two-line YAML pin (see
+                                  _rewrite_anchored_pair); `pattern` then
+                                  matches the VALUE only.
+      `require_match: True`       zero matches is a DEAD rule, not an "OK".
+                                  Default-off because most rules legitimately
+                                  match nothing in some files, but mandatory
+                                  for a rule that is the mechanical exit driver
+                                  for something else (e.g. the
+                                  federation-reconciler pin, whose staleness is
+                                  what keeps an image-pin EXEMPTIONS entry
+                                  alive forever).
     """
     rules = _expand_glob_rules(rules)
     changes = []
@@ -1249,6 +1365,29 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
                 changes.append(("OK", rule["desc"], "already up to date"))
             continue
 
+        if rule.get("pair_anchor"):
+            new_value = rule["replacement"](new_version)
+            new_content, old_values = _rewrite_anchored_pair(content, rule, new_value)
+            if not old_values:
+                changes.append(("DEAD", rule["desc"],
+                                f"anchor {rule['pair_anchor']!r} + key "
+                                f"'{rule['pair_key']}' matched NOTHING in "
+                                f"{rule['file']} — the file's shape moved and "
+                                f"this rule stopped bumping anything. Fix the "
+                                f"rule (do not delete it): a dead rule reads as "
+                                f"green while the version silently rots."))
+            elif new_content != content:
+                changes.append(("UPDATE", rule["desc"],
+                                f"{'[dry-run] ' if dry_run else ''}replaced "
+                                f"{len(old_values)} occurrence(s): "
+                                f"{sorted(set(old_values))[0]} → {new_value}"))
+                if not check_only and not dry_run:
+                    fpath.write_text(new_content, encoding="utf-8")
+                    os.chmod(fpath, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+            else:
+                changes.append(("OK", rule["desc"], "already up to date"))
+            continue
+
         pattern = rule["pattern"]
         replacement = rule["replacement"](new_version)
 
@@ -1260,7 +1399,15 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
 
         matches = re.findall(pattern, scan_text, re.MULTILINE)
         if not matches:
-            changes.append(("OK", rule["desc"], "no match (may already be updated)"))
+            if rule.get("require_match"):
+                changes.append(("DEAD", rule["desc"],
+                                f"pattern {pattern!r} matched NOTHING in "
+                                f"{rule['file']} — this rule is the mechanical "
+                                f"driver for that file's version and has "
+                                f"stopped driving it. Fix the rule (do not "
+                                f"delete it)."))
+            else:
+                changes.append(("OK", rule["desc"], "no match (may already be updated)"))
             continue
 
         needs_update = any(m != replacement for m in matches)
@@ -1514,6 +1661,25 @@ def main():
                 pattern = rule["pattern"]
                 replacement = rule["replacement"](ver)
 
+                if rule.get("pair_anchor"):
+                    _, old_values = _rewrite_anchored_pair(content, rule, replacement)
+                    if not old_values:
+                        unmatched += 1
+                        print(f"  ❌ {desc}")
+                        print(f"       DEAD: anchor {rule['pair_anchor']!r} + key "
+                              f"'{rule['pair_key']}' matched nothing")
+                    elif all(v == replacement for v in old_values):
+                        matched += 1
+                        print(f"  ✅ {desc}")
+                        print(f"       matched: {replacement} "
+                              f"({len(old_values)} occurrence(s))")
+                    else:
+                        unmatched += 1
+                        print(f"  ❌ {desc}")
+                        print(f"       found: {sorted(set(old_values))}")
+                        print(f"       expected: {replacement}")
+                    continue
+
                 if rule.get("whole_file"):
                     if content.strip() == replacement.strip():
                         matched += 1
@@ -1531,7 +1697,12 @@ def main():
                     scan_text, _ = _split_at_released_changelog(content)
 
                 matches = re.findall(pattern, scan_text, re.MULTILINE)
-                if not matches:
+                if not matches and rule.get("require_match"):
+                    unmatched += 1
+                    print(f"  ❌ {desc}")
+                    print(f"       DEAD: pattern matched nothing, but this rule "
+                          f"is declared require_match")
+                elif not matches:
                     matched += 1
                     print(f"  ✅ {desc}")
                     print(f"       no match (pattern already resolved)")
@@ -1571,11 +1742,18 @@ def main():
                 if status == "UPDATE":
                     has_drift = True
                     print(f"  DRIFT  [{line}] {desc}: {detail}")
+                elif status == "DEAD":
+                    # A rule that matches nothing would otherwise report OK
+                    # forever while the file it is supposed to drive rots.
+                    has_drift = True
+                    print(f"  DEAD   [{line}] {desc}: {detail}")
                 elif status == "SKIP":
                     print(f"  SKIP   [{line}] {desc}: {detail}")
 
         if has_drift:
-            print("\n❌ Version drift detected. Run bump_docs.py with version flags to fix.")
+            print("\n❌ Version drift (or a DEAD rule) detected. Run bump_docs.py "
+                  "with version flags to fix drift; fix a DEAD rule in "
+                  "_build_*_rules().")
             sys.exit(EXIT_VIOLATION)
         else:
             print("✅ All version references are consistent.")
@@ -1589,6 +1767,7 @@ def main():
 
     all_rules = _build_rules()
     total_updates = 0
+    dead_rules = 0
 
     for line, new_ver in [("platform", args.platform),
                           ("exporter", args.exporter),
@@ -1611,10 +1790,17 @@ def main():
                               check_only=args.check, dry_run=args.dry_run)
 
         for status, desc, detail in changes:
-            icon = {"UPDATE": "📝", "OK": "✅", "SKIP": "⚠️ "}[status]
+            icon = {"UPDATE": "📝", "OK": "✅", "SKIP": "⚠️ ", "DEAD": "❌"}[status]
             print(f"  {icon} {desc}: {detail}")
             if status == "UPDATE":
                 total_updates += 1
+            elif status == "DEAD":
+                dead_rules += 1
+
+    if dead_rules:
+        print(f"\n❌ {dead_rules} rule(s) matched NOTHING (DEAD). A rule that "
+              f"matches nothing bumps nothing — fix it in _build_*_rules().")
+        sys.exit(EXIT_VIOLATION)
 
     if args.check:
         if total_updates > 0:

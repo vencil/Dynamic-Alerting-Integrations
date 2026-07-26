@@ -178,6 +178,7 @@ lang: zh
 | `check_i18n_coverage.py` | check_i18n_coverage.py |
 | `check_iac_helm.py` | Container/k8s IaC SAST, Layer 2 (Helm templates). |
 | `check_iac_vibe_rules.py` | Container/k8s IaC SAST, Layer 1 (Dockerfile). |
+| `check_image_pin_capability.py` | a pinned da-tools image must actually CONTAIN the program the workload runs. |
 | `check_includes_sync.py` | Check that Chinese and English include snippets stay in sync. |
 | `check_jsx_i18n.py` | JSX 工具 i18n 完整性 lint |
 | `check_jsx_loader_compat.py` | Detect JSX-loader-incompatible module syntax (named exports / non-allowlist imports / require() calls). |

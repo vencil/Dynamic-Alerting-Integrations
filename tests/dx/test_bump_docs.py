@@ -594,3 +594,116 @@ class TestSkipReleasedChangelog:
             [self._inline_rule()], "0.2.0", check_only=True)
         assert "UPDATE" not in [c[0] for c in changes]
         assert "行為於 v0.0.9 調整" in changelog.read_text(encoding="utf-8")
+
+
+class TestHelmTwoLinePin:
+    """helm/federation-reconciler's `repository:` + `tag:` pin (F3).
+
+    That pin went unbumped for two releases because every rule here is
+    line-oriented and a Helm values pin spans two lines. It is not merely a
+    stale doc: the image-pin capability gate
+    (scripts/tools/lint/check_image_pin_capability.py) exempts that chart
+    *because* the pinned tag lacks the reconciler script, and the exemption's
+    exit condition is "the pin gets bumped". Nothing bumping the pin ⇒ the
+    exemption can never go stale ⇒ a severity:critical ADR-028 control stays
+    broken with every gate green. These tests pin the driver.
+    """
+
+    _VALUES = (
+        "image:\n"
+        "  repository: ghcr.io/vencil/da-tools\n"
+        '  tag: "v2.9.0"\n'
+        '  digest: ""\n'
+        "  pullPolicy: IfNotPresent\n"
+        "\n"
+        "sidecar:\n"
+        "  repository: quay.io/other/thing\n"
+        '  tag: "v1.0.0"\n'
+    )
+
+    def _tools_rules_for(self, path):
+        return [r for r in bump_docs._build_rules()["tools"] if r["file"] == path]
+
+    def test_rules_exist_for_both_files(self):
+        assert self._tools_rules_for("helm/federation-reconciler/values.yaml")
+        assert self._tools_rules_for("helm/federation-reconciler/Chart.yaml")
+
+    def test_real_repo_rules_bump_both_files(self, tmp_path, monkeypatch):
+        """End-to-end on the REAL rules against a copy of the real files."""
+        chart_dir = tmp_path / "helm" / "federation-reconciler"
+        chart_dir.mkdir(parents=True)
+        real = bump_docs.REPO_ROOT / "helm" / "federation-reconciler"
+        for name in ("values.yaml", "Chart.yaml"):
+            (chart_dir / name).write_text(
+                (real / name).read_text(encoding="utf-8"), encoding="utf-8")
+
+        rules = (self._tools_rules_for("helm/federation-reconciler/values.yaml")
+                 + self._tools_rules_for("helm/federation-reconciler/Chart.yaml"))
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        changes = bump_docs.apply_rules(rules, "2.10.0", check_only=False)
+
+        assert [c[0] for c in changes] == ["UPDATE", "UPDATE"], changes
+        values_text = (chart_dir / "values.yaml").read_text(encoding="utf-8")
+        assert '  tag: "v2.10.0"\n' in values_text
+        assert '"v2.9.0"' not in values_text.split("image:")[1].split("store:")[0]
+        assert 'appVersion: "v2.10.0"' in (chart_dir / "Chart.yaml").read_text(
+            encoding="utf-8")
+
+    def test_pair_rule_ignores_a_sibling_image(self, tmp_path, monkeypatch):
+        """Matching `tag:` alone would rewrite the wrong image's tag."""
+        values = tmp_path / "values.yaml"
+        values.write_text(self._VALUES, encoding="utf-8")
+        rule = dict(self._tools_rules_for(
+            "helm/federation-reconciler/values.yaml")[0], file="values.yaml")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        bump_docs.apply_rules([rule], "2.10.0", check_only=False)
+        text = values.read_text(encoding="utf-8")
+        assert '  tag: "v2.10.0"\n' in text
+        assert '  tag: "v1.0.0"\n' in text  # the sidecar is untouched
+
+    def test_pair_rule_preserves_indentation(self, tmp_path, monkeypatch):
+        """A 4-space chart must not be silently re-indented (= broken YAML)."""
+        values = tmp_path / "values.yaml"
+        values.write_text(
+            "image:\n"
+            "    repository: ghcr.io/vencil/da-tools\n"
+            '    tag: "v2.9.0"\n',
+            encoding="utf-8")
+        rule = dict(self._tools_rules_for(
+            "helm/federation-reconciler/values.yaml")[0], file="values.yaml")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        bump_docs.apply_rules([rule], "2.10.0", check_only=False)
+        assert '    tag: "v2.10.0"\n' in values.read_text(encoding="utf-8")
+
+    def test_dead_pair_rule_is_reported_not_silently_ok(self, tmp_path, monkeypatch):
+        """If the shape moves, the rule must DIE LOUDLY.
+
+        "no match → OK" is exactly how this pin escaped notice for two
+        releases; a rule that drives an exit condition may not fail silently.
+        """
+        values = tmp_path / "values.yaml"
+        values.write_text("image:\n  repo: ghcr.io/vencil/da-tools\n", encoding="utf-8")
+        rule = dict(self._tools_rules_for(
+            "helm/federation-reconciler/values.yaml")[0], file="values.yaml")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        changes = bump_docs.apply_rules([rule], "2.10.0", check_only=True)
+        assert changes[0][0] == "DEAD", changes
+        assert "matched NOTHING" in changes[0][2]
+
+    def test_dead_require_match_line_rule_is_reported(self, tmp_path, monkeypatch):
+        """The same guarantee for the line-oriented Chart.yaml appVersion rule."""
+        chart = tmp_path / "Chart.yaml"
+        chart.write_text("apiVersion: v2\nname: probe\nversion: 0.1.0\n", encoding="utf-8")
+        rule = dict(self._tools_rules_for(
+            "helm/federation-reconciler/Chart.yaml")[0], file="Chart.yaml")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        changes = bump_docs.apply_rules([rule], "2.10.0", check_only=True)
+        assert changes[0][0] == "DEAD", changes
+
+    def test_live_repo_rules_are_not_dead(self):
+        """The rules must actually match the files as they are committed today."""
+        rules = (self._tools_rules_for("helm/federation-reconciler/values.yaml")
+                 + self._tools_rules_for("helm/federation-reconciler/Chart.yaml"))
+        version = bump_docs.read_current_versions()["tools"]
+        changes = bump_docs.apply_rules(rules, version, check_only=True)
+        assert [c[0] for c in changes] == ["OK", "OK"], changes

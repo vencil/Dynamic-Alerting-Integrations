@@ -1144,6 +1144,30 @@ repos:
         # split tool's contract, not this gate's (see module docstring).
         files: ^(k8s/.*\.ya?ml|rule-packs/rule-pack-.*\.ya?ml|scripts/tools/(ops/generate_rule_pack_split|lint/check_scrape_reachability)\.py)$
 
+      - id: image-pin-capability-check
+        name: "image-pin capability — a pinned da-tools image must CONTAIN the program the workload runs"
+        entry: python3 -X utf8 scripts/tools/lint/check_image_pin_capability.py
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        # Crosses the manifest plane with the git-TAG plane: for every
+        # ghcr.io/vencil/da-tools:vX.Y.Z pin, assert the entry point the
+        # workload invokes (args[0] subcommand / /opt/da-tools/<x>.py) exists
+        # in that tools/vX.Y.Z tag's entrypoint.py COMMAND_MAP + build.sh
+        # TOOL_FILES. Fires on any k8s manifest, any chart values/template
+        # (the Helm pin is a two-line repository/tag PAIR — invisible to
+        # line-oriented scanners), the capability SoT itself, or the gate.
+        # Fail-closed: an unfetched tag or an unresolvable workload is exit 2,
+        # never a pass. Needs tags — the CI `lint` job checks out with
+        # fetch-depth: 0; locally run `git fetch --tags`.
+        # The helm half mirrors what the scanner actually opens: EVERY
+        # `values*.yaml` (an override that re-pins image.tag is a real
+        # deployment), `Chart.ya?ml` (that is how a chart dir is discovered),
+        # and `templates/**` at any depth. A `files:` regex wider than the
+        # scanner gives a hook that fires and prints OK; one narrower gives an
+        # edit that never runs the gate.
+        files: ^(k8s/.*\.ya?ml|helm/[^/]+/(values[^/]*\.ya?ml|Chart\.ya?ml|templates/.*\.ya?ml)|components/da-tools/app/(entrypoint\.py|build\.sh)|scripts/tools/lint/check_image_pin_capability\.py)$
+
       - id: vmalert-coverage-check
         name: rule-pack alert firing-coverage baseline (#947 gate A/replay gap guard)
         entry: python3 -X utf8 scripts/tools/lint/check_vmalert_coverage.py --ci

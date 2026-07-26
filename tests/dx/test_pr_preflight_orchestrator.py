@@ -294,6 +294,14 @@ class TestMainOrchestrator:
             ("check_conflict", "Conflict"),
             ("check_local_hooks", "Local hooks"),
             ("check_scope_drift", "Scope drift"),
+            # Was missing despite the docstring's "every check_*": with a
+            # shallow CI clone `origin/main..HEAD` is empty so the real check
+            # degraded to SKIP and the omission stayed invisible. Once the job
+            # takes full history the real check runs against the
+            # GitHub-generated PR merge commit — not a conventional commit —
+            # and the orchestrator test fails for reasons that have nothing to
+            # do with orchestration.
+            ("check_commit_scope_range", "Commit scope"),
             ("check_ci_status", "CI status"),
             ("check_pr_mergeable", "PR mergeable"),
         ]

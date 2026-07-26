@@ -6,6 +6,11 @@ type: application
 # 0.1.0 — #924 / ADR-028: initial chart (Deployment + /metrics + revoked.txt mount + NetworkPolicy).
 version: 0.1.0
 # appVersion: the da-tools image the reconciler ships in.
+# ⛔ v2.9.0 does NOT contain the reconciler script — it was added to build.sh
+# TOOL_FILES after that tag was cut, so the chart is not runnable as pinned.
+# Full rationale + exit condition: values.yaml `image:` block. Bumped in
+# lockstep with values.yaml image.tag by `bump_docs.py --tools` (both are
+# registered rules there, so a release cannot move one and leave the other).
 appVersion: "v2.9.0"
 keywords:
   - dynamic-alerting
