@@ -315,6 +315,13 @@ jobs:
           pre-commit run window-x-no-fallback-check --all-files
           pre-commit run dev-rules-enforcement-check --all-files
           pre-commit run portal-audience-enum-check --all-files
+          # Same class again, one layer down: the da-portal image's COPY
+          # allowlist vs what the portal actually fetches at runtime. Its
+          # inputs straddle `portal` (tools/portal/**) and `docker`
+          # (components/da-portal/**) filters, and the failure is invisible
+          # to every other job — nothing in CI builds AND renders the image —
+          # so it belongs in this ungated Lint leg, not behind a path filter.
+          pre-commit run portal-asset-shipping-check --all-files
           # Same 6C shape, missed by that sweep: portal-rulepack-claims is
           # named in NO workflow, and its live-dogfood twin
           # (tests/lint/test_check_portal_rulepack_claims.py::

@@ -315,6 +315,9 @@
   "scripts/tools/lint/check_playwright_rtl_drift.py": [
    "tests/lint/test_check_playwright_rtl_drift.py"
   ],
+  "scripts/tools/lint/check_portal_asset_shipping.py": [
+   "tests/lint/test_check_portal_asset_shipping.py"
+  ],
   "scripts/tools/lint/check_portal_rulepack_claims.py": [
    "tests/lint/test_check_portal_rulepack_claims.py"
   ],
@@ -654,7 +657,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "cfb9c3f2a818e2a98bf9c140d620d6fbcf5f29d30b308ced6c207fd434661fb4",
+ "source_digest": "c107b3b8670ee584ce4dc07bbe34646f78dee20cbbb31b55d5b72697a0344b93",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -774,6 +777,7 @@
   "tests/lint/test_check_pint.py",
   "tests/lint/test_check_planning_status_sync.py",
   "tests/lint/test_check_playwright_rtl_drift.py",
+  "tests/lint/test_check_portal_asset_shipping.py",
   "tests/lint/test_check_portal_rulepack_claims.py",
   "tests/lint/test_check_pr_scope_drift.py",
   "tests/lint/test_check_property_coverage.py",
@@ -1027,7 +1031,8 @@
    "tests/ops/test_state_reconcile.py"
   ],
   "components/da-portal/Dockerfile": [
-   "tests/helm/test_portal_relay_token_guard.py"
+   "tests/helm/test_portal_relay_token_guard.py",
+   "tests/lint/test_check_portal_asset_shipping.py"
   ],
   "components/da-portal/nginx-main.conf": [
    "tests/helm/test_portal_relay_token_guard.py"
@@ -1117,11 +1122,16 @@
    "tests/lint/test_lint_tool_consistency.py",
    "tests/shared/test_validate_all.py"
   ],
+  "docs/assets/dist": [
+   "tests/lint/test_check_portal_asset_shipping.py"
+  ],
   "docs/assets/jsx-loader.html": [
+   "tests/lint/test_check_portal_asset_shipping.py",
    "tests/lint/test_lint_jsx_babel_frontmatter.py"
   ],
   "docs/assets/platform-data.json": [
    "tests/lint/test_check_makefile_targets.py",
+   "tests/lint/test_check_portal_asset_shipping.py",
    "tests/lint/test_check_threshold_unit_sanity.py",
    "tests/ops/test_portal_path_filter_coverage.py"
   ],
@@ -1134,7 +1144,8 @@
   "docs/assets/tool-registry.yaml": [
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_scan_component_health.py",
-   "tests/dx/test_sync_tool_registry.py"
+   "tests/dx/test_sync_tool_registry.py",
+   "tests/lint/test_check_portal_asset_shipping.py"
   ],
   "docs/getting-started/for-tenants.en.md": [
    "tests/dx/test_add_frontmatter.py"
@@ -1153,9 +1164,13 @@
    "tests/rulepacks/test_vm_alert_parity.py",
    "tests/rulepacks/test_vm_replay_staleness.py"
   ],
+  "docs/interactive": [
+   "tests/lint/test_check_portal_asset_shipping.py"
+  ],
   "docs/interactive/index.html": [
    "tests/dx/test_verify_diff.py",
-   "tests/lint/test_check_hub_badge_drift.py"
+   "tests/lint/test_check_hub_badge_drift.py",
+   "tests/lint/test_check_portal_asset_shipping.py"
   ],
   "docs/internal": [
    "tests/dx/test_add_frontmatter.py",
@@ -2020,6 +2035,12 @@
   ],
   "tools/portal/src/getting-started": [
    "tests/lint/test_check_jsx_loader_compat.py"
+  ],
+  "tools/portal/src/interactive/tools/AlertPreviewTab.jsx": [
+   "tests/lint/test_check_portal_asset_shipping.py"
+  ],
+  "tools/portal/src/interactive/tools/template-gallery.jsx": [
+   "tests/lint/test_check_portal_asset_shipping.py"
   ],
   "tools/portal/tests": [
    "tests/ops/test_portal_path_filter_coverage.py"

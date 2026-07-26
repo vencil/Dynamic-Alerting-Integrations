@@ -467,6 +467,20 @@ repos:
         # calls → not actually gated).
         files: ^(docs/assets/tool-registry\.yaml|docs/interactive/index\.html)$
 
+      - id: portal-asset-shipping-check
+        name: Portal runtime assets must be COPYed into the da-portal image
+        entry: python3 -X utf8 scripts/tools/lint/check_portal_asset_shipping.py
+        language: python
+        pass_filenames: false
+        # The Dockerfile copies docs/assets/ file-by-file while mkdocs
+        # publishes docs/ wholesale, so a new asset fetch works on Pages and
+        # in try-local (bind mount) but 404s in the built image — invisible to
+        # every CI job. Found three already-shipped assets missing that way
+        # (recommendation-data.json / template-data.json / design-tokens.css).
+        # Reads fixed paths → pass_filenames:false. Both ENDS must trigger it:
+        # the load sites (portal src + the two HTML shells) and the COPY set.
+        files: ^(tools/portal/(src|entries)/.*\.(js|jsx)|docs/assets/[^/]+\.html|docs/interactive/.*\.html|components/da-portal/Dockerfile)$
+
       - id: structure-check
         name: Project structure enforcement
         entry: python3 -X utf8 scripts/tools/lint/check_structure.py --ci

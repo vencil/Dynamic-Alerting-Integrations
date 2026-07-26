@@ -803,6 +803,8 @@ lint-portal: ## da-portal 整套 lint：jsx-loader-compat / undefined-tokens / p
 	@python3 scripts/tools/lint/check_hub_badge_drift.py
 	@echo "==> portal audience enum (closed vocab)"
 	@python3 scripts/tools/lint/check_portal_audience_enum.py
+	@echo "==> portal runtime assets shipped in da-portal image"
+	@python3 scripts/tools/lint/check_portal_asset_shipping.py
 
 .PHONY: lint-new-script
 lint-new-script: ## Run all CLI/SAST conventions on a single new lint script (PR-portal-6) — usage: make lint-new-script SCRIPT=scripts/tools/lint/check_foo.py
