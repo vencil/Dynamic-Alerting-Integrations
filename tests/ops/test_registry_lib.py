@@ -280,6 +280,10 @@ def test_real_extraction_chart_default_set_matches_table():
     doc = lib.build_registry_doc()
     tagged = {k for k, e in doc["keys"].items() if e.get("chart_default")}
     assert tagged == set(lib.CHART_DEFAULT_KEYS)
+    # Pin the DECISION, not just the mechanism: the owner-approved pg
+    # promotion (#1232) must not silently vanish via a table edit that
+    # keeps the count intact (CodeRabbit review of #1232).
+    assert {"pg_connections", "pg_replication_lag"} <= tagged
     assert len(tagged) == 8
 
 
