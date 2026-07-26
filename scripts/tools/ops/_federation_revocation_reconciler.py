@@ -32,6 +32,15 @@ Design notes (ADR-028 §MVP):
   * Clock-skew tolerance (G-Gemini-r2): a token within ``skew_margin`` of its
     expiry is treated as a normal prune, never a false-positive critical.
   * PII minimization (D3): events carry only opaque ``token_id`` + ``expires_at``.
+  * Evidence-channel canary (#1234): "no revocations happened" and "the
+    tenant-api → Vector → VictoriaLogs evidence path is severed" both look like
+    zero rows, and the severed case still publishes a clean all-clear with a
+    fresh ``last_reconcile_ts`` — a silent false-green. tenant-api therefore
+    emits a content-free ``federation_revocation_channel_heartbeat`` every ~5m
+    down the SAME transform and sink path, and ``channel_up`` asserts it arrived
+    (alert ``FederationRevocationEvidenceChannelDown``). ⛔ The heartbeat query
+    lives INSIDE the fail-closed try block: a VictoriaLogs outage must leave
+    ``channel_up`` at its previous value, never report a dead channel.
 """
 from __future__ import annotations
 
@@ -58,6 +67,37 @@ DEFAULT_WINDOW_LOOKBACK_S = 24 * 3600   # revocation events: query [now-24h, now
 DEFAULT_WINDOW_SETTLE_S = 60        # only reconcile logs old enough to have landed
 DEFAULT_FAILOPEN_LOOKBACK_S = 600   # gateway fail-open: RECENT window only (~10m) so the
 #                                     gauge reflects current failures, not a 24h-old blip
+DEFAULT_HEARTBEAT_LOOKBACK_S = 1800  # evidence-channel canary window (30m): tenant-api emits
+#                                      every 5m, so ~5-6 land here and one missed emission
+#                                      cannot read as a dead channel (#1234)
+# ⛔ THREE COUPLED NUMBERS — do not tune one alone (external review fold-in, #1252).
+# This window (30m), tenant-api's heartbeat interval (5m, --federation-heartbeat-interval)
+# and FederationRevocationEvidenceChannelDown's `for: 15m` are load-bearing on EACH OTHER:
+#   * window >> interval is what makes a single missed emission a non-event. Shrink the
+#     window toward the interval and the canary becomes a flap generator; at window ==
+#     interval a producer restart alone can zero `channel_up`.
+#   * The producer emits ONCE IMMEDIATELY before entering its ticker loop
+#     (heartbeat.go Run) — that covers COLD START / fresh deploy, where the window is
+#     genuinely empty. It is NOT what protects the `for: 15m` budget across a producer
+#     restart: the previous pod's ~5 heartbeats are still inside this window, so
+#     `channel_up` never dips. (tenant-api is `strategy: Recreate` per ADR-023, so there
+#     is no rolling surge either.) If someone ever shrinks this window to ≈ the interval,
+#     that immediate emit becomes load-bearing for restart survival too — which is the
+#     real reason the three numbers must move together.
+#   * for: 15m ≈ 3 intervals also doubles as the fresh-deploy grace period, because
+#     `channel_up` starts at 0 before the first successful reconcile.
+
+# The evidence-channel canary event, and the Vector stream class it arrives on.
+# Both strings are hand-copied contracts:
+#   * EVENT_HEARTBEAT      — tenant-api's internal/federation/token/heartbeat.go
+#                            and helm/vector/values.yaml `evidenceChannel.events`
+#   * LOG_TYPE_EVIDENCE    — helm/vector/values.yaml `evidenceChannel.logType`
+# A rename on any single side severs the channel while every component still
+# reports healthy; that is precisely what channel_up exists to catch, and the
+# canary catches a producer-side rename. A VECTOR-side rename shows up as a dead
+# channel too, so the tuple is covered end to end.
+EVENT_HEARTBEAT = "federation_revocation_channel_heartbeat"
+LOG_TYPE_EVIDENCE = "federation_evidence"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -157,6 +197,29 @@ def build_logsql_query(lookback_s: int, settle_s: int) -> str:
     )
 
 
+def build_heartbeat_query(lookback_s: int, settle_s: int) -> str:
+    """LogsQL for the evidence-channel liveness canary (ADR-028 D1 / #1234).
+
+    tenant-api emits ``federation_revocation_channel_heartbeat`` every ~5m down
+    the SAME Vector transform and sink path as real revocation events, so its
+    presence in this window proves the whole producer→Vector→VictoriaLogs chain
+    is intact. Absence means the chain is severed — which is otherwise
+    indistinguishable from "no revocations happened".
+
+    ⛔ SOURCE-QUALIFIED on purpose. build_logsql_query above filters on the
+    ``event`` field alone across the WHOLE store, which lets any producer that
+    ever logs that field name spoof the signal (the debt tracked in #1237). A
+    new query starts qualified: ``log_type`` is written by the platform inside
+    the ``federation_evidence`` transform (from pre-merge locals, so a log
+    payload cannot forge it), which pins the rows to the one stream class the
+    evidence channel owns."""
+    return (
+        f'_time:[now-{lookback_s}s, now-{settle_s}s] '
+        f'AND log_type:"{LOG_TYPE_EVIDENCE}" '
+        f'AND event:"{EVENT_HEARTBEAT}"'
+    )
+
+
 def build_failopen_query(lookback_s: int, settle_s: int) -> str:
     """LogsQL for gateway revoked-set read failures (the fail-open signal).
 
@@ -185,6 +248,13 @@ class Metrics:
         self.events_dropped = 0              # gauge: event-filtered rows that failed to parse (schema-drift signal)
         self.reconcile_errors_total = 0      # counter: failed reconcile passes (fail-closed)
         self.gateway_load_errors = 0         # gauge: gateway fail-open warns in window
+        # ADR-028 D1 / #1234 evidence-channel canary. channel_up starts at 0:
+        # before the first SUCCESSFUL pass the reconciler has no evidence the
+        # channel works, and claiming 1 would be exactly the optimistic default
+        # this control exists to remove. The alert's `for: 15m` (≈3 heartbeat
+        # periods) is the deploy-time grace window for that.
+        self.channel_up = 0                  # gauge: 1 = heartbeat seen in window, 0 = channel dead
+        self.heartbeats_seen = 0             # gauge: heartbeat rows in window (debug / chaos verification)
 
     def render(self) -> str:
         lines = [
@@ -206,6 +276,12 @@ class Metrics:
             "# HELP federation_gateway_revocation_load_errors Gateway revoked-set read failures seen in the window (fail-open signal).",
             "# TYPE federation_gateway_revocation_load_errors gauge",
             f"federation_gateway_revocation_load_errors {self.gateway_load_errors}",
+            "# HELP federation_revocation_channel_up Evidence channel liveness: 1 = the tenant-api heartbeat canary was seen in the window, 0 = the evidence path is severed (an empty channel would otherwise be indistinguishable from 'no revocations happened').",
+            "# TYPE federation_revocation_channel_up gauge",
+            f"federation_revocation_channel_up {self.channel_up}",
+            "# HELP federation_revocation_heartbeats_seen Canary heartbeat rows in the window (debug / chaos verification; channel_up is the alerting signal).",
+            "# TYPE federation_revocation_heartbeats_seen gauge",
+            f"federation_revocation_heartbeats_seen {self.heartbeats_seen}",
         ]
         return "\n".join(lines) + "\n"
 
@@ -258,6 +334,16 @@ def reconcile_once(cfg: "Config", metrics: Metrics, now: float) -> None:
     try:
         ev_rows = query_victorialogs(cfg.victorialogs_url, build_logsql_query(cfg.lookback_s, cfg.settle_s))
         fo_rows = query_victorialogs(cfg.victorialogs_url, build_failopen_query(cfg.failopen_lookback_s, cfg.settle_s))
+        # ⛔ INSIDE the fail-closed try, deliberately. If the heartbeat query
+        # were run outside it (or its result written to the gauge before the
+        # early-return), a VictoriaLogs blip would set channel_up = 0 and page
+        # FederationRevocationEvidenceChannelDown — a FALSE "the evidence
+        # channel is severed" caused by the very outage that already surfaces
+        # correctly as ReconcileStale. On any error the pass returns below
+        # WITHOUT touching channel_up, so it holds its previous value: an
+        # unreachable log store means "unknown", not "dead channel".
+        hb_rows = query_victorialogs(
+            cfg.victorialogs_url, build_heartbeat_query(cfg.heartbeat_lookback_s, cfg.settle_s))
         live = read_live_set(cfg.revoked_file)
         parsed = parse_events(ev_rows)
         result = reconcile(parsed, live, now, cfg.skew_margin_s)
@@ -274,6 +360,11 @@ def reconcile_once(cfg: "Config", metrics: Metrics, now: float) -> None:
     # while a real un-revoke went unseen (ADR-028 D3 honest-boundary).
     metrics.events_dropped = len(ev_rows) - len(parsed)
     metrics.gateway_load_errors = len(fo_rows)
+    # Evidence-channel liveness (#1234). Only reached on a SUCCESSFUL pass, so a
+    # 0 here means "the store was reachable and held no canary in the window" —
+    # a real severed channel — never "we could not ask".
+    metrics.heartbeats_seen = len(hb_rows)
+    metrics.channel_up = 1 if hb_rows else 0
     metrics.last_reconcile_ts = now
     if result.suspected:
         # Loud, opaque (token_id only): the tenant is resolved from the store at
@@ -296,6 +387,7 @@ class Config:
     settle_s: int
     skew_margin_s: int
     failopen_lookback_s: int
+    heartbeat_lookback_s: int = DEFAULT_HEARTBEAT_LOOKBACK_S
 
 
 def _serve_forever(cfg: Config, metrics: Metrics, clock=time.time) -> None:
@@ -340,6 +432,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--skew-margin", type=int, default=DEFAULT_SKEW_MARGIN_S)
     p.add_argument("--failopen-lookback", type=int, default=DEFAULT_FAILOPEN_LOOKBACK_S,
                    help="Recent window (s) for the gateway fail-open gauge.")
+    p.add_argument("--heartbeat-lookback", type=int, default=DEFAULT_HEARTBEAT_LOOKBACK_S,
+                   help="Window (s) for the evidence-channel canary (default 1800 = ~5-6 of "
+                        "tenant-api's 5m heartbeats, so one missed emission never reads as a "
+                        "dead channel).")
     args = p.parse_args(argv)
     cfg = Config(
         victorialogs_url=args.victorialogs_url,
@@ -350,6 +446,7 @@ def main(argv: list[str] | None = None) -> int:
         settle_s=args.settle,
         skew_margin_s=args.skew_margin,
         failopen_lookback_s=args.failopen_lookback,
+        heartbeat_lookback_s=args.heartbeat_lookback,
     )
     _serve_forever(cfg, Metrics())
     return 0

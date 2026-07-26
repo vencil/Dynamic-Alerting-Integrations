@@ -54,6 +54,8 @@ spec:
             - {{ .Values.reconcile.skewMarginSeconds | quote }}
             - --failopen-lookback
             - {{ .Values.reconcile.failopenLookbackSeconds | quote }}
+            - --heartbeat-lookback
+            - {{ .Values.reconcile.heartbeatLookbackSeconds | default 1800 | quote }}
           ports:
             - name: metrics
               containerPort: {{ .Values.metricsPort }}

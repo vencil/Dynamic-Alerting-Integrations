@@ -154,6 +154,20 @@ prometheusScrapeAnnotations:
 #   - chargeback-aggregator CronJob (query)  app.kubernetes.io/name=chargeback-aggregator
 #   - Grafana (query)                        app=grafana  (k8s/03-monitoring label)
 #   - federation-gateway (query, ADR-021)    app.kubernetes.io/name=federation-gateway
+#   - federation-reconciler (evidence read,  app.kubernetes.io/name=federation-reconciler
+#     ADR-028 D1 / #1234)
+#
+# ⚠️ EVERY ROW BELOW IS A SAME-NAMESPACE MATCH. A NetworkPolicy
+# `podSelector` with no sibling `namespaceSelector` selects pods in the
+# POLICY's own namespace, so each entry admits its consumer only while that
+# consumer runs in VictoriaLogs' namespace. Deploy a consumer elsewhere (the
+# reconciler chart takes `-n` like any other, and its default
+# `victorialogs.url` points at `victorialogs.monitoring.svc`) and its
+# podSelector row does NOT admit it — it needs an `allowedNamespaces` entry,
+# which is precisely why Vector has one since #1018. Symptom of getting this
+# wrong is per-consumer: the reconciler fails LOUD (query raises →
+# `reconcile_errors_total` → `FederationRevocationReconcileStale` critical),
+# Vector ingest fails SILENT.
 #
 # ⚠️ Trust boundary of this allowlist (ADR-021): every entry is EITHER a
 # platform-trusted component (Vector / chargeback / Grafana never carry a
@@ -182,6 +196,26 @@ networkPolicy:
     # → :9428 forward is dropped and the whole mode is DOA in-cluster.
     - matchLabels:
         app.kubernetes.io/name: federation-gateway
+    # federation-reconciler (ADR-028 D1 / #924, #1234): the un-revoke
+    # tamper-evidence reconciler. It READS the evidence stream from :9428 on
+    # every reconcile loop — it never writes, and it carries no tenant
+    # identity (all six of its metrics are platform-global with zero labels;
+    # and the evidence rows carry no DIRECT tenant id — that holds because the
+    # producer does not emit one and `evidenceChannel.keepFields` does not list
+    # one, NOT as an intrinsic property of the channel, so re-check it if either
+    # side changes; `token_id` is still indirectly tenant-attributable via the
+    # token registry — see log-visibility-2tier-catalogue.md), so it belongs in
+    # the "platform-internal reader" class above. Without this
+    # entry its queries are dropped at the network layer and the ENTIRE
+    # ADR-028 detection plane is DOA in-cluster. That failure is LOUD, not
+    # silent: a dropped connection makes `query_victorialogs()` raise, the
+    # reconciler's fail-closed path bumps `reconcile_errors_total` WITHOUT
+    # refreshing `last_reconcile_ts`, and `FederationRevocationReconcileStale`
+    # (critical) fires. The silent variant is the sibling half of #1234 — a
+    # reachable store that the evidence never reaches, which reconciles to a
+    # clean all-clear. Both must be closed for the control to mean anything.
+    - matchLabels:
+        app.kubernetes.io/name: federation-reconciler
   # `vector`: the log shipper's dedicated namespace (#1018 PSS privileged
   # carve-out — its 3 hostPath mounts are forbidden even by PSS baseline,
   # so it cannot share the restricted-tier `monitoring` ns). A

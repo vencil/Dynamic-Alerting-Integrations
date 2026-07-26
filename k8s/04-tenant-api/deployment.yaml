@@ -34,6 +34,14 @@ spec:
     metadata:
       labels:
         app: tenant-api
+        # ADR-028 / #1234: Vector's log source selects the federation revocation
+        # EVIDENCE producer by `app.kubernetes.io/name`. Without this label these
+        # raw manifests are not collected and the evidence channel stays empty —
+        # silently, because an empty channel reconciles to a clean all-clear.
+        # Pod-template label only: `.spec.selector.matchLabels` stays `app:
+        # tenant-api` (a Deployment's selector is immutable — changing it would
+        # break in-place upgrades).
+        app.kubernetes.io/name: tenant-api
         app.kubernetes.io/version: "2.4.0"
       annotations:
         # Force rolling restart when RBAC config changes

@@ -8,6 +8,11 @@
 #        a fail-closed pass never refreshes the ts, so staleness surfaces it.
 #   6-7) GatewayRevocationLoadFailure fires on a sustained fail-open read error
 #        (>0 for 2m), never at 0 (the 2m debounce rides out pod-start / remount blips).
+#   8-10) EvidenceChannelDown (#1234) fires when the heartbeat canary stops arriving
+#        (channel_up == 0 for 15m) and never while it arrives. BOTH EDGES of the
+#        for: window are pinned — still PENDING at 14m, FIRING at exactly 15m — so
+#        a shortened `for:` cannot pass (asserting only past the window would let
+#        `for: 5m` through, which is the mutation this pair is proved against).
 # Run: promtool test rules tests/rulepacks/platform-federation-revocation_test.yaml
 rule_files:
   - platform-federation-revocation.rules.yaml
@@ -112,4 +117,57 @@ tests:
     alert_rule_test:
       - eval_time: 8m
         alertname: FederationGatewayRevocationLoadFailure
+        exp_alerts: []
+
+  # 8) Evidence channel healthy — the canary keeps arriving → NEVER fires.
+  #    Held well past the 15m window so a stray inversion of the comparison
+  #    (`!= 0` / `> 0`) would surface here rather than only in production.
+  - interval: 1m
+    name: evidence-channel-up-does-not-fire
+    input_series:
+      - series: 'federation_revocation_channel_up'
+        values: '1+0x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: FederationRevocationEvidenceChannelDown
+        exp_alerts: []
+
+  # 9) Evidence channel dead — canary absent from the window → FIRES at for:15m.
+  #    ⛔ BOTH EDGES. The 14m assertion (still PENDING, exp_alerts: []) is the
+  #    load-bearing half: without it, shortening `for:` to 5m — which would page
+  #    on a single missed heartbeat plus one skipped reconcile pass — still passes
+  #    every remaining case. Proved by mutation: setting `for: 5m` in
+  #    platform-federation-revocation.rules.yaml turns THIS eval red and nothing
+  #    else.
+  - interval: 1m
+    name: evidence-channel-down-fires-at-for-boundary
+    input_series:
+      - series: 'federation_revocation_channel_up'
+        values: '0+0x25'
+    alert_rule_test:
+      - eval_time: 14m          # for:-ε — pending, must NOT page yet
+        alertname: FederationRevocationEvidenceChannelDown
+        exp_alerts: []
+      - eval_time: 15m          # exactly for: — fires
+        alertname: FederationRevocationEvidenceChannelDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Federation revocation evidence channel is DEAD — un-revoke detection is silently blind (ADR-028 / #1234)"
+
+  # 10) A single missed heartbeat window must NOT page. This is the false-positive
+  #     guard the 15m window buys: channel_up dips to 0 for one reconcile interval
+  #     (300s = 5 evals) and recovers, which the `for:` must absorb entirely.
+  - interval: 1m
+    name: evidence-channel-single-dip-does-not-fire
+    input_series:
+      - series: 'federation_revocation_channel_up'
+        values: '1+0x4 0+0x4 1+0x20'   # up 5m, down 5m, up again
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: FederationRevocationEvidenceChannelDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: FederationRevocationEvidenceChannelDown
         exp_alerts: []

@@ -1,7 +1,7 @@
 # Bare-rules promtool target for the federation-revocation reconciler alerts
 # (ADR-028 D1 / #924). promtool needs a top-level `groups:` document, not the
 # deployed `data: platform-alert.yml: |` ConfigMap, so this is an EXTRACTED COPY
-# of the three alerts from k8s/03-monitoring/configmap-rules-platform.yaml.
+# of the four alerts from k8s/03-monitoring/configmap-rules-platform.yaml.
 #
 # ⚠️ KEEP IN SYNC with that ConfigMap (expr + for + labels + summary). The
 # behavioural contract is exercised by platform-federation-revocation_test.yaml.
@@ -37,6 +37,22 @@ groups:
           severity: critical
         annotations:
           summary: "Federation revocation reconciler stale or down — un-revoke detection is not operational (ADR-028)"
+
+      # The evidence channel itself is dead (#1234): the reconciler saw no
+      # tenant-api heartbeat canary on a REACHABLE store, so the un-revoke
+      # control is reporting all-clear over an empty feed. Without this alert an
+      # empty channel is indistinguishable from "no revocations happened" and
+      # neither TamperSuspected nor ReconcileStale fires. `for: 15m` ≈ 3 heartbeat
+      # periods (producer 5m + reconcile 300s + settle 60s), which also covers the
+      # deploy grace window (channel_up starts at 0). NO `or absent(...)` — that
+      # cause is already ReconcileStale's absent() arm; duplicating it double-pages.
+      - alert: FederationRevocationEvidenceChannelDown
+        expr: federation_revocation_channel_up == 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Federation revocation evidence channel is DEAD — un-revoke detection is silently blind (ADR-028 / #1234)"
 
       # The gateway is failing to read the revoked-set and is failing OPEN
       # (revoked tokens ARE being allowed through) — the ADR-028 named Risk

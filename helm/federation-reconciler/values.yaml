@@ -53,6 +53,13 @@ reconcile:
   settleSeconds: 60         # skip logs younger than this (ingestion lag)
   skewMarginSeconds: 120    # ~2 min clock-skew tolerance at the TTL boundary
   failopenLookbackSeconds: 600  # RECENT window for the gateway fail-open gauge
+  # ADR-028 D1 / #1234 evidence-channel canary window. tenant-api emits
+  # `federation_revocation_channel_heartbeat` every 5m, so 1800s holds ~5-6 of
+  # them and ONE missed emission can never drive channel_up to 0. ⛔ Narrowing
+  # this toward the 5m producer cadence removes that margin and makes
+  # FederationRevocationEvidenceChannelDown flap on a single lost log line;
+  # widening it delays detection of a genuinely severed channel.
+  heartbeatLookbackSeconds: 1800
 
 metricsPort: 9099
 

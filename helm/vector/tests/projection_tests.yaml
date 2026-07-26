@@ -29,6 +29,10 @@
 #   - `tenant_route.t_1000`   → tenant-alpha's sanitized partition.
 #   - `tenant_route._unmatched` → the discard bucket (no sink consumes it):
 #                               proof a row did NOT reach any tenant partition.
+#
+# The ADR-028 / #1234 evidence-channel cases at the bottom insert_at
+# `origin_split` instead — the whole point of that group is the ROUTING
+# decision, so they must run the route transform, not bypass it.
 
 tests:
   # ── (i) NEGATIVE ASSERTION: sanitization actually REMOVES topology ────────
@@ -302,3 +306,178 @@ tests:
     # Must NOT leak into tenant-alpha's partition.
     no_outputs_from:
       - tenant_route.t_1000
+
+  # ══ ADR-028 D1 / #1234 — federation revocation EVIDENCE channel ═══════════
+  # These insert_at `origin_split` (NOT demux) because the routing decision is
+  # what is under test. The pod label is the split key and it is read from the
+  # PRISTINE `.kubernetes.*` blob — before any payload deep-merge — so a log
+  # producer cannot forge its own origin.
+
+  # ── (E1) The channel actually carries FIELDS, not an opaque string ────────
+  # This is the assertion that would have caught the fatal first-draft omission:
+  # without `parse_json(.message)` + deep merge, VictoriaLogs stores exactly one
+  # `message` string, the reconciler's field query `event:"..."` matches nothing,
+  # and the ADR-028 detection plane returns zero rows while LOOKING wired up.
+  - name: "ADR-028: tenant-api revocation event reaches the evidence stream as TOP-LEVEL fields"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"time":"2026-07-26T09:00:00.123456789Z","level":"INFO","msg":"federation token revoked","event":"federation_token_revoked","token_id":"tok-abc","expires_at":"2026-07-26T13:00:00Z"}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': tenant-api
+          kubernetes.container_name: tenant-api
+          kubernetes.pod_namespace: tenant-api
+          kubernetes.pod_name: tenant-api-6c4f-abcde
+          kubernetes.pod_node_name: node-3
+    outputs:
+      - extract_from: federation_evidence
+        conditions:
+          - type: vrl
+            source: |
+              # ⛔ LOAD-BEARING: the reconciler filters on the FIELD `event`
+              # and reads top-level `token_id` / `expires_at`. If the merge is
+              # ever removed these three assertions are the ones that go red.
+              assert_eq!(.event, "federation_token_revoked", "`event` must be a TOP-LEVEL field, not buried inside .message")
+              assert_eq!(.token_id, "tok-abc", "reconciler correlates on token_id")
+              assert_eq!(.expires_at, "2026-07-26T13:00:00Z")
+              # Platform-owned classification + promotion, taken from the
+              # PRE-merge k8s locals.
+              assert_eq!(.log_type, "federation_evidence")
+              assert_eq!(.app, "tenant-api")
+              assert_eq!(.k8s_namespace, "tenant-api")
+              assert_eq!(.pod_name, "tenant-api-6c4f-abcde")
+              assert!(!exists(.kubernetes), "raw k8s blob dropped once promoted (same as demux)")
+              # Every row in this store carries the correlation id.
+              assert!(
+                match(to_string(.log_event_id) ?? "",
+                  r'^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'),
+                "evidence rows carry a platform UUIDv7 log_event_id like every other row"
+              )
+    # ⛔ ISSUE #1234 ACCEPTANCE CRITERION 3, pinned mechanically: a tenant-api
+    # row must not land in ANY tenant projection partition. It cannot even reach
+    # `demux` — which is what makes tenant_project's fail-closed gate a
+    # structural guarantee here rather than a runtime branch we hope fires.
+    no_outputs_from:
+      - demux
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (E2) The liveness canary takes the same path ──────────────────────────
+  - name: "ADR-028: heartbeat canary reaches the evidence stream (channel_up depends on it)"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"time":"2026-07-26T09:05:00Z","level":"INFO","msg":"federation revocation evidence channel heartbeat","event":"federation_revocation_channel_heartbeat"}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': tenant-api
+          kubernetes.container_name: tenant-api
+          kubernetes.pod_namespace: tenant-api
+          kubernetes.pod_name: tenant-api-6c4f-abcde
+          kubernetes.pod_node_name: node-3
+    outputs:
+      - extract_from: federation_evidence
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event, "federation_revocation_channel_heartbeat")
+              assert_eq!(.log_type, "federation_evidence")
+              # ADR-028 §D3: the canary carries NO tenant identifier. If one
+              # ever appears here the PII boundary has regressed at the producer.
+              assert!(!exists(.tenant_id), "heartbeat must not carry a tenant identifier")
+    no_outputs_from:
+      - demux
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (E3) PII filter: ordinary tenant-api request logs are DROPPED ─────────
+  # tenant-api's request middleware logs `caller` (the operator's EMAIL) and
+  # `remote` (client IP) on EVERY request. Shipping the pod's whole stderr into
+  # a 30-day audit store would violate the PII-minimisation rule ADR-028 sets
+  # for itself. Asserting the row DID enter the evidence BRANCH and then did NOT
+  # come out of the remap proves the drop is the ALLOWLIST's doing — not an
+  # accident of routing that a selector change could silently undo.
+  - name: "ADR-028 D3: ordinary tenant-api request log (carries operator email) is dropped, never stored"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"time":"2026-07-26T09:06:00Z","level":"INFO","msg":"request","caller":"operator@example.com","remote":"10.0.0.5","method":"PUT","path":"/api/v1/tenants/acme/thresholds","status":200}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': tenant-api
+          kubernetes.container_name: tenant-api
+          kubernetes.pod_namespace: tenant-api
+          kubernetes.pod_name: tenant-api-6c4f-abcde
+          kubernetes.pod_node_name: node-3
+    outputs:
+      - extract_from: origin_split.evidence
+        conditions:
+          - type: vrl
+            source: |
+              # It reached the branch (routing is by POD, not by content)…
+              assert!(contains(to_string(.message) ?? "", "operator@example.com"))
+    # …and the allowlist stopped it here. Nothing downstream ever sees it.
+    no_outputs_from:
+      - federation_evidence
+      - demux
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (E4) Non-JSON tenant-api stderr is dropped too ────────────────────────
+  # Go runtime noise / panics are not evidence. Deliberately NOT reclassified
+  # into an operational stream — that would re-open the E3 PII hole via a
+  # different door (a panic can print request context).
+  - name: "ADR-028 D3: non-JSON tenant-api stderr is dropped from the evidence stream"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: "panic: runtime error: invalid memory address caller=operator@example.com"
+          'kubernetes.pod_labels."app.kubernetes.io/name"': tenant-api
+          kubernetes.container_name: tenant-api
+          kubernetes.pod_namespace: tenant-api
+          kubernetes.pod_name: tenant-api-6c4f-abcde
+          kubernetes.pod_node_name: node-3
+    outputs:
+      - extract_from: origin_split.evidence
+        conditions:
+          - type: vrl
+            source: |
+              assert!(contains(to_string(.message) ?? "", "panic:"))
+    no_outputs_from:
+      - federation_evidence
+      - demux
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (E5) REGRESSION: gateway rows behave exactly as before ────────────────
+  # The split must be transparent to the pre-existing pipeline: a gateway row
+  # still reaches demux, is still classified federation_audit, and still
+  # projects into its tenant partition. It must NOT appear on the evidence
+  # stream (which would double-write it into 0:0).
+  - name: "ADR-028 regression: gateway rows still flow demux → 0:0 → tenant partition, and never onto the evidence stream"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-alpha","token_id":"tok-gw","status":200,"path":"/select/logsql/query"}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': federation-gateway
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: federation-gateway-7d9f
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.log_type, "federation_audit", "gateway classification unchanged by the split")
+              assert_eq!(.tenant_id, "tenant-alpha")
+              assert_eq!(.k8s_namespace, "monitoring")
+      - extract_from: tenant_route.t_1000
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.account_id, 1000, "tenant projection still works through the split")
+              assert_eq!(.token_id, "tok-gw")
+    no_outputs_from:
+      - federation_evidence

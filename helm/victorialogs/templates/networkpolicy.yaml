@@ -3,14 +3,26 @@
 # on its HTTP listener — ingest + query + DELETE all share :9428. The
 # §2 hard rule guards the producer side (gateway → stdout, not direct
 # push) but does not protect the store itself from compromised
-# in-cluster pods. This NetworkPolicy locks the port to the five
-# legitimate consumers: the Vector DaemonSet (ingest — since #1018 in its
+# in-cluster pods. This NetworkPolicy locks the port to the declared
+# consumers: the Vector DaemonSet (ingest — since #1018 in its
 # dedicated `vector` namespace via `allowedNamespaces`; the same-ns
 # podSelector row remains for debug pods / pre-migration installs), the
 # chargeback CronJob (query), Grafana (query), the federation-gateway in
-# `mode: victorialogs` (tenant-scoped log query, ADR-021 #609), and
-# same-pod loopback (probes). Any other pod in the cluster — including a
-# freshly attacker-deployed one in the same namespace — cannot reach :9428.
+# `mode: victorialogs` (tenant-scoped log query, ADR-021 #609), the
+# federation-reconciler (revocation-evidence read, ADR-028 D1 / #1234),
+# and same-pod loopback (probes). Any other pod in the cluster — including
+# a freshly attacker-deployed one in the same namespace — cannot reach :9428.
+#
+# ⚠️ Every `allowedPodSelectors` row is a SAME-NAMESPACE match: a k8s
+# NetworkPolicy `podSelector` with no `namespaceSelector` beside it selects
+# pods in the policy's OWN namespace only. So each row admits its consumer
+# ONLY when that consumer runs in VictoriaLogs' namespace. A consumer
+# deployed elsewhere needs an `allowedNamespaces` entry instead (that is
+# exactly why Vector, since #1018, has one) — its podSelector row alone
+# will NOT let it in. The exact set is pinned by
+# tests/shared/test_helm_chart_log_aggregation.py
+# ::test_networkpolicy_locks_to_the_declared_consumer_set, so this list and
+# the values.yaml enumeration must be edited together with that test.
 #
 # Building auth (`-httpAuthKey`) into the chart is the deeper fix and
 # is tracked as a separate follow-up; NetworkPolicy is the minimum

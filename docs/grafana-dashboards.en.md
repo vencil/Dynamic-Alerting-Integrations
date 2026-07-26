@@ -36,7 +36,7 @@ The shipped Grafana (`k8s/03-monitoring/`) deliberately uses **selective embed**
 | Delivery | Dashboard | Rationale |
 |----------|-----------|-----------|
 | **Built-in (auto-provision)** | **MariaDB Overview** (uid `mariadb-overview`; exists only as a ConfigMap embed with no standalone JSON, hence not listed in this catalog) | Showcase first screen: the first thing you see after platform apply is the health of the monitored database (up / connections / QPS / InnoDB buffer pool) — also where the try-local one-click experience's alert red light lands |
-| **Built-in (auto-provision)** | **Federation Revocation Reconciler** (Dashboard 4 in this doc, Method C) | Security-alert observation surface: the three platform alerts for un-revoke detection ([ADR-028](./adr/028-federation-revocation-tamper-evidence.md)) ship with the platform, so the matching field view must exist the moment the pager fires — it must not depend on an operator remembering a manual import |
+| **Built-in (auto-provision)** | **Federation Revocation Reconciler** (Dashboard 4 in this doc, Method C) | Security-alert observation surface: the four platform alerts for un-revoke detection ([ADR-028](./adr/028-federation-revocation-tamper-evidence.md)) ship with the platform, so the matching field view must exist the moment the pager fires — it must not depend on an operator remembering a manual import |
 | **Operator-selected (Method A / B)** | The remaining five: Dashboard 1 (Platform Overview), 2 (Shadow Monitoring), 3 (Fleet Threshold Distribution), 5 (Federation Audit), 6 (Tenant Log Query) | Adopt as needed: Shadow only matters during a migration (removed after cutover), the Fleet governance view has limited value at low tenant counts, and Dashboards 5/6 only have data when the corresponding federation plane is enabled; many environments also attach their own Grafana rather than the shipped one — embedding everything by default would only produce no-data blank boards |
 
 ---
@@ -308,9 +308,9 @@ This dashboard is the **passive** governance view — use the distribution data 
 
 ### Motivation
 
-The [ADR-028](./adr/028-federation-revocation-tamper-evidence.md) federation-reconciler (`_federation_revocation_reconciler.py`) periodically reconciles the off-store revocation event log against the live revoked set to detect **un-revokes** (a write-capable attacker silently dropping a not-yet-expired revocation), and exposes six **platform-global, zero-label** metrics on `/metrics` (job=`federation-reconciler`, port 9099). Those metrics previously had only alerts consuming them, no operational view. This dashboard is that **field view** — it lays out the [runbook](internal/federation-revocation-reconciler-runbook.md)'s four chaos-validation scenarios on one page, with panel thresholds **aligned 1:1 to the three platform alerts** (see the mapping below) so the dashboard and the pager agree on what is bad.
+The [ADR-028](./adr/028-federation-revocation-tamper-evidence.md) federation-reconciler (`_federation_revocation_reconciler.py`) periodically reconciles the off-store revocation event log against the live revoked set to detect **un-revokes** (a write-capable attacker silently dropping a not-yet-expired revocation), and exposes eight **platform-global, zero-label** metrics on `/metrics` (job=`federation-reconciler`, port 9099). Those metrics previously had only alerts consuming them, no operational view. This dashboard is that **field view** — it lays out the [runbook](internal/federation-revocation-reconciler-runbook.md)'s five chaos-validation scenarios on one page, with panel thresholds **aligned 1:1 to the four platform alerts** (see the mapping below) so the dashboard and the pager agree on what is bad.
 
-> **Why no `$tenant` variable?** All six metrics are platform-global with no tenant label (un-revoke detection is a platform-level control, not per-tenant) — so this dashboard neither needs nor has a tenant dropdown.
+> **Why no `$tenant` variable?** All eight metrics are platform-global with no tenant label (un-revoke detection is a platform-level control, not per-tenant) — so this dashboard neither needs nor has a tenant dropdown.
 
 ### Deployment
 
@@ -338,18 +338,20 @@ This dashboard is **baked into the shipped Grafana**: the JSON is also embedded 
 |--------|-------|-------------------|--------|---------|
 | Top row | **Tamper status** | `federation_revocation_tamper_suspected` | ✓ Clean (0) = clean, but a live all-clear **only when Reconciler freshness is green**; on a fail-closed/stale pass it holds its last value, so read it together with freshness | 🔴 Tamper (>0) = suspected un-revoke |
 | Top row | **Reconciler freshness** | `time() - ..._last_reconcile_timestamp_seconds` | ✓ Fresh (<1800s) | 🔴 Stale (≥1800s) = detection is blind |
+| Top row | **Evidence channel** | `federation_revocation_channel_up` | ✓ Evidence flowing (1) = the channel is live, which is what makes a clean Tamper status mean anything | 🔴 Channel dead (0) = the evidence path is severed and detection is reporting all-clear over an empty feed |
 | Top row | **Gateway fail-open** | `federation_gateway_revocation_load_errors` | ✓ OK (0) | 🟡 Fail-open (>0) = revoked tokens honoured |
 | Top row | **Coverage integrity** | `federation_revocation_events_dropped` | ✓ Intact (0) | 🟡 Schema drift (>0) = coverage eroded |
 | Row 1 | **Reconciler staleness / error rate / events checked** | staleness (with 1800 line), `rate(...reconcile_errors_total[5m])`, `..._events_checked` | staleness sawtooths near 0, error rate flat 0 | staleness climbing + error rate >0 = fail-closed |
 | Row 2 | **Events dropped / erosion ratio** | `..._events_dropped`, `dropped / clamp_min(checked + dropped, 1)` | both 0 | >0 = schema-drift; ratio uses `clamp_min` to avoid 0/0=NaN |
 | Row 3 | **Gateway read failures** | `federation_gateway_revocation_load_errors` (with >0 line) | flat 0 | >0 = fail-open; oscillation near the `for:2m` boundary = beat-frequency |
 | Row 4 | **Suspected un-revokes (headline)** | `federation_revocation_tamper_suspected` (large, with >0 line) | flat 0 | >0 sustained 5m = critical security event |
+| Row 5 | **Heartbeat canary — 30m window liveness** | `..._channel_up` (0/1) + `..._heartbeats_seen` | channel_up flat 1, heartbeats_seen around 5-6 | heartbeats_seen decaying to 0 with channel_up dropping to 0 = the evidence channel is severed; a **cliff to 0** usually means a producer-side event rename or a Vector selector change |
 
-> **Readable without colour (accessibility):** all five stat panels (four top-row + the erosion ratio) don't rely on colour alone — every colour tier pairs a **symbol + text** (✓ / 🔴 / 🟡). Per ADR-012 / WCAG 1.4.1; an a11y golden in `tests/dx/test_federation_revocation_dashboard.py` pins "every colour tier has a symbol" against regression.
+> **Readable without colour (accessibility):** all six stat panels (five top-row + the erosion ratio) don't rely on colour alone — every colour tier pairs a **symbol + text** (✓ / 🔴 / 🟡). Per ADR-012 / WCAG 1.4.1; an a11y golden in `tests/dx/test_federation_revocation_dashboard.py` pins "every colour tier has a symbol" against regression.
 
-### Chaos-4 Scenario Mapping
+### Chaos-5 Scenario Mapping
 
-This dashboard is the field view for the four scenarios in the [runbook](internal/federation-revocation-reconciler-runbook.md)'s "pre-GA chaos validation":
+This dashboard is the field view for the five scenarios in the [runbook](internal/federation-revocation-reconciler-runbook.md)'s "pre-GA chaos validation":
 
 | Scenario | Primary metric | Healthy | Anomaly |
 |----------|---------------|---------|---------|
@@ -357,10 +359,11 @@ This dashboard is the field view for the four scenarios in the [runbook](interna
 | **fail-closed** | `reconcile_errors_total`↑ and `last_reconcile_timestamp` frozen | staleness ≈ 0 | staleness > 1800 |
 | **schema-drift** | `events_dropped` (+ erosion ratio) | 0 | >0 (visible, not silent) |
 | **beat-frequency (拍頻)** | `gateway_load_errors` oscillation at the `for:2m` boundary | no flap | repeated in/out of firing at the boundary → tune `for:` or interval |
+| **evidence-channel severance** ([#1234](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1234)) | `channel_up` + `heartbeats_seen` | 1 / around 5-6 | 0 / 0 (fires at `for:15m`) = detection has **no input**; ⛔ validate the reverse too: blocking VictoriaLogs egress must leave `channel_up` at its previous value and fire only `ReconcileStale` |
 
 ### Alignment with Alerts
 
-Panel thresholds deliberately **use the same values as the three alerts in [configmap-rules-platform.yaml](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-rules-platform.yaml)** (a single source of "what is bad"): `FederationRevocationTamperSuspected` (>0, 5m, critical), `FederationRevocationReconcileStale` (`time()-ts > 1800` or absent, 10m, critical), `FederationGatewayRevocationLoadFailure` (>0, 2m, warning). IR steps are in the [runbook](internal/federation-revocation-reconciler-runbook.md).
+Panel thresholds deliberately **use the same values as the four alerts in [configmap-rules-platform.yaml](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-rules-platform.yaml)** (a single source of "what is bad"): `FederationRevocationTamperSuspected` (>0, 5m, critical), `FederationRevocationReconcileStale` (`time()-ts > 1800` or absent, 10m, critical), `FederationRevocationEvidenceChannelDown` (`channel_up == 0`, 15m, critical), `FederationGatewayRevocationLoadFailure` (>0, 2m, warning). IR steps are in the [runbook](internal/federation-revocation-reconciler-runbook.md).
 
 ---
 

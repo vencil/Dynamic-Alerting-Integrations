@@ -1,9 +1,46 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
-  "title": "vector chart values — ADR-021 #609 tenantProjections type validation",
-  "description": "Constrains ONLY the tenant-isolation trust root (tenantProjections); all other values are left unconstrained (additionalProperties defaults true). A quoted or non-integer accountId would otherwise render invalid VRL and only fail later at `vector validate`; this fails it at `helm template` with a clear message. Uniqueness of tenantId/accountId is enforced separately by a render-time {{ fail }} guard in templates/configmap.yaml (JSON Schema cannot express field-level cross-item uniqueness).",
+  "title": "vector chart values — tenant-isolation + evidence-channel trust roots",
+  "description": "Constrains ONLY the two security-load-bearing blocks (tenantProjections = tenant isolation, evidenceChannel = the ADR-028 #1234 revocation-evidence PII gate); all other values are left unconstrained (additionalProperties defaults true). A quoted or non-integer accountId would otherwise render invalid VRL and only fail later at `vector validate`; this fails it at `helm template` with a clear message. Uniqueness of tenantId/accountId is enforced separately by a render-time {{ fail }} guard in templates/configmap.yaml (JSON Schema cannot express field-level cross-item uniqueness), as are the non-empty checks on evidenceChannel.events / .keepFields (deliberately NOT minItems here — the template's {{ fail }} explains WHY an empty list is a PII hole, and a bare schema error would replace that message).",
   "type": "object",
   "properties": {
+    "evidenceChannel": {
+      "type": ["object", "null"],
+      "description": "ADR-028 D1 / #1234 federation revocation EVIDENCE channel — the pre-demux origin split plus the PII gate on the evidence branch. Constrained because a typo silently MISROUTES rather than failing: the split's two conditions are positive matches on a pod label, so a wrong podLabelValue matches nothing, every tenant-api row falls into the unconsumed origin_split._unmatched, and the channel is permanently empty and indistinguishable from 'no revocations happened'. A typo'd KEY (podLabelvalue, keepfields) is the case additionalProperties:false actually catches — the template would silently fall back to its shipped default. Nullable so `helm upgrade --reuse-values` / `--set evidenceChannel=null` (no such key in stored values) still renders; the template is nil-safe and defaults every field.",
+      "additionalProperties": false,
+      "properties": {
+        "podLabelKey": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Pod label key the origin split reads from the PRISTINE .kubernetes.pod_labels (default app.kubernetes.io/name). Must be a label both branches can be keyed on."
+        },
+        "podLabelValue": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Label value identifying the evidence producer (default tenant-api). MUST also be covered by source.extraLabelSelector or nothing is tailed at all. Distinctness from gatewayLabelValue is enforced by a render-time {{ fail }} (equal values would copy every row down BOTH branches — Vector's `route` fans out to every match)."
+        },
+        "gatewayLabelValue": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Label value for the OTHER branch, the pre-existing audit pipeline feeding demux (default federation-gateway). A positive match on purpose: negation would make the split exhaustive and forward unrecognised rows into the 30-day 0:0 store."
+        },
+        "logType": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stream class stamped on evidence rows (default federation_evidence). Registered as a Tier-1 platform-only class in docs/internal/log-visibility-2tier-catalogue.md; changing it desynchronises that catalogue and the reconciler's LogsQL filter."
+        },
+        "events": {
+          "type": "array",
+          "description": "Fail-CLOSED ROW allowlist: the only `event` values that survive the evidence branch. Everything else aborts, which is what keeps tenant-api's per-request `caller` (operator EMAIL) / `remote` (client IP) out of the audit store. Adding an entry is a security-reviewed action. An explicitly empty list is rejected by a render-time {{ fail }}, not here.",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "keepFields": {
+          "type": "array",
+          "description": "Fail-CLOSED FIELD keep-list (default: event, token_id, expires_at). The row is REBUILT from these keys, so anything unlisted is structurally absent. Widening it is a security-reviewed action — it is the second half of the PII gate, and it is the SSOT the log-visibility catalogue's evidence-row description tracks. An explicitly empty list is rejected by a render-time {{ fail }}, not here.",
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
     "tenantProjections": {
       "type": "array",
       "description": "Per-tenant log projection map — a reviewed, GitOps-versioned projection of the Git account registry.",

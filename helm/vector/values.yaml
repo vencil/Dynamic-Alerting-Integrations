@@ -37,11 +37,42 @@ victorialogs:
   projectId: ""
 
 # Scope of the kubernetes_logs source — which pods to tail.
-# Phase 1 default: federation-gateway only (per #539 §1 trigger and §7
+# Phase 1 default was federation-gateway only (per #539 §1 trigger and §7
 # non-goals — "not a general platform log roll-up"). Empty selector =
 # tail every pod on the node; only use that for chart smoke-tests.
+#
+# ⛔ ADR-028 / #1234 widened this to a SET selector so tenant-api is tailed too.
+# tenant-api is the producer of the federation revocation evidence events
+# (`federation_token_revoked` / `federation_revocation_channel_heartbeat`) that
+# the federation-reconciler queries. ADR-028 §D3 assumed those already reached
+# VictoriaLogs "via the existing Vector pipeline"; they did not — this selector
+# did not match tenant-api, so the reconciler's evidence query returned zero
+# rows forever and the un-revoke tamper-evidence control was a silent no-op.
+#
+# A set selector (rather than a second `additionalSources` entry) is deliberate:
+# two `kubernetes_logs` sources sharing one `data_dir` have undocumented
+# checkpoint behaviour, and overlapping selectors double-ingest. One source, one
+# checkpoint namespace, split downstream by `origin_split` — see
+# templates/configmap.yaml.
+#
+# ⚠️ This selector matches `app.kubernetes.io/name`. Both helm/tenant-api and
+# (since #1234) k8s/04-tenant-api/deployment.yaml set that label on the pod, so
+# either deployment path is collected. If you run tenant-api from your own
+# manifests, that label is what puts it on the evidence channel.
+# ⛔ Narrowing this selector so tenant-api is no longer tailed PAGES within ~15m
+# — it is not a silent failure. An empty evidence channel would otherwise be
+# indistinguishable from "no revocations happened" (the reconciler gets zero rows
+# from a reachable store and publishes a clean all-clear), so
+# `FederationRevocationEvidenceChannelDown` (critical,
+# `federation_revocation_channel_up == 0 for 15m`, in
+# k8s/03-monitoring/configmap-rules-platform.yaml) covers it: tenant-api emits a
+# `federation_revocation_channel_heartbeat` canary every 5m down this exact path,
+# and its absence from the store fires. ⚠️ The one way to defeat that is to drop
+# tenant-api here AND drop the canary from `evidenceChannel.events` below — then
+# nothing is expected and nothing alerts. Verify evidence rows still arrive
+# (`log_type:federation_evidence` in VictoriaLogs) after any change here.
 source:
-  extraLabelSelector: "app.kubernetes.io/name=federation-gateway"
+  extraLabelSelector: "app.kubernetes.io/name in (federation-gateway,tenant-api)"
   extraNamespaceLabelSelector: ""
   # Glob for log file paths. Vector default is fine — left here as the
   # override seam.
@@ -59,6 +90,26 @@ source:
 # into the same VictoriaLogs store; see #552 for why this is the
 # correct chargeback source (gateway access-log request count cannot
 # distinguish heavy vs light queries).
+#
+# ⛔⛔ NEVER onboard an EVIDENCE / PII-BEARING producer through this list.
+# It is a documented BYPASS of the `origin_split` PII gate: every entry feeds
+# `demux` DIRECTLY (see templates/configmap.yaml — demux's inputs are
+# `origin_split.gateway` plus each `additionalSources` name), so an entry
+# never passes the evidence branch's row allowlist (`evidenceChannel.events`)
+# or its field keep-list (`evidenceChannel.keepFields`). Its rows land, whole
+# and unfiltered, in the 30-day 0:0 store — for tenant-api that means `caller`
+# (the operator's EMAIL) and `remote` (client IP) on EVERY request, exactly
+# what ADR-028 §D3 exists to exclude — and, worse, they become reachable from
+# `tenant_project`, i.e. eligible for a TENANT partition.
+# ⚠️ The paragraph above ("use this to tail pods whose labels don't unify
+# with the primary selector") is the trap: a differing label key is precisely
+# the symptom you would hit while onboarding a second evidence producer, and
+# this list is the wrong answer to it. The right answer is the origin split —
+# put the producer under `source.extraLabelSelector` and give it a branch
+# keyed on its pod label (`evidenceChannel.podLabelKey`/`podLabelValue`),
+# so the allowlist + field rebuild apply. Legitimate uses here are
+# platform-operational, non-PII streams only (e.g. the #552 Prometheus query
+# log). Adding an entry is a security-reviewed action.
 additionalSources: []
   # - name: prometheus_query_log
   #   extraLabelSelector: "app=prometheus"
@@ -99,11 +150,19 @@ additionalSources: []
 # do NOT name an entry `victorialogs` (collides with the built-in
 # primary sink). Naming conflicts surface at chart lint as a duplicate
 # YAML key — fail-loud.
+#
+# ⛔ `inputs:` MUST be `[demux, federation_evidence]`, not `[demux]`
+# (ADR-028 / #1234). `demux` alone carries the gateway stream only; the
+# federation revocation audit trail (`log_type=federation_evidence`) arrives on
+# the second input. A SIEM wired to `[demux]` silently misses the ENTIRE
+# revocation chain-of-custody — and the SIEM is precisely the component ADR-028
+# designates as the tamper-evident custodian, so that omission defeats the
+# control it is deployed for.
 additionalSinks: []
   # Example — splunk_hec for tamper-evident compliance trail:
   # - name: splunk_compliance
   #   type: splunk_hec_logs
-  #   inputs: [demux]                  # MUST be demux for VRL-tagged events
+  #   inputs: [demux, federation_evidence]  # VRL-tagged streams, both of them
   #   endpoint: https://splunk.example.com:8088
   #   default_token: ${SPLUNK_TOKEN}   # via envFrom secret
   #   _buffer_when_full: drop_newest
@@ -120,7 +179,7 @@ additionalSinks: []
   # trade-off.
   # - name: splunk_durable
   #   type: splunk_hec_logs
-  #   inputs: [demux]
+  #   inputs: [demux, federation_evidence]
   #   endpoint: https://splunk.example.com:8088
   #   default_token: ${SPLUNK_TOKEN}
   #   _buffer_type: disk
@@ -131,7 +190,7 @@ additionalSinks: []
   # - name: syslog_archive
   #   type: socket
   #   mode: tcp
-  #   inputs: [demux]
+  #   inputs: [demux, federation_evidence]
   #   address: syslog-collector.security.svc:6514
   #   encoding:
   #     codec: json
@@ -154,6 +213,84 @@ additionalSinks: []
 # useful if your gateway Deployment has a non-default name.
 audit:
   gatewayPodOwnerPrefix: "federation-gateway-"
+
+# ── Federation revocation EVIDENCE channel (ADR-028 D1 / #1234) ─────────────
+# The `origin_split` route splits the source stream BEFORE `demux`, and this
+# block is the SSOT for that split plus the PII filter on the evidence branch.
+#
+# Why a pre-demux split and not a 5th branch inside the demux VRL:
+#   - demux's VRL deep-merges the log payload over `.kubernetes.*`, so any
+#     routing decision made INSIDE demux could be forged by a log producer.
+#     Splitting first keys on pristine, kubelet-supplied pod metadata.
+#   - `tenant_project` (the tenant-visible projection) reads from `demux`. A
+#     tenant-api row must never be able to reach a tenant partition; the only
+#     structural guarantee is that it never enters demux at all.
+#
+# ⛔ `events` is a fail-CLOSED ALLOWLIST, and it is the PII boundary.
+# tenant-api's request middleware logs `caller` (the operator's EMAIL address)
+# and `remote` (client IP) on EVERY request. Everything on the evidence branch
+# that is not one of these events is DROPPED, so the 30-day audit store never
+# becomes a store of operator identities (ADR-028 §D3 PII minimisation).
+# Adding an entry here is a SECURITY-REVIEWED action: confirm the event's field
+# set carries no operator/tenant identifier before listing it. An empty list is
+# a render-time {{ fail }}.
+evidenceChannel:
+  # Pod label the split keys on. Must identify the evidence producer and must
+  # be covered by `source.extraLabelSelector` above, or nothing is tailed.
+  podLabelKey: "app.kubernetes.io/name"
+  podLabelValue: "tenant-api"
+  # The OTHER side of the split: rows carrying this label value go to `demux`
+  # (the pre-existing audit pipeline). ⛔ Both branches are POSITIVE matches on
+  # purpose. An earlier draft used the negation (`!= podLabelValue`) for this
+  # side, which made the two conditions exhaustive — so anything the source ever
+  # collected that was not exactly the evidence producer fell through into demux
+  # and on to the 30-day 0:0 store. For a PII gate the safe failure is to DROP,
+  # not to forward: with two positive matches an unrecognised row lands in
+  # `origin_split._unmatched`, which nothing consumes. The two values are
+  # distinct constants compared against the same field, so they remain mutually
+  # exclusive — which is the property that makes a plain `route` (whose
+  # semantics copy an event to EVERY matching output) safe here.
+  gatewayLabelValue: "federation-gateway"
+  # Stream class for the evidence rows. Registered as a Tier-1 stream class in
+  # docs/internal/log-visibility-2tier-catalogue.md (platform-only — it is
+  # NEVER projected to a tenant partition).
+  logType: "federation_evidence"
+  # The two ADR-028 evidence events. `federation_token_revoked` is emitted by
+  # the tenant-api revocation path; `federation_revocation_channel_heartbeat`
+  # is the liveness canary that makes an empty channel detectable instead of
+  # indistinguishable from "no revocations happened".
+  events:
+    - federation_token_revoked
+    - federation_revocation_channel_heartbeat
+  # ⛔ The OTHER half of the PII gate, and just as security-relevant as `events`.
+  # `events` is a ROW allowlist — it proves a row is one of the two evidence
+  # events and says NOTHING about which FIELDS that row carries. The transform
+  # deep-merges the producer's whole JSON object to the event root, so the
+  # emitted event is REBUILT from this keep-list and everything unlisted is
+  # structurally ABSENT (a del()-per-field denylist would be fail-OPEN the moment
+  # the producer adds a field nobody remembered to delete).
+  #
+  # ⚠️ ADDING A FIELD HERE IS A SECURITY-REVIEWED ACTION: it is the one edit that
+  # can put an operator/tenant identifier into a 30-day audit store. `tenant_id`
+  # is the obvious one to refuse; note `caller` (operator EMAIL) and `remote`
+  # (client IP) exist on tenant-api's request lines and would ride in on any
+  # future event that carries them.
+  # ⚠️ REMOVING a field is not safe either: drop `event` and the reconciler's
+  # LogsQL `event:"federation_token_revoked"` filter matches nothing — a silently
+  # empty detection plane against a store that is visibly receiving data. Drop
+  # `token_id` / `expires_at` and every row becomes unreconcilable (visible as
+  # the `federation_revocation_events_dropped` gauge, not as an outage).
+  #
+  # Absent key = the default below (the `helm upgrade --reuse-values` path).
+  # Explicitly empty / nulled = a render-time {{ fail }}, same as `events`.
+  # NOTE: the platform ALSO writes `timestamp` / `log_type` / `app` /
+  # `k8s_namespace` / `pod_name` / `pod_node` / `log_event_id` and re-serialises
+  # `message` from the kept set — those are platform-owned, not operator-tunable,
+  # and are taken from PRE-merge locals so no payload field can forge them.
+  keepFields:
+    - event
+    - token_id
+    - expires_at
 
 # ── (b) Tenant-sanitized log projection — ADR-021 Phase 1 / #609 ────────────
 # Fan-out (NOT a move): the platform full copy keeps flowing to the primary
