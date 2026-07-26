@@ -9,16 +9,32 @@ data:
   # Vector config (YAML form). Pipeline:
   #   kubernetes_logs(source)
   #     │
-  #     └─▶ demux(transform, VRL)
-  #            │ parse_json(.message)
-  #            │   success → log_type=federation_audit + merge parsed fields
-  #            │   fail    → log_type=gateway_operational (raw .message kept)
-  #            │ stream-field promotion: app / k8s_namespace
+  #     └─▶ origin_split(transform, route — ADR-028 / #1234)
+  #            │ keys ONLY on pristine `.kubernetes.*` (pre-merge)
   #            │
-  #            └─▶ victorialogs(sink, elasticsearch _bulk)
+  #            ├─▶ .gateway  ─▶ demux(transform, VRL)
+  #            │                   │ parse_json(.message)
+  #            │                   │   success → log_type=federation_audit + merge parsed fields
+  #            │                   │   fail    → log_type=gateway_operational (raw .message kept)
+  #            │                   │ stream-field promotion: app / k8s_namespace
+  #            │                   │
+  #            │                   ├─▶ victorialogs(sink, elasticsearch _bulk)
+  #            │                   └─▶ tenant_project ─▶ tenant_route ─▶ vl_tenant_<id>
+  #            │
+  #            └─▶ .evidence ─▶ federation_evidence(transform, VRL)
+  #                                │ parse_json(.message) + deep merge  ⛔ load-bearing
+  #                                │ DROP every row that is not one of the two
+  #                                │   ADR-028 federation evidence events (PII)
+  #                                │ REBUILD from a field keep-list (PII, again:
+  #                                │   the row check does not bound the fields)
+  #                                │ log_type=federation_evidence
+  #                                │
+  #                                └─▶ victorialogs(sink) — 0:0 ONLY, never a tenant partition
   #
   # See #539 §3 for the load-bearing schema choices and the explicit
   # rejection of `exists(.tenant_id)` as a demux key.
+  # See ADR-028 / #1234 for why the revocation evidence stream gets its own
+  # pre-demux branch instead of being folded into the demux VRL.
   vector.yaml: |
     # Vector's default data_dir is /var/lib/vector, which lives on the
     # container's root filesystem — and the DaemonSet locks that down
@@ -69,10 +85,92 @@ data:
       {{- end }}
 
     transforms:
+      {{- /* ── ADR-028 / #1234 evidence-channel wiring ─────────────────────────
+             Nil-safe like the `audit:` block above: an operator upgrading with
+             `helm upgrade --reuse-values` has no `evidenceChannel:` in stored
+             values, and `.Values.evidenceChannel.podLabelValue` would
+             nil-pointer-panic the render. */}}
+      {{- $ec := default dict .Values.evidenceChannel }}
+      {{- $ecLabel := default "app.kubernetes.io/name" $ec.podLabelKey }}
+      {{- $ecValue := default "tenant-api" $ec.podLabelValue }}
+      {{- $ecGwValue := default "federation-gateway" $ec.gatewayLabelValue }}
+      {{- if eq $ecValue $ecGwValue }}
+      {{-   fail (printf "evidenceChannel.podLabelValue and .gatewayLabelValue are both %q — the origin split would send the SAME rows down both branches (Vector's `route` copies an event to every matching output), putting tenant-api's stderr into the demux/0:0 path that the PII filter exists to keep it out of. They must be distinct." $ecValue) }}
+      {{- end }}
+      {{- $ecLogType := default "federation_evidence" $ec.logType }}
+      {{- $ecEvents := default (list "federation_token_revoked" "federation_revocation_channel_heartbeat") $ec.events }}
+      {{- /* An ABSENT `events` key takes the default above (the --reuse-values
+             upgrade path). An EXPLICITLY empty / nulled one is an operator
+             trying to disable the PII filter, and must fail loudly — hence the
+             hasKey test rather than a bare `if not $ecEvents`, which `default`
+             would make unreachable. */}}
+      {{- if and (hasKey $ec "events") (not $ec.events) }}
+      {{-   fail "evidenceChannel.events must list at least one event name. An empty list would render an invalid VRL condition AND, if it compiled, would let EVERY tenant-api stderr line into the 30-day audit store — tenant-api's request middleware logs `caller` (operator EMAIL) and `remote` (client IP) on every request, which is exactly what ADR-028 D3 PII minimisation forbids." }}
+      {{- end }}
+      {{- /* FIELD allowlist — the second half of the PII gate. `events` above is
+             a ROW allowlist and says nothing about which FIELDS a matched row
+             carries; see the rebuild in the VRL below. Same absent-vs-empty
+             distinction as `events`. */}}
+      {{- $ecKeep := default (list "event" "token_id" "expires_at") $ec.keepFields }}
+      {{- if and (hasKey $ec "keepFields") (not $ec.keepFields) }}
+      {{-   fail "evidenceChannel.keepFields must list at least one field. An empty keep-list strips `event` / `token_id` / `expires_at` off every evidence row, so the reconciler's LogsQL `event:\"federation_token_revoked\"` filter matches nothing — a silently empty detection plane against a store that is visibly receiving data." }}
+      {{- end }}
+      {{- /* Both branches test the SAME field against DISTINCT constants, so
+             they are MUTUALLY EXCLUSIVE — which is what makes a plain `route`
+             safe here: Vector's `route` copies an event to EVERY matching
+             output, and two exclusive conditions can never both match, so no
+             event is ever duplicated. The `fail` guard above enforces the
+             distinctness the exclusivity rests on.
+             They are deliberately NOT exhaustive. An earlier draft wrote the
+             gateway side as the negation (`!= evidenceValue`), which IS
+             exhaustive — and therefore forwarded every unrecognised row into
+             demux and on to the 30-day 0:0 store. For a PII gate the safe
+             failure is to DROP, so an unrecognised row now lands in
+             `origin_split._unmatched`, which nothing consumes. */}}
+      {{- $ecPath := printf ".kubernetes.pod_labels.%q" $ecLabel }}
+      # ── Pre-demux origin split (ADR-028 / #1234) ─────────────────────────
+      # ⛔ The condition reads ONLY `.kubernetes.*`, which at this point is
+      # PRISTINE: the payload has not been deep-merged yet. demux's
+      # `. = merge(., object!(parsed), deep: true)` lets a log payload overwrite
+      # `.kubernetes.*` (projection_tests.yaml already pins that hazard), so a
+      # producer could forge its own origin if we split downstream. Splitting
+      # BEFORE the merge makes the routing decision immune to payload content.
+      #
+      # ⛔ The `gateway` branch is what feeds demux. The precondition "demux
+      # never sees a tenant-api row" is therefore PRESERVED, not removed — it is
+      # the structural support for tenant_project's fail-closed guarantee
+      # (a tenant-api row physically cannot reach tenant_route).
+      origin_split:
+        type: route
+        inputs:
+          - kubernetes_logs
+        route:
+          # ADR-028 revocation evidence producer (tenant-api). Everything this
+          # pod emits enters the evidence branch, where all but the two
+          # federation events are dropped.
+          evidence: '{{ $ecPath }} == {{ $ecValue | quote }}'
+          # The pre-existing audit pipeline. ⛔ A POSITIVE match, not the
+          # negation of the evidence condition: negation would make the two
+          # branches EXHAUSTIVE, so any row the source ever collected that was
+          # not exactly the evidence producer would fall through into demux and
+          # on to the 30-day 0:0 store — carrying, for a mislabelled tenant-api
+          # pod, the `caller` (operator email) and `remote` (client IP) that
+          # ADR-028 §D3 exists to keep out. For a PII gate the safe failure is
+          # to DROP: an unrecognised row now lands in `origin_split._unmatched`,
+          # which nothing consumes. Both conditions test the SAME field against
+          # DISTINCT constants, so they stay mutually exclusive — that (not
+          # exhaustiveness) is what makes a plain `route` safe here, since
+          # `route` copies an event to EVERY matching output.
+          gateway: '{{ $ecPath }} == {{ $ecGwValue | quote }}'
       demux:
         type: remap
         inputs:
-          - kubernetes_logs
+          # ⛔ NOT `kubernetes_logs` — the origin split sits in between so this
+          # transform keeps seeing gateway-origin rows only (ADR-028 / #1234).
+          # `additionalSources` still feed demux directly: they are
+          # operator-declared extra sources (e.g. the #552 Prometheus query log)
+          # and were never in scope for the tenant-api split.
+          - origin_split.gateway
           {{- range .Values.additionalSources }}
           - {{ .name }}
           {{- end }}
@@ -225,6 +323,127 @@ data:
           # through to sinks verbatim instead of being dropped by the
           # implicit field policy. No-op today; ready when gateway-side
           # signing lands.
+      # ── Federation revocation EVIDENCE channel (ADR-028 D1 / #1234) ──────
+      # The second ingest path into the 0:0 platform store. ADR-028 §D3 assumed
+      # tenant-api's revocation events already reached VictoriaLogs "via the
+      # existing Vector pipeline"; they did not — the source selector only
+      # tailed federation-gateway, so the reconciler's evidence query returned
+      # zero rows forever and the tamper-evidence control was a silent no-op.
+      # That is the bug this transform closes.
+      #
+      # This is a SEPARATE remap rather than a 5th branch inside demux for two
+      # reasons: (1) demux's VRL must stay byte-for-byte unchanged so the
+      # gateway-origin invariant and every existing `vector test` assertion keep
+      # holding; (2) a row here must never be reachable from `tenant_project`,
+      # and the only structural way to guarantee that is to never let it enter
+      # demux at all.
+      federation_evidence:
+        type: remap
+        inputs:
+          - origin_split.evidence
+        # Same fail-closed trio as tenant_project: a row that aborts (not JSON,
+        # or not one of the allowlisted events) or hits a runtime VRL error is
+        # DROPPED — never forwarded half-processed. Pinned explicitly because
+        # the PII filter below hinges on `abort` actually dropping.
+        drop_on_abort: true
+        drop_on_error: true
+        reroute_dropped: false
+        source: |
+          # Snapshot the PRISTINE k8s metadata BEFORE the deep merge below. A
+          # producer emitting its own `kubernetes` / `app` / `k8s_namespace` key
+          # would otherwise overwrite the platform's record of where the row came
+          # from. (demux has the same exposure and is deliberately left alone in
+          # this PR — hardening it is a separate change; here the new path is
+          # built immune from day one because it is a chain-of-custody stream.)
+          k8s_app = to_string(.kubernetes.container_name) ?? "unknown"
+          k8s_ns = to_string(.kubernetes.pod_namespace) ?? "unknown"
+          k8s_pod = to_string(.kubernetes.pod_name) ?? ""
+          k8s_node = to_string(.kubernetes.pod_node_name) ?? ""
+          # ⛔ parse_json + deep merge is NOT optional and NOT cosmetic.
+          # The reconciler filters on the FIELD `event:"federation_token_revoked"`
+          # and reads top-level `token_id` / `expires_at`. Ship the line without
+          # merging and VictoriaLogs stores one opaque `message` string: the
+          # field query matches nothing, the reconciler still returns zero rows,
+          # and this whole channel is a no-op that LOOKS wired up.
+          parsed, err = parse_json(.message)
+          if err != null || !is_object(parsed) {
+            # Non-JSON tenant-api stderr (Go runtime noise, panics). Not
+            # evidence. Deliberately NOT reclassified into an operational
+            # stream — that would re-open the PII hole the filter below closes.
+            abort
+          }
+          . = merge(., object!(parsed), deep: true)
+          # ── PII gate (ADR-028 §D3) — ALLOWLIST, drop everything else ────────
+          # tenant-api's request middleware logs `caller` (the operator's EMAIL)
+          # and `remote` (client IP) on EVERY request. Shipping the pod's whole
+          # stderr into a 30-day audit store would violate the exact
+          # PII-minimisation rule ADR-028 writes for itself — and would inflate
+          # ingest volume against a sizing nobody has redone. Only the two
+          # federation evidence events survive; a new tenant-api log line is
+          # dropped unless someone deliberately adds it to
+          # `evidenceChannel.events`.
+          ev = to_string(.event) ?? ""
+          if {{ range $i, $e := $ecEvents }}{{ if $i }} && {{ end }}ev != {{ $e | quote }}{{ end }} {
+            abort
+          }
+          # ── FIELD allowlist (ADR-028 §D3) — REBUILD, never scrub ───────────
+          # The check above is a ROW allowlist: it proves the row is one of the
+          # two evidence events, and says NOTHING about which fields that row
+          # carries. The deep merge just put the producer's ENTIRE JSON object at
+          # the event root, so anything later added to that one log statement —
+          # slog switching on `caller`, a debugging `tenant_id`, a request-scoped
+          # `remote` — would ride into a 30-day store with nobody noticing, and
+          # the raw `.message` string would carry it a second time even if the
+          # structured copy were scrubbed. A del()-per-field denylist is
+          # FAIL-OPEN for exactly that case (tenant_project spells out the same
+          # reasoning below, and it applies harder here: this is a
+          # chain-of-custody stream whose own ADR writes the PII rule).
+          # So: build a FRESH event from an explicit keep-list. Everything not
+          # listed is structurally ABSENT, and widening
+          # `evidenceChannel.keepFields` is the security-reviewed action.
+          kept = {}
+          {{- range $f := $ecKeep }}
+          if exists(.{{ $f }}) {
+            kept.{{ $f }} = .{{ $f }}
+          }
+          {{- end }}
+          # Vector's own event timestamp, NOT a payload field — it is the
+          # victorialogs sink's `_time_field`. Drop it and VictoriaLogs stamps
+          # ingest time instead, which silently skews the reconciler's settled
+          # `_time:[now-Ns, now-Ms]` query window.
+          if exists(.timestamp) {
+            kept.timestamp = .timestamp
+          }
+          # Platform-owned classification + stream-field promotion. Taken from
+          # the PRE-merge locals and written onto the REBUILT event, so no
+          # payload field can forge or survive as any of them. Field names mirror
+          # demux exactly — two ingest paths writing the same store must not
+          # drift into two schemas — and `log_type`/`app`/`k8s_namespace` are
+          # `streamFields`, so they have to exist on every row.
+          # (`status`, the remaining stream field, is a gateway-audit concept
+          # with no meaning for an evidence row: not on the keep-list, so it is
+          # structurally absent rather than coerced.)
+          kept.log_type = {{ $ecLogType | quote }}
+          kept.app = k8s_app
+          kept.k8s_namespace = k8s_ns
+          kept.pod_name = k8s_pod
+          kept.pod_node = k8s_node
+          # Every row in this store carries a correlation id — the README, the
+          # log-aggregation runbook and the log-visibility catalogue all state
+          # that without qualification, so a second ingest path must stamp one
+          # too. Unconditional (platform-owned) for the same join-poisoning
+          # reason demux gives.
+          kept.log_event_id = uuid_v7()
+          # Re-serialize `_msg` from the ALLOWLISTED fields only (the sink's
+          # `_msg_field` is `message`). Carrying the producer's original line
+          # instead would re-admit, in string form, every field the allowlist
+          # just excluded — which is the whole hole this rebuild closes.
+          # encode_json is infallible (no `??`).
+          kept.message = encode_json(kept)
+          # `. = kept` is what makes the exclusion STRUCTURAL: `.kubernetes`, the
+          # raw message and every unlisted payload field cease to exist here
+          # rather than being deleted one remembered name at a time.
+          . = kept
       {{- if .Values.tenantProjections }}
       {{- /* ── Uniqueness guard (adversarial-review finding; fail-loud) ──────
              tenantProjections is the ENTIRE trust root of tenant isolation, yet
@@ -386,6 +605,12 @@ data:
         type: elasticsearch
         inputs:
           - demux
+          # ADR-028 / #1234: the revocation evidence stream is a SECOND input to
+          # the same 0:0 platform store, NOT a second sink. Removing this line
+          # silently re-breaks the reconciler (it would query a store the
+          # evidence never reaches) — `test_vector_projection_vrl.py` pins the
+          # exact input list for that reason.
+          - federation_evidence
         endpoints:
           - http://{{ .Values.victorialogs.host }}:{{ .Values.victorialogs.port }}/insert/elasticsearch/
         api_version: v8

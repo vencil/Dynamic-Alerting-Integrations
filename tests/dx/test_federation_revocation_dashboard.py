@@ -2,9 +2,10 @@
 
 The dashboard (`k8s/03-monitoring/federation-revocation-dashboard.json`) is the
 operational field view for the ADR-028 D1 un-revoke tamper-evidence control (#924).
-It consumes the six platform-global reconciler metrics emitted by
-`_federation_revocation_reconciler.py` and reuses two non-trivial PromQL idioms this
-repo keeps getting burned by:
+It consumes the eight platform-global reconciler metrics emitted by
+`_federation_revocation_reconciler.py` (six from #924, plus the #1234
+evidence-channel canary pair `channel_up` / `heartbeats_seen`) and reuses two
+non-trivial PromQL idioms this repo keeps getting burned by:
 
   * a `time() - <last_reconcile_timestamp>` STALENESS delta whose panel threshold
     must line up with the FederationRevocationReconcileStale alert (> 1800s), and
@@ -53,7 +54,7 @@ _needs_promtool = pytest.mark.skipif(_PROMTOOL is None, reason="promtool not on 
 
 
 # ── Synthetic reconciler state (the test fixture, legitimately fixed) ───────────
-# All six metrics are platform-global with ZERO labels, so each is a single series.
+# All eight metrics are platform-global with ZERO labels, so each is a single series.
 #
 # SCENARIO "incident" — a tamper+stale+drift state chosen so most panels carry a
 # non-trivial value. Evaluated at t=2000s (promtool epoch starts at 0, so at
@@ -64,6 +65,9 @@ _needs_promtool = pytest.mark.skipif(_PROMTOOL is None, reason="promtool not on 
 #   events_checked              = 7
 #   events_dropped              = 3      -> erosion = 3 / (7+3) = 0.3  (exact)
 #   gateway_revocation_load_errors = 1   -> "Gateway fail-open" == 1
+#   channel_up                  = 0      -> "Evidence channel" == 0 (severed; #1234)
+#   heartbeats_seen             = 0      -> the canary window is empty, consistent
+#                                           with channel_up = 0
 #   reconcile_errors_total (counter) ramps 0+2x…  -> rate[5m] > 0 (fail-closed marker)
 _INCIDENT = {
     "federation_revocation_tamper_suspected": "2",
@@ -71,6 +75,8 @@ _INCIDENT = {
     "federation_revocation_events_checked": "7",
     "federation_revocation_events_dropped": "3",
     "federation_gateway_revocation_load_errors": "1",
+    "federation_revocation_channel_up": "0",
+    "federation_revocation_heartbeats_seen": "0",
 }
 # counter that increases 2 per step so rate() is unambiguously positive
 _INCIDENT_COUNTER = ("federation_revocation_reconcile_errors_total", "0+2x200")
@@ -90,9 +96,17 @@ def _incident_input() -> list[dict]:
 # SCENARIO "idle" — the divide-by-zero guard: an idle feed where NOTHING was checked
 # and NOTHING dropped. The erosion ratio MUST read 0 (via clamp_min), never NaN.
 #   events_checked = 0, events_dropped = 0  -> 0 / clamp_min(0, 1) = 0 / 1 = 0
+#
+# It doubles as the #1234 canary's REASON TO EXIST: a healthy channel over an idle
+# feed. channel_up = 1 with heartbeats_seen = 6 (5m producer cadence into a 30m
+# window) is what makes "no revocations happened" readable as such — the same zero
+# event count with channel_up = 0 (the incident fixture) means the detection plane
+# is blind. Two fixtures, identical event counts, opposite meanings.
 _IDLE = {
     "federation_revocation_events_checked": "0",
     "federation_revocation_events_dropped": "0",
+    "federation_revocation_channel_up": "1",
+    "federation_revocation_heartbeats_seen": "6",
 }
 
 
@@ -125,8 +139,19 @@ _GOLDENS = [
     ("staleness (fail-closed", None, "incident", 2000, 1900, "{}"),
     ("erosion ratio", None, "incident", 2900, 0.3, "{}"),
     ("error rate (fail-closed", None, "incident", 2900, 2.0 / 15.0, "{}"),  # 2 per 15s step
+    # --- #1234 evidence-channel canary (severed, in the incident state) ---
+    # Bare selectors, so the label set pins WHICH metric the panel reads — the two
+    # canary metrics both read 0 here, and only exp_labels distinguishes them.
+    ("Evidence channel", None, "incident", 2900, 0, f'{{__name__="{_M}channel_up"}}'),
+    ("Heartbeat canary", "heartbeats in window", "incident", 2900, 0,
+     f'{{__name__="{_M}heartbeats_seen"}}'),
     # --- the divide-by-zero guard (idle feed): 0/clamp_min(0,1)=0, NOT NaN ---
     ("erosion ratio", None, "idle", 2900, 0, "{}"),
+    # --- and the canary HEALTHY over that same idle feed (the state the canary
+    # exists to make distinguishable from a severed channel) ---
+    ("Evidence channel", None, "idle", 2900, 1, f'{{__name__="{_M}channel_up"}}'),
+    ("Heartbeat canary", "heartbeats in window", "idle", 2900, 6,
+     f'{{__name__="{_M}heartbeats_seen"}}'),
 ]
 
 
@@ -245,7 +270,8 @@ def test_dashboard_is_valid_grafana_shape():
 def test_metric_names_are_the_reconciler_contract():
     """Pin the exact source-metric names the reconciler emits — a rename on either
     side (_federation_revocation_reconciler.py or this dashboard) breaks the data
-    flow silently. These are the six ADR-028 D1 metrics."""
+    flow silently. These are the eight ADR-028 D1 metrics (six from #924 plus the
+    #1234 evidence-channel canary pair)."""
     import json
 
     data = json.loads(_DASHBOARD.read_text(encoding="utf-8"))
@@ -257,6 +283,8 @@ def test_metric_names_are_the_reconciler_contract():
         "federation_revocation_events_dropped",
         "federation_revocation_reconcile_errors_total",
         "federation_gateway_revocation_load_errors",
+        "federation_revocation_channel_up",
+        "federation_revocation_heartbeats_seen",
     ):
         assert metric in exprs, f"reconciler metric {metric!r} missing from dashboard"
 
@@ -291,8 +319,9 @@ def test_colour_coded_stat_panels_carry_noncolour_state_channel():
     (including the alarming one) is left distinguished by colour alone."""
     panels = _load_panels()
     stat_panels = [p for p in panels if p.get("type") == "stat"]
-    assert len(stat_panels) == 5, (
-        f"expected 5 colour-coded stat panels (4 health summary + erosion ratio), "
+    assert len(stat_panels) == 6, (
+        f"expected 6 colour-coded stat panels (5 health summary — including the "
+        f"#1234 evidence-channel canary — plus erosion ratio), "
         f"found {len(stat_panels)} — the a11y coverage assumption drifted"
     )
     for panel in stat_panels:

@@ -72,6 +72,7 @@ enforced（runbook §8.1 / §8.3）。
 | `gateway_operational` | ⛔ platform-only | Envoy 操作層錯誤，非租戶可歸屬；落 `0:0` |
 | `suspicious_audit` | ⛔ platform-only | audit-row 偽造偵測訊號（#566 T2-1），平台資安自用 |
 | `prometheus_query_log` | ⛔ platform-only | 平台查詢成本資料（#552 chargeback），非租戶可見 |
+| `federation_evidence` | ⛔ platform-only | 聯邦 token 撤銷的 tamper-evidence audit trail（ADR-028 D1 / #1234）。⛔ 它**不經過 `demux`**——`origin_split` 在 demux **之前**就把它分出去，所以它連 `tenant_project` 的入口都到不了，是**結構性**不可投影（非靠 runtime 判斷）。**實際欄位集＝keep-list 重建的結果**（`evidenceChannel.keepFields` 預設 `event` / `token_id` / `expires_at`，加上平台注入的 `timestamp` / `log_type` / `app` / `k8s_namespace` / `pod_name` / `pod_node` / `log_event_id` 與由這些欄位 re-serialize 的 `message`）——注意它**帶平台拓樸欄位**（`app` / `k8s_namespace` / `pod_name` / `pod_node`，stream field 與值班定位需要），這正是它 platform-only 的理由之一。⚠️ **「不帶租戶識別碼」不是 channel 本身的性質**，而是 producer（tenant-api 在這兩個事件裡只寫 token 層欄位）＋ keep-list 未列任何租戶 id 兩者合成的結果：keep-list 是 operator 可調的 SSOT，`evidenceChannel.keepFields` 加一個 `tenant_id`（或 producer 把租戶 id 塞進 `token_id` 語意）就會帶進來，而 `token_id` 本身即可經 token registry 回推到單一租戶（**間接**可歸屬）。ADR-028 §D3 是對 producer 與 keep-list 的**要求**，改動任一側都要重新檢視 |
 | JWT-fail / 未帶有效 `tenant_id` 的列 | ⛔ platform-only | 無法歸屬到租戶 → fail-closed 落 `0:0`（runbook §8.3）|
 
 > tier-1 的「只投影 `federation_audit` 且帶有效 `tenant_id`」由 Vector `tenant_route`
@@ -118,7 +119,9 @@ enforced（runbook §8.1 / §8.3）。
   client 自帶一律被 `replace()` 覆寫）。
 - **平台拓樸欄位**：tier-2 allowlist 結構性排除（見上）。
 - **平台 ops-only stream**（`gateway_operational` / `suspicious_audit` / `prometheus_query_log`
-  / JWT-fail）：tier-1 不投影，永遠 `0:0`。
+  / `federation_evidence` / JWT-fail）：tier-1 不投影，永遠 `0:0`。`federation_evidence`
+  更強一級——它走 `origin_split` 的獨立分支、**根本不進 `demux`**，因此連進入
+  `tenant_project` 的物理路徑都沒有（`vector test` 的 `no_outputs_from: [demux, ...]` 釘住）。
 - **`(a)` 應用 log（`ProjectID=1`）**：Phase 2 defer-with-trigger（ADR-021 Future Work 1）；
   Phase 1 只有 `(b)` 平台營運 log（`ProjectID=0`）。
 

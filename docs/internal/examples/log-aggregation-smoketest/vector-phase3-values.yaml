@@ -6,7 +6,9 @@ additionalSources: []
 additionalSinks:
   - name: mock_siem
     type: http
-    inputs: [demux]
+    # Both VRL-tagged streams (ADR-028 / #1234) — a SIEM wired to [demux]
+    # alone misses the entire federation revocation audit trail.
+    inputs: [demux, federation_evidence]
     uri: http://mock-siem.monitoring.svc:8080/ingest
     encoding:
       codec: json

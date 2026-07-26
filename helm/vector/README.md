@@ -10,14 +10,28 @@ Built on **Vector** (`timberio/vector:0.55.0-distroless-libc`) — sink-agnostic
 kubernetes_logs (source, this-node pods only — VECTOR_SELF_NODE_NAME)
         │
         ▼
-demux (transform, VRL)
-   │  parse_json(.message)
-   │    success → log_type=federation_audit + merge parsed fields
-   │    fail    → log_type=gateway_operational (raw .message kept)
-   │  stream-field promotion: app / k8s_namespace
-        │
-        ▼
-victorialogs (sink — elasticsearch _bulk API → /insert/elasticsearch/)
+origin_split (transform, route — ADR-028 / #1234)
+   │  keys ONLY on pristine .kubernetes.* (the payload is not merged yet,
+   │  so a log producer cannot forge its own origin)
+   │
+   ├── .gateway ──▶ demux (transform, VRL)
+   │                  │  parse_json(.message)
+   │                  │    success → log_type=federation_audit + merge parsed fields
+   │                  │    fail    → log_type=gateway_operational (raw .message kept)
+   │                  │  stream-field promotion: app / k8s_namespace
+   │                  │
+   │                  ▼
+   │               victorialogs (sink — elasticsearch _bulk → /insert/elasticsearch/)
+   │
+   └── .evidence ─▶ federation_evidence (transform, VRL — ADR-028 D1)
+                      │  parse_json(.message) + deep merge  ⛔ load-bearing
+                      │  DROP every row that is not one of the two federation
+                      │    evidence events (tenant-api logs the operator's
+                      │    email on every request — ADR-028 §D3)
+                      │  log_type=federation_evidence
+                      │
+                      ▼
+                   victorialogs (same 0:0 sink, second input — NEVER a tenant partition)
 ```
 
 ## Critical VRL decisions (from #539 §3)
@@ -30,9 +44,24 @@ victorialogs (sink — elasticsearch _bulk API → /insert/elasticsearch/)
 
 The stream-field set is locked at the values level (`streamFields`) — changing it after data is ingested splits the stream tree and requires a re-index. The default `[app, k8s_namespace, log_type, tenant_id, status]` matches #539 §3's load-bearing schema table.
 
-## Phase 1 scope
+## Source scope
 
-`source.extraLabelSelector` defaults to `app.kubernetes.io/name=federation-gateway`. Per #539 §7 non-goals this is **not** a general platform log roll-up — every new consumer opens its own ticket. When #552 (chargeback) lands, extend the selector or add a second source.
+`source.extraLabelSelector` defaults to the set selector `app.kubernetes.io/name in (federation-gateway,tenant-api)`. Per #539 §7 non-goals this is **not** a general platform log roll-up — every new consumer opens its own ticket, and both members here have one.
+
+`tenant-api` was added by ADR-028 / [#1234](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1234): it is the producer of the federation revocation evidence events the reconciler queries. ADR-028 §D3 assumed those events already reached VictoriaLogs "via the existing Vector pipeline" — they did not, because this selector did not match tenant-api, so the reconciler's evidence query returned zero rows forever and the un-revoke tamper-evidence control was a silent no-op.
+
+A **set selector** rather than a second `additionalSources` entry is deliberate: two `kubernetes_logs` sources sharing one `data_dir` have undocumented checkpoint behaviour, and overlapping selectors double-ingest. One source, one checkpoint namespace, split downstream by `origin_split`.
+
+⚠️ The selector matches `app.kubernetes.io/name`. Both `helm/tenant-api` and (since #1234) the raw `k8s/04-tenant-api/deployment.yaml` set that label on the pod, so either deployment path is collected. If you run tenant-api from your own manifests, that label is what puts it on the evidence channel.
+
+⛔ **A miss here is COVERED, but by an alert — not by anything in this chart.** An evidence channel that collects nothing is otherwise indistinguishable from "no revocations happened": the reconciler queries a reachable store, gets zero rows, and reports a clean all-clear with a fresh `last_reconcile_ts`. What closes that is `FederationRevocationEvidenceChannelDown` (critical, `federation_revocation_channel_up == 0 for 15m`, in `k8s/03-monitoring/configmap-rules-platform.yaml`): tenant-api emits a `federation_revocation_channel_heartbeat` canary every 5m down this exact transform and sink path, and its absence from the store pages.
+
+So **narrowing this selector so tenant-api is no longer tailed pages within ~15m** — it does not fail silently. Two ways to defeat that safety net anyway, both worth knowing before you edit values:
+
+- Removing tenant-api from the selector **while the canary event is also removed from `evidenceChannel.events`** — then nothing is expected and nothing alerts.
+- Pointing the alert at a reconciler that cannot reach VictoriaLogs at all: a query failure is fail-CLOSED and holds `channel_up` at its previous value, surfacing as `FederationRevocationReconcileStale` rather than as a dead channel. That is deliberate (an outage must not read as "the evidence path is severed"), but it means a *permanently* unreachable store shows up as staleness only.
+
+⚠️ Note on today's state: the two alerts above are currently **firing-by-default**, not quietly green — the reconciler's pinned `da-tools:v2.9.0` image does not yet contain `_federation_revocation_reconciler.py` (registered in the #1240 image-pin EXEMPTIONS; the fix is the next `tools/v*` release), so `ReconcileStale` fires. The silent false-green is what appears **after** that is fixed, which is exactly what the canary is here to prevent.
 
 ## Tenant-sanitized projection (ADR-021 Phase 1 (b) — [#609](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/609))
 
@@ -95,7 +124,7 @@ Vector's multi-sink design is what keeps the compliance branch reachable without
 additionalSinks:
   - name: splunk_compliance
     type: splunk_hec_logs
-    inputs: [demux]                  # MUST be demux for VRL-tagged events
+    inputs: [demux, federation_evidence]  # BOTH — see the warning below
     endpoint: https://splunk.example.com:8088
     default_token: ${SPLUNK_TOKEN}   # provide via envFrom secret
     _buffer_when_full: drop_newest   # see below — never `block` for fan-out
@@ -125,5 +154,5 @@ The platform's role ends at handing the SIEM the same demuxed stream; the SIEM o
 ### Naming + collision rules
 
 - Each `additionalSinks` entry MUST have a unique `name` — collision with the built-in `victorialogs` sink fails chart lint as a duplicate YAML key (fail-loud, intentional).
-- Each entry's `inputs:` SHOULD be `[demux]` so the SIEM sees the same VRL-tagged stream (with `log_type` / `tenant_id` / etc.) as VictoriaLogs.
+- ⛔ Each entry's `inputs:` MUST be `[demux, federation_evidence]`, not `[demux]` (ADR-028 / [#1234](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1234)). Those are the chart's **two** VRL-tagged streams into the platform store: `demux` carries the gateway audit / operational / query-log shapes, and `federation_evidence` carries the federation **token-revocation audit trail**. A SIEM wired to `[demux]` alone silently receives **none** of the revocation chain-of-custody — and the SIEM is precisely the component ADR-028 designates as the tamper-evident custodian, so that omission defeats the control the fan-out exists for.
 - Pointing `inputs:` directly at `kubernetes_logs` is supported but means the SIEM gets RAW Envoy log lines — usually not what compliance wants.

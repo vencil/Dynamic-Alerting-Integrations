@@ -780,7 +780,7 @@ data:
           # Metrics from the federation-reconciler Deployment's /metrics
           # (helm/federation-reconciler). Behavioural contract:
           # tests/rulepacks/platform-federation-revocation_test.yaml (an extracted
-          # copy of these three alerts — KEEP IN SYNC).
+          # copy of these four alerts — KEEP IN SYNC).
           - alert: FederationRevocationTamperSuspected
             expr: federation_revocation_tamper_suspected > 0
             for: 5m
@@ -824,6 +824,58 @@ data:
                 and VictoriaLogs reachability. Details:
                 docs/adr/028-federation-revocation-tamper-evidence.md.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
+
+          # The evidence channel itself is dead (ADR-028 D1 / #1234). Without
+          # this alert an empty channel is INDISTINGUISHABLE from "no revocations
+          # happened": the reconciler queries a reachable store, gets zero rows,
+          # and publishes a clean all-clear with a fresh last_reconcile_ts — so
+          # neither TamperSuspected nor ReconcileStale fires. tenant-api emits a
+          # content-free canary every 5m down the SAME Vector transform and sink
+          # path as real evidence; its absence is the only signal that separates
+          # "quiet" from "blind".
+          #
+          # `for: 15m`: heartbeat 5m + reconcile 300s + settle 60s means a single
+          # missed emission or one skipped reconcile pass must not page. 15m is
+          # ~3 heartbeat periods, and it doubles as the deploy grace window
+          # (channel_up starts at 0 before the first successful pass).
+          #
+          # ⛔ NO `or absent(...)`: a missing metric (pod down / never scraped) is
+          # already covered by FederationRevocationReconcileStale's absent() arm.
+          # Adding it here would double-page the same cause.
+          #
+          # ⛔ A VictoriaLogs outage does NOT fire this: the reconciler runs the
+          # heartbeat query inside its fail-closed try block, so a failed pass
+          # leaves channel_up at its previous value rather than reporting 0.
+          - alert: FederationRevocationEvidenceChannelDown
+            expr: federation_revocation_channel_up == 0
+            for: 15m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Federation revocation evidence channel is DEAD — un-revoke detection is silently blind (ADR-028 / #1234)"
+              description: |
+                The reconciler saw NO tenant-api heartbeat canary in its evidence
+                window, on a reachable VictoriaLogs. The revocation evidence path
+                (tenant-api log → Vector origin_split → federation_evidence
+                transform → VictoriaLogs) is severed, so the un-revoke
+                tamper-evidence control is reporting a clean all-clear over an
+                EMPTY feed — TamperSuspected can never fire and ReconcileStale
+                stays green. Treat this as detection-down, not as a log-plumbing
+                nuisance. ACTION: (1) confirm tenant-api is emitting —
+                `kubectl -n tenant-api logs deploy/tenant-api | grep
+                federation_revocation_channel_heartbeat`; if absent, check the
+                pod's log level is <= Info and that federation is enabled
+                (--federation-key set; the canary is gated on it). (2) Confirm
+                Vector still selects the pod: helm/vector
+                `source.extraLabelSelector` must match tenant-api's
+                `app.kubernetes.io/name`, and `evidenceChannel.events` must still
+                list the event names tenant-api actually emits (a producer-side
+                rename presents exactly like this). (3) Query the store directly:
+                `log_type:federation_evidence` — an empty result confirms the
+                channel, a populated one points at the reconciler's query.
+                Details: docs/internal/federation-revocation-reconciler-runbook.md
+                and docs/adr/028-federation-revocation-tamper-evidence.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/federation-revocation-reconciler-runbook.md"
 
           - alert: FederationGatewayRevocationLoadFailure
             expr: federation_gateway_revocation_load_errors > 0

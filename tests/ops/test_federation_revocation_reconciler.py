@@ -108,6 +108,32 @@ class TestParsing:
         assert "now-600s" in q and "now-60s" in q
         assert "revoked-set reload failed" in q
 
+    def test_heartbeat_query_is_source_qualified(self):
+        """#1234: the canary query filters on the event field AND the stream
+        class it arrives on. Source qualification is the point — the pre-existing
+        revocation query keys on `event` alone across the whole store (the #1237
+        debt), so any producer that ever logs that field name can spoof it. The
+        heartbeat query starts qualified, and `log_type` is written by the
+        platform inside the Vector transform (from pre-merge locals), so a log
+        payload cannot forge it."""
+        q = rec.build_heartbeat_query(lookback_s=1800, settle_s=60)
+        assert 'event:"federation_revocation_channel_heartbeat"' in q
+        assert 'log_type:"federation_evidence"' in q, (
+            "heartbeat query is not source-qualified — it would match a "
+            "same-named event from any producer in the store"
+        )
+        assert "now-1800s" in q and "now-60s" in q
+
+    def test_heartbeat_and_revocation_queries_are_distinct_filters(self):
+        """The two evidence queries must not be substring-confusable: a test (or
+        a future dispatcher) that routes on 'federation_token_revoked' must never
+        also match the heartbeat query, or the canary would be fed the revocation
+        rows and read healthy for the wrong reason."""
+        hb = rec.build_heartbeat_query(lookback_s=1800, settle_s=60)
+        ev = rec.build_logsql_query(lookback_s=86400, settle_s=60)
+        assert "federation_token_revoked" not in hb
+        assert rec.EVENT_HEARTBEAT not in ev
+
 
 class TestMetrics:
     def test_render_has_all_series(self):
@@ -118,8 +144,18 @@ class TestMetrics:
             "federation_revocation_events_dropped",
             "federation_revocation_reconcile_errors_total",
             "federation_gateway_revocation_load_errors",
+            "federation_revocation_channel_up",
+            "federation_revocation_heartbeats_seen",
         ):
             assert name in text
+
+    def test_channel_up_defaults_to_down(self):
+        """Before the first SUCCESSFUL pass the reconciler has no evidence the
+        channel works, so the initial exposition must say 0 — an optimistic 1 is
+        exactly the false-green this control exists to remove. The alert's
+        `for: 15m` (~3 heartbeat periods) is the deploy grace window."""
+        assert rec.Metrics().channel_up == 0
+        assert "federation_revocation_channel_up 0" in rec.Metrics().render()
 
 
 def _cfg(tmp_path) -> rec.Config:
@@ -132,7 +168,106 @@ def _cfg(tmp_path) -> rec.Config:
         settle_s=60,
         skew_margin_s=120,
         failopen_lookback_s=600,
+        heartbeat_lookback_s=1800,
     )
+
+
+def _query_router(*, events=(), failopen=(), heartbeats=()):
+    """Route each of reconcile_once's three LogsQL queries to its own rows.
+
+    Dispatches on the EVENT NAME each query filters on (not a loose substring of
+    the whole query) so a future query can't silently be fed another's fixture —
+    the sibling failure mode of substring matching that hides drift."""
+    def _q(_url, query, **_k):
+        if rec.EVENT_HEARTBEAT in query:
+            return list(heartbeats)
+        if "federation_token_revoked" in query:
+            return list(events)
+        if "revoked-set reload failed" in query:
+            return list(failopen)
+        raise AssertionError(f"unrouted query: {query!r}")
+    return _q
+
+
+class TestEvidenceChannelCanary:
+    """ADR-028 D1 / #1234: `channel_up` distinguishes 'no revocations happened'
+    from 'the evidence path is severed' — the two states the reconciler otherwise
+    observes identically (zero rows), the severed one publishing a clean
+    all-clear."""
+
+    def test_heartbeat_in_window_marks_channel_up(self, tmp_path, monkeypatch):
+        cfg = _cfg(tmp_path)
+        m = rec.Metrics()
+        monkeypatch.setattr(rec, "query_victorialogs", _query_router(
+            heartbeats=[{"event": rec.EVENT_HEARTBEAT}] * 6))
+        rec.reconcile_once(cfg, m, now=1000.0)
+        assert m.channel_up == 1
+        assert m.heartbeats_seen == 6
+        assert m.reconcile_errors_total == 0
+
+    def test_no_heartbeat_in_window_marks_channel_down(self, tmp_path, monkeypatch):
+        """The load-bearing case: the store is REACHABLE and holds no canary, so
+        the channel really is severed. Note last_reconcile_ts still refreshes —
+        the pass succeeded; it is channel_up, not staleness, that carries this."""
+        cfg = _cfg(tmp_path)
+        m = rec.Metrics()
+        m.channel_up = 1                      # was healthy
+        monkeypatch.setattr(rec, "query_victorialogs", _query_router())
+        rec.reconcile_once(cfg, m, now=1000.0)
+        assert m.channel_up == 0
+        assert m.heartbeats_seen == 0
+        assert m.last_reconcile_ts == 1000.0  # the pass itself succeeded
+        assert m.reconcile_errors_total == 0
+
+    def test_query_failure_holds_channel_up_at_previous_value(self, tmp_path, monkeypatch):
+        """⛔ FAIL-CLOSED CONSISTENCY (the reason the heartbeat query sits inside
+        reconcile_once's existing try block). A VictoriaLogs outage must NOT be
+        reported as a dead evidence channel: that would page
+        FederationRevocationEvidenceChannelDown for an outage that already
+        surfaces correctly as ReconcileStale, and it would teach on-call that the
+        channel alert means 'VictoriaLogs is down'. channel_up must HOLD its
+        previous value — unreachable means unknown, not dead."""
+        cfg = _cfg(tmp_path)
+        m = rec.Metrics()
+        m.channel_up = 1                      # last known good
+        m.heartbeats_seen = 6
+        m.last_reconcile_ts = 500.0
+
+        def _boom(*_a, **_k):
+            raise urllib_error()
+
+        monkeypatch.setattr(rec, "query_victorialogs", _boom)
+        rec.reconcile_once(cfg, m, now=1000.0)
+
+        assert m.reconcile_errors_total == 1
+        assert m.last_reconcile_ts == 500.0   # unchanged -> staleness alert fires
+        assert m.channel_up == 1, (
+            "a failed pass reported the evidence channel DEAD — the heartbeat "
+            "query must be inside the fail-closed try block so the early return "
+            "leaves channel_up untouched"
+        )
+        assert m.heartbeats_seen == 6         # likewise not zeroed by a failed pass
+
+    def test_heartbeat_query_failure_alone_is_fail_closed(self, tmp_path, monkeypatch):
+        """Narrower variant: only the HEARTBEAT query fails (the other two
+        succeed). The whole pass must still fail closed — no partial update that
+        would publish a fresh last_reconcile_ts alongside a stale channel_up."""
+        cfg = _cfg(tmp_path)
+        m = rec.Metrics()
+        m.channel_up = 1
+        m.last_reconcile_ts = 500.0
+
+        def _q(_url, query, **_k):
+            if rec.EVENT_HEARTBEAT in query:
+                raise urllib_error()
+            return []
+
+        monkeypatch.setattr(rec, "query_victorialogs", _q)
+        rec.reconcile_once(cfg, m, now=1000.0)
+
+        assert m.reconcile_errors_total == 1
+        assert m.last_reconcile_ts == 500.0
+        assert m.channel_up == 1
 
 
 class TestReconcileOnceFailClosed:

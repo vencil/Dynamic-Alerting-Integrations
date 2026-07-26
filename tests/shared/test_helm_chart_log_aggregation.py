@@ -85,10 +85,27 @@ class TestVictoriaLogs:
         assert len(np) == 1, "NetworkPolicy must render by default"
 
     @_needs_helm
-    def test_networkpolicy_locks_to_three_consumers(self, repo_root: Path) -> None:
-        """Red-team T2-2 mitigation: only vector / chargeback-aggregator /
-        grafana can reach :9428. If anyone deletes a row from
-        allowedPodSelectors the lockdown silently loosens."""
+    def test_networkpolicy_locks_to_the_declared_consumer_set(self, repo_root: Path) -> None:
+        """Red-team T2-2 mitigation: the :9428 same-namespace podSelector
+        allowlist must be EXACTLY the declared consumer set — vector (ingest,
+        same-ns debug/pre-#1018 path), chargeback-aggregator (query), grafana
+        (query), federation-gateway (tenant-scoped query, ADR-021 #609) and
+        federation-reconciler (evidence read, ADR-028 D1 / #1234).
+
+        ⛔ EQUALITY, not `issubset`. The old subset form listed only the first
+        three, so DELETING a later-added row — the reconciler's, added by #1234 —
+        kept this whole suite green while severing the ADR-028 detection plane at
+        the network layer (verified: dropping that row passed all 49 tests in this
+        file). Equality also means ADDING a consumer must come through review
+        here, which is the right friction: every entry is an unauthenticated
+        reader/writer of a store with no auth on its HTTP listener, and the
+        trust-boundary rule in values.yaml (platform-trusted, or the gateway as
+        the sole tenant-facing authorization plane) has to be re-argued each
+        time.
+
+        Cross-namespace peers are a separate mechanism and are pinned by
+        test_networkpolicy_admits_vector_namespace — a consumer running OUTSIDE
+        VictoriaLogs' own namespace is not admitted by any row asserted here."""
         docs = _render(repo_root / "helm/victorialogs")
         np = [d for d in docs if d.get("kind") == "NetworkPolicy"][0]
         peers = np["spec"]["ingress"][0].get("from", [])
@@ -97,8 +114,15 @@ class TestVictoriaLogs:
             (("app.kubernetes.io/name", "vector"),),
             (("app.kubernetes.io/name", "chargeback-aggregator"),),
             (("app", "grafana"),),
+            (("app.kubernetes.io/name", "federation-gateway"),),
+            (("app.kubernetes.io/name", "federation-reconciler"),),
         }
-        assert expected.issubset(labels), f"missing consumers: {expected - labels}"
+        assert labels == expected, (
+            f"missing consumers: {expected - labels} (a deleted row silently "
+            f"severs that consumer); unreviewed additions: {labels - expected} "
+            "(each new entry is a security-reviewed widening — update this set "
+            "and the values.yaml/networkpolicy.yaml prose together)"
+        )
 
     @_needs_helm
     def test_networkpolicy_admits_vector_namespace(self, repo_root: Path) -> None:
@@ -220,6 +244,30 @@ class TestVector:
         # Render must succeed; the clause is correctly absent (treated as empty).
         vrl = yaml.safe_load(cm["data"]["vector.yaml"])["transforms"]["demux"]["source"]
         assert "suspicious_audit" not in vrl
+
+    @_needs_helm
+    def test_evidence_transform_exists_and_is_wired_to_the_store(
+        self, repo_root: Path
+    ) -> None:
+        """ADR-028 D1 / #1234. Every other test in this class inspects
+        `transforms.demux.source` only, so the whole second ingest path is
+        outside their field of view — a change that deleted it would leave this
+        class green. Pin the two structural facts that make the federation
+        revocation audit trail actually land in VictoriaLogs: the transform
+        exists, and the primary sink consumes it. (Its VRL behaviour and the
+        pre-demux routing are pinned in test_vector_projection_vrl.py +
+        helm/vector/tests/projection_tests.yaml.)"""
+        docs = _render(repo_root / "helm/vector")
+        cm = [d for d in docs if d.get("kind") == "ConfigMap" and "vector-config" in d["metadata"]["name"]][0]
+        cfg = yaml.safe_load(cm["data"]["vector.yaml"])
+        assert "federation_evidence" in cfg["transforms"], (
+            "the ADR-028 evidence transform must render — without it tenant-api's "
+            "revocation events never reach the store and the reconciler is a no-op"
+        )
+        assert "federation_evidence" in cfg["sinks"]["victorialogs"]["inputs"], (
+            "the primary 0:0 sink must consume the evidence stream"
+        )
+        assert "origin_split" in cfg["transforms"], "the pre-demux origin split must render"
 
     @_needs_helm
     def test_additional_sink_buffer_memory_default(self, repo_root: Path) -> None:

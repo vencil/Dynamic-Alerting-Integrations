@@ -197,6 +197,19 @@ func main() {
 	federationPrometheusURL := flag.String("federation-prometheus-url",
 		envOrDefault("TA_FEDERATION_PROMETHEUS_URL", ""),
 		"Base URL of the Prometheus/VictoriaMetrics backend the federation admission validator queries (Series API). Empty disables admission.")
+	// ADR-028 D1 / #1234: evidence-channel liveness canary. The reconciler's
+	// healthy state ("no revocations happened") and its blind state ("the
+	// tenant-api → Vector → VictoriaLogs evidence path is severed") both look
+	// like zero rows, and the blind one still publishes a clean all-clear. A
+	// content-free heartbeat down the SAME path makes the two distinguishable.
+	//
+	// 5m is chosen against the DETECTION side's windows: the reconciler runs
+	// every 300s over a 30m heartbeat window, so ~5-6 heartbeats land in any one
+	// window and a single missed emission can never drive channel_up to 0.
+	// Raising this toward 30m removes that margin; lowering it only adds volume.
+	federationHeartbeatInterval := flag.Duration("federation-heartbeat-interval",
+		parseDurationOrDefault(os.Getenv("TA_FEDERATION_HEARTBEAT_INTERVAL"), token.DefaultHeartbeatInterval),
+		"ADR-028 D1: cadence of the federation revocation evidence-channel liveness canary (default 5m; must stay well below the reconciler's 30m heartbeat window; TA_FEDERATION_HEARTBEAT_INTERVAL)")
 
 	// ADR-027 PR-1b-i: machine-identity audit (KSA projected token +
 	// TokenReview). Opt-in and AUDIT-ONLY — when enabled, tenant-api verifies
@@ -524,6 +537,13 @@ func main() {
 	if federationMgr != nil {
 		go orphan.NewDetector(*configDir, federationMgr.ListAllRecords).
 			Run(*reloadInterval, stopCh)
+		// ADR-028 D1 / #1234: evidence-channel liveness canary. Gated on the
+		// SAME `federationMgr != nil` condition as the orphan detector on
+		// purpose — the canary asserts that the federation REVOCATION evidence
+		// path works, and with federation disabled there is no revocation
+		// producer to assert anything about. Emitting it anyway would report a
+		// healthy evidence channel on a deployment that cannot produce evidence.
+		go token.NewHeartbeater().Run(*federationHeartbeatInterval, stopCh)
 	}
 
 	// ── Router ────────────────────────────────────────────────────────────────

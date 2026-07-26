@@ -128,7 +128,17 @@ class TestProjectionDisabledByDefault:
         assert "tenant_route" not in cfg["transforms"]
         assert not any(k.startswith("vl_tenant_") for k in cfg["sinks"])
         # The primary 0:0 sink is still there and still reads demux.
-        assert cfg["sinks"]["victorialogs"]["inputs"] == ["demux"]
+        #
+        # ⛔ CONTRACT CHANGE (ADR-028 D1 / #1234), not a test dodge: the 0:0
+        # store now has TWO ingest paths, and the exact-list form is kept
+        # deliberately so that dropping either one goes red. `demux` alone was
+        # the bug — tenant-api's revocation events never reached the store, so
+        # the reconciler's evidence query returned zero rows forever and the
+        # un-revoke tamper-evidence control was a silent no-op. `federation_
+        # evidence` is that second path. Order is asserted too: the rendered
+        # template writes demux first, and a reorder would mean someone
+        # restructured the sink block without reading this.
+        assert cfg["sinks"]["victorialogs"]["inputs"] == ["demux", "federation_evidence"]
 
     @_needs_helm
     def test_log_event_id_injected_even_when_projection_disabled(self, repo_root: Path) -> None:
@@ -281,6 +291,299 @@ class TestProjectionEnabledShape:
         # Eligibility + fail-closed aborts present.
         assert 'if .log_type != "federation_audit"' in vrl
         assert "abort" in vrl
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Federation revocation EVIDENCE channel (ADR-028 D1 / #1234)
+#
+# The reconciler's evidence query returned zero rows forever because the Vector
+# source only tailed federation-gateway — tenant-api's `federation_token_revoked`
+# events never reached VictoriaLogs at all. ADR-028 §D3 assumed they did. These
+# tests pin the pipeline shape that closes that gap; the BEHAVIOUR (parse/merge,
+# PII drop, no tenant-partition reachability) is pinned by `vector test` in
+# helm/vector/tests/projection_tests.yaml.
+# ──────────────────────────────────────────────────────────────────────────────
+
+_EVIDENCE_EVENTS = ("federation_token_revoked", "federation_revocation_channel_heartbeat")
+
+
+class TestFederationEvidenceChannel:
+    @_needs_helm
+    def test_source_selector_covers_both_producers(self, repo_root: Path) -> None:
+        """The single kubernetes_logs source must tail BOTH the gateway and the
+        evidence producer. A second `kubernetes_logs` source was rejected: two
+        sources sharing one `data_dir` have undocumented checkpoint behaviour and
+        overlapping selectors double-ingest. If tenant-api falls out of this
+        selector the whole ADR-028 detection plane is DOA again — silently."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector"))
+        sources = cfg["sources"]
+        assert list(sources) == ["kubernetes_logs"], "still exactly one primary source"
+        sel = sources["kubernetes_logs"]["extra_label_selector"]
+        assert "federation-gateway" in sel, "gateway must stay in scope (#539)"
+        assert "tenant-api" in sel, "evidence producer must be in scope (ADR-028 / #1234)"
+
+    @_needs_helm
+    def test_split_happens_before_demux_and_keys_on_pristine_kubernetes(
+        self, repo_root: Path
+    ) -> None:
+        """⛔ The split must sit BETWEEN the source and demux, and must key on
+        `.kubernetes.*`. demux deep-merges the log payload over the event root,
+        so a routing decision made downstream of that merge could be FORGED by a
+        log producer (projection_tests.yaml already pins the overwrite hazard).
+        Reading pristine, kubelet-supplied pod metadata is what makes the origin
+        decision untrusted-input-proof."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector"))
+        split = cfg["transforms"]["origin_split"]
+        assert split["type"] == "route"
+        assert split["inputs"] == ["kubernetes_logs"], "the split consumes the source directly"
+        for name, cond in split["route"].items():
+            assert cond.startswith(".kubernetes."), (
+                f"origin_split.{name} keys on {cond!r} — it MUST read the pristine "
+                ".kubernetes.* metadata, never a payload-controlled field"
+            )
+        # demux is fed by the gateway branch, NOT the raw source.
+        assert cfg["transforms"]["demux"]["inputs"][0] == "origin_split.gateway", (
+            "demux must consume the gateway branch — the 'demux only ever sees "
+            "gateway-origin rows' precondition is the structural support for "
+            "tenant_project's fail-closed guarantee, and it is preserved, not removed"
+        )
+
+    @_needs_helm
+    def test_route_conditions_are_mutually_exclusive_positive_matches(
+        self, repo_root: Path
+    ) -> None:
+        """Two independent properties, and it matters which one does which job.
+
+        MUTUAL EXCLUSIVITY is what makes a plain `route` (not `exclusive_route`)
+        safe: `route` copies an event to EVERY matching output, so two branches
+        that could both match would double-write a row into 0:0. Same field,
+        two distinct literal constants ⇒ never both.
+
+        NON-exhaustiveness is what makes the PII gate fail in the safe
+        direction. An earlier draft wrote the gateway side as the negation
+        (`!= evidenceValue`), which is exhaustive: every row the source ever
+        collected that was not exactly the evidence producer fell through into
+        demux and on to the 30-day 0:0 store — for a mislabelled tenant-api pod
+        that means `caller` (operator email) and `remote` (client IP), exactly
+        what ADR-028 §D3 exists to exclude. With two positive matches an
+        unrecognised row lands in `origin_split._unmatched`, which nothing
+        consumes, so the failure is a DROP. Reverting either branch to a
+        negation must fail here."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector"))
+        routes = cfg["transforms"]["origin_split"]["route"]
+        assert set(routes) == {"evidence", "gateway"}
+        for name, cond in routes.items():
+            assert "!=" not in cond, (
+                f"{name!r} branch uses a negation ({cond!r}) — that makes the split "
+                "exhaustive, so an unrecognised row is forwarded into demux/0:0 "
+                "instead of dropped. Both branches must be positive matches."
+            )
+        lhs_ev, _, rhs_ev = routes["evidence"].partition(" == ")
+        lhs_gw, _, rhs_gw = routes["gateway"].partition(" == ")
+        assert rhs_ev and rhs_gw, "both conditions must be simple `==` comparisons"
+        assert lhs_ev == lhs_gw, "both branches must test the SAME field"
+        assert rhs_ev != rhs_gw, (
+            "the two branches must test DISTINCT values — identical values would "
+            "send every row down both outputs (route fans out to all matches)"
+        )
+
+    @_needs_helm
+    def test_evidence_transform_is_failclosed(self, repo_root: Path) -> None:
+        """Same fail-closed trio as tenant_project. The PII allowlist below is
+        implemented with `abort`, so `drop_on_abort` is what actually enforces
+        it — pinned explicitly rather than relying on the default."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector"))
+        ev = cfg["transforms"]["federation_evidence"]
+        assert ev["type"] == "remap"
+        assert ev["inputs"] == ["origin_split.evidence"]
+        assert ev["drop_on_abort"] is True, "the PII allowlist is built on abort"
+        assert ev["drop_on_error"] is True
+        assert ev["reroute_dropped"] is False
+
+    @_needs_helm
+    def test_evidence_vrl_parses_and_merges_the_payload(self, repo_root: Path) -> None:
+        """⛔ THE fatal-omission guard. The reconciler filters on the FIELD
+        `event:"federation_token_revoked"` and reads top-level `token_id` /
+        `expires_at`. Ship the line without `parse_json(.message)` + deep merge
+        and VictoriaLogs stores one opaque `message` string: the field query
+        matches nothing, the reconciler still returns zero rows, and the channel
+        is a no-op that LOOKS wired up. This was the fatal omission in the first
+        draft of the design, so it gets its own test."""
+        vrl = _vector_yaml(_render(repo_root / "helm/vector"))["transforms"][
+            "federation_evidence"
+        ]["source"]
+        assert "parse_json(.message)" in vrl
+        assert "merge(., object!(parsed), deep: true)" in vrl
+
+    @_needs_helm
+    def test_evidence_vrl_drops_everything_but_the_two_events(self, repo_root: Path) -> None:
+        """ADR-028 §D3 PII minimisation. tenant-api's request middleware logs
+        `caller` (the operator's EMAIL) and `remote` (client IP) on EVERY
+        request; the whole pod stderr must NOT enter a 30-day audit store.
+
+        Pins the WHOLE drop condition, operands AND joiner, as one exact string:
+        `ev != A && ev != B`. Asserting only the operands left a mutation hole
+        wide enough to disable the channel — see the comment on `expected_cond`
+        below."""
+        vrl = _vector_yaml(_render(repo_root / "helm/vector"))["transforms"][
+            "federation_evidence"
+        ]["source"]
+        # ⛔ CODE lines only. The VRL carries long comments that quote `&&`, the
+        # event names and `del()` while explaining WHY the shape is what it is, so
+        # a substring scan over the whole block matches the prose and never fails
+        # on a real regression (that already bit the `del()` assertion in the
+        # sibling test below).
+        code_lines = [ln.strip() for ln in vrl.splitlines()
+                      if not ln.lstrip().startswith("#")]
+        for event in _EVIDENCE_EVENTS:
+            assert any(f'ev != "{event}"' in ln for ln in code_lines), (
+                f"{event} must be allowlisted (in CODE, not only in a comment)"
+            )
+        # ⛔ Pin the JOINER too, not just the operands. The condition is a
+        # conjunction of negations, so it is false the moment a row matches
+        # EITHER event → only non-evidence rows abort. Flip `&&` to `||` and it
+        # becomes true for EVERY row (no single `ev` can equal both names) → every
+        # row aborts → the evidence channel is permanently empty, the reconciler
+        # is back to zero rows forever, and the #1234 control is a silent no-op
+        # again. Before this assertion that mutation passed the entire suite: the
+        # other render tests only look for the operands, and the `vector test`
+        # cases that would catch it are BEHAVIOURAL — they run against the
+        # rendered config, so they go red only if this file's render assertions
+        # are not the ones guarding the joiner. Exact-string, so a reordering or
+        # a third silently-added operand also has to come through review here.
+        expected_cond = ("if " + " && ".join(f'ev != "{e}"' for e in _EVIDENCE_EVENTS)
+                         + " {")
+        assert expected_cond in code_lines, (
+            f"the PII drop condition must be exactly {expected_cond!r} — a `&&`-joined "
+            "conjunction of `!=` comparisons in this order. `||` inverts it into "
+            "drop-everything (silently empty channel); got: "
+            f"{[ln for ln in code_lines if ln.startswith('if ev')]!r}"
+        )
+        assert vrl.count("abort") >= 2, "parse-failure AND non-evidence rows must both abort"
+        # Allowlist, not denylist: there must be no `del(.caller)`-style scrub
+        # (which would be fail-OPEN — a future PII field would ride through).
+        assert "del(.caller)" not in vrl and "del(.remote)" not in vrl, (
+            "PII must be excluded by dropping the ROW (allowlist), not by scrubbing "
+            "named fields (a denylist is fail-open for any future field)"
+        )
+
+    @_needs_helm
+    def test_evidence_vrl_promotes_from_premerge_locals(self, repo_root: Path) -> None:
+        """Stream-field promotion must read the locals captured BEFORE the deep
+        merge, so a payload field cannot forge `app` / `k8s_namespace` /
+        `pod_name` / `pod_node` / `log_type` on a chain-of-custody row."""
+        vrl = _vector_yaml(_render(repo_root / "helm/vector"))["transforms"][
+            "federation_evidence"
+        ]["source"]
+        merge_at = vrl.index("merge(., object!(parsed)")
+        for local in ("k8s_app", "k8s_ns", "k8s_pod", "k8s_node"):
+            assert vrl.index(f"{local} = ") < merge_at, (
+                f"{local} must be captured BEFORE the merge (pristine .kubernetes.*)"
+            )
+        assert ".app = k8s_app" in vrl
+        assert ".k8s_namespace = k8s_ns" in vrl
+        assert ".pod_name = k8s_pod" in vrl
+        assert ".pod_node = k8s_node" in vrl
+        # log_type is platform-owned, assigned after the merge (payload can't win).
+        assert vrl.index('.log_type = "federation_evidence"') > merge_at
+        # Same unconditional correlation id demux stamps — README / runbook /
+        # catalogue all claim EVERY row has one.
+        assert ".log_event_id = uuid_v7()" in vrl
+        # ⛔ NOT `del(.kubernetes)`. The field allowlist rebuilds the event from
+        # `kept` and then REPLACES it wholesale, so `.kubernetes` — and every
+        # other unlisted key, including ones nobody remembered to name — is
+        # structurally absent rather than deleted one remembered name at a time.
+        # A `del()` denylist would be fail-open here (the same reasoning
+        # tenant_project spells out). Pin the replacement, and pin that it is the
+        # LAST thing the transform does, so nothing can be re-added after it.
+        assert ". = kept" in vrl, (
+            "the evidence row must be rebuilt from the keep-list and replaced "
+            "wholesale — a del()-per-field denylist is fail-open"
+        )
+        assert vrl.rstrip().endswith(". = kept"), (
+            "`. = kept` must be the final statement; any assignment after it "
+            "would re-admit a field the allowlist just excluded"
+        )
+        # Comment lines mention `del()` when explaining WHY it is not used, so
+        # this has to look at code only — a substring scan over the whole VRL
+        # would match the prose and never fail on a real regression.
+        code = "\n".join(
+            ln for ln in vrl.splitlines() if not ln.lstrip().startswith("#")
+        )
+        assert "del(" not in code, (
+            "no del() in the evidence path — exclusion is by allowlist rebuild, "
+            "and a stray del() would signal a drift back to denylist thinking"
+        )
+
+    @_needs_helm
+    def test_evidence_never_reaches_the_tenant_projection(self, repo_root: Path) -> None:
+        """Issue #1234 acceptance criterion 3, pinned at render level (the
+        behavioural proof is the `no_outputs_from` in projection_tests.yaml):
+        no tenant-facing transform or sink may consume the evidence stream."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector", sets=_PROJECTION_SETS))
+        assert cfg["transforms"]["tenant_project"]["inputs"] == ["demux"], (
+            "tenant_project must fork off demux ONLY — the evidence stream is "
+            "platform-only (0:0) and must be unreachable from any tenant partition"
+        )
+        for name, sink in cfg["sinks"].items():
+            if name.startswith("vl_tenant_"):
+                assert "federation_evidence" not in sink["inputs"], (
+                    f"{name} must not consume the evidence stream"
+                )
+
+    @_needs_helm
+    def test_evidence_channel_survives_reuse_values_upgrade(self, repo_root: Path) -> None:
+        """`helm upgrade --reuse-values` from a pre-#1234 release carries no
+        `evidenceChannel:` map. The naive `.Values.evidenceChannel.podLabelValue`
+        form nil-pointer-panics the render — the same trap the `audit:` block hit
+        on the 0.3.x → 0.4.0 path. Render with the whole block deleted."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector", sets={"evidenceChannel": "null"}))
+        routes = cfg["transforms"]["origin_split"]["route"]
+        assert "tenant-api" in routes["evidence"], "must fall back to the shipped default"
+        vrl = cfg["transforms"]["federation_evidence"]["source"]
+        for event in _EVIDENCE_EVENTS:
+            assert f'ev != "{event}"' in vrl
+
+    @_needs_helm
+    def test_empty_event_allowlist_fails_render(self, repo_root: Path) -> None:
+        """An operator emptying `evidenceChannel.events` is trying to disable the
+        PII filter. It must fail LOUDLY at render, not render a broken VRL
+        condition (or, worse, one that admits every tenant-api line into the
+        audit store). Uses a values file because `--set k=null` deletes the key
+        in Helm rather than setting it empty."""
+        with tempfile.TemporaryDirectory() as d:
+            vf = Path(d) / "empty-events.yaml"
+            vf.write_text("evidenceChannel:\n  events: []\n", encoding="utf-8")
+            r = subprocess.run(
+                ["helm", "template", "t", str(repo_root / "helm/vector"),
+                 "-n", "monitoring", "-f", str(vf)],
+                capture_output=True, text=True, timeout=30)
+        assert r.returncode != 0, "an empty evidence allowlist must fail render"
+        assert "evidenceChannel.events must list at least one" in r.stderr
+
+    @_needs_helm
+    def test_misspelled_evidence_channel_key_fails_schema(self, repo_root: Path) -> None:
+        """values.schema.json must constrain `evidenceChannel` with
+        additionalProperties:false. A MISSPELLED key is the failure mode no other
+        guard sees: `podLabelvalue: tenant-api` leaves the real `podLabelValue`
+        unset, the template silently falls back to its shipped default, and the
+        operator's intended routing never takes effect — no {{ fail }}, no
+        `vector validate` error, no behavioural test. (A misspelled VALUE cannot
+        be caught by any schema; it surfaces as an empty channel, which is why
+        the runbook §8.7 note on the unmonitored discard path exists.)
+
+        This test is also what stops the whole evidenceChannel schema block from
+        being deleted silently: without it, `additionalProperties` reverts to the
+        JSON-Schema default of true and this render starts passing."""
+        r = _render_result(repo_root / "helm/vector",
+                           sets={"evidenceChannel.podLabelvalue": "tenant-api"})
+        assert r.returncode != 0, (
+            "a misspelled evidenceChannel key must be rejected by values.schema.json "
+            "(additionalProperties: false), not silently ignored"
+        )
+        assert "podLabelvalue" in r.stderr, (
+            f"schema error must name the offending key; got: {r.stderr!r}"
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────

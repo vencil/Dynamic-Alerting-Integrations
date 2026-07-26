@@ -36,7 +36,7 @@ Dynamic Alerting 提供六份運維導向的 Dashboard：
 | 交付方式 | Dashboard | 動機 |
 |----------|-----------|------|
 | **內建（auto-provision）** | **MariaDB Overview**（uid `mariadb-overview`；只存在於 ConfigMap embed、無 standalone JSON，故不列本文目錄） | Showcase 首屏：平台 apply 完第一眼就能看到被監控資料庫的健康度（up／連線數／QPS／InnoDB buffer pool），也是 try-local 一鍵體驗的告警紅燈落點 |
-| **內建（auto-provision）** | **Federation Revocation Reconciler**（本文 Dashboard 4，方法 C） | 安全告警觀測面：un-revoke 偵測（[ADR-028](./adr/028-federation-revocation-tamper-evidence.md)）的三條平台告警隨平台出貨，pager 響起當下就要有對應的現場視圖——不應依賴 operator 記得手動匯入 |
+| **內建（auto-provision）** | **Federation Revocation Reconciler**（本文 Dashboard 4，方法 C） | 安全告警觀測面：un-revoke 偵測（[ADR-028](./adr/028-federation-revocation-tamper-evidence.md)）的四條平台告警隨平台出貨，pager 響起當下就要有對應的現場視圖——不應依賴 operator 記得手動匯入 |
 | **Operator 自選（方法 A / B）** | 其餘五份：Dashboard 1（Platform Overview）、2（Shadow Monitoring）、3（Fleet Threshold Distribution）、5（Federation Audit）、6（Tenant Log Query） | 按需採用：Shadow 只在 migration 期間有意義（cutover 後即移除）、Fleet 治理視角在租戶數少時參考價值有限、Dashboard 5／6 只在啟用對應聯邦面時才有資料；且不少環境接自營 Grafana 而非出廠這台——預設全塞只會產生 no-data 空版面 |
 
 ---
@@ -308,9 +308,9 @@ Tukey fences 需要分布**有離散度**才準。有兩種常見情形會讓它
 
 ### 動機
 
-[ADR-028](./adr/028-federation-revocation-tamper-evidence.md) 的 federation-reconciler（`_federation_revocation_reconciler.py`）週期性對帳撤銷事件日誌與 live 撤銷集，偵測 **un-revoke**（有寫入權的攻擊者把未過期的撤銷偷偷刪掉），並用 `/metrics`（job=`federation-reconciler`, port 9099）暴露六個**平台全域、零 label** 指標。這些指標先前只有告警在消費、沒有運維視圖。本 Dashboard 就是那個「**現場視圖**」——把 [runbook](internal/federation-revocation-reconciler-runbook.md) 的四個 chaos 驗證場景排成一頁，panel 閾值**與三個平台告警 1:1 對齊**（見下方對照），讓 Dashboard 與 pager 對「什麼叫壞」有一致定義。
+[ADR-028](./adr/028-federation-revocation-tamper-evidence.md) 的 federation-reconciler（`_federation_revocation_reconciler.py`）週期性對帳撤銷事件日誌與 live 撤銷集，偵測 **un-revoke**（有寫入權的攻擊者把未過期的撤銷偷偷刪掉），並用 `/metrics`（job=`federation-reconciler`, port 9099）暴露八個**平台全域、零 label** 指標。這些指標先前只有告警在消費、沒有運維視圖。本 Dashboard 就是那個「**現場視圖**」——把 [runbook](internal/federation-revocation-reconciler-runbook.md) 的五個 chaos 驗證場景排成一頁，panel 閾值**與四個平台告警 1:1 對齊**（見下方對照），讓 Dashboard 與 pager 對「什麼叫壞」有一致定義。
 
-> **為何沒有 `$tenant` 變數？** 六個指標都是平台全域、無 tenant label（un-revoke 偵測是平台級控制，非 per-tenant）——因此本 Dashboard 不需要、也沒有租戶下拉選單。
+> **為何沒有 `$tenant` 變數？** 八個指標都是平台全域、無 tenant label（un-revoke 偵測是平台級控制，非 per-tenant）——因此本 Dashboard 不需要、也沒有租戶下拉選單。
 
 ### 部署
 
@@ -338,18 +338,20 @@ da-tools grafana-import \
 |---|-------|---------------|------|------|
 | 頂列 | **Tamper status** | `federation_revocation_tamper_suspected` | ✓ Clean (0)＝乾淨，但**僅在 Reconciler freshness 為綠時**才是即時 all-clear；fail-closed/stale 時保留舊值，需與 freshness 並讀 | 🔴 Tamper (>0)＝疑似 un-revoke |
 | 頂列 | **Reconciler freshness** | `time() - ..._last_reconcile_timestamp_seconds` | ✓ Fresh (<1800s) | 🔴 Stale (≥1800s)＝偵測瞎了 |
+| 頂列 | **Evidence channel** | `federation_revocation_channel_up` | ✓ Evidence flowing (1)＝通道活著，此時 Tamper status 的乾淨才有意義 | 🔴 Channel dead (0)＝證據路徑斷、偵測對著空 feed 報 all-clear |
 | 頂列 | **Gateway fail-open** | `federation_gateway_revocation_load_errors` | ✓ OK (0) | 🟡 Fail-open (>0)＝撤銷 token 被放行 |
 | 頂列 | **Coverage integrity** | `federation_revocation_events_dropped` | ✓ Intact (0) | 🟡 Schema drift (>0)＝覆蓋被侵蝕 |
 | Row 1 | **Reconciler staleness / error rate / events checked** | staleness（含 1800 線）、`rate(...reconcile_errors_total[5m])`、`..._events_checked` | staleness 鋸齒近 0、error rate 平 0 | staleness 攀升＋error rate >0＝fail-closed |
 | Row 2 | **Events dropped / erosion ratio** | `..._events_dropped`、`dropped / clamp_min(checked + dropped, 1)` | 皆 0 | >0＝schema-drift；ratio 用 `clamp_min` 防 0/0=NaN |
 | Row 3 | **Gateway read failures** | `federation_gateway_revocation_load_errors`（含 >0 線） | 平 0 | >0＝fail-open；近 `for:2m` 邊界震盪＝拍頻 |
 | Row 4 | **Suspected un-revokes（headline）** | `federation_revocation_tamper_suspected`（大圖，含 >0 線） | 平 0 | >0 持續 5m＝critical 安全事件 |
+| Row 5 | **Heartbeat canary — 30m window liveness** | `..._channel_up`（0/1）＋ `..._heartbeats_seen` | channel_up 平 1、heartbeats_seen 約 5-6 | heartbeats_seen 衰減→0 且 channel_up 落 0＝證據通道斷；**斷崖式歸零**多半是 producer 事件改名或 Vector selector 改動 |
 
-> **色盲也能判讀（無障礙）：** 五個 stat panel（頂列四個 + erosion ratio）都不只靠顏色——每個顏色階都配**符號＋文字**（✓／🔴／🟡）。依 ADR-012 / WCAG 1.4.1；`tests/dx/test_federation_revocation_dashboard.py` 的 a11y golden 鎖住「每個顏色階都有符號」防退化。
+> **色盲也能判讀（無障礙）：** 六個 stat panel（頂列五個 + erosion ratio）都不只靠顏色——每個顏色階都配**符號＋文字**（✓／🔴／🟡）。依 ADR-012 / WCAG 1.4.1；`tests/dx/test_federation_revocation_dashboard.py` 的 a11y golden 鎖住「每個顏色階都有符號」防退化。
 
-### Chaos-4 場景對照
+### Chaos-5 場景對照
 
-本 Dashboard 是 [runbook](internal/federation-revocation-reconciler-runbook.md)「上線前 chaos 驗證」四場景的現場視圖：
+本 Dashboard 是 [runbook](internal/federation-revocation-reconciler-runbook.md)「上線前 chaos 驗證」五場景的現場視圖：
 
 | 場景 | 主看指標 | 健康 | 異常 |
 |------|---------|------|------|
@@ -357,10 +359,11 @@ da-tools grafana-import \
 | **fail-closed** | `reconcile_errors_total`↑ 且 `last_reconcile_timestamp` 停滯 | staleness≈0 | staleness >1800 |
 | **schema-drift** | `events_dropped`（+ erosion ratio） | 0 | >0（可見、非靜默）|
 | **拍頻（beat-frequency）** | `gateway_load_errors` 在 `for:2m` 邊界的震盪 | 不 flap | 邊界反覆進出 firing → 調 `for:` 或 interval |
+| **證據通道斷裂**（[#1234](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1234)） | `channel_up` ＋ `heartbeats_seen` | 1 / 約 5-6 | 0 / 0（`for:15m` 觸發）＝偵測面**沒有輸入**；⛔ 反向也要驗：擋 VictoriaLogs egress 時 `channel_up` 須**保留前值**、只觸發 `ReconcileStale` |
 
 ### 與告警的對齊
 
-panel 閾值刻意**與 [configmap-rules-platform.yaml](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-rules-platform.yaml) 的三個告警同一數值**（單一「什麼叫壞」來源）：`FederationRevocationTamperSuspected`（>0, 5m, critical）、`FederationRevocationReconcileStale`（`time()-ts > 1800` 或 absent, 10m, critical）、`FederationGatewayRevocationLoadFailure`（>0, 2m, warning）。IR 步驟見 [runbook](internal/federation-revocation-reconciler-runbook.md)。
+panel 閾值刻意**與 [configmap-rules-platform.yaml](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-rules-platform.yaml) 的四個告警同一數值**（單一「什麼叫壞」來源）：`FederationRevocationTamperSuspected`（>0, 5m, critical）、`FederationRevocationReconcileStale`（`time()-ts > 1800` 或 absent, 10m, critical）、`FederationRevocationEvidenceChannelDown`（`channel_up == 0`, 15m, critical）、`FederationGatewayRevocationLoadFailure`（>0, 2m, warning）。IR 步驟見 [runbook](internal/federation-revocation-reconciler-runbook.md)。
 
 ---
 

@@ -267,7 +267,11 @@ helm upgrade vector ./helm/vector -n vector --reuse-values \
 additionalSinks:
   - name: splunk_compliance
     type: splunk_hec_logs
-    inputs: [demux]                  # 拿 VRL-tagged stream，不是 raw
+    # ⛔ 兩條都要（ADR-028 / #1234）：demux＝gateway 面，
+    # federation_evidence＝聯邦 token 撤銷 audit trail。只寫 [demux]
+    # 的 SIEM 收不到任何撤銷紀錄——而 SIEM 正是 ADR-028 指定的
+    # chain-of-custody 承載者，漏掉它等於這條 fan-out 白做。
+    inputs: [demux, federation_evidence]
     endpoint: https://splunk.example.com:8088
     default_token: \${SPLUNK_TOKEN}  # via envFrom secret
     _buffer_when_full: drop_newest   # 鐵則：不可設 block
@@ -305,7 +309,7 @@ kubectl get pod -n vector -l app.kubernetes.io/name=vector  # Running
 |---|---|
 | `_buffer_when_full: drop_newest`（預設） | SIEM 慢/掛時，新事件對該 sink **被丟**，但 VictoriaLogs **絕不**被 back-pressure（#539 §2）。chart 自動 inject 這個 buffer block 除非 entry 自己有 `buffer:` |
 | **絕對不要** `_buffer_when_full: block` 在 fan-out sink | block 會 back-pressure 上游，VictoriaLogs 也卡。**只有**當 SIEM 是 system of record（compliance-only mode、VictoriaLogs disabled）才合理 |
-| `inputs: [demux]` 不要寫 `[kubernetes_logs]` | demux 是 VRL-tagged stream（有 `log_type`/`tenant_id`），raw 是 Envoy 原始行 —— compliance 通常要前者 |
+| `inputs: [demux, federation_evidence]` 不要寫 `[kubernetes_logs]`，也不要只寫 `[demux]` | demux 是 VRL-tagged stream（有 `log_type`/`tenant_id`），raw 是 Envoy 原始行 —— compliance 通常要前者。⛔ 但 chart 有**兩條** VRL-tagged stream：`federation_evidence`（ADR-028 / #1234）走獨立 pre-demux 分支，載的是 federation token 撤銷的 audit trail。只寫 `[demux]` 的 SIEM **整條撤銷 chain-of-custody 都收不到**，而 SIEM 正是 ADR-028 指定的 tamper-evident 承載者 |
 | 不要叫 `name: victorialogs` | 跟內建 primary sink 撞名 → helm lint 抓得到（duplicate YAML key），fail-loud |
 
 ### 7.3 「Compliance 的責任落在哪」
@@ -351,7 +355,8 @@ window。第二步才考慮 strict mode（disable VictoriaLogs）—— 那是
 |---|---|---|
 | Vector pod CrashLoop after adding additionalSinks | sink type 拼錯 / 必填欄位漏（splunk_hec_logs 漏 default_token 等） | `kubectl logs vector-XXX`；Vector 啟動時印 config validation error；改 values 後 `helm upgrade` |
 | VictoriaLogs 突然慢下來 | 不小心把 fan-out sink 設 `block` | `helm get values vector` 查 `_buffer_when_full`；改回 `drop_newest` |
-| SIEM 端只收到 raw Envoy 行不是 JSON | `inputs:` 設成 `[kubernetes_logs]` 而非 `[demux]` | 改 inputs，`helm upgrade` |
+| SIEM 端只收到 raw Envoy 行不是 JSON | `inputs:` 設成 `[kubernetes_logs]` 而非 `[demux, federation_evidence]` | 改 inputs，`helm upgrade` |
+| SIEM 收得到 gateway audit，但**完全沒有** federation token 撤銷紀錄 | `inputs:` 只寫了 `[demux]`，漏掉 `federation_evidence`（ADR-028 / #1234 新增的第二條 VRL-tagged stream） | 改成 `inputs: [demux, federation_evidence]`，`helm upgrade`。⚠️ 這是**靜默**失效：VictoriaLogs 那邊照常有資料，只有 SIEM 缺，靠人工比對才看得出來 |
 | dropped-events metric 一直爆高 | SIEM 處理慢於進入速度 | 調大 `_buffer_max_events`；或 SIEM 端擴容 |
 
 ## 7.5 Egress / tamper hardening（#566 batch D）
@@ -436,6 +441,7 @@ demux (VRL，注入 log_event_id)
 ```
 
 - **平台完整副本續留 `0:0`**——平台 ops 的跨租戶查詢面**不變**；`gateway_operational`／JWT-fail／`suspicious_audit`／`prometheus_query_log` 列**永遠只在 `0:0`**，不進任何租戶分區。
+- ⚠️ **上圖只畫 demux 這一條路**：ADR-028 / #1234 之後 `0:0` 有**兩條**進料——`demux`（本圖）與 `federation_evidence`（tenant-api 的撤銷 audit trail，走 `origin_split` 在 demux **之前**的獨立分支）。後者**不經過 demux**，因此連本圖裡 `tenant_project` 的入口都到不了——這正是它對租戶分區「結構性不可達」的原因，而非靠 eligibility gate 擋。拓樸全圖見 `helm/vector/README.md` §Pipeline（不加連結：`helm/` 不在 mkdocs 的文件樹內，相對連結會被 strict mode 判為死鏈——本檔其餘 `helm/vector` 引用同樣只用 code span）。
 - **租戶淨化投影是疊加層**——只有「`log_type=federation_audit` 且帶有效 `tenant_id`」的列會被投影。租戶只有 Day-0 起的歷史（新 feature，無需 backfill）。
 
 ### 8.2 啟用：把 registry 配發投影進 `tenantProjections`
@@ -521,6 +527,7 @@ vector test /tmp/rendered-vector.yaml helm/vector/tests/projection_tests.yaml
 - **Stream-field 高基數**：`tenantProjectionStreamFields` 僅低基數維度（`tenant_id`/`log_type`/`status`）；⛔ **絕不**放 `query`/`token_id`/`path` 等動態值（每個 distinct 值建一條 stream → RAM 爆）。
 - **K8s 資源 / 排程**（ops）：fan-out 增加 Vector CPU。確保 `resources.requests/limits` 對 N 租戶有餘裕，並考慮給 ingestion DaemonSet 一個 `PriorityClass`（node 資源枯竭時優先驅逐低優先 batch job、保 ingestion 存活）。⛔ **Phase 2 (a) 觸發時這從「考慮」升為硬不變式**（Gemini #905）：成千上萬 pod 應用 log 湧入時，Vector CPU 因大量 `uuid_v7()` 配發 + `encode_json` 階躍式暴增；若不綁高 `PriorityClass`，Kubelet 在 node starvation 時可能誤殺 shipper → **全叢集日誌斷流**。Phase 2 排程時 ingestion DaemonSet 的高 PriorityClass 列為生產 hard requirement。
 - **無聲丟棄的可觀測性（PR-4 已補）**：fail-closed 的 `abort`+`drop_on_abort` 讓異常列**無聲消失**——平台須監控 Vector 原生 `vector_component_discarded_events_total{component_id="tenant_project"}`（registry 未同步／惡意 payload 導致大量 drop 時要有能見度，而非等租戶報修）。#609 PR-4 落地 `TenantProjectionFanoutDiscardSpike`（`configmap-rules-platform.yaml` `federation-audit` group，warning）。⚠️ **標籤是 `component_id` 非 `component`**（Vector internal_metrics 原生標籤；本文件原寫 `component` 是非正式 prose，照 sibling `VectorBufferEventsDropped` 用 `component_id`），且需 `helm/vector metrics.enabled=true` + Prometheus scrape。⚠️ **這是粗粒度 spike tripwire 非精準 gap 偵測**：此 component-level counter 把**所有** abort 原因合計，而設計上**多數** demux 列為 non-audit（`gateway_operational`／`prometheus_query_log`／JWT-fail／`suspicious_audit`）被合法 drop，故**不可**用 `> 0`（恆真噪音）——改用 `rate > 5/s` 持續 `15m`（floor 須照各 gateway 營運 log 量的 steady-state drop rate 調）。精準的 per-account「可對映租戶投影缺漏」偵測需新增 per-partition row-count metric（option b），列 **defer-with-trigger**。⛔ **但精準 runtime 偵測器是 band-aid 非根治**：desync 的根因是 **config drift**（`tenantProjections` 落後 `_account_registry.yaml`），真正的修法是 **Phase 2 (a) config-from-SSOT**——從 registry **自動生成** `tenantProjections`、drift 根本不可能發生，屆時 option b 即不需要。在那之前流程防線＝onboarding guide 的配發紀律（§8.2）+ 本 coarse tripwire 接大規模事件。**trigger（任一）**：首次真實 registry desync 事故、租戶報修「看不到自己的 log」、或 Phase 2 (a) 自動生成排程時（屆時重估是否還需 option b）。需 mtail / metric 對照見下 §8.8。
+- **⛔ `federation_evidence` 是一條「設計上就近乎全丟、而且沒人監看」的丟棄路徑（ADR-028 / #1234）**：evidence 分支收的是 tenant-api **整個 pod 的 stderr**，而 PII allowlist 只放行 `evidenceChannel.events` 那兩個事件，所以 `vector_component_discarded_events_total{component_id="federation_evidence"}` 在**完全健康**時就長期高檔——**那是設計行為、不是故障訊號**，別照 `tenant_project` 的直覺去讀它。⚠️ **沒有任何 alert 選得到它**：上一則的 `TenantProjectionFanoutDiscardSpike` matcher 是 `component_id="tenant_project"` **精確比對**（不是 regex、不是 `=~`），而 `VectorBufferEventsDropped` 用的是**另一個 metric**（`vector_buffer_discarded_events_total`，sink buffer 面，與 transform 的 abort 丟棄無關）。⛔ 盲區的具體長相：producer 改掉 `event` key（slog 重構、欄位改叫 `event_type`、事件名改字）→ 兩個 allowlist 值全部 miss → 丟棄率變成 **100%**、evidence channel **永久空**，而這條 counter 只是從「長期高檔」變成「長期更高檔」——人與機器都分不出來，reconciler 則對著一個可達的 store 回報 all-clear。⛔ **刻意不加 rate-based alert（#1234 第二輪重新評估後**維持**此決定）**：baseline 本就≈100% 丟棄，任何 `rate >` 門檻量到的是 tenant-api 的**請求量**、量不到「allowlist 失配」，加了只是噪音（§8.7 上一則「floor 是猜測值」的教訓，在這裡更嚴重）。**具體為何量不到**：失配前後這條 counter 都在爬，差別只是「請求量−2 條事件」變成「請求量」——兩者的差值是**每 5 分鐘 1 筆心跳 + 偶發撤銷**，遠小於請求量自身的日夜波動，任何能容忍波動的 floor 都必然蓋過這個差值；反之能量出差值的 floor 一天要 flap 數次。**dynamic threshold（`avg_over_time` + stddev）也不行**：失配是**階梯式永久位移**、不是 spike，位移量又落在 stddev 內，模型會在幾個窗之後把新 baseline 吸收掉。**正確的偵測器是心跳 canary，且已落地**：`FederationRevocationEvidenceChannelDown`（critical，`federation_revocation_channel_up == 0 for 15m`，見 `k8s/03-monitoring/configmap-rules-platform.yaml`）——它量的是**通道有沒有東西出來**（store 裡有無心跳），而非**丟棄面有沒有異常**，所以 100% 丟棄的 baseline 對它完全無害。這條 counter 因此**維持為無告警的診斷指標**：triage 時用它區分「Vector 沒收到」（counter 也停）與「收到但全被 allowlist 丟掉」（counter 照爬而 channel_up=0）。⚠️ **告警觸發後的手動確認步驟仍然有效**：對 store 下 `log_type:federation_evidence` 看最近一筆的時間戳（心跳週期內應恆有新列），空集合或明顯過期＝allowlist 與 producer 已失配，先比對 tenant-api 目前實際輸出的 `event` 值再改 `evidenceChannel.events`（改它是 security-reviewed 動作，見 values.yaml）。
 
 ### 8.8 租戶日誌查詢可觀測層（ADR-021 #609 PR-4）
 
