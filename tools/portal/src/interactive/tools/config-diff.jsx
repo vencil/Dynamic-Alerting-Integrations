@@ -18,7 +18,7 @@ const t = window.__t || ((zh, en) => en);
 const EXAMPLE_OLD = `tenants:
   db-a:
     mysql_connections: "80"
-    mysql_cpu: "75"
+    mysql_threads_running: "45"
     _routing:
       receiver_type: "slack"
       webhook_url: "https://hooks.slack.com/services/xxx/old"
@@ -31,7 +31,7 @@ const EXAMPLE_NEW = `tenants:
   db-a:
     mysql_connections: "120"
     mysql_connections_critical: "200"
-    mysql_cpu: "75"
+    mysql_threads_running: "45"
     _routing:
       receiver_type: "webhook"
       webhook_url: "https://hooks.example.com/alerts"

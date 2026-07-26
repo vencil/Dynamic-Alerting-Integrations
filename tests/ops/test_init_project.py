@@ -71,6 +71,12 @@ class TestRulePackCatalog:
         assert 'mysql_replication_lag' in mariadb
         assert mariadb['mysql_connections'] == 80
         assert mariadb['mysql_connections_critical'] == 150
+        # #1231 rename guard: the catalog must carry the canonical spelling,
+        # never the retired mysql_cpu one.
+        assert 'mysql_threads_running' in mariadb
+        assert 'mysql_threads_running_critical' in mariadb
+        assert 'mysql_cpu' not in mariadb
+        assert 'mysql_cpu_critical' not in mariadb
 
     def test_operational_and_platform_have_empty_defaults(self):
         """Operational and platform packs have auto-enabled marker, empty defaults."""

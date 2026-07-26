@@ -24,6 +24,10 @@
 # 範圍：threshold 身分（defaults / optional_overrides 兩層＋chart_default）。
 # state_filters 與 dimensional_example 仍歸 scaffold（非閾值身分）。萃取為全量；
 # 本 registry 首要服務的 enforcement 路徑是 18-key 修復線（#1196 / TRK-337）。
+#
+# deprecated_aliases（#1231）：退役舊拼法 → canonical key（2-release 過渡窗）。
+# 本區段是 alias SSOT——Go（pkg/config/aliases.go）與 Python（_grar_validate.py）
+# 兩個 runtime 鏡像由 pin 測試釘住本區段（鏡像漂移＝CI 紅）。
 version: 1
 packs:
   kubernetes:
@@ -157,14 +161,14 @@ keys:
     desc: Max threads_connected warning
     metric_class: saturation
     chart_default: true
-  mysql_cpu:
+  mysql_threads_running:
     pack: mariadb
     tier: defaults
     value: 30
     unit: threads
     desc: 'threads_running saturation, NOT host CPU% — running-threads 1m-avg warning;
-      80→30 = PMM/Nichter ''high'' (#944); key kept as mysql_cpu (config-contract
-      stability; metric/alert renamed, #944 closed)'
+      80→30 = PMM/Nichter ''high'' (#944); renamed from mysql_cpu (#1231 owner-approved
+      reversal of the #944 keep — 2-release alias window, old spelling still resolves)'
     metric_class: saturation
     chart_default: true
   mysql_replication_lag:
@@ -186,15 +190,16 @@ keys:
     desc: Critical tier (Scenario D)
     metric_class: saturation
     critical_of: mysql_connections
-  mysql_cpu_critical:
+  mysql_threads_running_critical:
     pack: mariadb
     tier: optional_overrides
     value: 50
     unit: threads
     desc: Critical tier (running-threads saturation); 120→50 = PMM critical-load /
-      Nichter 'overloaded' (#944)
+      Nichter 'overloaded' (#944); renamed from mysql_cpu_critical (#1231, 2-release
+      alias window)
     metric_class: saturation
-    critical_of: mysql_cpu
+    critical_of: mysql_threads_running
   mysql_replication_lag_critical:
     pack: mariadb
     tier: optional_overrides
@@ -219,20 +224,24 @@ keys:
     unit: count
     desc: Connected clients warning
     metric_class: saturation
-  redis_evicted_keys_total:
+  redis_evicted_keys_rate:
     pack: redis
-    tier: optional_overrides
+    tier: defaults
     value: 100
     unit: keys/s
-    desc: Key eviction rate
+    desc: 'Key eviction rate; #1196 B identity fix: renamed from redis_evicted_keys_total
+      (alert demands _rate) + moved optional_overrides→defaults — unwired dead key,
+      no alias'
     metric_class: efficiency
-  redis_keyspace_misses_ratio:
+  redis_replication_lag:
     pack: redis
-    tier: optional_overrides
-    value: 0.3
-    unit: ratio
-    desc: Cache miss ratio (30%)
-    metric_class: efficiency
+    tier: defaults
+    value: 30
+    unit: seconds
+    desc: 'Replica lag warning; 30 = same anchor as mysql/pg replication_lag — redis
+      replication is normally sub-second, so 30s is unambiguous trouble (noise-averse
+      pick, #1231 owner call); #1196 C identity fix, no alias'
+    metric_class: replication
   mongodb_connections_current:
     pack: mongodb
     tier: defaults
@@ -240,41 +249,60 @@ keys:
     unit: count
     desc: Current connections warning
     metric_class: saturation
-  mongodb_repl_lag_seconds:
+  mongodb_replication_lag:
     pack: mongodb
     tier: defaults
     value: 10
     unit: seconds
-    desc: Replication lag warning
+    desc: 'Replication lag warning; #1196 C identity fix: renamed from mongodb_repl_lag_seconds
+      (alert demands mongodb_replication_lag) — unwired dead key, no alias'
     metric_class: replication
-  mongodb_opcounters_total:
+  mongodb_opcounters_rate:
     pack: mongodb
-    tier: optional_overrides
+    tier: defaults
     value: 10000
     unit: ops/s
-    desc: Total operations rate
+    desc: 'Total operations rate; #1196 B identity fix: renamed from mongodb_opcounters_total
+      (alert demands _rate) + moved optional_overrides→defaults — unwired dead key,
+      no alias'
     metric_class: throughput
-  es_jvm_memory_used_percent:
+  es_heap_usage_percent:
     pack: elasticsearch
     tier: defaults
     value: 85
     unit: '%'
-    desc: JVM heap usage warning
+    desc: 'JVM heap usage warning; #1196 C identity fix: renamed from es_jvm_memory_used_percent
+      (alert demands es_heap_usage_percent) — unwired dead key, no alias'
     metric_class: saturation
-  es_filesystem_free_percent:
+  es_disk_usage_percent:
     pack: elasticsearch
     tier: defaults
-    value: 15
+    value: 85
     unit: '%'
-    desc: Disk free space warning
+    desc: 'Disk USAGE % warning (used = 1 - available/size, recording rule tenant:es_disk_usage_percent:max,
+      compared with >); 85 = same band as oracle/db2 tablespace_used_percent; #1196
+      C semantic flip: replaces es_filesystem_free_percent 15 (FREE %) — carrying
+      15 into a used-% rule would fire permanently'
     metric_class: capacity
-  es_cluster_health:
+  es_pending_tasks:
     pack: elasticsearch
-    tier: optional_overrides
-    value: 1
-    unit: 0=green,1=yellow,2=red
-    desc: Cluster health threshold
+    tier: defaults
+    value: 50
+    unit: count
+    desc: 'Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py
+      catalog + examples/elasticsearch-tenant.yaml); #1196 D: key was alert-demanded
+      but absent from scaffold'
     metric_class: state
+  es_search_latency_ms:
+    pack: elasticsearch
+    tier: defaults
+    value: 1000
+    unit: ms
+    desc: Avg search latency warning (rate(query_time)/rate(query_total), per-query
+      mean); 1000 = Awesome Prometheus Alerts ElasticsearchHighQueryLatency anchor
+      (same formula, 1s/5m warning) — the only community rule semantically identical
+      to ours; full derivation + calibration caveat in the pack header (#1196 D)
+    metric_class: latency
   oracle_sessions_active:
     pack: oracle
     tier: defaults
@@ -324,6 +352,16 @@ keys:
     unit: ratio
     desc: Bufferpool hit ratio warning
     metric_class: efficiency
+  db2_lock_wait_time:
+    pack: db2
+    tier: defaults
+    value: 10
+    unit: s/s
+    desc: Lock wait accumulation rate warning (rate over 5m, summed across the tenant's
+      instances); 10 ≈ 6.7x the 1.5 normal level both reference libraries agree on,
+      below both fault levels (25/60) — full derivation + calibration workflow in
+      the pack header (#1196 D)
+    metric_class: latency
   db2_log_usage_percent:
     pack: db2
     tier: optional_overrides
@@ -580,3 +618,5 @@ keys:
     desc: Waiting connections critical
     metric_class: saturation
     critical_of: nginx_waiting
+deprecated_aliases:
+  mysql_cpu: mysql_threads_running

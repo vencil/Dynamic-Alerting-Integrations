@@ -22,7 +22,7 @@ tenants:
     # defaults_chain file list: the 30 it overrode is not in the response (EffectiveConfig
     # keeps MergedDefaults `json:"-"`), so the inheritance is readable in these files,
     # not in the API payload.
-    mysql_cpu: "40"
+    mysql_threads_running: "40"
     _metadata:
       owner: "platform-db-team"
       tier: "tier-1"

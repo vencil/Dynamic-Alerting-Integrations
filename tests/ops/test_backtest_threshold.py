@@ -574,7 +574,7 @@ class TestCustomAlertDetection:
     def test_keep_flat_removal_of_real_threshold_kept(self, monkeypatch):
         """純量閾值被移除（HEAD~1 有該 top-level key）→ 保留（disable transition，#657）。"""
         monkeypatch.setattr(bt, "_flat_keys_at_head1",
-                            lambda t: {"mysql_connections", "mysql_cpu"})
+                            lambda t: {"mysql_connections", "mysql_threads_running"})
         changes = [{"tenant": "db-b", "metric": "mysql_connections",
                     "old_value": "70", "new_value": None}]
         assert bt.keep_flat_threshold_changes(changes, {}) == changes
@@ -603,11 +603,11 @@ class TestCustomAlertDetection:
 
     def test_flat_keys_at_head1_parses_tenants_wrapper(self, monkeypatch):
         """從 HEAD~1 的 tenants-wrapper 抽 top-level 純量閾值 key（排除 _ 與 recipe 區塊）。"""
-        yaml_text = ("tenants:\n  db-b:\n    mysql_connections: '100'\n    mysql_cpu: '60'\n"
+        yaml_text = ("tenants:\n  db-b:\n    mysql_connections: '100'\n    mysql_threads_running: '60'\n"
                      "    _silent_mode: warning\n    _custom_alerts:\n      - recipe: threshold\n")
         monkeypatch.setattr(subprocess, "run",
                             lambda *a, **k: type("R", (), {"returncode": 0, "stdout": yaml_text})())
-        assert bt._flat_keys_at_head1("db-b") == {"mysql_connections", "mysql_cpu"}
+        assert bt._flat_keys_at_head1("db-b") == {"mysql_connections", "mysql_threads_running"}
 
     def test_notice_empty_when_no_recipes(self):
         """無 recipe 租戶 → notice 為空字串。"""

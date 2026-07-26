@@ -55,7 +55,7 @@ Tenant 透過 `tenant.yaml` 自助管理以下設定，不接觸 PromQL：
 tenants:
   db-a:
     mysql_connections: "800"           # Custom: 自訂閾值
-    mysql_cpu: ""                      # Default: 採用平台預設值
+    mysql_threads_running: ""          # Default: 採用平台預設值
     mariadb_replication_lag: "disable"  # Disable: 關閉此告警
     mysql_connections_critical: "1000"  # 多層嚴重度（_critical suffix）
     "redis_queue_length{queue='tasks'}": "500"  # 維度標籤篩選
@@ -120,7 +120,7 @@ tenants:
     (
       tenant:mysql_threads_running:avg1m
       > on(tenant) group_left
-      tenant:alert_threshold:mysql_cpu
+      tenant:alert_threshold:mysql_threads_running
     )
     unless on(tenant)
     (user_state_filter{filter="maintenance"} == 1)

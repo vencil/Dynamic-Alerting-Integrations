@@ -23,10 +23,12 @@ platform-defaults path can SUPPLY, under the exporter's reachability rules:
     `- alert:`, so the alert-based extractor can't reach them) are exempt —
     reused verbatim from `_observed_map_lib` so the two guards agree.
 
-KNOWN_UNWIRED: the 18 keys already dead at the time this gate landed. They are
-grandfathered as INFO (not errors) with a pointer to the tracking issue so the
-gate can merge without first fixing all 18 — the real fixes (move / rename /
-delete per root cause) land in follow-up PRs. The allowlist is EXIT-LOCKED (same
+KNOWN_UNWIRED: the keys already dead at the time this gate landed (18 then;
+the 9 B/C/D/E identity repairs shipped in #1231, 9 A-class tier moves remain).
+They are grandfathered as INFO (not errors) with a pointer to the tracking
+issue so the gate could merge without first fixing all of them — the real
+fixes (move / rename / delete per root cause) land per root-cause class in
+follow-up PRs. The allowlist is EXIT-LOCKED (same
 discipline as KNOWN_DEFERRED): a grandfathered key that becomes reachable, or
 disappears from the alert demand, is a HARD error — this forces the list to
 shrink as fixes land, so it can never rot into a permanent silent exemption.
@@ -54,9 +56,13 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
 
-# The 18 alert-demanded threshold keys that the platform-defaults path cannot
+# The alert-demanded threshold keys that the platform-defaults path cannot
 # yet supply. Grandfathered as INFO (see module docstring). Value = one-line
 # root-cause tag; the real fixes are tracked in the TRK-337 follow-ups.
+# Started at 18 when the gate landed; the B/C/D/E identity repairs shipped in
+# #1231 (rename/move/add/delete — 9 keys removed via the exit-lock below),
+# leaving the 9 A-class tier moves (a deliberate ship-enabled decision per
+# pack, not a mechanical fix — #1196).
 #   A = name-correct, wrong tier (in optional_overrides) → move to defaults
 #   B = name is wrong in scaffold (e.g. _total vs _rate) → rename + move
 #   C = base default exists but under a different name → align identity
@@ -69,18 +75,9 @@ KNOWN_UNWIRED: dict[str, str] = {
     "db2_log_usage_percent": "A: in optional_overrides, move to defaults (TRK-337)",
     "db2_deadlock_rate": "A: in optional_overrides, move to defaults (TRK-337)",
     "db2_tablespace_used_percent": "A: in optional_overrides, move to defaults (TRK-337)",
-    "db2_lock_wait_time": "D: absent from scaffold entirely (TRK-337)",
     "clickhouse_max_part_count": "A: in optional_overrides, move to defaults (TRK-337)",
     "clickhouse_replication_queue": "A: in optional_overrides, move to defaults (TRK-337)",
     "clickhouse_memory_tracking_bytes": "A: in optional_overrides, move to defaults (TRK-337)",
-    "redis_evicted_keys_rate": "B: scaffold has _total, alert wants _rate (TRK-337)",
-    "redis_replication_lag": "C: scaffold has a differently-named lag key (TRK-337)",
-    "mongodb_opcounters_rate": "B: scaffold has _total, alert wants _rate (TRK-337)",
-    "mongodb_replication_lag": "C: scaffold has repl_lag_seconds (TRK-337)",
-    "es_heap_usage_percent": "C: scaffold base default name differs (TRK-337)",
-    "es_disk_usage_percent": "C: scaffold base default name differs (TRK-337)",
-    "es_pending_tasks": "C: scaffold base default name differs (TRK-337)",
-    "es_search_latency_ms": "C: scaffold base default name differs (TRK-337)",
 }
 
 
@@ -164,8 +161,8 @@ def main(argv: list[str] | None = None) -> int:
             "producible by the platform-defaults path (TRK-337)"))
     parser.add_argument(
         "--ci", action="store_true",
-        help=i18n_text("新增不可達 key 或 KNOWN_UNWIRED exit-lock 破口即 exit 1（已知的 18 個為 INFO）",
-                       "exit 1 on NEW unreachable keys or a KNOWN_UNWIRED exit-lock breach (the known 18 are INFO)"))
+        help=i18n_text("新增不可達 key 或 KNOWN_UNWIRED exit-lock 破口即 exit 1（列管中的 A 類為 INFO）",
+                       "exit 1 on NEW unreachable keys or a KNOWN_UNWIRED exit-lock breach (the tracked A-class keys are INFO)"))
     args = parser.parse_args(argv)
 
     try:

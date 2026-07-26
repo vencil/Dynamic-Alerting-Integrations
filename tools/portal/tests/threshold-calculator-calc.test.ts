@@ -52,8 +52,8 @@ describe('suggestThreshold — normal metrics, other profiles', () => {
       critical: 1400,
     });
   });
-  it('mysql_cpu p50 base=25 → 29 / 35 (smallest base; warning still < critical)', () => {
-    expect(suggestThreshold(METRIC_PROFILES.mysql_cpu, 'p50', {})).toEqual({
+  it('mysql_threads_running p50 base=25 → 29 / 35 (smallest base; warning still < critical)', () => {
+    expect(suggestThreshold(METRIC_PROFILES.mysql_threads_running, 'p50', {})).toEqual({
       warning: 29,
       critical: 35,
     });
@@ -141,15 +141,15 @@ describe('generateYAML', () => {
 
   it('preserves selection order and 2 lines per metric; label is not emitted', () => {
     const yaml = generateYAML([
-      { metric: 'mysql_cpu', label: 'MySQL CPU', warning: 69, critical: 84 },
+      { metric: 'mysql_threads_running', label: 'MySQL CPU', warning: 69, critical: 84 },
       { metric: 'redis_memory', label: 'Redis Memory', warning: 92, critical: 112 },
     ]);
     const lines = yaml.split('\n');
     expect(lines).toEqual([
       'tenants:',
       '  my-app:',
-      '    mysql_cpu: "69"',
-      '    mysql_cpu_critical: "84"',
+      '    mysql_threads_running: "69"',
+      '    mysql_threads_running_critical: "84"',
       '    redis_memory: "92"',
       '    redis_memory_critical: "112"',
     ]);

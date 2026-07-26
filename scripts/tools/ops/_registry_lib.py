@@ -104,13 +104,40 @@ CHART_DEFAULT_KEYS: frozenset[str] = frozenset({
     "container_memory",
     # Scenario A: MySQL thresholds (mariadb pack)
     "mysql_connections",
-    "mysql_cpu",
+    "mysql_threads_running",
     "mysql_replication_lag",
     # PostgreSQL warning tier (postgresql pack) — owner-decided promotion,
     # #1200 Q3=C / D4 folding, 2026-07-25.
     "pg_connections",
     "pg_replication_lag",
 })
+
+# ---------------------------------------------------------------------------
+# deprecated_aliases — retired threshold-key spellings still honored during
+# their 2-release transition window (#1231). REGISTRY-SCOPE fact, same
+# rationale as CHART_DEFAULT_KEYS: scaffold's operative config-generation role
+# never consumes aliases, so the table is authored here and merged into the
+# registry document rather than widening the scaffold contract before PR-3.
+#
+# This table is the alias SSOT. The two runtime mirrors —
+#   - Go   components/threshold-exporter/app/pkg/config/aliases.go
+#          (deprecatedKeyAliases)
+#   - Py   scripts/tools/ops/_grar_validate.py (DEPRECATED_KEY_ALIASES)
+# — are PINNED to the registry's deprecated_aliases section by tests
+# (Go: pkg/config/aliases_registry_test.go; Py:
+# tests/lint/test_check_threshold_registry.py), so a drifted mirror fails CI.
+#
+# Contract (fail-loud in build_registry_doc): the OLD spelling must NOT be an
+# active registry key (it is retired), the target MUST be an active key, and
+# old != new. When a window closes, delete the entry here, regen, and drop the
+# mirror entries (the pin tests force the mirrors to follow).
+# ---------------------------------------------------------------------------
+DEPRECATED_KEY_ALIASES: dict[str, str] = {
+    # #944 / #1231: the metric has always measured mysql threads_running
+    # saturation, never host CPU% — the poisoned name is retired (2-release
+    # alias window from v2.10.0).
+    "mysql_cpu": "mysql_threads_running",
+}
 
 # ---------------------------------------------------------------------------
 # metric_class backfill — semantic classification of every threshold key
@@ -145,11 +172,12 @@ METRIC_CLASS_BACKFILL: dict[str, str] = {
     # replication
     "pg_replication_lag": "replication",
     "mysql_replication_lag": "replication",
-    "mongodb_repl_lag_seconds": "replication",
+    "mongodb_replication_lag": "replication",  # renamed from mongodb_repl_lag_seconds (#1196 C)
+    "redis_replication_lag": "replication",  # #1196 C repair line, new supply key
     "kafka_under_replicated_partitions": "replication",
     "clickhouse_replication_queue": "replication",
     # capacity
-    "es_filesystem_free_percent": "capacity",
+    "es_disk_usage_percent": "capacity",  # renamed from es_filesystem_free_percent (#1196 C, semantic flip free→used; still a disk fill level)
     "oracle_tablespace_used_percent": "capacity",
     "oracle_process_count": "capacity",
     "oracle_pga_allocated_bytes": "capacity",
@@ -161,19 +189,26 @@ METRIC_CLASS_BACKFILL: dict[str, str] = {
     "clickhouse_queries_rate": "throughput",
     "kafka_request_rate": "throughput",
     "nginx_request_rate": "throughput",
-    "mongodb_opcounters_total": "throughput",
+    "mongodb_opcounters_rate": "throughput",  # renamed from mongodb_opcounters_total (#1196 B)
     # latency
     "jvm_gc_pause": "latency",
     "oracle_wait_time_rate": "latency",
+    "db2_lock_wait_time": "latency",  # #1196 D repair line: stall accumulation rate, same shape as oracle_wait_time_rate
+    "es_search_latency_ms": "latency",  # #1196 D repair line: time-to-complete (avg per-query)
     # state
-    "es_cluster_health": "state",
     "kafka_broker_count": "state",
     "kafka_active_controllers": "state",
     "rabbitmq_consumers": "state",
+    # NOTE (#1196 D): es_pending_tasks is classed 'state' (master cluster-state
+    # task queue health, the coordination-health family es_cluster_health sat
+    # in) rather than 'saturation' — this table deliberately assigns no new
+    # saturation (see header), and schema marks saturation membership a
+    # deliberate product decision. Flagged as a saturation-upgrade candidate
+    # for owner review in the #1231 PR report.
+    "es_pending_tasks": "state",
     # efficiency
     "db2_bufferpool_hit_ratio": "efficiency",
-    "redis_evicted_keys_total": "efficiency",
-    "redis_keyspace_misses_ratio": "efficiency",
+    "redis_evicted_keys_rate": "efficiency",  # renamed from redis_evicted_keys_total (#1196 B)
     # errors
     "db2_deadlock_rate": "errors",
 }
@@ -211,6 +246,10 @@ _REGISTRY_HEADER = (
     "# 範圍：threshold 身分（defaults / optional_overrides 兩層＋chart_default）。\n"
     "# state_filters 與 dimensional_example 仍歸 scaffold（非閾值身分）。萃取為全量；\n"
     "# 本 registry 首要服務的 enforcement 路徑是 18-key 修復線（#1196 / TRK-337）。\n"
+    "#\n"
+    "# deprecated_aliases（#1231）：退役舊拼法 → canonical key（2-release 過渡窗）。\n"
+    "# 本區段是 alias SSOT——Go（pkg/config/aliases.go）與 Python（_grar_validate.py）\n"
+    "# 兩個 runtime 鏡像由 pin 測試釘住本區段（鏡像漂移＝CI 紅）。\n"
 )
 
 
@@ -232,6 +271,7 @@ def build_registry_doc(
     chart_default_keys: Optional[frozenset[str]] = None,
     metric_class_backfill: Optional[dict[str, str]] = None,
     strict_metric_class: Optional[bool] = None,
+    deprecated_aliases: Optional[dict[str, str]] = None,
 ) -> dict:
     """Mechanically extract the registry document from RULE_PACKS.
 
@@ -259,6 +299,12 @@ def build_registry_doc(
     chart_default table entry that is unknown or not defaults-tier (a typo'd
     table would silently un-ship a chart key), and on a backfill entry that is
     unknown or shadows a scaffold-authored class.
+
+    ``deprecated_aliases`` (#1231) rides along as a top-level registry section
+    (old spelling -> canonical key). Fail-loud contract: the old spelling must
+    NOT be an active key (it is retired), the target MUST be an active key
+    (an alias onto nothing would silently accept configs that resolve to no
+    threshold), and old != new.
     """
     if chart_default_keys is None:
         chart_default_keys = (
@@ -270,6 +316,10 @@ def build_registry_doc(
         )
     if strict_metric_class is None:
         strict_metric_class = rule_packs is None
+    if deprecated_aliases is None:
+        deprecated_aliases = (
+            DEPRECATED_KEY_ALIASES if rule_packs is None else {}
+        )
     if rule_packs is None:
         rule_packs = _load_scaffold().RULE_PACKS
 
@@ -360,11 +410,33 @@ def build_registry_doc(
                 "(schema requires it on every key)"
             )
 
+    # deprecated_aliases (#1231): retired spelling -> canonical key. Fail-loud
+    # so a stale table entry cannot ship a half-renamed contract.
+    for old, new in deprecated_aliases.items():
+        if old == new:
+            raise ValueError(
+                f"deprecated alias {old!r} maps to itself — remove the entry"
+            )
+        if old in keys:
+            raise ValueError(
+                f"deprecated alias {old!r} is still an ACTIVE registry key — "
+                "an alias entry means the old spelling is retired; finish the "
+                "rename (or drop the alias)"
+            )
+        if new not in keys:
+            raise ValueError(
+                f"deprecated alias {old!r} targets {new!r} which is not a "
+                "registry key — the alias would resolve to no threshold"
+            )
+
     # canonical field order (stable YAML emission).
     keys = {
         k: {f: e[f] for f in _FIELD_ORDER if f in e} for k, e in keys.items()
     }
-    return {"version": 1, "packs": packs, "keys": keys}
+    doc: dict[str, Any] = {"version": 1, "packs": packs, "keys": keys}
+    if deprecated_aliases:
+        doc["deprecated_aliases"] = dict(sorted(deprecated_aliases.items()))
+    return doc
 
 
 def write_registry(
@@ -494,6 +566,26 @@ def diff_docs(committed: dict, fresh: dict) -> list[str]:
                 diffs.append(
                     f"key {key!r}.{field}: registry={cv!r} vs scaffold={fv!r}"
                 )
+
+    # deprecated_aliases (#1231) — same anti-dual-SoT treatment as keys: any
+    # divergence in either direction is a drift (a missing section counts as
+    # an empty table).
+    c_alias = committed.get("deprecated_aliases", {}) or {}
+    f_alias = fresh.get("deprecated_aliases", {}) or {}
+    for old in sorted(set(f_alias) - set(c_alias)):
+        diffs.append(
+            f"deprecated_alias {old!r}: in authored table but missing from registry"
+        )
+    for old in sorted(set(c_alias) - set(f_alias)):
+        diffs.append(
+            f"deprecated_alias {old!r}: in registry but missing from authored table"
+        )
+    for old in sorted(set(c_alias) & set(f_alias)):
+        if c_alias[old] != f_alias[old]:
+            diffs.append(
+                f"deprecated_alias {old!r}: registry={c_alias[old]!r} vs "
+                f"authored={f_alias[old]!r}"
+            )
 
     if committed.get("version") != fresh.get("version"):
         diffs.append(
@@ -842,11 +934,14 @@ def membership_universe(
     """Every token a pack header may legitimately claim as a conf.d key.
 
     Registry keys + their derived ``_critical`` opt-ins (the exporter accepts
-    ``<base>_critical`` for any shipped base), plus caller-supplied extras
-    (the #1196 KNOWN_UNWIRED pending line, scaffold state-filter names), plus
-    structural prose tokens.
+    ``<base>_critical`` for any shipped base), plus deprecated alias spellings
+    (#1231 — still-valid conf.d input during their transition window) and
+    their ``_critical`` derivatives, plus caller-supplied extras (the #1196
+    KNOWN_UNWIRED pending line, scaffold state-filter names), plus structural
+    prose tokens.
     """
     keys = set(registry_keys(doc))
+    keys |= set(doc.get("deprecated_aliases", {}) or {})
     uni = keys | {k + CRITICAL_SUFFIX for k in keys}
     if extra_allowed:
         uni |= set(extra_allowed)

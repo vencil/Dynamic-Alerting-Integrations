@@ -32,7 +32,7 @@ const METRIC_PROFILES = {
     desc: 'Current number of active database connections',
     typical: { min: 10, max: 500, p50: 50, p90: 120, p95: 180, p99: 250 },
   },
-  mysql_cpu: {
+  mysql_threads_running: {
     label: 'MySQL Threads Running',
     unit: 'threads',
     desc: 'Running-threads saturation (threads_running, NOT host CPU%); Nichter tiers: busy 10–30, high 30–50, overloaded 50–100 (#944)',

@@ -23,7 +23,7 @@ exporter:
 thresholdConfig:
   defaults:
     mysql_connections: 80
-    mysql_cpu: 30      # running-thread SATURATION warning (threads_running, NOT host CPU%); 80→30 = PMM/Nichter "high" tier (#944)
+    mysql_threads_running: 30      # running-thread SATURATION warning (threads_running, NOT host CPU%); 80→30 = PMM/Nichter "high" tier (#944); renamed from mysql_cpu (#1231)
     mysql_replication_lag: 30  # async replication lag warning (seconds behind primary, sql_delay-adjusted) (#1200 WS5-P0-a)
     pg_connections: 80   # % of max_connections warning；pg 兩鍵升 chart_default（#1200 Q3=C / D4 folding）
     pg_replication_lag: 30   # replication lag warning (seconds)（#1200 Q3=C / D4 folding）

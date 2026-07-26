@@ -94,6 +94,7 @@ UNIT_DIMENSION: dict[str, str] = {
     "messages": "count",
     "seconds": "duration",
     "seconds/5m": "duration",
+    "ms": "duration",  # es_search_latency_ms (#1196 D) — millisecond latency threshold
     "msg/s": "rate",
     "req/s": "rate",
     "keys/s": "rate",
@@ -177,8 +178,9 @@ def _as_number(raw) -> float | None:
 def _walk_values(node, key_of_interest: str | None = None):
     """Yield (registry_key, number) for every threshold literal reachable in `node`.
 
-    A registry key's value may be a scalar (`mysql_cpu: "30"`) or a nested block
-    (the scheduled form `mysql_cpu: {default: {during_business_hours: "30"}}`).
+    A registry key's value may be a scalar (`mysql_threads_running: "30"`) or a
+    nested block (the scheduled form
+    `mysql_threads_running: {default: {during_business_hours: "30"}}`).
     #1217 burned on exactly the nested shape: a line-oriented scan is
     structurally blind to it, so once we are inside a known key we collect EVERY
     numeric leaf beneath it.

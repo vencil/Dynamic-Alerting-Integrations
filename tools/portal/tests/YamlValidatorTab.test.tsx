@@ -33,7 +33,7 @@ const PLATFORM_STUB = {
       category: 'database',
       defaults: {
         mysql_connections: { value: 80, unit: 'count', desc: 'Max connections warning', metricClass: 'saturation' },
-        mysql_cpu: { value: 30, unit: 'threads', desc: 'Running threads warning', metricClass: 'saturation' },
+        mysql_threads_running: { value: 30, unit: 'threads', desc: 'Running threads warning', metricClass: 'saturation' },
         // non-saturation key in a SELECTED pack — exercises the metricClass
         // filter itself (distinct from the pack-not-selected exclusion path)
         mysql_slow_queries: { value: 10, unit: 'count/s', desc: 'Slow queries warning' },
@@ -91,10 +91,10 @@ describe('YamlValidatorTab — saturation _critical hint', () => {
 
   it('shows the hint (with the key name) when a saturation _critical key is present', async () => {
     const q = await renderTab();
-    setYaml(q, 'mysql_cpu_critical: "50"');
+    setYaml(q, 'mysql_threads_running_critical: "50"');
     const hint = q.getByTestId('saturation-critical-hint');
     expect(hint).toBeInTheDocument();
-    expect(hint.textContent).toContain('mysql_cpu_critical');
+    expect(hint.textContent).toContain('mysql_threads_running_critical');
     expect(hint.textContent).toMatch(/saturation metric/i);
     // Links to the alerting-fundamentals article (REPO_BASE pattern).
     const link = hint.querySelector('a');
@@ -105,13 +105,13 @@ describe('YamlValidatorTab — saturation _critical hint', () => {
   it('dedupes and lists multiple distinct saturation _critical keys', async () => {
     const q = await renderTab();
     setYaml(q, [
-      'mysql_cpu_critical: "50"',
+      'mysql_threads_running_critical: "50"',
       'container_cpu_critical: "95"',
-      'mysql_cpu_critical: "55"', // duplicate key — listed once
+      'mysql_threads_running_critical: "55"', // duplicate key — listed once
     ].join('\n'));
     const hint = q.getByTestId('saturation-critical-hint');
-    expect(hint.textContent).toContain('mysql_cpu_critical, container_cpu_critical');
-    expect(hint.textContent?.match(/mysql_cpu_critical/g)).toHaveLength(1);
+    expect(hint.textContent).toContain('mysql_threads_running_critical, container_cpu_critical');
+    expect(hint.textContent?.match(/mysql_threads_running_critical/g)).toHaveLength(1);
   });
 
   it('does NOT show the hint for a non-saturation _critical key in a selected pack', async () => {
@@ -132,13 +132,13 @@ describe('YamlValidatorTab — saturation _critical hint', () => {
 
   it('does NOT show the hint for a commented-out line', async () => {
     const q = await renderTab();
-    setYaml(q, '# mysql_cpu_critical: "50"');
+    setYaml(q, '# mysql_threads_running_critical: "50"');
     expect(q.queryByTestId('saturation-critical-hint')).toBeNull();
   });
 
   it('hint disappears when the textarea is cleared', async () => {
     const q = await renderTab();
-    setYaml(q, 'mysql_cpu_critical: "50"');
+    setYaml(q, 'mysql_threads_running_critical: "50"');
     expect(q.getByTestId('saturation-critical-hint')).toBeInTheDocument();
     setYaml(q, '');
     expect(q.queryByTestId('saturation-critical-hint')).toBeNull();
@@ -146,7 +146,7 @@ describe('YamlValidatorTab — saturation _critical hint', () => {
 
   it('display-only: the hint never enters validateConfig issues', async () => {
     const q = await renderTab();
-    setYaml(q, 'mysql_cpu_critical: "50"');
+    setYaml(q, 'mysql_threads_running_critical: "50"');
     fireEvent.click(q.getByText('Validate'));
     // The hint is present, but no issue row mentions saturation — the
     // result block renders after the hint; scan every element carrying an

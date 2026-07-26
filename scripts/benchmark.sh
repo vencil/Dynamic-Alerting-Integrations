@@ -241,7 +241,10 @@ for i in range(${SYNTH_TENANTS}):
     name = f'synth-{i:04d}'
     tenants[name] = {
         'mysql_connections': str(50 + i % 100),
-        'mysql_cpu': str(60 + i % 40),
+        # threads-shaped value domain 20-59 (warning default 30 / critical 50),
+        # not the old percent-shaped 60-99 — the #1231 rename fixed the
+        # semantics, so the synthetic spread follows (#944 unit sanity).
+        'mysql_threads_running': str(20 + i % 40),
         'container_cpu': str(70 + i % 30),
         'container_memory': str(75 + i % 20),
     }
@@ -483,7 +486,8 @@ for i in range(${N_TENANTS}):
     rtype = RECEIVER_TYPES[i % len(RECEIVER_TYPES)]
     tenant = {
         'mysql_connections': str(50 + i % 100),
-        'mysql_cpu': str(60 + i % 40),
+        # threads-shaped 20-59 (see the synth-tenant generator note above; #1231)
+        'mysql_threads_running': str(20 + i % 40),
         '_routing': {
             'receiver': {'type': rtype},
             'group_by': ['alertname', 'severity'],

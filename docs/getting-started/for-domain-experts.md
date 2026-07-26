@@ -42,7 +42,7 @@ data_mappings:
   mysql_connections:
     source_metric: "mysql_global_status_threads_connected"
     # 如有需要，可加 relabel_configs
-  mysql_cpu:
+  mysql_threads_running:
     source_metric: "mysql_global_status_threads_running"
 ```
 
@@ -348,7 +348,7 @@ A: 支援。用 `type: "scheduled"` 和 `range` 參數：
 
 ```yaml
 thresholds:
-  mysql_cpu:
+  mysql_threads_running:
     type: "scheduled"
     default:
       during_business_hours: "30"   # threads_running 飽和（併發執行緒數，NOT host CPU%）

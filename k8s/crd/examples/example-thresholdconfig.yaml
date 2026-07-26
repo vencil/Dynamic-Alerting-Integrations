@@ -19,10 +19,11 @@ spec:
     db-a:
       mysql_connections: "70"
       # threads_running 1m-avg saturation (concurrent threads, NOT host CPU%); platform
-      # default 30, suggested critical tier 50 (#944). Key stays mysql_cpu for
-      # config-contract stability. 25 = a deliberate tightening for this payment-domain
+      # default 30, suggested critical tier 50 (#944). Renamed from mysql_cpu (#1231 —
+      # the poisoned name is retired; the old spelling still resolves during the
+      # 2-release alias window). 25 = a deliberate tightening for this payment-domain
       # tenant (pt-osc throttle tier), matching the stricter mysql_connections above.
-      mysql_cpu: "25"
+      mysql_threads_running: "25"
       container_memory: "85"
       _silent_mode: "disable"
       _routing:

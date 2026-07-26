@@ -11,7 +11,7 @@
 #   - redis-c: threshold exceeded but maintenance active → suppressed.
 #   - redis-d: below threshold → no alert.
 #   - redis-e: maintenance + NO metadata → suppressed by the BARE arm's OWN
-#     maintenance clause (#973-review hole, same fix as rule-pack-mariadb-cpu:
+#     maintenance clause (#973-review hole, same fix as rule-pack-mariadb-threads:
 #     each arm hand-copies the clause, and redis-c gives the bare copy zero
 #     mutation coverage — delete that copy and redis-c is still excluded by the
 #     bare arm's `unless tenant_metadata_info` — so only this tenant has teeth).
@@ -56,7 +56,7 @@ tests:
       # by the BARE arm's own maintenance clause (the only tenant whose suppression depends on it).
       # Static flag — the maintenance-window RELEASE waveform (and the `== 1` 0-value
       # contract) is pinned ONCE for the whole two-arm class in
-      # rule-pack-mariadb-cpu_test.yaml; duplicating the transition per fixture is bloat.
+      # rule-pack-mariadb-threads_test.yaml; duplicating the transition per fixture is bloat.
       - series: 'redis_connected_clients{tenant="redis-e"}'
         values: '600x30'
       - series: 'user_threshold{tenant="redis-e", component="redis", metric="connected_clients", severity="warning"}'

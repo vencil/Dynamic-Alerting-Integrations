@@ -134,8 +134,8 @@ RULE_PACK_CATALOG = {
         'defaults': {
             'mysql_connections': 80,
             'mysql_connections_critical': 150,
-            'mysql_cpu': 30,  # running-thread saturation warning (NOT host CPU%); 80→30 PMM/Nichter (#944)
-            'mysql_cpu_critical': 50,  # saturation critical; aligns with MariaDBHighThreadsRunningCritical + scaffold_tenant (#944/#951)
+            'mysql_threads_running': 30,  # running-thread saturation warning (NOT host CPU%); 80→30 PMM/Nichter (#944); renamed from mysql_cpu (#1231)
+            'mysql_threads_running_critical': 50,  # saturation critical; aligns with MariaDBHighThreadsRunningCritical + scaffold_tenant (#944/#951)
             'mysql_slow_queries': 10,
             'mysql_replication_lag': 30,
             'mysql_replication_lag_critical': 120,
@@ -162,7 +162,9 @@ RULE_PACK_CATALOG = {
             'redis_memory_usage_critical': 95,
             'redis_connected_clients': 500,
             'redis_evicted_keys': 100,
-            'redis_keyspace_misses_ratio': 50,
+            # redis_keyspace_misses_ratio removed (#1196 E): supply-side orphan —
+            # no alert consumes it, and this catalog's 50 vs the registry's 0.3
+            # was a third hand-copied unit universe (ratio vs percent).
         },
     },
     'mongodb': {

@@ -140,9 +140,9 @@ describe('findCommonSettings — value shared across all tenants', () => {
   };
 
   it('returns the metrics all tenants agree on, excluding the one that differs', () => {
-    // Only mysql_cpu differs (75 vs 90) → the other 6 DEFAULTS metrics are "common".
-    const t1 = { name: 'a', thresholds: { ...base, mysql_cpu: 75 } };
-    const t2 = { name: 'b', thresholds: { ...base, mysql_cpu: 90 } };
+    // Only mysql_threads_running differs (75 vs 90) → the other 6 DEFAULTS metrics are "common".
+    const t1 = { name: 'a', thresholds: { ...base, mysql_threads_running: 75 } };
+    const t2 = { name: 'b', thresholds: { ...base, mysql_threads_running: 90 } };
     expect(findCommonSettings([t1, t2])).toEqual([
       'mysql_connections', 'container_cpu', 'container_memory',
       'oracle_sessions_active', 'oracle_tablespace_used_pct', 'db2_connections_active',
@@ -150,11 +150,11 @@ describe('findCommonSettings — value shared across all tenants', () => {
   });
 
   it('FLAG: a metric MISSING from all tenants is reported "common" (undefined===undefined), but PARTIAL-missing is not', () => {
-    // t1 has mysql_connections+mysql_cpu; t2 has only mysql_connections.
+    // t1 has mysql_connections+mysql_threads_running; t2 has only mysql_connections.
     //   mysql_connections: [80,80]        → common
-    //   mysql_cpu:         [75, undefined] → every(v===75)? undefined≠75 → NOT common
+    //   mysql_threads_running:         [75, undefined] → every(v===75)? undefined≠75 → NOT common
     //   container_cpu … db2 (5 metrics):  [undefined, undefined] → all undefined → COMMON (surprising)
-    const t1 = { name: 'a', thresholds: { mysql_connections: 80, mysql_cpu: 75 } };
+    const t1 = { name: 'a', thresholds: { mysql_connections: 80, mysql_threads_running: 75 } };
     const t2 = { name: 'b', thresholds: { mysql_connections: 80 } };
     expect(findCommonSettings([t1, t2])).toEqual([
       'mysql_connections', 'container_cpu', 'container_memory',
@@ -176,7 +176,7 @@ describe('findDivergent — filter stddev>0, sort by stddev DESC', () => {
   // Three tenants. mysql_connections [10,20,100] spread widest; container_cpu [80,70,90] next;
   // all other 5 DEFAULTS metrics identical across tenants → stddev 0 → filtered out.
   const rest = {
-    mysql_cpu: 80, container_memory: 85, oracle_sessions_active: 200,
+    mysql_threads_running: 80, container_memory: 85, oracle_sessions_active: 200,
     oracle_tablespace_used_pct: 85, db2_connections_active: 200,
   };
   const t1 = { name: 'a', thresholds: { mysql_connections: 10, container_cpu: 80, ...rest } };
@@ -209,9 +209,9 @@ describe('findDivergent — filter stddev>0, sort by stddev DESC', () => {
 describe('DEFAULTS — the extracted default-threshold table', () => {
   it('exposes the 7 canonical metrics with their default values', () => {
     expect(DEFAULTS).toEqual({
-      // mysql_cpu = 30 running-threads saturation (threads_running, NOT host CPU%; #944);
-      // key kept as mysql_cpu for config-contract stability.
-      mysql_connections: 80, mysql_cpu: 30, container_cpu: 80,
+      // mysql_threads_running = 30 running-threads saturation (threads_running,
+      // NOT host CPU%; #944); renamed from mysql_cpu (#1231).
+      mysql_connections: 80, mysql_threads_running: 30, container_cpu: 80,
       container_memory: 85, oracle_sessions_active: 200,
       oracle_tablespace_used_pct: 85, db2_connections_active: 200,
     });

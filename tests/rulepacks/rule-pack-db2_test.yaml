@@ -10,7 +10,7 @@
 #   * a no-fire control (below/above threshold on the safe side / exporter healthy),
 #   * a `for:` debounce case (expr already true, eval BEFORE the for: window ⇒ no alert).
 # Threshold alerts additionally exercise the pack's per-alert branch plumbing
-# (hand-copied per alert), extending the rule-pack-mariadb-cpu_test.yaml scaffold
+# (hand-copied per alert), extending the rule-pack-mariadb-threads_test.yaml scaffold
 # to FIVE tenants:
 #   - db-a: breaching, metadata present    → fires ENRICHED (branch A).
 #   - db-b: breaching, NO metadata          → STILL fires BARE (branch B, vacuum).

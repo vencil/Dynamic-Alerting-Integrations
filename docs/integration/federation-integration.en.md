@@ -235,7 +235,7 @@ defaults:
   pg_connections: 80
   pg_replication_lag: 30
   mysql_connections: 80
-  mysql_cpu: 30              # threads_running saturation (concurrent threads, NOT host CPU%)
+  mysql_threads_running: 30  # threads_running saturation (concurrent threads, NOT host CPU%; renamed from mysql_cpu, #1231)
 
 # conf.d/db-a.yaml (edge-asia-1 tenant)
 tenants:

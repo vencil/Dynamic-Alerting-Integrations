@@ -1,10 +1,11 @@
 """Tests for scripts/tools/lint/check_threshold_reachability.py (TRK-337).
 
 The gate asserts every alert-demanded threshold key is producible by the
-platform-defaults path, grandfathering the 18 keys already dead when it landed.
+platform-defaults path, grandfathering the keys already dead when it landed
+(18 then; 9 A-class remain after the #1231 B/C/D/E identity repairs).
 Each test below pins one branch of that contract (they are regression pins for a
 declared-but-unwired guard, not decoration):
-  - the live repo is green (18 grandfathered, 0 new drift)
+  - the live repo is green (the A-class rump grandfathered, 0 new drift)
   - a NEW dead key fails --ci
   - the _critical reachability rule (base in supply) is honoured
   - the KNOWN_UNWIRED exit-lock fires when a grandfathered key is fixed or removed
@@ -31,12 +32,15 @@ def test_real_repo_has_no_new_drift():
     assert result["errors"] == [], result["errors"]
 
 
-def test_grandfather_list_is_exactly_the_18_dead_keys():
+def test_grandfather_list_is_exactly_the_remaining_dead_keys():
     """Every KNOWN_UNWIRED key must actually be dead on the real repo (else it is
-    a stale exemption). Guards against the list drifting from reality."""
+    a stale exemption). Guards against the list drifting from reality.
+    18 at gate-landing; the #1231 B/C/D/E identity repairs shrank it to the
+    9 A-class tier moves (all `A:`-tagged) still tracked under TRK-337."""
     result = gate.run_check()
-    # all 18 show up as info; none as a STALE-EXEMPTION error
-    assert len(result["infos"]) == len(gate.KNOWN_UNWIRED) == 18
+    # the whole rump shows up as info; none as a STALE-EXEMPTION error
+    assert len(result["infos"]) == len(gate.KNOWN_UNWIRED) == 9
+    assert all(tag.startswith("A:") for tag in gate.KNOWN_UNWIRED.values())
     assert not any("STALE-EXEMPTION" in e for e in result["errors"])
 
 

@@ -473,7 +473,7 @@ class TestExportPatch:
         return [tr.TenantRecommendation(
             tenant="db-a",
             keys=[
-                tr.KeyRecommendation("mysql_cpu", "80", p95=85.0, recommended=85,
+                tr.KeyRecommendation("mysql_threads_running", "80", p95=85.0, recommended=85,
                                      delta_pct=6.3, confidence="MEDIUM",
                                      reason="recommended at P95 (increase 6.3%)"),
                 tr.KeyRecommendation("mysql_connections", "90", p95=88.0, recommended=88,
@@ -492,7 +492,7 @@ class TestExportPatch:
         out = tr.format_export_patch(self._reports())
         doc = yaml.safe_load(out)
         # only the actionable key, quoted-string value, under tenants:<name>
-        assert doc == {"tenants": {"db-a": {"mysql_cpu": "85"}}}
+        assert doc == {"tenants": {"db-a": {"mysql_threads_running": "85"}}}
 
     def test_within_margin_and_skipped_not_patched(self):
         """within-margin / skipped key 不進 patch（只當註解列出）。"""
@@ -564,7 +564,7 @@ class TestExportPatch:
         yaml = pytest.importorskip("yaml")
         reports = [
             tr.TenantRecommendation(tenant="db-a", total_keys=1, keys=[
-                tr.KeyRecommendation("mysql_cpu", "80", recommended=90, delta_pct=12.5,
+                tr.KeyRecommendation("mysql_threads_running", "80", recommended=90, delta_pct=12.5,
                                      confidence="HIGH", reason="recommended at P95"),
             ]),
             tr.TenantRecommendation(tenant="db-b", total_keys=1, keys=[
@@ -575,7 +575,7 @@ class TestExportPatch:
         out = tr.format_export_patch(reports)
         doc = yaml.safe_load(out)
         # applyable YAML carries ONLY the actionable tenant
-        assert doc == {"tenants": {"db-a": {"mysql_cpu": "90"}}}
+        assert doc == {"tenants": {"db-a": {"mysql_threads_running": "90"}}}
         # but db-b's skip context is NOT silently dropped — present as a comment
         assert "db-b" in out
         assert "(skipped)" in out
@@ -583,7 +583,7 @@ class TestExportPatch:
 
     def test_export_patch_cli(self, tmp_path):
         """CLI --export-patch dry-run 路徑跑得通（無 Prometheus → 全 skip）。"""
-        write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml("db-a", keys={"mysql_cpu": 80}))
+        write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml("db-a", keys={"mysql_threads_running": 80}))
         with patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path),
                                  "--export-patch", "--dry-run"]):
             tr.main()  # must not raise

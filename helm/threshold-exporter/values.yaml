@@ -63,7 +63,8 @@ extraEnvFrom: []
 # check_threshold_registry.py --regen；出貨集增減是 D4 家族產品拍板，
 # 勿在此手改。
 # 史料：mysql_cpu 80→30 校準（#944）時本 chart 副本是最後被漏掉的一份
-# （#1200 WS1a 反向稽核補正）；改為生成段後該類漂移由 gate 根除。
+# （#1200 WS1a 反向稽核補正）；改為生成段後該類漂移由 gate 根除。該 key 已於
+# #1231 改名為 mysql_threads_running（毒名退役，2-release alias 過渡窗）。
 thresholdConfig:
   defaults:
     # >>> GENERATED:threshold-registry:helm-defaults — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
@@ -87,9 +88,10 @@ thresholdConfig:
     # 建議 120）
     mysql_connections: 80
     # threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30 =
-    # PMM/Nichter 'high' (#944); key kept as mysql_cpu (config-contract stability; metric/alert
-    # renamed, #944 closed)（critical 加嚴 opt-in：mysql_cpu_critical，registry 建議 50）
-    mysql_cpu: 30
+    # PMM/Nichter 'high' (#944); renamed from mysql_cpu (#1231 owner-approved reversal of the #944
+    # keep — 2-release alias window, old spelling still resolves)（critical 加嚴 opt-
+    # in：mysql_threads_running_critical，registry 建議 50）
+    mysql_threads_running: 30
     # seconds — Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 =
     # APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's lag-
     # template family default is 600s warning). Enabled by default (#1200 WS5-P0-a Q3=C)（critical 加嚴

@@ -93,7 +93,7 @@ def test_get_tenant_metrics_found():
     configs = {
         "db-a.yaml": {
             "path": "/x/db-a.yaml",
-            "data": {"tenants": {"db-a": {"mysql_connections": 70, "mysql_cpu": 80}}},
+            "data": {"tenants": {"db-a": {"mysql_connections": 70, "mysql_threads_running": 80}}},
         },
     }
     metrics = offboard_tenant.get_tenant_metrics("db-a", configs)
@@ -279,7 +279,7 @@ def test_remove_from_tenants_execute():
         make_confdir(d, {
             "db-a.yaml": {"tenants": {"db-a": {
                 "mysql_connections": 70,
-                "mysql_cpu": 80,
+                "mysql_threads_running": 80,
             }}},
         })
         removed = deprecate_rule.remove_from_tenants(
@@ -287,7 +287,7 @@ def test_remove_from_tenants_execute():
         assert len(removed) == 1
         data = deprecate_rule.load_yaml_file(os.path.join(d, "db-a.yaml"))
         assert "mysql_connections" not in data["tenants"]["db-a"]
-        assert "mysql_cpu" in data["tenants"]["db-a"]
+        assert "mysql_threads_running" in data["tenants"]["db-a"]
 
 def test_remove_from_tenants_skips_defaults():
     """測試跳過預設值檔案。"""

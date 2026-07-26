@@ -821,7 +821,7 @@ EXPECTED_SATURATION_KEYS = {
     # kubernetes
     "container_cpu", "container_cpu_throttle", "container_memory",
     # mariadb
-    "mysql_connections", "mysql_cpu",
+    "mysql_connections", "mysql_threads_running",
     # postgresql
     "pg_connections",
     # redis
@@ -829,7 +829,7 @@ EXPECTED_SATURATION_KEYS = {
     # mongodb
     "mongodb_connections_current",
     # elasticsearch
-    "es_jvm_memory_used_percent",
+    "es_heap_usage_percent",  # renamed from es_jvm_memory_used_percent (#1196 C / #1231)
     # oracle
     "oracle_sessions_active",
     # db2
@@ -853,11 +853,11 @@ class TestAnnotateSaturationCriticals:
 
     def test_inserts_comment_above_saturation_critical(self):
         """飽和 _critical 鍵上方插入註解，縮排保留。"""
-        text = 'tenants:\n  db-x:\n    mysql_cpu_critical: "50"\n'
+        text = 'tenants:\n  db-x:\n    mysql_threads_running_critical: "50"\n'
         out = annotate_saturation_criticals(text)
         lines = out.split("\n")
         idx = next(i for i, l in enumerate(lines)
-                   if l.strip().startswith("mysql_cpu_critical:"))
+                   if l.strip().startswith("mysql_threads_running_critical:"))
         assert lines[idx - 1] == f"    {SATURATION_CRITICAL_COMMENT}"
 
     def test_non_saturation_critical_untouched(self):
@@ -868,13 +868,13 @@ class TestAnnotateSaturationCriticals:
 
     def test_commented_line_not_annotated(self):
         """已註解行（# 開頭）不誤觸。"""
-        text = 'tenants:\n  db-x:\n    # mysql_cpu_critical: "50"\n'
+        text = 'tenants:\n  db-x:\n    # mysql_threads_running_critical: "50"\n'
         out = annotate_saturation_criticals(text)
         assert out == text
 
     def test_idempotent(self):
         """重複套用不重複插入。"""
-        text = 'tenants:\n  db-x:\n    mysql_cpu_critical: "50"\n'
+        text = 'tenants:\n  db-x:\n    mysql_threads_running_critical: "50"\n'
         once = annotate_saturation_criticals(text)
         assert annotate_saturation_criticals(once) == once
 
@@ -882,7 +882,7 @@ class TestAnnotateSaturationCriticals:
         """插入註解後 safe_load 資料等值（純顯示、不改語義）。"""
         text = yaml.safe_dump(
             {"tenants": {"db-x": {
-                "mysql_cpu_critical": "50",
+                "mysql_threads_running_critical": "50",
                 "container_memory_critical": "95",
                 "pg_replication_lag_critical": "60",
             }}},
@@ -892,7 +892,7 @@ class TestAnnotateSaturationCriticals:
 
     def test_base_key_without_critical_suffix_untouched(self):
         """飽和 base 鍵本身（無 _critical 後綴）不插註解。"""
-        text = 'tenants:\n  db-x:\n    mysql_cpu: "30"\n'
+        text = 'tenants:\n  db-x:\n    mysql_threads_running: "30"\n'
         assert annotate_saturation_criticals(text) == text
 
 
@@ -900,15 +900,15 @@ class TestSaturationWriteOutputs:
     """write_outputs() 飽和註解整合測試。"""
 
     def test_tenant_yaml_has_comment_above_saturation_critical(self):
-        """含 mysql_cpu_critical 的 tenant YAML 註解在該鍵上一行。"""
+        """含 mysql_threads_running_critical 的 tenant YAML 註解在該鍵上一行。"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            defaults = {"defaults": {"mysql_cpu": 30}}
-            tenant = {"tenants": {"db-x": {"mysql_cpu_critical": "50"}}}
+            defaults = {"defaults": {"mysql_threads_running": 30}}
+            tenant = {"tenants": {"db-x": {"mysql_threads_running_critical": "50"}}}
             write_outputs(tmpdir, "db-x", defaults, tenant, "report")
             with open(os.path.join(tmpdir, "db-x.yaml"), encoding="utf-8") as f:
                 lines = f.read().split("\n")
             idx = next(i for i, l in enumerate(lines)
-                       if l.strip().startswith("mysql_cpu_critical:"))
+                       if l.strip().startswith("mysql_threads_running_critical:"))
             assert lines[idx - 1].strip() == SATURATION_CRITICAL_COMMENT
 
     def test_empty_tenant_noop(self):
@@ -948,7 +948,7 @@ class TestSaturationGenerateProfile:
                     found += 1
                     assert lines[i - 1] == f"{m.group(1)}{SATURATION_CRITICAL_COMMENT}", \
                         f"line {i}: {line!r} 缺教育註解"
-            # mariadb 的 mysql_connections/mysql_cpu + nginx 的
+            # mariadb 的 mysql_connections/mysql_threads_running + nginx 的
             # nginx_connections/nginx_waiting critical tiers 至少各一
             assert found >= 4
 
@@ -959,7 +959,7 @@ class TestSaturationGenerateReport:
     def test_mariadb_report_includes_education_section(self):
         report = generate_report("db-x", ["kubernetes", "mariadb"], "/tmp/out")
         assert "飽和類指標的 critical 層" in report
-        assert "mysql_cpu_critical" in report
+        assert "mysql_threads_running_critical" in report
         assert "mysql_connections_critical" in report
         assert "container_cpu_critical" in report
         assert "docs/alerting-design-fundamentals.md" in report
@@ -1156,15 +1156,15 @@ class TestGenerateTenantInteractiveMetrics:
 
     def test_optional_overrides_prompted_after_defaults(self):
         """defaults 問完才問 optional_overrides（mariadb 的 _critical tiers）。"""
-        # 次序：k8s defaults(3) → mariadb defaults(3: mysql_connections, mysql_cpu,
+        # 次序：k8s defaults(3) → mariadb defaults(3: mysql_connections, mysql_threads_running,
         #         mysql_replication_lag)
         #       → mariadb optional_overrides(3: mysql_connections_critical,
-        #         mysql_cpu_critical, mysql_replication_lag_critical)。
+        #         mysql_threads_running_critical, mysql_replication_lag_critical)。
         res = _gen_tenant_interactive("db-c", ["kubernetes", "mariadb"], [
             "skip", "skip", "skip",   # k8s 3 defaults
             "skip", "skip", "skip",   # mariadb 3 defaults
             "100",                    # mysql_connections_critical → 保留
-            "skip",                   # mysql_cpu_critical → 省略
+            "skip",                   # mysql_threads_running_critical → 省略
             "skip",                   # mysql_replication_lag_critical → 省略
             _NEUTRAL_MAINT, _NEUTRAL_SILENT, _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
         ])

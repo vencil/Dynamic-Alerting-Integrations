@@ -33,7 +33,7 @@ class TestExtractCustomMetrics:
 
     def test_basic_extraction(self):
         """基本 custom_ 前綴正確抽取。"""
-        configs = {"db-a": {"custom_mysql_connections": 50, "mysql_cpu": 80}}
+        configs = {"db-a": {"custom_mysql_connections": 50, "mysql_threads_running": 80}}
         result = ag.extract_custom_metrics(configs)
         assert len(result) == 1
         assert result[0]["original_metric"] == "mysql_connections"
@@ -285,7 +285,7 @@ class TestLoadTenantConfigs:
                    "  db-a:\n"
                    "    custom_mysql_uptime: 1\n"
                    "  db-b:\n"
-                   "    mysql_cpu: 80\n")
+                   "    mysql_threads_running: 80\n")
         configs = ag.load_tenant_configs(config_dir=config_dir)
         assert set(configs) == {"db-a", "db-b"}
         assert configs["db-a"]["custom_mysql_uptime"] == 1

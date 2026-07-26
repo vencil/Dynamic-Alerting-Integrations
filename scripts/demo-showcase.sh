@@ -86,8 +86,8 @@ info "Creating _defaults.yaml (platform baseline)"
 cat > "$CONF_DIR/_defaults.yaml" << 'DEFAULTS'
 # Platform global defaults — all tenants inherit these
 mysql_connections: "80"
-# threads_running 1m-avg saturation (concurrent running threads, NOT host CPU%) — #944
-mysql_cpu: "30"
+# threads_running 1m-avg saturation (concurrent running threads, NOT host CPU%) — #944; renamed from mysql_cpu (#1231)
+mysql_threads_running: "30"
 pg_connections: "80"
 pg_replication_lag: "30"
 redis_memory_used_bytes: "4294967296"
@@ -101,7 +101,7 @@ cat > "$CONF_DIR/prod-mariadb.yaml" << 'TENANT1'
 # E-Commerce — MariaDB primary DB
 mysql_connections: "150"
 mysql_connections_critical: "200"
-mysql_cpu: "40"
+mysql_threads_running: "40"
 container_cpu: "75"
 container_memory: "80"
 

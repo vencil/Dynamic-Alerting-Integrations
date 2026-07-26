@@ -9,6 +9,10 @@
 # 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
 #   db2_connections_active: 200   # count — Active connections warning
 #   db2_bufferpool_hit_ratio: 0.95   # ratio — Bufferpool hit ratio warning
+#   db2_lock_wait_time: 10
+#       s/s — Lock wait accumulation rate warning (rate over 5m, summed across the tenant's
+#       instances); 10 ≈ 6.7x the 1.5 normal level both reference libraries agree on, below both
+#       fault levels (25/60) — full derivation + calibration workflow in the pack header (#1196 D)
 #
 # optional_overrides（documented-but-dormant——登錄有案、平台預設不出貨）：
 # ⛔ 啟用前提（別跳過）：threshold-exporter 只對「存在於 defaults 的 key」
@@ -22,10 +26,6 @@
 #   db2_deadlock_rate: 5   # count/s — Deadlock rate (5m)
 #   db2_tablespace_used_percent: 85   # % — Tablespace usage warning
 # <<< GENERATED:threshold-registry:pack-db2
-#
-# ⚠️ db2_lock_wait_time（起始建議值 10）目前是 18-key 修復線的 D 類 pending key
-# （#1196 / TRK-337——alert 需求它、平台 defaults 尚未供給），故不在上方生成段；
-# 校準推導見下，identity 實修落地後會自動進入生成段。
 #
 # ⚠️ 上列都是「Day 0 起始範例」不是通用安全值，每個 key 都須依該租戶實際 baseline
 # 校準（校準工作流見下方 db2_lock_wait_time 段，**適用上列每一個 key、不只

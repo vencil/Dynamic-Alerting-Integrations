@@ -1056,6 +1056,47 @@ repos:
         # this pygrep guards docs/scripts. CHANGELOG.md is exempt (it carries the
         # BREAKING-change migration note that necessarily quotes the old name).
 
+      - id: forbid-legacy-mysql-cpu-key
+        name: "#1231: forbid re-introducing the retired mysql_cpu threshold key as a live value"
+        entry: '\bmysql_[c]pu(_critical)?["'']?\s*:\s*(["'']?[0-9.]|["'']?disable|\{|\s*$)|tenant:alert_threshold:mysql_[c]pu'
+        language: pygrep
+        exclude: ^(CHANGELOG\.md|components/threshold-exporter/app/pkg/config/aliases_test\.go|components/threshold-exporter/app/config_alias_collector_test\.go|components/tenant-api/internal/handler/tenant_deprecation_test\.go|components/tenant-api/internal/gitops/writer_deprecation_test\.go|tools/portal/tests/playground-validation\.test\.ts|tests/ops/test_generate_alertmanager_routes\.py|tests/lint/test_check_threshold_registry\.py)$
+        # #1231 renamed mysql_cpu → mysql_threads_running (the metric never
+        # measured host CPU%). Prose mentions ("renamed from mysql_cpu") and the
+        # alias SSOT (`mysql_cpu: mysql_threads_running` — value is an
+        # IDENTIFIER) are legitimate residue during the 2-release alias window,
+        # so a bare word-match would need a giant brittle allowlist. This hook
+        # instead locks the re-introduction SHAPES: the key in key position
+        # carrying (1) a NUMERIC value (quoted or bare; the alias SSOT row is
+        # identifier-valued and stays legal), (2) the "disable" three-state
+        # sentinel — also a live value, it actively suppresses the metric, or
+        # (3) a nested block opener — an inline `{` or nothing else on the
+        # line, i.e. the structured/scheduled form whose value lives on the
+        # NEXT lines (the #1217 line-oriented blind spot; same shape family
+        # check_threshold_unit_sanity.py::_walk_values documents). Plus
+        # (4) the retired key appended to the tenant:alert_threshold:
+        # recording-rule prefix. A trailing-comment parent line is still
+        # invisible to (3) — accepted residual of a line-oriented hook.
+        # `mysql_[c]pu` is the self-match guard — the pattern (and any comment
+        # here) must never spell the retired shapes literally, or this config
+        # file trips its own hook. Excluded files are the alias-window fixture
+        # family — their fixtures ARE the old key as a live value by design.
+        # Phase 2 (#1231 alias window close): tighten to a full-token ban like
+        # forbid-legacy-mariadb-threshold-name above and drop the excludes.
+
+      - id: forbid-legacy-mysql-cpu-selector
+        name: "#1231: forbid re-introducing user_threshold{component=mysql, metric=cpu} selectors"
+        entry: 'component="mysql",\s*metric="cpu"'
+        language: pygrep
+        files: ^(rule-packs/|k8s/03-monitoring/|operator-manifests/).*\.ya?ml$
+        # Rule-pack side of the same rename: the exporter derives
+        # component/metric labels from the conf.d key (first-underscore split,
+        # pkg/config/parse.go parseMetricKey), so the retired key's selector
+        # shape is exactly component="mysql", metric="cpu". Scoped to the three
+        # rule surfaces (source pack / configmap copy / operator CRD copy);
+        # component="container", metric="cpu" (kubernetes pack) stays legal —
+        # a bare metric="cpu" pattern would false-positive on it.
+
       - id: ksm-version-allowlist
         name: "ADR-024: kube-state-metrics must allowlist app.kubernetes.io/version (test/rulepack-e2e)"
         entry: python3 -X utf8 scripts/tools/lint/check_ksm_version_allowlist.py --ci
@@ -1142,7 +1183,9 @@ repos:
         # (recommended 300 "count" against a 0-100 ratio → one portal button
         # silently disabled PostgresHighConnections). Registry `unit` is the SoT.
         # Fires on the SoT, on any artifact carrying threshold values, or on the
-        # gate itself.
+        # gate itself. (#1231 later knowingly reversed the #992/#944 "keep
+        # mysql_cpu" decision — the key is now mysql_threads_running; this gate
+        # predates and outlives that rename.)
         files: ^(rule-packs/threshold-registry\.yaml|docs/assets/(platform|recommendation|template)-data\.json|helm/threshold-exporter/values\.yaml|environments/.*/threshold-exporter\.yaml|k8s/crd/examples/.*\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/.*\.ya?ml|docs/.*\.md|scripts/tools/lint/check_threshold_unit_sanity\.py)$
 
       - id: scrape-reachability-check

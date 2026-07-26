@@ -4,7 +4,7 @@
 defaults:
   # --- MySQL/MariaDB ---
   mysql_connections: 80
-  mysql_cpu: 30              # 80→30 = #944 threads_running 飽和語意校準（此範例檔為漏改副本，隨 #1200 WS5-P0-a 對齊）
+  mysql_threads_running: 30  # 80→30 = #944 threads_running 飽和語意校準（此範例檔為漏改副本，隨 #1200 WS5-P0-a 對齊）；#1231 由 mysql_cpu 改名
   mysql_replication_lag: 30  # 原 aspirational key `mysql_slave_lag` 轉正——#1200 WS5-P0-a 落地為真實 threshold key
 
   # --- Redis ---
@@ -12,12 +12,12 @@ defaults:
   redis_connected_clients: 200
 
   # --- Elasticsearch ---
-  es_jvm_memory_used_percent: 85
-  es_filesystem_free_percent: 15
+  es_heap_usage_percent: 85   # #1231/#1196 C 由 es_jvm_memory_used_percent 改名（unwired 直修、無 alias）
+  es_disk_usage_percent: 85   # 已用率語意（>85 告警）；#1196 C 語意反向：取代 es_filesystem_free_percent 15（剩餘率）
 
   # --- MongoDB ---
   mongodb_connections_current: 300
-  mongodb_repl_lag_seconds: 10
+  mongodb_replication_lag: 10  # #1231/#1196 C 由 mongodb_repl_lag_seconds 改名（unwired 直修、無 alias）
 
   # --- 通用容器 ---
   container_cpu: 80

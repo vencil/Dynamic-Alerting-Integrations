@@ -8,8 +8,8 @@ tenants:
     # --- 基本閾值 (全域) ---
     mongodb_connections_current: "500"
     mongodb_connections_current_critical: "800"
-    mongodb_repl_lag_seconds: "10"
-    mongodb_repl_lag_seconds_critical: "30"
+    mongodb_replication_lag: "10"                           # #1196 C 由 mongodb_repl_lag_seconds 改名
+    mongodb_replication_lag_critical: "30"
     mongodb_cursors_open: "1000"
     mongodb_globallock_active_clients: "100"
 

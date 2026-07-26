@@ -23,7 +23,7 @@
       "category": "scenario",
       "packs": ["mariadb", "redis", "nginx", "kubernetes"],
       "desc": { "zh": "經典網店：MariaDB 用於訂單/庫存，Redis 用於會話/快取，Nginx 作反向代理，Kubernetes 容器監控", "en": "Classic web store: MariaDB for orders/inventory, Redis for sessions/cache, Nginx as reverse proxy, Kubernetes container monitoring." },
-      "yaml": "# E-Commerce Platform — MariaDB + Redis + Nginx + Kubernetes\nmysql_connections: \"150\"\nmysql_connections_critical: \"200\"\n# mysql_cpu = threads_running saturation (concurrent threads, NOT host CPU%); platform default 30\nmysql_cpu: \"40\"\n\nredis_memory_used_bytes: \"3221225472\"\nredis_memory_used_bytes_critical: \"4294967296\"\nredis_connected_clients: \"3000\"\n\nnginx_connections: \"2000\"\nnginx_request_rate: \"8000\"\nnginx_waiting: \"300\"\n\ncontainer_cpu: \"75\"\ncontainer_memory: \"80\"\n\n_routing:\n  receiver_type: slack\n  webhook_url: https://hooks.slack.com/services/xxx/yyy/zzz\n  group_by: [alertname, severity]\n  group_wait: \"30s\"\n  repeat_interval: \"4h\"\n\n_metadata:\n  owner: ecommerce-team\n  tier: production"
+      "yaml": "# E-Commerce Platform — MariaDB + Redis + Nginx + Kubernetes\nmysql_connections: \"150\"\nmysql_connections_critical: \"200\"\n# mysql_threads_running = threads_running saturation (concurrent threads, NOT host CPU%); platform default 30 (renamed from mysql_cpu, #1231)\nmysql_threads_running: \"40\"\n\nredis_memory_used_bytes: \"3221225472\"\nredis_memory_used_bytes_critical: \"4294967296\"\nredis_connected_clients: \"3000\"\n\nnginx_connections: \"2000\"\nnginx_request_rate: \"8000\"\nnginx_waiting: \"300\"\n\ncontainer_cpu: \"75\"\ncontainer_memory: \"80\"\n\n_routing:\n  receiver_type: slack\n  webhook_url: https://hooks.slack.com/services/xxx/yyy/zzz\n  group_by: [alertname, severity]\n  group_wait: \"30s\"\n  repeat_interval: \"4h\"\n\n_metadata:\n  owner: ecommerce-team\n  tier: production"
     },
     {
       "id": "iot-pipeline",
@@ -32,7 +32,7 @@
       "category": "scenario",
       "packs": ["kafka", "mongodb", "jvm", "kubernetes"],
       "desc": { "zh": "高吞吐 IoT：Kafka 資料引入、MongoDB 時序儲存、JVM 處理服務", "en": "High-throughput IoT: Kafka ingestion, MongoDB time-series storage, JVM-based processing services." },
-      "yaml": "# IoT Data Pipeline — Kafka + MongoDB + JVM + Kubernetes\nkafka_consumer_lag: \"50000\"\nkafka_consumer_lag_critical: \"200000\"\nkafka_broker_count: \"3\"\nkafka_active_controllers: \"1\"\nkafka_under_replicated_partitions: \"0\"\nkafka_request_rate: \"15000\"\n\nmongodb_connections_current: \"200\"\nmongodb_connections_current_critical: \"300\"\nmongodb_repl_lag_seconds: \"5\"\n\njvm_gc_pause: \"0.8\"\njvm_memory: \"85\"\njvm_threads: \"400\"\n\ncontainer_cpu: \"80\"\ncontainer_memory: \"85\"\n\n_routing:\n  receiver_type: pagerduty\n  group_by: [alertname, topic]\n  group_wait: \"1m\"\n  group_interval: \"5m\"\n  repeat_interval: \"12h\"\n\n_metadata:\n  owner: iot-platform-team\n  tier: production"
+      "yaml": "# IoT Data Pipeline — Kafka + MongoDB + JVM + Kubernetes\nkafka_consumer_lag: \"50000\"\nkafka_consumer_lag_critical: \"200000\"\nkafka_broker_count: \"3\"\nkafka_active_controllers: \"1\"\nkafka_under_replicated_partitions: \"0\"\nkafka_request_rate: \"15000\"\n\nmongodb_connections_current: \"200\"\nmongodb_connections_current_critical: \"300\"\nmongodb_replication_lag: \"5\"\n\njvm_gc_pause: \"0.8\"\njvm_memory: \"85\"\njvm_threads: \"400\"\n\ncontainer_cpu: \"80\"\ncontainer_memory: \"85\"\n\n_routing:\n  receiver_type: pagerduty\n  group_by: [alertname, topic]\n  group_wait: \"1m\"\n  group_interval: \"5m\"\n  repeat_interval: \"12h\"\n\n_metadata:\n  owner: iot-platform-team\n  tier: production"
     },
     {
       "id": "saas-backend",
@@ -41,7 +41,7 @@
       "category": "scenario",
       "packs": ["postgresql", "redis", "elasticsearch", "jvm", "kubernetes"],
       "desc": { "zh": "SaaS 後端：PostgreSQL 核心資料、Redis 快取、Elasticsearch 全文搜尋、JVM 服務", "en": "SaaS backend: PostgreSQL for core data, Redis for caching, Elasticsearch for full-text search, JVM services." },
-      "yaml": "# SaaS Multi-Service — PostgreSQL + Redis + ES + JVM + K8s\n# pg_connections is a PERCENTAGE of max_connections (0-100), not a raw count\npg_connections: \"85\"\npg_connections_critical: \"95\"\npg_replication_lag: \"10\"\n\nredis_memory_used_bytes: \"2147483648\"\nredis_connected_clients: \"2000\"\n\nes_jvm_memory_used_percent: \"80\"\nes_jvm_memory_used_percent_critical: \"92\"\nes_filesystem_free_percent: \"20\"\n\njvm_memory: \"80\"\njvm_gc_pause: \"0.5\"\njvm_threads: \"500\"\n\ncontainer_cpu: \"70\"\ncontainer_memory: \"80\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"6h\"\n\n_metadata:\n  owner: backend-team\n  tier: production"
+      "yaml": "# SaaS Multi-Service — PostgreSQL + Redis + ES + JVM + K8s\n# pg_connections is a PERCENTAGE of max_connections (0-100), not a raw count\npg_connections: \"85\"\npg_connections_critical: \"95\"\npg_replication_lag: \"10\"\n\nredis_memory_used_bytes: \"2147483648\"\nredis_connected_clients: \"2000\"\n\nes_heap_usage_percent: \"80\"\nes_disk_usage_percent: \"80\"\n\njvm_memory: \"80\"\njvm_gc_pause: \"0.5\"\njvm_threads: \"500\"\n\ncontainer_cpu: \"70\"\ncontainer_memory: \"80\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"6h\"\n\n_metadata:\n  owner: backend-team\n  tier: production"
     },
     {
       "id": "analytics",
@@ -77,7 +77,7 @@
       "category": "scenario",
       "packs": ["elasticsearch", "nginx", "jvm", "kubernetes"],
       "desc": { "zh": "搜尋平台：Elasticsearch 叢集搜尋引擎、Nginx 負載均衡、JVM 索引服務", "en": "Search platform: Elasticsearch cluster search engine, Nginx load balancer, JVM indexing services." },
-      "yaml": "# Search Platform — Elasticsearch + Nginx + JVM + K8s\nes_jvm_memory_used_percent: \"75\"\nes_jvm_memory_used_percent_critical: \"88\"\nes_filesystem_free_percent: \"20\"\nes_filesystem_free_percent_critical: \"10\"\n\nnginx_connections: \"5000\"\nnginx_request_rate: \"10000\"\nnginx_waiting: \"500\"\n\njvm_memory: \"80\"\njvm_gc_pause: \"0.5\"\n\ncontainer_cpu: \"80\"\ncontainer_memory: \"85\"\n\n_routing_profile: team-sre-apac\n\n_metadata:\n  owner: search-team\n  tier: production"
+      "yaml": "# Search Platform — Elasticsearch + Nginx + JVM + K8s\nes_heap_usage_percent: \"75\"\nes_disk_usage_percent: \"80\"\n\nnginx_connections: \"5000\"\nnginx_request_rate: \"10000\"\nnginx_waiting: \"500\"\n\njvm_memory: \"80\"\njvm_gc_pause: \"0.5\"\n\ncontainer_cpu: \"80\"\ncontainer_memory: \"85\"\n\n_routing_profile: team-sre-apac\n\n_metadata:\n  owner: search-team\n  tier: production"
     },
     {
       "id": "quick-mariadb",
@@ -86,7 +86,7 @@
       "category": "quickstart",
       "packs": ["mariadb"],
       "desc": { "zh": "最小 MariaDB 監控配置", "en": "Minimal MariaDB monitoring config." },
-      "yaml": "# MariaDB Quick Start\nmysql_connections: \"80\"\n# threads_running saturation warning (concurrent threads, NOT host CPU%) — this is the platform default\nmysql_cpu: \"30\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
+      "yaml": "# MariaDB Quick Start\nmysql_connections: \"80\"\n# threads_running saturation warning (concurrent threads, NOT host CPU%) — this is the platform default\nmysql_threads_running: \"30\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
     },
     {
       "id": "quick-postgresql",
@@ -113,7 +113,7 @@
       "category": "quickstart",
       "packs": ["mongodb"],
       "desc": { "zh": "最小 MongoDB 監控配置", "en": "Minimal MongoDB monitoring config." },
-      "yaml": "# MongoDB Quick Start\nmongodb_connections_current: \"300\"\nmongodb_repl_lag_seconds: \"10\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
+      "yaml": "# MongoDB Quick Start\nmongodb_connections_current: \"300\"\nmongodb_replication_lag: \"10\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
     },
     {
       "id": "quick-oracle",
@@ -176,7 +176,7 @@
       "category": "quickstart",
       "packs": ["elasticsearch"],
       "desc": { "zh": "最小 Elasticsearch 監控配置", "en": "Minimal Elasticsearch monitoring config." },
-      "yaml": "# Elasticsearch Quick Start\nes_jvm_memory_used_percent: \"85\"\nes_filesystem_free_percent: \"15\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
+      "yaml": "# Elasticsearch Quick Start\nes_heap_usage_percent: \"85\"\nes_disk_usage_percent: \"85\"\n\n_routing:\n  receiver_type: webhook\n  webhook_url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
     },
     {
       "id": "quick-jvm",
@@ -203,7 +203,7 @@
       "category": "advanced",
       "packs": ["mariadb"],
       "desc": { "zh": "展示如何設定臨時維護窗口、自動過期和靜默模式", "en": "Shows how to set up a temporary maintenance window with auto-expiry and silent mode." },
-      "yaml": "# Maintenance Window Demo\nmysql_connections: \"200\"\n# relaxed for the maintenance window (platform default 30, suggested critical tier 50)\nmysql_cpu: \"50\"\n\n_state_maintenance:\n  expires: \"2026-03-20T06:00:00Z\"\n\n_silent_mode:\n  expires: \"2026-03-15T12:00:00Z\"\n\n_routing:\n  receiver_type: teams\n  webhook_url: https://teams.example.com/webhook\n  group_wait: \"1m\"\n  repeat_interval: \"12h\""
+      "yaml": "# Maintenance Window Demo\nmysql_connections: \"200\"\n# relaxed for the maintenance window (platform default 30, suggested critical tier 50)\nmysql_threads_running: \"50\"\n\n_state_maintenance:\n  expires: \"2026-03-20T06:00:00Z\"\n\n_silent_mode:\n  expires: \"2026-03-15T12:00:00Z\"\n\n_routing:\n  receiver_type: teams\n  webhook_url: https://teams.example.com/webhook\n  group_wait: \"1m\"\n  repeat_interval: \"12h\""
     },
     {
       "id": "routing-profile",
@@ -212,7 +212,7 @@
       "category": "advanced",
       "packs": ["mariadb", "kubernetes"],
       "desc": { "zh": "使用 _routing_profile 取代 inline _routing — 團隊共用路由設定、減少配置重複", "en": "Use _routing_profile instead of inline _routing — share routing settings across tenants, reduce config duplication." },
-      "yaml": "# Routing Profile Demo (ADR-007)\nmysql_connections: \"80\"\nmysql_cpu: \"30\"\ncontainer_cpu: \"80\"\ncontainer_memory: \"85\"\n\n_routing_profile: team-sre-apac\n\n_metadata:\n  runbook_url: https://runbooks.example.com/db-b\n  owner: sre-apac\n  tier: production\n  domain: finance"
+      "yaml": "# Routing Profile Demo (ADR-007)\nmysql_connections: \"80\"\nmysql_threads_running: \"30\"\ncontainer_cpu: \"80\"\ncontainer_memory: \"85\"\n\n_routing_profile: team-sre-apac\n\n_metadata:\n  runbook_url: https://runbooks.example.com/db-b\n  owner: sre-apac\n  tier: production\n  domain: finance"
     },
     {
       "id": "finance-compliance",
@@ -230,7 +230,7 @@
       "category": "advanced",
       "packs": ["mariadb"],
       "desc": { "zh": "絕對最小配置 — 完美入門選擇。省略的 key 套用平台預設值。", "en": "The absolute minimum config — perfect for getting started. Omitted keys use platform defaults." },
-      "yaml": "# Minimal — just thresholds, platform defaults handle the rest\nmysql_connections: \"100\"\nmysql_cpu: \"35\""
+      "yaml": "# Minimal — just thresholds, platform defaults handle the rest\nmysql_connections: \"100\"\nmysql_threads_running: \"35\""
     }
   ]
 }

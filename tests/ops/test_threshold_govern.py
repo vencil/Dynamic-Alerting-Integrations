@@ -84,7 +84,7 @@ def test_plan_filters_and_quotes():
     reports = [
         _report("db-a", [
             _kr("mysql_connections", "2000", 100.0, -95.0, recommend.CONFIDENCE_HIGH, p95=100.0),
-            _kr("mysql_cpu", "75", 77.0, 2.7, recommend.CONFIDENCE_HIGH),          # below margin
+            _kr("mysql_threads_running", "75", 77.0, 2.7, recommend.CONFIDENCE_HIGH),          # below margin
             _kr("redis_mem", "x", None, None, recommend.CONFIDENCE_LOW),           # skipped
         ]),
         _report("db-b", [
@@ -111,7 +111,7 @@ FIXTURE = (
     "  db-a:\n"
     '    mysql_connections: "50"            # warning threshold\n'
     '    mysql_connections_critical: "120"  # critical\n'
-    "    mysql_cpu: \"75\"\n"
+    "    mysql_threads_running: \"75\"\n"
     "    _metadata:\n"
     '      owner: "team-db"\n'
     '      tier: "tier-1"\n'
@@ -128,7 +128,7 @@ def test_apply_changes_only_target_value_and_preserves_comments():
     # everything else byte-identical
     assert "# headline tenant — do not delete this comment" in new
     assert '    mysql_connections_critical: "120"  # critical' in new
-    assert '    mysql_cpu: "75"' in new
+    assert '    mysql_threads_running: "75"' in new
     assert '      owner: "team-db"' in new
     assert '    redis_mem: "512"' in new
     # exactly one line differs
@@ -139,11 +139,11 @@ def test_apply_changes_only_target_value_and_preserves_comments():
 
 def test_apply_multiple_keys_one_tenant():
     new, unapplied = tg.apply_threshold_changes(
-        FIXTURE, "db-a", {"mysql_connections": '"45"', "mysql_cpu": '"90"'}
+        FIXTURE, "db-a", {"mysql_connections": '"45"', "mysql_threads_running": '"90"'}
     )
     assert unapplied == []
     assert '    mysql_connections: "45"            # warning threshold' in new
-    assert '    mysql_cpu: "90"' in new
+    assert '    mysql_threads_running: "90"' in new
     # db-b untouched
     assert '    redis_mem: "512"' in new
 
@@ -153,7 +153,7 @@ def test_apply_does_not_touch_other_tenant():
     assert '    redis_mem: "1024"' in new
     # db-a fully intact
     assert '    mysql_connections: "50"            # warning threshold' in new
-    assert '    mysql_cpu: "75"' in new
+    assert '    mysql_threads_running: "75"' in new
 
 
 def test_apply_reports_missing_key_unapplied():
@@ -176,7 +176,7 @@ def test_apply_preserves_crlf_line_endings():
     crlf = (
         "tenants:\r\n  db-a:\r\n"
         '    mysql_connections: "50"\r\n'      # no inline comment — the risky case
-        '    mysql_cpu: "75"  # cpu\r\n'
+        '    mysql_threads_running: "75"  # cpu\r\n'
     )
     new, unapplied = tg.apply_threshold_changes(crlf, "db-a", {"mysql_connections": '"45"'})
     assert unapplied == []
@@ -264,7 +264,7 @@ def test_open_pr_success_maps_to_pr_opened(monkeypatch):
     assert out.pr_url == "https://gh/7" and out.pr_number == 7
     # the PUT body must be the merged config: target changed, others intact
     assert '    mysql_connections: "45"            # warning threshold' in calls["put_body"]
-    assert '    mysql_cpu: "75"' in calls["put_body"]
+    assert '    mysql_threads_running: "75"' in calls["put_body"]
     # governance channel header sent on both GET and PUT
     assert calls["get_headers"]["X-DA-Write-Source"] == tg.WRITE_SOURCE
 

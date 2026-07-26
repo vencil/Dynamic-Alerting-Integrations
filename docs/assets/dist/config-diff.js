@@ -5,7 +5,7 @@ import{e as v,f as A,h as O}from"./chunk-IIMWFNCC.js";import{a as h,b as w,c as 
 `));d&&d.length&&l.push(...d);let t=Y(n,v),u={};for(let f of new Set([...Object.keys(r),...Object.keys(t)])){if(v.has(f))continue;let x=Object.prototype.hasOwnProperty.call(r,f)?C(r[f]):void 0;x!==void 0&&x!==""?u[f]=x:Object.prototype.hasOwnProperty.call(t,f)?u[f]=t[f]:u[f]=x!==void 0?x:""}a[p]=u}return{tenants:a,errors:l}}function D(s,m){let a=j(s),l=j(m),o=a.tenants,i=l.tenants,b=[...new Set([...a.errors,...l.errors])],p=new Set([...Object.keys(o),...Object.keys(i)]),n=[];return p.forEach(r=>{let d=o[r],t=i[r];if(!d&&t){n.push({type:"tenant-added",tenant:r,keys:Object.keys(t)});return}if(d&&!t){n.push({type:"tenant-removed",tenant:r,keys:Object.keys(d)});return}new Set([...Object.keys(d),...Object.keys(t)]).forEach(f=>{let x=d[f],g=t[f];x===void 0&&g!==void 0?n.push({type:"key-added",tenant:r,key:f,newVal:g}):x!==void 0&&g===void 0?n.push({type:"key-removed",tenant:r,key:f,oldVal:x}):x!==g&&n.push({type:"key-changed",tenant:r,key:f,oldVal:x,newVal:g})})}),{changes:n,errors:b}}var e=h(_(),1),c=window.__t||((s,m)=>m),S=`tenants:
   db-a:
     mysql_connections: "80"
-    mysql_cpu: "75"
+    mysql_threads_running: "45"
     _routing:
       receiver_type: "slack"
       webhook_url: "https://hooks.slack.com/services/xxx/old"
@@ -16,7 +16,7 @@ import{e as v,f as A,h as O}from"./chunk-IIMWFNCC.js";import{a as h,b as w,c as 
   db-a:
     mysql_connections: "120"
     mysql_connections_critical: "200"
-    mysql_cpu: "75"
+    mysql_threads_running: "45"
     _routing:
       receiver_type: "webhook"
       webhook_url: "https://hooks.example.com/alerts"

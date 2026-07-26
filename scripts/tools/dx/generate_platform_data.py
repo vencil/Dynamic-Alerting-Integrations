@@ -192,7 +192,10 @@ PACK_LABELS = {
 
 # Key metrics covered (for matrix display)
 METRICS_COVERAGE = {
-    "mariadb": ["connections", "cpu", "memory", "slow_queries", "replication_lag", "query_errors"],
+    # mariadb: "cpu" + "threads_running" coexist during the #1231 2-release
+    # alias window (the exporter dual-emits user_threshold{metric="cpu"} next
+    # to {metric="threads_running"}); drop "cpu" when the window closes.
+    "mariadb": ["connections", "cpu", "threads_running", "memory", "slow_queries", "replication_lag", "query_errors"],
     "postgresql": ["connections", "cache_hit", "query_time", "disk_usage", "replication_lag"],
     "redis": ["memory", "evictions", "connected_clients", "keyspace_hits"],
     "mongodb": ["connections", "memory", "page_faults", "replication"],

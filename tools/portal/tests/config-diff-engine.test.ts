@@ -22,7 +22,7 @@ const EXAMPLE_OLD = [
   'tenants:',
   '  db-a:',
   '    mysql_connections: "80"',
-  '    mysql_cpu: "75"',
+  '    mysql_threads_running: "75"',
   '    _routing:',
   '      receiver_type: "slack"',
   '      webhook_url: "https://hooks.slack.com/services/xxx/old"',
@@ -37,7 +37,7 @@ const EXAMPLE_NEW = [
   '  db-a:',
   '    mysql_connections: "120"',
   '    mysql_connections_critical: "200"',
-  '    mysql_cpu: "75"',
+  '    mysql_threads_running: "75"',
   '    _routing:',
   '      receiver_type: "webhook"',
   '      webhook_url: "https://hooks.example.com/alerts"',
@@ -119,7 +119,7 @@ describe('security guards inherited/added by the engine', () => {
       '  __proto__:',
       '    polluted: "yes"',
       '  db-a:',
-      '    mysql_cpu: "75"',
+      '    mysql_threads_running: "75"',
     ].join('\n');
     const { tenants } = extractTenants(malicious);
     // Real guard: a `tenants['__proto__'] = {}` assignment would SWAP the
@@ -136,11 +136,11 @@ describe('security guards inherited/added by the engine', () => {
       'tenants:',
       '  db-a:',
       '    __proto__: "bad"',
-      '    mysql_cpu: "75"',
+      '    mysql_threads_running: "75"',
     ].join('\n');
     const { tenants } = extractTenants(malicious);
     expect(Object.prototype.hasOwnProperty.call(tenants['db-a'], '__proto__')).toBe(false);
-    expect(tenants['db-a'].mysql_cpu).toBe('75');
+    expect(tenants['db-a'].mysql_threads_running).toBe('75');
     expect(({} as Record<string, unknown>).bad).toBeUndefined();
   });
 

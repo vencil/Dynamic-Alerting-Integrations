@@ -42,16 +42,18 @@ spec:
     - record: tenant:alert_threshold:mysql_connections
       expr: max by(tenant) (user_threshold{component="mysql", metric="connections",
         severity="warning"})
-    - record: tenant:alert_threshold:mysql_cpu
-      expr: max by(tenant) (user_threshold{component="mysql", metric="cpu", severity="warning"})
+    - record: tenant:alert_threshold:mysql_threads_running
+      expr: max by(tenant) (user_threshold{component="mysql", metric="threads_running",
+        severity="warning"})
     - record: tenant:alert_threshold:mysql_replication_lag
       expr: max by(tenant) (user_threshold{component="mysql", metric="replication_lag",
         severity="warning"})
     - record: tenant:alert_threshold:mysql_connections_critical
       expr: max by(tenant) (user_threshold{component="mysql", metric="connections",
         severity="critical"})
-    - record: tenant:alert_threshold:mysql_cpu_critical
-      expr: max by(tenant) (user_threshold{component="mysql", metric="cpu", severity="critical"})
+    - record: tenant:alert_threshold:mysql_threads_running_critical
+      expr: max by(tenant) (user_threshold{component="mysql", metric="threads_running",
+        severity="critical"})
     - record: tenant:alert_threshold:mysql_replication_lag_critical
       expr: max by(tenant) (user_threshold{component="mysql", metric="replication_lag",
         severity="critical"})
@@ -331,17 +333,17 @@ spec:
         tier: '{{ $labels.tier }}'
     - alert: MariaDBHighThreadsRunning
       expr: "(\n  (\n    (\n      tenant:mysql_threads_running:avg1m\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:mysql_cpu\n    )\n    unless on(tenant)\n\
-        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  (\n    (\n      tenant:mysql_threads_running:avg1m\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:mysql_cpu\n    )\n    unless on(tenant)\n\
-        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left\n      tenant:alert_threshold:mysql_threads_running\n    )\n\
+        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        )\nor\n(\n  (\n    (\n      tenant:mysql_threads_running:avg1m\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:mysql_threads_running\n    )\n\
+        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
+        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         severity: warning
-        metric_group: cpu
+        metric_group: threads_running
         tenant: '{{ $labels.tenant }}'
       annotations:
         summary: High running-thread saturation on {{ $labels.tenant }}
@@ -359,17 +361,17 @@ spec:
         tier: '{{ $labels.tier }}'
     - alert: MariaDBHighThreadsRunningCritical
       expr: "(\n  (\n    (\n      tenant:mysql_threads_running:avg1m\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:mysql_cpu_critical\n    )\n   \
-        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
+        \ group_left\n      tenant:alert_threshold:mysql_threads_running_critical\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
         )\nor\n(\n  (\n    (\n      tenant:mysql_threads_running:avg1m\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:mysql_cpu_critical\n    )\n   \
-        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \ group_left\n      tenant:alert_threshold:mysql_threads_running_critical\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         severity: critical
-        metric_group: cpu
+        metric_group: threads_running
         tenant: '{{ $labels.tenant }}'
       annotations:
         summary: Critical running-thread saturation on {{ $labels.tenant }}
@@ -389,13 +391,13 @@ spec:
       expr: "(\n  (\n    (\n      (\n        tenant:mysql_threads_connected:max\n\
         \        > on(tenant) group_left\n        tenant:alert_threshold:mysql_connections\n\
         \      )\n      and on(tenant)\n      (\n        tenant:mysql_threads_running:avg1m\n\
-        \        > on(tenant) group_left\n        tenant:alert_threshold:mysql_cpu\n\
+        \        > on(tenant) group_left\n        tenant:alert_threshold:mysql_threads_running\n\
         \      )\n    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
         } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
         )\nor\n(\n  (\n    (\n      (\n        tenant:mysql_threads_connected:max\n\
         \        > on(tenant) group_left\n        tenant:alert_threshold:mysql_connections\n\
         \      )\n      and on(tenant)\n      (\n        tenant:mysql_threads_running:avg1m\n\
-        \        > on(tenant) group_left\n        tenant:alert_threshold:mysql_cpu\n\
+        \        > on(tenant) group_left\n        tenant:alert_threshold:mysql_threads_running\n\
         \      )\n    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
         } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 60s
