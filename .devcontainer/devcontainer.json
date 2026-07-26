@@ -45,7 +45,13 @@
   // 3. 安裝 promtool（pinned，與 ci.yml 同版——手裝 2.x vs CI pin 3.x 的
   //    lookback 語意 skew 燒過 #1134；pin parity 由
   //    tests/preview/test_promtool_pin_parity.py 顧）
-  "postCreateCommand": "pip3 install --user pyyaml pytest-benchmark pytest-xdist mkdocs-material mkdocs-static-i18n pymdown-extensions -c requirements/ci-constraints.txt && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && bash .devcontainer/install-promtool.sh",
+  // The pip set MUST stay a superset of what the ci.yml job running the full
+  // pytest suite installs — enforced by check_devcontainer_dep_parity.py
+  // (#1254). A package CI has and the container lacks does not fail tests, it
+  // makes them skip themselves, so the container reports a greener result
+  // than CI (measured: 28 tests silently skipped). Keep the trailing
+  // `-c requirements/ci-constraints.txt` so versions match CI's pins.
+  "postCreateCommand": "pip3 install --user pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema pytest-benchmark mkdocs-material mkdocs-static-i18n pymdown-extensions -c requirements/ci-constraints.txt && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && bash .devcontainer/install-promtool.sh",
 
   "customizations": {
     "vscode": {

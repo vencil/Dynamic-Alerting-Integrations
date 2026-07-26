@@ -1185,6 +1185,26 @@ repos:
         # edit that never runs the gate.
         files: ^(k8s/.*\.ya?ml|helm/[^/]+/(values[^/]*\.ya?ml|Chart\.ya?ml|templates/.*\.ya?ml)|components/da-tools/app/(entrypoint\.py|build\.sh)|scripts/tools/lint/check_image_pin_capability\.py)$
 
+      - id: devcontainer-dep-parity
+        name: "dev container must declare every Python dep CI installs (#1254)"
+        entry: python3 -X utf8 scripts/tools/lint/check_devcontainer_dep_parity.py
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        # The dev container is the MAIN PATH for `make dc-test`, but a package
+        # CI installs and the container lacks does NOT fail the suite — the
+        # affected tests skip themselves, so the container reports a GREENER
+        # result than CI (measured at #1254: 28 tests silently skipped).
+        # Asserts {CI's pip set} ⊆ {devcontainer postCreateCommand's pip set};
+        # container extras (mkdocs-*, pytest-benchmark) are allowed.
+        # Fail-closed: an unparseable file, or a full-suite job that appears to
+        # install nothing, exits 2 rather than passing vacuously.
+        # Scope is the DECLARATION only — it cannot know what an
+        # already-built container actually has (rebuild still required).
+        # `files:` covers both declaration sites plus the gate itself; a regex
+        # narrower than what the gate reads means edits that never run it.
+        files: ^(\.devcontainer/devcontainer\.json|\.github/workflows/ci\.yml|scripts/tools/lint/check_devcontainer_dep_parity\.py)$
+
       - id: vmalert-coverage-check
         name: rule-pack alert firing-coverage baseline (#947 gate A/replay gap guard)
         entry: python3 -X utf8 scripts/tools/lint/check_vmalert_coverage.py --ci

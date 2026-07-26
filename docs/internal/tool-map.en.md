@@ -158,6 +158,7 @@ lang: en
 | `check_design_token_usage.py` | JSX 設計 token 使用完整性 lint |
 | `check_dev_bypass_manifest.py` | ADR-022 Layer 4 (deploy-time guard). |
 | `check_dev_rules_enforcement.py` | detect doc-drift in dev-rules.md. |
+| `check_devcontainer_dep_parity.py` | dev container must declare every Python dep CI installs. |
 | `check_devrules_size.py` | Dev-rules 尺寸上限檢查。 |
 | `check_dist_source_consistency.py` | Catch portal dist commits without matching source change (testing-playbook §LL §2, TRK-239). |
 | `check_doc_datools_cmds.py` | documented `da-tools` binary-wrapper subcommands |

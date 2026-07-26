@@ -234,6 +234,9 @@
   "scripts/tools/lint/check_dev_rules_enforcement.py": [
    "tests/lint/test_check_dev_rules_enforcement.py"
   ],
+  "scripts/tools/lint/check_devcontainer_dep_parity.py": [
+   "tests/lint/test_check_devcontainer_dep_parity.py"
+  ],
   "scripts/tools/lint/check_devrules_size.py": [
    "tests/lint/test_check_devrules_size.py"
   ],
@@ -657,7 +660,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "fce559f912ffe82a6a0d614b1b23469c5cb355ac917a78137c39afae35e21d78",
+ "source_digest": "f36ad5dba626e482ba130fd16c76d59397e62173d383a51957dd0a7e0ffca993",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -744,6 +747,7 @@
   "tests/lint/test_check_design_token_usage.py",
   "tests/lint/test_check_dev_bypass_manifest.py",
   "tests/lint/test_check_dev_rules_enforcement.py",
+  "tests/lint/test_check_devcontainer_dep_parity.py",
   "tests/lint/test_check_devrules_size.py",
   "tests/lint/test_check_doc_datools_cmds.py",
   "tests/lint/test_check_doc_freshness.py",
@@ -949,6 +953,9 @@
    "tests/dx/test_preflight_msg_validator.py",
    "tests/lint/test_check_commit_scope_doc.py"
   ],
+  ".devcontainer/devcontainer.json": [
+   "tests/lint/test_check_devcontainer_dep_parity.py"
+  ],
   ".devcontainer/install-promtool.sh": [
    "tests/preview/test_promtool_pin_parity.py"
   ],
@@ -965,6 +972,7 @@
   ".github/workflows/ci.yml": [
    "tests/dx/test_compile_custom_alerts.py",
    "tests/lint/test_check_admin_config_schema.py",
+   "tests/lint/test_check_devcontainer_dep_parity.py",
    "tests/lint/test_check_pint.py",
    "tests/ops/test_portal_path_filter_coverage.py",
    "tests/preview/test_promtool_pin_parity.py"
@@ -1701,6 +1709,9 @@
   ],
   "scripts/tools/lint/check_confd_schema.py": [
    "tests/lint/test_check_confd_schema.py"
+  ],
+  "scripts/tools/lint/check_devcontainer_dep_parity.py": [
+   "tests/lint/test_check_devcontainer_dep_parity.py"
   ],
   "scripts/tools/lint/check_doc_datools_cmds.py": [
    "tests/lint/test_check_doc_datools_cmds.py"
