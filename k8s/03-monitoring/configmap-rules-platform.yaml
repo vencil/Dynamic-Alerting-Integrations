@@ -138,6 +138,127 @@ data:
               # CONTRACT (renaming the heading rots this link; rule-YAML URLs are not linted).
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#threshold-govern"
 
+          # The companion to ThresholdGovernanceStale above, and the reason
+          # #1242 was opened: that alert reads the CRONJOB face
+          # (kube_cronjob_status_last_successful_time), which a CronJob that has
+          # NEVER succeeded simply does not have — so it is structurally
+          # incapable of firing for the worst case. threshold-govern was pinned
+          # to an image that did not contain its program and failed weekly for
+          # MONTHS with zero signal (see #1040 G2 / #1240). Design notes:
+          #   - Reads the JOB face instead. Job objects only exist once
+          #     something actually ran, so a fresh install is silent by
+          #     construction — this is what lets this rule be strict where the
+          #     CronJob-face rule had to stay lenient for cold start.
+          #   - BOTH branches are gated on TERMINAL Jobs (Failed OR Complete).
+          #     This is load-bearing, not tidiness: an earlier draft compared
+          #     the latest failed start against the latest start of ANY Job. A
+          #     new Job gets its start_time the moment it is created but its
+          #     condition only after the backoff, so every new run briefly broke
+          #     the equality, emptied the vector, and RESET the `for: 15m`
+          #     timer. maintenance-scheduler runs every 5 MINUTES, so the timer
+          #     could never accumulate — the rule was structurally incapable of
+          #     firing for it, which is the very defect class it exists to
+          #     catch. Pinned by the `newer-run-in-flight-...` promtool case.
+          #   - "LAST run failed", not "any retained failed Job". Upstream
+          #     kubernetes-mixin's KubeJobFailed (`kube_job_failed > 0`) keeps
+          #     firing on a retained failure until a human deletes the Job
+          #     ("Removing failed job after investigation should clear this
+          #     alert"). maintenance-scheduler runs every 5 MINUTES, so that
+          #     semantic turns one blip into a permanently-lit alert with no
+          #     notifier to act on it. Comparing the latest FAILED start against
+          #     the latest start of ANY outcome makes a recovery self-resolve.
+          #   - `condition="true"` is pinned deliberately: KSM emits three
+          #     series per Job condition (true/false/unknown), exactly one of
+          #     which is 1. mixin's bare `> 0` would also select
+          #     condition="false"; it survives only because Kubernetes does not
+          #     currently write Failed=False.
+          #   - `owner_kind="CronJob"` keeps a hand-run `kubectl create job` out
+          #     of the platform's self-monitoring face.
+          #   - Every join operand is pre-projected with `max by (job_name,
+          #     namespace)`. Without it the KSM scrape labels (instance/job)
+          #     reach the join and a second KSM replica turns group_left into an
+          #     illegal many-to-many — the same alert-identity class the sibling
+          #     documents at the top of this file.
+          #   - Generic over the monitoring namespace rather than pinned to one
+          #     cronjob name: "the next CronJob repeats the gap" is precisely
+          #     what #1242 is about. Tenant namespaces are out of scope.
+          # severity:warning — a failed platform CronJob is a next-business-day
+          # repair, not a 3am page. ⚠️ KEEP IN SYNC with
+          # tests/rulepacks/platform-cronjob-failure.rules.yaml (expr/labels/`for`).
+          - alert: CronJobLastRunFailed
+            expr: |
+              (
+                max by (owner_name, namespace) (
+                  (
+                    max by (job_name, namespace) (
+                      kube_job_status_start_time{namespace="monitoring"}
+                    )
+                    and on (job_name, namespace)
+                      max by (job_name, namespace) (
+                        kube_job_failed{namespace="monitoring", condition="true"}
+                      ) == 1
+                  )
+                  * on (job_name, namespace) group_left (owner_name)
+                    max by (job_name, namespace, owner_name) (
+                      kube_job_owner{namespace="monitoring", owner_kind="CronJob"}
+                    )
+                )
+                ==
+                max by (owner_name, namespace) (
+                  (
+                    max by (job_name, namespace) (
+                      kube_job_status_start_time{namespace="monitoring"}
+                    )
+                    and on (job_name, namespace)
+                      (
+                        max by (job_name, namespace) (
+                          kube_job_failed{namespace="monitoring", condition="true"}
+                        )
+                        or
+                        max by (job_name, namespace) (
+                          kube_job_complete{namespace="monitoring", condition="true"}
+                        )
+                      ) == 1
+                  )
+                  * on (job_name, namespace) group_left (owner_name)
+                    max by (job_name, namespace, owner_name) (
+                      kube_job_owner{namespace="monitoring", owner_kind="CronJob"}
+                    )
+                )
+              )
+              unless on (owner_name, namespace)
+                label_replace(
+                  max by (cronjob, namespace) (
+                    kube_cronjob_spec_suspend{namespace="monitoring"}
+                  ) == 1,
+                  "owner_name", "$1", "cronjob", "(.*)"
+                )
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "CronJob {{ $labels.owner_name }}: most recent run failed"
+              description: |
+                The most recent Job created by CronJob {{ $labels.owner_name }}
+                in namespace {{ $labels.namespace }} ended in a Failed
+                condition. Unlike ThresholdGovernanceStale — which needs a
+                PREVIOUS success to measure staleness against — this fires the
+                first time a run fails, including for a CronJob that has never
+                succeeded even once.
+                NOT urgent: platform CronJobs are weekly (threshold-govern) or
+                every-5-minutes (maintenance-scheduler); neither carries a 3am
+                action. Triage in business hours.
+                Check: (a) `kubectl get jobs -n {{ $labels.namespace }}` and the
+                failing pod's logs; (b) whether the CronJob's pinned image
+                actually contains the program it invokes — that failure mode is
+                what motivated this alert and is now also gated at CI time by
+                scripts/tools/lint/check_image_pin_capability.py; (c) whether a
+                dependency the Job talks to (tenant-api, Prometheus) is
+                reachable from this namespace.
+                Self-resolving: a subsequent successful run clears this without
+                anyone deleting the failed Job. Suspending the CronJob also
+                silences it, matching ThresholdGovernanceStale.
+
           # --- Exporter Health ---
           - alert: ThresholdExporterDown
             expr: up{job="threshold-exporter"} == 0
