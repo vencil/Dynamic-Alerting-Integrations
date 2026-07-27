@@ -1,0 +1,234 @@
+# promtool unit tests for CronJobLastRunFailed (issue #1242).
+#
+# What this alert exists for: ThresholdGovernanceStale detects "has not
+# SUCCEEDED in 8 days", but it reads kube_cronjob_status_last_successful_time —
+# a series that a CronJob which has NEVER succeeded does not have. A CronJob
+# pinned to an image that cannot run it therefore failed weekly for months with
+# zero signal. This alert closes that by reading the JOB face instead, which
+# only exists once something actually ran.
+#
+# The distinguishing case is `older-failure-then-success-no-fire`: upstream
+# kubernetes-mixin's KubeJobFailed (`kube_job_failed > 0`) keeps firing on any
+# RETAINED failed Job until a human deletes it. With maintenance-scheduler on a
+# */5 schedule that turns one blip into a permanently-lit alert. We assert the
+# "latest run" semantics instead, so a recovery self-resolves.
+#
+# Timestamps: start_time values are compared against each OTHER (never against
+# time()), so small integers are sufficient and the test does not depend on the
+# evaluation wall clock.
+rule_files:
+  - platform-cronjob-failure.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ── fires: the most recent Job for this CronJob failed ──────────────────
+  - interval: 1m
+    name: cronjob-latest-run-failed-fires-after-for-and-projects-labels
+    input_series:
+      - series: 'kube_job_status_start_time{job_name="tg-2",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "200x30"
+      - series: 'kube_job_failed{job_name="tg-2",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x30"
+      - series: 'kube_job_owner{job_name="tg-2",namespace="monitoring",owner_kind="CronJob",owner_name="threshold-govern",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x30"
+    alert_rule_test:
+      # for: 15m must be real — a for:0s mutant would already fire at 10m.
+      - eval_time: 10m
+        alertname: CronJobLastRunFailed
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: CronJobLastRunFailed
+        exp_alerts:
+          # exp_labels asserts EXACTLY {severity, owner_name, namespace}: no
+          # instance / job / job_name / condition. That is the regression guard
+          # for the alert-identity bug the sibling ThresholdGovernanceStale was
+          # fixed for — a bare join would carry the KSM pod's instance label.
+          - exp_labels:
+              severity: warning
+              owner_name: threshold-govern
+              namespace: monitoring
+            exp_annotations:
+              summary: "CronJob threshold-govern: most recent run failed"
+
+  # ── does NOT fire: an older Job failed but the latest one succeeded ─────
+  # This is the case that separates us from mixin's KubeJobFailed.
+  - interval: 1m
+    name: cronjob-older-failure-then-success-no-fire
+    input_series:
+      # failed run, started earlier
+      - series: 'kube_job_status_start_time{job_name="ms-1",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "100x30"
+      - series: 'kube_job_failed{job_name="ms-1",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x30"
+      - series: 'kube_job_owner{job_name="ms-1",namespace="monitoring",owner_kind="CronJob",owner_name="maintenance-scheduler",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x30"
+      # later run, SUCCEEDED. kube_job_complete{condition="true"} is what KSM
+      # actually emits for a completed Job — modelling success as "a newer
+      # start_time and no condition series" would make it indistinguishable
+      # from a run that is still in flight, which is precisely the confusion
+      # that let the for-timer-reset bug below slip through review once.
+      - series: 'kube_job_status_start_time{job_name="ms-2",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "400x30"
+      - series: 'kube_job_complete{job_name="ms-2",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x30"
+      - series: 'kube_job_owner{job_name="ms-2",namespace="monitoring",owner_kind="CronJob",owner_name="maintenance-scheduler",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CronJobLastRunFailed
+        exp_alerts: []
+
+  # ── STILL fires while the next run is in flight ─────────────────────────
+  # THE regression guard for the bug this rule nearly shipped with. An earlier
+  # draft compared the latest FAILED start against the latest start of ANY Job,
+  # including one that had only just been created. A new Job gets its
+  # start_time immediately but its Failed/Complete condition only after the
+  # backoff, so every new run briefly broke the equality, emptied the vector,
+  # and RESET the `for: 15m` timer. maintenance-scheduler runs every 5 minutes,
+  # so the timer could never accumulate and the alert was structurally
+  # incapable of firing for it — the exact defect class this alert exists to
+  # catch. Restricting the right-hand branch to TERMINAL Jobs (failed OR
+  # complete) is what fixes it: an in-flight run no longer votes.
+  - interval: 1m
+    name: newer-run-in-flight-previous-run-failed-still-fires
+    input_series:
+      # previous run: failed
+      - series: 'kube_job_status_start_time{job_name="ms-3",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "100x40"
+      - series: 'kube_job_failed{job_name="ms-3",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x40"
+      - series: 'kube_job_owner{job_name="ms-3",namespace="monitoring",owner_kind="CronJob",owner_name="maintenance-scheduler",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x40"
+      # next run: started, no terminal condition yet — must NOT silence the alert
+      - series: 'kube_job_status_start_time{job_name="ms-4",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "_x5 400x35"
+      - series: 'kube_job_owner{job_name="ms-4",namespace="monitoring",owner_kind="CronJob",owner_name="maintenance-scheduler",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "_x5 1x35"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CronJobLastRunFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              owner_name: maintenance-scheduler
+              namespace: monitoring
+            exp_annotations:
+              summary: "CronJob maintenance-scheduler: most recent run failed"
+
+  # ── one alert, not two, when kube-state-metrics runs >1 replica ─────────
+  # Every join operand is pre-projected with `max by (job_name, namespace)`.
+  # Without that the KSM scrape labels reach the join and group_left becomes an
+  # illegal many-to-many. deployment-kube-state-metrics.yaml pins replicas: 1
+  # today, so this fixture is the only thing standing between that projection
+  # and a silent regression.
+  - interval: 1m
+    name: dual-ksm-replica-yields-single-alert
+    input_series:
+      - series: 'kube_job_status_start_time{job_name="tg-5",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "200x30"
+      - series: 'kube_job_status_start_time{job_name="tg-5",namespace="monitoring",instance="ksm-1:8080",job="kube-state-metrics"}'
+        values: "200x30"
+      - series: 'kube_job_failed{job_name="tg-5",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x30"
+      - series: 'kube_job_failed{job_name="tg-5",namespace="monitoring",condition="true",instance="ksm-1:8080",job="kube-state-metrics"}'
+        values: "1x30"
+      - series: 'kube_job_owner{job_name="tg-5",namespace="monitoring",owner_kind="CronJob",owner_name="threshold-govern",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x30"
+      - series: 'kube_job_owner{job_name="tg-5",namespace="monitoring",owner_kind="CronJob",owner_name="threshold-govern",owner_is_controller="true",instance="ksm-1:8080",job="kube-state-metrics"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CronJobLastRunFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              owner_name: threshold-govern
+              namespace: monitoring
+            exp_annotations:
+              summary: "CronJob threshold-govern: most recent run failed"
+
+  # ── does NOT fire: never scheduled (cold start) ─────────────────────────
+  # A fresh install has no Job objects at all, so the JOB face is empty. This is
+  # exactly why this alert can be strict where ThresholdGovernanceStale had to
+  # stay lenient: it cannot false-fire on a cluster that has not run yet.
+  - interval: 1m
+    name: cronjob-cold-start-no-jobs-no-fire
+    input_series:
+      # an unrelated series so the evaluation still runs
+      - series: 'up{job="kube-state-metrics"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CronJobLastRunFailed
+        exp_alerts: []
+
+  # ── does NOT fire: deliberately suspended ───────────────────────────────
+  - interval: 1m
+    name: cronjob-suspended-no-fire
+    input_series:
+      - series: 'kube_job_status_start_time{job_name="tg-3",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "200x30"
+      - series: 'kube_job_failed{job_name="tg-3",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x30"
+      - series: 'kube_job_owner{job_name="tg-3",namespace="monitoring",owner_kind="CronJob",owner_name="threshold-govern",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x30"
+      - series: 'kube_cronjob_spec_suspend{cronjob="threshold-govern",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CronJobLastRunFailed
+        exp_alerts: []
+
+  # ── does NOT fire: a one-off Job nobody scheduled ───────────────────────
+  # owner_kind filters to CronJob, so a hand-run `kubectl create job` that fails
+  # is the operator's business, not the platform's self-monitoring signal.
+  - interval: 1m
+    name: manual-job-without-cronjob-owner-no-fire
+    input_series:
+      - series: 'kube_job_status_start_time{job_name="adhoc-1",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "200x30"
+      - series: 'kube_job_failed{job_name="adhoc-1",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x30"
+      - series: 'kube_job_owner{job_name="adhoc-1",namespace="monitoring",owner_kind="",owner_name="",owner_is_controller="false",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CronJobLastRunFailed
+        exp_alerts: []
+
+  # ── does NOT fire: Failed condition present but FALSE ───────────────────
+  # KSM emits three series per Job condition (true/false/unknown), exactly one
+  # of which is 1. Upstream mixin's bare `kube_job_failed > 0` would select the
+  # condition="false" series; we pin condition="true" so a Job that carries a
+  # Failed=False condition cannot be misread as failed.
+  - interval: 1m
+    name: failed-condition-false-no-fire
+    input_series:
+      - series: 'kube_job_status_start_time{job_name="tg-4",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "200x30"
+      - series: 'kube_job_failed{job_name="tg-4",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "0x30"
+      - series: 'kube_job_failed{job_name="tg-4",namespace="monitoring",condition="false",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x30"
+      - series: 'kube_job_owner{job_name="tg-4",namespace="monitoring",owner_kind="CronJob",owner_name="threshold-govern",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CronJobLastRunFailed
+        exp_alerts: []
+
+  # ── does NOT fire: a different namespace is out of scope ────────────────
+  - interval: 1m
+    name: cronjob-outside-monitoring-namespace-no-fire
+    input_series:
+      - series: 'kube_job_status_start_time{job_name="tenant-1",namespace="db-a",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "200x30"
+      - series: 'kube_job_failed{job_name="tenant-1",namespace="db-a",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x30"
+      - series: 'kube_job_owner{job_name="tenant-1",namespace="db-a",owner_kind="CronJob",owner_name="tenant-backup",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CronJobLastRunFailed
+        exp_alerts: []
