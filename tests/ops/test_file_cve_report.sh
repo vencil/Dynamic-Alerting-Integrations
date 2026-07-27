@@ -137,4 +137,108 @@ echo "$out6" | grep -q 'issue edit 42 --repo o/r --title T — 2 fixable' \
   || fail "case10 expected the count in the edited title; got: $out6"
 echo "ok: case10 (title carries the live count)"
 
+# ── Message-truth cases (#1246 follow-up) ─────────────────────────────────────
+# The notification's WORDING must be true for every combination of (coverage
+# direction) x (total direction) x (new ids present) x (baseline readable).
+# The 2026-07-27 run proved the cost of getting this wrong: the bucket fell
+# 120 -> 62 and the alert announced a worsening, because a renamed image mints
+# ids the previous snapshot never had.
+
+# Body carrying the CURRENT marker format (with the stored total).
+mkbody_t() { # <file> <missing> <total> <tokens...>
+  local f="$1" m="$2" t="$3"; shift 3
+  printf 'previous body\n\n<!-- cve-state: missing=%s total=%s tokens=[%s] -->\n' "$m" "$t" "$*" > "$f"
+}
+# run_delta with a caller-chosen EXPECTED so coverage changes can be exercised.
+run_exp() { # <dir> <prev_body> <expected>
+  DRY_RUN_ISSUE_NUM=42 DRY_RUN_PREV_BODY="$2" GITHUB_STEP_SUMMARY=/dev/null \
+  DO_FILE=true DRY_RUN=1 REPO=o/r RUN_URL=http://run \
+    bash "$SCRIPT" "$1" nightly-cve "T" "$3" "self-built component" 2>&1
+}
+# The `issue edit` argv up to --body: lets a test assert the TITLE specifically
+# rather than matching text that the refreshed BODY also happens to contain.
+edit_title_of() { sed -n 's/.*DRY_RUN gh issue edit [0-9]* --repo [^ ]* --title \(.*\) --body.*/\1/p'; }
+
+# --- Case 11: coverage collapsed → must NOT be reported as an improvement ---
+# An unscanned image contributes zero findings, so the total falls BECAUSE the
+# scan broke. Calling that "not an aggregate regression" turns a degradation
+# alert into an all-clear — the worst failure this path can have.
+d11="$WORK/d11"; mkdir -p "$d11"          # zero fragments: every image failed
+b11="$WORK/b11"; mkbody_t "$b11" 0 3 "a/CVE-2026-0001 a/CVE-2026-0002 b/CVE-2026-0003"
+cmt11="$(run_exp "$d11" "$b11" 3 | comment_of)"
+echo "$cmt11" | grep -q "SCAN COVERAGE REGRESSED" || fail "case11 must lead with the coverage regression; got: $cmt11"
+echo "$cmt11" | grep -q "Not an aggregate regression" && fail "case11 must NOT call a coverage collapse an improvement; got: $cmt11"
+echo "$cmt11" | grep -q "New finding id" && fail "case11 must not claim new ids when there are none; got: $cmt11"
+echo "ok: case11 (coverage collapse → regression wording, no false all-clear)"
+
+# --- Case 12: total DOWN with a new id (the rename shape) → informational ---
+d12="$WORK/d12"; mkdir -p "$d12"; mkfrag_cve "$d12" newname CVE-2026-1111
+b12="$WORK/b12"; mkbody_t "$b12" 0 3 "oldname/CVE-2026-1111 oldname/CVE-2026-2222 oldname/CVE-2026-3333"
+cmt12="$(run_exp "$d12" "$b12" 1 | comment_of)"
+echo "$cmt12" | grep -q "Posture worsened" && fail "case12 must not call a 3 → 1 drop a worsening; got: $cmt12"
+echo "$cmt12" | grep -q "TOTAL went DOWN: 3 → 1" || fail "case12 expected both totals; got: $cmt12"
+echo "ok: case12 (total down + new id → informational, both numbers shown)"
+
+# --- Case 13: total UP → still a worsening, now quantified ---
+d13="$WORK/d13"; mkdir -p "$d13"; mkfrag_cve "$d13" alpha CVE-2026-1111 CVE-2026-4444
+b13="$WORK/b13"; mkbody_t "$b13" 0 1 "alpha/CVE-2026-1111"
+cmt13="$(run_exp "$d13" "$b13" 1 | comment_of)"
+echo "$cmt13" | grep -q "Posture worsened" || fail "case13 expected a worsening; got: $cmt13"
+echo "$cmt13" | grep -q "Total: 1 → 2" || fail "case13 must quantify the rise; got: $cmt13"
+echo "ok: case13 (total up → worsened + delta)"
+
+# --- Case 14: total UP but coverage RECOVERED → say so ---
+# Findings that were merely invisible now count. Calling that "worsened" with no
+# caveat reads as new exposure.
+d14="$WORK/d14"; mkdir -p "$d14"; mkfrag_cve "$d14" alpha CVE-2026-1111; mkfrag_cve "$d14" beta CVE-2026-5555
+b14="$WORK/b14"; mkbody_t "$b14" 1 1 "alpha/CVE-2026-1111"
+cmt14="$(run_exp "$d14" "$b14" 2 | comment_of)"
+echo "$cmt14" | grep -q "coverage also recovered" || fail "case14 must flag recovered coverage; got: $cmt14"
+echo "ok: case14 (total up via recovered coverage → newly visible, not newly introduced)"
+
+# --- Case 15: total UNCHANGED with different ids → not a worsening ---
+d15="$WORK/d15"; mkdir -p "$d15"; mkfrag_cve "$d15" newname CVE-2026-1111
+b15="$WORK/b15"; mkbody_t "$b15" 0 1 "oldname/CVE-2026-1111"
+cmt15="$(run_exp "$d15" "$b15" 1 | comment_of)"
+echo "$cmt15" | grep -q "Posture worsened" && fail "case15 must not call a like-for-like swap a worsening; got: $cmt15"
+echo "$cmt15" | grep -q "TOTAL UNCHANGED at 1" || fail "case15 expected the unchanged-total wording; got: $cmt15"
+echo "ok: case15 (equal totals, swapped ids → informational)"
+
+# --- Case 16: id set does not account for every finding → withhold arithmetic ---
+# `total` counts EVERY Trivy id; tokens only capture CVE-/GHSA- shapes. If a
+# finding arrives in another namespace the derived numbers would be wrong, so
+# the alert must still fire but must not do arithmetic it cannot stand behind.
+d16="$WORK/d16"; mkdir -p "$d16"
+printf 'alpha\t2\n| HIGH | CVE-2026-1111 | pkg |\n| HIGH | ALAS2-2026-9999 | pkg |\n' > "$d16/frag-alpha.txt"
+b16="$WORK/b16"; mkbody_t "$b16" 0 1 "alpha/CVE-2026-0000"
+cmt16="$(run_exp "$d16" "$b16" 1 | comment_of)"
+echo "$cmt16" | grep -q "Totals withheld" || fail "case16 expected withheld arithmetic; got: $cmt16"
+echo "$cmt16" | grep -q "Total: " && fail "case16 must not emit a before/after it cannot compute; got: $cmt16"
+echo "ok: case16 (unaccounted id shape → alert without arithmetic)"
+
+# --- Case 17: all clean → refresh title/body BEFORE closing ---
+# #1058 closed still titled "— 5 fixable" over yesterday's table, contradicting
+# its own "all clean" comment. Order matters: a title fixed AFTER the close is
+# still wrong at the moment the reader clicks the notification.
+d17="$WORK/d17"; mkdir -p "$d17"; mkfrag "$d17" alpha 0; mkfrag "$d17" beta 0
+b17="$WORK/b17"; mkbody_t "$b17" 0 5 "alpha/CVE-2026-1111"
+out17="$(run_exp "$d17" "$b17" 2)"
+echo "$out17" | edit_title_of | grep -q "0 fixable" || fail "case17 the EDITED TITLE must carry the live 0; got: $(echo "$out17" | edit_title_of)"
+echo "$out17" | grep -q "DRY_RUN gh issue close" || fail "case17 expected the close; got: $out17"
+[ "$(echo "$out17" | grep -n 'issue edit' | head -1 | cut -d: -f1)" -lt \
+  "$(echo "$out17" | grep -n 'issue close' | head -1 | cut -d: -f1)" ] \
+  || fail "case17 must edit BEFORE closing; got: $out17"
+echo "$out17" | grep -q "cve-state: missing=0 total=0 tokens=\[\]" \
+  || fail "case17 the closed body needs an EMPTY baseline, else a reopen under-notifies; got: $out17"
+echo "ok: case17 (all clean → title/body refreshed before close, empty baseline)"
+
+# --- Case 18: pre-#1246 marker (no total=) still compares ---
+# mkbody writes the OLD format. The fallback counts ids, which can only
+# under-count, so the worst case is under-claiming a rise — never inventing one.
+d18="$WORK/d18"; mkdir -p "$d18"; mkfrag_cve "$d18" alpha CVE-2026-1111 CVE-2026-4444
+b18="$WORK/b18"; mkbody "$b18" 0 "alpha/CVE-2026-1111"
+cmt18="$(run_exp "$d18" "$b18" 1 | comment_of)"
+echo "$cmt18" | grep -q "Total: 1 → 2" || fail "case18 old-format marker must still yield a delta; got: $cmt18"
+echo "ok: case18 (marker without total= → derived fallback still works)"
+
 echo "PASS: all file_cve_report.sh cases"

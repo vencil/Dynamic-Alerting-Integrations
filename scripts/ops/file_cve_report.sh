@@ -105,6 +105,19 @@ missing=$(( EXPECTED - present ))
 # nondeterministic order; without this every run would look "changed").
 tokens="$(printf '%s' "$tokens" | sort -u | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//')"
 
+# `total` sums the per-fragment header COUNTS, which summarize_trivy_cve.sh
+# derives from `group_by(.VulnerabilityID)` — i.e. EVERY id Trivy emits. The
+# token set only captures the CVE-/GHSA- shapes matched above, so an id in any
+# other namespace (ALAS-, RUSTSEC-, PYSEC-, DLA-, ...) would count toward the
+# total while minting no token. They agree today, but NOTHING enforces it, and a
+# silent divergence would make every before/after number in the notification
+# wrong. So measure it rather than assume it: on disagreement we still alert, we
+# just withhold arithmetic we cannot stand behind.
+tok_count="$(printf '%s' "$tokens" | tr ' ' '\n' | sed '/^$/d' | grep -c '/' || true)"
+tok_count="${tok_count:-0}"
+totals_comparable=1
+[ "$tok_count" -ne "$total" ] && totals_comparable=0
+
 {
   echo "# Nightly Image CVE Scan — ${KIND} — $(date -u +%F)"
   echo ""
@@ -186,6 +199,7 @@ fi
 prev_tokens=""
 have_baseline=0
 prev_missing=0
+prev_total=0
 if [ -n "$num" ]; then
   if [ "$DRY_RUN" = "1" ]; then
     # Test seam (see DRY_RUN_ISSUE_NUM): stand in for the issue body the offline
@@ -200,6 +214,18 @@ if [ -n "$num" ]; then
     prev_missing="$(printf '%s' "$marker" | sed -n 's/.*missing=\([0-9]*\).*/\1/p')"
     prev_missing="${prev_missing:-0}"
     prev_tokens="$(printf '%s' "$marker" | sed -n 's/.*tokens=\[\([^]]*\)\].*/\1/p')"
+    # Prefer the total the previous run STORED. Deriving it from the token count
+    # is only exact while every finding carries a CVE/GHSA id — see the
+    # totals_comparable note above — so the derivation is a fallback for markers
+    # written before `total=` existed, not the primary source.
+    prev_total="$(printf '%s' "$marker" | sed -n 's/.*[ ]total=\([0-9]*\).*/\1/p')"
+    if [ -z "$prev_total" ]; then
+      # Pre-#1246 marker. Counting ids can only UNDER-count (a non-CVE/GHSA id
+      # mints no token), so the worst case is under-claiming a rise — never
+      # inventing one.
+      prev_total="$(printf '%s' "$prev_tokens" | tr ' ' '\n' | sed '/^$/d' | grep -c '/' || true)"
+    fi
+    prev_total="${prev_total:-0}"
   fi
 fi
 
@@ -244,7 +270,11 @@ if [ "${#title_now}" -gt "$ISSUE_TITLE_MAX" ]; then
   title_now="${title_now:0:$ISSUE_TITLE_MAX}"
 fi
 
-state_marker="${STATE_OPEN} missing=${missing} tokens=[${tokens}] ${STATE_CLOSE}"
+# `total=` is stored explicitly (added #1246 f/u). Deriving it from the token
+# count is only correct while every id is a CVE/GHSA shape — see the
+# totals_comparable note above. Old markers lack the field; the reader below
+# falls back to the derivation for those, which is why the fallback stays.
+state_marker="${STATE_OPEN} missing=${missing} total=${total} tokens=[${tokens}] ${STATE_CLOSE}"
 
 if [ "$problem" -eq 1 ]; then
   body="$(printf '%sNightly image scan on `main` (%s): **%s** fixable HIGH/CRITICAL CVE(s) across %s/%s %s images scanned.\n\n%s\n%s\n**Remediate**: %sA failed build/scan is a Dockerfile/COPY break or a bad/missing image ref to fix directly. This issue is REFRESHED in place (body edited — no comment spam); it comments only when a NEW CVE appears or more images fail to scan, and auto-closes once clean.\n\n%s' \
@@ -255,13 +285,51 @@ if [ "$problem" -eq 1 ]; then
     echo "refreshing existing ${LABEL} issue #${num} (silent body edit)"
     gh_do issue edit "$num" --repo "$REPO" --title "$title_now" --body "$body"
     if [ "$worse" -eq 1 ]; then
-      # The ONE notifying path on an already-open issue. Lists what actually
-      # changed so the mail is worth opening.
-      note="⚠️ Posture worsened as of $(date -u +%F) (${RUN_URL})."
+      # The ONE notifying path on an already-open issue. Its wording must be TRUE
+      # for every combination of (coverage direction) x (total direction) x (new
+      # ids present) x (baseline readable) — an alert that overstates on a good
+      # day, or understates on a bad one, teaches the reader to stop opening it
+      # (#1228, the 33-night outage this path was rebuilt after).
+      #
+      # ORDER IS THE DESIGN. Coverage dominates the total: an image that fails to
+      # scan contributes ZERO findings, so a coverage regression MECHANICALLY
+      # lowers `total`. Comparing totals across a coverage change is meaningless,
+      # and calling such a drop an improvement is the worst possible failure —
+      # it converts a degradation alert into an all-clear. Coverage is therefore
+      # checked BEFORE any total comparison.
+      #
+      # Background on why new ids appear without new exposure: ids are
+      # image-scoped (`<image>/<CVE>`) — deliberate (#1228: a bare CVE-id set
+      # hides the same CVE reaching a SECOND image) — so RENAMING or REPLACING an
+      # image mints ids the previous snapshot never had. On 2026-07-27
+      # `configmap-reload` became `config-reloader` (16 findings -> 1) and the
+      # bucket fell 120 -> 62, yet the alert announced a worsening.
+      dated="as of $(date -u +%F) (${RUN_URL})"
+      if [ "$have_baseline" -eq 0 ]; then
+        # Fail open, but do not pretend to know a direction we cannot compute.
+        note="⚠️ Notifying without a comparable baseline ${dated}."$'\n\n'"No readable previous snapshot in this issue, so no direction can be established — treating that as worse on purpose."
+      elif [ "$missing" -gt "$prev_missing" ]; then
+        note="⚠️ SCAN COVERAGE REGRESSED ${dated}."$'\n\n'"Images failing to scan: ${prev_missing} → ${missing}. The finding total (${prev_total} → ${total}) is NOT comparable across a coverage change — an unscanned image contributes zero findings, so a total that held steady or fell may simply be hiding whatever the unscanned images carry. Fix the scan first."
+      elif [ "$totals_comparable" -eq 0 ]; then
+        # See the id-shape caveat where totals_comparable is computed: emit the
+        # ids, withhold arithmetic we cannot stand behind.
+        note="⚠️ New finding id(s) ${dated}."$'\n\n'"Totals withheld: this run's id set does not account for every counted finding (${tok_count} ids vs ${total} findings), so any before/after arithmetic would be wrong. See the note in file_cve_report.sh."
+      elif [ "$total" -gt "$prev_total" ]; then
+        note="⚠️ Posture worsened ${dated}."$'\n\n'"Total: ${prev_total} → ${total}."
+        if [ "$missing" -lt "$prev_missing" ]; then
+          # Coverage RECOVERED. Findings that were merely invisible now count.
+          note="${note}"$'\n\n'"⚠️ Read with care: coverage also recovered (images failing to scan: ${prev_missing} → ${missing}), so part of this rise is newly VISIBLE rather than newly introduced."
+        fi
+      elif [ "$total" -lt "$prev_total" ]; then
+        note="ℹ️ New finding id(s) ${dated}, but the TOTAL went DOWN: ${prev_total} → ${total}."$'\n\n'"Not an aggregate regression. Finding ids are image-scoped, so renaming or replacing an image mints ids the previous snapshot never had — check whether the \"new\" ids belong to an image that was just swapped before treating them as fresh exposure."
+      else
+        note="ℹ️ New finding id(s) ${dated}, with the TOTAL UNCHANGED at ${total}."$'\n\n'"An equal total with different ids is what a like-for-like image swap looks like — confirm before treating these as fresh exposure."
+      fi
+      # Only ever claim new ids when there ARE new ids: `worse` can also be set
+      # by a coverage regression alone, and the old wording announced "new
+      # findings" with nothing to list.
       [ -n "$new_tokens" ] && note="${note}"$'\n\n'"New findings: ${new_tokens}"
-      [ "$missing" -gt "$prev_missing" ] && note="${note}"$'\n\n'"Images failing to scan: ${prev_missing} → ${missing}."
-      [ "$have_baseline" -eq 0 ] && note="${note}"$'\n\n'"(No readable previous snapshot in this issue — notifying to fail open.)"
-      echo "posture worsened → commenting on #${num}"
+      echo "notifying on #${num}"
       gh_do issue comment "$num" --repo "$REPO" --body "$note"
     else
       echo "no new findings vs the previous run — silent refresh only"
@@ -280,6 +348,17 @@ else
   # problem==0 ⇒ total==0 AND missing==0 ⇒ genuinely all-clean, all scanned.
   if [ -n "$num" ]; then
     echo "all ${EXPECTED} ${KIND} images clean — closing ${LABEL} issue #${num}"
+    # #1246 follow-up: REFRESH before closing. Previously this path only
+    # commented + closed, so the issue kept the LAST FAILING title and body —
+    # #1058 closed reading "— 5 fixable" over a table of 5 CVEs and yesterday's
+    # run URL, directly contradicting its own "all clean, auto-closing" comment.
+    # A closed issue that argues with itself is worse than no issue: the next
+    # reader cannot tell which half is current. Title/body edits do not notify,
+    # so this costs nothing but truthfulness. The state marker is written too,
+    # giving a clean (empty) baseline if the issue is ever reopened.
+    clean_body="$(printf 'Nightly image scan on `main` (%s): **0** fixable HIGH/CRITICAL CVE(s) across %s/%s %s images scanned — all clean, so this issue was auto-closed.\n\nIt reopens (as a NEW issue) the next night a fixable finding or an unscannable image appears.\n\n%s' \
+      "$RUN_URL" "$present" "$EXPECTED" "$KIND" "$state_marker")"
+    gh_do issue edit "$num" --repo "$REPO" --title "$title_now" --body "$clean_body"
     gh_do issue comment "$num" --repo "$REPO" \
       --body "✅ All ${EXPECTED} ${KIND} images clean (0 fixable HIGH/CRITICAL) as of $(date -u +%F). Auto-closing. (${RUN_URL})"
     gh_do issue close "$num" --repo "$REPO"
