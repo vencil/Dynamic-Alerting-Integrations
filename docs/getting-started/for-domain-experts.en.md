@@ -42,7 +42,7 @@ data_mappings:
   mysql_connections:
     source_metric: "mysql_global_status_threads_connected"
     # Optional relabel_configs for transformation
-  mysql_cpu:
+  mysql_threads_running:
     source_metric: "mysql_global_status_threads_running"
 ```
 
@@ -348,7 +348,7 @@ A: Yes. Use `type: "scheduled"` with `range` parameter:
 
 ```yaml
 thresholds:
-  mysql_cpu:
+  mysql_threads_running:
     type: "scheduled"
     default:
       during_business_hours: "30"   # threads_running saturation (concurrent threads, NOT host CPU%)

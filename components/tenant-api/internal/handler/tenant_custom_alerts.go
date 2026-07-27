@@ -53,6 +53,13 @@ type PutCustomAlertsResponse struct {
 	Status     string `json:"status"`
 	TenantID   string `json:"tenant_id"`
 	SourceHash string `json:"source_hash"` // new hash post-write (for the next edit)
+	// Warnings carries non-blocking advisories for a write that SUCCEEDED —
+	// the #1231 deprecated-key alias notices from the shared write-boundary
+	// validation. They concern the tenant file's THRESHOLD keys (the write
+	// re-validates the whole merged document), not the recipes being saved:
+	// this endpoint is the portal's only tenant-file write path, so it is
+	// where a mysql_cpu-era file gets its author-facing migration signal.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // PutTenantCustomAlerts handles PUT /api/v1/tenants/{id}/custom-alerts.
@@ -228,7 +235,8 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		// Commit via the shared writer (re-validates schema + custom alerts,
 		// attributes the commit to the operator).
 		email := rbac.RequestEmail(r)
-		if err := d.Writer.Write(r.Context(), tenantID, email, merged); err != nil {
+		notices, err := d.Writer.Write(r.Context(), tenantID, email, merged)
+		if err != nil {
 			if errors.Is(err, gitops.ErrWriteOverloaded) {
 				WriteOverloaded(w, r)
 				return
@@ -252,6 +260,7 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			Status:     "success",
 			TenantID:   tenantID,
 			SourceHash: cfg.ComputeSourceHash([]byte(merged)),
+			Warnings:   notices,
 		})
 	}
 }

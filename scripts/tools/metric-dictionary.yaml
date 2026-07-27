@@ -19,10 +19,10 @@ mysql_global_status_threads_connected:
   note: "直接使用 scaffold_tenant.py 設定 mysql_connections 閾值"
 
 mysql_global_status_threads_running:
-  maps_to: mysql_cpu
+  maps_to: mysql_threads_running
   golden_rule: MariaDBHighThreadsRunning
   rule_pack: mariadb
-  note: "running-thread SATURATION（非主機 CPU%）；threshold key 保留 mysql_cpu（config 契約穩定性；metric/alert 已正名，#944 結案）。真 CPU% 見 PodContainerHighCPU"
+  note: "running-thread SATURATION（非主機 CPU%）；threshold key #1231 由 mysql_cpu 改名（知情推翻 #944「保留」決定；舊拼法 2-release 過渡窗內仍可解析）。真 CPU% 見 PodContainerHighCPU"
 
 mysql_global_status_slow_queries:
   maps_to: mysql_slow_queries
@@ -121,16 +121,10 @@ redis_connected_clients:
   note: "Redis 連線數 — 直接設定閾值"
 
 redis_evicted_keys_total:
-  maps_to: redis_evicted_keys_total
+  maps_to: redis_evicted_keys_rate  # #1196 B: 閾值 key 改名（alert 需求 _rate；原 _total 為 unwired 死 key）
   golden_rule: RedisHighEviction
   rule_pack: redis
   note: "Redis 驅逐 — rate() 指標"
-
-redis_keyspace_misses_total:
-  maps_to: redis_keyspace_misses_ratio
-  golden_rule: RedisHighCacheMiss
-  rule_pack: redis
-  note: "Cache miss — 需搭配 hits 計算比率"
 
 # ────────────────────────────────────────
 # MongoDB
@@ -142,13 +136,13 @@ mongodb_connections_current:
   note: "MongoDB 連線數 — 直接設定閾值"
 
 mongodb_mongod_replset_member_replication_lag:
-  maps_to: mongodb_repl_lag_seconds
+  maps_to: mongodb_replication_lag  # #1196 C: 閾值 key 改名（原 repl_lag_seconds 為 unwired 死 key）
   golden_rule: MongoDBReplicationLag
   rule_pack: mongodb
   note: "Replication lag — max by(tenant) 聚合"
 
 mongodb_ss_opcounters:
-  maps_to: mongodb_opcounters_total
+  maps_to: mongodb_opcounters_rate  # #1196 B: 閾值 key 改名（alert 需求 _rate；原 _total 為 unwired 死 key）
   golden_rule: MongoDBHighOps
   rule_pack: mongodb
   note: "Operations rate — sum by(tenant) 聚合"
@@ -157,22 +151,16 @@ mongodb_ss_opcounters:
 # Elasticsearch
 # ────────────────────────────────────────
 elasticsearch_jvm_memory_used_bytes:
-  maps_to: es_jvm_memory_used_percent
+  maps_to: es_heap_usage_percent  # #1196 C: 閾值 key 改名（原 es_jvm_memory_used_percent 為 unwired 死 key）
   golden_rule: ElasticsearchHighJVMMemory
   rule_pack: elasticsearch
   note: "JVM heap — 黃金標準已內建百分比計算"
 
 elasticsearch_filesystem_data_free_bytes:
-  maps_to: es_filesystem_free_percent
+  maps_to: es_disk_usage_percent  # #1196 C: 閾值 key 改名＋語意反向（free% 15 → used% 85）
   golden_rule: ElasticsearchLowDiskSpace
   rule_pack: elasticsearch
-  note: "磁碟空間 — 黃金標準已內建百分比計算"
-
-elasticsearch_cluster_health_status:
-  maps_to: es_cluster_health
-  golden_rule: ElasticsearchClusterUnhealthy
-  rule_pack: elasticsearch
-  note: "Cluster health — 0=green, 1=yellow, 2=red"
+  note: "磁碟空間 — 黃金標準已內建百分比計算（已用率語意，(1-available/size)*100）"
 
 # ────────────────────────────────────────
 # PostgreSQL

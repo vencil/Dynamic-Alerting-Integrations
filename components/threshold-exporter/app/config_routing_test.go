@@ -23,7 +23,7 @@ func TestValidateTenantKeys_MetadataReservedKey(t *testing.T) {
 			},
 		},
 	}
-	warnings := cfg.ValidateTenantKeys()
+	warnings := cfg.ValidateTenantKeys().Errors // #1231 c2 accessor
 	if len(warnings) != 0 {
 		t.Errorf("_metadata should be valid reserved key, got warnings: %v", warnings)
 	}
@@ -84,7 +84,7 @@ func TestResolve_ProfileFallbackToDefaults(t *testing.T) {
 	t.Parallel()
 	// Profile does NOT define a metric → fall back to defaults
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{"mysql_connections": 80, "mysql_cpu": 70},
+		Defaults: map[string]float64{"mysql_connections": 80, "mysql_threads_running": 70},
 		Profiles: map[string]map[string]ScheduledValue{
 			"standard-mariadb": {"mysql_connections": SV("85")},
 		},
@@ -94,8 +94,10 @@ func TestResolve_ProfileFallbackToDefaults(t *testing.T) {
 	}
 	cfg.ApplyProfiles()
 	result := cfg.Resolve()
-	if len(result) != 2 {
-		t.Fatalf("expected 2 resolved thresholds, got %d", len(result))
+	// #1231: mysql_threads_running dual-emits a legacy metric="cpu" twin
+	// during the alias transition window → 3 rows.
+	if len(result) != 3 {
+		t.Fatalf("expected 3 resolved thresholds, got %d", len(result))
 	}
 	// Find each metric
 	for _, r := range result {
@@ -104,9 +106,9 @@ func TestResolve_ProfileFallbackToDefaults(t *testing.T) {
 			if r.Value != 85 {
 				t.Errorf("connections: expected profile value 85, got %v", r.Value)
 			}
-		case "cpu":
+		case "threads_running", "cpu": // canonical row + legacy twin, same value
 			if r.Value != 70 {
-				t.Errorf("cpu: expected default value 70, got %v", r.Value)
+				t.Errorf("%s: expected default value 70, got %v", r.Metric, r.Value)
 			}
 		}
 	}
@@ -162,7 +164,7 @@ func TestResolve_ProfileWithSilentMode(t *testing.T) {
 		Profiles: map[string]map[string]ScheduledValue{
 			"standard-mariadb": {
 				"mysql_connections": SV("85"),
-				"_silent_mode":     SV("warning"),
+				"_silent_mode":      SV("warning"),
 			},
 		},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -354,13 +356,13 @@ func TestLoadDir_ProfilesMergeWithDefaults(t *testing.T) {
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
   mysql_connections: 80
-  mysql_cpu: 70
+  mysql_threads_running: 70
 `)
 	writeTestFile(t, dir, "_profiles.yaml", `
 profiles:
   standard-mariadb:
     mysql_connections: "85"
-    mysql_cpu: "75"
+    mysql_threads_running: "75"
 `)
 	writeTestFile(t, dir, "db-a.yaml", `
 tenants:
@@ -381,10 +383,12 @@ tenants:
 	cfg := mgr.GetConfig()
 	result := cfg.Resolve()
 
-	// db-a: connections=95 (tenant override), cpu=75 (profile)
-	// db-b: connections=85 (profile), cpu=75 (profile)
-	if len(result) != 4 {
-		t.Fatalf("expected 4 resolved thresholds, got %d", len(result))
+	// db-a: connections=95 (tenant override), threads_running=75 (profile)
+	// db-b: connections=85 (profile), threads_running=75 (profile)
+	// #1231: each tenant's mysql_threads_running profile value dual-emits a
+	// legacy metric="cpu" twin → 4 + 2 = 6 rows.
+	if len(result) != 6 {
+		t.Fatalf("expected 6 resolved thresholds, got %d", len(result))
 	}
 
 	for _, r := range result {
@@ -393,17 +397,17 @@ tenants:
 			if r.Value != 95 {
 				t.Errorf("db-a connections: expected 95 (tenant override), got %v", r.Value)
 			}
-		case r.Tenant == "db-a" && r.Metric == "cpu":
+		case r.Tenant == "db-a" && (r.Metric == "threads_running" || r.Metric == "cpu"):
 			if r.Value != 75 {
-				t.Errorf("db-a cpu: expected 75 (profile), got %v", r.Value)
+				t.Errorf("db-a %s: expected 75 (profile), got %v", r.Metric, r.Value)
 			}
 		case r.Tenant == "db-b" && r.Metric == "connections":
 			if r.Value != 85 {
 				t.Errorf("db-b connections: expected 85 (profile), got %v", r.Value)
 			}
-		case r.Tenant == "db-b" && r.Metric == "cpu":
+		case r.Tenant == "db-b" && (r.Metric == "threads_running" || r.Metric == "cpu"):
 			if r.Value != 75 {
-				t.Errorf("db-b cpu: expected 75 (profile), got %v", r.Value)
+				t.Errorf("db-b %s: expected 75 (profile), got %v", r.Metric, r.Value)
 			}
 		}
 	}
@@ -421,7 +425,7 @@ func TestValidateTenantKeys_ProfileRef(t *testing.T) {
 			"db-a": {"_profile": SV("standard-mariadb"), "mysql_connections": SV("90")},
 		},
 	}
-	warnings := cfg.ValidateTenantKeys()
+	warnings := cfg.ValidateTenantKeys().Errors // #1231 c2 accessor
 	if len(warnings) != 0 {
 		t.Errorf("expected no warnings for valid profile ref, got: %v", warnings)
 	}
@@ -434,7 +438,7 @@ func TestValidateTenantKeys_ProfileRef(t *testing.T) {
 			"db-a": {"_profile": SV("nonexistent"), "mysql_connections": SV("90")},
 		},
 	}
-	warnings2 := cfg2.ValidateTenantKeys()
+	warnings2 := cfg2.ValidateTenantKeys().Errors // #1231 c2 accessor
 	if len(warnings2) != 1 {
 		t.Errorf("expected 1 warning for unknown profile ref, got %d: %v", len(warnings2), warnings2)
 	}

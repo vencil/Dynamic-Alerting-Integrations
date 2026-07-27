@@ -178,6 +178,71 @@ func TestTruncationSortKey_TierOrdering(t *testing.T) {
 	}
 }
 
+// TestResolveAtWithStats_TruncationDropsLegacyTwinBeforeCanonical (#1231
+// review F3 = C2): the transition-window legacy twin must never outlive its
+// canonical row across the cardinality-cap boundary. A twin sorts under its
+// CANONICAL identity plus a trailing twin rank — immediately after the row it
+// shadows — so a cut inside the pair drops the twin (the only row rule packs
+// no longer consume) and keeps the canonical; a cut above the pair drops both.
+// The alias pair here is authored with the canonical spelling only: the twin
+// is emitted by resolve itself, no deprecated key needed in the fixture.
+func TestResolveAtWithStats_TruncationDropsLegacyTwinBeforeCanonical(t *testing.T) {
+	t.Parallel()
+
+	newCfg := func(limit int) *ThresholdConfig {
+		return &ThresholdConfig{
+			// mysql_threads_running is an alias target → canonical row + legacy
+			// twin; mysql_connections is a plain key. 3 rows total.
+			Defaults: map[string]float64{
+				"mysql_threads_running": 30,
+				"mysql_connections":     50,
+			},
+			Tenants:             map[string]map[string]ScheduledValue{"t": {}},
+			MaxMetricsPerTenant: limit,
+		}
+	}
+
+	now := time.Now()
+
+	// (a) Boundary splits the twin pair (cap=2): canonical lives, twin dies.
+	// Before the twin-aware sort key the twin's LEGACY identity ("cpu")
+	// sorted ahead of the canonical ("threads_running") within the same tier,
+	// so the survivor was the shadow nobody consumes and the dead row was the
+	// only one with a consumer.
+	wantSplit := []string{
+		"mysql/connections/warning/version=/val=50",
+		"mysql/threads_running/warning/version=/val=30",
+	}
+	sort.Strings(wantSplit)
+	for i := 0; i < 40; i++ {
+		result, _ := newCfg(2).ResolveAtWithStats(now)
+		got := survivorSet(result)
+		if !equalStringSlices(got, wantSplit) {
+			t.Fatalf("iter %d: cut inside the twin pair must keep the canonical row\n got: %v\nwant: %v",
+				i, got, wantSplit)
+		}
+	}
+
+	// (b) Pair fully under the cap (cap=3): both members live.
+	wantAll := []string{
+		"mysql/connections/warning/version=/val=50",
+		"mysql/cpu/warning/version=/val=30",
+		"mysql/threads_running/warning/version=/val=30",
+	}
+	sort.Strings(wantAll)
+	result, _ := newCfg(3).ResolveAtWithStats(now)
+	if got := survivorSet(result); !equalStringSlices(got, wantAll) {
+		t.Fatalf("pair under cap must keep both rows\n got: %v\nwant: %v", got, wantAll)
+	}
+
+	// (c) Boundary above the pair (cap=1): canonical and twin die together.
+	wantNone := []string{"mysql/connections/warning/version=/val=50"}
+	result, _ = newCfg(1).ResolveAtWithStats(now)
+	if got := survivorSet(result); !equalStringSlices(got, wantNone) {
+		t.Fatalf("cut above the pair must drop canonical and twin together\n got: %v\nwant: %v", got, wantNone)
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

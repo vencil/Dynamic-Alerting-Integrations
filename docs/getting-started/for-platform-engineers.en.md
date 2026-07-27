@@ -50,7 +50,7 @@ Minimal viable platform config:
 # conf.d/_defaults.yaml
 defaults:
   mysql_connections: "80"
-  mysql_cpu: "30"            # threads_running saturation (concurrent threads, NOT host CPU%)
+  mysql_threads_running: "30"  # threads_running saturation (concurrent threads, NOT host CPU%; renamed from mysql_cpu, #1231)
   mysql_memory: "85"
   # Other default thresholds...
 ```
@@ -192,11 +192,11 @@ The `{{tenant}}` placeholder expands to each tenant's name. Tenant YAML's `_rout
 profiles:
   standard-db:
     mysql_connections: "80"
-    mysql_cpu: "30"
+    mysql_threads_running: "30"
     container_memory: "85"
   high-load-db:
     mysql_connections: "60"     # Stricter
-    mysql_cpu: "45"             # looser on purpose: threads_running is a saturation signal — a high-load DB's normal concurrency is higher
+    mysql_threads_running: "45" # looser on purpose: threads_running is a saturation signal — a high-load DB's normal concurrency is higher
     container_memory: "80"
 ```
 

@@ -96,7 +96,7 @@ class TestValidateDir:
         assert viol == []
 
     def test_meta_file_skipped(self, confd, schema):
-        _write(confd, "_defaults.yaml", "defaults:\n  mysql_cpu: 80\n")
+        _write(confd, "_defaults.yaml", "defaults:\n  mysql_threads_running: 80\n")
         _write(confd, "db-a.yaml", 'tenants:\n  db-a:\n    _metadata:\n      db_type: redis\n')
         checked, viol, skipped = validate_dir(confd, schema, jsonschema)
         assert checked == 1 and viol == [] and skipped == ["_defaults.yaml"]
@@ -173,12 +173,12 @@ class TestDefaultsValidation:
         # `state_flters` (typo of state_filters) would otherwise SILENTLY drop the
         # whole platform-default block — the exact silent-failure this guard kills.
         _write(confd, "_defaults.yaml",
-               "defaults:\n  mysql_cpu: 80\nstate_flters:\n  x:\n    severity: warning\n")
+               "defaults:\n  mysql_threads_running: 80\nstate_flters:\n  x:\n    severity: warning\n")
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema, platform_schema)
         assert any("state_flters" in v for v in viol)
 
     def test_defaults_multidb_basename_also_guarded(self, confd, schema, platform_schema):
-        _write(confd, "_defaults-multidb.yaml", "defalts:\n  mysql_cpu: 80\n")  # 'defalts' typo
+        _write(confd, "_defaults-multidb.yaml", "defalts:\n  mysql_threads_running: 80\n")  # 'defalts' typo
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema, platform_schema)
         assert any("defalts" in v for v in viol)
 
@@ -197,7 +197,7 @@ class TestDefaultsValidation:
         # _defaults.yaml and must NOT false-red (esp. a platform-wide cardinality cap with
         # no other `_*` home). Adversarial review S1.
         _write(confd, "_defaults.yaml",
-               "defaults:\n  mysql_cpu: 80\nmax_metrics_per_tenant: 500\n"
+               "defaults:\n  mysql_threads_running: 80\nmax_metrics_per_tenant: 500\n"
                "profiles:\n  std: {}\n")
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema, platform_schema)
         assert viol == [], f"loader-legit top-level keys false-rejected: {viol}"

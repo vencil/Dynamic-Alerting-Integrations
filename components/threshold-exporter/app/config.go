@@ -749,10 +749,14 @@ func logConfigStats(logger *log.Logger, cfg *ThresholdConfig, prefix string) {
 		prefix, len(cfg.Defaults), len(cfg.Profiles), len(cfg.StateFilters), len(cfg.Tenants),
 		overrideCount, stateCount, silentCount)
 
-	if warnings := cfg.ValidateTenantKeys(); len(warnings) > 0 {
-		for _, w := range warnings {
-			logger.Printf("%s", w)
-		}
+	// #1231 c2: Errors (blocking channel — same set the tenant-api write
+	// gate rejects on) first, then Notices (advisory deprecation channel).
+	kv := cfg.ValidateTenantKeys()
+	for _, w := range kv.Errors {
+		logger.Printf("%s", w)
+	}
+	for _, n := range kv.Notices {
+		logger.Printf("%s", n)
 	}
 }
 

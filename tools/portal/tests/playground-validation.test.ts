@@ -17,7 +17,7 @@ const VALID = `tenants:
   db-a:
     mysql_connections: "70"
     mysql_connections_critical: "95"
-    mysql_cpu: "80"
+    mysql_threads_running: "80"
     _silent_mode: "disable"
     _routing:
       receiver_type: "webhook"
@@ -53,6 +53,17 @@ describe('validateTenantConfig', () => {
     expect(r.valid).toBe(true);
     expect(r.errors).toHaveLength(0);
     expect(r.summary.thresholds).toBeGreaterThan(0);
+  });
+
+  it('#1231 transition window: the retired mysql_cpu spelling stays a known key', () => {
+    // The known-key allowlist deliberately carries BOTH spellings while the
+    // 2-release alias window is open (old input is canonicalized at the
+    // exporter/tenant-api boundary). Removing the old entry early would flag
+    // still-valid tenant files.
+    const r = validateTenantConfig(
+      'tenants:\n  db-a:\n    mysql_cpu: "40"');
+    expect(r.valid).toBe(true);
+    expect(r.errors).toHaveLength(0);
   });
 
   it('rejects YAML with no tenants root key', () => {

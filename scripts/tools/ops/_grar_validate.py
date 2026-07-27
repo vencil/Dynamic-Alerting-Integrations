@@ -358,12 +358,89 @@ def _validate_version_label(tenant: str, key: str, base: str) -> list[str]:
     return out
 
 
+def _canonical_tenant_key(key: str) -> tuple[str, bool]:
+    """Canonical spelling for a tenant-config key (#1231 alias boundary).
+
+    Mirrors Go's ``canonicalKeyFor`` (threshold-exporter
+    pkg/config/aliases.go): EXACT match against DEPRECATED_KEY_ALIASES,
+    plus exactly two structurally-derived shapes — ``<base>_critical`` and
+    dimensional ``<base>{...}``. Everything else — including typos that
+    merely share the prefix, like ``mysql_cpu_util`` — returns unchanged,
+    so they keep failing unknown-key validation. Never prefix-match.
+    """
+    if key in DEPRECATED_KEY_ALIASES:
+        return DEPRECATED_KEY_ALIASES[key], True
+    if key.endswith("_critical"):
+        base = key.removesuffix("_critical")
+        if base in DEPRECATED_KEY_ALIASES:
+            return DEPRECATED_KEY_ALIASES[base] + "_critical", True
+    brace = key.find("{")
+    if brace > 0 and key[:brace] in DEPRECATED_KEY_ALIASES:
+        return DEPRECATED_KEY_ALIASES[key[:brace]] + key[brace:], True
+    return key, False
+
+
+def _canonicalize_alias_keys(
+        tenant: str, keys: set[str],
+        defaults_keys: set[str]) -> tuple[set[str], set[str], list[str]]:
+    """#1231 alias pre-pass for validate_tenant_keys.
+
+    Returns ``(keys_view, defaults_view, notices)``: deprecated spellings in
+    ``keys`` are replaced by their canonical form (so downstream checks and
+    messages name the NEW key), ``defaults_keys`` gets the same canonical
+    view (covers the pre-rename state where the platform defaults still
+    carry the old spelling), and each aliased key yields one non-blocking
+    NOTICE line. When BOTH spellings of the same threshold are present the
+    canonical entry wins and the deprecated one is reported as ignored —
+    matching the Go resolve boundary's dedup contract.
+
+    Wording contract (pinned by TestDeprecationNoticePin): NOTICE lines
+    must not contain the substring "skipping" and must not start with the
+    blocking prefix — otherwise the --validate fatal predicates
+    (generate_alertmanager_routes._validate_mode / validate_config) would
+    misclassify an advisory as a blocking failure.
+    """
+    notices: list[str] = []
+    keys_view: set[str] = set()
+    for key in sorted(keys):
+        canon, was_alias = _canonical_tenant_key(key)
+        if not was_alias:
+            keys_view.add(key)
+            continue
+        if canon in keys:
+            notices.append(
+                f"  NOTICE: {tenant}: deprecated key '{key}' is ignored "
+                f"because its replacement '{canon}' is also set — remove "
+                f"'{key}' (#1231 rename)")
+            continue
+        notices.append(
+            f"  NOTICE: {tenant}: key '{key}' was renamed to '{canon}' "
+            f"(#1231) — the old name still resolves during the 2-release "
+            f"transition window; please update this override to '{canon}'")
+        keys_view.add(canon)
+    defaults_view = {_canonical_tenant_key(k)[0] for k in defaults_keys}
+    return keys_view, defaults_view, notices
+
+
 def validate_tenant_keys(tenant: str, keys: set[str], defaults_keys: set[str]) -> list[str]:
     """Check tenant config keys for typos / unknown reserved keys.
 
-    Returns list of warning strings.
+    Returns list of warning strings. Deprecated key aliases (#1231) emit a
+    non-blocking ``NOTICE:`` line INSTEAD of the unknown-key warning: the
+    key is canonicalized first (exact-match table, never prefix-match) and
+    validated under its canonical spelling against a canonicalized defaults
+    view — so an old-spelled ``mysql_cpu_critical`` whose renamed base
+    exists is NOT a dangling ``_critical``, while prefix typos keep warning.
     """
     warnings = []
+    # #1231 alias pre-pass — BEFORE the reserved/defaults checks, mirroring
+    # the Go resolve boundary. Reassigning the parameters (rather than
+    # rewriting the loop below) keeps the long-standing validation body
+    # byte-identical — tests/shared/_mutation_pilot.py pins three of its
+    # source snippets verbatim.
+    keys, defaults_keys, notices = _canonicalize_alias_keys(
+        tenant, keys, defaults_keys)
+    warnings.extend(notices)
     for key in keys:
         if key in VALID_RESERVED_KEYS:
             continue
@@ -414,6 +491,25 @@ def _validate_profile_refs(parsed: dict) -> list[str]:
 # in tests/ops/test_generate_alertmanager_routes.py asserts no other
 # _grar_* source can emit this prefix into the validate warning stream.
 POLICY_ERROR_PREFIX = "ERROR:"
+
+# ── #1231: deprecated tenant-config key aliases ──
+# Python mirror of the Go alias boundary (threshold-exporter
+# pkg/config/aliases.go `deprecatedKeyAliases`): during the 2-release
+# transition window the OLD spelling keeps validating — as its canonical
+# key — and emits a non-blocking NOTICE line instead of the unknown-key
+# warning (see _canonical_tenant_key / _canonicalize_alias_keys above).
+# SSOT note: the alias SSOT is the registry's deprecated_aliases section
+# (rule-packs/threshold-registry.yaml, authored in _registry_lib.py
+# DEPRECATED_KEY_ALIASES). This dict is a runtime mirror, PINNED to that
+# section by tests/lint/test_check_threshold_registry.py
+# (test_python_alias_mirror_pinned_to_registry) — a drifted mirror fails
+# CI. To open/close an alias window: edit the authored table, regen the
+# registry, then update this mirror (and the Go one) to match.
+DEPRECATED_KEY_ALIASES = {
+    # #944 / #1231: the metric measures mysql threads_running saturation,
+    # never host CPU% — the poisoned name is being retired.
+    "mysql_cpu": "mysql_threads_running",
+}
 
 # Prometheus/Go-style duration grammar for domain-policy checks: one or
 # more <number><unit> tokens (multi-unit "1h30m", fractional "1.5h") or

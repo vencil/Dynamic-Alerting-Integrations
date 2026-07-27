@@ -22,6 +22,12 @@ import (
 type PRWriteResult struct {
 	BranchName string // the feature branch name (e.g. "tenant-api/db-a-prod/20260406-143022")
 	FilePath   string // the path of the written file
+	// Notices is validate()'s advisory deprecation channel (#1231 1b) —
+	// non-blocking deprecated-key alias advisories the handler surfaces in
+	// its 200 pending_review response. For WritePRBatch it aggregates every
+	// op's notices; each message already self-identifies its tenant
+	// (`tenant=<id>` is part of the ValidateTenantKeys wording).
+	Notices []string
 }
 
 // abortFeatureBranch best-effort rolls back a failed PR write: force the
@@ -48,8 +54,11 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
 	}
-	// Step 1: validate schema before anything
-	if errs := validate(w.configDir, tenantID, yamlContent); len(errs) > 0 {
+	// Step 1: validate schema before anything. notices (the non-blocking
+	// deprecation channel, #1231 1b) ride the result so the handler can
+	// surface them in its 200 response.
+	errs, notices := validate(w.configDir, tenantID, yamlContent)
+	if len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
@@ -144,6 +153,7 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	return &PRWriteResult{
 		BranchName: branchName,
 		FilePath:   filePath,
+		Notices:    notices,
 	}, nil
 }
 
@@ -181,7 +191,10 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		if err := guardTenantID(op.TenantID); err != nil {
 			return nil, err
 		}
-		if _, _, err := w.readMergeValidate(op.TenantID, op.Merge); err != nil {
+		// Pre-flight notices are discarded — the authoritative in-lock merge
+		// below re-runs validate against the fresh base and collects them
+		// exactly once (no duplicates in the aggregated result).
+		if _, _, _, err := w.readMergeValidate(op.TenantID, op.Merge); err != nil {
 			return nil, err
 		}
 	}
@@ -212,13 +225,18 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	// same tenant merges onto the first op's just-committed result (not the base).
 	// Byte-identical (no-op) merges are skipped so an idempotent patch/retry never
 	// churns an empty write; `changed` tracks whether ANY op mutated content.
+	// notices aggregates every op's advisory deprecation channel (#1231 1b) —
+	// collected BEFORE the no-op short-circuit, because a merge that changed no
+	// bytes still re-committed to a body carrying a deprecated spelling.
 	changed := false
+	var notices []string
 	for _, op := range ops {
-		content, existing, err := w.readMergeValidate(op.TenantID, op.Merge)
+		content, existing, opNotices, err := w.readMergeValidate(op.TenantID, op.Merge)
 		if err != nil {
 			w.abortFeatureBranch(base, branchName)
 			return nil, err
 		}
+		notices = append(notices, opNotices...)
 		if existing != nil && string(existing) == content {
 			continue // no-op for this tenant — nothing to write or commit
 		}
@@ -238,9 +256,14 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	// empty branch or open a change-free PR/MR (a forge would 422). Roll the
 	// branch back and signal the handler to return a clean "no changes" result —
 	// the PR-mode analogue of WriteMerged's direct-path no-op success (#1102).
+	// #1231 review F5: the result still carries the aggregated notices — an
+	// idempotent retry of a body with a deprecated spelling must keep its
+	// migration signal, exactly like WriteMerged's no-op short-circuit does
+	// (the notices were deliberately collected BEFORE the per-op no-op skip
+	// above; dropping them here contradicted that comment's whole point).
 	if !changed {
 		w.abortFeatureBranch(base, branchName)
-		return nil, ErrNoChanges
+		return &PRWriteResult{Notices: notices}, ErrNoChanges
 	}
 
 	pushed := true
@@ -269,6 +292,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 
 	return &PRWriteResult{
 		BranchName: branchName,
+		Notices:    notices,
 	}, nil
 }
 

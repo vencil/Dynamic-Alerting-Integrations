@@ -126,9 +126,11 @@ def test_hand_edit_inside_generated_block_bites(tmp_path):
     stale-surface hard error; re-splice → green again."""
     dst = _helm_values_copy(tmp_path)
     text = dst.read_text(encoding="utf-8")
-    assert "    mysql_cpu: 30" in text
-    dst.write_text(text.replace("    mysql_cpu: 30", "    mysql_cpu: 80"),
-                   encoding="utf-8")
+    assert "    mysql_threads_running: 30" in text
+    dst.write_text(
+        text.replace("    mysql_threads_running: 30",
+                     "    mysql_threads_running: 80"),
+        encoding="utf-8")
     result = gate.run_check(surface_paths={"helm-defaults": str(dst)})
     assert any("stale-surface" in e and "helm-defaults" in e
                for e in result["errors"]), result
@@ -174,17 +176,23 @@ def test_prose_claiming_nonexistent_key_is_a_violation(tmp_path):
 
 
 def test_prose_known_unwired_and_dimensional_are_allowed(tmp_path):
-    """The #1196 pending line (e.g. db2_lock_wait_time) and dimensional
-    tokens stay legal in prose while their repair is pending."""
+    """The #1196 pending-line exemption (extra_allowed = KNOWN_UNWIRED on the
+    real path) and dimensional tokens stay legal in prose while a repair is
+    pending. Uses a SYNTHETIC pending key: after the #1231 B/C/D/E identity
+    repairs every remaining KNOWN_UNWIRED key (A-class) is also a registry key
+    (optional_overrides tier), so only a synthetic injection still exercises
+    the pending-line branch hermetically (db2_lock_wait_time, the old fixture,
+    is a shipped defaults key now)."""
     f = tmp_path / "rule-pack-ok.yaml"
     f.write_text(
         "# header:\n"
-        "#   db2_lock_wait_time: 10\n"
+        "#   zzz_pending_key: 10\n"
         "#   mysql_connections_critical: \"120\"\n"
         "#   \"oracle_tablespace_used_percent{tablespace_name=\\\"TEMP\\\"}\": \"disable\"\n"
         "groups: []\n",
         encoding="utf-8")
-    result = gate.run_check(prose_files=[str(f)])
+    result = gate.run_check(
+        prose_files=[str(f)], extra_allowed={"zzz_pending_key"})
     assert not any("membership" in e for e in result["errors"]), result
 
 
@@ -242,3 +250,94 @@ def test_regen_surfaces_rejects_path_escaping_repo_root(tmp_path):
     doc["packs"][next(iter(doc["packs"]))]["rule_pack_file"] = "../../outside.yaml"
     with pytest.raises(ValueError, match="escapes repo root"):
         regen_surfaces(doc)
+
+
+# ── deprecated_aliases (#1231) — SSOT section + the Python-mirror pin ──────
+
+def test_python_alias_mirror_pinned_to_registry():
+    """_grar_validate.DEPRECATED_KEY_ALIASES (the Python runtime mirror) must
+    equal the registry's deprecated_aliases section exactly — both directions.
+    The Go mirror has the same pin in
+    components/threshold-exporter/app/pkg/config/aliases_registry_test.go."""
+    import importlib.util as _ilu
+    grar_path = REPO_ROOT / "scripts" / "tools" / "ops" / "_grar_validate.py"
+    spec = _ilu.spec_from_file_location("_grar_validate_pin", grar_path)
+    grar = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(grar)
+    doc = lib.load_registry()
+    assert grar.DEPRECATED_KEY_ALIASES == doc.get("deprecated_aliases", {}), (
+        "_grar_validate.DEPRECATED_KEY_ALIASES drifted from the registry "
+        "deprecated_aliases SSOT — edit _registry_lib.DEPRECATED_KEY_ALIASES, "
+        "regen, then update the mirror")
+
+
+def test_alias_targets_are_active_keys_and_old_spellings_are_retired():
+    doc = lib.load_registry()
+    aliases = doc.get("deprecated_aliases", {}) or {}
+    assert aliases, "expected at least one open alias window (#1231)"
+    for old, new in aliases.items():
+        assert new in doc["keys"], (old, new)
+        assert old not in doc["keys"], old
+
+
+def test_alias_drift_is_an_error(tmp_path):
+    """Registry deprecated_aliases diverging from the authored table (either
+    direction) is a drift violation."""
+    def drop_alias(doc):
+        doc.pop("deprecated_aliases", None)
+    path = _write_registry_variant(tmp_path, drop_alias)
+    result = gate.run_check(registry_path=path)
+    assert any(e.startswith("drift:") and "deprecated_alias" in e
+               for e in result["errors"]), result
+
+    def retarget_alias(doc):
+        aliases = doc.get("deprecated_aliases") or {}
+        old = next(iter(aliases))
+        aliases[old] = "pg_connections"
+    path = _write_registry_variant(tmp_path, retarget_alias)
+    result = gate.run_check(registry_path=path)
+    assert any(e.startswith("drift:") and "deprecated_alias" in e
+               for e in result["errors"]), result
+
+
+def test_build_rejects_bad_alias_entries():
+    """build_registry_doc fail-loud contract: alias old-spelling must not be
+    an active key; alias target must be an active key; old != new."""
+    import pytest
+    packs = {
+        "p1": {
+            "display": "P1", "exporter": "e", "default_on": True,
+            "rule_pack_file": "rule-packs/rule-pack-p1.yaml",
+            "defaults": {
+                "aaa_bbb": {"value": 1, "unit": "u", "desc": "d",
+                             "metric_class": "state"},
+                "aaa_ccc": {"value": 2, "unit": "u", "desc": "d",
+                             "metric_class": "state"},
+            },
+        },
+    }
+    with pytest.raises(ValueError, match="still an ACTIVE registry key"):
+        lib.build_registry_doc(
+            packs, deprecated_aliases={"aaa_bbb": "aaa_ccc"})
+    with pytest.raises(ValueError, match="not a\\s+registry key"):
+        lib.build_registry_doc(
+            packs, deprecated_aliases={"aaa_zzz": "aaa_gone"})
+    with pytest.raises(ValueError, match="maps to itself"):
+        lib.build_registry_doc(
+            packs, deprecated_aliases={"aaa_zzz": "aaa_zzz"})
+    # and the happy path emits the section
+    doc = lib.build_registry_doc(
+        packs, deprecated_aliases={"aaa_zzz": "aaa_bbb"})
+    assert doc["deprecated_aliases"] == {"aaa_zzz": "aaa_bbb"}
+
+
+def test_prose_may_name_deprecated_alias_spellings(tmp_path):
+    """During an open alias window the OLD spelling is still valid conf.d
+    input, so pack-header prose may legitimately name it (F6 membership)."""
+    f = tmp_path / "rule-pack-alias-prose.yaml"
+    f.write_text(
+        "# header:\n#   mysql_cpu: \"45\"\n#   mysql_cpu_critical: \"50\"\n"
+        "groups: []\n",
+        encoding="utf-8")
+    result = gate.run_check(prose_files=[str(f)])
+    assert not any("membership" in e for e in result["errors"]), result

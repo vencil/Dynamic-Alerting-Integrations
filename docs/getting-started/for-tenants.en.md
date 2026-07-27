@@ -61,7 +61,7 @@ Tri-state design: each metric can be **custom value**, **omitted** (use default)
 tenants:
   my-tenant:
     mysql_connections: "70"       # Custom
-    # mysql_cpu omitted           → uses _defaults.yaml value
+    # mysql_threads_running omitted → uses _defaults.yaml value
     container_memory: "disable"   # Suppress this alert
 ```
 

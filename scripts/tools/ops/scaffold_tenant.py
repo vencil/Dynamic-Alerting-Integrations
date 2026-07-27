@@ -214,12 +214,12 @@ RULE_PACKS = {
         "rule_pack_file": "rule-packs/rule-pack-mariadb.yaml",
         "defaults": {
             "mysql_connections": {"value": 80, "unit": "count", "desc": "Max threads_connected warning", "metric_class": "saturation"},
-            "mysql_cpu": {"value": 30, "unit": "threads", "desc": "threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30 = PMM/Nichter 'high' (#944); key kept as mysql_cpu (config-contract stability; metric/alert renamed, #944 closed)", "metric_class": "saturation"},
+            "mysql_threads_running": {"value": 30, "unit": "threads", "desc": "threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30 = PMM/Nichter 'high' (#944); renamed from mysql_cpu (#1231 owner-approved reversal of the #944 keep — 2-release alias window, old spelling still resolves)", "metric_class": "saturation"},
             "mysql_replication_lag": {"value": 30, "unit": "seconds", "desc": "Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 = APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's lag-template family default is 600s warning). Enabled by default (#1200 WS5-P0-a Q3=C)"},
         },
         "optional_overrides": {
             "mysql_connections_critical": {"value": 120, "unit": "count", "desc": "Critical tier (Scenario D)"},
-            "mysql_cpu_critical": {"value": 50, "unit": "threads", "desc": "Critical tier (running-threads saturation); 120→50 = PMM critical-load / Nichter 'overloaded' (#944)"},
+            "mysql_threads_running_critical": {"value": 50, "unit": "threads", "desc": "Critical tier (running-threads saturation); 120→50 = PMM critical-load / Nichter 'overloaded' (#944); renamed from mysql_cpu_critical (#1231, 2-release alias window)"},
             "mysql_replication_lag_critical": {"value": 120, "unit": "seconds", "desc": "Critical tier replication lag; 120 = 4x the APA/mixin 30s trigger, 5x below PMM family 600s — sustained minutes-level lag is a failover data-loss window (#1200 WS5-P0-a)"},
         },
     },
@@ -231,10 +231,8 @@ RULE_PACKS = {
         "defaults": {
             "redis_memory_used_bytes": {"value": 4294967296, "unit": "bytes (4GB)", "desc": "Memory usage warning", "metric_class": "saturation"},
             "redis_connected_clients": {"value": 200, "unit": "count", "desc": "Connected clients warning", "metric_class": "saturation"},
-        },
-        "optional_overrides": {
-            "redis_evicted_keys_total": {"value": 100, "unit": "keys/s", "desc": "Key eviction rate"},
-            "redis_keyspace_misses_ratio": {"value": 0.3, "unit": "ratio", "desc": "Cache miss ratio (30%)"},
+            "redis_evicted_keys_rate": {"value": 100, "unit": "keys/s", "desc": "Key eviction rate; #1196 B identity fix: renamed from redis_evicted_keys_total (alert demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias"},
+            "redis_replication_lag": {"value": 30, "unit": "seconds", "desc": "Replica lag warning; 30 = same anchor as mysql/pg replication_lag — redis replication is normally sub-second, so 30s is unambiguous trouble (noise-averse pick, #1231 owner call); #1196 C identity fix, no alias"},
         },
         "dimensional_example": {
             "redis_queue_length{queue=\"order-processing\"}": "100",
@@ -248,10 +246,8 @@ RULE_PACKS = {
         "rule_pack_file": "rule-packs/rule-pack-mongodb.yaml",
         "defaults": {
             "mongodb_connections_current": {"value": 300, "unit": "count", "desc": "Current connections warning", "metric_class": "saturation"},
-            "mongodb_repl_lag_seconds": {"value": 10, "unit": "seconds", "desc": "Replication lag warning"},
-        },
-        "optional_overrides": {
-            "mongodb_opcounters_total": {"value": 10000, "unit": "ops/s", "desc": "Total operations rate"},
+            "mongodb_replication_lag": {"value": 10, "unit": "seconds", "desc": "Replication lag warning; #1196 C identity fix: renamed from mongodb_repl_lag_seconds (alert demands mongodb_replication_lag) — unwired dead key, no alias"},
+            "mongodb_opcounters_rate": {"value": 10000, "unit": "ops/s", "desc": "Total operations rate; #1196 B identity fix: renamed from mongodb_opcounters_total (alert demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias"},
         },
         "dimensional_example": {
             "mongodb_op_latency{database=\"orders\"}": "50",
@@ -263,11 +259,10 @@ RULE_PACKS = {
         "default_on": False,
         "rule_pack_file": "rule-packs/rule-pack-elasticsearch.yaml",
         "defaults": {
-            "es_jvm_memory_used_percent": {"value": 85, "unit": "%", "desc": "JVM heap usage warning", "metric_class": "saturation"},
-            "es_filesystem_free_percent": {"value": 15, "unit": "%", "desc": "Disk free space warning"},
-        },
-        "optional_overrides": {
-            "es_cluster_health": {"value": 1, "unit": "0=green,1=yellow,2=red", "desc": "Cluster health threshold"},
+            "es_heap_usage_percent": {"value": 85, "unit": "%", "desc": "JVM heap usage warning; #1196 C identity fix: renamed from es_jvm_memory_used_percent (alert demands es_heap_usage_percent) — unwired dead key, no alias", "metric_class": "saturation"},
+            "es_disk_usage_percent": {"value": 85, "unit": "%", "desc": "Disk USAGE % warning (used = 1 - available/size, recording rule tenant:es_disk_usage_percent:max, compared with >); 85 = same band as oracle/db2 tablespace_used_percent; #1196 C semantic flip: replaces es_filesystem_free_percent 15 (FREE %) — carrying 15 into a used-% rule would fire permanently"},
+            "es_pending_tasks": {"value": 50, "unit": "count", "desc": "Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py catalog + examples/elasticsearch-tenant.yaml); #1196 D: key was alert-demanded but absent from scaffold"},
+            "es_search_latency_ms": {"value": 1000, "unit": "ms", "desc": "Avg search latency warning (rate(query_time)/rate(query_total), per-query mean); 1000 = Awesome Prometheus Alerts ElasticsearchHighQueryLatency anchor (same formula, 1s/5m warning) — the only community rule semantically identical to ours; full derivation + calibration caveat in the pack header (#1196 D)"},
         },
         "dimensional_example": {
             "es_index_doc_count{index=\"logs-prod\"}": "50000000",
@@ -300,6 +295,7 @@ RULE_PACKS = {
         "defaults": {
             "db2_connections_active": {"value": 200, "unit": "count", "desc": "Active connections warning", "metric_class": "saturation"},
             "db2_bufferpool_hit_ratio": {"value": 0.95, "unit": "ratio", "desc": "Bufferpool hit ratio warning"},
+            "db2_lock_wait_time": {"value": 10, "unit": "s/s", "desc": "Lock wait accumulation rate warning (rate over 5m, summed across the tenant's instances); 10 ≈ 6.7x the 1.5 normal level both reference libraries agree on, below both fault levels (25/60) — full derivation + calibration workflow in the pack header (#1196 D)"},
         },
         "optional_overrides": {
             "db2_log_usage_percent": {"value": 70, "unit": "%", "desc": "Transaction log usage warning"},

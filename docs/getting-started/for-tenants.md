@@ -61,7 +61,7 @@ tenants:
 tenants:
   my-tenant:
     mysql_connections: "70"       # 自訂
-    # mysql_cpu 省略               → 用 _defaults.yaml 的預設值
+    # mysql_threads_running 省略   → 用 _defaults.yaml 的預設值
     container_memory: "disable"   # 停用此 alert
 ```
 

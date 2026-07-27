@@ -70,6 +70,7 @@ func (c *ThresholdCollector) Collect(ch chan<- prometheus.Metric) {
 	// irrelevant (Prometheus sorts on Gather) but kept stable for diff clarity.
 	c.collectThresholds(ch, resolved)
 	c.collectCustomAlertErrors(ch, stats.PerTenantCustomAlertErrors)
+	c.collectDeprecatedKeys(ch, stats.PerTenantDeprecatedKeys)
 	c.collectSloObjectives(ch, stats.SloObjectives)
 	c.collectStateFilters(ch, cfg)
 	c.collectSilentModes(ch, cfg)
@@ -151,6 +152,36 @@ func (c *ThresholdCollector) collectCustomAlertErrors(ch chan<- prometheus.Metri
 		m, err := prometheus.NewConstMetric(caErrDesc, prometheus.GaugeValue, float64(n), tenant)
 		if err != nil {
 			log.Printf("WARN: failed to create da_custom_alert_parse_errors metric for tenant=%s: %v", tenant, err)
+			continue
+		}
+		ch <- m
+	}
+}
+
+// collectDeprecatedKeys emits da_config_deprecated_keys (#1231): the number
+// of deprecated (aliased) key spellings still present in each tenant's own
+// config during a rename transition window (e.g. mysql_cpu →
+// mysql_threads_running). ConstMetric per scrape (same shape as
+// collectCustomAlertErrors) so a migrated tenant's series simply stops
+// emitting; tenants with zero deprecated keys never appear.
+//
+// Deliberately its own metric and NOT a da_config_event series: the
+// TenantConfigEvent rule fires unconditionally on `da_config_event == 1`
+// (for: 0s) with expiry-flavored notification copy — riding that metric
+// would page tenants with a bogus "expired and auto-disabled" story for a
+// key that still works. This gauge is migration-progress observability only
+// and has NO alert wired to it.
+func (c *ThresholdCollector) collectDeprecatedKeys(ch chan<- prometheus.Metric, deprecated map[string]int) {
+	depDesc := prometheus.NewDesc(
+		"da_config_deprecated_keys",
+		"Per-tenant count of deprecated threshold key spellings still present in the tenant's config (#1231 rename transition, e.g. mysql_cpu → mysql_threads_running). Resolve treats them as their canonical replacement and dual-emits the legacy series during the transition window; this gauge tracks migration progress. Informational only — no alert consumes it.",
+		[]string{"tenant"},
+		nil,
+	)
+	for tenant, n := range deprecated {
+		m, err := prometheus.NewConstMetric(depDesc, prometheus.GaugeValue, float64(n), tenant)
+		if err != nil {
+			log.Printf("WARN: failed to create da_config_deprecated_keys metric for tenant=%s: %v", tenant, err)
 			continue
 		}
 		ch <- m

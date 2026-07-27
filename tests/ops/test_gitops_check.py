@@ -95,7 +95,7 @@ def valid_config_dir():
         # Create tenant files (Dynamic Alerting flat key-value format)
         db_a = {
             "mysql_connections": "80",
-            "mysql_cpu": "75",
+            "mysql_threads_running": "75",
             "container_memory": "85",
             "_routing": {"receiver_type": "slack"},
         }
@@ -396,7 +396,7 @@ class TestCheckLocal:
 
         assert result.details["tenant_files"] == 2
         assert result.details["total_metrics"] == 5
-        # db-a: mysql_connections, mysql_cpu, container_memory (3)
+        # db-a: mysql_connections, mysql_threads_running, container_memory (3)
         # db-b: redis_memory_usage, redis_connected_clients (2)
 
     def test_local_tenant_file_only_internal_keys(self, config_dir):

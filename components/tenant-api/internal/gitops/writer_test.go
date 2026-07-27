@@ -41,7 +41,7 @@ func TestValidate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			errs := validate("", tt.tenantID, tt.yaml)
+			errs, _ := validate("", tt.tenantID, tt.yaml)
 			if (len(errs) > 0) != (tt.wantErrs > 0) {
 				t.Errorf("validate(%q, ...) returned %d errors %v, want %d",
 					tt.tenantID, len(errs), errs, tt.wantErrs)
@@ -58,7 +58,7 @@ func TestValidate(t *testing.T) {
 func pilotDefaultsDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	const defaults = "defaults:\n  container_cpu: 80\n  container_memory: 85\n  mysql_cpu: 80\n"
+	const defaults = "defaults:\n  container_cpu: 80\n  container_memory: 85\n  mysql_threads_running: 80\n"
 	if err := os.WriteFile(filepath.Join(dir, "_defaults.yaml"), []byte(defaults), 0o644); err != nil {
 		t.Fatalf("write _defaults.yaml: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestValidateVersionThreshold(t *testing.T) {
 		{"uppercase violates charset", `container_cpu{version="V2"}`, false, "violates"},
 		{"regex matcher rejected", `container_cpu{version=~"v.*"}`, false, "regex version matcher"},
 		{"regex matcher rejected (memory)", `container_memory{version=~"v.*"}`, false, "regex version matcher"},
-		{"non-pilot metric rejected", `mysql_cpu{version="v2"}`, false, "non-pilot metric"},
+		{"non-pilot metric rejected", `mysql_threads_running{version="v2"}`, false, "non-pilot metric"},
 		{"empty version rejected", `container_cpu{version=""}`, false, "empty version label"},
 		{"literal default reserved", `container_cpu{version="default"}`, false, "reserved"},
 	}
@@ -97,7 +97,7 @@ func TestValidateVersionThreshold(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			y := "tenants:\n  db-a:\n    " + tt.key + ": \"60\"\n"
-			errs := validate(dir, "db-a", y)
+			errs, _ := validate(dir, "db-a", y)
 			if tt.wantOK {
 				if len(errs) != 0 {
 					t.Fatalf("validate(%q) = %v, want no errors", tt.key, errs)
@@ -125,7 +125,7 @@ func TestValidateMultiVersionCoexistence(t *testing.T) {
 	y := "tenants:\n  db-a:\n" +
 		"    container_cpu{version=\"v1\"}: \"80\"\n" +
 		"    container_cpu{version=\"v2\"}: \"60\"\n"
-	if errs := validate(dir, "db-a", y); len(errs) != 0 {
+	if errs, _ := validate(dir, "db-a", y); len(errs) != 0 {
 		t.Fatalf("coexisting v1+v2 thresholds should validate, got: %v", errs)
 	}
 }
@@ -141,15 +141,15 @@ func TestValidate_TenantOnlyMetricBody(t *testing.T) {
 	dir := pilotDefaultsDir(t)
 
 	// Mirrors conf.d/db-a.yaml: tenants block only, plain metric keys.
-	ok := "tenants:\n  db-a:\n    mysql_cpu: \"70\"\n    container_cpu: \"70\"\n"
-	if errs := validate(dir, "db-a", ok); len(errs) != 0 {
+	ok := "tenants:\n  db-a:\n    mysql_threads_running: \"70\"\n    container_cpu: \"70\"\n"
+	if errs, _ := validate(dir, "db-a", ok); len(errs) != 0 {
 		t.Fatalf("tenant-only metric body should validate against merged defaults, got: %v", errs)
 	}
 
 	// Negative: validation is NOT neutered — a genuinely unknown metric key
 	// (absent from _defaults.yaml, not a reserved key) still warns.
 	bad := "tenants:\n  db-a:\n    not_a_real_metric: \"70\"\n"
-	errs := validate(dir, "db-a", bad)
+	errs, _ := validate(dir, "db-a", bad)
 	if len(errs) == 0 {
 		t.Fatal("an unknown metric key must still warn after the defaults merge")
 	}
@@ -177,7 +177,7 @@ func TestValidate_RejectsNonTenantRootKeys(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			errs := validate(dir, "db-a", tt.yaml)
+			errs, _ := validate(dir, "db-a", tt.yaml)
 			if len(errs) == 0 {
 				t.Fatalf("validate(%q) returned no errors, want a root-key rejection", tt.yaml)
 			}
@@ -201,8 +201,8 @@ func TestValidate_RejectsNonTenantRootKeys(t *testing.T) {
 func TestValidate_RejectsFlatKV(t *testing.T) {
 	t.Parallel()
 	dir := pilotDefaultsDir(t)
-	flat := "container_cpu: \"80\"\nmysql_cpu: \"70\"\n" // no tenants: wrapper
-	errs := validate(dir, "db-a", flat)
+	flat := "container_cpu: \"80\"\nmysql_threads_running: \"70\"\n" // no tenants: wrapper
+	errs, _ := validate(dir, "db-a", flat)
 	if len(errs) == 0 {
 		t.Fatal("flat key-value body must be rejected on the write path, got no errors")
 	}
@@ -222,7 +222,7 @@ func TestWrite_RejectsFullConfigBody(t *testing.T) {
 
 	w := NewWriter(dir, dir)
 	full := "defaults:\n  container_cpu: 80\ntenants:\n  db-a:\n    container_cpu: \"70\"\n"
-	if err := w.Write(context.Background(), "db-a", "op@example.com", full); err == nil {
+	if _, err := w.Write(context.Background(), "db-a", "op@example.com", full); err == nil {
 		t.Fatal("Write must reject a body with a non-tenants root key, but returned nil")
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "db-a.yaml")); statErr == nil {
@@ -244,7 +244,7 @@ func TestWrite_RejectsBadVersionThreshold(t *testing.T) {
 	// version="V2" violates the ^[a-z0-9]... charset → validate() warns →
 	// Write must block before touching disk. Body is tenant-only.
 	bad := "tenants:\n  db-a:\n    container_cpu{version=\"V2\"}: \"60\"\n"
-	err := w.Write(context.Background(), "db-a", "op@example.com", bad)
+	_, err := w.Write(context.Background(), "db-a", "op@example.com", bad)
 	if err == nil {
 		t.Fatal("Write must reject an invalid version label, but returned nil")
 	}
@@ -271,7 +271,7 @@ func TestWrite_TenantOnlyMetricBody_Commits(t *testing.T) {
 
 	w := NewWriter(dir, dir)
 	body := "tenants:\n  db-a:\n    container_cpu: \"70\"\n"
-	if err := w.Write(context.Background(), "db-a", "op@example.com", body); err != nil {
+	if _, err := w.Write(context.Background(), "db-a", "op@example.com", body); err != nil {
 		t.Fatalf("tenant-only metric body must commit, got: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "db-a.yaml"))

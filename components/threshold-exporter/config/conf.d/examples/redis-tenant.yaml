@@ -13,7 +13,6 @@ tenants:
     redis_memory_used_bytes_critical: "10737418240"        # 10GB critical
     redis_connected_clients: "500"
     redis_rejected_connections: "10"
-    redis_keyspace_misses_ratio: "0.3"                     # 30% miss rate
 
     # --- 維度閾值: 按 queue 分設 ---
     # 語法: "metric{label=\"value\"}": "threshold" 或 "threshold:severity"

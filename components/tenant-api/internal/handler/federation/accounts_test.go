@@ -178,8 +178,8 @@ func TestBackfillAccounts_AllocatesFleet(t *testing.T) {
 	files := map[string]string{
 		"db-a.yaml":              "tenants:\n  db-a: {}\n",
 		"db-b.yaml":              "tenants:\n  db-b: {}\n",
-		"_defaults.yaml":         "defaults:\n  mysql_cpu: 80\n", // _-prefixed → skipped
-		"_account_registry.yaml": "",                             // present-but-empty → skipped, not a tenant
+		"_defaults.yaml":         "defaults:\n  mysql_threads_running: 80\n", // _-prefixed → skipped
+		"_account_registry.yaml": "",                                         // present-but-empty → skipped, not a tenant
 	}
 	d, configDir := newLogsFederationDeps(t, platformAdminRBAC, files)
 

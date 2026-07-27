@@ -11,7 +11,7 @@
 #   * a `for:` debounce case (expr already true, eval BEFORE the for: window ⇒ no alert).
 # Threshold alerts additionally exercise the pack's per-alert branch plumbing
 # (hand-copied per alert, so a typo in one alert's clause is only caught by testing
-# THAT alert), extending the rule-pack-mariadb-cpu_test.yaml scaffold to FIVE tenants:
+# THAT alert), extending the rule-pack-mariadb-threads_test.yaml scaffold to FIVE tenants:
 #   - db-a: over threshold, metadata present    → fires ENRICHED (branch A).
 #   - db-b: over threshold, NO metadata          → STILL fires BARE (branch B, vacuum).
 #   - db-c: over threshold, maintenance active   → suppressed via the ENRICHED arm's clause.
@@ -20,7 +20,7 @@
 #     Each alert hand-copies the maintenance `unless` TWICE (once per or-arm); db-c only
 #     exercises the enriched copy, so without db-e deleting the bare arm's copy stays
 #     green — and a metadata-less onboarding tenant in maintenance would still page
-#     (adversarial-review find; the four-tenant mariadb-cpu scaffold shares this hole).
+#     (adversarial-review find; the four-tenant mariadb-threads scaffold shares this hole).
 # db-a's tablespace input carries a SECOND, healthy dimension so the :max recording
 # rule's worst-dimension-wins direction is pinned (a min↔max flip turns the test red).
 # All input values are steady-state (constant gauges / linear counters ⇒ constant rate

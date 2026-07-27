@@ -15,17 +15,17 @@ func TestResolve_ThreeState(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{
-			"mysql_connections": 80,
-			"mysql_cpu":         80,
+			"mysql_connections":     80,
+			"mysql_threads_running": 80,
 		},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
 				"mysql_connections": SV("70"),
-				// mysql_cpu omitted → default 80
+				// mysql_threads_running omitted → default 80
 			},
 			"db-b": {
-				"mysql_connections": SV("disable"),
-				"mysql_cpu":         SV("40"),
+				"mysql_connections":     SV("disable"),
+				"mysql_threads_running": SV("40"),
 			},
 		},
 	}
@@ -38,13 +38,19 @@ func TestResolve_ThreeState(t *testing.T) {
 		return resolved[i].Metric < resolved[j].Metric
 	})
 
+	// #1231: while the alias transition window is open, every resolved
+	// mysql_threads_running row ships with a legacy metric="cpu" twin at the
+	// same value (regardless of which spelling the config used), so
+	// downstream rules keyed on either name see identical data.
 	expected := []struct {
 		tenant, metric, component string
 		value                     float64
 	}{
 		{"db-a", "connections", "mysql", 70},
 		{"db-a", "cpu", "mysql", 80},
+		{"db-a", "threads_running", "mysql", 80},
 		{"db-b", "cpu", "mysql", 40},
+		{"db-b", "threads_running", "mysql", 40},
 	}
 
 	if len(resolved) != len(expected) {
@@ -115,17 +121,19 @@ func TestResolve_TenantWithNoOverrides(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{
-			"mysql_connections": 80,
-			"mysql_cpu":         90,
+			"mysql_connections":     80,
+			"mysql_threads_running": 90,
 		},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {},
 		},
 	}
 
+	// #1231: mysql_threads_running dual-emits a legacy metric="cpu" twin
+	// during the alias transition window, so 2 defaults yield 3 rows.
 	resolved := cfg.Resolve()
-	if len(resolved) != 2 {
-		t.Fatalf("expected 2, got %d", len(resolved))
+	if len(resolved) != 3 {
+		t.Fatalf("expected 3, got %d", len(resolved))
 	}
 
 	for _, r := range resolved {
@@ -142,11 +150,11 @@ func TestResolve_TenantWithNoOverrides(t *testing.T) {
 func TestParseMetricKey(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		input              string
+		input             string
 		wantComp, wantMet string
 	}{
 		{"mysql_connections", "mysql", "connections"},
-		{"mysql_cpu", "mysql", "cpu"},
+		{"mysql_threads_running", "mysql", "threads_running"},
 		{"container_cpu_percent", "container", "cpu_percent"},
 		{"standalone", "default", "standalone"},
 	}

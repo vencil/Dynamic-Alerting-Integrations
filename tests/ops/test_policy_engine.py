@@ -31,7 +31,7 @@ def sample_config():
     """典型 tenant 配置。"""
     return {
         "mysql_connections": "80",
-        "mysql_cpu": "70",
+        "mysql_threads_running": "70",
         "container_memory": "85",
         "_routing": {
             "receiver": {
@@ -138,7 +138,7 @@ class TestResolveTarget:
         assert found is True
         assert isinstance(val, dict)
         assert "mysql_connections" in val
-        assert "mysql_cpu" in val
+        assert "mysql_threads_running" in val
 
     def test_wildcard_no_match(self, sample_config):
         """萬用字元無匹配回傳 (False, None)。"""
@@ -357,7 +357,7 @@ class TestEvaluateRule:
         """萬用字元匹配部分違規。"""
         rule = make_rule(target="mysql_*", operator="lte", value="50")
         violations = pe.evaluate_rule(rule, "db-a", sample_config)
-        assert len(violations) == 2  # mysql_connections=80, mysql_cpu=70
+        assert len(violations) == 2  # mysql_connections=80, mysql_threads_running=70
 
     def test_wildcard_required_no_match(self, make_rule, sample_config):
         """萬用字元 required 無匹配 → 違規。"""
@@ -368,7 +368,7 @@ class TestEvaluateRule:
     def test_forbidden_pass(self, make_rule):
         """forbidden 欄位不存在 → 通過。"""
         rule = make_rule(target="_dangerous", operator="forbidden")
-        violations = pe.evaluate_rule(rule, "db-a", {"mysql_cpu": "80"})
+        violations = pe.evaluate_rule(rule, "db-a", {"mysql_threads_running": "80"})
         assert len(violations) == 0
 
     def test_forbidden_fail(self, make_rule, sample_config):
@@ -411,7 +411,7 @@ class TestEvaluateRule:
             target="_routing.receiver.type",
             operator="equals", value="webhook",
         )
-        violations = pe.evaluate_rule(rule, "db-a", {"mysql_cpu": "80"})
+        violations = pe.evaluate_rule(rule, "db-a", {"mysql_threads_running": "80"})
         assert len(violations) == 0  # No _routing → skip
 
 
@@ -442,7 +442,7 @@ class TestEvaluatePolicies:
         ]
         configs = {
             "db-a": sample_config,
-            "db-b": {"mysql_cpu": "80"},  # 缺少 _routing 和 _nonexistent
+            "db-b": {"mysql_threads_running": "80"},  # 缺少 _routing 和 _nonexistent
         }
         result = pe.evaluate_policies(rules, configs)
         assert result.tenants_evaluated == 2
@@ -470,7 +470,7 @@ class TestLoadPolicies:
         policy_file = tmp_path / "_defaults.yaml"
         policy_file.write_text("""
 defaults:
-  mysql_cpu: 80
+  mysql_threads_running: 80
 
 _policies:
   - name: routing-required
@@ -515,7 +515,7 @@ policies:
     def test_load_no_policies_key(self, tmp_path):
         """沒有 policies 或 _policies key 回傳空清單。"""
         f = tmp_path / "empty.yaml"
-        f.write_text("defaults:\n  mysql_cpu: 80\n", encoding="utf-8")
+        f.write_text("defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
         rules = pe.load_policies(str(f))
         assert rules == []
 
@@ -568,19 +568,19 @@ class TestLoadTenantConfigs:
     def test_flat_format(self, tmp_path):
         """Flat 格式 YAML — 檔名即 tenant。"""
         (tmp_path / "db-a.yaml").write_text(
-            "mysql_cpu: '80'\n_routing:\n  receiver:\n    type: webhook\n",
+            "mysql_threads_running: '80'\n_routing:\n  receiver:\n    type: webhook\n",
             encoding="utf-8",
         )
         configs = pe.load_tenant_configs(str(tmp_path))
         assert "db-a" in configs
-        assert configs["db-a"]["mysql_cpu"] == "80"
+        assert configs["db-a"]["mysql_threads_running"] == "80"
 
     def test_multi_tenant_wrapper(self, tmp_path):
         """Multi-tenant wrapper 格式。"""
         (tmp_path / "cluster.yaml").write_text("""
 tenants:
   prod-db:
-    mysql_cpu: '90'
+    mysql_threads_running: '90'
   prod-cache:
     redis_memory: '80'
 """, encoding="utf-8")
@@ -591,10 +591,10 @@ tenants:
     def test_skip_defaults(self, tmp_path):
         """跳過 _ 開頭的檔案。"""
         (tmp_path / "_defaults.yaml").write_text(
-            "defaults:\n  mysql_cpu: 80\n", encoding="utf-8"
+            "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8"
         )
         (tmp_path / "db-a.yaml").write_text(
-            "mysql_cpu: '70'\n", encoding="utf-8"
+            "mysql_threads_running: '70'\n", encoding="utf-8"
         )
         configs = pe.load_tenant_configs(str(tmp_path))
         assert "db-a" in configs
@@ -698,7 +698,7 @@ class TestCLI:
 
     def test_main_no_policies(self, tmp_path, capsys):
         """無策略規則（目錄存在但空）→ 正常退出（訊息走 stderr，#1112）。"""
-        (tmp_path / "db-a.yaml").write_text("mysql_cpu: '80'\n", encoding="utf-8")
+        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path)])
         assert exit_code == 0
         assert "No policy rules found" in capsys.readouterr().err
@@ -726,7 +726,7 @@ class TestCLI:
 
     def test_main_no_policies_json_envelope(self, tmp_path, capsys):
         """#1112: 無策略規則 + --json → stdout 仍是恰好一份 JSON（report schema 歸零）。"""
-        (tmp_path / "db-a.yaml").write_text("mysql_cpu: '80'\n", encoding="utf-8")
+        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path), "--json"])
         assert exit_code == 0
         doc = json.loads(capsys.readouterr().out)
@@ -741,10 +741,10 @@ class TestCLI:
 _policies:
   - name: cpu-exists
     description: "CPU threshold must exist"
-    target: mysql_cpu
+    target: mysql_threads_running
     operator: required
 """, encoding="utf-8")
-        (tmp_path / "db-a.yaml").write_text("mysql_cpu: '80'\n", encoding="utf-8")
+        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path)])
         assert exit_code == 0
 
@@ -758,7 +758,7 @@ _policies:
     operator: required
     severity: error
 """, encoding="utf-8")
-        (tmp_path / "db-a.yaml").write_text("mysql_cpu: '80'\n", encoding="utf-8")
+        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path), "--ci"])
         assert exit_code == 1
 
@@ -772,7 +772,7 @@ _policies:
     operator: required
     severity: warning
 """, encoding="utf-8")
-        (tmp_path / "db-a.yaml").write_text("mysql_cpu: '80'\n", encoding="utf-8")
+        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path), "--ci"])
         assert exit_code == 0
 
@@ -782,10 +782,10 @@ _policies:
 _policies:
   - name: test
     description: test
-    target: mysql_cpu
+    target: mysql_threads_running
     operator: required
 """, encoding="utf-8")
-        (tmp_path / "db-a.yaml").write_text("mysql_cpu: '80'\n", encoding="utf-8")
+        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path), "--json"])
         assert exit_code == 0
         output = capsys.readouterr().out

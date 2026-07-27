@@ -8,19 +8,38 @@
 #
 # >>> GENERATED:threshold-registry:pack-elasticsearch — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
 # 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
-#   es_jvm_memory_used_percent: 85   # % — JVM heap usage warning
-#   es_filesystem_free_percent: 15   # % — Disk free space warning
-#
-# optional_overrides（documented-but-dormant——登錄有案、平台預設不出貨）：
-# ⛔ 啟用前提（別跳過）：threshold-exporter 只對「存在於 defaults 的 key」
-# 發射 user_threshold——resolveBaseRows 迭代的是 c.Defaults，resolveCriticalRows
-# 也要求 base key 在 defaults 才處理 _critical 覆寫（components/
-# threshold-exporter/app/pkg/config/resolve.go）。下列 key 必須先進
-# _defaults.yaml / Helm values 的 defaults，租戶 conf.d 才有東西可覆寫——
-# 只在租戶檔填一個不在 defaults 的 key 永遠不會生效：那不是 dormant，
-# 是永久無法啟用。
-#   es_cluster_health: 1   # 0=green,1=yellow,2=red — Cluster health threshold
+#   es_heap_usage_percent: 85
+#       % — JVM heap usage warning; #1196 C identity fix: renamed from es_jvm_memory_used_percent
+#       (alert demands es_heap_usage_percent) — unwired dead key, no alias
+#   es_disk_usage_percent: 85
+#       % — Disk USAGE % warning (used = 1 - available/size, recording rule
+#       tenant:es_disk_usage_percent:max, compared with >); 85 = same band as oracle/db2
+#       tablespace_used_percent; #1196 C semantic flip: replaces es_filesystem_free_percent 15 (FREE
+#       %) — carrying 15 into a used-% rule would fire permanently
+#   es_pending_tasks: 50
+#       count — Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py
+#       catalog + examples/elasticsearch-tenant.yaml); #1196 D: key was alert-demanded but absent
+#       from scaffold
+#   es_search_latency_ms: 1000
+#       ms — Avg search latency warning (rate(query_time)/rate(query_total), per-query mean); 1000 =
+#       Awesome Prometheus Alerts ElasticsearchHighQueryLatency anchor (same formula, 1s/5m warning)
+#       — the only community rule semantically identical to ours; full derivation + calibration
+#       caveat in the pack header (#1196 D)
 # <<< GENERATED:threshold-registry:pack-elasticsearch
+#
+# es_search_latency_ms 起始值 1000 的推導（#1196 D）：
+# Awesome Prometheus Alerts 的 ElasticsearchHighQueryLatency 用同一條公式
+# （rate(query_time)/rate(query_total)，平均每次 query 秒數）以 1s / for 5m /
+# warning 告警，是唯一與本 rule 語意完全同構的社群錨；官方 exporter 範例、
+# Elastic Stack Monitoring 內建 rules、New Relic / Grafana Cloud 整合、
+# AWS OpenSearch 推薦 alarms 均無 search latency 預設條目（Elastic 在
+# kibana#74821 明示固定閾值難有通用預設）。文獻健康帶：Last9 給平均延遲
+# <100ms 健康、>500ms critical；Datadog 生態 Claranet 模組給 10ms/20ms
+# （低延遲集群取向＝outlier，防後人誤引）。1000ms＝社群同構錨原值，對混合
+# 負載保守抗噪；本 rule 是平均值，平均破 1s 時 P99 通常已達數秒。
+# ⚠️ 起始點非通用值：搜尋延遲隨 query 複雜度、shard 拓撲與快取命中率差
+# 一到兩個數量級，正式採用前應以租戶 baseline 校準（低延遲搜尋型租戶可
+# 下探 200–500）。
 #
 # Tenant config 範例 (conf.d/es-prod.yaml):
 #   tenants:

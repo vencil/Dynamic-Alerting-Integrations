@@ -4,7 +4,7 @@
   "title": "Threshold registry — threshold-contract SoT shape (TRK-339 WS1a / #1200 D2)",
   "version": "v2.9.0",
   "description": "Shape contract for rule-packs/threshold-registry.yaml, the standalone threshold-contract SoT decided by epic #1200 D2 (standalone YAML registry: language-neutral, schema-validatable). STRICT at every level (additionalProperties:false) — this file is a hand-carried contract during the transition period, so a typo'd field or a mis-typed value must fail at author/CI time, not surface later as a silently-dropped threshold identity. Enforcement note: extraction is FULL (all packs/keys — mechanical), but the enforcement path this registry first serves is the 18-key repair line (#1196 / TRK-337). Validated BEFORE any generation stage by scripts/tools/lint/check_threshold_registry.py (pre-commit + CI).",
-  "$comment": "Cross-entry constraints that JSON Schema cannot express — every keys.<k>.pack must exist under packs, every critical_of must name a key in the same pack, and the whole document must stay semantically equal to scaffold_tenant.RULE_PACKS during the transition — are enforced by the equivalence assertion in check_threshold_registry.py (diff_vs_scaffold in _registry_lib.py). metric_class is an enum on purpose: adding a new class is a deliberate contract change and must touch this schema.",
+  "$comment": "Cross-entry constraints that JSON Schema cannot express — every keys.<k>.pack must exist under packs, every critical_of must name a key in the same pack, every deprecated_aliases target must name an existing key while its OLD spelling must NOT be an active key (both enforced fail-loud by build_registry_doc), and the whole document must stay semantically equal to scaffold_tenant.RULE_PACKS during the transition — are enforced by the equivalence assertion in check_threshold_registry.py (diff_vs_scaffold in _registry_lib.py). metric_class is an enum on purpose: adding a new class is a deliberate contract change and must touch this schema.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "packs", "keys"],
@@ -12,6 +12,19 @@
     "version": {
       "const": 1,
       "$comment": "Registry FORMAT version (not the platform release). Bump only with a migration note in the file header."
+    },
+    "deprecated_aliases": {
+      "type": "object",
+      "title": "Retired threshold-key spellings still honored during their transition window (#1231)",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "$comment": "old spelling -> canonical key. The old spelling stays pattern-legal (it WAS a key); the target must be an existing active key and the old spelling must not be — cross-checked fail-loud by build_registry_doc, not expressible here. This section is the alias SSOT: the Go (pkg/config/aliases.go deprecatedKeyAliases) and Python (_grar_validate.py DEPRECATED_KEY_ALIASES) runtime mirrors are pinned to it by tests."
+        }
+      },
+      "$comment": "Optional and sparse: present only while at least one alias window is open. Authored in _registry_lib.DEPRECATED_KEY_ALIASES during the transition period (PR-3 folds it into the authored registry file)."
     },
     "packs": {
       "type": "object",

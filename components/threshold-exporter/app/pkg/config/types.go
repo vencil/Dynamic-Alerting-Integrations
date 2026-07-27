@@ -188,7 +188,7 @@ const DefaultMaxMetricsPerTenant = 500
 //
 //	defaults:
 //	  mysql_connections: 80
-//	  mysql_cpu: 30                          # threads_running saturation, NOT host CPU% (#944)
+//	  mysql_threads_running: 30              # threads_running saturation, NOT host CPU% (#944; renamed from mysql_cpu, #1231)
 //	state_filters:
 //	  container_crashloop:
 //	    reasons: ["CrashLoopBackOff"]
@@ -223,6 +223,16 @@ type ResolvedThreshold struct {
 	Component    string
 	CustomLabels map[string]string // dimensional labels from {key="value"} syntax
 	RegexLabels  map[string]string // regex labels from {key=~"pattern"} syntax
+
+	// legacyTwinOf carries the canonical base key when this row is the
+	// transition-window legacy dual-emit twin of that key (#1231), and is
+	// empty on every other row. Unexported by design: it is resolve-internal
+	// ordering metadata — truncationSortKey sorts a twin immediately AFTER
+	// its canonical row so the cardinality-cap cut can never keep the twin
+	// while dropping the canonical — and it must never leak into the
+	// tenant-api JSON (encoding/json skips unexported fields) or the
+	// Prometheus label set (the collector reads exported fields only).
+	legacyTwinOf string
 }
 
 // ResolvedSeverityDedup represents a tenant's severity deduplication preference.

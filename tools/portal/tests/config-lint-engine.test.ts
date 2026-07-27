@@ -10,15 +10,15 @@ import { lintConfig, LINT_RULES, parseYaml } from '../src/interactive/tools/conf
 
 describe('parseYaml', () => {
   it('parses tenants, coerces numbers, and keeps the disable sentinel', () => {
-    const t = parseYaml('db-a:\n  mysql_cpu: 98\n  _silent_mode: "disable"');
-    expect(t['db-a'].mysql_cpu).toBe(98);          // numeric coercion
+    const t = parseYaml('db-a:\n  container_cpu: 98\n  _silent_mode: "disable"');
+    expect(t['db-a'].container_cpu).toBe(98);          // numeric coercion
     expect(t['db-a']._silent_mode).toBe('disable'); // sentinel preserved
   });
 });
 
 describe('lintConfig', () => {
   it('flags an over-high cpu threshold (threshold-too-high)', () => {
-    const r = lintConfig('db-a:\n  mysql_cpu: 98');
+    const r = lintConfig('db-a:\n  container_cpu: 98');
     expect(r.ok).toBe(true);
     const f = r.findings.find((x) => x.ruleId === 'threshold-too-high');
     expect(f).toBeTruthy();
@@ -40,7 +40,7 @@ describe('lintConfig', () => {
   });
 
   it('returns findings severity-sorted (error -> warning -> info)', () => {
-    const r = lintConfig('db-a:\n  mysql_cpu: 98\n  latency_warning: 50');
+    const r = lintConfig('db-a:\n  container_cpu: 98\n  latency_warning: 50');
     const order = { error: 0, warning: 1, info: 2 };
     for (let i = 1; i < r.findings.length; i++) {
       expect(order[r.findings[i].severity]).toBeGreaterThanOrEqual(order[r.findings[i - 1].severity]);

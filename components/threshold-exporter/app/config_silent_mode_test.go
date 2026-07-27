@@ -734,7 +734,9 @@ func TestValidateTenantKeys(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			w := tt.cfg.ValidateTenantKeys()
+			// #1231 c2: the pre-existing warning kinds all live on the
+			// Errors channel; these fixtures carry no deprecated aliases.
+			w := tt.cfg.ValidateTenantKeys().Errors
 			if len(w) != tt.wantLen {
 				t.Fatalf("expected %d warnings, got %d: %v", tt.wantLen, len(w), w)
 			}

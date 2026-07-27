@@ -9,10 +9,10 @@
 # >>> GENERATED:threshold-registry:pack-mariadb — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
 # 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
 #   mysql_connections: 80   [chart-default]   # count — Max threads_connected warning
-#   mysql_cpu: 30   [chart-default]
+#   mysql_threads_running: 30   [chart-default]
 #       threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30
-#       = PMM/Nichter 'high' (#944); key kept as mysql_cpu (config-contract stability; metric/alert
-#       renamed, #944 closed)
+#       = PMM/Nichter 'high' (#944); renamed from mysql_cpu (#1231 owner-approved reversal of the
+#       #944 keep — 2-release alias window, old spelling still resolves)
 #   mysql_replication_lag: 30   [chart-default]
 #       seconds — Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 =
 #       APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's
@@ -27,9 +27,9 @@
 # 只在租戶檔填一個不在 defaults 的 key 永遠不會生效：那不是 dormant，
 # 是永久無法啟用。
 #   mysql_connections_critical: 120   # count — Critical tier (Scenario D)
-#   mysql_cpu_critical: 50
+#   mysql_threads_running_critical: 50
 #       threads — Critical tier (running-threads saturation); 120→50 = PMM critical-load / Nichter
-#       'overloaded' (#944)
+#       'overloaded' (#944); renamed from mysql_cpu_critical (#1231, 2-release alias window)
 #   mysql_replication_lag_critical: 120
 #       seconds — Critical tier replication lag; 120 = 4x the APA/mixin 30s trigger, 5x below PMM
 #       family 600s — sustained minutes-level lag is a failover data-loss window (#1200 WS5-P0-a)
@@ -40,7 +40,7 @@
 #     db-a:
 #       mysql_connections: "70"        # 自訂連線數警告閾值
 #       mysql_connections_critical: "120"  # Critical 閾值
-#       mysql_cpu: "45"               # 自訂執行緒飽和警告閾值（平台預設 30；key 保留 mysql_cpu＝config 契約穩定性，#944 結案）
+#       mysql_threads_running: "45"   # 自訂執行緒飽和警告閾值（平台預設 30；#1231 由 mysql_cpu 改名，舊拼法在 2-release 過渡窗內仍可解析）
 #       mysql_replication_lag: "20"           # 自訂複寫延遲警告閾值 (秒)
 #       mysql_replication_lag_critical: "120" # Critical 閾值 (秒，opt-in)
 # ============================================================
@@ -61,7 +61,7 @@ groups:
       # (promtool-verified). avg_over_time absorbs the dips; max by(tenant) still keeps
       # the per-tenant busiest instance (topology-aware: the saturated primary, not
       # diluted by idle replicas — which avg-across-instances would, and sum would
-      # false-fire). Consumed by the `mysql_cpu` threshold key + MariaDBHighThreadsRunning alert
+      # false-fire). Consumed by the `mysql_threads_running` threshold key + MariaDBHighThreadsRunning alert
       # (metric-dictionary.yaml). This is SATURATION; for true CPU UTILISATION see
       # PodContainerHighCPU (rule-pack-kubernetes, cAdvisor ÷ limit/request) — complementary
       # signals, NOT equal (USE method; threads_running and CPU% decouple both ways).
@@ -128,8 +128,8 @@ groups:
       - record: tenant:alert_threshold:mysql_connections
         expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="warning"})
 
-      - record: tenant:alert_threshold:mysql_cpu
-        expr: max by(tenant) (user_threshold{component="mysql", metric="cpu", severity="warning"})
+      - record: tenant:alert_threshold:mysql_threads_running
+        expr: max by(tenant) (user_threshold{component="mysql", metric="threads_running", severity="warning"})
 
       - record: tenant:alert_threshold:mysql_replication_lag
         expr: max by(tenant) (user_threshold{component="mysql", metric="replication_lag", severity="warning"})
@@ -138,8 +138,8 @@ groups:
       - record: tenant:alert_threshold:mysql_connections_critical
         expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="critical"})
 
-      - record: tenant:alert_threshold:mysql_cpu_critical
-        expr: max by(tenant) (user_threshold{component="mysql", metric="cpu", severity="critical"})
+      - record: tenant:alert_threshold:mysql_threads_running_critical
+        expr: max by(tenant) (user_threshold{component="mysql", metric="threads_running", severity="critical"})
 
       - record: tenant:alert_threshold:mysql_replication_lag_critical
         expr: max by(tenant) (user_threshold{component="mysql", metric="replication_lag", severity="critical"})
@@ -609,10 +609,18 @@ groups:
       # For true CPU UTILISATION see PodContainerHighCPU (rule-pack-kubernetes,
       # cAdvisor ÷ limit/request) — they decouple both ways (a single heavy query
       # pins a core at low threads_running; lock/IO waits pile threads at low CPU).
-      # NOTE: the threshold key (`mysql_cpu`) and metric_group ("cpu") are KEPT
-      # as-is for config-contract stability (a tenant-facing config key + routing
-      # key — the industry norm is to keep these stable, not cosmetically rename;
-      # the metric + alert are already correctly named). #944 closed on this basis.
+      # NOTE: the threshold key and metric_group are now `mysql_threads_running` /
+      # "threads_running" — #1231 (owner-approved) KNOWINGLY REVERSED the #944
+      # "keep mysql_cpu for config-contract stability" decision and retired the
+      # poisoned name: a key that SAYS cpu but MEANS threads keeps reinfecting
+      # every surface that copies it (#944/#1217 cleanups kept finding new
+      # copies). Transition: 2-release alias window — the old spelling still
+      # resolves (canonicalized at the exporter/tenant-api boundary) and the
+      # exporter dual-emits user_threshold{metric="cpu"} next to
+      # {metric="threads_running"} so downstream rules/dashboards migrate
+      # without a gap. Alias table: registry `deprecated_aliases` section
+      # (rule-packs/threshold-registry.yaml — the SSOT; Go/Python mirrors are
+      # pin-tested to it).
       - alert: MariaDBHighThreadsRunning
         expr: |
           (
@@ -620,7 +628,7 @@ groups:
               (
                 tenant:mysql_threads_running:avg1m
                 > on(tenant) group_left
-                tenant:alert_threshold:mysql_cpu
+                tenant:alert_threshold:mysql_threads_running
               )
               unless on(tenant)
               (user_state_filter{filter="maintenance"} == 1)
@@ -634,7 +642,7 @@ groups:
               (
                 tenant:mysql_threads_running:avg1m
                 > on(tenant) group_left
-                tenant:alert_threshold:mysql_cpu
+                tenant:alert_threshold:mysql_threads_running
               )
               unless on(tenant)
               (user_state_filter{filter="maintenance"} == 1)
@@ -647,7 +655,7 @@ groups:
         for: 30s
         labels:
           severity: warning
-          metric_group: "cpu"
+          metric_group: "threads_running"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High running-thread saturation on {{ $labels.tenant }}"
@@ -668,7 +676,7 @@ groups:
               (
                 tenant:mysql_threads_running:avg1m
                 > on(tenant) group_left
-                tenant:alert_threshold:mysql_cpu_critical
+                tenant:alert_threshold:mysql_threads_running_critical
               )
               unless on(tenant)
               (user_state_filter{filter="maintenance"} == 1)
@@ -682,7 +690,7 @@ groups:
               (
                 tenant:mysql_threads_running:avg1m
                 > on(tenant) group_left
-                tenant:alert_threshold:mysql_cpu_critical
+                tenant:alert_threshold:mysql_threads_running_critical
               )
               unless on(tenant)
               (user_state_filter{filter="maintenance"} == 1)
@@ -693,7 +701,7 @@ groups:
         for: 30s
         labels:
           severity: critical
-          metric_group: "cpu"
+          metric_group: "threads_running"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Critical running-thread saturation on {{ $labels.tenant }}"
@@ -721,7 +729,7 @@ groups:
                 (
                   tenant:mysql_threads_running:avg1m
                   > on(tenant) group_left
-                  tenant:alert_threshold:mysql_cpu
+                  tenant:alert_threshold:mysql_threads_running
                 )
               )
               unless on(tenant)
@@ -743,7 +751,7 @@ groups:
                 (
                   tenant:mysql_threads_running:avg1m
                   > on(tenant) group_left
-                  tenant:alert_threshold:mysql_cpu
+                  tenant:alert_threshold:mysql_threads_running
                 )
               )
               unless on(tenant)

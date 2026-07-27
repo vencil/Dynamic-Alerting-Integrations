@@ -52,7 +52,7 @@ Tenants configure thresholds via `tenant.yaml` without touching PromQL:
 ```yaml
 # Three-state control example (key names match metric definitions in _defaults.yaml)
 mysql_connections: "800"        # Custom: user-defined threshold
-mysql_cpu: ""                   # Default: use platform default (omit or empty string)
+mysql_threads_running: ""       # Default: use platform default (omit or empty string)
 mariadb_replication_lag: "disable" # Disable: turn off this alert
 ```
 
@@ -83,7 +83,7 @@ Domain Experts define composite alerting scenarios with clear business semantics
     (
       tenant:mysql_threads_running:avg1m
       > on(tenant) group_left
-      tenant:alert_threshold:mysql_cpu
+      tenant:alert_threshold:mysql_threads_running
     )
     unless on(tenant)
     (user_state_filter{filter="maintenance"} == 1)

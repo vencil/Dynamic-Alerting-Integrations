@@ -35,8 +35,13 @@ const (
 // to ensure consistency.
 type TaskResult struct {
 	TenantID string `json:"tenant_id"`
-	Status   string `json:"status"`  // "ok" | "error"
+	Status   string `json:"status"` // "ok" | "error"
 	Message  string `json:"message,omitempty"`
+	// Warnings mirrors handler.BatchResult.Warnings (#1231 1b): non-blocking
+	// deprecation advisories for an op that succeeded, so the async polling
+	// path (?async=true → GET /tasks/{id}) carries the same author-facing
+	// signal as the sync response instead of silently dropping it.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // Task represents a single async batch operation.

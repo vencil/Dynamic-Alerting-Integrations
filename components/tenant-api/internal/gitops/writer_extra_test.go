@@ -17,7 +17,7 @@ import (
 func TestValidate_ValidConfig(t *testing.T) {
 	t.Parallel()
 	yaml := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
-	errs := validate("", "db-a", yaml)
+	errs, _ := validate("", "db-a", yaml)
 	if len(errs) != 0 {
 		t.Errorf("expected no errors, got: %v", errs)
 	}
@@ -26,18 +26,18 @@ func TestValidate_ValidConfig(t *testing.T) {
 func TestValidate_MultipleTenants(t *testing.T) {
 	t.Parallel()
 	yaml := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n  db-b:\n    _silent_mode: \"critical\"\n"
-	errs := validate("", "db-a", yaml)
+	errs, _ := validate("", "db-a", yaml)
 	if len(errs) != 0 {
 		t.Errorf("expected no errors for db-a, got: %v", errs)
 	}
-	errs = validate("", "db-b", yaml)
+	errs, _ = validate("", "db-b", yaml)
 	if len(errs) != 0 {
 		t.Errorf("expected no errors for db-b, got: %v", errs)
 	}
 }
 
 func TestValidate_InvalidYAML(t *testing.T) {
-	errs := validate("", "db-a", "{{not yaml")
+	errs, _ := validate("", "db-a", "{{not yaml")
 	if len(errs) == 0 {
 		t.Error("expected errors for invalid YAML")
 	}
@@ -49,7 +49,7 @@ func TestValidate_InvalidYAML(t *testing.T) {
 func TestValidate_MissingTenantSection(t *testing.T) {
 	t.Parallel()
 	yaml := "tenants:\n  db-b:\n    cpu: \"80\"\n"
-	errs := validate("", "db-a", yaml)
+	errs, _ := validate("", "db-a", yaml)
 	if len(errs) == 0 {
 		t.Error("expected error for missing tenant section")
 	}
@@ -60,7 +60,7 @@ func TestValidate_MissingTenantSection(t *testing.T) {
 
 func TestValidate_EmptyContent(t *testing.T) {
 	t.Parallel()
-	errs := validate("", "db-a", "")
+	errs, _ := validate("", "db-a", "")
 	if len(errs) == 0 {
 		t.Error("expected error for empty content")
 	}
@@ -69,7 +69,7 @@ func TestValidate_EmptyContent(t *testing.T) {
 func TestValidate_NoTenantsKey(t *testing.T) {
 	t.Parallel()
 	yaml := "defaults:\n  cpu: 80\n"
-	errs := validate("", "db-a", yaml)
+	errs, _ := validate("", "db-a", yaml)
 	if len(errs) == 0 {
 		t.Error("expected error when tenants key is missing")
 	}
@@ -116,7 +116,7 @@ func TestWrite_ValidationFailure(t *testing.T) {
 	w := NewWriter(dir, dir)
 
 	// Invalid YAML should fail validation before touching disk
-	err := w.Write(context.Background(), "db-a", "test@example.com", "{{invalid yaml")
+	_, err := w.Write(context.Background(), "db-a", "test@example.com", "{{invalid yaml")
 	if err == nil {
 		t.Error("expected error for invalid YAML")
 	}
@@ -136,7 +136,7 @@ func TestWrite_MissingTenantSection(t *testing.T) {
 	dir := t.TempDir()
 	w := NewWriter(dir, dir)
 
-	err := w.Write(context.Background(), "db-a", "test@example.com", "tenants:\n  db-b:\n    cpu: \"80\"\n")
+	_, err := w.Write(context.Background(), "db-a", "test@example.com", "tenants:\n  db-b:\n    cpu: \"80\"\n")
 	if err == nil {
 		t.Error("expected error for missing tenant section")
 	}
@@ -158,7 +158,7 @@ func TestValidationFailuresWrapErrValidation(t *testing.T) {
 	ctx := context.Background()
 	const bad = "{{invalid yaml"
 
-	if err := w.Write(ctx, "db-a", "e@x.com", bad); !errors.Is(err, ErrValidation) {
+	if _, err := w.Write(ctx, "db-a", "e@x.com", bad); !errors.Is(err, ErrValidation) {
 		t.Errorf("Write: errors.Is(err, ErrValidation) = false; err = %v", err)
 	}
 	if _, err := w.WritePR(ctx, "db-a", "e@x.com", bad); !errors.Is(err, ErrValidation) {
@@ -264,7 +264,7 @@ func TestWrite_InGitRepo(t *testing.T) {
 	w := NewWriter(dir, dir)
 
 	yamlContent := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
-	err := w.Write(context.Background(), "db-a", "test@example.com", yamlContent)
+	_, err := w.Write(context.Background(), "db-a", "test@example.com", yamlContent)
 	if err != nil {
 		t.Fatalf("Write returned error: %v", err)
 	}
@@ -288,13 +288,13 @@ func TestWrite_UpdateExistingInGitRepo(t *testing.T) {
 
 	// First write
 	yaml1 := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
-	if err := w.Write(context.Background(), "db-a", "test@example.com", yaml1); err != nil {
+	if _, err := w.Write(context.Background(), "db-a", "test@example.com", yaml1); err != nil {
 		t.Fatalf("first Write: %v", err)
 	}
 
 	// Second write (update)
 	yaml2 := "tenants:\n  db-a:\n    _silent_mode: \"critical\"\n"
-	if err := w.Write(context.Background(), "db-a", "test@example.com", yaml2); err != nil {
+	if _, err := w.Write(context.Background(), "db-a", "test@example.com", yaml2); err != nil {
 		t.Fatalf("second Write: %v", err)
 	}
 
@@ -315,12 +315,12 @@ func TestWrite_DifferentTenants(t *testing.T) {
 	w := NewWriter(dir, dir)
 
 	yaml1 := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
-	if err := w.Write(context.Background(), "db-a", "alice@example.com", yaml1); err != nil {
+	if _, err := w.Write(context.Background(), "db-a", "alice@example.com", yaml1); err != nil {
 		t.Fatalf("Write db-a: %v", err)
 	}
 
 	yaml2 := "tenants:\n  db-b:\n    _silent_mode: \"critical\"\n"
-	if err := w.Write(context.Background(), "db-b", "bob@example.com", yaml2); err != nil {
+	if _, err := w.Write(context.Background(), "db-b", "bob@example.com", yaml2); err != nil {
 		t.Fatalf("Write db-b: %v", err)
 	}
 
@@ -340,7 +340,7 @@ func TestWrite_AuthorEmailParsing(t *testing.T) {
 
 	// Email with @ should extract name from prefix
 	yaml := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
-	err := w.Write(context.Background(), "db-a", "alice.smith@example.com", yaml)
+	_, err := w.Write(context.Background(), "db-a", "alice.smith@example.com", yaml)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -368,7 +368,7 @@ func TestWrite_CommitterFromEnv(t *testing.T) {
 	w := NewWriter(dir, dir)
 
 	yaml := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
-	if err := w.Write(context.Background(), "db-a", "operator@example.com", yaml); err != nil {
+	if _, err := w.Write(context.Background(), "db-a", "operator@example.com", yaml); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -423,7 +423,7 @@ func TestCommitParent_InGitRepo(t *testing.T) {
 
 	// Write to create a second commit
 	yaml := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
-	if err := w.Write(context.Background(), "db-a", "test@example.com", yaml); err != nil {
+	if _, err := w.Write(context.Background(), "db-a", "test@example.com", yaml); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -454,7 +454,7 @@ func TestValidate_CustomAlerts_ValidRecipe(t *testing.T) {
 	t.Parallel()
 	yaml := "tenants:\n  db-a:\n    _custom_alerts:\n" +
 		"      - {recipe: threshold, name: q, metric: qd, op: \">\", window: 5m, threshold: \"1:warning\"}\n"
-	if errs := validate("", "db-a", yaml); len(errs) != 0 {
+	if errs, _ := validate("", "db-a", yaml); len(errs) != 0 {
 		t.Errorf("valid custom alert should pass preflight, got: %v", errs)
 	}
 }
@@ -464,7 +464,7 @@ func TestValidate_CustomAlerts_BadRecipeRejected(t *testing.T) {
 	// unknown recipe → preflight violation (→ Write returns "validation failed" → HTTP 400)
 	yaml := "tenants:\n  db-a:\n    _custom_alerts:\n" +
 		"      - {recipe: bogus, name: x, metric: m, op: \">\", window: 5m, threshold: \"1:warning\"}\n"
-	errs := validate("", "db-a", yaml)
+	errs, _ := validate("", "db-a", yaml)
 	if len(errs) == 0 || !strings.Contains(strings.Join(errs, ";"), "_custom_alerts[0]") {
 		t.Errorf("bad recipe should be rejected at preflight with an indexed violation, got: %v", errs)
 	}
@@ -475,7 +475,7 @@ func TestValidate_CustomAlerts_BadForRejected(t *testing.T) {
 	// non-enum `for` (TRK-326) → preflight violation
 	yaml := "tenants:\n  db-a:\n    _custom_alerts:\n" +
 		"      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"1:warning\", for: 2m}\n"
-	if errs := validate("", "db-a", yaml); len(errs) == 0 {
+	if errs, _ := validate("", "db-a", yaml); len(errs) == 0 {
 		t.Errorf("non-enum for should be rejected at preflight, got no errors")
 	}
 }

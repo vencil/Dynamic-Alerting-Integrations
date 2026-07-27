@@ -140,7 +140,7 @@ func writeHierarchicalBenchFixtureContent(root string, numTenants int) error {
 	// L0 root _defaults.yaml: platform-wide floor thresholds.
 	if err := writeYAMLFile(filepath.Join(root, "_defaults.yaml"), `defaults:
   mysql_connections: 80
-  mysql_cpu: 80
+  mysql_threads_running: 80
   container_cpu: 80
   container_memory: 85
   oracle_sessions_active: 200
@@ -212,7 +212,7 @@ func writeHierarchicalBenchFixtureContent(root string, numTenants int) error {
 		content := fmt.Sprintf(`tenants:
   %s:
     mysql_connections: "%d"
-    mysql_cpu: "%d"
+    mysql_threads_running: "%d"
     container_cpu:
       default: "%d"
       overrides:
@@ -395,7 +395,7 @@ func BenchmarkDiffAndReload_Hierarchical_1000_OneTenantChanged(b *testing.B) {
 		"tenant-0500.yaml")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		content := fmt.Sprintf("tenants:\n  tenant-0500:\n    mysql_connections: \"%d\"\n    mysql_cpu: \"%d\"\n",
+		content := fmt.Sprintf("tenants:\n  tenant-0500:\n    mysql_connections: \"%d\"\n    mysql_threads_running: \"%d\"\n",
 			50+i%100, 60+i%40)
 		if err := os.WriteFile(targetFile, []byte(content), 0o600); err != nil {
 			b.Fatal(err)
@@ -482,7 +482,7 @@ func BenchmarkDiffAndReload_Hierarchical_1000_Churn10pct(b *testing.B) {
 		// Rewrite all 100 target files with iteration-specific values
 		// so the file hash actually moves.
 		for j := 0; j < 100; j++ {
-			content := fmt.Sprintf("tenants:\n  %s:\n    mysql_connections: \"%d\"\n    mysql_cpu: \"%d\"\n",
+			content := fmt.Sprintf("tenants:\n  %s:\n    mysql_connections: \"%d\"\n    mysql_threads_running: \"%d\"\n",
 				targetIDs[j], 50+(i+j)%100, 60+(i+j)%40)
 			if err := os.WriteFile(targetFiles[j], []byte(content), 0o600); err != nil {
 				b.Fatal(err)

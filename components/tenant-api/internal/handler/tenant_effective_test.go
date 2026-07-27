@@ -38,7 +38,7 @@ func TestGetTenantEffective_Success_Flat(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
-		"defaults:\n  mysql_connections: \"80\"\n  mysql_cpu: \"90\"\n")
+		"defaults:\n  mysql_connections: \"80\"\n  mysql_threads_running: \"90\"\n")
 	writeFile(t, filepath.Join(dir, "db-a.yaml"),
 		"tenants:\n  db-a:\n    mysql_connections: \"70\"\n")
 
@@ -72,12 +72,12 @@ func TestGetTenantEffective_Success_Flat(t *testing.T) {
 		t.Errorf("DefaultsChain = %v, want [_defaults.yaml]", ec.DefaultsChain)
 	}
 
-	// Merged config: tenant override wins for mysql_connections, default for mysql_cpu.
+	// Merged config: tenant override wins for mysql_connections, default for mysql_threads_running.
 	if got := ec.EffectiveConfig["mysql_connections"]; got != "70" {
 		t.Errorf("mysql_connections = %v, want \"70\"", got)
 	}
-	if got := ec.EffectiveConfig["mysql_cpu"]; got != "90" {
-		t.Errorf("mysql_cpu = %v, want \"90\"", got)
+	if got := ec.EffectiveConfig["mysql_threads_running"]; got != "90" {
+		t.Errorf("mysql_threads_running = %v, want \"90\"", got)
 	}
 }
 
@@ -86,10 +86,10 @@ func TestGetTenantEffective_Success_Hierarchy(t *testing.T) {
 	dir := t.TempDir()
 	// L0 root defaults
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
-		"defaults:\n  mysql_connections: \"80\"\n  mysql_cpu: \"90\"\n  mysql_slow_queries: \"100\"\n")
+		"defaults:\n  mysql_connections: \"80\"\n  mysql_threads_running: \"90\"\n  mysql_slow_queries: \"100\"\n")
 	// L1 team-level defaults
 	writeFile(t, filepath.Join(dir, "team-a", "_defaults.yaml"),
-		"defaults:\n  mysql_cpu: \"85\"\n") // L1 overrides L0 for mysql_cpu
+		"defaults:\n  mysql_threads_running: \"85\"\n") // L1 overrides L0 for mysql_threads_running
 	// Tenant file at L1
 	writeFile(t, filepath.Join(dir, "team-a", "tenant-a.yaml"),
 		"tenants:\n  tenant-a:\n    mysql_connections: \"70\"\n") // tenant overrides mysql_connections
@@ -126,8 +126,8 @@ func TestGetTenantEffective_Success_Hierarchy(t *testing.T) {
 	if got := ec.EffectiveConfig["mysql_connections"]; got != "70" {
 		t.Errorf("mysql_connections = %v (%T), want \"70\" (tenant override)", got, got)
 	}
-	if got := ec.EffectiveConfig["mysql_cpu"]; got != "85" {
-		t.Errorf("mysql_cpu = %v, want \"85\" (L1 override of L0)", got)
+	if got := ec.EffectiveConfig["mysql_threads_running"]; got != "85" {
+		t.Errorf("mysql_threads_running = %v, want \"85\" (L1 override of L0)", got)
 	}
 	if got := ec.EffectiveConfig["mysql_slow_queries"]; got != "100" {
 		t.Errorf("mysql_slow_queries = %v, want \"100\" (L0 inherited)", got)
@@ -272,7 +272,7 @@ func TestGetTenantEffective_NullDeletesInheritedKey(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
-		"defaults:\n  mysql_connections: \"80\"\n  mysql_cpu: \"90\"\n")
+		"defaults:\n  mysql_connections: \"80\"\n  mysql_threads_running: \"90\"\n")
 	writeFile(t, filepath.Join(dir, "db-a.yaml"),
 		"tenants:\n  db-a:\n    mysql_connections: ~\n") // YAML null
 
@@ -293,8 +293,8 @@ func TestGetTenantEffective_NullDeletesInheritedKey(t *testing.T) {
 	if _, present := ec.EffectiveConfig["mysql_connections"]; present {
 		t.Errorf("mysql_connections should be deleted by YAML null; got %v", ec.EffectiveConfig["mysql_connections"])
 	}
-	if got := ec.EffectiveConfig["mysql_cpu"]; got != "90" {
-		t.Errorf("mysql_cpu = %v, want \"90\" (unaffected)", got)
+	if got := ec.EffectiveConfig["mysql_threads_running"]; got != "90" {
+		t.Errorf("mysql_threads_running = %v, want \"90\" (unaffected)", got)
 	}
 }
 
@@ -304,9 +304,9 @@ func TestGetTenantEffective_MetadataSkipped(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
-		"defaults:\n  _metadata:\n    owner: platform\n  mysql_cpu: \"90\"\n")
+		"defaults:\n  _metadata:\n    owner: platform\n  mysql_threads_running: \"90\"\n")
 	writeFile(t, filepath.Join(dir, "db-a.yaml"),
-		"tenants:\n  db-a:\n    mysql_cpu: \"85\"\n")
+		"tenants:\n  db-a:\n    mysql_threads_running: \"85\"\n")
 
 	h := GetTenantEffective(&Deps{ConfigDir: dir})
 	req := newRequestWithChiParam("GET", "/api/v1/tenants/db-a/effective", "id", "db-a", nil)
@@ -325,7 +325,7 @@ func TestGetTenantEffective_MetadataSkipped(t *testing.T) {
 	if _, present := ec.EffectiveConfig["_metadata"]; present {
 		t.Errorf("_metadata should not be inherited; got %v", ec.EffectiveConfig["_metadata"])
 	}
-	if got := ec.EffectiveConfig["mysql_cpu"]; got != "85" {
-		t.Errorf("mysql_cpu = %v, want \"85\"", got)
+	if got := ec.EffectiveConfig["mysql_threads_running"]; got != "85" {
+		t.Errorf("mysql_threads_running = %v, want \"85\"", got)
 	}
 }

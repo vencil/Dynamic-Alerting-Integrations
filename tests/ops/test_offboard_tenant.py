@@ -130,12 +130,12 @@ class TestCheckCrossReferences:
 class TestGetTenantMetrics:
     def test_returns_metrics(self, tmp_path):
         configs = {
-            "db-a.yaml": {"tenants": {"db-a": {"mysql_connections": "80", "mysql_cpu": "75"}}},
+            "db-a.yaml": {"tenants": {"db-a": {"mysql_connections": "80", "mysql_threads_running": "75"}}},
         }
         d = _make_config_dir(tmp_path, configs)
         all_configs = ot.load_all_configs(d)
         metrics = ot.get_tenant_metrics("db-a", all_configs)
-        assert metrics == {"mysql_connections": "80", "mysql_cpu": "75"}
+        assert metrics == {"mysql_connections": "80", "mysql_threads_running": "75"}
 
     def test_returns_empty_for_missing_tenant(self, tmp_path):
         configs = {
@@ -192,7 +192,7 @@ class TestRunPrecheck:
 
     def test_lists_metrics(self, tmp_path):
         configs = {
-            "db-a.yaml": {"tenants": {"db-a": {"mysql_connections": "80", "mysql_cpu": "75"}}},
+            "db-a.yaml": {"tenants": {"db-a": {"mysql_connections": "80", "mysql_threads_running": "75"}}},
         }
         d = _make_config_dir(tmp_path, configs)
         _, report = ot.run_precheck("db-a", d)

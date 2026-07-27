@@ -73,7 +73,7 @@ func TestConfigManager_LoadDir_BasicMerge(t *testing.T) {
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
   mysql_connections: 80
-  mysql_cpu: 80
+  mysql_threads_running: 80
   container_cpu: 80
 state_filters:
   container_crashloop:
@@ -94,7 +94,7 @@ tenants:
 tenants:
   db-b:
     mysql_connections: "100"
-    mysql_cpu: "60"
+    mysql_threads_running: "60"
     _state_container_crashloop: "disable"
 `)
 
@@ -121,14 +121,16 @@ tenants:
 	if cfg.Tenants["db-a"]["mysql_connections"].Default != "70" {
 		t.Errorf("expected db-a mysql_connections=70, got %s", cfg.Tenants["db-a"]["mysql_connections"].Default)
 	}
-	if cfg.Tenants["db-b"]["mysql_cpu"].Default != "60" {
-		t.Errorf("expected db-b mysql_cpu=60, got %s", cfg.Tenants["db-b"]["mysql_cpu"].Default)
+	if cfg.Tenants["db-b"]["mysql_threads_running"].Default != "60" {
+		t.Errorf("expected db-b mysql_threads_running=60, got %s", cfg.Tenants["db-b"]["mysql_threads_running"].Default)
 	}
 
-	// db-a: 3 metrics, db-b: 3 metrics = 6
+	// db-a: 3 metrics, db-b: 3 metrics = 6; #1231 adds one legacy
+	// metric="cpu" twin per tenant for the mysql_threads_running alias
+	// window (retired spelling: mysql_threads_running) = 8.
 	resolved := cfg.Resolve()
-	if len(resolved) != 6 {
-		t.Errorf("expected 6 resolved thresholds, got %d: %+v", len(resolved), resolved)
+	if len(resolved) != 8 {
+		t.Errorf("expected 8 resolved thresholds, got %d: %+v", len(resolved), resolved)
 	}
 }
 

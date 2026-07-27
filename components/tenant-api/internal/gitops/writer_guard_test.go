@@ -24,12 +24,14 @@ func TestWriterRejectsReservedTenantID(t *testing.T) {
 		call func(w *Writer) error
 	}{
 		{"Write", func(w *Writer) error {
-			return w.Write(ctx, reserved, "op@example.com", "tenants:\n  x:\n    cpu: \"1\"\n")
+			_, err := w.Write(ctx, reserved, "op@example.com", "tenants:\n  x:\n    cpu: \"1\"\n")
+			return err
 		}},
 		{"WriteMerged", func(w *Writer) error {
-			return w.WriteMerged(ctx, reserved, "op@example.com", func([]byte) (string, error) {
+			_, err := w.WriteMerged(ctx, reserved, "op@example.com", func([]byte) (string, error) {
 				return "tenants:\n  x:\n    cpu: \"1\"\n", nil
 			})
+			return err
 		}},
 		{"WritePR", func(w *Writer) error {
 			_, err := w.WritePR(ctx, reserved, "op@example.com", "tenants:\n  x:\n    cpu: \"1\"\n")

@@ -16,7 +16,7 @@ const t = window.__t || ((zh, en) => en);
 const ALERT_DEFS = {
   mysql_connections:          { alert: 'MariaDBHighConnections',          severity: 'warning',  label: 'MySQL Connections' },
   mysql_connections_critical: { alert: 'MariaDBHighConnectionsCritical',  severity: 'critical', label: 'MySQL Connections (Critical)' },
-  mysql_cpu:                  { alert: 'MariaDBHighThreadsRunning',       severity: 'warning',  label: 'MySQL Threads Running' },
+  mysql_threads_running:      { alert: 'MariaDBHighThreadsRunning',       severity: 'warning',  label: 'MySQL Threads Running' },
   pg_connections:             { alert: 'PostgreSQLHighConnections',       severity: 'warning',  label: 'PG Connections' },
   pg_connections_critical:    { alert: 'PostgreSQLHighConnectionsCritical', severity: 'critical', label: 'PG Connections (Critical)' },
   pg_cache_hit_ratio:         { alert: 'PostgreSQLLowCacheHit',          severity: 'warning',  label: 'PG Cache Hit %', inverted: true },
@@ -30,14 +30,14 @@ const ALERT_DEFS = {
 const DEFAULT_CONFIG = {
   mysql_connections: '100',
   mysql_connections_critical: '200',
-  mysql_cpu: '30',
+  mysql_threads_running: '30',
   redis_memory: '80',
   redis_memory_critical: '95',
 };
 
 const DEFAULT_METRICS = {
   mysql_connections: 120,
-  mysql_cpu: 18,
+  mysql_threads_running: 18,
   redis_memory: 72,
 };
 

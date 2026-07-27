@@ -84,7 +84,7 @@ func TestVerifyRegistryNotResetWithFleet_Day0BlankRegistryOK(t *testing.T) {
 func TestVerifyRegistryNotResetWithFleet_Day0IgnoresUnderscoreFiles(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	writeFile(t, dir, "_defaults.yaml", "defaults:\n  mysql_cpu: 80\n")
+	writeFile(t, dir, "_defaults.yaml", "defaults:\n  mysql_threads_running: 80\n")
 	writeFile(t, dir, "_groups.yaml", "groups: {}\n")
 	writeFile(t, dir, RegistryFileName, "") // blank, but no real tenant → Day-0
 

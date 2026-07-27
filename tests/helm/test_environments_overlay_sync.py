@@ -14,7 +14,7 @@ This has now bitten the same key three times:
   * #1200 WS1a's reverse audit caught the chart copy (#1215) but missed
     these two overlays — so ``-f environments/local/threshold-exporter.yaml``
     (the very command ``scaffold_tenant.py`` prints in generated onboarding
-    docs) still rendered ``mysql_cpu: 80``;
+    docs) still rendered ``mysql_cpu`` at the stale 80;
   * this test's PR fixed the overlays.
 
 Each round fixed the copy and left the *class* unguarded. Nothing in

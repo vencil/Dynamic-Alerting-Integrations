@@ -64,6 +64,10 @@ function CustomAlertsModal(props) {
   const [loadError, setLoadError] = useState('');
   const [notice, setNotice] = useState('');
   const [collision, setCollision] = useState('');
+  // #1231: non-blocking advisories from a SUCCESSFUL save (deprecated
+  // threshold-key alias notices). Rendered as an info/warning block, never
+  // error-red — the write went through; these are migration reminders.
+  const [warnings, setWarnings] = useState([]);
   const liveRef = useRef(true);
 
   const isDirty = JSON.stringify(recipes) !== originalJSON || phase === 'form';
@@ -139,6 +143,7 @@ function CustomAlertsModal(props) {
     setNotice('');
     setViolations([]);
     setConflict(null);
+    setWarnings([]);
     saveCustomAlerts(tenantId, { custom_alerts: recipes, base_hash: baseHash })
       .then((res) => {
         if (!liveRef.current) return;
@@ -147,6 +152,9 @@ function CustomAlertsModal(props) {
           setBaseHash((res.data && res.data.source_hash) || baseHash);
           setOriginalJSON(JSON.stringify(recipes));
           setNotice(t('已儲存。', 'Saved.'));
+          // #1231: surface the API's non-blocking advisories verbatim
+          // (pass-through — the message text is owned by the backend).
+          setWarnings(Array.isArray(res.data && res.data.warnings) ? res.data.warnings : []);
           return;
         }
         if (res.status === 409) {
@@ -226,6 +234,16 @@ function CustomAlertsModal(props) {
             </div>
           )}
           {notice && <p className="mb-3 text-sm pl-2 border-l-2 border-[color:var(--da-color-success)] text-[color:var(--da-color-success)]" data-testid="notice">{notice}</p>}
+          {warnings.length > 0 && (
+            <div className="mb-3 p-3 rounded-md border-l-2 border-[color:var(--da-color-warning)] bg-[color:var(--da-color-warning-soft)]" data-testid="deprecation-warnings">
+              <p className="text-sm font-semibold">
+                {t('已儲存；後端提醒以下設定建議更新：', 'Saved. The backend flagged these advisories:')}
+              </p>
+              <ul className="text-xs mt-1 list-disc pl-5">
+                {warnings.map((w, i) => <li key={i}>{w}</li>)}
+              </ul>
+            </div>
+          )}
           {violations.length > 0 && (
             <div className="mb-3 p-3 rounded-md border-l-2 border-[color:var(--da-color-error)] bg-[color:var(--da-color-error-soft)]" data-testid="violations">
               <p className="text-sm font-semibold">

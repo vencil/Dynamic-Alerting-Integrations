@@ -54,7 +54,7 @@ conf.d/
 ```yaml
 defaults:
   mysql_connections: 80
-  mysql_cpu: 30
+  mysql_threads_running: 30
   mysql_replication_lag: 30
   container_cpu: 80
   container_memory: 85
@@ -76,7 +76,7 @@ tenants:
     mysql_connections: "70"          # Override default 80
     container_cpu: "70"              # Override default 80
     mysql_replication_lag: "disable" # No replica, disable
-    # mysql_cpu not specified → use default value 30
+    # mysql_threads_running not specified → use default value 30
     # Dimensional labels
     "redis_queue_length{queue='tasks'}": "500"
     "redis_queue_length{queue='events', priority='high'}": "1000:critical"

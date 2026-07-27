@@ -369,7 +369,7 @@ func TestIncrementalLoad_ProfilesAfterIncremental(t *testing.T) {
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
   mysql_connections: 80
-  mysql_cpu: 80
+  mysql_threads_running: 80
 `)
 	writeTestFile(t, dir, "_profiles.yaml", `
 profiles:
@@ -500,7 +500,7 @@ func TestIncrementalLoad_MultiOp(t *testing.T) {
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
   mysql_connections: 80
-  mysql_cpu: 80
+  mysql_threads_running: 80
 `)
 	writeTestFile(t, dir, "db-a.yaml", `
 tenants:
@@ -531,7 +531,7 @@ tenants:
 tenants:
   db-a:
     mysql_connections: "99"
-    mysql_cpu: "95"
+    mysql_threads_running: "95"
 `)
 	os.Remove(filepath.Join(dir, "db-b.yaml"))
 	writeTestFile(t, dir, "db-d.yaml", `
@@ -555,8 +555,8 @@ tenants:
 	if cfg.Tenants["db-a"]["mysql_connections"].Default != "99" {
 		t.Errorf("db-a mysql_connections: expected 99, got %s", cfg.Tenants["db-a"]["mysql_connections"].Default)
 	}
-	if cfg.Tenants["db-a"]["mysql_cpu"].Default != "95" {
-		t.Errorf("db-a mysql_cpu: expected 95, got %s", cfg.Tenants["db-a"]["mysql_cpu"].Default)
+	if cfg.Tenants["db-a"]["mysql_threads_running"].Default != "95" {
+		t.Errorf("db-a mysql_threads_running: expected 95, got %s", cfg.Tenants["db-a"]["mysql_threads_running"].Default)
 	}
 	if cfg.Tenants["db-c"]["mysql_connections"].Default != "50" {
 		t.Errorf("db-c should be unchanged at 50, got %s", cfg.Tenants["db-c"]["mysql_connections"].Default)
@@ -635,7 +635,7 @@ func TestIncrementalLoad_DefaultsModified(t *testing.T) {
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
   mysql_connections: 80
-  mysql_cpu: 80
+  mysql_threads_running: 80
 `)
 	writeTestFile(t, dir, "db-a.yaml", `
 tenants:
@@ -648,15 +648,15 @@ tenants:
 		t.Fatalf("initial load: %v", err)
 	}
 	cfg := mgr.GetConfig()
-	if cfg.Defaults["mysql_cpu"] != 80 {
-		t.Fatalf("expected default mysql_cpu 80, got %.0f", cfg.Defaults["mysql_cpu"])
+	if cfg.Defaults["mysql_threads_running"] != 80 {
+		t.Fatalf("expected default mysql_threads_running 80, got %.0f", cfg.Defaults["mysql_threads_running"])
 	}
 
 	// Modify defaults — add a new metric
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
   mysql_connections: 80
-  mysql_cpu: 85
+  mysql_threads_running: 85
   container_memory: 90
 `)
 
@@ -664,8 +664,8 @@ defaults:
 		t.Fatalf("incremental load: %v", err)
 	}
 	cfg = mgr.GetConfig()
-	if cfg.Defaults["mysql_cpu"] != 85 {
-		t.Errorf("expected updated mysql_cpu 85, got %.0f", cfg.Defaults["mysql_cpu"])
+	if cfg.Defaults["mysql_threads_running"] != 85 {
+		t.Errorf("expected updated mysql_threads_running 85, got %.0f", cfg.Defaults["mysql_threads_running"])
 	}
 	if cfg.Defaults["container_memory"] != 90 {
 		t.Errorf("expected new container_memory 90, got %.0f", cfg.Defaults["container_memory"])

@@ -29,6 +29,10 @@ const t = window.__t || ((zh, en) => en);
 const KNOWN_METRIC_KEYS = new Set([
   'mysql_connections',
   'mysql_connections_critical',
+  'mysql_threads_running',
+  // #1231 transition window: the retired spelling is still legal tenant input
+  // (canonicalized at the exporter/tenant-api boundary); drop when the
+  // 2-release alias window closes.
   'mysql_cpu',
   'mysql_memory',
   'mysql_slow_queries',

@@ -8,9 +8,8 @@ tenants:
     # --- 基本閾值 (全域) ---
     es_cluster_health_status: "1"                           # 1=yellow warning
     es_cluster_health_status_critical: "2"                  # 2=red critical
-    es_jvm_memory_used_percent: "85"
-    es_jvm_memory_used_percent_critical: "95"
-    es_filesystem_free_percent: "15"                        # 低於 15% 警告
+    es_heap_usage_percent: "85"                             # #1196 C 由 es_jvm_memory_used_percent 改名
+    es_disk_usage_percent: "85"                             # 已用率超過 85% 警告（#1196 C 語意反向：原 free% 15）
     es_pending_tasks: "50"
 
     # --- 維度閾值: 按 index 分設 ---
@@ -20,5 +19,5 @@ tenants:
     "es_index_store_size_bytes{index=\"audit-trail\"}": "53687091200"  # 50GB
 
     # --- 維度閾值: 按 node 分設 (特定節點可能硬體不同) ---
-    "es_jvm_memory_used_percent{node=\"es-hot-01\"}": "90"
-    "es_jvm_memory_used_percent{node=\"es-warm-01\"}": "80"
+    "es_heap_usage_percent{node=\"es-hot-01\"}": "90"
+    "es_heap_usage_percent{node=\"es-warm-01\"}": "80"
