@@ -240,3 +240,103 @@ class TestEnvOverride:
         mod = _load()
         monkeypatch.setenv("DX_WORKSPACE", "/elsewhere/ws")
         assert mod._workspace() == "/elsewhere/ws"
+
+
+class TestDepDoctor:
+    """Live dependency doctor (#1254 follow-up).
+
+    check_devcontainer_dep_parity.py proves only the DECLARATION.
+    postCreateCommand never re-runs on an existing container, so a stale
+    container silently reports greener-than-CI results — a clean rebuild moved
+    the packages from root to vscode and `make dc-test` died with
+    `ModuleNotFoundError: No module named 'yaml'` while every gate stayed
+    green. These tests pin what matters: it BLOCKS on a real gap, it is
+    skippable, and it degrades to a no-op rather than breaking dx-run.
+    """
+
+    def test_declared_packages_parses_real_devcontainer(self):
+        """SoT check: the expected set is PARSED, never hand-listed here."""
+        mod = _load()
+        pkgs = mod._declared_packages()
+        assert pkgs, "should parse the repo's real devcontainer.json"
+        # Spot-check the ones whose absence silently skipped 28 tests (#1254).
+        assert {"croniter", "promql-parser", "pytest", "pyyaml"} <= pkgs
+
+    def test_probe_exits_nonzero_and_names_missing_packages(self):
+        """The in-container probe must FAIL loudly on an absent package."""
+        mod = _load()
+        src = mod._doctor_probe_src(["pytest", "definitely-not-installed-xyz"])
+        r = subprocess.run(
+            [sys.executable, "-c", src],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert r.returncode == 1
+        assert "MISSING=definitely-not-installed-xyz" in r.stdout
+
+    def test_probe_exits_zero_when_all_present(self):
+        mod = _load()
+        src = mod._doctor_probe_src(["pytest"])
+        r = subprocess.run(
+            [sys.executable, "-c", src],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert r.returncode == 0
+        assert r.stdout.strip() == "MISSING="
+
+    def test_skip_env_makes_doctor_a_noop(self, monkeypatch):
+        mod = _load()
+        monkeypatch.setenv(mod.DOCTOR_SKIP_ENV, "1")
+        with patch("subprocess.run", side_effect=AssertionError("must not exec")):
+            assert mod._run_dep_doctor("c", "/ws") == 0
+
+    def test_missing_packages_block_the_run_with_rc4(self, capsys):
+        """A stale container must NOT be allowed to produce a green result."""
+        mod = _load()
+        missing_line = "MISSING=croniter,pyyaml"
+
+        def fake(cmd, *a, **kw):
+            out = MagicMock()
+            out.returncode = 0
+            out.stdout = ""
+            out.stderr = ""
+            if cmd[:2] == ["docker", "exec"] and "test" in cmd:
+                out.returncode = 1        # no stamp yet
+            elif cmd[:2] == ["docker", "exec"] and "python3" in cmd:
+                out.returncode = 1        # probe reports a gap
+                out.stdout = missing_line
+            return out
+
+        with patch("subprocess.run", side_effect=fake):
+            rc = mod._run_dep_doctor("c", "/ws")
+        assert rc == 4
+        err = capsys.readouterr().err
+        assert "croniter,pyyaml" in err
+        assert "rebuild" in err.lower()
+
+    def test_stamp_short_circuits_second_run(self):
+        """Once verified, it must not re-probe (keeps the common path cheap)."""
+        mod = _load()
+        calls = []
+
+        def fake(cmd, *a, **kw):
+            calls.append(cmd)
+            out = MagicMock()
+            out.returncode = 0            # stamp present
+            out.stdout = ""
+            return out
+
+        with patch("subprocess.run", side_effect=fake):
+            assert mod._run_dep_doctor("c", "/ws") == 0
+        assert not any("python3" in c for c in calls), "should not run the probe"
+
+    def test_unparseable_declaration_degrades_to_noop(self):
+        """dx-run must keep working from a checkout where parsing fails.
+
+        Deliberate fail-OPEN: the parity lint fails CLOSED on the same inputs
+        in CI, so this is a convenience tripwire, not the enforcement point.
+        """
+        mod = _load()
+        with patch.object(mod, "_declared_packages", return_value=None):
+            with patch("subprocess.run",
+                       side_effect=AssertionError("must not exec")):
+                assert mod._run_dep_doctor("c", "/ws") == 0

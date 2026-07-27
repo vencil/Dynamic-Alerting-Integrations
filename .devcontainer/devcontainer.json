@@ -51,7 +51,31 @@
   // makes them skip themselves, so the container reports a greener result
   // than CI (measured: 28 tests silently skipped). Keep the trailing
   // `-c requirements/ci-constraints.txt` so versions match CI's pins.
-  "postCreateCommand": "pip3 install --user pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema pytest-benchmark mkdocs-material mkdocs-static-i18n pymdown-extensions -c requirements/ci-constraints.txt && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && bash .devcontainer/install-promtool.sh",
+  //
+  // ⛔ NO `--user` here, and NO `sudo` either — both are load-bearing:
+  //   * `--user` installs into the HOME of whoever runs the lifecycle script.
+  //     Per the devcontainer spec that is `remoteUser` (vscode), but this
+  //     config sets no `containerUser`, so `Config.User` stays root and a bare
+  //     `docker exec` — which CLAUDE.md and the playbooks document, and which
+  //     scripts/ops/dx_run.py uses — lands as ROOT with none of these packages.
+  //     A clean rebuild then broke `make dc-test` outright
+  //     (`ModuleNotFoundError: No module named 'yaml'`) and `make
+  //     lint-docs-mkdocs` (`REASON=mkdocs-missing`). Installing system-wide
+  //     makes the set user-agnostic, matching how the Go and Node features
+  //     already work here (GOPATH=/go, npm prefix under /usr/local/share/nvm
+  //     are identical for both users) and matching ci.yml, which also installs
+  //     without `--user`.
+  //   * `sudo` is NOT needed: site-packages is `vscode:python` mode 2775, i.e.
+  //     writable by remoteUser already. Worse, it would BREAK container
+  //     creation — sudoers' secure_path excludes /usr/local/python/current/bin,
+  //     so `sudo pip3` is "command not found", and this is an `&&` chain, so
+  //     kind and promtool would silently never install.
+  // Deliberately NOT fixed here: whether tooling should exec as vscode instead
+  // of root. On this Windows host the bind mount presents files as root:root,
+  // so git refuses to run as vscode ("detected dubious ownership"), which takes
+  // out `go build` VCS stamping and every git-shelling lint. That is a separate
+  // decision — see the issue linked from CHANGELOG.
+  "postCreateCommand": "pip3 install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema pytest-benchmark mkdocs-material mkdocs-static-i18n pymdown-extensions -c requirements/ci-constraints.txt && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && bash .devcontainer/install-promtool.sh",
 
   "customizations": {
     "vscode": {

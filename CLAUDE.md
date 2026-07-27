@@ -107,7 +107,7 @@ Vibe 專案內建 **七個本地 skills**（`.claude/skills/`），在對應情�
 
 ## AI Agent 環境
 
-- **Dev Container**: `docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container <cmd>`（或 `make dc-run`）；重開機後 `docker start vibe-dev-container` / `make dc-up`
+- **Dev Container**: `docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container <cmd>`（或 `make dc-run`）；重開機後 `docker start vibe-dev-container` / `make dc-up`。⚠️ raw `docker exec` 走的是 **root**（`Config.User=root`，非 `remoteUser`）——依賴一律 system-wide 安裝以確保兩種身分皆可用（#1264）。`make dc-run`／`dc-test` 會先跑活體依賴檢查，容器落後於 `devcontainer.json` 時 **exit 4** 並提示 rebuild（`VIBE_SKIP_DC_DOCTOR=1` 可繞過）
 - **K8s MCP** 常 timeout → fallback docker exec；**Prometheus/Alertmanager** `port-forward` + `localhost:9090/9093`
 - **測試**: Python tests Cowork VM 直接跑；Go tests 需 Dev Container（`make dc-go-test`，支援 `MOD=`/`PKG=` 縮小範圍——單 package 秒級）。**檔案清理** `docker exec ... rm -f`（Cowork VM 無法直接 rm 掛載路徑）
 
