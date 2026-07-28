@@ -72,7 +72,7 @@ def test_the_shipped_default_is_expressible_as_a_lua_pattern(repo_root: Path):
     values = yaml.safe_load((repo_root / _VALUES).read_text(encoding="utf-8"))
     pattern = values["revokedSet"]["tokenIdPattern"]
     assert pattern.startswith("^") and pattern.endswith("$")
-    for ch in ("{", "}", "\\", "|"):
+    for ch in ("{", "}", "\\", "|", "%"):
         assert ch not in pattern, f"the shipped default contains {ch!r}"
 
 
@@ -106,9 +106,14 @@ def test_default_renders(repo_root: Path):
     ("ftk_[0-9a-f]+$", "must be anchored"),
     # The operator foot-gun: valid regex, passes the anchor and empty checks,
     # matches nothing under Lua pattern semantics.
-    ("^ftk_[0-9a-f]{16}$", "LUA PATTERN"),
-    (r"^ftk_\w+$", "LUA PATTERN"),
-    ("^(ftk|xtk)_[0-9a-f]+$", "LUA PATTERN"),
+    ("^ftk_[0-9a-f]{16}$", "does not mean the same thing"),
+    (r"^ftk_\w+$", "does not mean the same thing"),
+    ("^(ftk|xtk)_[0-9a-f]+$", "does not mean the same thing"),
+    # The mirror-image trap: valid and correct as a Lua pattern, taken
+    # literally by the Go writer and the Python reconciler. Rejected for the
+    # same reason as the regex-only ones — the three sides would stop meaning
+    # the same thing while their literals still matched each other.
+    ("^ftk_%x+$", "does not mean the same thing"),
 ])
 def test_a_silently_broken_pattern_aborts_the_render(repo_root: Path, pattern, fingerprint):
     r = _render(repo_root, pattern)

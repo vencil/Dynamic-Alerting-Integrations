@@ -76,9 +76,30 @@ a gateway that accepts a revoked set the reconciler reads differently.
 {{- if not (and (hasPrefix "^" $p) (hasSuffix "$" $p)) }}
 {{- fail (printf "federation-gateway: revokedSet.tokenIdPattern must be anchored with ^...$ so a line matches as a whole, got %q (#1235)" $p) }}
 {{- end }}
-{{- range $bad := list "{" "}" "\\" "|" }}
+{{- /* The value has to mean the SAME THING in three dialects — this Lua
+       pattern, tenant-api's Go regexp, and the reconciler's Python re. The
+       characters below are meaningful in some of them and literal in the
+       others, so a value carrying one can never be equivalent across all
+       three, however identical the three copies look. Both directions are
+       rejected, because both have a natural-looking trap:
+         {  }  \  |   regex-only. Pinning the id length with braces is the
+                      obvious "tightening"; Lua reads it literally, matches
+                      NOTHING, and the gateway then refuses every reload —
+                      staying on the set it already had, with a freshly
+                      started worker enforcing none at all.
+         %            Lua-only (its escape character). `%x` is the natural
+                      Lua-native tightening; it works perfectly in the
+                      gateway while Go and Python read it literally and
+                      reject every real id — the revoke path then errors
+                      and the reconciler suspects everything. Loud rather
+                      than silent, but still a contract that cannot hold.
+       The literal-equality test in tests/ops/test_revoked_set_contract.py
+       cannot catch either: it compares the three copies to each other, and
+       they ARE equal — they just do not mean the same thing. That is the
+       whole of #1235, one level up. */}}
+{{- range $bad := list "{" "}" "\\" "|" "%" }}
 {{- if contains $bad $p }}
-{{- fail (printf "federation-gateway: revokedSet.tokenIdPattern contains %q. This value is a LUA PATTERN, not a regex: Lua has no brace quantifiers, no backslash escapes and no alternation, so that character matches LITERALLY. A pattern that looks like a tightening (pinning a length with braces is the obvious one) therefore matches NOTHING — the gateway then refuses every reload, silently staying on the revoked set it already had, and a freshly started worker enforces none at all. If the contract genuinely needs to change it must change on all three sides together, and the value must stay expressible as a Lua pattern (#1235). Got %q" $bad $p) }}
+{{- fail (printf "federation-gateway: revokedSet.tokenIdPattern contains %q, which does not mean the same thing in all three dialects the contract has to hold in (this Lua pattern, tenant-api's Go regexp, the reconciler's Python re). Braces/backslash/alternation are regex-only and Lua takes them literally; %% is Lua-only and Go and Python take it literally. Either way the three sides stop agreeing while their literals still look identical, which is exactly the drift #1235 exists to close. If the contract genuinely needs to change it must change on all three sides together and stay expressible in all three. Got %q" $bad $p) }}
 {{- end }}
 {{- end }}
 {{- end }}
