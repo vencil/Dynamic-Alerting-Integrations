@@ -254,6 +254,23 @@ class TestDepDoctor:
     skippable, and it degrades to a no-op rather than breaking dx-run.
     """
 
+    @pytest.fixture(autouse=True)
+    def _hermetic_skip_env(self, monkeypatch):
+        """Clear the doctor's bypass env for EVERY test in this class.
+
+        Without this, a developer or CI runner that exports
+        `VIBE_SKIP_DC_DOCTOR=1` turns the doctor into an early `return 0` and
+        these tests stop testing anything —
+        `test_stamp_short_circuits_second_run` in particular would pass
+        VACUOUSLY, with zero subprocess calls, which is precisely the
+        silent-green failure mode this whole change exists to prevent
+        (verified: with the var exported it passed while asserting nothing).
+        Autouse rather than per-test `delenv` so tests added later inherit the
+        guarantee instead of re-introducing the hole.
+        Tests that need the bypass ON set it themselves afterwards.
+        """
+        monkeypatch.delenv(_load().DOCTOR_SKIP_ENV, raising=False)
+
     def test_declared_packages_parses_real_devcontainer(self):
         """SoT check: the expected set is PARSED, never hand-listed here."""
         mod = _load()
