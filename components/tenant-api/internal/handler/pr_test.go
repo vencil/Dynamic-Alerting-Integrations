@@ -54,8 +54,28 @@ func initGitConfigDir(t *testing.T) string {
 
 // --- PR List Handler tests (GET /api/v1/prs) ---
 
+// cleanupForgeMetricsRegistries schedules a reset of platform's two
+// process-global metrics registries (breaker states + conflict counts).
+//
+// WHY this is needed: building a real gh.Client registers a circuit breaker,
+// and driving a tracker Sync() records a conflict count — both into
+// package-level maps in internal/platform that nothing ever clears. `go test
+// -count=N` re-runs the package in ONE process, so iteration 1 leaves those
+// maps populated and iterations 2..N fail TestMetricsHandler_Golden's
+// preconditions (metrics_golden_test.go:79/82), which require a fresh-process
+// empty state. PR CI runs -count=1 and cannot see this; the nightly
+// -race -count=10 job is what fails (#1213).
+//
+// Do not delete these calls as noise — without them the golden test is red 9
+// runs out of 10.
+func cleanupForgeMetricsRegistries(t *testing.T) {
+	t.Helper()
+	t.Cleanup(platform.ResetMetricsRegistriesForTest)
+}
+
 func newTestTracker(t *testing.T, prs []platform.PRInfo) *gh.Tracker {
 	t.Helper()
+	cleanupForgeMetricsRegistries(t)
 	apiPRs := make([]map[string]interface{}, len(prs))
 	for i, pr := range prs {
 		apiPRs[i] = map[string]interface{}{
@@ -245,6 +265,7 @@ func TestPutTenant_PRMode_PendingPRConflict(t *testing.T) {
 	}))
 	defer ghSrv.Close()
 
+	cleanupForgeMetricsRegistries(t)
 	ghClient, _ := gh.NewClient("token", "owner/repo", "main")
 	ghClient.SetBaseURL(ghSrv.URL)
 
@@ -290,6 +311,7 @@ func TestPutTenant_PRMode_InvalidTenantID(t *testing.T) {
 	}))
 	defer ghSrv.Close()
 
+	cleanupForgeMetricsRegistries(t)
 	ghClient, _ := gh.NewClient("token", "owner/repo", "main")
 	ghClient.SetBaseURL(ghSrv.URL)
 	tracker := gh.NewTracker(ghClient, 1<<30)
@@ -321,6 +343,7 @@ func TestPutTenant_GitLabMode_PendingMRConflict(t *testing.T) {
 	defer glSrv.Close()
 
 	// Use GitHub client as concrete tracker (both implement platform.Tracker)
+	cleanupForgeMetricsRegistries(t)
 	ghClient, _ := gh.NewClient("token", "owner/repo", "main")
 	ghClient.SetBaseURL(glSrv.URL)
 	tracker := gh.NewTracker(ghClient, 1<<30)
@@ -851,6 +874,7 @@ func TestPutTenant_PRMode_ConcurrentSameTenant(t *testing.T) {
 		},
 	}
 	// Real tracker (thread-safe). Long interval + no WatchLoop → no polling.
+	cleanupForgeMetricsRegistries(t)
 	ghClient, _ := gh.NewClient("token", "owner/repo", "main")
 	tracker := gh.NewTracker(ghClient, 1<<30)
 

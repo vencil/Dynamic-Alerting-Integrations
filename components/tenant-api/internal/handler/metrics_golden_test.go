@@ -71,8 +71,17 @@ func TestMetricsHandler_Golden(t *testing.T) {
 
 	// Globals in OTHER packages have no seam this test can pin, so require the
 	// fresh-process default instead. If one of these fires, an earlier test in
-	// this binary now leaks that state — isolate that test (save/restore, like
-	// this one does for handler globals), don't regenerate the golden around it.
+	// this binary now leaks that state — isolate that test, don't regenerate the
+	// golden around it.
+	//
+	// Which isolation form depends on the leaking test: save/restore (as this
+	// test does for its own handler globals) is only safe when the leaker is
+	// SERIAL. For a leaker under t.Parallel(), save/restore is last-cleanup-wins
+	// — each parallel test snapshots at its own start and the last cleanup to run
+	// restores a snapshot that already contains another test's write (measured
+	// flaky). Use an idempotent reset from t.Cleanup instead; see
+	// platform.ResetMetricsRegistriesForTest, which is how the forge circuit and
+	// conflict registries below are kept clean by pr_test.go.
 	if tok, sub := orphan.OrphanCounts(); tok != 0 || sub != 0 {
 		t.Fatalf("precondition: orphan counts = (%d, %d), want (0, 0) — an earlier test left detector state behind", tok, sub)
 	}
