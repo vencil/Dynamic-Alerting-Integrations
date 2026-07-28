@@ -324,6 +324,79 @@ PLATFORM_ALERT_IDENTITY_LABELS = (
 )
 
 
+# The shipped platform pack. Deriving identities from it (rather than probing a
+# hand-written sample) is what makes the guard fail-closed over alertnames — a
+# fixed sample goes stale the moment anyone adds an alert, and it did: the pack
+# grew 5 alerts (#1259, #1266) while this PR was open, none of them sampled.
+_PLATFORM_RULES_CONFIGMAP = (
+    Path(__file__).resolve().parents[3]
+    / "k8s" / "03-monitoring" / "configmap-rules-platform.yaml"
+)
+_PLATFORM_IDENTITY_CACHE: "tuple[dict, ...] | None" = None
+# `sum by (tenant)` / `max by (namespace, tenant)` … — a label the alert only
+# carries at fire time, which is exactly the class that made this guard necessary.
+_EXPR_TENANT_AGG_RE = re.compile(
+    r'\b(?:sum|max|min|count|avg|topk|bottomk|group)\s+by\s*\(\s*[^)]*\btenant\b')
+
+
+def platform_alert_identities(
+        configmap_path: "Path | str | None" = None) -> tuple[dict, ...]:
+    """Every platform self-monitoring alert's fire-time label identity.
+
+    Rule-level ``labels:`` UNION the labels the expr produces — an alert whose
+    expr aggregates ``by (tenant)`` carries a ``tenant`` label at fire time even
+    though its ``labels:`` block has none. Reading only the block is precisely
+    how a tenant-silenceable platform alert survived review.
+
+    Falls back to :data:`PLATFORM_ALERT_IDENTITY_LABELS` when the ConfigMap is
+    unreachable (the tool also runs from images that carry no repo tree). The
+    fallback is a strict subset, so it can only under-report, never green-light
+    something the full set would flag — and a repo-anchored test pins that
+    in-repo callers get the full set, so the degradation cannot go unnoticed.
+    """
+    global _PLATFORM_IDENTITY_CACHE
+    if configmap_path is None and _PLATFORM_IDENTITY_CACHE is not None:
+        return _PLATFORM_IDENTITY_CACHE
+    path = Path(configmap_path) if configmap_path else _PLATFORM_RULES_CONFIGMAP
+    try:
+        docs = [d for d in yaml.safe_load_all(path.read_text(encoding="utf-8"))
+                if d and d.get("kind") == "ConfigMap"]
+        rules_doc = yaml.safe_load(next(iter(docs[0]["data"].values())))
+        out: list[dict] = []
+        for group in rules_doc.get("groups", []):
+            for rule in group.get("rules", []):
+                if "alert" not in rule:
+                    continue
+                labels = dict(rule.get("labels") or {})
+                if labels.get("alert_source") != "platform":
+                    # Watchdog rides its own index-0 lane and deliberately carries
+                    # no discriminator; assert_watchdog_inhibit_immunity covers it
+                    # at the same call sites. Keying on the marker (not on the
+                    # alertname) means a future unmarked alert is excluded for the
+                    # same stated reason rather than by accident.
+                    continue
+                labels["alertname"] = rule["alert"]
+                if _EXPR_TENANT_AGG_RE.search(str(rule.get("expr", ""))):
+                    labels.setdefault("tenant", "any-tenant")
+                out.append(labels)
+        identities = tuple(out) if out else PLATFORM_ALERT_IDENTITY_LABELS
+    except (OSError, yaml.YAMLError, KeyError, StopIteration, AttributeError):
+        identities = PLATFORM_ALERT_IDENTITY_LABELS
+    if configmap_path is None:
+        _PLATFORM_IDENTITY_CACHE = identities
+    return identities
+
+
+def _pinned_label_values(matchers: list[str], label: str) -> list[str]:
+    """Literal values *matchers* pins for *label* via ``label="value"``."""
+    out: list[str] = []
+    for matcher in matchers or []:
+        parsed = _INHIBIT_MATCHER_RE.match(matcher)
+        if parsed and parsed.group(1) == label and parsed.group(2) == "=":
+            out.append(parsed.group(3))
+    return out
+
+
 def find_tenant_silenceable_platform_inhibits(
         inhibit_rules: list[dict] | None,
         platform_label_sets: "tuple[dict, ...] | list[dict] | None" = None,
@@ -339,7 +412,7 @@ def find_tenant_silenceable_platform_inhibits(
 
     Empty result = invariant holds.
     """
-    sets = platform_label_sets or PLATFORM_ALERT_IDENTITY_LABELS
+    sets = platform_label_sets or platform_alert_identities()
     out: list[tuple[int, dict, dict]] = []
     for i, rule in enumerate(inhibit_rules or []):
         if not isinstance(rule, dict):
@@ -350,7 +423,16 @@ def find_tenant_silenceable_platform_inhibits(
         targets = _inhibit_target_matchers(rule)
         if targets is None:
             continue
-        for labels in sets:
+        # A target pinning `tenant="db-a"` cannot be judged against a probe that
+        # carries a different tenant value — the equality simply misses and the
+        # rule reads as safe. Runtime tenant values are unbounded and cannot be
+        # enumerated ahead of time, so take them FROM THE RULE: re-probe every
+        # tenant-bearing platform identity with each literal tenant it names.
+        probes = list(sets)
+        for pinned in _pinned_label_values(targets, "tenant"):
+            probes.extend({**labels, "tenant": pinned}
+                          for labels in sets if "tenant" in labels)
+        for labels in probes:
             if all(_matcher_matches_labels(m, labels) for m in targets):
                 out.append((i, rule, labels))
                 break

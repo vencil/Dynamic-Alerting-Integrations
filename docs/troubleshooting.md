@@ -125,7 +125,7 @@ kubectl exec -n monitoring deploy/alertmanager -- \
 
 1. `da-tools validate-config --config-dir conf.d/ --policy .github/custom-rule-policy.yaml` 是否有 `_routing_enforced` 被 WARN + skip（receiver 設定錯誤或 webhook domain 不在 allowlist 都會**靜默跳過**該 route）。⚠️ **`--policy` 不可省**：domain allowlist 檢查在 `_grar_routes.py` 是 `if allowed_domains:` 守著的，沒給 policy 就等於沒有 allowlist、驗不出「domain 被擋掉」這個成因（裸指令會顯示一切正常）。
 2. 產生設定後是否真的 reload 了 Alertmanager（見 [§Step 6](integration/byo-alertmanager-integration.md#step-6-reload-alertmanager)）。
-3. 是否誤用了模式 B（receiver 含 `{{tenant}}`）——per-tenant enforced route 帶 `tenant="<name>"` matcher，而平台告警沒有 tenant，**結構上收不到**。
+3. 是否誤用了模式 B（receiver 含 `{{tenant}}`）——per-tenant enforced route 帶 `tenant="<name>"` matcher，而 40 條平台告警裡有 **37 條沒有 tenant、結構上收不到**。⚠️ 反過來要注意剩下 3 條（`TenantMetricsOverLimit` / `FederationRejectionRateAnomaly` / `FederationGatewayBackendErrors`）**帶 tenant、會被送進租戶通道**——症狀是「租戶抱怨收到看不懂的平台告警」而不是「我沒收到」，兩種相反的失敗都指向同一個成因。詳見 [BYO 指南 §11](integration/byo-alertmanager-integration.md#11-平台自監控告警的投遞)。
 
 ⚠️ **注意，這不是「沒收到」而是「收太多」的反向情境**：若你在某條 route 寫了 `tenant=~".*"` 想表達「所有租戶」，Alertmanager 會把**平台告警一起吃進租戶通道**（label 不存在等同空值）。改寫 `tenant!=""` 只解決一半——有 3 條平台告警帶 `tenant` label（`TenantMetricsOverLimit` / `FederationRejectionRateAnomaly` / `FederationGatewayBackendErrors`，後兩條的 label 由 expr `sum by (tenant)` 在觸發時才產生）。「只要租戶告警」要寫 `tenant!=""` **加上** `alert_source=""`。
 

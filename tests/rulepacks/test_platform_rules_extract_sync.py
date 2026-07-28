@@ -63,6 +63,15 @@ _RULEPACKS_DIR = os.path.join(_REPO, "tests", "rulepacks")
 _EXTRACT_GLOB = os.path.join(_RULEPACKS_DIR, "**", "platform-*.rules.yaml")
 # Prong 2: every other bare-rules file in the tree — mirrors matched by alertname.
 _ALL_RULES_GLOB = os.path.join(_RULEPACKS_DIR, "**", "*.rules.yaml")
+# …except trees whose whole PURPOSE is to diverge from what ships. The ADR-030
+# harness candidates deliberately carry different `for:` / selectors than the
+# shipped rules, so mirror-by-name would demand equality from files designed to
+# disagree. Today no candidate alertname collides with a platform one, so this is
+# pre-emptive: without it, the first collision turns a green suite red for a
+# non-bug, and the obvious "fix" would be to weaken the drift guard itself.
+# Exemption is by DIRECTORY, not by alertname — a name-based skip would also hide
+# a genuine drift in a real extract that happens to share the name.
+_MIRROR_EXEMPT_PREFIXES = ("reference-validation/",)
 
 # Fields whose drift changes what the alert DOES (or what promtool asserts on).
 _BEHAVIOURAL_FIELDS = ("expr", "for", "labels")
@@ -109,12 +118,35 @@ def _extracted_alerts() -> list[tuple[str, str, dict]]:
     shipped = _shipped_alerts()
     out: list[tuple[str, str, dict]] = []
     for path in sorted(glob.glob(_ALL_RULES_GLOB, recursive=True)):
-        strict = os.path.abspath(path) in named
         rel = os.path.relpath(path, _RULEPACKS_DIR).replace(os.sep, "/")
+        if rel.startswith(_MIRROR_EXEMPT_PREFIXES):
+            continue
+        strict = os.path.abspath(path) in named
         for alertname, rule in _alerts_in(path):
             if strict or alertname in shipped:
                 out.append((rel, alertname, rule))
     return out
+
+
+def test_divergent_harness_tree_is_exempt_and_the_exemption_is_narrow():
+    """The exemption must apply, must be non-vacuous, and must not creep.
+
+    Non-vacuous: the exempt directory has to actually exist and hold rules,
+    otherwise this passes for the wrong reason. Narrow: it may only ever skip
+    files under the declared prefixes — an exemption that quietly widened would
+    disable the drift guard for real extracts.
+    """
+    exempt_files = [p for p in glob.glob(_ALL_RULES_GLOB, recursive=True)
+                    if os.path.relpath(p, _RULEPACKS_DIR).replace(os.sep, "/")
+                    .startswith(_MIRROR_EXEMPT_PREFIXES)]
+    assert exempt_files, (
+        f"no files under {_MIRROR_EXEMPT_PREFIXES} — the exemption is vacuous; "
+        "drop it or point it at the tree it was written for")
+    discovered = {f for f, _a, _r in _extracted_alerts()}
+    assert not [f for f in discovered if f.startswith(_MIRROR_EXEMPT_PREFIXES)]
+    assert _MIRROR_EXEMPT_PREFIXES == ("reference-validation/",), (
+        "the mirror exemption widened — every added prefix removes a tree from "
+        "the drift guard, so it needs its own justification")
 
 
 def test_extracts_are_discovered():

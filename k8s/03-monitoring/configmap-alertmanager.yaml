@@ -194,7 +194,7 @@ data:
       #
       # `alert_source=""` reads as "only alerts that carry NO platform marker":
       # Alertmanager treats a missing label as the empty string, so tenant alerts
-      # (no such label) still match, while the 35 platform alerts that carry
+      # (no such label) still match, while the 40 platform alerts that carry
       # alert_source="platform" are excluded. Watchdog is unaffected either way —
       # severity=none never matched the warning/critical targets.
       #

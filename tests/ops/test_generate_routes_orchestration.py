@@ -719,6 +719,85 @@ class TestPlatformAlertsNotTenantSilenceable:
         assert all(s["severity"] == "warning"
                    for s in sets if "tenant" in s), sets
 
+    def test_runtime_default_is_the_derived_set_not_a_sample(self):
+        """The guard's DEFAULT probe set must be the full pack, not a sample.
+
+        The render paths (`assemble_configmap`, `_merge_routes_receivers_inhibits`)
+        call the assert WITHOUT passing label sets, so whatever the default is IS
+        the production guarantee. A hand-written sample goes stale on the next
+        alert — and did: the pack grew 5 alerts (#1259, #1266) mid-PR, none of
+        them in the constant. Tests that pass the derived set explicitly cannot
+        catch that divergence, which is exactly how it was missed.
+        """
+        from _grar_validate import (  # noqa: PLC0415
+            PLATFORM_ALERT_IDENTITY_LABELS, platform_alert_identities)
+        default_names = {s["alertname"] for s in platform_alert_identities()}
+        derived_names = {s["alertname"] for s in _real_platform_label_sets()}
+        assert default_names == derived_names, (
+            "the runtime default no longer matches the shipped pack — the "
+            f"guard would silently under-check: {derived_names ^ default_names}")
+        sample_names = {s["alertname"] for s in PLATFORM_ALERT_IDENTITY_LABELS}
+        assert sample_names < derived_names, (
+            "the fallback constant must stay a STRICT subset (it may only "
+            "under-report, never green-light something the full set flags)")
+
+    def test_target_pinning_a_literal_tenant_is_still_caught(self):
+        """A target pinning `tenant="db-a"` suppresses the tenant-bearing
+        platform alerts for that tenant. Probing with a fixed placeholder value
+        misses it (equality just fails), so the tenant value is taken FROM THE
+        RULE — runtime tenants are unbounded and cannot be enumerated up front.
+        """
+        rule = {
+            "source_matchers": ['alertname="TenantSilentWarning"', 'tenant="db-a"'],
+            "target_matchers": ['severity="warning"', 'tenant="db-a"'],
+            "equal": ["tenant"],
+        }
+        offending = find_tenant_silenceable_platform_inhibits([rule])
+        assert offending, (
+            "a target pinning a literal tenant slipped past the guard — it "
+            "would mute the 3 tenant-bearing platform alerts for that tenant")
+
+    def test_target_pinning_an_unsampled_platform_alertname_is_caught(self):
+        """Deriving from the ConfigMap is what makes alertname coverage
+        fail-closed. `ConfigReloaderNotStarting` ships in the pack but is not in
+        the fallback constant; with the constant alone this rule reads as safe.
+        """
+        from _grar_validate import PLATFORM_ALERT_IDENTITY_LABELS  # noqa: PLC0415
+        rule = {
+            "source_matchers": ['alertname="TenantSilentWarning"', 'tenant=~".+"'],
+            "target_matchers": ['alertname="ConfigReloaderNotStarting"'],
+            "equal": ["tenant"],
+        }
+        assert find_tenant_silenceable_platform_inhibits([rule]), \
+            "unsampled platform alertname slipped past the derived guard"
+        # and prove the sample-only path is what used to miss it
+        assert not find_tenant_silenceable_platform_inhibits(
+            [rule], PLATFORM_ALERT_IDENTITY_LABELS), (
+            "fallback constant unexpectedly covers this alertname — rewrite "
+            "this test against one it genuinely does not sample")
+
+    def test_structurally_unreachable_target_is_not_false_flagged(self):
+        """Guard the guard against over-reach: a target requiring a non-empty
+        tenant cannot suppress a tenantless platform alert, so naming one must
+        NOT be reported. Without this, widening the probe set would trade a
+        fail-open for a fail-closed that blocks legitimate config.
+        """
+        rule = {
+            "source_matchers": ['alertname="TenantSilentWarning"', 'tenant=~".+"'],
+            "target_matchers": ['alertname="ConfigReloaderNotStarting"',
+                                'tenant=~".+"'],
+            "equal": ["tenant"],
+        }
+        assert find_tenant_silenceable_platform_inhibits([rule]) == [], (
+            "false positive: ConfigReloaderNotStarting carries no tenant, so a "
+            'tenant=~".+" target can never match it')
+
+    def test_identity_loader_falls_back_when_configmap_unreachable(self):
+        from _grar_validate import (  # noqa: PLC0415
+            PLATFORM_ALERT_IDENTITY_LABELS, platform_alert_identities)
+        assert platform_alert_identities("/nonexistent/platform.yaml") == \
+            PLATFORM_ALERT_IDENTITY_LABELS
+
     def test_committed_base_configmap_holds_invariant(self):
         am = _committed_alertmanager_config()
         offending = find_tenant_silenceable_platform_inhibits(
