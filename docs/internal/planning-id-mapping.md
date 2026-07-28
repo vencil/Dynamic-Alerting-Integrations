@@ -185,6 +185,8 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-350 | [#1236](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1236) | `revoked.txt` missing 時 gateway fail-open 不發 log — `FederationGatewayRevocationLoadFailure` 抓不到 ADR 自己點名的攻擊（文件↔碼矛盾） | [#1233](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1233) |
 | TRK-351 | [#1237](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1237) | reconciler 兩支 LogsQL 查詢無來源限定 — 非權威來源可灌入假訊號（alert fatigue → 偵測失能） | [#1233](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1233) |
 | TRK-352 | [#1238](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1238) | `FederationRevocationTamperSuspected` `for:5m` 等於 reconcile interval（300s）＋gauge 每輪歸零 → 短窗 un-revoke 結構上不可 page | [#1233](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1233) |
+| TRK-353 | [#1250](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1250) | `check_scrape_reachability` 的 `_up` 後綴 heuristic 誤判平台指標 — `channel_up` 拿不到 sibling 的可達性保護（回填：本列於 TRK-354 一併補上） | [#1233](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1233) |
+| TRK-354 | [#1269](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1269) | 私密 advisory 的發布觸發點：修法已合入但刻意停在 draft 的決策紀錄＋兩個觸發條件＋發布前檢查（`vibe-release` Rule 4 為其自發火機制） | [#1233](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1233) |
 
 ## 不在 mapping 範圍
 

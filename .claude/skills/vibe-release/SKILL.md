@@ -1,11 +1,11 @@
 ---
 name: vibe-release
-description: Vibe 六線版號 release 收尾 SOP — make pre-tag → CHANGELOG distill + project-face refresh → 6-line tag push → gh release ×6。Use when wrapping a Vibe release：user 說「release 收尾 / 進入 phase e / 準備 release」、問「release 準備好了嗎」、branch 名 `chore/v*-release-wrapup`、或動到 `make pre-tag` / 六線 tag push / `gh release create`。延伸 #474 Layer 3 的 inline checklist 為系統化流程。
+description: Vibe 六線版號 release 收尾 SOP — make pre-tag → CHANGELOG distill + project-face refresh → 未發布 draft advisory 檢查 → 6-line tag push → gh release ×6。Use when wrapping a Vibe release：user 說「release 收尾 / 進入 phase e / 準備 release」、問「release 準備好了嗎」、branch 名 `chore/v*-release-wrapup`、或動到 `make pre-tag` / 六線 tag push / `gh release create`。延伸 #474 Layer 3 的 inline checklist 為系統化流程。
 ---
 
 # vibe-release — 六線版號 release 收尾
 
-完整步驟、distribution artifacts、benchmark gate、踩坑見 [`github-release-playbook.md`](../../../docs/internal/github-release-playbook.md)。本 skill 是**收尾 agent 紀律**的濃縮：三條規則（源自 v2.8.0 收尾踩的 2 個 release blocker），加 release-type 分流。
+完整步驟、distribution artifacts、benchmark gate、踩坑見 [`github-release-playbook.md`](../../../docs/internal/github-release-playbook.md)。本 skill 是**收尾 agent 紀律**的濃縮：四條規則（Rule 1–3 源自 v2.8.0 收尾踩的 2 個 release blocker；Rule 4 源自 #1269 — draft advisory 不在任何會被例行掃到的清單裡），加 release-type 分流。
 
 ## 何時觸發
 
@@ -43,12 +43,20 @@ release-wrap-up 情境（**非**一般 dev）：「release 收尾 / 進入 phase
 
 issue triage 每天動、docs 月級更新——靜態 issue list 幾天就說謊。roadmap 拆三段：(1) vX.Y.0 delivered 靜態成就；(2) v.next 方向 + **單一 live milestone link** + 3-5 focus bullet；(3) 長期願景。docs = SSOT for「打算做什麼」，milestone = SSOT for「正在做什麼」，不同抽象層故不漂移。
 
-### 4. 六線 tag push + `gh release create`
+### 4. 未發布的 draft security advisory 檢查（Rule 4）
+
+⛔ **推 tag 前跑一次** `gh api repos/{owner}/{repo}/security-advisories --jq '.[] | select(.state=="draft") | .ghsa_id + " | " + .summary'`。
+
+有 draft 就對照它的觸發條件決定是否**隨這次 release 一併發布**——通常還要回填 `patched_versions`（advisory 常在「fix 已合入、尚未發版」狀態下建立，那個欄位當時只能留空）。
+
+**為什麼放在這裡**：draft advisory **不出現在任何維護者會例行掃的清單**——它不在 issue 列表、不在 PR 列表，GitHub 也沒有到期提醒或陳舊警示（查遍官方文件無此機制）。因此「等發版再發」這個決定沒有任何東西會叫醒你，除非把檢查掛在**發版本身**這個必然會發生的事件上。若該 advisory 的 affected package 是 dependency-graph 不支援的 ecosystem（如 `other`），它更不會進全域 Advisory Database、不觸發任何人的 Dependabot——**發布是唯一的觸達管道，漏掉就等於沒發生**。首例：[#1269](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1269)（TRK-354）。
+
+### 5. 六線 tag push + `gh release create`
 
 依分流推 tag；步驟、artifact、benchmark gate 見 [`github-release-playbook.md`](../../../docs/internal/github-release-playbook.md)。
 
 ## 使用法
 
-1. 收尾前對照三條規則跑完才宣告「ready to ship」（每條都在 v2.8.0 炸過：Rule 1 → 30 分 recovery、Rule 2 user 中途加、Rule 3 Gemini 抓）
+1. 收尾前對照四條規則跑完才宣告「ready to ship」（Rule 1–3 都在 v2.8.0 炸過：Rule 1 → 30 分 recovery、Rule 2 user 中途加、Rule 3 Gemini 抓；Rule 4 是預防性的——它防的東西**沒有任何其他機制會提醒你**）
 2. pre-tag 過 ≠ 完成；audit pre-tag vs release.yaml 的 gap
-3. 細節一律 deferred 到 [`github-release-playbook.md`](../../../docs/internal/github-release-playbook.md)，本 skill 只管「別漏哪三件事」
+3. 細節一律 deferred 到 [`github-release-playbook.md`](../../../docs/internal/github-release-playbook.md)，本 skill 只管「別漏哪四件事」
