@@ -214,7 +214,10 @@ jobs:
           # v0.15.0 / 2025-04-09 and two CVE issues (#188, #210) sat unanswered for
           # months while its 16 Go-stdlib findings accrued. prometheus-operator ships
           # a monthly-cadence equivalent.
-          - name: config-reloader # k8s/03-monitoring/deployment-alertmanager.yaml (sidecar)
+          # Pinned in TWO manifests with the SAME digest — deployment-alertmanager.yaml
+          # (routing config, #1243) and deployment-prometheus.yaml (Rule Packs, #1246).
+          # A digest refresh MUST update both or they drift silently.
+          - name: config-reloader # k8s/03-monitoring/deployment-{alertmanager,prometheus}.yaml (sidecars)
             ref: "quay.io/prometheus-operator/prometheus-config-reloader:v0.92.1@sha256:74550ba3e8bf93f47bc574231090d340ae9c01d25cd11ff74799e65f9fdb9a48"
           # NOTE: alpine/git's VERSION tags are mutable — upstream's Sunday cron
           # re-pushes v<X.Y.Z> from a fresh `apk add` (alpine-docker/git build.yml), so

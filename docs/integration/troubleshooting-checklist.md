@@ -230,6 +230,12 @@ kubectl exec -n <vmalert-ns> <vmalert-pod> -- \
 # 3. last reload 的 timestamp（Prom 專用）
 kubectl exec -n <prom-ns> <prom-pod> -- \
     wget -qO- localhost:9090/api/v1/status/runtimeinfo | grep -i reload
+
+# 4. 誰去打 reload 的？（Vibe 內建 manifest：#1246 起有 config-reloader sidecar）
+#    容器不在 / CrashLoop = 沒有任何東西會自動 reload，只能人工 POST
+kubectl get pod -n <prom-ns> <prom-pod> \
+    -o jsonpath='{range .status.containerStatuses[*]}{.name}{" restarts="}{.restartCount}{" ready="}{.ready}{"\n"}{end}'
+kubectl logs -n <prom-ns> <prom-pod> -c config-reloader --tail=20
 ```
 
 **最常見原因**：**GitOps reconcile 卡住**——commit 已 merge 但 ArgoCD / Flux 仍在 backoff 或 webhook 沒觸發 sync；ConfigMap 的舊 generation 還在 pod。
@@ -251,8 +257,9 @@ kubectl rollout restart statefulset <prom-sts> -n <prom-ns>
 
 **If not this**：
 - (a) Prometheus Operator 仍在 reconcile PrometheusRule CRD → `kubectl describe prometheusrule <name>` 看 events
-- (b) reload endpoint 自己 fail（PromQL syntax error 在新規則裡）→ Prom 會保留舊 config，log 含 `reloading config failed`。修 syntax 重 commit
+- (b) reload endpoint 自己 fail（PromQL syntax error 在新規則裡）→ Prom 會保留舊 config，log 含 `reloading config failed`。修 syntax 重 commit。**Vibe 內建部署有平台告警 `PrometheusConfigReloadFailed` 專門抓這個**（`prometheus_config_last_reload_successful == 0`，for 2m）——實測過：reload 被拒後 gauge 歸零、`/api/v1/rules` continue 回舊規則、程序不死，沒有這條告警就完全無聲
 - (c) HA Prom 兩個 replica 中只有一個 reload 成功 → 見 §1.5.1
+- (d) **沒有任何東西去打 reload**——上面第 4 步的 `config-reloader` sidecar 不存在（自架 Prometheus 沒加）或在 CrashLoop。Vibe 內建部署有 `ConfigReloaderHighRestarts` 抓 CrashLoop；但**「Up 但卡死」兩條告警都抓不到**，所以第 4 步的 log 仍要親眼看。注意這顆 sidecar **只 watch `/etc/prometheus/rules`**：`prometheus.yml` 以 `subPath` 掛載，K8s 不把 ConfigMap 更新傳播進 subPath 掛載，改它一定要重啟 Pod、reload 沒用
 
 **Cross-ref**：playbook §12 Phase 2 catalog row「新規則沒 fire (shadow alert volume = 0)」
 

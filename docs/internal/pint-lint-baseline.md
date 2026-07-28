@@ -69,7 +69,7 @@ updated_at: 2026-06-15
 
 ## 殘留 scope 盲區（defer-with-trigger）
 
-平台 pack 的 **extract** 已納入（Watchdog 等），但只有**有 promtool 測試的 2 條**（sse-reconnect / watchdog）有 extract；`configmap-rules-platform.yaml` 其餘 ~18 條（`DefaultsTruncationStorm`〔`count without(tenant)`〕/ `ThresholdExporterAbsent` 等）**無 extract → 仍未涵蓋**。**Defer-with-trigger**：為其餘平台告警建 extract（或改用可掃的 platform rule-pack source）——觸發：平台 pack 新增 aggregation 類告警、或首次平台規則 topology-trap 漏網。連帶需豁免平台 sentinels（同 `*ExporterAbsent` 模式）。
+平台 pack 的 **extract** 已納入（Watchdog 等），但只有**有 promtool 測試的**才有 extract：`tests/rulepacks/platform-*.rules.yaml` 目前 **12 檔、涵蓋 19 條**（#1246 加入 reload-failed / reloader-restarts / reloader-notstarting 三條），`configmap-rules-platform.yaml` 全 pack **39 條**中其餘 **20 條**（`DefaultsTruncationStorm`〔`count without(tenant)`〕/ `ThresholdExporterAbsent` 等）**無 extract → 仍未涵蓋**。（數字用 parse 數出，非 grep；改動平台 pack 後請重數。）**Defer-with-trigger**：為其餘平台告警建 extract（或改用可掃的 platform rule-pack source）——觸發：平台 pack 新增 aggregation 類告警、或首次平台規則 topology-trap 漏網。連帶需豁免平台 sentinels（同 `*ExporterAbsent` 模式）。
 
 ## 關聯
 

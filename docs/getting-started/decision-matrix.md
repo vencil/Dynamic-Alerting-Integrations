@@ -38,7 +38,7 @@ lang: zh
 | **前置條件** | 任何 Prometheus 環境 | kube-prometheus-stack 已安裝 |
 | **Rule Pack 載入** | projected volume / configMapGenerator | PrometheusRule CRD |
 | **路由配置** | `generate_alertmanager_routes.py` → ConfigMap | `operator-generate` → AlertmanagerConfig CRD |
-| **配置重載** | config-reloader sidecar | Operator 自動 reconcile |
+| **配置重載** | config-reloader sidecar（Rule Pack 熱更新；`prometheus.yml` 若以 `subPath` 掛載則仍須重啟 Pod——K8s 不把 ConfigMap 更新傳播進 subPath 掛載，本 repo 的 manifest 正是這樣掛的） | Operator 自動 reconcile |
 | **GitOps 支援** | 手動管理 ConfigMap YAML | `--gitops` 產出 deterministic YAML |
 | **多 Prometheus** | 複雜（需手動分配 ConfigMap） | 原生支援（namespace-scoped CRD） |
 | **遷移複雜度** | 低（直接掛載） | 中（需轉換 CRD 格式） |

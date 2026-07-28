@@ -750,6 +750,160 @@ data:
                 TenantApiConfigReloadFailing (a rate alert) cannot.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md"
 
+          # --- Prometheus reload failure (#1246) ---
+          # The config-reloader sidecar added in #1246 automates what used to be a
+          # manual POST /-/reload — and in doing so creates a failure mode that did
+          # not exist before. MEASURED on a real prom/prometheus:v3.13.1 by feeding
+          # it a deliberately broken rule file and POSTing /-/reload: the reload is
+          # REJECTED, this gauge drops to 0, /api/v1/rules keeps returning the
+          # PRE-EDIT rule, and the process stays Up. Nothing crashes and nothing
+          # pages — the operator edits a Rule Pack ConfigMap, sees no error, and
+          # believes the new rule is live while Prometheus quietly evaluates the old
+          # one. Before the sidecar a broken pack surfaced on the next pod restart
+          # (a visible CrashLoop); the sidecar trades that loud failure for a silent
+          # one, so this alert is the price of the automation, not a nice-to-have.
+          #
+          # Uses PROMETHEUS'S OWN gauge, already scraped by the static self-scrape
+          # job (job="prometheus" → localhost:9090 in configmap-prometheus.yaml) —
+          # deliberately NOT the reloader's own metrics, which would need
+          # --listen-address plus a second annotated Service to be scrapeable at all.
+          # `for: 2m` mirrors the sibling TenantApiConfigReloadStale above. There is
+          # no self-healing: the gauge stays 0 until a reload SUCCEEDS, so this
+          # clears only when the broken pack is actually fixed.
+          - alert: PrometheusConfigReloadFailed
+            expr: prometheus_config_last_reload_successful{job="prometheus"} == 0
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Prometheus rejected its last reload — Rule Pack edits are NOT in effect"
+              description: |
+                Prometheus's LAST config/rule reload FAILED, so it is still
+                evaluating the PREVIOUS rule set: every Rule Pack ConfigMap edited
+                since then is NOT in effect, and this does NOT self-heal — the
+                process keeps running and keeps serving the old rules. Almost always
+                a broken Rule Pack. In the Prometheus container log, grep
+                `loading groups failed` — that is the line whose `err=` names the
+                offending file under /etc/prometheus/rules and the exact parse
+                position (the neighbouring `Failed to apply configuration` and
+                `Error reloading config` lines confirm the rollback but do NOT name
+                the file; the string "Error loading config" does not appear at all).
+                Then fix that ConfigMap; `promtool check rules` against the pack
+                reproduces the same parse error locally before you re-apply.
+                SCOPE NOTE: the config-reloader sidecar only watches
+                /etc/prometheus/rules. prometheus.yml is mounted with subPath, and
+                Kubernetes does not propagate ConfigMap updates into a subPath
+                mount, so a prometheus.yml change is invisible to both the sidecar
+                and this alert and still requires a pod restart.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md"
+
+          # --- config-reloader sidecar crash loop (#1246) ---
+          # Covers BOTH config-reloader sidecars — Prometheus's (#1246, watches the
+          # Rule Packs) and Alertmanager's (#1243, watches the routing config) —
+          # because they share the container name; the `pod` label says which one.
+          # A single rule is deliberate: the consequence is identical (hot reload
+          # silently stops happening) and the remedy starts the same way.
+          #
+          # This is the complement to PrometheusConfigReloadFailed above, which only
+          # fires when a reload was ATTEMPTED and rejected. A crash-looping sidecar
+          # attempts no reload at all, so that gauge sits happily at 1 while edits
+          # silently stop taking effect — the exact #1246 bug, back again and now
+          # invisible. The sibling alert below covers the OTHER shape of "not
+          # running" (never started at all), which this counter cannot see.
+          #
+          # ⚠️ RESIDUAL GAP (stated, not papered over): a reloader that is Up but
+          # WEDGED — running, never restarting, no longer reacting to file changes —
+          # trips none of these alerts. Closing that needs a synthetic canary Rule
+          # Pack, which is out of scope here.
+          #
+          # kube_pod_container_status_restarts_total comes from kube-state-metrics
+          # (scraped via the annotated Service in the monitoring namespace), NOT from
+          # cAdvisor — the cAdvisor job's metric_relabel keep-list is scoped to
+          # `namespace=~"db-.+"` and drops the monitoring namespace entirely, so a
+          # container_* expression here would never produce a sample.
+          #
+          # ⚠️ `>= 4`, NOT the sibling ThresholdExporterHighRestarts's `> 3`, and the
+          # difference is not cosmetic. increase() EXTRAPOLATES to the window edges,
+          # so `> 3` is not the same predicate for every pod: MEASURED on
+          # prom/prometheus:v3.13.1 with an identical fixture shape, 3 restarts in
+          # the hour stayed silent when the counter started the window at 0 but
+          # FIRED (3.05) when it started at 7 — i.e. `> 3` pages at three restarts
+          # for any container that had ever restarted before, contradicting its own
+          # summary text. `>= 4` measured identical at bases 0 / 7 / 41: three never
+          # fires, four always does.
+          - alert: ConfigReloaderHighRestarts
+            expr: |
+              increase(
+                kube_pod_container_status_restarts_total{
+                  container="config-reloader",
+                  namespace="monitoring"
+                }[1h]
+              ) >= 4
+            for: 0s
+            labels:
+              severity: warning
+            annotations:
+              summary: "config-reloader sidecar in {{ $labels.pod }} is restarting frequently"
+              description: |
+                {{ $value | printf "%.0f" }} restarts in the last hour. While this
+                sidecar is down, hot reload silently stops: the ConfigMap still syncs
+                into the pod, but nothing POSTs /-/reload, so edits do not take
+                effect and NO other alert fires (PrometheusConfigReloadFailed only
+                catches reloads that were attempted and rejected). Check the
+                config-reloader container's logs and last-state reason —
+                OOMKilled means the memory limit is too tight for the watched-dir
+                size. Which component lost hot reload depends on the `pod` label:
+                the Prometheus pod's sidecar watches the Rule Packs, the
+                Alertmanager pod's watches the routing config.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md"
+
+          # --- config-reloader sidecar never started (#1246) ---
+          # The gap ConfigReloaderHighRestarts above CANNOT close. A container stuck
+          # in ImagePullBackOff / ErrImagePull / CreateContainerConfigError never
+          # runs, so kubelet reports restartCount 0 FOREVER and increase() sees a
+          # flat zero — the restart alert is structurally silent for the one failure
+          # mode most likely to hit a fresh or air-gapped install, where quay.io may
+          # simply be unreachable.
+          #
+          # And it is worse than "hot reload stops". Pod readiness is the AND of all
+          # containers, so a sidecar that never starts holds the WHOLE Prometheus pod
+          # NotReady even though Prometheus itself is serving: the `prometheus`
+          # Service drops its only endpoint, taking Grafana's datasource and the
+          # federation-proxy upstream with it. None of the obvious signals notice —
+          # the self-scrape is static localhost:9090 so `up{job="prometheus"}` stays
+          # 1, prometheus_config_last_reload_successful stays 1, and the repo's
+          # ContainerImagePullFailure is built on a recording rule scoped to
+          # `namespace=~"db-.+"` (rule-pack-kubernetes.yaml), which excludes
+          # monitoring entirely. Hence severity CRITICAL, not warning.
+          #
+          # Shape mirrors VectorProjectionGateStuck below (same KSM waiting-reason
+          # idiom, same reason list), with the non-init metric.
+          - alert: ConfigReloaderNotStarting
+            expr: |
+              max by (namespace, pod) (
+                max_over_time(
+                  kube_pod_container_status_waiting_reason{container="config-reloader", namespace="monitoring", reason=~"ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError|CrashLoopBackOff"}[5m]
+                )
+              ) > 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "config-reloader sidecar in {{ $labels.pod }} cannot start — pod held NotReady"
+              description: |
+                The config-reloader container is stuck waiting (image pull failure,
+                bad image reference, container-config error, or a crash loop) and has
+                never run. Two consequences, the second easy to miss: hot reload is
+                dead for whatever this sidecar watches, AND the pod cannot become
+                Ready while one of its containers is not — so if this is the
+                Prometheus pod, the `prometheus` Service has NO endpoints and every
+                consumer (Grafana datasource, federation-proxy upstream) is down even
+                though the Prometheus process itself is healthy. `kubectl describe
+                pod` gives the reason; an unreachable quay.io on a fresh or
+                air-gapped cluster is the most common cause — mirror the reloader
+                image into your registry and repoint it.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md"
+
           # --- tenant-api read-HA defer re-trigger (ADR-023 A4 / #678 / #788, CLOSED-deferred) ---
           # CODIFIED re-trigger for a CLOSED-deferred design item. #678 (TRK-325
           # read/write CQRS split) and its RFC duplicate #788 were closed deferred:
