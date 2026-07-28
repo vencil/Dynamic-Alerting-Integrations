@@ -151,6 +151,18 @@ The engine-death blind spot is closed and the **design-readiness half of every d
     - the heartbeat only proves "the engine is alive," not "rule evaluation is correct" (→ left to the runtime canary);
     - under the single-replica demo deployment, a real outage still needs manual recovery (HA is the operator's responsibility).
 
+## Postscript: how platform alerts actually get delivered (decisions above unchanged)
+
+The decision sections of this ADR only cover the dedicated lane for `Watchdog`; **how the remaining platform self-monitoring alerts reach a human** was out of scope at the time, and the shipped state is "they land in the root `default` receiver, which has no notifier". That leaves a practical gap: an operator who reads this ADR learns how to configure the heartbeat but finds no answer to "so how do I receive the other 40?".
+
+Supplementary notes (**none of the decisions above are modified**):
+
+- The mechanism is the existing `_routing_enforced` (platform-wide enforced route) — no new component is needed.
+- Platform alerts have no tenant to route them by, so they carry the positive discriminator label `alert_source: platform`. `Watchdog` **deliberately does not**: it has its own index-0 lane, and a second discriminator could pull the heartbeat into a second delivery path — the same reasoning as the "top-of-tree + `continue: false`" argument above.
+- Shipping default remains **zero delivery** (we do not pre-wire alerts to an unknown destination), consistent with this ADR's "the URL is a configuration switch, not a hard dependency" posture.
+
+For the full configuration example, the negative-assertion trap in the `tenant=""` fallback, and honest limitations such as "one enforced route cannot express critical OR platform", see [BYO Alertmanager Integration Guide §11 Delivering Platform Self-Monitoring Alerts](../integration/byo-alertmanager-integration.en.md#11-delivering-platform-self-monitoring-alerts).
+
 ## Related
 
 - value-form cookbook wrap-up: [#832](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/832) — where tenant-side liveness lives, a different plane from this ADR.

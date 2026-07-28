@@ -25,5 +25,6 @@ groups:
         for: 2m
         labels:
           severity: critical
+          alert_source: platform
         annotations:
           summary: "tenant-api running >1 replica — single-writer invariant (ADR-023) breached at runtime"

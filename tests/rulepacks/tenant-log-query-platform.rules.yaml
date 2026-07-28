@@ -35,6 +35,7 @@ groups:
         for: 15m
         labels:
           severity: warning
+          alert_source: platform
         annotations:
           summary: "Log-query requests for account {{ $labels.account_id }} are mostly rejected"
 
@@ -46,5 +47,6 @@ groups:
         for: 15m
         labels:
           severity: warning
+          alert_source: platform
         annotations:
           summary: "Vector tenant-projection drop rate >5/s for 15m — above baseline (usually rising operational-log volume, NOT registry desync; compare baseline first)"

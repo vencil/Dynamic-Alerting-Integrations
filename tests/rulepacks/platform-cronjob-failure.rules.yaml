@@ -60,5 +60,6 @@ groups:
         for: 15m
         labels:
           severity: warning
+          alert_source: platform
         annotations:
           summary: "CronJob {{ $labels.owner_name }}: most recent run failed"

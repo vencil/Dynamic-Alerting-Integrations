@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: observability
 created_at: 2026-06-14
-updated_at: 2026-06-17
+updated_at: 2026-07-28
 ---
 
 # ADR-025: 告警平面自我存活性 — 讓告警系統能偵測自己的死亡
@@ -154,6 +154,18 @@ receivers:
     - 外部心跳是 operator 要自備的依賴（斷網退路＝被動探測）。
     - 心跳只能證明「引擎還活著」，不能證明「規則評估正確」（→ 留給 runtime canary）。
     - 單副本示範部署下，真出事仍需人工復原（高可用是 operator 的責任）。
+
+## 後記：平台告警的投遞怎麼接（不改上述決策）
+
+本 ADR 的決策段落只處理 `Watchdog` 這一條的專線；**其餘平台自監控告警怎麼送到人**當時不在範圍內，出貨狀態是「落在 root `default` receiver、無 notifier」。這造成一個實務落差：operator 讀完本 ADR 知道心跳怎麼設，卻找不到「那另外 40 條要怎麼收」的答案。
+
+補充說明（**不修改上述任何決策**）：
+
+- 接的機制是既有的 `_routing_enforced`（平台級 enforced route），不需要新元件。
+- 平台告警沒有 tenant 可依附，故帶正向 discriminator label `alert_source: platform`（`Watchdog` **刻意不帶**——它有 index-0 專線，多一個 discriminator 會讓心跳被拉進第二條投遞路徑，與本 ADR「置頂 + `continue: false`」的推理一致）。
+- 出貨仍維持**零投遞**（不預設把告警送到未知目的地），與本 ADR「URL 是設定開關，不是硬性依賴」同一姿態。
+
+完整設定範例、`tenant=""` 兜底的負向斷言陷阱、以及「一條 enforced route 無法同時表達 critical OR platform」等誠實限制，見 [BYO Alertmanager 整合指南 §11 平台自監控告警的投遞](../integration/byo-alertmanager-integration.md#11-平台自監控告警的投遞)。
 
 ## 相關
 

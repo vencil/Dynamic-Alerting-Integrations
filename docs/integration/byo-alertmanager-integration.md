@@ -396,8 +396,10 @@ _routing_enforced:
     type: "webhook"
     url: "https://noc.example.com/alerts"
   match:
-    severity: "critical"
+    - 'severity="critical"'     # ⚠️ 必須是 matcher 字串的 list
 ```
+
+> ⚠️ **`match` 只接受 list-of-matcher-strings**。寫成 map 形式（`match:` / `  severity: "critical"`）會被 `_grar_routes.py::_build_single_enforced_route` 的 `isinstance(match, list)` 判斷**靜默丟棄**——產生的 route 因此**沒有任何 matcher**，加上 enforced route 固定帶 `continue: true`，結果是一條 **match-all 消防水管**：所有租戶的所有告警（含 severity=info 與其他租戶的）全被雙送進該 receiver。範本見 [`conf.d/_defaults.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/config/conf.d/_defaults.yaml) 的註解區塊。
 
 **模式 B：Per-tenant 獨立通道**
 
@@ -414,6 +416,8 @@ _routing_enforced:
 ```
 
 模式 A 產生單一共用 platform route；模式 B 產生 N 個 per-tenant route（各帶 `tenant="<name>"` matcher + `continue: true`）。預設不啟用。
+
+> 上面兩個模式談的是**租戶**告警。平台**自己**的自監控告警（Prometheus / Alertmanager / exporter / tenant-api / 聯邦管線的健康）沒有 tenant 可依附，選法不同——見 [§11 平台自監控告警的投遞](#11-平台自監控告警的投遞)。
 
 ---
 
@@ -446,6 +450,98 @@ da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertm
 ```
 
 工具內建冪等檢查（不重複建立相同 silence）與自動延展（既有 silence 到期早於視窗結束時自動 extend）。詳見 [Shadow Monitoring SOP §8](../shadow-monitoring-sop.md) 中的維護窗口操作說明。
+
+---
+
+## 11. 平台自監控告警的投遞
+
+平台自己也有一份自監控 rule pack（`k8s/03-monitoring/configmap-rules-platform.yaml`，41 條），監看 Prometheus / Alertmanager / threshold-exporter / tenant-api / 聯邦與投影管線的健康。**出貨預設它們不通知任何人**：`Watchdog` 走 [自我存活性](alerting-plane-self-liveness.md)的 index-0 心跳專線，其餘 40 條落在 root 的 `default` receiver（無 notifier）。這是刻意的出貨姿態（不預設把告警送到我們不知道的地方），**不是無解**——本節說明怎麼接上。
+
+接的機制就是 §8 的 `_routing_enforced`，差別只在 matcher 該寫什麼。
+
+### 主要選法：`alert_source="platform"`（正向斷言）
+
+平台告警**沒有 tenant 可依附**，所以平台給了它們一個正向 discriminator label：除 `Watchdog` 外的 40 條全部帶 `alert_source: platform`。
+
+```yaml
+# conf.d/_defaults.yaml
+_routing_enforced:
+  enabled: true
+  receiver:
+    type: "webhook"
+    url: "https://noc.example.com/platform-alerts"
+  match:
+    - 'alert_source="platform"'
+  group_by: ["alertname"]     # 平台告警無 tenant，用 root 的 [alertname,tenant] 分組沒有意義
+  group_wait: "30s"
+  repeat_interval: "4h"
+```
+
+這是**正向**斷言：只選有標的，語意明確、不會誤收。`alert_source` 是**保留值**——非平台規則樹不得使用，且 `Watchdog` 必須不帶（它有自己的專線，多一個 discriminator 會讓心跳被拉進第二條投遞路徑）。兩個方向都由 `tests/ops/test_generate_routes_orchestration.py::TestPlatformAlertSourceContract` 機械保證。
+
+### 兜底：`tenant=""`（⚠️ 負向斷言，有已知陷阱且**不完整**）
+
+40 條裡有 **37 條**完全沒有 `tenant` label，所以 `tenant=""` 接得住那 37 條。**剩下 3 條接不到**（全部 `severity: warning`）：
+
+| 告警 | `tenant` 從哪來 |
+|---|---|
+| `TenantMetricsOverLimit` | rule-level `labels.tenant`（也來自 expr 結果集） |
+| `FederationRejectionRateAnomaly` | expr `sum by (tenant)` 產生的 **runtime** label |
+| `FederationGatewayBackendErrors` | expr `sum by (tenant)` 產生的 **runtime** label |
+
+⚠️ 後兩條特別容易漏判：它們的 rule-level `labels:` 裡**沒有** `tenant`，只在告警實際觸發時由 expr 的聚合維度帶出來——只讀規則檔的 `labels:` 會誤以為它們無 tenant。
+
+因此 `tenant=""` 是一個**不完整的兜底**：它確實能接住「未來漏打 `alert_source`、且結果集無 tenant」的新規則，但**接不到**任何 per-tenant 聚合形狀的平台告警——而聯邦面的告警正是這個形狀。代價還包括：它同時接住任何其他碰巧沒有 tenant 的告警。**正向的 `alert_source="platform"` 才是 40/40 的完整選法**，`tenant=""` 只適合當作額外的第二層網。
+
+⚠️ **這裡有個反過來咬人的坑，務必記住**：Alertmanager 的官方語意是「**label 不存在 == label 值為空字串**」。因此：
+
+| 寫法 | 實際會匹配到 |
+|---|---|
+| `tenant=""` | 無 `tenant` label 的告警（40 條平台告警裡的 37 條）✅ 這是兜底想要的 |
+| `tenant=~".*"` | **所有告警，含全部 40 條平台告警** ⚠️ `.*` 匹配空值 |
+| `tenant!=""` / `tenant=~"\S+"` | 任何帶 tenant 的告警——⚠️ **包含上表那 3 條平台告警**，不等於「只要租戶告警」 |
+| `tenant!=""` ＋ `alert_source=""` | 真正的「只要租戶告警」✅ 兩個 matcher 是 AND |
+
+也就是說，想寫「所有租戶的告警」而順手寫成 `tenant=~".*"`，會**把平台告警一起吃進租戶通道**。這是 Alertmanager 的長期已知陷阱（[alertmanager#2102](https://github.com/prometheus/alertmanager/issues/2102)）。而換成 `tenant!=""` 只解決一半——它仍會撈到那 3 條 per-tenant 聚合的平台告警；要乾淨地表達「只要租戶告警」必須**再加一個 `alert_source=""`**。平台自己出貨的 silent-mode `inhibit_rules` 就是這個組合（`tenant=~".+"` ＋ `alert_source=""`），可以當範本。
+
+### ⛔ 誠實限制：一條 enforced route，`match` 內是 AND
+
+四點必須先知道，否則會做出錯誤預期：
+
+1. **`_routing_enforced` 只產生「一條」route**（模式 A）。
+2. **`match` 陣列內的多個 matcher 是 AND**，不是 OR。
+3. 因此**無法用一條 enforced route 同時表達「所有 critical」OR「所有平台告警」**——這兩個需求要**二選一**：
+   - 選 `alert_source="platform"` → 平台自監控 40/40 收到；租戶的 critical 走各租戶自己的 `_routing`（不進 NOC）。
+   - 選 `severity="critical"` → NOC 收到所有租戶 critical，但平台自監控只涵蓋 **18/40**（18 critical、20 warning、2 info），其餘 22 條仍然靜默。
+
+   ⚠️ 不要試圖「手動在 base ConfigMap 再加一條 route」繞過：重新產生設定時 `route.routes` 是**整段 REPLACE**（`assemble_configmap`），手加的 route 會在下一次 regen 消失。
+
+4. **模式 B（`{{tenant}}` 展開）完全接不到平台告警**：per-tenant enforced route 硬帶 `tenant="<name>"` matcher（`scripts/tools/ops/_grar_routes.py`），而平台告警沒有 tenant。要收平台告警只能用模式 A。
+
+### 接上之後的噪音特性（先看再接）
+
+平台告警**繞過了平台大部分的降噪機制**，因為那些機制都以 `tenant` / `metric_group` 為 key：
+
+- **Severity dedup 不生效**：出貨的 dedup `inhibit_rules` 兩側都要求 `metric_group=~".+"` 且 `tenant="<name>"`，而平台告警**零條有 `metric_group`**（37 條連 `tenant` 也沒有）。免疫的成因是**前者**——`metric_group` 一條都沒有，所以連帶 tenant 的那 3 條也不會被 dedup 掉。實例：`ThresholdExporterDown`（warning）與 `ThresholdExporterAbsent`（critical）在全滅時會**雙發**，不會像租戶告警那樣被壓成一則。
+- **Silent mode 不生效（成因與上一條不同）**：`TenantSilentWarning` / `TenantSilentCritical` 的 inhibit target 是 `severity=<...>` + `tenant=~".+"`——上面那 3 條帶 tenant 的平台 warning **原本落在 target 內**，租戶只要開一次 `_silent_mode` 就能把平台自己的故障告警消音。本版已在這兩條 inhibit 的 `target_matchers` 加上 `alert_source=""`（語意：只針對**沒有**平台標記的租戶告警），平台告警因此免疫。⚠️ 兩條的免疫來源不同，別混記：**dedup 是「本來就沒有 `metric_group`」**，**silent mode 是「本版加了排除條件」**。
+  同一個缺口有**第二個面**，本版一併修掉：`maintenance-scheduler` 依租戶的 `_state_maintenance.recurring` 建立的 Alertmanager silence，matcher 原本只有 `tenant="<name>"`，租戶開維護窗口一樣會把那 3 條平台告警靜音。現已同樣帶上 `alert_source=""`（`scripts/tools/ops/maintenance_scheduler.py`，兩個寫入點共用同一個 builder）。⚠️ 兩個面必須一起看：**inhibit 與 silence 是不同機制**，只修一個，洞只是換個形狀。舊有的單 matcher silence 不受影響——冪等查找是以 `(tenant, comment)` 為鍵、按名掃 `tenant` matcher，不比對整組。
+- **`absent()` 型告警在元件未部署時常態 firing**：`ThresholdExporterAbsent`、`TenantExporterJobAbsent`、`FederationRevocationReconcileStale`、`FederationAuditPipelineSilent` **四條**是設計上的「東西不見了就叫」（最後兩條屬聯邦面，未啟用聯邦時必然亮燈），在 demo / 部分部署的環境會持續亮燈。接上通道前先確認這些元件都真的部署了，否則第一天就會收到穩定噪音。
+  > `MassExporterOutage` **不在此列**：它的 expr 尾端是 `unless on() absent(up{job="tenant-exporters"})`，整個 job 不存在時**刻意抑制自己**，把「exporter 面整片消失」這個情境單獨留給 `TenantExporterJobAbsent` 承接。它恰恰是「元件未部署時**不**叫」的那一類。
+- **⛔ 第一天必然收到的一則：`AlertmanagerWebhookNotificationsFailing`**：出貨的 `secret-watchdog-heartbeat.yaml` 是 placeholder（`REPLACE_WITH_EXTERNAL_DEAD_MANS_SWITCH_URL`），而 Watchdog route 的 `repeat_interval` 是 3m ⇒ Alertmanager 每 3 分鐘送出一次必失敗的 webhook ⇒ 該規則（`increase(...[10m]) > 0`、`for: 15m`）在**未設定外部 DMS 的環境會永久 firing**。這不是「可能」的噪音，是接上通道後 15 分鐘內**一定**會拿到的第一則。先做完[自我存活性指南①](alerting-plane-self-liveness.md)填好 Secret，再接通道。
+  ⚠️ **順帶一個誤診陷阱**：`alertmanager_notifications_failed_total` **沒有 per-receiver label**（只有 `integration` / `reason`），所以你新加的 NOC webhook 若失敗，餵的是**同一個 counter**。後果有二：(a) 告警文字會指著 watchdog secret 叫你去查，實際壞的是 NOC webhook；(b)「webhook 壞了」這則告警本身會被路由到那個壞掉的 webhook。判別方式只能看 Alertmanager 自己的 log／`amtool` 而非這個指標。
+
+建議做法：先用一個**低優先級的通道**（如專屬 Slack channel、不 page 的 webhook）接一週觀察，確認噪音收斂後再接到會叫醒人的通道。
+
+### ⚠️ 升級註記：本次的 label 變更會擾動已在跑的告警狀態
+
+40 條規則新增了一個 rule-level label，這會改變它們的 label set，因而有兩個**一次性**的可觀察副作用（**只影響已經把平台告警接上通知的環境**；出貨預設 `_routing_enforced` 關閉、無人接收，則感受不到）：
+
+1. **Alertmanager fingerprint 改變**：Alertmanager 以 label set 算 alert fingerprint，label set 一變就是「新的一則告警」。已接好投遞的 operator 會看到舊 fingerprint 走完 `resolve_timeout` 後發出一輪**假 resolved**，新 fingerprint 再**重新 page** 一次。
+2. **Prometheus `for:` 計時器重置**：reload 規則時，Prometheus 以「rule name + labels」配對既有的 pending/firing 狀態，配不上就當成新規則**從零重新計時**。`for: 15m` 的規則因此有最長 **15 分鐘**的偵測空窗——套用本版時如果正好有事故在燒，那段時間不會有新的 firing 通知。
+
+建議在維護窗口套用，或至少避開已知的事故處理期間。
+
+> 相關：[告警平面自我存活性（Operator 指南）](alerting-plane-self-liveness.md)（`Watchdog` 與外部 dead-man's-switch）· [ADR-025](../adr/025-alerting-plane-self-liveness.md)（設計決策）· [故障排查](../troubleshooting.md#平台告警沒有收到通知)
 
 ---
 

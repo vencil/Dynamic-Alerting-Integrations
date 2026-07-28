@@ -30,6 +30,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
+              alert_source: platform
               namespace: monitoring
               pod: prometheus-7c9d-abcde
             exp_annotations:

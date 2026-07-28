@@ -18,6 +18,7 @@ groups:
         for: 3m
         labels:
           severity: critical
+          alert_source: platform
         annotations:
           summary: "Entire tenant-exporters scrape job is absent — per-tenant liveness is BLIND"
 
@@ -36,5 +37,6 @@ groups:
         for: 3m
         labels:
           severity: critical
+          alert_source: platform
         annotations:
           summary: "Mass exporter outage ({{ $value }} tenants) — shared-dependency failure suspected"

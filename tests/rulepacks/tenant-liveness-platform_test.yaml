@@ -49,6 +49,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
+              alert_source: platform
               job: tenant-exporters
             exp_annotations:
               summary: "Entire tenant-exporters scrape job is absent — per-tenant liveness is BLIND"
@@ -110,6 +111,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
+              alert_source: platform
             exp_annotations:
               summary: "Mass exporter outage (8 tenants) — shared-dependency failure suspected"
 
@@ -146,6 +148,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
+              alert_source: platform
               job: tenant-exporters
             exp_annotations:
               summary: "Entire tenant-exporters scrape job is absent — per-tenant liveness is BLIND"
@@ -445,6 +448,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
+              alert_source: platform
               job: tenant-exporters
             exp_annotations:
               summary: "Entire tenant-exporters scrape job is absent — per-tenant liveness is BLIND"

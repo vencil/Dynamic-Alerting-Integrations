@@ -43,6 +43,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              alert_source: platform
               container: config-reloader
               namespace: monitoring
               pod: prometheus-7c9d-abcde
@@ -90,6 +91,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              alert_source: platform
               container: config-reloader
               namespace: monitoring
               pod: alertmanager-6b4f-fghij
@@ -141,6 +143,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              alert_source: platform
               container: config-reloader
               namespace: monitoring
               pod: alertmanager-6b4f-fghij
@@ -148,6 +151,7 @@ tests:
               summary: "config-reloader sidecar in alertmanager-6b4f-fghij is restarting frequently"
           - exp_labels:
               severity: warning
+              alert_source: platform
               container: config-reloader
               namespace: monitoring
               pod: prometheus-7c9d-abcde

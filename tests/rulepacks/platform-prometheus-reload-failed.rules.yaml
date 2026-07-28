@@ -14,5 +14,6 @@ groups:
         for: 2m
         labels:
           severity: warning
+          alert_source: platform
         annotations:
           summary: "Prometheus rejected its last reload — Rule Pack edits are NOT in effect"

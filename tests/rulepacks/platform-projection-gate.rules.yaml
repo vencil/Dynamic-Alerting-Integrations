@@ -25,6 +25,7 @@ groups:
         for: 5m
         labels:
           severity: critical
+          alert_source: platform
         annotations:
           summary: "Vector projection gate found a wrong accountId (mode={{ $labels.mode }}) — tenant log routing degraded to 0:0"
 
@@ -36,6 +37,7 @@ groups:
         for: 5m
         labels:
           severity: critical
+          alert_source: platform
         annotations:
           summary: "Vector projection gate could not read the account registry at boot (mode={{ $labels.mode }}) — tenant routing silently degraded"
 
@@ -49,5 +51,6 @@ groups:
         for: 5m
         labels:
           severity: critical
+          alert_source: platform
         annotations:
           summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in {{ $labels.namespace }}"

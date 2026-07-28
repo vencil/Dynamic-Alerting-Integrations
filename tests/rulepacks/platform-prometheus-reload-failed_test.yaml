@@ -34,6 +34,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              alert_source: platform
               job: prometheus
               instance: localhost:9090
             exp_annotations:
@@ -43,6 +44,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              alert_source: platform
               job: prometheus
               instance: localhost:9090
             exp_annotations:

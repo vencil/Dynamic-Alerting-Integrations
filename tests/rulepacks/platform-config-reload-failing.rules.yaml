@@ -16,5 +16,6 @@ groups:
         for: 5m
         labels:
           severity: warning
+          alert_source: platform
         annotations:
           summary: "tenant-api config hot-reload failing for {{ $labels.component }} — serving stale last-good"

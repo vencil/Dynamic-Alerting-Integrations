@@ -281,6 +281,107 @@ def assert_watchdog_inhibit_immunity(inhibit_rules: list[dict] | None) -> None:
         "(see the alerting-plane self-liveness runbook).")
 
 
+# ── Tenant-scoped silencing must not reach PLATFORM alerts ─────────
+#
+# Silent Mode (TenantSilentWarning / TenantSilentCritical) is a TENANT-controlled
+# switch: a tenant sets `_silent_mode` in its own config and the sentinel fires.
+# Its inhibit target is severity + tenant=~".+", which is fine for tenant alerts
+# — but THREE platform self-monitoring alerts also carry a `tenant` label and are
+# severity=warning, so before the `alert_source=""` matcher was added a tenant
+# could mute the platform's own failure alerts. Two of the three
+# (FederationRejectionRateAnomaly, FederationGatewayBackendErrors) get `tenant`
+# from their expr's `sum by (tenant)`, i.e. only at fire time — reading the rule
+# file's `labels:` block says they have no tenant, which is how this survived
+# review.
+#
+# The invariant this codifies is deliberately NARROW: only a rule whose SOURCE
+# side is tenant-gated (i.e. it is triggered by something a tenant controls) is
+# forbidden from targeting a platform alert. A future deliberate platform→platform
+# inhibit (source not tenant-gated) stays legal.
+PLATFORM_ALERT_SOURCE_LABEL = "alert_source"
+PLATFORM_ALERT_SOURCE_VALUE = "platform"
+
+# Representative label sets of the platform self-monitoring pack
+# (k8s/03-monitoring/configmap-rules-platform.yaml). Real alertnames are used so
+# a target matcher that names `alertname` is still evaluated fail-closed; the
+# repo-anchored test derives the FULL set from the ConfigMap, so drift here
+# weakens only the default, never the shipped guarantee.
+PLATFORM_ALERT_IDENTITY_LABELS = (
+    # the tenant-bearing shapes — the ones this guard exists for
+    {"alertname": "FederationGatewayBackendErrors", "severity": "warning",
+     "alert_source": "platform", "tenant": "any-tenant"},
+    {"alertname": "FederationRejectionRateAnomaly", "severity": "warning",
+     "alert_source": "platform", "tenant": "any-tenant"},
+    {"alertname": "TenantMetricsOverLimit", "severity": "warning",
+     "alert_source": "platform", "tenant": "any-tenant"},
+    # tenant-less shapes, one per shipped severity
+    {"alertname": "ThresholdExporterAbsent", "severity": "critical",
+     "alert_source": "platform"},
+    {"alertname": "ThresholdExporterDown", "severity": "warning",
+     "alert_source": "platform"},
+    {"alertname": "TenantApiReadHANeeded", "severity": "info",
+     "alert_source": "platform"},
+)
+
+
+def find_tenant_silenceable_platform_inhibits(
+        inhibit_rules: list[dict] | None,
+        platform_label_sets: "tuple[dict, ...] | list[dict] | None" = None,
+) -> list[tuple[int, dict, dict]]:
+    """Return [(index, rule, platform_labels), ...] for every TENANT-SCOPED
+    inhibit rule whose target side would suppress a platform self-monitoring
+    alert.
+
+    "Tenant-scoped" = the SOURCE matchers presence-gate `tenant` (`tenant=~".+"`
+    or `tenant="x"`), i.e. the rule can only be triggered by an alert a tenant
+    owns. "Would suppress" reuses the same AND-join semantics as the Watchdog
+    guard: a rule suppresses an alert iff ALL its target matchers match it.
+
+    Empty result = invariant holds.
+    """
+    sets = platform_label_sets or PLATFORM_ALERT_IDENTITY_LABELS
+    out: list[tuple[int, dict, dict]] = []
+    for i, rule in enumerate(inhibit_rules or []):
+        if not isinstance(rule, dict):
+            continue
+        sources = _inhibit_side_matchers(rule, "source")
+        if not sources or not _matchers_gate_label_present(sources, "tenant"):
+            continue  # not tenant-triggered → out of scope for this invariant
+        targets = _inhibit_target_matchers(rule)
+        if targets is None:
+            continue
+        for labels in sets:
+            if all(_matcher_matches_labels(m, labels) for m in targets):
+                out.append((i, rule, labels))
+                break
+    return out
+
+
+def assert_platform_alerts_not_tenant_silenceable(
+        inhibit_rules: list[dict] | None,
+        platform_label_sets: "tuple[dict, ...] | list[dict] | None" = None,
+) -> None:
+    """Fail-closed guard: raise ValueError if a tenant-triggered inhibit rule
+    would suppress a platform self-monitoring alert. Run on the FINAL merged
+    inhibit set at every render path, alongside the Watchdog guard."""
+    offending = find_tenant_silenceable_platform_inhibits(
+        inhibit_rules, platform_label_sets)
+    if not offending:
+        return
+    details = "; ".join(
+        f"inhibit_rules[{i}] target="
+        f"{r.get('target_matchers', r.get('target_match', r.get('target_match_re')))}"
+        f" suppresses {lbls.get('alertname')}"
+        for i, r, lbls in offending)
+    raise ValueError(
+        "Platform-alert silencing invariant violated: tenant-triggered inhibit "
+        f"rule(s) would suppress a platform self-monitoring alert ({details}). A "
+        "tenant must not be able to mute the platform's own failure alerts. Fix: "
+        f'add `{PLATFORM_ALERT_SOURCE_LABEL}=""` to target_matchers (a missing '
+        "label equals the empty string in Alertmanager, so tenant alerts still "
+        "match while platform alerts are excluded), or narrow the target.")
+
+
 def load_policy(policy_path: str | None) -> list[str]:
     """Load policy YAML and return allowed_domains list (may be empty)."""
     if not policy_path or not Path(policy_path).is_file():

@@ -20,5 +20,6 @@ groups:
         for: 0s
         labels:
           severity: warning
+          alert_source: platform
         annotations:
           summary: "config-reloader sidecar in {{ $labels.pod }} is restarting frequently"

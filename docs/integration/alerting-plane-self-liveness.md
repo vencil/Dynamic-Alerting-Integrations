@@ -26,6 +26,8 @@ lang: zh
 | 置頂 route（`routes[0]`）+ `watchdog-heartbeat` receiver（`url_file`） | `k8s/03-monitoring/configmap-alertmanager.yaml`（路由由平台的 `generate_alertmanager_routes.py` 於每次重生時重新注入 index 0，撐過 route-REPLACE） |
 | 外部 DMS URL（內嵌 token，**機密**） | `k8s/03-monitoring/secret-watchdog-heartbeat.yaml` → 掛載到 `/etc/alertmanager/secrets/watchdog-heartbeat-url` |
 
+> ⚠️ **本文只涵蓋 `Watchdog` 這一條心跳專線**。同一份 rule pack 裡還有 **40 條**平台自監控告警（exporter / tenant-api / 聯邦 / 投影管線的健康），它們**不走**這條專線、出貨預設落在無 notifier 的 `default` receiver。設好心跳**不等於**那 40 條會通知你——怎麼接見 [BYO Alertmanager 整合指南 §11 平台自監控告警的投遞](byo-alertmanager-integration.md#11-平台自監控告警的投遞)（用 `_routing_enforced` + `match: ['alert_source="platform"']`）。
+
 ## ① 設定外部心跳（必做）
 
 1. 在平台**外部**（不會跟本叢集一起死的地方）準備一個 DMS / heartbeat 監測（如 Healthchecks.io、Better Stack、PagerDuty heartbeat、或自架在獨立 VM / 叢集的監測）。取得它的 ingest URL（通常內嵌一個 token / UUID）。
@@ -89,5 +91,6 @@ Alertmanager **沒有「inhibition 免疫」原語**；`severity: none` 只是�
 ## 相關
 
 - [ADR-025 告警平面自我存活性](../adr/025-alerting-plane-self-liveness.md)（設計決策）
+- [BYO Alertmanager 整合指南 §11](byo-alertmanager-integration.md#11-平台自監控告警的投遞)（**另外 40 條**平台自監控告警怎麼接上通知）
 - [Operator Alertmanager 整合指南](operator-alertmanager-integration.md)（租戶告警 receiver / Secret / 抑制規則）
 - [高可用性設計](../design/high-availability.md)（資料平面 HA，互補、不同平面）
