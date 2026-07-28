@@ -44,6 +44,119 @@ DEFAULT_CONTAINER = "vibe-dev-container"
 DEFAULT_WORKSPACE = "/workspaces/vibe-k8s-lab"
 OUT_FILE = "_dx_out.txt"
 
+# ── Live dependency doctor (#1254 follow-up) ─────────────────────────
+#
+# check_devcontainer_dep_parity.py proves the DECLARATION is right. It cannot
+# prove the RUNNING container matches, because `postCreateCommand` only ever
+# runs at container CREATE — an existing container silently keeps whatever it
+# was built with. That gap is not theoretical: a clean rebuild moved the
+# packages from root to vscode and `make dc-test` died with
+# `ModuleNotFoundError: No module named 'yaml'` while every gate stayed green.
+#
+# So assert it live, for the user we are ABOUT TO exec as, and fail loudly
+# with the rebuild instruction instead of letting the command produce a
+# greener-than-CI result.
+#
+# The expected set is PARSED FROM the declaration (single SoT) rather than
+# hand-listed here — a second hand-maintained list is exactly the drift #1254
+# was about. Distribution names are checked via importlib.metadata, so no
+# fragile dist-name → import-name mapping is needed (pyyaml → yaml etc.).
+DOCTOR_SKIP_ENV = "VIBE_SKIP_DC_DOCTOR"
+_DOCTOR_STAMP_DIR = "/tmp"
+
+
+def _declared_packages() -> set[str] | None:
+    """Parse the declared pip set from devcontainer.json. None if unavailable.
+
+    Returns None (doctor degrades to a no-op) rather than raising: dx-run must
+    keep working from a checkout where the lint module or the config moved.
+    That is a deliberate fail-OPEN, and it is safe because the parity lint
+    fails CLOSED on the same inputs in CI — this is a convenience tripwire,
+    not the enforcement point.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    lint_dir = repo_root / "scripts" / "tools" / "lint"
+    try:
+        sys.path.insert(0, str(lint_dir))
+        import check_devcontainer_dep_parity as parity  # noqa: PLC0415
+
+        return parity.devcontainer_packages(
+            repo_root / ".devcontainer" / "devcontainer.json"
+        )
+    except Exception:  # noqa: BLE001 - any failure → doctor is a no-op
+        return None
+
+
+def _doctor_probe_src(packages: list[str]) -> str:
+    """Python source run INSIDE the container to verify the packages resolve."""
+    return (
+        "import importlib.metadata as m,sys\n"
+        f"pkgs={sorted(packages)!r}\n"
+        "bad=[]\n"
+        "for p in pkgs:\n"
+        "    try: m.version(p)\n"
+        "    except Exception: bad.append(p)\n"
+        "print('MISSING=' + ','.join(bad))\n"
+        "sys.exit(1 if bad else 0)\n"
+    )
+
+
+def _run_dep_doctor(name: str, ws: str) -> int:
+    """Verify the running container has the declared packages. 0 = ok."""
+    if os.environ.get(DOCTOR_SKIP_ENV):
+        return 0
+    packages = _declared_packages()
+    if not packages:
+        return 0
+
+    # Stamp keyed by the declaration itself: re-checks only when the declared
+    # set changes, so the common path costs nothing after the first run.
+    import hashlib  # noqa: PLC0415
+
+    digest = hashlib.sha256(
+        ",".join(sorted(packages)).encode("utf-8")
+    ).hexdigest()[:16]
+    stamp = f"{_DOCTOR_STAMP_DIR}/.vibe-dep-doctor-{digest}"
+    seen = subprocess.run(
+        ["docker", "exec", name, "test", "-f", stamp],
+        capture_output=True, check=False, timeout=60,
+    )
+    if seen.returncode == 0:
+        return 0
+
+    probe = subprocess.run(
+        ["docker", "exec", "-w", ws, name, "python3", "-c",
+         _doctor_probe_src(sorted(packages))],
+        capture_output=True, text=True, check=False, timeout=120,
+    )
+    if probe.returncode == 0:
+        subprocess.run(
+            ["docker", "exec", name, "touch", stamp],
+            capture_output=True, check=False, timeout=60,
+        )
+        return 0
+
+    missing = ""
+    for line in (probe.stdout or "").splitlines():
+        if line.startswith("MISSING="):
+            missing = line.split("=", 1)[1]
+    print(
+        f"\n{name}: declared Python dependencies are MISSING from the running "
+        f"container:\n    {missing or '<probe failed>'}\n\n"
+        "The container predates the current .devcontainer/devcontainer.json — "
+        "postCreateCommand only runs at container CREATE, so an existing "
+        "container never picks up a changed dependency set.\n"
+        "Running anyway would report a GREENER result than CI (missing "
+        "packages make tests skip themselves rather than fail).\n\n"
+        "Fix — rebuild the container:\n"
+        "    npx -y @devcontainers/cli up --workspace-folder <repo> "
+        "--remove-existing-container\n"
+        "or, to unblock without a rebuild, install the declared set inside it.\n"
+        f"Set {DOCTOR_SKIP_ENV}=1 to bypass this check.\n",
+        file=sys.stderr,
+    )
+    return 4
+
 
 def _container() -> str:
     return os.environ.get("DX_CONTAINER", DEFAULT_CONTAINER)
@@ -132,6 +245,13 @@ def cmd_run(cmd: list[str], detach: bool = False) -> int:
             file=sys.stderr,
         )
         return 3
+
+    # Live dependency check before we hand the command to the container —
+    # see _run_dep_doctor. Cheap after the first run (stamped), skippable via
+    # VIBE_SKIP_DC_DOCTOR=1.
+    rc_doctor = _run_dep_doctor(name, ws)
+    if rc_doctor != 0:
+        return rc_doctor
 
     # Build the in-container shell command: run user cmd, capture to
     # workspace file so host can cat it even when docker exec drops stdout.
