@@ -109,15 +109,17 @@ spec:
         # #1246: Rule Pack 熱更新的觸發器。在此之前這個 Pod 只有一個容器，而
         # **Prometheus 不監看 rule 檔** —— kubelet 會把 ConfigMap 變更同步進下面
         # 的 projected volume（30–90s），但規則要等到有人 POST /-/reload 或 Pod
-        # 重啟才真的生效，而 repo 內沒有任何東西會自動去打它（唯二的 /-/reload
-        # 用例是 troubleshooting-checklist 的 kubectl exec 與 BYO 文件的 curl，
-        # 都是人工步驟）。ADR-005「動態管理」等多份文件卻寫成 sidecar 自動 reload
-        # —— 這個 sidecar 就是把那個說法補成真。
+        # 重啟才真的生效，而 repo 內**沒有任何自動化**會去打它——散在文件裡的
+        # /-/reload 都是人工步驟（troubleshooting-checklist 與 BYO 指南的
+        # kubectl exec / curl、tenant-federation 的 token 輪替說明等，不只兩處，
+        # 別在這裡維護清單）。ADR-005「動態管理」等多份文件卻寫成 sidecar 自動
+        # reload —— 這個 sidecar 就是把那個說法補成真。
         #
-        # 與 Alertmanager 側同一顆 image（#1251 引進，已在部署 SSOT 與 nightly
-        # 掃描矩陣內，不新增第三方供應鏈面）。--reload-url 的上游預設正好就是
-        # http://127.0.0.1:9090/-/reload，這裡仍顯式寫出來，免得日後上游改預設
-        # 時靜默指向別處。
+        # 與 Alertmanager 側同一顆 image（#1243 引進，已在部署 SSOT 與 nightly
+        # 掃描矩陣內，不新增第三方供應鏈面）。--reload-url 顯式寫出來（值刻意與
+        # 上游預設 http://127.0.0.1:9090/-/reload 逐字相同，不用 localhost——後者
+        # 可能解析到 ::1 而 Prometheus 綁的是 0.0.0.0），免得日後上游改預設時靜默
+        # 指向別處。
         #
         # ⚠️ 範圍誠實：這只修 RULE PACK。主設定 prometheus.yml 是以
         # `subPath: prometheus.yml` 掛載的，而 **Kubernetes 對 subPath 掛載不傳播
@@ -133,7 +135,7 @@ spec:
               drop: ["ALL"]
           args:
             - "--watched-dir=/etc/prometheus/rules"
-            - "--reload-url=http://localhost:9090/-/reload"
+            - "--reload-url=http://127.0.0.1:9090/-/reload"
           volumeMounts:
             - name: rules
               mountPath: /etc/prometheus/rules

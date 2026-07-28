@@ -211,19 +211,24 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{compone
 
 | ConfigMap 名稱 | 內容 | 規則數 |
 |----------------|------|--------|
-| `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 11R + 8A |
-| `prometheus-rules-postgresql` | `postgresql-recording.yml`, `postgresql-alert.yml` | 11R + 8A |
-| `prometheus-rules-kubernetes` | `kubernetes-recording.yml`, `kubernetes-alert.yml` | 7R + 4A |
+| `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 14R + 18A |
+| `prometheus-rules-postgresql` | `postgresql-recording.yml`, `postgresql-alert.yml` | 11R + 9A |
+| `prometheus-rules-kubernetes` | `kubernetes-recording.yml`, `kubernetes-alert.yml` | 30R + 14A |
 | `prometheus-rules-redis` | `redis-recording.yml`, `redis-alert.yml` | 11R + 6A |
-| `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 10R + 6A |
+| `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 10R + 8A |
 | `prometheus-rules-elasticsearch` | `elasticsearch-recording.yml`, `elasticsearch-alert.yml` | 11R + 7A |
 | `prometheus-rules-oracle` | `oracle-recording.yml`, `oracle-alert.yml` | 11R + 7A |
-| `prometheus-rules-db2` | `db2-recording.yml`, `db2-alert.yml` | 12R + 7A |
+| `prometheus-rules-db2` | `db2-recording.yml`, `db2-alert.yml` | 13R + 8A |
 | `prometheus-rules-clickhouse` | `clickhouse-recording.yml`, `clickhouse-alert.yml` | 12R + 7A |
-| `prometheus-rules-kafka` | `kafka-recording.yml`, `kafka-alert.yml` | 11R + 10A |
-| `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 11R + 10A |
-| `prometheus-rules-operational` | `operational-alert.yml` | 0R + 2A |
-| `prometheus-rules-platform` | `platform-alert.yml` | 0R + 4A |
+| `prometheus-rules-kafka` | `kafka-recording.yml`, `kafka-alert.yml` | 13R + 9A |
+| `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 12R + 8A |
+| `prometheus-rules-jvm` | `jvm-recording.yml`, `jvm-alert.yml` | 9R + 7A |
+| `prometheus-rules-nginx` | `nginx-recording.yml`, `nginx-alert.yml` | 9R + 6A |
+| `prometheus-rules-liveness` | `liveness-alert.yml` | 0R + 1A |
+| `prometheus-rules-operational` | `operational-alert.yml` | 0R + 4A |
+| `prometheus-rules-platform` | `platform-alert.yml` | 0R + 39A |
+
+> ⚠️ 這張表是**手抄**的，沒有 gate 擋它漂移——`platform-data.json` 才是生成的 SoT。#1246 校正時實測 13 列中有 9 列數字過期、且漏了 jvm / nginx / liveness 三個 pack。改動 Rule Pack 後請以 `docs/assets/platform-data.json` 覆核。
 
 > **你只需掛載與你環境相關的規則包。** 例如只用 MariaDB 和 Redis，就只掛這兩個。未使用的規則包即使掛載，因無對應 metric，evaluation 成本近乎零——但選擇性掛載可保持配置清晰。
 

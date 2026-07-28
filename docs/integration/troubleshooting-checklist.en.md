@@ -230,6 +230,12 @@ kubectl exec -n <vmalert-ns> <vmalert-pod> -- \
 # 3. Timestamp of last reload (Prom-specific)
 kubectl exec -n <prom-ns> <prom-pod> -- \
     wget -qO- localhost:9090/api/v1/status/runtimeinfo | grep -i reload
+
+# 4. WHO is calling reload? (Vibe's shipped manifest: config-reloader sidecar since #1246)
+#    Container missing / CrashLooping = nothing reloads automatically; only a manual POST does
+kubectl get pod -n <prom-ns> <prom-pod> \
+    -o jsonpath='{range .status.containerStatuses[*]}{.name}{" restarts="}{.restartCount}{" ready="}{.ready}{"\n"}{end}'
+kubectl logs -n <prom-ns> <prom-pod> -c config-reloader --tail=20
 ```
 
 **Most likely cause**: **GitOps reconcile stuck** — commit is merged but ArgoCD / Flux is in backoff or the webhook didn't trigger sync; the pod is still mounting the old ConfigMap generation.
@@ -251,8 +257,9 @@ kubectl rollout restart statefulset <prom-sts> -n <prom-ns>
 
 **If not this**:
 - (a) Prometheus Operator still reconciling PrometheusRule CRD → `kubectl describe prometheusrule <name>` and check events
-- (b) Reload endpoint itself failing (PromQL syntax error in new rule) → Prom keeps the old config; log contains `reloading config failed`. Fix the syntax and re-commit
+- (b) Reload endpoint itself failing (PromQL syntax error in new rule) → Prom keeps the old config; log contains `reloading config failed`. Fix the syntax and re-commit. **Vibe's shipped deployment has a platform alert, `PrometheusConfigReloadFailed`, dedicated to this** (`prometheus_config_last_reload_successful == 0`, for 2m) — measured behaviour: after a rejected reload the gauge drops to 0, `/api/v1/rules` keeps returning the OLD rules, and the process stays up, so without this alert the failure is completely silent
 - (c) In HA Prom, only one of two replicas reloads → see §1.5.1
+- (d) **Nothing is calling reload at all** — the `config-reloader` sidecar from step 4 is absent (a bring-your-own Prometheus that never added it) or CrashLooping. Vibe's shipped deployment has `ConfigReloaderHighRestarts` for the CrashLoop case, but **neither alert catches an "Up but wedged" reloader**, so still read the step-4 logs yourself. Note this sidecar watches **only `/etc/prometheus/rules`**: `prometheus.yml` is mounted with `subPath` and K8s does not propagate ConfigMap updates into a subPath mount, so changing it always needs a pod restart — reload will not help
 
 **Cross-ref**: playbook §12 Phase 2 catalog row "New rules don't fire (shadow alert volume = 0)"
 

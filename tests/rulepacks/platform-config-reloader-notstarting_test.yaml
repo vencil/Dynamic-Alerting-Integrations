@@ -1,0 +1,87 @@
+# promtool behavioural test for ConfigReloaderNotStarting (#1246).
+#
+# This alert exists because ConfigReloaderHighRestarts structurally CANNOT see it: a
+# container stuck in ImagePullBackOff never runs, so kubelet reports restartCount 0
+# forever and increase() over that counter is a flat zero. Meanwhile pod readiness is
+# the AND of all containers, so the Prometheus pod goes NotReady and the `prometheus`
+# Service loses its only endpoint — while `up{job="prometheus"}` (static
+# localhost:9090) and prometheus_config_last_reload_successful both stay at 1.
+#
+# Cases pin: the firing path with the `pod` label, the reason regex, and both
+# selectors. Run:
+#   promtool test rules tests/rulepacks/platform-config-reloader-notstarting_test.yaml
+rule_files:
+  - platform-config-reloader-notstarting.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) Image cannot be pulled (fresh / air-gapped cluster, quay.io unreachable):
+  #    sustained ImagePullBackOff → fires critical, `pod` rides through so the
+  #    operator knows whether it is Prometheus or Alertmanager that is wedged.
+  - interval: 1m
+    name: imagepullbackoff-fires-critical-with-pod-label
+    input_series:
+      - series: 'kube_pod_container_status_waiting_reason{container="config-reloader", namespace="monitoring", pod="prometheus-7c9d-abcde", reason="ImagePullBackOff"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ConfigReloaderNotStarting
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring
+              pod: prometheus-7c9d-abcde
+            exp_annotations:
+              summary: "config-reloader sidecar in prometheus-7c9d-abcde cannot start — pod held NotReady"
+
+  # 2) Healthy start-up: the container is briefly ContainerCreating, a reason that is
+  #    NOT in the regex. Widening the regex to match any reason fails ONLY this case,
+  #    which is what keeps every normal pod start from paging.
+  - interval: 1m
+    name: containercreating-is-not-a-failure-no-fire
+    input_series:
+      - series: 'kube_pod_container_status_waiting_reason{container="config-reloader", namespace="monitoring", pod="prometheus-7c9d-abcde", reason="ContainerCreating"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ConfigReloaderNotStarting
+        exp_alerts: []
+
+  # 3) DISCRIMINATOR for the container selector: another monitoring container failing
+  #    to pull must not be reported as a reloader failure. Dropping
+  #    `container="config-reloader"` fails ONLY this case.
+  - interval: 1m
+    name: other-container-imagepull-no-fire
+    input_series:
+      - series: 'kube_pod_container_status_waiting_reason{container="threshold-exporter", namespace="monitoring", pod="threshold-exporter-55f-xyz", reason="ImagePullBackOff"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ConfigReloaderNotStarting
+        exp_alerts: []
+
+  # 4) DISCRIMINATOR for the namespace selector: kube-state-metrics reports on the
+  #    whole cluster, so a tenant pod with a same-named container must not page the
+  #    platform team. Dropping `namespace="monitoring"` fails ONLY this case.
+  - interval: 1m
+    name: same-container-name-other-namespace-no-fire
+    input_series:
+      - series: 'kube_pod_container_status_waiting_reason{container="config-reloader", namespace="db-a", pod="tenant-thing-9f8-klmno", reason="ImagePullBackOff"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ConfigReloaderNotStarting
+        exp_alerts: []
+
+  # 5) Nothing waiting at all (the steady state): gauge present but 0 — must be
+  #    silent. `> 0` is what makes this true; `>= 0` would page on every healthy pod.
+  - interval: 1m
+    name: not-waiting-no-fire
+    input_series:
+      - series: 'kube_pod_container_status_waiting_reason{container="config-reloader", namespace="monitoring", pod="prometheus-7c9d-abcde", reason="ImagePullBackOff"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ConfigReloaderNotStarting
+        exp_alerts: []

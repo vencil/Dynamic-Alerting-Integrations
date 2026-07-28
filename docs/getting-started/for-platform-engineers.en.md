@@ -585,7 +585,7 @@ receivers:
 
 ### Config Reload Endpoint Security
 
-Prometheus's `/-/reload` and Alertmanager's `/-/reload` are HTTP POST endpoints for triggering configuration reload. This project uses a `config-reloader` sidecar to call Alertmanager's endpoint automatically.
+Prometheus's `/-/reload` and Alertmanager's `/-/reload` are HTTP POST endpoints for triggering configuration reload. This project runs a `config-reloader` sidecar on **both** sides to call those endpoints automatically: the Alertmanager one watches the routing config (#1243), the Prometheus one watches the Rule Pack directory `/etc/prometheus/rules` (added in #1246). The Prometheus side does **not** cover `prometheus.yml` — it is mounted with `subPath`, K8s does not propagate ConfigMap updates into a subPath mount, so changing it still requires a pod restart.
 
 **Security implications:** These endpoints require no authentication. If an attacker can reach the Prometheus/Alertmanager port, they can repeatedly trigger reloads causing performance impact; on Prometheus with `--web.enable-lifecycle` they can also shut the service down via `/-/quit` (Alertmanager has no such endpoint).
 

@@ -57,7 +57,7 @@ configmap-rules-{mariadb,kubernetes,redis,mongodb,elasticsearch,oracle,db2,click
 
 ## config-reloader Sidecar 行為
 
-平台有**兩個** config-reloader sidecar，行為相同但守的東西不同：Prometheus 側守 `/etc/prometheus/rules`（Rule Pack，#1246 補上），Alertmanager 側守 `/etc/alertmanager`（路由設定，#1251 由 `configmap-reload` 換成 `prometheus-config-reloader`）。
+平台有**兩個** config-reloader sidecar，行為相同但守的東西不同：Prometheus 側守 `/etc/prometheus/rules`（Rule Pack，#1246 補上），Alertmanager 側守 `/etc/alertmanager`（路由設定，#1243 由 `configmap-reload` 換成 `prometheus-config-reloader`）。
 
 **關鍵洞察：** sidecar 監聽的是 Projected Volume 的**檔案內容變更**，不是 ConfigMap annotation 或 metadata。
 

@@ -101,7 +101,7 @@ def detect_deployment_mode(kubeconfig=None):
 |------|-------------------|-------------------|
 | Rule Pack mount | projected volume ConfigMap | PrometheusRule CRD |
 | Route generation | `generate_alertmanager_routes.py` | `operator-generate` AlertmanagerConfig |
-| Config reload | config-reloader sidecar (Rule Packs; `prometheus.yml` is a subPath mount and still needs a restart) | Operator auto-reconcile |
+| Config reload | config-reloader sidecar (Rule Packs; `prometheus.yml` still needs a restart *if* mounted with `subPath`, as this repo's manifest does — a bring-your-own Prometheus mounting the whole directory is not affected) | Operator auto-reconcile |
 | Validation tool | `validate_config.py` | `operator-check` |
 
 **Strict exclusion**: A single cluster's Alertmanager must not use both ConfigMap and AlertmanagerConfig CRD for route management simultaneously. `operator-generate` detects and warns.

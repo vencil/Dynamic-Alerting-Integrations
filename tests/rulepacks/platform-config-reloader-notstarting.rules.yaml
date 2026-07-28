@@ -1,0 +1,23 @@
+# EXTRACTED COPY of the ConfigReloaderNotStarting alert in
+# k8s/03-monitoring/configmap-rules-platform.yaml (group platform-self-monitoring).
+#
+# ⚠️ KEEP IN SYNC with that ConfigMap — expr / labels / `for` / summary must match
+# exactly. `description` is deliberately omitted: promtool compares the annotation
+# set for exact equality and the multi-line operator guidance adds nothing to the
+# behavioural assertions. Sync is machine-enforced by
+# tests/rulepacks/test_platform_rules_extract_sync.py.
+groups:
+  - name: platform-self-monitoring
+    rules:
+      - alert: ConfigReloaderNotStarting
+        expr: |
+          max by (namespace, pod) (
+            max_over_time(
+              kube_pod_container_status_waiting_reason{container="config-reloader", namespace="monitoring", reason=~"ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError|CrashLoopBackOff"}[5m]
+            )
+          ) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "config-reloader sidecar in {{ $labels.pod }} cannot start — pod held NotReady"

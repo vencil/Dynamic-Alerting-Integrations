@@ -211,19 +211,24 @@ Load pre-written Recording Rules + Alert Rules into your Prometheus to enable dy
 
 | ConfigMap Name | Contents | Rules |
 |---|---|---|
-| `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 11R + 8A |
-| `prometheus-rules-postgresql` | `postgresql-recording.yml`, `postgresql-alert.yml` | 11R + 8A |
-| `prometheus-rules-kubernetes` | `kubernetes-recording.yml`, `kubernetes-alert.yml` | 7R + 4A |
+| `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 14R + 18A |
+| `prometheus-rules-postgresql` | `postgresql-recording.yml`, `postgresql-alert.yml` | 11R + 9A |
+| `prometheus-rules-kubernetes` | `kubernetes-recording.yml`, `kubernetes-alert.yml` | 30R + 14A |
 | `prometheus-rules-redis` | `redis-recording.yml`, `redis-alert.yml` | 11R + 6A |
-| `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 10R + 6A |
+| `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 10R + 8A |
 | `prometheus-rules-elasticsearch` | `elasticsearch-recording.yml`, `elasticsearch-alert.yml` | 11R + 7A |
 | `prometheus-rules-oracle` | `oracle-recording.yml`, `oracle-alert.yml` | 11R + 7A |
-| `prometheus-rules-db2` | `db2-recording.yml`, `db2-alert.yml` | 12R + 7A |
+| `prometheus-rules-db2` | `db2-recording.yml`, `db2-alert.yml` | 13R + 8A |
 | `prometheus-rules-clickhouse` | `clickhouse-recording.yml`, `clickhouse-alert.yml` | 12R + 7A |
-| `prometheus-rules-kafka` | `kafka-recording.yml`, `kafka-alert.yml` | 11R + 10A |
-| `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 11R + 10A |
-| `prometheus-rules-operational` | `operational-alert.yml` | 0R + 2A |
-| `prometheus-rules-platform` | `platform-alert.yml` | 0R + 4A |
+| `prometheus-rules-kafka` | `kafka-recording.yml`, `kafka-alert.yml` | 13R + 9A |
+| `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 12R + 8A |
+| `prometheus-rules-jvm` | `jvm-recording.yml`, `jvm-alert.yml` | 9R + 7A |
+| `prometheus-rules-nginx` | `nginx-recording.yml`, `nginx-alert.yml` | 9R + 6A |
+| `prometheus-rules-liveness` | `liveness-alert.yml` | 0R + 1A |
+| `prometheus-rules-operational` | `operational-alert.yml` | 0R + 4A |
+| `prometheus-rules-platform` | `platform-alert.yml` | 0R + 39A |
+
+> ⚠️ This table is **hand-maintained** with no drift gate — `platform-data.json` is the generated SoT. When #1246 corrected it, 9 of 13 rows were stale and the jvm / nginx / liveness packs were missing entirely. Re-check against `docs/assets/platform-data.json` after changing a Rule Pack.
 
 > **You only need to mount rule packs relevant to your environment.** For example, if you only use MariaDB and Redis, mount only those two. Unmounted rule packs incur near-zero evaluation cost even if mounted (no matching metrics), but selective mounting keeps configurations clear.
 

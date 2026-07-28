@@ -42,7 +42,10 @@ done
 # 4. 部署 Monitoring Stack
 log "Deploying Monitoring Stack..."
 kubectl apply -f "${K8S_DIR}/03-monitoring/"
-kubectl rollout status deploy/prometheus -n monitoring --timeout=60s
+# 120s not 60s: the prometheus pod now pulls TWO images (prom/prometheus plus the
+# #1246 config-reloader sidecar from quay.io), and kubelet serialises image pulls
+# within a pod — a cold node was hitting the old 60s gate and aborting setup.
+kubectl rollout status deploy/prometheus -n monitoring --timeout=120s
 kubectl rollout status deploy/kube-state-metrics -n monitoring --timeout=60s
 log "✓ Monitoring stack deployed"
 

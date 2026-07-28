@@ -1,0 +1,18 @@
+# EXTRACTED COPY of the PrometheusConfigReloadFailed alert in
+# k8s/03-monitoring/configmap-rules-platform.yaml (group platform-self-monitoring).
+#
+# ⚠️ KEEP IN SYNC with that ConfigMap — expr / labels / `for` / summary must match
+# exactly. `description` is deliberately omitted: promtool compares the annotation
+# set for exact equality and the multi-line operator guidance adds nothing to the
+# behavioural assertions. Sync is machine-enforced by
+# tests/rulepacks/test_platform_rules_extract_sync.py.
+groups:
+  - name: platform-self-monitoring
+    rules:
+      - alert: PrometheusConfigReloadFailed
+        expr: prometheus_config_last_reload_successful{job="prometheus"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus rejected its last reload — Rule Pack edits are NOT in effect"

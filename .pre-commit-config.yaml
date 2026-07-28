@@ -275,7 +275,10 @@ repos:
 
       - id: rule-pack-stats-check
         name: Rule Pack stats drift
-        entry: python3 -X utf8 scripts/tools/dx/generate_rule_pack_stats.py --check
+        # --lang all: the generator defaults to zh, so without this the hook
+        # validated ONLY rule-pack-stats.md and rule-pack-stats.en.md could drift
+        # forever unnoticed — it had, by 3 alerts, until #1246 regenerated both.
+        entry: python3 -X utf8 scripts/tools/dx/generate_rule_pack_stats.py --check --lang all
         language: python
         pass_filenames: false
         files: ^(rule-packs/|k8s/03-monitoring/).*\.yaml$

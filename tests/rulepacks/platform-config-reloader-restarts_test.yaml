@@ -1,0 +1,155 @@
+# promtool behavioural test for ConfigReloaderHighRestarts (#1246).
+#
+# This alert is one of two complements to PrometheusConfigReloadFailed: that one only
+# fires when a reload was ATTEMPTED and rejected, so a crash-looping sidecar — no
+# reload attempted at all — leaves the gauge at 1 and the #1246 bug silently back.
+# (The "never started at all" shape is a different metric entirely and lives in
+# platform-config-reloader-notstarting_test.yaml.)
+#
+# ⚠️ FIXTURE SHAPE — the restart ramp deliberately sits in the MIDDLE of the [1h]
+# window, not at its edge. A first draft put the ramp at the window boundary and the
+# left-open range `(t-1h, t]` clipped the first sample, so a series meant to model 3
+# restarts actually delivered a delta of 2 and the test passed for the wrong reason.
+# Every case here evaluates at 90m with a flat run-in and run-out around the ramp.
+#
+# ⚠️ FIXTURE BASE — cases run at BOTH a zero and a non-zero starting restart count,
+# and that is load-bearing, not padding. increase() extrapolates to the window edges,
+# but when the first in-window sample is 0 the extrapolation collapses to the
+# counter-zero point and the factor becomes exactly 1.0. So a zero-based fixture
+# measures a DIFFERENT predicate than a real crash-looping container, which always
+# carries a non-zero lifetime restart count. MEASURED on prom/prometheus:v3.13.1:
+# with `> 3`, three restarts stayed silent from base 0 but FIRED (3.05) from base 7 —
+# which is why the shipped rule is `>= 4`, measured identical at bases 0 / 7 / 41.
+# Case 3 below is the one that pins that, and it is the ONLY case that fails if the
+# rule regresses to `> 3`.
+# Run: promtool test rules tests/rulepacks/platform-config-reloader-restarts_test.yaml
+rule_files:
+  - platform-config-reloader-restarts.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) Prometheus's sidecar crash-looping: 4 restarts in the hour → fires, and the
+  #    `pod` label must ride through (it is the only thing that says WHICH of the two
+  #    config-reloader sidecars is broken — they share the container name).
+  - interval: 1m
+    name: crashlooping-sidecar-fires-with-pod-label
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{container="config-reloader", namespace="monitoring", pod="prometheus-7c9d-abcde"}'
+        values: '0+0x49 1 2 3 4 4+0x36'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: ConfigReloaderHighRestarts
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              container: config-reloader
+              namespace: monitoring
+              pod: prometheus-7c9d-abcde
+            exp_annotations:
+              summary: "config-reloader sidecar in prometheus-7c9d-abcde is restarting frequently"
+
+  # 2) DISCRIMINATOR for the threshold: 3 restarts must stay silent. Loosening the
+  #    rule to `>= 3` (or `> 2`) fails here.
+  - interval: 1m
+    name: three-restarts-below-threshold-no-fire
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{container="config-reloader", namespace="monitoring", pod="prometheus-7c9d-abcde"}'
+        values: '0+0x49 1 2 3 3+0x37'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: ConfigReloaderHighRestarts
+        exp_alerts: []
+
+  # 3) DISCRIMINATOR for extrapolation: the SAME three restarts, but on a container
+  #    that had already restarted 7 times — the realistic shape, since anything
+  #    crash-looping has a non-zero lifetime count. increase() extrapolates to
+  #    3.05 here, so a rule written `> 3` FIRES and calls it "3 restarts in the last
+  #    hour", contradicting its own summary. `>= 4` keeps it silent. Reverting the
+  #    threshold to `> 3` fails ONLY this case.
+  - interval: 1m
+    name: three-restarts-nonzero-base-no-fire
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{container="config-reloader", namespace="monitoring", pod="alertmanager-6b4f-fghij"}'
+        values: '7+0x49 8 9 10 10+0x37'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: ConfigReloaderHighRestarts
+        exp_alerts: []
+
+  # 4) …and four restarts from that same non-zero base MUST fire, so case 3 is not
+  #    passing merely because a non-zero base suppresses everything.
+  - interval: 1m
+    name: four-restarts-nonzero-base-fires
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{container="config-reloader", namespace="monitoring", pod="alertmanager-6b4f-fghij"}'
+        values: '41+0x49 42 43 44 45 45+0x36'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: ConfigReloaderHighRestarts
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              container: config-reloader
+              namespace: monitoring
+              pod: alertmanager-6b4f-fghij
+            exp_annotations:
+              summary: "config-reloader sidecar in alertmanager-6b4f-fghij is restarting frequently"
+
+  # 5) DISCRIMINATOR for the container selector: a DIFFERENT container in the same
+  #    namespace restart-storming must not trip this alert (threshold-exporter has
+  #    its own ThresholdExporterHighRestarts). Dropping `container="config-reloader"`
+  #    — the easy "simplification" — fails ONLY this case.
+  - interval: 1m
+    name: other-container-storm-no-fire
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{container="threshold-exporter", namespace="monitoring", pod="threshold-exporter-55f-xyz"}'
+        values: '0+0x49 1 2 3 4 5 6 6+0x34'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: ConfigReloaderHighRestarts
+        exp_alerts: []
+
+  # 6) DISCRIMINATOR for the namespace selector: kube-state-metrics reports on the
+  #    WHOLE cluster, so a tenant workload that happens to run a container named
+  #    `config-reloader` must not page the platform team. Dropping
+  #    `namespace="monitoring"` fails ONLY this case.
+  - interval: 1m
+    name: same-container-name-other-namespace-no-fire
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{container="config-reloader", namespace="db-a", pod="tenant-thing-9f8-klmno"}'
+        values: '0+0x49 1 2 3 4 5 5+0x35'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: ConfigReloaderHighRestarts
+        exp_alerts: []
+
+  # 7) Both sidecars storming at once: ONE rule covers Prometheus's (#1246) and
+  #    Alertmanager's (#1243) reloader because they share a container name, so this
+  #    must produce TWO separate alerts keyed by `pod` — not one merged alert that
+  #    hides which component lost hot reload.
+  - interval: 1m
+    name: both-sidecars-produce-separate-alerts
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{container="config-reloader", namespace="monitoring", pod="prometheus-7c9d-abcde"}'
+        values: '0+0x49 1 2 3 4 4+0x36'
+      - series: 'kube_pod_container_status_restarts_total{container="config-reloader", namespace="monitoring", pod="alertmanager-6b4f-fghij"}'
+        values: '0+0x49 1 2 3 4 5 5+0x35'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: ConfigReloaderHighRestarts
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              container: config-reloader
+              namespace: monitoring
+              pod: alertmanager-6b4f-fghij
+            exp_annotations:
+              summary: "config-reloader sidecar in alertmanager-6b4f-fghij is restarting frequently"
+          - exp_labels:
+              severity: warning
+              container: config-reloader
+              namespace: monitoring
+              pod: prometheus-7c9d-abcde
+            exp_annotations:
+              summary: "config-reloader sidecar in prometheus-7c9d-abcde is restarting frequently"

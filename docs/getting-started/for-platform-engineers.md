@@ -438,7 +438,7 @@ spec:
 
 ### Config Reload 端點安全
 
-Prometheus 的 `/-/reload` 和 Alertmanager 的 `/-/reload` 是用於觸發設定重新載入的 HTTP POST 端點。本專案使用 `config-reloader` sidecar 自動呼叫 Alertmanager 的該端點。
+Prometheus 的 `/-/reload` 和 Alertmanager 的 `/-/reload` 是用於觸發設定重新載入的 HTTP POST 端點。本專案在**兩邊各有一顆** `config-reloader` sidecar 自動呼叫該端點：Alertmanager 側守路由設定（#1243），Prometheus 側守 Rule Pack 目錄 `/etc/prometheus/rules`（#1246 補上）。Prometheus 側**不涵蓋 `prometheus.yml`**——它以 `subPath` 掛載，K8s 不把 ConfigMap 更新傳播進 subPath 掛載，改它仍須重啟 Pod。
 
 **安全影響：** 這些端點不需認證。如果攻擊者可以到達 Prometheus/Alertmanager 埠，他們可以重複觸發重新載入造成效能衝擊；Prometheus 若啟用了 `--web.enable-lifecycle`，還可以透過 `/-/quit` 關閉服務（Alertmanager 無此端點）。
 
