@@ -50,8 +50,11 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "_extract_host",
         "_validate_profile_refs",
         "assert_equal_labels_gated",  # #1132 equal-label-gated invariant
+        # tenant-triggered inhibit must not suppress a platform alert
+        "assert_platform_alerts_not_tenant_silenceable",
         "assert_watchdog_inhibit_immunity",
         "check_domain_policies",
+        "find_tenant_silenceable_platform_inhibits",
         "find_ungated_equal_label_inhibits",  # #1132 finder
         "find_watchdog_suppressing_inhibits",
         "load_policy",

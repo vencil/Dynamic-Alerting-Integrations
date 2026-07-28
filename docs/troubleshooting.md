@@ -20,6 +20,7 @@ lang: zh
 | ConfigMap 改了但 exporter 還是舊值 | Platform / SRE | [SHA-256 熱重載延遲](#sha-256-熱重新加載延遲) |
 | 我的告警該響卻沒響 | Tenant（診斷需 Platform / SRE 協助） | [空向量警報不觸發](#空向量警報不觸發) |
 | 多副本 / 多租戶數值被重複計算 | Platform / SRE | [雙租戶抓取重複計數](#雙租戶抓取重複計數) |
+| 平台自監控告警在 Prometheus 有 firing，卻沒人收到 | Platform / SRE | [平台告警沒有收到通知](#平台告警沒有收到通知) |
 | Operator 環境規則沒載入 | Platform Engineer | [Operator 環境常見問題](#prometheus-operator-環境常見問題) |
 
 ## SHA-256 熱重新加載延遲
@@ -95,6 +96,40 @@ user_threshold{tenant="db-a", severity="warning"} 30  (from replica-2)
 2. **`migrate_rule.py` AST 引擎**：產出的 threshold recording rule 也固定為 `max by(tenant)`，使用者無法覆寫
 
 另一方面，**data（資料）recording rules** 的聚合方式依語義而異。例如 `mysql_threads_connected`（當前連線數）每個副本觀察到的是同一個值，用 `max`；但 `rate(requests_total)`（每秒請求量）若來自不同來源，可能需要 `sum`。Data recording rules 的聚合策略可透過 metric dictionary 指定，不受本節 threshold 聚合約束的影響。
+
+## 平台告警沒有收到通知
+
+> 👤 **適用：** Platform Engineer / SRE
+
+**情景：** Prometheus `/alerts` 看得到平台自監控告警（`ThresholdExporterAbsent`、`TenantApiSingleWriterBreach`、`FederationAuditPipelineSilent` 之類）在 Firing，Alertmanager UI 也看得到，但**沒有任何人收到通知**。
+
+**原因（多半不是故障，是沒接）：** 平台自監控 rule pack 出貨預設**不投遞**。`Watchdog` 走 index-0 心跳專線，其餘 **40 條**落在 root 的 `default` receiver——那是一個**沒有 notifier** 的 receiver，所以告警到此為止。這是刻意的出貨姿態（不預設把告警送到我們不知道的目的地）。
+
+**診斷：**
+
+```bash
+# 1. 確認告警在 Alertmanager 手上（不是 Prometheus 沒送出去）
+kubectl exec -n monitoring deploy/alertmanager -- \
+  amtool alert --alertmanager.url=http://localhost:9093
+
+# 2. 問 Alertmanager 這則告警會被路由到哪個 receiver
+kubectl exec -n monitoring deploy/alertmanager -- \
+  amtool config routes test --config.file=/etc/alertmanager/alertmanager.yml \
+  alertname=ThresholdExporterAbsent severity=critical alert_source=platform
+# 回 `default` ⇒ 沒接（正常出貨狀態）；回 `platform-enforced` ⇒ 已接上
+```
+
+**解法：** 用平台級 enforced route 接上——`conf.d/_defaults.yaml` 的 `_routing_enforced` 加 `match: ['alert_source="platform"']`（除 `Watchdog` 外 40 條全帶此 label）。完整範例、`tenant=""` 兜底的陷阱、以及「一條 enforced route 無法同時涵蓋 critical 與 platform」等限制，見 [BYO Alertmanager 整合指南 §11](integration/byo-alertmanager-integration.md#11-平台自監控告警的投遞)。
+
+**接上之後仍沒收到？** 依序排除：
+
+1. `da-tools validate-config --config-dir conf.d/ --policy .github/custom-rule-policy.yaml` 是否有 `_routing_enforced` 被 WARN + skip（receiver 設定錯誤或 webhook domain 不在 allowlist 都會**靜默跳過**該 route）。⚠️ **`--policy` 不可省**：domain allowlist 檢查在 `_grar_routes.py` 是 `if allowed_domains:` 守著的，沒給 policy 就等於沒有 allowlist、驗不出「domain 被擋掉」這個成因（裸指令會顯示一切正常）。
+2. 產生設定後是否真的 reload 了 Alertmanager（見 [§Step 6](integration/byo-alertmanager-integration.md#step-6-reload-alertmanager)）。
+3. 是否誤用了模式 B（receiver 含 `{{tenant}}`）——per-tenant enforced route 帶 `tenant="<name>"` matcher，而 40 條平台告警裡有 **37 條沒有 tenant、結構上收不到**。⚠️ 反過來要注意剩下 3 條（`TenantMetricsOverLimit` / `FederationRejectionRateAnomaly` / `FederationGatewayBackendErrors`）**帶 tenant、會被送進租戶通道**——症狀是「租戶抱怨收到看不懂的平台告警」而不是「我沒收到」，兩種相反的失敗都指向同一個成因。詳見 [BYO 指南 §11](integration/byo-alertmanager-integration.md#11-平台自監控告警的投遞)。
+
+⚠️ **注意，這不是「沒收到」而是「收太多」的反向情境**：若你在某條 route 寫了 `tenant=~".*"` 想表達「所有租戶」，Alertmanager 會把**平台告警一起吃進租戶通道**（label 不存在等同空值）。改寫 `tenant!=""` 只解決一半——有 3 條平台告警帶 `tenant` label（`TenantMetricsOverLimit` / `FederationRejectionRateAnomaly` / `FederationGatewayBackendErrors`，後兩條的 label 由 expr `sum by (tenant)` 在觸發時才產生）。「只要租戶告警」要寫 `tenant!=""` **加上** `alert_source=""`。
+
+**相關：** `Watchdog` 心跳本身沒送出去是另一個症狀，走 [告警平面自我存活性 §⑤ 排障](integration/alerting-plane-self-liveness.md)。
 
 ---
 

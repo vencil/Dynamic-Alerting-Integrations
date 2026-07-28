@@ -181,6 +181,40 @@ data:
       # name) and is enforced fail-closed by generate_alertmanager_routes.py
       # --strict (assert_equal_labels_gated).
 
+      # ⛔ Silent Mode inhibits are TENANT-SCOPED — they must never reach a
+      # PLATFORM self-monitoring alert. Three platform alerts carry a `tenant`
+      # label (TenantMetricsOverLimit via rule-level labels; Federation-
+      # RejectionRateAnomaly and FederationGatewayBackendErrors via their expr's
+      # `sum by (tenant)`, so the label exists only at fire time and is invisible
+      # in the rule's `labels:` block) and all three are severity=warning. Without
+      # the `alert_source=""` matcher below they land squarely inside the warning
+      # target, so a tenant flipping `_silent_mode` once would MUTE the platform's
+      # own failure alerts — including FederationGatewayBackendErrors, whose own
+      # annotation says the fault is the platform's, not the tenant's.
+      #
+      # `alert_source=""` reads as "only alerts that carry NO platform marker":
+      # Alertmanager treats a missing label as the empty string, so tenant alerts
+      # (no such label) still match, while the 40 platform alerts that carry
+      # alert_source="platform" are excluded. Watchdog is unaffected either way —
+      # severity=none never matched the warning/critical targets.
+      #
+      # Only THESE TWO rules need it. The severity-dedup rules above and the
+      # CustomRecipeSilent rule below are already immune for structural reasons:
+      # dedup targets require metric_group=~".+" and ZERO platform alerts carry
+      # metric_group; CustomRecipeSilent targets component="custom" and no
+      # platform alert carries component. Adding alert_source="" there would be
+      # inert noise, and the dedup rules are REGENERATED per tenant anyway.
+      #
+      # These two rules survive regeneration on BOTH paths, so the matcher below
+      # is committed-and-preserved rather than generated:
+      #   * --output-configmap (_grar_render.assemble_configmap) keeps ALL base
+      #     inhibit rules and appends the generated ones;
+      #   * --apply (_grar_render._merge_routes_receivers_inhibits) keeps every
+      #     base rule whose source_matchers do NOT mention metric_group, i.e.
+      #     only the dedup family is replaced — these two are kept.
+      # Verified by re-running --output-configmap after this edit.
+      # Guarded by _grar_validate.assert_platform_alerts_not_tenant_silenceable.
+
       # v1.2.0 Silent Mode: 壓制 warning 通知
       # TenantSilentWarning sentinel 觸發時，該 tenant 的 warning alert 不通知
       # alert 仍寫入 TSDB（Grafana 可查），僅攔截 Alertmanager 通知
@@ -190,6 +224,7 @@ data:
         target_matchers:
           - severity="warning"
           - tenant=~".+"
+          - alert_source=""
         equal: ["tenant"]
 
       # v1.2.0 Silent Mode: 壓制 critical 通知
@@ -200,6 +235,7 @@ data:
         target_matchers:
           - severity="critical"
           - tenant=~".+"
+          - alert_source=""
         equal: ["tenant"]
 
       # v2.9.0 #741 S7/S8: per-recipe Custom Alert silent mode.

@@ -85,3 +85,31 @@ _routing_defaults:
 #   group_by: ["alertname", "tenant"]
 #   group_wait: "15s"
 #   repeat_interval: "1h"
+#
+# ── Selector 怎麼挑：租戶 critical vs 平台自監控 ──────────────────
+# 上面的 `severity="critical"` 是「NOC 收所有租戶 critical」的用例。
+# 若你要收的是**平台自己**的自監控告警（Prometheus / Alertmanager /
+# exporter / tenant-api / 聯邦與投影管線的健康，`configmap-rules-platform.yaml`
+# 共 41 條），selector 要改成正向 discriminator：
+#
+#   match:
+#     - 'alert_source="platform"'
+#
+# 除 `Watchdog`（走 index-0 心跳專線）外的 40 條全部帶 `alert_source: platform`；
+# 該值為平台樹**保留值**，租戶 rule pack 不得使用。
+#
+# ⛔ 兩者無法用同一條 enforced route 同時表達：`_routing_enforced` 只產生
+# **一條** route，且 `match` 陣列內的多個 matcher 是 **AND** 不是 OR。要二選一：
+#   * `alert_source="platform"` → 平台自監控 40/40，租戶 critical 走各租戶自己的 `_routing`
+#   * `severity="critical"`     → 租戶 critical 全收，但平台自監控只涵蓋 18/40
+#                                 （18 critical、20 warning、2 info）
+#
+# ⚠️ 想寫「所有租戶」時不要用 `tenant=~".*"`：Alertmanager 語意「label 不存在
+# == 空值」，`.*` 會把平台告警一起吃進租戶通道。改寫 `tenant!=""` 只解決一半——
+# 有 3 條平台告警（TenantMetricsOverLimit／FederationRejectionRateAnomaly／
+# FederationGatewayBackendErrors）帶 tenant label（後兩條由 expr `sum by (tenant)`
+# 在觸發時產生，規則檔的 `labels:` 看不到），仍會被撈進來。
+# 真正的「只要租戶告警」＝ `tenant!=""` ＋ `alert_source=""` 兩個 matcher（AND）。
+#
+# 完整說明（噪音特性、`tenant=""` 兜底的負向斷言陷阱）見
+# docs/integration/byo-alertmanager-integration.md §11。

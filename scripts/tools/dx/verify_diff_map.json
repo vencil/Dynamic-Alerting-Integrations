@@ -410,6 +410,7 @@
   ],
   "scripts/tools/ops/_grar_validate.py": [
    "tests/ops/test_generate_alertmanager_routes.py",
+   "tests/ops/test_generate_routes_orchestration.py",
    "tests/ops/test_grar_strict_hardening.py",
    "tests/shared/test_property_tools.py"
   ],
@@ -662,7 +663,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "045f107941c751764a6eba0d9e2072a1ce3cc6bc8ba9ab57a7b4c30a99410a9c",
+ "source_digest": "0b2e43a00a599387769931283aece6de7f7e4aab6e24bf659ec9859a65f44d54",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1434,6 +1435,7 @@
    "tests/lint/test_check_scrape_reachability.py"
   ],
   "k8s/03-monitoring/configmap-rules-platform.yaml": [
+   "tests/ops/test_generate_routes_orchestration.py",
    "tests/rulepacks/test_platform_rules_extract_sync.py"
   ],
   "k8s/03-monitoring/cronjob-maintenance-scheduler.yaml": [
@@ -2006,6 +2008,7 @@
    "tests/dx/test_custom_alerts_promtool.py",
    "tests/dx/test_inject_waveform.py",
    "tests/lint/test_check_vmalert_coverage.py",
+   "tests/rulepacks/test_platform_rules_extract_sync.py",
    "tests/rulepacks/test_vm_alert_parity.py"
   ],
   "tests/rulepacks/vm_deviation_catalog.yaml": [

@@ -53,8 +53,10 @@ from _grar_validate import (  # noqa: E402, F401
     _extract_host,
     _validate_profile_refs,
     assert_equal_labels_gated,
+    assert_platform_alerts_not_tenant_silenceable,
     assert_watchdog_inhibit_immunity,
     check_domain_policies,
+    find_tenant_silenceable_platform_inhibits,
     find_ungated_equal_label_inhibits,
     find_watchdog_suppressing_inhibits,
     load_policy,
@@ -143,6 +145,11 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
     for idx, _rule in find_watchdog_suppressing_inhibits(inhibit_rules):
         errors.append(f"  WARN: generated inhibit_rules[{idx}] would suppress the "
                       "Watchdog heartbeat (ADR-025) — skipping forbidden rule")
+    # Same early tripwire for the tenant-cannot-silence-platform invariant.
+    for idx, _rule, _lbls in find_tenant_silenceable_platform_inhibits(inhibit_rules):
+        errors.append(f"  WARN: generated inhibit_rules[{idx}] is tenant-triggered "
+                      f"and would suppress platform alert {_lbls.get('alertname')} "
+                      "— skipping forbidden rule")
     route_count = len(routes)
     inhibit_count = len(inhibit_rules)
     print(f"Validation: {route_count} route(s), {len(receivers)} receiver(s), "

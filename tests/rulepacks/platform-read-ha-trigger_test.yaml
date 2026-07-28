@@ -42,6 +42,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: info
+              alert_source: platform
               job: tenant-api
             exp_annotations:
               summary: "tenant-api read load sustained — revisit read/write CQRS split (ADR-023 A4)"

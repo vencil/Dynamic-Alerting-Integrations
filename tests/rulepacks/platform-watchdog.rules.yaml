@@ -27,6 +27,7 @@ groups:
         for: 15m
         labels:
           severity: warning
+          alert_source: platform
         annotations:
           summary: "Alertmanager webhook notifications are failing — Watchdog heartbeat may not be egressing"
 
@@ -47,5 +48,6 @@ groups:
         for: 15m
         labels:
           severity: warning
+          alert_source: platform
         annotations:
           summary: "Threshold-governance loop has not succeeded in 8 days"

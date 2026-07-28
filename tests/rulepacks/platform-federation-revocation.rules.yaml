@@ -20,6 +20,7 @@ groups:
         for: 5m
         labels:
           severity: critical
+          alert_source: platform
         annotations:
           summary: "Federation token un-revoke suspected — reconciler found a revoked-but-live token absent from the live set (ADR-028)"
 
@@ -35,6 +36,7 @@ groups:
         for: 10m
         labels:
           severity: critical
+          alert_source: platform
         annotations:
           summary: "Federation revocation reconciler stale or down — un-revoke detection is not operational (ADR-028)"
 
@@ -51,6 +53,7 @@ groups:
         for: 15m
         labels:
           severity: critical
+          alert_source: platform
         annotations:
           summary: "Federation revocation evidence channel is DEAD — un-revoke detection is silently blind (ADR-028 / #1234)"
 
@@ -63,6 +66,7 @@ groups:
         for: 2m
         labels:
           severity: warning
+          alert_source: platform
         annotations:
           summary: "Federation gateway cannot read the revoked-set — fail-open is allowing revoked tokens (ADR-028 §fail-open)"
 
@@ -85,6 +89,7 @@ groups:
         for: 10m
         labels:
           severity: critical
+          alert_source: platform
         annotations:
           summary: "Federation revoked set violates its line contract — the gateway is refusing to load it, so revocations made since are NOT enforced (ADR-028 / #1235)"
 
@@ -93,5 +98,6 @@ groups:
         for: 10m
         labels:
           severity: critical
+          alert_source: platform
         annotations:
           summary: "Federation gateway REFUSED its revoked-set reload — it is enforcing a stale set, so revocations made since are NOT in force (ADR-028 / #1235)"

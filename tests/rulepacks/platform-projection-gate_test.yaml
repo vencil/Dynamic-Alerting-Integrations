@@ -52,6 +52,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
+              alert_source: platform
               mode: degrade
               namespace: vector
             exp_annotations:
@@ -96,6 +97,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
+              alert_source: platform
               mode: degrade
               namespace: vector
             exp_annotations:
@@ -128,6 +130,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
+              alert_source: platform
               namespace: vector
             exp_annotations:
               summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in vector"
@@ -180,6 +183,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
+              alert_source: platform
               namespace: vector
             exp_annotations:
               summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in vector"
@@ -204,6 +208,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
+              alert_source: platform
               namespace: vector
             exp_annotations:
               summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in vector"

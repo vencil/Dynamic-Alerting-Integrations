@@ -21,5 +21,6 @@ groups:
         for: 10m
         labels:
           severity: warning
+          alert_source: platform
         annotations:
           summary: "tenant-api SSE clients have not reconnected after a restart (10m)"

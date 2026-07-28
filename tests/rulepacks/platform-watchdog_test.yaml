@@ -48,6 +48,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              alert_source: platform
               integration: webhook
             exp_annotations:
               summary: "Alertmanager webhook notifications are failing — Watchdog heartbeat may not be egressing"
@@ -79,8 +80,10 @@ tests:
   #    sample value makes time() - value exceed the 8d (691200s) threshold at a
   #    tiny eval_time, so no 8-day test window is needed. Realistic KSM scrape
   #    labels (job/instance) are included to prove `max by (cronjob, namespace)`
-  #    PROJECTS THEM AWAY — exp_labels asserts exactly {severity,cronjob,namespace}
-  #    with no instance/job (the regression guard for the dedup-identity bug), and
+  #    PROJECTS THEM AWAY — exp_labels asserts exactly {severity,alert_source,
+  #    cronjob,namespace} with no instance/job (the regression guard for the
+  #    dedup-identity bug; `alert_source` is the static platform delivery
+  #    discriminator from the rule's `labels:`, not a projected series label), and
   #    the 10m/16m split proves the 15m `for` (a for:0s mutant fires at 10m → red).
   - interval: 1m
     name: governance-stale-fires-after-for-and-projects-labels
@@ -96,6 +99,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              alert_source: platform
               cronjob: threshold-govern
               namespace: monitoring
             exp_annotations:

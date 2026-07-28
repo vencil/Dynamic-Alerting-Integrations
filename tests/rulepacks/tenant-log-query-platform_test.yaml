@@ -38,6 +38,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              alert_source: platform
               account_id: "1000"
             exp_annotations:
               summary: "Log-query requests for account 1000 are mostly rejected"
@@ -90,6 +91,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              alert_source: platform
               account_id: "1000"
             exp_annotations:
               summary: "Log-query requests for account 1000 are mostly rejected"
@@ -112,6 +114,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              alert_source: platform
               component_id: tenant_project
               component_kind: transform
             exp_annotations:

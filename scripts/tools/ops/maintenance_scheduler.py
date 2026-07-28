@@ -44,6 +44,32 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 # Creator label for idempotency checks
 SILENCE_CREATOR = "da-tools/maintenance-scheduler"
 
+
+def _tenant_silence_matchers(tenant):
+    """Matchers for a tenant maintenance silence — tenant's alerts ONLY.
+
+    Single builder on purpose: create_silence and extend_silence used to carry
+    hand-copied matcher literals, so a scoping fix could land in one and not the
+    other (that divergence is the whole failure mode this project keeps hitting).
+
+    ``alert_source=""`` is the platform carve-out. Alertmanager treats a missing
+    label and an empty value as the same thing, so this matches exactly the
+    alerts that do NOT carry ``alert_source`` — i.e. tenant alerts — and excludes
+    the platform self-monitoring pack (every alert there but ``Watchdog`` carries
+    ``alert_source: platform``). Without it a tenant's own recurring maintenance
+    window silences the three platform alerts that happen to carry a ``tenant``
+    label (TenantMetricsOverLimit plus FederationRejectionRateAnomaly /
+    FederationGatewayBackendErrors, whose ``sum by (tenant)`` exprs produce one
+    at runtime) — including a federation backend fault the rule itself documents
+    as "platform fault, not a tenant rejection". Mirrors the same carve-out on
+    the silent-mode inhibit rules in configmap-alertmanager.yaml; the two faces
+    have to move together or the hole just changes shape.
+    """
+    return [
+        {"name": "tenant", "value": tenant, "isRegex": False},
+        {"name": "alert_source", "value": "", "isRegex": False},
+    ]
+
 # Pre-compiled regex for Go-style duration parsing (e.g. "1d", "4h", "2h30m", "1h15m30s")
 _DURATION_RE = re.compile(r"(\d+)(d|h|m|s)")
 
@@ -211,9 +237,7 @@ def create_silence(alertmanager_url, tenant, reason, ends_at, dry_run=False):
     """
     now = datetime.now(timezone.utc)
     payload = {
-        "matchers": [
-            {"name": "tenant", "value": tenant, "isRegex": False},
-        ],
+        "matchers": _tenant_silence_matchers(tenant),
         "startsAt": now.isoformat(),
         "endsAt": ends_at.isoformat(),
         "createdBy": SILENCE_CREATOR,
@@ -247,9 +271,7 @@ def extend_silence(alertmanager_url, silence_id, tenant, reason, ends_at,
     now = datetime.now(timezone.utc)
     payload = {
         "id": silence_id,
-        "matchers": [
-            {"name": "tenant", "value": tenant, "isRegex": False},
-        ],
+        "matchers": _tenant_silence_matchers(tenant),
         "startsAt": now.isoformat(),
         "endsAt": ends_at.isoformat(),
         "createdBy": SILENCE_CREATOR,

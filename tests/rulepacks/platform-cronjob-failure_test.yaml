@@ -40,12 +40,16 @@ tests:
       - eval_time: 16m
         alertname: CronJobLastRunFailed
         exp_alerts:
-          # exp_labels asserts EXACTLY {severity, owner_name, namespace}: no
-          # instance / job / job_name / condition. That is the regression guard
-          # for the alert-identity bug the sibling ThresholdGovernanceStale was
-          # fixed for — a bare join would carry the KSM pod's instance label.
+          # exp_labels asserts EXACTLY {severity, alert_source, owner_name,
+          # namespace}: no instance / job / job_name / condition. That is the
+          # regression guard for the alert-identity bug the sibling
+          # ThresholdGovernanceStale was fixed for — a bare join would carry the
+          # KSM pod's instance label. (`alert_source` is the STATIC platform
+          # delivery discriminator from the rule's `labels:`, not a projected
+          # series label — see configmap-rules-platform.yaml's header.)
           - exp_labels:
               severity: warning
+              alert_source: platform
               owner_name: threshold-govern
               namespace: monitoring
             exp_annotations:
@@ -111,6 +115,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              alert_source: platform
               owner_name: maintenance-scheduler
               namespace: monitoring
             exp_annotations:
@@ -143,6 +148,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              alert_source: platform
               owner_name: threshold-govern
               namespace: monitoring
             exp_annotations:

@@ -355,6 +355,76 @@ class TestExtendSilence:
         assert sid is None
 
 
+# ── 5c. platform carve-out on the silence matchers ───────────────
+
+class TestSilenceScopeExcludesPlatformAlerts:
+    """A tenant's maintenance window must not silence PLATFORM alerts.
+
+    The window is opened by the tenant's own ``_state_maintenance.recurring``,
+    so a bare ``tenant="<name>"`` matcher hands a tenant the ability to mute the
+    platform's own self-monitoring — including FederationGatewayBackendErrors,
+    whose rule comment calls it a platform fault rather than a tenant rejection.
+    Those alerts are only caught because two of them derive a ``tenant`` label
+    at runtime via ``sum by (tenant)``; counting rule-level ``labels:`` alone
+    misses them, which is exactly how this went unnoticed.
+
+    ``alert_source=""`` is the carve-out (Alertmanager: a missing label and an
+    empty value are the same thing), mirroring the silent-mode inhibit rules in
+    configmap-alertmanager.yaml. Asserted on BOTH writers — they carried
+    hand-copied matcher literals before, so the fix could otherwise land on one
+    path and quietly not the other.
+    """
+
+    _EXPECTED = [
+        {"name": "tenant", "value": "db-a", "isRegex": False},
+        {"name": "alert_source", "value": "", "isRegex": False},
+    ]
+
+    @mock.patch.object(ms, "_api_request")
+    def test_create_silence_carves_out_platform_alerts(self, mock_api):
+        mock_api.return_value = {"silenceID": "new-001"}
+        ends = datetime(2025, 6, 15, 6, 0, tzinfo=timezone.utc)
+        ms.create_silence("http://am:9093", "db-a", "backup", ends)
+        assert mock_api.call_args[1]["payload"]["matchers"] == self._EXPECTED
+
+    @mock.patch.object(ms, "_api_request")
+    def test_extend_silence_carves_out_platform_alerts(self, mock_api):
+        mock_api.return_value = {"silenceID": "abc-123"}
+        ends = datetime(2025, 6, 15, 8, 0, tzinfo=timezone.utc)
+        ms.extend_silence("http://am:9093", "abc-123", "db-a", "backup", ends)
+        assert mock_api.call_args[1]["payload"]["matchers"] == self._EXPECTED
+
+    def test_both_writers_share_one_builder(self):
+        """Guard the guard: identical literals would pass the two asserts above
+        while still being two copies that can diverge on the next edit."""
+        import inspect
+        for fn in (ms.create_silence, ms.extend_silence):
+            src = inspect.getsource(fn)
+            assert "_tenant_silence_matchers(tenant)" in src, (
+                f"{fn.__name__} must build matchers via the shared helper, not "
+                f"an inline literal")
+            assert '"name": "tenant"' not in src, (
+                f"{fn.__name__} re-inlines a matcher literal — the two writers "
+                f"drifted apart again")
+
+    def test_idempotency_lookup_still_finds_older_single_matcher_silences(self):
+        """Silences created before the carve-out carry ONE matcher. The lookup
+        keys on (tenant, comment) and scans for the ``tenant`` matcher by name,
+        so widening the written set must not orphan them into duplicates."""
+        legacy = [{
+            "status": {"state": "active"},
+            "createdBy": ms.SILENCE_CREATOR,
+            "matchers": [{"name": "tenant", "value": "db-a", "isRegex": False}],
+            "comment": "backup",
+            "id": "legacy-001",
+            "endsAt": "2025-06-15T06:00:00Z",
+        }]
+        with mock.patch.object(ms, "_api_request", return_value=legacy):
+            found = ms.get_existing_silences("http://am:9093")
+        assert ("db-a", "backup") in found
+        assert found[("db-a", "backup")]["id"] == "legacy-001"
+
+
 # ── 5c. push_metrics ─────────────────────────────────────────────
 
 class TestPushMetrics:

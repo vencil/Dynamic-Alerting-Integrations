@@ -48,6 +48,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
+              alert_source: platform
               namespace: tenant-api
               deployment: tenant-api
             exp_annotations:
@@ -95,6 +96,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
+              alert_source: platform
               namespace: tenant-api
               deployment: tenant-api
             exp_annotations:
@@ -119,6 +121,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
+              alert_source: platform
               namespace: tenant-api
               deployment: tenant-api
             exp_annotations:

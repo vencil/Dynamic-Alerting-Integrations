@@ -37,6 +37,7 @@ from _grar_routes import (  # noqa: E402
     _build_sentinel_sinkhole_route)
 from _grar_validate import (  # noqa: E402
     assert_watchdog_inhibit_immunity,
+    assert_platform_alerts_not_tenant_silenceable,
     assert_equal_labels_gated,
     find_ungated_equal_label_inhibits,
 )
@@ -272,6 +273,10 @@ def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], in
     # suppress the always-firing Watchdog heartbeat — it must always egress.
     assert_watchdog_inhibit_immunity(merged["inhibit_rules"])
 
+    # A tenant-triggered inhibit (Silent Mode) must never suppress a PLATFORM
+    # self-monitoring alert — three of them carry a tenant label at fire time.
+    assert_platform_alerts_not_tenant_silenceable(merged["inhibit_rules"])
+
     # #1132: every equal-label must be presence-gated on some side (strict → fail,
     # else → warn). Runs on the base+generated merge, so a hand-written base rule
     # (Silent Mode / Custom silence) is guarded here too.
@@ -374,6 +379,8 @@ def _merge_routes_receivers_inhibits(existing: dict, routes: list[dict],
     # inhibit rules were generated this run) — the Watchdog heartbeat must never
     # be inhibited before it reaches the external dead-man's-switch.
     assert_watchdog_inhibit_immunity(existing.get("inhibit_rules", []))
+    # Same tenant-cannot-silence-platform invariant on the --apply merge path.
+    assert_platform_alerts_not_tenant_silenceable(existing.get("inhibit_rules", []))
     # #1132: same equal-label-gated invariant on the --apply merge path.
     _enforce_equal_labels_gated(existing.get("inhibit_rules", []), strict)
 

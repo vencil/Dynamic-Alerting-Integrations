@@ -41,6 +41,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              alert_source: platform
               job: tenant-api
             exp_annotations:
               summary: "tenant-api SSE clients have not reconnected after a restart (10m)"

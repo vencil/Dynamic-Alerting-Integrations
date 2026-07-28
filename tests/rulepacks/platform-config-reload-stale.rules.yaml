@@ -13,5 +13,6 @@ groups:
         for: 2m
         labels:
           severity: warning
+          alert_source: platform
         annotations:
           summary: "tenant-api {{ $labels.component }} config is stale — last reload failed"

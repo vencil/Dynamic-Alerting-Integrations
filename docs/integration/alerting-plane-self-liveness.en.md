@@ -26,6 +26,8 @@ The fix: a **permanently-firing** `Watchdog` alert (`expr: vector(1)`) routed th
 | Top-priority route (`routes[0]`) + `watchdog-heartbeat` receiver (`url_file`) | `k8s/03-monitoring/configmap-alertmanager.yaml` (the route is re-injected at index 0 by the platform's `generate_alertmanager_routes.py` on every regeneration, surviving the route-REPLACE) |
 | External DMS URL (embeds a token, **secret**) | `k8s/03-monitoring/secret-watchdog-heartbeat.yaml` → mounted at `/etc/alertmanager/secrets/watchdog-heartbeat-url` |
 
+> ⚠️ **This document covers only the `Watchdog` heartbeat lane.** The same rule pack contains **40 more** platform self-monitoring alerts (health of the exporter / tenant-api / federation / projection pipeline). They do **not** ride this lane, and out of the box they land in the notifier-less `default` receiver. Configuring the heartbeat does **not** mean those 40 will reach you — to wire them, see [BYO Alertmanager Integration Guide §11 Delivering Platform Self-Monitoring Alerts](byo-alertmanager-integration.en.md#11-delivering-platform-self-monitoring-alerts) (`_routing_enforced` + `match: ['alert_source="platform"']`).
+
 ## ① Configure the external heartbeat (required)
 
 1. Outside the platform (somewhere that won't die with this cluster), set up a DMS / heartbeat monitor (e.g. Healthchecks.io, Better Stack, a PagerDuty heartbeat, or your own on an independent VM / cluster). Get its ingest URL (it usually embeds a token / UUID).
@@ -89,5 +91,6 @@ Fully air-gapped environments (financial intranets, factory edge) can't send the
 ## Related
 
 - [ADR-025 Alerting-Plane Self-Liveness](../adr/025-alerting-plane-self-liveness.en.md) (design decision)
+- [BYO Alertmanager Integration Guide §11](byo-alertmanager-integration.en.md#11-delivering-platform-self-monitoring-alerts) (how to wire notifications for the **other 40** platform self-monitoring alerts)
 - [Operator Alertmanager Integration Guide](operator-alertmanager-integration.en.md) (tenant-alert receivers / Secrets / inhibit rules)
 - [High-Availability Design](../design/high-availability.en.md) (data-plane HA — complementary, a different plane)

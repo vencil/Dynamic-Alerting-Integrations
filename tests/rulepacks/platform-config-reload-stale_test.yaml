@@ -29,6 +29,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              alert_source: platform
               component: groups
               job: tenant-api
               instance: 10.0.0.2:8080

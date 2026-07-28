@@ -18,6 +18,7 @@ lang: en
 | ConfigMap changed but exporter still shows old value | Platform / SRE | [SHA-256 Hot-Reload Delay](#sha-256-hot-reload-delay) |
 | My alert should fire but doesn't | Tenant (diagnosis needs Platform / SRE help) | [Empty Vector Alerts Don't Fire](#empty-vector-alerts-dont-fire) |
 | Multi-replica / multi-tenant values double-counted | Platform / SRE | [Dual-Replica Scrape Double-Counting](#dual-replica-scrape-double-counting) |
+| Platform self-monitoring alerts are Firing in Prometheus but nobody is notified | Platform / SRE | [Platform Alerts Never Reach Anyone](#platform-alerts-never-reach-anyone) |
 | Rules not loaded in an Operator environment | Platform Engineer | [Prometheus Operator Common Issues](#prometheus-operator-common-issues) |
 
 ## SHA-256 Hot-Reload Delay
@@ -93,6 +94,40 @@ This issue applies only to **threshold recording rules**. A threshold is inheren
 2. **`migrate_rule.py` AST engine**: Generated threshold recording rules are hardcoded to `max by(tenant)` — users cannot override this
 
 On the other hand, **data recording rules** use context-dependent aggregation. For example, `mysql_threads_connected` (current connection count) reports the same value from every replica, so `max` is correct. But `rate(requests_total)` (per-second request volume) from distinct sources may require `sum`. Data recording rule aggregation can be specified via the metric dictionary and is not constrained by the threshold aggregation rule described in this section.
+
+## Platform Alerts Never Reach Anyone
+
+> 👤 **For:** Platform Engineer / SRE
+
+**Symptom:** Prometheus `/alerts` shows platform self-monitoring alerts (`ThresholdExporterAbsent`, `TenantApiSingleWriterBreach`, `FederationAuditPipelineSilent`, etc.) as Firing, the Alertmanager UI shows them too — but **nobody is notified**.
+
+**Cause (usually not a fault — just not wired):** the platform self-monitoring rule pack ships with **no delivery**. `Watchdog` rides the index-0 heartbeat lane; the other **40** land in the root `default` receiver, which has **no notifier**, so that is where they stop. This is a deliberate shipping posture (we do not pre-wire alerts to a destination we don't know about).
+
+**Diagnosis:**
+
+```bash
+# 1. Confirm Alertmanager actually has the alert (i.e. Prometheus did dispatch it)
+kubectl exec -n monitoring deploy/alertmanager -- \
+  amtool alert --alertmanager.url=http://localhost:9093
+
+# 2. Ask Alertmanager which receiver this alert would be routed to
+kubectl exec -n monitoring deploy/alertmanager -- \
+  amtool config routes test --config.file=/etc/alertmanager/alertmanager.yml \
+  alertname=ThresholdExporterAbsent severity=critical alert_source=platform
+# `default` ⇒ not wired (the normal shipped state); `platform-enforced` ⇒ wired
+```
+
+**Fix:** wire it with a platform-wide enforced route — add `match: ['alert_source="platform"']` to `_routing_enforced` in `conf.d/_defaults.yaml` (all 40 alerts except `Watchdog` carry that label). For the full example, the `tenant=""` fallback trap, and limitations such as "one enforced route cannot cover both critical and platform", see [BYO Alertmanager Integration Guide §11](integration/byo-alertmanager-integration.en.md#11-delivering-platform-self-monitoring-alerts).
+
+**Still nothing after wiring it?** Rule out, in order:
+
+1. Whether `da-tools validate-config --config-dir conf.d/ --policy .github/custom-rule-policy.yaml` reports `_routing_enforced` as WARN + skipped (a malformed receiver, or a webhook domain outside the allowlist, **silently skips** the route). ⚠️ **`--policy` is not optional here**: the domain-allowlist check is guarded by `if allowed_domains:` in `_grar_routes.py`, so without a policy file there is no allowlist and the "domain blocked" cause cannot be reproduced — the bare command reports everything as fine.
+2. Whether Alertmanager was actually reloaded after regenerating the config (see [§Step 6](integration/byo-alertmanager-integration.en.md#step-6-reload-alertmanager)).
+3. Whether you accidentally used mode B (receiver containing `{{tenant}}`) — per-tenant enforced routes carry a `tenant="<name>"` matcher, and **37 of the 40 platform alerts have no tenant, so they are structurally unreachable**. ⚠️ Watch for the opposite symptom on the other 3 (`TenantMetricsOverLimit` / `FederationRejectionRateAnomaly` / `FederationGatewayBackendErrors`): they **do** carry tenant and get **delivered into tenant channels** — which presents as "a tenant is complaining about platform alerts they don't understand" rather than "I got nothing". Both failures share one cause; see [BYO guide §11](integration/byo-alertmanager-integration.en.md#11-delivering-platform-self-monitoring-alerts).
+
+⚠️ **Note the inverse failure — "too much" rather than "nothing"**: if some route uses `tenant=~".*"` to mean "all tenants", Alertmanager will **sweep platform alerts into the tenant channel** (a missing label is equivalent to an empty value). Switching to `tenant!=""` only fixes half of it — 3 platform alerts do carry a `tenant` label (`TenantMetricsOverLimit` / `FederationRejectionRateAnomaly` / `FederationGatewayBackendErrors`, the latter two only materialising it at fire time from `sum by (tenant)`). "Tenant alerts only" must be written `tenant!=""` **plus** `alert_source=""`.
+
+**Related:** the `Watchdog` heartbeat itself failing to egress is a different symptom — see [Alerting-Plane Self-Liveness §⑤ Troubleshooting](integration/alerting-plane-self-liveness.en.md).
 
 ---
 

@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -45,7 +46,9 @@ from generate_alertmanager_routes import (
 from _grar_render import _merge_routes_receivers_inhibits, _enforce_equal_labels_gated
 from generate_alertmanager_routes import (
     assert_equal_labels_gated,
+    assert_platform_alerts_not_tenant_silenceable,
     assert_watchdog_inhibit_immunity,
+    find_tenant_silenceable_platform_inhibits,
     find_ungated_equal_label_inhibits,
     find_watchdog_suppressing_inhibits,
 )
@@ -650,6 +653,274 @@ class TestWatchdogInhibitImmunity:
 
 
 # ============================================================
+# A tenant must not be able to silence a PLATFORM self-monitoring alert
+# ============================================================
+def _committed_alertmanager_config():
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    cm_path = os.path.join(
+        repo_root, "k8s", "03-monitoring", "configmap-alertmanager.yaml")
+    cm = yaml.safe_load(open(cm_path, encoding="utf-8").read())
+    return yaml.safe_load(cm["data"]["alertmanager.yml"])
+
+
+# Non-vacuity floor for every platform-pack assertion in this module. ONE copy on
+# purpose: it was two (this and the alert_source contract's own), and a floor that
+# exists twice is a floor that gets bumped once — the stale copy then keeps a lower
+# bar without failing anything, which is the same silent-drift class the shared
+# scanner below argues against (CodeRabbit, PR #1270). Grows with the pack; it is a
+# floor on the SUM across every platform rules ConfigMap, so splitting the pack into
+# two files keeps satisfying it instead of silently halving coverage.
+_MIN_PLATFORM_ALERTS = 40
+
+
+def _real_platform_label_sets():
+    """Label sets of every SHIPPED platform alert, derived from the ConfigMap.
+
+    Two sources of `tenant`, and the second is the one a rule-file reader misses:
+      * rule-level `labels.tenant` (TenantMetricsOverLimit), and
+      * a runtime label produced by the expr's `sum by (tenant)`
+        (FederationRejectionRateAnomaly / FederationGatewayBackendErrors) — those
+        rules' `labels:` blocks say nothing about tenant.
+    Deriving instead of hardcoding keeps the guard from going stale when platform
+    alerts are added or renamed.
+    """
+    import re as _re
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    path = os.path.join(
+        repo_root, "k8s", "03-monitoring", "configmap-rules-platform.yaml")
+    cm = yaml.safe_load(open(path, encoding="utf-8").read())
+    out = []
+    for body in (cm.get("data") or {}).values():
+        for group in (yaml.safe_load(body) or {}).get("groups", []):
+            for rule in group.get("rules", []):
+                if "alert" not in rule:
+                    continue
+                labels = dict(rule.get("labels") or {})
+                if labels.get("alert_source") != "platform":
+                    continue  # Watchdog rides its own lane; guarded separately
+                labels["alertname"] = rule["alert"]
+                if any("tenant" in [t.strip() for t in m.group(1).split(",")]
+                       for m in _re.finditer(r"\bby\s*\(([^)]*)\)", rule["expr"])):
+                    labels.setdefault("tenant", "any-tenant")
+                out.append(labels)
+    return out
+
+
+class TestPlatformAlertsNotTenantSilenceable:
+    """Silent Mode is a TENANT-controlled switch; it must not reach a PLATFORM
+    self-monitoring alert.
+
+    Three platform alerts carry a `tenant` label and are severity=warning, so the
+    `severity="warning"` + `tenant=~".+"` silent-mode target caught them: a tenant
+    setting `_silent_mode` once would mute the platform's own failure alerts —
+    including FederationGatewayBackendErrors, whose annotation states the fault is
+    the platform's. Fixed by adding `alert_source=""` to the two silent-mode
+    target_matchers and codified by find_tenant_silenceable_platform_inhibits.
+    """
+
+    def test_derivation_is_non_vacuous(self):
+        sets = _real_platform_label_sets()
+        assert len(sets) >= _MIN_PLATFORM_ALERTS, (
+            f"only {len(sets)} platform alerts derived")
+        tenant_bearing = sorted(s["alertname"] for s in sets if "tenant" in s)
+        assert tenant_bearing == [
+            "FederationGatewayBackendErrors",
+            "FederationRejectionRateAnomaly",
+            "TenantMetricsOverLimit",
+        ], tenant_bearing
+        assert all(s["severity"] == "warning"
+                   for s in sets if "tenant" in s), sets
+
+    def test_runtime_default_is_the_derived_set_not_a_sample(self):
+        """The guard's DEFAULT probe set must be the full pack, not a sample.
+
+        The render paths (`assemble_configmap`, `_merge_routes_receivers_inhibits`)
+        call the assert WITHOUT passing label sets, so whatever the default is IS
+        the production guarantee. A hand-written sample goes stale on the next
+        alert — and did: the pack grew 5 alerts (#1259, #1266) mid-PR, none of
+        them in the constant. Tests that pass the derived set explicitly cannot
+        catch that divergence, which is exactly how it was missed.
+        """
+        from _grar_validate import (  # noqa: PLC0415
+            PLATFORM_ALERT_IDENTITY_LABELS, platform_alert_identities)
+        default_names = {s["alertname"] for s in platform_alert_identities()}
+        derived_names = {s["alertname"] for s in _real_platform_label_sets()}
+        assert default_names == derived_names, (
+            "the runtime default no longer matches the shipped pack — the "
+            f"guard would silently under-check: {derived_names ^ default_names}")
+        sample_names = {s["alertname"] for s in PLATFORM_ALERT_IDENTITY_LABELS}
+        assert sample_names < derived_names, (
+            "the fallback constant must stay a STRICT subset (it may only "
+            "under-report, never green-light something the full set flags)")
+
+    def test_target_pinning_a_literal_tenant_is_still_caught(self):
+        """A target pinning `tenant="db-a"` suppresses the tenant-bearing
+        platform alerts for that tenant. Probing with a fixed placeholder value
+        misses it (equality just fails), so the tenant value is taken FROM THE
+        RULE — runtime tenants are unbounded and cannot be enumerated up front.
+        """
+        rule = {
+            "source_matchers": ['alertname="TenantSilentWarning"', 'tenant="db-a"'],
+            "target_matchers": ['severity="warning"', 'tenant="db-a"'],
+            "equal": ["tenant"],
+        }
+        offending = find_tenant_silenceable_platform_inhibits([rule])
+        assert offending, (
+            "a target pinning a literal tenant slipped past the guard — it "
+            "would mute the 3 tenant-bearing platform alerts for that tenant")
+
+    def test_target_pinning_an_unsampled_platform_alertname_is_caught(self):
+        """Deriving from the ConfigMap is what makes alertname coverage
+        fail-closed. `ConfigReloaderNotStarting` ships in the pack but is not in
+        the fallback constant; with the constant alone this rule reads as safe.
+        """
+        from _grar_validate import PLATFORM_ALERT_IDENTITY_LABELS  # noqa: PLC0415
+        rule = {
+            "source_matchers": ['alertname="TenantSilentWarning"', 'tenant=~".+"'],
+            "target_matchers": ['alertname="ConfigReloaderNotStarting"'],
+            "equal": ["tenant"],
+        }
+        assert find_tenant_silenceable_platform_inhibits([rule]), \
+            "unsampled platform alertname slipped past the derived guard"
+        # and prove the sample-only path is what used to miss it
+        assert not find_tenant_silenceable_platform_inhibits(
+            [rule], PLATFORM_ALERT_IDENTITY_LABELS), (
+            "fallback constant unexpectedly covers this alertname — rewrite "
+            "this test against one it genuinely does not sample")
+
+    def test_structurally_unreachable_target_is_not_false_flagged(self):
+        """Guard the guard against over-reach: a target requiring a non-empty
+        tenant cannot suppress a tenantless platform alert, so naming one must
+        NOT be reported. Without this, widening the probe set would trade a
+        fail-open for a fail-closed that blocks legitimate config.
+        """
+        rule = {
+            "source_matchers": ['alertname="TenantSilentWarning"', 'tenant=~".+"'],
+            "target_matchers": ['alertname="ConfigReloaderNotStarting"',
+                                'tenant=~".+"'],
+            "equal": ["tenant"],
+        }
+        assert find_tenant_silenceable_platform_inhibits([rule]) == [], (
+            "false positive: ConfigReloaderNotStarting carries no tenant, so a "
+            'tenant=~".+" target can never match it')
+
+    def test_identity_loader_falls_back_when_configmap_unreachable(self):
+        from _grar_validate import (  # noqa: PLC0415
+            PLATFORM_ALERT_IDENTITY_LABELS, platform_alert_identities)
+        assert platform_alert_identities("/nonexistent/platform.yaml") == \
+            PLATFORM_ALERT_IDENTITY_LABELS
+
+    def test_committed_base_configmap_holds_invariant(self):
+        am = _committed_alertmanager_config()
+        offending = find_tenant_silenceable_platform_inhibits(
+            am.get("inhibit_rules", []), _real_platform_label_sets())
+        assert offending == [], (
+            "configmap-alertmanager.yaml has tenant-triggered inhibit rule(s) that "
+            f"suppress a platform alert: "
+            f"{[(i, lbls.get('alertname')) for i, _r, lbls in offending]}")
+        # and the default (non-derived) label sets agree
+        assert_platform_alerts_not_tenant_silenceable(am.get("inhibit_rules", []))
+
+    def test_removing_the_exclusion_reintroduces_the_defect(self):
+        # Mutation self-proof: strip alert_source="" from the committed silent-mode
+        # rules and the guard must go red. Without this, a green suite would not
+        # prove the matcher is what is doing the work.
+        am = _committed_alertmanager_config()
+        mutated = []
+        for rule in am["inhibit_rules"]:
+            rule = dict(rule)
+            rule["target_matchers"] = [
+                m for m in rule.get("target_matchers", [])
+                if not m.startswith("alert_source=")]
+            mutated.append(rule)
+        offending = find_tenant_silenceable_platform_inhibits(
+            mutated, _real_platform_label_sets())
+        caught = {lbls["alertname"] for _i, _r, lbls in offending}
+        assert caught, "mutation was not detected — the guard proves nothing"
+        with pytest.raises(ValueError, match="platform self-monitoring alert"):
+            assert_platform_alerts_not_tenant_silenceable(mutated)
+
+    def test_tenant_alerts_are_still_inhibited(self):
+        # Over-correction guard: the fix must NOT stop silent mode from doing its
+        # job for ordinary tenant alerts (which carry no alert_source at all).
+        from _grar_validate import _matcher_matches_labels, _inhibit_target_matchers
+        am = _committed_alertmanager_config()
+        silent = [r for r in am["inhibit_rules"]
+                  if any("TenantSilent" in m for m in r.get("source_matchers", []))]
+        assert len(silent) == 2, silent
+        tenant_warning = {"alertname": "MySQLHighConnections", "severity": "warning",
+                          "tenant": "any-tenant", "metric_group": "mysql_connections"}
+        tenant_critical = {"alertname": "MySQLHighConnectionsCritical",
+                           "severity": "critical", "tenant": "any-tenant",
+                           "metric_group": "mysql_connections"}
+        hits = []
+        for rule in silent:
+            targets = _inhibit_target_matchers(rule)
+            for labels in (tenant_warning, tenant_critical):
+                if all(_matcher_matches_labels(m, labels) for m in targets):
+                    hits.append(labels["alertname"])
+        assert sorted(hits) == ["MySQLHighConnections",
+                                "MySQLHighConnectionsCritical"], hits
+
+    def test_watchdog_stays_immune_and_out_of_scope(self):
+        # Watchdog has no alert_source and severity=none: it never matched the
+        # warning/critical targets, so the new matcher changes nothing for it.
+        am = _committed_alertmanager_config()
+        assert find_watchdog_suppressing_inhibits(am.get("inhibit_rules", [])) == []
+        assert_watchdog_inhibit_immunity(am.get("inhibit_rules", []))
+
+    def test_severity_dedup_and_custom_recipe_need_no_change(self):
+        # Those two families are immune for STRUCTURAL reasons (dedup targets
+        # require metric_group, which zero platform alerts carry; CustomRecipe-
+        # Silent targets component="custom", which none carry). Asserted so the
+        # "why only two rules were touched" reasoning is mechanical, not prose.
+        sets = _real_platform_label_sets()
+        assert all("metric_group" not in s for s in sets)
+        assert all(s.get("component") != "custom" for s in sets)
+        dedup_like = [
+            {"source_matchers": ['severity="critical"', 'metric_group=~".+"',
+                                 'tenant="any-tenant"'],
+             "target_matchers": ['severity="warning"', 'metric_group=~".+"',
+                                 'tenant="any-tenant"'], "equal": ["metric_group"]},
+            {"source_matchers": ['alertname="CustomRecipeSilent"', 'tenant=~".+"',
+                                 'name=~".+"'],
+             "target_matchers": ['component="custom"', 'tenant=~".+"', 'name=~".+"'],
+             "equal": ["tenant", "name"]},
+        ]
+        assert find_tenant_silenceable_platform_inhibits(dedup_like, sets) == []
+
+    def test_invariant_is_narrow_not_a_blanket_platform_ban(self):
+        # A deliberate platform→platform inhibit (source NOT tenant-gated) stays
+        # legal — the invariant is about TENANT-triggered silencing only.
+        platform_to_platform = [
+            {"source_matchers": ['alertname="ThresholdExporterAbsent"'],
+             "target_matchers": ['alert_source="platform"', 'severity="warning"']}]
+        assert find_tenant_silenceable_platform_inhibits(platform_to_platform) == []
+        # ...but the same target with a tenant-gated source IS flagged.
+        tenant_gated = [
+            {"source_matchers": ['alertname="TenantSilentWarning"', 'tenant=~".+"'],
+             "target_matchers": ['alert_source="platform"', 'severity="warning"']}]
+        assert len(find_tenant_silenceable_platform_inhibits(tenant_gated)) == 1
+
+    def test_assemble_fails_closed_on_tenant_silenceable_base_inhibit(self):
+        base = load_base_config(None)
+        base["inhibit_rules"] = [
+            {"source_matchers": ['alertname="TenantSilentWarning"', 'tenant=~".+"'],
+             "target_matchers": ['severity="warning"', 'tenant=~".+"'],
+             "equal": ["tenant"]}]  # the pre-fix shape
+        with pytest.raises(ValueError, match="platform self-monitoring alert"):
+            assemble_configmap(base, [], [], [])
+
+    def test_validate_mode_tripwire_exits_on_tenant_silenceable_inhibit(self):
+        bad = [{"source_matchers": ['alertname="TenantSilentWarning"', 'tenant=~".+"'],
+                "target_matchers": ['severity="warning"', 'tenant=~".+"'],
+                "equal": ["tenant"]}]
+        with pytest.raises(SystemExit) as exc:
+            gar._validate_mode([], [], bad, [])
+        assert exc.value.code != 0
+
+
+# ============================================================
 # #1132: equal-label-gated invariant (silent-suppression guard)
 # ============================================================
 class TestEqualLabelGatedInvariant:
@@ -744,6 +1015,80 @@ class TestEqualLabelGatedInvariant:
 
 
 # ============================================================
+# Shared rule-tree scanner for the static label-contract gates below
+# ============================================================
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# ⚠️ PREFIX, not a literal filename. Both gates below are bounded by "is this a
+# platform rules ConfigMap?", and a literal `configmap-rules-platform.yaml` made
+# a SECOND platform rules ConfigMap unrepresentable: adding `alert_source` to it
+# tripped the RESERVED assertion (red), while omitting the label left it with
+# ZERO presence coverage (green) — i.e. the gate actively pushed the maintainer
+# toward the broken state. Any `configmap-rules-platform*.{yaml,yml}` now counts,
+# and the presence floor is a sum across the whole set.
+_PLATFORM_CM_PREFIX = "configmap-rules-platform"
+# Both extensions: a rules ConfigMap named `.yml` was silently skipped by the
+# scanner, which is the same "escapes the gate by being named differently" hole.
+_RULES_FILE_EXTS = (".yaml", ".yml")
+
+
+def _is_platform_cm_location(where: str) -> bool:
+    """True iff `where` names a rule inside a platform rules ConfigMap.
+
+    `where` is "<configmap-file>:<data-key>" on the ConfigMap side and a bare
+    rule-pack filename on the source side; only the former can be platform.
+    """
+    if ":" not in where:
+        return False
+    return where.split(":", 1)[0].startswith(_PLATFORM_CM_PREFIX)
+
+
+def _iter_repo_alert_rules():
+    """Yield (where, rule) for EVERY alerting rule the repo ships.
+
+    Both trees: the SOURCE rule packs under rule-packs/, plus every deployed
+    k8s/03-monitoring/configmap-rules-*.{yaml,yml} (the generated rule-pack
+    copies — double coverage vs the source scan, harmless — AND any hand-authored
+    rules ConfigMap outside rule-packs/, which is configmap-rules-platform.yaml
+    today and whatever is added later). `where` is the file name, prefixed
+    "<configmap>:<data-key>" for the ConfigMap side.
+
+    Single scanner on purpose: the sentinel contract and the alert_source
+    contract below are both "this discriminator is RESERVED" invariants, and a
+    reserved-value claim is only as good as its coverage — two scanners would
+    let one drift and silently narrow the other's guarantee.
+
+    RECURSIVE on both trees, for the same reason the `.yml` extension is
+    accepted: a reserved-value gate that a file escapes by being *placed*
+    differently is no better than one it escapes by being *named* differently.
+    A flat `os.listdir` would silently drop a pack moved into a subdirectory out
+    of BOTH contracts (CodeRabbit, PR #1270).
+    """
+    packs_dir = Path(_REPO_ROOT) / "rule-packs"
+    for path in sorted(packs_dir.rglob("*")):
+        if not (path.is_file() and path.name.endswith(_RULES_FILE_EXTS)):
+            continue
+        rel = path.relative_to(packs_dir).as_posix()
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for group in (doc or {}).get("groups", []):
+            for rule in group.get("rules", []):
+                if "alert" in rule:
+                    yield rel, rule
+    k8s_dir = Path(_REPO_ROOT) / "k8s" / "03-monitoring"
+    for path in sorted(k8s_dir.rglob("*")):
+        if not (path.is_file() and path.name.startswith("configmap-rules-")
+                and path.name.endswith(_RULES_FILE_EXTS)):
+            continue
+        rel = path.relative_to(k8s_dir).as_posix()
+        cm = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for fname, body in (cm.get("data") or {}).items():
+            doc = yaml.safe_load(body)
+            for group in (doc or {}).get("groups", []):
+                for rule in group.get("rules", []):
+                    if "alert" in rule:
+                        yield f"{rel}:{fname}", rule
+
+
+# ============================================================
 # #1095: sentinel label contract (fail-open guard)
 # ============================================================
 class TestSentinelLabelContract:
@@ -759,37 +1104,10 @@ class TestSentinelLabelContract:
     is added later outside rule-packs/), so a future sentinel added without the
     label fails loud here instead of silently regressing."""
 
-    _REPO_ROOT = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", ".."))
-
     def _iter_alert_rules(self):
-        packs_dir = os.path.join(self._REPO_ROOT, "rule-packs")
-        for fname in sorted(os.listdir(packs_dir)):
-            if not fname.endswith(".yaml"):
-                continue
-            with open(os.path.join(packs_dir, fname), encoding="utf-8") as f:
-                doc = yaml.safe_load(f.read())
-            for group in (doc or {}).get("groups", []):
-                for rule in group.get("rules", []):
-                    if "alert" in rule:
-                        yield fname, rule
-        # every deployed rules ConfigMap: the generated rule-pack copies (double
-        # coverage vs the source scan above — harmless) AND any hand-authored one
-        # outside rule-packs/ (configmap-rules-platform.yaml today; a future
-        # hand-written configmap-rules-<new>.yaml is covered automatically).
-        k8s_dir = os.path.join(self._REPO_ROOT, "k8s", "03-monitoring")
-        for cm_name in sorted(os.listdir(k8s_dir)):
-            if not (cm_name.startswith("configmap-rules-")
-                    and cm_name.endswith(".yaml")):
-                continue
-            with open(os.path.join(k8s_dir, cm_name), encoding="utf-8") as f:
-                cm = yaml.safe_load(f.read())
-            for fname, body in (cm.get("data") or {}).items():
-                doc = yaml.safe_load(body)
-                for group in (doc or {}).get("groups", []):
-                    for rule in group.get("rules", []):
-                        if "alert" in rule:
-                            yield f"{cm_name}:{fname}", rule
+        # Delegates to the module-level scanner (shared with the alert_source
+        # contract below) so the two reserved-value gates cannot drift apart.
+        return _iter_repo_alert_rules()
 
     def test_severity_none_alerts_carry_sentinel_component(self):
         seen = []
@@ -823,6 +1141,112 @@ class TestSentinelLabelContract:
                     f'component="sentinel" but severity='
                     f"{labels.get('severity')!r} — the sentinel sink would "
                     f"swallow a deliverable alert (#1095)")
+
+
+# ============================================================
+# alert_source="platform" delivery discriminator contract
+# ============================================================
+class TestPlatformAlertSourceContract:
+    """Every platform self-monitoring alert MUST carry `alert_source: platform`.
+
+    WHY: platform alerts have almost no tenant to route them by (37 of the 40
+    carry no `tenant` label at all — the 3 that do are TenantMetricsOverLimit via
+    rule-level labels, and FederationRejectionRateAnomaly /
+    FederationGatewayBackendErrors via their expr's `sum by (tenant)`, i.e. only
+    at fire time) and none carry `metric_group`. Without a POSITIVE
+    discriminator the only matcher an operator can put on the single
+    `_routing_enforced` route is `severity="critical"` — which reaches 18 of the
+    40, i.e. the majority of the platform's own self-monitoring would stay
+    undeliverable no matter how the operator wires it. This is the same failure
+    shape as #1095 (a discriminator that silently does not exist), inverted:
+    there the label was missing from a sinkhole, here from a delivery selector.
+
+    Two directions, both asserted, and BOTH bounded by the same
+    `_is_platform_cm_location` prefix test (not a literal filename) so a second
+    platform rules ConfigMap is covered by presence instead of being punished by
+    reserved:
+      1. presence  — every alert in ANY configmap-rules-platform*.{yaml,yml}
+         except `Watchdog` carries `alert_source: platform`;
+      2. reserved  — nothing OUTSIDE those ConfigMaps carries `alert_source` at
+         all, so `match: ['alert_source="platform"']` cannot silently start
+         picking up tenant alerts (which route by `tenant` and would then
+         dual-deliver into the NOC channel).
+
+    `Watchdog` is the deliberate exception, for the same reason it carries no
+    `component`: it rides the index-0 heartbeat route with `continue: false` and
+    must never be selectable by a second delivery path.
+    """
+
+    def _platform_rules(self):
+        return [(where, rule) for where, rule in _iter_repo_alert_rules()
+                if _is_platform_cm_location(where)]
+
+    def test_platform_cm_discovery_is_prefix_based(self):
+        # Regression guard for the scope seam: discovery must be a prefix test on
+        # the ConfigMap basename, not equality with one filename, and must accept
+        # both extensions. Asserted on the classifier directly so it holds even
+        # while only one platform ConfigMap exists.
+        assert _is_platform_cm_location("configmap-rules-platform.yaml:key")
+        assert _is_platform_cm_location("configmap-rules-platform-federation.yaml:k")
+        assert _is_platform_cm_location("configmap-rules-platform.yml:key")
+        # rule-pack side (no ":" prefix) is never platform, whatever it is named
+        assert not _is_platform_cm_location("configmap-rules-platform.yaml")
+        assert not _is_platform_cm_location("rule-pack-mysql.yaml")
+        assert not _is_platform_cm_location("configmap-rules-mysql.yaml:key")
+        assert _RULES_FILE_EXTS == (".yaml", ".yml")
+
+    def test_platform_alerts_carry_alert_source(self):
+        seen = []
+        watchdog_checked = False
+        for where, rule in self._platform_rules():
+            labels = rule.get("labels") or {}
+            if rule["alert"] == "Watchdog":
+                watchdog_checked = True
+                assert "alert_source" not in labels, (
+                    "Watchdog must NOT carry alert_source — it rides its own "
+                    "index-0 heartbeat route with continue:false; a delivery "
+                    "discriminator could pull the heartbeat into a second "
+                    "channel (same rule as its missing component label)")
+                continue
+            seen.append(rule["alert"])
+            assert labels.get("alert_source") == "platform", (
+                f"{where}: platform alert {rule['alert']!r} is missing "
+                f'alert_source="platform" — an operator wiring '
+                f"_routing_enforced cannot select it, so it stays in the "
+                f"notifier-less default receiver forever")
+        # non-vacuous: the scan must actually have reached the platform pack.
+        assert watchdog_checked, (
+            f"Watchdog was never scanned — no {_PLATFORM_CM_PREFIX}*.yaml parsed "
+            f"or was reached; every assertion above is vacuous")
+        assert len(seen) >= _MIN_PLATFORM_ALERTS, (
+            f"only {len(seen)} platform alerts scanned, expected >= "
+            f"{_MIN_PLATFORM_ALERTS}: {sorted(seen)}")
+        assert set(seen) >= {
+            "ThresholdExporterAbsent", "PrometheusRuleEvaluationFailing",
+            "TenantApiSingleWriterBreach", "FederationAuditPipelineSilent",
+            "VectorProjectionGateStuck"}, sorted(seen)
+
+    def test_alert_source_reserved_for_the_platform_tree(self):
+        # RESERVED value: a tenant-facing alert carrying alert_source would be
+        # dual-delivered into the platform/NOC channel by the operator's
+        # enforced route (continue:true), which is exactly the leak the custom
+        # isolation subtree exists to prevent.
+        offenders = []
+        for where, rule in _iter_repo_alert_rules():
+            labels = rule.get("labels") or {}
+            if "alert_source" not in labels:
+                continue
+            if not _is_platform_cm_location(where):
+                offenders.append((where, rule["alert"], labels["alert_source"]))
+                continue
+            assert labels["alert_source"] == "platform", (
+                f"{where}: alert {rule['alert']!r} carries "
+                f"alert_source={labels['alert_source']!r} — the only value the "
+                f"operator guide documents is \"platform\"")
+        assert offenders == [], (
+            "alert_source is RESERVED for the platform self-monitoring pack "
+            f"({_PLATFORM_CM_PREFIX}*.yaml); these rules would be swept into the "
+            f"platform NOC channel: {offenders}")
 
 
 # ============================================================
