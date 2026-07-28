@@ -12,7 +12,15 @@ type: application
 #         (AccountID/ProjectID injection, fail-closed null-claim guard,
 #         default-deny LogsQL endpoint allowlist, aud=tenant-federation-logs)
 # 0.3.1 — #902 L2: pin the Envoy image by digest (image.digest knob) — supply-chain
-version: 0.3.1
+# 0.4.0 — #1235: revoked.txt line contract — new revokedSet.tokenIdPattern value
+#         templated into revoked_check.lua, template-time guards on it, and a
+#         rewritten revoked-set reader in that filter. MINOR, not patch: the
+#         filter's behaviour on a malformed revoked set changes (it now refuses
+#         the reload and keeps the previously loaded set), and a new value key
+#         appears. `helm upgrade --reuse-values` is safe — the key has a default
+#         and Helm deep-merges the revokedSet map — but the runtime behaviour
+#         change is what earns the minor bump.
+version: 0.4.0
 # appVersion: pinned Envoy release
 appVersion: "v1.38.0"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle

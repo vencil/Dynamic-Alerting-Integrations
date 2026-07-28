@@ -47,4 +47,38 @@ victorialogs mode, jwt.audience MUST be `tenant-federation-logs`.
 {{- fail (printf "federation-gateway: victorialogs mode requires jwt.audience=\"tenant-federation-logs\" (a metrics-pull token must not query the log store), got %q" .Values.jwt.audience) }}
 {{- end }}
 {{- end }}
+{{- include "federation-gateway.validateRevokedSet" . }}
+{{- end }}
+
+{{/*
+Fail-loud guard for the revoked-set line contract (#1235 / TRK-349).
+
+revokedSet.tokenIdPattern is templated into revoked_check.lua and decides
+which revoked.txt lines the ENFORCEMENT plane accepts. Two ways to make it
+useless silently, both closed here:
+
+  * empty — Lua's string.match against "" succeeds for every input, so an
+    empty value would accept any line at all while still looking configured.
+  * unanchored — a pattern without ^...$ matches a SUBSTRING, so a line
+    could carry arbitrary bytes around a valid-looking id. Unambiguous whole
+    lines are the entire point: the detection plane (the ADR-028 reconciler)
+    reads the same file with its own parser, and the two ends can only agree
+    if each line means exactly one thing.
+
+A deploy that gets this wrong must fail at template time, not degrade into
+a gateway that accepts a revoked set the reconciler reads differently.
+*/}}
+{{- define "federation-gateway.validateRevokedSet" -}}
+{{- $p := .Values.revokedSet.tokenIdPattern | default "" }}
+{{- if not $p }}
+{{- fail "federation-gateway: revokedSet.tokenIdPattern must not be empty — an empty Lua pattern accepts every revoked.txt line (#1235)" }}
+{{- end }}
+{{- if not (and (hasPrefix "^" $p) (hasSuffix "$" $p)) }}
+{{- fail (printf "federation-gateway: revokedSet.tokenIdPattern must be anchored with ^...$ so a line matches as a whole, got %q (#1235)" $p) }}
+{{- end }}
+{{- range $bad := list "{" "}" "\\" "|" }}
+{{- if contains $bad $p }}
+{{- fail (printf "federation-gateway: revokedSet.tokenIdPattern contains %q. This value is a LUA PATTERN, not a regex: Lua has no brace quantifiers, no backslash escapes and no alternation, so that character matches LITERALLY. A pattern that looks like a tightening (pinning a length with braces is the obvious one) therefore matches NOTHING — the gateway then refuses every reload, silently staying on the revoked set it already had, and a freshly started worker enforces none at all. If the contract genuinely needs to change it must change on all three sides together, and the value must stay expressible as a Lua pattern (#1235). Got %q" $bad $p) }}
+{{- end }}
+{{- end }}
 {{- end }}

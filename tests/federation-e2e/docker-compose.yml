@@ -80,7 +80,16 @@ services:
   # driver does its own end-to-end readiness probe.
   federation-gateway:
     image: envoyproxy/envoy:distroless-v1.38.0
-    command: ["-c", "/etc/envoy/envoy.yaml"]
+    # --concurrency mirrors the chart (deployment.yaml passes
+    # .Values.concurrency); without it Envoy picks one worker per HOST cpu,
+    # which varies per machine. Pinned to 1 here because the revoked-set
+    # cache is PER WORKER: the S10 scenario asserts that a worker which
+    # refused a tampered file is still enforcing the set it loaded before,
+    # and with N workers a request can land on one that never saw the
+    # earlier file. One worker makes that observable instead of racy. It
+    # does not weaken the other scenarios — the local_rate_limit token
+    # buckets are shared across workers either way.
+    command: ["-c", "/etc/envoy/envoy.yaml", "--concurrency", "1"]
     volumes:
       - ./rendered/envoy.yaml:/etc/envoy/envoy.yaml:ro
       - ./rendered/revoked_check.lua:/etc/envoy/revoked_check.lua:ro

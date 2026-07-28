@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 RENDERED = Path(__file__).resolve().parent / "rendered"
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Client-side timeout. The gateway route timeout is 30s; allow margin.
 HTTP_TIMEOUT = 35
@@ -85,6 +86,41 @@ def sign_logs_token(tenant_id, *, private_key_pem, kid, account_id,
     (audience-bound model B). `account_id` is passed through verbatim."""
     return sign_token(tenant_id, private_key_pem=private_key_pem, kid=kid,
                       aud=aud, account_id=account_id, **kw)
+
+
+def write_revoked(path, text):
+    """Write the bind-mounted revoked.txt VERBATIM — no newline translation.
+
+    The gateway and the reconciler both read this file byte-for-byte, so a
+    driver on a Windows host must not silently rewrite its line endings on
+    the way in; the equivalence scenarios would then be comparing the two
+    readers on two different files. Same inode (write, not replace), so the
+    gateway container sees the change."""
+    path.write_text(text, encoding="utf-8", newline="")
+
+
+def reconciler_read(path):
+    """Read `path` with the ADR-028 reconciler's OWN production entry point.
+
+    Imported from the shipped tool rather than reimplemented here: the point
+    of the cross-language equivalence scenarios (S10/S11, #1235 / TRK-349) is
+    to run the real detection-side reader over the same bytes the real
+    enforcement-side Lua filter is reading. A local copy of the logic would
+    assert nothing about drift.
+
+    ⛔ It calls `read_live_set(path)`, NOT `parse_revoked_file(text)`. The
+    reconciler's divergence risk is not confined to the parser — the layer
+    that turns a FILE into that text can reinterpret bytes on its own, and a
+    scenario that hands the parser an in-memory string is blind to it while
+    still reading as though it compared two readers on one file. Taking the
+    same path the deployed reconciler takes is the whole point.
+    Returns (token_ids, rejected_count)."""
+    import sys
+    ops = str(REPO_ROOT / "scripts" / "tools" / "ops")
+    if ops not in sys.path:
+        sys.path.insert(0, ops)
+    import _federation_revocation_reconciler as reconciler
+    return reconciler.read_live_set(str(path))
 
 
 def gateway_request(gateway_url, path, *, token=None, method="GET",

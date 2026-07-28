@@ -13,6 +13,12 @@
 #        for: window are pinned — still PENDING at 14m, FIRING at exactly 15m — so
 #        a shortened `for:` cannot pass (asserting only past the window would let
 #        `for: 5m` through, which is the mutation this pair is proved against).
+#   11-14) The enforcement-plane staleness pair (#1235): LiveSetRejected (the file
+#        as the reconciler reads it) and GatewayRevokedSetReloadRejected (the
+#        gateway's own account of refusing the reload) each fire at >0 for 10m and
+#        never at 0. BOTH EDGES again — 9m PENDING, 10m FIRING — because the `for:`
+#        is the only thing separating "one anomalous pass" from "the enforcement
+#        plane is frozen on a stale set", and a shortened one would otherwise pass.
 # Run: promtool test rules tests/rulepacks/platform-federation-revocation_test.yaml
 rule_files:
   - platform-federation-revocation.rules.yaml
@@ -170,4 +176,70 @@ tests:
         exp_alerts: []
       - eval_time: 25m
         alertname: FederationRevocationEvidenceChannelDown
+        exp_alerts: []
+
+  # 11) The mounted revoked.txt carries a contract-violating line → the gateway is
+  #     refusing to load the current set. FIRES at for:10m, not before.
+  #     ⛔ BOTH EDGES. 10m is one reconcile interval (300s) plus an equal margin;
+  #     the 9m assertion is what stops that being quietly shortened back to a
+  #     single interval, where one anomalous pass would page.
+  - interval: 1m
+    name: live-set-rejected-fires-at-for-boundary
+    input_series:
+      - series: 'federation_revocation_live_set_rejected_lines'
+        values: '1+0x15'
+    alert_rule_test:
+      - eval_time: 9m           # for:-ε — pending, must NOT page yet
+        alertname: FederationRevocationLiveSetRejected
+        exp_alerts: []
+      - eval_time: 10m          # exactly for: — fires
+        alertname: FederationRevocationLiveSetRejected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Federation revoked set violates its line contract — the gateway is refusing to load it, so revocations made since are NOT enforced (ADR-028 / #1235)"
+
+  # 12) A clean live set (0) → never fires. Held past the window so an inverted
+  #     comparison (`== 0` / `< 1`) surfaces here rather than in production.
+  - interval: 1m
+    name: live-set-clean-does-not-fire
+    input_series:
+      - series: 'federation_revocation_live_set_rejected_lines'
+        values: '0+0x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: FederationRevocationLiveSetRejected
+        exp_alerts: []
+
+  # 13) The gateway's own account: it refused a reload and kept its previous set.
+  #     Separate metric, separate alert — the file can read clean from the
+  #     reconciler's projection while the gateway is still refusing, which is why
+  #     this one is not folded into #11.
+  - interval: 1m
+    name: gateway-reload-rejected-fires-at-for-boundary
+    input_series:
+      - series: 'federation_gateway_revoked_set_reload_rejected'
+        values: '3+0x15'
+    alert_rule_test:
+      - eval_time: 9m           # for:-ε — pending, must NOT page yet
+        alertname: FederationGatewayRevokedSetReloadRejected
+        exp_alerts: []
+      - eval_time: 10m          # exactly for: — fires
+        alertname: FederationGatewayRevokedSetReloadRejected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Federation gateway REFUSED its revoked-set reload — it is enforcing a stale set, so revocations made since are NOT in force (ADR-028 / #1235)"
+
+  # 14) No refusals in the window (0) → never fires.
+  - interval: 1m
+    name: gateway-reload-rejected-clean-does-not-fire
+    input_series:
+      - series: 'federation_gateway_revoked_set_reload_rejected'
+        values: '0+0x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: FederationGatewayRevokedSetReloadRejected
         exp_alerts: []

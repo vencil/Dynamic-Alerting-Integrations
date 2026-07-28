@@ -140,6 +140,16 @@ func (s *store) listAll(now time.Time) ([]Record, error) {
 // expiresAt argument is unused here — the production ConfigMap store
 // (configmap_store.go) is what writes the revoked set.
 func (s *store) revoke(tokenID string, _ time.Time) (bool, error) {
+	// The RecordStore precondition (#1235 / TRK-349). Enforced here even
+	// though THIS backend writes no revoked set: the guard belongs to the
+	// interface, not to one implementation, and an implementation that
+	// silently accepts what the contract forbids is exactly how the next
+	// backend inherits a hole. It costs nothing to hold — validTokenID is a
+	// single symbol shared with the production store, so this adds a call
+	// site and not a fourth copy of the contract.
+	if !validTokenID(tokenID) {
+		return false, ErrInvalidTokenID
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.recs[tokenID]; !ok {

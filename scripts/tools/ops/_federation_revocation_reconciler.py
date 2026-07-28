@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import re
 import sys
 import time
 import urllib.parse
@@ -99,6 +100,32 @@ DEFAULT_HEARTBEAT_LOOKBACK_S = 1800  # evidence-channel canary window (30m): ten
 EVENT_HEARTBEAT = "federation_revocation_channel_heartbeat"
 LOG_TYPE_EVIDENCE = "federation_evidence"
 
+# The revoked.txt line contract (#1235 / TRK-349). revoked.txt has two
+# independently-implemented readers — this one and the gateway Lua filter —
+# and they used to apply different line/whitespace semantics, so the same
+# file could parse to different token sets on the two ends. ADR-028's whole
+# detection argument assumes both ends see the SAME set, so the contract is
+# now explicit and identical on both sides.
+#
+# Peers that must stay equivalent:
+#   * helm/federation-gateway/values.yaml  `revokedSet.tokenIdPattern`
+#     (templated into revoked_check.lua — the gateway does not hard-code it)
+#   * components/tenant-api/internal/federation/token/manager.go
+#     `tokenIDPattern` (the writer)
+# tests/ops/test_revoked_set_contract.py asserts the three literals agree.
+# ⛔ Literal agreement is necessary, not sufficient — and it is one of four
+# guards, none of which substitutes for another:
+#   * the three-literal check       — a hand-copied pattern drifting;
+#   * federation-e2e S11 (positive) — PATTERN-DIALECT drift, one literal
+#     meaning different things to three engines;
+#   * federation-e2e S10 (negative) — READER-SEMANTICS drift, the two readers
+#     disagreeing about what a line IS. ⚠️ S11 has NO resistance to that
+#     class: both the old and the current reader pass S11;
+#   * the conformance matrix in tests/ops/test_revoked_set_contract.py — the
+#     byte space, mechanically enumerated through the production entry point.
+TOKEN_ID_PATTERN = r"^ftk_[0-9a-f]+$"
+_TOKEN_ID_RE = re.compile(TOKEN_ID_PATTERN)
+
 
 @dataclasses.dataclass(frozen=True)
 class RevocationEvent:
@@ -107,9 +134,49 @@ class RevocationEvent:
     expires_at: float  # unix seconds
 
 
-def parse_revoked_file(text: str) -> set[str]:
-    """Parse the mounted revoked.txt: one token_id per line, blanks ignored."""
-    return {line.strip() for line in text.splitlines() if line.strip()}
+def parse_revoked_file(text: str) -> tuple[set[str], int]:
+    """Parse the mounted revoked.txt under the strict line contract.
+
+    Returns ``(token_ids, rejected_count)``.
+
+    A line is what lies between LF separators — nothing else starts a new
+    line — and is compared to :data:`TOKEN_ID_PATTERN` byte-for-byte, with a
+    single trailing CR tolerated so a CRLF-written file yields the same ids.
+    Both rules exist to be IDENTICAL to the gateway's reader
+    (helm/federation-gateway/files/revoked_check.lua); the previous version
+    normalised each line instead, and that normalisation is what let the two
+    readers derive different sets from the same file (see the private
+    advisory).
+
+    ⛔ ASYMMETRY WITH THE GATEWAY — INTENTIONAL, DO NOT "UNIFY".
+    When the gateway meets a contract-violating line it discards the whole
+    reload and KEEPS ITS PREVIOUS SET: it is the enforcement plane, and
+    holding the older, pre-tamper set is what makes the attack ineffective.
+    This function must NOT do that. It is the DETECTION plane, and the id
+    that a rejected line would have carried has to come back ABSENT from the
+    live set — that absence is precisely what makes ``reconcile`` raise
+    TamperSuspected. Making the two ends behave the same way here would
+    remove the detection while leaving every component looking healthy,
+    i.e. it would re-create, in a new place, the failure ADR-028 is about.
+
+    Rejected lines are counted only; their content is never returned or
+    logged (ADR-028 D3).
+
+    Dialect note: ``fullmatch``, not ``match`` — Python's bare ``$`` also
+    matches just before a trailing newline, while Lua's and Go's anchor at
+    true end-of-string. ``fullmatch`` is what makes the three agree.
+    """
+    tokens: set[str] = set()
+    rejected = 0
+    for raw in text.split("\n"):
+        line = raw[:-1] if raw.endswith("\r") else raw
+        if not line:
+            continue
+        if not _TOKEN_ID_RE.fullmatch(line):
+            rejected += 1
+            continue
+        tokens.add(line)
+    return tokens, rejected
 
 
 def parse_events(rows: list[dict]) -> list[RevocationEvent]:
@@ -232,6 +299,42 @@ def build_failopen_query(lookback_s: int, settle_s: int) -> str:
     )
 
 
+# ⛔ The gateway's two revoked-set warnings mean OPPOSITE things and each
+# feeds its own gauge. This literal must never become a prefix or substring
+# of GATEWAY_FAILOPEN_PHRASE, or the fail-open gauge would count refusals —
+# reporting "we are letting revoked tokens through" about a gateway that is
+# still enforcing. tests/ops/test_federation_revocation_reconciler.py pins
+# both phrases against the shipped Lua, in both directions.
+GATEWAY_FAILOPEN_PHRASE = "federation: revoked-set reload failed"
+GATEWAY_REJECTED_PHRASE = "federation: revoked-set rejected"
+
+
+def build_rejected_query(lookback_s: int, settle_s: int) -> str:
+    """LogsQL for the gateway REFUSING to load the revoked set (#1235).
+
+    The enforcement plane's own account of what it did, rather than this
+    process's second reading of the file. That distinction is the point:
+    the two ends read different kubelet projections of the same ConfigMap
+    at different moments, so "the file I can see is clean" does not mean
+    "the gateway loaded it". A refusal means the gateway is still on the
+    set it had BEFORE the file changed — every revocation issued since is
+    unenforced, and a worker that started into a refusal enforces nothing.
+
+    Stream-field qualified, unlike :func:`build_failopen_query`. That one
+    is a bare phrase against ``_msg`` and is therefore forgeable by anything
+    that can get a matching string into the log stream (tracked separately);
+    a new query has no reason to inherit that. ``gateway_operational`` is
+    the class Vector assigns to gateway output that is NOT parseable audit
+    JSON — which is where a Lua ``logWarn`` lands, and which request-derived
+    content cannot reach because it parses as JSON into another class.
+    """
+    return (
+        f'_time:[now-{lookback_s}s, now-{settle_s}s] '
+        f'AND log_type:"gateway_operational" '
+        f'AND "{GATEWAY_REJECTED_PHRASE}"'
+    )
+
+
 # ── metrics exposition (dependency-free Prometheus text format) ────────────────
 
 class Metrics:
@@ -255,6 +358,29 @@ class Metrics:
         # periods) is the deploy-time grace window for that.
         self.channel_up = 0                  # gauge: 1 = heartbeat seen in window, 0 = channel dead
         self.heartbeats_seen = 0             # gauge: heartbeat rows in window (debug / chaos verification)
+        # ── Enforcement-plane staleness (#1235 / TRK-349) ──────────────
+        # Two gauges, deliberately, because they observe DIFFERENT planes
+        # and each is blind where the other sees.
+        #
+        #   live_set_rejected_lines — what THIS process reads out of the
+        #     mounted revoked.txt. Present whenever the file carries a
+        #     contract-violating line at all, which is the precondition for
+        #     every way the gateway can end up stale.
+        #   gateway_reload_rejected — what the GATEWAY says it did, read
+        #     back off its own log stream. Immune to the two ends reading
+        #     different kubelet projections at different times, which the
+        #     first gauge cannot see.
+        #
+        # Why either is needed at all: when the gateway refuses a reload it
+        # keeps the set it already had, so every revocation issued AFTER the
+        # bad line appeared is silently unenforced — and a freshly started
+        # worker, having no previous set, enforces NOTHING. Neither shows up
+        # in tamper_suspected, because that compares the audit log against
+        # the FILE (which does contain those newer entries), not against
+        # what the gateway actually loaded. A MISSING file is loud for
+        # exactly this reason and a REFUSED one was not.
+        self.live_set_rejected_lines = 0     # gauge: contract-violating lines in the mounted file
+        self.gateway_reload_rejected = 0     # gauge: gateway reload-refusal warns in window
 
     def render(self) -> str:
         lines = [
@@ -282,6 +408,12 @@ class Metrics:
             "# HELP federation_revocation_heartbeats_seen Canary heartbeat rows in the window (debug / chaos verification; channel_up is the alerting signal).",
             "# TYPE federation_revocation_heartbeats_seen gauge",
             f"federation_revocation_heartbeats_seen {self.heartbeats_seen}",
+            "# HELP federation_revocation_live_set_rejected_lines Contract-violating lines in the mounted revoked.txt. Non-zero means the gateway is refusing to load the current revoked set, so revocations made since are NOT being enforced (#1235).",
+            "# TYPE federation_revocation_live_set_rejected_lines gauge",
+            f"federation_revocation_live_set_rejected_lines {self.live_set_rejected_lines}",
+            "# HELP federation_gateway_revoked_set_reload_rejected Gateway reload-refusal warnings in the window, read back off the gateway's own log stream (enforcement-plane self-report; #1235).",
+            "# TYPE federation_gateway_revoked_set_reload_rejected gauge",
+            f"federation_gateway_revoked_set_reload_rejected {self.gateway_reload_rejected}",
         ]
         return "\n".join(lines) + "\n"
 
@@ -308,8 +440,12 @@ def query_victorialogs(base_url: str, query: str, timeout_s: float = 30.0) -> li
     return rows
 
 
-def read_live_set(path: str) -> set[str]:
+def read_live_set(path: str) -> tuple[set[str], int]:
     """Read the mounted revoked.txt (the live revoked token_id set).
+
+    Returns ``(token_ids, rejected_count)`` — see :func:`parse_revoked_file`
+    for the line contract and for why a rejected line is simply absent from
+    the returned set rather than suppressing the whole read.
 
     A MISSING file is benign, NOT fail-closed: the tenant-api creates the
     ``revoked.txt`` ConfigMap key on the first revoke, so an absent key means
@@ -320,10 +456,21 @@ def read_live_set(path: str) -> set[str]:
     Any OTHER read error (present but unreadable — permission / IO) propagates
     so the caller fails closed (never a false all-clear)."""
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        # ⛔ newline="" IS LOAD-BEARING — it disables the decode layer's
+        # newline translation. With the default, that layer rewrites a
+        # legacy line terminator into a separator ANYWHERE in the file
+        # BEFORE parse_revoked_file sees a single byte, while the gateway's
+        # reader does no such thing. The two ends would then derive
+        # different token sets from the same file — the exact divergence
+        # #1235 exists to close, reintroduced one layer above the parser.
+        # It is also what makes the parser's trailing-terminator tolerance
+        # real: on translated text that branch can never run.
+        # tests/ops/test_federation_revocation_reconciler.py pins this at
+        # the FILE level; a string-level test cannot see this layer at all.
+        with open(path, "r", encoding="utf-8", newline="") as fh:
             return parse_revoked_file(fh.read())
     except FileNotFoundError:
-        return set()
+        return set(), 0
 
 
 def reconcile_once(cfg: "Config", metrics: Metrics, now: float) -> None:
@@ -344,7 +491,11 @@ def reconcile_once(cfg: "Config", metrics: Metrics, now: float) -> None:
         # unreachable log store means "unknown", not "dead channel".
         hb_rows = query_victorialogs(
             cfg.victorialogs_url, build_heartbeat_query(cfg.heartbeat_lookback_s, cfg.settle_s))
-        live = read_live_set(cfg.revoked_file)
+        # Enforcement-plane self-report (#1235). Same window as the fail-open
+        # query — both ask "what did the gateway say in the recent past".
+        rj_rows = query_victorialogs(
+            cfg.victorialogs_url, build_rejected_query(cfg.failopen_lookback_s, cfg.settle_s))
+        live, live_rejected = read_live_set(cfg.revoked_file)
         parsed = parse_events(ev_rows)
         result = reconcile(parsed, live, now, cfg.skew_margin_s)
     except Exception as exc:  # noqa: BLE001 — any failure is fail-closed
@@ -365,7 +516,26 @@ def reconcile_once(cfg: "Config", metrics: Metrics, now: float) -> None:
     # a real severed channel — never "we could not ask".
     metrics.heartbeats_seen = len(hb_rows)
     metrics.channel_up = 1 if hb_rows else 0
+    metrics.live_set_rejected_lines = live_rejected
+    metrics.gateway_reload_rejected = len(rj_rows)
     metrics.last_reconcile_ts = now
+    if live_rejected:
+        # Count only — never the line itself (ADR-028 D3; the content is the
+        # sensitive part).
+        #
+        # ⚠️ An earlier revision of this fix deliberately shipped NO metric
+        # here, reasoning that "a rejected line means the id it would have
+        # carried is absent from the live set, so TamperSuspected already
+        # fires". That reasoning only covers the id ON the bad line. It says
+        # nothing about the OTHER ids, and the gateway's disposition is to
+        # discard the WHOLE reload — so every revocation issued after the
+        # bad line appeared is unenforced while the audit log and the file
+        # agree about it perfectly, and tamper_suspected stays 0. That is
+        # why the gauges above exist. Do not remove them on the strength of
+        # the argument they were added to refute.
+        print(f"revoked.txt: {live_rejected} line(s) rejected by the token-id contract "
+              f"(they are NOT in the live set; see the federation reconciler runbook)",
+              file=sys.stderr, flush=True)
     if result.suspected:
         # Loud, opaque (token_id only): the tenant is resolved from the store at
         # IR time, never logged here (D3).

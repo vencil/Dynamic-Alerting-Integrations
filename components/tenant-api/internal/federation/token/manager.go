@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"regexp"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -95,6 +96,53 @@ const clockSkewLeeway = time.Minute
 // (sub-issue IV-2f) records a token_id_prefix, so a recognisable
 // prefix keeps those lines greppable.
 const tokenIDPrefix = "ftk_"
+
+// tokenIDPattern is the wire contract for a token id as it appears on a
+// line of the derived revoked.txt (#1235 / TRK-349).
+//
+// revoked.txt is read by two independently-implemented consumers — the
+// gateway Lua filter and the ADR-028 reconciler — which previously used
+// different line/whitespace semantics and could therefore derive different
+// token sets from the same file. All three sides now hold the same
+// pattern; this constant is the writer's copy, and it is what keeps a
+// non-conforming id from being written in the first place.
+//
+// Length is deliberately NOT pinned even though newTokenID emits exactly
+// 16 hex characters: pinning it would reject every short fixture id in the
+// test suite and buys no security, because the property that matters is
+// "the byte set is unambiguous to both readers", not "the id is 16 long".
+//
+// Peers that must stay equivalent:
+//   - helm/federation-gateway/values.yaml   `revokedSet.tokenIdPattern`
+//   - scripts/tools/ops/_federation_revocation_reconciler.py
+//     `TOKEN_ID_PATTERN`
+//
+// Four guards, none of which substitutes for another:
+//   - tests/ops/test_revoked_set_contract.py asserts the three LITERALS
+//     agree — that catches a hand-copied pattern drifting, nothing else.
+//   - federation-e2e S11 (positive equivalence) catches PATTERN-DIALECT
+//     drift: one literal meaning different things to three engines.
+//   - federation-e2e S10 (negative) catches READER-SEMANTICS drift — two
+//     readers disagreeing about what a line IS. ⚠️ S11 has NO resistance
+//     to that class: both the old and the current reader pass S11.
+//   - the conformance matrix in tests/ops/test_revoked_set_contract.py
+//     covers the byte space, mechanically enumerated.
+const tokenIDPattern = "^" + tokenIDPrefix + "[0-9a-f]+$"
+
+var tokenIDRe = regexp.MustCompile(tokenIDPattern)
+
+// ErrInvalidTokenID reports a token id that violates tokenIDPattern.
+var ErrInvalidTokenID = errors.New("federation: token_id violates the revoked-set line contract")
+
+// validTokenID reports whether id may be written into the revoked set.
+//
+// Dialect note: in Go's regexp `$` means end-of-TEXT (\z semantics) unless
+// the `m` flag is set, matching Lua's `$` — so the anchored pattern really
+// does mean "the whole string". Python's bare `$` does not, which is why
+// the reconciler uses fullmatch rather than match.
+func validTokenID(id string) bool {
+	return tokenIDRe.MatchString(id)
+}
 
 // minRSAKeyBits is the smallest RSA modulus accepted for the signing
 // key. Below 2048 bits a forged signature becomes computationally
@@ -165,6 +213,15 @@ func (r Record) expired(now time.Time) bool { return now.After(r.ExpiresAt) }
 // only). Every method may touch a network-backed store, so all may
 // fail. The interface methods are unexported — it is implemented only
 // within this package.
+// ⛔ PRECONDITION ON revoke (#1235 / TRK-349), declared HERE on purpose.
+// `revoke` accepts only a tokenID satisfying validTokenID; anything else
+// MUST be refused with ErrInvalidTokenID and MUST NOT reach the store.
+// Until this was written down, the production implementation enforced a
+// precondition the interface never stated — which makes an implementation
+// that does not enforce it look compliant, and is how two implementations
+// of one interface drift apart. Both implementations are covered by the
+// same table-driven conformance test (revoked_contract_test.go); a third
+// must be added to it, not merely written.
 type RecordStore interface {
 	put(r Record) error
 	get(tokenID string) (Record, bool, error)

@@ -1055,7 +1055,7 @@ data:
           # Metrics from the federation-reconciler Deployment's /metrics
           # (helm/federation-reconciler). Behavioural contract:
           # tests/rulepacks/platform-federation-revocation_test.yaml (an extracted
-          # copy of these four alerts — KEEP IN SYNC).
+          # copy of these six alerts — KEEP IN SYNC).
           - alert: FederationRevocationTamperSuspected
             expr: federation_revocation_tamper_suspected > 0
             for: 5m
@@ -1171,6 +1171,98 @@ data:
                 defence). Details:
                 docs/adr/028-federation-revocation-tamper-evidence.md.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
+
+          # --- Enforcement-plane staleness (ADR-028 D1 / #1235 / TRK-349) ---
+          # ⛔ These two are NOT the fail-open alert above, and must never be read
+          # as it. FederationGatewayRevocationLoadFailure means "the list could not
+          # be read, so revoked tokens ARE being let through". These two mean the
+          # opposite thing about traffic and a worse thing about coverage: the list
+          # WAS read and was REFUSED, so the gateway is still enforcing the set it
+          # had loaded before — nothing extra is being let through from THAT set,
+          # but every revocation issued since the offending line appeared is
+          # silently unenforced, and a worker whose FIRST load hit that line has no
+          # previous set and enforces nothing at all.
+          #
+          # ⛔ Neither shows up in FederationRevocationTamperSuspected. That
+          # compares the audit log against the FILE, and the file does contain the
+          # newer revocations — what is stale is the set the GATEWAY loaded. A
+          # MISSING revoked.txt has always been loud for exactly this reason (the
+          # detection end reads an empty set, so everything is absent); a REFUSED
+          # one was not. These two alerts are that asymmetry being closed.
+          #
+          # Two alerts, not one, because the gauges observe DIFFERENT planes and
+          # each is blind where the other sees: LiveSetRejected is the file as the
+          # reconciler reads it (sees the cause, but through its own kubelet
+          # projection at its own moment), ReloadRejected is the gateway's own
+          # account of what it did (immune to that skew, silent for any cause that
+          # never produced the warning). Either can be non-zero alone.
+          #
+          # `for: 10m` on both: the reconciler's interval is 300s, so 10m is one
+          # full reconcile pass plus an equal margin — enough to absorb a single
+          # anomalous pass (a read that caught a ConfigMap projection swap
+          # mid-flight) without delaying anything real. A long window costs nothing
+          # here because the condition is PERSISTENT: only an out-of-band write can
+          # create it and only a human can clear it, so it is still true 10 minutes
+          # later. Contrast FederationGatewayRevocationLoadFailure's `for: 2m`,
+          # which debounces a genuinely transient I/O condition.
+          - alert: FederationRevocationLiveSetRejected
+            expr: federation_revocation_live_set_rejected_lines > 0
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Federation revoked set violates its line contract — the gateway is refusing to load it, so revocations made since are NOT enforced (ADR-028 / #1235)"
+              description: |
+                The reconciler read {{ $value }} line(s) in the mounted revoked.txt
+                that violate the token-id line contract. The gateway applies the
+                SAME contract and discards the WHOLE reload on a violation, keeping
+                the set it had already loaded — so the enforcement plane is frozen
+                on a pre-violation revoked set: every revocation issued after that
+                line appeared is NOT in force, and a gateway worker whose first
+                load hit it has no previous set and is enforcing nothing.
+                This is NOT the fail-open case
+                (FederationGatewayRevocationLoadFailure): the list is readable, it
+                is being refused. FederationRevocationTamperSuspected will NOT
+                cover it either — that compares the audit log against the FILE, and
+                the file does contain the newer revocations. ACTION: ⛔ do NOT
+                auto-remove the offending entry — removing it is what completes the
+                un-revoke this control exists to detect (revoked.txt is regenerated
+                verbatim from the store on every write). Find WHO wrote it: the
+                legitimate path (tenant-api revoke()) validates the id, so the
+                source is a direct ConfigMap edit / automation, an entry predating
+                that guard, or a write-capable attacker — cross-check the #926
+                audit for writes to tenant-federation-store. Details:
+                docs/internal/federation-revocation-reconciler-runbook.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/federation-revocation-reconciler-runbook.md"
+
+          - alert: FederationGatewayRevokedSetReloadRejected
+            expr: federation_gateway_revoked_set_reload_rejected > 0
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Federation gateway REFUSED its revoked-set reload — it is enforcing a stale set, so revocations made since are NOT in force (ADR-028 / #1235)"
+              description: |
+                The gateway logged {{ $value }} reload-refusal warning(s) in the
+                recent window: it read revoked.txt, met a line violating the
+                token-id contract, discarded the whole reload and kept its
+                previously loaded set. This is the ENFORCEMENT PLANE'S OWN ACCOUNT,
+                read back off its log stream — not the reconciler's second reading
+                of the file. That distinction is the point: the two ends read
+                different kubelet projections of the same ConfigMap at different
+                moments, so "the file looks clean from here" does not mean "the
+                gateway loaded it". Posture: nothing extra is being let through
+                from the set still in force, but every revocation issued since is
+                unenforced. ⛔ COLD START: compare the gateway pods' start times
+                against the first of these warnings — a pod whose FIRST load hit
+                the violation has no previous set and is enforcing NOTHING, which
+                is the fail-open posture, not the frozen one. ACTION: fix the
+                offending revoked.txt line at its source, never by deleting the
+                entry (that completes the un-revoke); runbook IR steps 1-4 apply.
+                Read together with FederationRevocationLiveSetRejected — this one
+                is the gateway's account, that one is the file's. Details:
+                docs/internal/federation-revocation-reconciler-runbook.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/federation-revocation-reconciler-runbook.md"
 
           # --- Tenant-exporter liveness: catastrophic fallback (#869) ---
           # Per-tenant TenantExporterAbsent (rule-pack-liveness.yaml) anti-joins

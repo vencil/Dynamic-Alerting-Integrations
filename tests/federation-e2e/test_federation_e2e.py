@@ -9,10 +9,29 @@ per-tenant rate limit; the rate-limit / payload / revocation scenarios
 use their own throwaway tenants so they cannot deplete each other's
 bucket.
 """
+import re
+import time
+
 from helpers import (RENDERED, assert_eventually, expect_positive,
                      expect_status, fresh_rsa_pem, gateway_request,
-                     mtail_counter, query, result_series, sign_token,
-                     tenants_in)
+                     mtail_counter, query, reconciler_read,
+                     result_series, sign_token, tenants_in, write_revoked)
+
+
+def _reload_interval():
+    """The reload gate the harness actually rendered into the filter.
+
+    Derived, never hard-coded. S10 has to outwait a reload to mean anything,
+    and if the runner's `--set revokedSet.reloadIntervalSeconds` ever moves
+    past a hard-coded sleep the scenario stops observing a reload at all —
+    and passes, because "still 403" is also what the un-reloaded previous
+    set looks like. A vacuous green is the one failure mode this scenario
+    cannot afford.
+    """
+    lua = (RENDERED / "revoked_check.lua").read_text(encoding="utf-8")
+    m = re.search(r"^local RELOAD_INTERVAL = (\d+)", lua, re.M)
+    assert m, "could not read RELOAD_INTERVAL out of the rendered filter"
+    return int(m.group(1))
 
 
 def test_s1_happy_path(gateway_url, signer):
@@ -250,3 +269,133 @@ def test_s9_metadata_api_surface(gateway_url, signer):
         assert resp.status_code != 200, \
             f"{path} reachable (HTTP {resp.status_code}) — topology/admin leak"
         assert resp.status_code in (403, 404), (path, resp.status_code)
+
+
+def test_s10_contract_violating_revoked_set_is_refused(gateway_url, signer):
+    """S10 — revoked.txt line contract, negative half (#1235 / TRK-349).
+
+    revoked.txt has two independently-implemented readers: the gateway Lua
+    filter (enforcement) and the ADR-028 reconciler (detection). They must
+    accept exactly the same lines as token ids, or the same file can mean
+    different things to each end and ADR-028's detection argument collapses.
+    This scenario feeds the SAME bytes to both — the real LuaJIT filter
+    running in Envoy, and the real reconciler parser.
+
+    ⛔ Their DISPOSITIONS differ on purpose, and that is asserted here too:
+      * the gateway refuses the whole file and keeps the set it had already
+        loaded, so a token revoked before the swap stays rejected — that is
+        what makes the attempt ineffective;
+      * the reconciler leaves that id ABSENT from the live set, because the
+        absence is what raises TamperSuspected.
+    Making the two behave alike would delete the detection silently.
+    """
+    kept_id, kept_tok = signer("s10-contract")     # revoked BEFORE the tamper
+    ghost_id, ghost_tok = signer("s10-contract")   # only ever in a bad line
+    revoked_file = RENDERED / "revoked.txt"
+    interval = _reload_interval()
+    settle = interval * 2 + 1.5
+
+    # A contract-violating line, with the violating byte in each position it
+    # can occupy relative to an id. The POSITION is the variable that matters
+    # and it is enumerated rather than sampled: a reader that ends a line
+    # early, one that starts it late, and one that runs two lines together
+    # fail differently, and only the position separates them. Each case is
+    # built so that a reader which salvaged anything — by truncating, by
+    # skipping the byte, or by merging the two lines — would resolve
+    # `ghost_id`. Nothing may.
+    def _cases(b):
+        return [
+            ("leading", b + ghost_id + "\n"),
+            ("trailing", ghost_id + b + "\n"),
+            ("interior", ghost_id[:6] + b + ghost_id[6:] + "\n"),
+            ("split", ghost_id[:6] + b + "\n" + ghost_id[6:] + "\n"),
+        ]
+
+    # Sampled from the low range by a fixed stride, NOT hand-picked. Every
+    # value below the id charset violates the contract, so which ones get
+    # exercised is arbitrary — and choosing them arbitrarily is the point:
+    # a hand-picked byte would be a statement about which one matters, and
+    # the whole lesson of #1235 is that the defect is a class, not a value.
+    # Breadth over the byte space lives in tests/ops/test_revoked_set_contract.py,
+    # which enumerates all of it against the detection end; what only this
+    # scenario can show is the ENFORCEMENT end's behaviour, in the real
+    # filter, inside real Envoy.
+    violating = {f"0x{b:02x}": chr(b) for b in range(0, 0x21, 0x10)}
+
+    expect_status(query(gateway_url, kept_tok, "process_open_fds"), 200)
+    try:
+        # Phase 1 — a clean set that revokes kept_id and nothing else.
+        write_revoked(revoked_file, kept_id + "\n")
+        assert_eventually(
+            lambda: expect_status(
+                query(gateway_url, kept_tok, "process_open_fds"), 403),
+            timeout=8.0, interval=1.0, desc="clean revoked set takes effect")
+
+        for kind, b in violating.items():
+            for position, content in _cases(b):
+                where = f"{kind} / {position}"
+                write_revoked(revoked_file, content)
+                time.sleep(settle)
+
+                # Enforcement half. The file is refused wholesale, so the set
+                # loaded before the tamper is still in force …
+                assert query(gateway_url, kept_tok, "process_open_fds"
+                             ).status_code == 403, f"{where}: previously revoked token was released"
+                # … and nothing was salvaged out of the bad line, so a token
+                # that exists only inside it never becomes enforced.
+                assert query(gateway_url, ghost_tok, "process_open_fds"
+                             ).status_code == 200, f"{where}: an id was reconstructed out of a refused line"
+
+                # Detection half, on the same bytes, through the reconciler's
+                # own production entry point.
+                tokens, rejected = reconciler_read(revoked_file)
+                assert rejected >= 1, (where, rejected)
+                assert ghost_id not in tokens, (where, tokens)
+                assert kept_id not in tokens, (where, tokens)
+
+        # Control — the 403s above are the KEPT set, not a wedged reload loop:
+        # a later clean file that drops kept_id still takes effect.
+        write_revoked(revoked_file, ghost_id + "\n")
+        assert_eventually(
+            lambda: expect_status(
+                query(gateway_url, kept_tok, "process_open_fds"), 200),
+            timeout=8.0, interval=1.0,
+            desc="a later clean reload still applies")
+    finally:
+        write_revoked(revoked_file, "")
+
+
+def test_s11_legal_revoked_set_parses_identically_on_both_ends(gateway_url,
+                                                               signer):
+    """S11 — revoked.txt line contract, positive half (#1235 / TRK-349).
+
+    For a file that SATISFIES the contract, the enforcement end and the
+    detection end must agree exactly on which tokens are revoked — including
+    across the one deviation the contract tolerates, a CRLF-written line. This
+    is the equivalence case the literal three-way pattern check in
+    tests/ops/test_revoked_set_contract.py cannot give: it runs both real
+    readers, in their own languages, over one file.
+    """
+    id_x, tok_x = signer("s11-equiv")
+    id_y, tok_y = signer("s11-equiv")
+    id_z, tok_z = signer("s11-equiv")   # never revoked — the negative control
+    revoked_file = RENDERED / "revoked.txt"
+
+    # One entry LF-terminated, one CRLF-terminated: one file, both endings.
+    legal = id_x + "\n" + id_y + "\r\n"
+    try:
+        write_revoked(revoked_file, legal)
+        assert_eventually(
+            lambda: expect_status(
+                query(gateway_url, tok_x, "process_open_fds"), 403),
+            timeout=8.0, interval=1.0, desc="LF entry revoked at the gateway")
+        expect_status(query(gateway_url, tok_y, "process_open_fds"), 403)
+        expect_status(query(gateway_url, tok_z, "process_open_fds"), 200)
+
+        # Same file, detection end — the identical set, no rejections.
+        tokens, rejected = reconciler_read(revoked_file)
+        assert rejected == 0, rejected
+        assert tokens == {id_x, id_y}, tokens
+        assert id_z not in tokens
+    finally:
+        write_revoked(revoked_file, "")
