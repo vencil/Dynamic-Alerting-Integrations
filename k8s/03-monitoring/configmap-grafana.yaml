@@ -126,7 +126,7 @@ data:
       "annotations": {
         "list": []
       },
-      "description": "ADR-028 D1 (#924 / #1002 / #1234) federation revocation reconciler — the operational field view for the un-revoke tamper-evidence control. Source metrics are emitted by the federation-reconciler Deployment's /metrics (job=federation-reconciler, port 9099; helm/federation-reconciler runs _federation_revocation_reconciler.py). All eight metrics are platform-global with ZERO labels, so there is no per-tenant template variable. Panel thresholds are aligned 1:1 to the four platform alerts (FederationRevocationTamperSuspected > 0, FederationRevocationReconcileStale time()-ts > 1800s, FederationRevocationEvidenceChannelDown channel_up == 0, FederationGatewayRevocationLoadFailure > 0) so the dashboard and the pager agree on what is bad. Rows map to the runbook's five chaos-validation scenarios: fail-closed / liveness, schema-drift, fail-open (拍頻), the tamper headline, and the evidence-channel canary. Behavioural contract: tests/dx/test_federation_revocation_dashboard.py.",
+      "description": "ADR-028 D1 (#924 / #1002 / #1234 / #1235) federation revocation reconciler — the operational field view for the un-revoke tamper-evidence control. Source metrics are emitted by the federation-reconciler Deployment's /metrics (job=federation-reconciler, port 9099; helm/federation-reconciler runs _federation_revocation_reconciler.py). All ten metrics are platform-global with ZERO labels, so there is no per-tenant template variable. Panel thresholds are aligned 1:1 to the six platform alerts (FederationRevocationTamperSuspected > 0, FederationRevocationReconcileStale time()-ts > 1800s, FederationRevocationEvidenceChannelDown channel_up == 0, FederationGatewayRevocationLoadFailure > 0, FederationRevocationLiveSetRejected > 0, FederationGatewayRevokedSetReloadRejected > 0) so the dashboard and the pager agree on what is bad. Rows map to the runbook's five chaos-validation scenarios: fail-closed / liveness, schema-drift, fail-open (拍頻), the tamper headline, and the evidence-channel canary; the enforcement-plane staleness pair (#1235) is a second summary row with no chaos scenario of its own yet. Behavioural contract: tests/dx/test_federation_revocation_dashboard.py.",
       "editable": true,
       "fiscalYearStartMonth": 0,
       "graphTooltip": 1,
@@ -489,6 +489,142 @@ data:
           }
         },
         {
+          "title": "Revoked-set contract — file",
+          "description": "ENFORCEMENT-PLANE STALENESS, cause side (ADR-028 D1 / #1235). Lines in the mounted revoked.txt that violate the token-id line contract, as THIS reconciler reads the file. The gateway applies the same contract and discards the WHOLE reload on a violation, keeping the set it had already loaded — so >0 means the enforcement plane is frozen on a pre-violation revoked set: every revocation issued since that line appeared is NOT in force, and a gateway worker whose FIRST load hit it has no previous set and is enforcing nothing. ⛔ This is NOT 'Gateway fail-open': there the list is unreadable and revoked tokens ARE being let through; here the list is readable and is being refused. ⛔ Tamper status will NOT show this — it compares the audit log against the FILE, which does contain the newer revocations. Threshold aligned to the FederationRevocationLiveSetRejected alert (>0, for 10m, critical). a11y (ADR-012 / WCAG 1.4.1): state is symbol + text, never colour alone.",
+          "type": "stat",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 12,
+            "x": 0,
+            "y": 4
+          },
+          "targets": [
+            {
+              "expr": "federation_revocation_live_set_rejected_lines",
+              "legendFormat": ""
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              },
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "✓ Conforming",
+                      "index": 0
+                    }
+                  }
+                },
+                {
+                  "type": "range",
+                  "options": {
+                    "from": 1,
+                    "to": null,
+                    "result": {
+                      "text": "🔴 Set not loading",
+                      "index": 1
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value_and_name"
+          }
+        },
+        {
+          "title": "Revoked-set reload — gateway",
+          "description": "ENFORCEMENT-PLANE STALENESS, the gateway's own account (ADR-028 D1 / #1235). Reload-refusal warnings read back off the gateway's own log stream in the recent (~10m) window — what the ENFORCEMENT plane says it did, not this process's second reading of the file. Deliberately NOT redundant with the panel to its left: the two ends read different kubelet projections of the same ConfigMap at different moments, so the file can read clean here while the gateway is still refusing; conversely this one stays silent for any cause that never produced the warning. Either can be non-zero alone — read them together. ⛔ COLD START: check the gateway pods' start times against the first of these warnings; a pod whose FIRST load hit the violation has no previous set and is enforcing NOTHING, which is the fail-open posture rather than the frozen one. Threshold aligned to the FederationGatewayRevokedSetReloadRejected alert (>0, for 10m, critical). a11y: symbol + text.",
+          "type": "stat",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 12,
+            "x": 12,
+            "y": 4
+          },
+          "targets": [
+            {
+              "expr": "federation_gateway_revoked_set_reload_rejected",
+              "legendFormat": ""
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              },
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "✓ Loading",
+                      "index": 0
+                    }
+                  }
+                },
+                {
+                  "type": "range",
+                  "options": {
+                    "from": 1,
+                    "to": null,
+                    "result": {
+                      "text": "🔴 Reload refused",
+                      "index": 1
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value_and_name"
+          }
+        },
+        {
           "title": "Reconciler staleness (fail-closed / liveness)",
           "description": "CHAOS SCENARIO: fail-closed. Seconds since last successful reconcile over time; the 1800s line is the FederationRevocationReconcileStale threshold. Healthy: time()-ts oscillates near 0 (sawtooth on the reconcile interval, 300s). Bad: climbs past 1800 and keeps rising = VictoriaLogs / revoked.txt read is failing and the pass no longer refreshes the timestamp (fail-closed, never a false all-clear). To validate: pause the VictoriaLogs Service and watch this cross 1800.",
           "type": "timeseries",
@@ -500,7 +636,7 @@ data:
             "h": 8,
             "w": 8,
             "x": 0,
-            "y": 4
+            "y": 8
           },
           "targets": [
             {
@@ -560,7 +696,7 @@ data:
             "h": 8,
             "w": 8,
             "x": 8,
-            "y": 4
+            "y": 8
           },
           "targets": [
             {
@@ -617,7 +753,7 @@ data:
             "h": 8,
             "w": 8,
             "x": 16,
-            "y": 4
+            "y": 8
           },
           "targets": [
             {
@@ -662,7 +798,7 @@ data:
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 12
+            "y": 16
           },
           "targets": [
             {
@@ -722,7 +858,7 @@ data:
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 12
+            "y": 16
           },
           "targets": [
             {
@@ -793,7 +929,7 @@ data:
             "h": 8,
             "w": 24,
             "x": 0,
-            "y": 20
+            "y": 24
           },
           "targets": [
             {
@@ -853,7 +989,7 @@ data:
             "h": 9,
             "w": 24,
             "x": 0,
-            "y": 28
+            "y": 32
           },
           "targets": [
             {
@@ -913,7 +1049,7 @@ data:
             "h": 8,
             "w": 24,
             "x": 0,
-            "y": 37
+            "y": 41
           },
           "targets": [
             {

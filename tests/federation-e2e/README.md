@@ -34,6 +34,13 @@ kubelet projected-volume swap itself is not covered — if that ever
 needs coverage it is a targeted chart-level follow-up, not a reason to
 kind-ify this harness.
 
+The gateway also runs with `--concurrency 1` (see `docker-compose.yml`),
+where production renders `.Values.concurrency` (2). The revoked-set cache
+is per Envoy worker, so a single worker is what makes the S10 "kept the
+previous set" assertion observable rather than racy; **per-worker cache
+divergence itself is therefore not covered here** — it is the same
+orchestration-layer boundary as the projected-volume swap above.
+
 `tenant-api` is **not** in the stack. Its federation token store is
 K8s-ConfigMap-coupled (ADR-020 Posture B), so running it here would
 re-introduce the K8s coupling this harness avoids. The driver instead
@@ -68,6 +75,36 @@ drives the stack through the gateway's published port.
 | S7 | Storage cap | a deliberately heavy query trips `--query.max-samples` → 422, audit log records it |
 | S8 | remote_read blocked | `/api/v1/read` and a trailing-slash variant → 403 |
 | S9 | Metadata API surface audit | every metadata endpoint tenant-scoped (db-a token, zero db-b topology); un-scopable endpoints (`/targets`, `/status/*`, `/admin/*`, `/metadata`) unreachable — never 200 (IV-2g #512) |
+| S10 | Revoked-set line contract, negative | a structural matrix (byte classes × the positions a byte can occupy relative to an id, including the two-line form) → for every cell the gateway refuses the WHOLE file and keeps its previously loaded set (a token revoked before the swap stays 403) **and** no id is reconstructed out of the refused line (a token that exists only inside it stays 200), while the reconciler's parser leaves that id absent from the live set — the deliberate enforcement/detection asymmetry (#1235). Ends with a control: a later clean file still applies, so the 403s were the KEPT set and not a wedged reload loop |
+| S11 | Revoked-set line contract, positive | a conforming `revoked.txt` (LF and CRLF entries in one file) → the gateway and the reconciler resolve exactly the same token set; a third, never-revoked token stays 200 |
+
+### Cross-language revoked-set contract (S10 / S11, #1235 · TRK-349)
+
+`revoked.txt` has two **independently implemented** readers — the gateway
+Lua filter (enforcement) and the ADR-028 reconciler (detection). They must
+accept exactly the same lines as token ids; otherwise the same file can
+resolve to different token sets on the two ends and ADR-028's detection
+argument no longer holds.
+
+⛔ **Four guards, and no part of this substitutes for another:**
+
+| Guard | Drift class it catches |
+|---|---|
+| `tests/ops/test_revoked_set_contract.py` three-literal equality | a hand-copied pattern drifting between tenant-api, the chart value and the reconciler. Nothing else — literal equality is **not** semantic equality |
+| **S11** (positive equivalence) | **pattern-dialect** drift: one literal meaning different things to the three engines. ⚠️ It has **NO** resistance to reader-semantics drift — both the old and the current reader pass S11 |
+| **S10** (negative) | **reader-semantics** drift: the two readers disagreeing about what a line IS, one layer below the pattern check. This is the scenario that covers the class #1235 actually was |
+| the conformance matrix in `tests/ops/test_revoked_set_contract.py` | the **byte space**, mechanically enumerated through the production entry point against an independent oracle written over bytes |
+
+S10/S11 are the only guards that run the real LuaJIT filter inside real
+Envoy, so they are where the ENFORCEMENT end's behaviour is observable at
+all; breadth over the byte space lives in the conformance matrix, which
+only exercises the detection end.
+
+⛔ The two ends deliberately dispose of a rejected file **differently** —
+the gateway keeps its previous set (enforcement safety), the reconciler
+lets the id be absent (that absence is the detection signal). S10 asserts
+both halves so a future "let's make these consistent" refactor cannot
+delete the detection quietly.
 
 ## Metadata API surface audit (IV-2g)
 

@@ -549,18 +549,18 @@ func TestStore_RevokeRemovesRecord(t *testing.T) {
 		t.Fatalf("newStore: %v", err)
 	}
 	now := time.Now()
-	rec := Record{TokenID: "ftk_rev", TenantID: "t", IssuedAt: now, ExpiresAt: now.Add(time.Hour)}
+	rec := Record{TokenID: "ftk_7e0", TenantID: "t", IssuedAt: now, ExpiresAt: now.Add(time.Hour)}
 	if err := st.put(rec); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	deleted, err := st.revoke("ftk_rev", rec.ExpiresAt)
+	deleted, err := st.revoke("ftk_7e0", rec.ExpiresAt)
 	if err != nil || !deleted {
 		t.Fatalf("revoke = (%v, %v), want (true, nil)", deleted, err)
 	}
-	if _, ok, _ := st.get("ftk_rev"); ok {
+	if _, ok, _ := st.get("ftk_7e0"); ok {
 		t.Error("record should be gone after revoke")
 	}
-	if deleted, _ := st.revoke("ftk_rev", rec.ExpiresAt); deleted {
+	if deleted, _ := st.revoke("ftk_7e0", rec.ExpiresAt); deleted {
 		t.Error("second revoke of the same token reported a deletion")
 	}
 }

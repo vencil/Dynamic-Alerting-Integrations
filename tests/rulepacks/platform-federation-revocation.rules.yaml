@@ -1,7 +1,7 @@
 # Bare-rules promtool target for the federation-revocation reconciler alerts
 # (ADR-028 D1 / #924). promtool needs a top-level `groups:` document, not the
 # deployed `data: platform-alert.yml: |` ConfigMap, so this is an EXTRACTED COPY
-# of the four alerts from k8s/03-monitoring/configmap-rules-platform.yaml.
+# of the six alerts from k8s/03-monitoring/configmap-rules-platform.yaml.
 #
 # ⚠️ KEEP IN SYNC with that ConfigMap (expr + for + labels + summary). The
 # behavioural contract is exercised by platform-federation-revocation_test.yaml.
@@ -65,3 +65,33 @@ groups:
           severity: warning
         annotations:
           summary: "Federation gateway cannot read the revoked-set — fail-open is allowing revoked tokens (ADR-028 §fail-open)"
+
+      # ⛔ The next two are the OPPOSITE posture from the one above (#1235): the
+      # list was read and REFUSED, so the gateway keeps the set it already had —
+      # nothing extra is let through from that set, but every revocation issued
+      # since the offending line appeared is unenforced, and a worker whose FIRST
+      # load hit it has no previous set and enforces nothing. Neither surfaces in
+      # TamperSuspected, which compares the audit log against the FILE (the file
+      # DOES contain the newer revocations); a missing file was always loud, a
+      # refused one was not. Two alerts because the gauges observe different
+      # planes: the file as the reconciler reads it vs the gateway's own account
+      # of what it loaded — either can be non-zero alone.
+      # `for: 10m` on both = one reconcile interval (300s) plus an equal margin,
+      # which absorbs a read that caught a projection swap mid-flight. Long costs
+      # nothing: the condition is persistent (only an out-of-band write creates
+      # it, only a human clears it), unlike the transient I/O the 2m above rides.
+      - alert: FederationRevocationLiveSetRejected
+        expr: federation_revocation_live_set_rejected_lines > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Federation revoked set violates its line contract — the gateway is refusing to load it, so revocations made since are NOT enforced (ADR-028 / #1235)"
+
+      - alert: FederationGatewayRevokedSetReloadRejected
+        expr: federation_gateway_revoked_set_reload_rejected > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Federation gateway REFUSED its revoked-set reload — it is enforcing a stale set, so revocations made since are NOT in force (ADR-028 / #1235)"

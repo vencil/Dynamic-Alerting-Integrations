@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -76,6 +77,29 @@ type configMapStore struct {
 	// buffer-backed logger to assert the revocation event without swapping the
 	// global default (test-seam discipline, CLAUDE.md §測試注入 Seam).
 	logger *slog.Logger
+	// lastContractViolations makes the contract-violation warning
+	// EDGE-triggered instead of level-triggered (#1235 / TRK-349).
+	//
+	// The condition it reports is persistent: a violating entry can only be
+	// created by a write that did not come through revoke(), and can only be
+	// cleared by a human editing the document. Logging it on every load
+	// therefore repeats one unchanging value at the rate of API traffic —
+	// and the worst of that is not the UI listing but mutate(), which calls
+	// load() inside RetryOnConflict, so a single contended write can emit the
+	// same warning several times. Contention peaks exactly when something
+	// else is writing this ConfigMap, i.e. when the signal matters most.
+	//
+	// Edge-triggering keeps every transition — appearance, growth, and the
+	// human all-clear — while dropping only the repetitions that carry no
+	// information. Deliberately NOT rate-limiting: rate-limiting is for
+	// high-frequency CHANGING events; here the value is constant, so a rate
+	// limit would just repeat the same number on a different clock.
+	//
+	// The zero value is the correct start state: a fresh process that finds
+	// violations reports them (0 -> n is an edge), and one that finds none
+	// stays quiet. Per-process, so each replica reports its own first
+	// observation — which is right, that IS a new observation.
+	lastContractViolations atomic.Int64
 }
 
 // NewConfigMapStore returns a RecordStore backed by the named ConfigMap
@@ -114,7 +138,53 @@ func (s *configMapStore) load(ctx context.Context) (*corev1.ConfigMap, *storeDoc
 	if err != nil {
 		return nil, nil, err
 	}
+	// Surfaced, never acted on — see countInvalidRevokedIDs. Count only: the
+	// entry itself is never logged (ADR-028 D3; the content is the sensitive
+	// part). Edge-triggered — see lastContractViolations for why, including
+	// why a rate limit would be the wrong instrument here.
+	n := int64(countInvalidRevokedIDs(doc))
+	if prev := s.lastContractViolations.Swap(n); prev != n {
+		switch {
+		case n > 0:
+			s.log().Warn("federation: store holds revoked entries that violate the token-id contract",
+				"event", "federation_revoked_entry_contract_violation",
+				"count", n, "previous_count", prev)
+		default:
+			// The all-clear. Only an edge-triggered signal can report this;
+			// a level-triggered one just stops, which is indistinguishable
+			// from the process having died.
+			s.log().Warn("federation: store no longer holds revoked entries that violate the token-id contract",
+				"event", "federation_revoked_entry_contract_violation_cleared",
+				"count", 0, "previous_count", prev)
+		}
+	}
 	return cm, doc, nil
+}
+
+// countInvalidRevokedIDs reports how many entries in the loaded document
+// carry a token_id that violates tokenIDPattern (#1235 / TRK-349).
+//
+// ⛔⛔ IT COUNTS. IT DOES NOT FILTER — and no caller may make it filter.
+// revokedText() regenerates revoked.txt verbatim from doc.Revoked on EVERY
+// write, so dropping a non-conforming entry here would remove that token
+// from the revoked set the moment anything else touched the store: the
+// load path would finish, on the attacker's behalf, exactly the un-revoke
+// that ADR-028 exists to detect. A bad entry that stays in the document
+// keeps being written out, keeps being visible to the reconciler, and is
+// refused by the gateway's whole-file check — all three of which are
+// safe. Removing it is the only unsafe option.
+//
+// The write-side guard (revoke) is what stops such an entry appearing in
+// the first place; this is the read-side detector for one that predates
+// the guard or was planted directly into the ConfigMap.
+func countInvalidRevokedIDs(doc *storeDoc) int {
+	n := 0
+	for _, e := range doc.Revoked {
+		if !validTokenID(e.TokenID) {
+			n++
+		}
+	}
+	return n
 }
 
 // parseStoreDoc decodes the store.json value. An empty value (a
@@ -270,6 +340,16 @@ func (s *configMapStore) listAll(now time.Time) ([]Record, error) {
 // inside the RetryOnConflict closure, which may run several times — and only
 // when the token was not already revoked (an idempotent re-revoke emits nothing).
 func (s *configMapStore) revoke(tokenID string, expiresAt time.Time) (bool, error) {
+	// Write-side charset guard (#1235 / TRK-349). revoked.txt is consumed
+	// by two independent readers whose agreement depends on every line
+	// being unambiguous, so a non-conforming id must never enter the store
+	// through the legitimate path. This is a hard error, not a
+	// normalisation: silently rewriting the id is what produced two
+	// disagreeing views in the first place.
+	// The offending id is NOT echoed into the error (it can reach a log).
+	if !validTokenID(tokenID) {
+		return false, ErrInvalidTokenID
+	}
 	found := false
 	newlyRevoked := false
 	err := s.mutate(func(doc *storeDoc) error {
@@ -344,6 +424,12 @@ func pruneDoc(doc *storeDoc, now time.Time) {
 // a plain id list any consumer can parse — not tailored to one gateway
 // (e.g. Nginx `map` `<id> 1;` syntax). The gateway-specific encoding is
 // settled when the gateway is built (sub-issue IV-2b), not guessed here.
+//
+// VERBATIM regeneration is load-bearing (#1235): every non-expired entry in
+// the document is written out unchanged on every write. That is why the
+// load path counts contract-violating entries instead of removing them —
+// removing one here would silently delete it from the revoked set. See
+// countInvalidRevokedIDs.
 func revokedText(revoked []revokedEntry, now time.Time) string {
 	var b strings.Builder
 	for _, e := range revoked {

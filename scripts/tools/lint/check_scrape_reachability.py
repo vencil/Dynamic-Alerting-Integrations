@@ -141,6 +141,13 @@ KNOWN_UNKNOWN_SOURCE: dict[str, str] = {
         "federation-reconciler helm chart — install ns = Release.Namespace, not pinned (#1203)",
     "federation_revocation_tamper_suspected":
         "federation-reconciler helm chart — install ns = Release.Namespace, not pinned (#1203)",
+    "federation_revocation_live_set_rejected_lines":
+        "federation-reconciler helm chart — install ns = Release.Namespace, not pinned (#1203)",
+    # NOTE the federation_gateway_ prefix, but the RECONCILER emits it: it is the
+    # gateway's reload-refusal warning counted off the gateway's log stream, so the
+    # scrape target is the reconciler Deployment, not the gateway (#1235).
+    "federation_gateway_revoked_set_reload_rejected":
+        "federation-reconciler helm chart — install ns = Release.Namespace, not pinned (#1203)",
     "tenant_log_query_requests_total":
         "tenant-log-query plane, helm-only — install ns not pinned by repo manifests (#1203)",
 }

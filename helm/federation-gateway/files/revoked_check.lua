@@ -17,6 +17,14 @@
 local MODE = "{{ .Values.mode }}"
 local REVOKED_FILE = "/etc/revoked/{{ .Values.revokedSet.key }}"
 local RELOAD_INTERVAL = {{ .Values.revokedSet.reloadIntervalSeconds }}
+-- The revoked.txt line contract, templated from the chart
+-- (`revokedSet.tokenIdPattern`) — deliberately NOT hard-coded here.
+-- revoked.txt has two independently-implemented readers, this filter and
+-- the ADR-028 reconciler; a copy of the contract living in each script is
+-- exactly the drift #1235 is about, so the chart owns the value and the
+-- scripts consume it. See values.yaml for the cross-language agreement
+-- check and its limits.
+local TOKEN_ID_PATTERN = {{ .Values.revokedSet.tokenIdPattern | quote }}
 local JWT_NS = "envoy.filters.http.jwt_authn"
 local PAYLOAD_KEY = "fed_payload"
 
@@ -37,22 +45,91 @@ local revoked_loaded_at = 0
 -- missing file is handled), but file:lines() can RAISE on a mid-read error
 -- (a projected-volume swap, an odd inode/permission state). An uncaught
 -- Lua error would make Envoy 500 the request — pcall keeps it fail-open.
+--
+-- ── Line contract (#1235 / TRK-349) ─────────────────────────────────
+-- Every non-empty line must match TOKEN_ID_PATTERN VERBATIM. There is no
+-- normalisation step any more: the previous version rewrote each line
+-- before comparing it, and that rewriting is what let this reader and the
+-- ADR-028 reconciler derive DIFFERENT token sets from the SAME file (the
+-- two readers disagreed on where a line ends and on what counts as
+-- whitespace). The only tolerated deviation is a single trailing CR, so a
+-- CRLF-written file is still read identically by both — every other byte
+-- is compared as-is.
+--
+-- "Verbatim" is a claim about BYTES, so how the file is read matters as
+-- much as what the pattern says — see the read loop below. THIS reader's
+-- behaviour is only observable in federation-e2e S10, the NEGATIVE
+-- scenario, which runs the real filter inside real Envoy; S11 (the
+-- positive equivalence case) does not distinguish the previous reader
+-- from this one and is therefore no guard against the drift class this
+-- comment is about. Breadth over the byte space lives in the conformance
+-- matrix in tests/ops/test_revoked_set_contract.py, which exercises the
+-- reconciler's reader.
+--
+-- A line that violates the contract DISCARDS THE WHOLE RELOAD: `revoked`
+-- is left untouched, so the set loaded before the file changed stays in
+-- force and a token revoked in that earlier set keeps being rejected.
+-- This is not a new failure mode — it is the same disposition the
+-- mid-read pcall path has always had (the assignment simply never
+-- happens) — applied to a newly-detected class of bad input.
+--
+-- ⛔ ASYMMETRY WITH THE RECONCILER — INTENTIONAL, DO NOT "UNIFY".
+-- This end keeps its previous set because it is the ENFORCEMENT plane:
+-- holding the older, pre-tamper set is what makes the attack ineffective.
+-- The detection end (scripts/tools/ops/_federation_revocation_reconciler.py
+-- `parse_revoked_file`) must NOT do this — it has to let the rejected id be
+-- ABSENT from the live set it reports, because that absence is what raises
+-- TamperSuspected. Harmonising the two ends would silently delete the
+-- detection while every test still passed.
+--
+-- COLD START: if the very FIRST load hits a contract violation there is no
+-- previous set to keep, so `revoked` stays at its initial empty value —
+-- the same posture as a missing file (fail OPEN, ADR-028 §相鄰破口).
 local function reload_revoked(handle, now)
+  local rejected = false
   local ok, err = pcall(function()
-    local f = io.open(REVOKED_FILE, "r")
+    local f = io.open(REVOKED_FILE, "rb")
     if not f then
       -- Missing / not yet written by tenant-api => nothing known-revoked.
       revoked = {}
       return
     end
-    local set = {}
-    for line in f:lines() do
-      local id = line:gsub("%s+", "")
-      if id ~= "" then
-        set[id] = true
-      end
-    end
+    -- ⛔ READ THE WHOLE FILE AND SPLIT IT HERE. Do NOT go back to the
+    -- line iterator: its readline is C-STRING based, so the "line" it
+    -- hands back is not always the bytes that are on disk. Measured
+    -- against the real filter running in Envoy, one byte class produced
+    -- THREE different outcomes depending on where in the line it sat —
+    -- including two where the reload SUCCEEDED while silently resolving a
+    -- different token set than the detection plane resolved from the same
+    -- file. That is the #1235 divergence itself, one layer below the
+    -- pattern check. read("*a"), string.find(..., plain) and string.sub
+    -- are all LENGTH-based, so this loop sees the file verbatim.
+    local data = f:read("*a")
     f:close()
+    local set = {}
+    local pos, size = 1, #data
+    while pos <= size do
+      local nl = string.find(data, "\n", pos, true)
+      local line = string.sub(data, pos, (nl or (size + 1)) - 1)
+      -- The one tolerated deviation: a single trailing CR, so a
+      -- CRLF-written file yields the same ids on both ends.
+      if string.sub(line, -1) == "\r" then
+        line = string.sub(line, 1, -2)
+      end
+      if line ~= "" then
+        if not string.match(line, TOKEN_ID_PATTERN) then
+          rejected = true
+          break
+        end
+        set[line] = true
+      end
+      if not nl then break end
+      pos = nl + 1
+    end
+    if rejected then
+      -- Deliberately do NOT assign `revoked`: keep the previous set.
+      return
+    end
     revoked = set
   end)
   -- Advance the gate even on failure so a broken read does not re-attempt
@@ -62,6 +139,18 @@ local function reload_revoked(handle, now)
   revoked_loaded_at = now
   if not ok then
     handle:logWarn("federation: revoked-set reload failed: " .. tostring(err))
+  elseif rejected then
+    -- ⛔ MUST stay textually distinct from the "reload failed" warning
+    -- above. That one feeds the reconciler's fail-open gauge
+    -- (build_failopen_query) and means "the list could not be read, we are
+    -- letting traffic through". THIS one is the opposite posture: the list
+    -- WAS read, it was refused, and the previous set is still being
+    -- enforced. Nothing extra is being let through, and an IR that reads
+    -- the two as the same signal draws the wrong conclusion.
+    -- The offending line is NOT logged (ADR-028 D3 + the private advisory).
+    handle:logWarn(
+      "federation: revoked-set rejected: line does not match the token-id contract; " ..
+      "keeping the previously loaded set")
   end
 end
 

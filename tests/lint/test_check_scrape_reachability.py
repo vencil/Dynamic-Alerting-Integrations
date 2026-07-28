@@ -101,7 +101,7 @@ def test_ledger_is_exactly_the_live_unknown_source_set():
     """Every KNOWN_UNKNOWN_SOURCE entry must still be demanded AND still be
     unknown-source (exit-lock keeps the ledger honest on the real artifacts)."""
     result = gate.run_check()
-    assert len(result["infos"]) == len(gate.KNOWN_UNKNOWN_SOURCE) == 5
+    assert len(result["infos"]) == len(gate.KNOWN_UNKNOWN_SOURCE) == 7
     assert not any("STALE-EXEMPTION" in e for e in result["errors"])
 
 

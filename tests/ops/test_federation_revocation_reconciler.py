@@ -75,7 +75,99 @@ class TestReconcile:
 
 class TestParsing:
     def test_parse_revoked_file(self):
-        assert rec.parse_revoked_file("ftk_1\n ftk_2 \n\n") == {"ftk_1", "ftk_2"}
+        assert rec.parse_revoked_file("ftk_1\nftk_2\n\n") == ({"ftk_1", "ftk_2"}, 0)
+
+    def test_parse_revoked_file_tolerates_crlf(self):
+        """A CRLF-written file must yield the same ids as an LF one — the one
+        deviation the line contract allows, so the two readers agree on a file
+        that a Windows-side tool touched."""
+        assert rec.parse_revoked_file("ftk_1\r\nftk_2\r\n") == ({"ftk_1", "ftk_2"}, 0)
+
+    def test_parse_revoked_file_rejects_and_counts_non_conforming_lines(self):
+        """#1235 / TRK-349: a line that violates the contract is REJECTED and
+        counted, never normalised into a clean id. Silent normalisation is what
+        let the two readers of this file derive different token sets."""
+        tokens, rejected = rec.parse_revoked_file(
+            "ftk_1\n"
+            " ftk_2 \n"          # contract-violating line
+            "ftk_3 ftk_4\n"      # contract-violating line
+            "FTK_5\n"            # contract-violating line
+            "ftk_6\n"
+        )
+        assert tokens == {"ftk_1", "ftk_6"}
+        assert rejected == 3
+
+    def test_parse_revoked_file_never_recovers_an_id_from_a_rejected_line(self):
+        """The load-bearing property: nothing inside a rejected line may
+        reappear as a token. A reader that salvaged an id out of a malformed
+        line would report a token as revoked that the gateway does not — that
+        divergence is what #1235 closes."""
+        for text in (
+            "ftk_dead ftk_beef\n",      # contract-violating line
+            " ftk_1\n",                 # contract-violating line
+            "ftk_1\rextra\n",           # contract-violating line
+        ):
+            tokens, rejected = rec.parse_revoked_file(text)
+            assert tokens == set(), text
+            assert rejected == 1, text
+
+    def test_a_trailing_separator_is_never_part_of_an_id(self):
+        """Asserted through parse_revoked_file, NOT through the bare regex.
+
+        Python's `$` also matches just before a trailing newline, where Lua's
+        and Go's anchor at true end-of-string; `fullmatch` is what closes that
+        gap. An earlier version of this test compared `re.match` with
+        `re.fullmatch` directly — which is a property of the standard library,
+        true whatever this module does, and stayed green when the function
+        under test was reverted to the loose form. Assert the FUNCTION."""
+        assert rec.parse_revoked_file("ftk_1\n") == ({"ftk_1"}, 0)
+        # A separator inside the line is not a separator the gateway honours,
+        # so this is one line, and one that violates the contract.
+        assert rec.parse_revoked_file("ftk_1\\n\n") == (set(), 1)
+
+    def test_read_live_set_missing_file_is_benign(self, tmp_path):
+        """A missing revoked.txt is 'nothing revoked yet', not an error — and
+        it reports zero rejections rather than crashing the tuple unpack."""
+        assert rec.read_live_set(str(tmp_path / "nope.txt")) == (set(), 0)
+
+    def test_read_live_set_reads_and_rejects(self, tmp_path):
+        p = tmp_path / "revoked.txt"
+        p.write_text("ftk_a1\nnot a token\n", encoding="utf-8", newline="\n")
+        assert rec.read_live_set(str(p)) == ({"ftk_a1"}, 1)
+
+    @pytest.mark.parametrize("raw", [
+        b"ftk_a1\nftk_b2\n",        # plain
+        b"ftk_a1\r\nftk_b2\r\n",    # the one tolerated deviation
+        b"ftk_a1\rftk_b2\n",        # contract-violating line
+        b"ftk_a1\rftk_b2\r\n",      # contract-violating line
+        b"ftk_a1\nnot a token\n",   # contract-violating line
+        b"ftk_a1",                  # no terminator on the last line
+    ], ids=lambda r: repr(r))
+    def test_read_live_set_adds_no_interpretation_of_its_own(self, tmp_path, raw):
+        """⛔ The FILE layer must hand parse_revoked_file the bytes verbatim.
+
+        This is the regression guard for a divergence that lived ABOVE the
+        parser: the decode layer's default newline handling rewrites a legacy
+        terminator into a separator anywhere in the file, whereas the gateway's
+        reader does not — so the two ends could still derive different token
+        sets from the same file while every string-level test stayed green.
+        A test that calls parse_revoked_file with a str CANNOT see this layer,
+        which is exactly why one is pinned here at the file level.
+        """
+        p = tmp_path / "revoked.txt"
+        p.write_bytes(raw)
+        assert rec.read_live_set(str(p)) == rec.parse_revoked_file(raw.decode("utf-8"))
+
+    def test_read_live_set_rejects_a_split_that_only_the_decoder_would_make(
+            self, tmp_path):
+        """The concrete half of the invariant above, spelled out: a single line
+        carrying a legacy terminator in the MIDDLE is one line, it violates the
+        contract, and nothing inside it may come back as a token. The gateway
+        refuses the same bytes; before this was pinned, this end recovered two
+        clean ids from them and reported nothing wrong."""
+        p = tmp_path / "revoked.txt"
+        p.write_bytes(b"ftk_a1\rftk_b2\n")
+        assert rec.read_live_set(str(p)) == (set(), 1)
 
     def test_parse_events_valid(self):
         rows = [{"token_id": "ftk_1", "expires_at": "2026-07-04T13:00:00Z"}]
@@ -106,7 +198,55 @@ class TestParsing:
         # The fail-open gauge must reflect RECENT failures, not a 24h-old blip.
         q = rec.build_failopen_query(lookback_s=600, settle_s=60)
         assert "now-600s" in q and "now-60s" in q
-        assert "revoked-set reload failed" in q
+        assert rec.GATEWAY_FAILOPEN_PHRASE in q
+
+    def test_rejected_query_is_stream_field_qualified(self):
+        """#1235. The fail-open query is a bare phrase against the whole
+        message and is therefore forgeable by anything that can get a matching
+        string into the stream. A new query must not inherit that: qualify on
+        the class Vector assigns to non-JSON gateway output, which
+        request-derived content cannot reach."""
+        q = rec.build_rejected_query(lookback_s=600, settle_s=60)
+        assert 'log_type:"gateway_operational"' in q
+        assert rec.GATEWAY_REJECTED_PHRASE in q
+        assert "now-600s" in q and "now-60s" in q
+
+    def test_the_two_gateway_phrases_can_never_be_confused(self):
+        """⛔ The gateway's two revoked-set warnings mean OPPOSITE things.
+
+        `reload failed` feeds the fail-open gauge and means "we could not read
+        the list, traffic is going through". `rejected` means "we read it,
+        refused it, and are still enforcing the previous one". If either
+        phrase were a substring of the other, one query would count both and
+        an incident responder would read the posture backwards.
+        """
+        a, b = rec.GATEWAY_FAILOPEN_PHRASE, rec.GATEWAY_REJECTED_PHRASE
+        assert a != b
+        assert a not in b and b not in a
+
+    def test_both_phrases_are_actually_emitted_by_the_shipped_lua(self):
+        """The queries above treat log text as an API. Nothing else binds them
+        to the producer, so a reworded `logWarn` would silently zero both
+        gauges — the failure mode where monitoring looks healthy because it
+        stopped asking. Pin the literals against the shipped filter."""
+        lua = os.path.join(
+            os.path.dirname(__file__), "..", "..",
+            "helm", "federation-gateway", "files", "revoked_check.lua")
+        src = open(os.path.abspath(lua), encoding="utf-8").read()
+        assert rec.GATEWAY_FAILOPEN_PHRASE in src, \
+            "the gateway no longer emits the fail-open phrase the reconciler counts"
+        assert rec.GATEWAY_REJECTED_PHRASE in src, \
+            "the gateway no longer emits the reload-refused phrase the reconciler counts"
+
+    def test_new_gauges_are_exposed(self):
+        """Both enforcement-staleness gauges must reach /metrics — a gauge that
+        is computed but never rendered is the same as no gauge."""
+        m = rec.Metrics()
+        m.live_set_rejected_lines = 3
+        m.gateway_reload_rejected = 2
+        out = m.render()
+        assert "federation_revocation_live_set_rejected_lines 3" in out
+        assert "federation_gateway_revoked_set_reload_rejected 2" in out
 
     def test_heartbeat_query_is_source_qualified(self):
         """#1234: the canary query filters on the event field AND the stream
@@ -172,18 +312,22 @@ def _cfg(tmp_path) -> rec.Config:
     )
 
 
-def _query_router(*, events=(), failopen=(), heartbeats=()):
-    """Route each of reconcile_once's three LogsQL queries to its own rows.
+def _query_router(*, events=(), failopen=(), heartbeats=(), rejected=()):
+    """Route each of reconcile_once's LogsQL queries to its own rows.
 
     Dispatches on the EVENT NAME each query filters on (not a loose substring of
     the whole query) so a future query can't silently be fed another's fixture —
-    the sibling failure mode of substring matching that hides drift."""
+    the sibling failure mode of substring matching that hides drift. The two
+    gateway phrases are checked most-specific-first and asserted elsewhere to be
+    non-overlapping, so neither can absorb the other's rows."""
     def _q(_url, query, **_k):
         if rec.EVENT_HEARTBEAT in query:
             return list(heartbeats)
         if "federation_token_revoked" in query:
             return list(events)
-        if "revoked-set reload failed" in query:
+        if rec.GATEWAY_REJECTED_PHRASE in query:
+            return list(rejected)
+        if rec.GATEWAY_FAILOPEN_PHRASE in query:
             return list(failopen)
         raise AssertionError(f"unrouted query: {query!r}")
     return _q
@@ -301,12 +445,12 @@ class TestReconcileOnceFailClosed:
 
     def test_happy_path_updates_metrics(self, tmp_path, monkeypatch):
         cfg = _cfg(tmp_path)
-        (tmp_path / "revoked.txt").write_text("ftk_present\n", encoding="utf-8")
+        (tmp_path / "revoked.txt").write_text("ftk_a11ce\n", encoding="utf-8")
         m = rec.Metrics()
 
         ev_rows = [
-            {"token_id": "ftk_present", "expires_at": _future_rfc3339(3600)},
-            {"token_id": "ftk_gone", "expires_at": _future_rfc3339(3600)},
+            {"token_id": "ftk_a11ce", "expires_at": _future_rfc3339(3600)},
+            {"token_id": "ftk_b0b", "expires_at": _future_rfc3339(3600)},
         ]
 
         def _query(_url, query, **_k):
@@ -316,11 +460,37 @@ class TestReconcileOnceFailClosed:
         now = _now()
         rec.reconcile_once(cfg, m, now=now)
 
-        assert m.tamper_suspected == 1          # ftk_gone is logged-live but absent
+        assert m.tamper_suspected == 1          # ftk_b0b is logged-live but absent
         assert m.gateway_load_errors == 2
         assert m.last_reconcile_ts == now
         assert m.reconcile_errors_total == 0
         assert m.events_dropped == 0            # both rows parsed cleanly
+
+    def test_contract_violating_live_line_still_raises_tamper(self, tmp_path, monkeypatch):
+        """#1235 / TRK-349 — the DETECTION half of the deliberate asymmetry.
+
+        The gateway, meeting a contract-violating line, discards the reload and
+        keeps its previous set (enforcement safety). This end must do the
+        opposite: the id the bad line would have carried has to be ABSENT from
+        the live set, so a token the log says is revoked comes back suspected.
+        If someone ever "unifies" the two ends by having the reconciler also
+        hold a previous set, this assertion is what goes red — otherwise the
+        detection would vanish with every other test still green."""
+        cfg = _cfg(tmp_path)
+        (tmp_path / "revoked.txt").write_text(
+            "ftk_a11ce ftk_b0b\n",      # contract-violating line
+            encoding="utf-8", newline="\n")
+        m = rec.Metrics()
+        ev_rows = [{"token_id": "ftk_a11ce", "expires_at": _future_rfc3339(3600)}]
+        monkeypatch.setattr(
+            rec, "query_victorialogs",
+            lambda _u, query, **_k: ev_rows if "federation_token_revoked" in query else [],
+        )
+        rec.reconcile_once(cfg, m, now=_now())
+
+        assert m.tamper_suspected == 1          # logged-live, absent from the live set
+        assert m.reconcile_errors_total == 0    # a rejected line is not a failed pass
+        assert m.last_reconcile_ts != 0.0       # ...so the pass still completes
 
     def test_malformed_event_rows_are_counted_not_silently_dropped(self, tmp_path, monkeypatch):
         # Schema drift: rows carry the event marker but can't be parsed. They must

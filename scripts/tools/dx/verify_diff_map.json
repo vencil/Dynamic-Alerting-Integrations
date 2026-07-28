@@ -399,7 +399,8 @@
    "tests/lint/test_validate_planning_session_row.py"
   ],
   "scripts/tools/ops/_federation_revocation_reconciler.py": [
-   "tests/ops/test_federation_revocation_reconciler.py"
+   "tests/ops/test_federation_revocation_reconciler.py",
+   "tests/ops/test_revoked_set_contract.py"
   ],
   "scripts/tools/ops/_grar_merge.py": [
    "tests/shared/test_property_tools.py"
@@ -661,7 +662,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "55d2f78afb881c54eb5aa6a3a683cd426aa67285f3b5af6ee9a6d97d7c2399af",
+ "source_digest": "045f107941c751764a6eba0d9e2072a1ce3cc6bc8ba9ab57a7b4c30a99410a9c",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -730,6 +731,7 @@
   "tests/helm/test_oauth2_gitlab_profile.py",
   "tests/helm/test_portal_relay_token_guard.py",
   "tests/helm/test_portal_static_tier_guard.py",
+  "tests/helm/test_revoked_set_contract_guard.py",
   "tests/helm/test_single_writer_guard.py",
   "tests/helm/test_victorialogs_gateway_guard.py",
   "tests/lint/test_check_account_registry_monotonic.py",
@@ -888,6 +890,7 @@
   "tests/ops/test_registry_lib.py",
   "tests/ops/test_regression.py",
   "tests/ops/test_renovate_config.py",
+  "tests/ops/test_revoked_set_contract.py",
   "tests/ops/test_rule_pack_diff.py",
   "tests/ops/test_rule_pack_split_real_packs.py",
   "tests/ops/test_runtime_audit.py",
@@ -1074,6 +1077,9 @@
   ],
   "components/recipe-preview/app.py": [
    "tests/preview/test_app.py"
+  ],
+  "components/tenant-api/internal/federation/token/manager.go": [
+   "tests/ops/test_revoked_set_contract.py"
   ],
   "components/tenant-api/internal/rbac/testdata/wizard": [
    "tests/ops/test_portal_path_filter_coverage.py"
@@ -1287,6 +1293,7 @@
    "tests/lint/test_check_cross_ns_url_consistency.py"
   ],
   "helm/federation-gateway": [
+   "tests/helm/test_revoked_set_contract_guard.py",
    "tests/helm/test_victorialogs_gateway_guard.py"
   ],
   "helm/federation-gateway/audit-sidecar/Dockerfile": [
@@ -1298,8 +1305,17 @@
   "helm/federation-gateway/files/federation-audit.mtail": [
    "tests/shared/test_federation_audit_mtail.py"
   ],
+  "helm/federation-gateway/files/revoked_check.lua": [
+   "tests/helm/test_revoked_set_contract_guard.py",
+   "tests/ops/test_revoked_set_contract.py"
+  ],
   "helm/federation-gateway/templates/_helpers.tpl": [
+   "tests/helm/test_revoked_set_contract_guard.py",
    "tests/helm/test_victorialogs_gateway_guard.py"
+  ],
+  "helm/federation-gateway/values.yaml": [
+   "tests/helm/test_revoked_set_contract_guard.py",
+   "tests/ops/test_revoked_set_contract.py"
   ],
   "helm/federation-reconciler": [
    "tests/dx/test_bump_docs.py",
@@ -1814,6 +1830,9 @@
    "tests/shared/test_dispatch_contract.py",
    "tests/shared/test_entrypoint.py",
    "tests/shared/test_lang_detection_guard.py"
+  ],
+  "scripts/tools/ops/_federation_revocation_reconciler.py": [
+   "tests/ops/test_revoked_set_contract.py"
   ],
   "scripts/tools/ops/_grar_validate.py": [
    "tests/lint/test_check_threshold_registry.py"

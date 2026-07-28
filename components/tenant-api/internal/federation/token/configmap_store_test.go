@@ -216,7 +216,7 @@ func TestConfigMapStore_RevokeEmitsEvent(t *testing.T) {
 	st.(*configMapStore).logger = slog.New(slog.NewJSONHandler(&buf, nil))
 
 	exp := time.Now().Add(90 * time.Minute).UTC()
-	if _, err := st.revoke("ftk_evt", exp); err != nil {
+	if _, err := st.revoke("ftk_e71", exp); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 
@@ -225,8 +225,8 @@ func TestConfigMapStore_RevokeEmitsEvent(t *testing.T) {
 		t.Fatalf("want exactly 1 revocation event, got %d: %s", len(events), buf.String())
 	}
 	ev := events[0]
-	if ev["token_id"] != "ftk_evt" {
-		t.Errorf("token_id = %v, want ftk_evt", ev["token_id"])
+	if ev["token_id"] != "ftk_e71" {
+		t.Errorf("token_id = %v, want ftk_e71", ev["token_id"])
 	}
 	if ev["expires_at"] != exp.Format(time.RFC3339) {
 		t.Errorf("expires_at = %v, want %v", ev["expires_at"], exp.Format(time.RFC3339))
@@ -239,7 +239,7 @@ func TestConfigMapStore_RevokeEmitsEvent(t *testing.T) {
 
 	// An idempotent re-revoke of an already-revoked token emits nothing.
 	buf.Reset()
-	if _, err := st.revoke("ftk_evt", exp); err != nil {
+	if _, err := st.revoke("ftk_e71", exp); err != nil {
 		t.Fatalf("re-revoke: %v", err)
 	}
 	if got := decodeRevocationEvents(t, &buf); len(got) != 0 {

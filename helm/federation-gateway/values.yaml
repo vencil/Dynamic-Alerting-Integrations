@@ -133,6 +133,35 @@ revokedSet:
   # read is a microsecond memory read gated to once per worker per
   # interval — not a hot-path disk stall.
   reloadIntervalSeconds: 30
+  # ── revoked.txt line contract (#1235 / TRK-349) ────────────────────
+  # The strict shape a revoked.txt line must have to be accepted. It is
+  # templated INTO revoked_check.lua (a Lua pattern) rather than
+  # hard-coded there, so the chart carries the contract instead of the
+  # script — `revoked.txt` has two independently-implemented readers
+  # (this gateway and the ADR-028 reconciler) and a hand-copied pattern
+  # in each is precisely the shape of drift #1235 is about.
+  #
+  # It must stay equivalent to tenant-api's `tokenIDPattern`
+  # (components/tenant-api/internal/federation/token/manager.go) and the
+  # reconciler's `TOKEN_ID_PATTERN`
+  # (scripts/tools/ops/_federation_revocation_reconciler.py).
+  # tests/ops/test_revoked_set_contract.py asserts the three agree —
+  # but ⛔ literal equality is NOT semantic equality across three regex
+  # dialects, and it is only one of four guards, none of which stands in
+  # for another:
+  #   * the three-literal check      — a hand-copied pattern drifting;
+  #   * federation-e2e S11 (positive) — PATTERN-DIALECT drift, one literal
+  #     meaning different things to three engines;
+  #   * federation-e2e S10 (negative) — READER-SEMANTICS drift, the two
+  #     readers disagreeing about what a line IS. ⚠️ S11 has NO resistance
+  #     to that class: both the old and the current reader pass S11;
+  #   * the conformance matrix in tests/ops/test_revoked_set_contract.py —
+  #     the byte space, mechanically enumerated.
+  #
+  # A non-conforming line makes the gateway DISCARD THE WHOLE RELOAD and
+  # keep its previously-loaded set (see revoked_check.lua) — widening
+  # this pattern therefore widens what the enforcement plane accepts.
+  tokenIdPattern: "^ftk_[0-9a-f]+$"
 
 # ── Rate limits ──────────────────────────────────────────────────────
 # All limits are per-Envoy-instance: with N replicas behind the Service
