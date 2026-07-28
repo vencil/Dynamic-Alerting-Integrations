@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -662,6 +663,16 @@ def _committed_alertmanager_config():
     return yaml.safe_load(cm["data"]["alertmanager.yml"])
 
 
+# Non-vacuity floor for every platform-pack assertion in this module. ONE copy on
+# purpose: it was two (this and the alert_source contract's own), and a floor that
+# exists twice is a floor that gets bumped once — the stale copy then keeps a lower
+# bar without failing anything, which is the same silent-drift class the shared
+# scanner below argues against (CodeRabbit, PR #1270). Grows with the pack; it is a
+# floor on the SUM across every platform rules ConfigMap, so splitting the pack into
+# two files keeps satisfying it instead of silently halving coverage.
+_MIN_PLATFORM_ALERTS = 40
+
+
 def _real_platform_label_sets():
     """Label sets of every SHIPPED platform alert, derived from the ConfigMap.
 
@@ -709,7 +720,8 @@ class TestPlatformAlertsNotTenantSilenceable:
 
     def test_derivation_is_non_vacuous(self):
         sets = _real_platform_label_sets()
-        assert len(sets) >= 40, f"only {len(sets)} platform alerts derived"
+        assert len(sets) >= _MIN_PLATFORM_ALERTS, (
+            f"only {len(sets)} platform alerts derived")
         tenant_bearing = sorted(s["alertname"] for s in sets if "tenant" in s)
         assert tenant_bearing == [
             "FederationGatewayBackendErrors",
@@ -1044,30 +1056,36 @@ def _iter_repo_alert_rules():
     contract below are both "this discriminator is RESERVED" invariants, and a
     reserved-value claim is only as good as its coverage — two scanners would
     let one drift and silently narrow the other's guarantee.
+
+    RECURSIVE on both trees, for the same reason the `.yml` extension is
+    accepted: a reserved-value gate that a file escapes by being *placed*
+    differently is no better than one it escapes by being *named* differently.
+    A flat `os.listdir` would silently drop a pack moved into a subdirectory out
+    of BOTH contracts (CodeRabbit, PR #1270).
     """
-    packs_dir = os.path.join(_REPO_ROOT, "rule-packs")
-    for fname in sorted(os.listdir(packs_dir)):
-        if not fname.endswith(_RULES_FILE_EXTS):
+    packs_dir = Path(_REPO_ROOT) / "rule-packs"
+    for path in sorted(packs_dir.rglob("*")):
+        if not (path.is_file() and path.name.endswith(_RULES_FILE_EXTS)):
             continue
-        with open(os.path.join(packs_dir, fname), encoding="utf-8") as f:
-            doc = yaml.safe_load(f.read())
+        rel = path.relative_to(packs_dir).as_posix()
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
         for group in (doc or {}).get("groups", []):
             for rule in group.get("rules", []):
                 if "alert" in rule:
-                    yield fname, rule
-    k8s_dir = os.path.join(_REPO_ROOT, "k8s", "03-monitoring")
-    for cm_name in sorted(os.listdir(k8s_dir)):
-        if not (cm_name.startswith("configmap-rules-")
-                and cm_name.endswith(_RULES_FILE_EXTS)):
+                    yield rel, rule
+    k8s_dir = Path(_REPO_ROOT) / "k8s" / "03-monitoring"
+    for path in sorted(k8s_dir.rglob("*")):
+        if not (path.is_file() and path.name.startswith("configmap-rules-")
+                and path.name.endswith(_RULES_FILE_EXTS)):
             continue
-        with open(os.path.join(k8s_dir, cm_name), encoding="utf-8") as f:
-            cm = yaml.safe_load(f.read())
+        rel = path.relative_to(k8s_dir).as_posix()
+        cm = yaml.safe_load(path.read_text(encoding="utf-8"))
         for fname, body in (cm.get("data") or {}).items():
             doc = yaml.safe_load(body)
             for group in (doc or {}).get("groups", []):
                 for rule in group.get("rules", []):
                     if "alert" in rule:
-                        yield f"{cm_name}:{fname}", rule
+                        yield f"{rel}:{fname}", rule
 
 
 # ============================================================
@@ -1159,12 +1177,6 @@ class TestPlatformAlertSourceContract:
     must never be selectable by a second delivery path.
     """
 
-    # Pinned so the presence assertion cannot go vacuous if the scanner or the
-    # ConfigMap name drifts; grows when platform alerts are added. This is a floor
-    # on the SUM across every platform rules ConfigMap, so splitting the pack into
-    # two files keeps satisfying it instead of silently halving coverage.
-    _MIN_PLATFORM_ALERTS = 40
-
     def _platform_rules(self):
         return [(where, rule) for where, rule in _iter_repo_alert_rules()
                 if _is_platform_cm_location(where)]
@@ -1206,9 +1218,9 @@ class TestPlatformAlertSourceContract:
         assert watchdog_checked, (
             f"Watchdog was never scanned — no {_PLATFORM_CM_PREFIX}*.yaml parsed "
             f"or was reached; every assertion above is vacuous")
-        assert len(seen) >= self._MIN_PLATFORM_ALERTS, (
+        assert len(seen) >= _MIN_PLATFORM_ALERTS, (
             f"only {len(seen)} platform alerts scanned, expected >= "
-            f"{self._MIN_PLATFORM_ALERTS}: {sorted(seen)}")
+            f"{_MIN_PLATFORM_ALERTS}: {sorted(seen)}")
         assert set(seen) >= {
             "ThresholdExporterAbsent", "PrometheusRuleEvaluationFailing",
             "TenantApiSingleWriterBreach", "FederationAuditPipelineSilent",
