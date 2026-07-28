@@ -6,21 +6,48 @@ name: Nightly Race Detector
 # in PR-blocking ci.yml) won't surface low-probability races; -count=10 on
 # every PR is too slow (multiplies tenant-api + threshold-exporter test time
 # by 10x). Nightly schedule trades latency for coverage. Advisory-only
-# (does NOT block any PR) — a race surfaced here is a real bug to triage,
+# (does NOT block any PR) — a failure surfaced here is a real bug to triage,
 # not a "fix this PR" gate.
 #
-# Failure handling: workflow opens an issue tagged `race-flake` listing the
-# failing test + run URL. Manual triage from there.
+# Failure handling: the matrix legs only PRODUCE evidence (a parsed fragment +
+# the raw `go test -json` stream as an artifact). A single fan-in `report` job
+# refreshes ONE tracking issue per module, labelled `test-isolation`, whose body
+# lists the deduped failing test names, the first-seen date, and the latest run.
+# It EDITS in place rather than creating — GitHub does not notify on a title or
+# body edit, so a standing failure stays visible without mailing anyone nightly.
+#
+# Two things this deliberately does NOT do, both learned the hard way:
+#   * It does not call itself a race unless the race detector actually fired.
+#     `-count=10` also catches repeat-run / test-isolation failures, which are a
+#     different bug class with different fixes (#932 triage). Titles follow the
+#     evidence, not this workflow's name.
+#   * It does not auto-close or comment nightly. One green night does not prove a
+#     repeat-run failure fixed, and a daily comment on standing debt is muted
+#     within a week — that is how #1228 stayed invisible for 33 nights. A green
+#     night is recorded as `last green:` in the body instead.
+#
+# Before this rework the issue step ran INSIDE the matrix (2 legs, fail-fast:
+# false) and called issues.create() unconditionally with a date-stamped title, so
+# one persistent failure minted one duplicate P2 issue per night: #1213 / #1230 /
+# #1258 / #1263 were four issues for one bug. The workflow-level `concurrency`
+# block below is run-scoped and never serialised the legs against each other;
+# moving the write into a single fan-in job is what makes that race structurally
+# impossible, rather than merely unlikely.
 
 on:
   schedule:
     # 16:00 UTC = 00:00 Asia/Taipei. Runs once daily, off-hours.
     - cron: "0 16 * * *"
   workflow_dispatch:
+    inputs:
+      file_issue:
+        description: "Actually create/refresh the tracking issues (leave off for a dry-run rehearsal)"
+        type: boolean
+        default: false
 
-permissions:
-  contents: read
-  issues: write
+# Deny by default; each job grants only what it needs (below). The matrix job
+# runs third-party test code under -race and must not hold an issues:write token.
+permissions: {}
 
 concurrency:
   group: nightly-race-${{ github.ref }}
@@ -30,6 +57,8 @@ jobs:
   race:
     name: Race Detector (${{ matrix.module }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -58,34 +87,130 @@ jobs:
             ${{ runner.os }}-go-1.26-
             ${{ runner.os }}-go-
 
+      # -json so the failure is machine-readable. `cmd/go` feeds the test
+      # binary's stdout AND stderr through test2json, so a `WARNING: DATA RACE`
+      # banner arrives as an {"Action":"output"} event attributed to the
+      # triggering test — verified against a real Go 1.26 race, not assumed.
+      #
+      # `set -o pipefail` + `|| rc=$?` so go test's exit code survives the tee
+      # (same shape as scripts/tools/ops/bench_wrapper.sh). The step itself does
+      # NOT fail here: the parse + upload steps below must still run, and the leg
+      # is failed explicitly at the end so it still shows red in the Actions tab.
       - name: Run tests with -race -count=10
         id: race
         working-directory: ${{ matrix.workdir }}
-        # -count=10 multiplies sampling chances. -timeout=30m guards
-        # against single test hangs (default is 10m which is tight at 10x).
-        run: go test ${{ matrix.packages }} -race -count=10 -timeout=30m
+        env:
+          PACKAGES: ${{ matrix.packages }}
+          RAW: ${{ github.workspace }}/race-raw-${{ matrix.module }}.jsonl
+          ERR: ${{ github.workspace }}/race-stderr-${{ matrix.module }}.log
+        # -timeout=30m guards against single test hangs (default 10m is tight at 10x).
+        # PACKAGES is intentionally unquoted: it is a multi-pattern list.
+        run: |
+          set -o pipefail
+          rc=0
+          go test $PACKAGES -race -count=10 -timeout=30m -json 2>"$ERR" | tee "$RAW" || rc=$?
+          echo "go test exited $rc"
+          echo "go_exit_code=$rc" >> "$GITHUB_OUTPUT"
 
-      - name: Open issue on failure
-        if: failure() && github.event_name == 'schedule'
-        uses: actions/github-script@v7
+      # Always runs: a crashed/timed-out leg still has to produce a fragment, or
+      # the report job would read "no fragment" as "nothing to say" — the silent
+      # direction this whole rework exists to remove.
+      - name: Extract failing tests
+        if: always()
+        env:
+          RC: ${{ steps.race.outputs.go_exit_code }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MODULE: ${{ matrix.module }}
+          WORKDIR: ${{ matrix.workdir }}
+          PACKAGES: ${{ matrix.packages }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ops/parse_go_test_json.py \
+            --module "$MODULE" \
+            --input "race-raw-${MODULE}.jsonl" \
+            --output "frag-${MODULE}.json" \
+            --go-exit-code "${RC:-1}" \
+            --run-url "$RUN_URL" \
+            --workdir "$WORKDIR" \
+            --packages "$PACKAGES"
+
+      # The full race report / panic / build error, for a human triaging. The
+      # parsed fragment is deliberately lossy; this is the evidence behind it.
+      - name: Upload raw go test -json stream
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          script: |
-            const { owner, repo } = context.repo;
-            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
-            const title = `Nightly race detector flake — ${{ matrix.module }} (${new Date().toISOString().slice(0,10)})`;
-            const body = [
-              `Nightly \`go test -race -count=10\` failed for **${{ matrix.module }}**.`,
-              ``,
-              `Run: ${runUrl}`,
-              ``,
-              `## Triage steps`,
-              `1. Reproduce locally: \`cd ${{ matrix.workdir }} && go test ${{ matrix.packages }} -race -count=10\``,
-              `2. If reproducible, add a regression test and fix the race.`,
-              `3. If not reproducible after 50 runs, close as transient and watch for re-occurrence.`,
-              ``,
-              `Auto-opened by [.github/workflows/nightly-race.yaml](https://github.com/${owner}/${repo}/blob/main/.github/workflows/nightly-race.yaml).`,
-            ].join('\n');
-            await github.rest.issues.create({
-              owner, repo, title, body,
-              labels: ['bug', 'ci', 'P2'],
-            });
+          name: race-raw-${{ matrix.module }}
+          path: |
+            race-raw-${{ matrix.module }}.jsonl
+            race-stderr-${{ matrix.module }}.log
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload fragment
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: race-frag-${{ matrix.module }}
+          path: frag-${{ matrix.module }}.json
+          retention-days: 14
+
+      # Visibility: the leg goes red for the same reason it always did. The
+      # reporting above just happens first.
+      - name: Fail the leg if go test failed
+        if: always() && steps.race.outputs.go_exit_code != '0'
+        env:
+          RC: ${{ steps.race.outputs.go_exit_code }}
+          MODULE: ${{ matrix.module }}
+        run: |
+          echo "::error title=Nightly race::go test exited ${RC} for ${MODULE}"
+          exit 1
+
+  # Single writer. `needs: [race]` + `always()` so a red leg still reports; the
+  # issue write lives here and NOWHERE else, which is what makes the duplicate-
+  # create race impossible rather than merely unlikely.
+  report:
+    name: aggregate + file/refresh tracking issues
+    needs: [race]
+    # Runs on dispatch too, so this path can be REHEARSED. It is brand new and
+    # cannot run in its own PR's CI (schedule/dispatch triggers only), so gating
+    # the whole job on `schedule` left no way to exercise it before the first
+    # real nightly. Filing is gated separately via DO_FILE below: a dispatch
+    # produces the full step summary and a dry run, and only creates or edits an
+    # issue when the operator ticks `file_issue`. Same shape as
+    # nightly-image-scan.yaml.
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v6 # for scripts/ops/file_race_report.py
+
+      # continue-on-error: download-artifact FAILS the step when no artifact
+      # matches the pattern. If both legs died before uploading, that failure
+      # would skip the reporting step below and the night would pass in silence
+      # — the worst possible direction. Let it fail soft; the script treats a
+      # missing fragment as a FAILING module and exits non-zero for it.
+      - name: Download fragments
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: race-frag-*
+          path: frags
+          merge-multiple: true
+
+      - name: File or refresh the tracking issues
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # schedule always files; a manual dispatch only when explicitly asked.
+          DO_FILE: ${{ github.event_name == 'schedule' || inputs.file_issue }}
+        run: |
+          set -euo pipefail
+          mkdir -p frags
+          python3 scripts/ops/file_race_report.py \
+            --frags-dir frags \
+            --expected-modules "tenant-api,threshold-exporter" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

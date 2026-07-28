@@ -11,6 +11,12 @@
    "tests/dx/test_generate_planning_index.py",
    "tests/lint/test_check_planning_status_sync.py"
   ],
+  "scripts/ops/file_race_report.py": [
+   "tests/ops/test_nightly_race_issue_policy.py"
+  ],
+  "scripts/ops/parse_go_test_json.py": [
+   "tests/ops/test_parse_go_test_json.py"
+  ],
   "scripts/tools/_lib_constants.py": [
    "tests/lint/test_check_confd_schema.py",
    "tests/shared/test_property_tools.py",
@@ -663,7 +669,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "0b2e43a00a599387769931283aece6de7f7e4aab6e24bf659ec9859a65f44d54",
+ "source_digest": "f93adb3edb6094604adfa4abfa9cf125976273a96ae1e63b841bddf75e67752a",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -873,6 +879,7 @@
   "tests/ops/test_migrate_rule_outputs.py",
   "tests/ops/test_migrate_to_operator.py",
   "tests/ops/test_migrate_v3.py",
+  "tests/ops/test_nightly_race_issue_policy.py",
   "tests/ops/test_nightly_scan_matrix_drift.py",
   "tests/ops/test_notification_tester.py",
   "tests/ops/test_observed_map_lib.py",
@@ -881,6 +888,7 @@
   "tests/ops/test_onboard_platform.py",
   "tests/ops/test_operator_check.py",
   "tests/ops/test_operator_generate_v2.py",
+  "tests/ops/test_parse_go_test_json.py",
   "tests/ops/test_parse_platform_config.py",
   "tests/ops/test_patch_config.py",
   "tests/ops/test_performance.py",
@@ -972,6 +980,7 @@
   ],
   ".github/workflows": [
    "tests/lint/test_check_workflow_git_push_permissions.py",
+   "tests/ops/test_nightly_race_issue_policy.py",
    "tests/ops/test_portal_path_filter_coverage.py"
   ],
   ".github/workflows/ci.yml": [
@@ -984,6 +993,9 @@
   ],
   ".github/workflows/nightly-image-scan.yaml": [
    "tests/ops/test_nightly_scan_matrix_drift.py"
+  ],
+  ".github/workflows/nightly-race.yaml": [
+   "tests/ops/test_nightly_race_issue_policy.py"
   ],
   ".github/workflows/release.yaml": [
    "tests/dx/test_verify_release.py"
@@ -1078,6 +1090,9 @@
   ],
   "components/recipe-preview/app.py": [
    "tests/preview/test_app.py"
+  ],
+  "components/tenant-api": [
+   "tests/ops/test_nightly_race_issue_policy.py"
   ],
   "components/tenant-api/internal/federation/token/manager.go": [
    "tests/ops/test_revoked_set_contract.py"
@@ -1551,11 +1566,18 @@
   "scripts/ops/file_cve_report.sh": [
    "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
+  "scripts/ops/file_race_report.py": [
+   "tests/ops/test_nightly_race_issue_policy.py"
+  ],
   "scripts/ops/fuse_plumbing_commit.py": [
    "tests/dx/test_fuse_plumbing_commit.py"
   ],
   "scripts/ops/inject_default_key.py": [
    "tests/ops/test_inject_default_key.py"
+  ],
+  "scripts/ops/parse_go_test_json.py": [
+   "tests/ops/test_nightly_race_issue_policy.py",
+   "tests/ops/test_parse_go_test_json.py"
   ],
   "scripts/ops/recover_index.sh": [
    "tests/dx/test_recover_index.py"
@@ -1995,7 +2017,8 @@
   ],
   "tests/ops": [
    "tests/dx/test_verify_diff.py",
-   "tests/ops/test_grar_facade_reexports.py"
+   "tests/ops/test_grar_facade_reexports.py",
+   "tests/ops/test_nightly_race_issue_policy.py"
   ],
   "tests/ops/test_byo_check.py": [
    "tests/ops/test_threshold_govern.py",
@@ -2003,6 +2026,9 @@
   ],
   "tests/ops/test_check_alert.py": [
    "tests/shared/test_json_stdout_contract.py"
+  ],
+  "tests/ops/test_nightly_scan_matrix_drift.py": [
+   "tests/ops/test_nightly_race_issue_policy.py"
   ],
   "tests/rulepacks": [
    "tests/dx/test_custom_alerts_promtool.py",
