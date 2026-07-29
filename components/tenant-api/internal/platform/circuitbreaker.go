@@ -289,3 +289,29 @@ func ConflictSnapshot() map[string]int {
 	}
 	return out
 }
+
+// ResetMetricsRegistriesForTest clears BOTH package-level metrics registries
+// (breaker states and conflict counts) back to their fresh-process state.
+// Test-only: production has exactly one forge provider per process and never
+// unregisters, so nothing outside tests has a reason to call this.
+//
+// Intended for tests that construct a real forge client or drive a tracker
+// sync — those writes are process-global and outlive the test that made them,
+// which makes a LATER test in the same binary observe them (see
+// handler.TestMetricsHandler_Golden, whose preconditions assert both
+// registries are empty). Call it from t.Cleanup.
+//
+// Deliberately an idempotent RESET, not a save-then-restore: the polluting
+// tests run under t.Parallel(), so each would snapshot at its own start and
+// the last cleanup to run would win — restoring a snapshot that already
+// contains another test's registration. Clearing to empty is order-independent
+// and therefore the only form that is stable under parallel cleanup.
+func ResetMetricsRegistriesForTest() {
+	breakerRegistryMu.Lock()
+	breakerRegistry = map[string]*CircuitBreaker{}
+	breakerRegistryMu.Unlock()
+
+	conflictCountMu.Lock()
+	conflictCount = map[string]int{}
+	conflictCountMu.Unlock()
+}
