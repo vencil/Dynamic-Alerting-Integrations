@@ -206,14 +206,26 @@ jobs:
           pip install pytest pyyaml -c requirements/ci-constraints.txt
           python -m pytest tests/rulepacks/test_vm_replay_staleness.py -v -rs
 
-      # Failure → auto-open a triage issue (nightly-race pattern, PLUS
-      # dedupe). Schedule only: a manual dispatch failure is being watched
-      # live, no issue spam. Dedupe rationale: nightly-race deliberately has
-      # NO dedupe (verified — it creates unconditionally) because each race
-      # flake is a distinct test's signal; HERE a rotted harness/pin fails
-      # for the SAME reason night after night, so re-filing would mint one
-      # duplicate P2 per night — an open issue with the same title prefix
-      # gets a "still failing" comment instead of a sibling.
+      # Failure → auto-open a triage issue. Schedule only: a manual dispatch
+      # failure is being watched live, no issue spam. Dedupe rationale: a
+      # rotted harness/pin fails for the SAME reason night after night, so
+      # re-filing would mint one duplicate P2 per night — an open issue with
+      # the same title prefix gets a "still failing" comment instead of a
+      # sibling.
+      #
+      # This comment used to claim nightly-race "deliberately has NO dedupe
+      # ... because each race flake is a distinct test's signal". That was
+      # wrong twice over and is corrected here rather than deleted, because it
+      # was read as a decision record and cost real triage time (#1275):
+      #   * The "deliberately/because" was never anyone's decision — the
+      #     originating PR (#1123) only recorded the OBSERVATION that
+      #     nightly-race created unconditionally. The rationale was inferred
+      #     while building THIS workflow and then read back as intent.
+      #   * The premise is false. #1213/#1230/#1258/#1263/#1272 were five
+      #     nights of the SAME test failing for the SAME reason, and none was
+      #     a data race. nightly-race now dedupes too (#1275).
+      # If you find yourself explaining another workflow's design in a comment
+      # here, state what you observed, not why you think they did it.
       - name: Open issue on failure
         if: failure() && github.event_name == 'schedule'
         uses: actions/github-script@v7
