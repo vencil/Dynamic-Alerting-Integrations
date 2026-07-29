@@ -656,6 +656,10 @@ generate-nav: ## 從文件 front matter 產生 MkDocs nav 結構 (使用: make g
 generate-rule-pack-readme: ## 從 Rule Pack YAML 產生（寫入）rule-packs/README.md（dry-run 用 --check）
 	@python3 ./scripts/tools/dx/generate_rule_pack_readme.py --update
 
+.PHONY: byo-rulepack-table
+byo-rulepack-table: ## 重新產生 BYO Prometheus 文件內的規則包表（#1267；sentinel 就地注入）
+	@python3 ./scripts/tools/dx/generate_byo_rulepack_table.py --generate --lang all
+
 .PHONY: platform-data
 platform-data: ## 產生 docs/assets/platform-data.json（含嵌入的 Tenant Metadata）
 	@python3 ./scripts/tools/dx/generate_platform_data.py
@@ -741,7 +745,7 @@ lint-extract: ## 拆新 lint script（PR #154/#162/#166/#169/#170 共通 boilerp
 
 lint-docs: ## 一站式文件 lint（versions + drift + tool consistency，支援 ARGS="--parallel"）
 	@python3 ./scripts/tools/validate_all.py \
-		--only versions,tool_map,doc_map,rule_pack_stats,rule_packs,changelog,glossary,includes,platform_data,tool_consistency,alerts \
+		--only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,glossary,includes,platform_data,tool_consistency,alerts \
 		$(ARGS)
 
 .PHONY: lint-egress

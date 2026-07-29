@@ -24,23 +24,25 @@ parent: architecture-and-design.md
 
 | Rule Pack | 擁有團隊 | ConfigMap 名稱 | Recording Rules | Alert Rules |
 |-----------|---------|-----------------|----------------|-------------|
-| MariaDB/MySQL | DBA | `prometheus-rules-mariadb` | 11 | 14 |
+| MariaDB/MySQL | DBA | `prometheus-rules-mariadb` | 14 | 18 |
 | PostgreSQL | DBA | `prometheus-rules-postgresql` | 11 | 9 |
 | Redis | Cache | `prometheus-rules-redis` | 11 | 6 |
 | MongoDB | AppData | `prometheus-rules-mongodb` | 10 | 8 |
 | Elasticsearch | Search | `prometheus-rules-elasticsearch` | 11 | 7 |
 | Oracle | DBA / Oracle | `prometheus-rules-oracle` | 11 | 7 |
-| DB2 | DBA / DB2 | `prometheus-rules-db2` | 12 | 7 |
+| DB2 | DBA / DB2 | `prometheus-rules-db2` | 13 | 8 |
 | ClickHouse | Analytics | `prometheus-rules-clickhouse` | 12 | 7 |
 | Kafka | Messaging | `prometheus-rules-kafka` | 13 | 9 |
 | RabbitMQ | Messaging | `prometheus-rules-rabbitmq` | 12 | 8 |
 | JVM | AppDev | `prometheus-rules-jvm` | 9 | 7 |
 | Nginx | Infra | `prometheus-rules-nginx` | 9 | 6 |
-| Kubernetes | Infra | `prometheus-rules-kubernetes` | 16 | 10 |
+| Kubernetes | Infra | `prometheus-rules-kubernetes` | 30 | 14 |
 | Exporter Liveness | Platform | `prometheus-rules-liveness` | 0 | 1 |
 | Operational | Platform | `prometheus-rules-operational` | 0 | 4 |
-| Platform | Platform | `prometheus-rules-platform` | 0 | 25 |
-| **總計** | | | **148** | **135** (= **283** rules) |
+| Platform | Platform | `prometheus-rules-platform` | 0 | 41 |
+| **總計** | | | **166** | **160** (= **326** rules) |
+
+> ⚠️ 本表為**手工維護的快照**，目前沒有 drift gate（[#1267](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1267) 只把 BYO 指南那張表改成生成）。「擁有團隊」欄沒有機器可讀來源，故不能直接生成——追蹤見上方 issue 的 follow-up。數字以 `docs/assets/platform-data.json` 為準。
 
 ### 3.2 自包含三部分結構
 

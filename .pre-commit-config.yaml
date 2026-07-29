@@ -284,6 +284,22 @@ repos:
         files: ^(rule-packs/|k8s/03-monitoring/).*\.yaml$
         additional_dependencies: ['pyyaml']
 
+      - id: byo-rulepack-table-check
+        name: BYO Prometheus rule-pack table drift
+        # #1267: the table in byo-prometheus-integration.{md,en.md} was hand-kept
+        # and ungated — 9 of 13 rows stale, 3 packs missing entirely. Corrected by
+        # hand in #1246 and stale AGAIN one commit later (#1266 added 2 platform
+        # alerts). Now generated from the projected volume + rule sources.
+        # `files:` covers BOTH the source YAML and the docs themselves, so a hand
+        # edit to the generated table is rejected too, not just source drift.
+        entry: python3 -X utf8 scripts/tools/dx/generate_byo_rulepack_table.py --check --lang all
+        language: python
+        pass_filenames: false
+        # 也涵蓋生成器本身：只改 render 邏輯（例如欄位格式）而不碰來源時，
+        # 若 hook 不觸發，committed 表格就會與新實作不一致（外審抓到）。
+        files: ^(rule-packs/|k8s/03-monitoring/.*\.yaml|docs/integration/byo-prometheus-integration(\.en)?\.md|scripts/tools/dx/generate_byo_rulepack_table\.py)
+        additional_dependencies: ['pyyaml']
+
       - id: alert-reference-check
         name: Alert reference drift (ALERT-REFERENCE.md/.en.md)
         entry: python3 -X utf8 scripts/tools/dx/generate_alert_reference.py --check

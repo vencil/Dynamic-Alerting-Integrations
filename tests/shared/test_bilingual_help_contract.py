@@ -33,13 +33,13 @@ allowlist below lands in the BILINGUAL bucket by default and must therefore
 either really implement bilingual help or add itself (with a reason) to an
 allowlist — there is no silent escape (``test_partition_is_exact``).
 
-* BILINGUAL (derived complement, 28 — all pass; repair queue empty) — the
+* BILINGUAL (derived complement, 37 — all pass; repair queue empty) — the
   behavioral assertions above run per tool.
 * ``ENGLISH_ONLY`` (137) — dx convention: non-customer-facing internal tools
   may ship English-only help. RATCHET: shrink-only — the gate runs each one
   under ``DA_LANG=zh`` and turns RED the moment its help gains CJK, forcing
   the entry OUT of the allowlist and INTO the bilingual contract.
-* ``CHINESE_ONLY_HELP`` (27) — help text is Chinese(-mixed) with NO
+* ``CHINESE_ONLY_HELP`` (28) — help text is Chinese(-mixed) with NO
   ``detect_cli_lang`` wiring at all: single-language by construction, legal
   under the ZH-primary SSOT policy (dev-rules §9b) for internal tooling.
   RATCHET: the gate asserts the wiring stays absent — the moment one of
@@ -52,7 +52,7 @@ allowlist — there is no silent escape (``test_partition_is_exact``).
 COST DESIGN (why not a blind full-matrix sweep)
 -----------------------------------------------
 Subprocess budget = 2×|BILINGUAL| + 1×|ENGLISH_ONLY| + 1×|CHINESE_ONLY|
-= 2×28 + 137 + 26 = 219 (vs 376 already spent by test_tool_exit_codes).
+= 2×37 + 137 + 28 = 239 (vs 376 already spent by test_tool_exit_codes).
 The allowlists are known-conclusion sets: one zh-help run suffices to verify
 "still no CJK" / "still has CJK" — an en-side run there would prove nothing
 this gate asserts. The CHINESE_ONLY wiring ratchet is a source-text check
@@ -287,6 +287,7 @@ CHINESE_ONLY_HELP: dict[str, str] = {
     # ── scripts/tools/dx ───────────────────────────────────────────────
     "bump_docs.py": _R_ZH,
     "doc_impact.py": _R_ZH,
+    "generate_byo_rulepack_table.py": _R_ZH,
     "generate_doc_map.py": _R_ZH,
     "generate_rule_pack_stats.py": _R_ZH,
     "generate_tool_map.py": _R_ZH,
@@ -408,10 +409,12 @@ def test_allowlists_shrink_only_count_pin():
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )
-    # pin 27: bumped from 26 for verify_diff.py, an upstream Chinese-only-help
-    # dx CLI added by #1156 and surfaced when this gate rebased onto it.
-    assert len(CHINESE_ONLY_HELP) <= 27, (
-        f"CHINESE_ONLY_HELP grew to {len(CHINESE_ONLY_HELP)} (pin=27). "
+    # pin 28: bumped from 27 for generate_byo_rulepack_table.py (#1267), a dx
+    # regen CLI whose help is Chinese like its sibling generate_rule_pack_stats.py
+    # — same class, same allowlist. (27 was itself bumped from 26 for
+    # verify_diff.py, an upstream Chinese-only-help dx CLI added by #1156.)
+    assert len(CHINESE_ONLY_HELP) <= 28, (
+        f"CHINESE_ONLY_HELP grew to {len(CHINESE_ONLY_HELP)} (pin=28). "
         "New tools should be bilingual (dev-rules §9); bump only with "
         "explicit justification."
     )

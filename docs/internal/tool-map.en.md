@@ -103,6 +103,7 @@ lang: en
 | `doc_impact.py` | 文件變更影響分析 |
 | `gen_recipe_status_json.py` | Generate recipe-status.json from the compiler SSOT (ADR-024 §8, #741 #6 / A1). |
 | `generate_alert_reference.py` | Auto-generate ALERT-REFERENCE.md from Rule Pack YAML files. |
+| `generate_byo_rulepack_table.py` | BYO Prometheus 規則包表產生器（#1267） |
 | `generate_changelog.py` | Generate CHANGELOG draft entries from conventional commits. |
 | `generate_doc_map.py` | 文件導覽自動生成 |
 | `generate_nav.py` | 從 docs/ 目錄自動生成 MkDocs nav 結構 |

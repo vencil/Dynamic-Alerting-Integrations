@@ -13,6 +13,7 @@
 import argparse
 import json
 import os
+import re
 import stat
 import sys
 from pathlib import Path
@@ -25,6 +26,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
+from _atomic_write import atomic_write_text  # noqa: E402
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 
@@ -53,6 +55,11 @@ PACK_META = {
     "rabbitmq": ("RabbitMQ", "rabbitmq_exporter"),
     "jvm": ("JVM", "jmx_exporter"),
     "nginx": ("Nginx", "nginx-prometheus-exporter"),
+    # liveness 先前不在此表，exporter 欄位因此 fallback 成 pack 名 "liveness"。
+    # #1267 把這張表搬進 architecture-and-design 後它會被讀者看到，故補上。
+    # exporter 欄由 LANG_STRINGS["<lang>"]["liveness_exporter"] 覆寫（此處僅為 fallback）——
+    # PACK_META 是跨語系共用的，直接放中文會讓英文表出現中文（外審抓到）。
+    "liveness": ("Exporter Liveness", "threshold-exporter heartbeat"),
     "operational": ("Operational", "threshold-exporter 運營模式"),
     "platform": ("Platform", "threshold-exporter 自監控"),
 }
@@ -65,6 +72,7 @@ LANG_STRINGS = {
         "total": "合計",
         "operational_exporter": "threshold-exporter 運營模式",
         "platform_exporter": "threshold-exporter 自監控",
+        "liveness_exporter": "threshold-exporter 心跳",
     },
     "en": {
         "header": "| Rule Pack | Exporter | Recording | Alert |",
@@ -72,6 +80,7 @@ LANG_STRINGS = {
         "total": "Total",
         "operational_exporter": "threshold-exporter operational mode",
         "platform_exporter": "threshold-exporter self-monitoring",
+        "liveness_exporter": "threshold-exporter heartbeat",
     },
 }
 
@@ -81,6 +90,41 @@ def _get_stats_file(lang: str) -> Path:
     if lang == "en":
         return INCLUDE_DIR / "rule-pack-stats.en.md"
     return INCLUDE_DIR / "rule-pack-stats.md"
+
+
+ARCH_SENTINEL_START = "<!-- RULE_PACK_STATS_START -->"
+ARCH_SENTINEL_END = "<!-- RULE_PACK_STATS_END -->"
+
+
+def _arch_doc(lang: str) -> Path:
+    """The doc the table is injected into (#1267)."""
+    name = "architecture-and-design.en.md" if lang == "en" else "architecture-and-design.md"
+    return REPO_ROOT / "docs" / name
+
+
+def _table_body(table: str) -> str:
+    """Strip the fragment's `<!-- ... -->` header lines — inline injection needs
+    only the table itself (the DO-NOT-EDIT notice lives beside the sentinels)."""
+    lines = [ln for ln in table.split("\n") if not ln.startswith("<!--")]
+    return "\n".join(lines).strip("\n") + "\n"
+
+
+def _replace_arch_block(content: str, body: str, rel: str) -> str:
+    """Swap the sentinel block's contents. The end sentinel deliberately does NOT
+    absorb a newline: `body` already ends with one, so letting both claim it adds
+    a blank line per run and `--check` would never converge."""
+    pattern = re.compile(
+        r"(" + re.escape(ARCH_SENTINEL_START) + r"\n)"
+        r".*?"
+        r"(" + re.escape(ARCH_SENTINEL_END) + r")",
+        re.DOTALL,
+    )
+    if not pattern.search(content):
+        raise ValueError(
+            f"{rel} 內找不到 sentinel 區塊。請加上這兩行：\n"
+            f"  {ARCH_SENTINEL_START}\n  {ARCH_SENTINEL_END}"
+        )
+    return pattern.sub(lambda m: m.group(1) + body + m.group(2), content)
 
 
 def count_rules_in_yaml(filepath: Path) -> tuple:
@@ -184,6 +228,8 @@ def generate_markdown_table(stats: dict, lang: str = "zh") -> str:
             exporter = s["operational_exporter"]
         elif name == "platform":
             exporter = s["platform_exporter"]
+        elif name == "liveness":
+            exporter = s["liveness_exporter"]
         lines.append(
             f"| {display.lower() if display == name else name} "
             f"| {exporter} "
@@ -282,6 +328,38 @@ def main():
                 has_drift = True
             else:
                 print(f"✅ {stats_file.relative_to(REPO_ROOT)} is up to date.")
+
+        # #1267: the fragment above had NO consumer from the day it was created
+        # (nothing ever wrote `--8<-- "docs/includes/rule-pack-stats.md"`), so the
+        # data stayed correct while the hand-written "139 Recording + 99 Alert"
+        # sentence in architecture-and-design.md drifted to 27/61 off. Inject the
+        # same table there instead.
+        #
+        # ⚠️ Sentinel injection, NOT a `--8<--` snippet: pymdownx.snippets only
+        # runs under MkDocs, and architecture-and-design.md is linked straight from
+        # README.md — a GitHub reader would get a literal `--8<-- "..."` line and
+        # no table at all. Same reasoning as generate_byo_rulepack_table.py.
+        arch = _arch_doc(lang)
+        arch_rel = arch.relative_to(REPO_ROOT).as_posix()
+        body = _table_body(table)
+        current = arch.read_text(encoding="utf-8")
+        try:
+            updated = _replace_arch_block(current, body, arch_rel)
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(2)
+
+        if args.generate:
+            if updated != current:
+                atomic_write_text(arch, updated)
+                print(f"✅ Injected table into {arch_rel}")
+        elif args.check:
+            if updated.strip() != current.strip():
+                print(f"❌ {arch_rel} 的規則包統計表已過期。"
+                      f"Run with --generate --lang all to update.")
+                has_drift = True
+            else:
+                print(f"✅ {arch_rel} is up to date.")
 
     if args.check and has_drift:
         sys.exit(EXIT_VIOLATION)

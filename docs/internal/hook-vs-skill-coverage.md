@@ -26,7 +26,7 @@ lang: zh
 
 死亡組合：以為某事是 hook-enforced（其實是 ⚙️ CI-only 或 👁️ reviewer-only）→ 不做 / 信任 hook 會擋 → **push 吃 CI 紅燈** / reviewer 退件。本表就是消除這種誤判。
 
-> **📊 Count reconciliation**：pre-commit hook 為 **87 auto + 14 manual + 3 pre-push = 104**（YAML parse 重數於 2026-07-23；先前快照 2026-06-12 為 69/14/3，其間逐案增量含 #1185 PR2 新增 `verify-diff-check`、#1195 `threshold-reachability-check` 等），與 CLAUDE.md 宣告一致。CLAUDE.md 的 hook 計數自 #1185 PR2 起由 CI `bump_docs --sync-counts --check` gate（本身即 ⚙️ CI-only，見 §4.5）。下文 §3/§4 的職能分組表為 v2.8.1 盤點時的快照、其後新 hook 僅逐案補列——**計數以 `.pre-commit-config.yaml` YAML parse 為準**，分組表供職能導覽不做計數依據。
+> **📊 Count reconciliation**：pre-commit hook 為 **98 auto + 14 manual + 3 pre-push = 115**（YAML parse 重數於 2026-07-23；先前快照 2026-06-12 為 69/14/3，其間逐案增量含 #1185 PR2 新增 `verify-diff-check`、#1195 `threshold-reachability-check` 等），與 CLAUDE.md 宣告一致。CLAUDE.md 的 hook 計數自 #1185 PR2 起由 CI `bump_docs --sync-counts --check` gate（本身即 ⚙️ CI-only，見 §4.5）。下文 §3/§4 的職能分組表為 v2.8.1 盤點時的快照、其後新 hook 僅逐案補列——**計數以 `.pre-commit-config.yaml` YAML parse 為準**，分組表供職能導覽不做計數依據。
 >
 > **更正（TRK-307，時值 v2.8.1 = 51/13/3）**：本表初版（PR #582）曾誤記「50 auto + 14 manual」並反指 CLAUDE.md 計數漂移——那是用 grep `stages:\s*\[manual\]` 數的結果，**配到了 `jsx-babel-check-strict-linecount` 的註解行**（該 hook 註解明寫 "Auto-stage (NOT manual)"，曾被提議 manual 但 PR #162 改回 auto）。TRK-307 的 `audit_rules_drift.py` 用 **YAML parse**（非 grep）重數，確認當時為 51/13/3，CLAUDE.md 一直是對的。**教訓：hook 計數要 YAML parse，grep 會配到註解 / 文字**——audit 工具上線首次執行即抓出此自埋誤差。
 
@@ -70,7 +70,7 @@ lang: zh
 
 ---
 
-## 3. Pre-commit auto hooks（87）— 🔧 機械，commit 時自動
+## 3. Pre-commit auto hooks（98）— 🔧 機械，commit 時自動
 
 > 完整定義見 [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml)。下表按職能分組；**AI 不需在 review 階段重做這些**——commit 時自動跑，失敗會擋。
 
@@ -148,7 +148,7 @@ lang: zh
 
 | engineering: skill | Vibe 對應 owner | 結論 |
 |---|---|---|
-| `engineering:code-review` | `vibe-dev-rules` + 87 pre-commit + commit-msg hook | git/commit/trailer 部分以 vibe-dev-rules 為準（TRK-301） |
+| `engineering:code-review` | `vibe-dev-rules` + 98 pre-commit + commit-msg hook | git/commit/trailer 部分以 vibe-dev-rules 為準（TRK-301） |
 | `engineering:debug` | `vibe-playbook-nav`（debug 章節） | 互補：reproduce 方法用 engineering，環境 trap 用 playbook |
 | `engineering:testing-strategy` | `test-map.md` + vibe-dev-rules（測試 seam） | 策略用 engineering，Vibe 專屬 seam 用 test-map |
 | `engineering:deploy-checklist` | `github-release-playbook` + `make pre-tag` + #474 | Vibe release 用 playbook + TRK-306（規劃中） |
@@ -183,7 +183,7 @@ lang: zh
 ## 8. AI agent 使用指引
 
 1. **Commit / push 前**：先掃本表「🕳️ 漏接」+「🧠 skill-advised」——這些沒人機械擋，必須自覺做。
-2. **不要重做 🔧 hook-enforced 的事**（87 auto + 3 pre-push + 2 PreToolUse）——浪費 token，hook 會擋。**但 ⚙️ CI-only gate（§4.5：`test_sast` / `bump_docs` hook 計數 / OpenAPI drift / 契約測試）本地不跑、push 才紅**——別把它們當 hook-enforced；改到對應輸入時本地手動跑（否則吃一輪 CI 紅燈）。
+2. **不要重做 🔧 hook-enforced 的事**（98 auto + 3 pre-push + 2 PreToolUse）——浪費 token，hook 會擋。**但 ⚙️ CI-only gate（§4.5：`test_sast` / `bump_docs` hook 計數 / OpenAPI drift / 契約測試）本地不跑、push 才紅**——別把它們當 hook-enforced；改到對應輸入時本地手動跑（否則吃一輪 CI 紅燈）。
 3. **記得手動跑 §4 manual hooks**（改對應檔後）——它們不在 commit 自動跑，漏了 CI 才擋。
 4. **trailer 規則**信任 commit-msg hook 會擋，但格式自覺照 CLAUDE.md 高頻地雷 #2 寫對（省一輪 commit 重試）。
 

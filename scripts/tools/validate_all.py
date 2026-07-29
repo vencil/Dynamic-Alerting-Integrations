@@ -46,6 +46,7 @@ FIX_COMMANDS: Dict[str, List[str]] = {
     "tool_map": ["dx/generate_tool_map.py", "--generate", "--lang", "all"],
     "doc_map": ["dx/generate_doc_map.py", "--generate", "--include-adr", "--lang", "all"],
     "rule_pack_stats": ["dx/generate_rule_pack_stats.py", "--generate", "--lang", "all"],
+    "byo_rulepack_table": ["dx/generate_byo_rulepack_table.py", "--generate", "--lang", "all"],
     "versions": ["lint/validate_docs_versions.py", "--fix"],
     "alerts": ["dx/generate_alert_reference.py"],
     "rule_packs": ["dx/generate_rule_pack_readme.py", "--update"],
@@ -69,6 +70,7 @@ TOOLS = [
     ("changelog", "dx/generate_changelog.py", ["--check"], "Conventional commit format"),
     ("versions", "lint/validate_docs_versions.py", ["--ci"], "Version/count consistency"),
     ("rule_pack_stats", "dx/generate_rule_pack_stats.py", ["--check", "--lang", "all"], "Rule Pack stats include drift"),
+    ("byo_rulepack_table", "dx/generate_byo_rulepack_table.py", ["--check", "--lang", "all"], "BYO Prometheus rule-pack table drift"),
     ("tool_map", "dx/generate_tool_map.py", ["--check", "--lang", "all"], "Tool map coverage drift"),
     ("doc_map", "dx/generate_doc_map.py", ["--check", "--include-adr", "--lang", "all"], "Doc map coverage drift"),
     ("platform_data", "dx/generate_platform_data.py", ["--check"], "Platform data drift (JSON vs YAML)"),
@@ -108,6 +110,18 @@ def _run_one(
             [sys.executable, script_path] + tool_args,
             capture_output=True,
             text=True,
+            # PRE-EXISTING BUG, fixed in passing (#1267). `text=True` without an
+            # explicit encoding decodes with locale.getpreferredencoding(). On a
+            # Windows cp950/cp936 host that is NOT utf-8, so the first "✅" a child
+            # prints (0xe2 …) raises UnicodeDecodeError inside subprocess's reader
+            # thread; `result.stdout` then comes back as None and _extract_detail()
+            # dies with AttributeError — taking the WHOLE validate_all run down, not
+            # just the offending check. Reproduced on unmodified main with
+            # generate_tool_map.py, i.e. `make lint-docs` was broken for every tool
+            # on such a host. The children already emit utf-8 (try_utf8_stdout /
+            # _force_utf8_streams); only the parent's decode side was wrong.
+            encoding="utf-8",
+            errors="replace",
             timeout=120,
             cwd=cwd,
         )
@@ -158,9 +172,13 @@ def _format_time(elapsed: float) -> str:
 WATCH_TRIGGERS: Dict[str, List[str]] = {
     "docs/": ["links", "translation", "freshness", "includes", "versions",
               "doc_map", "tool_consistency", "bilingual_content",
-              "frontmatter_versions"],
+              "frontmatter_versions", "byo_rulepack_table"],
     "docs/assets/": ["platform_data", "tool_consistency"],
-    "rule-packs/": ["alerts", "rule_packs", "rule_pack_stats", "versions",
+    # ⚠️ byo_rulepack_table 的主要來源其實是 k8s/03-monitoring/deployment-prometheus.yaml，
+    # 而本 dict 沒有 k8s/ 這個 key（rule_pack_stats 也有同樣的既有缺口）。watch 模式因此
+    # 不會因為改 projected volume 而重跑；pre-commit 的 files: 與 CI lint job 兩者都涵蓋，
+    # 故強制力未流失，僅 watch 便利性打折。
+    "rule-packs/": ["alerts", "rule_packs", "rule_pack_stats", "byo_rulepack_table", "versions",
                     "platform_data"],
     "scripts/tools/": ["tool_map", "cli_coverage"],
     "CLAUDE.md": ["versions", "doc_map"],
@@ -345,17 +363,17 @@ def _smart_detect(project_root: Path):
     try:
         result = subprocess.run(
             ["git", "diff", "--name-only", "HEAD"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
             cwd=str(project_root),
         )
         staged = subprocess.run(
             ["git", "diff", "--name-only", "--cached"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
             cwd=str(project_root),
         )
         untracked = subprocess.run(
             ["git", "ls-files", "--others", "--exclude-standard"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
             cwd=str(project_root),
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -484,14 +502,14 @@ def _generate_diff_report(failed_checks: dict, tools_dir: Path,
             # Run fix command
             subprocess.run(
                 [sys.executable, script_path] + fix_args,
-                capture_output=True, text=True, timeout=60,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
                 cwd=str(project_root),
             )
 
             # Capture diff
             diff_result = subprocess.run(
                 ["git", "diff", "--no-color"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
                 cwd=str(project_root),
             )
 
@@ -503,7 +521,7 @@ def _generate_diff_report(failed_checks: dict, tools_dir: Path,
             # Restore changed files
             subprocess.run(
                 ["git", "checkout", "."],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
                 cwd=str(project_root),
             )
         except subprocess.TimeoutExpired:
@@ -511,7 +529,7 @@ def _generate_diff_report(failed_checks: dict, tools_dir: Path,
             # Attempt restore anyway
             subprocess.run(
                 ["git", "checkout", "."],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
                 cwd=str(project_root),
             )
         except (OSError, subprocess.SubprocessError) as e:
@@ -823,7 +841,7 @@ def main():
             try:
                 result = subprocess.run(
                     [sys.executable, script_path] + fix_args,
-                    capture_output=True, text=True, timeout=60,
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
                     cwd=str(project_root),
                 )
                 if result.returncode == 0:
