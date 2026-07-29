@@ -70,7 +70,7 @@ lang: zh
 
 ---
 
-## 3. Pre-commit auto hooks（87）— 🔧 機械，commit 時自動
+## 3. Pre-commit auto hooks（98）— 🔧 機械，commit 時自動
 
 > 完整定義見 [`.pre-commit-config.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.pre-commit-config.yaml)。下表按職能分組；**AI 不需在 review 階段重做這些**——commit 時自動跑，失敗會擋。
 

@@ -20,23 +20,25 @@ parent: architecture-and-design.en.md
 
 | Rule Pack | Owning Team | ConfigMap Name | Recording Rules | Alert Rules |
 |-----------|------------|-----------------|----------------|-------------|
-| MariaDB/MySQL | DBA | `prometheus-rules-mariadb` | 11 | 14 |
+| MariaDB/MySQL | DBA | `prometheus-rules-mariadb` | 14 | 18 |
 | PostgreSQL | DBA | `prometheus-rules-postgresql` | 11 | 9 |
 | Redis | Cache | `prometheus-rules-redis` | 11 | 6 |
 | MongoDB | AppData | `prometheus-rules-mongodb` | 10 | 8 |
 | Elasticsearch | Search | `prometheus-rules-elasticsearch` | 11 | 7 |
 | Oracle | DBA / Oracle | `prometheus-rules-oracle` | 11 | 7 |
-| DB2 | DBA / DB2 | `prometheus-rules-db2` | 12 | 7 |
+| DB2 | DBA / DB2 | `prometheus-rules-db2` | 13 | 8 |
 | ClickHouse | Analytics | `prometheus-rules-clickhouse` | 12 | 7 |
 | Kafka | Messaging | `prometheus-rules-kafka` | 13 | 9 |
 | RabbitMQ | Messaging | `prometheus-rules-rabbitmq` | 12 | 8 |
 | JVM | AppDev | `prometheus-rules-jvm` | 9 | 7 |
 | Nginx | Infra | `prometheus-rules-nginx` | 9 | 6 |
-| Kubernetes | Infra | `prometheus-rules-kubernetes` | 16 | 10 |
+| Kubernetes | Infra | `prometheus-rules-kubernetes` | 30 | 14 |
 | Exporter Liveness | Platform | `prometheus-rules-liveness` | 0 | 1 |
 | Operational | Platform | `prometheus-rules-operational` | 0 | 4 |
-| Platform | Platform | `prometheus-rules-platform` | 0 | 25 |
+| Platform | Platform | `prometheus-rules-platform` | 0 | 41 |
 | **Total** | | | **148** | **135** |
+
+> ⚠️ This table is a **hand-maintained snapshot** with no drift gate yet ([#1267](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1267) only generated the BYO guide's table). The "Owning Team" column has no machine-readable source, so it cannot simply be generated — tracked in that issue's follow-up. Numbers follow `docs/assets/platform-data.json`.
 
 ### 3.2 Self-Contained Three-Part Structure
 

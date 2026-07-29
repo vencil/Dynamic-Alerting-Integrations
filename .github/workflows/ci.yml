@@ -274,6 +274,16 @@ jobs:
           pre-commit run tool-map-check --all-files
           pre-commit run doc-map-check --all-files
           pre-commit run rule-pack-stats-check --all-files
+          pre-commit run byo-rulepack-table-check --all-files
+          # #1268: version-consistency guards the README rule-pack/alert badges.
+          # It was NOT in this list, and there is no blanket `pre-commit run
+          # --all-files` anywhere — so in CI it was only reached transitively:
+          # adding a platform alert forces a rule-pack-stats regen, that file is
+          # docs/**/*.md, which flips docs-ci's `docs_changed` filter, which is
+          # what gates the drift-checks job that runs validate_all --only
+          # versions. Enforcement resting on an undocumented chain of three
+          # unrelated filters silently disappears the day any of them moves.
+          pre-commit run version-consistency --all-files
           pre-commit run glossary-check --all-files
           pre-commit run changelog-lint --all-files
           pre-commit run includes-sync --all-files

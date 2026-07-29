@@ -107,7 +107,7 @@ graph TB
                 TE2["Replica 2<br/>port 8080"]
             end
 
-            subgraph Rules["Projected Volume<br/>Rule Packs (×15)"]
+            subgraph Rules["Projected Volume<br/>Rule Packs (×16)"]
                 RP1["prometheus-rules-mariadb"]
                 RP2["prometheus-rules-postgresql"]
                 RP3["prometheus-rules-kubernetes"]
@@ -123,6 +123,7 @@ graph TB
                 RP13["prometheus-rules-nginx"]
                 RP14["prometheus-rules-operational"]
                 RP15["prometheus-rules-platform"]
+                RP16["prometheus-rules-liveness"]
             end
 
             Prom["Prometheus<br/>(Scrape: TE, Rule Evaluation)"]
@@ -208,7 +209,7 @@ graph LR
 | **三態運營模式** | 維護窗口期間零告警干擾，自動恢復不遺忘 | Normal / Silent / Maintenance + expires 自動失效 | [config-driven.md](design/config-driven.md) |
 | **Alert Routing** | 多通道通知確保關鍵告警必達正確人員 | 6 種 receiver、Timing Guardrails、Enforced Routing | [config-driven.md](design/config-driven.md) |
 | **Tenant API** | Domain expert 可自助操作，無需 YAML 知識 | Commit-on-write + RBAC 熱更新 + PR Write-back + 套完繼承的 effective config endpoint | [config-driven.md](design/config-driven.md) |
-| **Rule Packs** | 跨團隊並行開發零 PR 衝突 | 15 個 Projected Volume + 三部分結構 + 雙語 Annotation | [rule-packs.md](design/rule-packs.md) |
+| **Rule Packs** | 跨團隊並行開發零 PR 衝突 | 16 個 Projected Volume + 三部分結構 + 雙語 Annotation | [rule-packs.md](design/rule-packs.md) |
 | **客戶導入管線** | 既有 PromRule corpus → `conf.d/` 全自動化；anti-vendor-lock-in；零 orphan tenant 風險 | 5-step 遷移鏈（解析 → Profile Builder → Hierarchy-Aware Batch PR → Dangling Defaults Guard）。圖示見 [§1.3](#13-客戶導入與-gitops-治理管線-day-0-day-1-day-2) | [migration-toolkit-installation.md](migration-toolkit-installation.md) |
 | **效能架構** | 500+ tenant 毫秒級處理，資源成本近乎不隨租戶數增長 | Pre-computed Recording Rule、O(M) 複雜度、Cardinality Guard | [benchmarks.md](benchmarks.md) |
 | **高可用性 (HA)** | SLA 99.9%+ 警報可靠度，滾動更新零中斷 | 2 副本、PDB、`max by(tenant)` 防雙倍計算 | [high-availability.md](design/high-availability.md) |
@@ -229,13 +230,40 @@ Config-Driven 是平台核心：租戶與平台只改 YAML、不寫 PromQL，由
 
 ## 3. Projected Volume 架構 (Rule Packs) — 簡介
 
-平台管理 **16 個獨立規則包**，共 **139 個 Recording Rules + 99 個 Alert Rules**。每個 Rule Pack 為自包含的三部分結構：
+平台管理 **16 個獨立規則包**。每個 Rule Pack 為自包含的三部分結構：
 
 1. **Part 1：標準化記錄規則** — 正規化不同匯出器的原始指標
 2. **Part 2：閾值標準化** — 產出 `tenant:alert_threshold:*` 指標，供 Alert Rule 匹配
 3. **Part 3：警報規則** — 實際告警條件（含雙語 Annotation）
 
 **優點：** 零 PR 衝突、團隊自主、可複用、獨立測試。**完整詳解見** [rule-packs.md](design/rule-packs.md)。
+
+### 各規則包規則數
+
+下表由 `generate_rule_pack_stats.py` 從 Rule Pack 來源 YAML 產生（`rule-pack-stats-check` hook 把關），**請勿手改**。此處先前是一行手寫的「139 個 Recording + 99 個 Alert」，實際早已是 166 / 160——本節改引生成片段，就不會再各自漂移。
+
+<!-- RULE_PACK_STATS_START -->
+| 規則包 | Exporter | Recording | Alert |
+|--------|----------|-----------|-------|
+| clickhouse | clickhouse_exporter | 12 | 7 |
+| db2 | db2_exporter | 13 | 8 |
+| elasticsearch | elasticsearch_exporter | 11 | 7 |
+| jvm | jmx_exporter | 9 | 7 |
+| kafka | kafka_exporter | 13 | 9 |
+| kubernetes | cAdvisor + kube-state-metrics | 30 | 14 |
+| liveness | threshold-exporter 心跳 | 0 | 1 |
+| mariadb | mysqld_exporter (Percona) | 14 | 18 |
+| mongodb | mongodb_exporter | 10 | 8 |
+| nginx | nginx-prometheus-exporter | 9 | 6 |
+| operational | threshold-exporter 運營模式 | 0 | 4 |
+| oracle | oracledb_exporter | 11 | 7 |
+| postgresql | postgres_exporter | 11 | 9 |
+| rabbitmq | rabbitmq_exporter | 12 | 8 |
+| redis | redis_exporter | 11 | 6 |
+| platform | threshold-exporter 自監控 | 0 | 41 |
+| **合計** | | **166** | **160** |
+<!-- RULE_PACK_STATS_END -->
+
 
 ---
 
