@@ -1,52 +1,84 @@
 # CODEOWNERS — Dynamic Alerting Platform
 #
-# GitHub 使用此檔案在 PR 自動指派 reviewer。
-# 搭配 Branch Protection Rules 可實現 GitOps RBAC：
-#   - Platform Team 擁有 _defaults.yaml 與平台設定
-#   - 各 Tenant Team 擁有自己的 conf.d/<tenant>.yaml
-#   - Rule Pack 由對應 Domain Expert 團隊擁有
+# GitHub 用此檔在 PR 自動指派 reviewer；搭配 Branch Protection 的
+# `require_code_owner_reviews` 可實現 GitOps RBAC。
 #
 # 語法：pattern  @owner1 @owner2
 # 參考：https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# ============================================================
+# ⚠️ 為什麼 active 指派全部是 @vencil（#1277）
+# ============================================================
+# 本檔先前把擁有權指給 @platform-team / @dba-team / @search-team /
+# @analytics-team / @k8s-infra-team / @team-db-a / @team-db-b。查證後全數移除：
+#
+#   1. **語法前提不成立**：本 repo 的 owner 是**個人帳號**（vencil）而非
+#      organization。GitHub 的團隊語法是 `@org/team`，只在 org 底下有效；
+#      裸寫的 `@xxx-team` 一律當成**使用者帳號**解析。
+#   2. **它們是真實的第三方**：`@platform-team` 是一個與本專案無關的
+#      Organization（2018 建立）、`@dba-team` 是真實使用者
+#      "DBA Team - Service User"、`@search-team` / `@analytics-team` 同為
+#      無關的真實帳號；`@k8s-infra-team` / `@team-db-a` / `@team-db-b` 則
+#      根本不存在。本 repo 是 **public**，等於在公開檔案裡把 `docs/`、
+#      `scripts/tools/`、`.github/workflows/`、`CLAUDE.md` 的擁有權
+#      指給陌生人。
+#   3. **它們從來沒被解析成 owner**：CODEOWNERS 對「沒有本 repo write 權」
+#      的對象不會指派、PR 當下也不會有任何提示——**但檔案層級的錯誤 GitHub
+#      是有回報的**：repo 內瀏覽 CODEOWNERS 會標紅，且
+#      `GET /repos/{o}/{r}/codeowners/errors` 會逐行列出。本檔修改前實測回
+#      **20 筆 `Unknown owner`**（訊息即 "make sure @platform-team exists and
+#      has write access"）。所以徵兆一直都在，只是沒人去看。
+#      也因此，「開啟 `require_code_owner_reviews` 就會去 request 那些帳號」
+#      **是錯的**：無 write 權者根本不會被指派。真正會讓它成真的前提是
+#      **把 write 權發給那些帳號**，或在 org 底下真的存在同名 team。
+#
+# 目前唯一的協作者是 @vencil，所以 active 指派全部是他。**團隊切分的示意
+# 保留在下方分區標題與 docs/design/rule-packs.md §3.1 的示意區塊**——那是
+# 架構說明，不是擁有權宣告，兩者刻意分開。
+#
+# 導入到有 organization 的環境時：把 @vencil 換成 @<org>/<team>，並確認該
+# team 對本 repo 有 **write** 權限（沒有 write 就不會被指派）。
+# 若要讓這類漂移「擋 PR」而不只是「可被查詢」，可把
+# `GET /repos/{o}/{r}/codeowners/errors` 或
+# cloudposse/github-action-validate-codeowners 接進 CI —— GitHub 原生只提供
+# 觀測面（UI 標紅 + 上述 API），不會主動阻擋。
+# ============================================================
 
 # ============================================================
-# Platform-level config (requires Platform Team approval)
+# 平台層設定（示意歸屬：Platform Team）
 # ============================================================
-components/threshold-exporter/config/conf.d/_defaults.yaml  @platform-team
-helm/threshold-exporter/Chart.yaml                           @platform-team
-helm/threshold-exporter/values.yaml                          @platform-team
-.github/custom-rule-policy.yaml                              @platform-team
+components/threshold-exporter/config/conf.d/_defaults.yaml  @vencil
+helm/threshold-exporter/Chart.yaml                          @vencil
+helm/threshold-exporter/values.yaml                         @vencil
+.github/custom-rule-policy.yaml                             @vencil
 
 # ============================================================
-# Tenant configs (each team owns their own file)
+# 租戶設定（示意歸屬：各 Tenant Team 擁有自己的檔案）
+#
+# 有 org 的環境會是每個租戶一行、指向該租戶的團隊：
+#   components/threshold-exporter/config/conf.d/<tenant>.yaml  @<org>/team-<tenant>
+# db-a / db-b 是 repo 內的示範租戶。
 # ============================================================
-# Tenant Team A owns db-a.yaml
-components/threshold-exporter/config/conf.d/db-a.yaml        @team-db-a
-
-# Tenant Team B owns db-b.yaml
-components/threshold-exporter/config/conf.d/db-b.yaml        @team-db-b
-
-# New tenants: add a line here following the pattern:
-# components/threshold-exporter/config/conf.d/<tenant>.yaml   @team-<tenant>
+components/threshold-exporter/config/conf.d/db-a.yaml       @vencil
+components/threshold-exporter/config/conf.d/db-b.yaml       @vencil
 
 # ============================================================
-# Rule Packs (Domain Expert ownership)
+# Rule Packs（示意歸屬：各 Domain Expert 團隊）
+#
+# 用目錄層級涵蓋**全部 16 個 pack**。16 個之中 15 個有對應的
+# `rule-packs/rule-pack-<name>.yaml`，只有 **platform** 沒有（它由
+# `k8s/03-monitoring/configmap-rules-platform.yaml` 直接管理），所以第二條
+# pattern 是必要的、不是保險。先前這裡是逐 pack 的 glob，其中 7 個 pack
+# 完全沒有 owner，而 `rule-pack-platform*.yaml` 更是一條對不到任何檔案的
+# 死 glob（#1277 實查）。
 # ============================================================
-rule-packs/rule-pack-mariadb*.yaml       @dba-team
-rule-packs/rule-pack-redis*.yaml         @dba-team
-rule-packs/rule-pack-mongodb*.yaml       @dba-team
-rule-packs/rule-pack-elasticsearch*.yaml @search-team
-rule-packs/rule-pack-oracle*.yaml        @dba-team
-rule-packs/rule-pack-db2*.yaml           @dba-team
-rule-packs/rule-pack-clickhouse*.yaml    @analytics-team
-rule-packs/rule-pack-kubernetes*.yaml    @k8s-infra-team
-rule-packs/rule-pack-platform*.yaml      @platform-team
-rule-packs/rule-pack-operational*.yaml   @platform-team
+rule-packs/                                 @vencil
+k8s/03-monitoring/configmap-rules-*.yaml    @vencil
 
 # ============================================================
-# CI / tooling / docs (Platform Team)
+# CI / 工具 / 文件（示意歸屬：Platform Team）
 # ============================================================
-.github/workflows/       @platform-team
-scripts/tools/           @platform-team
-docs/                    @platform-team
-CLAUDE.md                @platform-team
+.github/workflows/       @vencil
+scripts/tools/           @vencil
+docs/                    @vencil
+CLAUDE.md                @vencil

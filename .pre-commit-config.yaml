@@ -281,7 +281,9 @@ repos:
         entry: python3 -X utf8 scripts/tools/dx/generate_rule_pack_stats.py --check --lang all
         language: python
         pass_filenames: false
-        files: ^(rule-packs/|k8s/03-monitoring/).*\.yaml$
+        # 也涵蓋兩個注入目標本身（#1277）：手改 sentinel 區塊內的生成表
+        # 若不觸發 hook 就不會被擋——與 byo-rulepack-table-check 同一課。
+        files: ^(rule-packs/.*\.yaml$|k8s/03-monitoring/.*\.yaml$|docs/architecture-and-design(\.en)?\.md$|docs/design/rule-packs(\.en)?\.md$|scripts/tools/dx/generate_rule_pack_stats\.py$|scripts/tools/dx/generate_platform_data\.py$)
         additional_dependencies: ['pyyaml']
 
       - id: byo-rulepack-table-check

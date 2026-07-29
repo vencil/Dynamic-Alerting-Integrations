@@ -147,8 +147,14 @@
    "tests/dx/test_generate_doc_map.py",
    "tests/shared/test_property_tools.py"
   ],
+  "scripts/tools/dx/generate_platform_data.py": [
+   "tests/dx/test_generate_rule_pack_stats_injection.py"
+  ],
   "scripts/tools/dx/generate_rule_pack_readme.py": [
    "tests/dx/test_generate_rule_pack_readme.py"
+  ],
+  "scripts/tools/dx/generate_rule_pack_stats.py": [
+   "tests/dx/test_generate_rule_pack_stats_injection.py"
   ],
   "scripts/tools/dx/generate_rulepack_configmaps.py": [
    "tests/dx/test_generate_rulepack_configmaps.py"
@@ -672,7 +678,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "aebe4291aed0e724df4d0360ef682d18a970a85f838310222dce4133b92431ca",
+ "source_digest": "d311d776f83e3422c01476a76615005beeb7afba1d5623b5522b54f66eeef7a1",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -701,6 +707,7 @@
   "tests/dx/test_generate_planning_index.py",
   "tests/dx/test_generate_platform_data.py",
   "tests/dx/test_generate_rule_pack_readme.py",
+  "tests/dx/test_generate_rule_pack_stats_injection.py",
   "tests/dx/test_generate_rulepack_configmaps.py",
   "tests/dx/test_generate_tenant_fixture.py",
   "tests/dx/test_generate_tool_map.py",
@@ -978,6 +985,9 @@
   ],
   ".doclinkignore": [
    "tests/lint/test_check_doc_links.py"
+  ],
+  ".github/CODEOWNERS": [
+   "tests/dx/test_generate_rule_pack_stats_injection.py"
   ],
   ".github/custom-rule-policy.yaml": [
    "tests/ops/test_lint_custom_rules.py"
@@ -1694,6 +1704,9 @@
   ],
   "scripts/tools/dx/generate_rule_pack_readme.py": [
    "tests/dx/test_generate_rule_pack_readme.py"
+  ],
+  "scripts/tools/dx/generate_rule_pack_stats.py": [
+   "tests/dx/test_generate_rule_pack_stats_injection.py"
   ],
   "scripts/tools/dx/generate_tenant_fixture.py": [
    "tests/dx/test_generate_tenant_fixture.py",

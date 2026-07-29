@@ -37,12 +37,14 @@ Permission boundaries are controlled by `.github/CODEOWNERS`:
 
 ```
 # Platform-level (requires Platform Team approval)
-components/threshold-exporter/config/conf.d/_defaults.yaml  @platform-team
+components/threshold-exporter/config/conf.d/_defaults.yaml  @<org>/platform-team
 
 # Tenant-level (each team self-approves)
-components/threshold-exporter/config/conf.d/db-a.yaml       @team-db-a
-components/threshold-exporter/config/conf.d/db-b.yaml       @team-db-b
+components/threshold-exporter/config/conf.d/db-a.yaml       @<org>/team-db-a
+components/threshold-exporter/config/conf.d/db-b.yaml       @<org>/team-db-b
 ```
+
+> ⚠️ The block above shows what this looks like **in an organization**. This repo's owner is a personal account, so the `@org/team` syntax does not apply and a bare `@xxx-team` resolves as a *user* handle — the real `.github/CODEOWNERS` assigns everything to `@vencil` and keeps the team split in comments only (#1277). When adopting, replace `@<org>/team-<tenant>` with your real team and confirm it has **write** access; owners without write are never assigned, and `GET /repos/{owner}/{repo}/codeowners/errors` lists every such line.
 
 ## 2. CI Auto-Validation
 
@@ -248,7 +250,7 @@ Platform Team-controlled settings (in `_defaults.yaml`) include global defaults,
 
 1. Run `da-tools scaffold --tenant <name> --db <type>` to generate YAML (add `--namespaces ns1,ns2` for multi-namespace)
 2. Place output in `conf.d/<tenant>.yaml`
-3. Update `.github/CODEOWNERS` to add `@team-<tenant>`
+3. Update `.github/CODEOWNERS` with that tenant's owner (`@<org>/team-<tenant>` in an org; ⛔ **never a bare `@team-<tenant>`** — it resolves as a user handle, and owners without write access are never assigned)
 4. Open PR → CI validates (`validate-config` one-shot check) → merge → auto-deploy
 
 ## Related Resources
