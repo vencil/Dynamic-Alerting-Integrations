@@ -36,6 +36,15 @@ gh_try() {
 
 if [ "$is_regression" = "true" ]; then
   # Ensure the label exists (idempotent), then apply it.
+  #
+  # The `|| true` here is DELIBERATE and must stay — it is not the #1228
+  # antipattern despite looking identical. There, the label was the dedup KEY for
+  # a tracking issue and `gh issue create --label` fails outright without it, so
+  # swallowing the failure lost the whole alert. Here `$LABEL` is decoration on a
+  # PR (applied below, removed again at the bottom of this script); nothing ever
+  # queries by it, and the actual report is the comment that follows. Failing the
+  # run because a cosmetic label would not apply would discard a perf report over
+  # nothing — fail-open is the correct direction for THIS call site.
   gh label create "$LABEL" --repo "$REPO" --color "D93F0B" \
     --description "Bench gate flagged a perf regression (informational)" --force >/dev/null 2>&1 || true
   gh_try pr edit "$PR_NUMBER" --repo "$REPO" --add-label "$LABEL" || true

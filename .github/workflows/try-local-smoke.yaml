@@ -90,16 +90,41 @@ jobs:
             echo "an open try-local-broken issue already exists — not duplicating."
             exit 0
           fi
-          # Ensure the label exists (P1 / documentation already do).
-          gh label create try-local-broken --repo "$REPO" --color B60205 \
-            --description "try-local onboarding stack is broken" --force || true
+          # Ensure the label exists. NOT `|| true`: try-local-broken is the dedup
+          # key for the lookup above, and `gh issue create --label` fails outright
+          # when the label is missing — so swallowing a create failure loses the
+          # ALERT, not just the label. That is exactly how #1228 turned a 422 into
+          # 33 silent nights. `--force` is create-or-update, so its exit code is
+          # ambiguous (update-failed vs create-failed); ask the API which it was
+          # instead of guessing.
+          label_ok=1
+          if ! gh label create try-local-broken --repo "$REPO" --color B60205 \
+                 --description "try-local onboarding stack is broken" --force; then
+            if gh api "repos/$REPO/labels/try-local-broken" --silent 2>/dev/null; then
+              echo "::warning::could not update the try-local-broken label, but it exists — continuing."
+            else
+              label_ok=0
+              echo "::error::label try-local-broken is missing and could not be created; filing WITHOUT it. Dedup is degraded (the lookup above will stop finding this issue) until the label is fixed."
+            fi
+          fi
           last3="$(gh run list --repo "$REPO" --workflow try-local-smoke.yaml \
                      --branch main --limit 3 \
                      --json createdAt,conclusion,url \
                      --jq '.[] | "- \(.createdAt) [\(.conclusion)] \(.url)"')"
           body="$(printf 'The try-local stack smoke test has failed 3+ consecutive nightly runs — the #449 onboarding showcase is likely broken.\n\nLast 3 runs:\n%s\n\nTriage locally:\n```\ncd try-local && cp .env.example .env && docker compose up -d\nbash smoke.sh\n```\n' "$last3")"
-          gh issue create --repo "$REPO" \
-            --title "try-local nightly smoke failing for 3+ runs" \
-            --label try-local-broken --label P1 --label documentation \
-            --assignee vencil \
-            --body "$body"
+          # Degraded path files without the dedup label rather than not at all: a
+          # duplicate issue is visible and closable, a missing one is silence.
+          if [ "$label_ok" -eq 1 ]; then
+            gh issue create --repo "$REPO" \
+              --title "try-local nightly smoke failing for 3+ runs" \
+              --label try-local-broken --label P1 --label documentation \
+              --assignee vencil \
+              --body "$body"
+          else
+            gh issue create --repo "$REPO" \
+              --title "try-local nightly smoke failing for 3+ runs" \
+              --label P1 --label documentation \
+              --assignee vencil \
+              --body "$body"
+            exit 1  # degraded state must not be able to live here quietly
+          fi
