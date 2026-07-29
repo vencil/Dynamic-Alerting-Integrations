@@ -52,9 +52,9 @@ Date:   2026-02-20
 Git RBAC（搭配 `.github/CODEOWNERS`）：
 ```bash
 # CODEOWNERS — PR 自動指派 reviewer
-conf.d/_defaults.yaml                @platform-team
-conf.d/db-a.yaml                     @db-a-team
-rule-packs/rule-pack-mariadb.yaml    @dba-team
+conf.d/_defaults.yaml                @<org>/platform-team
+conf.d/db-a.yaml                     @<org>/team-db-a
+rule-packs/                          @<org>/dba-team
 ```
 
 詳見 [GitOps 部署指南](integration/gitops-deployment.md) 的 tenant 自助設定範圍。

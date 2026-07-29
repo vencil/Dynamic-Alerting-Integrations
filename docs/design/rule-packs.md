@@ -20,29 +20,40 @@ parent: architecture-and-design.md
 
 ### 3.1 十六個獨立規則包
 
-> 計數與每包規則數以 [`docs/assets/platform-data.json`](../assets/platform-data.json) 為準（由 `generate_platform_data.py` 產生）；下表為其快照。`custom-alerts`（租戶編譯 pack）刻意不列入標準計數。
+> 本表由 `generate_rule_pack_stats.py` 從 Rule Pack 來源 YAML 產生（`rule-pack-stats-check` hook 把關），**請勿手改**。`custom-alerts`（租戶編譯 pack）刻意不列入標準計數。
 
-| Rule Pack | 擁有團隊 | ConfigMap 名稱 | Recording Rules | Alert Rules |
-|-----------|---------|-----------------|----------------|-------------|
-| MariaDB/MySQL | DBA | `prometheus-rules-mariadb` | 14 | 18 |
-| PostgreSQL | DBA | `prometheus-rules-postgresql` | 11 | 9 |
-| Redis | Cache | `prometheus-rules-redis` | 11 | 6 |
-| MongoDB | AppData | `prometheus-rules-mongodb` | 10 | 8 |
-| Elasticsearch | Search | `prometheus-rules-elasticsearch` | 11 | 7 |
-| Oracle | DBA / Oracle | `prometheus-rules-oracle` | 11 | 7 |
-| DB2 | DBA / DB2 | `prometheus-rules-db2` | 13 | 8 |
-| ClickHouse | Analytics | `prometheus-rules-clickhouse` | 12 | 7 |
-| Kafka | Messaging | `prometheus-rules-kafka` | 13 | 9 |
-| RabbitMQ | Messaging | `prometheus-rules-rabbitmq` | 12 | 8 |
-| JVM | AppDev | `prometheus-rules-jvm` | 9 | 7 |
-| Nginx | Infra | `prometheus-rules-nginx` | 9 | 6 |
-| Kubernetes | Infra | `prometheus-rules-kubernetes` | 30 | 14 |
-| Exporter Liveness | Platform | `prometheus-rules-liveness` | 0 | 1 |
-| Operational | Platform | `prometheus-rules-operational` | 0 | 4 |
-| Platform | Platform | `prometheus-rules-platform` | 0 | 41 |
-| **總計** | | | **166** | **160** (= **326** rules) |
+<!-- RULE_PACK_INVENTORY_START -->
+| Rule Pack | ConfigMap 名稱 | Recording Rules | Alert Rules |
+|-----------|-----------------|-----------------|-------------|
+| MariaDB/MySQL | `prometheus-rules-mariadb` | 14 | 18 |
+| PostgreSQL | `prometheus-rules-postgresql` | 11 | 9 |
+| Redis | `prometheus-rules-redis` | 11 | 6 |
+| MongoDB | `prometheus-rules-mongodb` | 10 | 8 |
+| Elasticsearch | `prometheus-rules-elasticsearch` | 11 | 7 |
+| Oracle | `prometheus-rules-oracle` | 11 | 7 |
+| DB2 | `prometheus-rules-db2` | 13 | 8 |
+| ClickHouse | `prometheus-rules-clickhouse` | 12 | 7 |
+| Kafka | `prometheus-rules-kafka` | 13 | 9 |
+| RabbitMQ | `prometheus-rules-rabbitmq` | 12 | 8 |
+| JVM | `prometheus-rules-jvm` | 9 | 7 |
+| Nginx | `prometheus-rules-nginx` | 9 | 6 |
+| Kubernetes | `prometheus-rules-kubernetes` | 30 | 14 |
+| Exporter Liveness | `prometheus-rules-liveness` | 0 | 1 |
+| Operational | `prometheus-rules-operational` | 0 | 4 |
+| Platform | `prometheus-rules-platform` | 0 | 41 |
+| **總計** | | **166** | **160** (= **326** rules) |
+<!-- RULE_PACK_INVENTORY_END -->
 
-> ⚠️ 本表為**手工維護的快照**，目前沒有 drift gate（[#1267](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1267) 只把 BYO 指南那張表改成生成）。「擁有團隊」欄沒有機器可讀來源，故不能直接生成——追蹤見上方 issue 的 follow-up。數字以 `docs/assets/platform-data.json` 為準。
+#### 團隊切分（示意，**非**擁有權宣告）
+
+> ℹ️ 下面是「各團隊獨立擁有、零 PR 衝突」這個架構性質的**一種可能切分**，用來說明它怎麼運作——**不是本平台的實際歸屬**。真正決定 PR 由誰審的是 [`.github/CODEOWNERS`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/CODEOWNERS)。刻意不放進上方庫存表，是因為那張表的每一欄都查得證，混進舉例會讓讀者分不出哪些是事實（[#1277](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1277)）。
+
+- **資料庫類**（MariaDB／PostgreSQL／Oracle／DB2／MongoDB／Redis）→ DBA 團隊；規模夠大時再依引擎拆給專責 DBA
+- **搜尋與分析**（Elasticsearch／ClickHouse）→ 搜尋／數據團隊
+- **訊息與應用執行環境**（Kafka／RabbitMQ／JVM／Nginx）→ 中介軟體／應用平台團隊
+- **叢集與平台自監控**（Kubernetes／Exporter Liveness／Operational／Platform）→ 平台團隊
+
+每個 pack 是獨立的 ConfigMap，因此上述任一組改自己的 pack 都不會與其他組產生 PR 衝突——這正是 Projected Volume 架構要換到的東西。
 
 ### 3.2 自包含三部分結構
 

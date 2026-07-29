@@ -85,6 +85,23 @@ LANG_STRINGS = {
 }
 
 
+def _pack_order() -> list:
+    """Canonical 16-pack ordering, imported rather than re-declared (#1277).
+
+    `generate_platform_data.PACK_ORDER` is the single place this order lives;
+    re-typing it here would create the 7th hand-maintained copy of rule-pack
+    metadata — the exact class of defect #1267/#1277 exist to remove.
+    """
+    from generate_platform_data import PACK_ORDER  # noqa: E402  (lazy: avoids import cycle)
+    return list(PACK_ORDER)
+
+
+def _pack_label(key: str) -> str:
+    """Display name, from the same SoT `platform-data.json` serialises as `label`."""
+    from generate_platform_data import PACK_LABELS  # noqa: E402
+    return PACK_LABELS.get(key, key)
+
+
 def _get_stats_file(lang: str) -> Path:
     """Return output path for a given language."""
     if lang == "en":
@@ -94,6 +111,88 @@ def _get_stats_file(lang: str) -> Path:
 
 ARCH_SENTINEL_START = "<!-- RULE_PACK_STATS_START -->"
 ARCH_SENTINEL_END = "<!-- RULE_PACK_STATS_END -->"
+
+# #1277: the §3.1 inventory table in docs/design/rule-packs.{md,en.md}.
+DESIGN_SENTINEL_START = "<!-- RULE_PACK_INVENTORY_START -->"
+DESIGN_SENTINEL_END = "<!-- RULE_PACK_INVENTORY_END -->"
+
+DESIGN_LANG = {
+    "zh": {
+        "header": "| Rule Pack | ConfigMap 名稱 | Recording Rules | Alert Rules |",
+        "sep": "|-----------|-----------------|-----------------|-------------|",
+        "total": "總計",
+        "unit": "rules",
+    },
+    "en": {
+        "header": "| Rule Pack | ConfigMap Name | Recording Rules | Alert Rules |",
+        "sep": "|-----------|----------------|-----------------|-------------|",
+        "total": "Total",
+        "unit": "rules",
+    },
+}
+
+
+def _design_doc(lang: str) -> Path:
+    """docs/design/rule-packs.{md,en.md} — the §3.1 inventory table (#1277)."""
+    name = "rule-packs.en.md" if lang == "en" else "rule-packs.md"
+    return REPO_ROOT / "docs" / "design" / name
+
+
+def render_design_table(stats: dict, lang: str = "zh") -> str:
+    """§3.1 的庫存表：顯示名 / ConfigMap 名 / 兩個規則數，全部可推導。
+
+    ⚠️ 這張表**不含**「擁有團隊」欄（#1277）。那一欄自 2026-04-06 引入後值從未
+    變動過（期間 kubernetes 規則數 7→30 也沒人回頭看過歸誰），而它給的
+    **逐 pack 對應**在 repo 內沒有任何機器可讀來源；修改前它還與當時
+    `.github/CODEOWNERS` 的歸屬相互矛盾（redis 寫 Cache／CODEOWNERS 是
+    `@dba-team`，mongodb 同）。注意那套**詞彙本身**並非零命中——
+    `rule-packs/README.md` 與 `configmap-prometheus.yaml` 的散文都提過
+    「DBA / K8s Infra / Search」，前者甚至是硬寫在 generate_rule_pack_readme.py
+    裡每次重生成的；`Messaging` / `Analytics` 更是 pack **category** 的正式
+    顯示名。零命中的只有 AppDev / AppData。
+    治理面的擁有權正本是 CODEOWNERS；本表只放「查得證的事實」，示意性的團隊
+    切分改放在表格下方明確標示的區塊，讓讀者分得出哪些是庫存、哪些是舉例。
+
+    來源刻意是 `PACK_LABELS` / `PACK_ORDER`（import 自 generate_platform_data）
+    ＋ `gather_stats()`，而不是已生成的 platform-data.json——避免「生成物依賴
+    另一個生成物」的重生順序問題。實測三者對 16 個 pack 逐筆一致。
+    """
+    s = DESIGN_LANG[lang]
+    per_pack = stats["per_pack"]
+    order = _pack_order()
+
+    # ⚠️ FAIL LOUD on a set mismatch. The rows come from PACK_ORDER while the
+    # totals come from gather_stats(); if those two disagree the table
+    # CONTRADICTS ITSELF — a pack silently gets no row while its counts still
+    # land in the total — and `--check` stays green because both sides are
+    # internally consistent with their own source. Measured: adding a
+    # rule-pack YAML without touching PACK_ORDER produced 16 rows summing to
+    # 166/160 under a total row reading 167/161, with rc=0. Nothing else
+    # enforces PACK_ORDER completeness (generate_platform_data.py iterates the
+    # same list, so it is green too). Same class the sibling
+    # generate_byo_rulepack_table.py fails loud on; found by adversarial review.
+    missing = [k for k in order if k not in per_pack]
+    extra = [k for k in per_pack if k not in order]
+    if missing or extra:
+        raise ValueError(
+            "PACK_ORDER 與實際掃到的 Rule Pack 不一致，表格會靜默漏列且總計對不上各列。\n"
+            f"  只在 PACK_ORDER（無來源檔）：{sorted(missing)}\n"
+            f"  只在來源檔（未列入 PACK_ORDER）：{sorted(extra)}\n"
+            "新增/移除 rule pack 時要同步 generate_platform_data.PACK_ORDER。"
+        )
+
+    lines = [s["header"], s["sep"]]
+    for key in order:
+        counts = per_pack[key]
+        lines.append(
+            f"| {_pack_label(key)} | `prometheus-rules-{key}` "
+            f"| {counts['recording']} | {counts['alert']} |"
+        )
+    lines.append(
+        f"| **{s['total']}** | | **{stats['recording']}** "
+        f"| **{stats['alert']}** (= **{stats['total']}** {s['unit']}) |"
+    )
+    return "\n".join(lines) + "\n"
 
 
 def _arch_doc(lang: str) -> Path:
@@ -109,22 +208,24 @@ def _table_body(table: str) -> str:
     return "\n".join(lines).strip("\n") + "\n"
 
 
-def _replace_arch_block(content: str, body: str, rel: str) -> str:
-    """Swap the sentinel block's contents. The end sentinel deliberately does NOT
+def _replace_block(content: str, body: str, rel: str, start: str, end: str) -> str:
+    """Swap a sentinel block's contents. The end sentinel deliberately does NOT
     absorb a newline: `body` already ends with one, so letting both claim it adds
-    a blank line per run and `--check` would never converge."""
+    a blank line per run and `--check` would never converge (burned once)."""
     pattern = re.compile(
-        r"(" + re.escape(ARCH_SENTINEL_START) + r"\n)"
-        r".*?"
-        r"(" + re.escape(ARCH_SENTINEL_END) + r")",
+        r"(" + re.escape(start) + r"\n)" r".*?" r"(" + re.escape(end) + r")",
         re.DOTALL,
     )
     if not pattern.search(content):
         raise ValueError(
-            f"{rel} 內找不到 sentinel 區塊。請加上這兩行：\n"
-            f"  {ARCH_SENTINEL_START}\n  {ARCH_SENTINEL_END}"
+            f"{rel} 內找不到 sentinel 區塊。請加上這兩行：\n  {start}\n  {end}"
         )
     return pattern.sub(lambda m: m.group(1) + body + m.group(2), content)
+
+
+def _replace_arch_block(content: str, body: str, rel: str) -> str:
+    """architecture-and-design.{md,en.md} 的統計表區塊。"""
+    return _replace_block(content, body, rel, ARCH_SENTINEL_START, ARCH_SENTINEL_END)
 
 
 def count_rules_in_yaml(filepath: Path) -> tuple:
@@ -300,70 +401,69 @@ def main():
             print(f"  {name:20s} {counts['recording']:3d}R  {counts['alert']:3d}A")
         return
 
+    # ⚠️ 兩階段：先把**所有**語言 × 所有輸出面算完，再開始寫。若邊算邊寫，
+    # 第二個語言算到一半失敗（例如某個 pack 的來源檔被移除 → KeyError）就會
+    #留下「ZH 已更新、EN 還是舊值」的分岔樹，而且 exit code 是 Python 預設的
+    # 1——與「有 drift，跑 --generate 就好」同碼，但 --generate 同樣會炸。
+    # 姊妹生成器 generate_byo_rulepack_table.py 在 #1267 已建立「非零退出 ⇒
+    # 什麼都沒改」的性質，這支當時漏了。外審實測抓到。
+    plan = []          # (kind, path, rel, current, updated)
+    try:
+        for lang in langs:
+            table = generate_markdown_table(stats, lang=lang)
+            sf = _get_stats_file(lang)
+            plan.append(("fragment", sf, sf.relative_to(REPO_ROOT).as_posix(),
+                         sf.read_text(encoding="utf-8") if sf.exists() else None, table))
+
+            arch = _arch_doc(lang)
+            arch_rel = arch.relative_to(REPO_ROOT).as_posix()
+            a_cur = arch.read_text(encoding="utf-8")
+            plan.append(("inject", arch, arch_rel, a_cur,
+                         _replace_arch_block(a_cur, _table_body(table), arch_rel)))
+
+            design = _design_doc(lang)
+            d_rel = design.relative_to(REPO_ROOT).as_posix()
+            d_cur = design.read_text(encoding="utf-8")
+            plan.append(("inject", design, d_rel, d_cur,
+                         _replace_block(d_cur, render_design_table(stats, lang=lang),
+                                        d_rel, DESIGN_SENTINEL_START, DESIGN_SENTINEL_END)))
+    except ValueError as exc:
+        # 缺 sentinel／PACK_ORDER 與來源不一致 —— caller error，不是 drift。
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    except KeyError as exc:
+        print(f"ERROR: Rule Pack {exc} 在 PACK_ORDER 內但找不到來源規則檔——"
+              f"新增/移除 pack 時要同步 generate_platform_data.PACK_ORDER。", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"ERROR: 讀取目標文件失敗：{exc}", file=sys.stderr)
+        return 2
+
     has_drift = False
-
-    for lang in langs:
-        table = generate_markdown_table(stats, lang=lang)
-        stats_file = _get_stats_file(lang)
-
+    for kind, path, rel, current, updated in plan:
         if args.generate:
-            INCLUDE_DIR.mkdir(parents=True, exist_ok=True)
-            stats_file.write_text(table, encoding="utf-8")
-            os.chmod(stats_file,
-                     stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
-                     | stat.S_IROTH)
-            print(f"✅ Generated {stats_file.relative_to(REPO_ROOT)}")
-
+            if kind == "fragment":
+                INCLUDE_DIR.mkdir(parents=True, exist_ok=True)
+                atomic_write_text(path, updated)
+                print(f"✅ Generated {rel}")
+            elif updated != current:
+                atomic_write_text(path, updated)
+                print(f"✅ Injected table into {rel}")
         elif args.check:
-            if not stats_file.exists():
-                print(f"❌ {stats_file.relative_to(REPO_ROOT)} does not exist. "
-                      f"Run with --generate first.")
+            if current is None:
+                print(f"❌ {rel} does not exist. Run with --generate first.")
                 has_drift = True
-                continue
-
-            existing = stats_file.read_text(encoding="utf-8")
-            if existing.strip() != table.strip():
-                print(f"❌ {stats_file.relative_to(REPO_ROOT)} is outdated. "
-                      f"Run with --generate to update.")
+            elif updated.strip() != current.strip():
+                print(f"❌ {rel} 已過期。Run with --generate --lang all to update.")
                 has_drift = True
             else:
-                print(f"✅ {stats_file.relative_to(REPO_ROOT)} is up to date.")
-
-        # #1267: the fragment above had NO consumer from the day it was created
-        # (nothing ever wrote `--8<-- "docs/includes/rule-pack-stats.md"`), so the
-        # data stayed correct while the hand-written "139 Recording + 99 Alert"
-        # sentence in architecture-and-design.md drifted to 27/61 off. Inject the
-        # same table there instead.
-        #
-        # ⚠️ Sentinel injection, NOT a `--8<--` snippet: pymdownx.snippets only
-        # runs under MkDocs, and architecture-and-design.md is linked straight from
-        # README.md — a GitHub reader would get a literal `--8<-- "..."` line and
-        # no table at all. Same reasoning as generate_byo_rulepack_table.py.
-        arch = _arch_doc(lang)
-        arch_rel = arch.relative_to(REPO_ROOT).as_posix()
-        body = _table_body(table)
-        current = arch.read_text(encoding="utf-8")
-        try:
-            updated = _replace_arch_block(current, body, arch_rel)
-        except ValueError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            sys.exit(2)
-
-        if args.generate:
-            if updated != current:
-                atomic_write_text(arch, updated)
-                print(f"✅ Injected table into {arch_rel}")
-        elif args.check:
-            if updated.strip() != current.strip():
-                print(f"❌ {arch_rel} 的規則包統計表已過期。"
-                      f"Run with --generate --lang all to update.")
-                has_drift = True
-            else:
-                print(f"✅ {arch_rel} is up to date.")
+                print(f"✅ {rel} is up to date.")
 
     if args.check and has_drift:
         sys.exit(EXIT_VIOLATION)
 
 
 if __name__ == "__main__":
-    main()
+    # sys.exit(main()) — main() 現在用 return 回 caller-error(2)，
+    # 裸呼叫會把退出碼丟掉（訊息有印、rc 卻是 0）。
+    sys.exit(main())

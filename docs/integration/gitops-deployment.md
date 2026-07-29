@@ -37,12 +37,14 @@ conf.d/
 
 ```
 # Platform-level（需 Platform Team approve）
-components/threshold-exporter/config/conf.d/_defaults.yaml  @platform-team
+components/threshold-exporter/config/conf.d/_defaults.yaml  @<org>/platform-team
 
 # Tenant-level（各團隊自行 approve）
-components/threshold-exporter/config/conf.d/db-a.yaml       @team-db-a
-components/threshold-exporter/config/conf.d/db-b.yaml       @team-db-b
+components/threshold-exporter/config/conf.d/db-a.yaml       @<org>/team-db-a
+components/threshold-exporter/config/conf.d/db-b.yaml       @<org>/team-db-b
 ```
+
+> ⚠️ 上面是**有 organization 的環境**下的樣子。本 repo 的 owner 是個人帳號，`@org/team` 語法不適用、裸寫的 `@xxx-team` 會被當成使用者帳號解析——實際 `.github/CODEOWNERS` 的 active 指派全部是 `@vencil`，團隊切分只留在註解（#1277）。導入時把 `@<org>/team-<tenant>` 換成你的真實 team，並確認它對 repo 有 **write** 權限；沒有 write 的對象不會被指派，可用 `GET /repos/{owner}/{repo}/codeowners/errors` 逐行查出。
 
 ## 2. CI 自動驗證
 
@@ -247,7 +249,7 @@ Platform Team 控制的設定（`_defaults.yaml`）包括全域預設、`_routin
 
 1. `da-tools scaffold --tenant <name> --db <type>` 產生 YAML（多 namespace 加 `--namespaces ns1,ns2`）
 2. 將產出放入 `conf.d/<tenant>.yaml`
-3. 更新 `.github/CODEOWNERS` 加入 `@team-<tenant>`
+3. 更新 `.github/CODEOWNERS` 加入該租戶的 owner（org 環境寫 `@<org>/team-<tenant>`；⛔ **不要裸寫 `@team-<tenant>`**——那會被當成使用者帳號，且無 write 權者不會被指派）
 4. 發 PR → CI 驗證（`validate-config` 一站式檢查） → merge → 自動部署
 
 ## 相關資源

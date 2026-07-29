@@ -52,9 +52,9 @@ Date:   2026-02-20
 Git RBAC (with `.github/CODEOWNERS`):
 ```bash
 # CODEOWNERS — Auto-assigns reviewers on PR
-conf.d/_defaults.yaml                @platform-team
-conf.d/db-a.yaml                     @db-a-team
-rule-packs/rule-pack-mariadb.yaml    @dba-team
+conf.d/_defaults.yaml                @<org>/platform-team
+conf.d/db-a.yaml                     @<org>/team-db-a
+rule-packs/                          @<org>/dba-team
 ```
 
 See [GitOps Deployment Guide](integration/gitops-deployment.en.md) for tenant self-service scope.
