@@ -21,10 +21,32 @@ script is a shell script that nothing ran (pytest does not collect `.sh`), so th
 guard lives HERE — in a Python test the existing CI job already executes — and
 checks the REAL call sites in the workflow rather than a synthetic fixture.
 
+Those API-contract guards are now DISCOVERY-BASED (`nightly-*.y*ml` plus the
+helper files each one references, plus the named extras in `_EXTRA_SCANNED`)
+rather than pointed at nightly-image-scan.yaml + file_cve_report.sh by name. The
+hardcoded form had the failure mode this file exists to prevent: it read like a
+repo-wide rule while covering exactly one workflow, so #1275's nightly-race.yaml
+/ file_race_report.py — a second label-keyed tracking issue, i.e. the same blast
+radius — landed outside it by default.
+
+Discovery brings a vacuity risk with it: a guard that finds NOTHING passes, and
+reads as broad coverage while providing none. Three assertions exist solely to
+make that impossible, and all are load-bearing rather than decoration:
+  * `test_nightly_discovery_is_not_vacuous` pins the known workflow names, and
+    requires every GLOBBED one to resolve at least one helper file (a global
+    "some workflow resolved something" floor let a whole workflow sit uncovered).
+  * The same test asserts each `_EXTRA_SCANNED` name really exists — a named
+    entry that resolves to nothing is the same vacuity a bad glob causes.
+  * `assert checked` in the description guard counts only descriptions that were
+    actually LENGTH-CHECKED. Counting templated ones too let the assertion stay
+    satisfied by strings it had deliberately skipped: an anti-vacuity guard that
+    was itself vacuous.
+
 Network-free (uses --list), so it runs in the plain Python Tests CI job.
 """
 from __future__ import annotations
 
+import ast
 import re
 import shlex
 import subprocess
@@ -34,9 +56,49 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW = ROOT / ".github" / "workflows" / "nightly-image-scan.yaml"
+WORKFLOWS_DIR = ROOT / ".github" / "workflows"
+WORKFLOW = WORKFLOWS_DIR / "nightly-image-scan.yaml"
 EXTRACTOR = ROOT / "scripts" / "ops" / "check_image_refs_resolve.py"
 REPORT_SH = ROOT / "scripts" / "ops" / "file_cve_report.sh"
+
+# Every nightly workflow, DISCOVERED rather than listed. The API-contract guards
+# at the bottom of this file used to read only nightly-image-scan.yaml +
+# file_cve_report.sh, so the next scheduled workflow to grow an issue-filing step
+# landed outside them by default — the guard covered exactly one file while
+# reading like a repo-wide rule. (nightly-race.yaml's file_race_report.py, added
+# in #1275, is precisely such a file.)
+#
+# try-local-smoke.yaml is NAMED rather than globbed. It is a scheduled workflow
+# with the same blast radius (a label-keyed tracking issue), it just lacks the
+# `nightly-` prefix. It is listed because the sibling commit fixes its swallowed
+# `gh label create` — and a fix that stays outside the guard is a fix nobody
+# stops you from reverting.
+#
+# Still NOT a repo-wide glob, and the reason is no longer "there is an unfixed bug
+# out there". It is that these guards cannot yet tell a label that is a DEDUP KEY
+# (must fail loudly — losing it loses the alert) from a label that is DECORATION
+# (should fail open — losing it must not discard the report).
+# scripts/tools/ops/bench_report_pr.sh is the latter, so a repo-wide glob would
+# flag it and be wrong. Making that distinction is its own design problem.
+_EXTRA_SCANNED = ("try-local-smoke.yaml",)
+
+NIGHTLY_WORKFLOWS = sorted(
+    set(WORKFLOWS_DIR.glob("nightly-*.y*ml"))
+    | {WORKFLOWS_DIR / name for name in _EXTRA_SCANNED}
+)
+
+# Helper files a nightly workflow references. BOTH scripts/ and tests/ — an
+# earlier draft matched only `scripts/`, which made nightly-mutation-pilot.yaml's
+# real helpers (`tests/shared/_mutation_pilot.py`, invoked at :96) structurally
+# invisible while the guard still reported coverage of that workflow.
+#
+# Over-inclusive on purpose: a bare mention in a comment also matches, so an
+# unrelated file can get scanned. That direction is safe (extra coverage); the
+# opposite direction is the bug this whole file exists to prevent. The flip side
+# is that coverage then depends on comment text, so the per-workflow assertion in
+# test_nightly_discovery_is_not_vacuous is what keeps a deleted reference from
+# silently shrinking the scanned set.
+_SCRIPT_REF_RE = re.compile(r"((?:scripts|tests)/[\w./-]+\.(?:sh|py))")
 
 # Widest suffix file_cve_report.sh appends to the base title at runtime:
 # " — <total> fixable, <missing> unscanned". Bounded generously so the guard
@@ -223,16 +285,250 @@ def _swallowed_label_create(source: str) -> list[str]:
     ]
 
 
+def _nightly_sources() -> dict[str, str]:
+    """Every nightly workflow plus the scripts it references, as {label: text}.
+
+    Discovered, not enumerated: a hardcoded list is how the previous version of
+    these guards ended up covering exactly one workflow while reading like a
+    repo-wide rule.
+    """
+    sources: dict[str, str] = {}
+    for wf in NIGHTLY_WORKFLOWS:
+        text = wf.read_text(encoding="utf-8")
+        sources[wf.name] = text
+        for rel in sorted(set(_SCRIPT_REF_RE.findall(text))):
+            script = ROOT / rel
+            if script.is_file():
+                sources[f"{wf.name} -> {rel}"] = script.read_text(encoding="utf-8")
+    return sources
+
+
+def test_nightly_discovery_is_not_vacuous() -> None:
+    """Guard the guard: an empty glob would make every check below pass silently.
+
+    Pins the workflows known to exist so a RENAME surfaces here (with an obvious
+    fix) instead of as silent loss of coverage. Adding a new nightly-*.yaml does
+    NOT trip this — the found set only has to stay a superset.
+    """
+    for name in _EXTRA_SCANNED:
+        assert (WORKFLOWS_DIR / name).is_file(), (
+            f"{name} is listed in _EXTRA_SCANNED but does not exist. A named entry "
+            "that silently resolves to nothing is the same vacuity a bad glob "
+            "causes — delete it deliberately or fix the name."
+        )
+    # Every name is a LITERAL, including the ones that reach the scan via
+    # _EXTRA_SCANNED. Writing `*_EXTRA_SCANNED` here instead was a real hole:
+    # emptying that tuple emptied the expectation too, so a workflow could be
+    # silently dropped from coverage and this test still passed. An assertion
+    # derived from the thing it guards does not guard it.
+    found = {p.name for p in NIGHTLY_WORKFLOWS}
+    expected = {
+        "nightly-image-scan.yaml",
+        "nightly-mutation-pilot.yaml",
+        "nightly-race.yaml",
+        "nightly-vm-replay.yaml",
+        "try-local-smoke.yaml",
+    }
+    missing = expected - found
+    assert not missing, (
+        f"nightly workflow(s) {sorted(missing)} no longer match `nightly-*.y*ml`. "
+        "If they were renamed, update the expected set here — otherwise the API "
+        "contract guards below stop covering them and pass vacuously."
+    )
+    # PER-WORKFLOW, not a global floor: `len(sources) > len(found)` was satisfied
+    # by three workflows resolving helpers while a fourth resolved none, so a
+    # whole workflow could sit outside every guard below and still read as covered.
+    # Applied only to the GLOBBED nightly workflows. Named extras are scanned for
+    # their own text and may legitimately inline everything — try-local-smoke does,
+    # so demanding a helper of it would fail for a reason that says nothing about
+    # coverage. Their existence is asserted above instead.
+    sources = _nightly_sources()
+    without_helpers = sorted(
+        wf.name for wf in NIGHTLY_WORKFLOWS
+        if wf.name not in _EXTRA_SCANNED
+        and not any(k.startswith(f"{wf.name} -> ") for k in sources)
+    )
+    assert not without_helpers, (
+        f"nightly workflow(s) {without_helpers} resolved to ZERO helper files. Either "
+        "they genuinely run everything inline (then drop them from this assertion "
+        "deliberately) or _SCRIPT_REF_RE has drifted and the guards below silently "
+        f"stopped covering them. Sources seen: {sorted(sources)}"
+    )
+
+
 def test_label_creation_failure_is_not_swallowed() -> None:
     """`gh label create ... || true` is what turned a 422 into a month of silence.
 
     The label is the dedup key for the tracking issue, so its absence has to be
-    handled explicitly (title-based fallback + a red run), never discarded.
+    handled explicitly (probe + title fallback + a red run), never discarded.
+
+    Scans EVERY nightly workflow and its helper scripts, not just
+    file_cve_report.sh: the failure mode is not specific to that script, and the
+    next scheduled workflow to grow a label-keyed tracking issue would otherwise
+    reintroduce it unguarded.
     """
-    offenders = _swallowed_label_create(_report_sh())
+    offenders = {
+        label: lines
+        for label, text in _nightly_sources().items()
+        if (lines := _swallowed_label_create(text))
+    }
     assert not offenders, (
         "`gh label create` must not be `|| true`-swallowed — the label is the issue "
-        f"dedup key and its absence breaks filing entirely. Offending line(s): {offenders}"
+        "dedup key and its absence breaks filing entirely. Probe with "
+        "`gh api repos/O/R/labels/NAME` to tell 'create failed' from 'label absent', "
+        f"degrade loudly, and red the run. Offenders: {offenders}"
+    )
+
+
+# Matching the ASSIGNMENT rather than the `--description` flag is deliberate:
+# neither nightly script passes the text inline (the shell one templates it, the
+# Python one hands a constant to an argv list), so a flag-scoped regex finds ZERO
+# call sites and passes vacuously. Non-Python sources have no parser available
+# here, so they keep a regex — the shell template is additionally resolved by
+# test_label_descriptions_fit_the_github_api_cap above.
+# `\w*` not `[A-Za-z_]*`: the latter rejected any prefix containing a digit, so a
+# perfectly ordinary `V2_LABEL_DESC=` was invisible to the shell/YAML path.
+_LABEL_DESC_ASSIGN = re.compile(
+    r"""^\s*\w*label_desc\s*=\s*(['"])(.*?)\1""", re.M | re.I
+)
+_LABEL_DESC_NAME = re.compile(r"label_desc", re.I)
+
+
+def _label_desc_literals(text: str, is_python: bool) -> list[tuple[str, bool]]:
+    """Every label-description constant as (value, is_templated).
+
+    Python goes through `ast`, not a regex, because the idiomatic way to write a
+    description longer than one line is parenthesised implicit concatenation:
+
+        LABEL_DESC = (
+            "first half "
+            "second half"
+        )
+
+    A line-anchored regex sees nothing there — so the very shape most likely to
+    BREACH a 100-char cap was the one shape the guard could not see. (Repo rule:
+    count structured sources by parsing them, not by grepping.)
+
+    Two extraction shapes, because named bindings are not the only way to spell it:
+      * an assignment whose NAME contains `label_desc` (today's two scripts), and
+      * a string literal sitting immediately after a `--description` element in an
+        argv list or call — the shape a NEW helper is most likely to use, since
+        that is how you hand the value straight to `gh`. Missing it would repeat
+        the mistake above: the guard blind to precisely the idiom people reach for.
+    """
+    out: list[tuple[str, bool]] = []
+    if is_python:
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:  # not our file to police
+            return out
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                names = [t.id for t in targets if isinstance(t, ast.Name)]
+                if not any(_LABEL_DESC_NAME.search(n) for n in names) or node.value is None:
+                    continue
+                try:
+                    value = ast.literal_eval(node.value)
+                except (ValueError, SyntaxError):
+                    out.append(("<runtime-composed>", True))  # f-string / .format()
+                    continue
+                out.append((value, False) if isinstance(value, str) else ("<non-str>", True))
+            elif isinstance(node, (ast.List, ast.Tuple, ast.Call)):
+                elts = node.elts if isinstance(node, (ast.List, ast.Tuple)) else node.args
+                for prev, nxt in zip(elts, elts[1:]):
+                    if not (isinstance(prev, ast.Constant) and prev.value == "--description"):
+                        continue
+                    try:
+                        value = ast.literal_eval(nxt)
+                    except (ValueError, SyntaxError):
+                        out.append(("<runtime-composed>", True))
+                        continue
+                    if isinstance(value, str):
+                        out.append((value, False))
+        return out
+    for _quote, desc in _LABEL_DESC_ASSIGN.findall(text):
+        out.append((desc, "$" in desc or "{" in desc))
+    return out
+
+
+def test_label_descriptions_fit_the_api_cap_repo_wide() -> None:
+    """Every nightly label description must fit GitHub's 100-char cap.
+
+    Complements the file_cve_report.sh template check above, which can only reason
+    about that one script's `${KIND}` interpolation. 111/117 characters is exactly
+    what 422'd for a month — and because the label is the dedup key, a description
+    that is merely too LONG silently disables issue filing entirely.
+
+    Templated values cannot be length-checked statically and are skipped. They are
+    therefore NOT counted toward the anti-vacuity assertion below: an earlier draft
+    counted them, so the assertion stayed satisfied by two skipped template strings
+    while the single genuinely-checked literal could vanish unnoticed — an
+    anti-vacuity guard that was itself vacuous.
+    """
+    cap = 100
+    checked: list[str] = []
+    offenders: list[str] = []
+    for label, text in _nightly_sources().items():
+        for desc, templated in _label_desc_literals(text, label.endswith(".py")):
+            if templated:
+                continue  # runtime-composed — see the per-script test above
+            checked.append(f"{label} ({len(desc)})")
+            if len(desc) > cap:
+                offenders.append(f"{label}: {len(desc)} chars — {desc!r}")
+    assert not offenders, (
+        f"label description(s) exceed GitHub's {cap}-char cap; the API 422s, "
+        "`gh issue create --label` then fails, and the tracking issue is never "
+        "filed:\n  " + "\n  ".join(offenders)
+    )
+    assert checked, (
+        "no label description was actually LENGTH-CHECKED in any nightly source "
+        "(templated ones do not count). Either every description became runtime-"
+        "composed — then this guard is inert and needs a different approach — or "
+        "the extraction drifted. Do not leave it silently checking nothing, which "
+        "is the shape that let the original outage survive 33 nights."
+    )
+
+
+def _label_create_steps_with_continue_on_error() -> list[str]:
+    """Steps that create a label AND are marked `continue-on-error: true`.
+
+    The YAML-native spelling of the same fail-open `|| true` cost. Only reachable
+    now that these guards read the workflow files themselves.
+
+    Checks BOTH levels and treats any enabled value as fail-open, not just a
+    literal step-level `True`:
+      * `continue-on-error` is valid on a JOB too (backtest.yaml and
+        self-review-pass2.yaml both use it that way), and a job-level one
+        swallows every step under it.
+      * a templated `${{ ... }}` value yaml-loads as a STRING, so an `is True`
+        comparison silently passes the very spelling used to make it conditional.
+    """
+    offenders: list[str] = []
+    for wf in NIGHTLY_WORKFLOWS:
+        doc = yaml.safe_load(wf.read_text(encoding="utf-8")) or {}
+        for job_name, job in (doc.get("jobs") or {}).items():
+            job = job or {}
+            job_coe = job.get("continue-on-error")
+            for step in job.get("steps") or []:
+                run = step.get("run") or ""
+                coe = step.get("continue-on-error", job_coe)
+                if "label create" in run and coe is not None and coe is not False:
+                    where = "step" if "continue-on-error" in step else "job"
+                    offenders.append(
+                        f"{wf.name}:{job_name}:{step.get('name') or '<unnamed>'} "
+                        f"({where}-level continue-on-error={coe!r})"
+                    )
+    return offenders
+
+
+def test_label_creation_is_not_continue_on_error() -> None:
+    """`continue-on-error: true` on a label-create step is `|| true` in YAML."""
+    offenders = _label_create_steps_with_continue_on_error()
+    assert not offenders, (
+        "label creation must not be marked continue-on-error — the label is the "
+        "issue dedup key, so discarding its failure breaks filing exactly as "
+        f"`|| true` did. Offending step(s): {offenders}"
     )
 
 

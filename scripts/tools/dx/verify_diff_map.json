@@ -678,7 +678,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "d311d776f83e3422c01476a76615005beeb7afba1d5623b5522b54f66eeef7a1",
+ "source_digest": "7bc81a1712ad4af7d53d9bc5f49cb8dc24272ab558c4b24e229af6d7c2560b5f",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1891,6 +1891,9 @@
   "scripts/tools/ops/alert_quality.py": [
    "tests/shared/test_help_contract.py"
   ],
+  "scripts/tools/ops/bench_report_pr.sh": [
+   "tests/ops/test_nightly_scan_matrix_drift.py"
+  ],
   "scripts/tools/ops/blast_radius.py": [
    "tests/ops/test_blast_radius.py"
   ],
@@ -2071,6 +2074,7 @@
    "tests/shared/test_go_mutation_pilot.py"
   ],
   "tests/shared/_mutation_pilot.py": [
+   "tests/ops/test_nightly_scan_matrix_drift.py",
    "tests/shared/test_mutation_catalog.py",
    "tests/shared/test_property_tools.py"
   ],
