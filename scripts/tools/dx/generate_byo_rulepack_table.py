@@ -148,6 +148,7 @@ def build_rows() -> list:
 
 
 def render_table(lang: str) -> str:
+    """整張表（表頭 + 分隔列 + 資料列）。只有表頭隨語系不同。"""
     s = LANG_STRINGS[lang]
     return "\n".join([s["header"], s["sep"], *build_rows()]) + "\n"
 
@@ -182,6 +183,7 @@ def replace_sentinel_block(content: str, table: str, doc: Path) -> str:
 
 
 def main() -> int:
+    """CLI 入口。回傳 0（無 drift／已寫入）、1（drift，`--check`）、2（caller error）。"""
     ap = argparse.ArgumentParser(
         description="產生 BYO Prometheus 文件內的規則包表（sentinel 就地注入）。",
     )

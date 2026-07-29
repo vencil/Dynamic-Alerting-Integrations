@@ -36,7 +36,7 @@ parent: architecture-and-design.en.md
 | Exporter Liveness | Platform | `prometheus-rules-liveness` | 0 | 1 |
 | Operational | Platform | `prometheus-rules-operational` | 0 | 4 |
 | Platform | Platform | `prometheus-rules-platform` | 0 | 41 |
-| **Total** | | | **148** | **135** |
+| **Total** | | | **166** | **160** (= **326** rules) |
 
 > ⚠️ This table is a **hand-maintained snapshot** with no drift gate yet ([#1267](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1267) only generated the BYO guide's table). The "Owning Team" column has no machine-readable source, so it cannot simply be generated — tracked in that issue's follow-up. Numbers follow `docs/assets/platform-data.json`.
 

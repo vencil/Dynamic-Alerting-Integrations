@@ -40,7 +40,7 @@ parent: architecture-and-design.md
 | Exporter Liveness | Platform | `prometheus-rules-liveness` | 0 | 1 |
 | Operational | Platform | `prometheus-rules-operational` | 0 | 4 |
 | Platform | Platform | `prometheus-rules-platform` | 0 | 41 |
-| **總計** | | | **166****160****326** rules) |
+| **總計** | | | **166** | **160** (= **326** rules) |
 
 > ⚠️ 本表為**手工維護的快照**，目前沒有 drift gate（[#1267](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1267) 只把 BYO 指南那張表改成生成）。「擁有團隊」欄沒有機器可讀來源，故不能直接生成——追蹤見上方 issue 的 follow-up。數字以 `docs/assets/platform-data.json` 為準。
 

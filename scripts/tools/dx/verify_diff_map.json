@@ -136,6 +136,9 @@
   "scripts/tools/dx/generate_alert_reference.py": [
    "tests/dx/test_generate_alert_reference.py"
   ],
+  "scripts/tools/dx/generate_byo_rulepack_table.py": [
+   "tests/dx/test_generate_byo_rulepack_table.py"
+  ],
   "scripts/tools/dx/generate_changelog.py": [
    "tests/dx/test_generate_changelog.py",
    "tests/shared/test_property_tools.py"
@@ -669,7 +672,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "f93adb3edb6094604adfa4abfa9cf125976273a96ae1e63b841bddf75e67752a",
+ "source_digest": "aebe4291aed0e724df4d0360ef682d18a970a85f838310222dce4133b92431ca",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -692,6 +695,7 @@
   "tests/dx/test_gen_recipe_status_json.py",
   "tests/dx/test_generate_adr_index.py",
   "tests/dx/test_generate_alert_reference.py",
+  "tests/dx/test_generate_byo_rulepack_table.py",
   "tests/dx/test_generate_changelog.py",
   "tests/dx/test_generate_doc_map.py",
   "tests/dx/test_generate_planning_index.py",
@@ -1467,6 +1471,7 @@
    "tests/lint/test_check_k8s_manifests.py"
   ],
   "k8s/03-monitoring/deployment-prometheus.yaml": [
+   "tests/dx/test_generate_byo_rulepack_table.py",
    "tests/lint/test_check_doc_k8s_refs.py",
    "tests/lint/test_check_k8s_manifests.py"
   ],
@@ -1676,6 +1681,9 @@
    "tests/dx/test_describe_tenant.py",
    "tests/golden/test_merge_parity.py",
    "tests/ops/test_property_based.py"
+  ],
+  "scripts/tools/dx/generate_byo_rulepack_table.py": [
+   "tests/dx/test_generate_byo_rulepack_table.py"
   ],
   "scripts/tools/dx/generate_doc_map.py": [
    "tests/dx/test_atomic_write.py"

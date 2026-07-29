@@ -57,7 +57,9 @@ PACK_META = {
     "nginx": ("Nginx", "nginx-prometheus-exporter"),
     # liveness 先前不在此表，exporter 欄位因此 fallback 成 pack 名 "liveness"。
     # #1267 把這張表搬進 architecture-and-design 後它會被讀者看到，故補上。
-    "liveness": ("Exporter Liveness", "threshold-exporter 心跳"),
+    # exporter 欄由 LANG_STRINGS["<lang>"]["liveness_exporter"] 覆寫（此處僅為 fallback）——
+    # PACK_META 是跨語系共用的，直接放中文會讓英文表出現中文（外審抓到）。
+    "liveness": ("Exporter Liveness", "threshold-exporter heartbeat"),
     "operational": ("Operational", "threshold-exporter 運營模式"),
     "platform": ("Platform", "threshold-exporter 自監控"),
 }
@@ -70,6 +72,7 @@ LANG_STRINGS = {
         "total": "合計",
         "operational_exporter": "threshold-exporter 運營模式",
         "platform_exporter": "threshold-exporter 自監控",
+        "liveness_exporter": "threshold-exporter 心跳",
     },
     "en": {
         "header": "| Rule Pack | Exporter | Recording | Alert |",
@@ -77,6 +80,7 @@ LANG_STRINGS = {
         "total": "Total",
         "operational_exporter": "threshold-exporter operational mode",
         "platform_exporter": "threshold-exporter self-monitoring",
+        "liveness_exporter": "threshold-exporter heartbeat",
     },
 }
 
@@ -224,6 +228,8 @@ def generate_markdown_table(stats: dict, lang: str = "zh") -> str:
             exporter = s["operational_exporter"]
         elif name == "platform":
             exporter = s["platform_exporter"]
+        elif name == "liveness":
+            exporter = s["liveness_exporter"]
         lines.append(
             f"| {display.lower() if display == name else name} "
             f"| {exporter} "

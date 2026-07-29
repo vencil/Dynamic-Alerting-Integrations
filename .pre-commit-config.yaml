@@ -295,7 +295,9 @@ repos:
         entry: python3 -X utf8 scripts/tools/dx/generate_byo_rulepack_table.py --check --lang all
         language: python
         pass_filenames: false
-        files: ^(rule-packs/|k8s/03-monitoring/.*\.yaml|docs/integration/byo-prometheus-integration(\.en)?\.md)
+        # 也涵蓋生成器本身：只改 render 邏輯（例如欄位格式）而不碰來源時，
+        # 若 hook 不觸發，committed 表格就會與新實作不一致（外審抓到）。
+        files: ^(rule-packs/|k8s/03-monitoring/.*\.yaml|docs/integration/byo-prometheus-integration(\.en)?\.md|scripts/tools/dx/generate_byo_rulepack_table\.py)
         additional_dependencies: ['pyyaml']
 
       - id: alert-reference-check

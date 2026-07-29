@@ -363,17 +363,17 @@ def _smart_detect(project_root: Path):
     try:
         result = subprocess.run(
             ["git", "diff", "--name-only", "HEAD"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
             cwd=str(project_root),
         )
         staged = subprocess.run(
             ["git", "diff", "--name-only", "--cached"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
             cwd=str(project_root),
         )
         untracked = subprocess.run(
             ["git", "ls-files", "--others", "--exclude-standard"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
             cwd=str(project_root),
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -502,14 +502,14 @@ def _generate_diff_report(failed_checks: dict, tools_dir: Path,
             # Run fix command
             subprocess.run(
                 [sys.executable, script_path] + fix_args,
-                capture_output=True, text=True, timeout=60,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
                 cwd=str(project_root),
             )
 
             # Capture diff
             diff_result = subprocess.run(
                 ["git", "diff", "--no-color"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
                 cwd=str(project_root),
             )
 
@@ -521,7 +521,7 @@ def _generate_diff_report(failed_checks: dict, tools_dir: Path,
             # Restore changed files
             subprocess.run(
                 ["git", "checkout", "."],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
                 cwd=str(project_root),
             )
         except subprocess.TimeoutExpired:
@@ -529,7 +529,7 @@ def _generate_diff_report(failed_checks: dict, tools_dir: Path,
             # Attempt restore anyway
             subprocess.run(
                 ["git", "checkout", "."],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
                 cwd=str(project_root),
             )
         except (OSError, subprocess.SubprocessError) as e:
@@ -841,7 +841,7 @@ def main():
             try:
                 result = subprocess.run(
                     [sys.executable, script_path] + fix_args,
-                    capture_output=True, text=True, timeout=60,
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
                     cwd=str(project_root),
                 )
                 if result.returncode == 0:
