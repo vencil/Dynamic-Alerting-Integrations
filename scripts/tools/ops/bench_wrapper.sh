@@ -14,8 +14,28 @@
 #      per-bench `ns/op` rows, and PASS/FAIL summaries.
 #   3. Writes:
 #        BENCH_OUT_DIR/bench.out.txt — clean benchmark results (stdout)
-#        BENCH_OUT_DIR/bench.err.log — raw stderr (log.Printf, compile errors)
+#        BENCH_OUT_DIR/bench.err.log — compile errors / setup failures (fd 2)
 #        BENCH_OUT_DIR/bench.raw.jsonl — original -json event stream
+#
+#      On a SUCCESSFUL run bench.err.log is normally EMPTY — that is expected,
+#      not a sign the capture broke. Under `-json`, cmd/go feeds the test
+#      binary's own stdout AND stderr through test2json, so log.Printf output
+#      arrives in the JSON stream as {"Action":"output"} events, never on fd 2.
+#      Measured (go1.23.12): a benchmark calling log.Println produced 0 bytes
+#      in bench.err.log and 6 matching output events on stdout — and so did one
+#      writing directly to os.Stderr.
+#
+#      Compile/setup failures are the exception and DO land here: the same
+#      measurement with a syntax error produced 47 bytes on fd 2 against 26 on
+#      stdout. That is why exit code 1 below points at this file. (Go 1.24+
+#      additionally emits build failures as JSON events; the pinned CI
+#      toolchain is 1.26, the dev container is 1.23 — so expect err.log to be
+#      populated locally on a compile error and possibly empty in CI.)
+#
+#      This line previously read "raw stderr (log.Printf, compile errors)":
+#      the log.Printf half was wrong, the compile-errors half was right.
+#      bench_filter.go:12-16 has always described the log.Printf behaviour
+#      correctly and is the SSOT for it.
 #
 # Usage
 #   scripts/tools/ops/bench_wrapper.sh -bench=. -benchmem -run=^$ \

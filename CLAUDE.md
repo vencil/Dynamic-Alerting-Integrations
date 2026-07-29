@@ -71,7 +71,13 @@ Vibe 專案內建 **七個本地 skills**（`.claude/skills/`），在對應情�
 
 ## 測試注入 Seam（v2.8.0 後標準）
 
-`ConfigManager` 三個 test-only setter（`SetMetrics` / `SetLogger` / `startWatchLoopWithFakeClock`）取代了 v2.7.x 的 global-swap antipatterns。**寫新測試鐵則：用對 seam、禁止再引入 global swap**；完整對照表（freshMetrics / fake clock / 已移除的 withIsolatedMetrics 等）+ 加 `t.Parallel` 的 RISKY 決策樹見 [`test-map.md` §測試注入 Seam](docs/internal/test-map.md#測試注入-seam-v280-後標準)（`add_t_parallel.py` 的 RISKY tuple 同時當 lint tripwire）。
+**適用範圍：`components/threshold-exporter/app/*_test.go`**（與 [`test-map.md` §測試注入 Seam](docs/internal/test-map.md#測試注入-seam-v280-後標準) 開頭的範圍宣告一致；本節原本沒複述這個範圍，容易被讀成全 repo 鐵則）。
+
+該範圍內：`ConfigManager` 三個 test-only setter（`SetMetrics` / `SetLogger` / `startWatchLoopWithFakeClock`）取代了 v2.7.x 的 global-swap antipatterns。**鐵則是「metrics / logger / watch 這三者一律走 seam」，不是「全面禁止 global swap」**——同 package 的 `main_test.go:8-9` 就明文保留了 `configDir` / `configPath` 的 defer-restore，並註明「因此刻意不 `t.Parallel`」。完整對照表（freshMetrics / fake clock / 已移除的 withIsolatedMetrics 等）+ 加 `t.Parallel` 的 RISKY 決策樹見 test-map.md（`add_t_parallel.py` 的 RISKY tuple 同時當 lint tripwire）。
+
+**tenant-api 的等價慣例**：`NewForTest`（`internal/rbac` / `internal/policy` / `internal/configwatcher` / `internal/tenantorg`）、`NewManagerForTest`（`internal/federation/fedpolicy` / `internal/federation/token`）、以及 `platform.ResetMetricsRegistriesForTest`（#1274）。
+
+**process-global 的清理形式取決於誰寫它**：序列測試用 defer-restore（如上述 `main_test.go`）；**由 `t.Parallel()` 測試寫入的則必須用冪等 reset**——save-then-restore 是「最後一個 cleanup 贏」，會把別的測試的寫入還原回去（#1274 實測 3 次紅 2 次，reset 形式 5/5 穩定）。⚠️ **reset 只解決清理，不提供隔離**：它讓「測試跑完後的狀態」與順序無關，但不會讓平行測試之間互不干擾。若平行測試各自需要**不同**的值，全域本身就是錯的機制——改用 per-test state，或讓該測試不平行。
 
 ## 語言策略（SSOT Language）
 

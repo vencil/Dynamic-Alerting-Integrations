@@ -391,9 +391,15 @@ workflow_dispatch 跑完後讀 step summary，決定要不要 tag。
 > COUNT=3 make go-bench-clean             # 覆寫 -count
 > ```
 >
-> 產出：`bench.out.txt`（僅 `goos:` / `goarch:` / `pkg:` / `cpu:` / `BenchmarkX ns/op` / `PASS` / `FAIL` 行）、`bench.err.log`（log.Printf 原 stderr）、`bench.raw.jsonl`（`go test -json` 原 event stream 供 debug）。
+> 產出：`bench.out.txt`（僅 `goos:` / `goarch:` / `pkg:` / `cpu:` / `BenchmarkX ns/op` / `PASS` / `FAIL` 行）、`bench.err.log`（compile / setup 失敗，成功跑時為空——見下）、`bench.raw.jsonl`（`go test -json` 原 event stream 供 debug）。
 >
-> 底層實作：`go test -bench ... -json <args>` → `bench_filter.go` 解析 JSON event，只保留「benchmark result pattern」+ 「suite header/summary」。-json 把 stdout/stderr 分流，彻底消除 log 污染。
+> 底層實作：`go test -bench ... -json <args>` → `bench_filter.go` 解析 JSON event，只保留「benchmark result pattern」+ 「suite header/summary」。
+>
+> ⚠️ **`-json` 並不是把 stdout/stderr 分流**（本行原文如此敘述，是錯的）。`cmd/go` 把測試 binary 的 stdout **與 stderr** 一起餵給 test2json，所以 `log.Printf`（乃至直接寫 `os.Stderr`）的輸出會以 `{"Action":"output"}` event 出現在 **stdout 的 JSON 串流裡**，不會落到 fd 2。實測 go1.23.12：呼叫 `log.Println` 的 benchmark 產出 `bench.err.log` **0 bytes**、stdout 6 個對應 event。
+>
+> **例外是編譯／setup 失敗，那真的會進 `bench.err.log`**：同一組實測改成語法錯誤，fd 2 得 47 bytes、stdout 只有 26。所以「跑失敗時先看 `bench.err.log`」仍然成立（`bench_wrapper.sh` 的 exit code 1 就指向它）；只有**成功跑完卻看到 err.log 是空的**才是預期行為、不代表擷取壞掉。Go 1.24+ 會連 build 失敗也發成 JSON event，CI 釘 1.26、dev container 是 1.23，因此本機看得到的編譯錯誤在 CI 可能改以 event 形式出現在 `bench.raw.jsonl`。
+>
+> 消除 log 污染的機制不是「分流」，而是 `bench_filter.go` 依 event 形狀**篩選**：所有測試輸出都被包成 JSON event，過濾器只保留 benchmark 結果與 suite header/summary。`bench_filter.go:12-16` 對這一段的敘述一直是對的，可以當 SSOT。
 
 **以下原 v2.1.0 LL 保留為背景，供 `bench_wrapper.sh` 出問題時的 root-cause 參考：**
 
