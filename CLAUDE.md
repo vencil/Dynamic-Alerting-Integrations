@@ -36,7 +36,7 @@ Vibe 專案內建 **七個本地 skills**（`.claude/skills/`），在對應情�
 - **`vibe-dev-rules`** — 13 條開發規範 + Top 4 違反熱點（commit / push / refactor 前自動觸發）
 - **`vibe-playbook-nav`** — 任務→Playbook 章節路由（涉及 K8s / docker / release / conf.d / benchmark / E2E 時自動觸發）
 - **`vibe-subagent-review`** — IaC-aware 兩階段 review（code 走 spec→quality、IaC 走 blast-radius）+ 對抗式 review 紀律（finder≠verifier 自審 / verify-before-assert / only-actionable）+ 長時驗證 agent 可觀測性協議（Workflow-first / `dev/<scope>/PROGRESS.jsonl` ledger / 單 agent ~15 min 上限 / `make agent-progress`）（multi-file PR / `Agent` 跑完後、commit 前、或 spawn 長時 reviewer/verifier 前自動觸發；TRK-305）
-- **`vibe-release`** — 六線版號 release 收尾 SOP（make pre-tag → CHANGELOG distill + project-face refresh → 六線 tag → gh release ×6；release 收尾 / phase e 時觸發；TRK-306，延伸 #474 Layer 3）
+- **`vibe-release`** — 六線版號 release 收尾 SOP（make pre-tag → CHANGELOG distill + project-face refresh → **未發布 draft advisory 檢查** → 六線 tag → gh release ×6；release 收尾 / phase e 時觸發；TRK-306 + TRK-354，延伸 #474 Layer 3）
 - **`vibe-brainstorm`** — 設計階段 Socratic ideation（MVP 範圍 / explicit trade-off / defer-with-trigger + proposer≠critic 內部對抗 + 外部 adversarial review；新 ADR / component / epic 拆解 / RFC 時觸發；TRK-308）
 - **`vibe-security-audit`** — 全 component 週期性深度安全稽核 harness（Recon→平行 Hunt→對抗式 Validate→Synthesize，跑在隔離 worktree 快照；借 Cloudflare `security-audit-skill` pattern wrap Vibe 攻擊面向，per-role 走 `.claude/agents/vibe-sec-*`；新信任邊界 GA 前 / incident 後 / 季度觸發，與 diff-scoped `/security-review` 互補、不進 CI）
 
