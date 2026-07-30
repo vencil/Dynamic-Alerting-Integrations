@@ -192,6 +192,10 @@ class TestParsing:
     def test_logsql_query_filters_event_field_and_settles(self):
         q = rec.build_logsql_query(lookback_s=86400, settle_s=60)
         assert 'event:"federation_token_revoked"' in q
+        assert f'log_type:"{rec.LOG_TYPE_EVIDENCE}"' in q, (
+            "#1237: revocation-event query is not source-qualified — it would "
+            "match a same-named event from any producer in the store"
+        )
         assert "now-86400s" in q and "now-60s" in q
 
     def test_failopen_query_uses_recent_window(self):
@@ -199,15 +203,19 @@ class TestParsing:
         q = rec.build_failopen_query(lookback_s=600, settle_s=60)
         assert "now-600s" in q and "now-60s" in q
         assert rec.GATEWAY_FAILOPEN_PHRASE in q
+        # #1237: was a bare _msg phrase; now class- AND app-qualified so a
+        # tenant request or a sidecar cannot forge the fail-open signal.
+        assert f'log_type:"{rec.LOG_TYPE_GATEWAY_OP}"' in q
+        assert f'app:"{rec.GATEWAY_APP}"' in q
 
     def test_rejected_query_is_stream_field_qualified(self):
-        """#1235. The fail-open query is a bare phrase against the whole
-        message and is therefore forgeable by anything that can get a matching
-        string into the stream. A new query must not inherit that: qualify on
-        the class Vector assigns to non-JSON gateway output, which
-        request-derived content cannot reach."""
+        """#1235 / #1237. Qualify on the class Vector assigns to non-JSON gateway
+        output (which request-derived content cannot reach — it parses as JSON
+        into another class) AND on the Envoy container `app`, excluding the
+        mtail / logrotate sidecars that share the pod and its label."""
         q = rec.build_rejected_query(lookback_s=600, settle_s=60)
-        assert 'log_type:"gateway_operational"' in q
+        assert f'log_type:"{rec.LOG_TYPE_GATEWAY_OP}"' in q
+        assert f'app:"{rec.GATEWAY_APP}"' in q
         assert rec.GATEWAY_REJECTED_PHRASE in q
         assert "now-600s" in q and "now-60s" in q
 
@@ -250,12 +258,11 @@ class TestParsing:
 
     def test_heartbeat_query_is_source_qualified(self):
         """#1234: the canary query filters on the event field AND the stream
-        class it arrives on. Source qualification is the point — the pre-existing
-        revocation query keys on `event` alone across the whole store (the #1237
-        debt), so any producer that ever logs that field name can spoof it. The
-        heartbeat query starts qualified, and `log_type` is written by the
-        platform inside the Vector transform (from pre-merge locals), so a log
-        payload cannot forge it."""
+        class it arrives on. `log_type` is written by the platform inside the
+        Vector transform (from pre-merge locals), so a log payload cannot forge
+        the class. The revocation query now carries the SAME qualifier (#1237
+        closed); test_event_and_heartbeat_queries_share_stream_class pins the two
+        together so they can never diverge into a silent all-clear."""
         q = rec.build_heartbeat_query(lookback_s=1800, settle_s=60)
         assert 'event:"federation_revocation_channel_heartbeat"' in q
         assert 'log_type:"federation_evidence"' in q, (
@@ -273,6 +280,59 @@ class TestParsing:
         ev = rec.build_logsql_query(lookback_s=86400, settle_s=60)
         assert "federation_token_revoked" not in hb
         assert rec.EVENT_HEARTBEAT not in ev
+
+    def test_event_and_heartbeat_queries_share_stream_class(self):
+        """⛔ #1237 load-bearing invariant. The revocation-event query and its
+        liveness canary MUST filter on the same stream class. If they diverge, a
+        misqualified event query could return zero (→ tamper_suspected 0, a clean
+        all-clear) while the canary still matched (→ channel_up 1), so the very
+        signal meant to catch a severed channel would pass. Pin them equal."""
+        ev = rec.build_logsql_query(lookback_s=86400, settle_s=60)
+        hb = rec.build_heartbeat_query(lookback_s=1800, settle_s=60)
+        token = f'log_type:"{rec.LOG_TYPE_EVIDENCE}"'
+        assert token in ev and token in hb, (
+            "event and canary queries no longer share the evidence stream class "
+            "— a divergence here is a silent all-clear over a blind query"
+        )
+
+    def test_gateway_app_matches_shipped_container_name(self):
+        """The gateway_operational queries narrow on `app` == the Envoy container
+        name, a hand-copied contract with the chart. A rename there would
+        silently zero the fail-open / reload-rejected gauges (monitoring looks
+        healthy because it stopped matching). Pin GATEWAY_APP against the shipped
+        Deployment, mirroring the phrase pin above. Exact per-line match, not a
+        substring — `- name: envoy` is a prefix of `- name: envoy-config`."""
+        dep = os.path.join(
+            os.path.dirname(__file__), "..", "..",
+            "helm", "federation-gateway", "templates", "deployment.yaml")
+        container_names = [
+            ln.strip() for ln in open(os.path.abspath(dep), encoding="utf-8")
+        ]
+        assert f"- name: {rec.GATEWAY_APP}" in container_names, (
+            f"GATEWAY_APP={rec.GATEWAY_APP!r} no longer matches a container name "
+            "in the federation-gateway Deployment — the app qualifier would zero "
+            "the gateway_operational gauges"
+        )
+
+    def test_log_type_constants_match_vector_configmap(self):
+        """LOG_TYPE_EVIDENCE / LOG_TYPE_GATEWAY_OP are hand-copied from the
+        Vector pipeline's demux / evidence classifier. A rename on the Vector
+        side would silently zero the queries that filter on them (monitoring
+        looks healthy because it stopped matching). Pin BOTH literals against the
+        shipped configmap — mirroring the GATEWAY_APP / phrase pins, so every
+        hand-copied stream contract has a cross-file guard, not just `app`."""
+        cm = os.path.join(
+            os.path.dirname(__file__), "..", "..",
+            "helm", "vector", "templates", "configmap.yaml")
+        src = open(os.path.abspath(cm), encoding="utf-8").read()
+        assert f'"{rec.LOG_TYPE_GATEWAY_OP}"' in src, (
+            f"LOG_TYPE_GATEWAY_OP={rec.LOG_TYPE_GATEWAY_OP!r} no longer appears "
+            "in the Vector configmap — the gateway_operational queries would zero"
+        )
+        assert f'"{rec.LOG_TYPE_EVIDENCE}"' in src, (
+            f"LOG_TYPE_EVIDENCE={rec.LOG_TYPE_EVIDENCE!r} no longer appears in "
+            "the Vector configmap — the evidence queries would zero out"
+        )
 
 
 class TestMetrics:
