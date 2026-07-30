@@ -4,7 +4,7 @@
 
 ## 這是什麼
 
-一支長駐 **Deployment**（`helm/federation-reconciler`，跑 da-tools image 內的 `_federation_revocation_reconciler.py`），週期性把**撤銷事件日誌**（VictoriaLogs，`event:"federation_token_revoked"`）跟 **live 撤銷集**（`tenant-federation-store` ConfigMap 的 `revoked.txt`，以唯讀 volume mount）對帳，偵測 **un-revoke**（有寫入權的攻擊者把未過期的撤銷偷偷刪掉），並用 `/metrics` 暴露給 Prometheus。
+一支長駐 **Deployment**（`helm/federation-reconciler`，跑 da-tools image 內的 `_federation_revocation_reconciler.py`），週期性把**撤銷事件日誌**（VictoriaLogs，`log_type:"federation_evidence" AND event:"federation_token_revoked"`——#1237 起限定串流，與 heartbeat canary 同類別）跟 **live 撤銷集**（`tenant-federation-store` ConfigMap 的 `revoked.txt`，以唯讀 volume mount）對帳，偵測 **un-revoke**（有寫入權的攻擊者把未過期的撤銷偷偷刪掉），並用 `/metrics` 暴露給 Prometheus。
 
 - **為何 Deployment 非 CronJob**：平台無 Pushgateway/textfile/vmalert，短命 CronJob 無法被 scrape；exporter + `up` liveness 才是 Prometheus-native。
 - **為何 mount 讀而非 API**：kubelet projection＝真·source-of-truth 直讀、不經可能被 compromise 的 tenant-api、且免 RBAC（ADR-028 G3）。
@@ -30,7 +30,7 @@
 ### `FederationRevocationTamperSuspected`（critical）
 **意義**：log 說某 token 已撤銷且未過期，但它不在 live 撤銷集 → 疑似 un-revoke。
 **IR**：
-1. 查 VictoriaLogs 拿 opaque token_id：`{job="kube-audit"}` 之外用 `event:"federation_token_revoked"` 過濾近 24h（reconciler pod log 也會印 `TAMPER SUSPECTED: ...`）。
+1. 查 VictoriaLogs 拿 opaque token_id：用 `log_type:"federation_evidence" AND event:"federation_token_revoked"` 過濾近 24h（與 reconciler 同一支查詢；#1237 起加 `log_type` 限定，避免比對到非權威來源灌入的同名事件）（reconciler pod log 也會印 `TAMPER SUSPECTED: ...`）。
 2. **租戶去識別化**：log 只有 token_id（ADR-028 D3）；IR 時從 store 的 records 以 token_id 反查租戶，**別**把租戶識別碼寫回工單。
 3. diff live store vs git 歷史；若確為惡意刪除，從 git 還原該撤銷（break-glass 見 governance-security.md）。
 4. 併查 #926 audit（是否有非平台身份寫 ConfigMap）——但本告警的威脅是**帶合法 SA 身份**的寫入，#926 可能看不到。
@@ -60,6 +60,7 @@
 **IR**：查 gateway 的 `revoked.txt` projected-volume mount + `tenant-federation-store` ConfigMap；**持續**失敗（非 pod 啟動 / remount 瞬態）可能是 mount 遭竄改（DoS 防禦本身，見 [#996](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/996)）。真正的 fail-closed 降級是 #996 的 defer-with-trigger。
 
 ⛔ **本告警只吃「讀不到」那一句 warn**（`federation: revoked-set reload failed`）。gateway 另有一句語意**相反**的 warn，見下。
+手查 VictoriaLogs（與 reconciler 同一支查詢）：`log_type:"gateway_operational" AND app:"envoy" AND "federation: revoked-set reload failed"`（#1237 起限定串流類別＋Envoy 容器，排除同 pod 的 mtail／logrotate sidecar 噪音；⚠️ 此限定只排除**合法** sidecar，非來源身分驗證——見 ADR-028 D3 §偵測查詢的來源限定的誠實邊界）。
 
 ### `FederationRevocationLiveSetRejected` ／ `FederationGatewayRevokedSetReloadRejected`（皆 critical；#1235 / TRK-349）
 
@@ -68,7 +69,7 @@
 **兩條告警分別是什麼**：
 
 - **`FederationRevocationLiveSetRejected`**（`federation_revocation_live_set_rejected_lines > 0`, `for:10m`, critical）——**成因側**。本 reconciler 從掛載的 `revoked.txt` 讀到違反行契約的行。它看得到成因，但讀的是**自己那份 kubelet 投影**，未必等於 gateway 當下載到的那份。
-- **`FederationGatewayRevokedSetReloadRejected`**（`federation_gateway_revoked_set_reload_rejected > 0`, `for:10m`, critical）——**執行面自述**。直接從 gateway 自己的 log stream 讀回牠拒載了幾次。它不受上述投影／時間差影響，但對「沒產生那句 warn 的成因」是啞的。
+- **`FederationGatewayRevokedSetReloadRejected`**（`federation_gateway_revoked_set_reload_rejected > 0`, `for:10m`, critical）——**執行面自述**。直接從 gateway 自己的 log stream 讀回牠拒載了幾次。它不受上述投影／時間差影響，但對「沒產生那句 warn 的成因」是啞的。手查：`log_type:"gateway_operational" AND app:"envoy" AND "federation: revoked-set rejected"`（#1237 起限定，同上一段的誠實邊界）。
 - ⛔ **兩者刻意不是冗餘**：各自在對方看不見的地方看得見，**任一可單獨非零**。看到其中一條就把另一條一起調出來看。
 - **`for:10m` 的來由**：reconcile 週期 300s，10m ＝一個完整週期再加等量餘裕，足以吸收單次異常（例如讀到正在被 kubelet 換版的投影）。此條件是**持久性**的（只有帶外寫入造得出來、只有人為改得掉），窗開長不花任何成本——與 `FederationGatewayRevocationLoadFailure` 的 `for:2m`（去抖真正瞬態的 I/O）不同。
 

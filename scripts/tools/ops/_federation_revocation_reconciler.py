@@ -100,6 +100,20 @@ DEFAULT_HEARTBEAT_LOOKBACK_S = 1800  # evidence-channel canary window (30m): ten
 EVENT_HEARTBEAT = "federation_revocation_channel_heartbeat"
 LOG_TYPE_EVIDENCE = "federation_evidence"
 
+# The Vector stream class for gateway operational output (non-JSON Envoy stderr
+# / Lua logWarn), plus the container whose output legitimately lands there.
+# Both are hand-copied contracts, pinned to source by the tests below:
+#   * LOG_TYPE_GATEWAY_OP — helm/vector/templates/configmap.yaml, the demux
+#                           `else` branch that classes non-JSON gateway output.
+#   * GATEWAY_APP          — helm/federation-gateway/templates/deployment.yaml,
+#                           the Envoy container `name:`. `.app` in Vector is the
+#                           k8s container_name.
+# `app` narrows gateway_operational — which ALSO carries the mtail / logrotate
+# sidecars' non-JSON stderr (same pod, same label) — to the Envoy container
+# whose Lua actually emits these warnings.
+LOG_TYPE_GATEWAY_OP = "gateway_operational"
+GATEWAY_APP = "envoy"
+
 # The revoked.txt line contract (#1235 / TRK-349). revoked.txt has two
 # independently-implemented readers — this one and the gateway Lua filter —
 # and they used to apply different line/whitespace semantics, so the same
@@ -255,11 +269,24 @@ def reconcile(
 def build_logsql_query(lookback_s: int, settle_s: int) -> str:
     """LogsQL for the settled revocation-event window.
 
-    Filters on the ``event`` data field (VictoriaLogs is schemaless — a
-    dedicated log_type stream is not required), and only reconciles logs old
-    enough to have reliably landed (avoids ingestion-lag misjudgement)."""
+    Source-qualified on ``log_type`` (#1237), matching build_heartbeat_query so
+    the revocation-event query and its liveness canary read the SAME stream
+    class. That symmetry is load-bearing: a qualifier here the canary did NOT
+    also carry would be a new silent-failure surface — it could exclude real
+    revocation events (→ tamper_suspected 0) while the canary still passed
+    (→ channel_up 1), i.e. a clean all-clear over a blind query.
+
+    ⚠️ This narrows the search (and stops a future ``additionalSources``
+    producer, or anything else that logs the ``event`` field name, from being
+    counted); it does NOT bind producer IDENTITY. ``log_type`` is stamped by
+    the platform in the evidence transform whose only entry ticket is a pod
+    label, so a principal able to create a pod with that label still reaches
+    this stream. Closing that forgery gap needs producer binding in the
+    evidence branch, not a query-side field (tracked separately). Only
+    reconciles logs old enough to have reliably landed (ingestion-lag guard)."""
     return (
         f'_time:[now-{lookback_s}s, now-{settle_s}s] '
+        f'AND log_type:"{LOG_TYPE_EVIDENCE}" '
         f'AND event:"federation_token_revoked"'
     )
 
@@ -273,13 +300,13 @@ def build_heartbeat_query(lookback_s: int, settle_s: int) -> str:
     is intact. Absence means the chain is severed — which is otherwise
     indistinguishable from "no revocations happened".
 
-    ⛔ SOURCE-QUALIFIED on purpose. build_logsql_query above filters on the
-    ``event`` field alone across the WHOLE store, which lets any producer that
-    ever logs that field name spoof the signal (the debt tracked in #1237). A
-    new query starts qualified: ``log_type`` is written by the platform inside
-    the ``federation_evidence`` transform (from pre-merge locals, so a log
-    payload cannot forge it), which pins the rows to the one stream class the
-    evidence channel owns."""
+    ⛔ SOURCE-QUALIFIED on purpose, and build_logsql_query above now carries the
+    SAME ``log_type`` qualifier (#1237 closed) — the two MUST stay matched, or a
+    real revocation event and its canary could be split across stream classes.
+    ``log_type`` is written by the platform inside the ``federation_evidence``
+    transform (from pre-merge locals, so a log payload cannot forge the CLASS),
+    which pins the rows to the one stream class the evidence channel owns. This
+    binds the stream class, not the producer identity — see build_logsql_query."""
     return (
         f'_time:[now-{lookback_s}s, now-{settle_s}s] '
         f'AND log_type:"{LOG_TYPE_EVIDENCE}" '
@@ -291,11 +318,26 @@ def build_failopen_query(lookback_s: int, settle_s: int) -> str:
     """LogsQL for gateway revoked-set read failures (the fail-open signal).
 
     The gateway Lua logs ``federation: revoked-set reload failed`` to Envoy
-    stderr; Vector ships it to VictoriaLogs. mtail (audit access-log only)
-    cannot see it, so the reconciler counts it here."""
+    stderr; Vector classes non-JSON gateway output as ``gateway_operational``.
+    Source-qualified on ``log_type`` + ``app`` (#1237, was a bare ``_msg``
+    phrase): the class alone still spans the mtail / logrotate sidecars' stderr
+    (same pod, same label), so ``app`` narrows it to the Envoy container. A
+    tenant cannot forge this VIA THE REQUEST PATH — request-derived content is
+    JSON and parses into another class (federation_audit), never
+    gateway_operational; verified against the real Envoy access-log encoder,
+    which escapes any injected byte into a single valid JSON line.
+    ⚠️ ``app`` excludes the sidecars' NOISE, it is NOT producer authentication:
+    a principal that can create a pod with the gateway label and an ``envoy``
+    container still lands in this class (gateway_operational has no pod_owner
+    check — the demux spoof guard only covers federation_audit). That is the
+    same producer-identity gap as the evidence branch, closed only by producer
+    binding at ingest, not a query-side field (tracked separately). mtail (audit
+    access-log only) cannot see this warning, so the reconciler counts it here."""
     return (
         f'_time:[now-{lookback_s}s, now-{settle_s}s] '
-        f'AND "federation: revoked-set reload failed"'
+        f'AND log_type:"{LOG_TYPE_GATEWAY_OP}" '
+        f'AND app:"{GATEWAY_APP}" '
+        f'AND "{GATEWAY_FAILOPEN_PHRASE}"'
     )
 
 
@@ -320,17 +362,20 @@ def build_rejected_query(lookback_s: int, settle_s: int) -> str:
     set it had BEFORE the file changed — every revocation issued since is
     unenforced, and a worker that started into a refusal enforces nothing.
 
-    Stream-field qualified, unlike :func:`build_failopen_query`. That one
-    is a bare phrase against ``_msg`` and is therefore forgeable by anything
-    that can get a matching string into the log stream (tracked separately);
-    a new query has no reason to inherit that. ``gateway_operational`` is
-    the class Vector assigns to gateway output that is NOT parseable audit
-    JSON — which is where a Lua ``logWarn`` lands, and which request-derived
-    content cannot reach because it parses as JSON into another class.
+    Source-qualified on ``log_type`` + ``app`` (build_failopen_query now carries
+    the same pair, #1237). ``gateway_operational`` is the class Vector assigns to
+    gateway output that is NOT parseable audit JSON — which is where a Lua
+    ``logWarn`` lands, and which request-derived content cannot reach because it
+    parses as JSON into another class. ``app`` narrows the class to the Envoy
+    container, excluding the mtail / logrotate sidecars that share the pod and
+    its label — but see build_failopen_query: ``app`` is noise-exclusion, NOT
+    producer authentication, and this class shares the evidence branch's
+    pod-label-only forging boundary.
     """
     return (
         f'_time:[now-{lookback_s}s, now-{settle_s}s] '
-        f'AND log_type:"gateway_operational" '
+        f'AND log_type:"{LOG_TYPE_GATEWAY_OP}" '
+        f'AND app:"{GATEWAY_APP}" '
         f'AND "{GATEWAY_REJECTED_PHRASE}"'
     )
 
