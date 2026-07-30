@@ -104,6 +104,11 @@ dir_rules:
     suite: tests/alertmanager-inhibit
     runner: "make test-am-inhibit"
     justification: harness_test.go 明列的受測輸入②——手貼 generator 輸出的 checked-in 結果（外審 F1）
+  - name: k8s-manifest-guards
+    source: "k8s/**"
+    suite: tests/k8s
+    runner: "pytest"
+    justification: tests/k8s 直接以 k8s/ 下的 raw manifest 為輸入（NetworkPolicy 兩端對稱性等），無 Python source 可供 import/文字掃描解析
   - name: portal-vitest
     source: "tools/portal/**"
     suite: tools/portal/tests

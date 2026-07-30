@@ -54,6 +54,22 @@ spec:
           podSelector:
             matchLabels:
               app: prometheus
+        # maintenance-scheduler drives the silences API (/api/v2/silences) for
+        # planned-maintenance windows. Its egress to 9093 was already allowed
+        # (allow-maintenance-scheduler-egress) but this side was not — and a
+        # NetworkPolicy connection needs BOTH ends, so every silence call was
+        # dropped here. The CronJob pod is labelled
+        # {app: dynamic-alerting, component: maintenance-scheduler}, so the
+        # `app: prometheus` peer above never matched it. Failure mode was
+        # silent-and-self-concealing: silences simply never appear, and the
+        # alerts they were meant to suppress fire through the maintenance
+        # window instead.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              component: maintenance-scheduler
       ports:
         - protocol: TCP
           port: 9093
