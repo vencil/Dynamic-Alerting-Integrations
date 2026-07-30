@@ -15,7 +15,10 @@ branch of that contract:
 from __future__ import annotations
 
 import importlib.util
+import re
 from pathlib import Path
+
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = REPO_ROOT / "scripts" / "tools" / "lint" / "check_scrape_reachability.py"
@@ -86,6 +89,44 @@ def _check(consumed, jobs, services, known_unknown=None):
     return gate.run_check(
         consumed=consumed, outputs=set(), jobs=jobs, services=services,
         known_unknown=known_unknown or {})
+
+
+def _jobs_without_monitoring_ns():
+    """The pre-fix face with `monitoring` dropped from the monitoring-components
+    SD namespace list — the drift the threshold-exporter family exists to catch.
+    Mutates the parsed job model, so no repo YAML is touched."""
+    jobs = _pre_fix_jobs()
+    for j in jobs:
+        if j["job"] == "monitoring-components":
+            j["sd_namespaces"] = [n for n in j["sd_namespaces"] if n != "monitoring"]
+    return jobs
+
+
+# The 13 threshold-exporter series both rule trees consume (#1285). All emitted
+# by one binary / one registry / one /metrics handler, so all share ONE scrape
+# provenance — the threshold-exporter Service in ns `monitoring`. Two DIFFERENT
+# declaration sites feed that one registry, and both must be named here so
+# verify_diff's text_map schedules this test when either moves:
+#   components/threshold-exporter/app/collector.go       — user_* + the two
+#       tenant_* info metrics + da_config_event (per-scrape ConstMetric)
+#   components/threshold-exporter/app/config_metrics.go  — the other 6 da_*
+#       (cumulative package-level collectors, registered onto the same registry)
+#   components/threshold-exporter/app/main.go            — mounts the handler
+_THRESHOLD_EXPORTER_METRICS = (
+    "da_config_blast_radius_tenants_affected_bucket",
+    "da_config_defaults_shadowed_total",
+    "da_config_event",
+    "da_config_last_reload_complete_unixtime_seconds",
+    "da_config_parse_failure_total",
+    "da_config_reload_trigger_total",
+    "da_tenant_metrics_over_limit",
+    "user_severity_dedup",
+    "user_silent_mode",
+    "user_state_filter",
+    "user_threshold",
+    "tenant_metadata_info",
+    "tenant_expected_exporter",
+)
 
 
 # ── the live repo ─────────────────────────────────────────────────────────
@@ -290,13 +331,182 @@ def test_kubelet_prefix_wins_over_kube_prefix():
     assert kind == "service" and spec == ("monitoring", "kube-state-metrics")
 
 
+# ── threshold-exporter provenance (#1285) ─────────────────────────────────
+
+def test_threshold_exporter_series_all_route_to_one_family():
+    """da_* / user_* / the two tenant_* info metrics share ONE scrape source.
+
+    They used to be excluded from the leaf set outright, on a value-origin
+    argument ("conf.d-synthesised"). Value origin is not scrape provenance:
+    every one of them is registered on threshold-exporter's single /metrics
+    registry, so all 13 must resolve to the same threshold-exporter family.
+    """
+    for m in _THRESHOLD_EXPORTER_METRICS:
+        fam = gate._resolve_family(m)
+        assert fam is not None, m
+        _key, kind, spec = fam
+        # Assert the LITERAL namespace, not gate.THRESHOLD_EXPORTER_NAMESPACE —
+        # comparing the constant against itself passes even if someone retargets
+        # the family at the wrong namespace (measured: that mutation left this
+        # test green).
+        assert (kind, spec) == ("helm-service", "monitoring"), (m, fam)
+
+
+def test_threshold_exporter_series_are_leaves_and_reachable_on_real_repo():
+    """All 13 are now judged by this gate, and all pass on the live manifests."""
+    result = gate.run_check()
+    classes = result["classes"]
+    for m in _THRESHOLD_EXPORTER_METRICS:
+        assert m in classes, f"{m} is not in the leaf set — the exclusion is back"
+        assert classes[m][0] == gate.REACHABLE, (m, classes[m])
+    assert result["errors"] == [], result["errors"]
+
+
+def test_threshold_exporter_family_is_exhaustive_on_the_real_repo():
+    """The prefix rows claim the WHOLE `da_`/`user_` namespace for one component.
+
+    That claim is only safe while threshold-exporter is the only emitter. If
+    another component (say the federation-gateway chart, helm-only and correctly
+    ledgered UNKNOWN-SOURCE for its other metrics) grows a `da_`/`user_`-named
+    series, the prefix would hand it a POSITIVELY FALSE provenance — "Service in
+    pinned ns 'monitoring'" — and route it around the NEW-UNKNOWN-SOURCE
+    exit-lock that exists to force exactly that classification decision.
+
+    Nothing in the gate can detect that, so pin the set instead: a 14th
+    `da_`/`user_` leaf must fail here and be triaged by a human.
+    """
+    classes = gate.run_check()["classes"]
+    seen = {m for m in classes if m.startswith(("da_", "user_"))}
+    seen |= {m for m in ("tenant_metadata_info", "tenant_expected_exporter")
+             if m in classes}
+    assert seen == set(_THRESHOLD_EXPORTER_METRICS), (
+        "threshold-exporter family membership drifted — confirm the new metric is "
+        "really emitted by threshold-exporter (components/threshold-exporter/app/"
+        "collector.go or config_metrics.go) before adding it here; if it comes "
+        f"from another component the prefix routing is wrong. Diff: "
+        f"{seen ^ set(_THRESHOLD_EXPORTER_METRICS)}")
+
+
+def test_threshold_exporter_series_die_if_a_name_filter_rejects_them():
+    """The detection this change ACTUALLY adds, and the only one.
+
+    ⚠️ Do not confuse this with the SD-list drift below: dropping `monitoring`
+    from the SD list was ALREADY loud before this change (measured: 24 other
+    leaves — alertmanager_* and 22 kube_* — are pinned into the same namespace
+    and go DEAD on it, so the gate was never silent about that). The genuinely
+    new capability is per-metric: a `__name__` keep/drop in the scraping job
+    that rejects THESE families specifically hits nothing else in the repo
+    (measured: 13 DEAD, 0 collateral), so before #1285 it was invisible.
+    """
+    jobs = _pre_fix_jobs()
+    for j in jobs:
+        if j["job"] == "monitoring-components":
+            j["name_rules"].append(("drop", "(da_|user_|tenant_metadata_info).*"))
+    consumed = {m: {f"platform::Consumer_{m}"} for m in _THRESHOLD_EXPORTER_METRICS}
+    result = _check(consumed=consumed, jobs=jobs, services=[])
+    for m in _THRESHOLD_EXPORTER_METRICS:
+        if m == "tenant_expected_exporter":
+            continue  # deliberately outside the drop regex — see the guard below
+        assert result["classes"][m][0] == gate.DEAD, (m, result["classes"][m])
+    # Guard against a vacuous pass: a name the filter does NOT reject must
+    # survive, otherwise this test would also pass if everything went DEAD.
+    assert result["classes"]["tenant_expected_exporter"][0] == gate.REACHABLE
+
+
+def test_threshold_exporter_series_are_dead_if_monitoring_ns_leaves_sd_list():
+    """Namespace/SD-face drift also reaches these 13 now that they are judged.
+
+    Weaker evidence than the test above — this drift was already caught via
+    other families in the same namespace — but it pins that the 13 participate
+    rather than being silently skipped.
+    """
+    consumed = {m: {f"platform::Consumer_{m}"} for m in _THRESHOLD_EXPORTER_METRICS}
+    result = _check(consumed=consumed, jobs=_jobs_without_monitoring_ns(),
+                    services=[])
+    for m in _THRESHOLD_EXPORTER_METRICS:
+        cls, reason = result["classes"][m]
+        assert cls == gate.DEAD, (m, cls, reason)
+        assert "monitoring" in reason
+    assert len([e for e in result["errors"] if "DEAD" in e]) == len(
+        _THRESHOLD_EXPORTER_METRICS), result["errors"]
+
+
+def test_threshold_exporter_chart_still_hardcodes_the_pinned_namespace():
+    """⛔ Pin the EXTERNAL premise the whole family entry rests on.
+
+    THRESHOLD_EXPORTER_NAMESPACE is an ASSERTION, not a check: the gate reads
+    only k8s/**, rule-packs/ and the prometheus ConfigMap — never helm/. It is
+    sound today solely because the chart template writes `namespace: monitoring`
+    literally instead of `{{ .Release.Namespace }}`.
+
+    That is a one-line edit away from false, and a tempting one: the SAME chart
+    already uses the templated form in servicemonitor.yaml, so "make the
+    namespace handling consistent" would silently turn 13 REACHABLE verdicts
+    into fiction with no gate firing (helm/** is not in this hook's files
+    filter either). Verifying the chart at gate runtime is deferred (#1286);
+    until then this test is the tripwire.
+    """
+    svc = (REPO_ROOT / "helm" / "threshold-exporter" / "templates" / "service.yaml"
+           ).read_text(encoding="utf-8")
+    docs = [d for d in yaml.safe_load_all(
+        re.sub(r"\{\{-?.*?-?\}\}", "PLACEHOLDER", svc, flags=re.S))
+        if isinstance(d, dict)]
+    assert docs, "chart Service template no longer parses as YAML"
+    ns = docs[0].get("metadata", {}).get("namespace")
+    assert ns == gate.THRESHOLD_EXPORTER_NAMESPACE, (
+        f"chart Service namespace is now {ns!r}, but the gate assumes "
+        f"{gate.THRESHOLD_EXPORTER_NAMESPACE!r}. If the chart was templatised, the "
+        "13 threshold-exporter metrics are no longer statically decidable — move "
+        "them to the KNOWN_UNKNOWN_SOURCE ledger instead of leaving them REACHABLE."
+    )
+
+
+def test_exact_family_does_not_swallow_other_charts_tenant_metrics():
+    """⛔ Hazard pin: tenant_metadata_info / tenant_expected_exporter are routed
+    by EXACT NAME, never by a `tenant_` prefix.
+
+    A `tenant_` prefix entry would also capture tenant_federation_requests_total
+    (federation-gateway chart) and tenant_log_query_requests_total
+    (tenant-log-query plane). Both install into Release.Namespace, are correctly
+    ledgered UNKNOWN-SOURCE, and would be silently reclassified REACHABLE off
+    the wrong component's Service — tripping the ledger exit-lock. If a future
+    author "simplifies" the exact rows into a prefix, this test must go red.
+    """
+    for m in ("tenant_federation_requests_total", "tenant_log_query_requests_total"):
+        assert gate._resolve_family(m) is None, (m, gate._resolve_family(m))
+        cls, _reason = gate.classify(m, _pre_fix_jobs(), [])
+        assert cls == gate.UNKNOWN_SOURCE, (m, cls)
+        assert m in gate.KNOWN_UNKNOWN_SOURCE, m
+    # and on the real artifacts they stay ledgered, not pinned
+    classes = gate.run_check()["classes"]
+    assert classes["tenant_federation_requests_total"][0] == gate.UNKNOWN_SOURCE
+    assert classes["tenant_log_query_requests_total"][0] == gate.UNKNOWN_SOURCE
+
+
+def test_exact_family_beats_prefix_family(monkeypatch):
+    """Exact-name routing must win over prefix routing — an exact row exists
+    precisely because the name's prefix belongs to a different component."""
+    assert gate._resolve_family("vector_probe_series") == (
+        "vector_", "helm-service", gate.VECTOR_NAMESPACE)
+    monkeypatch.setitem(gate._FAMILY_EXACT, "vector_probe_series",
+                        ("static", "prometheus"))
+    assert gate._resolve_family("vector_probe_series") == (
+        "vector_probe_series", "static", "prometheus")
+
+
 def test_vector_family_reachable_via_pinned_ns():
     result = _check(
         consumed={"vector_buffer_discarded_events_total": {"p::VectorBufferEventsDropped"}},
         jobs=_pre_fix_jobs(), services=[])
     cls, reason = result["classes"]["vector_buffer_discarded_events_total"]
     assert cls == gate.REACHABLE
-    assert "single-cluster" in reason  # federation plane explicitly out of scope
+    # The helm-service reason must disclose that only the JOB side was checked —
+    # the chart's Service annotation is assumed, not verified (#1286). It no
+    # longer carries the federation-plane note: that is a vector_-specific scope
+    # boundary (module docstring), not a property of the helm-service kind, and
+    # printing it on every helm-service family misattributed it to all of them.
+    assert "helm/ not read" in reason, reason
+    assert gate.VECTOR_NAMESPACE in reason, reason
 
 
 # ── UNKNOWN-SOURCE + exit-lock ────────────────────────────────────────────
@@ -335,15 +545,23 @@ def test_ledger_entry_that_got_pinned_is_stale():
                for e in result["errors"]), result["errors"]
 
 
-# ── leaf boundary (injected series belong to other gates) ────────────────
+# ── leaf boundary ─────────────────────────────────────────────────────────
 
-def test_injected_and_recording_series_are_not_leaves():
+def test_only_recording_outputs_and_manufactured_series_are_not_leaves():
+    """The leaf boundary drops recording-rule outputs and the two series
+    Prometheus manufactures — nothing else.
+
+    user_* / da_* used to be dropped here too as "conf.d-synthesised" (#1285).
+    That is a claim about a series' VALUE, not about how it reaches Prometheus,
+    and it hid 13 metrics from the only gate that asks whether their target is
+    scrapeable at all — so they are leaves now.
+    """
     leaves = gate.leaf_metrics(
         {"user_threshold": {"a"}, "da_config_event": {"b"}, "up": {"c"},
-         "tenant:mysql_connection_usage:ratio": {"d"},
+         "ALERTS": {"g"}, "tenant:mysql_connection_usage:ratio": {"d"},
          "produced_by_tree": {"e"}, "mysql_up": {"f"}},
         outputs={"produced_by_tree"})
-    assert set(leaves) == {"mysql_up"}
+    assert set(leaves) == {"mysql_up", "user_threshold", "da_config_event"}
 
 
 # ── extractor patch (blind spots of the split-tool base) ──────────────────

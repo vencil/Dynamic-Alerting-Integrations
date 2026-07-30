@@ -678,7 +678,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "f0a2648e5907bdabfe36b11ef41bd7f859768b7d08968fd97ba87eb58b5e21e0",
+ "source_digest": "7182b9eb06a417305d1b85f82fd5ba79185adf1f24674c9fe8378c8a80e8d5ce",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1117,8 +1117,20 @@
   "components/threshold-exporter": [
    "tests/ops/test_operator_generate_v2.py"
   ],
+  "components/threshold-exporter/app": [
+   "tests/lint/test_check_scrape_reachability.py"
+  ],
+  "components/threshold-exporter/app/collector.go": [
+   "tests/lint/test_check_scrape_reachability.py"
+  ],
   "components/threshold-exporter/app/config.go": [
    "tests/lint/test_check_hardcode_tenant.py"
+  ],
+  "components/threshold-exporter/app/config_metrics.go": [
+   "tests/lint/test_check_scrape_reachability.py"
+  ],
+  "components/threshold-exporter/app/main.go": [
+   "tests/lint/test_check_scrape_reachability.py"
   ],
   "components/threshold-exporter/app/pkg/config/aliases_registry_test.go": [
    "tests/lint/test_check_threshold_registry.py"
@@ -1403,6 +1415,9 @@
   "helm/threshold-exporter": [
    "tests/helm/test_image_tag_derivation.py",
    "tests/ops/test_operator_generate_v2.py"
+  ],
+  "helm/threshold-exporter/templates/service.yaml": [
+   "tests/lint/test_check_scrape_reachability.py"
   ],
   "helm/threshold-exporter/values.yaml": [
    "tests/helm/test_environments_overlay_sync.py"
