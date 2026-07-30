@@ -18,9 +18,20 @@ k8s/03-monitoring/configmap-prometheus.yaml (every job's target-selection
 keeps + metric_relabel __name__ keep/drop) and the Service manifests pinned in
 k8s/**. Each leaf is classified:
 
-  REACHABLE             target statically pinned by repo manifests AND admitted
-                        by >=1 job (SD namespace + annotation keep + __name__
-                        filter all pass).
+  REACHABLE             admitted by >=1 job. ⚠️ TWO EVIDENCE TIERS hide under
+                        this one word:
+                        * `static` / `service` / `name-filtered` families — the
+                          target is a REPO ARTIFACT (a k8s/** Service doc or a
+                          static_configs job), so SD namespace + annotation keep
+                          + __name__ filter are all evaluated against it.
+                        * `helm-service` families (vector_, and the
+                          threshold-exporter families below) — no repo manifest
+                          pins the target, so only the JOB side is checked: that
+                          some annotation-keep job's SD face covers the pinned
+                          namespace, and that no __name__ filter rejects the
+                          name. That the chart's Service actually carries
+                          `prometheus.io/scrape` is ASSUMED, not verified —
+                          this gate never opens helm/ (#1286).
   REACHABLE-IF-EXPORTED tenant-exporters face: the job WOULD admit a db-* ns
                         annotated Service, but per-tenant targets only exist at
                         runtime and whether the exporter exposes this exact
@@ -36,10 +47,50 @@ k8s/**. Each leaf is classified:
                         error: the alert can never fire.
 
 Leaf metric = consumed metric minus recording-rule names (':' or produced by
-either tree) and platform-injected series (user_*, da_*, tenant_metadata_info,
-tenant_expected_exporter, `up`) — those are conf.d/exporter-synthesised, not
-scraped from a component target, and are guarded by other gates (TRK-337,
-observed-map).
+either tree) and the two series Prometheus itself manufactures (`up`,
+`ALERTS`) — those have no exporter and no /metrics line, so there is no scrape
+face to resolve them against.
+
+⚠️ VALUE-ORIGIN IS NOT SCRAPE-PROVENANCE (#1285). user_* / da_* /
+tenant_metadata_info / tenant_expected_exporter were excluded here too, as
+"conf.d/exporter-synthesised, not scraped from a component target … guarded by
+other gates (TRK-337, observed-map)". The first clause conflated two different
+questions and the rest was false:
+
+  - Where the VALUE comes from (conf.d) says nothing about where the SERIES
+    comes from. All four families are emitted by ONE binary, on ONE registry,
+    behind ONE /metrics handler — threshold-exporter (collector.go
+    Describe/Collect + main.go's MetricsHandler mount). They exist only if that
+    component's target is scraped, exactly like alertmanager_* or kube_*.
+  - "Guarded by other gates" was outright false for da_*: TRK-337 walks the
+    threshold contract and the observed-map regex only matches colon-delimited
+    recording rules, so neither family's scrape face is visible to either. For
+    user_* it is half-true — TRK-337 guards the EMISSION supply chain (the
+    conf.d key that produces the value exists) but never asks whether the
+    emitting target can be scraped at all.
+
+They are therefore classified like any other component family, via the
+threshold-exporter helm-service entry below. Be precise about what that buys —
+it is narrower than it looks, and measured:
+
+  BUYS: a `__name__` keep/drop in the scraping job that rejects these families
+  is now caught (13 DEAD, 0 collateral). That is the ONLY drift class this
+  change newly detects; before #1285 the whole exclusion made it invisible.
+  It also makes the 13 participate in SD-face drift, though that was already
+  loud via the 24 other leaves pinned into the same namespace.
+
+  DOES NOT BUY, in decreasing order of how easily it is mistaken for covered:
+  (1) chart-side NAMESPACE drift. THRESHOLD_EXPORTER_NAMESPACE below is an
+      assertion about helm/threshold-exporter/templates/service.yaml, and this
+      gate never opens helm/. Templatise that line and all 13 keep reading
+      REACHABLE. Tripwired only from the test suite, not from here (#1286).
+  (2) chart-side ANNOTATION drift — same blindness; drop
+      `prometheus.io/scrape` from the chart values and the verdict is unchanged
+      (#1286).
+  (3) that any individual NAME is really emitted. The prefixes are unbounded:
+      a typo'd `da_config_evnet` reads REACHABLE. That stays TRK-337's half of
+      the contract for user_*, and remains uncovered for da_* — the test suite
+      pins the family's membership set instead.
 
 KNOWN_UNKNOWN_SOURCE is EXIT-LOCKED (same discipline as the TRK-337
 KNOWN_UNWIRED list): a NEW unknown-source metric is a hard error (classify it
@@ -94,15 +145,28 @@ K8S_MANIFESTS_DIR = PROJECT_ROOT / "k8s"
 
 SCRAPE_ANNOTATION = "prometheus.io/scrape"
 
-# ── injected / non-scraped series (guarded by other gates, not this one) ──
-INJECTED_PREFIXES = ("user_", "da_")
-INJECTED_EXACT = {"tenant_metadata_info", "tenant_expected_exporter", "up", "ALERTS"}
+# ── series Prometheus manufactures itself (no exporter, no /metrics line) ──
+# `up` is synthesised per target by the scrape loop; `ALERTS` is synthesised by
+# the rule engine. Neither has a scrape face to resolve, so neither is a leaf.
+# NOTE this set is deliberately tiny: "the value is computed elsewhere" is NOT
+# a reason to sit here — see the VALUE-ORIGIN note in the module docstring
+# (#1285 removed a user_*/da_* prefix exclusion that made exactly that mistake).
+INJECTED_EXACT = {"up", "ALERTS"}
 
 # Vector's operational install namespace (#1018 PSS carve-out). The chart's
 # Services render into Release.Namespace, but the platform pins the release to
 # this namespace — the prometheus configmap SD list must carry it for vector_*
 # to be scrapeable (see the monitoring-components job comment).
 VECTOR_NAMESPACE = "vector"
+
+# threshold-exporter's install namespace. Unlike Vector's (pinned only
+# operationally), this one is HARDCODED in the chart template —
+# helm/threshold-exporter/templates/service.yaml:5 writes `namespace:
+# monitoring` literally, NOT `{{ .Release.Namespace }}` — and `monitoring` is a
+# repo-pinned Namespace manifest (k8s/00-namespaces/namespaces.yaml:32). So the
+# target's namespace IS statically decidable on this single-cluster face, and
+# the family is judged, not ledgered as unknown-source.
+THRESHOLD_EXPORTER_NAMESPACE = "monitoring"
 
 # ── metric-family → expected source (declarative, longest-prefix wins) ──────
 # kind:
@@ -115,6 +179,7 @@ VECTOR_NAMESPACE = "vector"
 #   name-filtered    node-role job with a __name__ allowlist (value = job name)
 # Families not listed here fall through to the tenant-exporter face (the
 # is_federated_exporter_metric SSOT) and then UNKNOWN-SOURCE.
+# _FAMILY_EXACT (below) is consulted FIRST — see _resolve_family.
 _FAMILY_TABLE: list[tuple[str, str, object]] = [
     ("prometheus_", "static", "prometheus"),
     ("alertmanager_", "service", ("monitoring", "alertmanager")),
@@ -125,7 +190,29 @@ _FAMILY_TABLE: list[tuple[str, str, object]] = [
     ("kube_", "service", ("monitoring", "kube-state-metrics")),
     ("container_", "name-filtered", "kubelet-cadvisor"),
     ("vector_", "helm-service", VECTOR_NAMESPACE),
+    # threshold-exporter's two config-driven families (#1285). Their VALUES
+    # come from conf.d; their SERIES come from the threshold-exporter target
+    # like everything else it registers — see the module docstring.
+    ("da_", "helm-service", THRESHOLD_EXPORTER_NAMESPACE),
+    ("user_", "helm-service", THRESHOLD_EXPORTER_NAMESPACE),
 ]
+
+# ── EXACT-NAME families (checked before _FAMILY_TABLE) ─────────────────────
+# For series whose name shares a prefix with metrics from a DIFFERENT source,
+# so no prefix can route them without collateral.
+#
+# ⛔ DO NOT "simplify" these two rows into a `tenant_` prefix entry (#1285).
+# Measured: a `tenant_` prefix also swallows tenant_federation_requests_total
+# (federation-gateway chart) and tenant_log_query_requests_total
+# (tenant-log-query plane) — both correctly ledgered UNKNOWN-SOURCE because
+# their install ns is Release.Namespace. A prefix would reclassify them
+# REACHABLE off the wrong component's Service and trip the ledger exit-lock.
+# The pin lives in tests/lint/test_check_scrape_reachability.py.
+_FAMILY_EXACT: dict[str, tuple[str, object]] = {
+    # Same collector.go / same registry / same /metrics as the da_*+user_* rows.
+    "tenant_metadata_info": ("helm-service", THRESHOLD_EXPORTER_NAMESPACE),
+    "tenant_expected_exporter": ("helm-service", THRESHOLD_EXPORTER_NAMESPACE),
+}
 
 # Helm-only components: install namespace is Release.Namespace, NOT pinned by
 # any repo manifest, so the single-cluster scrape face cannot statically decide
@@ -369,12 +456,15 @@ def collect_rule_trees() -> tuple[dict[str, set], set[str]]:
 
 
 def leaf_metrics(consumed: dict[str, set], outputs: set[str]) -> dict[str, set]:
-    """Consumed metrics that must come from the scrape face (see docstring)."""
+    """Consumed metrics that must come from the scrape face (see docstring).
+
+    Only recording-rule outputs and the Prometheus-manufactured series are
+    dropped. A metric is NOT exempt for being config-driven — that is a claim
+    about its value, not about how the series reaches Prometheus (#1285).
+    """
     leaves: dict[str, set] = {}
     for m, users in consumed.items():
         if ":" in m or m in outputs or m in INJECTED_EXACT:
-            continue
-        if m.startswith(INJECTED_PREFIXES):
             continue
         leaves[m] = users
     return leaves
@@ -389,6 +479,13 @@ DEAD = "DEAD"
 
 
 def _resolve_family(metric: str):
+    """→ (matched key, kind, spec) or None. Exact beats prefix, then longest
+    prefix wins. Exact-first is load-bearing, not a tie-break nicety: an exact
+    row exists precisely because the name's prefix belongs to someone else."""
+    exact = _FAMILY_EXACT.get(metric)
+    if exact is not None:
+        kind, spec = exact
+        return (metric, kind, spec)
     best = None
     for prefix, kind, spec in _FAMILY_TABLE:
         if metric.startswith(prefix) and (best is None or len(prefix) > len(best[0])):
@@ -432,11 +529,15 @@ def classify(metric: str, jobs: list[dict], services: list[dict]) -> tuple[str, 
                               or re.fullmatch(j["ns_keep_regex"], ns))
                          and name_passes(metric, j["name_rules"])]
             if admitting:
-                return REACHABLE, (f"helm chart Service in pinned ns '{ns}' admitted "
-                                   f"by job '{admitting[0]['job']}' (single-cluster "
-                                   "face; federation plane assignment out of scope)")
-            return DEAD, (f"operationally pinned ns '{ns}' is in no annotation-keep "
-                          "job's SD face")
+                # Say what was actually checked. The federation-plane caveat is
+                # a vector_-specific scope note (see SCOPE BOUNDARY above) and
+                # is meaningless for other helm-service families, so it is not
+                # asserted here; "assumed annotated" states the real gap.
+                return REACHABLE, (f"job '{admitting[0]['job']}' admits ns '{ns}' "
+                                   "(chart Service assumed annotated — helm/ not "
+                                   "read, #1286)")
+            return DEAD, (f"pinned ns '{ns}' is in no annotation-keep job's SD face, "
+                          "or a __name__ filter rejects this metric")
         if kind == "name-filtered":
             job = next((j for j in jobs if j["job"] == spec), None)
             if job is None:
