@@ -251,8 +251,33 @@ class TestValidateCentralReferencesEdge:
 class TestIsExternalPipelineInput:
     def test_liveness_metrics_external(self):
         assert grps._is_external_pipeline_input("up") is True
+        # Each family's own liveness gauge is excused by its FAMILY PREFIX, not
+        # by the name ending in `_up` (TRK-353 / #1250).
         assert grps._is_external_pipeline_input("mysql_up") is True
         assert grps._is_external_pipeline_input("oracledb_up") is True
+
+    def test_platform_gauge_ending_in_up_is_not_external(self):
+        """TRK-353 / #1250: a `*_up` suffix is not provenance evidence.
+
+        `federation_revocation_channel_up` is a zero-label PLATFORM gauge from
+        the federation-reconciler Deployment — not a per-tenant exporter, so it
+        is not tenant-labeled and not federated. The removed suffix shortcut
+        excused it (and any future platform gauge whose name ends in `_up`).
+        """
+        for m in ("federation_revocation_channel_up",
+                  "some_future_platform_component_up"):
+            assert grps._is_external_pipeline_input(m) is False, m
+
+    def test_liveness_excuse_is_reachable_only_through_the_family_ssot(self):
+        """Mutation pin: the excuse must come from _FEDERATED_EXPORTER_PREFIXES.
+
+        Registering a new family in the shared SSOT is what admits its raws —
+        including its `_up` gauge. Drop the family and the gauge stops being
+        excused, which is exactly the property a name-suffix rule destroyed.
+        """
+        assert grps.is_federated_exporter_metric("mysql_up") is True
+        assert grps.is_federated_exporter_metric("nosuchexporter_up") is False
+        assert grps._is_external_pipeline_input("nosuchexporter_up") is False
 
     def test_platform_config_metrics_external(self):
         for m in ("tenant_metadata_info", "tenant_expected_exporter",

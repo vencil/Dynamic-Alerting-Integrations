@@ -75,9 +75,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _OPS = PROJECT_ROOT / "scripts" / "tools" / "ops"
 sys.path.insert(0, str(_OPS))
 from generate_rule_pack_split import (  # noqa: E402
-    _FEDERATED_EXPORTER_PREFIXES,
     extract_metrics_from_expr,
     extract_recording_outputs,
+    is_federated_exporter_metric,
 )
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -114,7 +114,7 @@ VECTOR_NAMESPACE = "vector"
 #                    annotation-keep job's SD list
 #   name-filtered    node-role job with a __name__ allowlist (value = job name)
 # Families not listed here fall through to the tenant-exporter face (the
-# _FEDERATED_EXPORTER_PREFIXES SSOT + *_up liveness) and then UNKNOWN-SOURCE.
+# is_federated_exporter_metric SSOT) and then UNKNOWN-SOURCE.
 _FAMILY_TABLE: list[tuple[str, str, object]] = [
     ("prometheus_", "static", "prometheus"),
     ("alertmanager_", "service", ("monitoring", "alertmanager")),
@@ -140,6 +140,20 @@ KNOWN_UNKNOWN_SOURCE: dict[str, str] = {
     "federation_revocation_last_reconcile_timestamp_seconds":
         "federation-reconciler helm chart — install ns = Release.Namespace, not pinned (#1203)",
     "federation_revocation_tamper_suspected":
+        "federation-reconciler helm chart — install ns = Release.Namespace, not pinned (#1203)",
+    # Same reconciler Deployment as the two rows above — a zero-label PLATFORM
+    # gauge. It could not be ledgered until TRK-353 / #1250 removed the `*_up`
+    # suffix shortcut that classified it REACHABLE-IF-EXPORTED (the exit-lock
+    # rejected the row with STALE-EXEMPTION).
+    # ⚠️ Be precise about what this row buys, because #1250 overstated it: the
+    # EXIT-LOCK, not target-drop detection. No helm-only row (these three
+    # included) can be judged DEAD — Release.Namespace is not statically
+    # resolvable on this single-cluster face — so "the reconciler's target
+    # silently vanished" is out of reach for the cohort, not a protection this
+    # gauge was singled out of. What the shortcut really cost: a factually false
+    # reason string, exclusion from the exit-locked cohort, and a blanket excuse
+    # for every FUTURE platform gauge whose name ends in `_up`.
+    "federation_revocation_channel_up":
         "federation-reconciler helm chart — install ns = Release.Namespace, not pinned (#1203)",
     "federation_revocation_live_set_rejected_lines":
         "federation-reconciler helm chart — install ns = Release.Namespace, not pinned (#1203)",
@@ -431,7 +445,13 @@ def classify(metric: str, jobs: list[dict], services: list[dict]) -> tuple[str, 
                 return REACHABLE, f"job '{spec}' __name__ filter admits it"
             return DEAD, (f"job '{spec}' __name__ allowlist rejects it and this "
                           "family has no other source")
-    if metric.startswith(_FEDERATED_EXPORTER_PREFIXES) or metric.endswith("_up"):
+    # Provenance by FAMILY, never by name shape: a `metric.endswith("_up")`
+    # shortcut used to sit here (and its twin in the split tool), classifying
+    # every platform gauge whose name happens to end in `_up` as tenant-exporter
+    # liveness — the one metric it was load-bearing for was the misclassified
+    # one (TRK-353 / #1250). New exporter family → register its prefix in the
+    # _FEDERATED_EXPORTER_PREFIXES SSOT; a name suffix is not evidence.
+    if is_federated_exporter_metric(metric):
         if _tenant_exporter_face_exists(jobs):
             return REACHABLE_IF_EXPORTED, (
                 "tenant-exporters face (annotated db-* ns Service); whether the "

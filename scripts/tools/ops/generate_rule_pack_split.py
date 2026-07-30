@@ -149,8 +149,11 @@ def extract_recording_outputs(rules: List[Dict[str, Any]]) -> Set[str]:
 #   • PER-TENANT exporter raw (one exporter per tenant; the scrape relabel stamps
 #     `tenant`) IS tenant-labeled → federated → legal on central. This covers the
 #     DB liveness / topology family every pack's *Down / *ExporterAbsent /
-#     *NoPrimary alert depends on: `up` / `<x>_up`, and the db-exporter raws
-#     (mysql_/mongodb_/pg_/redis_/oracledb_/kafka_/clickhouse_/rabbitmq_ …).
+#     *NoPrimary alert depends on: bare `up`, and the db-exporter raws
+#     (mysql_/mongodb_/pg_/redis_/oracledb_/kafka_/clickhouse_/rabbitmq_ …) —
+#     INCLUDING each family's own liveness gauge (`mysql_up`, `pg_up`, …), which
+#     is admitted by its family prefix like every other raw of that family, NOT
+#     by its name ending in `_up` (TRK-353; see _is_external_pipeline_input).
 #   • CLUSTER-LEVEL kube-state-metrics / kubelet raw (`kube_*` / `kubelet_*`) is
 #     NAMESPACE-labeled, NOT tenant-labeled (pack evidence: refs use
 #     `{namespace=~"db-.+"}` and recordings do `label_replace(...,"tenant","$1",
@@ -164,8 +167,10 @@ def extract_recording_outputs(rules: List[Dict[str, Any]]) -> Set[str]:
 #      (ADR-024), never a rule-pack recording: user_* (user_threshold /
 #      user_state_filter / user_severity_dedup / user_silent_mode),
 #      tenant_metadata_info, tenant_expected_exporter, da_config_event.
-#   2. Exporter liveness `up` / `<x>_up` (tenant-labeled, single 0/1 per target).
-#   3. Per-tenant db-exporter raw families (tenant-labeled, federated).
+#   2. Bare `up` — the scrape-synthesised per-target liveness series (tenant-labeled
+#      by the tenant-exporter job's relabel; it carries no family prefix to match).
+#   3. Per-tenant db-exporter raw families (tenant-labeled, federated), each
+#      family's own `<family>_up` liveness gauge included via its prefix.
 #
 # NARROW BY CONSTRUCTION — a recording-namespace metric (contains ':') is NEVER
 # external: it must be pipeline-produced, so a dropped recording group is still
@@ -188,24 +193,53 @@ _FEDERATED_EXPORTER_PREFIXES = (
 )
 
 
+def is_federated_exporter_metric(metric: str) -> bool:
+    """True if *metric* belongs to a per-tenant exporter family.
+
+    The ONE provenance predicate for the tenant-exporter face, imported by
+    check_scrape_reachability so the two tools cannot drift apart. Before
+    TRK-353 / #1250 the prefix tuple was shared but each tool carried its OWN
+    `*_up` suffix shortcut on top of it — so the shared half looked like an SSOT
+    while the duplicated half diverged exactly where it mattered.
+    """
+    return metric.startswith(_FEDERATED_EXPORTER_PREFIXES)
+
+
 def _is_external_pipeline_input(metric: str) -> bool:
     """True if *metric* is a federated external input a central rule may read.
 
     Federation-aligned (ADR-004, match[]=`{tenant!=""}`): recording-namespace
-    (excused elsewhere as pipeline-produced), platform-injected config, exporter
-    liveness (`up`/`*_up`), and per-tenant db-exporter raw — all tenant-labeled
-    and federated. Namespace-labeled kube_*/kubelet_* is NOT federated → NOT
+    (excused elsewhere as pipeline-produced), platform-injected config, bare `up`
+    scrape liveness, and per-tenant db-exporter raw — each family's own `*_up`
+    gauge included, admitted by its family prefix. All tenant-labeled and
+    federated. Namespace-labeled kube_*/kubelet_* is NOT federated → NOT
     external here.
+
+    ⛔ PROVENANCE IS DECIDED BY FAMILY, NEVER BY NAME SHAPE (TRK-353 / #1250).
+    A `metric.endswith("_up")` shortcut used to sit above the family clauses,
+    here and in check_scrape_reachability. It bought nothing — every exporter
+    liveness gauge consumed by rule-packs/ already matches
+    _FEDERATED_EXPORTER_PREFIXES — while silently excusing PLATFORM gauges that
+    merely end in `_up` (`federation_revocation_channel_up`: a zero-label gauge
+    from the federation-reconciler Deployment, not a tenant exporter). Do not
+    re-add a suffix rule; register the family prefix above instead.
+
+    FORWARD NOTE: this tool's input face is rule-packs/ only, so no platform
+    gauge reaches this predicate today. If the platform rule tree ever enters it
+    (a direction #1203 part 2 is weighing), the reconciler/gateway gauges will
+    be reported as dangling central references — they are platform-local-on-
+    central, a provenance category this validator does not model. Give them that
+    category; do NOT excuse them by name shape again.
     """
     if ":" in metric:
         return False
-    if metric == "up" or metric.endswith("_up"):
+    if metric == "up":
         return True
     if metric in _PLATFORM_CONFIG_METRICS:
         return True
     if metric.startswith(_PLATFORM_CONFIG_PREFIXES):
         return True
-    if metric.startswith(_FEDERATED_EXPORTER_PREFIXES):
+    if is_federated_exporter_metric(metric):
         return True
     return False
 

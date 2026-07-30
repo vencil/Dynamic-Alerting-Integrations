@@ -3,7 +3,7 @@
 The gate asserts every rule-consumed leaf metric is admitted by at least one
 scrape job of k8s/03-monitoring/configmap-prometheus.yaml. Each test pins one
 branch of that contract:
-  - the live repo is green (0 DEAD, the 5 helm-only unknowns ledgered)
+  - the live repo is green (0 DEAD, the 8 helm-only unknowns ledgered)
   - sanity anchors: the cadvisor job's three filter layers parse correctly,
     and the PRE-#1203 scrape face (tenant-api ns absent from the SD list /
     alertmanager unannotated) classifies the victim metrics DEAD — injected,
@@ -101,8 +101,26 @@ def test_ledger_is_exactly_the_live_unknown_source_set():
     """Every KNOWN_UNKNOWN_SOURCE entry must still be demanded AND still be
     unknown-source (exit-lock keeps the ledger honest on the real artifacts)."""
     result = gate.run_check()
-    assert len(result["infos"]) == len(gate.KNOWN_UNKNOWN_SOURCE) == 7
+    assert len(result["infos"]) == len(gate.KNOWN_UNKNOWN_SOURCE) == 8
     assert not any("STALE-EXEMPTION" in e for e in result["errors"])
+
+
+def test_reconciler_gauges_are_protected_as_one_cohort():
+    """TRK-353 / #1250: `channel_up` gets the SAME reachability protection as
+    its two siblings on the same federation-reconciler Deployment.
+
+    It used to classify REACHABLE-IF-EXPORTED off a `*_up` suffix shortcut —
+    a runtime-optimistic class that is never an error — so the one gauge whose
+    whole job is detecting silent evidence-channel failure was itself the one
+    gauge with no mechanical protection against silently losing its target.
+    """
+    classes = gate.run_check()["classes"]
+    cohort = ("federation_revocation_channel_up",
+              "federation_revocation_tamper_suspected",
+              "federation_revocation_last_reconcile_timestamp_seconds")
+    for m in cohort:
+        assert classes[m][0] == gate.UNKNOWN_SOURCE, (m, classes[m])
+        assert m in gate.KNOWN_UNKNOWN_SOURCE, m
 
 
 def test_repo_victim_metrics_are_reachable_after_fix():
@@ -204,6 +222,54 @@ def test_tenant_exporter_family_is_reachable_if_exported():
                     jobs=_pre_fix_jobs(), services=[])
     assert result["classes"]["mysql_up"][0] == gate.REACHABLE_IF_EXPORTED
     assert result["errors"] == []
+
+
+def test_every_real_exporter_liveness_gauge_still_routes_by_prefix():
+    """No collateral from dropping the `*_up` suffix clause (TRK-353 / #1250).
+
+    Every `<family>_up` gauge the two rule trees actually consume must still
+    reach the tenant-exporter face through _FEDERATED_EXPORTER_PREFIXES. Pinned
+    as a set, so a future prefix-list edit that orphans one of them is loud.
+    """
+    consumed = {m: {f"pack::{m}Down"} for m in
+                ("mysql_up", "pg_up", "redis_up", "mongodb_up",
+                 "oracledb_up", "db2_up")}
+    result = _check(consumed=consumed, jobs=_pre_fix_jobs(), services=[])
+    for m in consumed:
+        assert result["classes"][m][0] == gate.REACHABLE_IF_EXPORTED, (
+            m, result["classes"][m])
+    assert result["errors"] == []
+
+
+def test_platform_gauge_ending_in_up_is_not_tenant_exporter_face():
+    """The #1250 defect itself, and the mutation proof that the gate now bites.
+
+    A zero-label platform gauge whose name merely ends in `_up` used to be
+    classified REACHABLE-IF-EXPORTED with the factually wrong reason
+    "tenant-exporters face (annotated db-* ns Service)" — a class that is never
+    an error, so the gate stayed silent AND the exit-lock refused to let the
+    metric be ledgered (STALE-EXEMPTION). It must now fall through to
+    UNKNOWN-SOURCE and, unledgered, be a hard error.
+    """
+    result = _check(
+        consumed={"federation_revocation_channel_up": {"platform::EvidenceChannelDown"}},
+        jobs=_pre_fix_jobs(), services=[])
+    cls, reason = result["classes"]["federation_revocation_channel_up"]
+    assert cls == gate.UNKNOWN_SOURCE, (cls, reason)
+    assert "tenant-exporters face" not in reason
+    assert any("NEW-UNKNOWN-SOURCE" in e and "federation_revocation_channel_up" in e
+               for e in result["errors"]), result["errors"]
+
+
+def test_platform_gauge_ending_in_up_can_be_ledgered():
+    """The other half of the defect: with the shortcut gone, the ledger row the
+    exit-lock used to reject is now accepted (INFO, not STALE-EXEMPTION)."""
+    result = _check(
+        consumed={"federation_revocation_channel_up": {"platform::EvidenceChannelDown"}},
+        jobs=_pre_fix_jobs(), services=[],
+        known_unknown={"federation_revocation_channel_up": "reconciler helm-only (#1203)"})
+    assert result["errors"] == []
+    assert any("federation_revocation_channel_up" in i for i in result["infos"])
 
 
 def test_tenant_exporter_family_dead_without_exporter_face():
