@@ -1576,6 +1576,7 @@ data:
                 `_buffer_max_events` for that sink in helm/vector
                 values). For compliance-relevant streams this is an
                 audit-trail integrity event — investigate immediately.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
 
           # ── Tenant log-query rejection surge (ADR-021 #609 PR-4) ────
           # Symmetric to FederationRejectionRateAnomaly above, but for the
@@ -1793,6 +1794,7 @@ data:
                 it. Details in the init-container logs (`kubectl logs
                 <vector-pod> -c projection-gate`). See
                 platform-log-aggregation-runbook §8.9.2.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
 
           # ── Projection gate: init-container STUCK → rollout wedged (#908 PR-3a/PR-3) ──
           # The COMPLEMENT to the two degrade alerts above, for every state where the
@@ -1863,3 +1865,4 @@ data:
                 projection-gate --previous` for crash output. Consider `degrade`
                 mode if a hard rollout stop is worse than fail-available 0:0 for
                 your environment. See platform-log-aggregation-runbook §8.9.3.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
