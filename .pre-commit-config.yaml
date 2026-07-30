@@ -1220,7 +1220,7 @@ repos:
         # annotations), the shared extractor, or the gate itself changes. FAIL
         # on DEAD (no job admits a consumed metric — the #1203 tenant-api /
         # alertmanager disease), a NEW unknown-source metric, or a
-        # KNOWN_UNKNOWN_SOURCE exit-lock breach; the 5 helm-only unknowns are
+        # KNOWN_UNKNOWN_SOURCE exit-lock breach; the 8 helm-only unknowns are
         # INFO. Single-cluster face only — federation plane assignment is the
         # split tool's contract, not this gate's (see module docstring).
         files: ^(k8s/.*\.ya?ml|rule-packs/rule-pack-.*\.ya?ml|scripts/tools/(ops/generate_rule_pack_split|lint/check_scrape_reachability)\.py)$
