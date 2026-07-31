@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -456,9 +459,134 @@ def test_threshold_exporter_chart_still_hardcodes_the_pinned_namespace():
     assert ns == gate.THRESHOLD_EXPORTER_NAMESPACE, (
         f"chart Service namespace is now {ns!r}, but the gate assumes "
         f"{gate.THRESHOLD_EXPORTER_NAMESPACE!r}. If the chart was templatised, the "
-        "13 threshold-exporter metrics are no longer statically decidable — move "
-        "them to the KNOWN_UNKNOWN_SOURCE ledger instead of leaving them REACHABLE."
+        "13 threshold-exporter metrics are no longer statically decidable — drop "
+        "the threshold-exporter rows from _FAMILY_TABLE/_FAMILY_EXACT FIRST, then "
+        "ledger them in KNOWN_UNKNOWN_SOURCE. Ledgering alone does not work: "
+        "classify() resolves the family before any ledger lookup, so the metrics "
+        "would keep classifying REACHABLE and the rows would trip STALE-EXEMPTION."
     )
+
+
+# ── helm-service chart face (#1286) ───────────────────────────────────────
+# The `helm-service` kind asserts only the JOB side: that some annotation-keep
+# job's SD face covers the pinned namespace. That the chart actually RENDERS an
+# annotated Service into that namespace is ASSUMED — the gate never opens helm/.
+#
+# That blindness is deliberate, not laziness: pre-commit has no helm binary (the
+# one helm-rendering hook is `stages: [manual]` because rendering the charts
+# takes 1-2 min), and the repo's canonical template stripper
+# (check_image_pin_capability.strip_helm_actions) DROPS whole-line template
+# actions — so it would read threshold-exporter's
+# `annotations:\n  {{- toYaml .Values.service.annotations | nindent 4 }}`
+# as an EMPTY annotation map and produce a false DEAD on the very chart #1286
+# was filed about.
+#
+# So the chart face is pinned HERE, by rendering. `helm` exists in CI (the
+# pytest job installs it via azure/setup-helm precisely so these tests stop
+# silently skipping) and in the dev container; locally it skips.
+_HAS_HELM = shutil.which("helm") is not None
+_needs_helm = pytest.mark.skipif(not _HAS_HELM, reason="helm binary not on PATH")
+
+# pinned namespace (the helm-service family's spec) -> chart directory
+_HELM_SERVICE_CHART_FACE = {
+    "monitoring": "helm/threshold-exporter",
+    "vector": "helm/vector",
+}
+
+# Charts whose scrape Service does NOT render under DEFAULT values, so the
+# gate's REACHABLE verdict for that family currently rests on an operator
+# opting in. EXIT-LOCKED: an entry that starts rendering must be deleted (the
+# test below fails on it), so this map can only shrink.
+_KNOWN_UNRENDERED_UNDER_DEFAULTS = {
+    "vector": (
+        "both metrics Services are conditional — `-metrics` on metrics.enabled "
+        "(default false) and `-projection-gate-metrics` on tenantProjections "
+        "(default []). Tracked by #1291, which found the harder blocker too: "
+        "the Prometheus egress NetworkPolicy admits neither 9598 nor 9599, so "
+        "flipping the chart default alone would still yield zero series."
+    ),
+}
+
+
+def _helm_template(chart_rel: str, namespace: str) -> list[dict]:
+    """Render a chart with its DEFAULT values into *namespace*."""
+    out = subprocess.run(
+        ["helm", "template", "t", str(REPO_ROOT / chart_rel), "-n", namespace],
+        capture_output=True, text=True, encoding="utf-8", check=True, timeout=120)
+    return [d for d in yaml.safe_load_all(out.stdout) if d]
+
+
+def _scrape_services(docs: list[dict], namespace: str) -> list[dict]:
+    """Rendered Services in *namespace* carrying prometheus.io/scrape=true."""
+    hits = []
+    for d in docs:
+        if d.get("kind") != "Service":
+            continue
+        meta = d.get("metadata") or {}
+        # a chart may omit metadata.namespace, in which case it lands in the
+        # release namespace we rendered with
+        if (meta.get("namespace") or namespace) != namespace:
+            continue
+        if (meta.get("annotations") or {}).get(gate.SCRAPE_ANNOTATION) == "true":
+            hits.append(d)
+    return hits
+
+
+def test_every_helm_service_family_has_a_pinned_chart():
+    """Exhaustiveness: adding a helm-service family forces a chart-face decision.
+
+    Without this, a new `("foo_", "helm-service", "some-ns")` row would inherit
+    the REACHABLE-by-assumption verdict with nothing anywhere verifying that
+    "some-ns" ever receives an annotated Service. Runs without helm.
+    """
+    specs = {spec for _p, kind, spec in gate._FAMILY_TABLE if kind == "helm-service"}
+    specs |= {spec for kind, spec in gate._FAMILY_EXACT.values()
+              if kind == "helm-service"}
+    assert specs == set(_HELM_SERVICE_CHART_FACE), (
+        "helm-service family namespaces and the pinned chart faces disagree — "
+        "add the new namespace to _HELM_SERVICE_CHART_FACE (and, if its chart "
+        f"does not render a Service under default values, to the ledger). Diff: "
+        f"{specs ^ set(_HELM_SERVICE_CHART_FACE)}")
+
+
+@_needs_helm
+def test_helm_service_charts_render_an_annotated_service_under_defaults():
+    """#1286: the assumption the REACHABLE verdict rests on, actually checked.
+
+    Renders each pinned chart with DEFAULT values and requires a Service in the
+    pinned namespace carrying prometheus.io/scrape=true. Deleting that
+    annotation from the chart — the drift the gate cannot see — turns this red.
+    """
+    for ns, chart in sorted(_HELM_SERVICE_CHART_FACE.items()):
+        if ns in _KNOWN_UNRENDERED_UNDER_DEFAULTS:
+            continue
+        hits = _scrape_services(_helm_template(chart, ns), ns)
+        assert hits, (
+            f"{chart} renders no {gate.SCRAPE_ANNOTATION}=true Service into ns "
+            f"'{ns}' under default values, but the gate classifies that family "
+            "REACHABLE on the assumption that it does. Either restore the "
+            "chart's scrape annotation, or — when default-off rendering is "
+            "deliberate — add the namespace to _KNOWN_UNRENDERED_UNDER_DEFAULTS "
+            "with a reason. ⛔ Do NOT reach for KNOWN_UNKNOWN_SOURCE while the "
+            "family is still in _FAMILY_TABLE: classify() resolves the family "
+            "BEFORE any ledger lookup, so the metric keeps classifying "
+            "REACHABLE and the ledger row trips the exit-lock's STALE-EXEMPTION "
+            "instead. Ledgering is only correct after the helm-service family "
+            "entry itself is removed or reclassified.")
+
+
+@_needs_helm
+def test_known_unrendered_charts_are_exit_locked():
+    """The ledger may only shrink: a chart listed as not-rendering that starts
+    rendering must be removed, so the exemption cannot outlive its reason."""
+    for ns, reason in sorted(_KNOWN_UNRENDERED_UNDER_DEFAULTS.items()):
+        chart = _HELM_SERVICE_CHART_FACE[ns]
+        hits = _scrape_services(_helm_template(chart, ns), ns)
+        assert not hits, (
+            f"{chart} NOW renders a scrape-annotated Service into ns '{ns}' "
+            f"under default values — delete the '{ns}' row from "
+            f"_KNOWN_UNRENDERED_UNDER_DEFAULTS so the chart face is enforced "
+            f"instead of exempted. Recorded reason was: {reason}")
 
 
 def test_exact_family_does_not_swallow_other_charts_tenant_metrics():
@@ -500,12 +628,14 @@ def test_vector_family_reachable_via_pinned_ns():
         jobs=_pre_fix_jobs(), services=[])
     cls, reason = result["classes"]["vector_buffer_discarded_events_total"]
     assert cls == gate.REACHABLE
-    # The helm-service reason must disclose that only the JOB side was checked —
-    # the chart's Service annotation is assumed, not verified (#1286). It no
-    # longer carries the federation-plane note: that is a vector_-specific scope
-    # boundary (module docstring), not a property of the helm-service kind, and
-    # printing it on every helm-service family misattributed it to all of them.
-    assert "helm/ not read" in reason, reason
+    # The helm-service reason must disclose that only the JOB side was checked,
+    # and point at what DOES pin the chart face (#1286) rather than leaving the
+    # reader to assume nothing does. It deliberately no longer carries the
+    # federation-plane note: that is a vector_-specific scope boundary (module
+    # docstring), not a property of the helm-service kind, and printing it on
+    # every helm-service family misattributed it to all of them.
+    assert "chart face not read here" in reason, reason
+    assert "test_check_scrape_reachability" in reason, reason
     assert gate.VECTOR_NAMESPACE in reason, reason
 
 
