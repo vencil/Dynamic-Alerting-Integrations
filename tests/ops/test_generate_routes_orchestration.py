@@ -1276,7 +1276,14 @@ _CENTRAL_NAMESPACES = frozenset({"monitoring", "tenant-api"})
 # home cluster is what decides. Resolving these by prefix would misclassify the
 # six legitimate central kube_* readers below.
 _CLUSTER_LOCAL_PREFIXES = ("kube_", "kubelet_", "container_")
-_NAMESPACE_MATCHER_RE = re.compile(r'namespace\s*=\s*"([^"]+)"')
+# `(?<!\w)` is load-bearing: without a left boundary this also matches inside a
+# LONGER label name — `exported_namespace="monitoring"` (a routine Prometheus
+# relabel artifact when a job's own `namespace` label collides with the
+# target's) would be read as a central-namespace pin and flip the verdict from
+# UNRESOLVED to PLATFORM_LOCAL, i.e. silently default to central, which is the
+# one thing this module promises not to do (CodeRabbit, PR #1290). Zero
+# occurrences in the tree today — this keeps it that way.
+_NAMESPACE_MATCHER_RE = re.compile(r'(?<!\w)namespace\s*=\s*"([^"]+)"')
 
 # Alerts whose plane cannot be derived from the metric family because the
 # family is cluster-local AND the selector pins no central namespace. Each one

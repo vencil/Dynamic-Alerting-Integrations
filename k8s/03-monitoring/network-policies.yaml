@@ -249,8 +249,10 @@ spec:
     # bridges that translate Alertmanager webhooks into SNMP/SMS/Teams/ITSM all
     # listen on non-443 ports — sachet 9876, prom2teams 8089,
     # prometheus-webhook-snmp 9099, snmp_notifier 9464. (Prometheus' own port
-    # registry allocates webhook receivers in 9100-9999; none use 443.) An
-    # internal SMTP smarthost is 25/587. All of them are dropped here.
+    # registry keeps exporters and webhook receivers in the 9xxx band and
+    # allocates none of them on 443; a few bridges sit just outside it, e.g.
+    # prom2teams on 8089.) An internal SMTP smarthost is 25/587. All of them
+    # are dropped here.
     #
     # NetworkPolicy rules are ADDITIVE — there are no deny rules, only allows
     # plus "selected but unmatched ⇒ implicitly denied". So you do NOT edit this
@@ -275,7 +277,14 @@ spec:
     #       - Egress
     #     egress:
     #       - to:
-    #           - podSelector:
+    #           # ⚠️ A peer with NO namespaceSelector means "the policy's own
+    #           # namespace" (monitoring). NOC / ITSM bridges commonly live
+    #           # elsewhere — name their namespace explicitly or the rule
+    #           # silently matches nothing.
+    #           - namespaceSelector:
+    #               matchLabels:
+    #                 kubernetes.io/metadata.name: <bridge-namespace>
+    #             podSelector:
     #               matchLabels:
     #                 app.kubernetes.io/name: <your-webhook-bridge>
     #         ports:

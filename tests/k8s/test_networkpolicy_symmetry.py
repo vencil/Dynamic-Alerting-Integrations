@@ -106,17 +106,31 @@ def _ports(rule: dict) -> set[str]:
     return {str(p.get("port")) for p in (rule.get("ports") or []) if p.get("port") is not None}
 
 
+# Three outcomes that must NOT collapse into one another. Returning None for
+# all of them (the first version did) makes "every namespace" and "a selector
+# shape this code cannot read" compare equal to each other AND to a workload
+# that declares no namespace — a false resolution where an unresolvable peer
+# was the honest answer (CodeRabbit, PR #1290).
+_NS_ALL = "<all-namespaces>"
+_NS_UNSUPPORTED = "<unsupported-namespaceSelector>"
+
+
 def _peer_namespace(peer: dict, policy_namespace: str | None) -> str | None:
     """Which namespace a peer's podSelector resolves in.
 
     A peer with no `namespaceSelector` means "same namespace as the policy" —
     getting this wrong is how a cross-namespace pair looks symmetric when it is
-    not.
+    not. An EMPTY selector (`{}`) means every namespace, which is a real admit,
+    not an unknown. Any other label form is something this matchLabels-only
+    reader cannot evaluate, and says so instead of guessing.
     """
     ns_sel = peer.get("namespaceSelector")
     if ns_sel is None:
         return policy_namespace
-    return (ns_sel.get("matchLabels") or {}).get("kubernetes.io/metadata.name")
+    if not ns_sel:                       # `namespaceSelector: {}` — all namespaces
+        return _NS_ALL
+    name = (ns_sel.get("matchLabels") or {}).get("kubernetes.io/metadata.name")
+    return name if name else _NS_UNSUPPORTED
 
 
 def _intra_cluster_egress_edges(policies, workloads):
@@ -158,10 +172,26 @@ def _ingress_admits(policies, dst, src_workloads, ports) -> bool:
                 continue
             for peer in rule.get("from") or []:
                 pod_sel = peer.get("podSelector")
-                if pod_sel is None:
-                    # namespaceSelector-only / ipBlock: admits any pod there
-                    return True
                 peer_ns = _peer_namespace(peer, policy["metadata"].get("namespace"))
+                if pod_sel is None:
+                    # An ipBlock peer admits IP ranges, not in-cluster pods —
+                    # treating "no podSelector" as "admits anything" made every
+                    # such edge read symmetric, which is the exact direction
+                    # this gate exists to prevent (CodeRabbit, PR #1290).
+                    if peer.get("namespaceSelector") is None:
+                        continue
+                    if peer_ns == _NS_ALL:
+                        return True
+                    # whole-namespace admit: the SOURCE's namespace still has to
+                    # be the one admitted. Skipping this check let an ingress
+                    # rule admitting namespace `foo` satisfy a source in `bar`.
+                    if any(src["namespace"] == peer_ns for src in src_workloads):
+                        return True
+                    continue
+                if peer_ns in (_NS_ALL, _NS_UNSUPPORTED):
+                    # podSelector scoped by a selector we cannot evaluate: do not
+                    # guess in the permissive direction.
+                    continue
                 for src in src_workloads:
                     if src["namespace"] == peer_ns and _selects(pod_sel, src["labels"]):
                         return True
@@ -211,6 +241,42 @@ class TestNetworkPolicySymmetry:
             "manifest under k8s/ — either the destination moved/was renamed (the "
             "rule is now dead) or it lives in a helm chart (out of this gate's "
             f"scope, and the rule cannot be verified here): {dangling}")
+
+    @pytest.mark.parametrize("peers,src_ns,admits", [
+        # ipBlock admits IP ranges, not in-cluster pods. The first version read
+        # "no podSelector" as "admits anything" and returned True here, making
+        # every such edge look symmetric (CodeRabbit, PR #1290).
+        ([{"ipBlock": {"cidr": "10.0.0.0/8"}}], "monitoring", False),
+        # whole-namespace admit must still be the SOURCE's namespace
+        ([{"namespaceSelector":
+           {"matchLabels": {"kubernetes.io/metadata.name": "foo"}}}],
+         "monitoring", False),
+        ([{"namespaceSelector":
+           {"matchLabels": {"kubernetes.io/metadata.name": "monitoring"}}}],
+         "monitoring", True),
+        # `{}` really is every namespace — an admit, not an unknown
+        ([{"namespaceSelector": {}}], "somewhere-else", True),
+        # a namespaceSelector this matchLabels-only reader cannot evaluate must
+        # not be guessed in the permissive direction
+        ([{"namespaceSelector": {"matchLabels": {"name": "monitoring"}},
+           "podSelector": {"matchLabels": {"component": "x"}}}],
+         "monitoring", False),
+        ([{"namespaceSelector":
+           {"matchLabels": {"kubernetes.io/metadata.name": "monitoring"}},
+           "podSelector": {"matchLabels": {"component": "x"}}}],
+         "monitoring", True),
+    ])
+    def test_ingress_admits_peer_shapes(self, peers, src_ns, admits):
+        dst = {"name": "am", "namespace": "monitoring",
+               "labels": {"app": "alertmanager"}}
+        sources = [{"name": "src", "namespace": src_ns,
+                    "labels": {"component": "x"}}]
+        policies = [(Path("synthetic.yaml"), {
+            "metadata": {"name": "p", "namespace": "monitoring"},
+            "spec": {"podSelector": {"matchLabels": {"app": "alertmanager"}},
+                     "policyTypes": ["Ingress"],
+                     "ingress": [{"from": peers, "ports": [{"port": 9093}]}]}})]
+        assert _ingress_admits(policies, dst, sources, {"9093"}) is admits
 
     def test_intra_cluster_egress_has_matching_ingress(self):
         policies, workloads = _load()
