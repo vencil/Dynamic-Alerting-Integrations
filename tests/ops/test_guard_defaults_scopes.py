@@ -188,6 +188,33 @@ class TestWorkflowContract:
             "——0 表示本斷言空虛通過"
         )
 
+    def test_zero_defaults_is_not_an_error(self):
+        """觸發面有 6 條 path，其中 5 條與 `_defaults.yaml` 無關。
+
+        本 PR 自己就是實例：它只改 workflow 與 guard 周邊，`_defaults.yaml`
+        變更數為 0。若把「解析不出 `_defaults.yaml`」當成硬錯誤，任何改
+        da-guard 原始碼或這支 workflow 的 PR 都會被自己擋下。第一版正是這樣
+        寫的（且註解還宣稱「this workflow only runs on that path filter」，
+        那句是錯的）——留下這條斷言避免再犯。
+        """
+        wf = self._wf()
+        paths = wf[True]["pull_request"]["paths"]
+        non_defaults = [p for p in paths if "_defaults.yaml" not in p]
+        assert non_defaults, (
+            "觸發面只剩 _defaults.yaml 的話本斷言就沒有守護對象了；"
+            "若真的改成單一 path，請一併重新考慮零結果的處置"
+        )
+        for step in self._steps():
+            run = step.get("run") or ""
+            if "guard-targets.tsv" not in run and "TARGETS" not in run:
+                continue
+            for line in self._code_lines(run):
+                if "::error::" in line and "_defaults.yaml" in line:
+                    pytest.fail(
+                        f"零個 _defaults.yaml 不可當硬錯誤——{len(non_defaults)} "
+                        f"條觸發 path 與它無關：{line}"
+                    )
+
     def test_scope_step_uses_the_resolver(self):
         """避免 inline bash 重新長出一份未受測的根推導邏輯。"""
         runs = "\n".join((s.get("run") or "") for s in self._steps())

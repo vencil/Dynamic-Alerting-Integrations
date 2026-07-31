@@ -182,13 +182,15 @@ jobs:
                            echo "::warning::${a} is outside every conf.d tree — not validated" ;;
               esac
             done < "$TARGETS"
-          elif [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
-            # Triggered by a `**/_defaults.yaml` path filter, yet the diff
-            # resolved to nothing — the scope computation is wrong, not the PR.
-            echo "::error::no _defaults.yaml resolved from the PR diff, but this workflow only runs on that path filter"
-            exit 1
           else
-            # push / workflow_dispatch: no PR diff to scope against.
+            # Zero _defaults.yaml resolved. This is NOT necessarily a broken
+            # scope computation: the `paths:` filter above has six entries, and
+            # five of them are the guard's own source / this workflow. A PR that
+            # touches only those legitimately changes no _defaults.yaml — and
+            # validating the whole detected tree is exactly the right smoke test
+            # for "does the guard still work after this change".
+            # (push / workflow_dispatch land here too: no PR diff to scope against.)
+            echo "No _defaults.yaml in this diff — running whole-tree over ${CONF_D}"
             run_one "${CONF_D}" "${CONF_D}"
           fi
 
