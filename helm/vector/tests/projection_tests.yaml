@@ -58,7 +58,7 @@ tests:
           kubernetes.pod_namespace: monitoring
           kubernetes.pod_name: federation-gateway-7d9f-abcde
           kubernetes.pod_node_name: node-7
-          kubernetes.pod_owner: federation-gateway-7d9f
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
     outputs:
       # 0:0 platform full copy KEEPS everything — upstream, raw line, k8s topology.
       - extract_from: demux
@@ -114,7 +114,7 @@ tests:
           kubernetes.pod_namespace: monitoring
           kubernetes.pod_name: federation-gateway-7d9f-abcde
           kubernetes.pod_node_name: node-7
-          kubernetes.pod_owner: federation-gateway-7d9f
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
     outputs:
       - extract_from: demux
         conditions:
@@ -154,7 +154,7 @@ tests:
           kubernetes.pod_namespace: monitoring
           kubernetes.pod_name: federation-gateway-7d9f-abcde
           kubernetes.pod_node_name: node-7
-          kubernetes.pod_owner: federation-gateway-7d9f
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
     outputs:
       - extract_from: demux
         conditions:
@@ -184,7 +184,7 @@ tests:
           kubernetes.pod_namespace: monitoring
           kubernetes.pod_name: federation-gateway-7d9f-abcde
           kubernetes.pod_node_name: node-7
-          kubernetes.pod_owner: federation-gateway-7d9f
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
     outputs:
       - extract_from: demux
         conditions:
@@ -213,7 +213,7 @@ tests:
           kubernetes.pod_namespace: monitoring
           kubernetes.pod_name: federation-gateway-7d9f-abcde
           kubernetes.pod_node_name: node-7
-          kubernetes.pod_owner: federation-gateway-7d9f
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
     outputs:
       - extract_from: demux
         conditions:
@@ -241,7 +241,7 @@ tests:
           kubernetes.pod_namespace: monitoring
           kubernetes.pod_name: federation-gateway-7d9f-abcde
           kubernetes.pod_node_name: node-7
-          kubernetes.pod_owner: federation-gateway-7d9f
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
     outputs:
       - extract_from: demux
         conditions:
@@ -270,9 +270,9 @@ tests:
           message: '{"params":{"query":"up{tenant=\"tenant-alpha\"}"},"ruleGroup":"platform","status":200}'
           kubernetes.container_name: prometheus
           kubernetes.pod_namespace: monitoring
-          kubernetes.pod_name: prometheus-0
+          kubernetes.pod_name: prometheus-5f8c-abcde
           kubernetes.pod_node_name: node-7
-          kubernetes.pod_owner: prometheus
+          kubernetes.pod_owner: ReplicaSet/prometheus-5f8c
     outputs:
       - extract_from: demux
         conditions:
@@ -294,7 +294,7 @@ tests:
           kubernetes.pod_namespace: monitoring
           kubernetes.pod_name: federation-gateway-7d9f-fghij
           kubernetes.pod_node_name: node-9
-          kubernetes.pod_owner: federation-gateway-7d9f
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
     outputs:
       - extract_from: tenant_route.t_1001
         conditions:
@@ -464,7 +464,7 @@ tests:
           kubernetes.pod_namespace: monitoring
           kubernetes.pod_name: federation-gateway-7d9f-abcde
           kubernetes.pod_node_name: node-7
-          kubernetes.pod_owner: federation-gateway-7d9f
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
     outputs:
       - extract_from: demux
         conditions:
@@ -481,3 +481,107 @@ tests:
               assert_eq!(.token_id, "tok-gw")
     no_outputs_from:
       - federation_evidence
+
+  # ══ #1293 — pod_owner is "<Kind>/<Name>", not a bare workload name ═════════
+  # The origin spoof guard compares a workload-NAME prefix. Vector builds
+  # pod_owner as format!("{}/{}", kind, name), so the raw value never starts
+  # with that prefix and EVERY real gateway audit row was reclassified to
+  # suspicious_audit — which tenant_project then aborts, silently emptying
+  # every tenant partition. The three cases below pin the SHAPE-HANDLING truth
+  # table so it can't drift back: real owner passes, foreign owner is caught,
+  # missing owner is fail-closed.
+  #
+  # ⛔ SCOPE — what these three do NOT cover. They set `kubernetes.pod_owner`
+  # directly and their payloads carry no `kubernetes` key, so they exercise
+  # "given a trustworthy pod_owner, is the compare right?" — NOT "is pod_owner
+  # still trustworthy when the compare reads it?". It is not: demux merges the
+  # attacker-controlled `.message` payload into the event (`deep: true`) BEFORE
+  # this check runs, so a payload carrying its own `kubernetes.pod_owner`
+  # overrides the kubelet's. That ordering is unchanged by #1293 and is a
+  # separate defect of its own class (platform-owned fields read AFTER the
+  # untrusted merge); do not read these cases as evidence that the guard
+  # resists a forged payload.
+  #
+  # ⛔ The FIXTURES above carry the real "ReplicaSet/..." shape for the same
+  # reason. Before #1293 they used the bare name, so the suite validated a
+  # contract production never produces and stayed green through the outage.
+
+  # ── (O1) A legitimate gateway pod must stay federation_audit ──────────────
+  # This is the case whose absence let #1293 ship. It asserts the POSITIVE
+  # path end-to-end: correct owner → federation_audit → tenant partition.
+  - name: "#1293: real pod_owner shape (ReplicaSet/<name>) keeps a legitimate gateway row in federation_audit and in its tenant partition"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-alpha","token_id":"tok-real","status":200}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': federation-gateway
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.log_type, "federation_audit",
+                "a real gateway pod must NOT be reclassified — the Kind prefix has to be stripped before the compare")
+      - extract_from: tenant_route.t_1000
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.account_id, 1000,
+                "reclassification would abort tenant_project and empty the partition")
+              assert_eq!(.token_id, "tok-real")
+
+  # ── (O2) A foreign owner must still be caught ─────────────────────────────
+  # Stripping the Kind must not turn the guard into a no-op: same label, same
+  # container name, but owned by something else.
+  - name: "#1293: a gateway-labelled pod owned by a FOREIGN workload is still reclassified to suspicious_audit"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-alpha","token_id":"tok-forged","status":200}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': federation-gateway
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: not-the-gateway-1234-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/not-the-gateway-1234
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.log_type, "suspicious_audit", "foreign owner must still be caught")
+    no_outputs_from:
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (O3) No ownerReferences ⇒ no pod_owner field ⇒ fail-closed ────────────
+  # Vector omits pod_owner entirely for a pod with no ownerReferences (a bare
+  # attacker-created Pod is exactly that), so `owner` is "". That must NOT be
+  # read as "nothing to check".
+  - name: "#1293: a bare pod with NO pod_owner field is fail-closed, not admitted by omission"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-alpha","token_id":"tok-bare","status":200}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': federation-gateway
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: bare-pod
+          kubernetes.pod_node_name: node-7
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.log_type, "suspicious_audit", "absent pod_owner must fail closed")
+    no_outputs_from:
+      - tenant_route.t_1000
+      - tenant_route.t_1001

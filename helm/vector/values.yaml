@@ -203,11 +203,24 @@ additionalSinks: []
 # label-trust failure.
 #
 # The mitigation here is best-effort: after demux, if a row's
-# `log_type=federation_audit` but the pod's owner (ReplicaSet name)
-# doesn't match the expected gateway-deployment prefix, reclassify as
-# `log_type=suspicious_audit`. Sets up an alert/dashboard signal for
-# active spoofing; the real fix is RBAC stopping spoofer pods from
-# being created at all.
+# `log_type=federation_audit` but the pod's owner name doesn't match the
+# expected gateway-deployment prefix, reclassify as
+# `log_type=suspicious_audit`. The real fix is RBAC stopping spoofer pods
+# from being created at all.
+#
+# ⛔ This value is the owner's NAME prefix, WITHOUT the owner Kind. Vector
+# emits `pod_owner` as "<Kind>/<Name>" ("ReplicaSet/federation-gateway-7d9f");
+# the VRL strips the Kind half before comparing, so do NOT write
+# "ReplicaSet/..." here. Getting this wrong is not a no-op — a prefix that
+# never matches reclassifies every REAL audit row and takes the tenant
+# projection down with it, silently (#1293).
+#
+# ⚠️ `suspicious_audit` has NO alert and NO dashboard panel today — a
+# reclassified row is retained in the 0:0 platform store and is queryable,
+# but nothing pages on it. (An earlier version of this comment claimed it
+# "sets up an alert/dashboard signal"; that was never true.) Whether to add
+# that consumer is tracked separately — do not read this filter as an
+# active-spoofing detector.
 #
 # Empty `prefix` disables the check (skip the VRL clause entirely);
 # useful if your gateway Deployment has a non-default name.
