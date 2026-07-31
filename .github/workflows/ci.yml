@@ -342,6 +342,24 @@ jobs:
           # against the portal advertising alerts we don't ship had ZERO CI
           # enforcement for exactly the PR shape it exists to police.
           pre-commit run portal-rulepack-claims --all-files
+          # Same 6C shape, third sweep — these three are named in NO workflow
+          # AND their pytest twins do not enforce them either, so they had
+          # ZERO CI enforcement of any kind (local pre-commit only):
+          #   * vmalert-coverage-check — every test in
+          #     tests/lint/test_check_vmalert_coverage.py monkeypatches
+          #     cov._REPO to a tmp_path, so not one of them looks at the
+          #     shipped tree; the alert firing-coverage baseline was
+          #     unguarded in CI.
+          #   * threshold-observed-map-drift-check — tests/lint/ has no
+          #     corresponding test file at all.
+          #   * metric-dictionary-check — its live-repo test accepted exit
+          #     code 1 (this PR tightens that to 0), so even Python Tests
+          #     could not have caught a red gate.
+          # All three scan a fixed surface and run in under 3s, so the usual
+          # "too expensive for the ungated leg" argument does not apply.
+          pre-commit run vmalert-coverage-check --all-files
+          pre-commit run threshold-observed-map-drift-check --all-files
+          pre-commit run metric-dictionary-check --all-files
           pre-commit run structure-check --all-files
           pre-commit run routing-profiles-check --all-files
           # #880: conf.d tenant YAML vs tenant-config schema (db_type-typo guard).
@@ -529,10 +547,23 @@ jobs:
           sudo cp /tmp/prometheus-${PROM_VERSION}.linux-amd64/promtool /usr/local/bin/
           promtool --version
 
+      # Empty-glob guard mirrors "Run ops shell tests" below: without it the
+      # loop runs zero times and the step exits 0, so renaming/moving the
+      # fixtures would delete the entire alert firing-contract gate silently.
+      # Both extensions are globbed because check_vmalert_coverage's
+      # _fixture_files() accepts `_test.yml` too — a `.yml` fixture counted as
+      # COVERED by the baseline while never being executed here is exactly the
+      # asymmetry that makes the coverage number a lie.
       - name: Rule-pack promtool unit tests (alert fire/no-fire contracts)
         run: |
+          set -euo pipefail
           shopt -s nullglob
-          for t in tests/rulepacks/*_test.yaml; do
+          tests=(tests/rulepacks/*_test.yaml tests/rulepacks/*_test.yml)
+          if [ "${#tests[@]}" -eq 0 ]; then
+            echo "::error::no tests/rulepacks/*_test.{yaml,yml} found — the glob or the fixtures moved"
+            exit 1
+          fi
+          for t in "${tests[@]}"; do
             echo "::group::$t"
             promtool test rules "$t"
             echo "::endgroup::"

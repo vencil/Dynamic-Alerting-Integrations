@@ -423,18 +423,24 @@ class TestMainCLI:
 
 class TestRepoRegistry:
 
-    def test_repo_metric_dictionary_runs_clean_or_warn_only(self, monkeypatch):
+    def test_repo_metric_dictionary_runs_clean(self, monkeypatch):
         """The shipped metric-dictionary.yaml is scanned by its own lint.
 
-        We accept any exit code 0/1: the tool never returns errors today
-        (only warnings), but we ASSERT that running on the actual repo
-        files doesn't raise / SystemExit with anything weird (e.g., 2 = config
-        error). This is a regression guard against e.g. a rule-pack file
-        becoming unparseable YAML.
+        Exit code MUST be 0. The previous form accepted `in (0, 1)` on the
+        reasoning that "the tool only warns today" — but 1 is this repo's
+        violation code (dev-rule #13: 0 ok / 1 violation / 2 caller error), so
+        accepting it made the only live-repo assertion pass whether or not the
+        gate was red. That is the shape this file exists to prevent: an
+        assertion that cannot distinguish clean from broken guards nothing.
+
+        Warnings do NOT affect the exit code, so a warn-only scan still exits
+        0 and this stays green — verified against the shipped tree, which
+        reports warnings and exits 0.
         """
         monkeypatch.setattr(sys, "argv", ["check_metric_dictionary"])
         with pytest.raises(SystemExit) as exc:
             mod.main()
-        assert exc.value.code in (0, 1), (
-            f"unexpected exit code {exc.value.code} from repo scan"
+        assert exc.value.code == 0, (
+            f"exit code {exc.value.code} from repo scan "
+            "(1 = violation, 2 = caller error; both must fail this test)"
         )
