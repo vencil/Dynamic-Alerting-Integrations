@@ -359,6 +359,35 @@ window。第二步才考慮 strict mode（disable VictoriaLogs）—— 那是
 | SIEM 收得到 gateway audit，但**完全沒有** federation token 撤銷紀錄 | `inputs:` 只寫了 `[demux]`，漏掉 `federation_evidence`（ADR-028 / #1234 新增的第二條 VRL-tagged stream） | 改成 `inputs: [demux, federation_evidence]`，`helm upgrade`。⚠️ 這是**靜默**失效：VictoriaLogs 那邊照常有資料，只有 SIEM 缺，靠人工比對才看得出來 |
 | dropped-events metric 一直爆高 | SIEM 處理慢於進入速度 | 調大 `_buffer_max_events`；或 SIEM 端擴容 |
 
+#### 7.4.1 `VectorBufferEventsDropped`（warning，SIEM-bound row 正在無聲丟失）
+
+告警讀 `rate(vector_buffer_discarded_events_total[5m]) > 0`，`for: 5m`。
+`drop_newest` 是 §2 強制的 fan-out 預設，所以**丟 row 是設計行為、不是故障**——
+這條告警要回答的是「丟到什麼程度該處理」。
+
+⚠️ **先確認它有沒有可能開火**：這條依賴 Vector 自身 telemetry，而 chart 預設
+`metrics.enabled: false`（`helm/vector/values.yaml`）——關著的時候 `vector_*` 連
+series 都不存在，告警**恆不開火**，看起來跟「沒有丟 row」完全一樣。
+`helm get values vector | grep -A2 '^metrics:'` 先驗這件事。
+
+處置：
+
+1. **哪個 sink 在丟** —— 告警的 `component_id` label 就是 Vector sink id。
+   `_buffer_*` 是 chart 專屬 knob（不是 Vector 原生 sink key），所以要查
+   `helm get values vector`，不是讀 rendered Vector config。
+2. **判斷是持續落後還是突發** —— 持續 = 下游吞吐不足；突發尖峰 = buffer 太小。
+   兩者救法不同，別一律調大 buffer。
+3. **下游太慢** → SIEM 端擴容；或依 §7.3.1 的取捨表把 `_buffer_type` 切
+   `disk`（pod 重啟不丟、SIEM 恢復後 drain），這是多數合規場景的落點。
+4. **上游突發** → 調大 `_buffer_max_events`（預設值見 §7.3 的 values 區塊）。
+5. ⛔ **不要為了「不丟」直接切 `_buffer_when_full: block`** —— 那會讓 SIEM 故障
+   反壓整條管線、連 VictoriaLogs 一起卡，違反 §2 鐵則。只有在
+   compliance-strict（VictoriaLogs 根本不部署、SIEM 是唯一 SoR）拓樸下才成立，
+   屬產品定位變更等級的決定。
+
+**這條丟的是 SIEM-bound 副本，不是 VictoriaLogs 主路徑**——查 VictoriaLogs 仍看得到
+完整 row（§2 的保證）。要判斷 SIEM 缺了哪些，用 §7.4 表格最後兩列的方式比對兩端。
+
 ## 7.5 Egress / tamper hardening（#566 batch D）
 
 紅隊 T4-1/T4-2（惡意 `additionalSinks` 把 audit row 外洩）+ T3-2/T3-3

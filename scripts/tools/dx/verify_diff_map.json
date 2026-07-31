@@ -353,7 +353,8 @@
    "tests/lint/test_check_rulepack_sync.py"
   ],
   "scripts/tools/lint/check_scrape_reachability.py": [
-   "tests/lint/test_check_scrape_reachability.py"
+   "tests/lint/test_check_scrape_reachability.py",
+   "tests/ops/test_generate_routes_orchestration.py"
   ],
   "scripts/tools/lint/check_single_writer_invariant.py": [
    "tests/lint/test_check_single_writer_invariant.py"
@@ -678,7 +679,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "7182b9eb06a417305d1b85f82fd5ba79185adf1f24674c9fe8378c8a80e8d5ce",
+ "source_digest": "3e08e9b9201bda298a1c109436a7eddb51691140258b337ddeefec9dd65e779f",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -752,6 +753,7 @@
   "tests/helm/test_revoked_set_contract_guard.py",
   "tests/helm/test_single_writer_guard.py",
   "tests/helm/test_victorialogs_gateway_guard.py",
+  "tests/k8s/test_networkpolicy_symmetry.py",
   "tests/lint/test_check_account_registry_monotonic.py",
   "tests/lint/test_check_admin_config_schema.py",
   "tests/lint/test_check_bilingual_annotations.py",
@@ -1441,6 +1443,7 @@
    "tests/dx/test_log_visibility_catalogue.py"
   ],
   "helm/vector/templates/daemonset.yaml": [
+   "tests/ops/test_generate_routes_orchestration.py",
    "tests/shared/test_projection_gate_vap.py"
   ],
   "helm/vector/tests": [

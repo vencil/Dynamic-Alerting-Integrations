@@ -54,6 +54,22 @@ spec:
           podSelector:
             matchLabels:
               app: prometheus
+        # maintenance-scheduler drives the silences API (/api/v2/silences) for
+        # planned-maintenance windows. Its egress to 9093 was already allowed
+        # (allow-maintenance-scheduler-egress) but this side was not — and a
+        # NetworkPolicy connection needs BOTH ends, so every silence call was
+        # dropped here. The CronJob pod is labelled
+        # {app: dynamic-alerting, component: maintenance-scheduler}, so the
+        # `app: prometheus` peer above never matched it. Failure mode was
+        # silent-and-self-concealing: silences simply never appear, and the
+        # alerts they were meant to suppress fire through the maintenance
+        # window instead.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              component: maintenance-scheduler
       ports:
         - protocol: TCP
           port: 9093
@@ -206,7 +222,18 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # Webhook receivers (HTTPS)
+    # Webhook receivers (HTTPS).
+    #
+    # ⚠️ THIS RULE ENCODES A TOPOLOGY: "Alertmanager's notification destinations
+    # are EXTERNAL HTTPS endpoints". True for internet-connected deployments on
+    # SaaS notifiers (and for the ADR-025 watchdog heartbeat, whose url_file
+    # Secret the operator supplies). NOT true for air-gapped / internal-NOC
+    # deployments — see the block below before assuming this rule is enough.
+    #
+    # ⚠️ The `except:` metadata-endpoint carve-out is CNI-DEPENDENT. ipBlock
+    # except is longest-prefix-match, not set subtraction, and several CNIs have
+    # shipped bugs here — if you rely on it as a control, verify it on YOUR CNI
+    # rather than trusting this line.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
@@ -215,6 +242,61 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+    #
+    # ── AIR-GAPPED / IN-CLUSTER RECEIVER TOPOLOGY ────────────────────────────
+    # In a disconnected install the rule above allows something nobody uses (no
+    # internet to reach) and blocks everything people do use: the standard
+    # bridges that translate Alertmanager webhooks into SNMP/SMS/Teams/ITSM all
+    # listen on non-443 ports — sachet 9876, prom2teams 8089,
+    # prometheus-webhook-snmp 9099, snmp_notifier 9464. (Prometheus' own port
+    # registry keeps exporters and webhook receivers in the 9xxx band and
+    # allocates none of them on 443; a few bridges sit just outside it, e.g.
+    # prom2teams on 8089.) An internal SMTP smarthost is 25/587. All of them
+    # are dropped here.
+    #
+    # NetworkPolicy rules are ADDITIVE — there are no deny rules, only allows
+    # plus "selected but unmatched ⇒ implicitly denied". So you do NOT edit this
+    # file: add your own policy alongside it. That also survives re-applying
+    # this manifest, which an in-place edit would not.
+    #
+    # Prefer a selector over an ipBlock when the receiver runs in-cluster: pod
+    # IPs are ephemeral, and a selector additionally gets checked by
+    # tests/k8s/test_networkpolicy_symmetry.py (which cannot verify ipBlock
+    # peers — there is no ingress side to look at).
+    #
+    #   apiVersion: networking.k8s.io/v1
+    #   kind: NetworkPolicy
+    #   metadata:
+    #     name: allow-alertmanager-egress-noc
+    #     namespace: monitoring
+    #   spec:
+    #     podSelector:
+    #       matchLabels:
+    #         app: alertmanager
+    #     policyTypes:
+    #       - Egress
+    #     egress:
+    #       - to:
+    #           # ⚠️ A peer with NO namespaceSelector means "the policy's own
+    #           # namespace" (monitoring). NOC / ITSM bridges commonly live
+    #           # elsewhere — name their namespace explicitly or the rule
+    #           # silently matches nothing.
+    #           - namespaceSelector:
+    #               matchLabels:
+    #                 kubernetes.io/metadata.name: <bridge-namespace>
+    #             podSelector:
+    #               matchLabels:
+    #                 app.kubernetes.io/name: <your-webhook-bridge>
+    #         ports:
+    #           - protocol: TCP
+    #             port: <bridge port, e.g. 9876>
+    #
+    # Replacing the 0.0.0.0/0:443 rule above with a precise destination is a net
+    # TIGHTENING, not a relaxation — that rule is an opening, the protection
+    # comes from default-deny-all. Doing so is recommended once you know your
+    # receiver; keep 443 only if you genuinely reach an external HTTPS endpoint
+    # (e.g. an internet-reachable dead-man's-switch).
+    # ─────────────────────────────────────────────────────────────────────────
 ---
 # Grafana: needs Prometheus data source + DNS
 apiVersion: networking.k8s.io/v1

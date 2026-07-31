@@ -253,6 +253,50 @@ KNOWN_UNKNOWN_SOURCE: dict[str, str] = {
         "tenant-log-query plane, helm-only — install ns not pinned by repo manifests (#1203)",
 }
 
+# ── federation PLANE provenance (TRK-340 / #1203 part 2) ───────────────────
+# Which CLUSTER each unpinned-namespace source is ASSUMED to run on, under the
+# federation topology (platform rule tree on central). Consumed by
+# TestPlatformAlertPlaneContract; this file only owns the fact, not the
+# assertion.
+#
+# `platform-local-on-central` is the provenance category #1284 named in
+# generate_rule_pack_split._is_external_pipeline_input's FORWARD NOTE: a series
+# scraped from a target in the CENTRAL cluster's own namespaces, which is
+# neither federated-from-edge nor injected into the tenant plane. The scrape
+# face (above) and the federation plane are different questions about the same
+# metric — a target can be perfectly scrapeable and still sit on the wrong
+# cluster for the rules that read it.
+#
+# ⚠️ These are ASSUMPTIONS the repo cannot verify: install ns is
+# `Release.Namespace`, i.e. the operator's choice — which is exactly WHY these
+# metrics are ledgered above. "central" reflects every chart defaulting its
+# upstreams to `*.monitoring.svc`. Writing them down makes the assumption
+# reviewable instead of implicit.
+#
+# ⚠️ NOT a comprehension over KNOWN_UNKNOWN_SOURCE, deliberately: deriving it
+# would hand every future ledger entry a silent "central" — the exact default
+# this table exists to prevent. The contract pins the two key sets equal, so a
+# new ledger row without a plane decision is a red test, not a default.
+#
+# ⚠️ The sharpest known consequence of a wrong assumption here:
+# `tenant_log_query_requests_total` is `by account_id, project_id, status`
+# (helm/federation-gateway/files/federation-audit.mtail:93) — NO `tenant`
+# label. Install federation-gateway on an EDGE cluster and the alert reading it
+# goes blind on central AND cannot be federated back, because the
+# `match[]={tenant!=""}` selector skips it. Its sibling
+# `tenant_federation_requests_total` IS `by tenant, status` (same file :13) and
+# would federate. That asymmetry is invisible from the alert side.
+PLANE_OF_UNPINNED_SOURCE: dict[str, str] = {
+    "federation_gateway_revocation_load_errors": "platform-local-on-central",
+    "tenant_federation_requests_total": "platform-local-on-central",
+    "federation_revocation_last_reconcile_timestamp_seconds": "platform-local-on-central",
+    "federation_revocation_tamper_suspected": "platform-local-on-central",
+    "federation_revocation_channel_up": "platform-local-on-central",
+    "federation_revocation_live_set_rejected_lines": "platform-local-on-central",
+    "federation_gateway_revoked_set_reload_rejected": "platform-local-on-central",
+    "tenant_log_query_requests_total": "platform-local-on-central",
+}
+
 # ── PromQL extraction (patched superset of the split tool's extractor) ──────
 # generate_rule_pack_split.extract_metrics_from_expr requires the metric name
 # to be followed by `{`, `[` or whitespace, so it misses a metric directly

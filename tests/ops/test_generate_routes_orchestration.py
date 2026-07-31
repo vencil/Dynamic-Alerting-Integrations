@@ -13,6 +13,7 @@ single comprehensive test file.
 """
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -1247,6 +1248,225 @@ class TestPlatformAlertSourceContract:
             "alert_source is RESERVED for the platform self-monitoring pack "
             f"({_PLATFORM_CM_PREFIX}*.yaml); these rules would be swept into the "
             f"platform NOC channel: {offenders}")
+
+
+# ============================================================
+# #1203 part 2: platform alert FEDERATION-PLANE contract
+# ============================================================
+# The producer tables live in the scrape gate (that is where metric -> source
+# knowledge already is); this contract only reads them. Importing rather than
+# restating is the same "single scanner" discipline as _iter_repo_alert_rules
+# above — a second copy of the family table would drift and silently narrow
+# whichever gate lost the race.
+from check_scrape_reachability import (  # noqa: E402
+    KNOWN_UNKNOWN_SOURCE,
+    PLANE_OF_UNPINNED_SOURCE,
+    VECTOR_NAMESPACE,
+    extract_metrics,
+)
+
+EDGE_LOCAL = "edge-local"
+PLATFORM_LOCAL = "platform-local-on-central"
+UNRESOLVED = "unresolved"
+
+# Namespaces that exist in the CENTRAL cluster under the federation topology.
+_CENTRAL_NAMESPACES = frozenset({"monitoring", "tenant-api"})
+# Families every cluster runs its own copy of, so the metric name alone says
+# nothing about the plane — the SELECTOR names the workload, and the workload's
+# home cluster is what decides. Resolving these by prefix would misclassify the
+# six legitimate central kube_* readers below.
+_CLUSTER_LOCAL_PREFIXES = ("kube_", "kubelet_", "container_")
+# `(?<!\w)` is load-bearing: without a left boundary this also matches inside a
+# LONGER label name — `exported_namespace="monitoring"` (a routine Prometheus
+# relabel artifact when a job's own `namespace` label collides with the
+# target's) would be read as a central-namespace pin and flip the verdict from
+# UNRESOLVED to PLATFORM_LOCAL, i.e. silently default to central, which is the
+# one thing this module promises not to do (CodeRabbit, PR #1290). Zero
+# occurrences in the tree today — this keeps it that way.
+_NAMESPACE_MATCHER_RE = re.compile(r'(?<!\w)namespace\s*=\s*"([^"]+)"')
+
+# Alerts whose plane cannot be derived from the metric family because the
+# family is cluster-local AND the selector pins no central namespace. Each one
+# needs a human to say which workload the selector names and where it runs.
+# Kept as an explicit table, NOT as a fallback: an underivable alert that
+# silently defaulted to "central" is precisely the shape #1203 spent a whole
+# investigation undoing.
+_EDGE_LOCAL_BY_SELECTOR: dict[str, str] = {
+    "VectorProjectionGateStuck":
+        'reads kube_pod_init_container_status_waiting_reason with NO namespace '
+        'selector; container="projection-gate" exists only in the Vector '
+        f'DaemonSet ({VECTOR_NAMESPACE} ns), so the KSM that sees it is the '
+        "EDGE cluster's, not central's (helm/vector/templates/daemonset.yaml)",
+}
+
+# Non-vacuity anchor. LITERAL on purpose: deriving the expectation from the
+# derivation under test would make it self-satisfying — "an assertion derived
+# from the thing it guards does not guard it" (the hole #1283 fixed in the
+# nightly matrix guards, where `*_EXTRA_SCANNED` emptied both sides at once).
+_EXPECTED_EDGE_LOCAL_ALERTS = frozenset({
+    "VectorBufferEventsDropped",
+    "TenantProjectionFanoutDiscardSpike",
+    "VectorProjectionGateMismatch",
+    "VectorRegistryUnreadableAtBoot",
+    "VectorProjectionGateStuck",
+})
+
+
+def _alert_plane(alert: str, expr: str) -> tuple[str, list[str]]:
+    """Which cluster's Prometheus can see every input of *expr*.
+
+    EDGE_LOCAL wins over PLATFORM_LOCAL when an alert mixes planes: an alert is
+    only evaluable where ALL its inputs exist, so one edge-only input is enough
+    to make central evaluation structurally inert.
+    """
+    verdicts: set[str] = set()
+    why: list[str] = []
+    for metric in sorted(extract_metrics(expr)):
+        if metric.startswith("vector_"):
+            verdicts.add(EDGE_LOCAL)
+            why.append(f"{metric}: vector_ family -> {VECTOR_NAMESPACE} ns (edge)")
+        elif metric in PLANE_OF_UNPINNED_SOURCE:
+            verdicts.add(PLANE_OF_UNPINNED_SOURCE[metric])
+            why.append(f"{metric}: unpinned-ns ledger -> "
+                       f"{PLANE_OF_UNPINNED_SOURCE[metric]}")
+        elif metric.startswith(_CLUSTER_LOCAL_PREFIXES):
+            selectors = re.findall(re.escape(metric) + r"\s*\{([^}]*)\}", expr)
+            namespaces = set()
+            for body in selectors:
+                found = _NAMESPACE_MATCHER_RE.search(body)
+                namespaces.add(found.group(1) if found else None)
+            if namespaces and all(ns in _CENTRAL_NAMESPACES for ns in namespaces):
+                verdicts.add(PLATFORM_LOCAL)
+            elif alert in _EDGE_LOCAL_BY_SELECTOR:
+                verdicts.add(EDGE_LOCAL)
+                why.append(f"{metric}: declared edge-local — "
+                           f"{_EDGE_LOCAL_BY_SELECTOR[alert]}")
+            else:
+                verdicts.add(UNRESOLVED)
+                why.append(f"{metric}: cluster-local family, selector pins no "
+                           f"central namespace (saw {sorted(map(str, namespaces))})")
+        else:
+            verdicts.add(PLATFORM_LOCAL)
+    if EDGE_LOCAL in verdicts:
+        return EDGE_LOCAL, why
+    if UNRESOLVED in verdicts:
+        return UNRESOLVED, why
+    return PLATFORM_LOCAL, why
+
+
+class TestPlatformAlertPlaneContract:
+    """Every platform alert's evaluation plane must be DERIVABLE, not assumed.
+
+    WHY: #1203 found five platform alerts that can only be evaluated on the
+    edge cluster under the federation topology (their inputs are produced by
+    the Vector DaemonSet, or by a container that only exists inside it). They
+    were found by a human reading 41 expressions — nothing mechanical would
+    have caught a sixth. Two gates each disclaim the question: the scrape gate
+    models the SINGLE-CLUSTER face and says so in its SCOPE BOUNDARY note,
+    while generate_rule_pack_split's central-input validator never sees this
+    tree (its input glob is rule-packs/rule-pack-*.yaml). The handoff between
+    them is one-directional, so the gap belonged to neither.
+
+    This contract closes it WITHOUT a hand-maintained list of edge alerts: the
+    plane is derived from the producer tables the scrape gate already owns, and
+    the literal expectation below exists only to prove the derivation is not
+    vacuous.
+    """
+
+    def _platform_alerts(self):
+        return [(where, rule) for where, rule in _iter_repo_alert_rules()
+                if _is_platform_cm_location(where)]
+
+    def test_plane_table_covers_exactly_the_unpinned_ledger(self):
+        # The two tables answer different questions about the same rows
+        # (is it scrapeable here / which cluster is it on), so they must stay
+        # key-identical: a ledger row with no plane would fall through to the
+        # `else` branch of _alert_plane and be silently called central.
+        assert set(PLANE_OF_UNPINNED_SOURCE) == set(KNOWN_UNKNOWN_SOURCE), (
+            "PLANE_OF_UNPINNED_SOURCE must decide a plane for every "
+            "KNOWN_UNKNOWN_SOURCE row. Missing: "
+            f"{sorted(set(KNOWN_UNKNOWN_SOURCE) - set(PLANE_OF_UNPINNED_SOURCE))}; "
+            "stale: "
+            f"{sorted(set(PLANE_OF_UNPINNED_SOURCE) - set(KNOWN_UNKNOWN_SOURCE))}")
+        assert set(PLANE_OF_UNPINNED_SOURCE.values()) <= {EDGE_LOCAL, PLATFORM_LOCAL}
+
+    def test_every_platform_alert_has_a_derivable_plane(self):
+        unresolved = []
+        for where, rule in self._platform_alerts():
+            plane, why = _alert_plane(rule["alert"], str(rule.get("expr", "")))
+            if plane == UNRESOLVED:
+                unresolved.append((where, rule["alert"], why))
+        assert unresolved == [], (
+            "these platform alerts read a cluster-local metric family whose "
+            "selector pins no central namespace, so which cluster can evaluate "
+            "them is undecidable. Pin the namespace in the selector, or add the "
+            "alert to _EDGE_LOCAL_BY_SELECTOR naming the workload and its home "
+            f"cluster: {unresolved}")
+
+    def test_edge_local_set_matches_the_reviewed_expectation(self):
+        derived = {rule["alert"]
+                   for _, rule in self._platform_alerts()
+                   if _alert_plane(rule["alert"],
+                                   str(rule.get("expr", ""))) [0] == EDGE_LOCAL}
+        # Non-vacuity first: an empty derivation would make the equality below
+        # trivially checkable only in one direction.
+        assert derived, (
+            "no platform alert derived as edge-local — the scan reached no "
+            "platform ConfigMap, or extract_metrics stopped returning vector_ "
+            "metrics; every plane assertion here is vacuous")
+        assert derived == _EXPECTED_EDGE_LOCAL_ALERTS, (
+            "the set of platform alerts that can ONLY be evaluated on an edge "
+            "cluster changed. A NEW one means the platform tree grew an alert "
+            "the central Prometheus can never fire (#1203); a REMOVED one means "
+            "an alert's inputs moved plane. Either way it is a topology "
+            "decision, not a test to update reflexively. "
+            f"new={sorted(derived - _EXPECTED_EDGE_LOCAL_ALERTS)} "
+            f"gone={sorted(_EXPECTED_EDGE_LOCAL_ALERTS - derived)}")
+
+    def test_selector_declared_alerts_are_still_underivable(self):
+        # Exit-lock on _EDGE_LOCAL_BY_SELECTOR: an entry whose selector later
+        # gains a central namespace (or whose metric leaves the cluster-local
+        # families) would keep forcing an edge verdict that the code no longer
+        # supports. Same shrink-or-stay-justified discipline as the scrape
+        # gate's KNOWN_UNKNOWN_SOURCE.
+        by_name = {rule["alert"]: str(rule.get("expr", ""))
+                   for _, rule in self._platform_alerts()}
+        for alert in _EDGE_LOCAL_BY_SELECTOR:
+            assert alert in by_name, (
+                f"{alert} is declared edge-local but no longer exists in the "
+                "platform tree — drop the entry")
+            metrics = extract_metrics(by_name[alert])
+            assert any(m.startswith(_CLUSTER_LOCAL_PREFIXES) for m in metrics), (
+                f"{alert} no longer reads a cluster-local metric family, so its "
+                "plane is derivable now — remove it from _EDGE_LOCAL_BY_SELECTOR "
+                "instead of pinning a verdict by hand")
+
+    @pytest.mark.parametrize("expr,expected", [
+        # cluster-local family pinned to a central namespace -> central
+        ('max(kube_pod_container_status_restarts_total'
+         '{namespace="monitoring",container="x"}) > 3', PLATFORM_LOCAL),
+        # ... the SAME metric with no namespace selector is NOT derivable
+        ('max(kube_pod_container_status_restarts_total{container="x"}) > 3',
+         UNRESOLVED),
+        # a central namespace that is not ours is still not central
+        ('max(kube_pod_status_phase{namespace="vector"}) > 0', UNRESOLVED),
+        # vector_ family is edge whatever the shape of the expression
+        ('sum(rate(vector_sink_errors_total[5m])) > 0', EDGE_LOCAL),
+        # metric directly before `)` and at end-of-string: the split tool's
+        # narrow extractor misses both, which would have hidden an edge input
+        ('sum(vector_buffer_discarded_events_total) and up{job="x"}', EDGE_LOCAL),
+        ('up{job="x"} and vector_sink_errors_total', EDGE_LOCAL),
+        ('absent(vector_tenant_projection_gate_info)', EDGE_LOCAL),
+        # ledger row resolves through PLANE_OF_UNPINNED_SOURCE
+        ('absent_over_time(tenant_log_query_requests_total[10m])', PLATFORM_LOCAL),
+        ('increase(alertmanager_notifications_failed_total[15m]) > 0',
+         PLATFORM_LOCAL),
+        # one edge input is enough, even mixed with central ones
+        ('sum(vector_buffer_discarded_events_total) + '
+         'sum(alertmanager_notifications_failed_total)', EDGE_LOCAL),
+    ])
+    def test_plane_classifier(self, expr, expected):
+        assert _alert_plane("SyntheticAlert", expr)[0] == expected
 
 
 # ============================================================
