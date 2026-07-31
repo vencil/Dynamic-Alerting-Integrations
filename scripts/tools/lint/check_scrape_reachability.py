@@ -30,8 +30,11 @@ k8s/**. Each leaf is classified:
                           some annotation-keep job's SD face covers the pinned
                           namespace, and that no __name__ filter rejects the
                           name. That the chart's Service actually carries
-                          `prometheus.io/scrape` is ASSUMED, not verified —
-                          this gate never opens helm/ (#1286).
+                          `prometheus.io/scrape` is not verified HERE — this
+                          gate never opens helm/. The chart face is pinned
+                          instead by tests/lint/test_check_scrape_reachability
+                          .py, which renders each chart and requires an
+                          annotated Service in the pinned namespace (#1286).
   REACHABLE-IF-EXPORTED tenant-exporters face: the job WOULD admit a db-* ns
                         annotated Service, but per-tenant targets only exist at
                         runtime and whether the exporter exposes this exact
@@ -80,13 +83,17 @@ it is narrower than it looks, and measured:
   loud via the 24 other leaves pinned into the same namespace.
 
   DOES NOT BUY, in decreasing order of how easily it is mistaken for covered:
-  (1) chart-side NAMESPACE drift. THRESHOLD_EXPORTER_NAMESPACE below is an
-      assertion about helm/threshold-exporter/templates/service.yaml, and this
-      gate never opens helm/. Templatise that line and all 13 keep reading
-      REACHABLE. Tripwired only from the test suite, not from here (#1286).
-  (2) chart-side ANNOTATION drift — same blindness; drop
-      `prometheus.io/scrape` from the chart values and the verdict is unchanged
-      (#1286).
+  (1) chart-side NAMESPACE and ANNOTATION drift — this gate still never opens
+      helm/, so neither moves a verdict here. Both are tripwired from the TEST
+      SUITE instead (#1286): the namespace by a text pin, the annotation by
+      rendering each chart with `helm template` and requiring an annotated
+      Service in the pinned namespace. Those tests need the helm binary, so
+      they are real gates in CI and skip locally.
+  (2) NETWORK REACHABILITY. This gate models SD + annotations + __name__
+      filters — it does NOT model NetworkPolicy. A scrape the egress policy
+      denies still reads REACHABLE. That is not hypothetical: #1291 found all
+      four vector_* consumers inert because `allow-prometheus-egress` admits
+      neither 9598 nor 9599.
   (3) that any individual NAME is really emitted. The prefixes are unbounded:
       a typo'd `da_config_evnet` reads REACHABLE. That stays TRK-337's half of
       the contract for user_*, and remains uncovered for da_* — the test suite
@@ -578,8 +585,9 @@ def classify(metric: str, jobs: list[dict], services: list[dict]) -> tuple[str, 
                 # is meaningless for other helm-service families, so it is not
                 # asserted here; "assumed annotated" states the real gap.
                 return REACHABLE, (f"job '{admitting[0]['job']}' admits ns '{ns}' "
-                                   "(chart Service assumed annotated — helm/ not "
-                                   "read, #1286)")
+                                   "(chart face not read here — pinned by "
+                                   "tests/lint/test_check_scrape_reachability.py, "
+                                   "#1286)")
             return DEAD, (f"pinned ns '{ns}' is in no annotation-keep job's SD face, "
                           "or a __name__ filter rejects this metric")
         if kind == "name-filtered":

@@ -679,7 +679,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "3e08e9b9201bda298a1c109436a7eddb51691140258b337ddeefec9dd65e779f",
+ "source_digest": "c95893177d7fb4813bc7705a90ca6e9929ed1bd2a7c57612ae3d6bef45a18c3b",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1416,6 +1416,7 @@
   ],
   "helm/threshold-exporter": [
    "tests/helm/test_image_tag_derivation.py",
+   "tests/lint/test_check_scrape_reachability.py",
    "tests/ops/test_operator_generate_v2.py"
   ],
   "helm/threshold-exporter/templates/service.yaml": [
@@ -1427,6 +1428,7 @@
   "helm/vector": [
    "tests/dx/test_log_visibility_catalogue.py",
    "tests/lint/test_check_iac_helm.py",
+   "tests/lint/test_check_scrape_reachability.py",
    "tests/shared/test_helm_chart_log_aggregation.py",
    "tests/shared/test_vector_projection_vrl.py"
   ],
