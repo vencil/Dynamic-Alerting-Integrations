@@ -459,8 +459,11 @@ def test_threshold_exporter_chart_still_hardcodes_the_pinned_namespace():
     assert ns == gate.THRESHOLD_EXPORTER_NAMESPACE, (
         f"chart Service namespace is now {ns!r}, but the gate assumes "
         f"{gate.THRESHOLD_EXPORTER_NAMESPACE!r}. If the chart was templatised, the "
-        "13 threshold-exporter metrics are no longer statically decidable — move "
-        "them to the KNOWN_UNKNOWN_SOURCE ledger instead of leaving them REACHABLE."
+        "13 threshold-exporter metrics are no longer statically decidable — drop "
+        "the threshold-exporter rows from _FAMILY_TABLE/_FAMILY_EXACT FIRST, then "
+        "ledger them in KNOWN_UNKNOWN_SOURCE. Ledgering alone does not work: "
+        "classify() resolves the family before any ledger lookup, so the metrics "
+        "would keep classifying REACHABLE and the rows would trip STALE-EXEMPTION."
     )
 
 
@@ -562,8 +565,14 @@ def test_helm_service_charts_render_an_annotated_service_under_defaults():
             f"{chart} renders no {gate.SCRAPE_ANNOTATION}=true Service into ns "
             f"'{ns}' under default values, but the gate classifies that family "
             "REACHABLE on the assumption that it does. Either restore the "
-            "chart's scrape annotation, or move the family to "
-            "KNOWN_UNKNOWN_SOURCE / this test's ledger.")
+            "chart's scrape annotation, or — when default-off rendering is "
+            "deliberate — add the namespace to _KNOWN_UNRENDERED_UNDER_DEFAULTS "
+            "with a reason. ⛔ Do NOT reach for KNOWN_UNKNOWN_SOURCE while the "
+            "family is still in _FAMILY_TABLE: classify() resolves the family "
+            "BEFORE any ledger lookup, so the metric keeps classifying "
+            "REACHABLE and the ledger row trips the exit-lock's STALE-EXEMPTION "
+            "instead. Ledgering is only correct after the helm-service family "
+            "entry itself is removed or reclassified.")
 
 
 @_needs_helm
