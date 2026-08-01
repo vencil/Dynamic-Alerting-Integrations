@@ -150,7 +150,7 @@ index）。本 pipeline 的選擇凍結在 `helm/vector/values.yaml` 的
 |---|---|---|
 | `app` | stream | container_name，bounded |
 | `k8s_namespace` | stream | bounded |
-| `log_type` | stream | 2 值（federation_audit / gateway_operational） |
+| `log_type` | stream | 5 值（`federation_audit` / `gateway_operational` / `prometheus_query_log` / `suspicious_audit` / `federation_evidence`）——完整定義與租戶可見性見 [log-visibility-2tier-catalogue.md §Tier-1](log-visibility-2tier-catalogue.md) |
 | `tenant_id` | stream | bounded（百量級 MVP） |
 | `status` | stream | enum，~7 個 HTTP code |
 | `pod_name` | **data** | HPA churn 會炸 stream index |

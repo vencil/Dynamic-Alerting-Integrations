@@ -682,7 +682,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "aa6553ec8eb1a135cf8415c337db7acb1aab96c8199ea855725f1c53c563ce6f",
+ "source_digest": "085099754cd2bd7d373b06694d0c76d7a788b1e969966e4fecfef145c8712df0",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -970,6 +970,7 @@
   "tests/shared/test_tenant_projection_gate.py",
   "tests/shared/test_tool_exit_codes.py",
   "tests/shared/test_validate_all.py",
+  "tests/shared/test_vector_pin_parity.py",
   "tests/shared/test_vector_projection_vrl.py"
  ],
  "text_map": {
@@ -988,6 +989,9 @@
   ],
   ".devcontainer/install-promtool.sh": [
    "tests/preview/test_promtool_pin_parity.py"
+  ],
+  ".devcontainer/install-vector.sh": [
+   "tests/shared/test_vector_pin_parity.py"
   ],
   ".doclinkignore": [
    "tests/lint/test_check_doc_links.py"
@@ -1009,13 +1013,15 @@
    "tests/lint/test_check_devcontainer_dep_parity.py",
    "tests/lint/test_check_pint.py",
    "tests/ops/test_portal_path_filter_coverage.py",
-   "tests/preview/test_promtool_pin_parity.py"
+   "tests/preview/test_promtool_pin_parity.py",
+   "tests/shared/test_vector_pin_parity.py"
   ],
   ".github/workflows/guard-defaults-impact.yml": [
    "tests/ops/test_guard_defaults_scopes.py"
   ],
   ".github/workflows/nightly-image-scan.yaml": [
-   "tests/ops/test_nightly_scan_matrix_drift.py"
+   "tests/ops/test_nightly_scan_matrix_drift.py",
+   "tests/shared/test_vector_pin_parity.py"
   ],
   ".github/workflows/nightly-race.yaml": [
    "tests/ops/test_nightly_race_issue_policy.py"
@@ -1438,10 +1444,15 @@
    "tests/lint/test_check_iac_helm.py",
    "tests/lint/test_check_scrape_reachability.py",
    "tests/shared/test_helm_chart_log_aggregation.py",
+   "tests/shared/test_vector_pin_parity.py",
    "tests/shared/test_vector_projection_vrl.py"
   ],
   "helm/vector/Chart.yaml": [
-   "tests/shared/test_helm_chart_log_aggregation.py"
+   "tests/shared/test_helm_chart_log_aggregation.py",
+   "tests/shared/test_vector_pin_parity.py"
+  ],
+  "helm/vector/README.md": [
+   "tests/shared/test_vector_pin_parity.py"
   ],
   "helm/vector/projection-gate/serve_metrics.py": [
    "tests/shared/test_projection_gate_exposer.py"
@@ -1462,11 +1473,13 @@
   ],
   "helm/vector/tests/projection_tests.yaml": [
    "tests/shared/test_helm_chart_log_aggregation.py",
+   "tests/shared/test_vector_pin_parity.py",
    "tests/shared/test_vector_projection_vrl.py"
   ],
   "helm/vector/values.yaml": [
    "tests/dx/test_log_visibility_catalogue.py",
-   "tests/lint/test_check_admin_config_schema.py"
+   "tests/lint/test_check_admin_config_schema.py",
+   "tests/shared/test_vector_pin_parity.py"
   ],
   "helm/victorialogs": [
    "tests/shared/test_helm_chart_log_aggregation.py",
@@ -2088,6 +2101,9 @@
   ],
   "tests/ops/test_nightly_scan_matrix_drift.py": [
    "tests/ops/test_nightly_race_issue_policy.py"
+  ],
+  "tests/preview/test_promtool_pin_parity.py": [
+   "tests/shared/test_vector_pin_parity.py"
   ],
   "tests/rulepacks": [
    "tests/dx/test_custom_alerts_promtool.py",

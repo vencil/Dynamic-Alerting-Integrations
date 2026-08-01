@@ -873,6 +873,19 @@ jobs:
       # silently skip. No-op until the consumer test lands (nothing reads
       # this env var on this branch yet — verified by grep).
       VIBE_REQUIRE_DOCKER: "1"
+      # Same fail-closed pattern for the ADR-021/ADR-028 Vector VRL behaviour
+      # gate: this job installs Vector below, and `vector test` over
+      # helm/vector/tests/projection_tests.yaml is the ONLY place the shipped
+      # VRL is executed rather than string-matched (tenant fail-closed routing,
+      # the ADR-028 §D3 PII drop, the #1293 origin-spoof truth table). Those 4
+      # tests are `skipif`-gated on the binary, so a broken Install step would
+      # turn the whole behaviour gate into a green no-op.
+      VIBE_REQUIRE_VECTOR: "1"
+      # Same again for helm: 13 test files gate on `shutil.which("helm")`, and
+      # every rendered-manifest assertion in them (values.schema.json rejection,
+      # netpol consumer set, egress allowlist, the VRL render tests) skips
+      # silently without it. setup-helm failing open would hide all of them.
+      VIBE_REQUIRE_HELM: "1"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -922,13 +935,21 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/vibe-ci-downloads
-          key: ${{ runner.os }}-vibe-dl-pytests-vector-0.55.0-mtail-3.0.8
+          key: ${{ runner.os }}-vibe-dl-pytests-vector-0.57.0-mtail-3.0.8
 
+      # ⛔ VECTOR_VERSION must equal the version the chart actually DEPLOYS
+      # (helm/vector values.yaml `image.tag` + Chart.yaml `appVersion`) and the
+      # dev-container pin (.devcontainer/install-vector.sh). VRL is a versioned
+      # language — 0.55 already rejects error-coalescing that earlier releases
+      # accepted — so validating the shipped VRL with a DIFFERENT vector than
+      # runs it means the gate can pass on syntax/semantics production will not
+      # honour. All four pins are bound by tests/shared/test_vector_pin_parity.py;
+      # bump them together (version + SHA-256 + the cache key above).
       - name: Install Vector
         run: |
-          VECTOR_VERSION=0.55.0
-          # Pinned SHA-256 of vector-0.55.0-x86_64-unknown-linux-gnu.tar.gz (upstream SHA256SUMS).
-          VECTOR_SHA256=e0221681b1cd1f93c46008fde19c5ac5811718d10a803a4e320ff4e72ab9e4a9
+          VECTOR_VERSION=0.57.0
+          # Pinned SHA-256 of vector-0.57.0-x86_64-unknown-linux-gnu.tar.gz (upstream SHA256SUMS).
+          VECTOR_SHA256=4d156e6859e235b366f5b77121ae59d5440c93acab215c45f30f3fc839d20f65
           DL="$HOME/.cache/vibe-ci-downloads"
           mkdir -p "$DL"
           if [ ! -f "$DL/vector-${VECTOR_VERSION}.tgz" ]; then

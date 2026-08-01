@@ -2,7 +2,7 @@
 
 Node-level log shipper for the platform log-aggregation pipeline ([#539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539) Phase 1).
 
-Built on **Vector** (`timberio/vector:0.55.0-distroless-libc`) — sink-agnostic, VRL-transformable. The Vector pick over Fluent Bit / Promtail / Alloy is recorded in the source issue §3 (Promtail deprecated; Alloy loses home turf with VictoriaLogs; VRL is the right tool for the demux that matters).
+Built on **Vector** (`timberio/vector:0.57.0-distroless-libc`) — sink-agnostic, VRL-transformable. The Vector pick over Fluent Bit / Promtail / Alloy is recorded in the source issue §3 (Promtail deprecated; Alloy loses home turf with VictoriaLogs; VRL is the right tool for the demux that matters).
 
 ## Pipeline
 

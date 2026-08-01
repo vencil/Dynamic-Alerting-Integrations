@@ -23,6 +23,7 @@ Maps to ADR-021 implementation-plan AC (L224-226) and §Ingestion fan-out.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -45,6 +46,44 @@ _needs_helm = pytest.mark.skipif(not _HAS_HELM, reason="helm CLI not on PATH")
 _needs_vector = pytest.mark.skipif(
     not (_HAS_HELM and _HAS_VECTOR), reason="helm+vector CLIs not on PATH"
 )
+# Set to "1" by the CI job that installs these (ci.yml python-tests-run ``env:``).
+# When set, a missing binary is a FAILURE, not a skip — see the two guards below.
+_REQUIRE_VECTOR = os.environ.get("VIBE_REQUIRE_VECTOR") == "1"
+_REQUIRE_HELM = os.environ.get("VIBE_REQUIRE_HELM") == "1"
+
+
+def test_vector_present_when_required() -> None:
+    """Fail-closed guard against silent disarmament (mirrors the #908
+    ``test_mtail_present_when_required`` precedent).
+
+    ``TestVectorValidateAndTest`` is the ONLY place the shipped VRL is executed
+    rather than string-matched — tenant fail-closed routing, the ADR-028 §D3 PII
+    drop, and the #1293 origin-spoof truth table are all proven there and nowhere
+    else. Those tests are ``skipif``-gated on the binary, so if the CI ``Install
+    Vector`` step is deleted or breaks, they SKIP, the job stays green, and the
+    behaviour gate becomes a no-op that still reports success. Jobs that
+    legitimately run pytest without vector (validate.yaml) don't set the flag, so
+    they keep skipping."""
+    if _REQUIRE_VECTOR:
+        assert _HAS_VECTOR, (
+            "VIBE_REQUIRE_VECTOR=1 but `vector` is not on PATH — the CI 'Install "
+            "Vector' step (ci.yml python-tests-run job) is missing or broke; the "
+            "VRL behaviour gate would silently skip. Restore the install step."
+        )
+
+
+def test_helm_present_when_required() -> None:
+    """Same fail-closed guard for helm. 13 test files gate on
+    ``shutil.which("helm")``; every rendered-manifest assertion in them
+    (values.schema.json rejection, the NetworkPolicy consumer set, the egress
+    allowlist, and every render test in this file) skips silently without it, so
+    a broken ``azure/setup-helm`` step would fail OPEN across all of them."""
+    if _REQUIRE_HELM:
+        assert _HAS_HELM, (
+            "VIBE_REQUIRE_HELM=1 but `helm` is not on PATH — the CI 'Set up Helm' "
+            "step (ci.yml python-tests-run job) is missing or broke; every "
+            "helm-gated render assertion would silently skip. Restore the step."
+        )
 
 # Fixture projection: two tenants, ids in the registry's reserved-floor range
 # (>=1000, the account package's FirstTenantAccountID). Matches the routes the
