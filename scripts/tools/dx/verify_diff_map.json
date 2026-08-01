@@ -682,7 +682,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "274e6ade00315521f73586399de3fccc978745a6c435b78dccabfdfef12b3bd8",
+ "source_digest": "bd268489eb8f4acd37283ad03ef2839be3a124a31907ba6251200225ac6a9962",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -746,6 +746,7 @@
   "tests/e2e-bench/test_aggregate.py",
   "tests/golden/test_merge_parity.py",
   "tests/helm/test_environments_overlay_sync.py",
+  "tests/helm/test_federation_store_namespace_guard.py",
   "tests/helm/test_human_socket_guard.py",
   "tests/helm/test_identity_claim_headers_guard.py",
   "tests/helm/test_image_tag_derivation.py",
@@ -1230,6 +1231,9 @@
    "tests/dx/test_sync_tool_registry.py",
    "tests/lint/test_check_portal_asset_shipping.py"
   ],
+  "docs/getting-started/for-platform-engineers.md": [
+   "tests/helm/test_federation_store_namespace_guard.py"
+  ],
   "docs/getting-started/for-tenants.en.md": [
    "tests/dx/test_add_frontmatter.py"
   ],
@@ -1360,6 +1364,9 @@
    "tests/helm/test_revoked_set_contract_guard.py",
    "tests/helm/test_victorialogs_gateway_guard.py"
   ],
+  "helm/federation-gateway/README.md": [
+   "tests/helm/test_federation_store_namespace_guard.py"
+  ],
   "helm/federation-gateway/audit-sidecar/Dockerfile": [
    "tests/shared/test_federation_audit_mtail.py"
   ],
@@ -1404,6 +1411,7 @@
    "tests/lint/test_check_dev_bypass_manifest.py"
   ],
   "helm/tenant-api": [
+   "tests/helm/test_federation_store_namespace_guard.py",
    "tests/helm/test_human_socket_guard.py",
    "tests/helm/test_identity_claim_headers_guard.py",
    "tests/helm/test_image_tag_derivation.py",
@@ -1800,7 +1808,8 @@
    "tests/dx/test_tenant_verify.py"
   ],
   "scripts/tools/dx/verify_diff.py": [
-   "tests/dx/test_verify_diff.py"
+   "tests/dx/test_verify_diff.py",
+   "tests/helm/test_federation_store_namespace_guard.py"
   ],
   "scripts/tools/dx/verify_release.sh": [
    "tests/dx/test_verify_release.py"

@@ -47,6 +47,12 @@ image:
 # volume is `optional: true`, so the pod starts clean and `read_live_set` treats
 # the absent file as a benign empty set ("nothing revoked yet") — the reconcile
 # then compares real revocation events against an empty live set (#1313).
+#
+# ⛔ The invariant is a THREE-WAY equality: this chart, helm/federation-gateway
+# (which mounts the same key to ENFORCE revocation) and the store ConfigMap must
+# all live in one namespace, and tenant-api's `federation.store.namespace` must
+# name it. Satisfying only two of the three still breaks, just more quietly —
+# see that chart's README for which half goes silent in each case.
 store:
   configMapName: tenant-federation-store
   revokedKey: revoked.txt

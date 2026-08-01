@@ -134,8 +134,14 @@ Which read APIs a tenant can call through the gateway depends on the mode:
   `optional: true`, so the pod starts Ready with no `revoked.txt` at all and
   the filter enforces an EMPTY revoked set — every revoked token is honoured
   until its TTL, with no Kubernetes event and no log line to say so (#1313).
-  `helm/federation-reconciler` mounts the same key and has the same
-  requirement.
+- ⛔ **The invariant is a three-way equality, not a two-way one**:
+  `helm/federation-reconciler` mounts the *same* key for the ADR-028 detection
+  side, so **this chart, that chart, and the store ConfigMap must all be in one
+  namespace** — and `federation.store.namespace` must name it. Satisfying only
+  two of the three still breaks: gateway+store without the reconciler leaves the
+  un-revoke detection reading an empty live set (it treats an absent file as
+  "nothing revoked yet"), and reconciler+store without the gateway leaves the
+  enforcement plane accepting revoked tokens while every alert stays green.
 
 ## Rate limits are soft
 

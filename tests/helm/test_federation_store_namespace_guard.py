@@ -49,7 +49,12 @@ import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_CHART = _REPO_ROOT / "helm" / "tenant-api"
+# ⛔ Keep this as ONE literal "helm/tenant-api" string, not `/ "helm" / "tenant-api"`.
+# scripts/tools/dx/verify_diff.py builds its text_map by scanning test files for
+# literal path strings, so the split form registers this guard against NOTHING —
+# a change to the chart would not select it, and the gate would exist without
+# ever running on the thing it guards (caught by review on #1313).
+_CHART = _REPO_ROOT / "helm/tenant-api"
 
 _RELEASE_NS = "tenant-api"
 _CONSUMER_NS = "monitoring"

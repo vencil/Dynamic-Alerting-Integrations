@@ -270,6 +270,31 @@ federation:
     # gateway and reconciler INTO tenant-api's namespace instead and leave this
     # empty. Its cost is that the gateway's Prometheus scrape depends on it
     # living in `monitoring` (helm/federation-gateway/README.md).
+    #
+    # ⛔ CHANGING THIS ON A RUNNING DEPLOYMENT IS A DATA MOVE, NOT A SETTING
+    # CHANGE. The chart only creates an EMPTY ConfigMap in the new namespace
+    # (`data` is deliberately not templated — see the object's own comment); the
+    # old one stays put under `helm.sh/resource-policy: keep` and is then read by
+    # nobody. tenant-api's store only verifies that the target object EXISTS, not
+    # what is in it (`NewConfigMapStore` in
+    # components/tenant-api/internal/federation/token/configmap_store.go), so it
+    # comes up cleanly against an empty store — and every existing revocation is
+    # gone, so already-revoked tokens are accepted again until their TTL. That is
+    # precisely the un-revoke ADR-028 exists to detect, caused by the migration
+    # itself.
+    #
+    # Move the data WITH the setting, in this order (no revocation gap):
+    #   1. Copy the ConfigMap into the target namespace, carrying Helm's
+    #      ownership metadata so the upgrade adopts it rather than colliding:
+    #      annotations meta.helm.sh/release-name + meta.helm.sh/release-namespace
+    #      and label app.kubernetes.io/managed-by=Helm.
+    #   2. `helm upgrade` with the new value. Helm adopts the object and does NOT
+    #      touch `data` (this chart never templates it), so the copy survives.
+    #   3. Verify the enforcement plane actually sees it — exec into a gateway pod
+    #      and read /etc/revoked/revoked.txt.
+    #   4. Only then delete the ConfigMap in the old namespace.
+    # Doing step 2 before step 1 leaves a window in which revocations are not
+    # enforced.
     namespace: ""
 
   # Federation token lifetime, passed as --federation-token-ttl (Go duration).
