@@ -39,7 +39,9 @@ tenants:
   my-tenant: {}
 ```
 
-這會讓你的 tenant 使用所有預設閾值，沒有自訂路由（alert 會發到 Alertmanager 的 default receiver）。
+這會讓你的 tenant 使用**平台目前供給的**預設閾值，沒有自訂路由（alert 會發到 Alertmanager 的 default receiver）。
+
+⚠️ **「預設閾值」不等於「全部閾值」。** 出貨的 helm chart 只帶少數幾個 key 的平台預設值（`thresholdConfig.defaults`）；其餘 key 要由**平台 operator** 顯式供給（`scaffold-tenant` 產生的 `_defaults.yaml`，或自行填 helm values）之後，租戶才設得動、對應的告警才可能開火。**在 operator 供給之前，那些告警既不會開火、也不會有任何錯誤訊息**——這是 config-driven join 的機制本身（沒有閾值 series ⇒ 規則配不到 ⇒ 回空）。若你不確定平台替你開了哪些，問你的平台 operator 要 `_defaults.yaml` 的內容。
 
 ## 常見操作
 

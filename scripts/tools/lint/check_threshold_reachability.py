@@ -33,6 +33,26 @@ discipline as KNOWN_DEFERRED): a grandfathered key that becomes reachable, or
 disappears from the alert demand, is a HARD error — this forces the list to
 shrink as fixes land, so it can never rot into a permanent silent exemption.
 
+TWO SUPPLY FACES (P1-C). The check above answers "can the platform-defaults
+path produce this key" using `scaffold_tenant.generate_defaults()` — a TOOL'S
+CAPABILITY. That is the right question for "is this key dead", but it is not
+what an operator who ran `helm install` receives. The chart ships
+`thresholdConfig.defaults`, which is far smaller. So the same demand set is
+classified against BOTH faces:
+
+  1. chart-armed          — the shipped chart supplies it
+  2. NOT_CHART_ARMED      — the scaffold path can supply it, the chart does not
+                            (exit-locked ledger; operator must supply)
+  3. KNOWN_UNWIRED        — neither face can supply it (exit-locked ledger)
+
+Before this face existed the gate was green while describing face 1+2 as one
+number, so "how many shipped alerts cannot fire" was never measured by
+anything. ⚠️ Both faces use the same reachability rule, which means
+"chart-armed" says A TENANT CAN ARM IT — not that the alert fires out of the
+box. `_critical` keys count as reachable via their base, yet
+`resolveCriticalRows` iterates TENANT OVERRIDES: no `_critical` key is ever
+platform-supplied, and none is in the chart set today.
+
 Exit codes (_lib_exitcodes): 0 clean / 1 violation (--ci) / 2 caller error.
 """
 from __future__ import annotations
@@ -81,11 +101,93 @@ KNOWN_UNWIRED: dict[str, str] = {
 }
 
 
+# ── Second supply face: what the SHIPPED chart actually installs ────────────
+# `_supply()` answers "what CAN the platform-defaults path produce" — it reads
+# the scaffold generator. That is the right question for "is this key dead",
+# but it is NOT the question an operator who just ran `helm install` cares
+# about. The chart ships `thresholdConfig.defaults`, a much smaller set than
+# what the scaffold tool is capable of emitting. Everything in between only
+# becomes real if somebody runs the onboarding tool or hand-writes the
+# defaults — and until this face existed, nothing said so: the gate was green
+# while reporting a number that described a tool's capability, not a
+# deployment.
+#
+# ⚠️ "chart-armed" here means A TENANT CAN ARM IT, not "it fires out of the
+# box". A `_critical` key counts as reachable when its BASE is supplied (the
+# `resolveCriticalRows` path) — but `resolveCriticalRows` iterates TENANT
+# OVERRIDES, so no `_critical` key is ever platform-supplied. Today 0 of the 16
+# demanded `_critical` keys sit in the chart set and structurally none can.
+NOT_CHART_ARMED: frozenset[str] = frozenset({
+    "clickhouse_active_connections",
+    "clickhouse_queries_rate",
+    "db2_bufferpool_hit_ratio",
+    "db2_connections_active",
+    "db2_lock_wait_time",
+    "es_disk_usage_percent",
+    "es_heap_usage_percent",
+    "es_pending_tasks",
+    "es_search_latency_ms",
+    "jvm_gc_pause",
+    "jvm_gc_pause_critical",
+    "jvm_memory",
+    "jvm_memory_critical",
+    "jvm_threads",
+    "jvm_threads_critical",
+    "kafka_active_controllers",
+    "kafka_broker_count",
+    "kafka_consumer_lag",
+    "kafka_consumer_lag_critical",
+    "kafka_request_rate",
+    "kafka_request_rate_critical",
+    "kafka_under_replicated_partitions",
+    "kafka_under_replicated_partitions_critical",
+    "mongodb_connections_current",
+    "mongodb_opcounters_rate",
+    "mongodb_replication_lag",
+    "nginx_connections",
+    "nginx_connections_critical",
+    "nginx_request_rate",
+    "nginx_request_rate_critical",
+    "nginx_waiting",
+    "nginx_waiting_critical",
+    "oracle_sessions_active",
+    "oracle_tablespace_used_percent",
+    "rabbitmq_connections",
+    "rabbitmq_consumers",
+    "rabbitmq_node_mem_percent",
+    "rabbitmq_node_mem_percent_critical",
+    "rabbitmq_queue_messages",
+    "rabbitmq_queue_messages_critical",
+    "rabbitmq_unacked_messages",
+    "redis_connected_clients",
+    "redis_evicted_keys_rate",
+    "redis_memory_used_bytes",
+    "redis_replication_lag",
+})
+
+_CHART_VALUES = PROJECT_ROOT / "helm" / "threshold-exporter" / "values.yaml"
+
+
 def _supply() -> set[str]:
     """Every conf.d threshold key the platform-defaults path can produce."""
     db_packs = [k for k in scaffold_tenant.RULE_PACKS if k != "kubernetes"]
     generated = scaffold_tenant.generate_defaults(db_packs)
     return set(generated["defaults"].keys())
+
+
+def _chart_supply() -> set[str]:
+    """Every threshold key the SHIPPED helm chart installs as a platform default.
+
+    Reads the artifact, not the registry: `chart_default: true` in the registry
+    is the DECLARATION, `thresholdConfig.defaults` in values.yaml is what an
+    operator actually gets. The two are kept in step by
+    check_threshold_registry.py; reading values.yaml here means this gate keeps
+    measuring the deployment even if that equivalence ever breaks.
+    """
+    import yaml  # local import: only this face needs it
+
+    doc = yaml.safe_load(_CHART_VALUES.read_text(encoding="utf-8")) or {}
+    return set(((doc.get("thresholdConfig") or {}).get("defaults") or {}).keys())
 
 
 def _reachable(key: str, supply: set[str], deferred: set[str]) -> bool:
@@ -101,6 +203,8 @@ def run_check(
     supply: set[str] | None = None,
     deferred: set[str] | None = None,
     known_unwired: dict[str, str] | None = None,
+    chart_supply: set[str] | None = None,
+    not_chart_armed: frozenset[str] | None = None,
 ) -> dict[str, list[str]]:
     """Return {errors, infos}. errors fail --ci; infos are report-only.
 
@@ -109,12 +213,22 @@ def run_check(
     """
     if demand is None:
         demand = observed_map_lib.all_threshold_keys(observed_map_lib.default_pack_paths())
+    injected_supply = supply is not None
     if supply is None:
         supply = _supply()
     if deferred is None:
         deferred = set(observed_map_lib.KNOWN_DEFERRED)
     if known_unwired is None:
         known_unwired = KNOWN_UNWIRED
+    if chart_supply is None:
+        # The chart face is a NARROWING of the supply face. A caller that
+        # injected a synthetic supply but said nothing about the chart is
+        # exercising the unreachability contract, not this one — defaulting to
+        # the real values.yaml there would silently un-hermeticise their test
+        # and flag every synthetic key. No chart info given ⇒ no narrowing.
+        chart_supply = supply if injected_supply else _chart_supply()
+    if not_chart_armed is None:
+        not_chart_armed = frozenset() if injected_supply else NOT_CHART_ARMED
 
     dead = {k for k in demand if not _reachable(k, supply, deferred)}
 
@@ -147,6 +261,43 @@ def run_check(
             errors.append(
                 f"STALE-EXEMPTION: {k!r} is in KNOWN_UNWIRED but no alert demands it "
                 "anymore — remove it from KNOWN_UNWIRED."
+            )
+
+    # ── Chart face (C): scaffold-reachable but NOT shipped by the chart ──────
+    # Scope: only keys that are reachable at all. A key that is dead
+    # everywhere is already reported above; saying "…and it isn't in the chart
+    # either" would be noise.
+    reachable = demand - dead
+    not_armed = {k for k in reachable if not _reachable(k, chart_supply, deferred)}
+
+    for k in sorted(not_armed - not_chart_armed):
+        errors.append(
+            f"NOT-CHART-ARMED: threshold key {k!r} is demanded by an alert and the "
+            "scaffold path can supply it, but the shipped chart does NOT — an "
+            "operator who only ran `helm install` gets an alert that cannot fire. "
+            "Ship it in helm/threshold-exporter/values.yaml, or add it to "
+            "NOT_CHART_ARMED with a deliberate operator-supplied decision. (TRK-337)"
+        )
+
+    for k in sorted(not_armed & not_chart_armed):
+        infos.append(f"not-chart-armed {k} — operator must supply this default")
+
+    # Exit-lock, both directions — same discipline as KNOWN_UNWIRED.
+    for k in sorted(not_chart_armed - not_armed):
+        if k not in demand:
+            errors.append(
+                f"STALE-EXEMPTION: {k!r} is in NOT_CHART_ARMED but no alert demands "
+                "it anymore — remove it from NOT_CHART_ARMED."
+            )
+        elif k in dead:
+            errors.append(
+                f"STALE-EXEMPTION: {k!r} is in NOT_CHART_ARMED but is now UNREACHABLE "
+                "everywhere — it belongs in KNOWN_UNWIRED, not here."
+            )
+        else:
+            errors.append(
+                f"STALE-EXEMPTION: {k!r} is in NOT_CHART_ARMED but the chart now "
+                "ships it — remove it from NOT_CHART_ARMED so the gate protects it."
             )
 
     return {"errors": errors, "infos": infos}
@@ -187,9 +338,12 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr)
         return EXIT_VIOLATION if args.ci else EXIT_OK
 
+    n_unwired = sum(1 for m in infos if m.startswith("known-unwired "))
+    n_not_armed = sum(1 for m in infos if m.startswith("not-chart-armed "))
     print(
-        f"✅ threshold reachability OK — {len(infos)} known-unwired "
-        "(grandfathered, TRK-337), 0 new drift.",
+        f"✅ threshold reachability OK — {n_unwired} unreachable-everywhere "
+        f"(KNOWN_UNWIRED, TRK-337) / {n_not_armed} reachable but NOT shipped by "
+        "the chart (NOT_CHART_ARMED — operator must supply), 0 new drift.",
         file=sys.stderr)
     return EXIT_OK
 

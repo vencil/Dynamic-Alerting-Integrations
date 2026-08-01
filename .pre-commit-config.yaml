@@ -1165,11 +1165,16 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        # Fires when the DEMAND side (a rule-pack alert's user_threshold), the
-        # SUPPLY side (scaffold_tenant.generate_defaults), the shared extractor,
-        # or the gate itself changes. FAIL only on NEW unreachable keys or a
-        # KNOWN_UNWIRED exit-lock breach; the 18 grandfathered keys are INFO.
-        files: ^(rule-packs/rule-pack-.*\.yaml|scripts/tools/ops/(scaffold_tenant|_observed_map_lib)\.py|scripts/tools/lint/check_threshold_reachability\.py)$
+        # Fires when the DEMAND side (a rule-pack alert's user_threshold), EITHER
+        # supply side, the shared extractor, or the gate itself changes.
+        # ⚠️ `helm/threshold-exporter/values.yaml` is load-bearing here (P1-C):
+        # it is the SHIPPED supply face. Leaving it out is the exact failure this
+        # repo keeps hitting — a gate that reads an input its trigger filter does
+        # not cover simply never runs on the change that matters (adding or
+        # removing a chart default silently reclassifies keys).
+        # FAIL only on NEW unreachable / newly not-chart-armed keys, or an
+        # exit-lock breach in either ledger; grandfathered keys are INFO.
+        files: ^(rule-packs/rule-pack-.*\.yaml|helm/threshold-exporter/values\.yaml|scripts/tools/ops/(scaffold_tenant|_observed_map_lib)\.py|scripts/tools/lint/check_threshold_reachability\.py)$
 
       - id: threshold-registry-check
         name: "threshold registry SoT — schema + scaffold equivalence + generated-surface freshness + prose membership (TRK-339 WS1a / #1200)"

@@ -38,8 +38,11 @@ def test_grandfather_list_is_exactly_the_remaining_dead_keys():
     18 at gate-landing; the #1231 B/C/D/E identity repairs shrank it to the
     9 A-class tier moves (all `A:`-tagged) still tracked under TRK-337."""
     result = gate.run_check()
-    # the whole rump shows up as info; none as a STALE-EXEMPTION error
-    assert len(result["infos"]) == len(gate.KNOWN_UNWIRED) == 9
+    # the whole rump shows up as info; none as a STALE-EXEMPTION error.
+    # Scoped by prefix since P1-C added a second info class (not-chart-armed) —
+    # counting all infos would silently couple this pin to that ledger's size.
+    unwired_infos = [m for m in result["infos"] if m.startswith("known-unwired ")]
+    assert len(unwired_infos) == len(gate.KNOWN_UNWIRED) == 9
     assert all(tag.startswith("A:") for tag in gate.KNOWN_UNWIRED.values())
     assert not any("STALE-EXEMPTION" in e for e in result["errors"])
 
@@ -155,3 +158,91 @@ def test_main_ci_passes_when_clean(monkeypatch):
     monkeypatch.setattr(gate, "run_check",
                         lambda: {"errors": [], "infos": ["18 known-unwired"]})
     assert gate.main(["--ci"]) == gate.EXIT_OK
+
+
+# ── chart supply face (P1-C) ──────────────────────────────────────────────
+#
+# The gate's original supply face is `scaffold_tenant.generate_defaults()` — a
+# TOOL'S CAPABILITY, not the shipped deployment. These pin the second face: a
+# key the scaffold path can supply but the chart does not ship leaves an
+# operator with an alert that cannot fire.
+
+_BASE = dict(
+    demand={"a_key"},
+    supply={"a_key"},
+    deferred=set(),
+    known_unwired={},
+)
+
+
+def test_chart_armed_key_is_silent():
+    """Shipped by the chart → neither error nor info."""
+    r = gate.run_check(**_BASE, chart_supply={"a_key"}, not_chart_armed=frozenset())
+    assert r["errors"] == []
+    assert r["infos"] == []
+
+
+def test_reachable_but_not_shipped_is_an_error_when_unledgered():
+    """The whole point of P1-C: scaffold can supply it, the chart cannot."""
+    r = gate.run_check(**_BASE, chart_supply=set(), not_chart_armed=frozenset())
+    assert any("NOT-CHART-ARMED" in e and "a_key" in e for e in r["errors"])
+
+
+def test_ledgered_not_chart_armed_is_info_only():
+    r = gate.run_check(**_BASE, chart_supply=set(), not_chart_armed=frozenset({"a_key"}))
+    assert r["errors"] == []
+    assert any(m.startswith("not-chart-armed a_key") for m in r["infos"])
+
+
+def test_ledger_exit_lock_fires_when_chart_starts_shipping_it():
+    """Ledger can only shrink: once shipped, the entry must be removed."""
+    r = gate.run_check(**_BASE, chart_supply={"a_key"}, not_chart_armed=frozenset({"a_key"}))
+    assert any("STALE-EXEMPTION" in e and "chart now" in e for e in r["errors"])
+
+
+def test_ledger_exit_lock_fires_when_no_alert_demands_it():
+    r = gate.run_check(
+        demand=set(), supply={"a_key"}, deferred=set(), known_unwired={},
+        chart_supply=set(), not_chart_armed=frozenset({"a_key"}),
+    )
+    assert any("STALE-EXEMPTION" in e and "no alert demands" in e for e in r["errors"])
+
+
+def test_dead_key_is_not_also_reported_as_not_chart_armed():
+    """A key dead on BOTH faces is reported once, as unreachable — adding
+    '...and the chart lacks it too' would be noise."""
+    r = gate.run_check(
+        demand={"a_key"}, supply=set(), deferred=set(),
+        known_unwired={"a_key": "grandfathered"},
+        chart_supply=set(), not_chart_armed=frozenset(),
+    )
+    assert not any("NOT-CHART-ARMED" in e for e in r["errors"])
+    assert any(m.startswith("known-unwired a_key") for m in r["infos"])
+
+
+def test_ledger_entry_that_became_fully_dead_is_redirected():
+    """Wrong-ledger drift: it belongs in KNOWN_UNWIRED now, not here."""
+    r = gate.run_check(
+        demand={"a_key"}, supply=set(), deferred=set(),
+        known_unwired={"a_key": "grandfathered"},
+        chart_supply=set(), not_chart_armed=frozenset({"a_key"}),
+    )
+    assert any("STALE-EXEMPTION" in e and "UNREACHABLE" in e for e in r["errors"])
+
+
+def test_real_repo_chart_face_is_ledgered_and_non_vacuous():
+    """Live-repo pin. The literal lower bound guards against the ledger being
+    emptied or the chart face silently resolving to everything — an assertion
+    derived from the thing it guards would not guard it."""
+    r = gate.run_check()
+    assert r["errors"] == []
+    not_armed = [m for m in r["infos"] if m.startswith("not-chart-armed ")]
+    assert len(not_armed) >= 20, (
+        f"only {len(not_armed)} not-chart-armed keys — if the chart genuinely "
+        "started shipping them the exit-lock above would have fired, so this "
+        "more likely means the chart supply face stopped being read"
+    )
+    assert len(gate._chart_supply()) < len(gate._supply()), (
+        "the shipped chart supplies at least as much as the scaffold generator — "
+        "that would make this whole face a no-op; verify values.yaml parsed"
+    )
