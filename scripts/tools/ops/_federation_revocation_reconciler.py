@@ -351,14 +351,46 @@ def build_failopen_query(lookback_s: int, settle_s: int) -> str:
     )
 
 
-# ⛔ The gateway's two revoked-set warnings mean OPPOSITE things and each
-# feeds its own gauge. This literal must never become a prefix or substring
-# of GATEWAY_FAILOPEN_PHRASE, or the fail-open gauge would count refusals —
-# reporting "we are letting revoked tokens through" about a gateway that is
-# still enforcing. tests/ops/test_federation_revocation_reconciler.py pins
-# both phrases against the shipped Lua, in both directions.
+# ⛔ The gateway's THREE revoked-set warnings mean different things about what is
+# being let through right now, and each feeds its own gauge:
+#
+#   reload failed → could not read it;  the PREVIOUS set is still enforced
+#   rejected      → read and refused it; the PREVIOUS set is still enforced
+#   missing       → the file is gone;    the set is EMPTY, nothing is enforced
+#
+# No literal here may be a substring of another, in either direction, or one
+# query would count another's rows and an incident responder would read the
+# posture backwards — "we are letting revoked tokens through" about a gateway
+# that is still enforcing, or the reverse, which is worse.
+# tests/ops/test_federation_revocation_reconciler.py pins all three against the
+# shipped Lua and asserts pairwise non-containment.
 GATEWAY_FAILOPEN_PHRASE = "federation: revoked-set reload failed"
 GATEWAY_REJECTED_PHRASE = "federation: revoked-set rejected"
+GATEWAY_MISSING_PHRASE = "federation: revoked-set missing"
+
+
+def build_missing_query(lookback_s: int, settle_s: int) -> str:
+    """LogsQL for the gateway reporting the revoked-set file is ABSENT (#1236).
+
+    The one path that CLEARS the enforcement plane. The other two warnings leave
+    the previously loaded set in force, so they are staleness signals; this one
+    means the gateway is checking every token against an EMPTY set and honouring
+    all of them until their TTL — ADR-028 §相鄰破口 names deleting/unmounting the
+    projected key as the attack, and until #1236 the gateway said nothing at all
+    when it happened (the missing branch returns normally from inside the pcall,
+    so neither existing warning fires).
+
+    Same window as the other two gateway queries — all three ask "what did the
+    gateway say in the recent past". Source-qualified on ``log_type`` + ``app``
+    exactly like them; see :func:`build_failopen_query` for the honest boundary
+    on what that qualification does and does not prove about the producer.
+    """
+    return (
+        f'_time:[now-{lookback_s}s, now-{settle_s}s] '
+        f'AND log_type:"{LOG_TYPE_GATEWAY_OP}" '
+        f'AND app:"{GATEWAY_APP}" '
+        f'AND "{GATEWAY_MISSING_PHRASE}"'
+    )
 
 
 def build_rejected_query(lookback_s: int, settle_s: int) -> str:
@@ -436,6 +468,15 @@ class Metrics:
         # exactly this reason and a REFUSED one was not.
         self.live_set_rejected_lines = 0     # gauge: contract-violating lines in the mounted file
         self.gateway_reload_rejected = 0     # gauge: gateway reload-refusal warns in window
+        # ⛔ NOT one of the two above. Those two mean the gateway is FROZEN on a
+        # set it already had — stale, but still rejecting. This one means the
+        # file is GONE and the enforcement plane is EMPTY, which is the only
+        # gateway-side state where revoked tokens are actually being honoured.
+        # It is also the state the sentence above ("a MISSING file is loud")
+        # was describing from the DETECTION end only: tamper_suspected needs
+        # revocation events still inside the window to say anything, so until
+        # #1236 nothing at the ENFORCEMENT end said it at all.
+        self.gateway_revoked_set_missing = 0  # gauge: gateway "file is absent" warns in window
 
     def render(self) -> str:
         lines = [
@@ -469,6 +510,9 @@ class Metrics:
             "# HELP federation_gateway_revoked_set_reload_rejected Gateway reload-refusal warnings in the window, read back off the gateway's own log stream (enforcement-plane self-report; #1235).",
             "# TYPE federation_gateway_revoked_set_reload_rejected gauge",
             f"federation_gateway_revoked_set_reload_rejected {self.gateway_reload_rejected}",
+            "# HELP federation_gateway_revoked_set_missing Gateway reports the revoked-set file is ABSENT, so it is enforcing an EMPTY set and honouring every revoked token until its TTL. Unlike the two staleness gauges, this is the enforcement plane being open, not frozen (#1236).",
+            "# TYPE federation_gateway_revoked_set_missing gauge",
+            f"federation_gateway_revoked_set_missing {self.gateway_revoked_set_missing}",
         ]
         return "\n".join(lines) + "\n"
 
@@ -550,6 +594,12 @@ def reconcile_once(cfg: "Config", metrics: Metrics, now: float) -> None:
         # query — both ask "what did the gateway say in the recent past".
         rj_rows = query_victorialogs(
             cfg.victorialogs_url, build_rejected_query(cfg.failopen_lookback_s, cfg.settle_s))
+        # The enforcement plane reporting it has NO list at all (#1236). Same
+        # window and the same fail-closed block as its two siblings — an
+        # unreachable store must leave every gateway-side gauge at its previous
+        # value rather than publish a reassuring zero.
+        ms_rows = query_victorialogs(
+            cfg.victorialogs_url, build_missing_query(cfg.failopen_lookback_s, cfg.settle_s))
         live, live_rejected = read_live_set(cfg.revoked_file)
         parsed = parse_events(ev_rows)
         result = reconcile(parsed, live, now, cfg.skew_margin_s)
@@ -573,6 +623,7 @@ def reconcile_once(cfg: "Config", metrics: Metrics, now: float) -> None:
     metrics.channel_up = 1 if hb_rows else 0
     metrics.live_set_rejected_lines = live_rejected
     metrics.gateway_reload_rejected = len(rj_rows)
+    metrics.gateway_revoked_set_missing = len(ms_rows)
     metrics.last_reconcile_ts = now
     if live_rejected:
         # Count only — never the line itself (ADR-028 D3; the content is the

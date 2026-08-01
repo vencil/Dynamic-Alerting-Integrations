@@ -256,6 +256,11 @@ KNOWN_UNKNOWN_SOURCE: dict[str, str] = {
     # scrape target is the reconciler Deployment, not the gateway (#1235).
     "federation_gateway_revoked_set_reload_rejected":
         "federation-reconciler helm chart — install ns = Release.Namespace, not pinned (#1203)",
+    # Same producer and same prefix caveat as the row above, but NOT the same
+    # condition: those two mean the gateway is frozen on a set it already had;
+    # this one means the file is gone and it is enforcing nothing (#1236).
+    "federation_gateway_revoked_set_missing":
+        "federation-reconciler helm chart — install ns = Release.Namespace, not pinned (#1203)",
     "tenant_log_query_requests_total":
         "tenant-log-query plane, helm-only — install ns not pinned by repo manifests (#1203)",
 }
@@ -301,6 +306,7 @@ PLANE_OF_UNPINNED_SOURCE: dict[str, str] = {
     "federation_revocation_channel_up": "platform-local-on-central",
     "federation_revocation_live_set_rejected_lines": "platform-local-on-central",
     "federation_gateway_revoked_set_reload_rejected": "platform-local-on-central",
+    "federation_gateway_revoked_set_missing": "platform-local-on-central",
     "tenant_log_query_requests_total": "platform-local-on-central",
 }
 

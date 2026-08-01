@@ -14,7 +14,7 @@ Config-driven 多租戶告警平台，基於 Prometheus `group_left` 向量匹�
 > **100 租戶的監控管理：從 5,000 條手寫規則 → 237 條固定規則。**
 > 租戶只寫 YAML、不碰 PromQL —— 連自訂告警都用參數化 recipe 自助產出（v2.9.0 **Custom Alerts**）。新租戶**設定**分鐘級（rule-pack 已涵蓋的指標）、變更秒級生效；遷移既有複雜告警（自訂 exporter / 拓樸指標）視形態而定，見[遷移指南](docs/migration-guide.md)。
 
-![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.9.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-16-orange) ![Alerts](https://img.shields.io/badge/alerts-160-red) ![Bilingual](https://img.shields.io/badge/bilingual-94%20pairs-blue)
+![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.9.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-16-orange) ![Alerts](https://img.shields.io/badge/alerts-161-red) ![Bilingual](https://img.shields.io/badge/bilingual-94%20pairs-blue)
 
 ---
 

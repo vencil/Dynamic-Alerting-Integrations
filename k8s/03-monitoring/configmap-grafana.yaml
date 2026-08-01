@@ -498,7 +498,7 @@ data:
           },
           "gridPos": {
             "h": 4,
-            "w": 12,
+            "w": 8,
             "x": 0,
             "y": 4
           },
@@ -566,8 +566,8 @@ data:
           },
           "gridPos": {
             "h": 4,
-            "w": 12,
-            "x": 12,
+            "w": 8,
+            "x": 8,
             "y": 4
           },
           "targets": [
@@ -611,6 +611,74 @@ data:
                     "to": null,
                     "result": {
                       "text": "🔴 Reload refused",
+                      "index": 1
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value_and_name"
+          }
+        },
+        {
+          "title": "Revoked-set — MISSING",
+          "description": "THE ENFORCEMENT PLANE HAS NO LIST AT ALL (ADR-028 §fail-open / #1236). Warnings, in the recent (~10m) window, where the gateway reported its revoked-set file is ABSENT. ⛔ Read this differently from the two panels to its left: those mean the gateway is FROZEN on a set it already had — stale, but still rejecting. This one means it holds NOTHING, so every revoked token is being honoured until its TTL (≤4h). It is the ADR-028 §相鄰破口 attack shape (delete / unmount the projected key) and equally what a namespace misconfiguration looks like (#1313) — a ConfigMap is namespace-scoped, so the volume only resolves one in the gateway's OWN namespace. Until #1236 this state produced no signal at all: the Lua's missing branch returns normally from inside its pcall, so neither other warning fired. Threshold aligned to the FederationGatewayRevokedSetMissing alert (>0, for 5m, critical). a11y: symbol + text.",
+          "type": "stat",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 8,
+            "x": 16,
+            "y": 4
+          },
+          "targets": [
+            {
+              "expr": "federation_gateway_revoked_set_missing",
+              "legendFormat": ""
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              },
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "✓ Present",
+                      "index": 0
+                    }
+                  }
+                },
+                {
+                  "type": "range",
+                  "options": {
+                    "from": 1,
+                    "to": null,
+                    "result": {
+                      "text": "🔴 Absent — nothing enforced",
                       "index": 1
                     }
                   }
