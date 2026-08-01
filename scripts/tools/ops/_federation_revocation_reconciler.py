@@ -332,7 +332,17 @@ def build_failopen_query(lookback_s: int, settle_s: int) -> str:
     check — the demux spoof guard only covers federation_audit). That is the
     same producer-identity gap as the evidence branch, closed only by producer
     binding at ingest, not a query-side field (tracked separately). mtail (audit
-    access-log only) cannot see this warning, so the reconciler counts it here."""
+    access-log only) cannot see this warning, so the reconciler counts it here.
+
+    ⚠️ Until #1294 that sentence UNDERSTATED the exposure: ``app`` is written
+    from ``.kubernetes.container_name`` AFTER demux deep-merges the producer's
+    own JSON, so a payload carrying ``{"kubernetes":{"container_name":"envoy"}}``
+    set this field without the attacker naming any container ``envoy`` at all.
+    #1294 moved that read to a pre-merge snapshot, so the capability described
+    above ("can create a pod with the gateway label AND an ``envoy`` container")
+    is now the real bar rather than an overestimate of it. The producer-identity
+    gap itself is unchanged — this only restores the accuracy of the boundary
+    this docstring documents."""
     return (
         f'_time:[now-{lookback_s}s, now-{settle_s}s] '
         f'AND log_type:"{LOG_TYPE_GATEWAY_OP}" '

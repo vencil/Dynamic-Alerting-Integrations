@@ -368,9 +368,16 @@ class TestFederationEvidenceChannel:
         """⛔ The split must sit BETWEEN the source and demux, and must key on
         `.kubernetes.*`. demux deep-merges the log payload over the event root,
         so a routing decision made downstream of that merge could be FORGED by a
-        log producer (projection_tests.yaml already pins the overwrite hazard).
-        Reading pristine, kubelet-supplied pod metadata is what makes the origin
-        decision untrusted-input-proof."""
+        log producer. Reading pristine, kubelet-supplied pod metadata is what
+        makes the origin decision untrusted-input-proof.
+
+        The overwrite hazard itself is pinned behaviourally by the (F1)/(F2)
+        cases in helm/vector/tests/projection_tests.yaml. ⚠️ This docstring used
+        to assert that as already-existing fact ("projection_tests.yaml already
+        pins the overwrite hazard") — it was not: no fixture forged a
+        `kubernetes` key until #1294. The same unfounded claim sat in the
+        configmap comment above origin_split; both are corrected together
+        because a claim repeated in two places fails in two places."""
         cfg = _vector_yaml(_render(repo_root / "helm/vector"))
         split = cfg["transforms"]["origin_split"]
         assert split["type"] == "route"
