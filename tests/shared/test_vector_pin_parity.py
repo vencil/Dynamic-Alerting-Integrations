@@ -34,6 +34,7 @@ _DEVCONTAINER_SH = _REPO / ".devcontainer" / "install-vector.sh"
 _VALUES = _REPO / "helm" / "vector" / "values.yaml"
 _CHART = _REPO / "helm" / "vector" / "Chart.yaml"
 _README = _REPO / "helm" / "vector" / "README.md"
+_NIGHTLY = _REPO / ".github" / "workflows" / "nightly-image-scan.yaml"
 
 
 def _one(pattern: str, text: str, what: str) -> str:
@@ -51,7 +52,7 @@ def _ci_version() -> str:
 
 
 def test_files_exist() -> None:
-    for p in (_CI_YML, _DEVCONTAINER_SH, _VALUES, _CHART, _README):
+    for p in (_CI_YML, _DEVCONTAINER_SH, _VALUES, _CHART, _README, _NIGHTLY):
         assert p.is_file(), f"missing {p}"
 
 
@@ -107,6 +108,48 @@ def test_ci_pin_matches_the_deployed_image_tag() -> None:
         f"that actually runs the shipped VRL. Bump ci.yml + "
         f".devcontainer/install-vector.sh to match the image (or vice versa) — and "
         f"remember image.digest in values.yaml is AUTHORITATIVE over the tag."
+    )
+
+
+def test_nightly_scan_ref_matches_the_chart_image() -> None:
+    """The nightly CVE scan must scan the image the chart actually deploys.
+
+    ``nightly-image-scan.yaml`` hand-copies the full pinned ref (repository, tag
+    AND digest) into its matrix, annotated ``# helm/vector/values.yaml``. Nothing
+    bound the two: ``image-ref-resolve.yaml`` verifies the values.yaml refs
+    RESOLVE in the registry but never compares them to the matrix, and its own
+    header comment (lines 6-8) names ``matrix↔values drift`` as a gap that
+    "slips past" the nightly scan. So a digest bumped in one file and not the
+    other would leave the chart deploying image A while CVE scanning image B —
+    and, because ``image.digest`` is AUTHORITATIVE over the tag at deploy time,
+    that also lets the deployed binary drift away from the version every other
+    pin in this file agrees on, without any of them going red.
+
+    Binding repository+tag+digest is checkable offline; "does this digest really
+    belong to release X" is not (it needs a registry round-trip), so this gate
+    deliberately proves consistency between the two in-repo copies rather than
+    provenance of the digest itself.
+
+    ⚠️ Scope: vector only. The same matrix↔values drift exists for every other
+    entry in that scan (victoria-logs, envoy, …) — a repo-wide version of this
+    check is a separate change.
+    """
+    values = yaml.safe_load(_VALUES.read_text(encoding="utf-8"))
+    image = values["image"]
+    nightly = _NIGHTLY.read_text(encoding="utf-8")
+
+    ref = _one(r"""^\s*ref:\s*["'](timberio/vector:[^"']+)["']""", nightly,
+               "nightly-image-scan vector matrix ref")
+    expected = f"{image['repository']}:{image['tag']}"
+    digest = image.get("digest")
+    if digest:
+        expected = f"{expected}@{digest}"
+
+    assert ref == expected, (
+        f"nightly-image-scan.yaml scans {ref!r} but helm/vector/values.yaml deploys "
+        f"{expected!r}. The scan matrix is a hand-copy of that file (its own comment "
+        f"says so) — a drift means the CVE scan covers an image the cluster never "
+        f"runs. Update both together."
     )
 
 

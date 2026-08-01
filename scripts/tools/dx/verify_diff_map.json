@@ -682,7 +682,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "c3c292ad6b3f6d3fdd9b52bf068d9cffcda7c4fee4efed95543952809f2fdb09",
+ "source_digest": "085099754cd2bd7d373b06694d0c76d7a788b1e969966e4fecfef145c8712df0",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1020,7 +1020,8 @@
    "tests/ops/test_guard_defaults_scopes.py"
   ],
   ".github/workflows/nightly-image-scan.yaml": [
-   "tests/ops/test_nightly_scan_matrix_drift.py"
+   "tests/ops/test_nightly_scan_matrix_drift.py",
+   "tests/shared/test_vector_pin_parity.py"
   ],
   ".github/workflows/nightly-race.yaml": [
    "tests/ops/test_nightly_race_issue_policy.py"
