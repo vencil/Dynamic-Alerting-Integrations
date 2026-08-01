@@ -257,6 +257,19 @@ federation:
     # namespace, so helm/vector's evidence binding (`evidenceChannel.podNamespace`,
     # #1288/#1307) is unaffected: it binds the producer pod's namespace, not the
     # store's.
+    #
+    # ⚖️ TRADE-OFF, choose knowingly: mounting a ConfigMap as a volume needs NO
+    # RBAC — only the ability to create a pod in that namespace. So wherever the
+    # store lives, its contents are readable by whoever can create pods there,
+    # and `monitoring` is a SHARED namespace (prometheus / grafana / alertmanager
+    # / kube-state-metrics / CronJobs) — a wider set than tenant-api's own.
+    # store.json holds opaque token_ids and expiries only (ADR-028 D3; the
+    # signing key is a Secret and is NOT in here), so this is disclosure, not
+    # privilege escalation — and the alternative is a revocation set the gateway
+    # never reads at all. The reverse direction is equally valid: install the
+    # gateway and reconciler INTO tenant-api's namespace instead and leave this
+    # empty. Its cost is that the gateway's Prometheus scrape depends on it
+    # living in `monitoring` (helm/federation-gateway/README.md).
     namespace: ""
 
   # Federation token lifetime, passed as --federation-token-ttl (Go duration).
