@@ -97,6 +97,23 @@ data:
       {{- if eq $ecValue $ecGwValue }}
       {{-   fail (printf "evidenceChannel.podLabelValue and .gatewayLabelValue are both %q — the origin split would send the SAME rows down both branches (Vector's `route` copies an event to every matching output), putting tenant-api's stderr into the demux/0:0 path that the PII filter exists to keep it out of. They must be distinct." $ecValue) }}
       {{- end }}
+      {{- /* ── Producer namespace binding (#1288) ─────────────────────────────
+             The origin split's only entry ticket was a pod LABEL, which any
+             pod may declare for itself, so "which producer emitted this" was
+             never actually established. The namespace a pod RUNS IN is the one
+             piece of this metadata the pod cannot self-assign: it is set by the
+             control plane and cluster-unique, so matching on it raises the bar
+             from "can create a pod anywhere in the collected scope" to "can
+             create a pod in THIS namespace".
+             ⛔ The defaults and the absent-vs-explicitly-empty rule live in
+             _helpers.tpl, NOT here: NOTES.txt prints these same two values back
+             to the operator, and a second copy of the logic would let what we
+             ENFORCE drift from what we SAY we enforce. Both callers include the
+             one definition. (`default` would be wrong there for a separate
+             reason, spelled out in the helper: "" is falsy in Go templates, so
+             it would turn "disabled" back into the default.) */}}
+      {{- $ecNs := include "vector.evidenceNamespace" . }}
+      {{- $ecGwNs := include "vector.gatewayNamespace" . }}
       {{- $ecLogType := default "federation_evidence" $ec.logType }}
       {{- $ecEvents := default (list "federation_token_revoked" "federation_revocation_channel_heartbeat") $ec.events }}
       {{- /* An ABSENT `events` key takes the default above (the --reuse-values
@@ -111,16 +128,50 @@ data:
              a ROW allowlist and says nothing about which FIELDS a matched row
              carries; see the rebuild in the VRL below. Same absent-vs-empty
              distinction as `events`. */}}
+      {{- /* ── Membership, not just non-emptiness (#1288 gap 2) ──────────────
+             The guard above only rejects an EMPTY list. A values override that
+             merely DROPS `federation_token_revoked` renders a perfectly valid
+             pipeline in which every revocation row is aborted while the
+             heartbeat still flows — so `channel_up` stays 1, `tamper_suspected`
+             stays 0, and the detection plane reads as healthy while carrying no
+             evidence at all. That is the worst shape available: permanently
+             green, no attacker required, `helm upgrade --reuse-values` drift is
+             enough. Both members are load-bearing and neither is optional:
+             the revocation event IS the evidence, the heartbeat IS the proof
+             the channel is alive. */}}
+      {{- range $required := (list "federation_token_revoked" "federation_revocation_channel_heartbeat") }}
+      {{- if not (has $required $ecEvents) }}
+      {{-   fail (printf "evidenceChannel.events must contain %q — it is consumed by the ADR-028 D1 detection plane, not decoration. Dropping the revocation event aborts every revocation row while the heartbeat keeps the channel looking alive (permanently green with zero evidence); dropping the heartbeat blinds FederationRevocationEvidenceChannelDown. Current value: %v" $required $ecEvents) }}
+      {{- end }}
+      {{- end }}
       {{- $ecKeep := default (list "event" "token_id" "expires_at") $ec.keepFields }}
       {{- if and (hasKey $ec "keepFields") (not $ec.keepFields) }}
       {{-   fail "evidenceChannel.keepFields must list at least one field. An empty keep-list strips `event` / `token_id` / `expires_at` off every evidence row, so the reconciler's LogsQL `event:\"federation_token_revoked\"` filter matches nothing — a silently empty detection plane against a store that is visibly receiving data." }}
       {{- end }}
-      {{- /* Both branches test the SAME field against DISTINCT constants, so
-             they are MUTUALLY EXCLUSIVE — which is what makes a plain `route`
-             safe here: Vector's `route` copies an event to EVERY matching
-             output, and two exclusive conditions can never both match, so no
-             event is ever duplicated. The `fail` guard above enforces the
+      {{- /* Same membership requirement as `events` (#1288 gap 2). Each of the
+             three is read by name on the reconcile path: `event` is the LogsQL
+             filter, `token_id` is what a suspected row is identified BY, and
+             `expires_at` is what separates a genuine un-revoke from an ordinary
+             expiry prune. Drop any one and the plane degrades silently rather
+             than failing. */}}
+      {{- range $required := (list "event" "token_id" "expires_at") }}
+      {{- if not (has $required $ecKeep) }}
+      {{-   fail (printf "evidenceChannel.keepFields must contain %q — the reconciler reads it by name on every reconcile (event=LogsQL filter, token_id=the identity of a suspected row, expires_at=the expiry-vs-tamper discriminator). Widening this list is the security-reviewed action; narrowing it past these three silently empties the detection plane. Current value: %v" $required $ecKeep) }}
+      {{- end }}
+      {{- end }}
+      {{- /* Both branches test the SAME LABEL field against DISTINCT constants,
+             so they are MUTUALLY EXCLUSIVE — which is what makes a plain
+             `route` safe here: Vector's `route` copies an event to EVERY
+             matching output, and two exclusive conditions can never both match,
+             so no event is ever duplicated. The `fail` guard above enforces the
              distinctness the exclusivity rests on.
+             ⛔ #1288 adds a namespace conjunct to each branch. Exclusivity is
+             UNAFFECTED and still rests on the label alone: a conjunction can
+             only ever match a subset of what its label half matched, so two
+             conditions that were disjoint stay disjoint — including when both
+             namespaces are configured to the same value. Do not "simplify" the
+             distinctness guard away on the grounds that the namespaces differ;
+             the namespaces are operator-settable and may coincide.
              They are deliberately NOT exhaustive. An earlier draft wrote the
              gateway side as the negation (`!= evidenceValue`), which IS
              exhaustive — and therefore forwarded every unrecognised row into
@@ -150,7 +201,13 @@ data:
           # ADR-028 revocation evidence producer (tenant-api). Everything this
           # pod emits enters the evidence branch, where all but the two
           # federation events are dropped.
-          evidence: '{{ $ecPath }} == {{ $ecValue | quote }}'
+          # ⛔ The namespace conjunct (#1288) is producer BINDING, the label is
+          # not: a pod declares its own labels, but it cannot choose which
+          # namespace it runs in. A row that carries the label from anywhere
+          # else now matches NEITHER branch and lands in `_unmatched` — i.e.
+          # dropped, which is the same fail-to-DROP posture the paragraph above
+          # argues for, reached structurally instead of by an `abort`.
+          evidence: '{{ $ecPath }} == {{ $ecValue | quote }}{{ if $ecNs }} && .kubernetes.pod_namespace == {{ $ecNs | quote }}{{ end }}'
           # The pre-existing audit pipeline. ⛔ A POSITIVE match, not the
           # negation of the evidence condition: negation would make the two
           # branches EXHAUSTIVE, so any row the source ever collected that was
@@ -163,7 +220,21 @@ data:
           # DISTINCT constants, so they stay mutually exclusive — that (not
           # exhaustiveness) is what makes a plain `route` safe here, since
           # `route` copies an event to EVERY matching output.
-          gateway: '{{ $ecPath }} == {{ $ecGwValue | quote }}'
+          # ⚠️ HONEST BOUNDARY for the gateway conjunct (#1288). Unlike the
+          # evidence side — whose producer owns a single-workload namespace —
+          # the gateway's namespace is SHARED (prometheus / grafana /
+          # alertmanager / KSM / CronJobs live there). So this raises the bar to
+          # "can create a pod in the platform namespace", and a principal who
+          # already has that can reach the log store DIRECTLY: VictoriaLogs
+          # admits same-namespace pods by self-declared label and :9428 carries
+          # no authentication (#1295). Against THAT actor this conjunct buys
+          # nothing. What it does buy is the weaker, more common case: a
+          # workload elsewhere in the cluster that carries the gateway label —
+          # by accident or on purpose — no longer reaches demux at all.
+          # ⛔ Do not upgrade this comment into a claim of producer
+          # authentication. Real authentication needs producer-side signing
+          # (the `audit_signature` seam further down) or admission control.
+          gateway: '{{ $ecPath }} == {{ $ecGwValue | quote }}{{ if $ecGwNs }} && .kubernetes.pod_namespace == {{ $ecGwNs | quote }}{{ end }}'
       demux:
         type: remap
         inputs:

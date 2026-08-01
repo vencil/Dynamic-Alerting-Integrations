@@ -589,6 +589,113 @@ class TestFederationEvidenceChannel:
         vrl = cfg["transforms"]["federation_evidence"]["source"]
         for event in _EVIDENCE_EVENTS:
             assert f'ev != "{event}"' in vrl
+        # #1288: the namespace binding must also survive the nil path — an
+        # upgrader carrying no evidenceChannel map is exactly who would
+        # otherwise silently keep the label-only (unbound) split.
+        assert '.kubernetes.pod_namespace == "tenant-api"' in routes["evidence"], (
+            "the producer binding must default ON through --reuse-values, not "
+            "quietly degrade to label-only matching"
+        )
+        assert '.kubernetes.pod_namespace == "monitoring"' in routes["gateway"]
+
+    @_needs_helm
+    def test_producer_namespace_binding_is_on_by_default(self, repo_root: Path) -> None:
+        """#1288: both origin-split branches must require the producer's
+        namespace, not just its pod label. A pod declares its own labels; it
+        cannot choose the namespace it runs in, so this conjunct is the only
+        self-assignment-proof half of the split."""
+        routes = _vector_yaml(_render(repo_root / "helm/vector"))["transforms"]["origin_split"]["route"]
+        assert '.kubernetes.pod_namespace == "tenant-api"' in routes["evidence"]
+        assert '.kubernetes.pod_namespace == "monitoring"' in routes["gateway"]
+
+    @_needs_helm
+    def test_empty_namespace_disables_binding_without_reverting_to_default(
+        self, repo_root: Path
+    ) -> None:
+        """#1288 escape hatch. `""` must DISABLE the binding, not fall back to
+        the shipped default — the trap a bare `default "tenant-api" $ec.X` walks
+        into, because Go templates treat "" as falsy. The template distinguishes
+        absent (take the default) from explicitly empty (disabled) via hasKey;
+        this test is what stops that from being 'simplified' back."""
+        routes = _vector_yaml(_render(
+            repo_root / "helm/vector",
+            sets={"evidenceChannel.podNamespace": ""},
+        ))["transforms"]["origin_split"]["route"]
+        assert "pod_namespace" not in routes["evidence"], (
+            'explicitly empty podNamespace must disable the binding, not silently '
+            'restore the default'
+        )
+        # the other branch is independent
+        assert '.kubernetes.pod_namespace == "monitoring"' in routes["gateway"]
+
+    def test_namespace_defaults_have_exactly_one_definition(self, repo_root: Path) -> None:
+        """#1288: the producer-namespace defaults and the absent-vs-empty rule
+        live ONLY in _helpers.tpl. Two templates consume them — configmap.yaml
+        renders the route conditions, NOTES.txt prints them back to the operator
+        after install — so a second copy would let what we ENFORCE drift from
+        what we TELL the operator we enforce, and only one of the two would be
+        covered by the render tests above. This is the hand-copied-contract
+        drift class, so pin it at the source: both callers must `include`, and
+        neither may hardcode the default.
+
+        No binary needed — deliberately, so it runs even where helm is absent.
+        """
+        tpl = repo_root / "helm/vector/templates"
+        helpers = (tpl / "_helpers.tpl").read_text(encoding="utf-8")
+        for name, default in (("vector.evidenceNamespace", '"tenant-api"'),
+                              ("vector.gatewayNamespace", '"monitoring"')):
+            assert f'define "{name}"' in helpers, f"{name} must be defined in _helpers.tpl"
+            assert default in helpers, f"{name}'s default must live in _helpers.tpl"
+
+        for fname in ("configmap.yaml", "NOTES.txt"):
+            src = (tpl / fname).read_text(encoding="utf-8")
+            assert 'include "vector.evidenceNamespace"' in src, (
+                f"{fname} must take the evidence namespace from the shared helper"
+            )
+            assert 'include "vector.gatewayNamespace"' in src, (
+                f"{fname} must take the gateway namespace from the shared helper"
+            )
+            # The giveaway for a reintroduced copy: the hasKey fallback rebuilt
+            # locally. The helper is the only place that pattern belongs.
+            for key in ("podNamespace", "gatewayNamespace"):
+                assert f'hasKey $ec "{key}"' not in src, (
+                    f"{fname} re-implements the {key} fallback — that is the second "
+                    f"copy this test exists to prevent; call the helper instead"
+                )
+
+    @_needs_helm
+    def test_evidence_events_membership_is_enforced(self, repo_root: Path) -> None:
+        """#1288 gap 2. The pre-existing guard only rejected an EMPTY list. A
+        values override that merely DROPS the revocation event renders a valid
+        pipeline where every revocation row aborts while the heartbeat still
+        flows — `channel_up` 1, `tamper_suspected` 0, permanently green with no
+        evidence, and no attacker needed. Both members are load-bearing."""
+        for dropped, remaining in (
+            ("federation_token_revoked", "federation_revocation_channel_heartbeat"),
+            ("federation_revocation_channel_heartbeat", "federation_token_revoked"),
+        ):
+            r = _render_result(repo_root / "helm/vector",
+                               sets={"evidenceChannel.events": "{%s}" % remaining})
+            assert r.returncode != 0, f"dropping {dropped} must fail render"
+            assert dropped in r.stderr, (
+                f"the render error must name the missing member; got: {r.stderr!r}"
+            )
+
+    @_needs_helm
+    def test_evidence_keepfields_membership_is_enforced(self, repo_root: Path) -> None:
+        """#1288 gap 2, field half. Each of the three is read by name on the
+        reconcile path (event=LogsQL filter, token_id=identity of a suspected
+        row, expires_at=the expiry-vs-tamper discriminator), so narrowing past
+        them empties the detection plane silently."""
+        for dropped, remaining in (
+            ("token_id", "event,expires_at"),
+            ("expires_at", "event,token_id"),
+            ("event", "token_id,expires_at"),
+        ):
+            r = _render_result(repo_root / "helm/vector",
+                               sets={"evidenceChannel.keepFields": "{%s}" % remaining})
+            assert r.returncode != 0, f"dropping {dropped} must fail render"
+            assert dropped in r.stderr
 
     @_needs_helm
     def test_empty_event_allowlist_fails_render(self, repo_root: Path) -> None:

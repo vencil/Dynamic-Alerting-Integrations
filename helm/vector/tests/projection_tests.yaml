@@ -792,3 +792,114 @@ tests:
                 "_time_field must stay Vector's Timestamp; a payload string replaced it")
               assert!(!contains(to_string(.timestamp) ?? "", "1999"),
                 "payload value leaked into _time_field: " + (to_string(.timestamp) ?? "?"))
+
+  # ══ #1288 — the origin split binds on NAMESPACE, not just the pod label ════
+  # A pod declares its own labels, so the label alone selects a SHAPE, never a
+  # producer. The namespace it runs in is assigned by the control plane and is
+  # cluster-unique — the one piece of this metadata that is not self-assigned.
+  # Both branches now require it, and a row that carries the right label from
+  # the wrong namespace matches NEITHER branch: it lands in the unconsumed
+  # `_unmatched` output, i.e. dropped (the fail-to-DROP posture the origin-split
+  # comment argues for, reached structurally rather than by an `abort`).
+  #
+  # ⚠️ These four are about the ENTRY TICKET. They do not claim producer
+  # authentication: within the bound namespace the label is still self-declared,
+  # and for the gateway half that namespace is SHARED (see the honest-boundary
+  # note in values.yaml — a principal who can create pods there can reach the
+  # log store directly, #1295). Read them as "raises the bar to namespace-level
+  # access", not as "the producer is verified".
+  #
+  # ⛔ Only TWO of the four are regression coverage for this change.
+  # Counterfactual (revert the whole chart to pre-#1288, keep these cases):
+  #   (N1) (N3) → FAIL   ← the forged-origin rows; this is what #1288 buys
+  #   (N2) (N4) → PASS   ← the legitimate producers, which worked before too.
+  #                        They prove the binding did not cost us the control
+  #                        it protects — absence of a regression, not presence
+  #                        of a fix. Keep them; do not count them as evidence
+  #                        the change works.
+
+  # ── (N1) evidence: right label, WRONG namespace ⇒ never reaches the stream ─
+  - name: "#1288: a tenant-api-labelled pod in a foreign namespace never reaches the evidence stream"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"event":"federation_revocation_channel_heartbeat"}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': tenant-api
+          kubernetes.container_name: tenant-api
+          kubernetes.pod_namespace: attacker-ns
+          kubernetes.pod_name: attacker-rs-1-zzzzz
+          kubernetes.pod_node_name: node-3
+          kubernetes.pod_owner: ReplicaSet/attacker-rs-1
+    no_outputs_from:
+      - federation_evidence
+      - demux
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (N2) evidence: the legitimate producer is unaffected ──────────────────
+  # The binding must not cost us the control it protects.
+  - name: "#1288: the real tenant-api pod still reaches the evidence stream"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"event":"federation_token_revoked","token_id":"ftk_ns01","expires_at":"2099-01-01T00:00:00Z"}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': tenant-api
+          kubernetes.container_name: tenant-api
+          kubernetes.pod_namespace: tenant-api
+          kubernetes.pod_name: tenant-api-6c4f-abcde
+          kubernetes.pod_node_name: node-3
+          kubernetes.pod_owner: ReplicaSet/tenant-api-6c4f
+    outputs:
+      - extract_from: federation_evidence
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event, "federation_token_revoked")
+              assert_eq!(.token_id, "ftk_ns01")
+
+  # ── (N3) gateway: right label, WRONG namespace ⇒ never reaches demux ──────
+  # Consequently never reaches the 0:0 store nor any tenant partition.
+  - name: "#1288: a gateway-labelled pod in a foreign namespace never reaches demux"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-alpha","token_id":"tok-ns","status":200}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': federation-gateway
+          kubernetes.container_name: envoy
+          kubernetes.pod_namespace: attacker-ns
+          kubernetes.pod_name: federation-gateway-6666-aaaaa
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-6666
+    no_outputs_from:
+      - demux
+      - federation_evidence
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (N4) gateway: the legitimate producer is unaffected ───────────────────
+  - name: "#1288: the real federation-gateway pod still flows demux → 0:0 → tenant partition"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-alpha","token_id":"tok-ok","status":200}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': federation-gateway
+          kubernetes.container_name: envoy
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.log_type, "federation_audit")
+      - extract_from: tenant_route.t_1000
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.token_id, "tok-ok")

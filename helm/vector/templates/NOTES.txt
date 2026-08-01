@@ -12,6 +12,23 @@ Pipeline (per #539 §3):
 Operational logs are NOT dropped — they ride the gateway_operational
 stream so Envoy stderr stays centrally queryable for the first time.
 
+Producer binding (chart 0.10.0 / #1288) — CHECK THESE TWO:
+{{ $ecNs := include "vector.evidenceNamespace" . }}
+{{- $gwNs := include "vector.gatewayNamespace" . }}
+  evidence producer (tenant-api)     : {{ if $ecNs }}namespace must be {{ $ecNs | quote }}{{ else }}BINDING DISABLED (label-only){{ end }}
+  audit producer (federation-gateway): {{ if $gwNs }}namespace must be {{ $gwNs | quote }}{{ else }}BINDING DISABLED (label-only){{ end }}
+
+The origin split now requires the producer's NAMESPACE as well as its pod
+label — a pod declares its own labels, so the label alone never established
+who emitted a row. If either producer runs somewhere other than shown above,
+set evidenceChannel.podNamespace / .gatewayNamespace or that branch silently
+matches nothing:
+  - evidence: bounded + loud. FederationRevocationEvidenceChannelDown fires
+    ~45-50 min after the last good heartbeat.
+  - gateway : SILENT. FederationAuditPipelineSilent watches the mtail
+    sidecar's own counters — a different path that stays green.
+Set either to "" to disable that branch's binding (pre-0.10.0 behaviour).
+
 Smoke-test from a node:
   kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "vector.name" . }} --tail=20
 
