@@ -29,6 +29,7 @@ def _empty_result() -> dict:
     return {
         "all_tenants": [],
         "defaults_keys": set(),
+        "optional_override_keys": set(),
         "routing_defaults": {},
         "enforced_routing": None,
         "explicit_routing": {},
@@ -39,6 +40,13 @@ def _empty_result() -> dict:
         "routing_profiles": {},
         "domain_policies": {},
         "tenant_profile_refs": {},
+        # These two were missing while the docstring above claimed parity —
+        # _parse_platform_config only survived it because the domain-policy
+        # branch uses setdefault. Buckets read with plain [] (defaults_keys,
+        # optional_override_keys) would KeyError instead, so the helper has to
+        # actually match.
+        "policy_misplacements": [],
+        "policy_file_errors": [],
     }
 
 
@@ -60,6 +68,63 @@ class TestParsePlatformConfig:
         data = {"defaults": "not-a-dict"}
         _parse_platform_config(data, "_defaults.yaml", result)
         assert result["defaults_keys"] == set()
+
+    # ── #1189 / TRK-337 optional_overrides（宣告但無值的第三格）──────────
+
+    def test_optional_overrides_extracted_from_platform_file(self):
+        result = _empty_result()
+        data = {"optional_overrides": ["oracle_wait_time_rate", "db2_deadlock_rate"]}
+        _parse_platform_config(data, "_defaults.yaml", result)
+        assert result["optional_override_keys"] == {
+            "oracle_wait_time_rate", "db2_deadlock_rate"}
+
+    def test_optional_overrides_ignored_from_tenant_file(self):
+        """⛔ 平台範疇：租戶自有檔列 key＝自我授權繞過寫入閘門。"""
+        result = _empty_result()
+        data = {"optional_overrides": ["anything_i_want"]}
+        _parse_platform_config(data, "db-a.yaml", result)
+        assert result["optional_override_keys"] == set()
+
+    # ⚠️ 這三格的差別是「吵 vs 安靜」，不只是結果集合：非 list 要吵、null 要
+    # 安靜、非字串項目要吵。parser 的註解說明了為何那聲吵是承重的——同一份
+    # bytes 在 Go 側會讓整個檔案 unmarshal 失敗、連 defaults 一起消失，所以
+    # Python 這邊安靜丟掉就會讓 CI 對「會清空寫入平面的設定」保持綠。只斷言
+    # 集合等於沒把那個區別釘住。
+    def test_optional_overrides_non_list_ignored(self, capsys):
+        """非 list（含 dict / 字串）不得被當成成員集合，且必須吵。"""
+        for bad in ("not-a-list", {"a": 1}, 42):
+            result = _empty_result()
+            _parse_platform_config(
+                {"optional_overrides": bad}, "_defaults.yaml", result)
+            assert result["optional_override_keys"] == set(), bad
+            assert "WARN" in capsys.readouterr().err, bad
+
+    def test_optional_overrides_null_is_empty_not_error(self, capsys):
+        """`optional_overrides:`（null）是合法的空宣告，schema 也允許——不得吵。"""
+        result = _empty_result()
+        _parse_platform_config(
+            {"optional_overrides": None}, "_defaults.yaml", result)
+        assert result["optional_override_keys"] == set()
+        assert "WARN" not in capsys.readouterr().err
+
+    def test_optional_overrides_non_string_entries_dropped(self, capsys):
+        """混入非字串項目時只收字串，不整包丟棄也不 raise，但要吵。"""
+        result = _empty_result()
+        _parse_platform_config(
+            {"optional_overrides": ["ok_key", 7, None, {"k": "v"}]},
+            "_defaults.yaml", result)
+        assert result["optional_override_keys"] == {"ok_key"}
+        err = capsys.readouterr().err
+        assert "WARN" in err
+        # 吵的內容要說出「Go 會整檔失敗」，否則讀 log 的人不知道嚴重度
+        assert "whole file" in err
+
+    def test_optional_overrides_unions_across_platform_files(self):
+        """多個 `_` 前綴檔的宣告取聯集（與 defaults_keys 同語意）。"""
+        result = _empty_result()
+        _parse_platform_config({"optional_overrides": ["a"]}, "_defaults.yaml", result)
+        _parse_platform_config({"optional_overrides": ["b"]}, "_extra.yaml", result)
+        assert result["optional_override_keys"] == {"a", "b"}
 
     def test_routing_defaults_from_underscore_file(self):
         result = _empty_result()

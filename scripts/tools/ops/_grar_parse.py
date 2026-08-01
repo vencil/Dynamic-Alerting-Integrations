@@ -55,6 +55,40 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
     if isinstance(data.get("defaults"), dict):
         result["defaults_keys"].update(data["defaults"].keys())
 
+    # #1189 / TRK-337: keys the platform RECOGNISES but supplies no value for
+    # (the runtime half of the registry's `tier: optional_overrides`). They
+    # widen the membership universe validate_tenant_keys checks against, so a
+    # tenant can finally set them — which is precisely why they are honoured
+    # ONLY from _ prefixed files. A tenant naming its own keys here would be
+    # self-authorising past this very check; Go strips it from tenant-owned
+    # files for the same reason (applyBoundaryRules).
+    if "optional_overrides" in data:
+        if is_defaults_file:
+            raw = data["optional_overrides"]
+            if isinstance(raw, list):
+                # ⚠️ Non-string entries are dropped LOUDLY. Go decodes this
+                # field straight into []string, so the same bytes that cost
+                # Python one list entry cost Go the entire file: a mapping
+                # element (a stray trailing colon is enough) is an unmarshal
+                # error, and the whole platform block is skipped — taking
+                # `defaults:` with it. Dropping quietly here would leave CI
+                # green on the config that empties the write plane.
+                bad = [k for k in raw if not isinstance(k, str)]
+                if bad:
+                    print(f"  WARN: optional_overrides in {fname} has "
+                          f"{len(bad)} non-string entr{'y' if len(bad) == 1 else 'ies'} "
+                          f"({bad!r}) — ignored here, but the Go exporter fails "
+                          "the whole file on them", file=sys.stderr)
+                result["optional_override_keys"].update(
+                    k for k in raw if isinstance(k, str))
+            elif raw is not None:
+                print(f"  WARN: optional_overrides in {fname} must be a list, "
+                      "ignoring", file=sys.stderr)
+        else:
+            print(f"  WARN: optional_overrides in {fname} ignored "
+                  "(platform-scoped; only allowed in _ prefixed files)",
+                  file=sys.stderr)
+
     # Extract _routing_defaults (only from _ prefixed files)
     if "_routing_defaults" in data:
         if is_defaults_file:
@@ -166,6 +200,7 @@ def _parse_config_files(config_dir: str) -> dict:
     result = {
         "all_tenants": [],
         "defaults_keys": set(),
+        "optional_override_keys": set(),  # #1189: declared, platform-valueless
         "routing_defaults": {},
         "enforced_routing": None,
         "explicit_routing": {},
@@ -305,7 +340,8 @@ def load_tenant_configs(
     schema_warnings = []
     for tenant, keys in sorted(parsed["tenant_keys"].items()):
         schema_warnings.extend(
-            validate_tenant_keys(tenant, keys, parsed["defaults_keys"]))
+            validate_tenant_keys(tenant, keys, parsed["defaults_keys"],
+                                 parsed["optional_override_keys"]))
 
     # v2.1.0 ADR-007: Validate profile references
     schema_warnings.extend(_validate_profile_refs(parsed))

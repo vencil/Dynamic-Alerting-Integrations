@@ -605,7 +605,8 @@ def _canonicalize_alias_keys(
     return keys_view, defaults_view, notices
 
 
-def validate_tenant_keys(tenant: str, keys: set[str], defaults_keys: set[str]) -> list[str]:
+def validate_tenant_keys(tenant: str, keys: set[str], defaults_keys: set[str],
+                         optional_override_keys: set[str] | None = None) -> list[str]:
     """Check tenant config keys for typos / unknown reserved keys.
 
     Returns list of warning strings. Deprecated key aliases (#1231) emit a
@@ -614,6 +615,34 @@ def validate_tenant_keys(tenant: str, keys: set[str], defaults_keys: set[str]) -
     validated under its canonical spelling against a canonicalized defaults
     view — so an old-spelled ``mysql_cpu_critical`` whose renamed base
     exists is NOT a dangling ``_critical``, while prefix typos keep warning.
+
+    ``optional_override_keys`` (#1189 / TRK-337) is the platform's DECLARED
+    surface: keys it recognises but supplies no value for. It is a second
+    membership set, deliberately NOT unioned into ``defaults_keys``, because
+    the two behave differently downstream and the Go twin
+    (``ValidateTenantKeys``) has to reach the same verdict key-for-key.
+
+    ⚠️ Note which way that asymmetry runs. This function's output is
+    ADVISORY: ``generate_alertmanager_routes._validate_mode`` only fails on
+    warnings containing ``"skipping"`` or on ``ERROR:``-prefixed policy lines,
+    and ``unknown key … not in defaults`` is neither. So a divergence never
+    shows up as a red build — it shows up as CI saying nothing at all about a
+    config the tenant-api write gate then refuses (or, in the other
+    direction, as a missing heads-up). Accepting something Go refuses is
+    therefore the dangerous direction, not the safe one. Verdict parity is
+    pinned mechanically against a shared table, not by these two suites
+    asserting it about each other: ``tests/shared/optional_overrides_membership_matrix.json``.
+
+    * flat / dimensional keys → accepted (Go accepts them too; dimensional
+      rows resolve tenant-only, so they emit as soon as they are written)
+    * ``<base>_critical`` on a declared base → still WARNS. Go refuses it
+      because ``resolveCriticalRows`` keys off ``defaults[base]`` and drops
+      the row otherwise; accepting here would mean CI blesses a key the
+      exporter silently discards.
+    * a ``_critical`` key named ON the list itself → also still WARNS, for
+      the same runtime reason. Go's cascade never even reaches its declared
+      check for that shape. This is the majority shape: 16 of the registry's
+      25 ``tier: optional_overrides`` keys end in ``_critical``.
     """
     warnings = []
     # #1231 alias pre-pass — BEFORE the reserved/defaults checks, mirroring
@@ -624,6 +653,14 @@ def validate_tenant_keys(tenant: str, keys: set[str], defaults_keys: set[str]) -
     keys, defaults_keys, notices = _canonicalize_alias_keys(
         tenant, keys, defaults_keys)
     warnings.extend(notices)
+    # ⛔ Canonicalized by the same table as the defaults view above. A key
+    # listed under its retired spelling would never match the canonicalized
+    # tenant key, so the platform would be declaring something permanently
+    # un-settable with nothing saying so — the silent membership drift this
+    # change exists to end, reappearing inside its own fix. Go's twin is
+    # canonicalizeOptionalOverrides (pkg/config/aliases.go).
+    declared = {_canonical_tenant_key(k)[0]
+                for k in (optional_override_keys or ())}
     for key in keys:
         if key in VALID_RESERVED_KEYS:
             continue
@@ -631,11 +668,42 @@ def validate_tenant_keys(tenant: str, keys: set[str], defaults_keys: set[str]) -
             continue
         if key in defaults_keys:
             continue
+        # Declared without a platform value → settable, nothing to inherit.
+        #
+        # ⛔ This check is deliberately FLAT-ONLY, and both exclusions are
+        # load-bearing. Go's cascade reaches its `_critical` and dimensional
+        # branches BEFORE its declared check and `continue`s out of every arm,
+        # so a composite key named on the list never reaches Go's membership
+        # widening. Python's cascade has the opposite order, so without these
+        # guards a whole-key match here would shadow branches Go runs first:
+        #
+        #   `<base>_critical` on the list  — Go refuses (resolveCriticalRows
+        #       keys off defaults[base] and drops the row when the base has no
+        #       value). This is the registry's DOMINANT shape: 16 of the 25
+        #       `tier: optional_overrides` keys end in `_critical`.
+        #   `<base>{label="v"}` on the list — Go refuses (it looks up the
+        #       parsed BASE, never the full dimensional string). Worse, a
+        #       whole-key match would `continue` past the dimensional branch
+        #       below and silently skip ADR-024 OQ-6 version-label validation
+        #       entirely — accepting `{version="bad!!"}` that both sides
+        #       otherwise reject.
+        #
+        # Either shadow puts CI's verdict at odds with the tenant-api write
+        # gate: the Py↔Go split of #1189, reappearing inside its own fix.
+        if key in declared and not key.endswith("_critical") and "{" not in key:
+            continue
         # _critical suffix → check base
         if key.endswith("_critical"):
             base = key.removesuffix("_critical")
             if base in defaults_keys:
                 continue
+        # Dimensional base may be declared rather than valued. Checked ahead
+        # of the defaults-only block below so that block stays byte-identical
+        # for the mutation pins; a _critical key never reaches here (no brace).
+        if "{" in key and key.split("{")[0] in declared:
+            warnings.extend(
+                _validate_version_label(tenant, key, key.split("{")[0]))
+            continue
         # Dimensional key with {labels}
         if "{" in key:
             base = key.split("{")[0]

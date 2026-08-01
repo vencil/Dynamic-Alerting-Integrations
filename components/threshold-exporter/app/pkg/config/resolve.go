@@ -953,6 +953,12 @@ type KeyValidation struct {
 func (c *ThresholdConfig) ValidateTenantKeys() KeyValidation {
 	var v KeyValidation
 	canonDefaults := canonicalizeDefaults(c.Defaults)
+	// The platform surface is TWO sets, not one (#1189 / TRK-337): keys the
+	// platform gives a value to (defaults), and keys it merely RECOGNISES
+	// (optional_overrides — declared, tenant-settable, platform asserts
+	// nothing). Both go through the same canonicalization, or a deprecated
+	// spelling on the declared list would silently never match.
+	canonOptional := canonicalizeOptionalOverrides(c.OptionalOverrides)
 
 	// Defaults-side conflict: both spellings of the same threshold present.
 	// Resolve lets the canonical entry win and ignores the deprecated one —
@@ -1010,12 +1016,47 @@ func (c *ThresholdConfig) ValidateTenantKeys() KeyValidation {
 			// Warn when it appears elsewhere (silent no-op) or is malformed (would
 			// never auto-revert) — fail-loud per dev-rule #5.
 			if sv.Expiry != nil && sv.Expiry.Expires != "" {
-				if _, isDefault := canonDefaults[canonKey]; !isDefault {
+				// ⛔ Order matters, and it is defaults-first — matching the
+				// _critical branch below. Nothing forbids a key from being in
+				// BOTH sets (mergePartialInto only unions the list; no schema
+				// or loader cross-checks it against defaults), and a key that
+				// HAS a platform value has something to revert to no matter
+				// what else names it. Checking declared first would refuse a
+				// perfectly good time-boxed override while telling the author
+				// "there is no default to revert to" about a key whose default
+				// is right there — and would refuse it while
+				// ResolveThresholdExpiriesAt (which gates on canonDefaults
+				// alone) still emitted its expiry event, splitting the very
+				// pair the contract test below exists to hold together.
+				if _, isDefault := canonDefaults[canonKey]; isDefault {
+					if _, err := time.Parse(time.RFC3339, sv.Expiry.Expires); err != nil {
+						v.Errors = append(v.Errors, fmt.Sprintf(
+							"WARN: tenant=%s: invalid `expires:` %q on %q (need RFC3339 e.g. 2026-07-01T00:00:00Z) — override will NOT auto-revert", tenant, sv.Expiry.Expires, canonKey))
+					}
+				} else if _, isDeclared := canonOptional[canonKey]; isDeclared {
+					// ⛔ Declared keys are refused their OWN message rather than
+					// folded into the generic out-of-scope one below, because
+					// this is the single shape where `expires:` looks like it
+					// ought to work: the platform names the key, so an author
+					// reasonably expects the time-boxing base metrics get.
+					//
+					// It cannot work. `expires:` is a fail-SAFE hook — it
+					// reverts an override TO the platform default
+					// (resolveBaseRows is the only path carrying it). A
+					// declared key has no platform value to revert to, so
+					// lapsing leaves the threshold with no value at all —
+					// whatever the tenant was getting stops, and the alert
+					// goes quiet with nothing said. That is the silent revert
+					// PREVENT #656 forbids, and it is verbatim why
+					// resolveCriticalRows and resolveDimensionalRows refuse
+					// expires too — declared keys are the fourth member of
+					// that same "nothing to fall back to" family.
+					v.Errors = append(v.Errors, fmt.Sprintf(
+						"WARN: tenant=%s: `expires:` on %q is refused — %q is declared without a platform value (optional_overrides), so there is no default to revert to: on expiry the threshold would have NO value and the alert would go silent. Remove `expires:`; delete the override itself when you want it gone.",
+						tenant, canonKey, canonKey))
+				} else {
 					v.Errors = append(v.Errors, fmt.Sprintf(
 						"WARN: tenant=%s: `expires:` on %q is ignored — only base standard metrics (in _defaults.yaml) support time-boxed thresholds in v1", tenant, canonKey))
-				} else if _, err := time.Parse(time.RFC3339, sv.Expiry.Expires); err != nil {
-					v.Errors = append(v.Errors, fmt.Sprintf(
-						"WARN: tenant=%s: invalid `expires:` %q on %q (need RFC3339 e.g. 2026-07-01T00:00:00Z) — override will NOT auto-revert", tenant, sv.Expiry.Expires, canonKey))
 				}
 			}
 
@@ -1039,7 +1080,15 @@ func (c *ThresholdConfig) ValidateTenantKeys() KeyValidation {
 			// Dimensional key with {labels}
 			if strings.Contains(canonKey, "{") {
 				baseKey, customLabels, regexLabels := parseKeyWithLabels(canonKey)
-				if _, exists := canonDefaults[baseKey]; exists {
+				_, baseValued := canonDefaults[baseKey]
+				_, baseDeclared := canonOptional[baseKey]
+				// A declared base is accepted here with no reservation, unlike
+				// the _critical shape below: resolveDimensionalRows is
+				// tenant-only — it never consults defaults at all — so a
+				// dimensional override on a declared base resolves and emits
+				// the moment it is written. Accepting it does not promise
+				// anything the resolver won't deliver.
+				if baseValued || baseDeclared {
 					// ADR-024 OQ-6: validate any `version` dimensional label.
 					v.Errors = append(v.Errors,
 						validateVersionLabel(tenant, canonKey, baseKey, customLabels, regexLabels)...)
@@ -1080,6 +1129,39 @@ func (c *ThresholdConfig) ValidateTenantKeys() KeyValidation {
 				if _, exists := canonDefaults[baseKey]; exists {
 					continue
 				}
+				// ⛔ A DECLARED base is still refused — deliberately, and this
+				// is the one place the two membership sets must NOT be unioned.
+				// resolveCriticalRows keys off `defaults[baseKey]` and drops
+				// the row with a scrape-time log line when it is absent; a
+				// declared base is absent from defaults by definition. So
+				// accepting this key would let the write succeed and then emit
+				// nothing, with the only signal in the exporter's log — the
+				// precise failure this validator was extended to end (see the
+				// block comment above).
+				//
+				// ⚠️ Read alongside the flat branch below, which IS accepted
+				// even though it emits nothing either. The two are not
+				// inconsistent, but the difference is reachability, not
+				// principle, so it has to be said out loud: this shape is
+				// writable TODAY — the `_critical` twins of keys like
+				// pg_connections have their base in the shipped defaults, so a
+				// tenant can hit this branch on a live config right now. The
+				// flat shape cannot be reached at all until some file declares
+				// a key, and no supported producer can do that yet (the Helm
+				// template renders only defaults/state_filters, and
+				// scaffold_tenant.generate_defaults() emits the same two). A
+				// tripwire test holds that shut rather than leaving it to
+				// sequencing: tests/shared/test_optional_overrides_tripwire.py.
+				//
+				// The pairing flips together: when the emission loop learns to
+				// resolve declared keys, resolveCriticalRows and this branch
+				// change in the same commit, never one without the other.
+				if _, declared := canonOptional[baseKey]; declared {
+					v.Errors = append(v.Errors, fmt.Sprintf(
+						"WARN: tenant=%s: %q cannot be set — its base %q is declared without a platform value (optional_overrides), and the critical tier needs a base VALUE in defaults: resolveCriticalRows drops the row when the base is absent, so this override would be accepted and then emit nothing. Set %q itself instead, or ask the platform to move %q into defaults.",
+						tenant, canonKey, baseKey, baseKey, baseKey))
+					continue
+				}
 				v.Errors = append(v.Errors, fmt.Sprintf(
 					"WARN: tenant=%s: %q has no base metric %q in defaults — the critical "+
 						"tier is silently DROPPED (not defaulted): resolveCriticalRows only "+
@@ -1089,8 +1171,36 @@ func (c *ThresholdConfig) ValidateTenantKeys() KeyValidation {
 				continue
 			}
 
-			// Normal metric key → must exist in defaults
+			// Normal metric key → must be somewhere on the platform surface:
+			// either valued (defaults) or merely declared (optional_overrides).
 			if _, exists := canonDefaults[canonKey]; exists {
+				continue
+			}
+			// The third slot. Before this, a key absent from defaults was
+			// rejected here and gitops/writer.go turned the rejection into
+			// ErrValidation — so "dormant, waiting for the tenant to set it"
+			// was not a state any key could be in: it was dead AND unwritable,
+			// and the tenant could not help themselves. Accepting it is what
+			// lets a tenant calibrate a threshold the platform declines to put
+			// a number on.
+			//
+			// ⚠️ Accepting is not emitting, and this branch is the one place
+			// that gap lives. resolveBaseRows still iterates defaults only, so
+			// until the emission loop lands, a declared key a tenant sets is
+			// recorded and produces no row — no error, no notice, not even a
+			// scrape-time log line. That is a worse signal than the `_critical`
+			// shape refused above, which at least logs.
+			//
+			// What makes it acceptable is not sequencing but reachability, and
+			// reachability is held shut mechanically rather than promised:
+			// nothing can put a key on this list yet (the Helm template renders
+			// only defaults/state_filters; scaffold_tenant.generate_defaults()
+			// emits the same two; no shipped _defaults.yaml declares one), and
+			// tests/shared/test_optional_overrides_tripwire.py turns red the
+			// moment that stops being true. It is deleted by the same commit
+			// that adds the emission loop — and it also turns red if that
+			// commit lands and leaves it behind.
+			if _, declared := canonOptional[canonKey]; declared {
 				continue
 			}
 
