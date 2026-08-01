@@ -547,10 +547,17 @@ func isTenantOnlyChange(changed, added, removed []string) bool {
 // files) instead of scanning the whole surviving tree on every reload.
 func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]ThresholdConfig, changed, added, removed []string) ThresholdConfig {
 	merged := ThresholdConfig{
-		Defaults:     prev.Defaults,     // shared (immutable between patches)
-		StateFilters: prev.StateFilters, // shared
-		Profiles:     prev.Profiles,     // shared
-		Tenants:      make(map[string]map[string]ScheduledValue, len(prev.Tenants)),
+		Defaults: prev.Defaults, // shared (immutable between patches)
+		// Shared for the same reason: the incremental path only re-parses the
+		// tenant files that changed, so anything platform-scoped has to be
+		// carried across explicitly. Omitting it would give a config that is
+		// correct on a full rebuild and empty after the first incremental
+		// reload — exactly the full-vs-incremental drift this function's
+		// header warns about.
+		OptionalOverrides: prev.OptionalOverrides,
+		StateFilters:      prev.StateFilters, // shared
+		Profiles:          prev.Profiles,     // shared
+		Tenants:           make(map[string]map[string]ScheduledValue, len(prev.Tenants)),
 	}
 	// Shallow-copy tenants map (keys only, values are immutable per-tenant maps)
 	for k, v := range prev.Tenants {

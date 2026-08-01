@@ -148,6 +148,12 @@ func mergeTenantConfig(configDir string, tenantCfg ThresholdConfig) ThresholdCon
 			for k, v := range defaults.Defaults {
 				merged.Defaults[k] = v
 			}
+			// Carried for the same reason as Defaults: this function is the
+			// whole of what the tenant-api write path knows about the platform
+			// surface. A key recognised by the platform but missing here would
+			// still be refused at write time, so the runtime slot would exist
+			// while remaining unusable through the only supported writer.
+			merged.OptionalOverrides = append(merged.OptionalOverrides, defaults.OptionalOverrides...)
 			for k, v := range defaults.StateFilters {
 				merged.StateFilters[k] = v
 			}

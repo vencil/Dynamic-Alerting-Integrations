@@ -13,6 +13,12 @@
       "title": "Platform default thresholds (metric → value)",
       "description": "Map of metric key → default threshold (scalar or scheduled). Keys are dynamic metric names → values left loose; only the top-level `defaults` key itself is guarded. `null`/empty is tolerated — Go unmarshals `defaults: null` (or `defaults:`) into a nil map (a valid empty-defaults placeholder); rejecting it would be Schema-red-but-system-runs friction (Gemini #913 對抗1)."
     },
+    "optional_overrides": {
+      "type": ["array", "null"],
+      "items": { "type": "string" },
+      "title": "Platform-recognised keys carrying no platform value",
+      "description": "Metric keys the platform RECOGNISES but asserts no value for — the runtime half of the registry's `tier: optional_overrides` (threshold-registry.schema.json calls that tier 'documented-but-dormant until wired'). A key listed here passes tenant-key validation, so a tenant can set it, while the platform emits nothing for it. That is the state the two-slot model cannot express: in `defaults` ⇒ armed for every tenant, absent ⇒ dead AND unwritable (ValidateTenantKeys rejects it, which the tenant-api write gate turns into ErrValidation). Membership is the whole payload, hence a list — a null inside `defaults` would decode into map[string]float64 as 0 and emit a zero threshold for everyone. ⛔ PLATFORM-SCOPED: applyBoundaryRules strips it from tenant-owned files, because a tenant able to name keys here would self-authorise past the write gate via a direct GitOps push."
+    },
     "state_filters": {
       "type": ["object", "null"],
       "title": "Platform default state filters",

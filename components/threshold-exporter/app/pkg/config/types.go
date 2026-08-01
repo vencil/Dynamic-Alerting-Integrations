@@ -205,7 +205,31 @@ const DefaultMaxMetricsPerTenant = 500
 //	    mysql_connections: "disable"
 //	    _state_container_crashloop: "disable"
 type ThresholdConfig struct {
-	Defaults            map[string]float64                   `yaml:"defaults"`
+	Defaults map[string]float64 `yaml:"defaults"`
+	// OptionalOverrides names keys the platform RECOGNISES but asserts no value
+	// for — the runtime half of the registry's `tier: optional_overrides`
+	// (docs/schemas/threshold-registry.schema.json calls tier "a load-bearing
+	// field, not decoration" and the tier itself "documented-but-dormant until
+	// wired"; this is that wiring).
+	//
+	// Today the config model has exactly two expressible states: a key is in
+	// Defaults (⇒ resolveBaseRows emits a platform value for EVERY tenant), or
+	// it is not (⇒ nothing is emitted AND ValidateTenantKeys rejects any tenant
+	// that tries to set it, which gitops/writer.go turns into a write refusal).
+	// There is no slot for "declared, tenant-enablable, platform asserts
+	// nothing" — so "dormant, waiting for the tenant" is not a state such a key
+	// can be in. It is dead, and the tenant cannot help themselves.
+	//
+	// ⚠️ A list, not a map: membership is the entire payload. Putting these in
+	// Defaults with a null value would not work — `key:` decodes into
+	// map[string]float64 as 0, which emits a threshold of zero for every
+	// tenant.
+	//
+	// ⛔ This field is PLATFORM-scoped. applyBoundaryRules strips it from
+	// tenant-owned files for the same reason it strips Defaults: a tenant that
+	// could name its own keys here would be self-authorising past the write
+	// gate via a direct GitOps push.
+	OptionalOverrides   []string                             `yaml:"optional_overrides"`
 	StateFilters        map[string]StateFilter               `yaml:"state_filters"`
 	Tenants             map[string]map[string]ScheduledValue `yaml:"tenants"`
 	Profiles            map[string]map[string]ScheduledValue `yaml:"profiles"`
