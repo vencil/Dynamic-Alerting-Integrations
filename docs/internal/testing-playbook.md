@@ -672,11 +672,37 @@ Phase .a0 已將主要互動工具加 `data-testid`（wizard、playground、conf
 
 ### 7. Dev Container mount scope（Trap #62 連帶工作流）
 
-Dev Container 只 bind-mount 主 worktree（`C:\Users\vencs\vibe-k8s-lab\`），claude worktree 的 Edit **不會進 container**。詳 `windows-mcp-playbook.md` Trap #62。**Go test / Playwright E2E** 在 claude worktree 做 Edit 後，一律走：
+Dev Container bind-mount 的是主 worktree 根目錄（`C:\Users\vencs\vibe-k8s-lab\`）。**被綁在主 worktree 的是 wrapper 的 `-w`，不是 mount 本身** — `dx-run.sh` / `make dc-go-test` 恆定作用於 `/workspaces/vibe-k8s-lab`，所以在 claude worktree 編輯後直接跑它們會測到主 worktree 的舊碼（假綠）。詳 `windows-mcp-playbook.md` Trap #62。
 
-1. `cp <claude-worktree-path> <main-worktree-path>` 同步單檔
-2. 在主 worktree 跑 `make dc-go-test` / `bash scripts/ops/dx-run.sh ...`
-3. 跑完在主 worktree `git checkout -- <path>` revert，claude worktree 保留為 SoT
+⭐ 但 `.claude/worktrees/**` **就在 mount 根目錄底下**，容器看得到、也讀得到你剛寫的內容（實測：host 寫檔 → 容器 `cat` 立即取得同一內容）。所以 **Go test 有一條更短的路**：直接把 worktree 子路徑餵給 `docker exec -w`，不必 cp 來 cp 去。
+
+```bash
+docker exec -w /workspaces/vibe-k8s-lab/.claude/worktrees/<name>/components/threshold-exporter/app \
+  vibe-dev-container go test ./... -count=1
+```
+
+⛔ **但 git-dependent 的測試不能用這條路 — 會拿到「確定性假紅」。** worktree 的 `.git` 是**檔案**不是目錄，內容是一行 **Windows 絕對路徑**：
+
+```
+gitdir: C:/Users/vencs/vibe-k8s-lab/.git/worktrees/<name>
+```
+
+Linux 容器裡的 git 認不得 `C:` 開頭，會當成**相對路徑**接在 cwd 後面：
+
+```
+fatal: not a git repository: /workspaces/vibe-k8s-lab/.claude/worktrees/<name>/C:/Users/vencs/.../worktrees/<name>
+```
+
+實例（2026-08-01，PR #1306 撞到）：`tenant-api` 的 `TestDiffTenant_RawYAML`。`gitops.Writer.Diff`（`writer.go:331-337`）用 `git diff --no-index` 產 unified diff，且**刻意丟棄 error**（`out, _ := cmd.Output()`，因為 `--no-index` 有差異時本來就 exit 1）。在 worktree 內 git 直接 exit 128、輸出為空 → `Diff` 回空字串 → `HasDiff=false` → 測試紅。主 worktree 同一支測試 rc=1、正常綠。
+
+**判別法（別靠猜，兩步就能定案）**：
+
+1. 在**主 worktree** 跑同一支測試 — 綠代表不是程式碼問題
+2. 在 claude worktree 內把你的改動**還原**再跑一次 — **仍然紅**就是環境性，與你的 diff 無關
+
+第 2 步是關鍵：光靠第 1 步分不出「worktree 環境壞」與「你的改動真的弄壞了」。
+
+**要真的驗這類測試**：在主 worktree 跑（cp 單檔 → `make dc-go-test` → `git checkout -- <path>` revert，claude worktree 保留為 SoT），或直接交給 CI。
 
 **不要**用 `git commit + push + fetch` 同步 — 會污染 commit history。**不要**改 `dx-run.sh` 的 `-w` 參數除非你願意同步調整 container bind-mount。
 
