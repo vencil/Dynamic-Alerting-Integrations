@@ -113,6 +113,7 @@ updated_at: 2026-07-04
 **判定：顯式 Risk Acceptance + 便宜偵測，不趕工 fail-closed**：
 - 這是**刻意權衡**：撤銷檢查套用**全部** federation 流量，天真 fail-closed = 任何 ConfigMap sync 抖動 / 新 pod 首載前 / volume remount 都造成**整個 federation 斷線**（自我 DoS）。同一支 Lua 對「跨租戶外洩」（VictoriaLogs mode 的 account_id）是 fail-**closed** ——證明 fail-open 是針對「撤銷 staleness ≤ 4h 可接受」的**局部、經思考**的選擇，非疏漏。
 - 本 ADR 把它從 code inline 註解**升為具名 Risk Acceptance**，並加**便宜偵測**：gateway 讀撤銷清單失敗 / 檔案 missing 時發 metric → 告警（fail-open 被觸發＝可見事件，零可用性風險，吻合本 ADR 的 detective thesis）。
+  - ⚠️ **勘誤（#1236 / TRK-350）**：上面這句自 MVP 起就寫著「**/ 檔案 missing**」，但實作只涵蓋了「讀取失敗」那一半。missing 分支在 Lua 的 pcall 內**正常 return**，於是 `ok` 為 true、兩個 `logWarn` 都不執行——而它是三條路徑中**唯一會清空執行面**的那條（另兩條保留前一份 set、仍在擋）。也就是說：本節點名的攻擊「刪／卸載 projected key」，其補償控制在出貨版本裡對它結構上無聲。#1236 補上第三句警告與 `federation_gateway_revoked_set_missing` gauge，告警 `FederationGatewayRevokedSetMissing`（`> 0 for 5m`, **critical**——它與另外三條 gateway 告警的差別是「正在放行」而非「凍結在舊集合」）。
 - 真正的 fail-closed 降級（區分 missing vs empty、定義降級範圍、測抖動邊界）是它自己的 mini-design → **另立 issue，defer-with-trigger**。
 
 ## Defer-with-trigger（Future Work）
@@ -142,7 +143,8 @@ updated_at: 2026-07-04
 1. [x] producer（[#997](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/997)）：`revoke()` 在**新增撤銷**時發 `federation_token_revoked`（opaque `token_id` + `expires_at`、**無租戶**、mutate() commit 後才發、idempotent 不重發、per-instance logger seam）。⚠️ **約束**：tenant-api 須跑 **log level ≤ Info**（事件 Info 級，Warn+ 會靜默過濾掉、令 tamper-evidence 失效）。
 2. [x] reconciler（見上 refinements）：pure `reconcile()` + **fail-closed**（查詢／讀取失敗增 error counter、**不刷 `last_reconcile_ts`**、絕不誤報 all-clear）+ clock-skew margin + settled 窗 + `events_dropped` gauge（有標記卻解不出的 row 計數＝schema-drift 可見性，本 PR 對抗式 review 補）；`helm/federation-reconciler`（Deployment + SA〔免 RBAC／token〕 + NetworkPolicy〔egress VictoriaLogs〕 + CM-mount + scrape）。
 3. [x] 3 告警（`FederationRevocationTamperSuspected` crit／`…ReconcileStale` crit〔staleness `time()-ts>30m` **or** `absent()`〕／`FederationGatewayRevocationLoadFailure` warn）+ promtool 契約測試（7 案）。
-4. [x] fail-open 偵測：reconciler 暴露 `federation_gateway_revocation_load_errors` **gauge**（近 ~10m 窗、非 24h），告警 `> 0 for: 2m`。
+4. [x] fail-open 偵測：reconciler 暴露 `federation_gateway_revocation_load_errors` **gauge**（近 ~10m 窗、非 24h），告警 `> 0 for: 2m`。⚠️ 只涵蓋「讀取失敗」；「檔案 missing」那一半見下一項。
+4b. [x] **檔案 missing 偵測（#1236 / TRK-350）**：gateway 的 missing 分支發第三句與另兩句**互不為子字串**的警告，reconciler 以同窗查詢暴露 `federation_gateway_revoked_set_missing` gauge，告警 `> 0 for: 5m` **critical**。之所以是獨立 gauge 而非併入上一項：那一項的兩條路徑都保留前一份撤銷集（stale but enforcing），missing 則是執行面**空集合**（nothing enforced），合併會讓 IR 對「現在有沒有在放行」讀出相反結論。
 5. [ ] （D2 輔助）in-CM revoked-set digest——**defer**（明標非主控，小 follow-up）。
 6. [x] runbook：[`federation-revocation-reconciler-runbook.md`](../internal/federation-revocation-reconciler-runbook.md)。
 7. [x] 相鄰 fail-open issue 已開：[#996](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/996)（fail-closed 降級，defer-with-trigger）。

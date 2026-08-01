@@ -70,6 +70,22 @@ groups:
         annotations:
           summary: "Federation gateway cannot read the revoked-set — fail-open is allowing revoked tokens (ADR-028 §fail-open)"
 
+      # The one gateway state where the set is EMPTY rather than stale (#1236):
+      # the projected key is gone, so every revoked token is honoured until its
+      # TTL. critical (vs the warning above) because the exposure is active, not
+      # frozen. `for: 5m` = one reconcile interval — shorter than the staleness
+      # pair's 10m, longer than the 2m above. ⚠️ On this gauge `for` debounces
+      # scrape jitter only: the value counts log rows in a ~10m window, so one
+      # transient line outlives any `for` we would set.
+      - alert: FederationGatewayRevokedSetMissing
+        expr: federation_gateway_revoked_set_missing > 0
+        for: 5m
+        labels:
+          severity: critical
+          alert_source: platform
+        annotations:
+          summary: "Federation gateway has NO revoked-set — it is enforcing an EMPTY set and honouring every revoked token (ADR-028 §fail-open)"
+
       # ⛔ The next two are the OPPOSITE posture from the one above (#1235): the
       # list was read and REFUSED, so the gateway keeps the set it already had —
       # nothing extra is let through from that set, but every revocation issued

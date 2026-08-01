@@ -36,7 +36,7 @@ Dynamic Alerting 提供六份運維導向的 Dashboard：
 | 交付方式 | Dashboard | 動機 |
 |----------|-----------|------|
 | **內建（auto-provision）** | **MariaDB Overview**（uid `mariadb-overview`；只存在於 ConfigMap embed、無 standalone JSON，故不列本文目錄） | Showcase 首屏：平台 apply 完第一眼就能看到被監控資料庫的健康度（up／連線數／QPS／InnoDB buffer pool），也是 try-local 一鍵體驗的告警紅燈落點 |
-| **內建（auto-provision）** | **Federation Revocation Reconciler**（本文 Dashboard 4，方法 C） | 安全告警觀測面：un-revoke 偵測（[ADR-028](./adr/028-federation-revocation-tamper-evidence.md)）的六條平台告警隨平台出貨，pager 響起當下就要有對應的現場視圖——不應依賴 operator 記得手動匯入 |
+| **內建（auto-provision）** | **Federation Revocation Reconciler**（本文 Dashboard 4，方法 C） | 安全告警觀測面：un-revoke 偵測（[ADR-028](./adr/028-federation-revocation-tamper-evidence.md)）的七條平台告警隨平台出貨，pager 響起當下就要有對應的現場視圖——不應依賴 operator 記得手動匯入 |
 | **Operator 自選（方法 A / B）** | 其餘五份：Dashboard 1（Platform Overview）、2（Shadow Monitoring）、3（Fleet Threshold Distribution）、5（Federation Audit）、6（Tenant Log Query） | 按需採用：Shadow 只在 migration 期間有意義（cutover 後即移除）、Fleet 治理視角在租戶數少時參考價值有限、Dashboard 5／6 只在啟用對應聯邦面時才有資料；且不少環境接自營 Grafana 而非出廠這台——預設全塞只會產生 no-data 空版面 |
 
 ---
@@ -308,9 +308,9 @@ Tukey fences 需要分布**有離散度**才準。有兩種常見情形會讓它
 
 ### 動機
 
-[ADR-028](./adr/028-federation-revocation-tamper-evidence.md) 的 federation-reconciler（`_federation_revocation_reconciler.py`）週期性對帳撤銷事件日誌與 live 撤銷集，偵測 **un-revoke**（有寫入權的攻擊者把未過期的撤銷偷偷刪掉），並用 `/metrics`（job=`federation-reconciler`, port 9099）暴露十個**平台全域、零 label** 指標。這些指標先前只有告警在消費、沒有運維視圖。本 Dashboard 就是那個「**現場視圖**」——把 [runbook](internal/federation-revocation-reconciler-runbook.md) 的五個 chaos 驗證場景排成一頁，panel 閾值**與六個平台告警 1:1 對齊**（見下方對照），讓 Dashboard 與 pager 對「什麼叫壞」有一致定義。
+[ADR-028](./adr/028-federation-revocation-tamper-evidence.md) 的 federation-reconciler（`_federation_revocation_reconciler.py`）週期性對帳撤銷事件日誌與 live 撤銷集，偵測 **un-revoke**（有寫入權的攻擊者把未過期的撤銷偷偷刪掉），並用 `/metrics`（job=`federation-reconciler`, port 9099）暴露十一個**平台全域、零 label** 指標。這些指標先前只有告警在消費、沒有運維視圖。本 Dashboard 就是那個「**現場視圖**」——把 [runbook](internal/federation-revocation-reconciler-runbook.md) 的五個 chaos 驗證場景排成一頁，panel 閾值**與七個平台告警 1:1 對齊**（見下方對照），讓 Dashboard 與 pager 對「什麼叫壞」有一致定義。
 
-> **為何沒有 `$tenant` 變數？** 十個指標都是平台全域、無 tenant label（un-revoke 偵測是平台級控制，非 per-tenant）——因此本 Dashboard 不需要、也沒有租戶下拉選單。
+> **為何沒有 `$tenant` 變數？** 十一個指標都是平台全域、無 tenant label（un-revoke 偵測是平台級控制，非 per-tenant）——因此本 Dashboard 不需要、也沒有租戶下拉選單。
 
 ### 部署
 
@@ -343,13 +343,14 @@ da-tools grafana-import \
 | 頂列 | **Coverage integrity** | `federation_revocation_events_dropped` | ✓ Intact (0) | 🟡 Schema drift (>0)＝覆蓋被侵蝕 |
 | 第二列 | **Revoked-set contract — file** | `federation_revocation_live_set_rejected_lines` | ✓ Conforming (0) | 🔴 Set not loading (>0)＝gateway 拒載整份撤銷集，**此後發出的撤銷都沒生效**；⛔ 與 Gateway fail-open 相反（那是讀不到、正在放行），且 Tamper status **不會**顯示它（那比對的是檔案，檔案裡有新撤銷） |
 | 第二列 | **Revoked-set reload — gateway** | `federation_gateway_revoked_set_reload_rejected` | ✓ Loading (0) | 🔴 Reload refused (>0)＝gateway 自己記錄的拒載；⛔ **冷啟動**：pod 首次載入就撞到＝該 worker 完全沒有撤銷集（fail-open 姿態）。與左邊那格觀測**不同平面**（兩端讀的是同一 ConfigMap 的不同 kubelet 投影），任一格可單獨非零 |
+| 第二列 | **Revoked-set — MISSING** | `federation_gateway_revoked_set_missing` | ✓ Present (0) | 🔴 Absent — nothing enforced (>0)＝檔案**不見了**。⛔ 與左邊兩格**讀法不同**：那兩格是「凍結在舊集合」（stale but enforcing），這一格是**手上什麼都沒有**，每個已撤銷 token 都被放行至 TTL。成因＝ADR-028 §相鄰破口 點名的刪／卸載 projected key，或 namespace 錯配（[#1313](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1313)：ConfigMap 是 namespace-scoped，volume 只解析得到 gateway **自己 namespace** 的那個）|
 | Row 1 | **Reconciler staleness / error rate / events checked** | staleness（含 1800 線）、`rate(...reconcile_errors_total[5m])`、`..._events_checked` | staleness 鋸齒近 0、error rate 平 0 | staleness 攀升＋error rate >0＝fail-closed |
 | Row 2 | **Events dropped / erosion ratio** | `..._events_dropped`、`dropped / clamp_min(checked + dropped, 1)` | 皆 0 | >0＝schema-drift；ratio 用 `clamp_min` 防 0/0=NaN |
 | Row 3 | **Gateway read failures** | `federation_gateway_revocation_load_errors`（含 >0 線） | 平 0 | >0＝fail-open；近 `for:2m` 邊界震盪＝拍頻 |
 | Row 4 | **Suspected un-revokes（headline）** | `federation_revocation_tamper_suspected`（大圖，含 >0 線） | 平 0 | >0 持續 5m＝critical 安全事件 |
 | Row 5 | **Heartbeat canary — 30m window liveness** | `..._channel_up`（0/1）＋ `..._heartbeats_seen` | channel_up 平 1、heartbeats_seen 約 5-6 | heartbeats_seen 衰減→0 且 channel_up 落 0＝證據通道斷；**斷崖式歸零**多半是 producer 事件改名或 Vector selector 改動 |
 
-> **色盲也能判讀（無障礙）：** 八個 stat panel（頂列五個 + 第二列 #1235 兩個 + erosion ratio）都不只靠顏色——每個顏色階都配**符號＋文字**（✓／🔴／🟡）。依 ADR-012 / WCAG 1.4.1；`tests/dx/test_federation_revocation_dashboard.py` 的 a11y golden 鎖住「每個顏色階都有符號」防退化。
+> **色盲也能判讀（無障礙）：** 九個 stat panel（頂列五個 + 第二列 #1235 兩個與 #1236 一個 + erosion ratio）都不只靠顏色——每個顏色階都配**符號＋文字**（✓／🔴／🟡）。依 ADR-012 / WCAG 1.4.1；`tests/dx/test_federation_revocation_dashboard.py` 的 a11y golden 鎖住「每個顏色階都有符號」防退化。
 
 ### Chaos-5 場景對照
 
@@ -365,7 +366,7 @@ da-tools grafana-import \
 
 ### 與告警的對齊
 
-panel 閾值刻意**與 [configmap-rules-platform.yaml](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-rules-platform.yaml) 的六個告警同一數值**（單一「什麼叫壞」來源）：`FederationRevocationTamperSuspected`（>0, 5m, critical）、`FederationRevocationReconcileStale`（`time()-ts > 1800` 或 absent, 10m, critical）、`FederationRevocationEvidenceChannelDown`（`channel_up == 0`, 15m, critical）、`FederationGatewayRevocationLoadFailure`（>0, 2m, warning）、`FederationRevocationLiveSetRejected`（>0, 10m, critical）、`FederationGatewayRevokedSetReloadRejected`（>0, 10m, critical）。⛔ 最後兩條與 `FederationGatewayRevocationLoadFailure` **姿態相反**：那條是「讀不到、正在放行」，這兩條是「讀到了但被拒絕、沿用前一份撤銷集」——沒有多放行任何東西，但**此後發出的撤銷都沒生效**（`for:10m` ＝一個 reconcile 週期 300s 再加等量餘裕；此條件是持久性的，窗開長不花成本）。IR 步驟見 [runbook](internal/federation-revocation-reconciler-runbook.md)。
+panel 閾值刻意**與 [configmap-rules-platform.yaml](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-rules-platform.yaml) 的七個告警同一數值**（單一「什麼叫壞」來源）：`FederationRevocationTamperSuspected`（>0, 5m, critical）、`FederationRevocationReconcileStale`（`time()-ts > 1800` 或 absent, 10m, critical）、`FederationRevocationEvidenceChannelDown`（`channel_up == 0`, 15m, critical）、`FederationGatewayRevocationLoadFailure`（>0, 2m, warning）、`FederationRevocationLiveSetRejected`（>0, 10m, critical）、`FederationGatewayRevokedSetReloadRejected`（>0, 10m, critical）、`FederationGatewayRevokedSetMissing`（>0, 5m, critical）。⛔ 最後三條**不是同一族**：`ReloadRejected` 那一對與 `FederationGatewayRevocationLoadFailure` **姿態相反**——那條是「讀不到、正在放行」，這兩條是「讀到了但被拒絕、沿用前一份撤銷集」，沒有多放行任何東西，但**此後發出的撤銷都沒生效**（`for:10m` ＝一個 reconcile 週期 300s 再加等量餘裕；此條件是持久性的，窗開長不花成本）。而 `RevokedSetMissing` 是**第三種姿態**、也是唯一執行面為**空集合**的那個：檔案不見了，gateway 手上什麼都沒有，每個已撤銷 token 都被放行至 TTL——所以是 critical 而非它鄰居那條的 warning，因為曝險是**進行中**而非**凍結**（#1236）。IR 步驟見 [runbook](internal/federation-revocation-reconciler-runbook.md)。
 
 ---
 

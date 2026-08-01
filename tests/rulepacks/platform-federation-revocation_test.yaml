@@ -13,6 +13,10 @@
 #        for: window are pinned — still PENDING at 14m, FIRING at exactly 15m — so
 #        a shortened `for:` cannot pass (asserting only past the window would let
 #        `for: 5m` through, which is the mutation this pair is proved against).
+#   15-16) The enforcement plane holding NO set at all (#1236): the projected key
+#        is gone, so the gateway checks every token against an EMPTY set. critical
+#        (the other three gateway alerts mean it is still enforcing something)
+#        at >0 for 5m, never at 0. BOTH EDGES again — 4m PENDING, 5m FIRING.
 #   11-14) The enforcement-plane staleness pair (#1235): LiveSetRejected (the file
 #        as the reconciler reads it) and GatewayRevokedSetReloadRejected (the
 #        gateway's own account of refusing the reload) each fire at >0 for 10m and
@@ -249,4 +253,38 @@ tests:
     alert_rule_test:
       - eval_time: 14m
         alertname: FederationGatewayRevokedSetReloadRejected
+        exp_alerts: []
+
+  # 15) Gateway reports the set is MISSING (#1236) → FIRES at for:5m, critical.
+  #     BOTH EDGES pinned (4m PENDING, 5m FIRING): the `for:` is the only thing
+  #     between "one anomalous window" and "the enforcement plane is open", and
+  #     asserting only past the window would let a shortened one through — the
+  #     same mutation the 15m and 10m pairs above are proved against.
+  - interval: 1m
+    name: gateway-revoked-set-missing-fires
+    input_series:
+      - series: 'federation_gateway_revoked_set_missing'
+        values: '1+0x9'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: FederationGatewayRevokedSetMissing
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: FederationGatewayRevokedSetMissing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+            exp_annotations:
+              summary: "Federation gateway has NO revoked-set — it is enforcing an EMPTY set and honouring every revoked token (ADR-028 §fail-open)"
+
+  # 16) File present in the window (0) → never fires.
+  - interval: 1m
+    name: gateway-revoked-set-missing-clean-does-not-fire
+    input_series:
+      - series: 'federation_gateway_revoked_set_missing'
+        values: '0+0x9'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: FederationGatewayRevokedSetMissing
         exp_alerts: []

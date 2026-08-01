@@ -24,6 +24,7 @@
 | `federation_revocation_heartbeats_seen` | gauge | 窗內心跳筆數（除錯 / chaos 驗證用；健康時約 5-6＝5m 週期落進 30m 窗）。**告警訊號是 `channel_up`，不是這個**；這個用來看「衰減中」vs「已斷」|
 | `federation_revocation_live_set_rejected_lines` | gauge | **執行面凍結——成因側**（#1235 / TRK-349）：掛載的 `revoked.txt` 中違反 token-id 行契約的行數，以**本行程讀到的檔案**為準。非零＝gateway 正在**拒載整份**撤銷集。只計數，**永不**回報行內容（ADR-028 D3）|
 | `federation_gateway_revoked_set_reload_rejected` | gauge | **執行面凍結——gateway 自述**（#1235 / TRK-349）：近窗（~10m）從 **gateway 自己的 log stream** 讀回的拒載 warn 數（查詢以 `log_type:"gateway_operational"` 限定串流）。與上一列**觀測不同平面**（兩端讀的是同一份 ConfigMap 的不同 kubelet 投影、時間點也不同），故**兩者皆需要**、任一可單獨非零 |
+| `federation_gateway_revoked_set_missing` | gauge | **執行面空集合**（#1236 / TRK-350）：近窗（~10m）gateway 自報「撤銷清單檔案不存在」的 warn 數。⛔ **與上面兩列不同族**：那兩列是「凍結在舊集合」（stale but enforcing），這一列是 gateway **手上什麼都沒有**——每個已撤銷 token 都被放行至 TTL。這是 ADR-028 §相鄰破口 點名的攻擊形態（刪／卸載 projected key），也是 namespace 錯配的長相（#1313）|
 
 ## 告警與 IR
 
@@ -59,8 +60,22 @@
 **意義**：gateway 讀不到 `revoked.txt`、**fail-open**（撤銷 token 被放行至 ≤4h TTL）——ADR-028 具名 Risk Acceptance 被觸發、變可見。
 **IR**：查 gateway 的 `revoked.txt` projected-volume mount + `tenant-federation-store` ConfigMap；**持續**失敗（非 pod 啟動 / remount 瞬態）可能是 mount 遭竄改（DoS 防禦本身，見 [#996](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/996)）。真正的 fail-closed 降級是 #996 的 defer-with-trigger。
 
-⛔ **本告警只吃「讀不到」那一句 warn**（`federation: revoked-set reload failed`）。gateway 另有一句語意**相反**的 warn，見下。
+⛔ **本告警只吃「讀不到」那一句 warn**（`federation: revoked-set reload failed`）。gateway 另有**兩句**語意不同的 warn，各有自己的 gauge 與告警，見下（`revoked-set rejected` 與 `revoked-set missing`）。三句在 reconciler 端以「兩兩互不為子字串」的機械斷言釘住，所以不會互相吃到對方的 row。
 手查 VictoriaLogs（與 reconciler 同一支查詢）：`log_type:"gateway_operational" AND app:"envoy" AND "federation: revoked-set reload failed"`（#1237 起限定串流類別＋Envoy 容器，排除同 pod 的 mtail／logrotate sidecar 噪音；⚠️ 此限定只排除**合法** sidecar，非來源身分驗證——見 ADR-028 D3 §偵測查詢的來源限定的誠實邊界）。
+
+### `FederationGatewayRevokedSetMissing`（critical；#1236 / TRK-350）
+
+**意義**：gateway 自報撤銷清單檔案**不存在**。⛔ 這是三條 gateway 告警中**唯一「執行面為空集合」**的：另外兩條都保留了前一份撤銷集（stale but enforcing），這一條代表 gateway 手上什麼都沒有——**每個已撤銷 token 都被放行至 TTL（≤4h）**。因此是 critical 而非 warning。
+
+**長相**：gateway 容器 log 出現 `federation: revoked-set missing: /etc/revoked/revoked.txt is absent; enforcing an EMPTY set — every revoked token is honoured until its TTL`。
+手查：`log_type:"gateway_operational" AND app:"envoy" AND "federation: revoked-set missing"`（來源限定的誠實邊界同 §fail-open 那條）。
+
+**IR**：
+
+1. **先分辨錯配 vs 攻擊**——這兩者長得一模一樣，但處置完全不同。查 store ConfigMap 是否存在於 **gateway 自己的 namespace**：ConfigMap 是 namespace-scoped，projected volume 只解析得到掛載 pod 自身 namespace 的那一個。tenant-api 的 `federation.store.namespace` 必須指向 gateway 與 reconciler 所在的 namespace（三方相等，見 [#1313](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1313)）。**新裝或剛改過拓撲就響 ⇒ 幾乎必然是錯配。**
+2. **ConfigMap 在、但 `revoked.txt` key 不見了** ⇒ 這是帶外寫入。合法路徑（tenant-api `revoke()`／任何 store 寫入）每次都會重生該 key，不可能刪掉它。併查 [#926](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/926) audit 看誰寫過 `tenant-federation-store`，並視為 incident 處理——ADR-028 §相鄰破口 正是把「刪／卸載 projected key」列為攻擊者在寫入路徑被封死後的下一步。
+3. **確認曝險窗**：從第一筆這句 warn 到修復之間，**所有**已撤銷但未過期的 token 都可用。撤銷集復原後，gateway 於下一個 `reloadIntervalSeconds`（預設 30s）內重新載入。必要時縮短 token TTL 或輪替簽章金鑰以強制失效。
+4. ⚠️ **不要**用 `FederationRevocationTamperSuspected` 是否同時響來判斷嚴重度：那條比對的是 audit log 與**檔案**，而檔案不見時它讀到空集，只有在窗內仍有未過期撤銷事件時才會響。近 4h 無撤銷 ⇒ 它保持綠，但本告警描述的曝險依然成立。
 
 ### `FederationRevocationLiveSetRejected` ／ `FederationGatewayRevokedSetReloadRejected`（皆 critical；#1235 / TRK-349）
 
@@ -111,7 +126,8 @@ tamper-**evident** 非 proof。錨定 tenant-api 範圍威脅（偷 SA / RCE）�
 
 promtool 是理論契約；推正式前在 `vibe-k8s-lab` 實驗叢集實地驗一輪，確認真實 scrape interval 下的收斂時間與有無拍頻（beat frequency）：
 
-1. **fail-open（`GatewayRevocationLoadFailure`）**：手動刪 / 卸載 gateway 的 `revoked.txt` projected key → 觀察 `federation_gateway_revocation_load_errors` 在近窗上升、告警於 `for:2m` 後觸發、復原後回落。
+1. **檔案 missing（`GatewayRevokedSetMissing`，#1236）**：手動刪 / 卸載 gateway 的 `revoked.txt` projected key → 觀察 **`federation_gateway_revoked_set_missing`** 在近窗上升、告警於 `for:5m` 後觸發 critical、復原後回落。⚠️ **這一步在 #1236 之前是一份跑不通的驗收程序**：原文要求觀察 `federation_gateway_revocation_load_errors`，但刪 key 走的是 Lua 的 missing 分支——它在 pcall 內正常 return，兩個既有 warn 都不發射，所以那個 gauge 恆 0、告警永不觸發。對應本注入的是這條新 gauge。
+1b. **fail-open（`GatewayRevocationLoadFailure`）**：這條要用**讀取中途失敗**（而非檔案不存在）才觸發，例如在 gateway 讀取期間抽換 projected volume 的 inode。若只是要驗告警鏈路本身，直接對該 gauge 灌值比構造真實 I/O 失敗實際得多。
 2. **fail-closed（`ReconcileStale`）**：暫停 VictoriaLogs Service（或 NetworkPolicy 擋 egress）→ 觀察 `reconcile_errors_total` 上升、`last_reconcile_ts` 停滯、`ReconcileStale` 於 `for:10m` 後觸發（絕不誤報 all-clear）。
 3. **schema-drift（`events_dropped`）**：注入缺欄位的 `federation_token_revoked` 測試事件 → 觀察 `events_dropped` 上升而非靜默。
 4. **拍頻**：確認 reconcile interval（300s）與 Prometheus scrape interval 不會在 `for:` 邊界產生 flap；必要時調 `for:` 或 interval。

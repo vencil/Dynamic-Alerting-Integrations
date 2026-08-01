@@ -8,6 +8,7 @@ never emits an all-clear) is tested by monkeypatching the I/O seams to raise.
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 import pytest
@@ -16,6 +17,30 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "too
 sys.path.insert(0, _TOOLS_DIR)
 
 import _federation_revocation_reconciler as rec  # noqa: E402
+
+
+def _gateway_phrases() -> dict[str, str]:
+    """Every ``GATEWAY_*_PHRASE`` the reconciler declares, discovered from the
+    module rather than hand-listed.
+
+    The guards over these are about a CLASS (no phrase may absorb another's
+    rows), so enumerating by hand would leave the next phrase uncovered on the
+    day it is added — which is exactly when the guard is needed.
+    """
+    return {
+        name: value
+        for name, value in vars(rec).items()
+        if name.startswith("GATEWAY_") and name.endswith("_PHRASE")
+    }
+
+
+def _shipped_lua() -> str:
+    """The Envoy filter as shipped by the chart — the actual producer of the
+    log lines the reconciler's queries treat as an API."""
+    path = os.path.join(
+        os.path.dirname(__file__), "..", "..",
+        "helm", "federation-gateway", "files", "revoked_check.lua")
+    return open(os.path.abspath(path), encoding="utf-8").read()
 
 HOUR = 3600.0
 
@@ -219,32 +244,89 @@ class TestParsing:
         assert rec.GATEWAY_REJECTED_PHRASE in q
         assert "now-600s" in q and "now-60s" in q
 
-    def test_the_two_gateway_phrases_can_never_be_confused(self):
-        """⛔ The gateway's two revoked-set warnings mean OPPOSITE things.
+    def test_gateway_phrases_can_never_be_confused(self):
+        """⛔ The gateway's revoked-set warnings mean DIFFERENT things about what
+        is being let through, and each feeds its own gauge:
 
-        `reload failed` feeds the fail-open gauge and means "we could not read
-        the list, traffic is going through". `rejected` means "we read it,
-        refused it, and are still enforcing the previous one". If either
-        phrase were a substring of the other, one query would count both and
-        an incident responder would read the posture backwards.
+            reload failed → could not read it;  PREVIOUS set still enforced
+            rejected      → read and refused it; PREVIOUS set still enforced
+            missing       → file is gone;        the set is EMPTY (#1236)
+
+        If any phrase were a substring of another, one query would count the
+        other's rows and an incident responder would read the posture backwards.
+
+        Enumerated from the module rather than hand-listed, so a FOURTH phrase is
+        covered by this guard the moment it is declared — hand-listed pairs are
+        how the class gets half-fixed.
         """
-        a, b = rec.GATEWAY_FAILOPEN_PHRASE, rec.GATEWAY_REJECTED_PHRASE
-        assert a != b
-        assert a not in b and b not in a
+        phrases = _gateway_phrases()
+        assert len(phrases) >= 3, f"expected at least 3 gateway phrases, got {sorted(phrases)}"
+        for na, a in phrases.items():
+            for nb, b in phrases.items():
+                if na == nb:
+                    continue
+                assert a not in b, (
+                    f"{na} is a substring of {nb} — the {nb} query would also count "
+                    f"{na} rows, reporting the wrong enforcement posture"
+                )
 
-    def test_both_phrases_are_actually_emitted_by_the_shipped_lua(self):
-        """The queries above treat log text as an API. Nothing else binds them
-        to the producer, so a reworded `logWarn` would silently zero both
-        gauges — the failure mode where monitoring looks healthy because it
-        stopped asking. Pin the literals against the shipped filter."""
-        lua = os.path.join(
-            os.path.dirname(__file__), "..", "..",
-            "helm", "federation-gateway", "files", "revoked_check.lua")
-        src = open(os.path.abspath(lua), encoding="utf-8").read()
-        assert rec.GATEWAY_FAILOPEN_PHRASE in src, \
-            "the gateway no longer emits the fail-open phrase the reconciler counts"
-        assert rec.GATEWAY_REJECTED_PHRASE in src, \
-            "the gateway no longer emits the reload-refused phrase the reconciler counts"
+    def test_every_phrase_is_actually_emitted_by_the_shipped_lua(self):
+        """The queries treat log text as an API. Nothing else binds them to the
+        producer, so a reworded `logWarn` would silently zero a gauge — the
+        failure mode where monitoring looks healthy because it stopped asking."""
+        src = _shipped_lua()
+        for name, phrase in _gateway_phrases().items():
+            assert phrase in src, (
+                f"the gateway no longer emits {name} ({phrase!r}); the gauge that "
+                "counts it now reads zero forever"
+            )
+
+    def test_no_lua_warning_is_unclaimed_or_double_claimed(self):
+        """⛔ The two guards above compare the reconciler's CONSTANTS. They are
+        structurally blind to a warning the Lua emits that no constant describes
+        — or worse, one that shares a prefix with an existing phrase and is
+        therefore counted into that gauge silently.
+
+        This asserts the other direction: every `revoked-set` warning the shipped
+        filter can emit is claimed by EXACTLY ONE phrase. A new warning must
+        either get its own gauge or deliberately extend an existing phrase's
+        meaning — never drift into one by prefix.
+        """
+        literals = set(re.findall(r'"(federation: revoked-set[^"]*)"', _shipped_lua()))
+        assert literals, "no revoked-set warning literals found — did the filter move?"
+        phrases = _gateway_phrases()
+        for lit in sorted(literals):
+            owners = [n for n, p in phrases.items() if lit.startswith(p)]
+            assert len(owners) == 1, (
+                f"Lua emits {lit!r} but it is claimed by {owners or 'NO phrase'} — "
+                "an unclaimed warning is invisible to every gauge; a doubly-claimed "
+                "one is counted into a gauge that means something else"
+            )
+
+    def test_missing_query_is_stream_field_qualified(self):
+        """#1236. The one gateway state where the enforcement plane is EMPTY.
+        Qualified identically to its two siblings — see build_failopen_query for
+        the honest boundary on what `app` does and does not prove."""
+        q = rec.build_missing_query(lookback_s=600, settle_s=60)
+        assert f'log_type:"{rec.LOG_TYPE_GATEWAY_OP}"' in q
+        assert f'app:"{rec.GATEWAY_APP}"' in q
+        assert rec.GATEWAY_MISSING_PHRASE in q
+        assert "now-600s" in q and "now-60s" in q
+
+    def test_every_metrics_field_reaches_the_exposition(self):
+        """A gauge that is computed but never rendered is the same as no gauge.
+
+        Mechanical over the object's own fields rather than a hand-listed set:
+        the failure this catches is "a field was added to Metrics and to
+        reconcile_once, but forgotten in render()", and a hand-listed assertion
+        is blind to exactly the field nobody remembered.
+        """
+        m = rec.Metrics()
+        exposed = [ln for ln in m.render().splitlines() if ln.startswith("# TYPE ")]
+        assert len(exposed) == len(vars(m)), (
+            f"Metrics carries {len(vars(m))} fields but render() exposes "
+            f"{len(exposed)} series — {sorted(vars(m))} vs {exposed}"
+        )
 
     def test_new_gauges_are_exposed(self):
         """Both enforcement-staleness gauges must reach /metrics — a gauge that
@@ -252,7 +334,9 @@ class TestParsing:
         m = rec.Metrics()
         m.live_set_rejected_lines = 3
         m.gateway_reload_rejected = 2
+        m.gateway_revoked_set_missing = 4
         out = m.render()
+        assert "federation_gateway_revoked_set_missing 4" in out
         assert "federation_revocation_live_set_rejected_lines 3" in out
         assert "federation_gateway_revoked_set_reload_rejected 2" in out
 
@@ -372,14 +456,18 @@ def _cfg(tmp_path) -> rec.Config:
     )
 
 
-def _query_router(*, events=(), failopen=(), heartbeats=(), rejected=()):
+def _query_router(*, events=(), failopen=(), heartbeats=(), rejected=(), missing=()):
     """Route each of reconcile_once's LogsQL queries to its own rows.
 
     Dispatches on the EVENT NAME each query filters on (not a loose substring of
     the whole query) so a future query can't silently be fed another's fixture —
-    the sibling failure mode of substring matching that hides drift. The two
-    gateway phrases are checked most-specific-first and asserted elsewhere to be
-    non-overlapping, so neither can absorb the other's rows."""
+    the sibling failure mode of substring matching that hides drift. The three
+    gateway phrases are asserted elsewhere to be pairwise non-overlapping, so
+    none can absorb another's rows.
+
+    ⛔ Deliberately raises on an unrouted query rather than returning []. A new
+    query added to reconcile_once would otherwise be fed an empty result here and
+    every test would stay green while its gauge read zero in production."""
     def _q(_url, query, **_k):
         if rec.EVENT_HEARTBEAT in query:
             return list(heartbeats)
@@ -387,6 +475,8 @@ def _query_router(*, events=(), failopen=(), heartbeats=(), rejected=()):
             return list(events)
         if rec.GATEWAY_REJECTED_PHRASE in query:
             return list(rejected)
+        if rec.GATEWAY_MISSING_PHRASE in query:
+            return list(missing)
         if rec.GATEWAY_FAILOPEN_PHRASE in query:
             return list(failopen)
         raise AssertionError(f"unrouted query: {query!r}")

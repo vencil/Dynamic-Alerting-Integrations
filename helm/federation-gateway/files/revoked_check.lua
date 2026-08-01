@@ -87,11 +87,20 @@ local revoked_loaded_at = 0
 -- the same posture as a missing file (fail OPEN, ADR-028 §相鄰破口).
 local function reload_revoked(handle, now)
   local rejected = false
+  local missing = false
   local ok, err = pcall(function()
     local f = io.open(REVOKED_FILE, "rb")
     if not f then
-      -- Missing / not yet written by tenant-api => nothing known-revoked.
+      -- ⛔ THIS IS THE ONLY BRANCH THAT CLEARS THE ENFORCEMENT PLANE.
+      -- `revoked` becomes empty, so from here every revoked token is honoured
+      -- until its TTL. Both error paths below do the OPPOSITE — they leave the
+      -- previously loaded set in force and keep rejecting. The signal below is
+      -- flagged here and emitted outside the pcall, because a `return` inside
+      -- pcall is a SUCCESS: `ok` stays true and neither warning fires. That is
+      -- exactly how this path stayed silent (#1236 / TRK-350) while ADR-028
+      -- §相鄰破口 named "delete/unmount the projected key" as the attack.
       revoked = {}
+      missing = true
       return
     end
     -- ⛔ READ THE WHOLE FILE AND SPLIT IT HERE. Do NOT go back to the
@@ -140,17 +149,31 @@ local function reload_revoked(handle, now)
   if not ok then
     handle:logWarn("federation: revoked-set reload failed: " .. tostring(err))
   elseif rejected then
-    -- ⛔ MUST stay textually distinct from the "reload failed" warning
-    -- above. That one feeds the reconciler's fail-open gauge
-    -- (build_failopen_query) and means "the list could not be read, we are
-    -- letting traffic through". THIS one is the opposite posture: the list
-    -- WAS read, it was refused, and the previous set is still being
-    -- enforced. Nothing extra is being let through, and an IR that reads
-    -- the two as the same signal draws the wrong conclusion.
+    -- ⛔ MUST stay textually distinct from the OTHER TWO warnings here. Each
+    -- feeds its own gauge and its own alert, because the three mean different
+    -- things about what is being let through right now:
+    --   reload failed  → could not read it; PREVIOUS set still enforced
+    --   rejected (this) → read it and refused it; PREVIOUS set still enforced
+    --   missing        → file is gone; the set is EMPTY, nothing is enforced
+    -- An IR that reads any two of them as the same signal draws the opposite
+    -- conclusion about the current posture. The reconciler asserts all three
+    -- literals are pairwise non-substrings, in both directions.
     -- The offending line is NOT logged (ADR-028 D3 + the private advisory).
     handle:logWarn(
       "federation: revoked-set rejected: line does not match the token-id contract; " ..
       "keeping the previously loaded set")
+  elseif missing then
+    -- The one posture where the enforcement plane is EMPTY (#1236 / TRK-350).
+    -- Emitted unconditionally — deliberately NOT gated on "have we ever loaded
+    -- it before". Such a gate would be silent in precisely the case that matters
+    -- most: a worker that comes up into a missing file has no previous set and
+    -- enforces nothing, and any gate keyed on per-worker memory also resets on
+    -- every rollout, letting a firing alert resolve itself while the condition
+    -- persists. The path is already rate-limited to once per RELOAD_INTERVAL per
+    -- worker by the time gate above, so it cannot flood.
+    handle:logWarn(
+      "federation: revoked-set missing: " .. REVOKED_FILE ..
+      " is absent; enforcing an EMPTY set — every revoked token is honoured until its TTL")
   end
 end
 

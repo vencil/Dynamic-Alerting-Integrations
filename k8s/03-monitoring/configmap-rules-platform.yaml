@@ -1118,7 +1118,7 @@ data:
           # Metrics from the federation-reconciler Deployment's /metrics
           # (helm/federation-reconciler). Behavioural contract:
           # tests/rulepacks/platform-federation-revocation_test.yaml (an extracted
-          # copy of these six alerts — KEEP IN SYNC).
+          # copy of these seven alerts — KEEP IN SYNC).
           - alert: FederationRevocationTamperSuspected
             expr: federation_revocation_tamper_suspected > 0
             for: 5m
@@ -1238,6 +1238,52 @@ data:
                 defence). Details:
                 docs/adr/028-federation-revocation-tamper-evidence.md.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
+
+          # --- Enforcement plane has NO list at all (ADR-028 §fail-open / #1236 / TRK-350) ---
+          # ⛔ CRITICAL while its neighbour above is only a warning, and the
+          # asymmetry is deliberate. `LoadFailure` and the two staleness alerts
+          # below all mean the gateway is still enforcing the set it had. THIS one
+          # is the single gateway state where the set is EMPTY: the projected key
+          # is gone, so every revoked token is honoured until its TTL (≤4h).
+          # ADR-028 §相鄰破口 names deleting/unmounting that key as the attacker's
+          # next move once the write path is closed, and until #1236 the gateway
+          # emitted nothing at all when it happened — the missing branch returns
+          # normally from inside the Lua pcall, so neither existing warning fired.
+          #
+          # `for: 5m` = one reconcile interval (300s), shorter than the 10m the
+          # staleness pair uses because the exposure here is active rather than
+          # frozen. ⚠️ Be honest about what `for` buys on THIS gauge: the value is
+          # a count of log rows in a ~10m window, so a single transient line keeps
+          # it non-zero far longer than any `for` we would set. It debounces scrape
+          # jitter, NOT a one-off missing read. A genuinely transient projection
+          # swap will page here; the runbook's first step is to separate that from
+          # a deleted key.
+          - alert: FederationGatewayRevokedSetMissing
+            expr: federation_gateway_revoked_set_missing > 0
+            for: 5m
+            labels:
+              severity: critical
+              alert_source: platform
+            annotations:
+              summary: "Federation gateway has NO revoked-set — it is enforcing an EMPTY set and honouring every revoked token (ADR-028 §fail-open)"
+              description: |
+                The federation-gateway reports that its revoked-set file is
+                ABSENT. Unlike the read-failure and reload-refused alerts, the
+                gateway is NOT holding a previous set here — it has none, so every
+                revoked federation token is being accepted until its TTL (≤4h).
+                This is the ADR-028 §相鄰破口 attack shape (delete / unmount the
+                projected key) and it is also what a namespace misconfiguration
+                looks like (#1313). ACTION: (1) confirm the store ConfigMap exists
+                in the gateway's OWN namespace — a ConfigMap is namespace-scoped
+                and the volume can only resolve one there; tenant-api's
+                `federation.store.namespace` must name that namespace. (2) If it
+                exists, check the projected volume mount on the gateway pods and
+                whether the `revoked.txt` key is still present in the ConfigMap.
+                (3) A key deleted out-of-band is tampering with the defence, not a
+                glitch — treat as an incident and cross-check #926 audit for who
+                wrote the ConfigMap. Details:
+                docs/internal/federation-revocation-reconciler-runbook.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/federation-revocation-reconciler-runbook.md"
 
           # --- Enforcement-plane staleness (ADR-028 D1 / #1235 / TRK-349) ---
           # ⛔ These two are NOT the fail-open alert above, and must never be read

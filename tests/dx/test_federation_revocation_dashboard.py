@@ -90,6 +90,14 @@ _INCIDENT = {
     "federation_revocation_heartbeats_seen": "0",
     "federation_revocation_live_set_rejected_lines": "1",
     "federation_gateway_revoked_set_reload_rejected": "4",
+    #   gateway_revoked_set_missing = 6  -> "Revoked-set — MISSING" == 6 (#1236).
+    #                                       A THIRD distinct non-zero value, for the
+    #                                       same reason the two above differ: these
+    #                                       three gateway gauges mean different things
+    #                                       about what is being let through, and equal
+    #                                       fixtures could not tell a panel reading the
+    #                                       wrong one from a correct one.
+    "federation_gateway_revoked_set_missing": "6",
 }
 # counter that increases 2 per step so rate() is unambiguously positive
 _INCIDENT_COUNTER = ("federation_revocation_reconcile_errors_total", "0+2x200")
@@ -127,6 +135,7 @@ _IDLE = {
     "federation_revocation_heartbeats_seen": "6",
     "federation_revocation_live_set_rejected_lines": "0",
     "federation_gateway_revoked_set_reload_rejected": "0",
+    "federation_gateway_revoked_set_missing": "0",
 }
 
 
@@ -174,6 +183,11 @@ _GOLDENS = [
      f'{{__name__="{_M}live_set_rejected_lines"}}'),
     ("Revoked-set reload", None, "incident", 2900, 4,
      '{__name__="federation_gateway_revoked_set_reload_rejected"}'),
+    # The third gateway gauge (#1236) — the one state where the set is EMPTY
+    # rather than stale. Distinct value (6) from its two neighbours for the same
+    # reason they differ from each other.
+    ("Revoked-set — MISSING", None, "incident", 2900, 6,
+     '{__name__="federation_gateway_revoked_set_missing"}'),
     # --- the divide-by-zero guard (idle feed): 0/clamp_min(0,1)=0, NOT NaN ---
     ("erosion ratio", None, "idle", 2900, 0, "{}"),
     # --- and the canary HEALTHY over that same idle feed (the state the canary
@@ -305,7 +319,7 @@ def test_dashboard_is_valid_grafana_shape():
 def test_metric_names_are_the_reconciler_contract():
     """Pin the exact source-metric names the reconciler emits — a rename on either
     side (_federation_revocation_reconciler.py or this dashboard) breaks the data
-    flow silently. These are the ten ADR-028 D1 metrics (six from #924, the #1234
+    flow silently. These are the eleven ADR-028 D1 metrics (the #1236 missing-set gauge, six from #924, the #1234
     evidence-channel canary pair, and the #1235 enforcement-plane staleness
     pair)."""
     import json
@@ -323,6 +337,7 @@ def test_metric_names_are_the_reconciler_contract():
         "federation_revocation_heartbeats_seen",
         "federation_revocation_live_set_rejected_lines",
         "federation_gateway_revoked_set_reload_rejected",
+        "federation_gateway_revoked_set_missing",
     ):
         assert metric in exprs, f"reconciler metric {metric!r} missing from dashboard"
 
@@ -357,10 +372,10 @@ def test_colour_coded_stat_panels_carry_noncolour_state_channel():
     (including the alarming one) is left distinguished by colour alone."""
     panels = _load_panels()
     stat_panels = [p for p in panels if p.get("type") == "stat"]
-    assert len(stat_panels) == 8, (
-        f"expected 8 colour-coded stat panels (5 top-row health summary — including "
+    assert len(stat_panels) == 9, (
+        f"expected 9 colour-coded stat panels (5 top-row health summary — including "
         f"the #1234 evidence-channel canary — plus the #1235 enforcement-plane "
-        f"staleness pair, plus erosion ratio), "
+        f"staleness pair and the #1236 missing-set panel, plus erosion ratio), "
         f"found {len(stat_panels)} — the a11y coverage assumption drifted"
     )
     for panel in stat_panels:
