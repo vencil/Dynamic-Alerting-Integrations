@@ -436,14 +436,30 @@ jobs:
           echo "mkdocs-build: ${{ needs.mkdocs-build.result }}"
           echo "drift-checks: ${{ needs.drift-checks.result }}"
           echo "i4-runbook-smoke-test: ${{ needs.i4-runbook-smoke-test.result }}"
-          if [[ "${{ needs.validate-mermaid.result }}" == "failure" || \
-                "${{ needs.check-links.result }}" == "failure" || \
-                "${{ needs.head-blob-hygiene.result }}" == "failure" || \
-                "${{ needs.check-frontmatter.result }}" == "failure" || \
-                "${{ needs.check-coverage.result }}" == "failure" || \
-                "${{ needs.mkdocs-build.result }}" == "failure" || \
-                "${{ needs.drift-checks.result }}" == "failure" || \
-                "${{ needs.i4-runbook-smoke-test.result }}" == "failure" ]]; then
+          # `cancelled` must fail like `failure` (mirrors the fail-closed
+          # semantics of ci.yml's "Python Tests (3.13)" aggregation gate). The
+          # previous form compared against "failure" only, so a job killed by
+          # the concurrency group or a dead runner reported `cancelled` and
+          # this required check went GREEN with that documentation leg never
+          # having run. `skipped` is deliberately still tolerated — these legs
+          # are path-gated by design and a skip is the intended no-op.
+          bad=0
+          for pair in \
+            "validate-mermaid:${{ needs.validate-mermaid.result }}" \
+            "check-links:${{ needs.check-links.result }}" \
+            "head-blob-hygiene:${{ needs.head-blob-hygiene.result }}" \
+            "check-frontmatter:${{ needs.check-frontmatter.result }}" \
+            "check-coverage:${{ needs.check-coverage.result }}" \
+            "mkdocs-build:${{ needs.mkdocs-build.result }}" \
+            "drift-checks:${{ needs.drift-checks.result }}" \
+            "i4-runbook-smoke-test:${{ needs.i4-runbook-smoke-test.result }}"; do
+            job="${pair%%:*}"; res="${pair#*:}"
+            if [[ "$res" == "failure" || "$res" == "cancelled" ]]; then
+              echo "::error::documentation check '$job' → $res"
+              bad=1
+            fi
+          done
+          if [[ "$bad" -ne 0 ]]; then
             echo "::error::One or more documentation checks failed"
             exit 1
           fi

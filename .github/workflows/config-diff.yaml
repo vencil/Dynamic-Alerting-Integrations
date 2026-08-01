@@ -47,13 +47,29 @@ jobs:
       - name: Run config diff
         id: diff
         run: |
+          # `|| true` used to swallow EVERY failure mode here, not just the
+          # expected one. That matters beyond this step: check_image_pin_
+          # capability.py lists `.github/workflows/**` as a deliberately
+          # non-covered surface, and its stated justification is that "workflow
+          # pins fail LOUDLY (a red CI job)". With a blanket `|| true` that
+          # premise was false for this workflow — an unpullable image or a
+          # renamed entrypoint produced an empty report, `has_changes` stayed
+          # unset, no comment was posted, and the job went green.
+          # Only 0 (no changes) and 1 (changes found) are expected; anything
+          # else is a real failure and must surface.
+          set +e
           docker run --rm \
             -v /tmp/old-conf.d:/data/old:ro \
             -v ${{ github.workspace }}/components/threshold-exporter/config/conf.d:/data/new:ro \
             ghcr.io/vencil/da-tools:v2.9.0 \
             config-diff --old-dir /data/old --new-dir /data/new \
-            > /tmp/diff-report.md || true
-          # config-diff exits 1 when changes exist (expected)
+            > /tmp/diff-report.md
+          rc=$?
+          set -e
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::config-diff exited $rc (expected 0=no changes or 1=changes) — image pull, entrypoint, or mount problem"
+            exit "$rc"
+          fi
           if [ -s /tmp/diff-report.md ]; then
             echo "has_changes=true" >> $GITHUB_OUTPUT
           fi
