@@ -220,8 +220,21 @@ class TestVector:
         cm = [d for d in docs if d.get("kind") == "ConfigMap" and "vector-config" in d["metadata"]["name"]][0]
         vrl = yaml.safe_load(cm["data"]["vector.yaml"])["transforms"]["demux"]["source"]
         assert "suspicious_audit" in vrl
-        assert "starts_with(owner" in vrl
         assert '"federation-gateway-"' in vrl
+        # #1293: the compare MUST run on the Kind-stripped owner. Asserting the
+        # bare `starts_with(owner` would not catch a revert — it is a prefix of
+        # `starts_with(owner_name`, so the broken form satisfies it too. Pin the
+        # strip itself and the exact argument.
+        assert "replace(owner, r'^[^/]*/', \"\")" in vrl, (
+            "pod_owner is rendered by Vector as '<Kind>/<Name>'; without the strip "
+            "the prefix compare never matches and every real gateway audit row is "
+            "reclassified (#1293)"
+        )
+        assert "starts_with(owner_name," in vrl, (
+            "the prefix test must consume the STRIPPED owner, not the raw field (#1293)"
+        )
+        # The behavioural half of this guard lives in helm/vector/tests/
+        # projection_tests.yaml cases (O1)/(O2)/(O3), run by `vector test`.
 
     @_needs_helm
     def test_vrl_origin_filter_disabled_with_empty_prefix(self, repo_root: Path) -> None:

@@ -256,14 +256,39 @@ data:
           {{- with (default dict .Values.audit).gatewayPodOwnerPrefix }}
           # Origin spoof check (#566 T2-1): a `federation_audit` row should
           # come from a pod owned by the federation-gateway Deployment's
-          # ReplicaSet (kubernetes.pod_owner like "federation-gateway-xyz").
-          # If the JSON shape says audit but the pod_owner doesn't match,
-          # someone deployed a sibling pod with the right label and is
-          # injecting forged rows. Reclassify so it's queryable + alertable
-          # in its own stream rather than mixing with real audit data.
+          # ReplicaSet. If the JSON shape says audit but the owner doesn't
+          # match, someone deployed a sibling pod with the right label and is
+          # injecting forged rows. Reclassify so it's queryable in its own
+          # stream rather than mixing with real audit data.
+          #
+          # ⛔ Vector renders `pod_owner` as "<Kind>/<Name>", e.g.
+          # "ReplicaSet/federation-gateway-7d9f". This shape is NOT verifiable
+          # from anything in this repo (Vector ships as a prebuilt binary), so
+          # it is pinned two ways instead: the kubernetes_logs source reference
+          # documents that exact example value, and the behaviour is held by
+          # helm/vector/tests/projection_tests.yaml cases (O1)/(O2)/(O3), which
+          # run under the real `vector test`. Comparing the RAW value
+          # against a workload-NAME prefix can never match, so every REAL
+          # gateway audit row was reclassified to suspicious_audit and, via
+          # tenant_project's `!= "federation_audit"` abort below, silently
+          # dropped out of every tenant partition (#1293). Strip the Kind half
+          # before the compare.
+          #
+          # Stripping HERE rather than baking "ReplicaSet/" into the values
+          # default is deliberate: an operator on `helm upgrade --reuse-values`
+          # carries the old-shaped value in their stored values, so a
+          # values-only fix would leave them broken. It also keeps the knob
+          # meaning "workload name prefix", which is what its name says, and
+          # does not pin the owner Kind (a gateway deployed as a StatefulSet
+          # or DaemonSet still matches on name).
+          #
+          # ⛔ A pod with no ownerReferences has NO pod_owner field at all, so
+          # `owner` is "" and the prefix test still fails → fail-closed. Keep
+          # it that way: a bare attacker-created Pod must not pass by omission.
           if .log_type == "federation_audit" {
             owner = to_string(.kubernetes.pod_owner) ?? ""
-            if !starts_with(owner, {{ . | quote }}) {
+            owner_name = replace(owner, r'^[^/]*/', "")
+            if !starts_with(owner_name, {{ . | quote }}) {
               .log_type = "suspicious_audit"
             }
           }
