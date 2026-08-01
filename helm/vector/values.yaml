@@ -264,6 +264,47 @@ evidenceChannel:
   # exclusive — which is the property that makes a plain `route` (whose
   # semantics copy an event to EVERY matching output) safe here.
   gatewayLabelValue: "federation-gateway"
+  # ── Producer namespace binding (#1288) ───────────────────────────────────
+  # ⛔ These are the ONLY part of the origin split that a pod cannot declare
+  # for itself. A pod chooses its own labels, so the label values above select
+  # a SHAPE, not a producer; the namespace a pod runs in is assigned by the
+  # control plane and is cluster-unique. Binding on it raises the bar from
+  # "can create a pod anywhere the collector reaches" (which is every namespace
+  # by default — see `source.extraNamespaceLabelSelector: ""`) to "can create a
+  # pod in THIS namespace".
+  #
+  # Defaults match the documented install paths (`helm install tenant-api …
+  # -n tenant-api` in docs/getting-started/for-platform-engineers.md; the
+  # gateway alongside the rest of the platform in `monitoring`).
+  #
+  # ⚠️ IF YOU INSTALL EITHER PRODUCER ELSEWHERE, SET THESE — otherwise that
+  # branch matches nothing and the stream goes quiet. The two halves fail
+  # differently and you should know which you are relying on:
+  #   - evidence: a mismatch is BOUNDED and LOUD. The heartbeat stops arriving
+  #     and FederationRevocationEvidenceChannelDown fires ~45-50 min after the
+  #     last good heartbeat. Derivation, so nobody has to re-guess it: a
+  #     heartbeat stays inside the canary window until it is older than the
+  #     1800s lookback, so `channel_up` only flips at +30 min, plus up to one
+  #     300s reconcile interval for the next evaluation (= +30-35 min), and the
+  #     alert's `for: 15m` runs after that. ⛔ The 60s settle does NOT extend
+  #     this — it gates how soon a FRESH heartbeat becomes visible, not how long
+  #     an old one lingers, so it must not be added to the tail.
+  #   - gateway:  a mismatch is SILENT. FederationAuditPipelineSilent watches
+  #     the mtail sidecar's own counters, which is a different path entirely
+  #     and stays green while the Vector side carries nothing.
+  # Set either to "" to disable that branch's binding (label-only matching,
+  # the pre-#1288 behaviour).
+  #
+  # ⚠️ HONEST BOUNDARY for the gateway half: `monitoring` is a SHARED namespace
+  # (prometheus / grafana / alertmanager / KSM / CronJobs). A principal able to
+  # create pods there can reach VictoriaLogs :9428 directly — it admits
+  # same-namespace pods by self-declared label and carries no authentication
+  # (#1295) — so against that actor this binding buys nothing. It does close
+  # the broader case: any workload elsewhere in the cluster carrying the
+  # gateway label, deliberately or by accident. Neither half is producer
+  # authentication; that needs producer-side signing or admission control.
+  podNamespace: "tenant-api"
+  gatewayNamespace: "monitoring"
   # Stream class for the evidence rows. Registered as a Tier-1 stream class in
   # docs/internal/log-visibility-2tier-catalogue.md (platform-only — it is
   # NEVER projected to a tenant partition).

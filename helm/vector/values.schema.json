@@ -24,6 +24,16 @@
           "minLength": 1,
           "description": "Label value for the OTHER branch, the pre-existing audit pipeline feeding demux (default federation-gateway). A positive match on purpose: negation would make the split exhaustive and forward unrecognised rows into the 30-day 0:0 store."
         },
+        "podNamespace": {
+          "type": "string",
+          "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "description": "#1288 producer binding: the namespace the evidence producer runs in (default tenant-api). Deliberately NO minLength — \"\" is the documented way to disable the binding and fall back to label-only matching, and the template distinguishes absent (take the default) from explicitly empty (disabled) via hasKey. The pattern is DNS-1123 label OR empty: a malformed value (typo, trailing space, a whole selector expression) would otherwise match no pod at all, which is indistinguishable from a correctly-configured-but-quiet branch — the exact silent-failure shape this whole change exists to remove, so it is rejected at render instead. A pod declares its own labels but cannot choose its namespace, so this is the only self-assignment-proof half of the origin split. A mismatch is bounded and loud: the heartbeat stops and FederationRevocationEvidenceChannelDown fires ~45-50 min after the last good heartbeat (30 min for it to age out of the 1800s canary window, up to one 300s reconcile interval, then the alert's for:15m)."
+        },
+        "gatewayNamespace": {
+          "type": "string",
+          "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "description": "#1288 producer binding for the gateway branch (default monitoring). Same empty-disables semantics and same DNS-1123-or-empty pattern as podNamespace — a typo here fails at render rather than silently matching nothing, which matters more on this branch because its failure mode is otherwise invisible. ⚠️ A mismatch here is SILENT — FederationAuditPipelineSilent watches the mtail sidecar's own counters, a different path that stays green while the Vector side carries nothing. ⚠️ monitoring is a SHARED namespace, and a principal who can create pods there can reach VictoriaLogs :9428 directly (no auth, admits same-namespace pods by self-declared label — #1295), so this binding does not stop that actor; it closes the broader case of a labelled workload elsewhere in the cluster."
+        },
         "logType": {
           "type": "string",
           "minLength": 1,

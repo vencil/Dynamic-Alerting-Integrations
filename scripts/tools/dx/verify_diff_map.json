@@ -682,7 +682,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "8b28bdec0488f59b19eb9ed59e25c38fedf99af170f30d4abec7074f79dc2e59",
+ "source_digest": "42a640f28a2c050fdf5c6e76175947923f5c53d310e87881f2fb6f4065d562a1",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1466,6 +1466,9 @@
   ],
   "helm/vector/projection-gate/verify_tenant_projections.py": [
    "tests/shared/test_tenant_projection_gate.py"
+  ],
+  "helm/vector/templates": [
+   "tests/shared/test_vector_projection_vrl.py"
   ],
   "helm/vector/templates/configmap.yaml": [
    "tests/dx/test_log_visibility_catalogue.py"
