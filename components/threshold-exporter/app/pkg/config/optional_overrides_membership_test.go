@@ -18,8 +18,14 @@ package config
 //	                         "write succeeds, nothing emits, log-only signal".
 //	                         resolveDeclaredRows skips this shape too, so the
 //	                         emission loop cannot route around the refusal
-//	expires:    REFUSED    — nothing to fail-safe back to; on lapse the
-//	                         threshold would have no value at all
+//	expires:    REFUSED    — for a DECLARED-ONLY key: nothing to fail-safe back
+//	                         to, so on lapse the threshold would have no value
+//	                         at all. ⚠️ Not unconditional: membership is
+//	                         defaults-first, so a key in BOTH sets keeps its
+//	                         time-box and still fires its expiry event —
+//	                         TestDeclaredKey_AlsoValuedKeepsExpiryWorkingAndEmitting
+//	                         pins exactly that, and reading this row as a blanket
+//	                         refusal is how the two got out of step once already
 //
 // So the rule this file pins is: never accept what the resolver will silently
 // drop. When PR-B shipped, the flat row was an exception held shut by a

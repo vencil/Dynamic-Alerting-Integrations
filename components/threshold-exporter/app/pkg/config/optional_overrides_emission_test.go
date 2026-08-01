@@ -123,13 +123,25 @@ func TestDeclaredEmission_TimeWindowAndInlineSeverity(t *testing.T) {
 // unparseable value; a declared key has no default, so the only honest outcome
 // is to drop the row and say so. Falling back to 0 would arm an alert at a
 // threshold nobody chose.
+// ⚠️ NOT t.Parallel: captures the package-level logger, a process global.
 func TestDeclaredEmission_UnparseableValueDropsWithNoFallback(t *testing.T) {
-	t.Parallel()
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
 	cfg := declaredEmissionCfg(nil, []string{"oracle_wait_time_rate"},
 		map[string]ScheduledValue{"oracle_wait_time_rate": {Default: "not-a-number"}})
 
 	if got := rowsFor(cfg.ResolveAt(time.Now()), "oracle_wait_time_rate"); len(got) != 0 {
 		t.Fatalf("an unparseable declared value must emit nothing (no default to fall back to), got %+v", got)
+	}
+	// The drop is the whole difference from resolveBaseRows, which falls back to
+	// the platform default here. Dropping SILENTLY would be the failure this
+	// tier exists to end, so the log line is part of the contract — asserting
+	// only the row count would stay green if it were removed.
+	if !strings.Contains(buf.String(), "oracle_wait_time_rate") ||
+		!strings.Contains(buf.String(), "not-a-number") {
+		t.Errorf("the drop must be loud and name both the key and the bad value, log was: %q", buf.String())
 	}
 }
 
@@ -155,6 +167,34 @@ func TestDeclaredEmission_ExpiresIsInertNotAVanish(t *testing.T) {
 	// held together by TestDeclaredKey_ExpiryRefusalAndEventSuppressionAgree).
 	if ev := cfg.ResolveThresholdExpiriesAt(time.Now()); len(ev) != 0 {
 		t.Errorf("no expiry event may fire for a key whose expiry is inert, got %+v", ev)
+	}
+}
+
+// The companion to the test above: the value persisting is only defensible
+// because the config is loudly rejected, and it is rejected on every reload
+// (logConfigStats prints every KeyValidation error). Without this pin, a
+// change that downgraded the refusal to a Notice — or dropped it — would turn
+// a GitOps-pushed `expires:` into an actual silent decoration, which is the
+// reading this design has to keep earning.
+func TestDeclaredEmission_ExpiresRefusalStaysABlockingError(t *testing.T) {
+	t.Parallel()
+	cfg := declaredEmissionCfg(nil, []string{"oracle_wait_time_rate"},
+		map[string]ScheduledValue{"oracle_wait_time_rate": {
+			Default: "50",
+			Expiry:  &ExpiryMeta{Expires: "2020-01-01T00:00:00Z"},
+		}})
+
+	kv := cfg.ValidateTenantKeys()
+
+	// Errors, not Notices — logConfigStats prints both, but only Errors reach
+	// the tenant-api write gate, and only Errors make CI's verdict non-empty.
+	if len(kv.Errors) != 1 {
+		t.Fatalf("want exactly 1 blocking error, got %d (notices=%d)", len(kv.Errors), len(kv.Notices))
+	}
+	for _, want := range []string{"oracle_wait_time_rate", "expires", "optional_overrides"} {
+		if !strings.Contains(kv.Errors[0], want) {
+			t.Errorf("refusal must name %q, got %q", want, kv.Errors[0])
+		}
 	}
 }
 

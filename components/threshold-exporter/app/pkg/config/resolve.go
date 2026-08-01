@@ -350,6 +350,16 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 // `expires:` on a declared key at write time; a value that reached disk anyway
 // (direct GitOps push) simply keeps applying, which is the fail-safe direction.
 //
+// ⚠️ Be precise about what that costs, because "the field is then decoration"
+// is the natural reading and it overstates it: the refusal is a KeyValidation
+// error, and logConfigStats prints every one of those on EVERY config load, so
+// a GitOps-pushed expires is loudly rejected once per reload — not silent.
+// What it does not get is the alertable channel: ResolveThresholdExpiriesAt
+// gates on canonDefaults alone, so da_config_event{event="threshold_expired"}
+// never fires for a declared key and no cleanup PR is prompted. That residual
+// is real, and it is exactly the one resolveCriticalRows and
+// resolveDimensionalRows already carry — consistent, not novel.
+//
 // ⛔ Ownership, not just membership. Every shape skipped below is ALREADY
 // emitted by one of the sibling phases, and a second row with the same label
 // set does not degrade one metric — it fails the whole Prometheus Gather and

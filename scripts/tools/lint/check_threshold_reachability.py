@@ -95,7 +95,12 @@ from _lib_validation import i18n_text  # noqa: E402
 # #1231 (rename/move/add/delete — 9 keys removed via the exit-lock below),
 # leaving the 9 A-class tier moves (a deliberate ship-enabled decision per
 # pack, not a mechanical fix — #1196).
-#   A = name-correct, wrong tier (in optional_overrides) → move to defaults
+#   A = name-correct, in optional_overrides → EITHER move to defaults (arms it
+#       for every tenant) OR leave it declared and let the tenant calibrate it.
+#       ⚠️ The second option only became real when resolveDeclaredRows landed
+#       (#1189 / TRK-337); before that "declared" meant dead. Which of the two
+#       applies is a per-key decision (#1310 / #1311), so this tag deliberately
+#       names both rather than prescribing the one that arms everyone.
 #   B = name is wrong in scaffold (e.g. _total vs _rate) → rename + move
 #   C = base default exists but under a different name → align identity
 #   D = key absent from scaffold entirely → add
