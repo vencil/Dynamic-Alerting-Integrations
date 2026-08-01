@@ -239,6 +239,25 @@ federation:
   # match the federation-gateway chart's revoked-set source.
   store:
     configMapName: tenant-federation-store
+    # Namespace the store ConfigMap is created in. EMPTY = this release's
+    # namespace (the historical behaviour; existing installs are unaffected).
+    #
+    # ⛔ SET THIS when federation-gateway / federation-reconciler do NOT run in
+    # tenant-api's own namespace. A ConfigMap is namespace-scoped and both of
+    # them consume it as a projected VOLUME, so each can only resolve one in its
+    # OWN namespace. The documented install paths put tenant-api in `tenant-api`
+    # (docs/getting-started/for-platform-engineers.md) and both consumers in
+    # `monitoring` (helm/federation-gateway/README.md) — under which the default
+    # leaves the gateway with no revoked.txt at all. Its volume is
+    # `optional: true`, so the pod starts clean and the Lua filter loads an
+    # EMPTY revoked set: every revoked token is honoured until its TTL, with no
+    # event and no log to say so (#1313).
+    #
+    # Only the ConfigMap moves — tenant-api's own POD stays in this release's
+    # namespace, so helm/vector's evidence binding (`evidenceChannel.podNamespace`,
+    # #1288/#1307) is unaffected: it binds the producer pod's namespace, not the
+    # store's.
+    namespace: ""
 
   # Federation token lifetime, passed as --federation-token-ttl (Go duration).
   # Matches the binary default; with Posture B server-side revocation an

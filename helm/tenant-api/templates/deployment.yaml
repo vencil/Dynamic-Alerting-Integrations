@@ -145,6 +145,10 @@ spec:
             {{- if .Values.federation.enabled }}
             - --federation-key=/etc/federation/{{ .Values.federation.signingKey.secretKey }}
             - --federation-store={{ .Values.federation.store.configMapName }}
+            # Always passed, never inferred. The binary would otherwise fall back
+            # to the pod's own namespace, which silently disagrees with the
+            # ConfigMap the chart just created whenever the two differ (#1313).
+            - --federation-namespace={{ include "tenant-api.federationStoreNamespace" . }}
             - --federation-token-ttl={{ .Values.federation.tokenTTL }}
             {{- end }}
             {{- if .Values.machineIdentity.enabled }}

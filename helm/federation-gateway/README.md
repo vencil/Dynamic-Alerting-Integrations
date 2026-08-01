@@ -125,6 +125,17 @@ Which read APIs a tenant can call through the gateway depends on the mode:
   If the file is absent the Lua **fails open** (nothing known-revoked; the
   4h token TTL still bounds exposure — failing closed would take the whole
   gateway down on a transient mount glitch).
+- ⛔ **That ConfigMap has to live in THIS chart's namespace.** A volume
+  resolves a ConfigMap only in the mounting pod's own namespace — it is not an
+  API read that can cross one. The documented paths install tenant-api in
+  `tenant-api` and this chart in `monitoring`, so unless both are in the same
+  place you must point tenant-api's `federation.store.namespace` at the
+  namespace this chart runs in. Getting it wrong is **silent**: the volume is
+  `optional: true`, so the pod starts Ready with no `revoked.txt` at all and
+  the filter enforces an EMPTY revoked set — every revoked token is honoured
+  until its TTL, with no Kubernetes event and no log line to say so (#1313).
+  `helm/federation-reconciler` mounts the same key and has the same
+  requirement.
 
 ## Rate limits are soft
 

@@ -39,6 +39,14 @@ image:
 # live revoked set. Mounted read-only — a kubelet projection is a DIRECT read of
 # the source of truth (NOT via the possibly-compromised tenant-api API), and
 # needs no RBAC (ADR-028 §MVP G3).
+#
+# ⛔ The ConfigMap must be in THIS release's namespace — a volume resolves one
+# only in the mounting pod's own namespace. tenant-api's chart creates it in ITS
+# namespace by default, so when the two differ, set tenant-api's
+# `federation.store.namespace` to this one. Getting it wrong is silent: the
+# volume is `optional: true`, so the pod starts clean and `read_live_set` treats
+# the absent file as a benign empty set ("nothing revoked yet") — the reconcile
+# then compares real revocation events against an empty live set (#1313).
 store:
   configMapName: tenant-federation-store
   revokedKey: revoked.txt

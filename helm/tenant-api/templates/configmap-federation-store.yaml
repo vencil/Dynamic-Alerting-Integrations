@@ -14,7 +14,10 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ .Values.federation.store.configMapName }}
-  namespace: {{ .Release.Namespace }}
+  # Not necessarily this release's namespace — the gateway and the reconciler
+  # mount this object, and a volume can only resolve a ConfigMap in the mounting
+  # pod's OWN namespace. See federation.store.namespace (#1313).
+  namespace: {{ include "tenant-api.federationStoreNamespace" . }}
   labels:
     {{- include "tenant-api.labels" . | nindent 4 }}
     app.kubernetes.io/component: federation-token-store

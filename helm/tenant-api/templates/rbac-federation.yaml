@@ -7,7 +7,9 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ include "tenant-api.name" . }}-federation
-  namespace: {{ .Release.Namespace }}
+  # Follows the ConfigMap, not the release: a Role only grants access to objects
+  # in ITS OWN namespace, so it has to live where the store does (#1313).
+  namespace: {{ include "tenant-api.federationStoreNamespace" . }}
   labels:
     {{- include "tenant-api.labels" . | nindent 4 }}
 rules:
@@ -23,7 +25,9 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ include "tenant-api.name" . }}-federation
-  namespace: {{ .Release.Namespace }}
+  # Follows the ConfigMap, not the release: a Role only grants access to objects
+  # in ITS OWN namespace, so it has to live where the store does (#1313).
+  namespace: {{ include "tenant-api.federationStoreNamespace" . }}
   labels:
     {{- include "tenant-api.labels" . | nindent 4 }}
 subjects:
