@@ -57,6 +57,27 @@ helm install vector ./helm/vector -n vector \
 #    conf.d registry ConfigMap 是 namespaced —— 必須存在於 vector ns
 #    （projectionGate.registry.configMapName 指的那顆），否則 gate 一律
 #    degrade 回 0:0。
+#
+#    ⛔ chart 0.10.0（#1288）起 origin split 同時綁「producer 的 namespace」：
+#    預設 evidenceChannel.podNamespace=tenant-api、.gatewayNamespace=monitoring。
+#    ⚠️ 兩個 producer 若不裝在這兩個 ns，**必須**一併設，否則該分支比對不到、
+#    整條流靜下來。兩半的失效可見度不同，升級前先知道你靠的是哪一個：
+#      - evidence：有界且大聲。heartbeat 停 → FederationRevocationEvidenceChannelDown
+#        在最後一次正常心跳後約 **45-50 分鐘**觸發。推導（免得下次又用猜的）：
+#        心跳要老於 1800s lookback 才離開 canary 窗，所以 channel_up 到 +30 分
+#        才翻 0，再加最多一個 300s reconcile 週期取到下次評估（＝+30~35 分），
+#        然後才開始跑 alert 的 for:15m。⛔ 60s settle **不**延長這條尾巴——
+#        它管的是「新心跳多久才可見」，不是「舊心跳多久才消失」，別加進去。
+#      - gateway ：**靜默**。FederationAuditPipelineSilent 盯的是 mtail sidecar
+#        自己的 counter，那是另一條路徑，Vector 這側斷掉它照樣綠。
+#    設成 "" 可停用該分支的綁定（回到 0.9.x 的 label-only 比對）。
+#    ⛔ 下面兩個變數請換成你自己的 namespace；範例值僅供示意。
+#    （別把 `<...>` 這種佔位符直接貼進命令列——shell 會把 `<` 當重導向。）
+TENANT_API_NS=tenant-api-prod
+GATEWAY_NS=platform
+helm install vector ./helm/vector -n vector \
+  --set "evidenceChannel.podNamespace=${TENANT_API_NS}" \
+  --set "evidenceChannel.gatewayNamespace=${GATEWAY_NS}"
 
 # 3) Grafana datasource：plugin 用 GF_INSTALL_PLUGINS 自動裝
 #    （k8s/03-monitoring/deployment-grafana.yaml 已加好）；

@@ -13,6 +13,13 @@ kubernetes_logs (source, this-node pods only — VECTOR_SELF_NODE_NAME)
 origin_split (transform, route — ADR-028 / #1234)
    │  keys ONLY on pristine .kubernetes.* (the payload is not merged yet,
    │  so a log producer cannot forge its own origin)
+   │  #1288: each branch requires the producer's pod label AND its NAMESPACE
+   │  (evidenceChannel.podNamespace / .gatewayNamespace; "" disables). A pod
+   │  declares its own labels but cannot choose its namespace, so the label
+   │  alone selects a shape, never a producer. A labelled row from anywhere
+   │  else matches neither branch and lands in the unconsumed _unmatched.
+   │  ⚠️ Bar-raising, NOT producer authentication — within the bound namespace
+   │  the label is still self-declared, and the gateway's namespace is shared.
    │
    ├── .gateway ──▶ demux (transform, VRL)
    │                  │  parse_json(.message)
@@ -104,7 +111,17 @@ Behavior is pinned by `vector test` (`tests/projection_tests.yaml`) + `tests/sha
 kubectl apply -f k8s/00-namespaces/namespace-vector.yaml
 
 # Default (federation-gateway only, sink at victorialogs.monitoring.svc:9428)
+# ⚠️ chart 0.10.0+ assumes tenant-api runs in `tenant-api` and the gateway in
+#    `monitoring` — see "Producer namespace binding" below before upgrading.
 helm install vector ./helm/vector -n vector
+
+# Producers installed elsewhere (#1288) — set BOTH or that branch goes quiet.
+# Substitute your own namespaces; the values below are only an example.
+TENANT_API_NS=tenant-api-prod
+GATEWAY_NS=platform
+helm install vector ./helm/vector -n vector \
+  --set "evidenceChannel.podNamespace=${TENANT_API_NS}" \
+  --set "evidenceChannel.gatewayNamespace=${GATEWAY_NS}"
 
 # Override the sink namespace
 helm install vector ./helm/vector -n vector \
