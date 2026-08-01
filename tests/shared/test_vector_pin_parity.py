@@ -132,7 +132,7 @@ def test_nightly_scan_ref_matches_the_chart_image() -> None:
 
     ⚠️ Scope: vector only. The same matrix↔values drift exists for every other
     entry in that scan (victoria-logs, envoy, …) — a repo-wide version of this
-    check is a separate change.
+    check is tracked as #1302.
     """
     values = yaml.safe_load(_VALUES.read_text(encoding="utf-8"))
     image = values["image"]
