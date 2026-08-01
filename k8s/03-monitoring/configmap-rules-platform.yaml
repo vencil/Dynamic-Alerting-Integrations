@@ -1118,7 +1118,7 @@ data:
           # Metrics from the federation-reconciler Deployment's /metrics
           # (helm/federation-reconciler). Behavioural contract:
           # tests/rulepacks/platform-federation-revocation_test.yaml (an extracted
-          # copy of these six alerts — KEEP IN SYNC).
+          # copy of these seven alerts — KEEP IN SYNC).
           - alert: FederationRevocationTamperSuspected
             expr: federation_revocation_tamper_suspected > 0
             for: 5m

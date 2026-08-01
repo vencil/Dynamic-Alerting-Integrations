@@ -61,6 +61,7 @@
 **IR**：查 gateway 的 `revoked.txt` projected-volume mount + `tenant-federation-store` ConfigMap；**持續**失敗（非 pod 啟動 / remount 瞬態）可能是 mount 遭竄改（DoS 防禦本身，見 [#996](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/996)）。真正的 fail-closed 降級是 #996 的 defer-with-trigger。
 
 ⛔ **本告警只吃「讀不到」那一句 warn**（`federation: revoked-set reload failed`）。gateway 另有**兩句**語意不同的 warn，各有自己的 gauge 與告警，見下（`revoked-set rejected` 與 `revoked-set missing`）。三句在 reconciler 端以「兩兩互不為子字串」的機械斷言釘住，所以不會互相吃到對方的 row。
+手查 VictoriaLogs（與 reconciler 同一支查詢）：`log_type:"gateway_operational" AND app:"envoy" AND "federation: revoked-set reload failed"`（#1237 起限定串流類別＋Envoy 容器，排除同 pod 的 mtail／logrotate sidecar 噪音；⚠️ 此限定只排除**合法** sidecar，非來源身分驗證——見 ADR-028 D3 §偵測查詢的來源限定的誠實邊界）。
 
 ### `FederationGatewayRevokedSetMissing`（critical；#1236 / TRK-350）
 
@@ -75,7 +76,6 @@
 2. **ConfigMap 在、但 `revoked.txt` key 不見了** ⇒ 這是帶外寫入。合法路徑（tenant-api `revoke()`／任何 store 寫入）每次都會重生該 key，不可能刪掉它。併查 [#926](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/926) audit 看誰寫過 `tenant-federation-store`，並視為 incident 處理——ADR-028 §相鄰破口 正是把「刪／卸載 projected key」列為攻擊者在寫入路徑被封死後的下一步。
 3. **確認曝險窗**：從第一筆這句 warn 到修復之間，**所有**已撤銷但未過期的 token 都可用。撤銷集復原後，gateway 於下一個 `reloadIntervalSeconds`（預設 30s）內重新載入。必要時縮短 token TTL 或輪替簽章金鑰以強制失效。
 4. ⚠️ **不要**用 `FederationRevocationTamperSuspected` 是否同時響來判斷嚴重度：那條比對的是 audit log 與**檔案**，而檔案不見時它讀到空集，只有在窗內仍有未過期撤銷事件時才會響。近 4h 無撤銷 ⇒ 它保持綠，但本告警描述的曝險依然成立。
-手查 VictoriaLogs（與 reconciler 同一支查詢）：`log_type:"gateway_operational" AND app:"envoy" AND "federation: revoked-set reload failed"`（#1237 起限定串流類別＋Envoy 容器，排除同 pod 的 mtail／logrotate sidecar 噪音；⚠️ 此限定只排除**合法** sidecar，非來源身分驗證——見 ADR-028 D3 §偵測查詢的來源限定的誠實邊界）。
 
 ### `FederationRevocationLiveSetRejected` ／ `FederationGatewayRevokedSetReloadRejected`（皆 critical；#1235 / TRK-349）
 

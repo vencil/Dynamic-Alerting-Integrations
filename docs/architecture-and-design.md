@@ -240,7 +240,7 @@ Config-Driven 是平台核心：租戶與平台只改 YAML、不寫 PromQL，由
 
 ### 各規則包規則數
 
-下表由 `generate_rule_pack_stats.py` 從 Rule Pack 來源 YAML 產生（`rule-pack-stats-check` hook 把關），**請勿手改**。此處先前是一行手寫的「139 個 Recording + 99 個 Alert」，實際早已是 166 / 160——本節改引生成片段，就不會再各自漂移。
+下表由 `generate_rule_pack_stats.py` 從 Rule Pack 來源 YAML 產生（`rule-pack-stats-check` hook 把關），**請勿手改**。此處先前是一行手寫的「139 個 Recording + 99 個 Alert」，實際早已是 166 / 161——本節改引生成片段，就不會再各自漂移。
 
 <!-- RULE_PACK_STATS_START -->
 | 規則包 | Exporter | Recording | Alert |

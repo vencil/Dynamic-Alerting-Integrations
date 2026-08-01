@@ -319,7 +319,7 @@ def test_dashboard_is_valid_grafana_shape():
 def test_metric_names_are_the_reconciler_contract():
     """Pin the exact source-metric names the reconciler emits — a rename on either
     side (_federation_revocation_reconciler.py or this dashboard) breaks the data
-    flow silently. These are the ten ADR-028 D1 metrics (six from #924, the #1234
+    flow silently. These are the eleven ADR-028 D1 metrics (the #1236 missing-set gauge, six from #924, the #1234
     evidence-channel canary pair, and the #1235 enforcement-plane staleness
     pair)."""
     import json
