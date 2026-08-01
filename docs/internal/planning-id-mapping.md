@@ -187,6 +187,8 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-352 | [#1238](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1238) | `FederationRevocationTamperSuspected` `for:5m` 等於 reconcile interval（300s）＋gauge 每輪歸零 → 短窗 un-revoke 結構上不可 page | [#1233](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1233) |
 | TRK-353 | [#1250](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1250) | `check_scrape_reachability` 的 `_up` 後綴 heuristic 誤判平台指標 — `channel_up` 拿不到 sibling 的可達性保護（回填：本列於 TRK-354 一併補上） | [#1233](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1233) |
 | TRK-354 | [#1269](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1269) | 私密 advisory 的發布觸發點：修法已合入但刻意停在 draft 的決策紀錄＋兩個觸發條件＋發布前檢查（`vibe-release` Rule 4 為其自發火機制） | [#1233](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1233) |
+| TRK-355 | [#1273](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1273) | 租戶告警也壓 `alert_source: tenant`，讓平台/租戶過濾兩側都是正向匹配（`defer-with-trigger`；#1270 review defer 出） | — |
+| TRK-356 | [#1292](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1292) | 目錄層繼承的 `_custom_alerts` 在 exporter 端沒有資料平面 — Python 編譯器做 UNION 繼承、Go 兩個讀取點只吃 `Tenants[tenant]` ⇒ 整棵子樹的 custom 告警 `on(tenant) group_left` 永遠 join 空集合 | — |
 
 ## 不在 mapping 範圍
 
