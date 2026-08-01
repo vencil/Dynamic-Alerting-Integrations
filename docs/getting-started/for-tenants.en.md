@@ -39,7 +39,9 @@ tenants:
   my-tenant: {}
 ```
 
-This gives your tenant all default thresholds with no custom routing (alerts go to Alertmanager's default receiver).
+This gives your tenant **whatever default thresholds the platform currently supplies**, with no custom routing (alerts go to Alertmanager's default receiver).
+
+⚠️ **"Default thresholds" is not "all thresholds."** The shipped helm chart carries platform defaults for only a handful of keys (`thresholdConfig.defaults`). Every other key has to be supplied explicitly by the **platform operator** (via the `_defaults.yaml` that `scaffold-tenant` generates, or by hand in helm values) before a tenant can set it and before the matching alert can fire. **Until the operator supplies it, those alerts neither fire nor produce any error** — that is the config-driven join mechanism itself (no threshold series ⇒ the rule matches nothing ⇒ empty result). If you are unsure what the platform enabled for you, ask your platform operator for the contents of `_defaults.yaml`.
 
 ## Common Operations
 
