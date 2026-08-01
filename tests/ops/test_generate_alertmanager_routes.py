@@ -790,10 +790,15 @@ class TestMembershipParityMatrix:
         assert {c["verdict"] for c in cases} <= {"accept", "refuse"}
 
     def test_python_side_matches_the_matrix(self):
+        from _grar_validate import DEPRECATED_KEY_ALIASES
         m = self._matrix()
         defaults = set(m["defaults"])
         failures = []
         for c in m["cases"]:
+            # 引用活別名的 row 在過渡窗關閉後會由 accept 翻成 refuse，且錯誤
+            # 訊息不會說出原因；比照 Go 半邊與 aliasUnderTest() 自動退場。
+            if c.get("requires_alias") and not DEPRECATED_KEY_ALIASES:
+                continue
             warnings = validate_tenant_keys(
                 "t-1", {c["key"]}, set(defaults), set(c["declared"]))
             # accept ＝ 沒有阻擋性訊息；NOTICE 兩側皆為告知性，不算拒絕

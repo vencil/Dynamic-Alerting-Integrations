@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -32,6 +33,12 @@ type membershipMatrix struct {
 		Key      string   `json:"key"`
 		Verdict  string   `json:"verdict"`
 		Why      string   `json:"why"`
+		// Rows that spell the live deprecated alias literally. They stop being
+		// meaningful the moment the transition window closes — and would then
+		// fail with a verdict mismatch that never names the retirement as the
+		// cause. Skipping them off the alias table gives the matrix the same
+		// escape aliasUnderTest gives the unit suite.
+		RequiresAlias bool `json:"requires_alias"`
 	} `json:"cases"`
 }
 
@@ -60,9 +67,37 @@ func TestMembershipParityMatrix(t *testing.T) {
 		defaults[k] = 80
 	}
 
+	// ⛔ The requires_alias skip below is only real if the tag actually decodes.
+	// A typo'd json tag would leave the field false forever, the skip would
+	// never fire, and the row would look protected while being exactly as
+	// brittle as before — a guard that cannot run. So derive the answer instead
+	// of trusting the field: any row naming a live deprecated spelling MUST
+	// carry the flag, which both proves decoding and keeps the tagging honest
+	// as rows are added.
+	for _, tc := range m.Cases {
+		mentions := false
+		for legacy := range deprecatedKeyAliases {
+			if strings.Contains(tc.Key, legacy) {
+				mentions = true
+			}
+			for _, d := range tc.Declared {
+				if strings.Contains(d, legacy) {
+					mentions = true
+				}
+			}
+		}
+		if mentions && !tc.RequiresAlias {
+			t.Errorf("case %q names a deprecated spelling but is not tagged requires_alias — "+
+				"it will fail with an unexplained verdict mismatch when the window closes", tc.Name)
+		}
+	}
+
 	for _, tc := range m.Cases {
 		t.Run(tc.Name, func(t *testing.T) {
 			t.Parallel()
+			if tc.RequiresAlias && len(deprecatedKeyAliases) == 0 {
+				t.Skip("alias transition window closed — delete this row")
+			}
 			switch tc.Verdict {
 			case "accept", "refuse":
 			default:

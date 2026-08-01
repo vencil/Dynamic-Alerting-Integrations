@@ -27,7 +27,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -38,7 +37,14 @@ _SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "dist", "site", "__pycach
 # The Go symbol that would make this tripwire obsolete. Named, not pattern-
 # matched, so renaming the loop does not silently retire the guard.
 _EMISSION_SYMBOL = "resolveDeclaredRows"
-_RESOLVE_GO = REPO_ROOT / "components" / "threshold-exporter" / "app" / "pkg" / "config" / "resolve.go"
+
+# ⛔ The whole module, not one file. resolve.go is already ~1400 lines, so the
+# emission loop plausibly lands in a new file beside it — and if this guard
+# watched only resolve.go, that split would leave direction 2 silent while
+# direction 1 kept rejecting the declarations the feature exists to allow. A
+# guard that stops firing without saying so is the exact failure this file was
+# written about, so it must not be one.
+_APP_MODULE = REPO_ROOT / "components" / "threshold-exporter" / "app"
 
 
 def _platform_files() -> list[Path]:
@@ -108,11 +114,22 @@ def test_tripwire_is_removed_once_the_emission_loop_lands():
     thing the feature exists to do — and a guard that can no longer fire for a
     real reason is indistinguishable from one that is simply green.
     """
-    if not _RESOLVE_GO.exists():
-        pytest.skip(f"{_RESOLVE_GO} not found")
-    source = _RESOLVE_GO.read_text(encoding="utf-8")
-    assert _EMISSION_SYMBOL not in source, (
-        f"{_EMISSION_SYMBOL} exists, so declared keys now emit and this tripwire is "
-        "stale: it would block the feature it was written to protect. Delete "
+    # A moved or renamed module is a BROKEN guard, not a reason to skip: a
+    # pytest.skip here would retire this file silently, which is the one
+    # outcome it exists to prevent.
+    assert _APP_MODULE.is_dir(), (
+        f"{_APP_MODULE} not found — this guard cannot run, and a guard that "
+        "cannot run must fail rather than skip."
+    )
+    carriers = [
+        p for p in sorted(_APP_MODULE.rglob("*.go"))
+        if not p.name.endswith("_test.go")
+        and _EMISSION_SYMBOL in p.read_text(encoding="utf-8", errors="ignore")
+    ]
+    assert not carriers, (
+        f"{_EMISSION_SYMBOL} exists in "
+        + ", ".join(p.relative_to(REPO_ROOT).as_posix() for p in carriers)
+        + ", so declared keys now emit and this tripwire is stale: it would "
+        "block the feature it was written to protect. Delete "
         "tests/shared/test_optional_overrides_tripwire.py."
     )

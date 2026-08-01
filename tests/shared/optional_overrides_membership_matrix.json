@@ -20,41 +20,63 @@
     "",
     "verdict semantics: 'accept' = no BLOCKING message (Go: len(Errors)==0;",
     "Python: no line containing 'WARN:'). Deprecation NOTICEs are advisory on",
-    "both sides and never count as a refusal."
+    "both sides and never count as a refusal.",
+    "",
+    "Rows carrying \"requires_alias\": true spell the live deprecated alias",
+    "literally (mysql_cpu). They are only meaningful while that alias sits inside",
+    "its #1231 transition window: once deprecatedKeyAliases empties, mysql_cpu",
+    "stops canonicalizing and those accept rows would become refuse, turning both",
+    "parity gates red with a verdict mismatch that never names the retirement as",
+    "the cause. Rather than leave that as a note for someone to find, BOTH readers",
+    "skip these rows when the alias table is empty -- the same escape the Go unit",
+    "suite gets from aliasUnderTest(). Delete them when the window closes."
   ],
-  "defaults": ["mysql_connections", "container_cpu"],
+  "defaults": [
+    "mysql_connections",
+    "container_cpu"
+  ],
   "cases": [
     {
       "name": "flat key on the list is settable",
-      "declared": ["oracle_wait_time_rate"],
+      "declared": [
+        "oracle_wait_time_rate"
+      ],
       "key": "oracle_wait_time_rate",
       "verdict": "accept",
       "why": "the point of the third slot"
     },
     {
       "name": "flat key absent from both sets stays unknown",
-      "declared": ["oracle_wait_time_rate"],
+      "declared": [
+        "oracle_wait_time_rate"
+      ],
       "key": "postgres_nonsense",
       "verdict": "refuse",
       "why": "the list is a membership set, not an amnesty"
     },
     {
       "name": "prefix lookalike of a declared key stays unknown",
-      "declared": ["oracle_wait_time_rate"],
+      "declared": [
+        "oracle_wait_time_rate"
+      ],
       "key": "oracle_wait_time_rate_extra",
       "verdict": "refuse",
       "why": "never prefix-match; the alias table forbids it for the same reason"
     },
     {
       "name": "key in BOTH defaults and the list",
-      "declared": ["mysql_connections"],
+      "declared": [
+        "mysql_connections"
+      ],
       "key": "mysql_connections",
       "verdict": "accept",
       "why": "nothing enforces disjointness; a valued key stays valued"
     },
     {
       "name": "_critical whose base is declared",
-      "declared": ["oracle_wait_time_rate"],
+      "declared": [
+        "oracle_wait_time_rate"
+      ],
       "key": "oracle_wait_time_rate_critical",
       "verdict": "refuse",
       "why": "resolveCriticalRows keys off defaults[base]; the row would be dropped"
@@ -68,21 +90,28 @@
     },
     {
       "name": "_critical key named ON the list",
-      "declared": ["jvm_memory_critical"],
+      "declared": [
+        "jvm_memory_critical"
+      ],
       "key": "jvm_memory_critical",
       "verdict": "refuse",
       "why": "16 of the registry's 25 optional_overrides keys are this shape; Go's cascade never reaches membership for it"
     },
     {
       "name": "_critical key AND its base both on the list",
-      "declared": ["jvm_memory", "jvm_memory_critical"],
+      "declared": [
+        "jvm_memory",
+        "jvm_memory_critical"
+      ],
       "key": "jvm_memory_critical",
       "verdict": "refuse",
       "why": "still no base VALUE to emit against"
     },
     {
       "name": "dimensional on a declared base",
-      "declared": ["oracle_wait_time_rate"],
+      "declared": [
+        "oracle_wait_time_rate"
+      ],
       "key": "oracle_wait_time_rate{db=\"ORCL\"}",
       "verdict": "accept",
       "why": "resolveDimensionalRows is tenant-only and never consults defaults, so it emits"
@@ -96,14 +125,18 @@
     },
     {
       "name": "dimensional spelling named ON the list",
-      "declared": ["oracle_wait_time_rate{db=\"ORCL\"}"],
+      "declared": [
+        "oracle_wait_time_rate{db=\"ORCL\"}"
+      ],
       "key": "oracle_wait_time_rate{db=\"ORCL\"}",
       "verdict": "refuse",
       "why": "both sides look up the parsed BASE, never the full dimensional string"
     },
     {
       "name": "bad version label on a DECLARED base is still validated",
-      "declared": ["oracle_wait_time_rate"],
+      "declared": [
+        "oracle_wait_time_rate"
+      ],
       "key": "oracle_wait_time_rate{version=\"bad!!\"}",
       "verdict": "refuse",
       "why": "the base must be declared-and-not-valued so this actually exercises the new dimensional branch; ADR-024 OQ-6 validation has to run there too, or the branch becomes a way to smuggle version labels past the guard"
@@ -117,70 +150,96 @@
     },
     {
       "name": "reserved key is unaffected by the list",
-      "declared": ["oracle_wait_time_rate"],
+      "declared": [
+        "oracle_wait_time_rate"
+      ],
       "key": "_silent_mode",
       "verdict": "accept",
       "why": "reserved keys short-circuit before membership on both sides"
     },
     {
       "name": "reserved prefix is unaffected by the list",
-      "declared": ["oracle_wait_time_rate"],
+      "declared": [
+        "oracle_wait_time_rate"
+      ],
       "key": "_state_maintenance",
       "verdict": "accept",
       "why": "as above"
     },
     {
       "name": "typo'd reserved key is not rescued by the list",
-      "declared": ["oracle_wait_time_rate"],
+      "declared": [
+        "oracle_wait_time_rate"
+      ],
       "key": "_silence_mode",
       "verdict": "refuse",
       "why": "the typo signal must survive"
     },
     {
       "name": "list carries the RETIRED spelling, tenant uses the canonical one",
-      "declared": ["mysql_cpu"],
+      "declared": [
+        "mysql_cpu"
+      ],
       "key": "mysql_threads_running",
       "verdict": "accept",
-      "why": "the list must be canonicalized by the same table, or it declares a permanently un-settable key"
+      "why": "the list must be canonicalized by the same table, or it declares a permanently un-settable key",
+      "requires_alias": true
     },
     {
       "name": "list carries the canonical spelling, tenant uses the retired one",
-      "declared": ["mysql_threads_running"],
+      "declared": [
+        "mysql_threads_running"
+      ],
       "key": "mysql_cpu",
       "verdict": "accept",
-      "why": "the rename transition window applies to declared keys too (advisory NOTICE only)"
+      "why": "the rename transition window applies to declared keys too (advisory NOTICE only)",
+      "requires_alias": true
     },
     {
       "name": "retired _critical spelling on the list, canonical _critical written",
-      "declared": ["mysql_cpu_critical"],
+      "declared": [
+        "mysql_cpu_critical"
+      ],
       "key": "mysql_threads_running_critical",
       "verdict": "refuse",
-      "why": "canonicalizes to the _critical shape, which is refused regardless of spelling"
+      "why": "canonicalizes to the _critical shape, which is refused regardless of spelling",
+      "requires_alias": true
     },
     {
       "name": "duplicate list entries collapse",
-      "declared": ["oracle_wait_time_rate", "oracle_wait_time_rate"],
+      "declared": [
+        "oracle_wait_time_rate",
+        "oracle_wait_time_rate"
+      ],
       "key": "oracle_wait_time_rate",
       "verdict": "accept",
       "why": "membership is a set on both sides"
     },
     {
       "name": "both spellings of one threshold on the list collapse",
-      "declared": ["mysql_cpu", "mysql_threads_running"],
+      "declared": [
+        "mysql_cpu",
+        "mysql_threads_running"
+      ],
       "key": "mysql_threads_running",
       "verdict": "accept",
-      "why": "canonicalization makes them one member"
+      "why": "canonicalization makes them one member",
+      "requires_alias": true
     },
     {
       "name": "whitespace-padded list entry does NOT match",
-      "declared": [" oracle_wait_time_rate "],
+      "declared": [
+        " oracle_wait_time_rate "
+      ],
       "key": "oracle_wait_time_rate",
       "verdict": "refuse",
       "why": "neither side strips. Recorded as a KNOWN SHARED GAP, not an endorsement: silently trimming would normalise a malformed platform file the way the rejected lowercase-coercion would have. The fix belongs in list-content validation, and this row exists so that fix has to update one table instead of hunting two suites."
     },
     {
       "name": "empty list entry matches nothing",
-      "declared": [""],
+      "declared": [
+        ""
+      ],
       "key": "oracle_wait_time_rate",
       "verdict": "refuse",
       "why": "same shared gap as the row above"

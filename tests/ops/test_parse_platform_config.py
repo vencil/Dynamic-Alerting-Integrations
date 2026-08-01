@@ -85,28 +85,39 @@ class TestParsePlatformConfig:
         _parse_platform_config(data, "db-a.yaml", result)
         assert result["optional_override_keys"] == set()
 
-    def test_optional_overrides_non_list_ignored(self):
-        """非 list（含 dict / 字串）不得被當成成員集合。"""
+    # ⚠️ 這三格的差別是「吵 vs 安靜」，不只是結果集合：非 list 要吵、null 要
+    # 安靜、非字串項目要吵。parser 的註解說明了為何那聲吵是承重的——同一份
+    # bytes 在 Go 側會讓整個檔案 unmarshal 失敗、連 defaults 一起消失，所以
+    # Python 這邊安靜丟掉就會讓 CI 對「會清空寫入平面的設定」保持綠。只斷言
+    # 集合等於沒把那個區別釘住。
+    def test_optional_overrides_non_list_ignored(self, capsys):
+        """非 list（含 dict / 字串）不得被當成成員集合，且必須吵。"""
         for bad in ("not-a-list", {"a": 1}, 42):
             result = _empty_result()
             _parse_platform_config(
                 {"optional_overrides": bad}, "_defaults.yaml", result)
             assert result["optional_override_keys"] == set(), bad
+            assert "WARN" in capsys.readouterr().err, bad
 
-    def test_optional_overrides_null_is_empty_not_error(self):
-        """`optional_overrides:`（null）是合法的空宣告，schema 也允許。"""
+    def test_optional_overrides_null_is_empty_not_error(self, capsys):
+        """`optional_overrides:`（null）是合法的空宣告，schema 也允許——不得吵。"""
         result = _empty_result()
         _parse_platform_config(
             {"optional_overrides": None}, "_defaults.yaml", result)
         assert result["optional_override_keys"] == set()
+        assert "WARN" not in capsys.readouterr().err
 
-    def test_optional_overrides_non_string_entries_dropped(self):
-        """混入非字串項目時只收字串，不整包丟棄也不 raise。"""
+    def test_optional_overrides_non_string_entries_dropped(self, capsys):
+        """混入非字串項目時只收字串，不整包丟棄也不 raise，但要吵。"""
         result = _empty_result()
         _parse_platform_config(
             {"optional_overrides": ["ok_key", 7, None, {"k": "v"}]},
             "_defaults.yaml", result)
         assert result["optional_override_keys"] == {"ok_key"}
+        err = capsys.readouterr().err
+        assert "WARN" in err
+        # 吵的內容要說出「Go 會整檔失敗」，否則讀 log 的人不知道嚴重度
+        assert "whole file" in err
 
     def test_optional_overrides_unions_across_platform_files(self):
         """多個 `_` 前綴檔的宣告取聯集（與 defaults_keys 同語意）。"""
