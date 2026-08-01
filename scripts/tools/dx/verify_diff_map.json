@@ -14,6 +14,9 @@
   "scripts/ops/file_race_report.py": [
    "tests/ops/test_nightly_race_issue_policy.py"
   ],
+  "scripts/ops/guard_defaults_scopes.py": [
+   "tests/ops/test_guard_defaults_scopes.py"
+  ],
   "scripts/ops/parse_go_test_json.py": [
    "tests/ops/test_parse_go_test_json.py"
   ],
@@ -679,7 +682,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "a27a2ded491e7defdd2f585f6b61840424069bcc629adf81e52817ce5c00db42",
+ "source_digest": "aa6553ec8eb1a135cf8415c337db7acb1aab96c8199ea855725f1c53c563ce6f",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -881,6 +884,7 @@
   "tests/ops/test_grafana_import.py",
   "tests/ops/test_grar_facade_reexports.py",
   "tests/ops/test_grar_strict_hardening.py",
+  "tests/ops/test_guard_defaults_scopes.py",
   "tests/ops/test_init_project.py",
   "tests/ops/test_inject_default_key.py",
   "tests/ops/test_inject_metadata_join.py",
@@ -1006,6 +1010,9 @@
    "tests/lint/test_check_pint.py",
    "tests/ops/test_portal_path_filter_coverage.py",
    "tests/preview/test_promtool_pin_parity.py"
+  ],
+  ".github/workflows/guard-defaults-impact.yml": [
+   "tests/ops/test_guard_defaults_scopes.py"
   ],
   ".github/workflows/nightly-image-scan.yaml": [
    "tests/ops/test_nightly_scan_matrix_drift.py"
@@ -1141,7 +1148,8 @@
    "tests/shared/test_reserved_key_py_go_parity.py"
   ],
   "components/threshold-exporter/config/conf.d": [
-   "tests/dx/test_compile_custom_alerts.py"
+   "tests/dx/test_compile_custom_alerts.py",
+   "tests/ops/test_guard_defaults_scopes.py"
   ],
   "components/threshold-exporter/config/conf.d/_defaults.yaml": [
    "tests/lint/test_check_threshold_unit_sanity.py",
@@ -1548,6 +1556,9 @@
   "rule-packs/recipes": [
    "tests/dx/test_recipe_lifecycle.py"
   ],
+  "rule-packs/recipes/examples/conf.d": [
+   "tests/ops/test_guard_defaults_scopes.py"
+  ],
   "rule-packs/rule-pack-custom-alerts.yaml": [
    "tests/ops/test_lint_custom_rules.py"
   ],
@@ -1607,6 +1618,9 @@
   ],
   "scripts/ops/fuse_plumbing_commit.py": [
    "tests/dx/test_fuse_plumbing_commit.py"
+  ],
+  "scripts/ops/guard_defaults_scopes.py": [
+   "tests/ops/test_guard_defaults_scopes.py"
   ],
   "scripts/ops/inject_default_key.py": [
    "tests/ops/test_inject_default_key.py"
@@ -2169,7 +2183,11 @@
    "tests/lint/test_check_cross_ns_url_consistency.py"
   ],
   "try-local/seed/conf.d": [
+   "tests/ops/test_guard_defaults_scopes.py",
    "tests/shared/test_dry_run_no_write.py"
+  ],
+  "try-local/seed/conf.d/_defaults.yaml": [
+   "tests/ops/test_guard_defaults_scopes.py"
   ],
   "try-local/seed/conf.d/_rbac.yaml": [
    "tests/lint/test_check_admin_config_schema.py"

@@ -52,6 +52,13 @@ jobs:
     steps:
       - name: Checkout PR branch
         uses: actions/checkout@v6
+        with:
+          # The scope step diffs against the PR base. A shallow clone (the
+          # default) has no `origin/<base>` ref, so that diff used to fail
+          # with `fatal: bad revision` — and because the failure was swallowed
+          # by `|| true`, the guard silently validated a directory the PR had
+          # never touched and posted a green sticky comment (#1219 / TRK-345).
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -104,46 +111,93 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           CONF_D: ${{ steps.detect.outputs.conf_d }}
         run: |
-          # Find every changed _defaults.yaml relative to the PR base.
-          # If there's exactly one, narrow scope to its directory.
-          # Otherwise fall back to the whole conf.d/ root (validating
-          # multiple cascading edits in one pass uses per-tenant
-          # defaults resolution; the redundant-override check stays
-          # accurate via NewDefaultsByTenant).
-          mapfile -t CHANGED < <(git diff --name-only "origin/${BASE_REF}"...HEAD -- '**/_defaults.yaml' || true)
-          if [ "${#CHANGED[@]}" -eq 1 ]; then
-            DIR=$(dirname "${CHANGED[0]}")
-            echo "scope=$DIR" >> "$GITHUB_OUTPUT"
-            echo "Narrow scope: $DIR (single _defaults.yaml change)"
-          else
-            echo "scope=${CONF_D}" >> "$GITHUB_OUTPUT"
-            echo "Whole-tree scope: ${CONF_D} (${#CHANGED[@]} _defaults.yaml changed)"
+          set -euo pipefail
+          # Fail loud when the base ref is missing. This used to be `|| true`,
+          # which turned "I cannot compute the scope" into "nothing changed"
+          # and sent the guard off to validate an unrelated directory (#1219).
+          if ! git rev-parse --verify --quiet "origin/${BASE_REF}^{commit}" >/dev/null; then
+            echo "::error::base ref origin/${BASE_REF} not found — the checkout step must use fetch-depth: 0"
+            exit 1
           fi
+          git diff --name-only "origin/${BASE_REF}...HEAD" -- '**/_defaults.yaml' \
+            > "$RUNNER_TEMP/changed-defaults.txt"
+          echo "Changed _defaults.yaml:"; cat "$RUNNER_TEMP/changed-defaults.txt"
+
+          # This repo's _defaults.yaml files live in SEVERAL independent conf.d
+          # trees (shipped config, try-local seed, recipe examples, e2e-bench and
+          # golden fixtures) — only one of them sits under the auto-detected root.
+          # So the scope is not one directory: it is one (config-dir, scope) pair
+          # per tree that the PR actually touched. Resolution lives in a tested
+          # helper rather than inline bash, because this is the step that failed.
+          python3 scripts/ops/guard_defaults_scopes.py - \
+            < "$RUNNER_TEMP/changed-defaults.txt" > "$RUNNER_TEMP/guard-targets.tsv"
+          echo "Resolved targets:"; cat "$RUNNER_TEMP/guard-targets.tsv"
 
       - name: Run da-guard
         if: steps.detect.outputs.conf_d != ''
         id: guard
         env:
           CONF_D: ${{ steps.detect.outputs.conf_d }}
-          INNER_SCOPE: ${{ steps.scope.outputs.scope }}
+          TARGETS: ${{ runner.temp }}/guard-targets.tsv
         run: |
-          set +e
-          SCOPE="${INNER_SCOPE}"
-          if [ -z "$SCOPE" ]; then
-            SCOPE="${CONF_D}"
+          REPORT="$RUNNER_TEMP/guard-report.md"
+          : > "$REPORT"
+          WORST=0
+
+          run_one() {
+            local config_dir="$1" scope="$2" part
+            part="$RUNNER_TEMP/part.md"
+            set +e
+            "$RUNNER_TEMP/da-guard" \
+                --config-dir "$config_dir" \
+                --scope "$scope" \
+                --cardinality-limit 500 \
+                --format md \
+                --output "$part"
+            local rc=$?
+            set -e
+            echo "### \`$config_dir\` (scope: \`$scope\`) — exit $rc" >> "$REPORT"
+            echo >> "$REPORT"
+            cat "$part" >> "$REPORT" 2>/dev/null || echo "_(no report produced)_" >> "$REPORT"
+            echo >> "$REPORT"
+            # `if` rather than `a && b` — under the default `bash -e` a false
+            # test as a standalone statement would abort the step.
+            if [ "$rc" -gt "$WORST" ]; then WORST="$rc"; fi
+            return 0
+          }
+
+          if [ -s "$TARGETS" ]; then
+            # One da-guard run per conf.d tree the PR actually touched.
+            while IFS=$'\t' read -r kind a b; do
+              case "$kind" in
+                target)    run_one "$a" "$b" ;;
+                # ⛔ Never silent: a _defaults.yaml outside every conf.d tree is
+                # reported as NOT CHECKED with the reason, because a green
+                # comment that quietly skipped the changed file is exactly the
+                # failure this workflow had (#1219).
+                unmanaged) echo "### \`$a\` — NOT CHECKED" >> "$REPORT"
+                           echo >> "$REPORT"
+                           echo "此檔不在任何 \`conf.d\` 樹底下，da-guard 無從解析它的繼承鏈。" >> "$REPORT"
+                           echo >> "$REPORT"
+                           echo "::warning::${a} is outside every conf.d tree — not validated" ;;
+              esac
+            done < "$TARGETS"
+          else
+            # Zero _defaults.yaml resolved. This is NOT necessarily a broken
+            # scope computation: the `paths:` filter above has six entries, and
+            # five of them are the guard's own source / this workflow. A PR that
+            # touches only those legitimately changes no _defaults.yaml — and
+            # validating the whole detected tree is exactly the right smoke test
+            # for "does the guard still work after this change".
+            # (push / workflow_dispatch land here too: no PR diff to scope against.)
+            echo "No _defaults.yaml in this diff — running whole-tree over ${CONF_D}"
+            run_one "${CONF_D}" "${CONF_D}"
           fi
-          "$RUNNER_TEMP/da-guard" \
-              --config-dir "${CONF_D}" \
-              --scope "$SCOPE" \
-              --cardinality-limit 500 \
-              --format md \
-              --output "$RUNNER_TEMP/guard-report.md"
-          GUARD_EXIT=$?
-          echo "exit=$GUARD_EXIT" >> "$GITHUB_OUTPUT"
-          # Always continue so the comment-posting step runs even when
-          # the guard returned 1 (errors). The "Fail if guard found
-          # errors" step at the end converts the captured exit code
-          # into a workflow failure.
+
+          echo "exit=$WORST" >> "$GITHUB_OUTPUT"
+          # Always continue so the comment-posting step runs even when the
+          # guard returned 1 (errors). The "Fail if guard found errors" step
+          # at the end converts the captured exit code into a workflow failure.
           exit 0
 
       - name: Post sticky PR comment
