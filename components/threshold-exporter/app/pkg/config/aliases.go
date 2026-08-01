@@ -139,6 +139,39 @@ func canonicalizeDefaults(defaults map[string]float64) map[string]float64 {
 	return out
 }
 
+// canonicalizeOptionalOverrides returns the platform's declared-without-value
+// key list as a canonical membership SET — the other half of the membership
+// universe ValidateTenantKeys checks against, mirroring canonicalizeDefaults.
+//
+// ⛔ Canonicalizing is not a nicety. ValidateTenantKeys compares the tenant's
+// CANONICALIZED key against canonicalizeDefaults' output, so a list entry left
+// in a deprecated spelling (`mysql_cpu`) would never match the canonical tenant
+// key (`mysql_threads_running`): the platform would be declaring a key that
+// stays permanently un-settable, and nothing would say so — the exact
+// silent-membership-drift #1189 is about, reappearing inside its own fix.
+//
+// ⚠️ Scope, honestly: this closes the DEPRECATED-SPELLING cause of that, and
+// only that. An entry that is a typo, carries stray whitespace (nothing strips
+// it), names a key no rule pack consumes, or is written in a `_critical` /
+// dimensional spelling the cascade never looks up whole, is still a silently
+// inert member. Nothing validates the list's CONTENTS on either side yet — the
+// shared verdict table records those rows as known gaps rather than pretending
+// they are covered (tests/shared/optional_overrides_membership_matrix.json).
+//
+// A set, not a map view: membership is the entire payload, so both spellings of
+// one threshold collapse onto the same canonical entry for free (the
+// canonical-wins dedup canonicalizeDefaults spells out is structural here).
+// No fast path either — the list is short (registry tier == optional_overrides
+// is 25 keys today) and this runs on the validation path, never per scrape.
+func canonicalizeOptionalOverrides(keys []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		canon, _ := canonicalKeyFor(k)
+		out[canon] = struct{}{}
+	}
+	return out
+}
+
 // canonicalizeOverrides returns a canonical VIEW of one tenant's overrides map
 // plus the number of deprecated spellings found (drives the
 // da_config_deprecated_keys gauge). Same fast-path + canonical-wins dedup

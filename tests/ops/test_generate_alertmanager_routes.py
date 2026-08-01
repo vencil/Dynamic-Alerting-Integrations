@@ -622,6 +622,192 @@ class TestValidateTenantKeys:
 
 
 # ============================================================
+# #1189 / TRK-337 optional_overrides：平台認得但不給值的第三格
+# （Python ↔ Go membership 對稱；Go 側見
+#  components/threshold-exporter/app/pkg/config/optional_overrides_membership_test.go）
+# ============================================================
+class TestOptionalOverridesMembership:
+    """宣告但無值的 key：租戶設得進去，平台不主張數值。
+
+    重點不在「多接受一組 key」，而在**哪幾格刻意不 union**——那幾格
+    Go 也拒絕，兩側必須逐格一致，否則 CI 說可以、寫入閘門說不行
+    （或反之），那正是 #1189 的病本身。
+    """
+
+    _DEFAULTS = {"mysql_connections"}
+
+    def test_declared_flat_key_accepted(self):
+        """宣告過的平鍵可被租戶設定——本次改動的核心。"""
+        warnings = validate_tenant_keys(
+            "db-a", {"oracle_wait_time_rate"}, self._DEFAULTS,
+            {"oracle_wait_time_rate"})
+        assert warnings == []
+
+    def test_declared_list_under_retired_spelling_still_matches(self):
+        """⭐ 清單本身要先正規化。
+
+        比對用的是**正規化後**的租戶 key，所以清單裡若留著舊拼法
+        （mysql_cpu），就永遠配不上 mysql_threads_running：平台宣告了一個
+        永遠啟用不了的 key，而且沒有任何訊號——正是本次要消滅的靜默漂移
+        在新機制上復發。用現存的活別名，不自造假別名。
+        """
+        warnings = validate_tenant_keys(
+            "db-a", {"mysql_threads_running"}, self._DEFAULTS, {"mysql_cpu"})
+        assert warnings == []
+
+    def test_tenant_uses_retired_spelling_of_declared_key(self):
+        """租戶用舊拼法設定宣告 key → 只有 NOTICE，不阻擋。"""
+        warnings = validate_tenant_keys(
+            "db-a", {"mysql_cpu"}, self._DEFAULTS, {"mysql_threads_running"})
+        assert all(w.strip().startswith("NOTICE:") for w in warnings), warnings
+        assert any("mysql_threads_running" in w for w in warnings)
+
+    def test_declared_dimensional_base_accepted(self):
+        """dimensional 這一格落地即生效：resolveDimensionalRows 從不查
+        defaults，租戶寫下去就會 emit，接受它沒有承諾任何 resolver 給不出
+        的東西。"""
+        warnings = validate_tenant_keys(
+            "db-a", {'oracle_wait_time_rate{db="ORCL"}'}, self._DEFAULTS,
+            {"oracle_wait_time_rate"})
+        assert warnings == []
+
+    def test_critical_twin_of_declared_base_still_warns(self):
+        """⛔ 刻意不 union 的那一格（Python ↔ Go 一致）。
+
+        Go 的 resolveCriticalRows 認的是 defaults[base]，base 只被宣告時
+        直接丟棄該 row。這裡若放行，等於 CI 祝福了一個 exporter 會默默扔掉
+        的 key——寫入成功、什麼都沒 emit、訊號只在 exporter 的 log 裡。
+        """
+        warnings = validate_tenant_keys(
+            "db-a", {"oracle_wait_time_rate_critical"}, self._DEFAULTS,
+            {"oracle_wait_time_rate"})
+        assert any("oracle_wait_time_rate_critical" in w for w in warnings)
+
+    def test_critical_key_named_on_the_list_is_still_refused(self):
+        """⛔ Py↔Go 對稱：清單裡直接列 `_critical` key 仍要警告。
+
+        Go 的 cascade 先走 `_critical` 分支、兩條路都 continue，所以那種 key
+        根本到不了 membership 放寬，且 resolveCriticalRows 在 base 無值時會丟
+        掉整個 row。這裡若放行，CI 綠而 tenant-api 寫入閘門拒絕——正是
+        #1189 的分歧，而且是 registry 裡的多數形狀（25 個中 16 個是
+        `_critical`）。
+        """
+        warnings = validate_tenant_keys(
+            "db-a", {"jvm_memory_critical"}, self._DEFAULTS,
+            {"jvm_memory_critical"})
+        assert any("jvm_memory_critical" in w for w in warnings), warnings
+
+    def test_critical_key_on_the_list_with_valued_base_is_silent(self):
+        """對照組：base 有值時本來就該通過，別把上一條修成一律報警。"""
+        warnings = validate_tenant_keys(
+            "db-a", {"mysql_connections_critical"}, {"mysql_connections"},
+            {"mysql_connections_critical"})
+        assert warnings == []
+
+    def test_declared_list_is_not_a_blanket_amnesty(self):
+        """宣告清單是成員集合，不是大赦：前綴相似與無關 key 照樣警告。"""
+        for key in ("oracle_wait_time_rate_extra", "postgres_nonsense"):
+            warnings = validate_tenant_keys(
+                "db-a", {key}, self._DEFAULTS, {"oracle_wait_time_rate"})
+            assert any("not in defaults" in w for w in warnings), (key, warnings)
+            assert any(key in w for w in warnings), (key, warnings)
+
+    def test_absent_argument_preserves_rejection(self):
+        """省略 / None / 空集合三者行為一致，且維持既有拒絕。"""
+        results = [
+            validate_tenant_keys("db-a", {"oracle_wait_time_rate"}, self._DEFAULTS),
+            validate_tenant_keys("db-a", {"oracle_wait_time_rate"}, self._DEFAULTS, None),
+            validate_tenant_keys("db-a", {"oracle_wait_time_rate"}, self._DEFAULTS, set()),
+        ]
+        assert all(r == results[0] for r in results), results
+        assert any("not in defaults" in w for w in results[0])
+
+    def test_optional_overrides_is_threaded_from_the_platform_file(self, config_dir):
+        """⭐ 有參數 ≠ 有人傳。
+
+        membership 放寬只在 load_tenant_configs 真的把解析出來的清單交給
+        validator 時才存在；預設值 None 讓「解析了但沒接上」可以無聲通過，
+        所以端到端釘住這條線。
+        """
+        write_yaml(config_dir, "_defaults.yaml", """
+defaults:
+  mysql_connections: 70
+optional_overrides:
+  - oracle_wait_time_rate
+tenants:
+  db-a:
+    oracle_wait_time_rate: "5"
+""")
+        _, _, schema_warnings, _er, _mc = load_tenant_configs(config_dir)
+        assert schema_warnings == []
+
+    def test_optional_overrides_in_a_tenant_file_is_ignored(self, config_dir):
+        """⛔ 安全邊界，鏡射 Go 的 applyBoundaryRules。
+
+        若租戶能在自己的檔案裡列 key，就等於自我授權繞過這道檢查本身
+        （tenant-api 不是唯一寫入者，GitOps 可以直推）。清單只從 `_` 前綴
+        的平台檔認得。
+        """
+        write_yaml(config_dir, "_defaults.yaml", "defaults:\n  mysql_connections: 70\n")
+        write_yaml(config_dir, "db-a.yaml", """
+optional_overrides:
+  - anything_i_want
+tenants:
+  db-a:
+    anything_i_want: "5"
+""")
+        _, _, schema_warnings, _er, _mc = load_tenant_configs(config_dir)
+        assert any("anything_i_want" in w and "not in defaults" in w
+                   for w in schema_warnings), schema_warnings
+
+
+class TestMembershipParityMatrix:
+    """Python 半邊的 Go↔Python membership parity pin（#1189 / TRK-337）。
+
+    兩側是同一條規則的獨立手抄、被不同 gate 消費，所以**誰也不斷言誰**：
+    兩邊各自對 `tests/shared/optional_overrides_membership_matrix.json`
+    斷言，讓一致性變成**傳遞性**的而非用文字宣稱的。Go 半邊在
+    `components/threshold-exporter/app/pkg/config/optional_overrides_parity_test.go`。
+
+    真正的價值在複合形狀：兩邊 cascade 的分支順序不同（Go 先驗
+    `_critical` / dimensional 再驗 membership，Python 相反），所以任何
+    「既在清單上又是複合形狀」的 key 都是一側可以無聲遮蔽另一側的地方。
+    這張表第一次畫出來時就抓到三個這樣的分歧。
+    """
+
+    @staticmethod
+    def _matrix():
+        import json
+        from pathlib import Path
+        p = (Path(__file__).resolve().parents[2]
+             / "tests" / "shared" / "optional_overrides_membership_matrix.json")
+        return json.loads(p.read_text(encoding="utf-8"))
+
+    def test_matrix_is_not_truncated(self):
+        """空集合靜默：矩陣縮到零仍會永遠綠，正是本 repo 一再抓到的形狀。"""
+        cases = self._matrix()["cases"]
+        assert len(cases) >= 20, f"matrix looks truncated: {len(cases)}"
+        assert {c["verdict"] for c in cases} <= {"accept", "refuse"}
+
+    def test_python_side_matches_the_matrix(self):
+        m = self._matrix()
+        defaults = set(m["defaults"])
+        failures = []
+        for c in m["cases"]:
+            warnings = validate_tenant_keys(
+                "t-1", {c["key"]}, set(defaults), set(c["declared"]))
+            # accept ＝ 沒有阻擋性訊息；NOTICE 兩側皆為告知性，不算拒絕
+            accepted = not any("WARN:" in w for w in warnings)
+            want = c["verdict"] == "accept"
+            if accepted != want:
+                failures.append(
+                    f"{c['name']}: key={c['key']!r} declared={c['declared']!r} "
+                    f"want={c['verdict']} got={'accept' if accepted else 'refuse'} "
+                    f"why={c['why']} warnings={warnings}")
+        assert not failures, "\n".join(failures)
+
+
+# ============================================================
 # #1231 deprecated key aliases（Python ↔ Go alias boundary 對稱）
 # ============================================================
 class TestDeprecatedKeyAliases:

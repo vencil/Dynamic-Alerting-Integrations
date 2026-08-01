@@ -682,7 +682,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "b01004d44491c62b2a6f4af0e7e78de4b10a3046a22d3d0230320b47ee5518e0",
+ "source_digest": "24749bb1534d90e9fdde270f44c850e83a09a65d5b30a1db9eef2886df2b5a63",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -957,6 +957,7 @@
   "tests/shared/test_mutation_catalog.py",
   "tests/shared/test_mutation_guards.py",
   "tests/shared/test_nginx_proxy.py",
+  "tests/shared/test_optional_overrides_tripwire.py",
   "tests/shared/test_pipeline_integration.py",
   "tests/shared/test_probe_health.py",
   "tests/shared/test_projection_gate_exposer.py",
@@ -1149,6 +1150,15 @@
   ],
   "components/threshold-exporter/app/pkg/config/aliases_registry_test.go": [
    "tests/lint/test_check_threshold_registry.py"
+  ],
+  "components/threshold-exporter/app/pkg/config/optional_overrides_membership_test.go": [
+   "tests/ops/test_generate_alertmanager_routes.py"
+  ],
+  "components/threshold-exporter/app/pkg/config/optional_overrides_parity_test.go": [
+   "tests/ops/test_generate_alertmanager_routes.py"
+  ],
+  "components/threshold-exporter/app/pkg/config/resolve.go": [
+   "tests/shared/test_optional_overrides_tripwire.py"
   ],
   "components/threshold-exporter/app/pkg/config/types.go": [
    "tests/shared/test_reserved_key_py_go_parity.py"
@@ -2128,6 +2138,9 @@
    "tests/ops/test_nightly_scan_matrix_drift.py",
    "tests/shared/test_mutation_catalog.py",
    "tests/shared/test_property_tools.py"
+  ],
+  "tests/shared/optional_overrides_membership_matrix.json": [
+   "tests/ops/test_generate_alertmanager_routes.py"
   ],
   "tests/shared/property-coverage.yaml": [
    "tests/lint/test_check_property_coverage.py"
