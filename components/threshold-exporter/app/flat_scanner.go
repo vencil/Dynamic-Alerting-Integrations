@@ -189,6 +189,16 @@ func applyBoundaryRules(name string, partial *ThresholdConfig, logger *log.Logge
 			logger.Printf("WARN: state_filters found in %s — should only be in _defaults.yaml, ignoring", name)
 			partial.StateFilters = nil
 		}
+		// ⛔ SECURITY: same boundary as Defaults, and for a sharper reason. A
+		// tenant file naming its own keys here would be self-authorising: the
+		// write gate refuses keys outside the platform surface, so a tenant
+		// that could extend that surface from its own file would walk straight
+		// past the refusal via a direct GitOps push (tenant-api is not the only
+		// writer). Strip and say so.
+		if len(partial.OptionalOverrides) > 0 {
+			logger.Printf("WARN: optional_overrides found in %s — platform-scoped, should only be in _defaults.yaml, ignoring", name)
+			partial.OptionalOverrides = nil
+		}
 		if len(partial.Defaults) > 0 {
 			logger.Printf("WARN: defaults found in %s — should only be in _defaults.yaml, ignoring", name)
 			partial.Defaults = nil
@@ -250,6 +260,23 @@ func mergePartialInto(merged *ThresholdConfig, partial ThresholdConfig) {
 	}
 	for k, v := range partial.StateFilters {
 		merged.StateFilters[k] = v
+	}
+	// Union, not replace: like Defaults above, several `_defaults.yaml` files
+	// across the directory tree each contribute part of the platform surface.
+	// De-duplicated because the same key legitimately appears at more than one
+	// level of the hierarchy.
+	if len(partial.OptionalOverrides) > 0 {
+		seen := make(map[string]struct{}, len(merged.OptionalOverrides))
+		for _, k := range merged.OptionalOverrides {
+			seen[k] = struct{}{}
+		}
+		for _, k := range partial.OptionalOverrides {
+			if _, dup := seen[k]; dup {
+				continue
+			}
+			seen[k] = struct{}{}
+			merged.OptionalOverrides = append(merged.OptionalOverrides, k)
+		}
 	}
 	for profileName, profileValues := range partial.Profiles {
 		if merged.Profiles[profileName] == nil {
