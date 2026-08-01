@@ -151,6 +151,42 @@ def test_service_account_subject_stays_in_the_release_namespace() -> None:
     )
 
 
+def test_data_move_guard_is_wired_and_defaults_to_refusing() -> None:
+    """The #1313 data-move guard: moving the store strands the existing
+    revocation set, so the chart refuses to render that move while the old
+    object still holds data.
+
+    ⚠️ COVERAGE HONESTY — the guard's actual firing CANNOT be tested here.
+    Helm's ``lookup`` returns empty under ``helm template`` AND under
+    ``--dry-run``, by design, so it only evaluates during a real
+    ``helm install/upgrade``. Verified out-of-band on a live kind cluster
+    across four cases: (1) no cluster → renders, (2) real install with an empty
+    old namespace → not blocked, (3) old namespace holding a store.json →
+    refused, naming the byte count and the escape hatch, (4) with the flag →
+    passes.
+
+    What IS mechanically pinned here is the part that would silently disarm it:
+    the escape hatch defaulting to off, and the template still performing the
+    lookup at all. A guard whose bypass ships as `true`, or whose lookup was
+    dropped in a refactor, renders identically to no guard.
+    """
+    values = yaml.safe_load((_CHART / "values.yaml").read_text(encoding="utf-8"))
+    store = values["federation"]["store"]
+    assert "acknowledgeDataMove" in store, (
+        "the data-move escape hatch is gone — the guard either no longer exists "
+        "or can no longer be bypassed deliberately"
+    )
+    assert store["acknowledgeDataMove"] is False, (
+        f"escape hatch ships as {store['acknowledgeDataMove']!r}; shipping it on "
+        "is indistinguishable from having no guard"
+    )
+    tmpl = (_CHART / "templates/configmap-federation-store.yaml").read_text(encoding="utf-8")
+    assert "lookup" in tmpl and "fail" in tmpl, (
+        "the store template no longer looks up the old ConfigMap / no longer "
+        "fails — the guard is inert while values.yaml still advertises it"
+    )
+
+
 @_needs_helm
 def test_role_moves_rather_than_being_duplicated() -> None:
     """Exactly one Role/RoleBinding pair, in the store's namespace. A copy left

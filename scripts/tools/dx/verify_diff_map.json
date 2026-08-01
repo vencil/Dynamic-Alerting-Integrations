@@ -682,7 +682,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "bd268489eb8f4acd37283ad03ef2839be3a124a31907ba6251200225ac6a9962",
+ "source_digest": "cebbbb647be8d02ab2f297e2711ec3f49d28f8482d1f23e743268fe404d72e28",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1419,6 +1419,9 @@
    "tests/helm/test_oauth2_gitlab_profile.py",
    "tests/helm/test_single_writer_guard.py"
   ],
+  "helm/tenant-api/templates/configmap-federation-store.yaml": [
+   "tests/helm/test_federation_store_namespace_guard.py"
+  ],
   "helm/tenant-api/templates/configmap-rbac.yaml": [
    "tests/lint/test_check_admin_config_schema.py"
   ],
@@ -1435,6 +1438,7 @@
    "tests/helm/test_machine_identity_guard.py"
   ],
   "helm/tenant-api/values.yaml": [
+   "tests/helm/test_federation_store_namespace_guard.py",
    "tests/helm/test_human_socket_guard.py",
    "tests/helm/test_identity_claim_headers_guard.py",
    "tests/helm/test_machine_identity_guard.py",

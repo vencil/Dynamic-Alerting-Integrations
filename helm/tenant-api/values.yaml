@@ -295,7 +295,22 @@ federation:
     #   4. Only then delete the ConfigMap in the old namespace.
     # Doing step 2 before step 1 leaves a window in which revocations are not
     # enforced.
+    #
+    # A comment is not a control, so the chart also REFUSES to render that move
+    # while the old object still holds data — see acknowledgeDataMove below.
     namespace: ""
+    # Escape hatch for the data-move guard above. Leave false.
+    #
+    # When `namespace` points somewhere other than this release's namespace AND
+    # the ConfigMap in this release's namespace still holds a `store.json`, the
+    # render FAILS with the migration steps rather than silently stranding the
+    # revocation set. Set true only when that old store is genuinely disposable
+    # (e.g. a fresh install where the namespace was set wrongly once).
+    #
+    # The guard is a no-op under `helm template` (`lookup` has no cluster to
+    # query), so CI renders and chart tests are unaffected; it fires on a real
+    # `helm upgrade`, which is where the data is actually at risk.
+    acknowledgeDataMove: false
 
   # Federation token lifetime, passed as --federation-token-ttl (Go duration).
   # Matches the binary default; with Posture B server-side revocation an
