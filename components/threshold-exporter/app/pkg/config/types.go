@@ -212,13 +212,18 @@ type ThresholdConfig struct {
 	// field, not decoration" and the tier itself "documented-but-dormant until
 	// wired"; this is that wiring).
 	//
-	// Today the config model has exactly two expressible states: a key is in
+	// The config model used to have exactly two expressible states: a key is in
 	// Defaults (⇒ resolveBaseRows emits a platform value for EVERY tenant), or
 	// it is not (⇒ nothing is emitted AND ValidateTenantKeys rejects any tenant
 	// that tries to set it, which gitops/writer.go turns into a write refusal).
-	// There is no slot for "declared, tenant-enablable, platform asserts
-	// nothing" — so "dormant, waiting for the tenant" is not a state such a key
-	// can be in. It is dead, and the tenant cannot help themselves.
+	// There was no slot for "declared, tenant-enablable, platform asserts
+	// nothing", so "dormant, waiting for the tenant" was not a state such a key
+	// could be in: it was dead, and the tenant could not help themselves.
+	//
+	// This field IS that slot, and it is now wired end to end —
+	// ValidateTenantKeys admits such a key and resolveDeclaredRows emits a row
+	// for it, State 1 only: a row exists iff the tenant supplied a value, with
+	// no platform fallback because there is no platform value to fall back to.
 	//
 	// ⚠️ A list, not a map: membership is the entire payload. Putting these in
 	// Defaults with a null value would not work — `key:` decodes into

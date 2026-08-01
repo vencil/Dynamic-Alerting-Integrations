@@ -137,6 +137,9 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 	// (canonical wins), the explicit guard against emitting two rows with
 	// identical label sets, which would 500 the whole Prometheus Gather.
 	canonDefaults := canonicalizeDefaults(c.Defaults)
+	// #1189: the declared surface, hoisted for the same reason canonDefaults is
+	// — it is per-config, not per-tenant, and this is the per-scrape path.
+	canonOptional := canonicalizeOptionalOverrides(c.OptionalOverrides)
 
 	for tenant, overrides := range c.Tenants {
 		startIdx := len(result) // track where this tenant's metrics start
@@ -155,6 +158,11 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 		result = append(result, c.resolveBaseRows(tenant, canonDefaults, canonOverrides, now)...)
 		result = append(result, c.resolveCriticalRows(tenant, canonDefaults, canonOverrides, now)...)
 		result = append(result, c.resolveDimensionalRows(tenant, canonOverrides, now)...)
+		// Phase 2C (#1189): declared-without-value keys — emitted ONLY when the
+		// tenant supplied a value. Must stay inside this segment: the
+		// cardinality guard below measures result[startIdx:] exactly once, so a
+		// row appended after it escapes the cap silently.
+		result = append(result, c.resolveDeclaredRows(tenant, canonDefaults, canonOptional, canonOverrides, now)...)
 
 		// #741 S3a: tenant-authored custom alerts → user_threshold{component="custom",
 		// recipe_id,name,mode}. Appended into this tenant's segment BEFORE the
@@ -318,6 +326,150 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 			Tenant:    tenant,
 			Metric:    metric,
 			Value:     defaultValue,
+			Severity:  severity,
+			Component: component,
+		})
+	}
+	return rows
+}
+
+// resolveDeclaredRows resolves a tenant's overrides for keys the platform
+// DECLARED without a value (#1189 / TRK-337 — `optional_overrides`). This is
+// the third slot's data plane: the platform recognises the key and asserts
+// nothing, so the ONLY way a row exists is that the tenant supplied a value.
+//
+// ⛔ There is no State 2. resolveBaseRows can fall back to a platform default
+// because it iterates the defaults map; a declared key has no default by
+// definition, so both of that function's State-2 entry paths (key omitted, and
+// unparseable value) collapse to "emit nothing" here. That asymmetry is the
+// whole point of the tier and is why `expires:` is not honoured either: expiry
+// is a fail-SAFE hook that reverts an override TO the platform default, and
+// reverting to nothing would take the threshold away silently — the failure
+// PREVENT #656 forbids, and verbatim why resolveCriticalRows and
+// resolveDimensionalRows refuse expires too. ValidateTenantKeys blocks
+// `expires:` on a declared key at write time; a value that reached disk anyway
+// (direct GitOps push) simply keeps applying, which is the fail-safe direction.
+//
+// ⚠️ Be precise about what that costs, because "the field is then decoration"
+// is the natural reading and it overstates it: the refusal is a KeyValidation
+// error, and logConfigStats prints every one of those on EVERY config load, so
+// a GitOps-pushed expires is loudly rejected once per reload — not silent.
+// What it does not get is the alertable channel: ResolveThresholdExpiriesAt
+// gates on canonDefaults alone, so da_config_event{event="threshold_expired"}
+// never fires for a declared key and no cleanup PR is prompted. That residual
+// is real, and it is exactly the one resolveCriticalRows and
+// resolveDimensionalRows already carry — consistent, not novel.
+//
+// ⛔ Ownership, not just membership. Every shape skipped below is ALREADY
+// emitted by one of the sibling phases, and a second row with the same label
+// set does not degrade one metric — it fails the whole Prometheus Gather and
+// takes every family in /metrics down with it (see canonicalizeDefaults' dedup
+// contract in aliases.go). Membership alone is NOT a sufficient admission test.
+//
+// ⚠️ Ownership is checked on the raw key, while the row's identity is the
+// POST-parseMetricKey (component, metric) pair, and that mapping is not
+// injective: `foo` and `default_foo` both parse to ("default", "foo"). So a
+// platform that declared `foo` while `default_foo` sat in defaults would slip
+// past the skip below and produce the duplicate this comment warns about. No
+// registry key has that shape (none is underscore-free, none is
+// `default_`-prefixed) and it needs the platform to author both halves, so
+// this is stated as a known limit rather than paid for with a per-key reparse.
+func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string]float64, declared map[string]struct{}, overrides map[string]ScheduledValue, now time.Time) []ResolvedThreshold {
+	if len(declared) == 0 {
+		return nil // steady state today: nothing declared, nothing to walk
+	}
+
+	var rows []ResolvedThreshold
+	// Iterate the DECLARED set, not the tenant's map: it is bounded by the
+	// platform surface (25 registry keys today) while a tenant's map is not.
+	for metricKey := range declared {
+		sv, set := overrides[metricKey]
+		if !set {
+			continue // declared but unset — the dormant state, correctly silent
+		}
+
+		// resolveBaseRows already emits this key for every tenant, and would
+		// produce a byte-identical label set. Nothing forbids a key from being
+		// in both sets — the validator explicitly accepts that overlap.
+		if _, valued := defaults[metricKey]; valued {
+			continue
+		}
+		// resolveDimensionalRows is tenant-only and ALREADY emits declared
+		// bases today (that is why ValidateTenantKeys accepts the shape).
+		if strings.Contains(metricKey, "{") {
+			continue
+		}
+		// resolveCriticalRows owns the critical tier. It keys off
+		// defaults[base], so for a declared base it drops the row — which is
+		// exactly why ValidateTenantKeys refuses that shape. Emitting it here
+		// would route around a deliberate refusal.
+		if strings.HasSuffix(metricKey, criticalSuffix) {
+			continue
+		}
+		// Reserved shapes. resolveBaseRows only needs four of these because it
+		// walks defaults, where the tenant-only ones never appear; walking the
+		// declared set can see any of them, since nothing validates the list's
+		// CONTENTS yet (aliases.go says so).
+		//
+		// ⚠️ Every entry in these two SSOT tables starts with "_" today, so the
+		// leading-underscore net further down already covers them and mutation
+		// testing cannot kill these two checks independently — that is expected,
+		// not an untested gap. They are kept because the SSOT is the table, not
+		// the naming convention: a reserved key added without the underscore
+		// would be caught here and missed by the net.
+		if validReservedKeys[metricKey] {
+			continue
+		}
+		reserved := false
+		for _, prefix := range validReservedPrefixes {
+			if strings.HasPrefix(metricKey, prefix) {
+				reserved = true
+				break
+			}
+		}
+		if reserved || strings.HasPrefix(metricKey, "_state_") || strings.HasPrefix(metricKey, "_silent_") {
+			continue
+		}
+		// Any other leading underscore is a typo'd reserved key. ValidateTenantKeys
+		// has an "unknown reserved key (typo?)" branch for exactly this, but it
+		// sits AFTER the membership check — so a mistyped reserved name on the
+		// platform list (`_silence_mode`) validates clean. parseMetricKey maps a
+		// leading-underscore key to component="default", so without this it would
+		// surface as user_threshold{component="default",metric="_silence_mode"}.
+		if strings.HasPrefix(metricKey, "_") {
+			continue
+		}
+
+		override := sv.ResolveValue(now)
+		lower := strings.TrimSpace(strings.ToLower(override))
+		// State 3: disable. Note that for a declared key this is
+		// indistinguishable in OUTPUT from "never set" — both emit nothing.
+		// It is still honoured so a tenant can express intent, and so a
+		// profile/inherited value can be switched off.
+		if isDisabled(lower) {
+			continue
+		}
+
+		component, metric := parseMetricKey(metricKey)
+		severity := "warning"
+		parts := strings.SplitN(override, ":", 2)
+		valueStr := strings.TrimSpace(parts[0])
+		if len(parts) == 2 {
+			severity = strings.TrimSpace(parts[1])
+		}
+
+		v, err := strconv.ParseFloat(valueStr, 64)
+		if err != nil {
+			// No default to fall back to — drop it and say so, matching
+			// resolveCriticalRows / resolveDimensionalRows rather than
+			// resolveBaseRows (which can and does fall back).
+			log.Printf("WARN: invalid declared threshold %q for tenant=%s key=%s, skipping", override, tenant, metricKey)
+			continue
+		}
+		rows = appendWithLegacyTwin(rows, metricKey, ResolvedThreshold{
+			Tenant:    tenant,
+			Metric:    metric,
+			Value:     v,
 			Severity:  severity,
 			Component: component,
 		})
@@ -1139,23 +1291,29 @@ func (c *ThresholdConfig) ValidateTenantKeys() KeyValidation {
 				// precise failure this validator was extended to end (see the
 				// block comment above).
 				//
-				// ⚠️ Read alongside the flat branch below, which IS accepted
-				// even though it emits nothing either. The two are not
-				// inconsistent, but the difference is reachability, not
-				// principle, so it has to be said out loud: this shape is
-				// writable TODAY — the `_critical` twins of keys like
-				// pg_connections have their base in the shipped defaults, so a
-				// tenant can hit this branch on a live config right now. The
-				// flat shape cannot be reached at all until some file declares
-				// a key, and no supported producer can do that yet (the Helm
-				// template renders only defaults/state_filters, and
-				// scaffold_tenant.generate_defaults() emits the same two). A
-				// tripwire test holds that shut rather than leaving it to
-				// sequencing: tests/shared/test_optional_overrides_tripwire.py.
+				// ⚠️ Read alongside the flat branch below, which IS accepted —
+				// and which, since resolveDeclaredRows landed, also EMITS. That
+				// is the difference now: accepting the flat shape promises a
+				// row the resolver delivers, while accepting this one would
+				// promise a row resolveCriticalRows drops.
 				//
-				// The pairing flips together: when the emission loop learns to
-				// resolve declared keys, resolveCriticalRows and this branch
-				// change in the same commit, never one without the other.
+				// ⚠️ An earlier version of this comment said the refusal and
+				// resolveCriticalRows "flip together in the same commit, never
+				// one without the other". That overstated it, and the emission
+				// loop landing is the proof: resolveDeclaredRows now emits
+				// declared keys, and this refusal is UNCHANGED and still
+				// correct — because its premise was never "declared keys don't
+				// emit", it was "resolveCriticalRows keys off defaults[base]
+				// and drops the row when the base has no value", which the
+				// emission loop does not touch (resolveDeclaredRows skips the
+				// `_critical` shape precisely so it cannot route around this).
+				//
+				// The real invariant is narrower: this refusal must stay in
+				// lockstep with resolveCriticalRows' admission test. They only
+				// flip together if the critical tier is ever extended to
+				// declared bases — a separate decision, which also has to
+				// answer whether a critical tier may exist with no warning tier
+				// beneath it (a tenant setting only `<base>_critical`).
 				if _, declared := canonOptional[baseKey]; declared {
 					v.Errors = append(v.Errors, fmt.Sprintf(
 						"WARN: tenant=%s: %q cannot be set — its base %q is declared without a platform value (optional_overrides), and the critical tier needs a base VALUE in defaults: resolveCriticalRows drops the row when the base is absent, so this override would be accepted and then emit nothing. Set %q itself instead, or ask the platform to move %q into defaults.",
@@ -1184,22 +1342,12 @@ func (c *ThresholdConfig) ValidateTenantKeys() KeyValidation {
 			// lets a tenant calibrate a threshold the platform declines to put
 			// a number on.
 			//
-			// ⚠️ Accepting is not emitting, and this branch is the one place
-			// that gap lives. resolveBaseRows still iterates defaults only, so
-			// until the emission loop lands, a declared key a tenant sets is
-			// recorded and produces no row — no error, no notice, not even a
-			// scrape-time log line. That is a worse signal than the `_critical`
-			// shape refused above, which at least logs.
-			//
-			// What makes it acceptable is not sequencing but reachability, and
-			// reachability is held shut mechanically rather than promised:
-			// nothing can put a key on this list yet (the Helm template renders
-			// only defaults/state_filters; scaffold_tenant.generate_defaults()
-			// emits the same two; no shipped _defaults.yaml declares one), and
-			// tests/shared/test_optional_overrides_tripwire.py turns red the
-			// moment that stops being true. It is deleted by the same commit
-			// that adds the emission loop — and it also turns red if that
-			// commit lands and leaves it behind.
+			// ✅ Accepting now means emitting: resolveDeclaredRows walks this
+			// same set and emits a row whenever the tenant supplied a value
+			// (State 1 only — no platform fallback, since there is no platform
+			// value to fall back to). The signal gap this branch used to carry
+			// — accepted, no row, no log — is closed, and the temporary
+			// tripwire that held it shut is deleted with that loop.
 			if _, declared := canonOptional[canonKey]; declared {
 				continue
 			}
@@ -1307,6 +1455,14 @@ func (c *ThresholdConfig) ApplyProfiles() {
 	if len(c.Profiles) == 0 {
 		return
 	}
+	// Hoisted for the same reason ResolveAtWithStats hoists it: the declared
+	// surface is per-config, not per-tenant.
+	canonDeclared := canonicalizeOptionalOverrides(c.OptionalOverrides)
+	// One line per (profile, key), not per tenant: the mistake belongs to
+	// whoever wrote the profile, and 1000 tenants sharing it is still one
+	// mistake. The unknown-profile WARN below is deliberately per-tenant
+	// because each tenant independently referenced a bad name.
+	warnedProfileKeys := make(map[string]struct{})
 
 	for tenant, overrides := range c.Tenants {
 		sv, exists := overrides["_profile"]
@@ -1343,8 +1499,75 @@ func (c *ThresholdConfig) ApplyProfiles() {
 		//     da_config_deprecated_keys count). The dropped deprecated-count
 		//     signal belongs to the profile AUTHOR's surface, which has no
 		//     notification channel today — deliberately not invented here.
+		//
+		// ⛔ #1189: a profile may NOT fill in a declared-without-value key.
+		// `_profiles.yaml` is platform-owned by enforcement — applyBoundaryRules
+		// strips `profiles:` from tenant files, confd.isReservedName makes the
+		// file unaddressable by any tenant id, and assemble_config_dir lists it
+		// under PLATFORM_FILES. A tenant's `_profile: X` elects a REFERENCE, not
+		// its contents: what X expands to is decided by the platform and can
+		// change under the tenant with no action or notice on their side. So a
+		// profile value is a platform assertion, and the whole meaning of the
+		// declared tier is that the platform asserts nothing — filling one in
+		// here would let resolveDeclaredRows emit it for every tenant on the
+		// profile, which is the global-arming the third slot exists to avoid,
+		// arriving through a side door.
+		//
+		// This also keeps today's behaviour exactly: such an entry produces no
+		// row now (resolveBaseRows walks defaults, where a declared key never
+		// is), so skipping is the conservative reading, not a new restriction.
+		//
+		// ⚠️ This closes the PROFILE path and only that one. A platform file
+		// can still reach a declared key through its own `tenants:` block —
+		// applyBoundaryRules strips Defaults/StateFilters/OptionalOverrides/
+		// Profiles by file class but never Tenants, and the schema calls
+		// `tenants:` in a _defaults.yaml loader-legitimate. Measured: one such
+		// entry emits, with no tenant opt-in at all. It is left open here
+		// deliberately — telling those two writers apart needs per-key
+		// provenance on ScheduledValue, which was weighed and declined (the
+		// struct is deliberately small; #871 caught a bench regression from
+		// growing it). Per-tenant enumeration by the platform is also a
+		// materially different act from a profile that fans out, so it is not
+		// obviously the same defect. Tracked with the rest of the tier's
+		// write-path questions rather than fixed by a half-measure here.
 		canonProfile, _ := canonicalizeOverrides(profile)
 		for key, profileValue := range canonProfile {
+			// ⛔ The declared check must look at the BASE, not the whole key.
+			// resolveDimensionalRows emits unconditionally — it never consults
+			// defaults — so a profile entry spelled `oracle_wait_time_rate{db="x"}`
+			// fans out to every tenant on the profile exactly like the flat
+			// spelling would, one label segment away from the blocked shape.
+			// (Measured: two tenants on such a profile got two rows.)
+			//
+			// ⛔ …but NOT the `_critical` shape, and the asymmetry is the whole
+			// test: block only where blocking buys something. resolveCriticalRows
+			// admits on defaults[base], so a profile supplying
+			// `jvm_memory_critical` (base `jvm_memory` valued) produces a real
+			// critical-tier row — while resolveDeclaredRows refuses that shape
+			// outright. Blocking it here would therefore prevent nothing and
+			// delete a working row, with a WARN as the only trace. Registry tier
+			// membership groups the two together; runtime behaviour does not.
+			declaredKey := key
+			if i := strings.IndexByte(key, '{'); i > 0 {
+				declaredKey = key[:i]
+			}
+			_, declared := canonDeclared[declaredKey]
+			if declared && strings.HasSuffix(key, criticalSuffix) {
+				declared = false
+			}
+			if declared {
+				// Only say something when the fill-in would actually have
+				// happened. If the tenant set the key themselves, the old code
+				// skipped it anyway — warning there would report a non-event
+				// and blame the wrong file.
+				if !tenantHasAliasEquivalent(overrides, key) {
+					if _, seen := warnedProfileKeys[profileName+"\x00"+key]; !seen {
+						warnedProfileKeys[profileName+"\x00"+key] = struct{}{}
+						log.Printf("WARN: profile %q supplies %q, but that key is declared without a platform value (optional_overrides) — ignoring. The platform not asserting a value is the point of that tier; to hand tenants a starting number, write it into their own file (scaffold_tenant does), and move the key to defaults: only if you mean to arm it for every tenant", profileName, key)
+					}
+				}
+				continue
+			}
 			if !tenantHasAliasEquivalent(overrides, key) {
 				overrides[key] = profileValue
 			}

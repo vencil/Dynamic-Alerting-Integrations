@@ -3,9 +3,21 @@
 
 WHY: a rule-pack alert reads its threshold from `tenant:alert_threshold:<key>`,
 which is populated from `user_threshold{component,metric}` — emitted by the
-threshold-exporter ONLY for keys present in `c.Defaults`
+threshold-exporter for keys present in `c.Defaults`
 (`resolveBaseRows` iterates `c.Defaults`; `resolveCriticalRows` requires the
-base key in `c.Defaults`). The platform-defaults surface is produced by
+base key in `c.Defaults`).
+
+⚠️ There is now a THIRD emission path (#1189 / TRK-337): `resolveDeclaredRows`
+emits a key listed in `optional_overrides` when — and only when — the TENANT
+supplied a value. This gate deliberately keeps measuring the platform-defaults
+path, because "the platform can produce it" and "a tenant happened to set it"
+are different questions and only the first is a property of what we ship. But
+it does mean the class-A remediation this gate prescribes below ("wrong tier —
+move it to defaults") is no longer the only fix: for a key meant to be
+tenant-calibrated, declaring it and letting the tenant set it is the intended
+end state, and moving it to `defaults:` would arm it for everyone instead.
+
+The platform-defaults surface is produced by
 `scaffold_tenant.generate_defaults()`. So an alert that demands a key which
 `generate_defaults()` never produces is DEAD — it can never fire, and nothing
 says so. This is a DECLARED-BUT-UNWIRED failure: schema validation can't catch
@@ -83,7 +95,12 @@ from _lib_validation import i18n_text  # noqa: E402
 # #1231 (rename/move/add/delete — 9 keys removed via the exit-lock below),
 # leaving the 9 A-class tier moves (a deliberate ship-enabled decision per
 # pack, not a mechanical fix — #1196).
-#   A = name-correct, wrong tier (in optional_overrides) → move to defaults
+#   A = name-correct, in optional_overrides → EITHER move to defaults (arms it
+#       for every tenant) OR leave it declared and let the tenant calibrate it.
+#       ⚠️ The second option only became real when resolveDeclaredRows landed
+#       (#1189 / TRK-337); before that "declared" meant dead. Which of the two
+#       applies is a per-key decision (#1310 / #1311), so this tag deliberately
+#       names both rather than prescribing the one that arms everyone.
 #   B = name is wrong in scaffold (e.g. _total vs _rate) → rename + move
 #   C = base default exists but under a different name → align identity
 #   D = key absent from scaffold entirely → add
