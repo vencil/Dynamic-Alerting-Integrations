@@ -20,7 +20,8 @@ type: application
 # 0.9.0 — #908 PR-3 m3: least-privilege securityContext for the gate init-container + exposer sidecar (projectionGate.securityContext — non-root 65532, drop ALL caps, no DAC_READ_SEARCH; Vector container stays root for /var/log)
 # 0.9.1 — #1293: origin spoof guard compared the RAW pod_owner ("<Kind>/<Name>") against a workload-NAME prefix, so it never matched and reclassified EVERY real gateway audit row to suspicious_audit — which tenant_project then aborted, silently emptying every tenant partition. Strip the Kind half before the compare; projection_tests.yaml fixtures corrected to the real shape + (O1)/(O2)/(O3) truth-table cases
 # 0.9.2 — appVersion corrected 0.55.0 → 0.57.0: it had drifted from the image the chart actually deploys (values.yaml image.tag has been 0.57.0-distroless-libc). No template change. All Vector pins (this, values.yaml image.tag, ci.yml, .devcontainer/install-vector.sh) are now bound by tests/shared/test_vector_pin_parity.py
-version: 0.9.2
+# 0.9.3 — #1294: platform-owned fields were read AFTER the untrusted payload deep-merge (or never assigned at all), so a producer could set them. demux now snapshots pod_owner/container_name/pod_namespace/pod_name/pod_node_name BEFORE the merge (the origin spoof guard was reading the very field the suspect row supplied) and takes ownership of `timestamp` — the sink's _time_field, which demux never assigned, so a payload key of that name became the row's time in BOTH the 0:0 store and every tenant partition; the evidence transform gets the same `timestamp` snapshot (it also drives the reconciler's detection window)
+version: 0.9.3
 # appVersion: pinned Vector release — MUST equal values.yaml `image.tag`'s
 # release component (the tag adds a `-distroless-libc` variant suffix) and the
 # CLI pinned in ci.yml / .devcontainer/install-vector.sh. Bound by

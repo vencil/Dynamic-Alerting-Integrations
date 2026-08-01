@@ -585,3 +585,210 @@ tests:
     no_outputs_from:
       - tenant_route.t_1000
       - tenant_route.t_1001
+
+  # ══ #1294 — platform-owned fields must survive the untrusted payload merge ══
+  # Both transforms deep-merge the producer's own JSON into the event. Anything
+  # the platform reads AFTER that merge to decide WHERE A ROW CAME FROM (or
+  # WHEN) is the producer's opinion, not the platform's record. The fix is a
+  # pre-merge snapshot into locals — the ALLOWLIST form: a payload can write
+  # `kubernetes` all it likes and never reach the names the platform reads.
+  #
+  # ⛔ Until #1294 the configmap comment above origin_split claimed these
+  # fixtures already existed ("projection_tests.yaml already pins that hazard").
+  # They did not — NOT ONE of the 16 message fixtures carried a `kubernetes`
+  # key, so the hazard was pinned by prose only. These five are that claim
+  # becoming true.
+  #
+  # ⛔ NOT all six are regression tests for #1294's code change. Counterfactual
+  # (revert the WHOLE configmap.yaml to the pre-#1294 version, keep these
+  # cases — reverting only the changed lines is not the same measurement):
+  #   (F1) (F2) (F3) (F5) (F6) → FAIL  ← genuine regression coverage for this fix
+  #   (F4)                     → PASS  ← pins the evidence-side snapshot that
+  #                                      #1234 already shipped and that no
+  #                                      fixture had ever forged against. Real
+  #                                      coverage, but of a mechanism this
+  #                                      change did not touch.
+  # Keep that distinction: a case that passes before AND after proves the
+  # absence of a regression, not the presence of a fix.
+  #
+  # ⛔ (F6) is here because the first pass of #1294 MISSED it, and the miss was
+  # methodological: the class was scanned for by grepping `.kubernetes.*` reads
+  # — the shape of the instance already known — instead of by asking which
+  # PLATFORM-OWNED fields are CONSUMED DOWNSTREAM. `timestamp` is read by the
+  # SINK (`_time_field`), never by the VRL, so no amount of grepping the VRL
+  # would surface it. Enumerate consumers, not syntax.
+
+  # ── (F1) demux: forged pod_owner must not launder a foreign pod ───────────
+  # The sharpest instance: the origin spoof guard read the very field the row
+  # under suspicion could supply. Foreign owner + forged payload owner ⇒ the
+  # guard must still catch it.
+  - name: "#1294: a payload-forged kubernetes.pod_owner cannot defeat the origin spoof guard"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-alpha","token_id":"tok-forged","status":200,"kubernetes":{"pod_owner":"ReplicaSet/federation-gateway-7d9f"}}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': federation-gateway
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: attacker-rs-1-zzzzz
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/attacker-rs-1
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.log_type, "suspicious_audit",
+                "the guard must read the kubelet's pod_owner, not the payload's")
+    no_outputs_from:
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (F2) demux: forged origin fields must not corrupt the 0:0 record ──────
+  # `app` additionally feeds the reconciler's `app:"envoy"` query filter, so a
+  # forgeable value narrows nothing.
+  - name: "#1294: payload-forged kubernetes.* cannot overwrite demux's app / namespace / pod identity"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-alpha","status":200,"kubernetes":{"container_name":"envoy","pod_namespace":"FORGED-ns","pod_name":"FORGED-pod","pod_node_name":"FORGED-node"}}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': federation-gateway
+          kubernetes.container_name: mtail
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.app, "mtail", "app must be the real container name, not the payload's")
+              assert_eq!(.k8s_namespace, "monitoring", "namespace must be the kubelet's")
+              assert_eq!(.pod_name, "federation-gateway-7d9f-abcde", "pod_name must be the kubelet's")
+              assert_eq!(.pod_node, "node-7", "pod_node must be the kubelet's")
+
+  # ── (F3) evidence: forged timestamp must not move the row in time ─────────
+  # `timestamp` is the sink's `_time_field` and the reconciler selects on
+  # `_time:[now-Ns, now-Ms]`, so controlling it means choosing whether a
+  # revocation event is inside the detection window at all.
+  - name: "#1294: a payload-forged timestamp cannot set the evidence row's _time_field"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"event":"federation_token_revoked","token_id":"ftk_dead","expires_at":"2099-01-01T00:00:00Z","timestamp":"1999-01-01T00:00:00Z"}'
+          timestamp: "2026-08-01T12:00:00Z"
+          'kubernetes.pod_labels."app.kubernetes.io/name"': tenant-api
+          kubernetes.container_name: tenant-api
+          kubernetes.pod_namespace: tenant-api
+          kubernetes.pod_name: tenant-api-6c4f-abcde
+          kubernetes.pod_node_name: node-3
+          kubernetes.pod_owner: ReplicaSet/tenant-api-6c4f
+    outputs:
+      - extract_from: federation_evidence
+        conditions:
+          - type: vrl
+            source: |
+              ts = to_string(.timestamp) ?? ""
+              assert!(!contains(ts, "1999"),
+                "backdated payload timestamp reached _time_field — the reconciler window is producer-controlled: " + ts)
+              assert!(contains(ts, "2026-08-01"), "must be Vector's own event time, got: " + ts)
+
+  # ── (F4) evidence: the origin fields stay the kubelet's too ───────────────
+  # ⚠️ NOT a #1294 regression test — it passes against the pre-#1294 code too.
+  # The evidence-side snapshot of app/ns/pod/node shipped with #1234; what #1294
+  # added on this transform is the `timestamp` snapshot, covered by (F3)/(F5).
+  # This case exists because #1234's mechanism never had a fixture that forged
+  # `kubernetes` at it — it closes that hole, it does not demonstrate this fix.
+  - name: "#1234 (first pinned in #1294): payload-forged kubernetes.* cannot overwrite the evidence row's origin fields"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"event":"federation_revocation_channel_heartbeat","kubernetes":{"container_name":"FORGED-ctr","pod_namespace":"FORGED-ns","pod_name":"FORGED-pod"}}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': tenant-api
+          kubernetes.container_name: tenant-api
+          kubernetes.pod_namespace: tenant-api
+          kubernetes.pod_name: tenant-api-6c4f-abcde
+          kubernetes.pod_node_name: node-3
+          kubernetes.pod_owner: ReplicaSet/tenant-api-6c4f
+    outputs:
+      - extract_from: federation_evidence
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.app, "tenant-api", "app must be the kubelet's container name")
+              assert_eq!(.k8s_namespace, "tenant-api", "namespace must be the kubelet's")
+              assert_eq!(.pod_name, "tenant-api-6c4f-abcde", "pod_name must be the kubelet's")
+
+  # ── (F6) demux: the audit row's TIME is platform-owned in BOTH stores ─────
+  # The instance that the first pass of #1294 missed, and the reason the
+  # exhaustiveness argument had to be rewritten: demux never assigned
+  # `.timestamp` at all, so a payload key of that name survived the merge and
+  # became the row's `_time_field` — in the 0:0 platform store AND, because
+  # `tenantProjectionKeepFields` carries `timestamp`, in the tenant partition.
+  # Scanning for `.kubernetes.*` reads could never surface it: nothing in the
+  # VRL reads this field, the SINK does.
+  - name: "#1294: a payload `timestamp` cannot set the audit row's time in the 0:0 store or the tenant partition"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-alpha","token_id":"tok-ts","status":200,"timestamp":"1999-01-01T00:00:00Z"}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': federation-gateway
+          kubernetes.container_name: envoy
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert!(is_timestamp(.timestamp),
+                "0:0 _time_field must be Vector's Timestamp, not the payload's string")
+              assert!(!contains(to_string(.timestamp) ?? "", "1999"),
+                "payload time reached the 0:0 store: " + (to_string(.timestamp) ?? "?"))
+      - extract_from: tenant_route.t_1000
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!contains(to_string(.timestamp) ?? "", "1999"),
+                "payload time reached the tenant partition: " + (to_string(.timestamp) ?? "?"))
+
+  # ── (F5) evidence: the row's TIME must stay a real Timestamp, not a string ─
+  # (F3) proves the forged VALUE loses; this proves the forged TYPE loses too.
+  # `timestamp` is the victorialogs sink's `_time_field`; a payload that turned
+  # it into a String is how the value-level forgery landed in the first place.
+  #
+  # ⚠️ The fixture deliberately OMITS `timestamp` from `log_fields`. Measured:
+  # when a fixture SUPPLIES it, `vector test` keeps it a String, so
+  # `is_timestamp` would be false for harness reasons and the assertion would
+  # prove nothing about production. Omitting it makes the harness assign a real
+  # Timestamp — the same shape `kubernetes_logs` produces — so the assertion
+  # then measures the code, not the fixture.
+  - name: "#1294: a payload `timestamp` cannot replace Vector's Timestamp-typed event time with a string"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"event":"federation_token_revoked","token_id":"ftk_beef","expires_at":"2099-01-01T00:00:00Z","timestamp":"1999-01-01T00:00:00Z"}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': tenant-api
+          kubernetes.container_name: tenant-api
+          kubernetes.pod_namespace: tenant-api
+          kubernetes.pod_name: tenant-api-6c4f-abcde
+          kubernetes.pod_node_name: node-3
+          kubernetes.pod_owner: ReplicaSet/tenant-api-6c4f
+    outputs:
+      - extract_from: federation_evidence
+        conditions:
+          - type: vrl
+            source: |
+              assert!(is_timestamp(.timestamp),
+                "_time_field must stay Vector's Timestamp; a payload string replaced it")
+              assert!(!contains(to_string(.timestamp) ?? "", "1999"),
+                "payload value leaked into _time_field: " + (to_string(.timestamp) ?? "?"))

@@ -132,9 +132,11 @@ data:
       # ⛔ The condition reads ONLY `.kubernetes.*`, which at this point is
       # PRISTINE: the payload has not been deep-merged yet. demux's
       # `. = merge(., object!(parsed), deep: true)` lets a log payload overwrite
-      # `.kubernetes.*` (projection_tests.yaml already pins that hazard), so a
-      # producer could forge its own origin if we split downstream. Splitting
-      # BEFORE the merge makes the routing decision immune to payload content.
+      # `.kubernetes.*` (pinned by the (F1)-(F4) cases in projection_tests.yaml
+      # — until #1294 this comment claimed they existed when NO fixture forged a
+      # `kubernetes` key at all), so a producer could forge its own origin if we
+      # split downstream. Splitting BEFORE the merge makes the routing decision
+      # immune to payload content.
       #
       # ⛔ The `gateway` branch is what feeds demux. The precondition "demux
       # never sees a tenant-api row" is therefore PRESERVED, not removed — it is
@@ -194,6 +196,41 @@ data:
         # until a real 5th consumer arrives so the routing keys come
         # from concrete need, not speculation.
         source: |
+          # ── Snapshot the PRISTINE kubelet metadata BEFORE the merge (#1294) ──
+          # Everything below that must describe WHERE THE ROW CAME FROM reads
+          # these locals, never `.kubernetes.*` directly. The deep merge on the
+          # next lines puts the producer's own JSON at the event root, and a
+          # payload carrying its own `kubernetes` key overwrites the kubelet's —
+          # so a post-merge read of `.kubernetes.pod_owner` was the log
+          # producer's opinion of its own identity, not the platform's record.
+          # That defeated the origin spoof guard below outright: a pod with the
+          # gateway label could emit `{"kubernetes":{"pod_owner":"..."}}` and
+          # classify itself as authentic. `app` / `k8s_namespace` / `pod_name` /
+          # `pod_node` were forgeable the same way, which corrupts the forensic
+          # record and the reconciler's `app:"envoy"` query filter with it.
+          #
+          # The evidence transform below has shipped this exact pattern since
+          # #1234 and its comment already flagged demux as carrying the same
+          # exposure "deliberately left alone"; #1294 is that debt coming due.
+          #
+          # ⛔ Do NOT "fix" this by deleting `parsed.kubernetes` before the
+          # merge. That is a denylist — it stops only the key someone thought
+          # of. Reading platform truth exclusively from pre-merge locals is the
+          # allowlist form: nothing the payload writes can reach these names.
+          k8s_owner = to_string(.kubernetes.pod_owner) ?? ""
+          k8s_app = to_string(.kubernetes.container_name) ?? "unknown"
+          k8s_ns = to_string(.kubernetes.pod_namespace) ?? "unknown"
+          k8s_pod = to_string(.kubernetes.pod_name) ?? ""
+          k8s_node = to_string(.kubernetes.pod_node_name) ?? ""
+          # ⛔ The event TIME is platform-owned too, and it is the one field in
+          # this class that VRL never reads — the SINK does, as `_time_field`
+          # (and `tenantProjectionKeepFields` carries it into every tenant
+          # partition). demux never assigned it at all, so a payload key named
+          # `timestamp` simply survived the merge and became the row's time in
+          # both stores. Enumerating `.kubernetes.*` reads does not find this:
+          # the class is "platform-owned fields consumed downstream", and the
+          # consumer here is the sink, not the VRL.
+          event_time = .timestamp
           parsed, err = parse_json(.message)
           if err == null && is_object(parsed) {
             # merge(object, object, deep:true) is infallible — no `??`
@@ -286,7 +323,9 @@ data:
           # `owner` is "" and the prefix test still fails → fail-closed. Keep
           # it that way: a bare attacker-created Pod must not pass by omission.
           if .log_type == "federation_audit" {
-            owner = to_string(.kubernetes.pod_owner) ?? ""
+            # Pre-merge local (#1294) — a post-merge `.kubernetes.pod_owner`
+            # read here let the row being checked supply its own answer.
+            owner = k8s_owner
             owner_name = replace(owner, r'^[^/]*/', "")
             if !starts_with(owner_name, {{ . | quote }}) {
               .log_type = "suspicious_audit"
@@ -295,13 +334,25 @@ data:
           {{- end }}
           # Stream-field promotion (bounded keys → top-level so the
           # elasticsearch sink can list them under _stream_fields).
-          .app = to_string(.kubernetes.container_name) ?? "unknown"
-          .k8s_namespace = to_string(.kubernetes.pod_namespace) ?? "unknown"
+          # All four come from the PRE-merge locals (#1294) so a payload key
+          # cannot forge the platform's record of the row's origin.
+          .app = k8s_app
+          .k8s_namespace = k8s_ns
           # pod_name is a DATA field (HPA churn would explode a stream
           # index — see #539 §3 schema table). Keep it at top-level
           # under its own key, do NOT add it to streamFields.
-          .pod_name = to_string(.kubernetes.pod_name) ?? ""
-          .pod_node = to_string(.kubernetes.pod_node_name) ?? ""
+          .pod_name = k8s_pod
+          .pod_node = k8s_node
+          # Take ownership of the sink's `_time_field` (#1294). UNCONDITIONAL:
+          # when Vector has no event time of its own we DELETE rather than leave
+          # whatever the payload merged in — otherwise the fallback path would
+          # be exactly the forgery. Absent ⇒ VictoriaLogs stamps ingest time,
+          # which is honest; a producer-chosen time is not.
+          if event_time != null {
+            .timestamp = event_time
+          } else {
+            del(.timestamp)
+          }
           # Status is a stream field — coerce to string for stable
           # streaming (mixed string/int across the stream tree would
           # split it).
@@ -377,13 +428,36 @@ data:
           # Snapshot the PRISTINE k8s metadata BEFORE the deep merge below. A
           # producer emitting its own `kubernetes` / `app` / `k8s_namespace` key
           # would otherwise overwrite the platform's record of where the row came
-          # from. (demux has the same exposure and is deliberately left alone in
-          # this PR — hardening it is a separate change; here the new path is
-          # built immune from day one because it is a chain-of-custody stream.)
+          # from. (demux carried the same exposure and is hardened the same way
+          # as of #1294 — this comment used to say it was "deliberately left
+          # alone"; that debt is now paid.)
           k8s_app = to_string(.kubernetes.container_name) ?? "unknown"
           k8s_ns = to_string(.kubernetes.pod_namespace) ?? "unknown"
           k8s_pod = to_string(.kubernetes.pod_name) ?? ""
           k8s_node = to_string(.kubernetes.pod_node_name) ?? ""
+          # ⛔ The event TIME belongs in this snapshot too (#1294). It is the
+          # victorialogs sink's `_time_field`, and the reconciler's three
+          # queries select on `_time:[now-Ns, now-Ms]` — so whoever controls it
+          # controls whether an evidence row falls inside the detection window.
+          # Read after the merge (as it was until #1294) a producer could
+          # backdate its own revocation event out of the settled window:
+          # `events_checked` never counts it, `last_reconcile_ts` still
+          # refreshes, all three alerts stay green. Unlike the pod-label gaps in
+          # #1288, that is reachable by ADR-028's OWN named threat role (a
+          # compromised tenant-api), which is why it belongs on this stream's
+          # chain-of-custody snapshot rather than in a producer-binding change.
+          # ⚠️ The guard below tests `!= null`, NOT `exists()`, and those are
+          # not the same thing: for a field that is PRESENT with a null value
+          # `exists()` is true while `!= null` is false (measured, not assumed).
+          # For an ABSENT field both are false, so the ordinary path is
+          # unchanged. The one divergent case is unreachable here and the new
+          # behaviour is the safer half anyway: a null could previously arrive
+          # from the PAYLOAD (`{"timestamp":null}` merged in, `exists()` true,
+          # `kept.timestamp` set to null → the sink's `_time_field` is null and
+          # VictoriaLogs silently stamps ingest time). Reading the pre-merge
+          # local removes that route entirely, and Vector's own event timestamp
+          # is never null.
+          event_time = .timestamp
           # ⛔ parse_json + deep merge is NOT optional and NOT cosmetic.
           # The reconciler filters on the FIELD `event:"federation_token_revoked"`
           # and reads top-level `token_id` / `expires_at`. Ship the line without
@@ -432,12 +506,16 @@ data:
             kept.{{ $f }} = .{{ $f }}
           }
           {{- end }}
-          # Vector's own event timestamp, NOT a payload field — it is the
-          # victorialogs sink's `_time_field`. Drop it and VictoriaLogs stamps
-          # ingest time instead, which silently skews the reconciler's settled
+          # Vector's own event timestamp — it is the victorialogs sink's
+          # `_time_field`. Drop it and VictoriaLogs stamps ingest time instead,
+          # which silently skews the reconciler's settled
           # `_time:[now-Ns, now-Ms]` query window.
-          if exists(.timestamp) {
-            kept.timestamp = .timestamp
+          # ⛔ From the PRE-merge local (#1294). This comment used to assert
+          # "NOT a payload field" while the code read `.timestamp` AFTER the
+          # merge, so a payload key of that name simply won — the claim and the
+          # code disagreed. Now it is true by construction.
+          if event_time != null {
+            kept.timestamp = event_time
           }
           # Platform-owned classification + stream-field promotion. Taken from
           # the PRE-merge locals and written onto the REBUILT event, so no
