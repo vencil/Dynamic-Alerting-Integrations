@@ -239,6 +239,78 @@ federation:
   # match the federation-gateway chart's revoked-set source.
   store:
     configMapName: tenant-federation-store
+    # Namespace the store ConfigMap is created in. EMPTY = this release's
+    # namespace (the historical behaviour; existing installs are unaffected).
+    #
+    # ⛔ SET THIS when federation-gateway / federation-reconciler do NOT run in
+    # tenant-api's own namespace. A ConfigMap is namespace-scoped and both of
+    # them consume it as a projected VOLUME, so each can only resolve one in its
+    # OWN namespace. The documented install paths put tenant-api in `tenant-api`
+    # (docs/getting-started/for-platform-engineers.md) and both consumers in
+    # `monitoring` (helm/federation-gateway/README.md) — under which the default
+    # leaves the gateway with no revoked.txt at all. Its volume is
+    # `optional: true`, so the pod starts clean and the Lua filter loads an
+    # EMPTY revoked set: every revoked token is honoured until its TTL, with no
+    # event and no log to say so (#1313).
+    #
+    # Only the ConfigMap moves — tenant-api's own POD stays in this release's
+    # namespace, so helm/vector's evidence binding (`evidenceChannel.podNamespace`,
+    # #1288/#1307) is unaffected: it binds the producer pod's namespace, not the
+    # store's.
+    #
+    # ⚖️ TRADE-OFF, choose knowingly: mounting a ConfigMap as a volume needs NO
+    # RBAC — only the ability to create a pod in that namespace. So wherever the
+    # store lives, its contents are readable by whoever can create pods there,
+    # and `monitoring` is a SHARED namespace (prometheus / grafana / alertmanager
+    # / kube-state-metrics / CronJobs) — a wider set than tenant-api's own.
+    # store.json holds opaque token_ids and expiries only (ADR-028 D3; the
+    # signing key is a Secret and is NOT in here), so this is disclosure, not
+    # privilege escalation — and the alternative is a revocation set the gateway
+    # never reads at all. The reverse direction is equally valid: install the
+    # gateway and reconciler INTO tenant-api's namespace instead and leave this
+    # empty. Its cost is that the gateway's Prometheus scrape depends on it
+    # living in `monitoring` (helm/federation-gateway/README.md).
+    #
+    # ⛔ CHANGING THIS ON A RUNNING DEPLOYMENT IS A DATA MOVE, NOT A SETTING
+    # CHANGE. The chart only creates an EMPTY ConfigMap in the new namespace
+    # (`data` is deliberately not templated — see the object's own comment); the
+    # old one stays put under `helm.sh/resource-policy: keep` and is then read by
+    # nobody. tenant-api's store only verifies that the target object EXISTS, not
+    # what is in it (`NewConfigMapStore` in
+    # components/tenant-api/internal/federation/token/configmap_store.go), so it
+    # comes up cleanly against an empty store — and every existing revocation is
+    # gone, so already-revoked tokens are accepted again until their TTL. That is
+    # precisely the un-revoke ADR-028 exists to detect, caused by the migration
+    # itself.
+    #
+    # Move the data WITH the setting, in this order (no revocation gap):
+    #   1. Copy the ConfigMap into the target namespace, carrying Helm's
+    #      ownership metadata so the upgrade adopts it rather than colliding:
+    #      annotations meta.helm.sh/release-name + meta.helm.sh/release-namespace
+    #      and label app.kubernetes.io/managed-by=Helm.
+    #   2. `helm upgrade` with the new value. Helm adopts the object and does NOT
+    #      touch `data` (this chart never templates it), so the copy survives.
+    #   3. Verify the enforcement plane actually sees it — exec into a gateway pod
+    #      and read /etc/revoked/revoked.txt.
+    #   4. Only then delete the ConfigMap in the old namespace.
+    # Doing step 2 before step 1 leaves a window in which revocations are not
+    # enforced.
+    #
+    # A comment is not a control, so the chart also REFUSES to render that move
+    # while the old object still holds data — see acknowledgeDataMove below.
+    namespace: ""
+    # Escape hatch for the data-move guard above. Leave false.
+    #
+    # When `namespace` points somewhere other than this release's namespace AND
+    # the ConfigMap in this release's namespace still holds a `store.json`, the
+    # render FAILS with the migration steps rather than silently stranding the
+    # revocation set. Set true only when that old store is genuinely disposable
+    # (e.g. a fresh install where the namespace was set wrongly once).
+    #
+    # The guard is a no-op under `helm template` (`lookup` has no cluster to
+    # query), so CI renders and chart tests are unaffected; it fires on a real
+    # `helm upgrade`, which is where the data is actually at risk.
+    acknowledgeDataMove: false
 
   # Federation token lifetime, passed as --federation-token-ttl (Go duration).
   # Matches the binary default; with Posture B server-side revocation an

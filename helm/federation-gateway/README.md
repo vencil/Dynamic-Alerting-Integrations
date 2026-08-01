@@ -125,6 +125,23 @@ Which read APIs a tenant can call through the gateway depends on the mode:
   If the file is absent the Lua **fails open** (nothing known-revoked; the
   4h token TTL still bounds exposure — failing closed would take the whole
   gateway down on a transient mount glitch).
+- ⛔ **That ConfigMap has to live in THIS chart's namespace.** A volume
+  resolves a ConfigMap only in the mounting pod's own namespace — it is not an
+  API read that can cross one. The documented paths install tenant-api in
+  `tenant-api` and this chart in `monitoring`, so unless both are in the same
+  place you must point tenant-api's `federation.store.namespace` at the
+  namespace this chart runs in. Getting it wrong is **silent**: the volume is
+  `optional: true`, so the pod starts Ready with no `revoked.txt` at all and
+  the filter enforces an EMPTY revoked set — every revoked token is honoured
+  until its TTL, with no Kubernetes event and no log line to say so (#1313).
+- ⛔ **The invariant is a three-way equality, not a two-way one**:
+  `helm/federation-reconciler` mounts the *same* key for the ADR-028 detection
+  side, so **this chart, that chart, and the store ConfigMap must all be in one
+  namespace** — and `federation.store.namespace` must name it. Satisfying only
+  two of the three still breaks: gateway+store without the reconciler leaves the
+  un-revoke detection reading an empty live set (it treats an absent file as
+  "nothing revoked yet"), and reconciler+store without the gateway leaves the
+  enforcement plane accepting revoked tokens while every alert stays green.
 
 ## Rate limits are soft
 
