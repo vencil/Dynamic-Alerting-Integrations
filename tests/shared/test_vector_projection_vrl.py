@@ -664,6 +664,31 @@ class TestFederationEvidenceChannel:
                 )
 
     @_needs_helm
+    def test_namespace_values_reject_malformed_input(self, repo_root: Path) -> None:
+        """#1288: a malformed namespace matches no pod at all, which looks
+        exactly like a correctly-configured-but-quiet branch — the silent-
+        failure shape this change exists to remove. The schema pattern is
+        DNS-1123-label-or-empty so a typo fails at render instead.
+        `""` must still be accepted: it is the documented disable switch."""
+        for value, should_render in (
+            ("tenant-api", True),
+            ("", True),                        # the disable switch
+            ("Tenant-API", False),             # uppercase is not a valid ns
+            ("tenant api", False),             # whitespace
+            ("ns-trailing-", False),           # DNS-1123 forbids a trailing dash
+            ("app.kubernetes.io/name=x", False),   # a selector, not a namespace
+        ):
+            r = _render_result(repo_root / "helm/vector",
+                               string_sets={"evidenceChannel.podNamespace": value})
+            if should_render:
+                assert r.returncode == 0, f"{value!r} must be accepted: {r.stderr!r}"
+            else:
+                assert r.returncode != 0, (
+                    f"{value!r} is not a valid namespace and must be rejected at "
+                    f"render, not silently match nothing"
+                )
+
+    @_needs_helm
     def test_evidence_events_membership_is_enforced(self, repo_root: Path) -> None:
         """#1288 gap 2. The pre-existing guard only rejected an EMPTY list. A
         values override that merely DROPS the revocation event renders a valid

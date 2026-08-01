@@ -71,9 +71,13 @@ helm install vector ./helm/vector -n vector \
 #      - gateway ：**靜默**。FederationAuditPipelineSilent 盯的是 mtail sidecar
 #        自己的 counter，那是另一條路徑，Vector 這側斷掉它照樣綠。
 #    設成 "" 可停用該分支的綁定（回到 0.9.x 的 label-only 比對）。
-#    helm install vector ./helm/vector -n vector \
-#      --set evidenceChannel.podNamespace=<tenant-api 實際所在 ns> \
-#      --set evidenceChannel.gatewayNamespace=<gateway 實際所在 ns>
+#    ⛔ 下面兩個變數請換成你自己的 namespace；範例值僅供示意。
+#    （別把 `<...>` 這種佔位符直接貼進命令列——shell 會把 `<` 當重導向。）
+TENANT_API_NS=tenant-api-prod
+GATEWAY_NS=platform
+helm install vector ./helm/vector -n vector \
+  --set "evidenceChannel.podNamespace=${TENANT_API_NS}" \
+  --set "evidenceChannel.gatewayNamespace=${GATEWAY_NS}"
 
 # 3) Grafana datasource：plugin 用 GF_INSTALL_PLUGINS 自動裝
 #    （k8s/03-monitoring/deployment-grafana.yaml 已加好）；

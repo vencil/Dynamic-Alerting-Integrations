@@ -115,10 +115,13 @@ kubectl apply -f k8s/00-namespaces/namespace-vector.yaml
 #    `monitoring` — see "Producer namespace binding" below before upgrading.
 helm install vector ./helm/vector -n vector
 
-# Producers installed elsewhere (#1288) — set BOTH or that branch goes quiet
+# Producers installed elsewhere (#1288) — set BOTH or that branch goes quiet.
+# Substitute your own namespaces; the values below are only an example.
+TENANT_API_NS=tenant-api-prod
+GATEWAY_NS=platform
 helm install vector ./helm/vector -n vector \
-  --set evidenceChannel.podNamespace=<tenant-api's namespace> \
-  --set evidenceChannel.gatewayNamespace=<gateway's namespace>
+  --set "evidenceChannel.podNamespace=${TENANT_API_NS}" \
+  --set "evidenceChannel.gatewayNamespace=${GATEWAY_NS}"
 
 # Override the sink namespace
 helm install vector ./helm/vector -n vector \
