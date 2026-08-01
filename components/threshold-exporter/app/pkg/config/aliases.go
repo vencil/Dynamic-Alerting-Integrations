@@ -161,9 +161,16 @@ func canonicalizeDefaults(defaults map[string]float64) map[string]float64 {
 // A set, not a map view: membership is the entire payload, so both spellings of
 // one threshold collapse onto the same canonical entry for free (the
 // canonical-wins dedup canonicalizeDefaults spells out is structural here).
-// No fast path either — the list is short (registry tier == optional_overrides
-// is 25 keys today) and this runs on the validation path, never per scrape.
+//
+// ⚠️ This DOES run per scrape as of the declared-key emission loop
+// (ResolveAtWithStats hoists it beside canonDefaults), so the empty-list fast
+// path is load-bearing rather than cosmetic: with nothing declared — every
+// shipped config today — it must not allocate on the hot path. A nil map still
+// answers `_, ok := m[k]` correctly, so callers need no nil check.
 func canonicalizeOptionalOverrides(keys []string) map[string]struct{} {
+	if len(keys) == 0 {
+		return nil
+	}
 	out := make(map[string]struct{}, len(keys))
 	for _, k := range keys {
 		canon, _ := canonicalKeyFor(k)

@@ -516,10 +516,31 @@ def generate_profile(profile_name: str, selected_dbs: list[str], tier: str = "pr
                 value = type(info["value"])(value * tier_factor)
             profile[key] = value
 
-        # Include optional overrides (critical tiers) as commented hints
-        # By placing them with actual values, the profile becomes a
-        # complete "standard" baseline that tenants only override selectively
+        # Optional-tier keys: the `_critical` twins go in, the flat ones do not.
+        #
+        # They look alike in the registry but behave nothing alike. A
+        # `<base>_critical` resolves through resolveCriticalRows, which only
+        # requires the BASE to be in `defaults:` — true for pg_connections,
+        # mysql_connections and the rest — so a profile supplying it produces a
+        # real critical-tier row today. Keep them.
+        #
+        # ⛔ The flat ones (oracle_* / db2_* / clickhouse_*) are the
+        # declared-without-value tier (#1189 / TRK-337). A profile is
+        # platform-authored, and that tier's whole meaning is that the platform
+        # asserts no value, so ApplyProfiles now refuses to fill one in and logs
+        # the entry as ignored. Writing them here would emit a file whose
+        # entries are dead on arrival.
+        #
+        # Nothing that worked stops working: those flat keys are absent from
+        # `defaults:` and resolveBaseRows walks `defaults`, so they never
+        # reached a metric. (The old comment claimed these were "commented
+        # hints" while the code wrote real values, and called the whole set
+        # "critical tiers" — inaccurate for exactly the flat ones.) The
+        # suggested-starting-value job for those belongs in the TENANT's own
+        # file, which the interactive prompt already handles.
         for key, info in pack.get("optional_overrides", {}).items():
+            if not key.endswith("_critical"):
+                continue
             profile[key] = info["value"]
 
     return {"profiles": {profile_name: profile}}

@@ -177,6 +177,31 @@ class TestGenerateProfile:
         profile = result["profiles"]["std-pg-prod"]
         assert "pg_connections_critical" in profile
 
+    def test_optional_tier_split_critical_in_flat_out(self):
+        """⛔ #1189 / TRK-337：optional_overrides 的兩半在 profile 裡待遇相反。
+
+        `<base>_critical` 走 resolveCriticalRows，只要求 base 在 `defaults:`
+        （pg_connections 等都在），所以 profile 供給它會產生真的 critical 層
+        row——保留。**平鍵**則是「宣告但平台不主張值」那一格：profile 是平台
+        授權的檔案，exporter 的 ApplyProfiles 現在會拒絕替它填值並記一行
+        WARN，寫進去只會生出一份 dead-on-arrival 的檔案。
+
+        逐 pack 對照該 pack 自己的 optional_overrides，不用字串後綴猜。
+        """
+        import scaffold_tenant as st
+
+        problems = []
+        for db, pack in st.RULE_PACKS.items():
+            optional = pack.get("optional_overrides", {})
+            if not optional:
+                continue
+            profile = generate_profile("std", [db])["profiles"]["std"]
+            leaked = [k for k in optional if not k.endswith("_critical") and k in profile]
+            missing = [k for k in optional if k.endswith("_critical") and k not in profile]
+            if leaked or missing:
+                problems.append(f"{db}: flat-leaked={leaked} critical-missing={missing}")
+        assert not problems, "\n".join(problems)
+
 
 # ============================================================
 # generate_report

@@ -3,9 +3,21 @@
 
 WHY: a rule-pack alert reads its threshold from `tenant:alert_threshold:<key>`,
 which is populated from `user_threshold{component,metric}` — emitted by the
-threshold-exporter ONLY for keys present in `c.Defaults`
+threshold-exporter for keys present in `c.Defaults`
 (`resolveBaseRows` iterates `c.Defaults`; `resolveCriticalRows` requires the
-base key in `c.Defaults`). The platform-defaults surface is produced by
+base key in `c.Defaults`).
+
+⚠️ There is now a THIRD emission path (#1189 / TRK-337): `resolveDeclaredRows`
+emits a key listed in `optional_overrides` when — and only when — the TENANT
+supplied a value. This gate deliberately keeps measuring the platform-defaults
+path, because "the platform can produce it" and "a tenant happened to set it"
+are different questions and only the first is a property of what we ship. But
+it does mean the class-A remediation this gate prescribes below ("wrong tier —
+move it to defaults") is no longer the only fix: for a key meant to be
+tenant-calibrated, declaring it and letting the tenant set it is the intended
+end state, and moving it to `defaults:` would arm it for everyone instead.
+
+The platform-defaults surface is produced by
 `scaffold_tenant.generate_defaults()`. So an alert that demands a key which
 `generate_defaults()` never produces is DEAD — it can never fire, and nothing
 says so. This is a DECLARED-BUT-UNWIRED failure: schema validation can't catch

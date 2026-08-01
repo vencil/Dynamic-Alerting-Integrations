@@ -8,28 +8,25 @@ package config
 // The membership universe is now TWO sets, and the interesting content of this
 // file is where they are deliberately NOT unioned:
 //
-//	flat        accepted   — the point of the change, and the one gap: nothing
-//	                         emits for it yet, so a tenant who sets one gets no
-//	                         row and no signal at all. Held shut by
-//	                         tests/shared/test_optional_overrides_tripwire.py
-//	                         until the emission loop lands, because no
-//	                         supported producer can put a key on the list
+//	flat        accepted   — the point of the change, and since
+//	                         resolveDeclaredRows landed it also EMITS (State 1
+//	                         only: a row exists iff the tenant supplied a value)
 //	dimensional accepted   — resolveDimensionalRows never consults defaults, so
 //	                         the row emits the moment it is written
 //	_critical   REFUSED    — resolveCriticalRows keys off defaults[base] and
 //	                         drops the row otherwise; accepting would mean
-//	                         "write succeeds, nothing emits, log-only signal",
-//	                         and unlike the flat shape this one is writable on
-//	                         a live config TODAY
+//	                         "write succeeds, nothing emits, log-only signal".
+//	                         resolveDeclaredRows skips this shape too, so the
+//	                         emission loop cannot route around the refusal
 //	expires:    REFUSED    — nothing to fail-safe back to; on lapse the
 //	                         threshold would have no value at all
 //
-// So the rule this file pins is not the tidy "never accept what the resolver
-// will silently drop" — the flat row breaks that. It is: never accept it where
-// a tenant can actually get there. The two refusals guard shapes that are
-// reachable now; the tripwire guards the one that is not, mechanically rather
-// than by promise. A future pass that widens membership "for consistency" has
-// to delete a test that says why not.
+// So the rule this file pins is: never accept what the resolver will silently
+// drop. When PR-B shipped, the flat row was an exception held shut by a
+// temporary tripwire (no supported producer could put a key on the list);
+// that exception is now closed by the emission loop rather than by the
+// tripwire, which is deleted. A future pass that widens membership "for
+// consistency" still has to delete a test that says why not.
 
 import (
 	"sort"
