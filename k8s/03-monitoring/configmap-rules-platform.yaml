@@ -1119,8 +1119,36 @@ data:
           # (helm/federation-reconciler). Behavioural contract:
           # tests/rulepacks/platform-federation-revocation_test.yaml (an extracted
           # copy of these seven alerts — KEEP IN SYNC).
+          #
+          # ⛔ THREE OF THE SEVEN LATCH — `max_over_time(...[1h]) > 0` (#1238 /
+          # TRK-352). Read this before "simplifying" any of them back to a bare
+          # `gauge > 0`. EVERY gauge in this block is recomputed from scratch on
+          # each reconcile pass (300s): either a snapshot set-diff, or a count of
+          # log rows in a rolling ~600s window. So a bounded, one-off occurrence
+          # holds its gauge non-zero for only one or two passes — SHORTER than the
+          # `for:` it must outlast. Measured with promtool against the pre-#1238
+          # rules: a single-pass excursion of tamper_suspected never fired at any
+          # eval time, and neither did a single refused reload. The latch
+          # separates "was this ever detected" from "is it still true right now",
+          # and only the first question is meaningful for tamper evidence.
+          #
+          # ⚠️ What the latch does NOT buy (ADR-028 §誠實邊界, say it plainly):
+          # it makes a detection that HAPPENED reach a human. It does not make
+          # the detection happen. The reconciler samples every 300s while the
+          # smallest viable un-revoke is far shorter, so an attack reverted inside
+          # one sampling gap is never observed and no alert expression can page
+          # for it. Closing that needs an event-driven detector, not a stickier
+          # query — tracked in #1322 (TRK-357).
+          #
+          # ⚠️ `for:` is NOT a debounce on a latched alert. Once the latch is
+          # true it stays true for the whole window, so a single sample satisfies
+          # any `for:` we could set (measured). The existing values are retained
+          # deliberately — they cost minutes against a ≤4h exposure ceiling and a
+          # 300s sampling floor, and moving them would churn the extracted-copy
+          # contract, the promtool edges and the runbook timings for no measured
+          # gain. Do not re-derive them as noise suppression; they are not.
           - alert: FederationRevocationTamperSuspected
-            expr: federation_revocation_tamper_suspected > 0
+            expr: max_over_time(federation_revocation_tamper_suspected[1h]) > 0
             for: 5m
             labels:
               severity: critical
@@ -1250,16 +1278,20 @@ data:
           # emitted nothing at all when it happened — the missing branch returns
           # normally from inside the Lua pcall, so neither existing warning fired.
           #
-          # `for: 5m` = one reconcile interval (300s), shorter than the 10m the
-          # staleness pair uses because the exposure here is active rather than
-          # frozen. ⚠️ Be honest about what `for` buys on THIS gauge: the value is
-          # a count of log rows in a ~10m window, so a single transient line keeps
-          # it non-zero far longer than any `for` we would set. It debounces scrape
-          # jitter, NOT a one-off missing read. A genuinely transient projection
-          # swap will page here; the runbook's first step is to separate that from
-          # a deleted key.
+          # ⛔ CORRECTED IN #1238 — the paragraph that used to sit here claimed
+          # "a single transient line keeps it non-zero far longer than any `for`
+          # we would set". That was measured to be false for one of the two
+          # alignments. The gauge counts log rows over a ~600s window and is
+          # rewritten every 300s, so ONE missing-read row is visible to either
+          # two passes (600s of non-zero — outlasts `for: 5m`) or, when the pass
+          # schedule falls the other way, only ONE (300s — does NOT outlast it,
+          # promtool-verified). "A genuinely transient projection swap will page
+          # here" was therefore true most of the time and silently false the
+          # rest. The latch removes the alignment dependency entirely: any pass
+          # that sees the empty enforcement plane pages. `for: 5m` is retained
+          # but no longer filters — see the block comment on the first alert.
           - alert: FederationGatewayRevokedSetMissing
-            expr: federation_gateway_revoked_set_missing > 0
+            expr: max_over_time(federation_gateway_revoked_set_missing[1h]) > 0
             for: 5m
             labels:
               severity: critical
@@ -1310,14 +1342,24 @@ data:
           # account of what it did (immune to that skew, silent for any cause that
           # never produced the warning). Either can be non-zero alone.
           #
-          # `for: 10m` on both: the reconciler's interval is 300s, so 10m is one
-          # full reconcile pass plus an equal margin — enough to absorb a single
-          # anomalous pass (a read that caught a ConfigMap projection swap
-          # mid-flight) without delaying anything real. A long window costs nothing
-          # here because the condition is PERSISTENT: only an out-of-band write can
-          # create it and only a human can clear it, so it is still true 10 minutes
-          # later. Contrast FederationGatewayRevocationLoadFailure's `for: 2m`,
-          # which debounces a genuinely transient I/O condition.
+          # ⛔ CORRECTED IN #1238 — "the condition is PERSISTENT … so it is still
+          # true 10 minutes later" was written as applying to BOTH, and it only
+          # ever held for LiveSetRejected. That one reads the FILE, so the
+          # condition really does persist until a human fixes the line. The
+          # gateway's account does NOT: `gateway_reload_rejected` is a count of
+          # log rows in a rolling ~600s window, recomputed every 300s, so one
+          # refused reload holds the gauge non-zero for AT MOST 600s — exactly
+          # `for: 10m`, and the alert therefore never fires (promtool-verified:
+          # no fire at 9m, 10m, 11m or 14m). Worse, the warning is only emitted
+          # when a reload happens, and the gateway reloads inside the request
+          # path (revoked_check.lua — Envoy's Lua filter has no timer), so a
+          # low-traffic gateway with a poisoned revoked.txt emits sparse warnings
+          # and the gauge decays between them: a genuinely frozen enforcement
+          # plane could stay below the threshold indefinitely. LiveSetRejected
+          # keeps the bare `> 0`; ReloadRejected is latched. Contrast
+          # FederationGatewayRevocationLoadFailure's `for: 2m`, which debounces a
+          # genuinely transient I/O condition and whose gauge outlasts it either
+          # way.
           - alert: FederationRevocationLiveSetRejected
             expr: federation_revocation_live_set_rejected_lines > 0
             for: 10m
@@ -1350,7 +1392,7 @@ data:
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/federation-revocation-reconciler-runbook.md"
 
           - alert: FederationGatewayRevokedSetReloadRejected
-            expr: federation_gateway_revoked_set_reload_rejected > 0
+            expr: max_over_time(federation_gateway_revoked_set_reload_rejected[1h]) > 0
             for: 10m
             labels:
               severity: critical

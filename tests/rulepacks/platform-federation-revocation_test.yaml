@@ -23,6 +23,12 @@
 #        never at 0. BOTH EDGES again — 9m PENDING, 10m FIRING — because the `for:`
 #        is the only thing separating "one anomalous pass" from "the enforcement
 #        plane is frozen on a stale set", and a shortened one would otherwise pass.
+#   17-20) THE LATCH (#1238 / TRK-352). Cases 1-16 only ever modelled conditions
+#        that PERSIST, which is the half these gauges are naturally good at. A
+#        gauge recomputed every 300s is structurally worst at holding a BOUNDED
+#        occurrence — and that is the shape of the smallest real un-revoke. 17-19
+#        are counterfactuals (they fail against the pre-#1238 rules); 20 pins the
+#        cost the latch buys rather than a benefit.
 # Run: promtool test rules tests/rulepacks/platform-federation-revocation_test.yaml
 rule_files:
   - platform-federation-revocation.rules.yaml
@@ -288,3 +294,144 @@ tests:
       - eval_time: 9m
         alertname: FederationGatewayRevokedSetMissing
         exp_alerts: []
+
+  # ── 17-20) THE LATCH (#1238 / TRK-352) ──────────────────────────────────────
+  # Cases 1-16 all model a condition that PERSISTS. That is the easy half, and
+  # it is the only half that was ever tested. These four model the hard half: a
+  # BOUNDED occurrence, which is the shape of the smallest real attack and the
+  # shape every gauge here is structurally worst at holding.
+  #
+  # ⛔ Each of 17-19 is a counterfactual, not a confirmation: run it against the
+  # pre-#1238 rules (`git show e2d72ce4:tests/rulepacks/platform-federation-
+  # revocation.rules.yaml`) and the FIRING assertion fails — that is the whole
+  # value of the change, measured rather than asserted. The trailing no-fire
+  # assertion pins the 1h window itself: shorten it below the firing eval_time
+  # and these go red.
+
+  # 17) ⛔ THE #1238 ACCEPTANCE CASE. tamper_suspected non-zero for EXACTLY one
+  # reconcile pass (300s == 5 one-minute samples), then back to 0 — an un-revoke
+  # that was reverted before the next pass. Pre-#1238 this never fired at ANY
+  # eval time, because `for: 5m` and the pass length are the same 300s, so the
+  # gauge was always back to 0 one sample before the threshold was reached.
+  - interval: 1m
+    name: tamper-single-pass-blip-latches
+    input_series:
+      - series: 'federation_revocation_tamper_suspected'
+        values: '1 1 1 1 1 0+0x70'
+    alert_rule_test:
+      # still inside `for:` — pending, not firing (pins that `for:` is honoured)
+      - eval_time: 4m
+        alertname: FederationRevocationTamperSuspected
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: FederationRevocationTamperSuspected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+            exp_annotations:
+              summary: "Federation token un-revoke suspected — reconciler found a revoked-but-live token absent from the live set (ADR-028)"
+      # long after the gauge returned to 0, the detection is still pageable
+      - eval_time: 30m
+        alertname: FederationRevocationTamperSuspected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+            exp_annotations:
+              summary: "Federation token un-revoke suspected — reconciler found a revoked-but-live token absent from the live set (ADR-028)"
+      # …and past the 1h window it clears (reset time is bounded, not infinite)
+      - eval_time: 66m
+        alertname: FederationRevocationTamperSuspected
+        exp_alerts: []
+
+  # 18) Same shape for the empty-enforcement-plane gauge (#1236). One
+  # missing-read row observed by a single pass (300s) did NOT outlast `for: 5m`,
+  # while the SAME row observed by two passes (600s) did — the alert fired or
+  # not depending on pass alignment. Latched, alignment no longer decides.
+  - interval: 1m
+    name: gateway-revoked-set-missing-single-pass-latches
+    input_series:
+      - series: 'federation_gateway_revoked_set_missing'
+        values: '1 1 1 1 1 0+0x70'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: FederationGatewayRevokedSetMissing
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: FederationGatewayRevokedSetMissing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+            exp_annotations:
+              summary: "Federation gateway has NO revoked-set — it is enforcing an EMPTY set and honouring every revoked token (ADR-028 §fail-open)"
+      - eval_time: 30m
+        alertname: FederationGatewayRevokedSetMissing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+            exp_annotations:
+              summary: "Federation gateway has NO revoked-set — it is enforcing an EMPTY set and honouring every revoked token (ADR-028 §fail-open)"
+      - eval_time: 66m
+        alertname: FederationGatewayRevokedSetMissing
+        exp_alerts: []
+
+  # 19) A SINGLE refused reload. The gauge counts rows in a ~600s window and is
+  # rewritten every 300s, so one warning is non-zero for at most 600s — exactly
+  # `for: 10m`. Pre-#1238 this NEVER fired: the last non-zero sample sits at 9m,
+  # one minute short of the threshold. This is the case that showed the shipped
+  # "the condition is PERSISTENT" rationale did not apply to this gauge.
+  - interval: 1m
+    name: gateway-reload-rejected-single-refusal-latches
+    input_series:
+      - series: 'federation_gateway_revoked_set_reload_rejected'
+        values: '1+0x9 0+0x70'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: FederationGatewayRevokedSetReloadRejected
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: FederationGatewayRevokedSetReloadRejected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+            exp_annotations:
+              summary: "Federation gateway REFUSED its revoked-set reload — it is enforcing a stale set, so revocations made since are NOT in force (ADR-028 / #1235)"
+      - eval_time: 40m
+        alertname: FederationGatewayRevokedSetReloadRejected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+            exp_annotations:
+              summary: "Federation gateway REFUSED its revoked-set reload — it is enforcing a stale set, so revocations made since are NOT in force (ADR-028 / #1235)"
+      - eval_time: 72m
+        alertname: FederationGatewayRevokedSetReloadRejected
+        exp_alerts: []
+
+  # 20) ⚠️ HONESTY CASE — pins the cost, not a benefit. A single SCRAPE sample
+  # (not even a whole pass) latches too. `for:` therefore filters NOTHING on the
+  # latched alerts; it is pure latency. This case exists so that nobody reads
+  # the retained `for: 5m` as a debounce and "restores" it as one, and so that
+  # the false-positive surface the latch buys is written down where it will be
+  # run rather than only in a comment. The producer-side mitigation for the one
+  # false positive we could name (a legitimate revocation reconciled before its
+  # own ConfigMap projection has landed) is the reconciler's projection-grace,
+  # NOT this `for:`.
+  - interval: 1m
+    name: tamper-single-sample-also-latches-for-does-not-filter
+    input_series:
+      - series: 'federation_revocation_tamper_suspected'
+        values: '0 1 0+0x70'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: FederationRevocationTamperSuspected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+            exp_annotations:
+              summary: "Federation token un-revoke suspected — reconciler found a revoked-but-live token absent from the live set (ADR-028)"

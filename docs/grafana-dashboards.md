@@ -347,7 +347,7 @@ da-tools grafana-import \
 | Row 1 | **Reconciler staleness / error rate / events checked** | staleness（含 1800 線）、`rate(...reconcile_errors_total[5m])`、`..._events_checked` | staleness 鋸齒近 0、error rate 平 0 | staleness 攀升＋error rate >0＝fail-closed |
 | Row 2 | **Events dropped / erosion ratio** | `..._events_dropped`、`dropped / clamp_min(checked + dropped, 1)` | 皆 0 | >0＝schema-drift；ratio 用 `clamp_min` 防 0/0=NaN |
 | Row 3 | **Gateway read failures** | `federation_gateway_revocation_load_errors`（含 >0 線） | 平 0 | >0＝fail-open；近 `for:2m` 邊界震盪＝拍頻 |
-| Row 4 | **Suspected un-revokes（headline）** | `federation_revocation_tamper_suspected`（大圖，含 >0 線） | 平 0 | >0 持續 5m＝critical 安全事件 |
+| Row 4 | **Suspected un-revokes（headline）** | `federation_revocation_tamper_suspected`（大圖，含 >0 線） | 平 0 | **任何**一次 >0＝critical 安全事件（#1238 起鎖存，不需持續） |
 | Row 5 | **Heartbeat canary — 30m window liveness** | `..._channel_up`（0/1）＋ `..._heartbeats_seen` | channel_up 平 1、heartbeats_seen 約 5-6 | heartbeats_seen 衰減→0 且 channel_up 落 0＝證據通道斷；**斷崖式歸零**多半是 producer 事件改名或 Vector selector 改動 |
 
 > **色盲也能判讀（無障礙）：** 九個 stat panel（頂列五個 + 第二列 #1235 兩個與 #1236 一個 + erosion ratio）都不只靠顏色——每個顏色階都配**符號＋文字**（✓／🔴／🟡）。依 ADR-012 / WCAG 1.4.1；`tests/dx/test_federation_revocation_dashboard.py` 的 a11y golden 鎖住「每個顏色階都有符號」防退化。
@@ -367,6 +367,8 @@ da-tools grafana-import \
 ### 與告警的對齊
 
 panel 閾值刻意**與 [configmap-rules-platform.yaml](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-rules-platform.yaml) 的七個告警同一數值**（單一「什麼叫壞」來源）：`FederationRevocationTamperSuspected`（>0, 5m, critical）、`FederationRevocationReconcileStale`（`time()-ts > 1800` 或 absent, 10m, critical）、`FederationRevocationEvidenceChannelDown`（`channel_up == 0`, 15m, critical）、`FederationGatewayRevocationLoadFailure`（>0, 2m, warning）、`FederationRevocationLiveSetRejected`（>0, 10m, critical）、`FederationGatewayRevokedSetReloadRejected`（>0, 10m, critical）、`FederationGatewayRevokedSetMissing`（>0, 5m, critical）。⛔ 最後三條**不是同一族**：`ReloadRejected` 那一對與 `FederationGatewayRevocationLoadFailure` **姿態相反**——那條是「讀不到、正在放行」，這兩條是「讀到了但被拒絕、沿用前一份撤銷集」，沒有多放行任何東西，但**此後發出的撤銷都沒生效**（`for:10m` ＝一個 reconcile 週期 300s 再加等量餘裕；此條件是持久性的，窗開長不花成本）。而 `RevokedSetMissing` 是**第三種姿態**、也是唯一執行面為**空集合**的那個：檔案不見了，gateway 手上什麼都沒有，每個已撤銷 token 都被放行至 TTL——所以是 critical 而非它鄰居那條的 warning，因為曝險是**進行中**而非**凍結**（#1236）。IR 步驟見 [runbook](internal/federation-revocation-reconciler-runbook.md)。
+
+⛔ **#1238 之後，「panel 與 pager 同一數值」只剩門檻相同，觸發語意不再相同——看板綠而 pager 紅是預期行為，不是矛盾。** `TamperSuspected` / `RevokedSetReloadRejected` / `RevokedSetMissing` 三條已改為**鎖存**（`max_over_time(...[1h]) > 0`）：panel 畫的是**原始 gauge＝此刻狀態**，會在下一輪對帳（300s）就回到 0；告警畫的是**過去 1 小時內是否曾經非零**，因此最多會在 gauge 歸零後續燒約 1 小時。上表那三條的 `for:` 也不再是過濾器（鎖存之下單一取樣即滿足），只是延遲。**值班時看板全綠不足以判定 pager 是誤報**——請改看告警本身的 `ACTIVE SINCE` 與 runbook 對應章節。原因（三個 gauge 都每輪重算，有界事件撐不到自己的 `for:`）見 [ADR-028 §D3](adr/028-federation-revocation-tamper-evidence.md)。
 
 ---
 

@@ -50,6 +50,16 @@ spec:
             - {{ .Values.reconcile.lookbackSeconds | quote }}
             - --settle
             - {{ .Values.reconcile.settleSeconds | quote }}
+            - --projection-grace
+            # ⛔ NOT `| default 180`. Sprig's `default` treats an explicit 0 as
+            # empty, so the documented way to disable this guard
+            # (`--set reconcile.projectionGraceSeconds=0`) would silently render
+            # 180 and the operator would never know. `hasKey` separates absent
+            # (use the fallback, which is what a `--reuse-values` upgrade from a
+            # pre-0.2.0 release hits) from explicitly set — including 0. Same
+            # shape as helm/vector's evidenceChannel guards; pinned by
+            # tests/helm/test_federation_reconciler_projection_grace.py.
+            - {{ if hasKey .Values.reconcile "projectionGraceSeconds" }}{{ .Values.reconcile.projectionGraceSeconds | quote }}{{ else }}{{ 180 | quote }}{{ end }}
             - --skew-margin
             - {{ .Values.reconcile.skewMarginSeconds | quote }}
             - --failopen-lookback

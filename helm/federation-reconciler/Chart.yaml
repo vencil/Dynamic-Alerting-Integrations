@@ -4,7 +4,11 @@ description: Federation revocation reconciler (ADR-028 D1, #924) — a long-runn
 type: application
 # version: Helm Chart version (bump on chart/template change).
 # 0.1.0 — #924 / ADR-028: initial chart (Deployment + /metrics + revoked.txt mount + NetworkPolicy).
-version: 0.1.0
+# 0.2.0 — #1238 / TRK-352: reconcile.projectionGraceSeconds (event-query-only age
+#         guard covering this pod's own kubelet ConfigMap projection lag). Needed
+#         because the latched TamperSuspected alert no longer absorbs a one-pass
+#         false positive for free. Set to 0 to reproduce the pre-#1238 windows.
+version: 0.2.0
 # appVersion: the da-tools image the reconciler ships in.
 # ⛔ v2.9.0 does NOT contain the reconciler script — it was added to build.sh
 # TOOL_FILES after that tag was cut, so the chart is not runnable as pinned.

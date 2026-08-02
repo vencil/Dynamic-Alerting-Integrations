@@ -7,6 +7,7 @@ never emits an all-clear) is tested by monkeypatching the I/O seams to raise.
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import sys
@@ -222,6 +223,20 @@ class TestParsing:
             "match a same-named event from any producer in the store"
         )
         assert "now-86400s" in q and "now-60s" in q
+
+    def test_event_settle_is_the_larger_lag_never_the_sum(self):
+        """#1238. VictoriaLogs ingestion lag and this pod's own kubelet
+        ConfigMap projection lag are two independent delays measured from the
+        SAME instant (tenant-api commits the ConfigMap before emitting the
+        event), so the guard is max() — summing them would delay detection for
+        no additional safety, and taking either alone reopens the other hazard.
+        """
+        assert rec.event_settle_s(60, 180) == 180     # projection lag dominates
+        assert rec.event_settle_s(300, 180) == 300    # a raised --settle still wins
+        assert rec.event_settle_s(60, 60) == 60
+        # grace disabled => exactly the pre-#1238 behaviour, so an operator can
+        # revert the mitigation without a redeploy of a different image.
+        assert rec.event_settle_s(60, 0) == 60
 
     def test_failopen_query_uses_recent_window(self):
         # The fail-open gauge must reflect RECENT failures, not a 24h-old blip.
@@ -682,3 +697,57 @@ def _future_rfc3339(seconds: int) -> str:
     import datetime as dt
 
     return (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class TestProjectionGraceWiring:
+    """#1238. The projection grace must narrow the EVENT query and NOTHING else.
+
+    The three gateway-side gauges read a ``[now-600s, now-settle]`` window.
+    Raising their near edge SHRINKS that window, which makes a single refused
+    reload / missing read even harder to hold above its `for:` — the exact
+    opposite of what #1238 does for them. So the obvious-looking simplification
+    ("just raise --settle, it is the same idea") is a regression, and it is one
+    that no assertion elsewhere in this file would notice: every other test
+    either calls the query builders directly with explicit arguments or ignores
+    the query text entirely. Hence this class.
+    """
+
+    def _captured(self, tmp_path, monkeypatch, settle_s, grace_s):
+        cfg = dataclasses.replace(
+            _cfg(tmp_path), settle_s=settle_s, projection_grace_s=grace_s)
+        seen: list[str] = []
+
+        def _q(_url, query, **_k):
+            seen.append(query)
+            return []
+
+        monkeypatch.setattr(rec, "query_victorialogs", _q)
+        rec.reconcile_once(cfg, rec.Metrics(), now=_now())
+        return seen
+
+    def test_grace_moves_the_event_window_only(self, tmp_path, monkeypatch):
+        seen = self._captured(tmp_path, monkeypatch, settle_s=60, grace_s=180)
+
+        events = [q for q in seen if "federation_token_revoked" in q]
+        others = [q for q in seen if "federation_token_revoked" not in q]
+        assert len(events) == 1
+        # fail-open, heartbeat, rejected, missing — if this count changes, a new
+        # query was added and its near edge has to be decided deliberately.
+        assert len(others) == 4, f"unexpected query set: {others}"
+
+        assert "now-180s" in events[0] and "now-60s" not in events[0], (
+            "the event query must settle on max(settle, projection_grace)")
+        for q in others:
+            assert "now-60s" in q, (
+                "a gateway-side window must keep the bare --settle; raising its "
+                f"near edge shrinks the ~600s window it depends on: {q!r}")
+            assert "now-180s" not in q, (
+                f"projection grace leaked into a gateway-side window: {q!r}")
+
+    def test_zero_grace_reproduces_the_pre_1238_windows(self, tmp_path, monkeypatch):
+        """The mitigation is revertible from values alone — an operator who
+        decides the grace is mis-tuned for their cluster can set it to 0 and get
+        exactly the old behaviour back, without waiting for a chart release."""
+        seen = self._captured(tmp_path, monkeypatch, settle_s=60, grace_s=0)
+        for q in seen:
+            assert "now-60s" in q

@@ -30,6 +30,11 @@
 
 ### `FederationRevocationTamperSuspected`（critical）
 **意義**：log 說某 token 已撤銷且未過期，但它不在 live 撤銷集 → 疑似 un-revoke。
+⛔ **本告警自 #1238 起為鎖存式**（`max_over_time(...[1h]) > 0`）。三件事必須先知道，否則會誤判現場：
+1. **它說的是「過去 1 小時內曾經偵測到」，不是「此刻仍然成立」。** 你接手時 gauge 很可能已經是 0——那是正常的，不代表誤報，也不代表已修復。要看當下狀態請直接查 `federation_revocation_tamper_suspected`（未鎖存的原值）。
+2. **修好之後告警不會立刻消**，最多續燒 1 小時（鎖存窗＝最短復歸時間，刻意如此：一條 critical 安全訊號不該在有人確認之前自己消失）。**不要因為它還在燒就以為沒修好。**
+3. **它不保證偵測到了每一次 un-revoke。** 對帳每 300s 一輪，短於一輪的竄改窗可能完全沒被取樣。看到這條＝至少有一次被抓到；沒看到 ≠ 沒發生過。詳 ADR-028 §D3「取樣式偵測的固有盲區」。
+
 **IR**：
 1. 查 VictoriaLogs 拿 opaque token_id：用 `log_type:"federation_evidence" AND event:"federation_token_revoked"` 過濾近 24h（與 reconciler 同一支查詢；#1237 起加 `log_type` 限定，避免比對到非權威來源灌入的同名事件）（reconciler pod log 也會印 `TAMPER SUSPECTED: ...`）。
 2. **租戶去識別化**：log 只有 token_id（ADR-028 D3）；IR 時從 store 的 records 以 token_id 反查租戶，**別**把租戶識別碼寫回工單。
@@ -84,9 +89,9 @@
 **兩條告警分別是什麼**：
 
 - **`FederationRevocationLiveSetRejected`**（`federation_revocation_live_set_rejected_lines > 0`, `for:10m`, critical）——**成因側**。本 reconciler 從掛載的 `revoked.txt` 讀到違反行契約的行。它看得到成因，但讀的是**自己那份 kubelet 投影**，未必等於 gateway 當下載到的那份。
-- **`FederationGatewayRevokedSetReloadRejected`**（`federation_gateway_revoked_set_reload_rejected > 0`, `for:10m`, critical）——**執行面自述**。直接從 gateway 自己的 log stream 讀回牠拒載了幾次。它不受上述投影／時間差影響，但對「沒產生那句 warn 的成因」是啞的。手查：`log_type:"gateway_operational" AND app:"envoy" AND "federation: revoked-set rejected"`（#1237 起限定，同上一段的誠實邊界）。
+- **`FederationGatewayRevokedSetReloadRejected`**（`max_over_time(federation_gateway_revoked_set_reload_rejected[1h]) > 0`, `for:10m`, critical）——**執行面自述**。直接從 gateway 自己的 log stream 讀回牠拒載了幾次。它不受上述投影／時間差影響，但對「沒產生那句 warn 的成因」是啞的。手查：`log_type:"gateway_operational" AND app:"envoy" AND "federation: revoked-set rejected"`（#1237 起限定，同上一段的誠實邊界）。
 - ⛔ **兩者刻意不是冗餘**：各自在對方看不見的地方看得見，**任一可單獨非零**。看到其中一條就把另一條一起調出來看。
-- **`for:10m` 的來由**：reconcile 週期 300s，10m ＝一個完整週期再加等量餘裕，足以吸收單次異常（例如讀到正在被 kubelet 換版的投影）。此條件是**持久性**的（只有帶外寫入造得出來、只有人為改得掉），窗開長不花任何成本——與 `FederationGatewayRevocationLoadFailure` 的 `for:2m`（去抖真正瞬態的 I/O）不同。
+- **`for:10m` 的來由（#1238 更正）**：原本寫的是「reconcile 週期 300s，10m ＝一個完整週期再加等量餘裕；此條件是**持久性**的，窗開長不花任何成本」。⛔ **那個持久性論證只對 `LiveSetRejected` 成立**——它讀的是**檔案**，壞行不修就一直在。`ReloadRejected` 讀的是 ~600s 窗內的 log 列數、每 300s 重算，所以**單次拒載最多非零 600s，恰好等於 `for:10m`，實測永不觸發**（promtool：9m/10m/11m/14m 皆不響）。而且流量會讓它更糟不是更好：gateway 的 reload 掛在請求路徑上，安靜的 gateway 帶著中毒檔案只會零星產生 warn，窗與窗之間 gauge 就衰減回 0。故 `ReloadRejected` **改為鎖存**（`max_over_time(...[1h])`），`LiveSetRejected` 維持裸 `> 0`（它的持久性是真的）。兩者的 `for:10m` 皆保留，但**鎖存那條的 `for:` 已不再過濾任何東西**，只是延遲——與 `FederationGatewayRevocationLoadFailure` 的 `for:2m`（去抖真正瞬態的 I/O，且其 gauge 本來就撐得過 2m）不同。
 
 ⛔ **不要與 `FederationGatewayRevocationLoadFailure` 混為一談——兩者姿態相反**：
 
@@ -131,6 +136,8 @@ promtool 是理論契約；推正式前在 `vibe-k8s-lab` 實驗叢集實地驗�
 2. **fail-closed（`ReconcileStale`）**：暫停 VictoriaLogs Service（或 NetworkPolicy 擋 egress）→ 觀察 `reconcile_errors_total` 上升、`last_reconcile_ts` 停滯、`ReconcileStale` 於 `for:10m` 後觸發（絕不誤報 all-clear）。
 3. **schema-drift（`events_dropped`）**：注入缺欄位的 `federation_token_revoked` 測試事件 → 觀察 `events_dropped` 上升而非靜默。
 4. **拍頻**：確認 reconcile interval（300s）與 Prometheus scrape interval 不會在 `for:` 邊界產生 flap；必要時調 `for:` 或 interval。
+4b. **短窗 un-revoke（`TamperSuspected`，#1238）**——驗的是**鎖存**，也是本 runbook 唯一會暴露取樣盲區的場景。從 live 撤銷集移除一個未過期的 token_id，**在下一輪對帳前**放回（≲300s）→ 期望：若這一輪剛好取樣到，`federation_revocation_tamper_suspected` 只會有**單輪**非零，而 `FederationRevocationTamperSuspected` **仍應觸發並續燒約 1 小時**；#1238 之前它一次都不會觸發。⛔ **這一場景本質是機率性的，別把單次沒響當成迴歸**：竄改窗短於 300s 時，是否被取樣取決於它與對帳排程的相對位置。要穩定重現就把窗拉長到跨越一個對帳時點（例如 ≥360s），或直接看 `federation_revocation_tamper_suspected` 的原始序列確認那一輪確實非零。反向也要驗：全程不動撤銷集 → 告警**不得**觸發（鎖存讓任何一次假陽性都會 page 一小時，這是它的代價）。
+4c. **合法撤銷不得被讀成竄改（`projectionGraceSeconds`，#1238）**：正常撤銷一個 token（走 tenant-api），**不做任何竄改** → `tamper_suspected` 全程必須維持 0。這一步在驗 4b 之後才有意義：kind 上實測 ConfigMap→volume 投影延遲為 11–68s（預設 kubelet，一個 ~60s 同步迴圈的均勻分布），**其中兩次超過 `settleSeconds: 60`**，所以少了投影 grace 時，合法撤銷本身就足以產生單輪假陽性、而鎖存會把它變成一小時的 critical。若此步驟見到非零，先看該叢集的 kubelet `syncFrequency` 與 `configMapAndSecretChangeDetectionStrategy`，再調 `reconcile.projectionGraceSeconds`（設 0 可還原 #1238 之前的行為）。
 5. **證據通道斷裂（`EvidenceChannelDown`，#1234）**——本 runbook 唯一驗「偵測面有沒有輸入」的場景，**務必實跑**（其餘四場景驗的是「有輸入時判斷對不對」）。三種等價注入，任一即可，建議依序遞增可信度：
    - **停 producer**：`kubectl -n tenant-api scale deploy/tenant-api --replicas=0` → 觀察 `federation_revocation_heartbeats_seen` 在一個 30m 窗內衰減至 0、`federation_revocation_channel_up` 落 0、告警於 `for:15m` 後觸發；復原後心跳應在**一個 reconcile 週期內**（≤300s）把 `channel_up` 拉回 1（producer 啟動即刻發一次，不等第一個 tick）。
    - **拔掉 Vector source**：把 `source.extraLabelSelector` 改回只選 federation-gateway → 驗**同一個** metric 反應。這條同時驗證了 §D 的 selector 是真的載重路徑，而非只是 values 上的裝飾。

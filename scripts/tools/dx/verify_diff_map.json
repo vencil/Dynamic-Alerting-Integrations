@@ -684,7 +684,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "87dfb72612734cd60ed3119f599a5b80215b8af53983cff1298cf8c23ae5ed5d",
+ "source_digest": "35c91a19d6a88f97d679ff965761cf24e7b41650793757b0f065e42cd7e318cc",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -748,6 +748,7 @@
   "tests/e2e-bench/test_aggregate.py",
   "tests/golden/test_merge_parity.py",
   "tests/helm/test_environments_overlay_sync.py",
+  "tests/helm/test_federation_reconciler_projection_grace.py",
   "tests/helm/test_federation_store_namespace_guard.py",
   "tests/helm/test_human_socket_guard.py",
   "tests/helm/test_identity_claim_headers_guard.py",
@@ -1400,13 +1401,15 @@
   ],
   "helm/federation-reconciler": [
    "tests/dx/test_bump_docs.py",
+   "tests/helm/test_federation_reconciler_projection_grace.py",
    "tests/lint/test_check_image_pin_capability.py"
   ],
   "helm/federation-reconciler/Chart.yaml": [
    "tests/dx/test_bump_docs.py"
   ],
   "helm/federation-reconciler/values.yaml": [
-   "tests/dx/test_bump_docs.py"
+   "tests/dx/test_bump_docs.py",
+   "tests/helm/test_federation_reconciler_projection_grace.py"
   ],
   "helm/mariadb-instance": [
    "tests/lint/test_check_iac_helm.py"
@@ -1477,6 +1480,7 @@
   ],
   "helm/vector": [
    "tests/dx/test_log_visibility_catalogue.py",
+   "tests/helm/test_federation_reconciler_projection_grace.py",
    "tests/lint/test_check_iac_helm.py",
    "tests/lint/test_check_scrape_reachability.py",
    "tests/shared/test_helm_chart_log_aggregation.py",
@@ -1831,6 +1835,7 @@
   ],
   "scripts/tools/dx/verify_diff.py": [
    "tests/dx/test_verify_diff.py",
+   "tests/helm/test_federation_reconciler_projection_grace.py",
    "tests/helm/test_federation_store_namespace_guard.py"
   ],
   "scripts/tools/dx/verify_release.sh": [
@@ -1965,6 +1970,7 @@
    "tests/shared/test_lang_detection_guard.py"
   ],
   "scripts/tools/ops/_federation_revocation_reconciler.py": [
+   "tests/helm/test_federation_reconciler_projection_grace.py",
    "tests/ops/test_revoked_set_contract.py"
   ],
   "scripts/tools/ops/_grar_validate.py": [
