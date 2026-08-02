@@ -67,9 +67,13 @@ conf.d/
 defaults:
   pg_stat_activity_count: 500
   pg_replication_lag_seconds: 30
-  _routing:
-    group_wait: 60s
-    group_interval: 5m
+
+# ↓ 頂層 key，與 `defaults:` 平級 —— 不是巢狀在它底下。
+#   `defaults:` 的型別是 map[string]float64，塞任何巢狀 mapping 進去會讓
+#   **整份檔案**解析失敗，而且失敗是靜默的（見 merge_tenant.go）。
+_routing_defaults:
+  group_wait: "60s"
+  group_interval: "5m"
 
 # L1 finance/_defaults.yaml
 defaults:
@@ -82,7 +86,7 @@ tenants:
     pg_stat_activity_count: 150   # override: 單一 tenant 最嚴格
     # pg_replication_lag_seconds: 繼承 L0 = 30
     # pg_locks_count: 繼承 L1 = 100
-    # _routing.group_wait: 繼承 L0 = 60s
+    # _routing_defaults.group_wait: 繼承 L0 = 60s
 ```
 
 **Effective config 計算**：

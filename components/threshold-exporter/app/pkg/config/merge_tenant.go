@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -144,7 +145,24 @@ func mergeTenantConfig(configDir string, tenantCfg ThresholdConfig) ThresholdCon
 	defaultsPath := filepath.Join(configDir, "_defaults.yaml")
 	if data, err := os.ReadFile(defaultsPath); err == nil {
 		var defaults ThresholdConfig
-		if err := yaml.Unmarshal(data, &defaults); err == nil {
+		if err := yaml.Unmarshal(data, &defaults); err != nil {
+			// A file that EXISTS but cannot be decoded is not the benign case
+			// the missing-file comment above describes. This function is the
+			// whole of what the tenant-api read and write paths know about the
+			// platform surface, so a decode failure here hands every caller an
+			// EMPTY one: the effective-config GET under-reports, and
+			// ValidateTenantKeys then judges legitimate tenant keys "unknown"
+			// and refuses the write — through the only supported writer.
+			//
+			// Note the asymmetry this closes. The exporter's own loader has
+			// been loud about exactly this since the cycle-6 RCA
+			// (parsePartialConfig logs ERROR and increments parse_failure for
+			// `_`-prefixed files); this path had no signal at all. The decode
+			// result is still discarded — unchanged behaviour — it just no
+			// longer happens without a word.
+			log.Printf("ERROR: %s exists but failed to parse, ALL platform defaults "+
+				"are being ignored: %v", defaultsPath, err)
+		} else {
 			for k, v := range defaults.Defaults {
 				merged.Defaults[k] = v
 			}
