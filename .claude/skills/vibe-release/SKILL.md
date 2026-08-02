@@ -45,7 +45,9 @@ issue triage 每天動、docs 月級更新——靜態 issue list 幾天就說�
 
 ### 4. 未發布的 draft security advisory 檢查（Rule 4）
 
-✅ **這一條自 #1295 起已機械化**：`make pre-tag` 會跑 `draft-advisory-check`，有 draft 就中止並印出清單。`gh` 缺席或查詢失敗**也**中止（「查不到」不得被讀成「沒有」）。所以人工發版也蓋得到，不再只靠這個 skill 被叫起來。
+✅ **這一條自 #1295 起已機械化**：`make pre-tag` 會跑 `draft-advisory-check`，有 draft 就中止並印出清單。`gh` 缺席或查詢失敗**也**中止（「查不到」不得被讀成「沒有」）。所以人工跑 `make pre-tag` 也蓋得到，不再只靠這個 skill 被叫起來。
+
+⚠️ **但它涵蓋的只有這條本地路徑**：`release.yaml` 由 tag push 觸發，而**沒有任何機制**強制 `make pre-tag` 先跑過——`git push origin <tag>` 仍然完全繞過這道檢查。所以本 skill 的 Rule 4 沒有因為機械化而退場，它守的正是「有人沒跑 pre-tag 就推 tag」這一格。
 
 手動要單獨查時：`gh api repos/{owner}/{repo}/security-advisories --jq '.[] | select(.state=="draft") | .ghsa_id + " | " + .summary'`。
 

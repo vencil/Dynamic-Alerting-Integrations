@@ -136,7 +136,7 @@ lang: zh
 | `vibe-dev-rules` | 13 規範 + Top 4 | advisory（多數規範有對應 hook，但 commit 前提醒靠 skill） | **前置**：在 hook 擋下之前先自覺（省 push cycle） |
 | `vibe-playbook-nav` | 任務→Playbook 章節路由 | advisory | 無對應 hook（純導航） |
 | `vibe-subagent-review` | IaC-aware 兩階段 review（code spec→quality / IaC blast-radius） | advisory（cross-file 語義層，機械 SAST 抓不到） | **補集 #448**：機械層單檔 SAST 由 #448；本 skill 顧跨檔 cascade（TRK-305） |
-| `vibe-release` | 六線版號 release 收尾 SOP（pre-tag / project-face / milestone-link） | advisory（release 紀律；docker+Trivy 部分已被 #474 機械化進 pre-tag） | **延伸**：#474 把 Layer 1/2 機械化，本 skill 系統化 Layer 3 discipline（TRK-306） |
+| `vibe-release` | 六線版號 release 收尾 SOP（pre-tag / project-face / milestone-link） | advisory（release 紀律；docker+Trivy 部分已被 #474 機械化進 pre-tag，**Rule 4 未發布 draft advisory 檢查已被 #1295 機械化為 `draft-advisory-check`** — 但只在本地 `make pre-tag` 路徑，直接 push tag 仍繞過） | **延伸**：#474 把 Layer 1/2 機械化，本 skill 系統化 Layer 3 discipline（TRK-306） |
 | `vibe-brainstorm` | 設計階段 Socratic ideation（MVP / trade-off / defer-trigger + 外審） | advisory（純設計流程） | 無對應 hook（設計階段，無 code 可機械驗）（TRK-308） |
 | `vibe-security-audit` | 週期性深度安全稽核 harness（Recon→平行 Hunt→對抗式 Validate→Synthesize，跑隔離 worktree 快照） | advisory（新信任邊界 GA 前 / incident 後 / 季度觸發） | **補集**：與 diff-scoped `/security-review` 互補、**不進 CI**（#1001） |
 
