@@ -49,10 +49,12 @@ lang: zh
 ```yaml
 # conf.d/_defaults.yaml
 defaults:
-  mysql_connections: "80"
-  mysql_threads_running: "30"  # threads_running 飽和（併發執行緒數，NOT host CPU%；#1231 由 mysql_cpu 改名）
-  mysql_memory: "85"
-  # 其他預設閾值...
+  # ⚠️ 值是數字、不加引號 —— Go 端型別為 map[string]float64
+  mysql_connections: 80
+  mysql_threads_running: 30  # threads_running 飽和（併發執行緒數，NOT host CPU%；#1231 由 mysql_cpu 改名）
+  mysql_replication_lag: 30  # 秒 — 非同步複製延遲
+  # 其他預設閾值...（key 必須是 threshold-registry 認得的名字，
+  # 否則會產出沒有任何 rule pack 消費的死 series，且不會有人告訴你）
 ```
 
 ### 部署 threshold-exporter ×2 HA
@@ -118,16 +120,21 @@ helm install da-portal ./helm/da-portal/ -n monitoring
 ```yaml
 # conf.d/_defaults.yaml
 defaults:
-  mysql_connections: "80"
-  mysql_connections_critical: "95"
-  container_cpu: "70"
-  container_memory: "80"
-  # 維度維持空閾值（跳過）
-  redis_memory: "disable"      # 禁用
-  _routing_defaults:
-    group_wait: "30s"
-    group_interval: "5m"
-    repeat_interval: "12h"
+  # ⚠️ 值是數字、不加引號 —— Go 端型別為 map[string]float64。寫成 "80" 會讓
+  #    「整份檔案」unmarshal 失敗，該檔的 defaults 全數落空（exporter 會記一行
+  #    ERROR，但 tenant-api 的驗證路徑是靜默吞掉的）。
+  mysql_connections: 80
+  container_cpu: 70
+  container_memory: 80
+  # 維度閾值不寫在這裡：維度 key 僅限租戶設定，不繼承 defaults
+  # 平台不想給某個 key 預設值 → 整條不寫。defaults 沒有 "disable" 這個狀態；
+  # 三態的 "disable" 與 <key>_critical 都只在租戶設定裡有效（見 for-tenants.md）
+
+# ↓ 頂層 key，與 defaults: 同級，不是它的子項
+_routing_defaults:
+  group_wait: "30s"
+  group_interval: "5m"
+  repeat_interval: "12h"
 ```
 
 驗證預設值語法：
@@ -158,15 +165,20 @@ kubectl edit deployment prometheus -n monitoring
 啟用雙軌通知（NOC + Tenant）：
 
 ```yaml
-# conf.d/_defaults.yaml
-defaults:
-  _routing_enforced:
-    receiver:
-      type: "slack"
-      api_url: "https://hooks.slack.com/services/T/B/xxx"
-      channel: "#noc-alerts"
-    group_wait: "10s"
-    repeat_interval: "2h"
+# conf.d/_defaults.yaml — _routing_enforced 是頂層 key，不放在 defaults: 底下
+_routing_enforced:
+  enabled: true                 # ⚠️ 省略＝false，整段被靜默忽略
+  receiver:
+    type: "slack"
+    api_url: "https://hooks.slack.com/services/T/B/xxx"
+    channel: "#noc-alerts"
+  # ⚠️ match 必須是「matcher 字串的 list」。省略它會產生一條沒有任何 matcher
+  #    的 route，加上固定帶的 continue: true ＝ 所有租戶的所有告警都被雙送到
+  #    這個 receiver（match-all 消防水管）。寫成 map 形式也會被靜默丟棄。
+  match:
+    - 'severity="critical"'
+  group_wait: "10s"
+  repeat_interval: "2h"
 ```
 
 NOC 收到的通知使用 `platform_summary` annotation，內容聚焦容量規劃和升級決策。Tenant 仍收到各自的 `summary`，不受影響。
@@ -174,15 +186,14 @@ NOC 收到的通知使用 `platform_summary` annotation，內容聚焦容量規�
 ### 設定路由預設值 (_routing_defaults)
 
 ```yaml
-# conf.d/_defaults.yaml
-defaults:
-  _routing_defaults:
-    receiver:
-      type: "slack"
-      api_url: "https://hooks.slack.com/services/T/{{tenant}}-alerts"
-      channel: "#{{tenant}}-team"
-    group_wait: "30s"
-    repeat_interval: "4h"
+# conf.d/_defaults.yaml — _routing_defaults 是頂層 key，不放在 defaults: 底下
+_routing_defaults:
+  receiver:
+    type: "slack"
+    api_url: "https://hooks.slack.com/services/T/{{tenant}}-alerts"
+    channel: "#{{tenant}}-team"
+  group_wait: "30s"
+  repeat_interval: "4h"
 ```
 
 `{{tenant}}` 佔位符自動展開為各 tenant 的名稱。Tenant YAML 的 `_routing` 可覆蓋此預設。

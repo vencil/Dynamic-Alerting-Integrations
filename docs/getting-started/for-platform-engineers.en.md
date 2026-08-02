@@ -49,10 +49,12 @@ Minimal viable platform config:
 ```yaml
 # conf.d/_defaults.yaml
 defaults:
-  mysql_connections: "80"
-  mysql_threads_running: "30"  # threads_running saturation (concurrent threads, NOT host CPU%; renamed from mysql_cpu, #1231)
-  mysql_memory: "85"
-  # Other default thresholds...
+  # ⚠️ Values are NUMBERS, unquoted — the Go type is map[string]float64
+  mysql_connections: 80
+  mysql_threads_running: 30  # threads_running saturation (concurrent threads, NOT host CPU%; renamed from mysql_cpu, #1231)
+  mysql_replication_lag: 30  # seconds — async replication lag
+  # Other default thresholds... (keys MUST be names the threshold-registry knows,
+  # or you get a dead series no rule pack consumes — and nothing will tell you)
 ```
 
 ### Deploy threshold-exporter ×2 HA
@@ -116,16 +118,21 @@ Requires:
 ```yaml
 # conf.d/_defaults.yaml
 defaults:
-  mysql_connections: "80"
-  mysql_connections_critical: "95"
-  container_cpu: "70"
-  container_memory: "80"
-  # Dimension threshold omitted (will use default)
-  redis_memory: "disable"      # Suppress entirely
-  _routing_defaults:
-    group_wait: "30s"
-    group_interval: "5m"
-    repeat_interval: "12h"
+  # ⚠️ Values are NUMBERS, unquoted — the Go type is map[string]float64. Writing
+  #    "80" fails the unmarshal for the WHOLE file, dropping every default in it
+  #    (the exporter logs one ERROR; the tenant-api validation path swallows it).
+  mysql_connections: 80
+  container_cpu: 70
+  container_memory: 80
+  # Dimensional thresholds don't go here: dimensional keys are tenant-only, never inherited from defaults
+  # To leave a key with no platform default, just omit it. `defaults` has no
+  # "disable" state; tri-state "disable" and <key>_critical are tenant-only (see for-tenants.en.md)
+
+# ↓ top-level key, a sibling of `defaults:` — NOT nested under it
+_routing_defaults:
+  group_wait: "30s"
+  group_interval: "5m"
+  repeat_interval: "12h"
 ```
 
 Validate defaults syntax:
@@ -156,15 +163,21 @@ kubectl edit deployment prometheus -n monitoring
 Enable dual-channel notifications (NOC + Tenant):
 
 ```yaml
-# conf.d/_defaults.yaml
-defaults:
-  _routing_enforced:
-    receiver:
-      type: "slack"
-      api_url: "https://hooks.slack.com/services/T/B/xxx"
-      channel: "#noc-alerts"
-    group_wait: "10s"
-    repeat_interval: "2h"
+# conf.d/_defaults.yaml — _routing_enforced is a TOP-LEVEL key, not under defaults:
+_routing_enforced:
+  enabled: true                 # ⚠️ omitted = false; the whole block is silently ignored
+  receiver:
+    type: "slack"
+    api_url: "https://hooks.slack.com/services/T/B/xxx"
+    channel: "#noc-alerts"
+  # ⚠️ match MUST be a list of matcher strings. Omitting it yields a route with
+  #    NO matchers, and with the hardcoded continue: true that double-sends every
+  #    alert from every tenant to this receiver (a match-all firehose). Writing
+  #    it as a map is silently discarded, with the same result.
+  match:
+    - 'severity="critical"'
+  group_wait: "10s"
+  repeat_interval: "2h"
 ```
 
 NOC receives notifications using `platform_summary` annotation, focused on capacity planning and escalation decisions. Tenants still receive their own `summary` unaffected.
@@ -172,15 +185,14 @@ NOC receives notifications using `platform_summary` annotation, focused on capac
 ### Setting Up Routing Defaults (_routing_defaults)
 
 ```yaml
-# conf.d/_defaults.yaml
-defaults:
-  _routing_defaults:
-    receiver:
-      type: "slack"
-      api_url: "https://hooks.slack.com/services/T/{{tenant}}-alerts"
-      channel: "#{{tenant}}-team"
-    group_wait: "30s"
-    repeat_interval: "4h"
+# conf.d/_defaults.yaml — _routing_defaults is a TOP-LEVEL key, not under defaults:
+_routing_defaults:
+  receiver:
+    type: "slack"
+    api_url: "https://hooks.slack.com/services/T/{{tenant}}-alerts"
+    channel: "#{{tenant}}-team"
+  group_wait: "30s"
+  repeat_interval: "4h"
 ```
 
 The `{{tenant}}` placeholder expands to each tenant's name. Tenant YAML's `_routing` can override this default.
