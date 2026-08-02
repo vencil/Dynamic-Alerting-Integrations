@@ -34,12 +34,17 @@
 1. **它說的是「過去 1 小時內曾經偵測到」，不是「此刻仍然成立」。** 你接手時 gauge 很可能已經是 0——那是正常的，不代表誤報，也不代表已修復。要看當下狀態請直接查 `federation_revocation_tamper_suspected`（未鎖存的原值）。
 2. **修好之後告警不會立刻消**，最多續燒 1 小時（鎖存窗＝最短復歸時間，刻意如此：一條 critical 安全訊號不該在有人確認之前自己消失）。**不要因為它還在燒就以為沒修好。**
 3. **它不保證偵測到了每一次 un-revoke。** 對帳每 300s 一輪，短於一輪的竄改窗可能完全沒被取樣。看到這條＝至少有一次被抓到；沒看到 ≠ 沒發生過。詳 ADR-028 §D3「取樣式偵測的固有盲區」。
+4. ⛔⛔ **鎖存期間，後續的 un-revoke 不會產生新的 page——這是本告警最容易害死人的性質，處置時務必照下面做。** 這個指標是**平台全域、零 label** 的，所以無論偵測到幾次、涉及哪些 token，Alertmanager 看到的永遠是**同一個** alert instance。它已經在 firing，於是第二次攻擊既不會觸發 `group_interval` 的新通知，也要等到 `repeat_interval`（預設路由為 **12h**）才會再響一次。
+   - ⚠️ **但這不等於「瞎了」**：偵測本身照常運作，`federation_revocation_tamper_suspected` 的**原始序列**與 Grafana 看板會如實反映每一輪的結果。失去的是**通知**，不是偵測。
+   - ⇒ **IR 規則**：本告警 firing 期間，**以原始 gauge（未鎖存）為現場訊號**，不要用「沒有新的 page」判斷情況已穩定。處置完成後**繼續盯著原始序列至少兩個對帳週期（≥10 分鐘）**，確認它維持在 0 之後再收工。
+   - **為什麼不用「加 `token_id` label 讓每個 token 成為獨立 alert」解決**（外審建議、已評估否決）：`reconcile()` 回報的是**所有**未過期且不在 live set 的 token，所以在撤銷集被清空這個**本告警的主場景**（#1236 / #1313）下，label 基數等於當時全部有效撤銷數——偏偏在最需要它的時候爆炸。加上 `render()` 是手寫平面文字（無 client library）、promtool fixture 與看板兩份副本全用 bare selector（加 label 後測試仍全綠＝假保護），以及改 alert identity 會位移既有的 Alertmanager grouping／silence。真正的解在 #1322 的事件驅動偵測。
 
 **IR**：
 1. 查 VictoriaLogs 拿 opaque token_id：用 `log_type:"federation_evidence" AND event:"federation_token_revoked"` 過濾近 24h（與 reconciler 同一支查詢；#1237 起加 `log_type` 限定，避免比對到非權威來源灌入的同名事件）（reconciler pod log 也會印 `TAMPER SUSPECTED: ...`）。
 2. **租戶去識別化**：log 只有 token_id（ADR-028 D3）；IR 時從 store 的 records 以 token_id 反查租戶，**別**把租戶識別碼寫回工單。
 3. diff live store vs git 歷史；若確為惡意刪除，從 git 還原該撤銷（break-glass 見 governance-security.md）。
 4. 併查 #926 audit（是否有非平台身份寫 ConfigMap）——但本告警的威脅是**帶合法 SA 身份**的寫入，#926 可能看不到。
+5. ⚠️ **若 diff 顯示那些 token 其實都在 store 裡、而且是剛剛才合法撤銷的 → 這是投影延遲造成的假陽性，不是攻擊。** 成因：撤銷事件已可對帳，但 reconciler 自己那份 kubelet ConfigMap 投影還沒更新，於是合法撤銷讀起來像 un-revoke。**判別**：該 token 在**下一輪**對帳就會消失（不需要任何人動手），且時間點緊跟著一次合法撤銷。**處置**：查目標叢集 kubelet 的 `syncFrequency` 與 `configMapAndSecretChangeDetectionStrategy`（後者若為非預設的 `Cache`，傳播上界要再加一個 TTL），把 `reconcile.projectionGraceSeconds` 調到**確定大於該叢集的最壞傳播時間**並留餘裕；預設 180s 是照 Kubernetes 預設行為（sync 週期 60s 一級）取的，**叢集若把 sync 週期調大到分鐘級就會被擊穿**。⛔ 這件事在 #1238 之前不會發生：當時 `for: 5m` 順帶吸收掉了這種單輪假陽性，鎖存把那層免費保護拿掉了，所以它現在會直接 page。上線前請跑 §chaos 場景 4c 確認本叢集不會誤報。
 
 ### `FederationRevocationReconcileStale`（critical）
 **意義**：reconciler 逾 30min 未成功對帳，或指標消失（pod down / 從未 scrape）→ **偵測本身瞎了**。

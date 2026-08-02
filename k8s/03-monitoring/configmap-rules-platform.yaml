@@ -1140,6 +1140,22 @@ data:
           # for it. Closing that needs an event-driven detector, not a stickier
           # query — tracked in #1322 (TRK-357).
           #
+          # ⛔ SECOND-ORDER COST OF LATCHING — a further detection during the
+          # latch window produces NO new page. These gauges are platform-global
+          # with ZERO labels, so every detection maps to the SAME Alertmanager
+          # alert instance; while it is already firing there is no new instance
+          # to notify about, and the default route's repeat_interval is 12h.
+          # Detection itself is unaffected (the raw gauge and the dashboard both
+          # still move) — what is lost is the notification. The runbook makes
+          # this an explicit IR rule: during a firing latch, read the RAW gauge,
+          # never "no new page" as evidence of stability.
+          # ⛔ Do NOT "fix" this by adding a token_id label. `reconcile()`
+          # reports EVERY revoked-and-live token absent from the live set, so in
+          # the emptied-set scenario these alerts exist for (#1236 / #1313) the
+          # cardinality equals the whole revocation set — it explodes exactly
+          # when the alert matters. The real fix is event-driven detection
+          # (#1322); until then this is a documented trade-off, not an oversight.
+          #
           # ⚠️ `for:` is NOT a debounce on a latched alert. Once the latch is
           # true it stays true for the whole window, so a single sample satisfies
           # any `for:` we could set (measured). The existing values are retained
