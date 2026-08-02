@@ -113,6 +113,9 @@ def test_explicit_zero_survives_rendering() -> None:
 
 @_needs_helm
 def test_explicit_non_default_value_is_passed_through() -> None:
+    """The non-zero control for the case above. Without it, a template that
+    hard-coded the flag to a literal would satisfy the zero test by accident
+    (it would just always be wrong in the other direction)."""
     assert _rendered_grace("reconcile.projectionGraceSeconds=30") == "30"
 
 
@@ -139,4 +142,8 @@ def test_shipped_default_matches_the_template_fallback_and_the_script() -> None:
 
 @_needs_helm
 def test_default_render_uses_the_shipped_value() -> None:
+    """A plain `helm install` with no overrides must arm the guard. Distinct
+    from the absent-key case above: this one exercises what values.yaml ships,
+    that one exercises the template's own fallback, and they are allowed to be
+    the same number only because the test above pins them equal."""
     assert _rendered_grace() == str(_script_default())

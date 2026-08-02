@@ -713,11 +713,19 @@ class TestProjectionGraceWiring:
     """
 
     def _captured(self, tmp_path, monkeypatch, settle_s, grace_s):
+        """Every LogsQL string one reconcile pass actually issues, in order.
+
+        Deliberately NOT `_query_router`: that helper dispatches on the event
+        name and returns fixtures, which is what you want when the subject is
+        the reconcile logic. Here the subject is the QUERY TEXT itself, so the
+        seam has to record rather than route.
+        """
         cfg = dataclasses.replace(
             _cfg(tmp_path), settle_s=settle_s, projection_grace_s=grace_s)
         seen: list[str] = []
 
         def _q(_url, query, **_k):
+            """Record and return nothing — the gauges are not under test here."""
             seen.append(query)
             return []
 
@@ -726,6 +734,16 @@ class TestProjectionGraceWiring:
         return seen
 
     def test_grace_moves_the_event_window_only(self, tmp_path, monkeypatch):
+        """⛔ The load-bearing assertion of this class.
+
+        Asserts BOTH directions, because each alone passes under a plausible
+        regression: that the event window moved to the grace (or a `default`-
+        swallowed grace leaves it at the settle), and that no gateway-side
+        window moved with it (or "just raise --settle" silently shrinks their
+        ~600s window). The `len(others) == 4` line is the third assertion — it
+        turns "someone added a fifth query" into a failure rather than into a
+        query whose near edge nobody decided.
+        """
         seen = self._captured(tmp_path, monkeypatch, settle_s=60, grace_s=180)
 
         events = [q for q in seen if "federation_token_revoked" in q]
