@@ -111,7 +111,7 @@
     "thresholdScalar": {
       "type": "string",
       "title": "Threshold Value (Scalar)",
-      "description": "Simple string threshold. Values: numeric threshold (e.g., '70'), 'disable' (stop alerting), or 'value:severity' (e.g., '1000:critical'). Three-state design: custom value, omit (use default), or 'disable'.",
+      "description": "Simple string threshold. Values: numeric threshold (e.g., '70'), 'disable' (stop alerting), or 'value:severity' (e.g., '1000:critical'). Three-state design: custom value, omit (use default), or 'disable' — the 'omit' state applies only to keys that have a value under 'defaults:' in _defaults.yaml. A key the platform only DECLARES (its 'optional_overrides:' list) has no default to inherit, so omitting it means no value and no series at all.",
       "examples": ["70", "1000", "disable", "500:critical", "85.5"]
     },
     "scheduledValue": {

@@ -2,7 +2,8 @@
 # 來源參考: percona/mongodb_exporter
 #
 # MongoDB 典型維度: database (庫), collection (集合), rs (replica set)
-# 三態: 數值=Custom, 省略=Default, "disable"=停用
+# 三態（限 _defaults.yaml 的 defaults: 有值的 key）: 數值=Custom, 省略=Default, "disable"=停用
+# ⚠️ 列在 optional_overrides: 的宣告 key 沒有值可繼承 ⇒ 省略＝沒有值＝靜默，只有兩態（#1321）
 tenants:
   mongo-prod:
     # --- 基本閾值 (全域) ---

@@ -1,10 +1,16 @@
 # Platform default thresholds (try-local seed).
 #
-# The threshold-exporter only emits a `user_threshold` series for metric keys
-# that appear HERE (resolve.go iterates `defaults`). A tenant override for a
-# key absent from defaults is silently ignored — so every demo threshold key
-# below must be declared. Values are numbers (float64), tenant overrides are
+# A key listed under `defaults:` below is emitted as a `user_threshold` series
+# for EVERY tenant (resolveBaseRows iterates `defaults`), and a tenant override
+# replaces that value — so every demo threshold key that needs a platform value
+# must be listed there. Values are numbers (float64), tenant overrides are
 # strings ("70", "70:critical", "disable").
+#
+# ⚠️ "absent from `defaults:` ⇒ silently ignored" was true until #1310 and is
+# what this comment used to say; it is now FALSE for the `optional_overrides:`
+# block 50 lines below (#1321). Those 9 keys carry no platform value, but a
+# tenant CAN set them and `resolveDeclaredRows` emits the row — the third state.
+# Absent from BOTH blocks is still ignored.
 #
 # SUPPLY CONTRACT: every WARNING-tier key the packs in prometheus.yml
 # `rule_files` demand must be listed below — rule-pack-mariadb reads

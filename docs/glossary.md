@@ -182,7 +182,7 @@ lang: zh
 :   本平台的核心元件。讀取 tenant YAML 配置，轉換為 Prometheus metrics（`user_threshold` 系列）。支援 HA 部署（×2），端口 8080。
 
 **Three-State Config Logic（三態配置語意）**
-:   指**配置層**的三種取值：Custom Value（自訂值）/ Omitted（省略 → 採 `_defaults.yaml` 預設）/ Disable（`"disable"` → 不輸出）。詳見 [Config-Driven 設計](design/config-driven.md) §2.1。⚠️ 與「三態運營模式」是**不同概念**，勿以單詞「三態」混用。
+:   指**配置層**的三種取值：Custom Value（自訂值）/ Omitted（省略 → 採 `_defaults.yaml` 的 `defaults:` 預設）/ Disable（`"disable"` → 不輸出）。⚠️ **三態只適用有平台預設的 key**：列在 `optional_overrides:` 的宣告 key 沒有值可繼承，省略＝沒有值＝不輸出，只有「填值 / 不填」兩態。詳見 [Config-Driven 設計](design/config-driven.md) §2.1。⚠️ 與「三態運營模式」是**不同概念**，勿以單詞「三態」混用。
 
 **Three-State Operational Model（三態運營模式）**
 :   指**運營層**的三種狀態：Normal / Silent / Maintenance，透過 Sentinel Alert + Alertmanager Inhibit 實現，均支援 `expires` 自動失效。詳見 [Config-Driven 設計](design/config-driven.md) §2.7。

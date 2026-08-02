@@ -991,6 +991,171 @@ def render_optional_overrides_lines(doc: dict, indent: int) -> list[str]:
     return lines
 
 
+# ---------------------------------------------------------------------------
+# The SAME declared set, told to the OTHER audience (#1321)
+# ---------------------------------------------------------------------------
+# Everything above renders the declared tier for a reader who owns the PLATFORM
+# side: rule-pack headers, helm values, the dev conf.d template. None of those
+# files is one a tenant ever opens. The single file a tenant does open is its
+# own ``<tenant>.yaml``, and until #1321 that file's generated header said the
+# opposite of the truth ("Omitted keys inherit from _defaults.yaml" /
+# "省略=Default") — true for every key with a platform default, FALSE for the
+# declared tier, which has no value to inherit at all.
+#
+# So the tenant stub gets its own rendering of the declared set. Deliberately
+# NOT a second derivation: both generators hand this renderer a key list that
+# came out of ``shipped_optional_keys_for_packs`` (``init_project`` calls it
+# directly; ``scaffold_tenant`` passes the very list ``generate_defaults``
+# already wrote into the sibling ``_defaults.yaml``, so the stub cannot
+# advertise a key that file does not declare — that mismatch is exactly what
+# earns a tenant an HTTP 400 from the only supported writer).
+#
+# ⛔ The values render as REFERENCE-ONLY comment text and every emitted key line
+# is itself a comment carrying a ``<your value>`` placeholder. Filling a real
+# number in for the tenant would re-arm, on the generated-artifact surface, the
+# exact keystroke #1310/PR-C removed from the interactive prompt (see
+# ``scaffold_tenant.prompt_value``): ADR-030's blind-write reference library has
+# measured counter-examples for these very numbers.
+
+TENANT_STUB_DECLARED_HEADING = {
+    "zh": "# ── 平台已宣告、但不主張值的 key（_defaults.yaml 的 optional_overrides 清單）──",
+    "en": "# -- Declared keys: the platform recognises these but asserts no value --",
+}
+
+_TENANT_STUB_PLACEHOLDER = {"zh": '"<你的值>"', "en": '"<your value>"'}
+
+_TENANT_STUB_PROSE = {
+    "zh": (
+        "#",
+        "# 平台「認得」下列 key：你在上面 tenants: 底下自己填值就會生效，不必再找",
+        "# operator 開通。但平台刻意不給它們預設值 ⇒ 不填＝沒有值＝不產生 series，",
+        "# 不會有告警，也不會有任何錯誤訊息。那是設計，不是漏掉的預設——所以本檔開頭",
+        "# 的三態在這一格只有兩態：填值，或靜默（沒有「省略＝用預設」可用）。",
+        "# ⚠️ 下列數字是「參考起點」不是背書：這種閾值只有你自己的 baseline 校準得",
+        "#    出來。照抄已有實測反例（ADR-030 盲寫參考庫）——Oracle 備份批次 process",
+        "#    count 560 > 建議 300、計畫性 stats-gather PGA 22GB > 建議 4GiB，兩者",
+        "#    都會誤觸。",
+        "# 用法：整行複製到上面自己那個租戶底下、去掉開頭的「# 」、把佔位字串換成你",
+        "#    校準出來的數字（縮排已對齊）。若上面該租戶目前是 `<tenant>: {}`（空設",
+        "#    定），先把 ` {}` 刪掉再貼——flow mapping 底下接縮排行不是合法 YAML。",
+    ),
+    "en": (
+        "#",
+        "# The platform RECOGNISES these keys: set one under `tenants:` above and",
+        "# it takes effect — no operator action needed. But the platform ships no",
+        "# default for them, so leaving one out means NO value at all: no series,",
+        "# no alert, and no error message either. That silence is the design, not",
+        "# a missing default — the three-state rule at the top of this file has",
+        "# only two states here: set a value, or stay silent.",
+        "# WARNING: the numbers below are a STARTING REFERENCE, not an endorsement",
+        "#    — only your own baseline can calibrate this tier. Copying them has",
+        "#    measured counter-examples (ADR-030): an Oracle backup batch at 560",
+        "#    processes vs the suggested 300; a planned stats-gather at 22GB PGA",
+        "#    vs the suggested 4GiB.",
+        "# To use: copy a whole line under your tenant above, drop the leading",
+        "#    '# ', and replace the placeholder with a number you calibrated",
+        "#    yourself (the indent already lines up). If your tenant currently",
+        "#    reads `<tenant>: {}`, delete the ` {}` first — indented lines under",
+        "#    a flow mapping are not valid YAML.",
+    ),
+}
+
+_TENANT_STUB_META = {
+    "zh": "{desc} — 參考起點 {value} {unit}（非背書，須依自身 baseline 校準）",
+    "en": "{desc} — reference start {value} {unit} (not an endorsement; calibrate)",
+}
+
+
+def _optional_entry_index(rule_packs: Optional[dict] = None) -> dict[str, dict]:
+    """key -> optional_overrides entry, across every pack (meta lookup only)."""
+    if rule_packs is None:
+        rule_packs = _load_scaffold().RULE_PACKS
+    return {
+        key: entry
+        for meta in (rule_packs or {}).values()
+        for key, entry in ((meta or {}).get("optional_overrides") or {}).items()
+    }
+
+
+def render_tenant_declared_stub_lines(
+    keys, rule_packs: Optional[dict] = None, lang: str = "zh", indent: int = 4
+) -> list[str]:
+    """The tenant-stub comment block for ``keys`` (all lines are comments).
+
+    ``keys`` is the caller's already-derived declared list (see the section
+    note above — this function never re-derives it, so it cannot disagree with
+    the ``_defaults.yaml`` written alongside). Empty list → empty block.
+
+    Every key renders as ``# <indent>key: "<placeholder>"``, i.e. commented out
+    AND valueless: dropping the leading ``"# "`` yields a line already at the
+    right indent for ``tenants: <tenant>:``.
+
+    ⚠️ Be precise about what the placeholder buys, because the natural claim —
+    "an unsubstituted placeholder gets caught by validation" — is FALSE and was
+    written here before it was measured. ``thresholdScalar`` in
+    ``docs/schemas/tenant-config.schema.json`` is ``{"type": "string"}`` with no
+    pattern, so ``key: "<your value>"`` is a schema-valid threshold: measured,
+    ``validate_config.py`` reports 5 checks / 5 pass / 0 warn on exactly that
+    file. What the placeholder DOES buy is that no platform-chosen number is
+    silently armed — the failure mode it removes is a wrong threshold quietly
+    alerting, not a wrong threshold being rejected. The only signal a
+    substituted-nothing key produces today is exporter-side and
+    tenant-invisible: ``resolveDeclaredRows`` cannot parse the value, logs
+    ``WARN: invalid declared threshold`` and emits no row (``resolve.go``), so
+    the tenant sees silence — the same thing it would see had it never set the
+    key at all. Tightening the schema is deliberately NOT done here: that
+    validator is on the path of every tenant threshold, so it is its own change.
+    """
+    if not keys:
+        return []
+    entries = _optional_entry_index(rule_packs)
+    prefix = f"# {' ' * indent}"
+    cont = f"{prefix}  # "
+    lines = [TENANT_STUB_DECLARED_HEADING[lang], *_TENANT_STUB_PROSE[lang]]
+    for key in keys:
+        entry = entries.get(key) or {}
+        keyline = f"{prefix}{key}: {_TENANT_STUB_PLACEHOLDER[lang]}"
+        if not entry:
+            lines.append(keyline)
+            continue
+        meta = _TENANT_STUB_META[lang].format(
+            desc=entry.get("desc", ""),
+            value=_fmt_value(entry.get("value")),
+            unit=entry.get("unit", ""),
+        )
+        inline = f"{keyline}   # {meta}"
+        if len(inline) <= 100:
+            lines.append(inline)
+            continue
+        lines.append(keyline)
+        lines += [f"{cont}{seg}" for seg in textwrap.wrap(meta, 100 - len(cont))]
+    return lines
+
+
+def append_tenant_declared_stub(
+    text: str,
+    keys,
+    rule_packs: Optional[dict] = None,
+    lang: str = "zh",
+    indent: int = 4,
+) -> str:
+    """Append the declared-key block to a rendered tenant stub. Idempotent.
+
+    A file-level reference section appended AFTER the dumped YAML, not spliced
+    into the tenant's own mapping: a stub with no overrides dumps as
+    ``<tenant>: {}`` (flow style), so there is no block-mapping context to
+    splice into at all. The prose says so — copying a line into a tenant that
+    still reads ``{}`` needs the ``{}`` removed first, and a hint that quietly
+    produces a YAML syntax error would be worse than no hint.
+    """
+    lines = render_tenant_declared_stub_lines(keys, rule_packs, lang, indent)
+    if not lines or TENANT_STUB_DECLARED_HEADING[lang] in text:
+        return text
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return text + "\n".join(lines) + "\n"
+
+
 def render_block(surface_id: str, body_lines: list[str], indent: str = "") -> str:
     """Full generated block text (markers + body), newline-joined."""
     return "\n".join(

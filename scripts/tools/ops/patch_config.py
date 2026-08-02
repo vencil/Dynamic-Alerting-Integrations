@@ -7,10 +7,14 @@ ConfigMap structures. Auto-detects format by checking for '_defaults.yaml' key.
 Usage: patch_config.py <tenant> <metric_key> <value>
        patch_config.py --diff <tenant> <metric_key> <value>
 
-Three-state logic:
+Three-state logic (for keys `_defaults.yaml` gives a value to, under `defaults:`):
   - Custom value:  patch_config.py db-a mysql_connections 50
   - Default (delete key): patch_config.py db-a mysql_connections default
   - Disable:       patch_config.py db-a mysql_connections disable
+
+  ⚠️ For a key `_defaults.yaml` only DECLARES (its `optional_overrides:` list)
+  there is no platform value to fall back to, so `default` does not restore one
+  — deleting the key means no value and no series at all (#1321).
 
 Diff preview (terraform plan analogy):
   - patch_config.py --diff db-a mysql_connections 50

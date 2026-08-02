@@ -43,7 +43,7 @@ Six core scenarios are all **end-to-end verified** (inside a K8s cluster, from a
 |----------|-----------------------------------|----------------|
 | **A — Dynamic thresholds** | Tenant threshold changes take effect immediately, no restart | Self-service tuning without an ops ticket |
 | **B — Weakest-link detection** | Alerts fire on the "worst" value across nodes / metrics | One bad node is caught, not diluted by averaging |
-| **C — Three-state control** | Each metric can be custom / default / disable | Precise control over each alert's switch and threshold |
+| **C — Three-state control** | A metric that has a platform default can be custom / default / disable (a declared key has nothing to inherit — only "set it" or "stay silent") | Precise control over each alert's switch and threshold |
 | **D — Maintenance mode** | Auto-silence during the window, auto-recover on expiry | Planned maintenance doesn't spam, and you can't forget to re-enable |
 | **E — Multi-tenant isolation** | Changing tenant A's config **never** affects tenant B | The foundation of multi-tenant safety |
 | **F — HA failover** | Service continues when a Pod dies; aggregate value doesn't double | High availability + data correctness |

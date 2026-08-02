@@ -79,6 +79,12 @@ func (c *ThresholdConfig) Resolve() []ResolvedThreshold {
 //   - omitted      → use default
 //   - "disable"    → skip (no metric exposed)
 //
+// ⚠️ Those three states describe the DEFAULTS-backed population only, i.e. the
+// keys resolveBaseRows walks. A key the platform merely DECLARES
+// (OptionalOverrides — key names, no values) has no default to fall back to, so
+// there is no State 2 for it: omitted means no value and no row. See
+// resolveDeclaredRows.
+//
 // Multi-tier severity: tenants can set <metric>_critical in their overrides
 // to expose a separate critical-severity threshold for the same metric.
 // The base metric retains severity=warning; the _critical variant gets severity=critical.
@@ -263,6 +269,11 @@ func isThresholdExpired(sv ScheduledValue, now time.Time) bool {
 // disable) plus the inline "value:severity" suffix. Extracted verbatim from
 // the ResolveAtWithStats per-tenant loop (Phase 2A) — see that method for the
 // full contract.
+//
+// ⚠️ "omitted→default" is a property of THIS function's input, not of the
+// config model: it holds because the loop iterates the defaults map, so every
+// key it sees has a platform value by construction. The declared tier
+// (resolveDeclaredRows) has no such value and therefore no such state.
 //
 // #1231: both maps arrive pre-canonicalized (deprecated alias spellings folded
 // onto their canonical key), and every append goes through appendWithLegacyTwin

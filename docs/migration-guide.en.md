@@ -261,7 +261,7 @@ tenants:
 | YAML quoting required | Keys containing `{` must be wrapped in double quotes |
 | No `_critical` suffix | Use `"value:severity"` syntax instead, e.g. `"500:critical"` |
 | Tenant-only | Dimension keys do not inherit from `defaults`; allowed only in tenant config |
-| Three-state still applies | Value=Custom, omitted=Default (basic key only), `"disable"`=Disabled |
+| Three-state still applies | Value=Custom, omitted=Default (basic key only, and only where the key has a value in `defaults:` of `_defaults.yaml`; a key listed under `optional_overrides:` inherits nothing, so omitted=no value=silent), `"disable"`=Disabled |
 
 **Platform-team PromQL adaptation**: the dimension label must appear in both the Recording Rule's `by()` and the Alert Rule's `on()`. Three-piece contract + `tenant:<metric>:<agg>` naming convention: [design/rule-packs.en.md](design/rule-packs.en.md). Redis / ES / MongoDB dimension examples live under `components/threshold-exporter/config/conf.d/examples/`.
 

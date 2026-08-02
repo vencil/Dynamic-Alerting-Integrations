@@ -235,7 +235,8 @@ GitOps 工作流下，Tenant 可在自己的 YAML 中自行管理以下設定（
 
 | 設定 | 說明 | 範例 |
 |------|------|------|
-| 閾值三態 | 自訂值 / 省略用預設 / `"disable"` | `mysql_connections: "70"` |
+| 閾值三態 | 自訂值 / 省略用預設 / `"disable"`（⚠️ 「省略用預設」僅限 `_defaults.yaml` 的 `defaults:` 有值的 key） | `mysql_connections: "70"` |
+| 宣告 key（`optional_overrides:`） | 平台認得 key 名但不主張值：租戶填了才生效，**省略＝沒有值＝靜默**（無預設可繼承，只有兩態） | `oracle_wait_time_rate: "<你校準出的值>"` |
 | `_critical` 後綴 | 多層嚴重度 | `mysql_connections_critical: "95"` |
 | `_routing` | 通知路由（6 種 receiver type） | `receiver: {type: "webhook", url: "..."}` |
 | `_routing.overrides[]` | 特定 alert 使用不同 receiver | `alertname: "..."`，`receiver: {type: "email", ...}` |

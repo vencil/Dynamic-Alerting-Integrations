@@ -261,7 +261,7 @@ tenants:
 | YAML 需加引號 | 含 `{` 的 key 必須用雙引號包裹 |
 | 不支援 `_critical` 後綴 | 改用 `"value:severity"` 語法，如 `"500:critical"` |
 | Tenant-only | 維度 key 不繼承 `defaults`，僅允許在租戶設定中 |
-| 三態仍適用 | 數值=Custom, 省略=Default (僅基本 key), `"disable"`=停用 |
+| 三態仍適用 | 數值=Custom, 省略=Default (僅基本 key，且該 key 在 `_defaults.yaml` 的 `defaults:` 有值；列在 `optional_overrides:` 的宣告 key 省略＝無值＝靜默), `"disable"`=停用 |
 
 **平台團隊 PromQL 適配**：維度 label 必須同時出現在 Recording Rule 的 `by()` 與 Alert Rule 的 `on()` 中。三件套契約與 `tenant:<metric>:<agg>` 命名規範：[design/rule-packs.md](design/rule-packs.md)。Redis / ES / MongoDB 維度範例：`components/threshold-exporter/config/conf.d/examples/`。
 

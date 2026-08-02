@@ -125,7 +125,11 @@ func (c *ThresholdCollector) collectThresholds(ch chan<- prometheus.Metric, reso
 
 		desc := prometheus.NewDesc(
 			"user_threshold",
-			"User-defined alerting threshold (config-driven, three-state: custom/default/disable)",
+			// ⚠️ The three states hold for keys the platform gives a default;
+			// a declared key (optional_overrides) has none, so it is
+			// custom-or-silent — saying otherwise here would be the same
+			// untrue claim #1321 removed from the tenant-facing files.
+			"User-defined alerting threshold (config-driven, three-state: custom/default/disable; declared keys have no default: custom or silent)",
 			labelNames,
 			nil,
 		)

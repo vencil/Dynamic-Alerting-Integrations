@@ -2,7 +2,8 @@
 # 來源參考: prometheus-community/elasticsearch_exporter
 #
 # ES 典型維度: index (索引), node (節點)
-# 三態: 數值=Custom, 省略=Default, "disable"=停用
+# 三態（限 _defaults.yaml 的 defaults: 有值的 key）: 數值=Custom, 省略=Default, "disable"=停用
+# ⚠️ 列在 optional_overrides: 的宣告 key 沒有值可繼承 ⇒ 省略＝沒有值＝靜默，只有兩態（#1321）
 tenants:
   es-prod:
     # --- 基本閾值 (全域) ---

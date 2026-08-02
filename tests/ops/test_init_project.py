@@ -6,6 +6,7 @@ YAML structure validation, K8s naming validation, and end-to-end initialization.
 """
 
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime
@@ -400,6 +401,157 @@ class TestGenTenantYaml:
         assert 'db-a' in yaml1
         assert 'db-a' not in yaml2
         assert 'db-b' in yaml2
+
+
+# ============================================================
+# ── 5b. _gen_tenant_yaml — declared-key stub block (#1321) ──
+# ============================================================
+
+# A stub key line, whatever sits on its right-hand side. Deliberately looser
+# than "line that carries the placeholder": the regression this guards against
+# is a well-meant `key: 300`, so the extractor must still SEE such a line
+# rather than filter it out and report a tidy pass.
+_STUB_KEY_LINE = re.compile(r'^#\s{3,}([a-z][a-z0-9_]*):(.*)$')
+_STUB_PLACEHOLDER = '"<your value>"'
+
+
+def _stub_key_lines(text):
+    """[(key, rhs), …] for the commented key lines of the declared block."""
+    return [(m.group(1), m.group(2))
+            for m in (_STUB_KEY_LINE.match(l) for l in text.split('\n')) if m]
+
+
+def _shipped_chart_declared_keys():
+    """The declared list as it is actually SHIPPED, read from the artifact.
+
+    Deliberately not `shipped_optional_keys_for_packs`: that is the function the
+    generator itself calls, so it cannot disagree with the generator. The chart
+    values file is written by a different producer (the registry `--regen`
+    block) and is the reachability gate's own assertion source.
+    """
+    values = os.path.join(REPO_ROOT, 'helm', 'threshold-exporter', 'values.yaml')
+    with open(values, encoding='utf-8') as f:
+        shipped = yaml.safe_load(f)['thresholdConfig']['optional_overrides']
+    assert shipped, f'{values} ships an empty declared list — nothing to check against'
+    return set(shipped)
+
+
+class TestGenTenantYamlDeclaredBlock:
+    """The declared tier, told to the only reader who opens this file (#1321).
+
+    `_defaults.yaml` and the rule-pack headers already explain the tier to
+    whoever runs the PLATFORM. A tenant reads neither: the one file it opens is
+    its own `<tenant>.yaml`, whose header used to say "Omitted keys inherit
+    from _defaults.yaml" — true for keys with a platform default, exactly
+    backwards for the declared tier, which has nothing to inherit.
+    """
+
+    def _declared(self, packs):
+        from _registry_lib import shipped_optional_keys_for_packs
+        return shipped_optional_keys_for_packs(packs)
+
+    def test_header_no_longer_claims_every_omitted_key_inherits(self):
+        yaml_str = ip._gen_tenant_yaml('db-a', ['oracle'])
+        assert 'Omitted keys inherit from _defaults.yaml.' not in yaml_str
+        assert 'inherits NOTHING' in yaml_str
+        assert 'stays silent' in yaml_str
+
+    def test_header_also_names_the_critical_tier(self):
+        """Two buckets is not the taxonomy. `<base>_critical` is in NEITHER
+        block, yet it takes effect today whenever `<base>` has a value under
+        `defaults:` — so a header that stops at two reads as complete and is
+        not. Same criterion as the three-way rule-pack header split: does what
+        we say buy the tenant protection."""
+        yaml_str = ip._gen_tenant_yaml('db-a', ['oracle'])
+        assert '`<base>_critical`' in yaml_str
+        assert 'critical-severity threshold' in yaml_str
+
+    def test_block_members_equal_the_derived_set(self):
+        """⛔ This pins the WIRING, not the derivation — say so, because the
+        name reads like the stronger claim.
+
+        The equality's right-hand side is `shipped_optional_keys_for_packs`,
+        which is the very function `_gen_tenant_yaml` calls. A broken derivation
+        therefore moves BOTH sides together and leaves this green (measured:
+        inverting the predicate and defeating the pack filter are both caught by
+        other tests in this class, not by this one). What it does catch is the
+        block vanishing, dropping a key, or emitting one twice — worth pinning,
+        since the tenant is told to read the block as the complete list for its
+        packs, and set equality (not substring) is what makes that readable.
+
+        The last assertion has an independent source: every listed key must also
+        appear in the SHIPPED chart values, read from the artifact rather than
+        re-derived (same discipline as the reachability gate). That one does not
+        move with the generator.
+        """
+        packs = ['oracle', 'db2', 'clickhouse']
+        listed = [k for k, _rhs in _stub_key_lines(
+            ip._gen_tenant_yaml('db-a', packs))]
+        assert set(listed) == set(self._declared(packs))
+        assert len(listed) == len(set(listed)), 'duplicate key line'
+        assert set(listed) <= _shipped_chart_declared_keys(), (
+            'the stub advertises a key the shipped chart does not declare — a '
+            'tenant setting it gets an unknown-key 400 from the only supported '
+            'writer')
+
+    def test_block_is_filtered_by_the_selected_packs(self):
+        listed = {k for k, _ in _stub_key_lines(
+            ip._gen_tenant_yaml('db-a', ['oracle']))}
+        assert listed == set(self._declared(['oracle']))
+        assert not [k for k in listed if k.startswith('clickhouse_')]
+
+    def test_no_declared_key_is_ever_given_a_value(self):
+        """⛔ The regression guard, and the reason the block renders commented
+        placeholders at all: writing the registry's number in for the tenant
+        would re-arm on this surface the keystroke #1310 removed from the
+        interactive prompt (ADR-030 has measured counter-examples for these
+        very numbers)."""
+        packs = ['oracle', 'db2', 'clickhouse']
+        yaml_str = ip._gen_tenant_yaml('db-a', packs)
+        declared = set(self._declared(packs))
+
+        # (a) nothing declared may reach the parsed document …
+        config = yaml.safe_load(yaml_str)
+        assert not declared & set(config['tenants']['db-a'])
+
+        # (b) … nor may a number sit on a key line, commented out or not.
+        for key, rhs in _stub_key_lines(yaml_str):
+            value = rhs.split('#')[0].strip()
+            assert value == _STUB_PLACEHOLDER, f'{key} carries a value: {rhs!r}'
+
+    def test_reference_numbers_are_labelled_as_such(self):
+        """The number stays visible (it is the only starting point an operator
+        has) but never as an endorsement."""
+        yaml_str = ip._gen_tenant_yaml('db-a', ['oracle'])
+        assert 'reference start 300 count' in yaml_str
+        assert 'not an endorsement' in yaml_str
+
+    def test_pack_without_declared_keys_gets_no_block(self):
+        """mariadb's optional tier is `_critical`-only ⇒ nothing to say."""
+        yaml_str = ip._gen_tenant_yaml('db-a', ['mariadb'])
+        assert not _stub_key_lines(yaml_str)
+        assert 'Declared keys' not in yaml_str
+
+    def test_stub_is_still_valid_yaml_and_block_is_all_comments(self):
+        yaml_str = ip._gen_tenant_yaml('db-a', ['oracle', 'db2'])
+        config = yaml.safe_load(yaml_str)
+        assert set(config) == {'tenants'}
+        lines = yaml_str.split('\n')
+        start = next(i for i, l in enumerate(lines)
+                     if l.startswith('# -- Declared keys'))
+        assert all(l.startswith('#') or not l.strip()
+                   for l in lines[start:])
+
+    def test_block_matches_what_the_sibling_defaults_file_declares(self):
+        """⛔ Same generator run writes both files. A stub advertising a key
+        the sibling `_defaults.yaml` does not declare earns the tenant an
+        HTTP 400 from the only supported writer."""
+        packs = ['oracle', 'db2', 'clickhouse']
+        declared_in_defaults = yaml.safe_load(
+            ip._gen_defaults_yaml(packs, 'monitoring'))['optional_overrides']
+        listed = [k for k, _ in _stub_key_lines(
+            ip._gen_tenant_yaml('db-a', packs))]
+        assert listed == declared_in_defaults
 
 
 # ============================================================

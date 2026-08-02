@@ -15,6 +15,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 from unittest import mock
@@ -1611,3 +1612,174 @@ class TestPromptDefaultsSplitByKeyClass:
         import _registry_lib
 
         assert st.is_shipped_optional_key is _registry_lib.is_shipped_optional_key
+
+
+# ============================================================
+# 租戶 stub 的宣告 key 區塊（#1321）
+# ============================================================
+
+# 一行 stub key line，右手邊放什麼都抓得到。刻意比「帶佔位字串的行」寬鬆：
+# 這條 regex 要擋的回歸就是好心寫上去的 `key: 300`，濾掉它就等於回報一個假綠。
+_STUB_KEY_LINE = re.compile(r"^#\s{3,}([a-z][a-z0-9_]*):(.*)$")
+_STUB_PLACEHOLDER = '"<你的值>"'
+
+
+def _stub_key_lines(text):
+    """[(key, rhs), …] — 宣告區塊裡被註解掉的 key 行。"""
+    return [(m.group(1), m.group(2))
+            for m in (_STUB_KEY_LINE.match(l) for l in text.split("\n")) if m]
+
+
+def _shipped_chart_declared_keys():
+    """出貨的宣告清單，直接讀產物。
+
+    刻意不用 `shipped_optional_keys_for_packs`——那正是生成器自己呼叫的那一支，
+    拿它當斷言來源只能證明接線通。chart values 由另一個生產者（registry
+    `--regen` 生成段）寫出，也是可達性 gate 自己的斷言來源。
+    """
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    values = os.path.join(repo_root, "helm", "threshold-exporter", "values.yaml")
+    with open(values, encoding="utf-8") as f:
+        shipped = yaml.safe_load(f)["thresholdConfig"]["optional_overrides"]
+    assert shipped, f"{values} 出貨的宣告清單是空的——沒有東西可對照"
+    return set(shipped)
+
+
+def _tenant_yaml_for(tmpdir, dbs, tenant="db-c"):
+    """實跑 generate_defaults + generate_tenant + write_outputs，回傳檔案全文。"""
+    packs = ["kubernetes", *dbs]
+    defaults = generate_defaults(packs)
+    tenant_data = generate_tenant(tenant, packs, interactive=False)
+    write_outputs(tmpdir, tenant, defaults, tenant_data, "report")
+    with open(os.path.join(tmpdir, f"{tenant}.yaml"), encoding="utf-8") as f:
+        return f.read()
+
+
+class TestTenantStubDeclaredBlock:
+    """⛔ 租戶唯一會打開的檔案是 `<tenant>.yaml`——不是 `_defaults.yaml`、不是
+    rule-pack header、也不是 Portal。宣告層要讓租戶知道，就得寫在這裡。
+
+    而原本的標頭「三態: 數值=Custom, 省略=Default」對宣告層是反的：那一格沒有值
+    可繼承，省略＝沒有值＝靜默。
+    """
+
+    def _declared(self, dbs):
+        from _registry_lib import shipped_optional_keys_for_packs
+        return shipped_optional_keys_for_packs(["kubernetes", *dbs], RULE_PACKS)
+
+    def test_header_no_longer_claims_omission_means_default_for_every_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content = _tenant_yaml_for(tmpdir, ["oracle"])
+        assert '# 三態: 數值=Custom, 省略=Default, "disable"=停用' not in content
+        assert "省略＝沒有值＝靜默" in content
+        assert "沒有值可繼承" in content
+
+    def test_header_also_names_the_critical_tier(self):
+        """兩類還不是完整分類：`<base>_critical` 兩個區塊都不在，卻只要 `<base>`
+        在 `defaults:` 有值就會產出一條真的 critical row。停在兩類會讀成「已窮盡」
+        而其實沒有——判準與 rule-pack header 一分為三那條相同。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content = _tenant_yaml_for(tmpdir, ["oracle"])
+        assert "第三類 <base>_critical" in content
+        assert "真的 critical 閾值" in content
+
+    def test_block_members_equal_the_derived_set(self):
+        """⛔ 這條釘的是**接線**、不是推導——名字讀起來像後者，所以明寫。
+
+        等號右邊是 `shipped_optional_keys_for_packs`，而生成器呼叫的正是同一支：
+        推導壞掉時兩邊會一起動，這條照樣綠（實測：推導反轉與 pack 過濾失效都不會
+        點亮它，是本 class 其他測試抓到的）。它真正擋得住的是整段消失、少一個 key、
+        或同一個 key 出現兩次——值得釘，因為租戶被告知可以把這段當成「我這些 pack
+        的完整清單」，而「集合相等（非子字串）」正是讓這句話讀得下去的前提。
+
+        最後一條斷言的來源是獨立的：列出的每個 key 都必須出現在**出貨的** chart
+        values 上，讀產物而非重算（與可達性 gate 同一條紀律），它不會跟著生成器動。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content = _tenant_yaml_for(tmpdir, ["oracle", "db2", "clickhouse"])
+        listed = [k for k, _rhs in _stub_key_lines(content)]
+        assert set(listed) == set(self._declared(["oracle", "db2", "clickhouse"]))
+        assert len(listed) == len(set(listed)), "重複的 key 行"
+        assert set(listed) <= _shipped_chart_declared_keys(), (
+            "stub 列出了出貨 chart 沒有宣告的 key——租戶照著填會被唯一受支援的"
+            "寫入者判 unknown key（400）")
+
+    def test_block_is_filtered_by_the_selected_packs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content = _tenant_yaml_for(tmpdir, ["oracle"])
+        listed = {k for k, _ in _stub_key_lines(content)}
+        assert listed == set(self._declared(["oracle"]))
+        assert not [k for k in listed if k.startswith("db2_")]
+
+    def test_no_declared_key_is_ever_given_a_value(self):
+        """⛔ 這條是「好心幫租戶填預設」的擋板。#1310 PR-C 才剛為此拿掉互動 prompt
+        的 Enter 預設（ADR-030 對這幾個數字有實測反例：備份批次 560 誤觸建議的
+        300、stats-gather 22GB 誤觸建議的 4GiB）；在生成物上填回去是同一個錯。"""
+        dbs = ["oracle", "db2", "clickhouse"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content = _tenant_yaml_for(tmpdir, dbs)
+        declared = set(self._declared(dbs))
+
+        # (a) 解析後的文件裡不得出現任何宣告 key……
+        parsed = yaml.safe_load(content)
+        assert not declared & set(parsed["tenants"]["db-c"] or {})
+
+        # (b) ……key 行上也不得出現數字（即使是註解掉的）。
+        for key, rhs in _stub_key_lines(content):
+            value = rhs.split("#")[0].strip()
+            assert value == _STUB_PLACEHOLDER, f"{key} 被填了值: {rhs!r}"
+
+    def test_reference_numbers_are_labelled_as_such(self):
+        """數字仍要看得見（它是唯一的起點），但必須標成參考起點而非背書。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content = _tenant_yaml_for(tmpdir, ["oracle"])
+        assert "參考起點 300 count" in content
+        assert "非背書" in content
+
+    def test_pack_without_declared_keys_gets_no_block(self):
+        """只選 postgresql（optional tier 全是 `_critical`）⇒ 整段不出現。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content = _tenant_yaml_for(tmpdir, ["postgresql"])
+        assert not _stub_key_lines(content)
+        assert "平台已宣告、但不主張值的 key" not in content
+
+    def test_stub_is_still_valid_yaml_and_block_is_all_comments(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content = _tenant_yaml_for(tmpdir, ["oracle", "db2"])
+        parsed = yaml.safe_load(content)
+        assert set(parsed) == {"tenants"}
+        lines = content.split("\n")
+        start = next(i for i, l in enumerate(lines)
+                     if l.startswith("# ── 平台已宣告"))
+        assert all(l.startswith("#") or not l.strip() for l in lines[start:])
+
+    def test_block_matches_what_the_sibling_defaults_file_declares(self):
+        """⛔ 同一次 write_outputs 寫出兩個檔。stub 列出 `_defaults.yaml` 沒宣告的
+        key，等於請租戶去踩 tenant-api 的 unknown-key 400。"""
+        dbs = ["oracle", "db2", "clickhouse"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content = _tenant_yaml_for(tmpdir, dbs)
+            with open(os.path.join(tmpdir, "_defaults.yaml"), encoding="utf-8") as f:
+                declared_in_defaults = yaml.safe_load(f)["optional_overrides"]
+        assert [k for k, _ in _stub_key_lines(content)] == declared_in_defaults
+
+    def test_appending_twice_is_a_no_op(self):
+        """共用 appender 宣稱冪等（比照 annotate_saturation_criticals）——釘住它，
+        免得日後有人把它接到「重寫既有租戶檔」的路徑上時堆出第二段。"""
+        from _registry_lib import append_tenant_declared_stub
+
+        keys = self._declared(["oracle"])
+        once = append_tenant_declared_stub("tenants:\n  db-c: {}\n", keys, lang="zh")
+        assert append_tenant_declared_stub(once, keys, lang="zh") == once
+
+    def test_cli_path_carries_the_block_end_to_end(self):
+        """接線也要釘住：run_non_interactive 這條真正的出貨路徑要有這一段。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = argparse.Namespace(
+                tenant="db-c", db="oracle", output_dir=tmpdir)
+            run_non_interactive(args)
+            with open(os.path.join(tmpdir, "db-c.yaml"), encoding="utf-8") as f:
+                content = f.read()
+        assert {k for k, _ in _stub_key_lines(content)} == set(
+            self._declared(["oracle"]))

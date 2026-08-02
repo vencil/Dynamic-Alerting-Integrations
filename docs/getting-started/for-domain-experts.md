@@ -340,7 +340,9 @@ A: 在 tenant YAML 中覆蓋特定 key：
 tenants:
   my-tenant:
     mysql_connections: "70"      # 自訂此項
-    # 其他項目省略，會用 _defaults.yaml 的預設
+    # 其他項目省略，會用 _defaults.yaml 的 defaults: 預設
+    # ⚠️ 但列在 _defaults.yaml 的 optional_overrides: 的宣告 key 沒有預設可繼承，
+    #    省略＝沒有值＝不產生 series（不是「用預設」）
 ```
 
 **Q: Rule Pack 支援排程式閾值嗎？**
