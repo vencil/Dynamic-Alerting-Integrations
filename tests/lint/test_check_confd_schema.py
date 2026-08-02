@@ -42,6 +42,8 @@ _REAL_SHIPPED_CONFD = [
                  "cardinality-demo", "conf.d"),
 ]
 _PRECOMMIT_CFG = os.path.join(_REPO, ".pre-commit-config.yaml")
+_CI_WORKFLOW = os.path.join(_REPO, ".github", "workflows", "ci.yml")
+_SHIPPED_HOOK_ID = "confd-schema-check-shipped"
 
 
 @pytest.fixture(scope="module")
@@ -168,34 +170,55 @@ class TestValidateDir:
 
     @pytest.mark.parametrize("tree", _REAL_SHIPPED_CONFD)
     def test_real_shipped_confd_is_clean(self, tree, schema):
-        # Every SHIPPED conf.d tree (demo stack + the examples users copy from)
-        # must stay schema-valid. try-local was red with no gate to notice; the
-        # other two had the same zero coverage and just happened to be clean.
-        # Twin of test_real_confd_is_clean for the non-exporter trees.
+        """Every SHIPPED conf.d tree must stay schema-valid.
+
+        Demo stack + the examples users copy from. try-local was red with no gate
+        to notice; the other two had the same zero coverage and just happened to
+        be clean. Twin of test_real_confd_is_clean for the non-exporter trees.
+        """
         checked, viol, _skipped = validate_dir(tree, schema, jsonschema)
         assert viol == [], f"{tree} violates the schema: {viol}"
         assert checked >= 1
 
     def test_shipped_hook_covers_every_shipped_tree(self):
-        # Drift guard: the hook's --config-dir list and the list this file asserts
-        # on must not diverge. Without this, adding a tree to one side silently
-        # leaves the other blind — the exact failure mode that let try-local rot.
+        """The hook's --config-dir list must match the trees this file asserts on.
+
+        Drift guard: without it, adding a tree to one side silently leaves the
+        other blind — the exact failure mode that let try-local rot unnoticed.
+        """
         with open(_PRECOMMIT_CFG, encoding="utf-8") as fh:
             cfg = fh.read()
-        entry = cfg.split("id: confd-schema-check-shipped", 1)[1].split("language:", 1)[0]
+        entry = cfg.split(f"id: {_SHIPPED_HOOK_ID}", 1)[1].split("language:", 1)[0]
         hooked = {ln.split("--config-dir", 1)[1].strip()
                   for ln in entry.splitlines() if "--config-dir" in ln}
         expected = {os.path.relpath(p, _REPO).replace(os.sep, "/")
                     for p in _REAL_SHIPPED_CONFD}
         assert hooked == expected, f"hook covers {hooked}, tests cover {expected}"
 
+    def test_shipped_hook_is_named_by_the_ci_workflow(self):
+        """.github/workflows/ci.yml must invoke the hook by name.
+
+        Defining a hook is not the same as CI running it: Vibe has no blanket
+        `pre-commit run --all-files`, so a hook no workflow names by hand has ZERO
+        CI enforcement (#1223). Deleting the invocation line would silently retire
+        this gate — nothing else would go red — so the link is asserted here rather
+        than left to review. A typo'd id fails loudly (pre-commit rejects unknown
+        ids); a DELETED line is the silent case this covers.
+        """
+        with open(_CI_WORKFLOW, encoding="utf-8") as fh:
+            ci = fh.read()
+        assert f"pre-commit run {_SHIPPED_HOOK_ID}" in ci, (
+            f"{_SHIPPED_HOOK_ID} is defined but .github/workflows/ci.yml never runs "
+            f"it — the gate would exist without ever executing in CI")
+
     def test_severity_dedup_accepts_runtime_vocabulary(self, confd, schema):
-        # The schema's enum once read ['auto','manual','disable'] — a vocabulary
-        # NOTHING in the repo speaks: ResolveSeverityDedup (resolve.go) accepts
-        # enable/disable, scaffold_tenant.py's --severity-dedup offers exactly
-        # those two, and every doc says the same. That drift made a valid config
-        # fail the lint. Positive case so the enum cannot regress away from what
-        # the resolver actually honours.
+        """The enum must not drift away from what the resolver honours.
+
+        It once read ['auto','manual','disable'] — a vocabulary NOTHING in the
+        repo speaks: ResolveSeverityDedup (resolve.go) accepts enable/disable,
+        scaffold_tenant.py's --severity-dedup offers exactly those two, and every
+        doc says the same. That drift made a valid config fail the lint.
+        """
         for value in ("enable", "disable"):
             _write(confd, "db-a.yaml",
                    f'tenants:\n  db-a:\n    _severity_dedup: "{value}"\n')
@@ -203,8 +226,12 @@ class TestValidateDir:
             assert viol == [], f"_severity_dedup: {value!r} must validate: {viol}"
 
     def test_severity_dedup_rejects_unknown_value(self, confd, schema):
-        # Negative twin: the resolver only WARNs and falls back to enable on an
-        # unknown value, so the schema is the one place a typo gets caught.
+        """A typo'd value must be caught here — the schema is the only catcher.
+
+        Negative twin: the resolver only WARNs and falls back to enable on an
+        unknown value, so nothing downstream reddens. Contract pin rather than
+        new detection power: the pre-fix enum rejected 'enabel' too.
+        """
         _write(confd, "db-a.yaml", 'tenants:\n  db-a:\n    _severity_dedup: "enabel"\n')
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
         assert len(viol) == 1, viol
@@ -339,14 +366,16 @@ class TestCLI:
         assert result.returncode == EXIT_CALLER_ERROR
 
     def test_shipped_trees_exit_zero_in_one_invocation(self):
-        # The real hook invocation: several --config-dir in one run.
+        """The real hook invocation: several --config-dir in one run."""
         result = _run(*_REAL_SHIPPED_CONFD)
         assert result.returncode == EXIT_OK, result.stderr
         assert "OK:" in result.stdout
 
     def test_multi_dir_violation_names_the_offending_tree(self, confd, tmp_path):
-        # With >1 tree in play a bare relpath does not say WHERE to go fix; the
-        # violation must carry the tree it came from.
+        """A violation must name its tree once several are scanned.
+
+        With >1 tree in play a bare relpath does not say WHERE to go fix.
+        """
         clean = tmp_path / "clean"
         clean.mkdir()
         _write(str(clean), "ok.yaml", 'tenants:\n  db-a:\n    _severity_dedup: "enable"\n')
@@ -356,7 +385,9 @@ class TestCLI:
         assert confd.replace(os.sep, "/") in result.stderr, result.stderr
 
     def test_one_missing_dir_among_several_exits_two(self):
-        # Fail-closed: a typo'd path must not silently reduce coverage to the
-        # dirs that happen to exist.
+        """Fail-closed: a typo'd path must not silently shrink coverage.
+
+        Otherwise the gate quietly validates only the dirs that happen to exist.
+        """
         result = _run(_REAL_TRYLOCAL_CONFD, os.path.join(_REPO, "no", "such", "dir"))
         assert result.returncode == EXIT_CALLER_ERROR
