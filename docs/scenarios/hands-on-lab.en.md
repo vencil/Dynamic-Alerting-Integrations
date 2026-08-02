@@ -91,8 +91,9 @@ container_cpu: "75"
 container_memory: "80"
 
 _routing:
-  receiver_type: slack
-  webhook_url: https://hooks.slack.com/services/T00/B00/xxx
+  receiver:
+    type: slack
+    api_url: https://hooks.slack.com/services/T00/B00/xxx
   group_by: [alertname, severity]
   group_wait: "30s"
   repeat_interval: "4h"
@@ -132,7 +133,9 @@ jvm_gc_pause: "0.8"
 jvm_memory: "85"
 
 _routing:
-  receiver_type: pagerduty
+  receiver:
+    type: pagerduty
+    service_key: "<your-pagerduty-service-key>"
   group_by: [alertname, topic]
   group_wait: "1m"
   repeat_interval: "12h"
@@ -150,10 +153,15 @@ _state_maintenance:
   expires: "2026-03-20T06:00:00Z"
 
 _silent_mode:
+  target: warning        # required — which severities to silence (warning | critical | all | disable)
   expires: "2026-03-18T12:00:00Z"
 
 _routing:
-  receiver_type: email
+  receiver:
+    type: email
+    to: ["dba-oncall@example.com"]
+    smarthost: "smtp.example.com:587"
+    from: "alerting@example.com"
   group_wait: "5m"
   repeat_interval: "24h"
 ```
@@ -282,8 +290,9 @@ Try changing prod-oracle's routing to use Slack:
 ```yaml
 # In prod-oracle.yaml, replace _routing_profile line with:
 _routing:
-  receiver_type: slack
-  webhook_url: https://hooks.slack.com/services/xxx
+  receiver:
+    type: slack
+    api_url: https://hooks.slack.com/services/xxx
 ```
 
 Run validation again — you should see a domain policy warning: `finance` domain forbids `slack`. Add `--strict` and the warning escalates to an ERROR with a non-zero exit code (CI runs `--validate --strict`, blocking such violations before merge).
