@@ -600,6 +600,25 @@ pre-tag: version-check lint-docs playbook-freshness-ll draft-advisory-check benc
 #     read as "nothing to publish".
 # Escape hatch is explicit and recorded in the shell history, mirroring the
 # `acknowledgeDataMove` precedent: ADVISORY_ACK=1 make pre-tag
+#
+# ⛔ `--paginate` IS LOAD-BEARING, not tidiness. `gh api` returns one page
+# (30) by default, so without it a repo with more advisories than that would
+# have its later drafts silently omitted and this gate would report "none" —
+# a fail-OPEN, in the one direction every other branch here is careful to
+# avoid. (Verified: --paginate composes with --jq, applying the filter per
+# page and concatenating.)
+#
+# ⚠️ HONEST BOUNDARY — this covers the LOCAL path only. `release.yaml`
+# triggers on tag push, and nothing mechanically requires `make pre-tag` to
+# have run first, so `git push origin <tag>` still reaches the release
+# workflow without ever consulting this check. That is a strictly smaller
+# hole than before (the check previously existed only as a skill instruction
+# that fired when an agent invoked it), but it is NOT full enforcement: for
+# that the same query has to run inside release.yaml ahead of any build/push
+# step, which changes release semantics (a tag would then be able to exist
+# with no release behind it) and needs its own decision on what the CI-side
+# equivalent of ADVISORY_ACK should be. Raised by review on #1324; not folded
+# in here because it is a change to the release path, not to this gate.
 .PHONY: draft-advisory-check
 draft-advisory-check: ## ⛔ 擋住「有未發布 draft advisory 就打 tag」（#1269；ADVISORY_ACK=1 可明示略過）
 	@# ⛔ ONE shell for the whole recipe. Each `@` line in a Makefile is its own
@@ -613,7 +632,7 @@ draft-advisory-check: ## ⛔ 擋住「有未發布 draft advisory 就打 tag」�
 		echo "❌ draft-advisory-check: 找不到 gh CLI，無法查詢 draft advisory。"; \
 		echo "   這一項刻意 fail-closed：查不到 ≠ 沒有。裝 gh 或 ADVISORY_ACK=1 明示略過。"; \
 		exit 1; \
-	elif ! drafts=$$(gh api repos/{owner}/{repo}/security-advisories \
+	elif ! drafts=$$(gh api --paginate repos/{owner}/{repo}/security-advisories \
 			--jq '.[] | select(.state=="draft") | .ghsa_id + " | " + .summary' 2>/dev/null); then \
 		echo "❌ draft-advisory-check: gh api 查詢失敗（權限不足或網路問題）。"; \
 		echo "   需要能讀 security advisories 的 token；或 ADVISORY_ACK=1 明示略過。"; \
