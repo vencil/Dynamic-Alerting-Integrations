@@ -66,6 +66,34 @@ import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat
 DEFAULT_SKEW_MARGIN_S = 120         # ~2 min: absorb API-server/VictoriaLogs/node clock drift
 DEFAULT_WINDOW_LOOKBACK_S = 24 * 3600   # revocation events: query [now-24h, now-settle]
 DEFAULT_WINDOW_SETTLE_S = 60        # only reconcile logs old enough to have landed
+DEFAULT_PROJECTION_GRACE_S = 180    # #1238: additionally, only reconcile events old enough
+#                                     that THIS pod's kubelet projection of revoked.txt has
+#                                     certainly caught up (see event_settle_s).
+#                                     ⛔ THE NUMBER IS SIZED FROM THE DOCUMENTED WORST
+#                                     CASE, NOT FROM THE MEASUREMENT BELOW. kubelet
+#                                     propagation is "sync period + cache propagation
+#                                     delay"; this repo already records 30-90s for
+#                                     ConfigMap volumes (docs/internal/testing-playbook.md
+#                                     and k8s/03-monitoring/deployment-prometheus.yaml),
+#                                     and a non-default
+#                                     `configMapAndSecretChangeDetectionStrategy: Cache`
+#                                     adds a further TTL. 180 covers that with margin and
+#                                     costs only detection latency, against a ≤4h exposure.
+#                                     The measurement is corroboration — it shows the
+#                                     hazard is real and gives the shape, nothing more.
+#                                     Measured on kind (default kubelet, 6 patches):
+#                                     11/30/40/55/62/68s — i.e. the delay is roughly
+#                                     uniform over one ~60s kubelet sync loop, and TWO of
+#                                     six already exceeded the 60s `--settle`. So the
+#                                     hazard this guards is reproducible, not theoretical.
+#                                     The same run showed an `items:`-filtered projection
+#                                     and a whole-ConfigMap mount updating in the SAME
+#                                     second every time, so the reconciler's and the
+#                                     gateway's differing mount shapes do not add skew.
+#                                     ⚠️ That measurement is a LOWER bound: it validates
+#                                     the mechanism and the order of magnitude, never a
+#                                     production cluster's worst case. Do NOT tighten this
+#                                     toward 68s.
 DEFAULT_FAILOPEN_LOOKBACK_S = 600   # gateway fail-open: RECENT window only (~10m) so the
 #                                     gauge reflects current failures, not a 24h-old blip
 DEFAULT_HEARTBEAT_LOOKBACK_S = 1800  # evidence-channel canary window (30m): tenant-api emits
@@ -264,6 +292,44 @@ def reconcile(
             suspected.append(ev.token_id)
     suspected.sort()
     return ReconcileResult(checked=len(checked_ids), suspected=suspected)
+
+
+def event_settle_s(settle_s: int, projection_grace_s: int) -> int:
+    """Effective age a revocation event must reach before it is reconciled.
+
+    Two INDEPENDENT lags have to have elapsed, and they are measured from the
+    same instant, so the guard is the larger of the two — never their sum, and
+    never just one of them:
+
+    * ``settle_s`` — VictoriaLogs ingestion lag. Ask too early and the row is
+      not in the store yet, so the event is simply not seen this pass.
+    * ``projection_grace_s`` — this pod's OWN kubelet ConfigMap projection lag
+      (#1238). Ask too early and the event IS seen while the projected
+      ``revoked.txt`` still predates it, so a token that was revoked correctly
+      reads as absent from the live set — i.e. a LEGITIMATE revocation is
+      reported as tamper. tenant-api commits the ConfigMap BEFORE emitting the
+      event (ADR-028 §D3 dual-write ordering), so projection starts no later
+      than the event timestamp and measuring the grace from the event is the
+      conservative direction.
+
+    ⛔ This applies to the EVENT query only. The fail-open / rejected / missing
+    queries deliberately keep the bare ``settle_s``: their window is
+    ``[now-600s, now-settle]`` and raising the near edge would SHRINK it, which
+    is the opposite of what #1238 needs for those two gauges. Widening the
+    shared ``--settle`` instead of adding this parameter would have made
+    FederationGatewayRevokedSetReloadRejected strictly worse.
+
+    Why a grace is needed at all now: before #1238 the `for: 5m` on
+    FederationRevocationTamperSuspected absorbed a one-pass false positive for
+    free. Latching the alert removes that absorption, so the same hazard has to
+    be handled where it actually originates — at the source, on the event's
+    age — rather than by an alert threshold that also happened to hide real
+    attacks. Making it a `for:`-style debounce again (e.g. "suspected on two
+    consecutive passes") is NOT an option: the un-revoke window this alert
+    exists to catch is shorter than one pass, so it can never be observed
+    twice, and such a rule would silently restore the exact blindness #1238
+    removes."""
+    return max(settle_s, projection_grace_s)
 
 
 def build_logsql_query(lookback_s: int, settle_s: int) -> str:
@@ -578,7 +644,9 @@ def reconcile_once(cfg: "Config", metrics: Metrics, now: float) -> None:
     last_reconcile_ts or emit an all-clear — a stuck pass surfaces as staleness,
     never as a false 'no tamper' and never as a crash-loop."""
     try:
-        ev_rows = query_victorialogs(cfg.victorialogs_url, build_logsql_query(cfg.lookback_s, cfg.settle_s))
+        ev_rows = query_victorialogs(
+            cfg.victorialogs_url,
+            build_logsql_query(cfg.lookback_s, event_settle_s(cfg.settle_s, cfg.projection_grace_s)))
         fo_rows = query_victorialogs(cfg.victorialogs_url, build_failopen_query(cfg.failopen_lookback_s, cfg.settle_s))
         # ⛔ INSIDE the fail-closed try, deliberately. If the heartbeat query
         # were run outside it (or its result written to the gauge before the
@@ -664,6 +732,7 @@ class Config:
     skew_margin_s: int
     failopen_lookback_s: int
     heartbeat_lookback_s: int = DEFAULT_HEARTBEAT_LOOKBACK_S
+    projection_grace_s: int = DEFAULT_PROJECTION_GRACE_S
 
 
 def _serve_forever(cfg: Config, metrics: Metrics, clock=time.time) -> None:
@@ -705,6 +774,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--interval", type=int, default=300, help="Reconcile interval, seconds.")
     p.add_argument("--lookback", type=int, default=DEFAULT_WINDOW_LOOKBACK_S)
     p.add_argument("--settle", type=int, default=DEFAULT_WINDOW_SETTLE_S)
+    p.add_argument("--projection-grace", type=int, default=DEFAULT_PROJECTION_GRACE_S,
+                   help="Extra age (s) a revocation event must reach before it is reconciled, "
+                        "covering this pod's OWN kubelet ConfigMap projection lag. Applies to "
+                        "the event query only; the effective settle is max(settle, this). "
+                        "Prevents a legitimate revocation from being read as tamper simply "
+                        "because the projected revoked.txt has not landed yet (#1238).")
     p.add_argument("--skew-margin", type=int, default=DEFAULT_SKEW_MARGIN_S)
     p.add_argument("--failopen-lookback", type=int, default=DEFAULT_FAILOPEN_LOOKBACK_S,
                    help="Recent window (s) for the gateway fail-open gauge.")
@@ -723,6 +798,7 @@ def main(argv: list[str] | None = None) -> int:
         skew_margin_s=args.skew_margin,
         failopen_lookback_s=args.failopen_lookback,
         heartbeat_lookback_s=args.heartbeat_lookback,
+        projection_grace_s=args.projection_grace,
     )
     _serve_forever(cfg, Metrics())
     return 0

@@ -1,7 +1,10 @@
 # Bare-rules promtool target for the federation-revocation reconciler alerts
 # (ADR-028 D1 / #924). promtool needs a top-level `groups:` document, not the
 # deployed `data: platform-alert.yml: |` ConfigMap, so this is an EXTRACTED COPY
-# of the six alerts from k8s/03-monitoring/configmap-rules-platform.yaml.
+# of the seven alerts from k8s/03-monitoring/configmap-rules-platform.yaml.
+# (It said "six" until #1238; #1236 had added the seventh without updating this
+# sentence. Nothing enforces prose — test_platform_rules_extract_sync.py compares
+# expr/for/labels/summary only, and deliberately in one direction.)
 #
 # ⚠️ KEEP IN SYNC with that ConfigMap (expr + for + labels + summary). The
 # behavioural contract is exercised by platform-federation-revocation_test.yaml.
@@ -13,10 +16,18 @@ groups:
     rules:
       # An un-revoke was detected: a token the log says is revoked-and-live is
       # absent from the live set. Critical — a revoked federation token may be
-      # accepted until its TTL. `for: 5m` rides out one reconcile interval so a
-      # single transient mismatch (mount sync vs log) does not page.
+      # accepted until its TTL.
+      # ⛔ LATCHED since #1238. The gauge is recomputed every reconcile pass
+      # (300s), so a one-pass detection used to expire before `for: 5m` could
+      # elapse and never paged at all. `max_over_time(...[1h])` holds it. The
+      # comment this replaced said `for: 5m` "rides out one reconcile interval so
+      # a single transient mismatch (mount sync vs log) does not page" — that was
+      # true, and it was also exactly why the smallest real attack could not page.
+      # The mount-sync half is now handled at the source instead, by the
+      # reconciler's projection-grace on the event query. Full rationale and the
+      # residual sampling gap: the block comment in the ConfigMap + ADR-028.
       - alert: FederationRevocationTamperSuspected
-        expr: federation_revocation_tamper_suspected > 0
+        expr: max_over_time(federation_revocation_tamper_suspected[1h]) > 0
         for: 5m
         labels:
           severity: critical
@@ -73,12 +84,14 @@ groups:
       # The one gateway state where the set is EMPTY rather than stale (#1236):
       # the projected key is gone, so every revoked token is honoured until its
       # TTL. critical (vs the warning above) because the exposure is active, not
-      # frozen. `for: 5m` = one reconcile interval — shorter than the staleness
-      # pair's 10m, longer than the 2m above. ⚠️ On this gauge `for` debounces
-      # scrape jitter only: the value counts log rows in a ~10m window, so one
-      # transient line outlives any `for` we would set.
+      # frozen.
+      # ⛔ LATCHED since #1238, and the claim this replaced was measurably wrong:
+      # "one transient line outlives any `for` we would set" held only when TWO
+      # passes happened to observe the row (600s of non-zero). When only one did
+      # (300s) it did NOT outlive `for: 5m`, so the same event paged or did not
+      # depending on pass alignment. The latch removes that dependency.
       - alert: FederationGatewayRevokedSetMissing
-        expr: federation_gateway_revoked_set_missing > 0
+        expr: max_over_time(federation_gateway_revoked_set_missing[1h]) > 0
         for: 5m
         labels:
           severity: critical
@@ -96,10 +109,14 @@ groups:
       # refused one was not. Two alerts because the gauges observe different
       # planes: the file as the reconciler reads it vs the gateway's own account
       # of what it loaded — either can be non-zero alone.
-      # `for: 10m` on both = one reconcile interval (300s) plus an equal margin,
-      # which absorbs a read that caught a projection swap mid-flight. Long costs
-      # nothing: the condition is persistent (only an out-of-band write creates
-      # it, only a human clears it), unlike the transient I/O the 2m above rides.
+      # ⛔ The "persistent condition" rationale for `for: 10m` applies to
+      # LiveSetRejected ONLY. That one reads the FILE, so it stays true until a
+      # human fixes the line. ReloadRejected counts log rows in a ~600s window
+      # rewritten every 300s, so one refused reload holds it non-zero for at most
+      # 600s == `for: 10m` and never fired (promtool-verified); it is LATCHED
+      # since #1238. Traffic makes it worse, not better: the gateway reloads only
+      # inside the request path, so a quiet gateway with a poisoned file emits
+      # sparse warnings and the gauge decays between them.
       - alert: FederationRevocationLiveSetRejected
         expr: federation_revocation_live_set_rejected_lines > 0
         for: 10m
@@ -110,7 +127,7 @@ groups:
           summary: "Federation revoked set violates its line contract — the gateway is refusing to load it, so revocations made since are NOT enforced (ADR-028 / #1235)"
 
       - alert: FederationGatewayRevokedSetReloadRejected
-        expr: federation_gateway_revoked_set_reload_rejected > 0
+        expr: max_over_time(federation_gateway_revoked_set_reload_rejected[1h]) > 0
         for: 10m
         labels:
           severity: critical

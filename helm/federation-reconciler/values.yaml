@@ -65,6 +65,19 @@ reconcile:
   intervalSeconds: 300      # reconcile cadence
   lookbackSeconds: 86400    # revocation-event window [now-24h, now-settle]
   settleSeconds: 60         # skip logs younger than this (ingestion lag)
+  # ⛔ #1238. A SECOND, independent age guard, applied to the revocation-event
+  # query ONLY (effective near edge = max(settleSeconds, this)). It covers this
+  # pod's own kubelet ConfigMap projection lag: reconcile an event before the
+  # projected revoked.txt has caught up and a token that WAS revoked correctly
+  # reads as absent from the live set — a legitimate revocation reported as
+  # tamper. Until #1238 the alert's `for: 5m` absorbed that for free; latching
+  # the alert removes the absorption, so the hazard is handled at its source.
+  # ⛔ Do NOT "simplify" this by raising settleSeconds instead: settleSeconds is
+  # shared with the gateway-side queries, whose window is [now-600s, now-settle],
+  # and raising their near edge SHRINKS it — making a single refused reload
+  # harder to catch, the opposite of what #1238 does for those gauges.
+  # Set to 0 to reproduce the pre-#1238 windows exactly.
+  projectionGraceSeconds: 180
   skewMarginSeconds: 120    # ~2 min clock-skew tolerance at the TTL boundary
   failopenLookbackSeconds: 600  # RECENT window for the gateway fail-open gauge
   # ADR-028 D1 / #1234 evidence-channel canary window. tenant-api emits
