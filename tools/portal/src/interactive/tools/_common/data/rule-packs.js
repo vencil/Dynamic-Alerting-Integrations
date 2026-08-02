@@ -37,6 +37,15 @@ purpose: |
     PACK_ORDER                ordered packId list (window.__PLATFORM_DATA.packOrder || Object.keys(RULE_PACK_DATA))
     CATEGORY_LABELS           map of category to i18n thunk
     getAllMetricKeys(packs)   flatten defaults to [{key, pack, label, value, unit, desc}]
+    DECLARED_KEYS             window.__PLATFORM_DATA.declaredKeys || {} — keys the
+                              platform recognises but assigns NO value to
+    getDeclaredKeys(packs)    flatten those to [{key, pack, label, value, unit, desc}]
+                              where `value` is a REFERENCE number only
+
+  ⛔ DECLARED_KEYS is deliberately a separate accessor, not extra entries in
+  getAllMetricKeys: consumers of that list read `value` as "the default the
+  platform supplies", and for these keys there is no such thing — omitting one
+  is silence, not a fallback.
 
   Per-default optional field `metricClass` ('saturation') mirrors
   scaffold_tenant.py RULE_PACKS `metric_class` (via platform-data
@@ -99,4 +108,37 @@ function getAllMetricKeys(selectedPacks) {
   return keys;
 }
 
-export { RULE_PACK_DATA, CATEGORY_LABELS, getAllMetricKeys, PACK_ORDER };
+// Keys the platform RECOGNISES but assigns no value to (registry tier
+// `optional_overrides`, flat spellings). A tenant may set one and it fires;
+// leaving it out is silence, not a default — there is nothing to fall back to.
+//
+// Kept OUT of getAllMetricKeys on purpose: every consumer of that list treats
+// an entry as "a default the platform supplies" (it spreads `value`/`unit`
+// straight from `pack.defaults`), so folding these in would hand them a
+// `value` the platform does not stand behind. Separate accessor, separate
+// meaning.
+//
+// Top-level rather than under RULE_PACK_DATA because the inline catalog above
+// is a hand-written mirror that rule-packs-fallback-drift.test.ts deep-equals
+// per pack; a per-pack field would need hand-copying into it. Offline degrades
+// to {} — same derived-fallback shape as PACK_ORDER.
+const DECLARED_KEYS = window.__PLATFORM_DATA?.declaredKeys || {};
+
+function getDeclaredKeys(selectedPacks) {
+  const keys = [];
+  const packs = selectedPacks && selectedPacks.length > 0
+    ? selectedPacks
+    : Object.keys(DECLARED_KEYS);
+  for (const packId of packs) {
+    const rows = DECLARED_KEYS[packId];
+    if (!rows) continue;
+    const label = RULE_PACK_DATA[packId]?.label || packId;
+    for (const row of rows) keys.push({ pack: packId, label, ...row });
+  }
+  return keys;
+}
+
+export {
+  RULE_PACK_DATA, CATEGORY_LABELS, getAllMetricKeys, PACK_ORDER,
+  DECLARED_KEYS, getDeclaredKeys,
+};

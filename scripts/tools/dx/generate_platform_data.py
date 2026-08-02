@@ -413,6 +413,50 @@ def build_wizard_images() -> dict:
     return images
 
 
+def build_declared_keys(scaffold_packs: dict) -> dict:
+    """Top-level `declaredKeys`: keys the platform RECOGNISES but gives no value.
+
+    Registry tier `optional_overrides`, flat spellings only — membership comes
+    from `_registry_lib.is_shipped_optional_key`, the SAME predicate that builds
+    the shipped `optional_overrides:` list and the two onboarding generators'
+    output. No second spelling of the rule, no hand-copied key list.
+
+    ⛔ Deliberately NOT nested under `rulePacks[*]`. `rule-packs.js` carries a
+    hand-written fallback mirror of that subtree and
+    `rule-packs-fallback-drift.test.ts` deep-equals it per pack, so a per-pack
+    field would have to be hand-copied there too — a fresh hand-maintained copy
+    of a generated contract, in the very line of work that exists to delete
+    them (and #1226 has not yet settled how that mirror should be generated).
+    A top-level field sits outside that per-pack projection; the browser-side
+    fallback degrades to `{}`, the same shape `packOrder` already uses (derived,
+    not hand-copied).
+
+    ⛔ `value` is a REFERENCE number for display only. The platform does not
+    assert it: ADR-030's blind-write reference library measured several of these
+    numbers false-alarming on benign load (#1176), which is precisely why the
+    keys carry no platform value. Never pre-fill one for a tenant.
+    """
+    sys.path.insert(0, str(SCAFFOLD_PATH.parent))
+    from _registry_lib import is_shipped_optional_key  # noqa: E402
+
+    declared: dict = {}
+    for pack_id in PACK_ORDER:
+        entries = (scaffold_packs.get(pack_id) or {}).get("optional_overrides") or {}
+        rows = [
+            {
+                "key": k,
+                "value": v["value"],
+                "unit": v.get("unit", ""),
+                "desc": v.get("desc", ""),
+            }
+            for k, v in entries.items()
+            if is_shipped_optional_key(k)
+        ]
+        if rows:
+            declared[pack_id] = rows
+    return declared
+
+
 def build_platform_data() -> dict:
     """Build the complete platform-data.json structure."""
     rule_counts = gather_rule_counts()
@@ -476,6 +520,7 @@ def build_platform_data() -> dict:
         "packOrder": PACK_ORDER,
         "images": build_wizard_images(),
         "rulePacks": rule_packs,
+        "declaredKeys": build_declared_keys(scaffold_packs),
         "categories": CATEGORIES,
         "totals": {
             "packs": len(PACK_ORDER),

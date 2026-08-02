@@ -52,7 +52,7 @@ purpose: |
   Consumers import these functions directly via ESM (dev-rules §S6).
 ---
 
-import { RULE_PACK_DATA, getAllMetricKeys } from '../data/rule-packs.js';
+import { RULE_PACK_DATA, getAllMetricKeys, getDeclaredKeys } from '../data/rule-packs.js';
 import { ROUTING_DEFAULTS, ROUTING_PROFILES, DOMAIN_POLICIES } from '../data/routing-profiles.js';
 import { RECEIVER_TYPES, RESERVED_KEYS, RESERVED_PREFIXES, TIMING_GUARDRAILS } from '../validation/constants.js';
 import { parseDuration } from '../validation/yaml-parser.js';
@@ -94,6 +94,13 @@ function validateConfig(config, selectedPacks) {
   const issues = [];
   const info = [];
   const knownMetrics = new Set(getAllMetricKeys(selectedPacks).map(m => m.key));
+  // Keys the platform recognises but gives no value to. Before they were
+  // carried here, typing one produced "not found in Rule Pack defaults" — the
+  // platform's own tenant docs tell you to set exactly these, so the validator
+  // was arguing with the documentation. They are NOT in knownMetrics because
+  // that set means "has a platform default"; kept apart so the message can say
+  // the true thing instead of the opposite one.
+  const declaredMetrics = new Set(getDeclaredKeys(selectedPacks).map(m => m.key));
 
   for (const [key, val] of Object.entries(config)) {
     if (key.startsWith('_')) continue;
@@ -117,10 +124,19 @@ function validateConfig(config, selectedPacks) {
           msg: t(`閾值 ${numVal} < 0，無效`, `Threshold ${numVal} < 0, invalid`) });
       }
     }
-    if (selectedPacks && selectedPacks.length > 0 && knownMetrics.size > 0) {
+    if (selectedPacks && selectedPacks.length > 0
+        && (knownMetrics.size > 0 || declaredMetrics.size > 0)) {
       const isCriticalVariant = key.endsWith('_critical');
       const baseKey = isCriticalVariant ? key.replace(/_critical$/, '') : key;
-      if (!knownMetrics.has(baseKey) && !knownMetrics.has(key)) {
+      if (declaredMetrics.has(baseKey) || declaredMetrics.has(key)) {
+        // Recognised, settable, and deliberately value-less. Say so — and say
+        // that the number has to come from the tenant's own baseline, because
+        // the reference figures shipped alongside these keys have measured
+        // false-alarm cases on benign load (#1176).
+        info.push({ level: 'info', field: key,
+          msg: t(`平台宣告的 key：平台不主張預設值，填了才生效（不填＝靜默）；數值請依自身 baseline 校準`,
+                 `Platform-declared key: no platform default, it takes effect only once you set it (omit = silent). Calibrate the number from your own baseline`) });
+      } else if (!knownMetrics.has(baseKey) && !knownMetrics.has(key)) {
         issues.push({ level: 'info', field: key,
           msg: t(`此 metric key 不在已選 Rule Pack 的預設清單中`, `Metric key not found in selected Rule Pack defaults`) });
       }
