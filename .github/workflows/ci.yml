@@ -367,6 +367,13 @@ jobs:
           # land a dbType/db_typ key or maraidb value that silently drops a tenant
           # from liveness. Hook venv carries jsonschema via additional_dependencies.
           pre-commit run confd-schema-check --all-files
+          # Same gate over every OTHER shipped conf.d tree (try-local demo stack +
+          # recipe/da-tools examples), which had NO validation of any kind: the hook
+          # above only ever scanned the exporter's conf.d, so shipped demo and
+          # example configs could (and did) drift red against the schema unnoticed.
+          # Named here explicitly — the Lint job runs unconditionally, so this is
+          # not subject to a path filter.
+          pre-commit run confd-schema-check-shipped --all-files
           # Gemini #1056 disposition 3b: admin meta-config (_rbac / _domain_policy /
           # _tenant_orgs) structural schema validation. Backstops the local hook so a
           # direct push / bypass cannot land a key-typo or bad-enum admin config that

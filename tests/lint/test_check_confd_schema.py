@@ -31,6 +31,17 @@ _SCRIPT = os.path.join(_REPO, "scripts", "tools", "lint", "check_confd_schema.py
 _SCHEMA = os.path.join(_REPO, "docs", "schemas", "tenant-config.schema.json")
 _PLATFORM_SCHEMA = os.path.join(_REPO, "docs", "schemas", "platform-defaults.schema.json")
 _REAL_CONFD = os.path.join(_REPO, "components", "threshold-exporter", "config", "conf.d")
+# The shipped conf.d trees that went unvalidated until `confd-schema-check-shipped`
+# was added — demo stack + the example configs users copy from. Kept in sync with
+# that hook's --config-dir list by test_shipped_hook_covers_every_shipped_tree.
+_REAL_TRYLOCAL_CONFD = os.path.join(_REPO, "try-local", "seed", "conf.d")
+_REAL_SHIPPED_CONFD = [
+    _REAL_TRYLOCAL_CONFD,
+    os.path.join(_REPO, "rule-packs", "recipes", "examples", "conf.d"),
+    os.path.join(_REPO, "components", "da-tools", "app", "examples",
+                 "cardinality-demo", "conf.d"),
+]
+_PRECOMMIT_CFG = os.path.join(_REPO, ".pre-commit-config.yaml")
 
 
 @pytest.fixture(scope="module")
@@ -56,10 +67,12 @@ def _write(d: str, name: str, text: str) -> None:
         fh.write(text)
 
 
-def _run(config_dir: str):
+def _run(*config_dirs: str):
+    argv = [sys.executable, _SCRIPT]
+    for d in config_dirs:
+        argv += ["--config-dir", d]
     return subprocess.run(  # subprocess-timeout: ignore
-        [sys.executable, _SCRIPT, "--config-dir", config_dir],
-        capture_output=True, text=True, encoding="utf-8",
+        argv, capture_output=True, text=True, encoding="utf-8",
     )
 
 
@@ -153,6 +166,50 @@ class TestValidateDir:
         assert viol == [], f"shipped conf.d violates the schema: {viol}"
         assert checked >= 2
 
+    @pytest.mark.parametrize("tree", _REAL_SHIPPED_CONFD)
+    def test_real_shipped_confd_is_clean(self, tree, schema):
+        # Every SHIPPED conf.d tree (demo stack + the examples users copy from)
+        # must stay schema-valid. try-local was red with no gate to notice; the
+        # other two had the same zero coverage and just happened to be clean.
+        # Twin of test_real_confd_is_clean for the non-exporter trees.
+        checked, viol, _skipped = validate_dir(tree, schema, jsonschema)
+        assert viol == [], f"{tree} violates the schema: {viol}"
+        assert checked >= 1
+
+    def test_shipped_hook_covers_every_shipped_tree(self):
+        # Drift guard: the hook's --config-dir list and the list this file asserts
+        # on must not diverge. Without this, adding a tree to one side silently
+        # leaves the other blind — the exact failure mode that let try-local rot.
+        with open(_PRECOMMIT_CFG, encoding="utf-8") as fh:
+            cfg = fh.read()
+        entry = cfg.split("id: confd-schema-check-shipped", 1)[1].split("language:", 1)[0]
+        hooked = {ln.split("--config-dir", 1)[1].strip()
+                  for ln in entry.splitlines() if "--config-dir" in ln}
+        expected = {os.path.relpath(p, _REPO).replace(os.sep, "/")
+                    for p in _REAL_SHIPPED_CONFD}
+        assert hooked == expected, f"hook covers {hooked}, tests cover {expected}"
+
+    def test_severity_dedup_accepts_runtime_vocabulary(self, confd, schema):
+        # The schema's enum once read ['auto','manual','disable'] — a vocabulary
+        # NOTHING in the repo speaks: ResolveSeverityDedup (resolve.go) accepts
+        # enable/disable, scaffold_tenant.py's --severity-dedup offers exactly
+        # those two, and every doc says the same. That drift made a valid config
+        # fail the lint. Positive case so the enum cannot regress away from what
+        # the resolver actually honours.
+        for value in ("enable", "disable"):
+            _write(confd, "db-a.yaml",
+                   f'tenants:\n  db-a:\n    _severity_dedup: "{value}"\n')
+            _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
+            assert viol == [], f"_severity_dedup: {value!r} must validate: {viol}"
+
+    def test_severity_dedup_rejects_unknown_value(self, confd, schema):
+        # Negative twin: the resolver only WARNs and falls back to enable on an
+        # unknown value, so the schema is the one place a typo gets caught.
+        _write(confd, "db-a.yaml", 'tenants:\n  db-a:\n    _severity_dedup: "enabel"\n')
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
+        assert len(viol) == 1, viol
+        assert "_severity_dedup" in viol[0]
+
 
 # --- _defaults.yaml platform-schema guard (#658 fast-follow / Gemini 對抗3) ---
 
@@ -186,7 +243,7 @@ class TestDefaultsValidation:
         # A _defaults.yaml carrying inherited tenant-override keys (reserved keys +
         # _state_*/_routing prefixes) must NOT false-red.
         _write(confd, "_defaults.yaml",
-               "_metadata:\n  owner: dba\n_severity_dedup: auto\n"
+               "_metadata:\n  owner: dba\n_severity_dedup: enable\n"
                "_state_maintenance: disable\n_routing_enforced: true\n")
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema, platform_schema)
         assert viol == []
@@ -279,4 +336,27 @@ class TestCLI:
 
     def test_missing_dir_exit_two(self):
         result = _run(os.path.join(_REPO, "no", "such", "dir"))
+        assert result.returncode == EXIT_CALLER_ERROR
+
+    def test_shipped_trees_exit_zero_in_one_invocation(self):
+        # The real hook invocation: several --config-dir in one run.
+        result = _run(*_REAL_SHIPPED_CONFD)
+        assert result.returncode == EXIT_OK, result.stderr
+        assert "OK:" in result.stdout
+
+    def test_multi_dir_violation_names_the_offending_tree(self, confd, tmp_path):
+        # With >1 tree in play a bare relpath does not say WHERE to go fix; the
+        # violation must carry the tree it came from.
+        clean = tmp_path / "clean"
+        clean.mkdir()
+        _write(str(clean), "ok.yaml", 'tenants:\n  db-a:\n    _severity_dedup: "enable"\n')
+        _write(confd, "db-a.yaml", 'tenants:\n  db-a:\n    _metadata:\n      dbType: mariadb\n')
+        result = _run(str(clean), confd)
+        assert result.returncode == EXIT_VIOLATION
+        assert confd.replace(os.sep, "/") in result.stderr, result.stderr
+
+    def test_one_missing_dir_among_several_exits_two(self):
+        # Fail-closed: a typo'd path must not silently reduce coverage to the
+        # dirs that happen to exist.
+        result = _run(_REAL_TRYLOCAL_CONFD, os.path.join(_REPO, "no", "such", "dir"))
         assert result.returncode == EXIT_CALLER_ERROR

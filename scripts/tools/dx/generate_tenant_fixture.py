@@ -219,7 +219,11 @@ def _gen_tenant_config(rng: random.Random, tenant_id: str, db_type: str) -> dict
             "reason": "Scheduled maintenance window",
         }
     if rng.random() < 0.1:
-        config["_severity_dedup"] = rng.choice(["auto", "manual", "disable"])
+        # enable/disable are the only values ResolveSeverityDedup (resolve.go) and
+        # generate_alertmanager_routes.py act on — the old ["auto","manual","disable"]
+        # list mirrored a bogus schema enum and made every generated fixture emit
+        # values the exporter would WARN about and fall back to enable on.
+        config["_severity_dedup"] = rng.choice(["enable", "disable"])
 
     return config
 

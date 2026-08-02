@@ -581,6 +581,39 @@ repos:
         files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_confd_schema|docs/schemas/(tenant-config|platform-defaults)\.schema\.json)
         additional_dependencies: ['pyyaml', 'jsonschema']
 
+      # Same gate, every OTHER shipped conf.d tree. The hook above is pinned to the
+      # exporter's conf.d and its `files:` filter matches nothing else, so every
+      # other conf.d tree we ship had ZERO CI validation. That blind spot let
+      # try-local's `cache-demo.yaml` sit red against the schema (a `_severity_dedup`
+      # value the schema's enum rejected) with nothing to catch it.
+      #
+      # Scope is "shipped config a user reads or runs", NOT every conf.d in the repo:
+      #   * try-local/seed          — the one-command demo stack's tenant configs
+      #   * rule-packs/recipes/...  — custom-alert recipe examples users copy from
+      #   * da-tools/.../cardinality-demo — shipped example tenant config
+      # Deliberately EXCLUDED: tests/golden/fixtures/** and tests/e2e-bench/**.
+      # Those encode malformed shapes ON PURPOSE (verified: the `flat` and
+      # `opt-out-null` golden fixtures both fail this schema by design — that IS the
+      # thing they test), so gating them would either red the build or force the
+      # fixtures to stop testing what they exist to test.
+      #
+      # Note the editor side already validates ALL of these: devcontainer.json maps
+      # `**/conf.d/[^_]*.yaml` to this schema, so a red squiggle appeared for
+      # cache-demo.yaml the whole time while CI stayed silent. This closes that
+      # editor-vs-CI asymmetry for shipped trees. Named explicitly in ci.yml's Lint
+      # job too, which runs unconditionally (no path filter) — see #1223's lesson
+      # that a hook no workflow calls by name has ZERO CI enforcement.
+      - id: confd-schema-check-shipped
+        name: shipped conf.d trees (try-local / recipe + da-tools examples) ↔ tenant-config schema
+        entry: python3 -X utf8 scripts/tools/lint/check_confd_schema.py
+          --config-dir try-local/seed/conf.d
+          --config-dir rule-packs/recipes/examples/conf.d
+          --config-dir components/da-tools/app/examples/cardinality-demo/conf.d
+        language: python
+        pass_filenames: false
+        files: ^(try-local/seed/conf\.d/|rule-packs/recipes/examples/conf\.d/|components/da-tools/app/examples/cardinality-demo/conf\.d/|scripts/tools/lint/check_confd_schema|docs/schemas/(tenant-config|platform-defaults)\.schema\.json)
+        additional_dependencies: ['pyyaml', 'jsonschema']
+
       # Gemini #1056 disposition 3b: pre-merge structural validation for the
       # tenant-api ADMIN meta-config files (_rbac / _domain_policy / _tenant_orgs).
       # _rbac / _tenant_orgs parse STRICTLY (yaml KnownFields), so a typo'd key is a

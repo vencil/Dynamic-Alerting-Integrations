@@ -49,9 +49,9 @@
         "_severity_dedup": {
           "type": "string",
           "title": "Severity Deduplication Mode",
-          "description": "Controls Alertmanager inhibition behavior for multi-severity alerts. Values: 'auto' (default), 'manual', 'disable'. See architecture-and-design.md §2.8 for details.",
-          "enum": ["auto", "manual", "disable"],
-          "default": "auto"
+          "description": "Controls Alertmanager inhibition behavior for multi-severity alerts. Values: 'enable' (default — suppress the warning notification when critical fires for the same tenant + metric_group), 'disable' (receive both notifications). Matches ResolveSeverityDedup in components/threshold-exporter/app/pkg/config/resolve.go. See docs/design/config-driven.md §2.8 for details.",
+          "enum": ["enable", "disable"],
+          "default": "enable"
         },
         "_namespaces": {
           "type": "array",
@@ -902,8 +902,9 @@
         },
         "_severity_dedup": {
           "type": "string",
-          "enum": ["auto", "manual", "disable"],
-          "description": "Default severity dedup mode for tenants under this directory."
+          "enum": ["enable", "disable"],
+          "default": "enable",
+          "description": "Default severity dedup mode for tenants under this directory. Same vocabulary as the tenant-level key: 'enable' (default) | 'disable'."
         },
         "_custom_alerts": {
           "$ref": "#/definitions/customAlertList",

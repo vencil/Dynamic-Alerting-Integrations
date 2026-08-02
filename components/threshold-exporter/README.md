@@ -172,7 +172,7 @@ conf.d/
 | 租戶 metadata | `_metadata` | `{runbook_url, owner, tier, …}` | 注入 `tenant_metadata_info` |
 | Silent mode | `_silent_mode` | `"warning"` 或 `{target, expires, reason}` | `expires` 自動失效 |
 | Maintenance | `_state_maintenance` | `{target, expires, reason, recurring[]}` | 窗口內抑制狀態告警 |
-| Severity dedup | `_severity_dedup` | `true` | critical 觸發時抑制 warning 通知 |
+| Severity dedup | `_severity_dedup` | `"enable"` | `"enable"`（預設）/ `"disable"`；critical 觸發時抑制 warning 通知 |
 | 自訂告警 | `_custom_alerts` | recipe 清單 | 見 [§4.5](#45-自訂告警-_custom_alerts) |
 
 範例配置：
