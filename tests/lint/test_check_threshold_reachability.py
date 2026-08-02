@@ -365,16 +365,25 @@ def test_real_repo_declares_every_grandfathered_key_on_every_face():
     assert gate.run_check()["errors"] == []
 
 
-def test_the_faces_are_distinct_artifacts_not_one_source_read_twice():
-    """Non-vacuity pin for the multi-face split itself. If every face resolved
-    to the same object, `_declared_faces` would be three names for one read and
-    the whole point — that the chart and the customer conf.d can disagree —
-    would be untestable."""
+def test_the_three_faces_agree_today():
+    """Equivalence pin, and ONLY that: the three producers — the chart's
+    values.yaml, `scaffold_tenant.generate_defaults`,
+    `init_project._gen_defaults_yaml` — must render the same declared list,
+    because a key a tenant is validated against on one surface must not be
+    refused on another.
+
+    ⛔ This does NOT prove the faces are independent artifacts. An earlier
+    revision also asserted `chart is not scaffold and scaffold is not init`,
+    which is vacuously true for EVERY possible implementation — each face
+    builds and returns a fresh `set`, so the identity check passes even if all
+    three read one file. Artifact-independence is pinned where it can actually
+    fail, by `test_shipped_optional_reads_values_yaml_not_the_registry_tier`:
+    it points one face at a synthetic values.yaml and requires that face to
+    follow the file rather than the registry.
+    """
     chart = gate._shipped_optional()
     scaffold = gate._onboarding_declared()
     init = gate._init_project_declared()
-    assert chart is not scaffold and scaffold is not init
-    # ...and they agree TODAY, which is the property the gate is protecting.
     assert chart == scaffold == init, (chart, scaffold, init)
 
 

@@ -684,7 +684,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "7d5998a2155ed81ea35a6ca1249a80e738658e911e86bdf0d309c3fc37f7b927",
+ "source_digest": "87dfb72612734cd60ed3119f599a5b80215b8af53983cff1298cf8c23ae5ed5d",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1242,11 +1242,13 @@
    "tests/helm/test_federation_store_namespace_guard.py"
   ],
   "docs/getting-started/for-tenants.en.md": [
-   "tests/dx/test_add_frontmatter.py"
+   "tests/dx/test_add_frontmatter.py",
+   "tests/ops/test_registry_lib.py"
   ],
   "docs/getting-started/for-tenants.md": [
    "tests/dx/test_add_frontmatter.py",
-   "tests/lint/test_lint_tool_consistency.py"
+   "tests/lint/test_lint_tool_consistency.py",
+   "tests/ops/test_registry_lib.py"
   ],
   "docs/glossary.en.md": [
    "tests/lint/test_check_codename_gate.py"
@@ -2250,6 +2252,7 @@
    "tests/shared/test_dry_run_no_write.py"
   ],
   "try-local/seed/conf.d/_defaults.yaml": [
+   "tests/ops/test_generate_alertmanager_routes.py",
    "tests/ops/test_guard_defaults_scopes.py"
   ],
   "try-local/seed/conf.d/_rbac.yaml": [

@@ -41,12 +41,13 @@ tenants:
 
 這會讓你的 tenant 使用**平台目前供給的**預設閾值，沒有自訂路由（alert 會發到 Alertmanager 的 default receiver）。
 
-⚠️ **「預設閾值」不等於「全部閾值」；而「設得動」也不等於「告警活了」。** 出貨的 helm chart 只帶少數幾個 key 的平台預設值（`thresholdConfig.defaults`）。其餘 key 分兩類，處置完全不同：
+⚠️ **「預設閾值」不等於「全部閾值」；而「設得動」也不等於「告警活了」。** 出貨的 helm chart 只帶少數幾個 key 的平台預設值（`thresholdConfig.defaults`）。其餘 key 分**三類**，處置完全不同：
 
-- **平台已宣告、但不主張值的 key** — 列在 `_defaults.yaml` / helm values 的 `optional_overrides:` 清單裡，隨 chart 與 onboarding 產物一起出貨。**這批不需要 operator 再動手**：你直接在自己的 `conf.d/<tenant>.yaml` 填值就會生效。但平台刻意不給它們預設值，所以**你不填就是靜默，而且不會有任何錯誤訊息**——那是設計，不是漏掉的預設：這些閾值（例如 Oracle process count、DB2 deadlock rate）只有你自己的 baseline 校準得出來，平台替你選一個數字只會製造誤觸。
-- **既不在 `defaults:`、也不在 `optional_overrides:` 的 key** — 仍要由**平台 operator** 顯式供給（`scaffold-tenant` 產生的 `_defaults.yaml`，或自行填 helm values）之後你才設得動。在那之前透過 Portal / Tenant API 寫入會被擋下（unknown key），直接推 GitOps 則是寫得進去但不會生效。
+- **平台已宣告、但不主張值的 key**（目前 9 個）— 列在 `_defaults.yaml` / helm values 的 `optional_overrides:` 清單裡，隨 chart 與 onboarding 產物一起出貨。**這批不需要 operator 再動手**：你直接在自己的 `conf.d/<tenant>.yaml` 填值就會生效。但平台刻意不給它們預設值，所以**你不填就是靜默，而且不會有任何錯誤訊息**——那是設計，不是漏掉的預設：這些閾值（例如 Oracle process count、DB2 deadlock rate）只有你自己的 baseline 校準得出來，平台替你選一個數字只會製造誤觸。
+- **不在清單裡、但 base 已有平台預設的 `<base>_critical`**（目前 5 個：`mysql_connections_critical`、`mysql_threads_running_critical`、`mysql_replication_lag_critical`、`pg_connections_critical`、`pg_replication_lag_critical`）— **你今天就設得動**，透過 Portal / Tenant API 寫入不會被擋，直推 GitOps 也一樣，填了就會產出一條真的 critical 告警。`_critical` 從來不走宣告清單（列進去只是裝飾），它的入場條件是「同名 base 在 `defaults:` 有值」，而這 5 個的 base（`mysql_connections`、`pg_connections` …）本來就在出貨的平台預設裡。
+- **base 也還沒有平台預設的 key**（目前 11 個，例如 `kafka_*_critical` / `jvm_*_critical` / `nginx_*_critical`）— 這一類才真的要由**平台 operator** 先顯式供給 base（`scaffold-tenant` 產生的 `_defaults.yaml`，或自行填 helm values）之後你才設得動。在那之前透過 Portal / Tenant API 寫入會被擋下（unknown key），直接推 GitOps 則是寫得進去但不會生效。
 
-兩類的共同點是：沒有閾值 series ⇒ 規則配不到 ⇒ 回空，這是 config-driven join 的機制本身。若你不確定平台替你開了哪些，問你的平台 operator 要 `_defaults.yaml` 的內容——**`defaults:` 與 `optional_overrides:` 兩段都要**。
+第一類（你沒填）與第三類（base 還沒供給）的結果一樣：沒有閾值 series ⇒ 規則配不到 ⇒ 回空，這是 config-driven join 的機制本身。若你不確定某個 key 落在哪一類，問你的平台 operator 要 `_defaults.yaml` 的內容——**`defaults:` 與 `optional_overrides:` 兩段都要**，然後照這個順序判：`optional_overrides:` 裡列了它 ⇒ 第一類；它長得像 `X_critical` 且 `defaults:` 裡有 `X` ⇒ 第二類；兩者皆非 ⇒ 第三類。
 
 ## 常見操作
 
@@ -60,7 +61,9 @@ tenants:
     container_cpu: "60"           # 容器 CPU 警告閾值（預設 70）
 ```
 
-三態設計：每個指標可以設定 **自訂值**、**省略**（用預設）、或 `"disable"`（停用）。
+三態設計（**限有平台預設的 key**）：每個指標可以設定 **自訂值**、**省略**（用預設）、或 `"disable"`（停用）。
+
+⚠️ 上面第一類（宣告層 `optional_overrides:`）沒有平台預設可回退，**省略＝沒有值＝不產生 series**，不是「用預設」；那一格實際只有「填」與「不填（靜默）」兩態。
 
 > 💡 **互動工具** — 想即時驗證你的 YAML？試試 [YAML Playground](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/playground.jsx)。不確定閾值怎麼設？用 [Threshold Calculator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/threshold-calculator.jsx) 從 p50/p90/p99 推算。
 
@@ -236,7 +239,7 @@ A: 不需要用的 Rule Pack 不會產生 alert（沒有對應的 exporter metri
 A: Profile 是填充（fill-in），只在 tenant 沒有設定該 key 時生效。你的直接設定永遠優先。
 
 **Q: 我怎麼知道現在有哪些 metric key 可以設定？**
-A: 查看 `_defaults.yaml` 和各 Rule Pack YAML 的頂部註解。也可以執行 `diagnose.py --show-inheritance`：輸出的 `resolved` 是**已有值**的 key，`declared` 是**平台認得但不主張值**的 key（`optional_overrides:`）——後者一樣設得動，只是你不填就沒有值。
+A: 查看 `_defaults.yaml` 和各 Rule Pack YAML 的頂部註解。也可以執行 `diagnose.py --show-inheritance`：輸出的 `resolved` 是**已有值**的 key，`declared` 是**平台認得但不主張值**的 key（`optional_overrides:`）——後者一樣設得動，只是你不填就沒有值。⚠️ 上面的第二類（base 已有平台預設的 `<base>_critical`）**兩段都不會列出來**：`_critical` 從不進宣告清單，所以不在 `declared`；你沒填時也還沒有值，所以不在 `resolved`。這一類要自己判：key 長得像 `X_critical`，而 `defaults:` 裡有 `X`。
 
 > 💡 **第一次上線？** 用 [Onboarding Checklist](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/onboarding-checklist.jsx) 取得完整的步驟清單，或從 [互動式入門精靈](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx) 開始。想在瀏覽器中觀看完整的平台運作流程？[Platform Demo](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/platform-demo.jsx) 展示真實場景。所有工具見 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/)。企業內網環境可用 `da-portal` Docker image 自建：`docker run -p 8080:80 ghcr.io/vencil/da-portal`（[部署說明](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md)）。
 

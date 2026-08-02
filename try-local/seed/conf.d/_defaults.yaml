@@ -44,14 +44,19 @@ defaults:
 # so none of these fire here — they are present so the write path can be
 # exercised, and so this file matches the shape the shipping artifacts have.
 #
-# SOURCE (this file is hand-maintained; NO gate compares it — same caveat as the
-# defaults above): rule-packs/threshold-registry.yaml, the `tier:
-# optional_overrides` keys that are NOT `<base>_critical`. The shipped copies are
-# generated: helm/threshold-exporter/values.yaml
-# `thresholdConfig.optional_overrides` and
+# SOURCE: rule-packs/threshold-registry.yaml, the `tier: optional_overrides`
+# keys that are NOT `<base>_critical`. The shipped copies are generated:
+# helm/threshold-exporter/values.yaml `thresholdConfig.optional_overrides` and
 # components/threshold-exporter/config/conf.d/_defaults.yaml `optional_overrides`
 # (both spliced by `check_threshold_registry.py --regen`). If those diverge from
 # the list below, THEY are right and this copy needs a hand edit.
+#
+# ⛔ This list is hand-maintained but NOT ungated (it was, until #1310): it is
+# compared byte-for-byte against BOTH generated copies by
+# tests/ops/test_generate_alertmanager_routes.py
+# ::TestShippedDeclaredListIsSettable
+# ::test_the_shipped_artifacts_carry_the_same_non_empty_list.
+# The `defaults:` values above still have no such gate — that caveat stands.
 optional_overrides:
   - oracle_wait_time_rate
   - oracle_process_count

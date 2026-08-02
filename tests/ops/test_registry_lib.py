@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
@@ -538,10 +539,26 @@ _CHART_VALUES = REPO_ROOT / "helm" / "threshold-exporter" / "values.yaml"
 
 
 def _resolve_critical_rows_body() -> str:
+    """The Go source of `resolveCriticalRows`, or a NAMED failure.
+
+    `str.index` here raised a bare `ValueError: substring not found` when the
+    function was renamed or moved — which says nothing about which string was
+    missing or why anyone cares, while the caller's docstring promises it
+    "fails FIRST, naming the reason". Same for the terminator: if
+    `resolveCriticalRows` ever becomes the last function in the file there is
+    no following `\\nfunc `, and the body simply runs to EOF.
+    """
     src = _RESOLVE_GO.read_text(encoding="utf-8")
-    start = src.index(
-        "func (c *ThresholdConfig) resolveCriticalRows(")
-    end = src.index("\nfunc ", start + 1)
+    sig = "func (c *ThresholdConfig) resolveCriticalRows("
+    start = src.find(sig)
+    assert start != -1, (
+        f"{_RESOLVE_GO} no longer defines {sig!r}. Every three-way pack-header "
+        "claim below is derived from that function's entry condition, so a "
+        "rename/removal must be repaired here (repoint this reader) before "
+        "those claims mean anything")
+    end = src.find("\nfunc ", start + 1)
+    if end == -1:  # last function in the file — body runs to EOF
+        end = len(src)
     return src[start:end]
 
 
@@ -707,3 +724,157 @@ def test_membership_universe_composition():
     assert "pending_key" in uni and "pending_key_critical" in uni
     assert "state_filters" in uni                # structural prose token
     assert "totally_bogus_key" not in uni
+
+
+# ── the TENANT-FACING doc's three-population claim (#1310) ────────────────
+#
+# `docs/getting-started/for-tenants.md` (+ `.en.md`) tells a CUSTOMER which of
+# the three optional-tier populations a key belongs to, and it does so with
+# hard numbers (9 / 5 / 11) and with the five settable-today `<base>_critical`
+# keys spelled out by name. That paragraph is a HAND COPY of a derived
+# contract: flip one tier in `scaffold_tenant.RULE_PACKS`, or ship one more
+# chart default, and the page a customer reads goes quietly false — the same
+# drift class this whole PR exists to delete, landing on the one surface with
+# no generator and (until now) no gate.
+#
+# The derivation below reuses the SAME two predicates the pack-header renderer
+# uses (`is_shipped_optional_key` for list membership, `has_shipped_chart_base`
+# for the split among the rest), so the doc cannot disagree with the rule-pack
+# headers either; and every predicate answer is cross-checked against the
+# SHIPPED `helm/threshold-exporter/values.yaml`, so a registry that has drifted
+# from the artifact fails here instead of being blessed by it.
+
+_TENANT_DOC_RELS = (
+    "docs/getting-started/for-tenants.md",
+    "docs/getting-started/for-tenants.en.md",
+)
+_TENANT_DOCS = tuple(REPO_ROOT / rel for rel in _TENANT_DOC_RELS)
+
+# ⛔ EXACT tokens, never substring/`in`: `mysql_connections_critical` contains
+# `mysql_connections`, so a substring test reports "found" for precisely the
+# stale spellings that most resemble a live key (feedback: 子字串比對會藏住漂移).
+_DOC_CRITICAL_NAME_RE = re.compile(r"`([a-z][a-z0-9_]*_critical)`")
+# glob-shaped family examples in the dormant bullet: `kafka_*_critical`
+_DOC_CRITICAL_FAMILY_RE = re.compile(r"`([a-z][a-z0-9_]*?)_\*_critical`")
+# "（目前 9 個）" / "(9 today)" — the ZH SSOT and the EN mirror
+_DOC_COUNT_RE = re.compile(r"目前\s*(\d+)\s*個|\((\d+) today")
+
+
+def _doc_group_bullets(path: Path) -> list[str]:
+    """The three `- **…**` bullets of the three-population paragraph, in order.
+
+    Every step FAILS LOUD rather than returning a short list. A silently empty
+    or partial parse would make every assertion below vacuous — a gate that
+    reports success forever is worse than no gate, because it also buys the
+    reader's confidence (same discipline as
+    `check_portal_rulepack_claims.parse_portal_claims`).
+    """
+    lines = path.read_text(encoding="utf-8").splitlines()
+    anchors = [i for i, ln in enumerate(lines)
+               if "`thresholdConfig.defaults`" in ln]
+    assert len(anchors) == 1, (
+        f"{path.name}: expected exactly one paragraph mentioning "
+        f"`thresholdConfig.defaults` to anchor the three-population bullets, "
+        f"found {len(anchors)} at lines {[i + 1 for i in anchors]}. The doc's "
+        "shape changed and this gate can no longer find the claims — repoint "
+        "the anchor, do not delete the check")
+    bullets: list[str] = []
+    for ln in lines[anchors[0] + 1:]:
+        if ln.startswith("- "):
+            bullets.append(ln)
+        elif bullets:
+            break  # first non-bullet line after the block closes it
+    assert len(bullets) == 3, (
+        f"{path.name}: expected 3 population bullets after the anchor, parsed "
+        f"{len(bullets)}. If the doc genuinely describes a different number of "
+        "populations, update the derivation below too — do not loosen this")
+    return bullets
+
+
+def _derive_three_populations() -> tuple[set, set, set]:
+    """(declared, base_shipped, dormant) — the optional tier split by TRUTH.
+
+    Same predicates as `optional_warning_groups`, each answer re-asked of the
+    shipped chart so declaration and artifact cannot silently disagree.
+    """
+    import yaml
+
+    doc = lib.build_registry_doc()
+    chart_doc = yaml.safe_load(_CHART_VALUES.read_text(encoding="utf-8")) or {}
+    threshold_cfg = chart_doc.get("thresholdConfig") or {}
+    chart_defaults = set(threshold_cfg.get("defaults") or {})
+    shipped_list = set(threshold_cfg.get("optional_overrides") or [])
+    assert chart_defaults and shipped_list, "values.yaml faces parsed as empty"
+
+    tier = {k for k, e in doc["keys"].items()
+            if e.get("tier") == "optional_overrides"}
+    declared = {k for k in tier if lib.is_shipped_optional_key(k)}
+    assert declared == shipped_list, (
+        "the membership predicate and the SHIPPED optional_overrides list "
+        f"disagree (predicate-only={sorted(declared - shipped_list)}, "
+        f"artifact-only={sorted(shipped_list - declared)}) — the doc's group 1 "
+        "would be describing something no operator ever received")
+
+    base_shipped = set()
+    for key in tier - declared:
+        base = doc["keys"][key].get("critical_of")
+        by_registry = lib.has_shipped_chart_base(doc, key)
+        by_artifact = bool(base) and base in chart_defaults
+        assert by_registry == by_artifact, (
+            f"{key}: registry says base-shipped={by_registry} but "
+            f"values.yaml says {by_artifact} (base={base!r})")
+        if by_registry:
+            base_shipped.add(key)
+    return declared, base_shipped, tier - declared - base_shipped
+
+
+@pytest.mark.parametrize("path", _TENANT_DOCS, ids=lambda p: p.name)
+def test_tenant_doc_three_population_claim_matches_the_derivation(path):
+    """The customer-facing counts AND the five spelled-out names, both langs."""
+    declared, base_shipped, dormant = _derive_three_populations()
+    bullets = _doc_group_bullets(path)
+    expected = [len(declared), len(base_shipped), len(dormant)]
+
+    counts = []
+    for idx, bullet in enumerate(bullets):
+        match = _DOC_COUNT_RE.search(bullet)
+        assert match, (
+            f"{path.name}: population bullet {idx + 1} states no count. Either "
+            "restore the number (and it will be gated here) or drop the count "
+            f"from all three bullets: {bullet[:120]!r}")
+        counts.append(int(match.group(1) or match.group(2)))
+    assert counts == expected, (
+        f"{path.name}: the doc claims {counts} keys in "
+        "(declared / base-shipped / dormant) but the registry + shipped "
+        f"values.yaml derive {expected}. The derivation is the SSOT — fix the "
+        "doc, in BOTH languages")
+
+    # group 2 is the only bullet that spells its members out; EXACT set
+    # equality, so a renamed or retired key cannot hide behind a live prefix.
+    named = set(_DOC_CRITICAL_NAME_RE.findall(bullets[1]))
+    assert named == base_shipped, (
+        f"{path.name}: the doc names {sorted(named)} as the `<base>_critical` "
+        f"keys a tenant can set today, the derivation says "
+        f"{sorted(base_shipped)} (doc-only={sorted(named - base_shipped)}, "
+        f"missing={sorted(base_shipped - named)})")
+
+    # ...and the other two bullets must NOT name individual keys: a literal
+    # name there would be a fourth ungated claim on this page.
+    for idx in (0, 2):
+        stray = _DOC_CRITICAL_NAME_RE.findall(bullets[idx])
+        assert not stray, (
+            f"{path.name}: population bullet {idx + 1} now spells out "
+            f"{stray} — extend this gate to pin that bullet's membership too, "
+            "do not ship an unchecked key list")
+
+    # the dormant bullet gives glob-shaped families (`kafka_*_critical`);
+    # each must still have at least one real member.
+    families = _DOC_CRITICAL_FAMILY_RE.findall(bullets[2])
+    assert families, (
+        f"{path.name}: the dormant bullet no longer gives any `x_*_critical` "
+        "example family — if that was deliberate, drop this assertion with it")
+    for family in families:
+        assert any(k.startswith(family + "_") for k in dormant), (
+            f"{path.name}: the doc offers `{family}_*_critical` as an example "
+            f"of the dormant group, but no dormant key starts with "
+            f"'{family}_' (dormant={sorted(dormant)})")

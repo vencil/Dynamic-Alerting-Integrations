@@ -63,8 +63,8 @@ _HELP = {
         'en': 'Path to tenant config directory (conf.d/) for profile lookup'
     },
     'show_inheritance': {
-        'zh': '顯示詳細的四層繼承鏈解析 (需要 --config-dir)',
-        'en': 'Show detailed four-layer inheritance chain resolution (requires --config-dir)'
+        'zh': '顯示詳細的三層繼承鏈解析 (需要 --config-dir)',
+        'en': 'Show detailed three-layer inheritance chain resolution (requires --config-dir)'
     }
 }
 
@@ -131,7 +131,7 @@ def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
 
 
 def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]:
-    """Resolve the four-layer inheritance chain for a tenant.
+    """Resolve the inheritance chain for a tenant.
 
     Returns a dict with:
       - chain: list of layers with source and keys
@@ -140,10 +140,26 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
       - declared: key NAMES the platform recognises but assigns no value to
         (`_defaults.yaml` `optional_overrides:`, #1310)
 
-    Four-layer inheritance (v1.12.0):
+    THREE chain layers — the same three this function has always emitted:
       1. Global Defaults (_defaults.yaml)
       2. Profile Overlay (_profiles.yaml → profile keys fill-in)
       3. Tenant Override (tenant-specific keys)
+
+    ⛔ Do NOT "correct" this back to four. The v1.12.0 model named four
+    (`ApplyProfiles` in components/threshold-exporter/app/pkg/config/
+    resolve.go), but its layer 2 is the Rule Pack Baseline, which is
+    "embedded in defaults" — the onboarding generator merges it into
+    `_defaults.yaml` before this function ever opens the file, so it is not
+    separately observable here and was never emitted as a chain entry. The
+    docstring said "four" over a list of three for exactly that reason;
+    counting what we actually return is the honest repair.
+
+    ⚠️ Separately, this reader is FLAT: it opens `<config-dir>/_defaults.yaml`
+    and non-recursively iterates `<config-dir>/*.yaml`, so the exporter's
+    directory hierarchy (platform → domain → region → tenant, see
+    components/threshold-exporter/README.md §4.2) collapses into layer 1 here.
+    A tenant configured through nested `_defaults.yaml` files gets a chain that
+    is correct about the merge RESULT of the top level only.
 
     ⛔ `declared` is deliberately NOT merged into `resolved`, and is not a chain
     layer. The chain answers "what value does this tenant end up with"; a

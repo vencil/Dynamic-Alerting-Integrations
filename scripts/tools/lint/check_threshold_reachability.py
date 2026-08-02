@@ -303,7 +303,12 @@ def _init_project_declared() -> set[str]:
     """
     import yaml  # local import: only this face needs it
 
-    sys.path.insert(0, str(_OPS))
+    # Guarded: this face is called per run (and per test), and an unguarded
+    # insert would grow sys.path without bound. The module-level insert above
+    # already put _OPS on the path; this is belt-and-braces for callers that
+    # import the module and mutate sys.path themselves.
+    if str(_OPS) not in sys.path:
+        sys.path.insert(0, str(_OPS))
     import init_project  # noqa: E402
 
     packs = sorted(init_project.RULE_PACK_CATALOG)

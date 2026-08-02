@@ -797,7 +797,7 @@ _OPTIONAL_SHIPPED_WARNING_LINES = (
 _OPTIONAL_CRITICAL_BASE_SHIPPED_WARNING_LINES = (
     "#",
     "# optional_overrides（不在出貨清單裡，但 base 已出貨——租戶今天就設得動）：",
-    "# 下列 `<base>_critical` 不在平台出貨的 `optional_overrides:` 清單裡，也不需要在：",
+    "# 下列 `<base>_critical` 不在平台出貨的 `optional_overrides:` 清單裡，也不需要列進去。",
     "# 它們的解析走 resolveCriticalRows，入場條件是 `defaults[base]` 有值（components/",
     "# threshold-exporter/app/pkg/config/resolve.go），而下列每個 key 的 base 都標了",
     "# [chart-default]＝出貨的 Helm values / dev conf.d 範本就供給它。⇒ 租戶在自己的",
