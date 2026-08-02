@@ -214,7 +214,10 @@ func collectDocDefaultsSamples(t *testing.T) []docYAMLBlock {
 				if isPlatformDefaultsSample(s.text) {
 					samples = append(samples, docYAMLBlock{
 						file: b.file,
-						line: b.line + s.offset,
+						// b.line is the opening fence; body line 0 sits one line
+						// below it, so +1 makes offset=0 point at the segment's
+						// first real line instead of the ```yaml fence.
+						line: b.line + s.offset + 1,
 						body: s.text,
 					})
 				}
