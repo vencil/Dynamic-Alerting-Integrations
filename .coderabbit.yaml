@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://www.coderabbit.ai/integrations/schema.v2.json
 #
-# 目的：只關掉「逐次 push 的增量 review」，降低 per-developer rate-limit 消耗。
+# 目的（其一）：只關掉「逐次 push 的增量 review」，降低 per-developer rate-limit 消耗。
 # （本 repo maintainer 落在 CodeRabbit 活動量前 5% 的自適應限額，過去一段期間約
 #  1/6 的 PR 初次 review 被限額跳過且不自動補做。）初次 review 照跑；push 後不再
 #  自動重看，需要對最終版再過一次時於 PR 留言 `@coderabbitai review`。
@@ -10,7 +10,24 @@
 #  寫出來的 key，其餘設定沿用既有 UI / org 值。務必保留這行。
 #  （日後若想把完整設定收斂進本檔：先於 PR 留言 `@coderabbitai configuration`
 #   匯出現行有效設定，逐項寫入後再關掉 inheritance。）
+#
+# 目的（其二）：關掉 Docstring Coverage pre-merge check。它是 CodeRabbit 內建檢查，
+#  本 repo 從未 enforce docstring——無 pydocstyle / interrogate / flake8-docstrings，
+#  `.pre-commit-config.yaml` 與 `ci.yml` 裡的 "docstring" 命中全是註解文字、沒有一個
+#  是閘門。而預設門檻 80% 對照實測相差甚遠：`tests/` 為 43.9%（10715 個 def/class
+#  中 4703 個有 docstring）、`scripts/tools/` 為 79.3%（2445 個中 1938 個）。
+#  ⇒ 幾乎每個碰測試的 Python PR 都會亮這條紅字（#1276 62.96%、#1326 7.14% 各響一次，
+#  兩次都是噪音）。CodeRabbit 是對「PR 變更到的函式」計算、不分目錄，所以無法用單一
+#  threshold 同時擋掉測試噪音又對工具碼保有鑑別力——降到能擋噪音就低到沒有意義。
+#  關掉它不會失去任何 repo 真正在守的東西；若日後決定把 docstring 升為真閘門，正確
+#  作法是先在 repo 側加 OSS 檢查器（見 dev-rules 的 hybrid lint policy）再回頭開這裡。
+#  ⚠ `mode` 的值**必須加引號**：YAML 1.1 會把裸 `off` 解析成 boolean false（實測
+#  `yaml.safe_load("mode: off")` -> False），而 schema 要的是 string enum
+#  ["off","warning","error"]。
 inheritance: true
 reviews:
   auto_review:
     auto_incremental_review: false
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
