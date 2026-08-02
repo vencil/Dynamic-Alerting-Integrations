@@ -120,7 +120,7 @@ defaults:
   mysql_connections_critical: "95"
   container_cpu: "70"
   container_memory: "80"
-  # Dimension threshold omitted (will use default)
+  # Dimensional thresholds don't go here: dimensional keys are tenant-only, never inherited from defaults
   redis_memory: "disable"      # Suppress entirely
   _routing_defaults:
     group_wait: "30s"

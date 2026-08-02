@@ -122,7 +122,7 @@ defaults:
   mysql_connections_critical: "95"
   container_cpu: "70"
   container_memory: "80"
-  # 維度維持空閾值（跳過）
+  # 維度閾值不寫在這裡：維度 key 僅限租戶設定，不繼承 defaults
   redis_memory: "disable"      # 禁用
   _routing_defaults:
     group_wait: "30s"
