@@ -666,6 +666,10 @@
    "tests/shared/test_lib_python.py",
    "tests/shared/test_mutation_guards.py"
   ],
+  "tests/ops/_stub_declared_shared.py": [
+   "tests/ops/test_init_project.py",
+   "tests/ops/test_scaffold_tenant.py"
+  ],
   "tests/ops/test_alertmanager_amtool_validity.py": [
    "tests/ops/test_alertmanager_routing_correctness.py"
   ],
@@ -685,7 +689,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "491c1b080112a8cd82945da325a68f80b35c84ea6ce6d86f23ecd7cfc7f2df39",
+ "source_digest": "0b42f77259dd86fda426eacb9d5fcef5bc0ff0b12b4aca1594f9df2d6ce0d760",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2145,6 +2149,10 @@
    "tests/lint/test_check_threshold_registry.py",
    "tests/ops/test_grar_facade_reexports.py",
    "tests/ops/test_nightly_race_issue_policy.py"
+  ],
+  "tests/ops/_stub_declared_shared.py": [
+   "tests/ops/test_init_project.py",
+   "tests/ops/test_scaffold_tenant.py"
   ],
   "tests/ops/test_byo_check.py": [
    "tests/ops/test_threshold_govern.py",

@@ -924,6 +924,37 @@ def render_chart_defaults_lines(doc: dict, indent: int) -> list[str]:
     return lines
 
 
+_COMMENT_WIDTH = 100
+
+
+def _append_wrapped_comment(lines: list[str], item: str, meta: str, cont: str,
+                            width: int = _COMMENT_WIDTH) -> list[str]:
+    """Append ``item`` carrying ``meta`` as a trailing comment; wrap past ``width``.
+
+    Both list-shaped renderers below (the shipped ``optional_overrides:`` list
+    and the tenant stub's declared block) need the identical rule: keep the
+    comment INLINE while the whole line fits in ``width`` columns, otherwise
+    emit the item alone and continue ``meta`` on comment-only lines indented to
+    ``cont``. Having written that rule twice is how the two blocks would
+    eventually stop looking alike — they render the SAME declared set to two
+    audiences, so a divergence in wrapping is a divergence nobody chose.
+
+    ⛔ Byte-for-byte identical to what each renderer did inline: three spaces
+    before the ``#``, ``textwrap.wrap`` at ``width - len(cont)``. The generated
+    surfaces are gate-compared (``check_threshold_registry.py --ci``), so a
+    cosmetic drift here reads as a real regen diff.
+
+    Mutates and returns ``lines`` (the callers accumulate into one list).
+    """
+    inline = f"{item}   # {meta}"
+    if len(inline) <= width:
+        lines.append(inline)
+        return lines
+    lines.append(item)
+    lines += [f"{cont}{seg}" for seg in textwrap.wrap(meta, width - len(cont))]
+    return lines
+
+
 def _shipped_optional_by_pack(doc: dict) -> list[tuple[str, dict, list]]:
     """[(pack_name, pack_meta, [(key, entry), …]), …] — shipped optional keys.
 
@@ -969,10 +1000,11 @@ def render_optional_overrides_lines(doc: dict, indent: int) -> list[str]:
 
     Each item carries the registry's ``unit — desc`` as an INLINE comment,
     wrapped onto comment-only continuation lines when it would pass 100
-    columns (``_entry_lines`` house style). Everything added is a comment, so
-    the block still parses as a plain list of key names — ``regen_surfaces``
-    ``yaml.safe_load``s the spliced document before writing, which would catch
-    a regression here.
+    columns (``_entry_lines`` house style — the wrapping itself is
+    ``_append_wrapped_comment``, shared with the tenant stub renderer).
+    Everything added is a comment, so the block still parses as a plain list of
+    key names — ``regen_surfaces`` ``yaml.safe_load``s the spliced document
+    before writing, which would catch a regression here.
     """
     ind = " " * indent
     cont = f"{ind}  # "
@@ -980,14 +1012,8 @@ def render_optional_overrides_lines(doc: dict, indent: int) -> list[str]:
     for pack_name, pack_meta, pack_keys in _shipped_optional_by_pack(doc):
         lines.append(f"{ind}# ── {pack_name}：{pack_meta['display']} ──")
         for key, entry in pack_keys:
-            item = f"{ind}- {key}"
-            meta = f"{entry['unit']} — {entry['desc']}"
-            inline = f"{item}   # {meta}"
-            if len(inline) <= 100:
-                lines.append(inline)
-                continue
-            lines.append(item)
-            lines += [f"{cont}{seg}" for seg in textwrap.wrap(meta, 100 - len(cont))]
+            _append_wrapped_comment(
+                lines, f"{ind}- {key}", f"{entry['unit']} — {entry['desc']}", cont)
     return lines
 
 
@@ -1123,12 +1149,9 @@ def render_tenant_declared_stub_lines(
             value=_fmt_value(entry.get("value")),
             unit=entry.get("unit", ""),
         )
-        inline = f"{keyline}   # {meta}"
-        if len(inline) <= 100:
-            lines.append(inline)
-            continue
-        lines.append(keyline)
-        lines += [f"{cont}{seg}" for seg in textwrap.wrap(meta, 100 - len(cont))]
+        # Same wrapping rule as the shipped `optional_overrides:` list — one
+        # implementation, because the two blocks render the same declared set.
+        _append_wrapped_comment(lines, keyline, meta, cont)
     return lines
 
 
@@ -1214,6 +1237,69 @@ def render_tenant_critical_note_lines(defaults, lang: str = "zh") -> list[str]:
     shipped = defaults_critical_keys(defaults)
     template = _TENANT_STUB_CRITICAL_NOTE[(lang, bool(shipped))]
     return [line.format(n=len(shipped)) for line in template]
+
+
+# The header sentence that POINTS AT the block above — and the pointer is the
+# half that was still asserted rather than derived (#1321 review). The block is
+# emitted only when the declared list is non-empty (``append_tenant_declared_stub``
+# returns ``text`` unchanged for an empty list), while both generators' headers
+# said "the list is at the end of this file" unconditionally. Measured: the
+# optional tier of mariadb / redis / postgresql / kafka / rabbitmq / jvm / nginx
+# is `_critical`-only, so `shipped_optional_keys_for_packs` returns [] for every
+# one of them — a tenant onboarded onto any of those packs got a header
+# pointing at a section that is not in its file.
+#
+# ⛔ Not fixed by making the sentence conditional prose ("if there are declared
+# keys, see the end of the file") — that hands the tenant the judgement call the
+# generator already has the data to make. Same discipline as the `_critical`
+# paragraph next door: render the claim FROM the artifact this run produces.
+_TENANT_STUB_DECLARED_NOTE = {
+    ("zh", True): (
+        "# 宣告層（_defaults.yaml 的 optional_overrides: 清單）沒有值可繼承 ⇒"
+        " 省略＝沒有值＝靜默，",
+        "# 不是「用預設」；那一格只有「填值」與「不填」兩態。本次選的 pack 有 {n} 個"
+        "這種 key，",
+        "# 清單見檔尾。",
+    ),
+    ("zh", False): (
+        "# 宣告層（_defaults.yaml 的 optional_overrides: 清單）沒有值可繼承 ⇒"
+        " 省略＝沒有值＝靜默，",
+        "# 不是「用預設」；那一格只有「填值」與「不填」兩態。本次選的 pack 一個這種"
+        " key 都沒有，",
+        "# 所以本檔沒有那一段可看（換 pack 時會有）。",
+    ),
+    ("en", True): (
+        "# Omitting a key _defaults.yaml only DECLARES (its `optional_overrides:`",
+        "# list) inherits NOTHING — the platform asserts no value there, so an unset",
+        "# declared key stays silent. The {n} such keys for the packs selected here",
+        "# are listed at the end of this file.",
+    ),
+    ("en", False): (
+        "# Omitting a key _defaults.yaml only DECLARES (its `optional_overrides:`",
+        "# list) inherits NOTHING — the platform asserts no value there, so an unset",
+        "# declared key stays silent. The packs selected here declare no such key,",
+        "# so this file carries no such list.",
+    ),
+}
+
+
+def render_tenant_declared_note_lines(keys, lang: str = "zh") -> list[str]:
+    """The tenant header's declared-tier paragraph, true for ``keys``.
+
+    ``keys`` must be the SAME list the caller hands
+    ``append_tenant_declared_stub`` — that is what makes "the list is at the end
+    of this file" a fact about the file being written rather than a hope. Both
+    generators hold exactly one such list per run (``scaffold_tenant`` from the
+    sibling ``_defaults.yaml`` it just built, ``init_project`` from
+    ``shipped_optional_keys_for_packs``), so nothing new is derived here.
+
+    The count is rendered for the same reason ``render_tenant_critical_note_lines``
+    renders one: it makes the claim checkable against the emitted block instead
+    of merely plausible.
+    """
+    keys = list(keys or [])
+    return [line.format(n=len(keys))
+            for line in _TENANT_STUB_DECLARED_NOTE[(lang, bool(keys))]]
 
 
 def append_tenant_declared_stub(

@@ -1618,32 +1618,33 @@ class TestPromptDefaultsSplitByKeyClass:
 # 租戶 stub 的宣告 key 區塊（#1321）
 # ============================================================
 
-# 一行 stub key line，右手邊放什麼都抓得到。刻意比「帶佔位字串的行」寬鬆：
-# 這條 regex 要擋的回歸就是好心寫上去的 `key: 300`，濾掉它就等於回報一個假綠。
-_STUB_KEY_LINE = re.compile(r"^#\s{3,}([a-z][a-z0-9_]*):(.*)$")
-_STUB_PLACEHOLDER = '"<你的值>"'
+# ⛔ stub 格式的期望值只有一份，與 `test_init_project.py` 共用
+#（`tests/ops/_stub_declared_shared.py`）。兩包釘的是**同一個** renderer 產出的
+# 同一段格式；各留一份手抄的結果是：格式一改、只更新其中一份，另一份會繼續綠著
+# 而其實已經不再量任何東西。
+from _stub_declared_shared import (  # noqa: E402
+    REPO_ROOT,
+    STUB_PLACEHOLDER,
+    STUB_PLACEHOLDER_VALUE,
+    paste_declared_lines_under_tenant as _paste_declared_lines_under_tenant,
+    shipped_chart_declared_keys,
+    stub_key_lines as _stub_key_lines,
+)
 
+# 參數化掉的差異：這一支生成器渲染的是中文 stub。
+_LANG = "zh"
+_STUB_PLACEHOLDER = STUB_PLACEHOLDER[_LANG]
 
-def _stub_key_lines(text):
-    """[(key, rhs), …] — 宣告區塊裡被註解掉的 key 行。"""
-    return [(m.group(1), m.group(2))
-            for m in (_STUB_KEY_LINE.match(l) for l in text.split("\n")) if m]
+# ⚠️ 這個 `os.path.join` 刻意留在**本檔**而不是搬進共用 helper：
+# `verify_diff.build_map` 只掃 `test_*.py` 取路徑引用，搬走等於把
+# `helm/threshold-exporter/values.yaml` → 本模組這條 text_map 拿掉——chart 一改
+# 就不會再選中下面那條讀 chart 的測試。
+_SHIPPED_CHART_VALUES = os.path.join(
+    REPO_ROOT, "helm", "threshold-exporter", "values.yaml")
 
 
 def _shipped_chart_declared_keys():
-    """出貨的宣告清單，直接讀產物。
-
-    刻意不用 `shipped_optional_keys_for_packs`——那正是生成器自己呼叫的那一支，
-    拿它當斷言來源只能證明接線通。chart values 由另一個生產者（registry
-    `--regen` 生成段）寫出，也是可達性 gate 自己的斷言來源。
-    """
-    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))))
-    values = os.path.join(repo_root, "helm", "threshold-exporter", "values.yaml")
-    with open(values, encoding="utf-8") as f:
-        shipped = yaml.safe_load(f)["thresholdConfig"]["optional_overrides"]
-    assert shipped, f"{values} 出貨的宣告清單是空的——沒有東西可對照"
-    return set(shipped)
+    return shipped_chart_declared_keys(_SHIPPED_CHART_VALUES)
 
 
 def _tenant_yaml_for(tmpdir, dbs, tenant="db-c", overrides=None):
@@ -1661,30 +1662,6 @@ def _tenant_yaml_for(tmpdir, dbs, tenant="db-c", overrides=None):
     write_outputs(tmpdir, tenant, defaults, tenant_data, "report")
     with open(os.path.join(tmpdir, f"{tenant}.yaml"), encoding="utf-8") as f:
         return f.read()
-
-
-def _paste_declared_lines_under_tenant(text, tenant):
-    """完全照 stub 的說明做一次：整行複製到租戶底下、去掉開頭的「# 」。
-
-    貼成該租戶 mapping 的**第一個**條目——既是說明最自然的讀法，也是唯一讓縮排
-    仍然「承重」的位置：貼在整段最後面時，縮排過深的一行會變成前一個巢狀 mapping
-    的兄弟，YAML 照樣 parse 得過。另外照說明的前置條件，先把 ` {}` 拆掉。
-    """
-    lines = text.split("\n")
-    pasted = [ln[2:] for ln in lines if _STUB_KEY_LINE.match(ln)]
-    assert pasted, "沒有可貼的宣告 key 行——區塊不見了"
-    anchor = re.compile(r"^(\s*)%s:(\s*\{\})?\s*$" % re.escape(tenant))
-    out, done = [], False
-    for line in lines:
-        m = anchor.match(line)
-        if m and not done:
-            out.append(f"{m.group(1)}{tenant}:")
-            out.extend(pasted)
-            done = True
-            continue
-        out.append(line)
-    assert done, f"找不到可貼進去的 `{tenant}:` 行"
-    return "\n".join(out)
 
 
 class TestTenantStubDeclaredBlock:
@@ -1813,6 +1790,41 @@ class TestTenantStubDeclaredBlock:
                      if l.startswith("# ── 平台已宣告"))
         assert all(l.startswith("#") or not l.strip() for l in lines[start:])
 
+    def test_header_pointer_agrees_with_whether_the_block_exists(self):
+        """⛔ 標頭那句「清單見檔尾」是這裡最後一句寫死的話。
+
+        檔尾那一段只在宣告清單非空時才附上，而**多數** pack 的 optional tier 全是
+        `_critical`（實測 postgresql / mariadb / redis / mongodb / elasticsearch /
+        kafka / rabbitmq / jvm / nginx / kubernetes 一律推導成 []）。只選這些
+        pack 的租戶，拿到的標頭會指向一個它檔案裡不存在的段落。
+
+        ⛔ 斷言寫成與產物的**等價**、而不是「片語有出現」：改成條件句（「若有宣告
+        key 則見檔尾」）同樣能通過存在性檢查，卻把生成器自己做得到的判斷丟回給
+        租戶。
+        """
+        from _registry_lib import TENANT_STUB_DECLARED_HEADING
+        heading = TENANT_STUB_DECLARED_HEADING[_LANG]
+        shapes = [
+            ["postgresql"],            # optional tier 全 _critical
+            ["mariadb"],               # 同上，第二個
+            ["oracle"],                # 有平鍵
+            ["postgresql", "oracle"],  # 混合
+        ]
+        for dbs in shapes:
+            declared = self._declared(dbs)
+            with tempfile.TemporaryDirectory() as tmpdir:
+                content = _tenant_yaml_for(tmpdir, dbs)
+            header = content.split("\ntenants:")[0]
+
+            assert (heading in content) == bool(declared), dbs
+            assert ("清單見檔尾" in header) == bool(declared), dbs
+            assert ("所以本檔沒有那一段可看" in header) == (not declared), dbs
+            if declared:
+                assert f"本次選的 pack 有 {len(declared)} 個這種 key" in header, (
+                    dbs, header)
+            # ……而指路句所承諾的那一段，就是這份清單本身。
+            assert [k for k, _ in _stub_key_lines(content)] == declared, dbs
+
     def test_block_matches_what_the_sibling_defaults_file_declares(self):
         """⛔ 同一次 write_outputs 寫出兩個檔。stub 列出 `_defaults.yaml` 沒宣告的
         key，等於請租戶去踩 tenant-api 的 unknown-key 400。"""
@@ -1848,7 +1860,7 @@ class TestTenantStubDeclaredBlock:
         for key in keys:
             assert key in section, (
                 f"{key} 沒有落在該租戶底下——stub 的縮排已與生成器 dump 出來的不符")
-            assert section[key] == "<你的值>"
+            assert section[key] == STUB_PLACEHOLDER_VALUE[_LANG]
         # 租戶原本的 key 仍在原處
         assert section["container_cpu"] == "70"
 

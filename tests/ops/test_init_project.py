@@ -407,61 +407,34 @@ class TestGenTenantYaml:
 # ── 5b. _gen_tenant_yaml — declared-key stub block (#1321) ──
 # ============================================================
 
-# A stub key line, whatever sits on its right-hand side. Deliberately looser
-# than "line that carries the placeholder": the regression this guards against
-# is a well-meant `key: 300`, so the extractor must still SEE such a line
-# rather than filter it out and report a tidy pass.
-_STUB_KEY_LINE = re.compile(r'^#\s{3,}([a-z][a-z0-9_]*):(.*)$')
-_STUB_PLACEHOLDER = '"<your value>"'
+# ⛔ The stub-format expectations live in ONE module shared with
+# `test_scaffold_tenant.py` (`tests/ops/_stub_declared_shared.py`). Both
+# packages pin the SAME block, produced by the same renderer; two hand-kept
+# copies meant a format change updated in one of them left the other green and
+# no longer measuring anything.
+from _stub_declared_shared import (  # noqa: E402
+    STUB_PLACEHOLDER,
+    STUB_PLACEHOLDER_VALUE,
+    paste_declared_lines_under_tenant as _paste_declared_lines_under_tenant,
+    shipped_chart_declared_keys,
+    stub_key_lines as _stub_key_lines,
+)
 
+# The parameterised difference: this generator renders the English stub.
+_LANG = 'en'
+_STUB_PLACEHOLDER = STUB_PLACEHOLDER[_LANG]
 
-def _stub_key_lines(text):
-    """[(key, rhs), …] for the commented key lines of the declared block."""
-    return [(m.group(1), m.group(2))
-            for m in (_STUB_KEY_LINE.match(l) for l in text.split('\n')) if m]
-
-
-def _paste_declared_lines_under_tenant(text, tenant):
-    """Do literally what the stub tells the tenant to do; return the new text.
-
-    "copy a whole line under your tenant above, drop the leading '# '" — pasted
-    as the FIRST entry of the tenant's own mapping, which is both the natural
-    reading and the placement that keeps the surrounding indentation
-    load-bearing (appending at the very end of a nested block would let a
-    too-deep line parse as a sibling of the last nested key). Also applies the
-    prose's own precondition: delete a ` {}` flow mapping before pasting under
-    it.
-    """
-    lines = text.split('\n')
-    pasted = [ln[2:] for ln in lines if _STUB_KEY_LINE.match(ln)]
-    assert pasted, 'nothing to paste — the declared block is missing'
-    anchor = re.compile(r'^(\s*)%s:(\s*\{\})?\s*$' % re.escape(tenant))
-    out, done = [], False
-    for line in lines:
-        m = anchor.match(line)
-        if m and not done:
-            out.append(f'{m.group(1)}{tenant}:')
-            out.extend(pasted)
-            done = True
-            continue
-        out.append(line)
-    assert done, f'no `{tenant}:` line to paste under'
-    return '\n'.join(out)
+# ⚠️ Kept as a literal `os.path.join` HERE rather than inside the shared
+# helper: `verify_diff.build_map` scans only `test_*.py` for path references,
+# so moving this join out would drop `helm/threshold-exporter/values.yaml` →
+# this module from `text_map` — a chart edit would stop selecting the test
+# below that reads the chart.
+_SHIPPED_CHART_VALUES = os.path.join(
+    REPO_ROOT, 'helm', 'threshold-exporter', 'values.yaml')
 
 
 def _shipped_chart_declared_keys():
-    """The declared list as it is actually SHIPPED, read from the artifact.
-
-    Deliberately not `shipped_optional_keys_for_packs`: that is the function the
-    generator itself calls, so it cannot disagree with the generator. The chart
-    values file is written by a different producer (the registry `--regen`
-    block) and is the reachability gate's own assertion source.
-    """
-    values = os.path.join(REPO_ROOT, 'helm', 'threshold-exporter', 'values.yaml')
-    with open(values, encoding='utf-8') as f:
-        shipped = yaml.safe_load(f)['thresholdConfig']['optional_overrides']
-    assert shipped, f'{values} ships an empty declared list — nothing to check against'
-    return set(shipped)
+    return shipped_chart_declared_keys(_SHIPPED_CHART_VALUES)
 
 
 class TestGenTenantYamlDeclaredBlock:
@@ -526,7 +499,13 @@ class TestGenTenantYamlDeclaredBlock:
         # regime word in the header must agree with the parsed artifact.
         header = tenant_text.split('\ntenants:')[0]
         assert ('lists none of them under `defaults:`' in header) == (not crit)
-        assert str(len(crit)) in header
+        # ⛔ Anchored to the phrase the count is rendered INTO, not to the bare
+        # digits. `str(len(crit)) in header` is a substring test against a
+        # header full of unrelated numbers (issue refs, the declared-tier count,
+        # "rule 1 above"), so a header claiming any wrong count that happens to
+        # share a digit passes it — measured, and it is the same "match looser
+        # than the target" defect this PR is fixing elsewhere.
+        assert re.search(rf'\bgives {len(crit)} of them a value\b', header), header
 
     def test_critical_paragraph_flips_when_defaults_gains_a_critical_key(self):
         """The renderer's own contract, on synthetic input: a `_critical`
@@ -617,6 +596,45 @@ class TestGenTenantYamlDeclaredBlock:
         assert all(l.startswith('#') or not l.strip()
                    for l in lines[start:])
 
+    def test_header_pointer_agrees_with_whether_the_block_exists(self):
+        """⛔ The header's pointer at the block was the last static claim here.
+
+        The block is emitted only when the declared list is non-empty, but the
+        header said "Those keys are listed at the end of this file"
+        unconditionally — and MOST packs' optional tier is `_critical`-only
+        (measured: mariadb / postgresql / redis / mongodb / elasticsearch /
+        kafka / rabbitmq / jvm / nginx / kubernetes all derive to []). So a
+        tenant onboarded onto any of them got a header pointing at a section
+        that is not in its file.
+
+        ⛔ Asserted as an EQUIVALENCE against the artifact, not as "the phrase
+        is present": a conditional sentence ("if there are declared keys, see
+        the end of the file") would satisfy a presence check while still
+        handing the tenant a judgement the generator can make itself.
+        """
+        from _registry_lib import TENANT_STUB_DECLARED_HEADING
+        heading = TENANT_STUB_DECLARED_HEADING[_LANG]
+        shapes = [
+            ['mariadb'],                          # optional tier all _critical
+            ['redis'],                            # ditto — a second one
+            ['oracle'],                           # flat declared keys
+            ['mariadb', 'oracle', 'clickhouse'],  # mixed
+        ]
+        for packs in shapes:
+            declared = self._declared(packs)
+            text = ip._gen_tenant_yaml('db-a', packs)
+            header = text.split('\ntenants:')[0]
+
+            assert (heading in text) == bool(declared), packs
+            assert ('listed at the end of this file' in header) \
+                == bool(declared), packs
+            assert ('declare no such key' in header) == (not declared), packs
+            if declared:
+                assert re.search(rf'\bThe {len(declared)} such keys\b',
+                                 header), (packs, header)
+            # …and the block the pointer promises is exactly that list.
+            assert [k for k, _ in _stub_key_lines(text)] == declared, packs
+
     def test_block_matches_what_the_sibling_defaults_file_declares(self):
         """⛔ Same generator run writes both files. A stub advertising a key
         the sibling `_defaults.yaml` does not declare earns the tenant an
@@ -657,7 +675,7 @@ class TestGenTenantYamlDeclaredBlock:
             assert key in section, (
                 f'{key} did not land under the tenant — the stub indent no '
                 f'longer matches what this generator dumps')
-            assert section[key] == '<your value>'
+            assert section[key] == STUB_PLACEHOLDER_VALUE[_LANG]
         # the tenant's pre-existing keys are still its own
         assert '_routing' in section
 
