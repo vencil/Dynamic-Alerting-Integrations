@@ -121,7 +121,8 @@ helm install da-portal ./helm/da-portal/ -n monitoring
 # conf.d/_defaults.yaml
 defaults:
   # ⚠️ 值是數字、不加引號 —— Go 端型別為 map[string]float64。寫成 "80" 會讓
-  #    整份檔案 unmarshal 失敗，而載入端是「靜默略過」＝該檔零預設值、無錯誤訊息。
+  #    「整份檔案」unmarshal 失敗，該檔的 defaults 全數落空（exporter 會記一行
+  #    ERROR，但 tenant-api 的驗證路徑是靜默吞掉的）。
   mysql_connections: 80
   container_cpu: 70
   container_memory: 80

@@ -119,8 +119,8 @@ Requires:
 # conf.d/_defaults.yaml
 defaults:
   # ⚠️ Values are NUMBERS, unquoted — the Go type is map[string]float64. Writing
-  #    "80" fails the unmarshal for the WHOLE file, and the loader skips that
-  #    failure silently: zero defaults, no error message.
+  #    "80" fails the unmarshal for the WHOLE file, dropping every default in it
+  #    (the exporter logs one ERROR; the tenant-api validation path swallows it).
   mysql_connections: 80
   container_cpu: 70
   container_memory: 80
