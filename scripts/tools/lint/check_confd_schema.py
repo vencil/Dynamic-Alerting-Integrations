@@ -28,6 +28,9 @@ Exit codes (scripts/tools/_lib_exitcodes.py):
 
 Usage:
   python3 check_confd_schema.py --config-dir components/threshold-exporter/config/conf.d
+  # --config-dir is repeatable — one gate over several shipped conf.d trees:
+  python3 check_confd_schema.py --config-dir try-local/seed/conf.d \
+                                --config-dir rule-packs/recipes/examples/conf.d
 """
 from __future__ import annotations
 
@@ -140,8 +143,10 @@ def validate_dir(config_dir: str, schema: dict, validator,
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Validate conf.d tenant YAML against tenant-config.schema.json (#880)")
-    parser.add_argument("--config-dir", required=True,
-                        help="conf.d directory to scan (recurses into examples/)")
+    parser.add_argument("--config-dir", required=True, action="append", metavar="DIR",
+                        help="conf.d directory to scan (recurses into examples/). "
+                             "Repeatable — pass once per tree to cover several shipped "
+                             "conf.d trees in a single gate.")
     parser.add_argument("--schema", default=_DEFAULT_SCHEMA,
                         help="Tenant JSON Schema path (default: docs/schemas/tenant-config.schema.json)")
     parser.add_argument("--platform-schema", default=_DEFAULT_PLATFORM_SCHEMA,
@@ -151,9 +156,10 @@ def main() -> int:
                         help="CI mode (accepted for symmetry with sibling lints; no behaviour change)")
     args = parser.parse_args()
 
-    if not os.path.isdir(args.config_dir):
-        print(f"ERROR: config-dir not found: {args.config_dir}", file=sys.stderr)
-        return EXIT_CALLER_ERROR
+    for config_dir in args.config_dir:
+        if not os.path.isdir(config_dir):
+            print(f"ERROR: config-dir not found: {config_dir}", file=sys.stderr)
+            return EXIT_CALLER_ERROR
 
     try:
         with open(args.schema, encoding="utf-8") as fh:
@@ -179,12 +185,25 @@ def main() -> int:
               "(pre-commit injects it via additional_dependencies).", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
-    try:
-        checked, violations, skipped = validate_dir(
-            args.config_dir, schema, jsonschema, platform_schema)
-    except _CallerError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return EXIT_CALLER_ERROR
+    # Aggregate across every --config-dir so ONE gate can cover several shipped
+    # conf.d trees. Violations are prefixed with the tree they came from — with
+    # more than one dir in play, a bare relpath ("cache-demo.yaml") does not say
+    # which tree to go fix.
+    checked = 0
+    violations: list[str] = []
+    skipped: list[str] = []
+    multi = len(args.config_dir) > 1
+    for config_dir in args.config_dir:
+        try:
+            d_checked, d_violations, d_skipped = validate_dir(
+                config_dir, schema, jsonschema, platform_schema)
+        except _CallerError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return EXIT_CALLER_ERROR
+        prefix = f"{config_dir.replace(os.sep, '/')}/" if multi else ""
+        checked += d_checked
+        violations.extend(v.replace("ERROR: ", f"ERROR: {prefix}", 1) for v in d_violations)
+        skipped.extend(f"{prefix}{s}" for s in d_skipped)
 
     if skipped:
         print(f"skipped {len(skipped)} meta-file(s) not modelled by the tenant-config "

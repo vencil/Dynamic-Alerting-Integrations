@@ -242,7 +242,7 @@ GitOps 工作流下，Tenant 可在自己的 YAML 中自行管理以下設定（
 | `_routing.overrides[]` | 特定 alert 使用不同 receiver | `alertname: "..."`，`receiver: {type: "email", ...}` |
 | `_silent_mode` | 靜默模式（TSDB 有紀錄但不通知） | `{target: "all", expires: "2026-04-01T00:00:00Z"}` |
 | `_state_maintenance` | 維護模式（完全不觸發） | 同上，支援 `expires` 自動失效 |
-| `_severity_dedup` | 嚴重度去重 | `enabled: true` |
+| `_severity_dedup` | 嚴重度去重 | `"enable"`（預設）/ `"disable"` |
 
 Platform Team 控制的設定（`_defaults.yaml`）包括全域預設、`_routing_defaults`、`_routing_enforced`（雙軌通知）。
 
