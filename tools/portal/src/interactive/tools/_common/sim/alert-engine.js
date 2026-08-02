@@ -68,6 +68,20 @@ function generateSampleYaml(selectedPacks, withProfile) {
     for (const [key, meta] of Object.entries(pack.defaults)) {
       lines.push(`${key}: "${meta.value}"  # ${meta.desc}`);
     }
+    // Declared keys belong in the starter template too — #1321 is about
+    // discoverability, and a template that silently omits them teaches the
+    // reader they do not exist. ⛔ Emitted COMMENTED, never with a live value:
+    // the platform asserts no number for these, and ADR-030's blind-write
+    // library measured several of the reference figures false-alarming on
+    // benign load (#1176). Same rule the `<tenant>.yaml` generators follow.
+    const declared = getDeclaredKeys([packId]);
+    if (declared.length > 0) {
+      lines.push(`#   ${t('以下為平台宣告、但不主張值的 key：取消註解並填入依自身 baseline 校準的數值；不填＝靜默',
+                          'Declared by the platform, no platform value: uncomment and fill in a number calibrated from your own baseline. Left out = silent')}`);
+      for (const m of declared) {
+        lines.push(`#   ${m.key}: "<${t('你的值', 'your value')}>"  # ${m.desc}${t('（參考起點', ' (reference start')} ${m.value} ${m.unit}${t('，非背書）', ', not an endorsement)')}`);
+      }
+    }
   }
   lines.push('');
   if (withProfile) {
@@ -128,7 +142,19 @@ function validateConfig(config, selectedPacks) {
         && (knownMetrics.size > 0 || declaredMetrics.size > 0)) {
       const isCriticalVariant = key.endsWith('_critical');
       const baseKey = isCriticalVariant ? key.replace(/_critical$/, '') : key;
-      if (declaredMetrics.has(baseKey) || declaredMetrics.has(key)) {
+      if (isCriticalVariant && declaredMetrics.has(baseKey)) {
+        // ⛔ Do NOT fold this into the branch below by stripping `_critical`.
+        // ValidateTenantKeys (pkg/config/resolve.go) refuses `<declared>_critical`
+        // with a BLOCKING error — its comment there says in as many words that
+        // this is "the one place the two membership sets must NOT be unioned",
+        // because resolveCriticalRows keys off defaults[base] and drops the row
+        // when the base has no value. Telling the tenant "it takes effect once
+        // you set it" would promise a row the resolver never emits, for a write
+        // tenant-api answers with HTTP 400. Mirror the platform's refusal.
+        issues.push({ level: 'warning', field: key,
+          msg: t(`基底 ${baseKey} 是宣告 key（平台不主張值），critical 層需要 defaults 裡有基底值 ⇒ 這個 key 會被寫入端退件；請改設 ${baseKey} 本身`,
+                 `Base ${baseKey} is a declared key (no platform value), and the critical tier needs a base value in defaults — this key is rejected on write. Set ${baseKey} itself instead`) });
+      } else if (declaredMetrics.has(key)) {
         // Recognised, settable, and deliberately value-less. Say so — and say
         // that the number has to come from the tenant's own baseline, because
         // the reference figures shipped alongside these keys have measured

@@ -13,9 +13,12 @@
  *      platform default" and its consumers spread `value` from it; folding
  *      these in would hand them a number the platform does not stand behind.
  *   2. DECLARED_KEYS lives at the TOP LEVEL of platform-data.json, not under
- *      rulePacks[*]. The inline catalog in rule-packs.js is a hand-written
- *      mirror that rule-packs-fallback-drift.test.ts deep-equals per pack; a
- *      per-pack field would have to be hand-copied into it.
+ *      rulePacks[*] — and NOT because the existing drift gate forces it.
+ *      `carried()` in rule-packs-fallback-drift.test.ts is a ten-field
+ *      whitelist, so a new per-pack field would be dropped on both sides and
+ *      never compared. That is precisely why: a per-pack field would still
+ *      need hand-copying into the inline catalog for the offline path, with
+ *      nothing to catch it. Top-level gets its own drift gate — this file.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -45,8 +48,9 @@ describe('declaredKeys — generated data', () => {
   });
 
   it('is top-level, not nested under rulePacks', () => {
-    // Pins invariant 2. If someone moves it under rulePacks[*], the hand-written
-    // fallback in rule-packs.js silently stops mirroring platform-data.
+    // Pins invariant 2. Moving it under rulePacks[*] would put it inside a
+    // subtree whose drift gate whitelists ten fields — so the inline fallback
+    // would silently stop mirroring platform-data with nothing turning red.
     for (const pack of Object.values(platformData.rulePacks as Record<string, any>)) {
       expect(pack).not.toHaveProperty('declaredKeys');
     }
@@ -77,12 +81,30 @@ describe('rule-packs.js accessors', () => {
       .toEqual(PD_DECLARED[PACK].map(r => r.key));
   });
 
-  it('degrades to an empty map offline instead of throwing', async () => {
-    // No __PLATFORM_DATA at all — the standalone/offline bundle path.
+  it('offline fallback mirrors platform-data.json key-for-key', async () => {
+    // No __PLATFORM_DATA at all — the standalone / file:// / fetch-failed path.
+    // An EMPTY fallback would put the validator straight back to calling these
+    // keys unknown, which is the whole bug this change exists to remove; so the
+    // fallback carries the real list and this is its drift gate (same shape as
+    // images-fallback-drift.test.ts).
     const { DECLARED_KEYS, getDeclaredKeys } = await import(RULE_PACKS_MOD);
-    expect(DECLARED_KEYS).toEqual({});
-    expect(getDeclaredKeys([PACK])).toEqual([]);
-    expect(getDeclaredKeys()).toEqual([]);
+    expect(Object.keys(DECLARED_KEYS).sort()).toEqual(Object.keys(PD_DECLARED).sort());
+    for (const pack of Object.keys(PD_DECLARED)) {
+      expect(DECLARED_KEYS[pack]).toEqual(PD_DECLARED[pack]);
+    }
+    expect(getDeclaredKeys([PACK]).length).toBeGreaterThan(0);
+  });
+
+  it('offline still refuses to call a declared key unknown', async () => {
+    // The property the fallback exists for, asserted end-to-end rather than by
+    // inspecting the constant.
+    (window as any).__t = (_zh: string, en: string) => en;
+    const { validateConfig } = await import(ENGINE_MOD);
+    const out = validateConfig({ [DECLARED_KEY]: '400' }, [PACK]);
+    const m = out.issues.filter((i: any) => i.field === DECLARED_KEY).map((i: any) => i.msg).join(' ');
+    expect(m).not.toMatch(/not found in selected Rule Pack defaults/);
+    expect(m).toMatch(/no platform default/i);
+    delete (window as any).__t;
   });
 
   it('filters by selected pack', async () => {
@@ -159,5 +181,59 @@ describe('alert-engine — a declared key must not be called unknown', () => {
     const field = `${withDefault}_critical`;
     expect(msgs(validateConfig({ [field]: '95' }, [PACK]), field).join(' '))
       .not.toMatch(/not found in selected Rule Pack defaults/);
+  });
+
+  it('never tells a tenant that <declared_base>_critical will take effect', async () => {
+    // ⛔ The one place the two membership sets must NOT be unioned.
+    // ValidateTenantKeys refuses this shape with a BLOCKING error (its comment
+    // in pkg/config/resolve.go says exactly that), because resolveCriticalRows
+    // keys off defaults[base] and drops the row when the base has no value.
+    // Stripping `_critical` and matching the declared set would produce a
+    // confident "it takes effect once you set it" for a write tenant-api
+    // answers with HTTP 400 — worse than the vague message it replaced.
+    const { validateConfig } = await import(ENGINE_MOD);
+    const field = `${DECLARED_KEY}_critical`;
+    const m = msgs(validateConfig({ [field]: '500' }, [PACK]), field).join(' ');
+    expect(m).not.toMatch(/takes effect only once you set it/);
+    expect(m).toMatch(/rejected on write/i);
+    expect(m).toContain(DECLARED_KEY);
+  });
+});
+
+describe('generateSampleYaml — the starter template must not hide the tier', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    (window as any).__t = (_zh: string, en: string) => en;
+    (window as any).__PLATFORM_DATA = {
+      declaredKeys: PD_DECLARED,
+      rulePacks: platformData.rulePacks,
+      packOrder: platformData.packOrder,
+    };
+  });
+  afterEach(() => {
+    delete (window as any).__PLATFORM_DATA;
+    delete (window as any).__t;
+  });
+
+  it('lists the declared keys, commented, with no live value', async () => {
+    const { generateSampleYaml } = await import(ENGINE_MOD);
+    const yaml = generateSampleYaml([PACK], false);
+    for (const row of PD_DECLARED[PACK]) {
+      const line = yaml.split('\n').find((l: string) => l.includes(row.key));
+      expect(line, `${row.key} missing from the starter template`).toBeTruthy();
+      // Commented — an uncommented `key: "300"` would arm a number the
+      // platform does not stand behind (#1176 measured these false-alarming).
+      expect(line!.trimStart().startsWith('#')).toBe(true);
+      expect(line).not.toMatch(new RegExp(`^\\s*${row.key}\\s*:`));
+    }
+  });
+
+  it('still emits the real defaults as live values', async () => {
+    // Counter-case: the commenting rule must not leak onto keys that DO have a
+    // platform value.
+    const { generateSampleYaml } = await import(ENGINE_MOD);
+    const yaml = generateSampleYaml([PACK], false);
+    const withDefault = Object.keys(platformData.rulePacks[PACK].defaults)[0];
+    expect(yaml).toMatch(new RegExp(`^${withDefault}: "`, 'm'));
   });
 });

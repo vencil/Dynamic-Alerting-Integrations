@@ -421,15 +421,17 @@ def build_declared_keys(scaffold_packs: dict) -> dict:
     the shipped `optional_overrides:` list and the two onboarding generators'
     output. No second spelling of the rule, no hand-copied key list.
 
-    ⛔ Deliberately NOT nested under `rulePacks[*]`. `rule-packs.js` carries a
-    hand-written fallback mirror of that subtree and
-    `rule-packs-fallback-drift.test.ts` deep-equals it per pack, so a per-pack
-    field would have to be hand-copied there too — a fresh hand-maintained copy
-    of a generated contract, in the very line of work that exists to delete
-    them (and #1226 has not yet settled how that mirror should be generated).
-    A top-level field sits outside that per-pack projection; the browser-side
-    fallback degrades to `{}`, the same shape `packOrder` already uses (derived,
-    not hand-copied).
+    ⛔ Deliberately NOT nested under `rulePacks[*]` — but not for the reason it
+    first looks like. `rule-packs-fallback-drift.test.ts` does NOT gate a new
+    per-pack field: its `carried()` is a ten-field WHITELIST, so an extra field
+    is dropped on both sides and never compared. That IS the problem. A
+    per-pack field would still need hand-copying into the inline fallback in
+    `rule-packs.js` for the offline path to work, with nothing to catch it if
+    you forgot — a fresh, ungated hand-maintained copy of a generated contract,
+    in the very line of work that exists to delete them (and #1226 has not yet
+    settled how that mirror should be generated). A top-level field carries its
+    own drift gate instead (`declared-keys.test.ts`), the same shape `images.js`
+    already uses.
 
     ⛔ `value` is a REFERENCE number for display only. The platform does not
     assert it: ADR-030's blind-write reference library measured several of these

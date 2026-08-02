@@ -118,11 +118,35 @@ function getAllMetricKeys(selectedPacks) {
 // `value` the platform does not stand behind. Separate accessor, separate
 // meaning.
 //
-// Top-level rather than under RULE_PACK_DATA because the inline catalog above
-// is a hand-written mirror that rule-packs-fallback-drift.test.ts deep-equals
-// per pack; a per-pack field would need hand-copying into it. Offline degrades
-// to {} — same derived-fallback shape as PACK_ORDER.
-const DECLARED_KEYS = window.__PLATFORM_DATA?.declaredKeys || {};
+// Top-level rather than a field on RULE_PACK_DATA, and NOT because the drift
+// gate forces it: `carried()` in rule-packs-fallback-drift.test.ts is a
+// ten-field WHITELIST, so a new per-pack field would be dropped on both sides
+// and never compared at all. That is the actual reason — a per-pack field
+// would silently need hand-copying into the inline catalog with nothing to
+// catch it. A top-level field gets its own drift gate instead
+// (declared-keys.test.ts), which is the same shape images.js uses.
+//
+// The inline fallback below is a mirror, not a guess: it exists so the
+// standalone / file:// / fetch-failed path does not fall back into telling a
+// tenant that a documented key is unknown. ⛔ Do NOT hand-edit it — regenerate
+// platform-data.json and copy; the drift test compares it key-for-key.
+const DECLARED_KEYS = window.__PLATFORM_DATA?.declaredKeys || {
+  oracle: [
+    { key: 'oracle_wait_time_rate', value: 50, unit: 's/s', desc: 'Wait time rate (5m)' },
+    { key: 'oracle_process_count', value: 300, unit: 'count', desc: 'Active processes warning' },
+    { key: 'oracle_pga_allocated_bytes', value: 4294967296, unit: 'bytes (4GB)', desc: 'PGA allocation warning' },
+  ],
+  db2: [
+    { key: 'db2_log_usage_percent', value: 70, unit: '%', desc: 'Transaction log usage warning' },
+    { key: 'db2_deadlock_rate', value: 5, unit: 'count/s', desc: 'Deadlock rate (5m)' },
+    { key: 'db2_tablespace_used_percent', value: 85, unit: '%', desc: 'Tablespace usage warning' },
+  ],
+  clickhouse: [
+    { key: 'clickhouse_max_part_count', value: 300, unit: 'count', desc: 'Max part count per partition' },
+    { key: 'clickhouse_replication_queue', value: 50, unit: 'count', desc: 'Replication queue size' },
+    { key: 'clickhouse_memory_tracking_bytes', value: 8589934592, unit: 'bytes (8GB)', desc: 'Memory tracking warning' },
+  ],
+};
 
 function getDeclaredKeys(selectedPacks) {
   const keys = [];
