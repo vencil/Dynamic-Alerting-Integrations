@@ -170,9 +170,13 @@ _routing_enforced:
     type: "slack"
     api_url: "https://hooks.slack.com/services/T/B/xxx"
     channel: "#noc-alerts"
-  match:                        # ⚠️ MUST be a list of matcher strings
-    - 'severity="critical"'     #    omitting match yields a matcher-less route, and
-  group_wait: "10s"             #    with the hardcoded continue: true that is a match-all firehose
+  # ⚠️ match MUST be a list of matcher strings. Omitting it yields a route with
+  #    NO matchers, and with the hardcoded continue: true that double-sends every
+  #    alert from every tenant to this receiver (a match-all firehose). Writing
+  #    it as a map is silently discarded, with the same result.
+  match:
+    - 'severity="critical"'
+  group_wait: "10s"
   repeat_interval: "2h"
 ```
 

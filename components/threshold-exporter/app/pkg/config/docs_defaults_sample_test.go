@@ -90,7 +90,15 @@ func extractYAMLBlocks(file, content string) []docYAMLBlock {
 
 // fileHeaderRe matches a comment line that names a YAML file, e.g.
 // `# conf.d/_defaults.yaml (central)` or `# L1 finance/_defaults.yaml`.
-var fileHeaderRe = regexp.MustCompile(`^\s*#.*\.ya?ml\b`)
+//
+// ⚠️ Anchored at column 0 on purpose, and that anchor is load-bearing. With a
+// leading `\s*` this also matches an INDENTED comment that merely mentions a
+// filename in passing — `    # 其他項目省略，會用 _defaults.yaml 的預設`, which
+// sits inside a `tenants:` block in for-domain-experts.md. Treating that as a
+// file header severs a block mid-mapping: the tail is then validated as its own
+// document, and the head silently loses the entries below it. A real file header
+// in these illustrations always starts at column 0; an indented `#` is prose.
+var fileHeaderRe = regexp.MustCompile(`^#.*\.ya?ml\b`)
 
 // splitConcatenatedFiles divides a block that illustrates SEVERAL files in one
 // fence (each introduced by a `# path/to/file.yaml` comment) into one segment
@@ -100,19 +108,29 @@ var fileHeaderRe = regexp.MustCompile(`^\s*#.*\.ya?ml\b`)
 //
 // Splitting rather than skipping is deliberate: it makes the gate check MORE,
 // not less. Every segment is still held to the loader contract on its own.
-func splitConcatenatedFiles(body string) []string {
+// Each segment carries its own line offset (0-based, relative to the first line
+// INSIDE the fence) so a failure points at the offending file, not at the fence.
+func splitConcatenatedFiles(body string) []struct {
+	offset int
+	text   string
+} {
+	type seg = struct {
+		offset int
+		text   string
+	}
 	lines := strings.Split(body, "\n")
-	var segments []string
+	var segments []seg
 	var cur []string
-	for _, line := range lines {
+	start := 0
+	for i, line := range lines {
 		if fileHeaderRe.MatchString(line) && len(cur) > 0 {
-			segments = append(segments, strings.Join(cur, "\n"))
-			cur = nil
+			segments = append(segments, seg{offset: start, text: strings.Join(cur, "\n")})
+			cur, start = nil, i
 		}
 		cur = append(cur, line)
 	}
 	if len(cur) > 0 {
-		segments = append(segments, strings.Join(cur, "\n"))
+		segments = append(segments, seg{offset: start, text: strings.Join(cur, "\n")})
 	}
 	return segments
 }
@@ -128,6 +146,14 @@ func splitConcatenatedFiles(body string) []string {
 // A block that does not parse as a YAML mapping is not a config sample at all
 // (prose, a directory tree in a mislabeled fence) and is left alone — this test
 // pins the platform-defaults contract, not Markdown fence hygiene.
+//
+// ⚠️ Known blind spot, stated rather than papered over: a sample that is BOTH
+// malformed AND carries no `_defaults.yaml` header comment fails the generic
+// parse here and is therefore skipped, not reported. The header selector is what
+// keeps that hole small — every sample in the platform-engineer guide names its
+// file. Widening this to "every unparseable ```yaml block is an error" is a
+// separate call: docs/ currently has 17 such blocks, nearly all directory-tree
+// diagrams in mislabeled fences, so it would land as noise, not signal.
 func isPlatformDefaultsSample(body string) bool {
 	if firstLine, _, _ := strings.Cut(body, "\n"); strings.Contains(firstLine, "_defaults.yaml") {
 		return true
@@ -165,10 +191,13 @@ func collectDocDefaultsSamples(t *testing.T) []docYAMLBlock {
 		// ADR-017's L0 sample nests `_routing:` inside `defaults:`, which the
 		// root `_defaults.yaml` would reject (fullDirLoad → parsePartialConfig →
 		// ThresholdConfig). Tracked separately rather than silenced here.
-		if d.IsDir() && d.Name() == "adr" {
-			return filepath.SkipDir
+		if d.IsDir() {
+			if path == filepath.Join(docsDir, "adr") {
+				return filepath.SkipDir
+			}
+			return nil
 		}
-		if d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
+		if !strings.HasSuffix(d.Name(), ".md") {
 			return nil
 		}
 		raw, rerr := os.ReadFile(path)
@@ -181,9 +210,13 @@ func collectDocDefaultsSamples(t *testing.T) []docYAMLBlock {
 		}
 		rel = filepath.ToSlash(rel)
 		for _, b := range extractYAMLBlocks(rel, string(raw)) {
-			for _, seg := range splitConcatenatedFiles(b.body) {
-				if isPlatformDefaultsSample(seg) {
-					samples = append(samples, docYAMLBlock{file: b.file, line: b.line, body: seg})
+			for _, s := range splitConcatenatedFiles(b.body) {
+				if isPlatformDefaultsSample(s.text) {
+					samples = append(samples, docYAMLBlock{
+						file: b.file,
+						line: b.line + s.offset,
+						body: s.text,
+					})
 				}
 			}
 		}

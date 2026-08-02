@@ -172,9 +172,12 @@ _routing_enforced:
     type: "slack"
     api_url: "https://hooks.slack.com/services/T/B/xxx"
     channel: "#noc-alerts"
-  match:                        # ⚠️ 必須是 matcher 字串的 list
-    - 'severity="critical"'     #    省略 match 會產生無 matcher 的 route，
-  group_wait: "10s"             #    加上固定的 continue: true ＝ match-all 消防水管
+  # ⚠️ match 必須是「matcher 字串的 list」。省略它會產生一條沒有任何 matcher
+  #    的 route，加上固定帶的 continue: true ＝ 所有租戶的所有告警都被雙送到
+  #    這個 receiver（match-all 消防水管）。寫成 map 形式也會被靜默丟棄。
+  match:
+    - 'severity="critical"'
+  group_wait: "10s"
   repeat_interval: "2h"
 ```
 
