@@ -29,12 +29,14 @@ package config
 //
 //   - The exporter's own scanner IS loud: parsePartialConfig (flat_scanner.go)
 //     emits `metrics.IncParseFailure` plus an ERROR log naming the file.
-//   - mergeTenantConfig (merge_tenant.go) is NOT: it reads the root defaults
-//     under `if err := yaml.Unmarshal(...); err == nil { ... }`, so a decode
-//     error is swallowed and the tenant-api write/validate path proceeds with
-//     zero platform defaults, no error and no metric. That is the path a
-//     tenant's config is validated against, so a broken root `_defaults.yaml`
-//     silently widens what tenants are allowed to set.
+//   - mergeTenantConfig (merge_tenant.go) still DISCARDS the failed decode and
+//     carries on with zero platform defaults, and still exports no metric for
+//     it. That is the path a tenant's config is validated against, so a broken
+//     root `_defaults.yaml` makes ValidateTenantKeys judge legitimate tenant
+//     keys "unknown" and refuse the write. Until #1330 it did this without a
+//     word; it now logs an ERROR naming the file, so the two consumers are at
+//     least both audible — but only the exporter side is also observable in
+//     metrics.
 //
 // Either way the operator's own feedback loop stays green: scripts/tools/ops/
 // validate_config.py returns PASS/exit 0 on a sample that cannot load.
@@ -182,19 +184,42 @@ func collectDocDefaultsSamples(t *testing.T) []docYAMLBlock {
 		if werr != nil {
 			return werr
 		}
-		// docs/adr/** is deliberately out of scope, matching how the repo's
-		// other doc-content lints treat it (_version_patterns.DOC_MAP_SKIP_DIRS
-		// lists "adr"; check_doc_freshness.py excludes adr/* by default). An ADR
-		// is a historical decision record whose snippets illustrate a proposed
-		// MODEL — editing them to satisfy today's loader would rewrite the
-		// record. ⚠️ This is a scope decision, not a clean bill of health:
-		// ADR-017's L0 sample nests `_routing:` inside `defaults:`, which the
-		// root `_defaults.yaml` would reject (fullDirLoad → parsePartialConfig →
-		// ThresholdConfig). Tracked separately rather than silenced here.
+		// docs/adr/** IS in scope. It was excluded when this gate landed
+		// (#1327), on the reasoning that an ADR is a historical decision
+		// record whose snippets illustrate a proposed MODEL, so editing one to
+		// satisfy today's loader would rewrite the record. That exclusion was
+		// reversed deliberately, for two reasons:
+		//
+		//   - The concrete case that motivated it is gone. #1327's own comment
+		//     named ADR-017's L0 sample (`_routing:` nested inside `defaults:`)
+		//     as a real defect it was choosing not to silence; #1330 fixed it.
+		//     Nothing in docs/adr/ is now knowingly broken, so keeping the
+		//     exclusion buys no protection from churn — it only hides the next
+		//     one.
+		//   - The premise does not survive contact with what these samples are.
+		//     ADR-017's block is not a sketch of a rejected alternative; it is
+		//     labelled `# L0 _defaults.yaml` and shows the shipping inheritance
+		//     model. A reader copies it exactly as they would copy the
+		//     platform-engineer guide. "Historical record" protects the
+		//     DECISION and its rationale, not a config sample that silently
+		//     stopped matching the loader.
+		//
+		// Sibling doc lints (_version_patterns.DOC_MAP_SKIP_DIRS,
+		// check_doc_freshness.py) still skip adr/ — they police freshness
+		// metadata, where "don't churn the record" genuinely applies. This gate
+		// asserts loadability, which is timeless: a sample that cannot decode
+		// was never a faithful illustration of the model on any date.
+		//
+		// ⚠️ The cost this scope does carry, stated plainly: the repo has an
+		// `#### ❌ 錯誤` convention for deliberate counter-examples, and a
+		// counter-example that IS a `_defaults.yaml` would be failed here on
+		// purpose-built wrongness. No such sample exists today — the existing
+		// ❌ blocks are recording-rule sequences, which isPlatformDefaultsSample
+		// does not select — and the house style for this file is "show the
+		// correct shape, put the trap in a comment" (see the platform-engineer
+		// guide). If one is ever wanted, express it in prose or an untagged
+		// fence rather than re-narrowing this walk.
 		if d.IsDir() {
-			if path == filepath.Join(docsDir, "adr") {
-				return filepath.SkipDir
-			}
 			return nil
 		}
 		if !strings.HasSuffix(d.Name(), ".md") {
@@ -232,7 +257,38 @@ func collectDocDefaultsSamples(t *testing.T) []docYAMLBlock {
 		t.Fatal("found zero _defaults.yaml samples in docs/ — the extractor is broken, " +
 			"or the samples moved; a gate that measures nothing must fail loudly")
 	}
+
 	return samples
+}
+
+// TestDocsDefaultsGateCoversADRs exit-locks the docs/adr/** scope (see the walk
+// comment in collectDocDefaultsSamples).
+//
+// Without it, re-adding a SkipDir shrinks this gate back with NO other symptom:
+// every remaining sample still decodes, so the suite stays green while the ADR
+// samples quietly stop being checked. That is the same "gate exists but covers
+// less than it claims" shape the original exclusion already cost once — the
+// defect it was hiding (ADR-017's `_routing:` nested under `defaults:`) sat
+// there until someone went looking.
+//
+// ⚠️ This asserts SCOPE, not that ADRs must forever carry samples. If the ADRs
+// legitimately stop documenting `_defaults.yaml` (superseded, archived, sample
+// removed), delete this test in the SAME commit and say so in the message —
+// do not narrow the walk to make it pass.
+func TestDocsDefaultsGateCoversADRs(t *testing.T) {
+	samples := collectDocDefaultsSamples(t)
+	adr := 0
+	for _, s := range samples {
+		if strings.HasPrefix(s.file, "docs/adr/") {
+			adr++
+		}
+	}
+	if adr == 0 {
+		t.Errorf("no `_defaults.yaml` samples collected from docs/adr/** (total=%d). "+
+			"Either the adr/ scope was removed (a SkipDir, a changed walk root) — "+
+			"restore it — or the ADRs no longer carry samples, in which case remove "+
+			"this test deliberately rather than narrowing the walk.", len(samples))
+	}
 }
 
 // TestDocsDefaultsSamplesDecode asserts every documented `_defaults.yaml`
