@@ -62,9 +62,16 @@ Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides 
 defaults:
   pg_stat_activity_count: 500
   pg_replication_lag_seconds: 30
-  _routing:
-    group_wait: 60s
-    group_interval: 5m
+
+# ↓ top-level key, a sibling of `defaults:` — NOT nested under it.
+#   `defaults:` is map[string]float64; any nested mapping inside it fails the
+#   unmarshal for the WHOLE file, so EVERY default is dropped — not just the
+#   offending key. Both consumers log an ERROR (the exporter via
+#   parsePartialConfig, which also bumps parse_failure; tenant-api via
+#   merge_tenant.go), and neither applies any defaults.
+_routing_defaults:
+  group_wait: "60s"
+  group_interval: "5m"
 
 # L1 finance/_defaults.yaml
 defaults:
@@ -77,7 +84,7 @@ tenants:
     pg_stat_activity_count: 150   # override: single tenant is strictest
     # pg_replication_lag_seconds: inherited from L0 = 30
     # pg_locks_count: inherited from L1 = 100
-    # _routing.group_wait: inherited from L0 = 60s
+    # _routing_defaults.group_wait: inherited from L0 = 60s
 ```
 
 **Effective config computation**:

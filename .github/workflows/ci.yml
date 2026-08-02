@@ -47,6 +47,7 @@ jobs:
       go_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.go }}
       python_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.python }}
       portal_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.portal }}
+      docs_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.docs }}
     steps:
       # No actions/checkout: REST-API mode queries the changed-file list
       # via the GitHub API (see validate.yaml's identical note).
@@ -188,6 +189,22 @@ jobs:
               - "rule-packs/ALERT-REFERENCE.md"
               - "components/tenant-api/internal/rbac/testdata/wizard/**"
               - ".github/workflows/ci.yml"
+            # docs: threshold-exporter's pkg/config/docs_defaults_sample
+            # _test.go (#1327) walks docs/**/*.md and decodes every documented
+            # `_defaults.yaml` sample through the real ThresholdConfig
+            # loader — so documentation is a Go-test input, and a docs-only
+            # PR (which is exactly how eight unloadable blocks landed) must
+            # not skip that leg. Without this the gate is decorative for the
+            # one change class it guards: go_changed=false → leg skipped →
+            # the aggregate gate reads the skip as PASS.
+            #
+            # Deliberately its own filter rather than adding docs/** to `go`:
+            # that would also drag the tenant-api and am-inhibit legs
+            # (schemathesis included) into every doc typo, which is the exact
+            # CI-ROI 6C waste the banner comment above set out to remove.
+            # Only the threshold-exporter leg consumes docs/.
+            docs:
+              - "docs/**"
 
   lint:
     name: Lint
@@ -1135,8 +1152,15 @@ jobs:
     # CI-ROI 6C: path-gated — the go-tests aggregate gate below (the
     # required check) treats this skip as PASS only when detect-changes
     # said Go was not needed.
+    #
+    # `docs_changed` joins the condition because this leg alone reads
+    # docs/**: pkg/config/docs_defaults_sample_test.go decodes every
+    # documented `_defaults.yaml` sample through the real loader. The
+    # aggregate gate needs no change for this — a leg that RUNS reports
+    # success/failure, and its skipped siblings still satisfy the
+    # "skipped while go_changed!=true" branch.
     needs: detect-changes
-    if: needs.detect-changes.outputs.go_changed == 'true'
+    if: needs.detect-changes.outputs.go_changed == 'true' || needs.detect-changes.outputs.docs_changed == 'true'
     # Least-privilege token (CodeQL: workflow-missing-permissions). Tests +
     # coverage-artifact upload need nothing beyond repo read.
     permissions:
