@@ -924,6 +924,37 @@ def render_chart_defaults_lines(doc: dict, indent: int) -> list[str]:
     return lines
 
 
+_COMMENT_WIDTH = 100
+
+
+def _append_wrapped_comment(lines: list[str], item: str, meta: str, cont: str,
+                            width: int = _COMMENT_WIDTH) -> list[str]:
+    """Append ``item`` carrying ``meta`` as a trailing comment; wrap past ``width``.
+
+    Both list-shaped renderers below (the shipped ``optional_overrides:`` list
+    and the tenant stub's declared block) need the identical rule: keep the
+    comment INLINE while the whole line fits in ``width`` columns, otherwise
+    emit the item alone and continue ``meta`` on comment-only lines indented to
+    ``cont``. Having written that rule twice is how the two blocks would
+    eventually stop looking alike — they render the SAME declared set to two
+    audiences, so a divergence in wrapping is a divergence nobody chose.
+
+    ⛔ Byte-for-byte identical to what each renderer did inline: three spaces
+    before the ``#``, ``textwrap.wrap`` at ``width - len(cont)``. The generated
+    surfaces are gate-compared (``check_threshold_registry.py --ci``), so a
+    cosmetic drift here reads as a real regen diff.
+
+    Mutates and returns ``lines`` (the callers accumulate into one list).
+    """
+    inline = f"{item}   # {meta}"
+    if len(inline) <= width:
+        lines.append(inline)
+        return lines
+    lines.append(item)
+    lines += [f"{cont}{seg}" for seg in textwrap.wrap(meta, width - len(cont))]
+    return lines
+
+
 def _shipped_optional_by_pack(doc: dict) -> list[tuple[str, dict, list]]:
     """[(pack_name, pack_meta, [(key, entry), …]), …] — shipped optional keys.
 
@@ -969,10 +1000,11 @@ def render_optional_overrides_lines(doc: dict, indent: int) -> list[str]:
 
     Each item carries the registry's ``unit — desc`` as an INLINE comment,
     wrapped onto comment-only continuation lines when it would pass 100
-    columns (``_entry_lines`` house style). Everything added is a comment, so
-    the block still parses as a plain list of key names — ``regen_surfaces``
-    ``yaml.safe_load``s the spliced document before writing, which would catch
-    a regression here.
+    columns (``_entry_lines`` house style — the wrapping itself is
+    ``_append_wrapped_comment``, shared with the tenant stub renderer).
+    Everything added is a comment, so the block still parses as a plain list of
+    key names — ``regen_surfaces`` ``yaml.safe_load``s the spliced document
+    before writing, which would catch a regression here.
     """
     ind = " " * indent
     cont = f"{ind}  # "
@@ -980,15 +1012,318 @@ def render_optional_overrides_lines(doc: dict, indent: int) -> list[str]:
     for pack_name, pack_meta, pack_keys in _shipped_optional_by_pack(doc):
         lines.append(f"{ind}# ── {pack_name}：{pack_meta['display']} ──")
         for key, entry in pack_keys:
-            item = f"{ind}- {key}"
-            meta = f"{entry['unit']} — {entry['desc']}"
-            inline = f"{item}   # {meta}"
-            if len(inline) <= 100:
-                lines.append(inline)
-                continue
-            lines.append(item)
-            lines += [f"{cont}{seg}" for seg in textwrap.wrap(meta, 100 - len(cont))]
+            _append_wrapped_comment(
+                lines, f"{ind}- {key}", f"{entry['unit']} — {entry['desc']}", cont)
     return lines
+
+
+# ---------------------------------------------------------------------------
+# The SAME declared set, told to the OTHER audience (#1321)
+# ---------------------------------------------------------------------------
+# Everything above renders the declared tier for a reader who owns the PLATFORM
+# side: rule-pack headers, helm values, the dev conf.d template. None of those
+# files is one a tenant ever opens. The single file a tenant does open is its
+# own ``<tenant>.yaml``, and until #1321 that file's generated header said the
+# opposite of the truth ("Omitted keys inherit from _defaults.yaml" /
+# "省略=Default") — true for every key with a platform default, FALSE for the
+# declared tier, which has no value to inherit at all.
+#
+# So the tenant stub gets its own rendering of the declared set. Deliberately
+# NOT a second derivation: both generators hand this renderer a key list that
+# came out of ``shipped_optional_keys_for_packs`` (``init_project`` calls it
+# directly; ``scaffold_tenant`` passes the very list ``generate_defaults``
+# already wrote into the sibling ``_defaults.yaml``, so the stub cannot
+# advertise a key that file does not declare — that mismatch is exactly what
+# earns a tenant an HTTP 400 from the only supported writer).
+#
+# ⛔ The values render as REFERENCE-ONLY comment text and every emitted key line
+# is itself a comment carrying a ``<your value>`` placeholder. Filling a real
+# number in for the tenant would re-arm, on the generated-artifact surface, the
+# exact keystroke #1310/PR-C removed from the interactive prompt (see
+# ``scaffold_tenant.prompt_value``): ADR-030's blind-write reference library has
+# measured counter-examples for these very numbers.
+
+TENANT_STUB_DECLARED_HEADING = {
+    "zh": "# ── 平台已宣告、但不主張值的 key（_defaults.yaml 的 optional_overrides 清單）──",
+    "en": "# -- Declared keys: the platform recognises these but asserts no value --",
+}
+
+_TENANT_STUB_PLACEHOLDER = {"zh": '"<你的值>"', "en": '"<your value>"'}
+
+_TENANT_STUB_PROSE = {
+    "zh": (
+        "#",
+        "# 平台「認得」下列 key：你在上面 tenants: 底下自己填值就會生效，不必再找",
+        "# operator 開通。但平台刻意不給它們預設值 ⇒ 不填＝沒有值＝不產生 series，",
+        "# 不會有告警，也不會有任何錯誤訊息。那是設計，不是漏掉的預設——所以本檔開頭",
+        "# 的三態在這一格只有兩態：填值，或靜默（沒有「省略＝用預設」可用）。",
+        "# ⚠️ 下列數字是「參考起點」不是背書：這種閾值只有你自己的 baseline 校準得",
+        "#    出來。照抄已有實測反例（ADR-030 盲寫參考庫）——Oracle 備份批次 process",
+        "#    count 560 > 建議 300、計畫性 stats-gather PGA 22GB > 建議 4GiB，兩者",
+        "#    都會誤觸。",
+        "# 用法：整行複製到上面自己那個租戶底下、去掉開頭的「# 」、把佔位字串換成你",
+        "#    校準出來的數字（縮排已對齊）。若上面該租戶目前是 `<tenant>: {}`（空設",
+        "#    定），先把 ` {}` 刪掉再貼——flow mapping 底下接縮排行不是合法 YAML。",
+    ),
+    "en": (
+        "#",
+        "# The platform RECOGNISES these keys: set one under `tenants:` above and",
+        "# it takes effect — no operator action needed. But the platform ships no",
+        "# default for them, so leaving one out means NO value at all: no series,",
+        "# no alert, and no error message either. That silence is the design, not",
+        "# a missing default — the three-state rule at the top of this file has",
+        "# only two states here: set a value, or stay silent.",
+        "# WARNING: the numbers below are a STARTING REFERENCE, not an endorsement",
+        "#    — only your own baseline can calibrate this tier. Copying them has",
+        "#    measured counter-examples (ADR-030): an Oracle backup batch at 560",
+        "#    processes vs the suggested 300; a planned stats-gather at 22GB PGA",
+        "#    vs the suggested 4GiB.",
+        "# To use: copy a whole line under your tenant above, drop the leading",
+        "#    '# ', and replace the placeholder with a number you calibrated",
+        "#    yourself (the indent already lines up). If your tenant currently",
+        "#    reads `<tenant>: {}`, delete the ` {}` first — indented lines under",
+        "#    a flow mapping are not valid YAML.",
+    ),
+}
+
+_TENANT_STUB_META = {
+    "zh": "{desc} — 參考起點 {value} {unit}（非背書，須依自身 baseline 校準）",
+    "en": "{desc} — reference start {value} {unit} (not an endorsement; calibrate)",
+}
+
+
+def _optional_entry_index(rule_packs: Optional[dict] = None) -> dict[str, dict]:
+    """key -> optional_overrides entry, across every pack (meta lookup only)."""
+    if rule_packs is None:
+        rule_packs = _load_scaffold().RULE_PACKS
+    return {
+        key: entry
+        for meta in (rule_packs or {}).values()
+        for key, entry in ((meta or {}).get("optional_overrides") or {}).items()
+    }
+
+
+def render_tenant_declared_stub_lines(
+    keys, rule_packs: Optional[dict] = None, lang: str = "zh", indent: int = 4
+) -> list[str]:
+    """The tenant-stub comment block for ``keys`` (all lines are comments).
+
+    ``keys`` is the caller's already-derived declared list (see the section
+    note above — this function never re-derives it, so it cannot disagree with
+    the ``_defaults.yaml`` written alongside). Empty list → empty block.
+
+    Every key renders as ``# <indent>key: "<placeholder>"``, i.e. commented out
+    AND valueless: dropping the leading ``"# "`` yields a line already at the
+    right indent for ``tenants: <tenant>:``.
+
+    ⚠️ Be precise about what the placeholder buys, because the natural claim —
+    "an unsubstituted placeholder gets caught by validation" — is FALSE and was
+    written here before it was measured. ``thresholdScalar`` in
+    ``docs/schemas/tenant-config.schema.json`` is ``{"type": "string"}`` with no
+    pattern, so ``key: "<your value>"`` is a schema-valid threshold: measured,
+    ``validate_config.py`` reports 5 checks / 5 pass / 0 warn on exactly that
+    file. What the placeholder DOES buy is that no platform-chosen number is
+    silently armed — the failure mode it removes is a wrong threshold quietly
+    alerting, not a wrong threshold being rejected. The only signal a
+    substituted-nothing key produces today is exporter-side and
+    tenant-invisible: ``resolveDeclaredRows`` cannot parse the value, logs
+    ``WARN: invalid declared threshold`` and emits no row (``resolve.go``), so
+    the tenant sees silence — the same thing it would see had it never set the
+    key at all. Tightening the schema is deliberately NOT done here: that
+    validator is on the path of every tenant threshold, so it is its own change.
+    """
+    if not keys:
+        return []
+    entries = _optional_entry_index(rule_packs)
+    prefix = f"# {' ' * indent}"
+    cont = f"{prefix}  # "
+    lines = [TENANT_STUB_DECLARED_HEADING[lang], *_TENANT_STUB_PROSE[lang]]
+    for key in keys:
+        entry = entries.get(key) or {}
+        keyline = f"{prefix}{key}: {_TENANT_STUB_PLACEHOLDER[lang]}"
+        if not entry:
+            lines.append(keyline)
+            continue
+        meta = _TENANT_STUB_META[lang].format(
+            desc=entry.get("desc", ""),
+            value=_fmt_value(entry.get("value")),
+            unit=entry.get("unit", ""),
+        )
+        # Same wrapping rule as the shipped `optional_overrides:` list — one
+        # implementation, because the two blocks render the same declared set.
+        _append_wrapped_comment(lines, keyline, meta, cont)
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# The THIRD population — and its truth is per-GENERATOR, not per-repo (#1321)
+# ---------------------------------------------------------------------------
+# The tenant header names three groups: keys `_defaults.yaml` gives a value to,
+# keys it only DECLARES, and `<base>_critical`. The third sentence was first
+# written as a static claim ("in neither block; it fires once `<base>` has a
+# value") — measured true for what ``scaffold_tenant`` writes and FALSE for what
+# ``init_project`` writes in the very same command:
+#
+#   * ``scaffold_tenant.RULE_PACKS`` puts ZERO ``_critical`` in its ``defaults``
+#     tier, and the shipped ``helm/threshold-exporter/values.yaml``
+#     ``thresholdConfig.defaults`` carries zero as well.
+#   * ``init_project.RULE_PACK_CATALOG`` puts SIXTEEN of them straight into
+#     ``defaults`` (11 of its 15 packs — e.g. mariadb's
+#     ``mysql_connections_critical: 150``). So ``da-tools init --rule-packs
+#     mariadb`` writes a ``_defaults.yaml`` whose ``defaults:`` arms that
+#     critical for every tenant, while the ``<tenant>.yaml`` written by the SAME
+#     run told the tenant no critical row exists unless it sets one.
+#
+# That ``_critical``-into-``defaults`` divergence is init_project's third
+# contract copy; merging it is tracked separately and deliberately NOT done here
+# (a half-merged contract is a fourth contract — see the import note in
+# ``init_project``). What IS fixed here is the header lying about it: the claim
+# is DERIVED from the ``defaults:`` mapping the generator is about to write, so
+# whichever regime a generator is in, the file says the true one.
+
+def defaults_critical_keys(defaults) -> list[str]:
+    """The ``<base>_critical`` names a ``defaults:`` mapping assigns a value to.
+
+    ``defaults`` is the mapping the caller is ABOUT TO WRITE into its
+    ``_defaults.yaml`` — not a pack roster, not a registry query. Both
+    generators already hold it (``scaffold_tenant`` as
+    ``defaults_data["defaults"]``, ``init_project`` as ``_catalog_defaults()``),
+    so nothing new is derived and the header cannot drift from its sibling file.
+    """
+    return [k for k in (defaults or {}) if k.endswith(CRITICAL_SUFFIX)]
+
+
+# Two regimes, two truths. Keyed (lang, defaults-ships-critical) so a generator
+# in either regime gets prose that is true for the file it just wrote.
+_TENANT_STUB_CRITICAL_NOTE = {
+    ("zh", False): (
+        "# 第三類 <base>_critical：本次一起產出的 _defaults.yaml 的 defaults: 一個都沒有列，",
+        "# 平台不供給 critical 值 ⇒ 你在這裡填一個，只要 <base> 在 defaults: 有值，就會",
+        "# 產生一條真的 critical 閾值（不填則無此列，base 的 warning 列不受影響）。",
+    ),
+    ("zh", True): (
+        "# 第三類 <base>_critical：本次一起產出的 _defaults.yaml 的 defaults: 已經直接給了",
+        "# 其中 {n} 個值 ⇒ 對那 {n} 個，適用的是上面第一條（省略＝沿用平台值，critical 列",
+        "# 本來就會發射，不需要你做任何事）。不在 defaults: 的 <base>_critical 才要你自己",
+        "# 填，且只在 <base> 於 defaults: 有值時生效。",
+    ),
+    ("en", False): (
+        "# A third group is `<base>_critical`. The _defaults.yaml generated next to",
+        "# this file lists none of them under `defaults:`, so the platform supplies",
+        "# no critical value: set one here and it produces a real critical-severity",
+        "# threshold as long as `<base>` has a value under `defaults:`; leave it out",
+        "# and there simply is no critical row.",
+    ),
+    ("en", True): (
+        "# A third group is `<base>_critical`. The _defaults.yaml generated next to",
+        "# this file already gives {n} of them a value under `defaults:` — for those",
+        "# {n}, rule 1 above is the one that applies: omit and you keep the platform",
+        "# value, the critical row fires without you doing anything. A",
+        "# `<base>_critical` NOT in that section is yours to set, and it only takes",
+        "# effect while `<base>` has a value there.",
+    ),
+}
+
+
+def render_tenant_critical_note_lines(defaults, lang: str = "zh") -> list[str]:
+    """The tenant header's ``<base>_critical`` paragraph, true for ``defaults``.
+
+    ⛔ Derived from the artifact, never asserted statically: the two generators
+    disagree about whether ``_critical`` keys live in ``defaults:`` (see the
+    section note above), so a fixed sentence is guaranteed to be false for one
+    of them. The count is rendered too — it is what makes the claim checkable
+    against the sibling ``_defaults.yaml`` rather than merely plausible.
+    """
+    shipped = defaults_critical_keys(defaults)
+    template = _TENANT_STUB_CRITICAL_NOTE[(lang, bool(shipped))]
+    return [line.format(n=len(shipped)) for line in template]
+
+
+# The header sentence that POINTS AT the block above — and the pointer is the
+# half that was still asserted rather than derived (#1321 review). The block is
+# emitted only when the declared list is non-empty (``append_tenant_declared_stub``
+# returns ``text`` unchanged for an empty list), while both generators' headers
+# said "the list is at the end of this file" unconditionally. Measured: the
+# optional tier of mariadb / redis / postgresql / kafka / rabbitmq / jvm / nginx
+# is `_critical`-only, so `shipped_optional_keys_for_packs` returns [] for every
+# one of them — a tenant onboarded onto any of those packs got a header
+# pointing at a section that is not in its file.
+#
+# ⛔ Not fixed by making the sentence conditional prose ("if there are declared
+# keys, see the end of the file") — that hands the tenant the judgement call the
+# generator already has the data to make. Same discipline as the `_critical`
+# paragraph next door: render the claim FROM the artifact this run produces.
+_TENANT_STUB_DECLARED_NOTE = {
+    ("zh", True): (
+        "# 宣告層（_defaults.yaml 的 optional_overrides: 清單）沒有值可繼承 ⇒"
+        " 省略＝沒有值＝靜默，",
+        "# 不是「用預設」；那一格只有「填值」與「不填」兩態。本次選的 pack 有 {n} 個"
+        "這種 key，",
+        "# 清單見檔尾。",
+    ),
+    ("zh", False): (
+        "# 宣告層（_defaults.yaml 的 optional_overrides: 清單）沒有值可繼承 ⇒"
+        " 省略＝沒有值＝靜默，",
+        "# 不是「用預設」；那一格只有「填值」與「不填」兩態。本次選的 pack 一個這種"
+        " key 都沒有，",
+        "# 所以本檔沒有那一段可看（換 pack 時會有）。",
+    ),
+    ("en", True): (
+        "# Omitting a key _defaults.yaml only DECLARES (its `optional_overrides:`",
+        "# list) inherits NOTHING — the platform asserts no value there, so an unset",
+        "# declared key stays silent. The {n} such keys for the packs selected here",
+        "# are listed at the end of this file.",
+    ),
+    ("en", False): (
+        "# Omitting a key _defaults.yaml only DECLARES (its `optional_overrides:`",
+        "# list) inherits NOTHING — the platform asserts no value there, so an unset",
+        "# declared key stays silent. The packs selected here declare no such key,",
+        "# so this file carries no such list.",
+    ),
+}
+
+
+def render_tenant_declared_note_lines(keys, lang: str = "zh") -> list[str]:
+    """The tenant header's declared-tier paragraph, true for ``keys``.
+
+    ``keys`` must be the SAME list the caller hands
+    ``append_tenant_declared_stub`` — that is what makes "the list is at the end
+    of this file" a fact about the file being written rather than a hope. Both
+    generators hold exactly one such list per run (``scaffold_tenant`` from the
+    sibling ``_defaults.yaml`` it just built, ``init_project`` from
+    ``shipped_optional_keys_for_packs``), so nothing new is derived here.
+
+    The count is rendered for the same reason ``render_tenant_critical_note_lines``
+    renders one: it makes the claim checkable against the emitted block instead
+    of merely plausible.
+    """
+    keys = list(keys or [])
+    return [line.format(n=len(keys))
+            for line in _TENANT_STUB_DECLARED_NOTE[(lang, bool(keys))]]
+
+
+def append_tenant_declared_stub(
+    text: str,
+    keys,
+    rule_packs: Optional[dict] = None,
+    lang: str = "zh",
+    indent: int = 4,
+) -> str:
+    """Append the declared-key block to a rendered tenant stub. Idempotent.
+
+    A file-level reference section appended AFTER the dumped YAML, not spliced
+    into the tenant's own mapping: a stub with no overrides dumps as
+    ``<tenant>: {}`` (flow style), so there is no block-mapping context to
+    splice into at all. The prose says so — copying a line into a tenant that
+    still reads ``{}`` needs the ``{}`` removed first, and a hint that quietly
+    produces a YAML syntax error would be worse than no hint.
+    """
+    lines = render_tenant_declared_stub_lines(keys, rule_packs, lang, indent)
+    if not lines or TENANT_STUB_DECLARED_HEADING[lang] in text:
+        return text
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return text + "\n".join(lines) + "\n"
 
 
 def render_block(surface_id: str, body_lines: list[str], indent: str = "") -> str:

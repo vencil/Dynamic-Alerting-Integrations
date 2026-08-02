@@ -52,7 +52,12 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 # that merge, and must not be read as a first instalment of it: splitting the
 # consolidation into stages is explicitly warned against, because a half-merged
 # contract is a fourth contract.
-from _registry_lib import shipped_optional_keys_for_packs  # noqa: E402
+from _registry_lib import (  # noqa: E402
+    append_tenant_declared_stub,
+    render_tenant_critical_note_lines,
+    render_tenant_declared_note_lines,
+    shipped_optional_keys_for_packs,
+)
 
 _LANG = detect_cli_lang()
 
@@ -295,6 +300,23 @@ RULE_PACK_CATALOG = {
 # ============================================================
 
 
+def _catalog_defaults(rule_packs: list[str]) -> dict:
+    """The `defaults:` mapping this run will write into `_defaults.yaml`.
+
+    ONE derivation, consumed by both files a run produces: `_gen_defaults_yaml`
+    dumps it, and `_gen_tenant_yaml` reads it to decide what its header may
+    claim about `<base>_critical` (#1321). Re-spelling the loop in the second
+    caller would recreate exactly the drift this fix exists to remove — the
+    tenant header would then be describing a `defaults:` section that is only
+    assumed to match the one on disk.
+    """
+    defaults: dict = {}
+    for rp in rule_packs:
+        if rp in RULE_PACK_CATALOG:
+            defaults.update(RULE_PACK_CATALOG[rp]['defaults'])
+    return defaults
+
+
 def _gen_defaults_yaml(rule_packs: list[str], namespace: str) -> str:
     """Generate _defaults.yaml with selected rule pack defaults.
 
@@ -306,10 +328,7 @@ def _gen_defaults_yaml(rule_packs: list[str], namespace: str) -> str:
     `_defaults.yaml` for `OptionalOverrides` (the chart-side list only ever
     reaches threshold-exporter).
     """
-    defaults = {}
-    for rp in rule_packs:
-        if rp in RULE_PACK_CATALOG:
-            defaults.update(RULE_PACK_CATALOG[rp]['defaults'])
+    defaults = _catalog_defaults(rule_packs)
 
     # DERIVED from the shared predicate, never listed here — see the import
     # comment for why this one derivation is shared while the values above are
@@ -356,7 +375,8 @@ def _gen_defaults_yaml(rule_packs: list[str], namespace: str) -> str:
     # _defaults.yaml — Platform global defaults
     # Managed by Platform Team. Tenant files should NOT contain this section.
     #
-    # Three-state logic:
+    # Three-state logic — for the keys under `defaults:` below, which are the
+    # only ones that HAVE a platform value to fall back to:
     #   - Custom value:  metric_key: 42     → Override platform default
     #   - Omitted:       (not in tenant YAML) → Use this default
     #   - Disable:       metric_key: "disable" → Suppress metric entirely
@@ -377,15 +397,58 @@ def _gen_defaults_yaml(rule_packs: list[str], namespace: str) -> str:
 
 
 def _gen_tenant_yaml(tenant: str, rule_packs: list[str]) -> str:
-    """Generate a tenant stub YAML."""
+    """Generate a tenant stub YAML.
+
+    ⛔ This is the ONE file a tenant opens, so the header has to be true for
+    EVERY population of key (#1321). It used to say "Omitted keys inherit from
+    _defaults.yaml", which holds only for keys `_defaults.yaml` gives a value
+    to; for the DECLARED tier (`optional_overrides:` — key names, no values) it
+    is exactly backwards: there is nothing to inherit, so omission is silence.
+    The declared keys for the selected packs are appended as a commented,
+    valueless block — see `_registry_lib.append_tenant_declared_stub`.
+
+    ⛔ Two buckets is still not the whole taxonomy: `<base>_critical` appears in
+    neither block *for some generators*, yet it takes effect whenever `<base>`
+    has a value under `defaults:` (resolveCriticalRows keys off exactly that).
+    And "in neither block" is where a static sentence gets it wrong HERE:
+    `RULE_PACK_CATALOG` puts 16 `_critical` keys straight into `defaults:`, so
+    for this generator most of them DO have a platform value and rule 1 is the
+    applicable one. The paragraph is therefore rendered from the very
+    `defaults:` mapping this run writes — see
+    `_registry_lib.render_tenant_critical_note_lines`. Same criterion as the
+    three-way rule-pack header split: does what we say buy the tenant
+    protection or not.
+
+    ⛔ The pointer at the declared block ("listed at the end of this file") is
+    derived for the same reason. The block is appended only when the declared
+    list is non-empty, and most packs' optional tier is `_critical`-only
+    (measured: mariadb, postgresql, redis, mongodb, elasticsearch, kafka,
+    rabbitmq, jvm, nginx, kubernetes all yield []), so `da-tools init
+    --rule-packs mariadb` used to hand the tenant a header pointing at a
+    section that file does not contain — see
+    `_registry_lib.render_tenant_declared_note_lines`.
+    """
+    # The mapping `_gen_defaults_yaml` will dump for this same run — the header
+    # claims below are read off it, not asserted about it. Same for the declared
+    # list: one derivation per run, shared by the header sentence and the block
+    # appended at the bottom, so the two cannot disagree.
+    defaults = _catalog_defaults(rule_packs)
+    declared_keys = shipped_optional_keys_for_packs(rule_packs)
+    critical_note = '\n'.join(render_tenant_critical_note_lines(defaults, lang='en'))
+    declared_note = '\n'.join(
+        render_tenant_declared_note_lines(declared_keys, lang='en'))
     header = textwrap.dedent("""\
     # {tenant}.yaml — Tenant threshold overrides
     # Only the 'tenants' section is allowed in tenant files.
-    # Omitted keys inherit from _defaults.yaml.
+    # Omitting a key that _defaults.yaml gives a value to (its `defaults:`
+    # section) inherits that value.
+    {declared_note}
+    {critical_note}
     # Set a key to "disable" to suppress that metric.
     #
     # Generated by: da-tools init
-    """).format(tenant=tenant)
+    """).format(tenant=tenant, declared_note=declared_note,
+                critical_note=critical_note)
 
     tenant_config: dict = {}
 
@@ -405,7 +468,14 @@ def _gen_tenant_yaml(tenant: str, rule_packs: list[str]) -> str:
     }
 
     config = {'tenants': {tenant: tenant_config}}
-    return header + yaml.dump(config, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    body = yaml.dump(config, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    # Same derivation, same argument, same call as `_gen_defaults_yaml` above —
+    # the two files are generated side by side from one `rule_packs`, so the
+    # stub can only ever advertise keys that file actually declares. And it is
+    # the SAME `declared_keys` the header sentence above was rendered from, so
+    # "listed at the end of this file" is a fact about this string, not a hope.
+    return append_tenant_declared_stub(header + body, declared_keys, lang='en')
 
 
 # ============================================================

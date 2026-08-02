@@ -182,7 +182,7 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 :   The platform's core component. Reads tenant YAML configurations and converts them to Prometheus metrics (`user_threshold` series). Supports HA deployment (×2), port 8080.
 
 **Three-State Config Logic**
-:   The three **config-layer** values: Custom Value / Omitted (→ falls back to `_defaults.yaml`) / Disable (`"disable"` → no output). See [Config-Driven Design](design/config-driven.en.md) §2.1. ⚠️ A **distinct concept** from "Three-State Operational Model" below — don't conflate them under the bare word "three-state".
+:   The three **config-layer** values: Custom Value / Omitted (→ falls back to the `defaults:` value in `_defaults.yaml`) / Disable (`"disable"` → no output). ⚠️ **Three states only apply to keys that have a platform default**: a key listed under `optional_overrides:` has nothing to inherit, so omitting it means no value and no output — only "set it" or "leave it silent". See [Config-Driven Design](design/config-driven.en.md) §2.1. ⚠️ A **distinct concept** from "Three-State Operational Model" below — don't conflate them under the bare word "three-state".
 
 **Three-State Operational Model**
 :   The three **operational-layer** states: Normal / Silent / Maintenance, implemented via Sentinel Alert + Alertmanager Inhibit, all supporting `expires` auto-expiry. See [Config-Driven Design](design/config-driven.en.md) §2.7.

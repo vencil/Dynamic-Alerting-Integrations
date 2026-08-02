@@ -340,7 +340,9 @@ A: Override specific keys in tenant YAML:
 tenants:
   my-tenant:
     mysql_connections: "70"      # Custom this one
-    # Other keys omitted, will use _defaults.yaml
+    # Other keys omitted, will use the _defaults.yaml `defaults:` value
+    # WARNING: a key _defaults.yaml only DECLARES (its optional_overrides: list)
+    #    has no default to inherit — omitting it means no value and no series
 ```
 
 **Q: Does Rule Pack support scheduled thresholds?**

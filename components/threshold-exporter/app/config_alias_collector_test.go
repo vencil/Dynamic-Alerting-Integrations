@@ -57,7 +57,7 @@ func TestCollector_AliasWorstCaseCollision_GatherCleanAndExactSeries(t *testing.
 	// Byte-exact exposition: exactly one canonical + one legacy row per
 	// severity, all carrying the canonical-spelling values (65 / 95).
 	expected := `
-		# HELP user_threshold User-defined alerting threshold (config-driven, three-state: custom/default/disable)
+		# HELP user_threshold User-defined alerting threshold (config-driven, three-state: custom/default/disable; declared keys have no default: custom or silent)
 		# TYPE user_threshold gauge
 		user_threshold{component="mysql",metric="cpu",severity="critical",tenant="tenant-mixed"} 95
 		user_threshold{component="mysql",metric="cpu",severity="warning",tenant="tenant-mixed"} 65
@@ -99,7 +99,7 @@ func TestCollector_AliasDimensionalWorstCase_GatherClean(t *testing.T) {
 	}
 
 	expected := `
-		# HELP user_threshold User-defined alerting threshold (config-driven, three-state: custom/default/disable)
+		# HELP user_threshold User-defined alerting threshold (config-driven, three-state: custom/default/disable; declared keys have no default: custom or silent)
 		# TYPE user_threshold gauge
 		user_threshold{component="mysql",env="prod",metric="cpu",severity="warning",tenant="tenant-dim"} 65
 		user_threshold{component="mysql",env="prod",metric="threads_running",severity="warning",tenant="tenant-dim"} 65

@@ -7,10 +7,14 @@ ConfigMap structures. Auto-detects format by checking for '_defaults.yaml' key.
 Usage: patch_config.py <tenant> <metric_key> <value>
        patch_config.py --diff <tenant> <metric_key> <value>
 
-Three-state logic:
+Three-state logic (for keys `_defaults.yaml` gives a value to, under `defaults:`):
   - Custom value:  patch_config.py db-a mysql_connections 50
   - Default (delete key): patch_config.py db-a mysql_connections default
   - Disable:       patch_config.py db-a mysql_connections disable
+
+  ⚠️ For a key `_defaults.yaml` only DECLARES (its `optional_overrides:` list)
+  there is no platform value to fall back to, so `default` does not restore one
+  — deleting the key means no value and no series at all (#1321).
 
 Diff preview (terraform plan analogy):
   - patch_config.py --diff db-a mysql_connections 50
@@ -112,10 +116,38 @@ def patch_multifile(cm_data, tenant, metric_key, value):
     return {"data": {tenant_key: updated_yaml_str}}
 
 
+def read_platform_tiers(cm_data, mode):
+    """(defaults_mapping, declared_key_list) — the platform side of the ConfigMap.
+
+    ONE read path for both platform tiers, so nothing downstream has to re-parse
+    the same document with its own idea of where the tiers live (#1321):
+
+      * ``defaults``          — key → platform value. The platform ASSERTS these.
+      * ``optional_overrides`` — key NAMES only. The platform RECOGNISES these
+        and asserts NO value; a tenant that does not set one gets no value at
+        all, which is silence, not a fallback.
+
+    Legacy mode keeps both tiers in the single ``config.yaml``; multi-file mode
+    in ``_defaults.yaml``.
+    """
+    data = cm_data.get("data", {})
+    raw = data.get("config.yaml" if mode == "legacy" else "_defaults.yaml", "")
+    doc = (yaml.safe_load(raw) or {}) if raw else {}
+    return doc.get("defaults") or {}, list(doc.get("optional_overrides") or [])
+
+
 def get_current_value(cm_data, mode, tenant, metric_key):
     """Get the current value of a metric key from the ConfigMap.
 
-    Returns (current_value, source) where source is 'tenant', 'defaults', or 'none'.
+    Returns (current_value, source) where source is 'tenant', 'defaults',
+    'declared', or 'none'.
+
+    ``'declared'`` (#1321) is the tier the platform recognises but assigns no
+    value to. It is deliberately NOT folded into ``'none'``: for a declared key
+    the tenant may set a value and it takes effect, while ``'none'`` means the
+    platform does not know the key at all — the only two states that look alike
+    from the outside (both currently valueless) but differ in what the tenant
+    can do about it.
     """
     data = cm_data.get("data", {})
 
@@ -126,9 +158,6 @@ def get_current_value(cm_data, mode, tenant, metric_key):
             tenants = config.get("tenants", {})
             if tenant in tenants and metric_key in tenants[tenant]:
                 return tenants[tenant][metric_key], "tenant"
-            defaults = config.get("defaults", {})
-            if metric_key in defaults:
-                return defaults[metric_key], "defaults"
     else:
         tenant_key = f"{tenant}.yaml"
         if tenant_key in data and data[tenant_key]:
@@ -136,12 +165,12 @@ def get_current_value(cm_data, mode, tenant, metric_key):
             tenants = tenant_config.get("tenants", {})
             if tenant in tenants and metric_key in tenants[tenant]:
                 return tenants[tenant][metric_key], "tenant"
-        defaults_key = "_defaults.yaml"
-        if defaults_key in data and data[defaults_key]:
-            defaults_config = yaml.safe_load(data[defaults_key]) or {}
-            defaults_section = defaults_config.get("defaults", {})
-            if metric_key in defaults_section:
-                return defaults_section[metric_key], "defaults"
+
+    defaults_section, declared = read_platform_tiers(cm_data, mode)
+    if metric_key in defaults_section:
+        return defaults_section[metric_key], "defaults"
+    if metric_key in declared:
+        return None, "declared"
 
     return None, "none"
 
@@ -169,6 +198,38 @@ def find_affected_alerts(metric_key):
     return alerts
 
 
+# ---------------------------------------------------------------------------
+# Valueless-state wording, per platform tier (#1321)
+# ---------------------------------------------------------------------------
+# ⛔ These strings are the only thing an operator reads before applying, and
+# they used to say "default" unconditionally — i.e. they promised a platform
+# value behind every key. For a DECLARED key (`optional_overrides:` — key names,
+# no values) there is none, so "revert to default" really means "no value at
+# all": the series stops and the alert goes off the air. That is the shape
+# PREVENT #656 exists for, and a preview that calls it "default" hides it.
+# `get_current_value` already computes the tier (it is printed on the same
+# line as `source`); the wording now uses it instead of assuming.
+_AFTER_KEY_REMOVED = {
+    "declared": ("no value (key removed — the platform DECLARES this key but "
+                 "asserts no value, so nothing falls back: the metric goes "
+                 "silent)"),
+    "platform-default": "default (key removed)",
+    "unknown": ("no value (key removed — no platform default for this key to "
+                "fall back to)"),
+}
+_BEFORE_NOT_SET = {
+    "declared": ("no value (declared key, not set — the platform asserts no "
+                 "value here, so it is silent)"),
+    "platform-default": "default (not set)",
+    "unknown": "no value (not set — no platform default for this key)",
+}
+_NO_VALUE_DISPLAY = {
+    "declared": "(no value — declared, unset)",
+    "platform-default": "(platform default)",
+    "unknown": "(no value)",
+}
+
+
 def diff_preview(cm_data, mode, tenant, metric_key, value):
     """Show before/after preview of a config change without applying it.
 
@@ -177,11 +238,24 @@ def diff_preview(cm_data, mode, tenant, metric_key, value):
     current_value, source = get_current_value(cm_data, mode, tenant, metric_key)
     affected_alerts = find_affected_alerts(metric_key)
 
+    # Which platform tier the key sits in decides every valueless-state string
+    # below (see the tables above). Read once, from the same path
+    # `get_current_value` used.
+    platform_defaults, declared_keys = read_platform_tiers(cm_data, mode)
+    if metric_key in declared_keys:
+        tier = "declared"
+    elif source == "defaults" or metric_key in platform_defaults:
+        # Sourced from `defaults:`, or merely landing there once the tenant key
+        # goes away — either way deletion has something to fall back to.
+        tier = "platform-default"
+    else:
+        tier = "unknown"
+
     # Determine new state description
     new_value = value
     if str(value).lower() == "default":
-        new_state = "default (key removed)"
-        new_value = "(platform default)"
+        new_state = _AFTER_KEY_REMOVED[tier]
+        new_value = _NO_VALUE_DISPLAY[tier]
     elif str(value).lower() in ("disable", "disabled", "off", "false"):
         new_state = "disabled"
     else:
@@ -189,10 +263,13 @@ def diff_preview(cm_data, mode, tenant, metric_key, value):
 
     # Determine old state description
     if current_value is None:
-        old_state = "default (not set)"
-        old_display = "(platform default)"
+        old_state = _BEFORE_NOT_SET[tier]
+        old_display = _NO_VALUE_DISPLAY[tier]
     elif str(current_value).lower() in ("disable", "disabled", "off", "false"):
         old_state = "disabled"
+        old_display = str(current_value)
+    elif source == "defaults":
+        old_state = f"platform default: {current_value}"
         old_display = str(current_value)
     else:
         old_state = f"custom: {current_value}"

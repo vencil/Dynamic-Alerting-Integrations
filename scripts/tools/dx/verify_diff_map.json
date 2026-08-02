@@ -439,6 +439,7 @@
   ],
   "scripts/tools/ops/_registry_lib.py": [
    "tests/lint/test_check_threshold_registry.py",
+   "tests/ops/test_init_project.py",
    "tests/ops/test_scaffold_tenant.py"
   ],
   "scripts/tools/ops/alert_correlate.py": [
@@ -665,6 +666,10 @@
    "tests/shared/test_lib_python.py",
    "tests/shared/test_mutation_guards.py"
   ],
+  "tests/ops/_stub_declared_shared.py": [
+   "tests/ops/test_init_project.py",
+   "tests/ops/test_scaffold_tenant.py"
+  ],
   "tests/ops/test_alertmanager_amtool_validity.py": [
    "tests/ops/test_alertmanager_routing_correctness.py"
   ],
@@ -684,7 +689,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "c5c28eed1e7618aecc810f3687212c664d78de5d025ce983ba210aa3e20379af",
+ "source_digest": "0b42f77259dd86fda426eacb9d5fcef5bc0ff0b12b4aca1594f9df2d6ce0d760",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1476,7 +1481,9 @@
    "tests/helm/test_environments_overlay_sync.py",
    "tests/helm/test_optional_overrides_render.py",
    "tests/ops/test_generate_alertmanager_routes.py",
-   "tests/ops/test_registry_lib.py"
+   "tests/ops/test_init_project.py",
+   "tests/ops/test_registry_lib.py",
+   "tests/ops/test_scaffold_tenant.py"
   ],
   "helm/vector": [
    "tests/dx/test_log_visibility_catalogue.py",
@@ -2142,6 +2149,10 @@
    "tests/lint/test_check_threshold_registry.py",
    "tests/ops/test_grar_facade_reexports.py",
    "tests/ops/test_nightly_race_issue_policy.py"
+  ],
+  "tests/ops/_stub_declared_shared.py": [
+   "tests/ops/test_init_project.py",
+   "tests/ops/test_scaffold_tenant.py"
   ],
   "tests/ops/test_byo_check.py": [
    "tests/ops/test_threshold_govern.py",

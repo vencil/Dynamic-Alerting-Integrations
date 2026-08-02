@@ -79,6 +79,12 @@ func (c *ThresholdConfig) Resolve() []ResolvedThreshold {
 //   - omitted      → use default
 //   - "disable"    → skip (no metric exposed)
 //
+// ⚠️ Those three states describe the DEFAULTS-backed population only, i.e. the
+// keys resolveBaseRows walks. A key the platform merely DECLARES
+// (OptionalOverrides — key names, no values) has no default to fall back to, so
+// there is no State 2 for it: omitted means no value and no row. See
+// resolveDeclaredRows.
+//
 // Multi-tier severity: tenants can set <metric>_critical in their overrides
 // to expose a separate critical-severity threshold for the same metric.
 // The base metric retains severity=warning; the _critical variant gets severity=critical.
@@ -263,6 +269,11 @@ func isThresholdExpired(sv ScheduledValue, now time.Time) bool {
 // disable) plus the inline "value:severity" suffix. Extracted verbatim from
 // the ResolveAtWithStats per-tenant loop (Phase 2A) — see that method for the
 // full contract.
+//
+// ⚠️ "omitted→default" is a property of THIS function's input, not of the
+// config model: it holds because the loop iterates the defaults map, so every
+// key it sees has a platform value by construction. The declared tier
+// (resolveDeclaredRows) has no such value and therefore no such state.
 //
 // #1231: both maps arrive pre-canonicalized (deprecated alias spellings folded
 // onto their canonical key), and every append goes through appendWithLegacyTwin
@@ -1091,10 +1102,18 @@ type KeyValidation struct {
 	Notices []string // advisory channel: #1231 deprecation notices; MUST never block a write
 }
 
-// ValidateTenantKeys checks all tenant config keys against known defaults and
-// reserved patterns. Errors lists warning messages for unknown/invalid keys
-// (this helps catch typos like "_silence_mode" that would be silently
-// ignored); Notices lists non-blocking deprecation advisories (#1231).
+// ValidateTenantKeys checks all tenant config keys against the platform key
+// surface and reserved patterns. That surface is TWO sets, not just `defaults:`
+// (see the body): the keys the platform gives a value to, plus the ones it
+// merely DECLARES on `optional_overrides:`. Errors lists warning messages for
+// unknown/invalid keys (this helps catch typos like "_silence_mode" that would
+// be silently ignored); Notices lists non-blocking deprecation advisories
+// (#1231).
+//
+// ⛔ This comment used to read "against known defaults" — the same
+// understatement the tenant-facing docs carried (#1321). It says a key with no
+// platform value cannot be valid, and the declared tier is precisely that key:
+// no platform value, tenant-settable, accepted here.
 //
 // Alias handling mirrors the resolve boundary: each key is canonicalized
 // first (exact-match table, never prefix-match) and validated under its

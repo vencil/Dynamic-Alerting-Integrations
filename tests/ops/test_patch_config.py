@@ -116,6 +116,94 @@ class TestDiffPreview:
         assert not diff["changed"]
 
 
+class TestDiffPreviewDeclaredTier:
+    """⛔ 執行期輸出也是一種宣稱（#1321）。
+
+    `--diff` 印出來的那兩行是 operator 套用前唯一會讀的東西，而它們原本無條件說
+    「default」——等於承諾每個 key 背後都有平台值。對宣告層（`optional_overrides:`
+    只有 key 名、沒有值）沒有：`default` 不是還原成平台值，而是**沒有值**，series
+    停掉、告警下線（PREVENT #656 的形狀）。
+
+    `get_current_value` 本來就算得出 `source`（而且就印在同一行），資訊在手上，
+    只是字串沒用它。
+    """
+
+    DECLARED = "oracle_process_count"
+
+    def _cm(self, tenant_yaml="tenants:\n  db-a: {}"):
+        return {
+            "data": {
+                "_defaults.yaml": (
+                    "defaults:\n  mysql_connections: 70\n"
+                    f"optional_overrides:\n  - {self.DECLARED}\n"
+                ),
+                "db-a.yaml": tenant_yaml,
+            }
+        }
+
+    def test_declared_key_is_its_own_source(self):
+        """宣告 ≠ 未知：兩者現在都沒有值，但租戶能對前者做的事不同。"""
+        val, source = pc.get_current_value(
+            self._cm(), "multi-file", "db-a", self.DECLARED)
+        assert val is None
+        assert source == "declared"
+        val, source = pc.get_current_value(
+            self._cm(), "multi-file", "db-a", "totally_unknown_key")
+        assert source == "none"
+
+    def test_revert_of_a_declared_key_does_not_claim_a_default(self):
+        """租戶設過、現在要 revert：刪掉＝沒有值，不是「回到平台預設」。"""
+        diff = pc.diff_preview(
+            self._cm(f"tenants:\n  db-a:\n    {self.DECLARED}: '400'"),
+            "multi-file", "db-a", self.DECLARED, "default")
+        after = diff["after"]["state"]
+        assert "default (key removed)" not in after
+        assert "no value" in after
+        assert "silent" in after
+
+    def test_unset_declared_key_does_not_claim_a_default(self):
+        diff = pc.diff_preview(
+            self._cm(), "multi-file", "db-a", self.DECLARED, "400")
+        before = diff["before"]
+        assert before["source"] == "declared"
+        assert "default (not set)" not in before["state"]
+        assert "no value" in before["state"]
+
+    def test_key_with_a_platform_default_still_says_default(self):
+        """⛔ 反向：有平台預設的 key，原本的說法本來就是對的，不能一起改掉。"""
+        diff = pc.diff_preview(
+            self._cm("tenants:\n  db-a:\n    mysql_connections: '90'"),
+            "multi-file", "db-a", "mysql_connections", "default")
+        assert diff["after"]["state"] == "default (key removed)"
+
+    def test_platform_default_is_not_called_a_tenant_custom_value(self):
+        diff = pc.diff_preview(
+            self._cm(), "multi-file", "db-a", "mysql_connections", "90")
+        assert diff["before"]["source"] == "defaults"
+        assert diff["before"]["state"] == "platform default: 70"
+
+    def test_unknown_key_claims_neither_a_default_nor_a_declaration(self):
+        diff = pc.diff_preview(
+            self._cm(), "multi-file", "db-a", "totally_unknown_key", "default")
+        assert "no platform default" in diff["after"]["state"]
+        assert "declare" not in diff["after"]["state"].lower()
+
+    def test_legacy_mode_reads_the_same_two_tiers(self):
+        cm_data = {
+            "data": {
+                "config.yaml": (
+                    "tenants:\n  db-a: {}\n"
+                    "defaults:\n  mysql_connections: 70\n"
+                    f"optional_overrides:\n  - {self.DECLARED}\n"
+                )
+            }
+        }
+        assert pc.get_current_value(
+            cm_data, "legacy", "db-a", self.DECLARED)[1] == "declared"
+        assert pc.get_current_value(
+            cm_data, "legacy", "db-a", "mysql_connections") == (70, "defaults")
+
+
 class TestFindAffectedAlerts:
     """find_affected_alerts() 測試。"""
 

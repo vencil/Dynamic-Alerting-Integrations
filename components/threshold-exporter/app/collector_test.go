@@ -67,7 +67,7 @@ func TestCollector_Collect_CustomLabels(t *testing.T) {
 	collector := NewThresholdCollector(manager)
 
 	expected := `
-		# HELP user_threshold User-defined alerting threshold (config-driven, three-state: custom/default/disable)
+		# HELP user_threshold User-defined alerting threshold (config-driven, three-state: custom/default/disable; declared keys have no default: custom or silent)
 		# TYPE user_threshold gauge
 		user_threshold{component="mysql",env="prod",metric="connections",severity="warning",tenant="db-a"} 100
 	`
@@ -127,7 +127,7 @@ da_config_event{event="threshold_expired",reason="mysql_connections: incident #1
 	// And the VALUE fail-safes to the platform default (80), NOT the expired
 	// override (2000) — proven at the collector level, not just resolve.
 	expectedThreshold := `
-# HELP user_threshold User-defined alerting threshold (config-driven, three-state: custom/default/disable)
+# HELP user_threshold User-defined alerting threshold (config-driven, three-state: custom/default/disable; declared keys have no default: custom or silent)
 # TYPE user_threshold gauge
 user_threshold{component="mysql",metric="connections",severity="warning",tenant="db-a"} 80
 `
@@ -562,7 +562,7 @@ func TestCollector_RegexLabelOutput(t *testing.T) {
 
 	// Verify the _re suffix label is present in output
 	expected := `
-		# HELP user_threshold User-defined alerting threshold (config-driven, three-state: custom/default/disable)
+		# HELP user_threshold User-defined alerting threshold (config-driven, three-state: custom/default/disable; declared keys have no default: custom or silent)
 		# TYPE user_threshold gauge
 		user_threshold{component="oracle",metric="tablespace",severity="warning",tablespace_re="SYS.*",tenant="db-a"} 95
 	`
@@ -593,7 +593,7 @@ func TestCollector_MixedExactAndRegexLabels(t *testing.T) {
 
 	// Verify specific label values via full comparison
 	expected := `
-		# HELP user_threshold User-defined alerting threshold (config-driven, three-state: custom/default/disable)
+		# HELP user_threshold User-defined alerting threshold (config-driven, three-state: custom/default/disable; declared keys have no default: custom or silent)
 		# TYPE user_threshold gauge
 		user_threshold{component="oracle",env="prod",metric="ts",severity="warning",tablespace_re="TEMP.*",tenant="db-a"} 200
 	`
@@ -689,7 +689,7 @@ func TestCollector_SilentMode_NoLeakToThreshold(t *testing.T) {
 	// _silent_mode should NOT appear as a user_threshold metric;
 	// only the default mysql_connections should appear
 	expected := `
-		# HELP user_threshold User-defined alerting threshold (config-driven, three-state: custom/default/disable)
+		# HELP user_threshold User-defined alerting threshold (config-driven, three-state: custom/default/disable; declared keys have no default: custom or silent)
 		# TYPE user_threshold gauge
 		user_threshold{component="mysql",metric="connections",severity="warning",tenant="db-a"} 80
 	`

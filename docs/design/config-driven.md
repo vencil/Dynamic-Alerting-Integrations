@@ -25,8 +25,10 @@ parent: architecture-and-design.md
 | 狀態 | 配置方式 | Prometheus 輸出 | 說明 |
 |------|---------|-----------------|------|
 | **Custom Value** | `metric_key: 42` | ✓ 輸出自訂閾值 | 租戶覆蓋預設值 |
-| **Omitted (Default)** | 未在 YAML 中指定 | ✓ 輸出平台預設值 | 使用 `_defaults.yaml` |
+| **Omitted (Default)** | 未在 YAML 中指定 | ✓ 輸出平台預設值 | 使用 `_defaults.yaml` 的 `defaults:` 值 |
 | **Disable** | `metric_key: "disable"` | ✗ 不輸出 | 完全禁用該指標 |
+
+> ⚠️ **適用條件**：上表只對「在 `_defaults.yaml` 的 `defaults:` 有值」的 key 成立。列在 `optional_overrides:` 的**宣告 key**（平台只認得 key 名、不主張值）沒有預設可繼承——**省略＝沒有值＝不輸出 series**，不是「用預設」；那一格實際只有「填值」與「不填（靜默）」兩態。
 
 **Prometheus 輸出示例：**
 

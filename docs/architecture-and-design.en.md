@@ -219,7 +219,7 @@ The table below indexes the **core design concepts** (timeless capabilities, not
 
 Config-Driven is the platform core: tenants and the platform only edit YAML, never write PromQL — built from three-state config + Directory Scanner + hierarchical inheritance + vector-matching rules. Topics group into four areas (full reference in [config-driven.en.md](design/config-driven.en.md)):
 
-- **Config & inheritance**: three-state logic (custom value / omitted = default / disable), `conf.d/` Directory Scanner + SHA-256 hot-reload + incremental reload, `_defaults.yaml` L0→L3 inheritance, tenant↔namespace mapping (1:1 / N:1 / 1:N).
+- **Config & inheritance**: three-state logic (custom value / omitted = default / disable — ⚠️ only for keys that HAVE a platform default; a key declared under `optional_overrides:` carries no platform value, so omitting it means no value at all), `conf.d/` Directory Scanner + SHA-256 hot-reload + incremental reload, `_defaults.yaml` L0→L3 inheritance, tenant↔namespace mapping (1:1 / N:1 / 1:N).
 - **Alert semantics**: multi-tier severity (`_critical` suffix, `"value:severity"` syntax), regex dimension thresholds (`=~`), scheduled thresholds (UTC time windows, cross-midnight), three-state operational modes (Normal / Silent / Maintenance + Sentinel Alert).
 - **Routing**: 6 receiver types (Webhook / Email / Slack / Teams / RocketChat / PagerDuty) + Timing Guardrails, Severity Dedup (Alertmanager inhibit), per-rule routing overrides, platform-enforced routing (NOC mandatory), Routing Profiles & domain policies (ADR-007).
 - **Performance & self-service**: Pre-computed Recording Rules, O(M) complexity, Cardinality Guard, Tenant API (commit-on-write + RBAC hot-reload + Portal graceful degradation).

@@ -126,7 +126,12 @@ def run_precheck(tenant, config_dir):
         for key, val in metrics.items():
             report.append(f"   • {key}: {val}")
     else:
-        report.append(f"\n📊 此 tenant 無自訂指標 (全部使用平台預設值)")
+        # ⛔ 不寫「全部使用平台預設值」（#1321）：`_defaults.yaml` 的
+        # `optional_overrides:` 宣告層只有 key 名、沒有值，那些 key 沒被租戶設定
+        # 就是**沒有值＝靜默**，不是「沿用平台預設」。下架 pre-check 的讀者正是要
+        # 判斷「拿掉這個 tenant 會失去什麼」的人，講反了會低估。
+        report.append("\n📊 此 tenant 未設定任何指標覆寫 "
+                      "(有平台預設值的 key 沿用預設；平台只宣告、不主張值的 key 維持靜默)")
 
     # 5. 最終判定
     report.append(f"\n{'='*60}")

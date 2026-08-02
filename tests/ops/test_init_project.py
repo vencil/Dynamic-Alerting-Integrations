@@ -6,6 +6,7 @@ YAML structure validation, K8s naming validation, and end-to-end initialization.
 """
 
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime
@@ -400,6 +401,283 @@ class TestGenTenantYaml:
         assert 'db-a' in yaml1
         assert 'db-a' not in yaml2
         assert 'db-b' in yaml2
+
+
+# ============================================================
+# ── 5b. _gen_tenant_yaml — declared-key stub block (#1321) ──
+# ============================================================
+
+# ⛔ The stub-format expectations live in ONE module shared with
+# `test_scaffold_tenant.py` (`tests/ops/_stub_declared_shared.py`). Both
+# packages pin the SAME block, produced by the same renderer; two hand-kept
+# copies meant a format change updated in one of them left the other green and
+# no longer measuring anything.
+from _stub_declared_shared import (  # noqa: E402
+    STUB_PLACEHOLDER,
+    STUB_PLACEHOLDER_VALUE,
+    paste_declared_lines_under_tenant as _paste_declared_lines_under_tenant,
+    shipped_chart_declared_keys,
+    stub_key_lines as _stub_key_lines,
+)
+
+# The parameterised difference: this generator renders the English stub.
+_LANG = 'en'
+_STUB_PLACEHOLDER = STUB_PLACEHOLDER[_LANG]
+
+# ⚠️ Kept as a literal `os.path.join` HERE rather than inside the shared
+# helper: `verify_diff.build_map` scans only `test_*.py` for path references,
+# so moving this join out would drop `helm/threshold-exporter/values.yaml` →
+# this module from `text_map` — a chart edit would stop selecting the test
+# below that reads the chart.
+_SHIPPED_CHART_VALUES = os.path.join(
+    REPO_ROOT, 'helm', 'threshold-exporter', 'values.yaml')
+
+
+def _shipped_chart_declared_keys():
+    return shipped_chart_declared_keys(_SHIPPED_CHART_VALUES)
+
+
+class TestGenTenantYamlDeclaredBlock:
+    """The declared tier, told to the only reader who opens this file (#1321).
+
+    `_defaults.yaml` and the rule-pack headers already explain the tier to
+    whoever runs the PLATFORM. A tenant reads neither: the one file it opens is
+    its own `<tenant>.yaml`, whose header used to say "Omitted keys inherit
+    from _defaults.yaml" — true for keys with a platform default, exactly
+    backwards for the declared tier, which has nothing to inherit.
+    """
+
+    def _declared(self, packs):
+        from _registry_lib import shipped_optional_keys_for_packs
+        return shipped_optional_keys_for_packs(packs)
+
+    def test_header_no_longer_claims_every_omitted_key_inherits(self):
+        yaml_str = ip._gen_tenant_yaml('db-a', ['oracle'])
+        assert 'Omitted keys inherit from _defaults.yaml.' not in yaml_str
+        assert 'inherits NOTHING' in yaml_str
+        assert 'stays silent' in yaml_str
+
+    def test_header_also_names_the_critical_tier(self):
+        """Two buckets is not the taxonomy. `<base>_critical` is in neither
+        block *as far as the declared list goes*, yet it decides whether a
+        critical row exists at all — so a header that stops at two reads as
+        complete and is not. Same criterion as the three-way rule-pack header
+        split: does what we say buy the tenant protection."""
+        yaml_str = ip._gen_tenant_yaml('db-a', ['oracle'])
+        assert '`<base>_critical`' in yaml_str
+
+    # -- the third paragraph must be TRUE OF THIS GENERATOR'S OWN OUTPUT ----
+    #
+    # It was first written as a static sentence ("in neither block; set one and
+    # it fires once `<base>` has a value"). Measured: true of what
+    # `scaffold_tenant` writes, FALSE of what `init_project` writes — this
+    # module's `RULE_PACK_CATALOG` puts 16 `_critical` keys straight into
+    # `defaults:` (11 of its 15 packs), so `da-tools init --rule-packs mariadb`
+    # emits `mysql_connections_critical: 150` under `defaults:` in the very
+    # `_defaults.yaml` it writes next to the stub. For those keys rule 1 is the
+    # applicable one and the tenant needs to do nothing.
+    #
+    # ⛔ The two tests below assert against the SIBLING FILE, parsed — not
+    # against a phrase. That is the whole point: the previous test only checked
+    # that a string was present, which a false string passes just as well.
+
+    def test_critical_paragraph_matches_the_sibling_defaults_file(self):
+        packs = ['mariadb', 'oracle']
+        tenant_text = ip._gen_tenant_yaml('db-a', packs)
+        sibling = yaml.safe_load(ip._gen_defaults_yaml(packs, 'monitoring'))
+        crit = [k for k in sibling['defaults'] if k.endswith('_critical')]
+        assert crit, (
+            'fixture assumption broken: this generator is supposed to be the '
+            'one that DOES put _critical keys in `defaults:`')
+
+        from _registry_lib import render_tenant_critical_note_lines
+        expected = '\n'.join(
+            render_tenant_critical_note_lines(sibling['defaults'], lang='en'))
+        assert expected in tenant_text
+
+        # …and one assertion that does not go through the renderer at all: the
+        # regime word in the header must agree with the parsed artifact.
+        header = tenant_text.split('\ntenants:')[0]
+        assert ('lists none of them under `defaults:`' in header) == (not crit)
+        # ⛔ Anchored to the phrase the count is rendered INTO, not to the bare
+        # digits. `str(len(crit)) in header` is a substring test against a
+        # header full of unrelated numbers (issue refs, the declared-tier count,
+        # "rule 1 above"), so a header claiming any wrong count that happens to
+        # share a digit passes it — measured, and it is the same "match looser
+        # than the target" defect this PR is fixing elsewhere.
+        assert re.search(rf'\bgives {len(crit)} of them a value\b', header), header
+
+    def test_critical_paragraph_flips_when_defaults_gains_a_critical_key(self):
+        """The renderer's own contract, on synthetic input: a `_critical`
+        appearing in `defaults:` must move the claim, not just the count."""
+        from _registry_lib import render_tenant_critical_note_lines
+        without = '\n'.join(render_tenant_critical_note_lines(
+            {'mysql_connections': 80}, lang='en'))
+        with_crit = '\n'.join(render_tenant_critical_note_lines(
+            {'mysql_connections': 80, 'mysql_connections_critical': 150},
+            lang='en'))
+        assert 'lists none of them' in without
+        assert 'lists none of them' not in with_crit
+        assert 'gives 1 of them a value' in with_crit
+
+    def test_block_members_equal_the_derived_set(self):
+        """⛔ This pins the WIRING, not the derivation — say so, because the
+        name reads like the stronger claim.
+
+        The equality's right-hand side is `shipped_optional_keys_for_packs`,
+        which is the very function `_gen_tenant_yaml` calls. A broken derivation
+        therefore moves BOTH sides together and leaves this green (measured:
+        inverting the predicate and defeating the pack filter are both caught by
+        other tests in this class, not by this one). What it does catch is the
+        block vanishing, dropping a key, or emitting one twice — worth pinning,
+        since the tenant is told to read the block as the complete list for its
+        packs, and set equality (not substring) is what makes that readable.
+
+        The last assertion has an independent source: every listed key must also
+        appear in the SHIPPED chart values, read from the artifact rather than
+        re-derived (same discipline as the reachability gate). That one does not
+        move with the generator.
+        """
+        packs = ['oracle', 'db2', 'clickhouse']
+        listed = [k for k, _rhs in _stub_key_lines(
+            ip._gen_tenant_yaml('db-a', packs))]
+        assert set(listed) == set(self._declared(packs))
+        assert len(listed) == len(set(listed)), 'duplicate key line'
+        assert set(listed) <= _shipped_chart_declared_keys(), (
+            'the stub advertises a key the shipped chart does not declare — a '
+            'tenant setting it gets an unknown-key 400 from the only supported '
+            'writer')
+
+    def test_block_is_filtered_by_the_selected_packs(self):
+        listed = {k for k, _ in _stub_key_lines(
+            ip._gen_tenant_yaml('db-a', ['oracle']))}
+        assert listed == set(self._declared(['oracle']))
+        assert not [k for k in listed if k.startswith('clickhouse_')]
+
+    def test_no_declared_key_is_ever_given_a_value(self):
+        """⛔ The regression guard, and the reason the block renders commented
+        placeholders at all: writing the registry's number in for the tenant
+        would re-arm on this surface the keystroke #1310 removed from the
+        interactive prompt (ADR-030 has measured counter-examples for these
+        very numbers)."""
+        packs = ['oracle', 'db2', 'clickhouse']
+        yaml_str = ip._gen_tenant_yaml('db-a', packs)
+        declared = set(self._declared(packs))
+
+        # (a) nothing declared may reach the parsed document …
+        config = yaml.safe_load(yaml_str)
+        assert not declared & set(config['tenants']['db-a'])
+
+        # (b) … nor may a number sit on a key line, commented out or not.
+        for key, rhs in _stub_key_lines(yaml_str):
+            value = rhs.split('#')[0].strip()
+            assert value == _STUB_PLACEHOLDER, f'{key} carries a value: {rhs!r}'
+
+    def test_reference_numbers_are_labelled_as_such(self):
+        """The number stays visible (it is the only starting point an operator
+        has) but never as an endorsement."""
+        yaml_str = ip._gen_tenant_yaml('db-a', ['oracle'])
+        assert 'reference start 300 count' in yaml_str
+        assert 'not an endorsement' in yaml_str
+
+    def test_pack_without_declared_keys_gets_no_block(self):
+        """mariadb's optional tier is `_critical`-only ⇒ nothing to say."""
+        yaml_str = ip._gen_tenant_yaml('db-a', ['mariadb'])
+        assert not _stub_key_lines(yaml_str)
+        assert 'Declared keys' not in yaml_str
+
+    def test_stub_is_still_valid_yaml_and_block_is_all_comments(self):
+        yaml_str = ip._gen_tenant_yaml('db-a', ['oracle', 'db2'])
+        config = yaml.safe_load(yaml_str)
+        assert set(config) == {'tenants'}
+        lines = yaml_str.split('\n')
+        start = next(i for i, l in enumerate(lines)
+                     if l.startswith('# -- Declared keys'))
+        assert all(l.startswith('#') or not l.strip()
+                   for l in lines[start:])
+
+    def test_header_pointer_agrees_with_whether_the_block_exists(self):
+        """⛔ The header's pointer at the block was the last static claim here.
+
+        The block is emitted only when the declared list is non-empty, but the
+        header said "Those keys are listed at the end of this file"
+        unconditionally — and MOST packs' optional tier is `_critical`-only
+        (measured: mariadb / postgresql / redis / mongodb / elasticsearch /
+        kafka / rabbitmq / jvm / nginx / kubernetes all derive to []). So a
+        tenant onboarded onto any of them got a header pointing at a section
+        that is not in its file.
+
+        ⛔ Asserted as an EQUIVALENCE against the artifact, not as "the phrase
+        is present": a conditional sentence ("if there are declared keys, see
+        the end of the file") would satisfy a presence check while still
+        handing the tenant a judgement the generator can make itself.
+        """
+        from _registry_lib import TENANT_STUB_DECLARED_HEADING
+        heading = TENANT_STUB_DECLARED_HEADING[_LANG]
+        shapes = [
+            ['mariadb'],                          # optional tier all _critical
+            ['redis'],                            # ditto — a second one
+            ['oracle'],                           # flat declared keys
+            ['mariadb', 'oracle', 'clickhouse'],  # mixed
+        ]
+        for packs in shapes:
+            declared = self._declared(packs)
+            text = ip._gen_tenant_yaml('db-a', packs)
+            header = text.split('\ntenants:')[0]
+
+            assert (heading in text) == bool(declared), packs
+            assert ('listed at the end of this file' in header) \
+                == bool(declared), packs
+            assert ('declare no such key' in header) == (not declared), packs
+            if declared:
+                assert re.search(rf'\bThe {len(declared)} such keys\b',
+                                 header), (packs, header)
+            # …and the block the pointer promises is exactly that list.
+            assert [k for k, _ in _stub_key_lines(text)] == declared, packs
+
+    def test_block_matches_what_the_sibling_defaults_file_declares(self):
+        """⛔ Same generator run writes both files. A stub advertising a key
+        the sibling `_defaults.yaml` does not declare earns the tenant an
+        HTTP 400 from the only supported writer."""
+        packs = ['oracle', 'db2', 'clickhouse']
+        declared_in_defaults = yaml.safe_load(
+            ip._gen_defaults_yaml(packs, 'monitoring'))['optional_overrides']
+        listed = [k for k, _ in _stub_key_lines(
+            ip._gen_tenant_yaml('db-a', packs))]
+        assert listed == declared_in_defaults
+
+    def test_declared_lines_survive_the_copy_paste_the_prose_prescribes(self):
+        """⛔ The stub promises "the indent already lines up" — and until this
+        test nothing checked it.
+
+        The stub's indent is a constant in `_registry_lib`
+        (`render_tenant_declared_stub_lines`'s `indent=4`); the tenant keys'
+        indent is whatever `yaml.dump` happens to produce here. Two independent
+        facts, one of them written down as a promise to the tenant. Measured:
+        bumping that constant by 4 turned no test red at all, while a reader
+        following the prose afterwards gets `YAMLError: while parsing a block
+        mapping` in the commonest case (a tenant that already has keys).
+
+        So do the round trip for real — paste every line under the tenant with
+        the leading `'# '` removed — and assert BOTH that it parses AND that the
+        keys land under this tenant. Parsing alone is not enough: a too-deep
+        paste can still be valid YAML while silently nesting the key inside
+        whatever mapping precedes it.
+        """
+        text = ip._gen_tenant_yaml('db-a', ['oracle', 'db2'])
+        keys = [k for k, _ in _stub_key_lines(text)]
+        assert keys, 'no declared keys to round-trip'
+
+        pasted = _paste_declared_lines_under_tenant(text, 'db-a')
+        doc = yaml.safe_load(pasted)  # raises on the drifted indent
+        section = doc['tenants']['db-a']
+        for key in keys:
+            assert key in section, (
+                f'{key} did not land under the tenant — the stub indent no '
+                f'longer matches what this generator dumps')
+            assert section[key] == STUB_PLACEHOLDER_VALUE[_LANG]
+        # the tenant's pre-existing keys are still its own
+        assert '_routing' in section
 
 
 # ============================================================

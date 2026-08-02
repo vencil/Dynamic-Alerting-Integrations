@@ -4,7 +4,8 @@
 # 📌 基本閾值: 適用所有維度 (全域)
 # 📐 維度閾值: 針對特定 queue/db 設定不同水位
 #
-# 三態: 數值=Custom, 省略=Default, "disable"=停用
+# 三態（限 _defaults.yaml 的 defaults: 有值的 key）: 數值=Custom, 省略=Default, "disable"=停用
+# ⚠️ 列在 optional_overrides: 的宣告 key 沒有值可繼承 ⇒ 省略＝沒有值＝靜默，只有兩態（#1321）
 # 維度 severity 語法: "value:severity" (如 "1000:critical")
 tenants:
   redis-prod:

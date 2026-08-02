@@ -47,6 +47,8 @@ lang: zh
 
 **為什麼**：沒有 Disable 狀態時，使用者無法區分「沒設」和「主動關閉」，導致維護歧義。
 
+⚠️ **適用條件（#1321）**：三態的前提是「平台真的持有一個預設值」。閾值層列在 `_defaults.yaml` 頂層 `optional_overrides:` 的**宣告 key**（平台認得 key 名、刻意不主張值）沒有預設可繼承——**省略＝沒有值＝不發射**，那一格只有「填值 / 不填（靜默）」兩態。⛔ 寫文件或生成器 header 時不得把「省略＝用預設」寫成無條件宣稱；⛔ 也不得為了「補齊三態」把宣告 key 搬進 `defaults:`——那是對每個租戶武裝一個平台選的數字。
+
 **關聯**：詳見 `docs/design/config-driven.md` §2.1 三態邏輯。
 
 ### 4. Doc-as-Code：CHANGELOG / CLAUDE.md / README 同步更新

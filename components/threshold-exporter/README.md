@@ -45,7 +45,7 @@
 
 | 能力 | 一句話 |
 |------|--------|
-| **Config-driven 閾值** | YAML 數字直接變 `user_threshold` metric；三態（自訂值 / 套預設 / 停用）+ 嚴重度後綴 |
+| **Config-driven 閾值** | YAML 數字直接變 `user_threshold` metric；三態（自訂值 / 套預設 / 停用；適用條件見 [§4.3](#43-三態--嚴重度)）+ 嚴重度後綴 |
 | **四層繼承** | 平台 → domain → region → tenant 逐層 deep-merge，租戶只寫差異 |
 | **熱重載** | SHA-256 內容比對 + debounce；ConfigMap 變更後幾十秒內自動套用，不重啟 Pod |
 | **維度標籤** | 同一 metric 依 label（精確或 regex）設不同閾值，無爆增 series |
@@ -156,8 +156,10 @@ conf.d/
 |------|----------------|
 | `"70"` | `user_threshold{…} 70`（severity=warning） |
 | `"40:critical"` | `user_threshold{…,severity="critical"} 40` |
-| 省略不寫 | 套繼承來的 default |
+| 省略不寫 | 套繼承來的 default（⚠️ 僅限 `_defaults.yaml` 的 `defaults:` 有值的 key） |
 | `"disable"` | 不產生 metric |
+
+⚠️ **宣告 key 只有兩態**：列在 `_defaults.yaml` 頂層 `optional_overrides:` 的 key，平台只認得 key 名、不主張值（`resolveDeclaredRows`）——沒有 default 可繼承，**省略＝沒有值＝不產生 metric**，不是「套預設」。
 
 ### 4.4 閾值語法速查
 
