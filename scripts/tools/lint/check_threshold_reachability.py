@@ -11,11 +11,16 @@ base key in `c.Defaults`).
 emits a key listed in `optional_overrides` when — and only when — the TENANT
 supplied a value. This gate deliberately keeps measuring the platform-defaults
 path, because "the platform can produce it" and "a tenant happened to set it"
-are different questions and only the first is a property of what we ship. But
-it does mean the class-A remediation this gate prescribes below ("wrong tier —
-move it to defaults") is no longer the only fix: for a key meant to be
-tenant-calibrated, declaring it and letting the tenant set it is the intended
-end state, and moving it to `defaults:` would arm it for everyone instead.
+are different questions and only the first is a property of what we ship.
+
+That path is WIRED as of #1310: the platform now SHIPS those key names in the
+runtime `optional_overrides:` list (helm values + the dev conf.d template), so
+the per-key decision the old class-A tag left open has been made — the rump
+stays declared-without-value and the TENANT calibrates it. Moving one into
+`defaults:` would arm a platform-chosen number for every tenant and is a
+product decision, not a mechanical repair (#1311). What that buys is "the
+tenant can finally set it", NOT "the alert is live": no tenant value ⇒ no row
+⇒ still silent, by design.
 
 The platform-defaults surface is produced by
 `scaffold_tenant.generate_defaults()`. So an alert that demands a key which
@@ -36,7 +41,8 @@ platform-defaults path can SUPPLY, under the exporter's reachability rules:
     reused verbatim from `_observed_map_lib` so the two guards agree.
 
 KNOWN_UNWIRED: the keys already dead at the time this gate landed (18 then;
-the 9 B/C/D/E identity repairs shipped in #1231, 9 A-class tier moves remain).
+the 9 B/C/D/E identity repairs shipped in #1231, 9 A-class
+declared-without-value keys remain).
 They are grandfathered as INFO (not errors) with a pointer to the tracking
 issue so the gate could merge without first fixing all of them — the real
 fixes (move / rename / delete per root cause) land per root-cause class in
@@ -64,6 +70,27 @@ anything. ⚠️ Both faces use the same reachability rule, which means
 box. `_critical` keys count as reachable via their base, yet
 `resolveCriticalRows` iterates TENANT OVERRIDES: no `_critical` key is ever
 platform-supplied, and none is in the chart set today.
+
+THIRD FACE — DECLARED-LIST CONTAINMENT (#1310). Face 3 above says the platform
+supplies no value for a KNOWN_UNWIRED key. That is a defensible posture ONLY
+while the tenant can supply one instead, and a tenant can only write a key the
+platform has DECLARED: `ValidateTenantKeys` refuses an unknown key and
+tenant-api turns the refusal into a write rejection. So every still-dead
+grandfathered key must appear on the shipped `optional_overrides:` list, else
+"we leave this one to the tenant" is not a posture at all — nobody can set it
+and the alert is structurally unable to fire. That containment is a HARD error,
+and it is the detection this gate did not have before: dropping a key off the
+list used to change nothing anyone measured.
+
+⛔ "the shipped list" is THREE artifacts, and the one the error message is
+about is not the one that is easiest to read (`_declared_faces`). The chart's
+`thresholdConfig.optional_overrides` is rendered into the ConfigMap
+threshold-exporter mounts. tenant-api — the writer whose refusal the message
+actually describes — runs `--config-dir=/conf.d`, which an init container fills
+by cloning the CUSTOMER's GitOps repo; the `_defaults.yaml` in there comes from
+`scaffold_tenant.generate_defaults` or `init_project._gen_defaults_yaml`. A
+containment check that only read values.yaml would assert about the wrong
+process, and would have passed while every tenant write still 400'd.
 
 Exit codes (_lib_exitcodes): 0 clean / 1 violation (--ci) / 2 caller error.
 """
@@ -93,28 +120,43 @@ from _lib_validation import i18n_text  # noqa: E402
 # root-cause tag; the real fixes are tracked in the TRK-337 follow-ups.
 # Started at 18 when the gate landed; the B/C/D/E identity repairs shipped in
 # #1231 (rename/move/add/delete — 9 keys removed via the exit-lock below),
-# leaving the 9 A-class tier moves (a deliberate ship-enabled decision per
-# pack, not a mechanical fix — #1196).
-#   A = name-correct, in optional_overrides → EITHER move to defaults (arms it
-#       for every tenant) OR leave it declared and let the tenant calibrate it.
-#       ⚠️ The second option only became real when resolveDeclaredRows landed
-#       (#1189 / TRK-337); before that "declared" meant dead. Which of the two
-#       applies is a per-key decision (#1310 / #1311), so this tag deliberately
-#       names both rather than prescribing the one that arms everyone.
+# leaving the 9 A-class keys, which are NOT a pending mechanical fix.
+#   A = name-correct, tier `optional_overrides`, and now SHIPPED on the runtime
+#       `optional_overrides:` declared list (#1310) → the tenant sets it and it
+#       fires (`resolveDeclaredRows`); the platform asserts no value on purpose,
+#       so it stays silent until the tenant does. That is the END STATE, not a
+#       waypoint: promoting one to `defaults:` would arm a platform-chosen
+#       number for every tenant, which is a product decision (#1311), and
+#       ADR-030's blind-write reference library has cross-pack counter-examples
+#       for exactly these numbers. Re-deriving any single key's tier or value is
+#       tracked separately (#1196 / TRK-337).
 #   B = name is wrong in scaffold (e.g. _total vs _rate) → rename + move
 #   C = base default exists but under a different name → align identity
 #   D = key absent from scaffold entirely → add
 #   E = no alert actually consumes it elsewhere / orphan → delete
+#
+# ⚠️ One shared constant, not nine copies: the tag is what `main()` PRINTS
+# (see the `known-unwired` info below), and it was the printed string — not the
+# comment above it — that kept prescribing "move to defaults" for a full release
+# after the comment had been corrected. A test pins its CONTENT, not just its
+# `A:` prefix, for that reason.
+_A_DECLARED = (
+    "A: declared-without-value — shipped on the platform's optional_overrides: "
+    "list, so a tenant can set it and it fires (resolveDeclaredRows); the "
+    "platform asserts no value by design, so it stays silent until they do. "
+    "Deliberate end state, not a pending repair (#1310 / #1311)."
+)
+
 KNOWN_UNWIRED: dict[str, str] = {
-    "oracle_wait_time_rate": "A: in optional_overrides, move to defaults (TRK-337)",
-    "oracle_process_count": "A: in optional_overrides, move to defaults (TRK-337)",
-    "oracle_pga_allocated_bytes": "A: in optional_overrides, move to defaults (TRK-337)",
-    "db2_log_usage_percent": "A: in optional_overrides, move to defaults (TRK-337)",
-    "db2_deadlock_rate": "A: in optional_overrides, move to defaults (TRK-337)",
-    "db2_tablespace_used_percent": "A: in optional_overrides, move to defaults (TRK-337)",
-    "clickhouse_max_part_count": "A: in optional_overrides, move to defaults (TRK-337)",
-    "clickhouse_replication_queue": "A: in optional_overrides, move to defaults (TRK-337)",
-    "clickhouse_memory_tracking_bytes": "A: in optional_overrides, move to defaults (TRK-337)",
+    "oracle_wait_time_rate": _A_DECLARED,
+    "oracle_process_count": _A_DECLARED,
+    "oracle_pga_allocated_bytes": _A_DECLARED,
+    "db2_log_usage_percent": _A_DECLARED,
+    "db2_deadlock_rate": _A_DECLARED,
+    "db2_tablespace_used_percent": _A_DECLARED,
+    "clickhouse_max_part_count": _A_DECLARED,
+    "clickhouse_replication_queue": _A_DECLARED,
+    "clickhouse_memory_tracking_bytes": _A_DECLARED,
 }
 
 
@@ -207,6 +249,87 @@ def _chart_supply() -> set[str]:
     return set(((doc.get("thresholdConfig") or {}).get("defaults") or {}).keys())
 
 
+def _shipped_optional() -> set[str]:
+    """Every key name the SHIPPED chart DECLARES without a value (#1310).
+
+    `thresholdConfig.optional_overrides` — the list `ThresholdConfig.
+    OptionalOverrides` is loaded from, which `ValidateTenantKeys` consults as a
+    second membership set. A key on it is TENANT-SETTABLE; a key off it is not
+    writable by anyone.
+
+    Same artifact-not-declaration discipline as `_chart_supply()` above: the
+    registry's `tier: optional_overrides` is what we MEAN to ship, this list is
+    what an operator's exporter actually recognises. `check_threshold_registry
+    .py` keeps the two in step; reading values.yaml here means this face keeps
+    measuring the deployment even if that equivalence ever breaks.
+    """
+    import yaml  # local import: only the chart faces need it
+
+    doc = yaml.safe_load(_CHART_VALUES.read_text(encoding="utf-8")) or {}
+    return set((doc.get("thresholdConfig") or {}).get("optional_overrides") or [])
+
+
+def _onboarding_declared() -> set[str]:
+    """Every key name the ONBOARDING `_defaults.yaml` declares without a value.
+
+    ⛔ A SECOND face, not a duplicate of `_shipped_optional()`, because the two
+    lists reach two different processes. The chart's list is rendered into the
+    ConfigMap that threshold-exporter mounts. tenant-api — the only supported
+    WRITER, the one that turns `ValidateTenantKeys` into an HTTP 400 — runs with
+    `--config-dir=/conf.d`, and that directory is the customer's GitOps repo
+    cloned by an init container (`helm/tenant-api/templates/deployment.yaml`),
+    not the chart's ConfigMap. `config.mergeTenantConfig` reads
+    `<config-dir>/_defaults.yaml` for `OptionalOverrides`, so the list a tenant
+    is actually validated against is the one `scaffold_tenant.generate_defaults`
+    wrote into the customer repo.
+
+    Ship the chart list alone and the message the gate prints below ("a TENANT
+    cannot set it either") stays true while the gate says everything is fine —
+    which is precisely the shape of failure this face exists to catch.
+    """
+    db_packs = [k for k in scaffold_tenant.RULE_PACKS if k != "kubernetes"]
+    generated = scaffold_tenant.generate_defaults(db_packs)
+    return set(generated.get("optional_overrides") or [])
+
+
+def _init_project_declared() -> set[str]:
+    """Same question as `_onboarding_declared()`, for the OTHER producer.
+
+    `da-tools init` (`init_project._gen_defaults_yaml`) writes the customer's
+    `_defaults.yaml` for repos that bootstrap rather than scaffold. Covering
+    only one of the two producers would leave the other free to drop the list
+    silently — and "I fixed the instance the review named" is how this contract
+    ended up with copies in the first place.
+    """
+    import yaml  # local import: only this face needs it
+
+    # Guarded: this face is called per run (and per test), and an unguarded
+    # insert would grow sys.path without bound. The module-level insert above
+    # already put _OPS on the path; this is belt-and-braces for callers that
+    # import the module and mutate sys.path themselves.
+    if str(_OPS) not in sys.path:
+        sys.path.insert(0, str(_OPS))
+    import init_project  # noqa: E402
+
+    packs = sorted(init_project.RULE_PACK_CATALOG)
+    doc = yaml.safe_load(init_project._gen_defaults_yaml(packs, "monitoring")) or {}
+    return set(doc.get("optional_overrides") or [])
+
+
+# Face label → producer callable. Order is report order; the label is printed
+# verbatim in the UNSETTABLE error so the reader knows WHICH surface to repair.
+def _declared_faces() -> dict[str, set[str]]:
+    """{face label: declared key names} for every surface that must carry them."""
+    return {
+        "chart (helm/threshold-exporter/values.yaml → threshold-exporter)":
+            _shipped_optional(),
+        "onboarding/scaffold (scaffold_tenant.generate_defaults → the customer "
+        "conf.d that tenant-api validates against)": _onboarding_declared(),
+        "onboarding/init (init_project._gen_defaults_yaml → same, for "
+        "`da-tools init` repos)": _init_project_declared(),
+    }
+
+
 def _reachable(key: str, supply: set[str], deferred: set[str]) -> bool:
     if key in deferred:
         return True
@@ -222,6 +345,7 @@ def run_check(
     known_unwired: dict[str, str] | None = None,
     chart_supply: set[str] | None = None,
     not_chart_armed: frozenset[str] | None = None,
+    declared_faces: dict[str, set[str]] | None = None,
 ) -> dict[str, list[str]]:
     """Return {errors, infos}. errors fail --ci; infos are report-only.
 
@@ -235,8 +359,19 @@ def run_check(
         supply = _supply()
     if deferred is None:
         deferred = set(observed_map_lib.KNOWN_DEFERRED)
+    injected_known_unwired = known_unwired is not None
     if known_unwired is None:
         known_unwired = KNOWN_UNWIRED
+    if declared_faces is None:
+        # Same hermeticity rule the chart face states below, applied to the
+        # ledger this face is scoped by: a caller that injected a synthetic
+        # KNOWN_UNWIRED is exercising some other branch, and defaulting to the
+        # real artifacts would flag every one of its made-up keys. No
+        # declared-list info given ⇒ containment is vacuous for that call
+        # (zero faces to check, rather than one face that trivially contains
+        # everything — same outcome, and it cannot accidentally pass a real
+        # containment assertion).
+        declared_faces = {} if injected_known_unwired else _declared_faces()
     if chart_supply is None:
         # The chart face is a NARROWING of the supply face. A caller that
         # injected a synthetic supply but said nothing about the chart is
@@ -264,6 +399,40 @@ def run_check(
     # Grandfathered keys are report-only WHILE still dead...
     for k in sorted(dead & set(known_unwired)):
         infos.append(f"known-unwired {k} — {known_unwired[k]}")
+
+    # ...and only while a TENANT can still supply what the platform will not.
+    # Declared-list containment (#1310): "the platform asserts no value here"
+    # is a posture only if the key is on the shipped `optional_overrides:`
+    # list. Off the list `ValidateTenantKeys` rejects it as unknown (and
+    # tenant-api turns that into a write rejection), so nobody can set it and
+    # the alert is structurally unable to fire — with no other signal saying
+    # so. Scoped to the still-dead entries: a grandfathered key that is no
+    # longer dead is already reported by the exit-lock below, and saying
+    # "...and it is off the list too" would just double-report it.
+    #
+    # ⛔ EVERY face, not just the chart one. The message says "a TENANT cannot
+    # set it either", and the process that enforces that on a tenant is
+    # tenant-api reading the CUSTOMER's `_defaults.yaml` — a different artifact
+    # from the chart's ConfigMap, written by a different producer. A one-face
+    # check would keep printing that sentence while the face it names is fine
+    # and the face it means is empty. Which face is missing is named, because
+    # the repair differs per producer.
+    for k in sorted(dead & set(known_unwired)):
+        missing = [face for face, declared in declared_faces.items()
+                   if k not in declared]
+        if not missing:
+            continue
+        errors.append(
+            f"UNSETTABLE: threshold key {k!r} is demanded by an alert and is "
+            "grandfathered in KNOWN_UNWIRED (the platform deliberately asserts "
+            "no value for it), but it is NOT on the shipped optional_overrides: "
+            "declared list of: " + "; ".join(missing) + " — so a TENANT cannot "
+            "set it either (ValidateTenantKeys refuses an undeclared key) and "
+            "that alert is structurally unable to fire. Ship the key on every "
+            "declared face (edit scaffold_tenant.RULE_PACKS, then "
+            "check_threshold_registry.py --regen), or land a real fix and drop "
+            "it from KNOWN_UNWIRED. (#1310 / TRK-337)"
+        )
 
     # ...but the allowlist is exit-locked: a grandfathered key that got FIXED
     # (now reachable) or was REMOVED from the packs must be dropped from the
@@ -329,8 +498,8 @@ def main(argv: list[str] | None = None) -> int:
             "producible by the platform-defaults path (TRK-337)"))
     parser.add_argument(
         "--ci", action="store_true",
-        help=i18n_text("新增不可達 key 或 KNOWN_UNWIRED exit-lock 破口即 exit 1（列管中的 A 類為 INFO）",
-                       "exit 1 on NEW unreachable keys or a KNOWN_UNWIRED exit-lock breach (the tracked A-class keys are INFO)"))
+        help=i18n_text("新增不可達 key、ledger exit-lock 破口、或列管 key 掉出出貨宣告清單即 exit 1（列管中的 A 類為 INFO）",
+                       "exit 1 on NEW unreachable keys, a ledger exit-lock breach, or a tracked key dropping off the shipped declared list (the tracked A-class keys are INFO)"))
     args = parser.parse_args(argv)
 
     try:

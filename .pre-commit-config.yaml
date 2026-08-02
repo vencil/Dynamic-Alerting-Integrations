@@ -1187,10 +1187,12 @@ repos:
         # PR-3. Two live contract copies = the #1189 disease, so every copy
         # relationship is gated: JSON-Schema shape (pre-generation hard gate)
         # + semantic equivalence in either direction (no grandfather — born
-        # equal) + freshness of the three GENERATED surfaces (pack header
-        # threshold sections / helm values thresholdConfig.defaults / dev
-        # conf.d _defaults.yaml) + header-prose key membership (F6). Fix: edit
-        # RULE_PACKS, then `check_threshold_registry.py --regen` + commit.
+        # equal) + freshness of every GENERATED surface (pack header threshold
+        # sections / helm values thresholdConfig.defaults / dev conf.d
+        # _defaults.yaml / the optional_overrides declared-key LIST on both of
+        # those runtime surfaces, #1310) + header-prose key membership (F6).
+        # Fix: edit RULE_PACKS, then `check_threshold_registry.py --regen`
+        # + commit.
         # (check_threshold_reachability.py is in the filter because its
         # KNOWN_UNWIRED list feeds the membership universe.)
         files: ^(rule-packs/(threshold-registry|rule-pack-.*)\.yaml|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib)\.py|scripts/tools/lint/check_threshold_(registry|reachability)\.py|helm/threshold-exporter/values\.yaml|components/threshold-exporter/config/conf\.d/_defaults\.yaml)$

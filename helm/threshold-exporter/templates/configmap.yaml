@@ -11,6 +11,14 @@ data:
   _defaults.yaml: |
     defaults:
       {{- .Values.thresholdConfig.defaults | toYaml | nindent 6 }}
+    {{- if .Values.thresholdConfig.optional_overrides }}
+    {{- /* #1310: TOP-LEVEL key, sibling of defaults/state_filters — NOT a child
+           of defaults. It is a LIST of key names the platform recognises but
+           asserts no value for (ThresholdConfig.OptionalOverrides []string);
+           nesting it under defaults would decode as a threshold value. */}}
+    optional_overrides:
+      {{- .Values.thresholdConfig.optional_overrides | toYaml | nindent 6 }}
+    {{- end }}
     {{- if .Values.thresholdConfig.state_filters }}
     state_filters:
       {{- .Values.thresholdConfig.state_filters | toYaml | nindent 6 }}

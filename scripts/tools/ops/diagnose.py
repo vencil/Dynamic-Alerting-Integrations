@@ -63,8 +63,8 @@ _HELP = {
         'en': 'Path to tenant config directory (conf.d/) for profile lookup'
     },
     'show_inheritance': {
-        'zh': '顯示詳細的四層繼承鏈解析 (需要 --config-dir)',
-        'en': 'Show detailed four-layer inheritance chain resolution (requires --config-dir)'
+        'zh': '顯示詳細的三層繼承鏈解析 (需要 --config-dir)',
+        'en': 'Show detailed three-layer inheritance chain resolution (requires --config-dir)'
     }
 }
 
@@ -131,17 +131,44 @@ def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
 
 
 def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]:
-    """Resolve the four-layer inheritance chain for a tenant.
+    """Resolve the inheritance chain for a tenant.
 
     Returns a dict with:
       - chain: list of layers with source and keys
       - resolved: final merged key→value after all layers
       - profile_name: profile name or None
+      - declared: key NAMES the platform recognises but assigns no value to
+        (`_defaults.yaml` `optional_overrides:`, #1310)
 
-    Four-layer inheritance (v1.12.0):
+    THREE chain layers — the same three this function has always emitted:
       1. Global Defaults (_defaults.yaml)
       2. Profile Overlay (_profiles.yaml → profile keys fill-in)
       3. Tenant Override (tenant-specific keys)
+
+    ⛔ Do NOT "correct" this back to four. The v1.12.0 model named four
+    (`ApplyProfiles` in components/threshold-exporter/app/pkg/config/
+    resolve.go), but its layer 2 is the Rule Pack Baseline, which is
+    "embedded in defaults" — the onboarding generator merges it into
+    `_defaults.yaml` before this function ever opens the file, so it is not
+    separately observable here and was never emitted as a chain entry. The
+    docstring said "four" over a list of three for exactly that reason;
+    counting what we actually return is the honest repair.
+
+    ⚠️ Separately, this reader is FLAT: it opens `<config-dir>/_defaults.yaml`
+    and non-recursively iterates `<config-dir>/*.yaml`, so the exporter's
+    directory hierarchy (platform → domain → region → tenant, see
+    components/threshold-exporter/README.md §4.2) collapses into layer 1 here.
+    A tenant configured through nested `_defaults.yaml` files gets a chain that
+    is correct about the merge RESULT of the top level only.
+
+    ⛔ `declared` is deliberately NOT merged into `resolved`, and is not a chain
+    layer. The chain answers "what value does this tenant end up with"; a
+    declared key has no value until the tenant writes one, so folding it in
+    would invent a number the platform explicitly refuses to assert. It is
+    reported alongside because this function is what `--show-inheritance`
+    prints, and that command is the documented answer to "which metric keys can
+    I set?" — an answer that read `defaults:` alone was simply wrong about the
+    keys that need it most.
     """
     if not config_dir:
         return None
@@ -152,10 +179,14 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
     # Layer 1: Global defaults
     defaults_path = base / "_defaults.yaml"
     defaults_raw = {}
+    declared = []
     try:
         with open(defaults_path, encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
-        defaults_raw = raw.get("defaults", {}) if isinstance(raw, dict) else {}
+        if isinstance(raw, dict):
+            defaults_raw = raw.get("defaults", {}) or {}
+            listed = raw.get("optional_overrides") or []
+            declared = [k for k in listed if isinstance(k, str)]
     except (OSError, yaml.YAMLError):
         pass
 
@@ -242,6 +273,8 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
         "chain": chain,
         "resolved": resolved,
         "profile_name": profile_name,
+        # settable, but with no platform value — see the docstring
+        "declared": declared,
     }
 
 
@@ -260,6 +293,9 @@ def _format_chain_summary(inheritance):
     return {
         "layers": layers,
         "resolved_count": len(inheritance.get("resolved", {})),
+        # settable-but-unvalued keys are counted separately, never folded into
+        # resolved_count — they carry no value to resolve (#1310)
+        "declared_count": len(inheritance.get("declared", []) or []),
         "profile": inheritance.get("profile_name"),
     }
 

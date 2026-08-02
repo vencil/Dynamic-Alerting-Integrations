@@ -241,15 +241,83 @@ def test_regen_writes_registry_and_surfaces(monkeypatch, tmp_path):
     assert calls.get("write") and calls.get("surfaces")
 
 
-def test_regen_surfaces_rejects_path_escaping_repo_root(tmp_path):
+def test_regen_surfaces_rejects_path_escaping_repo_root(tmp_path, monkeypatch):
     """A registry-derived surface path carrying `..` must fail loud, not
-    splice a file outside the repo (CodeRabbit review of #1222)."""
+    splice a file outside the repo (CodeRabbit review of #1222).
+
+    ⛔ HERMETIC, and that is load-bearing rather than tidy. This test used to
+    call `regen_surfaces` on the REAL registry with only one pack's
+    `rule_pack_file` poisoned. `regen_surfaces` writes each surface as it goes
+    and only raises when it reaches the bad one, so the earlier surfaces —
+    helm values and the dev `conf.d/_defaults.yaml` — were rewritten to a
+    freshly regenerated state BEFORE the expected ValueError. In a whole-suite
+    run `tests/lint` goes first, so it silently repaired the working tree and
+    any drift a later `tests/ops` test was supposed to catch was already gone
+    (measured: the same mutation gave 4 failures scoped, 2 whole-suite).
+
+    Everything the test was written to prove is unchanged: a `..` in a
+    registry-derived surface path raises before writing. It now proves it
+    against a tmp repo root, so nothing outside tmp_path is touched.
+
+    ⛔ The escape TARGET is derived, not guessed. `surface_specs` joins
+    `rule_pack_file` onto `_REPO_ROOT`, so `../../outside.yaml` climbs two
+    levels out of the patched root — an earlier revision asserted about
+    `tmp_path/outside.yaml`, a location the code can never reach, so the check
+    was vacuous. The fake root is nested one level deeper here (`sandbox/repo`)
+    precisely so the real escape target lands back inside `tmp_path` and the
+    test keeps its hermeticity.
+
+    ⛔ And the target is PRE-SEEDED with a stale-but-spliceable copy of the
+    poisoned pack. Without that, "the file was not written" would hold for the
+    wrong reason: an unguarded `regen_surfaces` would die on FileNotFoundError
+    before writing anything. With it, dropping the containment check really
+    does rewrite the file, so the assertion below has something to catch.
+    """
     import pytest
-    from _registry_lib import regen_surfaces, load_registry
-    doc = load_registry()
-    doc["packs"][next(iter(doc["packs"]))]["rule_pack_file"] = "../../outside.yaml"
+    from _registry_lib import regen_surfaces, surface_specs
+
+    fake_root = tmp_path / "sandbox" / "repo"
+    fake_root.mkdir(parents=True)
+    helm = fake_root / "values.yaml"
+    dev = fake_root / "_defaults.yaml"
+    # Copies of the real host documents, so the two file-level surfaces splice
+    # exactly as they do in production (markers, parent keys, indent) — the
+    # earlier surfaces must be genuinely spliceable, or reaching the poisoned
+    # pack spec would prove nothing about ordering.
+    helm.write_text(Path(lib.HELM_VALUES_PATH).read_text(encoding="utf-8"),
+                    encoding="utf-8")
+    dev.write_text(Path(lib.DEV_DEFAULTS_PATH).read_text(encoding="utf-8"),
+                   encoding="utf-8")
+
+    doc = lib.build_registry_doc()
+    # Redirect BOTH file-level surfaces and the repo-root containment anchor
+    # into tmp_path, so the loop reaches the poisoned pack spec having touched
+    # nothing real.
+    monkeypatch.setattr(lib, "_REPO_ROOT", str(fake_root))
+    monkeypatch.setattr(lib, "HELM_VALUES_PATH", str(helm))
+    monkeypatch.setattr(lib, "DEV_DEFAULTS_PATH", str(dev))
+    assert len(surface_specs(doc)) > 4, "expected pack surfaces after the files"
+
+    victim = next(iter(doc["packs"]))
+    # A STALE copy of the real pack: the markers are intact so `splice_surface`
+    # succeeds, and the extra line inside the block makes the render differ, so
+    # an unguarded run reaches `write_text_secure` instead of no-op'ing.
+    marker = lib.begin_marker(f"pack-{victim}", "")
+    original = (REPO_ROOT / doc["packs"][victim]["rule_pack_file"]).read_text(
+        encoding="utf-8")
+    assert marker in original, f"pack {victim} lost its generated-block marker"
+    escape = (fake_root / ".." / ".." / "outside.yaml").resolve()
+    escape.write_text(
+        original.replace(marker, marker + "\n#   zzz_stale_probe: 1", 1),
+        encoding="utf-8")
+    seeded = escape.read_text(encoding="utf-8")
+
+    doc["packs"][victim]["rule_pack_file"] = "../../outside.yaml"
     with pytest.raises(ValueError, match="escapes repo root"):
         regen_surfaces(doc)
+    assert escape.read_text(encoding="utf-8") == seeded, (
+        f"regen_surfaces spliced {escape}, which is outside the (patched) repo "
+        "root — the containment check let a `..`-carrying registry path through")
 
 
 # ── deprecated_aliases (#1231) — SSOT section + the Python-mirror pin ──────

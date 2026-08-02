@@ -13,14 +13,17 @@
 #   kafka_active_controllers: 1   # count — Minimum active controllers (should be 1)
 #   kafka_request_rate: 10000   # msg/s — Message rate warning (5m)
 #
-# optional_overrides（documented-but-dormant——登錄有案、平台預設不出貨）：
-# ⛔ 啟用前提（別跳過）：threshold-exporter 只對「存在於 defaults 的 key」
-# 發射 user_threshold——resolveBaseRows 迭代的是 c.Defaults，resolveCriticalRows
-# 也要求 base key 在 defaults 才處理 _critical 覆寫（components/
-# threshold-exporter/app/pkg/config/resolve.go）。下列 key 必須先進
-# _defaults.yaml / Helm values 的 defaults，租戶 conf.d 才有東西可覆寫——
-# 只在租戶檔填一個不在 defaults 的 key 永遠不會生效：那不是 dormant，
-# 是永久無法啟用。
+# optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
+# ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，
+# 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，
+# 它讀的是 defaults[base]，base 沒有值就整列丟棄（components/threshold-exporter/
+# app/pkg/config/resolve.go）。而下列每個 key 的 base 都**未**標 [chart-default]
+# ⇒ 出貨的 Helm values / dev conf.d 範本沒有供給它：
+# 租戶在這個拓撲下填一個並不會發射任何 user_threshold。
+# 要能用，部署面必須先供給 base（scaffold_tenant 針對選到
+# 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），
+# critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是
+# 一格裝飾（#1311）。
 #   kafka_consumer_lag_critical: 10000   # messages — Consumer lag critical
 #   kafka_under_replicated_partitions_critical: 1   # count — Under-replicated critical
 #   kafka_request_rate_critical: 50000   # msg/s — Message rate critical

@@ -41,6 +41,29 @@ defaults:
   mysql_replication_lag: 30
   # <<< GENERATED:threshold-registry:dev-defaults
 
+# optional_overrides 為生成段（#1310）——「平台認得這個 key，但不主張它的值」。
+# 與 defaults 的差別是整個對比的重點：進 defaults ＝ 對每個租戶都武裝一個平台選的
+# 數字；列在這裡 ＝ 租戶可以在自己的檔案裡設它並生效（resolveDeclaredRows 只在租戶
+# 給了值時發射），平台自己不發射，租戶不設就是靜默。
+# ⛔ 只含 optional_overrides tier 的平鍵，不含 `<base>_critical`——後者走
+# resolveCriticalRows，base 沒進 defaults 就整列丟棄，列進來只是裝飾（#1311）。
+# 改內容走 scaffold_tenant.RULE_PACKS ＋ check_threshold_registry.py --regen。
+optional_overrides:
+  # >>> GENERATED:threshold-registry:dev-optional — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+  # ── oracle：Oracle Database (oracledb_exporter) ──
+  - oracle_wait_time_rate   # s/s — Wait time rate (5m)
+  - oracle_process_count   # count — Active processes warning
+  - oracle_pga_allocated_bytes   # bytes (4GB) — PGA allocation warning
+  # ── db2：IBM DB2 (ibm_db2_exporter) ──
+  - db2_log_usage_percent   # % — Transaction log usage warning
+  - db2_deadlock_rate   # count/s — Deadlock rate (5m)
+  - db2_tablespace_used_percent   # % — Tablespace usage warning
+  # ── clickhouse：ClickHouse (built-in /metrics) ──
+  - clickhouse_max_part_count   # count — Max part count per partition
+  - clickhouse_replication_queue   # count — Replication queue size
+  - clickhouse_memory_tracking_bytes   # bytes (8GB) — Memory tracking warning
+  # <<< GENERATED:threshold-registry:dev-optional
+
 state_filters:
   container_crashloop:
     reasons: ["CrashLoopBackOff"]

@@ -99,6 +99,33 @@ thresholdConfig:
     mysql_replication_lag: 30
     # <<< GENERATED:threshold-registry:helm-defaults
 
+  # optional_overrides 為生成段（#1310）——這一格的語意是「平台認得這個 key，
+  # 但不主張它的值」。列在此的 key 通過租戶端 key 驗證（租戶可在自己的 conf.d
+  # 設它並生效，exporter 的 resolveDeclaredRows 只在租戶給了值時發射），而平台
+  # 自己不發射任何值：租戶不設＝靜默，沒有平台回退，那正是這一格存在的理由。
+  #
+  # ⛔ 這不是「defaults 的候補名單」。把 key 從這裡搬進上面的 defaults ＝ 對每一個
+  # 租戶都武裝一個平台選的數字，那是 D4 家族產品拍板，不是機械編輯。
+  # ⛔ 內容只含 optional_overrides tier 的「平鍵」，不含任何 `<base>_critical`：
+  # 那些的解析走 resolveCriticalRows，它讀 defaults[base]，base 沒值就丟棄整列，
+  # 列進來只會是裝飾（#1311）。
+  # 改內容走 scaffold_tenant.RULE_PACKS ＋ check_threshold_registry.py --regen。
+  optional_overrides:
+    # >>> GENERATED:threshold-registry:helm-optional — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+    # ── oracle：Oracle Database (oracledb_exporter) ──
+    - oracle_wait_time_rate   # s/s — Wait time rate (5m)
+    - oracle_process_count   # count — Active processes warning
+    - oracle_pga_allocated_bytes   # bytes (4GB) — PGA allocation warning
+    # ── db2：IBM DB2 (ibm_db2_exporter) ──
+    - db2_log_usage_percent   # % — Transaction log usage warning
+    - db2_deadlock_rate   # count/s — Deadlock rate (5m)
+    - db2_tablespace_used_percent   # % — Tablespace usage warning
+    # ── clickhouse：ClickHouse (built-in /metrics) ──
+    - clickhouse_max_part_count   # count — Max part count per partition
+    - clickhouse_replication_queue   # count — Replication queue size
+    - clickhouse_memory_tracking_bytes   # bytes (8GB) — Memory tracking warning
+    # <<< GENERATED:threshold-registry:helm-optional
+
   # Scenario C: State-based monitoring filters
   # Each filter maps to kube_pod_container_status_waiting_reason values.
   # Enabled by default for all tenants; per-tenant disable via _state_<name>: "disable"

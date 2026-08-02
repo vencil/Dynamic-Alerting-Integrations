@@ -30,3 +30,40 @@ defaults:
   mysql_threads_running: 30      # running-thread SATURATION warning (threads_running, NOT host CPU%); 80→30 = PMM/Nichter "high" tier (#944); renamed from mysql_cpu (#1231)
   mysql_replication_lag: 30  # async replication lag warning (seconds behind primary, sql_delay-adjusted); quiet here — the seed pushes no mysql_slave_status_* series (#1200 WS5-P0-a)
   redis_connected_clients: 8000  # cache-demo (sentinel/dedup concept demo). DEMO-ONLY value — the platform default is 200 (threshold-registry.yaml); no redis pack is loaded here anyway
+
+# DECLARED-WITHOUT-VALUE keys (#1310). Key NAMES only — the platform recognises
+# them and asserts no number; a tenant sets one in its own file and
+# resolveDeclaredRows emits it, otherwise nothing happens. NOT a candidate list
+# for `defaults:` above: moving one up there arms a platform-chosen number for
+# every tenant, the opposite of what this section means.
+#
+# Why it is here at all: try-local is the ONE topology where threshold-exporter
+# and tenant-api share a single conf.d, so it is the cheapest place to prove the
+# declared key end-to-end (Portal Save → tenant-api write validation → exporter
+# emission) without a cluster. The packs loaded by this demo are mariadb/redis,
+# so none of these fire here — they are present so the write path can be
+# exercised, and so this file matches the shape the shipping artifacts have.
+#
+# SOURCE: rule-packs/threshold-registry.yaml, the `tier: optional_overrides`
+# keys that are NOT `<base>_critical`. The shipped copies are generated:
+# helm/threshold-exporter/values.yaml `thresholdConfig.optional_overrides` and
+# components/threshold-exporter/config/conf.d/_defaults.yaml `optional_overrides`
+# (both spliced by `check_threshold_registry.py --regen`). If those diverge from
+# the list below, THEY are right and this copy needs a hand edit.
+#
+# ⛔ This list is hand-maintained but NOT ungated (it was, until #1310): it is
+# compared byte-for-byte against BOTH generated copies by
+# tests/ops/test_generate_alertmanager_routes.py
+# ::TestShippedDeclaredListIsSettable
+# ::test_the_shipped_artifacts_carry_the_same_non_empty_list.
+# The `defaults:` values above still have no such gate — that caveat stands.
+optional_overrides:
+  - oracle_wait_time_rate
+  - oracle_process_count
+  - oracle_pga_allocated_bytes
+  - db2_log_usage_percent
+  - db2_deadlock_rate
+  - db2_tablespace_used_percent
+  - clickhouse_max_part_count
+  - clickhouse_replication_queue
+  - clickhouse_memory_tracking_bytes

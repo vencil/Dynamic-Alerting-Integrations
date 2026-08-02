@@ -18,14 +18,14 @@
 #       APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's
 #       lag-template family default is 600s warning). Enabled by default (#1200 WS5-P0-a Q3=C)
 #
-# optional_overrides（documented-but-dormant——登錄有案、平台預設不出貨）：
-# ⛔ 啟用前提（別跳過）：threshold-exporter 只對「存在於 defaults 的 key」
-# 發射 user_threshold——resolveBaseRows 迭代的是 c.Defaults，resolveCriticalRows
-# 也要求 base key 在 defaults 才處理 _critical 覆寫（components/
-# threshold-exporter/app/pkg/config/resolve.go）。下列 key 必須先進
-# _defaults.yaml / Helm values 的 defaults，租戶 conf.d 才有東西可覆寫——
-# 只在租戶檔填一個不在 defaults 的 key 永遠不會生效：那不是 dormant，
-# 是永久無法啟用。
+# optional_overrides（不在出貨清單裡，但 base 已出貨——租戶今天就設得動）：
+# 下列 `<base>_critical` 不在平台出貨的 `optional_overrides:` 清單裡，也不需要列進去。
+# 它們的解析走 resolveCriticalRows，入場條件是 `defaults[base]` 有值（components/
+# threshold-exporter/app/pkg/config/resolve.go），而下列每個 key 的 base 都標了
+# [chart-default]＝出貨的 Helm values / dev conf.d 範本就供給它。⇒ 租戶在自己的
+# conf.d 填一個，ValidateTenantKeys 放行、resolveCriticalRows 產出一條真的
+# critical row。清單刻意不收 _critical 也是同一個理由：它們用不到宣告集（#1311）。
+# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
 #   mysql_connections_critical: 120   # count — Critical tier (Scenario D)
 #   mysql_threads_running_critical: 50
 #       threads — Critical tier (running-threads saturation); 120→50 = PMM critical-load / Nichter
