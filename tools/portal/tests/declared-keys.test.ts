@@ -71,6 +71,9 @@ describe('rule-packs.js accessors', () => {
   });
   afterEach(() => {
     delete (window as any).__PLATFORM_DATA;
+    // Also cleared here, not in the test body: a failing assertion would skip a
+    // body-local delete and leak the stub into the rest of this describe.
+    delete (window as any).__t;
   });
 
   it('reads declaredKeys from window.__PLATFORM_DATA', async () => {
@@ -104,7 +107,6 @@ describe('rule-packs.js accessors', () => {
     const m = out.issues.filter((i: any) => i.field === DECLARED_KEY).map((i: any) => i.msg).join(' ');
     expect(m).not.toMatch(/not found in selected Rule Pack defaults/);
     expect(m).toMatch(/no platform default/i);
-    delete (window as any).__t;
   });
 
   it('filters by selected pack', async () => {
@@ -226,6 +228,27 @@ describe('generateSampleYaml — the starter template must not hide the tier', (
       expect(line!.trimStart().startsWith('#')).toBe(true);
       expect(line).not.toMatch(new RegExp(`^\\s*${row.key}\\s*:`));
     }
+  });
+
+  it('emits a pack section for a pack that has ONLY declared keys', async () => {
+    // The skip guard used to be "no defaults ⇒ skip the pack", which predates
+    // this tier: such a pack would be dropped whole, silently losing the very
+    // thing this change surfaces. No shipped pack is in that state today, so
+    // this is a synthetic one — the guard was stale, not broken, and staying
+    // stale is how it would become broken.
+    vi.resetModules();
+    (window as any).__t = (_zh: string, en: string) => en;
+    (window as any).__PLATFORM_DATA = {
+      declaredKeys: { lonely: [{ key: 'lonely_declared_key', value: 1, unit: 'count', desc: 'd' }] },
+      rulePacks: { lonely: { label: 'Lonely', category: 'database', metrics: [] } },
+      packOrder: ['lonely'],
+    };
+    const { generateSampleYaml } = await import(ENGINE_MOD);
+    const yaml = generateSampleYaml(['lonely'], false);
+    expect(yaml).toContain('# --- Lonely ---');
+    const line = yaml.split('\n').find((l: string) => l.includes('lonely_declared_key'));
+    expect(line, 'declared key dropped with the pack').toBeTruthy();
+    expect(line!.trimStart().startsWith('#')).toBe(true);
   });
 
   it('still emits the real defaults as live values', async () => {

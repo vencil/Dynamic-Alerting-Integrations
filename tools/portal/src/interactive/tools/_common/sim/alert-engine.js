@@ -63,9 +63,17 @@ function generateSampleYaml(selectedPacks, withProfile) {
   const lines = [`# ${t('從 Rule Pack 自動產生的 Tenant YAML', 'Auto-generated tenant YAML from Rule Packs')}`];
   for (const packId of selectedPacks) {
     const pack = RULE_PACK_DATA[packId];
-    if (!pack || !pack.defaults || Object.keys(pack.defaults).length === 0) continue;
+    if (!pack) continue;
+    const packDefaults = pack.defaults || {};
+    // Declared keys are a SECOND reason to emit a pack section. The old guard
+    // skipped on empty `defaults` alone, which predates this tier — a pack with
+    // a declared tier and no platform defaults would have been dropped whole,
+    // silently losing exactly the thing this change exists to surface. No
+    // shipped pack is in that state today; the guard was stale, not broken.
+    const declared = getDeclaredKeys([packId]);
+    if (Object.keys(packDefaults).length === 0 && declared.length === 0) continue;
     lines.push(`\n# --- ${pack.label} ---`);
-    for (const [key, meta] of Object.entries(pack.defaults)) {
+    for (const [key, meta] of Object.entries(packDefaults)) {
       lines.push(`${key}: "${meta.value}"  # ${meta.desc}`);
     }
     // Declared keys belong in the starter template too — #1321 is about
@@ -74,7 +82,6 @@ function generateSampleYaml(selectedPacks, withProfile) {
     // the platform asserts no number for these, and ADR-030's blind-write
     // library measured several of the reference figures false-alarming on
     // benign load (#1176). Same rule the `<tenant>.yaml` generators follow.
-    const declared = getDeclaredKeys([packId]);
     if (declared.length > 0) {
       lines.push(`#   ${t('以下為平台宣告、但不主張值的 key：取消註解並填入依自身 baseline 校準的數值；不填＝靜默',
                           'Declared by the platform, no platform value: uncomment and fill in a number calibrated from your own baseline. Left out = silent')}`);
