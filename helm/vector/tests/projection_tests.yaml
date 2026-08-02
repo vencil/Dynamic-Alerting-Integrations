@@ -482,6 +482,42 @@ tests:
     no_outputs_from:
       - federation_evidence
 
+  # ══ #1316 — the gateway's preflight INIT container is a second producer ════
+  # The store-mount preflight reports, once at pod start, that the revoked
+  # volume resolved to an empty directory — the one case the Lua cannot report,
+  # because its read runs inside envoy_on_request and an idle misconfigured
+  # gateway serves no request. For that line to reach the alert it has to (a)
+  # take the gateway branch and (b) arrive with `app` set to the INIT
+  # container's name, which is what the reconciler's missing query admits
+  # alongside "envoy".
+  #
+  # ⛔ Every other container_name in this file is a MAIN container. Nothing here
+  # proved that an init container of the same pod is treated identically — and
+  # the routing key is a POD-level label, so it is treated identically for a
+  # structural reason worth pinning rather than re-deriving.
+  - name: "#1316: the store-mount preflight init container lands in gateway_operational with its own app"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: "federation: revoked-set missing: /etc/revoked resolved to an EMPTY directory at startup"
+          'kubernetes.pod_labels."app.kubernetes.io/name"': federation-gateway
+          kubernetes.container_name: federation-store-preflight
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.log_type, "gateway_operational", "a non-JSON init-container line must classify as operational, not audit")
+              assert_eq!(.app, "federation-store-preflight", "app must carry the INIT container name — the reconciler's missing query filters on exactly this value")
+              assert_eq!(.k8s_namespace, "monitoring")
+    no_outputs_from:
+      - federation_evidence
+
   # ══ #1293 — pod_owner is "<Kind>/<Name>", not a bare workload name ═════════
   # The origin spoof guard compares a workload-NAME prefix. Vector builds
   # pod_owner as format!("{}/{}", kind, name), so the raw value never starts

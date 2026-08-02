@@ -56,6 +56,46 @@ image:
 store:
   configMapName: tenant-federation-store
   revokedKey: revoked.txt
+  # The store ConfigMap's chart-owned mount sentinel (#1316). Written by the
+  # tenant-api chart (`federation.store.sentinelKey`); this chart only READS it,
+  # in the preflight init-container. It is added to the volume's `items:` list
+  # alongside revokedKey — without that the projection would carry revoked.txt
+  # ONLY and the preflight could never see the sentinel, quietly degrading into
+  # the "does revoked.txt exist?" test that cannot tell a misconfiguration from
+  # a store nobody has revoked from yet.
+  # ⛔ Must equal tenant-api's value verbatim; pinned by
+  # tests/helm/test_federation_store_sentinel_guard.py.
+  sentinelKey: .chart-managed
+
+# ── Store-mount preflight (#1316) ────────────────────────────────────
+# Same check, same script and same modes as helm/federation-gateway — see that
+# chart's values.yaml for the full rationale and the boot-time-only boundary.
+#
+# ⚠️ ONE DIFFERENCE, stated because it changes what you get: the gateway's
+# preflight line rides an existing critical alert (Vector routes the gateway
+# pod's containers into `gateway_operational`, which the reconciler queries).
+# THIS pod is not in that route (helm/vector's origin_split matches the gateway
+# label), so its line lands nowhere central — it is a local diagnostic you read
+# with `kubectl logs -c federation-store-preflight`. That is not a gap being
+# hidden: a reconciler whose own mount is empty while revocation events exist in
+# the log already pages as FederationRevocationTamperSuspected. The preflight
+# line only turns "tamper suspected" into "your mount is in the wrong namespace"
+# without a human having to work it out.
+preflight:
+  # off | warn | enforce — see the gateway chart. Default warn: never blocks.
+  mode: warn
+  image:
+    # renovate: datasource=docker depName=busybox
+    repository: busybox
+    tag: "1.36"
+    digest: "sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 1m
+      memory: 8Mi
+    limits:
+      memory: 16Mi
 
 # VictoriaLogs endpoint the reconciler queries (matches helm/victorialogs).
 victorialogs:

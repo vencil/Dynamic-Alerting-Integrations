@@ -129,6 +129,14 @@ victorialogs:
 revokedSet:
   configMapName: tenant-federation-store
   key: revoked.txt
+  # The store ConfigMap's chart-owned mount sentinel (#1316). Written by the
+  # tenant-api chart (`federation.store.sentinelKey`) at install time; this
+  # chart only READS it, in the preflight init-container below.
+  # ⛔ Must equal tenant-api's value verbatim. Three charts hold three copies of
+  # this string and there is no shared helper across charts — a rename in one of
+  # them silently disarms the preflight, which is why
+  # tests/helm/test_federation_store_sentinel_guard.py pins them equal.
+  sentinelKey: .chart-managed
   # How often each Envoy worker re-reads the (tmpfs) revoked file. The
   # read is a microsecond memory read gated to once per worker per
   # interval — not a hot-path disk stall.
@@ -162,6 +170,86 @@ revokedSet:
   # keep its previously-loaded set (see revoked_check.lua) — widening
   # this pattern therefore widens what the enforcement plane accepts.
   tokenIdPattern: "^ftk_[0-9a-f]+$"
+
+# ── Store-mount preflight (#1316) ────────────────────────────────────
+# A one-shot init-container that answers, BEFORE Envoy starts, the question the
+# revoked volume cannot answer by itself: did my ConfigMap mount actually
+# resolve? The volume is `optional: true` (see the Deployment for why that
+# stays), and Kubernetes gives a pod whose optional ConfigMap is missing an
+# empty directory, Ready status and NO event — measured on a real cluster
+# (#1313). The Lua filter then enforces an empty revoked set and every revoked
+# token is honoured until its TTL.
+#
+# ⛔ WHAT THIS IS NOT — four boundaries, all of them measured or derived from
+# the shipped numbers, none of them hypothetical:
+#
+# 1. BOOT-TIME, NOT CONTINUOUS. One line per pod start.
+#    `FederationGatewayRevokedSetMissing` latches on `max_over_time(...[1h])`,
+#    so one line pages within `for: 5m`; but if nobody acts the alert RESOLVES
+#    after the latch window while the misconfiguration is still there. The
+#    continuous detector remains the Lua's own per-request warning, which needs
+#    the gateway to receive traffic — and an idle misconfigured gateway produces
+#    exactly nothing, which is the gap this closes.
+# 2. THE LINE HAS A DELIVERY WINDOW. The reconciler queries
+#    `[now-failopenLookback, now-settle]` (600s/60s by default) every 300s, so a
+#    single line is only visible to a reconcile that runs ~60-600s after it. The
+#    reconciler is a single replica: if it is not up and querying in that window
+#    — a cold co-deployment of the whole stack is exactly when it might not be —
+#    that line is lost for good, because nothing re-emits it until the pod
+#    restarts.
+# 3. SUCCESS IS SILENCE, so "healthy" and "the check was removed" are
+#    observationally identical: `mode: off`, an init-container edited out of a
+#    live Deployment, or a broken log hop all look like a clean mount. There is
+#    no positive heartbeat. helm/vector's `projection-gate` has the same shape
+#    and answers it with a ValidatingAdmissionPolicy
+#    (k8s/03-monitoring/validatingadmissionpolicy-projection-gate.yaml); nothing
+#    equivalent guards this one yet.
+# 4. IT ADDS AN IMAGE-PULL DEPENDENCY to a pod that had none. If busybox is
+#    unreachable (private registry not mirrored, rate limit, bad digest) the pod
+#    wedges in `Init:ImagePullBackOff` in EVERY mode, warn included — a rolling
+#    update keeps the old pods, but a fresh install or a scale-up does not come
+#    up. Air-gapped installs must mirror `preflight.image` or set
+#    `preflight.mode: "off"`.
+preflight:
+  # off     — do not render the init-container at all.
+  # warn    — check, log, and START ANYWAY (default). The log line carries the
+  #           SAME phrase the Lua uses for a missing revoked set, so it feeds the
+  #           existing critical alert; no new alert, no new metric.
+  # enforce — additionally exit non-zero, wedging the pod in
+  #           Init:CrashLoopBackOff. Chooses "no federation service" over
+  #           "federation service with revocation disabled".
+  # ⚠️ enforce is NOT the default on purpose, and the reason is sharper than
+  # "upgrades are racy". A store that has NEVER been written to is byte-identical
+  # at the mount to a store that is not there: the ConfigMap a pre-2.9.20
+  # tenant-api chart creates carries no `data` at all, and the runtime keys only
+  # appear on the first token write. So a topologically CORRECT fresh install
+  # whose producer chart simply lags reads as MISSING — under `warn` that is a
+  # false critical page (the message says so and names the kubectl that settles
+  # it); under `enforce` it is a refusal to start. And this repo ships no gateway
+  # replica-down alert, so an outage caused here is LESS visible than the
+  # fail-open it prevents. Turn it on once tenant-api >= 2.9.20 is deployed
+  # everywhere AND the stores have been written to at least once.
+  # ⛔ Quote it in a values FILE — YAML 1.1 reads a bare `off` as a boolean and
+  # the chart refuses to render (`--set preflight.mode=off` is unaffected).
+  mode: warn
+  image:
+    # A shell and `ls` are the whole requirement. The gateway's own image is
+    # distroless (no shell), so the check cannot reuse it; busybox is the
+    # smallest thing that can run it (~2.2 MB).
+    # renovate: datasource=docker depName=busybox
+    repository: busybox
+    tag: "1.36"
+    # Pinned by digest, same supply-chain convention as the Envoy and
+    # alpine/git images. Bump via `docker buildx imagetools inspect
+    # busybox:<tag> --format '{{"{{"}}.Manifest.Digest{{"}}"}}'`.
+    digest: "sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 1m
+      memory: 8Mi
+    limits:
+      memory: 16Mi
 
 # ── Rate limits ──────────────────────────────────────────────────────
 # All limits are per-Envoy-instance: with N replicas behind the Service

@@ -345,6 +345,127 @@ def test_helm_mixed_image_chart_is_an_error(tmp_path, monkeypatch):
     assert "ambiguous" in errors[0]
 
 
+# ── #1316: per-container attribution unblocks the sound mixed-image case ────
+# The chart-level refusal above stays for genuinely ambiguous charts. What it
+# used to also block is the case where the foreign image is right there in the
+# template with an `image:` naming its own values path — a sidecar or an init
+# container. That is not ambiguous, and refusing it forced any chart running a
+# da-tools workload to be single-image forever.
+_SIDECAR_VALUES = _VALUES_YAML + (
+    'preflight:\n'
+    '  image:\n'
+    '    repository: busybox\n'
+    '    tag: "1.36"\n'
+)
+_SIDECAR_TMPL = _DEPLOYMENT_TMPL + """\
+      initContainers:
+        - name: preflight
+          image: "{{ .Values.preflight.image.repository }}:{{ .Values.preflight.image.tag }}"
+          command: ["/bin/sh", "-c", "test -e /etc/x"]
+"""
+
+
+def test_a_container_reading_a_foreign_pin_is_attributed_not_refused(tmp_path, monkeypatch):
+    """A container whose `image:` reads a NON-da-tools pin is not a da-tools
+    container, so neither the mixed-image refusal nor the entry-point demand
+    applies to it. Both would fire without attribution: the chart holds two
+    repositories, and `/bin/sh -c` resolves to no da-tools entry point."""
+    _write_chart(tmp_path, values=_SIDECAR_VALUES, template=_SIDECAR_TMPL)
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    workloads = gate.collect_helm_workloads(errors)
+    assert errors == [], errors
+    assert [w.entry for w in workloads] == ["maintenance_scheduler.py"], (
+        "the da-tools container must still be checked — attribution may only "
+        "SUBTRACT the foreign container, never the workload being guarded"
+    )
+
+
+def test_an_unclaimed_foreign_pin_is_still_refused(tmp_path, monkeypatch):
+    """⛔ The fail-closed half. A foreign pin that NO container's `image:`
+    reads means something in this chart runs an image the gate cannot see —
+    the original ambiguity, and it stays fatal. (The pre-existing
+    test_helm_mixed_image_chart_is_an_error is the same statement from before
+    attribution existed; this one pins that adding a claimed pin alongside does
+    not launder the unclaimed one.)"""
+    _write_chart(
+        tmp_path,
+        values=_SIDECAR_VALUES + 'stray:\n  repository: ghcr.io/vencil/tenant-api\n  tag: "v2.9.0"\n',
+        template=_SIDECAR_TMPL)
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    assert gate.collect_helm_workloads(errors) == []
+    assert len(errors) == 1
+    assert "ambiguous" in errors[0]
+    assert "ghcr.io/vencil/tenant-api" in errors[0]
+    assert "busybox" not in errors[0], "the CLAIMED pin must not be reported as ambiguous"
+
+
+def test_an_expression_reading_the_da_tools_pin_too_is_never_attributed_away(tmp_path, monkeypatch):
+    """⛔ THE FAIL-OPEN THIS ASSERTION EXISTS FOR — it survived the first cut of
+    `attributed_pin`, which matched only against the FOREIGN pins.
+
+    An `image:` that reads the da-tools repository with another pin's tag then
+    looked like a clean foreign hit, so the one container the gate exists to
+    check was skipped and the chart passed. Matching against every pin makes it
+    ambiguous instead, and an ambiguous container is checked as before.
+
+    ⛔ The foreign pin is named `agent` on purpose. Pin trails are compared as a
+    SET, and an implementation that picks one arbitrarily instead of demanding
+    exactly one match would sort `image` (da-tools) before `preflight.image` and
+    pass this test by pure alphabetical luck. `agent.image` sorts BEFORE `image`,
+    so an arbitrary pick lands on the foreign pin and the container is skipped —
+    which is the fail-open, and now visible.
+    """
+    values = _VALUES_YAML + 'agent:\n  image:\n    repository: busybox\n    tag: "1.36"\n'
+    template = _DEPLOYMENT_TMPL + """\
+      initContainers:
+        - name: preflight
+          image: "{{ .Values.image.repository }}:{{ .Values.agent.image.tag }}"
+          command: ["/bin/sh", "-c", "true"]
+"""
+    _write_chart(tmp_path, values=values, template=template)
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    workloads = gate.collect_helm_workloads(errors)
+    assert errors, "a container reading the da-tools pin was attributed away and the chart passed"
+    assert workloads == [], "an ambiguous chart must yield no verified workloads"
+
+
+def test_an_image_expression_touching_two_foreign_pins_stays_unattributed(tmp_path, monkeypatch):
+    """Ambiguity inside ONE expression is refused rather than guessed at."""
+    values = _SIDECAR_VALUES + 'other:\n  image:\n    repository: alpine\n    tag: "3"\n'
+    template = _DEPLOYMENT_TMPL + """\
+      initContainers:
+        - name: preflight
+          image: "{{ .Values.preflight.image.repository }}:{{ .Values.other.image.tag }}"
+          command: ["/bin/sh", "-c", "true"]
+"""
+    _write_chart(tmp_path, values=values, template=template)
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    gate.collect_helm_workloads(errors)
+    assert errors, "an expression spanning two pins was silently attributed"
+
+
+def test_indexed_stripping_parses_to_the_same_structure() -> None:
+    """The attribution pass must not see a different document than the original
+    one. Asserted over every shipped chart template, because a divergence would
+    show up as containers that exist for one pass and not the other."""
+    import yaml as _yaml
+
+    for chart in sorted((gate.REPO_ROOT / "helm").iterdir()):
+        for template in sorted((chart / "templates").rglob("*.yaml")) if (chart / "templates").is_dir() else []:
+            text = template.read_text(encoding="utf-8")
+            plain = list(_yaml.safe_load_all(gate.strip_helm_actions(text)))
+            indexed_text, _ = gate.strip_helm_actions_indexed(text)
+            indexed = list(_yaml.safe_load_all(indexed_text))
+            assert len(plain) == len(indexed), template
+            for a, b in zip(plain, indexed):
+                assert [c.get("name") for c in gate.iter_containers(a)] == \
+                       [c.get("name") for c in gate.iter_containers(b)], template
+
+
 def test_yml_extension_is_scanned(tmp_path, monkeypatch):
     """The pre-commit `files:` regex accepts `.yml`; the scanner must too."""
     manifest = tmp_path / "k8s" / "job.yml"

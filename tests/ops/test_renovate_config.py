@@ -29,7 +29,7 @@ RENOVATE_JSON = REPO / "renovate.json"
 # Directories never worth walking when resolving managerFilePatterns.
 _SKIP_DIRS = {".git", "node_modules", ".claude", "site", "__pycache__", ".mypy_cache", ".pytest_cache"}
 
-# The 14 third-party images #902 L2 pinned. depName == the registry/repo path carried
+# The 15 third-party images #902 L2 pinned. depName == the registry/repo path carried
 # in the chart values, the k8s manifests, and the scan matrix. Pin a NEW third-party
 # image -> add it here AND ensure a customManager matches it (this set is the SSOT the
 # coverage test enforces against the config).
@@ -50,6 +50,10 @@ EXPECTED_DEPNAMES = {
     # replaced ghcr.io/jimmidyson/configmap-reload (release-dormant; #1243).
     "quay.io/prometheus-operator/prometheus-config-reloader",
     "alpine/git",
+    # #1316 store-mount preflight init-container, in BOTH federation consumer
+    # charts. Deployed from two values.yaml files with one digest, so Renovate
+    # has to bump both — the shared-depname invariant below is what proves it.
+    "busybox",
 }
 
 

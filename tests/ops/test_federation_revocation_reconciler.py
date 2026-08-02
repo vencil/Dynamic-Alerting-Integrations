@@ -318,6 +318,35 @@ class TestParsing:
                 "one is counted into a gauge that means something else"
             )
 
+    def test_no_chart_emitted_warning_is_unclaimed_or_double_claimed(self):
+        """⛔ The Lua stopped being the only producer in #1316. Both consumer
+        charts run a store-mount preflight init-container that echoes a
+        `federation: revoked-set` warning of its own, deliberately reusing the
+        MISSING phrase so the shipped alert covers it without a new metric.
+
+        The guard above scans ONLY the Lua, so it is structurally blind to a
+        chart-side reword — and that is the more likely edit, because a shell
+        string in a Helm template does not look like an API to whoever changes
+        it. Same rule, other producer: exactly one owner per literal.
+        """
+        for chart in ("helm/federation-gateway", "helm/federation-reconciler"):
+            path = os.path.abspath(os.path.join(
+                os.path.dirname(__file__), "..", "..", chart, "templates", "deployment.yaml"))
+            literals = set(re.findall(
+                r'"(federation: revoked-set[^"]*)"', open(path, encoding="utf-8").read()))
+            assert literals, (
+                f"{chart} emits no revoked-set warning — the preflight's line is "
+                "what makes an idle misconfigured consumer visible at all (#1316)"
+            )
+            phrases = _gateway_phrases()
+            for lit in sorted(literals):
+                owners = [n for n, p in phrases.items() if lit.startswith(p)]
+                assert len(owners) == 1, (
+                    f"{chart} emits {lit!r}, claimed by {owners or 'NO phrase'} — "
+                    "an unclaimed warning is invisible to every gauge; a doubly-"
+                    "claimed one is counted into a gauge that means something else"
+                )
+
     def test_missing_query_is_stream_field_qualified(self):
         """#1236. The one gateway state where the enforcement plane is EMPTY.
         Qualified identically to its two siblings — see build_failopen_query for

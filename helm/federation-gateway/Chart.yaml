@@ -20,7 +20,16 @@ type: application
 #         appears. `helm upgrade --reuse-values` is safe — the key has a default
 #         and Helm deep-merges the revokedSet map — but the runtime behaviour
 #         change is what earns the minor bump.
-version: 0.4.0
+# 0.5.0 — #1316: store-mount preflight init-container. New `preflight` value block
+#         (mode off|warn|enforce, default warn) and `revokedSet.sentinelKey`; a
+#         busybox init-container reports at boot when the revoked volume resolved
+#         to an empty directory, using the SAME log phrase the Lua uses so the
+#         existing FederationGatewayRevokedSetMissing alert covers it. MINOR: new
+#         value keys and a new container in the pod spec. `helm upgrade
+#         --reuse-values` is safe (both keys have defaults and Helm deep-merges
+#         the maps). Default `warn` never blocks startup; `optional: true` on the
+#         revoked volume is unchanged.
+version: 0.5.0
 # appVersion: pinned Envoy release
 appVersion: "v1.38.0"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle

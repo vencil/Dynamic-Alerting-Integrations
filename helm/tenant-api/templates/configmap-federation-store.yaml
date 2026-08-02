@@ -23,7 +23,7 @@ exactly where the data is at risk.
 {{- $stranded := "" }}
 {{- if $old }}{{- $stranded = index ($old.data | default dict) "store.json" | default "" }}{{- end }}
 {{- if and $stranded (not .Values.federation.store.acknowledgeDataMove) }}
-{{- fail (printf "\n\nfederation.store.namespace moves the token store to %q, but %s/%s still holds a store.json (%d bytes).\n\nHelm would create an EMPTY ConfigMap there; the old one is kept but read by nobody, and tenant-api starts cleanly against the empty store — every existing revocation stops being enforced and already-revoked tokens are accepted again until their TTL (ADR-028 un-revoke, caused by this upgrade).\n\nMove the data first, then re-run:\n  1. kubectl -n %s get configmap %s -o json > store-backup.json\n  2. Recreate it in %q with Helm's ownership metadata so this upgrade ADOPTS it:\n       annotations: meta.helm.sh/release-name=%s, meta.helm.sh/release-namespace=%s\n       label:       app.kubernetes.io/managed-by=Helm\n  3. Re-run this upgrade (Helm adopts the object and never templates `data`, so the copy survives)\n  4. Verify the enforcement plane sees it — exec a gateway pod and read /etc/revoked/revoked.txt\n  5. Only then delete the ConfigMap in %s\n\nIf the old store is genuinely disposable (e.g. a namespace set wrongly once on a fresh install), bypass with:\n  --set federation.store.acknowledgeDataMove=true\n"
+{{- fail (printf "\n\nfederation.store.namespace moves the token store to %q, but %s/%s still holds a store.json (%d bytes).\n\nHelm would create an EMPTY ConfigMap there; the old one is kept but read by nobody, and tenant-api starts cleanly against the empty store — every existing revocation stops being enforced and already-revoked tokens are accepted again until their TTL (ADR-028 un-revoke, caused by this upgrade).\n\nMove the data first, then re-run:\n  1. kubectl -n %s get configmap %s -o json > store-backup.json\n  2. Recreate it in %q with Helm's ownership metadata so this upgrade ADOPTS it:\n       annotations: meta.helm.sh/release-name=%s, meta.helm.sh/release-namespace=%s\n       label:       app.kubernetes.io/managed-by=Helm\n  3. Re-run this upgrade (Helm adopts the object and templates only its own sentinel key — never store.json / revoked.txt — so the copy survives)\n  4. Verify the enforcement plane sees it — exec a gateway pod and read /etc/revoked/revoked.txt\n  5. Only then delete the ConfigMap in %s\n\nIf the old store is genuinely disposable (e.g. a namespace set wrongly once on a fresh install), bypass with:\n  --set federation.store.acknowledgeDataMove=true\n"
   $targetNS .Release.Namespace .Values.federation.store.configMapName (len $stranded)
   .Release.Namespace .Values.federation.store.configMapName $targetNS
   .Release.Name .Release.Namespace .Release.Namespace) }}
@@ -36,10 +36,33 @@ exactly where the data is at risk.
 # object — empty — so tenant-api's RBAC needs get+update on one resourceName
 # and never a namespace-wide `create`.
 #
-# The `data` block is deliberately omitted: rendering store.json here would
-# make every `helm upgrade` reset it and wipe live tokens. Helm's three-way
-# merge leaves keys it never templated alone. `resource-policy: keep` further
-# protects the store from `helm uninstall`.
+# ⛔ THE RUNTIME KEYS (store.json / revoked.txt) ARE STILL NOT TEMPLATED HERE,
+# and templating them would wipe live tokens on every `helm upgrade`. Helm's
+# three-way merge only patches the keys the manifest actually carries and leaves
+# every other key of a live object alone — measured, not assumed: install without
+# the sentinel → write store.json/revoked.txt out-of-band → upgrade to a chart
+# that DOES carry the sentinel → both runtime keys survive verbatim, and a
+# `helm rollback` to the sentinel-less revision removes only the sentinel (#1316).
+# `resource-policy: keep` further protects the store from `helm uninstall`.
+#
+# EXACTLY ONE key is chart-owned: the mount sentinel below. It exists because a
+# ConfigMap volume can only resolve an object in the mounting pod's OWN namespace,
+# and both consumers mount this one with `optional: true` — so a namespace
+# misconfiguration gives them an EMPTY directory, a Ready pod and no Kubernetes
+# event (#1313, reproduced on a real cluster). The runtime keys cannot answer
+# "did my mount resolve?", because their absence is ALSO what a legitimately
+# fresh store looks like (tenant-api creates them on the first write,
+# configmap_store.go). A key this chart writes at install time can.
+# ⛔ Do NOT read this as "the data block is chart-managed now". Adding any
+# second key re-opens the wipe-on-upgrade hazard above; the guard below refuses
+# the render if the sentinel is aimed at a runtime key.
+{{- $sentinelKey := .Values.federation.store.sentinelKey | default "" }}
+{{- if not $sentinelKey }}
+{{- fail "federation.store.sentinelKey is empty — the consumers' mount preflight has nothing to look for and every gateway/reconciler would report its store as missing. Set it (default: .chart-managed) or, to opt out entirely, turn off the consumers' preflight instead." }}
+{{- end }}
+{{- if has $sentinelKey (list "store.json" "revoked.txt") }}
+{{- fail (printf "federation.store.sentinelKey=%q is a RUNTIME key. Templating it here would make every `helm upgrade` overwrite the live token store — the ADR-028 un-revoke, caused by the upgrade itself (this is the whole reason `data` carries nothing else). Pick a name the tenant-api never writes, e.g. .chart-managed." $sentinelKey) }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -53,4 +76,28 @@ metadata:
     app.kubernetes.io/component: federation-token-store
   annotations:
     helm.sh/resource-policy: keep
+data:
+  # Mount sentinel (#1316) — chart-owned, present from the FIRST `helm install`
+  # and independent of whether tenant-api has ever written a token. A consumer
+  # that can read this file has proved its volume resolved THIS object; one that
+  # cannot is looking at an empty directory.
+  # ⛔ The preflight tests only for the key's EXISTENCE and never reads the body.
+  # The body is for a human holding a `kubectl get cm -o yaml`: when you find a
+  # store you did not expect — an orphan left behind by a namespace move, say,
+  # which `helm.sh/resource-policy: keep` does not delete — this is what tells
+  # you which release wrote it. Do not build a check on parsing it without also
+  # making the consumers actually read it.
+  # ⛔ Read by helm/federation-gateway and helm/federation-reconciler. Renaming
+  # the key without renaming it in both consumers disarms their preflight —
+  # tests/helm/test_federation_store_sentinel_guard.py pins the three copies equal.
+  {{/* ⛔ `| quote` is load-bearing, not style. An UNQUOTED map key goes through
+       YAML 1.1 resolution: measured, `off`/`no` render as the boolean key
+       `false`, `yes` as `true`, `123` as an integer, and `null` produces a
+       document that does not even parse. Both consumers quote their side, so
+       they would look for the literal string and never find it — every gateway
+       and reconciler in the fleet would report its store missing forever. */}}
+  {{ $sentinelKey | quote }}: |
+    release={{ .Release.Name }}
+    releaseNamespace={{ .Release.Namespace }}
+    storeNamespace={{ include "tenant-api.federationStoreNamespace" . }}
 {{- end }}
