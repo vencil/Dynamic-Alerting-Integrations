@@ -105,7 +105,17 @@ class TestVictoriaLogs:
 
         Cross-namespace peers are a separate mechanism and are pinned by
         test_networkpolicy_admits_vector_namespace — a consumer running OUTSIDE
-        VictoriaLogs' own namespace is not admitted by any row asserted here."""
+        VictoriaLogs' own namespace is not admitted by any row asserted here.
+
+        ⛔ "locks" in this test's name means the policy admits EXACTLY this
+        set and no more — it is a statement about the rendered manifest, NOT
+        about unbypassability (corrected in #1295). Every row here matches a
+        SELF-DECLARED pod label in VictoriaLogs' own namespace, so a principal
+        able to create a pod there can wear one and be admitted; this suite
+        passing does not mean :9428 is protected from same-namespace pod
+        creation. The cross-namespace rows are the ones that rest on a
+        control-plane-assigned label. Do not cite a green run here as evidence
+        of a boundary."""
         docs = _render(repo_root / "helm/victorialogs")
         np = [d for d in docs if d.get("kind") == "NetworkPolicy"][0]
         peers = np["spec"]["ingress"][0].get("from", [])

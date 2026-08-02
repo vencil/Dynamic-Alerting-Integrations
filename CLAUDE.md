@@ -96,7 +96,7 @@ Vibe 專案內建 **七個本地 skills**（`.claude/skills/`），在對應情�
 **Makefile** 必記 Top 11：
 
 - `make pr-preflight` — ⛔ PR merge 前必跑（七項檢查 + 寫 `.git/.preflight-ok.<SHA>` marker）；commit 剛證 hooks 綠 → `make pr-preflight-quick`（`--skip-hooks`，marker 等價）
-- `make pre-tag` — ⛔ 打 tag 前必跑（version-check + lint-docs + `docker-build-all` hard gate + `trivy-scan-all` informational；#474 Layer 2，需 docker+trivy）
+- `make pre-tag` — ⛔ 打 tag 前必跑（version-check + lint-docs + **`draft-advisory-check`**（#1269，未發布 draft advisory 就擋 tag；雙向 fail-closed，`ADVISORY_ACK=1` 明示略過）+ `docker-build-all` hard gate + `trivy-scan-all` informational；#474 Layer 2，需 docker+trivy+**gh**）
 - `make win-commit MSG=_msg.txt FILES="a b"` — FUSE 卡死時 hook-gated Windows commit（siblings：`make fuse-commit` / `make fuse-locks` / `make recover-index`）
 - `make dc-up` / `make dc-test` / `make dc-run CMD="..."` — Dev Container 統一入口
 - `make session-cleanup` — session 結束清理

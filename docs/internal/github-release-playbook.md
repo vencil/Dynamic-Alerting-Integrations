@@ -114,14 +114,16 @@ git push origin main
 make version-check              # 版號一致性 — 必須 ✅
 make lint-docs                  # 文件 lint — 必須 0 failed
 pre-commit run --all-files      # auto hooks — 必須全過
-make pre-tag                    # 一鍵整合（含以上 + docker-build-all + trivy-scan-all）
+make pre-tag                    # 一鍵整合（含以上 + draft-advisory-check + docker-build-all + trivy-scan-all）
 ```
 
 任何一項失敗 → 修正 → 重新驗證 → 才能進入 Step 3。
 
-**#474 Layer 2 — artifact build 也要 pre-tag 驗**：`make pre-tag` 現含 `docker-build-all`（建 5 個 production image，**hard gate**）+ `trivy-scan-all`（CVE scan，**informational**，#448）。理由：`release.yaml` 在 tag push 才 build image，build break（#472/#473-class — moved-file COPY / 缺 pkg COPY）會在最糟的時機才爆。**需 docker (buildx) + trivy 在 PATH** — 在 maintainer 機器 / dev container 跑，非 bare host。PR 階段的對應防線是 `.github/workflows/component-docker-build.yaml`（#474 Layer 1）。
+**#474 Layer 2 — artifact build 也要 pre-tag 驗**：`make pre-tag` 現含 `docker-build-all`（建 5 個 production image，**hard gate**）+ `trivy-scan-all`（CVE scan，**informational**，#448）。理由：`release.yaml` 在 tag push 才 build image，build break（#472/#473-class — moved-file COPY / 缺 pkg COPY）會在最糟的時機才爆。**需 docker (buildx) + trivy + `gh` 在 PATH** — 在 maintainer 機器 / dev container 跑，非 bare host。PR 階段的對應防線是 `.github/workflows/component-docker-build.yaml`（#474 Layer 1）。
 
-> **Release wrap-up agent discipline（#474 Layer 3）**：tag push 前，wrap-up agent **必須**跑 `make pre-tag`（含 docker-build-all + trivy-scan-all），或手動等價指令。Makefile 是 authoritative-but-incomplete contract — agent 負責 audit「Makefile 涵蓋什麼 vs `release.yaml` 實際做什麼」。這是 #468 author-time checklist 的 release 類比：機械 gate 漏的，discipline gate 補。系統化版本見 TRK-306 `vibe-release` skill（規劃中）。
+**#1269 / #1295 — 未發布的 draft advisory 也是 hard gate**：`make pre-tag` 另含 `draft-advisory-check`（`gh` 是它的依賴，所以上面那行多了一項）。draft advisory 不出現在任何維護者會例行掃的清單，GitHub 也無到期提醒，所以「等發版再一起發」這個決定沒有東西會叫醒你——唯一必然發生的事件是發版本身。有 draft 就中止並印出 GHSA id；`gh` 缺席或查詢失敗**也**中止（「查不到」不得被讀成「沒有」）。決定「這次不發」用 `ADVISORY_ACK=1 make pre-tag` 明示。⚠️ **它只涵蓋這條本地路徑**：`release.yaml` 由 tag push 觸發且沒有任何機制強制 pre-tag 先跑，所以直接 push tag 仍會繞過——這一點與 Layer 3 的 discipline 要求是同一個理由。
+
+> **Release wrap-up agent discipline（#474 Layer 3）**：tag push 前，wrap-up agent **必須**跑 `make pre-tag`（含 draft-advisory-check + docker-build-all + trivy-scan-all），或手動等價指令。⛔ **這條 discipline 沒有因為 #1295 把 advisory 檢查機械化而變得可省**——那道 gate 掛在 `make pre-tag` 上，而沒有任何東西強制 tag push 前一定要跑過它；**跳過 pre-tag 直接 push tag，等於同時跳過那道 gate**。Makefile 是 authoritative-but-incomplete contract — agent 負責 audit「Makefile 涵蓋什麼 vs `release.yaml` 實際做什麼」。這是 #468 author-time checklist 的 release 類比：機械 gate 漏的，discipline gate 補。系統化版本見 TRK-306 `vibe-release` skill（規劃中）。
 
 #### Trigger-asymmetry workflow audit（#474 generalization）
 
@@ -216,7 +218,7 @@ GitHub Release page 是客戶下載 binary 必經的入口；release body 兼任
 - ✅ <feature/component> — `<test surface>`
 - ✅ Trivy <version> CVE audit — <X HIGH + Y CRITICAL → 0/0 clean OR 殘留說明>
 - ✅ `make pr-preflight` 全綠（七項檢查）
-- ✅ `make pre-tag` 全綠（version-check + lint-docs）
+- ✅ `make pre-tag` 全綠（version-check + lint-docs + draft-advisory-check + docker-build-all；若用 `ADVISORY_ACK=1` 放行請一併記錄理由）
 
 ## Known limits
 <已知但未在本 release 解的問題。每條一行，連到 issue / docs/api 的 §「Known gaps」>

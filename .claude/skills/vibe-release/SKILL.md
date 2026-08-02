@@ -27,7 +27,7 @@ release-wrap-up 情境（**非**一般 dev）：「release 收尾 / 進入 phase
 
 ### 1. `make pre-tag`（硬性閘門）
 
-含 version-check + lint-docs + playbook-freshness + benchmark-report-warn + **`docker-build-all`（hard gate）+ `trivy-scan-all`（informational）**（#474 Layer 2 已把 5 component image build + CVE scan 收進 pre-tag）。
+含 version-check + lint-docs + playbook-freshness + **`draft-advisory-check`（hard gate，#1295 fold-in）** + benchmark-report-warn + **`docker-build-all`（hard gate）+ `trivy-scan-all`（informational）**（#474 Layer 2 已把 5 component image build + CVE scan 收進 pre-tag）。⇒ 需要 PATH 上有 docker + trivy + **gh**。
 
 > **仍是 authoritative-but-incomplete**：pre-tag 是**最低標**，`release.yaml` 才是真 contract。release-only 的步驟（cosign 簽章、helm chart OCI push、digest verification #445 L3）不在 pre-tag——agent 須 audit「pre-tag 涵蓋了什麼 vs release.yaml 實際做什麼」，缺的手動補驗。#474 已把 docker build + Trivy 那段機械化（過去是純 discipline）。
 
@@ -45,7 +45,13 @@ issue triage 每天動、docs 月級更新——靜態 issue list 幾天就說�
 
 ### 4. 未發布的 draft security advisory 檢查（Rule 4）
 
-⛔ **推 tag 前跑一次** `gh api repos/{owner}/{repo}/security-advisories --jq '.[] | select(.state=="draft") | .ghsa_id + " | " + .summary'`。
+✅ **這一條自 #1295 起已機械化**：`make pre-tag` 會跑 `draft-advisory-check`，有 draft 就中止並印出清單。`gh` 缺席或查詢失敗**也**中止（「查不到」不得被讀成「沒有」）。所以人工跑 `make pre-tag` 也蓋得到，不再只靠這個 skill 被叫起來。
+
+⚠️ **但它涵蓋的只有這條本地路徑**：`release.yaml` 由 tag push 觸發，而**沒有任何機制**強制 `make pre-tag` 先跑過——`git push origin <tag>` 仍然完全繞過這道檢查。所以本 skill 的 Rule 4 沒有因為機械化而退場，它守的正是「有人沒跑 pre-tag 就推 tag」這一格。
+
+手動要單獨查時：`gh api repos/{owner}/{repo}/security-advisories --jq '.[] | select(.state=="draft") | .ghsa_id + " | " + .summary'`。
+
+⛔ **被擋住時不要直接 `ADVISORY_ACK=1` 繞過**——那個變數的用途是記錄「我看過了，這次刻意不發」這個**決定**，不是消除提示。
 
 有 draft 就對照它的觸發條件決定是否**隨這次 release 一併發布**——通常還要回填 `patched_versions`（advisory 常在「fix 已合入、尚未發版」狀態下建立，那個欄位當時只能留空）。
 

@@ -574,14 +574,78 @@ version-check: ## 檢查版號一致性 (CI lint 用)
 	@python3 ./scripts/tools/dx/bump_docs.py --check
 
 .PHONY: pre-tag
-pre-tag: version-check lint-docs playbook-freshness-ll benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
+pre-tag: version-check lint-docs playbook-freshness-ll draft-advisory-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
 	@echo ""
 	@echo "============================================================"
 	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  playbook-freshness ✅"
-	@echo "  Docker build (4 components) ✅  Trivy CVE scan (informational)"
+	@echo "  Draft-advisory check ✅  Docker build (5 components) ✅  Trivy CVE scan (informational)"
 	@echo "  Bench baseline: .build/bench-baseline.txt (informational, issue #60 Phase 1)"
 	@echo "  Safe to create tags."
 	@echo "============================================================"
+
+# --- #1269 / TRK-354: unpublished draft security advisory gate ---
+# WHY THIS IS A MAKE TARGET AND NOT ONLY A CHECKLIST LINE: a draft advisory
+# appears in NO list a maintainer routinely scans — not issues, not PRs — and
+# GitHub has no expiry or staleness reminder for it. So "we'll publish it with
+# the next release" is a decision that nothing will ever wake you up about.
+# The one event guaranteed to happen is the release itself, which is why the
+# check hangs off pre-tag. `vibe-release` Rule 4 already described this, but a
+# skill only fires when an agent invokes it — a human running `make pre-tag`
+# got no check at all. Codified beats documented (#1295 fold-in).
+#
+# FAIL-CLOSED, deliberately, in BOTH directions:
+#   * drafts exist        -> abort, print them, make the maintainer decide
+#   * gh missing / query fails -> abort too. A release that silently skipped
+#     this check is precisely the failure mode above; "couldn't ask" must not
+#     read as "nothing to publish".
+# Escape hatch is explicit and recorded in the shell history, mirroring the
+# `acknowledgeDataMove` precedent: ADVISORY_ACK=1 make pre-tag
+#
+# ⛔ `--paginate` IS LOAD-BEARING, not tidiness. `gh api` returns one page
+# (30) by default, so without it a repo with more advisories than that would
+# have its later drafts silently omitted and this gate would report "none" —
+# a fail-OPEN, in the one direction every other branch here is careful to
+# avoid. (Verified: --paginate composes with --jq, applying the filter per
+# page and concatenating.)
+#
+# ⚠️ HONEST BOUNDARY — this covers the LOCAL path only. `release.yaml`
+# triggers on tag push, and nothing mechanically requires `make pre-tag` to
+# have run first, so `git push origin <tag>` still reaches the release
+# workflow without ever consulting this check. That is a strictly smaller
+# hole than before (the check previously existed only as a skill instruction
+# that fired when an agent invoked it), but it is NOT full enforcement: for
+# that the same query has to run inside release.yaml ahead of any build/push
+# step, which changes release semantics (a tag would then be able to exist
+# with no release behind it) and needs its own decision on what the CI-side
+# equivalent of ADVISORY_ACK should be. Raised by review on #1324; not folded
+# in here because it is a change to the release path, not to this gate.
+.PHONY: draft-advisory-check
+draft-advisory-check: ## ⛔ 擋住「有未發布 draft advisory 就打 tag」（#1269；ADVISORY_ACK=1 可明示略過）
+	@# ⛔ ONE shell for the whole recipe. Each `@` line in a Makefile is its own
+	@# shell, so an `exit 0` on an early line aborts only THAT shell and make
+	@# happily runs the next one — the first version of this gate had the ack
+	@# branch on its own line and ADVISORY_ACK=1 did nothing (caught by running
+	@# it, not by reading it).
+	@if [ "$$ADVISORY_ACK" = "1" ]; then \
+		echo "⚠️  draft-advisory-check: 由 ADVISORY_ACK=1 明示略過"; \
+	elif ! command -v gh >/dev/null 2>&1; then \
+		echo "❌ draft-advisory-check: 找不到 gh CLI，無法查詢 draft advisory。"; \
+		echo "   這一項刻意 fail-closed：查不到 ≠ 沒有。裝 gh 或 ADVISORY_ACK=1 明示略過。"; \
+		exit 1; \
+	elif ! drafts=$$(gh api --paginate repos/{owner}/{repo}/security-advisories \
+			--jq '.[] | select(.state=="draft") | .ghsa_id + " | " + .summary' 2>/dev/null); then \
+		echo "❌ draft-advisory-check: gh api 查詢失敗（權限不足或網路問題）。"; \
+		echo "   需要能讀 security advisories 的 token；或 ADVISORY_ACK=1 明示略過。"; \
+		exit 1; \
+	elif [ -n "$$drafts" ]; then \
+		echo "❌ draft-advisory-check: 有未發布的 draft advisory —"; \
+		echo "$$drafts" | sed 's/^/     /'; \
+		echo "   對照它的觸發條件決定是否隨這次 release 發布（通常還要回填 patched_versions）。"; \
+		echo "   決定「這次不發」也可以，但要是一個決定：ADVISORY_ACK=1 make pre-tag"; \
+		exit 1; \
+	else \
+		echo "✅ draft-advisory-check: 無未發布 draft advisory"; \
+	fi
 
 # --- #474 Layer 2: local pre-tag Docker build + Trivy gate ---
 # release.yaml builds these 4 images at tag push; building them locally in

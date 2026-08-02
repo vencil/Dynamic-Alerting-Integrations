@@ -169,6 +169,18 @@ prometheusScrapeAnnotations:
 # `reconcile_errors_total` → `FederationRevocationReconcileStale` critical),
 # Vector ingest fails SILENT.
 #
+# ⛔ WHAT THIS ALLOWLIST IS AND IS NOT (corrected in #1295). It decides
+# which SELF-DECLARED pod labels are admitted from THIS namespace. A pod
+# label is not an identity: any principal able to create a pod here can
+# wear one of these values, so this list does not hold against them —
+# and :9428 is unauthenticated ingest + query + DELETE. `allowedNamespaces`
+# below is different in kind (namespace labels are control-plane assigned,
+# not self-declared) and IS a boundary. Treat the rows below as "which
+# workloads are supposed to talk to the store", i.e. a routing and
+# blast-radius decision, and read the tenant-isolation argument that
+# follows as conditional on nobody hostile being able to create pods in
+# this namespace. Candidate fixes: #1295.
+#
 # ⚠️ Trust boundary of this allowlist (ADR-021): every entry is EITHER a
 # platform-trusted component (Vector / chargeback / Grafana never carry a
 # tenant identity — they read the platform partition or set their own
