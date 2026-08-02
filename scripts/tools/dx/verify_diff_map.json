@@ -438,7 +438,8 @@
    "tests/ops/test_threshold_govern.py"
   ],
   "scripts/tools/ops/_registry_lib.py": [
-   "tests/lint/test_check_threshold_registry.py"
+   "tests/lint/test_check_threshold_registry.py",
+   "tests/ops/test_scaffold_tenant.py"
   ],
   "scripts/tools/ops/alert_correlate.py": [
    "tests/lint/test_snapshot_v2.py",
@@ -614,6 +615,7 @@
    "tests/ops/test_runtime_audit.py"
   ],
   "scripts/tools/ops/scaffold_tenant.py": [
+   "tests/ops/test_init_project.py",
    "tests/ops/test_integration.py",
    "tests/ops/test_regression.py",
    "tests/ops/test_scaffold_db.py",
@@ -682,7 +684,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "7e79bbd0e5d24607f641f9224aca4debc8b4b223ecd1cb86033668ca6df0a2a1",
+ "source_digest": "7d5998a2155ed81ea35a6ca1249a80e738658e911e86bdf0d309c3fc37f7b927",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -752,6 +754,7 @@
   "tests/helm/test_image_tag_derivation.py",
   "tests/helm/test_machine_identity_guard.py",
   "tests/helm/test_oauth2_gitlab_profile.py",
+  "tests/helm/test_optional_overrides_render.py",
   "tests/helm/test_portal_relay_token_guard.py",
   "tests/helm/test_portal_static_tier_guard.py",
   "tests/helm/test_revoked_set_contract_guard.py",
@@ -1157,6 +1160,9 @@
   "components/threshold-exporter/app/pkg/config/optional_overrides_parity_test.go": [
    "tests/ops/test_generate_alertmanager_routes.py"
   ],
+  "components/threshold-exporter/app/pkg/config/resolve.go": [
+   "tests/ops/test_registry_lib.py"
+  ],
   "components/threshold-exporter/app/pkg/config/types.go": [
    "tests/shared/test_reserved_key_py_go_parity.py"
   ],
@@ -1166,7 +1172,8 @@
   ],
   "components/threshold-exporter/config/conf.d/_defaults.yaml": [
    "tests/lint/test_check_threshold_unit_sanity.py",
-   "tests/ops/test_backtest_threshold.py"
+   "tests/ops/test_backtest_threshold.py",
+   "tests/ops/test_generate_alertmanager_routes.py"
   ],
   "components/threshold-exporter/config/conf.d/db-b.yaml": [
    "tests/ops/test_backtest_threshold.py"
@@ -1300,6 +1307,7 @@
    "tests/dx/test_tenant_verify.py"
   ],
   "docs/schemas/platform-defaults.schema.json": [
+   "tests/helm/test_optional_overrides_render.py",
    "tests/lint/test_check_confd_schema.py"
   ],
   "docs/schemas/tenant-config.schema.json": [
@@ -1432,7 +1440,8 @@
    "tests/helm/test_oauth2_gitlab_profile.py",
    "tests/helm/test_single_writer_guard.py",
    "tests/lint/test_check_dev_bypass_manifest.py",
-   "tests/lint/test_check_single_writer_invariant.py"
+   "tests/lint/test_check_single_writer_invariant.py",
+   "tests/ops/test_scaffold_tenant.py"
   ],
   "helm/tenant-api/templates/rbac-machine-identity.yaml": [
    "tests/helm/test_machine_identity_guard.py"
@@ -1448,14 +1457,21 @@
   ],
   "helm/threshold-exporter": [
    "tests/helm/test_image_tag_derivation.py",
+   "tests/helm/test_optional_overrides_render.py",
    "tests/lint/test_check_scrape_reachability.py",
    "tests/ops/test_operator_generate_v2.py"
+  ],
+  "helm/threshold-exporter/templates/configmap.yaml": [
+   "tests/helm/test_optional_overrides_render.py"
   ],
   "helm/threshold-exporter/templates/service.yaml": [
    "tests/lint/test_check_scrape_reachability.py"
   ],
   "helm/threshold-exporter/values.yaml": [
-   "tests/helm/test_environments_overlay_sync.py"
+   "tests/helm/test_environments_overlay_sync.py",
+   "tests/helm/test_optional_overrides_render.py",
+   "tests/ops/test_generate_alertmanager_routes.py",
+   "tests/ops/test_registry_lib.py"
   ],
   "helm/vector": [
    "tests/dx/test_log_visibility_catalogue.py",
@@ -2098,7 +2114,8 @@
    "tests/shared/test_helm_portal.py"
   ],
   "tests/lint": [
-   "tests/dx/test_scaffold_lint.py"
+   "tests/dx/test_scaffold_lint.py",
+   "tests/lint/test_check_threshold_registry.py"
   ],
   "tests/lint/test_check_cli_coverage.py": [
    "tests/dx/test_verify_diff.py"
@@ -2109,8 +2126,12 @@
   "tests/lint/test_check_hub_badge_drift.py": [
    "tests/dx/test_verify_diff.py"
   ],
+  "tests/lint/test_check_scrape_reachability.py": [
+   "tests/helm/test_optional_overrides_render.py"
+  ],
   "tests/ops": [
    "tests/dx/test_verify_diff.py",
+   "tests/lint/test_check_threshold_registry.py",
    "tests/ops/test_grar_facade_reexports.py",
    "tests/ops/test_nightly_race_issue_policy.py"
   ],
@@ -2188,7 +2209,8 @@
    "tests/shared/test_json_stdout_contract.py"
   ],
   "tests/shared/test_vector_projection_vrl.py": [
-   "tests/dx/test_log_visibility_catalogue.py"
+   "tests/dx/test_log_visibility_catalogue.py",
+   "tests/helm/test_optional_overrides_render.py"
   ],
   "tests/snapshots": [
    "tests/shared/test_help_contract.py"

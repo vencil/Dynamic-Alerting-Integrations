@@ -14,14 +14,15 @@
 #       instances); 10 ≈ 6.7x the 1.5 normal level both reference libraries agree on, below both
 #       fault levels (25/60) — full derivation + calibration workflow in the pack header (#1196 D)
 #
-# optional_overrides（documented-but-dormant——登錄有案、平台預設不出貨）：
-# ⛔ 啟用前提（別跳過）：threshold-exporter 只對「存在於 defaults 的 key」
-# 發射 user_threshold——resolveBaseRows 迭代的是 c.Defaults，resolveCriticalRows
-# 也要求 base key 在 defaults 才處理 _critical 覆寫（components/
-# threshold-exporter/app/pkg/config/resolve.go）。下列 key 必須先進
-# _defaults.yaml / Helm values 的 defaults，租戶 conf.d 才有東西可覆寫——
-# 只在租戶檔填一個不在 defaults 的 key 永遠不會生效：那不是 dormant，
-# 是永久無法啟用。
+# optional_overrides（已出貨在清單裡——平台認得這個 key，但不主張它的值）：
+# 下列 key 由平台出貨在 _defaults.yaml / Helm values 的 `optional_overrides:`
+# 清單中，租戶可直接在自己的 conf.d 填值並生效（resolveDeclaredRows 走宣告集，
+# 只在租戶給了值時發射；components/threshold-exporter/app/pkg/config/resolve.go）。
+# 平台不主張值 ⇒ 沒有平台回退：租戶不填就是靜默，那正是這一格的用意。
+# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
+# 照抄範例值已有跨 pack 的實測反例（ADR-030 盲寫良性參考庫）：Oracle 備份批次
+# process count 560 > 建議 300、計畫性 stats-gather PGA 22GB > 建議 4GiB 皆誤觸；
+# DB2 deadlock 建議 5/s＝300/min 反而偏高，實測 ~90/min 的真實 storm 接不到。
 #   db2_log_usage_percent: 70   # % — Transaction log usage warning
 #   db2_deadlock_rate: 5   # count/s — Deadlock rate (5m)
 #   db2_tablespace_used_percent: 85   # % — Tablespace usage warning
@@ -48,9 +49,14 @@
 #      工作負載偏高——實測 ~90/min（1.5/s）的真實 deadlock storm 不會觸發，
 #      要抓住較小的 storm 須依 baseline 往下調。
 #
-# ⛔ 啟用前提已隨 optional_overrides 段生成（見上方生成段警語；細節
-# resolveBaseRows 迭代 c.Defaults＝resolve.go:233、resolveCriticalRows 要求
-# base 在 defaults＝:320）。
+# ⛔ 舊的那句「optional_overrides 永久無法啟用」已不適用：PR-C（#1314）讓
+# resolveDeclaredRows 直接走宣告集，#1310 又把宣告清單本身出貨到 _defaults.yaml /
+# Helm values（含 onboarding 產生給客戶的那一份），所以列在出貨清單裡的 key，
+# 租戶在自己的 conf.d 填值即會發射。平台仍不主張值＝租戶不填就是靜默。
+# ⚠️ 逐 key 的處置以**上方生成段的警語為準**，本段不複述哪些 key 屬於哪一類：
+# 那份警語由 registry 生成，會隨每個 key 的出貨狀態自動改寫，而寫在這裡的任何
+# 名單或計數都沒有 gate 比對——本 pack 將來多一個 `<base>_critical`，這段就會
+# 悄悄變成假的。
 #
 # db2_lock_wait_time 起始值 10（秒/秒，跨該租戶所有 instance 加總）的推導：
 # tests/rulepacks/reference-validation/ 兩個獨立盲寫參考庫對此指標給出

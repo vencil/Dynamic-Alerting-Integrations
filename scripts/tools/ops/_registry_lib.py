@@ -10,22 +10,27 @@ family gate). ``rule-packs/threshold-registry.yaml`` is that registry;
 TRANSITION STATE (WS1a step 2 — the PR-2 rewire): the registry content is
 still MECHANICALLY EXTRACTED from ``scaffold_tenant.RULE_PACKS`` via
 ``build_registry_doc()`` (never hand-copied), but the registry is now a REAL
-SoT: three previously hand-copied surfaces are GENERATED from it inside
-delimited blocks (everything outside the delimiters stays hand-written):
+SoT: previously hand-copied surfaces are GENERATED from it inside delimited
+blocks (everything outside the delimiters stays hand-written):
 
   1. rule-pack header threshold sections (the "對應的 threshold-exporter
-     defaults" block of every threshold pack, defaults tier + a separate
-     optional_overrides block carrying the ⛔ activation-precondition warning);
+     defaults" block of every threshold pack, defaults tier + up to three
+     optional_overrides sub-sections, each under its own warning — see
+     ``optional_warning_groups`` / ``render_pack_header_lines``);
   2. ``helm/threshold-exporter/values.yaml`` ``thresholdConfig.defaults``
      (the ``chart_default`` key set);
   3. ``components/threshold-exporter/config/conf.d/_defaults.yaml``
-     ``defaults`` section (same ``chart_default`` set).
+     ``defaults`` section (same ``chart_default`` set);
+  4. the ``optional_overrides:`` LIST on both of those runtime surfaces
+     (#1310) — the declared-without-value key names the exporter recognises
+     but asserts no value for. A LIST, not a mapping: see
+     ``render_optional_overrides_lines``.
 
 ``scaffold_tenant.RULE_PACKS`` remains the operative contract for config
 GENERATION until PR-3 flips the direction (scaffold becomes a generated
 artifact / runtime loader of the registry — D2 migration shape, 31 import
 sites keep their API surface). During the transition the two copies MUST stay
-semantically equal AND the three generated surfaces must stay fresh — both
+semantically equal AND every generated surface must stay fresh — both
 enforced by ``scripts/tools/lint/check_threshold_registry.py`` (schema +
 equivalence + surface-freshness + header-prose key membership), wired as a
 pre-commit gate. On drift the fix is: edit ``scaffold_tenant.RULE_PACKS``
@@ -226,12 +231,15 @@ _REGISTRY_HEADER = (
     "# 語言中立（helm/docs/portal 直讀）、schema 可驗證\n"
     "# （docs/schemas/threshold-registry.schema.json）。\n"
     "#\n"
-    "# ✅ PR-2（rewire）後本檔已是真 SoT：三個原手抄面改為由本檔生成（定界符內），\n"
+    "# ✅ PR-2（rewire）後本檔已是真 SoT：原手抄面改為由本檔生成（定界符內），\n"
     "# 定界符外手寫 prose 照舊——\n"
-    "#   1. rule-pack header 閾值段（defaults tier + optional_overrides ⛔ 警語段）\n"
+    "#   1. rule-pack header 閾值段（defaults tier + optional_overrides 警語段，\n"
+    "#      依「在出貨清單裡 / 不在但 base 已出貨 / 兩者皆無」分三小段各配一份警語）\n"
     "#   2. helm/threshold-exporter/values.yaml thresholdConfig.defaults\n"
     "#      （chart_default 集）\n"
     "#   3. components/threshold-exporter/config/conf.d/_defaults.yaml defaults 段\n"
+    "#   4. 上述兩個 runtime 面的 optional_overrides: 宣告 key 清單（#1310；\n"
+    "#      是 list 不是 map——平台認得該 key 但不主張其值）\n"
     "# 新鮮度由 check_threshold_registry.py --check 面強制（stale＝硬錯）。\n"
     "#\n"
     "# ⚠️ 過渡期殘留：scaffold_tenant.RULE_PACKS 仍是 config 生成路徑的運作副本，\n"
@@ -240,7 +248,7 @@ _REGISTRY_HEADER = (
     "# gate check_threshold_registry.py 強制（防雙 SoT 漂移）。\n"
     "# 改閾值請改 scaffold_tenant.RULE_PACKS，再跑：\n"
     "#   python3 scripts/tools/lint/check_threshold_registry.py --regen\n"
-    "# （會同時重產本檔＋三個生成面。）PR-3 起 scaffold RULE_PACKS 降為生成物/\n"
+    "# （會同時重產本檔＋所有生成面。）PR-3 起 scaffold RULE_PACKS 降為生成物/\n"
     "# runtime 載入，附掛表併回本檔。\n"
     "#\n"
     "# 範圍：threshold 身分（defaults / optional_overrides 兩層＋chart_default）。\n"
@@ -603,8 +611,10 @@ def diff_vs_scaffold(doc: dict, rule_packs: Optional[dict] = None) -> list[str]:
 # ---------------------------------------------------------------------------
 # Generated surfaces (PR-2 rewire) — renderers, delimiter splice, freshness
 # ---------------------------------------------------------------------------
-# Three previously hand-copied surfaces are generated from the registry inside
-# delimited blocks. The delimiters are load-bearing: --check compares the
+# Previously hand-copied surfaces are generated from the registry inside
+# delimited blocks (a file may host more than one — helm values and the dev
+# template each carry both a `defaults` mapping and an `optional_overrides`
+# list). The delimiters are load-bearing: --check compares the
 # whole block (markers included) against a fresh render, --regen splices a
 # fresh render between them. Hand-written prose OUTSIDE the block is never
 # touched (and is separately covered by the header-prose membership lint).
@@ -654,25 +664,205 @@ def _entry_lines(
     ]
 
 
-# The ⛔ activation-precondition warning generated above every pack's
-# optional_overrides block (shape lifted from the hand-written rule-pack-db2
-# header that first documented the failure mode — now generated everywhere so
-# no pack header can claim a dormant key is a shipped default again).
-_OPTIONAL_WARNING_LINES = (
+# ---------------------------------------------------------------------------
+# optional_overrides — ONE tier, TWO populations, two different truths (#1310)
+# ---------------------------------------------------------------------------
+# Until PR-C (#1314) the whole tier got a SINGLE warning stating that a
+# tenant-set key "永遠不會生效 ... 永久無法啟用". That sentence is now FALSE for
+# half the tier and still TRUE for the other half:
+#
+#   * FLAT keys (today oracle_* / db2_* / clickhouse_*) — ``resolveDeclaredRows``
+#     walks the DECLARED set and emits a row as soon as the TENANT supplies a
+#     value, and #1310 ships that declared list itself in ``_defaults.yaml`` /
+#     Helm values. Tenant fills one in → it fires. No platform fallback, by
+#     design: the platform asserts no value.
+#   * ``<base>_critical`` keys — never on the list. ``resolveDeclaredRows``
+#     skips the critical suffix outright and ``resolveCriticalRows`` keys off
+#     ``defaults[base]``, so they are deliberately EXCLUDED (#1311): listing all
+#     25 tier keys would make 16 of them decoration.
+#
+# ⛔ But "off the list" is NOT "dormant", and conflating the two is the second
+# mistake this block has now made in both directions. ``resolveCriticalRows``
+# needs ``defaults[base]``, and for 5 of the 16 (the postgresql / mariadb ones)
+# that base IS a shipped chart default — so a tenant filling one in today gets a
+# real critical row. Only the other 11, whose base is not shipped either, are
+# actually dormant.
+#
+# So the warning is chosen PER KEY by TWO derived predicates —
+# ``is_shipped_optional_key`` (the SAME one that decides list membership, so
+# header claim and shipped list cannot drift apart) and ``has_shipped_chart_base``
+# (which asks the resolver's real entry condition). See
+# ``optional_warning_groups``.
+
+
+def is_shipped_optional_key(key: str) -> bool:
+    """Whether an ``optional_overrides``-tier key belongs in the SHIPPED list.
+
+    Flat keys only. Identical predicate to the one ``scaffold_tenant`` uses for
+    the same split (``not key.endswith("_critical") and "{" not in key``), which
+    in turn mirrors the exporter's own refusals in
+    ``components/threshold-exporter/app/pkg/config/resolve.go``:
+    ``resolveDeclaredRows`` skips both the ``_critical`` suffix (that tier is
+    ``resolveCriticalRows``' business, and it needs ``defaults[base]``) and
+    dimensional ``key{...}`` tokens (already emitted by
+    ``resolveDimensionalRows``).
+
+    NOTE the registry models no dimensional keys today (they are scaffold's
+    ``dimensional_example`` domain, see this module's SCOPE note), so the
+    ``{`` arm is defence, not a live branch.
+    """
+    return not key.endswith(CRITICAL_SUFFIX) and "{" not in key
+
+
+def shipped_optional_keys_for_packs(
+    pack_names, rule_packs: Optional[dict] = None
+) -> list[str]:
+    """The shipped ``optional_overrides:`` key names for a SELECTION of packs.
+
+    The onboarding generators (``scaffold_tenant.generate_defaults`` and
+    ``init_project._gen_defaults_yaml``) write a customer-side ``_defaults.yaml``
+    for the packs that customer selected, and that file is the ONLY declared-key
+    source the tenant-api write path ever reads
+    (``config.mergeTenantConfig`` joins ``configDir/_defaults.yaml``). They must
+    ship the same names the chart does, or a tenant on the GitOps topology gets
+    a 400 for a key the platform believes it declared.
+
+    ⛔ Both call this instead of re-spelling ``not endswith("_critical")``.
+    ``init_project`` keeps its OWN ``RULE_PACK_CATALOG`` for the ``defaults:``
+    values — that copy is a KNOWN divergence from ``scaffold_tenant.RULE_PACKS``
+    with its own consolidation tracked separately, and this function is
+    deliberately NOT that consolidation: it unifies only the declared-key
+    derivation, so the two generators cannot disagree about which keys a tenant
+    may set. Splitting that derivation in two would just have created a fourth
+    hand-copy of the predicate (#1189).
+
+    Order is RULE_PACKS order (== registry pack order), not the caller's
+    selection order, so a full selection renders byte-identical to
+    ``optional_override_list_keys``.
+    """
+    if rule_packs is None:
+        rule_packs = _load_scaffold().RULE_PACKS
+    selected = set(pack_names)
+    return [
+        key
+        for pack, meta in rule_packs.items()
+        if pack in selected
+        for key in (meta or {}).get("optional_overrides", {})
+        if is_shipped_optional_key(key)
+    ]
+
+
+def has_shipped_chart_base(doc: dict, key: str) -> bool:
+    """Whether an UNSHIPPED optional key's base is itself a shipped chart default.
+
+    Only ``<base>_critical`` keys have a base at all (``critical_of`` is derived,
+    never authored — see ``build_registry_doc``). ``resolveCriticalRows`` emits a
+    row the moment ``defaults[base]`` carries a value, so a ``_critical`` whose
+    base is ``chart_default: true`` is settable by a TENANT TODAY even though the
+    key itself is (correctly) off the declared list — it never needed to be on
+    it. A ``_critical`` whose base is NOT shipped is the genuinely dormant case:
+    the deployment must supply the base first.
+
+    ⛔ This distinction is why the pack-header warning is three-way and not two.
+    The pre-#1310 single warning, and the two-way split that first replaced it,
+    both told postgresql/mariadb readers their ``_critical`` keys "並不會發射任何
+    user_threshold" — false for all five of them, and false in the direction that
+    talks a tenant out of protection they already have.
+    """
+    base = (doc.get("keys", {}).get(key) or {}).get("critical_of")
+    if not base:
+        return False
+    return bool((doc.get("keys", {}).get(base) or {}).get("chart_default"))
+
+
+# Warning A — the keys the platform SHIPS in the optional_overrides: list.
+_OPTIONAL_SHIPPED_WARNING_LINES = (
     "#",
-    "# optional_overrides（documented-but-dormant——登錄有案、平台預設不出貨）：",
-    "# ⛔ 啟用前提（別跳過）：threshold-exporter 只對「存在於 defaults 的 key」",
-    "# 發射 user_threshold——resolveBaseRows 迭代的是 c.Defaults，resolveCriticalRows",
-    "# 也要求 base key 在 defaults 才處理 _critical 覆寫（components/",
-    "# threshold-exporter/app/pkg/config/resolve.go）。下列 key 必須先進",
-    "# _defaults.yaml / Helm values 的 defaults，租戶 conf.d 才有東西可覆寫——",
-    "# 只在租戶檔填一個不在 defaults 的 key 永遠不會生效：那不是 dormant，",
-    "# 是永久無法啟用。",
+    "# optional_overrides（已出貨在清單裡——平台認得這個 key，但不主張它的值）：",
+    "# 下列 key 由平台出貨在 _defaults.yaml / Helm values 的 `optional_overrides:`",
+    "# 清單中，租戶可直接在自己的 conf.d 填值並生效（resolveDeclaredRows 走宣告集，",
+    "# 只在租戶給了值時發射；components/threshold-exporter/app/pkg/config/resolve.go）。",
+    "# 平台不主張值 ⇒ 沒有平台回退：租戶不填就是靜默，那正是這一格的用意。",
+    "# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。",
+    "# 照抄範例值已有跨 pack 的實測反例（ADR-030 盲寫良性參考庫）：Oracle 備份批次",
+    "# process count 560 > 建議 300、計畫性 stats-gather PGA 22GB > 建議 4GiB 皆誤觸；",
+    "# DB2 deadlock 建議 5/s＝300/min 反而偏高，實測 ~90/min 的真實 storm 接不到。",
+)
+
+# Warning B — off the shipped list, but the BASE is a shipped chart default, so
+# `resolveCriticalRows` already has everything it needs. These keys are settable
+# by a tenant TODAY. Saying otherwise (as the single pre-#1310 warning and its
+# first two-way replacement both did) is the expensive direction of wrong: it
+# talks a reader out of protection that is already available.
+_OPTIONAL_CRITICAL_BASE_SHIPPED_WARNING_LINES = (
+    "#",
+    "# optional_overrides（不在出貨清單裡，但 base 已出貨——租戶今天就設得動）：",
+    "# 下列 `<base>_critical` 不在平台出貨的 `optional_overrides:` 清單裡，也不需要在：",
+    "# 它們的解析走 resolveCriticalRows，入場條件是 `defaults[base]` 有值（components/",
+    "# threshold-exporter/app/pkg/config/resolve.go），而下列每個 key 的 base 都標了",
+    "# [chart-default]＝出貨的 Helm values / dev conf.d 範本就供給它。⇒ 租戶在自己的",
+    "# conf.d 填一個，ValidateTenantKeys 放行、resolveCriticalRows 產出一條真的",
+    "# critical row。清單刻意不收 _critical 也是同一個理由：它們用不到宣告集（#1311）。",
+    "# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。",
+)
+
+# Warning C — off the shipped list AND the base is not shipped either. This is
+# the only population the original "documented-but-dormant" wording is still
+# true for. Worded by the property that actually gates them (`defaults[base]`),
+# not by the `_critical` spelling, so it stays true if the populations shift.
+_OPTIONAL_UNSHIPPED_WARNING_LINES = (
+    "#",
+    "# optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：",
+    "# ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，",
+    "# 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，",
+    "# 它讀的是 defaults[base]，base 沒有值就整列丟棄（components/threshold-exporter/",
+    "# app/pkg/config/resolve.go）。而下列每個 key 的 base 都**未**標 [chart-default]",
+    "# ⇒ 出貨的 Helm values / dev conf.d 範本沒有供給它：",
+    "# 租戶在這個拓撲下填一個並不會發射任何 user_threshold。",
+    "# 要能用，部署面必須先供給 base（scaffold_tenant 針對選到",
+    "# 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），",
+    "# critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是",
+    "# 一格裝飾（#1311）。",
 )
 
 
+def optional_warning_groups(doc: dict, optional: dict) -> list[tuple[tuple, dict]]:
+    """[(warning_lines, {key: entry}), …] — the optional tier split by TRUTH.
+
+    Three populations, three different truths, and the split is DERIVED
+    (``is_shipped_optional_key`` for membership, ``has_shipped_chart_base`` for
+    the rest) rather than spelled out per pack — the whole point is that a
+    header can never claim something the resolver contradicts.
+
+    Empty groups are dropped, so a pack with no optional tier gets no warning
+    line at all and a single-population pack gets exactly one.
+    """
+    shipped, base_shipped, dormant = {}, {}, {}
+    for key, entry in optional.items():
+        if is_shipped_optional_key(key):
+            shipped[key] = entry
+        elif has_shipped_chart_base(doc, key):
+            base_shipped[key] = entry
+        else:
+            dormant[key] = entry
+    groups = [
+        (_OPTIONAL_SHIPPED_WARNING_LINES, shipped),
+        (_OPTIONAL_CRITICAL_BASE_SHIPPED_WARNING_LINES, base_shipped),
+        (_OPTIONAL_UNSHIPPED_WARNING_LINES, dormant),
+    ]
+    return [(w, keys) for w, keys in groups if keys]
+
+
 def render_pack_header_lines(doc: dict, pack_name: str) -> list[str]:
-    """The generated threshold section of one rule-pack header (body only)."""
+    """The generated threshold section of one rule-pack header (body only).
+
+    The optional tier renders as up to THREE sub-sections, each under its own
+    warning (see ``optional_warning_groups``): the keys the platform ships on
+    the ``optional_overrides:`` list, the ``_critical`` keys whose base is a
+    shipped chart default (settable today), and the ones whose base is not
+    (genuinely dormant). A pack gets exactly the sub-sections its keys populate,
+    in that order; a pack with no optional-tier key gets no warning whatsoever.
+    """
     by_pack = keys_by_pack(doc).get(pack_name, {})
     defaults = {k: e for k, e in by_pack.items() if e.get("tier") == "defaults"}
     optional = {
@@ -684,9 +874,9 @@ def render_pack_header_lines(doc: dict, pack_name: str) -> list[str]:
     ]
     for key, entry in defaults.items():
         lines += _entry_lines(key, entry)
-    if optional:
-        lines += list(_OPTIONAL_WARNING_LINES)
-        for key, entry in optional.items():
+    for warning, keys in optional_warning_groups(doc, optional):
+        lines += list(warning)
+        for key, entry in keys.items():
             lines += _entry_lines(key, entry)
     return lines
 
@@ -734,6 +924,73 @@ def render_chart_defaults_lines(doc: dict, indent: int) -> list[str]:
     return lines
 
 
+def _shipped_optional_by_pack(doc: dict) -> list[tuple[str, dict, list]]:
+    """[(pack_name, pack_meta, [(key, entry), …]), …] — shipped optional keys.
+
+    Deterministic order, and the ONLY traversal used by both the renderer and
+    ``optional_override_list_keys``: registry pack order (``doc["packs"]``),
+    then registry key order within each pack. Packs with no shipped optional
+    key are omitted entirely.
+    """
+    grouped = keys_by_pack(doc)
+    out: list[tuple[str, dict, list]] = []
+    for pack_name, pack_meta in (doc.get("packs", {}) or {}).items():
+        pack_keys = [
+            (k, e)
+            for k, e in grouped.get(pack_name, {}).items()
+            if e.get("tier") == "optional_overrides" and is_shipped_optional_key(k)
+        ]
+        if pack_keys:
+            out.append((pack_name, pack_meta, pack_keys))
+    return out
+
+
+def optional_override_list_keys(doc: dict) -> list[str]:
+    """The key names shipped in the runtime ``optional_overrides:`` list.
+
+    Same traversal + predicate as ``render_optional_overrides_lines``, exposed
+    so callers can assert membership without re-parsing rendered comments.
+    """
+    return [k for _n, _m, pairs in _shipped_optional_by_pack(doc) for k, _e in pairs]
+
+
+def render_optional_overrides_lines(doc: dict, indent: int) -> list[str]:
+    """The shipped ``optional_overrides:`` LIST body (helm values / dev template).
+
+    A YAML **array of strings**, not a ``key: value`` mapping — the platform
+    RECOGNISES these keys and asserts NO value for them
+    (``docs/schemas/platform-defaults.schema.json`` types ``optional_overrides``
+    as ``array of string``; a value here would arm the key for every tenant,
+    the exact opposite of the tier's meaning).
+
+    ORDER: registry pack order, then registry key order within the pack (see
+    ``_shipped_optional_by_pack``) — the same traversal
+    ``render_chart_defaults_lines`` uses, so the two blocks read alike.
+
+    Each item carries the registry's ``unit — desc`` as an INLINE comment,
+    wrapped onto comment-only continuation lines when it would pass 100
+    columns (``_entry_lines`` house style). Everything added is a comment, so
+    the block still parses as a plain list of key names — ``regen_surfaces``
+    ``yaml.safe_load``s the spliced document before writing, which would catch
+    a regression here.
+    """
+    ind = " " * indent
+    cont = f"{ind}  # "
+    lines: list[str] = []
+    for pack_name, pack_meta, pack_keys in _shipped_optional_by_pack(doc):
+        lines.append(f"{ind}# ── {pack_name}：{pack_meta['display']} ──")
+        for key, entry in pack_keys:
+            item = f"{ind}- {key}"
+            meta = f"{entry['unit']} — {entry['desc']}"
+            inline = f"{item}   # {meta}"
+            if len(inline) <= 100:
+                lines.append(inline)
+                continue
+            lines.append(item)
+            lines += [f"{cont}{seg}" for seg in textwrap.wrap(meta, 100 - len(cont))]
+    return lines
+
+
 def render_block(surface_id: str, body_lines: list[str], indent: str = "") -> str:
     """Full generated block text (markers + body), newline-joined."""
     return "\n".join(
@@ -744,9 +1001,13 @@ def render_block(surface_id: str, body_lines: list[str], indent: str = "") -> st
 def surface_specs(doc: dict) -> list[dict]:
     """Every generated surface: id, absolute path, indent, rendered block.
 
-    Order: helm values, dev template, then one per threshold pack (packs
-    without threshold keys — liveness/operational/custom-alerts — carry no
-    generated block).
+    Order: the two ``defaults`` mappings (helm values, dev template), the two
+    ``optional_overrides`` lists on the SAME two files (#1310), then one per
+    threshold pack (packs without threshold keys —
+    liveness/operational/custom-alerts — carry no generated block).
+
+    Two surfaces per file is fine: ``regen_surfaces`` re-reads each file inside
+    the loop, so the second splice sees the first one's write.
     """
     specs = [
         {
@@ -760,6 +1021,21 @@ def surface_specs(doc: dict) -> list[dict]:
             "path": DEV_DEFAULTS_PATH,
             "indent": " " * 2,
             "body": render_chart_defaults_lines(doc, 2),
+        },
+        {
+            # thresholdConfig.optional_overrides — key at indent 2, list items
+            # (and therefore the markers) at 4.
+            "id": "helm-optional",
+            "path": HELM_VALUES_PATH,
+            "indent": " " * 4,
+            "body": render_optional_overrides_lines(doc, 4),
+        },
+        {
+            # top-level optional_overrides — key at indent 0, items at 2.
+            "id": "dev-optional",
+            "path": DEV_DEFAULTS_PATH,
+            "indent": " " * 2,
+            "body": render_optional_overrides_lines(doc, 2),
         },
     ]
     grouped = keys_by_pack(doc)

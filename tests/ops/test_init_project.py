@@ -266,6 +266,70 @@ class TestGenDefaultsYaml:
 
 
 # ============================================================
+# ── 4b. _gen_defaults_yaml — declared-key list (#1310) ──
+# ============================================================
+
+class TestGenDefaultsDeclaredList:
+    """The `optional_overrides:` list — key NAMES the platform recognises but
+    assigns no value to.
+
+    This generator writes the customer-side `_defaults.yaml`, which is the file
+    tenant-api validates tenant writes against (`--config-dir` is the cloned
+    customer repo, and `config.mergeTenantConfig` reads its `_defaults.yaml`).
+    Omit the list here and a `da-tools init` customer's tenants get HTTP 400 for
+    every declared key even though the chart declares them — the chart list only
+    ever reaches threshold-exporter.
+    """
+
+    def test_selected_pack_declares_its_flat_optional_keys(self):
+        config = yaml.safe_load(ip._gen_defaults_yaml(['oracle'], 'monitoring'))
+        assert config['optional_overrides'] == [
+            'oracle_wait_time_rate', 'oracle_process_count',
+            'oracle_pga_allocated_bytes',
+        ]
+
+    def test_list_of_strings_never_a_mapping(self):
+        config = yaml.safe_load(ip._gen_defaults_yaml(['db2'], 'monitoring'))
+        listed = config['optional_overrides']
+        assert isinstance(listed, list) and all(isinstance(k, str) for k in listed)
+        for key in listed:
+            assert key not in config['defaults']
+
+    def test_pack_without_flat_optional_keys_emits_nothing(self):
+        """mariadb's optional tier is `_critical`-only ⇒ no key at all, rather
+        than an empty list (which reads as an accident)."""
+        config = yaml.safe_load(ip._gen_defaults_yaml(['mariadb'], 'monitoring'))
+        assert 'optional_overrides' not in config
+
+    def test_no_critical_key_is_ever_declared(self):
+        """#1311: `<base>_critical` resolves via resolveCriticalRows off
+        defaults[base]; on the declared list it would be decoration."""
+        config = yaml.safe_load(
+            ip._gen_defaults_yaml(sorted(ip.RULE_PACK_CATALOG), 'monitoring'))
+        assert not [k for k in config['optional_overrides']
+                    if k.endswith('_critical')]
+
+    def test_matches_the_other_producer_key_for_key(self):
+        """⛔ The whole point of sharing the derivation: `da-tools init` and
+        `scaffold-tenant` must declare the SAME keys, or which onboarding tool a
+        customer happened to use decides which thresholds their tenants can set.
+        """
+        import scaffold_tenant
+
+        config = yaml.safe_load(
+            ip._gen_defaults_yaml(sorted(ip.RULE_PACK_CATALOG), 'monitoring'))
+        db_packs = [k for k in scaffold_tenant.RULE_PACKS if k != 'kubernetes']
+        other = scaffold_tenant.generate_defaults(db_packs)['optional_overrides']
+        assert config['optional_overrides'] == other
+
+    def test_header_explains_the_tier_rather_than_leaving_a_bare_list(self):
+        yaml_str = ip._gen_defaults_yaml(['oracle'], 'monitoring')
+        assert 'optional_overrides' in yaml_str
+        assert 'asserts no value' in yaml_str
+        assert 'Do NOT move one into `defaults:`' in yaml_str
+
+
+# ============================================================
 # ── 5. _gen_tenant_yaml ──
 # ============================================================
 

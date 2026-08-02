@@ -47,6 +47,35 @@ def test_grandfather_list_is_exactly_the_remaining_dead_keys():
     assert not any("STALE-EXEMPTION" in e for e in result["errors"])
 
 
+def test_remediation_text_matches_the_decision_that_was_actually_taken():
+    """documented != codified — pin the CONTENT, not just the `A:` prefix.
+
+    #1314 rewrote the module comment to say the A-class fix was no longer
+    necessarily "move it to defaults", but the strings that get PRINTED still
+    said exactly that, and the only assertion on them was `startswith("A:")` —
+    which cannot tell the two apart. #1310 then MADE the decision (ship the key
+    on the declared list, tenant calibrates), so the remediation a reader acts
+    on must describe that, and must not keep prescribing the option the owner
+    explicitly did not take (arming a platform-chosen number for every tenant).
+    """
+    assert gate.KNOWN_UNWIRED, "an emptied dict would make every loop below vacuous"
+    for key, tag in gate.KNOWN_UNWIRED.items():
+        assert tag.startswith("A:"), (key, tag)
+        assert "optional_overrides" in tag, (key, tag)
+        assert "resolveDeclaredRows" in tag, (key, tag)
+        assert "move to defaults" not in tag, (
+            f"{key}: remediation still prescribes promoting the key into "
+            "defaults:, which is the option #1311 rejected")
+
+
+def test_the_remediation_text_is_what_the_reader_actually_sees():
+    """The tag is only worth pinning if it reaches the operator: `main()` prints
+    the dict VALUE verbatim, so assert the emitted INFO line carries it."""
+    infos = gate.run_check()["infos"]
+    for key, tag in gate.KNOWN_UNWIRED.items():
+        assert f"known-unwired {key} — {tag}" in infos, key
+
+
 # ── new drift is caught ───────────────────────────────────────────────────
 
 def test_new_unreachable_key_is_an_error():
@@ -246,3 +275,153 @@ def test_real_repo_chart_face_is_ledgered_and_non_vacuous():
         "the shipped chart supplies at least as much as the scaffold generator — "
         "that would make this whole face a no-op; verify values.yaml parsed"
     )
+
+
+# ── declared-list containment (#1310) ─────────────────────────────────────
+#
+# A KNOWN_UNWIRED key is one the platform supplies no value for. That is a
+# posture only while the TENANT can supply one, which requires the key to be on
+# the shipped `optional_overrides:` list — `ValidateTenantKeys` refuses an
+# undeclared key. Off the list, nobody can set it and the alert is structurally
+# unable to fire, which is precisely what nothing measured before.
+#
+# "the shipped list" is one list per FACE, and the faces reach different
+# processes (see `_declared_faces`): the chart's feeds threshold-exporter, the
+# onboarding generators' feeds the customer conf.d that tenant-api — the writer
+# whose refusal this error is about — actually validates against.
+
+_UNWIRED = dict(demand={"a_key"}, supply=set(), deferred=set(),
+                chart_supply=set(), not_chart_armed=frozenset())
+
+
+def test_grandfathered_key_off_the_declared_list_is_an_error():
+    r = gate.run_check(**_UNWIRED, known_unwired={"a_key": "A: ..."},
+                       declared_faces={"chart": set()})
+    assert any("UNSETTABLE" in e and "a_key" in e for e in r["errors"]), r
+
+
+def test_grandfathered_key_on_the_declared_list_stays_info_only():
+    r = gate.run_check(**_UNWIRED, known_unwired={"a_key": "A: ..."},
+                       declared_faces={"chart": {"a_key"}})
+    assert r["errors"] == [], r
+    assert any(m.startswith("known-unwired a_key") for m in r["infos"]), r
+
+
+def test_a_key_present_on_one_face_and_missing_on_another_is_an_error():
+    """The failure this PR was written for: the chart carries the list and the
+    customer-side `_defaults.yaml` does not, so threshold-exporter recognises
+    the key while tenant-api still answers 400. One green face must not mask
+    the other, and the message must NAME the missing one — the repair is a
+    different producer per face."""
+    r = gate.run_check(
+        **_UNWIRED, known_unwired={"a_key": "A: ..."},
+        declared_faces={"chart": {"a_key"}, "onboarding/scaffold": set()},
+    )
+    bad = [e for e in r["errors"] if "UNSETTABLE" in e]
+    assert len(bad) == 1, r
+    assert "onboarding/scaffold" in bad[0], bad[0]
+    assert "chart" not in bad[0].split("declared list of:")[1], (
+        "the green face must not be named as missing: " + bad[0])
+
+
+def test_containment_is_vacuous_for_callers_that_injected_a_synthetic_ledger():
+    """Hermeticity pin, the same rule the chart face states: a caller that said
+    nothing about the shipped list gets no narrowing, so every pre-existing
+    synthetic test keeps meaning what it meant instead of being flagged for
+    made-up keys that could not possibly be in the real values.yaml."""
+    r = gate.run_check(**_UNWIRED, known_unwired={"a_key": "A: ..."})
+    assert not any("UNSETTABLE" in e for e in r["errors"]), r
+
+
+def test_a_reachable_grandfathered_key_is_not_double_reported():
+    """Scope pin: an entry that is no longer dead is already an exit-lock error;
+    adding '...and it is off the list too' would just duplicate it."""
+    r = gate.run_check(
+        demand={"a_key"}, supply={"a_key"}, deferred=set(),
+        known_unwired={"a_key": "A: ..."},
+        chart_supply={"a_key"}, not_chart_armed=frozenset(),
+        declared_faces={"chart": set()},
+    )
+    assert any("STALE-EXEMPTION" in e for e in r["errors"]), r
+    assert not any("UNSETTABLE" in e for e in r["errors"]), r
+
+
+def test_real_repo_declares_every_grandfathered_key_on_every_face():
+    """Live-repo pin (#1310). The 9 A-class keys are a deliberate posture ONLY
+    because the platform ships their names — on every surface a tenant is
+    validated against. Drop one anywhere and the posture silently becomes
+    'this alert cannot fire and nobody can fix it'."""
+    faces = gate._declared_faces()
+    assert len(faces) >= 3, (
+        "expected the chart face plus BOTH customer-side `_defaults.yaml` "
+        f"producers; got {sorted(faces)}")
+    for label, declared in faces.items():
+        assert declared, (
+            f"declared face {label!r} parsed as empty — an empty set would "
+            "satisfy nothing and make the containment check vacuous")
+        missing = sorted(set(gate.KNOWN_UNWIRED) - declared)
+        assert not missing, (
+            f"KNOWN_UNWIRED keys absent from {label}: {missing}")
+    assert gate.run_check()["errors"] == []
+
+
+def test_the_faces_are_distinct_artifacts_not_one_source_read_twice():
+    """Non-vacuity pin for the multi-face split itself. If every face resolved
+    to the same object, `_declared_faces` would be three names for one read and
+    the whole point — that the chart and the customer conf.d can disagree —
+    would be untestable."""
+    chart = gate._shipped_optional()
+    scaffold = gate._onboarding_declared()
+    init = gate._init_project_declared()
+    assert chart is not scaffold and scaffold is not init
+    # ...and they agree TODAY, which is the property the gate is protecting.
+    assert chart == scaffold == init, (chart, scaffold, init)
+
+
+# ── the chart face reads the ARTIFACT, not the registry declaration (#1310) ──
+
+def test_shipped_optional_reads_values_yaml_not_the_registry_tier(
+        tmp_path, monkeypatch):
+    """Mutation pin for `_shipped_optional`'s stated discipline.
+
+    Its docstring claims "reading values.yaml here means this face keeps
+    measuring the deployment even if that equivalence ever breaks". A blind
+    review swapped the body for a read of the registry's
+    `tier: optional_overrides` declaration and EVERY test still passed — the
+    two agree today, so only a DIVERGENCE can tell them apart.
+
+    So: point the face at a synthetic values.yaml carrying a list that is
+    nothing like the registry's, and require the face to return THAT. A
+    registry-reading implementation ignores the file entirely and returns the
+    nine real keys, so it fails here.
+
+    Hermetic on purpose — no repo file is written. Perturbing the real
+    values.yaml and restoring it would leave the workspace mangled on an
+    interrupted run, which is exactly the defect this suite just fixed in
+    test_check_threshold_registry.py's regen test.
+    """
+    probe = tmp_path / "values.yaml"
+    probe.write_text(
+        "thresholdConfig:\n"
+        "  defaults:\n"
+        "    zzz_probe_base: 1\n"
+        "  optional_overrides:\n"
+        "    - zzz_probe_declared_one\n"
+        "    - zzz_probe_declared_two\n",
+        encoding="utf-8")
+    monkeypatch.setattr(gate, "_CHART_VALUES", probe)
+
+    assert gate._shipped_optional() == {
+        "zzz_probe_declared_one", "zzz_probe_declared_two"}, (
+        "_shipped_optional did not follow the values.yaml it was pointed at — "
+        "it is reading the registry declaration, not the shipped artifact, so "
+        "the chart could stop shipping a key with nothing measuring it")
+    # the sibling face on the same file must stay artifact-driven too
+    assert gate._chart_supply() == {"zzz_probe_base"}
+
+
+def test_shipped_optional_is_non_vacuous_on_the_real_artifact():
+    """The hermetic pin above proves WHERE it reads; this proves the real file
+    has something to read (an empty list would satisfy that pin and silently
+    make every containment assertion vacuous)."""
+    assert len(gate._shipped_optional()) >= len(gate.KNOWN_UNWIRED)

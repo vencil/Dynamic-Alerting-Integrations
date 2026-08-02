@@ -4,12 +4,15 @@
 # 語言中立（helm/docs/portal 直讀）、schema 可驗證
 # （docs/schemas/threshold-registry.schema.json）。
 #
-# ✅ PR-2（rewire）後本檔已是真 SoT：三個原手抄面改為由本檔生成（定界符內），
+# ✅ PR-2（rewire）後本檔已是真 SoT：原手抄面改為由本檔生成（定界符內），
 # 定界符外手寫 prose 照舊——
-#   1. rule-pack header 閾值段（defaults tier + optional_overrides ⛔ 警語段）
+#   1. rule-pack header 閾值段（defaults tier + optional_overrides 警語段，
+#      依「在出貨清單裡 / 不在但 base 已出貨 / 兩者皆無」分三小段各配一份警語）
 #   2. helm/threshold-exporter/values.yaml thresholdConfig.defaults
 #      （chart_default 集）
 #   3. components/threshold-exporter/config/conf.d/_defaults.yaml defaults 段
+#   4. 上述兩個 runtime 面的 optional_overrides: 宣告 key 清單（#1310；
+#      是 list 不是 map——平台認得該 key 但不主張其值）
 # 新鮮度由 check_threshold_registry.py --check 面強制（stale＝硬錯）。
 #
 # ⚠️ 過渡期殘留：scaffold_tenant.RULE_PACKS 仍是 config 生成路徑的運作副本，
@@ -18,7 +21,7 @@
 # gate check_threshold_registry.py 強制（防雙 SoT 漂移）。
 # 改閾值請改 scaffold_tenant.RULE_PACKS，再跑：
 #   python3 scripts/tools/lint/check_threshold_registry.py --regen
-# （會同時重產本檔＋三個生成面。）PR-3 起 scaffold RULE_PACKS 降為生成物/
+# （會同時重產本檔＋所有生成面。）PR-3 起 scaffold RULE_PACKS 降為生成物/
 # runtime 載入，附掛表併回本檔。
 #
 # 範圍：threshold 身分（defaults / optional_overrides 兩層＋chart_default）。

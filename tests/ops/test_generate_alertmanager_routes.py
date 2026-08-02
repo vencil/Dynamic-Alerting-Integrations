@@ -812,6 +812,101 @@ class TestMembershipParityMatrix:
         assert not failures, "\n".join(failures)
 
 
+class TestShippedDeclaredListIsSettable:
+    """#1311 驗收：出貨的 `optional_overrides:` 清單，每個 key 都要落在
+    `ValidateTenantKeys` 的**放行**路徑上。
+
+    ⭐ 判準來源沿用上面那張既有判決矩陣的**期望值**，不在本檔另發明一套；下面
+    的 `test_matrix_still_defines_the_two_verdicts_this_test_leans_on` 就是在
+    釘住那張表沒有被改成別的意思。⚠️ 但要精確：實際執行斷言的是 **Python 側的
+    `validate_tenant_keys`**——矩陣是 Go↔Python 兩側**各自**對之斷言的同一張表，
+    Go 那一側由該矩陣自己的 pin 傳遞，不由本 class 直接執行。所以本檔證到的是
+    「出貨清單上的 key 在 Python 驗證器會被放行，而那個放行判準與 Go 側同表」，
+    不是「本檔跑了 Go」。
+
+    讀的是**產物**（helm values ＋ dev `_defaults.yaml`），不是 registry 的
+    `tier: optional_overrides` 宣告——registry 說我們想出貨什麼，產物才是
+    operator 真的拿到什麼，而 #1310 之前兩者相差整整一個清單。
+
+    ⛔ 為什麼 `defaults` 要驗兩態：宣告清單的意義是「**光憑列在清單上**就設得
+    進去」。若某個 key 只有在它**同時**還躺在 `defaults:` 裡才被放行，那讓它
+    settable 的是舊的那一格、不是這一格，清單對它就是裝飾。所以除了矩陣自己
+    的 defaults fixture，另跑一次 `defaults=∅`——這也正是 `<base>_critical`
+    被排除的機械理由（`resolveCriticalRows` 讀 `defaults[base]`），任何人把一
+    個 `_critical` 塞進清單，本測試就會紅。
+    """
+
+    _HELM_VALUES = "helm/threshold-exporter/values.yaml"
+    _DEV_DEFAULTS = "components/threshold-exporter/config/conf.d/_defaults.yaml"
+
+    @staticmethod
+    def _repo_root():
+        from pathlib import Path
+        return Path(__file__).resolve().parents[2]
+
+    @classmethod
+    def _matrix(cls):
+        return TestMembershipParityMatrix._matrix()
+
+    @classmethod
+    def _shipped_from(cls, rel_path: str, getter) -> list:
+        doc = yaml.safe_load(
+            (cls._repo_root() / rel_path).read_text(encoding="utf-8")) or {}
+        return getter(doc)
+
+    @classmethod
+    def _shipped(cls) -> list:
+        return cls._shipped_from(
+            cls._HELM_VALUES,
+            lambda d: (d.get("thresholdConfig") or {}).get("optional_overrides") or [])
+
+    def test_the_two_shipped_artifacts_carry_the_same_non_empty_list(self):
+        """空清單會讓底下每個迴圈變成永遠綠——本 repo 一再抓到的形狀。兩份產物
+        由同一個 renderer 生成，內容分歧代表其中一面漏跑 `--regen`。"""
+        helm = self._shipped()
+        dev = self._shipped_from(
+            self._DEV_DEFAULTS, lambda d: d.get("optional_overrides") or [])
+        assert helm, f"{self._HELM_VALUES} thresholdConfig.optional_overrides is empty"
+        assert helm == dev, (
+            f"shipped declared list diverges between the two runtime surfaces:\n"
+            f"  {self._HELM_VALUES}: {helm}\n  {self._DEV_DEFAULTS}: {dev}")
+
+    def test_matrix_still_defines_the_two_verdicts_this_test_leans_on(self):
+        """本測試的判準完全外包給矩陣；矩陣若被改寫成別的意思，這裡要先紅，
+        而不是繼續拿一個已經不存在的契約當靠山。"""
+        cases = self._matrix()["cases"]
+        on_list = [c for c in cases if c["key"] in c["declared"]]
+        assert any(c["verdict"] == "accept" and not c["key"].endswith("_critical")
+                   and "{" not in c["key"] for c in on_list), \
+            "matrix no longer says a flat key ON the list is settable"
+        assert any(c["verdict"] == "refuse" and c["key"].endswith("_critical")
+                   for c in on_list), \
+            "matrix no longer says a `_critical` key ON the list is refused"
+
+    def test_every_shipped_key_is_accepted_with_the_matrix_defaults(self):
+        shipped = self._shipped()
+        defaults = set(self._matrix()["defaults"])
+        refused = []
+        for key in shipped:
+            warnings = validate_tenant_keys("t-1", {key}, defaults, set(shipped))
+            if any("WARN:" in w for w in warnings):
+                refused.append(f"{key}: {warnings}")
+        assert not refused, (
+            "shipped declared keys a tenant still cannot write:\n" + "\n".join(refused))
+
+    def test_every_shipped_key_is_accepted_on_the_declaration_alone(self):
+        """`defaults=∅` — 清單本身就必須足以讓 key 設得進去。"""
+        shipped = self._shipped()
+        refused = []
+        for key in shipped:
+            warnings = validate_tenant_keys("t-1", {key}, set(), set(shipped))
+            if any("WARN:" in w for w in warnings):
+                refused.append(f"{key}: {warnings}")
+        assert not refused, (
+            "declared-list membership alone does not make these settable — the "
+            "list is decoration for them (#1311):\n" + "\n".join(refused))
+
+
 # ============================================================
 # #1231 deprecated key aliases（Python ↔ Go alias boundary 對稱）
 # ============================================================

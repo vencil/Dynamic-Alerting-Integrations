@@ -119,6 +119,67 @@ class TestGenerateDefaults:
 
 
 # ============================================================
+# generate_defaults — 宣告 key 清單（#1310）
+# ============================================================
+class TestGenerateDefaultsDeclaredList:
+    """⛔ 這一格是 tenant-api 寫入路徑唯一讀得到的宣告來源。
+
+    threshold-exporter 讀 chart 渲染出來的 ConfigMap，但 tenant-api 的
+    `--config-dir` 是 init container clone 下來的**客戶 GitOps repo**
+    （`helm/tenant-api/templates/deployment.yaml`），而
+    `config.mergeTenantConfig` 從那個目錄的 `_defaults.yaml` 讀
+    `OptionalOverrides`。只出貨 chart 那一份，租戶透過 Portal / Tenant API 設這
+    些 key 仍會被 `ValidateTenantKeys` 判 unknown → HTTP 400——`merge_tenant.go`
+    的註解在事情發生前就逐字預言過這個失效模式。
+    """
+
+    def test_selected_pack_declares_its_flat_optional_keys(self):
+        result = generate_defaults(["kubernetes", "oracle"])
+        assert result["optional_overrides"] == [
+            "oracle_wait_time_rate", "oracle_process_count",
+            "oracle_pga_allocated_bytes",
+        ]
+
+    def test_declared_keys_carry_no_value(self):
+        """是 list 不是 map：給了值就等於對每個租戶武裝一個平台選的數字，
+        正好是這一格語意的反面（platform-defaults.schema.json: array of string）。"""
+        result = generate_defaults(["kubernetes", "db2"])
+        assert isinstance(result["optional_overrides"], list)
+        assert all(isinstance(k, str) for k in result["optional_overrides"])
+        # ...而且不得同時混進 defaults（那才是「主張值」）
+        for key in result["optional_overrides"]:
+            assert key not in result["defaults"]
+
+    def test_no_critical_key_is_ever_declared(self):
+        """#1311：`<base>_critical` 走 resolveCriticalRows 讀 defaults[base]，
+        放進宣告清單只會是一格裝飾。"""
+        result = generate_defaults(list(RULE_PACKS.keys()))
+        assert not [k for k in result["optional_overrides"]
+                    if k.endswith("_critical")]
+
+    def test_unselected_pack_contributes_nothing(self):
+        """只選 postgresql（optional tier 全是 `_critical`）⇒ 整格不出現，
+        而不是出現一個空 list（空 list 讀起來像意外）。"""
+        result = generate_defaults(["kubernetes", "postgresql"])
+        assert "optional_overrides" not in result
+
+    def test_supply_face_is_untouched(self):
+        """可達性 gate 的供給面只讀 `defaults`；新增 sibling key 不得改變它。"""
+        db_packs = [k for k in RULE_PACKS if k != "kubernetes"]
+        assert len(generate_defaults(db_packs)["defaults"]) == 42
+
+    def test_derivation_is_the_shared_predicate_not_a_fourth_copy(self):
+        """清單內容必須逐字等於 chart 那一份的同 pack 子集——同一個 predicate、
+        同一個走訪順序。手抄第四份正是 #1189 的病灶。"""
+        import _registry_lib
+
+        db_packs = [k for k in RULE_PACKS if k != "kubernetes"]
+        generated = generate_defaults(db_packs)["optional_overrides"]
+        assert generated == _registry_lib.optional_override_list_keys(
+            _registry_lib.build_registry_doc())
+
+
+# ============================================================
 # generate_tenant
 # ============================================================
 class TestGenerateTenant:
@@ -1437,3 +1498,116 @@ class TestGenerateTenantInteractiveOrder:
                 "group_wait": "30s", "group_interval": "5m", "repeat_interval": "4h",
             },
         }}}
+
+
+# ============================================================
+# #1310 — Enter 預設在三種 key 上的差別待遇
+# ============================================================
+class TestPromptDefaultsSplitByKeyClass:
+    """互動 prompt 的 Enter 預設，只有**平鍵**被拿掉（#1310 / #1311）。
+
+    ⛔ 這是本次接線引入的 regression 的擋板，不是美化：在 `optional_overrides:`
+    清單出貨**之前**，租戶按 Enter 寫下的 `oracle_process_count: 300`
+    會被 `ValidateTenantKeys` 當 unknown key 擋掉，所以那個鍵盤動作是無害的。
+    清單一旦出貨，同一個 Enter 就真的武裝一條閾值——而 ADR-030 的盲寫參考庫
+    對這幾個數字有實測反例（備份批次 560 支 process 誤觸建議值 300）。
+
+    另外兩類**不得**受影響：
+      * `defaults` tier —— 平台本來就對每個租戶主張這個值；
+      * `<base>_critical` —— 走 `resolveCriticalRows`，base 在 `defaults:` 裡
+        有值，所以那個數字是平台真的持有的立場，可以按 Enter 採用。
+
+    prompt 本身在三類上都保留：它是租戶唯一會被告知這些 key 存在的地方。
+    """
+
+    _NEUTRAL_TAIL = [_NEUTRAL_MAINT, _NEUTRAL_SILENT, _NEUTRAL_DEDUP,
+                     *_NEUTRAL_ROUTING]
+
+    @staticmethod
+    def _prompts_for(selected_dbs):
+        """跑一次全空輸入，回傳 (每個 prompt 字串, 產生的 tenant 覆寫)。"""
+        seen = []
+
+        def _fake_input(prompt=""):
+            seen.append(prompt)
+            return ""
+
+        with mock.patch("builtins.input", _fake_input):
+            res = generate_tenant("db-c", selected_dbs, interactive=True)
+        return seen, res["tenants"]["db-c"]
+
+    def test_flat_optional_key_empty_input_writes_nothing(self):
+        """oracle：2 個 defaults 全部按 Enter 保留，3 個平鍵一個都不落地。"""
+        res = _gen_tenant_interactive("db-c", ["oracle"], [
+            "", "",              # defaults: sessions_active / tablespace
+            "", "", "",          # 平鍵 ×3 —— 留空即跳過
+            *self._NEUTRAL_TAIL,
+        ])
+        assert res == {"tenants": {"db-c": {
+            "oracle_sessions_active": "200",
+            "oracle_tablespace_used_percent": "85",
+        }}}
+
+    def test_flat_optional_key_typed_value_is_still_honoured(self):
+        """拿掉的是**預設**、不是這一格：租戶真的填了就照樣寫進去。"""
+        res = _gen_tenant_interactive("db-c", ["oracle"], [
+            "", "",
+            "60", "", "8589934592",   # wait_time_rate 填 / process_count 跳過 / pga 填
+            *self._NEUTRAL_TAIL,
+        ])
+        assert res == {"tenants": {"db-c": {
+            "oracle_sessions_active": "200",
+            "oracle_tablespace_used_percent": "85",
+            "oracle_wait_time_rate": "60",
+            "oracle_pga_allocated_bytes": "8589934592",
+        }}}
+
+    def test_critical_optional_key_keeps_its_enter_default(self):
+        """postgresql 的 optional tier 全是 `_critical`：行為必須逐字不變。"""
+        res = _gen_tenant_interactive("db-c", ["postgresql"], [
+            "", "",              # defaults
+            "", "",              # _critical ×2 —— Enter 仍採用平台值
+            *self._NEUTRAL_TAIL,
+        ])
+        assert res == {"tenants": {"db-c": {
+            "pg_connections": "80",
+            "pg_replication_lag": "30",
+            "pg_connections_critical": "90",
+            "pg_replication_lag_critical": "60",
+        }}}
+
+    def test_mixed_packs_split_on_the_shipped_list_predicate(self):
+        """同一次執行內兩類並存，判準是 `is_shipped_optional_key`，不是 pack。"""
+        prompts, overrides = self._prompts_for(["postgresql", "oracle"])
+        assert set(overrides) == {
+            "pg_connections", "pg_replication_lag",
+            "pg_connections_critical", "pg_replication_lag_critical",
+            "oracle_sessions_active", "oracle_tablespace_used_percent",
+        }, overrides
+        for key in ("oracle_wait_time_rate", "oracle_process_count",
+                    "oracle_pga_allocated_bytes"):
+            assert key not in overrides
+
+    def test_prompt_text_shows_the_number_as_a_reference_not_a_default(self):
+        """數字仍要看得見（它是操作者唯一的起點），但不能長得像 Enter 預設。"""
+        prompts, _ = self._prompts_for(["oracle"])
+        flat = [p for p in prompts if "oracle_process_count" in p]
+        assert len(flat) == 1, prompts
+        assert "無平台預設" in flat[0] and "留空跳過" in flat[0], flat[0]
+        assert "300" in flat[0], "the reference number must still be shown"
+        assert "(300 count)" not in flat[0], (
+            "still rendered in the Enter-default shape: " + flat[0])
+
+        valued = [p for p in prompts if "oracle_sessions_active" in p]
+        assert len(valued) == 1, prompts
+        assert "(200 count)" in valued[0], (
+            "the defaults tier prompt is a UX contract and must not change: "
+            + valued[0])
+        assert "無平台預設" not in valued[0]
+
+    def test_predicate_is_the_one_the_shipped_list_is_built_from(self):
+        """判準不得再手抄第四份：prompt 與清單生成必須是同一個函式。"""
+        import scaffold_tenant as st
+        import _registry_lib
+
+        assert st.is_shipped_optional_key is _registry_lib.is_shipped_optional_key

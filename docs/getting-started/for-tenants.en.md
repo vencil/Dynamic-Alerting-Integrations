@@ -41,7 +41,12 @@ tenants:
 
 This gives your tenant **whatever default thresholds the platform currently supplies**, with no custom routing (alerts go to Alertmanager's default receiver).
 
-⚠️ **"Default thresholds" is not "all thresholds."** The shipped helm chart carries platform defaults for only a handful of keys (`thresholdConfig.defaults`). Every other key has to be supplied explicitly by the **platform operator** (via the `_defaults.yaml` that `scaffold-tenant` generates, or by hand in helm values) before a tenant can set it and before the matching alert can fire. **Until the operator supplies it, those alerts neither fire nor produce any error** — that is the config-driven join mechanism itself (no threshold series ⇒ the rule matches nothing ⇒ empty result). If you are unsure what the platform enabled for you, ask your platform operator for the contents of `_defaults.yaml`.
+⚠️ **"Default thresholds" is not "all thresholds" — and "you can set it" is not "the alert is live."** The shipped helm chart carries platform defaults for only a handful of keys (`thresholdConfig.defaults`). Every other key falls into one of two groups, and they are handled very differently:
+
+- **Keys the platform DECLARES but assigns no value to** — listed under `optional_overrides:` in `_defaults.yaml` / helm values, shipped with the chart and with the onboarding artifacts. **These need no further operator action**: put a value in your own `conf.d/<tenant>.yaml` and it takes effect. But the platform deliberately asserts no default for them, so **leaving one unset is silent, with no error message either** — that is the design, not a missing default: thresholds like Oracle process count or DB2 deadlock rate can only be calibrated against your own baseline, and a platform-chosen number would just produce false alarms.
+- **Keys in neither `defaults:` nor `optional_overrides:`** — still have to be supplied explicitly by the **platform operator** (via the `_defaults.yaml` that `scaffold-tenant` generates, or by hand in helm values) before you can set them. Until then, writing one through the Portal / Tenant API is rejected as an unknown key, and pushing it straight to GitOps is accepted but has no effect.
+
+Both groups share the same mechanism: no threshold series ⇒ the rule matches nothing ⇒ empty result — that is the config-driven join itself. If you are unsure what the platform enabled for you, ask your platform operator for the contents of `_defaults.yaml` — **both the `defaults:` and the `optional_overrides:` sections**.
 
 ## Common Operations
 
@@ -231,7 +236,7 @@ A: Rule Packs without matching exporter metrics simply don't fire alerts (no dat
 A: Profiles are fill-in only — they apply only when the tenant hasn't set that key. Your direct settings always take precedence.
 
 **Q: How do I find available metric keys?**
-A: Check `_defaults.yaml` and the header comments in each Rule Pack YAML. You can also run `diagnose.py --show-inheritance` to see all resolved keys.
+A: Check `_defaults.yaml` and the header comments in each Rule Pack YAML. You can also run `diagnose.py --show-inheritance`: its `resolved` section lists keys that already carry a value, and `declared` lists the keys the platform recognises but assigns no value to (`optional_overrides:`) — those are settable too, they just have no value until you supply one.
 
 > 💡 **First time going live?** Use [Onboarding Checklist](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/onboarding-checklist.jsx) for a complete step-by-step guide, or start with the [interactive setup wizard](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx). Want to see the complete platform in action? [Platform Demo](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/platform-demo.jsx) demonstrates real scenarios. See all tools at [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/). For enterprise intranet deployment, use the `da-portal` Docker image: `docker run -p 8080:80 ghcr.io/vencil/da-portal` ([deployment guide](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md)).
 

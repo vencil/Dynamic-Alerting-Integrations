@@ -4,10 +4,11 @@
 WHY: epic #1200 D2 (LOCKED) makes ``rule-packs/threshold-registry.yaml`` the
 standalone SoT for the threshold contract (language-neutral,
 schema-validatable). The PR-2 rewire promoted it from a gated parallel copy to
-a REAL SoT: three previously hand-copied surfaces (rule-pack header threshold
+a REAL SoT: previously hand-copied surfaces (rule-pack header threshold
 sections, helm values ``thresholdConfig.defaults``, the dev template
-``conf.d/_defaults.yaml`` defaults section) are now GENERATED from it inside
-delimited blocks. ``scaffold_tenant.RULE_PACKS`` remains the operative copy
+``conf.d/_defaults.yaml`` defaults section, and — since #1310 — the
+``optional_overrides:`` declared-key LIST on both runtime surfaces) are now
+GENERATED from it inside delimited blocks. ``scaffold_tenant.RULE_PACKS`` remains the operative copy
 for the config-generation path until PR-3 demotes it, so the transition still
 needs the anti-dual-SoT gate. Two live copies of a contract is exactly the
 disease #1189 diagnosed (18 dead keys from four hand-copied surfaces
@@ -22,7 +23,7 @@ drifting), so every copy relationship is gated:
      the registry-scope enrichment tables in _registry_lib). ANY divergence in
      EITHER direction is a hard error — no grandfather list, the registry is
      born equal. On drift: edit scaffold_tenant.RULE_PACKS, then ``--regen``.
-  3. SURFACE FRESHNESS: each generated block in the three surfaces must be
+  3. SURFACE FRESHNESS: each generated block in every surface must be
      byte-equal to a fresh render from the committed registry. STALE (or
      missing/duplicated delimiters) is a hard error; ``--regen`` re-splices
      every surface in one shot.
@@ -132,7 +133,8 @@ def run_check(
     # Surfaces + membership render FROM the doc; a schema-invalid or drifted
     # doc already failed above, but keep going so one run reports everything.
 
-    # 3. generated-surface freshness (helm values / dev template / 13 packs).
+    # 3. generated-surface freshness (helm values + dev template — `defaults`
+    #    mapping AND `optional_overrides` list on each — plus 13 pack headers).
     for spec in registry_lib.surface_specs(doc):
         if surface_paths and spec["id"] in surface_paths:
             spec = {**spec, "path": surface_paths[spec["id"]]}
@@ -182,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=i18n_text(
             "threshold registry gate：schema 驗證 + 與 scaffold RULE_PACKS 的"
-            "過渡期等價斷言 + 三生成面新鮮度 + header 手寫 prose key membership"
+            "過渡期等價斷言 + 生成面新鮮度 + header 手寫 prose key membership"
             "（TRK-339 WS1a / #1200）",
             "Threshold-registry gate: schema validation + transition-period "
             "equivalence with scaffold RULE_PACKS + generated-surface "
@@ -197,7 +199,8 @@ def main(argv: list[str] | None = None) -> int:
         "--regen", action="store_true",
         help=i18n_text(
             "從 scaffold_tenant.RULE_PACKS 重新機械萃取並覆寫 registry，"
-            "並重產三個生成面（helm values / dev 範本 / pack headers）",
+            "並重產所有生成面（helm values / dev 範本各含 defaults 與 "
+            "optional_overrides 兩段 / pack headers）",
             "re-extract the registry from scaffold_tenant.RULE_PACKS AND "
             "re-splice every generated surface"))
     args = parser.parse_args(argv)

@@ -66,7 +66,7 @@
             },
             "tier": {
               "enum": ["defaults", "optional_overrides"],
-              "$comment": "defaults = emitted by the platform-defaults path (reachable per TRK-337); optional_overrides = documented-but-dormant until wired. The A-class of the 18 dead keys is exactly 'alert demands it but it sits in optional_overrides' — tier is therefore a load-bearing field, not decoration."
+              "$comment": "defaults = emitted by the platform-defaults path (reachable per TRK-337); optional_overrides = declared without a value — the platform recognises the key and asserts no number for it. WIRED as of #1310: the flat keys of this tier are shipped on the runtime `optional_overrides:` list (helm values + both onboarding `_defaults.yaml` producers), so a tenant sets one and resolveDeclaredRows emits it; `<base>_critical` keys stay off that list and resolve via resolveCriticalRows off defaults[base] instead. What the tier does NOT mean is 'not yet done' — an unset declared key is silent by design. The A-class of the 18 dead keys is exactly this tier, which is why tier is a load-bearing field, not decoration."
             },
             "value": { "type": "number" },
             "unit": { "type": "string", "minLength": 1 },

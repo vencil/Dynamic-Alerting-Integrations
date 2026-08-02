@@ -98,6 +98,12 @@ TOOL_FILES=(
     ops/migrate_rule.py
     ops/config_diff.py
     ops/scaffold_tenant.py
+    # #1310 — threshold-registry loader lib; top-level import of
+    # scaffold_tenant.py (is_shipped_optional_key decides which
+    # optional_overrides keys the interactive prompt may pre-fill). Stdlib-only
+    # at import time (pyyaml / jsonschema are optional-guarded), so it is safe
+    # to bundle; check_build_completeness.py enforces this pairing.
+    ops/_registry_lib.py
     ops/onboard_platform.py
     ops/offboard_tenant.py
     ops/deprecate_rule.py

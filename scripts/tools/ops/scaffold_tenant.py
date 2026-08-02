@@ -35,6 +35,15 @@ sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import read_onboard_hints, detect_cli_lang, write_text_secure  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+# The predicate that decides which optional_overrides keys the PLATFORM ships
+# on the runtime `optional_overrides:` list (#1310). Imported rather than
+# re-spelled: the interactive prompt's behaviour below has to track shipped
+# list membership exactly, and a third hand-copy of `not endswith("_critical")`
+# is how the two contracts drifted apart in the first place (#1189).
+from _registry_lib import (  # noqa: E402
+    is_shipped_optional_key,
+    shipped_optional_keys_for_packs,
+)
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
@@ -480,12 +489,38 @@ def prompt_multi(question: str, options: list[tuple[str, str]]) -> list[str]:
         print("  無效選擇，請重試。")
 
 
-def prompt_value(metric: str, info: dict[str, object], current: str | None = None) -> str | None:
-    """Prompt for a threshold value. Returns string or None to skip."""
-    default_val = current if current else info["value"]
-    raw = input(f"  {metric} [{info['desc']}] ({default_val} {info['unit']}): ").strip()
+def prompt_value(metric: str, info: dict[str, object], current: str | None = None,
+                 *, no_platform_default: bool = False) -> str | None:
+    """Prompt for a threshold value. Returns string or None to skip.
+
+    ``no_platform_default`` marks the declared-without-value tier (#1310): the
+    platform ships the KEY NAME on `optional_overrides:` and deliberately
+    asserts no value for it, so pressing Enter must not adopt the registry
+    number. Before that list shipped, such a write was rejected outright
+    (`ValidateTenantKeys` saw an empty declared set), which means shipping the
+    list WITHOUT this change would have turned a harmless keystroke into a real
+    armed threshold — and ADR-030's blind-write reference library has measured
+    counter-examples for exactly these numbers (an Oracle backup batch at 560
+    processes false-alarms against the suggested 300; a planned stats-gather at
+    22GB PGA against the suggested 4GiB). The number is still SHOWN, because it
+    is the only starting reference an operator has — but as a reference, not a
+    default. Empty input skips the key entirely, which is the correct end state
+    for a tenant that has not calibrated it: no value, no row, no alert.
+
+    A tenant's OWN prior value (``current``) is still a legitimate default even
+    here — that one is not a platform assertion.
+    """
+    if no_platform_default and current is None:
+        prompt = (f"  {metric} [{info['desc']}] (無平台預設，參考值 "
+                  f"{info['value']} {info['unit']}；須依自身 baseline 校準，"
+                  "留空跳過): ")
+        default_val = None
+    else:
+        default_val = current if current else info["value"]
+        prompt = f"  {metric} [{info['desc']}] ({default_val} {info['unit']}): "
+    raw = input(prompt).strip()
     if not raw:
-        return str(default_val)
+        return None if default_val is None else str(default_val)
     if raw.lower() in ("skip", "disable"):
         return raw if raw.lower() == "disable" else None
     return raw
@@ -547,7 +582,27 @@ def generate_profile(profile_name: str, selected_dbs: list[str], tier: str = "pr
 
 
 def generate_defaults(selected_dbs: list[str]) -> dict:
-    """Generate _defaults.yaml content."""
+    """Generate _defaults.yaml content.
+
+    Three sections, and the third one (#1310) is the reason this function is on
+    the tenant-api write path's critical chain:
+
+      * ``defaults``       — key → platform value (the platform ASSERTS these).
+      * ``state_filters``  — kubernetes state monitoring.
+      * ``optional_overrides`` — key NAMES only, no values. The platform merely
+        RECOGNISES these; the tenant supplies the number or nothing happens.
+
+    ⛔ Why the third one has to be HERE and not only in the Helm chart: the two
+    surfaces feed two DIFFERENT deployments. threshold-exporter reads the
+    chart-rendered ConfigMap, but tenant-api's ``--config-dir`` is the customer's
+    GitOps repo clone (``helm/tenant-api/templates/deployment.yaml`` init
+    container), and ``config.mergeTenantConfig`` reads
+    ``<config-dir>/_defaults.yaml`` — THIS file — for both ``Defaults`` and
+    ``OptionalOverrides``. Ship the list only in the chart and the only supported
+    writer still answers HTTP 400 for every declared key, which is the exact
+    failure ``merge_tenant.go`` predicted in prose ("unusable through the only
+    supported writer") before it happened.
+    """
     defaults = {}
     state_filters = {}
 
@@ -567,14 +622,39 @@ def generate_defaults(selected_dbs: list[str]) -> dict:
             for key, info in pack["defaults"].items():
                 defaults[key] = info["value"]
 
-    return {"defaults": defaults, "state_filters": state_filters}
+    # Declared-without-value key names for the selected packs (#1310).
+    #
+    # ⛔ DERIVED, never listed. The nine names are not spelled out anywhere in
+    # this file: `shipped_optional_keys_for_packs` applies the same
+    # `is_shipped_optional_key` predicate that builds the chart list, the pack
+    # headers and the interactive prompt's Enter-default split. A hand-copied
+    # roster here would be a fourth copy of the contract, which is the #1189
+    # disease this whole line of work exists to end.
+    #
+    # `defaults` is untouched by this — `check_threshold_reachability._supply()`
+    # reads `generated["defaults"]` alone, so the supply face is unchanged.
+    optional_overrides = shipped_optional_keys_for_packs(
+        ["kubernetes", *selected_dbs], RULE_PACKS)
+
+    out = {"defaults": defaults}
+    if optional_overrides:
+        # Omitted entirely when empty: `optional_overrides: []` reads as an
+        # accident, and the Go loader treats absent and empty identically.
+        # Emitted between the two existing sections so the file reads in the
+        # same order as the chart values and the dev conf.d template.
+        out["optional_overrides"] = optional_overrides
+    out["state_filters"] = state_filters
+    return out
 
 
 def prompt_tenant_overrides(selected_dbs: list[str]) -> dict:
     """互動式收集 tenant 覆寫（原 generate_tenant 內的 input()/print() 邏輯）。
 
     逐項詢問並收集：metric 閾值覆寫 → 維護模式 → 靜音模式 → 嚴重度去重 →
-    告警路由。prompt 提示字串、預設值與詢問次序與抽出前逐字相同（互動 UX 為契約）。
+    告警路由。prompt 提示字串、預設值與詢問次序與抽出前逐字相同（互動 UX 為契約），
+    **唯一例外**是 optional_overrides 的平鍵：#1310 把那批 key 出貨到宣告清單後，
+    「按 Enter 採用平台建議值」第一次真的會寫成生效的閾值，故該批改為無預設、
+    留空即跳過（見 ``prompt_value`` 的 ``no_platform_default``）。
     僅在 ``generate_tenant(interactive=True)`` 路徑被呼叫。
 
     Args:
@@ -599,8 +679,19 @@ def prompt_tenant_overrides(selected_dbs: list[str]) -> dict:
                 tenant_config[key] = val
 
         # Add optional overrides
+        #
+        # ⛔ The two halves of this tier get OPPOSITE prompt behaviour (#1310).
+        # A `<base>_critical` resolves through resolveCriticalRows off a base
+        # that IS in `defaults:`, so the registry number is a real platform
+        # position and Enter may adopt it — unchanged. The FLAT keys are the
+        # ones the platform now ships on the `optional_overrides:` list while
+        # asserting no value: Enter must not fill one in (see prompt_value).
+        # The prompt itself stays — it is the only place a tenant is ever told
+        # these keys exist, and dropping it would trade a bad default for zero
+        # discoverability.
         for key, info in pack.get("optional_overrides", {}).items():
-            val = prompt_value(key, info)
+            val = prompt_value(key, info,
+                               no_platform_default=is_shipped_optional_key(key))
             if val and val != "skip":
                 tenant_config[key] = val
 
@@ -845,6 +936,12 @@ def write_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant
     defaults_content = (
         "# _defaults.yaml — Platform-managed global settings\n"
         "# Generated by scaffold_tenant.py\n"
+        "#\n"
+        "# optional_overrides（若存在）：只有 key 名稱、沒有值。平台「認得」這些 key\n"
+        "# ——租戶可以在自己的檔案裡設定並生效——但平台不主張任何值，所以租戶不設就是\n"
+        "# 靜默。那是刻意的終態，不是漏掉的預設：這些閾值只有租戶自己的 baseline 校\n"
+        "# 準得出來。⛔ 不要為了「讓它不再靜默」把 key 搬進上面的 defaults——那是對\n"
+        "# 每一個租戶都武裝一個平台選的數字。\n"
         + yaml.safe_dump(defaults_data, default_flow_style=False,
                          allow_unicode=True, sort_keys=False)
     )

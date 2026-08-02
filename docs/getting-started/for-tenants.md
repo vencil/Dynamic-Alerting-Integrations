@@ -41,7 +41,12 @@ tenants:
 
 這會讓你的 tenant 使用**平台目前供給的**預設閾值，沒有自訂路由（alert 會發到 Alertmanager 的 default receiver）。
 
-⚠️ **「預設閾值」不等於「全部閾值」。** 出貨的 helm chart 只帶少數幾個 key 的平台預設值（`thresholdConfig.defaults`）；其餘 key 要由**平台 operator** 顯式供給（`scaffold-tenant` 產生的 `_defaults.yaml`，或自行填 helm values）之後，租戶才設得動、對應的告警才可能開火。**在 operator 供給之前，那些告警既不會開火、也不會有任何錯誤訊息**——這是 config-driven join 的機制本身（沒有閾值 series ⇒ 規則配不到 ⇒ 回空）。若你不確定平台替你開了哪些，問你的平台 operator 要 `_defaults.yaml` 的內容。
+⚠️ **「預設閾值」不等於「全部閾值」；而「設得動」也不等於「告警活了」。** 出貨的 helm chart 只帶少數幾個 key 的平台預設值（`thresholdConfig.defaults`）。其餘 key 分兩類，處置完全不同：
+
+- **平台已宣告、但不主張值的 key** — 列在 `_defaults.yaml` / helm values 的 `optional_overrides:` 清單裡，隨 chart 與 onboarding 產物一起出貨。**這批不需要 operator 再動手**：你直接在自己的 `conf.d/<tenant>.yaml` 填值就會生效。但平台刻意不給它們預設值，所以**你不填就是靜默，而且不會有任何錯誤訊息**——那是設計，不是漏掉的預設：這些閾值（例如 Oracle process count、DB2 deadlock rate）只有你自己的 baseline 校準得出來，平台替你選一個數字只會製造誤觸。
+- **既不在 `defaults:`、也不在 `optional_overrides:` 的 key** — 仍要由**平台 operator** 顯式供給（`scaffold-tenant` 產生的 `_defaults.yaml`，或自行填 helm values）之後你才設得動。在那之前透過 Portal / Tenant API 寫入會被擋下（unknown key），直接推 GitOps 則是寫得進去但不會生效。
+
+兩類的共同點是：沒有閾值 series ⇒ 規則配不到 ⇒ 回空，這是 config-driven join 的機制本身。若你不確定平台替你開了哪些，問你的平台 operator 要 `_defaults.yaml` 的內容——**`defaults:` 與 `optional_overrides:` 兩段都要**。
 
 ## 常見操作
 
@@ -231,7 +236,7 @@ A: 不需要用的 Rule Pack 不會產生 alert（沒有對應的 exporter metri
 A: Profile 是填充（fill-in），只在 tenant 沒有設定該 key 時生效。你的直接設定永遠優先。
 
 **Q: 我怎麼知道現在有哪些 metric key 可以設定？**
-A: 查看 `_defaults.yaml` 和各 Rule Pack YAML 的頂部註解。也可以執行 `diagnose.py --show-inheritance` 看完整的可用 key。
+A: 查看 `_defaults.yaml` 和各 Rule Pack YAML 的頂部註解。也可以執行 `diagnose.py --show-inheritance`：輸出的 `resolved` 是**已有值**的 key，`declared` 是**平台認得但不主張值**的 key（`optional_overrides:`）——後者一樣設得動，只是你不填就沒有值。
 
 > 💡 **第一次上線？** 用 [Onboarding Checklist](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/onboarding-checklist.jsx) 取得完整的步驟清單，或從 [互動式入門精靈](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx) 開始。想在瀏覽器中觀看完整的平台運作流程？[Platform Demo](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/platform-demo.jsx) 展示真實場景。所有工具見 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/)。企業內網環境可用 `da-portal` Docker image 自建：`docker run -p 8080:80 ghcr.io/vencil/da-portal`（[部署說明](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md)）。
 

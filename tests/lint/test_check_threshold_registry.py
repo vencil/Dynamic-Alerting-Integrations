@@ -241,15 +241,53 @@ def test_regen_writes_registry_and_surfaces(monkeypatch, tmp_path):
     assert calls.get("write") and calls.get("surfaces")
 
 
-def test_regen_surfaces_rejects_path_escaping_repo_root(tmp_path):
+def test_regen_surfaces_rejects_path_escaping_repo_root(tmp_path, monkeypatch):
     """A registry-derived surface path carrying `..` must fail loud, not
-    splice a file outside the repo (CodeRabbit review of #1222)."""
+    splice a file outside the repo (CodeRabbit review of #1222).
+
+    ⛔ HERMETIC, and that is load-bearing rather than tidy. This test used to
+    call `regen_surfaces` on the REAL registry with only one pack's
+    `rule_pack_file` poisoned. `regen_surfaces` writes each surface as it goes
+    and only raises when it reaches the bad one, so the earlier surfaces —
+    helm values and the dev `conf.d/_defaults.yaml` — were rewritten to a
+    freshly regenerated state BEFORE the expected ValueError. In a whole-suite
+    run `tests/lint` goes first, so it silently repaired the working tree and
+    any drift a later `tests/ops` test was supposed to catch was already gone
+    (measured: the same mutation gave 4 failures scoped, 2 whole-suite).
+
+    Everything the test was written to prove is unchanged: a `..` in a
+    registry-derived surface path raises before writing. It now proves it
+    against a tmp repo root, so nothing outside tmp_path is touched.
+    """
     import pytest
-    from _registry_lib import regen_surfaces, load_registry
-    doc = load_registry()
+    from _registry_lib import regen_surfaces, surface_specs
+
+    fake_root = tmp_path / "repo"
+    fake_root.mkdir()
+    helm = fake_root / "values.yaml"
+    dev = fake_root / "_defaults.yaml"
+    # Copies of the real host documents, so the two file-level surfaces splice
+    # exactly as they do in production (markers, parent keys, indent) — the
+    # earlier surfaces must be genuinely spliceable, or reaching the poisoned
+    # pack spec would prove nothing about ordering.
+    helm.write_text(Path(lib.HELM_VALUES_PATH).read_text(encoding="utf-8"),
+                    encoding="utf-8")
+    dev.write_text(Path(lib.DEV_DEFAULTS_PATH).read_text(encoding="utf-8"),
+                   encoding="utf-8")
+
+    doc = lib.build_registry_doc()
+    # Redirect BOTH file-level surfaces and the repo-root containment anchor
+    # into tmp_path, so the loop reaches the poisoned pack spec having touched
+    # nothing real.
+    monkeypatch.setattr(lib, "_REPO_ROOT", str(fake_root))
+    monkeypatch.setattr(lib, "HELM_VALUES_PATH", str(helm))
+    monkeypatch.setattr(lib, "DEV_DEFAULTS_PATH", str(dev))
+    assert len(surface_specs(doc)) > 4, "expected pack surfaces after the files"
+
     doc["packs"][next(iter(doc["packs"]))]["rule_pack_file"] = "../../outside.yaml"
     with pytest.raises(ValueError, match="escapes repo root"):
         regen_surfaces(doc)
+    assert not (tmp_path / "outside.yaml").exists()
 
 
 # ── deprecated_aliases (#1231) — SSOT section + the Python-mirror pin ──────
