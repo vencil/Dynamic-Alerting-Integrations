@@ -3,15 +3,41 @@
 # on its HTTP listener — ingest + query + DELETE all share :9428. The
 # §2 hard rule guards the producer side (gateway → stdout, not direct
 # push) but does not protect the store itself from compromised
-# in-cluster pods. This NetworkPolicy locks the port to the declared
+# in-cluster pods. This NetworkPolicy narrows the port to the declared
 # consumers: the Vector DaemonSet (ingest — since #1018 in its
 # dedicated `vector` namespace via `allowedNamespaces`; the same-ns
 # podSelector row remains for debug pods / pre-migration installs), the
 # chargeback CronJob (query), Grafana (query), the federation-gateway in
 # `mode: victorialogs` (tenant-scoped log query, ADR-021 #609), the
 # federation-reconciler (revocation-evidence read, ADR-028 D1 / #1234),
-# and same-pod loopback (probes). Any other pod in the cluster — including
-# a freshly attacker-deployed one in the same namespace — cannot reach :9428.
+# and same-pod loopback (probes).
+#
+# ⛔ HOW STRONG THIS ACTUALLY IS — corrected in #1295. This block used to
+# end with "Any other pod in the cluster — including a freshly
+# attacker-deployed one in the same namespace — cannot reach :9428". That
+# is FALSE for the same-namespace half, and the two kinds of row below are
+# NOT equally strong:
+#   * `allowedNamespaces` renders a `namespaceSelector` on
+#     `kubernetes.io/metadata.name`. A pod cannot choose its own namespace,
+#     and that label is maintained by the control plane — this row IS a
+#     boundary.
+#   * `allowedPodSelectors` renders a bare `podSelector`, i.e. a match on
+#     SELF-DECLARED pod labels within this namespace. Any principal able to
+#     create a pod here can wear one of the five labels and be admitted.
+# So what the policy buys is: everything from other namespaces is blocked
+# unless explicitly allowed, and same-namespace workloads that are not
+# deliberately impersonating a consumer are blocked. What it does NOT buy
+# is protection against a principal who can already create pods in THIS
+# namespace — for them the port stays unauthenticated ingest + query +
+# DELETE. Note that such a principal is already highly privileged here
+# (mounting any ConfigMap in a namespace needs no RBAC at all), so read
+# this as "an attacker already inside can also erase the evidence", not as
+# "anyone can walk in".
+# ⚠️ This is also the ceiling on any ingest-time classification done in
+# Vector (#1288): binding producer identity inside the pipeline cannot
+# constrain someone who writes to the store directly. Both candidate fixes
+# (enable `-httpAuthKey`; or move consumers behind namespace boundaries and
+# use `allowedNamespaces` throughout) are tracked in #1295.
 #
 # ⚠️ Every `allowedPodSelectors` row is a SAME-NAMESPACE match: a k8s
 # NetworkPolicy `podSelector` with no `namespaceSelector` beside it selects
@@ -24,10 +50,13 @@
 # ::test_networkpolicy_locks_to_the_declared_consumer_set, so this list and
 # the values.yaml enumeration must be edited together with that test.
 #
-# Building auth (`-httpAuthKey`) into the chart is the deeper fix and
-# is tracked as a separate follow-up; NetworkPolicy is the minimum
-# bar that closes the most-likely exploit path without forcing every
-# consumer to learn a token-rotation story.
+# Building auth (`-httpAuthKey`) into the chart is the deeper fix and is
+# tracked in #1295 (it is the only candidate that is independent of where
+# the consumers are deployed). NetworkPolicy remains the minimum bar — it
+# closes the cross-namespace and the incidental-reachability paths without
+# forcing every consumer to learn a token-rotation story — but per the
+# correction above it is not a boundary against same-namespace pod
+# creation, so do not cite it as one.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
