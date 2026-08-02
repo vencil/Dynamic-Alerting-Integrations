@@ -52,8 +52,9 @@ defaults:
   # ⚠️ Values are NUMBERS, unquoted — the Go type is map[string]float64
   mysql_connections: 80
   mysql_threads_running: 30  # threads_running saturation (concurrent threads, NOT host CPU%; renamed from mysql_cpu, #1231)
-  mysql_memory: 85
-  # Other default thresholds...
+  mysql_replication_lag: 30  # seconds — async replication lag
+  # Other default thresholds... (keys MUST be names the threshold-registry knows,
+  # or you get a dead series no rule pack consumes — and nothing will tell you)
 ```
 
 ### Deploy threshold-exporter ×2 HA

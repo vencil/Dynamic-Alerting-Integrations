@@ -52,8 +52,9 @@ defaults:
   # ⚠️ 值是數字、不加引號 —— Go 端型別為 map[string]float64
   mysql_connections: 80
   mysql_threads_running: 30  # threads_running 飽和（併發執行緒數，NOT host CPU%；#1231 由 mysql_cpu 改名）
-  mysql_memory: 85
-  # 其他預設閾值...
+  mysql_replication_lag: 30  # 秒 — 非同步複製延遲
+  # 其他預設閾值...（key 必須是 threshold-registry 認得的名字，
+  # 否則會產出沒有任何 rule pack 消費的死 series，且不會有人告訴你）
 ```
 
 ### 部署 threshold-exporter ×2 HA
