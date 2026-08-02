@@ -432,38 +432,84 @@ def test_an_expression_reading_the_da_tools_pin_too_is_never_attributed_away(tmp
     assert workloads == [], "an ambiguous chart must yield no verified workloads"
 
 
-def test_an_image_expression_touching_two_foreign_pins_stays_unattributed(tmp_path, monkeypatch):
-    """Ambiguity inside ONE expression is refused rather than guessed at."""
-    values = _SIDECAR_VALUES + 'other:\n  image:\n    repository: alpine\n    tag: "3"\n'
+def test_an_image_expression_touching_two_pins_is_not_attributed() -> None:
+    """Ambiguity inside ONE expression is refused rather than guessed at.
+
+    ⛔ Asserted on `attributed_pin` DIRECTLY. The end-to-end version of this
+    test was green under a mutation that dropped the "exactly one" rule — the
+    second pin in that fixture had no container claiming it, so the unclaimed
+    branch raised an error either way and `assert errors` proved nothing about
+    attribution. A unit assertion has no such back channel.
+    """
+    trails = ["preflight.image", "other.image"]
+    assert gate.attributed_pin({"preflight.image.repository", "other.image.tag"}, trails) is None
+    # ...and the single-pin case still resolves, or the guard above would be
+    # satisfied by a function that never attributes anything.
+    assert gate.attributed_pin({"preflight.image.repository"}, trails) == "preflight.image"
+
+
+def test_a_trail_that_is_also_a_da_tools_pin_never_grants_a_skip(tmp_path, monkeypatch):
+    """⛔ A FAIL-OPEN THIS GATE DID NOT HAVE BEFORE per-container attribution.
+
+    Every `values*.yaml` in the chart is read (see
+    test_helm_values_override_pin_is_also_checked), so ONE trail can hold a
+    da-tools pin in `values.yaml` and a foreign one in `values-prod.yaml` — a
+    mirror, a fork, a local registry. Attributing on the foreign membership
+    alone then excused the container the gate exists to check, and the chart
+    went green where it used to raise the mixed-image error.
+
+    The chart needs a SECOND, resolvable container: with only one, the
+    containers_seen==0 arm catches it anyway (and blames the wrong cause), so a
+    single-container fixture would pass against the buggy version too.
+    """
     template = _DEPLOYMENT_TMPL + """\
-      initContainers:
-        - name: preflight
-          image: "{{ .Values.preflight.image.repository }}:{{ .Values.other.image.tag }}"
+        - name: direct
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           command: ["/bin/sh", "-c", "true"]
 """
-    _write_chart(tmp_path, values=values, template=template)
+    chart = _write_chart(tmp_path, template=template)
+    (chart / "values-prod.yaml").write_text(
+        'image:\n  repository: mirror.local/da-tools\n  tag: "v2.9.0"\n', encoding="utf-8")
     monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
     errors: list[str] = []
-    gate.collect_helm_workloads(errors)
-    assert errors, "an expression spanning two pins was silently attributed"
+    workloads = gate.collect_helm_workloads(errors)
+    assert errors, (
+        f"the `direct` container was attributed away by a trail that is ALSO the "
+        f"da-tools pin; verified workloads={[w.where for w in workloads]}")
 
 
 def test_indexed_stripping_parses_to_the_same_structure() -> None:
-    """The attribution pass must not see a different document than the original
-    one. Asserted over every shipped chart template, because a divergence would
-    show up as containers that exist for one pass and not the other."""
+    """The attribution pass must not see a different document than the original.
+
+    ⛔ Placeholder names are NORMALISED before comparing, and `.yml` is scanned
+    as well as `.yaml`. Both matter: the two strippers emit deliberately
+    different placeholder text, so a chart writing `name: {{ … }}` would fail
+    this on the difference it is designed to have; and the scanner's own
+    `_yaml_files` reads both extensions, so a `.yml`-only divergence would sit
+    outside an assertion that claims to cover every shipped template.
+    """
+    import re as _re
     import yaml as _yaml
 
+    def _names(doc) -> list[str]:
+        return [_re.sub(r"__helm_(?:template|action_\d+)__", "<tpl>", str(c.get("name")))
+                for c in gate.iter_containers(doc)]
+
+    seen = 0
     for chart in sorted((gate.REPO_ROOT / "helm").iterdir()):
-        for template in sorted((chart / "templates").rglob("*.yaml")) if (chart / "templates").is_dir() else []:
+        templates = chart / "templates"
+        if not templates.is_dir():
+            continue
+        for template in sorted(p for p in templates.rglob("*") if p.suffix in (".yaml", ".yml")):
             text = template.read_text(encoding="utf-8")
             plain = list(_yaml.safe_load_all(gate.strip_helm_actions(text)))
             indexed_text, _ = gate.strip_helm_actions_indexed(text)
             indexed = list(_yaml.safe_load_all(indexed_text))
+            seen += 1
             assert len(plain) == len(indexed), template
             for a, b in zip(plain, indexed):
-                assert [c.get("name") for c in gate.iter_containers(a)] == \
-                       [c.get("name") for c in gate.iter_containers(b)], template
+                assert _names(a) == _names(b), template
+    assert seen > 20, f"only {seen} templates compared — the walk stopped finding charts"
 
 
 def test_yml_extension_is_scanned(tmp_path, monkeypatch):

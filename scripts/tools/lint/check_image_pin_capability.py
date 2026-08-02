@@ -678,7 +678,19 @@ def collect_helm_workloads(errors: list[str]) -> list[Workload]:
                     owner = attributed_pin(
                         image_values_paths(container.get("image"), actions),
                         list(other_trails) + da_tools_trails)
-                    if owner is not None and owner in other_trails:
+                    # ⛔ `not in da_tools_trails` is the second half of the veto,
+                    # and omitting it was a fail-OPEN this gate did not have
+                    # before. ONE trail can be both: every `values*.yaml` in the
+                    # chart is read, so a `values-prod.yaml` re-pointing
+                    # `image.repository` at a mirror or a fork puts `image` in
+                    # BOTH sets. Skipping on the foreign membership alone then
+                    # excused the very container the gate exists to check, and
+                    # the chart went green where it used to raise the
+                    # mixed-image error. (Charts with a single container are
+                    # caught by the containers_seen==0 arm below — but only
+                    # those, and with a message pointing at the wrong cause.)
+                    if (owner is not None and owner in other_trails
+                            and owner not in da_tools_trails):
                         claimed_trails.add(owner)
                         continue
                     containers_seen += 1

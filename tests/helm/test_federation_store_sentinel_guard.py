@@ -103,7 +103,7 @@ def _render(chart: Path, *overrides: str, namespace: str = "ns-under-test") -> l
     cmd = ["helm", "template", "rel", str(chart), "--namespace", namespace]
     for o in overrides:
         cmd += ["--set", o]
-    out = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=90)
+    out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", check=True, timeout=90)
     return [d for d in yaml.safe_load_all(out.stdout) if d]
 
 
@@ -111,7 +111,7 @@ def _render_fails(chart: Path, *overrides: str) -> str:
     cmd = ["helm", "template", "rel", str(chart)]
     for o in overrides:
         cmd += ["--set", o]
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=90)
     assert res.returncode != 0, "the render was expected to abort but succeeded"
     return res.stderr
 
@@ -418,14 +418,14 @@ def test_a_consumer_names_the_yaml_11_trap_for_an_unquoted_off(chart: Path, tmp_
     vf.write_text("preflight:\n  mode: off\n", encoding="utf-8")
     res = subprocess.run(
         ["helm", "template", "rel", str(chart), "-f", str(vf)],
-        capture_output=True, text=True, timeout=90)
+        capture_output=True, text=True, encoding="utf-8", timeout=90)
     assert res.returncode != 0, "an unquoted `off` rendered — it is the boolean false, not the mode"
     assert "BOOLEAN" in res.stderr and "Quote it" in res.stderr, res.stderr[-400:]
     # ...and the quoted form must work, or the advice in the error is wrong.
     vf.write_text('preflight:\n  mode: "off"\n', encoding="utf-8")
     ok = subprocess.run(
         ["helm", "template", "rel", str(chart), "-f", str(vf)],
-        capture_output=True, text=True, timeout=90)
+        capture_output=True, text=True, encoding="utf-8", timeout=90)
     assert ok.returncode == 0, ok.stderr[-400:]
 
 
@@ -528,7 +528,7 @@ def _run(store_dir: Path, mode: str, sentinel_key: str) -> subprocess.CompletedP
     return subprocess.run(
         [_SH, "-c", _shipped_script()],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         timeout=30,
         env={
             **os.environ,

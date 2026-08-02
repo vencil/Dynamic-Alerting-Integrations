@@ -80,7 +80,7 @@
 **長相**：這句 warn 有**兩個產生者**（#1316 起），先分清是哪一個，因為它們的時間語意完全不同：
 
 - **Envoy 容器**（`app:"envoy"`）：`federation: revoked-set missing: /etc/revoked/revoked.txt is absent; enforcing an EMPTY set — every revoked token is honoured until its TTL`。由 Lua 在**請求路徑**上發出（reload 掛在 `envoy_on_request` 內）⇒ **沒有流量就永遠不會出現**。
-- **`federation-store-preflight` init container**（`app:"federation-store-preflight"`）：同一句 phrase 開頭，接的是 `… resolved to an EMPTY directory at startup. ConfigMap '…' does not exist in namespace '…'`，**訊息裡直接寫出要修的 namespace**。它在 **pod 啟動時發一次**，補的正是「錯配但閒置的 gateway 一句話都不發」那個洞。
+- **`federation-store-preflight` init container**（`app:"federation-store-preflight"`）：同一句 phrase 開頭，接的是 `… resolved to an EMPTY directory at startup, so this workload would enforce an EMPTY revoked set …`，後面**列出兩種它無法區分的成因（a) CM 不在該 namespace／(b) CM 在但還沒被寫過**）並附上分辨用的 `kubectl`。它在 **pod 啟動時發一次**，補的正是「錯配但閒置的 gateway 一句話都不發」那個洞。⛔ 它**刻意不宣告是哪一種**——從 pod 內部看不出來（見下方警語）。
 
 手查：`log_type:"gateway_operational" AND (app:"envoy" OR app:"federation-store-preflight") AND "federation: revoked-set missing"`（來源限定的誠實邊界同 §fail-open 那條）。
 

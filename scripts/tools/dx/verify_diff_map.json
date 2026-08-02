@@ -418,6 +418,7 @@
    "tests/lint/test_validate_planning_session_row.py"
   ],
   "scripts/tools/ops/_federation_revocation_reconciler.py": [
+   "tests/helm/test_federation_store_sentinel_guard.py",
    "tests/ops/test_federation_revocation_reconciler.py",
    "tests/ops/test_revoked_set_contract.py"
   ],
@@ -691,7 +692,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "f43515a8cb5fab5de338b0f1bfee4c6759ab7c68e561c99e0fe77b2f756cd32e",
+ "source_digest": "675f4548579fba29a6e6c4607cdc1bbb0ba7fdee5eca3f40e12b989804575418",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -757,6 +758,7 @@
   "tests/helm/test_environments_overlay_sync.py",
   "tests/helm/test_federation_reconciler_projection_grace.py",
   "tests/helm/test_federation_store_namespace_guard.py",
+  "tests/helm/test_federation_store_sentinel_guard.py",
   "tests/helm/test_human_socket_guard.py",
   "tests/helm/test_identity_claim_headers_guard.py",
   "tests/helm/test_image_tag_derivation.py",
@@ -1381,8 +1383,10 @@
    "tests/lint/test_check_cross_ns_url_consistency.py"
   ],
   "helm/federation-gateway": [
+   "tests/helm/test_federation_store_sentinel_guard.py",
    "tests/helm/test_revoked_set_contract_guard.py",
-   "tests/helm/test_victorialogs_gateway_guard.py"
+   "tests/helm/test_victorialogs_gateway_guard.py",
+   "tests/ops/test_federation_revocation_reconciler.py"
   ],
   "helm/federation-gateway/README.md": [
    "tests/helm/test_federation_store_namespace_guard.py"
@@ -1404,6 +1408,9 @@
    "tests/helm/test_revoked_set_contract_guard.py",
    "tests/helm/test_victorialogs_gateway_guard.py"
   ],
+  "helm/federation-gateway/templates/deployment.yaml": [
+   "tests/helm/test_federation_store_sentinel_guard.py"
+  ],
   "helm/federation-gateway/values.yaml": [
    "tests/helm/test_revoked_set_contract_guard.py",
    "tests/ops/test_revoked_set_contract.py"
@@ -1411,10 +1418,15 @@
   "helm/federation-reconciler": [
    "tests/dx/test_bump_docs.py",
    "tests/helm/test_federation_reconciler_projection_grace.py",
-   "tests/lint/test_check_image_pin_capability.py"
+   "tests/helm/test_federation_store_sentinel_guard.py",
+   "tests/lint/test_check_image_pin_capability.py",
+   "tests/ops/test_federation_revocation_reconciler.py"
   ],
   "helm/federation-reconciler/Chart.yaml": [
    "tests/dx/test_bump_docs.py"
+  ],
+  "helm/federation-reconciler/templates/deployment.yaml": [
+   "tests/helm/test_federation_store_sentinel_guard.py"
   ],
   "helm/federation-reconciler/values.yaml": [
    "tests/dx/test_bump_docs.py",
@@ -1434,6 +1446,7 @@
   ],
   "helm/tenant-api": [
    "tests/helm/test_federation_store_namespace_guard.py",
+   "tests/helm/test_federation_store_sentinel_guard.py",
    "tests/helm/test_human_socket_guard.py",
    "tests/helm/test_identity_claim_headers_guard.py",
    "tests/helm/test_image_tag_derivation.py",
@@ -1847,7 +1860,8 @@
   "scripts/tools/dx/verify_diff.py": [
    "tests/dx/test_verify_diff.py",
    "tests/helm/test_federation_reconciler_projection_grace.py",
-   "tests/helm/test_federation_store_namespace_guard.py"
+   "tests/helm/test_federation_store_namespace_guard.py",
+   "tests/helm/test_federation_store_sentinel_guard.py"
   ],
   "scripts/tools/dx/verify_release.sh": [
    "tests/dx/test_verify_release.py"
@@ -1974,6 +1988,7 @@
    "tests/lint/test_check_structure.py"
   ],
   "scripts/tools/ops": [
+   "tests/helm/test_federation_store_sentinel_guard.py",
    "tests/ops/test_grar_facade_reexports.py",
    "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_dispatch_contract.py",
@@ -1982,6 +1997,7 @@
   ],
   "scripts/tools/ops/_federation_revocation_reconciler.py": [
    "tests/helm/test_federation_reconciler_projection_grace.py",
+   "tests/helm/test_federation_store_sentinel_guard.py",
    "tests/ops/test_revoked_set_contract.py"
   ],
   "scripts/tools/ops/_grar_validate.py": [
@@ -2164,6 +2180,9 @@
   ],
   "tests/ops/test_check_alert.py": [
    "tests/shared/test_json_stdout_contract.py"
+  ],
+  "tests/ops/test_federation_revocation_reconciler.py": [
+   "tests/helm/test_federation_store_sentinel_guard.py"
   ],
   "tests/ops/test_nightly_scan_matrix_drift.py": [
    "tests/ops/test_nightly_race_issue_policy.py"

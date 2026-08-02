@@ -356,6 +356,12 @@ class TestParsing:
         assert f'app:"{rec.GATEWAY_APP}"' in q
         assert rec.GATEWAY_MISSING_PHRASE in q
         assert "now-600s" in q and "now-60s" in q
+        # ⛔ The two-producer form (#1316) MUST stay parenthesised. LogsQL binds
+        # AND tighter than OR, so dropping the brackets turns this into
+        # `(time AND log_type AND app:envoy) OR (app:preflight AND phrase)` —
+        # the second arm loses the time window and the stream qualification
+        # entirely, and every substring assertion above still passes.
+        assert f'(app:"{rec.GATEWAY_APP}" OR app:"{rec.GATEWAY_PREFLIGHT_APP}")' in q
 
     def test_every_metrics_field_reaches_the_exposition(self):
         """A gauge that is computed but never rendered is the same as no gauge.
