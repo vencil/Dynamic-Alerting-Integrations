@@ -438,6 +438,7 @@
    "tests/ops/test_threshold_govern.py"
   ],
   "scripts/tools/ops/_registry_lib.py": [
+   "tests/dx/test_generate_platform_data.py",
    "tests/lint/test_check_threshold_registry.py",
    "tests/ops/test_init_project.py",
    "tests/ops/test_scaffold_tenant.py"
@@ -616,6 +617,7 @@
    "tests/ops/test_runtime_audit.py"
   ],
   "scripts/tools/ops/scaffold_tenant.py": [
+   "tests/dx/test_generate_platform_data.py",
    "tests/ops/test_init_project.py",
    "tests/ops/test_integration.py",
    "tests/ops/test_regression.py",
@@ -689,7 +691,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "a27d9acb93470b2debf05af8447811d0fb55c25d517b767aa8dbdfef7bb4538d",
+ "source_digest": "f43515a8cb5fab5de338b0f1bfee4c6759ab7c68e561c99e0fe77b2f756cd32e",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",

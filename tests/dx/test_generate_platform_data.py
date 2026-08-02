@@ -99,3 +99,63 @@ class TestHappyPath:
         mod = _load_module()
         _groups, meta = mod._load_tenant_metadata()
         assert meta, "真實 conf.d 應產出 tenant metadata"
+
+
+class TestDeclaredKeys:
+    """`declaredKeys` — 平台認得但不主張值的那一格，portal 側的資料源（#1321）。
+
+    ⛔ 這裡刻意不重算成員，而是拿 `_registry_lib.shipped_optional_keys_for_packs`
+    當斷言來源——那正是 generator 呼叫的同一支，也是兩個 onboarding 生成器與出貨
+    `optional_overrides:` 清單用的同一支。若哪天有人在 generator 裡另寫一套判準，
+    集合相等就會斷。
+    """
+
+    @staticmethod
+    def _derived() -> dict:
+        ops = str(_REPO_ROOT / "scripts" / "tools" / "ops")
+        if ops not in sys.path:
+            sys.path.insert(0, ops)
+        import scaffold_tenant  # noqa: PLC0415
+        from _registry_lib import shipped_optional_keys_for_packs  # noqa: PLC0415
+
+        out = {}
+        for pack in scaffold_tenant.RULE_PACKS:
+            keys = shipped_optional_keys_for_packs([pack])
+            if keys:
+                out[pack] = set(keys)
+        return out
+
+    def test_members_equal_the_shipped_derivation_per_pack(self):
+        mod = _load_module()
+        packs = mod.load_scaffold_rule_packs()
+        got = {p: {r["key"] for r in rows}
+               for p, rows in mod.build_declared_keys(packs).items()}
+        assert got == self._derived()
+
+    def test_is_non_vacuous(self):
+        # 沒有這條，上面那條在「兩邊都空」時會真空通過。
+        assert self._derived(), "推導端不該是空的——registry 有 9 個平鍵"
+
+    def test_never_emits_a_critical_spelling(self):
+        # `<base>_critical` 走 resolveCriticalRows 讀 defaults[base]，不屬這一格；
+        # 列進來等於在 portal 上廣告一條死路（#1311）。
+        mod = _load_module()
+        rows = mod.build_declared_keys(mod.load_scaffold_rule_packs())
+        emitted = [r["key"] for v in rows.values() for r in v]
+        assert [k for k in emitted if k.endswith("_critical")] == []
+
+    def test_row_shape_carries_reference_meta(self):
+        mod = _load_module()
+        rows = mod.build_declared_keys(mod.load_scaffold_rule_packs())
+        for pack_rows in rows.values():
+            for row in pack_rows:
+                assert set(row) == {"key", "value", "unit", "desc"}
+
+    def test_lands_at_the_top_level_not_under_rulepacks(self):
+        # 放進 rulePacks[*] 會被 rule-packs.js 那份手寫 fallback 的 per-pack
+        # deep-equal gate 拉著要求手抄一份——正是這條線在消滅的東西。
+        mod = _load_module()
+        data = mod.build_platform_data()
+        assert "declaredKeys" in data
+        for pack in data["rulePacks"].values():
+            assert "declaredKeys" not in pack
