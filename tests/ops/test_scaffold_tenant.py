@@ -1646,14 +1646,45 @@ def _shipped_chart_declared_keys():
     return set(shipped)
 
 
-def _tenant_yaml_for(tmpdir, dbs, tenant="db-c"):
-    """實跑 generate_defaults + generate_tenant + write_outputs，回傳檔案全文。"""
+def _tenant_yaml_for(tmpdir, dbs, tenant="db-c", overrides=None):
+    """實跑 generate_defaults + generate_tenant + write_outputs，回傳檔案全文。
+
+    ``overrides`` 給的是「該租戶已經有自己的 key」那個形狀——非互動預設產出的是
+    `db-c: {}`（flow mapping），而 flow mapping 底下的縮排不受既有 key 約束，
+    量不出 stub 縮排漂移。
+    """
     packs = ["kubernetes", *dbs]
     defaults = generate_defaults(packs)
     tenant_data = generate_tenant(tenant, packs, interactive=False)
+    if overrides:
+        tenant_data["tenants"][tenant] = dict(overrides)
     write_outputs(tmpdir, tenant, defaults, tenant_data, "report")
     with open(os.path.join(tmpdir, f"{tenant}.yaml"), encoding="utf-8") as f:
         return f.read()
+
+
+def _paste_declared_lines_under_tenant(text, tenant):
+    """完全照 stub 的說明做一次：整行複製到租戶底下、去掉開頭的「# 」。
+
+    貼成該租戶 mapping 的**第一個**條目——既是說明最自然的讀法，也是唯一讓縮排
+    仍然「承重」的位置：貼在整段最後面時，縮排過深的一行會變成前一個巢狀 mapping
+    的兄弟，YAML 照樣 parse 得過。另外照說明的前置條件，先把 ` {}` 拆掉。
+    """
+    lines = text.split("\n")
+    pasted = [ln[2:] for ln in lines if _STUB_KEY_LINE.match(ln)]
+    assert pasted, "沒有可貼的宣告 key 行——區塊不見了"
+    anchor = re.compile(r"^(\s*)%s:(\s*\{\})?\s*$" % re.escape(tenant))
+    out, done = [], False
+    for line in lines:
+        m = anchor.match(line)
+        if m and not done:
+            out.append(f"{m.group(1)}{tenant}:")
+            out.extend(pasted)
+            done = True
+            continue
+        out.append(line)
+    assert done, f"找不到可貼進去的 `{tenant}:` 行"
+    return "\n".join(out)
 
 
 class TestTenantStubDeclaredBlock:
@@ -1676,13 +1707,41 @@ class TestTenantStubDeclaredBlock:
         assert "沒有值可繼承" in content
 
     def test_header_also_names_the_critical_tier(self):
-        """兩類還不是完整分類：`<base>_critical` 兩個區塊都不在，卻只要 `<base>`
+        """兩類還不是完整分類：`<base>_critical` 不在宣告清單裡，卻只要 `<base>`
         在 `defaults:` 有值就會產出一條真的 critical row。停在兩類會讀成「已窮盡」
         而其實沒有——判準與 rule-pack header 一分為三那條相同。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             content = _tenant_yaml_for(tmpdir, ["oracle"])
         assert "第三類 <base>_critical" in content
         assert "真的 critical 閾值" in content
+
+    def test_critical_paragraph_matches_the_sibling_defaults_file(self):
+        """⛔ 第三類敘述不能是寫死的句子——它只對**本生成器**的產物為真。
+
+        `scaffold_tenant.RULE_PACKS` 的 defaults tier 一個 `_critical` 都沒有，
+        `init_project.RULE_PACK_CATALOG` 卻直接放了 16 個進 `defaults:`；同一句
+        「兩個區塊都不列」對後者是假的。所以這條**讀兄弟檔**（同一次
+        `write_outputs` 寫出去的 `_defaults.yaml`），拿它推導出期望值再比對——
+        原本那條只斷言字串存在，而一個假字串同樣會存在。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content = _tenant_yaml_for(tmpdir, ["oracle", "postgresql"])
+            with open(os.path.join(tmpdir, "_defaults.yaml"), encoding="utf-8") as f:
+                sibling = yaml.safe_load(f)
+        defaults = sibling["defaults"]
+        crit = [k for k in defaults if k.endswith("_critical")]
+        assert not crit, (
+            "fixture 假設變了：這一支本來是 defaults tier 不含 _critical 的那個"
+            "生成器；若真的要改，header 也必須跟著改（這正是本條在守的東西）")
+
+        from _registry_lib import render_tenant_critical_note_lines
+        expected = "\n".join(
+            render_tenant_critical_note_lines(defaults, lang="zh"))
+        assert expected in content
+
+        # 另加一條不經過 renderer 的斷言：header 的用詞必須與產物一致。
+        header = content.split("\ntenants:")[0]
+        assert ("一個都沒有列" in header) == (not crit)
 
     def test_block_members_equal_the_derived_set(self):
         """⛔ 這條釘的是**接線**、不是推導——名字讀起來像後者，所以明寫。
@@ -1763,6 +1822,44 @@ class TestTenantStubDeclaredBlock:
             with open(os.path.join(tmpdir, "_defaults.yaml"), encoding="utf-8") as f:
                 declared_in_defaults = yaml.safe_load(f)["optional_overrides"]
         assert [k for k, _ in _stub_key_lines(content)] == declared_in_defaults
+
+    def test_declared_lines_survive_the_copy_paste_the_prose_prescribes(self):
+        """⛔ stub 對租戶承諾「縮排已對齊」，而在此之前零 gate。
+
+        stub 的縮排是 `_registry_lib.render_tenant_declared_stub_lines` 的常數
+        `indent=4`，租戶 key 的縮排是這裡 `yaml.safe_dump` 產生的——兩份各自為政
+        的事實，其中一份被寫成對租戶的承諾。實測把那個常數 +4：**324 passed、零
+        測試轉紅**，而漂移後照做貼上，最常見情境（租戶已有 4-space key）會得到
+        `YAMLError: while parsing a block mapping`。
+
+        所以真的做一次往返，並且**同時**斷言「parse 得過」與「key 落在這個租戶
+        底下」：只驗 parse 不夠——縮排過深的一行可能仍是合法 YAML，只是悄悄掛進
+        前一個巢狀 mapping。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content = _tenant_yaml_for(
+                tmpdir, ["oracle", "db2"],
+                overrides={"container_cpu": "70", "container_memory": "85"})
+        keys = [k for k, _ in _stub_key_lines(content)]
+        assert keys, "沒有宣告 key 可往返"
+
+        parsed = yaml.safe_load(_paste_declared_lines_under_tenant(content, "db-c"))
+        section = parsed["tenants"]["db-c"]
+        for key in keys:
+            assert key in section, (
+                f"{key} 沒有落在該租戶底下——stub 的縮排已與生成器 dump 出來的不符")
+            assert section[key] == "<你的值>"
+        # 租戶原本的 key 仍在原處
+        assert section["container_cpu"] == "70"
+
+    def test_declared_lines_paste_into_an_empty_tenant_as_documented(self):
+        """空租戶（`db-c: {}`）走說明裡那條前置步驟：先拆掉 ` {}` 再貼。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content = _tenant_yaml_for(tmpdir, ["oracle"])
+        assert "db-c: {}" in content, "fixture 假設變了：非互動產出應為空 flow mapping"
+        keys = [k for k, _ in _stub_key_lines(content)]
+        parsed = yaml.safe_load(_paste_declared_lines_under_tenant(content, "db-c"))
+        assert set(keys) <= set(parsed["tenants"]["db-c"])
 
     def test_appending_twice_is_a_no_op(self):
         """共用 appender 宣稱冪等（比照 annotate_saturation_criticals）——釘住它，

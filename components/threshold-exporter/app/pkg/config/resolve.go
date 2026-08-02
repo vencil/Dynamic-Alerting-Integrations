@@ -1102,10 +1102,18 @@ type KeyValidation struct {
 	Notices []string // advisory channel: #1231 deprecation notices; MUST never block a write
 }
 
-// ValidateTenantKeys checks all tenant config keys against known defaults and
-// reserved patterns. Errors lists warning messages for unknown/invalid keys
-// (this helps catch typos like "_silence_mode" that would be silently
-// ignored); Notices lists non-blocking deprecation advisories (#1231).
+// ValidateTenantKeys checks all tenant config keys against the platform key
+// surface and reserved patterns. That surface is TWO sets, not just `defaults:`
+// (see the body): the keys the platform gives a value to, plus the ones it
+// merely DECLARES on `optional_overrides:`. Errors lists warning messages for
+// unknown/invalid keys (this helps catch typos like "_silence_mode" that would
+// be silently ignored); Notices lists non-blocking deprecation advisories
+// (#1231).
+//
+// ⛔ This comment used to read "against known defaults" — the same
+// understatement the tenant-facing docs carried (#1321). It says a key with no
+// platform value cannot be valid, and the declared tier is precisely that key:
+// no platform value, tenant-settable, accepted here.
 //
 // Alias handling mirrors the resolve boundary: each key is canonicalized
 // first (exact-match table, never prefix-match) and validated under its

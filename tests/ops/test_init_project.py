@@ -421,6 +421,34 @@ def _stub_key_lines(text):
             for m in (_STUB_KEY_LINE.match(l) for l in text.split('\n')) if m]
 
 
+def _paste_declared_lines_under_tenant(text, tenant):
+    """Do literally what the stub tells the tenant to do; return the new text.
+
+    "copy a whole line under your tenant above, drop the leading '# '" — pasted
+    as the FIRST entry of the tenant's own mapping, which is both the natural
+    reading and the placement that keeps the surrounding indentation
+    load-bearing (appending at the very end of a nested block would let a
+    too-deep line parse as a sibling of the last nested key). Also applies the
+    prose's own precondition: delete a ` {}` flow mapping before pasting under
+    it.
+    """
+    lines = text.split('\n')
+    pasted = [ln[2:] for ln in lines if _STUB_KEY_LINE.match(ln)]
+    assert pasted, 'nothing to paste — the declared block is missing'
+    anchor = re.compile(r'^(\s*)%s:(\s*\{\})?\s*$' % re.escape(tenant))
+    out, done = [], False
+    for line in lines:
+        m = anchor.match(line)
+        if m and not done:
+            out.append(f'{m.group(1)}{tenant}:')
+            out.extend(pasted)
+            done = True
+            continue
+        out.append(line)
+    assert done, f'no `{tenant}:` line to paste under'
+    return '\n'.join(out)
+
+
 def _shipped_chart_declared_keys():
     """The declared list as it is actually SHIPPED, read from the artifact.
 
@@ -457,14 +485,61 @@ class TestGenTenantYamlDeclaredBlock:
         assert 'stays silent' in yaml_str
 
     def test_header_also_names_the_critical_tier(self):
-        """Two buckets is not the taxonomy. `<base>_critical` is in NEITHER
-        block, yet it takes effect today whenever `<base>` has a value under
-        `defaults:` — so a header that stops at two reads as complete and is
-        not. Same criterion as the three-way rule-pack header split: does what
-        we say buy the tenant protection."""
+        """Two buckets is not the taxonomy. `<base>_critical` is in neither
+        block *as far as the declared list goes*, yet it decides whether a
+        critical row exists at all — so a header that stops at two reads as
+        complete and is not. Same criterion as the three-way rule-pack header
+        split: does what we say buy the tenant protection."""
         yaml_str = ip._gen_tenant_yaml('db-a', ['oracle'])
         assert '`<base>_critical`' in yaml_str
-        assert 'critical-severity threshold' in yaml_str
+
+    # -- the third paragraph must be TRUE OF THIS GENERATOR'S OWN OUTPUT ----
+    #
+    # It was first written as a static sentence ("in neither block; set one and
+    # it fires once `<base>` has a value"). Measured: true of what
+    # `scaffold_tenant` writes, FALSE of what `init_project` writes — this
+    # module's `RULE_PACK_CATALOG` puts 16 `_critical` keys straight into
+    # `defaults:` (11 of its 15 packs), so `da-tools init --rule-packs mariadb`
+    # emits `mysql_connections_critical: 150` under `defaults:` in the very
+    # `_defaults.yaml` it writes next to the stub. For those keys rule 1 is the
+    # applicable one and the tenant needs to do nothing.
+    #
+    # ⛔ The two tests below assert against the SIBLING FILE, parsed — not
+    # against a phrase. That is the whole point: the previous test only checked
+    # that a string was present, which a false string passes just as well.
+
+    def test_critical_paragraph_matches_the_sibling_defaults_file(self):
+        packs = ['mariadb', 'oracle']
+        tenant_text = ip._gen_tenant_yaml('db-a', packs)
+        sibling = yaml.safe_load(ip._gen_defaults_yaml(packs, 'monitoring'))
+        crit = [k for k in sibling['defaults'] if k.endswith('_critical')]
+        assert crit, (
+            'fixture assumption broken: this generator is supposed to be the '
+            'one that DOES put _critical keys in `defaults:`')
+
+        from _registry_lib import render_tenant_critical_note_lines
+        expected = '\n'.join(
+            render_tenant_critical_note_lines(sibling['defaults'], lang='en'))
+        assert expected in tenant_text
+
+        # …and one assertion that does not go through the renderer at all: the
+        # regime word in the header must agree with the parsed artifact.
+        header = tenant_text.split('\ntenants:')[0]
+        assert ('lists none of them under `defaults:`' in header) == (not crit)
+        assert str(len(crit)) in header
+
+    def test_critical_paragraph_flips_when_defaults_gains_a_critical_key(self):
+        """The renderer's own contract, on synthetic input: a `_critical`
+        appearing in `defaults:` must move the claim, not just the count."""
+        from _registry_lib import render_tenant_critical_note_lines
+        without = '\n'.join(render_tenant_critical_note_lines(
+            {'mysql_connections': 80}, lang='en'))
+        with_crit = '\n'.join(render_tenant_critical_note_lines(
+            {'mysql_connections': 80, 'mysql_connections_critical': 150},
+            lang='en'))
+        assert 'lists none of them' in without
+        assert 'lists none of them' not in with_crit
+        assert 'gives 1 of them a value' in with_crit
 
     def test_block_members_equal_the_derived_set(self):
         """⛔ This pins the WIRING, not the derivation — say so, because the
@@ -552,6 +627,39 @@ class TestGenTenantYamlDeclaredBlock:
         listed = [k for k, _ in _stub_key_lines(
             ip._gen_tenant_yaml('db-a', packs))]
         assert listed == declared_in_defaults
+
+    def test_declared_lines_survive_the_copy_paste_the_prose_prescribes(self):
+        """⛔ The stub promises "the indent already lines up" — and until this
+        test nothing checked it.
+
+        The stub's indent is a constant in `_registry_lib`
+        (`render_tenant_declared_stub_lines`'s `indent=4`); the tenant keys'
+        indent is whatever `yaml.dump` happens to produce here. Two independent
+        facts, one of them written down as a promise to the tenant. Measured:
+        bumping that constant by 4 turned no test red at all, while a reader
+        following the prose afterwards gets `YAMLError: while parsing a block
+        mapping` in the commonest case (a tenant that already has keys).
+
+        So do the round trip for real — paste every line under the tenant with
+        the leading `'# '` removed — and assert BOTH that it parses AND that the
+        keys land under this tenant. Parsing alone is not enough: a too-deep
+        paste can still be valid YAML while silently nesting the key inside
+        whatever mapping precedes it.
+        """
+        text = ip._gen_tenant_yaml('db-a', ['oracle', 'db2'])
+        keys = [k for k, _ in _stub_key_lines(text)]
+        assert keys, 'no declared keys to round-trip'
+
+        pasted = _paste_declared_lines_under_tenant(text, 'db-a')
+        doc = yaml.safe_load(pasted)  # raises on the drifted indent
+        section = doc['tenants']['db-a']
+        for key in keys:
+            assert key in section, (
+                f'{key} did not land under the tenant — the stub indent no '
+                f'longer matches what this generator dumps')
+            assert section[key] == '<your value>'
+        # the tenant's pre-existing keys are still its own
+        assert '_routing' in section
 
 
 # ============================================================

@@ -1132,6 +1132,90 @@ def render_tenant_declared_stub_lines(
     return lines
 
 
+# ---------------------------------------------------------------------------
+# The THIRD population — and its truth is per-GENERATOR, not per-repo (#1321)
+# ---------------------------------------------------------------------------
+# The tenant header names three groups: keys `_defaults.yaml` gives a value to,
+# keys it only DECLARES, and `<base>_critical`. The third sentence was first
+# written as a static claim ("in neither block; it fires once `<base>` has a
+# value") — measured true for what ``scaffold_tenant`` writes and FALSE for what
+# ``init_project`` writes in the very same command:
+#
+#   * ``scaffold_tenant.RULE_PACKS`` puts ZERO ``_critical`` in its ``defaults``
+#     tier, and the shipped ``helm/threshold-exporter/values.yaml``
+#     ``thresholdConfig.defaults`` carries zero as well.
+#   * ``init_project.RULE_PACK_CATALOG`` puts SIXTEEN of them straight into
+#     ``defaults`` (11 of its 15 packs — e.g. mariadb's
+#     ``mysql_connections_critical: 150``). So ``da-tools init --rule-packs
+#     mariadb`` writes a ``_defaults.yaml`` whose ``defaults:`` arms that
+#     critical for every tenant, while the ``<tenant>.yaml`` written by the SAME
+#     run told the tenant no critical row exists unless it sets one.
+#
+# That ``_critical``-into-``defaults`` divergence is init_project's third
+# contract copy; merging it is tracked separately and deliberately NOT done here
+# (a half-merged contract is a fourth contract — see the import note in
+# ``init_project``). What IS fixed here is the header lying about it: the claim
+# is DERIVED from the ``defaults:`` mapping the generator is about to write, so
+# whichever regime a generator is in, the file says the true one.
+
+def defaults_critical_keys(defaults) -> list[str]:
+    """The ``<base>_critical`` names a ``defaults:`` mapping assigns a value to.
+
+    ``defaults`` is the mapping the caller is ABOUT TO WRITE into its
+    ``_defaults.yaml`` — not a pack roster, not a registry query. Both
+    generators already hold it (``scaffold_tenant`` as
+    ``defaults_data["defaults"]``, ``init_project`` as ``_catalog_defaults()``),
+    so nothing new is derived and the header cannot drift from its sibling file.
+    """
+    return [k for k in (defaults or {}) if k.endswith(CRITICAL_SUFFIX)]
+
+
+# Two regimes, two truths. Keyed (lang, defaults-ships-critical) so a generator
+# in either regime gets prose that is true for the file it just wrote.
+_TENANT_STUB_CRITICAL_NOTE = {
+    ("zh", False): (
+        "# 第三類 <base>_critical：本次一起產出的 _defaults.yaml 的 defaults: 一個都沒有列，",
+        "# 平台不供給 critical 值 ⇒ 你在這裡填一個，只要 <base> 在 defaults: 有值，就會",
+        "# 產生一條真的 critical 閾值（不填則無此列，base 的 warning 列不受影響）。",
+    ),
+    ("zh", True): (
+        "# 第三類 <base>_critical：本次一起產出的 _defaults.yaml 的 defaults: 已經直接給了",
+        "# 其中 {n} 個值 ⇒ 對那 {n} 個，適用的是上面第一條（省略＝沿用平台值，critical 列",
+        "# 本來就會發射，不需要你做任何事）。不在 defaults: 的 <base>_critical 才要你自己",
+        "# 填，且只在 <base> 於 defaults: 有值時生效。",
+    ),
+    ("en", False): (
+        "# A third group is `<base>_critical`. The _defaults.yaml generated next to",
+        "# this file lists none of them under `defaults:`, so the platform supplies",
+        "# no critical value: set one here and it produces a real critical-severity",
+        "# threshold as long as `<base>` has a value under `defaults:`; leave it out",
+        "# and there simply is no critical row.",
+    ),
+    ("en", True): (
+        "# A third group is `<base>_critical`. The _defaults.yaml generated next to",
+        "# this file already gives {n} of them a value under `defaults:` — for those",
+        "# {n}, rule 1 above is the one that applies: omit and you keep the platform",
+        "# value, the critical row fires without you doing anything. A",
+        "# `<base>_critical` NOT in that section is yours to set, and it only takes",
+        "# effect while `<base>` has a value there.",
+    ),
+}
+
+
+def render_tenant_critical_note_lines(defaults, lang: str = "zh") -> list[str]:
+    """The tenant header's ``<base>_critical`` paragraph, true for ``defaults``.
+
+    ⛔ Derived from the artifact, never asserted statically: the two generators
+    disagree about whether ``_critical`` keys live in ``defaults:`` (see the
+    section note above), so a fixed sentence is guaranteed to be false for one
+    of them. The count is rendered too — it is what makes the claim checkable
+    against the sibling ``_defaults.yaml`` rather than merely plausible.
+    """
+    shipped = defaults_critical_keys(defaults)
+    template = _TENANT_STUB_CRITICAL_NOTE[(lang, bool(shipped))]
+    return [line.format(n=len(shipped)) for line in template]
+
+
 def append_tenant_declared_stub(
     text: str,
     keys,
