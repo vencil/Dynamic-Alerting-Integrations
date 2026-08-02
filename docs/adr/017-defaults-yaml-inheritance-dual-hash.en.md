@@ -65,8 +65,10 @@ defaults:
 
 # ↓ top-level key, a sibling of `defaults:` — NOT nested under it.
 #   `defaults:` is map[string]float64; any nested mapping inside it fails the
-#   unmarshal for the WHOLE file, and that failure is silent (see
-#   merge_tenant.go).
+#   unmarshal for the WHOLE file, so EVERY default is dropped — not just the
+#   offending key. Both consumers log an ERROR (the exporter via
+#   parsePartialConfig, which also bumps parse_failure; tenant-api via
+#   merge_tenant.go), and neither applies any defaults.
 _routing_defaults:
   group_wait: "60s"
   group_interval: "5m"

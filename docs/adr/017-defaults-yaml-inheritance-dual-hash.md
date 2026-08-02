@@ -70,7 +70,10 @@ defaults:
 
 # ↓ 頂層 key，與 `defaults:` 平級 —— 不是巢狀在它底下。
 #   `defaults:` 的型別是 map[string]float64，塞任何巢狀 mapping 進去會讓
-#   **整份檔案**解析失敗，而且失敗是靜默的（見 merge_tenant.go）。
+#   **整份檔案**解析失敗 ⇒ 連同所有預設值一起被丟棄，不是只丟那一個 key。
+#   兩個消費端都會 log ERROR（exporter 走 parsePartialConfig，另加
+#   parse_failure metric；tenant-api 走 merge_tenant.go），但**都不會**套用
+#   任何預設值。
 _routing_defaults:
   group_wait: "60s"
   group_interval: "5m"
