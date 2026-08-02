@@ -3,7 +3,7 @@
 Renovate cannot run in this PR's own CI (it is owner-activated via
 `.github/workflows/renovate.yaml` + a RENOVATE_TOKEN PAT). So this test is the
 offline safety net: it parses `renovate.json`, applies each customManager's regex to
-the ACTUAL repo files, and asserts that every one of the 14 #902 L2-pinned
+the ACTUAL repo files, and asserts that every one of the 15 #902 L2-pinned
 third-party images is matched with a sane (depName, tag, digest) — and that the
 scan-matrix refs and the deploy refs resolve to the SAME depName set (so a Renovate
 bump updates both in one PR and the drift-guard stays green).
@@ -52,7 +52,11 @@ EXPECTED_DEPNAMES = {
     "alpine/git",
     # #1316 store-mount preflight init-container, in BOTH federation consumer
     # charts. Deployed from two values.yaml files with one digest, so Renovate
-    # has to bump both — the shared-depname invariant below is what proves it.
+    # has to bump BOTH. ⛔ The shared-depname invariant below does NOT prove
+    # that — it compares depName SETS, and `busybox` is in the set whether one
+    # file matches or two, so a manager that saw only one would leave the other
+    # pinned to a stale digest with every test here green.
+    # test_busybox_is_matched_in_both_consumer_charts is the one that proves it.
     "busybox",
 }
 
@@ -157,6 +161,25 @@ def test_scan_matrix_and_deploy_refs_share_depnames():
                     for d in _extract(m)}
     assert matrix_names == EXPECTED_DEPNAMES, f"matrix missing: {sorted(EXPECTED_DEPNAMES - matrix_names)}"
     assert deploy_names == EXPECTED_DEPNAMES, f"deploy missing: {sorted(EXPECTED_DEPNAMES - deploy_names)}"
+
+
+def test_busybox_is_matched_in_both_consumer_charts():
+    """#1316 pins ONE image in TWO charts, and a digest refresh has to reach both.
+
+    ⛔ Asserted per FILE, because the set-based invariants cannot see this: they
+    compare depName sets, and `busybox` is present whether Renovate matches one
+    values.yaml or both. A manager whose file pattern reached only the gateway
+    chart would leave the reconciler pinned to a stale digest — with the scan
+    matrix, the depname coverage test and the shared-depname test all green.
+    """
+    cfg = _load_config()
+    matrix_mgr = _matrix_manager(cfg)
+    files = {d["file"] for m in cfg["customManagers"] if m is not matrix_mgr
+             for d in _extract(m) if d.get("depName") == "busybox"}
+    assert files == {
+        "helm/federation-gateway/values.yaml",
+        "helm/federation-reconciler/values.yaml",
+    }, f"busybox is not matched in both consumer charts, only: {sorted(files)}"
 
 
 def test_renovate_config_validator_if_available():

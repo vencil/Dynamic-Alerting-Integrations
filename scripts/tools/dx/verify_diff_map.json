@@ -692,7 +692,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "675f4548579fba29a6e6c4607cdc1bbb0ba7fdee5eca3f40e12b989804575418",
+ "source_digest": "5c48072da7414e6aacc86a1ac16da4d973b3d4b201401852130329651f4f4d41",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1413,6 +1413,7 @@
   ],
   "helm/federation-gateway/values.yaml": [
    "tests/helm/test_revoked_set_contract_guard.py",
+   "tests/ops/test_renovate_config.py",
    "tests/ops/test_revoked_set_contract.py"
   ],
   "helm/federation-reconciler": [
@@ -1430,7 +1431,8 @@
   ],
   "helm/federation-reconciler/values.yaml": [
    "tests/dx/test_bump_docs.py",
-   "tests/helm/test_federation_reconciler_projection_grace.py"
+   "tests/helm/test_federation_reconciler_projection_grace.py",
+   "tests/ops/test_renovate_config.py"
   ],
   "helm/mariadb-instance": [
    "tests/lint/test_check_iac_helm.py"

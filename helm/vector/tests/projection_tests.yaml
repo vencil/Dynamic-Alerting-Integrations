@@ -515,8 +515,14 @@ tests:
               assert_eq!(.log_type, "gateway_operational", "a non-JSON init-container line must classify as operational, not audit")
               assert_eq!(.app, "federation-store-preflight", "app must carry the INIT container name — the reconciler's missing query filters on exactly this value")
               assert_eq!(.k8s_namespace, "monitoring")
+    # Tenant routes listed alongside the evidence stream, matching every other
+    # gateway-origin case here: this row is a NEW container identity on the
+    # gateway branch, and an operational line carrying no tenant_id must never
+    # reach a tenant partition however the eligibility gate changes.
     no_outputs_from:
       - federation_evidence
+      - tenant_route.t_1000
+      - tenant_route.t_1001
 
   # ══ #1293 — pod_owner is "<Kind>/<Name>", not a bare workload name ═════════
   # The origin spoof guard compares a workload-NAME prefix. Vector builds

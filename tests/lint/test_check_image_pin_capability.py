@@ -473,9 +473,21 @@ def test_a_trail_that_is_also_a_da_tools_pin_never_grants_a_skip(tmp_path, monke
     monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
     errors: list[str] = []
     workloads = gate.collect_helm_workloads(errors)
-    assert errors, (
-        f"the `direct` container was attributed away by a trail that is ALSO the "
-        f"da-tools pin; verified workloads={[w.where for w in workloads]}")
+    # ⛔ Anchored on the SPECIFIC error, not just "something failed". `assert
+    # errors` alone is satisfied by any unrelated error this fixture might grow,
+    # so the fail-open could come back while the test stayed green.
+    assert any("mirror.local/da-tools" in e for e in errors), (
+        f"the chart failed, but not for the dual-membership trail; errors={errors}")
+    assert any("ALSO a da-tools pin" in e for e in errors), (
+        f"the message does not say WHY the trail was refused; errors={errors}")
+    # ⛔ BOTH findings, not just the chart-level one. A chart can hold two
+    # problems at once, and reporting only the ambiguity hid the unresolved
+    # entry point until the first was fixed — two CI rounds for one chart.
+    assert any("entry point" in e for e in errors), (
+        f"the per-container finding was discarded on the way out; errors={errors}")
+    assert workloads == [], (
+        f"a chart with a vetoed trail must yield no verified workloads, got "
+        f"{[w.where for w in workloads]}")
 
 
 def test_indexed_stripping_parses_to_the_same_structure() -> None:

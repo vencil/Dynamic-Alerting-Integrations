@@ -707,18 +707,27 @@ def collect_helm_workloads(errors: list[str]) -> list[Workload]:
                         chart_workloads.append(Workload(
                             chart_rel, f"{template_rel} (container {name}) @ {tag}",
                             tag, kind, entry))
-        unclaimed = sorted(repo for trail, repo in other_trails.items()
-                           if trail not in claimed_trails)
+        # ⛔ Emitted BEFORE the ambiguity check, not after it. A chart can hold
+        # both problems at once, and discarding the per-container findings on
+        # the way out hid the second one until the first was fixed — two CI
+        # rounds for one chart.
+        errors.extend(chart_errors)
+        unclaimed = sorted(
+            f"{repo} (values path {trail!r}{', which is ALSO a da-tools pin' if trail in da_tools_trails else ''})"
+            for trail, repo in other_trails.items() if trail not in claimed_trails)
         if unclaimed:
             # The original chart-level refusal, now narrowed to the case that is
             # still genuinely ambiguous: a foreign pin no container claims means
-            # something here runs an image this gate cannot see.
+            # something here runs an image this gate cannot see. The trail is
+            # named because one repository can appear under several of them, and
+            # the dual-membership note because that case is refused BY DESIGN
+            # (a trail that is also a da-tools pin can never excuse a container)
+            # rather than for want of a matching `image:`.
             errors.append(f"{chart_rel}: pins da-tools AND {unclaimed} with no "
                           f"container whose `image:` reads that pin; chart-level "
                           f"attribution is ambiguous for a mixed-image chart — "
                           f"extend collect_helm_workloads() before landing it")
             continue
-        errors.extend(chart_errors)
         workloads.extend(chart_workloads)
         if containers_seen == 0:
             errors.append(

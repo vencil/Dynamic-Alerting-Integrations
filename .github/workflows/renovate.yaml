@@ -1,6 +1,6 @@
 name: Renovate
 
-# Self-hosted Renovate (#902 L3) — auto-bumps the 14 third-party container image
+# Self-hosted Renovate (#902 L3) — auto-bumps the 15 third-party container image
 # tags + digests pinned in #902 L2 (renovate.json scopes Renovate to ONLY those
 # images via custom.regex managers). This closes the L1+L2 toil loop: a digest pin
 # freezes the image, so the nightly CVE scan can no longer auto-close on an upstream
