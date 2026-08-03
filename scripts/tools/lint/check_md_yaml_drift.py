@@ -38,13 +38,38 @@ except ImportError:
 try:
     import jsonschema
 except ImportError:
-    jsonschema = None  # Graceful degradation: skip schema validation
+    # Import stays optional so `--help` and `--check fences` (which need no
+    # schema at all) keep working in an env without it — the same reason
+    # check_confd_schema.py injects the module lazily. The schema pass itself
+    # now REFUSES to run without it (see _require_jsonschema): this used to be
+    # `jsonschema = None  # Graceful degradation`, and because the hook's
+    # additional_dependencies listed only pyyaml, that degradation meant the
+    # schema check silently validated nothing on every run it ever did.
+    jsonschema = None
+
+
+# A block carrying any of these top-level keys is a PLATFORM file
+# (`_defaults.yaml`) and is judged by platform-defaults.schema.json, which also
+# permits `tenants:` — so a doc that stacks L0 + a tenant block in one file
+# still routes correctly.
+PLATFORM_KEYS = {
+    "defaults", "state_filters", "optional_overrides", "profiles",
+    "max_metrics_per_tenant", "_routing_defaults", "_routing_enforced",
+}
+
+# File-header comment naming a YAML file, e.g. `# conf.d/_defaults.yaml`.
+# Anchored at column 0: an indented `#` that merely mentions a filename in
+# passing is prose, and treating it as a boundary would sever a block
+# mid-mapping. Mirrors fileHeaderRe in the Go gate
+# (components/threshold-exporter/app/pkg/config/docs_defaults_sample_test.go).
+FILE_HEADER_RE = re.compile(r"^#.*\.ya?ml\b")
 
 
 class MdYamlDriftChecker:
     """掃描 Markdown 中的 YAML code blocks 並驗證 schema 合規性。"""
 
-    # YAML 區塊必須包含這些 key 之一才被視為 tenant config 範例
+    # Tenant-shaped markers: keys that only appear INSIDE a tenant's body, so a
+    # block carrying one is a tenant snippet even without a `tenants:` wrapper.
     TENANT_CONFIG_MARKERS = {
         "_thresholds", "_routing", "_silent_mode", "_state_maintenance",
         "_routing_defaults", "_routing_enforced", "_threshold_mode",
@@ -55,16 +80,21 @@ class MdYamlDriftChecker:
         self.repo_root = Path(repo_root).resolve()
         self.verbose = verbose
         self.schema: Dict = {}
+        self.platform_schema: Dict = {}
         self._load_schema()
 
     def _load_schema(self):
-        """Load tenant-config.schema.json."""
-        schema_path = self.repo_root / "docs" / "schemas" / "tenant-config.schema.json"
-        if schema_path.exists():
+        """Load both schemas: tenant-config and platform-defaults."""
+        base = self.repo_root / "docs" / "schemas"
+        for attr, name in (("schema", "tenant-config.schema.json"),
+                           ("platform_schema", "platform-defaults.schema.json")):
+            path = base / name
+            if not path.exists():
+                continue
             try:
-                self.schema = json.loads(schema_path.read_text(encoding="utf-8"))
+                setattr(self, attr, json.loads(path.read_text(encoding="utf-8")))
             except (json.JSONDecodeError, OSError) as e:
-                print(f"WARNING: Cannot load schema: {e}", file=sys.stderr)
+                print(f"WARNING: Cannot load {name}: {e}", file=sys.stderr)
 
     def _extract_yaml_blocks(self, filepath: Path) -> List[Tuple[int, str]]:
         """Extract ```yaml code blocks from a markdown file.
@@ -96,21 +126,83 @@ class MdYamlDriftChecker:
 
         return blocks
 
+    @staticmethod
+    def _split_documented_files(block_lines: List[str]) -> List[Tuple[int, str]]:
+        """Split a fence that illustrates SEVERAL files into one segment per file.
+
+        Several docs teach inheritance by stacking `# L0 _defaults.yaml`,
+        `# L1 finance/_defaults.yaml` and a tenant file into ONE fence. Judged
+        whole, such a block is not even valid YAML (a repeated top-level key),
+        which says nothing about whether the documented config is right.
+
+        Returns (line_offset, text) pairs so a violation points at the offending
+        file rather than at the fence. Mirrors splitConcatenatedFiles in the Go
+        gate so the two extractors see the same units.
+        """
+        segments: List[Tuple[int, str]] = []
+        current: List[str] = []
+        start = 0
+        for i, line in enumerate(block_lines):
+            if FILE_HEADER_RE.match(line) and current:
+                segments.append((start, "\n".join(current)))
+                current, start = [], i
+            current.append(line)
+        if current:
+            segments.append((start, "\n".join(current)))
+        return segments
+
     def _is_tenant_config(self, data) -> bool:
-        """Check if parsed YAML looks like a tenant config snippet."""
+        """Is this block a Vibe config example (platform file or tenant snippet)?
+
+        Widened beyond the tenant markers to include the PLATFORM keys: a block
+        that is plainly a `_defaults.yaml` (`defaults:` / `state_filters:` /
+        `optional_overrides:`) had no schema oracle at all before, so a typo'd
+        top-level key such as `state_flters` passed unnoticed — the Go loader is
+        non-strict and cannot see it either.
+
+        ⚠️ Deliberately NOT selecting on a bare top-level `tenants:` yet, though
+        that is the obvious next widening. Measured: it would add 99 units and
+        surface ~15 failures that are four different things, not one —
+        genuinely broken examples (an email receiver with no `smarthost`, same
+        class as the hands-on-lab fix), examples that are invalid ON PURPOSE
+        (docs/internal/editor-schema-validation.md demonstrates what the editor
+        rejects), `...` ellipsis placeholders, and a whole second config model
+        (`alerts.threshold` / `receivers` in manage-at-scale + multi-domain).
+        Each needs its own call, so folding them in here would mean this gate
+        cannot go green — the exact reason it has sat parked. Tracked as the
+        follow-up rather than smuggled in.
+        """
         if not isinstance(data, dict):
             return False
-        # Direct match
         for key in data:
-            if key in self.TENANT_CONFIG_MARKERS:
+            if key in self.TENANT_CONFIG_MARKERS or key in PLATFORM_KEYS:
                 return True
-        # Nested under tenant name
+        # Nested under a tenant name (`tenants:` omitted in the snippet).
         for value in data.values():
             if isinstance(value, dict):
                 for key in value:
                     if key in self.TENANT_CONFIG_MARKERS:
                         return True
         return False
+
+    def _route(self, data: Dict) -> Tuple[Dict, Dict, str]:
+        """Pick the schema this block is actually governed by.
+
+        Three shapes, and using one schema for all of them is why this check
+        reported 38/38 violations while proving nothing: a `_defaults.yaml`
+        block judged against tenant-config.schema.json fails on
+        `'tenants' is a required property`, which is a statement about the
+        WRONG contract.
+        """
+        keys = set(data)
+        if keys & PLATFORM_KEYS:
+            return self.platform_schema, data, "platform"
+        if "tenants" in keys:
+            return self.schema, data, "tenant-file"
+        # A bare tenant body (`_routing:` etc. with no wrapper). Wrap it in a
+        # synthetic tenant so it is judged by the real per-tenant subschema
+        # instead of being skipped.
+        return self.schema, {"tenants": {"example-tenant": data}}, "fragment"
 
     def run_fences(self) -> int:
         """Fence hygiene: every ```yaml block in docs/ must parse as YAML.
@@ -177,93 +269,87 @@ class MdYamlDriftChecker:
         print("valid here and is what `kubectl apply -f` expects).")
         return EXIT_VIOLATION
 
-    def run(self) -> int:
-        """Execute YAML drift check."""
-        issues = []
-        total_blocks = 0
-        tenant_blocks = 0
-        validated_blocks = 0
+    def iter_config_units(self):
+        """Yield every documented config unit as (rel_path, line, data).
 
+        One fence can document several files, and one file can be a
+        multi-document stream, so a "unit" is a single YAML document inside a
+        single documented file — not a fence.
+
+        Blocks that do not parse are NOT reported here: fence hygiene is the
+        `--check fences` pass's job, and duplicating it would let a mislabelled
+        directory-tree diagram fail the schema gate for a reason that has
+        nothing to do with schemas.
+        """
         docs_dir = self.repo_root / "docs"
         for md_file in sorted(docs_dir.rglob("*.md")):
-            rel_path = str(md_file.relative_to(self.repo_root))
-            blocks = self._extract_yaml_blocks(md_file)
-
-            for line_num, yaml_content in blocks:
-                total_blocks += 1
-
-                # Try to parse YAML
-                try:
-                    data = yaml.safe_load(yaml_content)
-                except yaml.YAMLError as e:
-                    issues.append({
-                        "file": rel_path,
-                        "line": line_num,
-                        "error": f"Invalid YAML: {e}",
-                        "type": "parse_error",
-                    })
-                    continue
-
-                if data is None:
-                    continue
-
-                # Check if this looks like tenant config
-                if not self._is_tenant_config(data):
-                    if self.verbose:
-                        print(f"  SKIP {rel_path}:{line_num} (not tenant config)")
-                    continue
-
-                tenant_blocks += 1
-
-                # Schema validation (if available)
-                if self.schema and jsonschema:
+            rel_path = str(md_file.relative_to(self.repo_root)).replace(os.sep, "/")
+            for line_num, yaml_content in self._extract_yaml_blocks(md_file):
+                for offset, text in self._split_documented_files(yaml_content.split("\n")):
                     try:
-                        jsonschema.validate(data, self.schema)
-                        validated_blocks += 1
-                    except jsonschema.ValidationError as e:
-                        issues.append({
-                            "file": rel_path,
-                            "line": line_num,
-                            "error": f"Schema violation: {e.message}",
-                            "type": "schema_error",
-                        })
-                    except jsonschema.SchemaError as e:
-                        print(f"WARNING: Schema itself is invalid: {e}", file=sys.stderr)
-                        break
+                        docs = list(yaml.safe_load_all(text))
+                    except yaml.YAMLError:
+                        continue
+                    for data in docs:
+                        if data is None or not self._is_tenant_config(data):
+                            continue
+                        yield rel_path, line_num + offset, data
 
-                if self.verbose:
-                    print(f"  OK   {rel_path}:{line_num}")
+    def run(self) -> int:
+        """Execute the schema-conformance pass."""
+        if jsonschema is None:
+            print("ERROR: jsonschema not installed — the schema check cannot run. "
+                  "Install it (pip install jsonschema) or invoke --check fences.",
+                  file=sys.stderr)
+            return EXIT_CALLER_ERROR
+        if not self.schema or not self.platform_schema:
+            print("ERROR: could not load docs/schemas/{tenant-config,platform-defaults}"
+                  ".schema.json — refusing to report a clean run against no contract.",
+                  file=sys.stderr)
+            return EXIT_CALLER_ERROR
 
-        # Report
-        parse_errors = [i for i in issues if i["type"] == "parse_error"]
-        schema_errors = [i for i in issues if i["type"] == "schema_error"]
+        issues = []
+        checked = 0
+        by_kind: Dict[str, int] = {}
+
+        for rel_path, line_num, data in self.iter_config_units():
+            schema, doc, kind = self._route(data)
+            by_kind[kind] = by_kind.get(kind, 0) + 1
+            checked += 1
+            try:
+                jsonschema.validate(doc, schema)
+            except jsonschema.ValidationError as e:
+                issues.append({
+                    "file": rel_path, "line": line_num, "kind": kind,
+                    "error": e.message,
+                })
+            except jsonschema.SchemaError as e:
+                print(f"ERROR: schema itself is invalid: {e}", file=sys.stderr)
+                return EXIT_CALLER_ERROR
+            if self.verbose:
+                print(f"  OK   {rel_path}:{line_num} ({kind})")
 
         print("=" * 60)
         print("MARKDOWN YAML DRIFT CHECK")
         print("=" * 60)
-        print(f"Total YAML blocks scanned:   {total_blocks}")
-        print(f"Tenant config blocks:        {tenant_blocks}")
-        print(f"Schema-validated OK:         {validated_blocks}")
-        print(f"Parse errors:                {len(parse_errors)}")
-        print(f"Schema violations:           {len(schema_errors)}")
-        if not self.schema:
-            print("  (schema not loaded — skipped validation)")
-        if not jsonschema:
-            print("  (jsonschema not installed — skipped validation)")
+        print(f"Config units checked:        {checked}")
+        for kind in sorted(by_kind):
+            print(f"  {kind:<24} {by_kind[kind]}")
+        print(f"Schema violations:           {len(issues)}")
         print()
 
-        if issues:
-            for issue in issues:
-                marker = "PARSE" if issue["type"] == "parse_error" else "SCHEMA"
-                print(f"  [{marker}] {issue['file']}:{issue['line']}")
-                print(f"           {issue['error']}")
-            print()
-            print("Fix: Update YAML examples to match current schema,")
-            print("     or update docs/schemas/tenant-config.schema.json if schema changed.")
-            return EXIT_VIOLATION
-        else:
-            print("✓ All YAML examples are valid.")
+        if not issues:
+            print("✓ Every documented config example matches its schema.")
             return EXIT_OK
+        for issue in issues:
+            print(f"  [SCHEMA] {issue['file']}:{issue['line']} ({issue['kind']})")
+            print(f"           {issue['error']}")
+        print()
+        print("Fix the example, or the schema if the contract genuinely changed.")
+        print("Note which contract the block was judged against — a `_defaults.yaml`")
+        print("is governed by platform-defaults.schema.json, a tenant snippet by")
+        print("tenant-config.schema.json.")
+        return EXIT_VIOLATION
 
 
 def main():

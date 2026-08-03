@@ -905,6 +905,12 @@ repos:
         files: ^docs/.*\.md$
         additional_dependencies: ['pyyaml']
 
+      # jsonschema is REQUIRED here. It used to be absent while the script did
+      # `except ImportError: jsonschema = None  # Graceful degradation`, so in
+      # the hook's isolated venv the schema pass silently validated nothing on
+      # every run it ever did. The script now refuses to run without it
+      # (EXIT_CALLER_ERROR) instead of degrading — same posture as the sibling
+      # confd-schema-check.
       - id: md-yaml-drift-check
         name: Markdown YAML example ↔ schema drift
         entry: python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --ci
@@ -912,7 +918,7 @@ repos:
         pass_filenames: false
         files: ^docs/.*\.(md|yaml)$
         stages: [manual]
-        additional_dependencies: ['pyyaml']
+        additional_dependencies: ['pyyaml', 'jsonschema']
 
       - id: playwright-e2e
         name: Playwright Portal E2E smoke tests
