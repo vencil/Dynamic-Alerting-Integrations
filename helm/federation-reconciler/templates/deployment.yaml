@@ -1,3 +1,4 @@
+{{- include "federation-reconciler.validatePreflight" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -31,6 +32,81 @@ spec:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
+      {{- if ne .Values.preflight.mode "off" }}
+      # ── Store-mount preflight (#1316) ────────────────────────────
+      # Byte-for-byte the same check helm/federation-gateway runs; see that
+      # chart's deployment.yaml for why `optional: true` stays and why the check
+      # keys on a chart-owned sentinel instead of on revoked.txt.
+      #
+      # ⚠️ Unlike the gateway's, THIS pod's line does not reach the log plane —
+      # and not because a route drops it: helm/vector's kubernetes_logs source
+      # only SELECTS federation-gateway and tenant-api pods
+      # (`source.extraLabelSelector` in helm/vector/values.yaml), so a reconciler
+      # row is never collected in the first place. Adding an origin_split branch
+      # would therefore not help. Read it with
+      # `kubectl logs -c federation-store-preflight`. The alert that already
+      # covers this pod's empty mount is FederationRevocationTamperSuspected
+      # (revocation events in the log with an empty live set); the preflight only
+      # names the cause so nobody has to derive it.
+      initContainers:
+        - name: federation-store-preflight
+          image: "{{ .Values.preflight.image.repository }}:{{ .Values.preflight.image.tag }}{{ with .Values.preflight.image.digest }}@{{ . }}{{ end }}"
+          imagePullPolicy: {{ .Values.preflight.image.pullPolicy }}
+          securityContext:
+            # ⛔ runAsUser is set HERE rather than inherited. busybox's image
+            # USER is root, and this pod asserts runAsNonRoot with NO uid pin
+            # (the da-tools image supplies its own uid 10001), so an inherited
+            # context rejects this container with CreateContainerConfigError.
+            # The projected ConfigMap is world-readable, so the uid is arbitrary.
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: STORE_DIR
+              value: /etc/revoked
+            - name: SENTINEL_KEY
+              value: {{ .Values.store.sentinelKey | quote }}
+            - name: STORE_CM
+              value: {{ .Values.store.configMapName | quote }}
+            - name: PREFLIGHT_MODE
+              value: {{ .Values.preflight.mode | quote }}
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              # ⛔ `set -u` catches an UNSET var, not an empty one — and an empty
+              # SENTINEL_KEY turns the test below into "does the mount directory
+              # exist", which is always true, i.e. a check that passes on every
+              # pod forever. The chart's validatePreflight already refuses to
+              # render that, so this is the backstop for a hand-edited manifest.
+              : "${SENTINEL_KEY:?empty sentinel key — the preflight would pass on every pod, including an unresolved mount (#1316)}"
+              if [ -e "$STORE_DIR/$SENTINEL_KEY" ]; then
+                exit 0
+              fi
+              if [ -n "$(ls "$STORE_DIR" 2>/dev/null || true)" ]; then
+                echo "federation: store mount preflight: sentinel '$SENTINEL_KEY' is absent but '$STORE_DIR' carries data. Either this store predates the chart revision that writes the sentinel, or it is an ORPHAN left in this namespace by an earlier topology (helm.sh/resource-policy: keep does not delete the old object). Starting anyway. An orphan enforces a FROZEN revoked set; the alert that sees that is FederationRevocationTamperSuspected, not this line."
+                exit 0
+              fi
+              echo "federation: revoked-set missing: $STORE_DIR resolved to an EMPTY directory at startup, so this workload would enforce an EMPTY revoked set and honour every revoked token until its TTL. TWO causes are INDISTINGUISHABLE from inside the pod - kubelet projects a missing optional ConfigMap and an existing-but-empty one as the same empty directory - so confirm with: kubectl -n $POD_NAMESPACE get configmap $STORE_CM . (a) NOT THERE: a ConfigMap volume only ever resolves one in the mounting pod's OWN namespace; set the tenant-api chart's federation.store.namespace to '$POD_NAMESPACE', or move this workload into the store's namespace (#1313). (b) THERE but with no keys yet: a tenant-api chart older than 2.9.20 that has never written a token - harmless, and it clears itself once that chart is upgraded."
+              if [ "$PREFLIGHT_MODE" = "enforce" ]; then
+                exit 1
+              fi
+              exit 0
+          volumeMounts:
+            - name: revoked
+              mountPath: /etc/revoked
+              readOnly: true
+          resources:
+            {{- toYaml .Values.preflight.resources | nindent 12 }}
+      {{- end }}
       containers:
         - name: reconciler
           image: {{ include "federation-reconciler.image" . | quote }}
@@ -102,7 +178,25 @@ spec:
             # tenant-api creates it on the first revoke). A missing file is
             # handled as a benign empty set by the reconciler (ADR-028 G-B); a
             # genuinely down store/pod is caught by the `up` liveness instead.
+            # ⛔ It stays optional; the #1316 preflight complements it rather
+            # than replacing it — see helm/federation-gateway's deployment.yaml
+            # for why `optional: false` is the wrong lever here.
             optional: true
             items:
               - key: {{ .Values.store.revokedKey }}
                 path: {{ .Values.store.revokedKey }}
+              # ⛔ The sentinel MUST be listed here (#1316). `items:` is an
+              # allowlist: without this entry the projection carries revoked.txt
+              # only, the preflight could never see the sentinel, and its check
+              # would silently collapse into "does revoked.txt exist?" — which
+              # cannot tell a namespace misconfiguration from a store nobody has
+              # revoked from yet. A key that does not exist in the ConfigMap is
+              # simply skipped under optional:true (measured), so listing it
+              # RENDERS and MOUNTS safely against a store whose producing chart
+              # has not been upgraded. ⚠️ That is not the same as "the preflight
+              # stays quiet there": with no sentinel AND no revoked.txt the
+              # projection is empty, which is the state the preflight reports.
+              # Harmless (this pod is not in the log plane), but do not read the
+              # line as proof of a misconfiguration — see the gateway chart.
+              - key: {{ .Values.store.sentinelKey }}
+                path: {{ .Values.store.sentinelKey }}

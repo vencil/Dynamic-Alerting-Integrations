@@ -434,6 +434,19 @@ GATEWAY_FAILOPEN_PHRASE = "federation: revoked-set reload failed"
 GATEWAY_REJECTED_PHRASE = "federation: revoked-set rejected"
 GATEWAY_MISSING_PHRASE = "federation: revoked-set missing"
 
+# The gateway's #1316 store-mount preflight init-container. It emits
+# GATEWAY_MISSING_PHRASE at pod start when its projected volume resolved to an
+# empty directory, which is the ONE case the Lua cannot report: the Lua's read
+# runs inside `envoy_on_request`, so an idle misconfigured gateway never says
+# anything at all. `app` is Vector's copy of the PRISTINE container_name
+# (helm/vector's demux, #1294), and an init-container of the gateway pod carries
+# its own name there — so counting the preflight's line needs this second value.
+# Pinned against the chart by tests/helm/test_federation_store_sentinel_guard.py.
+# ⛔ MISSING ONLY. The preflight cannot produce the other two warnings (they mean
+# "read it and could not use it", which requires an actual reload attempt), so
+# widening the failopen / rejected queries would only add a way to miscount.
+GATEWAY_PREFLIGHT_APP = "federation-store-preflight"
+
 
 def build_missing_query(lookback_s: int, settle_s: int) -> str:
     """LogsQL for the gateway reporting the revoked-set file is ABSENT (#1236).
@@ -450,11 +463,26 @@ def build_missing_query(lookback_s: int, settle_s: int) -> str:
     gateway say in the recent past". Source-qualified on ``log_type`` + ``app``
     exactly like them; see :func:`build_failopen_query` for the honest boundary
     on what that qualification does and does not prove about the producer.
+
+    ⛔ TWO producers, not one (#1316). The Lua only reaches its missing branch
+    from ``envoy_on_request``, so a misconfigured gateway that receives NO
+    traffic reports nothing — the exact shape of a namespace misconfiguration
+    freshly rolled out. The chart's preflight init-container emits the same
+    phrase once at pod start, and Vector stamps ``app`` from the container name,
+    so this query has to admit that container too. Both rows mean the same
+    thing about the enforcement plane: it has no revoked set.
+
+    ⚠️ The preflight's contribution is ONE row per pod start, not a repeating
+    signal. `FederationGatewayRevokedSetMissing` latches on
+    ``max_over_time(...[1h])`` so a single row still pages, but the alert
+    RESOLVES a latch-window after the last row even if the misconfiguration
+    persists. Boot-time notification, not continuous detection — do not read a
+    resolved alert as "the mount was fixed".
     """
     return (
         f'_time:[now-{lookback_s}s, now-{settle_s}s] '
         f'AND log_type:"{LOG_TYPE_GATEWAY_OP}" '
-        f'AND app:"{GATEWAY_APP}" '
+        f'AND (app:"{GATEWAY_APP}" OR app:"{GATEWAY_PREFLIGHT_APP}") '
         f'AND "{GATEWAY_MISSING_PHRASE}"'
     )
 

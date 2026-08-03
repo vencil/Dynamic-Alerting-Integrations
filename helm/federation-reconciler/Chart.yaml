@@ -8,7 +8,14 @@ type: application
 #         guard covering this pod's own kubelet ConfigMap projection lag). Needed
 #         because the latched TamperSuspected alert no longer absorbs a one-pass
 #         false positive for free. Set to 0 to reproduce the pre-#1238 windows.
-version: 0.2.0
+# 0.3.0 — #1316: store-mount preflight init-container. New `preflight` value block
+#         (mode off|warn|enforce, default warn) and `store.sentinelKey`, which is
+#         also added to the revoked volume's `items:` allowlist so the sentinel is
+#         projected at all. MINOR: new value keys, a new container in the pod spec
+#         and one more projected file. `helm upgrade --reuse-values` is safe (both
+#         keys default and Helm deep-merges the maps); default `warn` never blocks
+#         startup and `optional: true` on the volume is unchanged.
+version: 0.3.0
 # appVersion: the da-tools image the reconciler ships in.
 # ⛔ v2.9.0 does NOT contain the reconciler script — it was added to build.sh
 # TOOL_FILES after that tag was cut, so the chart is not runnable as pinned.

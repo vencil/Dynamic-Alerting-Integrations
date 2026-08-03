@@ -48,6 +48,35 @@ victorialogs mode, jwt.audience MUST be `tenant-federation-logs`.
 {{- end }}
 {{- end }}
 {{- include "federation-gateway.validateRevokedSet" . }}
+{{- include "federation-gateway.validatePreflight" . }}
+{{- end }}
+
+{{/*
+Fail-loud guard for the store-mount preflight (#1316).
+
+Both ways of disarming it silently are closed here, and both were REPRODUCED
+before this guard existed rather than assumed:
+
+  * empty sentinelKey — the check is `[ -e "$STORE_DIR/$SENTINEL_KEY" ]`, and
+    with an empty key that tests the mount DIRECTORY, which always exists. The
+    preflight would then exit 0 on every pod, in every mode, including on a
+    completely unresolved mount. Nothing anywhere would say the check had
+    stopped working.
+  * a mode outside the enum — the script treats "not enforce" as warn, so a
+    typo like `enforced` renders happily, reports success, and silently
+    downgrades an operator who asked to fail closed into failing OPEN. That is
+    the one direction this feature must never fail in by accident.
+*/}}
+{{- define "federation-gateway.validatePreflight" -}}
+{{- if not (.Values.revokedSet.sentinelKey | default "") }}
+{{- fail "federation-gateway: revokedSet.sentinelKey must not be empty — the preflight would test the mount directory itself, which always exists, so it would pass on every pod including a completely unresolved mount (#1316)" }}
+{{- end }}
+{{- if kindIs "bool" .Values.preflight.mode }}
+{{- fail "federation-gateway: preflight.mode arrived as a BOOLEAN. YAML 1.1 — which Helm parses values files with — reads an unquoted `off` (and `on`/`yes`/`no`) as a boolean, so `mode: off` in a values FILE is not the string \"off\". Quote it: `mode: \"off\"`. (`--set preflight.mode=off` on the command line is unaffected.)" }}
+{{- end }}
+{{- if not (has .Values.preflight.mode (list "off" "warn" "enforce")) }}
+{{- fail (printf "federation-gateway: preflight.mode must be \"off\", \"warn\" or \"enforce\", got %q — anything else is treated as warn, silently downgrading a fail-closed intent into fail-open (#1316)" .Values.preflight.mode) }}
+{{- end }}
 {{- end }}
 
 {{/*

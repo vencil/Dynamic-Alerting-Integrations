@@ -1,7 +1,7 @@
 """Drift guard for the nightly third-party scan matrix (#902 L1-A drift guard).
 
 Closes the dual-SSOT gap raised in #907 review: the `scan-thirdparty` matrix in
-nightly-image-scan.yaml hardcodes the 14 third-party refs, while the actual
+nightly-image-scan.yaml hardcodes the 15 third-party refs, while the actual
 deployment refs live in helm values / k8s manifests. If a maintainer bumps a
 manifest (e.g. grafana 12.4.2 -> 12.5.0) but forgets the scan matrix, the scan
 would keep reporting the OLD version as "safe" while prod runs the new one —

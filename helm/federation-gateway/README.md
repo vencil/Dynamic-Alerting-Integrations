@@ -133,7 +133,30 @@ Which read APIs a tenant can call through the gateway depends on the mode:
   namespace this chart runs in. Getting it wrong is **silent**: the volume is
   `optional: true`, so the pod starts Ready with no `revoked.txt` at all and
   the filter enforces an EMPTY revoked set — every revoked token is honoured
-  until its TTL, with no Kubernetes event and no log line to say so (#1313).
+  until its TTL, and Kubernetes emits **no event whatsoever** (#1313).
+- ✅ **Since #1316 it is no longer silent — but read what the signal is.** A
+  `federation-store-preflight` init-container inspects the mount before Envoy
+  starts and, when it resolved to an empty directory, logs the same
+  `federation: revoked-set missing` phrase the Lua uses, naming the namespace to
+  fix. That feeds the existing `FederationGatewayRevokedSetMissing` critical
+  alert. ⚠️ **It fires ONCE per pod start, not continuously.** The alert latches
+  for an hour so a single line still pages, but it then RESOLVES even though the
+  misconfiguration is still there — a resolved alert is not evidence the mount
+  was fixed. The continuous detector is the Lua's own per-request warning, and
+  that one needs the gateway to actually receive traffic; an idle misconfigured
+  gateway produces nothing at all, which is the gap the preflight closes.
+  Set `preflight.mode: enforce` to refuse to start instead of reporting —
+  it is opt-in because a consumer chart upgraded ahead of tenant-api
+  legitimately sees a store with no sentinel yet, and this repo ships no
+  gateway replica-down alert to notice an outage caused that way.
+- ⛔ **`optional: true` stays, and the preflight does not replace it.**
+  `optional: false` would hand the decision to the kubelet — measured: the pod
+  wedges in `ContainerCreating` with a `FailedMount` event and recovers on its
+  own once the ConfigMap appears. Loud to `kubectl describe`, but invisible to
+  this platform's alerting, which deliberately excludes `ContainerCreating` as
+  normal startup (see `VectorProjectionGateStuck` in
+  `configmap-rules-platform.yaml`). It would also turn the next rollout of every
+  already-misconfigured deployment into an outage.
 - ⛔ **The invariant is a three-way equality, not a two-way one**:
   `helm/federation-reconciler` mounts the *same* key for the ADR-028 detection
   side, so **this chart, that chart, and the store ConfigMap must all be in one
@@ -237,6 +260,9 @@ exposed, 1 = one ingress, …).
 | `jwt.clockSkewSeconds` | `60` | Leeway for signer/verifier clock drift |
 | `upstream.host` / `upstream.port` | `federation-proxy.monitoring.svc` / `8080` | The Layer 3 proxy, a vmselect, or — in `victorialogs` mode — the VictoriaLogs Service (`victorialogs.monitoring.svc` / `9428`) |
 | `revokedSet.configMapName` | `tenant-federation-store` | ConfigMap tenant-api writes `revoked.txt` into |
+| `revokedSet.sentinelKey` | `.chart-managed` | The one key the **tenant-api chart** writes into that ConfigMap at install time (#1316). The preflight looks for it to prove the volume resolved. ⛔ Must equal tenant-api's `federation.store.sentinelKey` and the reconciler's `store.sentinelKey` verbatim — three charts, three copies, pinned by `tests/helm/test_federation_store_sentinel_guard.py`. It cannot key on `revoked.txt` instead: that key is legitimately absent on a store nobody has revoked from yet, so its absence cannot tell a misconfiguration from a fresh install |
+| `preflight.mode` | `warn` | `off` renders no init-container. `warn` logs and starts anyway — the log line carries the phrase `FederationGatewayRevokedSetMissing` already queries, so no new alert. `enforce` additionally exits non-zero, wedging the pod in `Init:CrashLoopBackOff` (a state this platform's KSM alerting *can* see, unlike `ContainerCreating`). ⛔ In **every** mode a store that carries data but no sentinel — an upgrade-transition or an orphan — starts and warns: the producer and consumer charts are separate releases on separate version lines, so blocking there would make the upgrade order itself an outage. ⚠️ **A never-written store is indistinguishable from an absent one** (a pre-2.9.20 tenant-api chart creates the ConfigMap with no `data`, and the runtime keys appear only on the first token write), so a correct fresh install with a lagging producer reads as MISSING: a false page under `warn`, a refusal to start under `enforce`. Quote the value in a values **file** — YAML 1.1 reads a bare `off` as a boolean and the chart refuses to render |
+| `preflight.image.*` | `busybox:1.36` (digest-pinned) | The check needs a shell and `ls`; the gateway's own image is distroless, so it cannot be reused. ⚠️ This is a **new image-pull dependency** on a pod that had none: an unreachable registry wedges the pod in `Init:ImagePullBackOff` in every mode, `warn` included. Air-gapped installs must mirror it or set `preflight.mode: "off"` |
 | `revokedSet.tokenIdPattern` | `^ftk_[0-9a-f]+$` | The strict shape a `revoked.txt` line must have, templated into `revoked_check.lua`. A non-conforming line makes the gateway **discard the whole reload and keep its previously loaded set** — widening this widens what the enforcement plane accepts. Must stay equivalent to tenant-api's `tokenIDPattern` and the ADR-028 reconciler's `TOKEN_ID_PATTERN` (#1235). ⛔ **The value must remain expressible as a LUA PATTERN, not a regex**, and three template-time guards abort the render otherwise: **empty** (Lua's match against `""` succeeds for every line), **unanchored** (a pattern without `^…$` matches a substring, so a line could carry arbitrary bytes around a valid id), and **syntax that cannot mean the same thing in all three dialects** — `{`, `}`, `\`, `\|` (regex-only, taken literally by Lua) and `%` (Lua-only, taken literally by Go and Python). The third is the operator foot-gun: pinning the id length with brace quantifiers is valid regex, passes the other two guards, and matches **nothing** under Lua pattern semantics, so the gateway would then refuse every reload and silently stay on the set it already had |
 | `network.xffTrustedHops` | `0` | Trusted L7 proxy hops — see "Client IP behind a load balancer". No safe universal default |
 | `rateLimit.perToken.*` / `perTenant.*` / `perIp.*` | see values.yaml | Token-bucket params; tuning corridors in comments |

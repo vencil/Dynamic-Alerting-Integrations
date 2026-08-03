@@ -228,6 +228,85 @@ def strip_helm_actions(text: str) -> str:
     return "\n".join(kept)
 
 
+# --- per-container image attribution (#1316) --------------------------------
+# `strip_helm_actions` collapses every action to ONE opaque placeholder, so a
+# parsed `image:` says "a template built this" and nothing more. That is what
+# made chart-level attribution the only sound option, and why a chart holding a
+# da-tools pin AND another repository's pin had to be an outright error.
+#
+# The indexed variant below keeps the same YAML shape but numbers the
+# placeholders and hands back the action bodies, so a container's `image:` can
+# be traced to the `.Values.<path>` it was assembled from — WITHOUT rendering
+# (which would need helm on PATH and would silently skip wherever it is absent,
+# the opposite of fail-closed; that trade-off is why the industry's
+# render-then-lint tools do not help here).
+#
+# ⛔ Attribution only ever SUBTRACTS work: a container traced to a non-da-tools
+# pin is skipped, and anything untraceable is treated exactly as before. A chart
+# is still an error unless EVERY non-da-tools pin has a container claiming it —
+# an unclaimed foreign pin means something in the chart runs an image this gate
+# cannot see, which is the original ambiguity and stays fatal.
+_INDEXED_PLACEHOLDER_RE = re.compile(r"__helm_action_(\d+)__")
+_SENTINEL_IDX_RE = re.compile("\x00tpl(\\d+)\x00")
+_VALUES_REF_RE = re.compile(r"\.Values\.([A-Za-z0-9_.]+)")
+
+
+def strip_helm_actions_indexed(text: str) -> tuple[str, list[str]]:
+    """`strip_helm_actions`, but each action keeps an identity.
+
+    Returns the stripped text (with `__helm_action_<i>__` placeholders) and the
+    action bodies, index-aligned. Same whole-line-action dropping rule, so the
+    document parses to the same structure.
+    """
+    bodies: list[str] = []
+
+    def _capture(match: re.Match) -> str:
+        bodies.append(match.group(0))
+        return f"\x00tpl{len(bodies) - 1}\x00"
+
+    collapsed = _TEMPLATE_ACTION_RE.sub(_capture, text)
+    kept: list[str] = []
+    for line in collapsed.split("\n"):
+        if line.strip() and not _SENTINEL_IDX_RE.sub("", line).strip():
+            continue  # whole-line action (control flow / nindent include)
+        kept.append(_SENTINEL_IDX_RE.sub(r"__helm_action_\1__", line))
+    return "\n".join(kept), bodies
+
+
+def image_values_paths(image_value, bodies: list[str]) -> set[str]:
+    """The dotted `.Values` paths a container's `image:` expression reads."""
+    if not isinstance(image_value, str):
+        return set()
+    paths: set[str] = set()
+    for index in _INDEXED_PLACEHOLDER_RE.findall(image_value):
+        position = int(index)
+        if position < len(bodies):
+            paths.update(_VALUES_REF_RE.findall(bodies[position]))
+    return paths
+
+
+def attributed_pin(image_paths: set[str], pin_trails: list[str]) -> str | None:
+    """The pin trail a container's image expression belongs to, if exactly one.
+
+    ⛔ Callers must pass EVERY pin in the chart, da-tools included, not just the
+    foreign ones. Matching against the foreign set alone makes an expression
+    that reads BOTH — say the da-tools repository with another pin's tag — look
+    like a clean foreign hit, and the container this gate exists to check would
+    be skipped. That is fail-OPEN, and it is the mutation that survived the
+    first version of this function.
+
+    Ambiguity stays unattributed on purpose: an expression touching two pins is
+    exactly the case this mechanism refuses to guess at, and an unattributed
+    container is handled as it was before attribution existed.
+    """
+    hits = {
+        trail for trail in pin_trails
+        for path in image_paths
+        if path == trail or path.startswith(f"{trail}.")
+    }
+    return hits.pop() if len(hits) == 1 else None
+
+
 # --- capability extraction (text in, facts out) ------------------------------
 # Deliberately text-based, not path-based: the inputs come from `git show
 # <tag>:<path>` and must never touch the working tree. Kept behaviourally
@@ -522,6 +601,8 @@ def collect_helm_workloads(errors: list[str]) -> list[Workload]:
             continue
         da_tools_pins: list[tuple[str, dict]] = []
         other_repos: set[str] = set()
+        other_trails: dict[str, str] = {}   # values trail -> repository (#1316)
+        da_tools_trails: list[str] = []     # so a mixed expression stays unattributed
         unreadable = False
         for values in values_files:
             values_rel = values.relative_to(REPO_ROOT).as_posix()
@@ -536,14 +617,11 @@ def collect_helm_workloads(errors: list[str]) -> list[Workload]:
             for trail, pin in find_image_pins(values_doc):
                 if pin.get("repository") == DA_TOOLS_REPO:
                     da_tools_pins.append((f"{values_rel}:{trail}", pin))
+                    da_tools_trails.append(trail)
                 elif isinstance(pin.get("repository"), str):
                     other_repos.add(pin["repository"])
+                    other_trails[trail] = pin["repository"]
         if unreadable or not da_tools_pins:
-            continue
-        if other_repos:
-            errors.append(f"{chart_rel}: pins da-tools AND {sorted(other_repos)}; "
-                          f"chart-level attribution is ambiguous for a mixed-image "
-                          f"chart — extend collect_helm_workloads() before landing it")
             continue
         tags: list[str] = []
         broken = False
@@ -572,27 +650,53 @@ def collect_helm_workloads(errors: list[str]) -> list[Workload]:
         if broken:
             continue
         containers_seen = 0
+        chart_workloads: list[Workload] = []
+        chart_errors: list[str] = []
+        claimed_trails: set[str] = set()   # non-da-tools pins a container claims
         # RECURSIVE: the pre-commit `files:` regex matches
         # `templates/<subdir>/x.yaml`, so a non-recursive glob would leave a
         # hook that fires on a file the scanner never opens — and prints OK.
         for template in _yaml_files(chart / "templates", "**/*"):
             template_rel = template.relative_to(REPO_ROOT).as_posix()
-            stripped = strip_helm_actions(template.read_text(encoding="utf-8"))
+            stripped, actions = strip_helm_actions_indexed(
+                template.read_text(encoding="utf-8"))
             try:
                 docs = list(yaml.safe_load_all(stripped))
             except yaml.YAMLError as exc:
-                errors.append(f"{template_rel}: not parseable as YAML even after "
-                              f"stripping template actions "
-                              f"({exc.__class__.__name__}) — a da-tools container "
-                              f"in it would be invisible to this gate")
+                chart_errors.append(f"{template_rel}: not parseable as YAML even after "
+                                    f"stripping template actions "
+                                    f"({exc.__class__.__name__}) — a da-tools container "
+                                    f"in it would be invisible to this gate")
                 continue
             for doc in docs:
                 for container in iter_containers(doc):
-                    containers_seen += 1
                     name = container.get("name", "<unnamed>")
+                    # #1316: a container whose image expression reads a
+                    # NON-da-tools pin is not a da-tools container, so its entry
+                    # point is none of this gate's business. Untraceable ones
+                    # fall through to the original treatment.
+                    owner = attributed_pin(
+                        image_values_paths(container.get("image"), actions),
+                        list(other_trails) + da_tools_trails)
+                    # ⛔ `not in da_tools_trails` is the second half of the veto,
+                    # and omitting it was a fail-OPEN this gate did not have
+                    # before. ONE trail can be both: every `values*.yaml` in the
+                    # chart is read, so a `values-prod.yaml` re-pointing
+                    # `image.repository` at a mirror or a fork puts `image` in
+                    # BOTH sets. Skipping on the foreign membership alone then
+                    # excused the very container the gate exists to check, and
+                    # the chart went green where it used to raise the
+                    # mixed-image error. (Charts with a single container are
+                    # caught by the containers_seen==0 arm below — but only
+                    # those, and with a message pointing at the wrong cause.)
+                    if (owner is not None and owner in other_trails
+                            and owner not in da_tools_trails):
+                        claimed_trails.add(owner)
+                        continue
+                    containers_seen += 1
                     resolved = resolve_entry(container)
                     if resolved is None:
-                        errors.append(
+                        chart_errors.append(
                             f"{template_rel} (container {name}): chart pins the "
                             f"da-tools image but this container's entry point "
                             f"cannot be resolved (no {IMAGE_TOOLS_DIR}*.py in "
@@ -600,9 +704,31 @@ def collect_helm_workloads(errors: list[str]) -> list[Workload]:
                         continue
                     kind, entry = resolved
                     for tag in tags:
-                        workloads.append(Workload(
+                        chart_workloads.append(Workload(
                             chart_rel, f"{template_rel} (container {name}) @ {tag}",
                             tag, kind, entry))
+        # ⛔ Emitted BEFORE the ambiguity check, not after it. A chart can hold
+        # both problems at once, and discarding the per-container findings on
+        # the way out hid the second one until the first was fixed — two CI
+        # rounds for one chart.
+        errors.extend(chart_errors)
+        unclaimed = sorted(
+            f"{repo} (values path {trail!r}{', which is ALSO a da-tools pin' if trail in da_tools_trails else ''})"
+            for trail, repo in other_trails.items() if trail not in claimed_trails)
+        if unclaimed:
+            # The original chart-level refusal, now narrowed to the case that is
+            # still genuinely ambiguous: a foreign pin no container claims means
+            # something here runs an image this gate cannot see. The trail is
+            # named because one repository can appear under several of them, and
+            # the dual-membership note because that case is refused BY DESIGN
+            # (a trail that is also a da-tools pin can never excuse a container)
+            # rather than for want of a matching `image:`.
+            errors.append(f"{chart_rel}: pins da-tools AND {unclaimed} with no "
+                          f"container whose `image:` reads that pin; chart-level "
+                          f"attribution is ambiguous for a mixed-image chart — "
+                          f"extend collect_helm_workloads() before landing it")
+            continue
+        workloads.extend(chart_workloads)
         if containers_seen == 0:
             errors.append(
                 f"{chart_rel}: pins the da-tools image ({', '.join(tags)}) but "

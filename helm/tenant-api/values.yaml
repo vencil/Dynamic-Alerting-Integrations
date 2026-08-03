@@ -223,7 +223,8 @@ rbac:
 #      The chart then pre-creates the (empty) token-store ConfigMap, adds the
 #      get+update RBAC, mounts the signing-key Secret, and passes the three
 #      --federation-* flags. tenant-api owns store.json at runtime; the chart
-#      never templates it, so `helm upgrade` cannot wipe live tokens.
+#      never templates THAT key (it templates only its own mount sentinel, see
+#      store.sentinelKey), so `helm upgrade` cannot wipe live tokens.
 federation:
   enabled: false
 
@@ -239,6 +240,29 @@ federation:
   # match the federation-gateway chart's revoked-set source.
   store:
     configMapName: tenant-federation-store
+    # Mount sentinel key (#1316). The ONE key this chart writes into the store
+    # ConfigMap, present from the first `helm install` and independent of whether
+    # tenant-api has ever written a token. federation-gateway and
+    # federation-reconciler each run a preflight init-container that looks for it:
+    # finding it proves their `optional: true` ConfigMap volume actually resolved
+    # THIS object, which the runtime keys cannot prove (their absence is also what
+    # a legitimately fresh store looks like) and which Kubernetes will not tell
+    # them either — a missing optional ConfigMap yields an empty directory, a
+    # Ready pod and no event (#1313).
+    #
+    # ⛔ THE SAME STRING MUST BE SET IN BOTH CONSUMERS (federation-gateway's
+    # `revokedSet.sentinelKey`, federation-reconciler's `store.sentinelKey`).
+    # Three charts, three copies, no shared helper — the drift is pinned by
+    # tests/helm/test_federation_store_sentinel_guard.py, not by convention.
+    #
+    # ⛔ It must NOT be `store.json` or `revoked.txt`: templating a runtime key
+    # here would make every `helm upgrade` overwrite the live token store. The
+    # template refuses to render in that case rather than trusting this comment.
+    #
+    # The leading dot is deliberate: the gateway mounts the WHOLE ConfigMap, and
+    # a dot-prefixed key stays out of a plain `ls` of the mount, so the preflight
+    # can use "are there any non-dot entries?" as its separate legacy-store test.
+    sentinelKey: .chart-managed
     # Namespace the store ConfigMap is created in. EMPTY = this release's
     # namespace (the historical behaviour; existing installs are unaffected).
     #
@@ -251,7 +275,10 @@ federation:
     # leaves the gateway with no revoked.txt at all. Its volume is
     # `optional: true`, so the pod starts clean and the Lua filter loads an
     # EMPTY revoked set: every revoked token is honoured until its TTL, with no
-    # event and no log to say so (#1313).
+    # Kubernetes event to say so (#1313). Since #1316 the consumers' preflight
+    # init-container does log it at pod start (and can be set to refuse to
+    # start) — but that is a boot-time notification, not a continuous detector,
+    # so getting this value right is still the actual fix.
     #
     # Only the ConfigMap moves — tenant-api's own POD stays in this release's
     # namespace, so helm/vector's evidence binding (`evidenceChannel.podNamespace`,
@@ -273,7 +300,8 @@ federation:
     #
     # ⛔ CHANGING THIS ON A RUNNING DEPLOYMENT IS A DATA MOVE, NOT A SETTING
     # CHANGE. The chart only creates an EMPTY ConfigMap in the new namespace
-    # (`data` is deliberately not templated — see the object's own comment); the
+    # (it templates only its own mount sentinel, never the runtime keys — see the
+    # object's own comment), so the new object carries no revocations; the
     # old one stays put under `helm.sh/resource-policy: keep` and is then read by
     # nobody. tenant-api's store only verifies that the target object EXISTS, not
     # what is in it (`NewConfigMapStore` in
@@ -288,8 +316,9 @@ federation:
     #      ownership metadata so the upgrade adopts it rather than colliding:
     #      annotations meta.helm.sh/release-name + meta.helm.sh/release-namespace
     #      and label app.kubernetes.io/managed-by=Helm.
-    #   2. `helm upgrade` with the new value. Helm adopts the object and does NOT
-    #      touch `data` (this chart never templates it), so the copy survives.
+    #   2. `helm upgrade` with the new value. Helm adopts the object and patches
+    #      only the keys its manifest carries — the mount sentinel, never
+    #      store.json / revoked.txt — so the copy survives.
     #   3. Verify the enforcement plane actually sees it — exec into a gateway pod
     #      and read /etc/revoked/revoked.txt.
     #   4. Only then delete the ConfigMap in the old namespace.

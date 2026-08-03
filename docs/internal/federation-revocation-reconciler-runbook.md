@@ -24,7 +24,7 @@
 | `federation_revocation_heartbeats_seen` | gauge | 窗內心跳筆數（除錯 / chaos 驗證用；健康時約 5-6＝5m 週期落進 30m 窗）。**告警訊號是 `channel_up`，不是這個**；這個用來看「衰減中」vs「已斷」|
 | `federation_revocation_live_set_rejected_lines` | gauge | **執行面凍結——成因側**（#1235 / TRK-349）：掛載的 `revoked.txt` 中違反 token-id 行契約的行數，以**本行程讀到的檔案**為準。非零＝gateway 正在**拒載整份**撤銷集。只計數，**永不**回報行內容（ADR-028 D3）|
 | `federation_gateway_revoked_set_reload_rejected` | gauge | **執行面凍結——gateway 自述**（#1235 / TRK-349）：近窗（~10m）從 **gateway 自己的 log stream** 讀回的拒載 warn 數（查詢以 `log_type:"gateway_operational"` 限定串流）。與上一列**觀測不同平面**（兩端讀的是同一份 ConfigMap 的不同 kubelet 投影、時間點也不同），故**兩者皆需要**、任一可單獨非零 |
-| `federation_gateway_revoked_set_missing` | gauge | **執行面空集合**（#1236 / TRK-350）：近窗（~10m）gateway 自報「撤銷清單檔案不存在」的 warn 數。⛔ **與上面兩列不同族**：那兩列是「凍結在舊集合」（stale but enforcing），這一列是 gateway **手上什麼都沒有**——每個已撤銷 token 都被放行至 TTL。這是 ADR-028 §相鄰破口 點名的攻擊形態（刪／卸載 projected key），也是 namespace 錯配的長相（#1313）|
+| `federation_gateway_revoked_set_missing` | gauge | **執行面空集合**（#1236 / TRK-350）：近窗（~10m）gateway 自報「撤銷清單檔案不存在」的 warn 數。**兩個產生者**（#1316）：Envoy 容器（請求路徑觸發，無流量就不發）與 `federation-store-preflight` init container（**每次 pod 啟動發一次**，訊息帶要修的 namespace）。⚠️ 後者是單發訊號 ⇒ 鎖存窗過後告警會**自行 resolve 而問題仍在**。⛔ **與上面兩列不同族**：那兩列是「凍結在舊集合」（stale but enforcing），這一列是 gateway **手上什麼都沒有**——每個已撤銷 token 都被放行至 TTL。這是 ADR-028 §相鄰破口 點名的攻擊形態（刪／卸載 projected key），也是 namespace 錯配的長相（#1313）|
 
 ## 告警與 IR
 
@@ -77,12 +77,21 @@
 
 **意義**：gateway 自報撤銷清單檔案**不存在**。⛔ 這是三條 gateway 告警中**唯一「執行面為空集合」**的：另外兩條都保留了前一份撤銷集（stale but enforcing），這一條代表 gateway 手上什麼都沒有——**每個已撤銷 token 都被放行至 TTL（≤4h）**。因此是 critical 而非 warning。
 
-**長相**：gateway 容器 log 出現 `federation: revoked-set missing: /etc/revoked/revoked.txt is absent; enforcing an EMPTY set — every revoked token is honoured until its TTL`。
-手查：`log_type:"gateway_operational" AND app:"envoy" AND "federation: revoked-set missing"`（來源限定的誠實邊界同 §fail-open 那條）。
+**長相**：這句 warn 有**兩個產生者**（#1316 起），先分清是哪一個，因為它們的時間語意完全不同：
+
+- **Envoy 容器**（`app:"envoy"`）：`federation: revoked-set missing: /etc/revoked/revoked.txt is absent; enforcing an EMPTY set — every revoked token is honoured until its TTL`。由 Lua 在**請求路徑**上發出（reload 掛在 `envoy_on_request` 內）⇒ **沒有流量就永遠不會出現**。
+- **`federation-store-preflight` init container**（`app:"federation-store-preflight"`）：同一句 phrase 開頭，接的是 `… resolved to an EMPTY directory at startup, so this workload would enforce an EMPTY revoked set …`，後面**列出兩種它無法區分的成因（a) CM 不在該 namespace／(b) CM 在但還沒被寫過**）並附上分辨用的 `kubectl`。它在 **pod 啟動時發一次**，補的正是「錯配但閒置的 gateway 一句話都不發」那個洞。⛔ 它**刻意不宣告是哪一種**——從 pod 內部看不出來（見下方警語）。
+
+手查：`log_type:"gateway_operational" AND (app:"envoy" OR app:"federation-store-preflight") AND "federation: revoked-set missing"`（來源限定的誠實邊界同 §fail-open 那條）。
+
+⚠️ **本告警會在問題還在的情況下自行 resolve。** preflight 那一列是 per-pod-start 的**單發**訊號，鎖存窗（`max_over_time(...[1h])`）過去之後 gauge 回 0、告警 resolve——**「已 resolve」不等於「掛載已修好」**。要確認修好，回頭跑上面那條手查、或直接 `kubectl logs <pod> -c federation-store-preflight`（**掛載到、且該 store 已由 ≥2.9.20 的 tenant-api chart 寫過 sentinel** 時完全沒有輸出）。
+
+⚠️ **反過來也要小心：preflight 那一列不保證錯配。** 它看得到的只有「掛載點是空的」，而 **kubelet 對「ConfigMap 不存在」與「ConfigMap 在但一把 key 都沒有」投影出來的目錄逐字相同**（真叢集實測）。後者是合法狀態——2.9.20 以前的 tenant-api chart 建的 store 完全沒有 `data`，而 `store.json` / `revoked.txt` 要到第一次寫入才出現。所以**收到這一列時先跑 `kubectl -n <ns> get cm tenant-federation-store`**：不存在＝錯配；存在但 `data` 為空＝生產端 chart 落後，無害，升上去就會消失。
 
 **IR**：
 
-1. **先分辨錯配 vs 攻擊**——這兩者長得一模一樣，但處置完全不同。查 store ConfigMap 是否存在於 **gateway 自己的 namespace**：ConfigMap 是 namespace-scoped，projected volume 只解析得到掛載 pod 自身 namespace 的那一個。tenant-api 的 `federation.store.namespace` 必須指向 gateway 與 reconciler 所在的 namespace（三方相等，見 [#1313](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1313)）。**新裝或剛改過拓撲就響 ⇒ 幾乎必然是錯配。**
+1. **先分辨錯配 vs 攻擊**——這兩者長得一模一樣，但處置完全不同。**第一步：看有沒有 preflight 那一列**（`kubectl logs <gateway-pod> -c federation-store-preflight`）。有 ⇒ 掛載點在**開機當下**就是空的，把可能性縮到兩種（真的沒有那個 ConfigMap／有但還沒被寫過），**用 `kubectl -n <ns> get cm tenant-federation-store` 分辨，不要直接照訊息下結論**——preflight 從 pod 內部看不出差別。沒有那一列而只有 Envoy 那一列 ⇒ 掛載在**啟動時是好的**、之後才變空，那比較像帶外刪除，走第 2 步。接著查 store ConfigMap 是否存在於 **gateway 自己的 namespace**：ConfigMap 是 namespace-scoped，projected volume 只解析得到掛載 pod 自身 namespace 的那一個。tenant-api 的 `federation.store.namespace` 必須指向 gateway 與 reconciler 所在的 namespace（三方相等，見 [#1313](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1313)）。**新裝或剛改過拓撲就響 ⇒ 幾乎必然是錯配。**
+   - ⛔ 還有第三種長相：preflight 印的是 `federation: store mount preflight: sentinel … is absent but … carries data`。那**不是**本告警（它不含 missing phrase、不進任何 gauge），意思是「掛載到的 store 沒有 chart 的 sentinel 但有資料」＝要嘛 tenant-api chart 還沒升到 2.9.20、要嘛掛到的是舊拓撲留下的**孤兒 ConfigMap**（`helm.sh/resource-policy: keep` 不會刪它）。孤兒的執行面是**凍結**而非空，該看的是 `FederationRevocationTamperSuspected`。
 2. **ConfigMap 在、但 `revoked.txt` key 不見了** ⇒ 這是帶外寫入。合法路徑（tenant-api `revoke()`／任何 store 寫入）每次都會重生該 key，不可能刪掉它。併查 [#926](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/926) audit 看誰寫過 `tenant-federation-store`，並視為 incident 處理——ADR-028 §相鄰破口 正是把「刪／卸載 projected key」列為攻擊者在寫入路徑被封死後的下一步。
 3. **確認曝險窗**：從第一筆這句 warn 到修復之間，**所有**已撤銷但未過期的 token 都可用。撤銷集復原後，gateway 於下一個 `reloadIntervalSeconds`（預設 30s）內重新載入。必要時縮短 token TTL 或輪替簽章金鑰以強制失效。
 4. ⚠️ **不要**用 `FederationRevocationTamperSuspected` 是否同時響來判斷嚴重度：那條比對的是 audit log 與**檔案**，而檔案不見時它讀到空集，只有在窗內仍有未過期撤銷事件時才會響。近 4h 無撤銷 ⇒ 它保持綠，但本告警描述的曝險依然成立。

@@ -30,7 +30,8 @@ name: Nightly Image CVE Scan
 #
 # Third-party images our helm charts AND k8s/ manifests pull (vector, victoria-logs,
 # envoy, oauth2-proxy, prom-label-proxy, python, mariadb, mysqld-exporter, grafana,
-# prometheus, alertmanager, kube-state-metrics, prometheus-config-reloader, alpine/git) are NOT
+# prometheus, alertmanager, kube-state-metrics, prometheus-config-reloader, alpine/git,
+# busybox) are NOT
 # built here — the scan-thirdparty job pulls each ref and Trivy-scans it directly. They
 # had ZERO automated CVE detection before #902 (PR/release/this job's build path
 # all scan only self-built images). Keep each ref in sync with the chart values /
@@ -223,6 +224,17 @@ jobs:
           # re-pushes v<X.Y.Z> from a fresh `apk add` (alpine-docker/git build.yml), so
           # the same tag silently gains OS fixes. Only the digest pins it; a digest-only
           # Renovate refresh is what clears this image's CVEs, not a tag bump.
+          # The #1316 store-mount preflight init-container in BOTH federation
+          # consumer charts. One image, two charts — a digest refresh must update
+          # helm/federation-gateway/values.yaml AND
+          # helm/federation-reconciler/values.yaml, or the two drift silently.
+          # ⛔ Do NOT cite a `tests/…py` path in a comment here: this file's
+          # helper-script discovery is a plain regex over the whole text, so a
+          # test path in a COMMENT gets read as a helper and its own fixtures
+          # (e.g. a deliberate `gh label create … || true`) are then reported as
+          # offenders by the guards below.
+          - name: busybox # helm/federation-{gateway,reconciler}/values.yaml (preflight init)
+            ref: "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
           - name: alpine-git # k8s/04-tenant-api/deployment.yaml (gitops sidecar)
             ref: "alpine/git:v2.54.0@sha256:b4d933c7185b5cc9da7704f2c6e19d477f935ea31a50d9a017ffce2bbd1109a3"
     steps:
@@ -311,7 +323,7 @@ jobs:
             "🛡️ Nightly image scan — self-built component CVEs / build failures on main" \
             5 "self-built component" \
             "for the Go/JS components we compile, a rebuild or a pinned-dependency bump clears these — start by checking whether the Dockerfile builder pins an older toolchain than CI does (that exact split hid a stdlib CVE from every green CI run in #1058). ONE EXCEPTION: recipe-preview is a Python service and its findings live in the BUNDLED upstream promtool binary, so no first-party bump touches them — the levers there are re-pinning PROM_VERSION or an evidence-backed, time-boxed entry in components/recipe-preview/.trivyignore.yaml. The release-time Trivy gate (release.yaml) blocks a tag until this bucket is 0 (security-audit-runbook §37)." || rc=1
-          # Third-party (14) — informational. The remediation sentence is the part
+          # Third-party (15) — informational. The remediation sentence is the part
           # of this alert that decides whether a reader acts or learns to ignore it,
           # so it names the levers that have ACTUALLY cleared findings here (#1243
           # triaged all 14 and cleared 58 of 120) instead of a generic "bump the tag".
@@ -324,7 +336,7 @@ jobs:
           bash scripts/ops/file_cve_report.sh frags-tp \
             nightly-cve-thirdparty \
             "🛡️ Nightly image scan — third-party upstream image CVEs on main" \
-            14 "third-party upstream image" \
+            15 "third-party upstream image" \
             "triage each image before assuming it is unfixable — #1243 cleared 58 of 120 this way. Four levers, in the order worth checking: (1) a DIGEST-only refresh, for images whose version tag is mutable and gets re-pushed from a fresh base (alpine/git rebuilds every Sunday); (2) a patch tag published AFTER Renovate's last weekly run — Renovate runs Mondays at 06:17 UTC, so anything released later that day waits nearly a full week (grafana 12.4.6 was built 8 hours after that run); (3) the same release published to a registry we do not pin (prom-label-proxy v0.14.0 shipped to Docker Hub, never to quay); (4) replacing a release-dormant image with a maintained equivalent (configmap-reload, last released 2025-04-09, -> prometheus-config-reloader). What is usually NOT the lever: a gated major on the Renovate Dashboard (#929) — verify it actually carries the fix first. What is left after those four splits three ways, and the split matters for the next triage: (a) FIXED ON MAIN, UNRELEASED — the project already bumped the dependency but has cut no release (mysqld-exporter, alertmanager); (b) NO FIX EXISTS ANYWHERE YET — the upstream dependency's own fix is newer than every release of the image, so no version of it can carry the fix (grafana's kin-openapi CRITICAL); (c) A MAJOR WOULD NOT HELP EITHER — the finding comes from a component the next major ships identically (mariadb's 15 findings are all a pre-compiled gosu binary that 12.x pins to the same version). Only (a) is a waiting game." || rc=1
           exit $rc
 
