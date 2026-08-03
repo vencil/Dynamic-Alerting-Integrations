@@ -112,6 +112,71 @@ class MdYamlDriftChecker:
                         return True
         return False
 
+    def run_fences(self) -> int:
+        """Fence hygiene: every ```yaml block in docs/ must parse as YAML.
+
+        Deliberately a SEPARATE check from the schema pass below, and wired as
+        its own hook, because the two differ on every axis that matters:
+
+        * Coverage — this rule speaks for ALL fenced yaml blocks (472 today);
+          the schema pass only speaks for the ~38 that look like tenant config.
+        * Concern — this one asks "is the fence honestly labelled?", the other
+          asks "does this config match the contract?". Bundling them lets one
+          mislabelled directory-tree diagram block an unrelated schema fix.
+
+        Parsed with `safe_load_all`, not `safe_load`: a multi-document stream
+        (`---`-separated k8s manifests, a frontmatter example) is perfectly
+        valid YAML, and four blocks in docs/ are exactly that. Using the
+        single-document loader here would report them as broken and push
+        authors toward splitting legitimate manifests apart.
+
+        ⚠️ Known blind spot, stated rather than papered over: "parses as YAML"
+        is NECESSARY but not SUFFICIENT for an honest fence tag. A fence holding
+        only shell, with no `key:` anywhere, is a valid YAML *scalar* and passes
+        here. What it does catch is the mislabelling that actually occurs in
+        this repo — directory-tree diagrams, and shell mixed into the same fence
+        as a manifest — because those contain colons that collide with the
+        surrounding structure. Closing the gap fully needs language detection,
+        a different tool with a different false-positive profile; deliberately
+        not attempted. Pinned by tests/lint/test_check_md_yaml_fences.py.
+        """
+        issues = []
+        total = 0
+        docs_dir = self.repo_root / "docs"
+        for md_file in sorted(docs_dir.rglob("*.md")):
+            rel_path = str(md_file.relative_to(self.repo_root)).replace(os.sep, "/")
+            for line_num, yaml_content in self._extract_yaml_blocks(md_file):
+                total += 1
+                try:
+                    list(yaml.safe_load_all(yaml_content))
+                except yaml.YAMLError as e:
+                    first = str(e).splitlines()[0]
+                    issues.append((rel_path, line_num, first))
+                    continue
+                if self.verbose:
+                    print(f"  OK   {rel_path}:{line_num}")
+
+        print("=" * 60)
+        print("MARKDOWN YAML FENCE HYGIENE")
+        print("=" * 60)
+        print(f"Fenced yaml blocks scanned:  {total}")
+        print(f"Blocks that do not parse:    {len(issues)}")
+        print()
+        if not issues:
+            print("✓ Every ```yaml block in docs/ parses as YAML.")
+            return EXIT_OK
+        for rel_path, line_num, err in issues:
+            print(f"  [FENCE] {rel_path}:{line_num}")
+            print(f"          {err}")
+        print()
+        print("A ```yaml fence that is not YAML misleads readers who copy it and")
+        print("breaks syntax highlighting. Fix by re-tagging the fence to what it")
+        print("actually is (```text for directory trees, ```bash for shell), or by")
+        print("splitting mixed content into one fence per language. Separate k8s")
+        print("manifests inside ONE block with `---` (a multi-document stream is")
+        print("valid here and is what `kubectl apply -f` expects).")
+        return EXIT_VIOLATION
+
     def run(self) -> int:
         """Execute YAML drift check."""
         issues = []
@@ -209,6 +274,11 @@ def main():
     parser.add_argument("--ci", action="store_true", help="CI mode: exit 1 on drift")
     parser.add_argument("--verbose", action="store_true", help="Show all scanned blocks")
     parser.add_argument("--repo-root", default=".", help="Repository root (default: .)")
+    parser.add_argument(
+        "--check", choices=("schema", "fences"), default="schema",
+        help="Which check to run: 'schema' (default; tenant-config blocks vs "
+             "JSON Schema) or 'fences' (every ```yaml block in docs/ must parse). "
+             "They are separate hooks so one cannot mask the other.")
     args = parser.parse_args()
 
     repo_root = Path(args.repo_root).resolve()
@@ -217,7 +287,7 @@ def main():
         return EXIT_CALLER_ERROR
 
     checker = MdYamlDriftChecker(str(repo_root), verbose=args.verbose)
-    exit_code = checker.run()
+    exit_code = checker.run_fences() if args.check == "fences" else checker.run()
 
     if args.ci:
         return exit_code

@@ -47,6 +47,9 @@ relabel_configs:
   - source_labels: [__meta_kubernetes_namespace]
     target_label: tenant
 
+```
+
+```bash
 # Or use scaffold tool to auto-generate
 da-tools scaffold --tenant db-a --db postgresql --namespaces ns-prod,ns-staging
 ```

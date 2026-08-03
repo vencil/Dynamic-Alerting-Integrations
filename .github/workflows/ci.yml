@@ -305,6 +305,12 @@ jobs:
           pre-commit run changelog-lint --all-files
           pre-commit run includes-sync --all-files
           pre-commit run platform-data-check --all-files
+          # Fence hygiene over docs/**. Lives HERE rather than in a pytest
+          # because the `python` filter carries only docs/glossary*.md, not
+          # docs/** — a docs-only PR would skip it, which is precisely the
+          # change class it guards. This Lint job has no `if:` and no `needs:`,
+          # so it runs unconditionally.
+          pre-commit run md-yaml-fence-check --all-files
           pre-commit run repo-name-check --all-files
           # Codename-leak guard runs in diff-only mode by default (lint-policy
           # §3 (b) class). resolve_diff_base() auto-picks origin/$GITHUB_BASE_REF

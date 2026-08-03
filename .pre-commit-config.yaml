@@ -889,6 +889,22 @@ repos:
         pass_filenames: false
         files: ^docs/.*\.md$
 
+      # Fence hygiene: a ```yaml fence in docs/ must actually be YAML. Split
+      # out from md-yaml-drift-check (below) on purpose — it covers ALL 472
+      # fenced blocks rather than the ~38 that look like tenant config, and a
+      # mislabelled directory-tree diagram must not be able to block an
+      # unrelated schema fix. Parses with safe_load_all: `---`-separated k8s
+      # manifests are valid YAML and four blocks in docs/ are exactly that.
+      # Auto-run (not manual) and listed in ci.yml's always-on Lint job, so a
+      # docs-only PR cannot skip it.
+      - id: md-yaml-fence-check
+        name: Markdown ```yaml fences must parse as YAML
+        entry: python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --check fences --ci
+        language: python
+        pass_filenames: false
+        files: ^docs/.*\.md$
+        additional_dependencies: ['pyyaml']
+
       - id: md-yaml-drift-check
         name: Markdown YAML example ↔ schema drift
         entry: python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --ci

@@ -26,7 +26,7 @@ As the platform grows from dozens to hundreds of tenants, the **flat structure**
 
 ### Limits of Flat Structure
 
-```yaml
+```text
 # Old: conf.d/ flat structure
 conf.d/
 ├── tenant-finance-a.yaml          # Finance, US-East, Prod
@@ -48,7 +48,7 @@ conf.d/
 
 ### Directory Structure
 
-```yaml
+```text
 conf.d/
 ├── _defaults.yaml                        # Global defaults (inherited by all tenants)
 │

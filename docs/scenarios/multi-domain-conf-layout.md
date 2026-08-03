@@ -26,7 +26,7 @@ lang: zh
 
 ### 平面結構的極限
 
-```yaml
+```text
 # 舊：conf.d/ 平面結構
 conf.d/
 ├── tenant-finance-a.yaml          # Finance，US-East，Prod
@@ -48,7 +48,7 @@ conf.d/
 
 ### 目錄結構
 
-```yaml
+```text
 conf.d/
 ├── _defaults.yaml                        # 全局預設值（所有 tenant 繼承）
 │
