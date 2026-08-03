@@ -320,6 +320,12 @@ jobs:
           # change class it guards. This Lint job has no `if:` and no `needs:`,
           # so it runs unconditionally.
           pre-commit run md-yaml-fence-check --all-files
+          # Schema conformance for documented config examples. Same reasoning as
+          # the fence check above (docs-only PRs must not skip it), and it is
+          # the ONLY oracle for the unknown-/typo'd-key class: the Go loader
+          # decodes non-strictly, so `state_flters` or a flat `receiver_type`
+          # is invisible to it by construction.
+          pre-commit run md-yaml-drift-check --all-files
           pre-commit run repo-name-check --all-files
           # Codename-leak guard runs in diff-only mode by default (lint-policy
           # §3 (b) class). resolve_diff_base() auto-picks origin/$GITHUB_BASE_REF

@@ -911,13 +911,19 @@ repos:
       # every run it ever did. The script now refuses to run without it
       # (EXIT_CALLER_ERROR) instead of degrading — same posture as the sibling
       # confd-schema-check.
+      # Un-parked. It was `stages: [manual]` since it landed, so it never ran on
+      # a commit or in CI — and while parked it was also validating every block
+      # against the wrong schema with jsonschema silently absent, so the three
+      # defects hid each other: nobody fixed the routing because nobody saw the
+      # gate, and un-parking it would have failed 38/38 anyway. Routing, the
+      # dependency and the docs are fixed, so it now runs like its siblings and
+      # is listed in ci.yml's always-on Lint job.
       - id: md-yaml-drift-check
         name: Markdown YAML example ↔ schema drift
         entry: python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --ci
         language: python
         pass_filenames: false
         files: ^docs/.*\.(md|yaml)$
-        stages: [manual]
         additional_dependencies: ['pyyaml', 'jsonschema']
 
       - id: playwright-e2e
