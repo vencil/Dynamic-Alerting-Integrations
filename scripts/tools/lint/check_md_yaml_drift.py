@@ -293,7 +293,12 @@ class MdYamlDriftChecker:
                     for data in docs:
                         if data is None or not self._is_tenant_config(data):
                             continue
-                        yield rel_path, line_num + offset, data
+                        # `line_num` is the ```yaml fence itself; +1 lands on the
+                        # segment's first real line. Matches the Go gate's
+                        # `b.line + s.offset + 1` exactly — the two gates
+                        # reporting the same block at different line numbers is
+                        # the first symptom of their extractors drifting apart.
+                        yield rel_path, line_num + offset + 1, data
 
     def run(self) -> int:
         """Execute the schema-conformance pass."""

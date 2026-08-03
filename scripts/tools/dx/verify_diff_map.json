@@ -692,7 +692,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "7ae4adcf33bda1eeb1ed653d4940ec19a48495fe1c3aa4627ecd1aaa68b2c4b4",
+ "source_digest": "154662d21810953f38fda90cc3898bfd6698e244624d858c0140c173c0175d10",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -845,6 +845,7 @@
   "tests/lint/test_check_window_x_no_fallback.py",
   "tests/lint/test_check_workflow_git_push_permissions.py",
   "tests/lint/test_detect_sed_damage.py",
+  "tests/lint/test_docs_yaml_split_parity.py",
   "tests/lint/test_fallback_image_digest_pin.py",
   "tests/lint/test_fix_doc_links.py",
   "tests/lint/test_fix_file_hygiene.py",
@@ -1933,7 +1934,8 @@
   ],
   "scripts/tools/lint/check_md_yaml_drift.py": [
    "tests/lint/test_check_md_yaml_drift.py",
-   "tests/lint/test_check_md_yaml_fences.py"
+   "tests/lint/test_check_md_yaml_fences.py",
+   "tests/lint/test_docs_yaml_split_parity.py"
   ],
   "scripts/tools/lint/check_metric_dictionary.py": [
    "tests/lint/test_check_metric_dictionary.py"
@@ -2222,7 +2224,11 @@
    "tests/shared/test_mutation_catalog.py",
    "tests/shared/test_property_tools.py"
   ],
+  "tests/shared/docs_yaml_split_matrix.json": [
+   "tests/lint/test_docs_yaml_split_parity.py"
+  ],
   "tests/shared/optional_overrides_membership_matrix.json": [
+   "tests/lint/test_docs_yaml_split_parity.py",
    "tests/ops/test_generate_alertmanager_routes.py"
   ],
   "tests/shared/property-coverage.yaml": [

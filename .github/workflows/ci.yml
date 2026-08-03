@@ -74,6 +74,14 @@ jobs:
             #     .yaml and try-local/alertmanager.yml (grep-verified) →
             #     those trees are in the filter too.
             #   - rule-packs/** — custom-alerts pack ↔ tenant-api goldens.
+            #   - tests/shared/** — the Go↔Python parity matrices
+            #     (optional_overrides_membership, docs_yaml_split) are ASSERTED
+            #     BY GO TESTS as well as Python ones. Without this entry the
+            #     asymmetry defeats the pin: editing a matrix alone runs the
+            #     Python half (tests/** is in the `python` filter) while the Go
+            #     half never runs, so a matrix edited to match one side ships
+            #     green with the two implementations disagreeing — precisely
+            #     what a parity matrix exists to make impossible.
             #   - ci_flake_retry.py + flaky-tests.yaml — the retry wrapper
             #     both Go legs run under.
             go:
@@ -83,6 +91,7 @@ jobs:
               - "**/go.sum"
               - "tests/contract/**"
               - "tests/alertmanager-inhibit/**"
+              - "tests/shared/**"
               - "rule-packs/**"
               - "k8s/03-monitoring/**"
               - "try-local/**"
