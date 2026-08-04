@@ -409,7 +409,16 @@ tenantProjectionGate: degrade
 projectionGate:
   image:
     # The vector-projection-gate image (helm/vector/projection-gate/Dockerfile).
-    # Published by the release pipeline; override to your registry/tag.
+    # ⛔ NOT published by any pipeline in this repo — measured 2026-08-04:
+    # release.yaml pushes five images and this is not one of them, no workflow
+    # or Makefile target builds this Dockerfile at all, and an anonymous
+    # `docker manifest inspect ghcr.io/vencil/vector-projection-gate:0.1.0`
+    # comes back `denied` while the five real first-party refs resolve. Treat
+    # this value as a NAMING DEFAULT, not a pullable ref: build it from the
+    # Dockerfile above, push it somewhere your cluster can pull, and override
+    # `repository` (+ `digest`). Left as-is on a cluster without credentials
+    # for it, the gate INIT-container never pulls — so Vector never starts on
+    # that node. Only reached when `tenantProjections` is set (#1337).
     repository: ghcr.io/vencil/vector-projection-gate
     tag: "0.1.0"
     digest: ""

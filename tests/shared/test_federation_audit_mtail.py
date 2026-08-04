@@ -16,8 +16,16 @@ gate, mirroring the ``vector validate`` codification in
 
 mtail 3.0.8 — the SAME version the audit-sidecar deploys
 (``helm/federation-gateway/audit-sidecar/Dockerfile`` ``MTAIL_VERSION`` /
-``values.yaml`` ``auditLog.image.tag``) — so the gate compiles against exactly
-the runtime compiler.
+``values.yaml`` ``auditLog.image.tag``) — so the gate compiles against the same
+mtail language the runtime does.
+
+⚠️ Same VERSION, not the same BINARY, since #1337: CI installs upstream's
+prebuilt 3.0.8 release while the sidecar image now compiles that version's
+pinned commit with a current Go toolchain (the prebuilt one is linked against Go
+1.21.1 and carried 20 fixable stdlib CVEs). That is fine for what this gate
+asserts — the .mtail language is fixed by the mtail version, not by the Go
+toolchain that built the compiler — but do not restate it as "byte-identical to
+what runs in the pod", because it is not.
 
 Gated on ``mtail`` being on PATH (``shutil.which``); CI installs a pinned +
 checksum-verified mtail (ci.yml ``python-tests`` job) so the gate is REAL there.

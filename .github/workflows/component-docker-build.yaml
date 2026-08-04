@@ -8,8 +8,12 @@ name: Component Docker Build (PR smoke)
 # only surfaces at tag push — the worst possible moment. v2.8.0 release hit 2
 # such dormant bugs in 30 min (#472 portal Dockerfile moved-file COPY, #473
 # exporter pkg/ COPY missing). This workflow runs `docker build` against the
-# 4 production Dockerfiles on every PR that touches their build inputs, so
+# 7 self-built Dockerfiles on every PR that touches their build inputs, so
 # build breakage fails at the introducing PR, not at release.
+#
+# ⚠️ Two of the seven ship inside Helm charts and are never published, so the
+# tag-time release build does NOT cover them at all (#1337) — for those two
+# this workflow plus the nightly scan are the ONLY automated build coverage.
 #
 # Cost: ~30-60 s per component, only on PRs touching the paths below.
 # No registry push (forked PRs work — `load: true` is local-daemon only).
@@ -41,6 +45,10 @@ on:
       - "tools/portal/src/**"        # da-portal COPY source (post TD-042 restructure)
       - "docs/assets/**"             # da-portal COPY source
       - "docs/.nojekyll"             # da-portal COPY source (rarely changes, but it IS a COPY input)
+      # Chart-shipped self-built images (#1337). Both build from their own
+      # directory, so the Dockerfile + its siblings are the whole input set.
+      - "helm/federation-gateway/audit-sidecar/**"
+      - "helm/vector/projection-gate/**"
       - ".github/workflows/component-docker-build.yaml"
 
 concurrency:
@@ -57,7 +65,13 @@ jobs:
     strategy:
       fail-fast: false  # build all components so one break doesn't mask another
       matrix:
-        # All 5 production Dockerfiles. 4 are self-contained (build from source in
+        # ⛔ Keep in sync with nightly-image-scan.yaml's `scan` matrix and with
+        # `make docker-build-all` — this is now MECHANICAL, not prose:
+        # test_selfbuilt_matrix_covers_every_dockerfile
+        # (tests/ops/test_nightly_scan_matrix_drift.py) pins all three against
+        # the repo's Dockerfile inventory (#1337).
+        #
+        # All 7 self-built Dockerfiles. 4 are self-contained (build from source in
         # Docker / COPY in-repo assets): threshold-exporter, da-portal, tenant-api,
         # recipe-preview — exactly where source-COPY paths drift (#472 da-portal
         # moved file, #473 exporter pkg/ COPY; recipe-preview COPYs the bundled
@@ -83,6 +97,14 @@ jobs:
           - name: recipe-preview
             context: .
             dockerfile: components/recipe-preview/Dockerfile
+          # Self-built but never published — they ship inside charts, so their
+          # only pre-merge build coverage is right here (#1337).
+          - name: federation-audit-sidecar
+            context: helm/federation-gateway/audit-sidecar
+            dockerfile: helm/federation-gateway/audit-sidecar/Dockerfile
+          - name: vector-projection-gate
+            context: helm/vector/projection-gate
+            dockerfile: helm/vector/projection-gate/Dockerfile
     steps:
       - uses: actions/checkout@v6
 

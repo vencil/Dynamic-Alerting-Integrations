@@ -9,7 +9,7 @@ name: Nightly Image CVE Scan
 # The gap: a new base-image (Alpine/distroless/nginx) CVE landing between the last
 # PR and a tag push is discovered ONLY at release — blocking it (v2.9.0 hit 3
 # freshly-disclosed HIGHs at tag time; runbook §37). This is the missing third
-# dimension: scan the 5 self-built component images (built from CURRENT main) PLUS
+# dimension: scan the 7 self-built images (built from CURRENT main) PLUS
 # the third-party upstream images our charts/manifests pull (#902 L1-A) every night,
 # and file ONE deduped tracking issue when fixable HIGH/CRITICAL CVEs appear, so
 # they surface days early. NON-BLOCKING by construction — it gates nothing
@@ -66,8 +66,14 @@ jobs:
     strategy:
       fail-fast: false # scan every image so one build break doesn't mask the rest
       matrix:
-        # Same 5 build configs as component-docker-build.yaml (#474). Keep in sync
-        # with that matrix when a component is added/removed.
+        # Same 7 build configs as component-docker-build.yaml (#474). "Keep in
+        # sync" is no longer prose: test_selfbuilt_matrix_covers_every_dockerfile
+        # and test_the_three_selfbuilt_build_lists_agree (in the nightly-scan
+        # matrix-drift module) pin this matrix against BOTH that workflow and
+        # `make docker-build-all`, and against the Dockerfile inventory itself
+        # (#1337). ⛔ Test NAMES only, no path — see the ⛔ note further down:
+        # a `tests/…py` path in any comment in this file is read as a helper
+        # script by the guards' discovery regex.
         include:
           - name: threshold-exporter
             context: components/threshold-exporter/app
@@ -84,6 +90,19 @@ jobs:
           - name: recipe-preview
             context: .
             dockerfile: components/recipe-preview/Dockerfile
+          # ── Self-built but NOT published (#1337) ───────────────────────────
+          # These two ship inside charts rather than as release artifacts, which
+          # is exactly why they had zero CVE coverage for so long: the ref
+          # extractor skips them (one has no registry, the other is under our
+          # own ghcr prefix) and the self-built matrix only listed components/*.
+          # They belong HERE and not in scan-thirdparty because that job PULLS a
+          # published ref — neither of these is pullable at all.
+          - name: federation-audit-sidecar
+            context: helm/federation-gateway/audit-sidecar
+            dockerfile: helm/federation-gateway/audit-sidecar/Dockerfile
+          - name: vector-projection-gate
+            context: helm/vector/projection-gate
+            dockerfile: helm/vector/projection-gate/Dockerfile
     steps:
       # Authenticated Docker Hub pulls (200/6h, per-account not shared-IP) when creds
       # are set; guarded — a no-op for forks / when the secret is unset. `secrets`
@@ -148,7 +167,7 @@ jobs:
           # so the #895 tracking issue reflects the governed posture (these 11 bundled-
           # promtool CVEs are handled, not unhandled noise). NEW promtool CVEs or
           # EXPIRED entries are NOT in the file → they still surface here (early warning
-          # preserved). Empty → no-op for the other 4 self-built images.
+          # preserved). Empty → no-op for the other 6 self-built images.
           trivyignores: ${{ matrix.name == 'recipe-preview' && 'components/recipe-preview/.trivyignore.yaml' || '' }}
 
       # Shared fail-loud summarizer → emits frag-<name>.txt for the report job.
@@ -310,19 +329,21 @@ jobs:
         run: |
           set -euo pipefail
           rc=0
-          # Self-built (5) — feeds the release.yaml Trivy gate; keep this signal clean.
-          # "We own these, so patch it" is honest for 4 of the 5 — but NOT blanket
+          # Self-built (7) — feeds the release.yaml Trivy gate; keep this signal clean.
+          # "We own these, so patch it" is honest for 5 of the 7 — but NOT blanket
           # true, and the same wrong-advice failure the third-party sentence below
-          # was rewritten for (#1243) applies here in miniature: recipe-preview is a
-          # Python service whose findings all live in a BUNDLED upstream promtool
-          # binary, so no first-party rebuild or dependency bump can clear them. The
-          # sentence names that exception rather than sending the reader to do
-          # something that cannot work (#1058).
+          # was rewritten for (#1243) applies here in miniature: TWO of these images
+          # carry findings inside a BUNDLED upstream binary that no first-party
+          # rebuild or dependency bump can clear — recipe-preview (promtool) and
+          # federation-audit-sidecar (mtail's own grpc pin; #1337 already rebuilt
+          # mtail from source with a current Go toolchain, which is what cleared
+          # the other 20). The sentence names both exceptions rather than sending
+          # the reader to do something that cannot work (#1058).
           bash scripts/ops/file_cve_report.sh frags-sb \
             nightly-cve \
             "🛡️ Nightly image scan — self-built component CVEs / build failures on main" \
-            5 "self-built component" \
-            "for the Go/JS components we compile, a rebuild or a pinned-dependency bump clears these — start by checking whether the Dockerfile builder pins an older toolchain than CI does (that exact split hid a stdlib CVE from every green CI run in #1058). ONE EXCEPTION: recipe-preview is a Python service and its findings live in the BUNDLED upstream promtool binary, so no first-party bump touches them — the levers there are re-pinning PROM_VERSION or an evidence-backed, time-boxed entry in components/recipe-preview/.trivyignore.yaml. The release-time Trivy gate (release.yaml) blocks a tag until this bucket is 0 (security-audit-runbook §37)." || rc=1
+            7 "self-built component" \
+            "for the Go/JS components we compile, a rebuild or a pinned-dependency bump clears these — start by checking whether the Dockerfile builder pins an older toolchain than CI does (that exact split hid a stdlib CVE from every green CI run in #1058). TWO EXCEPTIONS, both bundled upstream binaries no first-party bump touches: recipe-preview bundles promtool (levers: re-pin PROM_VERSION, or an evidence-backed time-boxed entry in components/recipe-preview/.trivyignore.yaml), and federation-audit-sidecar builds mtail from upstream source whose go.mod carries grpc as an INDIRECT dependency (mtail's last release is v3.0.8, 2024-08-08). ⛔ Be precise about why that one is still open: forcing a local `go get google.golang.org/grpc@v1.82.1` DOES compile (measured 2026-08-04) — it is not left here because it cannot be done, but because doing it forks an unmaintained upstream's dependency graph with no upstream test coverage behind it. It is therefore left VISIBLE rather than silently patched or silently waived; revisit if it ever becomes reachable rather than merely linked. The release-time Trivy gate (release.yaml) blocks a tag until this bucket is 0 (security-audit-runbook §37)." || rc=1
           # Third-party (15) — informational. The remediation sentence is the part
           # of this alert that decides whether a reader acts or learns to ignore it,
           # so it names the levers that have ACTUALLY cleared findings here (#1243

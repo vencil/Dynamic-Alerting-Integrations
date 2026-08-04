@@ -222,8 +222,21 @@ A **`logrotate` sidecar** caps the `emptyDir` mirror: it rotates at
 rotations (≈ `sizeMB × (keep + 1)` ceiling), and triggers Envoy's admin
 `/reopen_logs` so no line is lost. Both sidecars share one image built
 from [`audit-sidecar/Dockerfile`](audit-sidecar/Dockerfile) (Alpine +
-`mtail` + `logrotate`) — build and Trivy-scan it like any component
-image, then set `auditLog.image.repository`.
+`mtail` + `logrotate`) — build it, then set `auditLog.image.repository`.
+
+> ⚠️ **Rebuild after #1337 even though the tag is still `3.0.8`.** That tag
+> tracks the mtail version, and the mtail version has not changed — the *build*
+> has: mtail is now compiled from its pinned upstream commit with a current Go
+> toolchain instead of using upstream's 2024 prebuilt binary, and the runtime
+> base moved to Alpine 3.23.5. Measured on the built image, that takes it from
+> **23 fixable HIGH/CRITICAL to 2** (the two left are grpc, pinned by mtail's
+> own `go.mod`). An image you built before this change keeps all 23.
+>
+> You no longer need to remember to scan it by hand: the image is a matrix entry
+> in `nightly-image-scan.yaml`, `component-docker-build.yaml`, and
+> `make trivy-scan-all`. ⛔ It is **not** published by any pipeline, so
+> `release.yaml`'s tag-time Trivy hard gate never sees it — those three are the
+> whole of its automated coverage.
 
 The metric is scraped via the `prometheus.io/scrape` annotations on the
 Service — **install the chart in the `monitoring` namespace** so the

@@ -648,14 +648,24 @@ draft-advisory-check: ## ⛔ 擋住「有未發布 draft advisory 就打 tag」�
 	fi
 
 # --- #474 Layer 2: local pre-tag Docker build + Trivy gate ---
-# release.yaml builds these 4 images at tag push; building them locally in
+# release.yaml builds 5 of these 7 images at tag push; building them locally in
 # pre-tag catches #472/#473-class build breaks BEFORE the tag, not after.
+# ⚠️ The last two (federation-audit-sidecar / vector-projection-gate) ship
+# INSIDE Helm charts and are never published, so release.yaml never builds them
+# at all — here and the nightly scan are their only automated build coverage
+# (#1337). audit-sidecar compiles mtail from source (~25 s, needs the Go module
+# proxy); pre-tag already reaches the network for recipe-preview's promtool
+# tarball, so this is not a new class of failure — just a slower step.
 # Needs docker (buildx) + trivy on PATH — run on the maintainer machine /
 # dev container, not a bare host. docker-build-all is a HARD gate (build
 # failure aborts pre-tag); trivy-scan-all is informational (prints CVEs but
 # does not block — same stance as Layer 1 / #448).
+# ⛔ The image list here is pinned against nightly-image-scan.yaml,
+# component-docker-build.yaml and the Dockerfile inventory by
+# test_selfbuilt_matrix_covers_every_dockerfile (#1337) — adding a build here
+# without adding it there (or vice versa) is a hard test failure, by design.
 .PHONY: docker-build-all trivy-scan-all
-docker-build-all: ## 建 5 個 production component image（local --load，無 push；#474 Layer 2）
+docker-build-all: ## 建 7 個 self-built image（local --load，無 push；#474 Layer 2）
 	@docker buildx build --load -t local-test:threshold-exporter components/threshold-exporter/app
 	@mkdir -p docs/assets/vendor  # da-portal COPYs vendor/（空目錄即可，runtime CDN fallback）
 	@docker buildx build --load -t local-test:da-portal -f components/da-portal/Dockerfile .
@@ -669,9 +679,12 @@ docker-build-all: ## 建 5 個 production component image（local --load，無 p
 	@mkdir -p components/da-tools/app/tools
 	@for b in da-guard da-batchpr da-parser; do for a in amd64 arm64; do touch "components/da-tools/app/$$b.$$a"; done; done
 	@docker buildx build --load -t local-test:da-tools components/da-tools/app
+	@# 兩顆隨 chart 出貨、從不發布的自建 image（#1337）——build context 就是各自目錄。
+	@docker buildx build --load -t local-test:federation-audit-sidecar helm/federation-gateway/audit-sidecar
+	@docker buildx build --load -t local-test:vector-projection-gate helm/vector/projection-gate
 
-trivy-scan-all: docker-build-all ## Trivy CVE scan 5 個 image（informational：印出但不擋，#448）
-	@for img in threshold-exporter da-portal tenant-api da-tools recipe-preview; do \
+trivy-scan-all: docker-build-all ## Trivy CVE scan 7 個 image（informational：印出但不擋，#448）
+	@for img in threshold-exporter da-portal tenant-api da-tools recipe-preview federation-audit-sidecar vector-projection-gate; do \
 	  echo "[trivy] local-test:$$img"; \
 	  trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 local-test:$$img || true; \
 	done

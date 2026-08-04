@@ -119,7 +119,7 @@ make pre-tag                    # 一鍵整合（含以上 + draft-advisory-chec
 
 任何一項失敗 → 修正 → 重新驗證 → 才能進入 Step 3。
 
-**#474 Layer 2 — artifact build 也要 pre-tag 驗**：`make pre-tag` 現含 `docker-build-all`（建 5 個 production image，**hard gate**）+ `trivy-scan-all`（CVE scan，**informational**，#448）。理由：`release.yaml` 在 tag push 才 build image，build break（#472/#473-class — moved-file COPY / 缺 pkg COPY）會在最糟的時機才爆。**需 docker (buildx) + trivy + `gh` 在 PATH** — 在 maintainer 機器 / dev container 跑，非 bare host。PR 階段的對應防線是 `.github/workflows/component-docker-build.yaml`（#474 Layer 1）。
+**#474 Layer 2 — artifact build 也要 pre-tag 驗**：`make pre-tag` 現含 `docker-build-all`（建 **7** 個 self-built image，**hard gate**）+ `trivy-scan-all`（CVE scan，**informational**，#448）。⚠️ 其中 **2 個隨 chart 出貨、從不發布**（`federation-audit-sidecar` / `vector-projection-gate`，#1337）——`release.yaml` 完全不會 build 它們，所以對這兩顆而言 pre-tag 與夜掃就是**全部**的自動化建置覆蓋。`audit-sidecar` 會從 pinned commit 編譯 mtail（約 25 秒，需 Go module proxy）。理由：`release.yaml` 在 tag push 才 build image，build break（#472/#473-class — moved-file COPY / 缺 pkg COPY）會在最糟的時機才爆。**需 docker (buildx) + trivy + `gh` 在 PATH** — 在 maintainer 機器 / dev container 跑，非 bare host。PR 階段的對應防線是 `.github/workflows/component-docker-build.yaml`（#474 Layer 1）。
 
 **#1269 / #1295 — 未發布的 draft advisory 也是 hard gate**：`make pre-tag` 另含 `draft-advisory-check`（`gh` 是它的依賴，所以上面那行多了一項）。draft advisory 不出現在任何維護者會例行掃的清單，GitHub 也無到期提醒，所以「等發版再一起發」這個決定沒有東西會叫醒你——唯一必然發生的事件是發版本身。有 draft 就中止並印出 GHSA id；`gh` 缺席或查詢失敗**也**中止（「查不到」不得被讀成「沒有」）。決定「這次不發」用 `ADVISORY_ACK=1 make pre-tag` 明示。⚠️ **它只涵蓋這條本地路徑**：`release.yaml` 由 tag push 觸發且沒有任何機制強制 pre-tag 先跑，所以直接 push tag 仍會繞過——這一點與 Layer 3 的 discipline 要求是同一個理由。
 
@@ -139,7 +139,7 @@ make pre-tag                    # 一鍵整合（含以上 + draft-advisory-chec
 | `weekly-fuzz.yaml` | `schedule` + `workflow_dispatch` | ✅ 已有手動 dispatch |
 | `nightly-image-scan.yaml` | `schedule` + `workflow_dispatch` | ✅ build/scan 邏輯鏡 `component-docker-build.yaml`；它本身就是 release.yaml CVE gate 的**時間維度補位**（見下） |
 
-> **時間維度補位（release-night CVE ambush）**：release.yaml 的 Trivy 是 tag-time **hard gate**，但 base-image（Alpine/distroless/nginx）CVE 會在「上次 PR」與「真正打 tag」之間落地（[security-audit-runbook §Release-day CVE drift](security-audit-runbook.md)），於是發版夜才被擋。`nightly-image-scan.yaml`（schedule）每晚對 `main` build 出的 5 個 component image 跑 Trivy（同 release 契約：`CRITICAL,HIGH` + `ignore-unfixed`），有 fixable 就開／更新一個 deduped tracking issue（label `nightly-cve`、全清自動關），讓 CVE 提早幾天浮現而非發版當下才撞。**non-blocking**——不 gate 任何東西，release.yaml 仍是最後一道線。（scope：da-tools 走 stub build，只掃 OS/base-image 層、不掃 Go binary module CVE——後者由 release 真 build + Go CI 覆蓋。）
+> **時間維度補位（release-night CVE ambush）**：release.yaml 的 Trivy 是 tag-time **hard gate**，但 base-image（Alpine/distroless/nginx）CVE 會在「上次 PR」與「真正打 tag」之間落地（[security-audit-runbook §Release-day CVE drift](security-audit-runbook.md)），於是發版夜才被擋。`nightly-image-scan.yaml`（schedule）每晚對 `main` build 出的 **7** 個 self-built image 跑 Trivy（同 release 契約：`CRITICAL,HIGH` + `ignore-unfixed`），有 fixable 就開／更新一個 deduped tracking issue（label `nightly-cve`、全清自動關），讓 CVE 提早幾天浮現而非發版當下才撞。**non-blocking**——不 gate 任何東西，release.yaml 仍是最後一道線。（scope：da-tools 走 stub build，只掃 OS/base-image 層、不掃 Go binary module CVE——後者由 release 真 build + Go CI 覆蓋。）
 
 ### Step 3: 建立 Tag
 

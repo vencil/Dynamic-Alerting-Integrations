@@ -392,6 +392,11 @@ auditLog:
   volumeSizeLimit: 1Gi
   # The mtail + logrotate sidecars share one image, built from
   # audit-sidecar/Dockerfile. Override repository before deploying.
+  # ⚠️ #1337 changed HOW that image is built without changing this tag (it
+  # tracks the mtail version, which did not change): mtail is now compiled from
+  # its pinned upstream commit with a current Go toolchain, taking the built
+  # image from 23 fixable HIGH/CRITICAL to 2. An image you built earlier still
+  # has all 23 — rebuild it. See the chart README's audit-log section.
   image:
     repository: federation-audit-sidecar
     tag: "3.0.8"

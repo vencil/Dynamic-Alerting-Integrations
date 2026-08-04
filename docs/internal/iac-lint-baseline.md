@@ -55,11 +55,11 @@ epic #448 的 hybrid policy：**既有 open-source engine 優先 + Vibe wrapper 
 
 | Layer | 工具 | engine | scope | Critical | baseline-High | INFO |
 |---|---|---|---|---:|---:|---:|
-| L1 Dockerfile（TRK-311）| `check_iac_vibe_rules.py` | hadolint | 8 Dockerfile | **0** | 6 | 1 |
+| L1 Dockerfile（TRK-311）| `check_iac_vibe_rules.py` | hadolint | 9 Dockerfile | **0** | 6 | 2 |
 | L2 Helm template（TRK-312）| `check_iac_helm.py` | kube-linter | 9 chart | **0** | 5 | 3 |
 | L3 values/manifest secret-shape（TRK-313）| `check_helm_values_secrets.py` | —（純 Vibe，無對應 engine）| 111 檔 | **0** | 0 | 0 |
 | L4 raw k8s manifest（TRK-314）| `check_k8s_manifests.py` | kube-linter | 42 manifest | **0** | 1 | 0 |
-| **總計** | | | | **0** ✅ | **12** | 4 |
+| **總計** | | | | **0** ✅ | **12** | 5 |
 
 12 筆 baseline-High **全數**有 rationale + 退場/修補欄（見各層分節表），其中 L2 `tenant-api`、L4 `tenant-api` 為同一架構事實（git workdir 需可寫）；L1 6 筆為政策性 `--no-cache`/pip-self DL3018/DL3013（含 #908 vector projection-gate）；L2 mariadb×2 + vector×2（root log-collector）為架構必需。**0 Critical** 由 branch-protection required checks（`Lint` + `Container SAST (Helm L2 + raw k8s L4)`）真擋 merge。
 
@@ -69,18 +69,22 @@ epic #448 的 hybrid policy：**既有 open-source engine 優先 + Vibe wrapper 
 
 跑法：`python3 scripts/tools/lint/check_iac_vibe_rules.py`（CI hook `iac-sast-check`）。
 
-**Baseline 截至 2026-06-28**：8 個 Dockerfile，**0 BLOCK** ✅ / 6 WARN（High，列管如下）/ 1 INFO。
+**Baseline 截至 2026-08-04**（#1337 重新以工具輸出核對整張表）：**9** 個 Dockerfile，**0 BLOCK** ✅ / **6** WARN（High，列管如下）/ **2** INFO。
+
+> ⚠️ 這張表在 #1337 之前已經對不上工具輸出：宣稱 8 個 Dockerfile（實際 9）、漏列 `components/recipe-preview` 的 DL3013 與 DL3059 兩筆、`tenant-api` 行號停在 `:44`（實際 `:53`）。表格與工具之間**沒有機械閘門**（`check_iac_vibe_rules.py` 只 print，不比對本檔），所以列管表只能靠人工對帳——動這張表時請重跑 `python3 scripts/tools/lint/check_iac_vibe_rules.py --ci` 並以輸出為準，不要只改自己那幾列。
 
 | # | File:line | Code | 說明 | Rationale | 退場 / 修補 |
 |---|---|---|---|---|---|
-| 1 | `components/tenant-api/Dockerfile:44` | DL3018 | `apk add --no-cache git ca-certificates tzdata` 未 pin 版本 | 平台刻意採 `--no-cache` + 月度 rebuild + Trivy CRITICAL/HIGH gate，而非脆弱的 Alpine 版本 pin（Alpine repo 很快丟棄舊版本，pin 會把 build 變硬中斷）。同 `components/da-portal/Dockerfile` L30-31 註解的策略。 | 政策性 deferred；除非改採 pinned-base 策略，否則保留 |
-| 2 | `helm/federation-gateway/audit-sidecar/Dockerfile:22` | DL3018 | fetch stage `apk add --no-cache curl` 未 pin | 同 #1（build stage，只為下載 + checksum 驗證 mtail，不入 runtime image） | 同 #1 |
-| 3 | `helm/federation-gateway/audit-sidecar/Dockerfile:34` | DL3018 | runtime `apk add --no-cache logrotate` 未 pin | 同 #1 | 同 #1 |
-| 4 | `helm/federation-gateway/audit-sidecar/Dockerfile:22` | DL4006 | `echo "<sha>  file" \| sha256sum -c -` 的 pipe 前未設 `-o pipefail` | 該 RUN 以 `&&` 串接，且 pipe 的**最後一個指令就是安全關鍵的 `sha256sum -c`**——其 exit code 正確傳播（pipefail 缺席不影響 checksum 驗證的把關效果）；busybox sh。 | **修補候選**（非急）：可加 `SHELL ["/bin/ash","-o","pipefail","-c"]`；留待 sidecar Dockerfile 下次動到時順手 |
-| 5 | `components/da-tools/app/Dockerfile:15` | DL3013 | `pip install --upgrade pip` 未 pin pip 版本 | 升級 pip 自身到最新是標準且刻意的；應用相依套件**已 pin**（`PyYAML==6.0.3` / `promql-parser==0.7.0` / `croniter==6.0.0`）。DL3013 命中的是 `pip` 自身那一段。 | 低價值；可選擇性 pin，不列為待辦 |
-| 6 | `helm/vector/projection-gate/Dockerfile:19` | DL3018 | #908 tenantProjections gate 的 init-container image `apk add --no-cache python3 py3-yaml` 未 pin | 同 #1（`--no-cache` + 月度 rebuild + Trivy gate 策略；py3-yaml 是 distro 套件，image 無 pip 與 build toolchain） | 同 #1 |
+| 1 | `components/tenant-api/Dockerfile:53` | DL3018 | `apk add --no-cache git ca-certificates tzdata` 未 pin 版本 | 平台刻意採 `--no-cache` + 月度 rebuild + Trivy CRITICAL/HIGH gate，而非脆弱的 Alpine 版本 pin（Alpine repo 很快丟棄舊版本，pin 會把 build 變硬中斷）。同 `components/da-portal/Dockerfile` L30-31 註解的策略。 | 政策性 deferred；除非改採 pinned-base 策略，否則保留 |
+| 2 | `helm/federation-gateway/audit-sidecar/Dockerfile:38` | DL3018 | build stage `apk add --no-cache git` 未 pin | 同 #1（build stage，只為 clone mtail 的 pinned commit，不入 runtime image） | 同 #1 |
+| 3 | `helm/federation-gateway/audit-sidecar/Dockerfile:60` | DL3018 | runtime `apk add --no-cache logrotate` 未 pin | 同 #1 | 同 #1 |
+| 4 | `components/da-tools/app/Dockerfile:15` | DL3013 | `pip install --upgrade pip` 未 pin pip 版本 | 升級 pip 自身到最新是標準且刻意的；應用相依套件**已 pin**（`PyYAML==6.0.3` / `promql-parser==0.7.0` / `croniter==6.0.0`）。DL3013 命中的是 `pip` 自身那一段。 | 低價值；可選擇性 pin，不列為待辦 |
+| 5 | `components/recipe-preview/Dockerfile:15` | DL3013 | 同 #4，builder stage 的 `pip install --upgrade pip` | 同 #4 | 同 #4 |
+| 6 | `helm/vector/projection-gate/Dockerfile:24` | DL3018 | #908 tenantProjections gate 的 init-container image `apk add --no-cache python3 py3-yaml` 未 pin | 同 #1（`--no-cache` + 月度 rebuild + Trivy gate 策略；py3-yaml 是 distro 套件，image 無 pip 與 build toolchain） | 同 #1 |
 
-INFO（不列管，僅記錄）：`components/da-tools/app/Dockerfile:12` DL3059（multiple consecutive RUN）。
+**已退場（#1337）**：`audit-sidecar/Dockerfile:22` 的 **DL4006**（`echo "<sha>  file" | sha256sum -c -` 的 pipe 未設 `-o pipefail`）。原列管寫的退場條件是「留待 sidecar Dockerfile 下次動到時順手」——本次改建置方式（預編 binary → 自 pinned commit 編譯）把整個 pipe 拿掉了，供應鏈把關由 tarball SHA-256 換成更強的 commit pin，所以這一筆是**消失**而非豁免。WARN 因此 7 → 6。
+
+INFO（不列管，僅記錄）：`components/da-tools/app/Dockerfile:12`、`components/recipe-preview/Dockerfile:13`，皆為 DL3059（multiple consecutive RUN）。
 
 ## Layer 2 — Helm template（TRK-312，kube-linter + Vibe wrapper）
 

@@ -59,12 +59,29 @@ SOURCE_GLOBS = ("helm/*/values*.yaml", "k8s/**/*.yaml", "k8s/**/*.yml")
 # cannot be resolved against a public registry, so the resolve check would
 # false-fail on them — skip by repository name. (federation-gateway audit-sidecar:
 # helm/federation-gateway/audit-sidecar/Dockerfile, values repository has no host.)
+#
+# ⛔ SCOPE: this skip is about RESOLVING A REF, and it says nothing about CVE
+# coverage. Reading it as "this image is not our problem" is exactly how
+# federation-audit-sidecar shipped unscanned for months (#1337): the reasoning
+# below is sound here and was silently inherited by a question it never
+# answered. Both skipped classes are covered elsewhere — first-party by
+# release.yaml, and the chart-shipped locally-built ones by the self-built
+# `scan` matrix in nightly-image-scan.yaml (pinned to the Dockerfile inventory
+# by test_selfbuilt_matrix_covers_every_dockerfile).
 LOCAL_BUILT_IMAGES = {"federation-audit-sidecar"}
 
 # First-party images live in our own registry namespace: their currency is the
 # release pipeline's job, and resolving them needs ghcr auth (would false-fail an
 # anonymous CI check). L1-B targets the PUBLIC third-party refs (the #897 typo
 # class), so skip our own namespace here.
+#
+# ⛔ "the release pipeline's job" is TRUE OF FIVE IMAGES, not of the prefix.
+# `ghcr.io/vencil/vector-projection-gate` matches this prefix and is published by
+# nothing at all (#1337; an anonymous manifest inspect is `denied` while the five
+# real ones resolve) — so for that one this skip was hiding an unpublished image
+# behind a rule written for published ones. It is now covered by the self-built
+# `scan` matrix instead. Same scope note as LOCAL_BUILT_IMAGES above: skipping a
+# ref RESOLUTION check is not a statement about CVE coverage.
 SKIP_REPO_PREFIXES = ("ghcr.io/vencil/",)
 
 

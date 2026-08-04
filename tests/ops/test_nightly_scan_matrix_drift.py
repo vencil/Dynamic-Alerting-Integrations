@@ -410,8 +410,247 @@ def test_the_resolve_workflow_triggers_on_overlay_values_files() -> None:
     )
 
 
+# ── #1337: nothing pinned the SELF-BUILT matrix to anything ─────────────────
+# The third-party half of this file has had a real SSOT since #902 (the
+# extractor). The self-built half had none: its five entries, the identical five
+# in component-docker-build.yaml, and the five hand-written `docker buildx build`
+# lines in the Makefile were kept together by a COMMENT ("Keep in sync"). Two
+# images shipped inside Helm charts — helm/federation-gateway/audit-sidecar/Dockerfile
+# and helm/vector/projection-gate/Dockerfile — were therefore deployed for months
+# with zero CVE coverage, and no test could say so: they were absent from all
+# three lists at once, and every existing assertion was about set EQUALITY
+# BETWEEN those lists.
+#
+# ⛔ Those two paths are written out in full ON PURPOSE. `verify_diff`'s text_map
+# indexes LITERAL path strings, so the `ROOT / "a" / "b"` segment form used below
+# registers nothing — a guard that exists but is never selected for the diff that
+# breaks it is the failure mode this module is named after.
+#
+# The SSOT chosen here is `DOCKERFILE_CONTEXTS` in check_iac_vibe_rules.py. It is
+# already fail-closed on exactly the event that matters — an unregistered
+# Dockerfile is a BLOCK finding there — so a new image cannot enter the tree
+# without appearing in it. That makes it the one list a new image is guaranteed
+# to touch.
+#
+# ⛔ Read via ast, NOT by importing the module: check_iac_vibe_rules imports
+# pathspec, and a test that silently skips when an optional dependency is absent
+# is the "gate exists but never runs" shape this module exists to prevent.
+_IAC_RULES = ROOT / "scripts" / "tools" / "lint" / "check_iac_vibe_rules.py"
+
+# Dockerfiles deliberately OUTSIDE the scan matrices.
+#
+# ⛔ An exemption registry is itself the fail-open shape this test is closing, so
+# membership is not enough — `test_scan_exemptions_stay_undeployable` re-derives
+# the property each entry claims. In particular an entry must live under
+# `tests/`, which is what makes it structurally impossible to quietly exempt the
+# next chart-shipped image (the exact class that produced #1337).
+_SCAN_EXEMPT: dict[str, str] = {
+    "tests/e2e-bench/driver/Dockerfile": (
+        "ephemeral benchmark fixture — built by tests/e2e-bench/docker-compose.yml "
+        "for the duration of a bench run, torn down with it, never deployed and "
+        "never published. EXIT: it becomes reachable from a deployable tree."
+    ),
+    "tests/e2e-bench/receiver/Dockerfile": (
+        "same shape as the driver above (in-compose bench receiver). Same EXIT."
+    ),
+}
+
+# Trees whose contents are installed on a cluster or handed to a customer. If an
+# exempt Dockerfile ever becomes reachable from one of these, the exemption's
+# stated premise is false and the test says so.
+_DEPLOYABLE_TREES = ("helm", "k8s", "operator-manifests", "try-local")
+
+
+def _dockerfile_contexts() -> dict[str, str]:
+    """`DOCKERFILE_CONTEXTS` from check_iac_vibe_rules.py, read without importing."""
+    tree = ast.parse(_IAC_RULES.read_text(encoding="utf-8"))
+    for node in tree.body:
+        targets = (
+            [node.target] if isinstance(node, ast.AnnAssign) else getattr(node, "targets", [])
+        )
+        for t in targets:
+            if isinstance(t, ast.Name) and t.id == "DOCKERFILE_CONTEXTS":
+                return ast.literal_eval(node.value)
+    raise AssertionError(
+        f"DOCKERFILE_CONTEXTS not found in {_IAC_RULES.relative_to(ROOT).as_posix()} — "
+        "it is the SSOT this guard derives the self-built scan set from; if it was "
+        "renamed, re-point this test rather than deleting it."
+    )
+
+
+def _make_recipe(target: str) -> list[str]:
+    """Recipe lines of a Makefile target (tab-indented lines after `<target>:`)."""
+    lines = (ROOT / "Makefile").read_text(encoding="utf-8").splitlines()
+    out: list[str] = []
+    seen = False
+    for line in lines:
+        if not seen:
+            if re.match(rf"^{re.escape(target)}\s*:", line):
+                seen = True
+            continue
+        if line.startswith("\t"):
+            out.append(line.lstrip("\t"))
+        elif line.strip():  # a non-indented, non-blank line ends the recipe
+            break
+    assert out, f"Makefile target {target!r} has an empty recipe — parser or target moved"
+    return out
+
+
+def test_selfbuilt_matrix_covers_every_dockerfile() -> None:
+    """Every Dockerfile in the tree is scanned, or carries a registered exemption.
+
+    This is the assertion #1337 was missing. `test_report_expected_counts_match_
+    matrix_sizes` below only checks the matrix against a literal it sits next to,
+    so bumping both together passes while an image sits in neither list.
+
+    ⭐ COUNTERFACTUAL (measured, not assumed — the three inventories restored whole
+    from origin/main via `git show <base>:<file>`, these tests kept):
+      * this test          RED  on base, naming both chart-shipped images
+      * all 15 pre-existing tests in this module  GREEN on base
+    So this ONE assertion is the detection the PR actually buys. Its two siblings
+    below were GREEN-before/GREEN-after: they pin mechanisms that happened to be
+    consistent already and had no gate — regression pins, NOT a #1337 find. Do not
+    write them up as new detection (the #1294 lesson).
+    """
+    contexts = _dockerfile_contexts()
+    # Anti-vacuity: a parser that silently returned {} would make everything below
+    # trivially true, which is how this class of guard usually dies.
+    assert len(contexts) >= 7, (
+        f"only {len(contexts)} Dockerfiles parsed out of DOCKERFILE_CONTEXTS — "
+        "the repo has more than that; suspect the ast parse, not the repo"
+    )
+    unknown_exempt = set(_SCAN_EXEMPT) - set(contexts)
+    assert not unknown_exempt, (
+        f"exemption for a Dockerfile that is not registered upstream: {sorted(unknown_exempt)}\n"
+        "Registered means present in check_iac_vibe_rules.py DOCKERFILE_CONTEXTS."
+    )
+
+    expected = set(contexts) - set(_SCAN_EXEMPT)
+    matrix = {e["dockerfile"] for e in _matrix_include("scan")}
+    missing = sorted(expected - matrix)
+    extra = sorted(matrix - expected)
+    assert not missing and not extra, (
+        "the nightly self-built scan matrix does not cover the Dockerfile inventory.\n"
+        f"  built+deployed but NOT scanned: {missing}\n"
+        f"  in the matrix but not a registered Dockerfile: {extra}\n"
+        "Add it to the `scan` matrix in .github/workflows/nightly-image-scan.yaml "
+        "(and to component-docker-build.yaml + `make docker-build-all`), or add a "
+        "registered exemption to _SCAN_EXEMPT with a rationale and an EXIT "
+        "condition. Silence-by-classification is what #1337 was."
+    )
+
+    # The build CONTEXT has to agree too: a matrix entry pointing at the right
+    # Dockerfile with the wrong context builds nothing, or builds the wrong thing.
+    for entry in _matrix_include("scan"):
+        assert entry["context"] == contexts[entry["dockerfile"]], (
+            f"{entry['name']}: scan matrix context {entry['context']!r} != the "
+            f"registered build context {contexts[entry['dockerfile']]!r}"
+        )
+
+
+def test_scan_exemptions_stay_undeployable() -> None:
+    """Re-derive each exemption's premise instead of trusting the list.
+
+    ⚠️ GREEN-before/GREEN-after, same as the sibling above: the two bench
+    fixtures were already undeployable. What it buys is that the exemption
+    registry this PR introduces cannot become the next hiding place — mutation:
+    adding `helm/vector/projection-gate/Dockerfile` to _SCAN_EXEMPT (with a
+    plausible rationale) turns it red on the `tests/` rule.
+    """
+    for path, rationale in _SCAN_EXEMPT.items():
+        assert (ROOT / path).is_file(), (
+            f"exempt Dockerfile {path} does not exist — a stale exemption is a hole "
+            "that reads like a decision"
+        )
+        assert len(rationale) > 40, f"exemption {path} needs a real rationale"
+        # The load-bearing structural rule: only test fixtures may be exempt. A
+        # chart- or manifest-shipped image cannot be waived by adding a line here.
+        assert path.startswith("tests/"), (
+            f"{path} is outside tests/ — an image that ships with a chart or a "
+            "manifest may NOT be exempted from CVE scanning by list membership. "
+            "That is precisely the shape #1337 found in production."
+        )
+
+    exempt_dirs = {Path(p).parent.as_posix() for p in _SCAN_EXEMPT}
+    offenders: list[tuple[str, str]] = []
+    for tree in _DEPLOYABLE_TREES:
+        base = ROOT / tree
+        if not base.is_dir():
+            continue
+        for f in base.rglob("*"):
+            if not f.is_file() or f.suffix not in (".yaml", ".yml", ".json", ".tpl"):
+                continue
+            text = f.read_text(encoding="utf-8", errors="replace")
+            for d in exempt_dirs:
+                if d in text:
+                    offenders.append((f.relative_to(ROOT).as_posix(), d))
+    assert not offenders, (
+        "an exempt Dockerfile's directory is referenced from a DEPLOYABLE tree, so "
+        "the exemption's premise ('never deployed') is now false:\n"
+        + "\n".join(f"  {p} -> {d}" for p, d in sorted(offenders))
+    )
+
+
+def test_the_three_selfbuilt_build_lists_agree() -> None:
+    """nightly scan == component-docker-build == `make docker-build-all`.
+
+    All three built the same five images and were held together by a comment.
+
+    ⚠️ GREEN-before/GREEN-after: on origin/main the three lists genuinely did
+    agree, so this catches nothing that existed — it is a regression pin for the
+    next divergence. Mutation-verified instead: dropping an entry from the PR
+    workflow, from `docker-build-all`, or from `trivy-scan-all`'s loop each turns
+    it red (3/3 killed).
+    """
+    nightly = {(e["name"], e["context"], e["dockerfile"]) for e in _matrix_include("scan")}
+
+    pr_wf = yaml.safe_load(
+        (WORKFLOWS_DIR / "component-docker-build.yaml").read_text(encoding="utf-8")
+    )
+    pr = {
+        (e["name"], e["context"], e["dockerfile"])
+        for e in pr_wf["jobs"]["build"]["strategy"]["matrix"]["include"]
+    }
+    assert nightly == pr, (
+        "nightly-image-scan.yaml `scan` and component-docker-build.yaml `build` "
+        f"disagree.\n  only nightly: {sorted(nightly - pr)}\n  only PR: {sorted(pr - nightly)}"
+    )
+
+    # `docker buildx build --load -t local-test:<name> [-f <file>] <context>`
+    build_re = re.compile(
+        r"docker buildx build\s+--load\s+-t\s+local-test:(?P<name>[\w.-]+)\s+"
+        r"(?:-f\s+(?P<file>\S+)\s+)?(?P<context>\S+)\s*$"
+    )
+    make_built: set[tuple[str, str, str]] = set()
+    for line in _make_recipe("docker-build-all"):
+        m = build_re.search(line)
+        if m:
+            name, file_, ctx = m.group("name"), m.group("file"), m.group("context")
+            # No -f means the Dockerfile lives in the context dir.
+            make_built.add((name, ctx, file_ or f"{ctx.rstrip('/')}/Dockerfile"))
+    assert nightly == make_built, (
+        "`make docker-build-all` and the nightly `scan` matrix disagree.\n"
+        f"  only in the matrix: {sorted(nightly - make_built)}\n"
+        f"  only in the Makefile: {sorted(make_built - nightly)}\n"
+        "pre-tag is where a build break is supposed to surface before a tag; an "
+        "image the matrix scans but pre-tag never builds is half-covered."
+    )
+
+    # trivy-scan-all iterates a hand-written name list in a shell `for`.
+    scan_names: set[str] = set()
+    for line in _make_recipe("trivy-scan-all"):
+        m = re.search(r"for\s+img\s+in\s+(?P<names>[^;]+);", line)
+        if m:
+            scan_names = set(m.group("names").split())
+    assert scan_names == {n for n, _, _ in nightly}, (
+        "`make trivy-scan-all`'s image list != the nightly scan matrix names.\n"
+        f"  only in the matrix: {sorted({n for n, _, _ in nightly} - scan_names)}\n"
+        f"  only in trivy-scan-all: {sorted(scan_names - {n for n, _, _ in nightly})}"
+    )
+
+
 def test_report_expected_counts_match_matrix_sizes() -> None:
-    """The report's hardcoded EXPECTED (5 / 15) must track the matrix sizes."""
+    """The report's hardcoded EXPECTED (7 / 15) must track the matrix sizes."""
     n_selfbuilt = len(_matrix_include("scan"))
     n_thirdparty = len(_matrix_include("scan-thirdparty"))
     run = _aggregate_run()

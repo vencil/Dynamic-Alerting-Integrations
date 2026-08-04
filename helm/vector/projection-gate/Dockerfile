@@ -10,10 +10,15 @@
 #
 # Build (from this directory):
 #   docker build -t <registry>/vector-projection-gate:<tag> .
-# Scan before publishing (release discipline):
-#   trivy image --severity HIGH,CRITICAL <registry>/vector-projection-gate:<tag>
+# CVE coverage is AUTOMATED as of #1337: this image is a `scan` matrix entry in
+# .github/workflows/nightly-image-scan.yaml (nightly) and in
+# component-docker-build.yaml (PR) + `make trivy-scan-all` (pre-tag). Ad-hoc
+# `trivy image` is no longer the only thing standing between this image and a
+# regression.
 
-FROM alpine:3.23.4
+# 3.23.5, not 3.23.4: measured on this image, .4 ships libcrypto3 3.5.6-r0 and
+# libexpat 2.8.1-r0, both with fixable HIGH advisories; .5 takes it to zero.
+FROM alpine:3.23.5
 # python3 + PyYAML (the gate parses the registry + projections YAML). py3-yaml is
 # the distro package, so the image carries no pip and no build toolchain.
 RUN apk add --no-cache python3 py3-yaml \
