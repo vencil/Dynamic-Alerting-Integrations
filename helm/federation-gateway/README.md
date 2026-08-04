@@ -235,8 +235,10 @@ from [`audit-sidecar/Dockerfile`](audit-sidecar/Dockerfile) (Alpine +
 > You no longer need to remember to scan it by hand: the image is a matrix entry
 > in `nightly-image-scan.yaml`, `component-docker-build.yaml`, and
 > `make trivy-scan-all`. ⛔ It is **not** published by any pipeline, so
-> `release.yaml`'s tag-time Trivy hard gate never sees it — those three are the
-> whole of its automated coverage.
+> `release.yaml`'s tag-time Trivy hard gate — the only BLOCKING scan in the repo
+> — never sees it. Those three are its whole *CVE* coverage; its *build* is
+> additionally exercised by the `federation-e2e` CI job, which builds this image
+> from source on every run and scrapes the metrics it produces.
 
 The metric is scraped via the `prometheus.io/scrape` annotations on the
 Service — **install the chart in the `monitoring` namespace** so the

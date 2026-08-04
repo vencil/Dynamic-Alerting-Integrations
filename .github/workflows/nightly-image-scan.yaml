@@ -25,7 +25,7 @@ name: Nightly Image CVE Scan
 # Scope honesty: da-tools is built with STUBBED Go binaries (zero-byte, mirroring
 # component-docker-build.yaml's COPY-path stub) — its OS/base-image CVEs ARE
 # scanned, but its Go binaries' module CVEs are NOT here (covered by release.yaml's
-# real-build scan + Go CI / CodeQL govulncheck). The other 4 images build real, so
+# real-build scan + Go CI / CodeQL govulncheck). The other 6 images build real, so
 # their full image surface is scanned.
 #
 # Third-party images our helm charts AND k8s/ manifests pull (vector, victoria-logs,

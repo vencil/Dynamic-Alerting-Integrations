@@ -652,10 +652,13 @@ draft-advisory-check: ## ⛔ 擋住「有未發布 draft advisory 就打 tag」�
 # pre-tag catches #472/#473-class build breaks BEFORE the tag, not after.
 # ⚠️ The last two (federation-audit-sidecar / vector-projection-gate) ship
 # INSIDE Helm charts and are never published, so release.yaml never builds them
-# at all — here and the nightly scan are their only automated build coverage
-# (#1337). audit-sidecar compiles mtail from source (~25 s, needs the Go module
-# proxy); pre-tag already reaches the network for recipe-preview's promtool
-# tarball, so this is not a new class of failure — just a slower step.
+# at all (#1337). Their other build paths differ — vector-projection-gate is
+# built ONLY here, by component-docker-build.yaml and by the nightly scan, while
+# federation-audit-sidecar is additionally built on every CI run by the
+# federation-e2e job's compose stack. audit-sidecar compiles mtail from source
+# (~25 s, needs the Go module proxy); pre-tag already reaches the network for
+# recipe-preview's promtool tarball and tenant-api's `go mod download`, so this
+# is not a new class of failure — just a slower step.
 # Needs docker (buildx) + trivy on PATH — run on the maintainer machine /
 # dev container, not a bare host. docker-build-all is a HARD gate (build
 # failure aborts pre-tag); trivy-scan-all is informational (prints CVEs but

@@ -23,9 +23,11 @@
 # (2024-08-08); its prebuilt binary is linked against Go stdlib 1.21.1, which
 # by 2026 carries 20 fixable HIGH/CRITICAL stdlib CVEs plus grpc ones — and no
 # upstream release exists to bump to. Measured on this image: the prebuilt
-# binary scores 23 fixable HIGH/CRITICAL, this from-source build scores 2 (both
-# from mtail's OWN go.mod grpc pin, which only upstream can move). Rebuilding
-# the SAME source with a current toolchain clears 20 of them and introduces 0.
+# binary on Alpine 3.23.4 scores 23 fixable HIGH/CRITICAL, this from-source
+# build on 3.23.5 scores 2 (both from mtail's OWN go.mod grpc pin, which only
+# upstream can move). ⚠️ TWO levers, not one — rebuilding the SAME source with a
+# current toolchain clears the 20 Go-stdlib findings and introduces 0, and the
+# base bump below clears the remaining libcrypto3 one. 23 − 20 − 1 = 2.
 #
 # The supply-chain control is PRESERVED, not dropped: the tarball's SHA-256 is
 # replaced by a COMMIT pin, which is strictly stronger — git verifies object

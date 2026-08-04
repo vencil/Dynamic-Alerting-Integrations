@@ -35,6 +35,7 @@ the Vector / Helm installs alongside them.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -160,4 +161,86 @@ def test_compile_gate_rejects_broken_program(tmp_path: Path) -> None:
     assert res.returncode != 0, (
         "mtail --compile_only PASSED a deliberately broken program — the compile "
         f"gate is a no-op.\n--- stdout ---\n{res.stdout}\n--- stderr ---\n{res.stderr}"
+    )
+
+
+# ── mtail pin parity (#1337) ────────────────────────────────────────────────
+# Since #1337 the sidecar image BUILDS mtail from a pinned commit instead of
+# downloading upstream's prebuilt binary. That traded a SHA-256 a reviewer could
+# check against upstream's published checksums.txt for a commit id whose
+# provenance lived only in a Dockerfile comment ("d4b8a71 is what v3.0.8
+# dereferences to"). Content-addressing guarantees the fetched bytes match the
+# id; it guarantees nothing about the id being the RIGHT one.
+#
+# ⭐ The oracle here is upstream's own prebuilt 3.0.8 binary — the one CI still
+# installs and verifies against upstream's checksums.txt. It self-reports the
+# revision it was built from, so comparing that against MTAIL_COMMIT checks the
+# exact claim the comment makes, using an artifact whose integrity is already
+# established. Shaped after tests/preview/test_promtool_pin_parity.py.
+_DOCKERFILE = "helm/federation-gateway/audit-sidecar/Dockerfile"
+_CI_YML = ".github/workflows/ci.yml"
+
+
+def _one(pattern: str, text: str, what: str) -> str:
+    matches = re.findall(pattern, text, re.MULTILINE)
+    assert len(matches) == 1, (
+        f"expected exactly one {what} match for /{pattern}/, found {len(matches)}: {matches}"
+    )
+    return matches[0]
+
+
+def test_mtail_version_pin_parity(repo_root: Path) -> None:
+    """The image's mtail version == the version CI installs for the compile gate.
+
+    Pure file parsing, so it runs everywhere — no mtail, no Docker. If these skew,
+    the gate type-checks the program against a different mtail language than the
+    one the sidecar actually runs.
+    """
+    df = (repo_root / _DOCKERFILE).read_text(encoding="utf-8")
+    ci = (repo_root / _CI_YML).read_text(encoding="utf-8")
+    df_version = _one(r"^ARG MTAIL_VERSION=(\S+)", df, "Dockerfile MTAIL_VERSION")
+    ci_version = _one(r"^\s*MTAIL_VERSION=(\S+)", ci, "ci.yml MTAIL_VERSION")
+    assert df_version == ci_version, (
+        f"mtail version skew: {_DOCKERFILE} pins {df_version!r} but {_CI_YML} "
+        f"installs {ci_version!r}. The compile gate would validate the .mtail "
+        "program against a different mtail language than the sidecar runs."
+    )
+
+
+@_needs_mtail
+def test_mtail_commit_pin_matches_the_release_binary(repo_root: Path) -> None:
+    """MTAIL_COMMIT must be the revision upstream's own v3.0.8 binary reports.
+
+    ⛔ This is the only mechanical check that the commit we compile is the commit
+    the release tag names. Without it, the provenance of the from-source build
+    rests on a prose comment (#1337 blind review).
+
+    Gated on mtail being on PATH like its siblings — in CI that binary is the
+    checksum-verified upstream release, which is precisely what makes it a valid
+    oracle. Locally without mtail it skips, same as the compile gate.
+    """
+    df = (repo_root / _DOCKERFILE).read_text(encoding="utf-8")
+    pinned_commit = _one(r"^ARG MTAIL_COMMIT=([0-9a-f]{40})", df, "Dockerfile MTAIL_COMMIT")
+    pinned_version = _one(r"^ARG MTAIL_VERSION=(\S+)", df, "Dockerfile MTAIL_VERSION")
+
+    res = subprocess.run(
+        ["mtail", "--version"], capture_output=True, text=True, timeout=60,
+    )
+    # mtail prints its banner on stderr in some builds and stdout in others.
+    banner = f"{res.stdout}\n{res.stderr}"
+    reported_version = _one(r"mtail version (\S+)", banner, "mtail --version version")
+    reported_commit = _one(r"git revision ([0-9a-f]{40})", banner, "mtail --version revision")
+
+    assert reported_version == pinned_version, (
+        f"the mtail on PATH reports version {reported_version!r} but "
+        f"{_DOCKERFILE} pins {pinned_version!r} — compare like with like before "
+        "reading the revision assertion below."
+    )
+    assert reported_commit == pinned_commit, (
+        f"MTAIL_COMMIT in {_DOCKERFILE} is {pinned_commit} but upstream's own "
+        f"v{pinned_version} release binary was built from {reported_commit}. "
+        "The sidecar would be compiled from a DIFFERENT source tree than the "
+        "release it claims to be. Re-derive with:\n"
+        "  gh api repos/google/mtail/git/ref/tags/v<version> --jq .object.sha\n"
+        "  gh api repos/google/mtail/git/tags/<that-sha> --jq .object.sha"
     )
