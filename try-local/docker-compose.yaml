@@ -256,7 +256,13 @@ services:
     # git-init the config repo so commit-on-write has a repo. No monitoring
     # dependency → Mode 0 stays minimal. Directory mount (not single-file) to
     # avoid the WSL2 single-file bind-mount landmine.
-    image: alpine/git:latest
+    # Pinned tag AND digest, matched to the shipping ref in
+    # k8s/04-tenant-api/deployment.yaml + helm/tenant-api/templates/deployment.yaml
+    # (#1337 ①). The digest is not decoration here: alpine/git's VERSION tags are
+    # mutable — upstream's Sunday cron re-pushes v<X.Y.Z> from a fresh `apk add`
+    # — so the tag alone would still drift underneath us. Bump both halves
+    # together with the two deployment manifests.
+    image: alpine/git:v2.54.0@sha256:729da2347ce652f30476b064198577fe12e1147e58499be9f343039343ef2cee
     entrypoint: ["/bin/sh"]
     command: ["/seed/git-init.sh"]
     environment:
@@ -267,7 +273,7 @@ services:
 
   seed-metrics:
     # Push the synthetic high-connections metric so the headline critical fires.
-    image: curlimages/curl:latest
+    image: curlimages/curl:8.21.0
     entrypoint: ["/bin/sh"]
     command: ["/seed/push-metrics.sh"]
     environment:
@@ -290,7 +296,7 @@ services:
     # a live green sawtooth. (Full rationale in push-federation-metrics.sh.)
     # restart: unless-stopped so the freshness signal survives a pushgateway
     # bounce (re-push repopulates the memory-only gateway).
-    image: curlimages/curl:latest
+    image: curlimages/curl:8.21.0
     entrypoint: ["/bin/sh"]
     command: ["/seed/push-federation-metrics.sh"]
     environment:
