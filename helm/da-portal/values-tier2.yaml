@@ -61,10 +61,15 @@ portal:
 # 啟用 OAuth2-proxy：作為身份驗證層保護 Portal
 oauth2Proxy:
   enabled: true
-  image:
-    repository: quay.io/oauth2-proxy/oauth2-proxy
-    tag: "v7.15.2"
-    pullPolicy: IfNotPresent
+  # ⛔ NO `image:` override here, deliberately (#1302). This overlay used to pin
+  # `tag: v7.15.2` while values.yaml moved to v7.15.3 — and because a `-f`
+  # overlay merges key BY KEY, the base `digest` survived, so Tier 2 rendered
+  # `:v7.15.2@sha256:<v7.15.3's digest>`. The digest wins at pull time, so the
+  # running container was the right one while this profile's manifest, SBOM and
+  # `kubectl describe` all named the wrong version — and the day anyone added a
+  # digest here it would have silently DOWNGRADED past the v7.15.2 auth-bypass
+  # lineage. values.yaml owns this pin; overlays inherit it. Same rule the
+  # primary image already follows (#682).
   # Provider: github | google | oidc | gitlab
   # 根據組織選擇提供商（建議：OIDC 用於企業環境）
   provider: github  # Tier 2: Recommended oidc for enterprise

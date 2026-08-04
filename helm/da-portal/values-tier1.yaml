@@ -50,10 +50,15 @@ portal:
 # 不啟用 OAuth2-proxy（Git-Native 團隊無需身份驗證）
 oauth2Proxy:
   enabled: false
-  image:
-    repository: quay.io/oauth2-proxy/oauth2-proxy
-    tag: "v7.15.2"
-    pullPolicy: IfNotPresent
+  # ⛔ NO `image:` override here, deliberately (#1302). This overlay used to pin
+  # `tag: v7.15.2` while values.yaml moved to v7.15.3 — and because a `-f`
+  # overlay merges key BY KEY, the base `digest` survived, so the rendered ref
+  # was `:v7.15.2@sha256:<v7.15.3's digest>`. The digest wins at pull time, so
+  # the workload was fine while its own manifest, SBOM and `kubectl describe`
+  # all named the wrong version — and the day anyone added a digest here it
+  # would have silently DOWNGRADED. values.yaml owns this pin; overlays inherit
+  # it. Same rule the primary image already follows (#682, pinned by
+  # tests/helm/test_image_tag_derivation.py::test_da_portal_tiers_have_empty_tag).
   provider: github
   redirectUrl: "http://da-portal.example.com/oauth2/callback"
   emailDomain: "*"

@@ -16,7 +16,13 @@ name: Image Ref Resolve
 on:
   pull_request:
     paths:
-      - "helm/**/values.yaml"
+      # ⛔ `values*.yaml`, not `values.yaml` (#1302). The checker's own globs were
+      # widened to cover `-f values-tier2.yaml` overlay profiles; leaving this
+      # filter narrow would give a gate that CAN see those files but is never
+      # invoked when one changes — the trigger source has to match the scan face
+      # or the widening is decorative. Pinned by
+      # tests/ops/test_nightly_scan_matrix_drift.py.
+      - "helm/**/values*.yaml"
       - "k8s/**"
       - "scripts/ops/check_image_refs_resolve.py"
       - ".github/workflows/image-ref-resolve.yaml"
