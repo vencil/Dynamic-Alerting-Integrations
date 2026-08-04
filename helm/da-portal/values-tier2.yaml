@@ -67,7 +67,10 @@ oauth2Proxy:
   # digest 在 pull 時具權威性，所以跑起來的容器一直是對的；錯的是這個 profile 的
   # manifest / SBOM / `kubectl describe` 全都指名了另一個版本。
   # ⚠️ 而且這是個引信：哪天有人替這裡補上 digest，tag 就變權威，Tier 2 會**靜默降版**
-  # 回到 v7.15.2——那條 lineage 正是 #109 的 auth-bypass 修補版之前。
+  # 回到 v7.15.2。⛔ 危害在**機制**不在這兩個版號——v7.15.2 本身沒有已知問題（#109
+  # 正是把這顆映像**升到** v7.15.2 去修一個 auth bypass，而 v7.15.3 只是 #928 的例行
+  # bump）。真正的問題是「overlay 的 tag 可以在沒人察覺的情況下把 base 的升版蓋掉」，
+  # 而這條版本線既然帶過一次安全修補，下一次就不該由一個沒人在看的 overlay 決定。
   # ⇒ 這顆 pin 由 values.yaml 擁有，overlay 一律繼承。與 primary image 早在 #682
   # 就定下的規則相同。
   # Provider: github | google | oidc | gitlab

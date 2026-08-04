@@ -692,7 +692,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "f2ce4370b8067aadc3d3771cc52e08e109d676db212fc78837f9f7c5be7de085",
+ "source_digest": "63c9e645adb4a810b240979df5d08c657e788f03f992f9b02c20e6a2e61c6dcf",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1571,6 +1571,9 @@
    "tests/shared/test_helm_chart_log_aggregation.py",
    "tests/shared/test_vector_pin_parity.py",
    "tests/shared/test_vector_projection_vrl.py"
+  ],
+  "helm/vector/values-projection.yaml": [
+   "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   "helm/vector/values.yaml": [
    "tests/dx/test_log_visibility_catalogue.py",
