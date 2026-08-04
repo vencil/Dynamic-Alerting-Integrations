@@ -216,14 +216,25 @@ def test_hardcoded_template_image_refs_are_covered_by_the_scan() -> None:
     copy", because that is the property that actually matters and it keeps
     holding if the k8s manifest ever goes away.
     """
+    # ⛔ NO `/` requirement, and BOTH YAML extensions. An earlier cut of this
+    # regex demanded at least one slash, so a perfectly ordinary Docker Hub
+    # official ref (`image: alpine:3.20`) was invisible to it — this gate would
+    # have shipped with the same blind spot it exists to close. Neither shape
+    # occurs in the repo today (the only hardcoded template ref is alpine/git,
+    # and helm/ has no `.yml` templates), so this is coverage for the next one,
+    # not a fix for a live miss. CodeRabbit caught it on #1302.
     concrete = re.compile(
-        r"image:\s*[\"']?([a-z0-9][\w.\-]*(?:\.[\w.\-]+)?(?:/[\w.\-]+)+:[\w.\-]+"
+        r"image:\s*[\"']?([a-z0-9][\w.\-]*(?:/[\w.\-]+)*:[\w.\-]+"
         r"(?:@sha256:[0-9a-f]{64})?)[\"']?\s*$")
     matrix_refs = {e["ref"] for e in _matrix_include("scan-thirdparty")}
     selfbuilt_refs = {e.get("ref") for e in _matrix_include("scan")}
 
     offenders: dict[str, str] = {}
-    for path in sorted(ROOT.glob("helm/*/templates/**/*.yaml")):
+    templates = sorted(
+        p for p in ROOT.glob("helm/*/templates/**/*")
+        if p.suffix in (".yaml", ".yml"))
+    assert templates, "no helm templates found — this scan would be a no-op"
+    for path in templates:
         for line in path.read_text(encoding="utf-8").splitlines():
             m = concrete.search(line.strip())
             if not m:
@@ -268,15 +279,32 @@ def test_the_resolve_workflow_triggers_on_overlay_values_files() -> None:
     # PyYAML parses the bare `on:` key as the boolean True (YAML 1.1).
     triggers = wf.get("on") or wf.get(True)
     paths = triggers["pull_request"]["paths"]
-    assert any(p.startswith("helm/") and "values*" in p for p in paths), (
-        f"image-ref-resolve.yaml no longer triggers on overlay values files: {paths}. "
-        "The checker globs `helm/*/values*.yaml`; a narrower trigger means a PR that "
-        "changes only an overlay never runs it (#1302)."
+
+    # ⛔ Asserted BEHAVIOURALLY — the filter must actually match the overlay
+    # files that exist, not merely be spelled in a way that looks right. A
+    # syntactic check (`some entry starts with helm/ and contains values*`) is
+    # satisfied by `helm/nonexistent/values*.yaml`, which matches nothing. That
+    # is the same "present but covers nothing" shape this whole module is about.
+    overlays = [p.relative_to(ROOT).as_posix()
+                for p in sorted(ROOT.glob("helm/*/values-*.yaml"))]
+    assert overlays, "no overlay values files found — this assertion would be vacuous"
+
+    def _matches(pattern: str, target: str) -> bool:
+        """GitHub Actions path-filter semantics: `**` spans separators, `*` does not."""
+        rx = re.escape(pattern).replace(r"\*\*", "\x00").replace(r"\*", "[^/]*")
+        return re.fullmatch(rx.replace("\x00", ".*"), target) is not None
+
+    unmatched = [o for o in overlays if not any(_matches(p, o) for p in paths)]
+    assert not unmatched, (
+        f"image-ref-resolve.yaml does not trigger on these overlay files: {unmatched}\n"
+        f"  filter paths: {paths}\n"
+        "The checker globs `helm/*/values*.yaml`; a filter that misses an overlay "
+        "means a PR changing only that file never runs it (#1302)."
     )
 
 
 def test_report_expected_counts_match_matrix_sizes() -> None:
-    """The report's hardcoded EXPECTED (5 / 14) must track the matrix sizes."""
+    """The report's hardcoded EXPECTED (5 / 15) must track the matrix sizes."""
     n_selfbuilt = len(_matrix_include("scan"))
     n_thirdparty = len(_matrix_include("scan-thirdparty"))
     run = _aggregate_run()
