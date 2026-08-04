@@ -44,7 +44,7 @@ _RECURSIVE_CALLS = {"rglob", "walk"}
 # so both analysers below read this same function rather than each keeping
 # their own copy (the duplication that let `iterdir` slip through review).
 _FLAT_CALLS = {"listdir", "iterdir", "scandir"}
-_GUARD_CALLS = {"nested_yaml_warning", "nested_yaml_files"}
+_GUARD_CALLS = {"warn_nested", "nested_yaml_warning", "nested_yaml_files"}
 
 
 def _call_kind(node: ast.Call) -> str | None:

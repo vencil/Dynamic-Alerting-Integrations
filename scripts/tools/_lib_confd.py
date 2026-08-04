@@ -22,11 +22,12 @@ Two things a caller can do — pick deliberately, never by accident:
    Correct for anything whose job is "tell me about this configuration"
    (validators, describers, linters).
 
-2. `nested_yaml_warning(dir, tool=...)` — stay flat, but detect the case
-   where that is about to give a wrong answer and return a message saying
-   which files are being skipped. Correct for tools that are flat BY
-   DESIGN (e.g. `assemble_config_dir.py` merges several flat sharded
-   sources) and for ones whose recursive semantics are not yet decided.
+2. `warn_nested(dir)` — stay flat, but say so out loud: it prints the
+   files being skipped to stderr, once per directory per process. Correct
+   for tools that are flat BY DESIGN (e.g. `assemble_config_dir.py` merges
+   several flat sharded sources) and for ones whose recursive semantics
+   are not yet decided. (`nested_yaml_warning` is the pure form underneath
+   it, for callers that want the string rather than the side effect.)
 
 `tests/shared/test_confd_enumeration_contract.py` enforces that every tool
 reading a tenant config dir does one or the other — a new tool cannot
@@ -44,6 +45,8 @@ __all__ = [
     "iter_config_files",
     "nested_yaml_files",
     "nested_yaml_warning",
+    "reset_warned_for_test",
+    "warn_nested",
 ]
 
 CONFIG_SUFFIXES = (".yaml", ".yml")
@@ -158,3 +161,46 @@ def nested_yaml_warning(
         f"this tool's answer does not describe what the exporter is doing. "
         f"See issue #1339."
     )
+
+
+# Directories already warned about in THIS process. Module-level state, so it
+# carries the repo's usual obligation (CLAUDE.md): anything that writes it must
+# be resettable idempotently rather than save-and-restore.
+_WARNED: set[str] = set()
+
+
+def reset_warned_for_test() -> None:
+    """Idempotent reset of the once-per-directory memo.
+
+    Idempotent CLEAR, not save-then-restore: a restoring fixture is
+    "last cleanup wins" and would undo a parallel test's writes.
+    """
+    _WARNED.clear()
+
+
+def warn_nested(config_dir: str | os.PathLike[str], *, tool: str | None = None) -> bool:
+    """Print the nested-config warning to stderr, at most once per directory.
+
+    Returns whether anything was printed.
+
+    Why the memo: one command often scans the same `conf.d/` from more than
+    one place — `validate_config.py` reaches the routing parser twice, and
+    `migrate_to_operator.analyze_migration` both scans directly and calls
+    `discover_tenant_configs`. Printing the identical WARN twice reads as
+    two separate problems (CodeRabbit, PR #1343). De-duplicating here rather
+    than deleting one of the guards keeps every flat scan covered — a scan
+    whose only warning lives in some other function is exactly the
+    "gate exists but never fires" shape this module was written against.
+
+    Callers should use this instead of hand-rolling the print, so the
+    dedup and the stderr choice live in one place.
+    """
+    msg = nested_yaml_warning(config_dir, tool=tool)
+    if msg is None:
+        return False
+    key = os.path.abspath(os.fspath(config_dir))
+    if key in _WARNED:
+        return False
+    _WARNED.add(key)
+    print(f"WARN: {msg}", file=sys.stderr)
+    return True

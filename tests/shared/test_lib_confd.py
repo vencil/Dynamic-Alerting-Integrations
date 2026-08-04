@@ -14,6 +14,8 @@ from _lib_confd import (  # noqa: E402
     iter_config_files,
     nested_yaml_files,
     nested_yaml_warning,
+    reset_warned_for_test,
+    warn_nested,
 )
 
 
@@ -172,3 +174,51 @@ def test_derived_tool_name_survives_a_missing_argv(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "argv", [])
     msg = nested_yaml_warning(root)
     assert msg and "conf.d reader" in msg
+
+
+# ── warn_nested: says it once, and only to stderr ──────────────────────
+
+
+def test_warn_nested_prints_once_per_directory(capsys, hierarchical):
+    """One command often scans the same conf.d twice; say it once.
+
+    `validate_config.py` reaches the routing parser twice and
+    `migrate_to_operator.analyze_migration` both scans directly and calls
+    `discover_tenant_configs` — printing the identical WARN twice reads as
+    two separate problems (CodeRabbit, PR #1343). Note the fix is here, not
+    "delete one of the guards": a scan whose only warning lives in another
+    function is the gate-never-fires shape this module exists against.
+    """
+    reset_warned_for_test()
+    assert warn_nested(hierarchical) is True
+    assert warn_nested(hierarchical) is False, "second call must stay quiet"
+    err = capsys.readouterr().err
+    assert err.count("live in subdirectories") == 1
+
+
+def test_warn_nested_writes_only_to_stderr(capsys, hierarchical):
+    """stdout must stay parseable — several tools emit JSON on it."""
+    reset_warned_for_test()
+    warn_nested(hierarchical)
+    cap = capsys.readouterr()
+    assert cap.out == ""
+    assert "WARN:" in cap.err
+
+
+def test_warn_nested_is_silent_on_a_flat_dir(capsys, flat):
+    reset_warned_for_test()
+    assert warn_nested(flat) is False
+    assert capsys.readouterr().err == ""
+
+
+def test_reset_is_idempotent_not_save_restore(capsys, hierarchical):
+    """Repo rule (CLAUDE.md): process-global state gets an idempotent CLEAR.
+
+    A save-then-restore fixture is "last cleanup wins" and would undo a
+    parallel test's writes.
+    """
+    reset_warned_for_test()
+    reset_warned_for_test()  # calling twice must be harmless
+    assert warn_nested(hierarchical) is True
+    reset_warned_for_test()
+    assert warn_nested(hierarchical) is True, "after reset it may warn again"

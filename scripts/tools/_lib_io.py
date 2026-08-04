@@ -14,7 +14,7 @@ from typing import Any, Optional
 
 import yaml
 
-from _lib_confd import nested_yaml_warning
+from _lib_confd import warn_nested
 from _lib_constants import ONBOARD_HINTS_FILENAME
 
 
@@ -60,9 +60,7 @@ def iter_yaml_files(
     # tool= omitted on purpose: this helper is reached from several
     # entry points, so the message should name the command the
     # operator ran, not this function.
-    _nested = nested_yaml_warning(base)
-    if _nested:
-        print(f"WARN: {_nested}", file=sys.stderr)
+    warn_nested(base)
     result: list[tuple[str, str]] = []
     for entry in sorted(base.iterdir(), key=lambda p: p.name):
         fname = entry.name

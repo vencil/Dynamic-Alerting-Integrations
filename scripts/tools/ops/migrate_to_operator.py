@@ -34,7 +34,7 @@ except ImportError:
 from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
 from _lib_io import load_yaml_file, write_text_secure  # noqa: E402
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
-from _lib_confd import nested_yaml_warning  # noqa: E402
+from _lib_confd import warn_nested  # noqa: E402
 
 # Reuse patterns from operator_generate
 import re
@@ -96,9 +96,7 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
     tenants = []
     # #1339: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
-    _nested = nested_yaml_warning(config_dir, tool="migrate_to_operator")
-    if _nested:
-        print(f"WARN: {_nested}", file=sys.stderr)
+    warn_nested(config_dir, tool="migrate_to_operator")
     for yaml_file in config_dir.glob("*.yaml"):
         if not yaml_file.name.startswith("_"):
             tenant = yaml_file.stem
@@ -146,9 +144,7 @@ def parse_configmap_rules(source_dir: Path) -> List[dict]:
     results = []
     # #1339: second scan site — the guard must live where the scan does,
     # otherwise a hierarchical conf.d is silently empty on THIS path.
-    _nested = nested_yaml_warning(source_dir, tool="migrate_to_operator")
-    if _nested:
-        print(f"WARN: {_nested}", file=sys.stderr)
+    warn_nested(source_dir, tool="migrate_to_operator")
     for yaml_file in sorted(source_dir.glob("*.yaml")):
         try:
             data = load_yaml_file(str(yaml_file))
@@ -369,9 +365,7 @@ def analyze_migration(source_dir: Path, config_dir: Path) -> dict:
         if config_dir.is_dir():
             # #1339: second scan site — the guard must live where the scan does,
             # otherwise a hierarchical conf.d is silently empty on THIS path.
-            _nested = nested_yaml_warning(config_dir, tool="migrate_to_operator")
-            if _nested:
-                print(f"WARN: {_nested}", file=sys.stderr)
+            warn_nested(config_dir, tool="migrate_to_operator")
             for yaml_file in sorted(config_dir.glob("*.yaml")):
                 if not yaml_file.name.startswith("_"):
                     raw_name = yaml_file.stem

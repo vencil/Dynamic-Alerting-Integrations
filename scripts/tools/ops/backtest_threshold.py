@@ -50,7 +50,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import load_yaml_file, is_disabled, http_get_json, query_prometheus_range, write_json_secure, write_text_secure, add_prometheus_arg  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_confd import nested_yaml_warning  # noqa: E402
+from _lib_confd import warn_nested  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Default settings
@@ -207,9 +207,7 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
     baseline_base = Path(baseline_dir)
     # #1339: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
-    _nested = nested_yaml_warning(config_base, tool="backtest_threshold")
-    if _nested:
-        print(f"WARN: {_nested}", file=sys.stderr)
+    warn_nested(config_base, tool="backtest_threshold")
     for path in sorted(config_base.glob("*.yaml")):
         basename = path.name
         if basename.startswith("_"):
@@ -699,9 +697,7 @@ def main():
     elif args.config_dir:
         # #1339: second scan site — the guard must live where the scan does,
         # otherwise a hierarchical conf.d is silently empty on THIS path.
-        _nested = nested_yaml_warning(Path(args.config_dir), tool="backtest_threshold")
-        if _nested:
-            print(f"WARN: {_nested}", file=sys.stderr)
+        warn_nested(Path(args.config_dir), tool="backtest_threshold")
         parsed_conf = load_conf_files(
             [str(p) for p in sorted(Path(args.config_dir).glob("*.yaml"))]
         )
