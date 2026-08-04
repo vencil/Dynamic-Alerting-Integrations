@@ -39,8 +39,10 @@ name: Component Docker Build (PR smoke)
 # release jobs set `exit-code: 1` with no `continue-on-error`, so a fixable
 # HIGH/CRITICAL fails the release job. What is true, and is the likely origin of
 # the confusion, is that the scan runs POST-PUSH: the image is already in the
-# registry by then, so it reddens the release and blocks everything after it in
-# that job, rather than preventing publication of that image.
+# registry by then, so what it blocks is the release job going green, not the
+# publication of that image. (And in 4 of the 5 jobs it is the last step, so
+# nothing further is prevented either; only release-da-tools has signing / SBOM /
+# archive / GitHub-Release steps after it.)
 
 on:
   pull_request:

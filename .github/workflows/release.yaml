@@ -124,8 +124,12 @@ jobs:
       # ⛔ "informational" was wrong and is corrected in #1337: this step sets
       # exit-code 1 with no continue-on-error, so a fixable HIGH/CRITICAL FAILS
       # the release job. "post-push" is the real caveat — the image is already in
-      # the registry, so this blocks the release job (and every step after it),
-      # not the publication of that image.
+      # the registry, so what it actually blocks is the release JOB going green,
+      # not the publication of that image. ⚠️ Be precise about the second-order
+      # effect: in four of the five jobs this is the LAST step, so nothing further
+      # is prevented; only release-da-tools has steps after it (cosign signing,
+      # SBOM, cross-compiled archives, the GitHub Release itself), and there a red
+      # Trivy really does stop those from happening.
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@0.35.0
         with:

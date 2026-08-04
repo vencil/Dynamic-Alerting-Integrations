@@ -461,9 +461,13 @@ _DOCKERFILE_NAME_RE = re.compile(
 # allowed, `dockerfile_helpers.py` matches. Reject names whose FINAL extension is
 # a source/doc type — those are code ABOUT Dockerfiles, not build recipes. Caught
 # by this module's own name-rule test, which is why that test exists.
+# ⛔ `.tpl` is deliberately NOT in this list: `Dockerfile.tpl` is a plausible
+# templated build recipe, and excluding it would be the same wrong-direction
+# mistake as the too-narrow separator rule above. Helm's `_helpers.tpl` does not
+# match the name regex at all, so nothing needed `.tpl` here.
 _NOT_A_DOCKERFILE_SUFFIX = (
     ".py", ".md", ".sh", ".txt", ".json", ".yaml", ".yml", ".js", ".ts", ".go",
-    ".tpl", ".lock", ".toml", ".cfg", ".ini",
+    ".lock", ".toml", ".cfg", ".ini",
 )
 
 
