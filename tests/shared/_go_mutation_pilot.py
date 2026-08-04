@@ -317,10 +317,15 @@ MUTATIONS: list[Mutation] = [
     Mutation(
         target_file="pkg/config/hierarchy.go",
         test_target="./...",
-        label="deepMerge: drop nil-delete (override:nil overwrites with nil instead of deleting)",
+        # #1339: this branch used to delete unconditionally, which made
+        # /effective report a threshold as gone while collector.go kept
+        # emitting the platform default for it. Widening the guard back to
+        # `true` reinstates exactly that regression, so it is the mutation a
+        # test suite must kill.
+        label="deepMerge: widen nil-delete back to every key (threshold null wrongly drops the inherited default)",
         fn_name="deepMerge",
-        old="if v == nil {\n\t\t\tdelete(result, k)\n\t\t\tcontinue\n\t\t}",
-        new="if false {\n\t\t\tdelete(result, k)\n\t\t\tcontinue\n\t\t}",
+        old='if strings.HasPrefix(k, "_") {\n\t\t\t\tdelete(result, k)\n\t\t\t}',
+        new="if true {\n\t\t\t\tdelete(result, k)\n\t\t\t}",
     ),
     Mutation(
         target_file="pkg/config/hierarchy.go",

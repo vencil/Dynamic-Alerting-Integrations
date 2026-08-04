@@ -10,10 +10,20 @@ package config
 //
 // It is the pure function the /api/v1/tenants/simulate handler dispatches
 // to. Importantly it goes through the same merge path
-// (computeEffectiveConfig + computeMergedHash) as the production
+// (computeEffectiveConfig + computeMergedHash) as
 // ConfigManager.Resolve, so a simulated hash is byte-identical to what
 // you'd see after committing the same bytes — that contract is asserted
 // by TestSimulate_VsResolve_ParityHash.
+//
+// ⚠️ "Same path as ConfigManager.Resolve" is NOT "same path as the
+// exported metric". Resolve is the DIAGNOSTIC path; the series
+// `user_threshold` is produced by collector.go →
+// ThresholdConfig.ResolveAtWithStats, a different resolver that decodes
+// into typed ScheduledValue rather than merging `map[string]any`. The two
+// agree on every shape the schema admits — deepMerge was aligned to the
+// emitting path for threshold nulls in #1339 — but they are separate
+// implementations, so read a simulate result as "what the config would
+// merge to", not as "what /metrics will emit".
 //
 // API shape mirrors describe_tenant.py JSON output and EffectiveConfig
 // so HTTP consumers can compare the two responses field-for-field.

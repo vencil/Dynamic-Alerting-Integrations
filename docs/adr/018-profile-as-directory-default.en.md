@@ -77,7 +77,7 @@ Translator-internal algorithms (the metric_key 5-step ladder, majority vote, med
 
 This ADR's emission relies on ADR-017's:
 
-- **null-as-delete**: tenants who want to explicitly clear a value can still do so (emission uses explicit numbers, never null).
+- **null-as-delete**: tenants who want to explicitly set 0 can still do so (emission uses explicit numbers, never null). ⚠️ **Corrected by #1339**: `null` is no longer a way to opt out of an inherited THRESHOLD (it is indistinguishable from a half-typed line, and the schema rejects it) — use `"disable"`. The opt-out meaning of `null` survives only for the four `_routing` fields.
 - **map deep-merge**: each tenant file lists ONLY keys that differ from `_defaults.yaml`; runtime ResolveAt fills the rest from defaults.
 - **scalar override**: tenant string values (e.g. `"1500"`) override the default numeric; runtime uses strconv to convert back to float at ResolveAt time.
 

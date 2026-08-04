@@ -189,7 +189,7 @@ conf.d/
 |------|------|---------|
 | Scalar / Map 深度合併 | 同 key 深度合併；child 覆蓋 parent | 大部分 defaults override |
 | Array 完整取代（non-merge） | Child array 完整替換 parent，不連接 | `state_filters.reasons` / `_routing.group_by` |
-| `null` 即刪除 | Child `key: null` 從繼承鏈移除該 key | 禁用父層某個預設閾值 |
+| `null` 退出繼承（**分欄位**） | 只有 `_routing` 的 `group_by` / `group_wait` / `group_interval` / `repeat_interval` 四個欄位：child `key: null` 讓產出的 route 省略該欄位。**閾值 key 不適用**——null 不退出繼承，且 schema 會擋（與漏打不可分辨） | 退掉繼承來的通知節奏；**停用閾值請用 `"disable"`**（#1339） |
 | `_` 前綴保留 | `_silent_mode` / `_state_maintenance` / `_routing` / `_severity_dedup` / `_namespaces` 等 meta 欄位全程保留 | 租戶生命週期 meta |
 
 **Dual-Hash 熱重載**

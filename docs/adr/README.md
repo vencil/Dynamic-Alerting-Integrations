@@ -45,7 +45,7 @@ lang: zh
 | [014](#014-wizard-token-arbitrary-value-遷移策略) | Wizard Token Arbitrary-Value 遷移策略 (Option A) | ✅ Accepted | `bg-[color:var(--da-color-*)]` arbitrary-value 改寫 legacy `bg-slate-200`，避免 Tailwind config 擴充 + 同 commit 完成全替換 |
 | [015](#015-data-theme-單軌-dark-mode) | `[data-theme]` 單軌 Dark Mode（移除 `dark:` 變體） | ✅ Accepted | 統一以 `[data-theme="dark"]` attribute 管理 dark mode，禁用 Tailwind `dark:` 變體，消除 token/class 雙軌問題 |
 | [016](#016-confd-目錄分層-混合模式) | conf.d/ 目錄分層 + 混合模式 + 遷移策略 | ✅ Accepted | Directory Scanner 同時支援 flat 與 domain/region/env 3 層結構；零中斷升級 + `migrate-conf-d` 可選工具 |
-| [017](#017-defaultsyaml-繼承語意-dual-hash-hot-reload) | `_defaults.yaml` 繼承語意 + dual-hash hot-reload | ✅ Accepted | Deep merge with override（array replace、null-as-delete）+ 雙 hash（source_hash + merged_hash）精準判定 reload 觸發，配 300ms debounce |
+| [017](#017-defaultsyaml-繼承語意-dual-hash-hot-reload) | `_defaults.yaml` 繼承語意 + dual-hash hot-reload | ✅ Accepted | Deep merge with override（array replace、null-as-delete 僅限 `_` 保留鍵）+ 雙 hash（source_hash + merged_hash）精準判定 reload 觸發，配 300ms debounce |
 | [018](#018-profile-as-directory-default) | Profile-as-Directory-Default | ✅ Accepted | Cluster 共通閾值放 `_defaults.yaml`，只有偏離 default 的 tenant 寫 `<id>.yaml` override（median + sparse override）；跨 Profile Builder / batch PR pipeline / Dangling Defaults Guard 共通的「default vs override 邊界」決策。Translator 演算法細節留 `translate.go` package header（避免雙寫漂移）|
 | [019](#019-planning-ssot-frontmatter-contract-discovery-based-index) | Planning SSOT — Frontmatter Contract + Discovery-based Index | ✅ Accepted | **（貢獻者向：專案內部計畫追蹤治理，非平台功能）** 跨檔分散的計畫追蹤（tech-debt / dx-backlog / known-regression / roadmap / sprint）以 frontmatter contract + discovery-based index generator + active CI status-sync check 統一治理；TD/HA/REG 合併為 TRK namespace，ADR 與 S# 各自保留 |
 | [020](#020-tenant-federation-label-injection-proxy-over-self-built-endpoint) | Tenant Federation — Label-Injection Proxy over Self-Built Endpoint | 🟡 Proposed | Tenant 拉自己 metrics 回 tenant 側自管 federation。採 vmauth（VM 客戶）/ prom-label-proxy（Prom 客戶）做 label-enforced read proxy，不自寫 endpoint。2-tier policy（platform whitelist + tenant subset）+ 4h TTL token（無 server-side revocation，**對價條件**：gateway rate limit 必須到位）+ **3-layer blast radius**（storage backend series/sample cap + gateway per-token rate limit + proxy label injection）+ data-layer prerequisite（whitelist metric 必須 native 帶 `tenant_id` label，admission validator 把關）|
@@ -188,7 +188,7 @@ v2.7.0 Scale Foundation 第一塊。Directory Scanner 同時支援 flat 與 `{do
 
 **文件**: [`017-defaults-yaml-inheritance-dual-hash.md`](./017-defaults-yaml-inheritance-dual-hash.md)
 
-v2.7.0 Scale Foundation 第二塊。定義多層 `_defaults.yaml` 的繼承語意（L0 全域 → L1 domain → L2 region → L3 env → tenant），deep merge with override（array replace、null-as-delete、`_metadata` 不繼承）。雙 hash：`source_hash`（tenant YAML 檔案本身）+ `merged_hash`（effective config canonical JSON）精準判定 reload 觸發，避免 `_defaults.yaml` 變動時的 reload 風暴；300ms debounce 處理 batch git pull。
+v2.7.0 Scale Foundation 第二塊。定義多層 `_defaults.yaml` 的繼承語意（L0 全域 → L1 domain → L2 region → L3 env → tenant），deep merge with override（array replace、null-as-delete **僅限 `_` 保留鍵**（#1339 收窄；閾值 key 請用 `"disable"`）、`_metadata` 不繼承）。雙 hash：`source_hash`（tenant YAML 檔案本身）+ `merged_hash`（effective config canonical JSON）精準判定 reload 觸發，避免 `_defaults.yaml` 變動時的 reload 風暴；300ms debounce 處理 batch git pull。
 
 ---
 

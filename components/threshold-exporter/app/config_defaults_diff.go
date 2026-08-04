@@ -221,8 +221,15 @@ func collectDefaultsDiff(prefix string, a, b any, out *[]string) {
 // well-defined for tests.
 //
 // "Set" means present and not nil; YAML null is treated as "not
-// overridden" because deepMerge treats null as "delete key" (ADR-017
-// semantic trap #6) which leaves the defaults value visible.
+// overridden", which leaves the defaults value visible — so a defaults
+// change at that path is NOT shadowed.
+//
+// The old comment justified this with "deepMerge treats null as delete
+// key (ADR-017 trap #6)", which was backwards: deleting would have
+// removed the value, not left the default visible. #1339 narrowed the
+// delete to reserved (`_`-prefixed) keys, so on a threshold key null
+// really is "no override" and this behaviour is now correct for the
+// stated reason rather than in spite of it.
 func tenantOverridesAll(tenantSrc map[string]any, dotPaths []string) bool {
 	if len(dotPaths) == 0 {
 		return true

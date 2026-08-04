@@ -493,13 +493,17 @@ class TestKustomizationBuilder:
 #   - Dict fields  → deep merge (child adds new keys, overrides same keys)
 #   - Array fields → REPLACE (not concat)
 #   - Scalar       → child overrides parent
-#   - None / null  → delete parent's key ("opt-out")
+#   - None / null  → deletes parent's key ONLY for reserved (`_`-prefixed)
+#                    keys; on a threshold key it is a no-op, because the
+#                    exporter's emitting path ignores it (#1339)
 #   - _metadata    → never inherited (skipped at every depth)
 #
 # Properties under test:
 #   P1  Identity:   merge(a, {}) == a                      (empty override is no-op)
 #   P2  Idempotent: merge(merge(a, b), b) == merge(a, b)   (re-applying same override changes nothing)
-#   P3  Null-delete persistence: once deleted, cannot be resurrected by {} follow-up
+#   P3  Null-delete persistence (reserved keys): once deleted, cannot be
+#       resurrected by a {} follow-up; plus the mirror case that null on a
+#       threshold key changes nothing at all
 #   P4  Determinism: same inputs → byte-identical canonical JSON
 #   P5  No mutation: inputs are not modified (defensive copy via deepcopy)
 #   P6  _metadata never propagates from override (at any depth)
@@ -610,17 +614,21 @@ class TestDeepMergeProperties:
         twice = deep_merge(once, override)
         assert twice == once
 
-    def test_override_new_subtree_with_none_is_non_idempotent(self):
-        """Behavior-lock: override introducing a NEW subtree containing None is NOT idempotent.
+    def test_override_new_subtree_with_none_is_idempotent(self):
+        """The old asymmetry here is gone — #1339 removed its root cause.
 
-        Root cause (scripts/tools/dx/describe_tenant.py:34 `deep_merge`):
-          - 1st merge: base lacks 'a', so `result["a"] = deepcopy({"b": None})` — None preserved verbatim.
-          - 2nd merge: base now has dict at 'a', recursion fires, None-delete kicks in → {"a": {}}.
+        It used to be:
+          - 1st merge: base lacks 'a', so `result["a"] = deepcopy({"b": None})`,
+            preserving None verbatim.
+          - 2nd merge: base now has a dict at 'a', recursion fires, the blanket
+            None-delete kicks in → {"a": {}}.
 
-        This is a latent quirk versus the ADR-017 contract (None = delete at any depth).
-        Fixing it needs coordinated Go/Python change + ADR-017 clarification; out of
-        scope for A-8 (test-harness expansion). Test pins current behavior so any
-        future fix must update this assertion deliberately.
+        The old docstring called this a latent quirk needing "a coordinated
+        Go/Python change + ADR-017 clarification". That is exactly what #1339
+        did, for a different reason: the blanket delete made /effective
+        contradict what the exporter emits for a threshold key. With the delete
+        now limited to reserved (`_`-prefixed) keys, 'b' survives the recursion
+        and the merge is idempotent.
         """
         base = {}
         override = {"a": {"b": None}}
@@ -629,8 +637,7 @@ class TestDeepMergeProperties:
         twice = deep_merge(once, override)
 
         assert once == {"a": {"b": None}}, "1st merge preserves None verbatim"
-        assert twice == {"a": {}}, "2nd merge applies None-delete via recursion"
-        assert twice != once, "asymmetry exists — see docstring for future-fix plan"
+        assert twice == once, "None on a non-reserved key is a no-op, so re-merging changes nothing"
 
     # ---- P3 Null-delete persistence ------------------------------------------
 
@@ -640,25 +647,51 @@ class TestDeepMergeProperties:
     )
     @settings(max_examples=60, suppress_health_check=[HealthCheck.too_slow])
     def test_null_delete_is_persistent(self, base: Dict[str, Any], data):
-        """A key deleted via None cannot be resurrected by a subsequent {} or same-None override.
+        """A RESERVED key deleted via None cannot be resurrected by {} or the same None.
 
-        This guards against a subtle bug: if deep_merge ever started treating None
-        at dict-value-position as a no-op (leaving the old value), deletes would
-        silently resurrect.
+        Guards a subtle bug: if deep_merge stopped honouring None on reserved
+        keys, deletes would silently resurrect.
+
+        Scoped to reserved (`_`-prefixed) keys by #1339. On a threshold key None
+        is deliberately a no-op — the exporter's emitting path ignores it and
+        keeps using the platform default, so a diagnostic that deleted the key
+        would contradict /metrics. That half is pinned by
+        `test_null_on_threshold_key_is_a_noop`.
         """
-        # Pick a real top-level key from base to nuke.
+        # Pick a real top-level key from base and promote it to a reserved one.
         key = data.draw(st.sampled_from(sorted(base.keys())))
-        delete_override = {key: None}
+        reserved = "_" + key.lstrip("_")
+        base = {**base, reserved: base[key]}
+        delete_override = {reserved: None}
 
         stage1 = deep_merge(base, delete_override)
-        assert key not in stage1, f"key {key!r} should be gone after None override"
+        assert reserved not in stage1, f"key {reserved!r} should be gone after None override"
 
         # Re-applying {} or the same None override must not restore it.
         stage2 = deep_merge(stage1, {})
-        assert key not in stage2
+        assert reserved not in stage2
 
         stage3 = deep_merge(stage1, delete_override)
-        assert key not in stage3
+        assert reserved not in stage3
+
+    @given(base=_config_dicts().filter(lambda d: len(d) > 0), data=st.data())
+    @settings(max_examples=60, suppress_health_check=[HealthCheck.too_slow])
+    def test_null_on_threshold_key_is_a_noop(self, base: Dict[str, Any], data):
+        """The other half of #1339: None on a NON-reserved key changes nothing.
+
+        `mysql_connections: ~` and a half-typed `mysql_connections:` are the
+        same thing to YAML, so honouring the opt-out there would turn a typo
+        into a silently disabled alert. The exporter already refuses to do
+        that; this pins the diagnostic path to the same answer.
+        """
+        key = data.draw(st.sampled_from(sorted(base.keys())))
+        plain = key.lstrip("_") or "mysql_connections"
+        base = {**base, plain: base[key]}
+
+        got = deep_merge(base, {plain: None})
+
+        assert plain in got, f"key {plain!r} must survive an explicit null"
+        assert got[plain] == base[plain], "the inherited value must be unchanged"
 
     # ---- P4 Canonical JSON determinism ---------------------------------------
 
@@ -732,7 +765,13 @@ class TestDeepMergeProperties:
         override = {"thresholds": {"cpu": 70}}  # mem untouched, cpu wins
         assert deep_merge(base, override) == {"thresholds": {"cpu": 70, "mem": 90}}
 
-    def test_null_at_nested_depth_deletes(self):
-        base = {"thresholds": {"cpu": 80, "mem": 90}}
-        override = {"thresholds": {"mem": None}}
-        assert deep_merge(base, override) == {"thresholds": {"cpu": 80}}
+    def test_null_at_nested_depth_follows_the_same_per_key_rule(self):
+        # #1339: the rule is per-key, at every depth — reserved deletes,
+        # non-reserved is a no-op. Nothing special about being nested.
+        base = {"thresholds": {"cpu": 80, "mem": 90, "_note": "x"}}
+        assert deep_merge(base, {"thresholds": {"mem": None}}) == {
+            "thresholds": {"cpu": 80, "mem": 90, "_note": "x"}
+        }
+        assert deep_merge(base, {"thresholds": {"_note": None}}) == {
+            "thresholds": {"cpu": 80, "mem": 90}
+        }

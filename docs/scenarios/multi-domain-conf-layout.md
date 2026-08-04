@@ -113,7 +113,7 @@ conf.d/
 
 - **物件級** (dict)：遞迴合併，子鍵覆蓋父鍵
 - **陣列級** (list)：子陣列替代父陣列（不是追加）
-- **null 值**：表示「顯式 opt-out」——忽略上層值
+- **null 值**：**依欄位而定，沒有通則**——只有 `_routing` 的四個欄位是 opt-out，閾值 key 請用 `"disable"`（見本節末的說明與 [ADR-017](../adr/017-defaults-yaml-inheritance-dual-hash.md)）
   
 例：
 
@@ -158,9 +158,13 @@ tenants:
         url: "https://hooks.tenant-a.example.com/alerts"
 ```
 
-> ⚠️ ADR-017 描述了「顯式 `null` 退出繼承」，但 `tenant-config.schema.json`
-> 目前對**任何**租戶欄位都不接受 `null`（實測：`mysql_connections: null` 與
-> `_routing: null` 皆被拒）。在這個張力解決之前，請用覆寫值而不是設成 null。
+> ℹ️ **顯式 `null` 退出繼承是分欄位的**（#1339 已釐清並實作）：只有 `_routing`
+> 底下的 `group_by` / `group_wait` / `group_interval` / `repeat_interval` 四個
+> 欄位接受 `null`，效果是產出的 route 省略該欄位。`_routing.receiver: ~`
+> **仍被拒絕**——它會讓該租戶整條 route 消失、告警落到 catch-all。
+> **閾值 key 一律用 `"disable"`**，不要用 `null`：`mysql_connections: ~` 與打到
+> 一半的 `mysql_connections:` 對 YAML 完全相同，所以 schema 擋掉它。詳見
+> [ADR-017 §Merge 語意](../adr/017-defaults-yaml-inheritance-dual-hash.md)。
 
 ## 操作指南
 

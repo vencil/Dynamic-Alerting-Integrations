@@ -54,7 +54,25 @@ Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides 
 - **Dict/Map fields**: deep merge (child layer's new keys preserved, same keys overridden by child)
 - **Array/List fields**: **replace, not concat** (avoids ambiguity — "I overrode group_by, why are old values there?")
 - **Scalar fields**: child overrides parent
-- **Null / empty values**: explicit `null` deletes parent's value (opt-out pattern)
+- **Null values — per-field, not a blanket rule** (#1339 split what used to be one line):
+  - **The four routing fields** (`group_by` / `group_wait` / `group_interval` /
+    `repeat_interval` under `_routing`): an explicit `null` **opts out of
+    inheritance** and the generated route omits the field. It is the only way to
+    say so — these timing fields have no `"disable"` sentinel.
+    `_routing.receiver` and `_routing.overrides` are **excluded**: the former
+    makes the tenant's entire route disappear (alerts fall through to the
+    catch-all), the latter has nothing above it to opt out of.
+  - **Threshold keys**: an explicit `null` does **not** opt out — use
+    `"disable"`. The emitting path (`collector.go` → `ResolveAtWithStats`)
+    already ignores the null and falls back to the platform default; the
+    diagnostic path (`/effective`, `describe_tenant`, simulate) was aligned to
+    it in #1339.
+- **⚠️ A blank value and an explicit `null` are the same thing** — listing them
+  as "Null / empty values" was itself the misleading part: `mysql_connections: ~`
+  and `mysql_connections:` are different syntax that YAML parses to the **same
+  null**. Honouring null on a threshold key would therefore make "I stopped
+  typing halfway" mean "silently switch this alert off". That is why it is
+  unsupported there: an accident must fail **loud**, never **silent**.
 - **`_metadata` fields do not inherit**: each tenant's `_metadata` comes only from its own YAML + path inference (ADR-016)
 
 ```yaml

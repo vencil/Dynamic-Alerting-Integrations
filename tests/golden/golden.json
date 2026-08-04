@@ -115,17 +115,35 @@
       "_defaults.yaml"
     ],
     "effective_config": {
+      "alert_group": "baseline",
       "threshold": {
         "connections": 50,
-        "cpu": 70
+        "cpu": 70,
+        "memory": 75
       }
     },
     "fixture_dir": "opt-out-null",
-    "merged_hash": "f751df13d0aa2d19",
+    "merged_hash": "b6c67d95f32e28c2",
     "scenario": "opt-out-null",
     "source_file": "tenants.yaml",
     "source_hash": "d0d42110c018826d",
     "tenant_id": "tenant-optout"
+  },
+  {
+    "defaults_chain": [
+      "_defaults.yaml"
+    ],
+    "effective_config": {
+      "container_memory": "disable",
+      "mysql_connections": 80,
+      "redis_connected_clients": 5000
+    },
+    "fixture_dir": "opt-out-null-threshold",
+    "merged_hash": "37372a96e48ecfd4",
+    "scenario": "opt-out-null-threshold",
+    "source_file": "tenants.yaml",
+    "source_hash": "b9f1aec55934fb1c",
+    "tenant_id": "tenant-null"
   },
   {
     "defaults_chain": [

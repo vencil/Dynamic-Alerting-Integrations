@@ -13,7 +13,9 @@ package main
 //   full-l0-l3        — 4-level inheritance, array replace, tenant override
 //   mixed-mode        — flat + hierarchical tenants in same conf.d
 //   array-replace     — arrays replaced (not concat)
-//   opt-out-null      — explicit null deletes inherited key
+//   opt-out-null      — null deletes a reserved key, not a threshold key
+//   opt-out-null-threshold — real flat-metric-key shape: null keeps the
+//                       inherited default, "disable" is the opt-out (#1339)
 //   metadata-skipped  — _metadata never propagates
 //
 // If this test is red and the Python side is green, the Go port has drifted.

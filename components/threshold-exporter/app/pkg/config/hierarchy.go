@@ -19,7 +19,9 @@ package config
 //
 // Semantic rules enforced (MUST match describe_tenant.py + app/):
 //   - _metadata is never inherited
-//   - YAML null / ~ in override deletes inherited key
+//   - YAML null / ~ in override deletes an inherited RESERVED (`_`-prefixed)
+//     key; on a threshold key it is a no-op, matching the emitting path
+//     (see deepMerge for why the two differ — #1339)
 //   - map × map → recursive deep merge
 //   - array / scalar → override wins wholesale (no concat)
 //   - hash = SHA-256(canonical_json(merged))[:16]
@@ -328,7 +330,32 @@ func deepMerge(base, override map[string]any) map[string]any {
 			continue
 		}
 		if v == nil {
-			delete(result, k)
+			// ADR-017's explicit-null opt-out applies to RESERVED
+			// (`_`-prefixed) keys only.
+			//
+			// It must not apply to a threshold key, because the emitting
+			// path does not honour it: collector.go →
+			// ThresholdConfig.ResolveAtWithStats decodes a YAML null into
+			// ScheduledValue.Default == "", logs `unknown value ""...
+			// using default` and falls back to the PLATFORM DEFAULT. The
+			// inherited value is still being emitted. A diagnostic path
+			// that deleted the key here would tell the operator the
+			// threshold is gone while /metrics still carries it — and
+			// /effective is an endpoint customers call precisely when they
+			// are asking "why is this alert still firing?" (#1339 P0).
+			//
+			// Threshold keys are exactly the non-`_` keys: in
+			// tenant-config.schema.json the tenant body has `_`-prefixed
+			// named properties, dimensional patternProperties, and
+			// additionalProperties = thresholdScalar | scheduledValue.
+			// So "not reserved" ⇒ "is a threshold".
+			//
+			// To stop alerting on a threshold key use "disable"; null is
+			// indistinguishable from a half-typed line, which is why the
+			// schema rejects it there.
+			if strings.HasPrefix(k, "_") {
+				delete(result, k)
+			}
 			continue
 		}
 		if overrideMap, ok := v.(map[string]any); ok {

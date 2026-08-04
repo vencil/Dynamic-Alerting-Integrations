@@ -1,0 +1,4 @@
+tenants:
+  tenant-null:
+    mysql_connections: ~
+    container_memory: "disable"

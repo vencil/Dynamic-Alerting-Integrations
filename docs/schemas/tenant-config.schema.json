@@ -386,39 +386,40 @@
       "type": "object",
       "title": "Alert Routing Configuration",
       "description": "Per-tenant alert routing to custom receivers. Supports one primary receiver and per-alertname/metric_group overrides. Replaces _routing_defaults. See architecture-and-design.md §2.9 and cli-reference.md.",
+      "$comment": "#1339 P1 — explicit null is accepted on exactly four fields (group_by, group_wait, group_interval, repeat_interval) and nowhere else in this definition. Rationale, all measured against generate_alertmanager_routes.py with identical fixtures: on those four a null suppresses the inherited _routing_defaults value and the generated route simply omits the field, and there is no other way to express 'do not inherit this one' because the timing fields have no 'disable' sentinel. 'receiver: ~' is deliberately still rejected — it makes the tenant's ENTIRE route disappear ('WARN: missing required receiver, skipping'), so a one-character typo would silently reroute every alert for that tenant to the catch-all. 'overrides: ~' is rejected because it is a no-op (nothing above a tenant supplies overrides to opt out of) and accepting it would teach a gesture that does nothing.",
       "properties": {
         "receiver": {
           "$ref": "#/definitions/receiver",
           "title": "Primary Receiver",
-          "description": "Default receiver for alerts from this tenant. Can be webhook, email, slack, teams, rocketchat, or pagerduty."
+          "description": "Default receiver for alerts from this tenant. Can be webhook, email, slack, teams, rocketchat, or pagerduty. Null is NOT accepted here — it would drop the tenant's whole route (see $comment)."
         },
         "group_by": {
-          "type": "array",
+          "type": ["array", "null"],
           "title": "Group By Labels",
-          "description": "Alertmanager grouping labels (e.g., ['alertname', 'tenant']). Optional; defaults to Alertmanager config.",
+          "description": "Alertmanager grouping labels (e.g., ['alertname', 'tenant']). Optional; defaults to Alertmanager config. Explicit null opts out of the inherited _routing_defaults value.",
           "items": {
             "type": "string"
           },
           "examples": [["alertname", "tenant"], ["alertname", "severity", "instance"]]
         },
         "group_wait": {
-          "type": "string",
+          "type": ["string", "null"],
           "title": "Group Wait Duration",
-          "description": "Wait time before sending initial notification (Go duration, e.g., '30s'). Guardrail: 5s–5m. See architecture-and-design.md §2.9.",
+          "description": "Wait time before sending initial notification (Go duration, e.g., '30s'). Guardrail: 5s–5m. Explicit null opts out of the inherited value. See architecture-and-design.md §2.9.",
           "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
           "examples": ["30s", "1m", "5m"]
         },
         "group_interval": {
-          "type": "string",
+          "type": ["string", "null"],
           "title": "Group Interval Duration",
-          "description": "Interval between notifications for same group (Go duration, e.g., '5m'). Guardrail: 5s–5m. See architecture-and-design.md §2.9.",
+          "description": "Interval between notifications for same group (Go duration, e.g., '5m'). Guardrail: 5s–5m. Explicit null opts out of the inherited value. See architecture-and-design.md §2.9.",
           "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
           "examples": ["5s", "1m", "5m"]
         },
         "repeat_interval": {
-          "type": "string",
+          "type": ["string", "null"],
           "title": "Repeat Interval Duration",
-          "description": "Interval for re-sending unresolved alerts (Go duration, e.g., '4h'). Guardrail: 1m–72h. See architecture-and-design.md §2.9.",
+          "description": "Interval for re-sending unresolved alerts (Go duration, e.g., '4h'). Guardrail: 1m–72h. Explicit null opts out of the inherited value. See architecture-and-design.md §2.9.",
           "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
           "examples": ["1h", "4h", "24h"]
         },

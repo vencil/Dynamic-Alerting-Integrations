@@ -74,26 +74,41 @@ func TestDeepMerge_ArrayReplaceNotConcat(t *testing.T) {
 	}
 }
 
-// TestDeepMerge_NilDeletesKey — KEY trap #6 from §8.11.2.
-// YAML null (`~`) in override removes the key from result.
-func TestDeepMerge_NilDeletesKey(t *testing.T) {
+// TestDeepMerge_NilOptOutIsReservedKeysOnly — KEY trap #6 from §8.11.2,
+// narrowed by #1339. YAML null (`~`) in an override removes the key only when
+// the key is reserved (`_`-prefixed). On a threshold key it is a no-op,
+// because the emitting path (collector.go → ResolveAtWithStats) ignores it and
+// falls back to the platform default — deleting it here made /effective
+// contradict /metrics. Renamed from TestDeepMerge_NilDeletesKey, whose name
+// asserted the blanket rule that turned out to be the bug.
+func TestDeepMerge_NilOptOutIsReservedKeysOnly(t *testing.T) {
 	t.Parallel()
 	base := map[string]any{
-		"alert_group": "baseline",
-		"threshold":   map[string]any{"cpu": 70, "memory": 75},
+		"_silent_mode": "warning",
+		"alert_group":  "baseline",
+		"threshold":    map[string]any{"cpu": 70, "memory": 75},
 	}
 	over := map[string]any{
-		"alert_group": nil,
-		"threshold":   map[string]any{"memory": nil, "connections": 50},
+		"_silent_mode": nil,
+		"alert_group":  nil,
+		"threshold":    map[string]any{"memory": nil, "connections": 50},
 	}
 	got := deepMerge(base, over)
 
-	if _, has := got["alert_group"]; has {
-		t.Errorf("alert_group should have been deleted, got %v", got["alert_group"])
+	// Reserved (`_`-prefixed) key: the ADR-017 opt-out still applies.
+	if _, has := got["_silent_mode"]; has {
+		t.Errorf("_silent_mode should have been deleted, got %v", got["_silent_mode"])
+	}
+	// Non-reserved key: null is NOT an opt-out any more (#1339 P0). It used
+	// to delete, which made GET /tenants/{id}/effective report a threshold
+	// as gone while collector.go was still emitting the platform default
+	// for it. Use "disable" to stop alerting on a threshold key.
+	if got["alert_group"] != "baseline" {
+		t.Errorf("alert_group=%v, want baseline (null is not an opt-out on a non-reserved key)", got["alert_group"])
 	}
 	th := got["threshold"].(map[string]any)
-	if _, has := th["memory"]; has {
-		t.Errorf("threshold.memory should have been deleted, got %v", th["memory"])
+	if th["memory"] != 75 {
+		t.Errorf("threshold.memory=%v, want 75 (the rule applies at every depth)", th["memory"])
 	}
 	if th["cpu"] != 70 {
 		t.Errorf("threshold.cpu=%v, want 70 (preserved)", th["cpu"])

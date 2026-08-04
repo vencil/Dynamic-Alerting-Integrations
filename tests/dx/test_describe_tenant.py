@@ -48,12 +48,18 @@ class TestDeepMerge:
         assert result["config"] == {"x": 1}
 
     def test_deep_merge_null_optout(self):
-        base = {"a": 1, "b": 2, "c": {"x": 10, "y": 20}}
-        override = {"a": None, "c": {"y": None}}
+        # #1339: the null opt-out is per-key. Reserved (`_`-prefixed) keys are
+        # deleted; threshold keys are NOT — the exporter's emitting path
+        # ignores a null there and keeps using the platform default, so a
+        # diagnostic that deleted the key would contradict /metrics. The
+        # sanctioned way to stop alerting on a threshold key is "disable".
+        base = {"_silent_mode": "warning", "a": 1, "b": 2, "c": {"x": 10, "y": 20, "_z": 30}}
+        override = {"_silent_mode": None, "a": None, "c": {"y": None, "_z": None}}
         result = dt.deep_merge(base, override)
-        assert "a" not in result
+        assert "_silent_mode" not in result, "reserved key: null still opts out"
+        assert result["a"] == 1, "threshold key: null must not delete the inherited value"
         assert result["b"] == 2
-        assert result["c"] == {"x": 10}
+        assert result["c"] == {"x": 10, "y": 20}, "same rule applies at depth"
 
     def test_deep_merge_metadata_skip(self):
         base = {"_metadata": {"v": 1}, "config": {"x": 10}}
