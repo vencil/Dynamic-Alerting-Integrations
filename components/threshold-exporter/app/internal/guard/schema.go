@@ -8,12 +8,23 @@ package guard
 // SeverityError finding scoped to that tenant + field.
 //
 // Why nil is treated as "missing" rather than "explicitly cleared":
-// in ADR-017 deepMerge semantics, YAML null in an override DELETES
-// the inherited key, so a tenant that arrives at the schema check
-// with `field=nil` at a required path has effectively opted out of
-// the requirement. That's exactly the dangling-defaults scenario
-// this guard exists to catch — flagging it as an error is the
-// intended behaviour.
+// a required path that resolves to nil carries no value for the
+// exporter to act on, however it got there. That is the
+// dangling-defaults scenario this guard exists to catch.
+//
+// ⚠️ Rationale updated by #1339. It used to read "YAML null in an
+// override DELETES the inherited key", which was the blanket ADR-017
+// rule at the time. The rule is now per-key: null deletes only a
+// reserved (`_`-prefixed) key; on a THRESHOLD key it is a no-op,
+// because the emitting path (collector.go → ResolveAtWithStats)
+// ignores it and falls back to the platform default. Deleting it here
+// would have flagged a tenant whose series is being exported fine.
+//
+// So `cpu: ~` in a tenant override no longer reaches this check as
+// missing. The reachable ways a required path still lands on nil are
+// (a) neither the defaults chain nor the tenant ever supplied it, and
+// (b) a nil nested inside a subtree the tenant introduced wholesale —
+// deepMerge copies a brand-new subtree verbatim, nils included.
 //
 // PR-1 doesn't enforce field types or value ranges. PR-2/3 may add
 // a `RequiredFieldSpec` shape with type + range constraints once

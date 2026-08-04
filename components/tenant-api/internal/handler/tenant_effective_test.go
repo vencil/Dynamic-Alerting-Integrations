@@ -265,10 +265,23 @@ func TestGetTenantEffective_HashChangesOnContentEdit(t *testing.T) {
 	}
 }
 
-// TestGetTenantEffective_NullDeletesInheritedKey verifies that YAML `null` in
-// a tenant override deletes the inherited default — matching
-// describe_tenant.py trap #6.
-func TestGetTenantEffective_NullDeletesInheritedKey(t *testing.T) {
+// TestGetTenantEffective_NullOnThresholdKeepsInherited — #1339 P0.
+//
+// This endpoint is what a customer calls to ask "why is this alert still
+// firing?", so its answer has to be the one the exporter is acting on. YAML
+// null on a THRESHOLD key does not opt out: collector.go →
+// ResolveAtWithStats decodes it as an empty ScheduledValue.Default, warns,
+// and falls back to the platform default. So the inherited "80" must still
+// be reported here.
+//
+// This test previously asserted the opposite (named
+// TestGetTenantEffective_NullDeletesInheritedKey, citing the blanket ADR-017
+// rule). That is precisely how the contradiction shipped: /effective claimed
+// the key was gone while /metrics carried it. To stop alerting on a
+// threshold key the tenant writes "disable", not null — and null is rejected
+// by tenant-config.schema.json anyway, because it is indistinguishable from
+// a half-typed line.
+func TestGetTenantEffective_NullOnThresholdKeepsInherited(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
@@ -290,8 +303,8 @@ func TestGetTenantEffective_NullDeletesInheritedKey(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	if _, present := ec.EffectiveConfig["mysql_connections"]; present {
-		t.Errorf("mysql_connections should be deleted by YAML null; got %v", ec.EffectiveConfig["mysql_connections"])
+	if got := ec.EffectiveConfig["mysql_connections"]; got != "80" {
+		t.Errorf("mysql_connections = %v, want \"80\" — /effective must report what the exporter emits", got)
 	}
 	if got := ec.EffectiveConfig["mysql_threads_running"]; got != "90" {
 		t.Errorf("mysql_threads_running = %v, want \"90\" (unaffected)", got)

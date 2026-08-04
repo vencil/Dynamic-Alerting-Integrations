@@ -59,16 +59,27 @@ def deep_merge(base: dict, override: dict) -> dict:
     - Dict fields: deep merge (child adds new keys, overrides same keys)
     - Array fields: REPLACE (not concat)
     - Scalar fields: child overrides parent
-    - Explicit None/null: deletes parent's key
+    - Explicit None/null: deletes parent's key — RESERVED (`_`-prefixed) keys
+      only. On a threshold key it is a no-op: the exporter's emitting path
+      (collector.go -> ResolveAtWithStats) ignores the null and falls back to
+      the platform default, so a diagnostic that deleted the key would
+      contradict what /metrics is actually emitting (#1339 P0). Use "disable"
+      to stop alerting on a threshold key.
     - _metadata: never inherited (skipped in merge)
+
+    MUST stay in lockstep with pkg/config/hierarchy.go deepMerge — the golden
+    fixtures under tests/golden/ pin both against the same expected output.
     """
     result = copy.deepcopy(base)
     for k, v in override.items():
         if k == "_metadata":
             continue  # _metadata is never inherited
         if v is None:
-            result.pop(k, None)  # explicit null = opt-out
-        elif isinstance(v, dict) and isinstance(result.get(k), dict):
+            if k.startswith("_"):
+                result.pop(k, None)  # explicit null = opt-out (reserved keys)
+            # threshold key: null is NOT an opt-out — keep the inherited value
+            continue
+        if isinstance(v, dict) and isinstance(result.get(k), dict):
             result[k] = deep_merge(result[k], v)
         else:
             result[k] = copy.deepcopy(v)

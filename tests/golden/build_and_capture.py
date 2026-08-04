@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Build 7 golden fixture scenarios, run describe_tenant.py against each,
+Build the golden fixture scenarios, run describe_tenant.py against each,
 capture expected source_hash + merged_hash, emit golden.json.
 
 Scenarios cover every deep_merge / inheritance semantic in ADR-017
@@ -185,6 +185,35 @@ def s_metadata_skipped():
 """)
 
 
+# -------------------------------------------------------------------------
+# Scenario 8: null on a THRESHOLD key is not an opt-out (#1339 P0)
+#
+# Every other fixture here uses the synthetic `threshold: {cpu, memory}` /
+# `alert_group` shape, which no shipped _defaults.yaml has — that is why this
+# regression could sit behind a green parity suite. This one uses the REAL
+# shape: `defaults:` holds flat metric keys (unquoted numbers) and tenant
+# values are quoted strings.
+#
+# Pins all three states of the threshold tri-state at once:
+#   mysql_connections: ~          -> null is NOT an opt-out; 80 is retained,
+#                                    because collector.go emits 80 for it
+#   container_memory: "disable"   -> the sanctioned way to stop alerting
+#   redis_connected_clients       -> omitted, inherits 5000
+# -------------------------------------------------------------------------
+def s_opt_out_null_threshold():
+    d = reset("opt-out-null-threshold")
+    write(d / "_defaults.yaml", """defaults:
+  mysql_connections: 80
+  container_memory: 85
+  redis_connected_clients: 5000
+""")
+    write(d / "tenants.yaml", """tenants:
+  tenant-null:
+    mysql_connections: ~
+    container_memory: "disable"
+""")
+
+
 SCENARIOS = [
     ("flat", "tenant-a", s_flat),
     ("l0-only", "tenant-b", s_l0_only),
@@ -193,6 +222,7 @@ SCENARIOS = [
     ("mixed-mode-hier", "tenant-hier", None),               # no re-build
     ("array-replace", "tenant-arr", s_array_replace),
     ("opt-out-null", "tenant-optout", s_opt_out_null),
+    ("opt-out-null-threshold", "tenant-null", s_opt_out_null_threshold),
     ("metadata-skipped", "tenant-meta", s_metadata_skipped),
 ]
 
@@ -207,7 +237,16 @@ def run_describe(scenario_dir: str, tenant_id: str) -> dict:
         "--show-sources",
         "--format", "json",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    # encoding= is required, not cosmetic: describe_tenant.py emits non-ASCII
+    # (emoji status markers) and a Windows host defaults text mode to cp950,
+    # which raises UnicodeDecodeError before we ever see the JSON.
+    # 120s, not 30s: describe_tenant walks the fixture tree recursively, and on
+    # a Windows-mounted worktree that walk is I/O-bound to the point of taking
+    # ~34s wall for the deepest fixture (measured: 0.09s user, 0.08s sys — it is
+    # all filesystem latency, not compute). A 30s cap turned a cold cache into a
+    # TimeoutExpired traceback that reads like a hang in the tool under test.
+    result = subprocess.run(cmd, capture_output=True, text=True,
+                            encoding="utf-8", timeout=120)
     if result.returncode != 0:
         print(f"FAIL {scenario_dir}:{tenant_id}: {result.stderr}", file=sys.stderr)
         return {"error": result.stderr}
@@ -225,6 +264,7 @@ def main() -> int:
         "mixed-mode-hier": "mixed-mode",
         "array-replace": "array-replace",
         "opt-out-null": "opt-out-null",
+        "opt-out-null-threshold": "opt-out-null-threshold",
         "metadata-skipped": "metadata-skipped",
     }
     for scenario, tenant_id, builder in SCENARIOS:
@@ -252,7 +292,10 @@ def main() -> int:
         })
 
     out = HERE / "golden.json"
-    out.write_text(json.dumps(golden, indent=2, sort_keys=True), encoding="utf-8")
+    # Trailing newline is not cosmetic: without it the end-of-file-fixer hook
+    # rewrites golden.json on every commit, so each regeneration would show a
+    # spurious one-line diff against the committed copy.
+    out.write_text(json.dumps(golden, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"Wrote {out}")
     print(f"Captured {len(golden)} scenarios")
     for g in golden:

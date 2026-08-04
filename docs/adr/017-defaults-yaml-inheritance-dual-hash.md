@@ -59,7 +59,19 @@ conf.d/
 - **Dict/Map 欄位**：deep merge（子層新增的 key 會保留，相同 key 子層覆蓋父層）
 - **Array/List 欄位**：**replace，不 concat**（避免語意歧義 — "我覆蓋了 group_by，怎麼多出舊值？"）
 - **Scalar 欄位**：子層覆蓋父層
-- **Null / 空值**：顯式 `null` 會刪除父層的值（opt-out pattern）
+- **Null 值 — 依欄位而分，不是通則**（#1339 拆開原本合寫的一行）：
+  - **路由的四個欄位**（`_routing` 底下的 `group_by` / `group_wait` /
+    `group_interval` / `repeat_interval`）：顯式 `null` **退出繼承**，產出的 route
+    省略該欄位。這是唯一的表達方式——這些時間欄位沒有 `"disable"` 哨兵值。
+    `_routing.receiver` 與 `_routing.overrides` **不適用**：前者會讓該租戶整條
+    route 消失（告警落到 catch-all），後者無上層可退。
+  - **閾值 key**：顯式 `null` **不退出繼承**，請改用 `"disable"`。發射面
+    （`collector.go` → `ResolveAtWithStats`）本來就會忽略 null 並回退平台預設；
+    診斷面（`/effective`、`describe_tenant`、simulate）已於 #1339 對齊。
+- **⚠️ 「空值」與 null 要分開講**：`mysql_connections: ~` 與 `mysql_connections:`
+  對 YAML 是**完全相同的東西**。所以若讓閾值面的 null 生效，等於明文規定
+  「打到一半忘了填」＝安靜關掉一條告警。這就是閾值面不支援 null 的理由：
+  意外要走向**吵**，不能走向**靜**。
 - **`_metadata` 欄位不繼承**：每個 tenant 的 `_metadata` 僅來自自身 YAML + 路徑推斷（ADR-016）
 
 ```yaml

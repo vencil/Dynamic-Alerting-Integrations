@@ -66,12 +66,20 @@ func TestRun_MissingRequired_ExitsOne(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
 	testutil.WriteTree(t, tmp, map[string]string{
-		"conf.d/_defaults.yaml": "defaults:\n  cpu: 70\n",
+		// The platform declares cpu but supplies no default for it (the
+		// `optional_overrides:` shape). tenant-a sets its own; tenant-b
+		// never does, so cpu is absent from tenant-b's effective config
+		// and the guard must flag it.
+		//
+		// This used to be written as `tenant-b: {cpu: ~}`, on the old
+		// blanket ADR-017 rule that a null deletes the inherited default.
+		// #1339 narrowed that rule: on a threshold key a null is a no-op,
+		// because collector.go keeps emitting the platform default for it
+		// — so that fixture no longer describes a tenant that is missing
+		// anything. See TestRun_NullThreshold_IsNotMissing below.
+		"conf.d/_defaults.yaml": "defaults:\n  mem: 70\n",
 		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",
-		// tenant-b has cpu null in its override → ADR-017 says null
-		// deletes the inherited default, so the merged map ends up
-		// with cpu absent. The guard should flag this as missing.
-		"conf.d/tenant-b.yaml": "tenants:\n  tenant-b:\n    cpu: ~\n",
+		"conf.d/tenant-b.yaml":  "tenants:\n  tenant-b:\n    mem: 75\n",
 	})
 	code, stdout, _ := runOnce(t,
 		"--config-dir", filepath.Join(tmp, "conf.d"),
@@ -85,6 +93,30 @@ func TestRun_MissingRequired_ExitsOne(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "missing_required") {
 		t.Errorf("stdout should list missing_required kind: %q", stdout)
+	}
+}
+
+// TestRun_NullThreshold_IsNotMissing — #1339. A null on a threshold key is
+// not an opt-out, so the guard must NOT report the tenant as missing the
+// field: collector.go still exports the platform default for it, and a guard
+// that blocked the merge here would be blocking on a phantom.
+func TestRun_NullThreshold_IsNotMissing(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	testutil.WriteTree(t, tmp, map[string]string{
+		"conf.d/_defaults.yaml": "defaults:\n  cpu: 70\n",
+		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",
+		"conf.d/tenant-b.yaml":  "tenants:\n  tenant-b:\n    cpu: ~\n",
+	})
+	code, stdout, _ := runOnce(t,
+		"--config-dir", filepath.Join(tmp, "conf.d"),
+		"--required-fields", "cpu",
+	)
+	if code != exitOK {
+		t.Errorf("exit = %d, want %d (cpu is inherited, not missing). stdout=%q", code, exitOK, stdout)
+	}
+	if strings.Contains(stdout, "missing_required") {
+		t.Errorf("null on a threshold key must not be reported as missing: %q", stdout)
 	}
 }
 

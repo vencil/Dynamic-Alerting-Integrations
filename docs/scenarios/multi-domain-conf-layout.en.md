@@ -163,11 +163,15 @@ tenants:
         url: "https://hooks.tenant-a.example.com/alerts"   # destination)
 ```
 
-> ⚠️ ADR-017 describes an explicit-`null` opt-out for inherited values, but
-> `tenant-config.schema.json` does **not** accept `null` for any tenant field
-> today (measured: both `mysql_connections: null` and `_routing: null` are
-> rejected). Until that tension is resolved, override the value rather than
-> nulling it.
+> ℹ️ **The explicit-`null` opt-out is per-field** (settled and implemented in
+> #1339): only `group_by` / `group_wait` / `group_interval` / `repeat_interval`
+> under `_routing` accept `null`, and the effect is that the generated route
+> omits that field. `_routing.receiver: ~` is **still rejected** — it would make
+> the tenant's entire route disappear and drop its alerts to the catch-all.
+> **For threshold keys always use `"disable"`**, never `null`:
+> `mysql_connections: ~` and a half-typed `mysql_connections:` are identical to
+> YAML, which is why the schema blocks it. See
+> [ADR-017 §Merge Semantics](../adr/017-defaults-yaml-inheritance-dual-hash.en.md).
 
 ## Operational Guide
 
