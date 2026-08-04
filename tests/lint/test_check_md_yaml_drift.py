@@ -221,6 +221,59 @@ def test_enforced_routing_keeps_its_own_extra_fields(tmp_path: Path) -> None:
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
 
 
+def test_bare_tenants_block_is_selected(tmp_path: Path) -> None:
+    """The widening this file's docstring describes: a plain tenant FILE (just
+    `tenants:`, no marker key) is a documented config example and is judged."""
+    # An unquoted number: tenant values are ScheduledValue (string | object).
+    # Carries no marker key, so this block is selected ONLY by the `tenants`
+    # rule — which is exactly what this test pins.
+    body = "```yaml\ntenants:\n  db-a:\n    mysql_connections: 123\n```\n"
+    r = _run(_mkrepo(tmp_path, "t.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout
+    assert "(tenant-file)" in r.stdout
+
+
+def test_ignore_marker_exempts_and_is_reported(tmp_path: Path) -> None:
+    """A deliberate ❌ counter-example opts out — but never silently. The skip
+    is printed with the reason the marker had to supply, so `git grep
+    'md-yaml-drift: ignore'` plus the report is the full audit."""
+    body = (
+        "<!-- md-yaml-drift: ignore — deliberate counter-example -->\n"
+        '```yaml\ntenants:\n  db-a:\n    bogus_key: "1"\n```\n'
+    )
+    r = _run(_mkrepo(tmp_path, "ig.md", body))
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    assert "Blocks exempted by marker:   1" in r.stdout
+    assert "deliberate counter-example" in r.stdout
+    assert "docs/ig.md:2" in r.stdout
+
+
+def test_ignore_marker_requires_a_reason(tmp_path: Path) -> None:
+    """⛔ A bare `ignore` must NOT exempt anything. An exemption without a stated
+    reason is the silent-exclusion pattern this marker exists to avoid."""
+    body = (
+        "<!-- md-yaml-drift: ignore -->\n"
+        "```yaml\ntenants:\n  db-a:\n    mysql_connections: 123\n```\n"
+    )
+    r = _run(_mkrepo(tmp_path, "bare.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout
+    assert "123" in r.stdout
+
+
+def test_ignore_marker_only_applies_to_the_next_block(tmp_path: Path) -> None:
+    """Scope check: the marker exempts ONE block, not the rest of the file."""
+    body = (
+        "<!-- md-yaml-drift: ignore — first only -->\n"
+        "```yaml\ntenants:\n  a:\n    mysql_connections: 111\n```\n"
+        "\ntext between\n\n"
+        "```yaml\ntenants:\n  b:\n    mysql_connections: 222\n```\n"
+    )
+    r = _run(_mkrepo(tmp_path, "scope.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout
+    assert "222" in r.stdout
+    assert "111" not in r.stdout
+
+
 def test_unparseable_block_is_left_to_the_fence_check(tmp_path: Path) -> None:
     """Fence hygiene is a separate hook; reporting it here too would let a
     mislabelled directory tree fail the schema gate for an unrelated reason."""

@@ -370,6 +370,8 @@ tenants:
           receiver:
             type: "email"
             to: ["dba-team@example.com"]
+            smarthost: "smtp.example.com:587"
+            from: "alerting@example.com"
 ```
 
 ### 優先級

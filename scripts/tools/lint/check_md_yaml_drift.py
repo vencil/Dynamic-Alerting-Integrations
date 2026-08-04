@@ -57,6 +57,19 @@ PLATFORM_KEYS = {
     "max_metrics_per_tenant", "_routing_defaults", "_routing_enforced",
 }
 
+# Opt-out marker for a block that is WRONG ON PURPOSE — the `#### ❌` style
+# counter-example. Placed on the line above the fence:
+#
+#     <!-- md-yaml-drift: ignore — <reason> -->
+#     ```yaml
+#
+# A reason is mandatory (the regex will not match a bare `ignore`), and every
+# skip is printed in the report. Deliberately a marker in the DOC rather than a
+# filename list in this script: a list rots silently as docs move, and it hides
+# from the person reading the example why it is exempt. Exemptions must be
+# greppable — `git grep 'md-yaml-drift: ignore'` is the audit.
+IGNORE_RE = re.compile(r"<!--\s*md-yaml-drift:\s*ignore\s*[—\-:]\s*(\S.*?)\s*-->")
+
 # File-header comment naming a YAML file, e.g. `# conf.d/_defaults.yaml`.
 # Anchored at column 0: an indented `#` that merely mentions a filename in
 # passing is prose, and treating it as a boundary would sever a block
@@ -96,10 +109,13 @@ class MdYamlDriftChecker:
             except (json.JSONDecodeError, OSError) as e:
                 print(f"WARNING: Cannot load {name}: {e}", file=sys.stderr)
 
-    def _extract_yaml_blocks(self, filepath: Path) -> List[Tuple[int, str]]:
+    def _extract_yaml_blocks(self, filepath: Path,
+                             skipped: List[str] = None) -> List[Tuple[int, str]]:
         """Extract ```yaml code blocks from a markdown file.
 
-        Returns list of (line_number, yaml_content) tuples.
+        Returns list of (line_number, yaml_content) tuples. A block preceded by
+        an `md-yaml-drift: ignore — <reason>` marker is left out and, when
+        `skipped` is given, recorded there so the report can name it.
         """
         blocks = []
         try:
@@ -108,12 +124,38 @@ class MdYamlDriftChecker:
             return blocks
 
         in_yaml = False
+        ignoring = False   # inside a block an ignore marker exempted
         block_start = 0
         block_lines = []
+        lines = content.splitlines()
 
-        for i, line in enumerate(content.splitlines(), 1):
+        for i, line in enumerate(lines, 1):
             stripped = line.strip()
+            if ignoring:
+                # Consume the exempted block wholly, so nothing inside it can be
+                # read as a fence and desynchronise the state machine.
+                if stripped == "```":
+                    ignoring = False
+                continue
             if stripped in ("```yaml", "```yml") and not in_yaml:
+                # Look back past blank lines for an ignore marker.
+                marker = None
+                for back in range(i - 2, max(i - 4, -1), -1):
+                    prev = lines[back].strip()
+                    if not prev:
+                        continue
+                    marker = IGNORE_RE.search(prev)
+                    break
+                if marker:
+                    ignoring = True
+                    if skipped is not None:
+                        try:
+                            rel = str(filepath.relative_to(self.repo_root))
+                        except ValueError:
+                            rel = str(filepath)
+                        skipped.append(
+                            f"{rel.replace(os.sep, '/')}:{i} — {marker.group(1)}")
+                    continue
                 in_yaml = True
                 block_start = i
                 block_lines = []
@@ -125,6 +167,17 @@ class MdYamlDriftChecker:
                 block_lines.append(line)
 
         return blocks
+
+    @staticmethod
+    def _print_skipped(skipped: List[str]) -> None:
+        """Name every exempted block. A gate that silently drops inputs reads as
+        'covered everything' when it did not — so exemptions are always printed,
+        with the reason the marker had to supply."""
+        if not skipped:
+            return
+        print(f"Blocks exempted by marker:   {len(skipped)}")
+        for s in skipped:
+            print(f"    {s}")
 
     @staticmethod
     def _split_documented_files(block_lines: List[str]) -> List[Tuple[int, str]]:
@@ -160,20 +213,22 @@ class MdYamlDriftChecker:
         top-level key such as `state_flters` passed unnoticed — the Go loader is
         non-strict and cannot see it either.
 
-        ⚠️ Deliberately NOT selecting on a bare top-level `tenants:` yet, though
-        that is the obvious next widening. Measured: it would add 99 units and
-        surface ~15 failures that are four different things, not one —
-        genuinely broken examples (an email receiver with no `smarthost`, same
-        class as the hands-on-lab fix), examples that are invalid ON PURPOSE
-        (docs/internal/editor-schema-validation.md demonstrates what the editor
-        rejects), `...` ellipsis placeholders, and a whole second config model
-        (`alerts.threshold` / `receivers` in manage-at-scale + multi-domain).
-        Each needs its own call, so folding them in here would mean this gate
-        cannot go green — the exact reason it has sat parked. Tracked as the
-        follow-up rather than smuggled in.
+        A bare top-level `tenants:` counts too. That widening was deferred once
+        because it surfaced 18 failures spanning four unrelated causes, and a
+        gate that cannot go green is how this one ended up parked. They were
+        since triaged individually: real defects fixed (a state filter given a
+        `_silent_mode` value; an email receiver with no `smarthost`; an unquoted
+        tenant threshold in the very doc that teaches schema validation); one
+        genuine `#### ❌` counter-example given an explicit ignore marker; and a
+        config model that was never implemented anywhere — `alerts.threshold` /
+        `receivers` / a `"_defaults"` pseudo-tenant / `_cluster`, zero
+        occurrences in Go structs, both schemas, every shipping conf.d and every
+        golden fixture — rewritten to the real shapes.
         """
         if not isinstance(data, dict):
             return False
+        if "tenants" in data:
+            return True
         for key in data:
             if key in self.TENANT_CONFIG_MARKERS or key in PLATFORM_KEYS:
                 return True
@@ -233,11 +288,12 @@ class MdYamlDriftChecker:
         not attempted. Pinned by tests/lint/test_check_md_yaml_fences.py.
         """
         issues = []
+        skipped: List[str] = []
         total = 0
         docs_dir = self.repo_root / "docs"
         for md_file in sorted(docs_dir.rglob("*.md")):
             rel_path = str(md_file.relative_to(self.repo_root)).replace(os.sep, "/")
-            for line_num, yaml_content in self._extract_yaml_blocks(md_file):
+            for line_num, yaml_content in self._extract_yaml_blocks(md_file, skipped):
                 total += 1
                 try:
                     list(yaml.safe_load_all(yaml_content))
@@ -252,6 +308,7 @@ class MdYamlDriftChecker:
         print("MARKDOWN YAML FENCE HYGIENE")
         print("=" * 60)
         print(f"Fenced yaml blocks scanned:  {total}")
+        self._print_skipped(skipped)
         print(f"Blocks that do not parse:    {len(issues)}")
         print()
         if not issues:
@@ -282,9 +339,10 @@ class MdYamlDriftChecker:
         nothing to do with schemas.
         """
         docs_dir = self.repo_root / "docs"
+        self._skipped = []
         for md_file in sorted(docs_dir.rglob("*.md")):
             rel_path = str(md_file.relative_to(self.repo_root)).replace(os.sep, "/")
-            for line_num, yaml_content in self._extract_yaml_blocks(md_file):
+            for line_num, yaml_content in self._extract_yaml_blocks(md_file, self._skipped):
                 for offset, text in self._split_documented_files(yaml_content.split("\n")):
                     try:
                         docs = list(yaml.safe_load_all(text))
@@ -395,6 +453,7 @@ class MdYamlDriftChecker:
         print("MARKDOWN YAML DRIFT CHECK")
         print("=" * 60)
         print(f"Config units checked:        {checked}")
+        self._print_skipped(getattr(self, "_skipped", []))
         for kind in sorted(by_kind):
             print(f"  {kind:<24} {by_kind[kind]}")
         print(f"Schema violations:           {len(issues)}")

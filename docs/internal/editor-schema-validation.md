@@ -62,7 +62,7 @@ lang: zh
 # yaml-language-server: $schema=https://raw.githubusercontent.com/vencil/Dynamic-Alerting-Integrations/main/docs/schemas/tenant-config.schema.json
 tenants:
   my-tenant:
-    mysql_connections: 90
+    mysql_connections: "90"
 ```
 
 > ⚠️ **相對 modeline 會腐敗**：`$schema=` 的相對路徑是相對「該 YAML 檔自身位置」。若有人把帶 `../../docs/...` modeline 的檔**複製到別的目錄深度**（例如 `conf.d/asia/db-c.yaml`），相對層數就錯了 → 該檔**靜默失去驗證**（沒紅線 ≠ 正確）。絕對 https URL 與**位置無關**、複製到哪都對。（注意 `$schema=/docs/...` 的前導斜線在多數 language server 是**檔案系統絕對路徑**、非 workspace-root，不可靠。）

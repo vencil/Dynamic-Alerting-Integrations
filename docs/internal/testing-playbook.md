@@ -280,7 +280,10 @@ tenants:
     mysql_connections: "70"
     _routing:
       receiver: { type: "webhook", url: "..." }
+```
 
+<!-- md-yaml-drift: ignore — deliberate ❌ counter-example: the flat shape this section tells tools NOT to expect -->
+```yaml
 # ❌ flat 格式（僅用於簡化測試或文件範例）
 mysql_connections: "70"
 ```

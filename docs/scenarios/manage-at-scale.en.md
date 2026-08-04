@@ -49,13 +49,15 @@ python scripts/tools/dx/describe_tenant.py --all \
 #### B. Modify Domain Defaults
 
 ```yaml
-# conf.d/finance/_defaults.yaml
-tenants:
-  "_defaults":
-    alerts:
-      threshold:
-        MariaDBHighConnections: 95    # Raised from 90 to 95
+# conf.d/finance/_defaults.yaml — a domain-level platform file
+defaults:
+  mysql_connections: 95   # raised from the finance-domain 90
 ```
+
+> Thresholds are keyed by the **metric key** (`mysql_connections`), not by alert
+> name: `MariaDBHighConnections` consumes `tenant:alert_threshold:mysql_connections`,
+> so one key can drive several alerts. Platform values here are unquoted numbers
+> (`map[string]float64`); tenant overrides are quoted strings.
 
 #### C. Generate Post-Change Effective Config Snapshot
 
@@ -90,9 +92,9 @@ Example output:
 <summary>Substantive changes: 187 tenants</summary>
 
 - **tenant-fin-001**
-  - `alerts.threshold.MariaDBHighConnections`: 90 → 95
+  - `mysql_connections`: 90 → 95
 - **tenant-fin-002**
-  - `alerts.threshold.MariaDBHighConnections`: 90 → 95
+  - `mysql_connections`: 90 → 95
 ...
 </details>
 ```
@@ -107,7 +109,7 @@ The Blast Radius CI Bot will automatically post a report on the PR, allowing rev
 
 ### Problem
 
-Tenant `tenant-fin-042`'s `DiskUsageHigh` alert keeps firing. You want to find which layer the threshold comes from so you can modify it in the right place.
+Tenant `tenant-fin-042`'s `MariaDBHighConnections` alert keeps firing. You want to find which layer its threshold comes from so you can modify it in the right place.
 
 ### Steps
 
@@ -117,31 +119,35 @@ python scripts/tools/dx/describe_tenant.py tenant-fin-042 --show-sources --conf-
 
 Example output:
 
+```json
+{
+  "tenant_id": "tenant-fin-042",
+  "source_file": "finance/us-east/prod/tenant-fin-042.yaml",
+  "source_hash": "2748782e0e18b18b",
+  "merged_hash": "afe82e02e229272f",
+  "defaults_chain": [
+    "_defaults.yaml",
+    "finance/_defaults.yaml"
+  ],
+  "effective_config": {
+    "mysql_connections": 90,
+    "container_memory": "92"
+  }
+}
 ```
-tenant-fin-042 (finance/us-east/prod/tenant-fin-042.yaml)
-═════════════════════════════════════════════════════════
-Configuration sources (order of merge):
-  1. conf.d/_defaults.yaml (global)
-  2. conf.d/finance/_defaults.yaml (domain: finance)
-  3. conf.d/finance/us-east/_defaults.yaml (region: us-east)
-  4. conf.d/finance/us-east/prod/tenant-fin-042.yaml (tenant-specific)
 
-Effective configuration:
-  alerts.threshold.DiskUsageHigh: 85 (from: domain)
-  alerts.threshold.MariaDBHighConnections: 90 (from: domain)
-  receivers[0].type: slack (from: global)
-  timezone: America/New_York (from: region)
-```
-
-The output shows `DiskUsageHigh: 85` comes from the **domain layer** (`finance/_defaults.yaml`). To adjust only for this tenant, override in the tenant file:
+`defaults_chain` is the merge order, innermost last. `mysql_connections: 90` is an
+unquoted number, so it came from a platform `_defaults.yaml` — and the chain shows
+`finance/_defaults.yaml` as the innermost one that sets it, i.e. the **domain**
+layer. (`container_memory` is a quoted string: that one the tenant set itself.)
+To adjust `mysql_connections` for this tenant only, override it in the tenant file:
 
 ```yaml
 # conf.d/finance/us-east/prod/tenant-fin-042.yaml
 tenants:
   tenant-fin-042:
-    alerts:
-      threshold:
-        DiskUsageHigh: 92    # Raise threshold for this tenant only
+    mysql_connections: "120"   # raise for this tenant only; quoted — tenant
+                               # values are ScheduledValue (string | object)
 ```
 
 ## Scenario 3: Compare Configuration Differences Between Two Tenants
@@ -163,14 +169,13 @@ Example output:
   "tenant_a": "tenant-fin-001",
   "tenant_b": "tenant-fin-080",
   "only_in_tenant-fin-001": {
-    "timezone": "America/New_York"
+    "container_cpu": "75"
   },
   "only_in_tenant-fin-080": {
-    "_signature": {"mode": "gdpr-compatible"},
-    "timezone": "Europe/Dublin"
+    "pg_replication_lag": "60"
   },
   "different": {
-    "_encryption.enabled": {"a": false, "b": true}
+    "mysql_connections": {"a": "90", "b": "120"}
   }
 }
 ```
@@ -209,8 +214,8 @@ PR submitted → CI triggers blast-radius.yml
 
 <details>
 <summary>Substantive changes: 12 tenants</summary>
-- **tenant-fin-001**: `alerts.threshold.MariaDBHighConnections`: 90 → 95
-- **tenant-fin-002**: `alerts.threshold.MariaDBHighConnections`: 90 → 95
+- **tenant-fin-001**: `mysql_connections`: 90 → 95
+- **tenant-fin-002**: `mysql_connections`: 90 → 95
 ...
 </details>
 

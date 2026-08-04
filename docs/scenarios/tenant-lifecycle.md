@@ -303,10 +303,12 @@ tenants:
 # conf.d/db-product-01.yaml（中央）
 tenants:
   db-product-01:
-    _namespaces: ["prod-ns"]
-    _cluster: "edge-asia-prod"  # 指定所在邊緣叢集
+    _namespaces: ["prod-ns"]   # 此租戶擁有哪些邊緣 namespace
     pg_connections: "70"
-    _routing: { ... }
+    _routing:
+      receiver:
+        type: webhook
+        url: "https://noc.example.com/asia/alerts"
 ```
 
 ## 階段 4：下架

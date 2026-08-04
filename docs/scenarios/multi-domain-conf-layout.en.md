@@ -65,7 +65,7 @@ conf.d/
 │   │       └── tenant-c.yaml             # Finance, US-East, Staging
 │   │
 │   └── eu-west/
-│       ├── _defaults.yaml                # Finance EU-West region defaults (GDPR policy, signing keys)
+│       ├── _defaults.yaml                # Finance EU-West region defaults (region-specific thresholds)
 │       └── prod/
 │           └── tenant-d.yaml             # Finance, EU-West, Prod
 │
@@ -118,28 +118,29 @@ Effective config = merge(
 Example:
 
 ```yaml
-# Level 2: conf.d/finance/_defaults.yaml
-tenants:
-  "_defaults":
-    alerts:
-      threshold:
-        MariaDBHighConnections: 90
-        DiskUsageHigh: 85
-    receivers:
-      - name: finance-channel
-        type: slack
+# Level 2: conf.d/finance/_defaults.yaml — a platform file, so thresholds live
+# under a top-level `defaults:` (unquoted numbers) and routing under
+# `_routing_defaults:`, a SIBLING of `defaults:` rather than a child of it.
+defaults:
+  mysql_connections: 90
+  container_memory: 85
 
-# Level 5: conf.d/finance/us-east/prod/tenant-a.yaml
+_routing_defaults:
+  receiver:
+    type: slack
+    api_url: "https://hooks.slack.com/services/T/B/finance"
+  group_by: ["alertname", "tenant"]
+```
+
+```yaml
+# Level 5: conf.d/finance/us-east/prod/tenant-a.yaml — a tenant file: values are
+# quoted strings, and per-tenant routing is `_routing:` inside the tenant body.
 tenants:
   tenant-a:
-    alerts:
-      threshold:
-        MariaDBHighConnections: 95      # Override: raise from 90 to 95
-        # DiskUsageHigh not specified, inherits 85
-    receivers:
-      - name: finance-channel           # Replace entire array (if new receiver needed, list finance-channel too)
-      - name: custom-webhook
-        type: http
+    mysql_connections: "95"    # Override: raise from the domain's 90
+    # container_memory not specified — inherits 85 from Level 2
+    _routing:
+      group_by: ["alertname"]  # Replaces the inherited array; it is NOT appended
 ```
 
 ### Null Value Opt-Out (Advanced)
@@ -150,12 +151,16 @@ If tenant-a wants to "disable the finance-channel receiver from Finance domain d
 # conf.d/finance/us-east/prod/tenant-a.yaml
 tenants:
   tenant-a:
-    receivers: null    # Explicit opt-out: don't inherit Finance domain default receivers
-    # Or specify new receivers
-    receivers:
-      - name: custom-webhook
-        type: http
+    _routing:                    # Layer 3 wins over the domain's _routing_defaults
+      receiver:                  # for every key it names — here the whole receiver
+        type: webhook
+        url: "https://hooks.tenant-a.example.com/alerts"
 ```
+
+> ⚠️ ADR-017 describes an explicit-`null` opt-out for inherited values, but
+> `tenant-config.schema.json` accepts `null` for no tenant field today (measured:
+> both `mysql_connections: null` and `_routing: null` are rejected). Until that
+> tension is resolved, override the value rather than nulling it.
 
 ## Operational Guide
 
@@ -181,7 +186,7 @@ Would move:
   conf.d/ops-e.yaml → conf.d/ops/tenant-e.yaml
 
 Would extract domain defaults into:
-  conf.d/finance/_defaults.yaml (common keys: alerts.threshold.MariaDBHighConnections, receivers)
+  conf.d/finance/_defaults.yaml (common keys: defaults.mysql_connections, _routing_defaults)
   conf.d/infra/_defaults.yaml
 
 No changes made. Rerun with --apply to proceed.
@@ -220,9 +225,8 @@ Configuration sources (order of merge):
   5. conf.d/finance/us-east/prod/tenant-a.yaml (tenant-specific)
 
 Effective configuration:
-  alerts.threshold.MariaDBHighConnections: 90 (from: domain)
-  receivers[0].type: slack (from: global)
-  timezone: America/New_York (from: region)
+  mysql_connections: 90 (from: domain)
+  container_memory: 85 (from: domain)
   ...
 ```
 
@@ -257,21 +261,16 @@ The system automatically searches for:
 
 ### Scenario 3: Update Region Defaults (Bulk)
 
-Example: All EU-West tenants need GDPR-compliant signing
+Example: All EU-West tenants need tighter PostgreSQL connection budgets
 
 ```bash
 cat > conf.d/finance/eu-west/_defaults.yaml << 'EOF'
-tenants:
-  "_defaults":
-    _signature:
-      algorithm: sha256
-      mode: gdpr-compatible  # EU-compliant signing
-    _encryption:
-      enabled: true
-      key_rotation_days: 90
+defaults:
+  pg_connections: 70          # EU-West runs tighter connection budgets
+  pg_replication_lag: 20
 EOF
 
-# Verify: inspect an eu-west tenant to confirm it inherited the region-level GDPR defaults
+# Verify: inspect an eu-west tenant to confirm it inherited the region-level defaults
 # (describe_tenant has no region filter; check per-tenant or via --all)
 python scripts/tools/dx/describe_tenant.py tenant-d --show-sources
 ```
@@ -312,7 +311,7 @@ The system supports both:
 
 ```bash
 # 1. Quick check effective value for a tenant (JSON output + jq for a single key)
-python scripts/tools/dx/describe_tenant.py tenant-a --format json | jq '.alerts.threshold'
+python scripts/tools/dx/describe_tenant.py tenant-a --format json | jq '.effective_config'
 
 # 2. Find all Finance tenants (under hierarchical layout, finance tenants live under conf.d/finance/)
 find conf.d/finance -name 'tenant-*.yaml'
