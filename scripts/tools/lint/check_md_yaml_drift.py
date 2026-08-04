@@ -300,6 +300,49 @@ class MdYamlDriftChecker:
                         # the first symptom of their extractors drifting apart.
                         yield rel_path, line_num + offset + 1, data
 
+    def _receiver_checks(self, data: Dict, kind: str) -> List[Tuple[Dict, Dict, str]]:
+        """Hold every `receiver:` to the one contract the generator enforces.
+
+        platform-defaults.schema.json accepts `^_routing` via an EMPTY
+        patternProperties schema, so a top-level `_routing_defaults:` /
+        `_routing_enforced:` body is validated by nothing — measured: a receiver
+        with a flat `receiver_type`, a `webhook_url` and an invented key passed
+        clean. That is 18 of the 52 documented units, the largest single group,
+        and it is the same defect class as the tenant-side one this gate was
+        built to catch.
+
+        Validating the whole routing block against `definitions.routing` would
+        be wrong (`_routing_enforced` legitimately carries `enabled:` and
+        `match:`, which that definition forbids). What IS shared is the receiver:
+        `_grar_routes.py` funnels all four shapes — tenant override (:91),
+        profile-substituted (:210), platform-enforced (:257) and tenant primary
+        (:395) — through the same `build_receiver_config`. One consumer, one
+        contract, so the receiver is checked wherever it appears.
+
+        ⚠️ Boundary, measured rather than assumed. platform-defaults.schema.json
+        leaves 11 fields loose. Two had a cross-schema oracle available and are
+        now used: `tenants` (above) and the receiver (here). Of the rest,
+        `profiles` appears in 2 documented units but tenant-config.schema.json
+        has no `profiles` definition to check it against — writing one would be
+        inventing a contract, not enforcing an existing one. The other six
+        (`_metadata`, `_routing_profile`, `_silent_mode`, `_severity_dedup`,
+        `_namespaces`, `_profile` at platform top level) appear in ZERO
+        documented units, so no machinery is built for them.
+        """
+        if not isinstance(data, dict):
+            return []
+        receiver_schema = {
+            "$ref": "#/definitions/receiver",
+            "definitions": self.schema.get("definitions", {}),
+        }
+        out: List[Tuple[Dict, Dict, str]] = []
+        for key, value in data.items():
+            if not (isinstance(key, str) and key.startswith("_routing")):
+                continue
+            if isinstance(value, dict) and isinstance(value.get("receiver"), dict):
+                out.append((receiver_schema, value["receiver"], f"{kind}:{key}.receiver"))
+        return out
+
     def run(self) -> int:
         """Execute the schema-conformance pass."""
         if jsonschema is None:
@@ -321,16 +364,30 @@ class MdYamlDriftChecker:
             schema, doc, kind = self._route(data)
             by_kind[kind] = by_kind.get(kind, 0) + 1
             checked += 1
-            try:
-                jsonschema.validate(doc, schema)
-            except jsonschema.ValidationError as e:
-                issues.append({
-                    "file": rel_path, "line": line_num, "kind": kind,
-                    "error": e.message,
-                })
-            except jsonschema.SchemaError as e:
-                print(f"ERROR: schema itself is invalid: {e}", file=sys.stderr)
-                return EXIT_CALLER_ERROR
+            # A platform file may legitimately carry a `tenants:` block, and
+            # platform-defaults.schema.json leaves that field EXPLICITLY loose
+            # ("guarded by tenant-config.schema.json when in a tenant file").
+            # Routing on the platform key alone therefore left every tenant body
+            # inside a composite example validated by nothing — measured: a flat
+            # `receiver_type` with an invented key, the exact defect class this
+            # gate exists to catch, passed clean. The two schemas are
+            # complementary here as well, so a composite is held to BOTH.
+            checks = [(schema, doc, kind)]
+            if kind == "platform" and isinstance(data.get("tenants"), dict):
+                checks.append((self.schema, {"tenants": data["tenants"]},
+                               "platform+tenants"))
+            checks.extend(self._receiver_checks(data, kind))
+            for active_schema, active_doc, active_kind in checks:
+                try:
+                    jsonschema.validate(active_doc, active_schema)
+                except jsonschema.ValidationError as e:
+                    issues.append({
+                        "file": rel_path, "line": line_num, "kind": active_kind,
+                        "error": e.message,
+                    })
+                except jsonschema.SchemaError as e:
+                    print(f"ERROR: schema itself is invalid: {e}", file=sys.stderr)
+                    return EXIT_CALLER_ERROR
             if self.verbose:
                 print(f"  OK   {rel_path}:{line_num} ({kind})")
 

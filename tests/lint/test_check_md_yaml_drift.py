@@ -127,6 +127,100 @@ def test_missing_jsonschema_fails_closed(tmp_path: Path) -> None:
     assert "jsonschema not installed" in r.stderr
 
 
+def test_composite_platform_file_also_validates_its_tenants_block(tmp_path: Path) -> None:
+    """⛔ Regression pin for a fail-open found by adversarial review.
+
+    A platform file may legitimately carry `tenants:`, and routing picks the
+    PLATFORM schema on the platform key. But platform-defaults.schema.json
+    leaves `tenants` explicitly loose (its own title: "guarded by
+    tenant-config.schema.json when in a tenant file"), so for a while every
+    tenant body inside a composite example was validated by NOTHING — this
+    exact input passed clean, reporting "✓ Every documented config example
+    matches its schema".
+
+    The defect below is the same class the gate exists to catch (a flat
+    `receiver_type` plus an invented key), so if it ever passes again the
+    routing has silently stopped holding composites to both contracts.
+    """
+    body = (
+        "```yaml\n"
+        "# conf.d/_defaults.yaml\n"
+        "defaults:\n  mysql_connections: 80\n"
+        "tenants:\n"
+        "  db-a:\n"
+        "    _routing:\n"
+        "      receiver_type: slack\n"
+        "      bogus_key: 1\n"
+        "```\n"
+    )
+    r = _run(_mkrepo(tmp_path, "composite_tenants.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout
+    assert "receiver_type" in r.stdout
+    assert "(platform+tenants)" in r.stdout
+
+
+def test_platform_file_with_valid_tenants_block_passes(tmp_path: Path) -> None:
+    """The reverse assertion: holding composites to both contracts must not
+    reject a correct one. Note the asymmetry the loader itself imposes —
+    `defaults:` values are unquoted numbers (map[string]float64), tenant values
+    are quoted strings (ScheduledValue)."""
+    body = (
+        "```yaml\n"
+        "# conf.d/_defaults.yaml\n"
+        "defaults:\n  mysql_connections: 80\n"
+        "tenants:\n"
+        "  db-a:\n"
+        '    mysql_connections: "70"\n'
+        "```\n"
+    )
+    r = _run(_mkrepo(tmp_path, "composite_ok.md", body))
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+
+
+def test_top_level_routing_receiver_is_validated(tmp_path: Path) -> None:
+    """⛔ Second fail-open found by the same adversarial sweep.
+
+    platform-defaults.schema.json accepts `^_routing` through an EMPTY
+    patternProperties schema, so a top-level `_routing_enforced:` body was
+    validated by nothing — 18 of the 52 documented units, the largest group.
+    This is the same flat-`receiver_type` class the tenant side already caught.
+    """
+    body = (
+        "```yaml\n"
+        "# conf.d/_defaults.yaml\n"
+        "_routing_enforced:\n"
+        "  enabled: true\n"
+        "  receiver:\n"
+        "    receiver_type: slack\n"
+        "    bogus: 1\n"
+        "```\n"
+    )
+    r = _run(_mkrepo(tmp_path, "enforced.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout
+    assert "_routing_enforced.receiver" in r.stdout
+
+
+def test_enforced_routing_keeps_its_own_extra_fields(tmp_path: Path) -> None:
+    """The reverse assertion, and the reason only the RECEIVER is cross-checked:
+    `_routing_enforced` legitimately carries `enabled:` and `match:`, which
+    tenant-config's `definitions.routing` forbids. Validating the whole routing
+    block against that definition would reject every correct example."""
+    body = (
+        "```yaml\n"
+        "# conf.d/_defaults.yaml\n"
+        "_routing_enforced:\n"
+        "  enabled: true\n"
+        "  receiver:\n"
+        "    type: slack\n"
+        "    api_url: https://hooks.slack.com/services/x\n"
+        "  match:\n"
+        "    - 'severity=\"critical\"'\n"
+        "```\n"
+    )
+    r = _run(_mkrepo(tmp_path, "enforced_ok.md", body))
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+
+
 def test_unparseable_block_is_left_to_the_fence_check(tmp_path: Path) -> None:
     """Fence hygiene is a separate hook; reporting it here too would let a
     mislabelled directory tree fail the schema gate for an unrelated reason."""
