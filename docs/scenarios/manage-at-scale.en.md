@@ -99,7 +99,7 @@ Example output:
 </details>
 ```
 
-Note: Tenants that have already overridden `MariaDBHighConnections` (e.g., set to 98) will not appear in the affected list.
+Note: Tenants that have already overridden `mysql_connections` themselves (e.g., set to 98) will not appear in the affected list — the override key is the metric key, not the alert name.
 
 ### E. Submit PR After Confirmation
 
@@ -175,7 +175,7 @@ Example output:
     "pg_replication_lag": "60"
   },
   "different": {
-    "mysql_connections": {"a": "90", "b": "120"}
+    "mysql_connections": {"a": "110", "b": "120"}
   }
 }
 ```

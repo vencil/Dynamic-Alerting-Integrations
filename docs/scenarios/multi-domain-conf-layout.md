@@ -151,9 +151,9 @@ tenants:
 # conf.d/finance/us-east/prod/tenant-a.yaml
 tenants:
   tenant-a:
-    _routing:                    # 層級 3 對它指名的每個 key 都勝過 domain 的
-      receiver:                  # _routing_defaults —— 這裡是整個 receiver
-        type: webhook
+    _routing:                    # 層級 5 覆蓋 domain 的 _routing_defaults，對它
+      receiver:                  # 指名的每個 key 生效 —— 這裡整個 receiver 被
+        type: webhook            # **取代**（通知照送，只是換了目的地）
         url: "https://hooks.tenant-a.example.com/alerts"
 ```
 

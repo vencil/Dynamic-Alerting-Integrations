@@ -151,16 +151,17 @@ If tenant-a wants to "disable the finance-channel receiver from Finance domain d
 # conf.d/finance/us-east/prod/tenant-a.yaml
 tenants:
   tenant-a:
-    _routing:                    # Layer 3 wins over the domain's _routing_defaults
+    _routing:                    # Level 5 overrides the domain's _routing_defaults
       receiver:                  # for every key it names — here the whole receiver
-        type: webhook
-        url: "https://hooks.tenant-a.example.com/alerts"
+        type: webhook            # is REPLACED (delivery continues, to a new
+        url: "https://hooks.tenant-a.example.com/alerts"   # destination)
 ```
 
 > ⚠️ ADR-017 describes an explicit-`null` opt-out for inherited values, but
-> `tenant-config.schema.json` accepts `null` for no tenant field today (measured:
-> both `mysql_connections: null` and `_routing: null` are rejected). Until that
-> tension is resolved, override the value rather than nulling it.
+> `tenant-config.schema.json` does **not** accept `null` for any tenant field
+> today (measured: both `mysql_connections: null` and `_routing: null` are
+> rejected). Until that tension is resolved, override the value rather than
+> nulling it.
 
 ## Operational Guide
 

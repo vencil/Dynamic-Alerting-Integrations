@@ -99,7 +99,7 @@ python3 scripts/tools/ops/blast_radius.py \
 </details>
 ```
 
-注意：已自行覆蓋 `MariaDBHighConnections` 的租戶（例如設為 98）不會出現在影響清單中。
+注意：已自行覆蓋 `mysql_connections` 的租戶（例如設為 98）不會出現在影響清單中——覆寫的鍵是指標 key，不是告警名。
 
 ### E. 確認後提交 PR
 
@@ -174,7 +174,7 @@ python scripts/tools/dx/describe_tenant.py tenant-fin-001 --diff tenant-fin-080 
     "pg_replication_lag": "60"
   },
   "different": {
-    "mysql_connections": {"a": "90", "b": "120"}
+    "mysql_connections": {"a": "110", "b": "120"}
   }
 }
 ```

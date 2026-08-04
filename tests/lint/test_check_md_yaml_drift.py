@@ -147,7 +147,7 @@ def test_composite_platform_file_also_validates_its_tenants_block(tmp_path: Path
         "# conf.d/_defaults.yaml\n"
         "defaults:\n  mysql_connections: 80\n"
         "tenants:\n"
-        "  db-a:\n"
+        "  example-tenant:\n"
         "    _routing:\n"
         "      receiver_type: slack\n"
         "      bogus_key: 1\n"
@@ -169,7 +169,7 @@ def test_platform_file_with_valid_tenants_block_passes(tmp_path: Path) -> None:
         "# conf.d/_defaults.yaml\n"
         "defaults:\n  mysql_connections: 80\n"
         "tenants:\n"
-        "  db-a:\n"
+        "  example-tenant:\n"
         '    mysql_connections: "70"\n'
         "```\n"
     )
@@ -227,7 +227,7 @@ def test_bare_tenants_block_is_selected(tmp_path: Path) -> None:
     # An unquoted number: tenant values are ScheduledValue (string | object).
     # Carries no marker key, so this block is selected ONLY by the `tenants`
     # rule — which is exactly what this test pins.
-    body = "```yaml\ntenants:\n  db-a:\n    mysql_connections: 123\n```\n"
+    body = "```yaml\ntenants:\n  example-tenant:\n    mysql_connections: 123\n```\n"
     r = _run(_mkrepo(tmp_path, "t.md", body))
     assert r.returncode == EXIT_VIOLATION, r.stdout
     assert "(tenant-file)" in r.stdout
@@ -239,7 +239,7 @@ def test_ignore_marker_exempts_and_is_reported(tmp_path: Path) -> None:
     'md-yaml-drift: ignore'` plus the report is the full audit."""
     body = (
         "<!-- md-yaml-drift: ignore — deliberate counter-example -->\n"
-        '```yaml\ntenants:\n  db-a:\n    bogus_key: "1"\n```\n'
+        '```yaml\ntenants:\n  example-tenant:\n    bogus_key: "1"\n```\n'
     )
     r = _run(_mkrepo(tmp_path, "ig.md", body))
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
@@ -253,11 +253,37 @@ def test_ignore_marker_requires_a_reason(tmp_path: Path) -> None:
     reason is the silent-exclusion pattern this marker exists to avoid."""
     body = (
         "<!-- md-yaml-drift: ignore -->\n"
-        "```yaml\ntenants:\n  db-a:\n    mysql_connections: 123\n```\n"
+        "```yaml\ntenants:\n  example-tenant:\n    mysql_connections: 123\n```\n"
     )
     r = _run(_mkrepo(tmp_path, "bare.md", body))
     assert r.returncode == EXIT_VIOLATION, r.stdout
     assert "123" in r.stdout
+
+
+def test_ignore_marker_survives_multiple_blank_lines(tmp_path: Path) -> None:
+    """⛔ Regression: the look-back used a two-line window, so a marker with two
+    blank lines before the fence was silently lost and the block it exempted got
+    reported as a violation — with nothing pointing at the marker. The scan now
+    walks back to the first non-blank line."""
+    body = (
+        "<!-- md-yaml-drift: ignore — two blank lines below -->\n"
+        "\n\n"
+        "```yaml\ntenants:\n  example-tenant:\n    mysql_connections: 123\n```\n"
+    )
+    r = _run(_mkrepo(tmp_path, "blanks.md", body))
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    assert "Blocks exempted by marker:   1" in r.stdout
+
+
+def test_preceding_prose_is_not_mistaken_for_a_marker(tmp_path: Path) -> None:
+    """The reverse of the above: walking back further must not start treating
+    ordinary prose as an exemption."""
+    body = (
+        "Some prose paragraph here.\n\n"
+        "```yaml\ntenants:\n  example-tenant:\n    mysql_connections: 123\n```\n"
+    )
+    r = _run(_mkrepo(tmp_path, "prose.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout
 
 
 def test_ignore_marker_only_applies_to_the_next_block(tmp_path: Path) -> None:

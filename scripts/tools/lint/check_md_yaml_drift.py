@@ -138,9 +138,15 @@ class MdYamlDriftChecker:
                     ignoring = False
                 continue
             if stripped in ("```yaml", "```yml") and not in_yaml:
-                # Look back past blank lines for an ignore marker.
+                # Look back to the first NON-BLANK line and test that for a
+                # marker. Deliberately unbounded rather than a fixed window: a
+                # two-line window silently lost the exemption when an author
+                # left two blank lines between the marker and the fence, and a
+                # marker that fails to apply is the worst outcome here — the
+                # block it was meant to exempt gets reported as a violation with
+                # no hint that a marker exists.
                 marker = None
-                for back in range(i - 2, max(i - 4, -1), -1):
+                for back in range(i - 2, -1, -1):
                     prev = lines[back].strip()
                     if not prev:
                         continue
