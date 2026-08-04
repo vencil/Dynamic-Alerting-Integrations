@@ -206,7 +206,7 @@ tenants:
 
 ```bash
 # 命令行示例
-da-tools diagnose --tenant db-a --config-dir conf.d/
+da-tools diagnose db-a --config-dir conf.d/
 ```
 
 ```promql

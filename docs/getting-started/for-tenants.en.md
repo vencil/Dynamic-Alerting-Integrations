@@ -47,7 +47,11 @@ This gives your tenant **whatever default thresholds the platform currently supp
 - **`<base>_critical` keys that are off the list but whose base already HAS a platform default** (5 today: `mysql_connections_critical`, `mysql_threads_running_critical`, `mysql_replication_lag_critical`, `pg_connections_critical`, `pg_replication_lag_critical`) — **you can set these today**: a write through the Portal / Tenant API is not rejected, a direct GitOps push works too, and either way you get a real critical alert row. `_critical` keys never go through the declared list (listing them would be decoration); their entry condition is "the same-named base has a value in `defaults:`", and the bases of these five (`mysql_connections`, `pg_connections`, …) are shipped platform defaults already.
 - **Keys whose base has no platform default either** (11 today, e.g. `kafka_*_critical` / `jvm_*_critical` / `nginx_*_critical`) — this is the group that really does need the **platform operator** to supply the base first (via the `_defaults.yaml` that `scaffold-tenant` generates, or by hand in helm values) before you can set them. Until then, writing one through the Portal / Tenant API is rejected as an unknown key, and pushing it straight to GitOps is accepted but has no effect.
 
-The first group (when you leave it unset) and the third group end the same way: no threshold series ⇒ the rule matches nothing ⇒ empty result — that is the config-driven join itself. If you are unsure which group a key is in, ask your platform operator for the contents of `_defaults.yaml` — **both the `defaults:` and the `optional_overrides:` sections** — then decide in this order: listed under `optional_overrides:` ⇒ group 1; spelled `X_critical` with `X` present in `defaults:` ⇒ group 2; neither ⇒ group 3.
+The first group (when you leave it unset) and the third group end the same way: no threshold series ⇒ the rule matches nothing ⇒ empty result — that is the config-driven join itself.
+
+**Unsure which group a key is in? Do not eyeball it** — the command under *Self-Service Verification › View Inheritance Chain* below prints the answer already split into sections.
+
+`_defaults.yaml` normally sits in the **same `conf.d/` directory** you edit `<tenant>.yaml` in (CODEOWNERS restricts who may **change** it, not who may **read** it), so in most setups you can read it and run that command yourself. Only when your organisation keeps the platform file in a source you cannot reach (a multi-team sharded layout, see the [GitOps CI/CD Integration Guide](../scenarios/gitops-ci-integration.en.md)) do you need to ask your platform operator for it — **both the `defaults:` and the `optional_overrides:` sections**.
 
 ## Common Operations
 
@@ -200,6 +204,13 @@ python3 scripts/tools/ops/diagnose.py my-tenant \
   --config-dir conf.d/ --show-inheritance
 ```
 
+The output has two sections, matching the three groups described under *30-Second Quick Setup*:
+
+- **`resolved`** — keys this tenant **already has a value for** (whether it came from a platform default, a profile, or your own file).
+- **`declared`** — keys the platform **recognises but assigns no value to** (group 1). These **take effect the moment you set one, and stay silent with no error message if you do not** — so this section is effectively the list of *protections you are currently going without*.
+
+⚠️ Group 2 (`<base>_critical`) appears in **neither** section: `_critical` keys never enter the declared list, so they are absent from `declared`, and until you set one there is no value, so they are absent from `resolved` too. Spot that group by hand — the key is spelled `X_critical` and `defaults:` carries `X`. If a key is **none of the three** (not in `resolved`, not in `declared`, and not an `X_critical` whose base has a default), it is group 3: the base has not been supplied yet, so your platform operator has to add it before you can set anything.
+
 ### Preview Change Impact
 
 ```bash
@@ -239,7 +250,7 @@ A: Rule Packs without matching exporter metrics simply don't fire alerts (no dat
 A: Profiles are fill-in only — they apply only when the tenant hasn't set that key. Your direct settings always take precedence.
 
 **Q: How do I find available metric keys?**
-A: Check `_defaults.yaml` and the header comments in each Rule Pack YAML. You can also run `diagnose.py --show-inheritance`: its `resolved` section lists keys that already carry a value, and `declared` lists the keys the platform recognises but assigns no value to (`optional_overrides:`) — those are settable too, they just have no value until you supply one. ⚠️ Group 2 above (a `<base>_critical` whose base already has a platform default) appears in **neither** section: `_critical` keys never enter the declared list, so they are absent from `declared`, and until you set one there is no value, so they are absent from `resolved` too. Spot that group by hand: the key is spelled `X_critical` and `defaults:` carries `X`.
+A: Run the command under *Self-Service Verification › View Inheritance Chain* above — its `resolved` / `declared` sections are the answer, and that section also explains why a `<base>_critical` key shows up in neither of them. Per-key units and suggested starting points live in the header comments of each Rule Pack YAML.
 
 > 💡 **First time going live?** Use [Onboarding Checklist](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/onboarding-checklist.jsx) for a complete step-by-step guide, or start with the [interactive setup wizard](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx). Want to see the complete platform in action? [Platform Demo](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/platform-demo.jsx) demonstrates real scenarios. See all tools at [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/). For enterprise intranet deployment, use the `da-portal` Docker image: `docker run -p 8080:80 ghcr.io/vencil/da-portal` ([deployment guide](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md)).
 

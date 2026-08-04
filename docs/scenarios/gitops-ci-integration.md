@@ -318,6 +318,15 @@ git push origin feature/lower-connections
 # → ConfigMap 更新 → threshold-exporter hot-reload → Prometheus 使用新閾值
 ```
 
+> ⚠️ **上面第 2 步的 validate 不會提醒你「漏設了什麼」。** 平台有一批 key 是**認得但不主張值**的（`_defaults.yaml` 的 `optional_overrides:` 清單）：你不填，對應告警就永遠不會觸發，而且**驗證與 CI 全程綠燈、不會有任何錯誤訊息**——那是設計，不是漏掉的預設值（這些閾值只有你自己的 baseline 校準得出來）。要看某個 tenant 目前漏了哪些，跑：
+>
+> ```bash
+> python3 scripts/tools/ops/diagnose.py <tenant> \
+>   --config-dir conf.d/ --show-inheritance
+> ```
+>
+> 輸出的 `declared` 段就是「你目前放棄了哪些保護」。完整的三類 key 判讀見[租戶快速入門指南](../getting-started/for-tenants.md)。
+
 ## 6. 多團隊 Sharded 模式
 
 大型組織中，不同團隊可能各自維護自己的 `conf.d/` 目錄。`assemble_config_dir.py` 可以合併多個來源：
@@ -340,6 +349,7 @@ python3 scripts/tools/ops/assemble_config_dir.py \
 | ConfigMap 更新後 exporter 沒反應 | 確認 `reloadInterval` 設定、檢查 exporter logs | `kubectl logs -l app=threshold-exporter -n monitoring` |
 | Alertmanager 路由不生效 | `da-tools explain-route --tenant <name> --config-dir conf.d/` | 檢查四層合併順序 |
 | Kustomize build 失敗 | 確認 symlink 指向正確的 conf.d/ 檔案 | `ls -la kustomize/base/` |
+| 配置全綠、告警卻從來不觸發 | `diagnose.py <tenant> --config-dir conf.d/ --show-inheritance` | 該 key 若出現在 `declared` 段，代表平台認得它但不主張值——**你不填就是靜默且無錯誤訊息**，填上你自己 baseline 校準出的值即可 |
 
 ## 相關文件
 

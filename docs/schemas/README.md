@@ -83,7 +83,7 @@ tenants:
 
 **Cause**: Typo in metric name (missing 'c' in connections)
 
-**Resolution**: Check `_defaults.yaml` or run `diagnose.py --show-inheritance` to see valid metric keys
+**Resolution**: Check `_defaults.yaml` or run `diagnose.py <tenant> --config-dir conf.d/ --show-inheritance` to see valid metric keys — `resolved` lists the keys that already carry a value, `declared` the ones the platform recognises but assigns no value to (set one and it takes effect; leave it and the alert stays silent)
 
 ### "Invalid time window format"
 

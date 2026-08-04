@@ -318,6 +318,15 @@ git push origin feature/lower-connections
 # → ConfigMap updated → threshold-exporter hot-reloads → Prometheus uses new thresholds
 ```
 
+> ⚠️ **The validate step above will not tell you what you failed to set.** The platform declares a group of keys it recognises but asserts no value for (the `optional_overrides:` list in `_defaults.yaml`): leave one unset and its alert never fires, while validation and CI stay green with **no error message of any kind** — that is the design, not a missing default (these thresholds can only be calibrated against your own baseline). To see what a tenant is currently missing:
+>
+> ```bash
+> python3 scripts/tools/ops/diagnose.py <tenant> \
+>   --config-dir conf.d/ --show-inheritance
+> ```
+>
+> The `declared` section is the list of protections that tenant is going without. Full three-group breakdown in the [Tenant Quick Start Guide](../getting-started/for-tenants.en.md).
+
 ## 6. Multi-Team Sharded Mode
 
 In large organizations, different teams may maintain their own `conf.d/` directories. `assemble_config_dir.py` merges multiple sources:
@@ -340,6 +349,7 @@ With CI pipeline integration, each team only modifies their own conf.d/. The mer
 | ConfigMap updated but exporter unresponsive | Check `reloadInterval` setting, exporter logs | `kubectl logs -l app=threshold-exporter -n monitoring` |
 | Alertmanager routes not effective | `da-tools explain-route --tenant <name> --config-dir conf.d/` | Check four-layer merge order |
 | Kustomize build fails | Verify symlinks point to correct conf.d/ files | `ls -la kustomize/base/` |
+| Config is green but an alert never fires | `diagnose.py <tenant> --config-dir conf.d/ --show-inheritance` | If the key appears in the `declared` section the platform recognises it but asserts no value — **unset means silent, with no error message**. Supply a value calibrated against your own baseline |
 
 ## Related Documents
 

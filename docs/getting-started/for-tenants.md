@@ -47,7 +47,11 @@ tenants:
 - **不在清單裡、但 base 已有平台預設的 `<base>_critical`**（目前 5 個：`mysql_connections_critical`、`mysql_threads_running_critical`、`mysql_replication_lag_critical`、`pg_connections_critical`、`pg_replication_lag_critical`）— **你今天就設得動**，透過 Portal / Tenant API 寫入不會被擋，直推 GitOps 也一樣，填了就會產出一條真的 critical 告警。`_critical` 從來不走宣告清單（列進去只是裝飾），它的入場條件是「同名 base 在 `defaults:` 有值」，而這 5 個的 base（`mysql_connections`、`pg_connections` …）本來就在出貨的平台預設裡。
 - **base 也還沒有平台預設的 key**（目前 11 個，例如 `kafka_*_critical` / `jvm_*_critical` / `nginx_*_critical`）— 這一類才真的要由**平台 operator** 先顯式供給 base（`scaffold-tenant` 產生的 `_defaults.yaml`，或自行填 helm values）之後你才設得動。在那之前透過 Portal / Tenant API 寫入會被擋下（unknown key），直接推 GitOps 則是寫得進去但不會生效。
 
-第一類（你沒填）與第三類（base 還沒供給）的結果一樣：沒有閾值 series ⇒ 規則配不到 ⇒ 回空，這是 config-driven join 的機制本身。若你不確定某個 key 落在哪一類，問你的平台 operator 要 `_defaults.yaml` 的內容——**`defaults:` 與 `optional_overrides:` 兩段都要**，然後照這個順序判：`optional_overrides:` 裡列了它 ⇒ 第一類；它長得像 `X_critical` 且 `defaults:` 裡有 `X` ⇒ 第二類；兩者皆非 ⇒ 第三類。
+第一類（你沒填）與第三類（base 還沒供給）的結果一樣：沒有閾值 series ⇒ 規則配不到 ⇒ 回空，這是 config-driven join 的機制本身。
+
+**不確定某個 key 落在哪一類？不要用眼睛判**——下面〈自助驗證 › 檢視繼承鏈〉那一行指令會直接把答案分段列出來。
+
+`_defaults.yaml` 通常就在你編輯 `<tenant>.yaml` 的**同一個 `conf.d/` 目錄**裡（CODEOWNERS 限制的是誰能**改**它，不是誰能**讀**），所以多數情況下你自己看得到、也跑得動那行指令。只有當你的組織把平台檔放在你存取不到的來源時（例如多團隊 sharded 模式，見 [GitOps CI/CD 整合指南](../scenarios/gitops-ci-integration.md)），才需要向平台 operator 索取——**`defaults:` 與 `optional_overrides:` 兩段都要**。
 
 ## 常見操作
 
@@ -200,6 +204,13 @@ python3 scripts/tools/ops/diagnose.py my-tenant \
   --config-dir conf.d/ --show-inheritance
 ```
 
+輸出分兩段，對應上面〈30 秒快速配置〉講的三類 key：
+
+- **`resolved`** — 你這個 tenant **已經有值**的 key（不論值來自平台預設、profile 還是你自己填的）。
+- **`declared`** — 平台**認得但不主張值**的 key（第一類）。這些**你填了就生效、不填就是靜默且沒有錯誤訊息**，所以這一段實質上就是「你目前放棄了哪些保護」的清單。
+
+⚠️ 第二類（`<base>_critical`）**兩段都不會出現**：`_critical` 從不進宣告清單，所以不在 `declared`；你沒填時也還沒有值，所以不在 `resolved`。這一類要自己判——key 長得像 `X_critical`，而 `defaults:` 裡有 `X`。若一個 key **三者皆非**（不在 `resolved`、不在 `declared`、也不是 base 有預設的 `X_critical`），那就是第三類：base 還沒供給，得先請平台 operator 補，你才設得動。
+
 ### 預覽配置變更影響
 
 ```bash
@@ -239,7 +250,7 @@ A: 不需要用的 Rule Pack 不會產生 alert（沒有對應的 exporter metri
 A: Profile 是填充（fill-in），只在 tenant 沒有設定該 key 時生效。你的直接設定永遠優先。
 
 **Q: 我怎麼知道現在有哪些 metric key 可以設定？**
-A: 查看 `_defaults.yaml` 和各 Rule Pack YAML 的頂部註解。也可以執行 `diagnose.py --show-inheritance`：輸出的 `resolved` 是**已有值**的 key，`declared` 是**平台認得但不主張值**的 key（`optional_overrides:`）——後者一樣設得動，只是你不填就沒有值。⚠️ 上面的第二類（base 已有平台預設的 `<base>_critical`）**兩段都不會列出來**：`_critical` 從不進宣告清單，所以不在 `declared`；你沒填時也還沒有值，所以不在 `resolved`。這一類要自己判：key 長得像 `X_critical`，而 `defaults:` 裡有 `X`。
+A: 跑上面〈自助驗證 › 檢視繼承鏈〉那一行——輸出的 `resolved` / `declared` 兩段就是答案，該節也說明了為什麼 `<base>_critical` 不會出現在其中任何一段。每個 key 的單位與建議起點則在各 Rule Pack YAML 的頂部註解。
 
 > 💡 **第一次上線？** 用 [Onboarding Checklist](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/onboarding-checklist.jsx) 取得完整的步驟清單，或從 [互動式入門精靈](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../getting-started/wizard.jsx) 開始。想在瀏覽器中觀看完整的平台運作流程？[Platform Demo](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/platform-demo.jsx) 展示真實場景。所有工具見 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/)。企業內網環境可用 `da-portal` Docker image 自建：`docker run -p 8080:80 ghcr.io/vencil/da-portal`（[部署說明](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md)）。
 

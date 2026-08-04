@@ -38,7 +38,7 @@ Labels:   {tenant="db-a", severity="warning", namespace="db-a"}`,
     description: t('單租戶綜合健康檢查', 'Single-tenant comprehensive health check'),
     category: t('Prometheus API 工具', 'Prometheus API Tools'),
     popular: true,
-    preview: `$ da-tools diagnose --tenant db-a --prometheus http://localhost:9090
+    preview: `$ da-tools diagnose db-a --prometheus http://localhost:9090
 
 ╔══════════════════════════════════════╗
 ║  Tenant Health Report: db-a         ║
@@ -53,12 +53,23 @@ Mode:        normal (no silence/maintenance)
 ✓ All recording rules producing data
 ✓ Threshold metrics exported (12/12)
 ⚠ 1 alert firing: MariaDBHighConnections (87% > 80%)`,
-    args: [],
+    // Mirrors `diagnose.py --help`: `tenant` is a POSITIONAL, and there is no
+    // --namespace. Modelling the tenant as a flag made the builder emit
+    // `da-tools diagnose --tenant db-a`, which exits with
+    // "unrecognized arguments: --tenant" — the playground's whole job is to
+    // hand people a line they can paste.
+    args: [
+      { name: 'tenant', label: t('租戶 ID', 'Tenant ID'), required: true, placeholder: 'e.g., db-a' }
+    ],
     flags: [
-      { name: '--tenant', label: t('租戶 ID', 'Tenant ID'), required: true, placeholder: 'e.g., db-a' },
       { name: '--prometheus', label: t('Prometheus URL', 'Prometheus URL'), required: false, placeholder: 'http://localhost:9090' },
-      { name: '--config-dir', label: t('配置目錄', 'Config Directory'), required: false, placeholder: '/etc/config' },
-      { name: '--namespace', label: t('Kubernetes 命名空間', 'Kubernetes Namespace'), required: false, placeholder: 'monitoring' }
+      { name: '--config-dir', label: t('配置目錄', 'Config Directory'), required: false, placeholder: 'conf.d/' },
+      { name: '--show-inheritance', label: t('顯示繼承鏈（需 --config-dir）', 'Show inheritance chain (requires --config-dir)'), required: false, type: 'checkbox' },
+      // `--json` is `store_true, default=True` (diagnose.py:395) — passing it is
+      // a no-op, and the label says so. It is listed anyway because the flag is
+      // part of the da-tools subcommand contract (dev-rules #13) and the
+      // documented `da-tools diagnose … --json | jq` idiom uses it.
+      { name: '--json', label: t('JSON 輸出（預設已開啟）', 'JSON output (on by default)'), required: false, type: 'checkbox' }
     ]
   },
   'batch-diagnose': {

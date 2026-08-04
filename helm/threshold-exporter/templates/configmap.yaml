@@ -11,11 +11,39 @@ data:
   _defaults.yaml: |
     defaults:
       {{- .Values.thresholdConfig.defaults | toYaml | nindent 6 }}
+    {{- /* Type check sits OUTSIDE the truthy guard below, deliberately: `false`,
+           `0` and `""` are all falsy, so a guard-internal check can never see
+           them and a mistyped falsy scalar would stay indistinguishable from
+           "deliberately unset" (CodeRabbit #1336). Only genuinely absent/null
+           (kind `invalid`) and any slice — including the empty one — are let
+           through; the truthy guard then skips the empty cases as before.
+           Why a type check at all: the note below counts the list, and `len`
+           aborts the WHOLE render on a non-collection (`len of type bool`),
+           taking deployment.yaml with it over one mistyped value; while a
+           scalar does NOT abort — `len` counts CHARACTERS, so
+           `optional_overrides: "oracle_wait_time_rate"` rendered a confident
+           "21 keys". */}}
+    {{- if not (or (kindIs "invalid" .Values.thresholdConfig.optional_overrides) (kindIs "slice" .Values.thresholdConfig.optional_overrides)) }}
+    {{- fail (printf "thresholdConfig.optional_overrides must be a LIST of key names (array of string), got %s. This tier DECLARES keys without asserting values; a scalar or map here would assert one." (kindOf .Values.thresholdConfig.optional_overrides)) }}
+    {{- end }}
     {{- if .Values.thresholdConfig.optional_overrides }}
     {{- /* #1310: TOP-LEVEL key, sibling of defaults/state_filters — NOT a child
            of defaults. It is a LIST of key names the platform recognises but
            asserts no value for (ThresholdConfig.OptionalOverrides []string);
            nesting it under defaults would decode as a threshold value. */}}
+    {{- /* #1321: the note below is emitted as literal YAML comments INSIDE the
+           _defaults.yaml value, because `toYaml` renders the parsed list only —
+           every comment in values.yaml (the tier rationale at the top of the
+           block AND the per-key unit hints) is stripped at values-parse time
+           and cannot be recovered in the template. Without this, the one
+           artifact that reaches EVERY install is a bare list of key names, and
+           the reason they carry no value lives only in docs the reader may not
+           have. The count is rendered from the list itself so it cannot drift
+           away from what is emitted directly beneath it. */}}
+    # ⛔ 以下 {{ len .Values.thresholdConfig.optional_overrides }} 個 key，平台「認得但不主張值」。
+    # 租戶不填＝該告警靜默，且不會有任何錯誤訊息——那是設計，不是遺漏的預設值。
+    # 看某個租戶目前有哪些還沒填（輸出的 declared 段就是這批）：
+    #   da-tools diagnose <tenant> --config-dir <conf.d 目錄> --show-inheritance
     optional_overrides:
       {{- .Values.thresholdConfig.optional_overrides | toYaml | nindent 6 }}
     {{- end }}
