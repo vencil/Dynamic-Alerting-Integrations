@@ -889,14 +889,48 @@ repos:
         pass_filenames: false
         files: ^docs/.*\.md$
 
+      # Fence hygiene: a ```yaml fence in docs/ must actually be YAML. Split
+      # out from md-yaml-drift-check (below) on purpose — it covers ALL 472
+      # fenced blocks rather than the ~38 that look like tenant config, and a
+      # mislabelled directory-tree diagram must not be able to block an
+      # unrelated schema fix. Parses with safe_load_all: `---`-separated k8s
+      # manifests are valid YAML and four blocks in docs/ are exactly that.
+      # Auto-run (not manual) and listed in ci.yml's always-on Lint job, so a
+      # docs-only PR cannot skip it.
+      - id: md-yaml-fence-check
+        name: Markdown ```yaml fences must parse as YAML
+        entry: python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --check fences --ci
+        language: python
+        pass_filenames: false
+        # Includes the scanner itself: `pass_filenames: false` means `files:`
+        # only decides WHEN the hook runs, so a commit that touches only the
+        # extractor would otherwise run no gate locally (same rule the sibling
+        # confd-schema-check follows).
+        files: ^(docs/.*\.md|scripts/tools/lint/check_md_yaml_drift\.py)$
+        additional_dependencies: ['pyyaml']
+
+      # jsonschema is REQUIRED here. It used to be absent while the script did
+      # `except ImportError: jsonschema = None  # Graceful degradation`, so in
+      # the hook's isolated venv the schema pass silently validated nothing on
+      # every run it ever did. The script now refuses to run without it
+      # (EXIT_CALLER_ERROR) instead of degrading — same posture as the sibling
+      # confd-schema-check.
+      # Un-parked. It was `stages: [manual]` since it landed, so it never ran on
+      # a commit or in CI — and while parked it was also validating every block
+      # against the wrong schema with jsonschema silently absent, so the three
+      # defects hid each other: nobody fixed the routing because nobody saw the
+      # gate, and un-parking it would have failed 38/38 anyway. Routing, the
+      # dependency and the docs are fixed, so it now runs like its siblings and
+      # is listed in ci.yml's always-on Lint job.
       - id: md-yaml-drift-check
         name: Markdown YAML example ↔ schema drift
         entry: python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --ci
         language: python
         pass_filenames: false
-        files: ^docs/.*\.(md|yaml)$
-        stages: [manual]
-        additional_dependencies: ['pyyaml']
+        # Both SCHEMAS are inputs too: editing a schema can turn a documented
+        # example red, and without them here that edit never runs this gate.
+        files: ^(docs/.*\.(md|yaml)|docs/schemas/(tenant-config|platform-defaults)\.schema\.json|scripts/tools/lint/check_md_yaml_drift\.py)$
+        additional_dependencies: ['pyyaml', 'jsonschema']
 
       - id: playwright-e2e
         name: Playwright Portal E2E smoke tests

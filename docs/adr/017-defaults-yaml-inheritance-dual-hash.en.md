@@ -81,7 +81,10 @@ defaults:
 # tenant YAML
 tenants:
   fin-db-001:
-    pg_stat_activity_count: 150   # override: single tenant is strictest
+    pg_stat_activity_count: "150" # override: single tenant is strictest
+                                  # ⚠️ quoted here, unquoted under `defaults:` above —
+                                  # tenant values are ScheduledValue (string | object),
+                                  # platform defaults are map[string]float64
     # pg_replication_lag_seconds: inherited from L0 = 30
     # pg_locks_count: inherited from L1 = 100
     # _routing_defaults.group_wait: inherited from L0 = 60s

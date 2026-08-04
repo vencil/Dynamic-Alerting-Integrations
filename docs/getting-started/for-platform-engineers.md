@@ -393,13 +393,15 @@ Alertmanager receiver 的敏感資訊（Slack token、webhook URL 等）必須�
 
 **基本做法 — K8s Secret + secretKeyRef：**
 
-```yaml
+```bash
 # 1. 建立 Secret（一次性或由 CI 管理）
 kubectl create secret generic alertmanager-secrets \
   --from-literal=slack-api-url='https://hooks.slack.com/services/T.../B.../xxx' \
   --from-literal=pagerduty-key='your-service-key' \
   -n monitoring
+```
 
+```yaml
 # 2. 在 Alertmanager Deployment 中參照
 env:
   - name: SLACK_API_URL
@@ -420,11 +422,13 @@ env:
 
 生產環境若需中央化 secrets 管理、自動輪換和審計日誌，整合 External Secrets Operator (ESO)：
 
-```yaml
+```bash
 # 1. 安裝 External Secrets Operator
 helm repo add external-secrets https://charts.external-secrets.io
 helm install external-secrets external-secrets/external-secrets -n external-secrets --create-namespace
+```
 
+```yaml
 # 2. 設定 SecretStore（連接 Vault）
 apiVersion: external-secrets.io/v1beta1
 kind: SecretStore

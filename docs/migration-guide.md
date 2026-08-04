@@ -222,6 +222,9 @@ da-tools diagnose db-a                                     # 租戶健康總檢
   for: 5m
   labels: { severity: warning }
 
+```
+
+```yaml
 # 3. Tenant Config (租戶)
 tenants:
   db-a:

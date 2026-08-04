@@ -47,6 +47,9 @@ relabel_configs:
   - source_labels: [__meta_kubernetes_namespace]
     target_label: tenant
 
+```
+
+```bash
 # 或使用 scaffold 工具自動產出
 da-tools scaffold --tenant db-a --db postgresql --namespaces ns-prod,ns-staging
 ```
