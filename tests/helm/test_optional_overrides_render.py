@@ -30,6 +30,7 @@ Two layers, the shape #1286 established for chart-face assertions
 """
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -135,10 +136,54 @@ def test_template_body_actually_carries_the_values_list(repo_root: Path):
     assert guard, "the `{{- if }}` guard on the values path is missing"
 
 
+def test_template_carries_the_no_platform_default_note(repo_root: Path):
+    """#1321: the rendered ConfigMap must explain WHY these keys carry no value.
+
+    `toYaml` emits the PARSED list only, so every comment in values.yaml — the
+    tier rationale above the block and the per-key unit hints inside it — is
+    gone by the time anyone reads the shipped ConfigMap. The chart is the one
+    artifact that reaches every install; a bare list of key names there, with
+    the reason living only in docs the reader may never open, is the gap #1320
+    D1 chose to close ("make the silence loud" rather than invent platform
+    values for keys whose suggested values measured ~40% benign false alarms).
+
+    Static layer, so a helm-less runner still catches deletion of the note.
+    """
+    lines = (repo_root / _CONFIGMAP_TPL).read_text(encoding="utf-8").split("\n")
+    key_idx = next(i for i, ln in enumerate(lines)
+                   if ln.strip() == "optional_overrides:")
+    # The note must sit ABOVE the key and INSIDE the guard: an operator who
+    # empties the list should get neither the key nor an orphaned paragraph
+    # explaining a key that is no longer there.
+    guard_idx = max(i for i, ln in enumerate(lines[:key_idx])
+                    if "{{- if" in ln
+                    and ".Values.thresholdConfig.optional_overrides" in ln)
+    note = "\n".join(ln for ln in lines[guard_idx + 1:key_idx]
+                     if ln.lstrip().startswith("#"))
+    assert note, (
+        "no literal `#` comment line between the optional_overrides guard and "
+        "the key — the rendered ConfigMap would carry a bare list of key names")
+    assert "--show-inheritance" in note, (
+        "the note must point at the tool that answers 'which of these has this "
+        "tenant not set' (da-tools diagnose --show-inheritance) — otherwise the "
+        "reader is told a problem exists and not how to inspect it")
+    assert "len .Values.thresholdConfig.optional_overrides" in note, (
+        "the note's count must be rendered FROM the list it introduces; a "
+        "hardcoded number is exactly the hand-copied claim this block exists "
+        "to stop shipping")
+
+
 # ── render layer (helm-gated) ───────────────────────────────────────────────
 
-def _render_defaults_file(repo_root: Path, extra: list[str] | None = None) -> dict:
-    """helm template the chart and parse the rendered conf.d/_defaults.yaml."""
+def _render_defaults_raw(repo_root: Path, extra: list[str] | None = None) -> str:
+    """helm template the chart and return the rendered conf.d/_defaults.yaml
+    as the RAW string — comments intact.
+
+    Separate from `_render_defaults_file` on purpose: every other assertion here
+    goes through `yaml.safe_load`, which discards comments, so the #1321 note
+    is structurally invisible to them. A note-shaped regression would be green
+    across this entire module without a raw-text reader.
+    """
     cmd = ["helm", "template", "t", str(repo_root / _CHART), "-n", "monitoring"]
     cmd += extra or []
     out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
@@ -149,7 +194,12 @@ def _render_defaults_file(repo_root: Path, extra: list[str] | None = None) -> di
     assert len(cms) == 1, f"expected one {_CONFIGMAP_NAME} ConfigMap, got {len(cms)}"
     data = cms[0].get("data") or {}
     assert _DEFAULTS_FILE in data, sorted(data)
-    return yaml.safe_load(data[_DEFAULTS_FILE]) or {}
+    return data[_DEFAULTS_FILE]
+
+
+def _render_defaults_file(repo_root: Path, extra: list[str] | None = None) -> dict:
+    """helm template the chart and parse the rendered conf.d/_defaults.yaml."""
+    return yaml.safe_load(_render_defaults_raw(repo_root, extra)) or {}
 
 
 @_needs_helm
@@ -193,3 +243,79 @@ def test_empty_values_render_no_key_at_all(repo_root: Path, tmp_path: Path):
     assert "optional_overrides" not in rendered
     # the rest of the file must still render (guard must not swallow siblings)
     assert rendered.get("defaults") and rendered.get("state_filters")
+
+
+@_needs_helm
+def test_rendered_note_ships_and_its_count_tracks_the_list(
+        repo_root: Path, tmp_path: Path):
+    """#1321 acceptance: the note reaches the ConfigMap, and its count follows
+    the list it introduces.
+
+    The override half is what makes the count claim real — a note that
+    hardcoded today's nine would pass the default render unchanged.
+    """
+    raw = _render_defaults_raw(repo_root)
+    expected = len(_values(repo_root)["optional_overrides"])
+    m = re.search(r"以下\s*(\d+)\s*個 key", raw)
+    assert m, f"the #1321 note is absent from the rendered {_DEFAULTS_FILE}:\n{raw}"
+    assert int(m.group(1)) == expected, (
+        f"note says {m.group(1)} keys, values ship {expected}")
+    assert "--show-inheritance" in raw, (
+        "the note reached the ConfigMap without its inspection pointer")
+
+    probe = ["zzz_probe_alpha", "zzz_probe_beta"]
+    overlay = tmp_path / "probe.yaml"
+    overlay.write_text(
+        yaml.safe_dump({"thresholdConfig": {"optional_overrides": probe}}),
+        encoding="utf-8")
+    moved = re.search(r"以下\s*(\d+)\s*個 key",
+                      _render_defaults_raw(repo_root, ["-f", str(overlay)]))
+    assert moved and int(moved.group(1)) == len(probe), (
+        "the note's count did not follow the overridden list — it is hardcoded")
+
+
+@_needs_helm
+@pytest.mark.parametrize("bad,kind", [(True, "bool"), (5, "float64"),
+                                      ("oracle_wait_time_rate", "string"),
+                                      ({"oracle_wait_time_rate": 5}, "map")])
+def test_non_list_values_fail_with_a_reason_not_a_template_error(
+        repo_root: Path, tmp_path: Path, bad, kind):
+    """A mistyped `optional_overrides` must fail with an explanation.
+
+    Counting the list made `len` load-bearing, and `len` aborts the whole
+    render on a non-collection — over one mistyped value the operator would
+    lose Deployment/Service/PDB too, with only `error calling len: len of type
+    bool` to go on. Worse, a scalar does NOT abort: `len` counts CHARACTERS, so
+    `optional_overrides: "oracle_wait_time_rate"` rendered a confident
+    "21 keys". A map renders too, and its key count is even accidentally
+    right — while asserting values, which is the exact opposite of this tier.
+
+    So the guard is on the TYPE, not on whether `len` happens to survive it.
+    """
+    overlay = tmp_path / "bad.yaml"
+    overlay.write_text(
+        yaml.safe_dump({"thresholdConfig": {"optional_overrides": bad}}),
+        encoding="utf-8")
+    proc = subprocess.run(
+        ["helm", "template", "t", str(repo_root / _CHART), "-n", "monitoring",
+         "-f", str(overlay)],
+        capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert proc.returncode != 0, (
+        f"a {kind} was accepted; stdout:\n{proc.stdout[:800]}")
+    assert "must be a LIST of key names" in proc.stderr, (
+        "failed without naming the offending value — that is the opaque "
+        f"template error this guard exists to replace:\n{proc.stderr[:800]}")
+
+
+@_needs_helm
+def test_empty_values_render_no_orphaned_note(repo_root: Path, tmp_path: Path):
+    """Emptying the list must drop the explanation together with the key it
+    explains. An orphaned '以下 0 個 key' paragraph would be worse than none:
+    it describes a section the file no longer has."""
+    overlay = tmp_path / "empty.yaml"
+    overlay.write_text(
+        yaml.safe_dump({"thresholdConfig": {"optional_overrides": []}}),
+        encoding="utf-8")
+    raw = _render_defaults_raw(repo_root, ["-f", str(overlay)])
+    assert "個 key" not in raw and "--show-inheritance" not in raw, (
+        f"note survived an emptied list:\n{raw}")

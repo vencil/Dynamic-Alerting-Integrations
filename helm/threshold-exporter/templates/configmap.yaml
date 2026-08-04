@@ -16,6 +16,32 @@ data:
            of defaults. It is a LIST of key names the platform recognises but
            asserts no value for (ThresholdConfig.OptionalOverrides []string);
            nesting it under defaults would decode as a threshold value. */}}
+    {{- /* The note below counts the list, and `len` aborts the WHOLE render on a
+           non-collection (`len of type bool`) — which would take the entire
+           chart down, deployment.yaml included, over one mistyped value. Guard
+           the type explicitly so the operator gets the reason instead of a Go
+           template internal error. A scalar would also make `len` count
+           CHARACTERS: `optional_overrides: "oracle_wait_time_rate"` rendered a
+           confident "21 keys". Nothing FALSY reaches here — empty list, null,
+           `0` and `false` are all skipped by the `if` above, so a mistyped
+           falsy scalar stays indistinguishable from "deliberately unset".
+           Narrowing that is a separate change to the guard on line 14. */}}
+    {{- if not (kindIs "slice" .Values.thresholdConfig.optional_overrides) }}
+    {{- fail (printf "thresholdConfig.optional_overrides must be a LIST of key names (array of string), got %s. This tier DECLARES keys without asserting values; a scalar or map here would assert one." (kindOf .Values.thresholdConfig.optional_overrides)) }}
+    {{- end }}
+    {{- /* #1321: the note below is emitted as literal YAML comments INSIDE the
+           _defaults.yaml value, because `toYaml` renders the parsed list only —
+           every comment in values.yaml (the tier rationale at the top of the
+           block AND the per-key unit hints) is stripped at values-parse time
+           and cannot be recovered in the template. Without this, the one
+           artifact that reaches EVERY install is a bare list of key names, and
+           the reason they carry no value lives only in docs the reader may not
+           have. The count is rendered from the list itself so it cannot drift
+           away from what is emitted directly beneath it. */}}
+    # ⛔ 以下 {{ len .Values.thresholdConfig.optional_overrides }} 個 key，平台「認得但不主張值」。
+    # 租戶不填＝該告警靜默，且不會有任何錯誤訊息——那是設計，不是遺漏的預設值。
+    # 看某個租戶目前有哪些還沒填（輸出的 declared 段就是這批）：
+    #   da-tools diagnose <tenant> --config-dir <conf.d 目錄> --show-inheritance
     optional_overrides:
       {{- .Values.thresholdConfig.optional_overrides | toYaml | nindent 6 }}
     {{- end }}

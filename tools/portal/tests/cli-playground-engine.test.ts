@@ -26,6 +26,57 @@ describe('initCommandState', () => {
   });
 });
 
+describe('diagnose emits a command that actually runs', () => {
+  // `diagnose.py --help`: [--prometheus] [--config-dir] [--show-inheritance]
+  // [--json] tenant  — `tenant` is a POSITIONAL. Modelling it as `--tenant`
+  // made the builder emit `da-tools diagnose --tenant db-a`, which exits with
+  // "unrecognized arguments: --tenant". Handing over a paste-able line is this
+  // tool's entire job, so the shape is pinned here rather than only in the
+  // preview string.
+  it('puts the tenant positionally, never as a --tenant flag', () => {
+    const cmd = COMMANDS['diagnose'];
+    expect(cmd.args.map(a => a.name)).toEqual(['tenant']);
+    expect(cmd.flags.map(f => f.name)).not.toContain('--tenant');
+
+    const built = buildCommand({
+      isDocker: false,
+      network: {},
+      selectedCommand: 'diagnose',
+      command: cmd,
+      args: { tenant: 'db-a' },
+      flags: { '--prometheus': 'http://localhost:9090' },
+    });
+    expect(built).toBe('da-tools diagnose db-a --prometheus http://localhost:9090');
+    expect(built).not.toContain('--tenant');
+  });
+
+  it('renders --show-inheritance as a valueless checkbox flag', () => {
+    // Without `type: 'checkbox'` engine.js takes the value branch and emits
+    // `--show-inheritance <value>`, which argparse rejects.
+    const flag = COMMANDS['diagnose'].flags.find(f => f.name === '--show-inheritance');
+    expect(flag?.type).toBe('checkbox');
+
+    const built = buildCommand({
+      isDocker: false,
+      network: {},
+      selectedCommand: 'diagnose',
+      command: COMMANDS['diagnose'],
+      args: { tenant: 'db-a' },
+      flags: { '--config-dir': 'conf.d/', '--show-inheritance': true },
+    });
+    expect(built).toBe(
+      'da-tools diagnose db-a --config-dir conf.d/ --show-inheritance');
+  });
+
+  it('advertises no flag the CLI does not have', () => {
+    // `--namespace` was listed for years; diagnose.py has never accepted it.
+    const real = ['--prometheus', '--config-dir', '--show-inheritance', '--json'];
+    for (const f of COMMANDS['diagnose'].flags) {
+      expect(real).toContain(f.name);
+    }
+  });
+});
+
 describe('readHashCmd', () => {
   afterEach(() => {
     window.location.hash = '';
