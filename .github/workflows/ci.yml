@@ -1007,17 +1007,26 @@ jobs:
 
       # mtail CLI — same rationale as the Vector / Helm installs above. The #908
       # mtail-compile gate (tests/shared/test_federation_audit_mtail.py) compiles
-      # helm/federation-gateway/files/federation-audit.mtail under the SAME mtail
-      # the audit-sidecar deploys (3.0.8) — a syntax / type regression in the
+      # helm/federation-gateway/files/federation-audit.mtail under the same mtail
+      # VERSION the audit-sidecar deploys (3.0.8; see ⚠️ below — same version,
+      # different binary since #1337) — a syntax / type regression in the
       # program would otherwise surface only as a sidecar CrashLoop at deploy, not
       # in CI. Gated on `mtail` on PATH (shutil.which) → without this install the
-      # gate SILENTLY SKIPS. Pinned + checksum-verified (identical digest to
-      # helm/federation-gateway/audit-sidecar/Dockerfile).
+      # gate SILENTLY SKIPS. Pinned + checksum-verified.
+      # ⚠️ This is the upstream PREBUILT release binary, and since #1337 the
+      # sidecar image no longer uses it — that image compiles the same v3.0.8
+      # source from its pinned commit with a current Go toolchain (the prebuilt
+      # one is linked against Go 1.21.1 and carried 20 fixable stdlib CVEs). The
+      # two are the same mtail VERSION, which is all this gate needs: it type-
+      # checks the .mtail program, and the language is fixed by the version, not
+      # by the toolchain. ⛔ So do NOT re-sync this SHA-256 with the Dockerfile —
+      # the Dockerfile no longer has one (it pins a commit instead).
       - name: Install mtail
         run: |
           MTAIL_VERSION=3.0.8
           # sha256 of mtail_3.0.8_linux_amd64.tar.gz (upstream release
-          # checksums.txt); identical pin to audit-sidecar/Dockerfile.
+          # checksums.txt). See the ⚠️ above before "fixing" this to match
+          # audit-sidecar/Dockerfile — they pin different things on purpose.
           MTAIL_SHA256=123c2ee5f48c3eff12ebccee38befd2233d715da736000ccde49e3d5607724e4
           DL="$HOME/.cache/vibe-ci-downloads"
           mkdir -p "$DL"

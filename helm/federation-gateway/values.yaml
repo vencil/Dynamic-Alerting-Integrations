@@ -392,9 +392,19 @@ auditLog:
   volumeSizeLimit: 1Gi
   # The mtail + logrotate sidecars share one image, built from
   # audit-sidecar/Dockerfile. Override repository before deploying.
+  # ⛔ TAG BUMPED TO 3.0.8-2 (#1337) — you must rebuild and push before upgrading.
+  # The mtail version did NOT change; the BUILD did (compiled from mtail's pinned
+  # upstream commit with a current Go toolchain, and Alpine 3.23.5), taking the
+  # image from 23 fixable HIGH/CRITICAL to 2. The `-2` build-revision suffix is
+  # what makes that visible: this container has no `digest` knob and the pod
+  # template's checksum annotations only hash ConfigMaps, so leaving the tag at
+  # 3.0.8 would render a BYTE-IDENTICAL pod spec — no rollout, and with the
+  # default `IfNotPresent` the kubelet would keep serving the old 23-CVE image
+  # while the platform's nightly scan reported 2. Rebuild from
+  # audit-sidecar/Dockerfile, push as 3.0.8-2, then upgrade.
   image:
     repository: federation-audit-sidecar
-    tag: "3.0.8"
+    tag: "3.0.8-2"
     pullPolicy: IfNotPresent
   # mtail — tails sink 2, exposes the metric on this port; the Service
   # carries the prometheus.io/scrape annotations for it.

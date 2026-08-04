@@ -10,30 +10,87 @@
 #                 platform log aggregation) — not this file.
 #
 # Build (from this directory):
-#   docker build -t <registry>/federation-audit-sidecar:3.0.8 .
-# Scan before publishing (release discipline):
-#   trivy image --severity HIGH,CRITICAL <registry>/federation-audit-sidecar:3.0.8
+#   docker build -t <registry>/federation-audit-sidecar:3.0.8-2 .
+# ⛔ The tag is <mtail version>-<build revision>, and values.yaml pins the whole
+# string. Change anything in this file and you MUST bump the suffix: there is no
+# digest knob for this container and the pod template's checksum annotations hash
+# only ConfigMaps, so an unchanged tag renders a byte-identical pod spec — no
+# rollout, and `IfNotPresent` keeps serving the previous build (#1337).
+# CVE coverage is AUTOMATED as of #1337: this image is a `scan` matrix entry in
+# .github/workflows/nightly-image-scan.yaml (nightly) and in
+# component-docker-build.yaml (PR) + `make trivy-scan-all` (pre-tag). Ad-hoc
+# `trivy image` is no longer the only thing standing between this image and a
+# regression.
 
-# --- Stage 1: fetch + checksum-verify the mtail binary ----------------
-FROM alpine:3.23.4 AS fetch
+# --- Stage 1: build mtail from source ---------------------------------
+# ⛔ We build rather than download the upstream release binary, and that is a
+# SECURITY decision, not a preference. mtail's last release is v3.0.8
+# (2024-08-08); its prebuilt binary is linked against Go stdlib 1.21.1, which
+# by 2026 carries 20 fixable HIGH/CRITICAL stdlib CVEs plus grpc ones — and no
+# upstream release exists to bump to. Measured on this image: the prebuilt
+# binary on Alpine 3.23.4 scores 23 fixable HIGH/CRITICAL, this from-source
+# build on 3.23.5 scores 2 (both from mtail's OWN go.mod grpc pin, which only
+# upstream can move). ⚠️ TWO levers, not one — rebuilding the SAME source with a
+# current toolchain clears the 20 Go-stdlib findings and introduces 0, and the
+# base bump below clears the remaining libcrypto3 one. 23 − 20 − 1 = 2.
+#
+# The supply-chain control is PRESERVED, not dropped: the tarball's SHA-256 is
+# replaced by a COMMIT pin, which is strictly stronger — git verifies object
+# hashes end to end, and a commit id cannot be re-pointed the way a tag can.
+# d4b8a71 is what `v3.0.8` dereferences to AND what the official release binary
+# self-reports as its revision, so this builds the release's exact source tree —
+# and that is now a TEST, not a comment (test_mtail_commit_pin_matches_the_
+# release_binary compares it against the checksum-verified upstream binary CI
+# installs). ⛔ MTAIL_COMMIT alone selects the source; MTAIL_VERSION only feeds
+# the ldflags banner. Bump the commit and the version together.
+#
+# ⚠️ Two honest costs of building instead of downloading, neither of which the
+# old form had:
+#   * mtail's own go.mod/go.sum is NOT vendored here, so its transitive module
+#     graph is verified only against the upstream checksums inside the cloned
+#     commit — real verification, but of an artifact this repo cannot diff.
+#   * no `ARG` for GOPROXY or a corporate root CA. Behind a TLS-intercepting
+#     proxy this stage fails at either the git clone or the module fetch, and the
+#     module error is the less recognisable of the two. Add the ARG here if that
+#     environment ever needs to build it.
+#
+# ⚠️ Neither base below is visible to Renovate: renovate.json sets
+# `enabledManagers: ["custom.regex"]` and none of its managers matches a
+# Dockerfile, so `golang:1.26.5-alpine3.23` and `alpine:3.23.5` are bumped by
+# hand only. Detection still works (Trivy reads Go build info out of the shipped
+# binary — that is how the 20 stdlib findings surfaced); remediation does not.
+FROM golang:1.26.5-alpine3.23 AS build
 ARG MTAIL_VERSION=3.0.8
-# sha256 of mtail_3.0.8_linux_amd64.tar.gz, from the release checksums.txt.
-ARG MTAIL_SHA256=123c2ee5f48c3eff12ebccee38befd2233d715da736000ccde49e3d5607724e4
-RUN apk add --no-cache curl \
- && curl -fsSL -o /tmp/mtail.tar.gz \
-      "https://github.com/google/mtail/releases/download/v${MTAIL_VERSION}/mtail_${MTAIL_VERSION}_linux_amd64.tar.gz" \
- && echo "${MTAIL_SHA256}  /tmp/mtail.tar.gz" | sha256sum -c - \
- && tar -xzf /tmp/mtail.tar.gz -C /usr/local/bin mtail \
- && chmod 0755 /usr/local/bin/mtail
+ARG MTAIL_COMMIT=d4b8a7111c756f22f568f04c0d1ea3f3ec161494
+RUN apk add --no-cache git
+WORKDIR /src
+# `fetch --depth 1 <sha>` (not a tag/branch): content-addressed and shallow.
+RUN git init -q . \
+ && git remote add origin https://github.com/google/mtail \
+ && git fetch -q --depth 1 origin "${MTAIL_COMMIT}" \
+ && git checkout -q FETCH_HEAD
+# ldflags mirror upstream's Makefile (GO_LDFLAGS): without them the binary
+# reports `invalid:-use-make-to-build` for both Version and Revision, and
+# `mtail --version` is what an operator reads to confirm what is running.
+RUN CGO_ENABLED=0 go build -trimpath \
+      -ldflags "-s -w -extldflags '-static' \
+                -X main.Version=${MTAIL_VERSION} \
+                -X main.Revision=${MTAIL_COMMIT} \
+                -X main.Branch=v${MTAIL_VERSION}" \
+      -o /out/mtail ./cmd/mtail
 
 # --- Stage 2: runtime -------------------------------------------------
-FROM alpine:3.23.4
+FROM alpine:3.23.5
 # logrotate from the Alpine repo. busybox already supplies sh + wget
 # (wget --post-data is enough to POST Envoy's admin /reopen_logs), so the
 # runtime image carries no curl.
 RUN apk add --no-cache logrotate \
  && rm -rf /etc/periodic /etc/logrotate.d/* /var/cache/apk/*
-COPY --from=fetch /usr/local/bin/mtail /usr/local/bin/mtail
+COPY --from=build /out/mtail /usr/local/bin/mtail
+# Explicit, as it was before the build-from-source change: `go build` already
+# emits 0755 and `COPY --from` gives 0:0, but the old fetch stage stated this
+# guarantee rather than inheriting it, and uid 101 below must be able to exec it.
+RUN chmod 0755 /usr/local/bin/mtail
 # Match the gateway pod's non-root uid/gid (podSecurityContext: 101).
 USER 101:101
 # rationale: sidecar (mtail + logrotate) co-scheduled in the gateway pod —

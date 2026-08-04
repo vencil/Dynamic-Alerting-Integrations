@@ -692,7 +692,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "9ecaee057c2d9beb6b74ad960e283ed3a0ecc501d1115164ffd628b0c928dd01",
+ "source_digest": "f4c2e5c8d9feb13c1ae6b3d5ccd42c9bfaf5938f39ab091fb1ed3fa34232bac4",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1033,7 +1033,11 @@
    "tests/lint/test_check_pint.py",
    "tests/ops/test_portal_path_filter_coverage.py",
    "tests/preview/test_promtool_pin_parity.py",
+   "tests/shared/test_federation_audit_mtail.py",
    "tests/shared/test_vector_pin_parity.py"
+  ],
+  ".github/workflows/component-docker-build.yaml": [
+   "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   ".github/workflows/guard-defaults-impact.yml": [
    "tests/ops/test_guard_defaults_scopes.py"
@@ -1089,6 +1093,7 @@
    "tests/lint/test_check_orphan_lint.py",
    "tests/lint/test_check_unpinned_deps.py",
    "tests/ops/test_git_check_lock.py",
+   "tests/ops/test_nightly_scan_matrix_drift.py",
    "tests/rulepacks/test_vm_alert_parity.py"
   ],
   "README.en.md": [
@@ -1407,7 +1412,11 @@
   "helm/federation-gateway/README.md": [
    "tests/helm/test_federation_store_namespace_guard.py"
   ],
+  "helm/federation-gateway/audit-sidecar": [
+   "tests/ops/test_nightly_scan_matrix_drift.py"
+  ],
   "helm/federation-gateway/audit-sidecar/Dockerfile": [
+   "tests/ops/test_nightly_scan_matrix_drift.py",
    "tests/shared/test_federation_audit_mtail.py"
   ],
   "helm/federation-gateway/files/envoy.yaml": [
@@ -1431,7 +1440,8 @@
    "tests/helm/test_revoked_set_contract_guard.py",
    "tests/ops/test_federation_e2e_mirrors_deploy_sot.py",
    "tests/ops/test_renovate_config.py",
-   "tests/ops/test_revoked_set_contract.py"
+   "tests/ops/test_revoked_set_contract.py",
+   "tests/shared/test_federation_audit_mtail.py"
   ],
   "helm/federation-proxy": [
    "tests/ops/test_federation_e2e_mirrors_deploy_sot.py"
@@ -1546,6 +1556,9 @@
   ],
   "helm/vector/README.md": [
    "tests/shared/test_vector_pin_parity.py"
+  ],
+  "helm/vector/projection-gate/Dockerfile": [
+   "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   "helm/vector/projection-gate/serve_metrics.py": [
    "tests/shared/test_projection_gate_exposer.py"
@@ -1948,6 +1961,9 @@
   "scripts/tools/lint/check_i18n_coverage.py": [
    "tests/shared/test_bilingual_help_contract.py"
   ],
+  "scripts/tools/lint/check_iac_vibe_rules.py": [
+   "tests/ops/test_nightly_scan_matrix_drift.py"
+  ],
   "scripts/tools/lint/check_image_pin_capability.py": [
    "tests/dx/test_bump_docs.py",
    "tests/lint/test_check_image_pin_capability.py"
@@ -2169,8 +2185,17 @@
   "tests/e2e-bench/aggregate.py": [
    "tests/e2e-bench/test_aggregate.py"
   ],
+  "tests/e2e-bench/docker-compose.yml": [
+   "tests/ops/test_nightly_scan_matrix_drift.py"
+  ],
+  "tests/e2e-bench/driver/Dockerfile": [
+   "tests/ops/test_nightly_scan_matrix_drift.py"
+  ],
   "tests/e2e-bench/driver/driver.py": [
    "tests/e2e-bench/driver/test_driver.py"
+  ],
+  "tests/e2e-bench/receiver/Dockerfile": [
+   "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   "tests/federation-e2e": [
    "tests/dx/test_verify_diff.py"
@@ -2230,6 +2255,7 @@
    "tests/ops/test_nightly_race_issue_policy.py"
   ],
   "tests/preview/test_promtool_pin_parity.py": [
+   "tests/shared/test_federation_audit_mtail.py",
    "tests/shared/test_vector_pin_parity.py"
   ],
   "tests/rulepacks": [

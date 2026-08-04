@@ -8,10 +8,22 @@ name: Component Docker Build (PR smoke)
 # only surfaces at tag push — the worst possible moment. v2.8.0 release hit 2
 # such dormant bugs in 30 min (#472 portal Dockerfile moved-file COPY, #473
 # exporter pkg/ COPY missing). This workflow runs `docker build` against the
-# 4 production Dockerfiles on every PR that touches their build inputs, so
+# 7 self-built Dockerfiles on every PR that touches their build inputs, so
 # build breakage fails at the introducing PR, not at release.
 #
-# Cost: ~30-60 s per component, only on PRs touching the paths below.
+# ⚠️ Two of the seven ship inside Helm charts and are never published, so the
+# tag-time release build does NOT cover them at all (#1337). Their remaining
+# build coverage is NOT symmetric, so do not write it as one sentence:
+#   * vector-projection-gate — this workflow, the nightly scan and
+#     `make docker-build-all` are the only things that build it anywhere.
+#   * federation-audit-sidecar — additionally built on every CI run by the
+#     `federation-e2e` job (ci.yml), whose compose stack builds it from source
+#     (tests/federation-e2e/docker-compose.yml) and then scrapes its metrics.
+#
+# Cost: ~30-60 s per component, only on PRs touching the paths below. The
+# exception is federation-audit-sidecar, which since #1337 compiles mtail from
+# source (~25 s locally with a warm module cache; a cold runner also pays the
+# clone + module download).
 # No registry push (forked PRs work — `load: true` is local-daemon only).
 #
 # Trivy CVE scan: **informational at PR time (exit-code 0)**, NOT blocking.
@@ -19,9 +31,18 @@ name: Component Docker Build (PR smoke)
 # issue #448 (same author, later v2 rewrite) argues a blocking CVE scan at
 # PR time lets a fresh upstream base-image CVE block UNRELATED PRs with no
 # warning. We keep the build a hard gate (deterministic, blames this diff)
-# and surface CVEs as visible-but-non-blocking output. release.yaml's own
-# image CVE scan is likewise treated as informational (#448). Flip to
-# exit-code 1 here only if the project decides PR-time CVE-blocking is wanted.
+# and surface CVEs as visible-but-non-blocking output. Flip to exit-code 1
+# here only if the project decides PR-time CVE-blocking is wanted.
+#
+# ⛔ CORRECTION (#1337): this block used to add "release.yaml's own image CVE
+# scan is likewise treated as informational (#448)". That is FALSE — all five
+# release jobs set `exit-code: 1` with no `continue-on-error`, so a fixable
+# HIGH/CRITICAL fails the release job. What is true, and is the likely origin of
+# the confusion, is that the scan runs POST-PUSH: the image is already in the
+# registry by then, so what it blocks is the release job going green, not the
+# publication of that image. (And in 4 of the 5 jobs it is the last step, so
+# nothing further is prevented either; only release-da-tools has signing / SBOM /
+# archive / GitHub-Release steps after it.)
 
 on:
   pull_request:
@@ -41,6 +62,10 @@ on:
       - "tools/portal/src/**"        # da-portal COPY source (post TD-042 restructure)
       - "docs/assets/**"             # da-portal COPY source
       - "docs/.nojekyll"             # da-portal COPY source (rarely changes, but it IS a COPY input)
+      # Chart-shipped self-built images (#1337). Both build from their own
+      # directory, so the Dockerfile + its siblings are the whole input set.
+      - "helm/federation-gateway/audit-sidecar/**"
+      - "helm/vector/projection-gate/**"
       - ".github/workflows/component-docker-build.yaml"
 
 concurrency:
@@ -54,10 +79,25 @@ jobs:
   build:
     name: build ${{ matrix.name }}
     runs-on: ubuntu-latest
+    # Since #1337 one leg clones github.com/google/mtail and downloads a Go
+    # module graph. `git fetch -q` has no timeout of its own, and with
+    # `fail-fast: false` a hung fetch would otherwise burn GitHub's 360-minute
+    # default. Same value the nightly scan already uses for the same builds.
+    timeout-minutes: 25
     strategy:
       fail-fast: false  # build all components so one break doesn't mask another
       matrix:
-        # All 5 production Dockerfiles. 4 are self-contained (build from source in
+        # ⛔ Keep in sync with nightly-image-scan.yaml's `scan` matrix and with
+        # `make docker-build-all` — this is now MECHANICAL, not prose:
+        # test_selfbuilt_matrix_covers_every_dockerfile
+        # (tests/ops/test_nightly_scan_matrix_drift.py) pins all three against
+        # the repo's Dockerfile inventory (#1337).
+        #
+        # All 7 self-built Dockerfiles. The split below covers 5 of them; the
+        # remaining 2 are the chart-shipped pair, and both are self-contained
+        # (their build context is their own directory) — see their entries.
+        #
+        # 4 are self-contained (build from source in
         # Docker / COPY in-repo assets): threshold-exporter, da-portal, tenant-api,
         # recipe-preview — exactly where source-COPY paths drift (#472 da-portal
         # moved file, #473 exporter pkg/ COPY; recipe-preview COPYs the bundled
@@ -83,6 +123,14 @@ jobs:
           - name: recipe-preview
             context: .
             dockerfile: components/recipe-preview/Dockerfile
+          # Self-built but never published — they ship inside charts, so their
+          # only pre-merge build coverage is right here (#1337).
+          - name: federation-audit-sidecar
+            context: helm/federation-gateway/audit-sidecar
+            dockerfile: helm/federation-gateway/audit-sidecar/Dockerfile
+          - name: vector-projection-gate
+            context: helm/vector/projection-gate
+            dockerfile: helm/vector/projection-gate/Dockerfile
     steps:
       - uses: actions/checkout@v6
 

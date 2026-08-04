@@ -410,8 +410,595 @@ def test_the_resolve_workflow_triggers_on_overlay_values_files() -> None:
     )
 
 
+# ── #1337: nothing pinned the SELF-BUILT matrix to anything ─────────────────
+# The third-party half of this file has had a real SSOT since #902 (the
+# extractor). The self-built half had none: its five entries, the identical five
+# in component-docker-build.yaml, and the five hand-written `docker buildx build`
+# lines in the Makefile were kept together by a COMMENT ("Keep in sync"). Two
+# images shipped inside Helm charts — helm/federation-gateway/audit-sidecar/Dockerfile
+# and helm/vector/projection-gate/Dockerfile — were therefore deployed for months
+# with zero CVE coverage, and no test could say so: they were absent from all
+# three lists at once, and every existing assertion was about set EQUALITY
+# BETWEEN those lists.
+#
+# ⛔ Those two paths are written out in full ON PURPOSE. `verify_diff`'s text_map
+# indexes LITERAL path strings, so the `ROOT / "a" / "b"` segment form used below
+# registers nothing — a guard that exists but is never selected for the diff that
+# breaks it is the failure mode this module is named after.
+#
+# The SSOT chosen here is `DOCKERFILE_CONTEXTS` in check_iac_vibe_rules.py. It is
+# already fail-closed on exactly the event that matters — an unregistered
+# Dockerfile is a BLOCK finding there — so a new image cannot enter the tree
+# without appearing in it. That makes it the one list a new image is guaranteed
+# to touch.
+#
+# ⛔ Read via ast, NOT by importing the module: check_iac_vibe_rules imports
+# pathspec, and a test that silently skips when an optional dependency is absent
+# is the "gate exists but never runs" shape this module exists to prevent.
+_IAC_RULES = ROOT / "scripts" / "tools" / "lint" / "check_iac_vibe_rules.py"
+
+# ⛔ The registry is TRUSTED BUT VERIFIED, and both halves are load-bearing.
+# Blind review sank the first cut of this guard twice on the same root cause —
+# it trusted a hand-maintained dict as if it were the tree:
+#   (a) the upstream discovery is `rglob("Dockerfile*")` + a name filter, so
+#       `logrotate.Dockerfile` / `Containerfile` are invisible to it — an image
+#       could ship in a chart while being in NO list and NO exemption; and
+#   (b) the upstream BLOCK on an unregistered Dockerfile is waivable from the PR
+#       body (`bypass-lint: iac-vibe-rules`), so "cannot enter the tree without
+#       being registered" was never true in the strong sense.
+# So this module re-derives the inventory from the filesystem with a WIDER net
+# than upstream uses, and a test cannot be waived by a PR-body tag.
+# ⛔ The separator set is load-bearing, and getting it wrong is how the FIRST cut
+# of this guard still had the hole it was written to close. Upstream keeps
+# `Dockerfile` and `Dockerfile.<x>` only, so `Dockerfile-runtime`,
+# `Dockerfile_prod` and `Dockerfile2` are invisible to BOTH it and an earlier
+# version of this regex — and `docker build -f Dockerfile-runtime` is an ordinary
+# spelling. Accept any separator, plus `Containerfile` and `*.dockerfile`.
+# Case-insensitive: on Linux `dockerfile` is a different file from `Dockerfile`.
+_DOCKERFILE_NAME_RE = re.compile(
+    r"(?i)^((dockerfile|containerfile)([.\-_].*|\d.*)?|.+\.(dockerfile|containerfile))$")
+# ⛔ …and a subtraction, because accepting any separator over-reaches: with `_`
+# allowed, `dockerfile_helpers.py` matches. Reject names whose FINAL extension is
+# a source/doc type — those are code ABOUT Dockerfiles, not build recipes. Caught
+# by this module's own name-rule test, which is why that test exists.
+# ⛔ `.tpl` IS in this list, and an earlier round of this PR was wrong to remove
+# it. The reasoning that removed it — "`Dockerfile.tpl` is a plausible templated
+# build recipe" — inverts the consequence: a template is precisely what
+# `docker build -f` CANNOT consume, yet once discovered it could not be exempted
+# (exemptions require a `tests/` prefix) and would be demanded into
+# `make docker-build-all`. Admitting it forces the one artifact class that cannot
+# be built into the mandatory-build set. The buildable artifact is whatever the
+# template RENDERS to, and that is what belongs in the matrices.
+# ⚠️ Known boundary: if such a rendered Dockerfile is produced at build time and
+# never committed, it is invisible to this discovery (which reads the git index).
+# Nothing in the repo does that today; if something starts to, this is the line
+# to revisit.
+_NOT_A_DOCKERFILE_SUFFIX = (
+    ".py", ".md", ".sh", ".txt", ".json", ".yaml", ".yml", ".js", ".ts", ".go",
+    ".tpl", ".lock", ".toml", ".cfg", ".ini",
+)
+
+
+def _is_dockerfile_name(name: str) -> bool:
+    if name.lower().endswith(_NOT_A_DOCKERFILE_SUFFIX):
+        return False
+    return _DOCKERFILE_NAME_RE.match(name) is not None
+
+
+def _discover_dockerfiles() -> set[str]:
+    """Every image-build recipe TRACKED IN GIT, by a wider name rule than upstream.
+
+    ⛔ `git ls-files`, not a filesystem walk. Blind review killed the walk twice:
+      * it descended into `.git` (full history in CI, `fetch-depth: 0`) and every
+        sibling worktree under `.claude` before filtering — tens of thousands of
+        stats on a FUSE mount for a 9-element answer; and
+      * it saw UNTRACKED files, so a stray `Dockerfile.orig` from a failed
+        `git apply` reddened this test on a developer's machine while CI stayed
+        green, with a message telling them to register their scratch file.
+    The index is also the honest oracle: an untracked file ships to nobody.
+
+    Fail-CLOSED: a git failure raises rather than returning an empty set, because
+    an empty set makes every comparison below trivially true.
+    """
+    proc = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "-z"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=60,
+    )
+    assert proc.returncode == 0, (
+        f"`git ls-files` failed in {ROOT} (rc={proc.returncode}): {proc.stderr.strip()[:300]}\n"
+        "This guard derives the image inventory from the git index; it must not "
+        "silently fall back to 'no Dockerfiles found'."
+    )
+    files = [f for f in proc.stdout.split("\0") if f]
+    assert files, "`git ls-files` returned nothing — refusing to run vacuously"
+    found = {f for f in files if _is_dockerfile_name(f.rsplit("/", 1)[-1])}
+    # ⛔ The FILTERED set must be non-empty too, asserted HERE rather than in one
+    # caller. Blind review: a floor computed as `len(discovered) - len(exempt)`
+    # goes NEGATIVE if the name rule ever stops matching, and `len(matrix) >= -2`
+    # is satisfied by an empty matrix — the same triviality this guard already
+    # moved once, relocated from the registry to the name rule. Every caller must
+    # get the floor, so the assertion lives with the producer.
+    assert found, (
+        "no image-build recipes matched in a tree of "
+        f"{len(files)} tracked files — suspect the name rule, not the repo"
+    )
+    # Index-vs-worktree: `git ls-files` lists staged entries even after the file
+    # is deleted from disk. Fail-closed on that rather than reporting coverage of
+    # something that is gone.
+    missing = sorted(f for f in found if not (ROOT / f).is_file())
+    assert not missing, (
+        f"tracked but absent from the worktree: {missing} — `git rm` them, or "
+        "restore them; this guard would otherwise report coverage of a file "
+        "nobody can build."
+    )
+    return found
+
+# Dockerfiles deliberately OUTSIDE the scan matrices.
+#
+# ⛔ An exemption registry is itself the fail-open shape this test is closing, so
+# membership is not enough — `test_scan_exemptions_stay_undeployable` re-derives
+# the property each entry claims. In particular an entry must live under
+# `tests/`, which is what makes it structurally impossible to quietly exempt the
+# next chart-shipped image (the exact class that produced #1337).
+_SCAN_EXEMPT: dict[str, str] = {
+    "tests/e2e-bench/driver/Dockerfile": (
+        "ephemeral benchmark fixture — built by tests/e2e-bench/docker-compose.yml "
+        "for the duration of a bench run, torn down with it, never deployed and "
+        "never published. EXIT: it becomes reachable from a deployable tree."
+    ),
+    "tests/e2e-bench/receiver/Dockerfile": (
+        "same shape as the driver above (in-compose bench receiver). Same EXIT."
+    ),
+}
+
+# Trees whose contents are installed on a cluster or handed to a customer. If an
+# exempt Dockerfile ever becomes reachable from one of these, the exemption's
+# stated premise is false and the test says so.
+_DEPLOYABLE_TREES = ("helm", "k8s", "operator-manifests", "try-local")
+
+
+def _dockerfile_contexts() -> dict[str, str]:
+    """`DOCKERFILE_CONTEXTS` from check_iac_vibe_rules.py, read without importing.
+
+    ⛔ HONEST SCOPE — this reader is DEFENCE IN DEPTH, not the invariant.
+
+    Reading only the literal is fail-open by itself: an entry added after it
+    (``DOCKERFILE_CONTEXTS["x"] = "y"``, ``|= {...}``, ``.update({...})``) is live
+    at runtime and invisible here. The checks below close the spellings a reviewer
+    is actually likely to write, but they CANNOT be complete — aliasing
+    (``d = DOCKERFILE_CONTEXTS; d[k] = v``), ``globals()[...]``, ``__setitem__``
+    and mutation from another module all evade any such scan, and chasing them is
+    an arms race this file should not be in.
+
+    ⭐ What actually holds the invariant is `_discover_dockerfiles()`: the
+    dangerous case is a REAL Dockerfile registered out of band, and there the walk
+    sees the file while this reader does not, so `unregistered` is non-empty and
+    the test reds regardless of how the registration was spelled. A registration
+    with no file behind it is harmless by construction. Do not restate this
+    reader as "the literal is the whole story, asserted".
+    """
+    src = _IAC_RULES.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    rel = _IAC_RULES.relative_to(ROOT).as_posix()
+    # ⛔ ast.walk, not tree.body: a rebinding nested in `if` / `try` / `for` is
+    # still a rebinding, and the module-level-only scan missed it.
+    found: list[ast.expr] = []
+    rebinds: list[int] = []
+    for node in ast.walk(tree):
+        targets = (
+            [node.target] if isinstance(node, (ast.AnnAssign, ast.AugAssign))
+            else getattr(node, "targets", [])
+        )
+        for t in targets:
+            if isinstance(t, ast.Name) and t.id == "DOCKERFILE_CONTEXTS":
+                if isinstance(node, ast.AugAssign):
+                    # `|=` mutates in place (PEP 584) and is NOT a rebinding, so
+                    # it used to slip past both halves of this reader.
+                    rebinds.append(node.lineno)
+                elif node in tree.body:
+                    found.append(node.value)
+                else:
+                    rebinds.append(node.lineno)
+    assert len(found) == 1 and not rebinds, (
+        f"DOCKERFILE_CONTEXTS must be bound exactly once, at module level, and "
+        f"never re-bound or augmented in {rel} — found {len(found)} literal "
+        f"binding(s) and re-binding/augmentation at line(s) {rebinds or 'none'}. "
+        "This reader takes the literal, so anything else is invisible to it."
+    )
+
+    mutators: list[str] = []
+    for node in ast.walk(tree):
+        tgts = list(getattr(node, "targets", []))
+        if isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            tgts.append(node.target)
+        for t in tgts:
+            if (isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name)
+                    and t.value.id == "DOCKERFILE_CONTEXTS"):
+                mutators.append(f"line {t.lineno}: item assignment")
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "DOCKERFILE_CONTEXTS"
+                and node.func.attr in {"update", "setdefault", "pop", "popitem",
+                                       "clear", "__setitem__", "__ior__"}):
+            mutators.append(f"line {node.lineno}: .{node.func.attr}()")
+    assert not mutators, (
+        f"DOCKERFILE_CONTEXTS is mutated after its literal in {rel} "
+        f"({'; '.join(mutators)}). Put the entry in the literal — a runtime-only "
+        "entry is invisible to this reader while satisfying the upstream "
+        "registration check."
+    )
+    try:
+        return ast.literal_eval(found[0])
+    except ValueError as exc:  # non-literal value (comprehension, dict(), f-string…)
+        raise AssertionError(
+            f"DOCKERFILE_CONTEXTS in {rel} is no longer a plain literal ({exc}). "
+            "This guard needs to read it WITHOUT importing the module (it depends "
+            "on pathspec, and a test that skips when an optional dependency is "
+            "missing is the failure mode this module exists to prevent). Keep it a "
+            "literal, or re-point this reader — do not delete the assertion."
+        ) from exc
+
+
+def _make_recipe(target: str) -> list[str]:
+    """Recipe lines of a Makefile target (tab-indented lines after `<target>:`)."""
+    lines = (ROOT / "Makefile").read_text(encoding="utf-8").splitlines()
+    out: list[str] = []
+    seen = False
+    for line in lines:
+        if not seen:
+            if re.match(rf"^{re.escape(target)}\s*:", line):
+                seen = True
+            continue
+        if line.startswith("\t"):
+            out.append(line.lstrip("\t"))
+        elif line.strip():  # a non-indented, non-blank line ends the recipe
+            break
+    assert out, f"Makefile target {target!r} has an empty recipe — parser or target moved"
+    return out
+
+
+def test_selfbuilt_matrix_covers_every_dockerfile() -> None:
+    """Every Dockerfile in the tree is scanned, or carries a registered exemption.
+
+    This is the assertion #1337 was missing. `test_report_expected_counts_match_
+    matrix_sizes` below only checks the matrix against a literal it sits next to,
+    so bumping both together passes while an image sits in neither list.
+
+    ⭐ COUNTERFACTUAL (measured, not assumed — the three inventories restored whole
+    from origin/main via `git show <base>:<file>`, these tests kept):
+      * this test                          RED on base, naming both images
+      * test_the_three_selfbuilt_build_lists_agree  RED on base — but ONLY via its
+        anti-vacuity floor (the three lists themselves agreed, at 5). A derived
+        red, not a second independent detection; do not count it as one.
+      * test_scan_exemptions_stay_undeployable     GREEN before and after
+      * test_pr_build_triggers_on_every_matrix_entrys_dockerfile  GREEN before and
+        after (base's paths filter did cover base's matrix)
+      * all 15 pre-existing tests in this module   GREEN on base
+    So this ONE assertion is the detection the PR actually buys. The others are
+    regression pins for mechanisms that happened to be consistent already and had
+    no gate — real value, but NOT a #1337 find (the #1294 lesson).
+
+    ⛔ Mutation counts are stated for the SUITE, not per test, deliberately: the
+    harness runs every guard here against each mutation, so a per-test sub-count
+    cannot be read off the results. An earlier docstring claimed "5/5" while
+    naming four scenarios, and the PR-level total inherited that error — the kind
+    of unreconciled number this module elsewhere refuses to write.
+    Measured: **16 mutations, 0 survivors**, against a green baseline. They cover
+    removing an image from the matrix; a wrong build context; registering a
+    Dockerfile after the literal by item-assignment, `.update()`, `|=`, or a
+    rebind nested in an `if`; emptying the registry literal; narrowing the name
+    rule back to a `.` separator; dropping its over-match subtraction; a `!`
+    negation in the PR filter; dropping a path from that filter; dropping an entry
+    from any of the three build lists; and making one deployable tree contribute
+    nothing.
+    """
+    contexts = _dockerfile_contexts()
+    # ⛔ Anti-vacuity, and NOT a `>=` floor: the registry is compared against a
+    # filesystem walk, so the guard cannot be satisfied by a parser that returns
+    # less than the tree holds. The walk deliberately uses a WIDER name rule than
+    # upstream's `rglob("Dockerfile*")`, because `logrotate.Dockerfile` /
+    # `Containerfile` would otherwise be in no list, no registry and no exemption
+    # — a hole with the same shape as the one this module exists to close.
+    discovered = _discover_dockerfiles()
+    assert discovered, "no Dockerfiles discovered at all — the walk is broken, not the repo"
+    unregistered = sorted(discovered - set(contexts))
+    ghost = sorted(set(contexts) - discovered)
+    assert not unregistered, (
+        "image-build recipe(s) present in the tree but absent from "
+        f"DOCKERFILE_CONTEXTS: {unregistered}\n"
+        "Register each one (that also forces its build context to be declared), "
+        "then put it in the scan matrix or in _SCAN_EXEMPT. ⚠️ If the name is an "
+        "alternate spelling, the upstream hook does NOT see it — this test is the "
+        "only thing that does, and unlike that hook it cannot be waived from the "
+        "PR body."
+    )
+    assert not ghost, (
+        f"DOCKERFILE_CONTEXTS registers files that do not exist: {ghost}"
+    )
+    unknown_exempt = set(_SCAN_EXEMPT) - set(contexts)
+    assert not unknown_exempt, (
+        f"exemption for a Dockerfile that is not registered upstream: {sorted(unknown_exempt)}\n"
+        "Registered means present in check_iac_vibe_rules.py DOCKERFILE_CONTEXTS."
+    )
+
+    expected = set(contexts) - set(_SCAN_EXEMPT)
+    matrix = {e["dockerfile"] for e in _matrix_include("scan")}
+    missing = sorted(expected - matrix)
+    extra = sorted(matrix - expected)
+    assert not missing and not extra, (
+        "the nightly self-built scan matrix does not cover the Dockerfile inventory.\n"
+        f"  built+deployed but NOT scanned: {missing}\n"
+        f"  in the matrix but not a registered Dockerfile: {extra}\n"
+        "Add it to the `scan` matrix in .github/workflows/nightly-image-scan.yaml "
+        "(and to component-docker-build.yaml + `make docker-build-all`), or add a "
+        "registered exemption to _SCAN_EXEMPT with a rationale and an EXIT "
+        "condition. Silence-by-classification is what #1337 was."
+    )
+
+    # The build CONTEXT has to agree too: a matrix entry pointing at the right
+    # Dockerfile with the wrong context builds nothing, or builds the wrong thing.
+    for entry in _matrix_include("scan"):
+        assert entry["context"] == contexts[entry["dockerfile"]], (
+            f"{entry['name']}: scan matrix context {entry['context']!r} != the "
+            f"registered build context {contexts[entry['dockerfile']]!r}"
+        )
+
+
+def test_dockerfile_name_rule_covers_the_spellings_it_claims_to() -> None:
+    """Pin the name rule against known-positive and known-negative samples.
+
+    ⛔ A discovery regex that silently matches nothing looks exactly like a clean
+    repo, so it gets verified against samples rather than trusted. The hyphen and
+    underscore cases are here because the first cut of this guard required a `.`
+    separator and therefore missed `Dockerfile-runtime` — a spelling upstream's
+    own discovery also misses, i.e. the hole would have been in BOTH.
+    """
+    must_match = [
+        "Dockerfile", "dockerfile", "Dockerfile.dev", "Dockerfile-runtime",
+        "Dockerfile_prod", "Dockerfile2", "Containerfile", "Containerfile.ci",
+        "logrotate.Dockerfile", "sidecar.dockerfile",
+    ]
+    must_not_match = [
+        ".dockerignore", "docker-compose.yml", "Dockerfilter.py", "README.md",
+        "dockerfile_helpers.py", "build.sh",
+        # ⛔ Pinned in the NEGATIVE direction on purpose: a template is not a
+        # buildable recipe, and an earlier round of this PR removed `.tpl` from
+        # the subtraction list with no sample holding it either way. The rule
+        # only counts as "verified against samples" if both directions are here.
+        "Dockerfile.tpl", "Containerfile.tpl",
+    ]
+    missed = [n for n in must_match if not _is_dockerfile_name(n)]
+    over = [n for n in must_not_match if _is_dockerfile_name(n)]
+    assert not missed, f"name rule misses image-build spellings: {missed}"
+    assert not over, f"name rule over-matches non-Dockerfiles: {over}"
+
+
+def test_scan_exemptions_stay_undeployable() -> None:
+    """Re-derive each exemption's premise instead of trusting the list.
+
+    ⚠️ GREEN-before/GREEN-after, same as the sibling above: the two bench
+    fixtures were already undeployable. What it buys is that the exemption
+    registry this PR introduces cannot become the next hiding place — mutation:
+    adding `helm/vector/projection-gate/Dockerfile` to _SCAN_EXEMPT (with a
+    plausible rationale) turns it red on the `tests/` rule.
+    """
+    for path, rationale in _SCAN_EXEMPT.items():
+        assert (ROOT / path).is_file(), (
+            f"exempt Dockerfile {path} does not exist — a stale exemption is a hole "
+            "that reads like a decision"
+        )
+        assert len(rationale) > 40, f"exemption {path} needs a real rationale"
+        # The load-bearing structural rule: only test fixtures may be exempt. A
+        # chart- or manifest-shipped image cannot be waived by adding a line here.
+        assert path.startswith("tests/"), (
+            f"{path} is outside tests/ — an image that ships with a chart or a "
+            "manifest may NOT be exempted from CVE scanning by list membership. "
+            "That is precisely the shape #1337 found in production."
+        )
+
+    # ⛔ HONEST SCOPE — the load-bearing rule is the `tests/` prefix above, NOT
+    # this scan. Blind review measured the limit: charts reference images by
+    # REGISTRY REF (`repository: federation-audit-sidecar`), never by build
+    # directory, so `helm/federation-gateway/audit-sidecar` appears in exactly
+    # zero deployable YAML files today — i.e. if that (default-enabled,
+    # in-production) image were listed in _SCAN_EXEMPT, this half would report
+    # clean and only the prefix rule would stop it. Keep it as a cheap second net
+    # for the one case it does catch — a compose/values file that builds straight
+    # out of the exempt directory — and do not describe it as more than that.
+    exempt_dirs = {Path(p).parent.as_posix() for p in _SCAN_EXEMPT}
+    offenders: list[tuple[str, str]] = []
+    scanned = 0
+    missing_trees = [t for t in _DEPLOYABLE_TREES if not (ROOT / t).is_dir()]
+    # Anti-vacuity: `if not base.is_dir(): continue` silently shrinks the face to
+    # nothing if a tree is renamed. Make that a failure, not a quiet pass.
+    assert not missing_trees, (
+        f"deployable tree(s) missing: {missing_trees} — renamed? This scan would "
+        "have silently covered less while staying green; update _DEPLOYABLE_TREES."
+    )
+    per_tree: dict[str, int] = {}
+    for tree in _DEPLOYABLE_TREES:
+        n = 0
+        for f in (ROOT / tree).rglob("*"):
+            if not f.is_file() or f.suffix not in (".yaml", ".yml", ".json", ".tpl"):
+                continue
+            n += 1
+            scanned += 1
+            text = f.read_text(encoding="utf-8", errors="replace")
+            for d in exempt_dirs:
+                if d in text:
+                    offenders.append((f.relative_to(ROOT).as_posix(), d))
+        per_tree[tree] = n
+    # ⛔ PER-TREE, not a global floor. A global `scanned > 50` was satisfied by
+    # `helm/` alone (105 files), so emptying the other three trees left the scan
+    # three-quarters blind and green — the very shape this module already
+    # documents fixing for the nightly-workflow discovery further down.
+    empty = [t for t, n in per_tree.items() if n == 0]
+    assert not empty, (
+        f"deployable tree(s) contributed no scannable files: {empty} (counts: "
+        f"{per_tree}) — the scan face shrank; fix the walk or update "
+        "_DEPLOYABLE_TREES deliberately."
+    )
+    # ⛔ AND a magnitude floor. Replacing the global floor with the per-tree one
+    # was a REGRESSION, not a strengthening (blind review): collapse three trees
+    # to one file each and every tree is still non-empty, so the scan reads ~108
+    # files instead of ~180 and stays green. Keep both — they fail on different
+    # shapes, and an earlier cut left `scanned` computed but never asserted.
+    assert scanned > 50, (
+        f"only {scanned} deployable files read across {per_tree} — the scan face "
+        "collapsed in aggregate even though no single tree is empty"
+    )
+    assert not offenders, (
+        "an exempt Dockerfile's directory is referenced from a DEPLOYABLE tree, so "
+        "the exemption's premise ('never deployed') is now false:\n"
+        + "\n".join(f"  {p} -> {d}" for p, d in sorted(offenders))
+    )
+
+
+def test_the_three_selfbuilt_build_lists_agree() -> None:
+    """nightly scan == component-docker-build == `make docker-build-all`.
+
+    All three built the same five images and were held together by a comment.
+
+    ⚠️ On origin/main the three lists genuinely DID agree (at 5), so the equality
+    half catches nothing that existed — it is a regression pin for the next
+    divergence. It does go red on base, but only through the anti-vacuity floor
+    below; that is a derived red, not an independent find. Mutation-verified
+    instead: dropping an entry from the PR workflow, from `docker-build-all`, or
+    from `trivy-scan-all`'s loop each turns it red, as does shrinking all three
+    at once. See the suite-level mutation note on
+    test_selfbuilt_matrix_covers_every_dockerfile for the measured total — do not
+    restate a per-test sub-count here, that is where the earlier arithmetic error
+    came from.
+    """
+    nightly = {(e["name"], e["context"], e["dockerfile"]) for e in _matrix_include("scan")}
+    # ⛔ Floor first. Every assertion below is a set EQUALITY, and ∅ == ∅ — with
+    # both matrices emptied and the Makefile lines deleted this test passed
+    # cleanly (blind review). Equality between two collections proves nothing
+    # about either being non-empty.
+    #
+    # ⛔ Derived from the FILESYSTEM, not from DOCKERFILE_CONTEXTS. An earlier cut
+    # used the registry, which is on the other side of the same guard: empty the
+    # registry literal and the floor became `0 >= 0 - 2`, i.e. the empty matrix it
+    # exists to reject satisfied it. A floor computed from the artifact it guards
+    # proves nothing.
+    floor = len(_discover_dockerfiles()) - len(_SCAN_EXEMPT)
+    assert len(nightly) >= floor, (
+        f"only {len(nightly)} entries in the self-built scan matrix, but the tree "
+        f"holds {floor} non-exempt image-build recipes — the matrix shrank"
+    )
+
+    pr_wf = yaml.safe_load(
+        (WORKFLOWS_DIR / "component-docker-build.yaml").read_text(encoding="utf-8")
+    )
+    pr = {
+        (e["name"], e["context"], e["dockerfile"])
+        for e in pr_wf["jobs"]["build"]["strategy"]["matrix"]["include"]
+    }
+    assert nightly == pr, (
+        "nightly-image-scan.yaml `scan` and component-docker-build.yaml `build` "
+        f"disagree.\n  only nightly: {sorted(nightly - pr)}\n  only PR: {sorted(pr - nightly)}"
+    )
+
+    # `docker buildx build --load -t local-test:<name> [-f <file>] <context>`
+    build_re = re.compile(
+        r"docker buildx build\s+--load\s+-t\s+local-test:(?P<name>[\w.-]+)\s+"
+        r"(?:-f\s+(?P<file>\S+)\s+)?(?P<context>\S+)\s*$"
+    )
+    make_built: set[tuple[str, str, str]] = set()
+    for line in _make_recipe("docker-build-all"):
+        m = build_re.search(line)
+        if m:
+            name, file_, ctx = m.group("name"), m.group("file"), m.group("context")
+            # No -f means the Dockerfile lives in the context dir.
+            make_built.add((name, ctx, file_ or f"{ctx.rstrip('/')}/Dockerfile"))
+    assert nightly == make_built, (
+        "`make docker-build-all` and the nightly `scan` matrix disagree.\n"
+        f"  only in the matrix: {sorted(nightly - make_built)}\n"
+        f"  only in the Makefile: {sorted(make_built - nightly)}\n"
+        "pre-tag is where a build break is supposed to surface before a tag; an "
+        "image the matrix scans but pre-tag never builds is half-covered."
+    )
+
+    # trivy-scan-all iterates a hand-written name list in a shell `for`.
+    scan_names: set[str] = set()
+    for line in _make_recipe("trivy-scan-all"):
+        m = re.search(r"for\s+img\s+in\s+(?P<names>[^;]+);", line)
+        if m:
+            scan_names = set(m.group("names").split())
+    assert scan_names == {n for n, _, _ in nightly}, (
+        "`make trivy-scan-all`'s image list != the nightly scan matrix names.\n"
+        f"  only in the matrix: {sorted({n for n, _, _ in nightly} - scan_names)}\n"
+        f"  only in trivy-scan-all: {sorted(scan_names - {n for n, _, _ in nightly})}"
+    )
+
+
+def test_pr_build_triggers_on_every_matrix_entrys_dockerfile() -> None:
+    """Widening the PR-build matrix without widening its `paths:` buys nothing.
+
+    Exactly the property `test_the_resolve_workflow_triggers_on_overlay_values_files`
+    enforces for image-ref-resolve.yaml, written for the sibling workflow. Blind
+    review found it missing: an 8th image could be added to the matrix, the
+    nightly scan, `docker-build-all` and `trivy-scan-all` — every guard green —
+    while PRs that only touch its build inputs never run the build at all. For
+    the two chart-shipped images this workflow is one of only two automated
+    pre-merge build paths, so a silent miss here is not cosmetic.
+    """
+    wf = yaml.safe_load(
+        (WORKFLOWS_DIR / "component-docker-build.yaml").read_text(encoding="utf-8")
+    )
+    # PyYAML parses the `on:` key as the boolean True (YAML 1.1) — the same trap
+    # the Helm side of this repo documents. Accept either spelling.
+    on = wf.get("on", wf.get(True))
+    paths = on["pull_request"]["paths"]
+    assert paths, "component-docker-build.yaml has no pull_request.paths filter"
+
+    # ⛔ `!` NEGATION IS THE UNSAFE DIRECTION and this translator cannot model it:
+    # `helm/**` + `!helm/**/Dockerfile` would make every entry look covered here
+    # while GitHub excludes exactly the file that matters. Refuse to grade rather
+    # than grade wrongly. (`?`, `+` and `[]` are escaped to literals below, which
+    # errs toward a false RED — annoying, never silent.)
+    negations = [p for p in paths if p.lstrip().startswith("!")]
+    assert not negations, (
+        f"`on.pull_request.paths` uses negation patterns {negations}, which this "
+        "check cannot evaluate — it would report every matrix entry as covered "
+        "while GitHub excluded it. Express the filter without `!`, or teach this "
+        "test real minimatch semantics before adding one."
+    )
+
+    def _to_re(glob: str) -> re.Pattern[str]:
+        out, i = [], 0
+        while i < len(glob):
+            if glob.startswith("**", i):
+                out.append(".*")
+                i += 2
+            elif glob[i] == "*":
+                out.append("[^/]*")
+                i += 1
+            else:
+                out.append(re.escape(glob[i]))
+                i += 1
+        return re.compile("^" + "".join(out) + "$")
+
+    patterns = [_to_re(p) for p in paths]
+    entries = wf["jobs"]["build"]["strategy"]["matrix"]["include"]
+    assert entries, "component-docker-build.yaml build matrix is empty"
+    uncovered = [
+        e["name"] for e in entries
+        if not any(rx.match(e["dockerfile"]) for rx in patterns)
+    ]
+    assert not uncovered, (
+        "these build-matrix entries' Dockerfiles are not matched by any "
+        f"`on.pull_request.paths` pattern: {uncovered}\n"
+        f"  paths: {paths}\n"
+        "The matrix would build them, but no PR that changes only their build "
+        "inputs would ever start the workflow — scan face and TRIGGER face have "
+        "to widen together (#1302's lesson, #1337's shape)."
+    )
+
+
 def test_report_expected_counts_match_matrix_sizes() -> None:
-    """The report's hardcoded EXPECTED (5 / 15) must track the matrix sizes."""
+    """The report's hardcoded EXPECTED (7 / 15) must track the matrix sizes."""
     n_selfbuilt = len(_matrix_include("scan"))
     n_thirdparty = len(_matrix_include("scan-thirdparty"))
     run = _aggregate_run()
