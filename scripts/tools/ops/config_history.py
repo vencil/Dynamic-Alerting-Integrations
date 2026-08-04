@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
+from _lib_confd import warn_nested  # noqa: E402
 
 # Canonical lang detection (da-tools ROI r3 W2 bug fix): the former local
 # `_detect_lang` only checked the zh prefix per variable, so DA_LANG=en fell
@@ -59,6 +60,9 @@ def _scan_config_dir(config_dir):
               file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
+    # #1339: flat by design here — but a hierarchical conf.d must not
+    # look like an empty one. Name the files this scan cannot see.
+    warn_nested(config_path, tool="config_history")
     for f in sorted(config_path.glob("*.yaml")):
         if f.name.startswith('.'):
             continue

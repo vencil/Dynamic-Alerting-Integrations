@@ -53,6 +53,7 @@ sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_confd import iter_config_files  # noqa: E402
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
@@ -129,21 +130,28 @@ def _make_result(
 # Check 1: YAML Syntax
 # ============================================================
 def check_yaml_syntax(config_dir: str) -> dict[str, object]:
-    """Validate that all YAML files in config_dir parse successfully."""
+    """Validate that all YAML files in config_dir parse successfully.
+
+    Recursive since #1339: ADR-016 allows a hierarchical conf.d/ and the
+    exporter walks it, so a flat scan here reported `PASS` while never
+    reading the tenants it was asked about.
+    """
     errors = []
     file_count = 0
-    for fname in sorted(os.listdir(config_dir)):
-        if not fname.endswith((".yaml", ".yml")):
-            continue
-        fpath = str(Path(config_dir) / fname)
-        if not os.path.isfile(fpath):
-            continue
+    for fpath_p in iter_config_files(config_dir):
+        fpath = str(fpath_p)
         file_count += 1
         try:
             with open(fpath, encoding="utf-8") as f:
                 yaml.safe_load(f)
         except yaml.YAMLError as e:
-            errors.append(f"{fname}: {e}")
+            # Relative path, not bare filename: now that the scan is
+            # recursive, two levels can hold the same `_defaults.yaml`.
+            try:
+                label = fpath_p.relative_to(Path(config_dir)).as_posix()
+            except ValueError:
+                label = fpath_p.name
+            errors.append(f"{label}: {e}")
 
     if errors:
         return _make_result("yaml_syntax", FAIL, errors)
@@ -367,12 +375,13 @@ def check_profiles(config_dir: str) -> dict[str, object]:
                         f"profile={p_name}: contains unknown reserved key \"{key}\"")
 
     # ── Tenant _profile reference validation ──
-    for fname in sorted(os.listdir(config_dir)):
-        if not fname.endswith((".yaml", ".yml")):
-            continue
+    # Recursive since #1339 (see check_yaml_syntax). `_`/`.`-prefixed files
+    # are level defaults / meta, not tenant files — skipped at every depth.
+    for fpath_p in iter_config_files(config_dir):
+        fname = fpath_p.name
         if fname.startswith("_") or fname.startswith("."):
             continue
-        fpath = str(cfg / fname)
+        fpath = str(fpath_p)
         raw = load_yaml_file(fpath, default={})
         if not isinstance(raw, dict):
             continue

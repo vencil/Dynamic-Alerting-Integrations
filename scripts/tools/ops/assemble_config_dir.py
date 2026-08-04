@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
+from _lib_confd import warn_nested  # noqa: E402
 
 try:
     import yaml
@@ -56,6 +57,9 @@ def discover_yamls(source_dir: Path) -> List[Path]:
     """
     if not source_dir.is_dir():
         raise FileNotFoundError(f"source directory not found: {source_dir}")
+    # #1339: flat by design here — but a hierarchical conf.d must not
+    # look like an empty one. Name the files this scan cannot see.
+    warn_nested(source_dir, tool="assemble_config_dir")
     return sorted(source_dir.glob("*.yaml"))
 
 
@@ -177,6 +181,9 @@ def validate_merged(output_dir: Path) -> List[str]:
         return ["SKIP: PyYAML not installed, skipping validation"]
 
     issues = []
+    # #1339: second scan site — the guard must live where the scan does,
+    # otherwise a hierarchical conf.d is silently empty on THIS path.
+    warn_nested(output_dir, tool="assemble_config_dir")
     for f in sorted(output_dir.glob("*.yaml")):
         try:
             with open(f, encoding="utf-8") as fh:

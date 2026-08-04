@@ -43,6 +43,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import load_yaml_file as _lib_load_yaml  # noqa: E402
 from _lib_python import write_text_secure  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_confd import warn_nested  # noqa: E402
 
 
 def load_yaml_file(path):
@@ -87,6 +88,9 @@ def scan_for_metric(metric_key, config_dir):
     ]
 
     config_base = Path(config_dir)
+    # #1339: flat by design here — but a hierarchical conf.d must not
+    # look like an empty one. Name the files this scan cannot see.
+    warn_nested(config_base, tool="deprecate_rule")
     for entry in sorted(list(config_base.glob("*.yaml")) + list(config_base.glob("*.yml"))):
         filename = entry.name
         path = str(entry)
@@ -175,6 +179,9 @@ def remove_from_tenants(metric_key, config_dir, execute=False):
     ]
 
     config_base = Path(config_dir)
+    # #1339: second scan site — the guard must live where the scan does,
+    # otherwise a hierarchical conf.d is silently empty on THIS path.
+    warn_nested(config_base, tool="deprecate_rule")
     for entry in sorted(list(config_base.glob("*.yaml")) + list(config_base.glob("*.yml"))):
         filename = entry.name
         path = str(entry)

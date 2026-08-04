@@ -8,11 +8,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
 import yaml
 
+from _lib_confd import warn_nested
 from _lib_constants import ONBOARD_HINTS_FILENAME
 
 
@@ -54,6 +56,11 @@ def iter_yaml_files(
     base = Path(config_dir)
     if not base.is_dir():
         return []
+    # #1339: flat read — a hierarchical conf.d must not look empty.
+    # tool= omitted on purpose: this helper is reached from several
+    # entry points, so the message should name the command the
+    # operator ran, not this function.
+    warn_nested(base)
     result: list[tuple[str, str]] = []
     for entry in sorted(base.iterdir(), key=lambda p: p.name):
         fname = entry.name

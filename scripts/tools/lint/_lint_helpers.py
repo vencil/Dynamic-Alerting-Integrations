@@ -41,6 +41,10 @@ BUILD_EXEMPT = frozenset({
     "_lib_compat.py",
     # #452 Track A — canonical 0/1/2 exit-code constants. Library, not CLI.
     "_lib_exitcodes.py",
+    # #1339 — single answer to "what is in a conf.d/": the recursive read
+    # plus the guard a flat reader calls so a hierarchical tree can never
+    # look empty. Library, not CLI.
+    "_lib_confd.py",
     # v2.8.0 PR-3a — generate_alertmanager_routes.py split into 5 helpers.
     # These are library modules consumed by the main file via re-export,
     # not CLI commands themselves.
