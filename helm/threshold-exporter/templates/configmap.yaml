@@ -11,24 +11,26 @@ data:
   _defaults.yaml: |
     defaults:
       {{- .Values.thresholdConfig.defaults | toYaml | nindent 6 }}
+    {{- /* Type check sits OUTSIDE the truthy guard below, deliberately: `false`,
+           `0` and `""` are all falsy, so a guard-internal check can never see
+           them and a mistyped falsy scalar would stay indistinguishable from
+           "deliberately unset" (CodeRabbit #1336). Only genuinely absent/null
+           (kind `invalid`) and any slice — including the empty one — are let
+           through; the truthy guard then skips the empty cases as before.
+           Why a type check at all: the note below counts the list, and `len`
+           aborts the WHOLE render on a non-collection (`len of type bool`),
+           taking deployment.yaml with it over one mistyped value; while a
+           scalar does NOT abort — `len` counts CHARACTERS, so
+           `optional_overrides: "oracle_wait_time_rate"` rendered a confident
+           "21 keys". */}}
+    {{- if not (or (kindIs "invalid" .Values.thresholdConfig.optional_overrides) (kindIs "slice" .Values.thresholdConfig.optional_overrides)) }}
+    {{- fail (printf "thresholdConfig.optional_overrides must be a LIST of key names (array of string), got %s. This tier DECLARES keys without asserting values; a scalar or map here would assert one." (kindOf .Values.thresholdConfig.optional_overrides)) }}
+    {{- end }}
     {{- if .Values.thresholdConfig.optional_overrides }}
     {{- /* #1310: TOP-LEVEL key, sibling of defaults/state_filters — NOT a child
            of defaults. It is a LIST of key names the platform recognises but
            asserts no value for (ThresholdConfig.OptionalOverrides []string);
            nesting it under defaults would decode as a threshold value. */}}
-    {{- /* The note below counts the list, and `len` aborts the WHOLE render on a
-           non-collection (`len of type bool`) — which would take the entire
-           chart down, deployment.yaml included, over one mistyped value. Guard
-           the type explicitly so the operator gets the reason instead of a Go
-           template internal error. A scalar would also make `len` count
-           CHARACTERS: `optional_overrides: "oracle_wait_time_rate"` rendered a
-           confident "21 keys". Nothing FALSY reaches here — empty list, null,
-           `0` and `false` are all skipped by the `if` above, so a mistyped
-           falsy scalar stays indistinguishable from "deliberately unset".
-           Narrowing that is a separate change to the guard on line 14. */}}
-    {{- if not (kindIs "slice" .Values.thresholdConfig.optional_overrides) }}
-    {{- fail (printf "thresholdConfig.optional_overrides must be a LIST of key names (array of string), got %s. This tier DECLARES keys without asserting values; a scalar or map here would assert one." (kindOf .Values.thresholdConfig.optional_overrides)) }}
-    {{- end }}
     {{- /* #1321: the note below is emitted as literal YAML comments INSIDE the
            _defaults.yaml value, because `toYaml` renders the parsed list only —
            every comment in values.yaml (the tier rationale at the top of the

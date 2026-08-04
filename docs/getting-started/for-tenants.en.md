@@ -51,7 +51,7 @@ The first group (when you leave it unset) and the third group end the same way: 
 
 **Unsure which group a key is in? Do not eyeball it** — the command under *Self-Service Verification › View Inheritance Chain* below prints the answer already split into sections.
 
-`_defaults.yaml` normally sits in the **same `conf.d/` directory** you edit `<tenant>.yaml` in (CODEOWNERS restricts who may **change** it, not who may **read** it), so in most setups you can read it and run that command yourself. Only when your organisation keeps the platform file in a source you cannot reach (a multi-team sharded layout, see the [GitOps CI/CD Integration Guide](../scenarios/gitops-ci-integration.md)) do you need to ask your platform operator for it — **both the `defaults:` and the `optional_overrides:` sections**.
+`_defaults.yaml` normally sits in the **same `conf.d/` directory** you edit `<tenant>.yaml` in (CODEOWNERS restricts who may **change** it, not who may **read** it), so in most setups you can read it and run that command yourself. Only when your organisation keeps the platform file in a source you cannot reach (a multi-team sharded layout, see the [GitOps CI/CD Integration Guide](../scenarios/gitops-ci-integration.en.md)) do you need to ask your platform operator for it — **both the `defaults:` and the `optional_overrides:` sections**.
 
 ## Common Operations
 

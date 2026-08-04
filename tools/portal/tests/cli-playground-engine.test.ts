@@ -68,12 +68,28 @@ describe('diagnose emits a command that actually runs', () => {
       'da-tools diagnose db-a --config-dir conf.d/ --show-inheritance');
   });
 
-  it('advertises no flag the CLI does not have', () => {
+  it('advertises exactly the flags the CLI has — no more, no fewer', () => {
     // `--namespace` was listed for years; diagnose.py has never accepted it.
+    // Exact-set rather than one-way containment: a one-way check passes while
+    // a real flag silently goes unadvertised, which is how `--json` was
+    // missing until CodeRabbit flagged it on #1336.
+    // Ground truth = `diagnose.py --help`:
+    //   [--prometheus] [--config-dir] [--show-inheritance] [--json] tenant
     const real = ['--prometheus', '--config-dir', '--show-inheritance', '--json'];
-    for (const f of COMMANDS['diagnose'].flags) {
-      expect(real).toContain(f.name);
-    }
+    expect(COMMANDS['diagnose'].flags.map(f => f.name).sort())
+      .toEqual([...real].sort());
+  });
+
+  it('emits --json as a valueless flag', () => {
+    const built = buildCommand({
+      isDocker: false,
+      network: {},
+      selectedCommand: 'diagnose',
+      command: COMMANDS['diagnose'],
+      args: { tenant: 'db-a' },
+      flags: { '--json': true },
+    });
+    expect(built).toBe('da-tools diagnose db-a --json');
   });
 });
 

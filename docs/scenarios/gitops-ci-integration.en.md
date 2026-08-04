@@ -325,7 +325,7 @@ git push origin feature/lower-connections
 >   --config-dir conf.d/ --show-inheritance
 > ```
 >
-> The `declared` section is the list of protections that tenant is going without. Full three-group breakdown in the [Tenant Quick Start Guide](../getting-started/for-tenants.md).
+> The `declared` section is the list of protections that tenant is going without. Full three-group breakdown in the [Tenant Quick Start Guide](../getting-started/for-tenants.en.md).
 
 ## 6. Multi-Team Sharded Mode
 

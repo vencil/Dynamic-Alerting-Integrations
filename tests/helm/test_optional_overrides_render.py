@@ -275,9 +275,22 @@ def test_rendered_note_ships_and_its_count_tracks_the_list(
 
 
 @_needs_helm
-@pytest.mark.parametrize("bad,kind", [(True, "bool"), (5, "float64"),
-                                      ("oracle_wait_time_rate", "string"),
-                                      ({"oracle_wait_time_rate": 5}, "map")])
+@pytest.mark.parametrize("bad,kind", [
+    # `len` aborts on these …
+    (True, "bool"), (5, "float64"), ({"oracle_wait_time_rate": 5}, "map"),
+    # The EMPTY map is its own case: Helm logs
+    # "destination … is a table. Ignoring non-table value" and drops the
+    # shipped list, so before the type check this rendered nothing at all —
+    # a silently emptied declaration tier rather than an error.
+    ({}, "map"),
+    # … and silently miscounts these (character count), so the guard cannot
+    # key off whether `len` survives the value.
+    ("oracle_wait_time_rate", "string"),
+    # FALSY non-lists: invisible to a truthy guard, hence the type check sits
+    # outside it. Without that, `false` / `0` / `""` render as "deliberately
+    # unset" — the operator gets silence instead of an error (CodeRabbit #1336).
+    (False, "bool"), (0, "float64"), ("", "string"),
+])
 def test_non_list_values_fail_with_a_reason_not_a_template_error(
         repo_root: Path, tmp_path: Path, bad, kind):
     """A mistyped `optional_overrides` must fail with an explanation.

@@ -64,7 +64,12 @@ Mode:        normal (no silence/maintenance)
     flags: [
       { name: '--prometheus', label: t('Prometheus URL', 'Prometheus URL'), required: false, placeholder: 'http://localhost:9090' },
       { name: '--config-dir', label: t('配置目錄', 'Config Directory'), required: false, placeholder: 'conf.d/' },
-      { name: '--show-inheritance', label: t('顯示繼承鏈（需 --config-dir）', 'Show inheritance chain (requires --config-dir)'), required: false, type: 'checkbox' }
+      { name: '--show-inheritance', label: t('顯示繼承鏈（需 --config-dir）', 'Show inheritance chain (requires --config-dir)'), required: false, type: 'checkbox' },
+      // `--json` is `store_true, default=True` (diagnose.py:395) — passing it is
+      // a no-op, and the label says so. It is listed anyway because the flag is
+      // part of the da-tools subcommand contract (dev-rules #13) and the
+      // documented `da-tools diagnose … --json | jq` idiom uses it.
+      { name: '--json', label: t('JSON 輸出（預設已開啟）', 'JSON output (on by default)'), required: false, type: 'checkbox' }
     ]
   },
   'batch-diagnose': {
