@@ -167,22 +167,39 @@ def _h(key: str) -> str:
 #     docker manifest inspect <ref>
 # A ref that 404s here is a broken pipeline in someone else's repo.
 
-# Published by the Kubernetes project itself, and it ships NO `latest` tag at
-# all — a floating reference is impossible by construction.
-# Replaces `bitnami/kubectl`, which is no longer pinnable at all: Broadcom
-# moved the versioned Bitnami catalog behind a subscription and deleted the
-# free version tags on 2025-09-29, leaving only `latest` (documented by
-# Bitnami as development-only). Every `bitnami/kubectl:<version>` now 404s.
+# Chosen for what it CONTAINS, not only for how it can be pinned. Measured
+# (`docker run --entrypoint sh`): a shell, `kubectl` v1.34.9, and `kustomize`
+# v5.8.1. All three are load-bearing — the apply stage is a GitLab `script:`
+# block, which the runner executes through a shell inside this image, and the
+# first line of that block invokes standalone `kustomize`.
+# ⛔ Two images were rejected on measurement, not on preference:
+#   * `bitnami/kubectl` is no longer pinnable at all — Broadcom moved the
+#     versioned catalog behind a subscription and deleted the free version tags
+#     on 2025-09-29, leaving only `latest` (their docs call it dev-only). It
+#     also ships no `kustomize`, so this job never actually worked.
+#   * `registry.k8s.io/kubectl` is the Kubernetes project's own image and has
+#     no `latest` tag, which is attractive — but it is distroless-static: NO
+#     shell at all, so a GitLab `script:` block cannot run in it under any
+#     entrypoint override. Pinnability is worthless if the job cannot start.
+# `alpine/k8s` also publishes no `latest` tag (verified 404), so the
+# floating-reference argument survives the swap. Same publisher as
+# GITLAB_HELM_IMAGE below — one trust decision, not two.
 # ⚠️ kubectl supports ±1 minor of skew from the cluster — override
 # DA_KUBECTL_IMAGE if the customer's control plane sits further back.
-GITLAB_KUBECTL_IMAGE = 'registry.k8s.io/kubectl:v1.34.9'
+GITLAB_KUBECTL_IMAGE = 'alpine/k8s:1.34.9'
 
-# Held on the Helm 3 line ON PURPOSE. `alpine/helm:latest` now resolves to
-# Helm 4.x (4.0.0 GA'd 2025-11-12; `latest` and `4.2.3` share a digest), and
-# Helm 4 ships "backward incompatible changes including to the flags and
-# output of the Helm CLI" — so the previous floating tag walked existing
-# customer pipelines across a major boundary with no change on their side.
-# The image's own README also says not to use `latest` in production.
+# ⛔ Held on the Helm 3 line ON PURPOSE — pinned by
+# `test_helm_image_stays_on_the_helm_3_line`, because a comment alone did not
+# stop this: `alpine/helm:latest` now resolves to Helm 4.x (4.0.0 GA'd
+# 2025-11-12; `latest` and `4.2.3` share a digest), and Helm 4 ships "backward
+# incompatible changes including to the flags and output of the Helm CLI", so
+# the previous floating tag walked existing customer pipelines across a major
+# boundary with no change on their side. A future "just bump it" would do the
+# same thing deliberately; the test is what makes that a decision instead of an
+# accident. The image's own README also says not to use `latest` in production.
+# ⓘ Measured: ships a shell, but `ENTRYPOINT ["helm"]` — see the
+# `entrypoint: [""]` override in the emitted job, without which the job dies
+# before its first script line.
 GITLAB_HELM_IMAGE = 'alpine/helm:3.21.3'
 
 # quay.io, NOT Docker Hub. `argoproj/argocd` on Docker Hub was last pushed
@@ -219,9 +236,16 @@ def _gitlab_apply_image(deploy_method: str) -> tuple[str, str]:
 
     Mirrors _build_gitlab_apply_stage's branching *including its fallback*:
     an unrecognised deploy method lands in the argocd branch there, so it has
-    to land there here too — otherwise the emitted `variables:` block would
-    declare a variable the job never references, and the job would run with
-    an empty `image:`.
+    to land there here too.
+
+    ⚠️ The failure mode is a TOOL/COMMAND MISMATCH, not an undeclared variable.
+    Both the `variables:` entry and the job's `image:` read this one function,
+    so the name is always declared and always referenced — what diverging
+    fallbacks would produce is `argocd app sync` running inside the kubectl
+    image, i.e. a production deploy that starts and then dies on a missing
+    binary. `test_apply_image_matches_the_command_it_runs` is the guard, and it
+    has to re-derive the branch from the rendered script text; comparing the
+    two sides of this lookup to each other proves nothing.
     """
     return _GITLAB_APPLY_IMAGES.get(deploy_method, _GITLAB_APPLY_IMAGES['argocd'])
 
@@ -760,7 +784,14 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
     # ── Stage 3: Apply ───────────────────────────────────────
     apply:
       stage: apply
-      image: ${image_var}
+      image:
+        name: ${image_var}
+        # ⛔ Load-bearing, not boilerplate. GitLab runs `script:` through a shell
+        # INSIDE this image, so an image whose ENTRYPOINT is the tool itself
+        # (alpine/helm is `ENTRYPOINT ["helm"]`) turns that shell invocation into
+        # arguments to the tool and the job dies before the first script line.
+        # Harmless for images that already start a shell.
+        entrypoint: [""]
       environment:
         name: production
       rules:
@@ -778,7 +809,14 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
     # ── Stage 3: Apply via Helm ──────────────────────────────
     apply:
       stage: apply
-      image: ${image_var}
+      image:
+        name: ${image_var}
+        # ⛔ Load-bearing, not boilerplate. GitLab runs `script:` through a shell
+        # INSIDE this image, so an image whose ENTRYPOINT is the tool itself
+        # (alpine/helm is `ENTRYPOINT ["helm"]`) turns that shell invocation into
+        # arguments to the tool and the job dies before the first script line.
+        # Harmless for images that already start a shell.
+        entrypoint: [""]
       environment:
         name: production
       rules:
@@ -798,7 +836,14 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
     # ── Stage 3: Sync ArgoCD Application ─────────────────────
     apply:
       stage: apply
-      image: ${image_var}
+      image:
+        name: ${image_var}
+        # ⛔ Load-bearing, not boilerplate. GitLab runs `script:` through a shell
+        # INSIDE this image, so an image whose ENTRYPOINT is the tool itself
+        # (alpine/helm is `ENTRYPOINT ["helm"]`) turns that shell invocation into
+        # arguments to the tool and the job dies before the first script line.
+        # Harmless for images that already start a shell.
+        entrypoint: [""]
       environment:
         name: production
       rules:
