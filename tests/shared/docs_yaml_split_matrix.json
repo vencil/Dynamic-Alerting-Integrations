@@ -1,0 +1,127 @@
+{
+  "_comment": [
+    "Go<->Python parity matrix for splitting a fenced ```yaml block into the",
+    "files it documents. Two gates read docs/**/*.md and BOTH must cut the",
+    "blocks the same way:",
+    "  - Go     components/threshold-exporter/app/pkg/config/docs_defaults_sample_test.go",
+    "           (splitConcatenatedFiles + fileHeaderRe) - loader oracle",
+    "  - Python scripts/tools/lint/check_md_yaml_drift.py",
+    "           (_split_documented_files + FILE_HEADER_RE) - schema oracle",
+    "",
+    "They are two independent hand-written implementations of one rule, over one",
+    "corpus. That is the shape this repo keeps getting burned by, so neither",
+    "side asserts the other: both assert THIS table, which makes their agreement",
+    "transitive instead of merely claimed.",
+    "",
+    "Deliberately a CASE MATRIX, not a snapshot of the live docs tree. A snapshot",
+    "keyed by line number would need regenerating on every documentation edit -",
+    "churn that teaches people to regenerate without reading. These cases encode",
+    "the RULE, so they only change when the rule does.",
+    "",
+    "`offsets` are 0-based line offsets, relative to the first line INSIDE the",
+    "fence, at which each segment starts. Callers add the fence's own line + 1 to",
+    "turn an offset into a reportable file line."
+  ],
+  "cases": [
+    {
+      "name": "no header - the whole block is one file",
+      "block": ["defaults:", "  mysql_connections: 80"],
+      "offsets": [0],
+      "why": "The common case. A block with no file-header comment documents exactly one file."
+    },
+    {
+      "name": "two files introduced by header comments",
+      "block": [
+        "# L0 _defaults.yaml",
+        "defaults:",
+        "  a: 1",
+        "",
+        "# L1 finance/_defaults.yaml",
+        "defaults:",
+        "  b: 2"
+      ],
+      "offsets": [0, 4],
+      "why": "The inheritance illustrations. Judged whole this is not even valid YAML (repeated top-level key), which says nothing about whether the documented config is right."
+    },
+    {
+      "name": "three files",
+      "block": [
+        "# conf.d/_defaults.yaml",
+        "defaults:",
+        "  a: 1",
+        "# conf.d/db-a.yaml",
+        "tenants:",
+        "  db-a: {}",
+        "# conf.d/db-b.yaml",
+        "tenants:",
+        "  db-b: {}"
+      ],
+      "offsets": [0, 3, 6],
+      "why": "federation-integration.md stacks a platform file and two tenant files."
+    },
+    {
+      "name": "indented comment is prose, NOT a file boundary",
+      "block": [
+        "tenants:",
+        "  db-a:",
+        "    # other keys omitted, they use _defaults.yaml",
+        "    mysql_connections: \"80\""
+      ],
+      "offsets": [0],
+      "why": "LOAD-BEARING. The header regex is anchored at column 0. With a leading \\s* this indented comment (real, in for-domain-experts.md) would sever the block mid-mapping: the tail gets validated as its own document and the head silently loses the entries below it."
+    },
+    {
+      "name": "trailing comment on a data line is not a header",
+      "block": [
+        "defaults:",
+        "  mysql_connections: 80  # see conf.d/_defaults.yaml"
+      ],
+      "offsets": [0],
+      "why": "The regex must match the START of the line, so a filename mentioned in a trailing comment cannot be mistaken for a file boundary."
+    },
+    {
+      "name": "comment without a yaml filename is not a header",
+      "block": [
+        "# Platform defaults",
+        "defaults:",
+        "  a: 1",
+        "# tenant overrides follow",
+        "tenants:",
+        "  db-a: {}"
+      ],
+      "offsets": [0],
+      "why": "Only a comment naming a .yaml/.yml file starts a new documented file. Prose headings inside a block are ordinary comments."
+    },
+    {
+      "name": "leading header at offset 0 does not produce an empty first segment",
+      "block": ["# conf.d/_defaults.yaml", "defaults:", "  a: 1"],
+      "offsets": [0],
+      "why": "A header on the very first line opens the first segment rather than closing an empty one."
+    },
+    {
+      "name": ".yml spelling is a header too",
+      "block": [
+        "# conf.d/a.yml",
+        "tenants:",
+        "  a: {}",
+        "# conf.d/b.yml",
+        "tenants:",
+        "  b: {}"
+      ],
+      "offsets": [0, 3],
+      "why": "Both spellings appear in docs/; the regex uses .ya?ml."
+    },
+    {
+      "name": "text before the first header stays with it",
+      "block": [
+        "defaults:",
+        "  a: 1",
+        "# conf.d/db-a.yaml",
+        "tenants:",
+        "  db-a: {}"
+      ],
+      "offsets": [0, 2],
+      "why": "Content preceding the first header is its own segment (an unnamed file), not discarded."
+    }
+  ]
+}

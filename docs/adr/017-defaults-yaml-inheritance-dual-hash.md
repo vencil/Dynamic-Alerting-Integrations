@@ -86,7 +86,10 @@ defaults:
 # tenant YAML
 tenants:
   fin-db-001:
-    pg_stat_activity_count: 150   # override: 單一 tenant 最嚴格
+    pg_stat_activity_count: "150" # override: 單一 tenant 最嚴格
+                                  # ⚠️ 這裡加引號、上面 `defaults:` 不加 ——
+                                  # 租戶值是 ScheduledValue（字串｜物件），
+                                  # 平台預設是 map[string]float64
     # pg_replication_lag_seconds: 繼承 L0 = 30
     # pg_locks_count: 繼承 L1 = 100
     # _routing_defaults.group_wait: 繼承 L0 = 60s

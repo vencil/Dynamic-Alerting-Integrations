@@ -90,8 +90,9 @@ container_cpu: "75"
 container_memory: "80"
 
 _routing:
-  receiver_type: slack
-  webhook_url: https://hooks.slack.com/services/T00/B00/xxx
+  receiver:
+    type: slack
+    api_url: https://hooks.slack.com/services/T00/B00/xxx
   group_by: [alertname, severity]
   group_wait: "30s"
   repeat_interval: "4h"
@@ -129,7 +130,9 @@ jvm_gc_pause: "0.8"
 jvm_memory: "85"
 
 _routing:
-  receiver_type: pagerduty
+  receiver:
+    type: pagerduty
+    service_key: "<your-pagerduty-service-key>"
   group_by: [alertname, topic]
   group_wait: "1m"
   repeat_interval: "12h"
@@ -145,10 +148,15 @@ _state_maintenance:
   expires: "2026-03-20T06:00:00Z"
 
 _silent_mode:
+  target: warning        # 必填 —— 要靜音哪些嚴重度（warning | critical | all | disable）
   expires: "2026-03-18T12:00:00Z"
 
 _routing:
-  receiver_type: email
+  receiver:
+    type: email
+    to: ["dba-oncall@example.com"]
+    smarthost: "smtp.example.com:587"
+    from: "alerting@example.com"
   group_wait: "5m"
   repeat_interval: "24h"
 ```
@@ -274,8 +282,9 @@ Diff 精確顯示哪個 tenant、哪些 metric 受影響 — 這就是 CI 中會
 
 ```yaml
 _routing:
-  receiver_type: slack
-  webhook_url: https://hooks.slack.com/services/xxx
+  receiver:
+    type: slack
+    api_url: https://hooks.slack.com/services/xxx
 ```
 
 重跑驗證 — 應該會看到 domain policy 警告：`finance` domain 禁止使用 `slack`。加上 `--strict` 則警告升級為 ERROR 並以非零 exit code 失敗（CI 即以 `--validate --strict` 把這類違規擋在 merge 之前）。

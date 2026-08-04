@@ -222,6 +222,9 @@ Migrated three-piece set:
   for: 5m
   labels: { severity: warning }
 
+```
+
+```yaml
 # 3. Tenant Config (tenant)
 tenants:
   db-a:
