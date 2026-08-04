@@ -187,7 +187,7 @@ conf.d/
 |------|----------|-------------|
 | Scalar / Map deep merge | Same-key deep merge; child overrides parent | Most defaults override cases |
 | Array full replace (non-merge) | Child array fully replaces parent (no concat) | `state_filters.reasons` / `_routing.group_by` |
-| `null` means delete | Child `key: null` removes the key from inheritance chain | Disable a parent-layer default threshold |
+| `null` opts out of inheritance (**per-field**) | Only the four `_routing` fields `group_by` / `group_wait` / `group_interval` / `repeat_interval`: a child `key: null` makes the generated route omit that field. **Not threshold keys** — null does not opt out there and the schema rejects it (indistinguishable from a half-typed line) | Drop an inherited notification cadence; **to disable a threshold use `"disable"`** (#1339) |
 | `_` prefix preserved | Meta fields `_silent_mode` / `_state_maintenance` / `_routing` / `_severity_dedup` / `_namespaces` pass through untouched | Tenant lifecycle metadata |
 
 **Dual-Hash Hot-Reload**

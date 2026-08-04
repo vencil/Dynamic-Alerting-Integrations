@@ -316,8 +316,10 @@ func TestTenantOverridesAll_EmptyPathsReturnsTrue(t *testing.T) {
 
 func TestTenantOverridesAll_NilValueIsNotOverride(t *testing.T) {
 	t.Parallel()
-	// YAML null → deepMerge "delete key" semantics → defaults still
-	// visible → not an override.
+	// YAML null on a threshold key is not an override: the exporter keeps
+	// emitting the inherited default, so a defaults change at that path is
+	// NOT shadowed. (#1339 narrowed deepMerge's delete to reserved keys;
+	// this expectation was already the right one.)
 	tenant := map[string]any{"mysql_connections": nil}
 	if tenantOverridesAll(tenant, []string{"mysql_connections"}) {
 		t.Errorf("expected false (nil = delete-key, not override)")

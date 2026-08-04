@@ -82,7 +82,7 @@ Translator 內部演算法（metric_key 5-step ladder、majority vote、median �
 
 本 ADR emission 完全依賴 ADR-017 的：
 
-- **null-as-delete**：tenant 想 explicit override 為 0 / null 仍可（emission 用顯式數值，不踩 null）
+- **null-as-delete**：tenant 想 explicit override 為 0 仍可（emission 用顯式數值，不踩 null）。⚠️ **#1339 更正**：閾值 key 的 `null` 已**不再**是退出繼承的手段（與漏打不可分辨，schema 會擋），請改用 `"disable"`；`null` 的退出語意只保留給 `_routing` 的四個欄位
 - **map deep-merge**：每個 tenant 檔只列**該 tenant 與 default 不同**的 key，runtime ResolveAt 自動 fallback 到 `_defaults`
 - **scalar override**：tenant 字串值（如 `"1500"`）覆蓋 default 數值，runtime 用 strconv 在 ResolveAt 時轉回 float
 

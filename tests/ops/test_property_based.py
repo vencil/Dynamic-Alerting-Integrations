@@ -493,13 +493,17 @@ class TestKustomizationBuilder:
 #   - Dict fields  → deep merge (child adds new keys, overrides same keys)
 #   - Array fields → REPLACE (not concat)
 #   - Scalar       → child overrides parent
-#   - None / null  → delete parent's key ("opt-out")
+#   - None / null  → deletes parent's key ONLY for reserved (`_`-prefixed)
+#                    keys; on a threshold key it is a no-op, because the
+#                    exporter's emitting path ignores it (#1339)
 #   - _metadata    → never inherited (skipped at every depth)
 #
 # Properties under test:
 #   P1  Identity:   merge(a, {}) == a                      (empty override is no-op)
 #   P2  Idempotent: merge(merge(a, b), b) == merge(a, b)   (re-applying same override changes nothing)
-#   P3  Null-delete persistence: once deleted, cannot be resurrected by {} follow-up
+#   P3  Null-delete persistence (reserved keys): once deleted, cannot be
+#       resurrected by a {} follow-up; plus the mirror case that null on a
+#       threshold key changes nothing at all
 #   P4  Determinism: same inputs → byte-identical canonical JSON
 #   P5  No mutation: inputs are not modified (defensive copy via deepcopy)
 #   P6  _metadata never propagates from override (at any depth)

@@ -162,7 +162,9 @@ def s_array_replace():
 
 
 # -------------------------------------------------------------------------
-# Scenario 6: opt-out via explicit null deletes key
+# Scenario 6: explicit null — deletes a reserved (`_`-prefixed) key only.
+# The non-reserved keys here (alert_group, threshold.memory) are RETAINED;
+# see s_opt_out_null_threshold below for the real-shape threshold case (#1339).
 # -------------------------------------------------------------------------
 def s_opt_out_null():
     d = reset("opt-out-null")
