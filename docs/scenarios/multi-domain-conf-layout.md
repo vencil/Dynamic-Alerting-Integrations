@@ -139,9 +139,11 @@ tenants:
 > 產出「No tenants found」零路由。因此在階層布局下，`_routing_defaults:` 與租戶本體的
 > `_routing:` **不會被任何元件消費**——本文其餘的路由範例請在平面目錄下使用。
 >
-> ⚠️ 更要注意的是 `validate_config.py` 對階層目錄會回報 **PASS / exit 0**，但掃到的是
-> **0 個租戶**——它不是擋下來，而是對從未讀過的目錄報綠燈。追蹤見
-> [#1339](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1339)。
+> ✅ **`validate_config.py` 已於 [#1339](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1339)
+> 改為遞迴**——它先前對階層目錄回報 `PASS / exit 0` 卻掃到 **0 個租戶**（不是擋下來，
+> 是對從未讀過的目錄報綠燈）。其餘仍是平面的工具**不再靜默**：偵測到子目錄裡有設定檔時
+> 會列出被跳過的檔案，所以「零租戶」不會再看起來像「沒問題」。支援面邊界見
+> [ADR-016 §支援面邊界](../adr/016-conf-d-directory-hierarchy-mixed-mode.md)。
 
 ### Null 值 Opt-Out（進階）
 

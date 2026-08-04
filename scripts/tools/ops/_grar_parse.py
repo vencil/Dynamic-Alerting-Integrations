@@ -23,6 +23,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import is_disabled as _is_disabled  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_confd import nested_yaml_warning  # noqa: E402
 
 from _grar_merge import (  # noqa: E402
     _substitute_tenant,
@@ -218,6 +219,15 @@ def _parse_config_files(config_dir: str) -> dict:
     if not os.path.isdir(config_dir):
         print(f"ERROR: config directory not found: {config_dir}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
+
+    # #1339: this reader is FLAT while threshold-exporter walks the same
+    # tree recursively (ADR-016/017). Routing for a hierarchical conf.d is
+    # not implemented — but it used to fail SILENTLY ("No tenants found",
+    # zero routes), which reads like "this config needs no routing" rather
+    # than "this tool cannot see your tenants". Say which files are skipped.
+    _nested = nested_yaml_warning(config_dir, tool="routing generator")
+    if _nested:
+        print(f"WARN: {_nested}", file=sys.stderr)
 
     files = sorted(f for f in os.listdir(config_dir)
                    if (f.endswith(".yaml") or f.endswith(".yml"))

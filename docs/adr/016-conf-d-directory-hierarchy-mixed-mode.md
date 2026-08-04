@@ -116,6 +116,29 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 - **CI/CD**：`migrate-conf-d --dry-run` 可納入 PR check
 - **文件**：新增 `docs/scenarios/multi-domain-conf-layout.md`
 
+### ⛔ 支援面邊界：階層布局只有 threshold-exporter 完整實作（#1339，2026-08-04 補記）
+
+本 ADR 的「遞迴掃描」只落在 **threshold-exporter**（`pkg/config/hierarchy.go` 的
+`filepath.WalkDir`）。**Python 工具鏈當年沒有跟上**：以 AST 量測，**11 支工具平面
+列舉租戶設定目錄、6 支遞迴**——同一個階層目錄，`describe_tenant.py` 看得到租戶，
+`validate_config.py` 卻回報 `Result: PASS` / exit 0 而掃到 **0 個租戶**。那不是擋下來，
+是**對一個從未讀過的目錄發綠燈**。
+
+現況（#1339 修正後）：
+
+| 面 | 階層 `conf.d/` |
+|:--|:--|
+| threshold-exporter（閾值） | ✅ 完整遞迴繼承 |
+| `validate_config.py` | ✅ 已改為遞迴 |
+| 路由生成器 / 其餘平面工具 | ⚠️ **仍是平面**，但會列出被跳過的檔案並指回本節 |
+
+⇒ **路由面尚未支援階層布局**：`_routing_defaults` 與租戶本體的 `_routing` 在子目錄裡
+不會被任何元件消費。要用路由就把租戶檔放在 `conf.d/` 頂層。
+
+這個「平面但出聲」的契約由 `tests/shared/test_confd_enumeration_contract.py` 強制：
+新工具若平面讀取又不出聲會被擋下來，**選擇必須是刻意的**。共用列舉層在
+`scripts/tools/_lib_confd.py`。
+
 ## 相關
 
 - [ADR-017: _defaults.yaml 繼承語意 + dual-hash hot-reload](017-defaults-yaml-inheritance-dual-hash.md)

@@ -28,6 +28,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_confd import nested_yaml_warning  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -259,6 +260,11 @@ def build_tenant_metadata(config_dir: Path) -> dict[str, Any]:
     tenant_configs = {}
 
     # Load all tenant YAML files
+    # #1339: flat by design here — but a hierarchical conf.d must not
+    # look like an empty one. Name the files this scan cannot see.
+    _nested = nested_yaml_warning(config_dir, tool="generate_tenant_metadata")
+    if _nested:
+        print(f"WARN: {_nested}", file=sys.stderr)
     for yaml_file in sorted(config_dir.glob("*.yaml")):
         if yaml_file.name.startswith("_"):
             continue

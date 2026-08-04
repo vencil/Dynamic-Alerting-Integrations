@@ -35,6 +35,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
+from _lib_confd import nested_yaml_warning  # noqa: E402
 
 
 def find_config_file(tenant, config_dir):
@@ -52,6 +53,11 @@ def load_all_configs(config_dir):
     """載入 conf.d 下所有設定檔案。"""
     configs = {}
     base = Path(config_dir)
+    # #1339: flat by design here — but a hierarchical conf.d must not
+    # look like an empty one. Name the files this scan cannot see.
+    _nested = nested_yaml_warning(base, tool="offboard_tenant")
+    if _nested:
+        print(f"WARN: {_nested}", file=sys.stderr)
     yaml_paths = sorted(base.glob("*.yaml")) + sorted(base.glob("*.yml"))
     for entry in yaml_paths:
         filename = entry.name

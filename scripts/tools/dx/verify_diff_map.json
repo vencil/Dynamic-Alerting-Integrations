@@ -20,6 +20,9 @@
   "scripts/ops/parse_go_test_json.py": [
    "tests/ops/test_parse_go_test_json.py"
   ],
+  "scripts/tools/_lib_confd.py": [
+   "tests/shared/test_lib_confd.py"
+  ],
   "scripts/tools/_lib_constants.py": [
    "tests/lint/test_check_confd_schema.py",
    "tests/shared/test_property_tools.py",
@@ -692,7 +695,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "9ee47a5d3d17a4bc09c2fcd65955037b63a401cfcca765bbdaf9aa2784efcdfb",
+ "source_digest": "43413bd908dc1776591d46fbff43ed4067c5077ae0c504f420fa54fb0d12e45b",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -958,6 +961,7 @@
   "tests/rulepacks/test_vm_replay_staleness.py",
   "tests/shared/test_bilingual_help_contract.py",
   "tests/shared/test_ci_flag_contract.py",
+  "tests/shared/test_confd_enumeration_contract.py",
   "tests/shared/test_console_encoding_resilience.py",
   "tests/shared/test_dispatch_contract.py",
   "tests/shared/test_dry_run_no_write.py",
@@ -969,6 +973,7 @@
   "tests/shared/test_help_contract.py",
   "tests/shared/test_json_stdout_contract.py",
   "tests/shared/test_lang_detection_guard.py",
+  "tests/shared/test_lib_confd.py",
   "tests/shared/test_lib_godispatch.py",
   "tests/shared/test_lib_helpers.py",
   "tests/shared/test_lib_python.py",

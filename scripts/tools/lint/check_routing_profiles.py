@@ -25,6 +25,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import detect_cli_lang, load_yaml_file  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_confd import nested_yaml_warning  # noqa: E402
 
 _LANG = detect_cli_lang()
 
@@ -35,6 +36,12 @@ def _collect_data(config_dir: str) -> dict:
     policies: dict = {}
     tenant_ids: set[str] = set()
     profile_refs: dict[str, str] = {}  # tenant → profile name
+
+    # #1339: flat by design here — but a hierarchical conf.d must not
+    # look like an empty one. Name the files this scan cannot see.
+    _nested = nested_yaml_warning(config_dir, tool="check_routing_profiles")
+    if _nested:
+        print(f"WARN: {_nested}", file=sys.stderr)
 
     files = sorted(
         f for f in os.listdir(config_dir)

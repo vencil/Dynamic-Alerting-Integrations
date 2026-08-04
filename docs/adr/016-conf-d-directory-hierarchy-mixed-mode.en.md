@@ -111,6 +111,33 @@ Directory Scanner's design philosophy is "filesystem as source of truth."
 - **CI/CD**: `migrate-conf-d --dry-run` can be added to PR checks
 - **Documentation**: `docs/scenarios/multi-domain-conf-layout.md` added
 
+### ⛔ Support boundary: only threshold-exporter fully implements the hierarchy (#1339, added 2026-08-04)
+
+The "recursive scan" this ADR decided landed in **threshold-exporter** only
+(`pkg/config/hierarchy.go`, `filepath.WalkDir`). **The Python tool suite never
+followed.** Measured by AST: **11 tools enumerated a tenant config dir flat while
+6 recursed** — pointed at the same hierarchical directory, `describe_tenant.py`
+saw the tenant while `validate_config.py` reported `Result: PASS` / exit 0 having
+scanned **0 tenants**. Not a refusal: a green light for a directory it never read.
+
+State after the #1339 fix:
+
+| Plane | Hierarchical `conf.d/` |
+|:--|:--|
+| threshold-exporter (thresholds) | ✅ full recursive inheritance |
+| `validate_config.py` | ✅ now recursive |
+| routing generator / remaining flat tools | ⚠️ **still flat**, but they now name the files they skip and point here |
+
+⇒ **The routing plane does not support a hierarchical layout yet**:
+`_routing_defaults` and a tenant's own `_routing` are consumed by nothing when
+they sit in a subdirectory. To use routing, keep tenant files at the top level
+of `conf.d/`.
+
+The "flat but loud" contract is enforced by
+`tests/shared/test_confd_enumeration_contract.py`: a new tool that reads flat and
+stays silent fails the gate, so **the choice has to be deliberate**. The shared
+enumeration layer is `scripts/tools/_lib_confd.py`.
+
 ## Related
 
 - [ADR-017: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload](017-defaults-yaml-inheritance-dual-hash.md)

@@ -143,10 +143,14 @@ tenants:
 > own `_routing:` are **consumed by nothing** — use the remaining routing examples in
 > this document against a flat directory.
 >
-> ⚠️ More dangerous still: `validate_config.py` reports **PASS / exit 0** on a
-> hierarchical directory while scanning **0 tenants** — it does not block, it reports
-> green for a directory it never read. Tracked in
-> [#1339](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1339).
+> ✅ **`validate_config.py` was made recursive in
+> [#1339](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1339)** — it
+> used to report `PASS / exit 0` on a hierarchical directory while scanning **0
+> tenants** (not a refusal: a green light for a directory it never read). The tools
+> that are still flat are **no longer silent**: when they detect config files in
+> subdirectories they name the ones being skipped, so "zero tenants" can no longer
+> look like "no problems". For the support boundary see
+> [ADR-016 §Support boundary](../adr/016-conf-d-directory-hierarchy-mixed-mode.en.md).
 
 ### Null Value Opt-Out (Advanced)
 
