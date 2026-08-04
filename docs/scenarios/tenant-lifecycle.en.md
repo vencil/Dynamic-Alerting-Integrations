@@ -302,10 +302,12 @@ For tenants with data across multiple K8s clusters, reference "Multi-Cluster Fed
 # conf.d/db-product-01.yaml (central)
 tenants:
   db-product-01:
-    _namespaces: ["prod-ns"]
-    _cluster: "edge-asia-prod"  # Specify edge cluster location
+    _namespaces: ["prod-ns"]   # which edge namespaces this tenant owns
     pg_connections: "70"
-    _routing: { ... }
+    _routing:
+      receiver:
+        type: webhook
+        url: "https://noc.example.com/asia/alerts"
 ```
 
 ## Phase 4: Offboarding

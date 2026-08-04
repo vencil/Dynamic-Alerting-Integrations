@@ -65,7 +65,7 @@ conf.d/
 │   │       └── tenant-c.yaml             # Finance, US-East, Staging
 │   │
 │   └── eu-west/
-│       ├── _defaults.yaml                # Finance EU-West 區域預設（GDPR 政策、簽名金鑰）
+│       ├── _defaults.yaml                # Finance EU-West 區域預設（該區特有的閾值）
 │       └── prod/
 │           └── tenant-d.yaml             # Finance, EU-West, Prod
 │
@@ -118,44 +118,49 @@ conf.d/
 例：
 
 ```yaml
-# 層級 2：conf.d/finance/_defaults.yaml
-tenants:
-  "_defaults":
-    alerts:
-      threshold:
-        MariaDBHighConnections: 90
-        DiskUsageHigh: 85
-    receivers:
-      - name: finance-channel
-        type: slack
+# 層級 2：conf.d/finance/_defaults.yaml —— 平台檔，所以閾值放在頂層 `defaults:`
+# （不加引號的數字）。
+defaults:
+  mysql_connections: 90
+  container_memory: 85
+```
 
-# 層級 5：conf.d/finance/us-east/prod/tenant-a.yaml
+```yaml
+# 層級 5：conf.d/finance/us-east/prod/tenant-a.yaml —— 租戶檔：值是加引號的字串。
 tenants:
   tenant-a:
-    alerts:
-      threshold:
-        MariaDBHighConnections: 95      # 覆蓋：從 90 提高到 95
-        # DiskUsageHigh 未提，繼承 85
-    receivers:
-      - name: finance-channel           # 替代整個陣列（如有需要加新 receiver，須明列 finance-channel）
-      - name: custom-webhook
-        type: http
+    mysql_connections: "95"    # 覆蓋：從 domain 的 90 提高
+    # container_memory 未提 —— 繼承層級 2 的 85
 ```
+
+> ⛔ **階層布局目前只在閾值面成立。** 上面的繼承由 threshold-exporter 實作，實測有效；
+> 但**路由面的工具鏈只讀平面目錄**，看不見任何子目錄裡的租戶。實測同一份內容：
+> 平面 `conf.d/tenant-a.yaml` 會產出路由，階層 `conf.d/finance/us-east/prod/tenant-a.yaml`
+> 產出「No tenants found」零路由。因此在階層布局下，`_routing_defaults:` 與租戶本體的
+> `_routing:` **不會被任何元件消費**——本文其餘的路由範例請在平面目錄下使用。
+>
+> ⚠️ 更要注意的是 `validate_config.py` 對階層目錄會回報 **PASS / exit 0**，但掃到的是
+> **0 個租戶**——它不是擋下來，而是對從未讀過的目錄報綠燈。追蹤見
+> [#1339](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1339)。
 
 ### Null 值 Opt-Out（進階）
 
-若 tenant-a 想「停用 Finance 域的 finance-channel receiver」：
+若 tenant-a 想「停用繼承來的 finance-channel receiver」（路由面只支援平面目錄，
+所以以下路徑是平面的）：
 
 ```yaml
-# conf.d/finance/us-east/prod/tenant-a.yaml
+# conf.d/tenant-a.yaml
 tenants:
   tenant-a:
-    receivers: null    # 顯式 opt-out：不繼承 Finance 域預設的 receivers
-    # 或明列新 receivers
-    receivers:
-      - name: custom-webhook
-        type: http
+    _routing:                    # 租戶覆蓋 _routing_defaults，對它
+      receiver:                  # 指名的每個 key 生效 —— 這裡整個 receiver 被
+        type: webhook            # **取代**（通知照送，只是換了目的地）
+        url: "https://hooks.tenant-a.example.com/alerts"
 ```
+
+> ⚠️ ADR-017 描述了「顯式 `null` 退出繼承」，但 `tenant-config.schema.json`
+> 目前對**任何**租戶欄位都不接受 `null`（實測：`mysql_connections: null` 與
+> `_routing: null` 皆被拒）。在這個張力解決之前，請用覆寫值而不是設成 null。
 
 ## 操作指南
 
@@ -181,7 +186,7 @@ Would move:
   conf.d/ops-e.yaml → conf.d/ops/tenant-e.yaml
 
 Would extract domain defaults into:
-  conf.d/finance/_defaults.yaml (common keys: alerts.threshold.MariaDBHighConnections, receivers)
+  conf.d/finance/_defaults.yaml (common keys: defaults.mysql_connections, _routing_defaults)
   conf.d/infra/_defaults.yaml
 
 No changes made. Rerun with --apply to proceed.
@@ -220,9 +225,8 @@ Configuration sources (order of merge):
   5. conf.d/finance/us-east/prod/tenant-a.yaml (tenant-specific)
 
 Effective configuration:
-  alerts.threshold.MariaDBHighConnections: 90 (from: domain)
-  receivers[0].type: slack (from: global)
-  timezone: America/New_York (from: region)
+  mysql_connections: 90 (from: domain)
+  container_memory: 85 (from: domain)
   ...
 ```
 
@@ -257,21 +261,16 @@ python scripts/tools/dx/describe_tenant.py tenant-new --show-sources
 
 ### 情景 3：更新區域預設（bulk）
 
-例：所有 EU-West tenant 需要 GDPR 模式簽名
+例：所有 EU-West tenant 需要更緊的 PostgreSQL 連線預算
 
 ```bash
 cat > conf.d/finance/eu-west/_defaults.yaml << 'EOF'
-tenants:
-  "_defaults":
-    _signature:
-      algorithm: sha256
-      mode: gdpr-compatible  # 歐盟合規簽名
-    _encryption:
-      enabled: true
-      key_rotation_days: 90
+defaults:
+  pg_connections: 70          # EU-West 的連線預算較緊
+  pg_replication_lag: 20
 EOF
 
-# 驗證：抽一個 eu-west tenant，確認已繼承 region 層 GDPR 預設
+# 驗證：抽一個 eu-west tenant，確認已繼承 region 層預設
 # （describe_tenant 無 region filter；逐 tenant 或 --all 檢視）
 python scripts/tools/dx/describe_tenant.py tenant-d --show-sources
 ```
@@ -312,7 +311,7 @@ conf.d/
 
 ```bash
 # 1. 快速檢查某 tenant 的有效值（JSON 輸出 + jq 取單一鍵）
-python scripts/tools/dx/describe_tenant.py tenant-a --format json | jq '.alerts.threshold'
+python scripts/tools/dx/describe_tenant.py tenant-a --format json | jq '.effective_config'
 
 # 2. 找到所有 Finance tenant（階層式佈局下 finance tenant 在 conf.d/finance/ 下）
 find conf.d/finance -name 'tenant-*.yaml'

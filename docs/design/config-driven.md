@@ -490,7 +490,8 @@ tenants:
       expires: "2026-04-01T00:00:00Z"
       reason: "Migration shadow monitoring period"
     _state_maintenance:
-      target: "all"
+      target: "enable"   # state filter 只吃 enable/disable；
+                         # "all" 是 _silent_mode 的值
       expires: "2026-04-01T00:00:00Z"
       reason: "Scheduled maintenance window"
 ```

@@ -509,7 +509,8 @@ tenants:
       expires: "2026-04-01T00:00:00Z"
       reason: "Migration shadow monitoring period"
     _state_maintenance:
-      target: "all"
+      target: "enable"   # state filters take enable/disable;
+                         # "all" belongs to _silent_mode
       expires: "2026-04-01T00:00:00Z"
       reason: "Scheduled maintenance window"
 ```

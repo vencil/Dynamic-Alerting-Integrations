@@ -49,13 +49,15 @@ python scripts/tools/dx/describe_tenant.py --all \
 #### B. 修改域預設值
 
 ```yaml
-# conf.d/finance/_defaults.yaml
-tenants:
-  "_defaults":
-    alerts:
-      threshold:
-        MariaDBHighConnections: 95    # 從 90 調高到 95
+# conf.d/finance/_defaults.yaml —— domain 層的平台檔
+defaults:
+  mysql_connections: 95   # 從 finance domain 的 90 調高
 ```
+
+> 閾值以**指標 key**（`mysql_connections`）為鍵，不是以告警名為鍵：
+> `MariaDBHighConnections` 消費的是 `tenant:alert_threshold:mysql_connections`，
+> 所以一個 key 可以驅動多條告警。平台值是不加引號的數字（`map[string]float64`），
+> 租戶覆寫則是加引號的字串。
 
 #### C. 產出修改後有效配置快照
 
@@ -90,14 +92,14 @@ python3 scripts/tools/ops/blast_radius.py \
 <summary>Substantive changes: 187 tenants</summary>
 
 - **tenant-fin-001**
-  - `alerts.threshold.MariaDBHighConnections`: 90 → 95
+  - `mysql_connections`: 90 → 95
 - **tenant-fin-002**
-  - `alerts.threshold.MariaDBHighConnections`: 90 → 95
+  - `mysql_connections`: 90 → 95
 ...
 </details>
 ```
 
-注意：已自行覆蓋 `MariaDBHighConnections` 的租戶（例如設為 98）不會出現在影響清單中。
+注意：已自行覆蓋 `mysql_connections` 的租戶（例如設為 98）不會出現在影響清單中——覆寫的鍵是指標 key，不是告警名。
 
 ### E. 確認後提交 PR
 
@@ -107,7 +109,7 @@ Blast Radius CI Bot 會在 PR 上自動發布報告，reviewer 可在 merge 前�
 
 ### 問題
 
-租戶 `tenant-fin-042` 的 `DiskUsageHigh` 告警不斷觸發。你想確認這個閾值來自哪一層，才能在正確的位置修改。
+租戶 `tenant-fin-042` 的 `MariaDBHighConnections` 告警不斷觸發。你想確認這個閾值來自哪一層，才能在正確的位置修改。
 
 ### 步驟
 
@@ -117,31 +119,34 @@ python scripts/tools/dx/describe_tenant.py tenant-fin-042 --show-sources --conf-
 
 輸出範例：
 
+```json
+{
+  "tenant_id": "tenant-fin-042",
+  "source_file": "finance/us-east/prod/tenant-fin-042.yaml",
+  "source_hash": "2748782e0e18b18b",
+  "merged_hash": "afe82e02e229272f",
+  "defaults_chain": [
+    "_defaults.yaml",
+    "finance/_defaults.yaml"
+  ],
+  "effective_config": {
+    "mysql_connections": 90,
+    "container_memory": "92"
+  }
+}
 ```
-tenant-fin-042 (finance/us-east/prod/tenant-fin-042.yaml)
-═════════════════════════════════════════════════════════
-Configuration sources (order of merge):
-  1. conf.d/_defaults.yaml (global)
-  2. conf.d/finance/_defaults.yaml (domain: finance)
-  3. conf.d/finance/us-east/_defaults.yaml (region: us-east)
-  4. conf.d/finance/us-east/prod/tenant-fin-042.yaml (tenant-specific)
 
-Effective configuration:
-  alerts.threshold.DiskUsageHigh: 85 (from: domain)
-  alerts.threshold.MariaDBHighConnections: 90 (from: domain)
-  receivers[0].type: slack (from: global)
-  timezone: America/New_York (from: region)
-```
-
-從輸出可知 `DiskUsageHigh: 85` 來自 **domain 層**（`finance/_defaults.yaml`）。如果只想為這個租戶調整，在 tenant 檔案中覆蓋即可：
+`defaults_chain` 就是合併順序，越內層越後面。`mysql_connections: 90` 是不加引號的
+數字 ⇒ 來自平台的 `_defaults.yaml`，而鏈上最內層設它的是 `finance/_defaults.yaml`，
+也就是 **domain 層**。（`container_memory` 是加引號的字串，那個是租戶自己設的。）
+若只想為這個租戶調整 `mysql_connections`，在 tenant 檔案中覆蓋即可：
 
 ```yaml
 # conf.d/finance/us-east/prod/tenant-fin-042.yaml
 tenants:
   tenant-fin-042:
-    alerts:
-      threshold:
-        DiskUsageHigh: 92    # 只對此租戶提高閾值
+    mysql_connections: "120"   # 只對此租戶提高；加引號——租戶值是
+                               # ScheduledValue（字串｜物件）
 ```
 
 ## 情景 3：比較兩個租戶的配置差異
@@ -163,14 +168,13 @@ python scripts/tools/dx/describe_tenant.py tenant-fin-001 --diff tenant-fin-080 
   "tenant_a": "tenant-fin-001",
   "tenant_b": "tenant-fin-080",
   "only_in_tenant-fin-001": {
-    "timezone": "America/New_York"
+    "container_cpu": "75"
   },
   "only_in_tenant-fin-080": {
-    "_signature": {"mode": "gdpr-compatible"},
-    "timezone": "Europe/Dublin"
+    "pg_replication_lag": "60"
   },
   "different": {
-    "_encryption.enabled": {"a": false, "b": true}
+    "mysql_connections": {"a": "110", "b": "120"}
   }
 }
 ```
@@ -209,8 +213,8 @@ PR 提交 → CI 觸發 blast-radius.yml
 
 <details>
 <summary>Substantive changes: 12 tenants</summary>
-- **tenant-fin-001**: `alerts.threshold.MariaDBHighConnections`: 90 → 95
-- **tenant-fin-002**: `alerts.threshold.MariaDBHighConnections`: 90 → 95
+- **tenant-fin-001**: `mysql_connections`: 90 → 95
+- **tenant-fin-002**: `mysql_connections`: 90 → 95
 ...
 </details>
 
