@@ -57,7 +57,10 @@ def iter_yaml_files(
     if not base.is_dir():
         return []
     # #1339: flat read — a hierarchical conf.d must not look empty.
-    _nested = nested_yaml_warning(base, tool="iter_yaml_files")
+    # tool= omitted on purpose: this helper is reached from several
+    # entry points, so the message should name the command the
+    # operator ran, not this function.
+    _nested = nested_yaml_warning(base)
     if _nested:
         print(f"WARN: {_nested}", file=sys.stderr)
     result: list[tuple[str, str]] = []

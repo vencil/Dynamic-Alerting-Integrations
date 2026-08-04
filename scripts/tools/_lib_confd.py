@@ -36,6 +36,7 @@ quietly join the silent-zero class.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 __all__ = [
@@ -111,10 +112,24 @@ def nested_yaml_files(config_dir: str | os.PathLike[str]) -> list[Path]:
     ]
 
 
+def _running_tool() -> str:
+    """Best guess at the command the operator actually typed.
+
+    Derived from `sys.argv[0]`, not hard-coded: a SHARED helper such as
+    `_lib_io.iter_yaml_files` is reached from several entry points, and
+    labelling its warning with the helper's own name tells the operator
+    nothing about which command produced it. Falls back to a neutral
+    label when argv is unavailable (embedded / REPL use).
+    """
+    argv0 = (sys.argv[0] if sys.argv else "") or ""
+    name = os.path.basename(argv0)
+    return name[:-3] if name.endswith(".py") else (name or "conf.d reader")
+
+
 def nested_yaml_warning(
     config_dir: str | os.PathLike[str],
     *,
-    tool: str,
+    tool: str | None = None,
     limit: int = 5,
 ) -> str | None:
     """Return a message when a flat read of `config_dir` would mislead.
@@ -122,7 +137,13 @@ def nested_yaml_warning(
     `None` when the directory is flat (nothing to say). Callers MUST
     surface the message — printing it to stderr is enough; the point is
     that "0 tenants" can never again look like "no problems".
+
+    Omit `tool` from a shared helper so the message names the entry point
+    the operator ran rather than the helper; pass it explicitly from a
+    single-purpose tool where that name is the more useful one.
     """
+    if tool is None:
+        tool = _running_tool()
     missed = nested_yaml_files(config_dir)
     if not missed:
         return None

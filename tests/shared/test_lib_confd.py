@@ -142,3 +142,33 @@ def test_order_is_lexicographic_not_depth_first(tmp_path: pathlib.Path):
     got = [p.relative_to(root).as_posix() for p in iter_config_files(root)]
     assert got == ["a/tenant.yaml", "z.yaml"], "nested-but-alphabetically-first comes first"
     assert got != ["z.yaml", "a/tenant.yaml"], "this is NOT shallow-first ordering"
+
+
+def test_shared_helpers_name_the_entry_point_not_themselves(monkeypatch, tmp_path):
+    """`tool=` omitted → the message names the command the operator ran.
+
+    A shared helper (`_lib_io.iter_yaml_files`) is reached from several
+    entry points. Labelling its warning with the helper's own name tells
+    the operator nothing about which command produced it — the
+    traceability concern CodeRabbit raised on PR #1343.
+    """
+    root = tmp_path / "conf.d"
+    (root / "sub").mkdir(parents=True)
+    (root / "sub" / "t.yaml").write_text("tenants: {}\n", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", ["/some/where/offboard_tenant.py", "db-a"])
+    assert nested_yaml_warning(root).startswith("offboard_tenant:")
+
+    # An explicit name still wins, for single-purpose tools.
+    assert nested_yaml_warning(root, tool="explicit").startswith("explicit:")
+
+
+def test_derived_tool_name_survives_a_missing_argv(monkeypatch, tmp_path):
+    """Never crash the caller just to produce a label."""
+    root = tmp_path / "conf.d"
+    (root / "sub").mkdir(parents=True)
+    (root / "sub" / "t.yaml").write_text("tenants: {}\n", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [])
+    msg = nested_yaml_warning(root)
+    assert msg and "conf.d reader" in msg
