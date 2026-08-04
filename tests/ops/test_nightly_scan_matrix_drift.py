@@ -140,8 +140,278 @@ def test_thirdparty_matrix_equals_deployed_refs() -> None:
     )
 
 
+def _third_party_pins_in_helm_values() -> dict[str, set[str]]:
+    """Every third-party image ref pinned in ANY `helm/*/values*.yaml`, by file.
+
+    ⛔ Independent of the extractor in exactly ONE respect — FILE SELECTION — and
+    that is the respect that matters. The ref extraction and the skip lists are
+    deliberately reused (`_refs_from_node` / `_repo_of` / `LOCAL_BUILT_IMAGES` /
+    `SKIP_REPO_PREFIXES`), because re-implementing them here would just create a
+    second contract to drift. What is NOT reused is `SOURCE_GLOBS`: this helper
+    globs the tree itself, so a narrowing there cannot make this check narrow
+    with it. #1302 was precisely that failure — both sides of the existing
+    set-comparison came from one blind glob, so they stayed equal while an
+    unscanned image shipped.
+
+    ⚠️ So do not read this as "an independent second opinion on what a ref is".
+    It is a second opinion on WHICH FILES get looked at, nothing more.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_extractor", EXTRACTOR)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_extractor"] = mod          # frozen dataclasses need this
+    spec.loader.exec_module(mod)
+
+    scanned = sorted(ROOT.glob("helm/*/values*.yaml"))
+    # ⛔ Literal paths, and load-bearing for TWO reasons.
+    # (1) Vacuity: a glob that stops matching would make every assertion below
+    #     pass by finding nothing.
+    # (2) verify_diff's text_map is built by scanning test files for LITERAL
+    #     path strings. Without these, editing an overlay does not select the
+    #     test written for it — measured: both were `None` in the map while
+    #     `helm/da-portal/README.md` WAS registered, purely because a docstring
+    #     happened to name it. Same trap as #1313.
+    for known in ("helm/da-portal/values-tier1.yaml", "helm/da-portal/values-tier2.yaml"):
+        assert ROOT / known in scanned, f"{known} is no longer in the sampling face"
+
+    def _merge(base, over):
+        """`helm -f` semantics: deep, key BY KEY. The whole point of #1302."""
+        if isinstance(base, dict) and isinstance(over, dict):
+            out = dict(base)
+            for k, v in over.items():
+                out[k] = _merge(base.get(k), v)
+            return out
+        return over
+
+    out: dict[str, set[str]] = {}
+    for path in scanned:
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        # ⛔ An overlay is MERGED onto its base before extraction, because that is
+        # what actually deploys — and because reading it standalone has a blind
+        # spot that recreates #1302 through a MORE idiomatic path than the one
+        # #1302 fixed. `_refs_from_node` shape-A needs `repository` AND `tag` in
+        # the same node (check_image_refs_resolve.py), so an overlay that
+        # overrides only `tag:` and inherits `repository:` extracts to NOTHING.
+        # That is exactly the drift this module exists to catch: the merged ref
+        # is `<base repo>:<overlay tag>@<base digest>` — a tag and a digest that
+        # disagree, shipping unscanned. Verified: without this merge, injecting a
+        # bare `oauth2Proxy.image.tag` into an overlay leaves every test green.
+        if path.name != "values.yaml":
+            base_path = path.parent / "values.yaml"
+            if base_path.is_file():
+                doc = _merge(yaml.safe_load(base_path.read_text(encoding="utf-8")), doc)
+        refs = {r for r in mod._refs_from_node(doc)
+                if mod._repo_of(r) not in mod.LOCAL_BUILT_IMAGES
+                and not mod._repo_of(r).startswith(mod.SKIP_REPO_PREFIXES)}
+        if refs:
+            out[path.relative_to(ROOT).as_posix()] = refs
+    return out
+
+
+def test_every_helm_values_overlay_pin_is_in_the_scan_matrix() -> None:
+    """⛔ #1302 — the SAMPLING FACE, not just the two sets.
+
+    `test_thirdparty_matrix_equals_deployed_refs` compares the matrix against
+    whatever the extractor finds. That is only a coverage guarantee while the
+    extractor LOOKS at every place a deployed image can be pinned — and it did
+    not: its glob was `helm/*/values.yaml`, so a `-f values-tier2.yaml` overlay
+    (a documented install profile, helm/da-portal/README.md) was invisible to
+    BOTH sides. Two sets derived from the same blind extractor stay equal while
+    an image nobody scans ships.
+
+    Measured before the fix: injecting a pin into `values-tier2.yaml` left that
+    test GREEN; after widening the glob it goes RED. This assertion pins the
+    property directly so the glob cannot quietly narrow again.
+
+    ⚠️ Deliberately NOT asserting anything about `values-*.yaml` being allowed
+    to pin at all — that is a chart-design question. The rule here is only:
+    whatever they pin must be scanned.
+
+    ⚠️ One known cost of that rule: `helm/vector/values-projection.yaml` says of
+    itself that it is "NOT a deployment profile" — a synthetic render variant
+    that exists so kube-linter can see the projection-gate container. It pins no
+    image today, so this is inert; but if a future lint variant ever needs a
+    pinned tag to exercise some render branch, that SYNTHETIC value would be
+    required to sit in the real nightly CVE matrix. Prefer moving such a fixture
+    out of `values*.yaml` over widening this rule.
+    """
+    matrix_refs = {e["ref"] for e in _matrix_include("scan-thirdparty")}
+    missing: dict[str, set[str]] = {}
+    for path, refs in _third_party_pins_in_helm_values().items():
+        gap = refs - matrix_refs
+        if gap:
+            missing[path] = gap
+    assert not missing, (
+        "third-party image refs pinned in helm values are NOT in the nightly "
+        "scan-thirdparty matrix — they deploy but are never CVE-scanned:\n"
+        + "\n".join(f"  {p}: {sorted(g)}" for p, g in sorted(missing.items()))
+        + "\nAdd them to .github/workflows/nightly-image-scan.yaml, or stop "
+          "pinning them in the overlay so it inherits values.yaml (#1302)."
+    )
+
+
+def test_hardcoded_template_image_refs_are_covered_by_the_scan() -> None:
+    """⛔ #1302, second sampling hole: a concrete ref written straight into a
+    HELM TEMPLATE.
+
+    The extractor cannot glob `helm/*/templates/**` — those files are not YAML
+    until the Go-template actions are stripped, so `yaml.safe_load` throws. That
+    is a sound reason to exclude them, but it leaves any ref hardcoded there
+    outside the sampling face entirely. `helm/tenant-api/templates/deployment.yaml`
+    has exactly such a ref (the alpine/git init-container), and today it happens
+    to equal the copy in `k8s/04-tenant-api/deployment.yaml` — the one that IS
+    extracted and IS in the matrix. Nothing enforced that equality: bump one and
+    the nightly scan covers the other.
+
+    Asserted as "must be in the scan matrix" rather than "must equal the k8s
+    copy", because that is the property that actually matters and it keeps
+    holding if the k8s manifest ever goes away.
+    """
+    # ⛔ NO `/` requirement, and BOTH YAML extensions. An earlier cut of this
+    # regex demanded at least one slash, so a perfectly ordinary Docker Hub
+    # official ref (`image: alpine:3.20`) was invisible to it — this gate would
+    # have shipped with the same blind spot it exists to close. Neither shape
+    # occurs in the repo today (the only hardcoded template ref is alpine/git,
+    # and helm/ has no `.yml` templates), so this is coverage for the next one,
+    # not a fix for a live miss. CodeRabbit caught it on #1302.
+    # A trailing `# comment` and a registry PORT (`myreg.local:5000/x/y:1.0`)
+    # both used to fall outside the tail anchor — measured, and the comment form
+    # is the likelier of the two in this repo. Still NOT covered: a value on the
+    # following line. That needs a real YAML parse, which is the thing templates
+    # cannot have; stated here rather than left as a silent hole.
+    concrete = re.compile(
+        r"image:\s*[\"']?([a-z0-9][\w.\-]*(?::\d+)?(?:/[\w.\-]+)*:[\w.\-]+"
+        r"(?:@sha256:[0-9a-f]{64})?)[\"']?\s*(?:#.*)?$")
+    matrix_refs = {e["ref"] for e in _matrix_include("scan-thirdparty")}
+    # ⛔ First-party detection is the `ghcr.io/vencil/` prefix and nothing else.
+    # An earlier cut also excused refs found in the self-built `scan` matrix —
+    # dead code: those entries carry `name`/`context`/`dockerfile` and no `ref`
+    # at all, so the set was `{None}` and the branch never fired. Asserted, so
+    # nobody re-adds it believing it works.
+    assert {e.get("ref") for e in _matrix_include("scan")} == {None}, (
+        "the self-built scan matrix grew a `ref` key — first-party exemption "
+        "here is prefix-based on purpose; revisit before relying on it")
+
+    # ⛔ A LIST, not a dict keyed by path: a template with two offending refs
+    # would silently report only the last one — the same "truncated finding
+    # list" shape this module exists to prevent.
+    offenders: list[tuple[str, str]] = []
+    templates = sorted(
+        p for p in ROOT.glob("helm/*/templates/**/*")
+        if p.suffix in (".yaml", ".yml"))
+    assert templates, "no helm templates found — this scan would be a no-op"
+    for path in templates:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            # A fully commented-out line is not a deployed ref. Without this the
+            # scan over-detects in the ANNOYING direction: a dead example ref in
+            # a template comment would be demanded into the real CVE matrix,
+            # polluting a matrix whose own workflow header warns about training
+            # readers to ignore its nightly issue.
+            if stripped.startswith("#"):
+                continue
+            m = concrete.search(stripped)
+            if not m:
+                continue
+            ref = m.group(1)
+            if ref.startswith("ghcr.io/vencil/"):
+                continue  # first-party: the release pipeline owns its currency
+            if ref not in matrix_refs:
+                offenders.append((path.relative_to(ROOT).as_posix(), ref))
+    assert not offenders, (
+        "a third-party image ref is hardcoded in a Helm TEMPLATE and is not in "
+        "the nightly scan matrix — the extractor cannot see templates (they are "
+        "not parseable YAML), so nothing else will catch it:\n"
+        + "\n".join(f"  {p}: {r}" for p, r in sorted(offenders))
+        + "\nEither add it to the matrix, or move the pin into values.yaml where "
+          "the extractor samples it (#1302)."
+    )
+
+
+def test_the_extractor_samples_overlay_values_files() -> None:
+    """⛔ The ONLY thing that catches the extractor's glob narrowing again.
+
+    Not obvious, and worth spelling out: neither of the two set-comparisons can
+    catch it. `test_thirdparty_matrix_equals_deployed_refs` derives BOTH sides
+    from the extractor, so a narrower glob shrinks them together and stays
+    green — that is #1302 itself. The overlay guard above globs the tree
+    independently, so it also stays green while the extractor goes blind.
+
+    Asserted BEHAVIOURALLY — the extractor's own globs are resolved against the
+    real tree and compared to the files this module knows must be sampled. An
+    earlier cut just grepped the source for the literal `"helm/*/values*.yaml"`,
+    which is the same syntax-vs-behaviour weakness CodeRabbit flagged on the
+    trigger test in this very PR: `helm/*/values*.yml` or a chart-scoped glob
+    would satisfy the string check while sampling nothing.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_extractor_globs", EXTRACTOR)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_extractor_globs"] = mod
+    spec.loader.exec_module(mod)
+
+    sampled = {p for pattern in mod.SOURCE_GLOBS for p in ROOT.glob(pattern)}
+    must_sample = sorted(ROOT.glob("helm/*/values*.yaml"))
+    assert must_sample, "no helm values files found — this assertion would be vacuous"
+    missing = [p.relative_to(ROOT).as_posix() for p in must_sample if p not in sampled]
+    assert not missing, (
+        f"check_image_refs_resolve.py's SOURCE_GLOBS no longer sample: {missing}\n"
+        f"  globs: {mod.SOURCE_GLOBS}\n"
+        "Overlay profiles (`-f values-tier2.yaml`) pin real deployed images; a "
+        "glob that misses them makes those images invisible to the nightly scan "
+        "AND to both set-comparisons in this module, which is #1302 (#1302)."
+    )
+
+
+def test_the_resolve_workflow_triggers_on_overlay_values_files() -> None:
+    """⛔ Scan face and TRIGGER face must widen together.
+
+    `image-ref-resolve.yaml` is path-filtered. Widening the checker's globs
+    without widening this filter yields a gate that can see overlay files but is
+    never invoked when one changes — the shape where a control is present, runs,
+    and still covers nothing. A PR touching only `values-tier2.yaml` is exactly
+    the PR this check exists for.
+    """
+    wf = yaml.safe_load((WORKFLOWS_DIR / "image-ref-resolve.yaml").read_text(encoding="utf-8"))
+    # PyYAML parses the bare `on:` key as the boolean True (YAML 1.1).
+    triggers = wf.get("on") or wf.get(True)
+    paths = triggers["pull_request"]["paths"]
+
+    # ⛔ Asserted BEHAVIOURALLY — the filter must actually match the overlay
+    # files that exist, not merely be spelled in a way that looks right. A
+    # syntactic check (`some entry starts with helm/ and contains values*`) is
+    # satisfied by `helm/nonexistent/values*.yaml`, which matches nothing. That
+    # is the same "present but covers nothing" shape this whole module is about.
+    overlays = [p.relative_to(ROOT).as_posix()
+                for p in sorted(ROOT.glob("helm/*/values-*.yaml"))]
+    assert overlays, "no overlay values files found — this assertion would be vacuous"
+
+    def _matches(pattern: str, target: str) -> bool:
+        """GitHub Actions path-filter semantics: `**` spans separators, `*` does not.
+
+        ⚠️ Deliberately STRICTER than the real engine (minimatch) in one respect:
+        minimatch collapses `**` to zero directories, so `helm/**/values*.yaml`
+        also matches `helm/values.yaml`; this does not. The direction is the safe
+        one — it can only produce a false "not covered" (a nuisance failure),
+        never a false "covered" (the dangerous one). Inert today: every overlay
+        lives exactly one level under `helm/`.
+        """
+        rx = re.escape(pattern).replace(r"\*\*", "\x00").replace(r"\*", "[^/]*")
+        return re.fullmatch(rx.replace("\x00", ".*"), target) is not None
+
+    unmatched = [o for o in overlays if not any(_matches(p, o) for p in paths)]
+    assert not unmatched, (
+        f"image-ref-resolve.yaml does not trigger on these overlay files: {unmatched}\n"
+        f"  filter paths: {paths}\n"
+        "The checker globs `helm/*/values*.yaml`; a filter that misses an overlay "
+        "means a PR changing only that file never runs it (#1302)."
+    )
+
+
 def test_report_expected_counts_match_matrix_sizes() -> None:
-    """The report's hardcoded EXPECTED (5 / 14) must track the matrix sizes."""
+    """The report's hardcoded EXPECTED (5 / 15) must track the matrix sizes."""
     n_selfbuilt = len(_matrix_include("scan"))
     n_thirdparty = len(_matrix_include("scan-thirdparty"))
     run = _aggregate_run()

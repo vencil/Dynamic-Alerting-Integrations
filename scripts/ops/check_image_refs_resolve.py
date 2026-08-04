@@ -45,7 +45,14 @@ except ImportError:  # pragma: no cover - pyyaml is a hard dep in CI / pre-commi
     sys.exit(2)
 
 # Globs of the deployment sources humans hand-edit image refs into.
-SOURCE_GLOBS = ("helm/*/values.yaml", "k8s/**/*.yaml", "k8s/**/*.yml")
+# ⛔ `values*.yaml`, not `values.yaml` (#1302). A `-f values-tier2.yaml` overlay is
+# a DOCUMENTED deployment profile (helm/da-portal/README.md), and it can pin an
+# image the base never mentions — which this extractor, and therefore the nightly
+# CVE scan's matrix-drift guard, would never have seen. Two sibling gates over the
+# same concern already read `values*` (check_iac_helm.py, check_image_pin_capability.py);
+# this one was the odd one out, and da-portal's overlays had drifted two months
+# behind the base pin underneath that asymmetry.
+SOURCE_GLOBS = ("helm/*/values*.yaml", "k8s/**/*.yaml", "k8s/**/*.yml")
 
 # Images BUILT LOCALLY by a chart's own Dockerfile and NOT published to a public
 # registry (the deployer builds/loads them, or pushes to their own registry). They

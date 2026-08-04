@@ -50,10 +50,15 @@ portal:
 # 不啟用 OAuth2-proxy（Git-Native 團隊無需身份驗證）
 oauth2Proxy:
   enabled: false
-  image:
-    repository: quay.io/oauth2-proxy/oauth2-proxy
-    tag: "v7.15.2"
-    pullPolicy: IfNotPresent
+  # ⛔ 這裡刻意「不」覆寫 `image:`（#1302）。本 overlay 過去釘死 `tag: "v7.15.2"`，
+  # 而 values.yaml 早已走到 v7.15.3——由於 `-f` overlay 是**逐 key 合併**，base 的
+  # `digest` 存活了下來，實際渲染出的是 `:v7.15.2@sha256:<v7.15.3 的 digest>`。
+  # digest 在 pull 時具權威性，所以跑起來的容器一直是對的；錯的是這個 profile 的
+  # manifest / SBOM / `kubectl describe` 全都指名了另一個版本，而且哪天有人替這裡
+  # 補上 digest，tag 就變權威、會**靜默降版**。
+  # ⇒ 這顆 pin 由 values.yaml 擁有，overlay 一律繼承。與 primary image 早在 #682
+  # 就定下的規則相同（由 tests/helm/test_image_tag_derivation.py 的
+  # test_da_portal_tiers_have_empty_tag 釘住）。
   provider: github
   redirectUrl: "http://da-portal.example.com/oauth2/callback"
   emailDomain: "*"

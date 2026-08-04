@@ -692,7 +692,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "cd2f6c52292729ad3dcfa398eaa36d592e92d969dcfcbd85679f0dd22979a2f9",
+ "source_digest": "63c9e645adb4a810b240979df5d08c657e788f03f992f9b02c20e6a2e61c6dcf",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1038,6 +1038,9 @@
   ".github/workflows/guard-defaults-impact.yml": [
    "tests/ops/test_guard_defaults_scopes.py"
   ],
+  ".github/workflows/image-ref-resolve.yaml": [
+   "tests/ops/test_nightly_scan_matrix_drift.py"
+  ],
   ".github/workflows/nightly-image-scan.yaml": [
    "tests/ops/test_nightly_scan_matrix_drift.py",
    "tests/shared/test_vector_pin_parity.py"
@@ -1372,6 +1375,9 @@
    "tests/lint/test_check_iac_helm.py",
    "tests/shared/test_helm_portal.py"
   ],
+  "helm/da-portal/README.md": [
+   "tests/ops/test_nightly_scan_matrix_drift.py"
+  ],
   "helm/da-portal/files/relay_token.js": [
    "tests/helm/test_portal_relay_token_guard.py"
   ],
@@ -1380,6 +1386,12 @@
   ],
   "helm/da-portal/templates/deployment.yaml": [
    "tests/helm/test_oauth2_gitlab_profile.py"
+  ],
+  "helm/da-portal/values-tier1.yaml": [
+   "tests/ops/test_nightly_scan_matrix_drift.py"
+  ],
+  "helm/da-portal/values-tier2.yaml": [
+   "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   "helm/da-portal/values.yaml": [
    "tests/helm/test_portal_relay_token_guard.py",
@@ -1484,6 +1496,7 @@
    "tests/helm/test_single_writer_guard.py",
    "tests/lint/test_check_dev_bypass_manifest.py",
    "tests/lint/test_check_single_writer_invariant.py",
+   "tests/ops/test_nightly_scan_matrix_drift.py",
    "tests/ops/test_scaffold_tenant.py"
   ],
   "helm/tenant-api/templates/rbac-machine-identity.yaml": [
@@ -1558,6 +1571,9 @@
    "tests/shared/test_helm_chart_log_aggregation.py",
    "tests/shared/test_vector_pin_parity.py",
    "tests/shared/test_vector_projection_vrl.py"
+  ],
+  "helm/vector/values-projection.yaml": [
+   "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   "helm/vector/values.yaml": [
    "tests/dx/test_log_visibility_catalogue.py",
@@ -1636,7 +1652,8 @@
   ],
   "k8s/04-tenant-api/deployment.yaml": [
    "tests/lint/test_check_k8s_manifests.py",
-   "tests/lint/test_check_single_writer_invariant.py"
+   "tests/lint/test_check_single_writer_invariant.py",
+   "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   "k8s/crd": [
    "tests/lint/test_check_k8s_manifests.py"

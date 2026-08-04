@@ -61,10 +61,18 @@ portal:
 # 啟用 OAuth2-proxy：作為身份驗證層保護 Portal
 oauth2Proxy:
   enabled: true
-  image:
-    repository: quay.io/oauth2-proxy/oauth2-proxy
-    tag: "v7.15.2"
-    pullPolicy: IfNotPresent
+  # ⛔ 這裡刻意「不」覆寫 `image:`（#1302）。本 overlay 過去釘死 `tag: "v7.15.2"`，
+  # 而 values.yaml 早已走到 v7.15.3——由於 `-f` overlay 是**逐 key 合併**，base 的
+  # `digest` 存活了下來，Tier 2 實際渲染出的是 `:v7.15.2@sha256:<v7.15.3 的 digest>`。
+  # digest 在 pull 時具權威性，所以跑起來的容器一直是對的；錯的是這個 profile 的
+  # manifest / SBOM / `kubectl describe` 全都指名了另一個版本。
+  # ⚠️ 而且這是個引信：哪天有人替這裡補上 digest，tag 就變權威，Tier 2 會**靜默降版**
+  # 回到 v7.15.2。⛔ 危害在**機制**不在這兩個版號——v7.15.2 本身沒有已知問題（#109
+  # 正是把這顆映像**升到** v7.15.2 去修一個 auth bypass，而 v7.15.3 只是 #928 的例行
+  # bump）。真正的問題是「overlay 的 tag 可以在沒人察覺的情況下把 base 的升版蓋掉」，
+  # 而這條版本線既然帶過一次安全修補，下一次就不該由一個沒人在看的 overlay 決定。
+  # ⇒ 這顆 pin 由 values.yaml 擁有，overlay 一律繼承。與 primary image 早在 #682
+  # 就定下的規則相同。
   # Provider: github | google | oidc | gitlab
   # 根據組織選擇提供商（建議：OIDC 用於企業環境）
   provider: github  # Tier 2: Recommended oidc for enterprise
