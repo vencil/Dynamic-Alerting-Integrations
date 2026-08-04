@@ -28,7 +28,13 @@ services:
 
   # Layer 1 storage backend (the federation-proxy upstream).
   prometheus:
-    image: prom/prometheus:v3.11.2
+    # ⛔ Must equal the shipped ref in k8s/03-monitoring/deployment-prometheus.yaml
+    # (tag only — the deploy side additionally pins a digest). Bound by
+    # tests/ops/test_federation_e2e_mirrors_deploy_sot.py: this sat at v3.11.2
+    # from the harness commit (#544) until #1333, two minors behind what we
+    # ship, and nothing noticed because a working Prometheus passes every
+    # scenario regardless of version.
+    image: prom/prometheus:v3.13.2
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     command:
@@ -59,7 +65,12 @@ services:
   # and metadata request. Args mirror helm/federation-proxy (the SoT);
   # --enable-label-apis covers /series /labels /label/<n>/values.
   federation-proxy:
-    image: prometheuscommunity/prom-label-proxy:v0.14.0
+    # ⛔ Must equal helm/federation-proxy/values.yaml image.repository:image.tag.
+    # Bound by tests/ops/test_federation_e2e_mirrors_deploy_sot.py — this file
+    # is outside every Renovate customManager (they glob helm/ + k8s/ only, and
+    # this ref is tag-only so the digest-anchored patterns cannot match it), so
+    # nothing else would notice the e2e validating a version we do not ship.
+    image: prometheuscommunity/prom-label-proxy:v0.15.0
     # Args mirror helm/federation-proxy/templates/deployment.yaml (the
     # SoT) verbatim — single-dash flags, same order.
     command:
