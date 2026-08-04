@@ -38,7 +38,7 @@ def _mkrepo(tmp_path: Path, name: str, body: str) -> Path:
 def _run(root: Path, env: dict[str, str] | None = None):
     return subprocess.run(  # noqa: S603
         [sys.executable, "-X", "utf8", str(SCRIPT), "--ci", "--repo-root", str(root)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
         env={**os.environ, **(env or {})},
     )
 
@@ -85,13 +85,24 @@ def test_composite_fence_is_split_per_documented_file(tmp_path: Path) -> None:
         "# L0 _defaults.yaml\n"
         "defaults:\n  a: 1\n"
         "\n"
+        # `defaults:` keeps this segment SELECTED (a lone `state_flters` is not
+        # a key the selector recognises, so the segment would drop out and the
+        # unit count would fall back to 1); the typo is what makes it fail.
         "# L1 finance/_defaults.yaml\n"
         "defaults:\n  b: 2\n"
+        "state_flters:\n  m:\n    severity: info\n"
         "```\n"
     )
     r = _run(_mkrepo(tmp_path, "composite.md", body))
-    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    assert r.returncode == EXIT_VIOLATION, r.stdout
     assert "Config units checked:        2" in r.stdout
+    # Also pins the fence→file line translation (`line_num + offset + 1`), which
+    # is the contract the Go gate reports against: the fence opens on line 1 and
+    # the second documented file starts at offset 4, so the violation must be
+    # reported at line 6. Asserting only the unit count would let a regression in
+    # that arithmetic — the exact divergence this PR found between the two
+    # gates — stay green.
+    assert "docs/composite.md:6" in r.stdout
 
 
 def test_multi_document_block_validates_each_document(tmp_path: Path) -> None:

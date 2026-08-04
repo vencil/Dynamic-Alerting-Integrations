@@ -7,7 +7,10 @@ Both gates that read docs/**/*.md must cut a fenced block into the same units:
 
 Neither asserts the other. Both assert tests/shared/docs_yaml_split_matrix.json,
 which makes their agreement transitive rather than claimed — the same shape as
-tests/shared/optional_overrides_membership_matrix.json.
+the optional-overrides membership matrix in the same directory. (Named only in
+prose deliberately: verify_diff.build_map cannot tell a docstring mention from a
+real read, so spelling the filename here would fabricate a dependency edge from
+that matrix to this test.)
 
 The Go half lives in TestDocsYamlSplitMatrix in that same test file; if you
 change the rule, both halves fail until the matrix and both implementations

@@ -692,7 +692,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "154662d21810953f38fda90cc3898bfd6698e244624d858c0140c173c0175d10",
+ "source_digest": "d622ccf716bedb680c2073173dad26e460e60e256e55454ad3652874b4ad1f01",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2228,7 +2228,6 @@
    "tests/lint/test_docs_yaml_split_parity.py"
   ],
   "tests/shared/optional_overrides_membership_matrix.json": [
-   "tests/lint/test_docs_yaml_split_parity.py",
    "tests/ops/test_generate_alertmanager_routes.py"
   ],
   "tests/shared/property-coverage.yaml": [

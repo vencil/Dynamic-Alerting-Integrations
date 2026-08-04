@@ -902,7 +902,11 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --check fences --ci
         language: python
         pass_filenames: false
-        files: ^docs/.*\.md$
+        # Includes the scanner itself: `pass_filenames: false` means `files:`
+        # only decides WHEN the hook runs, so a commit that touches only the
+        # extractor would otherwise run no gate locally (same rule the sibling
+        # confd-schema-check follows).
+        files: ^(docs/.*\.md|scripts/tools/lint/check_md_yaml_drift\.py)$
         additional_dependencies: ['pyyaml']
 
       # jsonschema is REQUIRED here. It used to be absent while the script did
@@ -923,7 +927,9 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --ci
         language: python
         pass_filenames: false
-        files: ^docs/.*\.(md|yaml)$
+        # Both SCHEMAS are inputs too: editing a schema can turn a documented
+        # example red, and without them here that edit never runs this gate.
+        files: ^(docs/.*\.(md|yaml)|docs/schemas/(tenant-config|platform-defaults)\.schema\.json|scripts/tools/lint/check_md_yaml_drift\.py)$
         additional_dependencies: ['pyyaml', 'jsonschema']
 
       - id: playwright-e2e

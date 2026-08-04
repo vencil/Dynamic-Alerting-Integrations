@@ -30,7 +30,7 @@ def _run(repo_root: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603
         [sys.executable, "-X", "utf8", str(SCRIPT),
          "--check", "fences", "--ci", "--repo-root", str(repo_root)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
     )
 
 
@@ -119,7 +119,7 @@ def test_non_yaml_fences_are_ignored(tmp_path: Path) -> None:
 def test_help_exits_zero(flag: str) -> None:
     r = subprocess.run(  # noqa: S603
         [sys.executable, "-X", "utf8", str(SCRIPT), flag],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
     )
     assert r.returncode == EXIT_OK
     assert "--check" in r.stdout
