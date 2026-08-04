@@ -113,7 +113,7 @@ conf.d/
 
 - **物件級** (dict)：遞迴合併，子鍵覆蓋父鍵
 - **陣列級** (list)：子陣列替代父陣列（不是追加）
-- **null 值**：表示「顯式 opt-out」——忽略上層值
+- **null 值**：**依欄位而定，沒有通則**——只有 `_routing` 的四個欄位是 opt-out，閾值 key 請用 `"disable"`（見本節末的說明與 [ADR-017](../adr/017-defaults-yaml-inheritance-dual-hash.md)）
   
 例：
 

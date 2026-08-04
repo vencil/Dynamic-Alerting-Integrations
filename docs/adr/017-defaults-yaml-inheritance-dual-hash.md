@@ -68,8 +68,9 @@ conf.d/
   - **閾值 key**：顯式 `null` **不退出繼承**，請改用 `"disable"`。發射面
     （`collector.go` → `ResolveAtWithStats`）本來就會忽略 null 並回退平台預設；
     診斷面（`/effective`、`describe_tenant`、simulate）已於 #1339 對齊。
-- **⚠️ 「空值」與 null 要分開講**：`mysql_connections: ~` 與 `mysql_connections:`
-  對 YAML 是**完全相同的東西**。所以若讓閾值面的 null 生效，等於明文規定
+- **⚠️ 「空值」與顯式 `null` 是同一件事**——原文把兩者並列成「Null / 空值」，
+  正是誤導的來源：`mysql_connections: ~` 與 `mysql_connections:` 語法不同，但
+  YAML 解析出來**都是 null**。所以若讓閾值面的 null 生效，等於明文規定
   「打到一半忘了填」＝安靜關掉一條告警。這就是閾值面不支援 null 的理由：
   意外要走向**吵**，不能走向**靜**。
 - **`_metadata` 欄位不繼承**：每個 tenant 的 `_metadata` 僅來自自身 YAML + 路徑推斷（ADR-016）

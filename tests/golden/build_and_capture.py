@@ -21,7 +21,22 @@ DESCRIBE = HERE.parent.parent / "scripts" / "tools" / "dx" / "describe_tenant.py
 
 def write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    # newline="" for the same reason as golden.json below, and it matters more
+    # here: source_hash is computed over these files' bytes, so a CRLF
+    # regeneration would change every hash without changing any semantics.
+    path.write_text(content, encoding="utf-8", newline="")
+
+
+def _posix(p):
+    """Normalise a captured relative path to forward slashes.
+
+    describe_tenant.py reports paths with the host separator, so a Windows-host
+    regeneration used to write `db\\mariadb\\prod\\tenant-x.yaml` into
+    golden.json and turn the Go parity test red on paths alone — a silent
+    platform trap, since nothing about the merge semantics had changed. The Go
+    side compares against `/`-joined paths, so `/` is the contract.
+    """
+    return p.replace("\\", "/") if isinstance(p, str) else p
 
 
 def reset(scenario: str) -> Path:
@@ -284,18 +299,20 @@ def main() -> int:
             "scenario": scenario,
             "tenant_id": tenant_id,
             "fixture_dir": fixture_dir,
-            "source_file": result.get("source_file"),
+            "source_file": _posix(result.get("source_file")),
             "source_hash": result.get("source_hash"),
             "merged_hash": result.get("merged_hash"),
-            "defaults_chain": result.get("defaults_chain"),
+            "defaults_chain": [_posix(p) for p in (result.get("defaults_chain") or [])],
             "effective_config": result.get("effective_config"),
         })
 
     out = HERE / "golden.json"
-    # Trailing newline is not cosmetic: without it the end-of-file-fixer hook
-    # rewrites golden.json on every commit, so each regeneration would show a
-    # spurious one-line diff against the committed copy.
-    out.write_text(json.dumps(golden, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    # newline="" pins LF on every platform: write_text() defaults to
+    # os.linesep translation, so a Windows-host regeneration would rewrite the
+    # whole file as CRLF. The trailing newline is likewise not cosmetic —
+    # without it the end-of-file-fixer hook rewrites golden.json every commit.
+    out.write_text(json.dumps(golden, indent=2, sort_keys=True) + "\n",
+                   encoding="utf-8", newline="")
     print(f"Wrote {out}")
     print(f"Captured {len(golden)} scenarios")
     for g in golden:

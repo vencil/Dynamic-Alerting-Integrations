@@ -113,7 +113,7 @@ Effective config = merge(
 
 - **Object level** (dict): Recursive merge, child keys override parent keys
 - **Array level** (list): Child array replaces parent array (no appending)
-- **Null values**: Explicit opt-out—ignore upstream values
+- **Null values**: **per-field, no blanket rule** — only the four `_routing` fields are an opt-out; for threshold keys use `"disable"` (see the note at the end of this section and [ADR-017](../adr/017-defaults-yaml-inheritance-dual-hash.en.md))
 
 Example:
 

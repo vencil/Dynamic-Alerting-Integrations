@@ -73,7 +73,7 @@ func checkRequiredFields(input CheckInput) []Finding {
 					TenantID: tenantID,
 					Field:    field,
 					Message: fmt.Sprintf(
-						"required field %q is present but null in tenant %q's effective config (YAML null deletes inherited keys per ADR-017)",
+						"required field %q is present but null in tenant %q's effective config — no value for the exporter to act on (a null on a threshold key is NOT an opt-out; use \"disable\" to stop alerting)",
 						field, tenantID),
 				})
 			}

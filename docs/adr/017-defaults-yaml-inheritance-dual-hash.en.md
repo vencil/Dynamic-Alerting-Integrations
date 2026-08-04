@@ -67,11 +67,12 @@ Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides 
     already ignores the null and falls back to the platform default; the
     diagnostic path (`/effective`, `describe_tenant`, simulate) was aligned to
     it in #1339.
-- **⚠️ "Empty value" is not a synonym for null here**: `mysql_connections: ~`
-  and `mysql_connections:` are the **same thing** to YAML. Honouring null on a
-  threshold key would therefore make "I stopped typing halfway" mean "silently
-  switch this alert off". That is the reason it is unsupported there: an
-  accident must fail **loud**, never **silent**.
+- **⚠️ A blank value and an explicit `null` are the same thing** — listing them
+  as "Null / empty values" was itself the misleading part: `mysql_connections: ~`
+  and `mysql_connections:` are different syntax that YAML parses to the **same
+  null**. Honouring null on a threshold key would therefore make "I stopped
+  typing halfway" mean "silently switch this alert off". That is why it is
+  unsupported there: an accident must fail **loud**, never **silent**.
 - **`_metadata` fields do not inherit**: each tenant's `_metadata` comes only from its own YAML + path inference (ADR-016)
 
 ```yaml
