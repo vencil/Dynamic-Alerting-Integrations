@@ -692,7 +692,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "eb90ab29333ac8b17f0ec5f10b26902e8dc009605809fbfcbcf4e8b19aa4caa8",
+ "source_digest": "f4c2e5c8d9feb13c1ae6b3d5ccd42c9bfaf5938f39ab091fb1ed3fa34232bac4",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1440,7 +1440,8 @@
    "tests/helm/test_revoked_set_contract_guard.py",
    "tests/ops/test_federation_e2e_mirrors_deploy_sot.py",
    "tests/ops/test_renovate_config.py",
-   "tests/ops/test_revoked_set_contract.py"
+   "tests/ops/test_revoked_set_contract.py",
+   "tests/shared/test_federation_audit_mtail.py"
   ],
   "helm/federation-proxy": [
    "tests/ops/test_federation_e2e_mirrors_deploy_sot.py"

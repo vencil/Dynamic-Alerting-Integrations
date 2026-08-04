@@ -461,13 +461,21 @@ _DOCKERFILE_NAME_RE = re.compile(
 # allowed, `dockerfile_helpers.py` matches. Reject names whose FINAL extension is
 # a source/doc type — those are code ABOUT Dockerfiles, not build recipes. Caught
 # by this module's own name-rule test, which is why that test exists.
-# ⛔ `.tpl` is deliberately NOT in this list: `Dockerfile.tpl` is a plausible
-# templated build recipe, and excluding it would be the same wrong-direction
-# mistake as the too-narrow separator rule above. Helm's `_helpers.tpl` does not
-# match the name regex at all, so nothing needed `.tpl` here.
+# ⛔ `.tpl` IS in this list, and an earlier round of this PR was wrong to remove
+# it. The reasoning that removed it — "`Dockerfile.tpl` is a plausible templated
+# build recipe" — inverts the consequence: a template is precisely what
+# `docker build -f` CANNOT consume, yet once discovered it could not be exempted
+# (exemptions require a `tests/` prefix) and would be demanded into
+# `make docker-build-all`. Admitting it forces the one artifact class that cannot
+# be built into the mandatory-build set. The buildable artifact is whatever the
+# template RENDERS to, and that is what belongs in the matrices.
+# ⚠️ Known boundary: if such a rendered Dockerfile is produced at build time and
+# never committed, it is invisible to this discovery (which reads the git index).
+# Nothing in the repo does that today; if something starts to, this is the line
+# to revisit.
 _NOT_A_DOCKERFILE_SUFFIX = (
     ".py", ".md", ".sh", ".txt", ".json", ".yaml", ".yml", ".js", ".ts", ".go",
-    ".lock", ".toml", ".cfg", ".ini",
+    ".tpl", ".lock", ".toml", ".cfg", ".ini",
 )
 
 
@@ -504,7 +512,27 @@ def _discover_dockerfiles() -> set[str]:
     )
     files = [f for f in proc.stdout.split("\0") if f]
     assert files, "`git ls-files` returned nothing — refusing to run vacuously"
-    return {f for f in files if _is_dockerfile_name(f.rsplit("/", 1)[-1])}
+    found = {f for f in files if _is_dockerfile_name(f.rsplit("/", 1)[-1])}
+    # ⛔ The FILTERED set must be non-empty too, asserted HERE rather than in one
+    # caller. Blind review: a floor computed as `len(discovered) - len(exempt)`
+    # goes NEGATIVE if the name rule ever stops matching, and `len(matrix) >= -2`
+    # is satisfied by an empty matrix — the same triviality this guard already
+    # moved once, relocated from the registry to the name rule. Every caller must
+    # get the floor, so the assertion lives with the producer.
+    assert found, (
+        "no image-build recipes matched in a tree of "
+        f"{len(files)} tracked files — suspect the name rule, not the repo"
+    )
+    # Index-vs-worktree: `git ls-files` lists staged entries even after the file
+    # is deleted from disk. Fail-closed on that rather than reporting coverage of
+    # something that is gone.
+    missing = sorted(f for f in found if not (ROOT / f).is_file())
+    assert not missing, (
+        f"tracked but absent from the worktree: {missing} — `git rm` them, or "
+        "restore them; this guard would otherwise report coverage of a file "
+        "nobody can build."
+    )
+    return found
 
 # Dockerfiles deliberately OUTSIDE the scan matrices.
 #
@@ -734,6 +762,11 @@ def test_dockerfile_name_rule_covers_the_spellings_it_claims_to() -> None:
     must_not_match = [
         ".dockerignore", "docker-compose.yml", "Dockerfilter.py", "README.md",
         "dockerfile_helpers.py", "build.sh",
+        # ⛔ Pinned in the NEGATIVE direction on purpose: a template is not a
+        # buildable recipe, and an earlier round of this PR removed `.tpl` from
+        # the subtraction list with no sample holding it either way. The rule
+        # only counts as "verified against samples" if both directions are here.
+        "Dockerfile.tpl", "Containerfile.tpl",
     ]
     missed = [n for n in must_match if not _is_dockerfile_name(n)]
     over = [n for n in must_not_match if _is_dockerfile_name(n)]
@@ -805,6 +838,15 @@ def test_scan_exemptions_stay_undeployable() -> None:
         f"deployable tree(s) contributed no scannable files: {empty} (counts: "
         f"{per_tree}) — the scan face shrank; fix the walk or update "
         "_DEPLOYABLE_TREES deliberately."
+    )
+    # ⛔ AND a magnitude floor. Replacing the global floor with the per-tree one
+    # was a REGRESSION, not a strengthening (blind review): collapse three trees
+    # to one file each and every tree is still non-empty, so the scan reads ~108
+    # files instead of ~180 and stays green. Keep both — they fail on different
+    # shapes, and an earlier cut left `scanned` computed but never asserted.
+    assert scanned > 50, (
+        f"only {scanned} deployable files read across {per_tree} — the scan face "
+        "collapsed in aggregate even though no single tree is empty"
     )
     assert not offenders, (
         "an exempt Dockerfile's directory is referenced from a DEPLOYABLE tree, so "

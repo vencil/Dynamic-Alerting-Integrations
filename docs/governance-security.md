@@ -194,7 +194,7 @@ da-tools validate-config --config-dir conf.d/ --json
 | da-tools | `python:3.13.3-alpine3.22` | patch+alpine pin | Alpine 3.22 修復 libavif + openssl；`apk upgrade` 補漏 |
 | da-portal | `nginx:1.28.2-alpine3.23` | patch+alpine pin | Alpine 3.23 + `apk del` 移除 libavif/gd/libxml2 未使用 library |
 
-**CI 掃描：** 每個 image push 後自動執行 Trivy 掃描（CRITICAL + HIGH），有已修復的高危漏洞時阻斷 release。見 `.github/workflows/release.yaml`。
+**CI 掃描：** 每個 image push 後自動執行 Trivy 掃描（CRITICAL + HIGH），有已修復的高危漏洞時 release job 會失敗。⚠️ 順序要誠實交代：該掃描在 **push 之後**，且五個 release job 有四個它就是最後一步——所以它讓 release run 變紅，而不是把產物攔下來。更早的預警來自每晚對同一批 image 的掃描。見 `.github/workflows/release.yaml` 與 `.github/workflows/nightly-image-scan.yaml`。
 
 **企業 Registry 建議：** 定期 rebuild（建議每月或 CVE 公告後 48h 內）。設定 Trivy/Grype 排程掃描已上架 image。
 

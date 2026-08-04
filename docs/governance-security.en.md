@@ -194,7 +194,7 @@ All Pods set `seccompProfile: RuntimeDefault`. All Docker images pinned to speci
 | da-tools | `python:3.13.3-alpine3.22` | patch+alpine pin | Alpine 3.22 fixes libavif + openssl; `apk upgrade` patches gaps |
 | da-portal | `nginx:1.28.2-alpine3.23` | patch+alpine pin | Alpine 3.23 + `apk del` removes unused libavif/gd/libxml2 |
 
-**CI Scanning:** Trivy scan auto-runs after each image push (CRITICAL + HIGH), blocks release if fixable high-severity CVEs exist. See `.github/workflows/release.yaml`.
+**CI Scanning:** Trivy scan auto-runs after each image push (CRITICAL + HIGH) and fails the release job if fixable high-severity CVEs exist. Note the ordering honestly: the scan is **post-push**, and in four of the five release jobs it is the final step — so it turns the release run red rather than holding the artifact back. A nightly scan of the same images gives earlier warning. See `.github/workflows/release.yaml` and `.github/workflows/nightly-image-scan.yaml`.
 
 **Enterprise Registry recommendation:** Regular rebuilds (suggest monthly or within 48h of CVE announcement). Configure Trivy/Grype for scheduled scans on archived images.
 

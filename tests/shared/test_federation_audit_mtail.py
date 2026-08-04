@@ -35,6 +35,7 @@ the Vector / Helm installs alongside them.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -180,6 +181,24 @@ def test_compile_gate_rejects_broken_program(tmp_path: Path) -> None:
 # established. Shaped after tests/preview/test_promtool_pin_parity.py.
 _DOCKERFILE = "helm/federation-gateway/audit-sidecar/Dockerfile"
 _CI_YML = ".github/workflows/ci.yml"
+_VALUES = "helm/federation-gateway/values.yaml"
+
+# ── Recipe ↔ tag coupling (#1337) ───────────────────────────────────────────
+# The chart pins this image as `<mtail version>-<build revision>`. There is NO
+# digest knob for that container and the pod template's checksum annotations hash
+# only ConfigMaps, so if the recipe changes and the tag does not, `helm upgrade`
+# renders a byte-identical pod spec: no rollout, and with the default
+# `IfNotPresent` the node keeps serving the previous build while the platform's
+# nightly scan reports the new one.
+#
+# ⛔ That rule was written into FOUR files as prose and enforced by nothing —
+# this PR mechanised three list-drift couplings and then introduced a fourth as
+# a comment (blind review). This pins it: the digest below covers the
+# Dockerfile's INSTRUCTION lines only (comments and blanks stripped, so prose
+# edits do not force a spurious bump). Change the recipe and this test fails; the
+# failure message is the reminder to bump the tag as well as this constant.
+_RECIPE_DIGEST = "eacaa2b4352b3acc34eeace00ec3c8cd9e3f231405c94c5955ea7d21a93ccddc"
+_EXPECTED_TAG = "3.0.8-2"
 
 
 def _one(pattern: str, text: str, what: str) -> str:
@@ -188,6 +207,49 @@ def _one(pattern: str, text: str, what: str) -> str:
         f"expected exactly one {what} match for /{pattern}/, found {len(matches)}: {matches}"
     )
     return matches[0]
+
+
+def _recipe_digest(dockerfile: Path) -> str:
+    """sha256 over the Dockerfile's instruction lines (comments/blanks stripped)."""
+    lines = [ln.rstrip() for ln in dockerfile.read_text(encoding="utf-8").splitlines()]
+    body = [ln for ln in lines if ln.strip() and not ln.lstrip().startswith("#")]
+    assert body, "no instruction lines parsed out of the Dockerfile — parser broken"
+    return hashlib.sha256("\n".join(body).encode("utf-8")).hexdigest()
+
+
+def test_sidecar_recipe_change_forces_a_tag_bump(repo_root: Path) -> None:
+    """Recipe and image tag must move together — the chart has no other lever.
+
+    Pure file parsing; runs everywhere.
+    """
+    actual = _recipe_digest(repo_root / _DOCKERFILE)
+    values = (repo_root / _VALUES).read_text(encoding="utf-8")
+    tag = _one(r'^\s*tag:\s*"([^"]+)"\s*$', values.split("auditLog:", 1)[1].split("\nmtail:", 1)[0],
+               "auditLog.image.tag")
+    mtail_version = _one(r"^ARG MTAIL_VERSION=(\S+)",
+                         (repo_root / _DOCKERFILE).read_text(encoding="utf-8"),
+                         "Dockerfile MTAIL_VERSION")
+
+    assert tag == _EXPECTED_TAG, (
+        f"{_VALUES} auditLog.image.tag is {tag!r}, this guard expects "
+        f"{_EXPECTED_TAG!r}. If you bumped the tag deliberately, update "
+        "_EXPECTED_TAG (and _RECIPE_DIGEST if the recipe changed too)."
+    )
+    assert tag.startswith(f"{mtail_version}-"), (
+        f"tag {tag!r} must be '<MTAIL_VERSION>-<build revision>' and MTAIL_VERSION "
+        f"is {mtail_version!r} — the two halves of the tag are what tell an "
+        "operator whether the mtail version or only the build changed."
+    )
+    assert actual == _RECIPE_DIGEST, (
+        "the audit-sidecar Dockerfile's INSTRUCTIONS changed "
+        f"({_RECIPE_DIGEST[:12]}… -> {actual[:12]}…).\n"
+        "⛔ Bump auditLog.image.tag's build-revision suffix in the same change, "
+        "then update _EXPECTED_TAG and _RECIPE_DIGEST here. Leaving the tag alone "
+        "renders a byte-identical pod spec: no rollout, and `IfNotPresent` keeps "
+        "the OLD image on every node while the nightly scan reports the new one. "
+        "(Comment-only edits do not reach this digest, so a failure here means the "
+        "recipe really changed.)"
+    )
 
 
 def test_mtail_version_pin_parity(repo_root: Path) -> None:

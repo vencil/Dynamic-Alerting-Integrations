@@ -241,8 +241,11 @@ from [`audit-sidecar/Dockerfile`](audit-sidecar/Dockerfile) (Alpine +
 > You no longer need to remember to scan it by hand: the image is a matrix entry
 > in `nightly-image-scan.yaml`, `component-docker-build.yaml`, and
 > `make trivy-scan-all`. ⛔ It is **not** published by any pipeline, so
-> `release.yaml`'s tag-time Trivy gate — the repo's only *release-blocking* CVE
-> scan — never sees it. Those three are its whole *CVE* coverage; its *build* is
+> `release.yaml`'s tag-time Trivy scan never sees it. ⚠️ That matters less than it
+> sounds: that scan runs POST-PUSH and is the last step in four of the five
+> release jobs, so for those it only reddens the Actions run — the image (and for
+> the exporter the chart) is already published. Those three are its whole *CVE*
+> coverage; its *build* is
 > additionally exercised by the `federation-e2e` CI job, which builds this image
 > from source on every run and scrapes the metrics it produces.
 
