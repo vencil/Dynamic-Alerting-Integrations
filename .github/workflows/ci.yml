@@ -149,13 +149,35 @@ jobs:
               - "Makefile"
               - ".pre-commit-config.yaml"
               - ".github/custom-rule-policy.yaml"
-              - "docs/glossary.md"
-              - "docs/glossary.en.md"
+              # ⛔ ALL of docs/, not a hand-picked few. Python tests read at
+              # least eight documentation files as CONTRACT inputs (the
+              # for-tenants key-group counts, the ADR planning index, the
+              # alerting-fundamentals cross-links, recommendation-data.json),
+              # and `check_threshold_unit_sanity` walks `docs/**/*.md` looking
+              # for threshold literals in fenced YAML. Its hook is NOT in the
+              # Lint job's named hook list, so Python Tests is its only CI
+              # execution path — gate that on a hand-picked subset and a
+              # docs-only PR skips it, reporting `skipped`, which satisfies
+              # branch protection. Same reasoning the `docs` filter below
+              # already applies to the Go leg. Enforced by
+              # tests/ops/test_portal_path_filter_coverage.py.
+              - "docs/**"
               - "flaky-tests.yaml"
               - "renovate.json"
               - ".devcontainer/**"
               - ".github/workflows/**"
+              - "environments/**"
               - "tools/portal/tests/**"
+              # ⛔ portal SOURCE, not just its tests. #1176's coverage gate is a
+              # deliberate cross-language pair: Vitest proves the shared
+              # renderer emits the caveat, pytest proves each component still
+              # routes through it. With only `tools/portal/tests/**` here, a PR
+              # that edited just the component matched `portal`, missed
+              # `python`, and skipped the half written to catch exactly that —
+              # and a path-skipped required check reports `skipped`, which
+              # SATISFIES branch protection. Every entry above is enforced by
+              # tests/ops/test_portal_path_filter_coverage.py.
+              - "tools/portal/src/**"
             # Portal Tests: Vitest + esbuild build verification + committed-dist
             # freshness + the RBAC wizard drift byte-clamp. Runs when portal
             # source or its committed dist change, AND when the wizard testdata
@@ -193,6 +215,11 @@ jobs:
               - "tools/portal/**"
               - "docs/assets/dist/**"
               - "docs/assets/platform-data.json"
+              # The Config Template Gallery's shipped templates. A Vitest reads
+              # them to assert every counter-example key a one-click-copy
+              # template hands over is annotated (#1176), so editing a template
+              # alone must not skip the Portal leg.
+              - "docs/assets/template-data.json"
               - "docs/schemas/tenant-config.schema.json"
               - "rule-packs/threshold-registry.yaml"
               - "rule-packs/ALERT-REFERENCE.md"

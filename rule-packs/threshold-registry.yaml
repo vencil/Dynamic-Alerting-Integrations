@@ -313,6 +313,11 @@ keys:
     unit: count
     desc: Active sessions warning
     metric_class: saturation
+    value_counterexample:
+      issue: 1176
+      direction: over_fire
+      observed: a healthy diurnal peak reaches 240 active sessions
+      observed_zh: 健康的日夜週期尖峰會到 240 個 active session
   oracle_tablespace_used_percent:
     pack: oracle
     tier: defaults
@@ -334,6 +339,11 @@ keys:
     unit: count
     desc: Active processes warning
     metric_class: capacity
+    value_counterexample:
+      issue: 1176
+      direction: over_fire
+      observed: a routine backup batch reaches 560 processes
+      observed_zh: 例行備份批次會到 560 個 process
   oracle_pga_allocated_bytes:
     pack: oracle
     tier: optional_overrides
@@ -341,6 +351,11 @@ keys:
     unit: bytes (4GB)
     desc: PGA allocation warning
     metric_class: capacity
+    value_counterexample:
+      issue: 1176
+      direction: over_fire
+      observed: a planned stats-gather reaches 22 GB PGA
+      observed_zh: 計畫性 stats-gather 會用到 22 GB PGA
   db2_connections_active:
     pack: db2
     tier: defaults
@@ -348,6 +363,11 @@ keys:
     unit: count
     desc: Active connections warning
     metric_class: saturation
+    value_counterexample:
+      issue: 1176
+      direction: over_fire
+      observed: a peak-hour workload reaches 360 connections
+      observed_zh: 尖峰時段的工作負載會到 360 個連線
   db2_bufferpool_hit_ratio:
     pack: db2
     tier: defaults
@@ -365,6 +385,11 @@ keys:
       below both fault levels (25/60) — full derivation + calibration workflow in
       the pack header (#1196 D)
     metric_class: latency
+    value_counterexample:
+      issue: 1176
+      direction: over_fire
+      observed: a benign batch lock-wait transient holds 18 s/s for 7 min (negative-db2.yaml)
+      observed_zh: 良性批次的 lock-wait 短暫維持 18 s/s 達 7 分鐘（negative-db2.yaml）
   db2_log_usage_percent:
     pack: db2
     tier: optional_overrides
@@ -379,6 +404,11 @@ keys:
     unit: count/s
     desc: Deadlock rate (5m)
     metric_class: errors
+    value_counterexample:
+      issue: 1176
+      direction: under_fire
+      observed: a real ~90/min deadlock storm stays under 5/s (=300/min) and is missed
+      observed_zh: 真實的 ~90/min deadlock storm 低於 5/s（＝300/min），因此接不到
   db2_tablespace_used_percent:
     pack: db2
     tier: optional_overrides

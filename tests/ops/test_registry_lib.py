@@ -666,15 +666,21 @@ def test_surface_specs_cover_helm_dev_and_threshold_packs():
     specs = lib.surface_specs(doc)
     ids = [s["id"] for s in specs]
     # the file-level surfaces are order-pinned: two `defaults` mappings, then
-    # the two `optional_overrides` lists that share the SAME two files (#1310)
-    assert ids[:4] == [
-        "helm-defaults", "dev-defaults", "helm-optional", "dev-optional"]
+    # the `optional_overrides` lists — two of which share the SAME two files as
+    # the mappings above (#1310), plus the try-local seed, which stopped being
+    # a hand-maintained third copy in #1176/#1344 (its only gate compared the
+    # PARSED list, so it never saw the per-key counter-example comments).
+    assert ids[:5] == [
+        "helm-defaults", "dev-defaults", "helm-optional", "dev-optional",
+        "try-local-optional"]
     assert "pack-mariadb" in ids and "pack-kubernetes" in ids
-    assert len(ids) == 4 + 13  # 13 threshold packs, non-threshold packs none
+    assert len(ids) == 5 + 13  # 13 threshold packs, non-threshold packs none
     # the two surfaces per file must target the same path but distinct blocks
     by_id = {s["id"]: s for s in specs}
     assert by_id["helm-defaults"]["path"] == by_id["helm-optional"]["path"]
     assert by_id["dev-defaults"]["path"] == by_id["dev-optional"]["path"]
+    assert by_id["try-local-optional"]["path"] not in {
+        by_id["helm-optional"]["path"], by_id["dev-optional"]["path"]}
     assert len({s["id"] for s in specs}) == len(specs)
 
 

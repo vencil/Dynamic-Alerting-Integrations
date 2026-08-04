@@ -17,9 +17,7 @@
 # 只在租戶給了值時發射；components/threshold-exporter/app/pkg/config/resolve.go）。
 # 平台不主張值 ⇒ 沒有平台回退：租戶不填就是靜默，那正是這一格的用意。
 # ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
-# 照抄範例值已有跨 pack 的實測反例（ADR-030 盲寫良性參考庫）：Oracle 備份批次
-# process count 560 > 建議 300、計畫性 stats-gather PGA 22GB > 建議 4GiB 皆誤觸；
-# DB2 deadlock 建議 5/s＝300/min 反而偏高，實測 ~90/min 的真實 storm 接不到。
+# 已測到反例的那幾個，反例逐條標在該 key 下（registry `value_counterexample`）。
 #   clickhouse_max_part_count: 300   # count — Max part count per partition
 #   clickhouse_replication_queue: 50   # count — Replication queue size
 #   clickhouse_memory_tracking_bytes: 8589934592   # bytes (8GB) — Memory tracking warning

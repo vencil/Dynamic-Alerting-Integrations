@@ -444,6 +444,7 @@
   "scripts/tools/ops/_registry_lib.py": [
    "tests/dx/test_generate_platform_data.py",
    "tests/lint/test_check_threshold_registry.py",
+   "tests/lint/test_counterexample_coverage.py",
    "tests/ops/test_init_project.py",
    "tests/ops/test_scaffold_tenant.py"
   ],
@@ -560,6 +561,7 @@
    "tests/shared/test_dispatch_contract.py"
   ],
   "scripts/tools/ops/init_project.py": [
+   "tests/lint/test_counterexample_coverage.py",
    "tests/ops/test_init_project.py"
   ],
   "scripts/tools/ops/inject_metadata_join.py": [
@@ -622,6 +624,7 @@
   ],
   "scripts/tools/ops/scaffold_tenant.py": [
    "tests/dx/test_generate_platform_data.py",
+   "tests/lint/test_counterexample_coverage.py",
    "tests/ops/test_init_project.py",
    "tests/ops/test_integration.py",
    "tests/ops/test_regression.py",
@@ -695,7 +698,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "8a18d7d7f77d87ccfa3ded23dc2f74e446a6770f94482f19f6d2ec3b5b9e112a",
+ "source_digest": "e27f203a5eceefe314d71e267e4b78c6f1eafa7f5cbc4f45a8efbf9e159090ee",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -847,6 +850,7 @@
   "tests/lint/test_check_vmalert_coverage.py",
   "tests/lint/test_check_window_x_no_fallback.py",
   "tests/lint/test_check_workflow_git_push_permissions.py",
+  "tests/lint/test_counterexample_coverage.py",
   "tests/lint/test_detect_sed_damage.py",
   "tests/lint/test_docs_yaml_split_parity.py",
   "tests/lint/test_fallback_image_digest_pin.py",
@@ -1077,7 +1081,8 @@
    "tests/lint/test_check_dev_rules_enforcement.py",
    "tests/lint/test_check_makefile_targets.py",
    "tests/lint/test_check_orphan_lint.py",
-   "tests/lint/test_check_portal_asset_shipping.py"
+   "tests/lint/test_check_portal_asset_shipping.py",
+   "tests/lint/test_counterexample_coverage.py"
   ],
   "CHANGELOG.md": [
    "tests/dx/test_add_frontmatter.py",
@@ -1257,13 +1262,15 @@
    "tests/lint/test_check_makefile_targets.py",
    "tests/lint/test_check_portal_asset_shipping.py",
    "tests/lint/test_check_threshold_unit_sanity.py",
+   "tests/lint/test_counterexample_coverage.py",
    "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "docs/assets/recommendation-data.json": [
    "tests/lint/test_check_threshold_unit_sanity.py"
   ],
   "docs/assets/template-data.json": [
-   "tests/lint/test_check_threshold_unit_sanity.py"
+   "tests/lint/test_check_threshold_unit_sanity.py",
+   "tests/lint/test_counterexample_coverage.py"
   ],
   "docs/assets/tool-registry.yaml": [
    "tests/dx/test_bump_docs.py",
@@ -1717,6 +1724,9 @@
    "tests/shared/test_ci_flag_contract.py",
    "tests/shared/test_json_stdout_contract.py"
   ],
+  "rule-packs/threshold-registry.yaml": [
+   "tests/helm/test_optional_overrides_render.py"
+  ],
   "scripts/_lib.sh": [
    "tests/shared/test_lib_helpers.py"
   ],
@@ -2150,6 +2160,9 @@
   "tests/contract/run_contract_tests.py": [
    "tests/dx/test_verify_diff.py"
   ],
+  "tests/dx": [
+   "tests/ops/test_portal_path_filter_coverage.py"
+  ],
   "tests/dx/fixtures/custom_alert_validation_vectors.json": [
    "tests/dx/test_compile_custom_alerts.py"
   ],
@@ -2185,6 +2198,9 @@
   ],
   "tests/dx/test_tenant_log_query_dashboard.py": [
    "tests/dx/test_federation_revocation_dashboard.py"
+  ],
+  "tests/dx/test_verify_diff.py": [
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "tests/dx/test_waveform_score.py": [
    "tests/dx/test_dx_json_stdout_contract.py"
@@ -2241,6 +2257,9 @@
   "tests/lint/test_check_scrape_reachability.py": [
    "tests/helm/test_optional_overrides_render.py"
   ],
+  "tests/lint/test_counterexample_coverage.py": [
+   "tests/lint/test_check_threshold_registry.py"
+  ],
   "tests/ops": [
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_threshold_registry.py",
@@ -2263,6 +2282,12 @@
   ],
   "tests/ops/test_nightly_scan_matrix_drift.py": [
    "tests/ops/test_nightly_race_issue_policy.py"
+  ],
+  "tests/ops/test_portal_path_filter_coverage.py": [
+   "tests/lint/test_counterexample_coverage.py"
+  ],
+  "tests/ops/test_registry_lib.py": [
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "tests/preview/test_promtool_pin_parity.py": [
    "tests/shared/test_federation_audit_mtail.py",
@@ -2346,7 +2371,8 @@
    "tests/lint/test_check_design_token_usage.py",
    "tests/lint/test_check_jsx_i18n.py",
    "tests/lint/test_check_jsx_loader_compat.py",
-   "tests/lint/test_lint_tool_consistency.py"
+   "tests/lint/test_lint_tool_consistency.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "tools/portal/src/getting-started": [
    "tests/lint/test_check_jsx_loader_compat.py"
@@ -2354,11 +2380,27 @@
   "tools/portal/src/interactive/tools/AlertPreviewTab.jsx": [
    "tests/lint/test_check_portal_asset_shipping.py"
   ],
+  "tools/portal/src/interactive/tools/YamlValidatorTab.jsx": [
+   "tests/lint/test_counterexample_coverage.py"
+  ],
+  "tools/portal/src/interactive/tools/_common/data/rule-packs.js": [
+   "tests/lint/test_counterexample_coverage.py"
+  ],
+  "tools/portal/src/interactive/tools/_common/sim/alert-engine.js": [
+   "tests/lint/test_counterexample_coverage.py"
+  ],
+  "tools/portal/src/interactive/tools/multi-tenant-comparison.jsx": [
+   "tests/lint/test_counterexample_coverage.py"
+  ],
   "tools/portal/src/interactive/tools/template-gallery.jsx": [
-   "tests/lint/test_check_portal_asset_shipping.py"
+   "tests/lint/test_check_portal_asset_shipping.py",
+   "tests/lint/test_counterexample_coverage.py"
   ],
   "tools/portal/tests": [
    "tests/ops/test_portal_path_filter_coverage.py"
+  ],
+  "tools/portal/tests/counterexample-portal-faces.test.ts": [
+   "tests/lint/test_counterexample_coverage.py"
   ],
   "try-local/alertmanager.yml": [
    "tests/dx/test_verify_diff.py",

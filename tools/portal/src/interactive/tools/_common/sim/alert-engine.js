@@ -52,7 +52,14 @@ purpose: |
   Consumers import these functions directly via ESM (dev-rules §S6).
 ---
 
-import { RULE_PACK_DATA, getAllMetricKeys, getDeclaredKeys } from '../data/rule-packs.js';
+// `counterexampleComment` lives next to the data it renders (`rule-packs.js`),
+// not here. It was local until a THIRD caller appeared outside this module and,
+// unable to import it, hand-copied the sentence — which had already drifted
+// before anyone reviewed it. The fix is where it is defined, not another
+// factoring inside one caller (#1344).
+import {
+  RULE_PACK_DATA, getAllMetricKeys, getDeclaredKeys, counterexampleComment,
+} from '../data/rule-packs.js';
 import { ROUTING_DEFAULTS, ROUTING_PROFILES, DOMAIN_POLICIES } from '../data/routing-profiles.js';
 import { RECEIVER_TYPES, RESERVED_KEYS, RESERVED_PREFIXES, TIMING_GUARDRAILS } from '../validation/constants.js';
 import { parseDuration } from '../validation/yaml-parser.js';
@@ -74,6 +81,21 @@ function generateSampleYaml(selectedPacks, withProfile) {
     if (Object.keys(packDefaults).length === 0 && declared.length === 0) continue;
     lines.push(`\n# --- ${pack.label} ---`);
     for (const [key, meta] of Object.entries(packDefaults)) {
+      // ⛔ A LIVE, copy-paste value — one of THREE such faces, not "the one"
+      // as this comment used to claim (the Config Template Gallery and
+      // `YamlValidatorTab`'s insert-metric button are the others; a blind
+      // review found both, #1344). The declared block below is emitted
+      // commented precisely because the platform asserts no number for those —
+      // but these defaults-tier keys ARE asserted, and #1176 measured
+      // counter-examples for two of them. A
+      // template that stays silent about that teaches the reader the number is
+      // endorsed. Rendered from the registry field, so a pack with nothing
+      // measured emits nothing (absence ≠ "validated").
+      // Guard on the RENDERED sentence, not on the field: an unrecognised
+      // `direction` yields null, and emitting `# undefined` above a live
+      // threshold is worse than emitting nothing.
+      const comment = counterexampleComment(meta.valueCounterexample);
+      if (comment) lines.push(`# ${comment}`);
       lines.push(`${key}: "${meta.value}"  # ${meta.desc}`);
     }
     // Declared keys belong in the starter template too — #1321 is about
@@ -86,6 +108,12 @@ function generateSampleYaml(selectedPacks, withProfile) {
       lines.push(`#   ${t('以下為平台宣告、但不主張值的 key：取消註解並填入依自身 baseline 校準的數值；不填＝靜默',
                           'Declared by the platform, no platform value: uncomment and fill in a number calibrated from your own baseline. Left out = silent')}`);
       for (const m of declared) {
+        // ⛔ Same caveat as the live-value loop above. These rows carry a
+        // reference number too, and #1320 D1 says this is the tier a tenant can
+        // fill in TODAY — so of the two loops, this is the one whose numbers are
+        // most likely to be copied. Covering only `defaults` left them bare.
+        const comment = counterexampleComment(m.valueCounterexample);
+        if (comment) lines.push(`#   ${comment}`);
         lines.push(`#   ${m.key}: "<${t('你的值', 'your value')}>"  # ${m.desc}${t('（參考起點', ' (reference start')} ${m.value} ${m.unit}${t('，非背書）', ', not an endorsement)')}`);
       }
     }

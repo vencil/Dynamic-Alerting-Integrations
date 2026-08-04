@@ -399,6 +399,97 @@ def test_build_rejects_bad_alias_entries():
     assert doc["deprecated_aliases"] == {"aaa_zzz": "aaa_bbb"}
 
 
+# ── value_counterexample (#1176) ──────────────────────────────────────────
+#
+# The field records that ADR-030's reference library produced a case a shipped
+# value gets wrong, so every face that hands the number over can hand over what
+# we know about it. It is NOT a verdict — that library is a sampling probe, and
+# its README's anti-Goodhart clause forbids treating it as a spec.
+
+_CE_MARK = lib.COUNTEREXAMPLE_MARK
+
+
+def _ce_keys() -> dict:
+    doc = lib.build_registry_doc()
+    return {k: e["value_counterexample"]
+            for k, e in doc["keys"].items() if "value_counterexample" in e}
+
+
+def test_real_repo_counterexamples_are_well_formed():
+    """Shape is schema-pinned; this also fails loud if the set empties out,
+    which would otherwise make every assertion below vacuously true."""
+    ce = _ce_keys()
+    assert ce, "no key carries value_counterexample — the rest of this file "\
+               "would pass vacuously"
+    for key, e in ce.items():
+        # `observed_zh` is schema-optional and gate-required (the ZH surfaces
+        # include the one file a tenant opens; owner decision, #1344), so it is
+        # allowed but not part of the minimum shape asserted here — the
+        # "everything ships it" assertion lives in
+        # tests/lint/test_counterexample_coverage.py, next to the surfaces that
+        # would otherwise fall back to English.
+        assert set(e) <= {"issue", "direction", "observed", "observed_zh"}, (key, e)
+        assert {"issue", "direction", "observed"} <= set(e), (key, e)
+        assert isinstance(e["issue"], int) and e["issue"] > 0, (key, e)
+        assert e["direction"] in ("over_fire", "under_fire"), (key, e)
+        assert e["observed"].strip(), key
+        if "observed_zh" in e:
+            assert e["observed_zh"].strip(), key
+
+
+def test_pack_header_renders_exactly_its_own_counterexamples():
+    """One ⚠ line per counter-example key IN THAT PACK — and none for a pack
+    that has measured none.
+
+    ⛔ The regression this pins: the three cases used to be spelled out as
+    prose inside the GENERATED optional-tier warning, so the Oracle and
+    ClickHouse headers both asserted DB2's counter-example. ClickHouse has
+    never had one measured at all. A pack header must not claim a fact about a
+    pack it does not own — re-tuning db2_deadlock_rate would have left two
+    other packs quietly citing the old number.
+    """
+    doc = lib.build_registry_doc()
+    ce = _ce_keys()
+    packs_with_ce = set()
+    for pack_name in doc["packs"]:
+        own = {k for k, e in doc["keys"].items() if e["pack"] == pack_name}
+        body = "\n".join(lib.render_pack_header_lines(doc, pack_name))
+        expected = len(own & set(ce))
+        assert body.count(_CE_MARK) == expected, (
+            f"{pack_name}: rendered {body.count(_CE_MARK)} counter-example "
+            f"lines, registry has {expected}")
+        if expected:
+            packs_with_ce.add(pack_name)
+        foreign = [k for k in ce if k not in own and k in body]
+        assert not foreign, (
+            f"{pack_name} header names another pack's key: {foreign}")
+    assert len(packs_with_ce) >= 2, (
+        "fewer than two packs render one — the cross-pack assertion above "
+        "would not be exercised")
+
+
+def test_the_two_directions_do_not_share_wording():
+    """`over_fire` and `under_fire` are opposite failures — a single blanket
+    caveat ("this value is too low") is FALSE for the under_fire one. That is
+    why direction is an enum and the wording is derived from it."""
+    over = lib._counterexample_lines(
+        {"value_counterexample": {"issue": 1, "direction": "over_fire",
+                                  "observed": "X"}})
+    under = lib._counterexample_lines(
+        {"value_counterexample": {"issue": 1, "direction": "under_fire",
+                                  "observed": "X"}})
+    assert over and under
+    assert "\n".join(over) != "\n".join(under)
+    # and the repo really does ship both, so the distinction is load-bearing
+    assert {e["direction"] for e in _ce_keys().values()} == {"over_fire", "under_fire"}
+
+
+def test_absence_renders_nothing_at_all():
+    """No field ⇒ no line. "Silent" must read as "nothing measured", never as
+    "validated" — an unconditional footer would say the opposite."""
+    assert lib._counterexample_lines({"value": 1}) == []
+
+
 def test_prose_may_name_deprecated_alias_spellings(tmp_path):
     """During an open alias window the OLD spelling is still valid conf.d
     input, so pack-header prose may legitimately name it (F6 membership)."""

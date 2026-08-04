@@ -84,6 +84,35 @@
               "type": "string",
               "minLength": 1,
               "$comment": "DERIVED, never authored: present iff the key ends in _critical and its base key exists in the same pack. Names the base key."
+            },
+            "value_counterexample": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["issue", "direction", "observed"],
+              "$comment": "Sparse. Records that the ADR-030 reference-validation library produced a measured case THIS value gets wrong, so every face that hands the number over can hand over what we know about it (#1176 / #1320 D1: the platform does not pick numbers for tenants). ⛔ It is NOT a verdict that the value is wrong: that library is a sampling probe and its README's anti-Goodhart clause forbids treating it as a spec — re-tuning a threshold to satisfy a waveform invalidates the measurement. Stating the observation and letting the reader judge is the whole point. Absence means 'no counter-example measured', never 'value validated'.",
+              "properties": {
+                "issue": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "$comment": "GitHub issue carrying the measurement, so the claim is auditable rather than folklore."
+                },
+                "direction": {
+                  "enum": ["over_fire", "under_fire"],
+                  "$comment": "over_fire = a BENIGN scenario crossed this threshold (false alarm). under_fire = a REAL fault stayed under it (missed detection). The two are not interchangeable — a blanket 'these values are too low' caveat is false for the under_fire ones, which is exactly why this is an enum and not prose."
+                },
+                "observed": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[^\\n\\r]+$",
+                  "$comment": "The measured scenario in ONE clause, phrased as an observation ('a routine backup batch reaches 560 processes'), not as an instruction. ⛔ Single line: every consumer splices this into a `#` comment, and a newline puts the tail at column 0 — the written `_defaults.yaml` stops being valid YAML and the tenant's config fails to load. ⚠️ This `pattern` catches an EMBEDDED newline only. It does NOT catch a TRAILING one — jsonschema matches with `re.search` and Python's `$` also matches just before a final newline, so `observed: |` (the natural YAML spelling for a long clause) passes here. The enforcer for the trailing/blank/padded cases is `_registry_lib.require_counterexample`, which every composer calls; this pattern is the portable half. Do not read a green schema run as 'single line, enforced' (#1344)."
+                },
+                "observed_zh": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[^\\n\\r]+$",
+                  "$comment": "The same observation in Traditional Chinese. ⛔ Present for every counter-example the platform ships — enforced by `tests/lint/test_counterexample_coverage.py`, not optional-in-practice — because the ZH surfaces include `<tenant>.yaml`, the one file a tenant opens, and a Chinese frame wrapped around an English clause is a worse read than either language alone (owner decision, #1344; CodeRabbit had asked for the reverse and was refused on the grounds that `desc` is 67/67 English — that argument holds for `desc`, which no tenant-facing sentence embeds). ⚠️ It is SCHEMA-optional so that the field can be added to a new key in a follow-up commit without breaking the registry; the composers fall back to `observed` rather than rendering nothing, because silence must keep meaning 'not measured'. The gate is what makes the fallback unreachable in shipped data."
+                }
+              }
             }
           }
         }

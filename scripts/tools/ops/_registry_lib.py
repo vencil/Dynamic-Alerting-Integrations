@@ -221,7 +221,7 @@ METRIC_CLASS_BACKFILL: dict[str, str] = {
 # Canonical per-key field order for the emitted registry document.
 _FIELD_ORDER = (
     "pack", "tier", "value", "unit", "desc", "metric_class", "chart_default",
-    "critical_of",
+    "critical_of", "value_counterexample",
 )
 
 _REGISTRY_HEADER = (
@@ -365,6 +365,14 @@ def build_registry_doc(
             }
             if "metric_class" in info:
                 entry["metric_class"] = info["metric_class"]
+            if "value_counterexample" in info:
+                # Passed through verbatim, never derived: it records that the
+                # ADR-030 reference library produced a case THIS value gets
+                # wrong. Deliberately not a verdict — that library is a
+                # sampling probe, not a spec (its README's anti-Goodhart
+                # clause), so the registry states the measurement and lets the
+                # reader judge. #1176.
+                entry["value_counterexample"] = dict(info["value_counterexample"])
             if key in chart_default_keys:
                 if tier != "defaults":
                     raise ValueError(
@@ -626,6 +634,16 @@ DEV_DEFAULTS_PATH = os.path.join(
     _REPO_ROOT, "components", "threshold-exporter", "config", "conf.d",
     "_defaults.yaml",
 )
+# ⛔ The try-local seed used to be the THIRD copy of the declared list,
+# hand-maintained by a comment that told the reader "if the generated copies
+# diverge, THEY are right and this copy needs a hand edit" — i.e. a documented
+# manual sync step. Its only gate compared the PARSED list, so anything
+# comment-shaped (which is where the counter-example caveat lives) was
+# invisible to it and the seed silently became the one shipped conf.d without
+# the caveat (blind review, #1344). Generating it deletes the manual step.
+TRY_LOCAL_DEFAULTS_PATH = os.path.join(
+    _REPO_ROOT, "try-local", "seed", "conf.d", "_defaults.yaml",
+)
 
 _MARKER_STEM = "GENERATED:threshold-registry:"
 
@@ -657,11 +675,220 @@ def _entry_lines(
     keyline = f"{prefix}{key}: {_fmt_value(entry['value'])}{tag}"
     meta = f"{entry['unit']} — {entry['desc']}"
     inline = f"{keyline}   # {meta}"
-    if len(inline) <= 100:
-        return [inline]
-    return [keyline] + [
+    lines = [inline] if len(inline) <= 100 else [keyline] + [
         f"{cont}{seg}" for seg in textwrap.wrap(meta, 100 - len(cont))
     ]
+    return lines + _counterexample_lines(entry, cont)
+
+
+# The two directions are NOT interchangeable, and a single blanket caveat would
+# be false for one of them: over_fire means a benign scenario crossed the
+# threshold, under_fire means a real fault stayed under it. #1176 has both.
+#
+# ⛔ ONE source for the verdict wording, in both languages, for every surface —
+# Python and JS alike (the JS copy lives in `_common/data/rule-packs.js` and is
+# imported by both portal callers). What is deliberately NOT unified is the
+# SENTENCE each medium composes around it: a YAML comment, a CLI prompt line
+# and a React element cannot share a string. The facts (issue / observed /
+# direction verdict / the mark) have one source; the framing is per-medium.
+# Saying more than that is what the previous docstring here did, and it was
+# false the moment the second composer appeared (blind review, #1344).
+COUNTEREXAMPLE_DIRECTION = {
+    "zh": {
+        "over_fire": "此值會對正常運作誤警",
+        "under_fire": "此值接不到該抓的故障",
+    },
+    "en": {
+        "over_fire": "fires on benign load",
+        "under_fire": "misses the fault it should catch",
+    },
+}
+
+# The phrase every rendered counter-example carries, exported so the gates can
+# key off ONE string. Three test files had each hand-copied a fragment of it —
+# the same duplication this whole line of work exists to delete, reproduced
+# inside the tests that guard against it (CodeRabbit, #1344).
+COUNTEREXAMPLE_MARK = "實測反例"
+COUNTEREXAMPLE_MARKS = {"zh": COUNTEREXAMPLE_MARK, "en": "measured counter-example"}
+
+
+def counterexample_verdict(ce: dict, lang: str = "zh") -> str:
+    """What the measured counter-example says about the value, in `lang`.
+
+    Lookup, never a ternary: an unknown ``direction`` must be a hard error and
+    not silently render as the OTHER direction's wording. The portal copy of
+    this table fails the same way by design (`rule-packs.js`) — telling an
+    operator "this value fires on benign load" when the measurement said the
+    opposite points them at the wrong knob.
+
+    ⛔ Fail loud, but say WHAT is wrong. A bare ``KeyError: 'over-fire'`` out of
+    a dict lookup surfaces to an operator running `scaffold_tenant` as a
+    traceback with no hint that the typo is in a registry field (blind review,
+    #1344) — and `scaffold_tenant` has no except around the write path.
+    """
+    require_counterexample(ce)
+    return COUNTEREXAMPLE_DIRECTION[lang][ce["direction"]]
+
+
+def require_counterexample(ce: dict) -> dict:
+    """Validate a `value_counterexample` and say what is wrong if it is not.
+
+    ⛔ ALL THREE fields, in one place. An earlier version guarded only
+    ``direction``, so a missing ``issue`` or ``observed`` still reached an
+    operator as a bare ``KeyError: 'observed'`` from whichever composer got
+    there first — the cited instance fixed, the class left open (blind review,
+    #1344).
+
+    ⛔ ``observed`` must be one non-blank line. The schema's ``pattern`` catches
+    an EMBEDDED newline but not a trailing one: jsonschema matches with
+    ``re.search`` and Python's ``$`` also matches just before a final newline,
+    so ``observed: |`` (the natural YAML way to write a long clause) produces a
+    string the schema accepts. Every composer collapses whitespace defensively,
+    but the useful place to refuse it is here, where the message can name the
+    field — not silently, five surfaces downstream.
+    """
+    missing = [f for f in ("issue", "direction", "observed") if f not in ce]
+    if missing:
+        raise ValueError(
+            f"value_counterexample is missing {missing} (needs issue / "
+            f"direction / observed; see docs/schemas/threshold-registry.schema.json). "
+            f"Got keys {sorted(ce)}.")
+    if ce["direction"] not in COUNTEREXAMPLE_DIRECTION["zh"]:
+        raise ValueError(
+            f"value_counterexample.direction={ce['direction']!r} is not one of "
+            f"{sorted(COUNTEREXAMPLE_DIRECTION['zh'])} (key metadata in "
+            f"scaffold_tenant.RULE_PACKS / threshold-registry.yaml). The two "
+            f"directions mean opposite things, so there is no safe default.")
+    for field in ("observed", "observed_zh"):
+        if field not in ce:
+            continue  # `observed_zh` is optional in the schema; see below
+        observed = ce[field]
+        if not isinstance(observed, str) or not observed.strip():
+            raise ValueError(
+                f"value_counterexample.{field}={observed!r} is blank — an empty "
+                "clause renders as a warning that says nothing, which reads as "
+                "'measured and fine'.")
+        if observed != " ".join(observed.split()):
+            raise ValueError(
+                f"value_counterexample.{field}={observed!r} contains a newline "
+                "or padding. It is spliced into single-line `#` comments on "
+                "several surfaces; write it as one clause.")
+    return ce
+
+
+def counterexample_observed(ce: dict, lang: str = "zh") -> str:
+    """The measured clause in `lang`.
+
+    ⛔ Falls back to `observed` (English) rather than rendering nothing. A
+    missing translation must not make the warning disappear: absence of the
+    caveat is the repo's signal for "nothing was measured", and borrowing it
+    for "nothing was translated" would turn a data-entry gap into a false
+    all-clear. `tests/lint/test_counterexample_coverage.py` requires every
+    shipped counter-example to carry `observed_zh`, so the fallback is a
+    safety net rather than a path anything actually takes (owner decision on
+    the mixed-language ZH surfaces, #1344).
+    """
+    if lang == "zh":
+        return ce.get("observed_zh") or ce["observed"]
+    return ce["observed"]
+
+
+def counterexample_for_key(key: str, rule_packs: Optional[dict] = None) -> Optional[dict]:
+    """The measured counter-example for `key`, or None. Looks across both tiers."""
+    if rule_packs is None:
+        rule_packs = _load_scaffold().RULE_PACKS
+    for pack in (rule_packs or {}).values():
+        for tier in ("defaults", "optional_overrides"):
+            info = (pack.get(tier) or {}).get(key)
+            if isinstance(info, dict) and "value_counterexample" in info:
+                return info["value_counterexample"]
+    return None
+
+
+def counterexample_sentence(ce: dict, lang: str = "zh") -> str:
+    """The one-line comment framing used by the two `_defaults.yaml` writers."""
+    mark = COUNTEREXAMPLE_MARKS[lang]
+    verdict = counterexample_verdict(ce, lang)
+    if lang == "zh":
+        return f"#{ce['issue']} {mark}：{counterexample_observed(ce, 'zh')}（{verdict}）"
+    return f"#{ce['issue']} {mark}: {counterexample_observed(ce, 'en')} ({verdict})"
+
+
+def annotate_defaults_counterexamples(dumped: str, rule_packs: Optional[dict] = None,
+                                      lang: str = "zh") -> str:
+    """Splice the ⚠ comment above each emitted key that has one.
+
+    ⛔ Why this exists at all: the interactive prompt only reaches a human who
+    is ANSWERING PROMPTS. `generate_defaults` → `write_outputs` is the path
+    taken by `--non-interactive`, by `--from-onboard` batch onboarding, by the
+    interactive run whose operator declines to customise, and by
+    `da-tools init` — and it writes the platform-asserted numbers straight into
+    `_defaults.yaml` with nobody prompted.
+
+    ⛔ It lives HERE, not in `scaffold_tenant`, because there are TWO producers
+    of that file: `scaffold_tenant.write_outputs` and
+    `init_project._gen_defaults_yaml`. It was in `scaffold_tenant`, so the
+    second producer wrote the same declared keys bare — same directory, same
+    filename, one annotated and one not (blind review, #1344).
+
+    A text splice rather than a comment-preserving dumper: the file is
+    `yaml.safe_dump`ed, which drops comments by construction, and swapping the
+    dumper for one annotation would rewrite every line of a file the Go loader
+    reads. The splice keys off the emitted line, so it can only annotate a key
+    this run actually wrote.
+
+    ⛔ BOTH shapes, not just `key: value`. `optional_overrides:` is a plain
+    string LIST (`- oracle_process_count`), so a colon-only splice skipped the
+    entire declared tier — the tier #1320 D1 says a tenant can fill in today.
+
+    ⛔ WRAPPED, like every other composer. This one used to interpolate the
+    sentence raw, so an `observed` containing a newline emitted its tail at
+    column 0 and the written `_defaults.yaml` stopped being valid YAML. The
+    schema now forbids the newline at the source; wrapping here means a single
+    bad field cannot corrupt a customer file even if it slips in some other way.
+    """
+    out: list[str] = []
+    for line in dumped.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            key = stripped[2:].strip().strip("'\"")
+        elif stripped.endswith(":") or ":" not in stripped:
+            out.append(line)
+            continue
+        else:
+            key = stripped.split(":", 1)[0].strip()
+        ce = counterexample_for_key(key, rule_packs)
+        if ce:
+            indent = line[: len(line) - len(line.lstrip())]
+            cont = f"{indent}# "
+            body = "⚠ " + " ".join(counterexample_sentence(ce, lang).split())
+            out.extend(f"{cont}{seg}" for seg in textwrap.wrap(
+                body, _COMMENT_WIDTH - len(cont), break_on_hyphens=False))
+        out.append(line)
+    return "\n".join(out)
+
+
+def _counterexample_lines(entry: dict, cont: str = "#       ") -> list[str]:
+    """The ⚠ line under a key whose value has a measured counter-example.
+
+    Rendered FROM the registry field, never authored per pack — the same
+    discipline as the tier warnings next door: a header must not be able to
+    claim something the registry contradicts. Absence of the field renders
+    nothing at all, so "no line" means "no counter-example measured" and never
+    "validated".
+    """
+    ce = entry.get("value_counterexample")
+    if not ce:
+        return []
+    verdict = counterexample_verdict(ce)
+    body = (f"⚠ 參考庫實測反例（#{ce['issue']}）："
+            f"{counterexample_observed(ce, 'zh')} —— {verdict}；"
+            f"這個數字是起點，不是平台背書的值")
+    # break_on_hyphens=False: the default splits `negative-db2.yaml` after the
+    # hyphen, so a reader (and any gate comparing content) sees a filename cut
+    # in half across two comment lines.
+    return [f"{cont}{seg}"
+            for seg in textwrap.wrap(body, 100 - len(cont), break_on_hyphens=False)]
 
 
 # ---------------------------------------------------------------------------
@@ -784,10 +1011,15 @@ _OPTIONAL_SHIPPED_WARNING_LINES = (
     "# 只在租戶給了值時發射；components/threshold-exporter/app/pkg/config/resolve.go）。",
     "# 平台不主張值 ⇒ 沒有平台回退：租戶不填就是靜默，那正是這一格的用意。",
     "# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。",
-    "# 照抄範例值已有跨 pack 的實測反例（ADR-030 盲寫良性參考庫）：Oracle 備份批次",
-    "# process count 560 > 建議 300、計畫性 stats-gather PGA 22GB > 建議 4GiB 皆誤觸；",
-    "# DB2 deadlock 建議 5/s＝300/min 反而偏高，實測 ~90/min 的真實 storm 接不到。",
+    "# 已測到反例的那幾個，反例逐條標在該 key 下（registry `value_counterexample`）。",
 )
+# ⛔ The three counter-examples used to be spelled out HERE, as prose, inside a
+# GENERATED block — and the Oracle header enumerated DB2's case, so a pack
+# header asserted a fact about a pack it does not own. That is the hand-copied
+# contract this whole registry exists to delete: re-tuning db2_deadlock_rate
+# would have left two other packs quietly claiming the old number. They are now
+# rendered per key from `value_counterexample`, which also means a pack with no
+# measured counter-example silently gets no such claim (#1176).
 
 # Warning B — off the shipped list, but the BASE is a shipped chart default, so
 # `resolveCriticalRows` already has everything it needs. These keys are settable
@@ -920,6 +1152,11 @@ def render_chart_defaults_lines(doc: dict, indent: int) -> list[str]:
                 )
             for seg in textwrap.wrap(meta, 100 - indent - 2):
                 lines.append(f"{ind}# {seg}")
+            # Wired now, not "when a chart_default key gets one": no shipped
+            # chart_default carries a counter-example today, so this emits
+            # nothing — but the alternative is a face that silently ships a
+            # bare number the day the registry learns something about it.
+            lines.extend(_counterexample_lines(entry, f"{ind}# "))
             lines.append(f"{ind}{key}: {_fmt_value(entry['value'])}")
     return lines
 
@@ -1014,6 +1251,22 @@ def render_optional_overrides_lines(doc: dict, indent: int) -> list[str]:
         for key, entry in pack_keys:
             _append_wrapped_comment(
                 lines, f"{ind}- {key}", f"{entry['unit']} — {entry['desc']}", cont)
+            # The tenant-facing copy of this same declared set already carries
+            # the caveat per key; an operator reading the chart got less than a
+            # tenant reading their own file. "Names a key" is the trigger, not
+            # "hands over a number" — a reader who goes and looks the key up is
+            # exactly the reader about to copy the reference figure (#1344).
+            #
+            # ⚠️ BELOW the item and indented, whereas
+            # `annotate_defaults_counterexamples` puts it ABOVE the key. Not an
+            # oversight: this block is a YAML LIST whose items already carry a
+            # trailing `# unit — desc` comment that continues on indented
+            # comment lines (`_append_wrapped_comment`), so the caveat is the
+            # next continuation of the item it belongs to. A mapping key has no
+            # such continuation, and a comment above it is the only position
+            # that reads as a preamble rather than as a note on the PREVIOUS
+            # key. Same composer, two host grammars.
+            lines.extend(_counterexample_lines(entry, cont))
     return lines
 
 
@@ -1058,9 +1311,8 @@ _TENANT_STUB_PROSE = {
         "# 不會有告警，也不會有任何錯誤訊息。那是設計，不是漏掉的預設——所以本檔開頭",
         "# 的三態在這一格只有兩態：填值，或靜默（沒有「省略＝用預設」可用）。",
         "# ⚠️ 下列數字是「參考起點」不是背書：這種閾值只有你自己的 baseline 校準得",
-        "#    出來。照抄已有實測反例（ADR-030 盲寫參考庫）——Oracle 備份批次 process",
-        "#    count 560 > 建議 300、計畫性 stats-gather PGA 22GB > 建議 4GiB，兩者",
-        "#    都會誤觸。",
+        "#    出來。平台自家的盲寫參考庫（ADR-030）已經對其中一些值量到反例，逐條",
+        "#    標在該 key 自己底下——沒有標的就是沒測過，永遠不讀作「已驗證」。",
         "# 用法：整行複製到上面自己那個租戶底下、去掉開頭的「# 」、把佔位字串換成你",
         "#    校準出來的數字（縮排已對齊）。若上面該租戶目前是 `<tenant>: {}`（空設",
         "#    定），先把 ` {}` 刪掉再貼——flow mapping 底下接縮排行不是合法 YAML。",
@@ -1074,10 +1326,10 @@ _TENANT_STUB_PROSE = {
         "# a missing default — the three-state rule at the top of this file has",
         "# only two states here: set a value, or stay silent.",
         "# WARNING: the numbers below are a STARTING REFERENCE, not an endorsement",
-        "#    — only your own baseline can calibrate this tier. Copying them has",
-        "#    measured counter-examples (ADR-030): an Oracle backup batch at 560",
-        "#    processes vs the suggested 300; a planned stats-gather at 22GB PGA",
-        "#    vs the suggested 4GiB.",
+        "#    — only your own baseline can calibrate this tier. Where the",
+        "#    platform's own blind-write reference library (ADR-030) measured a",
+        "#    counter-example it is noted under that key; no note means nothing",
+        "#    was measured, and never means 'validated'.",
         "# To use: copy a whole line under your tenant above, drop the leading",
         "#    '# ', and replace the placeholder with a number you calibrated",
         "#    yourself (the indent already lines up). If your tenant currently",
@@ -1090,6 +1342,32 @@ _TENANT_STUB_META = {
     "zh": "{desc} — 參考起點 {value} {unit}（非背書，須依自身 baseline 校準）",
     "en": "{desc} — reference start {value} {unit} (not an endorsement; calibrate)",
 }
+
+
+def stub_counterexample_lines(ce: dict, cont: str, lang: str = "zh") -> list[str]:
+    """The ⚠ continuation lines under ONE stub key that has a measured
+    counter-example.
+
+    ⛔ Per KEY, deliberately. This block used to carry a single hand-written
+    paragraph naming two Oracle cases, printed unconditionally — so a db2-only
+    tenant was handed a caveat about two keys its file does not contain, while
+    the one key in it that DOES have a measurement (``db2_deadlock_rate``) said
+    nothing, and the blanket "both would over-fire" was the exact reversal the
+    registry's ``direction`` enum exists to prevent (it is ``under_fire``).
+    Two independent blind reviews found this as their top finding (#1344).
+    """
+    verdict = counterexample_verdict(ce, lang)
+    mark = COUNTEREXAMPLE_MARKS[lang]
+    if lang == "zh":
+        body = (f"⚠ #{ce['issue']} {mark}："
+                f"{counterexample_observed(ce, 'zh')}（{verdict}）")
+    else:
+        body = (f"⚠ #{ce['issue']} {mark}: "
+                f"{counterexample_observed(ce, 'en')} ({verdict})")
+    # break_on_hyphens=False for the same reason as the header renderer: the
+    # default cuts `negative-db2.yaml` in half across two lines.
+    return [f"{cont}{seg}" for seg in
+            textwrap.wrap(body, _COMMENT_WIDTH - len(cont), break_on_hyphens=False)]
 
 
 def _optional_entry_index(rule_packs: Optional[dict] = None) -> dict[str, dict]:
@@ -1152,6 +1430,9 @@ def render_tenant_declared_stub_lines(
         # Same wrapping rule as the shipped `optional_overrides:` list — one
         # implementation, because the two blocks render the same declared set.
         _append_wrapped_comment(lines, keyline, meta, cont)
+        ce = entry.get("value_counterexample")
+        if ce:
+            lines.extend(stub_counterexample_lines(ce, cont, lang))
     return lines
 
 
@@ -1369,6 +1650,13 @@ def surface_specs(doc: dict) -> list[dict]:
             # top-level optional_overrides — key at indent 0, items at 2.
             "id": "dev-optional",
             "path": DEV_DEFAULTS_PATH,
+            "indent": " " * 2,
+            "body": render_optional_overrides_lines(doc, 2),
+        },
+        {
+            # try-local ships its own conf.d; same list, same shape.
+            "id": "try-local-optional",
+            "path": TRY_LOCAL_DEFAULTS_PATH,
             "indent": " " * 2,
             "body": render_optional_overrides_lines(doc, 2),
         },

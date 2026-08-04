@@ -48,6 +48,7 @@ two-ended way.
 """
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -90,6 +91,177 @@ def _filter_patterns(name: str) -> list[str]:
 
 def _portal_filter_patterns() -> list[str]:
     return _filter_patterns("portal")
+
+
+# ── the mirror image: pytest reading OUT of the Python tree ─────────────────
+#
+# ⛔ This half was missing, and the asymmetry bit immediately. #1176 added a
+# pytest that reads portal SOURCE (`tools/portal/src/**`) to assert a component
+# still routes through the shared renderer — the pytest half of a deliberate
+# cross-language pair. `tools/portal/tests/**` was in the `python` filter but
+# `tools/portal/src/**` was not, so a PR that only edited the component matched
+# `portal`, missed `python`, and skipped the very check written to catch it
+# (blind review, #1344). Same failure shape as the portal side, same fix.
+
+PY_TEST_DIRS = ("tests",)
+PY_ROOTS = {"REPO_ROOT", "ROOT", "_REPO_ROOT", "REPO", "_ROOT"}
+
+
+def _python_filter_patterns() -> list[str]:
+    return _filter_patterns("python")
+
+
+def _python_out_of_tree_reads() -> dict[str, list[str]]:
+    """Map repo-relative path -> the pytest files that reference it.
+
+    Same best-effort posture as the portal scanner: only literal, root-anchored
+    joins that resolve to a file that actually exists. Under-detection is the
+    safe direction (no assertion), over-detection would red an innocent PR.
+
+    ⛔ FILES only. A bare directory read (`REPO_ROOT / "docs"`) is a coverage
+    question about a whole subtree and answering it mechanically would mean
+    demanding `docs/**` in the `python` filter — a real CI-cost decision, not
+    something a drift guard gets to make. Recorded here as a known blind spot
+    rather than silently conflated with the file case.
+
+    ⛔ Case-SENSITIVE existence. `Path.exists()` on Windows matches
+    `"readme.md"` against `README.md`, and `tests/dx/test_verify_diff.py`
+    contains exactly that string as a FIXTURE for the same trap — so a naive
+    check reports a nonexistent read, on one OS only.
+    """
+    found: dict[str, list[str]] = {}
+    for top in PY_TEST_DIRS:
+        for test_file in sorted((ROOT / top).rglob("test_*.py")):
+            src = test_file.read_text(encoding="utf-8")
+            try:
+                tree = ast.parse(src)
+            except SyntaxError:
+                continue
+            for rel in _module_repo_paths(tree):
+                if _is_tracked_file(rel):
+                    found.setdefault(rel, []).append(
+                        test_file.relative_to(ROOT).as_posix())
+    return found
+
+
+def _module_repo_paths(tree: ast.AST) -> set[str]:
+    """Repo-relative paths a module names, via AST rather than regex.
+
+    Two shapes, because both are in use:
+
+      A. a join off a repo-root constant — `REPO_ROOT / "a/b"`, and the
+         multi-segment `REPO_ROOT / "a" / "b"`.
+      B. ⛔ ANY module-level string literal that resolves to a real repo file,
+         in a module that also has a repo-root constant. The regex-only version
+         saw shape A only, and `tests/ops/test_registry_lib.py` writes
+         `tuple(REPO_ROOT / rel for rel in _TENANT_DOC_RELS)` — the join target
+         is a NAME, so the two files it reads
+         (`docs/getting-started/for-tenants.*`) were invisible, and they really
+         were missing from the filter. A scanner whose blind spot is "someone
+         put the paths in a constant" is blind to the tidiest code in the repo
+         (blind review, #1344).
+
+    The `_is_tracked_file` check upstream is what keeps shape B honest: a
+    string that is not a real file in the tree is not treated as a path.
+    """
+    has_root = any(
+        isinstance(n, ast.Name) and n.id in PY_ROOTS for n in ast.walk(tree))
+    if not has_root:
+        return set()
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            parts = _div_literals(node)
+            if parts:
+                out.add("/".join(parts))
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            v = node.value.strip()
+            if _looks_like_a_path(v):
+                out.add(v)
+    return out
+
+
+# ⛔ Bound the candidate BEFORE it reaches the filesystem. Shape B accepts any
+# module-level string, and `tests/dx/**` embeds whole Python programs as
+# literals (the fake-`gh` script). On Linux `Path("<1.5 KB of source>").is_file()`
+# raises `OSError: [Errno 36] File name too long`; on Windows it just returns
+# False. So the un-bounded version passed on the host and ERRORED in the
+# container — i.e. in CI (#1344). A "path" has no whitespace and is short.
+_MAX_PATH_LEN = 200
+
+
+def _looks_like_a_path(v: str) -> bool:
+    return (
+        "/" in v
+        and len(v) <= _MAX_PATH_LEN
+        and not v.startswith(("/", "http", "."))
+        and not any(c.isspace() for c in v)
+    )
+
+
+def _div_literals(node: ast.AST) -> list[str]:
+    """Flatten `ROOT / "a" / "b"` to ['a', 'b']; [] if any part is not literal."""
+    if isinstance(node, ast.Name):
+        return [] if node.id not in PY_ROOTS else ["\0ROOT"]
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value.strip("/")]
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        left, right = _div_literals(node.left), _div_literals(node.right)
+        if not left or not right:
+            return []
+        parts = left + right
+        return [p for p in parts if p != "\0ROOT"] if "\0ROOT" in parts else []
+    return []
+
+
+def _is_tracked_file(rel: str) -> bool:
+    """Exists, is a file, and is spelled exactly as on disk.
+
+    Every filesystem call is guarded: a candidate that the OS refuses to even
+    stat is simply not a path, and must not become an error in a drift guard.
+    """
+    try:
+        target = ROOT / rel
+        if not target.is_file():
+            return False
+    except OSError:
+        return False
+    probe = ROOT
+    try:
+        for part in rel.split("/"):
+            names = {p.name for p in probe.iterdir()} if probe.is_dir() else set()
+            if part not in names:
+                return False
+            probe = probe / part
+    except OSError:
+        return False
+    return True
+
+
+def test_python_filter_covers_every_out_of_tree_pytest_input() -> None:
+    patterns = _python_filter_patterns()
+    uncovered = {
+        path: sources
+        for path, sources in _python_out_of_tree_reads().items()
+        if not any(_covers(p, path) for p in patterns)
+    }
+    assert not uncovered, (
+        "pytest files read repo paths that are NOT in ci.yml's `python` path "
+        "filter — a PR touching only those paths would skip Python Tests "
+        "(reporting `skipped`, which satisfies branch protection). Add each to "
+        "the filter:\n"
+        + "\n".join(f"    - {p!r}  (read by {', '.join(s)})"
+                    for p, s in sorted(uncovered.items()))
+    )
+
+
+def test_python_scanner_actually_finds_something() -> None:
+    """Empty-run guard. If the two regexes stop matching the idioms in use,
+    the assertion above passes over nothing and reads as full coverage."""
+    reads = _python_out_of_tree_reads()
+    assert len(reads) >= 5, (
+        f"only {len(reads)} out-of-tree pytest reads detected — the scanner "
+        "has almost certainly stopped recognising the idiom")
 
 
 def _out_of_tree_reads() -> dict[str, list[str]]:

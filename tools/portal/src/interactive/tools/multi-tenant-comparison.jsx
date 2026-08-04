@@ -9,6 +9,10 @@ related: [capacity-planner, roi-calculator, alert-noise-analyzer]
 
 import React, { useState, useMemo } from 'react';
 import { computeStats, detectOutliers, findCommonSettings, findDivergent, DEFAULTS } from './multi-tenant-comparison/calc.js';
+import {
+  getValueCounterexample, counterexampleVerdict, counterexampleLabel,
+  counterexampleObserved,
+} from './_common/data/rule-packs.js';
 import { MetricCard as MetricCardBase } from './_common/components/MetricCard.jsx';
 
 const t = window.__t || ((zh, en) => en);
@@ -212,6 +216,10 @@ function MultiTenantComparison() {
   const outlierBoxStyle = { marginTop: 8, padding: '8px 12px', background: 'var(--da-color-error-soft)', borderRadius: 6, border: '1px solid var(--da-color-error)' };
   const outlierLabelStyle = { fontSize: 12, fontWeight: 600, color: 'var(--da-color-error-text)' };
   const outlierValueStyle = { fontSize: 12, color: 'var(--da-color-error-text)', marginLeft: 8 };
+  // Warning semantics, not error: the number is a starting reference that has a
+  // measured counter-example, not a broken configuration. `-warning-text` is the
+  // AA-on-white variant (the saturated stroke token fails as text).
+  const counterexampleStyle = { marginTop: 6, padding: '6px 10px', background: 'var(--da-color-warning-soft)', borderRadius: 6, border: '1px solid var(--da-color-warning)', fontSize: 12, color: 'var(--da-color-warning-text)' };
   const divergenceBoxStyle = { border: '1px solid var(--da-color-section-border)', borderRadius: 8, overflow: 'hidden' };
   const commonSettingsBoxStyle = { padding: '8px 12px', background: 'var(--da-color-success-soft)', borderTop: '1px solid var(--da-color-section-border)' };
   const commonSettingsTextStyle = { fontSize: 12, color: 'var(--da-color-success)' };
@@ -304,6 +312,36 @@ function MultiTenantComparison() {
             maxVal={maxBarVal * 1.1}
             label={`${selectedMetric} (${t('預設', 'default')}: ${DEFAULTS[selectedMetric]})`}
           />
+          {/* This view labels a number "default" and flags which tenants match
+              it — which reads as "the value to align on". For the keys whose
+              default has a measured counter-example (#1176) that framing is
+              exactly backwards, so say so right here rather than only in the
+              starter YAML next door. Derived, so a key with nothing measured
+              renders nothing. */}
+          {(() => {
+            const ce = getValueCounterexample(selectedMetric);
+            // ⛔ Imported, not restated. This block used to keep its own copy of
+            // the direction→wording map — and the copy had ALREADY drifted from
+            // the one in the starter-YAML renderer (full-width vs half-width
+            // parentheses) before any review saw it. A null verdict means the
+            // direction is unrecognised: render nothing rather than silently
+            // showing the OPPOSITE direction's sentence (#1344).
+            const verdict = ce ? counterexampleVerdict(ce) : null;
+            if (!verdict) return null;
+            // Label AND punctuation come from the shared module: the literal
+            // `：（）` written here rendered CJK brackets inside an all-English
+            // EN-locale sentence, and the mark was a second hand-copy of a
+            // string the Python side deliberately exports from one place.
+            const { mark, colon, open, close } = counterexampleLabel();
+            return (
+              <div style={counterexampleStyle} data-testid="counterexample-note">
+                {/* Decorative: the sentence that follows carries the meaning on
+                    its own, so the glyph must not be the only signal (1.4.1). */}
+                <span aria-hidden="true">⚠</span>{' '}
+                #{ce.issue} {mark}{colon}{counterexampleObserved(ce)}{open}{verdict}{close}
+              </div>
+            );
+          })()}
           {outliers.length > 0 && (
             <div style={outlierBoxStyle}>
               <span style={outlierLabelStyle}>

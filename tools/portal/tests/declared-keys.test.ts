@@ -259,4 +259,139 @@ describe('generateSampleYaml — the starter template must not hide the tier', (
     const withDefault = Object.keys(platformData.rulePacks[PACK].defaults)[0];
     expect(yaml).toMatch(new RegExp(`^${withDefault}: "`, 'm'));
   });
+
+  // ── #1176: a live value with a measured counter-example ──────────────────
+  //
+  // This template is the ONE face that hands a number over as copy-paste YAML.
+  // The declared block above is commented precisely because the platform
+  // asserts no number for those — but defaults-tier keys ARE asserted, and the
+  // reference library measured counter-examples for two of them. Staying silent
+  // there teaches the reader the number is endorsed.
+
+  it('warns immediately above a live value that has a measured counter-example', async () => {
+    vi.resetModules();
+    (window as any).__t = (_zh: string, en: string) => en;
+    (window as any).__PLATFORM_DATA = {
+      declaredKeys: {},
+      rulePacks: {
+        p: {
+          label: 'P', category: 'database', metrics: [],
+          defaults: {
+            calibrated_key: { value: 10, unit: 'count', desc: 'no counter-example' },
+            contradicted_key: {
+              value: 200, unit: 'count', desc: 'has one',
+              valueCounterexample: {
+                issue: 1176, direction: 'over_fire',
+                observed: 'a healthy diurnal peak reaches 240',
+              },
+            },
+          },
+        },
+      },
+      packOrder: ['p'],
+    };
+    const { generateSampleYaml } = await import(ENGINE_MOD);
+    const lines: string[] = generateSampleYaml(['p'], false).split('\n');
+
+    const valueIdx = lines.findIndex(l => /^contradicted_key: "/.test(l));
+    expect(valueIdx, 'live value row missing').toBeGreaterThan(-1);
+    const warn = lines[valueIdx - 1];
+    expect(warn, 'no warning directly above the value').toContain('#1176');
+    expect(warn).toContain('a healthy diurnal peak reaches 240');
+    expect(warn.trimStart().startsWith('#')).toBe(true);
+
+    // ...and a key with nothing measured gets NO such line: silence must read
+    // as "not measured", never as "validated".
+    const cleanIdx = lines.findIndex(l => /^calibrated_key: "/.test(l));
+    expect(lines[cleanIdx - 1]).not.toContain('#1176');
+  });
+
+  it('exposes counter-examples to any tool, so none needs its own copy', async () => {
+    // multi-tenant-comparison rendered "oracle_sessions_active (default: 200)"
+    // from a private hardcoded table while the starter YAML next door already
+    // carried the caveat. The accessor exists so the second tool reads the
+    // same registry-derived data instead of gaining a second copy.
+    vi.resetModules();
+    (window as any).__t = (_zh: string, en: string) => en;
+    (window as any).__PLATFORM_DATA = {
+      declaredKeys: {},
+      rulePacks: {
+        p: {
+          label: 'P', category: 'database', metrics: [],
+          defaults: {
+            marked: {
+              value: 200, unit: 'count', desc: 'd',
+              valueCounterexample: { issue: 1176, direction: 'over_fire', observed: 'peak 240' },
+            },
+            unmarked: { value: 10, unit: 'count', desc: 'd' },
+          },
+        },
+      },
+      packOrder: ['p'],
+    };
+    const { getValueCounterexample } = await import(RULE_PACKS_MOD);
+    expect(getValueCounterexample('marked')).toMatchObject({
+      issue: 1176, direction: 'over_fire',
+    });
+    expect(getValueCounterexample('unmarked')).toBeNull();
+    expect(getValueCounterexample('no_such_key')).toBeNull();
+  });
+
+  it('finds a counter-example on the DECLARED tier too, not just defaults', async () => {
+    // ⛔ The test above sets `declaredKeys: {}`, so deleting the accessor's
+    // declared-tier loop left it green — a vacuous guard on the very gap that
+    // blocked this PR (three of the six counter-example keys live in that
+    // tier, and it is the one #1320 D1 says a tenant can fill in TODAY).
+    vi.resetModules();
+    (window as any).__t = (_zh: string, en: string) => en;
+    (window as any).__PLATFORM_DATA = {
+      declaredKeys: {
+        oracle: [
+          { key: 'declared_marked', value: 300, unit: 'count', desc: 'd',
+            valueCounterexample: { issue: 1176, direction: 'over_fire', observed: 'batch reaches 560' } },
+          { key: 'declared_plain', value: 50, unit: 'count', desc: 'd' },
+        ],
+      },
+      rulePacks: { oracle: { label: 'O', category: 'database', metrics: [], defaults: {} } },
+      packOrder: ['oracle'],
+    };
+    const { getValueCounterexample } = await import(RULE_PACKS_MOD);
+    expect(getValueCounterexample('declared_marked')).toMatchObject({
+      issue: 1176, direction: 'over_fire', observed: 'batch reaches 560',
+    });
+    expect(getValueCounterexample('declared_plain')).toBeNull();
+  });
+
+  it('uses opposite wording for under_fire — "too low" is false for it', async () => {
+    vi.resetModules();
+    (window as any).__t = (_zh: string, en: string) => en;
+    const mk = (direction: string) => ({
+      declaredKeys: {},
+      rulePacks: {
+        p: {
+          label: 'P', category: 'database', metrics: [],
+          defaults: {
+            k: {
+              value: 5, unit: 'count/s', desc: 'd',
+              valueCounterexample: { issue: 1176, direction, observed: 'X' },
+            },
+          },
+        },
+      },
+      packOrder: ['p'],
+    });
+
+    (window as any).__PLATFORM_DATA = mk('over_fire');
+    let { generateSampleYaml } = await import(ENGINE_MOD);
+    const over = generateSampleYaml(['p'], false);
+
+    vi.resetModules();
+    (window as any).__PLATFORM_DATA = mk('under_fire');
+    ({ generateSampleYaml } = await import(ENGINE_MOD));
+    const under = generateSampleYaml(['p'], false);
+
+    expect(over).not.toEqual(under);
+    expect(over).toContain('fires on benign load');
+    expect(under).toContain('misses the fault it should catch');
+  });
 });

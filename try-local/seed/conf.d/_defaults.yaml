@@ -51,25 +51,35 @@ defaults:
 # exercised, and so this file matches the shape the shipping artifacts have.
 #
 # SOURCE: rule-packs/threshold-registry.yaml, the `tier: optional_overrides`
-# keys that are NOT `<base>_critical`. The shipped copies are generated:
-# helm/threshold-exporter/values.yaml `thresholdConfig.optional_overrides` and
-# components/threshold-exporter/config/conf.d/_defaults.yaml `optional_overrides`
-# (both spliced by `check_threshold_registry.py --regen`). If those diverge from
-# the list below, THEY are right and this copy needs a hand edit.
+# keys that are NOT `<base>_critical`. This block is now GENERATED from it by
+# `check_threshold_registry.py --regen`, exactly like the two shipped copies
+# (helm/threshold-exporter/values.yaml `thresholdConfig.optional_overrides` and
+# components/threshold-exporter/config/conf.d/_defaults.yaml).
 #
-# ⛔ This list is hand-maintained but NOT ungated (it was, until #1310): it is
-# compared byte-for-byte against BOTH generated copies by
-# tests/ops/test_generate_alertmanager_routes.py
-# ::TestShippedDeclaredListIsSettable
-# ::test_the_shipped_artifacts_carry_the_same_non_empty_list.
+# ⛔ It used to be hand-maintained with a documented "if those diverge, THEY are
+# right and this copy needs a hand edit" step. The gate on it
+# (tests/ops/test_generate_alertmanager_routes.py::TestShippedDeclaredListIsSettable)
+# compares the PARSED list — so it never saw anything comment-shaped, and when
+# the shipped copies gained the per-key measured-counter-example caveat (#1176)
+# this seed became the one conf.d in the repo without it, with nothing turning
+# red. Generating it deletes the manual step rather than documenting it better.
 # The `defaults:` values above still have no such gate — that caveat stands.
 optional_overrides:
-  - oracle_wait_time_rate
-  - oracle_process_count
-  - oracle_pga_allocated_bytes
-  - db2_log_usage_percent
-  - db2_deadlock_rate
-  - db2_tablespace_used_percent
-  - clickhouse_max_part_count
-  - clickhouse_replication_queue
-  - clickhouse_memory_tracking_bytes
+  # >>> GENERATED:threshold-registry:try-local-optional — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+  # ── oracle：Oracle Database (oracledb_exporter) ──
+  - oracle_wait_time_rate   # s/s — Wait time rate (5m)
+  - oracle_process_count   # count — Active processes warning
+    # ⚠ 參考庫實測反例（#1176）：例行備份批次會到 560 個 process —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
+  - oracle_pga_allocated_bytes   # bytes (4GB) — PGA allocation warning
+    # ⚠ 參考庫實測反例（#1176）：計畫性 stats-gather 會用到 22 GB PGA —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
+  # ── db2：IBM DB2 (ibm_db2_exporter) ──
+  - db2_log_usage_percent   # % — Transaction log usage warning
+  - db2_deadlock_rate   # count/s — Deadlock rate (5m)
+    # ⚠ 參考庫實測反例（#1176）：真實的 ~90/min deadlock storm 低於 5/s（＝300/min），因此接不到 ——
+    # 此值接不到該抓的故障；這個數字是起點，不是平台背書的值
+  - db2_tablespace_used_percent   # % — Tablespace usage warning
+  # ── clickhouse：ClickHouse (built-in /metrics) ──
+  - clickhouse_max_part_count   # count — Max part count per partition
+  - clickhouse_replication_queue   # count — Replication queue size
+  - clickhouse_memory_tracking_bytes   # bytes (8GB) — Memory tracking warning
+  # <<< GENERATED:threshold-registry:try-local-optional
