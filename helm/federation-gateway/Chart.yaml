@@ -29,7 +29,17 @@ type: application
 #         --reuse-values` is safe (both keys have defaults and Helm deep-merges
 #         the maps). Default `warn` never blocks startup; `optional: true` on the
 #         revoked volume is unchanged.
-version: 0.5.0
+# 0.5.1 — #1337: auditLog.image.tag 3.0.8 -> 3.0.8-2. The mtail VERSION is
+#         unchanged; the sidecar image's BUILD changed (mtail compiled from its
+#         pinned upstream commit with a current Go toolchain + Alpine 3.23.5,
+#         23 fixable HIGH/CRITICAL -> 2). ⛔ NOT cosmetic: this container has no
+#         digest knob and the pod-template checksums hash only ConfigMaps, so
+#         without a tag change the rendered pod spec would be byte-identical —
+#         no rollout, and `IfNotPresent` would keep the old image. PATCH: no new
+#         value keys, no container added or removed. ⚠️ REQUIRES ACTION: rebuild
+#         audit-sidecar/Dockerfile and push it as 3.0.8-2 BEFORE upgrading, or
+#         the mtail/logrotate containers hit ImagePullBackOff.
+version: 0.5.1
 # appVersion: pinned Envoy release
 appVersion: "v1.38.0"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle

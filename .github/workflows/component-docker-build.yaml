@@ -31,9 +31,16 @@ name: Component Docker Build (PR smoke)
 # issue #448 (same author, later v2 rewrite) argues a blocking CVE scan at
 # PR time lets a fresh upstream base-image CVE block UNRELATED PRs with no
 # warning. We keep the build a hard gate (deterministic, blames this diff)
-# and surface CVEs as visible-but-non-blocking output. release.yaml's own
-# image CVE scan is likewise treated as informational (#448). Flip to
-# exit-code 1 here only if the project decides PR-time CVE-blocking is wanted.
+# and surface CVEs as visible-but-non-blocking output. Flip to exit-code 1
+# here only if the project decides PR-time CVE-blocking is wanted.
+#
+# ⛔ CORRECTION (#1337): this block used to add "release.yaml's own image CVE
+# scan is likewise treated as informational (#448)". That is FALSE — all five
+# release jobs set `exit-code: 1` with no `continue-on-error`, so a fixable
+# HIGH/CRITICAL fails the release job. What is true, and is the likely origin of
+# the confusion, is that the scan runs POST-PUSH: the image is already in the
+# registry by then, so it reddens the release and blocks everything after it in
+# that job, rather than preventing publication of that image.
 
 on:
   pull_request:
@@ -70,6 +77,11 @@ jobs:
   build:
     name: build ${{ matrix.name }}
     runs-on: ubuntu-latest
+    # Since #1337 one leg clones github.com/google/mtail and downloads a Go
+    # module graph. `git fetch -q` has no timeout of its own, and with
+    # `fail-fast: false` a hung fetch would otherwise burn GitHub's 360-minute
+    # default. Same value the nightly scan already uses for the same builds.
+    timeout-minutes: 25
     strategy:
       fail-fast: false  # build all components so one break doesn't mask another
       matrix:

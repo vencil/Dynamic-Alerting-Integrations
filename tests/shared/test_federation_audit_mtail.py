@@ -15,9 +15,10 @@ gate, mirroring the ``vector validate`` codification in
 ``test_vector_projection_vrl.py`` and the promtool rule-pack gate.
 
 mtail 3.0.8 — the SAME version the audit-sidecar deploys
-(``helm/federation-gateway/audit-sidecar/Dockerfile`` ``MTAIL_VERSION`` /
-``values.yaml`` ``auditLog.image.tag``) — so the gate compiles against the same
-mtail language the runtime does.
+(``helm/federation-gateway/audit-sidecar/Dockerfile`` ``MTAIL_VERSION``; the
+chart's ``auditLog.image.tag`` carries that version plus a build-revision suffix,
+``3.0.8-2`` since #1337) — so the gate compiles against the same mtail language
+the runtime does.
 
 ⚠️ Same VERSION, not the same BINARY, since #1337: CI installs upstream's
 prebuilt 3.0.8 release while the sidecar image now compiles that version's
@@ -190,11 +191,18 @@ def _one(pattern: str, text: str, what: str) -> str:
 
 
 def test_mtail_version_pin_parity(repo_root: Path) -> None:
-    """The image's mtail version == the version CI installs for the compile gate.
+    """The image's declared mtail version == the version CI installs.
 
-    Pure file parsing, so it runs everywhere — no mtail, no Docker. If these skew,
-    the gate type-checks the program against a different mtail language than the
-    one the sidecar actually runs.
+    Pure file parsing, so it runs everywhere — no mtail, no Docker.
+
+    ⚠️ SCOPE, stated precisely because an earlier docstring had it backwards:
+    ``MTAIL_VERSION`` feeds only the ``-X main.Version`` / ``-X main.Branch``
+    ldflags, i.e. the BANNER. The source that is actually compiled is selected by
+    ``MTAIL_COMMIT`` alone. So this test catches a mislabelled image; it does NOT
+    catch a language skew — changing the commit while leaving the version alone
+    keeps it green. The property that matters is enforced by
+    ``test_mtail_commit_pin_matches_the_release_binary`` below, which is why that
+    one being skippable is guarded by ``VIBE_REQUIRE_MTAIL``.
     """
     df = (repo_root / _DOCKERFILE).read_text(encoding="utf-8")
     ci = (repo_root / _CI_YML).read_text(encoding="utf-8")
@@ -225,6 +233,14 @@ def test_mtail_commit_pin_matches_the_release_binary(repo_root: Path) -> None:
 
     res = subprocess.run(
         ["mtail", "--version"], capture_output=True, text=True, timeout=60,
+    )
+    # Report a broken binary AS a broken binary. Without this the regex below
+    # fails with "found 0 matches", which points the reader at the pattern
+    # instead of at the mtail install.
+    assert res.returncode == 0, (
+        f"`mtail --version` exited {res.returncode} — the oracle for this pin is "
+        f"unusable, so the assertion below would be meaningless.\n"
+        f"--- stdout ---\n{res.stdout}\n--- stderr ---\n{res.stderr}"
     )
     # mtail prints its banner on stderr in some builds and stdout in others.
     banner = f"{res.stdout}\n{res.stderr}"

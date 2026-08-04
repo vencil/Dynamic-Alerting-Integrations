@@ -35,7 +35,7 @@ lang: zh
 | **High** | **WARN**（不擋 merge，但**須列管**於本文件 + rationale）| **L2 / L4** `run-as-non-root`·`no-read-only-root-fs`·`unset-cpu·memory-requirements`·`capabilities-add`（wrapper rule）；L1 hadolint `warning` | **L2 / L4**：中央 `EXEMPTIONS` registry（`check_iac_helm.py` / `check_k8s_manifests.py`）+ 本表 rationale，否則未登記 High → BLOCK；L1 hadolint warning 自動入本表 |
 | **Medium / Low** | **INFO**（僅 log，不列管）| 其餘所有 kube-linter check；hadolint `info`/`style` | n/a |
 
-> **CVE image scan 維持 informational**（AC 5）：release.yaml 的既有 trivy image-CVE scan **不**升為 BLOCK —— upstream CVE 隨時爆，不應無預警卡 release（與本表的「IaC misconfig」是不同關注點）。
+> **CVE image scan 不由本表管**（AC 5）：#448 的 IaC 四層**不動** release.yaml 既有的 trivy image-CVE scan（與本表的「IaC misconfig」是不同關注點）。⛔ **勘誤（#1337）**：這裡原本寫「維持 informational／不升為 BLOCK」，但那個掃描**本來就是阻擋的**——五個 release job 全設 `exit-code: 1` 且無 `continue-on-error`，可修的 HIGH/CRITICAL 會讓 release job 紅。真正的但書是它跑在 **post-push**：image 當下已進 registry，所以它擋的是 release job（與其後所有步驟），不是該 image 的發布。
 
 ### Branch protection required checks（AC 5，**owner action**）
 
@@ -88,7 +88,7 @@ INFO（不列管，僅記錄）：`components/da-tools/app/Dockerfile:12`、`com
 
 ## Layer 2 — Helm template（TRK-312，kube-linter + Vibe wrapper）
 
-跑法：`python3 scripts/tools/lint/check_iac_helm.py`（CI job「Container SAST L2 (Helm)」；本地 on-demand：`pre-commit run iac-helm-sast-check --hook-stage manual --all-files`）。引擎：**單一 kube-linter**（render-then-lint）+ Mode A 源碼掃描 + wrapper `capabilities.add` 規則。**trivy-config 不採用**（與 kube-linter 對 K8s misconfig 高度重疊、雙引擎會 desync；trivy 仍是既有的 image-CVE informational scan，不同關注點）。
+跑法：`python3 scripts/tools/lint/check_iac_helm.py`（CI job「Container SAST L2 (Helm)」；本地 on-demand：`pre-commit run iac-helm-sast-check --hook-stage manual --all-files`）。引擎：**單一 kube-linter**（render-then-lint）+ Mode A 源碼掃描 + wrapper `capabilities.add` 規則。**trivy-config 不採用**（與 kube-linter 對 K8s misconfig 高度重疊、雙引擎會 desync；trivy 仍是既有的 image-CVE scan，不同關注點——**且它在 release 是阻擋的**，見上方 AC 5 勘誤）。
 
 **例外採中央註冊表**（`check_iac_helm.py` 的 `EXEMPTIONS` dict，非 in-chart 註解——`helm template` 會剝掉註解，且集中式給 SecOps 單一稽核面）。
 

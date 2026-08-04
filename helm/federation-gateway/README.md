@@ -224,19 +224,25 @@ rotations (≈ `sizeMB × (keep + 1)` ceiling), and triggers Envoy's admin
 from [`audit-sidecar/Dockerfile`](audit-sidecar/Dockerfile) (Alpine +
 `mtail` + `logrotate`) — build it, then set `auditLog.image.repository`.
 
-> ⚠️ **Rebuild after #1337 even though the tag is still `3.0.8`.** That tag
-> tracks the mtail version, and the mtail version has not changed — the *build*
-> has: mtail is now compiled from its pinned upstream commit with a current Go
-> toolchain instead of using upstream's 2024 prebuilt binary, and the runtime
-> base moved to Alpine 3.23.5. Measured on the built image, that takes it from
-> **23 fixable HIGH/CRITICAL to 2** (the two left are grpc, pinned by mtail's
-> own `go.mod`). An image you built before this change keeps all 23.
+> ⛔ **#1337 bumped this image's tag to `3.0.8-2` — rebuild and push before you
+> upgrade the chart, or the gateway pods will not start.** The mtail *version* is
+> unchanged; the *build* is not: mtail is now compiled from its pinned upstream
+> commit with a current Go toolchain instead of upstream's 2024 prebuilt binary,
+> and the runtime base moved to Alpine 3.23.5. Measured on the built image, that
+> takes it from **23 fixable HIGH/CRITICAL to 2** (the two left are grpc, pinned
+> by mtail's own `go.mod`).
+>
+> The `-2` suffix exists precisely so you cannot miss this. This container has no
+> `digest` knob and the pod template's checksum annotations hash only ConfigMaps,
+> so keeping `3.0.8` would have rendered a byte-identical pod spec: no rollout,
+> and under the default `IfNotPresent` your nodes would keep serving the old
+> 23-CVE image while the platform's nightly scan reported 2.
 >
 > You no longer need to remember to scan it by hand: the image is a matrix entry
 > in `nightly-image-scan.yaml`, `component-docker-build.yaml`, and
 > `make trivy-scan-all`. ⛔ It is **not** published by any pipeline, so
-> `release.yaml`'s tag-time Trivy hard gate — the only BLOCKING scan in the repo
-> — never sees it. Those three are its whole *CVE* coverage; its *build* is
+> `release.yaml`'s tag-time Trivy gate — the repo's only *release-blocking* CVE
+> scan — never sees it. Those three are its whole *CVE* coverage; its *build* is
 > additionally exercised by the `federation-e2e` CI job, which builds this image
 > from source on every run and scrapes the metrics it produces.
 
@@ -286,6 +292,7 @@ exposed, 1 = one ingress, …).
 | `auditLog.maxRequestBytes` | `1048576` | Request-body buffer cap (1 MiB) — bounds the POST body the Lua audit filter reads |
 | `auditLog.volumeSizeLimit` | `256Mi` | `emptyDir` cap for the audit-log mirror |
 | `auditLog.image.repository` | `federation-audit-sidecar` | mtail + logrotate sidecar image — build from `audit-sidecar/Dockerfile` |
+| `auditLog.image.tag` | `3.0.8-2` | `<mtail version>-<build revision>`. Bump the suffix whenever the Dockerfile changes: there is no `digest` knob here, so the tag is the only thing that makes `helm upgrade` roll the pods (#1337) |
 | `auditLog.logrotate.sizeMB` / `.keep` | `50` / `2` | Rotate the mirror at this size; keep this many rotations |
 
 ## Resiliency

@@ -578,7 +578,7 @@ pre-tag: version-check lint-docs playbook-freshness-ll draft-advisory-check benc
 	@echo ""
 	@echo "============================================================"
 	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  playbook-freshness ✅"
-	@echo "  Draft-advisory check ✅  Docker build (5 components) ✅  Trivy CVE scan (informational)"
+	@echo "  Draft-advisory check ✅  Docker build (7 self-built images) ✅  Trivy CVE scan (informational)"
 	@echo "  Bench baseline: .build/bench-baseline.txt (informational, issue #60 Phase 1)"
 	@echo "  Safe to create tags."
 	@echo "============================================================"
