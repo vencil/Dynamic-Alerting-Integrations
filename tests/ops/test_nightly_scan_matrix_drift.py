@@ -154,8 +154,20 @@ def _third_party_pins_in_helm_values() -> dict[str, set[str]]:
     sys.modules["_extractor"] = mod          # frozen dataclasses need this
     spec.loader.exec_module(mod)
 
+    scanned = sorted(ROOT.glob("helm/*/values*.yaml"))
+    # ⛔ Literal paths, and load-bearing for TWO reasons.
+    # (1) Vacuity: a glob that stops matching would make every assertion below
+    #     pass by finding nothing.
+    # (2) verify_diff's text_map is built by scanning test files for LITERAL
+    #     path strings. Without these, editing an overlay does not select the
+    #     test written for it — measured: both were `None` in the map while
+    #     `helm/da-portal/README.md` WAS registered, purely because a docstring
+    #     happened to name it. Same trap as #1313.
+    for known in ("helm/da-portal/values-tier1.yaml", "helm/da-portal/values-tier2.yaml"):
+        assert ROOT / known in scanned, f"{known} is no longer in the sampling face"
+
     out: dict[str, set[str]] = {}
-    for path in sorted(ROOT.glob("helm/*/values*.yaml")):
+    for path in scanned:
         doc = yaml.safe_load(path.read_text(encoding="utf-8"))
         refs = {r for r in mod._refs_from_node(doc)
                 if mod._repo_of(r) not in mod.LOCAL_BUILT_IMAGES
@@ -223,11 +235,23 @@ def test_hardcoded_template_image_refs_are_covered_by_the_scan() -> None:
     # occurs in the repo today (the only hardcoded template ref is alpine/git,
     # and helm/ has no `.yml` templates), so this is coverage for the next one,
     # not a fix for a live miss. CodeRabbit caught it on #1302.
+    # A trailing `# comment` and a registry PORT (`myreg.local:5000/x/y:1.0`)
+    # both used to fall outside the tail anchor — measured, and the comment form
+    # is the likelier of the two in this repo. Still NOT covered: a value on the
+    # following line. That needs a real YAML parse, which is the thing templates
+    # cannot have; stated here rather than left as a silent hole.
     concrete = re.compile(
-        r"image:\s*[\"']?([a-z0-9][\w.\-]*(?:/[\w.\-]+)*:[\w.\-]+"
-        r"(?:@sha256:[0-9a-f]{64})?)[\"']?\s*$")
+        r"image:\s*[\"']?([a-z0-9][\w.\-]*(?::\d+)?(?:/[\w.\-]+)*:[\w.\-]+"
+        r"(?:@sha256:[0-9a-f]{64})?)[\"']?\s*(?:#.*)?$")
     matrix_refs = {e["ref"] for e in _matrix_include("scan-thirdparty")}
-    selfbuilt_refs = {e.get("ref") for e in _matrix_include("scan")}
+    # ⛔ First-party detection is the `ghcr.io/vencil/` prefix and nothing else.
+    # An earlier cut also excused refs found in the self-built `scan` matrix —
+    # dead code: those entries carry `name`/`context`/`dockerfile` and no `ref`
+    # at all, so the set was `{None}` and the branch never fired. Asserted, so
+    # nobody re-adds it believing it works.
+    assert {e.get("ref") for e in _matrix_include("scan")} == {None}, (
+        "the self-built scan matrix grew a `ref` key — first-party exemption "
+        "here is prefix-based on purpose; revisit before relying on it")
 
     offenders: dict[str, str] = {}
     templates = sorted(
@@ -240,7 +264,7 @@ def test_hardcoded_template_image_refs_are_covered_by_the_scan() -> None:
             if not m:
                 continue
             ref = m.group(1)
-            if ref.startswith("ghcr.io/vencil/") or ref in selfbuilt_refs:
+            if ref.startswith("ghcr.io/vencil/"):
                 continue  # first-party: the release pipeline owns its currency
             if ref not in matrix_refs:
                 offenders[path.relative_to(ROOT).as_posix()] = ref
