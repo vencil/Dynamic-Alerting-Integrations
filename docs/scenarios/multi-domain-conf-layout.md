@@ -119,39 +119,40 @@ conf.d/
 
 ```yaml
 # 層級 2：conf.d/finance/_defaults.yaml —— 平台檔，所以閾值放在頂層 `defaults:`
-# （不加引號的數字），路由放在 `_routing_defaults:`，它與 `defaults:` **同級**、
-# 不是它的子項。
+# （不加引號的數字）。
 defaults:
   mysql_connections: 90
   container_memory: 85
-
-_routing_defaults:
-  receiver:
-    type: slack
-    api_url: "https://hooks.slack.com/services/T/B/finance"
-  group_by: ["alertname", "tenant"]
 ```
 
 ```yaml
-# 層級 5：conf.d/finance/us-east/prod/tenant-a.yaml —— 租戶檔：值是加引號的字串，
-# 而 per-tenant 路由是租戶本體內的 `_routing:`。
+# 層級 5：conf.d/finance/us-east/prod/tenant-a.yaml —— 租戶檔：值是加引號的字串。
 tenants:
   tenant-a:
     mysql_connections: "95"    # 覆蓋：從 domain 的 90 提高
     # container_memory 未提 —— 繼承層級 2 的 85
-    _routing:
-      group_by: ["alertname"]  # 取代繼承來的陣列，**不是**追加
 ```
+
+> ⛔ **階層布局目前只在閾值面成立。** 上面的繼承由 threshold-exporter 實作，實測有效；
+> 但**路由面的工具鏈只讀平面目錄**，看不見任何子目錄裡的租戶。實測同一份內容：
+> 平面 `conf.d/tenant-a.yaml` 會產出路由，階層 `conf.d/finance/us-east/prod/tenant-a.yaml`
+> 產出「No tenants found」零路由。因此在階層布局下，`_routing_defaults:` 與租戶本體的
+> `_routing:` **不會被任何元件消費**——本文其餘的路由範例請在平面目錄下使用。
+>
+> ⚠️ 更要注意的是 `validate_config.py` 對階層目錄會回報 **PASS / exit 0**，但掃到的是
+> **0 個租戶**——它不是擋下來，而是對從未讀過的目錄報綠燈。追蹤見
+> [#1339](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1339)。
 
 ### Null 值 Opt-Out（進階）
 
-若 tenant-a 想「停用 Finance 域的 finance-channel receiver」：
+若 tenant-a 想「停用繼承來的 finance-channel receiver」（路由面只支援平面目錄，
+所以以下路徑是平面的）：
 
 ```yaml
-# conf.d/finance/us-east/prod/tenant-a.yaml
+# conf.d/tenant-a.yaml
 tenants:
   tenant-a:
-    _routing:                    # 層級 5 覆蓋 domain 的 _routing_defaults，對它
+    _routing:                    # 租戶覆蓋 _routing_defaults，對它
       receiver:                  # 指名的每個 key 生效 —— 這裡整個 receiver 被
         type: webhook            # **取代**（通知照送，只是換了目的地）
         url: "https://hooks.tenant-a.example.com/alerts"

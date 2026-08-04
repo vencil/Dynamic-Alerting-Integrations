@@ -119,39 +119,45 @@ Example:
 
 ```yaml
 # Level 2: conf.d/finance/_defaults.yaml — a platform file, so thresholds live
-# under a top-level `defaults:` (unquoted numbers) and routing under
-# `_routing_defaults:`, a SIBLING of `defaults:` rather than a child of it.
+# under a top-level `defaults:` (unquoted numbers).
 defaults:
   mysql_connections: 90
   container_memory: 85
-
-_routing_defaults:
-  receiver:
-    type: slack
-    api_url: "https://hooks.slack.com/services/T/B/finance"
-  group_by: ["alertname", "tenant"]
 ```
 
 ```yaml
 # Level 5: conf.d/finance/us-east/prod/tenant-a.yaml — a tenant file: values are
-# quoted strings, and per-tenant routing is `_routing:` inside the tenant body.
+# quoted strings.
 tenants:
   tenant-a:
     mysql_connections: "95"    # Override: raise from the domain's 90
     # container_memory not specified — inherits 85 from Level 2
-    _routing:
-      group_by: ["alertname"]  # Replaces the inherited array; it is NOT appended
 ```
+
+> ⛔ **The hierarchical layout holds for the threshold plane only.** The inheritance
+> above is implemented by threshold-exporter and is measured to work; the **routing
+> toolchain reads flat directories only** and sees no tenant inside any subdirectory.
+> Measured on identical content: flat `conf.d/tenant-a.yaml` produces routes, while
+> hierarchical `conf.d/finance/us-east/prod/tenant-a.yaml` produces "No tenants found"
+> and zero routes. So under a hierarchical layout, `_routing_defaults:` and a tenant's
+> own `_routing:` are **consumed by nothing** — use the remaining routing examples in
+> this document against a flat directory.
+>
+> ⚠️ More dangerous still: `validate_config.py` reports **PASS / exit 0** on a
+> hierarchical directory while scanning **0 tenants** — it does not block, it reports
+> green for a directory it never read. Tracked in
+> [#1339](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1339).
 
 ### Null Value Opt-Out (Advanced)
 
-If tenant-a wants to "disable the finance-channel receiver from Finance domain defaults":
+If tenant-a wants to "disable the inherited finance-channel receiver" (the routing
+plane supports flat directories only, hence the flat path below):
 
 ```yaml
-# conf.d/finance/us-east/prod/tenant-a.yaml
+# conf.d/tenant-a.yaml
 tenants:
   tenant-a:
-    _routing:                    # Level 5 overrides the domain's _routing_defaults
+    _routing:                    # The tenant overrides _routing_defaults
       receiver:                  # for every key it names — here the whole receiver
         type: webhook            # is REPLACED (delivery continues, to a new
         url: "https://hooks.tenant-a.example.com/alerts"   # destination)
