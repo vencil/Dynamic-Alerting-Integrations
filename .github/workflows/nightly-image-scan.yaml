@@ -198,15 +198,15 @@ jobs:
           # pushed it to quay — quay's v0.13.0/latest/v0 all still resolve to the April
           # build. Staying on quay freezes x/net + prometheus lib at April versions.
           - name: prom-label-proxy # helm/federation-proxy/values.yaml
-            ref: "prometheuscommunity/prom-label-proxy:v0.14.0@sha256:e314c38621614b33dde314d0fd6635d7362f311aaa68325f24ff933b324c00d1"
+            ref: "prometheuscommunity/prom-label-proxy:v0.15.0@sha256:b6fc0bba6669fcb7eebe527e57de6b94eb85a6a3441b1a0546227a822fd8ea7b"
           - name: mariadb # helm/mariadb-instance/values.yaml
             ref: "mariadb:11.8.8@sha256:efb4959ef2c835cd735dbc388eb9ad6aab0c78dd64febcd51bc17481111890c4"
           - name: mysqld-exporter # helm/mariadb-instance/values.yaml
             ref: "prom/mysqld-exporter:v0.19.0@sha256:eacb4b18e2ec1e0abdf2d64851b68526c964f6d9cb3e9458fb5d5f5062ea94c1"
           - name: grafana # k8s/03-monitoring/deployment-grafana.yaml
-            ref: "grafana/grafana:12.4.6@sha256:dc91df727e7a90043b74ed4e2df7e4302f0eb3ad8f1e9fe278b0f7a7689d3432"
+            ref: "grafana/grafana:12.4.6@sha256:c2cd7057f6116f708b6ab11dc36089f4b34bcf5065c4457ca6b55daa42a9eb8c"
           - name: prometheus # k8s/03-monitoring/deployment-prometheus.yaml
-            ref: "prom/prometheus:v3.13.1@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893"
+            ref: "prom/prometheus:v3.13.2@sha256:508729e0e2d18e11fd742a5a5ca70e557b940a93948c3c95fd0123a6fd538b69"
           - name: alertmanager # k8s/03-monitoring/deployment-alertmanager.yaml
             ref: "prom/alertmanager:v0.33.1@sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d"
           - name: kube-state-metrics # k8s/03-monitoring/deployment-kube-state-metrics.yaml
@@ -219,7 +219,7 @@ jobs:
           # (routing config, #1243) and deployment-prometheus.yaml (Rule Packs, #1246).
           # A digest refresh MUST update both or they drift silently.
           - name: config-reloader # k8s/03-monitoring/deployment-{alertmanager,prometheus}.yaml (sidecars)
-            ref: "quay.io/prometheus-operator/prometheus-config-reloader:v0.92.1@sha256:74550ba3e8bf93f47bc574231090d340ae9c01d25cd11ff74799e65f9fdb9a48"
+            ref: "quay.io/prometheus-operator/prometheus-config-reloader:v0.93.0@sha256:0ccb22ca9f3f6fd9f76ce95585d18bd2e363d421c534dde710be4bd13caa551d"
           # NOTE: alpine/git's VERSION tags are mutable — upstream's Sunday cron
           # re-pushes v<X.Y.Z> from a fresh `apk add` (alpine-docker/git build.yml), so
           # the same tag silently gains OS fixes. Only the digest pins it; a digest-only
@@ -236,7 +236,7 @@ jobs:
           - name: busybox # helm/federation-{gateway,reconciler}/values.yaml (preflight init)
             ref: "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
           - name: alpine-git # k8s/04-tenant-api/deployment.yaml (gitops sidecar)
-            ref: "alpine/git:v2.54.0@sha256:b4d933c7185b5cc9da7704f2c6e19d477f935ea31a50d9a017ffce2bbd1109a3"
+            ref: "alpine/git:v2.54.0@sha256:729da2347ce652f30476b064198577fe12e1147e58499be9f343039343ef2cee"
     steps:
       # Authenticated Docker Hub pulls (rate-limit headroom); guarded no-op without creds.
       - name: Docker Hub login (no-op without creds)

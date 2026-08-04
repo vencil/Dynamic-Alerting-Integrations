@@ -692,7 +692,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "5362d43dd71b4b2f34c05b7bbe0bcc2429068ed726db711c026b5eb6ce6cea65",
+ "source_digest": "cd2f6c52292729ad3dcfa398eaa36d592e92d969dcfcbd85679f0dd22979a2f9",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -890,6 +890,7 @@
   "tests/ops/test_explain_route.py",
   "tests/ops/test_explain_route_trace.py",
   "tests/ops/test_federation_check.py",
+  "tests/ops/test_federation_e2e_mirrors_deploy_sot.py",
   "tests/ops/test_federation_keygen.py",
   "tests/ops/test_federation_revocation_reconciler.py",
   "tests/ops/test_generate_alertmanager_routes.py",
@@ -1416,8 +1417,18 @@
   ],
   "helm/federation-gateway/values.yaml": [
    "tests/helm/test_revoked_set_contract_guard.py",
+   "tests/ops/test_federation_e2e_mirrors_deploy_sot.py",
    "tests/ops/test_renovate_config.py",
    "tests/ops/test_revoked_set_contract.py"
+  ],
+  "helm/federation-proxy": [
+   "tests/ops/test_federation_e2e_mirrors_deploy_sot.py"
+  ],
+  "helm/federation-proxy/templates/deployment.yaml": [
+   "tests/ops/test_federation_e2e_mirrors_deploy_sot.py"
+  ],
+  "helm/federation-proxy/values.yaml": [
+   "tests/ops/test_federation_e2e_mirrors_deploy_sot.py"
   ],
   "helm/federation-reconciler": [
    "tests/dx/test_bump_docs.py",
@@ -1597,7 +1608,8 @@
   "k8s/03-monitoring/deployment-prometheus.yaml": [
    "tests/dx/test_generate_byo_rulepack_table.py",
    "tests/lint/test_check_doc_k8s_refs.py",
-   "tests/lint/test_check_k8s_manifests.py"
+   "tests/lint/test_check_k8s_manifests.py",
+   "tests/ops/test_federation_e2e_mirrors_deploy_sot.py"
   ],
   "k8s/03-monitoring/federation-revocation-dashboard.json": [
    "tests/dx/test_federation_revocation_dashboard.py"
@@ -2145,6 +2157,9 @@
   ],
   "tests/federation-e2e": [
    "tests/dx/test_verify_diff.py"
+  ],
+  "tests/federation-e2e/docker-compose.yml": [
+   "tests/ops/test_federation_e2e_mirrors_deploy_sot.py"
   ],
   "tests/golden/build_and_capture.py": [
    "tests/golden/test_merge_parity.py"

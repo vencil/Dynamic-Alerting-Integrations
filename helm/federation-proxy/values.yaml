@@ -24,14 +24,14 @@ image:
   # catches up.
   # renovate: datasource=docker depName=prometheuscommunity/prom-label-proxy
   repository: prometheuscommunity/prom-label-proxy
-  tag: "v0.14.0"
+  tag: "v0.15.0"
   # Pinned by digest (#902 L2 supply-chain). MUST stay in sync with the
   # scan-thirdparty matrix (drift-guard enforces). Bump via
   # `docker buildx imagetools inspect <repo>:<tag> --format '{{ .Manifest.Digest }}'`.
   # ⛔ Digest is AUTHORITATIVE: `--set image.tag=…` ALONE does NOT upgrade — k8s
   #    silently keeps running THIS digest (tag becomes a lie). To upgrade you MUST
   #    also `--set image.digest=<new>` (or `=""`). L3/Renovate will automate both.
-  digest: "sha256:e314c38621614b33dde314d0fd6635d7362f311aaa68325f24ff933b324c00d1"
+  digest: "sha256:b6fc0bba6669fcb7eebe527e57de6b94eb85a6a3441b1a0546227a822fd8ea7b"
   pullPolicy: IfNotPresent
 
 # Upstream backend — any Prometheus-HTTP-API-compatible endpoint
