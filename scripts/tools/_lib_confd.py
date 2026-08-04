@@ -66,12 +66,18 @@ def _is_config(name: str) -> bool:
 
 
 def iter_config_files(config_dir: str | os.PathLike[str], *, recursive: bool = True):
-    """Yield config files under `config_dir`, sorted, deepest path last.
+    """Yield config files under `config_dir`, sorted by POSIX relative path.
 
-    Sorted by POSIX-style relative path so callers get a stable order on
-    every platform (a plain `Path.rglob` yields OS-dependent order, and
-    `os.sep` differences leak into any output that echoes the path — the
-    trap that turned the Go/Python golden parity red in #1341).
+    That ordering is the whole promise — it is NOT depth-first, and
+    shallow files do not come first: `a/tenant.yaml` sorts before a
+    root-level `z.yaml`. (An earlier docstring here claimed "deepest path
+    last", which lexicographic order never guaranteed; the current fixture
+    set happened not to expose the difference.)
+
+    Sorting on the POSIX-style relative path gives a stable order on every
+    platform — a plain `Path.rglob` yields OS-dependent order, and `os.sep`
+    differences leak into any output that echoes the path, the trap that
+    turned the Go/Python golden parity red in #1341.
 
     `recursive=False` reproduces the historical flat behaviour; it exists
     so a caller can be explicit rather than accidentally flat.

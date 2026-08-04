@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant, add_prometheus_arg  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_confd import nested_yaml_warning  # noqa: E402
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
@@ -102,6 +103,10 @@ def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
     base = Path(config_dir)
     if not base.is_dir():
         return None
+    # #1339: flat read — a hierarchical conf.d must not look empty.
+    _nested = nested_yaml_warning(base, tool="diagnose")
+    if _nested:
+        print(f"WARN: {_nested}", file=sys.stderr)
     for entry in sorted(base.iterdir(), key=lambda p: p.name):
         fname = entry.name
         if not fname.endswith((".yaml", ".yml")):
@@ -192,6 +197,10 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
 
     # Find tenant config
     tenant_overrides = {}
+    # #1339: flat read — a hierarchical conf.d must not look empty.
+    _nested = nested_yaml_warning(base, tool="diagnose")
+    if _nested:
+        print(f"WARN: {_nested}", file=sys.stderr)
     for entry in sorted(base.iterdir(), key=lambda p: p.name):
         fname = entry.name
         if not fname.endswith((".yaml", ".yml")):

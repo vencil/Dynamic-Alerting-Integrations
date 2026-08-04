@@ -38,9 +38,60 @@ TOOLS = REPO / "scripts" / "tools"
 # A file "reads a tenant config dir" if it mentions one of these knobs.
 _DIR_HINTS = ("config_dir", "conf-d", "conf_d")
 
-_RECURSIVE_CALLS = {"rglob", "walk", "iter_config_files"}
-_FLAT_CALLS = {"listdir"}
+_RECURSIVE_CALLS = {"rglob", "walk"}
+# Every way a caller can list ONE directory level. Enumerated deliberately
+# and kept in one place — an enumerated guard is only as good as its list,
+# so both analysers below read this same function rather than each keeping
+# their own copy (the duplication that let `iterdir` slip through review).
+_FLAT_CALLS = {"listdir", "iterdir", "scandir"}
 _GUARD_CALLS = {"nested_yaml_warning", "nested_yaml_files"}
+
+
+def _call_kind(node: ast.Call) -> str | None:
+    """Classify one call as 'flat', 'recursive', 'guard', or None."""
+    fn = node.func
+    name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+    if name in _GUARD_CALLS:
+        return "guard"
+    if name in _RECURSIVE_CALLS:
+        return "recursive"
+    if name in _FLAT_CALLS:
+        return "flat"
+    if name == "iter_config_files":
+        # The shared helper has a `recursive=` knob, so the call name alone
+        # does not settle it: `iter_config_files(d, recursive=False)` is a
+        # flat read wearing a recursive-looking name.
+        for kw in node.keywords:
+            if kw.arg == "recursive":
+                if isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                    return "recursive"
+                return "flat"  # False, or computed → cannot be trusted as recursive
+        return "recursive"  # default is recursive=True
+    if name == "glob" and node.args and isinstance(node.args[0], ast.Constant):
+        pat = node.args[0].value
+        # `glob("*.yaml")` is flat; `glob("**/*.yaml")` is not.
+        if isinstance(pat, str) and pat.startswith("*.y"):
+            return "flat"
+    return None
+
+
+def _own_scope_calls(fn: ast.AST):
+    """Yield Calls in THIS function's own scope, not nested definitions.
+
+    `ast.walk` descends into nested `def` / `async def` / `lambda` /
+    `class` bodies, so an *uncalled* inner helper that invokes the guard
+    would make its enclosing flat scan look guarded while nothing runs at
+    runtime. Stop at every nested lexical scope.
+    """
+    stack = list(ast.iter_child_nodes(fn))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.Lambda, ast.ClassDef)):
+            continue
+        if isinstance(node, ast.Call):
+            yield node
+        stack.extend(ast.iter_child_nodes(node))
 
 
 def _classify(path: pathlib.Path):
@@ -52,24 +103,8 @@ def _classify(path: pathlib.Path):
         tree = ast.parse(src)
     except SyntaxError:
         return False, False, False, False
-    flat = recursive = guarded = False
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        fn = node.func
-        name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
-        if name in _RECURSIVE_CALLS:
-            recursive = True
-        if name in _GUARD_CALLS:
-            guarded = True
-        if name in _FLAT_CALLS:
-            flat = True
-        if name == "glob" and node.args and isinstance(node.args[0], ast.Constant):
-            pat = node.args[0].value
-            # `glob("*.yaml")` is flat; `glob("**/*.yaml")` is not.
-            if isinstance(pat, str) and pat.startswith("*.y"):
-                flat = True
-    return True, flat, recursive, guarded
+    kinds = {_call_kind(n) for n in ast.walk(tree) if isinstance(n, ast.Call)}
+    return True, "flat" in kinds, "recursive" in kinds, "guard" in kinds
 
 
 def _readers():
@@ -104,23 +139,9 @@ def _flat_scopes_without_guard(path: pathlib.Path) -> list[str]:
     for fn in ast.walk(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        flat = guarded = False
-        for node in ast.walk(fn):
-            if not isinstance(node, ast.Call):
-                continue
-            f = node.func
-            name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
-            if name in _GUARD_CALLS:
-                guarded = True
-            if name in _RECURSIVE_CALLS:
-                guarded = True  # recursing is the other valid answer
-            if name in _FLAT_CALLS:
-                flat = True
-            if name == "glob" and node.args and isinstance(node.args[0], ast.Constant):
-                pat = node.args[0].value
-                if isinstance(pat, str) and pat.startswith("*.y"):
-                    flat = True
-        if flat and not guarded:
+        kinds = {_call_kind(c) for c in _own_scope_calls(fn)}
+        # Recursing is the other valid answer, so it counts as guarded.
+        if "flat" in kinds and not ({"guard", "recursive"} & kinds):
             bad.append(fn.name)
     return bad
 
@@ -164,3 +185,69 @@ def test_guard_lives_where_the_flat_scan_lives(path: pathlib.Path):
         f"`nested_yaml_warning(...)` call into the scanning function, or make "
         f"that function recurse. See issue #1339."
     )
+
+
+# ── The gate's own bypasses (CodeRabbit review on PR #1343) ─────────────
+#
+# An enumerated guard is only as good as its list, so the ways around it
+# are pinned here as counter-examples. Each of these DID slip through the
+# first version of this gate — measured, not imagined.
+
+_BYPASS_CASES = {
+    "iterdir": "def scan(config_dir):\n    for p in config_dir.iterdir():\n        pass\n",
+    "scandir": "import os\ndef scan(config_dir):\n    for p in os.scandir(config_dir):\n        pass\n",
+    # Our own helper has a `recursive=` knob: the call name looks recursive
+    # while the read is flat.
+    "iter_config_files_recursive_false": (
+        "from _lib_confd import iter_config_files\n"
+        "def scan(config_dir):\n"
+        "    for p in iter_config_files(config_dir, recursive=False):\n        pass\n"
+    ),
+    # A guard inside an inner function that nobody calls emits nothing at
+    # runtime, but `ast.walk` used to count it for the enclosing scope.
+    "guard_in_uncalled_inner_function": (
+        "from _lib_confd import nested_yaml_warning\nimport os\n"
+        "def scan(config_dir):\n"
+        "    def _never():\n        return nested_yaml_warning(config_dir, tool='x')\n"
+        "    for f in os.listdir(config_dir):\n        pass\n"
+    ),
+}
+
+_ACCEPTED_CASES = {
+    "iter_config_files_default_is_recursive": (
+        "from _lib_confd import iter_config_files\n"
+        "def scan(config_dir):\n    for p in iter_config_files(config_dir):\n        pass\n"
+    ),
+    "flat_with_guard_in_same_scope": (
+        "from _lib_confd import nested_yaml_warning\nimport os\n"
+        "def scan(config_dir):\n"
+        "    w = nested_yaml_warning(config_dir, tool='x')\n"
+        "    for f in os.listdir(config_dir):\n        pass\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_BYPASS_CASES))
+def test_known_bypasses_are_caught(name, tmp_path: pathlib.Path):
+    f = tmp_path / f"{name}.py"
+    f.write_text(_BYPASS_CASES[name], encoding="utf-8")
+    _, flat, recursive, guarded = _classify(f)
+    unguarded = _flat_scopes_without_guard(f)
+    assert (flat and not (recursive or guarded)) or unguarded, (
+        f"{name} slipped through: flat={flat} recursive={recursive} "
+        f"guarded={guarded} unguarded_scopes={unguarded}"
+    )
+
+
+@pytest.mark.parametrize("name", sorted(_ACCEPTED_CASES))
+def test_legitimate_shapes_are_not_flagged(name, tmp_path: pathlib.Path):
+    """The other half: the gate must not cry wolf on correct code.
+
+    Without this, tightening the classifier could pass every bypass test
+    by simply rejecting everything.
+    """
+    f = tmp_path / f"{name}.py"
+    f.write_text(_ACCEPTED_CASES[name], encoding="utf-8")
+    _, flat, recursive, guarded = _classify(f)
+    assert recursive or guarded
+    assert _flat_scopes_without_guard(f) == []

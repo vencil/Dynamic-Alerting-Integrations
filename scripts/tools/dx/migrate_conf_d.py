@@ -34,6 +34,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_confd import nested_yaml_warning  # noqa: E402
 
 try:
     import yaml
@@ -77,6 +78,10 @@ def plan_migration(conf_d: Path) -> list[dict]:
     """
     actions = []
 
+    # #1339: flat read — a hierarchical conf.d must not look empty.
+    _nested = nested_yaml_warning(conf_d, tool="migrate_conf_d")
+    if _nested:
+        print(f"WARN: {_nested}", file=sys.stderr)
     for fp in sorted(conf_d.iterdir()):
         if fp.is_dir():
             # Already nested — skip

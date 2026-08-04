@@ -124,3 +124,21 @@ def test_hidden_entries_are_skipped_like_the_exporter(tmp_path: pathlib.Path):
     assert got == ["real/tenant-b.yaml", "tenant-a.yaml"]
     # ...and the guard must not advertise files nobody would have read anyway.
     assert [p.name for p in nested_yaml_files(root)] == ["tenant-b.yaml"]
+
+
+def test_order_is_lexicographic_not_depth_first(tmp_path: pathlib.Path):
+    """Counter-example pinning what the order actually is (PR #1343 review).
+
+    The docstring once promised "deepest path last". Lexicographic order
+    never guaranteed that — a nested `a/...` sorts before a root-level
+    `z.yaml` — and the original fixtures happened not to show it. Pin the
+    real contract so nobody builds on the wrong one.
+    """
+    root = tmp_path / "conf.d"
+    (root / "a").mkdir(parents=True)
+    (root / "a" / "tenant.yaml").write_text("tenants: {}\n", encoding="utf-8")
+    (root / "z.yaml").write_text("tenants: {}\n", encoding="utf-8")
+
+    got = [p.relative_to(root).as_posix() for p in iter_config_files(root)]
+    assert got == ["a/tenant.yaml", "z.yaml"], "nested-but-alphabetically-first comes first"
+    assert got != ["z.yaml", "a/tenant.yaml"], "this is NOT shallow-first ordering"

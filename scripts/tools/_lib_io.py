@@ -8,11 +8,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
 import yaml
 
+from _lib_confd import nested_yaml_warning
 from _lib_constants import ONBOARD_HINTS_FILENAME
 
 
@@ -54,6 +56,10 @@ def iter_yaml_files(
     base = Path(config_dir)
     if not base.is_dir():
         return []
+    # #1339: flat read — a hierarchical conf.d must not look empty.
+    _nested = nested_yaml_warning(base, tool="iter_yaml_files")
+    if _nested:
+        print(f"WARN: {_nested}", file=sys.stderr)
     result: list[tuple[str, str]] = []
     for entry in sorted(base.iterdir(), key=lambda p: p.name):
         fname = entry.name
