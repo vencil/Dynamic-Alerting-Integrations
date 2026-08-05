@@ -695,7 +695,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "11374740e919ecef5820adc8e2c5ba453174f78512ea63ca677423f30dba9b96",
+ "source_digest": "8a18d7d7f77d87ccfa3ded23dc2f74e446a6770f94482f19f6d2ec3b5b9e112a",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -949,6 +949,7 @@
   "tests/ops/test_threshold_govern.py",
   "tests/ops/test_threshold_govern_manifest.py",
   "tests/ops/test_threshold_recommend.py",
+  "tests/ops/test_trylocal_compose_pins.py",
   "tests/ops/test_validate_config.py",
   "tests/ops/test_validate_migration.py",
   "tests/ops/test_verify_download.py",
@@ -1062,6 +1063,9 @@
   ],
   ".github/workflows/renovate.yaml": [
    "tests/ops/test_renovate_config.py"
+  ],
+  ".github/workflows/try-local-smoke.yaml": [
+   "tests/ops/test_trylocal_compose_pins.py"
   ],
   ".pre-commit-config.yaml": [
    "tests/dx/test_bump_docs.py",
@@ -1731,7 +1735,8 @@
   ],
   "scripts/ops/check_image_refs_resolve.py": [
    "tests/ops/test_check_image_refs_resolve.py",
-   "tests/ops/test_nightly_scan_matrix_drift.py"
+   "tests/ops/test_nightly_scan_matrix_drift.py",
+   "tests/ops/test_trylocal_compose_pins.py"
   ],
   "scripts/ops/ci_flake_retry.py": [
    "tests/ops/test_ci_flake_retry.py"
@@ -2361,7 +2366,8 @@
    "tests/shared/test_json_stdout_contract.py"
   ],
   "try-local/docker-compose.yaml": [
-   "tests/lint/test_check_cross_ns_url_consistency.py"
+   "tests/lint/test_check_cross_ns_url_consistency.py",
+   "tests/ops/test_trylocal_compose_pins.py"
   ],
   "try-local/seed/conf.d": [
    "tests/ops/test_guard_defaults_scopes.py",
