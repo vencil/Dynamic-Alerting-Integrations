@@ -1929,11 +1929,80 @@ class TestCustomerDeliveredImagePins:
     # Substring that must appear in the image chosen for each deploy method.
     # Derived from the tool the branch actually runs, so a table entry pointing
     # at the wrong image fails even though that image is perfectly concrete.
+    #
+    # ⛔ This checks the repository NAME, which is a far weaker property than
+    # "the image can run the branch's commands". `vendor/kubectl-notreally:v1`
+    # passes. Capability cannot be checked offline at all — see
+    # `_MEASURED_UNUSABLE` for the one thing that CAN be pinned about it.
     _IMAGE_IDENTITY = {
         'kustomize': ('k8s', 'kubectl'),
         'helm': ('helm',),
         'argocd': ('argocd',),
     }
+
+    # Repositories MEASURED to be unusable for a GitLab `script:` job, with the
+    # date and the observation. Offline we cannot prove an image *works*; we can
+    # refuse to silently re-adopt one we already proved does not.
+    #
+    # ⛔ This exists because the attractive-looking wrong answer is written down
+    # in `init_project.py` itself: that file explains at length why
+    # `registry.k8s.io/kubectl` is the Kubernetes project's own image and ships
+    # no `latest` tag. Both facts are true, and a future reader can reasonably
+    # conclude it is the better pin — which is exactly how the regression this
+    # ledger guards against was introduced the first time.
+    @staticmethod
+    def _repo_of(ref):
+        """Repository portion of a ref, tolerating a registry port.
+
+        ⛔ A naive `rsplit(':', 1)[0]` turns `quay.io:443/argoproj/argocd` into
+        `quay.io` — the same trap the tag parser in the try-local guard had to
+        fix. Only strip a colon that lives in the LAST path segment.
+        """
+        repo = ref.split('@', 1)[0]
+        return repo.rsplit(':', 1)[0] if ':' in repo.rsplit('/', 1)[-1] else repo
+
+    _MEASURED_UNUSABLE = {
+        'registry.k8s.io/kubectl':
+            'distroless-static: no /bin/sh (measured 2026-08-05, '
+            '`docker run --entrypoint sh` -> exec: "sh": not found). GitLab '
+            'writes the script: block into a shell, so the job cannot start '
+            'and no `entrypoint:` override can rescue it.',
+        'bitnami/kubectl':
+            'free namespace carries only `latest` since 2025-09-29 (every '
+            'version tag 404s), and the image ships no `kustomize` binary '
+            'while the kustomize branch runs `kustomize build`.',
+    }
+
+    def test_pin_table_covers_exactly_the_methods_the_generator_branches_on(self):
+        """Adding a row to the pin table must not skip the identity check.
+
+        `_IMAGE_IDENTITY` used to be the parametrize source AND the lookup, so a
+        new pin-table row was simply never visited — measured: adding a `flux`
+        row left all tests green while `--deploy flux` fell through to the
+        argocd script running inside whatever image the new row named.
+        """
+        assert set(ip._GITLAB_APPLY_IMAGES) == set(self._IMAGE_IDENTITY), (
+            'pin table and identity table disagree:\n'
+            f'  in pin table only: {sorted(set(ip._GITLAB_APPLY_IMAGES) - set(self._IMAGE_IDENTITY))}\n'
+            f'  in identity only:  {sorted(set(self._IMAGE_IDENTITY) - set(ip._GITLAB_APPLY_IMAGES))}')
+        assert set(ip._GITLAB_APPLY_IMAGES) == set(self._SCRIPT_MARKER), (
+            'pin table and script-marker table disagree — a method with no '
+            'marker would make test_apply_image_matches_the_command_it_runs '
+            'unable to identify its branch')
+
+    @pytest.mark.parametrize('deploy', sorted(_IMAGE_IDENTITY))
+    def test_pin_table_avoids_images_measured_unusable(self, deploy):
+        """A repository we already proved cannot run the job stays out.
+
+        ⚠️ The inverse does NOT hold: absence from this ledger is not evidence
+        that an image works. This is a memory of past measurements, not a
+        capability check.
+        """
+        _, ref = ip._GITLAB_APPLY_IMAGES[deploy]
+        repo = self._repo_of(ref)
+        assert repo not in self._MEASURED_UNUSABLE, (
+            f'{deploy!r} is mapped to {repo!r}, which was measured unusable: '
+            f'{self._MEASURED_UNUSABLE[repo]}')
 
     @pytest.mark.parametrize('deploy', sorted(_IMAGE_IDENTITY))
     def test_pin_table_maps_each_method_to_an_image_of_the_right_kind(self, deploy):
@@ -1945,11 +2014,12 @@ class TestCustomerDeliveredImagePins:
         NAME is not evidence either; it is chosen in the same dict.
         """
         var, ref = ip._GITLAB_APPLY_IMAGES[deploy]
-        repo = ref.split('@', 1)[0].rsplit(':', 1)[0].lower()
+        repo = self._repo_of(ref).lower()
         wanted = self._IMAGE_IDENTITY[deploy]
         assert any(w in repo for w in wanted), (
-            f'{deploy!r} is mapped to {ref!r}, whose repository names none of '
-            f'{wanted} — the runner would not carry the tool this branch runs')
+            f'{deploy!r} is mapped to {ref!r}, whose repository does not even '
+            f'name any of {wanted}. ⚠️ Passing this proves only that the NAME '
+            f'mentions the tool — not that the image contains it')
         assert any(w in var.lower() for w in wanted), (
             f'{deploy!r} declares {var!r}, which does not name {wanted}')
 
