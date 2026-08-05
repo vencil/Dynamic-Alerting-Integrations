@@ -40,8 +40,23 @@ data:
            the reason they carry no value lives only in docs the reader may not
            have. The count is rendered from the list itself so it cannot drift
            away from what is emitted directly beneath it. */}}
+    {{- /* #1176: the per-key `⚠ 參考庫實測反例` lines are ALSO comments in
+           values.yaml, so they hit the same `toYaml` wall as the tier
+           rationale above — the artifact that reaches every install would
+           again be a bare list. ⛔ The clauses themselves are deliberately NOT
+           reproduced here: they are registry-derived on every other surface,
+           and a hand-copy in a Helm template is the exact drift this line of
+           work exists to delete (it cannot be regenerated — `--regen` does not
+           touch templates). What IS emitted is the pointer plus the fact that
+           some of these keys have a measurement, so a reader of the ConfigMap
+           alone knows there is something to go and read. */}}
     # ⛔ 以下 {{ len .Values.thresholdConfig.optional_overrides }} 個 key，平台「認得但不主張值」。
     # 租戶不填＝該告警靜默，且不會有任何錯誤訊息——那是設計，不是遺漏的預設值。
+    # ⚠️ 其中數個 key，平台自家的盲寫參考庫（ADR-030）已經量到「照抄這個參考數字
+    #    會判錯」的實測案例，逐條標在 chart 的 values.yaml 與 rule-pack header 該
+    #    key 底下（找 `⚠ 參考庫實測反例`）。⛔ 失效方向兩種都有：有的會對正常運作
+    #    誤警，有的是太寬、接不到該抓的故障——別一概當成「平台的數字偏低」。
+    #    這裡不重述那些句子：它們由 registry 生成，抄一份到 template 就再也不會更新。
     # 看某個租戶目前有哪些還沒填（輸出的 declared 段就是這批）：
     #   da-tools diagnose <tenant> --config-dir <conf.d 目錄> --show-inheritance
     optional_overrides:

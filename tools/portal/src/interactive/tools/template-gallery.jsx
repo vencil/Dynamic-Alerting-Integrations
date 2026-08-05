@@ -18,6 +18,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 // That global-registration path is gone entirely (TRK-230z).
 import { Loading } from './_common/components/Loading.jsx';
 import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
+import { annotateCounterexamples } from './_common/data/rule-packs.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -46,8 +47,22 @@ function tText(obj) {
 }
 
 /* Transform raw JSON template into runtime format with t() accessors */
+/**
+ * ⛔ The caveat is attached HERE, at the data boundary, so `tpl.yaml` is the
+ * annotated text everywhere downstream — preview, Copy button, and anything
+ * added later. Annotating per use-site is what let the first version diverge:
+ * the preview called the annotator and the Copy handler did not have to, so a
+ * one-line "simplification" would have shown a reader the caveat and then put
+ * a bare threshold on their clipboard. That is worse than never annotating,
+ * because the reader believes they checked (blind review, #1344).
+ */
 function hydrateTemplate(raw) {
-  return { ...raw, name: () => tText(raw.name), desc: () => tText(raw.desc) };
+  return {
+    ...raw,
+    yaml: annotateCounterexamples(raw.yaml),
+    name: () => tText(raw.name),
+    desc: () => tText(raw.desc),
+  };
 }
 
 /* ── Pack badge colors ── */

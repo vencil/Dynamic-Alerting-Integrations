@@ -11,13 +11,49 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 // destructure of `window.__portalShared` crashed the whole bundle at
 // load time: no module in the graph imported portal-shared.jsx, so
 // the producer never ran.
-import { getAllMetricKeys } from './_common/data/rule-packs.js';
+import {
+  getAllMetricKeys, getValueCounterexample, counterexampleComment,
+} from './_common/data/rule-packs.js';
 import { parseYaml } from './_common/validation/yaml-parser.js';
 import { generateSampleYaml, validateConfig } from './_common/sim/alert-engine.js';
 import { MetricAutocomplete, RulePackSelector } from './portal-shared.jsx';
 
 const t = window.__t || ((zh, en) => en);
 const REPO_BASE = "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main";
+
+/**
+ * Insert a metric line into the user's YAML, with its measured counter-example
+ * directly above it (#1176).
+ *
+ * ⛔ This inserts a LIVE platform value into an editable buffer on one click —
+ * a comment in `alert-engine.js` used to claim the starter template's defaults
+ * loop was "the one face that hands a number over as a live, copy-paste
+ * value", and this button proved it wrong (blind review, #1344).
+ *
+ * ⛔ Pure, exported, and tested as such. Inside the click handler it was
+ * reachable only by driving an autocomplete, so the only assertion anyone
+ * could write was a regex over this file's source — a test that passes on
+ * code that never runs. Rendered from the registry field, so a key with
+ * nothing measured inserts exactly one line.
+ */
+function insertMetricIntoYaml(prev, m) {
+  const line = `${m.key}: "${m.value}"  # ${m.desc || ''}`;
+  const caveat = counterexampleComment(getValueCounterexample(m.key));
+  const lines = String(prev ?? '').split('\n');
+  // Insert before first _ key or at end of metric section
+  let insertIdx = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (trimmed.startsWith('_') && !trimmed.startsWith('#')) {
+      insertIdx = i;
+      break;
+    }
+  }
+  // Caveat FIRST: a comment below the value it qualifies reads as a note on
+  // the next key.
+  lines.splice(insertIdx, 0, ...(caveat ? [`# ${caveat}`, line] : [line]));
+  return lines.join('\n');
+}
 
 function YamlValidatorTab() {
   const [selectedPacks, setSelectedPacks] = useState(['mariadb', 'kubernetes']);
@@ -59,23 +95,8 @@ function YamlValidatorTab() {
     setResult({ config, parseErrors: errors, ...validation });
   }, [yaml, selectedPacks]);
 
-  const handleInsertMetric = useCallback((m) => {
-    const line = `${m.key}: "${m.value}"  # ${m.desc || ''}`;
-    setYaml(prev => {
-      const lines = prev.split('\n');
-      // Insert before first _ key or at end of metric section
-      let insertIdx = lines.length;
-      for (let i = 0; i < lines.length; i++) {
-        const trimmed = lines[i].trim();
-        if (trimmed.startsWith('_') && !trimmed.startsWith('#')) {
-          insertIdx = i;
-          break;
-        }
-      }
-      lines.splice(insertIdx, 0, line);
-      return lines.join('\n');
-    });
-  }, []);
+  const handleInsertMetric = useCallback(
+    (m) => setYaml(prev => insertMetricIntoYaml(prev, m)), []);
 
   const issueIcon = (level) => {
     if (level === 'error') return '🔴';
@@ -194,4 +215,4 @@ function YamlValidatorTab() {
 }
 
 // <!-- jsx-loader-compat: ignore -->
-export { YamlValidatorTab };
+export { YamlValidatorTab, insertMetricIntoYaml };

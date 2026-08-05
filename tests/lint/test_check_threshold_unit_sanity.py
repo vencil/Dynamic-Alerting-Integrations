@@ -276,6 +276,49 @@ def test_markdown_non_yaml_and_fragment_blocks_are_tolerated(tmp_path):
 # -------------------------------------------------------------- real repo
 
 
+def test_registry_metadata_numbers_are_not_read_as_thresholds(monkeypatch):
+    """A NUMBER stored *about* a key is not a threshold FOR that key.
+
+    The walker's rule — "once inside a known registry key, every numeric leaf
+    beneath it is a threshold literal" (#1217's nested scheduled form) — held
+    only while every metadata field was non-numeric. #1176 added
+    `value_counterexample: {issue: 1176, …}` and the gate promptly reported
+    `oracle_pga_allocated_bytes = 1176 … < 1 MiB, looks like a unit slip`: a
+    real false positive produced by a real contract change.
+
+    Pinned with a bytes key on purpose — bytes is the one dimension with a
+    lower bound, so a stray small integer is guaranteed to trip it if the
+    exclusion regresses.
+    """
+    # `_REGISTRY_KEYS` is populated by run_check(); seed it so the walker
+    # recognises the key (monkeypatch restores it, keeping this hermetic).
+    monkeypatch.setattr(gate, "_REGISTRY_KEYS", {"oracle_pga_allocated_bytes"})
+    entry = {
+        "pack": "p", "tier": "defaults", "unit": "bytes (4GB)",
+        "desc": "d", "metric_class": "capacity",
+        "value": 4294967296,
+        "value_counterexample": {
+            "issue": 1176, "direction": "over_fire", "observed": "x",
+        },
+    }
+    found = dict(gate._walk_values({"oracle_pga_allocated_bytes": entry}))
+    assert found == {"oracle_pga_allocated_bytes": 4294967296}, found
+
+    # ...and the exclusion is DERIVED from the registry's own field list, so a
+    # future metadata field is covered without editing this gate.
+    assert "value" not in gate._REGISTRY_METADATA_FIELDS
+    assert "value_counterexample" in gate._REGISTRY_METADATA_FIELDS
+
+
+def test_scheduled_nested_thresholds_still_collected(monkeypatch):
+    """Counter-case for the exclusion above: the #1217 nested form carries REAL
+    threshold literals under names that are not registry metadata, and must
+    keep being collected. An over-broad skip would silently un-cover it."""
+    monkeypatch.setattr(gate, "_REGISTRY_KEYS", {"mysql_threads_running"})
+    nested = {"mysql_threads_running": {"default": {"during_business_hours": "30"}}}
+    assert dict(gate._walk_values(nested)) == {"mysql_threads_running": 30}
+
+
 def test_real_repo_is_clean():
     """Smoke: the shipped artifacts satisfy the gate. If this goes red, an
     asset drifted from the registry — read the message, don't relax the gate."""

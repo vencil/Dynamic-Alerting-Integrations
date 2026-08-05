@@ -53,10 +53,14 @@ optional_overrides:
   # ── oracle：Oracle Database (oracledb_exporter) ──
   - oracle_wait_time_rate   # s/s — Wait time rate (5m)
   - oracle_process_count   # count — Active processes warning
+    # ⚠ 參考庫實測反例（#1176）：例行備份批次會到 560 個 process —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
   - oracle_pga_allocated_bytes   # bytes (4GB) — PGA allocation warning
+    # ⚠ 參考庫實測反例（#1176）：計畫性 stats-gather 會用到 22 GB PGA —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
   # ── db2：IBM DB2 (ibm_db2_exporter) ──
   - db2_log_usage_percent   # % — Transaction log usage warning
   - db2_deadlock_rate   # count/s — Deadlock rate (5m)
+    # ⚠ 參考庫實測反例（#1176）：真實的 ~90/min deadlock storm 低於 5/s（＝300/min），因此接不到 ——
+    # 此值接不到該抓的故障；這個數字是起點，不是平台背書的值
   - db2_tablespace_used_percent   # % — Tablespace usage warning
   # ── clickhouse：ClickHouse (built-in /metrics) ──
   - clickhouse_max_part_count   # count — Max part count per partition

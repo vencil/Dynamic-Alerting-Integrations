@@ -145,11 +145,25 @@ class TestDeclaredKeys:
         assert [k for k in emitted if k.endswith("_critical")] == []
 
     def test_row_shape_carries_reference_meta(self):
+        # `valueCounterexample` (#1176) is SPARSE — present only for keys whose
+        # shipped number has a measured counter-example, absent otherwise, so
+        # "no field" reads as "nothing measured" and never as "validated".
+        # Required core stays closed: an unexpected field here would reach the
+        # portal's hand-written fallback with nothing comparing the two.
+        required = {"key", "value", "unit", "desc"}
+        optional = {"valueCounterexample"}
         mod = _load_module()
         rows = mod.build_declared_keys(mod.load_scaffold_rule_packs())
+        seen_optional = 0
         for pack_rows in rows.values():
             for row in pack_rows:
-                assert set(row) == {"key", "value", "unit", "desc"}
+                assert required <= set(row), row
+                assert set(row) <= required | optional, row
+                seen_optional += "valueCounterexample" in row
+        assert seen_optional, (
+            "no declared row carries valueCounterexample — the declared tier is "
+            "the one a tenant can fill in TODAY, so a bare reference number "
+            "there is the most likely to be copied (#1320 D1)")
 
     def test_lands_at_the_top_level_not_under_rulepacks(self):
         # 放進 rulePacks[*] 會被 rule-packs.js 那份手寫 fallback 的 per-pack

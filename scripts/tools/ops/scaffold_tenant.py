@@ -41,12 +41,15 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 # list membership exactly, and a third hand-copy of `not endswith("_critical")`
 # is how the two contracts drifted apart in the first place (#1189).
 from _registry_lib import (  # noqa: E402
+    annotate_defaults_counterexamples,
     append_tenant_declared_stub,
+    counterexample_sentence,
     is_shipped_optional_key,
     render_tenant_critical_note_lines,
     render_tenant_declared_note_lines,
     shipped_optional_keys_for_packs,
 )
+from _registry_lib import counterexample_for_key as _registry_counterexample_for_key  # noqa: E402
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
@@ -286,13 +289,16 @@ RULE_PACKS = {
         "default_on": False,
         "rule_pack_file": "rule-packs/rule-pack-oracle.yaml",
         "defaults": {
-            "oracle_sessions_active": {"value": 200, "unit": "count", "desc": "Active sessions warning", "metric_class": "saturation"},
+            "oracle_sessions_active": {"value": 200, "unit": "count", "desc": "Active sessions warning", "metric_class": "saturation",
+                                       "value_counterexample": {"issue": 1176, "direction": "over_fire", "observed": "a healthy diurnal peak reaches 240 active sessions", "observed_zh": "健康的日夜週期尖峰會到 240 個 active session"}},
             "oracle_tablespace_used_percent": {"value": 85, "unit": "%", "desc": "Tablespace usage warning"},
         },
         "optional_overrides": {
             "oracle_wait_time_rate": {"value": 50, "unit": "s/s", "desc": "Wait time rate (5m)"},
-            "oracle_process_count": {"value": 300, "unit": "count", "desc": "Active processes warning"},
-            "oracle_pga_allocated_bytes": {"value": 4294967296, "unit": "bytes (4GB)", "desc": "PGA allocation warning"},
+            "oracle_process_count": {"value": 300, "unit": "count", "desc": "Active processes warning",
+                                     "value_counterexample": {"issue": 1176, "direction": "over_fire", "observed": "a routine backup batch reaches 560 processes", "observed_zh": "例行備份批次會到 560 個 process"}},
+            "oracle_pga_allocated_bytes": {"value": 4294967296, "unit": "bytes (4GB)", "desc": "PGA allocation warning",
+                                           "value_counterexample": {"issue": 1176, "direction": "over_fire", "observed": "a planned stats-gather reaches 22 GB PGA", "observed_zh": "計畫性 stats-gather 會用到 22 GB PGA"}},
         },
         "dimensional_example": {
             "oracle_tablespace_used_percent{tablespace_name=~\"USERS|DATA.*\"}": "90",
@@ -305,13 +311,20 @@ RULE_PACKS = {
         "default_on": False,
         "rule_pack_file": "rule-packs/rule-pack-db2.yaml",
         "defaults": {
-            "db2_connections_active": {"value": 200, "unit": "count", "desc": "Active connections warning", "metric_class": "saturation"},
+            "db2_connections_active": {"value": 200, "unit": "count", "desc": "Active connections warning", "metric_class": "saturation",
+                                       "value_counterexample": {"issue": 1176, "direction": "over_fire", "observed": "a peak-hour workload reaches 360 connections", "observed_zh": "尖峰時段的工作負載會到 360 個連線"}},
             "db2_bufferpool_hit_ratio": {"value": 0.95, "unit": "ratio", "desc": "Bufferpool hit ratio warning"},
-            "db2_lock_wait_time": {"value": 10, "unit": "s/s", "desc": "Lock wait accumulation rate warning (rate over 5m, summed across the tenant's instances); 10 ≈ 6.7x the 1.5 normal level both reference libraries agree on, below both fault levels (25/60) — full derivation + calibration workflow in the pack header (#1196 D)"},
+            "db2_lock_wait_time": {"value": 10, "unit": "s/s", "desc": "Lock wait accumulation rate warning (rate over 5m, summed across the tenant's instances); 10 ≈ 6.7x the 1.5 normal level both reference libraries agree on, below both fault levels (25/60) — full derivation + calibration workflow in the pack header (#1196 D)",
+                                   # ⛔ That derivation is sound and still stands, but it only weighed the
+                                   # POSITIVE fault libraries (25/60). The BENIGN library reaches 18 —
+                                   # above the shipped 10 — which is precisely the case prose reasoning
+                                   # cannot be trusted to notice and a per-key field can.
+                                   "value_counterexample": {"issue": 1176, "direction": "over_fire", "observed": "a benign batch lock-wait transient holds 18 s/s for 7 min (negative-db2.yaml)", "observed_zh": "良性批次的 lock-wait 短暫維持 18 s/s 達 7 分鐘（negative-db2.yaml）"}},
         },
         "optional_overrides": {
             "db2_log_usage_percent": {"value": 70, "unit": "%", "desc": "Transaction log usage warning"},
-            "db2_deadlock_rate": {"value": 5, "unit": "count/s", "desc": "Deadlock rate (5m)"},
+            "db2_deadlock_rate": {"value": 5, "unit": "count/s", "desc": "Deadlock rate (5m)",
+                                  "value_counterexample": {"issue": 1176, "direction": "under_fire", "observed": "a real ~90/min deadlock storm stays under 5/s (=300/min) and is missed", "observed_zh": "真實的 ~90/min deadlock storm 低於 5/s（＝300/min），因此接不到"}},
             "db2_tablespace_used_percent": {"value": 85, "unit": "%", "desc": "Tablespace usage warning"},
         },
         "dimensional_example": {
@@ -492,6 +505,45 @@ def prompt_multi(question: str, options: list[tuple[str, str]]) -> list[str]:
         print("  無效選擇，請重試。")
 
 
+def _counterexample_sentence(ce: dict) -> str:
+    """The prompt framing of a measured counter-example.
+
+    ⛔ The FACTS come from one place — `_registry_lib.counterexample_sentence`,
+    the same composer the two `_defaults.yaml` writers use, over the same
+    direction table the rule-pack headers and the portal render from. This
+    module used to keep its own copy of the direction→wording map while its
+    docstring claimed the clause was "shared by every surface"; the claim was
+    false and the copy was one edit away from saying the opposite of the header
+    next to it (blind review, #1344).
+    """
+    return counterexample_sentence(ce)
+
+
+def counterexample_prompt_lines(info: dict[str, object]) -> list[str]:
+    """The ⚠ line shown above a prompt whose value has a measured counter-example.
+
+    Derived from the registry field (`value_counterexample`), never authored at
+    the prompt — the rule-pack headers render the same data from the same
+    source, so the two cannot disagree. Returns [] when nothing was measured,
+    which reads as "no counter-example", never as "validated".
+    """
+    ce = info.get("value_counterexample")
+    if not ce:
+        return []
+    return [f"  ⚠ {_counterexample_sentence(ce)}"]
+
+
+def counterexample_for_key(key: str, rule_packs: dict | None = None) -> dict | None:
+    """The measured counter-example for `key`, or None. Looks across both tiers.
+
+    Re-exported from `_registry_lib`, which owns it because `init_project`
+    writes the same `_defaults.yaml` and needs the same annotation. Kept
+    spelled here so existing callers and tests import one obvious name.
+    """
+    return _registry_counterexample_for_key(
+        key, RULE_PACKS if rule_packs is None else rule_packs)
+
+
 def prompt_value(metric: str, info: dict[str, object], current: str | None = None,
                  *, no_platform_default: bool = False) -> str | None:
     """Prompt for a threshold value. Returns string or None to skip.
@@ -502,17 +554,25 @@ def prompt_value(metric: str, info: dict[str, object], current: str | None = Non
     number. Before that list shipped, such a write was rejected outright
     (`ValidateTenantKeys` saw an empty declared set), which means shipping the
     list WITHOUT this change would have turned a harmless keystroke into a real
-    armed threshold — and ADR-030's blind-write reference library has measured
-    counter-examples for exactly these numbers (an Oracle backup batch at 560
-    processes false-alarms against the suggested 300; a planned stats-gather at
-    22GB PGA against the suggested 4GiB). The number is still SHOWN, because it
-    is the only starting reference an operator has — but as a reference, not a
-    default. Empty input skips the key entirely, which is the correct end state
-    for a tenant that has not calibrated it: no value, no row, no alert.
+    armed threshold. The number is still SHOWN, because it is the only starting
+    reference an operator has — but as a reference, not a default. Empty input
+    skips the key entirely, which is the correct end state for a tenant that has
+    not calibrated it: no value, no row, no alert.
 
     A tenant's OWN prior value (``current``) is still a legitimate default even
     here — that one is not a platform assertion.
+
+    ⛔ Any measured counter-example is printed FIRST, for BOTH branches — the
+    declared-tier keys are not the only ones that have them. `#1176` measured
+    counter-examples for two `defaults`-tier keys too, and those still take the
+    ``else`` branch, where the registry number IS the Enter-default: pressing
+    Enter arms a value the reference library has already contradicted. The text
+    is derived from ``value_counterexample`` rather than restated here, so this
+    docstring cannot drift away from the registry (it used to name two of them
+    in prose — that copy went stale the moment a third was recorded).
     """
+    for line in counterexample_prompt_lines(info):
+        print(line)
     if no_platform_default and current is None:
         prompt = (f"  {metric} [{info['desc']}] (無平台預設，參考值 "
                   f"{info['value']} {info['unit']}；須依自身 baseline 校準，"
@@ -945,8 +1005,9 @@ def write_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant
         "# 靜默。那是刻意的終態，不是漏掉的預設：這些閾值只有租戶自己的 baseline 校\n"
         "# 準得出來。⛔ 不要為了「讓它不再靜默」把 key 搬進上面的 defaults——那是對\n"
         "# 每一個租戶都武裝一個平台選的數字。\n"
-        + yaml.safe_dump(defaults_data, default_flow_style=False,
-                         allow_unicode=True, sort_keys=False)
+        + annotate_defaults_counterexamples(
+            yaml.safe_dump(defaults_data, default_flow_style=False,
+                           allow_unicode=True, sort_keys=False))
     )
     write_text_secure(defaults_path, defaults_content)
     print(f"  📄 {defaults_path}")

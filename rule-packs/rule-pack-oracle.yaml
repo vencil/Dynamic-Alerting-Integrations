@@ -8,6 +8,7 @@
 # >>> GENERATED:threshold-registry:pack-oracle — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
 # 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
 #   oracle_sessions_active: 200   # count — Active sessions warning
+#       ⚠ 參考庫實測反例（#1176）：健康的日夜週期尖峰會到 240 個 active session —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
 #   oracle_tablespace_used_percent: 85   # % — Tablespace usage warning
 #
 # optional_overrides（已出貨在清單裡——平台認得這個 key，但不主張它的值）：
@@ -16,22 +17,22 @@
 # 只在租戶給了值時發射；components/threshold-exporter/app/pkg/config/resolve.go）。
 # 平台不主張值 ⇒ 沒有平台回退：租戶不填就是靜默，那正是這一格的用意。
 # ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
-# 照抄範例值已有跨 pack 的實測反例（ADR-030 盲寫良性參考庫）：Oracle 備份批次
-# process count 560 > 建議 300、計畫性 stats-gather PGA 22GB > 建議 4GiB 皆誤觸；
-# DB2 deadlock 建議 5/s＝300/min 反而偏高，實測 ~90/min 的真實 storm 接不到。
+# 已測到反例的那幾個，反例逐條標在該 key 下（registry `value_counterexample`）。
 #   oracle_wait_time_rate: 50   # s/s — Wait time rate (5m)
 #   oracle_process_count: 300   # count — Active processes warning
+#       ⚠ 參考庫實測反例（#1176）：例行備份批次會到 560 個 process —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
 #   oracle_pga_allocated_bytes: 4294967296   # bytes (4GB) — PGA allocation warning
+#       ⚠ 參考庫實測反例（#1176）：計畫性 stats-gather 會用到 22 GB PGA —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
 # <<< GENERATED:threshold-registry:pack-oracle
 #
 # ⚠️ 上列是「Day 0 起始 floor 範例」，不是通用安全值 —— 忙碌 / 大型庫的正常
 # 水位常高於這些數字，照抄到忙庫會 over-fire。ADR-030 盲寫良性參考庫實測
 # (tests/rulepacks/reference-validation/negative-oracle.yaml，全部應不告警)
-# 就有三個被這組範例值誤觸：
-#   健康日夜週期      active sessions 峰值 240 > 200
-#   備份批次期間      process count 560 > 300
-#   計畫性 stats-gather  PGA 22 GB (≈20.5 GiB) > 4 GiB
-# 三個良性高原都比對應告警的 for:(5m / 5m / 10m)長，for: 擋不掉。
+# 就有數個 key 被這組範例值誤觸——**哪幾個、量到什麼，逐條標在上方生成區塊該
+# key 底下**（由 registry 的 value_counterexample 渲染）。這裡刻意不再重述那些
+# 數字：手抄一份就是下一個漂移源，重新校準後這段散文不會跟著改。
+# ⚠️ 另外注意持續時間：那些良性高原都比對應告警的 for:(5m / 5m / 10m)長，
+# for: 擋不掉——這一點與數值無關，故留在這裡。
 #
 # ⛔ 正式採用前必須以該租戶實際 baseline 校準，不要照抄：
 #   Day N：da-tools threshold-recommend —— P95/P99 + alert_quality Noise Score，

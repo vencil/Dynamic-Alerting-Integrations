@@ -43,7 +43,7 @@ tenants:
 
 ⚠️ **「預設閾值」不等於「全部閾值」；而「設得動」也不等於「告警活了」。** 出貨的 helm chart 只帶少數幾個 key 的平台預設值（`thresholdConfig.defaults`）。其餘 key 分**三類**，處置完全不同：
 
-- **平台已宣告、但不主張值的 key**（目前 9 個）— 列在 `_defaults.yaml` / helm values 的 `optional_overrides:` 清單裡，隨 chart 與 onboarding 產物一起出貨。**這批不需要 operator 再動手**：你直接在自己的 `conf.d/<tenant>.yaml` 填值就會生效。但平台刻意不給它們預設值，所以**你不填就是靜默，而且不會有任何錯誤訊息**——那是設計，不是漏掉的預設：這些閾值（例如 Oracle process count、DB2 deadlock rate）只有你自己的 baseline 校準得出來，平台替你選一個數字只會製造誤觸。
+- **平台已宣告、但不主張值的 key**（目前 9 個）— 列在 `_defaults.yaml` / helm values 的 `optional_overrides:` 清單裡，隨 chart 與 onboarding 產物一起出貨。**這批不需要 operator 再動手**：你直接在自己的 `conf.d/<tenant>.yaml` 填值就會生效。但平台刻意不給它們預設值，所以**你不填就是靜默，而且不會有任何錯誤訊息**——那是設計，不是漏掉的預設：這些閾值（例如 Oracle process count、DB2 deadlock rate）只有你自己的 baseline 校準得出來，平台替你選一個數字，**兩個方向都可能出錯**——可能對你的正常運作誤警，也可能寬到接不到真的故障。⚠️ 別把它讀成「平台的數字一律偏低」：`db2_deadlock_rate` 的實測反例正是**反方向**（範例值太寬、漏抓）。平台自家參考庫實際量到反例的 key，會逐條標在 `_defaults.yaml` / helm values 該 key 底下（`⚠ 參考庫實測反例`），沒有標的就是沒測過。
 - **不在清單裡、但 base 已有平台預設的 `<base>_critical`**（目前 5 個：`mysql_connections_critical`、`mysql_threads_running_critical`、`mysql_replication_lag_critical`、`pg_connections_critical`、`pg_replication_lag_critical`）— **你今天就設得動**，透過 Portal / Tenant API 寫入不會被擋，直推 GitOps 也一樣，填了就會產出一條真的 critical 告警。`_critical` 從來不走宣告清單（列進去只是裝飾），它的入場條件是「同名 base 在 `defaults:` 有值」，而這 5 個的 base（`mysql_connections`、`pg_connections` …）本來就在出貨的平台預設裡。
 - **base 也還沒有平台預設的 key**（目前 11 個，例如 `kafka_*_critical` / `jvm_*_critical` / `nginx_*_critical`）— 這一類才真的要由**平台 operator** 先顯式供給 base（`scaffold-tenant` 產生的 `_defaults.yaml`，或自行填 helm values）之後你才設得動。在那之前透過 Portal / Tenant API 寫入會被擋下（unknown key），直接推 GitOps 則是寫得進去但不會生效。
 

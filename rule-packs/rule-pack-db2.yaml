@@ -8,11 +8,14 @@
 # >>> GENERATED:threshold-registry:pack-db2 — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
 # 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
 #   db2_connections_active: 200   # count — Active connections warning
+#       ⚠ 參考庫實測反例（#1176）：尖峰時段的工作負載會到 360 個連線 —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
 #   db2_bufferpool_hit_ratio: 0.95   # ratio — Bufferpool hit ratio warning
 #   db2_lock_wait_time: 10
 #       s/s — Lock wait accumulation rate warning (rate over 5m, summed across the tenant's
 #       instances); 10 ≈ 6.7x the 1.5 normal level both reference libraries agree on, below both
 #       fault levels (25/60) — full derivation + calibration workflow in the pack header (#1196 D)
+#       ⚠ 參考庫實測反例（#1176）：良性批次的 lock-wait 短暫維持 18 s/s 達 7 分鐘（negative-db2.yaml） ——
+#       此值會對正常運作誤警；這個數字是起點，不是平台背書的值
 #
 # optional_overrides（已出貨在清單裡——平台認得這個 key，但不主張它的值）：
 # 下列 key 由平台出貨在 _defaults.yaml / Helm values 的 `optional_overrides:`
@@ -20,11 +23,11 @@
 # 只在租戶給了值時發射；components/threshold-exporter/app/pkg/config/resolve.go）。
 # 平台不主張值 ⇒ 沒有平台回退：租戶不填就是靜默，那正是這一格的用意。
 # ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
-# 照抄範例值已有跨 pack 的實測反例（ADR-030 盲寫良性參考庫）：Oracle 備份批次
-# process count 560 > 建議 300、計畫性 stats-gather PGA 22GB > 建議 4GiB 皆誤觸；
-# DB2 deadlock 建議 5/s＝300/min 反而偏高，實測 ~90/min 的真實 storm 接不到。
+# 已測到反例的那幾個，反例逐條標在該 key 下（registry `value_counterexample`）。
 #   db2_log_usage_percent: 70   # % — Transaction log usage warning
 #   db2_deadlock_rate: 5   # count/s — Deadlock rate (5m)
+#       ⚠ 參考庫實測反例（#1176）：真實的 ~90/min deadlock storm 低於 5/s（＝300/min），因此接不到 ——
+#       此值接不到該抓的故障；這個數字是起點，不是平台背書的值
 #   db2_tablespace_used_percent: 85   # % — Tablespace usage warning
 # <<< GENERATED:threshold-registry:pack-db2
 #
@@ -35,9 +38,12 @@
 # 失效模式**依方向而不同**，別一概而論：
 #   • 4 個「越高越糟」的 key（connections_active / log_usage_percent /
 #     tablespace_used_percent / lock_wait_time）—— 忙碌 / 大型庫的正常水位常高於
-#     範例值，照抄會 over-fire。ADR-030 良性參考庫實測
-#     tests/rulepacks/reference-validation/negative-db2.yaml：尖峰時段 connections
-#     360 > 200 誤觸，且 4h 高原遠長於 for: 5m，for: 擋不掉。
+#     範例值，照抄會 over-fire。這是**方向性風險**，適用這四個；至於哪幾個已經被
+#     ADR-030 良性參考庫（tests/rulepacks/reference-validation/negative-db2.yaml）
+#     實際量到反例，**逐條標在上方生成區塊該 key 底下**——這裡刻意不再重述清單，
+#     手抄一份就是下一個漂移源（本行原本自己就違反了這句：它把其中一個 key 的
+#     實測數字又抄了一遍）。⚠️ 另外注意持續時間：那些良性高原動輒數小時，遠長於
+#     for: 5m，所以 `for:` 擋不掉它們——這一點與數值無關，故留在這裡。
 #   • bufferpool_hit_ratio 方向相反（`<`，越低越糟）—— 正常水位高於 0.95 只會讓它
 #     更不發射；它的 over-fire 是良性維護（如 REORG）短暫跌破門檻。
 #   • deadlock_rate 實測是**偏高漏抓**（under-fire）不是 over-fire，見下方語意陷阱。
@@ -45,9 +51,9 @@
 # ⛔ 兩個會靜默失效 / 漏抓的語意陷阱：
 #   1. bufferpool_hit_ratio 尺度是 0–1。exporter 若輸出百分數（95 而非 0.95），
 #      `< 0.95` 永遠不成立 → 告警永不發射＝靜默 FN；onboarding 必須確認尺度。
-#   2. deadlock_rate 比的是 rate() ＝每秒值：範例 5 ＝ 5/s ＝ 300/min，對多數
-#      工作負載偏高——實測 ~90/min（1.5/s）的真實 deadlock storm 不會觸發，
-#      要抓住較小的 storm 須依 baseline 往下調。
+#   2. deadlock_rate 比的是 rate() ＝**每秒值**，不是每分鐘——單位換算錯一次就
+#      差 60 倍。這個 key 的實測反例（含具體量到什麼）標在上方生成區塊該 key
+#      底下，此處不重述數字；要抓住較小的 storm 須依 baseline 往下調。
 #
 # ⛔ 舊的那句「optional_overrides 永久無法啟用」已不適用：PR-C（#1314）讓
 # resolveDeclaredRows 直接走宣告集，#1310 又把宣告清單本身出貨到 _defaults.yaml /

@@ -34,8 +34,12 @@ import pytest
 import yaml
 
 from scaffold_tenant import (
+    annotate_defaults_counterexamples,
     annotate_saturation_criticals,
     build_receiver_from_args,
+    counterexample_for_key,
+    counterexample_prompt_lines,
+    prompt_value,
     generate_defaults,
     generate_tenant,
     generate_profile,
@@ -49,7 +53,13 @@ from scaffold_tenant import (
     RULE_PACKS,
     SATURATION_CRITICAL_COMMENT,
 )
+from _registry_lib import (  # noqa: E402
+    counterexample_observed as registry_counterexample_observed,
+)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+# Imported, never restated: the renderer owns the wording, the gates only
+# reference it (CodeRabbit, #1344 — three files had hand-copied a fragment).
+from _registry_lib import COUNTEREXAMPLE_MARK as _CE_MARK  # noqa: E402
 
 
 # ============================================================
@@ -1892,3 +1902,109 @@ class TestTenantStubDeclaredBlock:
                 content = f.read()
         assert {k for k, _ in _stub_key_lines(content)} == set(
             self._declared(["oracle"]))
+
+
+# ============================================================
+# value_counterexample at the interactive prompt (#1176)
+# ============================================================
+class TestCounterexamplePrompt:
+    """The prompt is where a human types the number in, so it is the last
+    place the platform can say what it knows about that number."""
+
+    _CE = {"issue": 1176, "direction": "over_fire", "observed": "peak reaches 240"}
+
+    def test_absent_field_prints_nothing(self):
+        """Silence must read as "nothing measured", never as "validated"."""
+        assert counterexample_prompt_lines({"value": 1}) == []
+
+    def test_directions_do_not_share_wording(self):
+        over = counterexample_prompt_lines({"value_counterexample": dict(self._CE)})
+        under = counterexample_prompt_lines(
+            {"value_counterexample": {**self._CE, "direction": "under_fire"}})
+        assert over and under and over != under
+
+    def test_warning_reaches_the_defaults_tier_branch(self, capsys, monkeypatch):
+        """The regression this pins: the declared tier is NOT the only one with
+        counter-examples. Two defaults-tier keys have them too, and those take
+        the branch where the registry number IS the Enter-default — pressing
+        Enter arms a value the reference library already contradicted."""
+        monkeypatch.setattr("builtins.input", lambda _="": "")
+        info = {"value": 200, "unit": "count", "desc": "d",
+                "value_counterexample": dict(self._CE)}
+        got = prompt_value("oracle_sessions_active", info)   # no_platform_default=False
+        assert got == "200", "Enter still adopts the platform value here"
+        out = capsys.readouterr().out
+        assert "#1176" in out and "peak reaches 240" in out
+
+    def test_non_interactive_defaults_file_carries_the_warning(self):
+        """⛔ The path that never asks anyone is the one that needed this most.
+
+        `--non-interactive`, `--from-onboard` batch onboarding, and the
+        interactive run whose operator declines to customise all go
+        generate_defaults → write_outputs, writing the platform-asserted
+        numbers straight into `_defaults.yaml` with no prompt in sight. Three
+        of those numbers have measured counter-examples.
+        """
+        defaults = generate_defaults(["oracle", "db2"])
+        dumped = yaml.safe_dump(defaults, default_flow_style=False,
+                                allow_unicode=True, sort_keys=False)
+        annotated = annotate_defaults_counterexamples(dumped)
+        lines = annotated.split("\n")
+
+        marked = 0
+        for key, info in (
+            (k, i)
+            for pack in RULE_PACKS.values()
+            for k, i in (pack.get("defaults") or {}).items()
+        ):
+            if "value_counterexample" not in info or key not in defaults["defaults"]:
+                continue
+            idx = next(i for i, l in enumerate(lines)
+                       if l.strip().startswith(f"{key}:"))
+            # Adjacency over the CONTIGUOUS comment block directly above the
+            # key, not just `lines[idx - 1]`: the clause wraps at 100 columns,
+            # so for a long `observed` the line touching the key is the
+            # continuation. Still adjacency — the block must end at this key,
+            # so a caveat parked elsewhere in the file does not count.
+            block, j = [], idx - 1
+            while j >= 0 and lines[j].strip().startswith("#"):
+                block.append(lines[j])
+                j -= 1
+            head = " ".join(" ".join(reversed(block)).replace("#", " ").split())
+            assert _CE_MARK in head, f"{key} written with no caveat"
+            # ⛔ The WHOLE clause, not its last token. `observed.split()[-1]`
+            # is a one-word substring test: two keys whose clauses end in the
+            # same word (`… reaches 360 connections` / `… active connections`)
+            # could swap caveats undetected — a comparison looser than the
+            # thing it compares (blind review, #1344).
+            # The ZH clause, because this writer emits Chinese comments. Using
+            # `observed` (English) would pass only on the fallback path that
+            # `observed_zh` exists to retire (#1344).
+            observed = " ".join(registry_counterexample_observed(
+                info["value_counterexample"], "zh").split())
+            assert observed in head, f"{key} carries a caveat that is not its own"
+            marked += 1
+        assert marked >= 2, "fewer than two keys exercised — assertion is weak"
+
+        # Counter-case: a key with nothing measured must NOT gain a line, or
+        # "silent" would stop meaning "nothing measured".
+        clean = next(k for k in defaults["defaults"]
+                     if counterexample_for_key(k) is None)
+        idx = next(i for i, l in enumerate(lines)
+                   if l.strip().startswith(f"{clean}:"))
+        assert _CE_MARK not in lines[idx - 1], clean
+
+        # ...and the result is still loadable YAML (comments, not corruption).
+        assert yaml.safe_load(annotated) == defaults
+
+    def test_every_registry_counterexample_is_reachable_from_a_prompt(self):
+        """Non-vacuity: each key carrying the field must live in a tier the
+        interactive flow actually prompts for, or the line renders for nobody."""
+        found = 0
+        for pack in RULE_PACKS.values():
+            for tier in ("defaults", "optional_overrides"):
+                for key, info in (pack.get(tier) or {}).items():
+                    if "value_counterexample" in info:
+                        assert counterexample_prompt_lines(info), key
+                        found += 1
+        assert found >= 2, "fewer than two keys carry the field"

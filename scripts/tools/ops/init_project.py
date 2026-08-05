@@ -53,6 +53,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 # consolidation into stages is explicitly warned against, because a half-merged
 # contract is a fourth contract.
 from _registry_lib import (  # noqa: E402
+    annotate_defaults_counterexamples,
     append_tenant_declared_stub,
     render_tenant_critical_note_lines,
     render_tenant_declared_note_lines,
@@ -499,7 +500,18 @@ def _gen_defaults_yaml(rule_packs: list[str], namespace: str) -> str:
     # Rule Packs: {rule_packs}
     """).format(rule_packs=', '.join(rule_packs))
 
-    return header + yaml.dump(config, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    # ⛔ Same annotation as `scaffold_tenant.write_outputs`, from the same
+    # composer. This is the SECOND producer of a file called `_defaults.yaml`
+    # in the same `conf.d/`: it derives its declared list from the same shared
+    # predicate, so it lists exactly the keys ADR-030's reference library has
+    # counter-examples for. Without this, `da-tools init` wrote the caveat into
+    # `<tenant>.yaml` (which shares the stub renderer) and left the sibling
+    # `_defaults.yaml` bare — one annotated file and one not, side by side
+    # (blind review, #1344). English, because everything this tool writes is.
+    return header + annotate_defaults_counterexamples(
+        yaml.dump(config, default_flow_style=False, allow_unicode=True,
+                  sort_keys=False),
+        lang="en")
 
 
 def _gen_tenant_yaml(tenant: str, rule_packs: list[str]) -> str:

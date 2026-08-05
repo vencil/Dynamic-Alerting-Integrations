@@ -275,6 +275,44 @@ def test_rendered_note_ships_and_its_count_tracks_the_list(
 
 
 @_needs_helm
+def test_rendered_note_says_some_of_these_keys_have_a_measured_counterexample(
+        repo_root: Path):
+    """#1176: the ConfigMap is the artifact that reaches EVERY install, and
+    `toYaml` strips the per-key `⚠ 參考庫實測反例` lines exactly as it strips
+    the tier rationale (#1321's lesson, re-learned here).
+
+    ⛔ What is asserted is the POINTER, not the clauses. Reproducing them in a
+    Helm template would be a hand-copy that `--regen` cannot reach — the drift
+    this line of work exists to delete. What must survive is that a reader of
+    the ConfigMap alone knows (a) some of these keys have a measurement and
+    (b) the failure runs in BOTH directions, because "the platform's numbers
+    run low" is false for the under_fire one.
+    """
+    raw = _render_defaults_raw(repo_root)
+    assert "參考庫實測反例" in raw, (
+        "the ConfigMap ships the declared list with no hint that several of "
+        f"those keys have a measured counter-example:\n{raw}")
+    assert "誤警" in raw and "接不到" in raw, (
+        "the note names only one failure direction — a blanket 'these values "
+        "are too low' caveat is false for the under_fire key")
+    # And the clauses themselves must NOT be here: a template copy cannot be
+    # regenerated, so it would go stale on the next recalibration.
+    for observed in _shipped_observed_clauses(repo_root):
+        assert observed not in raw, (
+            f"the template hand-copies a registry clause ({observed!r}) — it "
+            "is not reachable by `check_threshold_registry.py --regen`")
+
+
+def _shipped_observed_clauses(repo_root: Path) -> list[str]:
+    registry = yaml.safe_load(
+        (repo_root / "rule-packs" / "threshold-registry.yaml").read_text(
+            encoding="utf-8"))
+    return [e["value_counterexample"]["observed"]
+            for e in (registry.get("keys") or {}).values()
+            if "value_counterexample" in e]
+
+
+@_needs_helm
 @pytest.mark.parametrize("bad,kind", [
     # `len` aborts on these …
     (True, "bool"), (5, "float64"), ({"oracle_wait_time_rate": 5}, "map"),

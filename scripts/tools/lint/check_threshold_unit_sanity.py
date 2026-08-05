@@ -175,6 +175,33 @@ def _as_number(raw) -> float | None:
 # ------------------------------------------------------------------ scanning
 
 
+# Registry METADATA field names — everything the registry stores about a key
+# except the threshold itself. Derived from the registry's own field order so a
+# future field cannot be forgotten here; hand-listing them is how the second
+# copy would drift.
+#
+# Why this is needed at all: "every numeric leaf beneath a registry key is a
+# threshold literal" held only while all metadata was non-numeric. #1176 added
+# `value_counterexample: {issue: 1176, …}`, and the walker duly reported
+# `oracle_pga_allocated_bytes = 1176` as a bytes value under 1 MiB — a real
+# false positive from a real contract change, not a lint quirk.
+_REGISTRY_METADATA_FIELDS = frozenset(registry_lib._FIELD_ORDER) - {"value"}
+
+# Fail LOUD on contract drift rather than degrade. `_FIELD_ORDER` is a private
+# symbol in another module; if it is renamed, emptied, or loses `value`, the
+# derivation above silently becomes wrong in one of two directions — scanning
+# metadata as thresholds again, or (worse) excluding the threshold itself and
+# reporting a clean bill for an unchecked registry. Neither should be
+# discoverable only by someone noticing the gate went quiet.
+if not _REGISTRY_METADATA_FIELDS or "value" not in registry_lib._FIELD_ORDER:
+    raise RuntimeError(
+        "registry_lib._FIELD_ORDER no longer looks like the registry key "
+        f"schema (got {registry_lib._FIELD_ORDER!r}). This gate derives its "
+        "metadata-exclusion set from it; re-check that derivation before "
+        "trusting a green run."
+    )
+
+
 def _walk_values(node, key_of_interest: str | None = None):
     """Yield (registry_key, number) for every threshold literal reachable in `node`.
 
@@ -183,7 +210,8 @@ def _walk_values(node, key_of_interest: str | None = None):
     `mysql_threads_running: {default: {during_business_hours: "30"}}`).
     #1217 burned on exactly the nested shape: a line-oriented scan is
     structurally blind to it, so once we are inside a known key we collect EVERY
-    numeric leaf beneath it.
+    numeric leaf beneath it — except the registry's own metadata blocks, whose
+    numbers describe the key rather than threshold it (`_REGISTRY_METADATA_FIELDS`).
     """
     if isinstance(node, dict):
         for k, v in node.items():
@@ -192,6 +220,8 @@ def _walk_values(node, key_of_interest: str | None = None):
                 if base in _REGISTRY_KEYS:
                     yield from _walk_values(v, base)
                     continue
+            if key_of_interest is not None and k in _REGISTRY_METADATA_FIELDS:
+                continue
             if key_of_interest is not None:
                 num = _as_number(v)
                 if num is not None:

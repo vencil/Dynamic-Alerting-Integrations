@@ -450,6 +450,13 @@ def build_declared_keys(scaffold_packs: dict) -> dict:
                 "value": v["value"],
                 "unit": v.get("unit", ""),
                 "desc": v.get("desc", ""),
+                # ⛔ This tier needs the counter-example MORE than defaults does,
+                # not less: these are the keys #1320 D1 says a tenant can fill in
+                # today, so the reference number here is the one most likely to be
+                # copied. Carrying it only on `defaults` left the three
+                # most-likely-to-be-used numbers bare on every portal surface.
+                **({"valueCounterexample": v["value_counterexample"]}
+                   if "value_counterexample" in v else {}),
             }
             for k, v in entries.items()
             if is_shipped_optional_key(k)
@@ -498,6 +505,12 @@ def build_platform_data() -> dict:
                         # 供 portal 顯示 _critical 教育提示
                         **({"metricClass": v["metric_class"]}
                            if "metric_class" in v else {}),
+                        # value_counterexample（#1176）同樣僅 present 時透傳。
+                        # ⛔ 這一格是 defaults tier——portal 的 generateSampleYaml
+                        # 會把它當「活值」寫進使用者可複製的起手 YAML，所以它是
+                        # 全平台唯一「把已測到反例的數字直接交到人手上」的面。
+                        **({"valueCounterexample": v["value_counterexample"]}
+                           if "value_counterexample" in v else {}),
                     }
                     for k, v in defaults.items()
                 }
