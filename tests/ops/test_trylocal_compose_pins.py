@@ -46,7 +46,12 @@ FLOATING_TAGS = frozenset({"latest", "main", "master", "edge", "stable",
                            "nightly", "dev", "devel", "head", "canary"})
 
 # `${VAR:-default}` / `${VAR-default}` — compose's own shell-style substitution.
-_SUBST = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*:?-(?P<default>[^}]*)\}$")
+# ⛔ NOT anchored, and applied with `sub` not `match`: compose interpolates
+# anywhere in the string, so `curlimages/curl:${CURL_TAG:-latest}` is the more
+# likely shape than a whole-ref `${VAR:-…}`. An anchored version let exactly
+# that through — `_tag_of` read the tag as `-latest}`, which is not in
+# FLOATING_TAGS, so a floating default passed the guard.
+_SUBST = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*:?-(?P<default>[^}]*)\}")
 
 
 def _load_services() -> dict:
@@ -57,12 +62,19 @@ def _load_services() -> dict:
 def _effective_ref(image: str) -> str:
     """The ref a plain `docker compose up` would actually resolve.
 
-    A bare `${VAR}` with no default is returned unchanged so it fails the
-    concreteness check below — an unset variable resolves to an empty image
-    name, which is worse than a floating tag, not better.
+    Substitutes EVERY `${VAR:-default}` / `${VAR-default}` in the string, not
+    just a whole-string one. A `${VAR}` with no default has nothing to
+    substitute, so it survives into the returned value — and the caller treats
+    any surviving `$` as unresolved (see `_is_resolved`), because an unset
+    variable resolves to an empty segment at runtime, which is worse than a
+    floating tag rather than better.
     """
-    m = _SUBST.match(image.strip())
-    return m.group("default").strip() if m else image.strip()
+    return _SUBST.sub(lambda m: m.group("default").strip(), image.strip())
+
+
+def _is_resolved(ref: str) -> bool:
+    """No interpolation survived, so what the file says is what docker pulls."""
+    return "$" not in ref
 
 
 def _tag_of(ref: str) -> str | None:
@@ -110,6 +122,10 @@ def test_compose_is_parseable_and_not_empty():
 def test_pulled_image_names_a_concrete_tag(service):
     """Every pulled image must name a tag, and it must not be a floating one."""
     ref = _effective_ref(_pulled_services()[service]["image"])
+    assert _is_resolved(ref), (
+        f"{service}: {ref!r} still carries an unresolved interpolation. A "
+        f"`${{VAR}}` with no default resolves to nothing at runtime, so the "
+        f"file does not say what gets pulled — give it a `:-default`")
     tag = _tag_of(ref)
     assert tag is not None, (
         f"{service}: {ref!r} names no tag — Docker resolves that to `:latest`, "
@@ -142,16 +158,34 @@ def test_the_detector_actually_detects():
     Without this, a `_tag_of` that returned None for everything, or a regex that
     matched nothing, would make every assertion above pass vacuously.
     """
-    # must be flagged
-    assert _tag_of("alpine/git") is None                       # tagless
-    assert _tag_of("curlimages/curl:latest") == "latest"
-    assert _effective_ref("${PORTAL_TAG:-ghcr.io/x/y:latest}") == "ghcr.io/x/y:latest"
-    # the two helpers must COMPOSE — a substituted default is what gets tagged
-    assert _tag_of(_effective_ref("${FOO:-bar/baz:latest}")) == "latest"
-    # must NOT be flagged
-    assert _tag_of("prom/prometheus:v3.11.2") == "v3.11.2"
-    assert _tag_of("alpine/git:v2.54.0@sha256:" + "0" * 64) == "v2.54.0"
-    assert _tag_of("registry.local:5000/team/app:1.2.3") == "1.2.3", \
+    def verdict(image):
+        """Exactly what test_pulled_image_names_a_concrete_tag decides."""
+        ref = _effective_ref(image)
+        if not _is_resolved(ref):
+            return "unresolved"
+        tag = _tag_of(ref)
+        if tag is None:
+            return "tagless"
+        return "floating" if tag in FLOATING_TAGS else "ok"
+
+    # ── must be REJECTED ──────────────────────────────────────────────
+    assert verdict("alpine/git") == "tagless"
+    assert verdict("curlimages/curl:latest") == "floating"
+    assert verdict("${FOO:-bar/baz:latest}") == "floating"       # whole-ref subst
+    # ⛔ PARTIAL interpolation — the shape an anchored regex let through, and
+    # the far likelier one in a real compose file. Both `:-` and `-` syntaxes.
+    assert verdict("curlimages/curl:${CURL_TAG:-latest}") == "floating"
+    assert verdict("curlimages/curl:${CURL_TAG-latest}") == "floating"
+    # ⛔ No default at all: nothing to substitute, so it never becomes concrete.
+    assert verdict("curlimages/curl:${CURL_TAG}") == "unresolved"
+    assert verdict("${UNSET_VAR}") == "unresolved"
+
+    # ── must be ACCEPTED ──────────────────────────────────────────────
+    assert verdict("prom/prometheus:v3.11.2") == "ok"
+    assert verdict("alpine/git:v2.54.0@sha256:" + "0" * 64) == "ok"
+    assert verdict("registry.local:5000/team/app:1.2.3") == "ok", \
         "a registry port must not be mistaken for a tag"
-    # a bare ${VAR} with no default stays unresolved so it fails concreteness
-    assert _tag_of(_effective_ref("${UNSET_VAR}")) is None
+    # a partial interpolation with a CONCRETE default is fine — the guard must
+    # not over-reject merely because the file contains a `${`
+    assert verdict("ghcr.io/x/y:${TAG:-v1.2.3}") == "ok"
+    assert _effective_ref("ghcr.io/x/y:${TAG:-v1.2.3}") == "ghcr.io/x/y:v1.2.3"

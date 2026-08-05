@@ -695,7 +695,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "11374740e919ecef5820adc8e2c5ba453174f78512ea63ca677423f30dba9b96",
+ "source_digest": "9d82bcf33ce6313befceb0025b92ea190609d2863c29bb6fdb2efa4271c83e8d",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -949,6 +949,7 @@
   "tests/ops/test_threshold_govern.py",
   "tests/ops/test_threshold_govern_manifest.py",
   "tests/ops/test_threshold_recommend.py",
+  "tests/ops/test_trylocal_compose_pins.py",
   "tests/ops/test_validate_config.py",
   "tests/ops/test_validate_migration.py",
   "tests/ops/test_verify_download.py",
@@ -1052,6 +1053,7 @@
   ],
   ".github/workflows/nightly-image-scan.yaml": [
    "tests/ops/test_nightly_scan_matrix_drift.py",
+   "tests/ops/test_trylocal_compose_pins.py",
    "tests/shared/test_vector_pin_parity.py"
   ],
   ".github/workflows/nightly-race.yaml": [
@@ -1062,6 +1064,9 @@
   ],
   ".github/workflows/renovate.yaml": [
    "tests/ops/test_renovate_config.py"
+  ],
+  ".github/workflows/try-local-smoke.yaml": [
+   "tests/ops/test_trylocal_compose_pins.py"
   ],
   ".pre-commit-config.yaml": [
    "tests/dx/test_bump_docs.py",
@@ -2257,7 +2262,8 @@
    "tests/helm/test_federation_store_sentinel_guard.py"
   ],
   "tests/ops/test_nightly_scan_matrix_drift.py": [
-   "tests/ops/test_nightly_race_issue_policy.py"
+   "tests/ops/test_nightly_race_issue_policy.py",
+   "tests/ops/test_trylocal_compose_pins.py"
   ],
   "tests/preview/test_promtool_pin_parity.py": [
    "tests/shared/test_federation_audit_mtail.py",
@@ -2355,13 +2361,17 @@
   "tools/portal/tests": [
    "tests/ops/test_portal_path_filter_coverage.py"
   ],
+  "try-local/.env.example": [
+   "tests/ops/test_trylocal_compose_pins.py"
+  ],
   "try-local/alertmanager.yml": [
    "tests/dx/test_verify_diff.py",
    "tests/shared/test_dry_run_no_write.py",
    "tests/shared/test_json_stdout_contract.py"
   ],
   "try-local/docker-compose.yaml": [
-   "tests/lint/test_check_cross_ns_url_consistency.py"
+   "tests/lint/test_check_cross_ns_url_consistency.py",
+   "tests/ops/test_trylocal_compose_pins.py"
   ],
   "try-local/seed/conf.d": [
    "tests/ops/test_guard_defaults_scopes.py",
