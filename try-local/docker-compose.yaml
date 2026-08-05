@@ -37,12 +37,19 @@ services:
     # scrape success is the effective health signal.
 
   tenant-api:
-    # Built from source. The --dev-bypass-auth flag this stack relies on
-    # (#619 / ADR-022) is NOT in any published image yet — v2.8.0 predates it
-    # and v2.9.0 is unreleased. try-local users already clone the repo, so a
-    # one-time local build is fine, and it builds for the host's native arch
-    # (no arm64 wait). When a dev-bypass-capable image ships, delete `build:`
-    # and use:  image: ghcr.io/vencil/tenant-api:${TENANT_API_TAG:-v2.9.0}
+    # Built from source. try-local users already clone the repo, so a one-time
+    # local build is fine, and it builds for the host's native arch (no arm64
+    # wait).
+    # ⛔ This comment used to say `--dev-bypass-auth` (#619 / ADR-022) was in no
+    # published image and to switch to `v2.9.0` once one shipped. Both halves were
+    # wrong by the time anyone read them: the flag ships from tenant-api/v2.9.7
+    # onward, and **v2.9.0 was never cut on this line** (it goes v2.8.0 → v2.9.7),
+    # so following that instruction gave `manifest unknown` and the stack would
+    # not come up. Corrected in #1337 ①.
+    # Switching to a published image is therefore now possible — but it changes
+    # what the demo RUNS (auth path, arch, first-boot time), so it is deliberately
+    # not bundled with a pinning change. Use a real tag if you do it:
+    #   image: ghcr.io/vencil/tenant-api:${TENANT_API_TAG:-v2.9.8}
     build:
       context: ..
       dockerfile: components/tenant-api/Dockerfile
@@ -256,13 +263,18 @@ services:
     # git-init the config repo so commit-on-write has a repo. No monitoring
     # dependency → Mode 0 stays minimal. Directory mount (not single-file) to
     # avoid the WSL2 single-file bind-mount landmine.
-    # Pinned tag AND digest, matched to the shipping ref in
-    # k8s/04-tenant-api/deployment.yaml + helm/tenant-api/templates/deployment.yaml
-    # (#1337 ①). The digest is not decoration here: alpine/git's VERSION tags are
-    # mutable — upstream's Sunday cron re-pushes v<X.Y.Z> from a fresh `apk add`
-    # — so the tag alone would still drift underneath us. Bump both halves
-    # together with the two deployment manifests.
-    image: alpine/git:v2.54.0@sha256:729da2347ce652f30476b064198577fe12e1147e58499be9f343039343ef2cee
+    # Release tag, deliberately WITHOUT a digest (#1337 ①). The deploy surface
+    # pins this same image by digest (k8s/04-tenant-api/deployment.yaml,
+    # helm/tenant-api/templates/deployment.yaml, and the nightly scan matrix) —
+    # ⛔ do not copy that here. Those three are covered by Renovate's
+    # managerFilePatterns and move together; `try-local/**` matches none of them,
+    # so a digest here would be the one copy nothing ever bumps. Since alpine/git
+    # is rebuilt weekly and its CVE remediation is precisely a digest refresh
+    # (see .github/workflows/nightly-image-scan.yaml), a frozen digest would keep
+    # the demo on a known-vulnerable layer permanently and — unlike a tag — it
+    # could not self-heal. The tag being mutable is the lesser evil here; on the
+    # deploy surface, where we DO own the bump loop, the trade goes the other way.
+    image: alpine/git:v2.54.0
     entrypoint: ["/bin/sh"]
     command: ["/seed/git-init.sh"]
     environment:
