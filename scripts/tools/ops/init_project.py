@@ -145,6 +145,112 @@ def _h(key: str) -> str:
 
 
 # ============================================================
+# Customer-delivered container image pins (#1337 ②④)
+# ============================================================
+# Every ref below is emitted into a file the CUSTOMER runs: the GitLab CI
+# apply stage carries `environment: name: production` plus cluster-write
+# credentials, and the git-sync patch is applied straight into their cluster.
+#
+# ⛔ Pinned to a concrete VERSION TAG, deliberately NOT a digest. The
+# customer's repo has no updater of ours to re-resolve a digest, and an
+# un-maintained digest pin inhibits security updates — OpenSSF Scorecard says
+# exactly that inside the Pinned-Dependencies check that asks for pinning.
+# Every upstream tool that generates config for someone else makes the same
+# call: `helm create` emits a tag via `.Chart.AppVersion`, GitLab's own
+# shipped CI templates emit `${AUTO_DEPLOY_IMAGE_VERSION}`, Argo CD's
+# install.yaml emits `quay.io/argoproj/argocd:vX.Y.Z`. Contrast
+# `scripts/tools/lint/check_iac_helm.py`, which DOES pin its fallback images
+# by digest — those run in OUR CI, where we own the bump loop and a test
+# enforces the digest (tests/lint/test_fallback_image_digest_pin.py).
+#
+# ⛔ On bump, confirm the ref resolves anonymously BEFORE committing:
+#     docker manifest inspect <ref>
+# A ref that 404s here is a broken pipeline in someone else's repo.
+
+# Chosen for what it CONTAINS, not only for how it can be pinned. Measured
+# (`docker run --entrypoint sh`): a shell, `kubectl` v1.34.9, and `kustomize`
+# v5.8.1. All three are load-bearing — the apply stage is a GitLab `script:`
+# block, which the runner executes through a shell inside this image, and the
+# first line of that block invokes standalone `kustomize`.
+# ⛔ Two images were rejected on measurement, not on preference:
+#   * `bitnami/kubectl` is no longer pinnable at all — Broadcom moved the
+#     versioned catalog behind a subscription and deleted the free version tags
+#     on 2025-09-29, leaving only `latest` (their docs call it dev-only). It
+#     also ships no `kustomize`, so this job never actually worked.
+#   * `registry.k8s.io/kubectl` is the Kubernetes project's own image and has
+#     no `latest` tag, which is attractive — but it is distroless-static: NO
+#     shell at all, so a GitLab `script:` block cannot run in it under any
+#     entrypoint override. Pinnability is worthless if the job cannot start.
+# `alpine/k8s` also publishes no `latest` tag (verified 404), so the
+# floating-reference argument survives the swap. Same publisher as
+# GITLAB_HELM_IMAGE below — one trust decision, not two.
+# ⚠️ kubectl supports ±1 minor of skew from the cluster — override
+# DA_KUBECTL_IMAGE if the customer's control plane sits further back.
+GITLAB_KUBECTL_IMAGE = 'alpine/k8s:1.34.9'
+
+# ⛔ Held on the Helm 3 line ON PURPOSE — pinned by
+# `test_helm_image_stays_on_the_helm_3_line`, because a comment alone did not
+# stop this: `alpine/helm:latest` now resolves to Helm 4.x (4.0.0 GA'd
+# 2025-11-12; `latest` and `4.2.3` share a digest), and Helm 4 ships "backward
+# incompatible changes including to the flags and output of the Helm CLI", so
+# the previous floating tag walked existing customer pipelines across a major
+# boundary with no change on their side. A future "just bump it" would do the
+# same thing deliberately; the test is what makes that a decision instead of an
+# accident. The image's own README also says not to use `latest` in production.
+# ⓘ Measured: ships a shell, but `ENTRYPOINT ["helm"]` — see the
+# `entrypoint: [""]` override in the emitted job, without which the job dies
+# before its first script line.
+GITLAB_HELM_IMAGE = 'alpine/helm:3.21.3'
+
+# quay.io, NOT Docker Hub. `argoproj/argocd` on Docker Hub was last pushed
+# 2022-01-21 and carries no tag beyond v2.6.15, so a pipeline built on it runs
+# a CLI years out of step with the customer's Argo CD server. quay.io is the
+# registry Argo CD's own install manifests use.
+# ⓘ Argo CD's CI guidance is that the CLI should track the server, so two
+# alternatives are worth offering: download it from the customer's own server
+# (`https://$ARGOCD_SERVER/download/argocd-linux-amd64`), or enable auto-sync
+# and drop this stage entirely.
+GITLAB_ARGOCD_IMAGE = 'quay.io/argoproj/argocd:v3.5.0'
+
+# registry.k8s.io/git-sync publishes ONLY exact patch tags (no `latest`, no
+# `v4`), so a consumer is forced to name a version. The previous pin, v4.4.0
+# (2024-12-13), was 8 releases and ~19 months behind when this was caught: it
+# misses CVE-2025-30204 (High, reached transitively through golang-jwt and
+# fixed in v4.4.1) plus every base-image rebuild from v4.4.3 onward. git-sync
+# publishes no per-project advisory feed, so a stale pin here emits no signal
+# whatsoever — the staleness is only ever found by looking.
+GIT_SYNC_IMAGE = 'registry.k8s.io/git-sync/git-sync:v4.7.1'
+
+# deploy method -> (GitLab CI variable name, pinned ref). Single source for
+# BOTH the `variables:` block and the apply stage's `image:` line, so the two
+# cannot drift apart.
+_GITLAB_APPLY_IMAGES = {
+    'kustomize': ('DA_KUBECTL_IMAGE', GITLAB_KUBECTL_IMAGE),
+    'helm': ('DA_HELM_IMAGE', GITLAB_HELM_IMAGE),
+    'argocd': ('DA_ARGOCD_IMAGE', GITLAB_ARGOCD_IMAGE),
+}
+
+
+def _gitlab_apply_image(deploy_method: str) -> tuple[str, str]:
+    """(variable name, pinned ref) for the apply stage's runner image.
+
+    Mirrors _build_gitlab_apply_stage's branching *including its fallback*:
+    an unrecognised deploy method lands in the argocd branch there, so it has
+    to land there here too.
+
+    ⚠️ The failure mode is a TOOL/COMMAND MISMATCH, not an undeclared variable.
+    Both the `variables:` entry and the job's `image:` read this one function,
+    so the name is always declared and always referenced — what diverging
+    fallbacks would produce is `argocd app sync` running inside the kubectl
+    image, i.e. a production deploy that starts and then dies on a missing
+    binary. `test_apply_image_matches_the_command_it_runs` is the guard, and it
+    has to re-derive the branch from the rendered script text; comparing the
+    two sides of this lookup to each other proves nothing.
+    """
+    return _GITLAB_APPLY_IMAGES.get(deploy_method, _GITLAB_APPLY_IMAGES['argocd'])
+
+
+# ============================================================
 # Rule Pack catalog (metric keys per rule pack)
 # ============================================================
 RULE_PACK_CATALOG = {
@@ -662,14 +768,30 @@ def _gen_github_actions(
 
 
 def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
-    """Build GitLab CI apply stage based on deployment method."""
+    """Build GitLab CI apply stage based on deployment method.
+
+    The runner image is emitted as `$VAR`, never as a literal ref: the pin
+    lives once in _GITLAB_APPLY_IMAGES and reaches the customer through the
+    `variables:` block, so they can override it without editing generated
+    YAML. ⛔ The branching here and in _gitlab_apply_image must stay in step —
+    including the `else` fallback (see that function's docstring).
+    """
+    image_var, _ = _gitlab_apply_image(deploy_method)
+
     if deploy_method == 'kustomize':
         return textwrap.dedent("""\
 
     # ── Stage 3: Apply ───────────────────────────────────────
     apply:
       stage: apply
-      image: bitnami/kubectl:latest
+      image:
+        name: ${image_var}
+        # ⛔ Load-bearing, not boilerplate. GitLab runs `script:` through a shell
+        # INSIDE this image, so an image whose ENTRYPOINT is the tool itself
+        # (alpine/helm is `ENTRYPOINT ["helm"]`) turns that shell invocation into
+        # arguments to the tool and the job dies before the first script line.
+        # Harmless for images that already start a shell.
+        entrypoint: [""]
       environment:
         name: production
       rules:
@@ -679,7 +801,7 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
         - kubectl apply --dry-run=server -f /tmp/manifests.yaml
         - kubectl apply -f /tmp/manifests.yaml
         - kubectl rollout restart deployment/prometheus -n {namespace}
-    """).format(namespace=namespace)
+    """).format(namespace=namespace, image_var=image_var)
 
     elif deploy_method == 'helm':
         return textwrap.dedent("""\
@@ -687,7 +809,14 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
     # ── Stage 3: Apply via Helm ──────────────────────────────
     apply:
       stage: apply
-      image: alpine/helm:latest
+      image:
+        name: ${image_var}
+        # ⛔ Load-bearing, not boilerplate. GitLab runs `script:` through a shell
+        # INSIDE this image, so an image whose ENTRYPOINT is the tool itself
+        # (alpine/helm is `ENTRYPOINT ["helm"]`) turns that shell invocation into
+        # arguments to the tool and the job dies before the first script line.
+        # Harmless for images that already start a shell.
+        entrypoint: [""]
       environment:
         name: production
       rules:
@@ -699,7 +828,7 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
             -f environments/prod/values.yaml \\
             -n {namespace} \\
             --wait --timeout 5m
-    """).format(namespace=namespace)
+    """).format(namespace=namespace, image_var=image_var)
 
     else:  # argocd
         return textwrap.dedent("""\
@@ -707,14 +836,21 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
     # ── Stage 3: Sync ArgoCD Application ─────────────────────
     apply:
       stage: apply
-      image: argoproj/argocd:latest
+      image:
+        name: ${image_var}
+        # ⛔ Load-bearing, not boilerplate. GitLab runs `script:` through a shell
+        # INSIDE this image, so an image whose ENTRYPOINT is the tool itself
+        # (alpine/helm is `ENTRYPOINT ["helm"]`) turns that shell invocation into
+        # arguments to the tool and the job dies before the first script line.
+        # Harmless for images that already start a shell.
+        entrypoint: [""]
       environment:
         name: production
       rules:
         - when: manual
       script:
         - argocd app sync dynamic-alerting --prune --timeout 300
-    """)
+    """).format(image_var=image_var)
 
 
 def _gen_gitlab_ci(
@@ -724,6 +860,7 @@ def _gen_gitlab_ci(
 ) -> str:
     """Generate GitLab CI pipeline for Dynamic Alerting CI/CD."""
     apply_stage = _build_gitlab_apply_stage(deploy_method, namespace)
+    apply_image_var, apply_image_ref = _gitlab_apply_image(deploy_method)
 
     return textwrap.dedent("""\
     # Dynamic Alerting CI/CD Pipeline (GitLab CI)
@@ -739,6 +876,9 @@ def _gen_gitlab_ci(
 
     variables:
       DA_TOOLS_IMAGE: {da_tools_image}
+      # Apply-stage runner image. Pinned to a version tag we verified resolves;
+      # override it here (not in the job) to track your own cluster / Helm line.
+      {apply_image_var}: {apply_image_ref}
       CONFIG_DIR: conf.d
       MONITORING_NS: {namespace}
 
@@ -786,6 +926,8 @@ def _gen_gitlab_ci(
     """).format(
         da_tools_image=da_tools_image,
         namespace=namespace,
+        apply_image_var=apply_image_var,
+        apply_image_ref=apply_image_ref,
         apply_stage=apply_stage,
     )
 
@@ -860,7 +1002,7 @@ def _gen_git_sync_deployment(
           # ── Init: one-time clone so exporter never starts with empty config ──
           initContainers:
             - name: git-sync-init
-              image: registry.k8s.io/git-sync/git-sync:v4.4.0
+              image: {GIT_SYNC_IMAGE}
               args:
                 - "--repo={git_repo}"
                 - "--ref={git_branch}"
@@ -886,7 +1028,7 @@ def _gen_git_sync_deployment(
                   mountPath: /data/config
                   readOnly: true
             - name: git-sync
-              image: registry.k8s.io/git-sync/git-sync:v4.4.0
+              image: {GIT_SYNC_IMAGE}
               args:
                 - "--repo={git_repo}"
                 - "--ref={git_branch}"
@@ -961,8 +1103,15 @@ def _gen_kustomize_overlay(env_name: str, namespace: str) -> str:
     )
 
 
-def _gen_precommit_snippet() -> str:
-    """Generate .pre-commit-config.yaml snippet."""
+def _gen_precommit_snippet(da_tools_image: str) -> str:
+    """Generate .pre-commit-config.yaml snippet.
+
+    ⛔ Takes the image as an argument. It used to hardcode
+    `ghcr.io/vencil/da-tools:latest`, so a customer who ran
+    `--da-tools-image registry.internal/da-tools:v2.9.0` still got a snippet
+    pointing back at ghcr.io — silently ignoring the flag on the one artifact
+    that runs on every developer's laptop (#1337 ④).
+    """
     return (
         "# Dynamic Alerting pre-commit hooks\n"
         "# Add this to your existing .pre-commit-config.yaml\n"
@@ -978,7 +1127,7 @@ def _gen_precommit_snippet() -> str:
         "        entry: >-\n"
         "          docker run --rm\n"
         "          -v ${PWD}/conf.d:/data/conf.d:ro\n"
-        "          ghcr.io/vencil/da-tools:latest\n"
+        f"          {da_tools_image}\n"
         "          validate-config --config-dir /data/conf.d --ci\n"
         "        language: system\n"
         "        files: ^conf\\.d/.*\\.ya?ml$\n"
@@ -989,7 +1138,7 @@ def _gen_precommit_snippet() -> str:
         "        entry: >-\n"
         "          docker run --rm\n"
         "          -v ${PWD}/conf.d:/data/conf.d:ro\n"
-        "          ghcr.io/vencil/da-tools:latest\n"
+        f"          {da_tools_image}\n"
         "          generate-routes --config-dir /data/conf.d --dry-run --validate\n"
         "        language: system\n"
         "        files: ^conf\\.d/.*\\.ya?ml$\n"
@@ -1327,7 +1476,7 @@ def run_init(config: dict, output_dir: str) -> list[str]:
     # ── 4. Pre-commit config ───────────────────────────────
     _write_file(
         str(out / '.pre-commit-config.da.yaml'),
-        _gen_precommit_snippet(),
+        _gen_precommit_snippet(da_tools_image),
         created,
     )
 

@@ -936,21 +936,21 @@ class TestGenPrecommitSnippet:
 
     def test_valid_yaml_structure(self):
         """Generated snippet is valid YAML."""
-        yaml_str = ip._gen_precommit_snippet()
+        yaml_str = ip._gen_precommit_snippet('ghcr.io/vencil/da-tools:latest')
         config = yaml.safe_load(yaml_str)
         assert 'repos' in config
         assert isinstance(config['repos'], list)
 
     def test_local_repo(self):
         """Snippet uses local repo type."""
-        yaml_str = ip._gen_precommit_snippet()
+        yaml_str = ip._gen_precommit_snippet('ghcr.io/vencil/da-tools:latest')
         config = yaml.safe_load(yaml_str)
         repo = config['repos'][0]
         assert repo['repo'] == 'local'
 
     def test_da_validate_config_hook(self):
         """da-validate-config hook is present."""
-        yaml_str = ip._gen_precommit_snippet()
+        yaml_str = ip._gen_precommit_snippet('ghcr.io/vencil/da-tools:latest')
         config = yaml.safe_load(yaml_str)
         hooks = config['repos'][0]['hooks']
         hook_ids = [h['id'] for h in hooks]
@@ -958,7 +958,7 @@ class TestGenPrecommitSnippet:
 
     def test_da_generate_routes_hook(self):
         """da-generate-routes hook is present."""
-        yaml_str = ip._gen_precommit_snippet()
+        yaml_str = ip._gen_precommit_snippet('ghcr.io/vencil/da-tools:latest')
         config = yaml.safe_load(yaml_str)
         hooks = config['repos'][0]['hooks']
         hook_ids = [h['id'] for h in hooks]
@@ -966,7 +966,7 @@ class TestGenPrecommitSnippet:
 
     def test_hooks_target_conf_d(self):
         """Hooks are limited to conf.d files."""
-        yaml_str = ip._gen_precommit_snippet()
+        yaml_str = ip._gen_precommit_snippet('ghcr.io/vencil/da-tools:latest')
         config = yaml.safe_load(yaml_str)
         hooks = config['repos'][0]['hooks']
         for hook in hooks:
@@ -975,7 +975,7 @@ class TestGenPrecommitSnippet:
 
     def test_language_system(self):
         """Hooks use 'system' language."""
-        yaml_str = ip._gen_precommit_snippet()
+        yaml_str = ip._gen_precommit_snippet('ghcr.io/vencil/da-tools:latest')
         config = yaml.safe_load(yaml_str)
         hooks = config['repos'][0]['hooks']
         for hook in hooks:
@@ -983,7 +983,7 @@ class TestGenPrecommitSnippet:
 
     def test_header_mentions_da_tools(self):
         """Header mentions Dynamic Alerting."""
-        yaml_str = ip._gen_precommit_snippet()
+        yaml_str = ip._gen_precommit_snippet('ghcr.io/vencil/da-tools:latest')
         assert 'Dynamic Alerting' in yaml_str
         assert 'da-tools' in yaml_str
 
@@ -1842,3 +1842,370 @@ class TestGitOpsNativeMode:
             exporter = patch['spec']['template']['spec']['containers'][0]
             assert exporter['name'] == 'threshold-exporter'
             assert '/data/config/current/alerting/conf.d' in exporter['args'][0]
+
+
+# ============================================================
+# ── Customer-delivered image pins (#1337 ②④) ──
+# ============================================================
+
+class TestCustomerDeliveredImagePins:
+    """Every container image ref handed to a customer must name a version.
+
+    These refs land in files the CUSTOMER executes: the GitLab apply stage
+    carries `environment: name: production` plus cluster-write credentials,
+    and the git-sync patch is applied straight into their cluster. A floating
+    tag there moves under them with no change on their side — which is what
+    had already happened when #1337 was written: `alpine/helm:latest` walked
+    existing pipelines across the Helm 3 -> 4 major boundary, and
+    `bitnami/kubectl` lost every version tag when Broadcom moved the free
+    catalog to `latest`-only.
+
+    ⛔ Scope is deliberately THIRD-PARTY refs. First-party `ghcr.io/vencil/*`
+    currency is the release flow's job, not a pin here: #902 considered
+    first-party digest pinning and REJECTED it. Widening this guard to
+    first-party would silently reverse that decision.
+
+    ⚠️ Honest boundary — this suite checks FLOATING vs CONCRETE, never
+    CURRENCY. Reverting git-sync to the stale v4.4.0 leaves every test below
+    green (measured, not assumed), because v4.4.0 is a perfectly concrete tag.
+    Nothing offline can tell you a pin has gone stale; that needs a registry
+    round-trip, and git-sync publishes no advisory feed to subscribe to
+    either. Do not read a green run here as "the pins are current".
+    """
+
+    _FIRST_PARTY = 'ghcr.io/vencil/'
+    _FLOATING = ('latest', 'main', 'master', 'edge', 'stable')
+    _FLOATING_RE = re.compile(r'[\w.\-/]+:(?:latest|main|master|edge|stable)\b')
+
+    @staticmethod
+    def _pipeline(deploy, da_tools_image='ghcr.io/vencil/da-tools:v9.9.9'):
+        return yaml.safe_load(ip._gen_gitlab_ci('monitoring', da_tools_image, deploy))
+
+    @staticmethod
+    def _tag_of(ref):
+        """The tag portion, or None when the ref names none.
+
+        ⛔ Splits after the LAST `/` so a registry PORT is not read as a tag.
+        A naive `rpartition(':')` reports `quay.io:443/argoproj/argocd` as
+        tag=`443/argoproj/argocd` — concrete-looking, while Docker resolves it
+        to `:latest`. That exact ref survived an earlier version of this suite.
+        """
+        last = ref.split('@', 1)[0].rsplit('/', 1)[-1]
+        return last.rsplit(':', 1)[1] if ':' in last else None
+
+    def test_pin_table_entries_are_concrete(self):
+        """Every pinned ref names a repository AND a non-floating tag."""
+        refs = [ref for _, ref in ip._GITLAB_APPLY_IMAGES.values()] + [ip.GIT_SYNC_IMAGE]
+        assert len(refs) >= 4, 'anti-vacuity: the pin table shrank unexpectedly'
+        for ref in refs:
+            tag = self._tag_of(ref)
+            assert tag is not None, (
+                f'{ref!r} names no tag — Docker resolves that to `:latest`, so '
+                f'the omission is a floating reference written a different way')
+            assert tag not in self._FLOATING, f'{ref!r} uses a floating tag'
+            assert not re.fullmatch(r'v?\d+', tag), (
+                f'{ref!r} pins only a major version ({tag!r}), which upstream '
+                f'moves — pin the full release')
+
+    def test_helm_image_stays_on_the_helm_3_line(self):
+        """The Helm 3 pin is a DECISION, so it needs a gate, not a comment.
+
+        `alpine/helm:latest` resolving to Helm 4 is the headline defect this
+        change exists to fix; a later "just bump it" would reproduce it exactly,
+        and every other assertion in this class would stay green because 4.x is
+        a perfectly concrete tag. Bumping to Helm 4 is allowed — but it has to
+        be a deliberate edit here, taken together with the generated
+        `helm upgrade` flags, which Helm 4 changed.
+        """
+        _, ref = ip._GITLAB_APPLY_IMAGES['helm']
+        tag = self._tag_of(ref)
+        major = tag.lstrip('v').split('.', 1)[0]
+        assert major == '3', (
+            f'helm image is pinned to {ref!r} (major {major}). Helm 4 carries '
+            f'"backward incompatible changes ... to the flags and output of the '
+            f'Helm CLI"; if this move is intended, update the generated '
+            f'`helm upgrade` invocation and this test together.')
+
+    # Substring that must appear in the image chosen for each deploy method.
+    # Derived from the tool the branch actually runs, so a table entry pointing
+    # at the wrong image fails even though that image is perfectly concrete.
+    #
+    # ⛔ This checks the repository NAME, which is a far weaker property than
+    # "the image can run the branch's commands". `vendor/kubectl-notreally:v1`
+    # passes. Capability cannot be checked offline at all — see
+    # `_MEASURED_UNUSABLE` for the one thing that CAN be pinned about it.
+    _IMAGE_IDENTITY = {
+        'kustomize': ('k8s', 'kubectl'),
+        'helm': ('helm',),
+        'argocd': ('argocd',),
+    }
+
+    # Repositories MEASURED to be unusable for a GitLab `script:` job, with the
+    # date and the observation. Offline we cannot prove an image *works*; we can
+    # refuse to silently re-adopt one we already proved does not.
+    #
+    # ⛔ This exists because the attractive-looking wrong answer is written down
+    # in `init_project.py` itself: that file explains at length why
+    # `registry.k8s.io/kubectl` is the Kubernetes project's own image and ships
+    # no `latest` tag. Both facts are true, and a future reader can reasonably
+    # conclude it is the better pin — which is exactly how the regression this
+    # ledger guards against was introduced the first time.
+    @staticmethod
+    def _repo_of(ref):
+        """Repository portion of a ref, tolerating a registry port.
+
+        ⛔ A naive `rsplit(':', 1)[0]` turns `quay.io:443/argoproj/argocd` into
+        `quay.io` — the same trap the tag parser in the try-local guard had to
+        fix. Only strip a colon that lives in the LAST path segment.
+        """
+        repo = ref.split('@', 1)[0]
+        return repo.rsplit(':', 1)[0] if ':' in repo.rsplit('/', 1)[-1] else repo
+
+    _MEASURED_UNUSABLE = {
+        'registry.k8s.io/kubectl':
+            'distroless-static: no /bin/sh (measured 2026-08-05, '
+            '`docker run --entrypoint sh` -> exec: "sh": not found). GitLab '
+            'writes the script: block into a shell, so the job cannot start '
+            'and no `entrypoint:` override can rescue it.',
+        'bitnami/kubectl':
+            'free namespace carries only `latest` since 2025-09-29 (every '
+            'version tag 404s), and the image ships no `kustomize` binary '
+            'while the kustomize branch runs `kustomize build`.',
+    }
+
+    def test_pin_table_covers_exactly_the_methods_the_generator_branches_on(self):
+        """Adding a row to the pin table must not skip the identity check.
+
+        `_IMAGE_IDENTITY` used to be the parametrize source AND the lookup, so a
+        new pin-table row was simply never visited — measured: adding a `flux`
+        row left all tests green while `--deploy flux` fell through to the
+        argocd script running inside whatever image the new row named.
+        """
+        assert set(ip._GITLAB_APPLY_IMAGES) == set(self._IMAGE_IDENTITY), (
+            'pin table and identity table disagree:\n'
+            f'  in pin table only: {sorted(set(ip._GITLAB_APPLY_IMAGES) - set(self._IMAGE_IDENTITY))}\n'
+            f'  in identity only:  {sorted(set(self._IMAGE_IDENTITY) - set(ip._GITLAB_APPLY_IMAGES))}')
+        assert set(ip._GITLAB_APPLY_IMAGES) == set(self._SCRIPT_MARKER), (
+            'pin table and script-marker table disagree — a method with no '
+            'marker would make test_apply_image_matches_the_command_it_runs '
+            'unable to identify its branch')
+
+    @pytest.mark.parametrize('deploy', sorted(_IMAGE_IDENTITY))
+    def test_pin_table_avoids_images_measured_unusable(self, deploy):
+        """A repository we already proved cannot run the job stays out.
+
+        ⚠️ The inverse does NOT hold: absence from this ledger is not evidence
+        that an image works. This is a memory of past measurements, not a
+        capability check.
+        """
+        _, ref = ip._GITLAB_APPLY_IMAGES[deploy]
+        repo = self._repo_of(ref)
+        assert repo not in self._MEASURED_UNUSABLE, (
+            f'{deploy!r} is mapped to {repo!r}, which was measured unusable: '
+            f'{self._MEASURED_UNUSABLE[repo]}')
+
+    @pytest.mark.parametrize('deploy', sorted(_IMAGE_IDENTITY))
+    def test_pin_table_maps_each_method_to_an_image_of_the_right_kind(self, deploy):
+        """The pin TABLE itself can be wrong, and nothing else notices.
+
+        Swapping the kustomize and helm rows leaves every other test in this
+        class green while emitting `kubectl apply` into an image that has no
+        kubectl — on a job carrying production cluster credentials. The variable
+        NAME is not evidence either; it is chosen in the same dict.
+        """
+        var, ref = ip._GITLAB_APPLY_IMAGES[deploy]
+        repo = self._repo_of(ref).lower()
+        wanted = self._IMAGE_IDENTITY[deploy]
+        assert any(w in repo for w in wanted), (
+            f'{deploy!r} is mapped to {ref!r}, whose repository does not even '
+            f'name any of {wanted}. ⚠️ Passing this proves only that the NAME '
+            f'mentions the tool — not that the image contains it')
+        assert any(w in var.lower() for w in wanted), (
+            f'{deploy!r} declares {var!r}, which does not name {wanted}')
+
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    def test_apply_stage_uses_a_declared_variable_not_a_literal(self, deploy):
+        """The job must reference `$VAR` and `variables:` must declare that VAR.
+
+        ⚠️ Honest about what this proves: both sides read `_gitlab_apply_image`,
+        so the value comparison is agree-by-construction and can only catch the
+        rendering losing a line — NOT a wrong pin. The pin's correctness is
+        covered by `test_pin_table_maps_each_method_to_an_image_of_the_right_kind`
+        and `test_apply_image_matches_the_command_it_runs`, which re-derive from
+        an independent side.
+        """
+        doc = self._pipeline(deploy)
+        image = doc['apply']['image']
+        assert isinstance(image, dict), (
+            f'apply stage must use the mapping form so it can carry '
+            f'`entrypoint: [""]`; got {image!r}')
+        assert image.get('entrypoint') == [''], (
+            'the entrypoint override is what lets a tool-entrypoint image '
+            '(alpine/helm) run a GitLab `script:` block at all')
+        name = image['name']
+        assert name.startswith('$'), f'apply stage pins a literal ref: {name!r}'
+        var = name[1:]
+        expected_var, expected_ref = ip._gitlab_apply_image(deploy)
+        assert var == expected_var, f'job references ${var}, table says ${expected_var}'
+        assert doc['variables'].get(var) == expected_ref, (
+            f'variables: declares {doc["variables"].get(var)!r} but the pin '
+            f'table says {expected_ref!r}')
+
+    # Which apply branch a rendered job came from, judged by the command it
+    # runs. Used to check the image against the script rather than trusting
+    # that both were derived from the same lookup.
+    _SCRIPT_MARKER = {
+        'kustomize': 'kustomize build',
+        'helm': 'helm upgrade',
+        'argocd': 'argocd app sync',
+    }
+
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd', 'not-a-real-method'])
+    def test_apply_image_matches_the_command_it_runs(self, deploy):
+        """The runner image and the command must come from the SAME branch.
+
+        `_build_gitlab_apply_stage` chooses the script, `_gitlab_apply_image`
+        chooses the image, and both treat an unrecognised deploy method as
+        argocd. If those two fallbacks ever diverge the job would run — say —
+        `argocd app sync` inside a kubectl image, which starts a production
+        deploy and then fails on a missing binary.
+
+        ⛔ Asserting only "the variable is declared" does NOT catch that: both
+        sides read the same lookup, so they agree by construction. The branch
+        is therefore re-derived here from the rendered script text, which is an
+        independent signal.
+        """
+        doc = self._pipeline(deploy)
+        script = ' '.join(doc['apply']['script'])
+        name = doc['apply']['image']['name']
+        assert name.startswith('$') and not name.startswith('$$'), (
+            f'expected a single-$ variable reference, got {name!r} — GitLab '
+            f'reads `$$` as a literal `$` and would pull an image by that name')
+        var = name[1:]
+        assert var in doc['variables'], f'{var} referenced but never declared'
+
+        branches = [b for b, marker in self._SCRIPT_MARKER.items() if marker in script]
+        assert len(branches) == 1, (
+            f'could not identify the apply branch from the rendered script '
+            f'(matched {branches}); the markers need updating')
+        expected_var, _ = ip._gitlab_apply_image(branches[0])
+        assert var == expected_var, (
+            f'script runs the {branches[0]!r} branch but the image comes from '
+            f'${var} (expected ${expected_var})')
+
+    def test_run_init_threads_the_requested_image_into_every_artifact(self):
+        """End-to-end: the WIRING, not just the function.
+
+        ⛔ The bug this change fixed lived in the call site — `run_init` was
+        passing nothing, so the snippet fell back to a hardcoded ghcr.io ref.
+        Testing `_gen_precommit_snippet` alone cannot see that, and every other
+        `run_init` test passes exactly the value the old hardcode used, so they
+        are blind to it too. This one uses a sentinel that appears in no
+        default, so a regression at the call site has nowhere to hide.
+        """
+        sentinel = 'registry.internal:5000/team/da-tools:v9.9.9'
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ip.run_init({
+                'ci': 'both',
+                'deploy': 'kustomize',
+                'rule_packs': ['mariadb'],
+                'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': sentinel,
+            }, tmpdir)
+            checked = 0
+            for rel in ('.pre-commit-config.da.yaml',
+                        os.path.join('.gitlab-ci.d', 'dynamic-alerting.yml'),
+                        os.path.join('.github', 'workflows', 'dynamic-alerting.yaml')):
+                path = os.path.join(tmpdir, rel)
+                assert os.path.isfile(path), f'{rel} was not generated'
+                body = open(path, encoding='utf-8').read()
+                assert sentinel in body, f'{rel} ignored --da-tools-image'
+                assert 'ghcr.io/vencil/da-tools' not in body, (
+                    f'{rel} still carries the built-in default alongside the '
+                    f'requested image')
+                checked += 1
+            assert checked == 3, 'anti-vacuity: expected three artifacts to carry it'
+
+    def test_git_sync_containers_all_use_the_pinned_ref(self):
+        """Both the init container and the sidecar track one constant."""
+        patch = yaml.safe_load(ip._gen_git_sync_deployment(
+            'monitoring', 'https://example.com/r.git', 'main', 'conf.d'))
+        spec = patch['spec']['template']['spec']
+        found = [c['image'] for c in spec.get('initContainers', []) + spec['containers']
+                 if 'git-sync' in c['name']]
+        assert len(found) >= 2, 'anti-vacuity: expected an init container AND a sidecar'
+        assert set(found) == {ip.GIT_SYNC_IMAGE}, f'git-sync refs drifted: {sorted(set(found))}'
+
+    def test_precommit_snippet_honours_the_requested_image(self):
+        """`--da-tools-image` must reach the snippet.
+
+        It used to be hardcoded, so a customer pointing at their own registry
+        still got a snippet that pulled from ghcr.io. The negative half of the
+        assertion is what pins that: the default must NOT survive an override.
+        """
+        snippet = ip._gen_precommit_snippet('registry.internal/da-tools:v2.9.0')
+        assert 'registry.internal/da-tools:v2.9.0' in snippet
+        assert 'ghcr.io/vencil/da-tools' not in snippet
+
+    def test_only_first_party_refs_may_float(self):
+        """Class-level guard over every generated customer artifact.
+
+        Keyed on the floating tag itself rather than on a list of known
+        images, so a NEW third-party image added to any of these generators is
+        caught without anyone remembering to update this test.
+
+        ⛔ That claim is only true because the artifacts are obtained by RUNNING
+        `run_init` into a temp dir and walking everything it wrote. An earlier
+        version listed the generators by hand, and a floating ref planted in
+        `_gen_kustomize_base` or `_gen_git_sync_kustomization` sailed through —
+        the list, not the scan, was the hole.
+        """
+        offenders, scanned = [], 0
+        for deploy in ('kustomize', 'helm', 'argocd'):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # config_source=git so the git-sync overlay is generated too.
+                ip.run_init({
+                    'ci': 'both',
+                    'deploy': deploy,
+                    'rule_packs': ['mariadb'],
+                    'tenants': ['db-a'],
+                    'namespace': 'monitoring',
+                    'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+                    'config_source': 'git',
+                    'git_repo': 'https://example.com/r.git',
+                    'git_branch': 'main',
+                    'git_path': 'conf.d',
+                    'git_period': 60,
+                }, tmpdir)
+                for root, _dirs, files in os.walk(tmpdir):
+                    for fn in files:
+                        path = os.path.join(root, fn)
+                        scanned += 1
+                        with open(path, encoding='utf-8', errors='replace') as fh:
+                            for line in fh:
+                                for ref in self._FLOATING_RE.findall(line):
+                                    if not ref.startswith(self._FIRST_PARTY):
+                                        offenders.append(
+                                            f'{os.path.relpath(path, tmpdir)}: {line.strip()}')
+
+        # Floor from the walk itself, not from a list this test maintains.
+        assert scanned >= 24, (
+            f'anti-vacuity: only {scanned} generated files scanned across three '
+            f'deploy methods — run_init stopped emitting, or the walk is broken')
+        assert not offenders, (
+            'floating third-party refs emitted to customers:\n  '
+            + '\n  '.join(sorted(set(offenders))))
+
+    def test_the_floating_detector_actually_detects(self):
+        """Positive control for the regex above.
+
+        Without this, a regex that silently matches nothing would make
+        `test_only_first_party_refs_may_float` pass forever. Uses the exact
+        refs #1337 removed.
+        """
+        for bad in ('bitnami/kubectl:latest', 'alpine/helm:latest', 'argoproj/argocd:latest'):
+            assert self._FLOATING_RE.findall(f'      image: {bad}') == [bad]
+        # ...and must not fire on a pinned ref or on a GitHub runner label.
+        assert not self._FLOATING_RE.findall('    runs-on: ubuntu-latest')
+        assert not self._FLOATING_RE.findall(f'      image: {ip.GIT_SYNC_IMAGE}')
