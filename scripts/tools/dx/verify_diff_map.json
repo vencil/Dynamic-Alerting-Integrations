@@ -698,7 +698,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "e27f203a5eceefe314d71e267e4b78c6f1eafa7f5cbc4f45a8efbf9e159090ee",
+ "source_digest": "3a213452ef7401c53e27b68377d00e79a9d8d5bc377e45d4f37161823dacc06a",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1278,6 +1278,9 @@
    "tests/dx/test_sync_tool_registry.py",
    "tests/lint/test_check_portal_asset_shipping.py"
   ],
+  "docs/cli-reference.md": [
+   "tests/ops/test_generate_routes_orchestration.py"
+  ],
   "docs/getting-started/for-platform-engineers.md": [
    "tests/helm/test_federation_store_namespace_guard.py"
   ],
@@ -1295,6 +1298,9 @@
   ],
   "docs/glossary.md": [
    "tests/lint/test_check_codename_gate.py"
+  ],
+  "docs/integration/troubleshooting-checklist.md": [
+   "tests/ops/test_generate_routes_orchestration.py"
   ],
   "docs/integration/victoriametrics-integration.md": [
    "tests/rulepacks/test_vm_alert_parity.py",
@@ -1314,7 +1320,8 @@
    "tests/dx/test_doc_coverage.py",
    "tests/dx/test_generate_doc_map.py",
    "tests/dx/test_generate_planning_index.py",
-   "tests/lint/test_check_bilingual_structure.py"
+   "tests/lint/test_check_bilingual_structure.py",
+   "tests/ops/test_generate_routes_orchestration.py"
   ],
   "docs/internal/backend-compat-baseline.md": [
    "tests/rulepacks/test_vm_backend_parity.py"
@@ -2233,7 +2240,8 @@
    "tests/golden/test_merge_parity.py"
   ],
   "tests/helm": [
-   "tests/dx/test_verify_diff.py"
+   "tests/dx/test_verify_diff.py",
+   "tests/helm/test_optional_overrides_render.py"
   ],
   "tests/helm/test_image_tag_derivation.py": [
    "tests/shared/test_helm_portal.py"
@@ -2297,6 +2305,7 @@
    "tests/dx/test_custom_alerts_promtool.py",
    "tests/dx/test_inject_waveform.py",
    "tests/lint/test_check_vmalert_coverage.py",
+   "tests/ops/test_generate_routes_orchestration.py",
    "tests/rulepacks/test_platform_rules_extract_sync.py",
    "tests/rulepacks/test_vm_alert_parity.py"
   ],
@@ -2357,8 +2366,7 @@
    "tests/shared/test_json_stdout_contract.py"
   ],
   "tests/shared/test_vector_projection_vrl.py": [
-   "tests/dx/test_log_visibility_catalogue.py",
-   "tests/helm/test_optional_overrides_render.py"
+   "tests/dx/test_log_visibility_catalogue.py"
   ],
   "tests/snapshots": [
    "tests/shared/test_help_contract.py"

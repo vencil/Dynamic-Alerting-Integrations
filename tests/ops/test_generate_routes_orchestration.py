@@ -1251,6 +1251,198 @@ class TestPlatformAlertSourceContract:
 
 
 # ============================================================
+# runbook_url coverage contract (#1207 續 — the last 2 of the 42)
+# ============================================================
+# Shape of every runbook_url in the platform tree: an absolute GitHub blob URL
+# on main, optionally with an ASCII #anchor. Asserted (not merely described) by
+# test_runbook_urls_resolve_inside_this_repo below.
+_RUNBOOK_URL_PREFIX = (
+    "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/")
+
+# The platform alerts that still ship WITHOUT a runbook_url.
+#
+# SHRINK-ONLY + EXIT-LOCKED, same discipline as check_scrape_reachability's
+# KNOWN_UNKNOWN_SOURCE / check_orphan_recordings' KNOWN_ORPHANS: a row may only
+# be deleted, never added to paper over a new alert, and a row whose alert HAS
+# since gained a runbook_url is reported as a violation (see
+# test_runbook_ledger_is_exit_locked). A ledger rather than a straight
+# "all 42 must have one" assertion because these two are a KNOWN, deliberately
+# deferred gap — #1207's sweep took the tree from 0/34 to 30/34 and its
+# follow-up to 40/42, recording that these two alone have no existing
+# disposition page to point at and need IR content written first
+# (CHANGELOG.md `## [Unreleased]`; the writing is tracked in #1360, which is
+# also what deletes these two rows). Pointing them at a page that does not
+# answer the page-out is the failure mode the upstream ecosystem keeps hitting
+# (prometheus-community/helm-charts#3893: a shipped runbook_url that 404s), and
+# it is strictly worse than an honest absence: the operator loses the ability
+# to tell "no runbook yet" from "runbook exists, go read it".
+_PLATFORM_ALERTS_WITHOUT_RUNBOOK: dict[str, str] = {
+    "CronJobLastRunFailed":
+        "no existing page documents what to do when a platform CronJob's last "
+        "run failed. The sibling ThresholdGovernanceStale points at "
+        "docs/cli-reference.md#threshold-govern, but this rule is deliberately "
+        "GENERIC over the monitoring namespace (that genericity is the point of "
+        "#1242), so a per-command CLI page is the wrong target the moment "
+        "maintenance-scheduler is the failing CronJob. Triage lives only in the "
+        "alert's own description today.",
+    "MassExporterOutage":
+        "no existing page documents a FLEET-WIDE tenant-exporter outage. "
+        "docs/integration/troubleshooting-checklist.md 1.1.1 is the nearest "
+        "entry but it triages a SINGLE threshold-exporter target (wrong "
+        "workload — this alert reads the tenant-exporters job) and its advice "
+        "is per-target remediation, which is exactly what this alert's "
+        "description tells the operator NOT to do.",
+}
+
+
+class TestPlatformRunbookCoverageContract:
+    """Every platform self-monitoring alert must carry a `runbook_url` that
+    resolves to a page in THIS repo.
+
+    WHY: platform alerts page the platform's own on-call, who has no tenant to
+    hand the incident to. 40 of the 42 already carry one; nothing stopped the
+    41st from shipping without it — the annotation is not part of any schema,
+    pint cannot see this tree at all (`.pint.hcl`'s parser include list is
+    rule-packs/ + tests/rulepacks/*.rules.yaml; the ConfigMap wrapper is
+    unparseable, and the pint-reachable EXTRACTS mirror only ~2/3 of the tree,
+    so a pint `alerts/annotation` rule would go green while a third of the
+    alerts stayed uncovered), and configmap-rules-platform.yaml says so in its
+    own words next to the one anchored link ("rule-YAML URLs are not linted").
+
+    Two directions:
+      1. coverage — every platform alert except the shrink-only ledger above
+         carries a non-empty runbook_url;
+      2. resolvability — every runbook_url that IS present names a file that
+         exists on disk, and an #anchor (if any) names a heading that exists in
+         that file. A dead runbook link is worse than a missing one: it costs
+         the on-call a click plus the doubt about whether they have the wrong
+         URL or the wrong problem.
+
+    Reuses `_iter_repo_alert_rules` / `_is_platform_cm_location` rather than
+    re-globbing, for the same reason the three contracts above share them: a
+    second scanner drifts and silently narrows whichever gate lost the race.
+    """
+
+    def _platform_alerts(self):
+        return [(where, rule) for where, rule in _iter_repo_alert_rules()
+                if _is_platform_cm_location(where)]
+
+    @staticmethod
+    def _github_ascii_slug(heading: str) -> str:
+        """GitHub's heading -> anchor slug, ASCII subset only.
+
+        Deliberately NOT a general slugger: the repo's convention is that a
+        runbook_url anchor must be ASCII (a CJK/full-width heading has no
+        stable anchor — that is why the three internal-runbook links carry no
+        anchor at all), and test_runbook_anchors_are_ascii pins it. Headings
+        that are not pure ASCII simply do not match any anchor here, which is
+        the correct outcome.
+        """
+        s = heading.strip().lower()
+        s = re.sub(r"[^\w\s-]", "", s)
+        return re.sub(r"\s+", "-", s)
+
+    def test_every_platform_alert_carries_a_runbook_url(self):
+        seen = []
+        missing = []
+        for where, rule in self._platform_alerts():
+            name = rule["alert"]
+            seen.append(name)
+            url = (rule.get("annotations") or {}).get("runbook_url")
+            if url:
+                continue
+            if name in _PLATFORM_ALERTS_WITHOUT_RUNBOOK:
+                continue
+            missing.append((where, name))
+        # Non-vacuity first: an empty scan would make the assertion below pass
+        # for the wrong reason (this is the hole #1283 fixed elsewhere).
+        assert len(seen) >= _MIN_PLATFORM_ALERTS, (
+            f"only {len(seen)} platform alerts scanned, expected >= "
+            f"{_MIN_PLATFORM_ALERTS} — no {_PLATFORM_CM_PREFIX}*.yaml was "
+            f"parsed, so every assertion here is vacuous: {sorted(seen)}")
+        assert missing == [], (
+            "these platform alerts ship with no `runbook_url` annotation, so "
+            "the platform on-call they page has nowhere to go. FIX: add "
+            f'`runbook_url: "{_RUNBOOK_URL_PREFIX}<path-in-this-repo>"` to the '
+            "alert's annotations, pointing at a page that already exists and "
+            "actually answers the page-out (an ADR, a docs/internal/*runbook, "
+            "or a troubleshooting entry — see the 40 that do). ⛔ Do NOT invent "
+            "a URL to get past this gate and do NOT add a row to "
+            "_PLATFORM_ALERTS_WITHOUT_RUNBOOK: that ledger is shrink-only and "
+            "exists solely for the two alerts #1207 left pending. If no such "
+            "page exists yet, write the disposition content first. "
+            f"Offenders: {missing}")
+
+    def test_runbook_ledger_is_exit_locked(self):
+        # The ledger must shrink, never linger: a row whose alert has gained a
+        # runbook_url, or that names an alert no longer in the tree, is stale.
+        by_name = {rule["alert"]: (rule.get("annotations") or {}).get("runbook_url")
+                   for _, rule in self._platform_alerts()}
+        gone = sorted(set(_PLATFORM_ALERTS_WITHOUT_RUNBOOK) - set(by_name))
+        assert gone == [], (
+            "_PLATFORM_ALERTS_WITHOUT_RUNBOOK names alert(s) that no longer "
+            f"exist in the platform tree — delete the row(s): {gone}")
+        fixed = sorted(name for name in _PLATFORM_ALERTS_WITHOUT_RUNBOOK
+                       if by_name.get(name))
+        assert fixed == [], (
+            "these alerts now HAVE a runbook_url but are still listed in "
+            "_PLATFORM_ALERTS_WITHOUT_RUNBOOK — delete the row(s) so the "
+            f"coverage gate starts holding them: {fixed}")
+
+    def test_runbook_urls_resolve_inside_this_repo(self):
+        broken = []
+        checked = 0
+        for where, rule in self._platform_alerts():
+            url = (rule.get("annotations") or {}).get("runbook_url")
+            if not url:
+                continue
+            checked += 1
+            if not url.startswith(_RUNBOOK_URL_PREFIX):
+                broken.append((where, rule["alert"], url, "not a blob/main URL "
+                               "for this repo"))
+                continue
+            rel, _, anchor = url[len(_RUNBOOK_URL_PREFIX):].partition("#")
+            target = Path(_REPO_ROOT) / rel
+            if not target.is_file():
+                broken.append((where, rule["alert"], url,
+                               f"{rel} does not exist in this repo"))
+                continue
+            if not anchor:
+                continue
+            slugs = {self._github_ascii_slug(line.lstrip("#"))
+                     for line in target.read_text(encoding="utf-8").splitlines()
+                     if line.startswith("#")}
+            if anchor not in slugs:
+                broken.append((where, rule["alert"], url,
+                               f"no heading in {rel} slugs to #{anchor}"))
+        assert checked >= _MIN_PLATFORM_ALERTS - len(
+            _PLATFORM_ALERTS_WITHOUT_RUNBOOK), (
+            f"only {checked} runbook_url(s) checked — the scan did not reach "
+            "the platform tree, so this gate is vacuous")
+        assert broken == [], (
+            "these platform runbook_url(s) point at something that is not "
+            "there. A 404 runbook is worse than no runbook: it burns the "
+            "on-call's first click and leaves them unsure whether the link or "
+            "their diagnosis is wrong. FIX: repoint the URL, or restore the "
+            f"heading/file it named (renaming a linked heading rots it): {broken}")
+
+    def test_runbook_anchors_are_ascii(self):
+        # The anchor convention, pinned so it cannot erode: CJK / full-width
+        # headings have no stable GitHub anchor, which is why the internal
+        # runbook links deliberately carry none. An anchor that is not ASCII
+        # would also silently fall out of the slug check above.
+        for where, rule in self._platform_alerts():
+            url = (rule.get("annotations") or {}).get("runbook_url") or ""
+            _, _, anchor = url.partition("#")
+            if not anchor:
+                continue
+            assert anchor.isascii(), (
+                f"{where}: {rule['alert']} has a non-ASCII runbook_url anchor "
+                f"#{anchor} — link to the file with no anchor instead (the "
+                "three docs/internal/* links do exactly this)")
+
+
+# ============================================================
 # #1203 part 2: platform alert FEDERATION-PLANE contract
 # ============================================================
 # The producer tables live in the scrape gate (that is where metric -> source

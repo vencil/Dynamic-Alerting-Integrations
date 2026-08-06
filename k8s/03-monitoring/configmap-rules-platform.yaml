@@ -177,7 +177,10 @@ data:
                 CronJob deleted entirely is not caught here (its KSM series
                 vanishes); that surfaces at deploy/review time.
               # Anchor = the ASCII '#### threshold-govern' heading in cli-reference.md — a
-              # CONTRACT (renaming the heading rots this link; rule-YAML URLs are not linted).
+              # CONTRACT: renaming the heading rots this link. Now mechanically held by
+              # TestPlatformRunbookCoverageContract (tests/ops/test_generate_routes_
+              # orchestration.py), which resolves every runbook_url in this tree to a real
+              # file + a real heading. Before that gate, rule-YAML URLs were not linted.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#threshold-govern"
 
           # The companion to ThresholdGovernanceStale above, and the reason

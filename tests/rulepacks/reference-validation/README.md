@@ -87,8 +87,28 @@ candidate 的 `for:` / severity / raw-metric selector 與出貨 pack **逐條鎖
 
 ## 重跑（迴歸基線）
 
-需要 dev-container 內的 `vmsingle`（`:8428`）+ `vmalert-tool`/`vmalert`（見 ADR-030
-harness 的 VM 安裝說明）。每個函式庫：
+需要 `vmsingle`（`:8428`）+ `vmalert`（dev-container 內為 `/tmp/vm/vmalert-prod`；
+`inject_waveform.py` 依序探 `$VMALERT` → `PATH` → 該路徑）。
+
+⛔ **本檔不複製一份安裝指令**——版本與 SHA 只能有一份，手抄第二份正是這個 repo
+在消滅的病。可執行的配方在 CI workflow 裡，照抄那裡：
+
+| 要裝什麼 | 唯一可執行來源 |
+|---|---|
+| `vmalert`（本節用的） | [`nightly-vm-replay.yaml`](../../../.github/workflows/nightly-vm-replay.yaml) 的 `Install vmalert (from the pinned vmutils tarball)` step |
+| `vmalert-tool` | [`ci.yml`](../../../.github/workflows/ci.yml) 的 `Install vmalert-tool` step（**同一份** vmutils tarball，同一組 SHA-256） |
+| `vmsingle` | `nightly-vm-replay.yaml` 的 `Start pinned VictoriaMetrics (vmsingle, -retentionPeriod=100y)` step（digest-pinned image） |
+
+**版本從哪裡讀**：以上每一處都 `. tests/rulepacks/vm_engine_version` 取 `VM_VERSION`——
+那是引擎版本的單一 SSOT（現值見該檔），tarball 的 SHA-256 與 vmsingle 的 image digest
+都與它耦合，不符即 fail。bump 程序、以及 dev-container 的 vmsingle 為何來自**另一包**
+tarball，見 [`backend-compat-baseline.md`](../../../docs/internal/backend-compat-baseline.md)
+的「版本 pin 單一 SSOT」條。
+
+⚠️ [ADR-030](../../../docs/adr/030-decision-layer-migration-validation.md) **沒有** VM 安裝
+說明（本節原本指向那裡），且該 ADR 已宣告凍結、不再擴充——安裝面的 SSOT 只在上表。
+
+每個函式庫：
 
 ```sh
 # 驗證 → 注入 → 評分（--rules-delay-s 30 是 for:-alert 的 ALERTS 可見性所必需）
