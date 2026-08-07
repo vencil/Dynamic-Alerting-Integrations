@@ -1167,11 +1167,56 @@ def _platform_rule_locations() -> frozenset:
     EXISTS — a header or object name pointing at a pack that is not there is
     evidence of a stale or fabricated artifact, not of provenance.
     """
-    packs = _generated_pack_names()
-    return frozenset(
-        where for where, _doc, prov in _rule_containers()
-        if not (prov and prov in packs)
-    )
+    pack_alerts = _source_pack_alerts()
+    out = set()
+    for where, doc, claimed in _rule_containers():
+        if where.startswith("rule-packs/"):
+            continue                       # the source tree is never a deployment
+        mine = _alert_names(doc)
+        # ⛔ A CLAIM is not provenance; a MATCH is. The header, the object name
+        # and the path are all just strings an author controls, so "generated"
+        # was previously conferred by writing one line — a forged
+        # `# GENERATED from rule-packs/rule-pack-redis.yaml`, or a three-line
+        # `groups: []` decoy pack, bought a hand-authored alerting tree its way
+        # out of every contract. Requiring the artifact's alerts to actually
+        # BE in the pack it names makes forgery cost as much as writing the
+        # rules, and makes an empty decoy worthless (an empty pack is a
+        # superset of nothing).
+        if claimed and mine and mine <= pack_alerts.get(claimed, frozenset()):
+            continue
+        # …and a copy whose NAME says nothing is still generated if its content
+        # says so. Without this, an operator manifest called anything other than
+        # `da-rule-pack-<x>` was declared platform-scope and the diagnostic told
+        # the maintainer to put `alert_source: platform` on tenant alerts —
+        # reserved-label misuse, the exact failure the old prefix criterion was
+        # replaced for.
+        if mine and any(mine <= alerts for alerts in pack_alerts.values()):
+            continue
+        if not mine and claimed and claimed in pack_alerts:
+            continue                       # recording-only key of a real pack
+        out.add(where)
+    return frozenset(out)
+
+
+def _alert_names(doc) -> frozenset:
+    """Alert names a rules document declares (empty for recording-only)."""
+    names = set()
+    for group in (doc.get("groups") or []):
+        if isinstance(group, dict):
+            for rule in (group.get("rules") or []):
+                if isinstance(rule, dict) and "alert" in rule:
+                    names.add(rule["alert"])
+    return frozenset(names)
+
+
+@functools.lru_cache(maxsize=1)
+def _source_pack_alerts() -> dict:
+    """{pack name: the alert names its rule-packs/ source declares}."""
+    out = {}
+    for where, doc, prov in _rule_containers():
+        if where.startswith("rule-packs/") and prov:
+            out.setdefault(prov, set()).update(_alert_names(doc))
+    return {k: frozenset(v) for k, v in out.items()}
 
 
 # Directories whose YAML is deliberately NOT shipped alerting configuration:
@@ -1181,6 +1226,40 @@ def _platform_rule_locations() -> frozenset:
 _SCAN_SKIP_PARTS = frozenset({
     "testdata", "fixtures", "node_modules", "site", "__pycache__", ".git",
 })
+
+
+@functools.lru_cache(maxsize=1)
+def _deployed_dirs() -> tuple:
+    """Directories this repo's own deploy commands hand to `kubectl apply -f`.
+
+    ⛔ This is the POSITIVE "shipped" signal, and it is DERIVED, not listed.
+    Scanning every YAML in the repo and defaulting to platform made the gate
+    fail-closed over things that are not deployments at all: a BYO
+    PrometheusRule sample under docs/ — a file whose entire purpose is to be
+    copied by a customer — was told to add `alert_source: platform`, a reserved
+    label that would pipe their alerts into our NOC. A gate that cannot tell a
+    shipped manifest from an illustration of one is not tightening coverage,
+    it is taxing documentation.
+
+    Reading the targets out of the deploy scripts keeps scope honest in both
+    directions: add a `kubectl apply -f` for a new directory and it is covered
+    automatically; nothing is covered because someone remembered to list it.
+    NON-RECURSIVE, matching kubectl's default — `operator-manifests/fixtures/`
+    is not applied by `kubectl apply -f operator-manifests/`, so it is not in
+    scope here either.
+    """
+    targets = set()
+    pat = re.compile(r'kubectl apply -f\s+"?([^\s"|;&]+)')
+    for rel in ("scripts/setup.sh", "operator-manifests/README.md", "k8s/README.md"):
+        path = Path(_REPO_ROOT) / rel
+        if not path.exists():
+            continue
+        for raw in pat.findall(path.read_text(encoding="utf-8")):
+            cleaned = raw.replace("${K8S_DIR}", "k8s").replace("$K8S_DIR", "k8s")
+            cleaned = cleaned.strip("/")
+            if cleaned and not cleaned.startswith("-"):
+                targets.add(cleaned)
+    return tuple(sorted(targets))
 
 
 def _tracked_yaml_paths():
@@ -1200,9 +1279,21 @@ def _tracked_yaml_paths():
     out = subprocess.run(
         ["git", "-C", _REPO_ROOT, "ls-files", "-z"],
         capture_output=True, text=True, check=True).stdout
+    deployed = _deployed_dirs()
+
+    def in_scope(rel: str) -> bool:
+        # rule-packs/ is the AUTHORING surface: not applied directly, but it is
+        # what every generated copy is derived from, so it must be read to know
+        # what "generated" means at all.
+        if rel.startswith("rule-packs/"):
+            return True
+        parent = PurePosixPath(rel).parent.as_posix()
+        return parent in deployed          # direct child only — kubectl is not recursive
+
     return sorted(p for p in out.split("\0") if p
                   and p.lower().endswith((".yaml", ".yml"))
-                  and not (_SCAN_SKIP_PARTS & set(PurePosixPath(p).parts)))
+                  and not (_SCAN_SKIP_PARTS & set(PurePosixPath(p).parts))
+                  and in_scope(p))
 
 
 @functools.lru_cache(maxsize=1)
@@ -1545,9 +1636,14 @@ class TestPlatformAlertSourceContract:
             f"the deployed ConfigMap tree yielded {len(k8s_tree)} container(s)")
         prom = [w for w in by_where if w.startswith("operator-manifests/")]
         assert len(prom) >= 16, f"PrometheusRule tree not discovered: {prom}"
-        assert all(by_where[w] for w in prom), (
-            "an operator manifest with no derivable source pack would be "
-            "platform-scope; today all of them map to a pack")
+        # Classification, not the CLAIM. Provenance may be established by
+        # content (alerts that are actually in a pack) even when the object
+        # name says nothing, so asserting on the claimed string would fail a
+        # correctly-classified manifest and re-create the reserved-label
+        # misdiagnosis this whole criterion exists to avoid.
+        assert not any(w in platform for w in prom), (
+            f"operator manifest(s) classified platform-scope: "
+            f"{[w for w in prom if w in platform]}")
         # 4. `groups:` alone is not enough: RBAC subject groups are not rules.
         assert not any("configmap-rbac" in w for w in by_where), sorted(by_where)
         # 5. Nothing rule-shaped may yield zero rules (the silent-zero).
