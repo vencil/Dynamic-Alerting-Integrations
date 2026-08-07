@@ -82,8 +82,62 @@ filter_known() {
         | grep -vE "contains a link '\\./[^']+\\.en\\.md'" \
         | grep -vE "Doc file 'CHANGELOG\\.md' contains a link 'docs/[^']+\\.md" \
         | grep -v "component-health-snapshot\\.json" \
+        | grep -vE "contains a link '[^']*#[^']*', but there is no such anchor on this page\\.$" \
+        | grep -vE "does not contain an anchor '#[^']*'\\.$" \
         || true
 }
+
+# --- #1200: MkDocs-vs-GitHub anchor debt (RATCHETED, not accepted) -----------
+# Filters 6+7 above are NOT "known-acceptable" in the sense the other five are.
+# They are a LEDGERED DEBT with a hard ceiling, kept separate so the number can
+# never quietly grow.
+#
+# Root cause: `mkdocs.yml` leaves `toc.slugify` at Python-Markdown's ASCII-only
+# default, which COLLAPSES runs of whitespace and DROPS CJK entirely — a pure
+# Chinese heading slugs to the empty string and lands as `_1` / `_2`. GitHub
+# does neither. The two renderers therefore disagree on almost every anchor in
+# a zh-primary docs tree, and a link cannot be correct on both.
+# The fix is to switch the slug function; that rewrites ~2897 published anchor
+# URLs across 220 pages with no anchor-level redirect available anywhere in the
+# MkDocs ecosystem (fragments never reach the server), so it is its own
+# migration and its own review — tracked in #1200's session-handoff comment.
+#
+# ⛔ This block is an EXIT-LOCK, not an exemption:
+#   * count > ceiling  -> FAIL. New anchor debt must not hide behind this.
+#   * count < ceiling  -> FAIL. Ratchet the ceiling DOWN in the same commit.
+#   * count == 0       -> FAIL. The migration landed; DELETE filters 6+7 and
+#                         this whole block instead of leaving a dead filter.
+anchor_debt() {
+    grep "^WARNING" "$LOG_FILE" \
+        | grep -E "contains a link '[^']*#[^']*', but there is no such anchor on this page\\.$|does not contain an anchor '#[^']*'\\.$" \
+        || true
+}
+ANCHOR_DEBT_CEILING=240
+ANCHOR_DEBT=$(anchor_debt | wc -l)
+ANCHOR_DEBT=${ANCHOR_DEBT//[[:space:]]/}
+
+if [ "$ANCHOR_DEBT" -eq 0 ]; then
+    echo "::error::anchor debt is 0 — the toc.slugify migration (#1200) has \
+landed. DELETE filters 6+7 and the anchor-debt block in $0; leaving a dead \
+filter is how the next real breakage gets swallowed." >&2
+    echo "MKDOCS STRICT STATUS=FAIL ANCHOR_DEBT_LEDGER=stale" >&2
+    exit 1
+elif [ "$ANCHOR_DEBT" -gt "$ANCHOR_DEBT_CEILING" ]; then
+    echo "::error::anchor debt GREW to $ANCHOR_DEBT (ceiling \
+$ANCHOR_DEBT_CEILING). This ledger is shrink-only — do not raise the ceiling \
+to get past this. Either the new link is genuinely broken on the MkDocs site, \
+or it needs the #1200 slugify migration first." >&2
+    anchor_debt | head -20 >&2
+    echo "MKDOCS STRICT STATUS=FAIL ANCHOR_DEBT=$ANCHOR_DEBT" >&2
+    exit 1
+elif [ "$ANCHOR_DEBT" -lt "$ANCHOR_DEBT_CEILING" ]; then
+    echo "::error::anchor debt SHRANK to $ANCHOR_DEBT (ceiling \
+$ANCHOR_DEBT_CEILING) — good, but ratchet ANCHOR_DEBT_CEILING down to \
+$ANCHOR_DEBT in this same commit so the gain cannot be silently given back." >&2
+    echo "MKDOCS STRICT STATUS=FAIL ANCHOR_DEBT=$ANCHOR_DEBT" >&2
+    exit 1
+fi
+echo "MKDOCS ANCHOR DEBT=$ANCHOR_DEBT (ledgered, #1200)"
 
 # Filter rationales (this script is the single source of truth — keep
 # rationales here in sync with the filter list above):
