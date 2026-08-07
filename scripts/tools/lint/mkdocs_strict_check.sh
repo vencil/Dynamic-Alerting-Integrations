@@ -116,10 +116,30 @@ ANCHOR_DEBT_CEILING=240
 ANCHOR_DEBT=$(anchor_debt | wc -l)
 ANCHOR_DEBT=${ANCHOR_DEBT//[[:space:]]/}
 
+# ⛔ Before trusting a count of 0, prove the COLLECTOR still works. `grep
+# "^WARNING"` is a load-bearing assumption: if mkdocs ever changes its log
+# prefix, adds unconditional colour (pint already does exactly this — see
+# check_pint.py's ANSI fix), or is run with --quiet, every filter here matches
+# nothing and BOTH counters read 0. Without this canary the zero branch would
+# tell a maintainer to delete the filters, and deleting them makes
+# ACTIONABLE_COUNT read 0 too — a green build with the whole warning pipeline
+# dead. A zero-warning mkdocs build is not a thing this repo has ever had.
+TOTAL_WARNINGS=$(grep -c "^WARNING" "$LOG_FILE" || true)
+TOTAL_WARNINGS=${TOTAL_WARNINGS//[[:space:]]/}
+if [ "$TOTAL_WARNINGS" -eq 0 ]; then
+    echo "::error::the warning collector matched NOTHING (0 lines start with \
+'WARNING'). Do not read this as a clean build and do not delete any filter: \
+mkdocs almost certainly changed its log format, added colour, or was run \
+quietly. Fix the collector in $0 first, then re-read the counts." >&2
+    echo "MKDOCS STRICT STATUS=FAIL COLLECTOR=broken LOG=$LOG_FILE" >&2
+    exit 1
+fi
+
 if [ "$ANCHOR_DEBT" -eq 0 ]; then
-    echo "::error::anchor debt is 0 — the toc.slugify migration (#1200) has \
-landed. DELETE filters 6+7 and the anchor-debt block in $0; leaving a dead \
-filter is how the next real breakage gets swallowed." >&2
+    echo "::error::anchor debt is 0 while the collector is alive \
+($TOTAL_WARNINGS warnings seen) — the toc.slugify migration (#1200) has \
+landed. Remove ONLY filters 6+7 and this anchor-debt block; leave the other \
+five filters and the ACTIONABLE_COUNT gate in place." >&2
     echo "MKDOCS STRICT STATUS=FAIL ANCHOR_DEBT_LEDGER=stale" >&2
     exit 1
 elif [ "$ANCHOR_DEBT" -gt "$ANCHOR_DEBT_CEILING" ]; then

@@ -80,6 +80,15 @@ def _gfm_anchor(heading_text: str) -> str:
     exactly why `_` must NOT be pre-stripped alongside them.
     """
     text = heading_text.strip()
+    # ATX closing sequence (CommonMark §4.2): a run of `#` at end-of-line is
+    # part of the SYNTAX, not the text — but only when whitespace separates it
+    # from the content. `## Foo ##` and `## Foo #` are both `foo`; `## Foo##`
+    # keeps the hashes as text (they then vanish as punctuation, also `foo`).
+    # Without this the trailing space becomes a dash and the anchor is `foo-`,
+    # which is both a false red on the correct link and a false green on the
+    # 404 one. The pre-rewrite slugger got this right only by accident, via a
+    # `.strip("-")` that was itself wrong for leading dashes.
+    text = re.sub(r"\s+#+[ \t]*$", "", text)
     text = re.sub(r"!\[([^\]]*)\]\([^\)]+\)", r"\1", text)  # image → alt text
     text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)   # link → label
     return _gfm_slug(text)
