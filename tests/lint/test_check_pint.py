@@ -87,8 +87,14 @@ def _hcl_list(hcl: str, key: str) -> list[str]:
     # `/* */` too: HCL accepts it, so commenting an include entry out that way
     # drops the same 42 entries from pint while a `#`-only strip still reads
     # the path as live. Block comments first, then line comments.
-    hcl = re.sub(r'/\*.*?\*/', '', hcl, flags=re.S)
+    # ⛔ LINE comments first. .pint.hcl already contains an unpaired `/*` inside
+    # a `#` comment (a glob, `tests/rulepacks/*`); stripping block comments
+    # first lets that `/*` pair with a later `*/` and swallow real config,
+    # producing a misleading "parser.include NOT FOUND" instead of a drift
+    # report. Removing line comments first makes the stray `/*` disappear with
+    # the comment that contains it.
     hcl = re.sub(r'^[ \t]*(?:#|//).*$', '', hcl, flags=re.M)
+    hcl = re.sub(r'/\*.*?\*/', '', hcl, flags=re.S)
     block = re.search(r'parser\s*\{(.*?)\n\}', hcl, re.S)
     assert block, "expected a `parser { ... }` block in .pint.hcl"
     m = re.search(rf'^\s*{key}\s*=\s*\[(.*?)\]', block.group(1), re.S | re.M)
@@ -213,7 +219,25 @@ def test_entries_floor_survives_pints_ansi_coloured_output():
     # situation entirely. Reading both constants makes a ratchet a two-line edit
     # that stays consistent by construction.
     total, pack = mod._PINT_ENTRIES_AT_MEASURE, mod._PLATFORM_PACK_ENTRIES
-    assert total - pack < floor <= total, (
+
+    # ⛔ The lockstep the constant's own comment claims. It did NOT exist:
+    # changing _PLATFORM_PACK_ENTRIES from 42 to 30 left every test green while
+    # the comment asserted the sibling value was read back "so the two cannot
+    # drift". Claiming a guard is worse than not having one — it is why nobody
+    # adds the guard. pint entries and platform alert count are the same
+    # quantity (the ConfigMap holds only alerting rules, no recording rules).
+    ops = _read("tests/ops/test_generate_routes_orchestration.py")
+    m_alerts = re.search(r'_MIN_PLATFORM_ALERTS\s*=\s*(\d+)', ops)
+    assert m_alerts, "_MIN_PLATFORM_ALERTS not found in the platform-pack scanner"
+    assert pack == int(m_alerts.group(1)), (
+        f"_PLATFORM_PACK_ENTRIES={pack} but _MIN_PLATFORM_ALERTS="
+        f"{m_alerts.group(1)}. These count the same rules; letting them drift "
+        "makes the pint staleness window size itself against a stale number.")
+
+    # `0 <` as well as `< pack`: floor == total leaves NO room for a legitimate
+    # small deletion, which contradicts the sizing note's own "8 of slack", and
+    # `total := floor` would otherwise satisfy the window trivially.
+    assert 0 < total - floor < pack, (
         f"_MIN_PINT_ENTRIES={floor} is outside the useful window "
         f"({total - pack}, {total}]: at or below it, losing the whole platform "
         f"ConfigMap ({pack} entries) stays green; above it, the measured total "

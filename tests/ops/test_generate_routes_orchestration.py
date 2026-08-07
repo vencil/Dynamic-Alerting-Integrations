@@ -1123,23 +1123,32 @@ def _is_platform_cm_location(where: str) -> bool:
          DELETE the correct label. That is the same "the gate steers you into the
          broken state" failure the prefix itself was introduced to fix, one level up.
 
-    Deriving from the generated-copy convention makes the classification a
-    property of the artifact (does a source pack exist?) instead of a property of
-    its name. 17/17 identical to the old prefix test on today's tree — pinned by
-    test_platform_cm_criterion_matches_the_prefix_era_on_the_live_tree.
+    Deriving from the generator's own provenance makes the classification a
+    property of the artifact instead of a property of its name — and the
+    matching DISCOVERY rewrite (see `_iter_rule_containers`) means membership
+    no longer depends on filename or directory either. Scope today: 63
+    containers across three trees / 408 rules, of which exactly one container
+    is hand-authored. Pinned by test_platform_cm_discovery_is_content_based
+    and test_unknown_provenance_defaults_to_platform.
 
-    ⛔ KNOWN LIMIT — CLASSIFICATION is artifact-based; DISCOVERY still is not.
-    Everything above only decides how to label a file that `_iter_repo_alert_rules`
-    already chose to read, and that chooser is still pure filename + fixed
-    directory: `configmap-rules-*` under k8s/03-monitoring/. So a platform rules
-    ConfigMap named `configmap-platform-selfmon-rules.yaml`, or spelled `.YAML`,
-    or living in k8s/04-tenant-api/ (a real directory), is invisible to all four
-    contracts — not misclassified, never seen. The name-dependence moved from the
-    classifier to the discoverer rather than being eliminated. Closing it means
-    deciding what makes a file a rules ConfigMap on CONTENT (kind + a data key
-    that parses as `groups:`) or on membership in a kustomization, which changes
-    what three contracts iterate over and belongs in its own change. Tracked in
-    the #1200 handoff comment alongside the anchor debt.
+    ⛔ KNOWN LIMIT — one directory criterion remains, deliberately. The bare
+    `groups:` document shape (a plain Prometheus rule file, no ConfigMap or
+    PrometheusRule wrapper) is only recognised under rule-packs/. That is a
+    PATH test, and it contradicts the "content, never location" rule the
+    scanner otherwise follows — kept because the shape is indistinguishable
+    from this repo's 23 `tests/rulepacks/*.rules.yaml` extracts and
+    tests/e2e-bench/alert-rules.yml, which are test inputs rather than shipped
+    configuration. The cost is real: a hand-authored `extra-platform-rules.yaml`
+    with top-level `groups:` anywhere outside rule-packs/ is not discovered.
+    Closing it needs a positive signal for "shipped" — kustomization membership
+    or a Helm values reference — which is its own change.
+
+    Two further soft spots, both currently harmless and both worth knowing:
+    a PrometheusRule's provenance comes from its `da-rule-pack-<x>` object name
+    alone, so the name attests to nothing about the CONTENT it wraps; and
+    `groups: []` passes the shape test (a generator with nothing to emit
+    legitimately produces one), so an unrelated ConfigMap with an empty
+    `groups` key would be read as a rules container contributing no rules.
     """
     return where in _platform_rule_locations()
 
@@ -1160,7 +1169,7 @@ def _platform_rule_locations() -> frozenset:
     """
     packs = _generated_pack_names()
     return frozenset(
-        where for where, _doc, prov in _iter_rule_containers()
+        where for where, _doc, prov in _rule_containers()
         if not (prov and prov in packs)
     )
 
@@ -1181,12 +1190,25 @@ def _tracked_yaml_paths():
     # and the exact trick a red-team run used — is simply never listed. Filtering
     # in Python is the difference between "the scanner declined to look" and
     # "the scanner looked and found nothing".
+    # ⛔ `-z` + NUL split, matching _git_tracked_paths below. Plain `.split()`
+    # breaks on whitespace, so `k8s/configmap rules platform.yaml` arrives as
+    # three fragments and none of them opens; and without -z git applies
+    # core.quotePath, so a CJK filename comes back as `"k8s/r\303\250gles.yaml"`
+    # and fails the suffix test. In a zh-primary repo that is not hypothetical,
+    # and both failures are the scanner declining to look — the exact thing the
+    # case-insensitive suffix match above exists to prevent.
     out = subprocess.run(
-        ["git", "-C", _REPO_ROOT, "ls-files"],
-        capture_output=True, text=True, check=True).stdout.split()
-    return sorted(p for p in out
-                  if p.lower().endswith((".yaml", ".yml"))
+        ["git", "-C", _REPO_ROOT, "ls-files", "-z"],
+        capture_output=True, text=True, check=True).stdout
+    return sorted(p for p in out.split("\0") if p
+                  and p.lower().endswith((".yaml", ".yml"))
                   and not (_SCAN_SKIP_PARTS & set(PurePosixPath(p).parts)))
+
+
+@functools.lru_cache(maxsize=1)
+def _rule_containers() -> tuple:
+    """Cached tuple form of _iter_rule_containers — see F11 note there."""
+    return tuple(_iter_rule_containers())
 
 
 def _iter_rule_containers():
@@ -1232,26 +1254,72 @@ def _iter_rule_containers():
             isinstance(g, dict) and "rules" in g for g in value)
 
     gen_re = re.compile(r"GENERATED from rule-packs/rule-pack-([A-Za-z0-9_-]+)\.ya?ml")
+
+    def _header_provenance(chunk: str):
+        """The generator header, read ONLY from a document's leading comments.
+
+        ⛔ Two things must both be narrow here, and the first version was
+        narrow in neither. Searching the whole file's raw text means the string
+        confers provenance from anywhere it appears — including inside an
+        `annotations.summary` value, which is attacker- or tenant-writable
+        data. And computing it once per FILE then applying it to every document
+        means a `---` separator is the best hiding place in the repo: append a
+        hand-authored ConfigMap to any generated one and it inherits the
+        header. That is the escape hatch content-based discovery just closed,
+        reopened one layer up and cheaper than before.
+        """
+        for line in chunk.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if not stripped.startswith("#"):
+                return None              # past the leading comment block
+            m = gen_re.search(stripped)
+            if m:
+                return m.group(1)
+        return None
+
+    def _documents(text: str):
+        """(raw slice, parsed doc) per YAML document, so provenance stays local."""
+        chunks, cur = [], []
+        for line in text.splitlines(keepends=True):
+            if line.rstrip("\r\n") == "---" and cur:
+                chunks.append("".join(cur))
+                cur = []
+            else:
+                cur.append(line)
+        if cur:
+            chunks.append("".join(cur))
+        for chunk in chunks:
+            try:
+                yield chunk, yaml.safe_load(chunk)
+            except yaml.YAMLError:
+                continue
+
     for rel in _tracked_yaml_paths():
         path = Path(_REPO_ROOT) / rel
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        if "groups:" not in text:            # cheap prefilter, not a criterion
-            continue
-        try:
-            docs = list(yaml.safe_load_all(text))
-        except yaml.YAMLError:
+        # ⛔ Prefilter must be WIDER than the criterion, or it becomes one.
+        # `groups :` — a space before the colon — is legal YAML that the exact
+        # substring missed, so the file was dropped before anything structural
+        # ever looked at it. Deliberately UNANCHORED: the generated ConfigMaps
+        # carry their rules in a double-quoted scalar (`x.yml: "groups:\n..."`),
+        # so `groups` never starts a line there and a `^`-anchored pattern
+        # silently drops the entire deployed tree. `_is_rule_groups` below is
+        # what actually decides; this only avoids reading every YAML in full.
+        if not re.search(r"groups\s*:", text):
             continue
 
-        header = gen_re.search(text)
-        for doc in docs:
+        for chunk, doc in _documents(text):
+            header_prov = _header_provenance(chunk)
             if not isinstance(doc, dict):
                 continue
             kind = doc.get("kind")
             if kind == "ConfigMap":
-                prov = header.group(1) if header else None
+                prov = header_prov
                 for key, body in (doc.get("data") or {}).items():
                     try:
                         inner = yaml.safe_load(body) if isinstance(body, str) else body
@@ -1262,10 +1330,18 @@ def _iter_rule_containers():
                             or isinstance(inner.get("spec"), dict)):
                         yield f"{rel}:{key}", inner, prov
             elif kind == "PrometheusRule":
+                # ⛔ `groups` at the TOP level of a PrometheusRule is the
+                # commonest paste error and the tripwire below cannot see it:
+                # that check receives `doc["spec"]`, so the misplaced key is
+                # outside what it is handed. Normalise here, where both halves
+                # are still visible, and let the tripwire flag the empty spec.
+                if _is_rule_groups(doc.get("groups")) and not (
+                        isinstance(doc.get("spec"), dict) and doc["spec"].get("groups")):
+                    yield rel, {"_misplaced_groups": doc.get("groups")}, None
+                    continue
                 name = (doc.get("metadata") or {}).get("name") or ""
                 prov = (name[len("da-rule-pack-"):]
-                        if name.startswith("da-rule-pack-") else
-                        (header.group(1) if header else None))
+                        if name.startswith("da-rule-pack-") else header_prov)
                 yield rel, (doc.get("spec") or {}), prov
             elif _is_rule_groups(doc.get("groups")) and rel.startswith("rule-packs/"):
                 stem = _strip_rules_ext(PurePosixPath(rel).name)
@@ -1282,7 +1358,7 @@ def _iter_repo_alert_rules():
     reserved-value claim is only as good as its coverage — two scanners would
     let one drift and silently narrow the other's guarantee.
     """
-    for where, doc, _prov in _iter_rule_containers():
+    for where, doc, _prov in _rule_containers():
         for group in (doc.get("groups") or []):
             if not isinstance(group, dict):
                 continue
@@ -1304,8 +1380,27 @@ def _rule_shaped_but_unparsed():
     the repo now uses.
     """
     offenders = []
-    for where, doc, _prov in _iter_rule_containers():
+    # ⛔ A file that will not parse is the loudest silent-zero of all: it
+    # contributes nothing and no branch above ever sees it. 68 tracked YAML in
+    # this repo currently fail to parse (helm templates carrying Go actions);
+    # none holds rules today, so only flag one that visibly tries to.
+    for rel in _tracked_yaml_paths():
+        try:
+            text = (Path(_REPO_ROOT) / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if "- alert:" not in text:
+            continue
+        try:
+            list(yaml.safe_load_all(text))
+        except yaml.YAMLError as exc:
+            offenders.append((rel, f"declares alerts but will not parse: {exc.__class__.__name__}"))
+    for where, doc, _prov in _rule_containers():
         if doc.get("groups"):
+            continue
+        if "_misplaced_groups" in doc:
+            offenders.append((where, "PrometheusRule with groups: at the top "
+                                     "level instead of under spec:"))
             continue
         nested = doc.get("spec")
         if isinstance(nested, dict) and nested.get("groups"):
@@ -1415,7 +1510,7 @@ class TestPlatformAlertSourceContract:
         previous version of this test pinned hand-written `where` values, which
         is exactly the thing that let a filename-shaped criterion look verified.
         """
-        containers = list(_iter_rule_containers())
+        containers = list(_rule_containers())
         assert len(containers) >= 30, (
             f"only {len(containers)} rules container(s) discovered — every "
             "assertion below would be vacuous")
@@ -1434,6 +1529,19 @@ class TestPlatformAlertSourceContract:
         assert "platform" not in _generated_pack_names()
         # 3. operator-manifests/ PrometheusRule objects are DISCOVERED — the
         #    directory-scoped scanner never saw this deployment path at all.
+        # ⛔ Pin EVERY tree, not the two that happened to get one. Dropping
+        # rule-packs/ — 16 containers, 122 rules, half of what the previous
+        # scanner read — was completely silent: the `>= 30` container floor has
+        # 33 of slack at today's 63, so losing a whole tree still clears it.
+        # A floor that only the trees you remembered can trip is not a floor.
+        packs_tree = [w for w in by_where if w.startswith("rule-packs/")]
+        assert len(packs_tree) >= 16, (
+            f"the rule-packs/ source tree yielded {len(packs_tree)} container(s) "
+            "— it is no longer being discovered, and every contract silently "
+            "narrowed to the deployed copies")
+        k8s_tree = [w for w in by_where if w.startswith("k8s/03-monitoring/")]
+        assert len(k8s_tree) >= 17, (
+            f"the deployed ConfigMap tree yielded {len(k8s_tree)} container(s)")
         prom = [w for w in by_where if w.startswith("operator-manifests/")]
         assert len(prom) >= 16, f"PrometheusRule tree not discovered: {prom}"
         assert all(by_where[w] for w in prom), (
@@ -1451,12 +1559,33 @@ class TestPlatformAlertSourceContract:
         INSIDE the gates. This is the property that makes naming, extension and
         directory irrelevant, so it is pinned on the classifier's own logic.
         """
+        # ⛔ Exercise the REAL classifier. The first version of this test
+        # restated the predicate inside itself and asserted on its own fake
+        # list — a tautology that still passed with the classifier inverted to
+        # fail-OPEN, while its docstring claimed to pin "the classifier's own
+        # logic". Monkeypatching the container source is what makes the
+        # assertion depend on the code under test.
         packs = _generated_pack_names()
-        # provenance naming a pack that does not exist is NOT provenance
         assert "definitely-not-a-pack" not in packs
-        fake = [("x.yaml:k", {}, "definitely-not-a-pack"), ("y.yaml:k", {}, None)]
-        assert all(not (prov and prov in packs) for _w, _d, prov in fake), (
-            "a header pointing at a missing pack must not confer generated status")
+        fake = (
+            ("fake.yaml:missing-pack", {}, "definitely-not-a-pack"),
+            ("fake.yaml:no-prov", {}, None),
+            ("fake.yaml:real-pack", {}, sorted(packs)[0]),
+        )
+        original = _rule_containers
+        try:
+            globals()["_rule_containers"] = lambda: fake
+            _platform_rule_locations.cache_clear()
+            got = _platform_rule_locations()
+        finally:
+            globals()["_rule_containers"] = original
+            _platform_rule_locations.cache_clear()
+        assert "fake.yaml:missing-pack" in got, (
+            "a header naming a pack that does not exist must NOT confer "
+            "generated status — stale or fabricated provenance is not provenance")
+        assert "fake.yaml:no-prov" in got, (
+            "unknown provenance must default to platform (fail-closed)")
+        assert "fake.yaml:real-pack" not in got
 
     def test_platform_alerts_carry_alert_source(self):
         seen = []
@@ -1567,14 +1696,25 @@ def _git_tracked_paths() -> frozenset:
         out = subprocess.run(
             ["git", "-C", _REPO_ROOT, "ls-files", "-z"],
             capture_output=True, text=True, timeout=60, check=True).stdout
-    except (OSError, subprocess.SubprocessError):
+    except FileNotFoundError:
+        # git is not installed at all — the source-tarball case this tolerates.
         return frozenset()
+    except subprocess.CalledProcessError as exc:
+        # ⛔ git RAN and refused. That is a misconfigured environment, not an
+        # absent repo, and the assert below never sees it — `GIT_DIR` pointing
+        # at nothing exits 128 and lands here, which is exactly the scenario
+        # the assert was written for and exactly the one it could not reach.
+        raise AssertionError(
+            f"git ls-files failed (exit {exc.returncode}) — GIT_DIR/GIT_WORK_TREE "
+            "is probably misconfigured. Refusing to treat that as 'no files to "
+            "check', which would silently pass every runbook URL.") from exc
     tracked = frozenset(p for p in out.split("\0") if p)
     # ⛔ An EMPTY result from a git that RAN is not "no .git here" — it is a git
-    # pointed somewhere else. `GIT_DIR=/nonexistent pytest …` exits 0 with no
-    # output, which silently disabled this whole check; one stray environment
-    # variable should not be able to switch a gate off. Absent git (the tarball
-    # case this tolerates) raises above and still returns empty.
+    # pointed somewhere else, e.g. GIT_DIR aimed at another repo whose index is
+    # empty (a nonexistent GIT_DIR exits 128 and raises above instead). One
+    # stray environment variable should not be able to switch a gate off.
+    # Absent git — the source-tarball case this deliberately tolerates — also
+    # raises above and still returns empty.
     assert tracked, (
         "git ran but tracked nothing — GIT_DIR/GIT_WORK_TREE is probably "
         "pointing away from the repo. Refusing to treat that as 'no files to "
@@ -1739,6 +1879,13 @@ class TestPlatformRunbookCoverageContract:
             "## Commented Out Phantom\n"
             "-->\n"
             "\n"
+            # Four spaces makes an INDENTED CODE BLOCK, not a heading. The
+            # three fence fixtures above all probe one dimension; this probes
+            # the other, and it is the fail-open one — an upstream change that
+            # starts tolerating leading indent without re-imposing the 4-space
+            # limit turns every indented `#` comment into a live anchor.
+            "    # Indented Code Phantom\n"
+            "\n"
             "#NotAHeading\n"
             "\n"
             "### Nested Heading\n",
@@ -1767,6 +1914,10 @@ class TestPlatformRunbookCoverageContract:
         assert "info-string-survivor" in anchors, (
             "a backtick in an opening fence's info string means it is NOT a "
             "fence; upstream is treating it as one and eating the heading")
+        assert "indented-code-phantom" not in anchors, (
+            "a 4-space-indented `#` line is an indented code block, not a "
+            "heading — upstream has started accepting leading indent without "
+            "the 4-space limit, which mints anchors GitHub does not have")
         assert "commented-out-phantom" not in anchors, (
             "a heading inside an HTML comment is being counted upstream — "
             "GitHub does not render it, so links to it 404")
@@ -1968,7 +2119,7 @@ class TestPlatformRunbookCoverageContract:
             # gained this guard in _check_anchor; the borrowed reader bypasses
             # it, so the one consumer that most needs it was the one left out.
             if target.suffix.lower() not in (".md", ".markdown"):
-                if not re.fullmatch(r"L\d+(-L\d+)?", anchor):
+                if not re.fullmatch(r"L\d+(C\d+)?(-L\d+(C\d+)?)?", anchor):
                     broken.append((where, rule["alert"], url,
                                    f"{rel} is not Markdown — GitHub renders it as "
                                    f"source and offers only #L<n> line refs, so "

@@ -450,7 +450,10 @@ class DocLinkChecker:
             # if they were headings invents anchors that do not exist —
             # configmap-rules-platform.yaml alone yields 39 phantoms — so a
             # bogus link reads valid while the one real form (`#L42`) reads broken.
-            if not re.fullmatch(r"L\d+(-L\d+)?", anchor):
+            # GitHub also mints column permalinks (`#L42C5-L48C10`) when a
+            # selection does not span whole lines; rejecting those reports a
+            # link that actually resolves.
+            if not re.fullmatch(r"L\d+(C\d+)?(-L\d+(C\d+)?)?", anchor):
                 self.broken_anchors.append({
                     "file": source_file.relative_to(self.repo_root),
                     "line": line_num,
