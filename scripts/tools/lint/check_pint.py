@@ -113,6 +113,11 @@ _PINT_ARGS = ["--offline", "-c", ".pint.hcl", "lint",
 # only signal, and this is what turns it red. Re-measure on every PINT_VERSION bump.
 _MIN_PINT_ENTRIES = 385
 
+# What configmap-rules-platform.yaml contributes (pint 0.86.0: 393 total, 351
+# without it). Doubles as the staleness bound enforced after the floor check:
+# slack larger than this means the floor could no longer see the pack vanish.
+_PLATFORM_PACK_ENTRIES = 42
+
 # pint colours its logs unconditionally — it does NOT check for a TTY — so under
 # `capture_output=True` the entries line arrives as
 # `\x1b[2mentries=\x1b[0m\x1b[94m393\x1b[0m`. A plain `entries=(\d+)` never matches
@@ -176,10 +181,19 @@ def main() -> int:
         if m is None:
             # Not "can't check, carry on" — an unreadable count means the floor below
             # is unenforceable, which is the same silent-green it exists to prevent.
-            # Most likely cause: a pint bump renamed/reformatted the `entries=` log.
-            print("FAIL: could not read `entries=N` from pint's output — its log "
-                  "format changed (PINT_VERSION bump?) and the non-vacuity floor "
-                  "can no longer be evaluated. Failing loud instead of skipping it.",
+            # ⛔ Do NOT name a single cause here. This branch is reached by any
+            # failure that stops pint printing a summary, and the two commonest
+            # are NOT a version bump: the docker fallback failing to pull (the
+            # binary install in ci.yml is continue-on-error), and .pint.hcl
+            # itself failing to parse. Asserting "log format changed" sends the
+            # reader to re-measure a floor when the real fix is a pull or a
+            # syntax error a few lines up.
+            print("FAIL: could not read `entries=N` from pint's output, so the "
+                  "non-vacuity floor cannot be evaluated. Failing loud instead "
+                  "of skipping it. Check, in this order: pint's own output above "
+                  "(a .pint.hcl parse error or a failed docker pull prints there "
+                  "and stops the run before any summary); then whether a "
+                  "PINT_VERSION bump renamed the `entries=` field.",
                   file=sys.stderr)
             return EXIT_VIOLATION
         entries = int(m.group(1))
@@ -193,6 +207,27 @@ def main() -> int:
                   f"parser.relaxed parses the ConfigMap-embedded platform rules. "
                   f"If rules were legitimately REMOVED, lower _MIN_PINT_ENTRIES in "
                   f"{Path(__file__).name} deliberately.", file=sys.stderr)
+            return EXIT_VIOLATION
+
+        # ⛔ Keep the DETECTION WINDOW open. A fixed floor decays: the drop it
+        # exists to catch is −_PLATFORM_PACK_ENTRIES, so once the repo grows
+        # past floor + that, the pack can fall out entirely and the total still
+        # clears the floor. The guard would read green forever after, with no
+        # edit ever having been made to it — failure by growth, not by change.
+        # Requiring the slack to stay under one pack's worth makes the floor
+        # self-maintaining: routine additions are free until they would blind
+        # it, and then CI names the number to move it to.
+        slack = entries - _MIN_PINT_ENTRIES
+        if slack > _PLATFORM_PACK_ENTRIES:
+            print(f"FAIL: pint checked {entries} entries against a "
+                  f"{_MIN_PINT_ENTRIES} floor — {slack} of slack, more than the "
+                  f"{_PLATFORM_PACK_ENTRIES} the platform ConfigMap contributes. "
+                  f"The floor can no longer detect that pack dropping out of "
+                  f"scope, which is the main thing it is for. Ratchet "
+                  f"_MIN_PINT_ENTRIES in {Path(__file__).name} up to "
+                  f"{entries - 8} (keeping the usual 8 for small legitimate "
+                  f"deletions) and re-read the sizing note above it.",
+                  file=sys.stderr)
             return EXIT_VIOLATION
 
     if result.returncode != 0 and args.ci:

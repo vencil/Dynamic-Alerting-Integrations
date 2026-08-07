@@ -16,7 +16,7 @@ import argparse
 import unicodedata
 from pathlib import Path
 from collections import defaultdict
-from typing import List, Tuple, Dict, Set
+from typing import List, Tuple, Dict, Optional, Set
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
 # Migrated in #489 Phase B (was missing encoding setup → would crash on
@@ -304,16 +304,49 @@ class DocLinkChecker:
             with open(resolved, "r", encoding="utf-8") as f:
                 lines = f.readlines()
 
-            in_code = False
+            # Fence state is (char, length): CommonMark closes a fence only with
+            # the SAME character and at least the opening run length, so a ```
+            # inside a ~~~~ block is content. A plain `startswith("```")` toggle
+            # misses `~~~` blocks entirely — their `# comments` then register as
+            # real headings and the anchor reads valid while GitHub 404s.
+            fence: Optional[Tuple[str, int]] = None
+            # `<!-- ... -->` may span lines; a heading inside one is not rendered,
+            # so commenting a section out must rot its inbound links (that is the
+            # whole point of this gate) rather than silently keep them green.
+            in_html_comment = False
             # Page-scoped so repeated headings collect their GitHub `-1`/`-2`
             # variants (adds anchors, never removes any → cannot false-positive).
             slugger = _GfmSlugger()
-            for line in lines:
+            for raw_line in lines:
+                line = raw_line
+                if in_html_comment:
+                    end = line.find("-->")
+                    if end == -1:
+                        continue
+                    line = line[end + 3:]
+                    in_html_comment = False
+                while "<!--" in line:
+                    start = line.index("<!--")
+                    end = line.find("-->", start + 4)
+                    if end == -1:
+                        line = line[:start]
+                        in_html_comment = True
+                        break
+                    line = line[:start] + line[end + 3:]
+
                 stripped = line.strip()
-                if stripped.startswith("```"):
-                    in_code = not in_code
+                fence_m = re.match(r"^(`{3,}|~{3,})", stripped)
+                if fence_m:
+                    char, run = fence_m.group(1)[0], len(fence_m.group(1))
+                    if fence is None:
+                        # An opening fence's info string may not contain backticks.
+                        if not (char == "`" and "`" in stripped[run:]):
+                            fence = (char, run)
+                        continue
+                    if char == fence[0] and run >= fence[1] and not stripped[run:].strip():
+                        fence = None
                     continue
-                if in_code:
+                if fence is not None:
                     continue
                 m = re.match(r"^(#{1,6})\s+(.+)", line)
                 if m:
@@ -367,6 +400,23 @@ class DocLinkChecker:
                       link_url: str) -> None:
         """Validate that an anchor exists in the target file's headings."""
         if not anchor:
+            return
+        if target_path.suffix.lower() not in (".md", ".markdown"):
+            # GitHub renders non-Markdown blobs as source; the ONLY anchors it
+            # offers are line refs (`#L42`). Slugging a .yaml's `#` comments as
+            # if they were headings invents anchors that do not exist —
+            # configmap-rules-platform.yaml alone yields 39 phantoms — so a
+            # bogus link reads valid while the one real form (`#L42`) reads broken.
+            if not re.fullmatch(r"L\d+(-L\d+)?", anchor):
+                self.broken_anchors.append({
+                    "file": source_file.relative_to(self.repo_root),
+                    "line": line_num,
+                    "link": link_url,
+                    "anchor": anchor,
+                    "best_match": None,
+                    "available": [f"(non-Markdown target; only #L<n> line refs "
+                                  f"exist on {target_path.name})"],
+                })
             return
         headings = self._get_headings(target_path)
         if not headings:

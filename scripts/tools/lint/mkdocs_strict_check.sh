@@ -116,6 +116,16 @@ ANCHOR_DEBT_CEILING=240
 ANCHOR_DEBT=$(anchor_debt | wc -l)
 ANCHOR_DEBT=${ANCHOR_DEBT//[[:space:]]/}
 
+# ⛔ A count is not a set. Fix one debted link and break a genuinely new one in
+# the same commit and the total is still 240 — green, with a real breakage
+# absorbed by a ledger whose stated job is to stop exactly that. Pinning the
+# digest of the sorted debt lines closes the swap: any substitution changes the
+# digest while the count sits still. This adds no new brittleness — the count is
+# already an exact equality, so a toolchain change that shifts the set was
+# always going to fail here; the digest just makes it fail for the right reason.
+ANCHOR_DEBT_DIGEST_PIN=9059a94c3d65c29d6369df93c2f44e6d0a9133340f832ff3d335a7a753c7eac6
+ANCHOR_DEBT_DIGEST=$(anchor_debt | LC_ALL=C sort | sha256sum | cut -d' ' -f1)
+
 # ⛔ Before trusting a count of 0, prove the COLLECTOR still works. `grep
 # "^WARNING"` is a load-bearing assumption: if mkdocs ever changes its log
 # prefix, adds unconditional colour (pint already does exactly this — see
@@ -141,6 +151,16 @@ if [ "$ANCHOR_DEBT" -eq 0 ]; then
 landed. Remove ONLY filters 6+7 and this anchor-debt block; leave the other \
 five filters and the ACTIONABLE_COUNT gate in place." >&2
     echo "MKDOCS STRICT STATUS=FAIL ANCHOR_DEBT_LEDGER=stale" >&2
+    exit 1
+elif [ "$ANCHOR_DEBT" -eq "$ANCHOR_DEBT_CEILING" ] \
+     && [ "$ANCHOR_DEBT_DIGEST" != "$ANCHOR_DEBT_DIGEST_PIN" ]; then
+    echo "::error::anchor debt is still $ANCHOR_DEBT but its CONTENTS changed \
+(digest $ANCHOR_DEBT_DIGEST, pinned $ANCHOR_DEBT_DIGEST_PIN). A one-for-one \
+swap is how a real breakage gets absorbed by a count that never moves. If you \
+fixed a debted link, the count must go DOWN and the ceiling with it; if a link \
+legitimately changed shape, update the pin in the same commit and say why." >&2
+    diff <(anchor_debt | LC_ALL=C sort) /dev/null | head -20 >&2
+    echo "MKDOCS STRICT STATUS=FAIL ANCHOR_DEBT_LEDGER=swapped" >&2
     exit 1
 elif [ "$ANCHOR_DEBT" -gt "$ANCHOR_DEBT_CEILING" ]; then
     echo "::error::anchor debt GREW to $ANCHOR_DEBT (ceiling \

@@ -77,6 +77,14 @@ def test_pint_config_scopes_to_rule_pack_sources():
 
 def _hcl_list(hcl: str, key: str) -> list[str]:
     """Extract a `parser` block string-list (`include` / `relaxed`) from .pint.hcl."""
+    # ⛔ Strip comments FIRST. pint ignores a commented-out list entry; a plain
+    # `"..."` findall does not, so `# "k8s/.../configmap-rules-platform.*"`
+    # reads as still-included here while pint silently drops 42 entries. One
+    # `# ` is all it takes, and the lockstep this helper exists to enforce is
+    # then enforcing nothing. Quoted `#` inside a path would be a false strip,
+    # so only treat `#`/`//` as a comment when it starts a line (after indent),
+    # which is the only form this file uses.
+    hcl = re.sub(r'^[ \t]*(?:#|//).*$', '', hcl, flags=re.M)
     block = re.search(r'parser\s*\{(.*?)\n\}', hcl, re.S)
     assert block, "expected a `parser { ... }` block in .pint.hcl"
     m = re.search(rf'^\s*{key}\s*=\s*\[(.*?)\]', block.group(1), re.S | re.M)

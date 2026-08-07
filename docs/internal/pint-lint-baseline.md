@@ -7,7 +7,7 @@ lang: zh
 status: active
 domain: observability
 created_at: 2026-06-15
-updated_at: 2026-06-15
+updated_at: 2026-08-07
 ---
 
 # Pint Lint Baseline — Prometheus rule static-analysis

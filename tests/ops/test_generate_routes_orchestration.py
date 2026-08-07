@@ -14,6 +14,7 @@ single comprehensive test file.
 import functools
 import json
 import os
+import posixpath
 import re
 import subprocess
 import tempfile
@@ -1066,6 +1067,13 @@ def _generated_pack_names() -> frozenset:
     RECURSIVE, matching `_iter_repo_alert_rules`'s rglob over the same tree: a
     source pack moved into a subdirectory must not read as "source deleted", or
     its generated ConfigMap would be misclassified as hand-authored.
+
+    ⛔ A name alone does not make a pack. The file must parse as YAML and
+    actually declare `groups:` — otherwise `touch rule-packs/rule-pack-x.yaml`
+    (zero bytes, thirty keystrokes) reclassifies configmap-rules-x.yaml as
+    generated, and every platform alert inside it drops out of all four
+    contracts while the suite stays green. A decoy is only convincing if it
+    has to contain the thing it claims to be the source of.
     """
     packs_dir = Path(_REPO_ROOT) / "rule-packs"
     names = set()
@@ -1073,8 +1081,15 @@ def _generated_pack_names() -> frozenset:
         if not path.is_file():
             continue
         stem = _strip_rules_ext(path.name)
-        if stem and stem.startswith(_RULE_PACK_PREFIX):
-            names.add(stem[len(_RULE_PACK_PREFIX):])
+        if not (stem and stem.startswith(_RULE_PACK_PREFIX)):
+            continue
+        try:
+            doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (yaml.YAMLError, UnicodeDecodeError, OSError):
+            continue
+        if not isinstance(doc, dict) or not doc.get("groups"):
+            continue
+        names.add(stem[len(_RULE_PACK_PREFIX):])
     return frozenset(names)
 
 
@@ -1103,6 +1118,19 @@ def _is_platform_cm_location(where: str) -> bool:
     property of the artifact (does a source pack exist?) instead of a property of
     its name. 17/17 identical to the old prefix test on today's tree — pinned by
     test_platform_cm_criterion_matches_the_prefix_era_on_the_live_tree.
+
+    ⛔ KNOWN LIMIT — CLASSIFICATION is artifact-based; DISCOVERY still is not.
+    Everything above only decides how to label a file that `_iter_repo_alert_rules`
+    already chose to read, and that chooser is still pure filename + fixed
+    directory: `configmap-rules-*` under k8s/03-monitoring/. So a platform rules
+    ConfigMap named `configmap-platform-selfmon-rules.yaml`, or spelled `.YAML`,
+    or living in k8s/04-tenant-api/ (a real directory), is invisible to all four
+    contracts — not misclassified, never seen. The name-dependence moved from the
+    classifier to the discoverer rather than being eliminated. Closing it means
+    deciding what makes a file a rules ConfigMap on CONTENT (kind + a data key
+    that parses as `groups:`) or on membership in a kustomization, which changes
+    what three contracts iterate over and belongs in its own change. Tracked in
+    the #1200 handoff comment alongside the anchor debt.
     """
     if ":" not in where:
         return False
@@ -1541,6 +1569,13 @@ class TestPlatformRunbookCoverageContract:
         assert anchor("Validate Config!") == "validate-config"
         assert anchor("**Bold** `code` heading") == "bold-code-heading"
 
+        # ⛔ Exercise EVERY fence spelling, not just the one this repo writes
+        # most. A canary whose only fence is ```` ```bash ```` cannot see a
+        # regression that opens fences solely on an info string — bare ``` and
+        # `~~~` blocks would start emitting their `#` comments as headings, the
+        # gate would accept anchors that 404 on GitHub, and this test would
+        # still pass. Each spelling below is a distinct way for the upstream
+        # tracker to break, so each gets its own phantom to catch.
         md = tmp_path / "canary.md"
         md.write_text(
             "# Real Heading\n"
@@ -1549,6 +1584,18 @@ class TestPlatformRunbookCoverageContract:
             "# CI gate\n"
             "#!/usr/bin/env bash\n"
             "```\n"
+            "\n"
+            "```\n"
+            "# Bare Fence Phantom\n"
+            "```\n"
+            "\n"
+            "~~~bash\n"
+            "# Tilde Fence Phantom\n"
+            "~~~\n"
+            "\n"
+            "<!--\n"
+            "## Commented Out Phantom\n"
+            "-->\n"
             "\n"
             "#NotAHeading\n"
             "\n"
@@ -1563,6 +1610,15 @@ class TestPlatformRunbookCoverageContract:
             "code-fence tracking regressed upstream — a fenced `# comment` is "
             "being read as a heading, which is exactly how a 404 anchor went "
             "green here")
+        assert "bare-fence-phantom" not in anchors, (
+            "an info-string-less ``` no longer opens a fence upstream — bare "
+            "blocks now leak their `#` comments as headings")
+        assert "tilde-fence-phantom" not in anchors, (
+            "`~~~` fences are not being tracked upstream; CommonMark allows "
+            "them and their `#` comments are leaking as headings")
+        assert "commented-out-phantom" not in anchors, (
+            "a heading inside an HTML comment is being counted upstream — "
+            "GitHub does not render it, so links to it 404")
         assert "notaheading" not in anchors, (
             "ATX headings require `#{1,6}\\s+`; `#Foo` is not a heading")
         # ...and it must actually FIND headings (an empty set would make the
@@ -1631,15 +1687,23 @@ class TestPlatformRunbookCoverageContract:
         forces an explicit, reviewed bump to grow, the same shape as
         test_bilingual_help_contract.py::test_allowlists_shrink_only_count_pin.
         """
-        assert len(_PLATFORM_ALERTS_WITHOUT_RUNBOOK) <= 2, (
-            f"_PLATFORM_ALERTS_WITHOUT_RUNBOOK grew to "
-            f"{len(_PLATFORM_ALERTS_WITHOUT_RUNBOOK)} (pin=2). This ledger is "
-            "shrink-only: it exists for the two alerts #1207 left pending "
-            "(CronJobLastRunFailed, MassExporterOutage), NOT as an escape hatch "
-            "for a new alert that shipped without a runbook_url. Write the "
-            "disposition page and point the alert at it. If a new deferral is "
-            "genuinely unavoidable, bumping this pin is the deliberate, reviewed "
-            f"cost of that: {sorted(_PLATFORM_ALERTS_WITHOUT_RUNBOOK)}")
+        # ⛔ Pin the KEY SET, not the row count. A count pin says "no more than
+        # two deferrals", which a SWAP satisfies: give CronJobLastRunFailed a
+        # runbook_url, delete its row, and land a brand-new runbook-less alert
+        # with a row of its own — still two, still green, and the docstring's
+        # "a row may only be DELETED" is quietly false. Subset-of-the-original
+        # is the property actually wanted, and it still lets the ledger empty.
+        _LEDGER_ORIGIN = frozenset({"CronJobLastRunFailed", "MassExporterOutage"})
+        added = set(_PLATFORM_ALERTS_WITHOUT_RUNBOOK) - _LEDGER_ORIGIN
+        assert not added, (
+            f"_PLATFORM_ALERTS_WITHOUT_RUNBOOK gained {sorted(added)}. This "
+            "ledger is shrink-only: it exists for the two alerts #1207 left "
+            "pending (CronJobLastRunFailed, MassExporterOutage), NOT as an "
+            "escape hatch for a new alert that shipped without a runbook_url — "
+            "and swapping one out for another is exactly the move a count-only "
+            "pin would have waved through. Write the disposition page and point "
+            "the alert at it. If a new deferral is genuinely unavoidable, adding "
+            "it to _LEDGER_ORIGIN above is the deliberate, reviewed cost of that.")
         # Every row must carry its own written justification — the ledger's value
         # is the REASON, not the name (a bare name set would let a row be added
         # with no argument for it).
@@ -1699,9 +1763,16 @@ class TestPlatformRunbookCoverageContract:
             # blob/main renders what is COMMITTED: an untracked or ignored file
             # exists here and 404s there. Skipped when git is unavailable — see
             # _git_tracked_paths.
+            # ⛔ Test the REQUESTED path, not the resolved one. GitHub serves
+            # blob/main/<literal path>; if that literal path is not committed it
+            # 404s no matter what a local symlink points at. Checking the
+            # resolved target lets `docs/_alias.md -> docs/cli-reference.md`
+            # (untracked symlink, real destination) pass a gate whose whole
+            # purpose is "the on-call can open this URL". resolve() stays above,
+            # where it belongs: proving the link cannot escape the repo.
             tracked = _git_tracked_paths()
-            if tracked and target.relative_to(
-                    Path(_REPO_ROOT).resolve()).as_posix() not in tracked:
+            requested = posixpath.normpath(rel)
+            if tracked and requested not in tracked:
                 broken.append((where, rule["alert"], url,
                                f"{rel} exists on disk but is NOT tracked by git — "
                                "blob/main serves the committed tree, so this 404s"))
