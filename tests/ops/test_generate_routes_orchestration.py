@@ -1302,15 +1302,16 @@ def _iter_rule_containers():
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        # ⛔ Prefilter must be WIDER than the criterion, or it becomes one.
-        # `groups :` — a space before the colon — is legal YAML that the exact
-        # substring missed, so the file was dropped before anything structural
-        # ever looked at it. Deliberately UNANCHORED: the generated ConfigMaps
-        # carry their rules in a double-quoted scalar (`x.yml: "groups:\n..."`),
-        # so `groups` never starts a line there and a `^`-anchored pattern
-        # silently drops the entire deployed tree. `_is_rule_groups` below is
-        # what actually decides; this only avoids reading every YAML in full.
-        if not re.search(r"groups\s*:", text):
+        # ⛔ Prefilter must be WIDER than the criterion, or it silently becomes
+        # one. Every tighter spelling tried here has been wrong in a different
+        # direction: `"groups:"` as a literal misses the legal `groups :` and
+        # the quoted key `"groups":`; a `^`-anchored pattern misses the deployed
+        # tree entirely, because generated ConfigMaps carry their rules inside a
+        # double-quoted scalar where `groups` never starts a line. The bare word
+        # is the only form with no YAML spelling between it and the key.
+        # `_is_rule_groups` below is what actually decides; this exists only to
+        # avoid parsing every YAML in the repo.
+        if "groups" not in text:
             continue
 
         for chunk, doc in _documents(text):
