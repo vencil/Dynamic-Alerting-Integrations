@@ -293,6 +293,47 @@ class DocLinkChecker:
         """
         return _gfm_anchor(heading_text)
 
+    @staticmethod
+    def _strip_html_comments(line: str) -> Tuple[str, bool]:
+        """Remove HTML comments from one non-fenced line.
+
+        Returns (remaining text, whether an unterminated comment BLOCK opened).
+
+        Two CommonMark rules do the work here, and getting either wrong makes
+        this swallow the rest of the file:
+
+        * Only a `<!--` that STARTS a line (≤3 spaces of indent) begins an HTML
+          block that can span lines. A `<!--` appearing mid-line — most often
+          inside a code span, e.g. ``## the `<!--` marker`` — is inline text; if
+          nothing closes it on that line it stays literal rather than opening a
+          block. Treating it as a block opener silently deleted every heading
+          below it.
+        * `<!-->` and `<!--->` are NOT comments (a comment's text may not begin
+          with `>` or `->`), so they must not open anything either.
+        """
+        out, i, opened = [], 0, False
+        while True:
+            start = line.find("<!--", i)
+            if start == -1:
+                out.append(line[i:])
+                break
+            if line[start + 4:start + 5] == ">" or line[start + 4:start + 6] == "->":
+                out.append(line[i:start + 4])       # malformed → literal text
+                i = start + 4
+                continue
+            end = line.find("-->", start + 4)
+            if end != -1:
+                out.append(line[i:start])
+                i = end + 3
+                continue
+            if line[:start].strip():
+                out.append(line[i:])                # mid-line, unclosed → literal
+            else:
+                out.append(line[i:start])
+                opened = True
+            break
+        return "".join(out), opened
+
     def _get_headings(self, filepath: Path) -> Set[str]:
         """Extract all heading anchors from a Markdown file (cached)."""
         resolved = filepath.resolve()
@@ -319,35 +360,37 @@ class DocLinkChecker:
             slugger = _GfmSlugger()
             for raw_line in lines:
                 line = raw_line
+
+                # ⛔ ORDER MATTERS, and the obvious order is wrong. Comments must
+                # be resolved INSIDE the fence state, never before it: a fenced
+                # block is literal content, so a stray `<!--` in a ```markdown
+                # example is text, not a comment opener. Stripping first let one
+                # such line swallow its own closing fence and then every heading
+                # to EOF — one benign doc example turned 0 broken anchors into 30.
                 if in_html_comment:
                     end = line.find("-->")
                     if end == -1:
                         continue
                     line = line[end + 3:]
                     in_html_comment = False
-                while "<!--" in line:
-                    start = line.index("<!--")
-                    end = line.find("-->", start + 4)
-                    if end == -1:
-                        line = line[:start]
-                        in_html_comment = True
-                        break
-                    line = line[:start] + line[end + 3:]
-
-                stripped = line.strip()
-                fence_m = re.match(r"^(`{3,}|~{3,})", stripped)
-                if fence_m:
-                    char, run = fence_m.group(1)[0], len(fence_m.group(1))
-                    if fence is None:
-                        # An opening fence's info string may not contain backticks.
-                        if not (char == "`" and "`" in stripped[run:]):
-                            fence = (char, run)
+                else:
+                    stripped = line.strip()
+                    fence_m = re.match(r"^(`{3,}|~{3,})", stripped)
+                    if fence_m:
+                        char, run = fence_m.group(1)[0], len(fence_m.group(1))
+                        if fence is None:
+                            # An opening fence's info string may not contain backticks.
+                            if not (char == "`" and "`" in stripped[run:]):
+                                fence = (char, run)
+                            continue
+                        if (char == fence[0] and run >= fence[1]
+                                and not stripped[run:].strip()):
+                            fence = None
                         continue
-                    if char == fence[0] and run >= fence[1] and not stripped[run:].strip():
-                        fence = None
-                    continue
-                if fence is not None:
-                    continue
+                    if fence is not None:
+                        continue
+
+                line, in_html_comment = self._strip_html_comments(line)
                 m = re.match(r"^(#{1,6})\s+(.+)", line)
                 if m:
                     heading_text = m.group(2).strip()

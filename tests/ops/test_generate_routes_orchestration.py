@@ -1087,7 +1087,16 @@ def _generated_pack_names() -> frozenset:
             doc = yaml.safe_load(path.read_text(encoding="utf-8"))
         except (yaml.YAMLError, UnicodeDecodeError, OSError):
             continue
-        if not isinstance(doc, dict) or not doc.get("groups"):
+        # ⛔ Test for the KEY, not for a truthy value. `rule-pack-custom-alerts`
+        # is generated, and a conf.d tree that declares no `_custom_alerts` —
+        # an ordinary, supported deployment — makes the generator emit
+        # `groups: []`. Truthiness reads that empty artifact as "no source pack",
+        # reclassifies its ConfigMap as hand-authored platform, and then demands
+        # `alert_source: platform` on TENANT alerts: a reserved value that pipes
+        # them into the NOC channel. Steering the maintainer into a broken state
+        # is precisely why the filename criterion had to go; requiring a truthy
+        # `groups` reinstalls it from the other side.
+        if not isinstance(doc, dict) or "groups" not in doc:
             continue
         names.add(stem[len(_RULE_PACK_PREFIX):])
     return frozenset(names)

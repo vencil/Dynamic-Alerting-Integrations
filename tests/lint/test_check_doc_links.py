@@ -143,6 +143,63 @@ class TestGfmSluggerDuplicates:
 
 
 # ---------------------------------------------------------------------------
+# Block structure: fences and HTML comments
+# ---------------------------------------------------------------------------
+class TestBlockStructure:
+    """Which lines COUNT as headings — the half that corpus coverage can't reach.
+
+    Every case here was a real defect, and not one of them was caught by a test
+    or by the repo's own 306 Markdown files: the corpus contains no `~~~` fence,
+    no 4-backtick fence, and no heading whose anchors depend on comment handling.
+    A rewrite of this machinery is therefore invisible to CI unless these live
+    as fixtures, which is exactly how the last two rewrites shipped broken.
+
+    Ground truth is CommonMark (verified against markdown-it-py); the failure
+    mode on the left of each `==` is what a wrong implementation produced.
+    """
+
+    @pytest.mark.parametrize("name,body,expected", [
+        # ── fences ──────────────────────────────────────────────────────────
+        ("tilde fence hides its comments",
+         "# Real\n~~~bash\n# Phantom\n~~~\n", {"real"}),
+        ("bare fence hides its comments",
+         "# Real\n```\n# Phantom\n```\n", {"real"}),
+        ("info string does not close a fence",
+         "```\n# A\n```bash\n# B\n```\n## After\n", {"after"}),
+        ("longer run closes, shorter does not",
+         "````\n```\n# Inner\n```\n````\n## After\n", {"after"}),
+        ("closing fence may not carry a trailing word",
+         "```\n# Inner\n``` foo\n```\n## After\n", {"after"}),
+        ("tilde info string MAY contain a backtick",
+         "~~~js `x`\n# Inner\n~~~\n## After\n", {"after"}),
+        ("unterminated fence swallows to EOF",
+         "# Before\n```\n# Inner\n", {"before"}),
+        # ── HTML comments ───────────────────────────────────────────────────
+        ("a commented-out heading is not rendered",
+         "# Top\n<!--\n## Hidden\n-->\n## After\n", {"top", "after"}),
+        ("a comment may span a whole fence",
+         "<!--\n```\n## X\n```\n-->\n## After\n", {"after"}),
+        # ⛔ The four below are why order matters: comments must be resolved
+        # INSIDE the fence state, and only a line-leading `<!--` opens a block.
+        ("unpaired <!-- inside a fence is literal content",
+         "# Real\n```markdown\n<!-- hide\n```\n\n## After\n", {"real", "after"}),
+        ("...and does not eat every later heading",
+         "```\n<!-- x\n```\n# One\n# Two\n", {"one", "two"}),
+        ("<!-- in a heading's code span is inline text",
+         "## The `<!--` marker\n\n## After\n", {"the----marker", "after"}),
+        ("<!--> is malformed and opens nothing",
+         "<!-->\n# After\n", {"after"}),
+        ("mid-line unclosed <!-- stays literal",
+         "Foo <!--\n# After\n-->\n", {"after"}),
+    ])
+    def test_heading_visibility(self, tmp_path, name, body, expected):
+        checker = _make_checker(tmp_path)
+        md = tmp_path / "docs" / "case.md"
+        md.write_text(body, encoding="utf-8")
+        assert checker._get_headings(md) == expected, name
+
+
+# ---------------------------------------------------------------------------
 # Upstream ground truth
 # ---------------------------------------------------------------------------
 class TestGithubSluggerFixtures:

@@ -1,0 +1,240 @@
+WARNING -  Doc file 'adr/001-severity-dedup-via-inhibit.en.md' contains a link '../architecture-and-design.en.md#appendix-a-role--tool-quick-reference', but the doc 'architecture-and-design.en.md' does not contain an anchor '#appendix-a-role--tool-quick-reference'.
+WARNING -  Doc file 'adr/001-severity-dedup-via-inhibit.md' contains a link '../architecture-and-design.md#附錄角色與工具速查', but the doc 'architecture-and-design.md' does not contain an anchor '#附錄角色與工具速查'.
+WARNING -  Doc file 'adr/002-oci-registry-over-chartmuseum.en.md' contains a link '../architecture-and-design.en.md#appendix-a-role--tool-quick-reference', but the doc 'architecture-and-design.en.md' does not contain an anchor '#appendix-a-role--tool-quick-reference'.
+WARNING -  Doc file 'adr/002-oci-registry-over-chartmuseum.md' contains a link '../architecture-and-design.md#附錄角色與工具速查', but the doc 'architecture-and-design.md' does not contain an anchor '#附錄角色與工具速查'.
+WARNING -  Doc file 'adr/003-sentinel-alert-pattern.en.md' contains a link '../architecture-and-design.en.md#appendix-a-role--tool-quick-reference', but the doc 'architecture-and-design.en.md' does not contain an anchor '#appendix-a-role--tool-quick-reference'.
+WARNING -  Doc file 'adr/003-sentinel-alert-pattern.md' contains a link '../architecture-and-design.md#附錄角色與工具速查', but the doc 'architecture-and-design.md' does not contain an anchor '#附錄角色與工具速查'.
+WARNING -  Doc file 'adr/005-projected-volume-for-rule-packs.en.md' contains a link '../architecture-and-design.en.md#appendix-a-role--tool-quick-reference', but the doc 'architecture-and-design.en.md' does not contain an anchor '#appendix-a-role--tool-quick-reference'.
+WARNING -  Doc file 'adr/005-projected-volume-for-rule-packs.md' contains a link '../architecture-and-design.md#附錄角色與工具速查', but the doc 'architecture-and-design.md' does not contain an anchor '#附錄角色與工具速查'.
+WARNING -  Doc file 'adr/006-tenant-mapping-topologies.en.md' contains a link '../architecture-and-design.en.md#appendix-a-role--tool-quick-reference', but the doc 'architecture-and-design.en.md' does not contain an anchor '#appendix-a-role--tool-quick-reference'.
+WARNING -  Doc file 'adr/006-tenant-mapping-topologies.md' contains a link '../architecture-and-design.md#附錄角色與工具速查', but the doc 'architecture-and-design.md' does not contain an anchor '#附錄角色與工具速查'.
+WARNING -  Doc file 'adr/007-cross-domain-routing-profiles.en.md' contains a link '../architecture-and-design.en.md#appendix-a-role--tool-quick-reference', but the doc 'architecture-and-design.en.md' does not contain an anchor '#appendix-a-role--tool-quick-reference'.
+WARNING -  Doc file 'adr/007-cross-domain-routing-profiles.md' contains a link '../architecture-and-design.md#附錄角色與工具速查', but the doc 'architecture-and-design.md' does not contain an anchor '#附錄角色與工具速查'.
+WARNING -  Doc file 'adr/016-conf-d-directory-hierarchy-mixed-mode.en.md' contains a link '../internal/benchmark-playbook.md#synthetic-fixture-generation-速率對照', but the doc 'internal/benchmark-playbook.md' does not contain an anchor '#synthetic-fixture-generation-速率對照'.
+WARNING -  Doc file 'adr/016-conf-d-directory-hierarchy-mixed-mode.md' contains a link '../internal/benchmark-playbook.md#synthetic-fixture-generation-速率對照', but the doc 'internal/benchmark-playbook.md' does not contain an anchor '#synthetic-fixture-generation-速率對照'.
+WARNING -  Doc file 'adr/017-defaults-yaml-inheritance-dual-hash.en.md' contains a link '../architecture-and-design.md#設計概念總覽', but the doc 'architecture-and-design.en.md' does not contain an anchor '#設計概念總覽'.
+WARNING -  Doc file 'adr/017-defaults-yaml-inheritance-dual-hash.md' contains a link '../architecture-and-design.md#設計概念總覽', but the doc 'architecture-and-design.md' does not contain an anchor '#設計概念總覽'.
+WARNING -  Doc file 'adr/017-defaults-yaml-inheritance-dual-hash.md' contains a link '../benchmarks.md#1-規模能撐多少租戶', but the doc 'benchmarks.md' does not contain an anchor '#1-規模能撐多少租戶'.
+WARNING -  Doc file 'adr/025-alerting-plane-self-liveness.md' contains a link '../integration/byo-alertmanager-integration.md#11-平台自監控告警的投遞', but the doc 'integration/byo-alertmanager-integration.md' does not contain an anchor '#11-平台自監控告警的投遞'.
+WARNING -  Doc file 'adr/README.en.md' contains a link '#004-federation-architecture--central-exporter-first', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.en.md' contains a link '#016-confd-directory-hierarchy--mixed-mode', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.en.md' contains a link '#017-_defaultsyaml-inheritance-semantics--dual-hash-hot-reload', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.en.md' contains a link '#019-planning-ssot--frontmatter-contract--discovery-based-index', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.en.md' contains a link '#020-tenant-federation--label-injection-proxy-over-self-built-endpoint', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.en.md' contains a link '#021-tenant-log-query--authorization-plane-only-ingestion-decoupled', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.en.md' contains a link '#022-tenant-api-dev-auth-bypass--four-layer-containment', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.en.md' contains a link '#023-tenant-api-write-plane--single-writer-invariant--resilience-containment', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.en.md' contains a link '#024-version-aware-threshold--declarative-cutover-via-the-existing-dimensional-version-label', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#001-嚴重度-dedup-採用-inhibit-規則', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#002-oci-registry-替代-chartmuseum', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#003-sentinel-alert-模式', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#004-federation-架構中央-exporter-優先', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#005-投影卷掛載-rule-pack', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#006-租戶映射拓撲-11-n1-1n', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#007-跨域路由設定檔與域策略', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#008-operator-native-整合路徑', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#009-tenant-manager-crud-api-架構', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#011-pr-based-write-back-模式', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#012-threshold-heatmap-色盲補丁', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#013-元件健康度與-token-density-指標', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#014-wizard-token-arbitrary-value-遷移策略', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#015-data-theme-單軌-dark-mode', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#016-confd-目錄分層--混合模式', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#017-_defaultsyaml-繼承語意--dual-hash-hot-reload', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#019-planning-ssot--frontmatter-contract--discovery-based-index', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#020-tenant-federation--label-injection-proxy-over-self-built-endpoint', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#021-tenant-log-query--authorization-plane-only-ingestion-decoupled', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#022-tenant-api-dev-auth-bypass--四層圍堵', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#023-tenant-api-寫入平面--single-writer-invariant-與韌性圍堵', but there is no such anchor on this page.
+WARNING -  Doc file 'adr/README.md' contains a link '#024-version-aware-threshold--透過既有-dimensional-version-label-達成-declarative-cutover', but there is no such anchor on this page.
+WARNING -  Doc file 'alerting-best-practices.md' contains a link '#0-告警的價值鏈', but there is no such anchor on this page.
+WARNING -  Doc file 'alerting-best-practices.md' contains a link '#2-actionable的完整定義冪等光譜', but there is no such anchor on this page.
+WARNING -  Doc file 'alerting-best-practices.md' contains a link '#3-為什麼動作面比決策面難驗', but there is no such anchor on this page.
+WARNING -  Doc file 'alerting-best-practices.md' contains a link '#4-不可約命令式動作的護欄工具箱', but there is no such anchor on this page.
+WARNING -  Doc file 'alerting-best-practices.md' contains a link '#5-破壞性不可逆動作防線必須前移', but there is no such anchor on this page.
+WARNING -  Doc file 'alerting-best-practices.md' contains a link '#6-本平台的誠實邊界', but there is no such anchor on this page.
+WARNING -  Doc file 'alerting-best-practices.md' contains a link '#7-帶走的-checklist', but there is no such anchor on this page.
+WARNING -  Doc file 'alerting-slo-error-budget.md' contains a link 'alerting-best-practices.md#6-本平台的誠實邊界', but the doc 'alerting-best-practices.md' does not contain an anchor '#6-本平台的誠實邊界'.
+WARNING -  Doc file 'api/README.md' contains a link '../architecture-and-design.md#2-核心設計config-driven-架構', but the doc 'architecture-and-design.md' does not contain an anchor '#2-核心設計config-driven-架構'.
+WARNING -  Doc file 'architecture-and-design.en.md' contains a link '#13-customer-migration--gitops-governance-pipeline-day-0--day-1--day-2', but there is no such anchor on this page.
+WARNING -  Doc file 'architecture-and-design.en.md' contains a link 'architecture-and-design.md#6-adr-索引-architecture-decision-records', but there is no such anchor on this page.
+WARNING -  Doc file 'architecture-and-design.md' contains a link '#1-系統架構圖-system-architecture-diagram', but there is no such anchor on this page.
+WARNING -  Doc file 'architecture-and-design.md' contains a link '#13-客戶導入與-gitops-治理管線-day-0--day-1--day-2', but there is no such anchor on this page.
+WARNING -  Doc file 'architecture-and-design.md' contains a link '#5-未來路線-roadmap', but there is no such anchor on this page.
+WARNING -  Doc file 'architecture-and-design.md' contains a link '#設計概念總覽', but there is no such anchor on this page.
+WARNING -  Doc file 'benchmarks.en.md' contains a link 'internal/benchmark-playbook.md#踩坑記錄-lessons-learned', but the doc 'internal/benchmark-playbook.md' does not contain an anchor '#踩坑記錄-lessons-learned'.
+WARNING -  Doc file 'benchmarks.md' contains a link '#1-規模能撐多少租戶', but there is no such anchor on this page.
+WARNING -  Doc file 'benchmarks.md' contains a link '#12-租戶自訂告警的成本另一條曲線', but there is no such anchor on this page.
+WARNING -  Doc file 'benchmarks.md' contains a link '#2-速度告警多久-fire', but there is no such anchor on this page.
+WARNING -  Doc file 'benchmarks.md' contains a link '#3-容量怎麼-sizing', but there is no such anchor on this page.
+WARNING -  Doc file 'benchmarks.md' contains a link '#4-穩定長時間會-leak-嗎', but there is no such anchor on this page.
+WARNING -  Doc file 'benchmarks.md' contains a link '#5-量測方法與可信度', but there is no such anchor on this page.
+WARNING -  Doc file 'benchmarks.md' contains a link 'internal/benchmark-playbook.md#踩坑記錄-lessons-learned', but the doc 'internal/benchmark-playbook.md' does not contain an anchor '#踩坑記錄-lessons-learned'.
+WARNING -  Doc file 'cli-reference.md' contains a link '#docker-快速參考', but there is no such anchor on this page.
+WARNING -  Doc file 'cli-reference.md' contains a link '#全局選項', but there is no such anchor on this page.
+WARNING -  Doc file 'cli-reference.md' contains a link '#命令分類', but there is no such anchor on this page.
+WARNING -  Doc file 'cli-reference.md' contains a link '#命令詳解', but there is no such anchor on this page.
+WARNING -  Doc file 'cli-reference.md' contains a link '#快速開始', but there is no such anchor on this page.
+WARNING -  Doc file 'cli-reference.md' contains a link '#檔案系統工具', but there is no such anchor on this page.
+WARNING -  Doc file 'cli-reference.md' contains a link '#環境變數', but there is no such anchor on this page.
+WARNING -  Doc file 'cli-reference.md' contains a link '#配置生成工具', but there is no such anchor on this page.
+WARNING -  Doc file 'design/config-driven.md' contains a link '../benchmarks.md#1-規模能撐多少租戶', but the doc 'benchmarks.md' does not contain an anchor '#1-規模能撐多少租戶'.
+WARNING -  Doc file 'getting-started/for-platform-engineers.en.md' contains a link '#deploy-tenant-api--da-portal-tenant-manager', but there is no such anchor on this page.
+WARNING -  Doc file 'getting-started/for-platform-engineers.md' contains a link '#部署-tenant-api--da-portaltenant-manager', but there is no such anchor on this page.
+WARNING -  Doc file 'grafana-dashboards.md' contains a link './architecture-and-design.md#2-核心設計config-driven-架構', but the doc 'architecture-and-design.md' does not contain an anchor '#2-核心設計config-driven-架構'.
+WARNING -  Doc file 'integration/alerting-plane-self-liveness.md' contains a link 'byo-alertmanager-integration.md#11-平台自監控告警的投遞', but the doc 'integration/byo-alertmanager-integration.md' does not contain an anchor '#11-平台自監控告警的投遞'.
+WARNING -  Doc file 'integration/byo-alertmanager-integration.md' contains a link '#11-平台自監控告警的投遞', but there is no such anchor on this page.
+WARNING -  Doc file 'integration/byo-alertmanager-integration.md' contains a link '../troubleshooting.md#平台告警沒有收到通知', but the doc 'troubleshooting.md' does not contain an anchor '#平台告警沒有收到通知'.
+WARNING -  Doc file 'integration/byo-prometheus-integration.md' contains a link '../design/config-driven.md#23-tenant-namespace-映射模式-tenant-namespace-mapping', but the doc 'design/config-driven.md' does not contain an anchor '#23-tenant-namespace-映射模式-tenant-namespace-mapping'.
+WARNING -  Doc file 'integration/deployment-sizing.en.md' contains a link '../internal/benchmark-playbook.md#sharding-決策建議empirical-not-extrapolated', but the doc 'internal/benchmark-playbook.md' does not contain an anchor '#sharding-決策建議empirical-not-extrapolated'.
+WARNING -  Doc file 'integration/deployment-sizing.md' contains a link '#記憶體行為reload-pressure-下的-high-water-creep', but there is no such anchor on this page.
+WARNING -  Doc file 'integration/deployment-sizing.md' contains a link '../internal/benchmark-playbook.md#sharding-決策建議empirical-not-extrapolated', but the doc 'internal/benchmark-playbook.md' does not contain an anchor '#sharding-決策建議empirical-not-extrapolated'.
+WARNING -  Doc file 'interactive-tools.md' contains a link '#使用方式', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/archive/automation-origins/fuse-rename-trick.md' contains a link '../../windows-mcp-playbook.md#已知陷阱速查', but the doc 'internal/windows-mcp-playbook.md' does not contain an anchor '#已知陷阱速查'.
+WARNING -  Doc file 'internal/archive/automation-origins/fuse-rename-trick.md' contains a link '../../windows-mcp-playbook.md#已知陷阱速查', but the doc 'internal/windows-mcp-playbook.md' does not contain an anchor '#已知陷阱速查'.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link '#regression-處理phase-2--informational不擋-merge', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link '#regression-處理phase-2--informational不擋-merge', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link '#routing-bench-注意事項', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link '#routing-bench-注意事項', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link '#under-load-bench-注意事項', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link '#under-load-bench-注意事項', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link '#在-dev-container-內執行', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link '#在-dev-container-內執行', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link '#方法論', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link '#方法論', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link '#自動化指令', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link '#自動化指令', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link '#踩坑記錄-lessons-learned', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link '#踩坑記錄-lessons-learned', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link '../benchmarks.md#11-平台規則為什麼與租戶數無關om', but the doc 'benchmarks.en.md' does not contain an anchor '#11-平台規則為什麼與租戶數無關om'.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link '../benchmarks.md#11-平台規則為什麼與租戶數無關om', but the doc 'benchmarks.md' does not contain an anchor '#11-平台規則為什麼與租戶數無關om'.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link 'test-map.md#benchmark-基線', but the doc 'internal/test-map.md' does not contain an anchor '#benchmark-基線'.
+WARNING -  Doc file 'internal/benchmark-playbook.md' contains a link 'test-map.md#benchmark-基線', but the doc 'internal/test-map.md' does not contain an anchor '#benchmark-基線'.
+WARNING -  Doc file 'internal/commit-convention.md' contains a link '../adr/019-planning-ssot.md#namespace-policy三-namespace-共存', but the doc 'adr/019-planning-ssot.md' does not contain an anchor '#namespace-policy三-namespace-共存'.
+WARNING -  Doc file 'internal/commit-convention.md' contains a link '../adr/019-planning-ssot.md#namespace-policy三-namespace-共存', but the doc 'adr/019-planning-ssot.md' does not contain an anchor '#namespace-policy三-namespace-共存'.
+WARNING -  Doc file 'internal/dev-rules.md' contains a link '../adr/019-planning-ssot.md#三層設計', but the doc 'adr/019-planning-ssot.md' does not contain an anchor '#三層設計'.
+WARNING -  Doc file 'internal/dev-rules.md' contains a link '../adr/019-planning-ssot.md#三層設計', but the doc 'adr/019-planning-ssot.md' does not contain an anchor '#三層設計'.
+WARNING -  Doc file 'internal/dev-rules.md' contains a link 'windows-mcp-playbook.md#v271-llend-of-file-fixer-會把-symlink-blob-弄壞', but the doc 'internal/windows-mcp-playbook.md' does not contain an anchor '#v271-llend-of-file-fixer-會把-symlink-blob-弄壞'.
+WARNING -  Doc file 'internal/dev-rules.md' contains a link 'windows-mcp-playbook.md#v271-llend-of-file-fixer-會把-symlink-blob-弄壞', but the doc 'internal/windows-mcp-playbook.md' does not contain an anchor '#v271-llend-of-file-fixer-會把-symlink-blob-弄壞'.
+WARNING -  Doc file 'internal/doc-template.md' contains a link './testing-playbook.md#文件敘述風格', but the doc 'internal/testing-playbook.md' does not contain an anchor '#文件敘述風格'.
+WARNING -  Doc file 'internal/doc-template.md' contains a link './testing-playbook.md#文件敘述風格', but the doc 'internal/testing-playbook.md' does not contain an anchor '#文件敘述風格'.
+WARNING -  Doc file 'internal/frontend-quality-backlog.md' contains a link 'testing-playbook.md#2-testfixme-是債務標記不是先通過-ci的工具', but the doc 'internal/testing-playbook.md' does not contain an anchor '#2-testfixme-是債務標記不是先通過-ci的工具'.
+WARNING -  Doc file 'internal/frontend-quality-backlog.md' contains a link 'testing-playbook.md#2-testfixme-是債務標記不是先通過-ci的工具', but the doc 'internal/testing-playbook.md' does not contain an anchor '#2-testfixme-是債務標記不是先通過-ci的工具'.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link '#da-tools-獨立-release', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link '#da-tools-獨立-release', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link '#pr-ci-診斷流程', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link '#pr-ci-診斷流程', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link '#release-標準流程', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link '#release-標準流程', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link '#step-35-起草-release-bodyreadiness-statement-template', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link '#step-35-起草-release-bodyreadiness-statement-template', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link '#tenant-api-獨立-release', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link '#tenant-api-獨立-release', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link '#上版前品質驗證清單pre-release-checklist', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link '#上版前品質驗證清單pre-release-checklist', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link '#已知陷阱', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link '#已知陷阱', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link '#認證設定', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link '#認證設定', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link 'windows-mcp-playbook.md#powershell-rest-apigithub-等', but the doc 'internal/windows-mcp-playbook.md' does not contain an anchor '#powershell-rest-apigithub-等'.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link 'windows-mcp-playbook.md#powershell-rest-apigithub-等', but the doc 'internal/windows-mcp-playbook.md' does not contain an anchor '#powershell-rest-apigithub-等'.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link 'windows-mcp-playbook.md#已知陷阱速查', but the doc 'internal/windows-mcp-playbook.md' does not contain an anchor '#已知陷阱速查'.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link 'windows-mcp-playbook.md#已知陷阱速查', but the doc 'internal/windows-mcp-playbook.md' does not contain an anchor '#已知陷阱速查'.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link 'windows-mcp-playbook.md#長-body-的建議做法', but the doc 'internal/windows-mcp-playbook.md' does not contain an anchor '#長-body-的建議做法'.
+WARNING -  Doc file 'internal/github-release-playbook.md' contains a link 'windows-mcp-playbook.md#長-body-的建議做法', but the doc 'internal/windows-mcp-playbook.md' does not contain an anchor '#長-body-的建議做法'.
+WARNING -  Doc file 'internal/pitch-deck-talking-points.md' contains a link '../benchmarks.md#1-規模能撐多少租戶', but the doc 'benchmarks.en.md' does not contain an anchor '#1-規模能撐多少租戶'.
+WARNING -  Doc file 'internal/pitch-deck-talking-points.md' contains a link '../benchmarks.md#1-規模能撐多少租戶', but the doc 'benchmarks.md' does not contain an anchor '#1-規模能撐多少租戶'.
+WARNING -  Doc file 'internal/pitch-deck-talking-points.md' contains a link '../benchmarks.md#2-速度告警多久-fire', but the doc 'benchmarks.en.md' does not contain an anchor '#2-速度告警多久-fire'.
+WARNING -  Doc file 'internal/pitch-deck-talking-points.md' contains a link '../benchmarks.md#2-速度告警多久-fire', but the doc 'benchmarks.md' does not contain an anchor '#2-速度告警多久-fire'.
+WARNING -  Doc file 'internal/planning-index.md' contains a link '../adr/019-planning-ssot.md#三層設計', but the doc 'adr/019-planning-ssot.md' does not contain an anchor '#三層設計'.
+WARNING -  Doc file 'internal/planning-index.md' contains a link '../adr/019-planning-ssot.md#三層設計', but the doc 'adr/019-planning-ssot.md' does not contain an anchor '#三層設計'.
+WARNING -  Doc file 'internal/security-audit-runbook.md' contains a link 'github-release-playbook.md#release-gate-陷阱component-releaseyaml-實戰v290-首次五線-ga', but the doc 'internal/github-release-playbook.md' does not contain an anchor '#release-gate-陷阱component-releaseyaml-實戰v290-首次五線-ga'.
+WARNING -  Doc file 'internal/security-audit-runbook.md' contains a link 'github-release-playbook.md#release-gate-陷阱component-releaseyaml-實戰v290-首次五線-ga', but the doc 'internal/github-release-playbook.md' does not contain an anchor '#release-gate-陷阱component-releaseyaml-實戰v290-首次五線-ga'.
+WARNING -  Doc file 'internal/test-coverage-matrix.md' contains a link '../scenarios/verified-scenarios.md#關鍵設計驗證max-bytenant-防-ha-翻倍', but the doc 'scenarios/verified-scenarios.en.md' does not contain an anchor '#關鍵設計驗證max-bytenant-防-ha-翻倍'.
+WARNING -  Doc file 'internal/test-coverage-matrix.md' contains a link '../scenarios/verified-scenarios.md#關鍵設計驗證max-bytenant-防-ha-翻倍', but the doc 'scenarios/verified-scenarios.md' does not contain an anchor '#關鍵設計驗證max-bytenant-防-ha-翻倍'.
+WARNING -  Doc file 'internal/test-coverage-matrix.md' contains a link 'benchmark-playbook.md#重跑本-baseline-指令', but the doc 'internal/benchmark-playbook.md' does not contain an anchor '#重跑本-baseline-指令'.
+WARNING -  Doc file 'internal/test-coverage-matrix.md' contains a link 'benchmark-playbook.md#重跑本-baseline-指令', but the doc 'internal/benchmark-playbook.md' does not contain an anchor '#重跑本-baseline-指令'.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link '#confd-yaml-格式陷阱', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link '#confd-yaml-格式陷阱', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link '#k8s-環境問題', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link '#k8s-環境問題', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link '#playwright-e2e-測試portal-smoke-tests', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link '#playwright-e2e-測試portal-smoke-tests', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link '#sast-合規', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link '#sast-合規', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link '#v26x-lessons-learned--go-並發測試-flake2026-04-11', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link '#v26x-lessons-learned--go-並發測試-flake2026-04-11', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link '#測試前置準備', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link '#測試前置準備', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link '#程式碼品質規範', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link '#程式碼品質規範', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link '#負載注入-load-injection', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link '#負載注入-load-injection', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link 'test-map.md#benchmark-基線', but the doc 'internal/test-map.md' does not contain an anchor '#benchmark-基線'.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link 'test-map.md#benchmark-基線', but the doc 'internal/test-map.md' does not contain an anchor '#benchmark-基線'.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link 'windows-mcp-playbook.md#helm-upgrade-防衝突', but the doc 'internal/windows-mcp-playbook.md' does not contain an anchor '#helm-upgrade-防衝突'.
+WARNING -  Doc file 'internal/testing-playbook.md' contains a link 'windows-mcp-playbook.md#helm-upgrade-防衝突', but the doc 'internal/windows-mcp-playbook.md' does not contain an anchor '#helm-upgrade-防衝突'.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#fuse-phantom-lock-防治', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#fuse-phantom-lock-防治', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#git-操作決策樹', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#git-操作決策樹', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#helm-upgrade-防衝突', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#helm-upgrade-防衝突', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#mcp-shell-pitfalls編寫-bat--ps1-wrapper-時必讀', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#mcp-shell-pitfalls編寫-bat--ps1-wrapper-時必讀', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#port-forward-模式', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#port-forward-模式', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#powershell-rest-apigithub-等', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#powershell-rest-apigithub-等', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#windows-clone-初次設定--symlink-支援', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#windows-clone-初次設定--symlink-支援', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#三層環境職責矩陣', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#三層環境職責矩陣', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#修復層-bfuse-cache-重建level-1--5', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#修復層-bfuse-cache-重建level-1--5', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#修復層-c1escape-helpersmcp-60s-timeout--fuse-cache-bypass', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#修復層-c1escape-helpersmcp-60s-timeout--fuse-cache-bypass', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#已知陷阱速查', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#已知陷阱速查', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#核心原則docker-exec-stdout-為空', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link '#核心原則docker-exec-stdout-為空', but there is no such anchor on this page.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link 'benchmark-playbook.md#在-dev-container-內執行', but the doc 'internal/benchmark-playbook.md' does not contain an anchor '#在-dev-container-內執行'.
+WARNING -  Doc file 'internal/windows-mcp-playbook.md' contains a link 'benchmark-playbook.md#在-dev-container-內執行', but the doc 'internal/benchmark-playbook.md' does not contain an anchor '#在-dev-container-內執行'.
+WARNING -  Doc file 'migration-guide.en.md' contains a link '#13-enterprise-grade-migration--large-tenant-1000-rules', but there is no such anchor on this page.
+WARNING -  Doc file 'migration-guide.en.md' contains a link '#9-dimensional-labels--multi-db-type-support', but there is no such anchor on this page.
+WARNING -  Doc file 'migration-guide.en.md' contains a link '#where-are-you-你在哪個階段', but there is no such anchor on this page.
+WARNING -  Doc file 'migration-guide.md' contains a link '#11-擴展不支援的-db-類型', but there is no such anchor on this page.
+WARNING -  Doc file 'migration-guide.md' contains a link '#13-企業級遷移--大型租戶1000-條規則', but there is no such anchor on this page.
+WARNING -  Doc file 'migration-guide.md' contains a link '#2-反向分析既有監控da-tools-onboard', but there is no such anchor on this page.
+WARNING -  Doc file 'migration-guide.md' contains a link '#3-產生租戶設定da-tools-scaffold', but there is no such anchor on this page.
+WARNING -  Doc file 'migration-guide.md' contains a link '#4-轉換既有規則da-tools-migrate', but there is no such anchor on this page.
+WARNING -  Doc file 'migration-guide.md' contains a link '#7-遷移後驗證', but there is no such anchor on this page.
+WARNING -  Doc file 'migration-guide.md' contains a link '#8-五種遷移場景範例', but there is no such anchor on this page.
+WARNING -  Doc file 'migration-guide.md' contains a link '#9-維度標籤--多-db-類型支援', but there is no such anchor on this page.
+WARNING -  Doc file 'migration-guide.md' contains a link '#你在哪個階段where-are-you', but there is no such anchor on this page.
+WARNING -  Doc file 'migration-guide.md' contains a link '#核心遷移流程照順序做', but there is no such anchor on this page.
+WARNING -  Doc file 'migration-guide.md' contains a link 'architecture-and-design.md#設計概念總覽', but the doc 'architecture-and-design.md' does not contain an anchor '#設計概念總覽'.
+WARNING -  Doc file 'migration-guide.md' contains a link 'integration/gitops-deployment.md#7-tenant-自助設定範圍', but the doc 'integration/gitops-deployment.md' does not contain an anchor '#7-tenant-自助設定範圍'.
+WARNING -  Doc file 'migration-guide.md' contains a link 'scenarios/tenant-lifecycle.md#階段-12上線day-0', but the doc 'scenarios/tenant-lifecycle.md' does not contain an anchor '#階段-12上線day-0'.
+WARNING -  Doc file 'scenarios/multi-cluster-federation.md' contains a link '../integration/federation-integration.md#12-架構選擇中央評估-vs-邊緣評估', but the doc 'integration/federation-integration.md' does not contain an anchor '#12-架構選擇中央評估-vs-邊緣評估'.
+WARNING -  Doc file 'scenarios/multi-cluster-federation.md' contains a link '../integration/federation-integration.md#4-中央叢集配置', but the doc 'integration/federation-integration.md' does not contain an anchor '#4-中央叢集配置'.
+WARNING -  Doc file 'scenarios/multi-system-migration-playbook.md' contains a link '#8-plan-a-vs-plan-bgit-layout-選擇', but there is no such anchor on this page.
+WARNING -  Doc file 'scenarios/shadow-audit.md' contains a link 'shadow-monitoring-cutover.md#phase-0告警品質評估不需部署任何元件', but the doc 'scenarios/shadow-monitoring-cutover.md' does not contain an anchor '#phase-0告警品質評估不需部署任何元件'.
+WARNING -  Doc file 'scenarios/staged-adoption-guide.en.md' contains a link '../integration/troubleshooting-checklist.md#132-silencer-mismatchdisablement-drift--double-fire-alert-storm', but the doc 'integration/troubleshooting-checklist.en.md' does not contain an anchor '#132-silencer-mismatchdisablement-drift--double-fire-alert-storm'.
+WARNING -  Doc file 'scenarios/staged-adoption-guide.en.md' contains a link 'multi-system-migration-playbook.md#11-rollback-三層可逆界線', but the doc 'scenarios/multi-system-migration-playbook.en.md' does not contain an anchor '#11-rollback-三層可逆界線'.
+WARNING -  Doc file 'scenarios/staged-adoption-guide.md' contains a link '../integration/troubleshooting-checklist.md#132-silencer-mismatchdisablement-drift--double-fire-alert-storm', but the doc 'integration/troubleshooting-checklist.md' does not contain an anchor '#132-silencer-mismatchdisablement-drift--double-fire-alert-storm'.
+WARNING -  Doc file 'scenarios/staged-adoption-guide.md' contains a link 'multi-system-migration-playbook.md#11-rollback-三層可逆界線', but the doc 'scenarios/multi-system-migration-playbook.md' does not contain an anchor '#11-rollback-三層可逆界線'.
+WARNING -  Doc file 'scenarios/tenant-lifecycle.md' contains a link '../design/config-driven.md#27-三態運營模式-operational-modes', but the doc 'design/config-driven.md' does not contain an anchor '#27-三態運營模式-operational-modes'.
+WARNING -  Doc file 'scenarios/verified-scenarios.md' contains a link '#覆蓋總覽', but there is no such anchor on this page.
+WARNING -  Doc file 'scenarios/verified-scenarios.md' contains a link '../architecture-and-design.md#4-高可用性設計-high-availability', but the doc 'architecture-and-design.md' does not contain an anchor '#4-高可用性設計-high-availability'.
+WARNING -  Doc file 'schemas/migration-state.md' contains a link '../scenarios/multi-system-migration-playbook.md#3-phase-0--discovery--inventory', but the doc 'scenarios/multi-system-migration-playbook.en.md' does not contain an anchor '#3-phase-0--discovery--inventory'.
+WARNING -  Doc file 'schemas/migration-state.md' contains a link '../scenarios/multi-system-migration-playbook.md#3-phase-0--discovery--inventory', but the doc 'scenarios/multi-system-migration-playbook.md' does not contain an anchor '#3-phase-0--discovery--inventory'.
+WARNING -  Doc file 'troubleshooting.md' contains a link '#prometheus-operator-環境常見問題', but there is no such anchor on this page.
+WARNING -  Doc file 'troubleshooting.md' contains a link '#sha-256-熱重新加載延遲', but there is no such anchor on this page.
+WARNING -  Doc file 'troubleshooting.md' contains a link '#平台告警沒有收到通知', but there is no such anchor on this page.
+WARNING -  Doc file 'troubleshooting.md' contains a link '#空向量警報不觸發', but there is no such anchor on this page.
+WARNING -  Doc file 'troubleshooting.md' contains a link '#雙租戶抓取重複計數', but there is no such anchor on this page.
+WARNING -  Doc file 'troubleshooting.md' contains a link 'architecture-and-design.md#4-高可用性設計-high-availability', but the doc 'architecture-and-design.md' does not contain an anchor '#4-高可用性設計-high-availability'.
+WARNING -  Doc file 'troubleshooting.md' contains a link 'integration/byo-alertmanager-integration.md#11-平台自監控告警的投遞', but the doc 'integration/byo-alertmanager-integration.md' does not contain an anchor '#11-平台自監控告警的投遞'.

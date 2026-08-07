@@ -112,28 +112,39 @@ anchor_debt() {
         | grep -E "contains a link '[^']*#[^']*', but there is no such anchor on this page\\.$|does not contain an anchor '#[^']*'\\.$" \
         || true
 }
-ANCHOR_DEBT_CEILING=240
 ANCHOR_DEBT=$(anchor_debt | wc -l)
 ANCHOR_DEBT=${ANCHOR_DEBT//[[:space:]]/}
 
-# ⛔ A count is not a set. Fix one debted link and break a genuinely new one in
-# the same commit and the total is still 240 — green, with a real breakage
-# absorbed by a ledger whose stated job is to stop exactly that. Pinning the
-# digest of the sorted debt lines closes the swap: any substitution changes the
-# digest while the count sits still. This adds no new brittleness — the count is
-# already an exact equality, so a toolchain change that shifts the set was
-# always going to fail here; the digest just makes it fail for the right reason.
-ANCHOR_DEBT_DIGEST_PIN=9059a94c3d65c29d6369df93c2f44e6d0a9133340f832ff3d335a7a753c7eac6
-ANCHOR_DEBT_DIGEST=$(anchor_debt | LC_ALL=C sort | sha256sum | cut -d' ' -f1)
+# ⛔ Store the SET, not a count and not a hash of it.
+#
+# A count is blind to substitution: fix one debted link, break a genuinely new
+# one, and the total never moves. A HASH sees the substitution but cannot say
+# what moved — it can only report "different", which sends the maintainer to
+# rebuild the previous revision by hand to find out. Worse, a hash is checkable
+# only where the count is already known (count == ceiling), leaving the common
+# path — a mixed commit that nets to a smaller number — completely unguarded.
+#
+# The baseline file costs ~240 lines and removes all three problems: the diff is
+# computable and printable, every branch can consult it, and a benign edit shows
+# up as a readable before/after instead of an accusation. Regenerate with
+#   bash scripts/tools/lint/mkdocs_strict_check.sh --write-baseline
+# and review the diff like any other change — that review IS the gate.
+BASELINE="$SCRIPT_DIR/mkdocs-anchor-debt.txt"
+if [ "${1:-}" = "--write-baseline" ]; then
+    anchor_debt | LC_ALL=C sort > "$BASELINE"
+    echo "wrote $(wc -l < "$BASELINE" | tr -d '[:space:]') lines to $BASELINE"
+    exit 0
+fi
 
-# ⛔ Before trusting a count of 0, prove the COLLECTOR still works. `grep
-# "^WARNING"` is a load-bearing assumption: if mkdocs ever changes its log
-# prefix, adds unconditional colour (pint already does exactly this — see
-# check_pint.py's ANSI fix), or is run with --quiet, every filter here matches
-# nothing and BOTH counters read 0. Without this canary the zero branch would
-# tell a maintainer to delete the filters, and deleting them makes
-# ACTIONABLE_COUNT read 0 too — a green build with the whole warning pipeline
-# dead. A zero-warning mkdocs build is not a thing this repo has ever had.
+# ⛔ Before trusting a debt of 0, prove the COLLECTOR still works — and prove it
+# PER CLASS, not in aggregate. Counting all warnings only catches failures that
+# take every class down together (log prefix change, unconditional colour,
+# --quiet). It does NOT catch the realistic one: mkdocs.yml's
+# `validation.links.anchors` reverting from `warn` to `info`, a one-line change
+# and this repo's own state one commit ago. That silences the anchor class while
+# ~209 other warnings keep the aggregate canary quiet, the debt reads 0, and the
+# zero branch then declares the migration landed and invites deletion of the
+# filters — permanent green over 240 live breakages. Verified end to end.
 TOTAL_WARNINGS=$(grep -c "^WARNING" "$LOG_FILE" || true)
 TOTAL_WARNINGS=${TOTAL_WARNINGS//[[:space:]]/}
 if [ "$TOTAL_WARNINGS" -eq 0 ]; then
@@ -144,40 +155,54 @@ quietly. Fix the collector in $0 first, then re-read the counts." >&2
     echo "MKDOCS STRICT STATUS=FAIL COLLECTOR=broken LOG=$LOG_FILE" >&2
     exit 1
 fi
-
-if [ "$ANCHOR_DEBT" -eq 0 ]; then
-    echo "::error::anchor debt is 0 while the collector is alive \
-($TOTAL_WARNINGS warnings seen) — the toc.slugify migration (#1200) has \
-landed. Remove ONLY filters 6+7 and this anchor-debt block; leave the other \
-five filters and the ACTIONABLE_COUNT gate in place." >&2
-    echo "MKDOCS STRICT STATUS=FAIL ANCHOR_DEBT_LEDGER=stale" >&2
-    exit 1
-elif [ "$ANCHOR_DEBT" -eq "$ANCHOR_DEBT_CEILING" ] \
-     && [ "$ANCHOR_DEBT_DIGEST" != "$ANCHOR_DEBT_DIGEST_PIN" ]; then
-    echo "::error::anchor debt is still $ANCHOR_DEBT but its CONTENTS changed \
-(digest $ANCHOR_DEBT_DIGEST, pinned $ANCHOR_DEBT_DIGEST_PIN). A one-for-one \
-swap is how a real breakage gets absorbed by a count that never moves. If you \
-fixed a debted link, the count must go DOWN and the ceiling with it; if a link \
-legitimately changed shape, update the pin in the same commit and say why." >&2
-    diff <(anchor_debt | LC_ALL=C sort) /dev/null | head -20 >&2
-    echo "MKDOCS STRICT STATUS=FAIL ANCHOR_DEBT_LEDGER=swapped" >&2
-    exit 1
-elif [ "$ANCHOR_DEBT" -gt "$ANCHOR_DEBT_CEILING" ]; then
-    echo "::error::anchor debt GREW to $ANCHOR_DEBT (ceiling \
-$ANCHOR_DEBT_CEILING). This ledger is shrink-only — do not raise the ceiling \
-to get past this. Either the new link is genuinely broken on the MkDocs site, \
-or it needs the #1200 slugify migration first." >&2
-    anchor_debt | head -20 >&2
-    echo "MKDOCS STRICT STATUS=FAIL ANCHOR_DEBT=$ANCHOR_DEBT" >&2
-    exit 1
-elif [ "$ANCHOR_DEBT" -lt "$ANCHOR_DEBT_CEILING" ]; then
-    echo "::error::anchor debt SHRANK to $ANCHOR_DEBT (ceiling \
-$ANCHOR_DEBT_CEILING) — good, but ratchet ANCHOR_DEBT_CEILING down to \
-$ANCHOR_DEBT in this same commit so the gain cannot be silently given back." >&2
-    echo "MKDOCS STRICT STATUS=FAIL ANCHOR_DEBT=$ANCHOR_DEBT" >&2
+if ! grep -qE "^[[:space:]]*anchors:[[:space:]]*warn([[:space:]]|$)" mkdocs.yml; then
+    echo "::error::mkdocs.yml no longer sets validation.links.anchors to 'warn', \
+so anchor problems are not being reported at all and any debt figure below is \
+meaningless. Restore it before reading this gate's result." >&2
+    echo "MKDOCS STRICT STATUS=FAIL COLLECTOR=anchors-not-warned" >&2
     exit 1
 fi
-echo "MKDOCS ANCHOR DEBT=$ANCHOR_DEBT (ledgered, #1200)"
+
+if [ ! -f "$BASELINE" ]; then
+    echo "::error::anchor-debt baseline missing at $BASELINE. Regenerate with \
+--write-baseline and commit it; do not delete this block to get past this." >&2
+    echo "MKDOCS STRICT STATUS=FAIL ANCHOR_DEBT_LEDGER=no-baseline" >&2
+    exit 1
+fi
+BASELINE_COUNT=$(wc -l < "$BASELINE" | tr -d '[:space:]')
+ADDED=$(comm -13 "$BASELINE" <(anchor_debt | LC_ALL=C sort) || true)
+REMOVED=$(comm -23 "$BASELINE" <(anchor_debt | LC_ALL=C sort) || true)
+
+# ⛔ ADDED is checked FIRST and unconditionally, in every branch. A commit that
+# fixes four debted links and introduces one new breakage nets to a smaller
+# number; judged on the count alone that reads as progress, and the ratchet then
+# writes the new breakage into the baseline as though it had always been there.
+if [ -n "$ADDED" ]; then
+    echo "::error::$(printf '%s\n' "$ADDED" | wc -l | tr -d '[:space:]') NEW \
+anchor problem(s) not in the baseline. This ledger holds a fixed set of known
+#1200 slugify divergences; it is not a place to park a fresh breakage, and a
+net-smaller total does not license one:" >&2
+    printf '%s\n' "$ADDED" | head -20 >&2
+    echo "MKDOCS STRICT STATUS=FAIL ANCHOR_DEBT_LEDGER=grew" >&2
+    exit 1
+fi
+if [ -n "$REMOVED" ]; then
+    echo "::error::$(printf '%s\n' "$REMOVED" | wc -l | tr -d '[:space:]') anchor \
+problem(s) fixed — good. Refresh the baseline in this same commit so the gain
+cannot be given back silently: bash $0 --write-baseline" >&2
+    printf '%s\n' "$REMOVED" | head -20 >&2
+    echo "MKDOCS STRICT STATUS=FAIL ANCHOR_DEBT_LEDGER=shrank" >&2
+    exit 1
+fi
+if [ "$ANCHOR_DEBT" -eq 0 ]; then
+    echo "::error::anchor debt is 0 and the collector is alive \
+($TOTAL_WARNINGS warnings seen, anchors still set to 'warn') — the toc.slugify \
+migration (#1200) has landed. Remove ONLY filters 6+7, this block, and \
+$BASELINE; leave the other five filters and the ACTIONABLE_COUNT gate." >&2
+    echo "MKDOCS STRICT STATUS=FAIL ANCHOR_DEBT_LEDGER=stale" >&2
+    exit 1
+fi
+echo "MKDOCS ANCHOR DEBT=$ANCHOR_DEBT (ledgered vs baseline of $BASELINE_COUNT, #1200)"
 
 # Filter rationales (this script is the single source of truth — keep
 # rationales here in sync with the filter list above):
