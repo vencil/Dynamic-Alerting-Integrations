@@ -84,6 +84,10 @@ def _hcl_list(hcl: str, key: str) -> list[str]:
     # then enforcing nothing. Quoted `#` inside a path would be a false strip,
     # so only treat `#`/`//` as a comment when it starts a line (after indent),
     # which is the only form this file uses.
+    # `/* */` too: HCL accepts it, so commenting an include entry out that way
+    # drops the same 42 entries from pint while a `#`-only strip still reads
+    # the path as live. Block comments first, then line comments.
+    hcl = re.sub(r'/\*.*?\*/', '', hcl, flags=re.S)
     hcl = re.sub(r'^[ \t]*(?:#|//).*$', '', hcl, flags=re.M)
     block = re.search(r'parser\s*\{(.*?)\n\}', hcl, re.S)
     assert block, "expected a `parser { ... }` block in .pint.hcl"
@@ -201,12 +205,18 @@ def test_entries_floor_survives_pints_ansi_coloured_output():
 
     floor = mod._MIN_PINT_ENTRIES
     assert isinstance(floor, int)
-    # Sizing window, measured with pint 0.86.0: 393 total, of which 42 come from
-    # configmap-rules-platform.yaml. Below 352 the floor cannot notice the platform
-    # pack falling out of scope (the −42 drop it exists to catch); at/above 393 every
-    # routine rule ADDITION would need this number bumped.
-    assert 352 <= floor < 393, (
-        f"_MIN_PINT_ENTRIES={floor} is outside the useful window [352, 393): too low "
-        f"and losing the whole platform ConfigMap stays green, too high and adding a "
-        f"rule turns CI red. Re-measure and re-centre it on a PINT_VERSION bump."
+    # ⛔ DERIVE the window; do not snapshot it. Hard-coding `< 393` deadlocked
+    # the two guards against each other: the runtime staleness tripwire only
+    # fires once entries reach measure+pack, and every value it can suggest is
+    # then above the frozen upper bound — so obeying CI's own instruction turned
+    # this test red, with a message about PINT_VERSION that describes a different
+    # situation entirely. Reading both constants makes a ratchet a two-line edit
+    # that stays consistent by construction.
+    total, pack = mod._PINT_ENTRIES_AT_MEASURE, mod._PLATFORM_PACK_ENTRIES
+    assert total - pack < floor <= total, (
+        f"_MIN_PINT_ENTRIES={floor} is outside the useful window "
+        f"({total - pack}, {total}]: at or below it, losing the whole platform "
+        f"ConfigMap ({pack} entries) stays green; above it, the measured total "
+        f"itself would fail. Ratchet _MIN_PINT_ENTRIES and _PINT_ENTRIES_AT_MEASURE "
+        f"together — check_pint.py's own failure message prints both values."
     )

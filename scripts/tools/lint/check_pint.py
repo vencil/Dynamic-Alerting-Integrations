@@ -114,9 +114,18 @@ _PINT_ARGS = ["--offline", "-c", ".pint.hcl", "lint",
 _MIN_PINT_ENTRIES = 385
 
 # What configmap-rules-platform.yaml contributes (pint 0.86.0: 393 total, 351
-# without it). Doubles as the staleness bound enforced after the floor check:
-# slack larger than this means the floor could no longer see the pack vanish.
+# without it) and the total measured at the same time. Both are needed: the pair
+# is what keeps the floor's DETECTION WINDOW open as the repo grows, and the
+# test asserts the floor sits inside (total - pack, total].
+#
+# ⛔ 42 is not a free-standing number — it is the platform alert count, already
+# pinned as `_MIN_PLATFORM_ALERTS` in tests/ops/test_generate_routes_orchestration.py
+# (the ConfigMap holds 42 `- alert:` and 0 `- record:`, so pint entries and alert
+# count are the same quantity). Restating it here is a third hand-copy; the
+# sibling test file's own convention is to read such values back out rather than
+# repeat them, and the lockstep test does exactly that for this constant.
 _PLATFORM_PACK_ENTRIES = 42
+_PINT_ENTRIES_AT_MEASURE = 393
 
 # pint colours its logs unconditionally — it does NOT check for a TTY — so under
 # `capture_output=True` the entries line arrives as
@@ -218,15 +227,21 @@ def main() -> int:
         # self-maintaining: routine additions are free until they would blind
         # it, and then CI names the number to move it to.
         slack = entries - _MIN_PINT_ENTRIES
-        if slack > _PLATFORM_PACK_ENTRIES:
+        # `>=`, not `>`: the floor can only see the pack vanish while
+        # `entries - pack < floor`, i.e. while slack is STRICTLY under one
+        # pack's worth. At slack == pack the drop lands exactly ON the floor and
+        # `<` is false, so it passes — the one value the guard was written for.
+        if slack >= _PLATFORM_PACK_ENTRIES:
             print(f"FAIL: pint checked {entries} entries against a "
                   f"{_MIN_PINT_ENTRIES} floor — {slack} of slack, more than the "
                   f"{_PLATFORM_PACK_ENTRIES} the platform ConfigMap contributes. "
                   f"The floor can no longer detect that pack dropping out of "
                   f"scope, which is the main thing it is for. Ratchet "
                   f"_MIN_PINT_ENTRIES in {Path(__file__).name} up to "
-                  f"{entries - 8} (keeping the usual 8 for small legitimate "
-                  f"deletions) and re-read the sizing note above it.",
+                  f"{entries - 8} AND _PINT_ENTRIES_AT_MEASURE to {entries} "
+                  f"(keeping the usual 8 for small legitimate deletions). Both, "
+                  f"or the lockstep test in tests/lint/test_check_pint.py fails: "
+                  f"it derives the useful window from that pair.",
                   file=sys.stderr)
             return EXIT_VIOLATION
 
