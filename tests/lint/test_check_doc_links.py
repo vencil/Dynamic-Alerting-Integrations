@@ -53,10 +53,189 @@ class TestHeadingToAnchor:
         assert "section" in result
         assert "(" not in result
 
-    def test_emoji_shortcode_removed(self):
-        result = cdl.DocLinkChecker._heading_to_anchor(":rocket: Launch")
-        assert "rocket" not in result
-        assert "launch" in result
+    def test_emoji_shortcode_keeps_the_name(self):
+        # github.com deletes the `:` (Po) and keeps the shortcode *name*.
+        # The pre-2026 implementation deleted `:[a-z_]+:` wholesale, which
+        # invented an anchor nobody could ever link to.
+        assert cdl.DocLinkChecker._heading_to_anchor(":rocket: Launch") == (
+            "rocket-launch")
+
+
+# ---------------------------------------------------------------------------
+# GFM slug rules — the four behaviours the pre-2026 implementation got wrong,
+# plus the ones that keep it honest.  Each expectation is what github.com
+# actually emits (see TestGithubSluggerFixtures for the upstream ground truth).
+# ---------------------------------------------------------------------------
+class TestGfmSlugRules:
+    @pytest.mark.parametrize("heading,expected", [
+        # (1) Whitespace runs are NOT collapsed — every U+0020 is one `-`.
+        ("Hello  World", "hello--world"),
+        # ...which is why deleted punctuation between spaces leaves `--`.
+        ("Role & Tool", "role--tool"),
+        ("conf.d/ Directory Hierarchy + Mixed Mode",
+         "confd-directory-hierarchy--mixed-mode"),
+        ("Day-0 / Day-1", "day-0--day-1"),
+        ("Planning SSOT — Frontmatter Contract",
+         "planning-ssot--frontmatter-contract"),
+        # (2) `_` (Pc) survives — it is a word character, not markup.
+        ("`_defaults.yaml` Inheritance", "_defaultsyaml-inheritance"),
+        ("SetMetrics / SetLogger seam", "setmetrics--setlogger-seam"),
+        # (3) `:shortcode:` loses only its colons.
+        (":ok_hand: Single", "ok_hand-single"),
+        # (4) Leading/trailing `-` are NOT stripped.
+        ("⛔ 高頻地雷", "-高頻地雷"),
+        ("Trailing emoji 🛡️", "trailing-emoji-️"),
+        # ASCII `-` survives; other Pd (en/em dash) are deleted outright.
+        ("TRK-302 rollout", "trk-302-rollout"),
+        ("v2.9.0 — GA", "v290--ga"),
+        # CJK (Lo) survives, full-width punctuation does not.
+        ("部署 tenant-api + da-portal（Tenant Manager）",
+         "部署-tenant-api--da-portaltenant-manager"),
+        ("修復層 B：FUSE Cache 重建（Level 1 ~ 5）",
+         "修復層-bfuse-cache-重建level-1--5"),
+        # Non-U+0020 whitespace is DELETED, not hyphenated.
+        ("Foo\tBar", "foobar"),
+        ("Foo Bar", "foobar"),
+        # Inline markup is reduced to its rendered text first.
+        ("**Bold** `code` *it*", "bold-code-it"),
+        ("[Link](http://example.com)", "link"),
+        ("![alt text](img.png)", "alt-text"),
+    ])
+    def test_rule(self, heading, expected):
+        assert cdl.DocLinkChecker._heading_to_anchor(heading) == expected
+
+    def test_leading_dash_is_load_bearing(self):
+        """Regression guard for the `.strip('-')` bug.
+
+        Emoji-prefixed headings are everywhere in this repo; stripping the
+        leading dash minted an anchor github.com never emits, so the checker
+        happily validated links that 404 on github.com.
+        """
+        anchor = cdl.DocLinkChecker._heading_to_anchor("🚀 Quick Start")
+        assert anchor == "-quick-start"
+        assert not anchor.startswith("q")
+
+
+# ---------------------------------------------------------------------------
+# Duplicate-heading numbering (page-scoped `-1` / `-2` suffixes)
+# ---------------------------------------------------------------------------
+class TestGfmSluggerDuplicates:
+    def test_plain_repetition(self):
+        slugger = cdl._GfmSlugger()
+        assert [slugger.slug("Rollback") for _ in range(3)] == [
+            "rollback", "rollback-1", "rollback-2"]
+
+    def test_collision_loop_skips_taken_ids(self):
+        """`echo 1` and `echo-1` slug identically — the counter must not
+        hand the same id to both (github-slugger's while-loop)."""
+        slugger = cdl._GfmSlugger()
+        assert slugger.slug("echo") == "echo"
+        assert slugger.slug("echo") == "echo-1"
+        assert slugger.slug("echo 1") == "echo-1-1"
+        assert slugger.slug("echo-1") == "echo-1-2"
+        assert slugger.slug("echo") == "echo-2"
+
+    def test_get_headings_exposes_duplicate_variants(self, tmp_path):
+        checker = _make_checker(tmp_path)
+        md = tmp_path / "docs" / "dup.md"
+        md.write_text("# Setup\n\n## Setup\n\n## Setup\n", encoding="utf-8")
+        assert checker._get_headings(md) == {"setup", "setup-1", "setup-2"}
+
+
+# ---------------------------------------------------------------------------
+# Upstream ground truth
+# ---------------------------------------------------------------------------
+class TestGithubSluggerFixtures:
+    """Verbatim cases from `github-slugger`'s test/fixtures.json.
+
+    Copyright (c) 2015 Dan Flettre — ISC License.
+    https://github.com/Flet/github-slugger
+
+    Those fixtures are GitHub-*rendered* ground truth, so they pin the exact
+    rule: lowercase → delete every char outside
+    `Alphabetic | Mark | Decimal_Number | Connector_Punctuation | '-' | ' '`
+    → turn each U+0020 into one `-`.
+
+    Cases are fed to `_gfm_slug` (the raw core) rather than
+    `_heading_to_anchor`, because the latter additionally `.strip()`s the
+    heading — correct for Markdown ATX headings, where surrounding
+    whitespace is not part of the rendered text, but not what the raw
+    slugger contract says.  The three whitespace-edge cases below are
+    therefore listed against the core only.
+    """
+
+    # A curated subset — the multi-KB Unicode-category blobs are omitted.
+    UPSTREAM = [
+        ("bravoCharlieDelta", "bravocharliedelta"),
+        ("heading with a - dash", "heading-with-a---dash"),
+        ("heading with an _ underscore", "heading-with-an-_-underscore"),
+        ("heading with a period.txt", "heading-with-a-periodtxt"),
+        ("exchange.bind_headers(exchange, routing [, bindCallback])",
+         "exchangebind_headersexchange-routing--bindcallback"),
+        (" ", "-"),
+        (" a", "-a"),
+        ("a ", "a-"),
+        ("apostrophe’s should be trimmed",
+         "apostrophes-should-be-trimmed"),
+        ("I ♥ unicode", "i--unicode"),
+        ("dash-dash", "dash-dash"),
+        ("en–dash", "endash"),
+        ("em–dash", "emdash"),
+        ("\U0001f604 unicode emoji", "-unicode-emoji"),
+        ("\U0001f604_\U0001f604 unicode emoji", "_-unicode-emoji"),
+        ("\U0001f604 - an emoji", "---an-emoji"),
+        (":smile: - a gemoji", "smile---a-gemoji"),
+        ("Привет non-latin 你好",
+         "привет-non-latin-你好"),
+        (":ok: No underscore", "ok-no-underscore"),
+        (":ok_hand: Single", "ok_hand-single"),
+        (":ok_hand::hatched_chick: Two in a row with no spaces",
+         "ok_handhatched_chick-two-in-a-row-with-no-spaces"),
+        (":ok_hand: :hatched_chick: Two in a row",
+         "ok_hand-hatched_chick-two-in-a-row"),
+        # Connector_Punctuation — every one kept.
+        ("a_ ‿ ⁀ ⁔ ︳ ︴ ﹍ ﹎ ﹏ ＿b",
+         "a_-‿-⁀-⁔-︳-︴-﹍-﹎-﹏-＿b"),
+        # Dash_Punctuation — only ASCII `-` kept, the other 23 deleted.
+        ("a- ֊ ־ ᐀ ᠆ ‐ ‑ ‒ – — "
+         "― ⸗ ⸚ ⸺ ⸻ ⹀ 〜 〰 ゠ "
+         "︱ ︲ ﹘ ﹣ －b",
+         "a------------------------b"),
+        # Enclosing_Mark — every one kept (this is why VS16 survives too).
+        ("a҈ ҉ ᪾ ⃝ ⃞ ⃟ ⃠ ⃢ ⃣ "
+         "⃤ ꙰ ꙱ ꙲b",
+         "a҈-҉-᪾-⃝-⃞-⃟-⃠-⃢-⃣-"
+         "⃤-꙰-꙱-꙲b"),
+        ("a b", "ab"),
+    ]
+
+    @pytest.mark.parametrize("raw,expected", UPSTREAM)
+    def test_upstream_case(self, raw, expected):
+        assert cdl._gfm_slug(raw) == expected
+
+    def test_upstream_repetition_sequence(self):
+        """Fixtures 'Repetition (1)'..'(5)' — one slugger, in order."""
+        slugger = cdl._GfmSlugger()
+        seq = ["echo", "echo", "echo 1", "echo-1", "echo"]
+        got = [slugger.dedup(cdl._gfm_slug(s)) for s in seq]
+        assert got == ["echo", "echo-1", "echo-1-1", "echo-1-2", "echo-2"]
+
+    def test_known_gap_other_alphabetic_symbols(self):
+        """Documented, accepted divergence — see `_GFM_KEEP_CATEGORIES`.
+
+        `Alphabetic` includes Other_Alphabetic, which covers the enclosed
+        Latin letters (`ⓔ`, `🅨` — general category So).  stdlib
+        `unicodedata` exposes general categories only, so we drop them where
+        github.com keeps them.  Closing this would mean either a new
+        dependency (the `doc-links-check` hook is deliberately dependency
+        free) or a hand-maintained Unicode range table that silently drifts.
+        Zero headings in this repo contain such a character.
+
+        This test exists so the gap fails loudly if it ever *changes*,
+        rather than sitting undocumented.
+        """
+        assert cdl._gfm_slug("aⓔb") == "ab"   # github.com: "aⓔb"
+        assert cdl._gfm_slug("a\U0001f168b") == "ab"  # github.com: "a🅨b"
 
 
 # ---------------------------------------------------------------------------
@@ -296,3 +475,65 @@ class TestCrossLanguageCounterparts:
         checker.check_cross_language_counterparts()
         missing = [m for m in checker.missing_counterparts if m["direction"] == "zh→en"]
         assert any("guide" in m["missing"] for m in missing)
+
+
+# ---------------------------------------------------------------------------
+class TestNoInvisibleCharsInLinkAnchors:
+    """A link fragment must never carry a non-printing character.
+
+    GitHub's slug keeps Mn/Cf codepoints (a VARIATION SELECTOR-16 that trails an
+    emoji is `Mn`) while dropping the emoji itself (`So`), so a heading ending in
+    `... 🛡️` yields an anchor whose last character is invisible. Writing that
+    anchor into a link is *correct* for GitHub and unreviewable for humans: the
+    fragment looks identical to the clean one in every editor and diff.
+
+    The fix is always on the heading side (drop the emoji), never on the link
+    side — which is why this guard reads links rather than headings: 53 headings
+    in this repo would slug to an invisible-tailed anchor, and they are harmless
+    right up until someone links to one.
+    """
+
+    _INVISIBLE = ("Mn", "Cf")
+
+    @staticmethod
+    def _repo_root() -> Path:
+        return Path(__file__).resolve().parents[2]
+
+    def _offenders(self):
+        import re
+        import unicodedata
+        root = self._repo_root()
+        skip = {".git", "node_modules", "site", ".pytest_cache"}
+        found, scanned = [], 0
+        for path in sorted(root.rglob("*.md")):
+            if skip & set(path.relative_to(root).parts):
+                continue
+            try:
+                lines = path.read_text(encoding="utf-8").split("\n")
+            except OSError:
+                continue
+            scanned += 1
+            for lineno, line in enumerate(lines, 1):
+                for m in re.finditer(r"\]\(([^)]*#[^)]*)\)", line):
+                    frag = m.group(1)
+                    bad = [c for c in frag
+                           if unicodedata.category(c) in self._INVISIBLE]
+                    if bad:
+                        found.append((
+                            str(path.relative_to(root)), lineno, frag,
+                            [f"U+{ord(c):04X}" for c in bad]))
+        return found, scanned
+
+    def test_no_link_fragment_carries_an_invisible_codepoint(self):
+        offenders, scanned = self._offenders()
+        assert not offenders, (
+            "these link fragments contain a non-printing codepoint — the target "
+            "heading almost certainly ends in an emoji, whose VARIATION "
+            "SELECTOR survives GitHub's slug while the emoji itself does not. "
+            "FIX the HEADING (drop the trailing emoji) and update the link; do "
+            "NOT paste the invisible character into the link to make it "
+            "resolve.\n" + "\n".join(
+                f"  {f}:{n}  {frag!r}  {codes}" for f, n, frag, codes in offenders))
+        assert scanned >= 200, (
+            f"only {scanned} markdown files scanned — the walk did not reach the "
+            "doc tree, so this assertion is vacuous")

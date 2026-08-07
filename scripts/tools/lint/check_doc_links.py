@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import argparse
+import unicodedata
 from pathlib import Path
 from collections import defaultdict
 from typing import List, Tuple, Dict, Set
@@ -25,6 +26,89 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# GFM anchor generation — github.com heading-id semantics
+# ---------------------------------------------------------------------------
+# Authoritative rule (html-pipeline's TocFilter, which github.com runs, and
+# which `github-slugger` reproduces character-for-character):
+#
+#     id = text.downcase
+#     id.gsub!(/[^<word>\- ]/u, '')   # DELETE, never substitute
+#     id.tr!(' ', '-')                # per-character, runs NOT collapsed
+#
+# `<word>` == Alphabetic | Mark | Decimal_Number | Connector_Punctuation, so:
+#   * `_` (Pc) and ASCII `-` survive  →  `_defaults.yaml` → `_defaultsyaml`
+#   * CJK (Lo) survives
+#   * emoji (So), `*`, backtick, `:`, `（）` are deleted with NO `-` inserted
+#     →  `:ok_hand: Single` → `ok_hand-single`
+#   * tab / NBSP are NOT U+0020, so they are deleted rather than hyphenated
+#   * leading/trailing `-` are NOT stripped — `## 🚀 Deploy` is `#-deploy`
+# Repeated headings on one page get `-1`, `-2`, … (see `_GfmSlugger`).
+#
+# Alphabetic == L* | Nl | Other_Alphabetic.  stdlib `unicodedata` exposes
+# general categories only, so `Nl` is listed explicitly and Other_Alphabetic
+# is the one accepted gap — it costs the enclosed-letter symbols (`ⓐ`, `🅰`,
+# category So, which github.com keeps).  Documented in the fixture-parity
+# test; adding a dependency to close it is not worth it (see tests/lint/
+# test_check_doc_links.py::TestGithubSluggerFixtures).
+_GFM_KEEP_CATEGORIES = frozenset({"Nd", "Nl", "Pc"})
+
+
+def _gfm_slug(text: str) -> str:
+    """Lowercase → drop non-word chars → each U+0020 becomes one `-`."""
+    out: List[str] = []
+    for ch in text.lower():
+        if ch == " ":
+            out.append("-")
+        elif ch == "-":
+            out.append(ch)
+        else:
+            category = unicodedata.category(ch)
+            if category[0] in ("L", "M") or category in _GFM_KEEP_CATEGORIES:
+                out.append(ch)
+    return "".join(out)
+
+
+def _gfm_anchor(heading_text: str) -> str:
+    """Slug a raw Markdown heading the way github.com does.
+
+    GitHub slugs the *rendered* text, so inline markup is reduced first.
+    Emphasis / code markers (`*`, backtick, `~`) need no special-casing —
+    they are non-`\\p{Word}` and get dropped by `_gfm_slug` anyway, which is
+    exactly why `_` must NOT be pre-stripped alongside them.
+    """
+    text = heading_text.strip()
+    text = re.sub(r"!\[([^\]]*)\]\([^\)]+\)", r"\1", text)  # image → alt text
+    text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)   # link → label
+    return _gfm_slug(text)
+
+
+class _GfmSlugger:
+    """Page-scoped slugger: appends `-1`, `-2`, … to duplicate headings.
+
+    Mirrors `github-slugger`'s counter, including its collision loop — the
+    suffix keeps climbing until the result is unused, so a page holding both
+    `Echo 1` and a later `Echo 1` yields `echo-1` then `echo-1-1`, and an
+    `echo-1` heading after those becomes `echo-1-2` rather than stealing an
+    id that is already taken.
+    """
+
+    def __init__(self) -> None:
+        self._occurrences: Dict[str, int] = {}
+
+    def dedup(self, base: str) -> str:
+        """Apply the page-scoped duplicate suffix to an already-built slug."""
+        result = base
+        while result in self._occurrences:
+            self._occurrences[base] += 1
+            result = f"{base}-{self._occurrences[base]}"
+        self._occurrences[result] = 0
+        return result
+
+    def slug(self, heading_text: str) -> str:
+        return self.dedup(_gfm_anchor(heading_text))
 
 
 class DocLinkChecker:
@@ -191,32 +275,14 @@ class DocLinkChecker:
 
     @staticmethod
     def _heading_to_anchor(heading_text: str) -> str:
-        """Convert heading text to GFM-compatible anchor id.
+        """Convert heading text to the anchor id github.com would emit.
 
-        GFM rules:
-        - Lowercase
-        - Remove non-alphanumeric/CJK chars except hyphens and spaces
-        - Replace spaces with hyphens
-        - Strip leading/trailing hyphens
+        Thin wrapper over `_gfm_anchor` (see its module-level docstring for
+        the rule and its provenance).  This returns the *base* slug; the
+        `-1`/`-2` duplicate suffixes are page-scoped and therefore live in
+        `_GfmSlugger`, which `_get_headings` drives.
         """
-        text = heading_text.strip()
-        # Remove inline markdown: bold, italic, code, links, images
-        text = re.sub(r"[*_`]", "", text)
-        text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)
-        text = re.sub(r"!\[([^\]]*)\]\([^\)]+\)", r"\1", text)
-        # Remove emoji shortcodes like :rocket:
-        text = re.sub(r":[a-zA-Z0-9_+-]+:", "", text)
-        # Lowercase
-        text = text.lower()
-        # Keep alphanumeric, CJK, spaces, hyphens
-        text = re.sub(
-            r"[^\w\s\u4e00-\u9fff\u3400-\u4dbf\uF900-\uFAFF-]",
-            "", text)
-        # Replace whitespace with hyphens
-        text = re.sub(r"\s+", "-", text)
-        # Strip leading/trailing hyphens
-        text = text.strip("-")
-        return text
+        return _gfm_anchor(heading_text)
 
     def _get_headings(self, filepath: Path) -> Set[str]:
         """Extract all heading anchors from a Markdown file (cached)."""
@@ -230,6 +296,9 @@ class DocLinkChecker:
                 lines = f.readlines()
 
             in_code = False
+            # Page-scoped so repeated headings collect their GitHub `-1`/`-2`
+            # variants (adds anchors, never removes any → cannot false-positive).
+            slugger = _GfmSlugger()
             for line in lines:
                 stripped = line.strip()
                 if stripped.startswith("```"):
@@ -240,7 +309,7 @@ class DocLinkChecker:
                 m = re.match(r"^(#{1,6})\s+(.+)", line)
                 if m:
                     heading_text = m.group(2).strip()
-                    anchor = self._heading_to_anchor(heading_text)
+                    anchor = slugger.slug(heading_text)
                     if anchor:
                         anchors.add(anchor)
         except OSError:

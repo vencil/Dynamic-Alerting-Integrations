@@ -23,7 +23,7 @@ lang: zh
 | conf.d/ YAML 格式問題 | [§conf.d/ YAML 格式陷阱](#confd-yaml-格式陷阱) |
 | SAST 規則合規 | [§SAST 合規](#sast-合規) |
 | Playwright E2E | [§Playwright E2E](#playwright-e2e-測試portal-smoke-tests) |
-| Go 並發 flake 修法 | [§v2.6.x Go 並發測試 flake](#v26x-lessons-learned-go-並發測試-flake2026-04-11) |
+| Go 並發 flake 修法 | [§v2.6.x Go 並發測試 flake](#v26x-lessons-learned--go-並發測試-flake2026-04-11) |
 | 程式碼品質規範 | [§程式碼品質規範](#程式碼品質規範) |
 
 ## 測試前置準備

@@ -25,10 +25,10 @@ lang: en
 
 | You are… | Start with | Drill into |
 |---|---|---|
-| Tenant tech lead | [Where Are You?](#where-are-you-你在哪個階段), [§3 Generate config](#3-generate-tenant-config-da-tools-scaffold), [§9 Dimensional labels](#9-dimensional-labels-multi-db-type-support) | [§7 Verification](#7-post-migration-verification), [§12 FAQ](#12-faq) |
+| Tenant tech lead | [Where Are You?](#where-are-you-你在哪個階段), [§3 Generate config](#3-generate-tenant-config-da-tools-scaffold), [§9 Dimensional labels](#9-dimensional-labels--multi-db-type-support) | [§7 Verification](#7-post-migration-verification), [§12 FAQ](#12-faq) |
 | Platform / DevOps | Core flow [§1–§7](#core-migration-flow-in-order) (in order) | Reference band, Advanced band |
-| Enterprise / SRE (large migration) | [§2 Reverse analysis](#2-reverse-analyze-existing-monitoring-da-tools-onboard), [§13 Enterprise migration](#13-enterprise-grade-migration-large-tenant-1000-rules) | [Shadow Monitoring SOP](shadow-monitoring-sop.en.md) |
-| Domain Expert (DBA) | [§8 Examples](#8-five-migration-scenario-examples), [§9 Dimensional](#9-dimensional-labels-multi-db-type-support), [§11 Extending](#11-extending-unsupported-db-types) | [§4 Convert](#4-convert-existing-rules-da-tools-migrate) |
+| Enterprise / SRE (large migration) | [§2 Reverse analysis](#2-reverse-analyze-existing-monitoring-da-tools-onboard), [§13 Enterprise migration](#13-enterprise-grade-migration--large-tenant-1000-rules) | [Shadow Monitoring SOP](shadow-monitoring-sop.en.md) |
+| Domain Expert (DBA) | [§8 Examples](#8-five-migration-scenario-examples), [§9 Dimensional](#9-dimensional-labels--multi-db-type-support), [§11 Extending](#11-extending-unsupported-db-types) | [§4 Convert](#4-convert-existing-rules-da-tools-migrate) |
 
 > **Reading together**: locate yourself via the "Where Are You?" decision table, then each reader follows their own band. This doc has three bands — **Core Migration Flow (in order) / Reference (consult as needed) / Advanced & Operations**.
 

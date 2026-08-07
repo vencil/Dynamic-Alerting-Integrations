@@ -461,7 +461,7 @@ Prometheus 的 `/-/reload` 和 Alertmanager 的 `/-/reload` 是用於觸發設�
 
 ## Self-Service Portal（tenant-api）
 
-> **部署方式**見上方 [§部署 tenant-api + da-portal](#部署-tenant-api-da-portaltenant-manager)。
+> **部署方式**見上方 [§部署 tenant-api + da-portal](#部署-tenant-api--da-portaltenant-manager)。
 
 平台提供 Web UI（tenant-manager）讓 Domain Expert 自助管理 tenant 配置，無需直接編輯 YAML：
 

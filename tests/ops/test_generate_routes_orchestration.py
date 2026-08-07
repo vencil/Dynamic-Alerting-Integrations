@@ -11,12 +11,13 @@ the suffix change captures the actual concern instead of a generic "extended".
 The two files stay split because the combined LOC (~2200) is too large for a
 single comprehensive test file.
 """
+import functools
 import json
 import os
 import re
 import subprocess
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -671,7 +672,15 @@ def _committed_alertmanager_config():
 # scanner below argues against (CodeRabbit, PR #1270). Grows with the pack; it is a
 # floor on the SUM across every platform rules ConfigMap, so splitting the pack into
 # two files keeps satisfying it instead of silently halving coverage.
-_MIN_PLATFORM_ALERTS = 40
+#
+# It counts ALERTING RULES IN THE PLATFORM TREE — all of them, exceptions included.
+# Each contract then subtracts its OWN documented exceptions from this one number
+# (`- 1` for Watchdog on the alert_source-scoped floors, `- len(ledger)` on the
+# runbook resolvability floor). Encoding the exceptions at the use site instead of
+# baking a lowest-common-denominator into the constant is what lets the constant be
+# exact: at 40 it was two short of the shipped 42, i.e. two alerts could be deleted
+# outright without a single floor noticing.
+_MIN_PLATFORM_ALERTS = 42
 
 
 def _real_platform_label_sets():
@@ -721,7 +730,13 @@ class TestPlatformAlertsNotTenantSilenceable:
 
     def test_derivation_is_non_vacuous(self):
         sets = _real_platform_label_sets()
-        assert len(sets) >= _MIN_PLATFORM_ALERTS, (
+        # `- 1`: the derivation keeps only `alert_source="platform"` rules, and
+        # Watchdog is the ONE platform alert that deliberately carries no
+        # alert_source (it rides the index-0 heartbeat route). The floor is
+        # therefore the whole tree minus that single documented exception —
+        # written as arithmetic on the shared constant so growing the pack moves
+        # this floor too, instead of leaving a second number to go stale.
+        assert len(sets) >= _MIN_PLATFORM_ALERTS - 1, (
             f"only {len(sets)} platform alerts derived")
         tenant_bearing = sorted(s["alertname"] for s in sets if "tenant" in s)
         assert tenant_bearing == [
@@ -1019,28 +1034,85 @@ class TestEqualLabelGatedInvariant:
 # Shared rule-tree scanner for the static label-contract gates below
 # ============================================================
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-# ⚠️ PREFIX, not a literal filename. Both gates below are bounded by "is this a
-# platform rules ConfigMap?", and a literal `configmap-rules-platform.yaml` made
-# a SECOND platform rules ConfigMap unrepresentable: adding `alert_source` to it
-# tripped the RESERVED assertion (red), while omitting the label left it with
-# ZERO presence coverage (green) — i.e. the gate actively pushed the maintainer
-# toward the broken state. Any `configmap-rules-platform*.{yaml,yml}` now counts,
-# and the presence floor is a sum across the whole set.
+# The one platform rules ConfigMap that exists today. Kept for HUMAN-READABLE
+# messages only — it is NOT the discovery criterion any more, see
+# _is_platform_cm_location.
 _PLATFORM_CM_PREFIX = "configmap-rules-platform"
 # Both extensions: a rules ConfigMap named `.yml` was silently skipped by the
 # scanner, which is the same "escapes the gate by being named differently" hole.
 _RULES_FILE_EXTS = (".yaml", ".yml")
+# The deploy-copy / source naming convention that ties the two trees together:
+# k8s/03-monitoring/configmap-rules-<pack>.yaml is GENERATED from
+# rule-packs/rule-pack-<pack>.yaml. `check_portal_rulepack_claims.py` reads the
+# same pairing (its `path.stem.replace(...)` derivations at :135-142, and the
+# docstring at :33-36 names configmap-rules-platform.yaml as the one with "NO
+# rule-pack counterpart").
+_RULES_CM_PREFIX = "configmap-rules-"
+_RULE_PACK_PREFIX = "rule-pack-"
+
+
+def _strip_rules_ext(name: str) -> str | None:
+    """`foo.yaml` / `foo.yml` -> `foo`; anything else -> None."""
+    for ext in _RULES_FILE_EXTS:
+        if name.endswith(ext):
+            return name[: -len(ext)]
+    return None
+
+
+@functools.lru_cache(maxsize=1)
+def _generated_pack_names() -> frozenset:
+    """Pack names that HAVE a rule-packs/ source, i.e. whose ConfigMap is generated.
+
+    RECURSIVE, matching `_iter_repo_alert_rules`'s rglob over the same tree: a
+    source pack moved into a subdirectory must not read as "source deleted", or
+    its generated ConfigMap would be misclassified as hand-authored.
+    """
+    packs_dir = Path(_REPO_ROOT) / "rule-packs"
+    names = set()
+    for path in packs_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        stem = _strip_rules_ext(path.name)
+        if stem and stem.startswith(_RULE_PACK_PREFIX):
+            names.add(stem[len(_RULE_PACK_PREFIX):])
+    return frozenset(names)
 
 
 def _is_platform_cm_location(where: str) -> bool:
-    """True iff `where` names a rule inside a platform rules ConfigMap.
+    """True iff `where` names a rule inside a HAND-AUTHORED rules ConfigMap.
 
-    `where` is "<configmap-file>:<data-key>" on the ConfigMap side and a bare
-    rule-pack filename on the source side; only the former can be platform.
+    `where` is "<configmap-path>:<data-key>" on the ConfigMap side and a bare
+    rule-pack path on the source side; only the former can be platform.
+
+    THE CRITERION IS "no rule-packs/ source", not "the filename starts with
+    configmap-rules-platform". `_iter_repo_alert_rules`'s own docstring already
+    states the intent — "any HAND-AUTHORED rules ConfigMap OUTSIDE rule-packs/,
+    which is configmap-rules-platform.yaml today AND WHATEVER IS ADDED LATER" —
+    and a filename prefix is a proxy for that intent that fails two ways:
+
+      1. it compared the RELATIVE PATH, so `subdir/configmap-rules-platform.yaml`
+         (a placement the scanner above deliberately reaches, being recursive)
+         escaped every gate bounded by this predicate; and
+      2. a hand-authored ConfigMap NOT named `platform*` escaped presence
+         coverage entirely, while the alert_source RESERVED contract simultaneously
+         reported it as an offender — i.e. the diagnostic pushed the maintainer to
+         DELETE the correct label. That is the same "the gate steers you into the
+         broken state" failure the prefix itself was introduced to fix, one level up.
+
+    Deriving from the generated-copy convention makes the classification a
+    property of the artifact (does a source pack exist?) instead of a property of
+    its name. 17/17 identical to the old prefix test on today's tree — pinned by
+    test_platform_cm_criterion_matches_the_prefix_era_on_the_live_tree.
     """
     if ":" not in where:
         return False
-    return where.split(":", 1)[0].startswith(_PLATFORM_CM_PREFIX)
+    name = PurePosixPath(where.split(":", 1)[0]).name
+    if not name.startswith(_RULES_CM_PREFIX):
+        return False
+    pack = _strip_rules_ext(name[len(_RULES_CM_PREFIX):])
+    if pack is None:
+        return False
+    return pack not in _generated_pack_names()
 
 
 def _iter_repo_alert_rules():
@@ -1163,11 +1235,11 @@ class TestPlatformAlertSourceContract:
     there the label was missing from a sinkhole, here from a delivery selector.
 
     Two directions, both asserted, and BOTH bounded by the same
-    `_is_platform_cm_location` prefix test (not a literal filename) so a second
-    platform rules ConfigMap is covered by presence instead of being punished by
-    reserved:
-      1. presence  — every alert in ANY configmap-rules-platform*.{yaml,yml}
-         except `Watchdog` carries `alert_source: platform`;
+    `_is_platform_cm_location` ("no rule-packs/ source", not a filename test), so
+    any SECOND hand-authored rules ConfigMap is covered by presence instead of
+    being punished by reserved:
+      1. presence  — every alert in ANY hand-authored rules ConfigMap except
+         `Watchdog` carries `alert_source: platform`;
       2. reserved  — nothing OUTSIDE those ConfigMaps carries `alert_source` at
          all, so `match: ['alert_source="platform"']` cannot silently start
          picking up tenant alerts (which route by `tenant` and would then
@@ -1182,19 +1254,77 @@ class TestPlatformAlertSourceContract:
         return [(where, rule) for where, rule in _iter_repo_alert_rules()
                 if _is_platform_cm_location(where)]
 
-    def test_platform_cm_discovery_is_prefix_based(self):
-        # Regression guard for the scope seam: discovery must be a prefix test on
-        # the ConfigMap basename, not equality with one filename, and must accept
-        # both extensions. Asserted on the classifier directly so it holds even
-        # while only one platform ConfigMap exists.
+    def test_platform_cm_discovery_is_source_based(self):
+        # Regression guard for the scope seam. Discovery asks "does a rule-packs/
+        # source exist for this ConfigMap?", so it is a property of the ARTIFACT,
+        # not of its name. Asserted on the classifier directly so it holds even
+        # while only one hand-authored ConfigMap exists.
         assert _is_platform_cm_location("configmap-rules-platform.yaml:key")
         assert _is_platform_cm_location("configmap-rules-platform-federation.yaml:k")
         assert _is_platform_cm_location("configmap-rules-platform.yml:key")
+        # ⬇ the two cases the old `startswith(_PLATFORM_CM_PREFIX)` test got wrong.
+        # A subdirectory: the scanner is recursive on purpose, and the prefix test
+        # compared the RELATIVE PATH, so this one silently left every gate.
+        assert _is_platform_cm_location("nested/configmap-rules-platform.yaml:key"), (
+            "a platform ConfigMap in a subdirectory escaped the prefix test — the "
+            "scanner reaches it, so the classifier must too")
+        # A hand-authored ConfigMap NOT named platform*: has no rule-pack source,
+        # so it IS the platform tree by the docstring's own definition. Under the
+        # prefix test it got zero presence coverage AND was reported as a reserved
+        # violation, i.e. the gate told the maintainer to remove the right label.
+        assert _is_platform_cm_location("configmap-rules-mysql.yaml:key"), (
+            "no rule-packs/rule-pack-mysql.yaml exists, so this ConfigMap is "
+            "hand-authored — it must be inside the contract, not outside it")
+        # A GENERATED copy is never platform: rule-packs/rule-pack-redis.yaml is
+        # its source. (This is the assertion that would flip if someone deleted a
+        # source pack while leaving its deploy copy behind — deliberately loud.)
+        assert not _is_platform_cm_location("configmap-rules-redis.yaml:key")
+        assert "redis" in _generated_pack_names()
+        assert "platform" not in _generated_pack_names()
         # rule-pack side (no ":" prefix) is never platform, whatever it is named
         assert not _is_platform_cm_location("configmap-rules-platform.yaml")
         assert not _is_platform_cm_location("rule-pack-mysql.yaml")
-        assert not _is_platform_cm_location("configmap-rules-mysql.yaml:key")
+        # not a rules ConfigMap at all / not a YAML extension
+        assert not _is_platform_cm_location("configmap-alertmanager.yaml:key")
+        assert not _is_platform_cm_location("configmap-rules-platform.json:key")
         assert _RULES_FILE_EXTS == (".yaml", ".yml")
+
+    def test_platform_cm_criterion_matches_the_prefix_era_on_the_live_tree(self):
+        """The criterion swap is a HARDENING, not a scope change: on today's tree
+        the two agree on all 17 rules ConfigMaps.
+
+        Pinned so the swap cannot silently widen or narrow what the three
+        contracts cover, and so that the FIRST artifact where they disagree —
+        a hand-authored ConfigMap not named `platform*`, or a generated copy whose
+        source pack was deleted — surfaces here as an explicit decision instead of
+        quietly changing which alerts are gated.
+        """
+        k8s_dir = Path(_REPO_ROOT) / "k8s" / "03-monitoring"
+        cms = sorted(p for p in k8s_dir.rglob("*")
+                     if p.is_file() and p.name.startswith(_RULES_CM_PREFIX)
+                     and p.name.endswith(_RULES_FILE_EXTS))
+        assert len(cms) >= 17, (
+            f"only {len(cms)} rules ConfigMap(s) found — the comparison below is "
+            f"vacuous: {[p.name for p in cms]}")
+        disagree = []
+        for path in cms:
+            where = f"{path.relative_to(k8s_dir).as_posix()}:rules.yaml"
+            old = where.split(":", 1)[0].startswith(_PLATFORM_CM_PREFIX)
+            new = _is_platform_cm_location(where)
+            if old != new:
+                disagree.append((where, {"prefix": old, "no-source": new}))
+        assert disagree == [], (
+            "the 'no rule-packs/ source' criterion no longer agrees with the old "
+            "filename-prefix criterion. This is not automatically a bug — it is "
+            "the point where a maintainer must decide: a hand-authored rules "
+            "ConfigMap outside rule-packs/ IS platform-scope by "
+            "_iter_repo_alert_rules' definition and must carry alert_source + "
+            "runbook_url. Confirm that, then update this pin: {}".format(disagree))
+        # non-vacuous in the other direction too: exactly one of them is platform
+        platform = [p.name for p in cms
+                    if _is_platform_cm_location(
+                        f"{p.relative_to(k8s_dir).as_posix()}:k")]
+        assert platform == ["configmap-rules-platform.yaml"], platform
 
     def test_platform_alerts_carry_alert_source(self):
         seen = []
@@ -1219,9 +1349,11 @@ class TestPlatformAlertSourceContract:
         assert watchdog_checked, (
             f"Watchdog was never scanned — no {_PLATFORM_CM_PREFIX}*.yaml parsed "
             f"or was reached; every assertion above is vacuous")
-        assert len(seen) >= _MIN_PLATFORM_ALERTS, (
+        # `- 1`: Watchdog is skipped above (the one documented exception), so the
+        # floor is the whole tree minus it. See _MIN_PLATFORM_ALERTS.
+        assert len(seen) >= _MIN_PLATFORM_ALERTS - 1, (
             f"only {len(seen)} platform alerts scanned, expected >= "
-            f"{_MIN_PLATFORM_ALERTS}: {sorted(seen)}")
+            f"{_MIN_PLATFORM_ALERTS - 1}: {sorted(seen)}")
         assert set(seen) >= {
             "ThresholdExporterAbsent", "PrometheusRuleEvaluationFailing",
             "TenantApiSingleWriterBreach", "FederationAuditPipelineSilent",
@@ -1258,6 +1390,54 @@ class TestPlatformAlertSourceContract:
 # test_runbook_urls_resolve_inside_this_repo below.
 _RUNBOOK_URL_PREFIX = (
     "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/")
+
+# The heading -> anchor machinery is BORROWED, not reimplemented. The repo's
+# doc-link linter already owns a correct one, and the copy that used to live here
+# was a weaker second implementation of the same thing: it slugged every line
+# STARTING WITH "#" — no code-fence tracking, no `#{1,6}\s+` requirement — so a
+# shell comment inside a ``` block produced a phantom anchor. On
+# docs/cli-reference.md that is 173 "anchors" against 80 real headings; an anchor
+# pointing at a fenced `# CI gate` comment resolved GREEN while 404ing on GitHub.
+# A gate whose whole job is "this link is not a 404" must not carry the more
+# permissive of the repo's two anchor readers.
+#
+# Both borrowed members are `_`-private, so test_borrowed_anchor_machinery_canary
+# below pins the shape and behaviour this gate depends on: an upstream change
+# fails there, loudly, instead of silently degrading this gate.
+from check_doc_links import DocLinkChecker  # noqa: E402
+
+
+@functools.lru_cache(maxsize=1)
+def _doc_link_checker() -> DocLinkChecker:
+    """One shared instance (its __init__ pre-scans the docs tree, ~90ms)."""
+    return DocLinkChecker(_REPO_ROOT)
+
+
+def _doc_anchors(path: Path) -> set:
+    """GitHub anchors a Markdown file actually offers (code-fence aware)."""
+    return _doc_link_checker()._get_headings(path)
+
+
+@functools.lru_cache(maxsize=1)
+def _git_tracked_paths() -> frozenset:
+    """Repo-relative POSIX paths git tracks, or an EMPTY set if git is unusable.
+
+    A blob/main URL renders from what is COMMITTED, so a file that exists on the
+    developer's disk but is untracked (or ignored) still 404s for the on-call —
+    the exact failure this gate exists to prevent. One `git ls-files` covers the
+    whole tree, so the check is ~free.
+
+    Empty means "unknown" and the caller skips the check rather than reporting
+    every URL as broken: a source tarball / exported worktree with no .git is not
+    evidence that the docs are missing.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", _REPO_ROOT, "ls-files", "-z"],
+            capture_output=True, text=True, timeout=60, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return frozenset()
+    return frozenset(p for p in out.split("\0") if p)
 
 # The platform alerts that still ship WITHOUT a runbook_url.
 #
@@ -1302,45 +1482,99 @@ class TestPlatformRunbookCoverageContract:
     WHY: platform alerts page the platform's own on-call, who has no tenant to
     hand the incident to. 40 of the 42 already carry one; nothing stopped the
     41st from shipping without it — the annotation is not part of any schema,
-    pint cannot see this tree at all (`.pint.hcl`'s parser include list is
-    rule-packs/ + tests/rulepacks/*.rules.yaml; the ConfigMap wrapper is
-    unparseable, and the pint-reachable EXTRACTS mirror only ~2/3 of the tree,
-    so a pint `alerts/annotation` rule would go green while a third of the
-    alerts stayed uncovered), and configmap-rules-platform.yaml says so in its
-    own words next to the one anchored link ("rule-YAML URLs are not linted").
+    pint does not see this tree AS CONFIGURED (`.pint.hcl`'s parser include list
+    is rule-packs/ + tests/rulepacks/*.rules.yaml, and the pint-reachable
+    EXTRACTS mirror only 26 of the 42 alerts, so a pint `alerts/annotation` rule
+    would go green while a third of the tree stayed uncovered), and
+    configmap-rules-platform.yaml says so in its own words next to the one
+    anchored link ("rule-YAML URLs are not linted").
+
+    ⚠️ That is a CONFIG boundary, not a capability one — do not restate the older
+    "the ConfigMap wrapper is unparseable" claim, which is false. pint's
+    `parser.relaxed` mode exists precisely for "rules that are embedded inside a
+    different structure" (upstream docs/configuration.md), and its parser has an
+    explicit YAML-inside-YAML branch for the `data: |` shape a rules ConfigMap
+    uses (internal/parser/parser.go, `case yaml.ScalarNode`). CI pins pint 0.86.0
+    (.github/workflows/ci.yml), far past the version that landed it. So widening
+    `.pint.hcl` IS an option on the table; this contract is not a workaround for
+    an upstream limitation, it is the gate that holds while that option is
+    unexercised — and it covers 42/42 rather than the extracts' 26.
 
     Two directions:
       1. coverage — every platform alert except the shrink-only ledger above
          carries a non-empty runbook_url;
       2. resolvability — every runbook_url that IS present names a file that
-         exists on disk, and an #anchor (if any) names a heading that exists in
-         that file. A dead runbook link is worse than a missing one: it costs
-         the on-call a click plus the doubt about whether they have the wrong
-         URL or the wrong problem.
+         exists on disk, INSIDE this repo and TRACKED BY GIT, and an #anchor (if
+         any) names a heading that exists in that file. A dead runbook link is
+         worse than a missing one: it costs the on-call a click plus the doubt
+         about whether they have the wrong URL or the wrong problem.
 
     Reuses `_iter_repo_alert_rules` / `_is_platform_cm_location` rather than
     re-globbing, for the same reason the three contracts above share them: a
     second scanner drifts and silently narrows whichever gate lost the race.
+    The same argument is why the anchor reader is borrowed from
+    check_doc_links rather than reimplemented — see `_doc_anchors`.
     """
 
     def _platform_alerts(self):
         return [(where, rule) for where, rule in _iter_repo_alert_rules()
                 if _is_platform_cm_location(where)]
 
-    @staticmethod
-    def _github_ascii_slug(heading: str) -> str:
-        """GitHub's heading -> anchor slug, ASCII subset only.
+    def test_borrowed_anchor_machinery_canary(self, tmp_path):
+        """The borrowed `_`-private anchor machinery still works as this gate needs.
 
-        Deliberately NOT a general slugger: the repo's convention is that a
-        runbook_url anchor must be ASCII (a CJK/full-width heading has no
-        stable anchor — that is why the three internal-runbook links carry no
-        anchor at all), and test_runbook_anchors_are_ascii pins it. Headings
-        that are not pure ASCII simply do not match any anchor here, which is
-        the correct outcome.
+        `DocLinkChecker._get_headings` / `._heading_to_anchor` are private to
+        another module: nothing obliges their author to keep them. Without this
+        canary, a rename or a behaviour change would degrade
+        test_runbook_urls_resolve_inside_this_repo SILENTLY (an anchor set that
+        is empty, or wrong, only makes the gate louder or quieter — never red on
+        its own terms). Here it fails loudly and names the dependency.
+
+        Pins only the properties this gate depends on. Deliberately NOT pinned:
+        how CONSECUTIVE whitespace collapses. That is a real GitHub-fidelity bug
+        in `_heading_to_anchor` being fixed upstream in this same batch, and a
+        canary that froze today's answer would fight the fix.
         """
-        s = heading.strip().lower()
-        s = re.sub(r"[^\w\s-]", "", s)
-        return re.sub(r"\s+", "-", s)
+        anchor = DocLinkChecker._heading_to_anchor
+        # shape: still a staticmethod taking heading TEXT (no leading #)
+        assert anchor("Threshold Govern") == "threshold-govern"
+        assert anchor("Validate Config!") == "validate-config"
+        assert anchor("**Bold** `code` heading") == "bold-code-heading"
+
+        md = tmp_path / "canary.md"
+        md.write_text(
+            "# Real Heading\n"
+            "\n"
+            "```bash\n"
+            "# CI gate\n"
+            "#!/usr/bin/env bash\n"
+            "```\n"
+            "\n"
+            "#NotAHeading\n"
+            "\n"
+            "### Nested Heading\n",
+            encoding="utf-8")
+        anchors = _doc_anchors(md)
+        assert "real-heading" in anchors, anchors
+        assert "nested-heading" in anchors, anchors
+        # the two properties the deleted local slugger lacked, and the reason
+        # this gate borrows instead of copying:
+        assert "ci-gate" not in anchors, (
+            "code-fence tracking regressed upstream — a fenced `# comment` is "
+            "being read as a heading, which is exactly how a 404 anchor went "
+            "green here")
+        assert "notaheading" not in anchors, (
+            "ATX headings require `#{1,6}\\s+`; `#Foo` is not a heading")
+        # ...and it must actually FIND headings (an empty set would make the
+        # anchor branch of the gate vacuously strict, not vacuously green, but
+        # would still be a broken dependency)
+        assert len(anchors) == 2, anchors
+        # end-to-end on the file this gate really reads: the three live anchors
+        # resolve, and the fenced `# CI gate` comment that used to resolve does not.
+        live = _doc_anchors(Path(_REPO_ROOT) / "docs" / "cli-reference.md")
+        assert {"threshold-govern", "cardinality-forecast",
+                "validate-config"} <= live
+        assert "ci-gate" not in live
 
     def test_every_platform_alert_carries_a_runbook_url(self):
         seen = []
@@ -1373,6 +1607,49 @@ class TestPlatformRunbookCoverageContract:
             "page exists yet, write the disposition content first. "
             f"Offenders: {missing}")
 
+    def test_runbook_ledger_shrink_only_count_pin(self):
+        """Count pin: make "shrink-only" mechanical instead of aspirational.
+
+        The docstring on _PLATFORM_ALERTS_WITHOUT_RUNBOOK says a row may only be
+        DELETED. Nothing enforced that: shipping a 43rd platform alert with no
+        runbook_url and adding one line to the ledger turned the coverage gate
+        green again — the ledger absorbed the regression instead of reporting it,
+        which is exactly the "gate goes quiet as the debt grows" shape the two
+        sibling ledgers in this repo pin against
+        (test_check_scrape_reachability.py `== 9`,
+        test_check_orphan_recordings.py `== 12`).
+
+        `<=`, not `==`, and the choice is load-bearing. Those two siblings assert
+        `len(infos) == len(LEDGER) == N`: one statement doing double duty as a
+        STALENESS check (every row still applies on the live repo) and a size pin.
+        This ledger already has the staleness half — test_runbook_ledger_is_exit_locked
+        below reports a row that gained a runbook_url AND a row naming a deleted
+        alert — so the only missing half is the growth ratchet. Spelling
+        it `== 2` would additionally make the DESIRED direction cost a test edit:
+        #1360 lands the two IR pages, deletes both rows, and would then have to
+        come back here to re-pin. `<=` lets the ledger empty itself and still
+        forces an explicit, reviewed bump to grow, the same shape as
+        test_bilingual_help_contract.py::test_allowlists_shrink_only_count_pin.
+        """
+        assert len(_PLATFORM_ALERTS_WITHOUT_RUNBOOK) <= 2, (
+            f"_PLATFORM_ALERTS_WITHOUT_RUNBOOK grew to "
+            f"{len(_PLATFORM_ALERTS_WITHOUT_RUNBOOK)} (pin=2). This ledger is "
+            "shrink-only: it exists for the two alerts #1207 left pending "
+            "(CronJobLastRunFailed, MassExporterOutage), NOT as an escape hatch "
+            "for a new alert that shipped without a runbook_url. Write the "
+            "disposition page and point the alert at it. If a new deferral is "
+            "genuinely unavoidable, bumping this pin is the deliberate, reviewed "
+            f"cost of that: {sorted(_PLATFORM_ALERTS_WITHOUT_RUNBOOK)}")
+        # Every row must carry its own written justification — the ledger's value
+        # is the REASON, not the name (a bare name set would let a row be added
+        # with no argument for it).
+        unexplained = sorted(name for name, why
+                             in _PLATFORM_ALERTS_WITHOUT_RUNBOOK.items()
+                             if len(why.strip()) < 80)
+        assert unexplained == [], (
+            "each ledger row must state WHY no existing page answers the "
+            f"page-out: {unexplained}")
+
     def test_runbook_ledger_is_exit_locked(self):
         # The ledger must shrink, never linger: a row whose alert has gained a
         # runbook_url, or that names an alert no longer in the tree, is stale.
@@ -1402,16 +1679,36 @@ class TestPlatformRunbookCoverageContract:
                                "for this repo"))
                 continue
             rel, _, anchor = url[len(_RUNBOOK_URL_PREFIX):].partition("#")
-            target = Path(_REPO_ROOT) / rel
+            # CLOSURE FIRST. `Path(root) / rel` is not a containment operation:
+            # an absolute `rel` REPLACES the root outright (`Path(root)/"/etc/hosts"`
+            # is `/etc/hosts`, and `.is_file()` says True), and `../../..` walks out
+            # the same way. Either shape would let a URL that 404s on GitHub — the
+            # blob path does not exist in the repo — pass by resolving to some file
+            # on the developer's machine. resolve() then is_relative_to() is the
+            # actual containment test.
+            target = (Path(_REPO_ROOT) / rel).resolve()
+            if not target.is_relative_to(Path(_REPO_ROOT).resolve()):
+                broken.append((where, rule["alert"], url,
+                               f"{rel!r} resolves OUTSIDE the repo ({target}) — "
+                               "a blob/main path is always repo-relative"))
+                continue
             if not target.is_file():
                 broken.append((where, rule["alert"], url,
                                f"{rel} does not exist in this repo"))
                 continue
+            # blob/main renders what is COMMITTED: an untracked or ignored file
+            # exists here and 404s there. Skipped when git is unavailable — see
+            # _git_tracked_paths.
+            tracked = _git_tracked_paths()
+            if tracked and target.relative_to(
+                    Path(_REPO_ROOT).resolve()).as_posix() not in tracked:
+                broken.append((where, rule["alert"], url,
+                               f"{rel} exists on disk but is NOT tracked by git — "
+                               "blob/main serves the committed tree, so this 404s"))
+                continue
             if not anchor:
                 continue
-            slugs = {self._github_ascii_slug(line.lstrip("#"))
-                     for line in target.read_text(encoding="utf-8").splitlines()
-                     if line.startswith("#")}
+            slugs = _doc_anchors(target)
             if anchor not in slugs:
                 broken.append((where, rule["alert"], url,
                                f"no heading in {rel} slugs to #{anchor}"))
@@ -1431,7 +1728,9 @@ class TestPlatformRunbookCoverageContract:
         # headings have no stable GitHub anchor, which is why the internal
         # runbook links deliberately carry none. An anchor that is not ASCII
         # would also silently fall out of the slug check above.
+        seen = []
         for where, rule in self._platform_alerts():
+            seen.append(rule["alert"])
             url = (rule.get("annotations") or {}).get("runbook_url") or ""
             _, _, anchor = url.partition("#")
             if not anchor:
@@ -1440,6 +1739,19 @@ class TestPlatformRunbookCoverageContract:
                 f"{where}: {rule['alert']} has a non-ASCII runbook_url anchor "
                 f"#{anchor} — link to the file with no anchor instead (the "
                 "three docs/internal/* links do exactly this)")
+        # Non-vacuity floor, matching its three siblings in this class: without
+        # it an empty scan (the platform tree renamed, moved, or unparsed) passes
+        # this test for the wrong reason.
+        #
+        # The floor is on the SCAN, not on how many anchors it found. Flooring
+        # the anchor COUNT would punish the remediation this very test prescribes
+        # — "link to the file with no anchor instead" drives that count toward
+        # zero — so a tree that legitimately drops to zero anchors must stay
+        # green here while still proving the scan reached it.
+        assert len(seen) >= _MIN_PLATFORM_ALERTS, (
+            f"only {len(seen)} platform alerts scanned, expected >= "
+            f"{_MIN_PLATFORM_ALERTS} — no {_PLATFORM_CM_PREFIX}*.yaml was "
+            f"reached, so every assertion here is vacuous: {sorted(seen)}")
 
 
 # ============================================================

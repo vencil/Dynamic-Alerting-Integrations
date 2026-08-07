@@ -26,9 +26,19 @@ Two layers, the shape #1286 established for chart-face assertions
     `_defaults.yaml` against the values it was rendered from, item by item.
     `helm` exists in CI (azure/setup-helm) and in the dev container; locally
     it skips. `test_helm_present_when_required` below is this file's OWN
-    fail-closed guard for a broken setup-helm step — same shape as the sibling
-    tests/helm/ files, so a job that runs only this file still reddens instead
-    of silently skipping the render layer.
+    fail-closed guard for a broken setup-helm step.
+
+⛔ That local guard is the MINORITY shape, not the house style — do not read the
+line above as "the siblings all have one". 14 files under tests/helm/ gate on
+`shutil.which("helm")`; counting this one, 4 carry a local copy
+(test_federation_reconciler_projection_grace.py,
+test_federation_store_namespace_guard.py, test_federation_store_sentinel_guard.py).
+The other 10 are covered ONLY by the central
+tests/shared/test_vector_projection_vrl.py::test_helm_present_when_required,
+which still exists and is still their sole protection — but it only reddens when
+that file is part of the same pytest run. Hence the local copy here: a job that
+selects only this file still reddens instead of silently skipping the render
+layer.
 """
 from __future__ import annotations
 
