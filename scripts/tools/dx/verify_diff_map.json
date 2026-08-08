@@ -703,7 +703,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "cf5b8d0ff9dad3f09508ad15dd22068d4f6ef44722f7f3e2265ac04ecc6f19d0",
+ "source_digest": "e35092c1b39503477bca6fc7793d0fb743ba261471b8fc15ab89c3b7128f0510",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1043,6 +1043,7 @@
   ],
   ".github/workflows/ci.yml": [
    "tests/dx/test_compile_custom_alerts.py",
+   "tests/dx/test_recover_index.py",
    "tests/lint/test_check_admin_config_schema.py",
    "tests/lint/test_check_confd_schema.py",
    "tests/lint/test_check_devcontainer_dep_parity.py",
@@ -1081,6 +1082,7 @@
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_compile_custom_alerts.py",
    "tests/dx/test_line_ending_policy.py",
+   "tests/dx/test_recover_index.py",
    "tests/dx/test_scaffold_lint.py",
    "tests/helm/test_environments_overlay_sync.py",
    "tests/lint/test_check_admin_config_schema.py",
@@ -1111,6 +1113,7 @@
   ],
   "Makefile": [
    "tests/dx/test_compile_custom_alerts.py",
+   "tests/dx/test_recover_index.py",
    "tests/lint/test_check_makefile_targets.py",
    "tests/lint/test_check_orphan_lint.py",
    "tests/lint/test_check_unpinned_deps.py",
@@ -1750,7 +1753,8 @@
   "scripts/ops": [
    "tests/dx/test_bat_label_integrity.py",
    "tests/dx/test_line_ending_policy.py",
-   "tests/ops/test_ci_flake_retry.py"
+   "tests/ops/test_ci_flake_retry.py",
+   "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   "scripts/ops/_verify_download.sh": [
    "tests/ops/test_verify_download.py"
