@@ -1133,17 +1133,15 @@ def _is_platform_cm_location(where: str) -> bool:
     is hand-authored. Pinned by test_platform_cm_discovery_is_content_based
     and test_unknown_provenance_defaults_to_platform.
 
-    ⛔ KNOWN LIMIT — one directory criterion remains, deliberately. The bare
-    `groups:` document shape (a plain Prometheus rule file, no ConfigMap or
-    PrometheusRule wrapper) is only recognised under rule-packs/. That is a
-    PATH test, and it contradicts the "content, never location" rule the
-    scanner otherwise follows — kept because the shape is indistinguishable
-    from this repo's 23 `tests/rulepacks/*.rules.yaml` extracts and
-    tests/e2e-bench/alert-rules.yml, which are test inputs rather than shipped
-    configuration. The cost is real: a hand-authored `extra-platform-rules.yaml`
-    with top-level `groups:` anywhere outside rule-packs/ is not discovered.
-    Closing it needs a positive signal for "shipped" — kustomization membership
-    or a Helm values reference — which is its own change.
+    The last directory criterion is GONE. The bare `groups:` shape (a plain
+    Prometheus rule file with no ConfigMap or PrometheusRule wrapper) used to be
+    recognised only under rule-packs/, because it is indistinguishable from this
+    repo's 19 `tests/rulepacks/**/*.rules.yaml` extracts. That reason expired
+    when the scan narrowed to shipped roots — `tests/` is no longer read at all,
+    so the path test was protecting against a collision that can no longer
+    happen while leaving a real hole: a hand-authored `extra-platform-rules.yaml`
+    under k8s/ was not discovered. Removing it costs nothing on today's tree
+    (measured: identical containers, rules and platform set) and closes that.
 
     Two further soft spots, both currently harmless and both worth knowing:
     a PrometheusRule's provenance comes from its `da-rule-pack-<x>` object name
@@ -1317,6 +1315,31 @@ _SCAN_SKIP_PARTS = frozenset()
 # a maintainer happens to invoke kubectl, and a rules file moved into a
 # subdirectory must not leave every contract (CodeRabbit, PR #1270).
 _SHIPPED_ROOTS = ("k8s/", "operator-manifests/", "rule-packs/", "helm/")
+
+
+@functools.lru_cache(maxsize=1)
+def _expected_rule_files() -> frozenset:
+    """Files that MUST each yield at least one container, from `git ls-files`.
+
+    ⛔ The anchor has to live OUTSIDE the scanner. Deriving a floor from
+    `_source_pack_alerts()` — which reads the scanner — means a scanner that
+    goes blind to a tree also shrinks the number it is checked against, and the
+    check passes while the coverage evaporates. `git ls-files` knows what the
+    repo ships without asking any of this module's opinions.
+
+    Coverage is asserted PER FILE rather than as a count. A total floor is both
+    too loose and too tight at once: `>= 350` let 16 rules vanish unnoticed
+    while turning red on the legitimate retirement of any of 13 packs. "Every
+    shipped rules file still produces rules" says the thing actually meant, and
+    it updates itself when a pack is retired.
+    """
+    globs = ("rule-packs/rule-pack-*.yaml", "rule-packs/rule-pack-*.yml",
+             "operator-manifests/da-rule-pack-*.yaml",
+             "k8s/03-monitoring/configmap-rules-*.yaml",
+             "k8s/03-monitoring/configmap-rules-*.yml")
+    out = subprocess.run(["git", "-C", _REPO_ROOT, "ls-files", "-z", *globs],
+                         capture_output=True, text=True, check=True).stdout
+    return frozenset(p for p in out.split("\0") if p)
 
 
 def _tracked_yaml_paths():
@@ -1555,7 +1578,7 @@ def _containers_from_text(rel: str, text: str):
                 prov = (name[len("da-rule-pack-"):]
                         if name.startswith("da-rule-pack-") else header_prov)
                 yield rel, (doc.get("spec") or {}), prov
-            elif _is_rule_groups(doc.get("groups")) and rel.startswith("rule-packs/"):
+            elif _is_rule_groups(doc.get("groups")):
                 stem = _strip_rules_ext(PurePosixPath(rel).name)
                 prov = (stem[len(_RULE_PACK_PREFIX):]
                         if stem and stem.startswith(_RULE_PACK_PREFIX) else None)
@@ -1579,6 +1602,7 @@ def _iter_repo_alert_rules():
                     yield where, rule
 
 
+@functools.lru_cache(maxsize=1)
 def _rule_shaped_but_unparsed():
     """Containers that LOOK like they hold rules but yield none. Must stay empty.
 
@@ -1625,7 +1649,7 @@ def _rule_shaped_but_unparsed():
             offenders.append((where, "rules nested under spec.groups"))
         elif isinstance(doc.get("rules"), list):
             offenders.append((where, "rules present but no enclosing groups:"))
-    return offenders
+    return tuple(offenders)
 
 
 # ============================================================
@@ -1638,7 +1662,12 @@ class TestSentinelLabelContract:
     enforced NOC route and notifies humans with severity=none noise (#1095, the
     exact latent gap shipped between v1.2.0 and v2.9.x). Watchdog is the single
     deliberate exception: severity=none but NO component — it rides its own
-    index-0 route, never the sentinel sink. Scans the SOURCE rule packs plus
+    index-0 route, never the sentinel sink. Scans every rules container the
+    repo ships — see `_iter_rule_containers`, which finds them by CONTENT, not
+    by name or directory. Do not restate the old filename enumeration here: it
+    described a scanner that has been replaced, and it omitted
+    operator-manifests/ entirely (16 objects, 122 rules, a third of the tree).
+    Historically it read: the SOURCE rule packs plus
     EVERY k8s/03-monitoring/configmap-rules-*.yaml (the generated copies AND any
     hand-authored rules configmap — Watchdog's platform CM today, plus whatever
     is added later outside rule-packs/), so a future sentinel added without the
@@ -1696,13 +1725,13 @@ class TestSentinelLabelContract:
 class TestPlatformAlertSourceContract:
     """Every platform self-monitoring alert MUST carry `alert_source: platform`.
 
-    WHY: platform alerts have almost no tenant to route them by (37 of the 40
+    WHY: platform alerts have almost no tenant to route them by (39 of the 42
     carry no `tenant` label at all — the 3 that do are TenantMetricsOverLimit via
     rule-level labels, and FederationRejectionRateAnomaly /
     FederationGatewayBackendErrors via their expr's `sum by (tenant)`, i.e. only
     at fire time) and none carry `metric_group`. Without a POSITIVE
     discriminator the only matcher an operator can put on the single
-    `_routing_enforced` route is `severity="critical"` — which reaches 18 of the
+    `_routing_enforced` route is `severity="critical"` — which reaches 19 of the
     40, i.e. the majority of the platform's own self-monitoring would stay
     undeliverable no matter how the operator wires it. This is the same failure
     shape as #1095 (a discriminator that silently does not exist), inverted:
@@ -1736,9 +1765,16 @@ class TestPlatformAlertSourceContract:
         is exactly the thing that let a filename-shaped criterion look verified.
         """
         containers = list(_rule_containers())
-        assert len(containers) >= 30, (
-            f"only {len(containers)} rules container(s) discovered — every "
-            "assertion below would be vacuous")
+        # ⛔ EVERY shipped rules file must still produce rules. This replaces a
+        # `>= 30` container floor that had 33 of slack — enough for an entire
+        # tree to vanish silently — with an exact, self-updating statement.
+        produced = {w.split(":", 1)[0] for w, _d, _p in containers}
+        missing = sorted(_expected_rule_files() - produced)
+        assert not missing, (
+            f"{len(missing)} shipped rules file(s) yielded no container: "
+            f"{missing[:10]}. Either the scanner stopped understanding a shape "
+            "the repo uses, or those files stopped shipping rules — both are "
+            "changes that must be seen, not absorbed by a slack-heavy floor.")
 
         by_where = {w: prov for w, _doc, prov in containers}
         platform = sorted(_platform_rule_locations())
@@ -1780,7 +1816,7 @@ class TestPlatformAlertSourceContract:
         # 4. `groups:` alone is not enough: RBAC subject groups are not rules.
         assert not any("configmap-rbac" in w for w in by_where), sorted(by_where)
         # 5. Nothing rule-shaped may yield zero rules (the silent-zero).
-        assert _rule_shaped_but_unparsed() == [], _rule_shaped_but_unparsed()
+        assert _rule_shaped_but_unparsed() == (), _rule_shaped_but_unparsed()
 
     def test_unknown_provenance_defaults_to_platform(self, tmp_path):
         """Fail-closed direction, exercised rather than asserted in prose.
@@ -2014,23 +2050,23 @@ class TestPlatformRunbookCoverageContract:
     WHY: platform alerts page the platform's own on-call, who has no tenant to
     hand the incident to. 40 of the 42 already carry one; nothing stopped the
     41st from shipping without it — the annotation is not part of any schema,
-    pint does not see this tree AS CONFIGURED (`.pint.hcl`'s parser include list
-    is rule-packs/ + tests/rulepacks/*.rules.yaml, and the pint-reachable
-    EXTRACTS mirror only 26 of the 42 alerts, so a pint `alerts/annotation` rule
-    would go green while a third of the tree stayed uncovered), and
-    configmap-rules-platform.yaml says so in its own words next to the one
-    anchored link ("rule-YAML URLs are not linted").
+    and no linter asks the question this one asks.
 
-    ⚠️ That is a CONFIG boundary, not a capability one — do not restate the older
-    "the ConfigMap wrapper is unparseable" claim, which is false. pint's
-    `parser.relaxed` mode exists precisely for "rules that are embedded inside a
-    different structure" (upstream docs/configuration.md), and its parser has an
-    explicit YAML-inside-YAML branch for the `data: |` shape a rules ConfigMap
-    uses (internal/parser/parser.go, `case yaml.ScalarNode`). CI pins pint 0.86.0
-    (.github/workflows/ci.yml), far past the version that landed it. So widening
-    `.pint.hcl` IS an option on the table; this contract is not a workaround for
-    an upstream limitation, it is the gate that holds while that option is
-    unexercised — and it covers 42/42 rather than the extracts' 26.
+    ⚠️ Do NOT restate the two older versions of this note; both were false and
+    the second outlived its own fix. pint CAN read a rules ConfigMap
+    (`parser.relaxed` exists for rules "embedded inside a different structure"),
+    and — the part that went stale — `.pint.hcl` ALREADY reads this one:
+    `parser.include` carries the `configmap-rules-platform*` prefix pattern
+    with the matching `parser.relaxed` entry, and `check_pint.py` pins the
+    resulting count (`_PLATFORM_PACK_ENTRIES = 42`). The note that called
+    widening "an option on the table" would send the next maintainer to widen a
+    config that was widened two releases ago.
+
+    What pint still does not do is the thing this contract is for: its
+    `alerts/annotation` check verifies that an annotation EXISTS and matches a
+    regex. It does not resolve the URL, does not check the file is tracked in
+    this repo, and does not check the heading anchor still exists. A runbook_url
+    pointing at a deleted page passes pint and fails an on-call at 3am.
 
     Two directions:
       1. coverage — every platform alert except the shrink-only ledger above
@@ -3018,6 +3054,19 @@ class TestContainerDiscovery:
         assert pair("redis_up == 0") == pair("redis_up==0") == pair("redis_up  ==  0")
         assert pair("redis_up == 0") != pair("mysql_up == 0")
         assert pair("sum by (tenant) (x)") == pair("sum by(tenant)(x)")
+
+    def test_bare_groups_documents_are_found_outside_rule_packs(self):
+        # ⛔ The bare `groups:` shape is a rules file wherever it ships. It used
+        # to be recognised only under rule-packs/ — a path test kept to avoid
+        # colliding with tests/rulepacks/ extracts, long after the scan stopped
+        # reading tests/ at all. A hand-authored extra-platform-rules.yaml under
+        # k8s/ was invisible for as long as that outlived its reason.
+        text = ("groups:\n  - name: g\n    rules:\n"
+                "      - alert: BareGroups\n        expr: up == 0\n")
+        for rel in ("k8s/03-monitoring/extra-platform-rules.yaml",
+                    "operator-manifests/extra.yaml",
+                    "rule-packs/rule-pack-x.yaml"):
+            assert "BareGroups" in self._alerts(text, rel), rel
 
     def test_rbac_groups_are_not_rule_groups(self):
         text = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: rbac}\n"
