@@ -103,20 +103,36 @@ def load_tenant_configs(config_dir: str) -> dict[str, dict[str, Any]]:
 
 
 def write_text_secure(path: str, content: str) -> None:
-    """Write text to *path* with UTF-8 encoding and ``0o600`` permissions.
+    """Write text to *path* with UTF-8 encoding, LF endings, and ``0o600``.
 
     Centralises the SAST-mandated pattern::
 
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding="utf-8", newline="\\n") as f:
             f.write(content)
         Path(path).chmod(0o600)
+
+    ⛔ ``newline="\\n"`` is load-bearing, not cosmetic. Without it Python's
+    text layer translates every ``\\n`` to ``os.linesep``, so the SAME
+    generator emits LF on Linux/CI and CRLF on a Windows host. Since reads go
+    through universal-newline translation, the CRLF is invisible to the tool's
+    own ``--check`` and ``.gitattributes`` (``* text=auto eol=lf``) normalises
+    it away at commit — so the staged diff stays correct and nothing fails.
+    What breaks is the *working copy*: it diverges byte-wise from every other
+    file in the tree, which defeats byte-level comparisons (mutation harnesses
+    asserting a file was restored byte-identical) and emits a confusing
+    "CRLF will be replaced by LF" warning on every subsequent ``git diff``.
+
+    Note this pins LF unconditionally, which is correct for every current
+    caller. If a caller ever needs to emit a Windows-shell script
+    (``.bat`` / ``.cmd`` / ``.ps1`` — the only paths ``.gitattributes`` marks
+    ``eol=crlf``), it must NOT use this helper.
 
     Args:
         path: Filesystem path to write.
         content: Text content.
     """
     target = Path(path)
-    target.write_text(content, encoding="utf-8")
+    target.write_text(content, encoding="utf-8", newline="\n")
     target.chmod(0o600)
 
 
@@ -134,8 +150,13 @@ def write_json_secure(
         data: JSON-serializable object.
         indent: JSON indentation (default 2).
         ensure_ascii: If ``False`` (default), allow non-ASCII characters.
+
+    ``newline="\\n"`` is load-bearing for the same reason as
+    :func:`write_text_secure` — ``json.dump`` emits ``\\n`` between lines and
+    the text layer would translate every one of them to CRLF on a Windows
+    host. ``.gitattributes`` pins ``*.json`` to ``eol=lf``.
     """
-    with open(path, "w", encoding="utf-8") as fh:
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(data, fh, indent=indent, ensure_ascii=ensure_ascii)
     Path(path).chmod(0o600)
 

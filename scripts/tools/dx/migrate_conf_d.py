@@ -230,7 +230,7 @@ def main() -> None:
 
     if args.output_plan:
         Path(args.output_plan).write_text(
-            json.dumps(actions, indent=2, ensure_ascii=False), encoding="utf-8"
+            json.dumps(actions, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n"
         )
         print(f"✅ Plan written to {args.output_plan}")
 

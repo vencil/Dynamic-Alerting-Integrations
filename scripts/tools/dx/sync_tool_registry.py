@@ -206,7 +206,7 @@ def sync_tool_meta(tools: list, dry_run: bool, verbose: bool):
         return True
 
     new_content = content.replace(old_block, new_block)
-    LOADER_PATH.write_text(new_content, encoding="utf-8")
+    LOADER_PATH.write_text(new_content, encoding="utf-8", newline="\n")
     print("[flow_map] Updated CUSTOM_FLOW_MAP ({} entries)".format(len(tools)))
     return True
 
@@ -316,7 +316,7 @@ def sync_hub_cards(tools: list, dry_run: bool, verbose: bool) -> bool:
             print(c)
         return True
 
-    HUB_PATH.write_text(content, encoding="utf-8")
+    HUB_PATH.write_text(content, encoding="utf-8", newline="\n")
     print(f"[hub] Applied {len(changes)} change(s):")
     for c in changes:
         print(c)
@@ -395,7 +395,7 @@ def sync_frontmatter(tools: list, dry_run: bool, verbose: bool) -> bool:
                     fm_match.group(0),
                     f"{fm_match.group(1)}{new_fm}\n{fm_match.group(3)}",
                 )
-                jsx_path.write_text(new_content, encoding="utf-8")
+                jsx_path.write_text(new_content, encoding="utf-8", newline="\n")
                 for c in changes:
                     print(f"  [frontmatter] {key}: updated {c}")
                 any_changed = True

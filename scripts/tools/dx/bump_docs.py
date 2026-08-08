@@ -1109,7 +1109,7 @@ def apply_count_updates(check_only=False, dry_run=False, verbose=False):
                 diff_detail = f"[dry-run] {diff_detail}"
             changes.append(("UPDATE", rule["desc"], diff_detail))
             if not check_only and not dry_run:
-                fpath.write_text(new_content, encoding="utf-8")
+                fpath.write_text(new_content, encoding="utf-8", newline="\n")
                 os.chmod(fpath, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
 
     return changes
@@ -1359,7 +1359,7 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
                 diff_detail = f"{content.strip()} → {new_content.strip()}"
                 changes.append(("UPDATE", rule["desc"], diff_detail))
                 if not check_only and not dry_run:
-                    fpath.write_text(new_content, encoding="utf-8")
+                    fpath.write_text(new_content, encoding="utf-8", newline="\n")
                     os.chmod(fpath, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
             else:
                 changes.append(("OK", rule["desc"], "already up to date"))
@@ -1382,7 +1382,7 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
                                 f"{len(old_values)} occurrence(s): "
                                 f"{sorted(set(old_values))[0]} → {new_value}"))
                 if not check_only and not dry_run:
-                    fpath.write_text(new_content, encoding="utf-8")
+                    fpath.write_text(new_content, encoding="utf-8", newline="\n")
                     os.chmod(fpath, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
             else:
                 changes.append(("OK", rule["desc"], "already up to date"))
@@ -1422,7 +1422,7 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
                 diff_detail = f"[dry-run] {diff_detail}"
             changes.append(("UPDATE", rule["desc"], diff_detail))
             if not check_only and not dry_run:
-                fpath.write_text(new_content, encoding="utf-8")
+                fpath.write_text(new_content, encoding="utf-8", newline="\n")
                 os.chmod(fpath, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
         else:
             changes.append(("OK", rule["desc"], "already up to date"))
@@ -1487,7 +1487,7 @@ def _init_changelog_entry(version: str, lang: str = "zh"):
                     "# Changelog\n"
                 )
                 changelog.write_text(initial + stub + "\n",
-                                     encoding="utf-8")
+                                     encoding="utf-8", newline="\n")
                 os.chmod(changelog,
                          stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
                          | stat.S_IROTH)
@@ -1515,7 +1515,7 @@ def _init_changelog_entry(version: str, lang: str = "zh"):
             insert_pos = first_heading
 
         new_content = content[:insert_pos] + stub + content[insert_pos:]
-        changelog.write_text(new_content, encoding="utf-8")
+        changelog.write_text(new_content, encoding="utf-8", newline="\n")
         os.chmod(changelog,
                  stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
                  | stat.S_IROTH)

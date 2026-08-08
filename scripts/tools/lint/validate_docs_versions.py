@@ -943,7 +943,7 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
                 new_content = re.sub(pat, repl, new_content)
 
         if new_content != content:
-            fpath.write_text(new_content, encoding="utf-8")
+            fpath.write_text(new_content, encoding="utf-8", newline="\n")
             os.chmod(fpath,
                      stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
                      | stat.S_IROTH)

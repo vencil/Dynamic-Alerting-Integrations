@@ -537,7 +537,7 @@ def generate_synthetic_v2(
 def _write_yaml(path: Path, data: dict) -> None:
     """Write a dict as YAML. Avoids importing yaml to keep deps minimal."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
         _dump_yaml(f, data, indent=0)
 
 

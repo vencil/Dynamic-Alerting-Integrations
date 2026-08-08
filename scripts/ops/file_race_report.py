@@ -716,7 +716,7 @@ def main(argv: list[str] | None = None, runner=None) -> int:
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
-        with open(summary_path, "a", encoding="utf-8") as fh:
+        with open(summary_path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write("\n".join(lines) + "\n")
     print("\n".join(lines))
 

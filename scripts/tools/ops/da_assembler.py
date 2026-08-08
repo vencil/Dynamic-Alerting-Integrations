@@ -141,7 +141,7 @@ def write_rendered(
         return True
 
     config_dir.mkdir(parents=True, exist_ok=True)
-    dest.write_text(content, encoding="utf-8")
+    dest.write_text(content, encoding="utf-8", newline="\n")
     os.chmod(dest, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
     return True
 

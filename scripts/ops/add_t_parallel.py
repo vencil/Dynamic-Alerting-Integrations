@@ -137,7 +137,7 @@ def process_file(path: Path) -> int:
         new_text = "\n".join(out)
         if text.endswith("\n") and not new_text.endswith("\n"):
             new_text += "\n"
-        path.write_text(new_text, encoding="utf-8")
+        path.write_text(new_text, encoding="utf-8", newline="\n")
     return injected
 
 

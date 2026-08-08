@@ -81,7 +81,7 @@ def _safe_write(path: str, content: str):
     if write_text_secure:
         write_text_secure(path, content)
     else:
-        Path(path).write_text(content, encoding='utf-8')
+        Path(path).write_text(content, encoding='utf-8', newline='\n')
 
 
 # ─ Metric extraction from PromQL expressions ────────────────────────────
@@ -600,7 +600,7 @@ def process_rule_packs(
     # Write validation report
     if not dry_run:
         report_file = output_path / "validation-report.json"
-        with open(report_file, 'w', encoding='utf-8') as f:
+        with open(report_file, 'w', encoding='utf-8', newline='\n') as f:
             json.dump(report, f, indent=2, ensure_ascii=False)
 
     return report

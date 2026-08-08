@@ -81,7 +81,7 @@ def inject(path: Path, key: str, value: str) -> int:
             # No `defaults:` block found — prepend a fresh one. Preserves
             # existing content.
             out = ["defaults:", f"  {key}: {value.strip()}", ""] + out
-        path.write_text("\n".join(out) + "\n", encoding="utf-8")
+        path.write_text("\n".join(out) + "\n", encoding="utf-8", newline="\n")
         print(
             f"[inject_default_key] registered {key}={value} in {path}"
         )
@@ -91,7 +91,7 @@ def inject(path: Path, key: str, value: str) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         f"defaults:\n  {key}: {value.strip()}\n",
-        encoding="utf-8",
+        encoding="utf-8", newline="\n",
     )
     print(
         f"[inject_default_key] created {path} with {key}={value}"

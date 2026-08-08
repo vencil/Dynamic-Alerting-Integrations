@@ -243,7 +243,7 @@ def process_file(
         elif mode == "check":
             return True, None
         elif mode == "update":
-            with open(file_path, "w", encoding="utf-8") as f:
+            with open(file_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(new_content)
             os.chmod(file_path, 0o644)
             print(f"Updated: {file_path}")

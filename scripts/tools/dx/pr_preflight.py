@@ -407,8 +407,12 @@ def validate_pass2_trailer_placement(all_lines: list[str]) -> list[str]:
     clean = "\n".join(ln for ln in all_lines if not ln.startswith("#"))
     tmp_name = None
     try:
+        # newline="\n": this file is handed to `git interpret-trailers --parse`,
+        # whose trailer-block detection keys off blank-line paragraph splits.
+        # git tolerates CR today, but the input should not vary by host.
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", encoding="utf-8", delete=False
+            mode="w", suffix=".txt", encoding="utf-8", delete=False,
+            newline="\n"
         ) as fh:
             fh.write(clean + "\n")
             tmp_name = fh.name

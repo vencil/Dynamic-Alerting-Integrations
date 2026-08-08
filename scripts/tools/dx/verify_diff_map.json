@@ -68,6 +68,7 @@
    "tests/shared/test_property_tools.py"
   ],
   "scripts/tools/_lib_io.py": [
+   "tests/dx/test_line_ending_policy.py",
    "tests/ops/test_policy_opa_bridge.py",
    "tests/shared/test_property_tools.py"
   ],
@@ -90,6 +91,9 @@
   "scripts/tools/_lib_yaml.py": [
    "tests/ops/test_lib_yaml.py"
   ],
+  "scripts/tools/dx/_atomic_write.py": [
+   "tests/dx/test_line_ending_policy.py"
+  ],
   "scripts/tools/dx/_recipe_preview.py": [
    "tests/dx/test_recipe_preview.py"
   ],
@@ -109,6 +113,7 @@
   ],
   "scripts/tools/dx/bump_docs.py": [
    "tests/dx/test_bump_docs.py",
+   "tests/dx/test_line_ending_policy.py",
    "tests/shared/test_entrypoint.py"
   ],
   "scripts/tools/dx/bump_playbook_versions.py": [
@@ -698,7 +703,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "e27f203a5eceefe314d71e267e4b78c6f1eafa7f5cbc4f45a8efbf9e159090ee",
+ "source_digest": "cf5b8d0ff9dad3f09508ad15dd22068d4f6ef44722f7f3e2265ac04ecc6f19d0",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -733,6 +738,7 @@
   "tests/dx/test_generate_tool_map.py",
   "tests/dx/test_generate_tool_map_encoding.py",
   "tests/dx/test_inject_waveform.py",
+  "tests/dx/test_line_ending_policy.py",
   "tests/dx/test_log_visibility_catalogue.py",
   "tests/dx/test_migrate_conf_d.py",
   "tests/dx/test_pr_preflight_checks.py",
@@ -1074,6 +1080,7 @@
   ".pre-commit-config.yaml": [
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_compile_custom_alerts.py",
+   "tests/dx/test_line_ending_policy.py",
    "tests/dx/test_scaffold_lint.py",
    "tests/helm/test_environments_overlay_sync.py",
    "tests/lint/test_check_admin_config_schema.py",
@@ -1097,6 +1104,7 @@
   ],
   "CLAUDE.md": [
    "tests/dx/test_add_frontmatter.py",
+   "tests/dx/test_line_ending_policy.py",
    "tests/lint/test_check_doc_freshness.py",
    "tests/lint/test_check_frontmatter_versions.py",
    "tests/lint/test_validate_docs_versions.py"
@@ -1730,6 +1738,9 @@
   "scripts/_lib.sh": [
    "tests/shared/test_lib_helpers.py"
   ],
+  "scripts/dx": [
+   "tests/dx/test_line_ending_policy.py"
+  ],
   "scripts/dx/generate_adr_index.py": [
    "tests/dx/test_generate_adr_index.py"
   ],
@@ -1738,6 +1749,7 @@
   ],
   "scripts/ops": [
    "tests/dx/test_bat_label_integrity.py",
+   "tests/dx/test_line_ending_policy.py",
    "tests/ops/test_ci_flake_retry.py"
   ],
   "scripts/ops/_verify_download.sh": [
@@ -1794,6 +1806,9 @@
    "tests/dx/test_bat_label_integrity.py",
    "tests/dx/test_preflight_bash.py"
   ],
+  "scripts/session-guards": [
+   "tests/dx/test_line_ending_policy.py"
+  ],
   "scripts/session-guards/git_check_lock.sh": [
    "tests/ops/test_git_check_lock.py"
   ],
@@ -1810,6 +1825,7 @@
   "scripts/tools": [
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_generate_rule_pack_readme.py",
+   "tests/dx/test_line_ending_policy.py",
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_structure.py",
    "tests/ops/test_ci_flake_retry.py",
@@ -1850,6 +1866,7 @@
   "scripts/tools/dx": [
    "tests/dx/test_dx_json_stdout_contract.py",
    "tests/dx/test_generate_tenant_fixture.py",
+   "tests/dx/test_line_ending_policy.py",
    "tests/dx/test_verify_diff.py",
    "tests/ops/test_property_based.py",
    "tests/shared/test_bilingual_help_contract.py"
@@ -1940,6 +1957,7 @@
    "tests/dx/test_waveform_score.py"
   ],
   "scripts/tools/lint": [
+   "tests/dx/test_line_ending_policy.py",
    "tests/lint/test_check_cross_ns_url_consistency.py",
    "tests/lint/test_check_lint_toolchain_fit.py",
    "tests/shared/test_bilingual_help_contract.py",
@@ -2008,6 +2026,9 @@
   "scripts/tools/lint/check_metric_group_pairs.py": [
    "tests/lint/test_check_metric_group_pairs.py"
   ],
+  "scripts/tools/lint/check_open_encoding.py": [
+   "tests/dx/test_line_ending_policy.py"
+  ],
   "scripts/tools/lint/check_orphan_lint.py": [
    "tests/lint/test_check_orphan_lint.py"
   ],
@@ -2063,6 +2084,7 @@
    "tests/lint/test_check_structure.py"
   ],
   "scripts/tools/ops": [
+   "tests/dx/test_line_ending_policy.py",
    "tests/helm/test_federation_store_sentinel_guard.py",
    "tests/ops/test_grar_facade_reexports.py",
    "tests/shared/test_bilingual_help_contract.py",
@@ -2141,6 +2163,7 @@
   ],
   "tests/conftest.py": [
    "tests/dx/test_inject_waveform.py",
+   "tests/dx/test_line_ending_policy.py",
    "tests/dx/test_verify_diff.py",
    "tests/dx/test_waveform_compile.py",
    "tests/dx/test_waveform_score.py",
@@ -2182,6 +2205,9 @@
   "tests/dx/fixtures/waveform/tolerances/selftest_tolerances.yaml": [
    "tests/dx/test_dx_json_stdout_contract.py"
   ],
+  "tests/dx/test_atomic_write.py": [
+   "tests/dx/test_line_ending_policy.py"
+  ],
   "tests/dx/test_bump_docs.py": [
    "tests/dx/test_verify_diff.py"
   ],
@@ -2195,6 +2221,9 @@
   "tests/dx/test_fleet_threshold_dashboard.py": [
    "tests/dx/test_federation_revocation_dashboard.py",
    "tests/dx/test_tenant_log_query_dashboard.py"
+  ],
+  "tests/dx/test_generate_adr_index.py": [
+   "tests/dx/test_line_ending_policy.py"
   ],
   "tests/dx/test_tenant_log_query_dashboard.py": [
    "tests/dx/test_federation_revocation_dashboard.py"
@@ -2313,6 +2342,7 @@
    "tests/shared/test_go_mutation_pilot.py"
   ],
   "tests/shared/_mutation_pilot.py": [
+   "tests/dx/test_line_ending_policy.py",
    "tests/ops/test_nightly_scan_matrix_drift.py",
    "tests/shared/test_mutation_catalog.py",
    "tests/shared/test_property_tools.py"

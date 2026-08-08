@@ -98,7 +98,7 @@ def _save_history(config_dir, history):
     hdir = _history_dir(config_dir)
     history_file = hdir / 'history.json'
     history_file.write_text(format_json_report(history),
-                            encoding='utf-8')
+                            encoding='utf-8', newline='\n')
 
 
 def cmd_snapshot(config_dir, message=None):
@@ -146,7 +146,7 @@ def cmd_snapshot(config_dir, message=None):
     snap_dir.mkdir(exist_ok=True)
     for f in files:
         fp = snap_dir / f['name']
-        fp.write_text(f['content'], encoding='utf-8')
+        fp.write_text(f['content'], encoding='utf-8', newline='\n')
         os.chmod(fp, 0o600)  # Restrict snapshot files (may contain sensitive config)
 
     history.append(entry)

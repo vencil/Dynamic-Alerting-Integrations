@@ -75,7 +75,12 @@ def atomic_write_text(
     # cached write. Skip fsync on Windows where it's ~an order of magnitude
     # slower and the FUSE cache-drop scenario we're defending against is
     # Linux/WSL-only anyway.
-    with open(tmp, "w", encoding=encoding, newline=newline) as fh:
+    # `newline` is THIS function's own parameter, whose default is "\n" (see the
+    # signature above). The line-ending policy guard demands a string literal
+    # because `newline=<expr>` can hide os.linesep; here the pin is asserted
+    # separately by
+    # tests/dx/test_line_ending_policy.py::test_atomic_write_text_defaults_to_lf.
+    with open(tmp, "w", encoding=encoding, newline=newline) as fh:  # line-ending: ignore
         fh.write(content)
         fh.flush()
         if os.name == "posix":

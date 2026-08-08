@@ -373,7 +373,7 @@ def execute_plan(plan: MigrationPlan, use_git: bool = False) -> bool:
             new_lang = "zh" if ".zh.md" in filepath.name else "en"
             updated = update_frontmatter_lang(content, new_lang)
             if updated != content:
-                filepath.write_text(updated, encoding="utf-8")
+                filepath.write_text(updated, encoding="utf-8", newline="\n")
                 print(f"  ✓ frontmatter lang → {new_lang}: {filepath.relative_to(REPO_ROOT)}")
             else:
                 print(f"  · frontmatter unchanged: {filepath.relative_to(REPO_ROOT)}")
@@ -405,7 +405,7 @@ def execute_plan(plan: MigrationPlan, use_git: bool = False) -> bool:
 
             updated = content.replace(old_link, new_link) if old_link in content else content
             if updated != content:
-                filepath.write_text(updated, encoding="utf-8")
+                filepath.write_text(updated, encoding="utf-8", newline="\n")
                 print(f"  ✓ nav link updated: {filepath.relative_to(REPO_ROOT)}")
             else:
                 print(f"  · nav link unchanged: {filepath.relative_to(REPO_ROOT)}")

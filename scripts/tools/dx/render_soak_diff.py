@@ -248,7 +248,7 @@ def main() -> int:
     report, exit_code = render(Path(args.input_dir), warmup_sec_override=args.warmup_sec)
 
     if args.output:
-        Path(args.output).write_text(report, encoding="utf-8")
+        Path(args.output).write_text(report, encoding="utf-8", newline="\n")
         print(f"[info] report written to {args.output}", file=sys.stderr)
     else:
         sys.stdout.write(report)

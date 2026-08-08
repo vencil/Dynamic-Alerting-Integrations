@@ -123,6 +123,9 @@ lang: zh
 | **pre-commit hook 計數一致性**（`bump_docs --sync-counts --check`） | `python scripts/tools/dx/bump_docs.py --sync-counts --check` | CLAUDE.md 的 pre-commit hook 計數——**唯一無本地 hook 的計數維度**（version / rulepack / tool / badge 計數已由 §3 auto hook `version-consistency` 本地攔） | 增刪 pre-commit hook 後（#1185 PR2 接進 CI Version Consistency job） |
 | **OpenAPI spec drift** | `make api-docs` | tenant-api handler `@Router`/`@Param` 標註 ↔ 產出的 OpenAPI spec | 改 handler swag 標註後 |
 | **契約測試**（schemathesis） | `make contract-test` | tenant-api 全 method fuzz（TRK-222/228） | 改 tenant-api API 後 |
+| **行尾政策**（`tests/dx/test_line_ending_policy.py`，[dev-rules #11b](dev-rules.md)） | `pytest tests/dx/test_line_ending_policy.py` | `scripts/`+`components/`+`helm/` 全檔 AST：任何寫出文字的呼叫必須明確傳 `newline=` 且為字串字面值 | 新增/修改任何寫檔的 Python 後 |
+
+> ⚠️ **行尾這條與 §3 的 `open-encoding-audit` hook 是姊妹規則、卻在不同執行點**：忘記 `encoding=` 在 commit 當下就會看到警告（該 hook 是 **warn-only**、exit 0、**不擋 commit**——見 §3 line 85 的 `(warn)` 與 `.pre-commit-config.yaml` 的 `--ci` 註解，殘留約 72 個 latent site 待清理後才會 flip 成 `--strict-open-encoding`）；忘記 `newline=` 則本地完全無聲，要 push 後才從 CI 紅燈得知。兩者掃的是**高度重疊的呼叫站點**（`_violations_in` 的 fail-closed 分支甚至刻意依賴 `encoding=` 的存在當「這是文字串流」的證據）。之所以先落在 pytest 而非 hook，是因為新增 pre-commit hook 有一串連鎖 gate（索引、`files:` regex、雙語 help、exit-code 契約…）；**若這條開始頻繁跳閘，判準同 `verify_diff` 的遷移先例——升為 hook 併進 `check_open_encoding.py`**（該支已有 `--ci` / `--strict` 嚴重度階梯與 `# …: ignore` 慣例可直接複用）。
 
 > **遷移範例**：`verify_diff --check`（source→test 映射保鮮）**曾是本類**（唯一防線在 CI pytest 尾端的 `test_repo_check_is_green`），#1185 PR2 已接成 pre-commit hook `verify-diff-check` → 現屬 §3 hook-enforced，不在此表。判準「CI-only gate 若本地成本低、跳閘頻繁、可用 `files:` 限縮，就升為 hook」見 #1185（TRK-336）。
 
