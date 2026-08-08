@@ -64,7 +64,7 @@ def process_file(path: Path) -> int:
         if count:
             text = new_text
             n += count
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8", newline="\n")
     return n
 
 

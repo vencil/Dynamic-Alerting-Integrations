@@ -122,7 +122,7 @@ def _touch_heartbeat(repo_root: Path) -> None:
         p = Path(target)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(
-            _dt.datetime.now(_dt.timezone.utc).isoformat() + "\n", encoding="utf-8"
+            _dt.datetime.now(_dt.timezone.utc).isoformat() + "\n", encoding="utf-8", newline="\n"
         )
     except OSError as exc:
         print(
@@ -281,7 +281,10 @@ def _heal_pre_commit_shebang(repo_root: Path) -> str:
     # Rewrite: replace first line with #!/usr/bin/env python3
     new_content = "#!/usr/bin/env python3\n" + (lines[1] if len(lines) > 1 else "")
     try:
-        hook.write_text(new_content)
+        # newline="\n" is load-bearing: this rewrites a git hook's shebang
+        # line, and a CRLF-terminated `#!/usr/bin/env python3` makes the
+        # kernel look for the interpreter "python3\r" ("bad interpreter").
+        hook.write_text(new_content, encoding="utf-8", newline="\n")
         os.chmod(hook, 0o755)
         return f"healed: {interp} → /usr/bin/env python3"
     except OSError as exc:
@@ -338,7 +341,9 @@ def _do_init(
         marker.write_text(
             f"{status_line}\n"
             f"session={sid}\n"
-            f"written_at={_dt.datetime.now(_dt.timezone.utc).isoformat()}\n"
+            f"written_at={_dt.datetime.now(_dt.timezone.utc).isoformat()}\n",
+            encoding="utf-8",
+            newline="\n",
         )
     except OSError as exc:
         # Marker 寫不了也要繼續，但警告

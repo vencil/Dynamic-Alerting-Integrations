@@ -475,7 +475,7 @@ def main():
 
     # Write output file
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(content, encoding="utf-8")
+    args.output.write_text(content, encoding="utf-8", newline="\n")
     os.chmod(
         args.output,
         stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH,

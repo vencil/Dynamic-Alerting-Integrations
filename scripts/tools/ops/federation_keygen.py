@@ -198,7 +198,7 @@ def main() -> int:
     else:
         jwks = {"keys": [jwk]}
 
-    with open(args.jwks_out, "w", encoding="utf-8") as fh:
+    with open(args.jwks_out, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(jwks, fh, indent=2)
         fh.write("\n")
     # JWKS carries only public keys — world-readable is correct (it ships in

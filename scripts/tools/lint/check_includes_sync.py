@@ -127,7 +127,7 @@ def _create_en_stub(zh_path: Path, en_path: Path) -> None:
     for zh_str, en_str in _ZH_EN_HEADERS.items():
         content = content.replace(zh_str, en_str)
 
-    en_path.write_text(content, encoding="utf-8")
+    en_path.write_text(content, encoding="utf-8", newline="\n")
     os.chmod(en_path,
              stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
 

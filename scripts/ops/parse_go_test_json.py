@@ -202,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         packages=args.packages,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(frag, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    args.output.write_text(json.dumps(frag, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
 
     print(f"[parse_go_test_json] {args.module}: {json.dumps(frag, sort_keys=True)}")
     # Always exit 0: the fragment IS the product. The workflow fails the matrix

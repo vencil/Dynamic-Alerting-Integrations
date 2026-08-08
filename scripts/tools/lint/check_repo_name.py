@@ -117,7 +117,7 @@ def scan_file_full(filepath, fix=False):
         fixed_lines.append(line)
 
     if fix and changed:
-        with open(filepath, 'w', encoding='utf-8') as f:
+        with open(filepath, 'w', encoding='utf-8', newline='\n') as f:
             f.writelines(fixed_lines)
         os.chmod(filepath, 0o644)
 

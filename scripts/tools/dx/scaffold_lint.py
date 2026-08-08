@@ -960,7 +960,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"  + would {action}: {rel} ({len(content)} bytes)")
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        target.write_text(content, encoding="utf-8", newline="\n")
         print(f"  ✓ {action}: {rel}")
 
     if args.dry_run:

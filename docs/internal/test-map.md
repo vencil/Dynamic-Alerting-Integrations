@@ -189,6 +189,7 @@ if !waitFor(t, 2*time.Second, func() bool {
 | `ops/test_validate_config.py` | validate_config.py 配置驗證 | 25 | Wave 12 unittest→pytest |
 | `ops/test_config_diff.py` | config_diff.py 差異偵測 | 40 | Wave 12 unittest→pytest |
 | `dx/test_bump_docs.py` | bump_docs.py 版號更新 | 11 | Wave 12 unittest→pytest |
+| `dx/test_line_ending_policy.py` | 行尾政策：整棵 `scripts/` 的寫檔 site 必須明確表態 `newline=` | 255 | ⚠️ 兩層：static AST guard 跨平台會紅；行為測試只在 Windows 具鑑別力 |
 | `ops/test_maintenance_scheduler.py` | maintenance_scheduler.py 排程 | 55 | Wave 12 mock 統一 |
 | `ops/test_performance.py` | 效能曲線（scaling / load） | 7 | slow marker |
 | `ops/test_benchmark.py` | 效能基線 | 14 | benchmark + slow markers |

@@ -326,7 +326,7 @@ def preview_recipe(recipe, tenant, scenario):
         (confd / f"{tenant}.yaml").write_text(
             yaml.safe_dump({"tenants": {tenant: {"_custom_alerts": [recipe]}}},
                            sort_keys=False, allow_unicode=True),
-            encoding="utf-8",
+            encoding="utf-8", newline="\n",
         )
 
         # ── compile (errors → state:error, never mislabeled firing) ──
@@ -343,7 +343,7 @@ def preview_recipe(recipe, tenant, scenario):
         # promtool vanishing after the `which` probe or an unwritable temp dir,
         # so the {state:error} contract holds even then. ──
         try:
-            pack_path.write_text(cc._render(pack["groups"]), encoding="utf-8")
+            pack_path.write_text(cc._render(pack["groups"]), encoding="utf-8", newline="\n")
             chk = subprocess.run(
                 [_PROMTOOL, "check", "rules", pack_path.name],
                 cwd=work, capture_output=True, text=True, timeout=_TIMEOUT,
@@ -353,7 +353,7 @@ def preview_recipe(recipe, tenant, scenario):
                             f"{(chk.stderr or chk.stdout).strip()[:300]}",
                             alertname=f"Custom_{slug}")
             test_doc, severity, mode, thr_value = build_preview_test(recipe, tenant, value, slug)
-            (work / "preview_test.yaml").write_text(test_doc, encoding="utf-8")
+            (work / "preview_test.yaml").write_text(test_doc, encoding="utf-8", newline="\n")
             res = subprocess.run(
                 [_PROMTOOL, "test", "rules", "preview_test.yaml"],
                 cwd=work, capture_output=True, text=True, timeout=_TIMEOUT,

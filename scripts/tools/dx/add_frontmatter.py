@@ -250,7 +250,7 @@ def read_file_content(filepath: str) -> str:
 
 def write_file_content(filepath: str, content: str) -> None:
     """Write file content safely with correct permissions"""
-    with open(filepath, 'w', encoding='utf-8') as f:
+    with open(filepath, 'w', encoding='utf-8', newline='\n') as f:
         f.write(content)
     os.chmod(filepath, 0o644)
 

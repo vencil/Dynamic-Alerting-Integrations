@@ -268,9 +268,13 @@ def main():
 
         if args.generate:
             if args.safe:
-                atomic_write_text(target, content, newline=None)
+                # Keep atomic_write_text's newline="\n" default — passing
+                # newline=None here opted back into Python's platform-default
+                # translation, so --safe regens emitted CRLF on Windows hosts
+                # while CI emitted LF (same generator, different bytes).
+                atomic_write_text(target, content)
             else:
-                target.write_text(content, encoding="utf-8")
+                target.write_text(content, encoding="utf-8", newline="\n")
             os.chmod(target,
                      stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
                      | stat.S_IROTH)

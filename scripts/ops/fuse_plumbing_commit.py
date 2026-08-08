@@ -150,7 +150,9 @@ def plumbing_commit(
         ref_path = repo_root / ".git" / "refs" / "heads" / branch
         ref_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            ref_path.write_text(new_sha + "\n")
+            # newline="\n" is not cosmetic here: a git ref file is parsed
+            # byte-for-byte, so a CRLF-terminated SHA makes the ref invalid.
+            ref_path.write_text(new_sha + "\n", encoding="utf-8", newline="\n")
         except OSError as exc:
             print(
                 f"error: ref write failed ({exc}); new commit at {new_sha}",

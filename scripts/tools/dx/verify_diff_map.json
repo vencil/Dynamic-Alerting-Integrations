@@ -68,6 +68,7 @@
    "tests/shared/test_property_tools.py"
   ],
   "scripts/tools/_lib_io.py": [
+   "tests/dx/test_line_ending_policy.py",
    "tests/ops/test_policy_opa_bridge.py",
    "tests/shared/test_property_tools.py"
   ],
@@ -90,6 +91,9 @@
   "scripts/tools/_lib_yaml.py": [
    "tests/ops/test_lib_yaml.py"
   ],
+  "scripts/tools/dx/_atomic_write.py": [
+   "tests/dx/test_line_ending_policy.py"
+  ],
   "scripts/tools/dx/_recipe_preview.py": [
    "tests/dx/test_recipe_preview.py"
   ],
@@ -109,6 +113,7 @@
   ],
   "scripts/tools/dx/bump_docs.py": [
    "tests/dx/test_bump_docs.py",
+   "tests/dx/test_line_ending_policy.py",
    "tests/shared/test_entrypoint.py"
   ],
   "scripts/tools/dx/bump_playbook_versions.py": [
@@ -698,7 +703,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "e27f203a5eceefe314d71e267e4b78c6f1eafa7f5cbc4f45a8efbf9e159090ee",
+ "source_digest": "3cc4a60b384da1b98331157e0af438038101801cd11c33ba2e17a9eb70f6b8e1",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -733,6 +738,7 @@
   "tests/dx/test_generate_tool_map.py",
   "tests/dx/test_generate_tool_map_encoding.py",
   "tests/dx/test_inject_waveform.py",
+  "tests/dx/test_line_ending_policy.py",
   "tests/dx/test_log_visibility_catalogue.py",
   "tests/dx/test_migrate_conf_d.py",
   "tests/dx/test_pr_preflight_checks.py",
@@ -1074,6 +1080,7 @@
   ".pre-commit-config.yaml": [
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_compile_custom_alerts.py",
+   "tests/dx/test_line_ending_policy.py",
    "tests/dx/test_scaffold_lint.py",
    "tests/helm/test_environments_overlay_sync.py",
    "tests/lint/test_check_admin_config_schema.py",
@@ -1097,6 +1104,7 @@
   ],
   "CLAUDE.md": [
    "tests/dx/test_add_frontmatter.py",
+   "tests/dx/test_line_ending_policy.py",
    "tests/lint/test_check_doc_freshness.py",
    "tests/lint/test_check_frontmatter_versions.py",
    "tests/lint/test_validate_docs_versions.py"
@@ -2141,6 +2149,7 @@
   ],
   "tests/conftest.py": [
    "tests/dx/test_inject_waveform.py",
+   "tests/dx/test_line_ending_policy.py",
    "tests/dx/test_verify_diff.py",
    "tests/dx/test_waveform_compile.py",
    "tests/dx/test_waveform_score.py",

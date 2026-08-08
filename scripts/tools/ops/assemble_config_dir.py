@@ -318,7 +318,7 @@ def main() -> int:
         manifest_path = Path(args.manifest)
         manifest_path.write_text(
             format_json_report(manifest) + "\n",
-            encoding="utf-8",
+            encoding="utf-8", newline="\n",
         )
         os.chmod(manifest_path,
                  stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)

@@ -31,8 +31,12 @@ try:
 except ImportError:
     # 如果無法導入，定義簡單的 fallback
     def write_text_secure(path: str, content: str) -> None:
-        """Safe file writing with UTF-8 encoding."""
-        Path(path).write_text(content, encoding='utf-8')
+        """Safe file writing with UTF-8 encoding and LF endings.
+
+        ``newline='\\n'`` mirrors the real helper in ``_lib_io.py``: without
+        it this fallback would emit CRLF on Windows hosts.
+        """
+        Path(path).write_text(content, encoding='utf-8', newline='\n')
 
 
 def detect_cli_lang() -> str:

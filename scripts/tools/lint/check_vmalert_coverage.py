@@ -170,7 +170,7 @@ def generate() -> None:
     uncovered = current_uncovered()
     body = yaml.safe_dump({"uncovered": uncovered}, allow_unicode=True, sort_keys=True,
                           default_flow_style=False)
-    _BASELINE.write_text(_BASELINE_HEADER + body, encoding="utf-8")
+    _BASELINE.write_text(_BASELINE_HEADER + body, encoding="utf-8", newline="\n")
     total = sum(len(v) for v in uncovered.values())
     print(f"check_vmalert_coverage: wrote baseline with {total} uncovered alert(s) "
           f"across {len(uncovered)} pack(s) -> {_BASELINE.relative_to(_REPO)}")
