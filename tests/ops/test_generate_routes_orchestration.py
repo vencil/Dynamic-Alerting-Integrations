@@ -1086,9 +1086,11 @@ from _rule_tree import (  # noqa: E402
     _alert_names,
     _containers_from_text,
     _decode_manifest,
+    _documents,
     _expected_rule_files,
     _generated_pack_names,
     _is_platform_cm_location,
+    _is_rule_groups,
     _iter_repo_alert_rules,
     _platform_rule_locations,
     _rule_containers,
@@ -2753,6 +2755,191 @@ class TestContainerDiscovery:
                 f"{label}: the document's own rules are silently dropped by both "
                 f"the cluster and this scanner, and nothing flagged it: {got}")
 
+    # ── the parsing layer, one fixture per guard ──────────────────────────
+    #
+    # ⛔ A second mutation sweep found FIFTEEN survivors in `_containers_from_text`
+    # and its helpers — every branch below could be deleted or weakened with the
+    # whole suite green. They are the guards whose docstrings each describe a
+    # payload that walked through an earlier revision, so "the reason is written
+    # down" was doing the work a fixture should. These are the fixtures.
+
+    _CM = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"
+    _PR = ("apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\n"
+           "metadata: {name: %s}\n")
+    _GROUPS = ("groups:\n  - name: g\n    rules:\n      - alert: %s\n"
+               "        expr: up == 0\n")
+
+    @staticmethod
+    def _containers(text, rel="k8s/03-monitoring/x.yaml"):
+        return list(_containers_from_text(rel, text))
+
+    def _indented(self, alert, spaces):
+        pad = " " * spaces
+        return "".join(pad + line if line.strip() else line
+                       for line in (self._GROUPS % alert).splitlines(True))
+
+    def test_an_unparsable_yaml_data_key_is_reported_case_insensitively(self):
+        """A `|` block with broken indentation deletes a block of alerts silently.
+
+        The OUTER file still parses, so the whole-file tripwire sees nothing;
+        only this branch notices. The key's EXTENSION is the declaration of
+        intent — and it is matched case-insensitively because `.YML` is a legal
+        spelling and the same "escapes by being named differently" hole the
+        scanner exists to close.
+        """
+        for key in ("r.yml", "r.YML", "r.YAML"):
+            got = self._containers(self._CM + f"data:\n  {key}: |\n    groups: [\n")
+            assert [d for _w, d, _p in got if "_unparsable_body" in d], (
+                f"a data key named {key!r} declared YAML, failed to parse, and "
+                f"contributed nothing without a word: {got}")
+        # …and a key that promises no YAML is left alone: this repo ships a
+        # markdown Alertmanager template as a data key, and it contains the
+        # string `- alert:` as documentation.
+        assert self._containers(
+            self._CM + "data:\n  notes.md: |\n    - alert: example\n     [\n") == []
+
+    def test_a_data_key_nesting_rules_under_spec_is_still_a_container(self):
+        """The silent-zero's own entry point.
+
+        Rules pasted under `spec.groups` inside a ConfigMap data key (the
+        PrometheusRule shape, the commonest paste error) parse fine and
+        contribute zero rules. Admitting the container is what lets
+        `_rule_shaped_but_unparsed` say so; drop the `spec` arm and the
+        detection is gone with it, silently.
+        """
+        got = self._containers(
+            self._CM + "data:\n  r.yml: |\n    spec:\n" + self._indented("A", 6))
+        assert [d for _w, d, _p in got if "spec" in d], got
+
+    def test_a_prometheusrule_with_top_level_groups_is_normalised(self):
+        """Both directions, because each is a different failure.
+
+        `groups:` at the top level of a PrometheusRule deploys nothing — and the
+        tripwire cannot see it, because that check is handed `doc["spec"]` and
+        the misplaced key is outside what it receives. But a manifest carrying
+        BOTH keys has real `spec.groups`; reporting that one as misplaced is a
+        false positive on a working file.
+        """
+        misplaced = self._containers(self._PR % "p" + self._GROUPS % "Orphan")
+        assert [d for _w, d, _p in misplaced if "_misplaced_groups" in d], misplaced
+
+        both = self._containers(self._PR % "p" + self._GROUPS % "Stray"
+                                + "spec:\n" + self._indented("Real", 2))
+        assert not [d for _w, d, _p in both if "_misplaced_groups" in d], (
+            f"a PrometheusRule with real spec.groups was reported as misplaced "
+            f"because it ALSO has a top-level key: {both}")
+        assert {a for _w, d, _p in both for a, *_ in _alert_names(d)} == {"Real"}
+
+    def test_prometheusrule_provenance_is_the_name_then_the_header(self):
+        """Two sources, and dropping either one is silent.
+
+        Without the object name, a generated manifest with no header is
+        hand-authored — the gate then demands the RESERVED `alert_source` on the
+        tenant alerts inside it. Without the header fallback, a manifest whose
+        name does not follow the convention loses provenance the same way.
+        """
+        by_name = self._containers(
+            self._PR % "da-rule-pack-redis" + "spec:\n" + self._indented("A", 2))
+        assert {p for _w, _d, p in by_name} == {"redis"}, by_name
+
+        header = "# GENERATED from rule-packs/rule-pack-redis.yaml by x — DO NOT EDIT.\n"
+        by_header = self._containers(
+            header + self._PR % "named-anything-else"
+            + "spec:\n" + self._indented("A", 2))
+        assert {p for _w, _d, p in by_header} == {"redis"}, by_header
+
+    def test_a_leading_document_marker_does_not_end_the_header_scan(self):
+        """`---` on line 1 is a document START, not content.
+
+        Treating it as "past the leading comments" makes every file that opens
+        with an explicit marker lose its generator provenance — and a lost
+        provenance is a generated file reclassified as hand-authored platform.
+        """
+        text = ("---\n"
+                "# GENERATED from rule-packs/rule-pack-redis.yaml by x — DO NOT EDIT.\n"
+                + self._CM + "data:\n  r.yml: |\n" + self._indented("A", 4))
+        assert {p for _w, _d, p in self._containers(text)} == {"redis"}
+
+    def test_data_wins_over_binarydata_for_the_same_key(self):
+        """kubelet's precedence, not ours.
+
+        `MakePayload` reads `BinaryData` only for keys ABSENT from `Data`. Let
+        binaryData overwrite and the scanner gates a body the cluster never
+        serves — while the body it DOES serve goes unexamined.
+        """
+        import base64 as _b64  # noqa: PLC0415
+        shadow = _b64.b64encode(
+            (self._GROUPS % "FromBinary").encode("utf-8")).decode("ascii")
+        got = self._containers(
+            self._CM + "data:\n  r.yml: |\n" + self._indented("FromData", 4)
+            + f"binaryData:\n  r.yml: {shadow}\n")
+        assert {a for _w, d, _p in got for a, *_ in _alert_names(d)} == {"FromData"}
+
+    def test_a_data_value_that_is_already_a_mapping_is_used_as_is(self):
+        """A data key does not have to be a `|` block.
+
+        Written as nested YAML it arrives already parsed; discarding non-strings
+        drops the whole container, and the alerts in it are gated by nothing.
+        """
+        got = self._containers(
+            self._CM + "data:\n  r.yml:\n" + self._indented("FromMapping", 4))
+        assert {a for _w, d, _p in got for a, *_ in _alert_names(d)} == {"FromMapping"}
+
+    def test_rule_group_shape_boundaries(self):
+        """`groups:` is a popular word; the shape test is what makes it a criterion."""
+        assert _is_rule_groups([{"name": "g", "rules": []}])
+        # An empty list is a LEGITIMATE generator output (the custom-alerts pack
+        # with no `_custom_alerts` declared) — rejecting it reclassifies that
+        # pack's ConfigMap as hand-authored platform.
+        assert _is_rule_groups([])
+        # ANY entry with `rules`, not ALL: a real file may carry a group the
+        # scanner does not recognise beside ones it does.
+        assert _is_rule_groups([{"name": "a"}, {"name": "b", "rules": []}])
+        # …and the RBAC shape that motivated the whole test stays out.
+        assert not _is_rule_groups([{"name": "ops", "tenants": ["*"]}])
+        assert not _is_rule_groups({"rules": []}), "a mapping is not a group list"
+        assert not _is_rule_groups("groups")
+
+    def test_a_non_dict_group_entry_does_not_crash_the_scan(self):
+        """Malformed input must degrade, not abort.
+
+        `_iter_repo_alert_rules` walks whatever the repo contains; a stray
+        scalar in a `groups:` list raises AttributeError without the guard, and
+        one bad file would take every contract down with it.
+        """
+        import _rule_tree  # noqa: PLC0415
+        fake = (("x.yaml:k", {"groups": [
+            "not-a-group",
+            {"name": "g", "rules": [{"alert": "Survivor", "expr": "up == 0"}]},
+        ]}, None),)
+        original = _rule_tree._rule_containers
+        try:
+            _rule_tree._reset_caches()
+            _rule_tree._rule_containers = lambda: fake
+            got = {r["alert"] for _w, r in _iter_repo_alert_rules()}
+        finally:
+            _rule_tree._rule_containers = original
+            _rule_tree._reset_caches()
+        assert got == {"Survivor"}, got
+
+    def test_document_splitting_swallows_only_yaml_errors(self):
+        """The `except` is scoped on purpose.
+
+        A malformed document is expected and skipped. Anything else — a bug in
+        this scanner, a recursion limit, a type error — must escape, because a
+        blanket `except Exception` turns every future defect into "that file has
+        no rules" and the contracts stay green over it.
+        """
+        import _rule_tree  # noqa: PLC0415
+        original = _rule_tree.yaml.safe_load_all
+        try:
+            _rule_tree.yaml.safe_load_all = lambda _t: (_ for _ in ()).throw(
+                TypeError("scanner bug, not a malformed document"))
+            with pytest.raises(TypeError):
+                list(_documents("irrelevant: true\n"))
+        finally:
+            _rule_tree.yaml.safe_load_all = original
+
     def test_generator_header_does_not_cross_a_document_boundary(self):
         # A hand-authored document appended after `---` must not inherit the
         # provenance declared in the file's opening comments.
@@ -2974,6 +3161,23 @@ class TestProvenanceIsAMatchNotAClaim:
             _rule_tree._rule_containers = original
             _rule_tree._reset_caches()
 
+    def test_the_source_tree_is_never_classified_as_a_deployment(self):
+        """rule-packs/ holds SOURCES; nothing there is deployed.
+
+        Today every container under it resolves provenance from its own
+        filename, so dropping the exclusion changes nothing — measured, zero
+        rule-packs/ containers lack provenance. That is the whole hazard: one
+        source file the filename convention does not cover (a pack under a name
+        the stem test misses, a bare `groups:` doc beside the packs) becomes a
+        hand-authored PLATFORM tree, and the gate starts demanding the RESERVED
+        `alert_source: platform` on rules that are never applied to anything.
+        """
+        unnamed = ("rule-packs/shared/common-recording.yaml",
+                   self._doc(self._rule("A")), None)
+        assert unnamed[0] not in self._classify([unnamed]), (
+            "a container in the SOURCE tree was classified as a deployed "
+            "hand-authored platform tree")
+
     def test_only_a_rule_pack_file_may_define_a_pack(self):
         """The producer side, which is where the lie is cheapest to tell.
 
@@ -3030,17 +3234,26 @@ class TestSilentZeroSentinel:
             _rule_tree._reset_caches()
 
     def test_every_offender_shape_is_reported(self):
+        # (container, which BRANCH of the sentinel should claim it). Two rows
+        # share a branch on purpose — see the last one.
         cases = {
-            "cm.yaml:wont-parse": {"_unparsable_body": True},
-            "pr.yaml:groups-at-top": {"_misplaced_groups": True},
-            "cm.yaml:spec-nested": {"spec": self.HEALTHY},
-            "cm.yaml:groups-forgotten": {"rules": [
-                {"alert": "Orphan", "expr": "up == 0"}]},
-            "cm.yaml:shadowed-by-items": {
-                "_own_content_shadowed_by_items": True},
+            "cm.yaml:wont-parse": ({"_unparsable_body": True}, "unparsable"),
+            "pr.yaml:groups-at-top": ({"_misplaced_groups": True}, "misplaced"),
+            "cm.yaml:spec-nested": ({"spec": self.HEALTHY}, "spec-nested"),
+            "cm.yaml:groups-forgotten": ({"rules": [
+                {"alert": "Orphan", "expr": "up == 0"}]}, "no-groups"),
+            "cm.yaml:shadowed-by-items": (
+                {"_own_content_shadowed_by_items": True}, "items"),
+            # ⛔ `groups: []` PRESENT but empty, beside real rules under `spec`.
+            # The short-circuit must test the VALUE, not the key: on
+            # `"groups" in doc` this container is skipped entirely, and it
+            # contributes zero rules while `spec.groups` holds the real ones.
+            # Same branch as spec-nested, reached the other way round.
+            "cm.yaml:empty-groups-beside-spec": (
+                {"groups": [], "spec": self.HEALTHY}, "spec-nested"),
         }
         got = self._offenders_for(
-            tuple((w, d, None) for w, d in cases.items())
+            tuple((w, d, None) for w, (d, _b) in cases.items())
             + (("cm.yaml:healthy", self.HEALTHY, None),))
         missed = sorted(set(cases) - set(got))
         assert not missed, (
@@ -3048,10 +3261,13 @@ class TestSilentZeroSentinel:
             f"silent-zero sentinel stayed quiet about them: {missed}")
         assert "cm.yaml:healthy" not in got, (
             f"a container that DOES yield rules was reported: {got}")
-        # Each reason must name its own shape — four branches collapsing onto
-        # one message would satisfy the membership test above while telling the
-        # maintainer nothing about which mistake they made.
-        assert len(set(got.values())) == len(cases), got
+        # ⛔ One message per BRANCH. Branches collapsing onto a shared message
+        # would satisfy the membership test above while telling the maintainer
+        # nothing about which mistake they actually made.
+        branches = {b for _d, b in cases.values()}
+        assert len(set(got.values())) == len(branches), (
+            f"{len(branches)} distinct defects produced "
+            f"{len(set(got.values()))} distinct messages: {got}")
 
     def test_a_container_with_rules_is_not_judged_by_its_spec_key(self):
         """The short-circuit is load-bearing, not an optimisation.
