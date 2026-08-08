@@ -89,18 +89,28 @@ def _strip_rules_ext(name: str) -> str | None:
 
 @functools.lru_cache(maxsize=1)
 def _generated_pack_names() -> frozenset:
-    """Pack names that HAVE a rule-packs/ source, i.e. whose ConfigMap is generated.
+    """Pack names that HAVE a rule-packs/ source, by filename and shape.
 
-    RECURSIVE, matching `_iter_repo_alert_rules`'s rglob over the same tree: a
-    source pack moved into a subdirectory must not read as "source deleted", or
-    its generated ConfigMap would be misclassified as hand-authored.
+    ⛔ NOT ON THE CLASSIFICATION PATH ANY MORE. This used to decide whether a
+    ConfigMap was a generated copy, and its guards below were written against
+    that: a `touch rule-packs/rule-pack-x.yaml` decoy reclassifying
+    configmap-rules-x.yaml as generated and dropping every platform alert inside
+    it out of all four contracts. That chain now runs through
+    `_source_pack_alerts`, which compares CONTENT and never asks this function
+    anything — so the decoy is priced by the subset test there, not here.
 
-    ⛔ A name alone does not make a pack. The file must parse as YAML and
-    actually declare `groups:` — otherwise `touch rule-packs/rule-pack-x.yaml`
-    (zero bytes, thirty keystrokes) reclassifies configmap-rules-x.yaml as
-    generated, and every platform alert inside it drops out of all four
-    contracts while the suite stays green. A decoy is only convincing if it
-    has to contain the thing it claims to be the source of.
+    What is left is a filename-and-shape oracle used only by the discovery tests
+    (and by `_reset_caches`). Keep the guards honest anyway — the tests read it
+    as ground truth about which packs exist, and an oracle that answers loosely
+    makes the assertions that consult it loose in the same direction — but do
+    not read the ⛔ below as a live defence:
+
+    RECURSIVE, matching `_source_pack_alerts` over the same tree: a source pack
+    moved into a subdirectory must not read as "source deleted".
+
+    A name alone does not make a pack. The file must parse as YAML and actually
+    declare `groups:`; a decoy is only convincing if it has to contain the thing
+    it claims to be the source of.
     """
     packs_dir = Path(_REPO_ROOT) / "rule-packs"
     names = set()
@@ -154,8 +164,8 @@ def _is_platform_cm_location(where: str) -> bool:
     property of the artifact instead of a property of its name — and the
     matching DISCOVERY rewrite (see `_iter_rule_containers`) means membership
     no longer depends on filename or directory either. Scope today: 63
-    containers across three trees / 408 rules, of which exactly one container
-    is hand-authored. Pinned by test_platform_cm_discovery_is_content_based
+    containers across the four `_SHIPPED_ROOTS` / 408 rules, of which exactly
+    one container is hand-authored. Pinned by test_platform_cm_discovery_is_content_based
     and test_unknown_provenance_defaults_to_platform.
 
     The last directory criterion is GONE. The bare `groups:` shape (a plain
@@ -267,8 +277,9 @@ def _alert_names(doc) -> frozenset:
 def _source_pack_alerts() -> dict:
     """{pack name: the (alert, expr) pairs its rule-packs/ source declares}.
 
-    ⛔ Only the pack FILES themselves — `rule-packs/rule-pack-<name>.{yaml,yml}`,
-    at the top of the tree — may define what a pack contains. Accepting any
+    ⛔ Only the pack FILES themselves may define what a pack contains:
+    `rule-pack-<name>.{yaml,yml}` under rule-packs/, at ANY depth (the filename
+    is the pack's identity, see below). Accepting any
     container under rule-packs/ that *claimed* a provenance reopened forgery on
     the source side: rule-packs/ is the one tree scanned recursively, so a file
     dropped into rule-packs/recipes/examples/conf.d/ carrying a fake
@@ -378,7 +389,17 @@ def _expected_rule_files() -> frozenset:
     out = subprocess.run(["git", "-C", _REPO_ROOT, "ls-files", "-z", *globs],
                          capture_output=True, text=True, timeout=60,
                          check=True).stdout
-    return frozenset(p for p in out.split("\0") if p)
+    files = frozenset(p for p in out.split("\0") if p)
+    if not files:
+        # `raise`, not `assert` — this is a fail-closed check and `python -O`
+        # strips asserts. An empty anchor silently satisfies every per-file
+        # coverage assertion that reads it, which is the one outcome this
+        # function must never produce quietly.
+        raise AssertionError(
+            f"no tracked rules files matched {globs} under {_REPO_ROOT} — "
+            "either the repo layout moved or `git ls-files` failed; both make "
+            "the per-file coverage floor vacuous")
+    return files
 
 
 def _tracked_yaml_paths():
@@ -492,7 +513,11 @@ def _iter_rule_containers():
     Three container shapes, all recognised by structure:
       * `kind: ConfigMap`      → every data key whose body parses to a mapping
       * `kind: PrometheusRule` → `spec.groups`
-      * a bare `groups:` doc   → a source rule pack
+      * a bare `groups:` doc   → a wrapper-less Prometheus rule file, ANYWHERE
+        under the shipped roots. It used to be recognised only inside
+        rule-packs/ and therefore only ever meant "a source pack"; that path
+        test is gone, so `k8s/…/extra-platform-rules.yaml` is now discovered
+        too — and, having no provenance, classified as platform.
 
     Multi-document YAML is walked in full; a rules doc hiding behind a `---`
     separator is exactly the kind of placement this is meant to stop mattering.

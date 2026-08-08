@@ -1150,7 +1150,7 @@ class TestPlatformAlertSourceContract:
     at fire time) and none carry `metric_group`. Without a POSITIVE
     discriminator the only matcher an operator can put on the single
     `_routing_enforced` route is `severity="critical"` — which reaches 19 of the
-    40, i.e. the majority of the platform's own self-monitoring would stay
+    42, i.e. more than half of the platform's own self-monitoring would stay
     undeliverable no matter how the operator wires it. This is the same failure
     shape as #1095 (a discriminator that silently does not exist), inverted:
     there the label was missing from a sinkhole, here from a delivery selector.
@@ -1187,12 +1187,33 @@ class TestPlatformAlertSourceContract:
         # `>= 30` container floor that had 33 of slack — enough for an entire
         # tree to vanish silently — with an exact, self-updating statement.
         produced = {w.split(":", 1)[0] for w, _d, _p in containers}
-        missing = sorted(_expected_rule_files() - produced)
+        expected = _expected_rule_files()
+        missing = sorted(expected - produced)
         assert not missing, (
             f"{len(missing)} shipped rules file(s) yielded no container: "
             f"{missing[:10]}. Either the scanner stopped understanding a shape "
             "the repo uses, or those files stopped shipping rules — both are "
             "changes that must be seen, not absorbed by a slack-heavy floor.")
+        # ⛔ …and the SAME assertion in reverse, which is what makes the anchor
+        # an anchor. `expected ⊆ produced` alone is satisfied by an empty
+        # expected set — measured: `_expected_rule_files` returning
+        # `frozenset()`, or losing any one of its five globs, kept the whole
+        # suite green. A floor that can be zeroed is not a floor.
+        #
+        # Equality also makes the glob list keep up with the SCANNER instead of
+        # with a maintainer's memory. Every discovery shape this module has
+        # learned (bare `groups:` documents outside rule-packs/, `k8s/` subtrees
+        # other than 03-monitoring, `helm/`, `.yml` operator manifests, a
+        # PrometheusRule not named `da-rule-pack-*`) is reachable by the scanner
+        # and was named by NONE of the globs, so each was a file the coverage
+        # floor could not see going dark. Whichever side moves first, this is red
+        # until both agree.
+        unanchored = sorted(produced - expected)
+        assert not unanchored, (
+            f"{len(unanchored)} file(s) ship rules that the scanner finds but "
+            f"`_expected_rule_files()`'s globs do not name: {unanchored[:10]}. "
+            "They are outside the per-file coverage floor, so the day one stops "
+            "producing rules nothing goes red. Add the glob.")
 
         by_where = {w: prov for w, _doc, prov in containers}
         platform = sorted(_platform_rule_locations())
@@ -1283,6 +1304,113 @@ class TestPlatformAlertSourceContract:
         assert "fake.yaml:no-prov" in got, (
             "unknown provenance must default to platform (fail-closed)")
         assert "fake.yaml:real-pack" not in got
+
+    def test_classification_disagrees_with_the_filename_wherever_it_can(self):
+        """⛔ The one property this whole module exists for, and the live tree
+        cannot express it.
+
+        On today's repo the content criterion and a `configmap-rules-platform*`
+        filename prefix pick out the SAME single container, so every assertion
+        anchored on the real tree — including both TestPlatformReaderParity
+        cases — stays green with the classifier reverted to the prefix. Measured:
+        it does, all 119 of them, while an injected hand-authored platform alert
+        in `k8s/04-tenant-api/` goes completely unseen.
+
+        The parity harness structurally CANNOT cover this. Both readers it
+        cross-checks against (`_real_platform_label_sets` and production
+        `platform_alert_identities`) open one hard-coded filename, so reverting
+        the third reader to filename semantics makes all three agree. Two
+        filename readers can only ever detect drift in a filename reader.
+
+        So the four disagreeing shapes are constructed. Each is a real placement
+        a maintainer could make tomorrow, and each is the answer to a different
+        way the criterion has already been wrong once.
+        """
+        import _rule_tree  # noqa: PLC0415
+
+        # The "generated" case reuses a REAL source pack document rather than a
+        # reconstruction: provenance is decided by comparing `_alert_names(doc)`
+        # against the pack's own set, so a doc rebuilt from that set would be
+        # testing my reconstruction, not the classifier.
+        real_pack, pack_doc = next(
+            ((prov, doc) for w, doc, prov in _rule_containers()
+             if w.startswith("rule-packs/") and prov and _alert_names(doc)),
+            (None, None))
+        assert real_pack, "no source pack container — the generated case below "\
+                          "would be vacuous"
+        hand = {"groups": [{"name": "g", "rules": [{
+            "alert": "HandAuthoredSelfCheck",
+            "expr": "da_platform_writer_lock_lost > 0"}]}]}
+
+        cases = {
+            # 1. hand-authored, and NOT named platform*. The prefix says "not
+            #    platform" → presence gates skip it while the RESERVED gate
+            #    reports its correct `alert_source: platform` as an offender,
+            #    i.e. the diagnostic tells the maintainer to delete the label
+            #    that routes it. Content says platform, which is right.
+            "k8s/03-monitoring/configmap-noc-selfcheck.yaml:rules": (hand, None, True),
+            # 2. hand-authored, in a k8s subtree that is not 03-monitoring —
+            #    the exact directory a previous scope derivation dropped.
+            "k8s/04-tenant-api/configmap-rules-tenant-plane.yaml:rules": (hand, None, True),
+            # 3. hand-authored, named platform* but one directory DOWN. The
+            #    prefix compared the relative path, so this escaped every gate
+            #    while the scanner (recursive) was already reaching it.
+            "k8s/03-monitoring/sub/configmap-rules-platform.yaml:rules": (hand, None, True),
+            # 4. the reverse direction, which a one-sided test would miss: a
+            #    GENERATED copy that happens to be named platform*. The prefix
+            #    calls it platform and then demands `alert_source: platform` on
+            #    tenant alerts — a reserved value that pipes them to the NOC.
+            "k8s/03-monitoring/configmap-rules-platform-redis.yaml:rules": (
+                pack_doc, real_pack, False),
+        }
+        fake = tuple((w, doc, prov) for w, (doc, prov, _e) in cases.items())
+
+        original = _rule_tree._rule_containers
+        try:
+            _rule_tree._reset_caches()
+            _source_pack_alerts()             # memoise from the REAL tree FIRST…
+            _rule_tree._rule_containers = lambda: fake      # …then swap
+            _platform_rule_locations.cache_clear()
+            got = {w: _is_platform_cm_location(w) for w in cases}
+        finally:
+            _rule_tree._rule_containers = original
+            _rule_tree._reset_caches()
+
+        wrong = {w: (got[w], exp) for w, (_d, _p, exp) in cases.items()
+                 if got[w] != exp}
+        assert not wrong, (
+            "the classifier answered by NAME, not by content. Each of these is "
+            "a placement where the two criteria differ, which is the only place "
+            "the difference is observable at all:\n" + "\n".join(
+                f"  {w}: got platform={g}, expected {e}"
+                for w, (g, e) in sorted(wrong.items())))
+
+    def test_shipped_roots_are_whole_top_level_trees(self):
+        """Narrowing a root to a subdirectory is the regression, so pin the shape.
+
+        `_SHIPPED_ROOTS` back at `k8s/03-monitoring/` leaves the whole suite
+        green (measured) while `k8s/04-tenant-api/` and `k8s/crd/` drop out of
+        discovery — and the per-file coverage floor goes blind in the same
+        stroke, because its globs name only `k8s/03-monitoring/` too. Both halves
+        of the gate lose the same directory at once, which is why nothing
+        notices.
+
+        Two independent statements, neither a snapshot of the current tuple:
+        every root is a whole top-level tree, and `k8s` — the root this repo's
+        own raw-manifest SAST already scans — is one of them.
+        """
+        from _rule_tree import _SHIPPED_ROOTS  # noqa: PLC0415
+        from check_k8s_manifests import MANIFEST_ROOT  # noqa: PLC0415
+
+        deep = [r for r in _SHIPPED_ROOTS if r.count("/") != 1]
+        assert not deep, (
+            f"{deep} narrow the scan to a SUBDIRECTORY. Coverage must not "
+            "depend on where inside a shipped tree a rules file sits — a file "
+            "moved one level down would silently leave every contract.")
+        assert f"{MANIFEST_ROOT}/" in _SHIPPED_ROOTS, (
+            f"check_k8s_manifests scans {MANIFEST_ROOT!r} recursively as the "
+            "deployed-manifest tree; this scanner claims the same anchor in "
+            f"its own comment but ships {_SHIPPED_ROOTS}")
 
     def test_platform_alerts_carry_alert_source(self):
         seen = []
@@ -2455,6 +2583,29 @@ class TestContainerDiscovery:
                  "              - alert: InsideList\n                expr: up == 0\n")
         assert "InsideList" in self._alerts("kind: List\nitems:\n" + inner)
 
+    def test_unwrapping_is_duck_typed_on_items_not_on_the_kind_name(self):
+        """⛔ `kind: List` is the weakest spelling of the case above.
+
+        kubectl's `Unstructured.IsList()` checks for an `items` ARRAY and never
+        looks at the kind name — `decodeToList` then back-fills each item's own
+        kind. So `ConfigMapList`, `PrometheusRuleList` and a bare `items:` with
+        no kind at all are equally applyable, and the test above happens to use
+        the one spelling a kind-name check would also catch. Measured: narrowing
+        the unwrap to `kind == "List"`, or to a three-name enum, leaves the whole
+        suite green.
+        """
+        inner = ("  - apiVersion: v1\n    kind: ConfigMap\n"
+                 "    metadata: {name: x}\n    data:\n      r.yml: |\n"
+                 "        groups:\n          - name: g\n            rules:\n"
+                 "              - alert: %s\n                expr: up == 0\n")
+        for header, alert in (
+                ("kind: ConfigMapList\nitems:\n", "InsideConfigMapList"),
+                ("apiVersion: v1\nitems:\n", "InsideKindlessList"),
+                ("kind: SomethingNobodyEnumerated\nitems:\n", "InsideUnknownList")):
+            assert alert in self._alerts(header + inner % alert), (
+                f"{header.splitlines()[0]!r} was not unwrapped; kubectl applies "
+                "it identically to `kind: List`")
+
     def test_generator_header_does_not_cross_a_document_boundary(self):
         # A hand-authored document appended after `---` must not inherit the
         # provenance declared in the file's opening comments.
@@ -2470,6 +2621,43 @@ class TestContainerDiscovery:
                  for a, *_ in _alert_names(doc)}
         assert provs["First"] == "redis"
         assert provs["Second"] is None, "the header leaked across a `---`"
+
+    def test_provenance_is_read_only_from_the_leading_comment_block(self):
+        """The OTHER half of the header guard, and the attacker-writable one.
+
+        The document-boundary test above pins only `is_first`; it says nothing
+        about WHERE in a document the string may appear. Searching the raw text
+        means an `annotations.summary` — tenant- or attacker-writable data that
+        ends up rendered into an alert — confers provenance on the ConfigMap
+        that carries it. Measured: both widenings (drop the leading-comment
+        restriction, or search the whole file) survive the entire suite.
+        """
+        header = ("# GENERATED from rule-packs/rule-pack-redis.yaml by\n"
+                  "# scripts/x.py — DO NOT EDIT.\n")
+        body = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\n"
+                "data:\n  r.yml: |\n    groups:\n      - name: g\n"
+                "        rules:\n          - alert: A\n            expr: up == 0\n")
+
+        def prov(text):
+            return {p for _w, _d, p in _containers_from_text("k8s/x.yaml", text)}
+
+        assert prov(header + body) == {"redis"}, "the real shape stopped working"
+        # 1. past the leading comment block — a comment further down the file
+        assert prov(body + header) == {None}, (
+            "a generator header BELOW the content conferred provenance; the "
+            "guard reads the leading comment block, not any comment")
+        # 2. inside a value, which is the writable one
+        smuggled = (
+            "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\n"
+            "data:\n  r.yml: |\n    groups:\n      - name: g\n"
+            "        rules:\n          - alert: A\n            expr: up == 0\n"
+            "            annotations:\n"
+            "              summary: >-\n"
+            "                GENERATED from rule-packs/rule-pack-redis.yaml by\n"
+            "                scripts/x.py — DO NOT EDIT.\n")
+        assert prov(smuggled) == {None}, (
+            "an annotation VALUE conferred generated provenance — that string "
+            "is data, and on this platform it is tenant-reachable data")
 
     def test_expr_equality_ignores_only_serialization(self):
         # ⛔ Assert the WIRING, not the helper. Testing `_norm_expr` on its own
@@ -2512,11 +2700,266 @@ class TestContainerDiscovery:
         assert list(_containers_from_text(rel, text)) == []
 
 
-class TestPlatformReaderParity:
-    """The three readers of "the platform rule tree" must agree.
+class TestProvenanceIsAMatchNotAClaim:
+    """The forgery-cost invariants, each driven through the real classifier.
 
-    ⛔ There are three, and until the scanner moved into an importable module
-    there was no way for them to check each other:
+    ⛔ Every guard here exists because a red-team pass walked through its
+    absence, and every one of them was reverted by a mutant with the whole suite
+    still green — the live tree contains no forgery, so the live tree cannot
+    tell these apart. The shapes are constructed for the same reason
+    TestSilentZeroSentinel's are.
+    """
+
+    EXPR = "da_platform_writer_lock_lost > 0"
+
+    def _classify(self, fake, packs=None):
+        """Run the REAL classifier over a fabricated container list."""
+        import _rule_tree  # noqa: PLC0415
+        original = _rule_tree._rule_containers
+        try:
+            _rule_tree._reset_caches()
+            if packs is None:
+                _source_pack_alerts()        # memoise from the REAL tree FIRST…
+                _rule_tree._rule_containers = lambda: fake   # …then swap
+            else:
+                _rule_tree._rule_containers = lambda: tuple(packs) + tuple(fake)
+            _platform_rule_locations.cache_clear()
+            return _platform_rule_locations()
+        finally:
+            _rule_tree._rule_containers = original
+            _rule_tree._reset_caches()
+
+    @staticmethod
+    def _doc(*rules):
+        return {"groups": [{"name": "g", "rules": list(rules)}]}
+
+    @classmethod
+    def _rule(cls, alert, **extra):
+        return {"alert": alert, "expr": cls.EXPR, **extra}
+
+    def test_sharing_one_alert_with_a_pack_does_not_confer_provenance(self):
+        """SUBSET, not intersection.
+
+        `mine <= pack_alerts[claimed]` is what makes forgery cost as much as
+        writing the rules. Weakened to `mine & pack_alerts[claimed]` — an
+        overlap test — a hand-authored tree buys its way out by copying ONE
+        rule from the pack it names and appending whatever it likes. Both
+        mutations of that comparison survived the entire suite.
+        """
+        pack = ("rule-packs/rule-pack-forge.yaml",
+                self._doc(self._rule("SharedAlert")), "forge")
+        smuggler = ("k8s/03-monitoring/configmap-rules-forge.yaml:rules",
+                    self._doc(self._rule("SharedAlert"),
+                              self._rule("SmuggledCritical")), "forge")
+        got = self._classify([smuggler], packs=[pack])
+        assert smuggler[0] in got, (
+            "a container whose alerts are NOT a subset of the pack it claims "
+            "was treated as a generated copy of it; one borrowed rule bought "
+            "an entire hand-authored alert out of every contract")
+
+    def test_a_faithful_copy_is_still_recognised(self):
+        """The counterweight — over-tightening is a false positive on a real
+        deploy artifact, and its diagnostic tells the maintainer to put the
+        RESERVED `alert_source: platform` label on tenant alerts."""
+        pack = ("rule-packs/rule-pack-forge.yaml",
+                self._doc(self._rule("A"), self._rule("B")), "forge")
+        copy = ("k8s/03-monitoring/configmap-rules-forge.yaml:rules",
+                self._doc(self._rule("A"), self._rule("B")), "forge")
+        assert copy[0] not in self._classify([copy], packs=[pack])
+        # …and the same copy with NO claim at all. Content still says generated,
+        # and the branch that reads it is the difference between a nameless
+        # operator manifest being classified correctly and the gate demanding
+        # the RESERVED `alert_source: platform` on the tenant alerts inside it.
+        # Deleting that branch is fail-CLOSED, so nothing else goes red for it.
+        unnamed = ("operator-manifests/rules-for-forge.yaml:spec",
+                   self._doc(self._rule("A"), self._rule("B")), None)
+        assert unnamed[0] not in self._classify([unnamed], packs=[pack]), (
+            "a deploy copy whose NAME attests to nothing was declared "
+            "hand-authored platform, even though its content is exactly a "
+            "pack's — the gate would now demand a reserved label on tenant "
+            "alerts, which routes them to the NOC")
+
+    def test_identity_is_the_whole_rule_not_just_name_and_expr(self):
+        """`for:` / `labels:` / `annotations:` are part of the copy.
+
+        Identity was widened from (alert, expr) to the whole rule body this
+        round, and nothing tested it: reverting it left the suite green. A rule
+        that keeps the pack's name and expression but rewrites its severity, or
+        drops `for:`, is a DIFFERENT alert with different delivery — claiming it
+        is a generated copy is exactly the lie provenance is meant to price.
+        """
+        pack = ("rule-packs/rule-pack-forge.yaml",
+                (self._doc(self._rule("A", **{"for": "10m"},
+                                      labels={"severity": "warning"}))),
+                "forge")
+        for tweak in ({"for": "10m", "labels": {"severity": "critical"}},
+                      {"labels": {"severity": "warning"}},
+                      {"for": "10m", "labels": {"severity": "warning"},
+                       "annotations": {"summary": "injected"}}):
+            edited = ("k8s/03-monitoring/configmap-rules-forge.yaml:rules",
+                      self._doc(self._rule("A", **tweak)), "forge")
+            assert edited[0] in self._classify([edited], packs=[pack]), (
+                f"a rule differing from its claimed source by {sorted(tweak)} "
+                "was still accepted as a generated copy of it")
+
+    def test_a_second_file_claiming_a_pack_name_is_refused_loudly(self):
+        """One file per pack name, and `raise` rather than `assert`.
+
+        Two files claiming `rule-pack-redis` means one is forging, and merging
+        them writes the forger's alerts into redis's trusted set. `assert` would
+        make the whole check evaporate under `python -O`, which is why it is a
+        raise — and neither the uniqueness rule nor its threshold had a test.
+        """
+        import _rule_tree  # noqa: PLC0415
+        dupes = (
+            ("rule-packs/rule-pack-forge.yaml",
+             self._doc(self._rule("A")), "forge"),
+            ("rule-packs/recipes/examples/rule-pack-forge.yaml",
+             self._doc(self._rule("Smuggled")), "forge"),
+        )
+        original = _rule_tree._rule_containers
+        try:
+            _rule_tree._reset_caches()
+            _rule_tree._rule_containers = lambda: dupes
+            with pytest.raises(AssertionError, match="same rule pack"):
+                _source_pack_alerts()
+        finally:
+            _rule_tree._rule_containers = original
+            _rule_tree._reset_caches()
+
+    def test_only_a_rule_pack_file_may_define_a_pack(self):
+        """The producer side, which is where the lie is cheapest to tell.
+
+        rule-packs/ is scanned recursively, so a file dropped anywhere under it
+        carrying a forged `# GENERATED from …` header could write its own alerts
+        into a pack's trusted set. Two independent guards — the path must be
+        under rule-packs/, and the FILENAME must be that pack's — and both
+        survived every existing assertion.
+        """
+        import _rule_tree  # noqa: PLC0415
+        for where in ("rule-packs/recipes/examples/conf.d/redis-tenant.yaml",
+                      "k8s/03-monitoring/configmap-rules-forge.yaml"):
+            fake = ((where, self._doc(self._rule("Smuggled")), "forge"),)
+            original = _rule_tree._rule_containers
+            try:
+                _rule_tree._reset_caches()
+                _rule_tree._rule_containers = lambda: fake
+                packs = _source_pack_alerts()
+            finally:
+                _rule_tree._rule_containers = original
+                _rule_tree._reset_caches()
+            assert "forge" not in packs, (
+                f"{where} declared a generated-from header and was allowed to "
+                f"DEFINE the pack it named: {packs}")
+
+
+class TestSilentZeroSentinel:
+    """`_rule_shaped_but_unparsed()` must REPORT, not merely be empty.
+
+    ⛔ Its only assertion was `== ()` on the live tree. That is a snapshot of
+    "the repo is clean today" wearing an invariant's clothes: measured, every
+    one of nine mutations survived it — including `return ()`, which deletes the
+    sentinel outright, and each of the four offender branches individually. A
+    guard whose whole job is to fire has to be tested by making it fire.
+
+    Every shape here is one the sentinel names in its own docstring, driven
+    through the real function by swapping the container source rather than by
+    restating its logic.
+    """
+
+    HEALTHY = {"groups": [{"name": "g", "rules": [
+        {"alert": "RealAlert", "expr": "up == 0"}]}]}
+
+    def _offenders_for(self, fake):
+        import _rule_tree  # noqa: PLC0415
+        original = _rule_tree._rule_containers
+        try:
+            _rule_tree._reset_caches()
+            _rule_tree._rule_containers = lambda: fake
+            _rule_shaped_but_unparsed.cache_clear()
+            return dict(_rule_shaped_but_unparsed())
+        finally:
+            _rule_tree._rule_containers = original
+            _rule_tree._reset_caches()
+
+    def test_every_offender_shape_is_reported(self):
+        cases = {
+            "cm.yaml:wont-parse": {"_unparsable_body": True},
+            "pr.yaml:groups-at-top": {"_misplaced_groups": True},
+            "cm.yaml:spec-nested": {"spec": self.HEALTHY},
+            "cm.yaml:groups-forgotten": {"rules": [
+                {"alert": "Orphan", "expr": "up == 0"}]},
+        }
+        got = self._offenders_for(
+            tuple((w, d, None) for w, d in cases.items())
+            + (("cm.yaml:healthy", self.HEALTHY, None),))
+        missed = sorted(set(cases) - set(got))
+        assert not missed, (
+            "these visibly rule-shaped containers yield zero rules and the "
+            f"silent-zero sentinel stayed quiet about them: {missed}")
+        assert "cm.yaml:healthy" not in got, (
+            f"a container that DOES yield rules was reported: {got}")
+        # Each reason must name its own shape — four branches collapsing onto
+        # one message would satisfy the membership test above while telling the
+        # maintainer nothing about which mistake they made.
+        assert len(set(got.values())) == len(cases), got
+
+    def test_a_container_with_rules_is_not_judged_by_its_spec_key(self):
+        """The short-circuit is load-bearing, not an optimisation.
+
+        A PrometheusRule normalised into `{groups, spec.groups}` carries both
+        keys legitimately. Without `if doc.get("groups"): continue` it is
+        reported as "rules nested under spec.groups" — a false positive on a
+        healthy container, which is the failure mode that gets a sentinel
+        muted rather than fixed.
+        """
+        got = self._offenders_for(
+            (("pr.yaml:both-keys",
+              {**self.HEALTHY, "spec": self.HEALTHY}, None),))
+        assert got == {}, got
+
+    def test_a_file_that_declares_alerts_and_will_not_parse_is_reported(
+            self, tmp_path):
+        """…and the tripwire must not be steppable with a whitespace edit.
+
+        `-  alert:` (two spaces) is the same YAML as `- alert:`; the substring
+        test this replaced saw only the second, so a file could declare alerts,
+        fail to parse, contribute nothing, and be waved through by an extra
+        space.
+        """
+        import _rule_tree  # noqa: PLC0415
+        broken = "groups:\n  - name: g\n    rules:\n      -  alert: X\n     expr: ["
+        (tmp_path / "rule-packs").mkdir()
+        (tmp_path / "rule-packs" / "rule-pack-broken.yaml").write_text(
+            broken, encoding="utf-8")
+        original_root, original_paths, original_cm = (
+            _rule_tree._REPO_ROOT, _rule_tree._tracked_yaml_paths,
+            _rule_tree._rule_containers)
+        try:
+            _rule_tree._reset_caches()
+            _rule_tree._REPO_ROOT = str(tmp_path)
+            _rule_tree._tracked_yaml_paths = lambda: [
+                "rule-packs/rule-pack-broken.yaml"]
+            _rule_tree._rule_containers = tuple
+            _rule_shaped_but_unparsed.cache_clear()
+            got = dict(_rule_shaped_but_unparsed())
+        finally:
+            (_rule_tree._REPO_ROOT, _rule_tree._tracked_yaml_paths,
+             _rule_tree._rule_containers) = (
+                original_root, original_paths, original_cm)
+            _rule_tree._reset_caches()
+        assert "rule-packs/rule-pack-broken.yaml" in got, (
+            "a file that declares alerts and then fails to parse is the "
+            f"loudest silent-zero there is, and it went unreported: {got}")
+        assert "will not parse" in got["rule-packs/rule-pack-broken.yaml"]
+
+
+class TestPlatformReaderParity:
+    """The four readers of "the repo's rule tree" must agree.
+
+    ⛔ There are FOUR — the count was three until a mutation pass went looking
+    for the fourth — and until the scanner moved into an importable module there
+    was no way for any of them to check each other:
 
       1. `_rule_tree` — content-based, provenance-based, the one every contract
          in this file uses.
@@ -2524,6 +2967,11 @@ class TestPlatformReaderParity:
          `k8s/03-monitoring/configmap-rules-platform.yaml` by hard-coded path.
       3. `scripts/tools/ops/_grar_validate.platform_alert_identities()` —
          PRODUCTION code, same hard-coded path, and narrower still.
+      4. `scripts/tools/lint/check_scrape_reachability.collect_rule_trees()` —
+         a pre-commit gate in the SAME DIRECTORY as the scanner, which globbed
+         its own two non-recursive patterns and saw 33 of 49 files. It now
+         delegates discovery; test_the_reachability_gate_reads_the_same_tree
+         keeps it delegating.
 
     (2) and (3) keep their own path deliberately: (3) ships inside an image with
     no repo tree and falls back to a constant when the file is unreachable, so
@@ -2570,6 +3018,40 @@ class TestPlatformReaderParity:
             "reader — it reads one hard-coded ConfigMap, so anything the "
             "scanner found elsewhere is not being checked for tenant "
             f"silenceability at runtime: {sorted(missing)}")
+
+    def test_the_reachability_gate_reads_the_same_tree(self):
+        """The FOURTH reader, which the class docstring above used to omit.
+
+        `check_scrape_reachability.collect_rule_trees()` sits in the same
+        directory as the scanner and was globbing its own two non-recursive
+        patterns: `.yaml` only, ConfigMap only, no PrometheusRule / binaryData /
+        `kind: List` / multi-document. It opened 33 of the 49 files that ship
+        rules. Missing a tree is fail-open there too — an unseen rule is an
+        unseen CONSUMER, and a metric whose only consumer went unseen stops
+        being reported as unreachable.
+
+        It now delegates discovery to `_rule_tree`. This pins that: the rule ids
+        it attributes consumption to must name only files the scanner found, and
+        must cover every alerting rule the scanner sees.
+        """
+        from check_scrape_reachability import collect_rule_trees  # noqa: PLC0415
+
+        consumed, _outputs = collect_rule_trees()
+        gate_files = {rid.split(":", 1)[0]
+                      for ids in consumed.values() for rid in ids}
+        scanner_files = {w.split(":", 1)[0] for w, _d, _p in _rule_containers()}
+        assert gate_files, "the reachability gate attributed nothing — vacuous"
+        assert gate_files <= scanner_files, (
+            "the reachability gate reads rule files the content-based scanner "
+            f"does not: {sorted(gate_files - scanner_files)}")
+        # The direction that actually mattered: it used to see 16 fewer files.
+        # Files with only recording rules legitimately contribute no `consumed`
+        # entry, so compare against the alerting tree.
+        alerting_files = {w.split(":", 1)[0] for w, _r in _iter_repo_alert_rules()}
+        assert alerting_files <= gate_files, (
+            "these files ship alerting rules that the reachability gate never "
+            "read, so their input metrics are not checked for a scrape face: "
+            f"{sorted(alerting_files - gate_files)}")
 
     def test_the_two_filename_readers_agree_on_LABELS_not_just_names(self):
         """Same alertnames is not the same probe set.

@@ -144,6 +144,9 @@ sys.path.insert(0, str(_THIS_DIR.parent))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
+# The repo's one content-based rule-tree scanner. Same directory, zero
+# import cost — see collect_rule_trees for why this file no longer globs.
+from _rule_tree import _rule_containers  # noqa: E402
 
 PROM_CONFIGMAP = PROJECT_ROOT / "k8s" / "03-monitoring" / "configmap-prometheus.yaml"
 RULE_PACKS_DIR = PROJECT_ROOT / "rule-packs"
@@ -484,31 +487,34 @@ def _tenant_exporter_face_exists(jobs: list[dict]) -> bool:
 # ── rule-tree collection ────────────────────────────────────────────────────
 
 def collect_rule_trees() -> tuple[dict[str, set], set[str]]:
-    """(consumed metric → {consumer rule ids}, recording outputs of BOTH trees)."""
+    """(consumed metric → {consumer rule ids}, recording outputs of every tree).
+
+    ⛔ Discovery is DELEGATED to `_rule_tree`, the repo's one content-based
+    scanner, rather than re-globbed here. This function used to be the FOURTH
+    reader of "the rule trees" — two non-recursive globs, `.yaml` only, ConfigMap
+    only, no PrometheusRule / binaryData / `kind: List` / multi-document
+    handling — sitting in the same directory as the scanner, importable at zero
+    cost, and outside the cross-check that exists precisely because readers
+    drift. Measured: it opened 33 of the 49 files that ship rules, missing all
+    16 `operator-manifests/` PrometheusRules.
+
+    Missing a tree here is fail-open for THIS gate too: an unseen rule is an
+    unseen consumer, and a metric whose only consumer went unseen stops being
+    reported as unreachable. The 16 it missed happen to be exact generated
+    copies, so switching is a no-op on today's tree (verified: identical
+    consumed keys, recording outputs and leaf metrics) — the point is the day
+    they are not.
+    """
     consumed: dict[str, set] = defaultdict(set)
     outputs: set[str] = set()
-
-    def _ingest(rule_doc: dict, origin: str) -> None:
-        rules = [r for g in rule_doc.get("groups", []) or []
-                 for r in g.get("rules", []) or []]
+    for where, doc, _prov in _rule_containers():
+        rules = [r for g in (doc.get("groups") or [])
+                 for r in ((g or {}).get("rules") or [])]
         outputs.update(extract_recording_outputs(rules))
         for r in rules:
-            rid = f"{origin}::{r.get('alert') or r.get('record')}"
+            rid = f"{where}::{r.get('alert') or r.get('record')}"
             for m in extract_metrics(r.get("expr", "") or ""):
                 consumed[m].add(rid)
-
-    for p in sorted(RULE_PACKS_DIR.glob("rule-pack-*.yaml")):
-        doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-        if isinstance(doc, dict) and "groups" in doc:
-            _ingest(doc, p.name)
-    for p in sorted(K8S_RULES_DIR.glob("configmap-rules-*.yaml")):
-        doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-        if not isinstance(doc, dict) or doc.get("kind") != "ConfigMap":
-            continue
-        for body in (doc.get("data") or {}).values():
-            rd = yaml.safe_load(body)
-            if isinstance(rd, dict) and "groups" in rd:
-                _ingest(rd, p.name)
     return consumed, outputs
 
 

@@ -308,7 +308,8 @@
   ],
   "scripts/tools/lint/check_k8s_manifests.py": [
    "tests/lint/test_check_k8s_manifests.py",
-   "tests/lint/test_fallback_image_digest_pin.py"
+   "tests/lint/test_fallback_image_digest_pin.py",
+   "tests/ops/test_generate_routes_orchestration.py"
   ],
   "scripts/tools/lint/check_ksm_version_allowlist.py": [
    "tests/lint/test_check_ksm_version_allowlist.py"
@@ -702,7 +703,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "c721650fa83432ca52caf5a4bf4c64e369913c52e3540a65bc5681b056e586fd",
+ "source_digest": "d89a1f15ecab3faf90e8cd0d91be181eacb0dc41820bfa2b3a25642f4dd4bcb3",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1690,6 +1691,9 @@
   "k8s/03-monitoring/validatingadmissionpolicy-projection-gate.yaml": [
    "tests/shared/test_projection_gate_vap.py"
   ],
+  "k8s/04-tenant-api": [
+   "tests/ops/test_generate_routes_orchestration.py"
+  ],
   "k8s/04-tenant-api/configmap-rbac.yaml": [
    "tests/lint/test_check_admin_config_schema.py",
    "tests/ops/test_generate_routes_orchestration.py"
@@ -1700,7 +1704,8 @@
    "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   "k8s/crd": [
-   "tests/lint/test_check_k8s_manifests.py"
+   "tests/lint/test_check_k8s_manifests.py",
+   "tests/ops/test_generate_routes_orchestration.py"
   ],
   "mkdocs.yml": [
    "tests/lint/test_check_head_blob_hygiene.py"
