@@ -436,6 +436,9 @@
   "scripts/tools/ops/_grar_render.py": [
    "tests/ops/test_generate_routes_orchestration.py"
   ],
+  "scripts/tools/ops/_grar_routes.py": [
+   "tests/ops/test_generate_routes_orchestration.py"
+  ],
   "scripts/tools/ops/_grar_validate.py": [
    "tests/ops/test_generate_alertmanager_routes.py",
    "tests/ops/test_generate_routes_orchestration.py",
@@ -703,7 +706,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "2f285408de793e30ba44dc7b7df8dcb26499aa94ab3e024234a07a6f5c9222af",
+ "source_digest": "33e6496907adbeea74b7150567a1c8cd219218d1bc07f0ae3957e52219692837",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",

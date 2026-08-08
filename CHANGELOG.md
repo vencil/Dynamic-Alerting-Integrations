@@ -187,6 +187,11 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
   抽到 [`scripts/tools/lint/_rule_tree.py`](scripts/tools/lint/_rule_tree.py)。生產側**刻意保留自己的窄路徑**（它跑在沒有 repo tree 的 image 裡、檔案讀不到時 fallback 到常數，不能依賴 `git ls-files`）——它從這次抽出得到的不是共用實作，是 **`TestPlatformReaderParity` 這個交叉比對**：實測放進第二份手寫平台 ConfigMap 時，兩個檔名式 reader 看不見那條告警而掃描器看得見，交叉比對轉紅。以前那一天只會是個缺口。
   重構行為保持已逐項驗證（container / rules / platform / packs / offenders / expected_files / tracked 七項與抽出前完全相同）。ops 測試檔 3081 → 2546 行；`test_check_pint.py` 用 regex 讀常數的兩處同步指向新位置。`_source_pack_alerts` 的 pack 唯一性檢查從 `assert` 改為明確 `raise`——這是**唯一的行為變更**，方向是變嚴：實測 `python -O` 下舊版的 `assert` 被剝除，一份偽造的第二個 `rule-pack-redis.yaml` 會靜默併進 redis 的信任集合；新版擋下。一個 fail-closed 判斷不該可被最佳化掉。
 
+- **⛔ Watchdog 的契約豁免以名字為準，而那個名字租戶 pack 也能取（internal；行為變更）**：兩個 discriminator 契約各給 Watchdog 一張免死金牌，理由每次都是同一句「它跑在 index-0 route、`continue: false`」。但那是 `_build_watchdog_route()` 的事實，不是那七個字母的事實——寫成字面字串（全檔 17 處）等於把豁免轉讓給下一個叫 Watchdog 的東西。
+  **實測的洞在租戶側**：sentinel 契約的迴圈掃**全 repo**，豁免卻只看名字，所以 `rule-pack-redis.yaml` 裡一條 `severity: none`、無 `component`、名為 `Watchdog` 的告警**直接走過 #1095 契約**（實測：修法前該契約綠燈，修法後轉紅）——而它會 fall through 到租戶／NOC 通道，正是那個契約存在的理由。可能攔下它的「重複 alertname」斷言只掃 **platform** 樹（那支是為 runbook ledger 加的，不是為這件事）。
+  改為 `_heartbeat_alertnames()`：從 `_build_watchdog_route()` 的 matcher **推導**，matcher 解析借 `_grar_validate._pinned_label_values`（不自造第二套）。掃全樹的那個豁免點同時要求 **name AND platform 位置**。`_MIN_PLATFORM_ALERTS - 1` 的算術改成 `- len(_heartbeat_alertnames())`，parity 的 `- {"Watchdog"}` 同步。
+  新增 `test_the_heartbeat_exemption_is_route_derived_and_singular`，釘住那句理由的三種失效方式：route 不再 `continue: false`（豁免前提消失，而兩個契約還在發免死金牌）、第二條規則取用同名（Prometheus 接受不同 group 兩條 `- alert: Watchdog`）、豁免那條跑到 platform 樹外（等於租戶 pack 持有平台的 dead-man's-switch）。三種都實測轉紅。
+
 - **⛔ UTF-16 存的規則 manifest：kubectl 部署得了，掃描器讀不到，而且不留痕跡（internal；真的 fail-open）**：兩個 reader 都用 `read_text(encoding="utf-8")` 開檔，`UnicodeDecodeError` 一律 `continue` 吞掉。對 `kubectl apply` 實際串接的解碼器（`apimachinery/pkg/util/yaml.NewYAMLOrJSONDecoder` 1.36）實測四種編碼：
 
   | 編碼 | kubectl | 修前的掃描器 |

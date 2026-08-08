@@ -686,6 +686,36 @@ def _committed_alertmanager_config():
 _MIN_PLATFORM_ALERTS = 42
 
 
+@functools.lru_cache(maxsize=1)
+def _heartbeat_alertnames() -> frozenset:
+    """Alertnames the index-0 heartbeat route pins — DERIVED, not spelled here.
+
+    ⛔ This is the whole justification for the only exemption the discriminator
+    contracts grant. `Watchdog` carries no `component` and no `alert_source`
+    because it rides its own route at index 0 with `continue: false`; a
+    discriminator would make it selectable by a second channel and the external
+    dead-man's-switch would stop being the only thing watching it.
+
+    That reason is a property of `_build_watchdog_route()`, not of the seven
+    letters. Written as a literal at each use site — and it was, seventeen
+    times — the exemption transfers to whatever is named `Watchdog` next.
+    Measured: a rule named `Watchdog` in a TENANT pack, `severity: none`, no
+    `component`, walked straight through the #1095 sentinel contract, and the
+    duplicate-alertname assertion that might have caught it scans only the
+    PLATFORM tree (it was added for the runbook ledger, not for this).
+
+    Matcher parsing is borrowed from `_grar_validate` rather than re-regexed —
+    same discipline as everywhere else here.
+    """
+    from _grar_routes import _build_watchdog_route  # noqa: PLC0415
+    from _grar_validate import _pinned_label_values  # noqa: PLC0415
+
+    routes, _receivers = _build_watchdog_route()
+    return frozenset(
+        name for route in routes
+        for name in _pinned_label_values(route.get("matchers") or [], "alertname"))
+
+
 def _real_platform_label_sets():
     """Label sets of every SHIPPED platform alert, derived from the ConfigMap.
 
@@ -750,7 +780,7 @@ class TestPlatformAlertsNotTenantSilenceable:
         # therefore the whole tree minus that single documented exception —
         # written as arithmetic on the shared constant so growing the pack moves
         # this floor too, instead of leaving a second number to go stale.
-        assert len(sets) >= _MIN_PLATFORM_ALERTS - 1, (
+        assert len(sets) >= _MIN_PLATFORM_ALERTS - len(_heartbeat_alertnames()), (
             f"only {len(sets)} platform alerts derived")
         tenant_bearing = sorted(s["alertname"] for s in sets if "tenant" in s)
         assert tenant_bearing == [
@@ -1098,10 +1128,17 @@ class TestSentinelLabelContract:
             labels = rule.get("labels") or {}
             if labels.get("severity") != "none":
                 continue
-            if rule["alert"] == "Watchdog":
+            # ⛔ Name AND location. This loop spans the WHOLE repo, so a
+            # by-name-only exemption reaches into the tenant packs: a
+            # `severity: none` alert named `Watchdog` in rule-pack-redis.yaml
+            # was exempted here and invisible to the platform-scoped duplicate
+            # check, i.e. it fell through to the tenant/NOC channels — the
+            # exact #1095 leak this contract exists to stop.
+            if (rule["alert"] in _heartbeat_alertnames()
+                    and _is_platform_cm_location(where)):
                 assert "component" not in labels, (
-                    "Watchdog must NOT carry a component label — it rides its "
-                    "own index-0 route, not the sentinel sink (#1095)")
+                    f"{rule['alert']} must NOT carry a component label — it "
+                    "rides its own index-0 route, not the sentinel sink (#1095)")
                 continue
             seen.append(rule["alert"])
             assert labels.get("component") == "sentinel", (
@@ -1112,6 +1149,52 @@ class TestSentinelLabelContract:
         assert set(seen) >= {
             "TenantSilentWarning", "TenantSilentCritical",
             "TenantSeverityDedupEnabled", "CustomRecipeSilent"}, seen
+
+    def test_the_heartbeat_exemption_is_route_derived_and_singular(self):
+        """⛔ The exemption has to keep costing what it claims to cost.
+
+        Two contracts here grant exactly one alert a pass on the discriminator
+        they enforce, and the stated reason is always the same sentence: it
+        rides the index-0 route with `continue: false`. Three ways that sentence
+        can quietly stop being true, none of which anything checked:
+
+          1. the route stops being `continue: false` — the heartbeat becomes
+             selectable by a second channel and the exemption's whole premise
+             is gone, while both contracts keep granting it;
+          2. a SECOND rule takes the exempt name — Prometheus accepts two
+             `- alert: Watchdog` in different groups, and the duplicate check
+             that exists scans only the PLATFORM tree because it was added for
+             the runbook ledger;
+          3. the exempt rule moves OUT of the platform tree, at which point a
+             tenant pack is holding the platform's dead-man's-switch.
+        """
+        from _grar_routes import _build_watchdog_route  # noqa: PLC0415
+
+        names = _heartbeat_alertnames()
+        assert names, (
+            "the index-0 heartbeat route pins no alertname, so the exemptions "
+            "below grant nothing and every assertion that subtracts them is "
+            "off by their count")
+
+        routes, _receivers = _build_watchdog_route()
+        assert all(r.get("continue") is False for r in routes), (
+            "the heartbeat route no longer stops at itself, so the heartbeat "
+            f"IS reachable by a second channel — the reason {sorted(names)} is "
+            f"exempt from carrying a delivery discriminator no longer holds: "
+            f"{routes}")
+
+        # Whole tree, not the platform subset: the point is that nothing else
+        # anywhere may wear the name that buys the exemption.
+        holders = [(w, r) for w, r in _iter_repo_alert_rules()
+                   if r["alert"] in names]
+        assert len(holders) == len(names), (
+            f"{len(holders)} rules carry a heartbeat name {sorted(names)}, "
+            f"expected {len(names)}: {[w for w, _r in holders]}. A second one "
+            "inherits the exemption without touching a single contract.")
+        outside = [w for w, _r in holders if not _is_platform_cm_location(w)]
+        assert not outside, (
+            f"the heartbeat is defined outside the platform tree: {outside}. "
+            "A tenant rule pack would then own the platform's dead-man's-switch.")
 
     def test_component_sentinel_reserved_for_severity_none(self):
         # The discriminator is RESERVED: a deliverable (severity != none) alert
@@ -1419,7 +1502,7 @@ class TestPlatformAlertSourceContract:
         watchdog_checked = False
         for where, rule in self._platform_rules():
             labels = rule.get("labels") or {}
-            if rule["alert"] == "Watchdog":
+            if rule["alert"] in _heartbeat_alertnames():
                 watchdog_checked = True
                 assert "alert_source" not in labels, (
                     "Watchdog must NOT carry alert_source — it rides its own "
@@ -1439,9 +1522,10 @@ class TestPlatformAlertSourceContract:
             f"or was reached; every assertion above is vacuous")
         # `- 1`: Watchdog is skipped above (the one documented exception), so the
         # floor is the whole tree minus it. See _MIN_PLATFORM_ALERTS.
-        assert len(seen) >= _MIN_PLATFORM_ALERTS - 1, (
+        _exempt = len(_heartbeat_alertnames())
+        assert len(seen) >= _MIN_PLATFORM_ALERTS - _exempt, (
             f"only {len(seen)} platform alerts scanned, expected >= "
-            f"{_MIN_PLATFORM_ALERTS - 1}: {sorted(seen)}")
+            f"{_MIN_PLATFORM_ALERTS - _exempt}: {sorted(seen)}")
         assert set(seen) >= {
             "ThresholdExporterAbsent", "PrometheusRuleEvaluationFailing",
             "TenantApiSingleWriterBreach", "FederationAuditPipelineSilent",
@@ -3194,11 +3278,12 @@ class TestPlatformReaderParity:
         # index-0 heartbeat route and carries no component), so compare against
         # the scanner minus that one deliberate omission.
         reader = {s["alertname"] for s in _real_platform_label_sets()}
-        assert reader == scanner - {"Watchdog"}, (
+        assert reader == scanner - _heartbeat_alertnames(), (
             "the hard-coded-filename reader and the content-based scanner "
             "disagree about the platform tree.\n"
             f"  only the reader sees: {sorted(reader - scanner)}\n"
-            f"  only the scanner sees: {sorted(scanner - reader - {'Watchdog'})}")
+            f"  only the scanner sees: "
+            f"{sorted(scanner - reader - _heartbeat_alertnames())}")
 
     def test_production_identity_reader_matches_the_scanner(self):
         from _grar_validate import platform_alert_identities
@@ -3210,7 +3295,7 @@ class TestPlatformReaderParity:
             "reports platform alerts the scanner does not see, which means the "
             "two disagree about what the platform tree IS.\n"
             f"  only production sees: {sorted(prod - scanner)}")
-        missing = scanner - prod - {"Watchdog"}
+        missing = scanner - prod - _heartbeat_alertnames()
         assert not missing, (
             "these platform alerts are invisible to the PRODUCTION identity "
             "reader — it reads one hard-coded ConfigMap, so anything the "
