@@ -1,78 +1,163 @@
 # Session handoff — 平台告警治理 gate（branch `claude/rule-pack-governance-followup-q0fgur`）
 
-> ⛔ 這是 WIP branch 的暫存筆記，**merge 前刪除**（原本要放 `dev/`，但那是 gitignore 的暫存區，檔案不會進 repo 而容器會被回收，所以暫放這裡）。所有 commit subject 都標了「WIP，勿 merge」或屬於同一批未完成工作。
+> ⛔ 這是 WIP branch 的暫存筆記，**merge 前刪除**（原本要放 `dev/`，但那是 gitignore 的暫存區，
+> 檔案不會進 repo 而容器會被回收，所以暫放這裡）。
 
-**狀態**：10 個 commit，全部已推（遠端 = 本地 = `a59da668`，以 `git ls-remote` 驗過）。工作區乾淨。**沒有開 PR。**
+**狀態**：24 個 commit，HEAD = `1cace594`，遠端與本地同步，工作區乾淨。**沒有開 PR。**
+`tests/ops` + `tests/lint` = **6410 passed / 73 skipped**。
 
 ---
 
 ## ⛔ 明天第一件事
 
-**最後一批（`a59da668`）完全沒有經過盲審。** 前六輪盲審，每一輪都在我剛寫好、剛自認驗過的 code 裡找到 High——沒有一次例外。這一批動的是判準的核心邏輯，形狀跟前幾次一樣危險。
-
-我自己看得出的兩個可疑處，優先查：
-
-1. **`_source_pack_alerts()` 用「告警名」做集合比對** — 告警名會撞。兩個不同 pack 若有同名告警，`mine <= pack_alerts[claimed]` 可能誤判成立。
-2. **「任一 pack 的父集」那個 fallback**（`any(mine <= alerts for alerts in pack_alerts.values())`）— 一個只含**一條**常見告警名的手寫 artifact，可能被任何剛好含該名的 pack 認領，等於自動取得 generated 豁免。**這條 fallback 是我為了修 N1 誤報加的，很可能開了新洞。**
+沒有「必須先做」的阻塞項——上一批（`1cace594`）已跑完 mutation 並自審。
+直接從下面的〈剩餘工作〉挑。**兩個需要你先決定的**：S1 的三選一、S3 要不要獨立 PR。
 
 ---
 
-## 這輪做了什麼（六輪盲審 + 修補）
+## 這一段做完了什麼
 
-起點是三個 WIP commit（runbook 覆蓋率 gate、slugger 重寫、mkdocs anchor ledger）。之後每一輪都是「盲審 → 修 → 再審」。
+九個 commit，每一個都是「實測 → 修 → mutation 驗證轉紅 → 推」。
 
-**盲審抓到而我沒抓到的（節錄，全部已修）**：
+| commit | 內容 |
+|---|---|
+| `bce3c7bd` | 兩個 `>= 350` 非空底線**真的**換成逐檔覆蓋（上一批宣稱做了、實際沒做） |
+| `c8c513fe` | `platform_alert_identities()` 兩個 fail-open 缺口（只讀第一個 data key；expr 的 tenant 偵測漏 suffix 形式） |
+| `dc4f7a4c` | 掃描器判準整組沒測試——RVL 的 104 mutant 揭露 69 存活 |
+| `2975251e` | 更正上一條的存活數（我寫「降到 4」，那是估的） |
+| `95a64a36` | `items:` 蓋掉文件自身規則 → 交給 silent-zero 哨兵 |
+| `9db73247` | UTF-16 存的 manifest 部署得了但掃描器讀不到 |
+| `e90d89bb` | Watchdog 契約豁免改由 route 推導 |
+| `1cace594` | 補完 mutation：解析層 15 個守衛全無 fixture |
 
-- 我的 anchor ledger 在「債為 0」時印一句**祈使句**叫維護者刪掉整段 filter；照做之後整條 warning 管線死透且轉綠
-- 我寫在註解裡的「digest 不新增脆弱性」被一次**良性編輯**否證（改標題＋同批改它自己的 TOC 連結）
-- HTML 註解剝除放在 fence 判斷之前 → 一段普通的 markdown 範例讓 checker 從 0 變 30 個假 broken anchor
-- 誘餌檔用真值判斷 → 合法的空產物（`groups: []`）讓 gate 要求**租戶**告警加 `alert_source: platform`（RESERVED 值，會灌進 NOC）
-- provenance 對整檔做無錨點 substring 搜尋 → 標頭放在 annotation 值裡就生效
-- `_PLATFORM_PACK_ENTRIES` 的註解宣稱「lockstep 測試會回讀」——**沒有這種測試**
-- `_tracked_yaml_paths` 用 `git ls-files` 沒有 `-z`，而**同一個檔案的兄弟函式早就用了**
-- pint 的 tripwire 與測試**互相鎖死**：照 CI 自己的指示 ratchet 必然弄紅測試
+### 花錢買到、值得保留的事實
 
-**正面證據**（reviewer 給的，值得保留）：slugger 重寫用 `github-slugger@2.0.0` 對全 307 份 md / 5725 個 anchor 比對，**新實作 0 mismatch**（舊的 226 files mismatch / 1290 個漏產）。
+**kubectl 解碼器的實測行為**（用 `k8s.io/apimachinery` 1.36 寫小程式直接餵，
+不是推論；`kubectl apply --dry-run=client` **問不出來**，它在 flatten 之前就要 cluster discovery）：
+
+| 形狀 | `kubectl apply` 實際部署 |
+|---|---|
+| `kind: ConfigMap` + `data` | 1 個物件，data 保留 |
+| `kind: ConfigMap` + `items: []` + `data` | **0 個物件** |
+| `items` 非空 + 自己也有 `data` | 只有 items 裡那些 |
+| UTF-8 / UTF-8+BOM | 部署 |
+| **UTF-16 BE + BOM** | **部署** |
+| UTF-16 LE + BOM | `incomplete UTF-16 character`，不部署 |
+
+BE 過 LE 不過，是因為 `yaml.NewYAMLReader` 以 `\n` **位元組**切文件——
+big-endian 下切在 pair 邊界，little-endian 下切在 codepoint 中間。
+
+複現用的探針還在 `scratchpad/decoder/` 與 `scratchpad/utf16/`（容器回收後會消失，
+但 `go mod tidy` + 20 行就能重建，方法見 `9db73247` 的 commit message）。
 
 ---
 
-## RV8（第五輪紅隊）尚未處理的
+## 剩餘工作（依建議順序）
 
-它審的是 `ee6accef`，之後我推了 `0e61f096` / `86ad46c5` / `a59da668`。**下列需要重新確認是否仍活著**：
+### 1. S3 — `_norm_expr` 剝掉字串字面量裡的 `#`
 
-| # | 內容 | 我的判斷 |
-|---|---|---|
-| S6 | `kind: List` 包裝（`kubectl get -o yaml` 的原生形狀）三個 `elif` 都不匹配，doc 無聲落地 | **應該仍活著**，但現在只在部署目錄內 |
-| S7 | `except yaml.YAMLError: continue` — Helm template 化的規則永久靜默 | 部分處理（含 `- alert:` 的檔會被 `_rule_shaped_but_unparsed` 抓），但整檔跳過仍靜默 |
-| S8 | ConfigMap 的 `binaryData` 完全不看 | **仍活著** |
-| S9 | ledger **改名頂替**（把舊的改名並補 runbook，新的接收該名字） | **仍活著**——我擋的是重名，它用的是改名 |
-| N4 | `spec.spec.groups` 差一層就靜默（不可部署，但守門員宣稱的不變量不成立） | 仍活著 |
-| N5 | 掃描來源從檔案系統換成 git index 是覆蓋面**收窄**（未 tracked 但會被 `kubectl apply -f` 收到的檔案） | 仍活著，嚴重度低 |
-| N6 | 非 md runbook：無 anchor 的 `.yaml`、越界行號 `#L999999` 仍放行 | 仍活著 |
-| N7 | 空掃描下三支契約 vacuous 綠（suite 整體是紅的，但那三支自己沒有非空底線）。`test_every_platform_alert_has_a_derivable_plane` 最該補 | 仍活著 |
+**實測**：`up{job="a#b"}` 與 `up{job="a#c"}` 正規化後**相同**。兩個後果：provenance 可以用
+「只在 `#` 之後不同」的規則偽造；`check_rulepack_sync` 那支 CI drift gate 同樣看不見那種漂移
+（`_norm_expr` 是從它借來的，單一實作）。
 
-RV8 也提了一條**未能查證、建議實測**的：若有人用 Flux `kustomize-controller` 指向這些目錄（無 `kustomization.yaml` 時會遞迴 autodetect），`_SCAN_SKIP_PARTS` 就從設計極限降級為可部署繞過。
+修法要 quote-aware。**爆炸半徑最大**——它改的是一支 CI gate 對「兩條 expr 是否相同」的判準，
+必須先跑全樹 before/after 比對確認 0 diff。**建議獨立 PR。** 約 2-3h。
+
+### 2. S1 — helm template 在掃描面內但內容不可見（要你決定）
+
+`helm/` 底下 95 個 tracked YAML，**67 個 parse 不了**（Go template action）。今天沒有任何
+helm 檔放規則，而且「寫了字面 `- alert:` 又 parse 不了」的檔案**會**被哨兵抓到。
+殘留缺口只有一種：規則整個從 `toYaml .Values...` 注入，檔案裡沒有字面 `- alert:`。
+
+- (i) gate 裡跑 `helm template`——重，要 helm binary，但 `test_check_scrape_reachability.py` 已有先例
+- (ii) 把 `helm/` 移出 `_SHIPPED_ROOTS` 並誠實寫明不涵蓋
+- (iii) 加 tripwire：任何 helm values 長出 rules 形狀的 key 就紅 ← **我建議這個**，最便宜的誠實作法
+
+約 2h。
+
+### 3. 16 個仍存活的 mutant（RVL 那 69 個的餘數）
+
+- **A03–A08（6 個）** 全在 `_generated_pack_names`。它**已不在分類路徑上**（只剩測試 oracle，
+  註解已改成誠實敘述），嚴重度因此降一階——但 oracle 說謊會讓讀它的斷言跟著鬆。約 1h。
+- **A31 / A41**——`_SCAN_SKIP_PARTS` 註解自稱「deliberately EMPTY」、副檔名比對自稱大小寫不敏感
+  （`.YAML` 紅隊手法），兩個都沒有斷言釘住。約 30min。
+- **A29**（`raise` → `assert`）只在 `python -O` 下可觀測，要 subprocess 測試；
+  **A40**（`check=False`）要模擬 git 失敗。約 1h。
+- **A30 / A22 / A32** 判定語意等價。
+
+### 4. 小項
+
+- `TestPlatformReaderParity` 的 parity#2 只有 `assert prod`（≥1），沒有數值底線，
+  而它的結論已被 parity#1 + `test_runtime_default_is_the_derived_set_not_a_sample` 蘊含。
+  要嘛給它 `_MIN_PLATFORM_ALERTS`，要嘛在 docstring 講明它是推論式。
+- `test_check_pint.py` 用 regex 讀 `_rule_tree.py` 常數而不 import——模組註解已寫明那是刻意的
+  （要跟 `.pint.hcl` 的 include pattern 鎖步）。**判定不必動。**
+
+### 不必再做的
+
+上一版 handoff 的 RV8 清單（S6/S7/S8/S9/N4-N7）**全部已處理或已判定**：
+`kind: List` 與 binaryData 已修並有 fixture、ledger 改名頂替已改釘 expr digest、
+runbook 越界行號已修、三支契約的非空底線已補。
+
+最後一輪 mutation 剩下的 3 個存活**逐一可證明等價**，不要再花時間：
+`A85` 是刻意的 control（必須存活）、`A44` 拿掉的是恆真式（`_SCAN_SKIP_PARTS` 是 `frozenset()`）、
+`B07` 只在兩檔宣稱同一 pack 名時有差而那由唯一性 `raise` 禁止（該 raise 已有測試）。
 
 ---
 
-## 已知邊界（刻意保留，已寫進 `_is_platform_cm_location` docstring）
+## ⛔ 我這一段犯過的三個錯（同一種形狀，請保持警覺）
 
-- 裸 `groups:` 文件只在 `rule-packs/` 下辨識——這是**目錄判準**，與「內容而非位置」矛盾。保留是因為該形狀與 `tests/rulepacks/` 的 26 個 ADR-025 extract 無法區分。⚠️ **不能單獨拿掉**：一拿掉，那些 extract 的告警名會與平台 ConfigMap 重複，撞上重名斷言。
-- PrometheusRule 的 provenance 可由物件名取得，名字不擔保內容（`a59da668` 之後由內容比對兜底，但見上方可疑處 2）。
+三次都是**把沒實測的宣稱寫進 commit message / 註解**：
+
+1. `211c7fa5` 宣稱「兩個 350 換成逐檔覆蓋」——實際只拿掉 `>= 30`，兩個 350 一字未動，
+   而 `_expected_rule_files` 的 docstring 照著那個宣稱描述了一個沒發生的修復。**外審抓到。**
+2. `dc4f7a4c` 宣稱「存活 mutant 從 69 降到 4」——那個 4 是從「我補了幾支測試」反推的。
+   實數是 29 殺 / 13 活 / 27 未測。**自己補測時抓到。**
+3. `_decode_manifest` 的第一版用 `raw.decode("utf-16-le")`，那**不剝 BOM**
+   （只有 `utf-8-sig` 與無 endian 的 `utf-16`/`utf-32` 會），等於把我在同一段註解裡
+   描述的 provenance bug 從一種編碼擴散到四種。**我自己新寫的測試抓到，不是想出來的。**
+
+**規則**：任何寫進 commit message 或註解的數字／因果宣稱，都要有一條當場跑過的指令當證據。
+「我改了 X 所以 Y 應該變成 Z」不算。
+
+外審也有講錯的（S2 被指認為「可部署的繞過」，實測 kubectl 根本不部署那份文件）——
+**兩個方向都要驗**，不要照單全收，也不要因為它錯過一次就打折。
 
 ---
 
 ## 有用的作業方式（建議沿用）
 
-1. **盲審 worktree**：`git worktree add --detach /home/user/wt-<n>-q0fgur <branch>`，三個 reviewer 各一個、各給不同 lens（演算法正確性 / red-team / CI script fail-open）。⚠️ **不要在 reviewer 跑完前清掉 worktree**——我清太早，害三個 reviewer 中途要改用 `git show <sha>:<path>`。
-2. **prompt 必寫**：「diff 內新增的註解 / docstring / CHANGELOG 全部是**被審對象**，不是證據」。這句話是這輪最有效的一句。
-3. **反事實紀律**：注入攻擊 → 確認舊碼放行 → 修 → 確認轉紅 → 還原 → 確認不誤報。四步缺一不可，我漏掉「確認不誤報」時就出了 N1/N2 那種誤報。
-4. ⚠️ **清 `__pycache__`**：等長的程式碼編輯（如 `>=` 改 `==`）會讓 `(mtime, size)` 判定未變更而重用舊 bytecode，反事實會拿到**假綠**。用 `find . -name __pycache__ -exec rm -rf {} +` 加 `PYTHONDONTWRITEBYTECODE=1 python3 -B`。這是 reviewer 發現並回報的。
+1. **盲審 worktree**：`git worktree add --detach /home/user/wt-<n>-q0fgur <branch>`，
+   三個 reviewer 各一個、各給不同 lens（演算法正確性 / red-team / CI script fail-open）。
+   ⚠️ **不要在 reviewer 跑完前清掉 worktree。**
+2. **prompt 必寫**：「diff 內新增的註解 / docstring / CHANGELOG 全部是**被審對象**，不是證據」。
+   另外必寫「不要對工作區用 `git checkout`」——**我自己犯過一次，毀掉整輪修改。**
+3. **反事實四步**：注入 → 確認舊碼放行 → 修 → 確認轉紅 → 還原 → 確認不誤報。
+   缺「確認不誤報」就會出誤報（N1/N2、以及這輪 `utf-8-sig` 差點被報成 offender）。
+4. ⚠️ **清 `__pycache__`**：等長的程式碼編輯會讓 `(mtime, size)` 判定未變更而重用舊 bytecode，
+   反事實會拿到**假綠**。`find . -name __pycache__ -type d -exec rm -rf {} +` +
+   `PYTHONDONTWRITEBYTECODE=1 python3 -B`。
+5. **mutation 腳本的形狀**（`scratchpad/sweep.py`，值得重建）：
+   - **先驗證所有 anchor**（缺漏／多重命中都在動任何一行前中止）。實測攔下一個多重命中
+     （`A75` 的字串在 `_alert_names` 與 `_iter_repo_alert_rules` 各出現一次）。
+   - 結果**逐筆 flush** 到 log 檔（`buffering=1`），還原放 `finally`。
+     上一版就是一筆格式錯誤中途炸掉且沒還原，工作區留著 mutant。
+   - 每輪都放兩個 control：一個**語意相同**（必須存活，否則 harness 太敏感）、
+     一個**災難性失明**（掃描器回傳空；必須被殺，否則 harness 不可信）。
+   - 速度：約 17s/mutant（`tests/ops/test_generate_routes_orchestration.py` +
+     `tests/lint/test_check_pint.py`，`-x`）。29 個約 8 分鐘。
 
 ---
 
 ## 環境
 
-- 沙箱缺 `hypothesis` / `_cffi_backend` → `tests/` 全域有 4 個 collection error，與本變更無關。跑 `tests/ops tests/lint tests/rulepacks tests/helm` 即可（6498 passed / 231 skipped）。
-- commit 簽章伺服器偶發 503 → 重試即可（我遇過一次，第 2 次成功）。
-- commit scope enum 不含 `gates`，用 `ops`。
+- 沙箱缺 `hypothesis` → `tests/ops/test_property_based.py` collection error，**與本變更無關**
+  （`a2503a07` 亦然）。跑 `tests/ops tests/lint --ignore=tests/ops/test_property_based.py`。
+- 缺 `pytest-randomly` / `pytest-timeout` / `pytest-xdist` → 順序相依只能手動打散驗。
+  **「本機全綠」不等於「CI 全綠」。**
+- 沒有 `pre-commit` 執行檔。替代做法：parse `.pre-commit-config.yaml`，挑出 `files:` regex
+  命中改動檔的 auto-stage hook，直接跑它們的 `entry`（`pygrep` 語言的要當 regex 跑，
+  不是當指令跑）。本輪每次 commit 前都這樣做，15-20 個 hook。
+- 沒有 `kubectl` / `helm` / `ruff`。kubectl 可以現抓（`dl.k8s.io`），Go 可用（1.24.7），
+  proxy 下 `go mod tidy` 會通。
+- commit scope enum 不含 `gates` / `changelog`，用 `ops`。commit-msg hook 會擋。
