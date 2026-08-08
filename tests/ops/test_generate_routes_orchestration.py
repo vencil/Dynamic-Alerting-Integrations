@@ -695,8 +695,20 @@ def _real_platform_label_sets():
         rules' `labels:` blocks say nothing about tenant.
     Deriving instead of hardcoding keeps the guard from going stale when platform
     alerts are added or renamed.
+
+    ⛔ The "does this expr produce a `tenant` label" test is IMPORTED from the
+    production module, not re-expressed here. It used to be a second regex, and
+    the two had already drifted: production required an aggregator keyword
+    immediately before `by` and knew seven of them, so `sum(x) by (tenant)`,
+    `stddev by (tenant) (x)` and `quantile by (tenant) (…)` were tenant-bearing
+    to this reader and tenant-less to the one that actually guards the render
+    path. A test that derives the right answer independently and never compares
+    it to production's answer is not a guard — it is a second opinion nobody
+    reads. `_grar_validate` also parses ALL data/binaryData keys of ALL
+    ConfigMap docs; that part stays here as a deliberately narrow second reader,
+    and TestPlatformReaderParity is what makes the narrowness visible.
     """
-    import re as _re
+    from _grar_validate import _EXPR_TENANT_AGG_RE  # noqa: PLC0415
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     path = os.path.join(
         repo_root, "k8s", "03-monitoring", "configmap-rules-platform.yaml")
@@ -711,8 +723,7 @@ def _real_platform_label_sets():
                 if labels.get("alert_source") != "platform":
                     continue  # Watchdog rides its own lane; guarded separately
                 labels["alertname"] = rule["alert"]
-                if any("tenant" in [t.strip() for t in m.group(1).split(",")]
-                       for m in _re.finditer(r"\bby\s*\(([^)]*)\)", rule["expr"])):
+                if _EXPR_TENANT_AGG_RE.search(str(rule.get("expr", ""))):
                     labels.setdefault("tenant", "any-tenant")
                 out.append(labels)
     return out
@@ -2559,3 +2570,153 @@ class TestPlatformReaderParity:
             "reader — it reads one hard-coded ConfigMap, so anything the "
             "scanner found elsewhere is not being checked for tenant "
             f"silenceability at runtime: {sorted(missing)}")
+
+    def test_the_two_filename_readers_agree_on_LABELS_not_just_names(self):
+        """Same alertnames is not the same probe set.
+
+        ⛔ Comparing name sets is the weaker half of the comparison, and it is
+        blind to the half that decides the outcome. What
+        `find_tenant_silenceable_platform_inhibits` matches against is the LABEL
+        DICT, so two readers can list identical alertnames and still hand the
+        guard different answers — `tenant` is the label that flips it, it comes
+        from parsing the expr, and expr parsing is exactly where two hand-rolled
+        implementations drift. They HAD drifted: production wanted an aggregator
+        keyword right before `by`, so a reformat from `sum by (tenant) (x)` to
+        `sum(x) by (tenant)` — identical PromQL — moved the alert out of the
+        production probe set while every name-set assertion above stayed green.
+        The failure is silent AND fail-open: an unprobed alert makes a
+        tenant-triggered inhibit that would silence it read as safe.
+        """
+        from _grar_validate import platform_alert_identities  # noqa: PLC0415
+
+        def key(sets):
+            return {s["alertname"]: {k: v for k, v in sorted(s.items())}
+                    for s in sets}
+
+        prod, reader = key(platform_alert_identities()), key(
+            _real_platform_label_sets())
+        assert set(prod) == set(reader), (
+            f"name sets differ, compare labels is moot: "
+            f"{sorted(set(prod) ^ set(reader))}")
+        differing = {n: (prod[n], reader[n]) for n in prod
+                     if prod[n] != reader[n]}
+        assert not differing, (
+            "the two filename-anchored readers agree on WHICH platform alerts "
+            "exist but disagree on their fire-time labels; the production one "
+            "is what the runtime guard probes with:\n" + "\n".join(
+                f"  {n}: production={p} reader={r}"
+                for n, (p, r) in sorted(differing.items())))
+        # Non-vacuity on the label that decides the outcome: if no identity
+        # carries `tenant`, every dict above could be `{alertname, severity}`
+        # and the comparison would prove nothing about the drift it targets.
+        tenant_bearing = sorted(n for n, s in prod.items() if "tenant" in s)
+        assert len(tenant_bearing) >= 3, (
+            f"only {len(tenant_bearing)} tenant-bearing identities "
+            f"({tenant_bearing}) — the expr-derived label this test exists for "
+            "is barely present, so agreement on it is close to vacuous")
+
+
+class TestPlatformIdentityReaderCompleteness:
+    """`platform_alert_identities` must read the WHOLE ConfigMap file.
+
+    ⛔ Every alert this reader misses is one the runtime guard never probes, and
+    an unprobed alert makes a tenant-triggered inhibit that would silence it read
+    as SAFE. That is the fail-open direction, so "which parts of the file does it
+    open" is a security property, not a parsing detail. It used to open exactly
+    one: `docs[0]["data"]`'s first value.
+
+    The shipped file happens to be one document with one key today, which is why
+    none of the existing tests noticed — they all assert on the real tree. These
+    build the shapes instead.
+    """
+
+    @staticmethod
+    def _cm(name, data=None, binary_data=None):
+        doc = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": name}}
+        if data:
+            doc["data"] = data
+        if binary_data:
+            doc["binaryData"] = binary_data
+        return doc
+
+    @staticmethod
+    def _rules_body(alert, expr="up == 0", labels=None):
+        return yaml.safe_dump({"groups": [{"name": "g", "rules": [{
+            "alert": alert, "expr": expr,
+            "labels": labels or {"severity": "warning",
+                                 "alert_source": "platform"}}]}]})
+
+    def _identities(self, tmp_path, docs):
+        from _grar_validate import platform_alert_identities  # noqa: PLC0415
+        path = tmp_path / "cm.yaml"
+        path.write_text("\n---\n".join(yaml.safe_dump(d) for d in docs),
+                        encoding="utf-8")
+        # Explicit path => the module-level cache is bypassed (see the guard on
+        # `configmap_path is None`), so these never poison the real probe set.
+        return {i["alertname"]: i for i in platform_alert_identities(path)}
+
+    def test_second_data_key_in_the_same_configmap_is_read(self, tmp_path):
+        got = self._identities(tmp_path, [self._cm("rules", data={
+            "platform-alert.yml": self._rules_body("FirstKeyAlert"),
+            "platform-extra.yml": self._rules_body("SecondKeyAlert")})])
+        assert set(got) == {"FirstKeyAlert", "SecondKeyAlert"}, sorted(got)
+
+    def test_second_configmap_document_in_the_same_file_is_read(self, tmp_path):
+        got = self._identities(tmp_path, [
+            self._cm("rules-a", data={"a.yml": self._rules_body("DocOneAlert")}),
+            self._cm("rules-b", data={"b.yml": self._rules_body("DocTwoAlert")})])
+        assert set(got) == {"DocOneAlert", "DocTwoAlert"}, sorted(got)
+
+    def test_binarydata_rules_are_decoded(self, tmp_path):
+        import base64  # noqa: PLC0415
+        body = self._rules_body("BinaryDataAlert")
+        got = self._identities(tmp_path, [self._cm("rules", binary_data={
+            "platform-alert.yml": base64.b64encode(
+                body.encode("utf-8")).decode("ascii")})])
+        assert set(got) == {"BinaryDataAlert"}, sorted(got)
+
+    def test_one_undecodable_key_does_not_blank_the_probe_set(self, tmp_path):
+        """Fail-soft per key, because the alternative is fail-open for the file.
+
+        An exception here would escape into the caller's `except`, which
+        substitutes the six-entry fallback constant — i.e. one corrupt key would
+        silently shrink the probe set from the whole pack to a sample.
+        """
+        got = self._identities(tmp_path, [self._cm(
+            "rules",
+            data={"good.yml": self._rules_body("SurvivingAlert")},
+            binary_data={"corrupt.yml": "!!!! not base64 !!!!"})])
+        assert set(got) == {"SurvivingAlert"}, sorted(got)
+
+    def test_expr_derived_tenant_survives_a_pure_promql_reformat(self, tmp_path):
+        """The two spellings are the same query; both must carry `tenant`.
+
+        `sum by (tenant) (x)` and `sum(x) by (tenant)` differ only in where the
+        modifier sits. An aggregator-anchored pattern saw the first and not the
+        second, so reformatting one line moved a platform alert out of the guard.
+        """
+        for expr in ("sum by (tenant) (rate(x[5m])) > 1",
+                     "sum(rate(x[5m])) by (tenant) > 1",
+                     "stddev by (tenant) (x) > 1",
+                     "max by (namespace, tenant) (x) > 1"):
+            got = self._identities(tmp_path, [self._cm("rules", data={
+                "a.yml": self._rules_body("ReformatAlert", expr=expr)})])
+            assert got["ReformatAlert"].get("tenant") == "any-tenant", (
+                f"{expr!r} produces a `tenant` label at fire time but the "
+                "identity reader did not record one")
+
+    def test_by_without_tenant_does_not_invent_the_label(self, tmp_path):
+        """The counterweight: over-detection is fail-closed but not free.
+
+        Without this, widening the pattern to "any `by (`" would pass every test
+        above while making every aggregating alert tenant-bearing — which turns
+        legitimate tenant-scoped inhibit rules into false violations.
+        """
+        for expr in ("sum by (namespace) (x) > 1",
+                     "sum by (tenant_id) (x) > 1",
+                     "sum without (tenant) (x) > 1"):
+            got = self._identities(tmp_path, [self._cm("rules", data={
+                "a.yml": self._rules_body("NoTenantAlert", expr=expr)})])
+            assert "tenant" not in got["NoTenantAlert"], (
+                f"{expr!r} does not group by `tenant`, but the reader claimed a "
+                f"tenant label: {got['NoTenantAlert']}")
