@@ -187,6 +187,19 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
   抽到 [`scripts/tools/lint/_rule_tree.py`](scripts/tools/lint/_rule_tree.py)。生產側**刻意保留自己的窄路徑**（它跑在沒有 repo tree 的 image 裡、檔案讀不到時 fallback 到常數，不能依賴 `git ls-files`）——它從這次抽出得到的不是共用實作，是 **`TestPlatformReaderParity` 這個交叉比對**：實測放進第二份手寫平台 ConfigMap 時，兩個檔名式 reader 看不見那條告警而掃描器看得見，交叉比對轉紅。以前那一天只會是個缺口。
   重構行為保持已逐項驗證（container / rules / platform / packs / offenders / expected_files / tracked 七項與抽出前完全相同）。ops 測試檔 3081 → 2546 行；`test_check_pint.py` 用 regex 讀常數的兩處同步指向新位置。`_source_pack_alerts` 的 pack 唯一性檢查從 `assert` 改為明確 `raise`——這是**唯一的行為變更**，方向是變嚴：實測 `python -O` 下舊版的 `assert` 被剝除，一份偽造的第二個 `rule-pack-redis.yaml` 會靜默併進 redis 的信任集合；新版擋下。一個 fail-closed 判斷不該可被最佳化掉。
 
+- **⛔ UTF-16 存的規則 manifest：kubectl 部署得了，掃描器讀不到，而且不留痕跡（internal；真的 fail-open）**：兩個 reader 都用 `read_text(encoding="utf-8")` 開檔，`UnicodeDecodeError` 一律 `continue` 吞掉。對 `kubectl apply` 實際串接的解碼器（`apimachinery/pkg/util/yaml.NewYAMLOrJSONDecoder` 1.36）實測四種編碼：
+
+  | 編碼 | kubectl | 修前的掃描器 |
+  |---|---|---|
+  | UTF-8 | 部署 | 讀得到 |
+  | UTF-8 + BOM | 部署 | 讀得到，但 `﻿` 留著 |
+  | **UTF-16 BE + BOM** | **部署** | **靜默跳過** |
+  | UTF-16 LE + BOM | `incomplete UTF-16 character` | 靜默跳過 |
+
+  BE 能過而 LE 不能，是因為 `yaml.NewYAMLReader` 以 `\n` **位元組**切文件——big-endian 下切在 pair 邊界上、little-endian 下切在 codepoint 中間。所以一個是**真的 fail-open**（規則上線、四個契約全沒看到），另一個是 silent zero（作者以為上線了），而且兩者都**不留任何痕跡**——gate 在缺口上回報綠燈，比沒有 gate 更糟。
+  改為 `_decode_manifest()`：BOM 偵測（UTF-8/16/32，**UTF-32 的 BOM 以 UTF-16 的 BOM 開頭**，所以順序是承重的）＋ UTF-8 fallback。掃描器因此看得見那些規則，哨兵則另外反對編碼本身：非 UTF-8 的規則檔一律回報（「能不能部署取決於位元組順序」不是可以出貨的狀態），任何標準編碼都解不出來的 tracked YAML **無條件**回報（沒東西能判斷它是否含規則，這正是不能跳過的理由；kubectl 的 YAML parser 也只收 UTF-8/16/32）。實測全 repo 目前 0 個非純 UTF-8 YAML，底線從零開始。
+  **`utf-8-sig` 刻意不算 offender**：kubectl 照樣部署，而 BOM 現在也不再讓檔案掉 provenance——原本 `read_text("utf-8")` 留下的 `﻿` 會讓 `_header_provenance` 的第一行 `startswith("#")` 失敗，把 generated 檔重新分類成手寫平台樹。**這個 BOM bug 我自己在實作裡犯了一次**：`raw.decode("utf-16-le")` 不剝 BOM（只有 `utf-8-sig` 與無 endian 的 `utf-16`/`utf-32` 會），等於把同一個 bug 從一種編碼擴散到四種——是新加的 `test_every_bom_decodes_to_the_same_text` 抓到的，不是想出來的。修法改成切掉 BOM 再解。七個 mutant 逐一驗證轉紅。
+
 - **⛔ `items:` 蓋掉文件自身規則是 silent zero，不是繞過（internal；外審指認的方向是錯的）**：外審把 `kind: ConfigMap` ＋ `items: []` ＋ `data` 列為「可部署的繞過」——掃描器跳過該文件、但規則照樣上線。**實測不是這樣。** 用 `kubectl apply` 實際使用的解碼器（`unstructured.UnstructuredJSONScheme`，apimachinery 1.36）驗證三種形狀：`ConfigMap` ＋ `data` → 1 個物件、data 保留；`ConfigMap` ＋ `items: []` ＋ `data` → **0 個物件**；`items` 非空 ＋ 自己也有 `data` → 只有 items 裡那些。`items` 讓文件變成 LIST，而 list 自己的 `data` 會被丟掉。**掃描器跳過它跟叢集一致，discovery side 沒有洞要補。**
   剩下的問題是另一種、而且更容易誤觸：**規則不會部署、維護者以為會、沒有任何計數會動**。把 `kubectl get -o yaml` 的 `items:` 貼進手寫 ConfigMap，或刪光包裝物件後留下 `items: []`，都是普通的手滑。這正是 silent-zero 哨兵存在的理由，所以改成把它交給哨兵：拆封分支若發現該文件自己還有 `data` / `binaryData` / `spec`，產一個 marker container，哨兵回報「`items:` 讓 kubectl 把這份文件當 LIST、丟掉它自己的 data/spec——裡面的規則不會部署」。三種外層內容形狀（`data` / `binaryData` / PrometheusRule 的 `spec`）各有測試，四個 mutant（不產 marker／拿掉哨兵分支／條件只看 `data`／條件漏 `spec`）逐一驗證轉紅。活體樹 offenders 仍為空、63 個 container 不變。
 

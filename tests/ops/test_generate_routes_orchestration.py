@@ -11,6 +11,7 @@ the suffix change captures the actual concern instead of a generic "extended".
 The two files stay split because the combined LOC (~2200) is too large for a
 single comprehensive test file.
 """
+import codecs
 import functools
 import hashlib
 import json
@@ -1054,6 +1055,7 @@ from _rule_tree import (  # noqa: E402
     _PLATFORM_CM_PREFIX,
     _alert_names,
     _containers_from_text,
+    _decode_manifest,
     _expected_rule_files,
     _generated_pack_names,
     _is_platform_cm_location,
@@ -2980,6 +2982,139 @@ class TestSilentZeroSentinel:
             (("pr.yaml:both-keys",
               {**self.HEALTHY, "spec": self.HEALTHY}, None),))
         assert got == {}, got
+
+    def _sentinel_over(self, tmp_path, files):
+        """Run the REAL sentinel over a synthetic tree of {relpath: bytes}."""
+        import _rule_tree  # noqa: PLC0415
+        for rel, raw in files.items():
+            dest = tmp_path / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(raw)
+        saved = (_rule_tree._REPO_ROOT, _rule_tree._tracked_yaml_paths,
+                 _rule_tree._rule_containers)
+        try:
+            _rule_tree._reset_caches()
+            _rule_tree._REPO_ROOT = str(tmp_path)
+            _rule_tree._tracked_yaml_paths = lambda: sorted(files)
+            _rule_tree._rule_containers = tuple
+            _rule_shaped_but_unparsed.cache_clear()
+            return dict(_rule_shaped_but_unparsed())
+        finally:
+            (_rule_tree._REPO_ROOT, _rule_tree._tracked_yaml_paths,
+             _rule_tree._rule_containers) = saved
+            _rule_tree._reset_caches()
+
+    RULES_DOC = ("apiVersion: v1\nkind: ConfigMap\n"
+                 "metadata:\n  name: prometheus-rules-platform\n"
+                 "data:\n  platform-alert.yml: |\n    groups:\n"
+                 "      - name: g\n        rules:\n"
+                 "          - alert: EncodedAlert\n            expr: up == 0\n")
+
+    def test_a_utf16_rules_manifest_is_scanned_and_objected_to(self, tmp_path):
+        """⛔ The one encoding the cluster accepts and this scanner could not read.
+
+        Both readers here opened manifests with `read_text(encoding="utf-8")`
+        and swallowed `UnicodeDecodeError` with a bare `continue`. Measured
+        against the decoder `kubectl apply` actually uses
+        (`apimachinery/pkg/util/yaml.NewYAMLOrJSONDecoder`, 1.36):
+
+            UTF-16 BE + BOM  -> kubectl APPLIES it   (fail-open: rules shipped
+                                                      that no contract gated)
+            UTF-16 LE + BOM  -> kubectl errors       (silent zero: the author
+                                                      believes they shipped)
+
+        Both were invisible AND left no offender, which is the combination that
+        makes a gate worse than useless — it reports green over the gap.
+
+        Two properties, and the test needs both: the scanner must now SEE the
+        rules (so every contract applies to them), and the sentinel must still
+        OBJECT to the encoding (because which of the two outcomes above you get
+        depends on byte order, and that is not a state to ship).
+        """
+        for label, enc in (("UTF-16 BE", "utf-16-be"), ("UTF-16 LE", "utf-16-le")):
+            raw = (codecs.BOM_UTF16_BE if enc.endswith("be")
+                   else codecs.BOM_UTF16_LE) + self.RULES_DOC.encode(enc)
+            rel = "k8s/03-monitoring/configmap-rules-platform.yaml"
+
+            text, got_enc = _decode_manifest(raw)
+            assert text is not None and got_enc == enc, (
+                f"{label}: the decoder did not recognise the BOM ({got_enc})")
+            alerts = {a for _w, d, _p in _containers_from_text(rel, text)
+                      for a, *_ in _alert_names(d)}
+            assert alerts == {"EncodedAlert"}, (
+                f"{label}: kubectl can read these rules and the scanner still "
+                f"cannot — every contract is blind to them. Got {alerts}")
+
+            got = self._sentinel_over(tmp_path / enc, {rel: raw})
+            assert rel in got, (
+                f"{label}: a rules manifest shipped as {enc} drew no objection "
+                f"at all: {got}")
+            assert "UTF-8" in got[rel] and enc in got[rel], got[rel]
+
+    def test_every_bom_decodes_to_the_same_text(self):
+        """⛔ Order matters, and getting it wrong is silent corruption.
+
+        The UTF-32 BOMs BEGIN with the UTF-16 ones — `ff fe 00 00` starts with
+        `ff fe` — so a UTF-16-first table decodes a UTF-32 file as UTF-16 and
+        hands the scanner plausible-looking garbage instead of rules. Nothing
+        raises; the file just stops containing alerts. Measured: reordering the
+        table left the whole suite green until this case existed.
+        """
+        for bom, enc, payload_enc in (
+                (codecs.BOM_UTF8, "utf-8-sig", "utf-8"),
+                (codecs.BOM_UTF16_LE, "utf-16-le", "utf-16-le"),
+                (codecs.BOM_UTF16_BE, "utf-16-be", "utf-16-be"),
+                (codecs.BOM_UTF32_LE, "utf-32-le", "utf-32-le"),
+                (codecs.BOM_UTF32_BE, "utf-32-be", "utf-32-be")):
+            text, got = _decode_manifest(bom + self.RULES_DOC.encode(payload_enc))
+            assert got == enc, f"BOM for {enc} was read as {got}"
+            assert text == self.RULES_DOC, (
+                f"{enc} decoded to something other than the original text — a "
+                "misread encoding does not raise, it just stops containing "
+                f"alerts: {text[:60]!r}")
+        # …and with no BOM at all it is plain UTF-8, BOM-free.
+        assert _decode_manifest(self.RULES_DOC.encode("utf-8")) == (
+            self.RULES_DOC, "utf-8")
+
+    def test_a_file_no_encoding_decodes_is_reported_not_skipped(self, tmp_path):
+        """The residual: bytes that are not any standard Unicode encoding.
+
+        Nothing can tell whether it holds rules — that is exactly why it cannot
+        be skipped. kubectl's YAML parser takes UTF-8/16/32 and nothing else, so
+        such a file is a defect however it got there, and the sentinel is the
+        only thing in the repo that would ever mention it.
+        """
+        rel = "k8s/03-monitoring/configmap-rules-broken.yaml"
+        raw = b"\xff\xfe\x41" + self.RULES_DOC.encode("latin-1")[:40] + b"\xc0\xc1"
+        got = self._sentinel_over(tmp_path, {rel: raw})
+        assert rel in got, f"an undecodable shipped manifest was skipped: {got}"
+        assert "encoding" in got[rel]
+
+    def test_a_utf8_bom_does_not_cost_a_file_its_provenance(self, tmp_path):
+        """A BOM is invisible to a human and fatal to the header scan.
+
+        `read_text("utf-8")` keeps the `\ufeff`, so the first line of a
+        generated file fails `startswith("#")`, `_header_provenance` returns
+        None, and the file is reclassified as hand-authored platform — the gate
+        then demands the RESERVED `alert_source: platform` on tenant alerts.
+        `utf-8-sig` is what makes the BOM cost nothing.
+        """
+        header = ("# GENERATED from rule-packs/rule-pack-redis.yaml by\n"
+                  "# scripts/x.py — DO NOT EDIT.\n")
+        raw = codecs.BOM_UTF8 + (header + self.RULES_DOC).encode("utf-8")
+        text, enc = _decode_manifest(raw)
+        assert enc == "utf-8-sig" and not text.startswith("\ufeff"), enc
+        provs = {p for _w, _d, p in _containers_from_text("k8s/x.yaml", text)}
+        assert provs == {"redis"}, (
+            f"a byte-order mark cost this file its generator provenance: {provs}")
+        # ⛔ …and it is NOT an offender. kubectl applies a BOM-prefixed UTF-8
+        # manifest (measured), and the BOM no longer costs anything here, so
+        # this configuration WORKS — flagging it would be a false positive, and
+        # the message ("depends on the byte order") would be untrue of UTF-8.
+        # Without this, tightening the check to `enc != "utf-8"` stays green.
+        rel = "k8s/03-monitoring/configmap-rules-bom.yaml"
+        assert self._sentinel_over(tmp_path, {rel: raw}) == {}, (
+            "a working UTF-8-with-BOM manifest was reported as broken")
 
     def test_a_file_that_declares_alerts_and_will_not_parse_is_reported(
             self, tmp_path):

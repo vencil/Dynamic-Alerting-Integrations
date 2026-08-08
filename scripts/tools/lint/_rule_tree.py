@@ -22,6 +22,7 @@ test_generate_routes_orchestration.py::TestPlatformReaderParity.
 from __future__ import annotations
 
 import base64
+import codecs
 import functools
 import json
 import re
@@ -77,6 +78,70 @@ _RULES_FILE_EXTS = (".yaml", ".yml")
 # rule-pack counterpart").
 _RULES_CM_PREFIX = "configmap-rules-"
 _RULE_PACK_PREFIX = "rule-pack-"
+
+
+# BOM → codec, longest first: the UTF-32 BOMs BEGIN with the UTF-16 ones
+# (`ff fe 00 00` starts with `ff fe`), so testing UTF-16 first would decode a
+# UTF-32 file as UTF-16 and produce garbage instead of rules.
+_BOMS = (
+    (codecs.BOM_UTF32_LE, "utf-32-le"), (codecs.BOM_UTF32_BE, "utf-32-be"),
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF16_LE, "utf-16-le"), (codecs.BOM_UTF16_BE, "utf-16-be"),
+)
+
+
+def _decode_manifest(raw: bytes) -> "tuple[str | None, str]":
+    """(text, encoding) for a manifest's bytes; text is None if nothing decodes.
+
+    ⛔ NOT `read_text(encoding="utf-8")`. That raises on a UTF-16 file, and both
+    readers here used to swallow the exception and `continue` — so a rules
+    ConfigMap saved as UTF-16 was invisible to every contract AND left no trace.
+    Measured against the decoder `kubectl apply` streams manifests through
+    (`k8s.io/apimachinery/pkg/util/yaml.NewYAMLOrJSONDecoder`, 1.36):
+
+        UTF-8              -> applied
+        UTF-8 + BOM        -> applied
+        UTF-16 BE + BOM    -> APPLIED   <- deploys, and we could not see it
+        UTF-16 LE + BOM    -> "incomplete UTF-16 character"
+
+    The BE/LE asymmetry is not a quirk to rely on: `yaml.NewYAMLReader` splits
+    documents on the `\\n` BYTE, which stays pair-aligned in big-endian and
+    splits mid-codepoint in little-endian. So one of the two ships rules we
+    never gated (fail-open) and the other silently ships nothing (silent zero),
+    and neither said a word. Decode both, and let the sentinel object to the
+    encoding separately — see `_rule_shaped_but_unparsed`.
+
+    `utf-8-sig` for the plain-BOM case is load-bearing beyond tidiness:
+    `read_text("utf-8")` keeps the `\\ufeff`, which makes the first line of
+    `_header_provenance` fail `startswith("#")` and drops a generated file's
+    provenance — reclassifying it as hand-authored platform.
+    """
+    for bom, enc in _BOMS:
+        if raw.startswith(bom):
+            # ⛔ Slice the BOM off rather than trusting the codec to. Only
+            # `utf-8-sig` and the endian-less `utf-16`/`utf-32` do that; the
+            # explicit `utf-16-le` &c. hand back a leading `\\ufeff`, and that
+            # single invisible character is the provenance bug described below
+            # — reintroduced for four encodings instead of one. Found by
+            # test_every_bom_decodes_to_the_same_text, not by reasoning.
+            try:
+                return raw[len(bom):].decode(
+                    "utf-8" if enc == "utf-8-sig" else enc), enc
+            except UnicodeDecodeError:
+                return None, enc
+    try:
+        return raw.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError:
+        return None, "unknown"
+
+
+def _read_manifest(rel: str) -> "tuple[str | None, str]":
+    """`_decode_manifest` for a repo-relative path; (None, "unreadable") on OSError."""
+    try:
+        raw = (Path(_REPO_ROOT) / rel).read_bytes()
+    except OSError:
+        return None, "unreadable"
+    return _decode_manifest(raw)
 
 
 def _strip_rules_ext(name: str) -> str | None:
@@ -530,11 +595,9 @@ def _iter_rule_containers():
     platform artifact — see _is_platform_cm_location.
     """
     for rel in _tracked_yaml_paths():
-        path = Path(_REPO_ROOT) / rel
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
+        text, _enc = _read_manifest(rel)
+        if text is None:
+            continue          # reported by _rule_shaped_but_unparsed, not dropped
         yield from _containers_from_text(rel, text)
 
 
@@ -718,14 +781,40 @@ def _rule_shaped_but_unparsed():
     # this repo currently fail to parse (helm templates carrying Go actions);
     # none holds rules today, so only flag one that visibly tries to.
     for rel in _tracked_yaml_paths():
-        try:
-            text = (Path(_REPO_ROOT) / rel).read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        text, enc = _read_manifest(rel)
+        # ⛔ UNCONDITIONAL, and it cannot be conditioned on rule-shape because
+        # nothing here can read the file to find out. A shipped .yaml that no
+        # standard encoding decodes is not a manifest kubectl can apply either
+        # (its YAML parser takes UTF-8/16/32 and nothing else), so this fires on
+        # a real defect every time — measured: zero tracked YAML in this repo is
+        # anything but plain UTF-8, so the floor starts at zero and stays there.
+        if text is None and enc != "unreadable":
+            offenders.append((rel, f"no standard encoding decodes this file "
+                                   f"({enc}); the scanner cannot read it and "
+                                   "neither can kubectl"))
+            continue
+        if text is None:
             continue
         # ⛔ Regex, not a literal. `-  alert:` (two spaces) is the same YAML and
         # evaded the substring, so the "declares alerts but will not parse"
         # tripwire could be stepped around with a whitespace edit.
         if not re.search(r"^\s*-\s+alert\s*:", text, re.M):
+            continue
+        # ⛔ A rules file is UTF-8 or it is a bug, even though the decoder above
+        # now reads the others. Whether the rules reach the cluster depends on
+        # the byte order: UTF-16 BE applies, UTF-16 LE dies on
+        # `yaml.NewYAMLReader`'s `\n`-byte document split. "Deploys or silently
+        # does not, depending on endianness" is not a state to leave shipped, and
+        # every other reader in this repo opens manifests as UTF-8.
+        # `utf-8-sig` is deliberately NOT an offender: kubectl applies a
+        # BOM-prefixed UTF-8 manifest (measured), and the slice above means the
+        # BOM no longer costs the file its provenance. It works, so saying it is
+        # broken would be a false positive — and the message below would be a
+        # lie, since endianness has nothing to do with it.
+        if enc not in ("utf-8", "utf-8-sig"):
+            offenders.append((rel, f"declares alerts but ships as {enc}, not "
+                                   "UTF-8 — whether kubectl applies it depends "
+                                   "on the byte order"))
             continue
         try:
             list(yaml.safe_load_all(text))
