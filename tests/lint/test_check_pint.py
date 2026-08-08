@@ -114,14 +114,17 @@ def test_platform_configmap_is_in_scope_by_prefix_and_both_extensions():
       pytest-side scanners — which key off a PREFIX plus `(".yaml", ".yml")` — keep
       counting it, so the two sides disagree about what "the platform pack" is.
 
-    The prefix/extension judgment is read back out of the pytest module rather than
-    restated here, so the two cannot drift.
+    The prefix/extension judgment is read back out of the rule-tree module rather
+    than restated here, so the two cannot drift.
     """
     hcl = _read(".pint.hcl")
     include = _hcl_list(hcl, "include")
     relaxed = _hcl_list(hcl, "relaxed")
 
-    ops = _read("tests/ops/test_generate_routes_orchestration.py")
+    # The scanner moved out of the pytest module into an importable one; read
+    # the prefix/extension judgment from wherever it actually lives so this
+    # lockstep keeps pointing at the definition rather than at a stale copy.
+    ops = _read("scripts/tools/lint/_rule_tree.py")
     m_prefix = re.search(r'_PLATFORM_CM_PREFIX\s*=\s*"([^"]+)"', ops)
     assert m_prefix, "_PLATFORM_CM_PREFIX not found in the platform-pack scanner"
     prefix = m_prefix.group(1)
