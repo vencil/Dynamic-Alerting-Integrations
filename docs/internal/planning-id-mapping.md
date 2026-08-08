@@ -190,6 +190,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TRK-355 | [#1273](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1273) | 租戶告警也壓 `alert_source: tenant`，讓平台/租戶過濾兩側都是正向匹配（`defer-with-trigger`；#1270 review defer 出） | — |
 | TRK-356 | [#1292](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1292) | 目錄層繼承的 `_custom_alerts` 在 exporter 端沒有資料平面 — Python 編譯器做 UNION 繼承、Go 兩個讀取點只吃 `Tenants[tenant]` ⇒ 整棵子樹的 custom 告警 `on(tenant) group_left` 永遠 join 空集合 | — |
 | TRK-357 | [#1322](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1322) | 週期輪詢的 reconciler 抓不到短於一輪（300s）的 un-revoke — TRK-352 的鎖存讓「已取樣到的偵測」抵達人，但不改變是否取樣到；事件驅動偵測需同時放寬三道刻意收緊的權限（`defer-with-trigger`） | [#1238](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1238) |
+| TRK-358 | [#1366](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1366) | 行尾政策守衛只是 pytest、不是 pre-commit hook — 忘記 `newline=` 本地全綠、要 push 後才從 CI 得知；建議併進結構相同的 `check_open_encoding.py`（`defer-with-trigger`；#1363 review defer 出） | — |
 
 ## 不在 mapping 範圍
 
