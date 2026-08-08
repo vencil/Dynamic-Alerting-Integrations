@@ -2606,6 +2606,67 @@ class TestContainerDiscovery:
                 f"{header.splitlines()[0]!r} was not unwrapped; kubectl applies "
                 "it identically to `kind: List`")
 
+    def test_an_items_key_shadowing_a_documents_own_rules_is_reported(self):
+        """⛔ Not a bypass — a SILENT ZERO, and the distinction is the finding.
+
+        The reviewer who raised this called it a deployable bypass: `items: []`
+        on a `kind: ConfigMap` makes the scanner skip the document while its
+        `data` still ships. That is not what happens. Verified against the real
+        decoder `kubectl apply` uses (`unstructured.UnstructuredJSONScheme`,
+        apimachinery 1.36):
+
+            ConfigMap + data                -> 1 object, data kept
+            ConfigMap + `items: []` + data  -> 0 objects
+            items non-empty + own data      -> only the items
+
+        `items` makes the document a LIST, and a list's own `data` is discarded.
+        So the scanner agrees with the cluster, and there is nothing to close on
+        the discovery side.
+
+        What is left is worse in one respect and cheaper to hit: the rules do
+        not deploy, the maintainer believes they do, and no counter anywhere
+        moves. Pasting the `items:` key out of a `kubectl get -o yaml` dump, or
+        deleting the wrapped objects and leaving `items: []` behind, is an
+        ordinary accident. That is the silent zero the sentinel exists for.
+        """
+        rules = ("data:\n  r.yml: |\n    groups:\n      - name: g\n"
+                 "        rules:\n          - alert: NeverDeployed\n"
+                 "            expr: up == 0\n")
+        head = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: shadowed}\n"
+
+        # The control: without `items`, this is an ordinary rules ConfigMap.
+        assert self._alerts(head + rules) == {"NeverDeployed"}
+
+        # All three shapes the outer content can take. binaryData is a real
+        # delivery path in this repo (kubelet's MakePayload fallback) and `spec`
+        # is the PrometheusRule face, so a condition that only looked at `data`
+        # would leave two thirds of the shape silently dropped again.
+        import base64 as _b64  # noqa: PLC0415
+        b64 = _b64.b64encode(
+            yaml.safe_dump({"groups": [{"name": "g", "rules": [
+                {"alert": "NeverDeployed", "expr": "up == 0"}]}]}
+                           ).encode("utf-8")).decode("ascii")
+        for label, text in (
+                ("empty items", head + "items: []\n" + rules),
+                ("items with a decoy", head + rules +
+                 "items:\n  - {apiVersion: v1, kind: ConfigMap, "
+                 "metadata: {name: decoy}, data: {d.yml: \"groups: []\"}}\n"),
+                ("binaryData", head + "items: []\n"
+                 f"binaryData:\n  r.yml: {b64}\n"),
+                ("PrometheusRule spec", "apiVersion: monitoring.coreos.com/v1\n"
+                 "kind: PrometheusRule\nmetadata: {name: shadowed}\n"
+                 "items: []\nspec:\n  groups:\n    - name: g\n      rules:\n"
+                 "        - alert: NeverDeployed\n          expr: up == 0\n")):
+            rel = "k8s/03-monitoring/configmap-rules-shadowed.yaml"
+            got = list(_containers_from_text(rel, text))
+            assert {a for _w, d, _p in got for a, *_ in _alert_names(d)} == set(), (
+                f"{label}: the scanner reported rules that kubectl discards")
+            flagged = [w for w, d, _p in got
+                       if "_own_content_shadowed_by_items" in d]
+            assert flagged, (
+                f"{label}: the document's own rules are silently dropped by both "
+                f"the cluster and this scanner, and nothing flagged it: {got}")
+
     def test_generator_header_does_not_cross_a_document_boundary(self):
         # A hand-authored document appended after `---` must not inherit the
         # provenance declared in the file's opening comments.
@@ -2889,6 +2950,8 @@ class TestSilentZeroSentinel:
             "cm.yaml:spec-nested": {"spec": self.HEALTHY},
             "cm.yaml:groups-forgotten": {"rules": [
                 {"alert": "Orphan", "expr": "up == 0"}]},
+            "cm.yaml:shadowed-by-items": {
+                "_own_content_shadowed_by_items": True},
         }
         got = self._offenders_for(
             tuple((w, d, None) for w, d in cases.items())

@@ -586,6 +586,23 @@ def _containers_from_text(rel: str, text: str):
                 # contents invisible — including, measured, a tenant alert
                 # wearing the RESERVED `alert_source: platform`, which turned the
                 # reserved-value contract off entirely.
+                # ⛔ …and the outer document's OWN content is dropped, by
+                # kubectl and therefore by us. Verified against
+                # `unstructured.UnstructuredJSONScheme` (k8s 1.36 apimachinery),
+                # which is what `apply` decodes with:
+                #   ConfigMap + data                 -> 1 object, data kept
+                #   ConfigMap + `items: []` + data   -> 0 objects
+                #   items non-empty + own data       -> only the items
+                # So skipping it is CORRECT — but it is a SILENT ZERO, and a
+                # cheap accident: paste the `items:` key out of a
+                # `kubectl get -o yaml` dump into a hand-authored ConfigMap, or
+                # delete the wrapped objects and leave `items: []` behind, and
+                # your platform rules stop deploying with nothing saying so.
+                # Hand it to the sentinel rather than dropping it quietly.
+                if (doc.get("data") or doc.get("binaryData")
+                        or isinstance(doc.get("spec"), dict)):
+                    yield (f"{rel}:{doc.get('metadata', {}).get('name', '?')}",
+                           {"_own_content_shadowed_by_items": True}, header_prov)
                 for item in (doc.get("items") or []):
                     if isinstance(item, dict):
                         docs_todo.append(item)
@@ -723,6 +740,11 @@ def _rule_shaped_but_unparsed():
         if "_misplaced_groups" in doc:
             offenders.append((where, "PrometheusRule with groups: at the top "
                                      "level instead of under spec:"))
+            continue
+        if "_own_content_shadowed_by_items" in doc:
+            offenders.append((where, "an `items:` key makes kubectl treat this "
+                                     "document as a LIST and discard its own "
+                                     "data/spec — the rules in it do not deploy"))
             continue
         nested = doc.get("spec")
         if isinstance(nested, dict) and nested.get("groups"):
