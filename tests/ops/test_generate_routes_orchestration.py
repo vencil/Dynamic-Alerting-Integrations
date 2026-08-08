@@ -11,7 +11,9 @@ the suffix change captures the actual concern instead of a generic "extended".
 The two files stay split because the combined LOC (~2200) is too large for a
 single comprehensive test file.
 """
+import base64
 import functools
+import hashlib
 import json
 import os
 import posixpath
@@ -1199,22 +1201,46 @@ def _platform_rule_locations() -> frozenset:
 
 
 def _alert_names(doc) -> frozenset:
-    """Alert names a rules document declares (empty for recording-only)."""
-    names = set()
+    """(alert name, expr) pairs a rules document declares.
+
+    ⛔ The NAME alone is not identity. Matching on names made "generated" cost
+    one borrowed string: a hand-authored ConfigMap declaring `alert: RedisDown`
+    over `expr: da_platform_writer_lock_lost > 0` was adopted by the redis pack
+    and left all four contracts. Pairing the name with its expression means a
+    copy has to actually be a copy — which is what the word was supposed to
+    mean, and what the comment claiming forgery "costs as much as writing the
+    rules" needed in order to be true.
+    """
+    pairs = set()
     for group in (doc.get("groups") or []):
         if isinstance(group, dict):
             for rule in (group.get("rules") or []):
                 if isinstance(rule, dict) and "alert" in rule:
-                    names.add(rule["alert"])
-    return frozenset(names)
+                    pairs.add((rule["alert"], str(rule.get("expr", "")).strip()))
+    return frozenset(pairs)
 
 
 @functools.lru_cache(maxsize=1)
 def _source_pack_alerts() -> dict:
-    """{pack name: the alert names its rule-packs/ source declares}."""
+    """{pack name: the (alert, expr) pairs its rule-packs/ source declares}.
+
+    ⛔ Only the pack FILES themselves — `rule-packs/rule-pack-<name>.{yaml,yml}`,
+    at the top of the tree — may define what a pack contains. Accepting any
+    container under rule-packs/ that *claimed* a provenance reopened forgery on
+    the source side: rule-packs/ is the one tree scanned recursively, so a file
+    dropped into rule-packs/recipes/examples/conf.d/ carrying a fake
+    `# GENERATED from rule-packs/rule-pack-redis.yaml` header could write its
+    own alerts into redis's trusted set, and a manifest matching them then
+    walked out of all four contracts. Fixing the consumer side while leaving
+    the producer side credulous just moved where the lie had to be told.
+    """
     out = {}
     for where, doc, prov in _rule_containers():
-        if where.startswith("rule-packs/") and prov:
+        if not prov:
+            continue
+        name = PurePosixPath(where).name
+        expected = {f"{_RULE_PACK_PREFIX}{prov}{ext}" for ext in _RULES_FILE_EXTS}
+        if where == f"rule-packs/{name}" and name in expected:
             out.setdefault(prov, set()).update(_alert_names(doc))
     return {k: frozenset(v) for k, v in out.items()}
 
@@ -1228,38 +1254,23 @@ _SCAN_SKIP_PARTS = frozenset({
 })
 
 
-@functools.lru_cache(maxsize=1)
-def _deployed_dirs() -> tuple:
-    """Directories this repo's own deploy commands hand to `kubectl apply -f`.
-
-    ⛔ This is the POSITIVE "shipped" signal, and it is DERIVED, not listed.
-    Scanning every YAML in the repo and defaulting to platform made the gate
-    fail-closed over things that are not deployments at all: a BYO
-    PrometheusRule sample under docs/ — a file whose entire purpose is to be
-    copied by a customer — was told to add `alert_source: platform`, a reserved
-    label that would pipe their alerts into our NOC. A gate that cannot tell a
-    shipped manifest from an illustration of one is not tightening coverage,
-    it is taxing documentation.
-
-    Reading the targets out of the deploy scripts keeps scope honest in both
-    directions: add a `kubectl apply -f` for a new directory and it is covered
-    automatically; nothing is covered because someone remembered to list it.
-    NON-RECURSIVE, matching kubectl's default — `operator-manifests/fixtures/`
-    is not applied by `kubectl apply -f operator-manifests/`, so it is not in
-    scope here either.
-    """
-    targets = set()
-    pat = re.compile(r'kubectl apply -f\s+"?([^\s"|;&]+)')
-    for rel in ("scripts/setup.sh", "operator-manifests/README.md", "k8s/README.md"):
-        path = Path(_REPO_ROOT) / rel
-        if not path.exists():
-            continue
-        for raw in pat.findall(path.read_text(encoding="utf-8")):
-            cleaned = raw.replace("${K8S_DIR}", "k8s").replace("$K8S_DIR", "k8s")
-            cleaned = cleaned.strip("/")
-            if cleaned and not cleaned.startswith("-"):
-                targets.add(cleaned)
-    return tuple(sorted(targets))
+# ⛔ The SHIPPED roots. Anchored on this repo's own existing answer to "what is
+# a deployed manifest": scripts/tools/lint/check_k8s_manifests.py (the L4 raw-
+# manifest SAST) scans MANIFEST_ROOT = "k8s" — all of it, recursively.
+#
+# The previous attempt derived scope by regex-ing `kubectl apply -f` out of
+# scripts/setup.sh. That looked more principled and was strictly worse: setup.sh
+# is a 62-line Kind bootstrap that deploys namespaces and monitoring and stops,
+# so k8s/04-tenant-api/ and k8s/crd/ silently left the scan — and k8s/crd/ is
+# deployed by `make assembler-install-crd`, from a Makefile the parser never
+# read. One of the two directories it dropped was the very example the previous
+# commit claimed to have fixed. A derivation is only as good as the source it
+# derives from, and that source was not the deployment SSOT.
+#
+# RECURSIVE, unlike `kubectl apply -f <dir>`: coverage should not depend on how
+# a maintainer happens to invoke kubectl, and a rules file moved into a
+# subdirectory must not leave every contract (CodeRabbit, PR #1270).
+_SHIPPED_ROOTS = ("k8s/", "operator-manifests/", "rule-packs/")
 
 
 def _tracked_yaml_paths():
@@ -1279,21 +1290,10 @@ def _tracked_yaml_paths():
     out = subprocess.run(
         ["git", "-C", _REPO_ROOT, "ls-files", "-z"],
         capture_output=True, text=True, check=True).stdout
-    deployed = _deployed_dirs()
-
-    def in_scope(rel: str) -> bool:
-        # rule-packs/ is the AUTHORING surface: not applied directly, but it is
-        # what every generated copy is derived from, so it must be read to know
-        # what "generated" means at all.
-        if rel.startswith("rule-packs/"):
-            return True
-        parent = PurePosixPath(rel).parent.as_posix()
-        return parent in deployed          # direct child only — kubectl is not recursive
-
     return sorted(p for p in out.split("\0") if p
                   and p.lower().endswith((".yaml", ".yml"))
                   and not (_SCAN_SKIP_PARTS & set(PurePosixPath(p).parts))
-                  and in_scope(p))
+                  and p.startswith(_SHIPPED_ROOTS))
 
 
 @functools.lru_cache(maxsize=1)
@@ -1405,41 +1405,67 @@ def _iter_rule_containers():
         if "groups" not in text:
             continue
 
-        for chunk, doc in _documents(text):
+        for chunk, top_doc in _documents(text):
             header_prov = _header_provenance(chunk)
-            if not isinstance(doc, dict):
-                continue
-            kind = doc.get("kind")
-            if kind == "ConfigMap":
-                prov = header_prov
-                for key, body in (doc.get("data") or {}).items():
-                    try:
-                        inner = yaml.safe_load(body) if isinstance(body, str) else body
-                    except yaml.YAMLError:
-                        continue
-                    if isinstance(inner, dict) and (
-                            _is_rule_groups(inner.get("groups"))
-                            or isinstance(inner.get("spec"), dict)):
-                        yield f"{rel}:{key}", inner, prov
-            elif kind == "PrometheusRule":
-                # ⛔ `groups` at the TOP level of a PrometheusRule is the
-                # commonest paste error and the tripwire below cannot see it:
-                # that check receives `doc["spec"]`, so the misplaced key is
-                # outside what it is handed. Normalise here, where both halves
-                # are still visible, and let the tripwire flag the empty spec.
-                if _is_rule_groups(doc.get("groups")) and not (
-                        isinstance(doc.get("spec"), dict) and doc["spec"].get("groups")):
-                    yield rel, {"_misplaced_groups": doc.get("groups")}, None
+            docs_todo = [top_doc]
+            while docs_todo:
+                doc = docs_todo.pop(0)
+                if not isinstance(doc, dict):
                     continue
-                name = (doc.get("metadata") or {}).get("name") or ""
-                prov = (name[len("da-rule-pack-"):]
-                        if name.startswith("da-rule-pack-") else header_prov)
-                yield rel, (doc.get("spec") or {}), prov
-            elif _is_rule_groups(doc.get("groups")) and rel.startswith("rule-packs/"):
-                stem = _strip_rules_ext(PurePosixPath(rel).name)
-                prov = (stem[len(_RULE_PACK_PREFIX):]
-                        if stem and stem.startswith(_RULE_PACK_PREFIX) else None)
-                yield rel, doc, prov
+                kind = doc.get("kind")
+                if kind == "List":
+                    # ⛔ `kind: List` is what `kubectl get -o yaml` emits for multiple
+                    # objects and what `kubectl apply -f` happily takes back. Three
+                    # hard-coded kinds meant a wrapper nobody had to invent made the
+                    # contents invisible — including, measured, a tenant alert
+                    # wearing the RESERVED `alert_source: platform`, which turned the
+                    # reserved-value contract off entirely.
+                    for item in (doc.get("items") or []):
+                        if isinstance(item, dict):
+                            docs_todo.append(item)
+                    continue
+                if kind == "ConfigMap":
+                    prov = header_prov
+                    # ⛔ binaryData counts. kubelet's configmap MakePayload falls
+                    # back to BinaryData when a projected `items` key is absent from
+                    # Data (k8s pkg/volume/configmap/configmap.go), and this repo
+                    # mounts its rules exactly that way — so base64 is a real
+                    # delivery path, not an obfuscation. Reading only `data` left it
+                    # unscanned AND defeated the raw-text `- alert:` tripwire.
+                    entries = dict(doc.get("data") or {})
+                    for key, blob in (doc.get("binaryData") or {}).items():
+                        try:
+                            entries.setdefault(key, base64.b64decode(blob).decode("utf-8"))
+                        except (ValueError, UnicodeDecodeError):
+                            continue
+                    for key, body in entries.items():
+                        try:
+                            inner = yaml.safe_load(body) if isinstance(body, str) else body
+                        except yaml.YAMLError:
+                            continue
+                        if isinstance(inner, dict) and (
+                                _is_rule_groups(inner.get("groups"))
+                                or isinstance(inner.get("spec"), dict)):
+                            yield f"{rel}:{key}", inner, prov
+                elif kind == "PrometheusRule":
+                    # ⛔ `groups` at the TOP level of a PrometheusRule is the
+                    # commonest paste error and the tripwire below cannot see it:
+                    # that check receives `doc["spec"]`, so the misplaced key is
+                    # outside what it is handed. Normalise here, where both halves
+                    # are still visible, and let the tripwire flag the empty spec.
+                    if _is_rule_groups(doc.get("groups")) and not (
+                            isinstance(doc.get("spec"), dict) and doc["spec"].get("groups")):
+                        yield rel, {"_misplaced_groups": doc.get("groups")}, None
+                        continue
+                    name = (doc.get("metadata") or {}).get("name") or ""
+                    prov = (name[len("da-rule-pack-"):]
+                            if name.startswith("da-rule-pack-") else header_prov)
+                    yield rel, (doc.get("spec") or {}), prov
+                elif _is_rule_groups(doc.get("groups")) and rel.startswith("rule-packs/"):
+                    stem = _strip_rules_ext(PurePosixPath(rel).name)
+                    prov = (stem[len(_RULE_PACK_PREFIX):]
+                            if stem and stem.startswith(_RULE_PACK_PREFIX) else None)
+                    yield rel, doc, prov
 
 
 def _iter_repo_alert_rules():
@@ -1481,7 +1507,10 @@ def _rule_shaped_but_unparsed():
             text = (Path(_REPO_ROOT) / rel).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        if "- alert:" not in text:
+        # ⛔ Regex, not a literal. `-  alert:` (two spaces) is the same YAML and
+        # evaded the substring, so the "declares alerts but will not parse"
+        # tripwire could be stepped around with a whitespace edit.
+        if not re.search(r"^\s*-\s+alert\s*:", text, re.M):
             continue
         try:
             list(yaml.safe_load_all(text))
@@ -1547,7 +1576,9 @@ class TestSentinelLabelContract:
     def test_component_sentinel_reserved_for_severity_none(self):
         # The discriminator is RESERVED: a deliverable (severity != none) alert
         # must never ride component="sentinel" or the sinkhole would eat it.
+        examined = 0
         for where, rule in self._iter_alert_rules():
+            examined += 1
             labels = rule.get("labels") or {}
             if labels.get("component") == "sentinel":
                 assert labels.get("severity") == "none", (
@@ -1555,6 +1586,11 @@ class TestSentinelLabelContract:
                     f'component="sentinel" but severity='
                     f"{labels.get('severity')!r} — the sentinel sink would "
                     f"swallow a deliverable alert (#1095)")
+        # ⛔ Non-vacuity: every assertion above lives inside the loop, so an
+        # empty scan makes this contract pass by examining nothing.
+        assert examined >= 350, (
+            f"only {examined} alert(s) examined — the reserved-value claim is "
+            "only as strong as the coverage behind it")
 
 
 # ============================================================
@@ -1669,14 +1705,23 @@ class TestPlatformAlertSourceContract:
             ("fake.yaml:no-prov", {}, None),
             ("fake.yaml:real-pack", {}, sorted(packs)[0]),
         )
+        # ⛔ Clear EVERY cache that reads containers, not just the one under
+        # test. `_platform_rule_locations` now consults `_source_pack_alerts`,
+        # which is also memoised: clearing one left the other to be populated
+        # from the FAKE list, so this test passed only when something earlier in
+        # the session had warmed the real value. Running it alone failed —
+        # order-dependence, and the kind that looks like a real defect.
         original = _rule_containers
         try:
-            globals()["_rule_containers"] = lambda: fake
+            _source_pack_alerts.cache_clear()
+            _source_pack_alerts()            # memoise from the REAL tree FIRST…
+            globals()["_rule_containers"] = lambda: fake   # …then swap
             _platform_rule_locations.cache_clear()
             got = _platform_rule_locations()
         finally:
             globals()["_rule_containers"] = original
             _platform_rule_locations.cache_clear()
+            _source_pack_alerts.cache_clear()
         assert "fake.yaml:missing-pack" in got, (
             "a header naming a pack that does not exist must NOT confer "
             "generated status — stale or fabricated provenance is not provenance")
@@ -1722,8 +1767,10 @@ class TestPlatformAlertSourceContract:
         # dual-delivered into the platform/NOC channel by the operator's
         # enforced route (continue:true), which is exactly the leak the custom
         # isolation subtree exists to prevent.
-        offenders = []
+        offenders, non_platform_seen = [], 0
         for where, rule in _iter_repo_alert_rules():
+            if not _is_platform_cm_location(where):
+                non_platform_seen += 1
             labels = rule.get("labels") or {}
             if "alert_source" not in labels:
                 continue
@@ -1738,6 +1785,15 @@ class TestPlatformAlertSourceContract:
             "alert_source is RESERVED for the platform self-monitoring pack "
             f"({_PLATFORM_CM_PREFIX}*.yaml); these rules would be swept into the "
             f"platform NOC channel: {offenders}")
+        # ⛔ Non-vacuity on the side this contract is ABOUT. Every other floor in
+        # this file counts PLATFORM alerts, so a bypass that hides only
+        # non-platform containers keeps all of them satisfied and leaves this
+        # test — the one asserting the value is reserved AGAINST tenants —
+        # trivially green. Measured: a `kind: List` wrapper did exactly that.
+        assert non_platform_seen >= 350, (
+            f"only {non_platform_seen} non-platform alert(s) examined; a "
+            "reserved-value claim is only as good as the tenant-side coverage "
+            "behind it")
 
 
 # ============================================================
@@ -2115,6 +2171,36 @@ class TestPlatformRunbookCoverageContract:
         # _LEDGER_ORIGIN, so a typo sat there silently, and once #1360 empties
         # the ledger these two names would stay valid forever — a standing
         # licence to re-add exactly them, unreviewed.
+        # ⛔ A name is a slot, not an identity. Rename the real
+        # CronJobLastRunFailed, give it a runbook, then land a NEW runbook-less
+        # critical under the vacated name: the ledger is untouched, the subset
+        # pin holds, `unknown` is empty (the name still exists), and there are
+        # no duplicates. Pinning each ledger entry to its EXPRESSION makes the
+        # slot non-transferable — taking the name over means matching the rule.
+        # Digest rather than the literal: these exprs are multi-line PromQL and
+        # pasting them here would rot on any reformat while saying nothing a
+        # reader can check at a glance.
+        def _expr_digest(expr: str) -> str:
+            return hashlib.sha256(
+                " ".join(str(expr).split()).encode("utf-8")).hexdigest()[:16]
+
+        _LEDGER_EXPR_DIGESTS = {
+            "CronJobLastRunFailed": "47e14d4f7ecebc93",
+            "MassExporterOutage": "ceb1cee6443d2c81",
+        }
+        by_expr = {r["alert"]: str(r.get("expr", ""))
+                   for _w, r in _iter_repo_alert_rules()
+                   if _is_platform_cm_location(_w)}
+        for alert, pinned in _LEDGER_EXPR_DIGESTS.items():
+            if alert in by_expr:
+                actual = _expr_digest(by_expr[alert])
+                assert actual == pinned, (
+                    f"{alert} still carries its ledger exemption but its expr "
+                    f"changed (digest {actual}, pinned {pinned}). If the alert "
+                    f"was legitimately rewritten, update the pin deliberately; "
+                    f"if a DIFFERENT alert took the vacated name over, it does "
+                    f"not inherit the exemption.")
+
         unknown = _LEDGER_ORIGIN - set(names)
         assert not unknown, (
             f"_LEDGER_ORIGIN names alert(s) that do not exist in the platform "
@@ -2206,6 +2292,16 @@ class TestPlatformRunbookCoverageContract:
                                f"{rel} exists on disk but is NOT tracked by git — "
                                "blob/main serves the committed tree, so this 404s"))
                 continue
+            # ⛔ Checked BEFORE the no-anchor shortcut. A runbook_url pointing
+            # at a bare .yaml resolves, so `if not anchor: continue` waved it
+            # through — but "the URL 200s" was never the bar; the bar is that
+            # the on-call lands on something that answers the page.
+            if target.suffix.lower() not in (".md", ".markdown"):
+                if not anchor:
+                    broken.append((where, rule["alert"], url,
+                                   f"{rel} is not Markdown — an on-call opening "
+                                   f"this gets raw source, not a runbook"))
+                    continue
             if not anchor:
                 continue
             # ⛔ Non-Markdown blobs offer only line refs. `_doc_anchors` slugs
@@ -2216,11 +2312,22 @@ class TestPlatformRunbookCoverageContract:
             # gained this guard in _check_anchor; the borrowed reader bypasses
             # it, so the one consumer that most needs it was the one left out.
             if target.suffix.lower() not in (".md", ".markdown"):
+                first_line = int(re.match(r"L(\d+)", anchor).group(1)) if re.match(
+                    r"L\d+", anchor) else 0
+                total_lines = len(target.read_text(
+                    encoding="utf-8", errors="replace").splitlines())
                 if not re.fullmatch(r"L\d+(C\d+)?(-L\d+(C\d+)?)?", anchor):
                     broken.append((where, rule["alert"], url,
                                    f"{rel} is not Markdown — GitHub renders it as "
                                    f"source and offers only #L<n> line refs, so "
                                    f"#{anchor} does not exist"))
+                elif not 1 <= first_line <= total_lines:
+                    # ⛔ Bounds too. `#L999999` on a 270-line file is not a 404,
+                    # it just scrolls nowhere — precisely the "burns the
+                    # on-call's first click" this gate names as its reason.
+                    broken.append((where, rule["alert"], url,
+                                   f"#{anchor} is past the end of {rel} "
+                                   f"({total_lines} lines)"))
                 continue
             slugs = _doc_anchors(target)
             if anchor not in slugs:
@@ -2420,6 +2527,10 @@ class TestPlatformAlertPlaneContract:
             "them is undecidable. Pin the namespace in the selector, or add the "
             "alert to _EDGE_LOCAL_BY_SELECTOR naming the workload and its home "
             f"cluster: {unresolved}")
+
+        assert len(self._platform_alerts()) >= _MIN_PLATFORM_ALERTS, (
+            "the platform tree did not load — every alert below went unexamined "
+            "and this test would pass on an empty scan")
 
     def test_edge_local_set_matches_the_reviewed_expectation(self):
         derived = {rule["alert"]
