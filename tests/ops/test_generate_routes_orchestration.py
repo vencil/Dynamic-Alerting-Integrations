@@ -1233,7 +1233,10 @@ def _alert_names(doc) -> frozenset:
         if isinstance(group, dict):
             for rule in (group.get("rules") or []):
                 if isinstance(rule, dict) and "alert" in rule:
-                    pairs.add((rule["alert"], _norm_expr(rule.get("expr", ""))))
+                    body = {k: v for k, v in rule.items() if k != "expr"}
+                    pairs.add((rule["alert"],
+                               _norm_expr(rule.get("expr", "")),
+                               json.dumps(body, sort_keys=True, default=str)))
     return frozenset(pairs)
 
 
@@ -1251,7 +1254,7 @@ def _source_pack_alerts() -> dict:
     walked out of all four contracts. Fixing the consumer side while leaving
     the producer side credulous just moved where the lie had to be told.
     """
-    out = {}
+    out, seen_files = {}, {}
     for where, doc, prov in _rule_containers():
         if not prov:
             continue
@@ -1265,7 +1268,21 @@ def _source_pack_alerts() -> dict:
         name = PurePosixPath(where).name
         expected = {f"{_RULE_PACK_PREFIX}{prov}{ext}" for ext in _RULES_FILE_EXTS}
         if where.startswith("rule-packs/") and name in expected:
+            seen_files.setdefault(prov, set()).add(where)
             out.setdefault(prov, set()).update(_alert_names(doc))
+    # ⛔ ONE file per pack name. Recursion is right — a pack moved into a
+    # subdirectory is still that pack — but `.update()` merging whatever else
+    # claims the name is not: dropping a second `rule-pack-redis.yaml` into
+    # rule-packs/recipes/examples/conf.d/ silently added its alerts to redis's
+    # trusted set, and any manifest matching them then walked out of all four
+    # contracts. The earlier top-level-only rule blocked that by accident of
+    # path uniqueness, at the cost of a false positive on legitimate moves.
+    # Uniqueness is the property both cases actually wanted.
+    duplicated = {k: sorted(v) for k, v in seen_files.items() if len(v) > 1}
+    assert not duplicated, (
+        f"more than one file claims the same rule pack: {duplicated}. A pack "
+        "name is an identity; two files claiming it means one of them is "
+        "forging provenance, or a copy was left behind after a move.")
     return {k: frozenset(v) for k, v in out.items()}
 
 
@@ -1299,7 +1316,7 @@ _SCAN_SKIP_PARTS = frozenset()
 # RECURSIVE, unlike `kubectl apply -f <dir>`: coverage should not depend on how
 # a maintainer happens to invoke kubectl, and a rules file moved into a
 # subdirectory must not leave every contract (CodeRabbit, PR #1270).
-_SHIPPED_ROOTS = ("k8s/", "operator-manifests/", "rule-packs/")
+_SHIPPED_ROOTS = ("k8s/", "operator-manifests/", "rule-packs/", "helm/")
 
 
 def _tracked_yaml_paths():
@@ -1365,6 +1382,8 @@ def _header_provenance(chunk: str):
         stripped = line.strip()
         if not stripped:
             continue
+        if stripped == "---":
+            continue                 # document-start marker, not content
         if not stripped.startswith("#"):
             return None              # past the leading comment block
         m = gen_re.search(stripped)
@@ -1444,87 +1463,103 @@ def _containers_from_text(rel: str, text: str):
     Keeping the parsing reachable without git or a repo checkout is what lets
     TestContainerDiscovery pin each one with the shape that motivated it.
     """
-    def _emit():
-        # ⛔ Prefilter must be WIDER than the criterion, or it silently becomes
-        # one. Every tighter spelling tried here has been wrong in a different
-        # direction: `"groups:"` as a literal misses the legal `groups :` and
-        # the quoted key `"groups":`; a `^`-anchored pattern misses the deployed
-        # tree entirely, because generated ConfigMaps carry their rules inside a
-        # double-quoted scalar where `groups` never starts a line. The bare word
-        # is the only form with no YAML spelling between it and the key.
-        # `_is_rule_groups` below is what actually decides; this exists only to
-        # avoid parsing every YAML in the repo.
-        # …and binaryData payloads are base64, so the word never appears in the
-        # file at all. Dropping such a file here silently undid the binaryData
-        # decoding below — that branch only ran when some OTHER part of the
-        # same file happened to say "groups".
-        if "groups" not in text and "binaryData" not in text:
-            return
+    # ⛔ NO raw-text prefilter. Every spelling tried was wrong in a new way —
+    # a literal `"groups:"` missed `groups :` and the quoted key `"groups":`;
+    # an anchored pattern missed the deployed tree, whose rules live in quoted
+    # scalars; the bare word missed base64 binaryData; and even then it missed
+    # `"\\x67roups:"`, a YAML escape the generated files' own double-quoted
+    # form makes entirely natural. A prefilter the criterion can be smuggled
+    # past is not an optimisation, it IS the criterion. `_is_rule_groups`
+    # below is the real test; parsing ~90 files costs about a second.
 
-        file_header = _header_provenance(text)
-        for is_first, top_doc in _documents(text):
-            header_prov = file_header if is_first else None
-            docs_todo = [top_doc]
-            while docs_todo:
-                doc = docs_todo.pop(0)
-                if not isinstance(doc, dict):
-                    continue
-                kind = doc.get("kind")
-                if kind == "List":
-                    # ⛔ `kind: List` is what `kubectl get -o yaml` emits for multiple
-                    # objects and what `kubectl apply -f` happily takes back. Three
-                    # hard-coded kinds meant a wrapper nobody had to invent made the
-                    # contents invisible — including, measured, a tenant alert
-                    # wearing the RESERVED `alert_source: platform`, which turned the
-                    # reserved-value contract off entirely.
-                    for item in (doc.get("items") or []):
-                        if isinstance(item, dict):
-                            docs_todo.append(item)
-                    continue
-                if kind == "ConfigMap":
-                    prov = header_prov
-                    # ⛔ binaryData counts. kubelet's configmap MakePayload falls
-                    # back to BinaryData when a projected `items` key is absent from
-                    # Data (k8s pkg/volume/configmap/configmap.go), and this repo
-                    # mounts its rules exactly that way — so base64 is a real
-                    # delivery path, not an obfuscation. Reading only `data` left it
-                    # unscanned AND defeated the raw-text `- alert:` tripwire.
-                    entries = dict(doc.get("data") or {})
-                    for key, blob in (doc.get("binaryData") or {}).items():
-                        try:
-                            entries.setdefault(key, base64.b64decode(blob).decode("utf-8"))
-                        except (ValueError, UnicodeDecodeError):
-                            continue
-                    for key, body in entries.items():
-                        try:
-                            inner = yaml.safe_load(body) if isinstance(body, str) else body
-                        except yaml.YAMLError:
-                            continue
-                        if isinstance(inner, dict) and (
-                                _is_rule_groups(inner.get("groups"))
-                                or isinstance(inner.get("spec"), dict)):
-                            yield f"{rel}:{key}", inner, prov
-                elif kind == "PrometheusRule":
-                    # ⛔ `groups` at the TOP level of a PrometheusRule is the
-                    # commonest paste error and the tripwire below cannot see it:
-                    # that check receives `doc["spec"]`, so the misplaced key is
-                    # outside what it is handed. Normalise here, where both halves
-                    # are still visible, and let the tripwire flag the empty spec.
-                    if _is_rule_groups(doc.get("groups")) and not (
-                            isinstance(doc.get("spec"), dict) and doc["spec"].get("groups")):
-                        yield rel, {"_misplaced_groups": doc.get("groups")}, None
+    file_header = _header_provenance(text)
+    for is_first, top_doc in _documents(text):
+        header_prov = file_header if is_first else None
+        docs_todo = [top_doc]
+        while docs_todo:
+            doc = docs_todo.pop(0)
+            if not isinstance(doc, dict):
+                continue
+            kind = doc.get("kind")
+            if isinstance(doc.get("items"), list):
+                # ⛔ Mirror kubectl, which does NOT look at the kind name.
+                # `apply` builds with `.Flatten()`, whose FlattenListVisitor
+                # defers to `Unstructured.IsList()` — and that is literally
+                # "is `items` a list". `decodeToList` then back-fills each
+                # item's kind from the list's own (`ConfigMapList` → ConfigMap),
+                # so `kubectl get cm -o yaml` output round-trips, and so does a
+                # wrapper with a kind nobody has ever heard of. Matching the
+                # bare `List` spelling left every named variant open, and the
+                # worse face is SUBTRACTIVE: wrapping an EXISTING deployed file
+                # removed 14 alerts from every contract while all five floors
+                # still held.
+                # `kind: List` is what `kubectl get -o yaml` emits for multiple
+                # objects and what `kubectl apply -f` happily takes back. Three
+                # hard-coded kinds meant a wrapper nobody had to invent made the
+                # contents invisible — including, measured, a tenant alert
+                # wearing the RESERVED `alert_source: platform`, which turned the
+                # reserved-value contract off entirely.
+                for item in (doc.get("items") or []):
+                    if isinstance(item, dict):
+                        docs_todo.append(item)
+                continue
+            if kind == "ConfigMap":
+                prov = header_prov
+                # ⛔ binaryData counts. kubelet's configmap MakePayload falls
+                # back to BinaryData when a projected `items` key is absent from
+                # Data (k8s pkg/volume/configmap/configmap.go), and this repo
+                # mounts its rules exactly that way — so base64 is a real
+                # delivery path, not an obfuscation. Reading only `data` left it
+                # unscanned AND defeated the raw-text `- alert:` tripwire.
+                entries = dict(doc.get("data") or {})
+                for key, blob in (doc.get("binaryData") or {}).items():
+                    try:
+                        entries.setdefault(key, base64.b64decode(blob).decode("utf-8"))
+                    except (ValueError, UnicodeDecodeError):
                         continue
-                    name = (doc.get("metadata") or {}).get("name") or ""
-                    prov = (name[len("da-rule-pack-"):]
-                            if name.startswith("da-rule-pack-") else header_prov)
-                    yield rel, (doc.get("spec") or {}), prov
-                elif _is_rule_groups(doc.get("groups")) and rel.startswith("rule-packs/"):
-                    stem = _strip_rules_ext(PurePosixPath(rel).name)
-                    prov = (stem[len(_RULE_PACK_PREFIX):]
-                            if stem and stem.startswith(_RULE_PACK_PREFIX) else None)
-                    yield rel, doc, prov
-
-    yield from _emit()
+                for key, body in entries.items():
+                    try:
+                        inner = yaml.safe_load(body) if isinstance(body, str) else body
+                    except yaml.YAMLError:
+                        # ⛔ Not silent — but only when the body was TRYING to be
+                        # rules. The OUTER file parses, so the whole-file tripwire
+                        # sees nothing wrong; an indentation slip inside one `|`
+                        # block therefore deleted a whole block of alerts with no
+                        # counter moving. A ConfigMap may legitimately carry
+                        # non-YAML data keys (this repo ships a markdown
+                        # Alertmanager template that way), so flag only bodies
+                        # that visibly declare rules.
+                        # The KEY's extension is the declaration of intent: a
+                        # `.yml`/`.yaml` data key promises YAML, a `.md` one does
+                        # not. (Matching on `- alert:` in the body was too loose —
+                        # this repo's Alertmanager markdown template contains that
+                        # exact string as a documentation example.)
+                        if key.lower().endswith((".yml", ".yaml")):
+                            yield f"{rel}:{key}", {"_unparsable_body": True}, prov
+                        continue
+                    if isinstance(inner, dict) and (
+                            _is_rule_groups(inner.get("groups"))
+                            or isinstance(inner.get("spec"), dict)):
+                        yield f"{rel}:{key}", inner, prov
+            elif kind == "PrometheusRule":
+                # ⛔ `groups` at the TOP level of a PrometheusRule is the
+                # commonest paste error and the tripwire below cannot see it:
+                # that check receives `doc["spec"]`, so the misplaced key is
+                # outside what it is handed. Normalise here, where both halves
+                # are still visible, and let the tripwire flag the empty spec.
+                if _is_rule_groups(doc.get("groups")) and not (
+                        isinstance(doc.get("spec"), dict) and doc["spec"].get("groups")):
+                    yield rel, {"_misplaced_groups": doc.get("groups")}, None
+                    continue
+                name = (doc.get("metadata") or {}).get("name") or ""
+                prov = (name[len("da-rule-pack-"):]
+                        if name.startswith("da-rule-pack-") else header_prov)
+                yield rel, (doc.get("spec") or {}), prov
+            elif _is_rule_groups(doc.get("groups")) and rel.startswith("rule-packs/"):
+                stem = _strip_rules_ext(PurePosixPath(rel).name)
+                prov = (stem[len(_RULE_PACK_PREFIX):]
+                        if stem and stem.startswith(_RULE_PACK_PREFIX) else None)
+                yield rel, doc, prov
 
 
 def _iter_repo_alert_rules():
@@ -1577,6 +1612,9 @@ def _rule_shaped_but_unparsed():
             offenders.append((rel, f"declares alerts but will not parse: {exc.__class__.__name__}"))
     for where, doc, _prov in _rule_containers():
         if doc.get("groups"):
+            continue
+        if "_unparsable_body" in doc:
+            offenders.append((where, "ConfigMap data key does not parse as YAML"))
             continue
         if "_misplaced_groups" in doc:
             offenders.append((where, "PrometheusRule with groups: at the top "
@@ -2914,7 +2952,7 @@ class TestContainerDiscovery:
     @staticmethod
     def _alerts(text, rel="k8s/03-monitoring/x.yaml"):
         return {a for _w, doc, _p in _containers_from_text(rel, text)
-                for a, _e in _alert_names(doc)}
+                for a, *_ in _alert_names(doc)}
 
     def test_quoted_and_spaced_groups_keys_survive_the_prefilter(self):
         for spelling in ('"groups":', 'groups :', 'groups:'):
@@ -2962,7 +3000,7 @@ class TestContainerDiscovery:
                 "data:\n  r.yml: |\n    groups:\n      - name: g\n"
                 "        rules:\n          - alert: Second\n            expr: up == 0\n")
         provs = {a: prov for _w, doc, prov in _containers_from_text("k8s/x.yaml", text)
-                 for a, _e in _alert_names(doc)}
+                 for a, *_ in _alert_names(doc)}
         assert provs["First"] == "redis"
         assert provs["Second"] is None, "the header leaked across a `---`"
 
@@ -2985,4 +3023,10 @@ class TestContainerDiscovery:
         text = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: rbac}\n"
                 "data:\n  _rbac.yaml: |\n    groups:\n"
                 "      - name: platform-admins\n        tenants: [\"*\"]\n")
-        assert self._alerts(text, "k8s/04-tenant-api/configmap-rbac.yaml") == set()
+        # ⛔ Assert on CONTAINERS, not alerts. RBAC groups yield no alerts
+        # whether or not the shape guard exists, so the obvious assertion was
+        # true in both worlds: replacing `_is_rule_groups` with `value is not
+        # None` left it green while the RBAC ConfigMap became a platform
+        # container again. The observable difference is the container.
+        rel = "k8s/04-tenant-api/configmap-rbac.yaml"
+        assert list(_containers_from_text(rel, text)) == []
