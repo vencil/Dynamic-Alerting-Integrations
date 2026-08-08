@@ -1200,6 +1200,13 @@ def _platform_rule_locations() -> frozenset:
     return frozenset(out)
 
 
+# Borrowed from the rule-pack copy-drift guard: it is already this repo's
+# answer to "are these two serializations the same rule", already handles the
+# emitter differences (block scalar vs \n-escaped, `by (x)` vs `by(x)`), and is
+# already a CI gate. Reimplementing expr equality here is how the two drifted.
+from check_rulepack_sync import _norm_expr  # noqa: E402
+
+
 def _alert_names(doc) -> frozenset:
     """(alert name, expr) pairs a rules document declares.
 
@@ -1210,13 +1217,23 @@ def _alert_names(doc) -> frozenset:
     copy has to actually be a copy — which is what the word was supposed to
     mean, and what the comment claiming forgery "costs as much as writing the
     rules" needed in order to be true.
+
+    ⛔ expr is compared through check_rulepack_sync's `_norm_expr`, not a bare
+    `.strip()`. A bare string compare made `redis_up == 0` and `redis_up==0`
+    different rules: the deployed copy stopped matching its pack and TWELVE
+    tenant alerts were reclassified as platform, each with a diagnostic telling
+    the maintainer to add the RESERVED `alert_source: platform` — the exact
+    misdirection this criterion replaced the filename prefix to avoid, now
+    reachable by two characters of whitespace. That helper already exists, is
+    already the repo's answer to "are these the same rule", and is already a
+    CI gate; a second, weaker definition of expr equality was the bug.
     """
     pairs = set()
     for group in (doc.get("groups") or []):
         if isinstance(group, dict):
             for rule in (group.get("rules") or []):
                 if isinstance(rule, dict) and "alert" in rule:
-                    pairs.add((rule["alert"], str(rule.get("expr", "")).strip()))
+                    pairs.add((rule["alert"], _norm_expr(rule.get("expr", ""))))
     return frozenset(pairs)
 
 
@@ -1238,9 +1255,16 @@ def _source_pack_alerts() -> dict:
     for where, doc, prov in _rule_containers():
         if not prov:
             continue
+        # RECURSIVE, matching `_generated_pack_names`'s rglob. Requiring the
+        # pack to sit at the top of rule-packs/ made the two helpers disagree
+        # about the same question: move a pack into a subdirectory and one still
+        # knew it existed while the other did not, so its deploy copies were
+        # reclassified as hand-authored platform trees — with, again, the
+        # reserved-label misdiagnosis. The FILENAME is the pack's identity; its
+        # depth is not.
         name = PurePosixPath(where).name
         expected = {f"{_RULE_PACK_PREFIX}{prov}{ext}" for ext in _RULES_FILE_EXTS}
-        if where == f"rule-packs/{name}" and name in expected:
+        if where.startswith("rule-packs/") and name in expected:
             out.setdefault(prov, set()).update(_alert_names(doc))
     return {k: frozenset(v) for k, v in out.items()}
 
@@ -1249,9 +1273,14 @@ def _source_pack_alerts() -> dict:
 # parser fixtures and build/vendor output. Everything else in the tree is in
 # scope — the point of content-based discovery is that a real rules artifact
 # cannot escape by being placed somewhere the scanner was never told about.
-_SCAN_SKIP_PARTS = frozenset({
-    "testdata", "fixtures", "node_modules", "site", "__pycache__", ".git",
-})
+# ⛔ Deliberately EMPTY. Once the scan narrowed to k8s/ + operator-manifests/
+# + rule-packs/, this list matched zero files in the tree — while remaining a
+# working escape hatch: `mkdir k8s/03-monitoring/fixtures/` hid a rules
+# ConfigMap from every contract at the cost of one directory name. A filter
+# that protects nothing and hides something is pure attack surface. If a real
+# fixture tree ever lands under a shipped root, exclude it by explicit path
+# with a reason, not by a name any directory can adopt.
+_SCAN_SKIP_PARTS = frozenset()
 
 
 # ⛔ The SHIPPED roots. Anchored on this repo's own existing answer to "what is
@@ -1302,6 +1331,71 @@ def _rule_containers() -> tuple:
     return tuple(_iter_rule_containers())
 
 
+def _is_rule_groups(value) -> bool:
+    """Prometheus rule-group shape, not merely a key spelled `groups`.
+
+    ⛔ `groups:` is a popular word. k8s/04-tenant-api/configmap-rbac.yaml
+    uses it for RBAC subject groups (name / tenants / permissions), and a
+    scanner that accepted any `groups` key classified that file as a
+    hand-authored PLATFORM alerting tree. A rule group always carries
+    `rules`; an empty list is allowed because a generator with nothing to
+    emit legitimately produces one (see the custom-alerts pack).
+    """
+    if not isinstance(value, list):
+        return False
+    return not value or any(
+        isinstance(g, dict) and "rules" in g for g in value)
+
+gen_re = re.compile(r"GENERATED from rule-packs/rule-pack-([A-Za-z0-9_-]+)\.ya?ml")
+
+def _header_provenance(chunk: str):
+    """The generator header, read ONLY from a document's leading comments.
+
+    ⛔ Two things must both be narrow here, and the first version was
+    narrow in neither. Searching the whole file's raw text means the string
+    confers provenance from anywhere it appears — including inside an
+    `annotations.summary` value, which is attacker- or tenant-writable
+    data. And computing it once per FILE then applying it to every document
+    means a `---` separator is the best hiding place in the repo: append a
+    hand-authored ConfigMap to any generated one and it inherits the
+    header. That is the escape hatch content-based discovery just closed,
+    reopened one layer up and cheaper than before.
+    """
+    for line in chunk.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if not stripped.startswith("#"):
+            return None              # past the leading comment block
+        m = gen_re.search(stripped)
+        if m:
+            return m.group(1)
+    return None
+
+def _documents(text: str):
+    """(is-first-document, parsed doc) per YAML document.
+
+    ⛔ Let the YAML parser find document boundaries. Hand-splitting on
+    `line == "---"` missed the legal spellings `--- ` (one trailing space)
+    and `--- # comment`: the file then failed to split, `safe_load` raised
+    ComposerError on the multi-document text, and the `except` swallowed
+    the ENTIRE FILE — a whole rules ConfigMap gone, alert counts unchanged,
+    so no floor noticed. Worse, `_rule_shaped_but_unparsed` uses
+    `safe_load_all`, which parses that same file fine, so the one guard
+    meant to catch silent-zero could not see it. Two parsers disagreeing
+    about how many documents a file has WAS the hole; there is one now.
+
+    The generator header belongs to the file's opening comments, so it
+    applies to the first document only — a hand-authored document appended
+    after a `---` does not inherit its neighbour's provenance.
+    """
+    try:
+        for i, doc in enumerate(yaml.safe_load_all(text)):
+            yield i == 0, doc
+    except yaml.YAMLError:
+        return
+
+
 def _iter_rule_containers():
     """Yield (where, rules_doc, provenance) for every rules-bearing document.
 
@@ -1329,70 +1423,28 @@ def _iter_rule_containers():
     rule-packs/. None means "nobody generated this", which is what makes it a
     platform artifact — see _is_platform_cm_location.
     """
-    def _is_rule_groups(value) -> bool:
-        """Prometheus rule-group shape, not merely a key spelled `groups`.
-
-        ⛔ `groups:` is a popular word. k8s/04-tenant-api/configmap-rbac.yaml
-        uses it for RBAC subject groups (name / tenants / permissions), and a
-        scanner that accepted any `groups` key classified that file as a
-        hand-authored PLATFORM alerting tree. A rule group always carries
-        `rules`; an empty list is allowed because a generator with nothing to
-        emit legitimately produces one (see the custom-alerts pack).
-        """
-        if not isinstance(value, list):
-            return False
-        return not value or any(
-            isinstance(g, dict) and "rules" in g for g in value)
-
-    gen_re = re.compile(r"GENERATED from rule-packs/rule-pack-([A-Za-z0-9_-]+)\.ya?ml")
-
-    def _header_provenance(chunk: str):
-        """The generator header, read ONLY from a document's leading comments.
-
-        ⛔ Two things must both be narrow here, and the first version was
-        narrow in neither. Searching the whole file's raw text means the string
-        confers provenance from anywhere it appears — including inside an
-        `annotations.summary` value, which is attacker- or tenant-writable
-        data. And computing it once per FILE then applying it to every document
-        means a `---` separator is the best hiding place in the repo: append a
-        hand-authored ConfigMap to any generated one and it inherits the
-        header. That is the escape hatch content-based discovery just closed,
-        reopened one layer up and cheaper than before.
-        """
-        for line in chunk.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            if not stripped.startswith("#"):
-                return None              # past the leading comment block
-            m = gen_re.search(stripped)
-            if m:
-                return m.group(1)
-        return None
-
-    def _documents(text: str):
-        """(raw slice, parsed doc) per YAML document, so provenance stays local."""
-        chunks, cur = [], []
-        for line in text.splitlines(keepends=True):
-            if line.rstrip("\r\n") == "---" and cur:
-                chunks.append("".join(cur))
-                cur = []
-            else:
-                cur.append(line)
-        if cur:
-            chunks.append("".join(cur))
-        for chunk in chunks:
-            try:
-                yield chunk, yaml.safe_load(chunk)
-            except yaml.YAMLError:
-                continue
-
     for rel in _tracked_yaml_paths():
         path = Path(_REPO_ROOT) / rel
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
+        yield from _containers_from_text(rel, text)
+
+
+def _containers_from_text(rel: str, text: str):
+    """The per-file half of `_iter_rule_containers`, split out to be TESTABLE.
+
+    ⛔ Every guard below — the widened prefilter, `kind: List` unwrapping,
+    binaryData decoding, parser-driven document splitting, header locality —
+    was added because a red-team run walked through it, and NONE of them had a
+    regression test: reverting any one of them left the suite green, because
+    every assertion in this file reads the live tree, and the live tree
+    contains no attack. A guard with no fixture is a guard with a countdown.
+    Keeping the parsing reachable without git or a repo checkout is what lets
+    TestContainerDiscovery pin each one with the shape that motivated it.
+    """
+    def _emit():
         # ⛔ Prefilter must be WIDER than the criterion, or it silently becomes
         # one. Every tighter spelling tried here has been wrong in a different
         # direction: `"groups:"` as a literal misses the legal `groups :` and
@@ -1402,11 +1454,16 @@ def _iter_rule_containers():
         # is the only form with no YAML spelling between it and the key.
         # `_is_rule_groups` below is what actually decides; this exists only to
         # avoid parsing every YAML in the repo.
-        if "groups" not in text:
-            continue
+        # …and binaryData payloads are base64, so the word never appears in the
+        # file at all. Dropping such a file here silently undid the binaryData
+        # decoding below — that branch only ran when some OTHER part of the
+        # same file happened to say "groups".
+        if "groups" not in text and "binaryData" not in text:
+            return
 
-        for chunk, top_doc in _documents(text):
-            header_prov = _header_provenance(chunk)
+        file_header = _header_provenance(text)
+        for is_first, top_doc in _documents(text):
+            header_prov = file_header if is_first else None
             docs_todo = [top_doc]
             while docs_todo:
                 doc = docs_todo.pop(0)
@@ -1466,6 +1523,8 @@ def _iter_rule_containers():
                     prov = (stem[len(_RULE_PACK_PREFIX):]
                             if stem and stem.startswith(_RULE_PACK_PREFIX) else None)
                     yield rel, doc, prov
+
+    yield from _emit()
 
 
 def _iter_repo_alert_rules():
@@ -2191,6 +2250,13 @@ class TestPlatformRunbookCoverageContract:
         by_expr = {r["alert"]: str(r.get("expr", ""))
                    for _w, r in _iter_repo_alert_rules()
                    if _is_platform_cm_location(_w)}
+        # ⛔ Every ledger row needs a pin. Without this, deleting one digest
+        # line silently retires that row's protection while the subset lock
+        # keeps reporting green.
+        assert set(_LEDGER_EXPR_DIGESTS) == _LEDGER_ORIGIN, (
+            f"_LEDGER_EXPR_DIGESTS must pin exactly the ledger's original rows; "
+            f"missing {sorted(_LEDGER_ORIGIN - set(_LEDGER_EXPR_DIGESTS))}, "
+            f"extra {sorted(set(_LEDGER_EXPR_DIGESTS) - _LEDGER_ORIGIN)}")
         for alert, pinned in _LEDGER_EXPR_DIGESTS.items():
             if alert in by_expr:
                 actual = _expr_digest(by_expr[alert])
@@ -2312,8 +2378,11 @@ class TestPlatformRunbookCoverageContract:
             # gained this guard in _check_anchor; the borrowed reader bypasses
             # it, so the one consumer that most needs it was the one left out.
             if target.suffix.lower() not in (".md", ".markdown"):
-                first_line = int(re.match(r"L(\d+)", anchor).group(1)) if re.match(
-                    r"L\d+", anchor) else 0
+                # ⛔ BOTH ends. Checking only the first let `#L1-L99999` and the
+                # reversed `#L1975-L1` through — same symptom on GitHub as the
+                # `#L999999` this guard exists for, with the bad number simply
+                # moved to the back half of the range.
+                line_nums = [int(n) for n in re.findall(r"L(\d+)", anchor)]
                 total_lines = len(target.read_text(
                     encoding="utf-8", errors="replace").splitlines())
                 if not re.fullmatch(r"L\d+(C\d+)?(-L\d+(C\d+)?)?", anchor):
@@ -2321,13 +2390,14 @@ class TestPlatformRunbookCoverageContract:
                                    f"{rel} is not Markdown — GitHub renders it as "
                                    f"source and offers only #L<n> line refs, so "
                                    f"#{anchor} does not exist"))
-                elif not 1 <= first_line <= total_lines:
+                elif not all(1 <= n <= total_lines for n in line_nums) or (
+                        len(line_nums) == 2 and line_nums[0] > line_nums[1]):
                     # ⛔ Bounds too. `#L999999` on a 270-line file is not a 404,
                     # it just scrolls nowhere — precisely the "burns the
                     # on-call's first click" this gate names as its reason.
                     broken.append((where, rule["alert"], url,
-                                   f"#{anchor} is past the end of {rel} "
-                                   f"({total_lines} lines)"))
+                                   f"#{anchor} does not name a real line range "
+                                   f"in {rel} ({total_lines} lines)"))
                 continue
             slugs = _doc_anchors(target)
             if anchor not in slugs:
@@ -2828,3 +2898,91 @@ class TestParseConfigFilesEdge:
         (tmp_path / "bad.yaml").write_text("key: [unclosed", encoding="utf-8")
         result = _parse_config_files(str(tmp_path))
         assert result["all_tenants"] == []
+
+
+class TestContainerDiscovery:
+    """Every guard in `_containers_from_text`, pinned by the shape that motivated it.
+
+    ⛔ These exist because a counterfactual sweep found that reverting eight of
+    the nine guards in this file left the whole suite green. Every assertion
+    elsewhere reads the LIVE tree, and the live tree contains no attack — so
+    the guards were protected by nothing but the memory of why they were added.
+    Each case below is a payload that was measured slipping past an earlier
+    revision, reduced to the smallest form that still discriminates.
+    """
+
+    @staticmethod
+    def _alerts(text, rel="k8s/03-monitoring/x.yaml"):
+        return {a for _w, doc, _p in _containers_from_text(rel, text)
+                for a, _e in _alert_names(doc)}
+
+    def test_quoted_and_spaced_groups_keys_survive_the_prefilter(self):
+        for spelling in ('"groups":', 'groups :', 'groups:'):
+            text = ('apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n'
+                    'data:\n  r.yml: |\n    ' + spelling + '\n'
+                    '      - name: g\n        rules:\n'
+                    '          - alert: Seen\n            expr: up == 0\n')
+            assert "Seen" in self._alerts(text), spelling
+
+    def test_binary_data_is_decoded_and_reaches_the_prefilter(self):
+        # base64 never contains the word "groups", so a file with ONLY
+        # binaryData must still get past the raw-text prefilter.
+        text = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"
+                "binaryData:\n  r.yml: Z3JvdXBzOgogIC0gbmFtZTogYgogICAgcnVsZXM6CiAgICAgIC0gYWxlcnQ6IEZyb21CaW5hcnkKICAgICAgICBleHByOiB1cCA9PSAwCg==\n")
+        assert "FromBinary" in self._alerts(text)
+
+    def test_decorated_document_separators_still_split(self):
+        # `--- `, `--- # note` and `---   ` are all legal document starts. When
+        # they failed to split, safe_load raised on the merged text and the
+        # whole file was swallowed — silently, with every count unchanged.
+        second = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: y}\n"
+                  "data:\n  r.yml: |\n    groups:\n      - name: g\n"
+                  "        rules:\n          - alert: AfterSeparator\n"
+                  "            expr: up == 0\n")
+        for sep in ("---", "--- ", "--- # a note", "---   "):
+            text = "apiVersion: v1\nkind: Namespace\nmetadata: {name: n}\n" + sep + "\n" + second
+            assert "AfterSeparator" in self._alerts(text), repr(sep)
+
+    def test_list_wrappers_are_unwrapped(self):
+        inner = ("  - apiVersion: v1\n    kind: ConfigMap\n"
+                 "    metadata: {name: x}\n    data:\n      r.yml: |\n"
+                 "        groups:\n          - name: g\n            rules:\n"
+                 "              - alert: InsideList\n                expr: up == 0\n")
+        assert "InsideList" in self._alerts("kind: List\nitems:\n" + inner)
+
+    def test_generator_header_does_not_cross_a_document_boundary(self):
+        # A hand-authored document appended after `---` must not inherit the
+        # provenance declared in the file's opening comments.
+        text = ("# GENERATED from rule-packs/rule-pack-redis.yaml by\n"
+                "# scripts/x.py — DO NOT EDIT.\n"
+                "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\n"
+                "data:\n  r.yml: |\n    groups:\n      - name: g\n"
+                "        rules:\n          - alert: First\n            expr: up == 0\n"
+                "---\napiVersion: v1\nkind: ConfigMap\nmetadata: {name: b}\n"
+                "data:\n  r.yml: |\n    groups:\n      - name: g\n"
+                "        rules:\n          - alert: Second\n            expr: up == 0\n")
+        provs = {a: prov for _w, doc, prov in _containers_from_text("k8s/x.yaml", text)
+                 for a, _e in _alert_names(doc)}
+        assert provs["First"] == "redis"
+        assert provs["Second"] is None, "the header leaked across a `---`"
+
+    def test_expr_equality_ignores_only_serialization(self):
+        # ⛔ Assert the WIRING, not the helper. Testing `_norm_expr` on its own
+        # passed even with `_alert_names` reverted to a bare `.strip()` — the
+        # component worked and nothing checked that the caller used it. That
+        # revert is what reclassified twelve tenant alerts as platform over two
+        # characters of whitespace, so the pin has to run through `_alert_names`.
+        def pair(expr):
+            doc = {"groups": [{"name": "g", "rules": [
+                {"alert": "A", "expr": expr}]}]}
+            return _alert_names(doc)
+
+        assert pair("redis_up == 0") == pair("redis_up==0") == pair("redis_up  ==  0")
+        assert pair("redis_up == 0") != pair("mysql_up == 0")
+        assert pair("sum by (tenant) (x)") == pair("sum by(tenant)(x)")
+
+    def test_rbac_groups_are_not_rule_groups(self):
+        text = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: rbac}\n"
+                "data:\n  _rbac.yaml: |\n    groups:\n"
+                "      - name: platform-admins\n        tenants: [\"*\"]\n")
+        assert self._alerts(text, "k8s/04-tenant-api/configmap-rbac.yaml") == set()
