@@ -136,11 +136,16 @@ def plumbing_commit(
             parent = _run(["git", "rev-parse", "HEAD"])
 
         # ⛔ newline="\n" is load-bearing: `git commit-tree -F` takes this file
-        # VERBATIM as the commit message. On a Windows host the platform default
-        # would put a CR on every line of a PERMANENT commit object — including
-        # the trailer block, which `git interpret-trailers` and the
-        # Self-Review-Pass-2 gate parse. Unfixable afterwards without a history
-        # rewrite. (This whole module only ever runs on the Windows host.)
+        # VERBATIM as the commit message. Under a Python whose os.linesep is
+        # CRLF, the platform default would put a CR on every line of a
+        # PERMANENT commit object — including the trailer block that
+        # `git interpret-trailers` and the Self-Review-Pass-2 gate parse.
+        # Unfixable afterwards without a history rewrite. (Measured: the CRs do
+        # survive verbatim into the commit object.)
+        # NOTE: this module is normally driven from the Linux Cowork VM — see
+        # the /tmp index above and `python3 …` in the Makefile — where
+        # os.linesep is already LF. The pin is defence-in-depth for the
+        # Windows-host escape-hatch path, not a live Linux defect.
         with tempfile.NamedTemporaryFile("w", suffix=".msg", delete=False,
                                          encoding="utf-8", newline="\n") as mf:
             mf.write(message)
@@ -157,8 +162,13 @@ def plumbing_commit(
         ref_path = repo_root / ".git" / "refs" / "heads" / branch
         ref_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            # newline="\n" is not cosmetic here: a git ref file is parsed
-            # byte-for-byte, so a CRLF-terminated SHA makes the ref invalid.
+            # newline="\n" so the ref file is byte-identical on every host.
+            # NOTE: git itself tolerates a CRLF-terminated ref — measured:
+            # `git rev-parse` / `git log` / `git checkout` all resolve it fine,
+            # because the loose-ref parser strips trailing whitespace. So this
+            # is consistency, not a correctness fix. (An earlier revision of
+            # this comment claimed a CRLF ref is "invalid"; that was asserted
+            # without testing and is wrong — do not reinstate it.)
             ref_path.write_text(new_sha + "\n", encoding="utf-8", newline="\n")
         except OSError as exc:
             print(
@@ -265,7 +275,12 @@ def main(argv: list[str] | None = None) -> int:
 
     # Resolve message
     if args.msg_file:
-        message = pathlib.Path(args.msg_file).read_text()
+        # encoding="utf-8" must match the temp-file write further down: commit
+        # subjects in this repo are Traditional Chinese by convention, and a
+        # locale-default read raises UnicodeDecodeError on a cp950 host (that
+        # is a ValueError, so it would not be caught by the OSError handlers
+        # around this flow either).
+        message = pathlib.Path(args.msg_file).read_text(encoding="utf-8")
     else:
         message = args.message
 

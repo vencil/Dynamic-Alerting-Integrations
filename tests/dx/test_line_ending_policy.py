@@ -16,9 +16,14 @@ text layer 會把寫出的每個 `\\n` 轉成 `os.linesep`。
    ⇒ staged diff 仍然只有正確的那一行，PR 看起來完全正常。
 3. **CI 跑 Linux**，`os.linesep == "\\n"` ⇒ 產物本來就是 LF。
 
-壞掉的只有工作目錄的 bytes：它與樹裡其他檔案不一致，打壞 byte-level 比對
-（例如斷言「檔案被還原成 byte-identical」的 mutation harness），並讓之後每次
-`git diff` 都噴 "CRLF will be replaced by LF" 警告。
+壞掉的只有工作目錄的 bytes：它與樹裡其他檔案不一致，並讓之後每次 `git diff`
+都噴 "CRLF will be replaced by LF" 警告（實測會出現）。
+
+⚠️ 早期版本還宣稱這會「打壞斷言檔案被還原成 byte-identical 的 mutation
+harness」——**那個危害在本 repo 不存在**：`tests/shared/_mutation_pilot.py`
+讀寫兩端都用 `newline=""`，還原是逐位元組的。已刪除該理由，不要再寫回去。
+真正的危害是上面那兩條，加上下面兩個**實測會壞**的具體站點（寫進 commit
+object 的 message、以及 git hook 的 shebang 行）。
 
 ⛔ 第 3 點決定了這個檔案為什麼分兩層
 ====================================
@@ -73,6 +78,22 @@ GOVERNED_PATHS = [
     REPO_ROOT / "helm",
 ]
 
+# ⛔ 獨立於 `GOVERNED_PATHS` 的硬編清單，用來釘住「範圍不得被無聲收窄」。
+# 必須寫死：拿 GOVERNED_PATHS 自己去檢查自己，等於變數縮小、斷言也跟著縮小。
+# `scripts/dx` 明確列入 —— `tests/dx/test_generate_adr_index.py` 記載 PR #477
+# 的 CRLF 回歸就出在那兩支 generator，是這條規則的起源現場。
+REQUIRED_SUBTREES = (
+    "scripts/dx",
+    "scripts/ops",
+    "scripts/session-guards",
+    "scripts/tools",
+    "scripts/tools/dx",
+    "scripts/tools/lint",
+    "scripts/tools/ops",
+    "components",
+    "helm",
+)
+
 # 與 check_open_encoding.py 的 `# open-encoding: ignore` 同風格。
 IGNORE_MARKER = "line-ending: ignore"
 
@@ -98,9 +119,32 @@ HANDLE_FACTORIES = {
     "SpooledTemporaryFile": "w+b",
 }
 
-# 檔案 mode 字串的形狀（用來在位置引數中辨認 mode，而不必假設它在第幾個）。
-# 必要，因為 mode 的位置隨形狀而變：`open(path, mode)` 是第 2 個、
-# `Path.open(mode)` 是第 1 個、`os.fdopen(fd, mode)` 是第 2 個。
+# 直接產生文字 handle、**沒有 mode 參數**的建構子：一律需要表態。
+# `io.TextIOWrapper(buf, encoding=...)` 的 `newline` 預設就是 `None`，也就是
+# 這支守衛存在的理由本身；它在本 repo 已是既有詞彙（`pr_preflight.py`、
+# `diag_pr_ci.py` 都用它包 `sys.stdout.buffer`）。
+TEXT_WRAPPER_FACTORIES = {"TextIOWrapper"}
+
+# `.open()` 這個名字被太多不相干的 API 借用。以下模組的 `.open()` **不是**
+# 文字檔 handle（回傳 fd／binary stream／DB handle／根本不是檔案），把它們
+# 排除，否則守衛會對連 `newline=` 參數都沒有的呼叫報錯，而失敗訊息還會叫人
+# 去傳那個參數（照做直接 TypeError）。
+NON_TEXT_OPEN_MODULES = {
+    "os",          # os.open → int fd
+    "tarfile", "zipfile", "shelve", "dbm", "sqlite3",
+    "webbrowser",  # 根本不是檔案
+    "socket",
+}
+
+# 位置引數中「第幾個開始才可能是 mode」：
+#   open(file, mode) / io.open(file, mode) / os.fdopen(fd, mode) → 1
+#   Path.open(mode) / NamedTemporaryFile(mode)                   → 0
+# ⛔ 這個偏移是必要的，不是潔癖：若從 0 開始掃，`open("r", "w")`（檔名剛好
+# 叫 `r`）會把**檔名**當成 mode、判為唯讀而放行——在一支處處 fail-closed 的
+# 守衛裡開一個 fail-open 的洞。
+_MODULE_STYLE_OPEN = {"io", "gzip", "codecs", "bz2", "lzma", "fileinput"}
+
+# 檔案 mode 字串的形狀。
 _MODE_RE = re.compile(r"^[rwxa]\+?[btU]*\+?$")
 
 
@@ -127,19 +171,34 @@ def _get_kwarg(call: ast.Call, name: str):
 _UNRESOLVED_MODE = object()
 
 
-def _mode_of(call: ast.Call, default: str):
+def _mode_arg_start(call: ast.Call, name: str) -> int:
+    """First positional index that could hold a mode string.
+
+    `open(file, mode)` / `io.open(file, mode)` / `os.fdopen(fd, mode)` put the
+    file/fd first; `Path.open(mode)` / `NamedTemporaryFile(mode)` do not.
+    """
+    if name == "fdopen":
+        return 1
+    if name == "open":
+        fn = call.func
+        if isinstance(fn, ast.Name):
+            return 1  # builtin open(file, mode)
+        if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name) \
+                and fn.value.id in _MODULE_STYLE_OPEN:
+            return 1  # io.open(file, mode) etc.
+        return 0      # Path.open(mode)
+    return 0          # tempfile factories take mode first
+
+
+def _mode_of(call: ast.Call, default: str, name: str):
     """Resolve the file mode of a handle-producing call.
 
     Returns the mode string, or `_UNRESOLVED_MODE` when a mode is supplied but
     is not a static literal (e.g. `open(p, mode_var)`).
 
     ⛔ 「有給 mode 但看不懂」與「根本沒給 mode」必須是**不同**的回傳值。
-    第一版把兩者都回 `None` 然後一律放行 ⇒ `open(p, mode_var)` 靜默通過。
-    現在前者 fail-closed（要求作者表態或標 ignore），後者才套用預設。
-
-    mode 不從固定位置取：位置隨呼叫形狀而變（`open(path, mode)` 第 2 個、
-    `Path.open(mode)` 第 1 個、`NamedTemporaryFile(mode)` 第 1 個），所以改為
-    掃描位置引數、找出長得像 mode 的字串字面值。
+    最早的版本把兩者都回 `None` 然後一律放行 ⇒ `open(p, mode_var)` 靜默通過。
+    現在前者 fail-closed，後者才套用預設。
     """
     kw = _get_kwarg(call, "mode")
     if kw is not None:
@@ -147,16 +206,15 @@ def _mode_of(call: ast.Call, default: str):
             return kw.value.value
         return _UNRESOLVED_MODE
 
+    start = _mode_arg_start(call, name)
     saw_non_literal = False
-    for arg in call.args:
+    for arg in call.args[start:]:
         if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
             if _MODE_RE.match(arg.value):
                 return arg.value
         elif not isinstance(arg, ast.Constant):
             saw_non_literal = True
-    # A bare `open(path)` has exactly one arg and no mode → the default applies.
-    # `open(path, something_dynamic)` might be hiding a write mode → fail closed.
-    if saw_non_literal and len(call.args) >= 2:
+    if saw_non_literal:
         return _UNRESOLVED_MODE
     return default
 
@@ -189,8 +247,17 @@ def _violations_in(path: Path) -> list[tuple[int, str]]:
     或直接寫出文字的呼叫，都必須明確表態 `newline=` 且值為字串字面值。值本身
     交給作者決定（csv 的 `newline=""` 合法通過），強制的是「必須表態」。
     """
-    source = path.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(path))
+    # Mirror check_open_encoding.py's robustness: a non-UTF-8 or unparseable
+    # .py landing under a governed tree should not turn the whole guard into an
+    # ERROR whose traceback points at the guard instead of the offending file.
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    try:
+        tree = ast.parse(source, filename=str(path))
+    except SyntaxError:
+        return []
     lines = source.splitlines()
     out: list[tuple[int, str]] = []
 
@@ -206,15 +273,44 @@ def _violations_in(path: Path) -> list[tuple[int, str]]:
         newline_kw = _get_kwarg(node, "newline")
         reason = None
 
+        # `<module>.open()` on a module whose open() is not a text file handle
+        # (os → int fd, tarfile/zipfile → binary, shelve/dbm → DB, …). These
+        # do not even accept newline=, so flagging them would produce advice
+        # that raises TypeError if followed.
+        # ⚠️ Scoped to the name `open` on purpose: `os.open` is excluded but
+        # `os.fdopen` is a genuine text-handle factory and must stay in scope.
+        # (An earlier version excluded the whole `os` module and silently lost
+        # os.fdopen — the positive-control samples caught it.)
+        if name == "open" and isinstance(fn, ast.Attribute) \
+                and isinstance(fn.value, ast.Name) \
+                and fn.value.id in NON_TEXT_OPEN_MODULES:
+            continue
+
         if name == "write_text":
             # Path.write_text(...) — always text, always writing.
             verdict = _newline_verdict(newline_kw)
             if verdict:
                 reason = f"write_text(): {verdict}"
 
+        elif name in TEXT_WRAPPER_FACTORIES:
+            # No mode argument at all; it is a text handle by construction.
+            verdict = _newline_verdict(newline_kw)
+            if verdict:
+                reason = f"{name}(): {verdict}"
+
         elif name in HANDLE_FACTORIES:
-            mode = _mode_of(node, HANDLE_FACTORIES[name])
+            mode = _mode_of(node, HANDLE_FACTORIES[name], name)
             if mode is _UNRESOLVED_MODE:
+                # ⛔ fail closed ONLY with positive evidence that this is a text
+                # stream — i.e. an encoding= kwarg. Without it we cannot tell a
+                # dynamic-mode text open from `os.open(p, flags, 0o600)` or a
+                # binary API, and guessing produces false positives on calls
+                # that have no newline= parameter to pin.
+                # (`encoding=` itself is separately enforced by
+                # scripts/tools/lint/check_open_encoding.py, so the pair covers
+                # the dynamic-mode case between them.)
+                if _get_kwarg(node, "encoding") is None:
+                    continue
                 reason = (
                     f"{name}(): mode is not a literal, so it cannot be proven "
                     f"read-only or binary — pin newline= or mark ignore"
@@ -275,9 +371,11 @@ VIOLATING_SAMPLES = {
     "newline_os_linesep": 'open(p, "w", encoding="utf-8", newline=os.linesep)',
     "write_text_os_linesep": 'p.write_text(s, encoding="utf-8", newline=os.linesep)',
     "newline_variable": 'open(p, "w", encoding="utf-8", newline=nl)',
-    # mode 靜態不可知 ⇒ 無法證明是唯讀/二進位 ⇒ fail closed
+    # mode 靜態不可知，但 encoding= 證明這是文字串流 ⇒ fail closed
     "dynamic_mode": 'open(p, mode_var, encoding="utf-8")',
     "atomic_wrapper_optout": 'atomic_write_text(p, s, newline=None)',
+    # 沒有 mode 參數的文字 handle 建構子，newline 預設就是 None
+    "text_io_wrapper": 'io.TextIOWrapper(buf, encoding="utf-8").write(s)',
 }
 
 COMPLIANT_SAMPLES = {
@@ -293,10 +391,15 @@ COMPLIANT_SAMPLES = {
     "path_open_read": 'p.open(encoding="utf-8").read()',
     "binary_write": 'open(p, "wb").write(b)',
     "named_tmp_binary_default": 'tempfile.NamedTemporaryFile(suffix=".bin")',
-    "write_bytes": 'p.write_bytes(b)',
     # wrapper 自己 pin 了 LF，呼叫端不必再傳
     "atomic_wrapper_default": 'atomic_write_text(p, s)',
-    "secure_wrapper": 'write_text_secure(str(p), s)',
+    # 這些 `.open()` 不是文字檔 handle，連 newline= 參數都沒有 —— 守衛若對
+    # 它們報錯，失敗訊息叫人加的那個 kwarg 會直接 TypeError。
+    "os_open_fd": 'os.open(p, os.O_WRONLY | os.O_CREAT, 0o600)',
+    "tarfile_write": 'tarfile.open(archive, "w:gz")',
+    "shelve_open": 'shelve.open(dbpath, "c")',
+    # mode 動態但沒有 encoding= ⇒ 沒有證據顯示這是文字串流，不猜
+    "dynamic_mode_no_encoding": 'open(path, mode_var)',
 }
 
 
@@ -360,22 +463,21 @@ class TestWriteSitesPinNewline:
         本次唯二「CRLF 會真的弄壞東西」的例子（寫 git ref、改 hook shebang）
         所在的兩棵子樹。總數門檻對「範圍被收窄」是盲的，所以改成逐一斷言。
         """
-        for p in GOVERNED_PATHS:
-            assert p.exists(), f"governed path no longer exists: {p}"
-            found = _iter_py_files([p])
-            assert found, f"governed path matched 0 python files: {p}"
-
-        # 每一棵已知子樹都必須仍在涵蓋範圍內，避免整個子樹被無聲摘掉。
+        # ⛔ 不可寫成 `for p in GOVERNED_PATHS: assert ...`。那是對「要被釘住的
+        # 那個變數」本身做斷言 —— 變數縮小，斷言也跟著縮小。實測把
+        # GOVERNED_PATHS 改回只剩 `scripts/` 時，那種寫法 292 個測試全綠，而
+        # 悄悄掉出去的正是本 PR 在 helm/ 修的那一站。所以清單寫死在這裡。
         covered = {f.resolve() for f in GOVERNED_FILES}
-        for sub in ("ops", "session-guards", "tools", "tools/dx",
-                    "tools/lint", "tools/ops"):
-            subtree = REPO_ROOT / "scripts" / sub
+        for sub in REQUIRED_SUBTREES:
+            subtree = REPO_ROOT / sub
             assert subtree.is_dir(), f"expected subtree missing: {subtree}"
             in_subtree = [f for f in _iter_py_files([subtree])
                           if f.resolve() in covered]
             assert in_subtree, (
-                f"scripts/{sub} contributes 0 governed files — the guard's "
-                f"scope was narrowed and this subtree fell out silently"
+                f"{sub} contributes 0 governed files — the guard's scope was "
+                f"narrowed and this subtree fell out silently. If that is "
+                f"intended, delete it from REQUIRED_SUBTREES in the same "
+                f"commit so the removal is reviewable."
             )
 
     @pytest.mark.parametrize(
@@ -392,11 +494,16 @@ class TestWriteSitesPinNewline:
                 f"`* text=auto eol=lf`).\n"
                 f"Without it the SAME generator emits LF on Linux/CI and CRLF "
                 f"on a Windows host.\n"
-                f'If a non-LF ending is genuinely required (csv wants '
-                f'newline=""), pass it explicitly.\n'
-                f"If the file must be CRLF (.bat/.cmd/.ps1 — the only paths "
-                f".gitattributes marks eol=crlf), append "
-                f"`# {IGNORE_MARKER}` on that line."
+                f"Other explicit values are accepted — the rule requires a "
+                f"stated policy, not LF specifically:\n"
+                f'  • csv via the csv module      → newline=""\n'
+                f'  • must be CRLF on every host  → newline="\\r\\n"\n'
+                f"    (.bat/.cmd/.ps1 are the only paths .gitattributes marks "
+                f"eol=crlf; pin CRLF explicitly — do NOT reach for the ignore\n"
+                f"     marker, which restores the platform-dependent default "
+                f"and so is LF on Linux.)\n"
+                f"Only if the call genuinely has no newline= parameter, append "
+                f"`# {IGNORE_MARKER}` on the call's own line."
             )
 
 
@@ -412,6 +519,23 @@ class TestSharedWriteHelpersPinLF:
             "generate_tool_map.py --safe relies on it rather than passing "
             "newline= itself."
         )
+
+    def test_atomic_write_text_emits_lf_without_being_asked(self, tmp_path):
+        """呼叫端不傳 newline 時，落盤 bytes 必須是 LF。
+
+        ⛔ 這支不能被上面那支簽章測試取代。`_atomic_write.py` 內部那行帶著
+        `# line-ending: ignore`（`newline=` 是它自己的參數、無法寫成字面值），
+        所以 static guard 對它是盲的。實測：把那行改成 `newline=None` 之後，
+        守衛乾淨、簽章測試照樣綠、`tests/dx/test_atomic_write.py` 在 Linux 上
+        也全綠 —— 約 49 個 caller 依賴的那個 pin 完全沒有跨平台覆蓋。
+        這支就是補那個洞：不傳 newline，直接驗 bytes。
+        （Windows 上具鑑別力；Linux 上是 smoke test。）
+        """
+        from _atomic_write import atomic_write_text
+
+        target = tmp_path / "sample.md"
+        atomic_write_text(target, "alpha\nbeta\ngamma\n")
+        assert b"\r\n" not in target.read_bytes()
 
     def test_write_text_secure_emits_lf(self, tmp_path):
         """行為測試 —— 在 Windows 上具鑑別力，Linux 上是 smoke test。"""

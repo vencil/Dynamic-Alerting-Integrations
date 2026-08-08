@@ -539,7 +539,7 @@ def main(argv: list[str] | None = None) -> int:
         if marker.exists():
             print("--- marker content ---")
             try:
-                # The marker is written as utf-8 (see write_marker); reading it
+                # The marker is written as utf-8 (inline in _do_init); reading it
                 # with the locale default would raise UnicodeDecodeError on a
                 # cp950 host whenever the status line carries CJK or an emoji —
                 # and UnicodeDecodeError is a ValueError, so an `except OSError`
