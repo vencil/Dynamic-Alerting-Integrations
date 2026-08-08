@@ -203,7 +203,7 @@ def _write_log(
         path.parent.mkdir(parents=True, exist_ok=True)
         # ensure_ascii=False so CJK messages 不 escape 成 \uXXXX
         line = json.dumps(entry, ensure_ascii=False)
-        with path.open("a", encoding="utf-8") as fh:
+        with path.open("a", encoding="utf-8", newline="\n") as fh:
             fh.write(line + "\n")
     except OSError as exc:
         print(
@@ -262,8 +262,11 @@ def _heal_pre_commit_shebang(repo_root: Path) -> str:
     if not hook.exists():
         return "no pre-commit hook installed"
     try:
-        content = hook.read_text()
-    except OSError as exc:
+        # encoding must match the write side below (utf-8). A locale-default
+        # read here would make this a cp950-read → utf-8-write round trip,
+        # silently transcoding any non-ASCII byte in the hook.
+        content = hook.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
         return f"read failed: {exc}"
     lines = content.split("\n", 1)
     if not lines or not lines[0].startswith("#!"):
@@ -536,8 +539,13 @@ def main(argv: list[str] | None = None) -> int:
         if marker.exists():
             print("--- marker content ---")
             try:
-                print(marker.read_text().rstrip())
-            except OSError as exc:
+                # The marker is written as utf-8 (see write_marker); reading it
+                # with the locale default would raise UnicodeDecodeError on a
+                # cp950 host whenever the status line carries CJK or an emoji —
+                # and UnicodeDecodeError is a ValueError, so an `except OSError`
+                # would NOT catch it. Match the encoding, and widen the guard.
+                print(marker.read_text(encoding="utf-8").rstrip())
+            except (OSError, UnicodeDecodeError) as exc:
                 print(f"(read failed: {exc})")
         return 0
 

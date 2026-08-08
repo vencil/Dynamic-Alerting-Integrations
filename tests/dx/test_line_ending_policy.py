@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 from pathlib import Path
 
 import pytest
@@ -60,15 +61,47 @@ REPO_ROOT = Path(bump_docs.__file__).resolve().parent.parent.parent.parent
 # `_federation_revocation_reconciler.py` 讀取端明文標註 load-bearing 的
 # `newline=""` 都照常通過。被擋的只有「沒表態」與「明確要平台預設
 # （`newline=None`）」兩種。
-GOVERNED_PATHS = [REPO_ROOT / "scripts"]
+#
+# 範圍＝**所有會出貨或在生產跑的 Python**：`scripts/`（工具與 hook）、
+# `components/`（打包進映像的 CLI）、`helm/`（init-container 內跑的腳本）。
+# ⛔ 刻意**不含 `tests/`**（實測 1348 個 site）。理由是它們寫的是 tmp fixture、
+# 不是出貨產物，行尾不影響任何消費者；把它們拉進來只會製造一次性的大掃除與
+# 之後每支新測試的摩擦。這是刻意的邊界、不是漏掉——真要納入請先評估那 1348 個。
+GOVERNED_PATHS = [
+    REPO_ROOT / "scripts",
+    REPO_ROOT / "components",
+    REPO_ROOT / "helm",
+]
 
 # 與 check_open_encoding.py 的 `# open-encoding: ignore` 同風格。
 IGNORE_MARKER = "line-ending: ignore"
 
-# 這兩個 wrapper 自己在內部 pin 了 LF，呼叫端不必再傳 newline=。
-# 但**明確傳 newline=None** 會把平台預設轉換要回來（generate_tool_map.py 就是
-# 這樣中招的），所以那個形狀仍要擋。
-LF_PINNING_WRAPPERS = {"write_text_secure", "atomic_write_text"}
+# ⛔ 這張表刻意**只列 wrapper**，不列「開檔的語法形狀」。
+# 第一版守衛把規則寫成「`open` 或 `write_text` 這兩個名字」，結果是列舉而非推導：
+# `Path.open("w")` / `os.fdopen(fd,"w")` / `NamedTemporaryFile("w")` / `io.open`
+# / `gzip.open(...,"wt")` 全部從旁邊走過去（實測 22 種形狀中 20 種漏掉），樹裡
+# 當時就有 6 個真實未 pin 的站點。現在改成：**先判斷這個呼叫會不會交出一個
+# 可寫的文字 handle**，再要求它表態；名字只用來決定「預設 mode 是什麼」。
+#
+# `atomic_write_text` 自己 pin 了 LF（預設 `newline="\n"`，另有專門測試釘住），
+# 呼叫端不必再傳；但**明確傳 `newline=None`** 會把平台預設要回來
+# （`generate_tool_map.py` 正是這樣中招），所以那個形狀仍要擋。
+LF_PINNING_WRAPPERS = {"atomic_write_text"}
+
+# 會交出檔案 handle 的呼叫 → 該呼叫在「沒有指定 mode」時的預設 mode。
+# 依此判斷是否為可寫文字模式；`b` 一律視為二進位（無換行轉換）。
+HANDLE_FACTORIES = {
+    "open": "r",          # builtin open / Path.open / io.open / gzip.open / codecs.open
+    "fdopen": "r",        # os.fdopen
+    "NamedTemporaryFile": "w+b",
+    "TemporaryFile": "w+b",
+    "SpooledTemporaryFile": "w+b",
+}
+
+# 檔案 mode 字串的形狀（用來在位置引數中辨認 mode，而不必假設它在第幾個）。
+# 必要，因為 mode 的位置隨形狀而變：`open(path, mode)` 是第 2 個、
+# `Path.open(mode)` 是第 1 個、`os.fdopen(fd, mode)` 是第 2 個。
+_MODE_RE = re.compile(r"^[rwxa]\+?[btU]*\+?$")
 
 
 def _iter_py_files(paths: list[Path]) -> list[Path]:
@@ -91,28 +124,70 @@ def _get_kwarg(call: ast.Call, name: str):
     return None
 
 
-def _mode_of(call: ast.Call):
-    """Return open()'s mode string if statically known, else None."""
-    if len(call.args) >= 2 and isinstance(call.args[1], ast.Constant):
-        if isinstance(call.args[1].value, str):
-            return call.args[1].value
+_UNRESOLVED_MODE = object()
+
+
+def _mode_of(call: ast.Call, default: str):
+    """Resolve the file mode of a handle-producing call.
+
+    Returns the mode string, or `_UNRESOLVED_MODE` when a mode is supplied but
+    is not a static literal (e.g. `open(p, mode_var)`).
+
+    ⛔ 「有給 mode 但看不懂」與「根本沒給 mode」必須是**不同**的回傳值。
+    第一版把兩者都回 `None` 然後一律放行 ⇒ `open(p, mode_var)` 靜默通過。
+    現在前者 fail-closed（要求作者表態或標 ignore），後者才套用預設。
+
+    mode 不從固定位置取：位置隨呼叫形狀而變（`open(path, mode)` 第 2 個、
+    `Path.open(mode)` 第 1 個、`NamedTemporaryFile(mode)` 第 1 個），所以改為
+    掃描位置引數、找出長得像 mode 的字串字面值。
+    """
     kw = _get_kwarg(call, "mode")
-    if kw is not None and isinstance(kw.value, ast.Constant):
-        if isinstance(kw.value.value, str):
+    if kw is not None:
+        if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
             return kw.value.value
-    return None
+        return _UNRESOLVED_MODE
+
+    saw_non_literal = False
+    for arg in call.args:
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            if _MODE_RE.match(arg.value):
+                return arg.value
+        elif not isinstance(arg, ast.Constant):
+            saw_non_literal = True
+    # A bare `open(path)` has exactly one arg and no mode → the default applies.
+    # `open(path, something_dynamic)` might be hiding a write mode → fail closed.
+    if saw_non_literal and len(call.args) >= 2:
+        return _UNRESOLVED_MODE
+    return default
 
 
-def _is_explicit_none(kw) -> bool:
-    return isinstance(kw.value, ast.Constant) and kw.value.value is None
+def _newline_verdict(kw):
+    """Classify a `newline=` keyword. Returns None if acceptable, else a reason.
+
+    ⛔ 「有傳 newline=」不等於「pin 了行尾」。`newline=os.linesep` 會原封不動
+    把原始 bug 寫回去，卻長得完全合規（實測會產生 CRLF）——那正是想修這個
+    bug 的人最可能寫出的東西。所以只接受**字串字面值**；任何運算式（變數、
+    `os.linesep`、屬性存取）都要求作者改成字面值或明示 ignore。
+    """
+    if kw is None:
+        return "no newline= (platform default → CRLF on Windows)"
+    if isinstance(kw.value, ast.Constant):
+        if kw.value.value is None:
+            return "newline=None (explicit platform default)"
+        if isinstance(kw.value.value, str):
+            return None  # "\n" / "" / anything the author literally chose
+    return (
+        f"newline={ast.unparse(kw.value)} is not a string literal — "
+        f"os.linesep / a variable can still be CRLF"
+    )
 
 
 def _violations_in(path: Path) -> list[tuple[int, str]]:
     """Return [(lineno, reason)] for text-mode writes that don't pin newline.
 
-    可推導規則，不是列舉違規語法：任何**會寫出文字**的呼叫都必須明確表態
-    `newline=`，而且不能是 `None`。值本身交給作者決定（csv 的 `newline=""`
-    合法通過），強制的是「必須表態」。
+    規則由**操作**推導，不是列舉語法：凡是會交出「可寫的文字 handle」的呼叫，
+    或直接寫出文字的呼叫，都必須明確表態 `newline=` 且值為字串字面值。值本身
+    交給作者決定（csv 的 `newline=""` 合法通過），強制的是「必須表態」。
     """
     source = path.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(path))
@@ -124,30 +199,41 @@ def _violations_in(path: Path) -> list[tuple[int, str]]:
             continue
 
         fn = node.func
+        name = fn.attr if isinstance(fn, ast.Attribute) else (
+            fn.id if isinstance(fn, ast.Name) else None)
+        if name is None:
+            continue
         newline_kw = _get_kwarg(node, "newline")
         reason = None
 
-        if isinstance(fn, ast.Attribute) and fn.attr == "write_text":
-            if newline_kw is None:
-                reason = "Path.write_text() without newline="
-            elif _is_explicit_none(newline_kw):
-                reason = "Path.write_text(newline=None) — platform default"
+        if name == "write_text":
+            # Path.write_text(...) — always text, always writing.
+            verdict = _newline_verdict(newline_kw)
+            if verdict:
+                reason = f"write_text(): {verdict}"
 
-        elif isinstance(fn, ast.Name) and fn.id == "open":
-            mode = _mode_of(node)
-            if mode is None or "b" in mode:
-                continue  # read-default or binary — no text translation
-            if not any(c in mode for c in "wax"):
-                continue  # reading only
-            if newline_kw is None:
-                reason = f"open(..., {mode!r}) without newline="
-            elif _is_explicit_none(newline_kw):
-                reason = f"open(..., {mode!r}, newline=None) — platform default"
-
-        elif isinstance(fn, ast.Name) and fn.id in LF_PINNING_WRAPPERS:
-            if newline_kw is not None and _is_explicit_none(newline_kw):
+        elif name in HANDLE_FACTORIES:
+            mode = _mode_of(node, HANDLE_FACTORIES[name])
+            if mode is _UNRESOLVED_MODE:
                 reason = (
-                    f"{fn.id}(newline=None) — opts back out of the helper's "
+                    f"{name}(): mode is not a literal, so it cannot be proven "
+                    f"read-only or binary — pin newline= or mark ignore"
+                )
+            elif "b" in mode:
+                continue  # binary — no newline translation happens
+            elif not any(c in mode for c in "wax+"):
+                continue  # read-only text ("r"); nothing is written
+            else:
+                verdict = _newline_verdict(newline_kw)
+                if verdict:
+                    reason = f"{name}(..., {mode!r}): {verdict}"
+
+        elif name in LF_PINNING_WRAPPERS:
+            # Helper pins LF internally; only an explicit opt-out is a problem.
+            if newline_kw is not None and isinstance(newline_kw.value, ast.Constant) \
+                    and newline_kw.value.value is None:
+                reason = (
+                    f"{name}(newline=None) — opts back out of the helper's "
                     f'newline="\\n" default'
                 )
 
@@ -163,6 +249,102 @@ def _violations_in(path: Path) -> list[tuple[int, str]]:
 GOVERNED_FILES = _iter_py_files(GOVERNED_PATHS)
 
 
+# ⛔ 反例樣本 —— 這一組的存在本身就是閘門的一部分。
+#
+# 第一版沒有這組樣本，後果是：把 `_violations_in()` 第一行改成 `return []`，
+# 250 個 case **全部維持綠**。因為受管的樹是乾淨的，parametrize 那層只走綠
+# 方向，從來沒有任何一個已知違規證明偵測器還活著——偵測器可以整個被掏空而
+# 沒有任何測試察覺。反例與正例必須成對。
+#
+# 每一條的 bytes 都在 Windows host 上實測過會產生 CRLF。
+VIOLATING_SAMPLES = {
+    "builtin_open_w": 'open(p, "w", encoding="utf-8").write(s)',
+    "builtin_open_a": 'open(p, "a", encoding="utf-8").write(s)',
+    "builtin_open_rplus": 'open(p, "r+", encoding="utf-8").write(s)',
+    "path_open_w": 'p.open("w", encoding="utf-8").write(s)',
+    "path_open_a": 'p.open("a", encoding="utf-8").write(s)',
+    "io_open_w": 'io.open(p, "w", encoding="utf-8").write(s)',
+    "os_fdopen_w": 'os.fdopen(fd, "w", encoding="utf-8").write(s)',
+    "named_tmp_positional": 'tempfile.NamedTemporaryFile("w", suffix=".msg")',
+    "named_tmp_kwarg": 'tempfile.NamedTemporaryFile(mode="w", suffix=".json")',
+    "gzip_open_wt": 'gzip.open(p, "wt", encoding="utf-8").write(s)',
+    "write_text_bare": 'p.write_text(s, encoding="utf-8")',
+    "write_text_none": 'p.write_text(s, encoding="utf-8", newline=None)',
+    "open_newline_none": 'open(p, "w", encoding="utf-8", newline=None)',
+    # 這兩條是「看起來合規、實際照樣 CRLF」——最容易被寫出來的那種
+    "newline_os_linesep": 'open(p, "w", encoding="utf-8", newline=os.linesep)',
+    "write_text_os_linesep": 'p.write_text(s, encoding="utf-8", newline=os.linesep)',
+    "newline_variable": 'open(p, "w", encoding="utf-8", newline=nl)',
+    # mode 靜態不可知 ⇒ 無法證明是唯讀/二進位 ⇒ fail closed
+    "dynamic_mode": 'open(p, mode_var, encoding="utf-8")',
+    "atomic_wrapper_optout": 'atomic_write_text(p, s, newline=None)',
+}
+
+COMPLIANT_SAMPLES = {
+    "open_lf": 'open(p, "w", encoding="utf-8", newline="\\n").write(s)',
+    "write_text_lf": 'p.write_text(s, encoding="utf-8", newline="\\n")',
+    "csv_empty_newline": 'open(p, "w", encoding="utf-8", newline="").write(s)',
+    "path_open_lf": 'p.open("w", encoding="utf-8", newline="\\n").write(s)',
+    "fdopen_lf": 'os.fdopen(fd, "w", encoding="utf-8", newline="\\n").write(s)',
+    "named_tmp_lf": 'tempfile.NamedTemporaryFile(mode="w", newline="\\n")',
+    # 讀取與二進位不該被碰
+    "read_only": 'open(p, "r", encoding="utf-8").read()',
+    "read_default": 'open(p, encoding="utf-8").read()',
+    "path_open_read": 'p.open(encoding="utf-8").read()',
+    "binary_write": 'open(p, "wb").write(b)',
+    "named_tmp_binary_default": 'tempfile.NamedTemporaryFile(suffix=".bin")',
+    "write_bytes": 'p.write_bytes(b)',
+    # wrapper 自己 pin 了 LF，呼叫端不必再傳
+    "atomic_wrapper_default": 'atomic_write_text(p, s)',
+    "secure_wrapper": 'write_text_secure(str(p), s)',
+}
+
+
+class TestGuardDetectsKnownViolations:
+    """反例層：證明偵測器活著。
+
+    ⛔ 不要刪掉這個 class。沒有它，`_violations_in()` 可以整個回傳空 list 而
+    整份測試檔仍然全綠（實測 250/250 pass）——那是「守衛存在但不會跑」的
+    完全體。
+    """
+
+    @pytest.mark.parametrize("name", sorted(VIOLATING_SAMPLES))
+    def test_violating_shape_is_flagged(self, name, tmp_path):
+        sample = tmp_path / f"v_{name}.py"
+        sample.write_text(VIOLATING_SAMPLES[name] + "\n",
+                          encoding="utf-8", newline="\n")
+        found = _violations_in(sample)
+        assert found, (
+            f"guard did NOT flag a known-bad shape: {VIOLATING_SAMPLES[name]}\n"
+            f"這個形狀在 Windows 上會寫出 CRLF，守衛必須看得見它。"
+        )
+
+    @pytest.mark.parametrize("name", sorted(COMPLIANT_SAMPLES))
+    def test_compliant_shape_is_not_flagged(self, name, tmp_path):
+        sample = tmp_path / f"c_{name}.py"
+        sample.write_text(COMPLIANT_SAMPLES[name] + "\n",
+                          encoding="utf-8", newline="\n")
+        found = _violations_in(sample)
+        assert not found, (
+            f"guard raised a FALSE POSITIVE on: {COMPLIANT_SAMPLES[name]}\n"
+            f"got: {found}"
+        )
+
+    def test_ignore_marker_suppresses(self, tmp_path):
+        """逃生門必須真的有效——它在 repo 內 0 次使用，沒有測試就等於沒驗過。"""
+        sample = tmp_path / "ignored.py"
+        sample.write_text(
+            f'open(p, "w", encoding="utf-8")  # {IGNORE_MARKER}\n',
+            encoding="utf-8", newline="\n")
+        assert not _violations_in(sample)
+        # 沒有 marker 的同一行必須仍然被抓 —— 證明上面那條是 marker 生效，
+        # 不是這個形狀本來就不會被抓（否則這個測試是空跑）。
+        bare = tmp_path / "bare.py"
+        bare.write_text('open(p, "w", encoding="utf-8")\n',
+                        encoding="utf-8", newline="\n")
+        assert _violations_in(bare)
+
+
 class TestWriteSitesPinNewline:
     """Static AST guard — 跨平台閘門（見模組 docstring 的 ⛔ 段）。"""
 
@@ -171,11 +353,30 @@ class TestWriteSitesPinNewline:
 
         如果 scripts/ 被搬走或改名，`_iter_py_files` 會安靜地回空 list，
         底下每個 parametrize 都變成 0 個 case ⇒ 整層守衛無聲消失。
+
+        ⛔ 不要把這個換回單一的總數門檻。原本寫的是 `> 150`，而實際值是 250：
+        把 `GOVERNED_PATHS` 收窄成 `scripts/tools` 會剩 231 個檔、照樣通過，
+        被靜靜丟掉的正好是 `scripts/ops` 與 `scripts/session-guards`——也就是
+        本次唯二「CRLF 會真的弄壞東西」的例子（寫 git ref、改 hook shebang）
+        所在的兩棵子樹。總數門檻對「範圍被收窄」是盲的，所以改成逐一斷言。
         """
-        assert len(GOVERNED_FILES) > 150, (
-            f"only {len(GOVERNED_FILES)} governed files found — "
-            f"GOVERNED_PATHS is stale, the guard is scanning almost nothing"
-        )
+        for p in GOVERNED_PATHS:
+            assert p.exists(), f"governed path no longer exists: {p}"
+            found = _iter_py_files([p])
+            assert found, f"governed path matched 0 python files: {p}"
+
+        # 每一棵已知子樹都必須仍在涵蓋範圍內，避免整個子樹被無聲摘掉。
+        covered = {f.resolve() for f in GOVERNED_FILES}
+        for sub in ("ops", "session-guards", "tools", "tools/dx",
+                    "tools/lint", "tools/ops"):
+            subtree = REPO_ROOT / "scripts" / sub
+            assert subtree.is_dir(), f"expected subtree missing: {subtree}"
+            in_subtree = [f for f in _iter_py_files([subtree])
+                          if f.resolve() in covered]
+            assert in_subtree, (
+                f"scripts/{sub} contributes 0 governed files — the guard's "
+                f"scope was narrowed and this subtree fell out silently"
+            )
 
     @pytest.mark.parametrize(
         "py_file", GOVERNED_FILES, ids=lambda p: p.name,
@@ -305,14 +506,20 @@ class TestSyncCountsEmitsLF:
 
         CRLF 那個 bug 的傷害之所以隱形，正是因為「只有一行的 diff」與
         「整檔被重寫」在 git 眼裡長得一樣。這裡直接比對行內容。
+
+        ⛔ 比較走 **read_bytes()**，不可改回 `read_text().splitlines()`。
+        `read_text` 會做 universal-newline 正規化，把 `b"a\\r\\nb"` 讀成
+        `"a\\nb"` —— 也就是把這個測試想觀察的那個維度整個洗掉：即使 bug 完整
+        存在、整檔被改寫成 CRLF，逐行比對仍然只會看到 2 行不同。原本的寫法正是
+        如此，它掛在名為 `...EmitsLF` 的 class 底下卻對 LF 毫無鑑別力。
         """
         root = patch_repo_root(bump_docs)
         claude_md = self._build_fixture_repo(root)
-        before_lines = claude_md.read_text(encoding="utf-8").splitlines()
+        before_lines = claude_md.read_bytes().split(b"\n")
 
         bump_docs.apply_count_updates()
 
-        after_lines = claude_md.read_text(encoding="utf-8").splitlines()
+        after_lines = claude_md.read_bytes().split(b"\n")
         assert len(before_lines) == len(after_lines)
 
         differing = [

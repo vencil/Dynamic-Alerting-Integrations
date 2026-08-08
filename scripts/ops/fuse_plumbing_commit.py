@@ -135,7 +135,14 @@ def plumbing_commit(
         else:
             parent = _run(["git", "rev-parse", "HEAD"])
 
-        with tempfile.NamedTemporaryFile("w", suffix=".msg", delete=False) as mf:
+        # ⛔ newline="\n" is load-bearing: `git commit-tree -F` takes this file
+        # VERBATIM as the commit message. On a Windows host the platform default
+        # would put a CR on every line of a PERMANENT commit object — including
+        # the trailer block, which `git interpret-trailers` and the
+        # Self-Review-Pass-2 gate parse. Unfixable afterwards without a history
+        # rewrite. (This whole module only ever runs on the Windows host.)
+        with tempfile.NamedTemporaryFile("w", suffix=".msg", delete=False,
+                                         encoding="utf-8", newline="\n") as mf:
             mf.write(message)
             msg_path = mf.name
         try:

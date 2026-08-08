@@ -703,7 +703,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "3cc4a60b384da1b98331157e0af438038101801cd11c33ba2e17a9eb70f6b8e1",
+ "source_digest": "a811855bc91b146f5a8d57d8d8e5178b82d3a03d89b7cf11fc1828996a63b447",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1746,6 +1746,7 @@
   ],
   "scripts/ops": [
    "tests/dx/test_bat_label_integrity.py",
+   "tests/dx/test_line_ending_policy.py",
    "tests/ops/test_ci_flake_retry.py"
   ],
   "scripts/ops/_verify_download.sh": [
@@ -1802,6 +1803,9 @@
    "tests/dx/test_bat_label_integrity.py",
    "tests/dx/test_preflight_bash.py"
   ],
+  "scripts/session-guards": [
+   "tests/dx/test_line_ending_policy.py"
+  ],
   "scripts/session-guards/git_check_lock.sh": [
    "tests/ops/test_git_check_lock.py"
   ],
@@ -1818,6 +1822,7 @@
   "scripts/tools": [
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_generate_rule_pack_readme.py",
+   "tests/dx/test_line_ending_policy.py",
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_structure.py",
    "tests/ops/test_ci_flake_retry.py",

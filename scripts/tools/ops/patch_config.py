@@ -329,7 +329,7 @@ def apply_patch(cm_data, mode, tenant, metric_key, value):
         patch_data = patch_multifile(cm_data, tenant, metric_key, value)
 
     with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json',
-                                     encoding="utf-8") as temp:
+                                     encoding="utf-8", newline='\n') as temp:
         json.dump(patch_data, temp)
         temp_path = temp.name
 
