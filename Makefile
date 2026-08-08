@@ -358,8 +358,16 @@ fuse-locks: ## 偵測 .git/ 的 phantom lock（FUSE 鬼影）
 	@python3 scripts/ops/fuse_plumbing_commit.py --show-locks
 
 .PHONY: recover-index
-recover-index: ## FUSE index corruption 逃生門：從 HEAD 重建 .git/index (用：CHECK=1 只診斷不修)
-	@if [ "$(CHECK)" = "1" ]; then \
+recover-index: ## FUSE index corruption 逃生門：從 HEAD 重建 .git/index (只要提到 CHECK＝只診斷不修)
+	@# The SIGNAL IS THAT THE OPERATOR TYPED `CHECK`, not what they set it to.
+	@# Two earlier versions both let a typo repair instead of diagnose:
+	@#   `= "1"`  sent CHECK=true / CHECK=yes down the REPAIR path;
+	@#   `-n …`   still sent `CHECK=` and `CHECK=$UNSET_VAR` there, and an empty
+	@#            exported CHECK becomes a make variable too — so someone who
+	@#            typed the word CHECK got their staging area discarded.
+	@# `origin` distinguishes "defined, possibly empty" from "never mentioned",
+	@# which is the actual question. Repair stays reachable only by saying nothing.
+	@if [ "$(origin CHECK)" != "undefined" ]; then \
 		bash scripts/ops/recover_index.sh --check; \
 	else \
 		bash scripts/ops/recover_index.sh; \
