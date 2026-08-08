@@ -76,6 +76,62 @@ jobs:
               - "mkdocs.yml"
               - "scripts/tools/**/*.py"
               - "scripts/tools/lint/**/*.sh"
+              # ⛔ Three inputs reached INDIRECTLY — through a script a gated job
+              # merely invokes. That is exactly the class the coverage guard in
+              # tests/ops/test_portal_path_filter_coverage.py documents it
+              # CANNOT see, so this group is maintained by measurement, not by
+              # review: every `python … .py` command in every gated leg of this
+              # workflow was replayed under an open()/read_text recorder, and
+              # these are the tracked files that came back uncovered.
+              #   * .doclinkignore — check_doc_links.py (`check-links`) loads it
+              #     to decide which link failures are WAIVED, so editing it alone
+              #     changes what that required check enforces while skipping it.
+              #   * scripts/tools/lint/mkdocs-anchor-debt.txt — the ledger
+              #     `mkdocs-build` passes or fails on, compared as a SET in BOTH
+              #     directions (`comm -13` then `comm -23`), so deleting a line
+              #     is as fatal as adding one. It landed 2026-08-08 (c33508d2)
+              #     already outside this filter: the `**/*.sh` entry above covers
+              #     the script but not its data file.
+              #   * components/threshold-exporter/README.md — read by
+              #     check_doc_links.py; nothing else here reaches it.
+              # ⚠️ The sweep is in-process, so it under-reports any leg that
+              # fans out through subprocess — `drift-checks` (validate_all.py,
+              # 12 subprocess calls) is the one that does. Its inputs are NOT
+              # established by this measurement.
+              - ".doclinkignore"
+              - "scripts/tools/lint/mkdocs-anchor-debt.txt"
+              - "components/threshold-exporter/README.md"
+              # ⛔ The pin SSOT six of this workflow's gated jobs INSTALL FROM
+              # (`pip install … -c requirements/ci-constraints.txt`, #1158) —
+              # not a file any doc check reads, which is why no "does a test
+              # read it?" review ever caught it. `mkdocs-build` installs the
+              # pinned mkdocs-material / static-i18n / pymdown set from it and
+              # is the ONLY pre-merge verification that the docs still build
+              # (the pre-push strict hook is scoped to docs/mkdocs paths, so a
+              # requirements-only push does not trigger it either). Without
+              # this entry a bump of those pins touches no `docs` path, every
+              # gated leg reports `skipped`, and `all-checks` tolerates
+              # `skipped` unconditionally — it fails only on failure/cancelled,
+              # deliberately weaker than ci.yml's gate, which re-checks the
+              # detect output. So the bump merges with NO pre-merge doc-build
+              # signal at all — which is the whole point of a required check.
+              # (Every GATED leg reports `skipped`; `head-blob-hygiene` has no
+              # `if:` and reports success, which is why `all-checks` is green
+              # with nothing having built the docs.) The break then lands
+              # post-merge on this workflow's own push-to-main run — push has
+              # no top-level `paths:` and `mkdocs-build` gates on
+              # `event_name != 'pull_request' || …`, so it runs there — i.e.
+              # main goes red for everyone instead of the PR going red for its
+              # author.
+              #
+              # Accepted cost: `docs` is ONE filter gating eight jobs, so a pin
+              # bump now also runs the two that do not install from it —
+              # doc-line-count and i4-runbook-smoke-test (whose three curl
+              # downloads are unverified, i.e. a network-flake surface). Worth
+              # it against a silently unbuilt doc site; recorded so it is a
+              # choice, not a surprise. Enforced by
+              # tests/ops/test_portal_path_filter_coverage.py.
+              - "requirements/**"
               - ".github/workflows/docs-ci.yaml"
               - ".pre-commit-config.yaml"
 

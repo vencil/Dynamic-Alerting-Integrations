@@ -146,6 +146,33 @@ jobs:
               - "k8s/**"
               - "try-local/**"
               - "pyproject.toml"
+              # ⛔ The pin SSOT this job INSTALLS FROM, not a file any test
+              # reads. Every `pip install … -c requirements/ci-constraints.txt`
+              # in CI (#1158) resolves versions here, so this file decides the
+              # versions the whole Python suite executes under. Without this
+              # entry a pin bump — which touches ONLY requirements/** — reports
+              # python_changed=false, skips this job, and the aggregate gate
+              # reads the skip as PASS (by design, see the banner). Precisely:
+              # the ungated `lint-rule-packs` job does install these pins and
+              # run pytest, and the full suite runs on the push-to-main after
+              # the merge — so what is missing is the PRE-MERGE signal, and the
+              # "local green, CI first-run red" drift class the constraints
+              # file exists to close lands on main, for everyone, instead of on
+              # the PR that caused it. The usual "no test reads
+              # it, so nothing can break" reasoning does not apply — the file is
+              # not an INPUT to the suite, it is the suite's ENVIRONMENT.
+              # Enforced by tests/ops/test_portal_path_filter_coverage.py
+              # (gated-job step-input half), which asserts that every repo file
+              # a path-gated job EXECUTES or INSTALLS FROM — an interpreter's
+              # script argument, pip's `-c`/`-r` file, or a `./script` run in
+              # command position — would TRIGGER the
+              # condition gating that job. (It evaluates the whole `if:`, not
+              # one filter: `go-tests-threshold-exporter` is gated on
+              # `go || docs`, so either filter matching is enough.)
+              # Deliberately narrower than "every file the
+              # job mentions": prose in an `::error::` string is not a
+              # dependency, and demanding it would only make filters worse.
+              - "requirements/**"
               - "Makefile"
               - ".pre-commit-config.yaml"
               - ".github/custom-rule-policy.yaml"
@@ -178,6 +205,17 @@ jobs:
               # SATISFIES branch protection. Every entry above is enforced by
               # tests/ops/test_portal_path_filter_coverage.py.
               - "tools/portal/src/**"
+              # ⛔ The file that DEFINES which files above are Vitests. The
+              # coverage guard hard-codes `tools/portal/tests` as the tree it
+              # scans, and vitest.config.ts's `include` is what makes that true.
+              # Widen the include (add `src/**/*.test.*`, say) and every new
+              # Vitest's out-of-tree reads become permanently invisible — while
+              # the PR making that change matches `portal` but NOT `python`, so
+              # the guard does not even run to notice. Found by blind review;
+              # `test_this_guard_is_not_itself_path_skippable` now lists it, and
+              # `test_scanned_portal_tree_matches_the_vitest_include` pins the
+              # two together so the entry cannot rot into decoration.
+              - "tools/portal/vitest.config.ts"
             # Portal Tests: Vitest + esbuild build verification + committed-dist
             # freshness + the RBAC wizard drift byte-clamp. Runs when portal
             # source or its committed dist change, AND when the wizard testdata
@@ -224,6 +262,15 @@ jobs:
               - "rule-packs/threshold-registry.yaml"
               - "rule-packs/ALERT-REFERENCE.md"
               - "components/tenant-api/internal/rbac/testdata/wizard/**"
+              # ⛔ Same class as `requirements/**` in `python` above, found by
+              # the same mechanical guard: this leg RUNS this script as its
+              # bundle-size gate, and no other job executes it against the real
+              # tree (its only pytest checks the --help contract). A PR that
+              # edits the budget script alone matches `scripts/**` → `python`,
+              # so Python Tests runs — but Portal Tests, the one leg that would
+              # actually execute the edited gate, is skipped, and the skip reads
+              # as PASS. A raised budget or a broken gate merges unexercised.
+              - "scripts/tools/lint/check_portal_bundle_size.py"
               - ".github/workflows/ci.yml"
             # docs: threshold-exporter's pkg/config/docs_defaults_sample
             # _test.go (#1327) walks docs/**/*.md and decodes every documented
