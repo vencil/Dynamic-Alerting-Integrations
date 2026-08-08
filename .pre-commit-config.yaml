@@ -1538,3 +1538,76 @@ repos:
     hooks:
       - id: actionlint
         args: [-shellcheck=, -pyflakes=]
+
+  # --- Shell lint: ShellCheck, SC2006 class ------------------------------------
+  # Hybrid policy (lint-policy / iac-lint-baseline): official OSS engine, no Vibe
+  # wrapper. Covers the SHELL-SCRIPT face — 60 tracked files (59 `*.sh` plus
+  # `scripts/hooks/commit-msg`, which `identify` tags from its shebang). Baseline
+  # measured before enabling: 0 SC2006 across all 60.
+  #
+  # ⚠️ This does NOT discharge the "enabling shellcheck-on-workflows" decision the
+  # actionlint block above defers — that is actionlint's own `-shellcheck=`, still
+  # off, and this hook is `types: [shell]` so it never opens a workflow YAML. Data
+  # point for whoever takes that decision: the workflow face is also at 0 SC2006
+  # today (measured across all `run:` blocks after the fix in this change).
+  #
+  # AUTO stage, not manual: pre-commit installs the binary itself from the
+  # shellcheck-py wheel, so there is no "present on CI, absent on Windows" split
+  # to route around — measured on a Windows 11 host, this hook runs and reports
+  # byte-identically to CI in ~5s. (An earlier revision of this block claimed the
+  # opposite and used `stages: [manual]`; that reasoning was borrowed from
+  # actionlint, which shells out to a SYSTEM shellcheck, and does not apply here.)
+  # Auto also means contributors get it on commit rather than only at CI.
+  #
+  # Scoped by `--include` rather than enabling the full ruleset: at this severity
+  # the repo currently carries dozens of other findings (SC2034 / SC1091 / SC2016
+  # / SC2015 / SC2001 / SC2086 / SC2064 …), so a blanket enable would land red.
+  # Widening is its own baseline pass, exactly as this one was.
+  #
+  # ⛔ The four SC10xx codes and `--norc` are here for FAIL-CLOSED reasons, not
+  # because anyone wants parse-error linting: with `--include=SC2006` alone, a
+  # file ShellCheck goes quiet on yields NO output and exit 0, so the backtick
+  # check is silently off for it. THREE such doors exist — each measured against
+  # the pinned 0.10.0 binary with a live `` `make …` `` in the file:
+  #   1. it cannot PARSE the script (unterminated if/case/brace/quote) → SC1072 /
+  #      SC1073 — closed by including those codes;
+  #   2. it declines the SHEBANG (`#!/usr/bin/env zsh`, `#!…python3`) → SC1071
+  #      only — closed by including that code. Latent today (all 60 files are
+  #      bash/sh). ⚠️ SC1008 is NOT a door and is included defensively only:
+  #      measured, `#!/opt/weird/thing` emits SC1008 *and* SC2006 and still exits
+  #      1 under an SC2006-only include, i.e. the file is analysed normally. It
+  #      costs nothing and covers the case where a future ShellCheck turns an
+  #      unrecognised shebang into a refusal;
+  #   3. the finding is SUPPRESSED — `.shellcheckrc` carrying `disable=SC2006`
+  #      (read from the file's directory upward, from cwd, and from $HOME), or an
+  #      in-file `# shellcheck disable=SC2006` / `disable=all`.
+  # `--norc` closes the rc-file half of door 3. ⚠️ The IN-FILE directive is NOT
+  # closed and deliberately so — it is ShellCheck's sanctioned opt-out and it is
+  # visible in the diff that adds it. Know that it exists: the widening pass this
+  # block anticipates is exactly when someone reaches for `disable=`, and a blanket
+  # `disable=all` would take SC2006 with it.
+  # Verified: rc=0 for every door without these settings, rc=1 with them (except
+  # the in-file directive, which stays rc=0 by design), clean script rc=0 always.
+  #
+  # ⛔ DO NOT take SC2006's own "Did you mean" suggestion. It rewrites the
+  # backtick pair as `$(...)`, which still EXECUTES — and `$(...)` is not an
+  # SC2006 violation, so the tool then goes quiet on a defect it just moved.
+  # For prose that is merely QUOTING a command name, escape it: \` .
+  #
+  # Why THIS class: a backtick pair used as typographic quoting inside a
+  # double-quoted string is EXECUTED. `recover_index.sh`'s advice line ran
+  # `make recover-index` — the repair path — during the documented diagnose-only
+  # `--check`, rebuilding .git/index and discarding the operator's staged work
+  # while still exiting 2 ("no rebuild"). Convention did not prevent it: three
+  # other backticks in that same file were already escaped correctly.
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        # ⚠️ Block sequence, NOT flow style: in `args: [a, --include=X,Y,Z]` the
+        # commas inside the value split it into separate YAML items, so Y and Z
+        # reach shellcheck as FILENAMES ("openBinaryFile: does not exist").
+        args:
+          - --norc
+          - --severity=style
+          - --include=SC2006,SC1071,SC1072,SC1073,SC1008
