@@ -11,7 +11,6 @@ the suffix change captures the actual concern instead of a generic "extended".
 The two files stay split because the combined LOC (~2200) is too large for a
 single comprehensive test file.
 """
-import base64
 import functools
 import hashlib
 import json
@@ -20,7 +19,7 @@ import posixpath
 import re
 import subprocess
 import tempfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1037,9 +1036,6 @@ class TestEqualLabelGatedInvariant:
 # Shared rule-tree scanner for the static label-contract gates below
 # ============================================================
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-# The one platform rules ConfigMap that exists today. Kept for HUMAN-READABLE
-# messages only — it is NOT the discovery criterion any more, see
-# _is_platform_cm_location.
 # The rule-tree scanner now lives in scripts/tools/lint/_rule_tree.py so that
 # other gates can import it — see that module's docstring for why the three
 # readers had drifted apart while it was stranded in this file.
@@ -1050,14 +1046,11 @@ from _rule_tree import (  # noqa: E402
     _expected_rule_files,
     _generated_pack_names,
     _is_platform_cm_location,
-    _is_rule_groups,
     _iter_repo_alert_rules,
-    _iter_rule_containers,
     _platform_rule_locations,
     _rule_containers,
     _rule_shaped_but_unparsed,
     _source_pack_alerts,
-    _norm_expr,
 )
 
 # ============================================================
@@ -1110,9 +1103,9 @@ class TestSentinelLabelContract:
     def test_component_sentinel_reserved_for_severity_none(self):
         # The discriminator is RESERVED: a deliverable (severity != none) alert
         # must never ride component="sentinel" or the sinkhole would eat it.
-        examined = 0
+        examined_files = set()
         for where, rule in self._iter_alert_rules():
-            examined += 1
+            examined_files.add(where.split(":", 1)[0])
             labels = rule.get("labels") or {}
             if labels.get("component") == "sentinel":
                 assert labels.get("severity") == "none", (
@@ -1121,10 +1114,16 @@ class TestSentinelLabelContract:
                     f"{labels.get('severity')!r} — the sentinel sink would "
                     f"swallow a deliverable alert (#1095)")
         # ⛔ Non-vacuity: every assertion above lives inside the loop, so an
-        # empty scan makes this contract pass by examining nothing.
-        assert examined >= 350, (
-            f"only {examined} alert(s) examined — the reserved-value claim is "
-            "only as strong as the coverage behind it")
+        # empty scan makes this contract pass by examining nothing. Asserted
+        # PER FILE against `git ls-files`, not as a total count — see
+        # _expected_rule_files' docstring for why a count is both too loose
+        # (16 rules could vanish under the old `>= 350`) and too tight (any
+        # legitimate pack retirement turned it red).
+        missing = sorted(_expected_rule_files() - examined_files)
+        assert not missing, (
+            f"{len(missing)} shipped rules file(s) contributed no alert to "
+            f"this scan: {missing[:10]} — the reserved-value claim is only as "
+            "strong as the coverage behind it")
 
 
 # ============================================================
@@ -1259,15 +1258,14 @@ class TestPlatformAlertSourceContract:
         import _rule_tree
         original = _rule_tree._rule_containers
         try:
-            _source_pack_alerts.cache_clear()
+            _rule_tree._reset_caches()
             _source_pack_alerts()            # memoise from the REAL tree FIRST…
             _rule_tree._rule_containers = lambda: fake     # …then swap
             _platform_rule_locations.cache_clear()
             got = _platform_rule_locations()
         finally:
             _rule_tree._rule_containers = original
-            _platform_rule_locations.cache_clear()
-            _source_pack_alerts.cache_clear()
+            _rule_tree._reset_caches()
         assert "fake.yaml:missing-pack" in got, (
             "a header naming a pack that does not exist must NOT confer "
             "generated status — stale or fabricated provenance is not provenance")
@@ -1313,10 +1311,10 @@ class TestPlatformAlertSourceContract:
         # dual-delivered into the platform/NOC channel by the operator's
         # enforced route (continue:true), which is exactly the leak the custom
         # isolation subtree exists to prevent.
-        offenders, non_platform_seen = [], 0
+        offenders, non_platform_files, platform_files = [], set(), set()
         for where, rule in _iter_repo_alert_rules():
-            if not _is_platform_cm_location(where):
-                non_platform_seen += 1
+            (platform_files if _is_platform_cm_location(where)
+             else non_platform_files).add(where.split(":", 1)[0])
             labels = rule.get("labels") or {}
             if "alert_source" not in labels:
                 continue
@@ -1336,10 +1334,19 @@ class TestPlatformAlertSourceContract:
         # non-platform containers keeps all of them satisfied and leaves this
         # test — the one asserting the value is reserved AGAINST tenants —
         # trivially green. Measured: a `kind: List` wrapper did exactly that.
-        assert non_platform_seen >= 350, (
-            f"only {non_platform_seen} non-platform alert(s) examined; a "
-            "reserved-value claim is only as good as the tenant-side coverage "
-            "behind it")
+        #
+        # PER FILE, and the platform files are subtracted from the expected set
+        # rather than pinned by name: whichever shipped files the scanner did
+        # NOT classify as platform must each have contributed a tenant-side
+        # alert. A count could not say this — `>= 350` stayed green while a
+        # whole file went dark (16 rules of slack) and went red on the
+        # legitimate retirement of any of 13 packs.
+        missing = sorted(
+            _expected_rule_files() - platform_files - non_platform_files)
+        assert not missing, (
+            f"{len(missing)} shipped rules file(s) contributed no alert at "
+            f"all: {missing[:10]}; a reserved-value claim is only as good as "
+            "the tenant-side coverage behind it")
 
 
 # ============================================================

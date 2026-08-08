@@ -26,15 +26,45 @@ import functools
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path, PurePosixPath
 
 import yaml
 
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Guarded and deduped, unlike the bare double-insert most siblings use: this
+# module is imported by test suites whose conftest has already added the same
+# directory, and `check_rulepack_sync` below inserts one more on its own.
+_THIS_DIR = str(Path(__file__).resolve().parent)
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
 
-_REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
+def _find_repo_root() -> str:
+    """Walk up to the directory that holds `.git`, with a legible failure.
+
+    ⛔ Not `parents[3]`. That hard-codes "four levels below the root", which is
+    true here and false the moment this file is copied somewhere flatter — and
+    a sibling in this very directory (`check_rulepack_sync.py`) is already
+    copied into a flat `core/lint/` by components/recipe-preview/Dockerfile.
+    The failure mode of the index form is `IndexError: 3` at import time, with
+    nothing saying what went wrong.
+    """
+    here = Path(__file__).resolve()
+    for candidate in here.parents:
+        if (candidate / ".git").exists():
+            return str(candidate)
+    raise RuntimeError(
+        f"cannot locate the repository root above {here} — this module reads "
+        "the shipped rule tree with `git ls-files` and has nothing to read "
+        "without one. If it is being used outside a checkout, that is the bug.")
+
+
+_REPO_ROOT = _find_repo_root()
+
+# ⛔ Read by tests/lint/test_check_pint.py with a REGEX, not an import, so that
+# .pint.hcl's include pattern and this prefix cannot drift apart. It has no
+# in-module caller by design: discovery is content-based and this is only used
+# for HUMAN-READABLE messages. Deleting it as "unused" breaks that lockstep.
 _PLATFORM_CM_PREFIX = "configmap-rules-platform"
 # Both extensions: a rules ConfigMap named `.yml` was silently skipped by the
 # scanner, which is the same "escapes the gate by being named differently" hole.
@@ -274,9 +304,9 @@ def _source_pack_alerts() -> dict:
     duplicated = {k: sorted(v) for k, v in seen_files.items() if len(v) > 1}
     if duplicated:
         raise AssertionError(
-        f"more than one file claims the same rule pack: {duplicated}. A pack "
-        "name is an identity; two files claiming it means one of them is "
-        "forging provenance, or a copy was left behind after a move.")
+            f"more than one file claims the same rule pack: {duplicated}. A "
+            "pack name is an identity; two files claiming it means one of them "
+            "is forging provenance, or a copy was left behind after a move.")
     return {k: frozenset(v) for k, v in out.items()}
 
 
@@ -324,17 +354,30 @@ def _expected_rule_files() -> frozenset:
     repo ships without asking any of this module's opinions.
 
     Coverage is asserted PER FILE rather than as a count. A total floor is both
-    too loose and too tight at once: `>= 350` let 16 rules vanish unnoticed
-    while turning red on the legitimate retirement of any of 13 packs. "Every
-    shipped rules file still produces rules" says the thing actually meant, and
-    it updates itself when a pack is retired.
+    too loose and too tight at once, measured on the tree as it stands (366
+    non-platform alerts, old floor `>= 350`):
+      too loose — 16 rules could vanish unnoticed; emptying
+        rule-packs/rule-pack-liveness.yaml leaves 363 and the floor stays green
+        while a whole shipped file has gone dark.
+      too tight — retiring any of 13 of the 16 packs drops below it (redis
+        -18 -> 348, mariadb -54 -> 312). The failure text then tells the
+        maintainer their legitimate retirement broke a reserved-value contract.
+
+    "Every shipped rules file still produces rules" says the thing actually
+    meant, and it updates itself when a pack is retired: the retired file
+    leaves `git ls-files`, so it leaves the expected set too.
+
+    Three call sites depend on this: the discovery-scope test and the two
+    reserved-value contracts (component="sentinel" and alert_source), each of
+    which needs non-vacuity over the files it scans.
     """
     globs = ("rule-packs/rule-pack-*.yaml", "rule-packs/rule-pack-*.yml",
              "operator-manifests/da-rule-pack-*.yaml",
              "k8s/03-monitoring/configmap-rules-*.yaml",
              "k8s/03-monitoring/configmap-rules-*.yml")
     out = subprocess.run(["git", "-C", _REPO_ROOT, "ls-files", "-z", *globs],
-                         capture_output=True, text=True, check=True).stdout
+                         capture_output=True, text=True, timeout=60,
+                         check=True).stdout
     return frozenset(p for p in out.split("\0") if p)
 
 
@@ -354,7 +397,7 @@ def _tracked_yaml_paths():
     # case-insensitive suffix match above exists to prevent.
     out = subprocess.run(
         ["git", "-C", _REPO_ROOT, "ls-files", "-z"],
-        capture_output=True, text=True, check=True).stdout
+        capture_output=True, text=True, timeout=60, check=True).stdout
     return sorted(p for p in out.split("\0") if p
                   and p.lower().endswith((".yaml", ".yml"))
                   and not (_SCAN_SKIP_PARTS & set(PurePosixPath(p).parts))
@@ -579,6 +622,22 @@ def _containers_from_text(rel: str, text: str):
                 prov = (stem[len(_RULE_PACK_PREFIX):]
                         if stem and stem.startswith(_RULE_PACK_PREFIX) else None)
                 yield rel, doc, prov
+
+
+def _reset_caches() -> None:
+    """Clear every memo that reads the tree, in one call.
+
+    ⛔ Six functions here are `lru_cache`d and three of them read
+    `_rule_containers()`. A test that swaps the container source and clears two
+    of the three leaves the third holding values computed from the fake input —
+    and because these caches now live at MODULE scope rather than inside one
+    pytest file, that staleness outlives the test. Enumerating them at the call
+    site is how one gets missed; enumerating them here is how it stays fixed.
+    """
+    for fn in (_generated_pack_names, _platform_rule_locations,
+               _source_pack_alerts, _expected_rule_files, _rule_containers,
+               _rule_shaped_but_unparsed):
+        fn.cache_clear()
 
 
 def _iter_repo_alert_rules():

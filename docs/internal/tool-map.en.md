@@ -139,6 +139,7 @@ lang: en
 | Tool | Description |
 |------|------|
 | `_lint_helpers.py` | Shared utilities for lint tools. |
+| `_rule_tree.py` | Rule-tree scanner — what alerting rules this repo actually ships. |
 | `_version_patterns.py` | Version pattern registry for validate_docs_versions.py |
 | `check_account_registry_monotonic.py` | guard _account_registry.yaml's |
 | `check_ad_hoc_git_scripts.py` | Ad-hoc Windows shell script guard (L1 pre-commit hook). |
