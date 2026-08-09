@@ -712,7 +712,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "40ce3d55af7363d7cdf22122555eb1379a67e477f267db32a6181bdb4323ea57",
+ "source_digest": "3b1534645334f2b5a7362cb70a93329bf70c22f86f10d344a8778bddbcda6896",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1068,6 +1068,9 @@
   ".github/workflows/component-docker-build.yaml": [
    "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
+  ".github/workflows/config-diff.yaml": [
+   "tests/ops/test_portal_path_filter_coverage.py"
+  ],
   ".github/workflows/guard-defaults-impact.yml": [
    "tests/ops/test_guard_defaults_scopes.py"
   ],
@@ -1103,7 +1106,8 @@
    "tests/lint/test_check_makefile_targets.py",
    "tests/lint/test_check_orphan_lint.py",
    "tests/lint/test_check_portal_asset_shipping.py",
-   "tests/lint/test_counterexample_coverage.py"
+   "tests/lint/test_counterexample_coverage.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "CHANGELOG.md": [
    "tests/dx/test_add_frontmatter.py",
@@ -1132,6 +1136,7 @@
    "tests/lint/test_check_unpinned_deps.py",
    "tests/ops/test_git_check_lock.py",
    "tests/ops/test_nightly_scan_matrix_drift.py",
+   "tests/ops/test_portal_path_filter_coverage.py",
    "tests/rulepacks/test_vm_alert_parity.py"
   ],
   "README.en.md": [
@@ -1155,6 +1160,9 @@
    "tests/helm/test_portal_relay_token_guard.py",
    "tests/lint/test_check_portal_asset_shipping.py"
   ],
+  "components/da-portal/README.md": [
+   "tests/ops/test_portal_path_filter_coverage.py"
+  ],
   "components/da-portal/nginx-main.conf": [
    "tests/helm/test_portal_relay_token_guard.py"
   ],
@@ -1169,8 +1177,14 @@
   "components/da-tools": [
    "tests/lint/test_check_subprocess_timeout.py"
   ],
+  "components/da-tools/README.md": [
+   "tests/ops/test_portal_path_filter_coverage.py"
+  ],
   "components/da-tools/app/Dockerfile": [
    "tests/lint/test_check_iac_vibe_rules.py"
+  ],
+  "components/da-tools/app/VERSION": [
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "components/da-tools/app/build.sh": [
    "tests/lint/test_check_image_pin_capability.py",
@@ -1187,7 +1201,8 @@
    "tests/preview/test_app.py"
   ],
   "components/tenant-api": [
-   "tests/ops/test_nightly_race_issue_policy.py"
+   "tests/ops/test_nightly_race_issue_policy.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "components/tenant-api/internal/federation/token/manager.go": [
    "tests/ops/test_revoked_set_contract.py"
@@ -1197,6 +1212,9 @@
   ],
   "components/threshold-exporter": [
    "tests/ops/test_operator_generate_v2.py"
+  ],
+  "components/threshold-exporter/README.md": [
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "components/threshold-exporter/app": [
    "tests/lint/test_check_scrape_reachability.py"
@@ -1245,7 +1263,8 @@
   ],
   "docs/CHANGELOG.md": [
    "tests/dx/test_bump_docs.py",
-   "tests/dx/test_doc_coverage.py"
+   "tests/dx/test_doc_coverage.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "docs/README-root.md": [
    "tests/lint/test_fix_file_hygiene.py"
@@ -1294,7 +1313,8 @@
   ],
   "docs/assets/template-data.json": [
    "tests/lint/test_check_threshold_unit_sanity.py",
-   "tests/lint/test_counterexample_coverage.py"
+   "tests/lint/test_counterexample_coverage.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "docs/assets/tool-registry.yaml": [
    "tests/dx/test_bump_docs.py",
@@ -1310,6 +1330,7 @@
   ],
   "docs/getting-started/for-tenants.en.md": [
    "tests/dx/test_add_frontmatter.py",
+   "tests/ops/test_portal_path_filter_coverage.py",
    "tests/ops/test_registry_lib.py"
   ],
   "docs/getting-started/for-tenants.md": [
@@ -1322,6 +1343,9 @@
   ],
   "docs/glossary.md": [
    "tests/lint/test_check_codename_gate.py"
+  ],
+  "docs/index.md": [
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "docs/integration/troubleshooting-checklist.md": [
    "tests/ops/test_generate_routes_orchestration.py"
@@ -1345,7 +1369,8 @@
    "tests/dx/test_generate_doc_map.py",
    "tests/dx/test_generate_planning_index.py",
    "tests/lint/test_check_bilingual_structure.py",
-   "tests/ops/test_generate_routes_orchestration.py"
+   "tests/ops/test_generate_routes_orchestration.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "docs/internal/backend-compat-baseline.md": [
    "tests/rulepacks/test_vm_backend_parity.py"
@@ -1354,6 +1379,7 @@
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_devrules_size.py",
+   "tests/ops/test_portal_path_filter_coverage.py",
    "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_ci_flag_contract.py",
    "tests/shared/test_json_stdout_contract.py"
@@ -1389,7 +1415,8 @@
    "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "docs/schemas/waveform-pack.schema.json": [
-   "tests/dx/test_waveform_compile.py"
+   "tests/dx/test_waveform_compile.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "docs/schemas/waveform-tolerances.schema.json": [
    "tests/dx/test_waveform_score.py"
@@ -1486,6 +1513,7 @@
   "helm/federation-gateway/values.yaml": [
    "tests/helm/test_revoked_set_contract_guard.py",
    "tests/ops/test_federation_e2e_mirrors_deploy_sot.py",
+   "tests/ops/test_portal_path_filter_coverage.py",
    "tests/ops/test_renovate_config.py",
    "tests/ops/test_revoked_set_contract.py",
    "tests/shared/test_federation_audit_mtail.py"
@@ -1515,6 +1543,7 @@
   "helm/federation-reconciler/values.yaml": [
    "tests/dx/test_bump_docs.py",
    "tests/helm/test_federation_reconciler_projection_grace.py",
+   "tests/ops/test_portal_path_filter_coverage.py",
    "tests/ops/test_renovate_config.py"
   ],
   "helm/mariadb-instance": [
@@ -1727,10 +1756,14 @@
   ],
   "mkdocs.yml": [
    "tests/lint/test_check_head_blob_hygiene.py",
-   "tests/lint/test_mkdocs_strict_check.py"
+   "tests/lint/test_mkdocs_strict_check.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "renovate.json": [
    "tests/ops/test_renovate_config.py"
+  ],
+  "rule-packs/ALERT-REFERENCE.md": [
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "rule-packs/README.md": [
    "tests/dx/test_generate_rule_pack_readme.py"
@@ -1765,7 +1798,8 @@
    "tests/shared/test_json_stdout_contract.py"
   ],
   "rule-packs/threshold-registry.yaml": [
-   "tests/helm/test_optional_overrides_render.py"
+   "tests/helm/test_optional_overrides_render.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "scripts/_lib.sh": [
    "tests/shared/test_lib_helpers.py"
@@ -1786,6 +1820,7 @@
    "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   "scripts/ops/_verify_download.sh": [
+   "tests/ops/test_portal_path_filter_coverage.py",
    "tests/ops/test_verify_download.py"
   ],
   "scripts/ops/check_image_refs_resolve.py": [
@@ -1794,7 +1829,8 @@
    "tests/ops/test_trylocal_compose_pins.py"
   ],
   "scripts/ops/ci_flake_retry.py": [
-   "tests/ops/test_ci_flake_retry.py"
+   "tests/ops/test_ci_flake_retry.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "scripts/ops/commit_helper.py": [
    "tests/ops/test_commit_helper.py"
@@ -1866,6 +1902,7 @@
    "tests/ops/test_lint_custom_rules.py",
    "tests/ops/test_migrate_ast.py",
    "tests/ops/test_operator_generate_v2.py",
+   "tests/ops/test_portal_path_filter_coverage.py",
    "tests/ops/test_property_based.py",
    "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_dispatch_contract.py",
@@ -1915,7 +1952,8 @@
    "tests/dx/test_coverage_gap_analysis.py",
    "tests/dx/test_makefile_utf8_mode.py",
    "tests/dx/test_verify_diff.py",
-   "tests/lint/test_check_structure.py"
+   "tests/lint/test_check_structure.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "scripts/tools/dx/coverage_delta.py": [
    "tests/dx/test_coverage_delta.py"
@@ -1973,7 +2011,8 @@
    "tests/shared/test_reserved_key_py_go_parity.py"
   ],
   "scripts/tools/dx/tenant_verify.py": [
-   "tests/dx/test_tenant_verify.py"
+   "tests/dx/test_tenant_verify.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "scripts/tools/dx/verify_diff.py": [
    "tests/dx/test_verify_diff.py",
@@ -1994,6 +2033,7 @@
    "tests/dx/test_line_ending_policy.py",
    "tests/lint/test_check_cross_ns_url_consistency.py",
    "tests/lint/test_check_lint_toolchain_fit.py",
+   "tests/ops/test_portal_path_filter_coverage.py",
    "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_property_tools.py"
   ],
@@ -2027,6 +2067,7 @@
   ],
   "scripts/tools/lint/check_doc_links.py": [
    "tests/dx/test_coverage_gap_analysis.py",
+   "tests/ops/test_portal_path_filter_coverage.py",
    "tests/rulepacks/test_reference_validation_readme_pointers.py"
   ],
   "scripts/tools/lint/check_engagement_disclosure.py": [
@@ -2083,6 +2124,9 @@
   "scripts/tools/lint/check_playwright_rtl_drift.py": [
    "tests/lint/test_check_playwright_rtl_drift.py"
   ],
+  "scripts/tools/lint/check_portal_bundle_size.py": [
+   "tests/ops/test_portal_path_filter_coverage.py"
+  ],
   "scripts/tools/lint/check_property_coverage.py": [
    "tests/lint/test_check_property_coverage.py"
   ],
@@ -2117,7 +2161,8 @@
    "tests/shared/test_sast.py"
   ],
   "scripts/tools/lint/mkdocs-anchor-debt.txt": [
-   "tests/lint/test_mkdocs_strict_check.py"
+   "tests/lint/test_mkdocs_strict_check.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "scripts/tools/lint/mkdocs_strict_check.sh": [
    "tests/lint/test_mkdocs_strict_check.py"
@@ -2171,7 +2216,8 @@
    "tests/dx/test_coverage_gap_analysis.py"
   ],
   "scripts/tools/ops/generate_alertmanager_routes.py": [
-   "tests/ops/test_generate_alertmanager_routes.py"
+   "tests/ops/test_generate_alertmanager_routes.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "scripts/tools/ops/generate_rule_pack_split.py": [
    "tests/ops/test_rule_pack_split_real_packs.py",
@@ -2220,10 +2266,12 @@
    "tests/shared/test_property_tools.py"
   ],
   "tests/contract": [
-   "tests/dx/test_verify_diff.py"
+   "tests/dx/test_verify_diff.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "tests/contract/requirements.txt": [
-   "tests/lint/test_check_unpinned_deps.py"
+   "tests/lint/test_check_unpinned_deps.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "tests/contract/run_contract_tests.py": [
    "tests/dx/test_verify_diff.py"
@@ -2318,7 +2366,11 @@
   ],
   "tests/lint": [
    "tests/dx/test_scaffold_lint.py",
-   "tests/lint/test_check_threshold_registry.py"
+   "tests/lint/test_check_threshold_registry.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
+  ],
+  "tests/lint/test_check_admin_config_schema.py": [
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "tests/lint/test_check_cli_coverage.py": [
    "tests/dx/test_verify_diff.py",
@@ -2326,6 +2378,9 @@
   ],
   "tests/lint/test_check_dev_rules_enforcement.py": [
    "tests/dx/test_verify_diff.py"
+  ],
+  "tests/lint/test_check_devcontainer_dep_parity.py": [
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "tests/lint/test_check_hub_badge_drift.py": [
    "tests/dx/test_verify_diff.py"
@@ -2392,6 +2447,7 @@
    "tests/rulepacks/test_vm_backend_parity.py"
   ],
   "tests/shared": [
+   "tests/ops/test_portal_path_filter_coverage.py",
    "tests/shared/test_lang_detection_guard.py"
   ],
   "tests/shared/_go_mutation_pilot.py": [
@@ -2452,6 +2508,9 @@
   "tools/portal": [
    "tests/ops/test_portal_path_filter_coverage.py"
   ],
+  "tools/portal/entries": [
+   "tests/ops/test_portal_path_filter_coverage.py"
+  ],
   "tools/portal/src": [
    "tests/dx/test_scan_component_health.py",
    "tests/lint/test_check_design_token_usage.py",
@@ -2480,13 +2539,17 @@
   ],
   "tools/portal/src/interactive/tools/template-gallery.jsx": [
    "tests/lint/test_check_portal_asset_shipping.py",
-   "tests/lint/test_counterexample_coverage.py"
+   "tests/lint/test_counterexample_coverage.py",
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "tools/portal/tests": [
    "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "tools/portal/tests/counterexample-portal-faces.test.ts": [
    "tests/lint/test_counterexample_coverage.py"
+  ],
+  "tools/portal/vitest.config.ts": [
+   "tests/ops/test_portal_path_filter_coverage.py"
   ],
   "try-local/alertmanager.yml": [
    "tests/dx/test_verify_diff.py",

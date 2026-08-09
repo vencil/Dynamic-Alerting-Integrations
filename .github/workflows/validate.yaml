@@ -99,6 +99,43 @@ jobs:
               - "components/tenant-api/**"
               - "rule-packs/**"
               - "scripts/tools/**"
+              # `scripts/tools/**` above does NOT reach scripts/ops/. Go Lint
+              # runs this checksum verifier on both halves of its golangci-lint
+              # download (install script + binary), so it is the supply-chain
+              # control for that job — yet a PR editing ONLY the verifier
+              # matches no `validate` path, and a path-skipped required check
+              # reports `skipped`, which satisfies branch protection. Not yet
+              # burned, and for a stronger reason than luck: the file has
+              # exactly one commit (91bae528, #849), which PREDATES `go-lint`
+              # entering this workflow (ae0cd4fc, #912) — at that point only
+              # ci.yml referenced it. It has never been edited since Go Lint
+              # started running it. The reachability is what matters; the next
+              # edit has nothing protecting it. File-level on purpose: no
+              # other validate step names
+              # anything under scripts/ops/, and `scripts/ops/**` would pull
+              # three required checks into every host-side escape-hatch edit.
+              # (Widening this to `scripts/ops/_verify_*.sh` would RED the
+              # coverage guard in tests/ops/test_portal_path_filter_coverage.py
+              # — its `_covers` models `*.ext`, not `prefix_*.ext`. Extend that
+              # alphabet first.)
+              - "scripts/ops/_verify_download.sh"
+              # The pin SSOT validate-config and version-check INSTALL FROM
+              # (`pip install pyyaml -c requirements/ci-constraints.txt`,
+              # #1158) — the suite's ENVIRONMENT, not an input any check reads,
+              # which is why no "does a test read it?" review ever caught it.
+              # Same skip-as-green trap, on jobs this file's own banner calls
+              # branch-protection required checks.
+              #
+              # Accepted cost: `validate` is ONE filter gating three jobs, so
+              # each entry also pulls in the jobs that do not need it — the
+              # verifier entry pulls in two (only go-lint runs it), the
+              # requirements entry pulls in one (validate-config and
+              # version-check both install from it; go-lint does not).
+              # Conservative by the banner's own rule — recorded here so it is
+              # a choice, not a surprise.
+              # Both entries enforced by
+              # tests/ops/test_portal_path_filter_coverage.py.
+              - "requirements/**"
               - "tests/**"
               - ".github/custom-rule-policy.yaml"
               - ".github/workflows/validate.yaml"
@@ -109,6 +146,29 @@ jobs:
               # version-check → the hook-count drift the step exists to catch slips
               # through (the silent 84→86 drift happened exactly this way).
               - ".pre-commit-config.yaml"
+              # ⛔ version-check's OTHER inputs, same shape as the entry above
+              # and found the same way it should have been found: the two
+              # commands that job runs (`bump_docs.py --check` and
+              # `--sync-counts --check`) were replayed under an open()/read_text
+              # recorder. They touch 277 tracked files; every one but these nine
+              # already matches a pattern above. Reading the script would not
+              # have produced this list — the paths are assembled across several
+              # tables — which is the point: an indirect read through a script a
+              # job merely invokes is the class the coverage guard in
+              # tests/ops/test_portal_path_filter_coverage.py documents it
+              # CANNOT see, so this group is maintained by measurement.
+              # Editing any one of them ALONE skips all three required checks,
+              # and the version/count drift they exist to catch then lands on
+              # main's own push run instead of on the PR that caused it.
+              - "README.md"
+              - "README.en.md"
+              - "CLAUDE.md"
+              - "mkdocs.yml"
+              - "components/da-portal/README.md"
+              - "components/da-tools/README.md"
+              - "components/da-tools/app/VERSION"
+              - "components/threshold-exporter/README.md"
+              - ".github/workflows/config-diff.yaml"
               # helm/** and docs/** PRs (chart hardening, governance docs) hit the SAME
               # required-checks-contract gap the tenant-api note above describes: main's
               # branch protection requires this workflow's jobs, but the path filter
