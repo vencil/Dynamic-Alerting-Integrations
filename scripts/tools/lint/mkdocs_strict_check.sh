@@ -130,11 +130,6 @@ ANCHOR_DEBT=${ANCHOR_DEBT//[[:space:]]/}
 #   bash scripts/tools/lint/mkdocs_strict_check.sh --write-baseline
 # and review the diff like any other change — that review IS the gate.
 BASELINE="$SCRIPT_DIR/mkdocs-anchor-debt.txt"
-if [ "${1:-}" = "--write-baseline" ]; then
-    anchor_debt | LC_ALL=C sort > "$BASELINE"
-    echo "wrote $(wc -l < "$BASELINE" | tr -d '[:space:]') lines to $BASELINE"
-    exit 0
-fi
 
 # ⛔ Before trusting a debt of 0, prove the COLLECTOR still works — and prove it
 # PER CLASS, not in aggregate. Counting all warnings only catches failures that
@@ -161,6 +156,19 @@ so anchor problems are not being reported at all and any debt figure below is \
 meaningless. Restore it before reading this gate's result." >&2
     echo "MKDOCS STRICT STATUS=FAIL COLLECTOR=anchors-not-warned" >&2
     exit 1
+fi
+
+# ⛔ Write mode lives BELOW the two integrity checks, not above them. It used to
+# run first and `exit 0`, so regenerating the ledger with a broken collector — a
+# changed mkdocs log format, a partial log, `anchors:` reverted to `info` —
+# wrote an empty or truncated baseline and called it the new truth. The checks
+# that exist to stop exactly that were three lines further down and never ran.
+# `sort -u` because the ledger is a SET of warnings; a duplicated line would
+# otherwise inflate the count a later run is compared against.
+if [ "${1:-}" = "--write-baseline" ]; then
+    anchor_debt | LC_ALL=C sort -u > "$BASELINE"
+    echo "wrote $(wc -l < "$BASELINE" | tr -d '[:space:]') lines to $BASELINE"
+    exit 0
 fi
 
 if [ ! -f "$BASELINE" ]; then

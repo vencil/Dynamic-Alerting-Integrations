@@ -191,6 +191,30 @@ class TestBlockStructure:
          "<!-->\n# After\n", {"after"}),
         ("mid-line unclosed <!-- stays literal",
          "Foo <!--\n# After\n-->\n", {"after"}),
+        # ⛔ CommonMark's three-space rule, for BOTH block openers. At four
+        # spaces a line is an indented CODE BLOCK, so neither `<!--` nor a fence
+        # may change parser state — and letting either do so inverts the
+        # in-code/out-of-code state for the whole rest of the file. Raised by
+        # CodeRabbit on PR #1370; the code accepted any whitespace-only prefix
+        # while its own docstring already said "≤3 spaces of indent".
+        ("<!-- at three spaces still opens a block",
+         "# Top\n\n   <!--\n## Hidden\n-->\n## After\n", {"top", "after"}),
+        ("<!-- at four spaces is indented code, not an opener",
+         "# Top\n\n    <!--\n\n## After\n", {"top", "after"}),
+        ("a four-space-indented fence does not hide what follows",
+         "# Top\n\n    ```\n    # code, not a heading\n    ```\n\n## After\n",
+         {"top", "after"}),
+        # ⛔ The PAIRED case above does not discriminate — an indented fence
+        # that opens and closes again lands on the same heading set either way.
+        # An UNPAIRED one is the observable difference: treated as a fence it
+        # swallows every heading to EOF.
+        ("an unpaired four-space fence must not swallow the rest",
+         "# Top\n\n    ```\n\n## After\n", {"top", "after"}),
+        ("...and an unpaired three-space one still does",
+         "# Top\n\n   ```\n\n## After\n", {"top"}),
+        ("...and a three-space one still fences",
+         "# Top\n\n   ```\n   # Phantom\n   ```\n\n## After\n",
+         {"top", "after"}),
     ])
     def test_heading_visibility(self, tmp_path, name, body, expected):
         checker = _make_checker(tmp_path)

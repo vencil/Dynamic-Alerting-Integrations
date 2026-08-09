@@ -508,8 +508,12 @@ def collect_rule_trees() -> tuple[dict[str, set], set[str]]:
     consumed: dict[str, set] = defaultdict(set)
     outputs: set[str] = set()
     for where, doc, _prov in _rule_containers():
-        rules = [r for g in (doc.get("groups") or [])
-                 for r in ((g or {}).get("rules") or [])]
+        # ⛔ isinstance at BOTH levels. `_is_rule_groups` accepts a `groups`
+        # list when only SOME element is a mapping with `rules`, so a mixed list
+        # reaches every consumer — and this one raised `AttributeError` on the
+        # first scalar, taking the whole gate down. Measured.
+        rules = [r for g in (doc.get("groups") or []) if isinstance(g, dict)
+                 for r in (g.get("rules") or []) if isinstance(r, dict)]
         outputs.update(extract_recording_outputs(rules))
         for r in rules:
             rid = f"{where}::{r.get('alert') or r.get('record')}"

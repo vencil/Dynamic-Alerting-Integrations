@@ -441,7 +441,9 @@ data:
                 fixed (the old failures only drop out of the window as
                 time passes) — that's expected, not a stuck alert.
               # Anchor = the ASCII '#### validate-config' heading in cli-reference.md — a
-              # CONTRACT (renaming the heading rots this link; rule-YAML URLs are not linted).
+              # CONTRACT (renaming the heading rots this link). Since #1200 the URL itself
+              # IS linted: TestPlatformRunbookCoverageContract resolves every
+              # runbook_url in this tree to a real file + a real heading.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#validate-config"
 
           # `> 0.5` (not `> 0`) is the standard SRE-grade defence against
@@ -582,7 +584,9 @@ data:
                 ADR-017 inheritance chain, not single-tenant
                 overgrowth.
               # Anchor = the ASCII '#### cardinality-forecast' heading in cli-reference.md — a
-              # CONTRACT (renaming the heading rots this link; rule-YAML URLs are not linted).
+              # CONTRACT (renaming the heading rots this link). Since #1200 the URL itself
+              # IS linted: TestPlatformRunbookCoverageContract resolves every
+              # runbook_url in this tree to a real file + a real heading.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#cardinality-forecast"
 
           # `count without (tenant)` (NOT bare `count()`) is load-bearing.

@@ -3256,6 +3256,12 @@ class TestSilentZeroSentinel:
             # Same branch as spec-nested, reached the other way round.
             "cm.yaml:empty-groups-beside-spec": (
                 {"groups": [], "spec": self.HEALTHY}, "spec-nested"),
+            # ⛔ The empty container. A PrometheusRule with no `spec.groups`
+            # arrives as `{}` — no groups, no marker, no spec, no rules — and
+            # matched none of the branches above. The misplaced-`groups`
+            # normalisation's comment CLAIMED this tripwire would flag it; it
+            # did not, until CodeRabbit pointed at the gap on PR #1370.
+            "pr.yaml:empty-spec": ({}, "empty"),
         }
         got = self._offenders_for(
             tuple((w, d, None) for w, (d, _b) in cases.items())
@@ -3432,6 +3438,38 @@ class TestSilentZeroSentinel:
             assert _rules_shaped_at_any_depth(values) is None, (
                 f"{label} was mistaken for a Prometheus rule set: {values}")
 
+    def test_binarydata_decoding_is_strict_like_the_production_reader(self):
+        """⛔ Both readers of the same keys must agree on which ones decode.
+
+        `base64.b64decode` without `validate=True` silently DROPS every
+        character outside the alphabet, so a corrupt value decodes to arbitrary
+        bytes instead of raising. `_grar_validate` decodes the same `binaryData`
+        strictly; this one did not, so the two could disagree about which keys
+        exist — exactly the drift TestPlatformReaderParity exists to detect,
+        introduced inside the thing being cross-checked.
+        """
+        import base64 as _b64  # noqa: PLC0415
+        from _grar_validate import _configmap_rule_bodies  # noqa: PLC0415
+
+        body = ("groups:\n  - name: g\n    rules:\n      - alert: A\n"
+                "        expr: up == 0\n")
+        good = _b64.b64encode(body.encode("utf-8")).decode("ascii")
+        # Valid base64 with junk spliced in: lenient decoding strips the junk
+        # and yields plausible-looking bytes; strict decoding refuses.
+        corrupt = good[:8] + "!!!!" + good[8:]
+        cm = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"
+              f"binaryData:\n  good.yml: {good}\n  bad.yml: {corrupt}\n")
+
+        scanner_keys = {w.split(":", 1)[1]
+                        for w, _d, _p in _containers_from_text("k8s/x.yaml", cm)}
+        doc = yaml.safe_load(cm)
+        production_bodies = len(list(_configmap_rule_bodies(doc)))
+        assert scanner_keys == {"good.yml"}, (
+            f"the scanner accepted a corrupt binaryData key: {scanner_keys}")
+        assert production_bodies == 1, (
+            "the two readers disagree about how many binaryData keys decode: "
+            f"scanner={sorted(scanner_keys)} production={production_bodies}")
+
     def test_helm_is_actually_in_the_scan_surface(self):
         """⛔ The tripwire above only runs on files the scan surface reaches.
 
@@ -3572,6 +3610,25 @@ class TestScannerAnchorsAreFailClosed:
             "k8s/03-monitoring/configmap-rules-b.yaml": body})
         listed = self._with_root(repo, _tracked_yaml_paths)
         assert "k8s/03-monitoring/configmap-rules-a.YAML" in listed, listed
+
+    def test_the_coverage_anchor_also_sees_an_uppercase_extension(self, tmp_path):
+        """⛔ git matches a pathspec CASE-SENSITIVELY.
+
+        `_tracked_yaml_paths` filters suffixes in Python for exactly this
+        reason; `_expected_rule_files` kept the pathspec form, so
+        `configmap-rules-extra.YAML` was discovered by the scanner and absent
+        from the per-file coverage anchor. The two-way equality assertion turns
+        that into a red test — but one that blames the scanner for finding a
+        file that really does ship.
+        """
+        body = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"
+                "data:\n  r.yml: |\n    groups:\n      - name: g\n"
+                "        rules:\n          - alert: A\n            expr: up == 0\n")
+        repo = self._temp_repo(tmp_path, {
+            "k8s/03-monitoring/configmap-rules-a.YAML": body,
+            "k8s/03-monitoring/configmap-rules-b.yaml": body})
+        expected = self._with_root(repo, _expected_rule_files)
+        assert "k8s/03-monitoring/configmap-rules-a.YAML" in expected, sorted(expected)
 
     def test_an_empty_anchor_raises_instead_of_passing_everything(self, tmp_path):
         """Both `git ls-files` anchors are fail-CLOSED.
@@ -3789,6 +3846,48 @@ class TestPlatformReaderParity:
             "these files ship alerting rules that the reachability gate never "
             "read, so their input metrics are not checked for a scrape face: "
             f"{sorted(alerting_files - gate_files)}")
+
+    def test_a_malformed_element_does_not_take_a_consumer_down(self):
+        """⛔ `_is_rule_groups` accepts a MIXED list on purpose.
+
+        It returns True when *any* element is a mapping carrying `rules`, so a
+        `groups:` list with a stray scalar reaches every consumer. The scanner's
+        own iterator filters both levels; these two did not, and each failed
+        differently on the same input — measured:
+
+          check_scrape_reachability  AttributeError, the gate dies
+          platform_alert_identities  collapses to the 6-entry fallback constant,
+                                     i.e. 41 identities -> 6, fail-OPEN
+
+        The second is the dangerous one: the guard keeps running, on a probe set
+        that no longer covers the tree.
+        """
+        import check_scrape_reachability as csr  # noqa: PLC0415
+        from _grar_validate import platform_alert_identities  # noqa: PLC0415
+
+        mixed = ["not-a-group",
+                 {"name": "g", "rules": ["also-not-a-rule",
+                                         {"alert": "Survivor", "expr": "up == 0"}]}]
+        original = csr._rule_containers
+        try:
+            csr._rule_containers = lambda: (("x.yaml:k", {"groups": mixed}, None),)
+            consumed, _outputs = csr.collect_rule_trees()
+        finally:
+            csr._rule_containers = original
+        assert consumed, "the reachability gate found no consumers at all"
+
+        body = yaml.safe_dump({"groups": mixed[:1] + [{
+            "name": "g", "rules": ["junk", {
+                "alert": "RealPlatform", "expr": "up == 0",
+                "labels": {"alert_source": "platform", "severity": "warning"}}]}]})
+        path = Path(tempfile.mkdtemp()) / "cm.yaml"
+        path.write_text(yaml.safe_dump({
+            "apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "x"},
+            "data": {"r.yml": body}}), encoding="utf-8")
+        names = {i["alertname"] for i in platform_alert_identities(path)}
+        assert names == {"RealPlatform"}, (
+            "one malformed element collapsed the probe set to the fallback "
+            f"constant instead of dropping only itself: {sorted(names)}")
 
     def test_the_two_filename_readers_agree_on_LABELS_not_just_names(self):
         """Same alertnames is not the same probe set.

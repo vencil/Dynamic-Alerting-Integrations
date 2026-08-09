@@ -326,8 +326,14 @@ class DocLinkChecker:
                 out.append(line[i:start])
                 i = end + 3
                 continue
-            if line[:start].strip():
-                out.append(line[i:])                # mid-line, unclosed → literal
+            # ⛔ ≤3 spaces, per CommonMark. A whitespace-only prefix is not
+            # enough: at four spaces the line is an INDENTED CODE BLOCK and the
+            # `<!--` is literal text, so opening a comment block there swallows
+            # every heading below it — the same failure the mid-line case
+            # already guards, arrived at by indentation instead.
+            prefix = line[:start]
+            if prefix.strip() or len(prefix) > 3:
+                out.append(line[i:])                # mid-line / indented → literal
             else:
                 out.append(line[i:start])
                 opened = True
@@ -375,7 +381,14 @@ class DocLinkChecker:
                     in_html_comment = False
                 else:
                     stripped = line.strip()
-                    fence_m = re.match(r"^(`{3,}|~{3,})", stripped)
+                    # ⛔ Same three-space limit as the comment opener above:
+                    # CommonMark recognises a fence — opening OR closing — only
+                    # at ≤3 spaces of indent. At four it is indented-code
+                    # content, and letting it toggle `fence` here inverts the
+                    # in-code/out-of-code state for the whole rest of the file.
+                    indent = len(line) - len(line.lstrip(" "))
+                    fence_m = (re.match(r"^(`{3,}|~{3,})", stripped)
+                               if indent <= 3 else None)
                     if fence_m:
                         char, run = fence_m.group(1)[0], len(fence_m.group(1))
                         if fence is None:

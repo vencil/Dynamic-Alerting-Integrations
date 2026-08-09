@@ -22,6 +22,7 @@ test_generate_routes_orchestration.py::TestPlatformReaderParity.
 from __future__ import annotations
 
 import base64
+import binascii
 import codecs
 import functools
 import json
@@ -451,7 +452,14 @@ def _expected_rule_files() -> frozenset:
              "operator-manifests/da-rule-pack-*.yaml",
              "k8s/03-monitoring/configmap-rules-*.yaml",
              "k8s/03-monitoring/configmap-rules-*.yml")
-    out = subprocess.run(["git", "-C", _REPO_ROOT, "ls-files", "-z", *globs],
+    # ⛔ `--icase-pathspecs`. git matches a pathspec CASE-SENSITIVELY, so
+    # `configmap-rules-extra.YAML` is found by the scanner (which filters
+    # suffixes in Python for exactly this reason — see `_tracked_yaml_paths`)
+    # and missing from this anchor. The two-way equality assertion turns that
+    # into a red test rather than silent under-coverage, but a red test naming
+    # the wrong side is still the wrong answer: the file DOES ship.
+    out = subprocess.run(["git", "-C", _REPO_ROOT, "--icase-pathspecs",
+                          "ls-files", "-z", *globs],
                          capture_output=True, text=True, timeout=60,
                          check=True).stdout
     files = frozenset(p for p in out.split("\0") if p)
@@ -693,9 +701,16 @@ def _containers_from_text(rel: str, text: str):
                 # unscanned AND defeated the raw-text `- alert:` tripwire.
                 entries = dict(doc.get("data") or {})
                 for key, blob in (doc.get("binaryData") or {}).items():
+                    # ⛔ validate=True, matching `_grar_validate`'s reader of the
+                    # SAME keys. Without it b64decode silently drops every
+                    # character outside the alphabet, so a corrupt value decodes
+                    # to arbitrary bytes instead of raising — and the two readers
+                    # then disagree about which keys exist, which is precisely
+                    # the drift TestPlatformReaderParity exists to prevent.
                     try:
-                        entries.setdefault(key, base64.b64decode(blob).decode("utf-8"))
-                    except (ValueError, UnicodeDecodeError):
+                        entries.setdefault(key, base64.b64decode(
+                            str(blob), validate=True).decode("utf-8"))
+                    except (ValueError, UnicodeDecodeError, binascii.Error):
                         continue
                 for key, body in entries.items():
                     try:
@@ -920,4 +935,14 @@ def _rule_shaped_but_unparsed():
             offenders.append((where, "rules nested under spec.groups"))
         elif isinstance(doc.get("rules"), list):
             offenders.append((where, "rules present but no enclosing groups:"))
+        elif not doc:
+            # ⛔ The empty container, which the misplaced-`groups` normalisation
+            # above CLAIMED this tripwire would flag — and did not. A
+            # PrometheusRule with no `spec.groups` reaches here as `{}`: no
+            # groups, no marker, no spec, no rules, zero rules contributed, and
+            # until now no offender. That is the silent zero, arrived at by the
+            # one route the rest of this function does not cover.
+            offenders.append((where, "rule container yields no rules at all — "
+                                     "an empty PrometheusRule spec, or a data "
+                                     "key whose body emptied out"))
     return tuple(offenders)

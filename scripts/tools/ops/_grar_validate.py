@@ -416,8 +416,16 @@ def platform_alert_identities(
                 if not isinstance(rules_doc, dict):
                     continue
                 for group in rules_doc.get("groups") or []:
-                    for rule in (group or {}).get("rules") or []:
-                        if "alert" not in rule:
+                    # ⛔ Per-element isolation, matching `_configmap_rule_bodies`
+                    # above. Without it a single non-mapping element raises into
+                    # the handler below and `identities` collapses to the
+                    # six-entry fallback constant — the fail-OPEN direction this
+                    # function's docstring warns about, reachable from one bad
+                    # element anywhere in the tree. Measured: 41 identities -> 6.
+                    if not isinstance(group, dict):
+                        continue
+                    for rule in group.get("rules") or []:
+                        if not isinstance(rule, dict) or "alert" not in rule:
                             continue
                         labels = dict(rule.get("labels") or {})
                         if labels.get("alert_source") != "platform":
