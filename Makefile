@@ -4,6 +4,26 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
+# 所有 recipe 的 Python 一律跑在 UTF-8 mode（PEP 540；與逐行 `-X utf8` 等價，
+# 實測 `PYTHONUTF8=1 python foo.py` 與 `python -X utf8 foo.py` 行為相同）。
+#
+# 為什麼需要：CPython 到 3.14 為止，`subprocess(..., text=True)` 沒帶 `encoding=`
+# 時用 **locale codec** 解碼子行程輸出。在 zh-TW Windows host（cp950）上，讀本
+# repo 自己的中文 commit subject 就會炸 `UnicodeDecodeError: 'cp950' codec can't
+# decode byte 0x8f`——而且例外是在 subprocess 的 reader thread 裡拋的，呼叫端只
+# 拿到 `stdout=None`，接著在下一行炸一個看似無關的 `AttributeError`。
+# pre-commit 的 107 個 entry 全都帶 `-X utf8`，所以 hook 路徑一直免疫；本檔的 83
+# 處 Python 呼叫則一個都沒有，`make <target>` 才是真正的曝險面。
+#
+# ⛔ 這是**入口止血、不是修法**：真正的修法是讓每個 subprocess 呼叫自己 pin
+# `encoding=`（#1374 追蹤，136 站）。UTF-8 mode 會讓那類缺陷在本機**看不出來**，
+# 所以別因為這行存在就認為 #1374 可以關掉。
+# ⚠️ export 不會跨過 `docker exec`；容器內的呼叫不吃這行，但容器 locale 本來就是
+# UTF-8，沒有曝險。`make dc-*` 因此不需要額外處理。
+# ⚠️ 用 export 而非逐行 `-X utf8`，是因為逐行版蓋不到 `bash xxx.sh` 間接叫起的
+# Python（實測 export 會傳進巢狀 bash），而且下一個新增的呼叫一定會被漏掉。
+export PYTHONUTF8=1
+
 CLUSTER  := dynamic-alerting-cluster
 TENANT   ?= db-a
 COMP     ?= threshold-exporter

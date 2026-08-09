@@ -712,7 +712,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "3ce48d385d919ca11582c1505c31e3aa350672abde2697965db7199b31d0b080",
+ "source_digest": "40ce3d55af7363d7cdf22122555eb1379a67e477f267db32a6181bdb4323ea57",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -749,6 +749,7 @@
   "tests/dx/test_inject_waveform.py",
   "tests/dx/test_line_ending_policy.py",
   "tests/dx/test_log_visibility_catalogue.py",
+  "tests/dx/test_makefile_utf8_mode.py",
   "tests/dx/test_migrate_conf_d.py",
   "tests/dx/test_pr_preflight_checks.py",
   "tests/dx/test_pr_preflight_orchestrator.py",
@@ -874,6 +875,7 @@
   "tests/lint/test_lint_jsx_babel_frontmatter.py",
   "tests/lint/test_lint_jsx_babel_linecount.py",
   "tests/lint/test_lint_tool_consistency.py",
+  "tests/lint/test_mkdocs_strict_check.py",
   "tests/lint/test_snapshot_v2.py",
   "tests/lint/test_trufflehog_to_sarif.py",
   "tests/lint/test_validate_docs_versions.py",
@@ -1123,6 +1125,7 @@
   ],
   "Makefile": [
    "tests/dx/test_compile_custom_alerts.py",
+   "tests/dx/test_makefile_utf8_mode.py",
    "tests/dx/test_recover_index.py",
    "tests/lint/test_check_makefile_targets.py",
    "tests/lint/test_check_orphan_lint.py",
@@ -1723,7 +1726,8 @@
    "tests/ops/test_generate_routes_orchestration.py"
   ],
   "mkdocs.yml": [
-   "tests/lint/test_check_head_blob_hygiene.py"
+   "tests/lint/test_check_head_blob_hygiene.py",
+   "tests/lint/test_mkdocs_strict_check.py"
   ],
   "renovate.json": [
    "tests/ops/test_renovate_config.py"
@@ -1909,6 +1913,7 @@
   ],
   "scripts/tools/dx/bump_docs.py": [
    "tests/dx/test_coverage_gap_analysis.py",
+   "tests/dx/test_makefile_utf8_mode.py",
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_structure.py"
   ],
@@ -2111,6 +2116,12 @@
   "scripts/tools/lint/fix_file_hygiene.py": [
    "tests/shared/test_sast.py"
   ],
+  "scripts/tools/lint/mkdocs-anchor-debt.txt": [
+   "tests/lint/test_mkdocs_strict_check.py"
+  ],
+  "scripts/tools/lint/mkdocs_strict_check.sh": [
+   "tests/lint/test_mkdocs_strict_check.py"
+  ],
   "scripts/tools/lint/validate_docs_versions.py": [
    "tests/lint/test_validate_docs_versions.py"
   ],
@@ -2310,7 +2321,8 @@
    "tests/lint/test_check_threshold_registry.py"
   ],
   "tests/lint/test_check_cli_coverage.py": [
-   "tests/dx/test_verify_diff.py"
+   "tests/dx/test_verify_diff.py",
+   "tests/lint/test_mkdocs_strict_check.py"
   ],
   "tests/lint/test_check_dev_rules_enforcement.py": [
    "tests/dx/test_verify_diff.py"
