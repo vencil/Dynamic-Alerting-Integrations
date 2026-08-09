@@ -20,6 +20,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 _TOOLS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "tools", "lint")
 sys.path.insert(0, _TOOLS_DIR)
 
@@ -40,6 +42,75 @@ def test_norm_expr_comment_strip():
 
 def test_norm_expr_operator_spacing():
     assert sync._norm_expr("a > on(tenant) b") == sync._norm_expr("a>on(tenant)b")
+
+
+# ⛔ Normalization is for SERIALIZATION, and a string literal is not
+# serialization — a label matcher's value is the query. Every pair below used to
+# normalize to the same thing, in all three of PromQL's quote styles, and the
+# `#` cases did not merely collide: they truncated the expression to a fragment
+# (`up{job="a`). Two consumers, both wrong in the fail-open direction — this
+# module's drift gate stops seeing a real difference between a source pack and
+# its deployed copies, and `_rule_tree._alert_names` accepts a hand-authored
+# rule as a faithful copy of a pack it only resembles, which is the provenance
+# test that decides whether the platform contracts apply to it.
+@pytest.mark.parametrize("a,b", [
+    ('up{job="a#b"} == 0', 'up{job="a#c"} == 0'),          # hash in a value
+    ("up{job='x#y'} == 0", "up{job='x#z'} == 0"),          # single-quoted
+    ('up{job=`p#q`} == 0', 'up{job=`p#r`} == 0'),          # backtick, raw
+    ('up{msg="a  b"} == 0', 'up{msg="a b"} == 0'),         # whitespace
+    ('up{path=~"/a, b"} == 0', 'up{path=~"/a,b"} == 0'),   # different regexes
+    ('up{re=~"(a )b"} == 0', 'up{re=~"(a)b"} == 0'),       # different regexes
+    ('up{msg="a > b"} == 0', 'up{msg="a>b"} == 0'),        # operator chars
+])
+def test_norm_expr_does_not_rewrite_inside_string_literals(a, b):
+    assert sync._norm_expr(a) != sync._norm_expr(b), (
+        f"{a!r} and {b!r} are different queries and normalized to the same "
+        f"thing: {sync._norm_expr(a)!r}")
+    # …and the literal survives intact, rather than being merely non-equal.
+    assert '"a  b"' in sync._norm_expr('up{msg="a  b"} == 0')
+
+
+def test_norm_expr_still_strips_a_real_comment_containing_a_quote():
+    """The interleaving rule, which handling either token alone gets wrong.
+
+    `#` before a quote opens a comment (the apostrophe in "don't" is inside it);
+    a quote before a `#` opens a string (the hash is data). One left-to-right
+    alternation gives both; two independent passes give whichever ran first.
+    """
+    plain = sync._norm_expr("x == 0")
+    assert sync._norm_expr("x == 0  # don't do this") == plain
+    assert sync._norm_expr('x == 0  # a "quoted" note') == plain
+    assert sync._norm_expr("x == 0\n# trailing comment line") == plain
+
+
+def test_norm_expr_is_unchanged_on_every_shipped_expression():
+    """The no-op claim, asserted rather than asserted-in-prose.
+
+    String-awareness is a behaviour change to a CI drift gate, so the tree it
+    guards has to be measured, not reasoned about. Recomputed here rather than
+    pinned to a snapshot: what matters is that the normal form of a real
+    expression contains no comment and no rewritten literal.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]
+                          / "scripts" / "tools" / "lint"))
+    from _rule_tree import _rule_containers  # noqa: PLC0415
+
+    checked = 0
+    for _where, doc, _prov in _rule_containers():
+        for group in (doc.get("groups") or []):
+            for rule in ((group or {}).get("rules") or []):
+                expr = rule.get("expr")
+                if expr is None:
+                    continue
+                checked += 1
+                normalized = sync._norm_expr(expr)
+                # Idempotent: normalizing twice is normalizing once. A
+                # string-unaware pass fails this the moment a literal contains
+                # any of the characters the passes rewrite.
+                assert sync._norm_expr(normalized) == normalized, expr
+    assert checked >= 900, (
+        f"only {checked} expressions examined — the sweep is not covering the "
+        "tree it claims to")
 
 
 def test_extract_and_diff():

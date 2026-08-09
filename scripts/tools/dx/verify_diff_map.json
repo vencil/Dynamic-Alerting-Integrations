@@ -216,6 +216,7 @@
    "tests/shared/test_property_tools.py"
   ],
   "scripts/tools/lint/_rule_tree.py": [
+   "tests/lint/test_check_rulepack_sync.py",
    "tests/ops/test_generate_routes_orchestration.py"
   ],
   "scripts/tools/lint/check_account_registry_monotonic.py": [
@@ -706,7 +707,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "72d8f702c0d74795737589fc49b554210c297957adee2cb0ba84064df32054dc",
+ "source_digest": "15d4dc0af96110237a6499bf7b3f47d58c37290515861c59e76c1fc123ec09fc",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",

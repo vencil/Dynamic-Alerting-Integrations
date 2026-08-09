@@ -66,27 +66,86 @@ def _repo_root() -> Path:
     return p.parent.parent.parent
 
 
+# One left-to-right alternation over the things whose CONTENT is not code:
+# PromQL's three string-literal spellings and its line comment. `finditer`
+# takes the earliest match, so whichever opens first wins — which is exactly
+# the interleaving rule needed here. `up == 0  # don't` lexes the comment
+# (the `#` precedes the apostrophe), while `up{job="a#b"}` lexes the string
+# (the quote precedes the hash). Handling either one alone gets the other wrong.
+_EXPR_OPAQUE_RE = re.compile(
+    r'"(?:[^"\\]|\\.)*"'        # "…", backslash escapes
+    r"|'(?:[^'\\]|\\.)*'"       # '…', backslash escapes
+    r"|`[^`]*`"                 # `…`, raw — no escapes, per PromQL
+    r"|#[^\n]*"                 # line comment, to end of line
+)
+
+
 def _norm_expr(expr: Any) -> str:
     """Canonicalize a PromQL expression for serialization-agnostic comparison.
 
     Three normalizations so logically-equivalent PromQL compares equal no
     matter how it was serialized (block scalar vs `\\n`-escaped string):
-      1. Strip `#` line comments BEFORE collapsing newlines (Gemini review):
-         `#` comments to end-of-line, so flattening first would let a comment
-         swallow following tokens → a false drift/no-drift.
+      1. Strip `#` line comments.
       2. Collapse all whitespace runs to a single space.
       3. Remove whitespace adjacent to operator/grouping punctuation so
          `by(tenant)` == `by (tenant)` == `by(tenant, version)` (token-level
          minify, Gemini review) — emitters differ on this spacing.
+
+    ⛔ ALL THREE APPLY TO CODE ONLY. Run blindly over the whole expression they
+    rewrite the insides of string literals, and a label matcher's value is not
+    formatting — it is the query. Every one of these used to compare EQUAL:
+
+        up{job="a#b"}      vs  up{job="a#c"}      (and the normal form was the
+                                                   truncated fragment `up{job="a`)
+        up{msg="a  b"}     vs  up{msg="a b"}
+        up{path=~"/a, b"}  vs  up{path=~"/a,b"}   — different regexes
+        up{re=~"(a )b"}    vs  up{re=~"(a)b"}     — different regexes
+        up{msg="a > b"}    vs  up{msg="a>b"}
+
+    …in all three quote styles. Two consumers, and both directions are wrong:
+    this module's drift gate stops seeing a real difference between a source
+    pack and its deployed copies, and `_rule_tree._alert_names` accepts a
+    hand-authored rule as a faithful copy of a pack it merely resembles — which
+    is the provenance check that decides whether the platform contracts apply.
+
+    Verified no-op on the tree as it stands: all 930 shipped expressions
+    normalise identically before and after (none currently carries a comment or
+    a string literal containing any of the characters above).
+
+    An UNTERMINATED quote matches nothing here and stays in the code stream, so
+    a `#` after it reads as a comment. That is invalid PromQL either way and
+    promtool rejects it upstream; this function does not try to be a parser.
     """
-    s = re.sub(r"#[^\n]*", "", str(expr))
-    s = re.sub(r"\s+", " ", s).strip()
+    literals: list[str] = []
+
+    def _stash(m: "re.Match") -> str:
+        token = m.group(0)
+        if token.startswith("#"):
+            # A space, not "", though here the two are EQUIVALENT: a comment
+            # always runs to end-of-line, so a newline (or EOF) follows it and
+            # the whitespace pass merges either spelling away. Measured — the
+            # mutation to "" survives. It is a space because the first draft of
+            # this function normalized each code run in isolation, where the
+            # difference was real (`sum by(t) (\n  # c\n  x\n)` kept a space the
+            # comment-free spelling does not have) and the existing
+            # comment-strip test caught it. Keeping the separator costs nothing
+            # and removes the trap if the passes are ever split up again.
+            return " "
+        literals.append(token)
+        return f"\x00{len(literals) - 1}\x00"
+
+    # NUL is not a legal character in a YAML scalar (both 1.1 and 1.2 forbid the
+    # C0 range apart from tab/LF/CR, and PyYAML refuses to emit or load one), so
+    # a NUL-delimited index cannot collide with expression text.
+    s = _EXPR_OPAQUE_RE.sub(_stash, str(expr))
+    s = re.sub(r"\s+", " ", s)
     # Drop spaces around ( ) , and comparison operators; normalize the space
     # after by/without/on/group_left/group_right to none before '('.
     s = re.sub(r"\s*([(),])\s*", r"\1", s)
     s = re.sub(r"\s*(==|!=|>=|<=|>|<)\s*", r"\1", s)
     s = re.sub(r"\b(by|without|on|ignoring|group_left|group_right)\s+\(", r"\1(", s)
-    return s
+    s = re.sub(r"\x00(\d+)\x00", lambda m: literals[int(m.group(1))], s)
+    return s.strip()
 
 
 def _norm_rule(rule: dict) -> dict:

@@ -187,6 +187,20 @@ All notable changes to the **Dynamic Alerting Integrations** project will be doc
   抽到 [`scripts/tools/lint/_rule_tree.py`](scripts/tools/lint/_rule_tree.py)。生產側**刻意保留自己的窄路徑**（它跑在沒有 repo tree 的 image 裡、檔案讀不到時 fallback 到常數，不能依賴 `git ls-files`）——它從這次抽出得到的不是共用實作，是 **`TestPlatformReaderParity` 這個交叉比對**：實測放進第二份手寫平台 ConfigMap 時，兩個檔名式 reader 看不見那條告警而掃描器看得見，交叉比對轉紅。以前那一天只會是個缺口。
   重構行為保持已逐項驗證（container / rules / platform / packs / offenders / expected_files / tracked 七項與抽出前完全相同）。ops 測試檔 3081 → 2546 行；`test_check_pint.py` 用 regex 讀常數的兩處同步指向新位置。`_source_pack_alerts` 的 pack 唯一性檢查從 `assert` 改為明確 `raise`——這是**唯一的行為變更**，方向是變嚴：實測 `python -O` 下舊版的 `assert` 被剝除，一份偽造的第二個 `rule-pack-redis.yaml` 會靜默併進 redis 的信任集合；新版擋下。一個 fail-closed 判斷不該可被最佳化掉。
 
+- **⛔ `_norm_expr` 把正規化套進字串字面量裡——兩個 gate 同時失明（lint；行為變更，實測全樹 no-op）**：那三個正規化（剝 `#` 註解、壓縮空白、去除標點旁空白）是為了**序列化差異**而存在的，但它們對整條 expr 無差別套用，而 label matcher 的值**不是格式、是查詢本身**。實測以下每一組都被判為相同（三種引號形式皆然）：
+
+  | | |
+  |---|---|
+  | `up{job="a#b"}` | `up{job="a#c"}` — 且正規形是被截斷的殘骸 `up{job="a` |
+  | `up{msg="a  b"}` | `up{msg="a b"}` |
+  | `up{path=~"/a, b"}` | `up{path=~"/a,b"}` — 不同的 regex |
+  | `up{re=~"(a )b"}` | `up{re=~"(a)b"}` — 不同的 regex |
+  | `up{msg="a > b"}` | `up{msg="a>b"}` |
+
+  **兩個消費者、兩個方向都是 fail-open**：`check_rulepack_sync` 的 drift gate 看不見 source pack 與部署副本之間真實的差異；`_rule_tree._alert_names` 把一條**只是長得像**的手寫規則當成 pack 的忠實副本——而那正是決定平台契約要不要套用到它身上的 provenance 判準。
+  改為單一 left-to-right alternation，把 PromQL 三種字串字面量與行註解一起掃：`finditer` 取最早的匹配，所以誰先開始誰贏——`up == 0 # don't` 認出註解（`#` 在撇號之前），`up{job="a#b"}` 認出字串（引號在 `#` 之前）。**只處理其中一種必然把另一種弄錯。** 字串以 NUL 定界的索引暫存（YAML 兩個版本都禁止 scalar 內出現 C0 控制字元，不可能撞），正規化跑在完整的 code stream 上，最後還原。
+  **實測 no-op**：全樹 930 條 expr 在修前修後正規形**逐條相同**（拿 `HEAD` 開 worktree 對跑）。新增 idempotence 斷言（正規化兩次等於一次）掃全樹當回歸。四個 mutant 驗證轉紅（回到 string-unaware、丟掉單引號、丟掉反引號、字串不還原）；另兩個實測為**真等價**並據實記錄：註解換成空字串（註解必然到行尾，換行會被空白 pass 吸收）、alternation 內的排列順序（`#` 與引號不可能在同一位置開始，所以順序無關——重點是「同一次掃描」而非順序）。
+
 - **⛔ 補完 mutation：解析層 15 個守衛全部沒有 fixture，補到只剩 3 個可證明等價的存活（internal；行為未變）**：前一批留下約 27 個從未測過的 mutant，本批全跑（外加兩個 control）。第一輪 **9 殺 / 20 活**——存活的幾乎整組落在 `_containers_from_text` 與它的 helper 上，也就是每個 docstring 都寫著「這個 payload 曾經走過去」的那些守衛：註解在做 fixture 該做的事。
   補上逐守衛的 fixture 後 **26 殺 / 3 活**。新增涵蓋：無法 parse 的 `.yml` / `.YML` / `.YAML` data key 要被回報（而 `.md` key 不能——本 repo 出貨的 Alertmanager markdown 樣板裡就有 `- alert:` 當範例）、data key 把規則放在 `spec.groups`（silent-zero 的偵測入口）、PrometheusRule 頂層 `groups` 的正規化**與其反向**（同時有真 `spec.groups` 時不得誤報）、PrometheusRule provenance 的兩個來源（物件名、header fallback，缺任一個都會讓部署副本被當成手寫平台樹）、開頭 `---` 不得中止 header 掃描、`data` 對同名 key 優先於 `binaryData`（kubelet `MakePayload` 的順序，反過來會 gate 一份叢集不提供的內容）、data 值本身就是 mapping 時直接使用、`_is_rule_groups` 的四個邊界（含 `groups: []` 合法、`any` 非 `all`、RBAC 形狀仍排除）、`groups:` 裡混入非 dict 不得讓整個掃描崩掉、以及 `_documents` 的 `except` 只吞 `yaml.YAMLError`（改成 `except Exception` 會把未來每一個 scanner bug 變成「那個檔案沒有規則」）。
   另補兩個原本被判「今天等價」但其實只是**潛伏**的：`groups: []` 與 `spec.groups` 併存時哨兵短路（判斷式必須看**值**不是看 key，否則那個 container 整個被跳過而 `spec.groups` 裡是真規則），以及 rule-packs/ 來源樹的分類排除（今天每個容器都從檔名解得出 provenance，所以拿掉沒差——危險正在這裡：一個檔名慣例沒涵蓋到的來源檔會變成「手寫平台樹」，gate 於是對永不部署的規則要求 RESERVED 標籤）。
