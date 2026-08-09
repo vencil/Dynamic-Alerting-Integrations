@@ -712,7 +712,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "ba5f42956ba254730fcc871f74e6d4eaa2c47f9c764e4121382eff09fb4f5519",
+ "source_digest": "40ce3d55af7363d7cdf22122555eb1379a67e477f267db32a6181bdb4323ea57",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1913,6 +1913,7 @@
   ],
   "scripts/tools/dx/bump_docs.py": [
    "tests/dx/test_coverage_gap_analysis.py",
+   "tests/dx/test_makefile_utf8_mode.py",
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_structure.py"
   ],
