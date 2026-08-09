@@ -3,15 +3,18 @@
 > ⛔ 這是 WIP branch 的暫存筆記，**merge 前刪除**（原本要放 `dev/`，但那是 gitignore 的暫存區，
 > 檔案不會進 repo 而容器會被回收，所以暫放這裡）。
 
-**狀態**：26 個 commit，HEAD = `14fd1384`，遠端與本地同步，工作區乾淨。**沒有開 PR。**
-`tests/ops` + `tests/lint` + `tests/rulepacks` = **6489 passed / 130 skipped**。
+**狀態**：28 個 commit，HEAD = `bcb20069`，遠端與本地同步，工作區乾淨。**沒有開 PR。**
+`tests/ops` + `tests/lint` + `tests/rulepacks` = **6497 passed / 130 skipped**。
 
 ---
 
 ## ⛔ 明天第一件事
 
-沒有「必須先做」的阻塞項——上一批（`1cace594`）已跑完 mutation 並自審。
-直接從下面的〈剩餘工作〉挑。**需要你先決定的**：S1 的三選一。其餘（16 個仍存活的 mutant、兩個小項）可直接做。
+**剩餘工作只剩一個小項**（parity#2 的非空底線，見下）。S1 / S3 / 16 個 mutant 全部做完。
+沒有阻塞項，也沒有待你決定的事。
+
+真正該考慮的是**這個 branch 要怎麼收**：28 個 commit、沒有 PR、最早三個 commit 的 subject
+還標著「WIP，勿 merge」。merge 前要刪掉這份 handoff。
 
 ---
 
@@ -31,6 +34,7 @@
 | `1cace594` | 補完 mutation：解析層 15 個守衛全無 fixture |
 | `6d20740c` | 這份 handoff |
 | `14fd1384` | `_norm_expr` 把正規化套進字串字面量裡（S3；實測全樹 no-op） |
+| `bcb20069` | helm chart 宣告的規則一律拒收（S1 選項 iii）＋ 補完剩下的 mutant |
 
 ### 花錢買到、值得保留的事實
 
@@ -62,33 +66,29 @@ big-endian 下切在 pair 邊界，little-endian 下切在 codepoint 中間。
 三種引號形式皆然。已改為單一 left-to-right alternation（字串三式 ＋ 行註解一起掃），
 字串以 NUL 定界索引暫存。全樹 930 條 expr 修前修後逐條相同。
 
-### 1. S1 — helm template 在掃描面內但內容不可見（要你決定）
+### ~~S1~~ — 已完成（`bcb20069`，選了 (iii)）
 
-`helm/` 底下 95 個 tracked YAML，**67 個 parse 不了**（Go template action）。今天沒有任何
-helm 檔放規則，而且「寫了字面 `- alert:` 又 parse 不了」的檔案**會**被哨兵抓到。
-殘留缺口只有一種：規則整個從 `toYaml .Values...` 注入，檔案裡沒有字面 `- alert:`。
+`_rules_shaped_at_any_depth()` 遞迴拒收 helm 裡的規則形狀（帶真規則的 `groups:` mapping、
+以及 template 會自己包 `groups:` 的裸 rule list），並釘了五個反向對照防誤報。
+實測全 repo 目前 0 個 helm YAML 是規則形狀。
 
-- (i) gate 裡跑 `helm template`——重，要 helm binary，但 `test_check_scrape_reachability.py` 已有先例
-- (ii) 把 `helm/` 移出 `_SHIPPED_ROOTS` 並誠實寫明不涵蓋
-- (iii) 加 tripwire：任何 helm values 長出 rules 形狀的 key 就紅 ← **我建議這個**，最便宜的誠實作法
+### ~~16 個仍存活的 mutant~~ — 已完成（`bcb20069`）
 
-約 2h。
+殺掉 9 個（`_generated_pack_names` 四道守衛、`_SCAN_SKIP_PARTS` 空集合、副檔名大小寫、
+`python -O` 下的 pack 唯一性 `raise`、`_tracked_yaml_paths` 新加的空集合防護、`A32`）。
+順帶發現 `_tracked_yaml_paths` 少了 `_expected_rule_files` 那道空集合防護——git 失敗時
+靜默回傳 `[]`，`check_scrape_reachability --ci` 會對一棵從未打開的樹印「0 DEAD」。已補。
 
-### 2. 16 個仍存活的 mutant（RVL 那 69 個的餘數）
+剩下 8 個**逐一可證明等價**，不要再花時間：`A85`（control）、`A44`（恆真式）、
+`B07`（由已測過的唯一性 `raise` 保證）、`A30` / `A22`、`A04`（`is_file()` 多餘，對目錄
+`read_text()` 拋 `IsADirectoryError`，屬既有 `OSError` catch）、`A40`（`check=True` 被
+空集合防護涵蓋）。
 
-- **A03–A08（6 個）** 全在 `_generated_pack_names`。它**已不在分類路徑上**（只剩測試 oracle，
-  註解已改成誠實敘述），嚴重度因此降一階——但 oracle 說謊會讓讀它的斷言跟著鬆。約 1h。
-- **A31 / A41**——`_SCAN_SKIP_PARTS` 註解自稱「deliberately EMPTY」、副檔名比對自稱大小寫不敏感
-  （`.YAML` 紅隊手法），兩個都沒有斷言釘住。約 30min。
-- **A29**（`raise` → `assert`）只在 `python -O` 下可觀測，要 subprocess 測試；
-  **A40**（`check=False`）要模擬 git 失敗。約 1h。
-- **A30 / A22 / A32** 判定語意等價。
-
-### 3. 小項
+### 1. 唯一剩下的小項
 
 - `TestPlatformReaderParity` 的 parity#2 只有 `assert prod`（≥1），沒有數值底線，
   而它的結論已被 parity#1 + `test_runtime_default_is_the_derived_set_not_a_sample` 蘊含。
-  要嘛給它 `_MIN_PLATFORM_ALERTS`，要嘛在 docstring 講明它是推論式。
+  要嘛給它 `_MIN_PLATFORM_ALERTS`，要嘛在 docstring 講明它是推論式。約 15min。
 - `test_check_pint.py` 用 regex 讀 `_rule_tree.py` 常數而不 import——模組註解已寫明那是刻意的
   （要跟 `.pint.hcl` 的 include pattern 鎖步）。**判定不必動。**
 
@@ -98,9 +98,7 @@ helm 檔放規則，而且「寫了字面 `- alert:` 又 parse 不了」的檔�
 `kind: List` 與 binaryData 已修並有 fixture、ledger 改名頂替已改釘 expr digest、
 runbook 越界行號已修、三支契約的非空底線已補。
 
-最後一輪 mutation 剩下的 3 個存活**逐一可證明等價**，不要再花時間：
-`A85` 是刻意的 control（必須存活）、`A44` 拿掉的是恆真式（`_SCAN_SKIP_PARTS` 是 `frozenset()`）、
-`B07` 只在兩檔宣稱同一 pack 名時有差而那由唯一性 `raise` 禁止（該 raise 已有測試）。
+RVL 那 69 個存活的最終帳：**61 已驗證被殺、8 逐一可證明等價**（清單見上）。
 
 ---
 
