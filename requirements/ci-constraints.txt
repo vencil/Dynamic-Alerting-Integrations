@@ -50,6 +50,10 @@ hypothesis==6.156.9
 
 # --- parsers / validators (behavior-affecting on major bumps) ------------
 jsonschema==4.26.0
+# check-jsonschema vendors the GitLab CI schema that #1347's generated-pipeline
+# gate validates against; an upstream schema refresh arrives as a version bump,
+# so pin it like any other behavior-affecting validator.
+check-jsonschema==0.37.4
 promql-parser==0.10.0
 croniter==6.2.4
 pathspec==1.1.1

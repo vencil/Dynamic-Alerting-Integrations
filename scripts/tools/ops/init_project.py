@@ -601,13 +601,38 @@ def _gen_tenant_yaml(tenant: str, rule_packs: list[str]) -> str:
 # ============================================================
 
 def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
-    """Build GitHub Actions apply stage based on deployment method."""
+    """Build GitHub Actions apply stage, as a COLUMN-0 block.
+
+    ⛔ Contract with _gen_github_actions: every branch below returns a block
+    whose top-level key (``apply:``) sits at column 0 after ``dedent``. It is
+    the CALLER that indents it into ``jobs:`` (``textwrap.indent``), never this
+    function and never the literal indentation of these templates. Keep the
+    branches dedent-to-column-0; if you want the block nested, change the
+    caller.
+
+    ⛔ Second contract — ``needs:`` must NOT list ``generate`` (#1356). Every
+    branch below runs only on ``workflow_dispatch``, while ``generate`` runs
+    only on ``pull_request``. GitHub's rule is "If a job fails or is SKIPPED,
+    all jobs that need it are skipped unless the jobs use a conditional
+    expression that causes the job to continue" — so on a ``workflow_dispatch``
+    run ``generate`` is skipped, and ``apply`` was skipped with it. There is no
+    event under which both could run: the shipped ``apply`` had ZERO reachable
+    paths. Listing ``validate`` alone is not a weakening — ``generate`` produces
+    nothing ``apply`` consumes: it uploads no artifact, its only output is a
+    sticky PR comment, and the two branches that need a working tree check it
+    out themselves (the argocd branch needs none — ``argocd app sync`` talks to
+    the server, so it has no checkout step at all).
+    Enforced by the reachability assertion in
+    tests/ops/test_generated_ci_artifacts.py.
+    """
     if deploy_method == 'kustomize':
         return textwrap.dedent("""\
 
       # ── Stage 3: Apply (manual trigger only) ──────────────
+      # `needs: [validate]` only — `generate` is pull_request-only, and a
+      # skipped job skips everything that needs it (#1356).
       apply:
-        needs: [validate, generate]
+        needs: [validate]
         runs-on: ubuntu-latest
         if: github.event_name == 'workflow_dispatch'
         environment: production
@@ -623,15 +648,17 @@ def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
               kubectl apply -f /tmp/manifests.yaml
           - name: Reload Prometheus
             run: |
-              kubectl rollout restart deployment/prometheus -n {namespace}
+              kubectl rollout restart deployment/prometheus -n ${{{{ env.MONITORING_NS }}}}
     """).format(namespace=namespace)
 
     elif deploy_method == 'helm':
         return textwrap.dedent("""\
 
       # ── Stage 3: Apply via Helm (manual trigger only) ─────
+      # `needs: [validate]` only — `generate` is pull_request-only, and a
+      # skipped job skips everything that needs it (#1356).
       apply:
-        needs: [validate, generate]
+        needs: [validate]
         runs-on: ubuntu-latest
         if: github.event_name == 'workflow_dispatch'
         environment: production
@@ -642,7 +669,7 @@ def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
               helm upgrade --install threshold-exporter \\
                 oci://ghcr.io/vencil/charts/threshold-exporter \\
                 -f environments/prod/values.yaml \\
-                -n {namespace} \\
+                -n ${{{{ env.MONITORING_NS }}}} \\
                 --wait --timeout 5m
     """).format(namespace=namespace)
 
@@ -650,8 +677,10 @@ def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
         return textwrap.dedent("""\
 
       # ── Stage 3: Sync ArgoCD Application ──────────────────
+      # `needs: [validate]` only — `generate` is pull_request-only, and a
+      # skipped job skips everything that needs it (#1356).
       apply:
-        needs: [validate, generate]
+        needs: [validate]
         runs-on: ubuntu-latest
         if: github.event_name == 'workflow_dispatch'
         environment: production
@@ -668,7 +697,33 @@ def _gen_github_actions(
     deploy_method: str,
 ) -> str:
     """Generate GitHub Actions workflow for Dynamic Alerting CI/CD."""
-    apply_stage = _build_github_apply_stage(deploy_method, namespace)
+    # ⛔ Indent the apply block IN CODE, not by hand-matching two templates.
+    #
+    # This is the #1347 bug, and the reason the fix looks over-engineered for
+    # "two spaces". Both templates are `textwrap.dedent`ed, so where the apply
+    # block lands depended on the ARITHMETIC of two independent literal
+    # indents: the sub-template's common margin (6) vs. the outer template's
+    # common margin (4). Because dedent strips each template by ITS OWN margin,
+    # the sub-template came back at column 0 and the `{apply_stage}` line was
+    # already at column 0 too — so `apply:` was emitted as a TOP-LEVEL workflow
+    # key instead of a job, and GitHub refused to load the whole file. All
+    # three --deploy variants shipped that way, and the outer template still
+    # *looked* correctly nested in the source.
+    #
+    # That coupling is an implicit contract between two string literals: any
+    # future re-indent of either template (a reflow, a wrapping `if`, a linter)
+    # silently breaks it again, and nothing in the source says the two must
+    # agree. So the nesting is now explicit and mechanical — the sub-template
+    # owns a column-0 block, this line owns "put it under `jobs:`" — and
+    # tests/ops/test_generated_ci_artifacts.py parses the RESULT rather than
+    # trusting either literal.
+    #
+    # `{apply_stage}` below must therefore stay at the outer template's own
+    # margin (i.e. column 0 after dedent); the two spaces added here are the
+    # ONLY thing placing `apply:` at the same level as `validate:`/`generate:`.
+    apply_stage = textwrap.indent(
+        _build_github_apply_stage(deploy_method, namespace), '  ',
+    )
 
     return textwrap.dedent("""\
     # Dynamic Alerting CI/CD Pipeline
@@ -688,21 +743,46 @@ def _gen_github_actions(
           - 'conf.d/**'
           - 'kustomize/**'
           - 'rule-packs/**'
+      # ⛔ No `branches:` filter, deliberately. `on.push.branches` takes literals
+      # only — no expressions — so any value we write here is a guess about the
+      # customer's default branch, and `main` is wrong for every `master` /
+      # `trunk` / `develop` repo. Enumerating the common names is the same
+      # denylist mistake one size larger. Omitting the filter is the only form
+      # that is correct for everyone, and it can only ADD runs: a push to the
+      # default branch is still a push, so the post-merge re-validation this leg
+      # exists for is unchanged. The extra runs are `validate` alone (`generate`
+      # is pull_request-only, `apply` is workflow_dispatch-only) — a read-only
+      # `docker run validate-config` with no credentials, already narrowed by
+      # the paths filter below. The GitLab leg gets portability from
+      # `$CI_DEFAULT_BRANCH`; this is the GitHub equivalent.
       push:
-        branches: [main]
         paths:
           - 'conf.d/**'
       workflow_dispatch:
-        inputs:
-          dry_run:
-            description: 'Dry-run mode (no actual apply)'
-            type: boolean
-            default: true
+
+    # Least-privilege, and `pull-requests: write` is LOAD-BEARING, not
+    # boilerplate: the generate job's only output is a sticky PR comment, and
+    # GITHUB_TOKEN defaults to read-only on repositories created after 2023-02.
+    # Without this, Stage 2's comment step 403s and the customer's blast-radius
+    # review never appears. Same declaration this platform's own backtest.yaml
+    # carries for the same action.
+    #
+    # ⛔ SCOPE — this does NOT rescue a pull_request from a FORK. GitHub hard-
+    # locks GITHUB_TOKEN to read-only for fork PRs and `permissions:` cannot
+    # raise it; only `pull_request_target` / `workflow_run` get an elevated
+    # token, and this workflow deliberately uses neither (both run trusted code
+    # against untrusted input). So on a fork PR the comment step still 403s,
+    # exactly as before. A customer whose contributors work from forks needs a
+    # different design, not a wider `permissions:` block — tracked as a known
+    # boundary rather than silently implied to be fixed.
+    permissions:
+      contents: read
+      pull-requests: write
 
     env:
       DA_TOOLS_IMAGE: {da_tools_image}
       CONFIG_DIR: conf.d
-      MONITORING_NS: {namespace}
+      {monitoring_ns_env}
 
     jobs:
       # ── Stage 1: Validate ─────────────────────────────────
@@ -714,9 +794,9 @@ def _gen_github_actions(
           - name: Validate config (schema + routing + policy)
             run: |
               docker run --rm \\
-                -v ${{{{ github.workspace }}}}/conf.d:/data/conf.d:ro \\
+                -v ${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
-                validate-config --config-dir /data/conf.d --ci
+                validate-config --config-dir /data/conf.d
 
           - name: Lint custom rules (if any)
             run: |
@@ -741,7 +821,7 @@ def _gen_github_actions(
           - name: Generate Alertmanager routes
             run: |
               docker run --rm \\
-                -v ${{{{ github.workspace }}}}/conf.d:/data/conf.d:ro \\
+                -v ${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro \\
                 -v ${{{{ github.workspace }}}}/.output:/data/output \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
                 generate-routes --config-dir /data/conf.d \\
@@ -759,7 +839,7 @@ def _gen_github_actions(
             run: |
               docker run --rm \\
                 -v ${{{{ github.workspace }}}}/.output/base/conf.d:/data/conf.d.base:ro \\
-                -v ${{{{ github.workspace }}}}/conf.d:/data/conf.d:ro \\
+                -v ${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro \\
                 -v ${{{{ github.workspace }}}}/.output:/data/output \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
                 config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d \\
@@ -776,6 +856,22 @@ def _gen_github_actions(
         da_tools_image=da_tools_image,
         namespace=namespace,
         apply_stage=apply_stage,
+        # ⛔ Declared only where something reads it. The argocd branch runs
+        # `argocd app sync` and never names a namespace, so emitting
+        # MONITORING_NS there would ship the customer a knob that does nothing —
+        # the #1361 class, in `env:` rather than in `workflow_dispatch.inputs`.
+        # Held by the knob-reachability assertion in
+        # tests/ops/test_generated_ci_artifacts.py.
+        # ⚠️ A COMMENT, not an empty string, and the placeholder stays INDENTED
+        # in the template: a substitution at column 0 inside a textwrap.dedent
+        # block resets the common prefix and un-indents the whole document —
+        # which is #1347 itself. Measured while writing this: the column-0 form
+        # broke `test_github_workflow_parses_as_yaml`.
+        monitoring_ns_env=(
+            "# (no MONITORING_NS — the argocd branch never names a namespace)"
+            if deploy_method == "argocd"
+            else f"MONITORING_NS: {namespace}"
+        ),
     )
 
 
@@ -807,12 +903,29 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
       environment:
         name: production
       rules:
-        - when: manual
+        # ⛔ The `if:` is load-bearing, not decoration. A `rules:` entry with no
+        # `if:` / `changes:` / `exists:` matches EVERY pipeline, so a bare
+        # `- when: manual` attaches this job — which holds `environment:
+        # production` and cluster-write credentials — to every push and every
+        # merge request, including one opened by any Developer-role contributor
+        # against code that was never merged and never passed validate. Pinning
+        # it to the default branch is what removes that.
+        #
+        # ⛔ NOT parity with the GitHub sibling, and it would be wrong to read it
+        # that way: `workflow_dispatch` gates the EVENT, not the ref. Whoever
+        # dispatches picks the branch in the Run-workflow dialog, so the GitHub
+        # `apply` is still dispatchable from an unmerged branch while this one is
+        # not. Closing that gap needs `github.ref` in the job's `if:`, which the
+        # reachability evaluator cannot parse today — tracked as a stated
+        # boundary rather than half-done here. Held by the trigger-scope
+        # assertion in tests/ops/test_generated_ci_artifacts.py.
+        - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+          when: manual
       script:
         - kustomize build kustomize/overlays/prod > /tmp/manifests.yaml
         - kubectl apply --dry-run=server -f /tmp/manifests.yaml
         - kubectl apply -f /tmp/manifests.yaml
-        - kubectl rollout restart deployment/prometheus -n {namespace}
+        - kubectl rollout restart deployment/prometheus -n $MONITORING_NS
     """).format(namespace=namespace, image_var=image_var)
 
     elif deploy_method == 'helm':
@@ -832,13 +945,30 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
       environment:
         name: production
       rules:
-        - when: manual
+        # ⛔ The `if:` is load-bearing, not decoration. A `rules:` entry with no
+        # `if:` / `changes:` / `exists:` matches EVERY pipeline, so a bare
+        # `- when: manual` attaches this job — which holds `environment:
+        # production` and cluster-write credentials — to every push and every
+        # merge request, including one opened by any Developer-role contributor
+        # against code that was never merged and never passed validate. Pinning
+        # it to the default branch is what removes that.
+        #
+        # ⛔ NOT parity with the GitHub sibling, and it would be wrong to read it
+        # that way: `workflow_dispatch` gates the EVENT, not the ref. Whoever
+        # dispatches picks the branch in the Run-workflow dialog, so the GitHub
+        # `apply` is still dispatchable from an unmerged branch while this one is
+        # not. Closing that gap needs `github.ref` in the job's `if:`, which the
+        # reachability evaluator cannot parse today — tracked as a stated
+        # boundary rather than half-done here. Held by the trigger-scope
+        # assertion in tests/ops/test_generated_ci_artifacts.py.
+        - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+          when: manual
       script:
         - |
           helm upgrade --install threshold-exporter \\
             oci://ghcr.io/vencil/charts/threshold-exporter \\
             -f environments/prod/values.yaml \\
-            -n {namespace} \\
+            -n $MONITORING_NS \\
             --wait --timeout 5m
     """).format(namespace=namespace, image_var=image_var)
 
@@ -859,7 +989,24 @@ def _build_gitlab_apply_stage(deploy_method: str, namespace: str) -> str:
       environment:
         name: production
       rules:
-        - when: manual
+        # ⛔ The `if:` is load-bearing, not decoration. A `rules:` entry with no
+        # `if:` / `changes:` / `exists:` matches EVERY pipeline, so a bare
+        # `- when: manual` attaches this job — which holds `environment:
+        # production` and cluster-write credentials — to every push and every
+        # merge request, including one opened by any Developer-role contributor
+        # against code that was never merged and never passed validate. Pinning
+        # it to the default branch is what removes that.
+        #
+        # ⛔ NOT parity with the GitHub sibling, and it would be wrong to read it
+        # that way: `workflow_dispatch` gates the EVENT, not the ref. Whoever
+        # dispatches picks the branch in the Run-workflow dialog, so the GitHub
+        # `apply` is still dispatchable from an unmerged branch while this one is
+        # not. Closing that gap needs `github.ref` in the job's `if:`, which the
+        # reachability evaluator cannot parse today — tracked as a stated
+        # boundary rather than half-done here. Held by the trigger-scope
+        # assertion in tests/ops/test_generated_ci_artifacts.py.
+        - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+          when: manual
       script:
         - argocd app sync dynamic-alerting --prune --timeout 300
     """).format(image_var=image_var)
@@ -892,7 +1039,7 @@ def _gen_gitlab_ci(
       # override it here (not in the job) to track your own cluster / Helm line.
       {apply_image_var}: {apply_image_ref}
       CONFIG_DIR: conf.d
-      MONITORING_NS: {namespace}
+      {monitoring_ns_var}
 
     # ── Stage 1: Validate ────────────────────────────────────
     validate-config:
@@ -903,7 +1050,7 @@ def _gen_gitlab_ci(
             - conf.d/**/*
             - rule-packs/**/*
       script:
-        - da-tools validate-config --config-dir $CONFIG_DIR --ci
+        - da-tools validate-config --config-dir $CONFIG_DIR
 
     lint-custom-rules:
       stage: validate
@@ -913,9 +1060,21 @@ def _gen_gitlab_ci(
             - rule-packs/custom/**/*
           exists:
             - rule-packs/custom/
+      # ⛔ NO `allow_failure:`. `da-tools lint --ci` exits non-zero on ERROR
+      # only (lint_custom_rules.py: `if args.ci and errors`), and its ERRORs are
+      # the governance deny-list on tenant-authored raw PromQL — denied
+      # functions, denied patterns, and missing required labels, the last of
+      # which is what four-layer routing keys on. WARN-level naming nits do not
+      # affect the exit code at all, so the tool has already made the
+      # severity call and `allow_failure` was overriding it.
+      #
+      # The GitHub artifact runs the identical check as a step inside `validate`
+      # with no exemption, and this platform gates ITSELF on the same script
+      # (ci.yml + validate.yaml, both `--ci`, neither `continue-on-error`).
+      # Swallowing it here made one leg of a pair, and the customer's own repo,
+      # weaker than the platform holds itself to.
       script:
         - da-tools lint rule-packs/custom/ --ci
-      allow_failure: true
 
     # ── Stage 2: Generate routes + blast radius ──────────────
     generate-routes:
@@ -940,6 +1099,16 @@ def _gen_gitlab_ci(
         namespace=namespace,
         apply_image_var=apply_image_var,
         apply_image_ref=apply_image_ref,
+        # Same rule as the GitHub leg: declare the knob only where a script
+        # reads it. The argocd branch runs `argocd app sync` and never names a
+        # namespace. This leg shipped `MONITORING_NS` in all three branches
+        # while every script hardcoded `-n monitoring` — the #1361 class, live,
+        # on the generator whose sibling this PR had already fixed.
+        monitoring_ns_var=(
+            "# (no MONITORING_NS — the argocd branch never names a namespace)"
+            if deploy_method == "argocd"
+            else f"MONITORING_NS: {namespace}"
+        ),
         apply_stage=apply_stage,
     )
 
@@ -1130,6 +1299,17 @@ def _gen_precommit_snippet(da_tools_image: str) -> str:
         "# Generated by: da-tools init\n"
         "#\n"
         "# Validates tenant YAML on every commit (shift-left).\n"
+        "#\n"
+        "# NOTE: language is docker_image, not system. pre-commit splits `entry`\n"
+        "# with shlex and execs it WITHOUT a shell (pre_commit/lang_base.py), so an\n"
+        "# earlier `docker run -v ${PWD}/conf.d:...` form passed the literal string\n"
+        "# ${PWD} to docker and failed on every commit with an invalid-volume error.\n"
+        "# docker_image makes pre-commit build the `docker run` itself and mount the\n"
+        "# repo at /src (pre_commit/languages/docker.py: `-v <cwd>:/src:rw,Z\n"
+        "# --workdir /src`), which is why the paths below are /src-relative.\n"
+        "# Trade-off, stated: that mount is the whole repo read-WRITE, wider than the\n"
+        "# read-only conf.d mount the broken form asked for — but it is pre-commit's\n"
+        "# own mechanism, and a hook that cannot run protects nothing.\n"
         "\n"
         "repos:\n"
         "  - repo: local\n"
@@ -1137,22 +1317,18 @@ def _gen_precommit_snippet(da_tools_image: str) -> str:
         "      - id: da-validate-config\n"
         "        name: Validate Dynamic Alerting config\n"
         "        entry: >-\n"
-        "          docker run --rm\n"
-        "          -v ${PWD}/conf.d:/data/conf.d:ro\n"
         f"          {da_tools_image}\n"
-        "          validate-config --config-dir /data/conf.d --ci\n"
-        "        language: system\n"
+        "          validate-config --config-dir /src/conf.d\n"
+        "        language: docker_image\n"
         "        files: ^conf\\.d/.*\\.ya?ml$\n"
         "        pass_filenames: false\n"
         "\n"
         "      - id: da-generate-routes\n"
         "        name: Generate Alertmanager routes (dry-run)\n"
         "        entry: >-\n"
-        "          docker run --rm\n"
-        "          -v ${PWD}/conf.d:/data/conf.d:ro\n"
         f"          {da_tools_image}\n"
-        "          generate-routes --config-dir /data/conf.d --dry-run --validate\n"
-        "        language: system\n"
+        "          generate-routes --config-dir /src/conf.d --dry-run --validate\n"
+        "        language: docker_image\n"
         "        files: ^conf\\.d/.*\\.ya?ml$\n"
         "        pass_filenames: false\n"
     )
@@ -1287,13 +1463,13 @@ def _interactive_flow() -> dict:
 
     ci = _prompt_choice(
         "選擇 CI/CD 平台:" if is_zh else "Select CI/CD platform:",
-        ['github', 'gitlab', 'both'],
+        _parser_choices('--ci'),
         'both',
     )
 
     deploy = _prompt_choice(
         "選擇部署方式:" if is_zh else "Select deployment method:",
-        ['kustomize', 'helm', 'argocd'],
+        _parser_choices('--deploy'),
         'kustomize',
     )
 
@@ -1377,6 +1553,13 @@ def _preview_files(config: dict, output_dir: str) -> list[str]:
         _add(out / 'kustomize' / 'base' / 'README.md')
         _add(out / 'kustomize' / 'overlays' / 'dev' / 'kustomization.yaml')
         _add(out / 'kustomize' / 'overlays' / 'prod' / 'kustomization.yaml')
+    # GitOps Native Mode writes a gitops overlay regardless of --deploy
+    # (run_init step 3b). Omitting it here understated the dry-run by two
+    # files, one of them a Deployment patch — the preview promised nothing
+    # would touch kustomize/ and then two files appeared there.
+    if config.get('config_source') == 'git' and config.get('git_repo'):
+        _add(out / 'kustomize' / 'overlays' / 'gitops' / 'kustomization.yaml')
+        _add(out / 'kustomize' / 'overlays' / 'gitops' / 'git-sync-patch.yaml')
     _add(out / '.pre-commit-config.da.yaml')
     _add(out / '.da-init.yaml')
     return paths
@@ -1681,8 +1864,33 @@ def _handle_dry_run(config: dict, output_dir: str) -> None:
     sys.exit(EXIT_OK)
 
 
-def main():
-    try_utf8_stdout()
+
+def _parser_choices(flag: str) -> list[str]:
+    """The CLI's own `choices` for a flag, so the interactive path cannot drift.
+
+    ⛔ These lists used to be a second, unbound copy. Nothing tied them to
+    `_build_parser()`, and both `_build_*_apply_stage` end in `else:  # argocd`
+    — so a deploy method added interactively-only would silently ship argocd
+    YAML and never appear in the validated `--ci` x `--deploy` matrix, while one
+    added to `--deploy` only would never be offered on the path this tool calls
+    its default. Reading the parser makes "validated the moment it is added to
+    the CLI" true instead of aspirational.
+    """
+    for action in _build_parser()._actions:
+        if flag in (action.option_strings or []):
+            return list(action.choices or [])
+    raise SystemExit(f"init_project: no parser choices for {flag}")
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser.
+
+    Split out of ``main()`` so the `--ci` × `--deploy` choice sets are
+    readable as DATA. tests/ops/test_generated_ci_artifacts.py derives the
+    combination matrix from these `choices` instead of hand-listing it, so a
+    fourth deploy method is structurally validated the moment it is added
+    rather than whenever someone remembers to extend a test list.
+    """
     parser = argparse.ArgumentParser(
         description=_h('description'),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1715,6 +1923,13 @@ def main():
     parser.add_argument('--git-path', default='conf.d', help=_h('git_path'))
     parser.add_argument('--git-period', type=int, default=60,
                         help=_h('git_period'))
+
+    return parser
+
+
+def main():
+    try_utf8_stdout()
+    parser = _build_parser()
 
     args = parser.parse_args()
 

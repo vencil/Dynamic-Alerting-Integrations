@@ -192,6 +192,15 @@ jobs:
               - "flaky-tests.yaml"
               - "renovate.json"
               - ".devcontainer/**"
+              # ⚠️ `requirements/**` is NOT in this filter, and that is a real
+              # gap this PR deliberately does not close: a PR that only bumps a
+              # pin (this one adds check-jsonschema there, so a lone version
+              # bump becomes likely) skips Python Tests, and a path-skipped
+              # required check reports `skipped`, which SATISFIES branch
+              # protection. It is being fixed on its own branch, across all
+              # three path-filtered workflows plus a guard — see the
+              # requirements/** path-filter work. Adding a duplicate one-liner
+              # here would collide with it on these exact lines.
               - ".github/workflows/**"
               - "environments/**"
               - "tools/portal/tests/**"
@@ -1026,6 +1035,24 @@ jobs:
       # netpol consumer set, egress allowlist, the VRL render tests) skips
       # silently without it. setup-helm failing open would hide all of them.
       VIBE_REQUIRE_HELM: "1"
+      # Same fail-closed pattern for the #1347 generated-CI-artifact gate
+      # (tests/ops/test_generated_ci_artifacts.py): `da-tools init` ships a
+      # GitHub Actions workflow to CUSTOMER repos, and actionlint is the only
+      # thing here that reads it the way GitHub does — it is what catches the
+      # shipped-broken `apply` block. This job installs actionlint below; a
+      # regressed install step must fail rather than skip the 6 combinations.
+      VIBE_REQUIRE_ACTIONLINT: "1"
+      # Same again for the GitLab half of that gate: check-jsonschema validates
+      # the generated .gitlab-ci.yml against the vendored GitLab schema and is
+      # installed by this job's pip step. Without it the `--ci gitlab` and
+      # `--ci both` legs would silently skip.
+      VIBE_REQUIRE_CHECK_JSONSCHEMA: "1"
+      # And for the portal's own CI/CD wizard preview, which is a SECOND
+      # hand-written copy of that workflow (tools/portal/src/**). Validating it
+      # means loading the ES module with node — ubuntu-latest ships node, so a
+      # missing binary means the runner image regressed, not that the check is
+      # optional.
+      VIBE_REQUIRE_NODE: "1"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -1071,11 +1098,11 @@ jobs:
       # (correctness unaffected; only the cache benefit is lost). Both
       # installs here are HARD steps, so a download flake fails the job and
       # the post-save never captures a partial entry.
-      - name: Cache pinned binary downloads (Vector / mtail)
+      - name: Cache pinned binary downloads (Vector / mtail / actionlint)
         uses: actions/cache@v5
         with:
           path: ~/.cache/vibe-ci-downloads
-          key: ${{ runner.os }}-vibe-dl-pytests-vector-0.57.0-mtail-3.0.8
+          key: ${{ runner.os }}-vibe-dl-pytests-vector-0.57.0-mtail-3.0.8-actionlint-1.7.12
 
       # ⛔ VECTOR_VERSION must equal the version the chart actually DEPLOYS
       # (helm/vector values.yaml `image.tag` + Chart.yaml `appVersion`) and the
@@ -1134,6 +1161,39 @@ jobs:
           mtail --version 2>&1 | head -n1 || true
           command -v mtail
 
+      # actionlint CLI — the #1347 gate (tests/ops/test_generated_ci_artifacts.py)
+      # runs it over the GitHub Actions workflow `da-tools init` generates for
+      # CUSTOMER repos, and over the portal wizard's preview copy of it. Those
+      # artifacts live in NO workflow directory, so the repo's existing
+      # actionlint pre-commit hook cannot see them: its `files:` pattern is
+      # `^\.github/workflows/` (.pre-commit-config.yaml, no override) and the
+      # generated files only exist inside a pytest tmpdir. Gated on `actionlint`
+      # on PATH (shutil.which) → without this install the gate SILENTLY SKIPS.
+      #
+      # ⛔ ACTIONLINT_VERSION must equal the `rev:` of the rhysd/actionlint hook
+      # in .pre-commit-config.yaml. Two different actionlint versions mean the
+      # repo's own workflows and the workflows we SHIP to customers are judged
+      # by different rule sets — bound by
+      # tests/shared/test_actionlint_pin_parity.py (bump both + the SHA-256 +
+      # the cache key above together).
+      - name: Install actionlint
+        run: |
+          ACTIONLINT_VERSION=1.7.12
+          # sha256 of actionlint_1.7.12_linux_amd64.tar.gz, from the upstream
+          # release checksums file:
+          # https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_checksums.txt
+          ACTIONLINT_SHA256=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          DL="$HOME/.cache/vibe-ci-downloads"
+          mkdir -p "$DL"
+          if [ ! -f "$DL/actionlint-${ACTIONLINT_VERSION}.tgz" ]; then
+            curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -o "$DL/actionlint-${ACTIONLINT_VERSION}.tgz"
+          fi
+          bash scripts/ops/_verify_download.sh "$DL/actionlint-${ACTIONLINT_VERSION}.tgz" "$ACTIONLINT_SHA256"
+          tar xzf "$DL/actionlint-${ACTIONLINT_VERSION}.tgz" -C /tmp actionlint
+          sudo install -m0755 /tmp/actionlint /usr/local/bin/actionlint
+          actionlint --version
+          command -v actionlint
+
       - name: Cache pip packages
         uses: actions/cache@v5
         with:
@@ -1159,7 +1219,12 @@ jobs:
         # jsonschema: waveform_compile.py (ADR-030 fault-waveform packs) —
         # without it tests/dx/test_waveform_compile.py importorskips and the
         # governance-gate negative tests silently drop out of CI.
-        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema -c requirements/ci-constraints.txt
+        # check-jsonschema: ships the vendored GitLab CI schema that
+        # tests/ops/test_generated_ci_artifacts.py validates the generated
+        # .gitlab-ci.yml against (#1347). It installs a CLI, and the test finds
+        # it via shutil.which — VIBE_REQUIRE_CHECK_JSONSCHEMA above makes a
+        # missing CLI fail instead of skipping.
+        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema -c requirements/ci-constraints.txt
 
       - name: Collect tests
         # CI skips 3 slow/benchmark test suites for speed:

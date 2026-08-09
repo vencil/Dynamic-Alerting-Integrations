@@ -83,7 +83,7 @@
   // so git refuses to run as vscode ("detected dubious ownership"), which takes
   // out `go build` VCS stamping and every git-shelling lint. That is a separate
   // decision — see the issue linked from CHANGELOG.
-  "postCreateCommand": "pip3 install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema pytest-benchmark mkdocs-material mkdocs-static-i18n pymdown-extensions -c requirements/ci-constraints.txt && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && bash .devcontainer/install-promtool.sh && bash .devcontainer/install-vector.sh",
+  "postCreateCommand": "pip3 install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pytest-benchmark mkdocs-material mkdocs-static-i18n pymdown-extensions -c requirements/ci-constraints.txt && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && bash .devcontainer/install-promtool.sh && bash .devcontainer/install-vector.sh",
 
   "customizations": {
     "vscode": {
