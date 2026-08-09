@@ -45,9 +45,14 @@ _REAL_LEDGER = _REPO_ROOT / "scripts/tools/lint/mkdocs-anchor-debt.txt"
 
 _BASH = shutil.which("bash")
 
-pytestmark = pytest.mark.skipif(
-    _BASH is None, reason="mkdocs_strict_check.sh is a bash script; bash not on PATH"
-)
+# The bash skip lives on the `tree` fixture, NOT on a module-level pytestmark:
+# the static ledger assertion at the bottom of this file reads only a committed
+# text file, and a module-level mark would take that guard down on any host
+# without bash. Same shape as the autouse skip in
+# tests/lint/test_check_cli_coverage.py:438.
+# ⚠️ Adding `@pytest.mark.skipif(False, ...)` to the static test does NOT cancel
+# a module-level mark — pytest evaluates every mark and any True skips. Measured,
+# not assumed.
 
 # The stub stands in for mkdocs: it records the environment it was handed (so a
 # test can assert the *child* really saw the UTF-8 pin, rather than grepping the
@@ -130,6 +135,8 @@ class _Tree:
 
 @pytest.fixture()
 def tree(tmp_path: Path) -> _Tree:
+    if _BASH is None:
+        pytest.skip("mkdocs_strict_check.sh is a bash script; bash not on PATH")
     t = _Tree(tmp_path / "fake-repo")
     t.build()
     return t
@@ -264,6 +271,48 @@ def test_a_binary_looking_log_does_not_silence_the_collector(tree: _Tree) -> Non
         f"{out}"
     )
     assert proc.returncode == 0, out
+
+
+def test_a_binary_looking_log_does_not_silence_the_actionable_filter(
+    tree: _Tree,
+) -> None:
+    """The same suppression, one pipeline over: `filter_known` decides whether
+    this gate can fail at all, so emptying it turns a broken build into PASS.
+
+    Raised by CodeRabbit as an outside-diff finding on #1372 and confirmed: the
+    first fix put `-a` only on the stage that opens the file, leaving seven
+    `grep -v` stages reading a pipe. One NUL byte inside a warning line makes a
+    `-v` stage stop emitting lines. NUL is valid UTF-8, so the encoding gate
+    above lets this log straight through.
+
+    ⚠️ The assertions check the warning's own TEXT, not just the count, because
+    the two platforms fail differently and a count alone is blind to one of them:
+    grep 3.0 (Git Bash) writes "Binary file (standard input) matches" to
+    **stdout**, so the count is still 1 — the right number for entirely the wrong
+    reason — while grep on glibc writes it to stderr and the count drops to 0,
+    which reads as PASS. An earlier draft asserted only the count and was green
+    against the unfixed script on Windows.
+    """
+    lines = _ledger_sample()
+    tree.ledger.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
+    actionable = (
+        "WARNING -  Doc file 'x.md' contains a link 'gone.md', but the target "
+        "is not found."
+    )
+    log = ("\n".join(lines) + "\n").encode("utf-8") + actionable.encode("utf-8")
+    log += b"\x00 trailing build noise\n"
+
+    proc = tree.run(log)
+    out = _out(proc)
+    assert proc.returncode == 1, f"a real actionable warning was reported as PASS:\n{out}"
+    assert "ACTIONABLE_WARNINGS=1" in out, out
+    assert "gone.md" in out, (
+        "the gate failed, but it never reported the warning it failed on — the "
+        f"filter pipeline was silenced and something else was counted:\n{out}"
+    )
+    assert "binary file" not in out.lower(), (
+        f"grep's binary-file notice was counted as an actionable warning:\n{out}"
+    )
 
 
 # ── the ledger round-trip ──────────────────────────────────────────────

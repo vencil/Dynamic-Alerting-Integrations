@@ -105,15 +105,25 @@ mkdocs build 2>&1 | tee "$LOG_FILE"
 # `MkDocs Build Verification` job — both source THIS script, so the list
 # lives here only. Maintainers: add a comment per filter explaining why
 # the warning class is project-known-acceptable.
+# ⛔ `-a` and `LC_ALL=C` on EVERY stage, not just the one that opens the file.
+# `ACTIONABLE_COUNT=$(filter_known | wc -l)` is what decides whether this gate can
+# fail at all, so anything that silently empties this pipeline turns a broken
+# build into STATUS=PASS. grep applies its binary heuristic to a PIPE as well as
+# to a file: measured on glibc and on Git Bash 3.0, a single NUL byte inside one
+# warning line makes stage 2 print "binary file matches" to stderr and NOTHING to
+# stdout, and NUL is valid UTF-8 so the encoding gate further down cannot catch
+# it either. `LC_ALL=C` is for consistency with the byte-wise `sort`/`comm` that
+# consume the sibling extractor — no divergence was demonstrated for the -v
+# stages, it is there so no stage is left to the locale's discretion.
 filter_known() {
-    grep -a "^WARNING" "$LOG_FILE" \
-        | grep -v "mkdocs_static_i18n.*navigation.instant" \
-        | grep -v "Excluding.*README.md.*conflicts with.*index.md" \
-        | grep -vE "contains a link '\\./[^']+\\.en\\.md'" \
-        | grep -vE "Doc file 'CHANGELOG\\.md' contains a link 'docs/[^']+\\.md" \
-        | grep -v "component-health-snapshot\\.json" \
-        | grep -vE "contains a link '[^']*#[^']*', but there is no such anchor on this page\\.$" \
-        | grep -vE "does not contain an anchor '#[^']*'\\.$" \
+    LC_ALL=C grep -a "^WARNING" "$LOG_FILE" \
+        | LC_ALL=C grep -av "mkdocs_static_i18n.*navigation.instant" \
+        | LC_ALL=C grep -av "Excluding.*README.md.*conflicts with.*index.md" \
+        | LC_ALL=C grep -avE "contains a link '\\./[^']+\\.en\\.md'" \
+        | LC_ALL=C grep -avE "Doc file 'CHANGELOG\\.md' contains a link 'docs/[^']+\\.md" \
+        | LC_ALL=C grep -av "component-health-snapshot\\.json" \
+        | LC_ALL=C grep -avE "contains a link '[^']*#[^']*', but there is no such anchor on this page\\.$" \
+        | LC_ALL=C grep -avE "does not contain an anchor '#[^']*'\\.$" \
         || true
 }
 
