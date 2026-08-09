@@ -3720,10 +3720,30 @@ class TestPlatformReaderParity:
             f"{sorted(scanner - reader - _heartbeat_alertnames())}")
 
     def test_production_identity_reader_matches_the_scanner(self):
+        """⛔ Its own floor, not a sibling's.
+
+        `assert prod` only says "at least one", and the shape this test guards
+        against is production silently falling back to
+        `PLATFORM_ALERT_IDENTITY_LABELS` — a SIX-entry constant of real
+        alertnames. Both remaining assertions do catch that today (the fallback
+        is a strict subset, so `missing` fills up), but only because the scanner
+        side happens to be non-vacuous, and that is asserted in a DIFFERENT
+        test. A test that borrows its non-vacuity from a sibling goes quiet the
+        day the sibling is skipped, renamed or reordered.
+
+        The floor is `_MIN_PLATFORM_ALERTS` minus the heartbeat: production
+        keys on `alert_source="platform"` and Watchdog deliberately carries no
+        discriminator, so it is the one alert the reader cannot see.
+        """
         from _grar_validate import platform_alert_identities
         prod = {i["alertname"] for i in platform_alert_identities()}
         scanner = self._scanner_platform_alerts()
-        assert prod, "production reader returned nothing — comparison vacuous"
+        floor = _MIN_PLATFORM_ALERTS - len(_heartbeat_alertnames())
+        assert len(prod) >= floor, (
+            f"the production identity reader returned {len(prod)} alert(s), "
+            f"expected >= {floor}. At six it has fallen back to "
+            "PLATFORM_ALERT_IDENTITY_LABELS — the ConfigMap was unreachable or "
+            f"unparseable and nothing said so: {sorted(prod)}")
         assert prod <= scanner, (
             "scripts/tools/ops/_grar_validate.platform_alert_identities() "
             "reports platform alerts the scanner does not see, which means the "
