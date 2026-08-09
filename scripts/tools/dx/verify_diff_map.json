@@ -698,7 +698,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "2c992512e260d7536e3e414e7a76214b7b15d715840d82abdfd6757156aa15db",
+ "source_digest": "14f37cad9792936aa33c04ae5790af69559f010f0dc5457bf71d47593513a4ed",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1155,6 +1155,9 @@
   "components/da-tools/app/entrypoint.py": [
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_image_pin_capability.py"
+  ],
+  "components/recipe-preview/.trivyignore.yaml": [
+   "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   "components/recipe-preview/Dockerfile": [
    "tests/preview/test_promtool_pin_parity.py"

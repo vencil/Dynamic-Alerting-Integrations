@@ -936,13 +936,42 @@ def _if_narrows(node: dict) -> bool:
     return cond not in _NON_NARROWING_IF
 
 
+# `|| true` / `|| :` after a command discards its exit status. Folded first, so
+# a `\`-continued invocation with the swallow on the next physical line counts.
+_SWALLOW_RE = re.compile(r"\|\|\s*(?:true|:)\s*(?:$|[;&|])")
+
+
+def _disarmed(node: dict) -> str | None:
+    """Reason this job/step's FAILURE cannot fail the run, or None.
+
+    ⛔ `if:` is only one of the disabling mechanisms, and `_if_narrows` above
+    argues the point for it convincingly enough that it reads like the whole
+    story. It is not: `continue-on-error: true` is the YAML spelling of
+    `|| true`, and it leaves the step running, green, and unable to report
+    anything. Measured on this workflow: adding `continue-on-error: true` to the
+    delivered-scope step AND `|| true` to its command left all 42 tests passing,
+    while the only output that step has — pass/fail — was gone.
+
+    Fail-closed on expressions: a `continue-on-error: ${{ ... }}` cannot be
+    evaluated here, and "I cannot tell whether failure counts" must not be
+    graded as "failure counts".
+    """
+    raw = node.get("continue-on-error", False)
+    if raw is False:
+        return None
+    if raw is True:
+        return "continue-on-error: true"
+    return f"continue-on-error: {raw!r} (not statically decidable)"
+
+
 def _workflow_argvs(name: str) -> tuple[list[list[str]], list[str]]:
     """(argv of every unconditionally-reached `run:` step, labels of gated ones).
 
-    Nodes behind a condition this module cannot evaluate are EXCLUDED from the
-    argv list and reported separately, so a caller asserting "the workflow really
-    runs X" fails with the real reason ("X sits behind a gate I cannot read")
-    rather than the misleading "X is not invoked".
+    Nodes behind a condition this module cannot evaluate — or whose failure is
+    discarded — are EXCLUDED from the argv list and reported separately, so a
+    caller asserting "the workflow really runs X" fails with the real reason
+    ("X sits behind a gate I cannot read" / "X's failure is swallowed") rather
+    than the misleading "X is not invoked".
     """
     wf = yaml.safe_load((WORKFLOWS_DIR / name).read_text(encoding="utf-8"))
     argvs: list[list[str]] = []
@@ -951,12 +980,25 @@ def _workflow_argvs(name: str) -> tuple[list[list[str]], list[str]]:
         if _if_narrows(job):
             gated.append(f"job {job_name} (if: {job['if']})")
             continue
+        if (reason := _disarmed(job)):
+            gated.append(f"job {job_name} ({reason})")
+            continue
         for step in (job.get("steps") or []):
             label = f"{job_name}/{step.get('name', '<unnamed>')}"
             if _if_narrows(step):
                 gated.append(f"step {label} (if: {step['if']})")
                 continue
-            argvs.extend(_shell_argvs(step.get("run") or ""))
+            if (reason := _disarmed(step)):
+                gated.append(f"step {label} ({reason})")
+                continue
+            folded = re.sub(r"\\\n\s*", " ", step.get("run") or "")
+            for line in folded.split("\n"):
+                if _SWALLOW_RE.search(_strip_bash_comment(line)):
+                    gated.append(
+                        f"step {label} (failure swallowed: {line.strip()[:60]})"
+                    )
+                    continue
+                argvs.extend(_shell_argvs(line))
     return argvs, gated
 
 
@@ -1224,6 +1266,29 @@ def test_every_scan_job_actually_scans_its_own_matrix() -> None:
                 "reporting less."
             )
 
+        # ⛔ Pinning those three VALUES is a denylist: it says nothing about a
+        # FOURTH key. `severity` is load-bearing because it filters at scan
+        # time — and `trivyignores`, `scanners`, `vuln-type` and `skip-dirs` all
+        # narrow the scan through the same mechanism. Measured: adding
+        # `trivyignores: components/recipe-preview/.trivyignore.yaml` to
+        # scan-delivered left all 42 tests passing, with the job green, the
+        # fragment written, `missing=0`, and the tracking issue closing itself
+        # as "all 4 customer-delivered images clean".
+        #
+        # So the property is rebuilt as an allowlist: the key SET must be one we
+        # have looked at. Growth then has to be argued here rather than merged
+        # silently, which is the same shape as the exit-locked ledgers elsewhere
+        # in this module.
+        unexpected = set(with_) - _TRIVY_NEUTRAL_KEYS - set(contract) - \
+            _TRIVY_EXTRA_ALLOWED[job_name]
+        assert not unexpected, (
+            f"{job_name}'s Trivy step passes {sorted(unexpected)}, which this "
+            "guard has not vetted. Several trivy-action inputs shrink the scan "
+            "surface at scan time and are indistinguishable downstream from "
+            "'nothing was found'. If the new input is safe, add it to "
+            "_TRIVY_EXTRA_ALLOWED with the reason."
+        )
+
 
 @pytest.mark.parametrize("emptied", ["_GITLAB_APPLY_IMAGES", "GIT_SYNC_IMAGE"])
 def test_delivered_refs_refuses_a_half_empty_pin_table(tmp_path, emptied: str) -> None:
@@ -1294,6 +1359,58 @@ def test_the_report_job_waits_for_every_bucket() -> None:
         f"`report` does not declare needs on {missing} (needs: {needs}). Every "
         "bucket whose fragments it downloads has to be a dependency, or it "
         "aggregates a partial set and calls the difference a degraded scan."
+    )
+
+
+# The two conditions under which a job still runs after an upstream `needs:`
+# dependency FAILED. Both are already characterised in `_NON_NARROWING_IF`
+# above; this names the subset that specifically survives failure (as opposed
+# to merely relaxing something), because that is the property `report` needs.
+_RUNS_DESPITE_UPSTREAM_FAILURE = frozenset({"always()", "!cancelled()"})
+
+# Inputs that say WHAT to scan and WHERE to put the answer. They cannot shrink
+# what Trivy looks for, so they need no per-value pin.
+_TRIVY_NEUTRAL_KEYS = frozenset({"image-ref", "format", "output"})
+
+# Vetted exceptions, per bucket, with the reason. `scan` legitimately carries a
+# waiver file, but ONLY conditionally and ONLY for recipe-preview's bundled
+# promtool: the expression evaluates to '' for the other six images, so it is a
+# no-op there. The other two buckets scan images we do not build and have no
+# waiver story at all — an entry appearing in either is a finding, not config.
+_TRIVY_EXTRA_ALLOWED: dict[str, frozenset[str]] = {
+    "scan": frozenset({"trivyignores"}),
+    "scan-thirdparty": frozenset(),
+    "scan-delivered": frozenset(),
+}
+
+
+def test_the_report_job_still_runs_when_a_bucket_fails() -> None:
+    """⛔ `needs:` and `if: always()` are ONE mechanism, and only half was pinned.
+
+    The sibling test above pins the `needs:` edges. On its own that is the
+    dangerous half: GitHub skips a job whose `needs` dependency failed, so
+    without a condition that survives failure, `report` is skipped exactly when
+    a scan job goes red — and a scan job going red is the situation this bucket
+    exists for. Measured: deleting `if: always()` (keeping `needs:`) left all 42
+    tests passing.
+
+    What that costs at runtime is the whole degradation chain the workflow
+    header advertises: a 404'd ref makes the Trivy step fail → no fragment is
+    uploaded → `missing = EXPECTED - present > 0` → "Scan degraded" banner plus
+    a notifying comment. Every link needs `report` to have RUN. Skipped, the
+    tracking issue simply keeps yesterday's title and nobody is told anything —
+    the broken case and the healthy case become the same silence.
+    """
+    report = _nightly()["jobs"]["report"]
+    cond = str(report.get("if", "")).strip()
+    if cond.startswith("${{") and cond.endswith("}}"):
+        cond = cond[3:-2].strip()
+    assert cond in _RUNS_DESPITE_UPSTREAM_FAILURE, (
+        f"`report` has `if: {cond or '<none>'}`, which does not survive an "
+        f"upstream failure (expected one of {sorted(_RUNS_DESPITE_UPSTREAM_FAILURE)}). "
+        "With `needs:` on all three scan jobs, the default success() condition "
+        "means the aggregator is skipped precisely when a bucket breaks, so the "
+        "degraded-scan banner it exists to raise never fires."
     )
 
 
