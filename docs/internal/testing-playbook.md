@@ -1482,8 +1482,11 @@ mutation 腳本是「字串替換 → 跑測試 → 還原」。**替換字串�
 跑出來的 KILLED 是別的原因造成的。實測攔下過一個多重命中。
 
 ```python
-bad = [(name, src.count(old)) for name, path, old, _new in MUTANTS
-       if open(path, encoding="utf-8").read().count(old) != 1]
+bad = []
+for name, path, old, _new in MUTANTS:
+    hits = pathlib.Path(path).read_text(encoding="utf-8").count(old)
+    if hits != 1:
+        bad.append((name, path, hits))          # 0 = 會靜默變 no-op；>1 = 會改到別處
 if bad:
     print("ANCHOR PROBLEM:", bad); sys.exit(1)   # ⛔ 在任何替換之前
 ```
@@ -1513,15 +1516,25 @@ finally:
 另外兩件會讓 mutant 靜默不生效的事：**跑之前清 `__pycache__`**（stale bytecode 會讓替換不生效）、
 以及整輪用 `PYTHONDONTWRITEBYTECODE=1`。sweep 通常超過單次工具 timeout，**丟背景跑再輪詢 `RESTORED`**。
 
-### 4. 存活的 mutant 只有兩種下場，而且要分開記
+### 4. 存活的 mutant 有三種下場，而且要分開記
 
-一是**測試缺口**（補測試），二是**可證明等價**（附證明，不補測試）。
-可證明等價的典型：恆真式、已被另一個守衛涵蓋、或它本身就是刻意放的 control。
+⚠️ **這裡有兩個不同的分類軸，混起來就會把未知寫成已知。**
+
+**軸一：survivor 為什麼活著**（看到 SURVIVED 之後要判的）
+
+1. **測試缺口** — 補測試。
+2. **可證明等價** — 附證明，不補測試。典型：恆真式、已被另一個守衛涵蓋、或它本身就是刻意放的 control。
+3. **測試案例不具鑑別力** — 見 §5。**這一類不得併入「可證明等價」**：等價的意思是「改了也沒有語意差別」，
+   不具鑑別力的意思是「有差別，但我這個案例看不出來」。前者已知，後者未知。
+   它的處置是**重新設計案例後重跑**，在那之前它沒有結論。
+
 **不要為了把數字做成 0 而硬湊一支測試去追等價 mutant**——那支測試沒有守住任何東西，只是把帳做平。
 
-最終帳長這樣，三個數字分開列、加總對得上原始數：
+**軸二：最終報告怎麼記帳**（跑完之後對外講的）
 
-```
+三個數字分開列、加總對得上原始 mutant 數：
+
+```text
 61 已驗證被殺 + 7 逐一可證明等價 + 1 當初沒從報告轉錄進來所以無帳可對 = 69
 ```
 
