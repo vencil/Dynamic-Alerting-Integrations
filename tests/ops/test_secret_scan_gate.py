@@ -66,6 +66,21 @@ SHA form raises — a fork PR arrives via a direct SHA fetch with no local ref
 pointing at it, and `--branch <sha>` still resolves there, so this bound does
 not quietly break fork PRs.
 
+⛔ Cell E was CHALLENGED in blind review on a sound-looking argument: trufflehog
+clones `file://…` as a URL, git therefore uses transport rather than local
+optimisation, and transport only carries objects reachable from a matched ref
+— so the fork commit should be missing and every fork PR should hard-fail.
+Re-measured both ways, and the difference is HEAD:
+
+    HEAD left on `main`, commit unreferenced   → object ABSENT, rc=1, 0 findings
+    HEAD DETACHED at that commit (real state)  → object PRESENT, rc=0, 1 finding
+
+`git clone` advertises HEAD and transfers its commit even when no ref points at
+it. The reviewer's repro moved HEAD; `actions/checkout` does not — it leaves
+HEAD detached AT the scanned SHA (confirmed in the real run log). So cell E
+stands, and the guarantee rests on that checkout `ref:` line — which is why
+`test_the_scanned_commit_is_the_pr_head` pins it.
+
 A second, separate measurement (blind review, one obvious secret in a
 throwaway repo) established why `--fail-on-scan-errors` is now mandatory:
 
@@ -341,6 +356,38 @@ def _git_grep_files(needle: str) -> list[str]:
 # ── the two defects ─────────────────────────────────────────────────────────
 
 
+def test_the_scanned_commit_is_the_pr_head() -> None:
+    """`--branch <sha>` only works because checkout leaves HEAD at that commit.
+
+    The bound is `git rev-parse HEAD`, so whatever `actions/checkout` checks
+    out IS the scanned range's endpoint. Two things depend on the `ref:` line:
+
+      * scanning the PR head rather than the virtual merge commit (the whole
+        point — a merge-ref scan covers a different commit set); and
+      * the fork case working at all. trufflehog clones the workspace over git
+        transport, which carries only ref-reachable objects PLUS the
+        advertised HEAD. A fork PR's commit has no local ref, so it rides
+        along solely because HEAD is detached at it. Move HEAD and the object
+        is genuinely absent — measured, see the module docstring.
+
+    Deleting this one line therefore changes the scanned range AND removes the
+    only reason fork PRs resolve, with every other guard here still green.
+    """
+    checkout = [s for s in _steps()
+                if "actions/checkout" in str(s.get("uses") or "")]
+    assert len(checkout) == 1, (
+        f"expected exactly one checkout step, found {len(checkout)}"
+    )
+    ref = str((checkout[0].get("with") or {}).get("ref") or "")
+    assert "pull_request.head.sha" in ref, (
+        f"the checkout `ref:` is {ref!r}, which no longer pins the PR head "
+        "SHA.\nWithout it HEAD is the virtual merge commit, so "
+        "`--branch $(git rev-parse HEAD)` bounds the scan to a DIFFERENT "
+        "commit set — silently, with every other assertion here still "
+        "passing (#1364)."
+    )
+
+
 def test_guarded_inputs_are_named_literally() -> None:
     """Keep `_GUARDED_INPUTS` honest so it cannot be tidied away as dead weight.
 
@@ -470,14 +517,29 @@ def test_pull_requests_actually_reach_the_bounded_scan() -> None:
     # makes every PR scan disappear while the workflow still "triggers" and
     # every other assertion in this module stays green. Blind review; the
     # first cut read `on:` and the two STEP `if:`s and stopped there.
+    gated_jobs = {name: job.get("if") for name, job in _wf()["jobs"].items()
+                  if (job or {}).get("if")}
+    assert not gated_jobs, (
+        f"job-level `if:` present: {gated_jobs!r}. A skipped job reports "
+        "`skipped`, which SATISFIES branch protection — the whole gate would "
+        "vanish for PRs with nothing turning red (#1364). "
+        "(An earlier cut looped over steps and `break`ed after the first, so "
+        "it only ever inspected one job.)"
+    )
+
+    # ⛔ …and the CONVERT step, which owns the verified→exit-1 policy. Gate it
+    # on anything (`if: github.event_name == 'schedule'` is the one-liner) and
+    # PRs stop applying the policy entirely, both uploads skip with it, and
+    # nothing else in this module notices. Blind review — the FOURTH place in
+    # this change where a guard failed to read an `if:`.
     for step in _steps():
-        job_if = str((step["_job"] or {}).get("if") or "")
-        assert not job_if, (
-            f"the scan job carries a job-level `if:` ({job_if!r}). A skipped "
-            "job reports `skipped`, which satisfies branch protection — the "
-            "whole gate would vanish for PRs with nothing turning red (#1364)."
-        )
-        break
+        if "trufflehog_to_sarif.py" in (step.get("run") or ""):
+            assert not step.get("if"), (
+                f"the converter step is conditional ({step.get('if')!r}). Its "
+                "exit code IS the verified-finding policy; gating it means the "
+                "policy silently does not apply to whatever the condition "
+                "excludes (#1364)."
+            )
 
     # …and the two scan steps must be gated on those two modes, the right way round.
     diff_if = str(_diff_scans()[0][2].get("if") or "")
@@ -623,13 +685,6 @@ def test_the_blocking_step_cannot_be_made_advisory() -> None:
         # discards a non-zero exit", so the check is on the disabling
         # mechanisms themselves.
         folded = re.sub(r"\\\n\s*", " ", script)
-        # ⛔ `|| VAR=$?` is CAPTURE, not swallow — the workflow deliberately
-        # records the scanner's exit code so the results can be uploaded
-        # before the failure is re-raised by a later step. Blanking it out
-        # before the swallow scan keeps this check honest without making the
-        # capture idiom unusable. The re-raise itself is pinned separately by
-        # `test_a_captured_scan_error_is_re_raised`.
-        folded = re.sub(r"\|\|\s*\w+=\$\?", " ", folded)
         for pattern, why in (
             (r"set\s+\+e", "`set +e` disables abort-on-error"),
             (r"\|\|", "`|| ...` swallows a non-zero exit"),
@@ -754,6 +809,22 @@ def test_every_excluded_detector_is_justified_and_still_unused() -> None:
         "do not exclude it. A scan-layer exclusion is a permanent hole in L2."
     )
 
+    # ⛔ …and the other direction. Emptying the env var makes `excluded` empty,
+    # every loop below run zero times, and defect 2 return with this module
+    # fully green — the mutation its own error message describes without
+    # asserting. Derived rather than "the list must be non-empty": a registry
+    # entry whose premise still holds must still be APPLIED, so the only way to
+    # drop a detector from the scan config is to drop it from the registry too,
+    # which is a visible decision. (Blind review.)
+    unapplied = sorted(set(_JUSTIFIED_EXCLUSIONS) - set(excluded))
+    assert not unapplied, (
+        f"detector(s) registered as excluded but NOT in {EXCLUDE_ENV}: "
+        f"{unapplied}. Either exclude them, or delete the registry entry — "
+        "leaving the justification behind while the exclusion is gone means "
+        "the next reader believes a decision that is no longer in force, and "
+        "the false positives it documents come back (#1364)."
+    )
+
     # Anti-vacuity for the search mechanism itself: prove `git grep` finds
     # something that certainly exists before trusting it to find nothing.
     control = _git_grep_files("trufflehog")
@@ -802,77 +873,11 @@ def test_every_excluded_detector_is_justified_and_still_unused() -> None:
             )
 
 
-def test_a_captured_scan_error_is_re_raised() -> None:
-    """The scan steps capture their exit code — something must re-raise it.
-
-    Failing the scan step in place would skip `convert`, and both upload steps
-    are guarded on `convert.outcome != 'skipped'`, so the job would go red
-    having uploaded no SARIF at all. The workflow therefore captures the code
-    and re-raises it later. That indirection is only safe while the re-raise
-    exists: drop it and a scan error becomes a green job again — the very
-    thing `--fail-on-scan-errors` was added for.
-
-    ⛔ And the re-raising step must be UNCONDITIONAL. The first cut of this
-    test checked only that some step's SCRIPT contained the output name and an
-    `exit 1` — so renaming that step and setting `if: false` left it green
-    while a scan error became a silent success again. Caught by this module's
-    own mutation harness (S8), and it is the THIRD guard in this change to be
-    written without reading `if:` — after two blind reviewers had already
-    flagged exactly that omission elsewhere in this file. The rule is not
-    "remember to check if:", it is: **a guard that asserts something runs must
-    read every mechanism that can stop it running.**
-    """
-    steps = _steps()
-    captured = [s for s in steps if re.search(r"\|\|\s*(\w+)=\$\?", s.get("run") or "")]
-    assert captured, (
-        "no step captures a scan exit code any more. If the scan steps now "
-        "fail in place, `convert` is skipped and no SARIF is uploaded — check "
-        "that trade-off deliberately before deleting this test."
-    )
-    outputs = {m.group(1) for s in captured
-               for m in re.finditer(r'echo\s+"(\w+)=\$\{?\w+\}?"\s*>>\s*"\$GITHUB_OUTPUT"',
-                                    s.get("run") or "")}
-    assert outputs, "a scan exit code is captured but never published to GITHUB_OUTPUT"
-
-    def _code(step: dict) -> str:
-        """The step's script with comment lines removed.
-
-        ⛔ Load-bearing: the diff-scan step's comment block contains the
-        measurement table, which literally includes the text `exit 1`. Scanning
-        the raw script matched that step instead of the real re-raiser, and the
-        `always()` assertion below then failed against the WRONG step — a false
-        red that looked like a true one.
-        """
-        return "\n".join(ln for ln in (step.get("run") or "").splitlines()
-                         if not ln.strip().startswith("#"))
-
-    # The re-raiser reads the captured code through `env:` (a `steps.<id>
-    # .outputs.<name>` reference), not by repeating the shell variable — so
-    # look there as well as in the script.
-    def _consumes_output(step: dict) -> bool:
-        env_refs = " ".join(str(v) for v in (step.get("env") or {}).values())
-        haystack = (env_refs + " " + _code(step)).upper()
-        return any(o.upper() in haystack for o in outputs)
-
-    reraise = [s for s in steps if _consumes_output(s) and "exit 1" in _code(s)]
-    assert reraise, (
-        f"the captured scan exit code(s) {sorted(outputs)} are published but no "
-        "step re-raises them (no `exit 1` guarded on them). A scan that failed "
-        "outright would report success (#1364)."
-    )
-    # The scan steps' own failure is suppressed by design, so the re-raise is
-    # the ONLY thing left that turns a broken scan red. It must run even when
-    # an earlier step failed — i.e. `always()`, not the default `success()`,
-    # and certainly not a falsy literal.
-    unconditional = [s for s in reraise
-                     if "always()" in str(s.get("if") or "").lower()]
-    assert unconditional, (
-        "the step that re-raises a captured scan error is not `if: always()` "
-        f"(found: {[s.get('if') for s in reraise]!r}).\nWith the scan steps "
-        "deliberately not failing in place, a conditional re-raise means a "
-        "failed scan reports success — the silent green this whole change "
-        "exists to remove (#1364)."
-    )
+# (`test_a_captured_scan_error_is_re_raised` lived here and is gone with the
+#  design it guarded. The scan steps no longer capture their exit code — they
+#  fail in place, which skips convert, which skips both uploads. That is what
+#  this file already documented as intentional, and it is why a broken scan
+#  cannot publish a clean `results=0` SARIF over the alert history.)
 
 
 def test_the_converter_fails_as_a_PROCESS_not_just_as_a_function() -> None:

@@ -56,7 +56,7 @@ Vibe 專案內建 **七個本地 skills**（`.claude/skills/`），在對應情�
 
 **try-local 一鍵體驗**（#449 epic）：`cd try-local && cp .env.example .env && docker compose up -d`（不需 K8s）起整套 showcase stack，~1min 看到真實 critical 告警紅燈；Mode 0 核心雙星 `docker compose up da-portal tenant-api` 只起 live Tenant Manager（Save→真實 git commit）。tenant-api 本機用 `--dev-bypass-auth`（[ADR-022](docs/adr/022-dev-auth-bypass-four-layer-containment.md) 四層防線）。見 [`try-local/README.md`](try-local/README.md)。
 
-**Secret-scan 四層防線**（v2.8.1 #445）：L0 GitHub native push-protection → L1 pre-commit hook `secrets-scan-staged` → L2 server-side `secret-scan.yml`（不可繞）→ L3 release-time image digest verification。incident response 走 [`secret-leak-remediation-sop.md`](docs/internal/secret-leak-remediation-sop.md)（ASSUME COMPROMISE / ROTATE FIRST）；規範見 [`dev-rules.md` §安全紀律](docs/internal/dev-rules.md)。
+**Secret-scan 四層防線**（v2.8.1 #445）：L0 GitHub native push-protection → L1 pre-commit hook `secrets-scan-staged` → L2 server-side `secret-scan.yml`（一定會跑；⚠️ 但**不是** required check，見 dev-rules §安全紀律）→ L3 release-time image digest verification。incident response 走 [`secret-leak-remediation-sop.md`](docs/internal/secret-leak-remediation-sop.md)（ASSUME COMPROMISE / ROTATE FIRST）；規範見 [`dev-rules.md` §安全紀律](docs/internal/dev-rules.md)。
 
 **Container/k8s IaC SAST 四層防線**（v2.9.0 #448，與上互補）：L1 Dockerfile（hadolint）／ L2 Helm template + L4 raw k8s manifest（kube-linter）／ L3 values+manifest secret-shape（Vibe wrapper，與 #445 trufflehog 高熵互補）。**hybrid policy**（open-source engine + Vibe wrapper 取代 DIY-only，僅 greenfield）；Critical → BLOCK（required status check）、High → 中央 EXEMPTIONS 列管。consolidated baseline + Severity→Action SSOT + branch-protection checklist 見 [`iac-lint-baseline.md`](docs/internal/iac-lint-baseline.md)。
 
