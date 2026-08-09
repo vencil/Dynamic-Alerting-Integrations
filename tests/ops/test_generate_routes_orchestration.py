@@ -19,6 +19,8 @@ import os
 import posixpath
 import re
 import subprocess
+import sys
+import textwrap
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -1083,6 +1085,7 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")
 # readers had drifted apart while it was stranded in this file.
 from _rule_tree import (  # noqa: E402
     _PLATFORM_CM_PREFIX,
+    _SCAN_SKIP_PARTS,
     _alert_names,
     _containers_from_text,
     _decode_manifest,
@@ -1095,7 +1098,9 @@ from _rule_tree import (  # noqa: E402
     _platform_rule_locations,
     _rule_containers,
     _rule_shaped_but_unparsed,
+    _rules_shaped_at_any_depth,
     _source_pack_alerts,
+    _tracked_yaml_paths,
 )
 
 # ============================================================
@@ -3376,6 +3381,72 @@ class TestSilentZeroSentinel:
         assert _decode_manifest(self.RULES_DOC.encode("utf-8")) == (
             self.RULES_DOC, "utf-8")
 
+    def test_rules_declared_in_a_helm_chart_are_refused(self, tmp_path):
+        """⛔ helm/ is in the scan surface and its content mostly is not.
+
+        67 of the 95 tracked helm YAML carry Go template actions and do not
+        parse, so `_containers_from_text` never sees inside them. The
+        `- alert:` tripwire covers a template that spells rules out — but not
+        the shape this exists for, where the template says
+        `{{ toYaml .Values.extraRules | nindent 4 }}` and the RULES LIVE IN
+        VALUES. That file parses perfectly, nests its rules under an arbitrary
+        key, matches none of the three container shapes, and deploys real
+        alerts every contract here is blind to.
+
+        This gate does not render charts. Refusing the shape is the honest
+        option; pretending to follow it is not.
+        """
+        rules = {"groups": [{"name": "g", "rules": [
+            {"alert": "InjectedByChart", "expr": "up == 0"}]}]}
+        for label, values in (
+                ("nested under a key", {"extraRules": rules}),
+                ("several levels down", {"a": {"b": {"c": rules}}}),
+                # The template supplies `groups:`; values supply only the list.
+                ("a bare rule list", {"extraRules": [
+                    {"alert": "InjectedByChart", "expr": "up == 0"}]}),
+                ("at the document root", rules)):
+            rel = "helm/some-chart/values.yaml"
+            got = self._sentinel_over(
+                tmp_path / label.replace(" ", "-"),
+                {rel: yaml.safe_dump(values).encode("utf-8")})
+            assert rel in got, (
+                f"{label}: a chart declaring Prometheus rules drew no "
+                f"objection, and this gate cannot see what it deploys: {got}")
+            assert "render charts" in got[rel]
+
+    def test_the_helm_tripwire_does_not_fire_on_ordinary_chart_values(self):
+        """The counterweight, and it is what keeps the tripwire alive.
+
+        A tripwire that fires on `resources:` or on an empty generator artifact
+        gets switched off, and then it is not a tripwire. `_is_rule_groups`
+        alone is too loose here — it accepts `[]` on purpose — so the shape test
+        demands at least one real rule.
+        """
+        for label, values in (
+                ("resources", {"resources": {"limits": {"cpu": "1"}}}),
+                ("securityContext", {"podSecurityContext": {"runAsNonRoot": True}}),
+                ("an empty generator artifact", {"x": {"groups": []}}),
+                ("RBAC subject groups", {"groups": [
+                    {"name": "ops", "tenants": ["*"]}]}),
+                ("rule-shaped but no expr", {"x": [{"alert": "X"}]})):
+            assert _rules_shaped_at_any_depth(values) is None, (
+                f"{label} was mistaken for a Prometheus rule set: {values}")
+
+    def test_helm_is_actually_in_the_scan_surface(self):
+        """⛔ The tripwire above only runs on files the scan surface reaches.
+
+        `helm/` yields no containers today, so dropping it from
+        `_SHIPPED_ROOTS` changes no count and no contract — measured, that
+        mutation survived everything. It would also silently switch off the
+        refusal, because `_rule_shaped_but_unparsed` iterates
+        `_tracked_yaml_paths()`. A guard reachable only through its own unit
+        test is not deployed.
+        """
+        helm = [p for p in _tracked_yaml_paths() if p.startswith("helm/")]
+        assert len(helm) >= 50, (
+            f"only {len(helm)} helm YAML in the scan surface — the chart "
+            "tripwire has nothing to run on")
+
     def test_a_file_no_encoding_decodes_is_reported_not_skipped(self, tmp_path):
         """The residual: bytes that are not any standard Unicode encoding.
 
@@ -3450,6 +3521,153 @@ class TestSilentZeroSentinel:
             "a file that declares alerts and then fails to parse is the "
             f"loudest silent-zero there is, and it went unreported: {got}")
         assert "will not parse" in got["rule-packs/rule-pack-broken.yaml"]
+
+
+class TestScannerAnchorsAreFailClosed:
+    """The two `git ls-files` anchors, and the oracle the discovery tests read.
+
+    ⛔ Everything here was a surviving mutant. These are not deep invariants —
+    they are the small, load-bearing statements each function's own comment
+    already makes, which nothing was checking.
+    """
+
+    @staticmethod
+    def _temp_repo(tmp_path, files):
+        """A real git repo with *files* ({relpath: text}) tracked."""
+        subprocess.run(["git", "init", "-q", str(tmp_path)],
+                       check=True, timeout=60)
+        for rel, text in files.items():
+            dest = tmp_path / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(text, encoding="utf-8")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "-A"],
+                       check=True, timeout=60)
+        return tmp_path
+
+    @staticmethod
+    def _with_root(root, fn):
+        import _rule_tree  # noqa: PLC0415
+        original = _rule_tree._REPO_ROOT
+        try:
+            _rule_tree._reset_caches()
+            _rule_tree._REPO_ROOT = str(root)
+            return fn()
+        finally:
+            _rule_tree._REPO_ROOT = original
+            _rule_tree._reset_caches()
+
+    def test_an_uppercase_extension_is_still_listed(self, tmp_path):
+        """`git ls-files '*.yaml'` matches the pathspec CASE-SENSITIVELY.
+
+        Filtering in Python and lowercasing is the difference between "the
+        scanner looked and found nothing" and "the scanner declined to look" —
+        and `.YAML` is exactly what a red-team pass reached for.
+        """
+        body = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"
+                "data:\n  r.yml: |\n    groups:\n      - name: g\n"
+                "        rules:\n          - alert: UpperCase\n"
+                "            expr: up == 0\n")
+        repo = self._temp_repo(tmp_path, {
+            "k8s/03-monitoring/configmap-rules-a.YAML": body,
+            "k8s/03-monitoring/configmap-rules-b.yaml": body})
+        listed = self._with_root(repo, _tracked_yaml_paths)
+        assert "k8s/03-monitoring/configmap-rules-a.YAML" in listed, listed
+
+    def test_an_empty_anchor_raises_instead_of_passing_everything(self, tmp_path):
+        """Both `git ls-files` anchors are fail-CLOSED.
+
+        An empty scan is indistinguishable from a clean one: every contract
+        downstream iterates these lists, so `[]` makes all of them pass by
+        examining nothing. `check_scrape_reachability --ci` would print
+        "0 DEAD" over a tree it never opened.
+        """
+        empty = self._temp_repo(tmp_path, {"README.md": "no rules here\n"})
+        for fn in (_tracked_yaml_paths, _expected_rule_files):
+            with pytest.raises(AssertionError, match="git ls-files|repo layout"):
+                self._with_root(empty, fn)
+
+    def test_the_skip_list_is_empty_and_stays_empty(self):
+        """`_SCAN_SKIP_PARTS`'s own comment calls it "deliberately EMPTY".
+
+        It matched zero files once the scan narrowed to the shipped roots,
+        while remaining a working escape hatch: one `mkdir
+        k8s/03-monitoring/fixtures/` and a rules ConfigMap leaves every
+        contract. A filter that protects nothing and hides something is pure
+        attack surface — so the emptiness is the property, and nothing was
+        asserting it.
+        """
+        assert _SCAN_SKIP_PARTS == frozenset(), (
+            f"{sorted(_SCAN_SKIP_PARTS)} would hide a rules artifact from every "
+            "contract at the cost of one directory name. If a real fixture tree "
+            "lands under a shipped root, exclude it by explicit PATH instead.")
+
+    def test_the_pack_name_oracle_demands_a_file_that_is_really_a_pack(
+            self, tmp_path):
+        """`_generated_pack_names` is a test oracle now, not a live defence —
+        but an oracle that answers loosely makes every assertion reading it
+        loose in the same direction.
+
+        Four guards, each its own surviving mutant: the name must end in a
+        rules extension, it must be a FILE, it must be named `rule-pack-*`,
+        and it must actually declare `groups:` — otherwise
+        `touch rule-packs/rule-pack-x.yaml` (zero bytes) mints a pack.
+        """
+        import _rule_tree  # noqa: PLC0415
+        packs = tmp_path / "rule-packs"
+        (packs / "rule-pack-a-directory.yaml").mkdir(parents=True)
+        (packs / "rule-pack-real.yaml").write_text(
+            "groups:\n  - name: g\n    rules:\n      - alert: A\n"
+            "        expr: up == 0\n", encoding="utf-8")
+        # `groups: []` IS a pack: a generator with nothing to emit legitimately
+        # produces one, and reading it as "no source pack" reclassifies its
+        # ConfigMap as hand-authored platform.
+        (packs / "rule-pack-empty.yaml").write_text("groups: []\n", encoding="utf-8")
+        (packs / "rule-pack-decoy.yaml").write_text("", encoding="utf-8")
+        (packs / "rule-pack-no-groups.yaml").write_text("other: 1\n", encoding="utf-8")
+        (packs / "not-a-pack.yaml").write_text("groups: []\n", encoding="utf-8")
+        (packs / "rule-pack-wrong-ext.txt").write_text("groups: []\n", encoding="utf-8")
+        # RECURSIVE: a pack moved into a subdirectory is still that pack.
+        (packs / "sub").mkdir()
+        (packs / "sub" / "rule-pack-nested.yaml").write_text(
+            "groups: []\n", encoding="utf-8")
+
+        got = self._with_root(tmp_path, _rule_tree._generated_pack_names)
+        assert got == {"real", "empty", "nested"}, got
+
+    def test_pack_name_uniqueness_survives_python_dash_O(self, tmp_path):
+        """⛔ `raise`, not `assert` — and only `python -O` can tell them apart.
+
+        Two files claiming one pack name means one is forging provenance, and
+        merging them writes the forger's alerts into that pack's trusted set.
+        Written as `assert` the whole check is stripped under `-O`, so the
+        guard evaporates in exactly the configuration where nobody is watching.
+        Every in-process test passes either way; this one runs a subprocess.
+        """
+        script = textwrap.dedent(f"""
+            import sys
+            sys.path.insert(0, {str(Path(__file__).resolve().parents[2]
+                                    / "scripts" / "tools" / "lint")!r})
+            import _rule_tree
+            doc = {{"groups": [{{"name": "g", "rules": [
+                {{"alert": "A", "expr": "up == 0"}}]}}]}}
+            _rule_tree._rule_containers = lambda: (
+                ("rule-packs/rule-pack-forge.yaml", doc, "forge"),
+                ("rule-packs/sub/rule-pack-forge.yaml", doc, "forge"),
+            )
+            _rule_tree._source_pack_alerts.cache_clear()
+            try:
+                _rule_tree._source_pack_alerts()
+            except AssertionError:
+                print("RAISED")
+            else:
+                print("SILENT")
+        """)
+        out = subprocess.run([sys.executable, "-O", "-c", script],
+                             capture_output=True, text=True, timeout=120)
+        assert out.stdout.strip() == "RAISED", (
+            "under `python -O` the pack-uniqueness check did not fire — it is "
+            f"an `assert` and the optimizer removed it. stdout={out.stdout!r} "
+            f"stderr={out.stderr[-400:]!r}")
 
 
 class TestPlatformReaderParity:

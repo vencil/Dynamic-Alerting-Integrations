@@ -484,10 +484,23 @@ def _tracked_yaml_paths():
     out = subprocess.run(
         ["git", "-C", _REPO_ROOT, "ls-files", "-z"],
         capture_output=True, text=True, timeout=60, check=True).stdout
-    return sorted(p for p in out.split("\0") if p
-                  and p.lower().endswith((".yaml", ".yml"))
-                  and not (_SCAN_SKIP_PARTS & set(PurePosixPath(p).parts))
-                  and p.startswith(_SHIPPED_ROOTS))
+    paths = sorted(p for p in out.split("\0") if p
+                   and p.lower().endswith((".yaml", ".yml"))
+                   and not (_SCAN_SKIP_PARTS & set(PurePosixPath(p).parts))
+                   and p.startswith(_SHIPPED_ROOTS))
+    if not paths:
+        # ⛔ Same fail-closed guard as `_expected_rule_files`, and for the same
+        # reason: an empty scan is indistinguishable from a clean one. Every
+        # contract downstream iterates this list, so returning `[]` when git
+        # fails makes all of them pass by examining nothing — and the one
+        # production caller (`check_scrape_reachability --ci`) would report
+        # "0 DEAD" over a tree it never opened. `raise`, not `assert`:
+        # `python -O` strips the latter.
+        raise AssertionError(
+            f"no tracked YAML under {_SHIPPED_ROOTS} in {_REPO_ROOT} — either "
+            "the repo layout moved or `git ls-files` failed; an empty scan "
+            "satisfies every contract that reads it")
+    return paths
 
 
 @functools.lru_cache(maxsize=1)
@@ -762,6 +775,43 @@ def _iter_repo_alert_rules():
                     yield where, rule
 
 
+def _rules_shaped_at_any_depth(node, _depth: int = 0):
+    """First path at which *node* nests something that is a Prometheus rule set.
+
+    Returns a dotted path string, or None. Two shapes, because a chart can
+    supply either half and let the template supply the other:
+      * a mapping with a `groups:` key holding at least one real rule, and
+      * a bare list of rules, which a template wraps in `groups:` itself.
+
+    `_is_rule_groups` alone is too loose for a tripwire — it accepts `[]`,
+    which is a legitimate empty generator artifact. A tripwire that fires on
+    nothing gets deleted, so require an actual rule.
+    """
+    if _depth > 12:                       # charts are not this deep; stop anyway
+        return None
+    if isinstance(node, dict):
+        groups = node.get("groups")
+        if _is_rule_groups(groups) and any(
+                isinstance(r, dict) and ("alert" in r or "record" in r)
+                for g in (groups or []) if isinstance(g, dict)
+                for r in (g.get("rules") or [])):
+            return "groups"
+        for key, value in node.items():
+            found = _rules_shaped_at_any_depth(value, _depth + 1)
+            if found is not None:
+                return f"{key}.{found}" if found else str(key)
+        return None
+    if isinstance(node, list):
+        if any(isinstance(r, dict) and ("alert" in r or "record" in r) and "expr" in r
+               for r in node):
+            return ""                     # a bare rule list; caller names it
+        for i, item in enumerate(node):
+            found = _rules_shaped_at_any_depth(item, _depth + 1)
+            if found is not None:
+                return f"[{i}].{found}" if found else f"[{i}]"
+    return None
+
+
 @functools.lru_cache(maxsize=1)
 def _rule_shaped_but_unparsed():
     """Containers that LOOK like they hold rules but yield none. Must stay empty.
@@ -795,6 +845,36 @@ def _rule_shaped_but_unparsed():
             continue
         if text is None:
             continue
+        # ⛔ helm/ is IN the scan surface and its CONTENT mostly is not: 67 of
+        # its 95 tracked YAML carry Go template actions and do not parse, so
+        # `_containers_from_text` never sees inside them. The `- alert:`
+        # tripwire below covers a template that spells rules out literally —
+        # but not the shape that motivated this one, where the template says
+        # `{{ toYaml .Values.extraRules | nindent 4 }}` and the RULES LIVE IN
+        # VALUES. That file parses perfectly, nests its rules under an
+        # arbitrary key, matches none of the three container shapes, and
+        # deploys real alerts that every contract here is blind to.
+        #
+        # This gate does not render charts (no helm binary, and rendering is a
+        # much larger commitment — see the S1 options in the handoff), so the
+        # honest move is to refuse the shape rather than pretend to follow it.
+        # Measured: zero helm YAML in this repo is rules-shaped today and none
+        # of the 21 `toYaml .Values.*` injections targets anything close, so
+        # this starts at zero and stays there until someone actually does it.
+        if rel.startswith("helm/"):
+            try:
+                docs = list(yaml.safe_load_all(text))
+            except yaml.YAMLError:
+                docs = []                 # a template; the tripwire below applies
+            for doc in docs:
+                at = _rules_shaped_at_any_depth(doc)
+                if at is not None:
+                    offenders.append((rel, f"declares Prometheus rules at "
+                                           f"`{at or '(root)'}`, and this gate "
+                                           "does not render charts — whatever "
+                                           "the template injects is invisible "
+                                           "to every platform contract"))
+                    break
         # ⛔ Regex, not a literal. `-  alert:` (two spaces) is the same YAML and
         # evaded the substring, so the "declares alerts but will not parse"
         # tripwire could be stepped around with a whitespace edit.
