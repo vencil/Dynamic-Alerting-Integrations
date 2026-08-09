@@ -66,19 +66,12 @@ SHA form raises — a fork PR arrives via a direct SHA fetch with no local ref
 pointing at it, and `--branch <sha>` still resolves there, so this bound does
 not quietly break fork PRs.
 
-⛔ Cell E was CHALLENGED in blind review on a sound-looking argument: trufflehog
-clones `file://…` as a URL, git therefore uses transport rather than local
-optimisation, and transport only carries objects reachable from a matched ref
-— so the fork commit should be missing and every fork PR should hard-fail.
-Re-measured both ways, and the difference is HEAD:
-
-    HEAD left on `main`, commit unreferenced   → object ABSENT, rc=1, 0 findings
-    HEAD DETACHED at that commit (real state)  → object PRESENT, rc=0, 1 finding
-
-`git clone` advertises HEAD and transfers its commit even when no ref points at
-it. The reviewer's repro moved HEAD; `actions/checkout` does not — it leaves
-HEAD detached AT the scanned SHA (confirmed in the real run log). So cell E
-stands, and the guarantee rests on that checkout `ref:` line — which is why
+⛔ Cell E has been challenged once, on the sound-looking argument that a
+`file://` clone uses git transport and so carries only ref-reachable objects.
+Re-measured: with HEAD left elsewhere the object is indeed ABSENT (rc=1), but
+with HEAD DETACHED AT that commit — what `actions/checkout` actually leaves —
+it is PRESENT and found. `git clone` advertises HEAD and transfers its commit.
+The guarantee therefore rests on the checkout `ref:` line, which is why
 `test_the_scanned_commit_is_the_pr_head` pins it.
 
 A second, separate measurement (blind review, one obvious secret in a
@@ -93,11 +86,23 @@ The middle row is the one that matters: its output is byte-identical to a
 clean scan, which is exactly what the PR describing this change had quoted as
 its own evidence of success.
 
-⚠️ What is NOT established: WHY every Lob hit comes back verified. The
-detector marks a hit live on any 2xx from its verification endpoint, and 242
-of 242 came back verified while every other detector returned 0 — that is
-enough to say the signal carries no information, and it is deliberately not
-written up as "the endpoint returns 200 for anything", which was not measured.
+⚠️ What is NOT established, stated because three separate claims in this change
+were caught being wider than their evidence:
+
+  * WHY every Lob hit comes back verified. 242 of 242 verified against 0 from
+    every other detector is enough to say the signal carries no information;
+    it is deliberately NOT written up as "the endpoint returns 200 for
+    anything", which was not measured.
+  * That an empty SARIF closes every alert. What was measured is that an
+    analysis which stops reporting an alert closes it at that analysis's own
+    timestamp — from a run reporting 278 results, not 0. The `results=0` case
+    is inferred from the same mechanism.
+  * What `steps.<id>.outcome` evaluates to for a step that never ran because
+    an earlier one failed. The upload steps are guarded on `!= 'skipped'`
+    (pre-existing), so this decides whether they run at all in that case.
+    There is no instance in this repo's run history to read — every recorded
+    failure is the converter's own. Either way no SARIF exists to upload, so
+    the worst case is a confusing second failure, not lost coverage.
 """
 from __future__ import annotations
 
@@ -298,7 +303,7 @@ def _full_scans() -> list[tuple[str, str, dict]]:
     return full
 
 
-def _git_log_pickaxe(needle: str) -> list[str]:
+def _git_log_pickaxe(pattern: str, *, first_only: bool = False) -> list[str]:
     """Commits reachable from HEAD that ever ADDED or REMOVED `needle`
     OUTSIDE the files documenting the exclusion.
 
@@ -324,14 +329,15 @@ def _git_log_pickaxe(needle: str) -> list[str]:
       makes them agree.
     """
     excludes = [f":(exclude){doc}" for doc in _MARKER_DOC_FILES]
+    early_exit = ["--max-count=1"] if first_only else []
     proc = subprocess.run(
-        ["git", "-C", str(ROOT), "log", "HEAD", "--format=%H %s",
-         "-i", "--pickaxe-regex", "-S", re.escape(needle), "--", ".", *excludes],
+        ["git", "-C", str(ROOT), "log", "HEAD", "--format=%H %s", *early_exit,
+         "-i", "--pickaxe-regex", "-S", pattern, "--", ".", *excludes],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=300,
     )
     assert proc.returncode == 0, (
-        f"`git log -S {needle!r}` failed (rc={proc.returncode}): "
+        f"`git log -S {pattern!r}` failed (rc={proc.returncode}): "
         f"{proc.stderr.strip()[:300]}"
     )
     return [ln for ln in proc.stdout.splitlines() if ln.strip()]
@@ -378,13 +384,33 @@ def test_the_scanned_commit_is_the_pr_head() -> None:
     assert len(checkout) == 1, (
         f"expected exactly one checkout step, found {len(checkout)}"
     )
-    ref = str((checkout[0].get("with") or {}).get("ref") or "")
-    assert "pull_request.head.sha" in ref, (
+    with_block = checkout[0].get("with") or {}
+    ref = str(with_block.get("ref") or "")
+    # ⛔ ORDER, not mere presence. `${{ github.ref || pull_request.head.sha }}`
+    # contains the substring but resolves to `refs/pull/N/merge` on a PR (that
+    # value is truthy), so the scan silently covers the virtual merge commit
+    # instead of what the contributor pushed. Blind review round 4.
+    assert ref.strip().startswith("${{ github.event.pull_request.head.sha"), (
         f"the checkout `ref:` is {ref!r}, which no longer pins the PR head "
-        "SHA.\nWithout it HEAD is the virtual merge commit, so "
-        "`--branch $(git rev-parse HEAD)` bounds the scan to a DIFFERENT "
+        "SHA FIRST.\nOn a pull_request `github.ref` is the virtual merge ref "
+        "and is truthy, so putting it first makes "
+        "`--branch $(git rev-parse HEAD)` bound the scan to a DIFFERENT "
         "commit set — silently, with every other assertion here still "
         "passing (#1364)."
+    )
+    # ⛔ …and the sibling key in the same `with:` block, which has had no
+    # guard at all. A shallow clone makes the PR scan fail loudly (merge-base
+    # cannot resolve) but leaves the NIGHTLY quiet: a shallow repo is a valid
+    # repo, so trufflehog reports no scan error, walks one commit, and the
+    # converter publishes a near-empty SARIF over the alert history. That is
+    # the harm this file spends twenty lines describing, reachable in one
+    # line, in the half nobody watches. Blind review round 4.
+    assert str(with_block.get("fetch-depth")) == "0", (
+        f"checkout `fetch-depth` is {with_block.get('fetch-depth')!r}, not 0.\n"
+        "The PR scan needs base..head reachable (it would fail loudly), but "
+        "the nightly full-history scan would silently walk a shallow clone, "
+        "find almost nothing, and publish that as the authoritative result "
+        "(#1364)."
     )
 
 
@@ -475,7 +501,25 @@ def test_pull_requests_actually_reach_the_bounded_scan() -> None:
     # out would red a semantically identical workflow — a false RED on a
     # security gate, which is how carve-outs get widened. Blind review.
     pr_on = on["pull_request"] or {}
-    types = pr_on.get("types") or ["opened", "synchronize", "reopened"]
+    # ⛔ `.get(...) or default` cannot tell an ABSENT key (GitHub applies its
+    # own default) from an explicit empty list (which is a different thing and
+    # would be a silent coverage cut). Blind review round 4.
+    types = pr_on["types"] if "types" in pr_on else ["opened", "synchronize", "reopened"]
+    assert types, "`on.pull_request.types` is present but EMPTY — no PR event triggers this scan"
+    # ⛔ A path/branch filter suppresses the WHOLE workflow — no job, no check
+    # run, nothing to go red. That is strictly more silent than a job-level
+    # `if:` (which at least reports `skipped`), and the natural instance is
+    # the dangerous one: `paths-ignore: ['docs/**']` stops scanning exactly
+    # the tree where a token pasted into an example config would live. Blind
+    # review round 4; the first three rounds all missed it.
+    for filt in ("paths", "paths-ignore", "branches", "branches-ignore"):
+        assert filt not in pr_on, (
+            f"`on.pull_request.{filt}` is set ({pr_on.get(filt)!r}). A "
+            "filtered-out PR does not trigger this workflow AT ALL — no job, "
+            "no check, nothing red — so those commits are never scanned and "
+            "nobody finds out (#1364)."
+        )
+
     missing = {"opened", "synchronize", "reopened"} - set(types)
     assert not missing, (
         f"`on.pull_request.types` is missing {sorted(missing)} (has {types}).\n"
@@ -495,20 +539,35 @@ def test_pull_requests_actually_reach_the_bounded_scan() -> None:
         f"{mode}\nA near-miss spelling (e.g. `pull_request_target`) sends every "
         "PR down the `mode=full` path, which is deliberately UNBOUNDED."
     )
-    # ⛔ Not just "both strings are present somewhere" — `mode=pr` must be in
-    # the THEN branch. Blind review: swapping the two `echo` lines leaves the
-    # `if:` gates untouched and every other assertion here satisfied, while
-    # every PR runs the unbounded scan. Same equivalence class as "flip the
-    # two `if:`s", entered from the other side.
-    then_branch = mode.split("else", 1)[0]
-    assert re.search(r"mode=pr\b", then_branch), (
-        "the pull_request branch of the mode step no longer emits `mode=pr`:\n"
-        f"{mode}\nIf `mode=full` is emitted for pull_request events, every PR "
-        "runs the deliberately UNBOUNDED scan while the bounded command sits "
-        "unused in the file."
+    # ⛔ Not just "both strings are present somewhere" — `mode=pr` must be what
+    # a pull_request event actually produces. Blind review round 2: swapping
+    # the two `echo` lines leaves the `if:` gates untouched and every other
+    # assertion satisfied, while every PR runs the unbounded scan.
+    #
+    # ⛔⛔ And the FIRST fix for that was itself vacuous (blind review round 4):
+    # it did `mode.split("else", 1)[0]`, and `str.split` with no match returns
+    # `[whole]`, so `[0]` and `[-1]` were the SAME string whenever the script
+    # had no `else`. A perfectly natural rewrite —
+    #     mode=pr
+    #     if [ "$EVENT" = "pull_request" ]; then mode=full; fi
+    # — has no `else`, passes every assertion, and routes every PR to the
+    # unbounded scan. So the structure is now required, then read.
+    assert re.search(r"^\s*else\s*$", mode, re.M), (
+        "the mode step no longer has an explicit `else` branch:\n"
+        f"{mode}\nThis guard reads the then/else split to check WHICH mode a "
+        "pull_request produces; without the split it can only check that both "
+        "strings appear somewhere, which is satisfied by a script that emits "
+        "`mode=full` for pull_request events. Keep the if/else form."
     )
-    assert re.search(r"mode=full\b", mode.split("else", 1)[-1]), (
-        "the non-pull_request branch no longer emits `mode=full`"
+    then_branch, else_branch = mode.split("else", 1)
+    assert re.search(r"mode=pr\b", then_branch) and not re.search(r"mode=full\b", then_branch), (
+        "the pull_request branch of the mode step does not emit `mode=pr` "
+        f"(and only that):\n{mode}\nIf a pull_request produces `mode=full`, "
+        "every PR runs the deliberately UNBOUNDED scan while the bounded "
+        "command sits unused in the file."
+    )
+    assert re.search(r"mode=full\b", else_branch) and not re.search(r"mode=pr\b", else_branch), (
+        "the non-pull_request branch does not emit `mode=full` (and only that)"
     )
 
     # ⛔ JOB-level `if:` too. A job that is skipped reports `skipped`, and this
@@ -543,16 +602,58 @@ def test_pull_requests_actually_reach_the_bounded_scan() -> None:
 
     # …and the two scan steps must be gated on those two modes, the right way round.
     diff_if = str(_diff_scans()[0][2].get("if") or "")
-    assert "mode == 'pr'" in diff_if, (
+    # ⛔ EQUALITY, not containment. `… == 'pr' && github.event.pull_request
+    # .head.repo.fork == false` reads as a reasonable "don't scan forks" tweak,
+    # passes a substring check, and stops scanning fork PRs — which the module
+    # docstring spends a paragraph explaining must keep working. Blind review 4.
+    assert diff_if.strip() == "steps.mode.outputs.mode == 'pr'", (
         f"the --since-commit (bounded) scan is gated on {diff_if!r}, not on "
         "`steps.mode.outputs.mode == 'pr'` — PR events may not reach it."
     )
     for name, _cmd, step in _full_scans():
         full_if = str(step.get("if") or "")
-        assert "mode == 'full'" in full_if, (
+        assert full_if.strip() == "steps.mode.outputs.mode == 'full'", (
             f"the unbounded scan ({name}) is gated on {full_if!r}, not on "
             "`steps.mode.outputs.mode == 'full'` — it could run for PRs."
         )
+
+
+def test_no_scan_flag_is_added_without_review() -> None:
+    """⛔ Every other check here asks "is flag X present". None asked "what ELSE".
+
+    That asymmetry is a hole the size of one token. `--no-verification` makes
+    every finding unverified, so the converter emits `warning` and exits 0 —
+    L2 stops blocking anything, permanently, with every assertion in this
+    module green. `--results=unverified` does the same from the other side,
+    and `--exclude-paths <file>` reintroduces exactly the path-based silencing
+    this module's docstring rejects as fail-open. Blind review round 4.
+
+    An ALLOWLIST rather than a denylist of dangerous flags, because a denylist
+    has an n+1st member by construction — the repo's own lint-adoption note
+    says as much. Adding a flag is then a deliberate act: extend this set and
+    say why.
+    """
+    allowed = {
+        "--branch",              # bind the diff scan to the PR head (#1364)
+        "--since-commit",        # diff-mode range start
+        "--exclude-detectors",   # the registry above owns the value
+        "--fail-on-scan-errors", # a broken scan must not read as a clean one
+        "--json",                # NDJSON for the converter
+    }
+    offenders: list[str] = []
+    for name, cmd, _ in _trufflehog_invocations():
+        flags = {f.split("=", 1)[0] for f in re.findall(r"(?<![\w-])--[\w-]+", cmd)}
+        extra = sorted(flags - allowed)
+        if extra:
+            offenders.append(f"{name}: {extra}")
+    assert not offenders, (
+        "trufflehog invocation(s) carry flags this guard has never reviewed:\n"
+        + "\n".join(f"  {o}" for o in offenders)
+        + "\nSome single flags silently neuter the whole gate — "
+          "`--no-verification` makes every finding unverified, so the "
+          "converter never exits non-zero. If the flag is wanted, add it to "
+          "`allowed` in this test with a one-line rationale (#1364)."
+    )
 
 
 def test_full_scan_is_not_branch_bounded() -> None:
@@ -589,6 +690,17 @@ def test_nightly_full_scan_is_actually_scheduled() -> None:
     on = _on_block()
     schedule = on.get("schedule") or []
     crons = [e.get("cron") for e in schedule if isinstance(e, dict)]
+    # ⛔ …and it must be DAILY. `"0 2 1 1 *"` (yearly) or `"0 2 * * 0"`
+    # (weekly) satisfy "a cron exists" while cutting the only cross-branch
+    # coverage this design keeps by 7x-365x. Blind review round 4.
+    daily = [c for c in crons
+             if c and c.split()[2:5] == ["*", "*", "*"] and "," not in c.split()[1]]
+    assert daily, (
+        f"`on.schedule` has cron(s) {crons!r}, none of which run daily "
+        "(day-of-month / month / day-of-week must all be `*`). The nightly "
+        "full scan is the only thing that looks at unmerged branches; "
+        "throttling it is a coverage cut nothing else would notice (#1364)."
+    )
     assert any(c for c in crons), (
         f"`on.schedule` declares no cron ({schedule!r}). The full-history scan "
         "is the only cross-branch coverage left after the PR scan was bounded "
@@ -833,12 +945,33 @@ def test_every_excluded_detector_is_justified_and_still_unused() -> None:
         "search is broken, so every 'provider not used' result below would be "
         "a false negative"
     )
+    # ⛔ The SAME control for the history half. It had none — the tree half had
+    # one and the history half did not, which is this module's own "enforced on
+    # only one of a pair" shape, in this module. Any breakage that leaves the
+    # pickaxe returning EMPTY with rc=0 (a mistyped pathspec, an exclude that
+    # swallows `.`, a flag-semantics change) turns every historical assertion
+    # into a false negative silently. Blind review round 4.
+    hist_control = _git_log_pickaxe("trufflehog", first_only=True)
+    assert hist_control, (
+        "`git log -S trufflehog` over HEAD's history matched NO commits — the "
+        "pickaxe is broken, so every 'provider never used' result below would "
+        "be a false negative rather than a fact."
+    )
 
     for path in _MARKER_DOC_FILES:
         assert (ROOT / path).is_file(), (
             f"{path} is in _MARKER_DOC_FILES but does not exist — the carve-out "
             "would silently cover nothing, or the wrong thing"
         )
+
+    # One alternation walk over history for every marker of every excluded
+    # detector — the fast path. Per-marker walks below only run if this is
+    # non-empty. (`re.escape` because these are literals, not patterns.)
+    all_markers = [str(m) for d in excluded
+                   for m in _JUSTIFIED_EXCLUSIONS[d]["markers"]]  # type: ignore[union-attr]
+    assert all_markers, "no markers to re-derive from — the premises are unchecked"
+    combined_historical = _git_log_pickaxe(
+        "|".join(re.escape(m) for m in all_markers))
 
     for detector in excluded:
         entry = _JUSTIFIED_EXCLUSIONS[detector]
@@ -861,7 +994,16 @@ def test_every_excluded_detector_is_justified_and_still_unused() -> None:
             # …and the same question for HISTORY, because the exclusion also
             # applies to the nightly full-history scan. The doc files are
             # excluded by PATHSPEC inside `_git_log_pickaxe`, not by commit id.
-            historical = _git_log_pickaxe(str(marker))
+            #
+            # Cost: one full-history walk is ~16 s on this repo (1193 commits),
+            # and this module runs on nearly every PR. The markers are checked
+            # in ONE alternation walk above; this per-marker walk only happens
+            # when that came back non-empty, i.e. when there is something to
+            # name precisely. Blind review round 4 measured the naive form at
+            # 51 s.
+            if not combined_historical:
+                continue
+            historical = _git_log_pickaxe(re.escape(str(marker)))
             assert not historical, (
                 f"{marker!r} appears in the HISTORY of this repo outside the "
                 f"commits that document the {detector} exclusion:\n  "
