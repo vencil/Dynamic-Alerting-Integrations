@@ -10,8 +10,36 @@ name: Image Ref Resolve
 # First-party (ghcr.io/vencil/*) and locally-built (federation-audit-sidecar) refs
 # are skipped by the script — see scripts/ops/check_image_refs_resolve.py.
 #
-# Path-filtered: only runs when a deployment source carrying an image ref changes
-# (or the checker itself), so it doesn't tax unrelated PRs.
+# TWO SCOPES, run as two named steps and never as one combined invocation,
+# because they answer different questions and a reader should be able to tell
+# WHICH one broke from the step name alone (the checker offers no combined value
+# for the same reason):
+#   * `deploy`    — what WE install (helm values + k8s manifests). The #897 class.
+#   * `delivered` — what a CUSTOMER installs: the third-party refs `da-tools init`
+#                   writes into their repo (#1337 follow-up). Those live in
+#                   `scripts/**`, outside every glob this checker had, outside
+#                   Renovate's three customManagers (all key on `@sha256:`), and
+#                   outside the nightly CVE matrix — i.e. nothing answered "does
+#                   this ref still exist?" for them at all.
+#
+# Path-filtered: only runs when a source carrying an image ref changes (or the
+# checker itself).
+#
+# ⚠️ IT IS NO LONGER FREE FOR UNRELATED PRs, and that cost is deliberate. Adding
+# the `delivered` scope meant adding its pin source to the filter, and that
+# source is `scripts/tools/ops/init_project.py` — a ~70KB general-purpose
+# generator that rule-pack work routinely touches (e9a7d92b / 1b2e6bf7 /
+# 222742c5 all did). A GitHub path filter has no granularity below the file, so
+# there is no way to say "only when the pin constants change"; the alternative
+# was to widen the scan face and NOT the trigger face, which is exactly the
+# decorative gate #1302 was about. So a rule-pack PR now pays two registry
+# round-trips it does not need.
+# What keeps that bounded: this job ("resolve chart/manifest image refs") is NOT
+# in main's required status checks — verified 2026-08-06 against
+# `gh api repos/{owner}/{repo}/branches/main/protection`, whose contexts list
+# does not include it — so a red run here does not block a merge. It is a signal,
+# and on an unrelated PR it is a signal you may read and move on from. Revisit
+# only if the noise, not the runtime, starts costing something.
 
 on:
   pull_request:
@@ -25,6 +53,13 @@ on:
       - "helm/**/values*.yaml"
       - "k8s/**"
       - "scripts/ops/check_image_refs_resolve.py"
+      # ⛔ Same discipline as the `values*` line above, for the `delivered`
+      # scope: this file IS the pin table that scope reads, so a PR that bumps
+      # one of the four customer-facing refs must be the PR that re-resolves
+      # them. Widening the scan face without widening the trigger face gives a
+      # gate that CAN see the pins and is never invoked when one changes.
+      # Pinned by a sibling assertion in the nightly-scan matrix-drift module.
+      - "scripts/tools/ops/init_project.py"
       - ".github/workflows/image-ref-resolve.yaml"
   workflow_dispatch:
 
@@ -53,7 +88,32 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Resolve image refs
-        run: |
-          python3 -m pip install --quiet pyyaml -c requirements/ci-constraints.txt
-          python3 scripts/ops/check_image_refs_resolve.py
+      # Its own step so a dependency failure cannot be mistaken for a resolve
+      # failure in either scope below.
+      - name: Install Python deps
+        run: python3 -m pip install --quiet pyyaml -c requirements/ci-constraints.txt
+
+      - name: Resolve image refs (deploy scope — helm values + k8s manifests)
+        id: deploy_scope
+        run: python3 scripts/ops/check_image_refs_resolve.py --scope deploy
+
+      # Runs even when the deploy scope FAILED: `!cancelled()` (not `always()`)
+      # relaxes only the implicit success() check, so a real failure above does
+      # not hide this face.
+      #
+      # ⛔ The second clause reads like a guard against the install step being
+      # broken. It is not, and the comment used to claim it was: if that step
+      # never ran, `steps.deploy_scope.conclusion` is ABSENT, so the comparison
+      # is `'' != 'skipped'` → true and this step runs anyway. Nothing is lost by
+      # that — the script prints `check_image_refs_resolve: PyYAML not installed`
+      # and exits 2, the same diagnosis the deploy step would have given, not the
+      # "bogus ImportError" the old comment warned about. The clause is kept
+      # because it costs nothing and documents intent; the reachability guard in
+      # tests/ops/test_nightly_scan_matrix_drift.py allowlists this exact
+      # expression, so any edit to it must be re-argued there.
+      # The two scopes are independent faces: "the customer pipeline's kubectl
+      # image is gone" is worth knowing in the SAME run as "our grafana tag is
+      # typo'd", not in the run after.
+      - name: Resolve image refs (delivered scope — what `da-tools init` writes)
+        if: ${{ !cancelled() && steps.deploy_scope.conclusion != 'skipped' }}
+        run: python3 scripts/ops/check_image_refs_resolve.py --scope delivered

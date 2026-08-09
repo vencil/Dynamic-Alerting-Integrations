@@ -24,11 +24,21 @@ note — so a dev box without skopeo/docker doesn't false-fail; CI installs skop
 Exit: 0 = all concrete refs resolve (or resolver unavailable / nothing to check);
 1 = at least one ref does not resolve (the #897 class).
 
+Two SCOPES, deliberately separate sets (see `--scope` and `delivered_refs`):
+  * `deploy`    (default) — what WE install: helm values + k8s manifests.
+  * `delivered` — what a CUSTOMER installs: the third-party refs `da-tools init`
+                  writes into their repo, imported from init_project.py.
+
+There is deliberately NO `--scope all`; see the ⛔ note next to _SCOPES.
+
 Usage:
   check_image_refs_resolve.py [--root DIR] [--list] [--timeout SECS]
+                              [--scope {deploy,delivered}]
     --root    repo root to scan (default: cwd)
     --list    print the discovered concrete refs and exit 0 (no network) — for tests
     --timeout per-ref resolver timeout in seconds (default 30)
+    --scope   which ref set to check (default: deploy — see the ⛔ note on
+              `--list` compatibility next to _SCOPES below)
 """
 from __future__ import annotations
 
@@ -83,6 +93,84 @@ LOCAL_BUILT_IMAGES = {"federation-audit-sidecar"}
 # `scan` matrix instead. Same scope note as LOCAL_BUILT_IMAGES above: skipping a
 # ref RESOLUTION check is not a statement about CVE coverage.
 SKIP_REPO_PREFIXES = ("ghcr.io/vencil/",)
+
+# ── The CUSTOMER-DELIVERED scan face (#1337 follow-up) ───────────────────────
+# `da-tools init` writes third-party image refs into files the CUSTOMER runs:
+# the GitLab apply stage (which carries `environment: name: production` plus
+# cluster-write credentials) and the git-sync patch applied into their cluster.
+# Those refs live in `scripts/**`, so SOURCE_GLOBS above cannot see them and
+# neither can Renovate (all three of its customManagers key on `@sha256:`,
+# which these deliberately do not carry). They were in NO automated view of the
+# registry at all.
+#
+# ⛔ A SEPARATE SCOPE, not a widened SOURCE_GLOBS, and the reason is mechanical
+# rather than stylistic: the nightly `scan-thirdparty` matrix is pinned to
+# `--list`'s output by SET EQUALITY (test_thirdparty_matrix_equals_deployed_refs).
+# Folding these four into the default output would therefore FORCE them into the
+# production supply-chain scan face — a face whose whole contract is "images we
+# deploy", digest-pinned and Renovate-bumped. They are neither. So `--list` with
+# the default scope must stay byte-for-byte what it was; the delivered set gets
+# its own scope, its own workflow step, and its own nightly bucket.
+#
+# ⛔ NO `all`. An earlier draft offered one and nothing ever called it — not the
+# workflow (which deliberately runs two named steps so a reader can tell WHICH
+# scope broke from the step name alone), not a test, not a Makefile target. An
+# accepted-but-unexercised option is a third code path that only a future reader
+# runs, first time, in the dark; the repo's standing rule is to delete
+# speculative surface rather than carry it. If a combined run is ever genuinely
+# wanted, two invocations already give it, with better failure attribution.
+_SCOPES = ("deploy", "delivered")
+
+# ⛔ IMPORTED, never transcribed. A hand-copied table here would be a fourth
+# spelling of the same four refs (init_project.py, the nightly matrix, this, and
+# whatever the next reader adds) — and the copy that goes stale silently is
+# always the one nobody runs. The drift guard compares the nightly matrix
+# against THIS import, so a ref is spelled out in exactly two places:
+# init_project.py (the owner) and the nightly matrix (bound to it by that
+# guard). ⛔ That count is a property to MAINTAIN, not a fact to assume — the
+# drift guard's own positive samples were briefly a third copy, labelled
+# "verbatim", until a coordinated bump proved they could go stale in silence.
+# They now import from here instead. Anything that needs these refs imports.
+# Same shape as generate_platform_data.py importing this file for the deploy SSOT.
+DELIVERED_PIN_SOURCE = ("scripts", "tools", "ops", "init_project.py")
+
+
+def delivered_refs(root: Path) -> set[str]:
+    """Third-party refs `da-tools init` hands to a customer.
+
+    Fail-CLOSED in both directions: a load failure raises (rather than degrading
+    to "nothing to check", which reads exactly like a clean run), and an empty
+    pin table is an error rather than a silent no-op.
+
+    ⛔ EACH SOURCE IS CHECKED SEPARATELY, and that is not tidiness. The two
+    sources are unioned, so a check on the UNION is unreachable as long as
+    either one is non-empty: an earlier draft tested `if not refs` after
+    unconditionally adding GIT_SYNC_IMAGE, which made the emptiness guard dead
+    code — emptying `_GITLAB_APPLY_IMAGES` entirely still exited 0 and reported
+    one clean ref. A guard over a union can only catch the case where EVERY
+    source failed at once, which is the least likely one.
+    """
+    import importlib.util
+
+    path = root.joinpath(*DELIVERED_PIN_SOURCE)
+    spec = importlib.util.spec_from_file_location("_da_init_project", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"check_image_refs_resolve: cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_da_init_project"] = mod
+    spec.loader.exec_module(mod)
+
+    apply_refs = {ref for _var, ref in getattr(mod, "_GITLAB_APPLY_IMAGES", {}).values()}
+    git_sync = getattr(mod, "GIT_SYNC_IMAGE", "")
+    empty = [name for name, value in
+             (("_GITLAB_APPLY_IMAGES", apply_refs), ("GIT_SYNC_IMAGE", git_sync))
+             if not value]
+    if empty:
+        raise SystemExit(
+            f"check_image_refs_resolve: the customer-delivered pin table in {path} "
+            f"is missing or EMPTY: {', '.join(empty)} — refusing to report a clean "
+            "scope over a table that resolved to nothing.")
+    return apply_refs | {git_sync}
 
 
 def _repo_of(ref: str) -> str:
@@ -188,9 +276,15 @@ def main() -> int:
     ap.add_argument("--root", default=".", help="repo root to scan (default: cwd)")
     ap.add_argument("--list", action="store_true", help="print discovered concrete refs and exit (no network)")
     ap.add_argument("--timeout", type=int, default=30, help="per-ref resolver timeout (s)")
+    ap.add_argument("--scope", choices=_SCOPES, default="deploy",
+                    help="which ref set to check: deploy (helm values + k8s manifests, "
+                         "the default) or delivered (what `da-tools init` writes into a "
+                         "customer repo). There is no combined value on purpose — run "
+                         "it twice, so a failure says which scope broke.")
     args = ap.parse_args()
 
-    refs = sorted(discover_refs(Path(args.root)))
+    root = Path(args.root)
+    refs = sorted(discover_refs(root) if args.scope == "deploy" else delivered_refs(root))
 
     if args.list:
         for ref in refs:
@@ -209,7 +303,7 @@ def main() -> int:
             print(f"  - {ref}")
         return 0
 
-    print(f"Resolving {len(refs)} concrete image ref(s) via {name}...")
+    print(f"Resolving {len(refs)} concrete image ref(s) [scope={args.scope}] via {name}...")
     failed: list[tuple[str, str]] = []
     for ref in refs:
         resolvable = _resolvable(ref)  # `repo:tag@digest` → `repo@digest` for the resolver

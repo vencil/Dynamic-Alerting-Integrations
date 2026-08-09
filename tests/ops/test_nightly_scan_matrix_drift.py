@@ -53,6 +53,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -365,6 +366,31 @@ def test_the_extractor_samples_overlay_values_files() -> None:
     )
 
 
+def _gha_path_matches(pattern: str, target: str) -> bool:
+    """GitHub Actions path-filter semantics: `**` spans separators, `*` does not.
+
+    ⚠️ Deliberately STRICTER than the real engine (minimatch) in one respect:
+    minimatch collapses `**` to zero directories, so `helm/**/values*.yaml`
+    also matches `helm/values.yaml`; this does not. The direction is the safe
+    one — it can only produce a false "not covered" (a nuisance failure),
+    never a false "covered" (the dangerous one). Inert today: every overlay
+    lives exactly one level under `helm/`.
+
+    Module-level so the two trigger-face guards (overlay values files, and the
+    customer-delivered pin source) grade with ONE translator. Two copies would
+    drift, and the copy that drifts loose is the one that stops catching things.
+    """
+    rx = re.escape(pattern).replace(r"\*\*", "\x00").replace(r"\*", "[^/]*")
+    return re.fullmatch(rx.replace("\x00", ".*"), target) is not None
+
+
+def _resolve_workflow_paths() -> list[str]:
+    wf = yaml.safe_load((WORKFLOWS_DIR / "image-ref-resolve.yaml").read_text(encoding="utf-8"))
+    # PyYAML parses the bare `on:` key as the boolean True (YAML 1.1).
+    triggers = wf.get("on") or wf.get(True)
+    return triggers["pull_request"]["paths"]
+
+
 def test_the_resolve_workflow_triggers_on_overlay_values_files() -> None:
     """⛔ Scan face and TRIGGER face must widen together.
 
@@ -374,10 +400,7 @@ def test_the_resolve_workflow_triggers_on_overlay_values_files() -> None:
     and still covers nothing. A PR touching only `values-tier2.yaml` is exactly
     the PR this check exists for.
     """
-    wf = yaml.safe_load((WORKFLOWS_DIR / "image-ref-resolve.yaml").read_text(encoding="utf-8"))
-    # PyYAML parses the bare `on:` key as the boolean True (YAML 1.1).
-    triggers = wf.get("on") or wf.get(True)
-    paths = triggers["pull_request"]["paths"]
+    paths = _resolve_workflow_paths()
 
     # ⛔ Asserted BEHAVIOURALLY — the filter must actually match the overlay
     # files that exist, not merely be spelled in a way that looks right. A
@@ -388,25 +411,967 @@ def test_the_resolve_workflow_triggers_on_overlay_values_files() -> None:
                 for p in sorted(ROOT.glob("helm/*/values-*.yaml"))]
     assert overlays, "no overlay values files found — this assertion would be vacuous"
 
-    def _matches(pattern: str, target: str) -> bool:
-        """GitHub Actions path-filter semantics: `**` spans separators, `*` does not.
-
-        ⚠️ Deliberately STRICTER than the real engine (minimatch) in one respect:
-        minimatch collapses `**` to zero directories, so `helm/**/values*.yaml`
-        also matches `helm/values.yaml`; this does not. The direction is the safe
-        one — it can only produce a false "not covered" (a nuisance failure),
-        never a false "covered" (the dangerous one). Inert today: every overlay
-        lives exactly one level under `helm/`.
-        """
-        rx = re.escape(pattern).replace(r"\*\*", "\x00").replace(r"\*", "[^/]*")
-        return re.fullmatch(rx.replace("\x00", ".*"), target) is not None
-
+    _matches = _gha_path_matches
     unmatched = [o for o in overlays if not any(_matches(p, o) for p in paths)]
     assert not unmatched, (
         f"image-ref-resolve.yaml does not trigger on these overlay files: {unmatched}\n"
         f"  filter paths: {paths}\n"
         "The checker globs `helm/*/values*.yaml`; a filter that misses an overlay "
         "means a PR changing only that file never runs it (#1302)."
+    )
+
+
+# ── #1337 follow-up: the CUSTOMER-DELIVERED scan face ───────────────────────
+# Everything above is about images WE install. `da-tools init` writes a FOURTH
+# class into a CUSTOMER's repo — the GitLab apply stage's runner image and the
+# git-sync sidecar/init container — and those sat in no automated view of a
+# registry at all. Not by decision, by three independent misses that each read
+# as deliberate scoping until checked against the question:
+#   * the extractor's SOURCE_GLOBS cover `helm/` and `k8s/`, never `scripts/`;
+#   * all three Renovate customManagers require `@sha256:` in the match, which
+#     these refs deliberately do not carry (tag pins: the customer has no
+#     updater of ours to re-resolve a digest);
+#   * the offline pin guard that DOES exist says in its own docstring that it
+#     checks floating-vs-concrete SHAPE and never currency.
+#
+# ⛔ Written out in full ON PURPOSE, same reason as the Dockerfile paths further
+# down: verify_diff's text_map indexes LITERAL path strings, so a PR that bumps
+# scripts/tools/ops/init_project.py has to select these tests for its diff. The
+# constant is cross-checked against the checker's own tuple below so a MOVE of
+# the file fails here rather than silently un-selecting the guard.
+_DELIVERED_PIN_SOURCE = "scripts/tools/ops/init_project.py"
+
+# Minimum number of DISTINCT third-party refs a generated customer repo carries.
+#
+# ⛔ A LITERAL, and that is the whole point. Every other number in this section
+# is derived from either the pin table or the scan matrix, so a floor taken from
+# one of those would shrink in lockstep with the thing it is guarding — the
+# exact triviality `test_the_three_selfbuilt_build_lists_agree` had to relocate
+# its own floor away from. Lowering this has to be a deliberate edit.
+_DELIVERED_PRODUCT_FLOOR = 4
+
+# Shape of a concrete image ref, applied to SCALARS of the generated YAML rather
+# than to key names — so it sees the ref wherever the generator happens to put
+# it. Today that is two structurally different places: an `image:` value in the
+# kustomize git-sync patch, and a `variables:` entry (DA_HELM_IMAGE: ...) in the
+# GitLab pipeline, where the job's own `image:` line is only `$DA_HELM_IMAGE`.
+# A key-name rule would have seen one of those and missed the other.
+#
+# ⛔ ALL THREE DIGEST FORMS, not just `:tag`. The first draft ended in a
+# mandatory `:tag`, which made `repo@sha256:…`, `repo:tag@sha256:…` and
+# tagless refs ALL invisible — while the assertion this feeds exists precisely
+# to catch a ref someone hardcoded into a generator function. A digest ref is
+# the likeliest such ref (it is what a reviewer asks for when they see a tag),
+# so the one shape most likely to be added by hand was the one shape the guard
+# could not see.
+#
+# ⛔ NON-GOAL, deliberately: a TAGLESS ref (`nginx`, `alpine/helm`) stays
+# unmatched. It is not an oversight and it must not be "fixed" — a bare
+# `nginx` is character-for-character indistinguishable from any ordinary YAML
+# scalar (`monitoring`, `main`, a rule-pack name), so accepting it would turn
+# this from a ref detector into a string detector and every anti-vacuity floor
+# below it would go meaningless. The floating-tag case is covered where it can
+# be judged with the key in hand: the offline pin guard in the init-project
+# suite, which reads the generator's own pin table rather than a scalar walk.
+#
+# Measured against the real products (2026-08-06, three deploy methods):
+# 1175 scalars → exactly 5 matches — the 4 third-party refs plus the
+# first-party da-tools ref filtered out below. Zero false positives. The digest
+# widening did NOT change that count (the generated products carry no digest
+# ref today); it is drift protection for the ref someone adds next.
+_GENERATED_REF_SHAPE = re.compile(
+    r"^[a-z0-9][\w.\-]*(?::\d+)?(?:/[\w.\-]+)*"          # host[:port]/path…
+    r"(?::[\w][\w.\-]*(?:@sha256:[0-9a-f]{64})?"         # :tag  |  :tag@digest
+    r"|@sha256:[0-9a-f]{64})$"                           # @digest (no tag)
+)
+
+# ⛔ PAIRED samples, and the pairing is the point: a widening with only positive
+# samples drifts toward "matches everything" and the negative half is what stops
+# it. Both lists are asserted in one test so neither can be quietly dropped.
+_A_DIGEST = "sha256:" + "0123456789abcdef" * 4  # 64 hex chars; SHAPE is the subject
+
+
+def _delivered_pins_from_generator() -> tuple[str, ...]:
+    """The four customer-delivered pins, read from the generator that owns them.
+
+    Keeps the positive samples honest across a legitimate bump, and keeps this
+    file from becoming a third place a ref is spelled out.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_extractor_pins", EXTRACTOR)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_extractor_pins"] = mod
+    spec.loader.exec_module(mod)
+    pins = tuple(mod.delivered_refs(ROOT))
+    assert len(pins) == 4, (
+        f"expected 4 customer-delivered pins, got {len(pins)}: {pins}. If the "
+        "count legitimately changed, this sample set follows it automatically — "
+        "but check that the nightly bucket and its EXPECTED count moved too."
+    )
+    return pins
+
+_REF_SHAPE_MUST_MATCH = (
+    # ⛔ The real pins are IMPORTED, not transcribed. They used to be four
+    # literals labelled "verbatim", which is a claim that expires on the first
+    # legitimate bump: a coordinated `v3.5.0 -> v3.9.9` in both the generator and
+    # the scan matrix left all tests green while the comment silently became a
+    # lie — the samples stayed valid *shapes*, just no longer the real pins.
+    # Importing them also removes a third copy: the checker's own docstring said
+    # "there are exactly two places a ref exists", and transcribing them here
+    # made that three.
+    *_delivered_pins_from_generator(),
+    # First-party — matched by SHAPE, dropped later by the ghcr.io/vencil/ rule.
+    # It belongs here so that filter stays the thing doing the filtering.
+    "ghcr.io/vencil/da-tools:v9.9.9",
+    # A registry with an explicit port.
+    "localhost:5000/team/thing:1.0",
+    # The three digest forms the first draft missed.
+    f"alpine/k8s@{_A_DIGEST}",
+    f"alpine/k8s:1.34.9@{_A_DIGEST}",
+    f"quay.io/argoproj/argocd@{_A_DIGEST}",
+)
+
+_REF_SHAPE_MUST_NOT_MATCH = (
+    # Tagless — the documented non-goal above. Listed so that "we chose not to"
+    # is enforced rather than remembered.
+    "nginx",
+    "alpine/helm",
+    # Ordinary scalars the generated products are full of.
+    "monitoring",
+    "db-a",
+    "main",
+    "conf.d",
+    "60",
+    "0 0 * * *",
+    "https://example.com/r.git",
+    # A digest branch loose enough to accept these would accept prose too.
+    "alpine/k8s@sha256:deadbeef",       # too short to be a sha256
+    "alpine/k8s@md5:0123456789abcdef",  # not sha256
+    f"alpine/k8s@SHA256:{_A_DIGEST[7:]}",  # algorithm is lowercase in OCI refs
+)
+
+
+def _delivered_refs_via_cli() -> set[str]:
+    """The pin table, read through the checker's `--scope delivered`.
+
+    Deliberately the CLI and not a direct import of init_project.py: this is the
+    path CI actually runs, so a `--scope` that silently stopped resolving the pin
+    table would red HERE instead of only in a workflow nobody reads the log of.
+    """
+    proc = subprocess.run(
+        [sys.executable, str(EXTRACTOR), "--root", str(ROOT), "--list",
+         "--scope", "delivered"],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return {line.strip() for line in proc.stdout.splitlines() if line.strip()}
+
+
+def _refs_in_a_generated_customer_repo() -> tuple[set[str], int, int]:
+    """Third-party refs that actually appear in a tree `da-tools init` writes.
+
+    ⛔ Derived from the PRODUCTS, not from the pin table — that is what makes it
+    usable as an anti-vacuity floor for a guard whose other side IS the pin
+    table. It also catches a class the pin-table comparison structurally cannot:
+    a third-party ref hardcoded straight into a generator function, never routed
+    through `_GITLAB_APPLY_IMAGES` at all.
+
+    All three deploy methods, because the apply image is chosen per method (only
+    the kustomize tree carries alpine/k8s, only the helm tree alpine/helm, and so
+    on), and `config_source='git'` because the git-sync overlay is emitted on no
+    other path. Returns (refs, files_walked, scalars_checked) so the caller can
+    fail on a walk that collapsed rather than on an empty result that looks calm.
+
+    ⚠️ Honest boundary: only YAML products are parsed. A ref that a future
+    generator writes into the emitted README, or into a shell snippet, is
+    invisible here — the pin-table equality is what covers refs added the normal
+    way, and this is the second opinion on where they LAND, not a total scan.
+    """
+    import importlib.util
+    import tempfile
+
+    spec = importlib.util.spec_from_file_location(
+        "_delivered_init_project", ROOT / _DELIVERED_PIN_SOURCE)
+    assert spec is not None and spec.loader is not None, (
+        f"cannot load {_DELIVERED_PIN_SOURCE} — this guard must not degrade to "
+        "'no refs found', which reads exactly like a clean generator")
+    ip = importlib.util.module_from_spec(spec)
+    sys.modules["_delivered_init_project"] = ip
+    spec.loader.exec_module(ip)
+
+    def _scalars(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                yield from _scalars(k)
+                yield from _scalars(v)
+        elif isinstance(node, list):
+            for v in node:
+                yield from _scalars(v)
+        elif isinstance(node, str):
+            yield node
+
+    refs: set[str] = set()
+    files = scalars = 0
+    for deploy in ("kustomize", "helm", "argocd"):
+        with tempfile.TemporaryDirectory() as tmp:
+            ip.run_init({
+                "ci": "both",
+                "deploy": deploy,
+                "rule_packs": ["mariadb"],
+                "tenants": ["db-a"],
+                "namespace": "monitoring",
+                "da_tools_image": "ghcr.io/vencil/da-tools:v9.9.9",
+                # git-sync only reaches a customer on this path.
+                "config_source": "git",
+                "git_repo": "https://example.com/r.git",
+                "git_branch": "main",
+                "git_path": "conf.d",
+                "git_period": 60,
+            }, tmp)
+            for path in sorted(Path(tmp).rglob("*")):
+                if not path.is_file():
+                    continue
+                files += 1
+                if path.suffix not in (".yaml", ".yml"):
+                    continue
+                text = path.read_text(encoding="utf-8", errors="replace")
+                for doc in yaml.safe_load_all(text):
+                    for value in _scalars(doc):
+                        scalars += 1
+                        candidate = value.strip()
+                        # `$DA_HELM_IMAGE` / `${{ env.X }}` are references TO a
+                        # ref, not a ref — the concrete value is the variables
+                        # entry they point at, and it is collected on its own.
+                        if "$" in candidate or "{" in candidate:
+                            continue
+                        if not _GENERATED_REF_SHAPE.match(candidate):
+                            continue
+                        # First-party currency is the release flow's job (#902
+                        # rejected first-party digest pinning outright); the same
+                        # prefix rule the extractor uses.
+                        if candidate.startswith("ghcr.io/vencil/"):
+                            continue
+                        refs.add(candidate)
+    return refs, files, scalars
+
+
+def test_the_generated_ref_shape_sees_every_pin_form_and_no_prose() -> None:
+    """Paired samples for `_GENERATED_REF_SHAPE` — both directions, one test.
+
+    A shape rule exercised only against today's four tag pins can drift either
+    way without anything noticing, and BOTH directions have a named failure:
+
+      * too TIGHT — the shape ended in a mandatory `:tag`, so every digest form
+        was a MISS while the assertion it feeds claims to catch a ref hardcoded
+        into a generator. A digest ref is the likeliest such ref;
+      * too LOOSE — once widened, the temptation is to accept a bare `nginx`
+        too, at which point the rule matches ordinary YAML scalars and the
+        `len(refs) >= _DELIVERED_PRODUCT_FLOOR` floor below stops meaning
+        anything (it would be satisfied by four random strings).
+
+    ⚠️ Honest boundary: this pins the SHAPE only. That a real generated tree
+    contains no scalar which merely looks like a ref is a separate,
+    measured claim — `test_every_ref_a_generated_customer_repo_carries_is_scanned`
+    is where it is checked against the products.
+    """
+    assert _REF_SHAPE_MUST_MATCH and _REF_SHAPE_MUST_NOT_MATCH, (
+        "both sample lists must be non-empty — an empty one makes its half of "
+        "this test vacuous while the other half keeps it green")
+
+    missed = [s for s in _REF_SHAPE_MUST_MATCH if not _GENERATED_REF_SHAPE.match(s)]
+    assert not missed, (
+        f"_GENERATED_REF_SHAPE does not match these real ref forms: {missed}\n"
+        "A form it cannot see is a form the customer-delivered coverage guard "
+        "silently ignores — that was the `@sha256:` gap."
+    )
+
+    over = [s for s in _REF_SHAPE_MUST_NOT_MATCH if _GENERATED_REF_SHAPE.match(s)]
+    assert not over, (
+        f"_GENERATED_REF_SHAPE now matches things that are not image refs: {over}\n"
+        "Widening it far enough to match ordinary scalars turns the ref walk "
+        "into a string walk and makes the anti-vacuity floors below vacuous. "
+        "If one of these genuinely IS a ref form we deliver, move it to "
+        "_REF_SHAPE_MUST_MATCH deliberately — do not just loosen the pattern."
+    )
+
+
+def test_delivered_matrix_equals_the_customer_pin_table() -> None:
+    """scan-delivered matrix == the refs `da-tools init` hands a customer.
+
+    Same contract as `test_thirdparty_matrix_equals_deployed_refs`, for the other
+    scan face. Neither side is derived from the other: the matrix is a literal in
+    the workflow YAML, the pin table is imported from init_project.py through the
+    checker's `--scope delivered`. Bumping one without the other reds here.
+
+    ⭐ COUNTERFACTUAL (measured, not assumed): with init_project.py restored whole
+    from origin/main this test is GREEN — the four pins are unchanged on base, so
+    this assertion buys DRIFT protection going forward, not a live find. The
+    assertion that goes RED on base is the workflow trigger one below, and the
+    detection the PR actually buys is the nightly bucket itself, which no test can
+    stand in for. Do not restate this as "#1337's four pins were wrong".
+    """
+    matrix_refs = {e["ref"] for e in _matrix_include("scan-delivered")}
+    pinned = _delivered_refs_via_cli()
+
+    # ⛔ Floor BEFORE the equality, and taken from neither side of it: ∅ == ∅
+    # passes, and both sides are things a single careless edit can empty (delete
+    # the matrix entries, or empty `_GITLAB_APPLY_IMAGES`).
+    assert len(pinned) >= _DELIVERED_PRODUCT_FLOOR, (
+        f"the customer-delivered pin table resolved to only {len(pinned)} ref(s) "
+        f"({sorted(pinned)}) — expected at least {_DELIVERED_PRODUCT_FLOOR}. Either "
+        "pins were removed (then lower the floor deliberately) or `--scope "
+        "delivered` stopped reading the table, which would make the equality "
+        "below pass over nothing."
+    )
+    assert matrix_refs == pinned, (
+        "the nightly scan-delivered matrix drifted from the refs `da-tools init` "
+        "writes into a customer repo.\n"
+        f"  only in scan matrix : {sorted(matrix_refs - pinned)}\n"
+        f"  only in the pin table: {sorted(pinned - matrix_refs)}\n"
+        "Sync the scan-delivered matrix in .github/workflows/nightly-image-scan.yaml "
+        f"with the pin table in {_DELIVERED_PIN_SOURCE}. ⚠️ The matrix is a MIRROR "
+        "of that table — do not 'improve' it by adding a digest here; the tag-only "
+        "form is a decision made at the source (the customer has no updater of ours)."
+    )
+
+
+def test_every_ref_a_generated_customer_repo_carries_is_scanned() -> None:
+    """The second opinion: run the generator and look at what it WROTE.
+
+    `test_delivered_matrix_equals_the_customer_pin_table` compares the matrix to
+    the pin table. That is only a coverage guarantee while every delivered ref
+    goes THROUGH the pin table — and nothing structurally forces that. A ref
+    hardcoded straight into a generator function (`_gen_gitlab_ci`,
+    `_gen_git_sync_deployment`, or the next generator someone adds) ships to a
+    customer while both sides of that equality stay in perfect agreement. This is
+    the same failure #1302 was: two sets derived from one blind source.
+
+    So this one runs `run_init` for all three deploy methods and reads the actual
+    files, exactly as the sibling guard in the init-project suite does for
+    floating tags — that suite's docstring records why a hand-listed set of
+    generators was the hole, not the scan.
+    """
+    refs, files, scalars = _refs_in_a_generated_customer_repo()
+
+    # Anti-vacuity on the WALK, before anything about the refs: a generator that
+    # stopped emitting, or a rglob that stopped matching, produces an empty ref
+    # set that reads exactly like "nothing unscanned ships".
+    assert files >= 24, (
+        f"only {files} files generated across three deploy methods — run_init "
+        "stopped emitting, or the walk broke. The ref assertions below would "
+        "pass over nothing."
+    )
+    assert scalars >= 500, (
+        f"only {scalars} YAML scalars inspected across {files} generated files — "
+        "the products stopped parsing as YAML, or the scalar walk broke."
+    )
+    assert len(refs) >= _DELIVERED_PRODUCT_FLOOR, (
+        f"only {len(refs)} distinct third-party ref(s) found in the generated "
+        f"customer tree ({sorted(refs)}), expected at least "
+        f"{_DELIVERED_PRODUCT_FLOOR}. Either the generator stopped writing one "
+        "(check the deploy-method branch), or the ref shape rule drifted."
+    )
+
+    matrix_refs = {e["ref"] for e in _matrix_include("scan-delivered")}
+    unscanned = sorted(refs - matrix_refs)
+    assert not unscanned, (
+        "third-party image ref(s) written into a CUSTOMER's repo are not in the "
+        f"nightly scan-delivered matrix: {unscanned}\n"
+        "They are executed by the customer's pipeline (the apply stage carries "
+        "`environment: name: production` plus cluster-write credentials) and "
+        "nothing else looks at them — not Renovate (its customManagers all "
+        "require `@sha256:` and none reach `scripts/**`), not the deploy-scope "
+        "extractor (it globs `helm/` and `k8s/`).\n"
+        "Route the ref through the pin table and add it to the matrix in "
+        ".github/workflows/nightly-image-scan.yaml."
+    )
+
+
+def _strip_bash_comment(line: str) -> str:
+    """Everything on ONE logical line before the bash comment starts.
+
+    ⛔ Derived from the shell rule, not from a list of shapes someone named.
+    Bash starts a comment at a `#` that BEGINS A WORD — start of line, or after
+    unquoted whitespace — and never inside `'` or `"`. Every shape that beat the
+    previous `line.lstrip().startswith("#")` form is the same rule read properly:
+
+      * `cmd --scope deploy   # was --scope delivered`  (trailing; not line-initial)
+      * `run: >` folded scalars, where YAML joins the lines with spaces before
+        anything shell-shaped exists, so a comment on its own SOURCE line is
+        mid-line by the time bash sees it (measured, not assumed)
+      * `\\#` — a backslash before it means it is not a comment, and the
+        "preceded by whitespace" rule already says so without a special case.
+
+    Error direction is deliberate: if this strips something that bash would have
+    kept, callers see LESS text, so an "is it invoked" assertion gets harder to
+    satisfy — a false RED, never a silent pass.
+    """
+    quote = ""
+    for i, ch in enumerate(line):
+        if quote:
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in "'\"":
+            quote = ch
+        elif ch == "#" and (i == 0 or line[i - 1].isspace()):
+            return line[:i]
+    return line
+
+
+# Tokens shlex(punctuation_chars=True) emits that END one command and begin the
+# next. Without the split, `echo --scope delivered && real_cmd --scope deploy`
+# would present one argv holding both, and a prose `echo` would satisfy an
+# assertion about the real command.
+_SHELL_SEPARATORS = frozenset({"&&", "||", ";", ";;", "|", "&", "(", ")"})
+
+
+def _shell_argvs(run_text: str) -> list[list[str]]:
+    """Every command in a `run:` block as an argv list.
+
+    ⛔ The subject of an "is X invoked" assertion is the COMMAND, not the text
+    of the block. Substring-scanning the block reads the workflow's own English:
+    `echo "reproduce locally with check_image_refs_resolve.py --scope delivered"`
+    contains the string and invokes nothing. Parsing to argv makes that
+    impossible — `--scope delivered` inside a quoted echo argument is ONE token,
+    so it can never look like the two adjacent tokens a real invocation has.
+    """
+    folded = re.sub(r"\\\n\s*", " ", run_text)  # join `\`-continued lines first
+    argvs: list[list[str]] = []
+    for raw in folded.split("\n"):
+        line = _strip_bash_comment(raw).strip()
+        if not line:
+            continue
+        lex = shlex.shlex(line, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        try:
+            tokens = list(lex)
+        except ValueError as exc:  # unbalanced quote — refuse to grade blindly
+            raise AssertionError(
+                f"could not tokenise a `run:` line as a shell command ({exc}): "
+                f"{line!r}\nThis guard reads real argv; teach it the shape or "
+                "simplify the line rather than letting it grade a half-parse."
+            ) from exc
+        current: list[str] = []
+        for tok in tokens:
+            if tok in _SHELL_SEPARATORS:
+                if current:
+                    argvs.append(current)
+                current = []
+            else:
+                current.append(tok)
+        if current:
+            argvs.append(current)
+    return argvs
+
+
+def _names_label(text: str, label: str) -> bool:
+    """True iff `text` names `label` as a whole token.
+
+    ⛔ The boundary comes from the LABEL, never from a hardcoded family prefix.
+    Both directions are load-bearing and each was wrong at some point:
+      * `label in text` reports a short label as present when only a longer one
+        containing it was written (`nightly-cve` inside `nightly-cve-thirdparty`);
+      * extracting `nightly-cve[\\w-]*` tokens instead fixes that but bakes the
+        current family in, so a fourth bucket named anything else is reported
+        missing however loudly the step names it — a red whose remedy is already
+        done, which is how a guard teaches people to ignore it.
+    """
+    return re.search(rf"(?<![\w-]){re.escape(label)}(?![\w-])", text) is not None
+
+
+def _invokes_with_flag(argvs: list[list[str]], script: str, flag: str, value: str) -> bool:
+    """True iff some single command runs `script` AND passes `flag value`.
+
+    Both halves must be in the SAME argv: a workflow that runs the script with
+    one scope and merely mentions the other elsewhere has not run the other.
+    """
+    for argv in argvs:
+        if not any(tok == script or tok.endswith("/" + script) for tok in argv):
+            continue
+        if f"{flag}={value}" in argv:
+            return True
+        for i, tok in enumerate(argv[:-1]):
+            if tok == flag and argv[i + 1] == value:
+                return True
+    return False
+
+
+# WHOLE `if:` expressions that provably do not narrow which events reach a node.
+# ⛔ Matched EXACTLY, never by substring: the real expression below is
+# `!cancelled() && steps.X.conclusion != 'skipped'`, so a substring test for
+# `!cancelled()` would wave through the second clause — which does narrow — and
+# through anything a future edit appends to it. Unknown expression ⇒ treated as
+# a gate ⇒ the caller reds. Fail-closed, and the allowlist has to be widened
+# deliberately with the reasoning written down, as below.
+_NON_NARROWING_IF = {
+    "always()": "runs regardless of upstream outcome — strictly wider.",
+    "!cancelled()": "only relaxes the implicit success() — strictly wider.",
+    # The delivered-scope step. `deploy_scope` is itself unconditional, so it
+    # cannot be 'skipped'; and if it never ran at all the context entry is
+    # absent, making the comparison `'' != 'skipped'` → true. Both branches
+    # therefore run this step, which is why it does not narrow. (That second
+    # branch is the opposite of what the workflow comment used to claim.)
+    "!cancelled() && steps.deploy_scope.conclusion != 'skipped'":
+        "both branches evaluate true; see the note in image-ref-resolve.yaml.",
+}
+
+
+def _if_narrows(node: dict) -> bool:
+    """True iff this job/step carries a condition this module cannot see past.
+
+    ⛔ Reading `run:` and ignoring `if:` is how an "is it invoked" guard degrades
+    into an "is it written down" guard. Measured on this very workflow: adding
+    `if: ${{ github.event_name == 'workflow_dispatch' }}` to the delivered step
+    left the whole suite green, and so did `if: false` on the entire job — while
+    the PR-time re-resolution the assertion exists to guarantee stopped
+    happening. The disabling mechanism was never read, only the text beside it.
+    """
+    cond = str(node.get("if", "")).strip()
+    if not cond:
+        return False
+    if cond.startswith("${{") and cond.endswith("}}"):
+        cond = cond[3:-2].strip()
+    return cond not in _NON_NARROWING_IF
+
+
+def _workflow_argvs(name: str) -> tuple[list[list[str]], list[str]]:
+    """(argv of every unconditionally-reached `run:` step, labels of gated ones).
+
+    Nodes behind a condition this module cannot evaluate are EXCLUDED from the
+    argv list and reported separately, so a caller asserting "the workflow really
+    runs X" fails with the real reason ("X sits behind a gate I cannot read")
+    rather than the misleading "X is not invoked".
+    """
+    wf = yaml.safe_load((WORKFLOWS_DIR / name).read_text(encoding="utf-8"))
+    argvs: list[list[str]] = []
+    gated: list[str] = []
+    for job_name, job in wf["jobs"].items():
+        if _if_narrows(job):
+            gated.append(f"job {job_name} (if: {job['if']})")
+            continue
+        for step in (job.get("steps") or []):
+            label = f"{job_name}/{step.get('name', '<unnamed>')}"
+            if _if_narrows(step):
+                gated.append(f"step {label} (if: {step['if']})")
+                continue
+            argvs.extend(_shell_argvs(step.get("run") or ""))
+    return argvs, gated
+
+
+def test_the_resolve_workflow_covers_the_delivered_pin_source() -> None:
+    """⛔ Scan face and TRIGGER face must widen together — the #1302 lesson again.
+
+    `check_image_refs_resolve.py` grew a `--scope delivered`, and
+    `image-ref-resolve.yaml` grew a step that runs it. Neither is worth anything
+    unless a PR that CHANGES a pin actually starts the workflow, and the file
+    those pins live in is not matched by any of the pre-existing path filters
+    (`helm/**/values*.yaml`, `k8s/**`, the checker itself, the workflow itself).
+
+    Three separate properties, because each fails on its own:
+      1. the pin source is where this module thinks it is;
+      2. some `paths:` entry matches it, graded BEHAVIOURALLY (a filter spelled
+         `scripts/tools/ops/*.py` looks right and would also work, one spelled
+         `scripts/ops/init_project.py` looks right and matches nothing);
+      3. the workflow actually INVOKES `--scope delivered` — a trigger that runs
+         only the deploy scope is a gate that starts and covers nothing.
+    """
+    # (1) Cross-check the literal against the checker's own tuple, so moving the
+    # file reds here rather than silently un-selecting this test from the diff.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_extractor_delivered", EXTRACTOR)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_extractor_delivered"] = mod
+    spec.loader.exec_module(mod)
+    assert "/".join(mod.DELIVERED_PIN_SOURCE) == _DELIVERED_PIN_SOURCE, (
+        f"check_image_refs_resolve.DELIVERED_PIN_SOURCE points at "
+        f"{'/'.join(mod.DELIVERED_PIN_SOURCE)!r}, this module expects "
+        f"{_DELIVERED_PIN_SOURCE!r}. Update BOTH — including the literal here, "
+        "which is what selects this test for a diff touching that file."
+    )
+    assert (ROOT / _DELIVERED_PIN_SOURCE).is_file(), (
+        f"{_DELIVERED_PIN_SOURCE} does not exist — every assertion here would be "
+        "reasoning about a file that is gone")
+
+    # (2) Trigger face.
+    paths = _resolve_workflow_paths()
+    assert not any(p.lstrip().startswith("!") for p in paths), (
+        f"`on.pull_request.paths` uses negation patterns, which this translator "
+        f"cannot evaluate — it would report the pin source as covered while "
+        f"GitHub excluded it. paths: {paths}")
+    assert any(_gha_path_matches(p, _DELIVERED_PIN_SOURCE) for p in paths), (
+        f"image-ref-resolve.yaml does not trigger on {_DELIVERED_PIN_SOURCE}\n"
+        f"  filter paths: {paths}\n"
+        "That file IS the pin table the `delivered` scope reads, so a PR that "
+        "bumps one of the four customer-facing refs would never re-resolve them "
+        "— a gate that can see the pins and is never invoked when one changes "
+        "(#1302's shape, #1337's subject)."
+    )
+
+    # (3) Scan face: a real command has to run the checker in that scope.
+    # ⛔ Graded on parsed argv, never on the text of the block. Three shapes beat
+    # a text scan — measured, all three left the suite green: a trailing `#`
+    # comment, a `run: >` folded scalar (YAML moves the `#` off line-start), and
+    # an `echo` that merely mentions the flag. A guard whose subject is "is it
+    # invoked" must not be satisfiable by prose about invoking it, and requiring
+    # script and flag in the SAME argv is what makes that structural.
+    argvs, gated = _workflow_argvs("image-ref-resolve.yaml")
+    # ⛔ BOTH scopes. The delivered half is what this PR added, but the deploy
+    # half is the original #897 gate and it lost its protection the moment one
+    # invocation became two named steps: deleting the deploy step outright left
+    # the suite green. A guard that only watches the new half converts every
+    # future edit of the old half into a silent removal.
+    for scope in ("deploy", "delivered"):
+        assert _invokes_with_flag(
+            argvs, "check_image_refs_resolve.py", "--scope", scope
+        ), (
+            f"image-ref-resolve.yaml never runs `check_image_refs_resolve.py "
+            f"--scope {scope}` in a step that is unconditionally reached.\n"
+            f"  steps/jobs excluded because of an `if:` this module refuses to "
+            f"grade through: {gated or 'none'}\n"
+            "If the invocation is one of those, that IS the finding: a gate on "
+            "that step means the check stops happening on the events the "
+            "trigger was widened for. If the condition provably does not "
+            "narrow, add it to _NON_NARROWING_IF with the reasoning. The "
+            "`delivered` scope reads the customer pin table; the default "
+            "`deploy` scope does not read it at all."
+        )
+
+
+# Shapes that satisfied the previous TEXT-scanning form of assertion (3) while
+# the workflow ran `--scope deploy` only. Each is a real YAML `steps:` list; all
+# three were measured green against the old scan before this pairing existed.
+_SCAN_FACE_DECOYS = {
+    "trailing comment": """
+- run: |
+    python3 scripts/ops/check_image_refs_resolve.py --scope deploy   # was --scope delivered
+""",
+    "folded scalar moves the # off line-start": """
+- run: >
+    python3 scripts/ops/check_image_refs_resolve.py --scope deploy
+    # re-enable --scope delivered after #9999
+""",
+    "prose in an echo, no comment at all": """
+- run: echo "tip - reproduce locally with check_image_refs_resolve.py --scope delivered"
+""",
+    "mentioned in one command, run in another": """
+- run: echo --scope delivered && python3 scripts/ops/check_image_refs_resolve.py --scope deploy
+""",
+    "a different script gets the flag": """
+- run: python3 scripts/ops/other_tool.py --scope delivered
+""",
+}
+
+# …and the shapes that MUST still count, so the fix cannot be "reject everything".
+_SCAN_FACE_REAL = {
+    "plain": "- run: python3 scripts/ops/check_image_refs_resolve.py --scope delivered\n",
+    "equals form": "- run: python3 scripts/ops/check_image_refs_resolve.py --scope=delivered\n",
+    "line continuation": """
+- run: |
+    python3 scripts/ops/check_image_refs_resolve.py \\
+      --scope delivered
+""",
+    "after a real comment line": """
+- run: |
+    # resolve the customer-facing pins
+    python3 scripts/ops/check_image_refs_resolve.py --scope delivered
+""",
+    "second command in a chain": """
+- run: set -euo pipefail && python3 scripts/ops/check_image_refs_resolve.py --scope delivered
+""",
+}
+
+
+@pytest.mark.parametrize("label", sorted(_SCAN_FACE_DECOYS))
+def test_scan_face_reads_commands_not_prose(label: str) -> None:
+    """⛔ Counter-example half: text that MENTIONS the invocation must not pass.
+
+    Assertion (3) above is only worth its message if it is unsatisfiable by
+    prose. Its previous form — join the non-`#`-initial lines, substring-search
+    — passed all five of these. Pairing matters as much as the fix: the
+    companion test proves the tightening did not simply reject everything, which
+    is the other way a guard stops measuring anything.
+    """
+    steps = yaml.safe_load(_SCAN_FACE_DECOYS[label])
+    argvs = [argv for s in steps for argv in _shell_argvs(s.get("run") or "")]
+    assert not _invokes_with_flag(
+        argvs, "check_image_refs_resolve.py", "--scope", "delivered"
+    ), (
+        f"the scan-face check accepted {label!r} as a real invocation.\n"
+        f"  parsed argv: {argvs}\n"
+        "Something regressed to grading the TEXT of the run: block."
+    )
+
+
+@pytest.mark.parametrize("label", sorted(_SCAN_FACE_REAL))
+def test_scan_face_accepts_the_real_invocation_spellings(label: str) -> None:
+    """Paired positive: the shapes a maintainer would actually write must pass."""
+    steps = yaml.safe_load(_SCAN_FACE_REAL[label])
+    argvs = [argv for s in steps for argv in _shell_argvs(s.get("run") or "")]
+    assert _invokes_with_flag(
+        argvs, "check_image_refs_resolve.py", "--scope", "delivered"
+    ), (
+        f"the scan-face check rejected {label!r}, which is a real invocation.\n"
+        f"  parsed argv: {argvs}\n"
+        "A guard that only accepts one spelling reds on a harmless rewrite."
+    )
+
+
+def test_label_naming_is_exact_and_family_agnostic() -> None:
+    """Both failure directions of `_names_label`, including the family-prefix one.
+
+    The second block is the one worth keeping: this test's sibling claims to red
+    on the day a FOURTH bucket is added, and a matcher anchored on the current
+    `nightly-cve` family would instead red on a correct step forever.
+    """
+    long_only = "labels: 'nightly-cve-thirdparty' was deleted"
+    assert not _names_label(long_only, "nightly-cve"), (
+        "a longer label containing the short one satisfied it — substring drift"
+    )
+    assert _names_label(long_only, "nightly-cve-thirdparty")
+
+    # A fourth bucket outside the current family must be gradeable both ways.
+    other = "check the race-tracking issue"
+    assert _names_label(other, "race-tracking"), (
+        "a label outside the `nightly-cve` family was reported missing from a "
+        "text that names it — the matcher is anchored on today's family"
+    )
+    assert not _names_label("check the race-tracking-v2 issue", "race-tracking")
+
+    # Quoting/punctuation around the token must not hide it.
+    for wrapped in ("'nightly-cve'", '"nightly-cve"', "(nightly-cve)", "nightly-cve."):
+        assert _names_label(f"see {wrapped} for details", "nightly-cve"), wrapped
+
+
+# job -> (what its Trivy step must scan, why it differs).
+# Derived from what each bucket's matrix carries, not copied from the workflow:
+# `scan` builds images locally and tags them, the other two scan published refs.
+_SCAN_TARGETS = {
+    "scan": "local-scan/${{ matrix.name }}:nightly",
+    "scan-thirdparty": "${{ matrix.ref }}",
+    "scan-delivered": "${{ matrix.ref }}",
+}
+_FRAG_PREFIXES = {"scan": "sb", "scan-thirdparty": "tp", "scan-delivered": "dl"}
+
+
+def _nightly() -> dict:
+    return yaml.safe_load(
+        (WORKFLOWS_DIR / "nightly-image-scan.yaml").read_text(encoding="utf-8")
+    )
+
+
+def test_every_scan_job_actually_scans_its_own_matrix() -> None:
+    """⛔ The drift guard pins the MATRIX; this pins the SCANNER to the matrix.
+
+    Those are different contracts and only the first existed. Measured: changing
+    `scan-delivered`'s `image-ref` to a literal `alpine:3.20` left all 37 tests
+    green — and the runtime consequence is the worst available, because nothing
+    degrades. Four jobs still run, four fragments are still written, so
+    `missing = 4 - 4 = 0`, `problem=0`, and the tracking issue is AUTO-CLOSED
+    with "All 4 customer-delivered images clean". No red run, no degraded
+    banner, no notifying comment — the four customer pins are simply never
+    looked at while the audit trail says they are fine.
+
+    It also falsifies, silently and all at once, the workflow's own claim that
+    the scan "buys does-the-ref-still-exist for free": a deleted or retagged ref
+    can only show up as a degraded pull if the pull is of that ref.
+
+    All three buckets are asserted because the hole is identical in each and
+    `scan-thirdparty` has had it since #902 — fixing only the bucket this PR
+    added would leave the same defect in the sibling it was copied from.
+    """
+    wf = _nightly()
+    for job_name, expected in _SCAN_TARGETS.items():
+        job = wf["jobs"][job_name]
+        trivy = [
+            s for s in (job.get("steps") or [])
+            if "trivy-action" in str(s.get("uses", ""))
+        ]
+        assert len(trivy) == 1, (
+            f"{job_name} has {len(trivy)} trivy-action step(s); this guard "
+            "reads exactly one per bucket"
+        )
+        with_ = trivy[0].get("with") or {}
+        got = str(with_.get("image-ref", ""))
+        assert got == expected, (
+            f"{job_name}'s Trivy step scans {got!r}, not {expected!r}.\n"
+            "The matrix and the scanner have to name the same thing. When they "
+            "diverge every job still succeeds and the tracking issue closes "
+            "itself as clean, so this assertion is the only place it surfaces."
+        )
+        # ⛔ WHAT is scanned and HOW it is scanned are two contracts, and only
+        # the first was pinned. `severity` filters AT SCAN TIME, so narrowing it
+        # to `CRITICAL` means a HIGH in a customer-delivered image never enters
+        # the JSON at all — `summarize_trivy_cve.sh`'s downstream "defensive"
+        # HIGH-or-CRITICAL re-filter cannot recover data Trivy never emitted.
+        # The job stays green, the fragment is written, `missing=0`, and the
+        # tracking issue reports clean. Measured: that one-word edit left all 39
+        # tests passing. `exit-code: 0` is equally load-bearing in the other
+        # direction — the design is capture-don't-gate, and a non-zero code
+        # would turn every finding into a red nightly run.
+        contract = {
+            "severity": "CRITICAL,HIGH",
+            "ignore-unfixed": True,
+            "exit-code": "0",
+        }
+        for key, want in contract.items():
+            assert str(with_.get(key)) == str(want), (
+                f"{job_name}'s Trivy step sets {key}={with_.get(key)!r}, "
+                f"expected {want!r}. All three buckets share one scan contract; "
+                "a bucket that quietly narrows it reports clean instead of "
+                "reporting less."
+            )
+
+
+@pytest.mark.parametrize("emptied", ["_GITLAB_APPLY_IMAGES", "GIT_SYNC_IMAGE"])
+def test_delivered_refs_refuses_a_half_empty_pin_table(tmp_path, emptied: str) -> None:
+    """⛔ The PER-SOURCE emptiness guard, pinned by counter-example.
+
+    `delivered_refs()`'s docstring names a specific historical bug: checking
+    `if not refs` AFTER unioning the two sources made the guard dead code,
+    because a union is non-empty as long as EITHER source survives — emptying
+    `_GITLAB_APPLY_IMAGES` still exited 0 and reported one clean ref. Nothing
+    tested that. Measured by review: reverting the function to exactly the
+    union-first form the docstring describes left the whole suite green,
+    because every other assertion here compares the function's OUTPUT against
+    the workflow matrix and so only sees a reduction, never a broken guard.
+
+    That redundancy is also exactly what expires: the docstring invites reuse
+    ("anything that needs these refs imports"), and a future importer gets none
+    of the matrix-equality protection — only this guard. So the guard needs its
+    own counter-example, one per source, which is the shape a union check can
+    never satisfy.
+    """
+    src = (ROOT / _DELIVERED_PIN_SOURCE).read_text(encoding="utf-8")
+    fake_root = tmp_path
+    target = fake_root.joinpath(*_DELIVERED_PIN_SOURCE.split("/"))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # Neutralise ONE source while leaving the other intact — the case a union
+    # check cannot see.
+    target.write_text(
+        src + f"\n\n{emptied} = " + ("{}" if emptied.endswith("IMAGES") else '""') + "\n",
+        encoding="utf-8",
+    )
+
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_extractor_halfempty", EXTRACTOR)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_extractor_halfempty"] = mod
+    spec.loader.exec_module(mod)
+
+    with pytest.raises(SystemExit) as excinfo:
+        mod.delivered_refs(fake_root)
+    assert emptied in str(excinfo.value), (
+        f"delivered_refs() exited but did not name {emptied} as the empty "
+        f"source: {excinfo.value}. The message is the whole diagnosis on a CI "
+        "run page; a guard that fires without naming which half went missing "
+        "sends the reader to the wrong file."
+    )
+
+    # Paired positive: the untouched table must still resolve, so this test
+    # cannot be satisfied by a `delivered_refs` that raises unconditionally.
+    assert len(mod.delivered_refs(ROOT)) == 4
+
+
+def test_the_report_job_waits_for_every_bucket() -> None:
+    """`report` must depend on all three scan jobs.
+
+    Measured: dropping `scan-delivered` from `needs:` left 39 tests passing.
+    The runtime effect is a false alarm rather than a silent miss — `report`
+    can start downloading `cve-frag-dl-*` before those jobs finish, so
+    `present < 4` and the run posts a "Scan degraded" banner plus a notifying
+    comment for images that scanned perfectly well. That still matters: this
+    bucket's whole design goal is to not train its reader to ignore it.
+    """
+    report = _nightly()["jobs"]["report"]
+    needs = report.get("needs") or []
+    needs = [needs] if isinstance(needs, str) else list(needs)
+    missing = sorted(set(_SCAN_TARGETS) - set(needs))
+    assert not missing, (
+        f"`report` does not declare needs on {missing} (needs: {needs}). Every "
+        "bucket whose fragments it downloads has to be a dependency, or it "
+        "aggregates a partial set and calls the difference a degraded scan."
+    )
+
+
+def test_the_three_buckets_cannot_collect_each_others_fragments() -> None:
+    """⛔ The disjoint-artifact-namespace claim, asserted instead of narrated.
+
+    The workflow comments state the `sb-`/`tp-`/`dl-` prefixes keep the report
+    job's three downloads from cross-matching. Nothing checked it. Measured:
+    widening the delivered download to `pattern: cve-frag-*` left 37 tests
+    green, and at runtime that bucket then collects all 26 fragments —
+    `missing = 4 - 26 = -22`, so no degradation is reported, and the
+    customer-delivered issue is filled with the repo's entire third-party CVE
+    backlog carrying remediation advice written for a different bucket ("we do
+    not deploy these"), which is exactly the advice-mixing the design forbids.
+
+    Graded as a prefix relation, not by comparing the literals: the property
+    that matters is that no bucket's pattern can match another bucket's
+    uploads.
+    """
+    wf = _nightly()
+    uploads, downloads = {}, {}
+    for job_name in _SCAN_TARGETS:
+        for step in (wf["jobs"][job_name].get("steps") or []):
+            if "upload-artifact" in str(step.get("uses", "")):
+                uploads[job_name] = str((step.get("with") or {}).get("name", ""))
+    for step in (wf["jobs"]["report"].get("steps") or []):
+        pat = str((step.get("with") or {}).get("pattern", ""))
+        if pat:
+            downloads[str((step.get("with") or {}).get("path", "")) or pat] = pat
+
+    assert len(uploads) == len(_SCAN_TARGETS), (
+        f"only found uploads for {sorted(uploads)} — expected one per bucket"
+    )
+    assert len(downloads) == len(_SCAN_TARGETS), (
+        f"expected {len(_SCAN_TARGETS)} download patterns in `report`, found "
+        f"{len(downloads)}: {downloads}"
+    )
+    for job_name, name in uploads.items():
+        prefix = f"cve-frag-{_FRAG_PREFIXES[job_name]}-"
+        assert name.startswith(prefix), (
+            f"{job_name} uploads {name!r}, which does not carry its own "
+            f"namespace {prefix!r} — another bucket's download can now claim it"
+        )
+    for key, pat in downloads.items():
+        assert pat.endswith("*"), f"download pattern {pat!r} is not a glob"
+        stem = pat[:-1]
+        matched = [j for j, n in uploads.items() if n.startswith(stem)]
+        assert len(matched) == 1, (
+            f"download pattern {pat!r} (for {key!r}) matches uploads from "
+            f"{matched or 'no bucket'} — each download must claim exactly one "
+            "bucket. A pattern that matches several silently merges their "
+            "findings and drives `missing` negative, which suppresses the "
+            "degraded-scan banner entirely."
+        )
+
+
+def test_bash_comment_stripping_follows_the_shell_rule() -> None:
+    """The `#` rule itself, including the cases a line-oriented filter gets wrong.
+
+    Kept separate from the callers because both `_shell_argvs` and
+    `_report_calls` depend on it — a regression here is silent in each of them.
+    """
+    cases = [
+        ("cmd --a  # note", "cmd --a  "),  # trailing: the whole point
+        ("# note", ""),  # line-initial: the case the old form handled
+        ("cmd 'a # b'", "cmd 'a # b'"),  # quoted: not a comment
+        ('cmd "a # b" --c', 'cmd "a # b" --c'),  # same, double quotes
+        ("cmd --tag v1#2", "cmd --tag v1#2"),  # mid-word: not a comment
+        (r"cmd \#literal", r"cmd \#literal"),  # escaped: not a comment
+        ("cmd", "cmd"),  # nothing to strip
+    ]
+    wrong = [
+        (src, got, want)
+        for src, want in cases
+        if (got := _strip_bash_comment(src)) != want
+    ]
+    assert not wrong, "\n".join(
+        f"{src!r} -> {got!r}, expected {want!r}" for src, got, want in wrong
     )
 
 
@@ -998,21 +1963,38 @@ def test_pr_build_triggers_on_every_matrix_entrys_dockerfile() -> None:
 
 
 def test_report_expected_counts_match_matrix_sizes() -> None:
-    """The report's hardcoded EXPECTED (7 / 15) must track the matrix sizes."""
+    """The report's hardcoded EXPECTED (7 / 15 / 4) must track the matrix sizes.
+
+    Load-bearing beyond bookkeeping: EXPECTED is what turns "an image did not
+    scan" into `missing = EXPECTED - present > 0`, and that is the ONLY thing
+    separating a degraded run from a silent clean one. An EXPECTED set one too
+    LOW hides exactly one unscanned image per night, permanently, with the
+    tracking issue reporting the shortfall away.
+    """
     n_selfbuilt = len(_matrix_include("scan"))
     n_thirdparty = len(_matrix_include("scan-thirdparty"))
+    n_delivered = len(_matrix_include("scan-delivered"))
     run = _aggregate_run()
 
     m_sb = re.search(r'frags-sb.*?\s(\d+)\s+"self-built component"', run, re.S)
     m_tp = re.search(r'frags-tp.*?\s(\d+)\s+"third-party upstream image"', run, re.S)
+    m_dl = re.search(r'frags-dl.*?\s(\d+)\s+"customer-delivered image"', run, re.S)
 
     assert m_sb is not None, "could not find the self-built file_cve_report.sh EXPECTED arg"
     assert m_tp is not None, "could not find the third-party file_cve_report.sh EXPECTED arg"
+    assert m_dl is not None, (
+        "could not find the customer-delivered file_cve_report.sh EXPECTED arg — "
+        "the frags-dl call site or its KIND string moved, and this guard would "
+        "otherwise stop checking that bucket entirely")
     assert int(m_sb.group(1)) == n_selfbuilt, (
         f"report self-built EXPECTED={m_sb.group(1)} != {n_selfbuilt} scan matrix entries"
     )
     assert int(m_tp.group(1)) == n_thirdparty, (
         f"report third-party EXPECTED={m_tp.group(1)} != {n_thirdparty} scan-thirdparty entries"
+    )
+    assert int(m_dl.group(1)) == n_delivered, (
+        f"report customer-delivered EXPECTED={m_dl.group(1)} != {n_delivered} "
+        f"scan-delivered entries"
     )
 
 
@@ -1175,9 +2157,74 @@ def _shell_const(name: str) -> int:
 def test_report_call_sites_are_parseable() -> None:
     """Guard the guard: if this stops matching, the checks below go vacuous."""
     calls = _report_calls()
-    assert len(calls) == 2, f"expected 2 file_cve_report.sh calls, parsed {len(calls)}"
+    assert len(calls) == 3, f"expected 3 file_cve_report.sh calls, parsed {len(calls)}"
     for args in calls:
         assert len(args) >= 5, f"call site missing positional args: {args}"
+    # One dir per bucket. Two calls pointed at the same fragment dir would double-
+    # count one bucket and report the other as entirely unscanned — and both
+    # tracking issues would still be filed, so nothing else here would notice.
+    dirs = [a[0] for a in calls]
+    assert len(set(dirs)) == len(dirs), f"two report calls share a fragments dir: {dirs}"
+    labels = [a[1] for a in calls]
+    assert len(set(labels)) == len(labels), (
+        f"two report calls share a label: {labels} — the label is the issue dedup "
+        "key, so two buckets sharing one would overwrite each other's issue nightly")
+
+
+def _failure_explainer_run() -> str:
+    """The `run:` of the report job's failure-explainer step."""
+    steps = _workflow()["jobs"]["report"]["steps"]
+    step = next(
+        (s for s in steps if "Explain" in (s.get("name") or "")), None)
+    assert step is not None, (
+        "the report job has no 'Explain a likely failure cause' step — it was "
+        "renamed or removed, and the guard below would pass over nothing")
+    return step["run"]
+
+
+def test_the_failure_explainer_names_every_report_label() -> None:
+    """The only diagnostic this job prints must name every label it can fail on.
+
+    `file_cve_report.sh` delivers the alert unlabelled and then exits 1 when its
+    label is unusable, so ANY ONE of the buckets can red this job on its own. The
+    explainer is the whole diagnosis a maintainer gets on the run page (the real
+    cause of the 33-night outage was four scrolls into a step log), and it listed
+    two labels while three call sites existed — pointing the reader at two labels
+    that are fine.
+
+    ⛔ DERIVED from the call sites, not a copy of the list. A fourth bucket makes
+    this red on the day it is added, which is the point: enumerating the labels
+    here would reproduce exactly the staleness it is guarding against.
+    """
+    labels = [args[1] for args in _report_calls()]
+    assert len(labels) >= 2, (
+        f"only {len(labels)} report call site(s) parsed ({labels}) — "
+        "_report_calls() stopped matching and this check would be vacuous")
+
+    # ⛔ Whole-token match, not `lbl in text`. Substring matching reports a label
+    # as present when only a LONGER label containing it was written: with the
+    # real names, `nightly-cve` is a prefix of `nightly-cve-thirdparty`, so a
+    # text naming just the long one would satisfy the short one for free.
+    # (Same shape as feedback_substring_match_hides_drift; found by review.)
+    #
+    # ⛔ And the boundary is derived FROM EACH LABEL, not from a `nightly-cve`
+    # prefix pattern. This test's whole claim is that it survives a fourth
+    # bucket; a prefix-anchored extractor would see a differently-named fourth
+    # label as absent no matter what the step says, producing a red whose advice
+    # ("add the label to the step") is already done — the failure mode that
+    # trains readers to ignore it. Lookarounds on `[\w-]` are what make
+    # `nightly-cve` distinct from `nightly-cve-thirdparty` without any literal.
+    text = _failure_explainer_run()
+    missing = sorted(lbl for lbl in set(labels) if not _names_label(text, lbl))
+    assert not missing, (
+        f"the failure-explainer step does not mention these tracking label(s): "
+        f"{missing}\n"
+        f"  it names: {text.strip()[:200]}…\n"
+        "Any one of them going missing reds this job, and this message is the "
+        "only diagnosis on the run page. Add the label(s) to the "
+        "'Explain a likely failure cause' step in "
+        ".github/workflows/nightly-image-scan.yaml."
+    )
 
 
 def test_comment_stripper_keeps_continuation_lines() -> None:
