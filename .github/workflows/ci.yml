@@ -124,7 +124,7 @@ jobs:
             #     install-promtool.sh against ci.yml/Dockerfile; a
             #     devcontainer-side-only bump must not skip the guard.
             #   - tools/portal/tests/** — the ONLY non-Python source this
-            #     job's tests read: test_portal_path_filter_coverage SCANS
+            #     job's tests read: test_ci_path_filter_coverage SCANS
             #     that directory to assert every out-of-tree file a portal
             #     Vitest reads is listed in the `portal` filter below. That
             #     guard is a pytest, so without this line a PR adding a
@@ -161,7 +161,7 @@ jobs:
               # the PR that caused it. The usual "no test reads
               # it, so nothing can break" reasoning does not apply — the file is
               # not an INPUT to the suite, it is the suite's ENVIRONMENT.
-              # Enforced by tests/ops/test_portal_path_filter_coverage.py
+              # Enforced by tests/ops/test_ci_path_filter_coverage.py
               # (gated-job step-input half), which asserts that every repo file
               # a path-gated job EXECUTES or INSTALLS FROM — an interpreter's
               # script argument, pip's `-c`/`-r` file, or a `./script` run in
@@ -187,7 +187,7 @@ jobs:
               # docs-only PR skips it, reporting `skipped`, which satisfies
               # branch protection. Same reasoning the `docs` filter below
               # already applies to the Go leg. Enforced by
-              # tests/ops/test_portal_path_filter_coverage.py.
+              # tests/ops/test_ci_path_filter_coverage.py.
               - "docs/**"
               - "flaky-tests.yaml"
               - "renovate.json"
@@ -203,7 +203,7 @@ jobs:
               # `python`, and skipped the half written to catch exactly that —
               # and a path-skipped required check reports `skipped`, which
               # SATISFIES branch protection. Every entry above is enforced by
-              # tests/ops/test_portal_path_filter_coverage.py.
+              # tests/ops/test_ci_path_filter_coverage.py.
               - "tools/portal/src/**"
               # ⛔ The file that DEFINES which files above are Vitests. The
               # coverage guard hard-codes `tools/portal/tests` as the tree it
@@ -246,9 +246,18 @@ jobs:
             # the portal advertises, so a doc regen that touches no portal
             # file must run this leg too.
             #
-            # INVARIANT (enforced by tests/ops/test_portal_path_filter_
-            # coverage.py, not by this comment): every out-of-tree file a
-            # portal Vitest reads must be listed here.
+            # INVARIANT (enforced by
+            # tests/ops/test_ci_path_filter_coverage.py, not by this
+            # comment): every out-of-tree file a portal Vitest reads must
+            # be listed here.
+            # ⛔ Keep that filename on ONE line. It used to wrap mid-token
+            # (the break fell inside the identifier, at an underscore), so a
+            # grep for the WHOLE name missed it: during the #1373 rename the
+            # reference survived here, pointing at a file that no longer
+            # existed. CodeRabbit caught it; the sweep had reported clean.
+            # ⚠️ Prose, not enforcement — this comment protects one filename
+            # at one place, and three more paths in these workflows are
+            # wrapped the same way TODAY. Tracked separately; see #1373.
             portal:
               - "tools/portal/**"
               - "docs/assets/dist/**"
