@@ -200,6 +200,7 @@ half-done: **do not read a green ``make dc-test`` as covering the GitHub leg.**
 from __future__ import annotations
 
 import ast
+import functools
 import itertools
 import json
 import os
@@ -987,6 +988,60 @@ def test_generated_precommit_hooks_can_actually_run(generated, ci, deploy) -> No
                 "pre-commit build the command and the /src mount."
             )
 
+        # ⛔ The two assertions above only rule out shapes that cannot LAUNCH.
+        # An earlier version of this test stopped there and called itself "can
+        # actually run", which was a name claiming more than the body did: two
+        # edits that leave the hook launchable and failing on every commit both
+        # measured 318 passed. Everything below derives the argv pre-commit will
+        # really exec and holds it to the same CLI contract the workflow
+        # artifacts are held to.
+        argv = shlex.split(entry)
+        sub = next(
+            (a for a in argv[1:] if not a.startswith("-")), None,
+        ) if hook.get("language") == "docker_image" else None
+        if sub is None:
+            continue
+
+        # (a) `language: docker_image` mounts the working tree at /src and sets
+        # `--workdir /src` (pre_commit/languages/docker.py). /src is therefore
+        # the ONLY path inside that container that has anything to do with the
+        # user's repo, so an absolute path anywhere else in the argv cannot
+        # resolve. Measured: `--config-dir /data/conf.d` (the mount point the
+        # hand-rolled `docker run` version used) left 318 passed, and exits 2
+        # with "config-dir not found" on a real commit.
+        for token in argv:
+            if token.startswith("/"):
+                assert token == _PRECOMMIT_MOUNT or token.startswith(
+                    _PRECOMMIT_MOUNT + "/"), (
+                    f"hook {hook.get('id')!r} passes the absolute path "
+                    f"{token!r}, which is outside {_PRECOMMIT_MOUNT!r}. "
+                    "`language: docker_image` mounts the repo there and "
+                    "nowhere else, so this path does not exist in the "
+                    "container."
+                )
+
+        # (b) pre-commit appends the matched filenames to argv unless
+        # `pass_filenames: false` — and ⛔ its DEFAULT is true, so omitting the
+        # key is the dangerous spelling, not the safe one. Whether that is
+        # survivable is not a matter of taste: it depends on whether the target
+        # subcommand declares a positional, which argparse knows and we derive.
+        # Measured: flipping it to true left 318 passed, and exits 2 with
+        # "unrecognized arguments: <path>" on a real commit.
+        positionals = _da_tools_positionals()
+        assert sub in positionals, (
+            f"hook {hook.get('id')!r} invokes {sub!r}, which is not a da-tools "
+            "subcommand — check the entrypoint dispatch table."
+        )
+        if hook.get("pass_filenames", True):
+            assert positionals[sub], (
+                f"hook {hook.get('id')!r} lets pre-commit append filenames "
+                f"(pass_filenames defaults to true), but `{sub}` declares no "
+                f"positional argument, so argparse rejects them: "
+                f"`unrecognized arguments: <file>`. Either set "
+                "`pass_filenames: false` or invoke a subcommand that takes "
+                "paths."
+            )
+
 
 def test_the_unsupported_if_corpus_is_not_empty() -> None:
     """⛔ Anti-vacuity floor for the corpus that guards the guard.
@@ -1233,6 +1288,61 @@ def _da_tools_subcommands() -> dict[str, set[str]]:
         if sub in promq:
             flags.add("--prometheus")
         out[sub] = flags
+    assert out, "no da-tools scripts resolved — the glob stopped matching"
+    return out
+
+
+# Where `language: docker_image` puts the working tree. Not a style choice we
+# get to make: pre_commit/languages/docker.py builds the `docker run` itself
+# with `-v <cwd>:/src:rw,Z --workdir /src`, so this is the container-side name
+# of the customer's repo and the only path in there that resolves to it.
+_PRECOMMIT_MOUNT = "/src"
+
+
+@functools.lru_cache(maxsize=1)
+def _da_tools_positionals() -> dict[str, tuple[str, ...]]:
+    """subcommand -> the POSITIONAL argument names its script declares.
+
+    Cached: this parses the entrypoint plus ~50 tool scripts, and it is called
+    from inside a per-hook loop that is itself parametrized nine ways. Without
+    the cache the file's runtime went from 46s to 133s.
+
+    Same derivation as ``_da_tools_subcommands`` (entrypoint dispatch table →
+    each script's ``add_argument`` calls), reading the other half of the call:
+    an ``add_argument`` whose first literal does NOT start with ``-`` declares a
+    positional. Needed because "does this command accept a bare filename?" is a
+    real question the pre-commit artifact's ``pass_filenames`` setting asks, and
+    the answer has to come from argparse rather than from a hand-kept list.
+    """
+    tree = ast.parse(_ENTRYPOINT.read_text(encoding="utf-8"))
+    dispatch: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        pairs = {
+            k.value: v.value
+            for k, v in zip(node.keys, node.values)
+            if isinstance(k, ast.Constant) and isinstance(v, ast.Constant)
+            and isinstance(k.value, str) and isinstance(v.value, str)
+        }
+        if pairs and all(str(v).endswith(".py") for v in pairs.values()):
+            dispatch.update(pairs)
+
+    out: dict[str, tuple[str, ...]] = {}
+    for sub, script in dispatch.items():
+        hits = list(_REPO_ROOT.glob(f"scripts/tools/**/{script}"))
+        if not hits:
+            continue
+        names: list[str] = []
+        for n in ast.walk(ast.parse(hits[0].read_text(encoding="utf-8"))):
+            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr == "add_argument" and n.args):
+                first = n.args[0]
+                if (isinstance(first, ast.Constant)
+                        and isinstance(first.value, str)
+                        and not first.value.startswith("-")):
+                    names.append(first.value)
+        out[sub] = tuple(names)
     assert out, "no da-tools scripts resolved — the glob stopped matching"
     return out
 
@@ -2381,6 +2491,233 @@ def test_dry_run_preview_matches_what_run_init_writes(
         f"  previewed but never created: {sorted(preview - actual)}\n"
         f"  created but never previewed: {sorted(actual - preview)}\n"
         "Fix _preview_files to follow run_init — never the reverse."
+    )
+
+
+def _normalized_commands(text: str) -> list[str]:
+    """Shell text → one normalized command per entry (continuations folded)."""
+    folded = re.sub(r"\\\s*\n\s*", " ", text)
+    out = []
+    for line in _strip_shell_comments(folded).splitlines():
+        collapsed = " ".join(line.split())
+        if collapsed:
+            out.append(collapsed)
+    return out
+
+
+# ⛔ EXACT pin, and unlike most pins in this file it is NOT derived from a second
+# source — the apply stage's body has no independent oracle to check it against.
+# That makes listing the commands the correct trade-off here rather than a lapse
+# into enumeration: the property being protected is "nobody edits the production
+# apply path without saying so", and equality is what makes a deletion speak.
+#
+# Both legs are pinned because the guard that was missing here was missing on
+# BOTH: measured, deleting `kubectl apply --dry-run=server` (and its echo) from
+# the GitHub kustomize branch left 318 passed, and the GitLab branch carries the
+# same dry-run with no assertion either. The old per-branch tests used
+# `'kustomize build' in yaml_str`, so a whole branch vanishing turned red while
+# anything INSIDE a branch could be rewritten freely.
+_EXPECTED_GH_APPLY: dict[str, list[str]] = {
+    "kustomize": [
+        "kustomize build kustomize/overlays/prod > /tmp/manifests.yaml",
+        "kubectl apply --dry-run=server -f /tmp/manifests.yaml",
+        'echo "--- Dry-run passed. Applying... ---"',
+        "kubectl apply -f /tmp/manifests.yaml",
+        "kubectl rollout restart deployment/prometheus "
+        "-n ${{ env.MONITORING_NS }}",
+    ],
+    "helm": [
+        "helm upgrade --install threshold-exporter "
+        "oci://ghcr.io/vencil/charts/threshold-exporter "
+        "-f environments/prod/values.yaml -n ${{ env.MONITORING_NS }} "
+        "--wait --timeout 5m",
+    ],
+    "argocd": [
+        "argocd app sync dynamic-alerting --prune --timeout 300",
+    ],
+}
+
+_EXPECTED_GL_APPLY: dict[str, list[str]] = {
+    "kustomize": [
+        "kustomize build kustomize/overlays/prod > /tmp/manifests.yaml",
+        "kubectl apply --dry-run=server -f /tmp/manifests.yaml",
+        "kubectl apply -f /tmp/manifests.yaml",
+        "kubectl rollout restart deployment/prometheus -n $MONITORING_NS",
+    ],
+    "helm": [
+        "helm upgrade --install threshold-exporter "
+        "oci://ghcr.io/vencil/charts/threshold-exporter "
+        "-f environments/prod/values.yaml -n $MONITORING_NS "
+        "--wait --timeout 5m",
+    ],
+    "argocd": [
+        "argocd app sync dynamic-alerting --prune --timeout 300",
+    ],
+}
+
+
+def test_the_apply_pins_cover_every_deploy_method() -> None:
+    """⛔ Anti-vacuity floor, derived from the parser rather than from the pins.
+
+    Both tables are consumed by `[deploy]` lookup, so a deploy method that is
+    missing from them would simply never be graded — the silent-retirement
+    shape this file has been bitten by before (`_EXPECTED_GL_JOB_RULES`,
+    `_NEEDS`). Keying the floor off `DEPLOY_CHOICES` means adding a deploy
+    method to the CLI forces a decision about its apply body.
+    """
+    for label, table in (("GitHub", _EXPECTED_GH_APPLY),
+                         ("GitLab", _EXPECTED_GL_APPLY)):
+        assert set(table) == set(DEPLOY_CHOICES), (
+            f"the {label} apply pin covers {sorted(table)} but the CLI offers "
+            f"{sorted(DEPLOY_CHOICES)} — an unpinned deploy method ships its "
+            "production apply path with nothing checking it."
+        )
+        for deploy, commands in table.items():
+            assert commands, (
+                f"the {label} apply pin for {deploy!r} is empty, which grades "
+                "every possible body as correct."
+            )
+
+
+@pytest.mark.parametrize("ci,deploy", MATRIX)
+def test_apply_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> None:
+    """The production apply path is the highest-consequence text we generate.
+
+    It runs `kubectl apply` / `helm upgrade` / `argocd app sync --prune` against
+    a cluster under `environment: production`. Everything else this file asserts
+    is about whether that stage RUNS; this is the only thing asserting WHAT it
+    runs.
+    """
+    root = generated[(ci, deploy)]
+
+    if ci in ("github", "both"):
+        wf = yaml.safe_load((root / _GH_WORKFLOW).read_text(encoding="utf-8"))
+        got: list[str] = []
+        for step in wf["jobs"]["apply"]["steps"]:
+            if "run" in step:
+                got.extend(_normalized_commands(str(step["run"])))
+        assert got == _EXPECTED_GH_APPLY[deploy], (
+            f"the GitHub apply body for --deploy {deploy} changed.\n"
+            f"  expected: {_EXPECTED_GH_APPLY[deploy]}\n"
+            f"  got:      {got}\n"
+            "This is a production cluster write. If the change is intended, "
+            "update the pin in the same commit and say why in the message — do "
+            "not loosen the comparison."
+        )
+
+    if ci in ("gitlab", "both"):
+        pipe = yaml.safe_load((root / _GL_PIPELINE).read_text(encoding="utf-8"))
+        apply_jobs = [
+            body for name, body in pipe.items()
+            if isinstance(body, dict) and body.get("stage") == "apply"
+        ]
+        assert len(apply_jobs) == 1, (
+            f"expected exactly one GitLab job in the apply stage, found "
+            f"{len(apply_jobs)}"
+        )
+        got_gl: list[str] = []
+        for line in apply_jobs[0].get("script", []):
+            got_gl.extend(_normalized_commands(str(line)))
+        assert got_gl == _EXPECTED_GL_APPLY[deploy], (
+            f"the GitLab apply body for --deploy {deploy} changed.\n"
+            f"  expected: {_EXPECTED_GL_APPLY[deploy]}\n"
+            f"  got:      {got_gl}\n"
+            "Same reasoning as the GitHub leg above."
+        )
+
+
+# ⛔ Deliberately NOT the fixture's namespace, and not the CLI default. If this
+# test ran on `monitoring`, a generator that hard-coded the string instead of
+# threading the --namespace argument through would still satisfy it — the
+# assertion would be comparing the default to itself. A value that could only
+# have arrived by being passed in is what makes the check mean anything.
+_PROBE_NAMESPACE = "da-probe-ns"
+
+
+@pytest.mark.parametrize("ci,deploy", MATRIX)
+def test_declared_variable_values_match_their_source(tmp_path, ci, deploy) -> None:
+    """Every knob the pipeline DECLARES must carry the value its source says.
+
+    ⛔ An earlier round wired these knobs up so that a declared variable is
+    always read by something (the #1361 dead-knob class). That check is about
+    the NAME. Nothing looked at the VALUE, and a wrong value fails in the
+    quietest possible direction: measured, changing `CONFIG_DIR: conf.d` to
+    `configs` on BOTH legs left 318 passed while `run_init` still wrote only
+    `conf.d/`. The GitHub leg mounts
+    ``-v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro`` and
+    docker CREATES a missing bind source as an empty directory, so Stage 1 then
+    validates nothing and says so approvingly — measured directly:
+    `validate-config --config-dir <empty dir>` exits 0 with `Result: PASS`,
+    while a genuinely absent directory exits 2. The customer's only gate goes
+    green having read zero files.
+
+    Both expectations are DERIVED, not transcribed: the config directory comes
+    from walking what `run_init` actually wrote, and the namespace from the
+    config that fixture was built with.
+    """
+    root = tmp_path / "out"
+    ip.run_init(
+        {
+            "ci": ci,
+            "deploy": deploy,
+            "rule_packs": ["mariadb"],
+            "tenants": ["db-a"],
+            "namespace": _PROBE_NAMESPACE,
+            "da_tools_image": "ghcr.io/vencil/da-tools:latest",
+        },
+        str(root),
+    )
+    written = _files_written(root)
+
+    holders = {p.rsplit("/", 1)[0] for p in written if p.endswith("_defaults.yaml")}
+    assert len(holders) == 1, (
+        f"expected exactly one directory to hold _defaults.yaml, got {holders}"
+    )
+    config_dir = holders.pop()
+
+    checked = 0
+    if ci in ("github", "both"):
+        wf = yaml.safe_load((root / _GH_WORKFLOW).read_text(encoding="utf-8"))
+        env = wf.get("env") or {}
+        assert env.get("CONFIG_DIR") == config_dir, (
+            f"GitHub leg declares CONFIG_DIR={env.get('CONFIG_DIR')!r} but "
+            f"`da-tools init` wrote the tenant config into {config_dir!r}. The "
+            "workflow mounts that path into the validator; a wrong value is a "
+            "green Stage 1 over an empty directory, not a red one."
+        )
+        checked += 1
+        if "MONITORING_NS" in env:
+            assert env["MONITORING_NS"] == _PROBE_NAMESPACE, (
+                f"GitHub leg declares MONITORING_NS={env['MONITORING_NS']!r}, "
+                f"expected the namespace init was given "
+                f"({_PROBE_NAMESPACE!r})."
+            )
+            checked += 1
+
+    if ci in ("gitlab", "both"):
+        pipe = yaml.safe_load((root / _GL_PIPELINE).read_text(encoding="utf-8"))
+        variables = pipe.get("variables") or {}
+        assert variables.get("CONFIG_DIR") == config_dir, (
+            f"GitLab leg declares CONFIG_DIR={variables.get('CONFIG_DIR')!r} "
+            f"but `da-tools init` wrote the tenant config into {config_dir!r}."
+        )
+        checked += 1
+        if "MONITORING_NS" in variables:
+            assert variables["MONITORING_NS"] == _PROBE_NAMESPACE, (
+                f"GitLab leg declares "
+                f"MONITORING_NS={variables['MONITORING_NS']!r}, expected "
+                f"{_PROBE_NAMESPACE!r}."
+            )
+            checked += 1
+
+    # Anti-vacuity floor, and deliberately NOT derived from the artifact: if the
+    # generators stop emitting an `env:`/`variables:` block at all, every
+    # assertion above becomes unreachable and this test would pass by checking
+    # nothing. One declared value per emitted leg is the minimum.
+    assert checked >= 1, (
+        f"--ci {ci} --deploy {deploy} produced no declared variable to check — "
+        "either the generators dropped their env/variables block or this test "
+        "stopped finding it."
     )
 
 
