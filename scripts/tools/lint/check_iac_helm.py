@@ -280,11 +280,11 @@ def kube_linter_lint(rendered_yaml: str) -> list[dict] | None:
         return None
     with tempfile.TemporaryDirectory() as td:
         manifest = Path(td) / "manifest.yaml"
-        manifest.write_text(rendered_yaml, encoding="utf-8")
+        manifest.write_text(rendered_yaml, encoding="utf-8", newline="\n")
         cfg_local = Path(td) / ".kube-linter.yaml"
         cfg_src = REPO_ROOT / ".kube-linter.yaml"
         if cfg_src.exists():
-            cfg_local.write_text(cfg_src.read_text(encoding="utf-8"), encoding="utf-8")
+            cfg_local.write_text(cfg_src.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
         if mode == "binary":
             cmd = [binary, "lint", "--format", "json"]
             if cfg_local.exists():

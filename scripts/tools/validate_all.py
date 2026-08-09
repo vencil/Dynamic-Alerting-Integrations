@@ -757,6 +757,7 @@ def main():
             BASELINE_FILE.write_text(
                 json_mod.dumps(out, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
+                newline="\n",
             )
             os.chmod(BASELINE_FILE,
                      stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
@@ -790,7 +791,10 @@ def main():
         import stat
         from datetime import datetime, timezone
         write_header = not PROFILE_CSV.exists()
-        with open(PROFILE_CSV, "a", encoding="utf-8") as csvf:
+        # newline="\n" (not the csv module's newline=""): these rows are
+        # written as plain strings with an explicit "\n", so there is no
+        # csv.writer adding its own \r\n terminator to preserve.
+        with open(PROFILE_CSV, "a", encoding="utf-8", newline="\n") as csvf:
             if write_header:
                 all_names = [n for n, _, _, _ in TOOLS]
                 csvf.write("timestamp,mode,wall_time," +

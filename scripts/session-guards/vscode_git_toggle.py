@@ -74,7 +74,7 @@ def load_settings(settings_path: Path) -> dict:
 def save_settings(settings_path: Path, data: dict) -> None:
     """寫入 settings.json，確保目錄存在且格式美觀。"""
     settings_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(settings_path, "w", encoding="utf-8") as f:
+    with open(settings_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
         f.write("\n")
 

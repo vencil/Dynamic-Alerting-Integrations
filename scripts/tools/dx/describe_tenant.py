@@ -397,7 +397,7 @@ def main() -> None:
             result[tid] = info
         out = _output(result)
         if args.output:
-            Path(args.output).write_text(out, encoding="utf-8")
+            Path(args.output).write_text(out, encoding="utf-8", newline="\n")
             print(f"✅ Written {len(result)} tenants to {args.output}", file=sys.stderr)
         else:
             print(out)

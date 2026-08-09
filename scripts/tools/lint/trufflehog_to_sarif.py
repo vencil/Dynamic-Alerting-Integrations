@@ -224,7 +224,7 @@ def main() -> int:
     try:
         Path(args.output).write_text(
             json.dumps(sarif, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
+            encoding="utf-8", newline="\n",
         )
     except OSError as e:
         print(f"❌ could not write SARIF to {args.output}: {e}", file=sys.stderr)

@@ -537,7 +537,7 @@ def main() -> int:
     if not args.summary_only:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n"
         )
         print(f"\nWrote: {args.output.relative_to(REPO)}")
 

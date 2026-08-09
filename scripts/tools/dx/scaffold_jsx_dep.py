@@ -572,8 +572,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return EXIT_OK
 
     paths.dep_file.parent.mkdir(parents=True, exist_ok=True)
-    paths.dep_file.write_text(new_file_content, encoding="utf-8")
-    paths.parent_orchestrator.write_text(orch_final, encoding="utf-8")
+    paths.dep_file.write_text(new_file_content, encoding="utf-8", newline="\n")
+    paths.parent_orchestrator.write_text(orch_final, encoding="utf-8", newline="\n")
     print(f"created: {rel_dep}")
     print(f"updated: {rel_orch}")
     print(f"  - dependencies[] += {paths.dep_relpath!r} (changed={deps_changed})")

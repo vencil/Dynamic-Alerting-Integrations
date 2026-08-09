@@ -146,7 +146,7 @@ def fix_links_in_file(filepath, dry_run=False, verbose=False):
     # Write if changed
     if content != original:
         if not dry_run:
-            with open(filepath, 'w', encoding='utf-8') as f:
+            with open(filepath, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(content)
             os.chmod(filepath, 0o644)
         return fixes

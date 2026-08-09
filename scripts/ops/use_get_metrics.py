@@ -48,7 +48,7 @@ def process_file(path: Path) -> int:
             n += 1
         out.append(new_line)
     if n:
-        path.write_text("\n".join(out), encoding="utf-8")
+        path.write_text("\n".join(out), encoding="utf-8", newline="\n")
     return n
 
 

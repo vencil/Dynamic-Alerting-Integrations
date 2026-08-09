@@ -16,12 +16,22 @@
 #   CI first-run red" version-drift class (#1158, originally surfaced by
 #   the schemathesis `filter_too_much` seed-flake). Freezing every CI
 #   Python dep here makes runs reproducible and turns each upgrade into
-#   an explicit, reviewable PR (Renovate opens them — see renovate.json).
+#   an explicit, reviewable PR.
+#
+#   ⛔ Renovate does NOT open those PRs, and does not watch this file.
+#   `renovate.json` is deliberately images-only (`enabledManagers:
+#   ["custom.regex"]`, #902 L3) and none of its customManagers match
+#   `requirements/**` — so no bot ever bumps a line here. Python / Go /
+#   npm lang-deps are Category C in docs/internal/dx-tooling-backlog.md,
+#   deferred until the CI matrix is stable; until that trigger fires,
+#   tests/ops/test_renovate_config.py pins the images-only scope.
 #
 # UPGRADE
-#   Do NOT hand-edit to chase latest. Let Renovate bump a line via PR, or
-#   bump deliberately and re-verify. A new unpinned `pip install` is
-#   blocked by the `check_unpinned_deps` gate (scripts/tools/lint/).
+#   Do NOT hand-edit to chase latest. Every bump here is hand-authored:
+#   change the line deliberately in its own PR and re-verify, since the
+#   new version lands in every CI lane that installs the package. A new
+#   unpinned `pip install` is blocked by the `check_unpinned_deps` gate
+#   (scripts/tools/lint/).
 #
 # Versions below = the latest at pin time = what unpinned installs were
 # already pulling, so pinning is behavior-preserving.

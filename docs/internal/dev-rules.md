@@ -168,7 +168,7 @@ lang: zh
 
 **規則**：禁止對掛載路徑（`/sessions/*/mnt/**`、`/workspaces/vibe-k8s-lab/**`、`C:\Users\<user>\vibe-k8s-lab\**`）用 `sed -i`——FUSE 下截斷缺 EOF newline 的檔案 + 可能注入 NUL bytes。**改檔決策樹**：單檔小改→Read+Edit；整檔重寫→Read+Write；批次跨檔→Python + `scripts/tools/dx/_atomic_write.py`；真的要 pipe →`git show HEAD:<f> | sed '...' | tr -d '\0' > <f>`（非 in-place，HEAD 讀避 FUSE stale）。
 
-✅ **四層防護**：(1) Prevent (harness) — `preflight_bash.py` PreToolUse hook 攔 `sed -i`+掛載路徑（audit-2026-04 §H1）；(2) Detect — `detect_sed_damage.py` (commit-time NUL+截斷)；(3) Repair — `fix_file_hygiene.py` (auto-補 EOF + 移 NUL)；(4) Shell — `vibe-sed-guard.sh` (docker exec / 人類 dev)。**Symlink 例外**：symlink proxy md 在 `.pre-commit-config.yaml` `exclude` 排除（詳 [windows-mcp-playbook §v2.7.1 LL](windows-mcp-playbook.md#v271-llend-of-file-fixer-會把-symlink-blob-弄壞)）。
+✅ **四層防護**：(1) Prevent (harness) — `preflight_bash.py` PreToolUse hook 攔 `sed -i`+掛載路徑（audit-2026-04 §H1）；(2) Detect — `detect_sed_damage.py` (commit-time NUL+截斷)；(3) Repair — `fix_file_hygiene.py` (auto-補 EOF + 移 NUL)；(4) Shell — `vibe-sed-guard.sh` (docker exec / 人類 dev)。**Symlink 例外**：symlink proxy md 在 `.pre-commit-config.yaml` `exclude` 排除（詳 [windows-mcp-playbook §v2.7.1 LL](windows-mcp-playbook.md#v271-llend-of-file-fixer-會把-symlink-blob-弄壞)）。**行尾同屬檔案衛生**：`scripts/`+`components/`+`helm/` 任何寫出文字的呼叫（含 `Path.open`/`os.fdopen`/`NamedTemporaryFile`/`TextIOWrapper`，不只裸 `open`/`write_text`）須明確傳**字串字面值** `newline=`（`os.linesep` 實測仍是 CRLF、不算表態），否則同一支工具在 Linux 出 LF、Windows 出 CRLF——CI-only gate，詳 [hook-vs-skill-coverage §4.5](hook-vs-skill-coverage.md)。
 
 ### 12. Branch + PR 流程：禁止直推 main
 

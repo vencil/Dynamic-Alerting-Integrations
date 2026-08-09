@@ -1019,23 +1019,147 @@ def test_report_expected_counts_match_matrix_sizes() -> None:
 # ── GitHub API contract guard (the 33-night alerting outage) ─────────────────
 
 
-def _report_calls() -> list[list[str]]:
-    """Every `file_cve_report.sh` invocation in the report job, as argv lists.
+REPORT_SH_NAME = "file_cve_report.sh"
+
+# A call site is the script in COMMAND position: at the start of a (folded) line
+# or right after a command separator, optionally through an interpreter, with any
+# path prefix. Anchoring on the literal `bash scripts/ops/file_cve_report.sh`
+# would miss `./scripts/…`, `sh scripts/…`, a doubled space, and a
+# `"$GITHUB_WORKSPACE/…"` prefix.
+#
+# Widening it buys quieter CI, NOT safety. Safety comes from the conservation
+# check below, which bounds matches ≤ mentions: an unrecognised spelling makes
+# the two counts disagree and fails LOUDLY, so no spelling can slip past in
+# silence regardless of how wide this pattern is.
+#
+# `=` is excluded from the path prefix on purpose: `REPORT=scripts/ops/<name>` is
+# an ASSIGNMENT, not a call, and letting it match produced an EMPTY chunk that
+# still counted toward the conservation check below — satisfying the count while
+# the real `bash "$REPORT" …` invocation went unscanned, which is precisely the
+# silent direction that check exists to invert. Excluded, an assignment matches
+# nothing and the mention/chunk counts disagree loudly.
+REPORT_SH_CALL_RE = re.compile(
+    r"(?:^|[;&|]\s*)\s*(?:\w*sh\s+)?[^\s;&|=]*" + re.escape(REPORT_SH_NAME) + r"[\"']?",
+    re.M,
+)
+
+# Steps where the script name legitimately appears WITHOUT being an invocation
+# (prose inside an argument). Keyed by the `where` string below, value = how many
+# such mentions. Empty today. Add an entry only after confirming the occurrence
+# really is prose — it is the escape hatch for the conservation check, so a
+# careless entry here is how that check goes quiet.
+SCRIPT_MENTION_ALLOWLIST: dict[str, int] = {}
+
+
+def _strip_shell_comments(run: str) -> str:
+    """Drop comment lines from a `run:` block, keeping continuation lines.
+
+    Comments must go before continuations are folded, or their prose (which does
+    contain backticks) lands in the token stream. But a leading `#` is only a
+    comment when the shell is not already mid-word: after a trailing `\\` the next
+    line CONTINUES the quoted argument, so its `#` is ordinary text and dropping
+    it deletes real argument content — before the detector is ever shown it.
+
+    Measured under bash: ``"prose one \\`` / ``# … live `id -u` \\`` / ``more"``
+    arrives at the script as `prose one # … live 197609 more`, while the naive
+    line-level filter yielded a chunk containing no backtick at all AND left the
+    conservation count balanced. The blind spot was in what gets SUBMITTED for
+    checking, not in the check — which is why this is a named function with its
+    own test rather than three lines inline.
+
+    Continuation-awareness alone was not enough: a `#` line inside a genuine
+    multi-line double-quoted argument (no trailing `\\`) was still dropped. So
+    track the double quote as well — a `run:` block is a whole script read from
+    byte 0, so that state is determined, exactly as in the sibling script scanner.
+    """
+    kept: list[str] = []
+    continued = False
+    in_dq = False
+    for ln in run.splitlines():
+        if not continued and not in_dq and ln.lstrip().startswith("#"):
+            continue  # a real comment — and a comment cannot itself continue
+        kept.append(ln)
+        continued = ln.rstrip().endswith("\\")
+        # Unescaped double quotes on this line flip the state for the next one.
+        j, quotes = 0, 0
+        while j < len(ln):
+            if ln[j] == "\\":
+                j += 2
+                continue
+            if ln[j] == '"':
+                quotes += 1
+            j += 1
+        if quotes % 2:
+            in_dq = not in_dq
+    return "\n".join(kept)
+
+
+def _report_call_chunks() -> list[str]:
+    """Every `file_cve_report.sh` invocation in ANY workflow, as RAW shell text.
 
     Reads the REAL call sites rather than a fixture: the outage was caused by
     the arguments the workflow actually passes, and a synthetic test would have
     stayed green through all 33 failures.
+
+    DISCOVERED across workflows, not hardcoded to nightly-image-scan's report job,
+    for the reason stated at the top of the file — a hardcoded lookup reads like a
+    repo-wide rule while covering exactly one step, which is how #1275 landed
+    outside the sibling guards.
+
+    ⚠️ Scope, since "discovery" invites a bigger reading than this earns: it is
+    every workflow, but only invocations of THIS script. The sibling issue-filer
+    `file_race_report.py` (nightly-race.yaml) is NOT covered, and cannot simply be
+    folded in — it legitimately passes `--run-url "${GITHUB_SERVER_URL}/…"`, so a
+    shared rule would need a per-argument policy on which arguments may expand,
+    not one blanket "no `$` anywhere". A new issue-filing step calling a THIRD
+    script is likewise uncovered until someone widens this.
+
+    Kept separate from `_report_calls()` because quoting survives here. Anything
+    reasoning about how bash will EXPAND an argument has to read this — see
+    `_unescaped_expansions` for why the parsed argv cannot answer that.
     """
-    run = _aggregate_run()
-    # Comment lines first — otherwise the prose ends up in the token stream once
-    # backslash-continuations are folded together.
-    body = "\n".join(ln for ln in run.splitlines() if not ln.lstrip().startswith("#"))
-    flat = re.sub(r"\\\n\s*", " ", body)
-    calls = []
-    for chunk in flat.split("bash scripts/ops/file_cve_report.sh")[1:]:
-        chunk = chunk.split("|| rc=")[0].splitlines()[0]
-        calls.append(shlex.split(chunk))
-    return calls
+    return [c for rec in _report_call_scan() for c in rec["chunks"]]
+
+
+def _report_call_scan() -> list[dict]:
+    """Per-step scan: how often the script is NAMED vs how many calls parsed.
+
+    Both numbers are kept because their disagreement is the interesting event —
+    see `test_every_script_mention_is_an_accounted_call_site`.
+    """
+    scan: list[dict] = []
+    for path in sorted(WORKFLOWS_DIR.glob("*.y*ml")):
+        wf = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_name, job in (wf.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps") or []:
+                run = step.get("run")
+                if not isinstance(run, str) or REPORT_SH_NAME not in run:
+                    continue
+                flat = re.sub(r"\\\n\s*", " ", _strip_shell_comments(run))
+                scan.append({
+                    "where": f"{path.name}::{job_name}::{step.get('name') or '?'}",
+                    "mentions": flat.count(REPORT_SH_NAME),
+                    "chunks": [
+                        chunk.split("|| rc=")[0].splitlines()[0]
+                        for chunk in REPORT_SH_CALL_RE.split(flat)[1:]
+                    ],
+                })
+    return scan
+
+
+def _report_calls() -> list[list[str]]:
+    """The same invocations, parsed into argv lists.
+
+    ⚠️ These strings are NOT what bash hands the script. `shlex` keeps a
+    backslash that bash consumes, so each escaped metacharacter reads ONE
+    character longer here than in the issue body (`\\``  vs `` ` ``). Fine for
+    "which component does this name" questions; wrong for any byte-level or
+    length assertion — use `_report_call_chunks()` and reason about the raw text
+    for those.
+    """
+    return [shlex.split(chunk) for chunk in _report_call_chunks()]
 
 
 def _report_sh() -> str:
@@ -1054,6 +1178,245 @@ def test_report_call_sites_are_parseable() -> None:
     assert len(calls) == 2, f"expected 2 file_cve_report.sh calls, parsed {len(calls)}"
     for args in calls:
         assert len(args) >= 5, f"call site missing positional args: {args}"
+
+
+def test_comment_stripper_keeps_continuation_lines() -> None:
+    """Pin `_strip_shell_comments` on synthetic input, not on today's workflow.
+
+    The real `run:` block happens to contain no `#`-leading continuation, so
+    reverting this helper to a plain `startswith("#")` filter changes nothing
+    about the current file — measured: that mutation leaves the whole suite
+    GREEN. A guard whose logic is only exercised by data that does not exercise
+    it is not guarded at all, so the discriminating cases live here.
+    """
+    # A `#` line that follows a continuation is argument text, not a comment.
+    continued = 'bash x.sh "prose one \\\n# live -> `id -u` \\\nprose two"\n'
+    assert "`id -u`" in _strip_shell_comments(continued), (
+        "a continuation line was dropped as if it were a comment — its content, "
+        "including any live substitution, becomes invisible to every guard"
+    )
+
+    # A genuine comment still goes, otherwise its prose (which carries backticks
+    # in this very workflow) would be scanned as if it were an argument.
+    plain = '# a comment mentioning `tests/foo.py`\nbash x.sh "arg"\n'
+    assert "`tests/foo.py`" not in _strip_shell_comments(plain)
+
+    # A comment cannot itself continue: the line after one is a fresh command,
+    # so a `#` there is a comment again.
+    after = '# comment ending in a backslash \\\n# second comment `id`\nbash x.sh "a"\n'
+    assert "`id`" not in _strip_shell_comments(after)
+
+    # ...and a `#` inside a genuine MULTI-LINE quoted argument — no trailing
+    # backslash anywhere — is argument text too. Continuation-tracking alone
+    # missed this one; it needs the quote state.
+    multiline = 'bash x.sh "line one\n# live -> `id -u`\nline three"\n'
+    assert "`id -u`" in _strip_shell_comments(multiline), (
+        "a `#` line inside an open double-quoted argument was dropped as a comment"
+    )
+
+
+def test_call_site_regex_ignores_a_plain_assignment() -> None:
+    """`REPORT=scripts/ops/<name>` is not an invocation and must not count as one.
+
+    It used to match, yielding an EMPTY chunk that still counted toward the
+    conservation check — so the mention/chunk totals agreed while the real
+    `bash "$REPORT" … "prose"` invocation was never scanned. That is exactly the
+    silent direction the conservation check exists to invert, reintroduced by the
+    matcher itself.
+    """
+    assign = "          REPORT=scripts/ops/file_cve_report.sh"
+    assert len(REPORT_SH_CALL_RE.split(assign)) == 1, (
+        "an assignment matched as a call site; it contributes an empty chunk that "
+        "silently balances the conservation count"
+    )
+    # The real thing still matches, so this is not satisfied by matching nothing.
+    call = '          bash scripts/ops/file_cve_report.sh a b "c" 1 "d" "e"'
+    assert len(REPORT_SH_CALL_RE.split(call)) == 2
+
+
+def test_every_script_mention_is_an_accounted_call_site() -> None:
+    """Every occurrence of the script name must be recognised, or fail loudly.
+
+    Recognising shell command position is UNBOUNDED. `if …; then bash …`,
+    `for …; do bash …`, `( bash … )`, `{ bash …; }`, `env FOO=1 bash …`,
+    `timeout 60 bash …`, `bash -x …` are all ordinary and all defeat a
+    position-anchored pattern — measured, all seven slip past `REPORT_SH_CALL_RE`.
+    Enumerating spellings the pattern already matches proves nothing: it is the
+    pattern written a second time, and it passes precisely because the cases were
+    chosen to fit it.
+
+    So stop trying to recognise every position and require CONSERVATION instead:
+    every non-comment mention of the script in a scanned `run:` must have produced
+    a call-site chunk. That inverts the failure direction, which is the whole
+    point — an unrecognised spelling now fails HERE instead of silently
+    contributing nothing while `test_report_call_sites_are_parseable`'s count
+    stays satisfied by the call sites that did match.
+    """
+    scan = _report_call_scan()
+    assert scan, (
+        f"no workflow step mentions {REPORT_SH_NAME} — discovery is dead and every "
+        "guard built on it is vacuous"
+    )
+    for rec in scan:
+        expected = len(rec["chunks"]) + SCRIPT_MENTION_ALLOWLIST.get(rec["where"], 0)
+        assert rec["mentions"] == expected, (
+            f"{rec['where']}: the script is named {rec['mentions']}x but only "
+            f"{len(rec['chunks'])} call site(s) were recognised.\n"
+            "An invocation this module cannot parse is INVISIBLE to every guard "
+            "below — its arguments are never checked for shell expansion. Either "
+            "put the invocation in a position REPORT_SH_CALL_RE matches (simplest: "
+            "on its own line), widen the pattern, or — if this really is prose that "
+            "merely names the script — add it to SCRIPT_MENTION_ALLOWLIST."
+        )
+
+
+def _unescaped_expansions(text: str) -> list[tuple[str, int]]:
+    """Offsets in `text` where bash would REWRITE the word.
+
+    Scope, stated precisely because the obvious phrasing overclaims: inside a
+    DOUBLE-QUOTED word bash treats exactly three characters specially — `` ` ``,
+    `$`, and `\\` — so for such words the complete set of rewrite triggers is the
+    first two, with the third as their escape. This function is that rule, not a
+    list of spellings that have burned us.
+
+    It does NOT cover an UNQUOTED word, where globbing, brace and tilde expansion
+    also rewrite (`*.yaml`, `{a,b}`, `frags-[01]`, `~/x` all pass through here
+    unflagged — measured). Today every argument carrying prose is double-quoted
+    and the unquoted ones are literals (`frags-sb`, `nightly-cve`, `7`), so the
+    gap is not live; it is recorded because the guard reads as universal and is
+    not. Quoting-state tracking is what would close it, and that is exactly the
+    thing the paragraph below explains this function must not attempt.
+
+    Flagging `` ` `` and `$(` alone would be a partial enumeration even within the
+    double-quoted scope, and it left both `$VAR` (silently substitutes — and the
+    filing step has `GH_TOKEN` in its env, on a PUBLIC repo) and `"$PROSE"`
+    (hoisting the argument into a shell variable, the obvious readability
+    refactor of a 1.9 KB line) invisible to this guard.
+
+    Parity-counting the escape is what the shell itself does, and it is why a
+    lookbehind (`(?<!\\\\)`) is wrong: in `C:\\\\$(cmd)` the backslash is itself
+    escaped, so the substitution IS live and a lookbehind reads it as safe.
+
+    Deliberately NOT quote-state aware, and the asymmetry matters. Tracking
+    single quotes would let it accept a genuinely-literal `` ` `` inside '...',
+    but this prose is full of apostrophes ("Renovate's last weekly run",
+    "mariadb's 15 findings"). A naive tracker reads the first one as an opening
+    quote and then treats the rest of the argument as single-quoted — i.e. it
+    stops reporting, silently, which is the exact failure mode this guard
+    exists to end. Over-reporting a single-quoted backtick fails LOUD and costs
+    one escape; under-reporting ships another broken alert.
+    """
+    hits: list[tuple[str, int]] = []
+    i = 0
+    while i < len(text):
+        if text[i] == "\\":
+            i += 2  # escaped — whatever follows is literal to bash
+            continue
+        if text[i] in "`$":
+            hits.append((text[i], i))
+        i += 1
+    return hits
+
+
+def test_report_args_contain_no_shell_expansion() -> None:
+    """No argument to `file_cve_report.sh` may be silently rewritten by bash.
+
+    The self-built remediation prose quotes the exact command a reader is being
+    told about (``go get google.golang.org/grpc@...``). Written with a bare
+    backtick pair inside the double-quoted argument, bash does not render it —
+    it RUNS it, on the runner, and substitutes the (empty) stdout. The reader
+    then gets "forcing a local  DOES compile": the one command the sentence
+    exists to name, deleted.
+
+    Nothing reports it. A command substitution that fails inside a word does not
+    set the enclosing simple command's status, so `set -e` does not abort and
+    `|| rc=1` never fires — the job stays GREEN while the alert ships with a
+    hole. That is the same shape as the 33-night outage above: the alerting path
+    degraded silently, and only the content was wrong instead of missing.
+
+    Scanned on the RAW call text, not `_report_calls()`: shlex.split resolves
+    quoting away, so on the parsed argv an escaped and an unescaped backtick are
+    the same string and this guard would be structurally blind to its own bug.
+
+    Fix by escaping (``\\`` / ``\\$``) — that keeps the rendered issue body
+    byte-identical. If a call site ever genuinely WANTS an expansion, teach this
+    guard which argument may expand; that is a decision to make deliberately
+    here, not a default to inherit.
+    """
+    chunks = _report_call_chunks()
+    assert len(chunks) >= 2, (
+        f"expected at least the 2 known file_cve_report.sh call sites, found "
+        f"{len(chunks)} — the extraction drifted and this guard would pass vacuously."
+    )
+    for chunk, args in zip(chunks, _report_calls()):
+        assert len(args) >= 6, (
+            f"call site parsed to {len(args)} args, so the remediation argument "
+            f"was not captured and nothing below is actually being checked: {args}"
+        )
+        hits = _unescaped_expansions(chunk)
+        assert not hits, (
+            "unescaped shell expansion in a file_cve_report.sh argument:\n"
+            + "\n".join(
+                f"  {kind!r} at offset {off}: ...{chunk[max(0, off - 60):off + 60]}..."
+                for kind, off in hits
+            )
+            + "\nbash rewrites this before the script ever sees it, and the result "
+            "goes verbatim into a PUBLIC tracking-issue body: `` ` ``/`$(` EXECUTE "
+            "on the runner and substitute their stdout (deleting the text they "
+            "replace), `$VAR` substitutes the value (`GH_TOKEN` is in this step's "
+            "env). The run stays green either way — a failed expansion inside a "
+            "word does not trip `set -e`, so `|| rc=1` never fires.\n"
+            "In a DOUBLE-quoted argument, escape it as \\` or \\$ — the rendered "
+            "text stays byte-identical. In a SINGLE-quoted one the text is already "
+            "literal and this is a known over-report (see `_unescaped_expansions`); "
+            "do NOT add backslashes there, they would land in the issue body — "
+            "switch to double quotes and escape, or teach the guard. And if you "
+            "moved the prose into a shell variable, the guard can no longer read "
+            "the literal it must check — keep the argument inline."
+        )
+
+
+def test_expansion_detector_is_not_vacuous() -> None:
+    """The guard above must still be able to see the bugs it was written for.
+
+    Asserting only "the real call sites are clean" passes just as happily when
+    the detector has been broken as when the workflow is correct. So splice each
+    rewriting spelling back into the REAL chunk and require it to be caught, and
+    require the escaped spellings to be left alone — a detector that flagged both
+    would push authors toward deleting the prose instead of escaping it.
+
+    Injected as a trailing argument rather than by substituting known content, so
+    the test keeps biting after the prose is reworded.
+    """
+    chunk = _report_call_chunks()[0]
+    assert not _unescaped_expansions(chunk), "precondition: real chunk is clean"
+
+    must_catch = [
+        "`go get google.golang.org/grpc@v1.82.1`",  # the original bug
+        "$(whoami)",                                 # the modern spelling of it
+        "$RUN_URL",                                  # bare parameter expansion
+        "${GH_TOKEN}",                               # braced — leaks into a public issue
+        "$PROSE",                                    # the argument hoisted into a variable
+        # Escaped BACKSLASH before a live metachar: bash consumes `\\` as one
+        # literal backslash and the substitution still runs. A lookbehind-based
+        # detector reads this as safe; parity-counting does not.
+        r"C:\\$(echo RAN)",
+    ]
+    for injected in must_catch:
+        assert _unescaped_expansions(f'{chunk} "{injected}"'), (
+            f"detector missed {injected!r} appended to the real call site — bash "
+            "would rewrite that argument before the script saw it"
+        )
+
+    # Only ESCAPED metacharacters discriminate here. `*.yaml` / `~/x` / `100%`
+    # inside double quotes contain neither `` ` `` nor `$`, so no implementation
+    # of this shape could flag them — asserting on those would be decoration that
+    # passes by construction rather than coverage.
+    for benign in (r"\`go get x\`", r"\$(y)", r"\$VAR", r"\${GH_TOKEN}"):
+        assert not _unescaped_expansions(f'{chunk} "{benign}"'), (
+            f"detector wrongly flagged {benign!r}, which bash passes through "
+            "literally — false positives push authors to delete prose"
+        )
 
 
 def test_remediation_text_names_only_real_components() -> None:

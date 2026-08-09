@@ -688,7 +688,7 @@ def main() -> None:
     # Write output
     if args.output:
         out_path = Path(args.output)
-        out_path.write_text(output, encoding="utf-8")
+        out_path.write_text(output, encoding="utf-8", newline="\n")
         print(f"Written to {args.output}", file=sys.stderr)
     else:
         print(output)

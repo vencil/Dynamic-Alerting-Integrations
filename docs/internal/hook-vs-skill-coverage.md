@@ -26,7 +26,7 @@ lang: zh
 
 死亡組合：以為某事是 hook-enforced（其實是 ⚙️ CI-only 或 👁️ reviewer-only）→ 不做 / 信任 hook 會擋 → **push 吃 CI 紅燈** / reviewer 退件。本表就是消除這種誤判。
 
-> **📊 Count reconciliation**：pre-commit hook 為 **98 auto + 14 manual + 3 pre-push = 115**（YAML parse 重數於 2026-07-23；先前快照 2026-06-12 為 69/14/3，其間逐案增量含 #1185 PR2 新增 `verify-diff-check`、#1195 `threshold-reachability-check` 等），與 CLAUDE.md 宣告一致。CLAUDE.md 的 hook 計數自 #1185 PR2 起由 CI `bump_docs --sync-counts --check` gate（本身即 ⚙️ CI-only，見 §4.5）。下文 §3/§4 的職能分組表為 v2.8.1 盤點時的快照、其後新 hook 僅逐案補列——**計數以 `.pre-commit-config.yaml` YAML parse 為準**，分組表供職能導覽不做計數依據。
+> **📊 Count reconciliation**：pre-commit hook 為 **102 auto + 13 manual + 3 pre-push = 118**（`bump_docs --sync-counts` 於 2026-08-08 由 YAML parse 重數；先前快照 2026-07-23 為 98/14/3、2026-06-12 為 69/14/3，其間逐案增量含 #1185 PR2 新增 `verify-diff-check`、#1195 `threshold-reachability-check`、本次 `shellcheck` 等），與 CLAUDE.md 宣告一致。⚠️ **下文 §3/§4 標題內的數字是各自的盤點快照、且已知不準**——§3 寫 98（**落後**，實為 102），§4 寫 14（**超前**，實為 13）。只有本行的數字與 CLAUDE.md 由 gate 同步，兩處不一致時以本行為準。CLAUDE.md 的 hook 計數自 #1185 PR2 起由 CI `bump_docs --sync-counts --check` gate（本身即 ⚙️ CI-only，見 §4.5）。下文 §3/§4 的職能分組表為 v2.8.1 盤點時的快照、其後新 hook 僅逐案補列——**計數以 `.pre-commit-config.yaml` YAML parse 為準**，分組表供職能導覽不做計數依據。
 >
 > **更正（TRK-307，時值 v2.8.1 = 51/13/3）**：本表初版（PR #582）曾誤記「50 auto + 14 manual」並反指 CLAUDE.md 計數漂移——那是用 grep `stages:\s*\[manual\]` 數的結果，**配到了 `jsx-babel-check-strict-linecount` 的註解行**（該 hook 註解明寫 "Auto-stage (NOT manual)"，曾被提議 manual 但 PR #162 改回 auto）。TRK-307 的 `audit_rules_drift.py` 用 **YAML parse**（非 grep）重數，確認當時為 51/13/3，CLAUDE.md 一直是對的。**教訓：hook 計數要 YAML parse，grep 會配到註解 / 文字**——audit 工具上線首次執行即抓出此自埋誤差。
 
@@ -83,6 +83,7 @@ lang: zh
 | **平台資料 / routing** | `platform-data-check` `routing-profiles-check` `metric-dictionary-check` | 四層路由、Cardinality | Rule Pack ↔ metric 交叉驗證 |
 | **測試治理** | `flaky-registry-check` `property-coverage-check` `verify-diff-check` | TRK-010、property-pilot、#1185 PR2 | flaky registry schema、coverage drift、source→test 映射保鮮（`verify_diff --check`；原 ⚙️ CI-only，#1185 PR2 接成 hook） |
 | **Python 安全 / 可攜** | `subprocess-timeout-audit`（FATAL）`open-encoding-audit`（warn） | S#74、PR-2.5 | timeout kwarg、encoding kwarg |
+| **Shell 正確性** | `shellcheck`（OSS engine，`--norc --include=SC2006,SC1071,SC1072,SC1073,SC1008`） | lint-policy hybrid | 反引號命令替換：把 `` `cmd` `` 當排版引號寫進雙引號字串，bash 會**執行**它（`recover_index.sh` 曾因此在 diagnose-only 路徑重建 index、清掉 operator 暫存區）。額外的 SC10xx ＋ `--norc` 是 fail-closed 用——ShellCheck 只要對一個檔案**沉默**就零輸出、exit 0，而沉默有三道門：parse 失敗（SC1072/1073）、不支援的 shebang（**SC1071**）、以及 `disable=` 抑制（`.shellcheckrc` 由 `--norc` 擋掉；**檔內 `# shellcheck disable=` 刻意不擋**——那是工具正式的 opt-out 且會出現在 diff 裡，但要知道 `disable=all` 會連 SC2006 一起關掉）。⚠️ SC1008 **不是**門（實測：無法辨識的 shebang 仍會被完整分析、SC2006 照樣觸發），列入僅為防禦未來版本改變行為 |
 | **可達性** | `makefile-targets-check` | — | DX tools ↔ Makefile/pre-commit 可達 |
 
 ---
@@ -123,6 +124,9 @@ lang: zh
 | **pre-commit hook 計數一致性**（`bump_docs --sync-counts --check`） | `python scripts/tools/dx/bump_docs.py --sync-counts --check` | CLAUDE.md 的 pre-commit hook 計數——**唯一無本地 hook 的計數維度**（version / rulepack / tool / badge 計數已由 §3 auto hook `version-consistency` 本地攔） | 增刪 pre-commit hook 後（#1185 PR2 接進 CI Version Consistency job） |
 | **OpenAPI spec drift** | `make api-docs` | tenant-api handler `@Router`/`@Param` 標註 ↔ 產出的 OpenAPI spec | 改 handler swag 標註後 |
 | **契約測試**（schemathesis） | `make contract-test` | tenant-api 全 method fuzz（TRK-222/228） | 改 tenant-api API 後 |
+| **行尾政策**（`tests/dx/test_line_ending_policy.py`，[dev-rules #11b](dev-rules.md)） | `pytest tests/dx/test_line_ending_policy.py` | `scripts/`+`components/`+`helm/` 全檔 AST：任何寫出文字的呼叫必須明確傳 `newline=` 且為字串字面值 | 新增/修改任何寫檔的 Python 後 |
+
+> ⚠️ **行尾這條與 §3 的 `open-encoding-audit` hook 是姊妹規則、卻在不同執行點**：忘記 `encoding=` 在 commit 當下就會看到警告（該 hook 是 **warn-only**、exit 0、**不擋 commit**——見 §3 line 85 的 `(warn)` 與 `.pre-commit-config.yaml` 的 `--ci` 註解，殘留約 72 個 latent site 待清理後才會 flip 成 `--strict-open-encoding`）；忘記 `newline=` 則本地完全無聲，要 push 後才從 CI 紅燈得知。兩者掃的是**高度重疊的呼叫站點**（`_violations_in` 的 fail-closed 分支甚至刻意依賴 `encoding=` 的存在當「這是文字串流」的證據）。之所以先落在 pytest 而非 hook，是因為新增 pre-commit hook 有一串連鎖 gate（索引、`files:` regex、雙語 help、exit-code 契約…）；**若這條開始頻繁跳閘，判準同 `verify_diff` 的遷移先例——升為 hook 併進 `check_open_encoding.py`**（該支已有 `--ci` / `--strict` 嚴重度階梯與 `# …: ignore` 慣例可直接複用）。
 
 > **遷移範例**：`verify_diff --check`（source→test 映射保鮮）**曾是本類**（唯一防線在 CI pytest 尾端的 `test_repo_check_is_green`），#1185 PR2 已接成 pre-commit hook `verify-diff-check` → 現屬 §3 hook-enforced，不在此表。判準「CI-only gate 若本地成本低、跳閘頻繁、可用 `files:` 限縮，就升為 hook」見 #1185（TRK-336）。
 
@@ -148,7 +152,7 @@ lang: zh
 
 | engineering: skill | Vibe 對應 owner | 結論 |
 |---|---|---|
-| `engineering:code-review` | `vibe-dev-rules` + 98 pre-commit + commit-msg hook | git/commit/trailer 部分以 vibe-dev-rules 為準（TRK-301） |
+| `engineering:code-review` | `vibe-dev-rules` + 全部 pre-commit + commit-msg hook | git/commit/trailer 部分以 vibe-dev-rules 為準（TRK-301） |
 | `engineering:debug` | `vibe-playbook-nav`（debug 章節） | 互補：reproduce 方法用 engineering，環境 trap 用 playbook |
 | `engineering:testing-strategy` | `test-map.md` + vibe-dev-rules（測試 seam） | 策略用 engineering，Vibe 專屬 seam 用 test-map |
 | `engineering:deploy-checklist` | `github-release-playbook` + `make pre-tag` + #474 | Vibe release 用 playbook + TRK-306（規劃中） |
@@ -183,7 +187,7 @@ lang: zh
 ## 8. AI agent 使用指引
 
 1. **Commit / push 前**：先掃本表「🕳️ 漏接」+「🧠 skill-advised」——這些沒人機械擋，必須自覺做。
-2. **不要重做 🔧 hook-enforced 的事**（98 auto + 3 pre-push + 2 PreToolUse）——浪費 token，hook 會擋。**但 ⚙️ CI-only gate（§4.5：`test_sast` / `bump_docs` hook 計數 / OpenAPI drift / 契約測試）本地不跑、push 才紅**——別把它們當 hook-enforced；改到對應輸入時本地手動跑（否則吃一輪 CI 紅燈）。
+2. **不要重做 🔧 hook-enforced 的事**（全部 auto hooks + 3 pre-push + 2 PreToolUse；確切數字見 §Count reconciliation）——浪費 token，hook 會擋。**但 ⚙️ CI-only gate（§4.5：`test_sast` / `bump_docs` hook 計數 / OpenAPI drift / 契約測試）本地不跑、push 才紅**——別把它們當 hook-enforced；改到對應輸入時本地手動跑（否則吃一輪 CI 紅燈）。
 3. **記得手動跑 §4 manual hooks**（改對應檔後）——它們不在 commit 自動跑，漏了 CI 才擋。
 4. **trailer 規則**信任 commit-msg hook 會擋，但格式自覺照 CLAUDE.md 高頻地雷 #2 寫對（省一輪 commit 重試）。
 

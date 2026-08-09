@@ -608,7 +608,7 @@ def main():
         return
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.write_text(content, encoding="utf-8")
+    OUTPUT_PATH.write_text(content, encoding="utf-8", newline="\n")
     os.chmod(OUTPUT_PATH,
              stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
     print(f"✅ Generated {OUTPUT_PATH.relative_to(REPO_ROOT)}")

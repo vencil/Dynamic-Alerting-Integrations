@@ -151,7 +151,7 @@ def main() -> int:
                 f"# Run `make rulepack-configmaps` after editing the rule pack.\n"
                 f"# ============================================================\n"
             )
-            target.write_text(header + rendered, encoding="utf-8")
+            target.write_text(header + rendered, encoding="utf-8", newline="\n")
             wrote += 1
 
     if args.check:

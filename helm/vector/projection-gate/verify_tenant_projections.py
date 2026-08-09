@@ -267,7 +267,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {v}", file=sys.stderr)
 
     if args.metrics_file:
-        args.metrics_file.write_text(render_metric(verdict, args.mode), encoding="utf-8")
+        args.metrics_file.write_text(render_metric(verdict, args.mode),
+                                     encoding="utf-8", newline="\n")
 
     # Populate the config-dir + decide the exit code.
     #   - The base (0:0-only) config is ALWAYS placed, so Vector has a valid topology

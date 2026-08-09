@@ -72,7 +72,7 @@ class MermaidValidator:
             prefix='mmdc-puppeteer-', suffix='.json'
         )
         try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(_PUPPETEER_CONFIG_JSON)
         except Exception:
             try:
@@ -361,7 +361,8 @@ class MermaidValidator:
                 mode='w',
                 suffix='.mmd',
                 delete=False,
-                encoding='utf-8'
+                encoding='utf-8',
+                newline='\n'
             ) as tmp:
                 tmp.write(content)
                 tmp_path = tmp.name

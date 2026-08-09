@@ -198,7 +198,7 @@ def trigger_reload(config_dir: Path) -> bool:
                 new = content.replace(alt, marker)
             else:
                 new = content.rstrip() + "\n" + marker
-            yf.write_text(new, encoding="utf-8")
+            yf.write_text(new, encoding="utf-8", newline="\n")
             return True
         except OSError:
             continue
@@ -313,7 +313,7 @@ def main() -> int:
         cfg.ended_at_utc = datetime.now(timezone.utc).isoformat()
 
         # Write summary + run-config
-        with open(summary_path, "w", encoding="utf-8") as f:
+        with open(summary_path, "w", encoding="utf-8", newline="\n") as f:
             f.write(f"v2.8.0 readiness chaos soak — summary\n")
             f.write(f"=" * 60 + "\n")
             f.write(f"target:           {args.target_url}\n")
@@ -330,7 +330,7 @@ def main() -> int:
             f.write(f"Run report:       run `python3 scripts/tools/dx/render_soak_diff.py "
                     f"--input-dir {out}`\n")
 
-        with open(run_config_path, "w", encoding="utf-8") as f:
+        with open(run_config_path, "w", encoding="utf-8", newline="\n") as f:
             json.dump(asdict(cfg), f, indent=2, ensure_ascii=False)
 
         print(f"\n[info] soak {'completed' if not interrupted else 'interrupted'}: "

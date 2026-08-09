@@ -213,7 +213,7 @@ def main():
                 old_related = f"    related: [{', '.join(current)}]"
                 new_related = f"    related: [{', '.join(suggested)}]"
                 content = content.replace(old_related, new_related)
-        REGISTRY_PATH.write_text(content, encoding="utf-8")
+        REGISTRY_PATH.write_text(content, encoding="utf-8", newline="\n")
         print(f"\n✅ Updated {changes} tool(s) in registry")
     elif args.apply:
         print("\n✅ No changes needed")

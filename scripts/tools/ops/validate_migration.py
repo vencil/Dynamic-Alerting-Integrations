@@ -250,11 +250,14 @@ def write_csv_report(all_results, output_dir):
     csv_path = str(out_dir / "validation-report.csv")
 
     buf = io.StringIO()
-    # lineterminator='\n' — write_text_secure opens in text mode, which on
-    # Windows translates each \n → \r\n. csv.writer's default \r\n would then
-    # become \r\r\n on disk, producing phantom blank rows when downstream tools
-    # use universal-newlines reading. Pin \n here so the OS does the only
-    # translation.
+    # lineterminator='\n' — csv.writer's default is '\r\n'; we pin '\n' so the
+    # output is byte-identical on every host.
+    # ⚠️ HISTORY: this used to compensate for write_text_secure translating
+    # \n → \r\n on Windows (default '\r\n' would have landed as '\r\r\n', i.e.
+    # phantom blank rows under universal-newline reading). write_text_secure
+    # now pins newline="\n" itself, so NO translation happens any more and this
+    # file is LF on every platform — previously it was CRLF on Windows and LF
+    # on Linux. Do NOT "restore" the old reasoning: that translation is gone.
     writer = csv.writer(buf, lineterminator='\n')
     writer.writerow([
         "Label", "Tenant", "Old Query", "New Query",

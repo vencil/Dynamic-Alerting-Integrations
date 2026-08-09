@@ -512,6 +512,13 @@ jobs:
           # for the job; no setup-go step needed). shellcheck/pyflakes are
           # pinned OFF in .pre-commit-config.yaml args for host/CI parity.
           pre-commit run actionlint --all-files
+          # Shell lint (ShellCheck; SC2006 plus the SC10xx codes and --norc that
+          # keep it fail-closed — see .pre-commit-config.yaml for which silences
+          # each one covers). Auto-stage in the config, so contributors also get
+          # it on commit; this line is what makes it a REQUIRED check rather than
+          # something only a local hook run would catch. Baseline measured at 0
+          # across the 60 shell files before enabling.
+          pre-commit run shellcheck --all-files
 
   lint-rule-packs:
     # Custom Prometheus rule-pack governance linter.

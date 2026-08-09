@@ -20,7 +20,9 @@ schemathesis==4.23.0
 # owns the data-generation / health-check behavior that drives the seed
 # flake. Pinning schemathesis alone would still let hypothesis float to
 # latest at install time — the actual flake source would drift. Freeze
-# both together; Renovate / an explicit PR bumps them in lockstep.
+# both together; a hand-authored PR bumps them in lockstep. (Renovate
+# does not manage this file either — it is images-only, see the header
+# of requirements/ci-constraints.txt.)
 hypothesis==6.156.9
 #
 # Upgrade trigger: bump deliberately (and re-verify the health-check /
