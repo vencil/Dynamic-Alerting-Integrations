@@ -160,6 +160,12 @@ _MARKER_DOC_FILES = (
     ".github/workflows/secret-scan.yml",
     "tests/ops/test_secret_scan_gate.py",
     "CHANGELOG.md",
+    # Added pre-emptively (blind review): this SOP now carries a paragraph
+    # describing the exclusion, so the next person to make it concrete by
+    # naming the endpoint would trip a security gate for writing correct
+    # documentation. A predictable false RED is how carve-outs get widened
+    # under pressure; better to place it deliberately now.
+    "docs/internal/secret-leak-remediation-sop.md",
 )
 
 
@@ -238,19 +244,12 @@ def _env_block() -> dict:
     return _wf().get("env") or {}
 
 
-def _truthy_yaml(value: object) -> bool:
-    """Is this GitHub-Actions value enabled?
-
-    `continue-on-error: ${{ ... }}` yaml-loads as a STRING, so `is True`
-    silently passes the one spelling used to make it conditional — the same
-    trap `tests/ops/test_nightly_scan_matrix_drift.py` documents for its own
-    swallow guard. Anything not falsy counts as enabled.
-    """
-    if value is None or value is False:
-        return False
-    if isinstance(value, str):
-        return value.strip().lower() not in ("", "false")
-    return bool(value)
+# (A `_truthy_yaml` helper lived here and is deliberately gone. It tried to
+# decide whether a `continue-on-error` VALUE was enabled, which drags in the
+# PyYAML-vs-GitHub-Actions disagreement over the YAML 1.1 bool family — PyYAML
+# resolves `off` / `no` to False, GHA does not treat them as booleans at all.
+# The guard now asserts the KEY IS ABSENT, which is the property we actually
+# want and needs no parser agreement.)
 
 
 def _diff_scans() -> list[tuple[str, str, dict]]:
@@ -285,19 +284,34 @@ def _full_scans() -> list[tuple[str, str, dict]]:
 
 
 def _git_log_pickaxe(needle: str) -> list[str]:
-    """Commits that ever ADDED or REMOVED `needle` anywhere in history.
+    """Commits reachable from HEAD that ever ADDED or REMOVED `needle`
+    OUTSIDE the files documenting the exclusion.
 
     ⛔ `git grep` sees only the working tree, but the exclusion applies to the
     NIGHTLY FULL-HISTORY scan too — and the nightly's entire purpose is
     finding secrets that were committed and later deleted. A credential
     removed together with its marker is invisible to a tree-only check by
-    construction, so the premise "this project does not use the provider"
-    would go on holding for the tree while being false for the history the
-    scan actually walks. Blind review found this gap; today it is empty
-    (verified: the only hit for `lob.com` is the commit adding this guard).
+    construction.
+
+    Three things this got wrong on the first cut, all from blind review:
+
+    * **`--all` walked every fetched ref (144 locally).** A marker on somebody
+      else's unmerged branch would then red THIS PR, with the author unable to
+      clear it by changing their own diff — the exact pathology #1364 exists
+      to fix, recreated one level up in the guard that fixes it. Scoped to
+      HEAD's history: the corpus a PR is answerable for.
+    * **The doc carve-out was COMMIT-scoped.** One commit touching both a doc
+      file and a real integration was exempted wholesale. Now PATH-scoped via
+      pathspec, so only the doc files' own changes are excused.
+    * **Case.** `git grep -i` is case-insensitive but `-S` is a fixed string
+      and case-SENSITIVE (measured: `-S changelog` 67 commits vs `-S CHANGELOG`
+      143), so the two halves of one premise disagreed. `--pickaxe-regex -i`
+      makes them agree.
     """
+    excludes = [f":(exclude){doc}" for doc in _MARKER_DOC_FILES]
     proc = subprocess.run(
-        ["git", "-C", str(ROOT), "log", "--all", "--format=%H %s", "-S", needle],
+        ["git", "-C", str(ROOT), "log", "HEAD", "--format=%H %s",
+         "-i", "--pickaxe-regex", "-S", re.escape(needle), "--", ".", *excludes],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=300,
     )
@@ -409,7 +423,12 @@ def test_pull_requests_actually_reach_the_bounded_scan() -> None:
     """
     on = _on_block()
     assert "pull_request" in on, "the gate no longer triggers on pull_request at all"
-    types = (on["pull_request"] or {}).get("types") or []
+    # ⛔ An ABSENT `types:` is not a hole: GitHub's default for pull_request is
+    # exactly [opened, synchronize, reopened]. Requiring the list to be spelled
+    # out would red a semantically identical workflow — a false RED on a
+    # security gate, which is how carve-outs get widened. Blind review.
+    pr_on = on["pull_request"] or {}
+    types = pr_on.get("types") or ["opened", "synchronize", "reopened"]
     missing = {"opened", "synchronize", "reopened"} - set(types)
     assert not missing, (
         f"`on.pull_request.types` is missing {sorted(missing)} (has {types}).\n"
@@ -429,9 +448,36 @@ def test_pull_requests_actually_reach_the_bounded_scan() -> None:
         f"{mode}\nA near-miss spelling (e.g. `pull_request_target`) sends every "
         "PR down the `mode=full` path, which is deliberately UNBOUNDED."
     )
-    assert re.search(r'mode=pr\b', mode) and re.search(r'mode=full\b', mode), (
-        "the mode step no longer emits both `mode=pr` and `mode=full`"
+    # ⛔ Not just "both strings are present somewhere" — `mode=pr` must be in
+    # the THEN branch. Blind review: swapping the two `echo` lines leaves the
+    # `if:` gates untouched and every other assertion here satisfied, while
+    # every PR runs the unbounded scan. Same equivalence class as "flip the
+    # two `if:`s", entered from the other side.
+    then_branch = mode.split("else", 1)[0]
+    assert re.search(r"mode=pr\b", then_branch), (
+        "the pull_request branch of the mode step no longer emits `mode=pr`:\n"
+        f"{mode}\nIf `mode=full` is emitted for pull_request events, every PR "
+        "runs the deliberately UNBOUNDED scan while the bounded command sits "
+        "unused in the file."
     )
+    assert re.search(r"mode=full\b", mode.split("else", 1)[-1]), (
+        "the non-pull_request branch no longer emits `mode=full`"
+    )
+
+    # ⛔ JOB-level `if:` too. A job that is skipped reports `skipped`, and this
+    # repo has already documented that a skipped required check SATISFIES
+    # branch protection — so `if: github.event_name == 'schedule'` on the job
+    # makes every PR scan disappear while the workflow still "triggers" and
+    # every other assertion in this module stays green. Blind review; the
+    # first cut read `on:` and the two STEP `if:`s and stopped there.
+    for step in _steps():
+        job_if = str((step["_job"] or {}).get("if") or "")
+        assert not job_if, (
+            f"the scan job carries a job-level `if:` ({job_if!r}). A skipped "
+            "job reports `skipped`, which satisfies branch protection — the "
+            "whole gate would vanish for PRs with nothing turning red (#1364)."
+        )
+        break
 
     # …and the two scan steps must be gated on those two modes, the right way round.
     diff_if = str(_diff_scans()[0][2].get("if") or "")
@@ -509,7 +555,16 @@ def test_scan_errors_are_fatal() -> None:
     resolved SHA is a NEW dependency on resolution succeeding, so the fix for
     defect 1 widened the mouth of this pre-existing silent channel.
     """
-    offenders = [(n, c) for n, c, _ in _trufflehog_invocations()
+    invocations = _trufflehog_invocations()
+    # Own floor, not borrowed from a sibling test: if the discovery regex
+    # stops matching (e.g. the command moves into a shell script), `offenders`
+    # is empty and this passes without looking at anything. Blind review noted
+    # this was the one new assertion without one.
+    assert len(invocations) >= 2, (
+        f"expected at least the two scan modes, found {len(invocations)} — "
+        "this assertion would otherwise pass vacuously"
+    )
+    offenders = [(n, c) for n, c, _ in invocations
                  if "--fail-on-scan-errors" not in c]
     assert not offenders, (
         "these trufflehog invocations do not pass --fail-on-scan-errors:\n"
@@ -520,47 +575,75 @@ def test_scan_errors_are_fatal() -> None:
 
 
 def test_the_blocking_step_cannot_be_made_advisory() -> None:
-    """`continue-on-error` on the converter step turns L2 into decoration.
+    """`continue-on-error` on a load-bearing step turns L2 into decoration.
 
-    The converter's exit code IS the merge gate. Its exit-code contract is
-    already pinned — tightly, by value — in
-    `tests/lint/test_trufflehog_to_sarif.py::TestMainExitPolicy`; an earlier
-    revision of this module re-asserted the same thing more loosely via two
-    subprocesses, which bought nothing. The link that nothing covered is the
-    one between that exit code and the job's result, and it is one YAML line
-    wide.
+    The exit codes that matter are the scanner's (did the scan complete?) and
+    the converter's (was a live credential confirmed?). Either one, swallowed,
+    produces a green job that proves nothing.
+
+    ⛔ SCOPE. The first cut of this guard covered ONLY the converter step,
+    which left the two trufflehog scan steps completely unguarded — and a
+    single `continue-on-error: true` there restores the exact silent green
+    this module exists to prevent (the scan dies, `> findings.json` has
+    already created an empty file, the converter reads it and reports "no
+    secrets detected"). Blind review. The scope is now derived from what each
+    step RUNS, not from step names.
 
     Checks the JOB level too: `continue-on-error` is valid there and swallows
-    every step under it. Templated values (`${{ ... }}`) yaml-load as strings,
-    so `is True` would pass the very spelling used to make it conditional —
-    see `_truthy_yaml`. Same reasoning as the sibling guard in
-    `tests/ops/test_nightly_scan_matrix_drift.py`, which already applies it to
-    steps that merely create a label.
+    every step under it.
     """
     offenders: list[str] = []
     checked = 0
     for step in _steps():
         script = step.get("run") or ""
-        if "trufflehog_to_sarif.py" not in script:
+        # Steps whose exit code is load-bearing: the scanner and the policy
+        # converter. Derived from what the script runs, not from step names.
+        if not re.search(r"\btrufflehog\s+git\b|trufflehog_to_sarif\.py", script):
             continue
         checked += 1
         name = step.get("name") or "<unnamed>"
-        if _truthy_yaml(step.get("continue-on-error")):
+        # ⛔ ABSENCE, not falsiness. PyYAML resolves the YAML 1.1 bool family
+        # (`off` / `no`) to False while GitHub Actions does not treat them as
+        # booleans at all — the very divergence `_on_block` documents for the
+        # `on:` key. `continue-on-error: off` would therefore read as disabled
+        # here and possibly enabled there. Asserting the key is absent sidesteps
+        # the whole parser-disagreement class. (Blind review.)
+        if "continue-on-error" in step:
             offenders.append(f"{name} (step-level continue-on-error)")
-        if _truthy_yaml((step["_job"] or {}).get("continue-on-error")):
+        if "continue-on-error" in (step["_job"] or {}):
             offenders.append(f"{name} (JOB-level continue-on-error swallows it)")
-        # ⛔ Fold continuations FIRST. The converter call is spread over five
-        # backslash-continued lines, so a same-line scan for `||` misses the
-        # spelling that actually occurs — `|| true` parked on the last
+        # ⛔ Fold continuations FIRST. The commands are spread over several
+        # backslash-continued lines, so a same-line scan for a swallow misses
+        # the spelling that actually occurs — `|| true` parked on the last
         # argument line. Measured: that mutation survived the unfolded form.
+        #
+        # ⛔ DERIVED, not an enumeration of swallow spellings. An earlier cut
+        # looked for `||` only, so `; exit 0`, a trailing `exit 0`, `set +e`
+        # and `| tee` all passed. The property is "nothing in this script
+        # discards a non-zero exit", so the check is on the disabling
+        # mechanisms themselves.
         folded = re.sub(r"\\\n\s*", " ", script)
-        if re.search(r"trufflehog_to_sarif\.py[^\n]*\|\|", folded):
-            offenders.append(f"{name} (`|| ...` swallows the exit code)")
-    # Anti-vacuity: a renamed converter makes the loop body unreachable and
-    # every assertion above trivially true.
-    assert checked == 1, (
-        f"expected exactly one step invoking the converter, found {checked} — "
-        "this guard would otherwise pass by never looking at anything"
+        # ⛔ `|| VAR=$?` is CAPTURE, not swallow — the workflow deliberately
+        # records the scanner's exit code so the results can be uploaded
+        # before the failure is re-raised by a later step. Blanking it out
+        # before the swallow scan keeps this check honest without making the
+        # capture idiom unusable. The re-raise itself is pinned separately by
+        # `test_a_captured_scan_error_is_re_raised`.
+        folded = re.sub(r"\|\|\s*\w+=\$\?", " ", folded)
+        for pattern, why in (
+            (r"set\s+\+e", "`set +e` disables abort-on-error"),
+            (r"\|\|", "`|| ...` swallows a non-zero exit"),
+            (r";\s*exit\s+0", "`; exit 0` forces success"),
+            (r"^\s*exit\s+0\s*$", "a trailing `exit 0` forces success"),
+        ):
+            if re.search(pattern, folded, re.M):
+                offenders.append(f"{name} ({why})")
+    # Anti-vacuity: a renamed converter or scanner makes the loop body
+    # unreachable and every assertion above trivially true.
+    assert checked >= 2, (
+        f"expected at least the scan and convert steps, found {checked} with a "
+        "load-bearing exit code — this guard would otherwise pass by never "
+        "looking at anything"
     )
     assert offenders == [], (
         "the verified-finding policy step is marked non-fatal: "
@@ -620,10 +703,26 @@ def test_the_exclusion_list_is_not_overridden_closer_to_the_scan() -> None:
     """
     offenders: list[str] = []
     for step in _steps():
+        name = step.get("name") or "<unnamed>"
         if EXCLUDE_ENV in (step.get("env") or {}):
-            offenders.append(f"step {step.get('name') or '<unnamed>'} env:")
+            offenders.append(f"step {name} env:")
         if EXCLUDE_ENV in ((step["_job"] or {}).get("env") or {}):
             offenders.append("job-level env:")
+        # ⛔ …and the SHELL layer, which beats every YAML layer. Blind review:
+        # the first cut read only the two `env:` keys, so `export VAR=...`
+        # inside the script, an inline `VAR=... trufflehog ...` prefix, or a
+        # `>> "$GITHUB_ENV"` write from an earlier step all won silently while
+        # the registry kept validating the workflow-level value.
+        script = step.get("run") or ""
+        for pattern, why in (
+            (rf"\bexport\s+{re.escape(EXCLUDE_ENV)}=", "`export` in the script"),
+            (rf"^\s*{re.escape(EXCLUDE_ENV)}=\S+\s+\S", "inline `VAR=... cmd` prefix"),
+            (rf"{re.escape(EXCLUDE_ENV)}=[^\n]*>>\s*\"?\$\{{?GITHUB_ENV",
+             "written to $GITHUB_ENV"),
+            (rf"^\s*{re.escape(EXCLUDE_ENV)}=", "reassigned in the script"),
+        ):
+            if re.search(pattern, script, re.M):
+                offenders.append(f"step {name} ({why})")
     assert not offenders, (
         f"{EXCLUDE_ENV} is redefined closer to the scan than the workflow-level "
         f"`env:` block: {sorted(set(offenders))}\n"
@@ -689,23 +788,9 @@ def test_every_excluded_detector_is_justified_and_still_unused() -> None:
                 "record why the premise still holds."
             )
             # …and the same question for HISTORY, because the exclusion also
-            # applies to the nightly full-history scan. `_MARKER_DOC_FILES`
-            # cannot filter this one (it is commit-scoped, not path-scoped),
-            # so allow the commits that introduced those very files: anything
-            # ELSE means the provider once lived here and the nightly can no
-            # longer look for its credentials.
-            doc_commits = set()
-            for doc in _MARKER_DOC_FILES:
-                proc = subprocess.run(
-                    ["git", "-C", str(ROOT), "log", "--all", "--format=%H",
-                     "-S", str(marker), "--", doc],
-                    capture_output=True, text=True, encoding="utf-8",
-                    errors="replace", timeout=300,
-                )
-                assert proc.returncode == 0, proc.stderr[:300]
-                doc_commits.update(proc.stdout.split())
-            historical = [ln for ln in _git_log_pickaxe(str(marker))
-                          if ln.split()[0] not in doc_commits]
+            # applies to the nightly full-history scan. The doc files are
+            # excluded by PATHSPEC inside `_git_log_pickaxe`, not by commit id.
+            historical = _git_log_pickaxe(str(marker))
             assert not historical, (
                 f"{marker!r} appears in the HISTORY of this repo outside the "
                 f"commits that document the {detector} exclusion:\n  "
@@ -717,17 +802,110 @@ def test_every_excluded_detector_is_justified_and_still_unused() -> None:
             )
 
 
-# ⛔ REMOVED: `test_verified_findings_still_block`.
-#
-# It ran the converter twice through subprocesses to assert
-# `returncode != 0` / `== 0` for a verified / unverified finding. Two
-# independent blind reviewers flagged it as a WEAKER DUPLICATE of
-# `tests/lint/test_trufflehog_to_sarif.py::TestMainExitPolicy`, which has
-# pinned both directions since #496 and does it by VALUE
-# (`== EXIT_VERIFIED_FINDING` / `== EXIT_OK`) rather than by sign.
-#
-# It is recorded here rather than silently deleted because "the gate was not
-# made fail-open" IS a property this module should stand behind — it just was
-# not the unguarded link. That link is
-# `test_the_blocking_step_cannot_be_made_advisory` above: the converter's exit
-# code only blocks a merge while the step carrying it stays fatal.
+def test_a_captured_scan_error_is_re_raised() -> None:
+    """The scan steps capture their exit code — something must re-raise it.
+
+    Failing the scan step in place would skip `convert`, and both upload steps
+    are guarded on `convert.outcome != 'skipped'`, so the job would go red
+    having uploaded no SARIF at all. The workflow therefore captures the code
+    and re-raises it later. That indirection is only safe while the re-raise
+    exists: drop it and a scan error becomes a green job again — the very
+    thing `--fail-on-scan-errors` was added for.
+
+    ⛔ And the re-raising step must be UNCONDITIONAL. The first cut of this
+    test checked only that some step's SCRIPT contained the output name and an
+    `exit 1` — so renaming that step and setting `if: false` left it green
+    while a scan error became a silent success again. Caught by this module's
+    own mutation harness (S8), and it is the THIRD guard in this change to be
+    written without reading `if:` — after two blind reviewers had already
+    flagged exactly that omission elsewhere in this file. The rule is not
+    "remember to check if:", it is: **a guard that asserts something runs must
+    read every mechanism that can stop it running.**
+    """
+    steps = _steps()
+    captured = [s for s in steps if re.search(r"\|\|\s*(\w+)=\$\?", s.get("run") or "")]
+    assert captured, (
+        "no step captures a scan exit code any more. If the scan steps now "
+        "fail in place, `convert` is skipped and no SARIF is uploaded — check "
+        "that trade-off deliberately before deleting this test."
+    )
+    outputs = {m.group(1) for s in captured
+               for m in re.finditer(r'echo\s+"(\w+)=\$\{?\w+\}?"\s*>>\s*"\$GITHUB_OUTPUT"',
+                                    s.get("run") or "")}
+    assert outputs, "a scan exit code is captured but never published to GITHUB_OUTPUT"
+
+    def _code(step: dict) -> str:
+        """The step's script with comment lines removed.
+
+        ⛔ Load-bearing: the diff-scan step's comment block contains the
+        measurement table, which literally includes the text `exit 1`. Scanning
+        the raw script matched that step instead of the real re-raiser, and the
+        `always()` assertion below then failed against the WRONG step — a false
+        red that looked like a true one.
+        """
+        return "\n".join(ln for ln in (step.get("run") or "").splitlines()
+                         if not ln.strip().startswith("#"))
+
+    # The re-raiser reads the captured code through `env:` (a `steps.<id>
+    # .outputs.<name>` reference), not by repeating the shell variable — so
+    # look there as well as in the script.
+    def _consumes_output(step: dict) -> bool:
+        env_refs = " ".join(str(v) for v in (step.get("env") or {}).values())
+        haystack = (env_refs + " " + _code(step)).upper()
+        return any(o.upper() in haystack for o in outputs)
+
+    reraise = [s for s in steps if _consumes_output(s) and "exit 1" in _code(s)]
+    assert reraise, (
+        f"the captured scan exit code(s) {sorted(outputs)} are published but no "
+        "step re-raises them (no `exit 1` guarded on them). A scan that failed "
+        "outright would report success (#1364)."
+    )
+    # The scan steps' own failure is suppressed by design, so the re-raise is
+    # the ONLY thing left that turns a broken scan red. It must run even when
+    # an earlier step failed — i.e. `always()`, not the default `success()`,
+    # and certainly not a falsy literal.
+    unconditional = [s for s in reraise
+                     if "always()" in str(s.get("if") or "").lower()]
+    assert unconditional, (
+        "the step that re-raises a captured scan error is not `if: always()` "
+        f"(found: {[s.get('if') for s in reraise]!r}).\nWith the scan steps "
+        "deliberately not failing in place, a conditional re-raise means a "
+        "failed scan reports success — the silent green this whole change "
+        "exists to remove (#1364)."
+    )
+
+
+def test_the_converter_fails_as_a_PROCESS_not_just_as_a_function() -> None:
+    """⛔ `sys.exit(main())` is the only thing that turns the policy into an exit code.
+
+    An earlier revision of this module deleted a subprocess-based check of the
+    converter after two independent blind reviewers called it a weaker
+    duplicate of
+    `tests/lint/test_trufflehog_to_sarif.py::TestMainExitPolicy`. Both were
+    HALF right, and the deletion was a real loss of coverage — a third
+    reviewer caught it:
+
+      * that suite asserts the RETURN VALUE of `tts.main()` in-process, by
+        value, and is indeed the stronger test of the POLICY;
+      * it contains zero subprocesses, and grep confirms nothing else in the
+        repo runs the converter as a program.
+
+    So `sys.exit(main())` → `main()` makes the CLI exit 0 on a confirmed-live
+    credential with the entire test suite still green — while the workflow
+    invokes it exactly as a program. Two reviewers agreeing is strong evidence
+    that a claim is true, not proof: they checked that the other test asserted
+    the same POLICY, and so did I; none of us checked that it exercised the
+    same ENTRY POINT.
+
+    Asserted statically (no subprocess) so it stays cheap and cannot be
+    confused for a second copy of the policy test.
+    """
+    src = CONVERTER.read_text(encoding="utf-8")
+    assert re.search(r'if\s+__name__\s*==\s*["\']__main__["\']\s*:\s*\n\s*sys\.exit\(\s*main\(\)\s*\)',
+                     src), (
+        f"{CONVERTER.relative_to(ROOT).as_posix()} no longer ends in "
+        "`sys.exit(main())`.\nWithout it the process exits 0 no matter what "
+        "`main()` returns, so a VERIFIED finding produces a GREEN workflow "
+        "step — and every existing test still passes, because they all call "
+        "`main()` in-process and inspect its return value (#1364)."
+    )
