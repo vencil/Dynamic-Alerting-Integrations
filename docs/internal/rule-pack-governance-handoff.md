@@ -3,15 +3,15 @@
 > ⛔ 這是 WIP branch 的暫存筆記，**merge 前刪除**（原本要放 `dev/`，但那是 gitignore 的暫存區，
 > 檔案不會進 repo 而容器會被回收，所以暫放這裡）。
 
-**狀態**：24 個 commit，HEAD = `1cace594`，遠端與本地同步，工作區乾淨。**沒有開 PR。**
-`tests/ops` + `tests/lint` = **6410 passed / 73 skipped**。
+**狀態**：26 個 commit，HEAD = `14fd1384`，遠端與本地同步，工作區乾淨。**沒有開 PR。**
+`tests/ops` + `tests/lint` + `tests/rulepacks` = **6489 passed / 130 skipped**。
 
 ---
 
 ## ⛔ 明天第一件事
 
 沒有「必須先做」的阻塞項——上一批（`1cace594`）已跑完 mutation 並自審。
-直接從下面的〈剩餘工作〉挑。**兩個需要你先決定的**：S1 的三選一、S3 要不要獨立 PR。
+直接從下面的〈剩餘工作〉挑。**需要你先決定的**：S1 的三選一。其餘（16 個仍存活的 mutant、兩個小項）可直接做。
 
 ---
 
@@ -29,6 +29,8 @@
 | `9db73247` | UTF-16 存的 manifest 部署得了但掃描器讀不到 |
 | `e90d89bb` | Watchdog 契約豁免改由 route 推導 |
 | `1cace594` | 補完 mutation：解析層 15 個守衛全無 fixture |
+| `6d20740c` | 這份 handoff |
+| `14fd1384` | `_norm_expr` 把正規化套進字串字面量裡（S3；實測全樹 no-op） |
 
 ### 花錢買到、值得保留的事實
 
@@ -54,16 +56,13 @@ big-endian 下切在 pair 邊界，little-endian 下切在 codepoint 中間。
 
 ## 剩餘工作（依建議順序）
 
-### 1. S3 — `_norm_expr` 剝掉字串字面量裡的 `#`
+### ~~S3~~ — 已完成（`14fd1384`）
 
-**實測**：`up{job="a#b"}` 與 `up{job="a#c"}` 正規化後**相同**。兩個後果：provenance 可以用
-「只在 `#` 之後不同」的規則偽造；`check_rulepack_sync` 那支 CI drift gate 同樣看不見那種漂移
-（`_norm_expr` 是從它借來的，單一實作）。
+缺陷比原本記的更寬：不只 `#`，空白／逗號／括號／比較運算子在字串字面量內也全部被改寫，
+三種引號形式皆然。已改為單一 left-to-right alternation（字串三式 ＋ 行註解一起掃），
+字串以 NUL 定界索引暫存。全樹 930 條 expr 修前修後逐條相同。
 
-修法要 quote-aware。**爆炸半徑最大**——它改的是一支 CI gate 對「兩條 expr 是否相同」的判準，
-必須先跑全樹 before/after 比對確認 0 diff。**建議獨立 PR。** 約 2-3h。
-
-### 2. S1 — helm template 在掃描面內但內容不可見（要你決定）
+### 1. S1 — helm template 在掃描面內但內容不可見（要你決定）
 
 `helm/` 底下 95 個 tracked YAML，**67 個 parse 不了**（Go template action）。今天沒有任何
 helm 檔放規則，而且「寫了字面 `- alert:` 又 parse 不了」的檔案**會**被哨兵抓到。
@@ -75,7 +74,7 @@ helm 檔放規則，而且「寫了字面 `- alert:` 又 parse 不了」的檔�
 
 約 2h。
 
-### 3. 16 個仍存活的 mutant（RVL 那 69 個的餘數）
+### 2. 16 個仍存活的 mutant（RVL 那 69 個的餘數）
 
 - **A03–A08（6 個）** 全在 `_generated_pack_names`。它**已不在分類路徑上**（只剩測試 oracle，
   註解已改成誠實敘述），嚴重度因此降一階——但 oracle 說謊會讓讀它的斷言跟著鬆。約 1h。
@@ -85,7 +84,7 @@ helm 檔放規則，而且「寫了字面 `- alert:` 又 parse 不了」的檔�
   **A40**（`check=False`）要模擬 git 失敗。約 1h。
 - **A30 / A22 / A32** 判定語意等價。
 
-### 4. 小項
+### 3. 小項
 
 - `TestPlatformReaderParity` 的 parity#2 只有 `assert prod`（≥1），沒有數值底線，
   而它的結論已被 parity#1 + `test_runtime_default_is_the_derived_set_not_a_sample` 蘊含。
