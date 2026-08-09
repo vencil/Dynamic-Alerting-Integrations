@@ -25,6 +25,7 @@ lang: zh
 | Playwright E2E | [§Playwright E2E](#playwright-e2e-測試portal-smoke-tests) |
 | Go 並發 flake 修法 | [§v2.6.x Go 並發測試 flake](#v26x-lessons-learned--go-並發測試-flake2026-04-11) |
 | 程式碼品質規範 | [§程式碼品質規範](#程式碼品質規範) |
+| 守衛程式碼跑 mutation | [§v2.10.0 Mutation harness + 宣稱紀律](#v2100-lessons-learned-mutation-harness-and-claim-discipline-2026-08-09-pr-1370) |
 
 ## 測試前置準備
 
@@ -1462,6 +1463,121 @@ esbuild 的 dep graph 強制 import-target 在 importer 之前 evaluate；這是
 ### 適用範圍
 
 本節 6 個規則適用於所有 `tools/portal/src/interactive/tools/` 下的 JSX 工具 + `tools/portal/build.mjs` esbuild config + `tests/e2e/*.spec.ts` + `.github/workflows/playwright.yml`。新工具 onboarding 流程必走 §1 的 grep 檢查 + §3 的 workers=N 漸進驗證 + §5 的 a11y critical=0 gate。
+
+## v2.10.0 Lessons Learned: Mutation harness and claim discipline (2026-08-09, PR #1370)
+
+> **範圍**：這節講的是「守衛程式碼（lint / gate / contract test）自己有沒有被測到」。
+> §v2.8.0 第 6 條的 intentional-break dogfood 驗的是**一支測試抓不抓得到一個回歸**；
+> 這節是把同一件事放大到**一個模組 × N 個 mutant**，外加「跑完之後怎麼誠實報數」。
+> 起因：#1200 那批 gate 被外部 mutation 審查打 104 個 mutant，**69 個存活**——
+> 包含「把分類器退回檔名前綴」（整份模組存在的理由）而當時 119 支測試全綠。
+
+### 1. Harness 必須先驗 anchor，再動任何一行
+
+mutation 腳本是「字串替換 → 跑測試 → 還原」。**替換字串在動手前必須逐一確認在目標檔中剛好命中一次**，
+缺漏（0 次）或多重命中（>1 次）都要在動任何一行之前中止。
+
+理由不是潔癖：0 次命中會讓那個 mutant 靜默變成 no-op，跑出來是「SURVIVED」——
+而你會把它讀成「測試沒蓋到」，然後去補一支根本不需要的測試。多重命中則會一次改到不該改的地方，
+跑出來的 KILLED 是別的原因造成的。實測攔下過一個多重命中。
+
+```python
+bad = []
+for name, path, old, _new in MUTANTS:
+    hits = pathlib.Path(path).read_text(encoding="utf-8").count(old)
+    if hits != 1:
+        bad.append((name, path, hits))          # 0 = 會靜默變 no-op；>1 = 會改到別處
+if bad:
+    print("ANCHOR PROBLEM:", bad); sys.exit(1)   # ⛔ 在任何替換之前
+```
+
+### 2. 每輪放兩個 control
+
+- **一個語意等價的 mutant，必須存活** — 證明測試套件不是在對任何改動都轉紅（那等於沒有鑑別力）。
+- **一個災難性失明的 mutant，必須被殺** — 證明測試套件真的有跑到那段程式碼。
+
+兩個 control 有任一結果不符，那一輪的所有數字都不可信，先修 harness 再說。
+
+### 3. 還原要 `finally`，而且每個 mutant 前還原**全部**檔案
+
+跨檔 mutant（例如同一個 finding 影響兩支 gate）如果只還原「這次要改的那一支」，
+前一個 mutant 的改動會殘留、污染後面每一輪。
+
+```python
+try:
+    for name, path, old, new in MUTANTS:
+        for _p in ALL_PATHS: shutil.copy(f"{BACKUP}/{_p.name}", _p)  # 每輪先全還原
+        ...
+finally:
+    for _p in ALL_PATHS: shutil.copy(f"{BACKUP}/{_p.name}", _p)
+    print("RESTORED")   # ⛔ 沒印到這行就代表工作區是髒的
+```
+
+另外兩件會讓 mutant 靜默不生效的事：**跑之前清 `__pycache__`**（stale bytecode 會讓替換不生效）、
+以及整輪用 `PYTHONDONTWRITEBYTECODE=1`。sweep 通常超過單次工具 timeout，**丟背景跑再輪詢 `RESTORED`**。
+
+### 4. 存活的 mutant 有三種下場，而且要分開記
+
+⚠️ **這裡有兩個不同的分類軸，混起來就會把未知寫成已知。**
+
+**軸一：survivor 為什麼活著**（看到 SURVIVED 之後要判的）
+
+1. **測試缺口** — 補測試。
+2. **可證明等價** — 附證明，不補測試。典型：恆真式、已被另一個守衛涵蓋、或它本身就是刻意放的 control。
+3. **測試案例不具鑑別力** — 見 §5。**這一類不得併入「可證明等價」**：等價的意思是「改了也沒有語意差別」，
+   不具鑑別力的意思是「有差別，但我這個案例看不出來」。前者已知，後者未知。
+   它的處置是**重新設計案例後重跑**，在那之前它沒有結論。
+
+**不要為了把數字做成 0 而硬湊一支測試去追等價 mutant**——那支測試沒有守住任何東西，只是把帳做平。
+
+**軸二：最終報告怎麼記帳**（跑完之後對外講的）
+
+三個數字分開列、加總對得上原始 mutant 數：
+
+```text
+61 已驗證被殺 + 7 逐一可證明等價 + 1 當初沒從報告轉錄進來所以無帳可對 = 69
+```
+
+第三類要據實留著。把「無帳可對」併進「等價」就是在宣稱一件沒驗過的事。
+
+### 5. 不鑑別的 mutant 是測試設計 bug，不是通過
+
+mutant 存活有第三種可能，最容易被誤讀成「已覆蓋」：**測試案例根本分不出兩種實作**。
+
+實例（`check_doc_links` 的 CommonMark 三空格上限）：用「成對的四空格縮排 fence」當案例——
+一行開、一行關——不管實作有沒有執行三空格上限，最後的 heading 集合都一樣，所以 mutant 存活。
+改用**不成對**的四空格縮排 fence 才有鑑別力：把它當 fence 就會吞掉後面所有 heading，當內縮程式碼則不會。
+
+**看到 SURVIVED 的第一個問題不是「要補什麼測試」，是「現有這個案例分得出來嗎」。**
+
+### 6. monkeypatch 打錯位置會給你一個假的綠燈
+
+`from module import name` 在匯入端建立的是**新的名字綁定**。
+之後 patch `module.name` 不會影響已經匯入的那一份，消費端仍然呼叫原函式。
+
+實測踩到：驗證「非 dict 元素會不會讓 gate 掛掉」時 patch 了 `_rule_tree._rule_containers`，
+跑出來是 OK，差點據此把一個**真實成立的 fail-open** 判成不成立。
+改 patch 消費端自己的 `csr._rule_containers` 之後，立刻 `AttributeError`。
+
+**要 patch 的是「呼叫端看到的那個名字」，不是「定義它的那個模組」。**
+反向自檢：patch 完先跑一個「一定要壞」的案例，確認 patch 真的生效了再跑真正要驗的東西。
+
+### 7. 宣稱紀律 — 沒實測過的話不要寫進 commit message、docstring 或註解
+
+這條 branch 上同一形狀的錯誤出現**四次**，每次都是我自己寫的，每次都是別人抓到：
+
+| 宣稱 | 實際 |
+|------|------|
+| commit 宣稱「兩個 `>= 350` 換成逐檔覆蓋」 | 兩個 350 一字未動，而 docstring 照著那個宣稱描述了一個沒發生的修復 |
+| commit 宣稱「存活 mutant 從 69 降到 4」 | 那個 4 是估的，不是跑出來的 |
+| 註解描述的 provenance 修復涵蓋四種編碼 | 實作只處理一種（`utf-16-le` 不剝 BOM） |
+| 註解宣稱「讓 tripwire 去 flag 空的 spec」 | 哨兵**沒有那個分支**，空 spec 貢獻 0 條規則且無人回報 |
+
+守衛程式碼裡這種錯特別貴：**註解就是下一個讀的人用來取代「自己重推一遍」的東西**。
+一句不實的註解會讓後面每一個維護者都相信某個情境已經被守住。
+
+**正解**：寫下「X 會處理 Y」之前，先跑一次 Y。跑不了就寫「應該」並標記待驗，
+不要用直述句。數字一律附當場跑過的指令——這條的成本遠低於事後更正四次。
 
 ## 相關資源
 
