@@ -712,7 +712,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "3ce48d385d919ca11582c1505c31e3aa350672abde2697965db7199b31d0b080",
+ "source_digest": "bf60779083cd8af188b183fb75804856e3e1451f9c675d0cbcbfef6571bfa819",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -874,6 +874,7 @@
   "tests/lint/test_lint_jsx_babel_frontmatter.py",
   "tests/lint/test_lint_jsx_babel_linecount.py",
   "tests/lint/test_lint_tool_consistency.py",
+  "tests/lint/test_mkdocs_strict_check.py",
   "tests/lint/test_snapshot_v2.py",
   "tests/lint/test_trufflehog_to_sarif.py",
   "tests/lint/test_validate_docs_versions.py",
@@ -1723,7 +1724,8 @@
    "tests/ops/test_generate_routes_orchestration.py"
   ],
   "mkdocs.yml": [
-   "tests/lint/test_check_head_blob_hygiene.py"
+   "tests/lint/test_check_head_blob_hygiene.py",
+   "tests/lint/test_mkdocs_strict_check.py"
   ],
   "renovate.json": [
    "tests/ops/test_renovate_config.py"
@@ -2110,6 +2112,12 @@
   ],
   "scripts/tools/lint/fix_file_hygiene.py": [
    "tests/shared/test_sast.py"
+  ],
+  "scripts/tools/lint/mkdocs-anchor-debt.txt": [
+   "tests/lint/test_mkdocs_strict_check.py"
+  ],
+  "scripts/tools/lint/mkdocs_strict_check.sh": [
+   "tests/lint/test_mkdocs_strict_check.py"
   ],
   "scripts/tools/lint/validate_docs_versions.py": [
    "tests/lint/test_validate_docs_versions.py"
