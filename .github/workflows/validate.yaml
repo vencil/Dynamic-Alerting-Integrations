@@ -115,7 +115,7 @@ jobs:
               # anything under scripts/ops/, and `scripts/ops/**` would pull
               # three required checks into every host-side escape-hatch edit.
               # (Widening this to `scripts/ops/_verify_*.sh` would RED the
-              # coverage guard in tests/ops/test_portal_path_filter_coverage.py
+              # coverage guard in tests/ops/test_ci_path_filter_coverage.py
               # — its `_covers` models `*.ext`, not `prefix_*.ext`. Extend that
               # alphabet first.)
               - "scripts/ops/_verify_download.sh"
@@ -134,7 +134,7 @@ jobs:
               # Conservative by the banner's own rule — recorded here so it is
               # a choice, not a surprise.
               # Both entries enforced by
-              # tests/ops/test_portal_path_filter_coverage.py.
+              # tests/ops/test_ci_path_filter_coverage.py.
               - "requirements/**"
               - "tests/**"
               - ".github/custom-rule-policy.yaml"
@@ -155,7 +155,7 @@ jobs:
               # have produced this list — the paths are assembled across several
               # tables — which is the point: an indirect read through a script a
               # job merely invokes is the class the coverage guard in
-              # tests/ops/test_portal_path_filter_coverage.py documents it
+              # tests/ops/test_ci_path_filter_coverage.py documents it
               # CANNOT see, so this group is maintained by measurement.
               # Editing any one of them ALONE skips all three required checks,
               # and the version/count drift they exist to catch then lands on

@@ -1,8 +1,17 @@
 """Drift guards for CI path filters — three invariants, one failure mode.
 
-⛔ The filename says "portal" for history's sake; two of the three halves are
-not portal-specific and the newest one scans every workflow that path-gates
-jobs. Read this list before assuming what is (and is not) enforced here:
+Renamed from `test_portal_path_filter_coverage.py` (#1373), because the old name
+needed a ⛔ note apologising that only one of its three halves was portal-
+specific — and a comment explaining why a filename lies is a signal to rename
+the file, not a fix.
+
+⛔ Chasing a reference written before the rename: grepping the old name is NOT
+enough, and that is the whole lesson of #1373. A reference wrapped mid-token
+across two comment lines is invisible to a whole-name grep — one survived the
+rename sweep exactly that way. Rejoin comment continuations (drop the newline,
+its indent, and any `#`/`//`/`*` prefix) BEFORE matching.
+
+Read this list before assuming what is (and is not) enforced here:
 
   1. `portal` filter vs portal Vitests — every out-of-tree file a portal test
      READS must be in ci.yml's `portal` filter. (The original guard, below.)

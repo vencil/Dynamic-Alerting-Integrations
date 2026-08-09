@@ -78,7 +78,7 @@ jobs:
               - "scripts/tools/lint/**/*.sh"
               # ⛔ Three inputs reached INDIRECTLY — through a script a gated job
               # merely invokes. That is exactly the class the coverage guard in
-              # tests/ops/test_portal_path_filter_coverage.py documents it
+              # tests/ops/test_ci_path_filter_coverage.py documents it
               # CANNOT see, so this group is maintained by measurement, not by
               # review: every `python … .py` command in every gated leg of this
               # workflow was replayed under an open()/read_text recorder, and
@@ -130,7 +130,7 @@ jobs:
               # downloads are unverified, i.e. a network-flake surface). Worth
               # it against a silently unbuilt doc site; recorded so it is a
               # choice, not a surprise. Enforced by
-              # tests/ops/test_portal_path_filter_coverage.py.
+              # tests/ops/test_ci_path_filter_coverage.py.
               - "requirements/**"
               - ".github/workflows/docs-ci.yaml"
               - ".pre-commit-config.yaml"
