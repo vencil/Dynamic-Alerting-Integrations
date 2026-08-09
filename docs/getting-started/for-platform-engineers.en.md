@@ -611,7 +611,7 @@ Prometheus's `/-/reload` and Alertmanager's `/-/reload` are HTTP POST endpoints 
 
 ## Self-Service Portal (tenant-api)
 
-> **How to deploy** it is in [§Deploy tenant-api + da-portal](#deploy-tenant-api-da-portal-tenant-manager) above.
+> **How to deploy** it is in [§Deploy tenant-api + da-portal](#deploy-tenant-api--da-portal-tenant-manager) above.
 
 The platform provides a Web UI (tenant-manager) for Domain Experts to self-manage tenant configurations without editing YAML directly:
 

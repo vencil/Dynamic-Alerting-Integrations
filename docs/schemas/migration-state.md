@@ -144,7 +144,7 @@ lang: zh
 
 ## 關聯
 
-- **使用者**：[multi-system-migration-playbook §3](../scenarios/multi-system-migration-playbook.md#3-phase-0-discovery-inventory) Phase 0
+- **使用者**：[multi-system-migration-playbook §3](../scenarios/multi-system-migration-playbook.md#3-phase-0--discovery--inventory) Phase 0
 - **schema 系列**：[docs/schemas/](README.md)（其他 schema 文件）
 - **Future SSOT**：v2.9 backlog（待開 issue）
 

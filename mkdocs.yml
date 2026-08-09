@@ -16,6 +16,24 @@ exclude_docs: |
   README-root.md
   README-root.en.md
 
+# Link validation (mkdocs >= 1.6 native).
+# `anchors` defaults to `info`, i.e. swallowed by the build log — which is how
+# a batch of `#section` links rotted unnoticed. Promoting it to `warn` makes
+# the mismatches visible and greppable by
+# scripts/tools/lint/mkdocs_strict_check.sh.
+#
+# Detection only, on purpose. The site's heading ids come from
+# Python-Markdown's default (ASCII-only) `toc` slugify, which both collapses
+# whitespace runs and strips CJK outright — `9. 維度標籤 — 多 DB 類型支援`
+# becomes `#9-db`, and a pure-CJK heading becomes `#_1`. github.com's slugger
+# does neither. The two renderers genuinely disagree, so these warnings are
+# real findings against the *site*, not noise. Reconciling them means swapping
+# `toc.slugify` for a GFM-compatible one — staged separately as B3. Do NOT
+# lower this back to `info` to make the count go away.
+validation:
+  links:
+    anchors: warn
+
 theme:
   name: material
   language: zh

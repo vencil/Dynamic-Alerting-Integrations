@@ -210,7 +210,7 @@ graph LR
 | **Alert Routing** | 多通道通知確保關鍵告警必達正確人員 | 6 種 receiver、Timing Guardrails、Enforced Routing | [config-driven.md](design/config-driven.md) |
 | **Tenant API** | Domain expert 可自助操作，無需 YAML 知識 | Commit-on-write + RBAC 熱更新 + PR Write-back + 套完繼承的 effective config endpoint | [config-driven.md](design/config-driven.md) |
 | **Rule Packs** | 跨團隊並行開發零 PR 衝突 | 16 個 Projected Volume + 三部分結構 + 雙語 Annotation | [rule-packs.md](design/rule-packs.md) |
-| **客戶導入管線** | 既有 PromRule corpus → `conf.d/` 全自動化；anti-vendor-lock-in；零 orphan tenant 風險 | 5-step 遷移鏈（解析 → Profile Builder → Hierarchy-Aware Batch PR → Dangling Defaults Guard）。圖示見 [§1.3](#13-客戶導入與-gitops-治理管線-day-0-day-1-day-2) | [migration-toolkit-installation.md](migration-toolkit-installation.md) |
+| **客戶導入管線** | 既有 PromRule corpus → `conf.d/` 全自動化；anti-vendor-lock-in；零 orphan tenant 風險 | 5-step 遷移鏈（解析 → Profile Builder → Hierarchy-Aware Batch PR → Dangling Defaults Guard）。圖示見 [§1.3](#13-客戶導入與-gitops-治理管線-day-0--day-1--day-2) | [migration-toolkit-installation.md](migration-toolkit-installation.md) |
 | **效能架構** | 500+ tenant 毫秒級處理，資源成本近乎不隨租戶數增長 | Pre-computed Recording Rule、O(M) 複雜度、Cardinality Guard | [benchmarks.md](benchmarks.md) |
 | **高可用性 (HA)** | SLA 99.9%+ 警報可靠度，滾動更新零中斷 | 2 副本、PDB、`max by(tenant)` 防雙倍計算 | [high-availability.md](design/high-availability.md) |
 | **未來路線** | 權限 × 可觀測性閉環 × 智慧化 | Field-level RBAC、Auto-Discovery、DaC、Anomaly-Aware Threshold | [roadmap-future.md](design/roadmap-future.md) |

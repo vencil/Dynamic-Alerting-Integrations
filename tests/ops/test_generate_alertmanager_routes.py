@@ -838,11 +838,20 @@ class TestShippedDeclaredListIsSettable:
 
     _HELM_VALUES = "helm/threshold-exporter/values.yaml"
     _DEV_DEFAULTS = "components/threshold-exporter/config/conf.d/_defaults.yaml"
-    # ⛔ The third copy, and the only HAND-WRITTEN one: try-local's seed
-    # `_defaults.yaml` is not spliced by `--regen`, so nothing but this test
-    # stops it drifting from the two generated surfaces. try-local is the
-    # showcase a reader meets first — a stale list there teaches the wrong
-    # contract with no error anywhere.
+    # ⛔ The third copy. NOT hand-written any more (it was until #1176/PR #1344):
+    # the seed carries its own generated block — surface id `try-local-optional`
+    # — and `check_threshold_registry.py --regen` splices it like the other two,
+    # so `--ci`'s stale-surface check is a second gate on this file.
+    #
+    # The two gates are complementary, not redundant — measured, not assumed:
+    #   * drop a key INSIDE the markers → BOTH red (--ci stale-surface + the
+    #     equality assertion below);
+    #   * append a key AFTER the `<<<` end marker → --ci exits 0 (it diffs the
+    #     marker-delimited block, not the key), and the assertion below is the
+    #     only thing that fails, because it reads the PARSED list.
+    # try-local is the showcase a reader meets first, so a list there that
+    # disagrees with the shipped surfaces teaches the wrong contract; that
+    # second failure mode has no other reader.
     _TRY_LOCAL_SEED = "try-local/seed/conf.d/_defaults.yaml"
 
     @staticmethod
@@ -867,9 +876,11 @@ class TestShippedDeclaredListIsSettable:
             lambda d: (d.get("thresholdConfig") or {}).get("optional_overrides") or [])
 
     def test_the_shipped_artifacts_carry_the_same_non_empty_list(self):
-        """空清單會讓底下每個迴圈變成永遠綠——本 repo 一再抓到的形狀。前兩份產物
-        由同一個 renderer 生成，內容分歧代表其中一面漏跑 `--regen`；第三份
-        （try-local seed）是手抄的，這條斷言就是它唯一的 gate。"""
+        """空清單會讓底下每個迴圈變成永遠綠——本 repo 一再抓到的形狀。三份產物
+        （#1176/PR #1344 起連 try-local seed 在內）都由同一個 renderer 生成，
+        內容分歧代表其中一面漏跑 `--regen`。這條斷言不是它們唯一的 gate——`--ci`
+        的 stale-surface 也擋——但比對的是**解析後**的清單而非 marker 內的區塊
+        文字，所以 marker 之外被塞進同一個 key 的項目只有這裡會紅。"""
         helm = self._shipped()
         dev = self._shipped_from(
             self._DEV_DEFAULTS, lambda d: d.get("optional_overrides") or [])

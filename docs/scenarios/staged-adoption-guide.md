@@ -278,7 +278,7 @@ Rule Pack v2 升級時若**改了 alert name 或 label schema**，客戶針對 v
    - `_defaults.yaml` 的 disable list — 確認 v2 alertname 也在清單上（或加進去）
    - AM 的 silencer matchers — 確認 v2 label schema 不會讓既有 matcher mismatch
    - **缺哪一個就會 double-fire；補上才能 ship v2**
-   - 具體排查命令見 [troubleshooting-checklist §1.3.2](../integration/troubleshooting-checklist.md#132-silencer-mismatchdisablement-drift-double-fire-alert-storm)
+   - 具體排查命令見 [troubleshooting-checklist §1.3.2](../integration/troubleshooting-checklist.md#132-silencer-mismatchdisablement-drift--double-fire-alert-storm)
 3. 對每個 `custom_*`：判斷 v2 是否吸收 → 若是，本 guide 的 promotion 流程跑
 4. 對 v2 改語意的：`custom_*` 重寫對齊 v2 schema 或留原樣（**且** disable 配置同步更新）
 5. 對 v2 breaking：必須要 promote（被動 forced upgrade）

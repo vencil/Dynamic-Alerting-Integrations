@@ -14,6 +14,8 @@ Functions:
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import fnmatch
 import os
 import re
@@ -335,8 +337,42 @@ _PLATFORM_RULES_CONFIGMAP = (
 _PLATFORM_IDENTITY_CACHE: "tuple[dict, ...] | None" = None
 # `sum by (tenant)` / `max by (namespace, tenant)` … — a label the alert only
 # carries at fire time, which is exactly the class that made this guard necessary.
-_EXPR_TENANT_AGG_RE = re.compile(
-    r'\b(?:sum|max|min|count|avg|topk|bottomk|group)\s+by\s*\(\s*[^)]*\btenant\b')
+#
+# ⛔ Matches ANY `by (…)` grouping list, not `<aggregator> by (…)`. PromQL accepts
+# the modifier on either side of the argument list, and an aggregator-anchored
+# pattern sees only the prefix form:
+#     sum by (tenant) (rate(x[5m]))   ← seen
+#     sum(rate(x[5m])) by (tenant)    ← MISSED, same query
+# A pure reformat between those two — no semantic change, the kind of edit that
+# sails through review — used to drop the alert out of this guard's probe set and
+# make it tenant-silenceable again. The keyword list was also short three
+# aggregators PromQL has (`stddev`, `stdvar`, `quantile`, `count_values`), so
+# `stddev by (tenant) (…)` was invisible for no stated reason at all. `by (…)` is
+# the whole grammar of the thing being detected; enumerating what may precede it
+# only adds ways to be wrong.
+_EXPR_TENANT_AGG_RE = re.compile(r'\bby\s*\(\s*[^)]*\btenant\b\s*[,)]')
+
+
+def _configmap_rule_bodies(doc: dict):
+    """Every rule-file body a kubelet would project from *doc*, as text.
+
+    ``data`` values are already text. ``binaryData`` values are base64 and are
+    decoded here: a projected ConfigMap volume with explicit ``items`` falls back
+    to ``BinaryData`` when the key is absent from ``Data`` (kubelet's
+    ``MakePayload``), so a rules file parked there is served to Prometheus
+    exactly like a ``data`` one. Undecodable bytes are skipped rather than
+    raised on — one unreadable key must not blank the whole probe set, which is
+    the fail-open direction.
+    """
+    for section, decode in (("data", False), ("binaryData", True)):
+        for value in (doc.get(section) or {}).values():
+            if not decode:
+                yield str(value)
+                continue
+            try:
+                yield base64.b64decode(str(value), validate=True).decode("utf-8")
+            except (ValueError, UnicodeDecodeError, binascii.Error):
+                continue
 
 
 def platform_alert_identities(
@@ -353,6 +389,16 @@ def platform_alert_identities(
     fallback is a strict subset, so it can only under-report, never green-light
     something the full set would flag — and a repo-anchored test pins that
     in-repo callers get the full set, so the degradation cannot go unnoticed.
+
+    ⛔ EVERY ConfigMap document and EVERY key under ``data`` / ``binaryData``,
+    not ``docs[0]``'s first key. Both narrowings were silent drops, and dropping
+    an identity here is fail-OPEN: an alert absent from the probe set is one
+    :func:`find_tenant_silenceable_platform_inhibits` never tests, so a
+    tenant-triggered inhibit that would silence it reads as safe. A ConfigMap
+    growing a second data key is ordinary (kubelet projects each key as its own
+    file and Prometheus globs the directory), and ``binaryData`` is a real
+    delivery path in this repo, not a curiosity — see ``_rule_tree`` for the
+    kubelet ``MakePayload`` fallback that makes it one.
     """
     global _PLATFORM_IDENTITY_CACHE
     if configmap_path is None and _PLATFORM_IDENTITY_CACHE is not None:
@@ -361,26 +407,42 @@ def platform_alert_identities(
     try:
         docs = [d for d in yaml.safe_load_all(path.read_text(encoding="utf-8"))
                 if d and d.get("kind") == "ConfigMap"]
-        rules_doc = yaml.safe_load(next(iter(docs[0]["data"].values())))
+        if not docs:
+            raise KeyError("no ConfigMap document")
         out: list[dict] = []
-        for group in rules_doc.get("groups", []):
-            for rule in group.get("rules", []):
-                if "alert" not in rule:
+        for doc in docs:
+            for body in _configmap_rule_bodies(doc):
+                rules_doc = yaml.safe_load(body) or {}
+                if not isinstance(rules_doc, dict):
                     continue
-                labels = dict(rule.get("labels") or {})
-                if labels.get("alert_source") != "platform":
-                    # Watchdog rides its own index-0 lane and deliberately carries
-                    # no discriminator; assert_watchdog_inhibit_immunity covers it
-                    # at the same call sites. Keying on the marker (not on the
-                    # alertname) means a future unmarked alert is excluded for the
-                    # same stated reason rather than by accident.
-                    continue
-                labels["alertname"] = rule["alert"]
-                if _EXPR_TENANT_AGG_RE.search(str(rule.get("expr", ""))):
-                    labels.setdefault("tenant", "any-tenant")
-                out.append(labels)
+                for group in rules_doc.get("groups") or []:
+                    # ⛔ Per-element isolation, matching `_configmap_rule_bodies`
+                    # above. Without it a single non-mapping element raises into
+                    # the handler below and `identities` collapses to the
+                    # six-entry fallback constant — the fail-OPEN direction this
+                    # function's docstring warns about, reachable from one bad
+                    # element anywhere in the tree. Measured: 41 identities -> 6.
+                    if not isinstance(group, dict):
+                        continue
+                    for rule in group.get("rules") or []:
+                        if not isinstance(rule, dict) or "alert" not in rule:
+                            continue
+                        labels = dict(rule.get("labels") or {})
+                        if labels.get("alert_source") != "platform":
+                            # Watchdog rides its own index-0 lane and deliberately
+                            # carries no discriminator; assert_watchdog_inhibit_
+                            # immunity covers it at the same call sites. Keying on
+                            # the marker (not on the alertname) means a future
+                            # unmarked alert is excluded for the same stated reason
+                            # rather than by accident.
+                            continue
+                        labels["alertname"] = rule["alert"]
+                        if _EXPR_TENANT_AGG_RE.search(str(rule.get("expr", ""))):
+                            labels.setdefault("tenant", "any-tenant")
+                        out.append(labels)
         identities = tuple(out) if out else PLATFORM_ALERT_IDENTITY_LABELS
-    except (OSError, yaml.YAMLError, KeyError, StopIteration, AttributeError):
+    except (OSError, yaml.YAMLError, KeyError, StopIteration, AttributeError,
+            TypeError, ValueError):
         identities = PLATFORM_ALERT_IDENTITY_LABELS
     if configmap_path is None:
         _PLATFORM_IDENTITY_CACHE = identities

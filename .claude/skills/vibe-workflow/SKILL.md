@@ -26,7 +26,7 @@ Hook 設定見 [`.claude/settings.json`](../../../.claude/settings.json)。完�
 
 1. **⛔ 永遠不要用 Bash 工具執行 `sed -i`** — 改用 Read+Edit 工具。已有 shell wrapper 攔截（`vibe-sed-guard.sh`），違反時會直接報錯阻止。如需批次替換用 pipe：`sed '...' < file > file.tmp && mv file.tmp file`
 
-2. **FUSE phantom lock** → `make git-preflight`（或 `make git-lock ARGS="--clean"`）；頑強殘影升級 `make fuse-reset`（Level 1+3 自動，Level 2/4/5 指引見 [windows-mcp-playbook §修復層 B](../../../docs/internal/windows-mcp-playbook.md#修復層-bfuse-cache-重建level-1-5)）。FUSE 側 git 操作反覆卡住時 → **Windows 逃生門**：`scripts/ops/win_git_escape.bat`（[§修復層 C](../../../docs/internal/windows-mcp-playbook.md#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑)）
+2. **FUSE phantom lock** → `make git-preflight`（或 `make git-lock ARGS="--clean"`）；頑強殘影升級 `make fuse-reset`（Level 1+3 自動，Level 2/4/5 指引見 [windows-mcp-playbook §修復層 B](../../../docs/internal/windows-mcp-playbook.md#修復層-bfuse-cache-重建level-1--5)）。FUSE 側 git 操作反覆卡住時 → **Windows 逃生門**：`scripts/ops/win_git_escape.bat`（[§修復層 C](../../../docs/internal/windows-mcp-playbook.md#修復層-cwindows-原生-git-fallbackfuse-側卡死時的備援路徑)）
 
    **2b. ⛔ 不要用 FUSE temp index（`GIT_INDEX_FILE=/tmp/xxx`）做 git commit** — `.git/index` 在 FUSE 側永遠是 stale 的，`commit-tree` 產出的 tree 不含修改。**所有 git add/commit/push 必須從 Windows 側執行**：`make win-commit MSG=_msg.txt FILES="a b"`（hook-gated wrapper），或手動 `cd C:\Users\vencs\vibe-k8s-lab && git add ... && git commit --no-verify -F _msg.txt && git push --no-verify`
 

@@ -87,8 +87,40 @@ candidate 的 `for:` / severity / raw-metric selector 與出貨 pack **逐條鎖
 
 ## 重跑（迴歸基線）
 
-需要 dev-container 內的 `vmsingle`（`:8428`）+ `vmalert-tool`/`vmalert`（見 ADR-030
-harness 的 VM 安裝說明）。每個函式庫：
+需要 `vmsingle`（`:8428`）+ `vmalert`——dev-container 內兩支都已備妥：vmsingle 是
+`/tmp/vm/victoria-metrics-prod`、vmalert 是 `/tmp/vm/vmalert-prod`（`inject_waveform.py`
+依序探 `$VMALERT` → `PATH` → 後者）。
+
+⛔ **本檔不複製一份安裝指令**——版本與 SHA 只能有一份，手抄第二份正是這個 repo
+在消滅的病。可執行的配方在 CI workflow 裡，照抄那裡：
+
+| 要裝什麼 | 唯一可執行來源 |
+|---|---|
+| `vmalert`（本節用的） | [`nightly-vm-replay.yaml`](../../../.github/workflows/nightly-vm-replay.yaml) 的 `Install vmalert (from the pinned vmutils tarball)` step |
+| `vmalert-tool`（⚠️ **本節不需要**，列此僅為指出與上一列 SHA 同源） | [`ci.yml`](../../../.github/workflows/ci.yml) 的 `Install vmalert-tool (VictoriaMetrics MetricsQL unit-test engine)` step（**同一份** vmutils tarball，同一組 SHA-256——下方重跑指令不會用到它） |
+| `vmsingle` | `nightly-vm-replay.yaml` 的 `Start pinned VictoriaMetrics (vmsingle, -retentionPeriod=100y)` step（digest-pinned image） |
+
+**版本從哪裡讀**：以上每一處都 `. tests/rulepacks/vm_engine_version` 取 `VM_VERSION`——
+那是引擎版本的單一 SSOT（現值見該檔）。但**兩種產物的耦合方式不同，別記成同一件事**：
+
+- **vmutils tarball**：SHA-256 直接與 `VM_VERSION` 耦合——兩支 install step 各自寫死
+  `VMUTILS_SHA256`，下載回來的是 `vmutils-linux-amd64-v${VM_VERSION}.tar.gz`，由
+  `scripts/ops/_verify_download.sh` 比對；改版號沒改 hash 即 fail。
+- **vmsingle image**：與 `VM_VERSION` 耦合的只有 **tag**——`nightly-vm-replay.yaml`
+  的 **Guard 1** 斷言 image 字串含 `:v${VM_VERSION}@`。**digest 不由 `VM_VERSION` 決定**
+  （同一個 tag 可以被重 pin 到不同 digest，Guard 1 完全看不見），digest 的正確性改由
+  **Guard 2** 顧：把該處的 image 字串與 [`vm-anchor-on-pin-change.yml`](../../../.github/workflows/vm-anchor-on-pin-change.yml)
+  裡那份**手同步副本**逐 byte 比對，只改一邊就 fail。也就是說 digest 錨的是「兩個
+  workflow 跑的是同一批 bytes」，不是「digest 對得上版號」。
+
+bump 程序、以及 dev-container 的 vmsingle 為何來自**另一包** tarball，見
+[`backend-compat-baseline.md`](../../../docs/internal/backend-compat-baseline.md)
+的「版本 pin 單一 SSOT」條。
+
+⚠️ [ADR-030](../../../docs/adr/030-decision-layer-migration-validation.md) **沒有** VM 安裝
+說明（本節原本指向那裡），且該 ADR 已宣告凍結、不再擴充——安裝面的 SSOT 只在上表。
+
+每個函式庫：
 
 ```sh
 # 驗證 → 注入 → 評分（--rules-delay-s 30 是 for:-alert 的 ALERTS 可見性所必需）

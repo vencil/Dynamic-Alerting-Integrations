@@ -220,6 +220,10 @@
    "tests/shared/test_entrypoint.py",
    "tests/shared/test_property_tools.py"
   ],
+  "scripts/tools/lint/_rule_tree.py": [
+   "tests/lint/test_check_rulepack_sync.py",
+   "tests/ops/test_generate_routes_orchestration.py"
+  ],
   "scripts/tools/lint/check_account_registry_monotonic.py": [
    "tests/lint/test_check_account_registry_monotonic.py"
   ],
@@ -270,7 +274,8 @@
    "tests/lint/test_check_doc_freshness.py"
   ],
   "scripts/tools/lint/check_doc_links.py": [
-   "tests/lint/test_check_doc_links.py"
+   "tests/lint/test_check_doc_links.py",
+   "tests/ops/test_generate_routes_orchestration.py"
   ],
   "scripts/tools/lint/check_flaky_registry.py": [
    "tests/shared/test_property_tools.py"
@@ -309,7 +314,8 @@
   ],
   "scripts/tools/lint/check_k8s_manifests.py": [
    "tests/lint/test_check_k8s_manifests.py",
-   "tests/lint/test_fallback_image_digest_pin.py"
+   "tests/lint/test_fallback_image_digest_pin.py",
+   "tests/ops/test_generate_routes_orchestration.py"
   ],
   "scripts/tools/lint/check_ksm_version_allowlist.py": [
    "tests/lint/test_check_ksm_version_allowlist.py"
@@ -434,6 +440,9 @@
    "tests/shared/test_property_tools.py"
   ],
   "scripts/tools/ops/_grar_render.py": [
+   "tests/ops/test_generate_routes_orchestration.py"
+  ],
+  "scripts/tools/ops/_grar_routes.py": [
    "tests/ops/test_generate_routes_orchestration.py"
   ],
   "scripts/tools/ops/_grar_validate.py": [
@@ -703,7 +712,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "e35092c1b39503477bca6fc7793d0fb743ba261471b8fc15ab89c3b7128f0510",
+ "source_digest": "3ce48d385d919ca11582c1505c31e3aa350672abde2697965db7199b31d0b080",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -966,6 +975,7 @@
   "tests/preview/test_app.py",
   "tests/preview/test_promtool_pin_parity.py",
   "tests/rulepacks/test_platform_rules_extract_sync.py",
+  "tests/rulepacks/test_reference_validation_readme_pointers.py",
   "tests/rulepacks/test_reference_validation_sync.py",
   "tests/rulepacks/test_vm_alert_parity.py",
   "tests/rulepacks/test_vm_backend_parity.py",
@@ -1289,6 +1299,9 @@
    "tests/dx/test_sync_tool_registry.py",
    "tests/lint/test_check_portal_asset_shipping.py"
   ],
+  "docs/cli-reference.md": [
+   "tests/ops/test_generate_routes_orchestration.py"
+  ],
   "docs/getting-started/for-platform-engineers.md": [
    "tests/helm/test_federation_store_namespace_guard.py"
   ],
@@ -1306,6 +1319,9 @@
   ],
   "docs/glossary.md": [
    "tests/lint/test_check_codename_gate.py"
+  ],
+  "docs/integration/troubleshooting-checklist.md": [
+   "tests/ops/test_generate_routes_orchestration.py"
   ],
   "docs/integration/victoriametrics-integration.md": [
    "tests/rulepacks/test_vm_alert_parity.py",
@@ -1325,7 +1341,8 @@
    "tests/dx/test_doc_coverage.py",
    "tests/dx/test_generate_doc_map.py",
    "tests/dx/test_generate_planning_index.py",
-   "tests/lint/test_check_bilingual_structure.py"
+   "tests/lint/test_check_bilingual_structure.py",
+   "tests/ops/test_generate_routes_orchestration.py"
   ],
   "docs/internal/backend-compat-baseline.md": [
    "tests/rulepacks/test_vm_backend_parity.py"
@@ -1631,6 +1648,8 @@
    "tests/shared/test_helm_chart_log_aggregation.py"
   ],
   "k8s/03-monitoring": [
+   "tests/lint/test_check_pint.py",
+   "tests/ops/test_generate_routes_orchestration.py",
    "tests/ops/test_scaffold_db.py"
   ],
   "k8s/03-monitoring/configmap-alertmanager.yaml": [
@@ -1687,8 +1706,12 @@
   "k8s/03-monitoring/validatingadmissionpolicy-projection-gate.yaml": [
    "tests/shared/test_projection_gate_vap.py"
   ],
+  "k8s/04-tenant-api": [
+   "tests/ops/test_generate_routes_orchestration.py"
+  ],
   "k8s/04-tenant-api/configmap-rbac.yaml": [
-   "tests/lint/test_check_admin_config_schema.py"
+   "tests/lint/test_check_admin_config_schema.py",
+   "tests/ops/test_generate_routes_orchestration.py"
   ],
   "k8s/04-tenant-api/deployment.yaml": [
    "tests/lint/test_check_k8s_manifests.py",
@@ -1696,7 +1719,8 @@
    "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   "k8s/crd": [
-   "tests/lint/test_check_k8s_manifests.py"
+   "tests/lint/test_check_k8s_manifests.py",
+   "tests/ops/test_generate_routes_orchestration.py"
   ],
   "mkdocs.yml": [
    "tests/lint/test_check_head_blob_hygiene.py"
@@ -1732,6 +1756,7 @@
    "tests/rulepacks/test_reference_validation_sync.py"
   ],
   "rule-packs/rule-pack-redis.yaml": [
+   "tests/ops/test_generate_routes_orchestration.py",
    "tests/shared/test_ci_flag_contract.py",
    "tests/shared/test_json_stdout_contract.py"
   ],
@@ -1967,6 +1992,10 @@
    "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_property_tools.py"
   ],
+  "scripts/tools/lint/_rule_tree.py": [
+   "tests/lint/test_check_pint.py",
+   "tests/ops/test_generate_routes_orchestration.py"
+  ],
   "scripts/tools/lint/check_admin_config_schema.py": [
    "tests/lint/test_check_admin_config_schema.py"
   ],
@@ -1992,7 +2021,8 @@
    "tests/lint/test_check_doc_k8s_refs.py"
   ],
   "scripts/tools/lint/check_doc_links.py": [
-   "tests/dx/test_coverage_gap_analysis.py"
+   "tests/dx/test_coverage_gap_analysis.py",
+   "tests/rulepacks/test_reference_validation_readme_pointers.py"
   ],
   "scripts/tools/lint/check_engagement_disclosure.py": [
    "tests/lint/test_check_engagement_disclosure.py"
@@ -2266,7 +2296,8 @@
    "tests/golden/test_merge_parity.py"
   ],
   "tests/helm": [
-   "tests/dx/test_verify_diff.py"
+   "tests/dx/test_verify_diff.py",
+   "tests/helm/test_optional_overrides_render.py"
   ],
   "tests/helm/test_image_tag_derivation.py": [
    "tests/shared/test_helm_portal.py"
@@ -2313,6 +2344,9 @@
   "tests/ops/test_federation_revocation_reconciler.py": [
    "tests/helm/test_federation_store_sentinel_guard.py"
   ],
+  "tests/ops/test_generate_routes_orchestration.py": [
+   "tests/lint/test_check_pint.py"
+  ],
   "tests/ops/test_nightly_scan_matrix_drift.py": [
    "tests/ops/test_nightly_race_issue_policy.py"
   ],
@@ -2329,9 +2363,15 @@
   "tests/rulepacks": [
    "tests/dx/test_custom_alerts_promtool.py",
    "tests/dx/test_inject_waveform.py",
+   "tests/lint/test_check_pint.py",
    "tests/lint/test_check_vmalert_coverage.py",
+   "tests/ops/test_generate_routes_orchestration.py",
    "tests/rulepacks/test_platform_rules_extract_sync.py",
+   "tests/rulepacks/test_reference_validation_readme_pointers.py",
    "tests/rulepacks/test_vm_alert_parity.py"
+  ],
+  "tests/rulepacks/reference-validation/README.md": [
+   "tests/rulepacks/test_reference_validation_readme_pointers.py"
   ],
   "tests/rulepacks/vm_deviation_catalog.yaml": [
    "tests/rulepacks/test_vm_alert_parity.py"

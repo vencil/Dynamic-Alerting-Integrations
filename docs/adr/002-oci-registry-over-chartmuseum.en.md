@@ -106,4 +106,4 @@ Helm 3.8+ natively supports OCI-level artifact distribution standards. Helm char
 | [005-projected-volume-for-rule-packs.en](005-projected-volume-for-rule-packs.en.md) | ⭐⭐⭐ |
 | [README.en](README.en.md) | ⭐⭐⭐ |
 | ["Architecture and Design"](../architecture-and-design.md) | ⭐⭐ |
-| ["Architecture & Design — Appendix A"](../architecture-and-design.en.md#appendix-a-role-tool-quick-reference) | ⭐⭐ |
+| ["Architecture & Design — Appendix A"](../architecture-and-design.en.md#appendix-a-role--tool-quick-reference) | ⭐⭐ |

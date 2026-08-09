@@ -13,9 +13,10 @@ import os
 import re
 import sys
 import argparse
+import unicodedata
 from pathlib import Path
 from collections import defaultdict
-from typing import List, Tuple, Dict, Set
+from typing import List, Tuple, Dict, Optional, Set
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
 # Migrated in #489 Phase B (was missing encoding setup → would crash on
@@ -25,6 +26,98 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# GFM anchor generation — github.com heading-id semantics
+# ---------------------------------------------------------------------------
+# Authoritative rule (html-pipeline's TocFilter, which github.com runs, and
+# which `github-slugger` reproduces character-for-character):
+#
+#     id = text.downcase
+#     id.gsub!(/[^<word>\- ]/u, '')   # DELETE, never substitute
+#     id.tr!(' ', '-')                # per-character, runs NOT collapsed
+#
+# `<word>` == Alphabetic | Mark | Decimal_Number | Connector_Punctuation, so:
+#   * `_` (Pc) and ASCII `-` survive  →  `_defaults.yaml` → `_defaultsyaml`
+#   * CJK (Lo) survives
+#   * emoji (So), `*`, backtick, `:`, `（）` are deleted with NO `-` inserted
+#     →  `:ok_hand: Single` → `ok_hand-single`
+#   * tab / NBSP are NOT U+0020, so they are deleted rather than hyphenated
+#   * leading/trailing `-` are NOT stripped — `## 🚀 Deploy` is `#-deploy`
+# Repeated headings on one page get `-1`, `-2`, … (see `_GfmSlugger`).
+#
+# Alphabetic == L* | Nl | Other_Alphabetic.  stdlib `unicodedata` exposes
+# general categories only, so `Nl` is listed explicitly and Other_Alphabetic
+# is the one accepted gap — it costs the enclosed-letter symbols (`ⓐ`, `🅰`,
+# category So, which github.com keeps).  Documented in the fixture-parity
+# test; adding a dependency to close it is not worth it (see tests/lint/
+# test_check_doc_links.py::TestGithubSluggerFixtures).
+_GFM_KEEP_CATEGORIES = frozenset({"Nd", "Nl", "Pc"})
+
+
+def _gfm_slug(text: str) -> str:
+    """Lowercase → drop non-word chars → each U+0020 becomes one `-`."""
+    out: List[str] = []
+    for ch in text.lower():
+        if ch == " ":
+            out.append("-")
+        elif ch == "-":
+            out.append(ch)
+        else:
+            category = unicodedata.category(ch)
+            if category[0] in ("L", "M") or category in _GFM_KEEP_CATEGORIES:
+                out.append(ch)
+    return "".join(out)
+
+
+def _gfm_anchor(heading_text: str) -> str:
+    """Slug a raw Markdown heading the way github.com does.
+
+    GitHub slugs the *rendered* text, so inline markup is reduced first.
+    Emphasis / code markers (`*`, backtick, `~`) need no special-casing —
+    they are non-`\\p{Word}` and get dropped by `_gfm_slug` anyway, which is
+    exactly why `_` must NOT be pre-stripped alongside them.
+    """
+    text = heading_text.strip()
+    # ATX closing sequence (CommonMark §4.2): a run of `#` at end-of-line is
+    # part of the SYNTAX, not the text — but only when whitespace separates it
+    # from the content. `## Foo ##` and `## Foo #` are both `foo`; `## Foo##`
+    # keeps the hashes as text (they then vanish as punctuation, also `foo`).
+    # Without this the trailing space becomes a dash and the anchor is `foo-`,
+    # which is both a false red on the correct link and a false green on the
+    # 404 one. The pre-rewrite slugger got this right only by accident, via a
+    # `.strip("-")` that was itself wrong for leading dashes.
+    text = re.sub(r"\s+#+[ \t]*$", "", text)
+    text = re.sub(r"!\[([^\]]*)\]\([^\)]+\)", r"\1", text)  # image → alt text
+    text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)   # link → label
+    return _gfm_slug(text)
+
+
+class _GfmSlugger:
+    """Page-scoped slugger: appends `-1`, `-2`, … to duplicate headings.
+
+    Mirrors `github-slugger`'s counter, including its collision loop — the
+    suffix keeps climbing until the result is unused, so a page holding both
+    `Echo 1` and a later `Echo 1` yields `echo-1` then `echo-1-1`, and an
+    `echo-1` heading after those becomes `echo-1-2` rather than stealing an
+    id that is already taken.
+    """
+
+    def __init__(self) -> None:
+        self._occurrences: Dict[str, int] = {}
+
+    def dedup(self, base: str) -> str:
+        """Apply the page-scoped duplicate suffix to an already-built slug."""
+        result = base
+        while result in self._occurrences:
+            self._occurrences[base] += 1
+            result = f"{base}-{self._occurrences[base]}"
+        self._occurrences[result] = 0
+        return result
+
+    def slug(self, heading_text: str) -> str:
+        return self.dedup(_gfm_anchor(heading_text))
 
 
 class DocLinkChecker:
@@ -191,32 +284,61 @@ class DocLinkChecker:
 
     @staticmethod
     def _heading_to_anchor(heading_text: str) -> str:
-        """Convert heading text to GFM-compatible anchor id.
+        """Convert heading text to the anchor id github.com would emit.
 
-        GFM rules:
-        - Lowercase
-        - Remove non-alphanumeric/CJK chars except hyphens and spaces
-        - Replace spaces with hyphens
-        - Strip leading/trailing hyphens
+        Thin wrapper over `_gfm_anchor` (see its module-level docstring for
+        the rule and its provenance).  This returns the *base* slug; the
+        `-1`/`-2` duplicate suffixes are page-scoped and therefore live in
+        `_GfmSlugger`, which `_get_headings` drives.
         """
-        text = heading_text.strip()
-        # Remove inline markdown: bold, italic, code, links, images
-        text = re.sub(r"[*_`]", "", text)
-        text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)
-        text = re.sub(r"!\[([^\]]*)\]\([^\)]+\)", r"\1", text)
-        # Remove emoji shortcodes like :rocket:
-        text = re.sub(r":[a-zA-Z0-9_+-]+:", "", text)
-        # Lowercase
-        text = text.lower()
-        # Keep alphanumeric, CJK, spaces, hyphens
-        text = re.sub(
-            r"[^\w\s\u4e00-\u9fff\u3400-\u4dbf\uF900-\uFAFF-]",
-            "", text)
-        # Replace whitespace with hyphens
-        text = re.sub(r"\s+", "-", text)
-        # Strip leading/trailing hyphens
-        text = text.strip("-")
-        return text
+        return _gfm_anchor(heading_text)
+
+    @staticmethod
+    def _strip_html_comments(line: str) -> Tuple[str, bool]:
+        """Remove HTML comments from one non-fenced line.
+
+        Returns (remaining text, whether an unterminated comment BLOCK opened).
+
+        Two CommonMark rules do the work here, and getting either wrong makes
+        this swallow the rest of the file:
+
+        * Only a `<!--` that STARTS a line (≤3 spaces of indent) begins an HTML
+          block that can span lines. A `<!--` appearing mid-line — most often
+          inside a code span, e.g. ``## the `<!--` marker`` — is inline text; if
+          nothing closes it on that line it stays literal rather than opening a
+          block. Treating it as a block opener silently deleted every heading
+          below it.
+        * `<!-->` and `<!--->` are NOT comments (a comment's text may not begin
+          with `>` or `->`), so they must not open anything either.
+        """
+        out, i, opened = [], 0, False
+        while True:
+            start = line.find("<!--", i)
+            if start == -1:
+                out.append(line[i:])
+                break
+            if line[start + 4:start + 5] == ">" or line[start + 4:start + 6] == "->":
+                out.append(line[i:start + 4])       # malformed → literal text
+                i = start + 4
+                continue
+            end = line.find("-->", start + 4)
+            if end != -1:
+                out.append(line[i:start])
+                i = end + 3
+                continue
+            # ⛔ ≤3 spaces, per CommonMark. A whitespace-only prefix is not
+            # enough: at four spaces the line is an INDENTED CODE BLOCK and the
+            # `<!--` is literal text, so opening a comment block there swallows
+            # every heading below it — the same failure the mid-line case
+            # already guards, arrived at by indentation instead.
+            prefix = line[:start]
+            if prefix.strip() or len(prefix) > 3:
+                out.append(line[i:])                # mid-line / indented → literal
+            else:
+                out.append(line[i:start])
+                opened = True
+            break
+        return "".join(out), opened
 
     def _get_headings(self, filepath: Path) -> Set[str]:
         """Extract all heading anchors from a Markdown file (cached)."""
@@ -229,18 +351,63 @@ class DocLinkChecker:
             with open(resolved, "r", encoding="utf-8") as f:
                 lines = f.readlines()
 
-            in_code = False
-            for line in lines:
-                stripped = line.strip()
-                if stripped.startswith("```"):
-                    in_code = not in_code
-                    continue
-                if in_code:
-                    continue
+            # Fence state is (char, length): CommonMark closes a fence only with
+            # the SAME character and at least the opening run length, so a ```
+            # inside a ~~~~ block is content. A plain `startswith("```")` toggle
+            # misses `~~~` blocks entirely — their `# comments` then register as
+            # real headings and the anchor reads valid while GitHub 404s.
+            fence: Optional[Tuple[str, int]] = None
+            # `<!-- ... -->` may span lines; a heading inside one is not rendered,
+            # so commenting a section out must rot its inbound links (that is the
+            # whole point of this gate) rather than silently keep them green.
+            in_html_comment = False
+            # Page-scoped so repeated headings collect their GitHub `-1`/`-2`
+            # variants (adds anchors, never removes any → cannot false-positive).
+            slugger = _GfmSlugger()
+            for raw_line in lines:
+                line = raw_line
+
+                # ⛔ ORDER MATTERS, and the obvious order is wrong. Comments must
+                # be resolved INSIDE the fence state, never before it: a fenced
+                # block is literal content, so a stray `<!--` in a ```markdown
+                # example is text, not a comment opener. Stripping first let one
+                # such line swallow its own closing fence and then every heading
+                # to EOF — one benign doc example turned 0 broken anchors into 30.
+                if in_html_comment:
+                    end = line.find("-->")
+                    if end == -1:
+                        continue
+                    line = line[end + 3:]
+                    in_html_comment = False
+                else:
+                    stripped = line.strip()
+                    # ⛔ Same three-space limit as the comment opener above:
+                    # CommonMark recognises a fence — opening OR closing — only
+                    # at ≤3 spaces of indent. At four it is indented-code
+                    # content, and letting it toggle `fence` here inverts the
+                    # in-code/out-of-code state for the whole rest of the file.
+                    indent = len(line) - len(line.lstrip(" "))
+                    fence_m = (re.match(r"^(`{3,}|~{3,})", stripped)
+                               if indent <= 3 else None)
+                    if fence_m:
+                        char, run = fence_m.group(1)[0], len(fence_m.group(1))
+                        if fence is None:
+                            # An opening fence's info string may not contain backticks.
+                            if not (char == "`" and "`" in stripped[run:]):
+                                fence = (char, run)
+                            continue
+                        if (char == fence[0] and run >= fence[1]
+                                and not stripped[run:].strip()):
+                            fence = None
+                        continue
+                    if fence is not None:
+                        continue
+
+                line, in_html_comment = self._strip_html_comments(line)
                 m = re.match(r"^(#{1,6})\s+(.+)", line)
                 if m:
                     heading_text = m.group(2).strip()
-                    anchor = self._heading_to_anchor(heading_text)
+                    anchor = slugger.slug(heading_text)
                     if anchor:
                         anchors.add(anchor)
         except OSError:
@@ -289,6 +456,26 @@ class DocLinkChecker:
                       link_url: str) -> None:
         """Validate that an anchor exists in the target file's headings."""
         if not anchor:
+            return
+        if target_path.suffix.lower() not in (".md", ".markdown"):
+            # GitHub renders non-Markdown blobs as source; the ONLY anchors it
+            # offers are line refs (`#L42`). Slugging a .yaml's `#` comments as
+            # if they were headings invents anchors that do not exist —
+            # configmap-rules-platform.yaml alone yields 39 phantoms — so a
+            # bogus link reads valid while the one real form (`#L42`) reads broken.
+            # GitHub also mints column permalinks (`#L42C5-L48C10`) when a
+            # selection does not span whole lines; rejecting those reports a
+            # link that actually resolves.
+            if not re.fullmatch(r"L\d+(C\d+)?(-L\d+(C\d+)?)?", anchor):
+                self.broken_anchors.append({
+                    "file": source_file.relative_to(self.repo_root),
+                    "line": line_num,
+                    "link": link_url,
+                    "anchor": anchor,
+                    "best_match": None,
+                    "available": [f"(non-Markdown target; only #L<n> line refs "
+                                  f"exist on {target_path.name})"],
+                })
             return
         headings = self._get_headings(target_path)
         if not headings:

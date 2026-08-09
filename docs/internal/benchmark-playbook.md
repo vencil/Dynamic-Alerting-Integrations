@@ -21,7 +21,7 @@ lang: zh
 | Routing Bench | [§Routing Bench 注意事項](#routing-bench-注意事項) |
 | Under-Load Bench | [§Under-Load Bench 注意事項](#under-load-bench-注意事項) |
 | **PR-time bench gate 看懂 + 處理 regression** | [§Tier 1 PR-Time Bench Gate Operations](#tier-1-pr-time-bench-gate-operations) |
-| **Regression 處理（informational）+ nightly trend watchdog** | [§Regression 處理（Phase 2 — informational，不擋 merge）](#regression-處理phase-2-informational不擋-merge) |
+| **Regression 處理（informational）+ nightly trend watchdog** | [§Regression 處理（Phase 2 — informational，不擋 merge）](#regression-處理phase-2--informational不擋-merge) |
 | **Release-time cumulative drift report (Tier 2)** | [§Tier 2 Release-Time Bench Gate Operations](#tier-2-release-time-bench-gate-operations) |
 | **Reload 下記憶體 creep / GOMEMLIMIT / FreeOSMemory lever** | [§Memory characteristics under reload pressure](#memory-characteristics-under-reload-pressure-459) |
 | 踩坑記錄 | [§踩坑記錄](#踩坑記錄-lessons-learned) |

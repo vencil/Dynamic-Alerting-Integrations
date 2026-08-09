@@ -25,11 +25,24 @@ Two layers, the shape #1286 established for chart-face assertions
   * render (helm-gated) — `helm template` and compare the rendered
     `_defaults.yaml` against the values it was rendered from, item by item.
     `helm` exists in CI (azure/setup-helm) and in the dev container; locally
-    it skips. The fail-closed guard for a broken setup-helm step is central
-    (tests/shared/test_vector_projection_vrl.py::test_helm_present_when_required).
+    it skips. `test_helm_present_when_required` below is this file's OWN
+    fail-closed guard for a broken setup-helm step.
+
+⛔ That local guard is the MINORITY shape, not the house style — do not read the
+line above as "the siblings all have one". 14 files under tests/helm/ gate on
+`shutil.which("helm")`; counting this one, 4 carry a local copy
+(test_federation_reconciler_projection_grace.py,
+test_federation_store_namespace_guard.py, test_federation_store_sentinel_guard.py).
+The other 10 are covered ONLY by the central
+tests/shared/test_vector_projection_vrl.py::test_helm_present_when_required,
+which still exists and is still their sole protection — but it only reddens when
+that file is part of the same pytest run. Hence the local copy here: a job that
+selects only this file still reddens instead of silently skipping the render
+layer.
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -46,6 +59,19 @@ _DEFAULTS_FILE = "_defaults.yaml"
 
 _HAS_HELM = shutil.which("helm") is not None
 _needs_helm = pytest.mark.skipif(not _HAS_HELM, reason="helm CLI not on PATH")
+# Set to "1" by the CI job that installs helm (ci.yml python-tests-run ``env:``).
+# When set, a missing binary is a FAILURE, not a skip — a broken setup-helm step
+# would otherwise turn every render assertion here into a green no-op (#1300).
+_REQUIRE_HELM = os.environ.get("VIBE_REQUIRE_HELM") == "1"
+
+
+def test_helm_present_when_required() -> None:
+    """Fail-closed guard against silent disarmament."""
+    if _REQUIRE_HELM:
+        assert _HAS_HELM, (
+            "VIBE_REQUIRE_HELM=1 but no `helm` on PATH — every render assertion "
+            "in this file would have skipped silently"
+        )
 
 
 @pytest.fixture(scope="session")
