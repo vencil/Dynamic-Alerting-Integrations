@@ -619,12 +619,24 @@ class TestSyncCountsEmitsLF:
             f'newline="\\n" pin'
         )
 
-    # ⚠️ 這個名字的長度不是隨意的。`test_` 後面接**剛好 35 個** word char 會
-    # 命中 trufflehog 的 Lob API-key 形狀（`(live|test)_\w{35}`），而該
-    # detector 會把它回報成 VERIFIED，直接觸發 L2 secret-scan 的
-    # 「ROTATE FIRST」阻擋。本測試的前一個名字正好是 35，實際被擋過一次。
-    # 取名時避開 35 即可（此名為 40）。⛔ 也不要在註解裡把那個舊名字寫出來
-    # ——字面值一旦重新出現，掃描器一樣會命中。
+    # ⚠️ 這個名字的長度不是隨意的，但**原本寫在這裡的機制說明是錯的**，已於
+    # #1364 讀 pinned 原始碼（trufflehog v3.95.3 `pkg/detectors/lob/lob.go`）
+    # 更正。舊說法：「`(live|test)_\w{35}`，`test_` 後剛好 35 個 word char 就
+    # 中，避開 35 即可」——兩半都不對。
+    #
+    # 真正的 pattern 是 `(?i:lob)(?:.|[\n\r]){0,40}?\b([a-zA-Z0-9_]{40})\b`：
+    # **任何剛好 40 字元的識別字**，只要落在字母 `lob` 之後 40 字元內就中，而
+    # `lob` 藏在 `global` / `blob` 這種日常字裡。`test_` 前綴完全不相干——舊
+    # 例子只是 `test_`(5) + 35 恰好湊滿 40。⛔ 舊說法的推論還會反向誤導：照
+    # 它寫的「此名為 40（安全）」去理解，下一個人會以為 40 沒事，但 40 正是
+    # 觸發長度。這個方法名安全的真正理由是**完整識別字是 45 字元**
+    # （`test_` + 40），落在 `\b…{40}\b` 之外。
+    #
+    # ⚠️ 此外 #1364 之後 Lob detector 已在 L2 被停用
+    # （`TRUFFLEHOG_EXCLUDE_DETECTORS`），所以「會直接觸發 ROTATE FIRST 阻擋」
+    # 這個前提對今天的閘門也不再成立；保留這段是為了記錄命名限制的由來。
+    # ⛔ 仍然不要在註解裡把那個舊名字寫出來——字面值一旦重新出現，任何未停用
+    # 該 detector 的掃描（例如上游或別的 repo）一樣會命中。
     def test_sync_counts_touches_only_the_count_lines(self, patch_repo_root):
         """順帶釘住：只改數字，不動其他行。
 

@@ -3,10 +3,18 @@
 # Read by `scripts/tools/lint/check_secrets_staged.sh` (#445 AC i, L1).
 # This is an L1-only path-exclusion file: the L2 server-side workflow
 # `.github/workflows/secret-scan.yml` (#445 AC ii) scans with
-# `trufflehog git` mode and does NOT consume this file. L2 is the
-# unbypassable gate by design — sharing a silencing list with it would
-# weaken that. For an L2 false positive use the per-line
-# `# trufflehog:ignore` escape (documented near the bottom of this file).
+# `trufflehog git` mode and does NOT consume this file. Keeping the two
+# separate is deliberate: a path-exclusion list silences EVERY detector on
+# the listed paths, so sharing it with the server-side scan would trade a
+# narrow local convenience for a repo-wide blind spot. For an L2 false
+# positive use the per-line `# trufflehog:ignore` escape (documented near
+# the bottom of this file).
+#
+# ⚠️ The original wording justified this with "L2 is the unbypassable gate
+# by design". That premise is FALSE as of 2026-08-09: the L2 job is not in
+# main's required status checks and PRs have been merged with it red
+# (#1364). The separation is still right, but for the reason above — not
+# because L2 is a hard gate.
 #
 # IMPORTANT — who interprets this file:
 #   trufflehog's `filesystem` subcommand has no stable native

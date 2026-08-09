@@ -712,7 +712,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "3b1534645334f2b5a7362cb70a93329bf70c22f86f10d344a8778bddbcda6896",
+ "source_digest": "00990fa95792a8fa1fd0e7847dfcdcef1c5b83c4316d911545ba0048041ac93c",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -964,6 +964,7 @@
   "tests/ops/test_runtime_audit.py",
   "tests/ops/test_scaffold_db.py",
   "tests/ops/test_scaffold_tenant.py",
+  "tests/ops/test_secret_scan_gate.py",
   "tests/ops/test_shadow_verify.py",
   "tests/ops/test_silencer_drift_check.py",
   "tests/ops/test_state_reconcile.py",
@@ -1089,6 +1090,9 @@
   ],
   ".github/workflows/renovate.yaml": [
    "tests/ops/test_renovate_config.py"
+  ],
+  ".github/workflows/secret-scan.yml": [
+   "tests/ops/test_secret_scan_gate.py"
   ],
   ".github/workflows/try-local-smoke.yaml": [
    "tests/ops/test_trylocal_compose_pins.py"
@@ -1398,6 +1402,9 @@
   ],
   "docs/internal/platform-log-aggregation-runbook.md": [
    "tests/shared/test_helm_chart_log_aggregation.py"
+  ],
+  "docs/internal/secret-leak-remediation-sop.md": [
+   "tests/ops/test_secret_scan_gate.py"
   ],
   "docs/scenarios": [
    "tests/dx/test_bump_docs.py"
@@ -2167,6 +2174,9 @@
   "scripts/tools/lint/mkdocs_strict_check.sh": [
    "tests/lint/test_mkdocs_strict_check.py"
   ],
+  "scripts/tools/lint/trufflehog_to_sarif.py": [
+   "tests/ops/test_secret_scan_gate.py"
+  ],
   "scripts/tools/lint/validate_docs_versions.py": [
    "tests/lint/test_validate_docs_versions.py"
   ],
@@ -2390,6 +2400,9 @@
   ],
   "tests/lint/test_counterexample_coverage.py": [
    "tests/lint/test_check_threshold_registry.py"
+  ],
+  "tests/lint/test_trufflehog_to_sarif.py": [
+   "tests/ops/test_secret_scan_gate.py"
   ],
   "tests/ops": [
    "tests/dx/test_verify_diff.py",
