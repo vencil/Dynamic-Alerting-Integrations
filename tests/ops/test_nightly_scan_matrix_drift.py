@@ -504,33 +504,54 @@ def _delivered_pins_from_generator() -> tuple[str, ...]:
     sys.modules["_extractor_pins"] = mod
     spec.loader.exec_module(mod)
     pins = tuple(mod.delivered_refs(ROOT))
-    assert len(pins) == 4, (
-        f"expected 4 customer-delivered pins, got {len(pins)}: {pins}. If the "
-        "count legitimately changed, this sample set follows it automatically — "
-        "but check that the nightly bucket and its EXPECTED count moved too."
+    # ⛔ A FLOOR, not `== 4`. The sentence below promises the sample set follows a
+    # legitimate count change automatically, and an equality check is precisely
+    # what stops it doing so — the message described the behaviour the reader
+    # wanted rather than the one the code had. `_DELIVERED_PRODUCT_FLOOR` already
+    # holds this number and the two sibling floors already compare against it, so
+    # the literal was also a third copy of it.
+    assert len(pins) >= _DELIVERED_PRODUCT_FLOOR, (
+        f"expected at least {_DELIVERED_PRODUCT_FLOOR} customer-delivered pins, "
+        f"got {len(pins)}: {pins}. A DROP is the real signal here — the sample "
+        "set follows a legitimate increase automatically, but check that the "
+        "nightly bucket and its EXPECTED count moved too."
     )
     return pins
 
-_REF_SHAPE_MUST_MATCH = (
-    # ⛔ The real pins are IMPORTED, not transcribed. They used to be four
-    # literals labelled "verbatim", which is a claim that expires on the first
-    # legitimate bump: a coordinated `v3.5.0 -> v3.9.9` in both the generator and
-    # the scan matrix left all tests green while the comment silently became a
-    # lie — the samples stayed valid *shapes*, just no longer the real pins.
-    # Importing them also removes a third copy: the checker's own docstring said
-    # "there are exactly two places a ref exists", and transcribing them here
-    # made that three.
-    *_delivered_pins_from_generator(),
-    # First-party — matched by SHAPE, dropped later by the ghcr.io/vencil/ rule.
-    # It belongs here so that filter stays the thing doing the filtering.
-    "ghcr.io/vencil/da-tools:v9.9.9",
-    # A registry with an explicit port.
-    "localhost:5000/team/thing:1.0",
-    # The three digest forms the first draft missed.
-    f"alpine/k8s@{_A_DIGEST}",
-    f"alpine/k8s:1.34.9@{_A_DIGEST}",
-    f"quay.io/argoproj/argocd@{_A_DIGEST}",
-)
+
+def _ref_shape_must_match() -> tuple[str, ...]:
+    """Sample refs the shape MUST match — built on call, never at import.
+
+    ⛔ This used to be a module-scope tuple whose first element was
+    ``*_delivered_pins_from_generator()``, i.e. the generator ran during import.
+    Two things follow from that, and both were worse than they look: the helper
+    can raise ``SystemExit`` (a missing or empty pin table is a deliberate hard
+    exit, and this PR adds a member-level case), and at import time that aborts
+    COLLECTION of this module — so one bad pin takes out all ~55 guards in this
+    file at once, and reports it as a collection error rather than as the named
+    assertion that was written to explain it.
+    """
+    return (
+        # ⛔ The real pins are IMPORTED, not transcribed. They used to be four
+        # literals labelled "verbatim", which is a claim that expires on the first
+        # legitimate bump: a coordinated `v3.5.0 -> v3.9.9` in both the generator
+        # and the scan matrix left all tests green while the comment silently
+        # became a lie — the samples stayed valid *shapes*, just no longer the
+        # real pins. Importing them also removes a third copy: the checker's own
+        # docstring said "there are exactly two places a ref exists", and
+        # transcribing them here made that three.
+        *_delivered_pins_from_generator(),
+        # First-party — matched by SHAPE, dropped later by the ghcr.io/vencil/
+        # rule. It belongs here so that filter stays the thing doing the filtering.
+        "ghcr.io/vencil/da-tools:v9.9.9",
+        # A registry with an explicit port.
+        "localhost:5000/team/thing:1.0",
+        # The three digest forms the first draft missed.
+        f"alpine/k8s@{_A_DIGEST}",
+        f"alpine/k8s:1.34.9@{_A_DIGEST}",
+        f"quay.io/argoproj/argocd@{_A_DIGEST}",
+    )
+
 
 _REF_SHAPE_MUST_NOT_MATCH = (
     # Tagless — the documented non-goal above. Listed so that "we chose not to"
@@ -675,11 +696,12 @@ def test_the_generated_ref_shape_sees_every_pin_form_and_no_prose() -> None:
     measured claim — `test_every_ref_a_generated_customer_repo_carries_is_scanned`
     is where it is checked against the products.
     """
-    assert _REF_SHAPE_MUST_MATCH and _REF_SHAPE_MUST_NOT_MATCH, (
+    must_match = _ref_shape_must_match()
+    assert must_match and _REF_SHAPE_MUST_NOT_MATCH, (
         "both sample lists must be non-empty — an empty one makes its half of "
         "this test vacuous while the other half keeps it green")
 
-    missed = [s for s in _REF_SHAPE_MUST_MATCH if not _GENERATED_REF_SHAPE.match(s)]
+    missed = [s for s in must_match if not _GENERATED_REF_SHAPE.match(s)]
     assert not missed, (
         f"_GENERATED_REF_SHAPE does not match these real ref forms: {missed}\n"
         "A form it cannot see is a form the customer-delivered coverage guard "
@@ -692,7 +714,7 @@ def test_the_generated_ref_shape_sees_every_pin_form_and_no_prose() -> None:
         "Widening it far enough to match ordinary scalars turns the ref walk "
         "into a string walk and makes the anti-vacuity floors below vacuous. "
         "If one of these genuinely IS a ref form we deliver, move it to "
-        "_REF_SHAPE_MUST_MATCH deliberately — do not just loosen the pattern."
+        "_ref_shape_must_match() deliberately — do not just loosen the pattern."
     )
 
 
