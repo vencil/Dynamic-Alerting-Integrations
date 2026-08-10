@@ -89,18 +89,25 @@ WHAT THIS GUARD DOES **NOT** BUY
   decision, same disposition as #1349/#1350. ``--deploy helm`` is in the same
   position (its apply reads an ``environments/prod/values.yaml`` that ``init``
   does not create).
-* **Two coverage gaps left open ON PURPOSE, because neither can be shown to buy
-  detection today.** (a) The `conf.d/` that `init` scaffolds is the real input to
-  the customer's Stage 1, and nothing feeds it to `validate_config.py` even
-  though that module is importable in-process — measured, it currently exits 0
-  with 5/5 checks passing, so a guard there would start life green and stay
-  green until some future schema change. (b) The wizard's third claim surface,
+* ⛔ **ERRATUM — the exemption previously written here was wrong, and wrong in a
+  way worth keeping on the record.** It said: feeding the scaffolded `conf.d/`
+  to `validate_config.py` "would start life green and stay green until some
+  future schema change", and used that to justify not building the check. The
+  measurement behind that sentence is broken: `validate_config`'s known-key set
+  IS the sibling `_defaults.yaml` in the same directory, and `init` writes both
+  from one catalog — so the probe carries its own fix and 100% bogus keys still
+  pass 5/5. The right thing to measure is the REGISTRY identity, and that guard
+  would open **36 red** on today's output (nginx / clickhouse / db2 score zero
+  against `threshold-registry.yaml`) — the opposite of what the exemption
+  predicted. Tracked as #1387, together with the reason the existing
+  reachability gate misses it. **A probe that cannot go red is not evidence of
+  health; it is a broken instrument.**
+* **One coverage gap left open on purpose.** The wizard's third claim surface,
   `cicdGenerateInitCommand`, is checked only by substring in the portal suite;
-  its five flags were verified against `_build_parser()` by hand and all exist.
-  ⛔ Both are worth building and neither is built here: this file's own history
-  is that every guard added in a hurry shipped with one half of its mechanism
-  missing, and a guard whose counterfactual is "nothing changes" cannot be
-  distinguished from a guard that does nothing. Tracked rather than rushed.
+  its five flags were verified against `_build_parser()` by hand and all exist,
+  so a guard there starts green with no counterfactual to show for it. Worth
+  building, not built here — this file's own history is that every guard added
+  in a hurry shipped with one half of its mechanism missing.
 * **It does not check the exit-code contract of the commands it pins.** Every
   assertion here about failure is fail-OPEN-shaped: `continue-on-error` and
   `allow_failure` are blocked on both legs so a failure cannot be discarded.
