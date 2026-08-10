@@ -316,7 +316,18 @@ def test_engine_args_match_the_pre_commit_hook() -> None:
     quotes silently restores the tautology, which is why the shape, not the
     current text, is the problem.)
     """
-    hook = next(h for h in _hook_entry()["hooks"] if h["id"] == "actionlint")
+    hooks = _hook_entry()["hooks"]
+    # ⛔ Not a bare `next(...)`: the upstream repo also ships `actionlint-docker`
+    # and `actionlint-system`, each carrying its OWN args. Switching to one of
+    # them would raise StopIteration here and the reader would get a traceback
+    # instead of the sentence below that says what the contract is.
+    hook = next((h for h in hooks if h["id"] == "actionlint"), None)
+    assert hook is not None, (
+        f"no `actionlint` hook id in the {_ACTIONLINT_REPO} pre-commit entry "
+        f"(found {[h.get('id') for h in hooks]}); the `-docker` and `-system` "
+        f"variants pin their optional integrations separately — update this "
+        f"gate and tests/ops/test_generated_ci_artifacts.py together"
+    )
     hook_args = set(hook.get("args", []))
     assert {"-shellcheck=", "-pyflakes="} <= hook_args, (
         f"the actionlint pre-commit hook no longer pins its optional "
