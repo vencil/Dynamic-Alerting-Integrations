@@ -1289,6 +1289,50 @@ def test_every_scan_job_actually_scans_its_own_matrix() -> None:
             "_TRIVY_EXTRA_ALLOWED with the reason."
         )
 
+        # ⛔ Allowlisting the KEY says nothing about its VALUE, and for a waiver
+        # file the value is the whole safety argument. The comment on
+        # _TRIVY_EXTRA_ALLOWED claims this one is "ONLY conditionally and ONLY
+        # for recipe-preview's bundled promtool" — that sentence had nothing
+        # enforcing it. Measured: rewriting the expression to an unconditional
+        # `trivyignores: components/recipe-preview/.trivyignore.yaml` applied
+        # the waiver to all seven self-built images and left 43 tests passing.
+        # The file filters by CVE id, not by image, so today that is probably a
+        # no-op elsewhere — by coincidence, not by construction: one shared
+        # base-image CVE landing in that list would silently eat a real finding
+        # on six other images.
+        #
+        # Derived, not pinned: the waiver may only apply to a matrix entry that
+        # actually owns a waiver file on disk. Two independent sources (the
+        # workflow expression and the filesystem) have to agree.
+        if "trivyignores" in with_:
+            expr = str(with_["trivyignores"])
+            guarded = set(re.findall(r"matrix\.name\s*==\s*'([^']+)'", expr))
+            paths = set(re.findall(r"'([^']*\.trivyignore\.ya?ml)'", expr))
+            assert guarded, (
+                f"{job_name}'s trivyignores is unconditional ({expr!r}). A "
+                "waiver file must be scoped to the image it was written for; "
+                "applied matrix-wide it suppresses findings on every other "
+                "image in the bucket."
+            )
+            for path in paths:
+                owner = Path(path).parent.name
+                assert (ROOT / path).is_file(), (
+                    f"{job_name} references a waiver file that does not exist: "
+                    f"{path}"
+                )
+                assert owner in guarded, (
+                    f"{job_name} applies the waiver {path!r} (owned by "
+                    f"{owner!r}) under the condition(s) {sorted(guarded)}. The "
+                    "waiver must be gated on the image that owns it."
+                )
+                assert owner in {
+                    e.get("name") for e in
+                    (job.get("strategy", {}).get("matrix", {}).get("include") or [])
+                }, (
+                    f"{job_name} gates a waiver on {owner!r}, which is not in "
+                    "this job's matrix — the condition can never be true."
+                )
+
 
 @pytest.mark.parametrize("emptied", ["_GITLAB_APPLY_IMAGES", "GIT_SYNC_IMAGE"])
 def test_delivered_refs_refuses_a_half_empty_pin_table(tmp_path, emptied: str) -> None:
@@ -1382,6 +1426,64 @@ _TRIVY_EXTRA_ALLOWED: dict[str, frozenset[str]] = {
     "scan-thirdparty": frozenset(),
     "scan-delivered": frozenset(),
 }
+
+
+# Steps whose failure is allowed to be discarded, as {job: {step name}}. Empty
+# on purpose: the nightly workflow currently has ZERO of them, and its whole
+# design is fail-loud (summarize_trivy_cve.sh runs under `set -e` so an
+# unpullable image aborts instead of degrading to COUNT=0). An entry here is a
+# decision that has to be argued, not config.
+_NIGHTLY_DISARM_ALLOWED: dict[str, frozenset[str]] = {}
+
+
+def test_no_nightly_step_discards_its_own_failure() -> None:
+    """⛔ The disarm check existed but was wired to ONE workflow.
+
+    `_disarmed` / `_SWALLOW_RE` were added for the resolve workflow and are
+    reachable only through `_workflow_argvs`, whose sole call site names
+    `image-ref-resolve.yaml`. So the reasoning that motivated them — "a step
+    whose only output is pass/fail is worthless once its failure is discarded" —
+    was never applied to the three scan buckets this module actually exists to
+    protect. Measured: adding `continue-on-error: true` to scan-delivered's
+    Summarize step left all 43 tests passing.
+
+    ⚠️ Honest severity: this is not the main detection chain. `file_cve_report.sh`
+    computes `missing = EXPECTED - present` by counting artifacts on disk, not by
+    reading job conclusions, so a single silenced step still loses its fragment
+    and still trips the degraded banner. What a disarm buys is a green checkmark
+    on a bucket that actually failed, plus the standing risk that someone
+    silences BOTH the Trivy and the Summarize step (or the job) to stop a flaky
+    bucket reddening the nightly — at which point the count itself goes quiet.
+
+    The same helpers are reused deliberately: a second implementation of "what
+    counts as disarmed" is how the two drift apart.
+    """
+    wf = _nightly()
+    offenders: list[str] = []
+    for job_name, job in wf["jobs"].items():
+        allowed = _NIGHTLY_DISARM_ALLOWED.get(job_name, frozenset())
+        if (reason := _disarmed(job)):
+            offenders.append(f"job {job_name} ({reason})")
+        for step in (job.get("steps") or []):
+            label = str(step.get("name", "<unnamed>"))
+            if label in allowed:
+                continue
+            if (reason := _disarmed(step)):
+                offenders.append(f"{job_name}/{label} ({reason})")
+            folded = re.sub(r"\\\n\s*", " ", step.get("run") or "")
+            for line in folded.split("\n"):
+                if _SWALLOW_RE.search(_strip_bash_comment(line)):
+                    offenders.append(
+                        f"{job_name}/{label} (failure swallowed: "
+                        f"{line.strip()[:60]})"
+                    )
+    assert not offenders, (
+        "these nightly steps discard their own failure:\n  "
+        + "\n  ".join(offenders)
+        + "\nA scan step that cannot report failure is a scan that reports "
+        "clean. If one of these genuinely must be allowed to fail, add it to "
+        "_NIGHTLY_DISARM_ALLOWED with the reason — do not delete this test."
+    )
 
 
 def test_the_report_job_still_runs_when_a_bucket_fails() -> None:
