@@ -537,7 +537,8 @@ class TestGenerateDefaultsFromCandidates:
         ]
         suggestion = generate_defaults_from_candidates(candidates)
         body = yaml.dump({"defaults": suggestion["defaults"]}) + \
-            _render_critical_suggestion(suggestion["critical_overrides"])
+            _render_critical_suggestion(suggestion["critical_overrides"],
+                                        suggestion["defaults"])
 
         parsed = yaml.safe_load(body)
         assert parsed["defaults"] == {"cpu": "80"}
@@ -548,6 +549,106 @@ class TestGenerateDefaultsFromCandidates:
         for line in body.splitlines():
             if "cpu_critical" in line:
                 assert line.lstrip().startswith("#"), line
+
+    # 兩個段落標題。取自渲染器本身而非再抄一次字面值：抄一次就是第二份契約，
+    # 而這整個 PR 的主題就是手抄副本會各自漂移。
+    _READY_HEADER = "# READY —"
+    _BLOCKED_HEADER = "# ⛔ BLOCKED —"
+
+    def test_the_two_section_headers_are_what_the_renderer_emits(self):
+        """上面兩個常數是本檔的比對錨點，所以先證明它們真的出現在渲染輸出裡——
+        否則後面每一條 `in body` / `not in body` 都會變成恆真或恆假。"""
+        both = _render_critical_suggestion({"a_b_critical": "1", "c_d_critical": "2"},
+                                           {"a_b": "1"})
+        assert self._READY_HEADER in both, both
+        assert self._BLOCKED_HEADER in both, both
+
+    def test_dangling_critical_is_separated_from_the_copyable_ones(self):
+        """⛔ 建議行分兩組，判準是 base 在不在**同一份** `defaults:`（#1218 盲審）。
+
+        單一組的版本對每一條都給同一句指示「Copy each line into the `tenants:`
+        block」，而唯一的 caveat 講錯了後果——「takes effect while `<base>` has a
+        value」讀起來是「那一列不生效」，實際是 `ValidateTenantKeys` 把懸空的
+        `<base>_critical` 放進 **blocking** `Errors`、tenant-api 拒收**整份**租戶檔
+        （#1227；`gitops/writer.go:599` 的 `keyErrs`）。只有 critical severity 規則
+        的客戶（只 page 不 warn，很常見）會 100% 命中。
+        """
+        candidates = [
+            {"status": "perfect", "metric_key": "cpu", "severity": "warning", "threshold_value": "80"},
+            {"status": "perfect", "metric_key": "cpu", "severity": "critical", "threshold_value": "95"},
+            # base 從未以 warning severity 出現 → defaults 裡不會有 disk_usage
+            {"status": "perfect", "metric_key": "disk_usage", "severity": "critical", "threshold_value": "95"},
+        ]
+        suggestion = generate_defaults_from_candidates(candidates)
+        assert suggestion["defaults"] == {"cpu": "80"}
+        assert set(suggestion["critical_overrides"]) == {
+            "cpu_critical", "disk_usage_critical"}
+
+        body = _render_critical_suggestion(
+            suggestion["critical_overrides"], suggestion["defaults"])
+        # 段落標題，不是「出現過這個字」——BLOCKED 段的說明文字本身就提到 READY
+        # 清單（「move the line up to the READY list」），用鬆散比對會自己騙自己。
+        assert body.count(self._READY_HEADER) == 1 and body.count(self._BLOCKED_HEADER) == 1
+        ready, blocked = body.split(self._BLOCKED_HEADER, 1)
+
+        # 有 base 的那條在 READY 段；沒有 base 的在 BLOCKED 段——不是交換
+        assert "cpu_critical" in ready and "cpu_critical" not in blocked
+        assert "disk_usage_critical" in blocked and "disk_usage_critical" not in ready
+        # BLOCKED 段必須講對後果（整份被拒），不是「不生效」
+        assert "WHOLE tenant file" in blocked
+        # 數字仍然留著——這支工具的全部價值就是把客戶既有的閾值撈出來
+        assert 'disk_usage_critical: "95"' in body
+        # 兩組都必須整行是註解
+        for line in body.splitlines():
+            if "_critical:" in line:
+                assert line.lstrip().startswith("#"), line
+
+    def test_all_blocked_when_the_estate_is_critical_only(self):
+        """只 page 不 warn 的 estate：每一條建議都是懸空的，檔案不得出現 READY 段。"""
+        suggestion = generate_defaults_from_candidates([
+            {"status": "perfect", "metric_key": "disk_usage",
+             "severity": "critical", "threshold_value": "95"},
+        ])
+        assert "defaults" not in suggestion
+        body = _render_critical_suggestion(
+            suggestion["critical_overrides"], suggestion.get("defaults") or {})
+        assert self._BLOCKED_HEADER in body
+        assert self._READY_HEADER not in body
+
+    def test_critical_only_estate_never_writes_an_empty_defaults_mapping(self):
+        """⛔ 空的 `defaults:` 必須**省略**，不能 dump 成 `defaults: {}`（#1218 盲審）。
+
+        寫檔的守衛從 `if defaults:` 放寬成 `if suggestion:`，所以只有 critical
+        severity 的 estate 現在會走到寫檔。而這個檔的標頭寫的是「Review and merge
+        into conf.d/_defaults.yaml」——把一個字面的 `defaults: {}` 併到已經有內容的
+        `_defaults.yaml` 上，等於清空平台整個 base tier；同一個編輯在「鍵不存在」時
+        則無害。
+
+        走真的 `_write_phase2_outputs`，不是重寫一次它的組字串邏輯。
+        """
+        from pathlib import Path
+
+        import onboard_platform as op
+
+        candidates = [
+            {"status": "perfect", "metric_key": "disk_usage",
+             "severity": "critical", "threshold_value": "95"},
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = {"files_written": [], "phases": {}}
+            op._write_phase2_outputs(tmpdir, (candidates, [], {}), report)
+
+            written = [p for p in report["files_written"]
+                       if p.endswith("_defaults-suggestion.yaml")]
+            assert written, report["files_written"]
+            text = Path(written[0]).read_text(encoding="utf-8")
+
+        parsed = yaml.safe_load(text)
+        # 沒有 warning 層可建議時，`defaults:` 這個鍵根本不該存在
+        assert parsed is None or "defaults" not in parsed, text
+        assert "defaults: {}" not in text, text
+        # …但撈回來的數字仍然在檔案裡，那是跑 onboard 的唯一理由
+        assert 'disk_usage_critical: "95"' in text, text
 
     def test_no_critical_block_when_there_is_no_critical_tier(self):
         """空的一層不出標題——避免指向一個沒有內容的區段。"""

@@ -652,7 +652,7 @@ def generate_defaults_from_candidates(candidates):
     return out
 
 
-def _render_critical_suggestion(critical):
+def _render_critical_suggestion(critical, defaults=None):
     """Render the critical tier as a COMMENTED tenant-override block (#1218).
 
     Commented, and in the same file rather than a second one, on purpose. This
@@ -664,11 +664,37 @@ def _render_critical_suggestion(critical):
     look. A commented block cannot be merged by accident and still carries the
     numbers this tool went to the trouble of recovering.
 
+    ⛔ TWO groups, split on whether `<base>` is in the SAME suggestion's
+    `defaults:` (blind review, #1218). The single-group version handed every
+    recovered key the same instruction — "copy each line into the `tenants:`
+    block" — and its only caveat described the wrong consequence: "takes effect
+    while `<base>` has a value" reads as "that line stays quiet", when the
+    measured behaviour is that `ValidateTenantKeys` puts a dangling
+    `<base>_critical` on the BLOCKING `Errors` channel and tenant-api refuses
+    the WHOLE tenant file (#1227). An estate whose rules are critical-severity
+    only — page, never warn, which is common — makes 100% of the recovered keys
+    dangling, so following the instruction verbatim breaks every subsequent
+    write of that file.
+
+    Dropped rather than rendered was the other candidate and is wrong HERE, even
+    though it is what the sibling `init_project._catalog_critical` does. That
+    one is seeding a fresh stub, where a key nobody asked for is pure liability;
+    this one is REPORTING what the customer's own Alertmanager already had, and
+    silently discarding a threshold they are relying on today is the one thing a
+    migration tool must not do. So the numbers stay, under an instruction that
+    matches what will actually happen to them.
+
     Empty tier renders nothing at all, so the file never carries a heading with
     no rows under it.
     """
     if not critical:
         return ""
+    defaults = defaults or {}
+    ready, blocked = [], []
+    for key in sorted(critical):
+        base = key[: -len(CRITICAL_SUFFIX)]
+        (ready if base in defaults else blocked).append((key, base))
+
     lines = [
         "",
         "# ── Critical tier — do NOT put these under `defaults:` ──────────────",
@@ -677,11 +703,28 @@ def _render_critical_suggestion(critical):
         "# key written under `defaults:` produces no critical threshold — it emits",
         "# user_threshold{metric=\"<base>_critical\",severity=\"warning\"}, which no",
         "# recording rule consumes, and the matching *Critical alert can never fire.",
-        "# Copy each line into the `tenants:` block of the tenant it applies to;",
-        "# each one takes effect while its `<base>` has a value under `defaults:`.",
     ]
-    for key in sorted(critical):
-        lines.append(f"#     {key}: \"{critical[key]}\"")
+    if ready:
+        lines += [
+            "#",
+            "# READY — `<base>` is in the `defaults:` above. Copy each line into the",
+            "# `tenants:` block of the tenant it applies to.",
+        ]
+        lines += [f"#     {key}: \"{critical[key]}\"" for key, _ in ready]
+    if blocked:
+        lines += [
+            "#",
+            "# ⛔ BLOCKED — no `<base>` in the `defaults:` above. Copying one of these",
+            "# as-is does NOT merely leave it silent: a `<base>_critical` whose base",
+            "# is absent is a BLOCKING validation error, and the tenant-api write",
+            "# path rejects the WHOLE tenant file (not just this key), including",
+            "# every other change in the same save. Give `<base>` a value under",
+            "# `defaults:` FIRST, then move the line up to the READY list.",
+            "# The numbers are kept here because they are yours — they are what your",
+            "# existing rules use today.",
+        ]
+        lines += [f"#     {key}: \"{critical[key]}\"   # needs `{base}` in defaults:"
+                  for key, base in blocked]
     return "\n".join(lines) + "\n"
 
 
@@ -901,14 +944,28 @@ def _write_phase2_outputs(output_dir, phase2_results, report):
     suggestion = generate_defaults_from_candidates(candidates)
     if suggestion:
         defaults_path = str(p2 / "_defaults-suggestion.yaml")
+        suggested_defaults = suggestion.get("defaults") or {}
+        # ⛔ An EMPTY `defaults:` is omitted, not dumped as `defaults: {}` (blind
+        # review, #1218). The guard above widened from `if defaults` to
+        # `if suggestion`, so a critical-severity-only estate now reaches here
+        # with nothing in the base tier — and this file's own instruction is
+        # "merge into conf.d/_defaults.yaml". Merging a literal `defaults: {}`
+        # over a populated `_defaults.yaml` empties the platform's entire base
+        # tier; the same edit is harmless as an absent key. The critical block
+        # below still carries the recovered numbers, which is why the file is
+        # worth writing at all in that case.
         defaults_content = (
             "# Generated by onboard_platform.py — Phase 2\n"
             "# Suggested platform defaults from rule analysis\n"
             "# Review and merge into conf.d/_defaults.yaml\n\n"
-            + yaml.dump({"defaults": suggestion.get("defaults", {})},
-                        default_flow_style=False,
-                        allow_unicode=True, sort_keys=False)
-            + _render_critical_suggestion(suggestion.get("critical_overrides", {}))
+            + (yaml.dump({"defaults": suggested_defaults},
+                         default_flow_style=False,
+                         allow_unicode=True, sort_keys=False)
+               if suggested_defaults else
+               "# (no warning-tier threshold was recovered — nothing to merge into\n"
+               "#  `defaults:`; see the critical tier below)\n")
+            + _render_critical_suggestion(
+                suggestion.get("critical_overrides", {}), suggested_defaults)
         )
         write_text_secure(defaults_path, defaults_content)
         report["files_written"].append(defaults_path)

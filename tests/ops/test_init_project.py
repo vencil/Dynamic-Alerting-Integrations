@@ -835,26 +835,37 @@ class TestCriticalTierPlacement:
         assert re.search(rf'# {len(seeded)} of them are already written in below',
                          text), text
 
-    def test_stub_header_states_the_cost_the_tenant_cannot_infer(self):
-        """The pre-fill has one consequence a tenant cannot infer from the keys
-        alone (raised in blind review, #1218): a `<base>_critical` whose base
-        later leaves `defaults:` is a hard ValidateTenantKeys error that makes
-        tenant-api reject the WHOLE file (#1227), not just that key.
+    def test_stub_header_states_both_costs_the_tenant_cannot_infer(self):
+        """The pre-fill has two consequences a tenant cannot infer from the keys
+        alone, and BOTH were mis-stated in the first version (blind review,
+        #1218):
 
-        ⛔ The staleness half is asserted the other way round — the header must
-        NOT single these lines out as unreachable by a platform recalibration.
-        That reading is true of them and equally true of every key in the
-        sibling `_defaults.yaml`: `_gen_kustomize_base` builds the
-        `threshold-config` ConfigMap from `conf.d/` itself, so both files are
-        one-time copies in the customer's repo. Saying it about the pre-filled
-        lines alone implies a contrast that does not exist, which is how a true
-        sentence still misleads the only reader who has to act on it.
+        1. `<base>: "disable"` does not cascade to `<base>_critical` — the
+           warning row goes and the critical row keeps firing. Measured in
+           `pkg/config/critical_tier_placement_test.go`. The very next line of
+           this same header says `Set a key to "disable" to suppress that
+           metric`, so omitting this makes the file contradict itself.
+        2. A dangling `<base>_critical` is write-blocking **on the tenant-api
+           path only**. `validate_config.py` — the gate this tool actually
+           installs into the customer's CI and pre-commit — reports WARN and
+           exits 0 on the same input. The first draft promised "EVERY write of
+           this file is rejected" full stop, which is a stop this customer's
+           own pipeline does not perform.
         """
         text = ip._gen_tenant_yaml('db-a', ['mariadb'])
         header = text.split('\ntenants:')[0]
         prefill = header.split('already written in')[1]
-        assert 'EVERY write of this file is rejected' in prefill, header
-        assert 'hard validation error' in prefill, header
+
+        # (1) the disable-cascade caveat, and it must sit in the same header as
+        # the sentence it qualifies
+        assert 'does NOT disable' in prefill, header
+        assert 'Set a key to "disable"' in header, header
+
+        # (2) the rejection claim must name WHICH path, and must not promise
+        # that the installed validator stops it
+        assert 'tenant-api' in prefill, header
+        assert 'validate-config' in prefill and 'exits 0' in prefill, header
+
         # the staleness statement must cover BOTH files, never just these lines
         assert 'sibling' in prefill and '_defaults.yaml' in prefill, header
         assert 'reaches neither file' in prefill, header
@@ -862,29 +873,85 @@ class TestCriticalTierPlacement:
         # the paragraph above it (correctly) says the opposite.
         assert 'the platform supplies' not in prefill
 
-    def test_generated_kustomize_base_is_what_makes_that_claim_true(self):
-        """The header above tells the tenant their `conf.d/` IS the live
-        surface. That is a claim about a DIFFERENT generated file, so it is
-        pinned against that file rather than trusted: the ConfigMap is built
-        from `conf.d/`, which is why no platform-side recalibration reaches
-        either file until the tool is re-run.
+    def test_stub_header_makes_no_deploy_specific_claim(self):
+        """⛔ `_gen_tenant_yaml` never receives `deploy`, so any sentence about
+        the deployment wiring is a claim it cannot qualify — and two of the
+        three `--deploy` values do not generate that wiring at all.
+
+        The first version said "this tool wires conf.d/ straight into the
+        threshold-config ConfigMap". True for `kustomize`; for `helm` and
+        `argocd` no `kustomize/` tree is produced (pinned below), so the tenant
+        of a helm-deployed install was told their `conf.d/` was the live
+        surface by a file that had no idea which install it was for.
+
+        Pinned as an ABSENCE plus the fact that made it wrong, because the
+        absence alone would pass on an empty header.
         """
-        base = ip._gen_kustomize_base(['t1', 't2'], 'monitoring')
-        assert 'configMapGenerator' in base
-        assert 'name: threshold-config' in base
-        for entry in ('- _defaults.yaml', '- t1.yaml', '- t2.yaml'):
-            assert entry in base, base
-        # not sourced from the chart's platform-shipped defaults
-        assert 'thresholdConfig' not in base
+        import inspect
+        assert 'deploy' not in inspect.signature(ip._gen_tenant_yaml).parameters
+
+        header = ip._gen_tenant_yaml('db-a', ['mariadb']).split('\ntenants:')[0]
+        for mechanism in ('ConfigMap', 'kustomize', 'configMapGenerator', 'helm',
+                          'argocd'):
+            assert mechanism not in header, (mechanism, header)
+        # the deploy-independent property it says instead
+        assert 'nothing\n# generated here tracks the platform' in header, header
+
+    def test_only_kustomize_deploy_generates_the_kustomize_tree(self):
+        """The fact that made the removed sentence wrong, pinned so it cannot
+        quietly become true-again-for-one-value without someone noticing.
+
+        Driven through `run_init` (the real generator writing real files), not
+        `_preview_files` — the preview is a second hand-written roster, and
+        pinning a claim about the output against a mirror of the output is how
+        the sentence this replaces got written in the first place.
+        """
+        from pathlib import Path
+
+        for method, expected in (('kustomize', True), ('helm', False),
+                                 ('argocd', False)):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                created = ip.run_init({
+                    'ci': 'both', 'deploy': method, 'rule_packs': ['mariadb'],
+                    'tenants': ['db-a'], 'namespace': 'monitoring',
+                    'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+                }, tmpdir)
+                on_disk = [p.relative_to(tmpdir).as_posix()
+                           for p in Path(tmpdir).rglob('*') if p.is_file()]
+            assert any('kustomize/' in p for p in on_disk) is expected, (method, on_disk)
+            # the generator's own return value must agree with what it wrote
+            assert sorted(Path(p).name for p in created) == sorted(
+                Path(p).name for p in on_disk), (method, created, on_disk)
 
     def test_no_prefill_sentence_when_the_selection_has_no_critical_tier(self):
         """db2 / clickhouse ship no `_critical` at all, so the file must not
         point at a section it does not have — the same defect #1321 fixed for
-        the declared block, one paragraph over."""
-        text = ip._gen_tenant_yaml('db-a', ['db2'])
-        stub = yaml.safe_load(text)['tenants']['db-a']
-        assert not [k for k in stub if k.endswith('_critical')]
-        assert 'pre-filled below' not in text
+        the declared block, one paragraph over.
+
+        ⛔ Derived from the renderer, never a literal. The first version
+        asserted `'pre-filled below' not in text` — a string this module has
+        NEVER emitted (the sentence is "already written in below"), so it could
+        not fail for any input. Measured: with the `if not critical: return ''`
+        early return removed, `_gen_tenant_yaml('db-a', ['db2'])` renders
+        "# 0 of them are already written in below" — the exact #1321 defect this
+        test is named after — and the old assertion still passed (blind review).
+        """
+        # the guard itself, directly
+        assert ip._critical_prefill_note({}) == ''
+
+        # …and end to end, against a fingerprint taken from a NON-empty render
+        # so the marker is known to be discriminating rather than merely absent
+        sample = ip._critical_prefill_note({'zzz_critical': 1})
+        marker = sample.split('of them', 1)[1].splitlines()[0]
+        assert marker.strip(), sample
+
+        db2 = ip._gen_tenant_yaml('db-a', ['db2'])
+        mariadb = ip._gen_tenant_yaml('db-a', ['mariadb'])
+        assert marker in mariadb, marker      # the marker really does appear…
+        assert marker not in db2, marker      # …and it is absent here
+        assert ip._catalog_critical(['db2']) == {}
+        assert not [k for k in yaml.safe_load(db2)['tenants']['db-a']
+                    if k.endswith('_critical')]
 
     def test_critical_key_whose_base_vanished_is_not_seeded(self, monkeypatch):
         """A guard for a state the catalog is not in today, so it is exercised

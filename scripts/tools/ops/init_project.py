@@ -535,16 +535,36 @@ def _critical_prefill_note(critical: dict) -> str:
     copies" full stop, which an earlier draft did. That sentence is true and
     misleading in the same breath: stated about the `_critical` lines alone it
     implies the sibling `defaults:` keys DO keep flowing, and for this
-    generator's customers they do not. `_gen_kustomize_base` wires `conf.d/`
-    straight into the `threshold-config` ConfigMap (measured: the generated
-    `kustomize/base/kustomization.yaml` lists `_defaults.yaml` plus one entry
-    per tenant, and nothing in the generated tree references the chart's
-    `thresholdConfig` values), so BOTH files are one-time copies in the
-    customer's repo. The pre-fill's marginal freeze is therefore zero — what is
-    NOT zero, and is the cost the tenant genuinely cannot infer, is that a
-    dangling `<base>_critical` is write-blocking: a hard ValidateTenantKeys
-    error since #1227, and tenant-api rejects the whole file, not the one key
-    (measured against `ValidateTenantKeys`, blocking `Errors` channel).
+    generator's customers they do not — nothing in the generated tree
+    references the chart's `thresholdConfig` values (measured across all three
+    `--deploy` values). The pre-fill's marginal freeze is therefore zero.
+
+    ⛔ Nor does it name the ConfigMap wiring, which an earlier draft also did
+    ("this tool wires conf.d/ straight into the threshold-config ConfigMap").
+    That mechanism only exists for `--deploy kustomize`: `--deploy helm` and
+    `--deploy argocd` generate no `kustomize/` tree at all (measured — the
+    output is `.da-init.yaml`, two CI files, `.pre-commit-config.da.yaml` and
+    `conf.d/`, nothing else), and `_gen_tenant_yaml` never receives `deploy`,
+    so a deploy-specific sentence here cannot be true for two of the three.
+    The claim was narrowed to the property that holds for all three: nothing
+    generated tracks the platform (blind review, #1218).
+
+    ⛔ The two costs it DOES carry are the ones a tenant cannot infer and both
+    are measured:
+      * `<base>: "disable"` does not cascade to `<base>_critical`.
+        `resolveCriticalRows` tests the `_critical` override's own value and
+        `defaults[<base>]`'s existence, never the base override — measured:
+        base disabled + critical pre-filled yields exactly one row,
+        `{metric="connections", severity="critical"}`, with `ValidateTenantKeys`
+        silent. Before the pre-fill this could bite at most one accidental key;
+        now it is every critical key of every selected pack.
+      * A dangling `<base>_critical` is write-blocking on the tenant-api path
+        (`ValidateTenantKeys` blocking `Errors` → `gitops/writer.go:599`
+        `keyErrs`, the set every write gate turns into `ErrValidation`) — but
+        NOT on the gate this tool actually installs: `validate_config.py` on
+        the same input reports a WARN and exits 0, `--strict` included
+        (measured). Naming only the first would promise a stop that this
+        customer's CI does not perform.
 
     Derived from the mapping actually seeded (same rule as its neighbours): an
     empty tier renders nothing at all, so the file never points at an absent
@@ -556,13 +576,20 @@ def _critical_prefill_note(critical: dict) -> str:
         '\n# {n} of them are already written in below, at the platform\'s\n'
         '# suggested starting values. The lines are in THIS file, so they are\n'
         '# yours: retune or delete them freely. Like every key in the sibling\n'
-        '# _defaults.yaml, they are a one-time copy into your repo — this tool\n'
-        '# wires conf.d/ straight into the threshold-config ConfigMap, so a\n'
-        '# later platform recalibration reaches neither file until you re-run\n'
-        '# it. One thing you cannot undo by editing alone: if a `<base>` ever\n'
-        '# leaves `defaults:`, its `<base>_critical` line here must go too, or\n'
-        '# EVERY write of this file is rejected (a dangling `<base>_critical`\n'
-        '# is a hard validation error, not a warning).'
+        '# _defaults.yaml, they are a one-time copy into your repo — nothing\n'
+        '# generated here tracks the platform, so a later recalibration\n'
+        '# upstream reaches neither file until you re-run this tool.\n'
+        '#\n'
+        '# Two things editing alone will not tell you:\n'
+        '#   * `<base>: "disable"` does NOT disable its `<base>_critical`\n'
+        '#     twin. The warning row goes away and the critical row keeps\n'
+        '#     firing, with no warning tier beneath it and no validation\n'
+        '#     message anywhere. Disable or delete BOTH lines.\n'
+        '#   * If a `<base>` ever leaves `defaults:`, its `<base>_critical`\n'
+        '#     line here must go too. `da-tools validate-config` only WARNS\n'
+        '#     about that and still exits 0, but the tenant-api write path\n'
+        '#     treats it as blocking and rejects THIS WHOLE FILE — every\n'
+        '#     other change in the same save with it.'
     ).format(n=len(critical))
 
 
