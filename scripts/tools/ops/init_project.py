@@ -44,15 +44,17 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 # shared so the two customer-side `_defaults.yaml` producers cannot disagree
 # about which keys a tenant may set.
 #
-# ⛔ SCOPE of the sharing, deliberately narrow: only the DECLARED-KEY list.
-# `RULE_PACK_CATALOG` below stays this module's own copy of the `defaults:`
-# VALUES — that copy is a known divergence from `scaffold_tenant.RULE_PACKS`
-# (different key spellings, e.g. db2_log_usage vs db2_log_usage_percent) whose
-# consolidation is tracked separately. This change deliberately does NOT start
-# that merge, and must not be read as a first instalment of it: splitting the
-# consolidation into stages is explicitly warned against, because a half-merged
-# contract is a fourth contract.
+# ⛔ SCOPE of the sharing, deliberately narrow: the DECLARED-KEY list and the
+# `<base>_critical` SUFFIX constant (`CRITICAL_SUFFIX`, #1218) — both are
+# contract shape, not content. `RULE_PACK_CATALOG` below stays this module's own
+# copy of the `defaults:` VALUES — that copy is a known divergence from
+# `scaffold_tenant.RULE_PACKS` (different key spellings, e.g. db2_log_usage vs
+# db2_log_usage_percent) whose consolidation is tracked separately. This change
+# deliberately does NOT start that merge, and must not be read as a first
+# instalment of it: splitting the consolidation into stages is explicitly warned
+# against, because a half-merged contract is a fourth contract.
 from _registry_lib import (  # noqa: E402
+    CRITICAL_SUFFIX,
     annotate_defaults_counterexamples,
     append_tenant_declared_stub,
     render_tenant_critical_note_lines,
@@ -254,73 +256,113 @@ def _gitlab_apply_image(deploy_method: str) -> tuple[str, str]:
 # ============================================================
 # Rule Pack catalog (metric keys per rule pack)
 # ============================================================
+# TWO TIERS, and the split is not cosmetic — it is where the key ends up in the
+# generated files, which is what decides whether it produces anything (#1218 /
+# TRK-344):
+#
+#   'defaults'           → the `defaults:` section of `_defaults.yaml`.
+#                          `resolveBaseRows` walks that map, so every key here
+#                          emits `user_threshold{...,severity="warning"}` for
+#                          every tenant.
+#   'critical_overrides' → the `<tenant>.yaml` stub. `resolveCriticalRows`
+#                          iterates TENANT OVERRIDES only and admits on
+#                          `defaults[<base>]`, so this is the ONLY section in
+#                          which a `<base>_critical` key does anything.
+#
+# ⛔ A `<base>_critical` written into 'defaults' does not "also work, just less
+# neatly" — it silently becomes a DIFFERENT metric. `parseMetricKey` splits on
+# the first underscore, so `pg_connections_critical` resolves to
+# `{component="pg", metric="connections_critical", severity="warning"}`: a series
+# no recording rule joins, while `tenant:alert_threshold:pg_connections_critical`
+# (which reads `severity="critical"`) stays empty and the `*Critical` alert
+# cannot fire. Measured both directions in
+# `components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go`.
+# The placement rule is enforced for every `_defaults.yaml` producer by
+# `check_threshold_reachability.py`'s defaults-tier face, so a key put in the
+# wrong dict below fails CI rather than shipping.
 RULE_PACK_CATALOG = {
     'mariadb': {
         'label': 'MariaDB / MySQL',
         'defaults': {
             'mysql_connections': 80,
-            'mysql_connections_critical': 150,
             'mysql_threads_running': 30,  # running-thread saturation warning (NOT host CPU%); 80→30 PMM/Nichter (#944); renamed from mysql_cpu (#1231)
-            'mysql_threads_running_critical': 50,  # saturation critical; aligns with MariaDBHighThreadsRunningCritical + scaffold_tenant (#944/#951)
             'mysql_slow_queries': 10,
             'mysql_replication_lag': 30,
-            'mysql_replication_lag_critical': 120,
             'mysql_aborted_connections': 50,
             'mysql_table_locks_waited': 100,
+        },
+        'critical_overrides': {
+            'mysql_connections_critical': 150,
+            # ⛔ #951 added this key "for parity" and put it under `defaults:`,
+            # where it could not do the job the commit message claimed it did.
+            # 30/50 is the saturation pair from #944 (PMM pt-osc, Nichter); it
+            # only ever reaches MariaDBHighThreadsRunningCritical from here.
+            'mysql_threads_running_critical': 50,
+            'mysql_replication_lag_critical': 120,
         },
     },
     'postgresql': {
         'label': 'PostgreSQL',
         'defaults': {
             'pg_connections': 80,
-            'pg_connections_critical': 150,
             'pg_replication_lag': 30,
-            'pg_replication_lag_critical': 120,
             'pg_cache_hit_ratio': 95,
             'pg_deadlocks': 5,
             'pg_long_queries': 300,
+        },
+        'critical_overrides': {
+            'pg_connections_critical': 150,
+            'pg_replication_lag_critical': 120,
         },
     },
     'redis': {
         'label': 'Redis',
         'defaults': {
             'redis_memory_usage': 80,
-            'redis_memory_usage_critical': 95,
             'redis_connected_clients': 500,
             'redis_evicted_keys': 100,
             # redis_keyspace_misses_ratio removed (#1196 E): supply-side orphan —
             # no alert consumes it, and this catalog's 50 vs the registry's 0.3
             # was a third hand-copied unit universe (ratio vs percent).
         },
+        'critical_overrides': {
+            'redis_memory_usage_critical': 95,
+        },
     },
     'mongodb': {
         'label': 'MongoDB',
         'defaults': {
             'mongodb_connections': 80,
-            'mongodb_connections_critical': 150,
             'mongodb_replication_lag': 10,
             'mongodb_opcounters': 10000,
             'mongodb_page_faults': 100,
+        },
+        'critical_overrides': {
+            'mongodb_connections_critical': 150,
         },
     },
     'elasticsearch': {
         'label': 'Elasticsearch',
         'defaults': {
             'es_heap_usage': 80,
-            'es_heap_usage_critical': 90,
             'es_cluster_status': 1,
             'es_pending_tasks': 50,
             'es_query_latency': 500,
             'es_indexing_latency': 200,
+        },
+        'critical_overrides': {
+            'es_heap_usage_critical': 90,
         },
     },
     'oracle': {
         'label': 'Oracle',
         'defaults': {
             'oracle_tablespace_used_percent': 85,
-            'oracle_tablespace_used_percent_critical': 95,
             'oracle_active_sessions': 100,
             'oracle_blocking_sessions': 5,
+        },
+        'critical_overrides': {
+            'oracle_tablespace_used_percent_critical': 95,
         },
     },
     'db2': {
@@ -345,48 +387,58 @@ RULE_PACK_CATALOG = {
         'label': 'Apache Kafka',
         'defaults': {
             'kafka_consumer_lag': 10000,
-            'kafka_consumer_lag_critical': 50000,
             'kafka_under_replicated_partitions': 0,
             'kafka_active_controllers': 1,
             'kafka_offline_partitions': 0,
+        },
+        'critical_overrides': {
+            'kafka_consumer_lag_critical': 50000,
         },
     },
     'rabbitmq': {
         'label': 'RabbitMQ',
         'defaults': {
             'rabbitmq_queue_messages': 10000,
-            'rabbitmq_queue_messages_critical': 50000,
             'rabbitmq_consumers': 1,
             'rabbitmq_unacked_messages': 5000,
             'rabbitmq_memory_usage': 80,
+        },
+        'critical_overrides': {
+            'rabbitmq_queue_messages_critical': 50000,
         },
     },
     'jvm': {
         'label': 'JVM Applications',
         'defaults': {
             'jvm_heap_usage': 80,
-            'jvm_heap_usage_critical': 95,
             'jvm_gc_pause': 500,
             'jvm_threads': 500,
+        },
+        'critical_overrides': {
+            'jvm_heap_usage_critical': 95,
         },
     },
     'nginx': {
         'label': 'Nginx',
         'defaults': {
             'nginx_error_rate': 5,
-            'nginx_error_rate_critical': 15,
             'nginx_request_latency_p99': 1000,
             'nginx_active_connections': 1000,
+        },
+        'critical_overrides': {
+            'nginx_error_rate_critical': 15,
         },
     },
     'kubernetes': {
         'label': 'Kubernetes',
         'defaults': {
             'container_cpu': 80,
-            'container_cpu_critical': 95,
             'container_cpu_throttle': 25,  # chronic CFS throttle: % of ACTIVE periods throttled (#944 PR-2c)
-            'container_cpu_throttle_critical': 50,
             'container_memory': 85,
+        },
+        'critical_overrides': {
+            'container_cpu_critical': 95,
+            'container_cpu_throttle_critical': 50,
             'container_memory_critical': 95,
         },
     },
@@ -416,12 +468,102 @@ def _catalog_defaults(rule_packs: list[str]) -> dict:
     caller would recreate exactly the drift this fix exists to remove — the
     tenant header would then be describing a `defaults:` section that is only
     assumed to match the one on disk.
+
+    ⛔ It passes the merged mapping through UNFILTERED, and that is deliberate
+    (#1218 blind review). An earlier draft dropped any `_critical` key here as
+    "belt-and-braces". It was the opposite: `check_threshold_reachability`'s
+    defaults-tier face reads THIS function's rendered output, so the filter made
+    the only gate that polices the placement structurally unable to fire, while
+    a comment claimed it still would. A misfiled key would then have vanished
+    from BOTH generated files — no warning row, no critical row, no gate — which
+    is strictly worse than the bug being fixed. A misfile now flows through to
+    `defaults:`, where the gate names it and CI fails.
     """
     defaults: dict = {}
     for rp in rule_packs:
         if rp in RULE_PACK_CATALOG:
             defaults.update(RULE_PACK_CATALOG[rp]['defaults'])
     return defaults
+
+
+def _catalog_critical(rule_packs: list[str]) -> dict:
+    """The `<base>_critical` mapping this run will seed into `<tenant>.yaml`.
+
+    Sibling of `_catalog_defaults`, and the reason the pair exists: these keys
+    are worthless in `_defaults.yaml` and load-bearing in the tenant file, so
+    the two generators must not read one mapping and hope. Iteration follows the
+    CALLER's pack order, so `--rule-packs a,b` and `b,a` seed the same keys in a
+    different order (measured — the rendered stubs are not byte-identical).
+
+    Keys whose base is not in the same run's `defaults:` are dropped rather
+    than emitted: `resolveCriticalRows` admits on `defaults[<base>]`, so such a
+    key produces nothing and `ValidateTenantKeys` rejects the tenant write
+    outright (a dangling `_critical` is an Error, not a warning, since #1227).
+    Seeding a stub that the only supported writer refuses is worse than seeding
+    nothing. Today every catalog `_critical` has its base in the same pack, so
+    this drops nothing — it is a guard against a pack losing a base key later.
+    """
+    defaults = _catalog_defaults(rule_packs)
+    critical: dict = {}
+    for rp in rule_packs:
+        if rp not in RULE_PACK_CATALOG:
+            continue
+        for key, value in RULE_PACK_CATALOG[rp].get('critical_overrides', {}).items():
+            base = key[: -len(CRITICAL_SUFFIX)]
+            if base in defaults:
+                critical[key] = value
+    return critical
+
+
+def _critical_prefill_note(critical: dict) -> str:
+    """The sentences `render_tenant_critical_note_lines` cannot say for us.
+
+    That renderer is shared with `scaffold_tenant`, and it describes the
+    `_defaults.yaml` regime ("the platform ships no critical value; set one
+    here"). True for both generators — but only THIS one also pre-fills them,
+    and a tenant told to "set one here" while N are already set below would go
+    looking for a section it has. Kept local rather than adding a third regime
+    to the shared table: the difference being described is this generator's
+    behaviour, not a property of the `_defaults.yaml` it writes.
+
+    ⛔ It says "already set below", not "the platform supplies these" — the
+    sentence above it (correctly) says the platform supplies no critical value,
+    and a follow-up that read like a platform assertion would contradict it
+    (blind review, #1218).
+
+    ⛔ And it does NOT say "a later platform recalibration cannot reach these
+    copies" full stop, which an earlier draft did. That sentence is true and
+    misleading in the same breath: stated about the `_critical` lines alone it
+    implies the sibling `defaults:` keys DO keep flowing, and for this
+    generator's customers they do not. `_gen_kustomize_base` wires `conf.d/`
+    straight into the `threshold-config` ConfigMap (measured: the generated
+    `kustomize/base/kustomization.yaml` lists `_defaults.yaml` plus one entry
+    per tenant, and nothing in the generated tree references the chart's
+    `thresholdConfig` values), so BOTH files are one-time copies in the
+    customer's repo. The pre-fill's marginal freeze is therefore zero — what is
+    NOT zero, and is the cost the tenant genuinely cannot infer, is that a
+    dangling `<base>_critical` is write-blocking: a hard ValidateTenantKeys
+    error since #1227, and tenant-api rejects the whole file, not the one key
+    (measured against `ValidateTenantKeys`, blocking `Errors` channel).
+
+    Derived from the mapping actually seeded (same rule as its neighbours): an
+    empty tier renders nothing at all, so the file never points at an absent
+    section.
+    """
+    if not critical:
+        return ''
+    return (
+        '\n# {n} of them are already written in below, at the platform\'s\n'
+        '# suggested starting values. The lines are in THIS file, so they are\n'
+        '# yours: retune or delete them freely. Like every key in the sibling\n'
+        '# _defaults.yaml, they are a one-time copy into your repo — this tool\n'
+        '# wires conf.d/ straight into the threshold-config ConfigMap, so a\n'
+        '# later platform recalibration reaches neither file until you re-run\n'
+        '# it. One thing you cannot undo by editing alone: if a `<base>` ever\n'
+        '# leaves `defaults:`, its `<base>_critical` line here must go too, or\n'
+        '# EVERY write of this file is rejected (a dangling `<base>_critical`\n'
+        '# is a hard validation error, not a warning).'
+    ).format(n=len(critical))
 
 
 def _gen_defaults_yaml(rule_packs: list[str], namespace: str) -> str:
@@ -525,17 +667,17 @@ def _gen_tenant_yaml(tenant: str, rule_packs: list[str]) -> str:
     The declared keys for the selected packs are appended as a commented,
     valueless block — see `_registry_lib.append_tenant_declared_stub`.
 
-    ⛔ Two buckets is still not the whole taxonomy: `<base>_critical` appears in
-    neither block *for some generators*, yet it takes effect whenever `<base>`
-    has a value under `defaults:` (resolveCriticalRows keys off exactly that).
-    And "in neither block" is where a static sentence gets it wrong HERE:
-    `RULE_PACK_CATALOG` puts 16 `_critical` keys straight into `defaults:`, so
-    for this generator most of them DO have a platform value and rule 1 is the
-    applicable one. The paragraph is therefore rendered from the very
-    `defaults:` mapping this run writes — see
-    `_registry_lib.render_tenant_critical_note_lines`. Same criterion as the
-    three-way rule-pack header split: does what we say buy the tenant
-    protection or not.
+    ⛔ Two buckets is still not the whole taxonomy: `<base>_critical` is in
+    neither block, yet it takes effect whenever `<base>` has a value under
+    `defaults:` (resolveCriticalRows keys off exactly that) — AND ONLY when it
+    is written HERE. Until #1218 this generator put 16 of them into `defaults:`
+    instead, where they emitted `{component,metric="<base>_critical"}` warning
+    series and no critical tier at all; the header rendered from that mapping
+    then told the tenant "the critical row fires without you doing anything",
+    which was the opposite of what shipped. The paragraph is still rendered
+    from the very `defaults:` mapping this run writes
+    (`_registry_lib.render_tenant_critical_note_lines`) — that is what made the
+    regime flip when the keys moved, instead of leaving a stale sentence.
 
     ⛔ The pointer at the declared block ("listed at the end of this file") is
     derived for the same reason. The block is appended only when the declared
@@ -551,8 +693,10 @@ def _gen_tenant_yaml(tenant: str, rule_packs: list[str]) -> str:
     # list: one derivation per run, shared by the header sentence and the block
     # appended at the bottom, so the two cannot disagree.
     defaults = _catalog_defaults(rule_packs)
+    critical = _catalog_critical(rule_packs)
     declared_keys = shipped_optional_keys_for_packs(rule_packs)
     critical_note = '\n'.join(render_tenant_critical_note_lines(defaults, lang='en'))
+    critical_note += _critical_prefill_note(critical)
     declared_note = '\n'.join(
         render_tenant_declared_note_lines(declared_keys, lang='en'))
     header = textwrap.dedent("""\
@@ -570,12 +714,28 @@ def _gen_tenant_yaml(tenant: str, rule_packs: list[str]) -> str:
 
     tenant_config: dict = {}
 
-    # Add a few example overrides from the first rule pack
+    # Add a few example overrides from the first rule pack. Reads the BASE tier
+    # only — before #1218 this slice ran over a mapping that still held the
+    # `_critical` keys, so `--rule-packs mariadb` spent one of its three
+    # illustrative lines on `mysql_connections_critical` for whichever pack
+    # happened to be first, and on nothing for every other pack.
     if rule_packs and rule_packs[0] in RULE_PACK_CATALOG:
-        rp = RULE_PACK_CATALOG[rule_packs[0]]
-        keys = list(rp['defaults'].keys())[:3]
-        for k in keys:
-            tenant_config[k] = str(rp['defaults'][k])
+        pack_defaults = _catalog_defaults([rule_packs[0]])
+        for k in list(pack_defaults)[:3]:
+            tenant_config[k] = str(pack_defaults[k])
+
+    # The critical tier, for EVERY selected pack — not just the first. This is
+    # the section the keys had to move to (#1218): `resolveCriticalRows`
+    # iterates tenant overrides, so a `<base>_critical` anywhere else produces
+    # no critical row. Seeded with a value rather than commented out because
+    # that is what the platform's number is FOR, and it is the same position
+    # `scaffold_tenant` takes (its prompt offers the registry value as the
+    # Enter-default, and `generate_profile` writes the `_critical` twins while
+    # deliberately dropping the flat declared keys). The customer edits or
+    # deletes them in review — they are in the customer's own file, which is
+    # exactly the tier boundary `defaults:` violated.
+    for k, v in critical.items():
+        tenant_config[k] = str(v)
 
     # Add routing stub
     tenant_config['_routing'] = {
@@ -1918,9 +2078,20 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument('-o', '--output-dir', default='.', help=_h('output_dir'))
     parser.add_argument('--non-interactive', action='store_true',
                         help=_h('non_interactive'))
+    # ⛔ The help text used to say only ".da-init.yaml", which is the marker
+    # file this flag lets you past — not the blast radius. `_write_file` has no
+    # existence check, so a forced re-run rewrites conf.d/_defaults.yaml AND
+    # every conf.d/<tenant>.yaml, discarding hand-tuned thresholds. That
+    # understatement got worse with #1218: re-running is now the only in-tool
+    # route to the corrected `_defaults.yaml`, so someone WILL reach for it.
     parser.add_argument('--force', action='store_true',
-                        help='Overwrite existing .da-init.yaml' if _LANG == 'en'
-                        else '覆寫既有的 .da-init.yaml')
+                        help='Re-run in an initialised directory: REWRITES every '
+                             'generated file, including conf.d/_defaults.yaml and '
+                             'each conf.d/<tenant>.yaml (hand edits are lost)'
+                        if _LANG == 'en'
+                        else '在已初始化的目錄重跑：會**重寫所有產生的檔案**，'
+                             '含 conf.d/_defaults.yaml 與每一份 conf.d/<tenant>.yaml'
+                             '（手動調整會遺失）')
     parser.add_argument('--dry-run', action='store_true',
                         help='Show what files would be created without writing'
                         if _LANG == 'en' else '顯示會產生的檔案但不寫入')

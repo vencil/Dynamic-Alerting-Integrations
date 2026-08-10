@@ -64,6 +64,10 @@ from _lib_python import (  # noqa: E402
     METRIC_PREFIX_DB_MAP,
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+# The `<base>_critical` suffix, from the module that owns it for every other
+# `_defaults.yaml` producer (#1218). Re-spelling the literal here is how this
+# file came to route the critical tier into the wrong section in the first place.
+from _registry_lib import CRITICAL_SUFFIX  # noqa: E402
 
 # Conditionally import migrate_rule AST functions
 try:
@@ -595,7 +599,26 @@ def generate_defaults_from_candidates(candidates):
     """Generate _defaults.yaml content from threshold candidates.
 
     Groups candidates by metric_key, uses most common threshold as default.
-    Returns dict suitable for YAML output.
+
+    Returns ``{"defaults": {...}, "critical_overrides": {...}}`` — TWO tiers,
+    and the split is load-bearing rather than cosmetic (#1218 / TRK-344).
+
+    ⛔ Every critical-severity rule this tool reverse-engineers becomes a
+    ``<key>_critical``, and until #1218 all of them were emitted under
+    ``defaults:`` in a file whose own header says "Review and merge into
+    conf.d/_defaults.yaml". A customer who followed that instruction lost their
+    entire critical tier on the spot: ``resolveCriticalRows`` iterates TENANT
+    OVERRIDES, so a ``_critical`` key under ``defaults:`` produces no critical
+    threshold at all — it emits ``user_threshold{metric="<key>_critical",
+    severity="warning"}`` instead, which no recording rule joins, while
+    ``tenant:alert_threshold:<key>_critical`` stays empty and the ``*Critical``
+    alert cannot fire. Measured both directions in
+    ``components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go``.
+    Carrying the critical tier across was the entire reason to run ``onboard``.
+
+    The critical tier is returned separately so ``write_onboard_outputs`` can
+    render it where it actually works (a ``<tenant>.yaml`` override) instead of
+    where it is silently inert.
     """
     metric_values = {}  # metric_key → [threshold_values]
 
@@ -604,20 +627,62 @@ def generate_defaults_from_candidates(candidates):
             continue
         key = c["metric_key"]
         if c["severity"] == "critical":
-            key = f"{key}_critical"
+            key = f"{key}{CRITICAL_SUFFIX}"
         if key not in metric_values:
             metric_values[key] = []
         metric_values[key].append(c["threshold_value"])
 
     defaults = {}
+    critical = {}
     for key in sorted(metric_values.keys()):
         values = metric_values[key]
         # Use most common value as default
         counts = Counter(values)
         default_val = counts.most_common(1)[0][0]
-        defaults[key] = default_val
+        if key.endswith(CRITICAL_SUFFIX):
+            critical[key] = default_val
+        else:
+            defaults[key] = default_val
 
-    return {"defaults": defaults} if defaults else {}
+    out = {}
+    if defaults:
+        out["defaults"] = defaults
+    if critical:
+        out["critical_overrides"] = critical
+    return out
+
+
+def _render_critical_suggestion(critical):
+    """Render the critical tier as a COMMENTED tenant-override block (#1218).
+
+    Commented, and in the same file rather than a second one, on purpose. This
+    artifact's whole instruction is "review and merge into
+    conf.d/_defaults.yaml"; a live `critical_overrides:` mapping sitting next to
+    `defaults:` would be merged straight into that file by anyone following it,
+    and `_defaults.yaml` has no such section — the loader would ignore it and
+    the tier would be silent again, one step further from where anyone would
+    look. A commented block cannot be merged by accident and still carries the
+    numbers this tool went to the trouble of recovering.
+
+    Empty tier renders nothing at all, so the file never carries a heading with
+    no rows under it.
+    """
+    if not critical:
+        return ""
+    lines = [
+        "",
+        "# ── Critical tier — do NOT put these under `defaults:` ──────────────",
+        "# The platform's critical layer resolves from TENANT overrides only",
+        "# (resolveCriticalRows admits on defaults[<base>]), so a `<base>_critical`",
+        "# key written under `defaults:` produces no critical threshold — it emits",
+        "# user_threshold{metric=\"<base>_critical\",severity=\"warning\"}, which no",
+        "# recording rule consumes, and the matching *Critical alert can never fire.",
+        "# Copy each line into the `tenants:` block of the tenant it applies to;",
+        "# each one takes effect while its `<base>` has a value under `defaults:`.",
+    ]
+    for key in sorted(critical):
+        lines.append(f"#     {key}: \"{critical[key]}\"")
+    return "\n".join(lines) + "\n"
 
 
 def write_migration_csv(candidates, output_path):
@@ -833,15 +898,17 @@ def _write_phase2_outputs(output_dir, phase2_results, report):
     report["files_written"].append(csv_path)
 
     # Suggested _defaults.yaml
-    defaults = generate_defaults_from_candidates(candidates)
-    if defaults:
+    suggestion = generate_defaults_from_candidates(candidates)
+    if suggestion:
         defaults_path = str(p2 / "_defaults-suggestion.yaml")
         defaults_content = (
             "# Generated by onboard_platform.py — Phase 2\n"
             "# Suggested platform defaults from rule analysis\n"
             "# Review and merge into conf.d/_defaults.yaml\n\n"
-            + yaml.dump(defaults, default_flow_style=False,
+            + yaml.dump({"defaults": suggestion.get("defaults", {})},
+                        default_flow_style=False,
                         allow_unicode=True, sort_keys=False)
+            + _render_critical_suggestion(suggestion.get("critical_overrides", {}))
         )
         write_text_secure(defaults_path, defaults_content)
         report["files_written"].append(defaults_path)

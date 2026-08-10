@@ -434,3 +434,227 @@ def test_shipped_optional_is_non_vacuous_on_the_real_artifact():
     has something to read (an empty list would satisfy that pin and silently
     make every containment assertion vacuous)."""
     assert len(gate._shipped_optional()) >= len(gate.KNOWN_UNWIRED)
+
+
+# ── the defaults-tier face: `<base>_critical` placement (#1218 / TRK-344) ──
+#
+# A different question from every face above. Those ask "can this key be
+# produced"; this one asks "is this key in a section the resolver can act on".
+# `_defaults.yaml` has exactly one shape where the wrong section fails silently
+# in both directions at once, and the exporter behaviour both directions rest on
+# is measured in
+# components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go —
+# not inferred here from reading resolve.go.
+
+def test_critical_key_in_a_defaults_face_is_an_error():
+    result = gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces={"probe face": {"pg_connections", "pg_connections_critical"}},
+    )
+    hits = [e for e in result["errors"] if "CRITICAL-IN-DEFAULTS" in e]
+    assert len(hits) == 1, result
+    assert "pg_connections_critical" in hits[0]
+    assert "probe face" in hits[0], "the message must name the producer to repair"
+
+
+def test_clean_defaults_face_is_silent():
+    result = gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces={"probe face": {"pg_connections", "mysql_threads_running"}},
+    )
+    assert result["errors"] == [], result
+
+
+def test_every_offending_key_is_reported_not_just_the_first():
+    """One error per key, because the repair is per key: a message naming only
+    the first would read as "fix this one" on a face carrying sixteen."""
+    result = gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces={"probe": {"a_b", "a_b_critical", "c_d", "c_d_critical"}},
+    )
+    hits = [e for e in result["errors"] if "CRITICAL-IN-DEFAULTS" in e]
+    assert len(hits) == 2, hits
+
+
+def test_an_empty_defaults_face_is_an_error_not_a_pass():
+    """⛔ The vacuity trap this face is most likely to fall into. Every producer
+    ships a non-empty `defaults:`, so an empty set means the reader broke — a
+    moved file, a renamed section, a generator that started nesting elsewhere —
+    and an empty set passes the placement check perfectly.
+    """
+    result = gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces={"probe face": set()},
+    )
+    assert any("EMPTY-FACE" in e and "probe face" in e for e in result["errors"]), result
+
+
+def test_dimensional_key_in_a_defaults_face_is_an_error():
+    """The other half of the rule `TestDocsDefaultsSamplesHaveNoTenantOnlyKeys`
+    pins. Covering only `_critical` (the half #1218 was reported about) leaves
+    the equally-inert shape unguarded on all six producers."""
+    result = gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces={"probe": {"oracle_tablespace", 'oracle_ts{env="prod"}'}},
+    )
+    hits = [e for e in result["errors"] if "DIMENSIONAL-IN-DEFAULTS" in e]
+    assert len(hits) == 1, result
+    assert 'oracle_ts{env="prod"}' in hits[0]
+
+
+def test_critical_must_be_a_SUFFIX_not_a_substring():
+    """⛔ The rule is about the SUFFIX, because that is what the resolver keys
+    off: `resolveCriticalRows` filters on `strings.HasSuffix(key, "_critical")`
+    and derives the base with `TrimSuffix`. A key that merely CONTAINS the token
+    is an ordinary metric and belongs in `defaults:` like any other.
+
+    Pinned because relaxing `endswith` to `in` is invisible to every other case
+    here — no shipped key contains `_critical` off the end, so the whole suite
+    stays green while the gate starts failing CI on a legitimate key (found by
+    mutation, not by review). The failure direction is a false positive rather
+    than a miss, which is exactly why nothing else would surface it.
+    """
+    result = gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces={"probe": {"redis_critical_path_latency",
+                                  "pg_criticality_score"}},
+    )
+    assert [e for e in result["errors"] if "CRITICAL-IN-DEFAULTS" in e] == [], result
+
+
+def test_real_repo_defaults_faces_are_all_present_and_clean():
+    """The live artifacts. The face count is a literal because deriving the
+    expectation from the thing it guards is how a face silently disappears —
+    dropping one from `_defaults_faces` would otherwise just shrink both sides.
+    """
+    faces = gate._defaults_faces()
+    assert len(faces) == 6, sorted(faces)
+    labels = " ".join(faces)
+    for producer in ("values.yaml", "conf.d", "try-local",
+                     "scaffold_tenant.generate_defaults",
+                     "init_project._gen_defaults_yaml",
+                     "onboard_platform.generate_defaults_from_candidates"):
+        assert producer in labels, (producer, sorted(faces))
+    for face, keys in faces.items():
+        assert keys, f"{face} yielded nothing — the reader is broken"
+        assert not [k for k in keys if k.endswith("_critical")], face
+        assert not [k for k in keys if "{" in k], face
+
+
+def test_the_onboard_face_is_a_live_probe_not_a_constant():
+    """⛔ The `onboard` face feeds a synthetic candidate pair, so it is the one
+    face that could silently measure nothing at all — a producer that started
+    returning `{}` would leave the set empty, and empty is exactly what a clean
+    face looks like (the EMPTY-FACE branch catches that, but only if the probe
+    still reaches a producer). This pins that the probe's WARNING half comes
+    back, which is only true if the producer ran and routed by tier.
+    """
+    import sys as _sys
+    if str(gate._OPS) not in _sys.path:
+        _sys.path.insert(0, str(gate._OPS))
+    import onboard_platform
+
+    out = onboard_platform.generate_defaults_from_candidates(
+        [dict(c) for c in gate._ONBOARD_PROBE])
+    assert out["defaults"] == {"zzz_probe_metric": "80"}
+    assert out["critical_overrides"] == {"zzz_probe_metric_critical": "150"}
+
+    faces = gate._defaults_faces()
+    onboard_face = [v for k, v in faces.items() if "onboard_platform" in k]
+    assert onboard_face == [{"zzz_probe_metric"}], faces
+
+
+def test_a_missing_artifact_is_fail_closed_and_names_the_path(monkeypatch, capsys):
+    """The EMPTY-FACE message says a MISSING artifact does not reach it. That is
+    a claim about control flow, so it is pinned rather than asserted: the reader
+    raises, `main()` turns it into EXIT_CALLER_ERROR, and the path is in the
+    message. Without this, "fail-closed" is an article of faith about a branch
+    nobody walked."""
+    from pathlib import Path
+
+    monkeypatch.setattr(gate, "_TRY_LOCAL_DEFAULTS",
+                        Path(str(gate._TRY_LOCAL_DEFAULTS) + ".gone"))
+    rc = gate.main([])
+    assert rc == gate.EXIT_CALLER_ERROR
+    err = capsys.readouterr().err
+    assert "crashed" in err and "_defaults.yaml.gone" in err, err
+
+
+def test_precommit_filter_covers_every_input_this_gate_reads():
+    """⛔ A gate that reads an input its trigger filter does not cover does not
+    run on the change that matters. This hook's own comment said exactly that
+    about values.yaml while omitting `init_project.py` — a declared face since
+    #1310 — so `da-tools init` shipped 16 misplaced keys while the gate that
+    reads it never fired on the commit that changed them (#1218).
+
+    Derived, not restated: the inputs come from the module's own imports, its
+    path constants, AND the demand-side pack roster.
+
+    ⛔ That third source is not decoration. The first version of this test read
+    only imports and module-level `Path` constants — and the DEMAND side is
+    neither: `observed_map_lib.default_pack_paths()` is a function returning a
+    glob. Measured at the time: the derived set was exactly 8 entries with not
+    one `rule-packs/` file in it, so deleting `rule-packs/rule-pack-.*\\.yaml`
+    from the `files:` regex left this test green — i.e. the test named after
+    covering the gate's inputs could not see the input the gate exists for, and
+    the original TRK-337 failure shape (a new alert's commit not triggering the
+    reachability gate) walked straight through it. Found by blind review.
+
+    A literal floor plus four named members keeps an empty or collapsed
+    derivation from satisfying this vacuously.
+    """
+    import ast
+    import pathlib
+    import re
+
+    import yaml
+
+    tree = ast.parse(_SCRIPT.read_text(encoding="utf-8"))
+
+    inputs: set[str] = {"scripts/tools/lint/check_threshold_reachability.py"}
+
+    # the DEMAND side — a function call, invisible to both derivations below
+    for p in gate.observed_map_lib.default_pack_paths():
+        inputs.add(pathlib.Path(p).resolve().relative_to(REPO_ROOT).as_posix())
+
+    # every module it imports that lives in scripts/tools/ops — module level OR
+    # inside a function, since two of these faces import lazily
+    ops = REPO_ROOT / "scripts" / "tools" / "ops"
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            names.add(node.module.split(".")[0])
+    for name in names:
+        if (ops / f"{name}.py").is_file():
+            inputs.add(f"scripts/tools/ops/{name}.py")
+
+    # every repo file it reads through a module-level Path constant
+    for value in vars(gate).values():
+        if isinstance(value, pathlib.Path) and value.is_file():
+            try:
+                inputs.add(value.relative_to(REPO_ROOT).as_posix())
+            except ValueError:
+                pass
+
+    assert len(inputs) >= 20, sorted(inputs)
+    for expected in ("scripts/tools/ops/init_project.py",
+                     "scripts/tools/ops/_registry_lib.py",
+                     "scripts/tools/ops/onboard_platform.py",
+                     "helm/threshold-exporter/values.yaml"):
+        assert expected in inputs, (expected, sorted(inputs))
+    assert any(p.startswith("rule-packs/") for p in inputs), sorted(inputs)
+
+    config = yaml.safe_load(
+        (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    hooks = [h for repo in config["repos"] for h in repo["hooks"]
+             if h["id"] == "threshold-reachability-check"]
+    assert len(hooks) == 1, "hook id moved or was duplicated"
+    pattern = re.compile(hooks[0]["files"])
+
+    uncovered = sorted(p for p in inputs if not pattern.match(p))
+    assert uncovered == [], (
+        "threshold-reachability-check reads these but its `files:` filter does "
+        "not fire on them, so a commit touching only one of them skips the "
+        f"gate: {uncovered}")

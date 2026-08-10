@@ -107,6 +107,10 @@ _OPS = PROJECT_ROOT / "scripts" / "tools" / "ops"
 sys.path.insert(0, str(_OPS))
 import _observed_map_lib as observed_map_lib  # noqa: E402
 import scaffold_tenant  # noqa: E402
+# The `<base>_critical` suffix, from the module that already owns it for the
+# generators (`defaults_critical_keys` / `is_shipped_optional_key`). Spelling it
+# again here would be one more copy of the very contract this gate polices.
+from _registry_lib import CRITICAL_SUFFIX as _CRITICAL_SUFFIX  # noqa: E402
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
@@ -331,11 +335,117 @@ def _declared_faces() -> dict[str, set[str]]:
     }
 
 
+# ── FOURTH FACE — defaults-tier placement (#1218 / TRK-344) ─────────────────
+#
+# A different QUESTION from everything above. The faces so far ask "can this
+# key be produced"; this one asks "is this key in a section where the resolver
+# can act on it at all". `<base>_critical` is the one shape where the answer
+# depends on WHICH FILE SECTION holds it, and where the wrong section fails
+# silently in both directions at once:
+#
+#   * `resolveCriticalRows` iterates TENANT OVERRIDES and admits on
+#     `defaults[<base>]` — a `_critical` key under `defaults:` is never even
+#     looked at, so the `*Critical` alert cannot fire;
+#   * `resolveBaseRows` walks `defaults` and does NOT skip the suffix, and
+#     `parseMetricKey` splits on the first underscore — so the same key emits
+#     `{metric="<base>_critical", severity="warning"}`, one unconsumed series
+#     per tenant per key.
+#
+# Both directions are measured in
+# `components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go`.
+#
+# The dimensional shape rides along for the same reason and from the same
+# source: `TestDocsDefaultsSamplesHaveNoTenantOnlyKeys` pins BOTH, and
+# `_registry_lib.is_shipped_optional_key` treats them as one pair. A
+# `metric{label="v"}` key under `defaults:` is equally inert —
+# `resolveDimensionalRows` is tenant-only and never consults the defaults map,
+# and `parseMetricKey` bakes the label segment into the metric NAME. Covering
+# only the half this issue was reported about is how the other half survives.
+#
+# ⛔ Why here and not a new lint: the rule already existed as that Go test —
+# aimed at DOCUMENTATION samples only. `init_project._gen_defaults_yaml` shipped
+# 16 such keys across 11 packs for a year while it was green, because the
+# generators are Python and produce no file for a Go test to read. This module
+# already imports every producer for the declared faces, so the missing reach is
+# a few lines here rather than a ninth `check_*.py` and its hook cascade.
+#
+# ⛔ SHAPE, not membership: this face makes no claim about whether a key belongs
+# in the product. A `_critical` key is legitimate — in `<tenant>.yaml`.
+_DEV_DEFAULTS = PROJECT_ROOT / "components" / "threshold-exporter" / "config" / "conf.d" / "_defaults.yaml"
+_TRY_LOCAL_DEFAULTS = PROJECT_ROOT / "try-local" / "seed" / "conf.d" / "_defaults.yaml"
+
+# The probe fed to the `onboard` face below. A severity pair on one metric is
+# the minimal input that used to manufacture the defect, and it is spelled here
+# rather than derived so the probe cannot go vacuous with the producer.
+_ONBOARD_PROBE = (
+    {"status": "perfect", "metric_key": "zzz_probe_metric",
+     "severity": "warning", "threshold_value": "80"},
+    {"status": "perfect", "metric_key": "zzz_probe_metric",
+     "severity": "critical", "threshold_value": "150"},
+)
+
+
+def _defaults_section(text: str) -> set[str]:
+    """The key names under `defaults:` of a rendered `_defaults.yaml`/values.yaml."""
+    import yaml  # local import: only the artifact faces need it
+
+    doc = yaml.safe_load(text) or {}
+    root = doc.get("thresholdConfig") or doc  # chart values nest one level
+    return set((root.get("defaults") or {}).keys())
+
+
+def _defaults_faces() -> dict[str, set[str]]:
+    """{face label: `defaults:` key names} for every producer of that section.
+
+    ⛔ Every producer, and the list is the point. Five of these six were already
+    correct when the other was not, so a gate that read "the" defaults file
+    would have been green on any one of them — the same one-face blindness the
+    UNSETTABLE check above had to grow out of. The GENERATED faces are rendered
+    here rather than read off disk because a `da-tools init` customer's
+    `_defaults.yaml` exists only in their repo; the generator IS the artifact.
+
+    ⛔ `onboard` is a PROBE, not a render, and it is the face this list would
+    most easily have been written without. `da-tools onboard` reverse-engineers
+    a customer's existing Alertmanager estate and writes
+    `phase2-rules/_defaults-suggestion.yaml`, whose own header says "Review and
+    merge into conf.d/_defaults.yaml" — so until #1218 it turned every
+    critical-severity rule it recovered into a `<key>_critical` under
+    `defaults:`, i.e. it manufactured this defect from customer input, on the
+    one code path whose entire purpose was carrying a critical tier across. It
+    has no shipped artifact to read, so the face feeds it a fixed candidate pair
+    and reads what it renders. Found by blind review, not by the issue.
+    """
+    if str(_OPS) not in sys.path:
+        sys.path.insert(0, str(_OPS))
+    import init_project  # noqa: E402
+    import onboard_platform  # noqa: E402
+
+    init_packs = sorted(init_project.RULE_PACK_CATALOG)
+    scaffold_packs = [k for k in scaffold_tenant.RULE_PACKS if k != "kubernetes"]
+    onboard_suggestion = onboard_platform.generate_defaults_from_candidates(
+        [dict(c) for c in _ONBOARD_PROBE])
+    return {
+        "chart (helm/threshold-exporter/values.yaml)":
+            _defaults_section(_CHART_VALUES.read_text(encoding="utf-8")),
+        "dev conf.d (components/threshold-exporter/config/conf.d/_defaults.yaml)":
+            _defaults_section(_DEV_DEFAULTS.read_text(encoding="utf-8")),
+        "try-local seed (try-local/seed/conf.d/_defaults.yaml)":
+            _defaults_section(_TRY_LOCAL_DEFAULTS.read_text(encoding="utf-8")),
+        "onboarding/scaffold (scaffold_tenant.generate_defaults)":
+            set(scaffold_tenant.generate_defaults(scaffold_packs)["defaults"]),
+        "onboarding/init (init_project._gen_defaults_yaml)":
+            _defaults_section(
+                init_project._gen_defaults_yaml(init_packs, "monitoring")),
+        "migration/onboard (onboard_platform.generate_defaults_from_candidates, "
+        "probed)": set(onboard_suggestion.get("defaults") or {}),
+    }
+
+
 def _reachable(key: str, supply: set[str], deferred: set[str]) -> bool:
     if key in deferred:
         return True
-    if key.endswith("_critical"):
-        return key[: -len("_critical")] in supply
+    if key.endswith(_CRITICAL_SUFFIX):
+        return key[: -len(_CRITICAL_SUFFIX)] in supply
     return key in supply
 
 
@@ -347,6 +457,7 @@ def run_check(
     chart_supply: set[str] | None = None,
     not_chart_armed: frozenset[str] | None = None,
     declared_faces: dict[str, set[str]] | None = None,
+    defaults_faces: dict[str, set[str]] | None = None,
 ) -> dict[str, list[str]]:
     """Return {errors, infos}. errors fail --ci; infos are report-only.
 
@@ -373,6 +484,14 @@ def run_check(
         # everything — same outcome, and it cannot accidentally pass a real
         # containment assertion).
         declared_faces = {} if injected_known_unwired else _declared_faces()
+    if defaults_faces is None:
+        # ⛔ Unlike the faces above, this one does NOT go vacuous for hermetic
+        # callers. It asserts a property of the SHIPPED artifacts and reads no
+        # synthetic input, so there is nothing for an injected demand/supply/
+        # ledger to make inconsistent — and defaulting it to `{}` would mean the
+        # only test that exercises it is one written specifically for it. Tests
+        # that need it silent pass `defaults_faces={}` explicitly.
+        defaults_faces = _defaults_faces()
     if chart_supply is None:
         # The chart face is a NARROWING of the supply face. A caller that
         # injected a synthetic supply but said nothing about the chart is
@@ -448,6 +567,49 @@ def run_check(
             errors.append(
                 f"STALE-EXEMPTION: {k!r} is in KNOWN_UNWIRED but no alert demands it "
                 "anymore — remove it from KNOWN_UNWIRED."
+            )
+
+    # ── Defaults-tier placement (#1218 / TRK-344) ────────────────────────────
+    # Per FACE, not one global count: a single "no _critical anywhere" assertion
+    # is satisfied by four clean faces while the fifth ships sixteen, which is
+    # how this survived a year.
+    for face, keys in sorted(defaults_faces.items()):
+        if not keys:
+            errors.append(
+                f"EMPTY-FACE: the defaults-tier face {face!r} yielded no keys at "
+                "all, and an empty set passes the placement check below "
+                "vacuously. Every producer ships a non-empty `defaults:`, so "
+                "either its `defaults:` section was renamed / re-nested, or a "
+                "generator stopped emitting one. (An artifact that is MISSING "
+                "does not reach here — the reader raises and `main()` exits "
+                "EXIT_CALLER_ERROR naming the path.) Repair the reader, do not "
+                "delete the face."
+            )
+            continue
+        for k in sorted(k for k in keys if k.endswith(_CRITICAL_SUFFIX)):
+            base = k[: -len(_CRITICAL_SUFFIX)]
+            errors.append(
+                f"CRITICAL-IN-DEFAULTS: {face} puts {k!r} under `defaults:`, which "
+                "is not the critical tier and never becomes one: resolveCriticalRows "
+                "iterates TENANT OVERRIDES, so this emits "
+                f'user_threshold{{metric="{k}",severity="warning"}} — a series no '
+                f"recording rule joins — while tenant:alert_threshold:{k} stays "
+                "empty and the *Critical alert cannot fire. Move it to the tenant "
+                f"side (a `<tenant>.yaml` override), keeping {base!r} under "
+                "`defaults:` so the critical tier is admitted. (#1218 / TRK-344)"
+            )
+        # The other half of the same rule (docs_defaults_sample_test.go pins
+        # both; is_shipped_optional_key refuses both). Kept in this loop rather
+        # than a second one so a new face can never pick up one check and miss
+        # the other.
+        for k in sorted(k for k in keys if "{" in k):
+            errors.append(
+                f"DIMENSIONAL-IN-DEFAULTS: {face} puts {k!r} under `defaults:`, "
+                "which gives dimensional thresholds no default path: "
+                "resolveDimensionalRows is tenant-only and never consults the "
+                "defaults map, while parseMetricKey bakes the label segment into "
+                "the metric NAME. ValidateTenantKeys reports nothing. Move it to "
+                "a `<tenant>.yaml` override. (#1218 / TRK-344)"
             )
 
     # ── Chart face (C): scaffold-reachable but NOT shipped by the chart ──────

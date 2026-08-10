@@ -25,6 +25,7 @@ from onboard_platform import (
     extract_threshold_candidates,
     analyze_rule_files,
     generate_defaults_from_candidates,
+    _render_critical_suggestion,
     write_migration_csv,
     parse_scrape_configs,
     analyze_relabel_configs,
@@ -503,7 +504,17 @@ class TestGenerateDefaultsFromCandidates:
     """從候選值產生預設值。"""
 
     def test_basic_defaults(self):
-        """基本預設值產生。"""
+        """基本預設值產生 —— warning 進 defaults、critical 進另一層（#1218）。
+
+        ⛔ 這支測試原本斷言 `defaults["defaults"]["cpu_critical"] == "95"`，
+        也就是把缺陷本身釘成契約。`resolveCriticalRows` 只迭代租戶覆寫，所以
+        `defaults:` 裡的 `<base>_critical` 產不出 critical 閾值——它會發出
+        `user_threshold{metric="<base>_critical",severity="warning"}`（無人消費），
+        而對應的 `tenant:alert_threshold:` 記錄規則恆空、`*Critical` 告警恆不開火。
+        兩個方向實測於 pkg/config/critical_tier_placement_test.go。而這支工具產出的
+        檔案，標頭明寫「Review and merge into conf.d/_defaults.yaml」——照做的客戶
+        會在合併當下失去整個 critical 分級，而那正是他們跑 onboard 的理由。
+        """
         candidates = [
             {"status": "perfect", "metric_key": "cpu", "severity": "warning", "threshold_value": "80"},
             {"status": "perfect", "metric_key": "cpu", "severity": "critical", "threshold_value": "95"},
@@ -511,7 +522,41 @@ class TestGenerateDefaultsFromCandidates:
         defaults = generate_defaults_from_candidates(candidates)
         assert "defaults" in defaults
         assert defaults["defaults"]["cpu"] == "80"
-        assert defaults["defaults"]["cpu_critical"] == "95"
+        assert "cpu_critical" not in defaults["defaults"]
+        assert defaults["critical_overrides"]["cpu_critical"] == "95"
+
+    def test_critical_tier_is_rendered_as_a_commented_tenant_block(self):
+        """產出檔裡 critical 層必須是註解、且指向租戶檔。
+
+        parse 後的 `defaults:` 不得含它（否則照標頭指示合併就會複製缺陷），但值
+        必須留在檔案裡——這支工具的全部價值就是把客戶既有的 critical 閾值撈出來。
+        """
+        candidates = [
+            {"status": "perfect", "metric_key": "cpu", "severity": "warning", "threshold_value": "80"},
+            {"status": "perfect", "metric_key": "cpu", "severity": "critical", "threshold_value": "95"},
+        ]
+        suggestion = generate_defaults_from_candidates(candidates)
+        body = yaml.dump({"defaults": suggestion["defaults"]}) + \
+            _render_critical_suggestion(suggestion["critical_overrides"])
+
+        parsed = yaml.safe_load(body)
+        assert parsed["defaults"] == {"cpu": "80"}
+        assert not [k for k in parsed["defaults"] if k.endswith("_critical")]
+        assert 'cpu_critical: "95"' in body
+        assert "do NOT put these under `defaults:`" in body
+        # 每一行 critical 建議都必須是註解——少一個 `#` 就等於把它併回 defaults:
+        for line in body.splitlines():
+            if "cpu_critical" in line:
+                assert line.lstrip().startswith("#"), line
+
+    def test_no_critical_block_when_there_is_no_critical_tier(self):
+        """空的一層不出標題——避免指向一個沒有內容的區段。"""
+        candidates = [
+            {"status": "perfect", "metric_key": "cpu", "severity": "warning", "threshold_value": "80"},
+        ]
+        suggestion = generate_defaults_from_candidates(candidates)
+        assert "critical_overrides" not in suggestion
+        assert _render_critical_suggestion(suggestion.get("critical_overrides", {})) == ""
 
     def test_most_common_value(self):
         """最常見值作為預設值。"""

@@ -1706,10 +1706,11 @@ class TestTenantStubDeclaredBlock:
         """⛔ 第三類敘述不能是寫死的句子——它只對**本生成器**的產物為真。
 
         `scaffold_tenant.RULE_PACKS` 的 defaults tier 一個 `_critical` 都沒有，
-        `init_project.RULE_PACK_CATALOG` 卻直接放了 16 個進 `defaults:`；同一句
-        「兩個區塊都不列」對後者是假的。所以這條**讀兄弟檔**（同一次
-        `write_outputs` 寫出去的 `_defaults.yaml`），拿它推導出期望值再比對——
-        原本那條只斷言字串存在，而一個假字串同樣會存在。
+        `init_project.RULE_PACK_CATALOG` 則**曾經**直接放了 16 個進 `defaults:`；
+        同一句「兩個區塊都不列」對當時的它是假的（#1218 已把那 16 個搬走，兩者
+        今天同 regime——但推導保留，寫死任一 regime 會在下次移動時靜默變假）。
+        所以這條**讀兄弟檔**（同一次 `write_outputs` 寫出去的 `_defaults.yaml`），
+        拿它推導出期望值再比對——原本那條只斷言字串存在，而一個假字串同樣會存在。
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             content = _tenant_yaml_for(tmpdir, ["oracle", "postgresql"])

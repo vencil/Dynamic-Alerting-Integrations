@@ -66,18 +66,23 @@ class TestRulePackCatalog:
             assert pack in ip.RULE_PACK_CATALOG, f"{pack} not in catalog"
 
     def test_mariadb_pack_defaults(self):
-        """MariaDB pack must have expected metric keys."""
+        """MariaDB pack must have expected metric keys, in the right tier."""
         mariadb = ip.RULE_PACK_CATALOG['mariadb']['defaults']
+        critical = ip.RULE_PACK_CATALOG['mariadb']['critical_overrides']
         assert 'mysql_connections' in mariadb
         assert 'mysql_replication_lag' in mariadb
         assert mariadb['mysql_connections'] == 80
-        assert mariadb['mysql_connections_critical'] == 150
+        # #1218: the critical twin keeps its value and changes SECTION — it is
+        # asserted against `critical_overrides`, not merely "somewhere in the
+        # pack", because the section is the whole difference between a critical
+        # threshold and an unconsumed warning series.
+        assert critical['mysql_connections_critical'] == 150
         # #1231 rename guard: the catalog must carry the canonical spelling,
         # never the retired mysql_cpu one.
         assert 'mysql_threads_running' in mariadb
-        assert 'mysql_threads_running_critical' in mariadb
+        assert 'mysql_threads_running_critical' in critical
         assert 'mysql_cpu' not in mariadb
-        assert 'mysql_cpu_critical' not in mariadb
+        assert 'mysql_cpu_critical' not in critical
 
     def test_operational_and_platform_have_empty_defaults(self):
         """Operational and platform packs have auto-enabled marker, empty defaults."""
@@ -214,7 +219,8 @@ class TestGenDefaultsYaml:
         defaults = config['defaults']
         assert 'mysql_connections' in defaults
         assert defaults['mysql_connections'] == 80
-        assert defaults['mysql_connections_critical'] == 150
+        # …and its critical twin is NOT here (#1218). See TestCriticalTierPlacement.
+        assert 'mysql_connections_critical' not in defaults
 
     def test_multiple_rule_packs_merged(self):
         """Multiple rule packs' defaults are all merged."""
@@ -469,47 +475,59 @@ class TestGenTenantYamlDeclaredBlock:
     # -- the third paragraph must be TRUE OF THIS GENERATOR'S OWN OUTPUT ----
     #
     # It was first written as a static sentence ("in neither block; set one and
-    # it fires once `<base>` has a value"). Measured: true of what
-    # `scaffold_tenant` writes, FALSE of what `init_project` writes — this
-    # module's `RULE_PACK_CATALOG` puts 16 `_critical` keys straight into
-    # `defaults:` (11 of its 15 packs), so `da-tools init --rule-packs mariadb`
-    # emits `mysql_connections_critical: 150` under `defaults:` in the very
-    # `_defaults.yaml` it writes next to the stub. For those keys rule 1 is the
-    # applicable one and the tenant needs to do nothing.
+    # it fires once `<base>` has a value"). That was true of what
+    # `scaffold_tenant` wrote and false of what `init_project` wrote, because
+    # this module's catalog put 16 `_critical` keys straight into `defaults:` —
+    # so the sentence was made conditional on the artifact. #1218 then fixed the
+    # artifact: the keys moved to the tenant stub, both generators now ship the
+    # `_critical`-free regime, and the paragraph FOLLOWED the change instead of
+    # having to be found and rewritten. That is what the derivation bought, and
+    # it is why the tests below still read the sibling file rather than pinning
+    # whichever regime happens to be current.
     #
-    # ⛔ The two tests below assert against the SIBLING FILE, parsed — not
-    # against a phrase. That is the whole point: the previous test only checked
-    # that a string was present, which a false string passes just as well.
+    # ⛔ The tests below assert against the SIBLING FILE, parsed — not against a
+    # phrase. The pre-#1321 test only checked that a string was present, which a
+    # false string passes just as well.
 
     def test_critical_paragraph_matches_the_sibling_defaults_file(self):
         packs = ['mariadb', 'oracle']
         tenant_text = ip._gen_tenant_yaml('db-a', packs)
         sibling = yaml.safe_load(ip._gen_defaults_yaml(packs, 'monitoring'))
         crit = [k for k in sibling['defaults'] if k.endswith('_critical')]
-        assert crit, (
-            'fixture assumption broken: this generator is supposed to be the '
-            'one that DOES put _critical keys in `defaults:`')
+        assert crit == [], (
+            '#1218: no `_defaults.yaml` producer may put a `<base>_critical` '
+            'under `defaults:` — see TestCriticalTierPlacement for why, and '
+            'check_threshold_reachability for the repo-wide gate')
 
         from _registry_lib import render_tenant_critical_note_lines
         expected = '\n'.join(
             render_tenant_critical_note_lines(sibling['defaults'], lang='en'))
         assert expected in tenant_text
 
-        # …and one assertion that does not go through the renderer at all: the
-        # regime word in the header must agree with the parsed artifact.
+        # …and two assertions that do not go through the renderer at all: the
+        # regime the header is in must match the parsed artifact, BOTH ways.
+        # ⛔ Written as two direct assertions rather than
+        # `assert (marker in header) == (not crit)`, which the `crit == []`
+        # above degrades into a constant-RHS one-sided check that merely LOOKS
+        # bidirectional (blind review, #1218).
         header = tenant_text.split('\ntenants:')[0]
-        assert ('lists none of them under `defaults:`' in header) == (not crit)
-        # ⛔ Anchored to the phrase the count is rendered INTO, not to the bare
-        # digits. `str(len(crit)) in header` is a substring test against a
-        # header full of unrelated numbers (issue refs, the declared-tier count,
-        # "rule 1 above"), so a header claiming any wrong count that happens to
-        # share a digit passes it — measured, and it is the same "match looser
-        # than the target" defect this PR is fixing elsewhere.
-        assert re.search(rf'\bgives {len(crit)} of them a value\b', header), header
+        assert 'lists none of them under `defaults:`' in header, header
+        assert 'the wrong section' not in header, header
 
     def test_critical_paragraph_flips_when_defaults_gains_a_critical_key(self):
         """The renderer's own contract, on synthetic input: a `_critical`
-        appearing in `defaults:` must move the claim, not just the count."""
+        appearing in `defaults:` must move the claim, not just the count.
+
+        ⛔ And the claim it moves TO must be the true one (#1218). The branch
+        used to read "the critical row fires without you doing anything" — a
+        sentence about a file in which no critical row can exist, rendered into
+        the one file a customer opens. Measured in
+        `components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go`:
+        the key emits `{metric="<base>_critical", severity="warning"}` and
+        nothing else. So this asserts the promise is ABSENT, not just that the
+        wording changed — a rewrite that kept the reassurance would pass a
+        count-only assertion.
+        """
         from _registry_lib import render_tenant_critical_note_lines
         without = '\n'.join(render_tenant_critical_note_lines(
             {'mysql_connections': 80}, lang='en'))
@@ -518,7 +536,27 @@ class TestGenTenantYamlDeclaredBlock:
             lang='en'))
         assert 'lists none of them' in without
         assert 'lists none of them' not in with_crit
-        assert 'gives 1 of them a value' in with_crit
+        assert 'puts 1 of them under `defaults:`' in with_crit
+        assert 'the wrong section' in with_crit
+        assert 'no critical row exists' in with_crit
+        assert 'fires without you doing anything' not in with_crit
+
+    def test_critical_paragraph_is_a_warning_in_both_languages(self):
+        """Same claim, both renderings. The zh branch is what a Chinese-locale
+        `scaffold_tenant` run writes, and it carried the identical reassurance
+        ("critical 列本來就會發射，不需要你做任何事"); fixing only the branch the
+        English generator happens to use would leave the other half shipping
+        the sentence this issue is about.
+        """
+        from _registry_lib import render_tenant_critical_note_lines
+        misplaced = {'mysql_connections': 80, 'mysql_connections_critical': 150}
+        for lang, ok_marker, banned in (
+            ('en', 'the wrong section', 'fires without you doing anything'),
+            ('zh', '放錯區塊', '本來就會發射'),
+        ):
+            text = '\n'.join(render_tenant_critical_note_lines(misplaced, lang=lang))
+            assert ok_marker in text, (lang, text)
+            assert banned not in text, (lang, text)
 
     def test_block_members_equal_the_derived_set(self):
         """⛔ This pins the WIRING, not the derivation — say so, because the
@@ -678,6 +716,202 @@ class TestGenTenantYamlDeclaredBlock:
             assert section[key] == STUB_PLACEHOLDER_VALUE[_LANG]
         # the tenant's pre-existing keys are still its own
         assert '_routing' in section
+
+
+# ============================================================
+# ── 5c. `<base>_critical` tier placement (#1218 / TRK-344) ──
+# ============================================================
+#
+# The catalog is TWO dicts because the section a key lands in decides whether it
+# does anything, and both wrong answers are silent:
+#
+#   `defaults:`      → resolveBaseRows walks it and does not skip the suffix;
+#                      parseMetricKey splits on the FIRST underscore, so
+#                      `pg_connections_critical` becomes
+#                      {component="pg", metric="connections_critical",
+#                       severity="warning"} — one unconsumed series per tenant —
+#                      and `tenant:alert_threshold:pg_connections_critical`
+#                      (which reads severity="critical") stays empty.
+#   `<tenant>.yaml`  → resolveCriticalRows iterates tenant overrides and admits
+#                      on defaults[<base>], producing the real critical row.
+#
+# Both directions are MEASURED, not asserted from reading the resolver:
+# components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go.
+# The repo-wide gate over all five `_defaults.yaml` producers is
+# check_threshold_reachability.py's defaults-tier face; the tests here pin this
+# generator's own two files.
+
+class TestCriticalTierPlacement:
+    """#1218 — no `<base>_critical` in `defaults:`, all of them in the stub."""
+
+    def test_catalog_tiers_do_not_overlap_and_are_suffix_correct(self):
+        """The split is a partition, and the suffix decides which side.
+
+        Enumerating the 16 key names here would pass just as well after someone
+        added a 17th to the wrong dict, so the assertion is over EVERY pack.
+        """
+        for name, pack in ip.RULE_PACK_CATALOG.items():
+            base = pack['defaults']
+            crit = pack.get('critical_overrides', {})
+            assert not (set(base) & set(crit)), f'{name}: key in both tiers'
+            misfiled = [k for k in base if k.endswith('_critical')]
+            assert misfiled == [], (
+                f'{name}: {misfiled} sit in `defaults`, where the critical tier '
+                f'cannot see them — move them to `critical_overrides`')
+            stray = [k for k in crit if not k.endswith('_critical')]
+            assert stray == [], (
+                f'{name}: {stray} are in `critical_overrides` without the '
+                f'suffix — resolveCriticalRows would never look at them')
+
+    def test_every_critical_key_has_its_base_in_the_same_pack(self):
+        """resolveCriticalRows admits on `defaults[<base>]`, and since #1227 a
+        dangling `_critical` is a blocking ValidateTenantKeys Error — so a
+        seeded key whose base is absent is not merely inert, it makes the
+        tenant-api write of the whole stub fail.
+
+        The literal floor is the non-vacuity guard: this loop body runs zero
+        times on a catalog with no critical tier at all, and a test that passes
+        by never executing its assertion is indistinguishable from one that
+        holds.
+        """
+        checked = 0
+        for name, pack in ip.RULE_PACK_CATALOG.items():
+            for key in pack.get('critical_overrides', {}):
+                base = key[: -len('_critical')]
+                assert base in pack['defaults'], (
+                    f'{name}: {key} has no base {base!r} under `defaults`')
+                checked += 1
+        assert checked >= 16, checked
+
+    def test_generated_defaults_never_carry_a_critical_key(self):
+        """Over every pack individually AND the full selection — a per-pack loop
+        catches the pack a whole-catalog run would drown."""
+        packs = list(ip.RULE_PACK_CATALOG)
+        for selection in [[p] for p in packs] + [packs]:
+            config = yaml.safe_load(ip._gen_defaults_yaml(selection, 'monitoring'))
+            offenders = [k for k in config['defaults'] if k.endswith('_critical')]
+            assert offenders == [], f'{selection}: {offenders}'
+
+    def test_stub_seeds_the_critical_tier_for_every_selected_pack(self):
+        """Not just the first one.
+
+        The pre-#1218 stub copied three keys from `rule_packs[0]` only, so the
+        critical tier of packs 2..n existed nowhere a resolver would read it.
+        mariadb+kubernetes is the shipped interactive default pairing.
+        """
+        packs = ['mariadb', 'kubernetes']
+        stub = yaml.safe_load(ip._gen_tenant_yaml('db-a', packs))['tenants']['db-a']
+        expected = {}
+        for p in packs:
+            expected.update(ip.RULE_PACK_CATALOG[p]['critical_overrides'])
+        assert expected, 'fixture: both packs are supposed to have a critical tier'
+        for key, value in expected.items():
+            assert stub.get(key) == str(value), (key, stub.get(key), value)
+
+    def test_full_selection_seeds_all_sixteen(self):
+        """The count the issue was written about, derived from the catalog on
+        both sides so it tracks a 17th key instead of going stale — with a
+        literal floor so an empty derivation cannot satisfy it vacuously."""
+        packs = list(ip.RULE_PACK_CATALOG)
+        stub = yaml.safe_load(ip._gen_tenant_yaml('db-a', packs))['tenants']['db-a']
+        catalog_critical = {k for p in packs
+                            for k in ip.RULE_PACK_CATALOG[p].get('critical_overrides', {})}
+        assert len(catalog_critical) >= 16
+        assert catalog_critical <= set(stub)
+
+    def test_stub_header_count_matches_what_it_actually_seeded(self):
+        """The pre-fill sentence is rendered from the seeded mapping; pin that
+        it says the number the file carries, not a plausible one.
+
+        ⛔ Anchored to the phrase the count is rendered INTO, not to the bare
+        digits: `str(n) in text` is a substring test against a header full of
+        unrelated numbers, so a header claiming any wrong count that happens to
+        share a digit passes it.
+        """
+        packs = ['mariadb', 'kubernetes']
+        text = ip._gen_tenant_yaml('db-a', packs)
+        stub = yaml.safe_load(text)['tenants']['db-a']
+        seeded = [k for k in stub if k.endswith('_critical')]
+        assert re.search(rf'# {len(seeded)} of them are already written in below',
+                         text), text
+
+    def test_stub_header_states_the_cost_the_tenant_cannot_infer(self):
+        """The pre-fill has one consequence a tenant cannot infer from the keys
+        alone (raised in blind review, #1218): a `<base>_critical` whose base
+        later leaves `defaults:` is a hard ValidateTenantKeys error that makes
+        tenant-api reject the WHOLE file (#1227), not just that key.
+
+        ⛔ The staleness half is asserted the other way round — the header must
+        NOT single these lines out as unreachable by a platform recalibration.
+        That reading is true of them and equally true of every key in the
+        sibling `_defaults.yaml`: `_gen_kustomize_base` builds the
+        `threshold-config` ConfigMap from `conf.d/` itself, so both files are
+        one-time copies in the customer's repo. Saying it about the pre-filled
+        lines alone implies a contrast that does not exist, which is how a true
+        sentence still misleads the only reader who has to act on it.
+        """
+        text = ip._gen_tenant_yaml('db-a', ['mariadb'])
+        header = text.split('\ntenants:')[0]
+        prefill = header.split('already written in')[1]
+        assert 'EVERY write of this file is rejected' in prefill, header
+        assert 'hard validation error' in prefill, header
+        # the staleness statement must cover BOTH files, never just these lines
+        assert 'sibling' in prefill and '_defaults.yaml' in prefill, header
+        assert 'reaches neither file' in prefill, header
+        # …and it must not re-assert that the platform supplies the values —
+        # the paragraph above it (correctly) says the opposite.
+        assert 'the platform supplies' not in prefill
+
+    def test_generated_kustomize_base_is_what_makes_that_claim_true(self):
+        """The header above tells the tenant their `conf.d/` IS the live
+        surface. That is a claim about a DIFFERENT generated file, so it is
+        pinned against that file rather than trusted: the ConfigMap is built
+        from `conf.d/`, which is why no platform-side recalibration reaches
+        either file until the tool is re-run.
+        """
+        base = ip._gen_kustomize_base(['t1', 't2'], 'monitoring')
+        assert 'configMapGenerator' in base
+        assert 'name: threshold-config' in base
+        for entry in ('- _defaults.yaml', '- t1.yaml', '- t2.yaml'):
+            assert entry in base, base
+        # not sourced from the chart's platform-shipped defaults
+        assert 'thresholdConfig' not in base
+
+    def test_no_prefill_sentence_when_the_selection_has_no_critical_tier(self):
+        """db2 / clickhouse ship no `_critical` at all, so the file must not
+        point at a section it does not have — the same defect #1321 fixed for
+        the declared block, one paragraph over."""
+        text = ip._gen_tenant_yaml('db-a', ['db2'])
+        stub = yaml.safe_load(text)['tenants']['db-a']
+        assert not [k for k in stub if k.endswith('_critical')]
+        assert 'pre-filled below' not in text
+
+    def test_critical_key_whose_base_vanished_is_not_seeded(self, monkeypatch):
+        """A guard for a state the catalog is not in today, so it is exercised
+        on a mutated copy rather than asserted to be unreachable.
+
+        `_catalog_critical` reads the module global at call time, so patching
+        `ip.RULE_PACK_CATALOG` patches the name the consumer resolves — and the
+        first assertion below is the proof the patch took, not a formality: a
+        patch aimed at the wrong binding makes the real assertion pass for the
+        wrong reason.
+        """
+        pack = ip.RULE_PACK_CATALOG['mariadb']
+        broken = {
+            'mariadb': {
+                'label': pack['label'],
+                'defaults': {k: v for k, v in pack['defaults'].items()
+                             if k != 'mysql_connections'},
+                'critical_overrides': dict(pack['critical_overrides']),
+            }
+        }
+        monkeypatch.setattr(ip, 'RULE_PACK_CATALOG', broken)
+        assert 'mysql_connections' not in ip._catalog_defaults(['mariadb']), (
+            'the patch did not take — everything below would be vacuous')
+
+        seeded = ip._catalog_critical(['mariadb'])
+        assert 'mysql_connections_critical' not in seeded
+        assert 'mysql_threads_running_critical' in seeded
 
 
 # ============================================================

@@ -1450,19 +1450,24 @@ def render_tenant_declared_stub_lines(
 #   * ``scaffold_tenant.RULE_PACKS`` puts ZERO ``_critical`` in its ``defaults``
 #     tier, and the shipped ``helm/threshold-exporter/values.yaml``
 #     ``thresholdConfig.defaults`` carries zero as well.
-#   * ``init_project.RULE_PACK_CATALOG`` puts SIXTEEN of them straight into
-#     ``defaults`` (11 of its 15 packs — e.g. mariadb's
-#     ``mysql_connections_critical: 150``). So ``da-tools init --rule-packs
-#     mariadb`` writes a ``_defaults.yaml`` whose ``defaults:`` arms that
-#     critical for every tenant, while the ``<tenant>.yaml`` written by the SAME
-#     run told the tenant no critical row exists unless it sets one.
+#   * ``init_project.RULE_PACK_CATALOG`` USED TO put sixteen of them straight
+#     into ``defaults`` (11 of its 15 packs — e.g. mariadb's
+#     ``mysql_connections_critical: 150``), so ``da-tools init --rule-packs
+#     mariadb`` wrote a ``_defaults.yaml`` whose ``defaults:`` armed nothing at
+#     all for that key, while the ``<tenant>.yaml`` written by the SAME run
+#     told the tenant it was already covered.
 #
-# That ``_critical``-into-``defaults`` divergence is init_project's third
-# contract copy; merging it is tracked separately and deliberately NOT done here
-# (a half-merged contract is a fourth contract — see the import note in
-# ``init_project``). What IS fixed here is the header lying about it: the claim
-# is DERIVED from the ``defaults:`` mapping the generator is about to write, so
-# whichever regime a generator is in, the file says the true one.
+# ⛔ PAST TENSE from here down, and the tense is the point: #1218 moved those
+# sixteen into the catalog's ``critical_overrides`` tier and
+# ``check_threshold_reachability``'s defaults-tier face now fails CI on any
+# producer that reintroduces the shape, so BOTH generators are in the
+# ``_critical``-free regime today. The derivation below is kept exactly because
+# that was not always true and need not stay true: a sentence pinned to either
+# regime goes quietly false the next time a generator moves, which is the whole
+# defect #1321 fixed and #1218 found the other half of. What IS fixed here is
+# the header lying about it: the claim is DERIVED from the ``defaults:`` mapping
+# the generator is about to write, so whichever regime a generator is in, the
+# file says the true one.
 
 def defaults_critical_keys(defaults) -> list[str]:
     """The ``<base>_critical`` names a ``defaults:`` mapping assigns a value to.
@@ -1478,6 +1483,22 @@ def defaults_critical_keys(defaults) -> list[str]:
 
 # Two regimes, two truths. Keyed (lang, defaults-ships-critical) so a generator
 # in either regime gets prose that is true for the file it just wrote.
+#
+# ⛔ The True regime is a MISPLACEMENT REPORT, not the good case, and saying so
+# is the whole point of #1218 / TRK-344. It first shipped as reassurance — "the
+# critical row fires without you doing anything" — written from reading
+# `resolveCriticalRows` rather than running it. Measured (pkg/config/
+# critical_tier_placement_test.go): a `<base>_critical` under `defaults:` is
+# walked by `resolveBaseRows`, `parseMetricKey` splits on the FIRST underscore,
+# and the row that comes out is `{metric="<base>_critical", severity="warning"}`
+# — a series no recording rule joins — with no critical row anywhere. So the one
+# branch that existed to describe a defective file was telling its reader the
+# file was fine.
+#
+# No producer reaches this branch today (`check_threshold_reachability`'s
+# defaults-tier face fails CI first), and it is kept rather than deleted for
+# that reason: the alternative to a truthful branch is a KeyError inside a CLI
+# a customer is running.
 _TENANT_STUB_CRITICAL_NOTE = {
     ("zh", False): (
         "# 第三類 <base>_critical：本次一起產出的 _defaults.yaml 的 defaults: 一個都沒有列，",
@@ -1485,10 +1506,10 @@ _TENANT_STUB_CRITICAL_NOTE = {
         "# 產生一條真的 critical 閾值（不填則無此列，base 的 warning 列不受影響）。",
     ),
     ("zh", True): (
-        "# 第三類 <base>_critical：本次一起產出的 _defaults.yaml 的 defaults: 已經直接給了",
-        "# 其中 {n} 個值 ⇒ 對那 {n} 個，適用的是上面第一條（省略＝沿用平台值，critical 列",
-        "# 本來就會發射，不需要你做任何事）。不在 defaults: 的 <base>_critical 才要你自己",
-        "# 填，且只在 <base> 於 defaults: 有值時生效。",
+        "# ⚠️ 第三類 <base>_critical：本次一起產出的 _defaults.yaml 把其中 {n} 個放進了",
+        "# defaults:，那是放錯區塊、不是可繼承的平台值 —— critical 層只認租戶覆寫，那 {n} 個",
+        "# 只會各發一條 warning 級的 <base>_critical series（無人消費），critical 列並不存在。",
+        "# 要 critical 列請在本檔填 <base>_critical，只要 <base> 在 defaults: 有值就會生效。",
     ),
     ("en", False): (
         "# A third group is `<base>_critical`. The _defaults.yaml generated next to",
@@ -1498,12 +1519,13 @@ _TENANT_STUB_CRITICAL_NOTE = {
         "# and there simply is no critical row.",
     ),
     ("en", True): (
-        "# A third group is `<base>_critical`. The _defaults.yaml generated next to",
-        "# this file already gives {n} of them a value under `defaults:` — for those",
-        "# {n}, rule 1 above is the one that applies: omit and you keep the platform",
-        "# value, the critical row fires without you doing anything. A",
-        "# `<base>_critical` NOT in that section is yours to set, and it only takes",
-        "# effect while `<base>` has a value there.",
+        "# ⚠️ A third group is `<base>_critical`. The _defaults.yaml generated next",
+        "# to this file puts {n} of them under `defaults:` — the wrong section, not a",
+        "# platform value you can inherit: the critical tier reads tenant overrides",
+        "# only, so each of those {n} emits a warning-severity `<base>_critical`",
+        "# series that nothing consumes, and no critical row exists. Set",
+        "# `<base>_critical` HERE to get one; it takes effect while `<base>` has a",
+        "# value under `defaults:`.",
     ),
 }
 
@@ -1511,11 +1533,13 @@ _TENANT_STUB_CRITICAL_NOTE = {
 def render_tenant_critical_note_lines(defaults, lang: str = "zh") -> list[str]:
     """The tenant header's ``<base>_critical`` paragraph, true for ``defaults``.
 
-    ⛔ Derived from the artifact, never asserted statically: the two generators
-    disagree about whether ``_critical`` keys live in ``defaults:`` (see the
-    section note above), so a fixed sentence is guaranteed to be false for one
-    of them. The count is rendered too — it is what makes the claim checkable
-    against the sibling ``_defaults.yaml`` rather than merely plausible.
+    ⛔ Derived from the artifact, never asserted statically. Both generators
+    ship the False regime today, and that is precisely why the derivation has
+    to stay: they did NOT always agree (``init_project`` shipped 16 ``_critical``
+    keys under ``defaults:`` until #1218), and a sentence fixed to either regime
+    is a sentence that goes quietly false the next time one of them moves. The
+    count is rendered too — it is what makes the claim checkable against the
+    sibling ``_defaults.yaml`` rather than merely plausible.
     """
     shipped = defaults_critical_keys(defaults)
     template = _TENANT_STUB_CRITICAL_NOTE[(lang, bool(shipped))]
