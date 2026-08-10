@@ -1395,6 +1395,93 @@ def test_delivered_refs_refuses_a_half_empty_pin_table(tmp_path, emptied: str) -
     assert len(mod.delivered_refs(ROOT)) == 4
 
 
+def _load_extractor(name: str):
+    """Fresh in-process copy of the checker, under a caller-chosen module name."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(name, EXTRACTOR)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _fake_pin_root(tmp_path, appended: str):
+    """A tree holding a COPY of the pin source with `appended` tacked on."""
+    target = tmp_path.joinpath(*_DELIVERED_PIN_SOURCE.split("/"))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    src = (ROOT / _DELIVERED_PIN_SOURCE).read_text(encoding="utf-8")
+    target.write_text(src + appended, encoding="utf-8")
+    return tmp_path
+
+
+def test_reading_the_pin_table_leaves_no_process_state_behind(tmp_path) -> None:
+    """Loading the pin source must not mutate `sys.path` or `sys.modules`.
+
+    ⛔ The pin source is a CLI module, and executing it runs four
+    ``sys.path.insert(0, …)`` derived from its own ``__file__`` — never undone.
+    In the one-shot CI process that is invisible; in-process it is not.
+    MEASURED before the fix: after loading a COPY from a tmp dir, the four tmp
+    paths sit at the FRONT of ``sys.path``, and a subsequent
+    ``import init_project`` resolves to that copy — i.e. to the deliberately
+    MUTATED file a test just wrote, whose pin table is empty.
+
+    The suite did not hit that only because the half-empty test's final line
+    reloads the real file, pushing the real directories back in front. That line
+    exists to prove the function does not raise unconditionally, so the
+    containment was a side effect of an unrelated assertion — the kind that
+    disappears in a reordering, silently, with no test to notice.
+    """
+    root = _fake_pin_root(tmp_path, "\n\n_GITLAB_APPLY_IMAGES = {}\n")
+    mod = _load_extractor("_extractor_no_leak")
+
+    before = list(sys.path)
+    with pytest.raises(SystemExit):
+        mod.delivered_refs(root)
+
+    leaked = [p for p in sys.path if str(tmp_path) in p]
+    assert not leaked, (
+        f"loading the pin source left {len(leaked)} tmp path(s) on sys.path: "
+        f"{leaked}. The next in-process `import init_project` resolves against "
+        "these, so a test's throwaway copy becomes the module everyone else "
+        "sees."
+    )
+    assert sys.path == before, (
+        f"sys.path changed across the load: {set(sys.path) ^ set(before)}"
+    )
+    assert "_da_init_project" not in sys.modules, (
+        "a failed load left a half-initialised module registered under "
+        "`_da_init_project`; the next loader call would find it already present"
+    )
+
+
+def test_a_single_blanked_pin_is_named_not_shrugged_off(tmp_path) -> None:
+    """One emptied entry must be reported, not diluted by its siblings.
+
+    ``apply_refs`` is a SET of the table's values, so blanking ONE pin leaves it
+    truthy and the container-level emptiness check passes. Downstream does catch
+    the empty ref (the resolver fails, the gate exits 1), so this is not a
+    fail-open — it is the difference between a message naming the pin table and
+    a registry error about an empty string.
+    """
+    root = _fake_pin_root(
+        tmp_path,
+        "\n\n_GITLAB_APPLY_IMAGES = dict(_GITLAB_APPLY_IMAGES)\n"
+        "_GITLAB_APPLY_IMAGES[next(iter(_GITLAB_APPLY_IMAGES))] = "
+        "(next(iter(_GITLAB_APPLY_IMAGES.values()))[0], '   ')\n",
+    )
+    mod = _load_extractor("_extractor_blank_member")
+
+    with pytest.raises(SystemExit) as excinfo:
+        mod.delivered_refs(root)
+    assert "_GITLAB_APPLY_IMAGES" in str(excinfo.value), (
+        f"blanking one pin exited without naming the table: {excinfo.value}"
+    )
+
+    # Paired positive, same reason as above: the real table must still resolve.
+    assert len(mod.delivered_refs(ROOT)) == 4
+
+
 def test_the_report_job_waits_for_every_bucket() -> None:
     """`report` must depend on all three scan jobs.
 

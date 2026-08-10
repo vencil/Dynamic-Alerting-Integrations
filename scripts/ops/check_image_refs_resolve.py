@@ -157,14 +157,49 @@ def delivered_refs(root: Path) -> set[str]:
     if spec is None or spec.loader is None:
         raise SystemExit(f"check_image_refs_resolve: cannot load {path}")
     mod = importlib.util.module_from_spec(spec)
+    # ⛔ The pin source is a CLI module, so executing it is not free: it does four
+    # `sys.path.insert(0, …)` off its own `__file__` and never undoes them. That
+    # is harmless for the CI gate (one-shot process) and NOT harmless in-process.
+    # Measured: load a COPY of the source from a tmp dir and the process's
+    # sys.path gains four tmp entries AT THE FRONT — a later `import
+    # init_project` then resolves to that copy, and the copy is exactly the
+    # MUTATED one a test wrote (empty pin table). The suite does not hit this
+    # today only because the half-empty test's last line reloads the real file,
+    # re-inserting the real dirs in front; that line exists to prove this
+    # function is not raising unconditionally, so the containment is accidental
+    # and would vanish in any reordering. Snapshot/restore instead of relying on
+    # it, and drop the sys.modules entry so a failed exec leaves nothing
+    # half-initialised behind.
+    saved_path = list(sys.path)
     sys.modules["_da_init_project"] = mod
-    spec.loader.exec_module(mod)
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.path[:] = saved_path
+        sys.modules.pop("_da_init_project", None)
 
-    apply_refs = {ref for _var, ref in getattr(mod, "_GITLAB_APPLY_IMAGES", {}).values()}
+    # Member-level emptiness, not just container-level: `{""}` is a truthy set,
+    # so a single blanked pin would sail past a `not apply_refs` test and reach
+    # the registry as an unparseable ref. Downstream does catch it (the resolver
+    # fails and the gate exits 1), so this is not a fail-open — it is the
+    # difference between "the pin table is EMPTY: <name>" and a resolver error
+    # about an empty string.
+    table = getattr(mod, "_GITLAB_APPLY_IMAGES", {})
+    # ⚠️ Count non-empty VALUES, not the deduped set: two entries may legitimately
+    # pin the same image, and comparing `len(set)` against the entry count would
+    # red the gate for that alone.
+    non_empty = [ref for _var, ref in table.values()
+                 if isinstance(ref, str) and ref.strip()]
+    apply_refs = {ref.strip() for ref in non_empty}
     git_sync = getattr(mod, "GIT_SYNC_IMAGE", "")
+    git_sync = git_sync.strip() if isinstance(git_sync, str) else ""
     empty = [name for name, value in
              (("_GITLAB_APPLY_IMAGES", apply_refs), ("GIT_SYNC_IMAGE", git_sync))
              if not value]
+    if table and len(non_empty) < len(table):
+        empty.append(
+            f"_GITLAB_APPLY_IMAGES declares {len(table)} entries but only "
+            f"{len(non_empty)} carry a non-empty ref")
     if empty:
         raise SystemExit(
             f"check_image_refs_resolve: the customer-delivered pin table in {path} "
