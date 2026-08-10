@@ -698,7 +698,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "3aecbbb4d651b6c419a7ef989298bc7139bedab96ca1db9d5d63dba6e22c4797",
+ "source_digest": "ab0f9a98a79d20a17e7fbf3b8c1c8dc030d5dfc258dd8db0f9f9d0fbc80fcd40",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",

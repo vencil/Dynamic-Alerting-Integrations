@@ -1314,16 +1314,13 @@ def test_every_scan_job_actually_scans_its_own_matrix() -> None:
                 "applied matrix-wide it suppresses findings on every other "
                 "image in the bucket."
             )
+            owners = set()
             for path in paths:
                 owner = Path(path).parent.name
+                owners.add(owner)
                 assert (ROOT / path).is_file(), (
                     f"{job_name} references a waiver file that does not exist: "
                     f"{path}"
-                )
-                assert owner in guarded, (
-                    f"{job_name} applies the waiver {path!r} (owned by "
-                    f"{owner!r}) under the condition(s) {sorted(guarded)}. The "
-                    "waiver must be gated on the image that owns it."
                 )
                 assert owner in {
                     e.get("name") for e in
@@ -1332,6 +1329,19 @@ def test_every_scan_job_actually_scans_its_own_matrix() -> None:
                     f"{job_name} gates a waiver on {owner!r}, which is not in "
                     "this job's matrix — the condition can never be true."
                 )
+            # ⛔ EQUALITY, not membership. An earlier version asserted
+            # `owner in guarded`, which reads the wrong direction: the loop runs
+            # over the waiver PATHS (one), never over the guard names (可以 N
+            # 個), so an extra `|| matrix.name == 'other-image'` was invisible.
+            # Measured: OR-ing `da-tools` into the condition applied
+            # recipe-preview's promtool waivers to it and left 44 passing.
+            # Set equality makes the guard say "these images and no others".
+            assert guarded == owners, (
+                f"{job_name} gates its waiver on {sorted(guarded)} but the "
+                f"referenced waiver file(s) belong to {sorted(owners)}. A name "
+                "in the condition that owns no waiver file silently borrows "
+                "someone else's suppressions."
+            )
 
 
 @pytest.mark.parametrize("emptied", ["_GITLAB_APPLY_IMAGES", "GIT_SYNC_IMAGE"])
@@ -1434,6 +1444,95 @@ _TRIVY_EXTRA_ALLOWED: dict[str, frozenset[str]] = {
 # unpullable image aborts instead of degrading to COUNT=0). An entry here is a
 # decision that has to be argued, not config.
 _NIGHTLY_DISARM_ALLOWED: dict[str, frozenset[str]] = {}
+
+# Steps allowed to carry a NARROWING `if:` (one `_if_narrows` cannot read as
+# strictly-wider), as {job: {step name}}, each with its reason. Everything else
+# in a scan bucket has to be unconditional, because the buckets' whole output is
+# "did this image scan or not".
+#   * Docker Hub login   — credential-gated; `secrets` is not allowed in `if:`
+#                          so it keys off a mirrored env var, and a fork run
+#                          legitimately skips it.
+#   * vendor dir / stub  — per-image build prep, matrix-scoped by design.
+# `always()` is NOT listed: `_if_narrows` already classes it as non-narrowing
+# via `_NON_NARROWING_IF`, which is why the `Upload fragment` steps need no
+# entry here.
+_NIGHTLY_IF_ALLOWED: dict[str, frozenset[str]] = {
+    "scan": frozenset({
+        "Docker Hub login (no-op without creds)",
+        "Ensure da-portal vendor dir exists",
+        "Stub da-tools build inputs",
+    }),
+    "scan-thirdparty": frozenset({"Docker Hub login (no-op without creds)"}),
+    "scan-delivered": frozenset({"Docker Hub login (no-op without creds)"}),
+    # The reporter is gated at JOB level by `if: always()` (pinned separately);
+    # this step only speaks when the run already failed.
+    "report": frozenset({"Explain a likely failure cause"}),
+}
+
+
+def test_no_nightly_scan_step_is_silently_gated_off() -> None:
+    """⛔ The sibling test generalised HALF of the mechanism; this is the rest.
+
+    `_if_narrows` exists and is careful, but its only caller is
+    `_workflow_argvs`, whose only call site names `image-ref-resolve.yaml`. So
+    "did this step actually run" was enforced for one workflow and for none of
+    the three scan buckets — the commit that generalised `_disarmed` claimed to
+    "reuse the same implementation across the whole nightly" and delivered only
+    the disarm half. Measured: `if: false` on scan-delivered's Trivy step left
+    44 passing, and so did `if: matrix.name != 'grafana'` on scan-thirdparty's
+    Summarize step.
+
+    Same reuse discipline as the disarm test: this calls `_if_narrows` rather
+    than re-deriving what counts as a narrowing condition.
+    """
+    wf = _nightly()
+    offenders: list[str] = []
+    for job_name, job in wf["jobs"].items():
+        allowed = _NIGHTLY_IF_ALLOWED.get(job_name, frozenset())
+        if job_name != "report" and _if_narrows(job):
+            offenders.append(f"job {job_name} (if: {job['if']})")
+        for step in (job.get("steps") or []):
+            label = str(step.get("name", step.get("uses", "<unnamed>")))
+            if label in allowed:
+                continue
+            if _if_narrows(step):
+                offenders.append(f"{job_name}/{label} (if: {step['if']})")
+    assert not offenders, (
+        "these nightly steps sit behind a condition this module cannot read as "
+        "strictly wider:\n  " + "\n  ".join(offenders)
+        + "\nA scan step that does not run reports nothing, which downstream is "
+        "indistinguishable from a scan that found nothing. If the condition is "
+        "legitimate, add the step to _NIGHTLY_IF_ALLOWED with its reason."
+    )
+
+
+def test_the_nightly_if_allowlist_has_no_dead_entries() -> None:
+    """Exit-locked: an allowlist that outlives its steps rots into permission.
+
+    Every name listed must still exist AND still carry a narrowing `if:` — so
+    removing the condition (the good outcome) also forces the entry out, rather
+    than leaving a standing exemption for whatever later takes that name.
+    """
+    wf = _nightly()
+    stale: list[str] = []
+    for job_name, names in _NIGHTLY_IF_ALLOWED.items():
+        job = wf["jobs"].get(job_name)
+        assert job is not None, (
+            f"_NIGHTLY_IF_ALLOWED names job {job_name!r}, which no longer "
+            "exists — the exemption now applies to nothing and hides nothing."
+        )
+        present = {
+            str(s.get("name", s.get("uses", "<unnamed>"))): s
+            for s in (job.get("steps") or [])
+        }
+        for name in names:
+            step = present.get(name)
+            if step is None or not _if_narrows(step):
+                stale.append(f"{job_name}/{name}")
+    assert not stale, (
+        f"exempted steps that no longer need the exemption: {stale}. Drop them "
+        "from _NIGHTLY_IF_ALLOWED so the list keeps meaning what it says."
+    )
 
 
 def test_no_nightly_step_discards_its_own_failure() -> None:
