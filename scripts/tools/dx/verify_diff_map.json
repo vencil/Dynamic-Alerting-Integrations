@@ -717,7 +717,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "dee3f24d1381caa9f8b08ee51e2ade72af8e9d8fb25ec716a20a3db1e895b137",
+ "source_digest": "be21ebe4d7e27fd560d25aa0b2035b37477bdb56a06e2085a7aa13ae743cc2c4",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2499,7 +2499,8 @@
    "tests/shared/test_json_stdout_contract.py"
   ],
   "tests/ops/test_ci_path_filter_coverage.py": [
-   "tests/lint/test_counterexample_coverage.py"
+   "tests/lint/test_counterexample_coverage.py",
+   "tests/ops/test_wrapped_path_references.py"
   ],
   "tests/ops/test_federation_revocation_reconciler.py": [
    "tests/helm/test_federation_store_sentinel_guard.py"

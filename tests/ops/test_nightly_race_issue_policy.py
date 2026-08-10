@@ -16,13 +16,17 @@ only thing that can catch a regression before it ships a month of silence is an
 offline test in a job that actually runs. `tests/ops/*.sh` would not do — pytest
 does not collect shell scripts. This file is collected by the existing
 "Python Tests (3.13)" required check, whose path filter includes
-`.github/workflows/**` (ci.yml:147), so editing the workflow runs this guard.
+`.github/workflows/**` (see ci.yml's `python:` filter), so editing the workflow
+runs this guard. ⚠️ Anchored by NAME, not by line number: the two citations in
+this docstring were both stale before anyone noticed, because a line number is
+invalidated by every edit above it and nothing checks it.
 
 The workflow is parsed with `yaml.safe_load`, not grepped: a grep-level guard
 cannot tell "issues.create inside the matrix job" from "issues.create in the
 fan-in report job", which is the entire distinction being enforced.
 
-NOTE on assertion style: ci.yml runs pytest with `-x` (exit-first, ci.yml:990),
+NOTE on assertion style: ci.yml runs pytest with `-x` (exit-first, in the
+`Run pytest with coverage` step of `python-tests-run`),
 so each test collects ALL of its violations and reports them in ONE failure
 message. Successive bare asserts would surface one problem per CI round-trip.
 """
