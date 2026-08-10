@@ -89,6 +89,18 @@ WHAT THIS GUARD DOES **NOT** BUY
   decision, same disposition as #1349/#1350. ``--deploy helm`` is in the same
   position (its apply reads an ``environments/prod/values.yaml`` that ``init``
   does not create).
+* **Two coverage gaps left open ON PURPOSE, because neither can be shown to buy
+  detection today.** (a) The `conf.d/` that `init` scaffolds is the real input to
+  the customer's Stage 1, and nothing feeds it to `validate_config.py` even
+  though that module is importable in-process — measured, it currently exits 0
+  with 5/5 checks passing, so a guard there would start life green and stay
+  green until some future schema change. (b) The wizard's third claim surface,
+  `cicdGenerateInitCommand`, is checked only by substring in the portal suite;
+  its five flags were verified against `_build_parser()` by hand and all exist.
+  ⛔ Both are worth building and neither is built here: this file's own history
+  is that every guard added in a hurry shipped with one half of its mechanism
+  missing, and a guard whose counterfactual is "nothing changes" cannot be
+  distinguished from a guard that does nothing. Tracked rather than rushed.
 * **It does not check the exit-code contract of the commands it pins.** Every
   assertion here about failure is fail-OPEN-shaped: `continue-on-error` and
   `allow_failure` are blocked on both legs so a failure cannot be discarded.
@@ -170,7 +182,11 @@ WHAT THIS GUARD DOES **NOT** BUY
   generated tool invocations honour it, but ``on.push.paths`` /
   ``on.pull_request.paths`` (GitHub) and ``rules.changes`` (GitLab) accept
   literals only — no expressions, no variables — and the base-config checkout
-  also spells ``conf.d`` literally in ``git show``/``git archive``. So a customer
+  also spells ``conf.d`` literally in ``git show``/``git archive``. ⛔ A fourth
+  site this enumeration originally missed: the generated pre-commit hooks'
+  ``files:`` regex. An enumeration inside a stated boundary is itself a claim,
+  and this one was incomplete — the same class of miss the boundary describes.
+  So a customer
   who sets ``CONFIG_DIR: configs`` gets tools reading the right directory while
   the trigger filters match none of their files. The knob-reachability assertion
   above answers "is it read AT ALL", which this satisfies; it cannot answer "is
@@ -1000,10 +1016,19 @@ def test_generated_precommit_hooks_can_actually_run(generated, ci, deploy) -> No
     those passed on a hook that could not run: "is it well-formed" and "does it
     work" are different questions, and only the first was being asked.
     """
-    path = generated[(ci, deploy)] / ".pre-commit-config.da.yaml"
+    root = generated[(ci, deploy)]
+    path = root / ".pre-commit-config.da.yaml"
     cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
     hooks = [h for r in cfg["repos"] for h in r["hooks"]]
     assert hooks, "no hooks in the generated pre-commit config"
+
+    holders = {
+        p.rsplit("/", 1)[0]
+        for p in _files_written(root)
+        if p.endswith("_defaults.yaml")
+    }
+    assert len(holders) == 1, f"expected one config directory, got {holders}"
+    config_dir = holders.pop()
     for hook in hooks:
         entry = str(hook.get("entry", ""))
         assert not re.search(r"\$\{?\w+|\$\(", entry), (
@@ -1052,6 +1077,23 @@ def test_generated_precommit_hooks_can_actually_run(generated, ci, deploy) -> No
                     "nowhere else, so this path does not exist in the "
                     "container."
                 )
+
+        # (c) ⛔ The hook's `files:` decides whether it runs AT ALL, and this PR
+        # pinned that property on both CI legs (`_CLI_GH_TRIGGERS`,
+        # `_EXPECTED_GL_JOB_RULES`) with the argument that a filter matching
+        # nothing "leaves validate and generate dead on every PR". The third
+        # generated artifact has the identical property and got a substring
+        # check instead: measured, rewriting `^conf\.d/` to `^NOPEconf\.d/`
+        # left 341 passed because the old assertion only asked whether the
+        # pattern contained "conf". Derived from what `run_init` actually wrote,
+        # so renaming the config directory moves both together.
+        expected_files = rf"^{re.escape(config_dir)}/.*\.ya?ml$"
+        assert str(hook.get("files", "")) == expected_files, (
+            f"hook {hook.get('id')!r} filters on {hook.get('files')!r}, but "
+            f"`da-tools init` writes tenant config into {config_dir!r} "
+            f"(expected {expected_files!r}). A filter that matches nothing is a "
+            "shift-left hook that never fires, on every commit, silently."
+        )
 
         # (b) pre-commit appends the matched filenames to argv unless
         # `pass_filenames: false` — and ⛔ its DEFAULT is true, so omitting the
@@ -1643,6 +1685,13 @@ def _assert_github_deploy_contract(
         # workflows widen at job level in 9 places, and `bench-on-demand.yaml`'s
         # `gate` job is the identical shape (`contents: read` at the top,
         # `pull-requests: write` on the one job that comments).
+        #
+        # ⚠️ This check exists on the GitHub leg only, and that is NOT the
+        # "one of a pair" defect this file keeps finding: GitLab has no
+        # job-level `permissions:` concept at all — its jobs carry a
+        # project-wide `CI_JOB_TOKEN` whose scope is configured outside the
+        # pipeline file. There is nothing on that leg for a mirror of this rule
+        # to read.
         #
         # So the ceiling is now the job's OWN demand, unioned with the workflow
         # baseline: a job may hold a scope it can justify by a step that needs
@@ -2711,6 +2760,32 @@ def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> No
             "intended, update the pin in the same commit."
         )
 
+        # ⛔ The pin above covers the PRODUCING side. The motivation written
+        # beside it — "nothing caught 'the step that produces its input was
+        # removed', which leaves a comment action pointing at a file nobody
+        # writes" — is a statement about a LINK, and only one end of it was
+        # fastened. Measured: repointing the commenter at
+        # `.output/NOT-PRODUCED.md` left 341 passed, zero red.
+        #
+        # Derived on both ends: the produced set comes from the redirect targets
+        # in the pinned script, the consumed path from the step's own `with:`.
+        # Neither is hand-copied, so they cannot drift apart quietly.
+        produced = {
+            m.group(1)
+            for cmd in got
+            if (m := re.search(r">\s*(\S+)\s*$", cmd))
+        }
+        for step in wf["jobs"]["generate"]["steps"]:
+            path = (step.get("with") or {}).get("path")
+            if path is None:
+                continue
+            assert str(path) in produced, (
+                f"the generate job's {step.get('uses', step.get('name'))!r} "
+                f"consumes {path!r}, which no step in that job writes "
+                f"(produced: {sorted(produced)}). The action fails at runtime "
+                "on a file that was never created — a red pipeline on every PR."
+            )
+
     if ci in ("gitlab", "both"):
         pipe = yaml.safe_load((root / _GL_PIPELINE).read_text(encoding="utf-8"))
         jobs = [
@@ -2727,6 +2802,27 @@ def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> No
         assert got_gl == _EXPECTED_GL_GENERATE, (
             f"the GitLab generate body changed for --ci {ci} --deploy {deploy}.\n"
             f"  expected: {_EXPECTED_GL_GENERATE}\n  got:      {got_gl}"
+        )
+
+        # ⛔ On this leg `artifacts:` is the ENTIRE delivery mechanism. The
+        # GitHub leg hands the blast radius to the customer through a sticky PR
+        # comment (pinned via the `uses:` set); GitLab has no comment step at
+        # all, so deleting these four lines loses `alertmanager-routes.yaml` and
+        # `blast-radius.md` with a fully green pipeline. Measured: removing the
+        # block left 341 passed, zero red.
+        #
+        # ⚠️ `when:` is absent on purpose — that records the CURRENT state, not
+        # an endorsement. Its default is `on_success`, which is exactly why the
+        # unhandled `config-diff` exit code (#1358) drops the artifacts too. A
+        # fix there will have to edit this pin, which is the point of pinning.
+        assert jobs[0].get("artifacts") == {
+            "paths": [".output/"],
+            "expire_in": "7 days",
+        }, (
+            f"the GitLab generate job's `artifacts:` changed: "
+            f"{jobs[0].get('artifacts')!r}. This is the only way anything "
+            "reaches the customer on this leg — no artifacts, no routes file "
+            "and no blast-radius report, with the pipeline still green."
         )
 
 
