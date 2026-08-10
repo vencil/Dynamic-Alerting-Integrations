@@ -1623,13 +1623,45 @@ def _assert_github_deploy_contract(
 
     for jname, job in workflow["jobs"].items():
         effective = job["permissions"] if "permissions" in job else expected_perms
+
+        # What THIS job's steps actually demand, derived from `_NEEDS`.
+        demanded: dict[str, str] = {}
+        for step in (job.get("steps") or []):
+            for scope, needed in _demands(step):
+                if _rank(needed) > _rank(demanded.get(scope, "none")):
+                    demanded[scope] = needed
+
+        # ⛔ The ceiling used to be "never exceed the workflow grant", and that
+        # rule contradicted its own message. The message says `apply` is the
+        # `environment: production` job and therefore the worst place to widen —
+        # a statement about WHICH job, while the check said NO job may widen.
+        # The round that introduced it was explicitly trying to permit the
+        # least-privilege shape (`pull-requests: write` on `generate` alone) and
+        # blocked exactly that instead.
+        #
+        # It also encoded a rule this platform does not follow: 6 of its own
+        # workflows widen at job level in 9 places, and `bench-on-demand.yaml`'s
+        # `gate` job is the identical shape (`contents: read` at the top,
+        # `pull-requests: write` on the one job that comments).
+        #
+        # So the ceiling is now the job's OWN demand, unioned with the workflow
+        # baseline: a job may hold a scope it can justify by a step that needs
+        # it, and nothing more. `apply` runs checkout / kustomize / kubectl and
+        # demands no `pull-requests`, so granting it any is still red — which is
+        # what the original message was actually reaching for.
         for scope, value in effective.items():
-            assert _rank(value) <= _rank(expected_perms.get(scope, "none")), (
-                f"{label}: job {jname!r} has effective `{scope}: {value}` while "
+            ceiling = max(
+                _rank(expected_perms.get(scope, "none")),
+                _rank(demanded.get(scope, "none")),
+            )
+            assert _rank(value) <= ceiling, (
+                f"{label}: job {jname!r} has effective `{scope}: {value}`, but "
                 f"the workflow grant is `{scope}: "
-                f"{expected_perms.get(scope, 'none')}`. A job block WIDENS that "
-                "job's token — and `apply` is the `environment: production` "
-                "job, the worst place for it."
+                f"{expected_perms.get(scope, 'none')}` and no step in that job "
+                f"demands more than `{demanded.get(scope, 'none')}`. A scope no "
+                "step uses is a scope that only widens the blast radius — and "
+                "`apply` is the `environment: production` job, the worst place "
+                "for it."
             )
         for step in (job.get("steps") or []):
             for scope, needed in _demands(step):
@@ -1851,7 +1883,10 @@ def test_github_permissions_grant_what_the_steps_actually_need(
     _assert_github_deploy_contract(
         workflow,
         f"CLI artifact (--ci {ci} --deploy {deploy})",
-        {"contents": "read", "pull-requests": "write"},
+        # Workflow-level baseline only. `pull-requests: write` now lives on the
+        # `generate` job, where the ceiling rule justifies it from that job's
+        # own sticky-comment step — see the note beside that check.
+        {"contents": "read"},
         _CLI_GH_TRIGGERS,
         _cli_gh_uses(deploy),
         expects_lint=True,

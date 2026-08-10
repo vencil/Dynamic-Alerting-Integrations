@@ -775,9 +775,16 @@ def _gen_github_actions(
     # exactly as before. A customer whose contributors work from forks needs a
     # different design, not a wider `permissions:` block — tracked as a known
     # boundary rather than silently implied to be fixed.
+    #
+    # ⛔ The write scope sits on the `generate` job, NOT here. At workflow level
+    # every job inherits it, including `apply` — the one carrying
+    # `environment: production` and cluster credentials, which posts no comment
+    # and needs no PR write. This is the shape this platform uses on itself in
+    # 6 workflows / 9 jobs (bench-on-demand.yaml's `gate` job is identical:
+    # `contents: read` at the top, `pull-requests: write` on the one job that
+    # comments).
     permissions:
       contents: read
-      pull-requests: write
 
     env:
       DA_TOOLS_IMAGE: {da_tools_image}
@@ -812,6 +819,12 @@ def _gen_github_actions(
         needs: validate
         runs-on: ubuntu-latest
         if: github.event_name == 'pull_request'
+        # The only job that writes anything back to the PR. A job-level block
+        # REPLACES the workflow one rather than merging, so `contents: read` is
+        # restated here — dropping it would 403 the checkout.
+        permissions:
+          contents: read
+          pull-requests: write
         steps:
           - uses: actions/checkout@v4
 
