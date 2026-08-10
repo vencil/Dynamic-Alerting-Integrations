@@ -34,8 +34,8 @@ name: Bench Gate (release-time, Tier 2)
 #     auto-attach workflow, so it has no comparable baseline format.
 #     First meaningful Tier 2 exercise will be v2.9.0 (vs v2.8.0).
 #
-# See: issue #433, bench-gate-pr.yaml (Tier 1), release-attach-bench-
-#      baseline.yaml (nightly→release asset pipeline),
+# See: issue #433, bench-gate-pr.yaml (Tier 1),
+#      release-attach-bench-baseline.yaml (nightly→release asset pipeline),
 #      bench-gate-rollout.md (design).
 
 on:

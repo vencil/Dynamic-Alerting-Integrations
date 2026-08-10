@@ -12,8 +12,8 @@ Two tiers (each independently gated on a binary being on PATH):
     enabled, static per-AccountID sinks with FIXED headers, Layer-1 search
     flags, maxQueryDuration < gateway 30s.
   - `vector validate` + `vector test` (need BOTH `helm` and `vector`): the AC
-    behavior gate. validate = syntax; test runs helm/vector/tests/
-    projection_tests.yaml (negative assertion that topology is stripped,
+    behavior gate. validate = syntax; test runs
+    helm/vector/tests/projection_tests.yaml (negative assertion that topology is stripped,
     fail-closed on blank/unknown/parse-error tenant_id, log_event_id in both
     copies, gateway_operational stays 0:0). Mirrors the runbook §4.4 manual
     `vector validate` step, now codified.

@@ -12,8 +12,9 @@
 #
 # optional_overrides（不在出貨清單裡，但 base 已出貨——租戶今天就設得動）：
 # 下列 `<base>_critical` 不在平台出貨的 `optional_overrides:` 清單裡，也不需要列進去。
-# 它們的解析走 resolveCriticalRows，入場條件是 `defaults[base]` 有值（components/
-# threshold-exporter/app/pkg/config/resolve.go），而下列每個 key 的 base 都標了
+# 它們的解析走 resolveCriticalRows，入場條件是 `defaults[base]` 有值
+# （components/threshold-exporter/app/pkg/config/resolve.go），
+# 而下列每個 key 的 base 都標了
 # [chart-default]＝出貨的 Helm values / dev conf.d 範本就供給它。⇒ 租戶在自己的
 # conf.d 填一個，ValidateTenantKeys 放行、resolveCriticalRows 產出一條真的
 # critical row。清單刻意不收 _critical 也是同一個理由：它們用不到宣告集（#1311）。

@@ -39,8 +39,8 @@ import {
 
 // i18n helper — picks zh or en based on jsx-loader's detected language.
 //
-// This tool ships as a PRE-BUILT esbuild dist bundle (docs/assets/dist/
-// wizard.js). The language toggle in jsx-loader.html does a FULL PAGE
+// This tool ships as a PRE-BUILT esbuild dist bundle (
+// docs/assets/dist/wizard.js). The language toggle in jsx-loader.html does a FULL PAGE
 // RELOAD (not an in-place React re-mount) — see jsx-loader.html
 // setLanguage(). On reload the module is re-evaluated, so this module-level
 // `const t` is captured with `window.__t` already set at bootstrap. That is

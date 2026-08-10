@@ -38,8 +38,8 @@ package config
 //     least both audible — but only the exporter side is also observable in
 //     metrics.
 //
-// Either way the operator's own feedback loop stays green: scripts/tools/ops/
-// validate_config.py returns PASS/exit 0 on a sample that cannot load.
+// Either way the operator's own feedback loop stays green:
+// scripts/tools/ops/validate_config.py returns PASS/exit 0 on a sample that cannot load.
 //
 // Scope boundary: this pins the LOADER contract only. Whether a key is one the
 // threshold-registry knows (a dead-series risk) is the reachability class

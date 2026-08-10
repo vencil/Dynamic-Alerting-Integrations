@@ -5,8 +5,8 @@ purpose: |
   (operator command / migration command / AlertmanagerConfig preview /
   manual checklist) with copy-to-clipboard buttons.
 
-  Pre-PR-portal-4 lived inline as the largest function in operator-
-  setup-wizard.jsx (~240 LOC, lines 815-1053). Extracted to drop the
+  Pre-PR-portal-4 lived inline as the largest function in
+  operator-setup-wizard.jsx (~240 LOC, lines 815-1053). Extracted to drop the
   orchestrator under the 1000-LOC mark and to let future PRs polish
   this step without touching the wizard control flow.
 

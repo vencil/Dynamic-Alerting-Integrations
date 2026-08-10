@@ -70,8 +70,8 @@ jobs:
             #   - tests/contract/** — schemathesis runner + fixtures run
             #     inside the tenant-api leg.
             #   - tests/alertmanager-inhibit/** — the am-inhibit leg; its
-            #     tests also parse k8s/03-monitoring/configmap-alertmanager
-            #     .yaml and try-local/alertmanager.yml (grep-verified) →
+            #     tests also parse
+            #     k8s/03-monitoring/configmap-alertmanager.yaml and try-local/alertmanager.yml (grep-verified) →
             #     those trees are in the filter too.
             #   - rule-packs/** — custom-alerts pack ↔ tenant-api goldens.
             #   - tests/shared/** — the Go↔Python parity matrices
@@ -255,9 +255,11 @@ jobs:
             # grep for the WHOLE name missed it: during the #1373 rename the
             # reference survived here, pointing at a file that no longer
             # existed. CodeRabbit caught it; the sweep had reported clean.
-            # ⚠️ Prose, not enforcement — this comment protects one filename
-            # at one place, and three more paths in these workflows are
-            # wrapped the same way TODAY. Tracked separately; see #1373.
+            # ⛔ Now ENFORCED, so do not treat this comment as the guard:
+            # tests/ops/test_wrapped_path_references.py rejects any reference
+            # split across a line break, anywhere in the tree (#1378). This
+            # note stays only because the rule is easiest to understand where
+            # it was first broken.
             portal:
               - "tools/portal/**"
               - "docs/assets/dist/**"
@@ -725,8 +727,8 @@ jobs:
       # trigger and the goldens are real gates:
       #   - test_custom_alerts_promtool.py — #741 S1+S2 compiler fire/no-fire
       #     behavioral goldens against the compiled example pack
-      #   - test_federation_revocation_dashboard.py / test_fleet_threshold_
-      #     dashboard.py / test_tenant_log_query_dashboard.py — Grafana
+      #   - test_federation_revocation_dashboard.py /
+      #     test_fleet_threshold_dashboard.py / test_tenant_log_query_dashboard.py — Grafana
       #     dashboard PromQL regression goldens (queries read FROM the JSON)
       #   - test_waveform_compile.py — ADR-030 waveform compiler incl. the
       #     promtool round-trip tests; the module importorskips on
@@ -758,8 +760,9 @@ jobs:
         # job; steady state is a cache hit (no download at all).
         run: |
           pip install pytest -c requirements/ci-constraints.txt
-          # VM engine version comes from the single pins SSOT (tests/rulepacks/
-          # vm_engine_version) shared with the equivalence anchor (test_vm_backend_parity.py)
+          # VM engine version comes from the single pins SSOT
+          # (tests/rulepacks/vm_engine_version) shared with the equivalence
+          # anchor (test_vm_backend_parity.py)
           # so the gate's engine and the anchor-verified engine can't drift (pin-coupling guard).
           . tests/rulepacks/vm_engine_version
           # Pinned SHA-256 of vmutils-linux-amd64-v${VM_VERSION}.tar.gz (upstream release);
@@ -784,10 +787,12 @@ jobs:
 
       - name: Rule-pack vmalert (MetricsQL) parity + deviation-catalog gate
         # VM-backend tenants run rules on vmalert (MetricsQL), which deviates from PromQL
-        # by design (range-function cold-start; see docs/integration/victoriametrics-
-        # integration.md §3.1). Runs EVERY promtool fixture through vmalert-tool; an
-        # UNCATALOGUED divergence fails this step (catalog: tests/rulepacks/
-        # vm_deviation_catalog.yaml). PROMOTED TO REQUIRED 2026-07-19 (#947): soak trigger
+        # by design (range-function cold-start; see
+        # docs/integration/victoriametrics-integration.md §3.1).
+        # Runs EVERY promtool fixture through vmalert-tool; an UNCATALOGUED
+        # divergence fails this step (catalog:
+        # tests/rulepacks/vm_deviation_catalog.yaml).
+        # PROMOTED TO REQUIRED 2026-07-19 (#947): soak trigger
         # (a) met — >=2 weeks (2026-07-01 catalog freeze → 07-15) with zero unexplained NEW
         # divergences; the gate ran non-vacuously throughout (vmalert-tool install + the
         # teeth-test test_gate_detects_a_known_divergence verified green at head/mid/tail of

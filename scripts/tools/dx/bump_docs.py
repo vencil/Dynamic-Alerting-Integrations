@@ -186,8 +186,8 @@ def _build_tools_rules():
     # This pin was invisible to bump_docs for two releases: a Helm values pin is
     # `repository:` + `tag:` on TWO lines, and every rule here is line-oriented.
     # The consequence was not merely a stale doc — it was structural: the
-    # image-pin capability gate (scripts/tools/lint/
-    # check_image_pin_capability.py) exempts this chart *because* v2.9.0 lacks
+    # image-pin capability gate (
+    # scripts/tools/lint/check_image_pin_capability.py) exempts this chart *because* v2.9.0 lacks
     # the reconciler script, and that exemption's exit condition is "the pin
     # gets bumped". With nothing mechanically bumping the pin, the exemption
     # could never go stale, so a critical ADR-028 control would stay broken

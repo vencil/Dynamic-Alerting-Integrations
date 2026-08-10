@@ -5,8 +5,8 @@ purpose: |
   the user: `da-tools init` command, equivalent docker run command,
   generated repo file tree, and a sample GitHub Actions YAML.
 
-  Pre-PR-portal-10 these were inline at the top of cicd-setup-
-  wizard.jsx. Splitting drops ~115 LOC from the orchestrator and
+  Pre-PR-portal-10 these were inline at the top of
+  cicd-setup-wizard.jsx. Splitting drops ~115 LOC from the orchestrator and
   matches the operator-setup-wizard pattern from PR-portal-4.
 
   Public API:

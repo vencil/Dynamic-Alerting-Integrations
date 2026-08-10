@@ -6,8 +6,8 @@ purpose: |
   `migrate-to-operator --dry-run` migration command, and a sample
   AlertmanagerConfig CRD YAML for preview.
 
-  Pre-PR-portal-4 these were inline at the top of operator-setup-
-  wizard.jsx. Splitting them out drops 75 LOC from the orchestrator
+  Pre-PR-portal-4 these were inline at the top of
+  operator-setup-wizard.jsx. Splitting them out drops 75 LOC from the orchestrator
   and lets the StepReview component (also extracted in PR-portal-4)
   pull from the same canonical implementation.
 

@@ -5,8 +5,8 @@ purpose: |
   metadata, permission hierarchy (read/write/admin levels),
   environment + domain example lists.
 
-  Pre-PR-portal-10 these were inline at the top of rbac-setup-
-  wizard.jsx. Splitting matches the operator-setup-wizard pattern
+  Pre-PR-portal-10 these were inline at the top of
+  rbac-setup-wizard.jsx. Splitting matches the operator-setup-wizard pattern
   from PR-portal-4 + the other 2 sibling wizards in this PR.
 
   Public API:

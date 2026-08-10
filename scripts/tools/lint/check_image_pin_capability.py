@@ -837,8 +837,9 @@ def main() -> int:
             print(
                 "\nFix: bump the pin to a tools/v* tag whose tree contains the "
                 "entry point, or — if no released tag does yet — register the "
-                "workload in EXEMPTIONS (scripts/tools/lint/"
-                "check_image_pin_capability.py) with a rationale AND an exit "
+                "workload in EXEMPTIONS "
+                "(scripts/tools/lint/check_image_pin_capability.py) with a "
+                "rationale AND an exit "
                 "condition. The exemption key includes the TAG, so a pin that "
                 "moves must be re-registered rather than inheriting the old "
                 "licence.\nDo NOT 'fix' it by suspending the CronJob or scaling "

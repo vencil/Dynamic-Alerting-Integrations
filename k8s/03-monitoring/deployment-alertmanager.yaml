@@ -122,8 +122,8 @@ spec:
             name: alertmanager-config
         - name: data
           emptyDir: {}
-        # ADR-025 D1 / #838: external dead-man's-switch URL (secret-watchdog-
-        # heartbeat.yaml). optional:true so Alertmanager still starts if the
+        # ADR-025 D1 / #838: external dead-man's-switch URL (
+        # secret-watchdog-heartbeat.yaml). optional:true so Alertmanager still starts if the
         # Secret has not been applied yet — the heartbeat then fails to egress and
         # AlertmanagerWebhookNotificationsFailing fires, rather than taking the
         # whole alerting plane down on a missing Secret.

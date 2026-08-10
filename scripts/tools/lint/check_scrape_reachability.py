@@ -32,8 +32,8 @@ k8s/**. Each leaf is classified:
                           name. That the chart's Service actually carries
                           `prometheus.io/scrape` is not verified HERE — this
                           gate never opens helm/. The chart face is pinned
-                          instead by tests/lint/test_check_scrape_reachability
-                          .py, which renders each chart and requires an
+                          instead by
+                          tests/lint/test_check_scrape_reachability.py, which renders each chart and requires an
                           annotated Service in the pinned namespace (#1286).
   REACHABLE-IF-EXPORTED tenant-exporters face: the job WOULD admit a db-* ns
                         annotated Service, but per-tenant targets only exist at

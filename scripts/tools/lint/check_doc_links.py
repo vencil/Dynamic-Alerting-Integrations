@@ -51,8 +51,8 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 # general categories only, so `Nl` is listed explicitly and Other_Alphabetic
 # is the one accepted gap — it costs the enclosed-letter symbols (`ⓐ`, `🅰`,
 # category So, which github.com keeps).  Documented in the fixture-parity
-# test; adding a dependency to close it is not worth it (see tests/lint/
-# test_check_doc_links.py::TestGithubSluggerFixtures).
+# test; adding a dependency to close it is not worth it (see
+# tests/lint/test_check_doc_links.py::TestGithubSluggerFixtures).
 _GFM_KEEP_CATEGORIES = frozenset({"Nd", "Nl", "Pc"})
 
 
@@ -548,8 +548,8 @@ class DocLinkChecker:
             pass
 
         # rule-packs/ lives at the repo ROOT (real artifact dir); the docs site
-        # surfaces its *.md via a mkdocs build-time hook (scripts/mkdocs/
-        # rule_packs_bridge.py) — there is no docs/rule-packs symlink anymore.
+        # surfaces its *.md via a mkdocs build-time hook (
+        # scripts/mkdocs/rule_packs_bridge.py) — there is no docs/rule-packs symlink anymore.
         # In-content links use site-root form (e.g. `../rule-packs/README.md`)
         # that resolves lexically to docs/rule-packs/..., which does not exist on
         # disk at lint time. Rewrite that prefix to the real root rule-packs/...

@@ -389,8 +389,8 @@ func sloPeriod(spec CustomAlertSpec) (string, error) {
 	return p, nil
 }
 
-// sloMinEventsMax mirrors the schema `maximum` (docs/schemas/
-// tenant-config.schema.json min_events) and shape.py::_normalize_min_events's
+// sloMinEventsMax mirrors the schema `maximum` (
+// docs/schemas/tenant-config.schema.json min_events) and shape.py::_normalize_min_events's
 // upper bound: an absurd floor (e.g. 10^15) silently disables the alert while
 // looking configured, and the literal enters the rule text.
 const sloMinEventsMax = 1000000

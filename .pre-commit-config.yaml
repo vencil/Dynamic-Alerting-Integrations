@@ -878,8 +878,8 @@ repos:
       # maintainable successor to Layer 1's hard-coded PATTERNS. 0 on a clean
       # tree. Auto-stage + wired into CI (ci.yml) for parity with Layer 1.
       # NOT --strict yet: unregistered shape tokens stay discovery-only (that
-      # backlog is the ongoing #710 soak — run `python3 scripts/tools/lint/
-      # check_codename_gate.py` with no flags for the full frequency-ranked
+      # backlog is the ongoing #710 soak — run `python3
+      # scripts/tools/lint/check_codename_gate.py` with no flags for the full frequency-ranked
       # report). --strict promotion (unregistered also blocks) is deferred to
       # Phase C per #710 once the soak rate is low.
       - id: codename-gate-check

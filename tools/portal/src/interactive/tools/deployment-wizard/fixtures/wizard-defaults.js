@@ -6,8 +6,8 @@ purpose: |
   Portal+API), environment sizes, tenant size presets with replica
   counts, OAuth2 providers, Rule Pack catalog.
 
-  Pre-PR-portal-10 these were inline at the top of deployment-
-  wizard.jsx (~135 LOC). Splitting matches the operator-setup-wizard
+  Pre-PR-portal-10 these were inline at the top of
+  deployment-wizard.jsx (~135 LOC). Splitting matches the operator-setup-wizard
   pattern from PR-portal-4.
 
   Public API:

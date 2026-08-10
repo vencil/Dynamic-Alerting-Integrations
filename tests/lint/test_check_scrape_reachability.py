@@ -384,8 +384,9 @@ def test_threshold_exporter_family_is_exhaustive_on_the_real_repo():
              if m in classes}
     assert seen == set(_THRESHOLD_EXPORTER_METRICS), (
         "threshold-exporter family membership drifted — confirm the new metric is "
-        "really emitted by threshold-exporter (components/threshold-exporter/app/"
-        "collector.go or config_metrics.go) before adding it here; if it comes "
+        "really emitted by threshold-exporter "
+        "(components/threshold-exporter/app/collector.go or config_metrics.go) "
+        "before adding it here; if it comes "
         f"from another component the prefix routing is wrong. Diff: "
         f"{seen ^ set(_THRESHOLD_EXPORTER_METRICS)}")
 

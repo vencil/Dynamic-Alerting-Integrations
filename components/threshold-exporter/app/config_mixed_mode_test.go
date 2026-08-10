@@ -10,8 +10,8 @@ package main
 //     (`<root>/<domain>/<region>/<env>/<tenant>.yaml`)
 //
 // Mixed mode is the *transient* state during a flat→hierarchical
-// migration (per ADR-016 + docs/scenarios/incremental-migration-
-// playbook.md). The platform must:
+// migration (per ADR-016 +
+// docs/scenarios/incremental-migration-playbook.md). The platform must:
 //
 //  1. Apply root `_defaults.yaml` to BOTH flat tenants and nested
 //     tenants (root defaults is the only level both share).
