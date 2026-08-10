@@ -741,6 +741,19 @@ class TestGenTenantYamlDeclaredBlock:
 # check_threshold_reachability.py's defaults-tier face; the tests here pin this
 # generator's own two files.
 
+def _flat_header(text: str) -> str:
+    """The tenant stub's comment header as ONE line.
+
+    ⛔ Assertions about prose must not depend on where the renderer happened to
+    wrap. Round-2 blind review rewrote three sentences in this header and broke
+    four assertions pinned to a specific `\\n# ` position — none of which were
+    testing anything about line breaks. Flattening keeps them about what the
+    file SAYS.
+    """
+    return ' '.join(line.lstrip('#').strip()
+                    for line in text.split('\ntenants:')[0].splitlines())
+
+
 class TestCriticalTierPlacement:
     """#1218 — no `<base>_critical` in `defaults:`, all of them in the stub."""
 
@@ -832,7 +845,7 @@ class TestCriticalTierPlacement:
         text = ip._gen_tenant_yaml('db-a', packs)
         stub = yaml.safe_load(text)['tenants']['db-a']
         seeded = [k for k in stub if k.endswith('_critical')]
-        assert re.search(rf'# {len(seeded)} of them are already written in below',
+        assert re.search(rf'# {len(seeded)} of them are written in below',
                          text), text
 
     def test_stub_header_states_both_costs_the_tenant_cannot_infer(self):
@@ -853,22 +866,34 @@ class TestCriticalTierPlacement:
            own pipeline does not perform.
         """
         text = ip._gen_tenant_yaml('db-a', ['mariadb'])
-        header = text.split('\ntenants:')[0]
-        prefill = header.split('already written in')[1]
+        header = _flat_header(text)
+        prefill = header.split('of them are written in below')[1]
 
         # (1) the disable-cascade caveat, and it must sit in the same header as
         # the sentence it qualifies
         assert 'does NOT disable' in prefill, header
         assert 'Set a key to "disable"' in header, header
 
+        # (1b) …and DELETE must not be offered as a synonym for disable.
+        # Measured (round-2 blind review): both lines deleted → the warning row
+        # comes BACK at the platform default, because an absent key is State 2.
+        assert 'DELETING both lines is not the same thing' in prefill, header
+        assert 'Set BOTH to "disable"' in prefill, header
+
         # (2) the rejection claim must name WHICH path, and must not promise
-        # that the installed validator stops it
+        # that the CI generated beside this file stops it — that job currently
+        # exits 2 at argparse (`--ci`, #1380), so it validates nothing at all.
         assert 'tenant-api' in prefill, header
-        assert 'validate-config' in prefill and 'exits 0' in prefill, header
+        assert 'validate-config' in prefill and 'exit 0' in prefill, header
+        assert 'does not accept' in prefill, header
+
+        # (3) the only in-tool refresh route is --force, which discards the
+        # retuning the same paragraph invites two lines earlier
+        assert '--force' in prefill and 'discards every hand edit' in prefill, header
 
         # the staleness statement must cover BOTH files, never just these lines
         assert 'sibling' in prefill and '_defaults.yaml' in prefill, header
-        assert 'reaches neither file' in prefill, header
+        assert 'one-time copy into your repo' in prefill, header
         # …and it must not re-assert that the platform supplies the values —
         # the paragraph above it (correctly) says the opposite.
         assert 'the platform supplies' not in prefill
@@ -890,12 +915,12 @@ class TestCriticalTierPlacement:
         import inspect
         assert 'deploy' not in inspect.signature(ip._gen_tenant_yaml).parameters
 
-        header = ip._gen_tenant_yaml('db-a', ['mariadb']).split('\ntenants:')[0]
+        header = _flat_header(ip._gen_tenant_yaml('db-a', ['mariadb']))
         for mechanism in ('ConfigMap', 'kustomize', 'configMapGenerator', 'helm',
                           'argocd'):
             assert mechanism not in header, (mechanism, header)
         # the deploy-independent property it says instead
-        assert 'nothing\n# generated here tracks the platform' in header, header
+        assert 'nothing generated here tracks the platform' in header, header
 
     def test_only_kustomize_deploy_generates_the_kustomize_tree(self):
         """The fact that made the removed sentence wrong, pinned so it cannot
@@ -930,10 +955,10 @@ class TestCriticalTierPlacement:
 
         ⛔ Derived from the renderer, never a literal. The first version
         asserted `'pre-filled below' not in text` — a string this module has
-        NEVER emitted (the sentence is "already written in below"), so it could
+        NEVER emitted (the sentence is "of them are written in below"), so it could
         not fail for any input. Measured: with the `if not critical: return ''`
         early return removed, `_gen_tenant_yaml('db-a', ['db2'])` renders
-        "# 0 of them are already written in below" — the exact #1321 defect this
+        "# 0 of them are written in below" — the exact #1321 defect this
         test is named after — and the old assertion still passed (blind review).
         """
         # the guard itself, directly

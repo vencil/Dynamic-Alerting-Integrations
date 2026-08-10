@@ -707,19 +707,35 @@ def _render_critical_suggestion(critical, defaults=None):
     if ready:
         lines += [
             "#",
-            "# READY — `<base>` is in the `defaults:` above. Copy each line into the",
-            "# `tenants:` block of the tenant it applies to.",
+            "# READY — but read the condition: `<base>` is in the `defaults:` block",
+            "# ABOVE, i.e. in this suggestion. This tool never looked at your",
+            "# deployed conf.d/_defaults.yaml. These lines are safe to copy only",
+            "# once you have actually merged the matching `<base>` into that file;",
+            "# merge the suggestion selectively and a READY line becomes a BLOCKED",
+            "# one without changing here. Then copy each into the `tenants:` block",
+            "# of the tenant it applies to.",
         ]
         lines += [f"#     {key}: \"{critical[key]}\"" for key, _ in ready]
     if blocked:
         lines += [
             "#",
-            "# ⛔ BLOCKED — no `<base>` in the `defaults:` above. Copying one of these",
-            "# as-is does NOT merely leave it silent: a `<base>_critical` whose base",
-            "# is absent is a BLOCKING validation error, and the tenant-api write",
-            "# path rejects the WHOLE tenant file (not just this key), including",
-            "# every other change in the same save. Give `<base>` a value under",
-            "# `defaults:` FIRST, then move the line up to the READY list.",
+            "# ⛔ BLOCKED — no `<base>` in the `defaults:` above (and possibly none",
+            "# in your deployed _defaults.yaml either — again, unchecked). Copying",
+            "# one of these as-is does NOT merely leave it silent: a",
+            "# `<base>_critical` whose base is absent is a BLOCKING validation",
+            "# error, and the tenant-api write path rejects the WHOLE tenant file",
+            "# (not just this key), including every other change in the same save.",
+            "#",
+            "# ⚠️ The obvious remedy is not free. Giving `<base>` a value under",
+            "# `defaults:` arms a platform-chosen warning threshold for EVERY",
+            "# tenant, not only the one you are migrating — measured: one such key",
+            "# on a 3-tenant fleet produces a warning row for all three, and the",
+            "# `_defaults.yaml` this platform ships says in its own header not to",
+            "# do it to 'fix' a silence. There is no tenant-scoped alternative:",
+            "# `resolveCriticalRows` admits on `defaults[<base>]` only, so a base",
+            "# written as a tenant override does not enable the critical tier.",
+            "# So: either accept the fleet-wide warning tier for `<base>`, or",
+            "# leave this key out and keep paging from your existing rule.",
             "# The numbers are kept here because they are yours — they are what your",
             "# existing rules use today.",
         ]

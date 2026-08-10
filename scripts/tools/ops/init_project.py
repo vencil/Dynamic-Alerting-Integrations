@@ -549,8 +549,8 @@ def _critical_prefill_note(critical: dict) -> str:
     The claim was narrowed to the property that holds for all three: nothing
     generated tracks the platform (blind review, #1218).
 
-    ⛔ The two costs it DOES carry are the ones a tenant cannot infer and both
-    are measured:
+    ⛔ The costs it DOES carry are the ones a tenant cannot infer, and every
+    one of them is measured against the real resolver, not read off it:
       * `<base>: "disable"` does not cascade to `<base>_critical`.
         `resolveCriticalRows` tests the `_critical` override's own value and
         `defaults[<base>]`'s existence, never the base override — measured:
@@ -558,13 +558,30 @@ def _critical_prefill_note(critical: dict) -> str:
         `{metric="connections", severity="critical"}`, with `ValidateTenantKeys`
         silent. Before the pre-fill this could bite at most one accidental key;
         now it is every critical key of every selected pack.
+      * …and DELETE is not a synonym for disable, which an earlier draft
+        offered as one ("Disable or delete BOTH lines"). Measured, same three
+        cases: both disabled → 0 rows; both deleted → 1 row,
+        `{severity="warning", value=<the platform default>}`, because an absent
+        key is State 2. Telling a tenant who wants the metric off to delete
+        both lines hands them back the warning tier they were trying to remove.
       * A dangling `<base>_critical` is write-blocking on the tenant-api path
         (`ValidateTenantKeys` blocking `Errors` → `gitops/writer.go:599`
-        `keyErrs`, the set every write gate turns into `ErrValidation`) — but
-        NOT on the gate this tool actually installs: `validate_config.py` on
-        the same input reports a WARN and exits 0, `--strict` included
-        (measured). Naming only the first would promise a stop that this
-        customer's CI does not perform.
+        `keyErrs`, the set every write gate turns into `ErrValidation`).
+        ⛔ The note does NOT promise that the CI generated beside it catches
+        this first, which an earlier draft effectively did by saying
+        `da-tools validate-config` "only WARNS … and still exits 0". That is
+        true of the BARE tool (measured, `--strict` included) and beside the
+        point: all three generated invocations pass `--ci`, which
+        `validate_config.py` does not accept, so that job exits 2 at argparse
+        without validating anything (#1380 — the generator's own four sites are
+        already fixed on the #1347 branch, unpushed at the time of writing).
+        A sentence whose reassurance depends on a flag defect being absent is
+        one measurement away from being wrong in the customer's tree.
+
+    ⛔ It also no longer says the values are "at the platform's suggested
+    starting values" — three lines under a paragraph that (correctly) states
+    the platform supplies no critical value, that reads as exactly the platform
+    assertion the docstring above forbids.
 
     Derived from the mapping actually seeded (same rule as its neighbours): an
     empty tier renders nothing at all, so the file never points at an absent
@@ -573,23 +590,30 @@ def _critical_prefill_note(critical: dict) -> str:
     if not critical:
         return ''
     return (
-        '\n# {n} of them are already written in below, at the platform\'s\n'
-        '# suggested starting values. The lines are in THIS file, so they are\n'
-        '# yours: retune or delete them freely. Like every key in the sibling\n'
-        '# _defaults.yaml, they are a one-time copy into your repo — nothing\n'
-        '# generated here tracks the platform, so a later recalibration\n'
-        '# upstream reaches neither file until you re-run this tool.\n'
+        '\n# {n} of them are written in below, as a starting point. The lines\n'
+        '# are in THIS file, so they are yours: retune them freely. Like every\n'
+        '# key in the sibling _defaults.yaml, they are a one-time copy into\n'
+        '# your repo — nothing generated here tracks the platform. Picking up\n'
+        '# a later upstream recalibration means re-running this tool with\n'
+        '# `--force`, which REWRITES both files and discards every hand edit\n'
+        '# in them, so diff before you keep the result.\n'
         '#\n'
-        '# Two things editing alone will not tell you:\n'
+        '# Three things editing alone will not tell you:\n'
         '#   * `<base>: "disable"` does NOT disable its `<base>_critical`\n'
         '#     twin. The warning row goes away and the critical row keeps\n'
         '#     firing, with no warning tier beneath it and no validation\n'
-        '#     message anywhere. Disable or delete BOTH lines.\n'
+        '#     message anywhere. Set BOTH to "disable".\n'
+        '#   * DELETING both lines is not the same thing: an absent key falls\n'
+        '#     back to the platform value, so the warning row returns at the\n'
+        '#     _defaults.yaml number. Delete only suppresses the critical row.\n'
         '#   * If a `<base>` ever leaves `defaults:`, its `<base>_critical`\n'
-        '#     line here must go too. `da-tools validate-config` only WARNS\n'
-        '#     about that and still exits 0, but the tenant-api write path\n'
-        '#     treats it as blocking and rejects THIS WHOLE FILE — every\n'
-        '#     other change in the same save with it.'
+        '#     line here must go too. The tenant-api write path treats a\n'
+        '#     dangling one as blocking and rejects THIS WHOLE FILE — every\n'
+        '#     other change in the same save with it. Do not expect the CI\n'
+        '#     generated next to this file to catch it first: bare\n'
+        '#     `da-tools validate-config` only WARNS (exit 0), and the\n'
+        '#     invocation generated here passes a flag that tool does not\n'
+        '#     accept, so today that job fails before it validates anything.'
     ).format(n=len(critical))
 
 

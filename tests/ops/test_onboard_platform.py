@@ -603,6 +603,43 @@ class TestGenerateDefaultsFromCandidates:
             if "_critical:" in line:
                 assert line.lstrip().startswith("#"), line
 
+    def test_ready_states_which_defaults_it_was_judged_against(self):
+        """⛔ READY 是拿**這份建議自己的** `defaults:` 算的，不是客戶部署中的
+        `conf.d/_defaults.yaml`——這支工具從未讀過那個檔。而同一份產出的標頭寫
+        「Review and merge into conf.d/_defaults.yaml」，review 這個動詞本身就在
+        邀請選擇性合併：只要客戶決定不併某個 `<base>`，對應的 READY 行就變成
+        BLOCKED 情境（整份租戶檔被拒），而檔案裡沒有任何字提醒他（round-2 盲審）。
+        """
+        suggestion = generate_defaults_from_candidates([
+            {"status": "perfect", "metric_key": "cpu", "severity": "warning", "threshold_value": "80"},
+            {"status": "perfect", "metric_key": "cpu", "severity": "critical", "threshold_value": "95"},
+        ])
+        body = _render_critical_suggestion(
+            suggestion["critical_overrides"], suggestion["defaults"])
+        ready = body.split(self._BLOCKED_HEADER)[0]
+        # 條件必須明講是「上面那個 defaults: 區塊」而且未查過部署中的檔
+        assert "ABOVE" in ready, body
+        assert "never looked at your" in ready, body
+        assert "once you have actually merged" in ready, body
+
+    def test_blocked_remedy_states_its_fleet_wide_cost(self):
+        """⛔ BLOCKED 的補救（把 `<base>` 加進 `defaults:`）不是免費的：實測一個
+        `defaults:` key 在 3 租戶機隊上會讓**每一個**租戶多一條 warning 列，而同一
+        個產品的 `_defaults.yaml` 標頭正好反過來警告不要這樣做（"Do NOT move one
+        into `defaults:` to 'fix' the silence — that arms a platform-chosen
+        number for every tenant"）。兩份產出檔給相反的建議是最糟的形狀。
+        """
+        suggestion = generate_defaults_from_candidates([
+            {"status": "perfect", "metric_key": "disk_usage",
+             "severity": "critical", "threshold_value": "95"},
+        ])
+        blocked = _render_critical_suggestion(
+            suggestion["critical_overrides"], suggestion.get("defaults") or {})
+        assert "EVERY" in blocked and "tenant" in blocked, blocked
+        # 並且要說明沒有租戶範圍的替代路徑（base 寫成租戶 override 不算數）
+        assert "resolveCriticalRows" in blocked, blocked
+        assert "tenant override does not enable" in blocked, blocked
+
     def test_all_blocked_when_the_estate_is_critical_only(self):
         """只 page 不 warn 的 estate：每一條建議都是懸空的，檔案不得出現 READY 段。"""
         suggestion = generate_defaults_from_candidates([

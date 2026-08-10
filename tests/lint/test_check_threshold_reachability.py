@@ -522,6 +522,37 @@ def test_critical_must_be_a_SUFFIX_not_a_substring():
     assert [e for e in result["errors"] if "CRITICAL-IN-DEFAULTS" in e] == [], result
 
 
+def test_the_defaults_face_is_wired_into_run_check_not_just_callable(monkeypatch):
+    """⛔ The face has to be reachable from the PRODUCTION path, not merely
+    correct when called directly.
+
+    Measured (blind review, round 2): setting `defaults_faces = {}` where
+    `run_check` defaults it turned the whole #1218 guard off — `--ci` printed
+    `✅ threshold reachability OK` — and of 41 lint tests exactly ONE went red,
+    a fail-closed test that only noticed as a side effect of its own
+    monkeypatch. Every other test here calls `gate._defaults_faces()` directly
+    and so cannot see the wiring at all. That is the shape where a guard keeps
+    passing its own unit tests while no longer guarding anything.
+
+    So this one injects a dirty face at the SEAM `run_check` resolves — never
+    passing `defaults_faces=` — and asserts the error surfaces.
+    """
+    called = []
+
+    def _dirty():
+        called.append(True)
+        return {"injected face": {"pg_connections", "pg_connections_critical"}}
+
+    monkeypatch.setattr(gate, "_defaults_faces", _dirty)
+    result = gate.run_check(demand=set(), supply=set(), deferred=set(),
+                            known_unwired={})
+
+    assert called, "run_check never consulted _defaults_faces — the face is unwired"
+    hits = [e for e in result["errors"] if "CRITICAL-IN-DEFAULTS" in e]
+    assert len(hits) == 1, result
+    assert "injected face" in hits[0]
+
+
 def test_real_repo_defaults_faces_are_all_present_and_clean():
     """The live artifacts. The face count is a literal because deriving the
     expectation from the thing it guards is how a face silently disappears —
@@ -619,7 +650,15 @@ def test_precommit_filter_covers_every_input_this_gate_reads():
 
     # every module it imports that lives in scripts/tools/ops — module level OR
     # inside a function, since two of these faces import lazily
-    ops = REPO_ROOT / "scripts" / "tools" / "ops"
+    # ⛔ BOTH sibling directories the module puts on sys.path, not just `ops/`.
+    # The first version mapped import names against `scripts/tools/ops/` alone,
+    # so `_lib_compat` / `_lib_exitcodes` / `_lib_validation` — imported at
+    # module level from `scripts/tools/` via the `os.path.join(_THIS_DIR, "..")`
+    # insert — were invisible to a test whose name says "every input this gate
+    # reads" (blind review, round 2). `_lib_exitcodes` in particular owns the
+    # gate's exit-code contract, which is the whole meaning of `--ci`.
+    search_dirs = [REPO_ROOT / "scripts" / "tools" / "ops",
+                   REPO_ROOT / "scripts" / "tools"]
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -627,8 +666,10 @@ def test_precommit_filter_covers_every_input_this_gate_reads():
         elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
             names.add(node.module.split(".")[0])
     for name in names:
-        if (ops / f"{name}.py").is_file():
-            inputs.add(f"scripts/tools/ops/{name}.py")
+        for d in search_dirs:
+            if (d / f"{name}.py").is_file():
+                inputs.add((d / f"{name}.py").relative_to(REPO_ROOT).as_posix())
+                break
 
     # every repo file it reads through a module-level Path constant
     for value in vars(gate).values():
@@ -642,6 +683,7 @@ def test_precommit_filter_covers_every_input_this_gate_reads():
     for expected in ("scripts/tools/ops/init_project.py",
                      "scripts/tools/ops/_registry_lib.py",
                      "scripts/tools/ops/onboard_platform.py",
+                     "scripts/tools/_lib_exitcodes.py",
                      "helm/threshold-exporter/values.yaml"):
         assert expected in inputs, (expected, sorted(inputs))
     assert any(p.startswith("rule-packs/") for p in inputs), sorted(inputs)

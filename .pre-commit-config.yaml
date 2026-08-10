@@ -1258,7 +1258,7 @@ repos:
         # FAIL only on NEW unreachable / newly not-chart-armed keys, a
         # `<base>_critical` or dimensional key in any producer's `defaults:`, or
         # an exit-lock breach in either ledger; grandfathered keys are INFO.
-        files: ^(rule-packs/rule-pack-.*\.yaml|helm/threshold-exporter/values\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/_defaults\.yaml|scripts/tools/ops/(scaffold_tenant|_observed_map_lib|init_project|_registry_lib|onboard_platform)\.py|scripts/tools/lint/check_threshold_reachability\.py)$
+        files: ^(rule-packs/rule-pack-.*\.yaml|helm/threshold-exporter/values\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/_defaults\.yaml|scripts/tools/ops/(scaffold_tenant|_observed_map_lib|init_project|_registry_lib|onboard_platform)\.py|scripts/tools/_lib_(compat|exitcodes|validation)\.py|scripts/tools/lint/check_threshold_reachability\.py)$
 
       - id: threshold-registry-check
         name: "threshold registry SoT — schema + scaffold equivalence + generated-surface freshness + prose membership (TRK-339 WS1a / #1200)"
