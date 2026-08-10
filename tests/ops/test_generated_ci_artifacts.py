@@ -65,9 +65,23 @@ WHAT THIS GUARD DOES **NOT** BUY
 * **It does not make ``--deploy argocd`` a working deployment.** Section 5 now
   stops the wizard from *claiming* files the CLI never writes, but the product
   gap underneath is untouched and is deliberately out of scope: ``run_init``
-  gates every deployment artifact on ``deploy == 'kustomize'``, so an argocd
-  user gets ``conf.d/`` + CI files and nothing else — no Application manifest,
-  and no ``kustomize/overlays/prod`` for one to point at (the tree
+  gates every deployment artifact on ``deploy == 'kustomize'`` — with ONE
+  exception this paragraph used to deny. ⛔ It previously said an argocd user
+  gets ``conf.d/`` + CI files "and nothing else"; that was false, and false in a
+  way this very PR should have caught, because the same PR taught
+  ``_preview_files`` about the exception. GitOps Native Mode
+  (``config_source='git'``) writes ``kustomize/overlays/gitops/`` for ANY deploy
+  method. Measured: ``--deploy helm|argocd --config-source git`` produces
+  exactly those two files and NO ``kustomize/base/`` — while the overlay they
+  contain declares ``resources: [../../base]``. That is a dangling reference and
+  ``kustomize build`` cannot resolve it. ⚠️ The dry-run/actual set-equality test
+  added in this PR does NOT catch that: both sides contain the same two files,
+  so it pins the broken combination as correct. Tracked with the rest of the
+  product-level gaps below; the assertion this file makes is about the two
+  file-lists agreeing, never about the files being usable.
+
+  Back to the argocd branch: it gets no Application manifest, and no
+  ``kustomize/overlays/prod`` for one to point at (the tree
   ``docs/scenarios/gitops-ci-integration.md`` §3.3 tells them to target). The
   generated apply stage still runs ``argocd app sync dynamic-alerting``, which
   syncs an Application that was never scaffolded. Making the CLI emit it needs a
@@ -75,6 +89,25 @@ WHAT THIS GUARD DOES **NOT** BUY
   decision, same disposition as #1349/#1350. ``--deploy helm`` is in the same
   position (its apply reads an ``environments/prod/values.yaml`` that ``init``
   does not create).
+* **It does not check the exit-code contract of the commands it pins.** Every
+  assertion here about failure is fail-OPEN-shaped: `continue-on-error` and
+  `allow_failure` are blocked on both legs so a failure cannot be discarded.
+  Nothing asks the opposite question — whether a command returns non-zero on a
+  NORMAL run. `config_diff.py:656` is
+  ``sys.exit(EXIT_VIOLATION if has_changes else EXIT_OK)``, i.e. rc=1 whenever
+  there ARE changes (the `diff(1)` convention, and dev-rules #13 codifies it),
+  and both generated legs invoke it bare: the GitHub `run:` block (default
+  `bash -e`) and the last line of the GitLab `script:`. Since both jobs are
+  gated on `conf.d/**` having changed, the stage runs only when a diff exists
+  and then fails BECAUSE one exists — so `Post PR comment with blast radius`
+  never executes, and GitLab's `artifacts:when` (default `on_success`) drops
+  `.output/` entirely. ⛔ The platform's OWN blast-radius workflow already
+  solved this — `.github/workflows/config-diff.yaml:60-72` does
+  `set +e` / `rc=$?` / `if [ "$rc" -gt 1 ]`, with a comment recording that it
+  was once burned by the same thing — and the customer artifacts never got that
+  lesson. Fixing it needs the baseline-unavailable handling to land in the same
+  change (a green pipeline posting "everything is new" is harder to notice than
+  a red one), so it is tracked on #1358 rather than done here.
 * **It does not check that the GitLab artifact is anywhere GitLab will load
   it.** The pipeline is written to ``.gitlab-ci.d/dynamic-alerting.yml``, but
   GitLab only auto-loads a root ``.gitlab-ci.yml`` — we neither generate one
@@ -1609,9 +1642,29 @@ def _assert_github_deploy_contract(
                     "rest — the step 403s and the customer silently loses its "
                     "output. Grant the scope on the job, or remove the block."
                 )
+    # ⛔ This equality pins the CURRENT shape, which is not the best one, and
+    # saying so here is the point: the `pull-requests: write` scope lives at
+    # workflow level, so `apply` — the job carrying `environment: production` —
+    # inherits a scope only `generate`'s sticky-comment step needs. The
+    # effective-permissions block above already argues that a narrower job-level
+    # grant is "strictly better", and then this line makes the better shape RED.
+    #
+    # Moving the scope onto `generate` is a two-part change, and doing only the
+    # first half breaks the build: the `_rank` check above rejects a job block
+    # that WIDENS beyond the workflow default, which is exactly what a
+    # `generate`-only `pull-requests: write` would be once the workflow level
+    # drops to `contents: read`. That rule has already been reworked twice
+    # (blanket ban → effective-permissions model), so re-opening it belongs in
+    # its own change with its own counterfactuals, not bolted onto this one.
+    #
+    # Severity for the record: `pull-requests: write` grants no cluster access
+    # and `apply` is `workflow_dispatch`-only behind a protected environment, so
+    # the excess scope is a least-privilege wart rather than a live hole.
     assert workflow.get("permissions") == expected_perms, (
         f"{label}: permissions are {workflow.get('permissions')!r}, expected "
-        f"{expected_perms!r}."
+        f"{expected_perms!r}. If you are moving `pull-requests: write` onto the "
+        "`generate` job, read the note above first — the `_rank` narrowing rule "
+        "has to change in the same commit or the new shape fails there instead."
     )
 
     # (2) Every declared knob must reach an EXECUTABLE position.
@@ -2556,6 +2609,92 @@ _EXPECTED_GL_APPLY: dict[str, list[str]] = {
 }
 
 
+# ⛔ `generate` is the stage whose OUTPUT is the product promise — the
+# blast-radius comment a customer sees on their PR. The apply pins above were
+# added because "apply is the highest-consequence text we generate"; that
+# reasoning left `generate` with no WHAT-level assertion at all, and the
+# asymmetry was introduced by the very commit that added them. Measured:
+# deleting the entire `Config diff (blast radius)` step (10 lines) left
+# 326 passed / 6 skipped — zero red. The `uses:` set pin catches "the sticky
+# comment step was removed"; nothing caught "the step that produces its input
+# was removed", which leaves a comment action pointing at a file nobody writes.
+#
+# Unlike the apply bodies this does NOT vary by deploy method (verified: the
+# GitHub step list and the GitLab job set are identical across all three), so
+# one pin covers the axis.
+_EXPECTED_GH_GENERATE: list[str] = [
+    "mkdir -p .output",
+    "docker run --rm -v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:"
+    "/data/conf.d:ro -v ${{ github.workspace }}/.output:/data/output "
+    "${{ env.DA_TOOLS_IMAGE }} generate-routes --config-dir /data/conf.d "
+    "-o /data/output/alertmanager-routes.yaml --validate",
+    "git show ${{ github.event.pull_request.base.sha }}:conf.d > /dev/null 2>&1 "
+    "&& git archive ${{ github.event.pull_request.base.sha }} conf.d/ | "
+    "tar -x -C .output/base/ || mkdir -p .output/base/conf.d",
+    "docker run --rm -v ${{ github.workspace }}/.output/base/conf.d:"
+    "/data/conf.d.base:ro -v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:"
+    "/data/conf.d:ro -v ${{ github.workspace }}/.output:/data/output "
+    "${{ env.DA_TOOLS_IMAGE }} config-diff --old-dir /data/conf.d.base "
+    "--new-dir /data/conf.d --format markdown > .output/blast-radius.md",
+]
+
+_EXPECTED_GL_GENERATE: list[str] = [
+    "mkdir -p .output .output/base/conf.d",
+    "git archive $CI_MERGE_REQUEST_DIFF_BASE_SHA -- conf.d/ | "
+    "tar -x -C .output/base/ 2>/dev/null || true",
+    "da-tools generate-routes --config-dir $CONFIG_DIR "
+    "-o .output/alertmanager-routes.yaml --validate",
+    "da-tools config-diff --old-dir .output/base/conf.d --new-dir $CONFIG_DIR "
+    "--format markdown > .output/blast-radius.md",
+]
+
+
+@pytest.mark.parametrize("ci,deploy", MATRIX)
+def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> None:
+    """The stage that produces the customer-visible artifact, pinned like apply.
+
+    ⛔ Read the two pins above together with the known defects they currently
+    encode: the GitHub leg's base checkout has no `fetch-depth` and the GitLab
+    leg's `git archive` runs in an image with no git (#1358), and neither leg
+    handles `config-diff`'s exit code (see the "explicitly NOT covered" section).
+    These pins record the shipped text as it IS, so that fixing those defects is
+    a deliberate edit here rather than a silent one — they are not an
+    endorsement of it.
+    """
+    root = generated[(ci, deploy)]
+
+    if ci in ("github", "both"):
+        wf = yaml.safe_load((root / _GH_WORKFLOW).read_text(encoding="utf-8"))
+        got: list[str] = []
+        for step in wf["jobs"]["generate"]["steps"]:
+            if "run" in step:
+                got.extend(_normalized_commands(str(step["run"])))
+        assert got == _EXPECTED_GH_GENERATE, (
+            f"the GitHub generate body changed for --ci {ci} --deploy {deploy}.\n"
+            f"  expected: {_EXPECTED_GH_GENERATE}\n  got:      {got}\n"
+            "This stage produces the blast-radius comment. If the change is "
+            "intended, update the pin in the same commit."
+        )
+
+    if ci in ("gitlab", "both"):
+        pipe = yaml.safe_load((root / _GL_PIPELINE).read_text(encoding="utf-8"))
+        jobs = [
+            body for body in pipe.values()
+            if isinstance(body, dict) and body.get("stage") == "generate"
+        ]
+        assert len(jobs) == 1, (
+            f"expected exactly one GitLab job in the generate stage, "
+            f"found {len(jobs)}"
+        )
+        got_gl: list[str] = []
+        for line in jobs[0].get("script", []):
+            got_gl.extend(_normalized_commands(str(line)))
+        assert got_gl == _EXPECTED_GL_GENERATE, (
+            f"the GitLab generate body changed for --ci {ci} --deploy {deploy}.\n"
+            f"  expected: {_EXPECTED_GL_GENERATE}\n  got:      {got_gl}"
+        )
+
+
 def test_the_apply_pins_cover_every_deploy_method() -> None:
     """⛔ Anti-vacuity floor, derived from the parser rather than from the pins.
 
@@ -2710,14 +2849,19 @@ def test_declared_variable_values_match_their_source(tmp_path, ci, deploy) -> No
             )
             checked += 1
 
-    # Anti-vacuity floor, and deliberately NOT derived from the artifact: if the
-    # generators stop emitting an `env:`/`variables:` block at all, every
-    # assertion above becomes unreachable and this test would pass by checking
-    # nothing. One declared value per emitted leg is the minimum.
+    # Anti-vacuity floor. ⛔ An earlier version of this comment claimed it caught
+    # "the generators stop emitting an env:/variables: block at all" — that is
+    # NOT what it does, and stating it wrongly is worse than not stating it,
+    # because the next reader may weaken the assertions above believing the
+    # floor backstops them. The CONFIG_DIR comparisons are unconditional, so a
+    # missing key already fails there (`env.get(...)` returns None, measured:
+    # 6 red). What this floor actually catches is narrower: a future edit that
+    # wraps BOTH legs' checks in `if "X" in env:` the way MONITORING_NS is
+    # wrapped, at which point every assertion becomes skippable and the test
+    # would pass having compared nothing.
     assert checked >= 1, (
         f"--ci {ci} --deploy {deploy} produced no declared variable to check — "
-        "either the generators dropped their env/variables block or this test "
-        "stopped finding it."
+        "every comparison above was skipped, so this test verified nothing."
     )
 
 

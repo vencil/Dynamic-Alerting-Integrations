@@ -702,7 +702,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "04aabc1d757187fd7ca51ec2b682ddf7e3025ad29073198fdfa52fb6949e75e5",
+ "source_digest": "cd37079791cf785ff50b3c36e8e9711fa882105ea565b083f9460ed7060c5013",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1057,6 +1057,9 @@
   ],
   ".github/workflows/component-docker-build.yaml": [
    "tests/ops/test_nightly_scan_matrix_drift.py"
+  ],
+  ".github/workflows/config-diff.yaml": [
+   "tests/ops/test_generated_ci_artifacts.py"
   ],
   ".github/workflows/guard-defaults-impact.yml": [
    "tests/ops/test_guard_defaults_scopes.py"
