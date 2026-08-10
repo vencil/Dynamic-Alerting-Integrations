@@ -509,6 +509,14 @@ def _catalog_critical(rule_packs: list[str]) -> dict:
         if rp not in RULE_PACK_CATALOG:
             continue
         for key, value in RULE_PACK_CATALOG[rp].get('critical_overrides', {}).items():
+            # Suffix-guard before slicing: a key without `_critical` would have
+            # nine arbitrary characters chopped off it, and the membership test
+            # below would then pass or fail for a reason unrelated to this key.
+            # `test_catalog_tiers_do_not_overlap_and_are_suffix_correct` pins the
+            # shipped catalog, so this is defensive only — but a wrong-for-the-
+            # wrong-reason branch is exactly what the rest of this fix is about.
+            if not key.endswith(CRITICAL_SUFFIX):
+                continue
             base = key[: -len(CRITICAL_SUFFIX)]
             if base in defaults:
                 critical[key] = value

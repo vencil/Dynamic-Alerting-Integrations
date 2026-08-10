@@ -944,9 +944,14 @@ class TestCriticalTierPlacement:
                 on_disk = [p.relative_to(tmpdir).as_posix()
                            for p in Path(tmpdir).rglob('*') if p.is_file()]
             assert any('kustomize/' in p for p in on_disk) is expected, (method, on_disk)
-            # the generator's own return value must agree with what it wrote
-            assert sorted(Path(p).name for p in created) == sorted(
-                Path(p).name for p in on_disk), (method, created, on_disk)
+            # The generator's own return value must agree with what it wrote —
+            # compared on tmpdir-RELATIVE paths, not basenames (CodeRabbit).
+            # Three `kustomization.yaml` files are generated (base + two
+            # overlays), so a basename multiset still matches when one of them
+            # is written to the wrong directory.
+            assert sorted(Path(p).relative_to(tmpdir).as_posix()
+                          for p in created) == sorted(on_disk), (
+                method, created, on_disk)
 
     def test_no_prefill_sentence_when_the_selection_has_no_critical_tier(self):
         """db2 / clickhouse ship no `_critical` at all, so the file must not

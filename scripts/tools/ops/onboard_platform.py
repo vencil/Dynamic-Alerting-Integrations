@@ -616,9 +616,11 @@ def generate_defaults_from_candidates(candidates):
     ``components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go``.
     Carrying the critical tier across was the entire reason to run ``onboard``.
 
-    The critical tier is returned separately so ``write_onboard_outputs`` can
+    The critical tier is returned separately so ``_write_phase2_outputs`` can
     render it where it actually works (a ``<tenant>.yaml`` override) instead of
-    where it is silently inert.
+    where it is silently inert. (No ``write_onboard_outputs`` symbol exists in
+    this module — an earlier draft of this docstring named one, which is the
+    same class of unverified claim the rest of this change is about.)
     """
     metric_values = {}  # metric_key → [threshold_values]
 
