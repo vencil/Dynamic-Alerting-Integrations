@@ -1148,6 +1148,56 @@ def test_reachability_evaluator_refuses_shapes_it_cannot_read(if_expr) -> None:
             _synthetic(if_expr), "synthetic", {"gate": set(), "subject": set()})
 
 
+def test_the_dead_knob_detector_actually_detects() -> None:
+    """⛔ Counter-examples for `_unwired_knobs`, which had none.
+
+    It is the sole detector behind two assertions, and on the real artifacts one
+    of them is vacuous: the generated `workflow_dispatch:` declares no inputs at
+    all, so that call reduces to `assert not []` on all nine combinations.
+    Measured: inserting `return []` at the top of `_unwired_knobs` left
+    151 passed / 6 skipped — byte-identical to baseline, zero tests died.
+
+    That is the shape this file already fixed for the reachability evaluator
+    (three meta-tests at the `_synthetic` helper above) and for the shell-comment
+    stripper. The detector for the #1361 class had been left as the one piece of
+    machinery nothing points at.
+
+    Both hops are covered, plus a paired positive so a future tightening cannot
+    drift into biting correct wiring.
+    """
+    dead_input = {
+        "on": {"workflow_dispatch": {"inputs": {"dry_run": {"type": "boolean"}}}},
+        "env": {"DRY_RUN": "${{ inputs.dry_run }}"},
+        "jobs": {"a": {"steps": [{"run": "echo hello"}]}},
+    }
+    assert "inputs.dry_run" in " ".join(_unwired_knobs(dead_input)), (
+        "an input bound only to an env var nobody reads must be reported — "
+        "that binding is hop one of two, and treating it as wiring is exactly "
+        "the false negative this detector was rewritten to close (#1361)."
+    )
+
+    dead_env = {
+        "on": {"workflow_dispatch": None},
+        "env": {"MONITORING_NS": "monitoring"},
+        "jobs": {"a": {"steps": [{"run": "kubectl get pods"}]}},
+    }
+    assert "MONITORING_NS" in " ".join(_unwired_knobs(dead_env)), (
+        "a declared `env:` name that no executable position reads must be "
+        "reported; this is the knob the customer edits expecting an effect."
+    )
+
+    # Paired positive: correct wiring must NOT be reported, or the detector
+    # drifts into flagging every artifact and gets silenced.
+    wired = {
+        "on": {"workflow_dispatch": {"inputs": {"dry_run": {"type": "boolean"}}}},
+        "env": {"DRY_RUN": "${{ inputs.dry_run }}"},
+        "jobs": {"a": {"steps": [{"run": "test \"$DRY_RUN\" = true && echo skip"}]}},
+    }
+    assert not _unwired_knobs(wired), (
+        f"correctly wired knobs were reported as dead: {_unwired_knobs(wired)}"
+    )
+
+
 def test_reachability_evaluator_reads_the_shapes_it_claims_to() -> None:
     """The paired positive: supported shapes must NOT be refused or misread.
 
