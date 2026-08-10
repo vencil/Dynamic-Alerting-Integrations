@@ -371,8 +371,58 @@ def _declared_faces() -> dict[str, set[str]]:
 #
 # ⛔ SHAPE, not membership: this face makes no claim about whether a key belongs
 # in the product. A `_critical` key is legitimate — in `<tenant>.yaml`.
-_DEV_DEFAULTS = PROJECT_ROOT / "components" / "threshold-exporter" / "config" / "conf.d" / "_defaults.yaml"
-_TRY_LOCAL_DEFAULTS = PROJECT_ROOT / "try-local" / "seed" / "conf.d" / "_defaults.yaml"
+# ⛔⛔ DERIVED, never enumerated. Two hardcoded `Path` constants stood here and
+# blind review walked straight past them three different ways: an `examples/`
+# sibling inside the very conf.d tree they named
+# (`conf.d/examples/_defaults-multidb.yaml`, a copy-me file whose own header
+# teaches this rule), a NESTED `_defaults.yaml` (the loader enters one at every
+# depth — `config_hierarchy.go` — while the constants named depth 0 only), and a
+# whole second conf.d root (`rule-packs/recipes/examples/conf.d/`). All three
+# were demonstrated: inject `mysql_connections_critical` into any of them and
+# this gate exited 0 without a word.
+#
+# The predicate is the repo's own, not a new one: `check_confd_schema.py`
+# already classifies this artifact class as `basename.startswith("_defaults")`
+# + a YAML suffix, applied over a walk. Enumerating producers is right for
+# GENERATORS (they have no artifact to read); enumerating ARTIFACTS is what
+# leaves fifteen of seventeen files unguarded.
+#
+# Measured when this changed: 17 files match, all clean, so the derived scope is
+# green on arrival and buys 15 files of coverage.
+_DEFAULTS_ARTIFACT_EXCLUDED_DIRS = frozenset({".git", "node_modules", ".venv",
+                                             "__pycache__", "site", "dist"})
+
+# ⛔ Explicit, and empty on purpose. A fixture that deliberately encodes the
+# defective shape (to characterise the loader, say) belongs HERE with a reason —
+# not hidden behind a blanket `tests/` exclusion, which is how a guard quietly
+# stops covering the tree that grows fastest. Keys are repo-relative POSIX paths.
+_DEFAULTS_ARTIFACT_EXEMPT: dict[str, str] = {}
+
+# Non-vacuity floor. `EMPTY-FACE` catches a face whose `defaults:` is empty; it
+# cannot catch a WALK that returned no files at all, which is what a bad
+# exclusion or a moved tree looks like. Measured 17 at the time of writing; the
+# floor is deliberately below that so ordinary deletions do not trip it, and
+# deliberately above 2 so a regression to the old hardcoded pair does.
+_DEFAULTS_ARTIFACT_FLOOR = 10
+
+# Label prefix that tells the two face classes apart. Generators must be
+# non-empty; artifacts may legitimately be (see the EMPTY-FACE branch).
+_ARTIFACT_FACE_PREFIX = "artifact ("
+
+
+def _defaults_artifacts() -> list[Path]:
+    """Every tracked platform-defaults artifact, by predicate rather than name."""
+    out = []
+    for path in PROJECT_ROOT.rglob("_defaults*"):
+        if path.suffix not in (".yaml", ".yml") or not path.is_file():
+            continue
+        if _DEFAULTS_ARTIFACT_EXCLUDED_DIRS & set(path.parts):
+            continue
+        rel = path.relative_to(PROJECT_ROOT).as_posix()
+        if rel in _DEFAULTS_ARTIFACT_EXEMPT:
+            continue
+        out.append(path)
+    return sorted(out)
 
 # The probe fed to the `onboard` face below. A severity pair on one metric is
 # the minimal input that used to manufacture the defect, and it is spelled here
@@ -424,13 +474,11 @@ def _defaults_faces() -> dict[str, set[str]]:
     scaffold_packs = [k for k in scaffold_tenant.RULE_PACKS if k != "kubernetes"]
     onboard_suggestion = onboard_platform.generate_defaults_from_candidates(
         [dict(c) for c in _ONBOARD_PROBE])
-    return {
+
+    faces = {
+        # GENERATORS — no artifact on disk to read; the producer IS the surface.
         "chart (helm/threshold-exporter/values.yaml)":
             _defaults_section(_CHART_VALUES.read_text(encoding="utf-8")),
-        "dev conf.d (components/threshold-exporter/config/conf.d/_defaults.yaml)":
-            _defaults_section(_DEV_DEFAULTS.read_text(encoding="utf-8")),
-        "try-local seed (try-local/seed/conf.d/_defaults.yaml)":
-            _defaults_section(_TRY_LOCAL_DEFAULTS.read_text(encoding="utf-8")),
         "onboarding/scaffold (scaffold_tenant.generate_defaults)":
             set(scaffold_tenant.generate_defaults(scaffold_packs)["defaults"]),
         "onboarding/init (init_project._gen_defaults_yaml)":
@@ -439,6 +487,23 @@ def _defaults_faces() -> dict[str, set[str]]:
         "migration/onboard (onboard_platform.generate_defaults_from_candidates, "
         "probed)": set(onboard_suggestion.get("defaults") or {}),
     }
+
+    # ARTIFACTS — derived (see `_defaults_artifacts`). The floor fires BEFORE the
+    # per-face loop, because an empty walk produces zero faces and zero faces
+    # pass every check in that loop perfectly.
+    artifacts = _defaults_artifacts()
+    if len(artifacts) < _DEFAULTS_ARTIFACT_FLOOR:
+        raise RuntimeError(
+            f"defaults-artifact scan found only {len(artifacts)} file(s), below the "
+            f"floor of {_DEFAULTS_ARTIFACT_FLOOR}. A walk that returns (almost) "
+            "nothing passes the placement check vacuously, which is exactly the "
+            "shape the hardcoded-path version of this face shipped with. Repair "
+            "the scan or move the file(s) back; do not lower the floor.")
+    for path in artifacts:
+        rel = path.relative_to(PROJECT_ROOT).as_posix()
+        faces[f"{_ARTIFACT_FACE_PREFIX}{rel})"] = _defaults_section(
+            path.read_text(encoding="utf-8"))
+    return faces
 
 
 def _reachable(key: str, supply: set[str], deferred: set[str]) -> bool:
@@ -574,11 +639,25 @@ def run_check(
     # is satisfied by four clean faces while the fifth ships sixteen, which is
     # how this survived a year.
     for face, keys in sorted(defaults_faces.items()):
-        if not keys:
+        # ⛔ The vacuity rule applies to GENERATORS only, and the asymmetry is
+        # measured, not assumed: every generator ships a non-empty `defaults:`,
+        # so an empty one means its reader broke — but 2 of the 17 derived
+        # ARTIFACTS legitimately carry none (`rule-packs/recipes/examples/
+        # conf.d/_defaults.yaml` and its `finance/` child declare only the other
+        # sections). Applying the generator rule to artifacts turned this gate
+        # red on arrival for two files that are perfectly correct.
+        #
+        # Vacuity is still closed for artifacts, by two other links: a file that
+        # cannot be read RAISES (fail-closed, `main()` → EXIT_CALLER_ERROR with
+        # the path), and a walk that returns (almost) nothing trips
+        # `_DEFAULTS_ARTIFACT_FLOOR` before this loop runs. What is left —
+        # "parsed fine, genuinely has no `defaults:`" — is a real state of a real
+        # file, not a broken reader.
+        if not keys and not face.startswith(_ARTIFACT_FACE_PREFIX):
             errors.append(
                 f"EMPTY-FACE: the defaults-tier face {face!r} yielded no keys at "
                 "all, and an empty set passes the placement check below "
-                "vacuously. Every producer ships a non-empty `defaults:`, so "
+                "vacuously. Every GENERATOR ships a non-empty `defaults:`, so "
                 "either its `defaults:` section was renamed / re-nested, or a "
                 "generator stopped emitting one. (An artifact that is MISSING "
                 "does not reach here — the reader raises and `main()` exits "

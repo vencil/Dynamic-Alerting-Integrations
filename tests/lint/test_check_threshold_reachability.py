@@ -13,6 +13,8 @@ declared-but-unwired guard, not decoration):
 from __future__ import annotations
 
 import importlib.util
+
+import pytest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -554,20 +556,40 @@ def test_the_defaults_face_is_wired_into_run_check_not_just_callable(monkeypatch
 
 
 def test_real_repo_defaults_faces_are_all_present_and_clean():
-    """The live artifacts. The face count is a literal because deriving the
-    expectation from the thing it guards is how a face silently disappears —
-    dropping one from `_defaults_faces` would otherwise just shrink both sides.
+    """The live faces, in their two classes.
+
+    The GENERATOR count is a literal because deriving the expectation from the
+    thing it guards is how a face silently disappears — dropping one from
+    `_defaults_faces` would otherwise just shrink both sides. The ARTIFACT side
+    cannot be a literal (it is a walk, and files come and go), so it is pinned by
+    a floor plus named hard-to-guess members in
+    `test_the_artifact_face_is_derived_not_enumerated`.
+
+    ⛔ The cleanliness assertion runs over BOTH classes; the NON-EMPTY assertion
+    runs over generators only. Measured: two artifacts
+    (`rule-packs/recipes/examples/conf.d/_defaults.yaml` and its `finance/`
+    child) legitimately declare no `defaults:` at all, so requiring non-empty
+    everywhere turned this gate red on two correct files.
     """
     faces = gate._defaults_faces()
-    assert len(faces) == 6, sorted(faces)
-    labels = " ".join(faces)
-    for producer in ("values.yaml", "conf.d", "try-local",
+    generators = {k: v for k, v in faces.items()
+                  if not k.startswith(gate._ARTIFACT_FACE_PREFIX)}
+    artifacts = {k: v for k, v in faces.items()
+                 if k.startswith(gate._ARTIFACT_FACE_PREFIX)}
+
+    assert len(generators) == 4, sorted(generators)
+    labels = " ".join(generators)
+    for producer in ("values.yaml",
                      "scaffold_tenant.generate_defaults",
                      "init_project._gen_defaults_yaml",
                      "onboard_platform.generate_defaults_from_candidates"):
-        assert producer in labels, (producer, sorted(faces))
-    for face, keys in faces.items():
+        assert producer in labels, (producer, sorted(generators))
+
+    assert len(artifacts) >= gate._DEFAULTS_ARTIFACT_FLOOR, sorted(artifacts)
+
+    for face, keys in generators.items():
         assert keys, f"{face} yielded nothing — the reader is broken"
+    for face, keys in faces.items():
         assert not [k for k in keys if k.endswith("_critical")], face
         assert not [k for k in keys if "{" in k], face
 
@@ -603,12 +625,70 @@ def test_a_missing_artifact_is_fail_closed_and_names_the_path(monkeypatch, capsy
     nobody walked."""
     from pathlib import Path
 
-    monkeypatch.setattr(gate, "_TRY_LOCAL_DEFAULTS",
-                        Path(str(gate._TRY_LOCAL_DEFAULTS) + ".gone"))
+    real = gate._defaults_artifacts()
+    monkeypatch.setattr(
+        gate, "_defaults_artifacts",
+        lambda: real[:-1] + [Path(str(real[-1]) + ".gone")])
     rc = gate.main([])
     assert rc == gate.EXIT_CALLER_ERROR
     err = capsys.readouterr().err
     assert "crashed" in err and "_defaults.yaml.gone" in err, err
+
+
+def test_the_artifact_face_is_derived_not_enumerated():
+    """⛔ The three ways the hardcoded-path version was walked past (blind
+    review, round 3 — each demonstrated by injecting `mysql_connections_critical`
+    and watching this gate exit 0):
+
+      1. an `examples/` sibling INSIDE the very conf.d tree the constants named;
+      2. a NESTED `_defaults.yaml` (the loader enters one at every depth, see
+         `config_hierarchy.go`; the constants named depth 0 only);
+      3. a second conf.d root entirely (`rule-packs/recipes/examples/conf.d/`).
+
+    Pinned by naming members no enumeration would have guessed, rather than by a
+    count alone — a count is satisfied by any ten files.
+    """
+    found = {p.relative_to(gate.PROJECT_ROOT).as_posix()
+             for p in gate._defaults_artifacts()}
+
+    for missed in (
+        # 1 — sibling in the same tree
+        "components/threshold-exporter/config/conf.d/examples/_defaults-multidb.yaml",
+        # 2 — depth: the loader reads L1..L3 too
+        "tests/golden/fixtures/full-l0-l3/conf.d/db/_defaults.yaml",
+        "tests/golden/fixtures/full-l0-l3/conf.d/db/mariadb/prod/_defaults.yaml",
+        # 3 — a second conf.d root
+        "rule-packs/recipes/examples/conf.d/_defaults.yaml",
+        "rule-packs/recipes/examples/conf.d/finance/_defaults.yaml",
+    ):
+        assert missed in found, (missed, sorted(found))
+
+    # the two the old version DID cover must not have been dropped in the swap
+    for kept in ("components/threshold-exporter/config/conf.d/_defaults.yaml",
+                 "try-local/seed/conf.d/_defaults.yaml"):
+        assert kept in found, (kept, sorted(found))
+
+    assert len(found) >= gate._DEFAULTS_ARTIFACT_FLOOR, sorted(found)
+
+
+def test_an_empty_artifact_scan_is_an_error_not_a_pass(monkeypatch):
+    """⛔ `EMPTY-FACE` guards a face whose `defaults:` is empty. It cannot guard a
+    WALK that returned nothing, because zero faces means zero iterations and the
+    per-face loop is then perfectly satisfied — the same vacuity the hardcoded
+    pair shipped with, one level up. So the floor raises before the loop.
+    """
+    monkeypatch.setattr(gate, "_defaults_artifacts", list)
+    with pytest.raises(RuntimeError, match="below the floor"):
+        gate.run_check(demand=set(), supply=set(), deferred=set(), known_unwired={})
+
+
+def test_every_exempted_artifact_carries_a_reason_and_still_exists():
+    """The exemption table is empty today. If it ever is not, each entry must
+    name a real file and say why — an exemption whose path has since moved is an
+    exclusion nobody can evaluate."""
+    for rel, reason in gate._DEFAULTS_ARTIFACT_EXEMPT.items():
+        assert (gate.PROJECT_ROOT / rel).is_file(), rel
+        assert reason and len(reason) > 20, (rel, reason)
 
 
 def test_precommit_filter_covers_every_input_this_gate_reads():
@@ -678,6 +758,17 @@ def test_precommit_filter_covers_every_input_this_gate_reads():
                 inputs.add(value.relative_to(REPO_ROOT).as_posix())
             except ValueError:
                 pass
+
+    # ⛔ …and the DERIVED artifact scan, which is neither an import nor a Path
+    # constant. When the defaults-tier face stopped naming two files and started
+    # walking for them, this test kept passing while silently covering 15 fewer
+    # inputs than the gate reads — the same "derivation only sees one kind of
+    # source" blind spot that let the demand side (a function returning a glob)
+    # slip past the first version. Third source, third shape.
+    artifacts = [p.relative_to(REPO_ROOT).as_posix()
+                 for p in gate._defaults_artifacts()]
+    assert len(artifacts) >= gate._DEFAULTS_ARTIFACT_FLOOR, artifacts
+    inputs.update(artifacts)
 
     assert len(inputs) >= 20, sorted(inputs)
     for expected in ("scripts/tools/ops/init_project.py",

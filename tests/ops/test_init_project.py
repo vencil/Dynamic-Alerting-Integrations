@@ -880,12 +880,23 @@ class TestCriticalTierPlacement:
         assert 'DELETING both lines is not the same thing' in prefill, header
         assert 'Set BOTH to "disable"' in prefill, header
 
-        # (2) the rejection claim must name WHICH path, and must not promise
-        # that the CI generated beside this file stops it — that job currently
-        # exits 2 at argparse (`--ci`, #1380), so it validates nothing at all.
+        # (2) the rejection claim must name WHICH path blocks, and must state an
+        # invariant rather than the current state of the generated CI.
+        #
+        # ⛔ Two earlier drafts failed this in opposite directions, each one
+        # merge away from being false: "EVERY write of this file is rejected"
+        # (a stop the customer's pipeline does not perform), then "that job
+        # fails before it validates anything" (true only while the generated
+        # invocations still pass the unsupported `--ci`, #1380). So the negative
+        # assertions below are the load-bearing half — they forbid re-describing
+        # the neighbouring defect in a file customers keep.
         assert 'tenant-api' in prefill, header
-        assert 'validate-config' in prefill and 'exit 0' in prefill, header
-        assert 'does not accept' in prefill, header
+        assert 'ONLY the tenant-api write path' in prefill, header
+        assert 'validate-config' in prefill and 'exits 0' in prefill, header
+        assert 'green pipeline is not' in prefill, header
+        for time_bound in ('--ci', 'does not accept', 'before it validates',
+                           'EVERY write of this file is rejected'):
+            assert time_bound not in prefill, (time_bound, header)
 
         # (3) the only in-tool refresh route is --force, which discards the
         # retuning the same paragraph invites two lines earlier
@@ -921,6 +932,47 @@ class TestCriticalTierPlacement:
             assert mechanism not in header, (mechanism, header)
         # the deploy-independent property it says instead
         assert 'nothing generated here tracks the platform' in header, header
+
+    def test_force_really_discards_hand_edits_in_both_files(self):
+        """The header tells the operator that `--force` is the only in-tool
+        refresh route and that it discards their edits. That was prose with a
+        substring assertion behind it (blind review): soften `_check_existing_init`
+        to skip existing tenant files, or make `_write_file` existence-aware, and
+        the file keeps issuing a destructive warning about behaviour that changed
+        while every assertion stays green.
+
+        Runs the real CLI twice, so it pins the behaviour rather than the flag.
+        """
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        tool = str(Path(ip.__file__).resolve())
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = [sys.executable, tool, '-o', tmpdir, '--non-interactive',
+                    '--tenants', 'db-a', '--rule-packs', 'mariadb']
+            env = {**os.environ, 'PYTHONUTF8': '1', 'PYTHONDONTWRITEBYTECODE': '1'}
+            assert subprocess.run(base, capture_output=True, env=env,
+                                  timeout=180).returncode == 0
+
+            defaults = Path(tmpdir) / 'conf.d' / '_defaults.yaml'
+            tenant = Path(tmpdir) / 'conf.d' / 'db-a.yaml'
+            for f in (defaults, tenant):
+                f.write_text(f.read_text(encoding='utf-8') + '\n# HAND-EDIT\n',
+                             encoding='utf-8')
+
+            # without --force: refuses, and the edits survive
+            rerun = subprocess.run(base, capture_output=True, env=env, timeout=180)
+            assert rerun.returncode != 0, rerun.stdout[-500:]
+            assert all('HAND-EDIT' in f.read_text(encoding='utf-8')
+                       for f in (defaults, tenant))
+
+            # with --force: BOTH files are rewritten, both edits gone
+            forced = subprocess.run(base + ['--force'], capture_output=True,
+                                    env=env, timeout=180)
+            assert forced.returncode == 0, forced.stderr[-500:]
+            for f in (defaults, tenant):
+                assert 'HAND-EDIT' not in f.read_text(encoding='utf-8'), f.name
 
     def test_only_kustomize_deploy_generates_the_kustomize_tree(self):
         """The fact that made the removed sentence wrong, pinned so it cannot

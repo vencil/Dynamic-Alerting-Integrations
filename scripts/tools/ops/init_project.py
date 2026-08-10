@@ -575,16 +575,20 @@ def _critical_prefill_note(critical: dict) -> str:
       * A dangling `<base>_critical` is write-blocking on the tenant-api path
         (`ValidateTenantKeys` blocking `Errors` → `gitops/writer.go:599`
         `keyErrs`, the set every write gate turns into `ErrValidation`).
-        ⛔ The note does NOT promise that the CI generated beside it catches
-        this first, which an earlier draft effectively did by saying
-        `da-tools validate-config` "only WARNS … and still exits 0". That is
-        true of the BARE tool (measured, `--strict` included) and beside the
-        point: all three generated invocations pass `--ci`, which
-        `validate_config.py` does not accept, so that job exits 2 at argparse
-        without validating anything (#1380 — the generator's own four sites are
-        already fixed on the #1347 branch, unpushed at the time of writing).
-        A sentence whose reassurance depends on a flag defect being absent is
-        one measurement away from being wrong in the customer's tree.
+        ⛔ The note names the tenant-api path as the ONLY blocker and says a
+        green pipeline proves nothing — deliberately WITHOUT describing the
+        state of the generated CI, which two earlier drafts did in opposite
+        directions and both were one merge away from being false. Draft 1
+        promised "EVERY write of this file is rejected" (a stop the customer's
+        own pipeline does not perform). Draft 2 corrected it by saying that
+        pipeline "fails before it validates anything" — true today only because
+        the generated invocations pass `--ci`, which `validate_config.py` does
+        not accept (#1380); the moment that lands, the sentence steers the
+        operator away from a gate that works. What survives both regimes is the
+        invariant: bare `validate-config` WARNs and exits 0 on this input
+        (measured, `--strict` included), so its verdict never establishes that a
+        dangling `_critical` is gone. A customer-facing file must carry the
+        invariant, not the current state of a neighbouring defect.
 
     ⛔ It also no longer says the values are "at the platform's suggested
     starting values" — three lines under a paragraph that (correctly) states
@@ -615,13 +619,12 @@ def _critical_prefill_note(critical: dict) -> str:
         '#     back to the platform value, so the warning row returns at the\n'
         '#     _defaults.yaml number. Delete only suppresses the critical row.\n'
         '#   * If a `<base>` ever leaves `defaults:`, its `<base>_critical`\n'
-        '#     line here must go too. The tenant-api write path treats a\n'
-        '#     dangling one as blocking and rejects THIS WHOLE FILE — every\n'
-        '#     other change in the same save with it. Do not expect the CI\n'
-        '#     generated next to this file to catch it first: bare\n'
-        '#     `da-tools validate-config` only WARNS (exit 0), and the\n'
-        '#     invocation generated here passes a flag that tool does not\n'
-        '#     accept, so today that job fails before it validates anything.'
+        '#     line here must go too. ONLY the tenant-api write path treats a\n'
+        '#     dangling one as blocking, and it rejects THIS WHOLE FILE —\n'
+        '#     every other change in the same save with it. `da-tools\n'
+        '#     validate-config`, which the CI generated beside this file runs,\n'
+        '#     reports it as a WARNING and exits 0, so a green pipeline is not\n'
+        '#     evidence that this is fixed.'
     ).format(n=len(critical))
 
 

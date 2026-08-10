@@ -610,17 +610,30 @@ class TestGenerateDefaultsFromCandidates:
         邀請選擇性合併：只要客戶決定不併某個 `<base>`，對應的 READY 行就變成
         BLOCKED 情境（整份租戶檔被拒），而檔案裡沒有任何字提醒他（round-2 盲審）。
         """
+        # ⛔ fixture 必須同時產出 READY 與 BLOCKED 兩段，否則 `split(BLOCKED)[0]`
+        # 就等於整份 body，這條斷言會退化成「檔案裡某處有這些字」——盲審實測前一版
+        # 的 fixture 全部落在 READY、`split(...)[0] == body`，分段是裝飾性的。
         suggestion = generate_defaults_from_candidates([
             {"status": "perfect", "metric_key": "cpu", "severity": "warning", "threshold_value": "80"},
             {"status": "perfect", "metric_key": "cpu", "severity": "critical", "threshold_value": "95"},
+            {"status": "perfect", "metric_key": "disk_usage", "severity": "critical", "threshold_value": "95"},
         ])
         body = _render_critical_suggestion(
             suggestion["critical_overrides"], suggestion["defaults"])
+        assert self._BLOCKED_HEADER in body, body
         ready = body.split(self._BLOCKED_HEADER)[0]
-        # 條件必須明講是「上面那個 defaults: 區塊」而且未查過部署中的檔
-        assert "ABOVE" in ready, body
-        assert "never looked at your" in ready, body
-        assert "once you have actually merged" in ready, body
+        assert ready != body, "split 沒切到東西 ⇒ 下面的斷言退化成整檔搜尋"
+
+        # 條件必須明講是「上面那個 defaults: 區塊」而且未查過部署中的檔，
+        # 而且要在 READY 段**之內**——下界是 READY 標題，不是檔案開頭。
+        # ⛔ 只驗「在 BLOCKED 之前」擋不住「被搬進共用前言」：前言也在 BLOCKED
+        # 之前。變異實測：把條件搬到前言，只驗上界的版本照樣綠。
+        lo = body.index(self._READY_HEADER)
+        hi = body.index(self._BLOCKED_HEADER)
+        for phrase in ("ABOVE", "never looked at your",
+                       "once you have actually merged"):
+            assert phrase in ready, (phrase, body)
+            assert lo < body.index(phrase) < hi, (phrase, body)
 
     def test_blocked_remedy_states_its_fleet_wide_cost(self):
         """⛔ BLOCKED 的補救（把 `<base>` 加進 `defaults:`）不是免費的：實測一個

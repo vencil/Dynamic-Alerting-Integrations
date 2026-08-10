@@ -645,6 +645,13 @@ PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     "try-local/**", "Makefile", ".pre-commit-config.yaml", "docs/**",
     "renovate.json", ".devcontainer/**", ".github/workflows/**",
     "environments/**", "tools/portal/tests/**", "tools/portal/src/**",
+    # GAINED by #1218: the threshold-reachability gate's defaults-tier face
+    # stopped naming two `_defaults.yaml` paths and started deriving the
+    # artifact class by predicate, so a pytest now reads
+    # `rule-packs/recipes/examples/conf.d/_defaults.yaml` — the first read that
+    # points this scanner at `rule-packs/**`. Recorded per this test's own
+    # instruction ("A GAINED entry is normally fine: add it here").
+    "rule-packs/**",
 }
 
 

@@ -694,6 +694,15 @@ def _render_critical_suggestion(critical, defaults=None):
     defaults = defaults or {}
     ready, blocked = [], []
     for key in sorted(critical):
+        # Same suffix-guard as `init_project._catalog_critical`, for the same
+        # reason and as the same CLASS rather than the cited instance: slicing a
+        # key that does not end in `_critical` removes nine arbitrary characters
+        # and the membership test below then answers about a string that is not
+        # a base key. The CLI path filters on `endswith` upstream (`:644`), but
+        # both callers in the test suite build the mapping by hand, which is
+        # exactly the surface the sibling guard was added to protect.
+        if not key.endswith(CRITICAL_SUFFIX):
+            continue
         base = key[: -len(CRITICAL_SUFFIX)]
         (ready if base in defaults else blocked).append((key, base))
 
