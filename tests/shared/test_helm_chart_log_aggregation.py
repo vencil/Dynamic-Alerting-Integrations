@@ -243,8 +243,8 @@ class TestVector:
         assert "starts_with(owner_name," in vrl, (
             "the prefix test must consume the STRIPPED owner, not the raw field (#1293)"
         )
-        # The behavioural half of this guard lives in helm/vector/tests/
-        # projection_tests.yaml cases (O1)/(O2)/(O3), run by `vector test`.
+        # The behavioural half of this guard lives in
+        # helm/vector/tests/projection_tests.yaml cases (O1)/(O2)/(O3), run by `vector test`.
 
     @_needs_helm
     def test_vrl_origin_filter_disabled_with_empty_prefix(self, repo_root: Path) -> None:

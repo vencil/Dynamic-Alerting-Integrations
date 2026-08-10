@@ -8,8 +8,8 @@ package batchpr
 //     setup with whatever the human reviewer uses (gh auth status
 //     / GH_TOKEN env). One auth surface, one mental model.
 //
-//   - Mirrors the existing pattern in `.github/workflows/release-
-//     attach-bench-baseline.yaml` and the C-12 PR-5 guard workflow,
+//   - Mirrors the existing pattern in `
+//     .github/workflows/release-attach-bench-baseline.yaml` and the C-12 PR-5 guard workflow,
 //     both of which shell out to `gh`. Customers running the
 //     migration toolkit will already have `gh` available.
 //

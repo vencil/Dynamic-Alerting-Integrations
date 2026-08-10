@@ -259,8 +259,9 @@ def _shipped_optional() -> set[str]:
 
     Same artifact-not-declaration discipline as `_chart_supply()` above: the
     registry's `tier: optional_overrides` is what we MEAN to ship, this list is
-    what an operator's exporter actually recognises. `check_threshold_registry
-    .py` keeps the two in step; reading values.yaml here means this face keeps
+    what an operator's exporter actually recognises.
+    `check_threshold_registry.py` keeps the two in step; reading values.yaml
+    here means this face keeps
     measuring the deployment even if that equivalence ever breaks.
     """
     import yaml  # local import: only the chart faces need it

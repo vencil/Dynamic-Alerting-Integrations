@@ -15,8 +15,9 @@
 # optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
 # ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，
 # 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，
-# 它讀的是 defaults[base]，base 沒有值就整列丟棄（components/threshold-exporter/
-# app/pkg/config/resolve.go）。而下列每個 key 的 base 都**未**標 [chart-default]
+# 它讀的是 defaults[base]，base 沒有值就整列丟棄
+# （components/threshold-exporter/app/pkg/config/resolve.go）。
+# 而下列每個 key 的 base 都**未**標 [chart-default]
 # ⇒ 出貨的 Helm values / dev conf.d 範本沒有供給它：
 # 租戶在這個拓撲下填一個並不會發射任何 user_threshold。
 # 要能用，部署面必須先供給 base（scaffold_tenant 針對選到

@@ -512,8 +512,8 @@ def _build_watchdog_route() -> tuple[list[dict], list[dict]]:
          enforced NOC fallback) could otherwise swallow the heartbeat — and then
          the external monitor would false-alarm "platform dead".
       2. group_by:[alertname] pins zero-extra-aggregation so the heartbeat is NOT
-         folded into the root group_by ([alertname, tenant], configmap-
-         alertmanager.yaml) — which would mangle the cadence — while group_wait:0s
+         folded into the root group_by ([alertname, tenant],
+         configmap-alertmanager.yaml) — which would mangle the cadence — while group_wait:0s
          + a fixed repeat_interval keep the beat steady, and continue:false keeps
          it OFF every human channel.
 

@@ -166,8 +166,9 @@ const ROLE_AXIS = {
 // form — the SAME form the Hub's quick-access chips + dynamic cards use
 // (verified working). A bare `<tool>.html` does NOT resolve to the tool: no
 // per-tool `.html` file exists, and da-portal's nginx
-// `try_files $uri $uri/ /interactive/index.html` (components/da-portal/
-// nginx.conf) falls a missing path back to the Hub HOME — so a `<tool>.html`
+// `try_files $uri $uri/ /interactive/index.html`
+// (components/da-portal/nginx.conf) falls a missing path back to the Hub
+// HOME — so a `<tool>.html`
 // link silently lands on the home page, not the tool. (master-onboarding.jsx
 // still uses the bare form on `main` = a latent portal-wide bug, tracked
 // separately — do NOT copy it.)

@@ -225,8 +225,8 @@ func TestMergeTenantWithRootDefaults_PropagatesStateFilters(t *testing.T) {
 // tenant-api GET/validate/PUT boundary) tolerates it silently — but the platform
 // is NOT blind to it: the production scanner emits
 // da_config_parse_failure_total{file_basename="_defaults.yaml"} and pages via the
-// ConfigDefaultsParseFailure critical alert (k8s/03-monitoring/configmap-rules-
-// platform.yaml, issue #643). Pinned as this helper's current behavior.
+// ConfigDefaultsParseFailure critical alert (
+// k8s/03-monitoring/configmap-rules-platform.yaml, issue #643). Pinned as this helper's current behavior.
 func TestMergeTenantWithRootDefaults_MalformedDefaultsTolerated(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

@@ -36,8 +36,8 @@ parser {
   #
   # PREFIX + BOTH extensions, deliberately NOT the exact filename: the pytest-side
   # platform-pack scanners key off `_PLATFORM_CM_PREFIX = "configmap-rules-platform"`
-  # and `_RULES_FILE_EXTS = (".yaml", ".yml")` (tests/ops/test_generate_routes_
-  # orchestration.py), and their floors are worded as a SUM across every platform
+  # and `_RULES_FILE_EXTS = (".yaml", ".yml")` (
+  # tests/ops/test_generate_routes_orchestration.py), and their floors are worded as a SUM across every platform
   # rules ConfigMap so that SPLITTING the pack keeps satisfying them. An exact
   # `configmap-rules-platform\.yaml` would make a future
   # configmap-rules-platform-federation.yaml invisible to pint while pytest kept

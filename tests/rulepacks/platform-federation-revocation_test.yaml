@@ -302,8 +302,8 @@ tests:
   # shape every gauge here is structurally worst at holding.
   #
   # ⛔ Each of 17-19 is a counterfactual, not a confirmation: run it against the
-  # pre-#1238 rules (`git show e2d72ce4:tests/rulepacks/platform-federation-
-  # revocation.rules.yaml`) and the FIRING assertion fails — that is the whole
+  # pre-#1238 rules (`git show e2d72ce4:
+  # tests/rulepacks/platform-federation-revocation.rules.yaml`) and the FIRING assertion fails — that is the whole
   # value of the change, measured rather than asserted. The trailing no-fire
   # assertion pins the 1h window itself: shorten it below the firing eval_time
   # and these go red.

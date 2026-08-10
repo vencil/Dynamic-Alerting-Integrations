@@ -5,8 +5,8 @@ package main
 // REGRESSION: ValidateTenantKeys used to skip every `_critical` key
 // unconditionally, deferring to "base validation done by ResolveAt". ResolveAt
 // does check, but only `log.Printf`s at scrape time — and nobody authoring a
-// config reads the exporter's log. The author, CI (`generate_alertmanager_
-// routes.py --validate`) and the tenant-api write path (gitops/writer.go turns
+// config reads the exporter's log. The author, CI (`
+// generate_alertmanager_routes.py --validate`) and the tenant-api write path (gitops/writer.go turns
 // any output of this function into ErrValidation) all read THIS function.
 //
 // So the critical tier was the only key shape with no author-visible signal,

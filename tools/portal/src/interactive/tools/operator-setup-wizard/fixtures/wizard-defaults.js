@@ -5,8 +5,8 @@ purpose: |
   metadata, demo tenant list, supported Operator versions, cluster
   types, receiver types, and rule deployment modes.
 
-  Pre-PR-portal-4 these were inline at the top of operator-setup-
-  wizard.jsx. Splitting them out drops 60 LOC from the orchestrator
+  Pre-PR-portal-4 these were inline at the top of
+  operator-setup-wizard.jsx. Splitting them out drops 60 LOC from the orchestrator
   and lets the deployment-wizard / cicd-setup-wizard reuse the
   CLUSTER_TYPES + RECEIVER_TYPES tables in a follow-up.
 

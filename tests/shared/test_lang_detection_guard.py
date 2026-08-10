@@ -4,8 +4,8 @@
 Rationale（da-tools ROI r3 W2）：
 `config_history.py` 曾自建 `_detect_lang()`——`for var in (DA_LANG, LC_ALL,
 LANG)` 逐一 **只檢查 zh 前綴**，`DA_LANG=en` 不 return、落到下一個變數 →
-**`DA_LANG=en` 輸給 `LC_ALL=zh`**，違反 canonical 契約（tests/shared/
-test_property_tools.py 明釘「DA_LANG=en wins over LC_ALL=zh」；
+**`DA_LANG=en` 輸給 `LC_ALL=zh`**，違反 canonical 契約（
+tests/shared/test_property_tools.py 明釘「DA_LANG=en wins over LC_ALL=zh」；
 `detect_cli_lang` 對 zh/en 前綴都會提早 return，顯式設定必勝）。其他 13
 支 ops 工具皆循 `from _lib_python import detect_cli_lang` 慣例。本 gate
 防止同型 shadow 再長回來。

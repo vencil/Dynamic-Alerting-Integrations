@@ -149,8 +149,9 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
       3. Tenant Override (tenant-specific keys)
 
     ⛔ Do NOT "correct" this back to four. The v1.12.0 model named four
-    (`ApplyProfiles` in components/threshold-exporter/app/pkg/config/
-    resolve.go), but its layer 2 is the Rule Pack Baseline, which is
+    (`ApplyProfiles` in
+    components/threshold-exporter/app/pkg/config/resolve.go), but its layer 2
+    is the Rule Pack Baseline, which is
     "embedded in defaults" — the onboarding generator merges it into
     `_defaults.yaml` before this function ever opens the file, so it is not
     separately observable here and was never emitted as a chain entry. The

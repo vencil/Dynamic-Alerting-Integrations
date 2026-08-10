@@ -790,11 +790,11 @@ def main() -> int:
                         help="inject_waveform.py 產出的 JSON 報告路徑（1..N 份）")
     parser.add_argument("--tolerances", required=True,
                         help="容差矩陣 YAML（D5 兩段式：defaults 天花板 + overrides "
-                             "+ carve_outs；schema: docs/schemas/waveform-tolerances"
-                             ".schema.json）")
+                             "+ carve_outs；schema: "
+                             "docs/schemas/waveform-tolerances.schema.json）")
     parser.add_argument("--schema", default=_DEFAULT_SCHEMA,
-                        help="容差矩陣 JSON Schema 路徑（預設 docs/schemas/"
-                             "waveform-tolerances.schema.json）")
+                        help="容差矩陣 JSON Schema 路徑（預設 "
+                             "docs/schemas/waveform-tolerances.schema.json）")
     parser.add_argument("--json", action="store_true", dest="json_output",
                         help="stdout 輸出機器可讀 JSON（R2-4 結構化 baseline）")
     parser.add_argument("--out", help="另將 JSON 報告寫到檔案（write_text_secure）")

@@ -280,8 +280,9 @@ def main(argv: list[str] | None = None) -> int:
             "`make dc-test`, and a missing package does NOT fail the suite — "
             "the affected tests skip themselves, so the container reports a "
             "GREENER result than CI.\n"
-            "Fix: add them to `postCreateCommand` in .devcontainer/"
-            "devcontainer.json, keeping `-c requirements/ci-constraints.txt`.\n"
+            "Fix: add them to `postCreateCommand` in "
+            ".devcontainer/devcontainer.json, keeping "
+            "`-c requirements/ci-constraints.txt`.\n"
             "Note: this gate checks the DECLARATION only — an already-built "
             "container still needs a rebuild for the change to take effect.",
             file=sys.stderr,

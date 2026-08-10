@@ -60,8 +60,9 @@ REGISTRY = REPO_ROOT / "docs" / "assets" / "tool-registry.yaml"
 HUB_HTML = REPO_ROOT / "docs" / "interactive" / "index.html"
 
 # The closed audience vocabulary. Aligned to the governance matrix action
-# roles {PE, TA, SRE, DE, SEC} (docs/internal/monitoring-lifecycle-governance
-# -matrix.md) plus `maintainer` for platform-team-internal tools. Keep this
+# roles {PE, TA, SRE, DE, SEC}
+# (docs/internal/monitoring-lifecycle-governance-matrix.md) plus `maintainer`
+# for platform-team-internal tools. Keep this
 # the SINGLE source of the allowed set; the Hub role-filter buttons are a
 # (deliberate) SUBSET of it.
 ALLOWED_AUDIENCES = {"platform", "tenant", "domain", "sre", "maintainer", "sec"}

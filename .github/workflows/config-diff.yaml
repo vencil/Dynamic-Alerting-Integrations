@@ -48,8 +48,8 @@ jobs:
         id: diff
         run: |
           # `|| true` used to swallow EVERY failure mode here, not just the
-          # expected one. That matters beyond this step: check_image_pin_
-          # capability.py lists `.github/workflows/**` as a deliberately
+          # expected one. That matters beyond this step:
+          # check_image_pin_capability.py lists `.github/workflows/**` as a deliberately
           # non-covered surface, and its stated justification is that "workflow
           # pins fail LOUDLY (a red CI job)". With a blanket `|| true` that
           # premise was false for this workflow — an unpullable image or a

@@ -5,8 +5,8 @@ purpose: |
   metadata, Rule Pack catalog, CI platform choices, deployment-mode
   choices.
 
-  Pre-PR-portal-10 these were inline at the top of cicd-setup-
-  wizard.jsx. Splitting drops ~40 LOC from the orchestrator and
+  Pre-PR-portal-10 these were inline at the top of
+  cicd-setup-wizard.jsx. Splitting drops ~40 LOC from the orchestrator and
   matches the pattern established by operator-setup-wizard
   (PR-portal-4) + the other 2 sibling wizards in this same PR.
 

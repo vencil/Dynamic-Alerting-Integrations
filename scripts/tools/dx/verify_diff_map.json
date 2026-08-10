@@ -712,7 +712,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "8cf4137d79751706508a05798e642aabb26386e499745c116c98eb38ff814c1b",
+ "source_digest": "bbf1e9a9885fcf88c2236279d385949009ed92481d3156d6705175347121d24d",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -975,6 +975,7 @@
   "tests/ops/test_validate_config.py",
   "tests/ops/test_validate_migration.py",
   "tests/ops/test_verify_download.py",
+  "tests/ops/test_wrapped_path_references.py",
   "tests/preview/test_app.py",
   "tests/preview/test_promtool_pin_parity.py",
   "tests/rulepacks/test_platform_rules_extract_sync.py",
@@ -1141,6 +1142,7 @@
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_git_check_lock.py",
    "tests/ops/test_nightly_scan_matrix_drift.py",
+   "tests/ops/test_wrapped_path_references.py",
    "tests/rulepacks/test_vm_alert_parity.py"
   ],
   "README.en.md": [
@@ -1188,7 +1190,8 @@
    "tests/lint/test_check_iac_vibe_rules.py"
   ],
   "components/da-tools/app/VERSION": [
-   "tests/ops/test_ci_path_filter_coverage.py"
+   "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/ops/test_wrapped_path_references.py"
   ],
   "components/da-tools/app/build.sh": [
    "tests/lint/test_check_image_pin_capability.py",
@@ -1215,13 +1218,11 @@
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "components/threshold-exporter": [
-   "tests/ops/test_operator_generate_v2.py"
+   "tests/ops/test_operator_generate_v2.py",
+   "tests/ops/test_wrapped_path_references.py"
   ],
   "components/threshold-exporter/README.md": [
    "tests/ops/test_ci_path_filter_coverage.py"
-  ],
-  "components/threshold-exporter/app": [
-   "tests/lint/test_check_scrape_reachability.py"
   ],
   "components/threshold-exporter/app/collector.go": [
    "tests/lint/test_check_scrape_reachability.py"
@@ -1659,11 +1660,8 @@
    "tests/ops/test_generate_routes_orchestration.py",
    "tests/shared/test_projection_gate_vap.py"
   ],
-  "helm/vector/tests": [
-   "tests/shared/test_helm_chart_log_aggregation.py",
-   "tests/shared/test_vector_projection_vrl.py"
-  ],
   "helm/vector/tests/projection_tests.yaml": [
+   "tests/ops/test_wrapped_path_references.py",
    "tests/shared/test_helm_chart_log_aggregation.py",
    "tests/shared/test_vector_pin_parity.py",
    "tests/shared/test_vector_projection_vrl.py"
@@ -1819,6 +1817,9 @@
   ],
   "scripts/dx/generate_planning_index.py": [
    "tests/dx/test_generate_planning_index.py"
+  ],
+  "scripts/hooks/commit-msg": [
+   "tests/ops/test_wrapped_path_references.py"
   ],
   "scripts/ops": [
    "tests/dx/test_bat_label_integrity.py",
@@ -2201,7 +2202,8 @@
    "tests/lint/test_check_threshold_registry.py"
   ],
   "scripts/tools/ops/_registry_lib.py": [
-   "tests/ops/test_registry_lib.py"
+   "tests/ops/test_registry_lib.py",
+   "tests/ops/test_wrapped_path_references.py"
   ],
   "scripts/tools/ops/alert_correlate.py": [
    "tests/dx/test_coverage_gap_analysis.py"
@@ -2338,7 +2340,8 @@
    "tests/dx/test_dx_json_stdout_contract.py"
   ],
   "tests/e2e": [
-   "tests/lint/test_check_playwright_rtl_drift.py"
+   "tests/lint/test_check_playwright_rtl_drift.py",
+   "tests/ops/test_wrapped_path_references.py"
   ],
   "tests/e2e-bench/aggregate.py": [
    "tests/e2e-bench/test_aggregate.py"
@@ -2446,6 +2449,7 @@
    "tests/lint/test_check_pint.py",
    "tests/lint/test_check_vmalert_coverage.py",
    "tests/ops/test_generate_routes_orchestration.py",
+   "tests/ops/test_wrapped_path_references.py",
    "tests/rulepacks/test_platform_rules_extract_sync.py",
    "tests/rulepacks/test_reference_validation_readme_pointers.py",
    "tests/rulepacks/test_vm_alert_parity.py"
@@ -2457,11 +2461,11 @@
    "tests/rulepacks/test_vm_alert_parity.py"
   ],
   "tests/rulepacks/vm_engine_version": [
+   "tests/ops/test_wrapped_path_references.py",
    "tests/rulepacks/test_vm_backend_parity.py"
   ],
   "tests/shared": [
-   "tests/ops/test_ci_path_filter_coverage.py",
-   "tests/shared/test_lang_detection_guard.py"
+   "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "tests/shared/_go_mutation_pilot.py": [
    "tests/shared/test_go_mutation_pilot.py"
@@ -2500,7 +2504,8 @@
   "tests/shared/test_property_tools.py": [
    "tests/lint/test_check_build_completeness.py",
    "tests/lint/test_check_property_coverage.py",
-   "tests/shared/test_bilingual_help_contract.py"
+   "tests/shared/test_bilingual_help_contract.py",
+   "tests/shared/test_lang_detection_guard.py"
   ],
   "tests/shared/test_reserved_key_py_go_parity.py": [
    "tests/dx/test_sync_schema.py"
