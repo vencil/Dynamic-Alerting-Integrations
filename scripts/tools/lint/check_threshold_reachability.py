@@ -418,20 +418,40 @@ _DEFAULTS_ARTIFACT_SUFFIXES = (".yaml", ".yml")
 # stops covering the tree that grows fastest. Keys are repo-relative POSIX paths.
 _DEFAULTS_ARTIFACT_EXEMPT: dict[str, str] = {}
 
-# Non-vacuity floor. `EMPTY-FACE` catches a face whose `defaults:` is empty; it
-# cannot catch a WALK that returned no files at all, which is what a bad
-# exclusion or a moved tree looks like. Measured 17 at the time of writing; the
-# floor is deliberately below that so ordinary deletions do not trip it, and
-# deliberately above 2 so a regression to the old hardcoded pair does.
+# TWO non-vacuity floors, because there are two ways to end up with nothing to
+# check and they need different remedies. `EMPTY-FACE` catches a face whose
+# `defaults:` is empty; neither floor is about that.
+#
+#   SCAN floor  — the scan itself returned (almost) nothing: a broken reader, a
+#                 moved tree, a pathspec that stopped matching. Remedy: repair
+#                 the scan.
+#   READ floor  — the scan is fine but the exemption table consumed it. Remedy:
+#                 shorten the exemption list.
+#
+# ⛔ ONE floor is not enough, and this is a correction to the previous round.
+# Moving the single floor to the scan side fixed a misleading message ("repair
+# the scan or restore the file(s)" when the real cause was over-exemption) and
+# in doing so REMOVED the only tripwire on the other cause: measured, with all
+# 17 artifacts exempted the previous version raised nothing and read zero faces,
+# and the test written alongside it asserted that silence as correct — the fix
+# pinned the hole as a contract (blind review, round 5). A FIX can remove
+# incidental safety; the repair is both floors, not a different single one.
+#
+# Measured 17 artifacts at the time of writing. Both floors sit below that so
+# ordinary deletions do not trip them, and above 2 so a regression to the old
+# hardcoded pair does.
 _DEFAULTS_ARTIFACT_FLOOR = 10
+_DEFAULTS_ARTIFACT_READ_FLOOR = 10
 
 # Label prefix that tells the two face classes apart. Generators must be
 # non-empty; artifacts may legitimately be (see the EMPTY-FACE branch).
 # ⚠️ A STRING is a weak discriminator and the hole is on the generator side —
 # a generator whose label started with this prefix would be silently treated as
-# an artifact, and  cannot see it because the count does
-# not change. Zero instances today (all four labels are hardcoded literals).
-# Typed faces tracked in #1393.
+# an artifact, and `len(generators) == 4` (the assertion in
+# tests/lint/test_check_threshold_reachability.py) cannot see it because that
+# count does not change: the four old literals are still there and the new one
+# is tallied as an artifact. Zero instances today (all four labels are hardcoded
+# literals). Typed faces tracked in #1393.
 _ARTIFACT_FACE_PREFIX = "artifact ("
 
 
@@ -451,8 +471,21 @@ def _tracked_defaults_artifacts() -> list[str]:
     """
     import subprocess  # local: only this face shells out
 
+    # ⛔ NO pathspec. `git ls-files -- "*_defaults*"` is case-SENSITIVE — measured
+    # under both `core.ignorecase` values, `*_DEFAULTS*` returns 0 — so pairing it
+    # with a case-insensitive predicate delivered half a fix: `_defaults.YAML`
+    # got through (stem matches) but `_Defaults.yaml` and `_DEFAULTS.yml` never
+    # reached the predicate at all. Two predicates with the narrower one FIRST is
+    # the shape; the guard's own case-insensitivity test could not see it because
+    # it tests the predicate, and the hook's `(?i:)` filter could not see it
+    # because it tests the trigger. The scan had neither (blind review, round 5,
+    # two reviewers independently).
+    #
+    # Listing the whole index and filtering in Python makes `_is_defaults_artifact`
+    # the ONLY predicate. Measured cost: 2292 paths, 0.13s for the git call,
+    # 0.5ms for the filter — the pathspec was buying nothing.
     out = subprocess.run(
-        ["git", "-C", str(PROJECT_ROOT), "ls-files", "-z", "--", "*_defaults*"],
+        ["git", "-C", str(PROJECT_ROOT), "ls-files", "-z"],
         capture_output=True, check=True, timeout=60)
     return sorted(
         rel for rel in out.stdout.decode("utf-8", "replace").split("\0")
@@ -488,12 +521,21 @@ def _defaults_section(text: str) -> set[str]:
 def _defaults_faces() -> dict[str, set[str]]:
     """{face label: `defaults:` key names} for every producer of that section.
 
-    ⛔ Every producer, and the list is the point. Five of these six were already
-    correct when the other was not, so a gate that read "the" defaults file
-    would have been green on any one of them — the same one-face blindness the
-    UNSETTABLE check above had to grow out of. The GENERATED faces are rendered
-    here rather than read off disk because a `da-tools init` customer's
-    `_defaults.yaml` exists only in their repo; the generator IS the artifact.
+    TWO CLASSES, and the split is not cosmetic: the four GENERATORS below are
+    enumerated (they have no artifact on disk — a `da-tools init` customer's
+    `_defaults.yaml` exists only in their repo, so the generator IS the surface),
+    while the ARTIFACTS are DERIVED (`_defaults_artifacts`, and see the note at
+    the top of this section for why enumerating those was wrong).
+
+    ⛔ "Five of these six were already correct when the other was not" stood
+    here and was wrong twice over: the face list has not been six since the
+    artifact half became derived, AND two of the original six were defective,
+    not one — `init` shipped 16 misplaced keys and the `onboard` probe shipped
+    1 (`4fd49561:scripts/tools/ops/onboard_platform.py:607` wrote
+    `f"{key}_critical"` straight into `defaults:`, with a test asserting it).
+    Understating it to one weakened the very argument it was making for
+    per-face checking, and a reader who counted six faces would have gone
+    looking for the two this round deliberately stopped hardcoding.
 
     ⛔ `onboard` is a PROBE, not a render, and it is the face this list would
     most easily have been written without. `da-tools onboard` reverse-engineers
@@ -547,7 +589,17 @@ def _defaults_faces() -> dict[str, set[str]]:
             "shape the hardcoded-path version of this face shipped with. Repair "
             "the scan or restore the file(s); do not lower the floor. (Exemptions "
             f"are NOT counted here — {len(_DEFAULTS_ARTIFACT_EXEMPT)} exempted.)")
-    for path in _defaults_artifacts():
+    to_read = _defaults_artifacts()
+    if len(to_read) < _DEFAULTS_ARTIFACT_READ_FLOOR:
+        raise RuntimeError(
+            f"the scan found {len(scanned)} tracked file(s) but only {len(to_read)} "
+            f"survive the exemption table, below the read floor of "
+            f"{_DEFAULTS_ARTIFACT_READ_FLOOR}. The scan is FINE — "
+            f"{len(_DEFAULTS_ARTIFACT_EXEMPT)} exemption(s) consumed it, and zero "
+            "faces pass the placement check below perfectly. SHORTEN THE EXEMPTION "
+            "LIST; repairing the scan is not the remedy here, and neither is "
+            "lowering the floor.")
+    for path in to_read:
         rel = path.relative_to(PROJECT_ROOT).as_posix()
         # ⛔ The reader names the file. `read_text` raises with the path attached,
         # but `yaml.safe_load` does not — its error says `<unicode string>`, and
@@ -690,9 +742,14 @@ def run_check(
             )
 
     # ── Defaults-tier placement (#1218 / TRK-344) ────────────────────────────
-    # Per FACE, not one global count: a single "no _critical anywhere" assertion
-    # is satisfied by four clean faces while the fifth ships sixteen, which is
-    # how this survived a year.
+    # Per FACE, not one global count. Measured on the pre-fix tree: of the six
+    # faces that existed then, TWO were defective — `init` shipped 16 misplaced
+    # keys and the `onboard` probe shipped 1 — so a single "no _critical
+    # anywhere" assertion would have been satisfied by neither, but a gate that
+    # read any ONE face could have been green while both shipped. (An earlier
+    # version of this comment said "four clean faces while the fifth ships
+    # sixteen", which was true of four of them and understated the evidence for
+    # the design it justifies.)
     for face, keys in sorted(defaults_faces.items()):
         # ⛔ The vacuity rule applies to GENERATORS only, and the asymmetry is
         # measured, not assumed: every generator ships a non-empty `defaults:`,

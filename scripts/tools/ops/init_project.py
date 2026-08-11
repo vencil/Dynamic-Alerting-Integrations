@@ -581,14 +581,22 @@ def _critical_prefill_note(critical: dict) -> str:
         directions and both were one merge away from being false. Draft 1
         promised "EVERY write of this file is rejected" (a stop the customer's
         own pipeline does not perform). Draft 2 corrected it by saying that
-        pipeline "fails before it validates anything" — true today only because
-        the generated invocations pass `--ci`, which `validate_config.py` does
-        not accept (#1380); the moment that lands, the sentence steers the
-        operator away from a gate that works. What survives both regimes is the
-        invariant: bare `validate-config` WARNs and exits 0 on this input
-        (measured, `--strict` included), so its verdict never establishes that a
-        dangling `_critical` is gone. A customer-facing file must carry the
-        invariant, not the current state of a neighbouring defect.
+        pipeline "fails before it validates anything" — true only while the
+        generated invocations passed `--ci`, which `validate_config.py` does not
+        accept (#1380).
+
+        ⛔ And that is no longer even a hypothetical: #1347 merged as PR #1390
+        (`b016f77e`) WHILE THIS PR WAS IN REVIEW, removing `--ci` from all three
+        generated invocations. Draft 2 would now be describing a defect that no
+        longer exists, in a file customers keep. The reasoning paragraph itself
+        went stale the same way the sentence would have — which is the strongest
+        argument available for the rule it states.
+
+        What survives every regime is the invariant: bare `validate-config`
+        WARNs and exits 0 on this input (measured, `--strict` included), so its
+        verdict never establishes that a dangling `_critical` is gone. A
+        customer-facing file must carry the invariant, not the current state of
+        a neighbouring defect.
 
     ⛔ It also no longer says the values are "at the platform's suggested
     starting values" — three lines under a paragraph that (correctly) states

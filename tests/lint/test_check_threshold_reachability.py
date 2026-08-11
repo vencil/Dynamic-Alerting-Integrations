@@ -685,18 +685,39 @@ def test_an_empty_artifact_scan_is_an_error_not_a_pass(monkeypatch):
         gate.run_check(demand=set(), supply=set(), deferred=set(), known_unwired={})
 
 
-def test_exemptions_do_not_count_against_the_floor(monkeypatch):
-    """⛔ The floor's remedy text forbids the only correct action when exemptions
-    are subtracted first: "repair the scan or restore the file(s)" is wrong advice
-    for "you exempted too many". So the count is taken pre-subtraction — exempting
-    every artifact must NOT trip the floor (it changes what is read, not whether
-    the scan works)."""
-    everything = {rel: "x" * 40 for rel in gate._tracked_defaults_artifacts()}
-    monkeypatch.setattr(gate, "_DEFAULTS_ARTIFACT_EXEMPT", everything)
-    assert gate._defaults_artifacts() == []
+def test_the_two_floors_blame_the_right_cause(monkeypatch):
+    """⛔ Two ways to end up with nothing to check, two remedies — and the
+    previous version had only one floor, on the scan side.
+
+    That was itself a fix: with the single floor counted AFTER exemptions, a long
+    exemption list tripped it and the message said "repair the scan or restore
+    the file(s)", forbidding the only correct action. Moving it removed the
+    tripwire on over-exemption entirely — measured: 17/17 exempted raised nothing
+    and read ZERO faces, and the test written alongside asserted that silence was
+    correct. **The fix pinned the hole as a contract** (blind review, round 5).
+
+    So: a few exemptions must NOT trip the scan floor (the scan is fine), and
+    exempting everything MUST trip the read floor with a message naming the
+    exemption list.
+    """
+    scanned = gate._tracked_defaults_artifacts()
+    assert len(scanned) >= gate._DEFAULTS_ARTIFACT_FLOOR, scanned
+
+    # a couple of exemptions: scan floor must stay quiet, read floor too
+    monkeypatch.setattr(gate, "_DEFAULTS_ARTIFACT_EXEMPT",
+                        {rel: "x" * 40 for rel in scanned[:2]})
     result = gate.run_check(demand=set(), supply=set(), deferred=set(),
-                            known_unwired={})          # no RuntimeError
-    assert not [e for e in result["errors"] if "below the floor" in e]
+                            known_unwired={})
+    assert not [e for e in result["errors"] if "floor" in e], result
+
+    # everything exempted: the READ floor must fire, and must blame exemptions
+    monkeypatch.setattr(gate, "_DEFAULTS_ARTIFACT_EXEMPT",
+                        {rel: "x" * 40 for rel in scanned})
+    assert gate._defaults_artifacts() == []
+    with pytest.raises(RuntimeError, match="SHORTEN THE EXEMPTION LIST") as exc:
+        gate.run_check(demand=set(), supply=set(), deferred=set(), known_unwired={})
+    # …and must NOT send the reader to repair a scan that is working
+    assert "The scan is FINE" in str(exc.value)
 
 
 def test_the_scan_is_tracked_scope_not_a_filesystem_walk():
@@ -755,6 +776,35 @@ def test_the_artifact_predicate_matches_the_loader_not_the_sibling_lint():
         assert gate._is_defaults_artifact(name), name
     for name in ("_defaultsx.txt", "defaults.yaml", "_routing_profiles.yaml"):
         assert not gate._is_defaults_artifact(name), name
+
+
+def test_the_scan_hands_the_predicate_every_candidate_not_a_narrower_set():
+    """⛔ The predicate being case-insensitive buys nothing if what FEEDS it is
+    not. `git ls-files -- "*_defaults*"` is case-sensitive (measured under both
+    `core.ignorecase` values: `*_DEFAULTS*` → 0), so pairing the two delivered
+    half a fix — `_defaults.YAML` got through on its lowercase stem while
+    `_Defaults.yaml` and `_DEFAULTS.yml` never reached the predicate at all.
+
+    Neither existing test could see it: one exercises the predicate, the other
+    the hook's `(?i:)` trigger filter. **The scan was the untested link.** So
+    this asserts the scan lists the whole index and leaves the narrowing to
+    `_is_defaults_artifact` — i.e. that there is exactly ONE predicate.
+    """
+    import subprocess
+
+    listed = subprocess.run(
+        ["git", "-C", str(gate.PROJECT_ROOT), "ls-files", "-z"],
+        capture_output=True, check=True, timeout=60).stdout
+    everything = [p for p in listed.decode("utf-8", "replace").split("\0") if p]
+    assert len(everything) > 1000, len(everything)   # the whole index, not a slice
+
+    expected = sorted(
+        p for p in everything
+        if gate._is_defaults_artifact(p.rsplit("/", 1)[-1])
+        and (gate.PROJECT_ROOT / p).is_file())
+    assert gate._tracked_defaults_artifacts() == expected, (
+        "the scan is narrowing before the predicate runs — any filter applied "
+        "there is a second, unaudited predicate")
 
 
 def test_every_exempted_artifact_carries_a_reason_and_still_exists():
