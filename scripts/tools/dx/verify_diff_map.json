@@ -716,7 +716,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "deebde6e821afd1130a897614ad65ab165ae1491a7788e180fe577a65aa5e5df",
+ "source_digest": "41c185928b526571afcc4186ddc64d7a9ac34c42399ee80a223e37ee5a125609",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2475,10 +2475,12 @@
   ],
   "tests/ops/test_generated_ci_artifacts.py": [
    "tests/ops/test_init_project.py",
+   "tests/ops/test_nightly_scan_matrix_drift.py",
    "tests/shared/test_actionlint_pin_parity.py"
   ],
   "tests/ops/test_init_project.py": [
-   "tests/ops/test_generated_ci_artifacts.py"
+   "tests/ops/test_generated_ci_artifacts.py",
+   "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   "tests/ops/test_nightly_scan_matrix_drift.py": [
    "tests/ops/test_generated_ci_artifacts.py",

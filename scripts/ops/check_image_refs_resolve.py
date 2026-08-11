@@ -165,13 +165,15 @@ def delivered_refs(root: Path) -> set[str]:
     # MEASURED, at the two ends the fix has to cover:
     #   * load a COPY from a tmp dir and `sys.path` gains FOUR tmp entries at the
     #     FRONT, permanently;
-    #   * one load caches NINE first-party modules under generic names
-    #     (`_lib_python`, `_lib_compat`, `_registry_lib`, …). `root` is caller
-    #     supplied (`--root`), so a tree shipping its own `_lib_python` beside
-    #     `init_project.py` becomes the process-wide `_lib_python`. ⛔ Restoring
-    #     the PATH does not undo this — module caching is precisely the mechanism
-    #     that outlives a path restore — which is why the rollback below is a set
-    #     difference over `sys.modules` and not a `pop()` of our own key.
+    #   * one load caches 136 modules, of which NINE are first-party under generic
+    #     names (`_lib_python`, `_lib_compat`, `_registry_lib`, …). `root` is
+    #     caller supplied (`--root`), so a tree shipping its own `_lib_python`
+    #     beside `init_project.py` becomes the process-wide `_lib_python`.
+    #     ⛔ Restoring the PATH does not undo this — module caching is precisely
+    #     the mechanism that outlives a path restore — which is why the rollback
+    #     below also clears modules, rather than only popping our own key. Which
+    #     modules it clears is the subject of the ⛔ note on that loop: the nine,
+    #     not the hundred and thirty-six.
     #
     # ⚠️ HONEST BOUNDARY, because an earlier version of this comment overstated it
     # and three copies of the overstatement had to be removed. The concrete harm
@@ -192,11 +194,38 @@ def delivered_refs(root: Path) -> set[str]:
         spec.loader.exec_module(mod)
     finally:
         sys.path[:] = saved_path
-        # Derived, not enumerated: whatever this load added — including our own
-        # loader key, and including names a future pin source starts importing —
-        # goes back out. Modules already present are untouched.
+        # Derived over PROVENANCE, not over "everything new". ⛔ The first version
+        # of this rollback deleted every module added during exec, and the comment
+        # justified it with "one load caches nine first-party modules" — that count
+        # is right and the set is not: MEASURED, the difference is 136 entries, of
+        # which 9 are first-party. The other 127 are stdlib and site-packages
+        # (`typing`, `ssl`, `socket`, `hashlib`, `ast`, `attr.*`, `jsonschema`, the
+        # `rpds` C extension …). Deleting those does not unload them — it
+        # guarantees the NEXT import re-executes the module and yields a SECOND
+        # object, after which `except jsonschema.ValidationError` stops catching
+        # errors raised from the first copy and `isinstance` against attrs classes
+        # fails. It also made every repeat call re-import the world.
+        #
+        # The threat this rollback exists for is stated one paragraph up: a tree
+        # under caller-supplied `root` shipping its own `_lib_python`. So the
+        # deletion is scoped to modules whose file lives under `root` — the same
+        # derivation, aimed at the thing the comment actually describes.
+        _root = root.resolve()
         for _name in set(sys.modules) - saved_modules:
-            del sys.modules[_name]
+            _file = getattr(sys.modules.get(_name), "__file__", None)
+            if not _file:
+                continue  # namespace packages / builtins: no provenance to judge
+            try:
+                _from_root = Path(_file).resolve().is_relative_to(_root)
+            except (OSError, ValueError):  # unresolvable path on Windows
+                _from_root = False
+            if _from_root:
+                # ⚠️ del inside a finally: a raising __del__ would otherwise both
+                # abort the rollback halfway and replace the in-flight exception.
+                try:
+                    del sys.modules[_name]
+                except Exception:  # noqa: BLE001 - hygiene must not mask the real error
+                    pass
 
     # Member-level emptiness, not just container-level: `{""}` is a truthy set,
     # so a single blanked pin would sail past a `not apply_refs` test and reach
@@ -205,11 +234,14 @@ def delivered_refs(root: Path) -> set[str]:
     # ⚠️ The first version of this comment said flatly "this is not a fail-open,
     # the resolver fails and the gate exits 1". That is true only WHERE A RESOLVER
     # IS INSTALLED: `main()` below prints `::warning::` and returns 0 when neither
-    # skopeo nor docker is present. CI installs skopeo (image-ref-resolve.yaml), so
-    # the gate itself is safe; a local `--scope delivered` run on a box with
-    # neither exits 0 over a blanked pin. So: where a resolver exists this check
-    # buys a message that names the pin table instead of a registry error about an
-    # empty string, and where one does not it is the only thing that fires at all.
+    # skopeo nor docker is present. CI installs skopeo (image-ref-resolve.yaml,
+    # pinned by test_the_delivered_scope_step_has_a_resolver_installed), so the
+    # gate itself is safe. ⚠️ Tense matters here: WITHOUT this check, a local
+    # `--scope delivered` run on a box with neither WOULD exit 0 over a blanked
+    # pin. With it, that run exits 1 — the SystemExit below fires before `main()`
+    # ever consults `_resolver()`. So: where a resolver exists this check buys a
+    # message that names the pin table instead of a registry error about an empty
+    # string, and where one does not it is the only thing that fires at all.
     table = getattr(mod, "_GITLAB_APPLY_IMAGES", {})
     # ⚠️ Count non-empty VALUES, not the deduped set: two entries may legitimately
     # pin the same image, and comparing `len(set)` against the entry count would
