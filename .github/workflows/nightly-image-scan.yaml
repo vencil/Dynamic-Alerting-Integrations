@@ -28,6 +28,20 @@ name: Nightly Image CVE Scan
 # real-build scan + Go CI / CodeQL govulncheck). The other 6 images build real, so
 # their full image surface is scanned.
 #
+# THREE buckets, three tracking issues, and the split is about WHO ACTS, not about
+# where the Dockerfile lives:
+#   * scan             — images WE build. Lever: rebuild / bump a pinned dep.
+#   * scan-thirdparty  — images WE deploy but do not build. Lever: bump the pin
+#                        we own, or swap the image.
+#   * scan-delivered   — images a CUSTOMER runs because `da-tools init` wrote the
+#                        ref into THEIR repo. ⛔ We do not own the deployment;
+#                        bumping the constant here only changes what the NEXT
+#                        generated project gets. Merging this into the
+#                        third-party bucket would put two incompatible
+#                        remediation stories under one heading, which is the
+#                        #1243 / #1058 failure (advice that cannot work teaches
+#                        the reader to ignore the issue) in a new place.
+#
 # Third-party images our helm charts AND k8s/ manifests pull (vector, victoria-logs,
 # envoy, oauth2-proxy, prom-label-proxy, python, mariadb, mysqld-exporter, grafana,
 # prometheus, alertmanager, kube-state-metrics, prometheus-config-reloader, alpine/git,
@@ -291,9 +305,134 @@ jobs:
           path: frag-${{ matrix.name }}.txt
           retention-days: 14
 
+  scan-delivered:
+    name: scan ${{ matrix.name }} (customer-delivered)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }} # mirror for the `if` guard below
+    strategy:
+      fail-fast: false # scan every image so one pull failure doesn't mask the rest
+      matrix:
+        # Third-party images `da-tools init` writes into a CUSTOMER's repo (#1337
+        # follow-up). Every ref below lands in a file the customer EXECUTES: the
+        # GitLab apply stage carries `environment: name: production` plus
+        # cluster-write credentials, and the git-sync patch is applied straight
+        # into their cluster.
+        #
+        # These were in NO automated view of a registry before this job. Not by
+        # decision — by three independent misses, each of which reads as
+        # deliberate scoping until you check it against this question:
+        #   * Renovate: all three customManagers require `@sha256:` in the match,
+        #     and none of their managerFilePatterns reaches `scripts/**`.
+        #   * scan-thirdparty above: its matrix is pinned by SET EQUALITY to the
+        #     helm/k8s extractor, which globs `helm/*/values*.yaml` + `k8s/**`.
+        #   * The existing offline pin guard (TestCustomerDeliveredImagePins in the
+        #     init-project suite) says so in its own docstring: it checks FLOATING
+        #     vs CONCRETE, never currency, never existence.
+        #
+        # ⛔ TAG-ONLY refs, no digest, and that is NOT an oversight to "fix" here.
+        # The pins are tag-only at the source because the customer's repo has no
+        # updater of ours to re-resolve a digest; a digest pinned by us would
+        # freeze their pipeline on a layer only we can unfreeze. Adding a digest
+        # to the matrix alone would make it disagree with the pin table and red
+        # the drift guard — the matrix is a mirror of that table, not a place to
+        # improve it.
+        #
+        # ⭐ WHY THIS ALSO BUYS "does the ref still exist?" for free — verified in
+        # the two scripts below, not assumed. `summarize_trivy_cve.sh` is
+        # fail-LOUD (`jq empty` then `jq -e 'has("Results")'`, under `set -e`), so
+        # an absent or schema-broken Trivy JSON aborts the step instead of
+        # degrading to COUNT=0. No fragment is written, no artifact is uploaded,
+        # and `file_cve_report.sh` — which is handed an EXPECTED count — computes
+        # `missing = EXPECTED - present > 0`, which forces `problem=1`, a
+        # "Scan degraded" banner and a notifying comment. A ref that 404s
+        # therefore surfaces as DEGRADED, never as a silent clean.
+        # ⚠️ Honest boundary: that chain covers "Trivy could not produce a usable
+        # report". It would not cover a hypothetical Trivy that emitted a
+        # well-formed `Results: []` for an image it never pulled.
+        #
+        # Each entry names its source-of-truth constant + line. The drift guard
+        # in the nightly-scan matrix-drift module IMPORTS that table and asserts
+        # set equality, so these comments are navigation, not the contract.
+        # ⛔ CONSTANT + BASENAME only — never a `scripts/…py` or `tests/…py`
+        # path, in ANY comment in this file, however purely navigational. The
+        # guards' helper-script discovery is a plain regex over the whole file
+        # text, so such a path is read as a nightly HELPER SCRIPT and pulled
+        # into their scan face. Spelling the pin table's full path here grew
+        # that face from 2 files to 3 — and the third was init_project.py, a
+        # 70KB general-purpose generator that is not a nightly helper at all.
+        # The pin table lives in the tools/ops tree; the matrix-drift module
+        # holds the one literal path, cross-checked against the checker.
+        include:
+          - name: delivered-kubectl # GITLAB_KUBECTL_IMAGE (init_project.py:190)
+            ref: "alpine/k8s:1.34.9"
+          - name: delivered-helm # GITLAB_HELM_IMAGE (init_project.py:204)
+            ref: "alpine/helm:3.21.3"
+          - name: delivered-argocd # GITLAB_ARGOCD_IMAGE (init_project.py:214)
+            ref: "quay.io/argoproj/argocd:v3.5.0"
+          # Not routed through _GITLAB_APPLY_IMAGES — this one is the git-sync
+          # sidecar + init container in the generated kustomize gitops overlay,
+          # emitted only on the `config_source=git` path.
+          - name: delivered-git-sync # GIT_SYNC_IMAGE (init_project.py:223)
+            ref: "registry.k8s.io/git-sync/git-sync:v4.7.1"
+          # ⛔ The PUBLISHED tool image, and the only delivered ref that reaches
+          # 100% of generated projects — measured across all 18 option
+          # combinations, while no single project carries more than two of the
+          # four above and three combinations carry none. It is also the only one
+          # that runs on developer workstations (`.pre-commit-config.da.yaml`
+          # emits it as a `language: docker_image` entry), and the only one where
+          # OUR lever reaches EXISTING customers, because the tag is mutable and
+          # we move it.
+          # ⚠️ DISTINCT FROM the `da-tools` leg in the self-built `scan` bucket:
+          # that one BUILDS from current main with stubbed Go binaries, so its
+          # green is a statement about a fresh rebuild. This one pulls the tag a
+          # customer actually gets. Same name, different artifact, different
+          # question — which is why both legs exist.
+          - name: delivered-da-tools # DA_TOOLS_IMAGE (init_project.py)
+            ref: "ghcr.io/vencil/da-tools:latest"
+    steps:
+      # Authenticated Docker Hub pulls (rate-limit headroom); guarded no-op without
+      # creds. Two of the five refs are Docker Hub (alpine/k8s, alpine/helm).
+      - name: Docker Hub login (no-op without creds)
+        if: ${{ env.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: actions/checkout@v6 # for scripts/ops/summarize_trivy_cve.sh
+
+      # SAME contract as the other two scan jobs (CRITICAL,HIGH + ignore-unfixed,
+      # exit-code 0 — capture, don't gate). No trivyignores: the waiver file that
+      # exists is recipe-preview's bundled promtool, which has nothing to do with
+      # these.
+      - name: Trivy scan (JSON)
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ${{ matrix.ref }}
+          format: json
+          output: trivy-${{ matrix.name }}.json
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: 0
+
+      - name: Summarize findings
+        run: bash scripts/ops/summarize_trivy_cve.sh '${{ matrix.name }}'
+
+      # `dl-` prefix: a THIRD artifact namespace, disjoint from `sb-` and `tp-`,
+      # so the report job's three download patterns cannot cross-match.
+      - name: Upload fragment
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cve-frag-dl-${{ matrix.name }}
+          path: frag-${{ matrix.name }}.txt
+          retention-days: 14
+
   report:
     name: aggregate + alert
-    needs: [scan, scan-thirdparty]
+    needs: [scan, scan-thirdparty, scan-delivered]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -319,6 +458,17 @@ jobs:
           path: frags-tp
           merge-multiple: true
 
+      # Third dir, third issue. Deliberately NOT merged into frags-tp: the two
+      # buckets share a Trivy contract but nothing else — see the WHO ACTS note
+      # in the header. Mixing them would put "bump the pin we own" and "we cannot
+      # reach the deployment at all" under one remediation sentence.
+      - name: Download customer-delivered fragments
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cve-frag-dl-*
+          path: frags-dl
+          merge-multiple: true
+
       - name: Aggregate + maybe file the tracking issues
         env:
           GH_TOKEN: ${{ github.token }}
@@ -329,6 +479,10 @@ jobs:
         run: |
           set -euo pipefail
           rc=0
+          # ⚠️ The remediation prose passed to file_cve_report.sh is a
+          # double-quoted bash argument, so a backtick or `$(` in it is COMMAND
+          # SUBSTITUTION, not text (#1355 — tracked and fixed on its own branch;
+          # this bucket's new prose below deliberately contains neither).
           # Self-built (7) — keep this signal clean. ⚠️ It feeds the release.yaml
           # Trivy gate for FIVE of the seven; the two chart-shipped ones
           # (federation-audit-sidecar / vector-projection-gate) are never
@@ -363,6 +517,29 @@ jobs:
             "🛡️ Nightly image scan — third-party upstream image CVEs on main" \
             15 "third-party upstream image" \
             "triage each image before assuming it is unfixable — #1243 cleared 58 of 120 this way. Four levers, in the order worth checking: (1) a DIGEST-only refresh, for images whose version tag is mutable and gets re-pushed from a fresh base (alpine/git rebuilds every Sunday); (2) a patch tag published AFTER Renovate's last weekly run — Renovate runs Mondays at 06:17 UTC, so anything released later that day waits nearly a full week (grafana 12.4.6 was built 8 hours after that run); (3) the same release published to a registry we do not pin (prom-label-proxy v0.14.0 shipped to Docker Hub, never to quay); (4) replacing a release-dormant image with a maintained equivalent (configmap-reload, last released 2025-04-09, -> prometheus-config-reloader). What is usually NOT the lever: a gated major on the Renovate Dashboard (#929) — verify it actually carries the fix first. What is left after those four splits three ways, and the split matters for the next triage: (a) FIXED ON MAIN, UNRELEASED — the project already bumped the dependency but has cut no release (mysqld-exporter, alertmanager); (b) NO FIX EXISTS ANYWHERE YET — the upstream dependency's own fix is newer than every release of the image, so no version of it can carry the fix (grafana's kin-openapi CRITICAL); (c) A MAJOR WOULD NOT HELP EITHER — the finding comes from a component the next major ships identically (mariadb's 15 findings are all a pre-compiled gosu binary that 12.x pins to the same version). Only (a) is a waiting game." || rc=1
+          # Customer-delivered (4) — its own issue BECAUSE THE LEVER IS DIFFERENT.
+          # The other two buckets end in an action we can merge; this one mostly
+          # does not, because the ref is already frozen in someone else's repo.
+          # Folding it into the third-party bucket would put "bump the pin we own"
+          # next to "we cannot reach the deployment at all" under one remediation
+          # sentence, and the reader would apply the wrong half — the same
+          # wrong-advice failure #1243 and #1058 each had to rewrite this file for.
+          # (This prose deliberately contains no backtick and no `$(` — see the
+          # ⚠️ note above the self-built call.)
+          # Overrides the shared default, which names two causes that cannot occur
+          # in this bucket: it builds nothing, and a bad ref here is not "fix it
+          # directly" — that is the whole reason this bucket is separate.
+          # ⛔ Assigned on its own line, NOT as a `VAR=… bash …` prefix: the prefix
+          # form moves the script name off the position the call-site parser
+          # recognises, and the conservation guard reds with "named 3x, 2 call
+          # sites recognised". The fix is to keep the call line in the shape the
+          # parser reads, not to register an exemption for it.
+          export FAILURE_CAUSE_NOTE="A leg that did not report means the ref could not be pulled or scanned: either the tag is gone or was retagged away, or the registry refused us (the Docker Hub refs are pulled anonymously, so a shared-runner rate limit looks identical here — check the leg log before treating it as a yank). Nothing was built, so there is no build break to look for."
+          bash scripts/ops/file_cve_report.sh frags-dl \
+            nightly-cve-delivered \
+            "🛡️ Nightly image scan — customer-delivered image CVEs on main" \
+            5 "customer-delivered image" \
+            "the lever here is DIFFERENT from the other two buckets, and reaching for theirs wastes the triage: we do not deploy these. da-tools init writes them into the CUSTOMER's repo, where they are frozen at generation time — so bumping the constant changes what the NEXT generated project gets, and nothing else. Three separate actions, in this order. (1) BUMP THE PIN so new projects start clean. The pins are version TAGS, not digests, on purpose: the customer has no updater of ours to re-resolve a digest, and an unmaintained digest inhibits security updates — that is a decision, not an omission to fix here. (2) ASK WHETHER THE TAG IS MUTABLE BEFORE ASSUMING ANYONE MUST ACT. alpine/k8s and alpine/helm come from the same publisher whose alpine/git the third-party bucket documents as re-pushed weekly from a fresh apk add, so an upstream rebuild of the SAME tag reaches every existing customer on their next pipeline run with no release from us — verify that per image rather than assuming it, and note the other two do not behave that way (registry.k8s.io publishes only exact patch tags for git-sync, and quay's argocd tags are release artifacts). (3) FOR EXISTING CUSTOMERS, A BUMP IS NOT DELIVERY. It is a communication task: they re-run the init tool or edit the ref themselves. ⛔ HONEST SCOPE, and it is narrower than the other two buckets: this measures the five refs WE WOULD HAND OUT TODAY, not any customer's actual posture. The generated GitLab pipeline emits ONE of DA_KUBECTL_IMAGE / DA_HELM_IMAGE / DA_ARGOCD_IMAGE — whichever the chosen --deploy selects, never all three — as an OVERRIDABLE CI variable, plus DA_TOOLS_IMAGE which is overridable in the same block AND settable at generation time via --da-tools-image; we have no telemetry on which version a customer generated from or overrode to, and the git-sync ref only reaches them at all on the config_source=git path. A clean run here means OUR DEFAULT is clean; it does not mean anyone's pipeline is. ⛔ IT IS A UNION, NOT A CUSTOMER, and the distribution is uneven: measured across the full 18-combination option matrix by generating each tree and parsing it, a single generated project carries between ONE and THREE of these five. Only DA_TOOLS_IMAGE is in all 18 — the three third-party apply images are one-of-three by deploy method, and git-sync only exists on the config_source=git path. So a clean run means every ref we could hand out is clean; it is not a per-customer statement, and the count a given customer is exposed to is smaller than five. (Before the tool image was added, three combinations carried NONE of the watched refs at all.) ⚠️ Finally, do not read this bucket as replacing the offline pin guard in the init-project suite: that one checks floating-vs-concrete SHAPE and says so in its own docstring — it stays green on a perfectly concrete but two-year-stale tag. This bucket is the EXISTENCE-AND-CVE half — the half that needs a registry round-trip: it pulls each ref and scans it, so a ref that has been deleted or retagged away shows up as a degraded run, and a ref that grows a CRITICAL shows up as a finding. ⚠️ BUT DO NOT READ THE EXISTENCE HALF AS AN ALERT — measured, not assumed. The comment that notifies fires only when the missing count INCREASES, so a vanished ref notifies on the transition night and then never again while it stays gone; the issue title keeps saying "1 unscanned" and nothing re-raises it. And the same wire carries the most common transient failure on these runners: two of the five refs are Docker Hub, pulled anonymously, so a shared-IP rate limit produces byte-identical wording to a yank. The authoritative existence check is check_image_refs_resolve.py --scope delivered, and it lives in a PR-triggered workflow with no schedule, so nothing re-asserts existence nightly. Treat a degraded delivered run as "go look", not as "we will be told again". ⛔ CURRENCY IS NOT MEASURED BY ANYTHING, HERE OR ANYWHERE. Nothing in this repo compares these five pins against what the upstream has published since, so a two-year-old tag that still exists and whose findings are all unfixed (this scan passes ignore-unfixed) is green in this bucket AND green in the offline pin guard. Answering it needs a per-registry tag-enumeration call, which is not built and is not costed — quay.io and registry.k8s.io have not been checked for a usable list API. Until then, staleness is a human review item, not an alert." || rc=1
           exit $rc
 
       # A cron nobody watches degrades into background noise once it is red for
@@ -373,4 +550,4 @@ jobs:
       - name: Explain a likely failure cause
         if: ${{ failure() }}
         run: |
-          echo "::error title=Nightly CVE report failed::The scans may well have SUCCEEDED — this job is the alerting step, so a failure here means findings were computed but the tracking issue was NOT updated. Most likely causes: (1) a GitHub API validation error (label description >100 chars, issue title >256) — see the 422 in the step log; (2) the issues:write permission or GH_TOKEN scope changed; (3) the 'nightly-cve' / 'nightly-cve-thirdparty' label was deleted. Findings are still in the step summary above and in the cve-frag-* artifacts."
+          echo "::error title=Nightly CVE report failed::The scans may well have SUCCEEDED — this job is the alerting step, so a failure here means findings were computed but the tracking issue was NOT updated. Most likely causes: (1) a GitHub API validation error (label description >100 chars, issue title >256) — see the 422 in the step log; (2) the issues:write permission or GH_TOKEN scope changed; (3) one of the tracking labels — 'nightly-cve', 'nightly-cve-thirdparty', 'nightly-cve-delivered' — was deleted; in that case the reporter still DELIVERS the alert (unlabelled, title-prefix dedup) and then exits 1 on purpose, so ONE missing label reds this whole job while the other two buckets are perfectly fine — check the step log for which LABEL is named. Findings are still in the step summary above and in the cve-frag-* artifacts."

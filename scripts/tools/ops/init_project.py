@@ -224,6 +224,24 @@ GITLAB_ARGOCD_IMAGE = 'quay.io/argoproj/argocd:v3.5.0'
 # whatsoever — the staleness is only ever found by looking.
 GIT_SYNC_IMAGE = 'registry.k8s.io/git-sync/git-sync:v4.7.1'
 
+# The tool image every generated project runs, and the only ref that reaches
+# 100% of them: it lands in the GitHub workflow `env`, in the GitLab `variables`
+# block, AND in `.pre-commit-config.da.yaml` as a `language: docker_image` entry,
+# so it executes on developer workstations as well as in the customer's CI.
+#
+# ⛔ FLOATING ON PURPOSE, and that is a different decision from the four
+# third-party pins. A customer should get the current published tool without us
+# shipping them a new project, so the tag is mutable and we are the ones who move
+# it. That also makes it the one delivered ref where OUR lever reaches EXISTING
+# customers — which is why it belongs in the delivered scan face even though the
+# floating-shape guard deliberately exempts it.
+#
+# ⛔ A CONSTANT, not two literals. It used to be spelled out at the defaults dict
+# and again at the argparse default, which is exactly the "a ref exists in
+# exactly two places" contract this module documents for the pins below being
+# quietly violated for the most-executed image of the set.
+DA_TOOLS_IMAGE = 'ghcr.io/vencil/da-tools:latest'
+
 # deploy method -> (GitLab CI variable name, pinned ref). Single source for
 # BOTH the `variables:` block and the apply stage's `image:` line, so the two
 # cannot drift apart.
@@ -1753,7 +1771,7 @@ def _interactive_flow() -> dict:
         'rule_packs': rule_packs,
         'tenants': tenants,
         'namespace': namespace,
-        'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+        'da_tools_image': DA_TOOLS_IMAGE,
     }
 
 
@@ -2179,7 +2197,7 @@ def _build_parser() -> argparse.ArgumentParser:
                         if _LANG == 'en' else '顯示會產生的檔案但不寫入')
     parser.add_argument('--namespace', default='monitoring', help=_h('namespace'))
     parser.add_argument('--da-tools-image',
-                        default='ghcr.io/vencil/da-tools:latest',
+                        default=DA_TOOLS_IMAGE,
                         help=_h('da_tools_image'))
     parser.add_argument('--config-source',
                         choices=['configmap', 'git'], default='configmap',
