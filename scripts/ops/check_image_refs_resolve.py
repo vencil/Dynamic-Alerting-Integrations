@@ -44,8 +44,10 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import site
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 
 try:
@@ -189,6 +191,23 @@ def delivered_refs(root: Path) -> set[str]:
     # class — not because a victim was demonstrated.
     saved_path = list(sys.path)
     saved_modules = set(sys.modules)
+    # ⛔ Resolved BEFORE the try, not inside the finally. `root` defaults to
+    # `Path(".")`, so `.resolve()` calls `os.getcwd()`; raising there would skip
+    # the whole rollback AND replace the exception the caller was about to see —
+    # the exact failure the `del` below is wrapped against, one line above it.
+    _root = root.resolve()
+    # ⛔ …and the eviction must not swallow the interpreter. `--root` defaults to
+    # the CWD, and this repo carries an in-tree `.venv/` (untracked, and
+    # `.gitignore` names no venv), so "under root" would otherwise include every
+    # site-packages module — reinstating the 136-module blunt rule this scoping
+    # exists to replace, while the `kept_outside` tripwire stays green because
+    # stdlib lives outside the venv. Derived from the interpreter's own layout,
+    # not from a list of directory names.
+    _keep_roots = {Path(p).resolve() for p in (
+        *site.getsitepackages(), site.getusersitepackages(),
+        sysconfig.get_paths()["purelib"], sysconfig.get_paths()["platlib"],
+        sysconfig.get_paths()["stdlib"],
+    ) if p}
     sys.modules["_da_init_project"] = mod
     try:
         spec.loader.exec_module(mod)
@@ -210,13 +229,15 @@ def delivered_refs(root: Path) -> set[str]:
         # under caller-supplied `root` shipping its own `_lib_python`. So the
         # deletion is scoped to modules whose file lives under `root` — the same
         # derivation, aimed at the thing the comment actually describes.
-        _root = root.resolve()
         for _name in set(sys.modules) - saved_modules:
             _file = getattr(sys.modules.get(_name), "__file__", None)
             if not _file:
                 continue  # namespace packages / builtins: no provenance to judge
             try:
-                _from_root = Path(_file).resolve().is_relative_to(_root)
+                _resolved = Path(_file).resolve()
+                _from_root = (_resolved.is_relative_to(_root)
+                              and not any(_resolved.is_relative_to(k)
+                                          for k in _keep_roots))
             except (OSError, ValueError):  # unresolvable path on Windows
                 _from_root = False
             if _from_root:

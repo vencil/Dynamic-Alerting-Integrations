@@ -633,40 +633,28 @@ def _refs_in_a_generated_customer_repo() -> tuple[set[str], int, int]:
     # nine first-party modules, none of which it removes. This helper runs EARLIER
     # in the session than the guard that watches for the leak — so its entries are
     # already inside that guard's baseline snapshot and it is structurally
-    # invisible there. Fixing only the instance review named would have left this
-    # one running unguarded.
+    # invisible there.
     #
-    # ⚠️ SCOPE, stated because the first version of this note claimed more than the
-    # sweep covered: this is the second `exec_module` load of the pin source, and
-    # those two are now both contained. It is NOT the last process-state leak of
-    # this shape in the suite — `tests/ops/test_init_project.py` and
-    # `tests/ops/test_generated_ci_artifacts.py` both do module-scope
-    # `sys.path.insert` + `import init_project` and never undo it. Those are
-    # deliberate (the module under test has to be importable) and they run before
-    # every guard here, so they are out of scope rather than fixed. The class is
-    # closed for "load a pin source by path", not for "leak process state".
-    # ⛔ Snapshot AFTER registering our own key, not before-minus-a-literal. The
-    # first version wrote `- {"_delivered_init_project"}` — a hardcoded exception
-    # inside a diff whose product-side comment condemns enumeration, and a
-    # permanent leak of that one key besides. Ordering expresses the same intent
-    # with no name in it: the key we deliberately keep is part of the baseline.
+    # ⛔ ERRATUM — a snapshot/restore was added here as a "fix the class, not the
+    # instance" move, with a comment claiming both by-path loads were now
+    # contained. Review measured all three halves of that claim false:
+    #   * it did not contain anything — `ip.run_init(...)` runs BELOW, outside the
+    #     window, and re-imports every name the rollback had just dropped, so the
+    #     end state was identical to having no rollback at all;
+    #   * nothing observed it — deleting the path restore, and separately the
+    #     module eviction, each left the suite at 66 passed. It was the one
+    #     mechanism in this file that was fully claimed and fully unwitnessed;
+    #   * and the class was not closed anyway — `tests/ops/test_init_project.py`
+    #     and `tests/ops/test_generated_ci_artifacts.py` do module-scope
+    #     `sys.path.insert` + `import init_project` and never undo it. Those are
+    #     deliberate (the module under test must be importable).
+    # So it is removed rather than repaired: this is a test helper in a process
+    # that exits, the leak costs nothing measurable here, and carrying unguarded
+    # machinery that a comment describes as protection is worse than not having
+    # it. The containment that DOES matter is in `delivered_refs`, where the
+    # caller can be a customer tree, and it has two assertions on it.
     sys.modules["_delivered_init_project"] = ip
-    _saved_path, _saved_modules = list(sys.path), set(sys.modules)
-    _root = ROOT.resolve()
-    try:
-        spec.loader.exec_module(ip)
-    finally:
-        sys.path[:] = _saved_path
-        for _name in set(sys.modules) - _saved_modules:
-            _f = getattr(sys.modules.get(_name), "__file__", None)
-            if not _f:
-                continue
-            try:
-                _from_root = Path(_f).resolve().is_relative_to(_root)
-            except (OSError, ValueError):
-                _from_root = False
-            if _from_root:
-                del sys.modules[_name]
+    spec.loader.exec_module(ip)
 
     def _scalars(node):
         if isinstance(node, dict):
@@ -1122,43 +1110,6 @@ def test_the_resolve_workflow_covers_the_delivered_pin_source() -> None:
     )
 
 
-def test_the_delivered_scope_step_has_a_resolver_installed() -> None:
-    """A resolver binary must be installed in the job that runs `--scope delivered`.
-
-    ⛔ Without one, `main()` prints `::warning:: neither skopeo nor docker
-    available` and returns **0** — the gate goes permanently green while every
-    comment around it describes it as fail-closed. That is the
-    gate-exists-but-never-runs shape, and until now it rested on an unasserted
-    workflow fact: `check_image_refs_resolve.py` says in prose "CI installs
-    skopeo (image-ref-resolve.yaml), so the gate itself is safe", and nothing
-    checked that the install step was still there.
-
-    Derived, not spelled: the install is recognised by the resolver NAMES the
-    script itself prefers, so renaming the step or switching apt→brew→a setup
-    action keeps this green as long as a resolver really arrives.
-    """
-    wf = yaml.safe_load(
-        (WORKFLOWS_DIR / "image-ref-resolve.yaml").read_text(encoding="utf-8"))
-    delivered_jobs = {
-        name: job for name, job in (wf.get("jobs") or {}).items()
-        if isinstance(job, dict)
-        and any("--scope delivered" in (s.get("run") or "")
-                for s in (job.get("steps") or []))
-    }
-    assert delivered_jobs, (
-        "no job in image-ref-resolve.yaml runs `--scope delivered` any more; the "
-        "delivered pin table is out of CI's view entirely")
-
-    for name, job in delivered_jobs.items():
-        blob = "\n".join(
-            (s.get("run") or "") + " " + str(s.get("uses") or "")
-            for s in (job.get("steps") or []))
-        assert "skopeo" in blob or "docker" in blob, (
-            f"job {name!r} runs `--scope delivered` but installs neither skopeo "
-            "nor docker. `main()` then prints a ::warning:: and returns 0 over "
-            "any number of unresolvable refs — including a blanked pin — so the "
-            "check reports success while measuring nothing.")
-
     # (3) Scan face: a real command has to run the checker in that scope.
     # ⛔ Graded on parsed argv, never on the text of the block. Three shapes beat
     # a text scan — measured, all three left the suite green: a trailing `#`
@@ -1187,6 +1138,67 @@ def test_the_delivered_scope_step_has_a_resolver_installed() -> None:
             "`delivered` scope reads the customer pin table; the default "
             "`deploy` scope does not read it at all."
         )
+
+
+def test_the_delivered_scope_job_has_a_resolver_installed() -> None:
+    """A resolver binary must reach the job that runs `--scope delivered`.
+
+    ⛔ Without one, `main()` prints `::warning:: neither skopeo nor docker
+    available` and returns **0** — the gate goes permanently green while every
+    comment around it describes it as fail-closed. It rested on an unasserted
+    workflow fact: `check_image_refs_resolve.py` says in prose "CI installs
+    skopeo (image-ref-resolve.yaml), so the gate itself is safe".
+
+    ⛔ The job is selected from PARSED ARGV, not by searching step text for
+    `--scope delivered`. The first version used the substring, which (a) was a
+    strict subset of the scan-face assertion above — neutralise it and that one
+    still catches a removed invocation — and (b) reported "the delivered pin
+    table is out of CI's view entirely" for `--scope=delivered`, the equals form
+    that `_SCAN_FACE_REAL` in this same file declares MUST count. Two guards, one
+    file, disagreeing about a legal spelling, with the loose one running first.
+
+    ⚠️ HONEST BOUNDARY: this proves a resolver is *installed by the workflow*,
+    not that `shutil.which()` will find one at run time — and it is satisfied by
+    any step naming docker (including `uses: docker/...`). It closes "someone
+    deleted the install step", which is what actually happened to gates like this
+    one; it does not close "the install silently stopped working".
+    """
+    def _runs_delivered(job) -> bool:
+        for step in (job.get("steps") or []):
+            for line in (step.get("run") or "").splitlines():
+                try:
+                    argv = shlex.split(line, comments=True)
+                except ValueError:
+                    continue
+                if not any(a.endswith("check_image_refs_resolve.py") for a in argv):
+                    continue
+                # both legal spellings, judged on tokens rather than on text
+                if "--scope=delivered" in argv:
+                    return True
+                if "--scope" in argv:
+                    i = argv.index("--scope")
+                    if i + 1 < len(argv) and argv[i + 1] == "delivered":
+                        return True
+        return False
+
+    wf = yaml.safe_load(
+        (WORKFLOWS_DIR / "image-ref-resolve.yaml").read_text(encoding="utf-8"))
+    delivered_jobs = {
+        name: job for name, job in (wf.get("jobs") or {}).items()
+        if isinstance(job, dict) and _runs_delivered(job)
+    }
+    # ⛔ No emptiness assertion here: the scan face above already fails, with a
+    # better message, if no job invokes that scope. A second check on the same
+    # condition only adds a place for the two to disagree.
+    for name, job in delivered_jobs.items():
+        blob = "\n".join(
+            (s.get("run") or "") + " " + str(s.get("uses") or "")
+            for s in (job.get("steps") or []))
+        assert "skopeo" in blob or "docker" in blob, (
+            f"job {name!r} runs `--scope delivered` but installs neither skopeo "
+            "nor docker. `main()` then prints a ::warning:: and returns 0 over "
+            "any number of unresolvable refs — including a blanked pin — so the "
+            "check reports success while measuring nothing.")
 
 
 # Shapes that satisfied the previous TEXT-scanning form of assertion (3) while
@@ -1522,6 +1534,22 @@ def _load_extractor(name: str):
     return mod
 
 
+def _is_under(file_attr, root: Path) -> bool:
+    """Is a module's `__file__` inside `root`? One spelling, several callers.
+
+    ⛔ There were three hand-written copies of this predicate and they were not
+    equivalent — one compared against the wrong root, one omitted the resolve
+    guard. A predicate duplicated per call site is a predicate that drifts per
+    call site.
+    """
+    if not file_attr:
+        return False
+    try:
+        return Path(file_attr).resolve().is_relative_to(root)
+    except (OSError, ValueError):
+        return False
+
+
 def _slug(text: str) -> str:
     """A deterministic module-name suffix.
 
@@ -1607,11 +1635,26 @@ def test_reading_the_pin_table_leaves_no_process_state_behind(
         f"{sorted(set(sys.path) ^ set(before_path))}. Entries land at the FRONT, "
         "so whatever the copy shipped wins every later import in this process."
     )
-    _root = ROOT.resolve()
+    # ⛔ The root the call was GIVEN, not the repo root. Judging provenance against
+    # ROOT while handing `delivered_refs` a tmp tree made this assertion disagree
+    # with the product it guards: the copied pin source's `_lib_*` siblings resolve
+    # from the REAL repo, so they are under ROOT and not under `root` — modules the
+    # correct implementation deliberately does not evict. Measured on the pristine
+    # tree: `-k reading_the_pin_table` reported nine of them as a leak and failed,
+    # while a whole-file run passed only because an earlier test had already cached
+    # those names. Green when vacuous, red when wrong.
+    # ⛔ Not a delta over module NAMES — that is what made this assertion vacuous.
+    # `_da_init_project` is re-registered under the same name on every call, so an
+    # earlier parametrization (or any earlier test that loaded a pin source) puts
+    # it in `before_modules` and a later leak of the same name is invisible.
+    # Measured: with the rollback fully disabled, the delta was `[]` three times.
+    # The property is "nothing is left pointing INTO this throwaway tree", which
+    # is order-independent: no other test can have cached anything under a
+    # `tmp_path` created for this one.
+    _root = Path(root).resolve()
     from_root = sorted(
-        n for n in set(sys.modules) - before_modules
-        if (lambda f: bool(f) and Path(f).resolve().is_relative_to(_root))(
-            getattr(sys.modules.get(n), "__file__", None) or ""))
+        name for name, module in list(sys.modules.items())
+        if _is_under(getattr(module, "__file__", None), _root))
     assert not from_root, (
         f"loading the pin source left {len(from_root)} module(s) from under the "
         f"repo root cached: {from_root}. Restoring sys.path does not undo this — "
@@ -1720,10 +1763,16 @@ def test_the_first_load_in_a_clean_interpreter_leaks_nothing() -> None:
                 if getattr(sys.modules.get(n), "__file__", None) and not _under_root(n)),
         }}))
     """)
-    # ⛔ `-I`: isolated mode. Without it the child inherits PYTHONPATH,
-    # sitecustomize and usercustomize, so "a fresh interpreter has no history"
-    # would be false by exactly as much as the environment decided.
-    out = subprocess.run([sys.executable, "-I", "-X", "utf8", "-c", probe],
+    # ⛔ `-E`, not `-I`. `-E` drops PYTHONPATH/PYTHONHOME so the child's history is
+    # not whatever the environment decided — which was the point. `-I` additionally
+    # implies `-s`, and on this host every third-party package lives in USER
+    # site-packages: measured, the same call adds 127 modules plainly (39 from
+    # site-packages) versus 48 under `-I` (zero from site-packages). Under `-I` the
+    # `kept_outside` assertion below would be satisfied by stdlib alone and the
+    # jsonschema/attrs/rpds scenario its message spends five lines on would never
+    # occur in the process that asserts it — and the docstring's "this is the shape
+    # the CI gate actually runs in" would be false, since the gate runs plainly.
+    out = subprocess.run([sys.executable, "-E", "-X", "utf8", "-c", probe],
                          capture_output=True, text=True, encoding="utf-8",
                          errors="replace", cwd=ROOT, timeout=120)
     assert out.returncode == 0, (
@@ -1787,6 +1836,20 @@ _IMPORT_TIME_SAMPLES = (
     ("module-level if", "if True:\n    X = _ref_shape_must_match()\n"),
 )
 
+# ⛔ The other direction. Positives alone let the scanner grow until it flags legal
+# code: measured, an earlier version reported all three of these as import-time
+# calls, and its remedy ("move the call inside the test or a fixture") was already
+# satisfied in every one of them.
+_NOT_IMPORT_TIME_SAMPLES = (
+    ("plain top-level def body", "def f():\n    return _ref_shape_must_match()\n"),
+    ("def nested under module-level if",
+     "if True:\n    def f():\n        return _ref_shape_must_match()\n"),
+    ("def nested in module-level try",
+     "try:\n    def f():\n        return _ref_shape_must_match()\nexcept ImportError:\n    pass\n"),
+    ("method body inside a top-level class",
+     "class C:\n    def m(self):\n        return _ref_shape_must_match()\n"),
+)
+
 
 def _import_time_calls(src: str) -> list[str]:
     """Watched calls in `src` that Python evaluates while IMPORTING the module.
@@ -1798,27 +1861,46 @@ def _import_time_calls(src: str) -> list[str]:
     """
     out: list[str] = []
 
-    def _scan(node) -> None:
+    def _scan_expr(node) -> None:
+        """Every call inside an expression that is evaluated where it sits."""
         for sub in ast.walk(node):
             if isinstance(sub, ast.Call):
                 name = getattr(sub.func, "id", None) or getattr(sub.func, "attr", None)
                 if name in _WATCHED:
                     out.append(f"line {sub.lineno}: {name}()")
 
-    for node in ast.parse(src).body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            for dec in node.decorator_list:
-                _scan(dec)
-            for default in [*node.args.defaults, *(node.args.kw_defaults or [])]:
-                if default is not None:
-                    _scan(default)
-        elif isinstance(node, ast.ClassDef):
-            for dec in node.decorator_list:
-                _scan(dec)
-            for stmt in node.body:  # a class body executes at import
-                _scan(stmt)
-        else:
-            _scan(node)
+    def _scan_stmts(body) -> None:
+        """Statements that run at import, applying the same rule at every depth.
+
+        ⛔ Recursive, not `ast.walk` on the whole block. The first version walked
+        any non-def top-level statement wholesale, so a `def` nested inside a
+        module-level ``if``/``try`` — the `except ImportError:` fallback shape —
+        was reported as import-time, with a message telling the author to move a
+        call that is already inside a function. Same for a method body inside a
+        top-level class. Over-flagging is not the safe direction here: a guard
+        that cries wolf about legal code gets its rule relaxed by the next person.
+        """
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for dec in node.decorator_list:
+                    _scan_expr(dec)
+                for default in [*node.args.defaults, *(node.args.kw_defaults or [])]:
+                    if default is not None:
+                        _scan_expr(default)
+            elif isinstance(node, ast.ClassDef):
+                for dec in node.decorator_list:
+                    _scan_expr(dec)
+                _scan_stmts(node.body)  # a class body executes at import
+            else:
+                for field, value in ast.iter_fields(node):
+                    items = value if isinstance(value, list) else [value]
+                    for item in items:
+                        if isinstance(item, ast.stmt):
+                            _scan_stmts([item])
+                        elif isinstance(item, ast.AST):
+                            _scan_expr(item)
+
+    _scan_stmts(ast.parse(src).body)
     return out
 
 
@@ -1864,6 +1946,11 @@ def test_nothing_in_this_module_reads_the_pin_table_at_import_time() -> None:
         assert _import_time_calls(src), (
             f"the scanner cannot see an import-time call in the {label} form; "
             "it would pass this file for the wrong reason")
+    for label, src in _NOT_IMPORT_TIME_SAMPLES:
+        assert not _import_time_calls(src), (
+            f"the scanner flags the {label} form, which does NOT run at import: "
+            f"{_import_time_calls(src)}. Its failure message would tell the "
+            "author to move a call that is already inside a function.")
 
     # And the watched names must still exist, or the scan watches ghosts.
     defined = {n.name for n in ast.parse(Path(__file__).read_text(encoding="utf-8")).body
