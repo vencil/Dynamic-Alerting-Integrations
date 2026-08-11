@@ -47,10 +47,12 @@ Network-free (uses --list), so it runs in the plain Python Tests CI job.
 from __future__ import annotations
 
 import ast
+import json
 import re
 import shlex
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -524,12 +526,18 @@ def _ref_shape_must_match() -> tuple[str, ...]:
 
     ⛔ This used to be a module-scope tuple whose first element was
     ``*_delivered_pins_from_generator()``, i.e. the generator ran during import.
-    Two things follow from that, and both were worse than they look: the helper
-    can raise ``SystemExit`` (a missing or empty pin table is a deliberate hard
-    exit, and this PR adds a member-level case), and at import time that aborts
-    COLLECTION of this module — so one bad pin takes out all ~55 guards in this
-    file at once, and reports it as a collection error rather than as the named
-    assertion that was written to explain it.
+    The helper can raise ``SystemExit`` (a missing, empty, or partially blank pin
+    table is a deliberate hard exit), and at import time that does NOT surface as
+    a failed test.
+
+    ⚠️ An earlier version of this note called it "a collection error" affecting
+    "~55 guards in this file". Both halves were wrong in the same direction —
+    towards sounding contained. MEASURED: pytest ends with ``INTERNALERROR`` and
+    ``no tests ran``, and it takes down the WHOLE invocation, not just this module
+    (reproduced by running this file together with another). The guard count is
+    derivable (``pytest --collect-only``) and was 53 at the time, so it does not
+    belong in prose as an approximation either. `test_nothing_in_this_module_reads
+    _the_pin_table_at_import_time` is the tripwire that keeps this true.
     """
     return (
         # ⛔ The real pins are IMPORTED, not transcribed. They used to be four
@@ -618,8 +626,21 @@ def _refs_in_a_generated_customer_repo() -> tuple[set[str], int, int]:
         f"cannot load {_DELIVERED_PIN_SOURCE} — this guard must not degrade to "
         "'no refs found', which reads exactly like a clean generator")
     ip = importlib.util.module_from_spec(spec)
+    # ⛔ Same containment as `delivered_refs`, for the same reason: executing the
+    # pin source inserts four `sys.path` entries off its own `__file__` and caches
+    # nine first-party modules, none of which it removes. This helper is the SECOND
+    # instance of that load in this repo and it runs EARLIER in the session than
+    # the guard that watches for the leak — so its entries are already inside that
+    # guard's baseline snapshot and it is structurally invisible there. Fixing only
+    # the instance review named would have left this one running unguarded.
+    _saved_path, _saved_modules = list(sys.path), set(sys.modules)
     sys.modules["_delivered_init_project"] = ip
-    spec.loader.exec_module(ip)
+    try:
+        spec.loader.exec_module(ip)
+    finally:
+        sys.path[:] = _saved_path
+        for _name in set(sys.modules) - _saved_modules - {"_delivered_init_project"}:
+            del sys.modules[_name]
 
     def _scalars(node):
         if isinstance(node, dict):
@@ -1414,11 +1435,20 @@ def test_delivered_refs_refuses_a_half_empty_pin_table(tmp_path, emptied: str) -
 
     # Paired positive: the untouched table must still resolve, so this test
     # cannot be satisfied by a `delivered_refs` that raises unconditionally.
-    assert len(mod.delivered_refs(ROOT)) == 4
+    # ⛔ FLOOR, not `== 4` — same reason as `_delivered_pins_from_generator`: a
+    # legitimate 5th delivered pin is caught by the matrix set-equality guard,
+    # not by re-spelling the count here.
+    assert len(mod.delivered_refs(ROOT)) >= _DELIVERED_PRODUCT_FLOOR
 
 
 def _load_extractor(name: str):
-    """Fresh in-process copy of the checker, under a caller-chosen module name."""
+    """Fresh in-process copy of the checker, under a caller-chosen module name.
+
+    ⚠️ Registers `name` in `sys.modules` and does NOT remove it: the loaded module
+    is the test's subject and must stay reachable for the assertions. The tests
+    below therefore snapshot `sys.modules` AFTER calling this, so the helper's own
+    entry is inside the baseline rather than counted as a leak.
+    """
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(name, EXTRACTOR)
@@ -1437,71 +1467,235 @@ def _fake_pin_root(tmp_path, appended: str):
     return tmp_path
 
 
-def test_reading_the_pin_table_leaves_no_process_state_behind(tmp_path) -> None:
-    """Loading the pin source must not mutate `sys.path` or `sys.modules`.
+@pytest.mark.parametrize("appended,raises", [
+    # The emptiness exit: exec SUCCEEDS, the guard fires afterwards.
+    ("\n\n_GITLAB_APPLY_IMAGES = {}\n", SystemExit),
+    # exec itself RAISES — a different window, and the one a `try/finally` exists
+    # for. The first version of this test covered only the case above, so the
+    # rollback could have been deleted entirely and stayed green (proved by
+    # blind review: replacing the try/finally with straight-line statements left
+    # 53/53 passing).
+    ("\n\nraise RuntimeError('boom during exec')\n", RuntimeError),
+    # The SUCCESS path: nothing raises at all. State mutated after the guard has
+    # run is invisible to both cases above.
+    ("\n", None),
+])
+def test_reading_the_pin_table_leaves_no_process_state_behind(
+    tmp_path, appended: str, raises,
+) -> None:
+    """Loading the pin source must leave `sys.path` and `sys.modules` untouched.
 
     ⛔ The pin source is a CLI module, and executing it runs four
-    ``sys.path.insert(0, …)`` derived from its own ``__file__`` — never undone.
-    In the one-shot CI process that is invisible; in-process it is not.
-    MEASURED before the fix: after loading a COPY from a tmp dir, the four tmp
-    paths sit at the FRONT of ``sys.path``, and a subsequent
-    ``import init_project`` resolves to that copy — i.e. to the deliberately
-    MUTATED file a test just wrote, whose pin table is empty.
+    ``sys.path.insert(0, …)`` derived from its own ``__file__`` — never undone —
+    and caches nine first-party modules under generic names (`_lib_python`,
+    `_registry_lib`, …). In the one-shot CI process that is invisible; in-process
+    it is not. Restoring the path does NOT undo the module caching, which is why
+    both are asserted here.
 
-    The suite did not hit that only because the half-empty test's final line
-    reloads the real file, pushing the real directories back in front. That line
-    exists to prove the function does not raise unconditionally, so the
-    containment was a side effect of an unrelated assertion — the kind that
-    disappears in a reordering, silently, with no test to notice.
+    ⛔ Both assertions are DERIVED (whole-list equality, whole-key-set equality),
+    not a search for known names. An earlier version asserted
+    ``"_da_init_project" not in sys.modules``, i.e. one hardcoded name — and a
+    leak registered under ``init_project`` (the very name whose harm the comment
+    described) passed it. Naming what may not leak is a list that is always one
+    entry short.
+
+    ⚠️ What this does NOT establish: that a leak would break something today. The
+    concrete harm first claimed here — a later ``import init_project`` picking up
+    a throwaway copy — is unreachable in this suite (the name is already cached
+    from the real file by two other test modules, and nothing in this file
+    imports it). That was measured in a bare interpreter and generalised without
+    checking. The guard stands on the leak being real and cheap to remove.
     """
-    root = _fake_pin_root(tmp_path, "\n\n_GITLAB_APPLY_IMAGES = {}\n")
-    mod = _load_extractor("_extractor_no_leak")
+    root = _fake_pin_root(tmp_path, appended)
+    mod = _load_extractor(f"_extractor_no_leak_{abs(hash(appended))}")
 
-    before = list(sys.path)
-    with pytest.raises(SystemExit):
+    before_path = list(sys.path)
+    before_modules = set(sys.modules)
+    if raises is None:
         mod.delivered_refs(root)
+    else:
+        with pytest.raises(raises):
+            mod.delivered_refs(root)
 
-    leaked = [p for p in sys.path if str(tmp_path) in p]
-    assert not leaked, (
-        f"loading the pin source left {len(leaked)} tmp path(s) on sys.path: "
-        f"{leaked}. The next in-process `import init_project` resolves against "
-        "these, so a test's throwaway copy becomes the module everyone else "
-        "sees."
+    assert sys.path == before_path, (
+        "loading the pin source changed sys.path; the difference is "
+        f"{sorted(set(sys.path) ^ set(before_path))}. Entries land at the FRONT, "
+        "so whatever the copy shipped wins every later import in this process."
     )
-    assert sys.path == before, (
-        f"sys.path changed across the load: {set(sys.path) ^ set(before)}"
-    )
-    assert "_da_init_project" not in sys.modules, (
-        "a failed load left a half-initialised module registered under "
-        "`_da_init_project`; the next loader call would find it already present"
+    assert set(sys.modules) == before_modules, (
+        "loading the pin source left modules cached: "
+        f"{sorted(set(sys.modules) - before_modules)}. Restoring sys.path does "
+        "not undo this — a cached module outlives the path that found it, and "
+        "`root` is caller-supplied, so those names came from an arbitrary tree."
     )
 
 
-def test_a_single_blanked_pin_is_named_not_shrugged_off(tmp_path) -> None:
+@pytest.mark.parametrize("blank", ["''", "'   '", "None", "0", "b''"])
+def test_a_single_blanked_pin_is_named_not_shrugged_off(tmp_path, blank: str) -> None:
     """One emptied entry must be reported, not diluted by its siblings.
 
     ``apply_refs`` is a SET of the table's values, so blanking ONE pin leaves it
-    truthy and the container-level emptiness check passes. Downstream does catch
-    the empty ref (the resolver fails, the gate exits 1), so this is not a
-    fail-open — it is the difference between a message naming the pin table and
-    a registry error about an empty string.
+    truthy and the container-level emptiness check passes.
+
+    ⛔ Parametrized over non-`str` blanks as well, because the filter has two
+    halves and only one had a counter-example: with `'   '` as the sole sample,
+    replacing ``isinstance(ref, str) and ref.strip()`` with ``str(ref).strip()``
+    kept the suite green — and a `None` pin then ships as the literal ref
+    ``"None"``, which is exactly the unparseable-ref outcome the filter exists to
+    stop.
     """
     root = _fake_pin_root(
         tmp_path,
         "\n\n_GITLAB_APPLY_IMAGES = dict(_GITLAB_APPLY_IMAGES)\n"
         "_GITLAB_APPLY_IMAGES[next(iter(_GITLAB_APPLY_IMAGES))] = "
-        "(next(iter(_GITLAB_APPLY_IMAGES.values()))[0], '   ')\n",
+        f"(next(iter(_GITLAB_APPLY_IMAGES.values()))[0], {blank})\n",
     )
-    mod = _load_extractor("_extractor_blank_member")
+    mod = _load_extractor(f"_extractor_blank_{abs(hash(blank))}")
 
     with pytest.raises(SystemExit) as excinfo:
         mod.delivered_refs(root)
-    assert "_GITLAB_APPLY_IMAGES" in str(excinfo.value), (
-        f"blanking one pin exited without naming the table: {excinfo.value}"
+    message = str(excinfo.value)
+    # ⛔ The distinctive text, not just the table name: the container-level branch
+    # puts the bare name `_GITLAB_APPLY_IMAGES` into the same message, so a
+    # substring check on it cannot tell "one pin is blank" from "the table is
+    # empty" — and this test's whole subject is the former.
+    assert "declares" in message and "carry a non-empty ref" in message, (
+        f"blanking one pin ({blank}) did not produce the partial-count "
+        f"diagnosis; got: {message}"
     )
 
-    # Paired positive, same reason as above: the real table must still resolve.
-    assert len(mod.delivered_refs(ROOT)) == 4
+
+def test_the_first_load_in_a_clean_interpreter_leaks_nothing() -> None:
+    """The no-leak property, measured where it is actually observable.
+
+    ⛔ The in-process version of this check is ORDER-DEPENDENT and that is not a
+    theoretical worry — it was measured. It snapshots `sys.modules` inside the
+    test, but by then earlier tests have already called `delivered_refs`
+    successfully, so a name leaked by the FIRST call is already in the baseline
+    and a second leak of the same name is a no-op. Mutation proof: adding
+    `sys.modules.setdefault('init_project', mod)` on the success path — the exact
+    harm the containment exists for — left the in-process assertions at 61/61
+    green, both inside and outside the `try/finally` window.
+
+    A fresh interpreter has no such history: the call under test is the first one,
+    so anything it adds is attributable to it. This is also the shape the CI gate
+    actually runs in (`python3 scripts/ops/check_image_refs_resolve.py`), which
+    makes it the honest place to assert the property.
+    """
+    probe = textwrap.dedent(f"""
+        import importlib.util, json, sys
+        from pathlib import Path
+        root = Path({str(ROOT)!r})
+        spec = importlib.util.spec_from_file_location(
+            "_probe_chk", root / "scripts" / "ops" / "check_image_refs_resolve.py")
+        chk = importlib.util.module_from_spec(spec)
+        sys.modules["_probe_chk"] = chk
+        spec.loader.exec_module(chk)
+        before_path, before_mods = list(sys.path), set(sys.modules)
+        refs = chk.delivered_refs(root)
+        print(json.dumps({{
+            "refs": len(refs),
+            "path": [p for p in sys.path if p not in before_path],
+            "mods": sorted(set(sys.modules) - before_mods),
+        }}))
+    """)
+    out = subprocess.run([sys.executable, "-X", "utf8", "-c", probe],
+                         capture_output=True, text=True, encoding="utf-8",
+                         errors="replace", cwd=ROOT, timeout=120)
+    assert out.returncode == 0, (
+        f"the clean-interpreter probe failed (rc={out.returncode}); this must not "
+        f"be read as 'no leak'.\nstdout: {out.stdout}\nstderr: {out.stderr}")
+    result = json.loads(out.stdout.strip().splitlines()[-1])
+
+    # Anti-vacuity: a probe that resolved nothing would report an empty delta for
+    # the wrong reason.
+    assert result["refs"] >= _DELIVERED_PRODUCT_FLOOR, (
+        f"probe resolved only {result['refs']} refs; the empty delta below would "
+        "mean nothing")
+    assert not result["path"], (
+        f"the first delivered_refs() in a clean interpreter left {len(result['path'])} "
+        f"sys.path entries: {result['path']}")
+    assert not result["mods"], (
+        f"the first delivered_refs() in a clean interpreter cached "
+        f"{len(result['mods'])} modules: {result['mods']}. Restoring sys.path does "
+        "not undo module caching, and `root` is caller-supplied.")
+
+
+def test_nothing_in_this_module_reads_the_pin_table_at_import_time() -> None:
+    """Import-time evaluation must stay impossible, not merely absent.
+
+    ⛔ `_delivered_pins_from_generator()` can `SystemExit` (a missing, empty, or
+    partially blank pin table is a deliberate hard exit). Called from module
+    scope — which is where it lived until this was changed — that exit happens
+    during import, and pytest does not report it as a failed test or even as a
+    collection error: MEASURED, the run ends with `INTERNALERROR` and
+    `no tests ran`, and it takes down the WHOLE invocation, not just this file
+    (reproduced with a two-file run). With the call inside a function the same
+    broken pin gives named failures and the other guards still execute.
+
+    That fix is one module-scope line away from being undone and nothing else
+    would notice, so it gets a tripwire rather than a comment. Derived from the
+    AST, so any construct that evaluates at import — a bare call, a tuple splat,
+    a default argument, a class body, a decorator — is covered without listing
+    the constructs.
+    """
+    import ast
+
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    watched = {"_delivered_pins_from_generator", "_ref_shape_must_match",
+               "delivered_refs", "_load_extractor"}
+    offenders: list[str] = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue  # bodies run on call, not on import
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call):
+                name = getattr(sub.func, "id", None) or getattr(sub.func, "attr", None)
+                if name in watched:
+                    offenders.append(f"line {sub.lineno}: {name}()")
+
+    assert not offenders, (
+        "these calls run at IMPORT time, so a bad pin table aborts the whole "
+        f"pytest session instead of failing a named test: {offenders}. Move the "
+        "call inside the test or a fixture."
+    )
+    # Anti-vacuity: the walk must actually be able to see a module-level call.
+    probe = ast.parse("X = _ref_shape_must_match()\n")
+    assert any(isinstance(s, ast.Call) for n in probe.body for s in ast.walk(n)), (
+        "the module-scope scan cannot see a call it is supposed to reject"
+    )
+
+
+@pytest.mark.parametrize("blank", ["'   '", "None", "0"])
+def test_a_blank_git_sync_image_is_refused_too(tmp_path, blank: str) -> None:
+    """The second source needs the same normalization, and had none of its own.
+
+    ⛔ The existing half-empty parametrization sets `GIT_SYNC_IMAGE = ""`, which
+    the pre-existing falsiness check already caught — so the normalization line
+    added alongside the member-level filter was covered by nothing. Mutation
+    proof: deleting it outright left the suite green. A whitespace-only value
+    would then have been carried through as a ref made of spaces.
+    """
+    root = _fake_pin_root(tmp_path, f"\n\nGIT_SYNC_IMAGE = {blank}\n")
+    mod = _load_extractor(f"_extractor_git_sync_{abs(hash(blank))}")
+
+    with pytest.raises(SystemExit) as excinfo:
+        mod.delivered_refs(root)
+    assert "GIT_SYNC_IMAGE" in str(excinfo.value), (
+        f"a {blank} GIT_SYNC_IMAGE exited without naming it: {excinfo.value}")
+
+
+def test_the_blank_pin_guard_still_lets_the_real_table_through(tmp_path) -> None:
+    """Paired positive for the two tests above, factored out of both.
+
+    Neither can be satisfied by a `delivered_refs` that raises unconditionally.
+    ⛔ Asserts the FLOOR, not `== 4`: two sibling floors already compare against
+    `_DELIVERED_PRODUCT_FLOOR`, and the commit that introduced this pair wrote a
+    bare `== 4` in the very edit whose sibling hunk removed one for being "a
+    third copy" — the cited instance fixed, the class left alone.
+    """
+    mod = _load_extractor("_extractor_paired_positive")
+    assert len(mod.delivered_refs(ROOT)) >= _DELIVERED_PRODUCT_FLOOR
 
 
 def test_the_report_job_waits_for_every_bucket() -> None:

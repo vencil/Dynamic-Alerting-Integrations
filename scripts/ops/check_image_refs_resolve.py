@@ -158,32 +158,58 @@ def delivered_refs(root: Path) -> set[str]:
         raise SystemExit(f"check_image_refs_resolve: cannot load {path}")
     mod = importlib.util.module_from_spec(spec)
     # ⛔ The pin source is a CLI module, so executing it is not free: it does four
-    # `sys.path.insert(0, …)` off its own `__file__` and never undoes them. That
-    # is harmless for the CI gate (one-shot process) and NOT harmless in-process.
-    # Measured: load a COPY of the source from a tmp dir and the process's
-    # sys.path gains four tmp entries AT THE FRONT — a later `import
-    # init_project` then resolves to that copy, and the copy is exactly the
-    # MUTATED one a test wrote (empty pin table). The suite does not hit this
-    # today only because the half-empty test's last line reloads the real file,
-    # re-inserting the real dirs in front; that line exists to prove this
-    # function is not raising unconditionally, so the containment is accidental
-    # and would vanish in any reordering. Snapshot/restore instead of relying on
-    # it, and drop the sys.modules entry so a failed exec leaves nothing
-    # half-initialised behind.
+    # `sys.path.insert(0, …)` off its own `__file__` and never undoes them, and
+    # every module it imports through those paths stays in `sys.modules`. That is
+    # harmless for the CI gate (a one-shot process) and not harmless in-process.
+    #
+    # MEASURED, at the two ends the fix has to cover:
+    #   * load a COPY from a tmp dir and `sys.path` gains FOUR tmp entries at the
+    #     FRONT, permanently;
+    #   * one load caches NINE first-party modules under generic names
+    #     (`_lib_python`, `_lib_compat`, `_registry_lib`, …). `root` is caller
+    #     supplied (`--root`), so a tree shipping its own `_lib_python` beside
+    #     `init_project.py` becomes the process-wide `_lib_python`. ⛔ Restoring
+    #     the PATH does not undo this — module caching is precisely the mechanism
+    #     that outlives a path restore — which is why the rollback below is a set
+    #     difference over `sys.modules` and not a `pop()` of our own key.
+    #
+    # ⚠️ HONEST BOUNDARY, because an earlier version of this comment overstated it
+    # and three copies of the overstatement had to be removed. The concrete harm
+    # first written here — "a later `import init_project` resolves to the mutated
+    # copy" — is NOT reachable in today's test suite, for two independent reasons
+    # found by review, not by me: in a full run `init_project` is already cached
+    # from the real file (module-level imports in tests/ops/test_init_project.py
+    # and tests/ops/test_generated_ci_artifacts.py) so the import never consults
+    # `sys.path`; and in a single-file run of the guard module nothing imports
+    # that name at all. The leak is real and measured; the story about what it
+    # would break was measured in a bare interpreter and then generalised without
+    # checking. The rollback is kept because it is two lines and removes the
+    # class — not because a victim was demonstrated.
     saved_path = list(sys.path)
+    saved_modules = set(sys.modules)
     sys.modules["_da_init_project"] = mod
     try:
         spec.loader.exec_module(mod)
     finally:
         sys.path[:] = saved_path
-        sys.modules.pop("_da_init_project", None)
+        # Derived, not enumerated: whatever this load added — including our own
+        # loader key, and including names a future pin source starts importing —
+        # goes back out. Modules already present are untouched.
+        for _name in set(sys.modules) - saved_modules:
+            del sys.modules[_name]
 
     # Member-level emptiness, not just container-level: `{""}` is a truthy set,
     # so a single blanked pin would sail past a `not apply_refs` test and reach
-    # the registry as an unparseable ref. Downstream does catch it (the resolver
-    # fails and the gate exits 1), so this is not a fail-open — it is the
-    # difference between "the pin table is EMPTY: <name>" and a resolver error
-    # about an empty string.
+    # the registry as an unparseable ref.
+    #
+    # ⚠️ The first version of this comment said flatly "this is not a fail-open,
+    # the resolver fails and the gate exits 1". That is true only WHERE A RESOLVER
+    # IS INSTALLED: `main()` below prints `::warning::` and returns 0 when neither
+    # skopeo nor docker is present. CI installs skopeo (image-ref-resolve.yaml), so
+    # the gate itself is safe; a local `--scope delivered` run on a box with
+    # neither exits 0 over a blanked pin. So: where a resolver exists this check
+    # buys a message that names the pin table instead of a registry error about an
+    # empty string, and where one does not it is the only thing that fires at all.
     table = getattr(mod, "_GITLAB_APPLY_IMAGES", {})
     # ⚠️ Count non-empty VALUES, not the deduped set: two entries may legitimately
     # pin the same image, and comparing `len(set)` against the entry count would
