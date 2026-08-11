@@ -717,7 +717,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "be21ebe4d7e27fd560d25aa0b2035b37477bdb56a06e2085a7aa13ae743cc2c4",
+ "source_digest": "8f01fee12575a5453b0699bdb26866947b09f55c52c0babb3a134de2e6d294da",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2408,6 +2408,9 @@
    "tests/lint/test_check_playwright_rtl_drift.py",
    "tests/ops/test_wrapped_path_references.py"
   ],
+  "tests/e2e-bench": [
+   "tests/lint/test_check_threshold_reachability.py"
+  ],
   "tests/e2e-bench/aggregate.py": [
    "tests/e2e-bench/test_aggregate.py"
   ],
@@ -2499,8 +2502,7 @@
    "tests/shared/test_json_stdout_contract.py"
   ],
   "tests/ops/test_ci_path_filter_coverage.py": [
-   "tests/lint/test_counterexample_coverage.py",
-   "tests/ops/test_wrapped_path_references.py"
+   "tests/lint/test_counterexample_coverage.py"
   ],
   "tests/ops/test_federation_revocation_reconciler.py": [
    "tests/helm/test_federation_store_sentinel_guard.py"

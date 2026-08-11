@@ -15,6 +15,7 @@ from __future__ import annotations
 import importlib.util
 
 import pytest
+import yaml
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -167,19 +168,48 @@ def test_grandfathered_key_no_longer_demanded_is_a_stale_exemption():
 
 # ── the CLI exit-code contract (main), independent of the real artifacts ──────
 
+def _stub_result(errors=(), infos=()):
+    """A `run_check` return value of the CURRENT shape, for `main()` stubs.
+
+    One helper rather than three literals: `main()` reads `stats` as well as
+    `errors`/`infos`, and a stub that silently lags the real shape turns a
+    contract change into three identical KeyErrors far from their cause.
+    `test_run_check_returns_all_three_result_keys` pins the shape itself.
+    """
+    return {
+        "errors": list(errors),
+        "infos": list(infos),
+        "stats": {"generator_faces": 4, "artifact_faces": 17,
+                  "generator_keys": 102, "artifact_keys": 70,
+                  "artifacts_without_defaults": 2},
+    }
+
+
+def test_run_check_returns_all_three_result_keys():
+    """`main()` consumes `stats` unconditionally, so its presence is a contract.
+
+    Asserted on the REAL call, not a stub — a stub asserting its own shape is
+    the tautology this file has been burned by before.
+    """
+    result = gate.run_check(demand=set(), supply=set(), deferred=set(),
+                            known_unwired={}, defaults_faces=({}, {}))
+    assert set(result) == {"errors", "infos", "stats"}, sorted(result)
+    assert set(result["stats"]) == {
+        "generator_faces", "artifact_faces", "generator_keys", "artifact_keys",
+        "artifacts_without_defaults"}, sorted(result["stats"])
+
+
 def test_main_without_ci_is_report_only(monkeypatch):
     """Bare `main([])` never fails on errors — it is report-only, so a green
     local commit is not gated on the (grandfathered) unwired set."""
-    monkeypatch.setattr(gate, "run_check",
-                        lambda: {"errors": ["some drift"], "infos": []})
+    monkeypatch.setattr(gate, "run_check", lambda: _stub_result(["some drift"]))
     assert gate.main([]) == gate.EXIT_OK
 
 
 def test_main_ci_fails_on_errors(monkeypatch):
     """`--ci` escalates any error (new unreachable OR exit-lock breach) to
     EXIT_VIOLATION — this is what the CI hook relies on."""
-    monkeypatch.setattr(gate, "run_check",
-                        lambda: {"errors": ["a breach"], "infos": []})
+    monkeypatch.setattr(gate, "run_check", lambda: _stub_result(["a breach"]))
     assert gate.main(["--ci"]) == gate.EXIT_VIOLATION
 
 
@@ -187,7 +217,7 @@ def test_main_ci_passes_when_clean(monkeypatch):
     """`--ci` returns 0 when there are no errors, even with INFO-level
     grandfathered entries present."""
     monkeypatch.setattr(gate, "run_check",
-                        lambda: {"errors": [], "infos": ["18 known-unwired"]})
+                        lambda: _stub_result(infos=["18 known-unwired"]))
     assert gate.main(["--ci"]) == gate.EXIT_OK
 
 
@@ -451,7 +481,8 @@ def test_shipped_optional_is_non_vacuous_on_the_real_artifact():
 def test_critical_key_in_a_defaults_face_is_an_error():
     result = gate.run_check(
         demand=set(), supply=set(), deferred=set(), known_unwired={},
-        defaults_faces={"probe face": {"pg_connections", "pg_connections_critical"}},
+        defaults_faces=({"probe face": {"pg_connections", "pg_connections_critical"}},
+                        {}),
     )
     hits = [e for e in result["errors"] if "CRITICAL-IN-DEFAULTS" in e]
     assert len(hits) == 1, result
@@ -462,7 +493,8 @@ def test_critical_key_in_a_defaults_face_is_an_error():
 def test_clean_defaults_face_is_silent():
     result = gate.run_check(
         demand=set(), supply=set(), deferred=set(), known_unwired={},
-        defaults_faces={"probe face": {"pg_connections", "mysql_threads_running"}},
+        defaults_faces=({"probe face": {"pg_connections", "mysql_threads_running"}},
+                        {}),
     )
     assert result["errors"] == [], result
 
@@ -472,7 +504,7 @@ def test_every_offending_key_is_reported_not_just_the_first():
     the first would read as "fix this one" on a face carrying sixteen."""
     result = gate.run_check(
         demand=set(), supply=set(), deferred=set(), known_unwired={},
-        defaults_faces={"probe": {"a_b", "a_b_critical", "c_d", "c_d_critical"}},
+        defaults_faces=({"probe": {"a_b", "a_b_critical", "c_d", "c_d_critical"}}, {}),
     )
     hits = [e for e in result["errors"] if "CRITICAL-IN-DEFAULTS" in e]
     assert len(hits) == 2, hits
@@ -486,7 +518,7 @@ def test_an_empty_defaults_face_is_an_error_not_a_pass():
     """
     result = gate.run_check(
         demand=set(), supply=set(), deferred=set(), known_unwired={},
-        defaults_faces={"probe face": set()},
+        defaults_faces=({"probe face": set()}, {}),
     )
     assert any("EMPTY-FACE" in e and "probe face" in e for e in result["errors"]), result
 
@@ -504,7 +536,7 @@ def test_dimensional_key_in_a_defaults_face_is_an_error():
     """
     result = gate.run_check(
         demand=set(), supply=set(), deferred=set(), known_unwired={},
-        defaults_faces={"probe": {"oracle_tablespace", 'oracle_ts{env="prod"}'}},
+        defaults_faces=({"probe": {"oracle_tablespace", 'oracle_ts{env="prod"}'}}, {}),
     )
     hits = [e for e in result["errors"] if "DIMENSIONAL-IN-DEFAULTS" in e]
     assert len(hits) == 1, result
@@ -525,8 +557,8 @@ def test_critical_must_be_a_SUFFIX_not_a_substring():
     """
     result = gate.run_check(
         demand=set(), supply=set(), deferred=set(), known_unwired={},
-        defaults_faces={"probe": {"redis_critical_path_latency",
-                                  "pg_criticality_score"}},
+        defaults_faces=({"probe": {"redis_critical_path_latency",
+                                   "pg_criticality_score"}}, {}),
     )
     assert [e for e in result["errors"] if "CRITICAL-IN-DEFAULTS" in e] == [], result
 
@@ -550,7 +582,7 @@ def test_the_defaults_face_is_wired_into_run_check_not_just_callable(monkeypatch
 
     def _dirty():
         called.append(True)
-        return {"injected face": {"pg_connections", "pg_connections_critical"}}
+        return ({"injected face": {"pg_connections", "pg_connections_critical"}}, {})
 
     monkeypatch.setattr(gate, "_defaults_faces", _dirty)
     result = gate.run_check(demand=set(), supply=set(), deferred=set(),
@@ -562,14 +594,33 @@ def test_the_defaults_face_is_wired_into_run_check_not_just_callable(monkeypatch
     assert "injected face" in hits[0]
 
 
+# The four producers the generator half must consist of — EXACTLY these, no
+# more and no fewer. Matched as identifiers inside each label rather than by
+# comparing whole label strings, so rewording a label's prose does not fail this
+# but adding, dropping or renaming a PRODUCER does.
+_EXPECTED_GENERATOR_PRODUCERS = {
+    "values.yaml",
+    "scaffold_tenant.generate_defaults",
+    "init_project._gen_defaults_yaml",
+    "onboard_platform.generate_defaults_from_candidates",
+}
+
+
 def test_real_repo_defaults_faces_are_all_present_and_clean():
     """The live faces, in their two classes.
 
-    The GENERATOR count is a literal because deriving the expectation from the
-    thing it guards is how a face silently disappears — dropping one from
-    `_defaults_faces` would otherwise just shrink both sides. The ARTIFACT side
-    cannot be a literal (it is a walk, and files come and go), so it is pinned by
-    a floor plus named hard-to-guess members in
+    ⛔ The generator half is pinned by SET EQUALITY against the producers it must
+    consist of, not by `len(...) == 4`. A count cannot see a fifth generator
+    arriving misfiled — that was the whole of #1393: with the old label-prefix
+    discriminator, a generator whose label began `artifact (` was tallied as an
+    artifact and the count stayed at 4. Blind review then measured the same hole
+    surviving a `kind` field, because a hand-written field is as writable as a
+    hand-written label. Set equality over producers sees all three shapes
+    (added / dropped / renamed), and the two classes now come back from
+    `_defaults_faces()` separately so nothing DECLARES which class it is in.
+
+    The ARTIFACT side cannot be a literal (it is a walk, and files come and go),
+    so it is pinned by a floor plus named hard-to-guess members in
     `test_the_artifact_face_is_derived_not_enumerated`.
 
     ⛔ The cleanliness assertion runs over BOTH classes; the NON-EMPTY assertion
@@ -578,25 +629,25 @@ def test_real_repo_defaults_faces_are_all_present_and_clean():
     child) legitimately declare no `defaults:` at all, so requiring non-empty
     everywhere turned this gate red on two correct files.
     """
-    faces = gate._defaults_faces()
-    generators = {k: v for k, v in faces.items()
-                  if not k.startswith(gate._ARTIFACT_FACE_PREFIX)}
-    artifacts = {k: v for k, v in faces.items()
-                 if k.startswith(gate._ARTIFACT_FACE_PREFIX)}
+    generators, artifacts = gate._defaults_faces()
 
-    assert len(generators) == 4, sorted(generators)
-    labels = " ".join(generators)
-    for producer in ("values.yaml",
-                     "scaffold_tenant.generate_defaults",
-                     "init_project._gen_defaults_yaml",
-                     "onboard_platform.generate_defaults_from_candidates"):
-        assert producer in labels, (producer, sorted(generators))
+    matched: dict[str, str] = {}
+    for label in generators:
+        hits = {p for p in _EXPECTED_GENERATOR_PRODUCERS if p in label}
+        assert len(hits) == 1, (
+            f"generator face {label!r} names {len(hits)} known producer(s) "
+            f"{sorted(hits)} — a new generator must be added to "
+            "_EXPECTED_GENERATOR_PRODUCERS, not left to be counted")
+        producer = hits.pop()
+        assert producer not in matched, (producer, matched[producer], label)
+        matched[producer] = label
+    assert set(matched) == _EXPECTED_GENERATOR_PRODUCERS, sorted(generators)
 
     assert len(artifacts) >= gate._DEFAULTS_ARTIFACT_FLOOR, sorted(artifacts)
 
     for face, keys in generators.items():
         assert keys, f"{face} yielded nothing — the reader is broken"
-    for face, keys in faces.items():
+    for face, keys in {**generators, **artifacts}.items():
         assert not [k for k in keys if k.endswith("_critical")], face
         assert not [k for k in keys if "{" in k], face
 
@@ -619,9 +670,9 @@ def test_the_onboard_face_is_a_live_probe_not_a_constant():
     assert out["defaults"] == {"zzz_probe_metric": "80"}
     assert out["critical_overrides"] == {"zzz_probe_metric_critical": "150"}
 
-    faces = gate._defaults_faces()
-    onboard_face = [v for k, v in faces.items() if "onboard_platform" in k]
-    assert onboard_face == [{"zzz_probe_metric"}], faces
+    generators, _artifacts = gate._defaults_faces()
+    onboard_face = [v for k, v in generators.items() if "onboard_platform" in k]
+    assert onboard_face == [{"zzz_probe_metric"}], generators
 
 
 def test_a_missing_artifact_is_fail_closed_and_names_the_path(monkeypatch, capsys):
@@ -710,9 +761,24 @@ def test_the_two_floors_blame_the_right_cause(monkeypatch):
     scanned = gate._tracked_defaults_artifacts()
     assert len(scanned) >= gate._DEFAULTS_ARTIFACT_FLOOR, scanned
 
-    # a couple of exemptions: scan floor must stay quiet, read floor too
+    # A couple of exemptions: scan floor must stay quiet, read floor too.
+    # ⛔ They have to be NON-shipped files. Exempting a shipped one now trips
+    # `_SHIPPED_CONFD_ROOTS` first — correctly, since the exemption table is the
+    # other way a shipped root stops being checked, and it used to be completely
+    # silent. That is pinned separately in
+    # `test_exempting_a_shipped_artifact_is_not_silent`; this test is about the
+    # two file floors, so it must not collide with it.
+    non_shipped = [rel for rel in scanned
+                   if not any(rel == root or rel.startswith(root + "/")
+                              for root in gate._SHIPPED_CONFD_ROOTS)]
+    assert len(non_shipped) >= 2, non_shipped
+    # …and the two SMALLEST of them, so the artifact key floor (a third floor,
+    # pinned in its own test) does not fire first and mask which floor this test
+    # is actually about.
+    by_keys = sorted(non_shipped, key=lambda rel: len(gate._defaults_section(
+        (gate.PROJECT_ROOT / rel).read_text(encoding="utf-8"))))
     monkeypatch.setattr(gate, "_DEFAULTS_ARTIFACT_EXEMPT",
-                        {rel: "x" * 40 for rel in scanned[:2]})
+                        {rel: "x" * 40 for rel in by_keys[:2]})
     result = gate.run_check(demand=set(), supply=set(), deferred=set(),
                             known_unwired={})
     assert not [e for e in result["errors"] if "floor" in e], result
@@ -725,6 +791,265 @@ def test_the_two_floors_blame_the_right_cause(monkeypatch):
         gate.run_check(demand=set(), supply=set(), deferred=set(), known_unwired={})
     # …and must NOT send the reader to repair a scan that is working
     assert "The scan is FINE" in str(exc.value)
+
+
+# ── the recursive `defaults:` walk (#1392) ───────────────────────────────────
+#
+# The reader used to look at the top level of `defaults:` only. Measured on the
+# tree at the time: an injection one level down was completely silent, while the
+# same key at the top level was caught — so for every artifact that keeps its
+# keys nested, this gate was reporting on a layer that could not hold the defect.
+
+_NESTED_DOC = """defaults:
+  threshold:
+    cpu: 70
+    mysql_connections_critical: 90
+  alert_group: baseline
+"""
+
+
+def test_the_walk_reaches_every_depth_not_just_the_top():
+    """The witness for #1392, with its counterfactual spelled out.
+
+    ⛔ Both halves matter. "The recursive reader finds it" alone would also be
+    true of a reader that returns every string in the file; the second assertion
+    is what makes this a statement about the CHANGE — the top-level view of the
+    very same document does not contain the key, which is exactly why the old
+    reader was silent here.
+    """
+    keys = gate._defaults_section(_NESTED_DOC)
+    assert "threshold.mysql_connections_critical" in keys, keys
+
+    top_level_only = set(yaml.safe_load(_NESTED_DOC)["defaults"])
+    assert not [k for k in top_level_only if k.endswith("_critical")], (
+        "the counterfactual is void — this document must be invisible to a "
+        "top-level reader, or it proves nothing about the walk")
+
+
+def test_a_nested_misplacement_is_an_error_end_to_end():
+    """…and the walk is wired to the rule, not merely correct in isolation."""
+    result = gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces=({"probe": gate._defaults_section(_NESTED_DOC)}, {}),
+    )
+    hits = [e for e in result["errors"] if "CRITICAL-IN-DEFAULTS" in e]
+    assert len(hits) == 1, result
+    assert "threshold.mysql_connections_critical" in hits[0], (
+        "the message must name the PATH — 'mysql_connections_critical' alone "
+        "sends the reader to the top level, which is not where it is")
+
+
+def test_the_nested_message_names_the_consequence_that_actually_happens():
+    """⛔ A nested key does NOT produce a warning-severity series — the file does
+    not decode at all (`Defaults` is `map[string]float64`), so the whole
+    platform-defaults block is dropped with a parse-failure metric. Telling the
+    reader to go looking for `user_threshold{severity="warning"}` would send
+    them after a series that is not there.
+    """
+    nested = gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces=({"probe": {"threshold.pg_connections_critical"}}, {}),
+    )["errors"][0]
+    flat = gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces=({"probe": {"pg_connections_critical"}}, {}),
+    )["errors"][0]
+
+    assert "does not decode at all" in nested, nested
+    assert "da_config_parse_failure_total" in nested, nested
+    assert 'severity="warning"' not in nested, nested
+    # …and the flat case keeps the silent-series explanation, which IS its shape
+    assert 'severity="warning"' in flat, flat
+    assert "does not decode at all" not in flat, flat
+
+
+def test_a_key_whose_value_is_a_mapping_is_still_checked():
+    """Intermediate keys count, not just leaves: a misplaced `<base>_critical:`
+    that happens to hold a mapping is the same defect in a different shape, and
+    a leaves-only walk would step straight over it."""
+    keys = gate._defaults_section("defaults:\n  pg_connections_critical:\n    a: 1\n")
+    assert "pg_connections_critical" in keys, keys
+
+
+def test_the_walk_refuses_a_recursive_anchor_instead_of_truncating():
+    """⛔ `yaml.safe_load` accepts a self-referential anchor, and a walk without a
+    cap recurses until the interpreter stops it. Truncating silently would hand
+    back a partial key set that passes the placement check for everything it
+    never reached — so the cap RAISES.
+    """
+    with pytest.raises(RuntimeError, match="exceeded"):
+        gate._defaults_section("defaults: &a\n  x: *a\n")
+
+
+def test_the_walk_leaves_flat_faces_byte_identical():
+    """Anti-regression for the change itself: on a flat section the path IS the
+    key, so the generator faces must not have moved at all."""
+    for text in (gate._CHART_VALUES.read_text(encoding="utf-8"),
+                 "defaults:\n  a: 1\n  b: 2\n"):
+        doc = yaml.safe_load(text) or {}
+        root = doc.get("thresholdConfig") or doc
+        assert gate._defaults_section(text) == set(root.get("defaults") or {})
+
+
+# ── the two face classes are BUILT, not declared (#1393) ─────────────────────
+
+def test_a_label_that_looks_like_an_artifact_is_still_a_generator():
+    """⛔ The #1393 regression, and it is about the DISCRIMINATOR, not the label.
+
+    Measured on the old code: a generator whose label began `artifact (` was
+    filed as an artifact, so its empty (broken) reader was exempt from
+    EMPTY-FACE — errors 0 — while `len(generators) == 4` still passed because
+    the four old literals were untouched. A `kind` field was measured to
+    reproduce it exactly, a hand-written field being as writable as a
+    hand-written label. Classes now arrive in separate dicts, so the label is
+    decoration: an empty face in the generator dict is an error whatever it is
+    called.
+    """
+    result = gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces=({f"{gate._ARTIFACT_FACE_PREFIX}5th generator)": set()}, {}),
+    )
+    assert [e for e in result["errors"] if "EMPTY-FACE" in e], result
+
+
+def test_placement_runs_on_artifact_faces_too():
+    """Both classes go through the same `_report_placement`. Splitting the loop
+    in two is exactly how one class would quietly stop being checked."""
+    result = gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces=({}, {"artifact (probe)": {"pg_connections_critical",
+                                                  'oracle_ts{env="prod"}'}}),
+    )
+    assert [e for e in result["errors"] if "CRITICAL-IN-DEFAULTS" in e], result
+    assert [e for e in result["errors"] if "DIMENSIONAL-IN-DEFAULTS" in e], result
+
+
+def test_an_empty_artifact_face_is_legal():
+    """The asymmetry, from the other side: two shipped recipe roots genuinely
+    declare no `defaults:`, and applying the generator rule to artifacts turned
+    this gate red on arrival for both of them."""
+    result = gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces=({}, {"artifact (probe)": set()}),
+    )
+    assert [e for e in result["errors"] if "EMPTY-FACE" in e] == [], result
+
+
+# ── per-class and per-root floors (#1392) ────────────────────────────────────
+
+@pytest.mark.parametrize("root", sorted(gate._SHIPPED_CONFD_ROOTS))
+def test_every_shipped_root_has_its_own_floor(monkeypatch, root):
+    """⛔ Clear each shipped root in turn and this must go red for that root.
+
+    This is the floor's own emptiness test, applied per source rather than once
+    globally — measured before it existed: removing EVERY non-`tests/` artifact
+    leaves 12 fixture survivors, clears both file floors, and `run_check`
+    reports nothing at all. Fixtures outnumber the shipped files, so a single
+    global number can always be held up by the wrong class.
+    """
+    tracked = gate._tracked_defaults_artifacts()
+    kept = [rel for rel in tracked
+            if not (rel == root or rel.startswith(root + "/"))]
+    assert len(kept) < len(tracked), f"{root} contributed nothing to remove"
+    # the file floors must NOT be what fires — that is the whole point
+    assert len(kept) >= gate._DEFAULTS_ARTIFACT_FLOOR, kept
+
+    monkeypatch.setattr(gate, "_tracked_defaults_artifacts", lambda: kept)
+    monkeypatch.setattr(gate, "_defaults_artifacts",
+                        lambda: [gate.PROJECT_ROOT / rel for rel in kept])
+    with pytest.raises(RuntimeError, match="shipped conf.d root") as exc:
+        gate.run_check(demand=set(), supply=set(), deferred=set(), known_unwired={})
+    assert root in str(exc.value), exc.value
+
+
+def test_exempting_a_shipped_artifact_is_not_silent(monkeypatch):
+    """The exemption table is the OTHER way a shipped root stops being checked,
+    and it used to be completely silent: the read floor counts files repo-wide,
+    so exempting the two exporter artifacts left 15 survivors and nothing said
+    the shipped tree had gone dark."""
+    tracked = gate._tracked_defaults_artifacts()
+    root = "components/threshold-exporter/config/conf.d"
+    exempt = {rel: "x" * 40 for rel in tracked
+              if rel == root or rel.startswith(root + "/")}
+    assert exempt, root
+
+    monkeypatch.setattr(gate, "_DEFAULTS_ARTIFACT_EXEMPT", exempt)
+    with pytest.raises(RuntimeError, match="shipped conf.d root"):
+        gate.run_check(demand=set(), supply=set(), deferred=set(), known_unwired={})
+
+
+def test_the_key_floors_are_per_class_not_one_global_number():
+    """⛔ The first draft of this floor was a single total, and a single total
+    cannot see one class collapse: generators contribute 102 of the 172 keys and
+    hold any global number up on their own.
+    """
+    plenty = {f"g{i}" for i in range(200)}
+    # artifacts at zero, generators enormous → the artifact floor must still fire
+    with pytest.raises(RuntimeError, match="artifact faces yielded"):
+        gate._assert_keys_floor({"a generator": plenty}, {"an artifact": set()})
+    # …and symmetrically
+    with pytest.raises(RuntimeError, match="generator faces yielded"):
+        gate._assert_keys_floor({"a generator": {"one"}}, {"an artifact": plenty})
+
+
+def test_the_artifact_key_floor_sees_a_group_stop_yielding(monkeypatch):
+    """End-to-end, on the real tree, with the FILE count still above both file
+    floors — which is the case those two floors structurally cannot see."""
+    tracked = gate._tracked_defaults_artifacts()
+    kept = [rel for rel in tracked if not rel.startswith("tests/e2e-bench/")]
+    assert len(kept) >= gate._DEFAULTS_ARTIFACT_FLOOR, kept
+
+    monkeypatch.setattr(gate, "_tracked_defaults_artifacts", lambda: kept)
+    monkeypatch.setattr(gate, "_defaults_artifacts",
+                        lambda: [gate.PROJECT_ROOT / rel for rel in kept])
+    with pytest.raises(RuntimeError, match="artifact faces yielded"):
+        gate.run_check(demand=set(), supply=set(), deferred=set(), known_unwired={})
+
+
+def test_the_real_tree_clears_both_key_floors_with_room():
+    """Anti-vacuity for the floors themselves: they have to be under today's
+    values, or every one of the tests above passes for the wrong reason."""
+    generators, artifacts = gate._defaults_faces()
+    g_keys = sum(len(v) for v in generators.values())
+    a_keys = sum(len(v) for v in artifacts.values())
+    assert g_keys >= gate._DEFAULTS_GENERATOR_KEYS_FLOOR, g_keys
+    assert a_keys >= gate._DEFAULTS_ARTIFACT_KEYS_FLOOR, a_keys
+    assert gate._DEFAULTS_GENERATOR_KEYS_FLOOR > 0
+    assert gate._DEFAULTS_ARTIFACT_KEYS_FLOOR > 0
+
+
+def test_the_shipped_roots_agree_with_the_confd_schema_hooks():
+    """⛔ Second, independent source. `.pre-commit-config.yaml` is the only place
+    in this repo that states which conf.d trees are SHIPPED, in those words
+    ("shipped config a user reads or runs, NOT every conf.d in the repo"), and
+    `_SHIPPED_CONFD_ROOTS` must not drift from it.
+
+    Not set equality: a shipped tree with no `_defaults*.yaml` has nothing for
+    this gate to floor. So the relation asserted is — every root here is hooked,
+    and every hooked tree that is NOT here has no tracked `_defaults*.yaml`. The
+    day one grows a `_defaults.yaml`, this goes red asking for it.
+    """
+    cfg = (gate.PROJECT_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+    hooked: set[str] = set()
+    for hook_id in ("confd-schema-check", "confd-schema-check-shipped"):
+        entry = cfg.split(f"id: {hook_id}\n", 1)[1].split("language:", 1)[0]
+        hooked |= {ln.split("--config-dir", 1)[1].strip()
+                   for ln in entry.splitlines() if "--config-dir" in ln}
+    assert len(hooked) >= 4, hooked  # the parse itself must not go vacuous
+
+    missing = set(gate._SHIPPED_CONFD_ROOTS) - hooked
+    assert not missing, (
+        f"_SHIPPED_CONFD_ROOTS names {sorted(missing)}, which the confd-schema "
+        "hooks do not cover — one of the two is wrong")
+
+    tracked = gate._tracked_defaults_artifacts()
+    for tree in sorted(hooked - set(gate._SHIPPED_CONFD_ROOTS)):
+        found = [rel for rel in tracked
+                 if rel == tree or rel.startswith(tree + "/")]
+        assert not found, (
+            f"shipped tree {tree!r} now has {found} but no entry in "
+            "_SHIPPED_CONFD_ROOTS — add one, with a floor, or this gate is "
+            "silent about a tree we ship")
 
 
 def test_the_scan_is_tracked_scope_not_a_filesystem_walk():
