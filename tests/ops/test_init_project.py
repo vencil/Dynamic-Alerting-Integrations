@@ -973,13 +973,27 @@ class TestGenPrecommitSnippet:
             # Files pattern should reference conf.d
             assert 'conf' in hook['files']
 
-    def test_language_system(self):
-        """Hooks use 'system' language."""
+    def test_language_docker_image(self):
+        """Hooks use 'docker_image', not 'system'.
+
+        ⛔ This test used to assert `language: system`, which pinned a hook that
+        could never run: under `system`, pre-commit shlex-splits `entry` and
+        execs it with NO shell, so the `docker run -v ${PWD}/conf.d:…` the
+        snippet emitted reached docker as the literal string `${PWD}/conf.d` and
+        failed on every commit touching conf.d. The test passed throughout,
+        because it asked what the language WAS rather than whether the entry
+        could execute — and by pinning the value it made the defect load-bearing.
+        `docker_image` has pre-commit build the `docker run` and mount the repo
+        at /src itself (pre_commit/languages/docker.py), so no expansion is
+        needed. Executability is asserted in
+        tests/ops/test_generated_ci_artifacts.py.
+        """
         yaml_str = ip._gen_precommit_snippet('ghcr.io/vencil/da-tools:latest')
         config = yaml.safe_load(yaml_str)
         hooks = config['repos'][0]['hooks']
+        assert hooks, 'no hooks generated'
         for hook in hooks:
-            assert hook['language'] == 'system'
+            assert hook['language'] == 'docker_image'
 
     def test_header_mentions_da_tools(self):
         """Header mentions Dynamic Alerting."""
@@ -1375,7 +1389,15 @@ class TestRunInit:
 # ── 14. CI/Deploy Combinations (Parametrized) ──
 # ============================================================
 
-@pytest.mark.parametrize('ci,deploy', [
+# ⛔ Hand-written on purpose — do NOT rewrite this as a product of
+# `_build_parser()`'s `choices`. It is the INDEPENDENT source that
+# tests/ops/test_generated_ci_artifacts.py compares its parser-derived matrix
+# against (anti-vacuity floor). Derive both from the same call and the
+# comparison becomes a tautology: a `--deploy` choice silently dropped from
+# the CLI would shrink the matrix and every test would still pass, just with
+# fewer cases. Adding a fourth deploy method therefore reds that comparison
+# until this list is updated too — which is the point.
+CI_DEPLOY_COMBINATIONS = [
     ('github', 'kustomize'),
     ('github', 'helm'),
     ('github', 'argocd'),
@@ -1385,7 +1407,10 @@ class TestRunInit:
     ('both', 'kustomize'),
     ('both', 'helm'),
     ('both', 'argocd'),
-])
+]
+
+
+@pytest.mark.parametrize('ci,deploy', CI_DEPLOY_COMBINATIONS)
 class TestCiDeployCombinations:
     """Tests for all CI/deploy combinations."""
 

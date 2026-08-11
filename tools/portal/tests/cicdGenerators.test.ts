@@ -16,6 +16,7 @@ import fc from 'fast-check';
 import {
   cicdGenerateInitCommand,
   cicdGenerateDockerCommand,
+  cicdGeneratedPaths,
   cicdGenerateFileTree,
   cicdGenerateGitHubActionsPreview,
 } from '../src/interactive/tools/cicd-setup-wizard/utils/generators.js';
@@ -101,28 +102,54 @@ describe('cicdGenerateFileTree', () => {
     expect(out).toContain('db-b.yaml');
   });
 
-  it('emits .github/workflows/ when ci=github', () => {
-    expect(cicdGenerateFileTree(baseConfig({ ci: 'github' }))).toContain('.github/workflows/');
+  it('emits the github workflow when ci=github', () => {
+    expect(cicdGeneratedPaths(baseConfig({ ci: 'github' })))
+      .toContain('.github/workflows/dynamic-alerting.yaml');
   });
 
-  it('emits .gitlab-ci.d/ when ci=gitlab', () => {
-    expect(cicdGenerateFileTree(baseConfig({ ci: 'gitlab' }))).toContain('.gitlab-ci.d/');
+  it('emits the gitlab pipeline when ci=gitlab', () => {
+    expect(cicdGeneratedPaths(baseConfig({ ci: 'gitlab' })))
+      .toContain('.gitlab-ci.d/dynamic-alerting.yml');
   });
 
   it('emits BOTH github + gitlab when ci=both', () => {
-    const out = cicdGenerateFileTree(baseConfig({ ci: 'both' }));
-    expect(out).toContain('.github/workflows/');
-    expect(out).toContain('.gitlab-ci.d/');
+    const out = cicdGeneratedPaths(baseConfig({ ci: 'both' }));
+    expect(out).toContain('.github/workflows/dynamic-alerting.yaml');
+    expect(out).toContain('.gitlab-ci.d/dynamic-alerting.yml');
   });
 
-  it('emits kustomize/ when deploy=kustomize or argocd', () => {
-    expect(cicdGenerateFileTree(baseConfig({ deploy: 'kustomize' }))).toContain('kustomize/');
-    expect(cicdGenerateFileTree(baseConfig({ deploy: 'argocd' }))).toContain('kustomize/');
+  // ⛔ These two replace assertions that pinned the OPPOSITE — "emits
+  // kustomize/ when deploy=kustomize or argocd" and "emits argocd/ ONLY when
+  // deploy=argocd". Both were green and both were wrong: `da-tools init`
+  // scaffolds deployment files for deploy=kustomize only, so the wizard was
+  // promising two directories that never arrive, and this suite was what kept
+  // the promise load-bearing. Set equality (not toContain) so an added path
+  // also has to be justified against the CLI. Cross-checked against the real
+  // run_init() by tests/ops/test_generated_ci_artifacts.py.
+  it('scaffolds deployment files for deploy=kustomize only', () => {
+    expect(cicdGeneratedPaths(baseConfig({ deploy: 'kustomize' })).filter(p => p.startsWith('kustomize/')))
+      .toEqual([
+        'kustomize/base/kustomization.yaml',
+        'kustomize/base/README.md',
+        'kustomize/overlays/dev/kustomization.yaml',
+        'kustomize/overlays/prod/kustomization.yaml',
+      ]);
   });
 
-  it('emits argocd/ ONLY when deploy=argocd', () => {
-    expect(cicdGenerateFileTree(baseConfig({ deploy: 'argocd' }))).toContain('argocd/');
-    expect(cicdGenerateFileTree(baseConfig({ deploy: 'kustomize' }))).not.toContain('argocd/');
+  it.each(['helm', 'argocd'])('scaffolds NO deployment files for deploy=%s', (deploy) => {
+    const out = cicdGeneratedPaths(baseConfig({ deploy }));
+    expect(out.filter(p => p.startsWith('kustomize/') || p.startsWith('argocd/'))).toEqual([]);
+    expect(cicdGenerateFileTree(baseConfig({ deploy }))).not.toContain('argocd/');
+  });
+
+  it('draws a well-formed tree for multiple tenants', () => {
+    // The hand-drawn version gave EVERY tenant the terminal `└──` connector,
+    // so from the second tenant on the tree was malformed.
+    const lines = cicdGenerateFileTree(baseConfig({ tenants: ['db-a', 'db-b'] })).split('\n');
+    const lineFor = (name: string) => lines.find(l => l.trim().endsWith(name));
+    expect(lineFor('_defaults.yaml')).toBe('│   ├── _defaults.yaml');
+    expect(lineFor('db-a.yaml')).toBe('│   ├── db-a.yaml');
+    expect(lineFor('db-b.yaml')).toBe('│   └── db-b.yaml');
   });
 });
 

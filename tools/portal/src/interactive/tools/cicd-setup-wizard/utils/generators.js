@@ -12,6 +12,7 @@ purpose: |
   Public API:
     cicdGenerateInitCommand(config)            build da-tools CLI
     cicdGenerateDockerCommand(config)          docker wrapper
+    cicdGeneratedPaths(config)                 paths `init` will write
     cicdGenerateFileTree(config)               ASCII repo tree
     cicdGenerateGitHubActionsPreview(config)   sample workflow YAML
 
@@ -33,47 +34,109 @@ function cicdGenerateDockerCommand(config) {
   return `docker run --rm -it \\\n  -v $(pwd):/workspace -w /workspace \\\n  ghcr.io/vencil/da-tools:latest \\\n  ${init.replace('da-tools ', '')}`;
 }
 
-function cicdGenerateFileTree(config) {
-  const lines = ['your-repo/'];
-  lines.push('├── conf.d/');
-  lines.push('│   ├── _defaults.yaml');
+// ⛔ This list is a CLAIM about another program's behaviour, so it is held to
+// that program: tests/ops/test_generated_ci_artifacts.py runs the real
+// `run_init()` for each --deploy value and asserts the resulting file set
+// equals this one. Keep it derived from what `da-tools init` WRITES, never
+// from what a deploy method conceptually needs.
+//
+// Prior to #1347 this function promised `kustomize/` AND `argocd/` for
+// deploy=argocd. `init_project.py` writes NEITHER: both the kustomize tree
+// (run_init step 3) and every other deploy artifact are gated on
+// `deploy == 'kustomize'`, so the argocd branch scaffolds no deployment files
+// at all. The shipped argocd apply stage nonetheless runs
+// `argocd app sync dynamic-alerting`, an Application this wizard told the user
+// they would receive. That product gap is out of scope here (see the
+// "explicitly NOT covered" section of the Python guard); what is fixed is the
+// wizard claiming files that never arrive.
+function cicdGeneratedPaths(config) {
+  const paths = ['conf.d/_defaults.yaml'];
   for (const tenant of config.tenants) {
-    lines.push(`│   └── ${tenant}.yaml`);
+    paths.push(`conf.d/${tenant}.yaml`);
   }
   if (config.ci === 'github' || config.ci === 'both') {
-    lines.push('├── .github/workflows/');
-    lines.push('│   └── dynamic-alerting.yaml');
+    paths.push('.github/workflows/dynamic-alerting.yaml');
   }
   if (config.ci === 'gitlab' || config.ci === 'both') {
-    lines.push('├── .gitlab-ci.d/');
-    lines.push('│   └── dynamic-alerting.yml');
+    paths.push('.gitlab-ci.d/dynamic-alerting.yml');
   }
-  if (config.deploy === 'kustomize' || config.deploy === 'argocd') {
-    lines.push('├── kustomize/');
-    lines.push('│   ├── base/');
-    lines.push('│   │   └── kustomization.yaml');
-    lines.push('│   └── overlays/');
-    lines.push('│       ├── dev/');
-    lines.push('│       └── prod/');
+  if (config.deploy === 'kustomize') {
+    paths.push('kustomize/base/kustomization.yaml');
+    paths.push('kustomize/base/README.md');
+    paths.push('kustomize/overlays/dev/kustomization.yaml');
+    paths.push('kustomize/overlays/prod/kustomization.yaml');
   }
-  if (config.deploy === 'argocd') {
-    lines.push('├── argocd/');
-    lines.push('│   └── dynamic-alerting.yaml');
-  }
-  lines.push('├── .pre-commit-config.da.yaml');
-  lines.push('└── .da-init.yaml');
-  return lines.join('\n');
+  paths.push('.pre-commit-config.da.yaml');
+  paths.push('.da-init.yaml');
+  return paths;
 }
 
+// Render, not author: every name comes from cicdGeneratedPaths, so a directory
+// can never appear in the tree without a file that puts it there. The previous
+// hand-drawn version emitted `└──` for EVERY tenant (a malformed tree from the
+// second tenant on) because each line carried its own connector glyph.
+function _cicdTreeLines(node, prefix) {
+  const lines = [];
+  const names = Object.keys(node);
+  names.forEach((name, i) => {
+    const isLast = i === names.length - 1;
+    const children = node[name];
+    const isDir = children !== null;
+    lines.push(`${prefix}${isLast ? '└── ' : '├── '}${name}${isDir ? '/' : ''}`);
+    if (isDir) {
+      lines.push(..._cicdTreeLines(children, `${prefix}${isLast ? '    ' : '│   '}`));
+    }
+  });
+  return lines;
+}
+
+function cicdGenerateFileTree(config) {
+  const root = {};
+  for (const path of cicdGeneratedPaths(config)) {
+    const segments = path.split('/');
+    let cursor = root;
+    segments.forEach((segment, i) => {
+      if (i === segments.length - 1) {
+        cursor[segment] = null;
+      } else {
+        cursor[segment] = cursor[segment] || {};
+        cursor = cursor[segment];
+      }
+    });
+  }
+  return ['your-repo/', ..._cicdTreeLines(root, '')].join('\n');
+}
+
+// ⛔ `apply` must NOT declare `needs: generate` (#1356). `generate` is
+// pull_request-only and `apply` is workflow_dispatch-only; GitHub skips every
+// job that needs a SKIPPED job, so the two together left `apply` with zero
+// reachable events. The CLI generator (scripts/tools/ops/init_project.py,
+// _build_github_apply_stage) carries the identical constraint — this preview
+// is a second hand-written copy of that workflow (divergence tracked as
+// #1351), so a fix to one that is not applied to the other deepens the split.
+// Both are held by the reachability assertion in
+// tests/ops/test_generated_ci_artifacts.py.
 function cicdGenerateGitHubActionsPreview(config) {
   return `name: Dynamic Alerting CI/CD
 on:
   pull_request:
     paths: ['conf.d/**']
+  # No branches: filter. on.push.branches takes literals only, so any value
+  # here guesses the customer's default branch and is wrong for master/trunk
+  # repos. Omitting it is correct everywhere and only adds runs - a push to
+  # the default branch is still a push. Same reasoning as the CLI generator.
   push:
-    branches: [main]
     paths: ['conf.d/**']
   workflow_dispatch:
+
+# Least-privilege. This preview's generate job writes .output/ and nothing
+# else, so read is all it needs. The CLI generator (da-tools init) additionally
+# posts a sticky PR comment and therefore also declares pull-requests: write —
+# the difference is real, not drift, and granting a write scope this sample
+# never uses would be teaching the wrong default.
+# (No backticks in this block — it lives inside a JS template literal.)
+permissions:
+  contents: read
 
 jobs:
   validate:
@@ -85,7 +148,7 @@ jobs:
           docker run --rm \\
             -v \${{ github.workspace }}/conf.d:/data/conf.d:ro \\
             ghcr.io/vencil/da-tools:latest \\
-            validate-config --config-dir /data/conf.d --ci
+            validate-config --config-dir /data/conf.d
 
   generate:
     needs: validate
@@ -110,7 +173,7 @@ jobs:
             config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d --format markdown > .output/blast-radius.md
 
   apply:
-    needs: [validate, generate]
+    needs: [validate]
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: production
@@ -131,4 +194,4 @@ jobs:
         run: argocd app sync dynamic-alerting --force`}`;
 }
 
-export { cicdGenerateInitCommand, cicdGenerateDockerCommand, cicdGenerateFileTree, cicdGenerateGitHubActionsPreview };
+export { cicdGenerateInitCommand, cicdGenerateDockerCommand, cicdGeneratedPaths, cicdGenerateFileTree, cicdGenerateGitHubActionsPreview };
