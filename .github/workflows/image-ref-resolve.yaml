@@ -101,19 +101,21 @@ jobs:
       # relaxes only the implicit success() check, so a real failure above does
       # not hide this face.
       #
-      # ⛔ The second clause reads like a guard against the install step being
-      # broken. It is not, and the comment used to claim it was: if that step
-      # never ran, `steps.deploy_scope.conclusion` is ABSENT, so the comparison
-      # is `'' != 'skipped'` → true and this step runs anyway. Nothing is lost by
-      # that — the script prints `check_image_refs_resolve: PyYAML not installed`
-      # and exits 2, the same diagnosis the deploy step would have given, not the
-      # "bogus ImportError" the old comment warned about. The clause is kept
-      # because it costs nothing and documents intent; the reachability guard in
-      # tests/ops/test_nightly_scan_matrix_drift.py allowlists this exact
-      # expression, so any edit to it must be re-argued there.
+      # ⛔ A second clause `&& steps.deploy_scope.conclusion != 'skipped'` used to
+      # sit here, with a comment arguing it never narrows because an unconditional
+      # step "cannot be skipped" and an un-run step is ABSENT from the context.
+      # Review found that reasoning inverted: a step with no `if:` carries the
+      # implicit `success()`, so when an earlier step fails it is recorded with
+      # `conclusion: skipped` — present, not absent — and the clause gated this
+      # step in precisely the case the comment said it did not. It was also an
+      # allowlisted expression in the reachability guard, i.e. a fail-open
+      # exemption resting on a false premise, inside a module whose whole design
+      # is "unknown expression ⇒ assume it gates ⇒ red". Removed rather than
+      # re-argued: it bought nothing that `!cancelled()` plus a red job does not
+      # already give.
       # The two scopes are independent faces: "the customer pipeline's kubectl
       # image is gone" is worth knowing in the SAME run as "our grafana tag is
       # typo'd", not in the run after.
       - name: Resolve image refs (delivered scope — what `da-tools init` writes)
-        if: ${{ !cancelled() && steps.deploy_scope.conclusion != 'skipped' }}
+        if: ${{ !cancelled() }}
         run: python3 scripts/ops/check_image_refs_resolve.py --scope delivered

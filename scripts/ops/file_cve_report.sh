@@ -277,8 +277,17 @@ fi
 state_marker="${STATE_OPEN} missing=${missing} total=${total} tokens=[${tokens}] ${STATE_CLOSE}"
 
 if [ "$problem" -eq 1 ]; then
-  body="$(printf '%sNightly image scan on `main` (%s): **%s** fixable HIGH/CRITICAL CVE(s) across %s/%s %s images scanned.\n\n%s\n%s\n**Remediate**: %sA failed build/scan is a Dockerfile/COPY break or a bad/missing image ref to fix directly. This issue is REFRESHED in place (body edited — no comment spam); it comments only when a NEW CVE appears or more images fail to scan, and auto-closes once clean.\n\n%s' \
-    "$degraded_note" "$RUN_URL" "$total" "$present" "$EXPECTED" "$KIND" "$table" "$details" "${EXTRA_NOTE:+$EXTRA_NOTE }" "$state_marker")"
+  # ⛔ The "what a failed leg means" sentence is per-bucket, not universal. It used
+  # to be a constant reading "a Dockerfile/COPY break or a bad/missing image ref to
+  # fix directly" — true for the self-built bucket, false in both halves for the
+  # customer-delivered one, which builds nothing and whose bad refs are explicitly
+  # NOT fixable directly for existing customers. That is the #1243 / #1058 failure
+  # (advice that cannot work teaches the reader to ignore the issue) arriving by
+  # inheritance, on the run where the bucket is doing its most valuable work.
+  # Default preserves the previous wording for callers that do not set it.
+  failure_cause_note="${FAILURE_CAUSE_NOTE:-A failed build/scan is a Dockerfile/COPY break or a bad/missing image ref to fix directly.}"
+  body="$(printf '%sNightly image scan on `main` (%s): **%s** fixable HIGH/CRITICAL CVE(s) across %s/%s %s images scanned.\n\n%s\n%s\n**Remediate**: %s%s This issue is REFRESHED in place (body edited — no comment spam); it comments only when a NEW CVE appears or more images fail to scan, and auto-closes once clean.\n\n%s' \
+    "$degraded_note" "$RUN_URL" "$total" "$present" "$EXPECTED" "$KIND" "$table" "$details" "${EXTRA_NOTE:+$EXTRA_NOTE }" "$failure_cause_note" "$state_marker")"
   if [ -n "$num" ]; then
     # EDIT in place rather than a daily comment: a comment emails the assignee
     # every morning while an upstream patch is pending (fatigue → muted scan).

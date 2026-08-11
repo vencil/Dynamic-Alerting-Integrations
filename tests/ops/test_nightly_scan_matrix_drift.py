@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -965,13 +966,17 @@ def _invokes_with_flag(argvs: list[list[str]], script: str, flag: str, value: st
 _NON_NARROWING_IF = {
     "always()": "runs regardless of upstream outcome — strictly wider.",
     "!cancelled()": "only relaxes the implicit success() — strictly wider.",
-    # The delivered-scope step. `deploy_scope` is itself unconditional, so it
-    # cannot be 'skipped'; and if it never ran at all the context entry is
-    # absent, making the comparison `'' != 'skipped'` → true. Both branches
-    # therefore run this step, which is why it does not narrow. (That second
-    # branch is the opposite of what the workflow comment used to claim.)
-    "!cancelled() && steps.deploy_scope.conclusion != 'skipped'":
-        "both branches evaluate true; see the note in image-ref-resolve.yaml.",
+    # ⛔ REMOVED, and the removal is the lesson. This table used to carry
+    # `!cancelled() && steps.deploy_scope.conclusion != 'skipped'`, exempted on the
+    # reasoning that an unconditional step "cannot be 'skipped'" and an un-run one
+    # is absent from the context. That is inverted: a step with no `if:` carries
+    # the implicit `success()`, so an earlier failure records it as
+    # `conclusion: skipped` — present — and the clause narrowed exactly where the
+    # entry said it did not. ⇒ A fail-open exemption justified by a false premise,
+    # in the one table whose entries are graded on prose rather than on shape.
+    # The workflow dropped the clause instead of re-arguing it. Rule of thumb for
+    # the next entry here: if the justification needs a paragraph about context
+    # semantics, delete the condition instead.
 }
 
 
@@ -1138,6 +1143,53 @@ def test_the_resolve_workflow_covers_the_delivered_pin_source() -> None:
             "`delivered` scope reads the customer pin table; the default "
             "`deploy` scope does not read it at all."
         )
+
+
+@pytest.mark.parametrize("ci_env,expect_zero", [(None, True), ("true", False)])
+def test_a_missing_resolver_is_advisory_locally_and_fatal_in_ci(
+    tmp_path, ci_env, expect_zero: bool,
+) -> None:
+    """No skopeo and no docker must not report success in CI.
+
+    ⛔ This was the design's only fail-open, and the only thing standing in front
+    of it was the continued existence of an `apt-get install -y skopeo` step. The
+    realistic way that step stops working is not deletion — a guard covers that —
+    it is a maintainer answering an apt flake with `continue-on-error: true`.
+    After that the step's conclusion is `success`, both scopes print
+    `::warning:: neither skopeo nor docker available`, both return 0, and both
+    gates read green forever with nothing asserting otherwise.
+
+    Locally the fail-open is the right behaviour: a laptop without skopeo must not
+    fail a check about registry state. So the property is conditional, and both
+    halves are pinned — a check that cannot run must not report success where
+    someone is relying on it, and must not shout where nobody is.
+    """
+    env = {k: v for k, v in os.environ.items()
+           if k.upper() not in {"CI", "PATH", "GITHUB_ACTIONS"}}
+    # A PATH with neither resolver on it. tmp_path is empty by construction, which
+    # is a stronger statement than filtering a real PATH by name.
+    env["PATH"] = str(tmp_path)
+    env["SYSTEMROOT"] = os.environ.get("SYSTEMROOT", "")  # Windows needs this
+    if ci_env is not None:
+        env["CI"] = ci_env
+
+    proc = subprocess.run(
+        [sys.executable, "-X", "utf8", str(EXTRACTOR), "--scope", "delivered"],
+        cwd=ROOT, env=env, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=120)
+    blob = proc.stdout + proc.stderr
+    assert "neither skopeo nor docker" in blob, (
+        "the probe did not reach the no-resolver branch, so its exit code says "
+        f"nothing about it.\nstdout: {proc.stdout}\nstderr: {proc.stderr}")
+    if expect_zero:
+        assert proc.returncode == 0, (
+            "a developer box without skopeo must not fail this check; it reports "
+            f"and moves on. rc={proc.returncode}")
+    else:
+        assert proc.returncode != 0, (
+            "under CI a check that could not run reported SUCCESS. That is the "
+            "shape where one `continue-on-error: true` on the install step turns "
+            "both scopes permanently green.")
 
 
 def test_the_delivered_scope_job_has_a_resolver_installed() -> None:

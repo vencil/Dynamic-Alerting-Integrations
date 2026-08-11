@@ -43,12 +43,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import site
 import subprocess
 import sys
 import sysconfig
 from pathlib import Path
+
+# Distinct from EXIT_VIOLATION (1): "the check could not run" is not "the refs are
+# bad", and a reader of a CI log must be able to tell those apart.
+EXIT_NO_RESOLVER = 3
 
 try:
     import yaml
@@ -411,11 +416,26 @@ def main() -> int:
 
     build_cmd, name = _resolver()
     if build_cmd is None:
-        print("::warning:: neither skopeo nor docker available — SKIPPING image-ref "
-              "resolution (install skopeo in CI to enforce). Refs that WOULD be checked:")
+        # ⛔ This is the only fail-open in the design, and on a dev box it is the
+        # right one: a laptop without skopeo must not fail a check about registry
+        # state. In CI it is the wrong one, and it was defended only by the
+        # continued existence of an `apt-get install skopeo` step. The realistic
+        # way that step stops working is not deletion — a guard covers that — it
+        # is someone answering an apt flake with `continue-on-error: true`, after
+        # which the step's conclusion is `success`, every scope prints this
+        # warning, every scope returns 0, and both gates are green forever with
+        # nothing asserting otherwise. So: advisory locally, fail-closed under CI.
+        in_ci = bool(os.environ.get("CI"))
+        stream = sys.stderr if in_ci else sys.stdout
+        level = "error" if in_ci else "warning"
+        print(f"::{level}:: neither skopeo nor docker available — image-ref "
+              f"resolution did NOT run"
+              + (" (this is CI: a check that cannot run must not report success)"
+                 if in_ci else " (install skopeo to enforce locally)")
+              + ". Refs that WOULD be checked:", file=stream)
         for ref in refs:
-            print(f"  - {ref}")
-        return 0
+            print(f"  - {ref}", file=stream)
+        return EXIT_NO_RESOLVER if in_ci else 0
 
     print(f"Resolving {len(refs)} concrete image ref(s) [scope={args.scope}] via {name}...")
     failed: list[tuple[str, str]] = []
