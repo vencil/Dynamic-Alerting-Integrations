@@ -451,7 +451,7 @@ _DELIVERED_PIN_SOURCE = "scripts/tools/ops/init_project.py"
 # one of those would shrink in lockstep with the thing it is guarding — the
 # exact triviality `test_the_three_selfbuilt_build_lists_agree` had to relocate
 # its own floor away from. Lowering this has to be a deliberate edit.
-_DELIVERED_PRODUCT_FLOOR = 4
+_DELIVERED_PRODUCT_FLOOR = 5
 
 # Shape of a concrete image ref, applied to SCALARS of the generated YAML rather
 # than to key names — so it sees the ref wherever the generator happens to put
@@ -678,7 +678,13 @@ def _refs_in_a_generated_customer_repo() -> tuple[set[str], int, int]:
                 "rule_packs": ["mariadb"],
                 "tenants": ["db-a"],
                 "namespace": "monitoring",
-                "da_tools_image": "ghcr.io/vencil/da-tools:v9.9.9",
+                # ⛔ The real default, not a sentinel. A sentinel was fine while
+                # first-party refs were excluded from the derivation below; now
+                # that they are not, feeding a fake value would make this guard
+                # compare the watched set against a ref no customer ever gets —
+                # green for the wrong reason. Read from the generator so a bump
+                # of the tool tag flows here without an edit.
+                "da_tools_image": ip.DA_TOOLS_IMAGE,
                 # git-sync only reaches a customer on this path.
                 "config_source": "git",
                 "git_repo": "https://example.com/r.git",
@@ -704,11 +710,29 @@ def _refs_in_a_generated_customer_repo() -> tuple[set[str], int, int]:
                             continue
                         if not _GENERATED_REF_SHAPE.match(candidate):
                             continue
-                        # First-party currency is the release flow's job (#902
-                        # rejected first-party digest pinning outright); the same
-                        # prefix rule the extractor uses.
-                        if candidate.startswith("ghcr.io/vencil/"):
-                            continue
+                        # ⛔ NO first-party exclusion here any more, and the
+                        # removal is the finding. It used to skip everything under
+                        # `ghcr.io/vencil/` "because first-party currency is the
+                        # release flow's job (#902 rejected first-party digest
+                        # pinning)". #902 rejected DIGEST PINNING; it never
+                        # answered "does this ref resolve" or "what CVEs does the
+                        # published artifact carry". Inheriting a skip into a
+                        # question it was not written for is the same move whose
+                        # ⛔ note in the extractor says it is how
+                        # federation-audit-sidecar shipped unscanned for months.
+                        #
+                        # What it hid: `ghcr.io/vencil/da-tools` is in 18/18
+                        # generated projects — measured by generating the full
+                        # option matrix and parsing the trees — while no project
+                        # carries more than two of the four third-party pins and
+                        # three carry none. The one image every customer runs was
+                        # the one this guard could not see.
+                        #
+                        # Consequence of removing it: a future first-party ref
+                        # appearing in generated output reds this test until
+                        # someone decides where it is watched. That is the right
+                        # failure — it is exactly the decision that was skipped
+                        # by inheritance last time.
                         refs.add(candidate)
     return refs, files, scalars
 

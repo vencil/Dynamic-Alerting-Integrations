@@ -277,8 +277,23 @@ def delivered_refs(root: Path) -> set[str]:
     apply_refs = {ref.strip() for ref in non_empty}
     git_sync = getattr(mod, "GIT_SYNC_IMAGE", "")
     git_sync = git_sync.strip() if isinstance(git_sync, str) else ""
+    # ⛔ THIRD source, and it is the one every generated project gets. Review
+    # derived the delivered surface from the artifact instead of from this table:
+    # across all 18 `--ci` × `--deploy` × `--config-source` combinations,
+    # `DA_TOOLS_IMAGE` appears in 18/18 while no single project carries more than
+    # TWO of the four third-party pins and three combinations carry NONE. It was
+    # outside every face — `--scope deploy` skips the `ghcr.io/vencil/` prefix,
+    # this scope did not read it, and the nightly `scan` bucket BUILDS da-tools
+    # from main with stubbed binaries rather than pulling the published mutable
+    # tag, so its green says nothing about what customers pull. The exclusion was
+    # inherited from `SKIP_REPO_PREFIXES`, whose own ⛔ note warns that reusing it
+    # for a question it never answered is how `federation-audit-sidecar` shipped
+    # unscanned for months (#1337).
+    da_tools = getattr(mod, "DA_TOOLS_IMAGE", "")
+    da_tools = da_tools.strip() if isinstance(da_tools, str) else ""
     empty = [name for name, value in
-             (("_GITLAB_APPLY_IMAGES", apply_refs), ("GIT_SYNC_IMAGE", git_sync))
+             (("_GITLAB_APPLY_IMAGES", apply_refs), ("GIT_SYNC_IMAGE", git_sync),
+              ("DA_TOOLS_IMAGE", da_tools))
              if not value]
     if table and len(non_empty) < len(table):
         empty.append(
@@ -289,7 +304,7 @@ def delivered_refs(root: Path) -> set[str]:
             f"check_image_refs_resolve: the customer-delivered pin table in {path} "
             f"is missing or EMPTY: {', '.join(empty)} — refusing to report a clean "
             "scope over a table that resolved to nothing.")
-    return apply_refs | {git_sync}
+    return apply_refs | {git_sync, da_tools}
 
 
 def _repo_of(ref: str) -> str:
