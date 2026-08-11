@@ -66,18 +66,23 @@ class TestRulePackCatalog:
             assert pack in ip.RULE_PACK_CATALOG, f"{pack} not in catalog"
 
     def test_mariadb_pack_defaults(self):
-        """MariaDB pack must have expected metric keys."""
+        """MariaDB pack must have expected metric keys, in the right tier."""
         mariadb = ip.RULE_PACK_CATALOG['mariadb']['defaults']
+        critical = ip.RULE_PACK_CATALOG['mariadb']['critical_overrides']
         assert 'mysql_connections' in mariadb
         assert 'mysql_replication_lag' in mariadb
         assert mariadb['mysql_connections'] == 80
-        assert mariadb['mysql_connections_critical'] == 150
+        # #1218: the critical twin keeps its value and changes SECTION — it is
+        # asserted against `critical_overrides`, not merely "somewhere in the
+        # pack", because the section is the whole difference between a critical
+        # threshold and an unconsumed warning series.
+        assert critical['mysql_connections_critical'] == 150
         # #1231 rename guard: the catalog must carry the canonical spelling,
         # never the retired mysql_cpu one.
         assert 'mysql_threads_running' in mariadb
-        assert 'mysql_threads_running_critical' in mariadb
+        assert 'mysql_threads_running_critical' in critical
         assert 'mysql_cpu' not in mariadb
-        assert 'mysql_cpu_critical' not in mariadb
+        assert 'mysql_cpu_critical' not in critical
 
     def test_operational_and_platform_have_empty_defaults(self):
         """Operational and platform packs have auto-enabled marker, empty defaults."""
@@ -214,7 +219,8 @@ class TestGenDefaultsYaml:
         defaults = config['defaults']
         assert 'mysql_connections' in defaults
         assert defaults['mysql_connections'] == 80
-        assert defaults['mysql_connections_critical'] == 150
+        # …and its critical twin is NOT here (#1218). See TestCriticalTierPlacement.
+        assert 'mysql_connections_critical' not in defaults
 
     def test_multiple_rule_packs_merged(self):
         """Multiple rule packs' defaults are all merged."""
@@ -469,47 +475,59 @@ class TestGenTenantYamlDeclaredBlock:
     # -- the third paragraph must be TRUE OF THIS GENERATOR'S OWN OUTPUT ----
     #
     # It was first written as a static sentence ("in neither block; set one and
-    # it fires once `<base>` has a value"). Measured: true of what
-    # `scaffold_tenant` writes, FALSE of what `init_project` writes — this
-    # module's `RULE_PACK_CATALOG` puts 16 `_critical` keys straight into
-    # `defaults:` (11 of its 15 packs), so `da-tools init --rule-packs mariadb`
-    # emits `mysql_connections_critical: 150` under `defaults:` in the very
-    # `_defaults.yaml` it writes next to the stub. For those keys rule 1 is the
-    # applicable one and the tenant needs to do nothing.
+    # it fires once `<base>` has a value"). That was true of what
+    # `scaffold_tenant` wrote and false of what `init_project` wrote, because
+    # this module's catalog put 16 `_critical` keys straight into `defaults:` —
+    # so the sentence was made conditional on the artifact. #1218 then fixed the
+    # artifact: the keys moved to the tenant stub, both generators now ship the
+    # `_critical`-free regime, and the paragraph FOLLOWED the change instead of
+    # having to be found and rewritten. That is what the derivation bought, and
+    # it is why the tests below still read the sibling file rather than pinning
+    # whichever regime happens to be current.
     #
-    # ⛔ The two tests below assert against the SIBLING FILE, parsed — not
-    # against a phrase. That is the whole point: the previous test only checked
-    # that a string was present, which a false string passes just as well.
+    # ⛔ The tests below assert against the SIBLING FILE, parsed — not against a
+    # phrase. The pre-#1321 test only checked that a string was present, which a
+    # false string passes just as well.
 
     def test_critical_paragraph_matches_the_sibling_defaults_file(self):
         packs = ['mariadb', 'oracle']
         tenant_text = ip._gen_tenant_yaml('db-a', packs)
         sibling = yaml.safe_load(ip._gen_defaults_yaml(packs, 'monitoring'))
         crit = [k for k in sibling['defaults'] if k.endswith('_critical')]
-        assert crit, (
-            'fixture assumption broken: this generator is supposed to be the '
-            'one that DOES put _critical keys in `defaults:`')
+        assert crit == [], (
+            '#1218: no `_defaults.yaml` producer may put a `<base>_critical` '
+            'under `defaults:` — see TestCriticalTierPlacement for why, and '
+            'check_threshold_reachability for the repo-wide gate')
 
         from _registry_lib import render_tenant_critical_note_lines
         expected = '\n'.join(
             render_tenant_critical_note_lines(sibling['defaults'], lang='en'))
         assert expected in tenant_text
 
-        # …and one assertion that does not go through the renderer at all: the
-        # regime word in the header must agree with the parsed artifact.
+        # …and two assertions that do not go through the renderer at all: the
+        # regime the header is in must match the parsed artifact, BOTH ways.
+        # ⛔ Written as two direct assertions rather than
+        # `assert (marker in header) == (not crit)`, which the `crit == []`
+        # above degrades into a constant-RHS one-sided check that merely LOOKS
+        # bidirectional (blind review, #1218).
         header = tenant_text.split('\ntenants:')[0]
-        assert ('lists none of them under `defaults:`' in header) == (not crit)
-        # ⛔ Anchored to the phrase the count is rendered INTO, not to the bare
-        # digits. `str(len(crit)) in header` is a substring test against a
-        # header full of unrelated numbers (issue refs, the declared-tier count,
-        # "rule 1 above"), so a header claiming any wrong count that happens to
-        # share a digit passes it — measured, and it is the same "match looser
-        # than the target" defect this PR is fixing elsewhere.
-        assert re.search(rf'\bgives {len(crit)} of them a value\b', header), header
+        assert 'lists none of them under `defaults:`' in header, header
+        assert 'the wrong section' not in header, header
 
     def test_critical_paragraph_flips_when_defaults_gains_a_critical_key(self):
         """The renderer's own contract, on synthetic input: a `_critical`
-        appearing in `defaults:` must move the claim, not just the count."""
+        appearing in `defaults:` must move the claim, not just the count.
+
+        ⛔ And the claim it moves TO must be the true one (#1218). The branch
+        used to read "the critical row fires without you doing anything" — a
+        sentence about a file in which no critical row can exist, rendered into
+        the one file a customer opens. Measured in
+        `components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go`:
+        the key emits `{metric="<base>_critical", severity="warning"}` and
+        nothing else. So this asserts the promise is ABSENT, not just that the
+        wording changed — a rewrite that kept the reassurance would pass a
+        count-only assertion.
+        """
         from _registry_lib import render_tenant_critical_note_lines
         without = '\n'.join(render_tenant_critical_note_lines(
             {'mysql_connections': 80}, lang='en'))
@@ -518,7 +536,27 @@ class TestGenTenantYamlDeclaredBlock:
             lang='en'))
         assert 'lists none of them' in without
         assert 'lists none of them' not in with_crit
-        assert 'gives 1 of them a value' in with_crit
+        assert 'puts 1 of them under `defaults:`' in with_crit
+        assert 'the wrong section' in with_crit
+        assert 'no critical row exists' in with_crit
+        assert 'fires without you doing anything' not in with_crit
+
+    def test_critical_paragraph_is_a_warning_in_both_languages(self):
+        """Same claim, both renderings. The zh branch is what a Chinese-locale
+        `scaffold_tenant` run writes, and it carried the identical reassurance
+        ("critical 列本來就會發射，不需要你做任何事"); fixing only the branch the
+        English generator happens to use would leave the other half shipping
+        the sentence this issue is about.
+        """
+        from _registry_lib import render_tenant_critical_note_lines
+        misplaced = {'mysql_connections': 80, 'mysql_connections_critical': 150}
+        for lang, ok_marker, banned in (
+            ('en', 'the wrong section', 'fires without you doing anything'),
+            ('zh', '放錯區塊', '本來就會發射'),
+        ):
+            text = '\n'.join(render_tenant_critical_note_lines(misplaced, lang=lang))
+            assert ok_marker in text, (lang, text)
+            assert banned not in text, (lang, text)
 
     def test_block_members_equal_the_derived_set(self):
         """⛔ This pins the WIRING, not the derivation — say so, because the
@@ -678,6 +716,427 @@ class TestGenTenantYamlDeclaredBlock:
             assert section[key] == STUB_PLACEHOLDER_VALUE[_LANG]
         # the tenant's pre-existing keys are still its own
         assert '_routing' in section
+
+
+# ============================================================
+# ── 5c. `<base>_critical` tier placement (#1218 / TRK-344) ──
+# ============================================================
+#
+# The catalog is TWO dicts because the section a key lands in decides whether it
+# does anything, and both wrong answers are silent:
+#
+#   `defaults:`      → resolveBaseRows walks it and does not skip the suffix;
+#                      parseMetricKey splits on the FIRST underscore, so
+#                      `pg_connections_critical` becomes
+#                      {component="pg", metric="connections_critical",
+#                       severity="warning"} — one unconsumed series per tenant —
+#                      and `tenant:alert_threshold:pg_connections_critical`
+#                      (which reads severity="critical") stays empty.
+#   `<tenant>.yaml`  → resolveCriticalRows iterates tenant overrides and admits
+#                      on defaults[<base>], producing the real critical row.
+#
+# Both directions are MEASURED, not asserted from reading the resolver:
+# components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go.
+# The repo-wide gate over all five `_defaults.yaml` producers is
+# check_threshold_reachability.py's defaults-tier face; the tests here pin this
+# generator's own two files.
+
+def _flat_header(text: str) -> str:
+    """The tenant stub's comment header as ONE line.
+
+    ⛔ Assertions about prose must not depend on where the renderer happened to
+    wrap. Round-2 blind review rewrote three sentences in this header and broke
+    four assertions pinned to a specific `\\n# ` position — none of which were
+    testing anything about line breaks. Flattening keeps them about what the
+    file SAYS.
+    """
+    return ' '.join(line.lstrip('#').strip()
+                    for line in text.split('\ntenants:')[0].splitlines())
+
+
+class TestCriticalTierPlacement:
+    """#1218 — no `<base>_critical` in `defaults:`, all of them in the stub."""
+
+    def test_catalog_tiers_do_not_overlap_and_are_suffix_correct(self):
+        """The split is a partition, and the suffix decides which side.
+
+        Enumerating the 16 key names here would pass just as well after someone
+        added a 17th to the wrong dict, so the assertion is over EVERY pack.
+        """
+        for name, pack in ip.RULE_PACK_CATALOG.items():
+            base = pack['defaults']
+            crit = pack.get('critical_overrides', {})
+            assert not (set(base) & set(crit)), f'{name}: key in both tiers'
+            misfiled = [k for k in base if k.endswith('_critical')]
+            assert misfiled == [], (
+                f'{name}: {misfiled} sit in `defaults`, where the critical tier '
+                f'cannot see them — move them to `critical_overrides`')
+            stray = [k for k in crit if not k.endswith('_critical')]
+            assert stray == [], (
+                f'{name}: {stray} are in `critical_overrides` without the '
+                f'suffix — resolveCriticalRows would never look at them')
+
+    def test_every_critical_key_has_its_base_in_the_same_pack(self):
+        """resolveCriticalRows admits on `defaults[<base>]`, and since #1227 a
+        dangling `_critical` is a blocking ValidateTenantKeys Error — so a
+        seeded key whose base is absent is not merely inert, it makes the
+        tenant-api write of the whole stub fail.
+
+        The literal floor is the non-vacuity guard: this loop body runs zero
+        times on a catalog with no critical tier at all, and a test that passes
+        by never executing its assertion is indistinguishable from one that
+        holds.
+        """
+        checked = 0
+        for name, pack in ip.RULE_PACK_CATALOG.items():
+            for key in pack.get('critical_overrides', {}):
+                base = key[: -len('_critical')]
+                assert base in pack['defaults'], (
+                    f'{name}: {key} has no base {base!r} under `defaults`')
+                checked += 1
+        assert checked >= 16, checked
+
+    def test_generated_defaults_never_carry_a_critical_key(self):
+        """Over every pack individually AND the full selection — a per-pack loop
+        catches the pack a whole-catalog run would drown."""
+        packs = list(ip.RULE_PACK_CATALOG)
+        for selection in [[p] for p in packs] + [packs]:
+            config = yaml.safe_load(ip._gen_defaults_yaml(selection, 'monitoring'))
+            offenders = [k for k in config['defaults'] if k.endswith('_critical')]
+            assert offenders == [], f'{selection}: {offenders}'
+
+    def test_stub_seeds_the_critical_tier_for_every_selected_pack(self):
+        """Not just the first one.
+
+        The pre-#1218 stub copied three keys from `rule_packs[0]` only, so the
+        critical tier of packs 2..n existed nowhere a resolver would read it.
+        mariadb+kubernetes is the shipped interactive default pairing.
+        """
+        packs = ['mariadb', 'kubernetes']
+        stub = yaml.safe_load(ip._gen_tenant_yaml('db-a', packs))['tenants']['db-a']
+        expected = {}
+        for p in packs:
+            expected.update(ip.RULE_PACK_CATALOG[p]['critical_overrides'])
+        assert expected, 'fixture: both packs are supposed to have a critical tier'
+        for key, value in expected.items():
+            assert stub.get(key) == str(value), (key, stub.get(key), value)
+
+    def test_full_selection_seeds_all_sixteen(self):
+        """The count the issue was written about, derived from the catalog on
+        both sides so it tracks a 17th key instead of going stale — with a
+        literal floor so an empty derivation cannot satisfy it vacuously."""
+        packs = list(ip.RULE_PACK_CATALOG)
+        stub = yaml.safe_load(ip._gen_tenant_yaml('db-a', packs))['tenants']['db-a']
+        catalog_critical = {k for p in packs
+                            for k in ip.RULE_PACK_CATALOG[p].get('critical_overrides', {})}
+        assert len(catalog_critical) >= 16
+        assert catalog_critical <= set(stub)
+
+    def test_stub_header_count_matches_what_it_actually_seeded(self):
+        """The pre-fill sentence is rendered from the seeded mapping; pin that
+        it says the number the file carries, not a plausible one.
+
+        ⛔ Anchored to the phrase the count is rendered INTO, not to the bare
+        digits: `str(n) in text` is a substring test against a header full of
+        unrelated numbers, so a header claiming any wrong count that happens to
+        share a digit passes it.
+        """
+        packs = ['mariadb', 'kubernetes']
+        text = ip._gen_tenant_yaml('db-a', packs)
+        stub = yaml.safe_load(text)['tenants']['db-a']
+        seeded = [k for k in stub if k.endswith('_critical')]
+        assert re.search(rf'# {len(seeded)} of them are written in below',
+                         text), text
+
+    def test_stub_header_states_both_costs_the_tenant_cannot_infer(self):
+        """The pre-fill has two consequences a tenant cannot infer from the keys
+        alone, and BOTH were mis-stated in the first version (blind review,
+        #1218):
+
+        1. `<base>: "disable"` does not cascade to `<base>_critical` — the
+           warning row goes and the critical row keeps firing. Measured in
+           `pkg/config/critical_tier_placement_test.go`. The very next line of
+           this same header says `Set a key to "disable" to suppress that
+           metric`, so omitting this makes the file contradict itself.
+        2. A dangling `<base>_critical` is write-blocking **on the tenant-api
+           path only**. `validate_config.py` — the gate this tool actually
+           installs into the customer's CI and pre-commit — reports WARN and
+           exits 0 on the same input. The first draft promised "EVERY write of
+           this file is rejected" full stop, which is a stop this customer's
+           own pipeline does not perform.
+        """
+        text = ip._gen_tenant_yaml('db-a', ['mariadb'])
+        header = _flat_header(text)
+        prefill = header.split('of them are written in below')[1]
+
+        # (1) the disable-cascade caveat, and it must sit in the same header as
+        # the sentence it qualifies
+        assert 'does NOT disable' in prefill, header
+        assert 'Set a key to "disable"' in header, header
+
+        # (1b) …and DELETE must not be offered as a synonym for disable.
+        # Measured (round-2 blind review): both lines deleted → the warning row
+        # comes BACK at the platform default, because an absent key is State 2.
+        assert 'DELETING both lines is not the same thing' in prefill, header
+        assert 'BOTH lines must say "disable"' in prefill, header
+
+        # (1c) ⛔ "BOTH lines" presumes both lines exist, and usually they do
+        # not: base overrides are seeded from rule_packs[0] only while the
+        # critical tier is seeded for every selected pack. Measured with
+        # `--rule-packs mariadb,redis,kubernetes`: 7 `_critical` keys, 5 with no
+        # twin in the file. A remedy the reader cannot carry out is worse than
+        # none, so the header has to say the line may be missing (round-6 blind
+        # review).
+        assert 'most `<base>` lines are NOT in this file' in prefill, header
+        assert 'ADD the `<base>: "disable"` line yourself' in prefill, header
+
+        # (2) the rejection claim must name WHICH path blocks, and must state an
+        # invariant rather than the current state of the generated CI.
+        #
+        # ⛔ Two earlier drafts failed this in opposite directions, each one
+        # merge away from being false: "EVERY write of this file is rejected"
+        # (a stop the customer's pipeline does not perform), then "that job
+        # fails before it validates anything" (true only while the generated
+        # invocations still pass the unsupported `--ci`, #1380). So the negative
+        # assertions below are the load-bearing half — they forbid re-describing
+        # the neighbouring defect in a file customers keep.
+        assert 'tenant-api' in prefill, header
+        assert 'ONLY the tenant-api write path' in prefill, header
+        assert 'validate-config' in prefill and 'exits 0' in prefill, header
+        assert 'never establishes that this is fixed' in prefill, header
+        for time_bound in ('--ci', 'does not accept', 'before it validates',
+                           'EVERY write of this file is rejected',
+                           # ⛔ and no relative clause re-attributing the TOOL's
+                           # behaviour to the generated CI job: "…, which the CI
+                           # generated beside this file runs, reports it as a
+                           # WARNING and exits 0" reads as "that job goes green",
+                           # which is draft 2's defect wearing different words.
+                           'the CI generated beside this file runs'):
+            assert time_bound not in prefill, (time_bound, header)
+
+        # (3) the only in-tool refresh route is --force, which discards the
+        # retuning the same paragraph invites two lines earlier
+        assert '--force' in prefill and 'discards every hand edit' in prefill, header
+
+        # the staleness statement must cover BOTH files, never just these lines
+        assert 'sibling' in prefill and '_defaults.yaml' in prefill, header
+        assert 'one-time copy into your repo' in prefill, header
+        # …and it must not re-assert that the platform supplies the values —
+        # the paragraph above it (correctly) says the opposite.
+        assert 'the platform supplies' not in prefill
+
+    def test_the_missing_twin_claim_matches_what_the_stub_actually_seeds(self):
+        """The header's twinless-base caveat is a claim about THIS generator's
+        output, so it is measured rather than asserted: a multi-pack selection
+        must really produce `_critical` keys whose base is absent, otherwise the
+        caveat describes a state that cannot occur and is just noise.
+
+        Measured at the time of writing (`mariadb,redis,kubernetes`): 7 critical
+        keys, 5 of them twinless — because the illustrative base overrides come
+        from `rule_packs[0]` only while the critical tier is seeded for every
+        selected pack (blind review, round 6: the header said "BOTH lines must
+        say disable" while most files have only one of the two).
+        """
+        text = ip._gen_tenant_yaml('acme', ['mariadb', 'redis', 'kubernetes'])
+        stub = yaml.safe_load(text)['tenants']['acme']
+        crit = [k for k in stub if k.endswith('_critical')]
+        base = [k for k in stub
+                if not k.startswith('_') and not k.endswith('_critical')]
+        twinless = [k for k in crit if k[: -len('_critical')] not in base]
+
+        assert crit, stub
+        assert twinless, (
+            'no twinless critical key — the header caveat would be vacuous')
+        # the base tier really is first-pack-only, which is WHY they are twinless
+        assert all(k.startswith('mysql_') for k in base), base
+
+    def test_stub_header_makes_no_deploy_specific_claim(self):
+        """⛔ `_gen_tenant_yaml` never receives `deploy`, so any sentence about
+        the deployment wiring is a claim it cannot qualify — and two of the
+        three `--deploy` values do not generate that wiring at all.
+
+        The first version said "this tool wires conf.d/ straight into the
+        threshold-config ConfigMap". True for `kustomize`; for `helm` and
+        `argocd` no `kustomize/` tree is produced (pinned below), so the tenant
+        of a helm-deployed install was told their `conf.d/` was the live
+        surface by a file that had no idea which install it was for.
+
+        Pinned as an ABSENCE plus the fact that made it wrong, because the
+        absence alone would pass on an empty header.
+        """
+        import inspect
+        assert 'deploy' not in inspect.signature(ip._gen_tenant_yaml).parameters
+
+        header = _flat_header(ip._gen_tenant_yaml('db-a', ['mariadb']))
+        for mechanism in ('ConfigMap', 'kustomize', 'configMapGenerator', 'helm',
+                          'argocd'):
+            assert mechanism not in header, (mechanism, header)
+        # the deploy-independent property it says instead
+        assert 'nothing generated here tracks the platform' in header, header
+
+    def test_validate_config_really_warns_and_exits_zero_on_a_dangling_critical(self):
+        """⛔ The load-bearing sentence in the tenant header says `da-tools
+        validate-config` reports a dangling `<base>_critical` as a WARNING and
+        exits 0, so its verdict proves nothing. That was asserted as a SUBSTRING
+        only (blind review, round 4) — the third time this PR shipped a claim
+        whose truth nothing executed.
+
+        The natural follow-up to #1218 is to make `validate_config` escalate this
+        shape to an error. On that day the header would keep telling operators a
+        green run means nothing while the tool actually goes red, and every
+        string assertion would stay green. So this runs the real validator.
+        """
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        validator = str(Path(ip.__file__).resolve().parent / 'validate_config.py')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            conf = Path(tmpdir) / 'conf.d'
+            conf.mkdir()
+            (conf / '_defaults.yaml').write_text(
+                'defaults:\n  mysql_connections: 80\n', encoding='utf-8')
+            (conf / 'db-a.yaml').write_text(
+                'tenants:\n  db-a:\n    pg_connections_critical: "150"\n',
+                encoding='utf-8')
+            env = {**os.environ, 'PYTHONUTF8': '1', 'PYTHONDONTWRITEBYTECODE': '1'}
+            for extra in ([], ['--strict']):
+                run = subprocess.run(
+                    [sys.executable, validator, '--config-dir', str(conf), *extra],
+                    capture_output=True, text=True, encoding='utf-8',
+                    errors='replace', env=env, timeout=180)
+                assert run.returncode == 0, (extra, run.returncode, run.stdout[-800:])
+                assert 'WARN' in (run.stdout + run.stderr).upper(), (
+                    extra, run.stdout[-800:])
+
+    def test_force_really_discards_hand_edits_in_both_files(self):
+        """The header tells the operator that `--force` is the only in-tool
+        refresh route and that it discards their edits. That was prose with a
+        substring assertion behind it (blind review): soften `_check_existing_init`
+        to skip existing tenant files, or make `_write_file` existence-aware, and
+        the file keeps issuing a destructive warning about behaviour that changed
+        while every assertion stays green.
+
+        Runs the real CLI twice, so it pins the behaviour rather than the flag.
+        """
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        tool = str(Path(ip.__file__).resolve())
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = [sys.executable, tool, '-o', tmpdir, '--non-interactive',
+                    '--tenants', 'db-a', '--rule-packs', 'mariadb']
+            env = {**os.environ, 'PYTHONUTF8': '1', 'PYTHONDONTWRITEBYTECODE': '1'}
+            assert subprocess.run(base, capture_output=True, env=env,
+                                  timeout=180).returncode == 0
+
+            defaults = Path(tmpdir) / 'conf.d' / '_defaults.yaml'
+            tenant = Path(tmpdir) / 'conf.d' / 'db-a.yaml'
+            for f in (defaults, tenant):
+                f.write_text(f.read_text(encoding='utf-8') + '\n# HAND-EDIT\n',
+                             encoding='utf-8')
+
+            # without --force: refuses, and the edits survive
+            rerun = subprocess.run(base, capture_output=True, env=env, timeout=180)
+            assert rerun.returncode != 0, rerun.stdout[-500:]
+            assert all('HAND-EDIT' in f.read_text(encoding='utf-8')
+                       for f in (defaults, tenant))
+
+            # with --force: BOTH files are rewritten, both edits gone
+            forced = subprocess.run(base + ['--force'], capture_output=True,
+                                    env=env, timeout=180)
+            assert forced.returncode == 0, forced.stderr[-500:]
+            for f in (defaults, tenant):
+                assert 'HAND-EDIT' not in f.read_text(encoding='utf-8'), f.name
+
+    def test_only_kustomize_deploy_generates_the_kustomize_tree(self):
+        """The fact that made the removed sentence wrong, pinned so it cannot
+        quietly become true-again-for-one-value without someone noticing.
+
+        Driven through `run_init` (the real generator writing real files), not
+        `_preview_files` — the preview is a second hand-written roster, and
+        pinning a claim about the output against a mirror of the output is how
+        the sentence this replaces got written in the first place.
+        """
+        from pathlib import Path
+
+        for method, expected in (('kustomize', True), ('helm', False),
+                                 ('argocd', False)):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                created = ip.run_init({
+                    'ci': 'both', 'deploy': method, 'rule_packs': ['mariadb'],
+                    'tenants': ['db-a'], 'namespace': 'monitoring',
+                    'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+                }, tmpdir)
+                on_disk = [p.relative_to(tmpdir).as_posix()
+                           for p in Path(tmpdir).rglob('*') if p.is_file()]
+            assert any('kustomize/' in p for p in on_disk) is expected, (method, on_disk)
+            # The generator's own return value must agree with what it wrote —
+            # compared on tmpdir-RELATIVE paths, not basenames (CodeRabbit).
+            # Three `kustomization.yaml` files are generated (base + two
+            # overlays), so a basename multiset still matches when one of them
+            # is written to the wrong directory.
+            assert sorted(Path(p).relative_to(tmpdir).as_posix()
+                          for p in created) == sorted(on_disk), (
+                method, created, on_disk)
+
+    def test_no_prefill_sentence_when_the_selection_has_no_critical_tier(self):
+        """db2 / clickhouse ship no `_critical` at all, so the file must not
+        point at a section it does not have — the same defect #1321 fixed for
+        the declared block, one paragraph over.
+
+        ⛔ Derived from the renderer, never a literal. The first version
+        asserted `'pre-filled below' not in text` — a string this module has
+        NEVER emitted (the sentence is "of them are written in below"), so it could
+        not fail for any input. Measured: with the `if not critical: return ''`
+        early return removed, `_gen_tenant_yaml('db-a', ['db2'])` renders
+        "# 0 of them are written in below" — the exact #1321 defect this
+        test is named after — and the old assertion still passed (blind review).
+        """
+        # the guard itself, directly
+        assert ip._critical_prefill_note({}) == ''
+
+        # …and end to end, against a fingerprint taken from a NON-empty render
+        # so the marker is known to be discriminating rather than merely absent
+        sample = ip._critical_prefill_note({'zzz_critical': 1})
+        marker = sample.split('of them', 1)[1].splitlines()[0]
+        assert marker.strip(), sample
+
+        db2 = ip._gen_tenant_yaml('db-a', ['db2'])
+        mariadb = ip._gen_tenant_yaml('db-a', ['mariadb'])
+        assert marker in mariadb, marker      # the marker really does appear…
+        assert marker not in db2, marker      # …and it is absent here
+        assert ip._catalog_critical(['db2']) == {}
+        assert not [k for k in yaml.safe_load(db2)['tenants']['db-a']
+                    if k.endswith('_critical')]
+
+    def test_critical_key_whose_base_vanished_is_not_seeded(self, monkeypatch):
+        """A guard for a state the catalog is not in today, so it is exercised
+        on a mutated copy rather than asserted to be unreachable.
+
+        `_catalog_critical` reads the module global at call time, so patching
+        `ip.RULE_PACK_CATALOG` patches the name the consumer resolves — and the
+        first assertion below is the proof the patch took, not a formality: a
+        patch aimed at the wrong binding makes the real assertion pass for the
+        wrong reason.
+        """
+        pack = ip.RULE_PACK_CATALOG['mariadb']
+        broken = {
+            'mariadb': {
+                'label': pack['label'],
+                'defaults': {k: v for k, v in pack['defaults'].items()
+                             if k != 'mysql_connections'},
+                'critical_overrides': dict(pack['critical_overrides']),
+            }
+        }
+        monkeypatch.setattr(ip, 'RULE_PACK_CATALOG', broken)
+        assert 'mysql_connections' not in ip._catalog_defaults(['mariadb']), (
+            'the patch did not take — everything below would be vacuous')
+
+        seeded = ip._catalog_critical(['mariadb'])
+        assert 'mysql_connections_critical' not in seeded
+        assert 'mysql_threads_running_critical' in seeded
 
 
 # ============================================================

@@ -1025,8 +1025,12 @@ def write_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant
     # 「說了買不買得到保護」；租戶唯一會打開的檔不該還停在兩分。
     #
     # ⛔ 但「兩個區塊都不在」不能寫死：那是**本生成器**的事實，不是全 repo 的。
-    # `init_project.RULE_PACK_CATALOG` 把 16 個 `_critical` 直接放進 `defaults:`，
-    # 同一句話對它的產物是假的。所以第三類敘述改由**這一次要寫出去的**
+    # `init_project.RULE_PACK_CATALOG` **曾經**把 16 個 `_critical` 直接放進
+    # `defaults:`，同一句話對它的產物是假的。#1218 已把那 16 個搬進 catalog 的
+    # `critical_overrides` 層，並讓 `check_threshold_reachability` 的 defaults-tier
+    # face 對任何 producer 再犯就擋 CI，所以今天兩個生成器同屬同一 regime——但
+    # 推導照舊保留：寫死任一 regime 的句子，會在下一次某個生成器移動時靜默變假，
+    # 那正是這條紀律存在的理由。第三類敘述由**這一次要寫出去的**
     # `defaults_data["defaults"]` 推導（見 `render_tenant_critical_note_lines`）。
     #
     # ⛔ 而「清單見檔尾」本身也不能寫死：檔尾那一段只在宣告清單非空時才附上

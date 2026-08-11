@@ -606,6 +606,7 @@
    "tests/ops/test_offboard_tenant.py"
   ],
   "scripts/tools/ops/onboard_platform.py": [
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_error_consistency.py",
    "tests/ops/test_integration.py",
    "tests/ops/test_onboard_platform.py",
@@ -716,7 +717,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "d9c3cf8c14b89a13518b9d964730dae8b7920c6b9cf039a156c37cc698e1dc0e",
+ "source_digest": "7cb1df74ed7c755118cdfbcb590b56d27fb60ceaa956d4b5fef7590da9d36581",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1121,6 +1122,7 @@
    "tests/lint/test_check_makefile_targets.py",
    "tests/lint/test_check_orphan_lint.py",
    "tests/lint/test_check_portal_asset_shipping.py",
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/lint/test_counterexample_coverage.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py",
@@ -1253,6 +1255,10 @@
   "components/threshold-exporter/app/pkg/config/aliases_registry_test.go": [
    "tests/lint/test_check_threshold_registry.py"
   ],
+  "components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go": [
+   "tests/lint/test_check_threshold_reachability.py",
+   "tests/ops/test_init_project.py"
+  ],
   "components/threshold-exporter/app/pkg/config/optional_overrides_membership_test.go": [
    "tests/ops/test_generate_alertmanager_routes.py"
   ],
@@ -1267,15 +1273,20 @@
   ],
   "components/threshold-exporter/config/conf.d": [
    "tests/dx/test_compile_custom_alerts.py",
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_guard_defaults_scopes.py"
   ],
   "components/threshold-exporter/config/conf.d/_defaults.yaml": [
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/lint/test_check_threshold_unit_sanity.py",
    "tests/ops/test_backtest_threshold.py",
    "tests/ops/test_generate_alertmanager_routes.py"
   ],
   "components/threshold-exporter/config/conf.d/db-b.yaml": [
    "tests/ops/test_backtest_threshold.py"
+  ],
+  "components/threshold-exporter/config/conf.d/examples/_defaults-multidb.yaml": [
+   "tests/lint/test_check_threshold_reachability.py"
   ],
   "components/threshold-exporter/config/conf.d/examples/_domain_policy.yaml": [
    "tests/lint/test_check_admin_config_schema.py"
@@ -1639,6 +1650,7 @@
   "helm/threshold-exporter/values.yaml": [
    "tests/helm/test_environments_overlay_sync.py",
    "tests/helm/test_optional_overrides_render.py",
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_generate_alertmanager_routes.py",
    "tests/ops/test_init_project.py",
    "tests/ops/test_registry_lib.py",
@@ -1796,7 +1808,15 @@
    "tests/dx/test_recipe_lifecycle.py"
   ],
   "rule-packs/recipes/examples/conf.d": [
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_guard_defaults_scopes.py"
+  ],
+  "rule-packs/recipes/examples/conf.d/_defaults.yaml": [
+   "tests/lint/test_check_threshold_reachability.py",
+   "tests/ops/test_ci_path_filter_coverage.py"
+  ],
+  "rule-packs/recipes/examples/conf.d/finance/_defaults.yaml": [
+   "tests/lint/test_check_threshold_reachability.py"
   ],
   "rule-packs/rule-pack-custom-alerts.yaml": [
    "tests/ops/test_lint_custom_rules.py"
@@ -1925,6 +1945,7 @@
    "tests/dx/test_line_ending_policy.py",
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_structure.py",
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_flake_retry.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py",
@@ -1952,6 +1973,7 @@
   "scripts/tools/_lib_exitcodes.py": [
    "tests/dx/test_dx_json_stdout_contract.py",
    "tests/dx/test_verify_diff.py",
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/shared/test_ci_flag_contract.py",
    "tests/shared/test_json_stdout_contract.py",
    "tests/shared/test_tool_exit_codes.py"
@@ -2213,6 +2235,7 @@
   "scripts/tools/ops": [
    "tests/dx/test_line_ending_policy.py",
    "tests/helm/test_federation_store_sentinel_guard.py",
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_grar_facade_reexports.py",
    "tests/shared/test_bilingual_help_contract.py",
    "tests/shared/test_dispatch_contract.py",
@@ -2228,6 +2251,7 @@
    "tests/lint/test_check_threshold_registry.py"
   ],
   "scripts/tools/ops/_registry_lib.py": [
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_registry_lib.py",
    "tests/ops/test_wrapped_path_references.py"
   ],
@@ -2265,10 +2289,14 @@
    "tests/ops/test_generate_tenant_mapping_rules.py"
   ],
   "scripts/tools/ops/init_project.py": [
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_generated_ci_artifacts.py"
   ],
   "scripts/tools/ops/metric_observed_map.yaml": [
    "tests/shared/test_json_stdout_contract.py"
+  ],
+  "scripts/tools/ops/onboard_platform.py": [
+   "tests/lint/test_check_threshold_reachability.py"
   ],
   "scripts/tools/ops/operator_generate.py": [
    "tests/shared/test_help_contract.py"
@@ -2398,6 +2426,12 @@
   ],
   "tests/golden/build_and_capture.py": [
    "tests/golden/test_merge_parity.py"
+  ],
+  "tests/golden/fixtures/full-l0-l3/conf.d/db/_defaults.yaml": [
+   "tests/lint/test_check_threshold_reachability.py"
+  ],
+  "tests/golden/fixtures/full-l0-l3/conf.d/db/mariadb/prod/_defaults.yaml": [
+   "tests/lint/test_check_threshold_reachability.py"
   ],
   "tests/helm": [
    "tests/dx/test_verify_diff.py",
@@ -2638,6 +2672,7 @@
    "tests/shared/test_dry_run_no_write.py"
   ],
   "try-local/seed/conf.d/_defaults.yaml": [
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_generate_alertmanager_routes.py",
    "tests/ops/test_guard_defaults_scopes.py"
   ],

@@ -1125,7 +1125,7 @@ da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list
 | `--deploy` | 部署方式 | `kustomize` |
 | `--non-interactive` | 跳過互動提示（需搭配 `--tenants`） | — |
 | `--dry-run` | 顯示會產生的檔案但不寫入 | — |
-| `--force` | 覆寫既有的 `.da-init.yaml` | — |
+| `--force` | 在已初始化的目錄重跑：**重寫所有產生的檔案**，含 `conf.d/_defaults.yaml` 與每一份 `conf.d/<tenant>.yaml`（手動調整會遺失） | — |
 
 **範例**
 

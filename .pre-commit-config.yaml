@@ -1232,16 +1232,50 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        # Fires when the DEMAND side (a rule-pack alert's user_threshold), EITHER
-        # supply side, the shared extractor, or the gate itself changes.
+        # Fires when the DEMAND side (a rule-pack alert's user_threshold), ANY
+        # supply/declared/defaults face, the shared extractor, or the gate itself
+        # changes.
         # ⚠️ `helm/threshold-exporter/values.yaml` is load-bearing here (P1-C):
         # it is the SHIPPED supply face. Leaving it out is the exact failure this
         # repo keeps hitting — a gate that reads an input its trigger filter does
         # not cover simply never runs on the change that matters (adding or
         # removing a chart default silently reclassifies keys).
-        # FAIL only on NEW unreachable / newly not-chart-armed keys, or an
-        # exit-lock breach in either ledger; grandfathered keys are INFO.
-        files: ^(rule-packs/rule-pack-.*\.yaml|helm/threshold-exporter/values\.yaml|scripts/tools/ops/(scaffold_tenant|_observed_map_lib)\.py|scripts/tools/lint/check_threshold_reachability\.py)$
+        # ⛔ …and this list said exactly that while omitting four of its own
+        # inputs (#1218): `init_project.py` has been a declared face since #1310,
+        # `onboard_platform.py` and `_registry_lib.py` feed the defaults-tier
+        # faces, and the dev / try-local `_defaults.yaml` are two more of them.
+        # So a commit touching only `da-tools init` never ran the gate that reads
+        # it. The filter is kept in step by
+        # tests/lint/test_check_threshold_reachability.py::
+        # test_precommit_filter_covers_every_input_this_gate_reads, which derives
+        # the input list from the module instead of restating it.
+        # ⚠️ Scope of that repair, stated because the comment above overstates
+        # easily: this hook is NOT in the Lint job's named `pre-commit run <id>`
+        # list and there is no blanket `--all-files` run, so the filter only ever
+        # governs a LOCAL commit. In CI the same logic is enforced by
+        # tests/lint/test_check_threshold_reachability.py's real-repo tests under
+        # Python Tests, whose `python` path filter covers every face's input.
+        # FAIL only on NEW unreachable / newly not-chart-armed keys, a
+        # `<base>_critical` or dimensional key in any producer's `defaults:`, or
+        # an exit-lock breach in either ledger; grandfathered keys are INFO.
+        # ⛔ The `_defaults*` alternative is a PATTERN, not two paths. The gate's
+        # defaults-tier face used to name `components/…/conf.d/_defaults.yaml`
+        # and `try-local/seed/conf.d/_defaults.yaml`; blind review then walked
+        # past it three ways (an `examples/` sibling in the same tree, a NESTED
+        # `_defaults.yaml`, and a second conf.d root), so the face now WALKS for
+        # the artifact class — 17 files, not 2. A filter that still listed two
+        # would leave the gate unable to fire on the commit that changed the
+        # other fifteen. Kept in step by
+        # tests/lint/test_check_threshold_reachability.py::
+        # test_precommit_filter_covers_every_input_this_gate_reads, which derives
+        # the list from `_defaults_artifacts()` rather than restating it.
+        # ⚠️ The `_defaults*` alternative carries `(?i:)` because the gate's
+        # predicate is case-insensitive (it matches `config_hierarchy.go`, which
+        # lowercases before both its suffix and its filename test). A
+        # case-sensitive filter beside a case-insensitive reader is the same
+        # divergence in miniature: the gate would read `_defaults.YAML` while the
+        # hook never fired on the commit that added it.
+        files: ^(rule-packs/rule-pack-.*\.yaml|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_observed_map_lib|init_project|_registry_lib|onboard_platform)\.py|scripts/tools/_lib_(compat|exitcodes|validation)\.py|scripts/tools/lint/check_threshold_reachability\.py)$
 
       - id: threshold-registry-check
         name: "threshold registry SoT — schema + scaffold equivalence + generated-surface freshness + prose membership (TRK-339 WS1a / #1200)"

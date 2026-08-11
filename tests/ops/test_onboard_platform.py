@@ -25,6 +25,7 @@ from onboard_platform import (
     extract_threshold_candidates,
     analyze_rule_files,
     generate_defaults_from_candidates,
+    _render_critical_suggestion,
     write_migration_csv,
     parse_scrape_configs,
     analyze_relabel_configs,
@@ -503,7 +504,17 @@ class TestGenerateDefaultsFromCandidates:
     """從候選值產生預設值。"""
 
     def test_basic_defaults(self):
-        """基本預設值產生。"""
+        """基本預設值產生 —— warning 進 defaults、critical 進另一層（#1218）。
+
+        ⛔ 這支測試原本斷言 `defaults["defaults"]["cpu_critical"] == "95"`，
+        也就是把缺陷本身釘成契約。`resolveCriticalRows` 只迭代租戶覆寫，所以
+        `defaults:` 裡的 `<base>_critical` 產不出 critical 閾值——它會發出
+        `user_threshold{metric="<base>_critical",severity="warning"}`（無人消費），
+        而對應的 `tenant:alert_threshold:` 記錄規則恆空、`*Critical` 告警恆不開火。
+        兩個方向實測於 pkg/config/critical_tier_placement_test.go。而這支工具產出的
+        檔案，標頭明寫「Review and merge into conf.d/_defaults.yaml」——照做的客戶
+        會在合併當下失去整個 critical 分級，而那正是他們跑 onboard 的理由。
+        """
         candidates = [
             {"status": "perfect", "metric_key": "cpu", "severity": "warning", "threshold_value": "80"},
             {"status": "perfect", "metric_key": "cpu", "severity": "critical", "threshold_value": "95"},
@@ -511,7 +522,217 @@ class TestGenerateDefaultsFromCandidates:
         defaults = generate_defaults_from_candidates(candidates)
         assert "defaults" in defaults
         assert defaults["defaults"]["cpu"] == "80"
-        assert defaults["defaults"]["cpu_critical"] == "95"
+        assert "cpu_critical" not in defaults["defaults"]
+        assert defaults["critical_overrides"]["cpu_critical"] == "95"
+
+    def test_critical_tier_is_rendered_as_a_commented_tenant_block(self):
+        """產出檔裡 critical 層必須是註解、且指向租戶檔。
+
+        parse 後的 `defaults:` 不得含它（否則照標頭指示合併就會複製缺陷），但值
+        必須留在檔案裡——這支工具的全部價值就是把客戶既有的 critical 閾值撈出來。
+        """
+        candidates = [
+            {"status": "perfect", "metric_key": "cpu", "severity": "warning", "threshold_value": "80"},
+            {"status": "perfect", "metric_key": "cpu", "severity": "critical", "threshold_value": "95"},
+        ]
+        suggestion = generate_defaults_from_candidates(candidates)
+        body = yaml.dump({"defaults": suggestion["defaults"]}) + \
+            _render_critical_suggestion(suggestion["critical_overrides"],
+                                        suggestion["defaults"])
+
+        parsed = yaml.safe_load(body)
+        assert parsed["defaults"] == {"cpu": "80"}
+        assert not [k for k in parsed["defaults"] if k.endswith("_critical")]
+        assert 'cpu_critical: "95"' in body
+        assert "do NOT put these under `defaults:`" in body
+        # 每一行 critical 建議都必須是註解——少一個 `#` 就等於把它併回 defaults:
+        for line in body.splitlines():
+            if "cpu_critical" in line:
+                assert line.lstrip().startswith("#"), line
+
+    # 兩個段落標題。取自渲染器本身而非再抄一次字面值：抄一次就是第二份契約，
+    # 而這整個 PR 的主題就是手抄副本會各自漂移。
+    _READY_HEADER = "# READY —"
+    _BLOCKED_HEADER = "# ⛔ BLOCKED —"
+
+    def test_the_two_section_headers_are_what_the_renderer_emits(self):
+        """上面兩個常數是本檔的比對錨點，所以先證明它們真的出現在渲染輸出裡——
+        否則後面每一條 `in body` / `not in body` 都會變成恆真或恆假。"""
+        both = _render_critical_suggestion({"a_b_critical": "1", "c_d_critical": "2"},
+                                           {"a_b": "1"})
+        assert self._READY_HEADER in both, both
+        assert self._BLOCKED_HEADER in both, both
+
+    def test_dangling_critical_is_separated_from_the_copyable_ones(self):
+        """⛔ 建議行分兩組，判準是 base 在不在**同一份** `defaults:`（#1218 盲審）。
+
+        單一組的版本對每一條都給同一句指示「Copy each line into the `tenants:`
+        block」，而唯一的 caveat 講錯了後果——「takes effect while `<base>` has a
+        value」讀起來是「那一列不生效」，實際是 `ValidateTenantKeys` 把懸空的
+        `<base>_critical` 放進 **blocking** `Errors`、tenant-api 拒收**整份**租戶檔
+        （#1227；`gitops/writer.go:599` 的 `keyErrs`）。只有 critical severity 規則
+        的客戶（只 page 不 warn，很常見）會 100% 命中。
+        """
+        candidates = [
+            {"status": "perfect", "metric_key": "cpu", "severity": "warning", "threshold_value": "80"},
+            {"status": "perfect", "metric_key": "cpu", "severity": "critical", "threshold_value": "95"},
+            # base 從未以 warning severity 出現 → defaults 裡不會有 disk_usage
+            {"status": "perfect", "metric_key": "disk_usage", "severity": "critical", "threshold_value": "95"},
+        ]
+        suggestion = generate_defaults_from_candidates(candidates)
+        assert suggestion["defaults"] == {"cpu": "80"}
+        assert set(suggestion["critical_overrides"]) == {
+            "cpu_critical", "disk_usage_critical"}
+
+        body = _render_critical_suggestion(
+            suggestion["critical_overrides"], suggestion["defaults"])
+        # 段落標題，不是「出現過這個字」——BLOCKED 段的說明文字本身就提到 READY
+        # 清單（「move the line up to the READY list」），用鬆散比對會自己騙自己。
+        assert body.count(self._READY_HEADER) == 1 and body.count(self._BLOCKED_HEADER) == 1
+        ready, blocked = body.split(self._BLOCKED_HEADER, 1)
+
+        # 有 base 的那條在 READY 段；沒有 base 的在 BLOCKED 段——不是交換
+        assert "cpu_critical" in ready and "cpu_critical" not in blocked
+        assert "disk_usage_critical" in blocked and "disk_usage_critical" not in ready
+        # BLOCKED 段必須講對後果（整份被拒），不是「不生效」
+        assert "WHOLE tenant file" in blocked
+        # 數字仍然留著——這支工具的全部價值就是把客戶既有的閾值撈出來
+        assert 'disk_usage_critical: "95"' in body
+        # 兩組都必須整行是註解
+        for line in body.splitlines():
+            if "_critical:" in line:
+                assert line.lstrip().startswith("#"), line
+
+    def test_ready_states_which_defaults_it_was_judged_against(self):
+        """⛔ READY 是拿**這份建議自己的** `defaults:` 算的，不是客戶部署中的
+        `conf.d/_defaults.yaml`——這支工具從未讀過那個檔。而同一份產出的標頭寫
+        「Review and merge into conf.d/_defaults.yaml」，review 這個動詞本身就在
+        邀請選擇性合併：只要客戶決定不併某個 `<base>`，對應的 READY 行就變成
+        BLOCKED 情境（整份租戶檔被拒），而檔案裡沒有任何字提醒他（round-2 盲審）。
+        """
+        # ⛔ fixture 必須同時產出 READY 與 BLOCKED 兩段，否則 `split(BLOCKED)[0]`
+        # 就等於整份 body，這條斷言會退化成「檔案裡某處有這些字」——盲審實測前一版
+        # 的 fixture 全部落在 READY、`split(...)[0] == body`，分段是裝飾性的。
+        suggestion = generate_defaults_from_candidates([
+            {"status": "perfect", "metric_key": "cpu", "severity": "warning", "threshold_value": "80"},
+            {"status": "perfect", "metric_key": "cpu", "severity": "critical", "threshold_value": "95"},
+            {"status": "perfect", "metric_key": "disk_usage", "severity": "critical", "threshold_value": "95"},
+        ])
+        body = _render_critical_suggestion(
+            suggestion["critical_overrides"], suggestion["defaults"])
+        assert self._BLOCKED_HEADER in body, body
+        ready = body.split(self._BLOCKED_HEADER)[0]
+        assert ready != body, "split 沒切到東西 ⇒ 下面的斷言退化成整檔搜尋"
+
+        # 條件必須明講是「上面那個 defaults: 區塊」而且未查過部署中的檔，
+        # 而且要在 READY 段**之內**——下界是 READY 標題，不是檔案開頭。
+        # ⛔ 只驗「在 BLOCKED 之前」擋不住「被搬進共用前言」：前言也在 BLOCKED
+        # 之前。變異實測：把條件搬到前言，只驗上界的版本照樣綠。
+        lo = body.index(self._READY_HEADER)
+        hi = body.index(self._BLOCKED_HEADER)
+        for phrase in ("ABOVE", "never looked at your",
+                       "once you have actually merged"):
+            assert phrase in ready, (phrase, body)
+            assert lo < body.index(phrase) < hi, (phrase, body)
+
+        # ⛔ 而且必須**指名目的地檔案**。這一段的全部價值就是「別放進
+        # _defaults.yaml」，但在 round-6 盲審之前，這份產出檔唯一出現過的檔名
+        # 就是 conf.d/_defaults.yaml（它自己的檔頭指令），也就是這些 key 放進去
+        # 會失效的那一個。變異實測：把這行拿掉，當時沒有任何測試轉紅。
+        assert "conf.d/<tenant>.yaml" in ready, body
+        assert "NOT" in ready and "conf.d/_defaults.yaml" in ready, body
+
+    def test_blocked_remedy_states_its_fleet_wide_cost(self):
+        """⛔ BLOCKED 的補救（把 `<base>` 加進 `defaults:`）不是免費的：實測一個
+        `defaults:` key 在 3 租戶機隊上會讓**每一個**租戶多一條 warning 列，而同一
+        個產品的 `_defaults.yaml` 標頭正好反過來警告不要這樣做（"Do NOT move one
+        into `defaults:` to 'fix' the silence — that arms a platform-chosen
+        number for every tenant"）。兩份產出檔給相反的建議是最糟的形狀。
+        """
+        suggestion = generate_defaults_from_candidates([
+            {"status": "perfect", "metric_key": "disk_usage",
+             "severity": "critical", "threshold_value": "95"},
+        ])
+        blocked = _render_critical_suggestion(
+            suggestion["critical_overrides"], suggestion.get("defaults") or {})
+        assert "EVERY" in blocked and "tenant" in blocked, blocked
+        # 並且要說明沒有租戶範圍的替代路徑（base 寫成租戶 override 不算數）
+        assert "resolveCriticalRows" in blocked, blocked
+        assert "tenant override does not enable" in blocked, blocked
+
+    def test_a_key_without_the_suffix_is_dropped_rather_than_mis_sliced(self):
+        """⛔ 這支守衛（`onboard_platform.py` 的 `endswith(CRITICAL_SUFFIX)`）是為了
+        修「類別」而加的——但加完**沒有任何斷言在守它**（round-4 盲審：刪掉那兩行，
+        全檔照樣綠，因為六個呼叫點餵的都是 `*_critical`）。
+
+        處置為何是丟棄而非保留：這一層收到的非 `_critical` key **不是客戶的數字**
+        （客戶的閾值在 `defaults` 那一半，由 `:644` 依 severity 分流），而是產生器
+        自己壞掉才會出現的東西。同檔「不要靜默丟棄客戶數字」的原則講的是**值**，
+        不是畸形的鍵名——把它切掉九個字元再拿去比對 `defaults`，才會產生一個
+        與這個 key 無關的判斷。
+        """
+        body = _render_critical_suggestion(
+            {"cpu_critical": "95", "not_a_critical_key": "1"}, {"cpu": "80"})
+        assert 'cpu_critical: "95"' in body
+        assert "not_a_critical_key" not in body, body
+        # …且不得把它誤切成 `not_a_criti` 之類的東西拿去比對
+        assert "not_a_criti" not in body, body
+
+    def test_all_blocked_when_the_estate_is_critical_only(self):
+        """只 page 不 warn 的 estate：每一條建議都是懸空的，檔案不得出現 READY 段。"""
+        suggestion = generate_defaults_from_candidates([
+            {"status": "perfect", "metric_key": "disk_usage",
+             "severity": "critical", "threshold_value": "95"},
+        ])
+        assert "defaults" not in suggestion
+        body = _render_critical_suggestion(
+            suggestion["critical_overrides"], suggestion.get("defaults") or {})
+        assert self._BLOCKED_HEADER in body
+        assert self._READY_HEADER not in body
+
+    def test_critical_only_estate_never_writes_an_empty_defaults_mapping(self):
+        """⛔ 空的 `defaults:` 必須**省略**，不能 dump 成 `defaults: {}`（#1218 盲審）。
+
+        寫檔的守衛從 `if defaults:` 放寬成 `if suggestion:`，所以只有 critical
+        severity 的 estate 現在會走到寫檔。而這個檔的標頭寫的是「Review and merge
+        into conf.d/_defaults.yaml」——把一個字面的 `defaults: {}` 併到已經有內容的
+        `_defaults.yaml` 上，等於清空平台整個 base tier；同一個編輯在「鍵不存在」時
+        則無害。
+
+        走真的 `_write_phase2_outputs`，不是重寫一次它的組字串邏輯。
+        """
+        from pathlib import Path
+
+        import onboard_platform as op
+
+        candidates = [
+            {"status": "perfect", "metric_key": "disk_usage",
+             "severity": "critical", "threshold_value": "95"},
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = {"files_written": [], "phases": {}}
+            op._write_phase2_outputs(tmpdir, (candidates, [], {}), report)
+
+            written = [p for p in report["files_written"]
+                       if p.endswith("_defaults-suggestion.yaml")]
+            assert written, report["files_written"]
+            text = Path(written[0]).read_text(encoding="utf-8")
+
+        parsed = yaml.safe_load(text)
+        # 沒有 warning 層可建議時，`defaults:` 這個鍵根本不該存在
+        assert parsed is None or "defaults" not in parsed, text
+        assert "defaults: {}" not in text, text
+        # …但撈回來的數字仍然在檔案裡，那是跑 onboard 的唯一理由
+        assert 'disk_usage_critical: "95"' in text, text
+
+    def test_no_critical_block_when_there_is_no_critical_tier(self):
+        """空的一層不出標題——避免指向一個沒有內容的區段。"""
+        candidates = [
+            {"status": "perfect", "metric_key": "cpu", "severity": "warning", "threshold_value": "80"},
+        ]
+        suggestion = generate_defaults_from_candidates(candidates)
+        assert "critical_overrides" not in suggestion
+        assert _render_critical_suggestion(suggestion.get("critical_overrides", {})) == ""
 
     def test_most_common_value(self):
         """最常見值作為預設值。"""
