@@ -622,9 +622,8 @@ def _critical_prefill_note(critical: dict) -> str:
         '#     line here must go too. ONLY the tenant-api write path treats a\n'
         '#     dangling one as blocking, and it rejects THIS WHOLE FILE —\n'
         '#     every other change in the same save with it. `da-tools\n'
-        '#     validate-config`, which the CI generated beside this file runs,\n'
-        '#     reports it as a WARNING and exits 0, so a green pipeline is not\n'
-        '#     evidence that this is fixed.'
+        '#     validate-config` reports it as a WARNING and exits 0, so its\n'
+        '#     verdict never establishes that this is fixed.'
     ).format(n=len(critical))
 
 

@@ -893,9 +893,15 @@ class TestCriticalTierPlacement:
         assert 'tenant-api' in prefill, header
         assert 'ONLY the tenant-api write path' in prefill, header
         assert 'validate-config' in prefill and 'exits 0' in prefill, header
-        assert 'green pipeline is not' in prefill, header
+        assert 'never establishes that this is fixed' in prefill, header
         for time_bound in ('--ci', 'does not accept', 'before it validates',
-                           'EVERY write of this file is rejected'):
+                           'EVERY write of this file is rejected',
+                           # ⛔ and no relative clause re-attributing the TOOL's
+                           # behaviour to the generated CI job: "…, which the CI
+                           # generated beside this file runs, reports it as a
+                           # WARNING and exits 0" reads as "that job goes green",
+                           # which is draft 2's defect wearing different words.
+                           'the CI generated beside this file runs'):
             assert time_bound not in prefill, (time_bound, header)
 
         # (3) the only in-tool refresh route is --force, which discards the
@@ -932,6 +938,41 @@ class TestCriticalTierPlacement:
             assert mechanism not in header, (mechanism, header)
         # the deploy-independent property it says instead
         assert 'nothing generated here tracks the platform' in header, header
+
+    def test_validate_config_really_warns_and_exits_zero_on_a_dangling_critical(self):
+        """⛔ The load-bearing sentence in the tenant header says `da-tools
+        validate-config` reports a dangling `<base>_critical` as a WARNING and
+        exits 0, so its verdict proves nothing. That was asserted as a SUBSTRING
+        only (blind review, round 4) — the third time this PR shipped a claim
+        whose truth nothing executed.
+
+        The natural follow-up to #1218 is to make `validate_config` escalate this
+        shape to an error. On that day the header would keep telling operators a
+        green run means nothing while the tool actually goes red, and every
+        string assertion would stay green. So this runs the real validator.
+        """
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        validator = str(Path(ip.__file__).resolve().parent / 'validate_config.py')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            conf = Path(tmpdir) / 'conf.d'
+            conf.mkdir()
+            (conf / '_defaults.yaml').write_text(
+                'defaults:\n  mysql_connections: 80\n', encoding='utf-8')
+            (conf / 'db-a.yaml').write_text(
+                'tenants:\n  db-a:\n    pg_connections_critical: "150"\n',
+                encoding='utf-8')
+            env = {**os.environ, 'PYTHONUTF8': '1', 'PYTHONDONTWRITEBYTECODE': '1'}
+            for extra in ([], ['--strict']):
+                run = subprocess.run(
+                    [sys.executable, validator, '--config-dir', str(conf), *extra],
+                    capture_output=True, text=True, encoding='utf-8',
+                    errors='replace', env=env, timeout=180)
+                assert run.returncode == 0, (extra, run.returncode, run.stdout[-800:])
+                assert 'WARN' in (run.stdout + run.stderr).upper(), (
+                    extra, run.stdout[-800:])
 
     def test_force_really_discards_hand_edits_in_both_files(self):
         """The header tells the operator that `--force` is the only in-tool

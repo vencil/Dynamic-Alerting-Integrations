@@ -677,9 +677,84 @@ def test_an_empty_artifact_scan_is_an_error_not_a_pass(monkeypatch):
     per-face loop is then perfectly satisfied — the same vacuity the hardcoded
     pair shipped with, one level up. So the floor raises before the loop.
     """
-    monkeypatch.setattr(gate, "_defaults_artifacts", list)
+    # ⛔ Patches the SCAN, not the post-exemption list: the floor deliberately
+    # counts what the scan found, so that exempting files cannot walk the total
+    # down to the floor and then have the message blame the scan.
+    monkeypatch.setattr(gate, "_tracked_defaults_artifacts", list)
     with pytest.raises(RuntimeError, match="below the floor"):
         gate.run_check(demand=set(), supply=set(), deferred=set(), known_unwired={})
+
+
+def test_exemptions_do_not_count_against_the_floor(monkeypatch):
+    """⛔ The floor's remedy text forbids the only correct action when exemptions
+    are subtracted first: "repair the scan or restore the file(s)" is wrong advice
+    for "you exempted too many". So the count is taken pre-subtraction — exempting
+    every artifact must NOT trip the floor (it changes what is read, not whether
+    the scan works)."""
+    everything = {rel: "x" * 40 for rel in gate._tracked_defaults_artifacts()}
+    monkeypatch.setattr(gate, "_DEFAULTS_ARTIFACT_EXEMPT", everything)
+    assert gate._defaults_artifacts() == []
+    result = gate.run_check(demand=set(), supply=set(), deferred=set(),
+                            known_unwired={})          # no RuntimeError
+    assert not [e for e in result["errors"] if "below the floor" in e]
+
+
+def test_the_scan_is_tracked_scope_not_a_filesystem_walk():
+    """⛔ Measured, and the reason this is not an `rglob`: this repo keeps git
+    worktrees under `.claude/worktrees/`, so a filesystem walk from the main repo
+    root yielded **643 files in 18.7s, 618 of them other branches' working
+    copies** — a commit could be blocked by an error naming a path outside the
+    author's tree. Tracked scope is 17.
+    """
+    import subprocess
+
+    tracked = set(gate._tracked_defaults_artifacts())
+    assert tracked, "empty scan — the floor should have caught this first"
+    listed = subprocess.run(
+        ["git", "-C", str(gate.PROJECT_ROOT), "ls-files"],
+        capture_output=True, text=True, check=True, timeout=60).stdout.split()
+    assert tracked <= set(listed), sorted(tracked - set(listed))
+    assert not [r for r in tracked if r.startswith(".claude/")], sorted(tracked)
+
+
+def test_the_hook_filter_is_as_case_insensitive_as_the_predicate():
+    """⛔ A case-SENSITIVE trigger filter beside a case-INSENSITIVE reader is the
+    same divergence this round fixed, one layer out: the gate would read
+    `_defaults.YAML` while the hook never fired on the commit that added it.
+
+    Derived from the predicate rather than restated — the case variants come from
+    whatever `_is_defaults_artifact` accepts, so widening one and not the other
+    is what fails here.
+    """
+    import re
+
+    import yaml
+
+    config = yaml.safe_load(
+        (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    hooks = [h for repo in config["repos"] for h in repo["hooks"]
+             if h["id"] == "threshold-reachability-check"]
+    assert len(hooks) == 1
+    pattern = re.compile(hooks[0]["files"])
+
+    for name in ("_defaults.yaml", "_defaults.YAML", "_Defaults.yml",
+                 "_defaults-multidb.YAML"):
+        assert gate._is_defaults_artifact(name), name          # the reader takes it
+        rel = f"components/threshold-exporter/config/conf.d/{name}"
+        assert pattern.match(rel), (rel, "reader accepts it, hook filter does not")
+
+
+def test_the_artifact_predicate_matches_the_loader_not_the_sibling_lint():
+    """`config_hierarchy.go` lowercases before BOTH its suffix test and its
+    filename test, so `_defaults.YAML` is loaded at runtime. Borrowing
+    `check_confd_schema.py`'s case-SENSITIVE spelling let that file through on
+    every platform, and made `_Defaults.yaml` red on Windows / green on Linux CI
+    — the wrong way round (blind review, round 4)."""
+    for name in ("_defaults.yaml", "_defaults.YAML", "_Defaults.yml",
+                 "_defaults-multidb.YAML"):
+        assert gate._is_defaults_artifact(name), name
+    for name in ("_defaultsx.txt", "defaults.yaml", "_routing_profiles.yaml"):
+        assert not gate._is_defaults_artifact(name), name
 
 
 def test_every_exempted_artifact_carries_a_reason_and_still_exists():

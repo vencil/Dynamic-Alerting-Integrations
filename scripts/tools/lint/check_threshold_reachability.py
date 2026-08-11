@@ -381,16 +381,36 @@ def _declared_faces() -> dict[str, set[str]]:
 # were demonstrated: inject `mysql_connections_critical` into any of them and
 # this gate exited 0 without a word.
 #
-# The predicate is the repo's own, not a new one: `check_confd_schema.py`
-# already classifies this artifact class as `basename.startswith("_defaults")`
-# + a YAML suffix, applied over a walk. Enumerating producers is right for
-# GENERATORS (they have no artifact to read); enumerating ARTIFACTS is what
-# leaves fifteen of seventeen files unguarded.
+# ⛔ SCOPE is `git ls-files`, not a filesystem walk, and that is the second
+# correction this face needed. The first draft used `PROJECT_ROOT.rglob` with a
+# directory-name denylist; three reviewers converged on it independently and the
+# measurement is unambiguous — from the MAIN repo root that walk yields **643
+# files in 18.7s, 618 of them under `.claude/worktrees/`**, i.e. OTHER BRANCHES'
+# working copies. A commit touching nothing relevant could be blocked by an
+# error naming a path that is not in the author's tree, on this repo's own
+# standard worktree layout. Tracked scope is 17.
 #
-# Measured when this changed: 17 files match, all clean, so the derived scope is
-# green on arrival and buys 15 files of coverage.
-_DEFAULTS_ARTIFACT_EXCLUDED_DIRS = frozenset({".git", "node_modules", ".venv",
-                                             "__pycache__", "site", "dist"})
+# The denylist went with it rather than being extended: it matched any path
+# COMPONENT, so a customer-shaped `conf.d/site/_defaults.yaml` (multi-site
+# layouts really are `<root>/<domain>/<region>/<env>`) was silently dropped — a
+# demonstrated bypass. `git ls-files` needs no denylist: build output and
+# virtualenvs are not tracked.
+#
+# ⛔ The predicate is CASE-INSENSITIVE, matching the loader rather than the
+# sibling Python lint. `config_hierarchy.go` lowercases before both its suffix
+# and its filename test, so `_defaults.YAML` IS loaded; `check_confd_schema.py`
+# compares case-sensitively, so borrowing its spelling inherited a divergence
+# that let `_defaults.YAML` through on every platform (demonstrated), and made
+# `_Defaults.yaml` red on Windows and green on Linux CI — the wrong way round.
+#
+# ⚠️ COVERAGE, stated honestly: 17 files match, all clean today. Only **6** of
+# them can express this defect at the layer checked here — the other 11 are 2
+# legitimately-empty roots plus 9 `tests/golden/fixtures/**` files on the
+# hierarchy-loader schema, where thresholds live under `defaults.threshold.*`
+# and `_defaults_section` reads the top level only (measured: injecting there
+# is silent, injecting at top level is caught). Making the check schema-aware is
+# tracked in #1392; this comment must not be shortened into "17 files covered".
+_DEFAULTS_ARTIFACT_SUFFIXES = (".yaml", ".yml")
 
 # ⛔ Explicit, and empty on purpose. A fixture that deliberately encodes the
 # defective shape (to characterise the loader, say) belongs HERE with a reason —
@@ -407,22 +427,43 @@ _DEFAULTS_ARTIFACT_FLOOR = 10
 
 # Label prefix that tells the two face classes apart. Generators must be
 # non-empty; artifacts may legitimately be (see the EMPTY-FACE branch).
+# ⚠️ A STRING is a weak discriminator and the hole is on the generator side —
+# a generator whose label started with this prefix would be silently treated as
+# an artifact, and  cannot see it because the count does
+# not change. Zero instances today (all four labels are hardcoded literals).
+# Typed faces tracked in #1393.
 _ARTIFACT_FACE_PREFIX = "artifact ("
 
 
+def _is_defaults_artifact(name: str) -> bool:
+    """The loader's own rule, lowercased on both halves (see the note above)."""
+    lower = name.lower()
+    return lower.startswith("_defaults") and lower.endswith(_DEFAULTS_ARTIFACT_SUFFIXES)
+
+
+def _tracked_defaults_artifacts() -> list[str]:
+    """Repo-relative paths of every TRACKED platform-defaults artifact.
+
+    Separate from `_defaults_artifacts` so the floor can count what the scan
+    found BEFORE exemptions are subtracted — otherwise exempting files walks the
+    count down toward the floor and the floor's message ("repair the scan or
+    move the file(s) back") names the one repair that is not the problem.
+    """
+    import subprocess  # local: only this face shells out
+
+    out = subprocess.run(
+        ["git", "-C", str(PROJECT_ROOT), "ls-files", "-z", "--", "*_defaults*"],
+        capture_output=True, check=True, timeout=60)
+    return sorted(
+        rel for rel in out.stdout.decode("utf-8", "replace").split("\0")
+        if rel and _is_defaults_artifact(rel.rsplit("/", 1)[-1])
+        and (PROJECT_ROOT / rel).is_file())
+
+
 def _defaults_artifacts() -> list[Path]:
-    """Every tracked platform-defaults artifact, by predicate rather than name."""
-    out = []
-    for path in PROJECT_ROOT.rglob("_defaults*"):
-        if path.suffix not in (".yaml", ".yml") or not path.is_file():
-            continue
-        if _DEFAULTS_ARTIFACT_EXCLUDED_DIRS & set(path.parts):
-            continue
-        rel = path.relative_to(PROJECT_ROOT).as_posix()
-        if rel in _DEFAULTS_ARTIFACT_EXEMPT:
-            continue
-        out.append(path)
-    return sorted(out)
+    """The artifacts this face reads: tracked, minus the explicit exemptions."""
+    return [PROJECT_ROOT / rel for rel in _tracked_defaults_artifacts()
+            if rel not in _DEFAULTS_ARTIFACT_EXEMPT]
 
 # The probe fed to the `onboard` face below. A severity pair on one metric is
 # the minimal input that used to manufacture the defect, and it is spelled here
@@ -489,20 +530,34 @@ def _defaults_faces() -> dict[str, set[str]]:
     }
 
     # ARTIFACTS — derived (see `_defaults_artifacts`). The floor fires BEFORE the
-    # per-face loop, because an empty walk produces zero faces and zero faces
+    # per-face loop, because an empty scan produces zero faces and zero faces
     # pass every check in that loop perfectly.
-    artifacts = _defaults_artifacts()
-    if len(artifacts) < _DEFAULTS_ARTIFACT_FLOOR:
+    #
+    # ⛔ It counts what the SCAN found, not what survives the exemption table.
+    # Counting after subtraction makes exemptions walk the total toward the floor
+    # and then blames the scan: the message would say "repair the scan or move
+    # the file(s) back" while the only correct action is to shorten the exemption
+    # list, which it explicitly forbids.
+    scanned = _tracked_defaults_artifacts()
+    if len(scanned) < _DEFAULTS_ARTIFACT_FLOOR:
         raise RuntimeError(
-            f"defaults-artifact scan found only {len(artifacts)} file(s), below the "
-            f"floor of {_DEFAULTS_ARTIFACT_FLOOR}. A walk that returns (almost) "
-            "nothing passes the placement check vacuously, which is exactly the "
+            f"defaults-artifact scan found only {len(scanned)} tracked file(s), "
+            f"below the floor of {_DEFAULTS_ARTIFACT_FLOOR}. A scan that returns "
+            "(almost) nothing passes the placement check vacuously, which is the "
             "shape the hardcoded-path version of this face shipped with. Repair "
-            "the scan or move the file(s) back; do not lower the floor.")
-    for path in artifacts:
+            "the scan or restore the file(s); do not lower the floor. (Exemptions "
+            f"are NOT counted here — {len(_DEFAULTS_ARTIFACT_EXEMPT)} exempted.)")
+    for path in _defaults_artifacts():
         rel = path.relative_to(PROJECT_ROOT).as_posix()
-        faces[f"{_ARTIFACT_FACE_PREFIX}{rel})"] = _defaults_section(
-            path.read_text(encoding="utf-8"))
+        # ⛔ The reader names the file. `read_text` raises with the path attached,
+        # but `yaml.safe_load` does not — its error says `<unicode string>`, and
+        # with the scope at 17 files rather than 2 hardcoded ones, "which file"
+        # is precisely the information that was missing (blind review, round 4).
+        try:
+            faces[f"{_ARTIFACT_FACE_PREFIX}{rel})"] = _defaults_section(
+                path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001 — re-raised with provenance
+            raise RuntimeError(f"{rel}: {exc}") from exc
     return faces
 
 
@@ -642,10 +697,10 @@ def run_check(
         # ⛔ The vacuity rule applies to GENERATORS only, and the asymmetry is
         # measured, not assumed: every generator ships a non-empty `defaults:`,
         # so an empty one means its reader broke — but 2 of the 17 derived
-        # ARTIFACTS legitimately carry none (`rule-packs/recipes/examples/
-        # conf.d/_defaults.yaml` and its `finance/` child declare only the other
-        # sections). Applying the generator rule to artifacts turned this gate
-        # red on arrival for two files that are perfectly correct.
+        # ARTIFACTS legitimately carry none — the recipes example root
+        # `rule-packs/recipes/examples/conf.d/_defaults.yaml` and its `finance/`
+        # child declare only the other sections. Applying the generator rule to
+        # artifacts turned this gate red on arrival for two correct files.
         #
         # Vacuity is still closed for artifacts, by two other links: a file that
         # cannot be read RAISES (fail-closed, `main()` → EXIT_CALLER_ERROR with

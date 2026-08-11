@@ -653,6 +653,24 @@ class TestGenerateDefaultsFromCandidates:
         assert "resolveCriticalRows" in blocked, blocked
         assert "tenant override does not enable" in blocked, blocked
 
+    def test_a_key_without_the_suffix_is_dropped_rather_than_mis_sliced(self):
+        """⛔ 這支守衛（`onboard_platform.py` 的 `endswith(CRITICAL_SUFFIX)`）是為了
+        修「類別」而加的——但加完**沒有任何斷言在守它**（round-4 盲審：刪掉那兩行，
+        全檔照樣綠，因為六個呼叫點餵的都是 `*_critical`）。
+
+        處置為何是丟棄而非保留：這一層收到的非 `_critical` key **不是客戶的數字**
+        （客戶的閾值在 `defaults` 那一半，由 `:644` 依 severity 分流），而是產生器
+        自己壞掉才會出現的東西。同檔「不要靜默丟棄客戶數字」的原則講的是**值**，
+        不是畸形的鍵名——把它切掉九個字元再拿去比對 `defaults`，才會產生一個
+        與這個 key 無關的判斷。
+        """
+        body = _render_critical_suggestion(
+            {"cpu_critical": "95", "not_a_critical_key": "1"}, {"cpu": "80"})
+        assert 'cpu_critical: "95"' in body
+        assert "not_a_critical_key" not in body, body
+        # …且不得把它誤切成 `not_a_criti` 之類的東西拿去比對
+        assert "not_a_criti" not in body, body
+
     def test_all_blocked_when_the_estate_is_critical_only(self):
         """只 page 不 warn 的 estate：每一條建議都是懸空的，檔案不得出現 READY 段。"""
         suggestion = generate_defaults_from_candidates([
