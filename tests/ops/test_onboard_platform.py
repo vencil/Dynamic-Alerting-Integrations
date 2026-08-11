@@ -635,6 +635,13 @@ class TestGenerateDefaultsFromCandidates:
             assert phrase in ready, (phrase, body)
             assert lo < body.index(phrase) < hi, (phrase, body)
 
+        # ⛔ 而且必須**指名目的地檔案**。這一段的全部價值就是「別放進
+        # _defaults.yaml」，但在 round-6 盲審之前，這份產出檔唯一出現過的檔名
+        # 就是 conf.d/_defaults.yaml（它自己的檔頭指令），也就是這些 key 放進去
+        # 會失效的那一個。變異實測：把這行拿掉，當時沒有任何測試轉紅。
+        assert "conf.d/<tenant>.yaml" in ready, body
+        assert "NOT" in ready and "conf.d/_defaults.yaml" in ready, body
+
     def test_blocked_remedy_states_its_fleet_wide_cost(self):
         """⛔ BLOCKED 的補救（把 `<base>` 加進 `defaults:`）不是免費的：實測一個
         `defaults:` key 在 3 租戶機隊上會讓**每一個**租戶多一條 warning 列，而同一

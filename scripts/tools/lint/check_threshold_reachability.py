@@ -403,13 +403,22 @@ def _declared_faces() -> dict[str, set[str]]:
 # that let `_defaults.YAML` through on every platform (demonstrated), and made
 # `_Defaults.yaml` red on Windows and green on Linux CI — the wrong way round.
 #
-# ⚠️ COVERAGE, stated honestly: 17 files match, all clean today. Only **6** of
-# them can express this defect at the layer checked here — the other 11 are 2
-# legitimately-empty roots plus 9 `tests/golden/fixtures/**` files on the
-# hierarchy-loader schema, where thresholds live under `defaults.threshold.*`
-# and `_defaults_section` reads the top level only (measured: injecting there
-# is silent, injecting at top level is caught). Making the check schema-aware is
-# tracked in #1392; this comment must not be shortened into "17 files covered".
+# ⚠️ COVERAGE, stated honestly: 17 files match, all clean today. **7** of them
+# have a FLAT `defaults:` and can therefore express this defect at the layer
+# checked here; the other 10 are 8 `tests/golden/fixtures/**` files on the
+# hierarchy-loader schema (thresholds under `defaults.threshold.*`, and
+# `_defaults_section` reads the top level only — measured: injecting there is
+# silent, injecting at top level is caught) plus 2 legitimately-empty roots.
+# Making the check schema-aware is tracked in #1392; this comment must not be
+# shortened into "17 files covered".
+#
+# ⛔ 7/8/2, not the 6/9/2 an earlier revision of this comment carried. Two blind
+# reviewers disagreed on the split; arbitrating by parsing all 17 gives 7 flat,
+# and INJECTING into the disputed file
+# (`tests/golden/fixtures/full-l0-l3/conf.d/db/mariadb/prod/_defaults.yaml`,
+# whose flat `defaults:` holds only `level`/`region` metadata) makes this gate
+# exit 1 — so it is covered, and "can express the defect" is a question about
+# STRUCTURE, not about whether today's content happens to be thresholds.
 _DEFAULTS_ARTIFACT_SUFFIXES = (".yaml", ".yml")
 
 # ⛔ Explicit, and empty on purpose. A fixture that deliberately encodes the

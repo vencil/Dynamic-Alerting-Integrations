@@ -15,8 +15,11 @@ package config
 // Enforced elsewhere, so a change here has to move with them:
 //
 //   - `check_threshold_reachability`'s defaults-tier face rejects a `_critical`
-//     key under `defaults:` across all six `_defaults.yaml` producers, on the
-//     strength of this behaviour.
+//     key under `defaults:` across every `_defaults.yaml` surface — four
+//     enumerated GENERATORS plus every tracked ARTIFACT the predicate finds —
+//     on the strength of this behaviour. (Deliberately no number here: an
+//     earlier revision said "all six producers", which the same PR later had to
+//     retract once the artifact half became derived.)
 //   - `TestDocsDefaultsSamplesHaveNoTenantOnlyKeys` (docs_defaults_sample_test.go)
 //     holds documentation samples to the same rule and describes the emitted
 //     series shape in its failure message.

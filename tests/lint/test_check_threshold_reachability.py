@@ -494,7 +494,14 @@ def test_an_empty_defaults_face_is_an_error_not_a_pass():
 def test_dimensional_key_in_a_defaults_face_is_an_error():
     """The other half of the rule `TestDocsDefaultsSamplesHaveNoTenantOnlyKeys`
     pins. Covering only `_critical` (the half #1218 was reported about) leaves
-    the equally-inert shape unguarded on all six producers."""
+    the equally-inert shape unguarded on every surface this face covers.
+
+    ⛔ No producer COUNT here on purpose: "all six" stood in this docstring and
+    in the Go pin, and both went stale the moment the artifact half became
+    derived (4 enumerated generators + however many the predicate finds — 17
+    today). A number restated in three places is a number that will be corrected
+    in one of them.
+    """
     result = gate.run_check(
         demand=set(), supply=set(), deferred=set(), known_unwired={},
         defaults_faces={"probe": {"oracle_tablespace", 'oracle_ts{env="prod"}'}},

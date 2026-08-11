@@ -878,7 +878,17 @@ class TestCriticalTierPlacement:
         # Measured (round-2 blind review): both lines deleted → the warning row
         # comes BACK at the platform default, because an absent key is State 2.
         assert 'DELETING both lines is not the same thing' in prefill, header
-        assert 'Set BOTH to "disable"' in prefill, header
+        assert 'BOTH lines must say "disable"' in prefill, header
+
+        # (1c) ⛔ "BOTH lines" presumes both lines exist, and usually they do
+        # not: base overrides are seeded from rule_packs[0] only while the
+        # critical tier is seeded for every selected pack. Measured with
+        # `--rule-packs mariadb,redis,kubernetes`: 7 `_critical` keys, 5 with no
+        # twin in the file. A remedy the reader cannot carry out is worse than
+        # none, so the header has to say the line may be missing (round-6 blind
+        # review).
+        assert 'most `<base>` lines are NOT in this file' in prefill, header
+        assert 'ADD the `<base>: "disable"` line yourself' in prefill, header
 
         # (2) the rejection claim must name WHICH path blocks, and must state an
         # invariant rather than the current state of the generated CI.
@@ -914,6 +924,31 @@ class TestCriticalTierPlacement:
         # …and it must not re-assert that the platform supplies the values —
         # the paragraph above it (correctly) says the opposite.
         assert 'the platform supplies' not in prefill
+
+    def test_the_missing_twin_claim_matches_what_the_stub_actually_seeds(self):
+        """The header's twinless-base caveat is a claim about THIS generator's
+        output, so it is measured rather than asserted: a multi-pack selection
+        must really produce `_critical` keys whose base is absent, otherwise the
+        caveat describes a state that cannot occur and is just noise.
+
+        Measured at the time of writing (`mariadb,redis,kubernetes`): 7 critical
+        keys, 5 of them twinless — because the illustrative base overrides come
+        from `rule_packs[0]` only while the critical tier is seeded for every
+        selected pack (blind review, round 6: the header said "BOTH lines must
+        say disable" while most files have only one of the two).
+        """
+        text = ip._gen_tenant_yaml('acme', ['mariadb', 'redis', 'kubernetes'])
+        stub = yaml.safe_load(text)['tenants']['acme']
+        crit = [k for k in stub if k.endswith('_critical')]
+        base = [k for k in stub
+                if not k.startswith('_') and not k.endswith('_critical')]
+        twinless = [k for k in crit if k[: -len('_critical')] not in base]
+
+        assert crit, stub
+        assert twinless, (
+            'no twinless critical key — the header caveat would be vacuous')
+        # the base tier really is first-pack-only, which is WHY they are twinless
+        assert all(k.startswith('mysql_') for k in base), base
 
     def test_stub_header_makes_no_deploy_specific_claim(self):
         """⛔ `_gen_tenant_yaml` never receives `deploy`, so any sentence about

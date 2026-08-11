@@ -586,8 +586,11 @@ def _critical_prefill_note(critical: dict) -> str:
         accept (#1380).
 
         ⛔ And that is no longer even a hypothetical: #1347 merged as PR #1390
-        (`b016f77e`) WHILE THIS PR WAS IN REVIEW, removing `--ci` from all three
-        generated invocations. Draft 2 would now be describing a defect that no
+        (`b016f77e`) WHILE THIS PR WAS IN REVIEW, removing `--ci` from the three
+        `validate-config` invocations (measured: the generated tree still
+        contains three `--ci`, all of them on `da-tools lint`, which does accept
+        the flag — saying "all three invocations" without the qualifier reads as
+        "all of them"). Draft 2 would now be describing a defect that no
         longer exists, in a file customers keep. The reasoning paragraph itself
         went stale the same way the sentence would have — which is the strongest
         argument available for the rule it states.
@@ -622,7 +625,13 @@ def _critical_prefill_note(critical: dict) -> str:
         '#   * `<base>: "disable"` does NOT disable its `<base>_critical`\n'
         '#     twin. The warning row goes away and the critical row keeps\n'
         '#     firing, with no warning tier beneath it and no validation\n'
-        '#     message anywhere. Set BOTH to "disable".\n'
+        '#     message anywhere. BOTH lines must say "disable".\n'
+        '#   * …and most `<base>` lines are NOT in this file. The illustrative\n'
+        '#     base overrides above come from the FIRST selected pack only,\n'
+        '#     while the critical tier is seeded for every selected pack — so a\n'
+        '#     `<base>_critical` here often has no twin to edit. To silence one\n'
+        '#     of those, ADD the `<base>: "disable"` line yourself; omitting it\n'
+        '#     means "inherit the platform value", not "off".\n'
         '#   * DELETING both lines is not the same thing: an absent key falls\n'
         '#     back to the platform value, so the warning row returns at the\n'
         '#     _defaults.yaml number. Delete only suppresses the critical row.\n'
@@ -2158,7 +2167,11 @@ def _build_parser() -> argparse.ArgumentParser:
                              'generated file, including conf.d/_defaults.yaml and '
                              'each conf.d/<tenant>.yaml (hand edits are lost)'
                         if _LANG == 'en'
-                        else '在已初始化的目錄重跑：會**重寫所有產生的檔案**，'
+                        # ⚠️ 大寫「重寫所有產生的檔案」而非 markdown `**`：這是
+                        # argparse help，會**原樣**印到終端機（實測 `--help` 輸出
+                        # 帶著星號）。en 分支用大寫 REWRITES 正是為此，zh 分支卻
+                        # 用了 markdown 語法——全 repo 唯一一處，不是慣例。
+                        else '在已初始化的目錄重跑：會「重寫所有產生的檔案」，'
                              '含 conf.d/_defaults.yaml 與每一份 conf.d/<tenant>.yaml'
                              '（手動調整會遺失）')
     parser.add_argument('--dry-run', action='store_true',

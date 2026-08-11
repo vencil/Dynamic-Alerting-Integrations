@@ -706,6 +706,23 @@ def _render_critical_suggestion(critical, defaults=None):
         base = key[: -len(CRITICAL_SUFFIX)]
         (ready if base in defaults else blocked).append((key, base))
 
+    # ⛔ "the `defaults:` above" is only true when there IS one. A
+    # critical-severity-only estate produces no base tier, so `_write_phase2_outputs`
+    # omits the `defaults:` mapping entirely (emitting `defaults: {}` would empty
+    # the customer's platform tier on merge) — and the BLOCKED paragraph would
+    # then point at an absent section, the exact defect the sibling generator's
+    # `_critical_prefill_note` states it must never commit ("an empty tier
+    # renders nothing at all, so the file never points at an absent section").
+    # Blind review found the two generators disagreeing on their own shared rule.
+    blocked_opener = ([
+        "# ⛔ BLOCKED — no `<base>` in the `defaults:` block above (and possibly",
+        "# none in your deployed conf.d/_defaults.yaml either — unchecked). Copying",
+    ] if defaults else [
+        "# ⛔ BLOCKED — this suggestion has NO `defaults:` block at all (no",
+        "# warning-tier threshold was recovered), so every line below needs a",
+        "# `<base>` that must come from your deployed conf.d/_defaults.yaml,",
+        "# which this tool never read. Copying",
+    ])
     lines = [
         "",
         "# ── Critical tier — do NOT put these under `defaults:` ──────────────",
@@ -724,14 +741,18 @@ def _render_critical_suggestion(critical, defaults=None):
             "# once you have actually merged the matching `<base>` into that file;",
             "# merge the suggestion selectively and a READY line becomes a BLOCKED",
             "# one without changing here. Then copy each into the `tenants:` block",
-            "# of the tenant it applies to.",
+            "# of `conf.d/<tenant>.yaml` — the tenant's OWN file, NOT",
+            "# conf.d/_defaults.yaml. ⛔ Naming the destination matters more here",
+            "# than anywhere else in this file: until this line existed, the only",
+            "# filename it ever mentioned was conf.d/_defaults.yaml (in its own",
+            "# header instruction), which is precisely the file where these keys",
+            "# do nothing.",
         ]
         lines += [f"#     {key}: \"{critical[key]}\"" for key, _ in ready]
     if blocked:
         lines += [
             "#",
-            "# ⛔ BLOCKED — no `<base>` in the `defaults:` above (and possibly none",
-            "# in your deployed _defaults.yaml either — again, unchecked). Copying",
+            *blocked_opener,
             "# one of these as-is does NOT merely leave it silent: a",
             "# `<base>_critical` whose base is absent is a BLOCKING validation",
             "# error, and the tenant-api write path rejects the WHOLE tenant file",
