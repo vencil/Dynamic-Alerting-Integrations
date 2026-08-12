@@ -717,7 +717,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "397c29d7ee114f1b6baee579eeafe82ceda91ecd9a45563dc526e3ce9c6a5c3f",
+ "source_digest": "17824a9f0a4a30512943e5521eded82beb98edfeec20b924b7603d6455ad1e84",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2492,7 +2492,8 @@
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_threshold_registry.py",
    "tests/ops/test_grar_facade_reexports.py",
-   "tests/ops/test_nightly_race_issue_policy.py"
+   "tests/ops/test_nightly_race_issue_policy.py",
+   "tests/ops/test_onboard_platform.py"
   ],
   "tests/ops/_stub_declared_shared.py": [
    "tests/ops/test_init_project.py",

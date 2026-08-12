@@ -738,6 +738,71 @@ class TestGenerateDefaultsFromCandidates:
         assert "critical_overrides" not in suggestion
         assert _render_critical_suggestion(suggestion.get("critical_overrides", {})) == ""
 
+    def test_the_customer_facing_text_never_spells_the_731_shape(self):
+        """⛔ 這一支守的是「客戶會讀到的字」，不是 gate 的字。
+
+        `check_threshold_reachability` 那邊已有一支守衛在防 #731 的 metric-label
+        拼法，但它只看 gate 自己吐的訊息。這個檔案的文字有兩個出口，兩個都直接進
+        客戶的視野：`_render_critical_suggestion` 寫進客戶 `_defaults.yaml` 的註解，
+        以及本模組解釋 `_critical` 為何不能放 `defaults:` 的說明文字。
+
+        ⛔ 實測（第五輪變異）：把這兩處改回 `metric="<整個 key>"`，`tests/ops/` 全綠
+        ——修了措辭卻沒配斷言，這個 repo 第四次踩。`parseMetricKey` 切**第一個**底線，
+        所以 `<base>_critical` 的 `_critical` 落在 component/metric label 裡而不會變成
+        severity；把它寫成 `metric="<整個 key>"` 是在指一個不存在的 series。
+        """
+        import pathlib
+        import re as _re
+
+        import onboard_platform as _mod
+
+        rendered = _render_critical_suggestion({"pg_connections_critical": "500"})
+        assert rendered, "沒有輸出就沒有守到東西"
+
+        source = pathlib.Path(_mod.__file__).read_text(encoding="utf-8")
+
+        # ⛔ 兩個出口的規則不同，因為它們的讀者不同。第一版守衛在這裡犯過錯：
+        # 用 `metric="[^"]*_critical[^"]*"` 去抓，只釘得住「label 裡含 _critical」
+        # 這一種拼法，而變異寫成 `metric="<whole key>"` 就整個穿過去。釘拼法只會
+        # 得到一份含那幾種拼法的 denylist。
+
+        # 出口一：寫進客戶 `_defaults.yaml` 的註解。客戶檔不是教材，裡面的
+        # `metric="…"` 一定是具體 label 值，出現佔位符就是把「切分」這件事糊掉。
+        placeholder = _re.search(r'metric="[^"]*<[^"]*"', rendered)
+        assert not placeholder, (
+            f"寫進客戶檔的註解出現佔位符 {placeholder.group(0)!r}；"
+            "客戶讀到的必須是具體 label 值"
+        )
+
+        # 而且註解給的對應必須自洽：`<key> -> {component="A", metric="B"}` 裡
+        # `A_B` 必須就是 `<key>`。⛔ 這不是在 Python 重實作 parseMetricKey
+        # （`rulepack_contract_test.go` 明文警告那會變成新的 echo chamber），
+        # 是驗這個示例自己算得通——`metric="<whole key>"` 這類寫法算不通。
+        example = _re.search(
+            r'(\w+) -> \{component="([^"]*)", metric="([^"]*)"\}', rendered)
+        assert example, f"註解不再給具體對應，讀者無從驗證：{rendered}"
+        key, comp, met = example.groups()
+        assert f"{comp}_{met}" == key, (
+            f"註解裡的示例算不通：{key} 被說成 component={comp!r} metric={met!r}，"
+            f"但 {comp}_{met} != {key}"
+        )
+
+        # 出口二：模組自己的說明文字。這裡**允許**寫出錯誤拼法，前提是明講它是
+        # 錯的——樹上就有一句「Spelling it `metric="<whole key>"` names a series
+        # that does not exist」。規則因此是「反例必須被標記為反例」，而不是
+        # 「不准出現」。
+        for i, line in enumerate(source.splitlines()):
+            if not _re.search(r'metric="[^"]*<', line):
+                continue
+            window = " ".join(source.splitlines()[max(0, i - 1): i + 2])
+            assert _re.search(r"does not exist|not a series|⛔|never", window), (
+                f"第 {i + 1} 行寫出了 metric label 的佔位符拼法卻沒有標記為反例："
+                f"{line.strip()!r} — 讀者會把它當成實際行為"
+            )
+
+        # 正面：註解必須點出「切第一個底線」，否則讀者無從判斷
+        assert "first" in rendered.lower() or "第一個" in rendered, rendered
+
     def test_most_common_value(self):
         """最常見值作為預設值。"""
         candidates = [

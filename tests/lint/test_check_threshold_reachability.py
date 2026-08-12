@@ -13,6 +13,7 @@ declared-but-unwired guard, not decoration):
 from __future__ import annotations
 
 import importlib.util
+import re
 
 import pytest
 import yaml
@@ -930,6 +931,41 @@ def test_the_message_never_spells_a_one_segment_metric_label():
     contract = (gate.PROJECT_ROOT / "components" / "threshold-exporter" / "app"
                 / "rulepack_contract_test.go")
     assert contract.is_file(), contract
+
+
+def test_the_nested_suggestion_names_a_key_and_not_a_path():
+    """⛔ The nested branch must suggest a USABLE key, not the rendered path.
+
+    Distinct from the test above, which polices the #731 metric-label SHAPE.
+    This one polices the *identity* of the key the message tells you to create:
+    the message says "no key of that name exists at any tier" about the dotted
+    path, so suggesting an override keyed by that same dotted path contradicts
+    its own previous sentence and sends the reader to write a key that resolves
+    nowhere. Measured (round-5 mutation): reverting the `rsplit` left all 87
+    tests green — the shape guard cannot see this because the wrong key is not
+    spelled `metric="..."`.
+    """
+    msg = gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces=({"probe": {"threshold.pg_connections_critical": 1}}, {}),
+    )["errors"][0]
+    m = re.search(r"override keyed '([^']+)'", msg)
+    assert m, f"message no longer names the override key: {msg}"
+    suggested = m.group(1)
+    assert "." not in suggested, (
+        f"suggested override key {suggested!r} is a rendered path, not a key; "
+        f"the same message says no key of that name exists. Full message: {msg}"
+    )
+    # ⛔ The FIRST version of this test asserted `== "pg_connections"` and so
+    # pinned a wrong key in place: `resolveCriticalRows` (resolve.go:502) skips
+    # any override key that does not end in `_critical`, so an override keyed
+    # `pg_connections` yields a warning-severity base row and NO critical row —
+    # the exact silent failure this gate exists to prevent. A guard that checks
+    # only the SHAPE will happily certify the wrong identity.
+    assert suggested == "pg_connections_critical", (suggested, msg)
+    # …and the base must be named too, because resolveCriticalRows skips a
+    # second time when `defaults[base]` is absent (resolve.go:520).
+    assert "'pg_connections'" in msg, msg
 
 
 def test_a_floor_breach_says_that_nothing_else_ran_and_means_it(monkeypatch, capsys):

@@ -974,6 +974,7 @@ def _report_placement(face: str, keys: dict[str, int], errors: list[str]) -> Non
     """
     for k in sorted(k for k in keys if k.endswith(_CRITICAL_SUFFIX)):
         base = k[: -len(_CRITICAL_SUFFIX)]
+        leaf = k.rsplit(".", 1)[-1]
         if keys[k] == 0:
             # Flat: the key IS a `Defaults` key, and the failure is the silent
             # one this gate was built for.
@@ -1022,10 +1023,14 @@ def _report_placement(face: str, keys: dict[str, int], errors: list[str]) -> Non
             "hierarchy-merge fixture does not go through that path at all). Fix "
             "the nesting for the file's own reasons, and put the critical tier "
             "where it is read — a `<tenant>.yaml` override keyed "
-            f"{k.rsplit('.', 1)[-1][: -len(_CRITICAL_SUFFIX)]!r} (the LAST path "
-            "segment, unnested; the dotted path above is this tool's rendering "
-            "of where the key sits, not a key name — saying "
-            f"{base!r} here would contradict the sentence above). If "
+            f"{leaf!r} (the LAST path segment, unnested; the dotted path above "
+            "is this tool's rendering of where the key sits, not a key name), "
+            f"AND {leaf[: -len(_CRITICAL_SUFFIX)]!r} present in the FLAT "
+            "`defaults:` map. ⛔ Both halves are load-bearing: "
+            "resolveCriticalRows skips any override key that does not end in "
+            "`_critical`, and then skips it again if the base key is absent "
+            "from defaults — so dropping the suffix, or leaving the base inside "
+            "the nesting, each produce no critical row at all. If "
             "this file's BYTES are an input to another gate (a golden parity "
             "fixture hashes them), do not edit it to satisfy this one: register "
             "it in _DEFAULTS_ARTIFACT_EXEMPT with a reason. (#1218 / TRK-344)"
