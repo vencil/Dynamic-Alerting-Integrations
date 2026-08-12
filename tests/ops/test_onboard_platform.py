@@ -509,10 +509,11 @@ class TestGenerateDefaultsFromCandidates:
         ⛔ 這支測試原本斷言 `defaults["defaults"]["cpu_critical"] == "95"`，
         也就是把缺陷本身釘成契約。`resolveCriticalRows` 只迭代租戶覆寫，所以
         `defaults:` 裡的 `<base>_critical` 產不出 critical 閾值——它會落到 base
-        resolver，發出一條 `severity="warning"` 的 series，而 `_critical` 後綴留在
-        metric label 裡（`parseMetricKey` 切第一個底線，所以 label 是
-        `{component=<prefix>, metric=<rest>}`，**不是** `metric="<整個 key>"`——後者
-        正是 #731 的形狀，`app/rulepack_contract_test.go` 就是為了擋它而存在）。
+        resolver，發出一條 `severity="warning"` 的 series，而 `_critical` 這串字會落進
+        component/metric label 裡、不會變成 severity（`parseMetricKey` 切第一個底線：
+        本例 `cpu_critical` → `{component="cpu", metric="critical"}`；無底線的 key →
+        `component="default"`）。⛔ **不是** `metric="<整個 key>"`——後者正是 #731 的形狀，
+        `app/rulepack_contract_test.go` 就是為了擋它而存在。
         沒有記錄規則 join 它，對應的 `tenant:alert_threshold:` 恆空、`*Critical` 恆不開火。
         兩個方向實測於 pkg/config/critical_tier_placement_test.go。而這支工具產出的
         檔案，標頭明寫「Review and merge into conf.d/_defaults.yaml」——照做的客戶

@@ -531,6 +531,14 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #     they carry no keys). Those two are covered by `_SHIPPED_CONFD_ROOTS`.
 # The two mechanisms are complements, not belt-and-braces; neither covers the
 # whole grid, and pretending otherwise is how the next person stops checking.
+#
+# ⚠️ HEADROOM, measured, because these numbers need maintaining in BOTH
+# directions and the cost is small but real: the paired test requires each floor
+# to stay above "biggest group gone", so today artifacts tolerate +9 keys and
+# generators +28 before a pure ADDITION turns that test red asking for a higher
+# floor. Retiring a fixture asks for a lower one. Either way it is one constant
+# and a line in the commit message — but nobody should discover the direction by
+# guessing.
 _DEFAULTS_GENERATOR_KEYS_FLOOR = 80
 _DEFAULTS_ARTIFACT_KEYS_FLOOR = 60
 
@@ -941,9 +949,18 @@ def _assert_keys_floor(generators: dict[str, dict[str, int]],
             "lower the floor in the SAME commit, naming what was removed. This "
             "floor is hand-maintained against a measured value; it is not a "
             "claim that the number can only grow.\n"
-            "  If you just added an exemption, that is the cause instead — the "
-            "remedy is to shorten _DEFAULTS_ARTIFACT_EXEMPT, not to touch the "
-            "reader.")
+            "  If you just added an exemption and that exemption is genuinely "
+            "right (a byte-hashed golden fixture you must not edit): shorten "
+            "_DEFAULTS_ARTIFACT_EXEMPT if you can, and if you cannot, lower this "
+            "floor in the SAME commit naming the exempted file. ⛔ There has to "
+            "be an exit here — an earlier wording forbade editing the file, "
+            "forbade lowering the floor, and pointed at the exemption table as "
+            "the cause, which left a >10-key hashed fixture with no legal move "
+            "at all.\n"
+            "  ⚠️ ADDING artifacts pushes this floor UP, not down: it is a "
+            "hand-maintained lower bound, not a tracker. A pure addition can "
+            "make the paired test go red asking for a higher number — that is "
+            "the same maintenance, in the other direction.")
 
 
 def _report_placement(face: str, keys: dict[str, int], errors: list[str]) -> None:
@@ -975,10 +992,12 @@ def _report_placement(face: str, keys: dict[str, int], errors: list[str]) -> Non
                 "resolveCriticalRows iterates TENANT OVERRIDES, so this key is "
                 "emitted by resolveBaseRows instead — as a "
                 'severity="warning" `user_threshold` series whose labels come '
-                "from parseMetricKey splitting on the FIRST underscore, which "
-                "leaves `_critical` inside the metric label rather than making "
-                "it a severity (see app/rulepack_contract_test.go for that "
-                f"contract). No recording rule joins it, tenant:alert_threshold:{k} "
+                "from parseMetricKey splitting on the FIRST underscore, so the "
+                "`_critical` text lands inside the component/metric labels "
+                "instead of becoming a severity (`cpu_critical` → "
+                '{component="cpu",metric="critical"}; a key with no underscore → '
+                'component="default"). See app/rulepack_contract_test.go for that '
+                f"contract. No recording rule joins it, tenant:alert_threshold:{k} "
                 "stays empty, and nothing says so. The *Critical alert cannot "
                 "fire. Move it to the tenant side (a `<tenant>.yaml` override), "
                 f"keeping {base!r} under `defaults:` so the critical tier is "
@@ -1002,7 +1021,11 @@ def _report_placement(face: str, keys: dict[str, int], errors: list[str]) -> Non
             "file raises da_config_parse_failure_total at runtime; a "
             "hierarchy-merge fixture does not go through that path at all). Fix "
             "the nesting for the file's own reasons, and put the critical tier "
-            f"where it is read — a `<tenant>.yaml` override keyed {base!r}. If "
+            "where it is read — a `<tenant>.yaml` override keyed "
+            f"{k.rsplit('.', 1)[-1][: -len(_CRITICAL_SUFFIX)]!r} (the LAST path "
+            "segment, unnested; the dotted path above is this tool's rendering "
+            "of where the key sits, not a key name — saying "
+            f"{base!r} here would contradict the sentence above). If "
             "this file's BYTES are an input to another gate (a golden parity "
             "fixture hashes them), do not edit it to satisfy this one: register "
             "it in _DEFAULTS_ARTIFACT_EXEMPT with a reason. (#1218 / TRK-344)"

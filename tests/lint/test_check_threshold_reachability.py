@@ -897,12 +897,33 @@ def test_the_message_never_spells_a_one_segment_metric_label():
     warns that a Python re-implementation of the split would be a new echo
     chamber — so the message describes the shape and points at the contract
     instead of re-deriving the labels.
+
+    ⛔ ALL FOUR message branches, not just the flat `_critical` one. Measured
+    (blind review, mutation): with only the flat case covered, putting the #731
+    spelling back into the NESTED branch left the suite green — `_report_placement`
+    emits four different messages and the name of this test claims all of them.
     """
+    faces = {
+        "flat critical": _flat("pg_connections_critical"),
+        "nested critical": {"threshold.pg_connections_critical": 1},
+        "flat dimensional": _flat('pg_conn{env="prod"}'),
+        "nested dimensional": {'threshold.pg_conn{env="prod"}': 1},
+    }
+    seen = 0
+    for label, face in faces.items():
+        for msg in gate.run_check(
+            demand=set(), supply=set(), deferred=set(), known_unwired={},
+            defaults_faces=({label: face}, {}),
+        )["errors"]:
+            seen += 1
+            for key in face:
+                assert f'metric="{key}"' not in msg, (label, msg)
+    assert seen == len(faces), f"expected one message per branch, got {seen}"
+
     msg = gate.run_check(
         demand=set(), supply=set(), deferred=set(), known_unwired={},
         defaults_faces=({"probe": _flat("pg_connections_critical")}, {}),
     )["errors"][0]
-    assert 'metric="pg_connections_critical"' not in msg, msg
     assert "FIRST underscore" in msg, msg
     assert "rulepack_contract_test.go" in msg, msg
     # the Go contract this defers to must still be there under that name
@@ -1119,15 +1140,28 @@ def _trip_shipped_root_floor(monkeypatch):
                         lambda: [gate.PROJECT_ROOT / r for r in kept])
 
 
-def _trip_class_key_floor(monkeypatch):
+def _trip_generator_key_floor(monkeypatch):
     monkeypatch.setattr(gate.scaffold_tenant, "generate_defaults",
                         lambda _packs: {"defaults": {"one_surviving_key": 1}})
 
 
+def _trip_artifact_key_floor(monkeypatch):
+    # ⛔ A SEPARATE case from the generator one. `_assert_keys_floor` raises from
+    # two branches and the parametrisation used to walk only the generator side —
+    # measured: putting the artifact branch back on a bare `RuntimeError` left
+    # the suite green, and that branch is the one ordinary maintenance (retiring
+    # a fixture) actually trips.
+    kept = [rel for rel in gate._tracked_defaults_artifacts()
+            if not rel.startswith("tests/e2e-bench/")]
+    monkeypatch.setattr(gate, "_tracked_defaults_artifacts", lambda: kept)
+    monkeypatch.setattr(gate, "_defaults_artifacts",
+                        lambda: [gate.PROJECT_ROOT / r for r in kept])
+
+
 @pytest.mark.parametrize("trip", [
     _trip_scan_floor, _trip_read_floor, _trip_shipped_root_floor,
-    _trip_class_key_floor,
-], ids=["scan", "read", "shipped-root", "class-keys"])
+    _trip_generator_key_floor, _trip_artifact_key_floor,
+], ids=["scan", "read", "shipped-root", "generator-keys", "artifact-keys"])
 def test_every_floor_breach_is_a_violation_not_a_crash(monkeypatch, capsys, trip):
     """⛔ Exit-code semantics, per `scripts/tools/_lib_exitcodes.py`: 1 is "the
     tool ran correctly and found something the USER must act on", 2 is "the tool
@@ -1145,7 +1179,19 @@ def test_every_floor_breach_is_a_violation_not_a_crash(monkeypatch, capsys, trip
     err = capsys.readouterr().err
     assert "crashed" not in err, err[-1500:]
     assert "floor breach" in err, err[-1500:]
-    # …and without --ci it stays report-only, like every other violation here
+
+
+def test_a_floor_breach_without_ci_is_report_only(monkeypatch):
+    """The `--ci` / report-only split, once.
+
+    ⛔ Deliberately NOT a sixth assertion inside the parametrised test above.
+    Each `main()` there is a full `run_check()` — demand extraction over every
+    rule pack included — so a second call per case doubled the cost of the
+    slowest test in the file for a property that belongs to `main()`'s exit
+    handling, not to any individual floor. Measured: the parametrisation went
+    from ten full runs to five.
+    """
+    _trip_scan_floor(monkeypatch)
     assert gate.main([]) == gate.EXIT_OK
 
 
@@ -1424,8 +1470,22 @@ def test_each_shipped_root_floor_is_bracketed_too():
         # exporter's min_keys to its exact 19 stayed green, and a floor with zero
         # room goes red on the next legitimate edit — which is how people learn
         # to treat floors as numbers you adjust.
-        assert total - biggest < min_keys < total, (
-            f"{root}: min_keys {min_keys} must be greater than {total - biggest} "
+        #
+        # ⛔ …except when the root's keys all live in ONE file, where
+        # `total - biggest == 0` and `0 < min_keys < total` has NO INTEGER
+        # SOLUTION for total == 1. Blind review walked into that by following
+        # this gate's own instruction: add a `_defaults.yaml` to the
+        # cardinality-demo tree (the sibling test says "add one, with a floor"),
+        # then add `(1, 1, ...)` → `assert 1 < 1`. A one-file root loses
+        # everything when it loses that file, so any positive floor detects it.
+        lo = total - biggest
+        if lo == 0:
+            assert 1 <= min_keys <= total, (
+                f"{root}: all {total} key(s) live in one file, so min_keys must "
+                f"be between 1 and {total} (got {min_keys})")
+            continue
+        assert lo < min_keys < total, (
+            f"{root}: min_keys {min_keys} must be greater than {lo} "
             f"(losing its biggest file, {biggest} keys) and strictly below "
             f"today's {total}")
 
