@@ -192,14 +192,26 @@ def _stub_result(errors=(), infos=()):
     }
 
 
-def _flat(*paths: str) -> dict[str, int]:
+def _flat(*paths: str) -> dict[str, gate.KeyInfo]:
     """A synthetic face: these key paths, all at the top level of `defaults:`.
 
-    Faces are `{path: depth}` since #1392 — depth comes from the walk rather than
-    being re-derived from a dot in the rendered path, because a flat key may
-    legitimately contain one.
+    Faces map path → `KeyInfo` since #1392 — depth, leaf name and "does it have
+    children" all come from the walk rather than being re-derived from a dot in
+    the rendered path, because a flat key may legitimately contain one (and a
+    dimensional key's label value routinely does).
+
+    A flat face therefore means: depth 0, the leaf IS the path, no children.
     """
-    return {p: 0 for p in paths}
+    return {p: gate.KeyInfo(0, p, False) for p in paths}
+
+
+def _nested(**subtrees: dict[str, object]) -> dict[str, gate.KeyInfo]:
+    """A synthetic face built by the REAL walk, so tests cannot drift from it.
+
+    ⛔ Hand-writing `{path: KeyInfo(...)}` in a test would let the test assert
+    against a structure the walk never produces. Build the YAML shape, walk it.
+    """
+    return gate._walk_defaults_keys(dict(subtrees))
 
 
 def test_run_check_returns_all_three_result_keys():
@@ -868,7 +880,7 @@ def test_the_nested_message_names_the_consequence_that_actually_happens():
     """
     nested = gate.run_check(
         demand=set(), supply=set(), deferred=set(), known_unwired={},
-        defaults_faces=({"probe": {"threshold.pg_connections_critical": 1}}, {}),
+        defaults_faces=({"probe": _nested(threshold={"pg_connections_critical": 1})}, {}),
     )["errors"][0]
     flat = gate.run_check(
         demand=set(), supply=set(), deferred=set(), known_unwired={},
@@ -906,9 +918,18 @@ def test_the_message_never_spells_a_one_segment_metric_label():
     """
     faces = {
         "flat critical": _flat("pg_connections_critical"),
-        "nested critical": {"threshold.pg_connections_critical": 1},
+        "nested critical": _nested(threshold={"pg_connections_critical": 1}),
         "flat dimensional": _flat('pg_conn{env="prod"}'),
-        "nested dimensional": {'threshold.pg_conn{env="prod"}': 1},
+        "nested dimensional": _nested(threshold={'pg_conn{env="prod"}': 1}),
+        # ⛔ The two shapes the dotted-path split lost entirely: a label VALUE
+        # containing a dot. `{tablespace=~"SYS.*"}` is the mainstream dimensional
+        # form in this repo (collector_test.go:567), and an IP or a version
+        # string does it too. Under `"{" in k.rsplit(".", 1)[-1]` these yielded
+        # `*"}` / `1"}` and produced NO message at all — so this test's own
+        # `seen == len(faces)` would have counted them as covered while the
+        # branch never ran.
+        "flat dimensional, dotted label": _flat('ora_ts{tablespace=~"SYS.*"}'),
+        "flat dimensional, dotted ip": _flat('node_load{instance="10.0.0.1"}'),
     }
     seen = 0
     for label, face in faces.items():
@@ -947,7 +968,7 @@ def test_the_nested_suggestion_names_a_key_and_not_a_path():
     """
     msg = gate.run_check(
         demand=set(), supply=set(), deferred=set(), known_unwired={},
-        defaults_faces=({"probe": {"threshold.pg_connections_critical": 1}}, {}),
+        defaults_faces=({"probe": _nested(threshold={"pg_connections_critical": 1})}, {}),
     )["errors"][0]
     m = re.search(r"override keyed '([^']+)'", msg)
     assert m, f"message no longer names the override key: {msg}"
@@ -966,6 +987,51 @@ def test_the_nested_suggestion_names_a_key_and_not_a_path():
     # …and the base must be named too, because resolveCriticalRows skips a
     # second time when `defaults[base]` is absent (resolve.go:520).
     assert "'pg_connections'" in msg, msg
+
+
+def test_a_top_level_critical_key_with_a_mapping_value_is_its_own_case():
+    """⛔ Top level AND a mapping is neither flat nor nested.
+
+    `depth == 0` answers "is it top level", not "is it a leaf". Before the walk
+    returned `has_children`, this input took the FLAT branch and promised a
+    `severity="warning"` series — but `Defaults` is `map[string]float64`
+    (types.go:208), so the value does not unmarshal, the whole file is rejected
+    and nothing is emitted at all. Measured (round-6 mutation): removing the
+    branch left all 88 tests green.
+    """
+    face = _nested(**{"mysql_connections_critical": {"a": 1}})
+    msg = [e for e in gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces=({"probe": face}, {}),
+    )["errors"] if "CRITICAL-IN-DEFAULTS" in e]
+    assert len(msg) == 1, msg
+    assert "MAPPING value" in msg[0], msg[0]
+    # ⛔ and it must NOT promise the flat consequence…
+    assert "severity=" not in msg[0], msg[0]
+    # …nor claim the key name is missing, which is the nested branch's wording:
+    # the name IS at the top level here, only its value is wrong.
+    assert "no key of that name" not in msg[0], msg[0]
+
+
+def test_the_leaf_comes_from_the_walk_even_when_the_leaf_contains_a_dot():
+    """⛔ A leaf key may legally contain a dot; `rsplit('.', 1)` then lies.
+
+    `defaults: {threshold: {"a.b_critical": 1}}` renders as the path
+    `threshold.a.b_critical`, whose last dotted segment is `b_critical` — but
+    the KEY is `a.b_critical`, so an override keyed `b_critical` resolves
+    nowhere. Measured (round-6 mutation): re-splitting the path instead of
+    asking the walk left all 88 tests green, because every other nested probe
+    in this file has a dot-free leaf.
+    """
+    face = _nested(threshold={"a.b_critical": 1})
+    msg = [e for e in gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces=({"probe": face}, {}),
+    )["errors"] if "CRITICAL-IN-DEFAULTS" in e]
+    assert len(msg) == 1, msg
+    m = re.search(r"override keyed '([^']+)'", msg[0])
+    assert m, msg[0]
+    assert m.group(1) == "a.b_critical", (m.group(1), msg[0])
 
 
 def test_a_floor_breach_says_that_nothing_else_ran_and_means_it(monkeypatch, capsys):
@@ -1007,16 +1073,30 @@ def test_a_nested_dimensional_key_is_reported_once_with_nested_wording():
 
     assert len(dim) == 1, dim
     assert 'redis_q{queue="a"}.inner' not in dim[0], dim[0]
-    # the parent is flat here, so it keeps the flat wording…
-    assert "resolveDimensionalRows is tenant-only" in dim[0], dim[0]
+    # ⛔ This key is TOP LEVEL but its value is a mapping, and the earlier
+    # version of this test asserted the flat wording here — pinning the same
+    # defect its `_critical` sibling was fixed for. `Defaults` is
+    # map[string]float64, so the file does not decode and resolveDimensionalRows
+    # is never reached; saying "resolveDimensionalRows is tenant-only" describes
+    # a code path that does not run.
+    assert "MAPPING value" in dim[0], dim[0]
+    assert "resolveDimensionalRows is tenant-only" not in dim[0], dim[0]
 
-    # …and a genuinely nested one gets the nested wording
+    # a genuinely nested one gets the nested wording
     nested = [e for e in gate.run_check(
         demand=set(), supply=set(), deferred=set(), known_unwired={},
-        defaults_faces=({"probe": {'a.redis_q{queue="b"}': 1}}, {}))["errors"]
-        if "DIMENSIONAL-IN-DEFAULTS" in e]
+        defaults_faces=({"probe": _nested(a={'redis_q{queue="b"}': 1})}, {}),
+    )["errors"] if "DIMENSIONAL-IN-DEFAULTS" in e]
     assert len(nested) == 1, nested
     assert "SECOND, independent problem" in nested[0], nested[0]
+
+    # …and a genuinely FLAT one still gets the flat wording
+    flat = [e for e in gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces=({"probe": _flat('redis_q{queue="c"}')}, {}),
+    )["errors"] if "DIMENSIONAL-IN-DEFAULTS" in e]
+    assert len(flat) == 1, flat
+    assert "resolveDimensionalRows is tenant-only" in flat[0], flat[0]
 
 
 def test_a_flat_key_containing_a_dot_is_not_diagnosed_as_nested():

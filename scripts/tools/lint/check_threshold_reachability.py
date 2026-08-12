@@ -671,8 +671,44 @@ _ONBOARD_PROBE = (
 _DEFAULTS_MAX_DEPTH = 16
 
 
+class KeyInfo(int):
+    """A key's depth, PLUS the two structural facts the walk already knows.
+
+    ⛔ Subclasses `int` on purpose: every consumer that only wants the depth
+    (`info == 0`, `info + 1`, `len(face)`, `sum(...)`) keeps working unchanged,
+    so adding structure here cannot quietly alter the floors or the counts.
+    Only the two call sites that were re-deriving structure from the rendered
+    path read `.leaf` / `.has_children`.
+
+    Both fields exist because blind review measured a defect for each of them,
+    and both defects were the SAME mistake this module's own walk docstring
+    warns about — guessing structure from a dot in the rendered string:
+
+    - `.leaf`: `k.rsplit(".", 1)[-1]` splits on the last dot ANYWHERE, so a
+      dimensional key whose label value contains a dot
+      (`oracle_tablespace{tablespace=~"SYS.*"}` — the mainstream shape in this
+      repo, cf. `collector_test.go:567`) yielded `*"}` and the whole class went
+      undetected. Base `2e61b20a` tested `"{" in k` and caught them, so the
+      dotted paths introduced here had regressed coverage.
+    - `.has_children`: `depth == 0` answers "is it top level", NOT "is it a
+      leaf". `defaults: {mysql_connections_critical: {a: 1}}` is top level AND
+      a mapping, so it was reported with the flat consequence ("emits a
+      severity=warning series") when the truth is that `Defaults
+      map[string]float64` fails to unmarshal and NOTHING is emitted.
+    """
+
+    leaf: str
+    has_children: bool
+
+    def __new__(cls, depth: int, leaf: str, has_children: bool) -> "KeyInfo":
+        self = super().__new__(cls, depth)
+        self.leaf = leaf
+        self.has_children = has_children
+        return self
+
+
 def _walk_defaults_keys(node: object, prefix: str = "",
-                        depth: int = 0) -> dict[str, int]:
+                        depth: int = 0) -> dict[str, KeyInfo]:
     """{dotted path: nesting depth} for every mapping key ANYWHERE under `defaults:`.
 
     ⛔ Recursive, and that is the whole point (#1392). Reading only the top level
@@ -699,7 +735,7 @@ def _walk_defaults_keys(node: object, prefix: str = "",
     string is the shape where an exception becomes structurally impossible to get
     right.
     """
-    keys: dict[str, int] = {}
+    keys: dict[str, KeyInfo] = {}
     if depth > _DEFAULTS_MAX_DEPTH:
         raise RuntimeError(
             f"`defaults:` walk exceeded {_DEFAULTS_MAX_DEPTH} levels at {prefix!r}. "
@@ -710,8 +746,10 @@ def _walk_defaults_keys(node: object, prefix: str = "",
     if isinstance(node, dict):
         for k, v in node.items():
             path = f"{prefix}.{k}" if prefix else str(k)
-            keys[path] = depth
-            keys.update(_walk_defaults_keys(v, path, depth + 1))
+            sub = _walk_defaults_keys(v, path, depth + 1)
+            # `str(k)` is the key AS WRITTEN — never re-split out of `path`.
+            keys[path] = KeyInfo(depth, str(k), bool(sub))
+            keys.update(sub)
     elif isinstance(node, list):
         for item in node:
             # List ITEMS carry no key of their own; a mapping inside one does.
@@ -795,15 +833,23 @@ def _defaults_faces() -> tuple[dict[str, dict[str, int]], dict[str, dict[str, in
         "chart (helm/threshold-exporter/values.yaml)":
             _defaults_section(_CHART_VALUES.read_text(encoding="utf-8"),
                               unwrap_chart=True),
-        # These two hand back a plain mapping already, so their keys are depth 0
-        # by construction rather than by a walk.
+        # ⛔ These two hand back a live mapping rather than YAML text, so they
+        # used to be flattened with `{k: 0 for k in ...}` — assuming depth 0 by
+        # construction. Blind review measured the cost: `main()` prints
+        # "inspected at every depth of `defaults:`" for EVERY face, and that
+        # sentence was false for two of the four generators. It is only true
+        # today because every pack's default happens to be a scalar; the day one
+        # becomes a mapping, the claim keeps printing and the walk has still
+        # never run. Walk the mapping directly — same walk, same KeyInfo, no
+        # round-trip through YAML text.
         "onboarding/scaffold (scaffold_tenant.generate_defaults)":
-            {k: 0 for k in scaffold_tenant.generate_defaults(scaffold_packs)["defaults"]},
+            _walk_defaults_keys(
+                scaffold_tenant.generate_defaults(scaffold_packs)["defaults"]),
         "onboarding/init (init_project._gen_defaults_yaml)":
             _defaults_section(
                 init_project._gen_defaults_yaml(init_packs, "monitoring")),
         "migration/onboard (onboard_platform.generate_defaults_from_candidates, "
-        "probed)": {k: 0 for k in (onboard_suggestion.get("defaults") or {})},
+        "probed)": _walk_defaults_keys(onboard_suggestion.get("defaults") or {}),
     }
 
     # ARTIFACTS — derived (see `_defaults_artifacts`). The floor fires BEFORE the
@@ -974,7 +1020,32 @@ def _report_placement(face: str, keys: dict[str, int], errors: list[str]) -> Non
     """
     for k in sorted(k for k in keys if k.endswith(_CRITICAL_SUFFIX)):
         base = k[: -len(_CRITICAL_SUFFIX)]
-        leaf = k.rsplit(".", 1)[-1]
+        leaf = keys[k].leaf
+        if keys[k] == 0 and keys[k].has_children:
+            # Top level, but the VALUE is a mapping. ⛔ Neither of the other two
+            # branches is true here and blind review measured both misreadings:
+            # `depth == 0` alone answers "is it top level", not "is it a leaf",
+            # so this landed in the flat branch and promised a
+            # severity="warning" series. `Defaults` is `map[string]float64`
+            # (types.go:208), so the value fails to unmarshal and the whole file
+            # is rejected — nothing is emitted at all, warning tier included.
+            # The nested wording is wrong too: the key name IS at the top level,
+            # so "no key of that name exists" would be false.
+            errors.append(
+                f"CRITICAL-IN-DEFAULTS: {face} puts {k!r} at the top level of "
+                "`defaults:` but gives it a MAPPING value. `Defaults` is "
+                "`map[string]float64`, so this does not decode: the whole file "
+                "is rejected and NO series is emitted — not the critical one, "
+                "and not the warning-tier fallback the flat case would have "
+                "produced. Two independent repairs are needed: give this key a "
+                f"scalar value, and move the critical tier to a `<tenant>.yaml` "
+                f"override keyed {leaf!r} with "
+                f"{leaf[: -len(_CRITICAL_SUFFIX)]!r} present in the flat "
+                "`defaults:` map (resolveCriticalRows skips any override key "
+                "without the `_critical` suffix, then skips again if the base "
+                "is absent). (#1218 / TRK-344)"
+            )
+            continue
         if keys[k] == 0:
             # Flat: the key IS a `Defaults` key, and the failure is the silent
             # one this gate was built for.
@@ -1045,11 +1116,32 @@ def _report_placement(face: str, keys: dict[str, int], errors: list[str]) -> Non
     #      dimensional key was reported too. Measured on
     #      `defaults: {'redis_q{queue="a"}': {inner: 1, other_critical: 2}}` —
     #      3 errors, two of them naming paths that are not keys anywhere.
-    #      Only the LAST segment can carry the label selector.
+    #      Only the key ITSELF can carry the label selector. ⛔ The first fix
+    #      for this asked `"{" in k.rsplit(".", 1)[-1]`, which split on the last
+    #      dot ANYWHERE and so lost every dimensional key whose label VALUE
+    #      contains a dot (`{tablespace=~"SYS.*"}`, IPs, versions) — a coverage
+    #      regression against base, which caught them with `"{" in k`. The walk
+    #      knows the leaf; ask it.
     #   2. The consequence was stated as if the key were flat. Nested, the file
     #      does not decode at all and `resolveDimensionalRows` never enters the
     #      picture.
-    for k in sorted(k for k in keys if "{" in k.rsplit(".", 1)[-1]):
+    for k in sorted(k for k in keys if "{" in keys[k].leaf):
+        if keys[k] == 0 and keys[k].has_children:
+            # Same third case as the `_critical` loop above, and it had the same
+            # bug: top level with a mapping value is neither flat nor nested.
+            # ⛔ A test asserted the flat wording for exactly this input, so the
+            # defect had a guard certifying it.
+            errors.append(
+                f"DIMENSIONAL-IN-DEFAULTS: {face} puts {k!r} at the top level of "
+                "`defaults:` with a MAPPING value. `Defaults` is "
+                "`map[string]float64`, so the file does not decode and NOTHING "
+                "is emitted — resolveDimensionalRows is never reached, so its "
+                "tenant-only rule is not why this fails. Two independent "
+                "repairs: give the key a scalar value, and move dimensional "
+                "thresholds to a `<tenant>.yaml` override (they have no default "
+                "path at any tier). (#1218 / TRK-344)"
+            )
+            continue
         if keys[k] == 0:
             errors.append(
                 f"DIMENSIONAL-IN-DEFAULTS: {face} puts {k!r} under `defaults:`, "
