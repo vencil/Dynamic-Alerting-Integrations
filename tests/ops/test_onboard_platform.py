@@ -795,7 +795,19 @@ class TestGenerateDefaultsFromCandidates:
             if not _re.search(r'metric="[^"]*<', line):
                 continue
             window = " ".join(source.splitlines()[max(0, i - 1): i + 2])
-            assert _re.search(r"does not exist|not a series|⛔|never", window), (
+            # ⛔ Explicit negations ONLY. The first version also accepted `⛔`
+            # and `never`, which appear 8 and 7 times in this module — including
+            # inside `_render_critical_suggestion`'s own docstring — so a future
+            # placeholder passed as soon as it landed within one line of any
+            # unrelated prose carrying either. The docstring claimed the rule was
+            # "反例必須被標記為反例"; the marker set did not require a statement
+            # that the spelling is WRONG. (CodeRabbit, PR #1410)
+            # ⚠️ Honest limit: "is this marked as a counterexample" is a semantic
+            # question, so this stays a denylist of negation phrasings. The hard,
+            # derivable rule is the one above — the RENDERED output (what the
+            # customer reads) may not contain a placeholder at all, and its
+            # example must be arithmetically self-consistent.
+            assert _re.search(r"does not exist|not a series|no such series", window), (
                 f"第 {i + 1} 行寫出了 metric label 的佔位符拼法卻沒有標記為反例："
                 f"{line.strip()!r} — 讀者會把它當成實際行為"
             )

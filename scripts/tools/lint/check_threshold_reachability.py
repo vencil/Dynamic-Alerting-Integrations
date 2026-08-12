@@ -757,7 +757,7 @@ def _walk_defaults_keys(node: object, prefix: str = "",
     return keys
 
 
-def _defaults_section(text: str, *, unwrap_chart: bool = False) -> dict[str, int]:
+def _defaults_section(text: str, *, unwrap_chart: bool = False) -> dict[str, KeyInfo]:
     """{key path: depth} under `defaults:` of a `_defaults.yaml` / chart values.
 
     ⛔ `unwrap_chart` is OFF by default and only the chart face turns it on. The
@@ -776,7 +776,7 @@ def _defaults_section(text: str, *, unwrap_chart: bool = False) -> dict[str, int
     return _walk_defaults_keys(root.get("defaults") or {})
 
 
-def _defaults_faces() -> tuple[dict[str, dict[str, int]], dict[str, dict[str, int]]]:
+def _defaults_faces() -> tuple[dict[str, dict[str, KeyInfo]], dict[str, dict[str, KeyInfo]]]:
     """(generators, artifacts) — {face label: `defaults:` key paths} for each class.
 
     TWO CLASSES, and the split is not cosmetic: the four GENERATORS below are
@@ -880,8 +880,8 @@ def _defaults_faces() -> tuple[dict[str, dict[str, int]], dict[str, dict[str, in
             "faces pass the placement check below perfectly. SHORTEN THE EXEMPTION "
             "LIST; repairing the scan is not the remedy here, and neither is "
             "lowering the floor.")
-    artifacts: dict[str, dict[str, int]] = {}
-    by_root: dict[str, list[tuple[str, dict[str, int]]]] = {
+    artifacts: dict[str, dict[str, KeyInfo]] = {}
+    by_root: dict[str, list[tuple[str, dict[str, KeyInfo]]]] = {
         r: [] for r in _SHIPPED_CONFD_ROOTS}
     for path in to_read:
         rel = path.relative_to(PROJECT_ROOT).as_posix()
@@ -905,7 +905,7 @@ def _defaults_faces() -> tuple[dict[str, dict[str, int]], dict[str, dict[str, in
 
 
 def _assert_shipped_roots_intact(
-        by_root: dict[str, list[tuple[str, dict[str, int]]]]) -> None:
+        by_root: dict[str, list[tuple[str, dict[str, KeyInfo]]]]) -> None:
     """Every shipped conf.d root must still contribute what it contributes today.
 
     Per ROOT, because the global floors are a single number that one class can
@@ -947,8 +947,8 @@ def _assert_shipped_roots_intact(
             "are on you).")
 
 
-def _assert_keys_floor(generators: dict[str, dict[str, int]],
-                       artifacts: dict[str, dict[str, int]]) -> None:
+def _assert_keys_floor(generators: dict[str, dict[str, KeyInfo]],
+                       artifacts: dict[str, dict[str, KeyInfo]]) -> None:
     """The only non-vacuity signal that moves when a reader silently stops reading.
 
     One floor per class, because a single combined floor lets the bigger class
@@ -1009,7 +1009,7 @@ def _assert_keys_floor(generators: dict[str, dict[str, int]],
             "the same maintenance, in the other direction.")
 
 
-def _report_placement(face: str, keys: dict[str, int], errors: list[str]) -> None:
+def _report_placement(face: str, keys: dict[str, KeyInfo], errors: list[str]) -> None:
     """Both halves of the defaults-tier placement rule, for ONE face.
 
     ⛔ One function, called from both class loops. The two checks used to sit in
@@ -1180,8 +1180,8 @@ def run_check(
     chart_supply: set[str] | None = None,
     not_chart_armed: frozenset[str] | None = None,
     declared_faces: dict[str, set[str]] | None = None,
-    defaults_faces: tuple[dict[str, dict[str, int]], dict[str, dict[str, int]]] | None = None,
-) -> dict[str, list[str]]:
+    defaults_faces: tuple[dict[str, dict[str, KeyInfo]], dict[str, dict[str, KeyInfo]]] | None = None,
+) -> dict[str, object]:
     """Return {errors, infos}. errors fail --ci; infos are report-only.
 
     Inputs default to the real extractors; hermetic tests inject synthetic sets

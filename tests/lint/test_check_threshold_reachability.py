@@ -1620,7 +1620,18 @@ def test_the_shipped_roots_agree_with_the_confd_schema_hooks():
     cfg = (gate.PROJECT_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
     hooked: set[str] = set()
     for hook_id in ("confd-schema-check", "confd-schema-check-shipped"):
-        entry = cfg.split(f"id: {hook_id}\n", 1)[1].split("language:", 1)[0]
+        # ⛔ Check the hook exists before slicing. `split(...)[1]` on a missing id
+        # raises `IndexError: list index out of range`, so renaming or removing
+        # the hook hands the reader an index error instead of the drift message
+        # this test exists to deliver — and the `len(hooked) >= 4` guard below
+        # runs too late to explain it. (CodeRabbit, PR #1410)
+        marker = f"id: {hook_id}\n"
+        assert marker in cfg, (
+            f"pre-commit hook id {hook_id!r} is gone from .pre-commit-config.yaml. "
+            "This test pins _SHIPPED_CONFD_ROOTS against those hooks' "
+            "--config-dir set; if the hook was renamed, update both."
+        )
+        entry = cfg.split(marker, 1)[1].split("language:", 1)[0]
         hooked |= {ln.split("--config-dir", 1)[1].strip()
                    for ln in entry.splitlines() if "--config-dir" in ln}
     assert len(hooked) >= 4, hooked  # the parse itself must not go vacuous
