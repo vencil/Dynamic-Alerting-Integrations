@@ -56,7 +56,7 @@ Go 測試**不在** `tests/`，而是與被測程式碼同目錄：
 
 | Job (workflow) | 跑什麼 |
 |---------------|--------|
-| `Python Tests (3.13)` (ci.yml) | 聚合 gate（恆回報的 required check 名）；實跑在 `Python Tests — run (3.13)`：`pytest tests/ scripts/tools/`，跳過 3 個 `@slow` 測試（見下）。可證明無關的 PR（docs-only / portal-only）由 `detect-changes` path gate skip 實跑、gate 仍回報 pass |
+| `Python Tests (3.13)` (ci.yml) | 聚合 gate（恆回報的 required check 名）；實跑在 `Python Tests — run (3.13)`：`pytest tests/ scripts/tools/`，跳過 3 個 `@slow` 測試（見下）。⚠️ **不再受 path gate 影響**：`python` filter 帶 catch-all，實跑腿在每支 PR 都跑（理由與成本量測見 `ci.yml` 該 filter 的註解）。Go / Portal 兩線仍是 path-gated |
 | `Go Tests (1.26)` (ci.yml) | 聚合 gate（恆回報的 required check 名）；實跑拆三腿：`go test ./cmd/... ./internal/...`（tenant-api）+ `./...`（threshold-exporter）+ `tests/alertmanager-inhibit`，同受 `detect-changes` path gate |
 | `Smoke Tests (Chromium)` (Playwright E2E workflow) | `tests/e2e/*.spec.ts`（排除 `@visual` tag） |
 | `Portal Tests` (ci.yml) | `tools/portal/tests/*.test.{ts,tsx}` Vitest 單元測試（ESM Option C；monorepo restructure 後從 tests/portal/ 搬入） |

@@ -66,8 +66,9 @@ blocking every subsequent portal PR until #1223 fixed both the drift and that
 one filter entry.
 
 Invariant enforced here: **every out-of-tree path a portal test reads must be
-covered by a pattern in ci.yml's `portal` filter.** Network-free pure parsing,
-so it runs in the plain Python Tests job — and `.github/workflows/**` is in the
+covered by a pattern in ci.yml's `portal` filter.** Network-free parsing plus
+one `git ls-files` (see `_tracked_files`; the module needs a git checkout), so
+it runs in the plain Python Tests job — and `.github/workflows/**` is in the
 `python` filter, so editing either end re-runs this guard.
 
 Two extraction shapes are recognised, matching the two idioms in use:
@@ -100,9 +101,12 @@ from __future__ import annotations
 
 import ast
 import re
+import subprocess
+import sys
 from functools import lru_cache
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -146,8 +150,278 @@ def _load_workflow(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
+def _trigger_events(workflow: dict) -> tuple[str, ...]:
+    """The event names a workflow's `on:` block declares.
+
+    ⛔ DERIVED, never listed. A hard-coded probe list let `push` be dropped in
+    one edit, after which ANDing `github.event_name == 'pull_request'` onto a
+    gated leg reads as true and the leg silently stops running on main.
+    Deriving makes that removal an edit to ci.yml's own triggers.
+
+    ⚠️ YAML 1.1 reads a bare `on` as the boolean True, so `safe_load` keys the
+    block under `True`. Pure, so the refusal below can be fed degenerate input.
+    """
+    raw = workflow.get("on", workflow.get(True))
+    if isinstance(raw, str):
+        names = [raw]
+    elif isinstance(raw, (dict, list)):
+        names = [n for n in raw if isinstance(n, str) and n]
+    else:
+        names = []
+    assert names, (
+        f"workflow declares no trigger events ({raw!r}), so every loop over "
+        "them iterates ZERO times and passes by examining nothing. ⚠️ Check "
+        "the `True` key first — YAML 1.1 reads a bare `on` as a boolean."
+    )
+    return tuple(sorted(set(names)))
+
+
+def test_trigger_events_are_derived_and_refuse_an_empty_on_block() -> None:
+    """The probe loop's quantifier, and its vacuity tripwire.
+
+    ⛔ Both spellings of the block, because ci.yml uses the mapping form and
+    the boolean key is easy to lose in a refactor — and the degenerate cases,
+    because "the loop ran zero times" is indistinguishable from a pass.
+    """
+    both = ("pull_request", "push")
+    assert _trigger_events({True: {"push": None, "pull_request": None}}) == both
+    assert _trigger_events({"on": ["push", "pull_request"]}) == both
+    assert _trigger_events({"on": "zschedule"}) == ("zschedule",)
+    for degenerate in ({}, {"on": None}, {"on": []}, {"on": {}}, {True: None}):
+        with pytest.raises(AssertionError, match="no trigger events"):
+            _trigger_events(degenerate)
+    # …and it must describe the REAL workflow, or the probe tests a fiction.
+    assert "push" in _trigger_events(_load_workflow(WORKFLOW)), (
+        "ci.yml no longer runs on `push`, which halves what the skippability "
+        "probe quantifies over. That is a real change to when the gated legs "
+        "are a pre-merge signal — decide it deliberately.")
+
+
 @lru_cache(maxsize=None)
 def _workflow_filters(path: Path) -> dict[str, list[str]]:
+    """The ENUMERATED patterns of every filter — catch-alls removed.
+
+    ⛔ Deliberately less than the file says: every coverage question here is
+    `any(_covers(...))`, which a catch-all makes trivially true. A catch-all is
+    DERIVED — covering every tracked file — never spelled, and
+    `_workflow_filters_raw` gives the literal list.
+    """
+
+    return _strip_catch_alls(_workflow_filters_raw(path), path.name)
+
+
+def _strip_catch_alls(filters: dict[str, list[str]],
+                      where: str) -> dict[str, list[str]]:
+    """Pure so its refusal can be fed degenerate input.
+
+    ⛔ An inline `assert` over live data cannot distinguish "the check is here"
+    from "the check was deleted"; split out so
+    `test_enumerated_view_drops_catch_alls_and_nothing_else` drives it.
+    """
+    enumerated: dict[str, list[str]] = {}
+    for name, patterns in filters.items():
+        kept = [p for p in patterns if not _is_catch_all(p)]
+        if patterns and not kept:
+            raise AssertionError(
+                f"{where}: filter {name!r} is nothing but catch-all "
+                f"pattern(s) {patterns}, so its enumerated view is empty and "
+                "every coverage assertion here reads EVERY path as uncovered.\n"
+                "⛔ Restore the enumerated entries — they are what still says "
+                "something if the catch-all is ever removed.\n"
+                "⛔ Do NOT exempt this filter from the strip instead: that "
+                "makes `any(_covers('**', p))` true for every path, so every "
+                "COVERAGE assertion for it passes vacuously and permanently. "
+                "If it genuinely gates a repo-wide job, drop the gate.")
+        enumerated[name] = kept
+    return enumerated
+
+
+_MIN_TRACKED = 1000
+
+
+@lru_cache(maxsize=1)
+def _tracked_files() -> tuple[str, ...]:
+    """Every tracked path, from git rather than from a walk.
+
+    ⛔ `-z` AND the NUL split — the half-fix yields ONE element holding the
+    whole listing. `_MIN_TRACKED` is the tripwire, hard-coded not derived.
+    """
+
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True,
+            # ⛔ Not optional: an inherited invalid stdin handle makes
+            # subprocess raise WinError 6 on some Windows pytest runners, and
+            # the clause below then misreports it as "not a git checkout".
+            stdin=subprocess.DEVNULL,
+            text=True, check=True, timeout=120).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise AssertionError(
+            "`git ls-files -z` failed, so the tracked-file set that decides "
+            "what a catch-all pattern covers is unavailable. ⚠️ Read the "
+            "underlying error first: no checkout, a subprocess-layer failure "
+            f"and a stalled FUSE mount all land here. {exc!r}"
+        ) from exc
+    return _split_tracked(out)
+
+
+def _split_tracked(raw: str) -> tuple[str, ...]:
+    """Pure, so the floor below can be handed degenerate input."""
+    files = tuple(sorted(p for p in raw.split("\0") if p))
+    assert len(files) >= _MIN_TRACKED, (
+        f"`git ls-files -z` yielded {len(files)} path(s), which is not a "
+        "plausible listing of this repo: a truncated or unsplit listing makes "
+        "every `all(...)` judgement below trivially true and the module green "
+        "and quiet. Check the split matches the flag (`-z` -> NUL, no flag -> "
+        "newline)."
+    )
+    # ⛔ The floor alone is not enough: slicing to `[:_MIN_TRACKED]` satisfies
+    # it exactly. Cross-check the SEPARATOR COUNT, derived from the same input
+    # by a different route. ⚠️ Honest bound: this defeats truncation of the
+    # LIST, not of the INPUT — truncating `raw` earlier passes both sides.
+    assert len(files) >= raw.count("\0"), (
+        f"the listing contains {raw.count(chr(0))} NUL separators but only "
+        f"{len(files)} paths survived: something is dropping entries, and a "
+        "shortened sweep passes every `all(...)` below for what it skips."
+    )
+    return files
+
+
+def test_tracked_split_refuses_an_unsplit_listing() -> None:
+    """The floor fires on the shape that actually happens: `-z` with a newline
+    split (the natural half-fix for `core.quotePath`) yields ONE element.
+    """
+    blob = "\0".join(f"zdir/zfile{i}.txt" for i in range(2000))
+
+    assert len(_split_tracked(blob)) == 2000
+
+    # the half-fix: NUL-joined data split as if it were newline-separated
+    with pytest.raises(AssertionError, match="not a\n?\\s*plausible listing"):
+        _split_tracked(blob.replace("\0", "\n"))
+
+    # and an outright empty listing, the other way a broken call looks
+    with pytest.raises(AssertionError, match="plausible listing"):
+        _split_tracked("")
+
+
+def test_tracked_set_matches_an_independent_git_listing() -> None:
+    """⛔ Both guards above live INSIDE `_split_tracked`, so anything one frame
+    out is unguarded: a pathspec on the argv, a slice, or a filter on the
+    return each narrowed the set with the whole suite green (blind review).
+
+    Independent BY CONSTRUCTION — its own argv, its own split. Building the
+    expected side from a module helper would compare a narrowing to itself.
+    """
+    out = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True,
+        stdin=subprocess.DEVNULL, text=True, check=True, timeout=120).stdout
+    expected = {p for p in out.split("\0") if p}
+    actual = set(_tracked_files())
+    assert actual == expected, (
+        f"`_tracked_files()` is not `git ls-files -z`: {len(actual)} path(s) "
+        f"against {len(expected)}. Every `all(...)` below then quantifies over "
+        "a SUBSET and passes for what it skips.\n"
+        f"    dropped: {sorted(expected - actual)[:10]}\n"
+        f"    extra:   {sorted(actual - expected)[:10]}")
+
+
+def test_tracked_files_is_never_sliced_at_a_use_site() -> None:
+    """The same disarm one frame further out, where no in-helper guard sees it.
+
+    ⛔ `for path in _tracked_files()[:1500]` is a two-character edit at the
+    CALL site; the floor and the NUL cross-check both still pass.
+
+    ⚠️ HONEST BOUND, because the first version claimed more than it did: this
+    recognises the direct subscript, a local bound from the call and then
+    subscripted, and a subscript on a wrapper (`sorted(...)`, `list(...)`).
+    It does NOT model `itertools.islice`, a filtering comprehension, or an
+    `enumerate`/`break`. Those remain unmodelled — but measured, a PREFIX
+    truncation cannot hide the gap this module exists for: the uncovered paths
+    are spread through the sorted sequence and `.bandit` is index 0, so any
+    prefix keeps some. What this buys is the plausible "cap the one
+    O(files x patterns) call" edit, not a proof.
+    """
+    tree = ast.parse(Path(__file__).resolve().read_text(encoding="utf-8"))
+
+    def _is_call(node: ast.AST) -> bool:
+        return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "_tracked_files")
+
+    bound = {
+        target.id
+        for node in ast.walk(tree) if isinstance(node, ast.Assign)
+        and _is_call(node.value)
+        for target in node.targets if isinstance(target, ast.Name)
+    }
+    sliced = sorted(
+        node.lineno for node in ast.walk(tree)
+        if isinstance(node, ast.Subscript)
+        and (_is_call(node.value)
+             or (isinstance(node.value, ast.Name) and node.value.id in bound)
+             or (isinstance(node.value, ast.Call)
+                 and any(_is_call(a) for a in node.value.args)))
+    )
+    assert not sliced, (
+        f"`_tracked_files()` is subscripted at line(s) {sliced}. Slicing the "
+        "QUANTIFIER makes every `all(...)`/`any(...)` below silently PARTIAL: "
+        "the assertion still reads 'no tracked file can skip this leg' while "
+        "asking it of a subset. Iterate the whole set.")
+
+
+@lru_cache(maxsize=None)
+def _is_catch_all(pattern: str) -> bool:
+    """True when `pattern` covers every tracked file, i.e. gates nothing."""
+    return all(_covers(pattern, path) for path in _tracked_files())
+
+
+def test_is_catch_all_is_derived_from_the_tracked_set(monkeypatch) -> None:
+    """⛔ The SAME pattern, TWO different tracked sets, OPPOSITE answers.
+
+    Pinning spellings cannot pin this, and neither can one synthetic set: any
+    fixed literal set can be grown to contain whatever single fixture this
+    test names (blind review did exactly that). What no spelling-based
+    implementation can do is return different answers for one pattern — that
+    is only possible if the tracked set is actually consulted.
+    """
+    # ⛔ The odd path MOVES: lexicographically first in one case, last in
+    # another, middle in a third. A classification that samples ONE element
+    # instead of quantifying — `_covers(pattern, max(_tracked_files()))` was
+    # the measured survivor, and `min`/`[0]`/`[-1]` are the same family —
+    # gets at least one of these wrong. Two sets differing only at the end
+    # caught "look at the first" and missed "look at the last".
+    # ⛔ The LAST case is 5 members with the odd path at index 4, and it is not
+    # decorative: with only 3-member sets, `islice(_tracked_files(), 3)` — cap
+    # the one O(files x patterns) call — satisfies every case, and `islice`
+    # also slips past the AST no-slicing guard, whose docstring concedes it.
+    # Measured: cap=1 and cap=2 red, cap=3 and cap=4 green until this case.
+    module = sys.modules[__name__]
+    for tracked, expected in (
+            (("zaaa/a.zmd", "zaaa/m.zmd", "zaaa/z.zmd"), True),
+            (("z000/x.zmd", "zaaa/m.zmd", "zaaa/z.zmd"), False),   # first
+            (("zaaa/a.zmd", "zmid/x.zmd", "zaaa/z.zmd"), False),   # middle
+            (("zaaa/a.zmd", "zaaa/m.zmd", "zzzz/x.zmd"), False),   # last
+            (("zaaa/a.zmd", "zaaa/b.zmd", "zaaa/c.zmd",
+              "zaaa/d.zmd", "zzzz/x.zmd"), False)):                # index 4
+        _is_catch_all.cache_clear()
+        monkeypatch.setattr(module, "_tracked_files", lambda t=tracked: t)
+        try:
+            assert _is_catch_all("zaaa/**") is expected, (
+                f"`zaaa/**` against tracked set {tracked} must be "
+                f"{expected} — it covers every path in the first set and not "
+                "the second. One answer for both means `_is_catch_all` is "
+                "checking the SPELLING, not the coverage, so a catch-all "
+                "written any other way stops being stripped and every "
+                "coverage assertion in this module goes vacuous.")
+            assert not _is_catch_all("zaaa/a.zmd"), (
+                "an exact path was called a catch-all against a two-file set "
+                "— over-permissive, which strips real gating entries.")
+        finally:
+            # ⛔ Both ends: entries computed against a fake set must not answer
+            # for later tests, and stale real-set entries must not answer here.
+            _is_catch_all.cache_clear()
+
+
+def _workflow_filters_raw(path: Path) -> dict[str, list[str]]:
     """Every `dorny/paths-filter` filter defined in a workflow, by name.
 
     ⛔ Two of dorny's inputs change what "this filter matched" MEANS, and this
@@ -622,6 +896,233 @@ def test_python_filter_covers_every_out_of_tree_pytest_input() -> None:
     )
 
 
+def test_python_tests_run_cannot_be_path_skipped() -> None:
+    """No tracked file can be changed alone and leave Python Tests un-run.
+
+    Stronger than the other assertions, which are bounded by what the scanner
+    can SEE. Quantified over EVERY tracked file and every job gated on
+    `python`, on every event ci.yml declares, so a new leg or spelling inherits
+    it without an edit here. 101 tracked files sat outside the enumerated list
+    and 9 of the previous 400 commits touched nothing else. ⚠️ SCOPE: the
+    JOB-level `if:` only; step-level switches are refused by `_job_step_files`
+    and the push-event half by
+    `test_detect_outputs_are_forced_true_off_a_pull_request`.
+    """
+
+    raw = _workflow_filters_raw(WORKFLOW)
+    jobs = _load_workflow(WORKFLOW)["jobs"]
+    gated_on_python = sorted(
+        job_id for job_id, names in _gated_jobs(WORKFLOW).items()
+        if "python" in names
+    )
+    assert gated_on_python, (
+        "no job in ci.yml is gated on the `python` filter any more. Either "
+        "the gate moved (re-point this test), it was DELETED and the leg runs "
+        "unconditionally — strictly STRONGER, so retire this test and the "
+        "`python` filter in one commit — or `_gated_jobs` stopped recognising "
+        "the idiom (fix the scanner). Never delete this test alone.")
+
+    for job_id in gated_on_python:
+        condition = str(jobs[job_id].get("if", ""))
+        if not condition:
+            # Gated purely by `needs:` inheritance: no condition of its own,
+            # and `_condition_triggers("")` would red a CORRECT configuration.
+            continue
+        # ⛔ EVERY declared event, DERIVED from ci.yml's own `on:` block. Under
+        # a PR-only evaluator, ANDing `github.event_name == 'pull_request'`
+        # onto this job's `if:` reads as true and the leg silently stops
+        # running on every push to main — and a hard-coded probe list let
+        # `push` be dropped here in one edit (blind review).
+        # ⛔ Quantify over the WHOLE set, not one arbitrary path: probing one
+        # raises the EVENT-scoping message below when it is merely uncovered.
+        for probe_event in _trigger_events(_load_workflow(WORKFLOW)):
+            if not any(_condition_triggers(condition, path, raw, probe_event)
+                       for path in _tracked_files()):
+                raise AssertionError(
+                    f"ci.yml::{job_id} does not run on a {probe_event!r} event "
+                    f"for ANY tracked file ({condition!r}) — scoped by EVENT, "
+                    "not by path. A leg scoped to one event stops being a "
+                    "pre-merge signal on the other and the aggregate gate reads "
+                    "it as a PASS. ⛔ Do not re-scope by event here.")
+
+        skippable = [
+            path for path in _tracked_files()
+            if not _condition_triggers(condition, path, raw)
+        ]
+        assert not skippable, (
+            f"ci.yml::{job_id} can be skipped by a PR that changes only these "
+            f"{len(skippable)} tracked file(s), and the always-run aggregate "
+            "gate turns that skip into a PASS — the #1368 shape.\n"
+            "⛔ The fix is the catch-all in the `python` filter, NOT adding "
+            "these paths to the enumerated list — that list is bounded by what "
+            "a scanner sees, which is less than what the suite reads.\n"
+            "⚠️ If you just wrote the catch-all as `**/*`: `_covers` excludes "
+            "a bare `*` from its alphabet and so reads it as covering nothing. "
+            "Write `**`; do not 'fix' this by listing paths.\n"
+            f"    {skippable[:10]}")
+
+
+def test_enumerated_view_drops_catch_alls_and_nothing_else() -> None:
+    """The exclusion in `_workflow_filters` is itself a disarm surface: it
+    removes patterns before every coverage assertion sees them, so a bug that
+    dropped one entry too many would make this module quieter, not louder.
+    """
+    # forward: `python` carries a catch-all; enumerated = raw minus catch-alls.
+    raw = _workflow_filters_raw(WORKFLOW)["python"]
+    catch_alls = [p for p in raw if _is_catch_all(p)]
+    assert catch_alls, (
+        "no pattern in ci.yml's `python` filter is recognised as a catch-all, "
+        "so Python Tests is path-skippable again. Check which cause you have: "
+        "the catch-all was removed from ci.yml (restore it); it is spelled "
+        "`**/*`, a real catch-all in picomatch but outside `_covers`' closed "
+        "alphabet (a bare `*`), so this module reads it as covering nothing — "
+        "write `**`, do NOT start listing paths; or `_is_catch_all` was cut "
+        f"down to a literal check and this diagnosis is wrong. raw: {raw}")
+    assert _filter_patterns("python") == [p for p in raw if p not in catch_alls]
+
+    # forward, and the reason this test exists: the classification must be
+    # DERIVED. `**/**` is a genuine catch-all and not the spelling ci.yml uses,
+    # so an "optimisation" of `_is_catch_all` down to `pattern == "**"` reds
+    # here instead of silently turning the docstring's claim into a lie.
+    assert _is_catch_all("**/**"), (
+        "`**/**` is no longer classified as a catch-all. It covers every path "
+        "in picomatch and in `_covers`, so the classification has become a "
+        "check on SPELLING rather than on coverage — the one thing "
+        "`_workflow_filters`' docstring promises it is not.")
+
+    # reverse: a real gating pattern must NEVER be treated as a catch-all.
+    for pattern in ("docs/**", "**/*.py", "Makefile", "tools/portal/src/**"):
+        assert not _is_catch_all(pattern), (
+            f"{pattern!r} was classified as a catch-all. It gates real paths, "
+            "so dropping it would silently narrow every assertion here.")
+
+    # degenerate: a filter left with NOTHING after the strip must raise.
+    with pytest.raises(AssertionError, match="nothing but catch-all"):
+        _strip_catch_alls({"zpython": ["**"]}, "zsynthetic.yml")
+
+    # and the strip must be a no-op on a filter with no catch-all.
+    plain = {"zdocs": ["zdocs/**", "zmkdocs.yml"]}
+    assert _strip_catch_alls(plain, "zsynthetic.yml") == plain
+
+
+_TERNARY_OUTPUT = re.compile(
+    r"^\$\{\{\s*(?P<cond>.+?)\s*&&\s*'(?P<then>[^']*)'\s*\|\|\s*"
+    r"(?P<otherwise>.+?)\s*\}\}$")
+
+
+def _output_expression_is_sound(expr: str, step_id: str, filter_name: str) -> bool:
+    """Both branches of a PR-gated detect output, not just the `true` one.
+
+    ⛔ The else-branch is checked too, against the SPECIFIC dorny step and
+    filter this output relays; `python_changed` pointing at
+    `steps.filter.outputs.go` is the same defect.
+    """
+    match = _TERNARY_OUTPUT.fullmatch(expr.strip())
+    if not match or match.group("then") != "true":
+        return False
+    event = EVENT_NAME.fullmatch(match.group("cond").strip())
+    if not (event and event.group(1) == "!="
+            and event.group(2) == "pull_request"):
+        return False
+    return match.group("otherwise").strip() == \
+        f"steps.{step_id}.outputs.{filter_name}"
+
+
+def test_detect_outputs_are_forced_true_off_a_pull_request() -> None:
+    """A PR-only filter step must not leave its outputs empty on push.
+
+    In ci.yml the `dorny/paths-filter` step carries
+    `if: github.event_name == 'pull_request'`, so on a push it does not run and
+    `steps.filter.outputs.*` is empty; the outputs work only because each is
+    `${{ github.event_name != 'pull_request' && 'true' || steps.filter… }}`.
+
+    ⛔ Conditional on purpose, not a blanket rule: `docs-ci.yaml` and
+    `validate.yaml` write the bare `steps.filter.outputs.*` and are CORRECT to,
+    because their dorny step has no `if:`. The invariant is the coupling —
+    PR-gated filter step ⇒ forced output.
+    """
+    checked = 0
+    for path in _paths_filter_workflows():
+        workflow = _load_workflow(path)
+        for job_id, job in (workflow.get("jobs") or {}).items():
+            steps = job.get("steps") or []
+            gated_step_ids = [
+                str(step.get("id") or "")
+                for step in steps
+                if "dorny/paths-filter" in str(step.get("uses", ""))
+                and EVENT_NAME.search(str(step.get("if", "")))
+            ]
+            if not gated_step_ids:
+                continue
+            assert len(gated_step_ids) == 1 and gated_step_ids[0], (
+                f"{path.name}::{job_id} has {len(gated_step_ids)} event-gated "
+                "dorny steps (or one without an `id:`); this test relays "
+                "outputs to exactly one identified step. Model the new shape.")
+            step_id = gated_step_ids[0]
+            for name, expr in (job.get("outputs") or {}).items():
+                if not name.endswith("_changed"):
+                    continue
+                checked += 1
+                filter_name = name[: -len("_changed")]
+                assert _output_expression_is_sound(
+                    str(expr), step_id, filter_name), (
+                    f"{path.name}::{job_id} gates its `dorny/paths-filter` "
+                    f"step on the event, so on a push that step does not run "
+                    f"and `{name}` would be the empty string — every leg it "
+                    f"gates skips on every push to main while every PR stays "
+                    f"green. The output must read exactly "
+                    f"`${{{{ github.event_name != 'pull_request' && 'true' || "
+                    f"steps.{step_id}.outputs.{filter_name} }}}}`; "
+                    f"it is {expr!r}.\n"
+                    "⛔ BOTH branches matter: forcing 'true' off a PR but "
+                    "falling back to a literal (or another filter's output) on "
+                    "a PR is the worse half — the leg then skips on EVERY pull "
+                    "request and the aggregate gate reads that as a PASS. Do "
+                    "not delete the ternary because a catch-all makes it look "
+                    "redundant; the catch-all lives in the FILTER, which on a "
+                    "push is never evaluated.")
+    assert checked >= 4, (
+        f"only {checked} PR-gated detect output(s) were checked; ci.yml has "
+        "four today (go/python/portal/docs) and this floor has NO headroom.\n"
+        "⛔ Workflows untouched? Then discovery regressed and this test would "
+        "otherwise pass by examining nothing. ⚠️ Deliberately retired a "
+        "filter? Lower this floor in the SAME commit and name the filter.")
+
+
+def test_paths_filter_action_stays_on_the_verified_major() -> None:
+    """`_covers` hard-codes one of dorny's matcher options; pin the version.
+
+    `_covers` compares path segments literally, i.e. it behaves like picomatch
+    with `dot: true` — which is what dorny/paths-filter v3 passes
+    (`src/filter.ts`: `const MatchOptions = {dot: true}`), not a free choice,
+    so a major bump must re-verify it. ⚠️ This does NOT catch a behaviour
+    change inside v3: the action is referenced by floating major tag.
+    """
+    verified = "dorny/paths-filter@v3"
+    # ⛔ Parsed `uses:` values, not raw file text: a comment saying "we
+    # evaluated dorny/paths-filter@v4 and rejected it" would otherwise red.
+    seen = []
+    for path in _paths_filter_workflows():
+        for job in (_load_workflow(path).get("jobs") or {}).values():
+            for step in job.get("steps") or []:
+                uses = str(step.get("uses", ""))
+                if uses.startswith("dorny/paths-filter@"):
+                    seen.append((path.name, uses))
+    assert seen, "no dorny/paths-filter `uses:` found in the scanned workflows"
+    wrong = sorted({ref for _, ref in seen if ref != verified})
+    assert not wrong, (
+        f"`_covers` models picomatch with dot:true because that is what "
+        f"{verified} passes; these references are not that: {wrong}.\n"
+        "  * a different MAJOR (`@v4`): read the action's `MatchOptions` "
+        "upstream FIRST. Still `dot: true` -> update `verified`. `dot` now "
+        "defaults OFF -> updating `verified` IS the disarm: `**` stops "
+        "matching the 94 dot-bearing tracked paths while `_is_catch_all` "
+        "keeps insisting it covers them. Teach `_covers` the new default "
+        "BEFORE touching this line.\n"
+        "  * a SHA pin: strictly better and the matcher is unchanged. Record "
+        "the corresponding tag in `verified`; do not revert the SHA pin.")
+
+
 # The `python` filter entries this scanner currently justifies — i.e. entries
 # it can point at a concrete pytest read for. Pinned as an EXACT set.
 #
@@ -682,7 +1183,8 @@ def test_scanner_still_justifies_every_filter_entry_it_used_to() -> None:
         "⛔ A LOST entry usually means the scanner went blind to that part of "
         "the tree — check the extractor before concluding the filter entry is "
         "unnecessary, and do NOT delete the entry to make this pass. A GAINED "
-        "entry is normally fine: add it here.")
+        "entry is normally fine: add it here — UNLESS it is a catch-all, which "
+        "justifies every path and makes every coverage assertion here vacuous.")
 
 
 def test_python_scanner_actually_finds_something() -> None:
@@ -791,8 +1293,15 @@ def test_python_scanner_actually_finds_something() -> None:
 # file. Every `pip install … -c requirements/ci-constraints.txt` step resolves
 # versions through it (#1158), so it is not an input to the Python suite, it is
 # the suite's ENVIRONMENT — and it was in no filter. A pin bump touches ONLY
-# `requirements/**`, so python_changed=false, Python Tests is skipped, and the
-# skip satisfies branch protection. Precisely: the ungated `lint-rule-packs`
+# `requirements/**`, so python_changed=false, the RUN leg is skipped, and the
+# always-run aggregate turns that skip into a PASS on the required check.
+#
+# ⚠️ For ci.yml's `python` that route is now closed by a catch-all in the
+# filter (see `test_python_tests_run_cannot_be_path_skipped`), but the
+# invariant below still gates `docs-ci.yaml` / `validate.yaml` and keeps
+# ci.yml's enumerated entries live if the catch-all is ever removed.
+#
+# Precisely: the ungated `lint-rule-packs`
 # job does install these pins and run some pytest modules, and the full suite
 # does run on the push-to-main AFTER the merge (`python_changed` is hard-coded
 # 'true' off a PR) — so the defect is not "never tested", it is "no pre-merge
@@ -993,10 +1502,11 @@ ALWAYS = re.compile(r"always\(\)")
 
 
 def _condition_triggers(condition: str, path: str,
-                        filters: dict[str, list[str]]) -> bool:
-    """Would `path` changing make a job with this `if:` run, on a PR?"""
+                        filters: dict[str, list[str]],
+                        event: str = "pull_request") -> bool:
+    """Would `path` changing make a job with this `if:` run, on `event`?"""
     tokens = _tokenize_condition(condition)
-    value, rest = _parse_or(tokens, path, filters, condition)
+    value, rest = _parse_or(tokens, path, filters, condition, event)
     if rest:
         raise AssertionError(
             f"could not fully parse job condition {condition!r} (stopped at "
@@ -1020,44 +1530,48 @@ def _tokenize_condition(condition: str) -> list[str]:
     return [t.replace("\0CALL", "()") for t in tokens if t.strip()]
 
 
-def _parse_or(tokens, path, filters, whole):
-    value, tokens = _parse_and(tokens, path, filters, whole)
+def _parse_or(tokens, path, filters, whole, event="pull_request"):
+    value, tokens = _parse_and(tokens, path, filters, whole, event)
     while tokens and tokens[0] == "||":
-        right, tokens = _parse_and(tokens[1:], path, filters, whole)
+        right, tokens = _parse_and(tokens[1:], path, filters, whole, event)
         value = value or right
     return value, tokens
 
 
-def _parse_and(tokens, path, filters, whole):
-    value, tokens = _parse_atom(tokens, path, filters, whole)
+def _parse_and(tokens, path, filters, whole, event="pull_request"):
+    value, tokens = _parse_atom(tokens, path, filters, whole, event)
     while tokens and tokens[0] == "&&":
-        right, tokens = _parse_atom(tokens[1:], path, filters, whole)
+        right, tokens = _parse_atom(tokens[1:], path, filters, whole, event)
         value = value and right
     return value, tokens
 
 
-def _parse_atom(tokens, path, filters, whole):
+def _parse_atom(tokens, path, filters, whole, event="pull_request"):
     if not tokens:
         raise AssertionError(f"job condition {whole!r} ends unexpectedly.")
     head, tokens = tokens[0], tokens[1:]
     if head == "(":
-        value, tokens = _parse_or(tokens, path, filters, whole)
+        value, tokens = _parse_or(tokens, path, filters, whole, event)
         if not tokens or tokens[0] != ")":
             raise AssertionError(f"unbalanced parentheses in {whole!r}.")
         return value, tokens[1:]
-    return _atom_value(head.strip(), whole, path, filters), tokens
+    return _atom_value(head.strip(), whole, path, filters, event), tokens
 
 
 def _atom_value(atom: str, whole: str, path: str,
-                filters: dict[str, list[str]]) -> bool:
+                filters: dict[str, list[str]],
+                event: str = "pull_request") -> bool:
     gate = GATE_ATOM.fullmatch(atom)
     if gate and gate.group(1) in filters:
         return any(_covers(p, path) for p in filters[gate.group(1)])
-    event = EVENT_NAME.fullmatch(atom)
-    if event:
-        equals = event.group(1) == "=="
-        is_pr = event.group(2) == "pull_request"
-        return equals == is_pr
+    # ⛔ Do not rebind `event` here. It is the str parameter this atom is being
+    # evaluated FOR; an earlier revision reused the name for the match object,
+    # so anything reading `event` after this line silently got a re.Match.
+    comparison = EVENT_NAME.fullmatch(atom)
+    if comparison:
+        equals = comparison.group(1) == "=="
+        matches = comparison.group(2) == event
+        return equals == matches
     if ALWAYS.fullmatch(atom):
         return True
     raise AssertionError(
@@ -1098,18 +1612,54 @@ def _job_step_files(workflow_path: Path, job_id: str) -> set[str]:
         raise AssertionError(
             f"job {job_id!r} no longer exists in {workflow_path.name}. If it "
             "was renamed, update the pins in this module; do not drop them.")
+    job = workflow["jobs"][job_id]
+    if job.get("continue-on-error"):
+        raise AssertionError(
+            f"{workflow_path.name}::{job_id} sets `continue-on-error: true` at "
+            "JOB level, so its result is reported as `success` downstream even "
+            "when steps failed: the aggregate gate's `RUN_RESULT = success` "
+            "branch passes and the required check goes green over a failing "
+            "test run. ⛔ Step-level tolerance one scope up; the idiom exists "
+            "at job level twice here (backtest, self-review-pass2).")
     found: set[str] = set()
-    for step in workflow["jobs"][job_id].get("steps") or []:
-        if GATE_OUTPUT.search(str(step.get("if", ""))):
+    for step in job.get("steps") or []:
+        step_if = str(step.get("if", ""))
+        # ⛔ PIN THE ACCEPTED SET, not the rejected spellings: four successive
+        # rounds each found a switch-off the previous denylist lacked —
+        # `steps.*.outputs.*`, `needs.<detect>.outputs.*` in dorny's array
+        # idiom, `env.*`, `github.event_name` / `vars.*`. A denylist has no last
+        # member; the accepted set does: `always()` alone, which only WIDENS.
+        gating_step_if = bool(step_if.strip()) and step_if.strip() != "always()"
+        if step.get("continue-on-error"):
+            label = step.get("name") or step.get("uses") or "<unnamed step>"
+            raise AssertionError(
+                f"{workflow_path.name}::{job_id} step {label!r} has "
+                "`continue-on-error: true`. That neutralises it without "
+                "touching any `if:` — it runs, may fail, and the job still "
+                "reports `success` to the aggregate gate and thus to branch "
+                "protection.\n"
+                "⛔ Do NOT drop the `continue-on-error` to buy silence and do "
+                "NOT widen a path filter. If it IS a step executing gated "
+                "files, move it to an ungated job or make it hard-fail.\n"
+                "⚠️ If the step runs no test (an install, an artifact upload) "
+                "this predicate is too broad — but do NOT narrow it to "
+                "`_run_script_files`-resolves-a-tracked-file: that helper "
+                "deliberately does not resolve DIRECTORY arguments, so "
+                "`pytest tests/` resolves to nothing and 3 of the 5 gated legs' "
+                "primary test steps would fall outside it. Narrow on an axis "
+                "that cannot swallow the test step: steps with no `run:`.")
+        if gating_step_if:
             raise AssertionError(
                 f"{workflow_path.name}::{job_id} has a STEP whose `if:` "
-                f"consults a gate output ({step.get('if')!r}). The effective "
+                f"consults a computed value ({step.get('if')!r}). The effective "
                 "condition for that step's files is the CONJUNCTION of the "
-                "job's `if:` and the step's, and this module evaluates only "
-                "the job's — so a file the step runs would be checked against "
-                "the wrong gate, and the job reports `success` (not `skipped`) "
-                "while never executing it. Model the conjunction before using "
-                "this shape.")
+                "job's `if:` and the step's, and this module evaluates only the "
+                "job's — so a file the step runs is checked against the wrong "
+                "gate while the job reports `success` and never executes it. "
+                "Model the conjunction before using this shape.\n"
+                "⛔ Do NOT silence this by widening a path filter or deleting "
+                "the step's condition; if the value has nothing to do with "
+                "path gating, NARROW this predicate to values that feed a gate.")
         work_dir = str(step.get("working-directory") or "").strip("/")
         for candidate in _run_script_files(step.get("run") or ""):
             for resolved in (f"{work_dir}/{candidate}" if work_dir else None,
@@ -1776,6 +2326,23 @@ def test_condition_evaluator_handles_the_shapes_that_defeated_heuristics() -> No
     b = "needs.d.outputs.zb_changed == 'true'"
     hit, miss = "zsrc/x.txt", "zother/x.txt"
 
+    # ⛔ The `event` parameter must actually be CONSULTED. ci.yml's python-gated
+    # condition contains no `github.event_name` atom today, so both probe events
+    # compute the identical value and hard-coding `'pull_request'` back into
+    # `_atom_value` was silent — which makes `_trigger_events`, its vacuity
+    # tripwire and the whole `for probe_event` loop decorative. Pin it here,
+    # against synthetic conditions, so the dimension survives ci.yml changing.
+    for atom, event, expected in (
+            ("github.event_name == 'push'", "push", True),
+            ("github.event_name == 'push'", "pull_request", False),
+            ("github.event_name != 'push'", "push", False),
+            ("github.event_name == 'pull_request'", "pull_request", True),
+            ("github.event_name == 'pull_request'", "push", False)):
+        assert _atom_value(atom, atom, hit, filters, event) is expected, (
+            f"{atom!r} evaluated for event {event!r} must be {expected}. A "
+            "hard-coded event here silently retires the entire event "
+            "dimension: every probe then asks the same question twice.")
+
     def triggers(cond, path):
         return _condition_triggers(cond, path, filters)
 
@@ -2390,23 +2957,95 @@ def test_a_needs_dependency_propagates_the_gate(tmp_path: Path) -> None:
     assert "report" not in opted_out, opted_out
 
 
+# Every spelling the `gating_step_if` comment claims the ACCEPTED set covers.
+# ⛔ Pinning one of them pins a denylist containing that one: `"needs." in
+# step_if` kept the suite green while a real `steps.probe.outputs.python`
+# switch-off went undetected (blind review). All of them, or the pin means
+# nothing.
+STEP_SWITCH_OFF_SPELLINGS = (
+    "steps.probe.outputs.python == 'true'",
+    "needs.detect-changes.outputs.python_changed == 'true'",
+    "env.X == 'true'",
+    "github.event_name == 'schedule'",
+    "vars.FOO == '1'",
+    # ⛔ A namespace no denylist would list, because it does not exist.
+    # Real spellings only ever pin a denylist that happens to contain them:
+    # `startswith(("steps.","needs.","env.","github.","vars."))` refuses all
+    # five above while silently accepting nine other namespaces.
+    "zznever.zfield == 'zvalue'",
+    # ⛔ …and these three exist because that was STILL not arbitrary enough.
+    # Every member above — the invented one included — is shaped
+    # `<expr> == '<literal>'`, so a predicate keyed on `"==" in step_if`
+    # refuses all six and accepts these. The set has to vary along BOTH axes
+    # (namespace AND syntax) or it pins a shape, not the accept-set rule.
+    # The first is dorny's own documented array idiom, already refused at job
+    # level — the two levels disagreeing is exactly how the quiet one becomes
+    # the way in.
+    "contains(fromJSON(needs.detect-changes.outputs.changes), 'python')",
+    "success()",
+    "needs.detect-changes.outputs.python_changed",
+    # ⛔ …and these two exist because THAT was still not arbitrary enough. All
+    # nine above are >= 9 characters while `always()` is 8, so a predicate of
+    # `len(step_if.strip()) >= 9` refused every one of them and accepted
+    # `env.X`, `vars.Q` and — most total switch-off there is — `if: false`.
+    # A set that varies on namespace and syntax but not LENGTH pins length.
+    "false",
+    "env.X",
+)
+
+
 def test_a_step_level_gate_condition_is_refused(tmp_path: Path) -> None:
     """The effective gate becomes a conjunction this module does not evaluate.
 
     Worse than `skipped`: the JOB reports success while the step never ran, so
     the missing coverage leaves no trace at all in the checks list.
     """
-    wf = _synthetic_workflow(
-        tmp_path, "step-gate.yml",
-        GATED_LEG_YAML
-        + "      - if: needs.detect-changes.outputs.python_changed == 'true'\n"
-          "        run: bash scripts/ops/_verify_download.sh a b\n")
-    try:
-        _job_step_files(wf, "leg")
-    except AssertionError as exc:
-        assert "CONJUNCTION" in str(exc)
-    else:  # pragma: no cover - the raise is the point
-        raise AssertionError("a step-level gate was evaluated as if absent")
+    step = "        run: bash scripts/ops/_verify_download.sh a b\n"
+    # ⛔ Vacuity tripwire. Emptying the tuple runs this loop ZERO times and the
+    # test still passes on the `always()` assertion at the end — measured.
+    # DISTINCT, because a duplicated member satisfies a plain length floor.
+    assert len(set(STEP_SWITCH_OFF_SPELLINGS)) >= 11, (
+        f"only {len(set(STEP_SWITCH_OFF_SPELLINGS))} distinct spelling(s) to "
+        "refuse; the loop below then proves less than it claims. Removing one "
+        "is removing coverage — say which and why.")
+    # ⛔ …and at least one shorter than `always()`, or the set pins LENGTH:
+    # `len(step_if.strip()) >= 9` refuses every 9-char-plus spelling, accepts
+    # `always()` at 8, and waves through `false` and `env.X`.
+    assert min(len(s) for s in STEP_SWITCH_OFF_SPELLINGS) < len("always()"), (
+        "every spelling here is at least as long as `always()`, so this loop "
+        "cannot tell the accept-set rule from any predicate keyed on length.")
+    # ⛔ And they must not all share ONE syntactic shape. When every member was
+    # `<expr> == '<literal>'`, a predicate keyed on `"==" in step_if` refused
+    # all of them and accepted `success()`, bare truthy references and dorny's
+    # `contains(fromJSON(...))` idiom. A set that varies on one axis only pins
+    # that axis.
+    assert sum("==" not in s for s in STEP_SWITCH_OFF_SPELLINGS) >= 3, (
+        "every spelling here is an equality comparison, so this loop cannot "
+        "tell the accept-set rule from any predicate keyed on `==`. Keep at "
+        "least three members that are NOT `X == 'Y'`.")
+    for index, spelling in enumerate(STEP_SWITCH_OFF_SPELLINGS):
+        wf = _synthetic_workflow(
+            tmp_path, f"step-gate-{index}.yml",
+            GATED_LEG_YAML + f"      - if: {spelling}\n" + step)
+        try:
+            _job_step_files(wf, "leg")
+        except AssertionError as exc:
+            assert "CONJUNCTION" in str(exc)
+        else:  # pragma: no cover - the raise is the point
+            raise AssertionError(
+                f"a step gated on {spelling!r} was evaluated as if absent — "
+                "the predicate has reverted to a denylist, and a denylist has "
+                "no last member.")
+
+    # ⛔ …and `always()` must still be ACCEPTED. It only WIDENS, and it is the
+    # whole reason the predicate is an accepted SET rather than an inverted
+    # denylist — refusing it would red every honest workflow instead.
+    accepted = _synthetic_workflow(
+        tmp_path, "step-always.yml",
+        GATED_LEG_YAML + "      - if: always()\n" + step)
+    assert _job_step_files(accepted, "leg") == {
+        "scripts/tools/lint/check_doc_links.py",
+        "scripts/ops/_verify_download.sh"}
 
 
 def test_working_directory_resolves_step_relative_scripts(tmp_path: Path) -> None:
@@ -2578,6 +3217,11 @@ def test_this_guard_is_not_itself_path_skippable() -> None:
         # never ran on.
         VITEST_CONFIG.relative_to(ROOT).as_posix(),
         *(p.relative_to(ROOT).as_posix() for p in _paths_filter_workflows()),
+        # ⛔ DELIBERATELY absent: the tracked SET itself. The honest entry is
+        # "all of them", which cannot be written — this list is checked against
+        # the catch-all-STRIPPED view and would red on the same 101 paths by
+        # construction. That dependency is covered by ci.yml's catch-all,
+        # pinned by `test_python_tests_run_cannot_be_path_skipped`.
     ]
     uncovered = [
         path

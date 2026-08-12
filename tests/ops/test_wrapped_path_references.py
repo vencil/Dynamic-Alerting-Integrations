@@ -81,21 +81,33 @@ tests/` in full. The rules schema cannot express "any tracked file" —
 widening selection would mean changing that schema. Raised by CodeRabbit
 on #1383.
 
-⛔ But `python-tests-run` is ITSELF path-gated (`if: … python_changed ==
-'true'`), and 101 tracked files fall outside ci.yml's `python` filter —
-including `.pint.hcl`, which this very change had to unwrap. A PR touching
-only such a file does not run this guard at all, and the aggregate gate treats
-that skip as PASS. That is the exact shape #1368 exists to prevent, one level
-up, and it is NOT fixed here: widening the filter to `**` is a CI-cost
-decision for the owner, not something to slip into a lint PR. Found by blind
-review; tracked rather than papered over.
+⛔ FIXED, and worth keeping the shape written down. `python-tests-run` used to
+be genuinely path-gated while 101 tracked files fell outside ci.yml's `python`
+filter, so a PR touching only such a file did not run this guard at all.
+⚠️ The required check `Python Tests (3.13)` is reported by the always-run
+aggregate, not by the skipped leg — so it reported SUCCESS, never `skipped`.
+The defect was never "a skipped required check satisfies branch protection";
+it was `detect-changes` answering "not needed" for a suite that was needed.
+Same #1368 shape, one level up.
+
+⛔ The fix is a catch-all rather than "add those 101 paths" because of this
+module: it reads the WHOLE tracked tree, so no filter NARROWER than everything
+can express its input set — any such filter is a guess that is wrong by
+construction. ci.yml's `python` filter now carries `**`, pinned by
+`test_python_tests_run_cannot_be_path_skipped`; the enumerated entries stay
+beside it and stay machine-checked, because the guard asks its coverage
+questions against the enumerated view only.
 """
 from __future__ import annotations
 
+import ast
+import os
 import re
 import subprocess
 from functools import lru_cache
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -194,6 +206,10 @@ _MIN_BARE_NAME = 12
 # still — `_unread_drift` runs first and demands every tracked file, so by the
 # time this is reached the count is always the full tree; it only fires if the
 # repo itself shrinks. Kept as a cheap tripwire, described for what it is.
+# Independent of anything `_tracked()` computes, on purpose: a floor taken from
+# the thing it protects is not a floor.
+_MIN_TRACKED_FILES = 1000
+
 _MIN_FILES = 1500
 _MIN_TOKENS = 2000
 _MIN_RESOLVING = 300
@@ -217,9 +233,39 @@ _MIN_RESOLVING = 300
 @lru_cache(maxsize=1)
 def _tracked() -> tuple[str, ...]:
     out = subprocess.run(
-        ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True,
+        # ⛔ `-z` + a NUL split, not the newline default. Under the default
+        # `core.quotePath` this command C-quotes any non-ASCII tracked path, so
+        # a newline-split listing silently misrepresents it — and this scan's
+        # whole point is that nothing is quietly dropped. The sibling guard
+        # (tests/ops/test_ci_path_filter_coverage.py `_split_tracked`) fixed
+        # this and documented the half-fix trap; this copy was left behind in
+        # the same change and blind review caught the asymmetry.
+        ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, text=True,
+        # An inherited invalid stdin handle makes subprocess raise WinError 6
+        # on some Windows pytest runners; see the same note in
+        # tests/ops/test_ci_path_filter_coverage.py's `_tracked_files`.
+        stdin=subprocess.DEVNULL,
         check=True, timeout=120).stdout
-    return tuple(sorted(p for p in out.split("\n") if p))
+    return _split_listing(out)
+
+
+def _split_listing(raw: str) -> tuple[str, ...]:
+    """Pure, so the floor below can be handed degenerate input.
+
+    ⛔ Inline over live data, neither check below can fail — nothing tells
+    "the check is here" from "the check was deleted". Split out so
+    `test_tracked_split_refuses_a_narrowed_listing` can drive them directly.
+    """
+    files = tuple(sorted(p for p in raw.split("\0") if p))
+    assert len(files) >= _MIN_TRACKED_FILES, (
+        f"`git ls-files -z` yielded {len(files)} path(s) — not a plausible "
+        "listing of this repo. `_unread_drift` compares the scan against THIS "
+        "sequence, so a truncated or wrongly-split listing makes the "
+        "'nothing was skipped' check agree with itself and pass.")
+    assert len(files) >= raw.count("\0"), (
+        f"{raw.count(chr(0))} NUL separators but only {len(files)} paths "
+        "survived — something between git and here is dropping entries.")
+    return files
 
 
 @lru_cache(maxsize=1)
@@ -296,11 +342,41 @@ def _unread_drift(read_paths: set[str]) -> list[str]:
     return [f"{len(missing)} tracked file(s) were never read: {missing[:5]}"]
 
 
+def _decoded_shortfall(read_chars: int, on_disk: int) -> str | None:
+    """⛔ Guards the CONSUMED corpus, not the bytes handed to the decoder.
+
+    `_decode_whole` asserts `len(raw) == st_size`, which is an assertion about
+    its INPUT — moving the truncation one line later (`raw.decode(...)[:4096]`)
+    satisfies it and still drops most of the corpus. Blind review measured that
+    edit: every path survived, all three floors below cleared, the run got 2.7x
+    faster, and a wrapped reference injected past the cut went unseen.
+
+    The bound is arithmetic, not a tuned constant: UTF-8 uses at most 4 bytes
+    per code point, so decoding N bytes yields at least N/4 characters. Any
+    complete decode clears it with room; a prefix truncation cannot.
+    """
+    if read_chars * 4 < on_disk:
+        return (f"only {read_chars} character(s) decoded from {on_disk} byte(s) "
+                "on disk — below the arithmetic floor for a complete UTF-8 "
+                "decode, so content was dropped AFTER the per-file size check. "
+                "The path set can be intact while the corpus is a prefix.")
+    return None
+
+
 def _coverage_shortfalls(files: list[tuple[str, str]]) -> list[str]:
     """Non-empty when the scan stopped reaching enough of the tree."""
     tokens = [t for _, text in files for t in _tokens(text)]
     resolving = {t for t in tokens if _resolves(t)}
     problems = []
+    on_disk = 0
+    for path in _tracked():
+        try:
+            on_disk += (ROOT / path).stat().st_size
+        except OSError:
+            continue
+    truncated = _decoded_shortfall(sum(len(t) for _, t in files), on_disk)
+    if truncated:
+        problems.append(truncated)
     if len(files) <= _MIN_FILES:
         problems.append(f"only {len(files)} tracked files read (floor {_MIN_FILES})")
     if len(tokens) <= _MIN_TOKENS:
@@ -324,10 +400,43 @@ def _read_tracked() -> list[tuple[str, str]]:
     files: list[tuple[str, str]] = []
     for path in _tracked():
         try:
-            files.append((path, (ROOT / path).read_bytes().decode("utf-8", "replace")))
+            # ⛔ ONE handle, and `fstat` on it — not two path-based calls.
+            # Separate `read_bytes()` + `Path.stat()` can resolve to different
+            # inodes if the path is replaced between them, and swapping their
+            # ORDER does not help: the check below is an equality, so a file
+            # that changes size trips it either way (read-first reports short,
+            # stat-first reports long). Same handle makes both numbers describe
+            # the same file.
+            with (ROOT / path).open("rb") as handle:
+                size = os.fstat(handle.fileno()).st_size
+                raw = handle.read()
         except OSError:
             continue
+        files.append((path, _decode_whole(raw, size, path)))
     return files
+
+
+def _decode_whole(raw: bytes, size: int, path: str) -> str:
+    """Decode, refusing a PARTIAL read.
+
+    ⛔ Every other guard here pins the PATH SET — `_unread_drift`, the
+    independent `git ls-files` cross-check, the no-slicing check. None of them
+    sees content: `read_bytes()[:4096]` keeps all 2293 paths, satisfies all
+    three, and still truncates 1615 files, dropping ~74% of the corpus and
+    ~58% of the path-like tokens. Measured: a wrapped reference injected past
+    the cut is invisible while the suite stays green (and the run gets 2.4x
+    faster, which is what makes the edit attractive).
+
+    Pure, so `test_partial_read_is_refused` can hand it a short buffer — an
+    inline check over real files can never fail and so can never be shown to
+    still exist.
+    """
+    assert len(raw) == size, (
+        f"{path}: read {len(raw)} byte(s) of a {size}-byte file. The scan then "
+        "covers a PREFIX of the tree's content while every path-set guard "
+        "still reports a full sweep — the failure this module exists to "
+        "prevent, one layer in.")
+    return raw.decode("utf-8", "replace")
 
 
 def test_no_reference_is_split_across_a_line_break() -> None:
@@ -458,6 +567,111 @@ def test_extensionless_paths_are_tokenised_too() -> None:
         f"a wrapped bare extensionless name ({subject}) must be reported")
 
 
+def test_tracked_split_refuses_a_narrowed_listing() -> None:
+    """The floor and the NUL cross-check, driven directly.
+
+    ⛔ Inline over the real listing neither can fail, so deleting them is
+    invisible. `_split_listing` is pure precisely so they can be driven.
+    """
+    blob = "\0".join(f"zdir/zfile{i}.txt" for i in range(2000))
+    assert len(_split_listing(blob)) == 2000
+
+    # the half-fix: `-z` requested, newline split kept -> ONE element
+    with pytest.raises(AssertionError, match="plausible"):
+        _split_listing(blob.replace("\0", "\n"))
+    with pytest.raises(AssertionError, match="plausible"):
+        _split_listing("")
+
+    # ⛔ The NUL cross-check needs its OWN case. Both inputs above trip the
+    # >=_MIN_TRACKED_FILES floor first, so the separator assert never ran and
+    # replacing it with `assert True` left this test green (blind review).
+    # Drive it with enough paths to clear the floor AND more separators than
+    # survivors — doubled NULs, the shape a sloppy join produces.
+    doubled = "\0\0".join(f"zdir/zfile{i}.txt" for i in range(2000))
+    with pytest.raises(AssertionError, match="NUL separators"):
+        _split_listing(doubled)
+
+
+def test_decoded_shortfall_refuses_a_truncated_corpus() -> None:
+    """The corpus floor, driven directly.
+
+    Over the real tree it can never fail, so nothing distinguishes "the check
+    is here" from "the check was deleted" — the reason it is a pure function.
+    """
+    assert _decoded_shortfall(1_000_000, 1_000_000) is None   # ASCII
+    assert _decoded_shortfall(400_000, 1_000_000) is None     # dense CJK
+    assert "arithmetic floor" in (_decoded_shortfall(4096, 1_000_000) or "")
+
+
+def test_partial_read_is_refused() -> None:
+    """The content-length check, driven directly.
+
+    ⛔ Over real files it can never fail, so nothing distinguishes "the check
+    is here" from "the check was deleted" — the same reason `_split_listing`
+    is a separate function.
+    """
+    body = b"zline-one\nzline-two\n"
+    assert _decode_whole(body, len(body), "zfake.txt").endswith("two\n")
+    with pytest.raises(AssertionError, match="byte\\(s\\) of a"):
+        _decode_whole(body[:5], len(body), "zfake.txt")
+
+
+def test_tracked_set_matches_an_independent_git_listing() -> None:
+    """⛔ The floor has ~1300 files of headroom, so it cannot see a narrowing
+    that stays above it — blind review dropped every `.md` (306 files, the
+    exact surface this scan exists for: CHANGELOG.md alone carries 601
+    resolvable references) and the whole module stayed green, because
+    `_unread_drift` compares the scan against the SAME narrowed sequence and
+    so agrees with itself.
+
+    Independent BY CONSTRUCTION: its own argv, its own split.
+    """
+    out = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True,
+        stdin=subprocess.DEVNULL, text=True, check=True, timeout=120).stdout
+    expected = {p for p in out.split("\0") if p}
+    actual = set(_tracked())
+    assert actual == expected, (
+        f"`_tracked()` is not `git ls-files -z`: {len(actual)} path(s) "
+        f"against {len(expected)}. Every file missing here is a file this "
+        "guard silently never scans.\n"
+        f"    dropped: {sorted(expected - actual)[:10]}\n"
+        f"    extra:   {sorted(actual - expected)[:10]}")
+
+
+def test_tracked_is_never_narrowed_at_a_use_site() -> None:
+    """The same disarm one frame out, where the in-helper checks cannot see it.
+
+    ⚠️ Same honest bound as the sibling module's copy: direct subscript, a
+    local bound from the call, and a wrapper call are recognised; `islice`
+    and filtering comprehensions are not.
+    """
+    tree = ast.parse(Path(__file__).resolve().read_text(encoding="utf-8"))
+
+    def _is_call(node: ast.AST) -> bool:
+        return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "_tracked")
+
+    bound = {
+        target.id
+        for node in ast.walk(tree) if isinstance(node, ast.Assign)
+        and _is_call(node.value)
+        for target in node.targets if isinstance(target, ast.Name)
+    }
+    sliced = sorted(
+        node.lineno for node in ast.walk(tree)
+        if isinstance(node, ast.Subscript)
+        and (_is_call(node.value)
+             or (isinstance(node.value, ast.Name) and node.value.id in bound)
+             or (isinstance(node.value, ast.Call)
+                 and any(_is_call(a) for a in node.value.args)))
+    )
+    assert not sliced, (
+        f"`_tracked()` is subscripted at line(s) {sliced}. The scan then "
+        "covers a SUBSET while `_unread_drift` compares against the same "
+        "subset and reports nothing skipped. Iterate the whole set.")
+
+
 def test_each_tripwire_fires_on_degenerate_input() -> None:
     """The three tripwires above all guard conditions that are currently FALSE.
 
@@ -474,11 +688,18 @@ def test_each_tripwire_fires_on_degenerate_input() -> None:
     assert _offenders([("fake.py", "# nothing to see here\n# at all\n")]) == {}
 
     assert _unread_drift(set()), "reading nothing at all must be drift"
-    assert _unread_drift(set(_tracked()[:5])), (
+    # ⛔ A literal, NOT a slice of `_tracked()`: a degenerate input taken from
+    # the thing it protects moves with it, and slicing the sweep at a use site
+    # is itself the disarm `test_tracked_is_never_narrowed_at_a_use_site`
+    # exists to refuse.
+    assert _unread_drift({"README.md"}), (
         "reading only a handful of tracked files must be drift")
     assert _unread_drift(set(_tracked())) == []
 
     assert _coverage_shortfalls([]), "an empty scan must be a shortfall"
-    assert len(_coverage_shortfalls([])) == 3, (
+    # 4 = files / tokens / resolving / decoded-corpus. The last one guards the
+    # CONSUMED corpus rather than the bytes fed to the decoder; adding it moved
+    # this count, which is exactly what this assertion is for.
+    assert len(_coverage_shortfalls([])) == 4, (
         "every floor must report independently, so one collapsing does not hide "
         "the others")

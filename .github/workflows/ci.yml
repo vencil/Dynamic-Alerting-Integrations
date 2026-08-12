@@ -11,11 +11,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # CI-ROI wave 6C: path-scope the two critical-path test pillars (Go /
-  # Python) so a provably-unrelated PR (docs-only, portal-only) stops
-  # paying the full ~4 min Go+Python wall time AND frees their runner
-  # slots for the queue. Same dorny/paths-filter REST-mode pattern as
-  # validate.yaml's "Detect Validate Path Changes" job.
+  # CI-ROI wave 6C: path-scope the critical-path test pillars so a
+  # provably-unrelated PR (docs-only, portal-only) stops paying their
+  # full wall time AND frees their runner slots for the queue. Same
+  # dorny/paths-filter REST-mode pattern as validate.yaml's "Detect
+  # Validate Path Changes" job.
+  # ⚠️ `python` is no longer in that scheme: its filter carries a
+  # catch-all, so that leg runs on every PR (rationale and measured cost
+  # in the filter's own comment). Only `go`, `portal` and `docs` are
+  # still path-scoped — read the rest of this banner as being about them.
   #
   # Required-check safety (the "required check skipped → Expected forever"
   # trap, see validate.yaml's banner + memory Trap 17): the two names
@@ -28,9 +32,11 @@ jobs:
   # keep reporting on every PR and every push to main.
   #
   # Filter philosophy: CONSERVATIVE — skip only what is provably
-  # unrelated; when in doubt, run. The path lists below include every
-  # real-repo-tree path the suites actually read (verified by grep, see
-  # the per-filter comments), and a change to THIS workflow file always
+  # unrelated; when in doubt, run. `go` / `portal` / `docs` enumerate the
+  # real-repo-tree paths those suites read (verified by grep, see the
+  # per-filter comments). `python` does not enumerate at all — its inputs
+  # turned out to be unenumerable, not merely under-enumerated, so it is
+  # a catch-all (see its comment). A change to THIS workflow file always
   # runs everything.
   detect-changes:
     name: Detect CI Path Changes
@@ -92,6 +98,24 @@ jobs:
               - "tests/contract/**"
               - "tests/alertmanager-inhibit/**"
               - "tests/shared/**"
+              #   - tests/golden/**, tests/rulepacks/** and tests/dx/fixtures/**
+              #     — same asymmetry as tests/shared/** above, in three sibling
+              #     directories. `config_golden_parity_test.go`,
+              #     `rulepack_contract_test.go` and `custom_alert_test.go`
+              #     (which walks UP from cwd to find them) read these from the
+              #     repo root; their Python ends are covered by `tests/**`. So a
+              #     PR that only regenerated those fixtures ran the Python half
+              #     — which passes by construction — while every Go leg skipped
+              #     and `Go Tests (1.26)` reported PASS.
+              #     ⛔ No scanner DERIVES `go` entries from what Go tests READ
+              #     (python and portal have one each), so 14 of these 16 are
+              #     unpinned — only ci_flake_retry.py + tests/contract/** are.
+              #     All three were found BY HAND, the third only after the first
+              #     two were "fixed": treat the class as open until #1399 lands
+              #     a scanner, not as closed because this list grew.
+              - "tests/golden/**"
+              - "tests/rulepacks/**"
+              - "tests/dx/fixtures/**"
               - "rule-packs/**"
               - "k8s/03-monitoring/**"
               - "try-local/**"
@@ -136,6 +160,30 @@ jobs:
             #     tightening this list reds instead of silently disarming it.
             #     (Caught by CodeRabbit on PR #1229.)
             python:
+              # ⛔ CATCH-ALL, and the load-bearing entry: it is what makes
+              # `python-tests-run` unskippable. Deleting it reverts to the
+              # state it replaced; `test_python_tests_run_cannot_be_path_skipped`
+              # reds if it goes.
+              #
+              # Why a catch-all rather than 101 more entries: an enumeration
+              # is only as complete as the scanner deriving it, and
+              # `test_wrapped_path_references` reads the WHOLE tracked tree —
+              # no filter narrower than everything can express its input set.
+              # 101 tracked files sat outside the enumerated list, and 9 of
+              # the last 400 commits touched nothing else. The rejected
+              # alternative (repo-wide guards in an ungated job) costs ~17x
+              # more COMPUTE, though ⚠️ LESS wall — reject it on compute and
+              # on its hand-maintained list, not on wall.
+              #
+              # ⚠️ The entries below are NOT uniformly enforced: 19 of 23 are
+              # pinned (deleting any one reds the guard); the 4 that delete
+              # GREEN are `operator-manifests/**`, `pyproject.toml`,
+              # `.github/custom-rule-policy.yaml`, `flaky-tests.yaml`. Being
+              # outside PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES is NOT the
+              # criterion — 7 sit outside it and 3 of those are still pinned.
+              # The guard IGNORES the catch-all when asking coverage
+              # questions, so the list stays machine-checked.
+              - "**"
               - "**/*.py"
               - "tests/**"
               - "scripts/**"
@@ -150,9 +198,11 @@ jobs:
               # reads. Every `pip install … -c requirements/ci-constraints.txt`
               # in CI (#1158) resolves versions here, so this file decides the
               # versions the whole Python suite executes under. Without this
-              # entry a pin bump — which touches ONLY requirements/** — reports
-              # python_changed=false, skips this job, and the aggregate gate
-              # reads the skip as PASS (by design, see the banner). Precisely:
+              # entry — and without the catch-all above, which is what makes
+              # this historical rather than live — a pin bump, touching ONLY
+              # requirements/**, reports python_changed=false, skips this job,
+              # and the aggregate gate reads the skip as PASS (by design, see
+              # the banner). That was #1368. Precisely:
               # the ungated `lint-rule-packs` job does install these pins and
               # run pytest, and the full suite runs on the push-to-main after
               # the merge — so what is missing is the PRE-MERGE signal, and the
@@ -184,10 +234,12 @@ jobs:
               # for threshold literals in fenced YAML. Its hook is NOT in the
               # Lint job's named hook list, so Python Tests is its only CI
               # execution path — gate that on a hand-picked subset and a
-              # docs-only PR skips it, reporting `skipped`, which satisfies
-              # branch protection. Same reasoning the `docs` filter below
-              # already applies to the Go leg. Enforced by
-              # tests/ops/test_ci_path_filter_coverage.py.
+              # docs-only PR skips the RUN leg, and the always-run aggregate
+              # turns that skip into a PASS on the required check. (Not "a
+              # skipped required check satisfies branch protection" — the
+              # required name is the aggregate's and it reports success.)
+              # Same reasoning the `docs` filter below already applies to the
+              # Go leg. Enforced by tests/ops/test_ci_path_filter_coverage.py.
               - "docs/**"
               - "flaky-tests.yaml"
               - "renovate.json"
@@ -201,9 +253,11 @@ jobs:
               # routes through it. With only `tools/portal/tests/**` here, a PR
               # that edited just the component matched `portal`, missed
               # `python`, and skipped the half written to catch exactly that —
-              # and a path-skipped required check reports `skipped`, which
-              # SATISFIES branch protection. Every entry above is enforced by
-              # tests/ops/test_ci_path_filter_coverage.py.
+              # and the always-run aggregate turned that skip into a PASS on
+              # the required check. ⚠️ NOT every entry above is enforced by
+              # tests/ops/test_ci_path_filter_coverage.py: 19 of 23 are, and
+              # the four that are not are named in the catch-all comment at
+              # the top of this filter.
               - "tools/portal/src/**"
               # ⛔ The file that DEFINES which files above are Vitests. The
               # coverage guard hard-codes `tools/portal/tests` as the tree it
@@ -399,11 +453,11 @@ jobs:
           pre-commit run changelog-lint --all-files
           pre-commit run includes-sync --all-files
           pre-commit run platform-data-check --all-files
-          # Fence hygiene over docs/**. Lives HERE rather than in a pytest
-          # because the `python` filter carries only docs/glossary*.md, not
-          # docs/** — a docs-only PR would skip it, which is precisely the
-          # change class it guards. This Lint job has no `if:` and no `needs:`,
-          # so it runs unconditionally.
+          # Fence hygiene over docs/**. Lives HERE, not in a pytest, because
+          # this Lint job has no `if:` and no `needs:` — it runs on every PR
+          # and gives the cheap early signal. (NOT because the `python` filter
+          # is narrow: it carries docs/** and a catch-all, so a pytest would
+          # run too. This is a placement choice, not a coverage necessity.)
           pre-commit run md-yaml-fence-check --all-files
           # Schema conformance for documented config examples. Same reasoning as
           # the fence check above (docs-only PRs must not skip it), and it is
@@ -437,13 +491,15 @@ jobs:
           # CI-ROI 6C blind-spot fix: these 4 lints' live-dogfood pytest
           # twins (tests/lint/*::TestLiveRepo*) had "Python Tests" as
           # their ONLY CI enforcement point — but their scan surfaces
-          # (tools/portal/src/**, docs/** jsx/js/css, dev-rules.md) are
-          # exactly the path classes the detect-changes gate now skips
-          # Python Tests for. Wiring them here (all four scripts scan
-          # their FULL fixed surface on every run — none is diff-only)
-          # keeps portal-only / docs-only PRs gated without paying the
-          # whole pytest suite. Same hoisting rationale as
-          # design-token-usage above.
+          # (tools/portal/src/**, docs/** jsx/js/css, dev-rules.md) were
+          # exactly the path classes the detect-changes gate then skipped
+          # Python Tests for. ⚠️ That premise is DEAD — the `python` filter
+          # now carries a catch-all, so those twins run on every PR. Kept
+          # deliberately as the cheaper signal (red in ~10s instead of ~5m,
+          # and this job is ungated), not retired; but do not cite
+          # "docs-only PRs skip Python Tests" as the reason. All four
+          # scripts scan their FULL fixed surface on every run — none is
+          # diff-only. Same hoisting rationale as design-token-usage above.
           pre-commit run undefined-tokens-check --all-files
           pre-commit run jsx-loader-compat-check --all-files
           pre-commit run window-x-no-fallback-check --all-files
@@ -555,10 +611,12 @@ jobs:
           # above: check_hub_badge_drift.py has NO pre-commit hook — its
           # live pytest twin (tests/lint/test_check_hub_badge_drift.py::
           # TestLiveRepoIsClean, reading docs/interactive/index.html) was
-          # enforced only by "Python Tests", which docs-only PRs now
-          # skip. Direct CLI call (stdlib-only, exit 0/1) mirroring the
-          # check_retire_drift.py direct-step precedent in Lint Rule
-          # Packs.
+          # enforced only by "Python Tests", which docs-only PRs then
+          # skipped. ⚠️ Same dead premise as the block above — the `python`
+          # filter now has a catch-all; this remains as the cheap/early
+          # signal, not the only one. Direct CLI call (stdlib-only, exit
+          # 0/1) mirroring the check_retire_drift.py direct-step precedent
+          # in Lint Rule Packs.
           python3 -X utf8 scripts/tools/lint/check_hub_badge_drift.py
           # GHA workflow lint (actionlint, OSS engine; #1021 follow-up).
           # Blocks the script-injection class (raw untrusted expression
