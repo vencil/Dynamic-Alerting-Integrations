@@ -887,6 +887,81 @@ def test_the_nested_message_names_the_consequence_that_actually_happens():
     assert "independent problem" not in flat, flat
 
 
+def test_the_message_never_spells_a_one_segment_metric_label():
+    """⛔ `parseMetricKey` splits on the FIRST underscore, so the emitted series
+    is `{component=<prefix>, metric=<rest incl. _critical>}`. This message used
+    to print `metric="<whole key>"` — which is not a series that exists, and is
+    **the exact shape of #731**: rule packs queried the whole key while the
+    exporter emitted the split form, the join was empty, and alerts failed
+    silently. `app/rulepack_contract_test.go` exists to stop that coming back and
+    warns that a Python re-implementation of the split would be a new echo
+    chamber — so the message describes the shape and points at the contract
+    instead of re-deriving the labels.
+    """
+    msg = gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces=({"probe": _flat("pg_connections_critical")}, {}),
+    )["errors"][0]
+    assert 'metric="pg_connections_critical"' not in msg, msg
+    assert "FIRST underscore" in msg, msg
+    assert "rulepack_contract_test.go" in msg, msg
+    # the Go contract this defers to must still be there under that name
+    contract = (gate.PROJECT_ROOT / "components" / "threshold-exporter" / "app"
+                / "rulepack_contract_test.go")
+    assert contract.is_file(), contract
+
+
+def test_a_floor_breach_says_that_nothing_else_ran_and_means_it(monkeypatch, capsys):
+    """⛔ The message and the behaviour are asserted TOGETHER.
+
+    Saying "nothing else ran" is only worth printing if it is true, and the
+    previous wording ("the placement checks did NOT run") understated it: the
+    floors raise while the faces are being built, before `run_check` appends a
+    single error, so the module's headline TRK-337 check and both exit-locked
+    ledgers are gone too. Measured: 59 stderr lines → 6.
+    """
+    monkeypatch.setitem(gate.KNOWN_UNWIRED, "zzz_not_demanded_by_any_alert",
+                        "synthetic stale ledger entry")
+
+    gate.main(["--ci"])
+    intact = capsys.readouterr().err
+    assert "STALE-EXEMPTION" in intact, intact[-800:]
+
+    _trip_shipped_root_floor(monkeypatch)
+    assert gate.main(["--ci"]) == gate.EXIT_VIOLATION
+    broken = capsys.readouterr().err
+    assert "NOTHING ELSE IN THIS MODULE RAN" in broken, broken[-800:]
+    # …and the claim is true: the ledger exit-lock really did not report
+    assert "STALE-EXEMPTION" not in broken, broken[-800:]
+    assert "known-unwired " not in broken, broken[-800:]
+
+
+def test_a_nested_dimensional_key_is_reported_once_with_nested_wording():
+    """The `_critical` half's two bugs, repeated one loop down and fixed here:
+    the `{` test looked at the whole dotted path (so every CHILD of a dimensional
+    key was reported, naming paths that are not keys), and the consequence was
+    worded as though the key were flat."""
+    walked = gate._defaults_section(
+        'defaults:\n  \'redis_q{queue="a"}\':\n    inner: 1\n')
+    dim = [e for e in gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces=({"probe": walked}, {}))["errors"]
+        if "DIMENSIONAL-IN-DEFAULTS" in e]
+
+    assert len(dim) == 1, dim
+    assert 'redis_q{queue="a"}.inner' not in dim[0], dim[0]
+    # the parent is flat here, so it keeps the flat wording…
+    assert "resolveDimensionalRows is tenant-only" in dim[0], dim[0]
+
+    # …and a genuinely nested one gets the nested wording
+    nested = [e for e in gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces=({"probe": {'a.redis_q{queue="b"}': 1}}, {}))["errors"]
+        if "DIMENSIONAL-IN-DEFAULTS" in e]
+    assert len(nested) == 1, nested
+    assert "SECOND, independent problem" in nested[0], nested[0]
+
+
 def test_a_flat_key_containing_a_dot_is_not_diagnosed_as_nested():
     """⛔ Depth comes from the walk, never from a dot in the rendered path.
 

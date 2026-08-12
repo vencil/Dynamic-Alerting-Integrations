@@ -523,7 +523,8 @@ class TestGenTenantYamlDeclaredBlock:
         sentence about a file in which no critical row can exist, rendered into
         the one file a customer opens. Measured in
         `components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go`:
-        the key emits `{metric="<base>_critical", severity="warning"}` and
+        the key emits `{component="<prefix>", metric="<rest>_critical",
+        severity="warning"}` (parseMetricKey splits on the first underscore) and
         nothing else. So this asserts the promise is ABSENT, not just that the
         wording changed — a rewrite that kept the reassurance would pass a
         count-only assertion.

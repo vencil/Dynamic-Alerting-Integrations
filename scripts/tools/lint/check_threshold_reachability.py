@@ -138,6 +138,13 @@ class _GateViolation(RuntimeError):
     ⚠️ The READER's failures stay caller errors — an unreadable or malformed file
     genuinely means this tool could not do its job, and its message already
     carries the path.
+
+    ⚠️ …and that deliberately includes the `defaults:` walk hitting
+    `_DEFAULTS_MAX_DEPTH`, even though a recursive YAML anchor in a TRACKED file
+    is a repo state rather than an environment one. It arrives through the
+    reader's provenance wrapper (which is what attaches the filename), and
+    splitting it out would mean classifying an exception by its text. Flagged
+    here because the boundary is arguable, not because nobody noticed.
     """
 
 
@@ -370,8 +377,9 @@ def _declared_faces() -> dict[str, set[str]]:
 #     looked at, so the `*Critical` alert cannot fire;
 #   * `resolveBaseRows` walks `defaults` and does NOT skip the suffix, and
 #     `parseMetricKey` splits on the first underscore — so the same key emits
-#     `{metric="<base>_critical", severity="warning"}`, one unconsumed series
-#     per tenant per key.
+#     `{component="<prefix>", metric="<rest>_critical", severity="warning"}`
+#     (the suffix rides inside the metric label; `metric="<whole key>"` is the
+#     #731 shape and names nothing), one unconsumed series per tenant per key.
 #
 # Both directions are measured in
 # `components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go`.
@@ -582,7 +590,18 @@ _ARTIFACT_FACE_PREFIX = "artifact ("
 
 
 def _is_defaults_artifact(name: str) -> bool:
-    """The loader's own rule, lowercased on both halves (see the note above)."""
+    """Case-insensitive like the loader, but a PREFIX where the loader is exact.
+
+    ⛔ Two halves with two different justifications, and conflating them invites
+    the wrong "cleanup":
+      * case-insensitivity MIRRORS `config_hierarchy.go`, which lowercases before
+        both its suffix and its filename test;
+      * the `_defaults` PREFIX is deliberately WIDER than the loader, whose test
+        is `lower == "_defaults.yaml" || lower == "_defaults.yml"` (exact). The
+        width is load-bearing — `examples/_defaults-multidb.yaml` is one of the
+        three files blind review used to walk past the hardcoded-path version, and
+        narrowing this to the loader's equality would drop it again.
+    """
     lower = name.lower()
     return lower.startswith("_defaults") and lower.endswith(_DEFAULTS_ARTIFACT_SUFFIXES)
 
@@ -941,13 +960,26 @@ def _report_placement(face: str, keys: dict[str, int], errors: list[str]) -> Non
         if keys[k] == 0:
             # Flat: the key IS a `Defaults` key, and the failure is the silent
             # one this gate was built for.
+            # ⛔ Describe the SHAPE; do not spell the labels out. `parseMetricKey`
+            # splits on the FIRST underscore, so the emitted series is
+            # {component=<prefix>, metric=<rest incl. _critical>} — writing
+            # `metric="<whole key>"` here (as this message did) sends the reader
+            # to a series that does not exist. It is also the exact shape of
+            # #731, whose fix ships with an anti-echo-chamber guard
+            # (`app/rulepack_contract_test.go`) warning that a PYTHON re-impl of
+            # that split would just be a new echo chamber — so this does not
+            # re-derive the labels either.
             errors.append(
                 f"CRITICAL-IN-DEFAULTS: {face} puts {k!r} under `defaults:`, "
                 "which is not the critical tier and never becomes one: "
-                "resolveCriticalRows iterates TENANT OVERRIDES, so this emits "
-                f'user_threshold{{metric="{k}",severity="warning"}} — a series '
-                f"no recording rule joins — while tenant:alert_threshold:{k} "
-                "stays empty and nothing says so. The *Critical alert cannot "
+                "resolveCriticalRows iterates TENANT OVERRIDES, so this key is "
+                "emitted by resolveBaseRows instead — as a "
+                'severity="warning" `user_threshold` series whose labels come '
+                "from parseMetricKey splitting on the FIRST underscore, which "
+                "leaves `_critical` inside the metric label rather than making "
+                "it a severity (see app/rulepack_contract_test.go for that "
+                f"contract). No recording rule joins it, tenant:alert_threshold:{k} "
+                "stays empty, and nothing says so. The *Critical alert cannot "
                 "fire. Move it to the tenant side (a `<tenant>.yaml` override), "
                 f"keeping {base!r} under `defaults:` so the critical tier is "
                 "admitted. (#1218 / TRK-344)"
@@ -977,15 +1009,39 @@ def _report_placement(face: str, keys: dict[str, int], errors: list[str]) -> Non
         )
     # The other half of the same rule (docs_defaults_sample_test.go pins both;
     # is_shipped_optional_key refuses both).
-    for k in sorted(k for k in keys if "{" in k):
-        errors.append(
-            f"DIMENSIONAL-IN-DEFAULTS: {face} puts {k!r} under `defaults:`, "
-            "which gives dimensional thresholds no default path: "
-            "resolveDimensionalRows is tenant-only and never consults the "
-            "defaults map, while parseMetricKey bakes the label segment into "
-            "the metric NAME. ValidateTenantKeys reports nothing. Move it to "
-            "a `<tenant>.yaml` override. (#1218 / TRK-344)"
-        )
+    #
+    # ⛔ Two things this loop got wrong until blind review, BOTH of them the
+    # `_critical` half's bugs repeated verbatim one loop down — "fixed the
+    # instance, not the class":
+    #   1. `"{" in k` tested the whole dotted PATH, so every child of a
+    #      dimensional key was reported too. Measured on
+    #      `defaults: {'redis_q{queue="a"}': {inner: 1, other_critical: 2}}` —
+    #      3 errors, two of them naming paths that are not keys anywhere.
+    #      Only the LAST segment can carry the label selector.
+    #   2. The consequence was stated as if the key were flat. Nested, the file
+    #      does not decode at all and `resolveDimensionalRows` never enters the
+    #      picture.
+    for k in sorted(k for k in keys if "{" in k.rsplit(".", 1)[-1]):
+        if keys[k] == 0:
+            errors.append(
+                f"DIMENSIONAL-IN-DEFAULTS: {face} puts {k!r} under `defaults:`, "
+                "which gives dimensional thresholds no default path: "
+                "resolveDimensionalRows is tenant-only and never consults the "
+                "defaults map, while parseMetricKey bakes the label segment into "
+                "the metric NAME. ValidateTenantKeys reports nothing. Move it to "
+                "a `<tenant>.yaml` override. (#1218 / TRK-344)"
+            )
+        else:
+            errors.append(
+                f"DIMENSIONAL-IN-DEFAULTS: {face} puts {k!r} under `defaults:` at "
+                f"depth {keys[k] + 1}. `Defaults` is a FLAT map, so this path is "
+                "not a key at any tier, and dimensional thresholds have no "
+                "default path in the first place (resolveDimensionalRows is "
+                "tenant-only). ⛔ The nesting is a SECOND, independent problem — "
+                "removing this key does not make the section decodable. Move the "
+                "threshold to a `<tenant>.yaml` override and fix the nesting for "
+                "the file's own reasons. (#1218 / TRK-344)"
+            )
 
 
 def _reachable(key: str, supply: set[str], deferred: set[str]) -> bool:
@@ -1237,11 +1293,23 @@ def main(argv: list[str] | None = None) -> int:
         # and "the lint crashed" is read as flaky-skip-it — the one reaction
         # these floors exist to prevent.
         print(f"❌ {exc}", file=sys.stderr)
+        # ⛔ State the FULL blast radius. An earlier wording said only "the
+        # placement checks did NOT run", and blind review measured what that
+        # understates: the floors raise out of `_defaults_faces()`, which
+        # `run_check` calls while resolving its inputs — before a single error is
+        # appended. Measured with a stale ledger entry present: floors intact →
+        # 59 lines of stderr including STALE-EXEMPTION; one floor broken → 6
+        # lines and no STALE-EXEMPTION, no known-unwired INFO, no
+        # NOT-CHART-ARMED. Nothing in this module ran, including its headline
+        # TRK-337 reachability check and both exit-locked ledgers.
         print(
-            "\n1 defaults-tier floor breach — TRK-344 / #1392. NOTE: the "
-            "placement checks did NOT run; the floors are evaluated first "
-            "precisely because an empty face passes them vacuously. Re-run after "
-            "fixing this.", file=sys.stderr)
+            "\n1 defaults-tier floor breach — TRK-344 / #1392. ⛔ NOTHING ELSE "
+            "IN THIS MODULE RAN: not the TRK-337 reachability check, not the "
+            "KNOWN_UNWIRED or NOT_CHART_ARMED exit-locks, not the placement "
+            "checks, and no INFO. The floors are evaluated while the faces are "
+            "built — before any check — precisely because an empty face passes "
+            "every one of them vacuously. Fix this and re-run to see the rest.",
+            file=sys.stderr)
         return EXIT_VIOLATION if args.ci else EXIT_OK
     except Exception as exc:  # noqa: BLE001 — caller error, not a violation
         print(f"ERROR: reachability check crashed: {exc}", file=sys.stderr)

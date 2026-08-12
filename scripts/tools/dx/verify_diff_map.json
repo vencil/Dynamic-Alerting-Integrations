@@ -717,7 +717,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "3fdc5a34a568b49998848f754af05caf9d9c7d5bda356ca3ab0b78af9db4c960",
+ "source_digest": "8429c35c43ce2a8c5e09eb0efa44861004746210ab218eb8990b43dbc2f233a6",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1273,6 +1273,9 @@
   ],
   "components/threshold-exporter/app/pkg/config/types.go": [
    "tests/shared/test_reserved_key_py_go_parity.py"
+  ],
+  "components/threshold-exporter/app/rulepack_contract_test.go": [
+   "tests/lint/test_check_threshold_reachability.py"
   ],
   "components/threshold-exporter/config/conf.d": [
    "tests/dx/test_compile_custom_alerts.py",
