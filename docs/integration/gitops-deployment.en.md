@@ -80,9 +80,21 @@ The GitHub Actions template automatically posts the blast radius report as a PR 
 
 | Exit Code | Meaning | CI Behavior |
 |-----------|---------|------------|
-| 0 | No configuration changes | Skip comment |
+| 0 | No configuration changes | Report says "no changes"; the comment is still refreshed |
 | 1 | Changes detected | Post blast radius report |
-| 2 | Error (directory not found, etc.) | Pipeline fails |
+| 2 | Error (directory not found, etc.) | Pipeline fails, nothing posted |
+
+> ℹ️ Row 0 used to read "skip comment", but **nothing in this repository
+> implements that** — measured: `config-diff` still prints a **non-empty**
+> report (containing `No changes detected.`) when there are no changes, so any
+> gate keyed on "the report file is non-empty" posts on `0` too. That is the better
+> behaviour anyway: the comment is sticky, and skipping would leave the
+> **previous** run's report in place looking like the current verdict.
+>
+> ⚠️ The rule this implies: **decide whether anything changed from the exit
+> code, never from whether the report file is empty.** It is non-empty for
+> both `0` and `1`; empty only means the tool did not finish, which is a
+> failure rather than "no changes".
 
 **Data-Driven Threshold Review Dual Engine**: `config-diff` (static blast radius analysis) paired with `backtest` (Prometheus historical backtest) form a complete review workflow with pre-change preview + historical validation.
 

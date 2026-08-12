@@ -2447,8 +2447,16 @@ docker run --rm \
 
 | Code | Description |
 |------|-------------|
-| `0` | Success |
-| `1` | Invalid directory |
+| `0` | No configuration changes |
+| `1` | Changes detected — the signal CI uses to tell that this PR touched config |
+| `2` | Caller error: directory missing, input unreadable, or the run did not complete |
+
+> ⚠️ **`1` means "there are changes", not "it failed".** A CI step that calls
+> this command bare will fail whenever the command is working correctly.
+> A consumer-side snippet you can copy (`set +e` / `rc=$?`) is in
+> [GitOps CI integration §2.3 Stage 2: Generate](scenarios/gitops-ci-integration.en.md);
+> the same contract is restated in
+> [GitOps deployment integration](integration/gitops-deployment.en.md).
 
 ---
 

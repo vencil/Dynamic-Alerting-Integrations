@@ -2180,8 +2180,14 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 成功 |
-| `1` | 目錄無效 |
+| `0` | 無配置變更 |
+| `1` | 偵測到變更 —— CI 用來判斷「這個 PR 動了配置」的訊號 |
+| `2` | 呼叫端錯誤：目錄不存在、輸入無法解析，或執行未完成 |
+
+> ⚠️ **`1` 是「有變更」，不是失敗。** 裸呼叫這個命令的 CI 步驟，會在它正常運作時失敗。
+> 可照抄的消費端寫法（`set +e` / `rc=$?`）在
+> [GitOps CI 整合 §2.3 Stage 2: Generate](scenarios/gitops-ci-integration.md)；
+> 同一份結束碼契約在 [GitOps 部署整合](integration/gitops-deployment.md) 也有一份。
 
 ---
 

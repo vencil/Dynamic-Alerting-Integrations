@@ -611,14 +611,71 @@ def build_parser():
 def main():
     """Entry point.
 
-    Exit codes:
+    Exit codes (SSOT: ``scripts/tools/_lib_exitcodes.py``):
       0 — no changes detected
       1 — changes detected (useful for CI: non-zero = PR has config diff)
-      2 — error (bad args, missing dirs, etc.)
-    """
-    parser = build_parser()
-    args = parser.parse_args()
+      2 — caller error: bad args, missing dirs, malformed input, or any
+          unexpected crash
 
+    ⛔ Why the handler below catches ``Exception`` instead of naming the
+    exception types: measured on this tool, the inputs that MUST land on 2
+    span three different layers, and the third is unreachable from any
+    try/except placed around the loaders.
+
+      * ``yaml.YAMLError`` family (parser / scanner / composer / reader) —
+        a malformed file under either ``--old-dir`` or ``--new-dir``.
+      * ``UnicodeDecodeError`` — a conf.d file that is not UTF-8. Not a
+        ``YAMLError``; ``open()`` raises before the parser ever runs.
+      * ``ValueError: Circular reference detected`` — a self-referencing YAML
+        anchor (``tenants: &a {t: *a}``). ``yaml.safe_load`` accepts it
+        happily; the raise comes from ``json.dumps`` under ``--format json``,
+        i.e. AFTER loading and rendering.
+
+    An enumerated tuple was tried and provably misses the last two, so this is
+    anchored on "the run did not complete" rather than on a list of spellings.
+
+    What the collision costs, and why 2 is the correct code rather than a
+    tidier 1: an uncaught exception exits **1**, which is this tool's
+    "changes detected" signal, while stdout stays empty. Every consumer that
+    follows the documented contract (``docs/integration/gitops-deployment.md``
+    — 0 skip / 1 post the report / 2 fail the pipeline) therefore reads a
+    crash as a finding and posts, or silently skips, an empty report. The
+    exit-code SSOT already assigns "malformed input YAML/JSON ... or an
+    unexpected crash" to ``EXIT_CALLER_ERROR``; this makes the code obey it.
+    """
+    args = build_parser().parse_args()
+    try:
+        return _run(args)
+    except Exception as exc:  # noqa: BLE001 — deliberate; see docstring
+        # ``sys.exit`` inside ``_run`` raises SystemExit, which derives from
+        # BaseException, so the tool's own 0/1/2 exits pass through untouched.
+        #
+        # ``str(exc)``, not ``repr(exc)``: a YAMLError's str() carries the file
+        # name, line and column, while its repr() replaces those Mark objects
+        # with memory addresses. The reader is someone in a CI log deciding
+        # between "the image did not pull", "the mount is wrong" and "one of my
+        # config files is broken".
+        #
+        # ⚠️ Measured, so that the next person does not over-trust this: only
+        # the YAMLError family actually names the offending file.
+        # ``UnicodeDecodeError`` reports a byte offset into an unnamed buffer,
+        # and ``ValueError('Circular reference detected')`` says nothing at
+        # all. Hence the type name (str() alone can be that terse) and both
+        # directory paths (the exception never says which side it was
+        # reading). Naming the file in those two cases needs the loader to
+        # attach it per file, which lives in the shared lib and is deliberately
+        # not changed here.
+        print(
+            f"ERROR: cannot compare configs "
+            f"(--old-dir {args.old_dir} --new-dir {args.new_dir}): "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(EXIT_CALLER_ERROR)
+
+
+def _run(args):
+    """Do the comparison. Exits 0/1 itself; raises on anything unexpected."""
     if not Path(args.old_dir).is_dir():
         print(f"ERROR: old-dir not found: {args.old_dir}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)

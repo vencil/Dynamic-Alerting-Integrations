@@ -3,7 +3,10 @@
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
+from pathlib import Path
 
 import pytest
 import yaml
@@ -308,32 +311,145 @@ class TestEndToEnd:
 
 # ── Exit Code Tests (v1.11.0 CI integration) ─────────────────────
 
+def _write_tenant(directory, value="80"):
+    path = os.path.join(directory, "db-a.yaml")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        yaml.dump({"tenants": {"db-a": {"mysql_connections": value}}}, f)
+    return path
+
+
+def _run_cli(old_dir, new_dir, *extra):
+    """Invoke the tool the way a pipeline does — as a process — and read its rc."""
+    return subprocess.run(
+        [sys.executable, "-X", "utf8", cd.__file__,
+         "--old-dir", str(old_dir), "--new-dir", str(new_dir), *extra],
+        capture_output=True, encoding="utf-8", errors="replace", timeout=120,
+    )
+
+
 class TestExitCode:
-    """config_diff.py exit codes for CI pipeline integration."""
+    """Exit codes, exercised through the real entry point.
+
+    ⛔ These used to assert ``(1 if diffs else 0) == 0`` — a reimplementation
+    of the exit rule, checked against itself. Nothing ever started the
+    process, so exit 2 had no coverage at all, and neither did any path where
+    the tool dies before printing. That is how an uncaught exception exiting
+    **1** survived: 1 is this tool's "changes detected" code, so every
+    consumer following the documented contract reads a crash as a finding —
+    while the report it supposedly produced is zero bytes.
+
+    Contract (``scripts/tools/_lib_exitcodes.py``, restated for consumers in
+    ``docs/integration/gitops-deployment.md``): 0 no changes / 1 changes
+    detected / 2 caller error, which explicitly names malformed input and
+    unexpected crashes.
+    """
 
     def test_exit_0_no_changes(self):
-        """Identical directories → exit 0."""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "db-a.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"tenants": {"db-a": {"mysql_connections": "80"}}}, f)
-            old = cd.load_configs_from_dir(d)
-            new = cd.load_configs_from_dir(d)
-            diffs = cd.compute_diff(old, new)
-            # Exit code logic: 1 if diffs else 0
-            assert (1 if diffs else 0) == 0
+            _write_tenant(d)
+            p = _run_cli(d, d)
+        assert p.returncode == 0, p.stderr
+        assert "No changes detected" in p.stdout
 
     def test_exit_1_changes_detected(self):
-        """Different directories → exit 1 (signal to CI)."""
         with tempfile.TemporaryDirectory() as old_dir, \
              tempfile.TemporaryDirectory() as new_dir:
-            with open(os.path.join(old_dir, "db-a.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"tenants": {"db-a": {"mysql_connections": "80"}}}, f)
-            with open(os.path.join(new_dir, "db-a.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"tenants": {"db-a": {"mysql_connections": "50"}}}, f)
-            old = cd.load_configs_from_dir(old_dir)
-            new = cd.load_configs_from_dir(new_dir)
-            diffs = cd.compute_diff(old, new)
-            assert (1 if diffs else 0) == 1
+            _write_tenant(old_dir, "80")
+            _write_tenant(new_dir, "50")
+            p = _run_cli(old_dir, new_dir)
+        assert p.returncode == 1, p.stderr
+        assert "db-a" in p.stdout
+
+    def test_exit_2_missing_dir(self):
+        with tempfile.TemporaryDirectory() as new_dir:
+            _write_tenant(new_dir)
+            p = _run_cli(os.path.join(new_dir, "nope"), new_dir)
+        assert p.returncode == 2, p.stderr
+        assert p.stdout == ""
+
+    @pytest.mark.parametrize("label,writer,extra,names_file", [
+        # The yaml.YAMLError family.
+        ("malformed_yaml",
+         lambda p: Path(p).write_text("tenants:\n  db-a: [unclosed\n   x: :\n",
+                                      encoding="utf-8", newline="\n"),
+         (), True),
+        # Not UTF-8: open() raises before the parser is reached, so this is
+        # NOT a YAMLError and an enumerated `except yaml.YAMLError` misses it.
+        ("non_utf8",
+         lambda p: Path(p).write_bytes(b"tenants:\n  db-a:\n    note: caf\xe9\n"),
+         (), False),
+        # A self-referencing anchor: yaml.safe_load ACCEPTS it, and json.dumps
+        # is what raises — downstream of every loader, so no try/except placed
+        # around the loading step can reach it.
+        ("anchor_cycle_json",
+         lambda p: Path(p).write_text("tenants: &a\n  db-a:\n    self: *a\n",
+                                      encoding="utf-8", newline="\n"),
+         ("--format", "json"), False),
+    ])
+    def test_exit_2_when_the_run_cannot_complete(self, label, writer, extra,
+                                                 names_file):
+        """Every way the run fails to finish lands on 2, never on 1.
+
+        The three cases sit in three different layers (decode / parse /
+        serialize) on purpose: that spread is the argument for catching
+        broadly rather than naming exception types, and the third case is the
+        one that makes a loader-level handler structurally insufficient.
+        """
+        with tempfile.TemporaryDirectory() as old_dir, \
+             tempfile.TemporaryDirectory() as new_dir:
+            _write_tenant(old_dir)
+            writer(os.path.join(new_dir, "db-a.yaml"))
+            p = _run_cli(old_dir, new_dir, *extra)
+
+        assert p.returncode == 2, (
+            f"{label}: expected 2 (caller error), got {p.returncode}; "
+            "1 is indistinguishable from 'changes detected'.\n"
+            f"stdout={p.stdout[:200]!r}\nstderr={p.stderr[-400:]!r}"
+        )
+        assert p.stdout == "", (
+            f"{label}: a run that did not complete must not leave a partial "
+            f"report for a consumer to post; got {p.stdout[:200]!r}"
+        )
+        # ⛔ This used to be `assert "ERROR" in p.stderr`, which matched the
+        # handler's own literal prefix and so was true whenever the handler
+        # existed at all — it constrained nothing about the message. What a
+        # reader of a CI log actually has to decide is between "the image did
+        # not pull", "the mount is wrong" and "one of my config files is
+        # broken", so the message has to carry enough to separate those.
+        assert str(old_dir) in p.stderr and str(new_dir) in p.stderr, (
+            f"{label}: the message must name both directories — the exception "
+            f"does not say which side it was reading; got {p.stderr[-300:]!r}"
+        )
+        # All three of these exception classes are named ``*Error``; str() of
+        # some of them is terse enough that the class name is the only clue
+        # to what kind of failure it was.
+        assert "Error" in p.stderr, (
+            f"{label}: the exception type name is missing from the message; "
+            f"got {p.stderr[-300:]!r}"
+        )
+        if names_file:
+            # The decisive one: repr() of a YAMLError replaces its Mark
+            # objects with memory addresses, str() carries file/line/column.
+            # Naming the file is what makes the message actionable, and it is
+            # exactly what a regression back to `!r` would take away.
+            assert "db-a.yaml" in p.stderr, (
+                f"{label}: the message must name the file that failed to "
+                f"parse; got {p.stderr[-300:]!r}"
+            )
+        else:
+            # ⚠️ NOT an endorsement — a recorded gap. These two exceptions do
+            # not carry a path (a byte offset into an unnamed buffer, and a
+            # bare "Circular reference detected"), so an operator is told a
+            # config file is broken without being told which one. Closing it
+            # means attaching the filename per file in the shared loader,
+            # which this change deliberately leaves alone. Asserting the
+            # absence keeps it from being quietly "fixed" by a message that
+            # only looks more specific.
+            assert "db-a.yaml" not in p.stderr, (
+                f"{label}: the message now names the file — good, but this "
+                "branch was recording that it could not. Move this case to "
+                "names_file=True and delete this note."
+            )
 
 
 # ── 9. Profile Key Diff (v1.12.0 fine-grained) ───────────────────

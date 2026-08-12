@@ -84,8 +84,34 @@ def load_tenant_configs(config_dir: str) -> dict[str, dict[str, Any]]:
         config_dir: Path to the configuration directory.
 
     Returns:
-        Dict mapping ``tenant_name`` → ``config_dict``.  Empty dict
-        on any error or if *config_dir* is missing.
+        Dict mapping ``tenant_name`` → ``config_dict``.  Empty dict when
+        *config_dir* is missing or holds no eligible files.
+
+        ⚠️ A document that parses to a non-mapping is skipped, but an EMPTY
+        file is not: ``load_yaml_file`` turns it into the ``{}`` default, so
+        the file registers a tenant named after it with no thresholds. Same
+        for a comments-only file. Measured, and load-bearing for every caller
+        that counts tenants.
+
+    Raises:
+        Anything raised while listing the directory or reading a file
+        propagates. ``yaml.YAMLError``, ``UnicodeDecodeError`` and ``OSError``
+        are the common ones, but this is deliberately NOT a closed list — a
+        deeply nested document raises ``RecursionError``, which is a sibling
+        of none of them, and an unreadable *directory* raises from
+        :func:`iter_yaml_files` rather than from :func:`load_yaml_file`.
+        Callers that need a CLI exit code should catch broadly at their entry
+        point rather than name types here.
+
+    ⛔ This previously documented itself as returning an "empty dict on any
+    error", which was never true — the exceptions above have always
+    propagated. The wording mattered because it invites callers to treat a
+    malformed config directory as an empty one, i.e. to fail OPEN on exactly
+    the input that should be loudest. Callers that need a CLI exit code
+    should map these to ``EXIT_CALLER_ERROR`` at their own entry point (see
+    ``scripts/tools/ops/config_diff.py:main``); swallowing them *here* would
+    silently turn "your config is broken" into "you have no tenants" for
+    every one of this helper's callers at once.
     """
     configs: dict[str, dict[str, Any]] = {}
     for fname, fpath in iter_yaml_files(config_dir):
