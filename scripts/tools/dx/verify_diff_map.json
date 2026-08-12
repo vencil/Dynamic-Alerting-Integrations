@@ -717,7 +717,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "8f01fee12575a5453b0699bdb26866947b09f55c52c0babb3a134de2e6d294da",
+ "source_digest": "3fdc5a34a568b49998848f754af05caf9d9c7d5bda356ca3ab0b78af9db4c960",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2456,6 +2456,7 @@
   ],
   "tests/lint": [
    "tests/dx/test_scaffold_lint.py",
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/lint/test_check_threshold_registry.py",
    "tests/ops/test_ci_path_filter_coverage.py"
   ],

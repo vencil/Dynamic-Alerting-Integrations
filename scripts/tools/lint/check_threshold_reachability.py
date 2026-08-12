@@ -119,6 +119,28 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
 
+class _GateViolation(RuntimeError):
+    """A floor breach: the tool ran fine, the REPOSITORY is in a state to fix.
+
+    ⛔ Not a caller error, and the distinction is the repo's own SSOT:
+    `scripts/tools/_lib_exitcodes.py` defines EXIT_VIOLATION (1) as "the tool ran
+    correctly and found something the USER must act on" and EXIT_CALLER_ERROR (2)
+    as "the tool could NOT do its job because of how it was invoked or its
+    environment". "A shipped `_defaults.yaml` was deleted" is squarely the first,
+    yet every floor in this module used to surface as `crashed: …` with rc=2 —
+    and a maintainer reading "lint crashed" reaches for skip-it-and-move-on,
+    which is the single reaction these floors exist to prevent (blind review).
+
+    Subclasses RuntimeError on purpose: the floors are also asserted directly in
+    tests with `pytest.raises(RuntimeError, ...)`, and narrowing that would be a
+    second change riding along with this one.
+
+    ⚠️ The READER's failures stay caller errors — an unreadable or malformed file
+    genuinely means this tool could not do its job, and its message already
+    carries the path.
+    """
+
+
 # The alert-demanded threshold keys that the platform-defaults path cannot
 # yet supply. Grandfathered as INFO (see module docstring). Value = one-line
 # root-cause tag; the real fixes are tracked in the TRK-337 follow-ups.
@@ -483,18 +505,24 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #
 # Measured today — generators 102 (chart 8 / scaffold 42 / init 51 / onboard 1),
 # artifacts 70 (exporter conf.d 19 / try-local 4 / recipes 0 / e2e-bench 13 /
-# golden fixtures 34). Each floor sits below its class's value and above what
-# that class would read if a whole group stopped yielding:
+# golden fixtures 34). Each floor sits below its class's value; what it would
+# read if a whole group stopped yielding:
 #
-#   generators, if a producer stops emitting `defaults:`   chart 94 / scaffold 60 / init 51
-#   artifacts,  if a group stops yielding                  exporter 51 / golden 36 / e2e-bench 57
+#   generators   chart 94 / scaffold 60 / init 51 / onboard 101
+#   artifacts    exporter 51 / golden 36 / e2e-bench 57 / try-local 66 / recipes 70
 #
-# ⚠️ Stated honestly: the artifact floor catches the exporter, golden and
-# e2e-bench groups disappearing; it does NOT catch try-local alone (66) or the
-# recipes roots (70, they carry no keys) — those two are covered by
-# `_SHIPPED_CONFD_ROOTS` instead, which is why both mechanisms exist. And the
-# generator floor is the only thing watching a producer that shrinks without
-# emptying: EMPTY-FACE fires at zero, not at "init dropped 40 of its 51 keys".
+# ⚠️ Stated honestly, BOTH ways — an earlier revision claimed each floor sits
+# "above what that class would read if a whole group stopped yielding", which is
+# false for two of the nine rows above and was caught by blind review doing the
+# arithmetic:
+#   * generator floor 80 does NOT catch chart (94) or onboard (101) going to
+#     zero. Both are caught by EMPTY-FACE instead, which fires at exactly zero —
+#     so what this floor uniquely watches is a producer that SHRANK without
+#     emptying ("init dropped 40 of its 51 keys"), which nothing else sees.
+#   * artifact floor 60 does NOT catch try-local (66) or the recipes roots (70,
+#     they carry no keys). Those two are covered by `_SHIPPED_CONFD_ROOTS`.
+# The two mechanisms are complements, not belt-and-braces; neither covers the
+# whole grid, and pretending otherwise is how the next person stops checking.
 _DEFAULTS_GENERATOR_KEYS_FLOOR = 80
 _DEFAULTS_ARTIFACT_KEYS_FLOOR = 60
 
@@ -580,7 +608,7 @@ def _tracked_defaults_artifacts() -> list[str]:
     # two reviewers independently).
     #
     # Listing the whole index and filtering in Python makes `_is_defaults_artifact`
-    # the ONLY predicate. Measured cost: 2292 paths, 0.13s for the git call,
+    # the ONLY predicate. Measured cost: ~2.3k paths (2294 today), 0.13s for the git call,
     # 0.5ms for the filter — the pathspec was buying nothing.
     out = subprocess.run(
         ["git", "-C", str(PROJECT_ROOT), "ls-files", "-z"],
@@ -616,8 +644,9 @@ _ONBOARD_PROBE = (
 _DEFAULTS_MAX_DEPTH = 16
 
 
-def _walk_defaults_keys(node: object, prefix: str = "", depth: int = 0) -> set[str]:
-    """Every mapping key ANYWHERE under `defaults:`, as a dotted path.
+def _walk_defaults_keys(node: object, prefix: str = "",
+                        depth: int = 0) -> dict[str, int]:
+    """{dotted path: nesting depth} for every mapping key ANYWHERE under `defaults:`.
 
     ⛔ Recursive, and that is the whole point (#1392). Reading only the top level
     measured 7 of 17 tracked artifacts as able to express the defect this gate
@@ -627,18 +656,23 @@ def _walk_defaults_keys(node: object, prefix: str = "", depth: int = 0) -> set[s
     Dotted paths rather than bare leaf names so the error message can say WHICH
     level to repair; `endswith(_CRITICAL_SUFFIX)` and the `{` test are unaffected
     by the prefix, and on a flat section the path IS the key (measured: the chart
-    and `init` faces return byte-identical sets before and after this change).
+    and `init` faces return byte-identical key sets before and after #1392).
 
     INTERMEDIATE keys are collected too, not just leaves: a misplaced
     `mysql_connections_critical:` whose value happens to be a mapping is the same
     defect wearing a different shape, and a leaves-only walk would step over it.
 
-    ⚠️ A key that itself contains a dot makes the path ambiguous to a READER. It
-    is not ambiguous to the rules above (they never split the path), and no
-    tracked artifact has one; a schema that grows them should revisit the
-    separator, not the walk.
+    ⛔ The DEPTH is returned, not re-derived downstream from a dot in the path.
+    An earlier revision returned bare paths and `_report_placement` tested
+    `"." in key` to decide whether a key was nested — blind review measured the
+    misdiagnosis: a flat `defaults: {"a.b_critical": 90}` (a legal YAML key that
+    contains a dot) was reported with the nested consequence, which is the wrong
+    failure mode and sends the reader after a metric that will not exist. The
+    walk already knows the depth; throwing it away and guessing from the rendered
+    string is the shape where an exception becomes structurally impossible to get
+    right.
     """
-    keys: set[str] = set()
+    keys: dict[str, int] = {}
     if depth > _DEFAULTS_MAX_DEPTH:
         raise RuntimeError(
             f"`defaults:` walk exceeded {_DEFAULTS_MAX_DEPTH} levels at {prefix!r}. "
@@ -649,25 +683,35 @@ def _walk_defaults_keys(node: object, prefix: str = "", depth: int = 0) -> set[s
     if isinstance(node, dict):
         for k, v in node.items():
             path = f"{prefix}.{k}" if prefix else str(k)
-            keys.add(path)
-            keys |= _walk_defaults_keys(v, path, depth + 1)
+            keys[path] = depth
+            keys.update(_walk_defaults_keys(v, path, depth + 1))
     elif isinstance(node, list):
         for item in node:
             # List ITEMS carry no key of their own; a mapping inside one does.
-            keys |= _walk_defaults_keys(item, prefix, depth + 1)
+            keys.update(_walk_defaults_keys(item, prefix, depth + 1))
     return keys
 
 
-def _defaults_section(text: str) -> set[str]:
-    """The key paths under `defaults:` of a rendered `_defaults.yaml`/values.yaml."""
+def _defaults_section(text: str, *, unwrap_chart: bool = False) -> dict[str, int]:
+    """{key path: depth} under `defaults:` of a `_defaults.yaml` / chart values.
+
+    ⛔ `unwrap_chart` is OFF by default and only the chart face turns it on. The
+    unwrap exists because `helm/threshold-exporter/values.yaml` nests everything
+    one level down under `thresholdConfig:`; applying it to conf.d artifacts as
+    well was measured to be a hole (blind review): `root = doc.get(...) or doc`
+    means ANY `_defaults.yaml` that grows a top-level `thresholdConfig:` key
+    stops having its real `defaults:` read at all — injected `_critical` and
+    everything else silently vanished, rc=0. A conf.d file has no
+    `thresholdConfig:` in its schema, so for those the top level IS the root.
+    """
     import yaml  # local import: only the artifact faces need it
 
     doc = yaml.safe_load(text) or {}
-    root = doc.get("thresholdConfig") or doc  # chart values nest one level
+    root = (doc.get("thresholdConfig") or doc) if unwrap_chart else doc
     return _walk_defaults_keys(root.get("defaults") or {})
 
 
-def _defaults_faces() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+def _defaults_faces() -> tuple[dict[str, dict[str, int]], dict[str, dict[str, int]]]:
     """(generators, artifacts) — {face label: `defaults:` key paths} for each class.
 
     TWO CLASSES, and the split is not cosmetic: the four GENERATORS below are
@@ -720,15 +764,19 @@ def _defaults_faces() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
 
     generators = {
         # GENERATORS — no artifact on disk to read; the producer IS the surface.
+        # ⛔ Only this one unwraps `thresholdConfig:` — see `_defaults_section`.
         "chart (helm/threshold-exporter/values.yaml)":
-            _defaults_section(_CHART_VALUES.read_text(encoding="utf-8")),
+            _defaults_section(_CHART_VALUES.read_text(encoding="utf-8"),
+                              unwrap_chart=True),
+        # These two hand back a plain mapping already, so their keys are depth 0
+        # by construction rather than by a walk.
         "onboarding/scaffold (scaffold_tenant.generate_defaults)":
-            set(scaffold_tenant.generate_defaults(scaffold_packs)["defaults"]),
+            {k: 0 for k in scaffold_tenant.generate_defaults(scaffold_packs)["defaults"]},
         "onboarding/init (init_project._gen_defaults_yaml)":
             _defaults_section(
                 init_project._gen_defaults_yaml(init_packs, "monitoring")),
         "migration/onboard (onboard_platform.generate_defaults_from_candidates, "
-        "probed)": set(onboard_suggestion.get("defaults") or {}),
+        "probed)": {k: 0 for k in (onboard_suggestion.get("defaults") or {})},
     }
 
     # ARTIFACTS — derived (see `_defaults_artifacts`). The floor fires BEFORE the
@@ -742,7 +790,7 @@ def _defaults_faces() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
     # list, which it explicitly forbids.
     scanned = _tracked_defaults_artifacts()
     if len(scanned) < _DEFAULTS_ARTIFACT_FLOOR:
-        raise RuntimeError(
+        raise _GateViolation(
             f"defaults-artifact scan found only {len(scanned)} tracked file(s), "
             f"below the floor of {_DEFAULTS_ARTIFACT_FLOOR}. A scan that returns "
             "(almost) nothing passes the placement check vacuously, which is the "
@@ -751,7 +799,7 @@ def _defaults_faces() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
             f"are NOT counted here — {len(_DEFAULTS_ARTIFACT_EXEMPT)} exempted.)")
     to_read = _defaults_artifacts()
     if len(to_read) < _DEFAULTS_ARTIFACT_READ_FLOOR:
-        raise RuntimeError(
+        raise _GateViolation(
             f"the scan found {len(scanned)} tracked file(s) but only {len(to_read)} "
             f"survive the exemption table, below the read floor of "
             f"{_DEFAULTS_ARTIFACT_READ_FLOOR}. The scan is FINE — "
@@ -759,8 +807,9 @@ def _defaults_faces() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
             "faces pass the placement check below perfectly. SHORTEN THE EXEMPTION "
             "LIST; repairing the scan is not the remedy here, and neither is "
             "lowering the floor.")
-    artifacts: dict[str, set[str]] = {}
-    by_root: dict[str, list[tuple[str, set[str]]]] = {r: [] for r in _SHIPPED_CONFD_ROOTS}
+    artifacts: dict[str, dict[str, int]] = {}
+    by_root: dict[str, list[tuple[str, dict[str, int]]]] = {
+        r: [] for r in _SHIPPED_CONFD_ROOTS}
     for path in to_read:
         rel = path.relative_to(PROJECT_ROOT).as_posix()
         # ⛔ The reader names the file. `read_text` raises with the path attached,
@@ -783,7 +832,7 @@ def _defaults_faces() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
 
 
 def _assert_shipped_roots_intact(
-        by_root: dict[str, list[tuple[str, set[str]]]]) -> None:
+        by_root: dict[str, list[tuple[str, dict[str, int]]]]) -> None:
     """Every shipped conf.d root must still contribute what it contributes today.
 
     Per ROOT, because the global floors are a single number that one class can
@@ -795,48 +844,90 @@ def _assert_shipped_roots_intact(
         n_keys = sum(len(keys) for _rel, keys in found)
         if len(found) >= min_artifacts and n_keys >= min_keys:
             continue
-        raise RuntimeError(
+        # ⛔ Cause order matters, and the previous wording had it backwards.
+        # "Restore the file(s)" led, so a maintainer whose files were all still
+        # present read past it to the second clause and did what it said: edited
+        # the floor. Measured (blind review): typo `defaults:` in a shipped file
+        # → this fires → change `1, 3` to `1, 0` → green → then a `_critical`
+        # injected into that same file is silent, and the suite is 68 passed.
+        # The renamed-section case is FIRST now, and the "adjust the table"
+        # branch is explicitly not for making this message go away.
+        raise _GateViolation(
             f"shipped conf.d root {root!r} now contributes {len(found)} "
-            f"artifact(s) / {n_keys} key(s), below its floor of {min_artifacts} / "
-            f"{min_keys}. This root ships: {why} Its artifacts are what make this "
-            "gate a statement about what customers receive rather than about what "
-            "the test fixtures happen to contain — fixtures outnumber them and "
-            "will hold every global floor up on their own. Restore the file(s), or "
-            "if the tree really moved, update _SHIPPED_CONFD_ROOTS *and* the "
-            "confd-schema hooks in .pre-commit-config.yaml together (a test pins "
-            "them to each other).")
+            f"artifact(s) / {n_keys} key(s), below its floor of {min_artifacts} "
+            f"artifact(s) / {min_keys} key(s). This root ships: {why} Its "
+            "artifacts are what make this gate a statement about what customers "
+            "receive rather than about what the test fixtures happen to contain "
+            "— fixtures outnumber them and will hold every global floor up on "
+            "their own.\n"
+            "  MOST LIKELY: a `defaults:` section in this tree was renamed, "
+            "re-nested, or emptied — the file is still there, so the file counts "
+            "above did not move. Check the section name first.\n"
+            "  OR: the file(s) were deleted or moved — restore them.\n"
+            "  ⛔ LOWERING THESE NUMBERS IS NOT A REMEDY. A shipped root whose "
+            "keys went to zero is precisely what this floor is for; editing "
+            "_SHIPPED_CONFD_ROOTS to match the new reality re-creates the blind "
+            "spot. Only change the table when a tree genuinely moved or stopped "
+            "shipping, and then change the confd-schema hooks in "
+            ".pre-commit-config.yaml in the same commit (a test pins the ROOT "
+            "SET to those hooks — it does NOT police these two numbers, so they "
+            "are on you).")
 
 
-def _assert_keys_floor(generators: dict[str, set[str]],
-                       artifacts: dict[str, set[str]]) -> None:
+def _assert_keys_floor(generators: dict[str, dict[str, int]],
+                       artifacts: dict[str, dict[str, int]]) -> None:
     """The only non-vacuity signal that moves when a reader silently stops reading.
 
     One floor per class, because a single combined floor lets the bigger class
     hold the number up for the smaller one (measured: generators are 102 of the
     172 keys).
     """
-    for label, faces, floor in (
-        ("generator", generators, _DEFAULTS_GENERATOR_KEYS_FLOOR),
-        ("artifact", artifacts, _DEFAULTS_ARTIFACT_KEYS_FLOOR),
-    ):
-        n_keys = sum(len(v) for v in faces.values())
-        if n_keys >= floor:
-            continue
-        raise RuntimeError(
-            f"the defaults-tier {label} faces yielded {n_keys} key(s), below the "
-            f"floor of {floor} — while still reading {len(faces)} {label} face(s). "
-            "The face COUNT is therefore not what changed: a `defaults:` section "
-            "was renamed, re-nested, or a producer stopped emitting one, and an "
-            "empty face passes the placement check perfectly (for artifacts it is "
-            "even exempt from EMPTY-FACE, because empty is legal there). Repair "
-            "the reader or the producer; do not lower the floor. "
-            f"(If you just added an exemption, that is the cause instead — "
-            f"{len(_DEFAULTS_ARTIFACT_EXEMPT)} entr(y/ies) in "
-            "_DEFAULTS_ARTIFACT_EXEMPT, and the remedy there is to shorten that "
-            "list, not to touch the reader.)")
+    # ⛔ Per-class WORDING as well as per-class numbers. The two classes had one
+    # shared message and blind review measured two sentences in it that are false
+    # on the generator side: an empty generator face does NOT "pass the placement
+    # check" (EMPTY-FACE catches it), and the exemption table cannot affect a
+    # generator count at all — it sent the reader to a table unrelated to their
+    # problem.
+    n_gen = sum(len(v) for v in generators.values())
+    if n_gen < _DEFAULTS_GENERATOR_KEYS_FLOOR:
+        raise _GateViolation(
+            f"the defaults-tier GENERATOR faces yielded {n_gen} key(s) across "
+            f"{len(generators)} face(s), below the floor of "
+            f"{_DEFAULTS_GENERATOR_KEYS_FLOOR}. A generator that emits NOTHING is "
+            "already caught by EMPTY-FACE; this floor is for the other shape — a "
+            "producer that SHRANK without emptying (a pack catalog trimmed, a "
+            "tier split, a render path that started skipping keys), which no "
+            "other check can see. Repair the producer. If a producer legitimately "
+            "got smaller, re-measure and update the floor in the same commit, "
+            "saying what shrank and why.")
+
+    n_art = sum(len(v) for v in artifacts.values())
+    if n_art < _DEFAULTS_ARTIFACT_KEYS_FLOOR:
+        # ⛔ Do not assert what did or did not change. The previous wording said
+        # "The face COUNT is therefore not what changed", and blind review hit it
+        # by retiring three golden fixtures — where the face count is exactly
+        # what changed. Print both numbers and let the reader see it.
+        raise _GateViolation(
+            f"the defaults-tier ARTIFACT faces yielded {n_art} key(s) across "
+            f"{len(artifacts)} face(s), below the floor of "
+            f"{_DEFAULTS_ARTIFACT_KEYS_FLOOR} "
+            f"({len(_DEFAULTS_ARTIFACT_EXEMPT)} exempted, "
+            f"{sum(1 for v in artifacts.values() if not v)} face(s) empty).\n"
+            "  If the face count is UNCHANGED: a `defaults:` section was renamed "
+            "or re-nested and that file is now a blind spot — empty is legal for "
+            "an artifact, so EMPTY-FACE will not say so. Repair the reader or the "
+            "section, and do not lower the floor to match.\n"
+            "  If the face count DROPPED because artifacts were legitimately "
+            "removed (retiring fixtures is ordinary maintenance): re-measure and "
+            "lower the floor in the SAME commit, naming what was removed. This "
+            "floor is hand-maintained against a measured value; it is not a "
+            "claim that the number can only grow.\n"
+            "  If you just added an exemption, that is the cause instead — the "
+            "remedy is to shorten _DEFAULTS_ARTIFACT_EXEMPT, not to touch the "
+            "reader.")
 
 
-def _report_placement(face: str, keys: set[str], errors: list[str]) -> None:
+def _report_placement(face: str, keys: dict[str, int], errors: list[str]) -> None:
     """Both halves of the defaults-tier placement rule, for ONE face.
 
     ⛔ One function, called from both class loops. The two checks used to sit in
@@ -847,29 +938,42 @@ def _report_placement(face: str, keys: set[str], errors: list[str]) -> None:
     """
     for k in sorted(k for k in keys if k.endswith(_CRITICAL_SUFFIX)):
         base = k[: -len(_CRITICAL_SUFFIX)]
-        # A dotted path means the key sits under a nested mapping, and the
-        # consequence there is a DIFFERENT one — worth saying, because the
-        # repair is the same but the symptom a reader would go looking for is
-        # not. `Defaults` is `map[string]float64`, so a nested section does not
-        # decode at all: `parsePartialConfig` drops the whole file and raises
-        # `da_config_parse_failure_total`. The flat case is the silent one.
-        consequence = (
-            "this sits under a nested mapping, so the file does not decode at "
-            "all — `Defaults` is map[string]float64 and parsePartialConfig drops "
-            "the ENTIRE platform-defaults block for the file (with a "
-            "da_config_parse_failure_total metric and an ERROR log)"
-            if "." in k else
-            "resolveCriticalRows iterates TENANT OVERRIDES, so this emits "
-            f'user_threshold{{metric="{k}",severity="warning"}} — a series no '
-            f"recording rule joins — while tenant:alert_threshold:{k} stays "
-            "empty and nothing says so"
-        )
+        if keys[k] == 0:
+            # Flat: the key IS a `Defaults` key, and the failure is the silent
+            # one this gate was built for.
+            errors.append(
+                f"CRITICAL-IN-DEFAULTS: {face} puts {k!r} under `defaults:`, "
+                "which is not the critical tier and never becomes one: "
+                "resolveCriticalRows iterates TENANT OVERRIDES, so this emits "
+                f'user_threshold{{metric="{k}",severity="warning"}} — a series '
+                f"no recording rule joins — while tenant:alert_threshold:{k} "
+                "stays empty and nothing says so. The *Critical alert cannot "
+                "fire. Move it to the tenant side (a `<tenant>.yaml` override), "
+                f"keeping {base!r} under `defaults:` so the critical tier is "
+                "admitted. (#1218 / TRK-344)"
+            )
+            continue
+        # Nested. ⛔ Do NOT describe the nesting's own consequence as if this key
+        # caused it, and do NOT offer "keep the base under `defaults:`" — blind
+        # review measured both mistakes on the previous wording: a maintainer who
+        # moved only the `_critical` half left the nesting in place and this gate
+        # went GREEN on a file that still does not decode. Two separate problems,
+        # said separately, and the repair for the one being reported is stated
+        # without promising it fixes the other.
         errors.append(
-            f"CRITICAL-IN-DEFAULTS: {face} puts {k!r} under `defaults:`, which is "
-            f"not the critical tier and never becomes one: {consequence}. The "
-            "*Critical alert cannot fire. Move it to the tenant side (a "
-            f"`<tenant>.yaml` override), keeping {base!r} under `defaults:` so "
-            "the critical tier is admitted. (#1218 / TRK-344)"
+            f"CRITICAL-IN-DEFAULTS: {face} puts {k!r} under `defaults:` at depth "
+            f"{keys[k] + 1}, and `Defaults` is a FLAT map — no key of that name "
+            "exists at any tier, critical or otherwise, so the *Critical alert "
+            "cannot fire. ⛔ The nesting is a SECOND, independent problem: "
+            "removing this key does not make the section decodable, and this "
+            "gate deliberately does not police nesting on its own (a flat-loader "
+            "file raises da_config_parse_failure_total at runtime; a "
+            "hierarchy-merge fixture does not go through that path at all). Fix "
+            "the nesting for the file's own reasons, and put the critical tier "
+            f"where it is read — a `<tenant>.yaml` override keyed {base!r}. If "
+            "this file's BYTES are an input to another gate (a golden parity "
+            "fixture hashes them), do not edit it to satisfy this one: register "
+            "it in _DEFAULTS_ARTIFACT_EXEMPT with a reason. (#1218 / TRK-344)"
         )
     # The other half of the same rule (docs_defaults_sample_test.go pins both;
     # is_shipped_optional_key refuses both).
@@ -900,7 +1004,7 @@ def run_check(
     chart_supply: set[str] | None = None,
     not_chart_armed: frozenset[str] | None = None,
     declared_faces: dict[str, set[str]] | None = None,
-    defaults_faces: tuple[dict[str, set[str]], dict[str, set[str]]] | None = None,
+    defaults_faces: tuple[dict[str, dict[str, int]], dict[str, dict[str, int]]] | None = None,
 ) -> dict[str, list[str]]:
     """Return {errors, infos}. errors fail --ci; infos are report-only.
 
@@ -1034,7 +1138,7 @@ def run_check(
     # Vacuity is still closed for artifacts, by three links: a file that cannot
     # be read RAISES (fail-closed, `main()` → EXIT_CALLER_ERROR with the path), a
     # walk that returns (almost) nothing trips `_DEFAULTS_ARTIFACT_FLOOR`, and a
-    # face that silently stops YIELDING trips `_DEFAULTS_KEYS_FLOOR` — the third
+    # face that silently stops YIELDING trips the per-class key floors — the third
     # is the one the file floors could never see, since renaming a `defaults:`
     # section leaves the file count untouched. What is left — "parsed fine,
     # genuinely has no `defaults:`" — is a real state of a real file.
@@ -1127,6 +1231,18 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = run_check()
+    except _GateViolation as exc:
+        # ⛔ A floor breach is USER-actionable (see `_GateViolation`). Reporting
+        # it as "crashed" with rc=2 told the reader their environment was broken,
+        # and "the lint crashed" is read as flaky-skip-it — the one reaction
+        # these floors exist to prevent.
+        print(f"❌ {exc}", file=sys.stderr)
+        print(
+            "\n1 defaults-tier floor breach — TRK-344 / #1392. NOTE: the "
+            "placement checks did NOT run; the floors are evaluated first "
+            "precisely because an empty face passes them vacuously. Re-run after "
+            "fixing this.", file=sys.stderr)
+        return EXIT_VIOLATION if args.ci else EXIT_OK
     except Exception as exc:  # noqa: BLE001 — caller error, not a violation
         print(f"ERROR: reachability check crashed: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
