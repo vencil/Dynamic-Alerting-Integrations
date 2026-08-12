@@ -1490,7 +1490,8 @@ def defaults_critical_keys(defaults) -> list[str]:
 # `resolveCriticalRows` rather than running it. Measured (pkg/config/
 # critical_tier_placement_test.go): a `<base>_critical` under `defaults:` is
 # walked by `resolveBaseRows`, `parseMetricKey` splits on the FIRST underscore,
-# and the row that comes out is `{metric="<base>_critical", severity="warning"}`
+# and the row that comes out is
+# `{component="<prefix>", metric="<rest>_critical", severity="warning"}`
 # — a series no recording rule joins — with no critical row anywhere. So the one
 # branch that existed to describe a defective file was telling its reader the
 # file was fine.

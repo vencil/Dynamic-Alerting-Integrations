@@ -20,8 +20,12 @@
 # The `_critical` tier canNOT be supplied here: resolveCriticalRows scans
 # TENANT OVERRIDES only (app/pkg/config/resolve.go), so a `<key>_critical` line
 # in defaults falls through to the base resolver and emits a junk
-# user_threshold{metric="<key>_critical", severity="warning"} that no recording
-# rule reads. Critical tiers belong in a tenant file (see db-demo.yaml's
+# severity="warning" series in which the `_critical` text lands inside the
+# component/metric labels instead of becoming a severity — parseMetricKey
+# splits on the first underscore, so mysql_connections_critical becomes
+# {component="mysql", metric="connections_critical"}, NOT metric="<whole key>"
+# (see app/rulepack_contract_test.go; that mismatch is #731). No recording
+# rule reads it. Critical tiers belong in a tenant file (see db-demo.yaml's
 # mysql_connections_critical) — which is why this pack's *Critical alerts have
 # no supply in the demo.
 # The mysql_* values mirror the platform defaults (operating SoT:

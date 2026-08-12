@@ -609,10 +609,16 @@ def generate_defaults_from_candidates(candidates):
     conf.d/_defaults.yaml". A customer who followed that instruction lost their
     entire critical tier on the spot: ``resolveCriticalRows`` iterates TENANT
     OVERRIDES, so a ``_critical`` key under ``defaults:`` produces no critical
-    threshold at all — it emits ``user_threshold{metric="<key>_critical",
-    severity="warning"}`` instead, which no recording rule joins, while
-    ``tenant:alert_threshold:<key>_critical`` stays empty and the ``*Critical``
-    alert cannot fire. Measured both directions in
+    threshold at all — it falls through to the base resolver and emits a
+    ``severity="warning"`` series in which the ``_critical`` text lands inside
+    the component/metric LABELS instead of becoming a severity
+    (``parseMetricKey`` splits on the FIRST underscore: ``cpu_critical`` →
+    ``{component="cpu", metric="critical"}``; a key with no underscore →
+    ``component="default"``). ⛔ Spelling it ``metric="<whole key>"`` names a
+    series that does not exist — that is the #731 shape
+    ``app/rulepack_contract_test.go`` exists to prevent. No recording
+    rule joins it, ``tenant:alert_threshold:<key>_critical`` stays empty and the
+    ``*Critical`` alert cannot fire. Measured both directions in
     ``components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go``.
     Carrying the critical tier across was the entire reason to run ``onboard``.
 
@@ -728,9 +734,12 @@ def _render_critical_suggestion(critical, defaults=None):
         "# ── Critical tier — do NOT put these under `defaults:` ──────────────",
         "# The platform's critical layer resolves from TENANT overrides only",
         "# (resolveCriticalRows admits on defaults[<base>]), so a `<base>_critical`",
-        "# key written under `defaults:` produces no critical threshold — it emits",
-        "# user_threshold{metric=\"<base>_critical\",severity=\"warning\"}, which no",
-        "# recording rule consumes, and the matching *Critical alert can never fire.",
+        "# key written under `defaults:` produces no critical threshold — it falls",
+        "# through to the base resolver and emits a severity=\"warning\" series in",
+        "# which the `_critical` text lands inside the component/metric labels",
+        "# instead of becoming a severity (parseMetricKey splits on the first",
+        "# underscore: cpu_critical -> {component=\"cpu\", metric=\"critical\"}),",
+        "# which no recording rule consumes, so the *Critical alert can never fire.",
     ]
     if ready:
         lines += [

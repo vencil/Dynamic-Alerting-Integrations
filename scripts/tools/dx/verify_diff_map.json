@@ -717,7 +717,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "be21ebe4d7e27fd560d25aa0b2035b37477bdb56a06e2085a7aa13ae743cc2c4",
+ "source_digest": "ad8530a2d79dfa115d2c4b35a91b9e1dedb80a2a3a8084bc94f0ced58b352026",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1273,6 +1273,9 @@
   ],
   "components/threshold-exporter/app/pkg/config/types.go": [
    "tests/shared/test_reserved_key_py_go_parity.py"
+  ],
+  "components/threshold-exporter/app/rulepack_contract_test.go": [
+   "tests/lint/test_check_threshold_reachability.py"
   ],
   "components/threshold-exporter/config/conf.d": [
    "tests/dx/test_compile_custom_alerts.py",
@@ -2408,6 +2411,9 @@
    "tests/lint/test_check_playwright_rtl_drift.py",
    "tests/ops/test_wrapped_path_references.py"
   ],
+  "tests/e2e-bench": [
+   "tests/lint/test_check_threshold_reachability.py"
+  ],
   "tests/e2e-bench/aggregate.py": [
    "tests/e2e-bench/test_aggregate.py"
   ],
@@ -2453,6 +2459,7 @@
   ],
   "tests/lint": [
    "tests/dx/test_scaffold_lint.py",
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/lint/test_check_threshold_registry.py",
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
@@ -2485,7 +2492,8 @@
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_threshold_registry.py",
    "tests/ops/test_grar_facade_reexports.py",
-   "tests/ops/test_nightly_race_issue_policy.py"
+   "tests/ops/test_nightly_race_issue_policy.py",
+   "tests/ops/test_onboard_platform.py"
   ],
   "tests/ops/_stub_declared_shared.py": [
    "tests/ops/test_init_project.py",

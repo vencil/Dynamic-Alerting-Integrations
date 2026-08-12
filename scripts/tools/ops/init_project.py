@@ -767,7 +767,8 @@ def _gen_tenant_yaml(tenant: str, rule_packs: list[str]) -> str:
     neither block, yet it takes effect whenever `<base>` has a value under
     `defaults:` (resolveCriticalRows keys off exactly that) — AND ONLY when it
     is written HERE. Until #1218 this generator put 16 of them into `defaults:`
-    instead, where they emitted `{component,metric="<base>_critical"}` warning
+    instead, where they emitted `{component="<prefix>",
+    metric="<rest>_critical"}` (parseMetricKey splits on the first underscore) warning
     series and no critical tier at all; the header rendered from that mapping
     then told the tenant "the critical row fires without you doing anything",
     which was the opposite of what shipped. The paragraph is still rendered
