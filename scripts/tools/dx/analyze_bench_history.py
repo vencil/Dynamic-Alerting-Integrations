@@ -1423,26 +1423,39 @@ def _recovering_label_change(findings: list[TrendFinding], prior_state: list[lis
     return None
 
 
-def _state_transition_comment(prior: list[list[str]], current: list[list[str]]) -> str | None:
+def _state_transition_comment(prior: list[list[str]], current: list[list[str]],
+                              held: list[HeldRow] | None = None) -> str | None:
     """Markdown summary of how the flagged-benchmark set changed since the prior
     run, or None when nothing changed (→ body refreshed silently, no comment).
 
     Only `sustained` / `creep` rows count as "flagged": a `held` row is a bench
     the watchdog is still waiting on, and letting one through here would post
     "**Recovered (no longer flagged):** `X`" about a benchmark whose whole reason
-    for being on the marker is that recovery has NOT been shown."""
+    for being on the marker is that recovery has NOT been shown.
+
+    Dropping out of the flagged set is therefore reported two different ways, and
+    `held` is what tells them apart: a bench that left the ledger passed
+    ``_recovery_block`` and is genuinely recovered, while one that is still held
+    only stopped *firing* — most likely because the sliding anchor drifted up
+    onto its regression, which is the exact failure this whole change exists to
+    catch. Calling that "Recovered" in a comment would reintroduce the false
+    all-clear at the notification layer after we removed it from the close
+    decision."""
+    held_now = {h.bench for h in (held or [])}
     prior, current = _flagged_only(prior), _flagged_only(current)
     if prior == current:
         return None
     prior_kind = {b: k for b, k in prior}
     cur_kind = {b: k for b, k in current}
     newly = sorted(b for b in cur_kind if b not in prior_kind)
-    cleared = sorted(b for b in prior_kind if b not in cur_kind)
+    gone = [b for b in prior_kind if b not in cur_kind]
+    cleared = sorted(b for b in gone if b not in held_now)
+    stopped_firing = sorted(b for b in gone if b in held_now)
     escalated = sorted(b for b in cur_kind
                        if b in prior_kind and prior_kind[b] != cur_kind[b] == "sustained")
     eased = sorted(b for b in cur_kind
                    if b in prior_kind and prior_kind[b] != cur_kind[b] == "creep")
-    if not (newly or cleared or escalated or eased):
+    if not (newly or cleared or stopped_firing or escalated or eased):
         return None  # defensive: states differ only in an unexpected way
     parts = ["## Perf-trend update", ""]
     if newly:
@@ -1453,6 +1466,11 @@ def _state_transition_comment(prior: list[list[str]], current: list[list[str]]) 
         parts.append("**Eased to creep:** " + ", ".join(f"`{b}`" for b in eased))
     if cleared:
         parts.append("**Recovered (no longer flagged):** " + ", ".join(f"`{b}`" for b in cleared))
+    if stopped_firing:
+        parts.append("**Stopped firing but NOT proved recovered:** "
+                     + ", ".join(f"`{b}`" for b in stopped_firing)
+                     + " — still measured against the frozen baseline; see the "
+                       "Held table in the issue body.")
     parts += ["", "_See the issue body for the full current table. Posted only on a "
               "change in the flagged set — the body is refreshed silently every night._"]
     return "\n".join(parts)
@@ -1625,7 +1643,7 @@ def run_trend_watch(args) -> int:
                 prior_state = _parse_state_marker(open_issues[0].get("body"))
                 if prior_state is None:
                     prior_state = current_state
-                transition = _state_transition_comment(prior_state, current_state)
+                transition = _state_transition_comment(prior_state, current_state, held)
                 cur_labels = [l.get("name") for l in (open_issues[0].get("labels") or [])]
                 label_change = _recovering_label_change(findings, prior_state, cur_labels)
                 verb = "[dry-run] would update" if args.dry_run else "updating"

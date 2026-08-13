@@ -1284,6 +1284,30 @@ class TestLedgerKeepsUnprovenBenches:
         c = ab._state_transition_comment(prior, [[_BENCH, "creep"]])
         assert c and "Recovered" not in c and "Eased to creep" in c
 
+    def test_bench_that_stopped_firing_is_not_announced_as_recovered(self):
+        # The other direction of the same rule. Here the bench IS gone from the
+        # flagged set (so the marker-side filter above cannot help) and is held
+        # only in tonight's freshly computed ledger. Announcing "Recovered" here
+        # would put the false all-clear back in the notification layer right
+        # after we removed it from the close decision — the sliding anchor
+        # drifting onto the regression is the likeliest reason it stopped firing.
+        held = [ab.HeldRow(bench=_BENCH_B, anchor_ns=35e6, cpu_model=_EPYC,
+                           code="above", reason="still above the frozen baseline")]
+        c = ab._state_transition_comment(
+            [[_BENCH, "sustained"], [_BENCH_B, "sustained"]],
+            [[_BENCH, "sustained"]], held)
+        assert c is not None
+        assert "Recovered" not in c
+        assert "NOT proved recovered" in c and _BENCH_B in c
+
+    def test_a_genuinely_retired_bench_is_still_announced_as_recovered(self):
+        # Counterpart: absent from the ledger means it passed _recovery_block,
+        # so the recovery claim is earned and must survive.
+        c = ab._state_transition_comment(
+            [[_BENCH, "sustained"], [_BENCH_B, "sustained"]],
+            [[_BENCH, "sustained"]], [])
+        assert c and "Recovered (no longer flagged):" in c and _BENCH_B in c
+
     def test_held_row_does_not_drive_the_recovering_label(self):
         # The label means "sustained cleared, creep remains". A held row is not
         # a sustained finding and must not be read as one.
