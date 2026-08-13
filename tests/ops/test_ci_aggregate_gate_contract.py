@@ -1296,8 +1296,26 @@ _ALLOWED_TEST_OPERATORS = frozenset({
     "-z", "-n", "-eq", "-ne", "-gt", "-ge", "-lt", "-le", "-a", "-o",
 })
 _TEST_OPERATORS = re.compile(r"(?<![\w-])(-[A-Za-z]{1,2})(?![\w-])")
+# ⛔ A REDIRECTION reads the filesystem with no `$`, no command and no test
+# operator: `if : 2>/dev/null < /home/runner/.bashrc; then exit 0; fi` was
+# green against every other check here — `:` is allowlisted, the differential
+# runs both passes on the same filesystem, and putting `2>/dev/null` first
+# silences the stderr report that would otherwise have caught it. Fifth
+# recurrence of "enumerating the ways to reach runner state has no last
+# member", so this is an accept-set over TARGETS, which is closed: a redirect
+# target is a file descriptor or a word, and the only word a verdict has any
+# business naming is one of its own modelled bindings.
+_REDIRECT = re.compile(r"(?:^|[\s;&|])\d*(?:<<?|>>?)\s*(\S+)")
 _LINE_COMMENT = re.compile(r"(?m)#.*$")
 _FRAGMENT = re.compile(r"\|\||&&|[;|&]|\n")
+
+
+def _redirect_word_is_bound(target: str, bound: set[str]) -> bool:
+    """A redirect target is acceptable only if it expands a modelled name."""
+    names = _shell_reads(target)
+    stripped = target.strip('"\'')
+    return bool(names) and names <= bound and stripped in {
+        f"${name}" for name in names} | {f"${{{name}}}" for name in names}
 
 
 def _command_words(script: str) -> set[str]:
@@ -1415,6 +1433,10 @@ def test_gate_scripts_are_executable_the_way_github_runs_them() -> None:
         job = jobs[gate.job_id]
         steps = job.get("steps") or []
         step = steps[gate.step]
+        bound_for_redirects = {gate.bindings.detect_result[0]}
+        bound_for_redirects |= set(gate.bindings.changed_names)
+        bound_for_redirects |= {n for n, _job in gate.bindings.legs}
+        bound_for_redirects |= set(_simulated_runner_vars(""))
         if gate.step != 0:
             problems.append(
                 f"{gate}: the verdict is step {gate.step}, not the first. A "
@@ -1475,6 +1497,21 @@ def test_gate_scripts_are_executable_the_way_github_runs_them() -> None:
                 "PowerShell, where this script is not even valid — so the "
                 "whole exit-code matrix would be asserting about a shell that "
                 "never runs it.")
+        redirects = sorted({
+            target for target in _REDIRECT.findall(gate.script)
+            if not (target.startswith("&")
+                    or _redirect_word_is_bound(target, bound_for_redirects))
+        })
+        if redirects:
+            problems.append(
+                f"{gate}: the gate script redirects to/from {redirects}. A "
+                "redirection reads or writes the filesystem without naming a "
+                "variable, running a command or using a test operator — the "
+                "channel that got past every other check here — and both "
+                "passes of the differential see the same filesystem, so it "
+                "cannot see this either. A verdict may only redirect to an "
+                "expansion of one of its own bindings (today: "
+                "`>> \"$GITHUB_STEP_SUMMARY\"`).")
         operators = sorted(
             set(_TEST_OPERATORS.findall(_LINE_COMMENT.sub("", gate.script)))
             - _ALLOWED_TEST_OPERATORS)
@@ -1795,6 +1832,19 @@ def test_gate_skip_tolerance_weighs_every_filter_its_legs_gate_on() -> None:
         if deps != _detect_jobs(CI_WORKFLOW):
             found[("ci.yml", _gate_id, leg_id)] = frozenset({
                 f"__reachability__ {leg_id} now needs {sorted(deps)}"})
+        # ⛔ And its `if:` must be gate references only. The premise is "this
+        # leg can skip for NO reason other than its own path filters"; adding
+        # a conjunct — blind review used `&& github.event.pull_request.draft
+        # == false` — gives it a second reason to skip, and the gate then
+        # forgives that skip. One word on the leg, everything green.
+        residue = _EXPRESSION.sub("", str(jobs[leg_id].get("if", "")))
+        residue = _IF_GATE_REF.sub("", residue)
+        residue = re.sub(r"==\s*'true'|\|\||[()\s]", "", residue)
+        if residue:
+            found[("ci.yml", _gate_id, leg_id)] = frozenset({
+                f"__reachability__ {leg_id}'s `if:` has a non-filter term "
+                f"({residue!r}), so it can skip for a reason the gate's "
+                "skip-tolerance does not model"})
 
     ledgered = {key: value[0] for key, value in KNOWN_SKIP_TOLERANCE_GAPS.items()}
     new_gaps = {k: sorted(v) for k, v in found.items() if ledgered.get(k) != v}
@@ -2131,12 +2181,16 @@ def test_a_script_that_never_ran_is_not_mistaken_for_a_verdict(
 # passing gate is a tripwire nobody has watched fire."
 #
 # ⚠️ STILL UNCONTROLLED, stated rather than left to be discovered. The
-# fail-closed REFUSAL clauses — the `raise`s in `_step_bindings`, `_gates` and
-# `_path_gated_jobs`, `_resolved_shell`, `_simulated_runner_vars`, and the
-# `_TICKET` pattern — can each be made permissive with the suite green. They
-# are one tier less dangerous than the above (a refusal that stops refusing
-# hides a shape rather than passing a failing test), and the first control
-# below is the template for closing them.
+# fail-closed REFUSAL clauses can each be made permissive with the suite
+# green: the two-detect-results raise in `_step_bindings`, the multi-step
+# and unknown-shell raises in `_gates`, the unparsed-`if:` raise in
+# `_path_gated_jobs`, `_resolved_shell`, and the `_TICKET` pattern. (The
+# `_MENTIONS_NEEDS` raise IS controlled, by
+# `test_an_unparsable_needs_binding_refuses_rather_than_absorbs`.) A
+# refusal that stops refusing hides a shape rather than passing a failing
+# test, and the controls below are the template for closing them.
+# ⚠️ `_simulated_runner_vars` was on this list and does NOT belong — it is
+# exploitable, and now has its own control.
 #
 # ⚠️ And `_synthetic_workflow` can only build a ONE-leg, ONE-filter gate, so
 # the multi-leg loop that `go-tests` actually uses — and the multi-filter path
@@ -2193,6 +2247,9 @@ _SCRIPT_SAMPLES = (
      "command substitution"),
     ('ZQ_X="${ZQ_X:-push}"\nif [ "$ZQ_X" = "y" ]; then exit 0; fi\n', True,
      "self-referencing assignment launders a runner variable"),
+    ('if : 2>/dev/null < /home/runner/.bashrc; then exit 0; fi\n', True,
+     "redirection probes the filesystem with no $, command or operator"),
+    ('echo hi > /tmp/zq\n', True, "redirect to a literal path"),
     ('exit 0 || true\n', True, "|| true"),
     ('set +ex\nexit 0\n', True, "set +ex"),
     ('set +o errexit\nexit 0\n', True, "set +o errexit"),
@@ -2236,7 +2293,10 @@ def test_the_script_level_checks_reject_what_defeated_them(
             or _COMMAND_SUB.search(script)
             or _EXIT_SWALLOW.search(script)
             or ({n for n in _shell_reads(script)
-                 if n not in bound and n not in _script_local_names(script)}))
+                 if n not in bound and n not in _script_local_names(script)})
+            or ({target for target in _REDIRECT.findall(script)
+                 if not (target.startswith("&")
+                         or _redirect_word_is_bound(target, bound))}))
         if rejected != must_reject:
             problems.append(
                 f"{'accepted' if must_reject else 'rejected'} "
@@ -2246,6 +2306,33 @@ def test_the_script_level_checks_reject_what_defeated_them(
         + "\n  ".join(problems)
         + "\nA sample that flips here is a spelling that either reaches the "
           "runner unseen, or reds a maintainer doing something ordinary.")
+
+
+def test_every_simulated_runner_var_is_visible_to_the_differential() -> None:
+    """A value the harness supplies but never varies is a blind channel.
+
+    ⛔ Adding one constant key to `_simulated_runner_vars` — say
+    `GITHUB_BASE_REF: ""` — makes `if [ "$GITHUB_BASE_REF" = "main" ]; then
+    exit 0; fi` bind cleanly AND read the same in both passes of the
+    differential, so the gate returns 0 for every pull request against main
+    with the whole suite green. Measured. That is the same "helper weakened,
+    a red ci.yml edit goes green" shape as the four exploitable ones, not the
+    lesser tier an earlier version of the comment above claimed.
+
+    The invariant: anything the harness supplies must either be varied by
+    `_RUNNER_ENV`, or take a different value on the two passes (which is why
+    the step summary path is per-cell and per-script rather than shared).
+    """
+    first = _simulated_runner_vars("/zq/a")
+    second = _simulated_runner_vars("/zq/b")
+    blind = sorted(
+        name for name, value in first.items()
+        if name not in _RUNNER_ENV and second.get(name) == value)
+    assert not blind, (
+        f"{blind} are supplied to the gate but identical on both passes of "
+        "the differential and absent from _RUNNER_ENV, so a gate branching "
+        "on them is invisible. Either vary the value per pass, or add the "
+        "name to _RUNNER_ENV.")
 
 
 def test_the_derivation_helpers_can_actually_fail(tmp_path: Path) -> None:
