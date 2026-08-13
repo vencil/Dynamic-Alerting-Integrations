@@ -15,7 +15,8 @@ byte-compared. The counterfactual surface is the union of
     git grep -l ".github/workflows" -- 'tests/**.py'
     git grep -l "ci\.yml" -- 'tests/**.py'
 
-— 35 modules, 949 passed / 126 skipped on the tree without this file. ⚠️
+— 34 modules on the tree without this file (35 with it), 949 passed / 126
+skipped. ⚠️
 Reproduce the SET with those two commands rather than trusting the counts:
 they move with the tree, and one grep instead of the union gives a different
 answer (an earlier draft of this paragraph described a hand-narrowed 22-module
@@ -56,6 +57,16 @@ treat it as the list: its authority is line 66, the `gh api` invocation, not
 the tick-boxes at line 46, which name six checks out of the nineteen that are
 actually required and do not include `Portal Tests`.
 
+⛔ The biggest thing it does NOT cover, named because it is adjacent enough to
+be mistaken for covered: `run: pytest … || true` on a test leg is the shell
+spelling of `continue-on-error`, achieves exactly the same thing, sits in the
+same decision path, and NOTHING in this repo forbids it. It is banned in the
+gate scripts here (see `_EXIT_SWALLOW`) and deliberately not on the legs,
+because `python-tests-run` has a live and legitimate `|| true` on its "Install
+mtail" step and the narrowing that would separate the two is the one the
+sibling module documents two failed attempts at. Candidate ticket, not a
+silent omission.
+
 ⛔ What a green run does NOT prove, stated because a green guard is read as a
 guarantee. It does not prove the gate script runs as bash at all beyond the
 inputs checked here (`runs-on`, `container`, `shell` and `defaults` are
@@ -65,10 +76,12 @@ mirrored constant, correct on the date stamped beside it and stale the moment
 GitHub settings change); and it says nothing about 16 of the 19 required
 checks.
 
-⛔ Its scope is `ci.yml`. Every assertion here except
-`test_gate_shaped_jobs_are_either_modelled_or_ledgered` is bound to
-`CI_WORKFLOW`, and that one only asks whether a gate-shaped job elsewhere is
-modelled or ledgered. That leaves the LARGER half of the problem untouched
+⛔ Its scope is `ci.yml`, with two exceptions:
+`test_gate_shaped_jobs_are_either_modelled_or_ledgered` asks whether a
+gate-shaped job in any dorny workflow is modelled or ledgered, and
+`test_the_required_check_names_belong_to_the_gates_and_nothing_else` sweeps
+every workflow, because branch protection matches a check NAME regardless of
+which file produced it. Everything else is bound to `CI_WORKFLOW`. That leaves the LARGER half of the problem untouched
 and it is worth naming precisely, because #1398's summary is easy to read as
 "docs-ci's `all-checks` is weak": of the 19 required checks, **ten are
 path-gated jobs registered as required directly, with no aggregate layer at
@@ -101,8 +114,9 @@ shape this repo keeps re-learning — see the ⛔ block above
 the same idea were defeated in opposite directions.
 
 Discovery is cross-checked against an INDEPENDENT route through the same
-workflow — the set of jobs whose own `if:` consults a detect output — so a
-discovery that quietly finds nothing cannot pass.
+workflow — the set of jobs that path-skip, derived from their own `if:` and
+propagated through `needs:` — so a discovery that quietly finds nothing
+cannot pass.
 
 ## How the shell is CHECKED (execute it, do not grep it)
 
@@ -184,10 +198,10 @@ def _paths_filter_workflows() -> tuple[Path, ...]:
     """Every workflow that owns a `dorny/paths-filter` detect job.
 
     Derived from the tree rather than listed. ⚠️ But "scanned" is a narrow
-    word: only `test_gate_shaped_jobs_are_either_modelled_or_ledgered` looks
-    outside `ci.yml`, and only to ask whether a gate-shaped job there is
-    modelled or ledgered. A workflow entering this set does NOT bring its jobs
-    under the rest of the assertions here. The sibling module carries the same
+    word: a workflow entering this set is only asked whether a gate-shaped
+    job in it is modelled or ledgered. It does NOT bring its jobs under the
+    rest of the assertions here — the required-check NAME sweep covers every
+    workflow separately, and everything else is `ci.yml` only. The sibling module carries the same
     correction for the same reason — a workflow being scanned says nothing
     about its jobs being seen. `sorted` keeps failure messages stable.
     """
@@ -376,15 +390,21 @@ def _gates(path: Path) -> tuple[Gate, ...]:
     return tuple(gates)
 
 
-def _discover_ci_gates() -> tuple[tuple[Gate, ...], AssertionError | None]:
+def _discover_gates_or_fail() -> tuple[tuple[Gate, ...], AssertionError | None]:
     """Discovery, with its refusal captured instead of raised at import.
 
-    ⛔ Every fail-closed `raise` above happens while `_ci_gates()` is being
+    ⛔ Every fail-closed `raise` above happens while `_gates_or_fail()` is being
     called for the `parametrize` decorator — i.e. at COLLECTION time. Blind
-    review hit one and the result was `ERROR collecting`: all assertions in
-    this file vanished at once, over a modelling gap in ONE gate. A gap in
-    gate A must not take gate B's and C's protection offline, so the refusal
-    is carried to `test_gate_discovery_did_not_refuse` and reported there.
+    review hit one and the result was `ERROR collecting`: every assertion in
+    this file vanished at once with no message about why.
+
+    ⚠️ What this buys is a readable failure, NOT isolation. A refusal still
+    empties the gate set, so `_gates_or_fail` re-raises it in every assertion
+    that iterates gates — otherwise those tests would iterate an empty tuple
+    and pass. A later reviewer measured exactly that vacuous-green state and
+    was right to call the earlier wording ("a gap in gate A must not take gate
+    B's protection offline") false: it does, and the honest fix is to make all
+    of them say so rather than to claim an isolation that is not implemented.
     """
     try:
         return _gates(CI_WORKFLOW), None
@@ -392,10 +412,24 @@ def _discover_ci_gates() -> tuple[tuple[Gate, ...], AssertionError | None]:
         return (), refusal
 
 
-_CI_GATES, _CI_GATE_REFUSAL = _discover_ci_gates()
+_CI_GATES, _CI_GATE_REFUSAL = _discover_gates_or_fail()
 
 
 def _ci_gates() -> tuple[Gate, ...]:
+    return _CI_GATES
+
+
+def _gates_or_fail() -> tuple[Gate, ...]:
+    """Every assertion that iterates gates goes through here.
+
+    An empty gate set makes a `for gate in …` assertion pass without looking
+    at anything, so a discovery refusal has to be re-raised rather than
+    silently yielding nothing.
+    """
+    if _CI_GATE_REFUSAL is not None:
+        raise AssertionError(
+            "gate discovery refused, so this assertion examined nothing:\n"
+            + str(_CI_GATE_REFUSAL))
     return _CI_GATES
 
 
@@ -575,8 +609,8 @@ def _leg_tuples(leg_count: int) -> list[tuple[str, ...]]:
     ⚠️ Stated blind spot: a backdoor that needs THREE OR MORE legs to hold
     mutually distinct values simultaneously is not generated. Nothing in the
     contract or in the shipped scripts has that shape, and buying it back
-    costs the exponential. Growth is now quadratic: 3 legs 79 tuples (vs 125),
-    4 legs 154 (vs 625), 5 legs 254 (vs 3125).
+    costs the exponential. Growth is now quadratic: 3 legs 65 tuples (vs
+    125), 4 legs 117 (vs 625), 5 legs 185 (vs 3125).
     """
     tuples = {(value,) * leg_count for value in _RESULT_DOMAIN}
     for i in range(leg_count):
@@ -588,8 +622,6 @@ def _leg_tuples(leg_count: int) -> list[tuple[str, ...]]:
                     row = ["success"] * leg_count
                     row[i], row[j] = a, b
                     tuples.add(tuple(row))
-    if leg_count == 1:
-        tuples |= {(value,) for value in _RESULT_DOMAIN}
     return sorted(tuples)
 
 
@@ -660,12 +692,13 @@ def _run_matrix(script: str, gate: Gate) -> tuple[_Cell, ...]:
     to start exits 2 (parse error) or 127 (no such file), so EVERY cell
     mismatches at once.
 
-    ⚠️ stderr is deliberately NOT policed. An earlier version failed any cell
-    that wrote to it, which reported 75 near-identical violations for one
-    added `>&2` diagnostic — each one saying "exit 0, which is correct". A
-    step writing to stderr does not fail in Actions and cannot change the
-    verdict, so the only thing that rule bought was pressure to delete
-    diagnostics.
+    ⚠️ stderr IS policed, once per gate rather than once per cell — see
+    `_matrix_violations`. Failing every cell that wrote to it reported 75
+    near-identical violations for one added `>&2`, each saying "exit 0, which
+    is correct"; the noise was the problem, not the rule. The rule itself is
+    load-bearing: a gate that falls over at run time can still exit 0 (see
+    `test_a_script_that_never_ran_is_not_mistaken_for_a_verdict`), and stderr
+    is the only signal that separates that from a decision.
     """
     argv = list(gate.shell_argv)
     with tempfile.TemporaryDirectory() as tmp:
@@ -679,17 +712,35 @@ def _run_matrix(script: str, gate: Gate) -> tuple[_Cell, ...]:
 
         def run(case) -> _Cell:
             detect, legs, changed = case
-            done = subprocess.run(
-                argv,
-                env=_env_for(gate, detect, legs, changed, summary.as_posix()),
-                capture_output=True, encoding="utf-8", errors="replace",
-                timeout=60)
+            env = _env_for(gate, detect, legs, changed, summary.as_posix())
+            # ⛔ Retry once when the answer falls outside the contract's range.
+            # The scripts are deterministic, so a repeat cannot mask a real
+            # defect — but a `bash` that failed to START answers 126/127, and
+            # under load on a Windows host that happens: blind review measured
+            # one run of this module at `5 failed` and the next, unchanged, at
+            # `19 passed`, with every flaky cell a spawn failure being read as
+            # the gate's verdict. Instrument noise, not a finding — and the
+            # noise was in the FALSE-RED direction, which is how a guard gets
+            # deleted.
+            for attempt in (1, 2):
+                done = subprocess.run(
+                    argv, env=env, capture_output=True, encoding="utf-8",
+                    errors="replace", timeout=60)
+                if done.returncode in (0, 1) or attempt == 2:
+                    break
             return _Cell(detect, legs, changed, done.returncode,
                          done.stderr)
 
         workers = min(64, (os.cpu_count() or 4) * 4)
         with ThreadPoolExecutor(max_workers=workers) as pool:
             return tuple(pool.map(run, cells))
+
+
+# ⛔ Exact stderr text a gate is allowed to emit. Empty, and it is the seam the
+# stderr message points at — an assertion message that names a mechanism must
+# name one that exists. Add the literal text, never a pattern: the point is
+# that a NEW noise source has to be looked at once.
+ALLOWED_GATE_STDERR: frozenset[str] = frozenset()
 
 
 def _matrix_violations(gate: Gate, cells: tuple[_Cell, ...]) -> list[str]:
@@ -722,14 +773,17 @@ def _matrix_violations(gate: Gate, cells: tuple[_Cell, ...]) -> list[str]:
     # an error — so the exit-code superset argument alone does not catch a
     # gate that is broken at run time. stderr is the only signal that
     # separates "decided" from "fell over".
-    noisy = [cell for cell in cells if cell.stderr.strip()]
+    noisy = [cell for cell in cells
+             if cell.stderr.strip() and cell.stderr.strip() not in ALLOWED_GATE_STDERR]
     if noisy:
         problems.append(
             f"{gate}: {len(noisy)} of {len(cells)} cells wrote to stderr, "
-            f"e.g. {noisy[0].stderr.strip()!r}. A gate that writes to `>&2` "
-            "is not modelled here — either it is a deliberate diagnostic, in "
-            "which case teach `_matrix_violations` to allow that exact text, "
-            "or the script is failing in a way its exit code hides.")
+            f"e.g. {noisy[0].stderr.strip()!r}. Either the script is failing "
+            "in a way its exit code hides, or the text is a deliberate "
+            "diagnostic — in which case add it to `ALLOWED_GATE_STDERR` "
+            "above.\n⛔ Do NOT delete the `>&2` to buy silence: a gate that "
+            "falls over at run time and still exits 0 is invisible to the "
+            "exit-code comparison, and this is the only thing that sees it.")
     return problems
 
 
@@ -762,7 +816,7 @@ def test_every_path_gated_leg_is_watched_by_a_gate() -> None:
     job that stopped being gated has a skip-tolerance branch that became
     unreachable and now only reads as protection.
     """
-    gates = _ci_gates()
+    gates = _gates_or_fail()
     # ⛔ Said out loud because the matrix test is parametrised over this set:
     # if it collapses to empty, pytest reports zero tests as a pass. Blind
     # review reached that state by renaming the `dorny/paths-filter` action.
@@ -776,25 +830,52 @@ def test_every_path_gated_leg_is_watched_by_a_gate() -> None:
     }
     gated = _path_gated_jobs(CI_WORKFLOW)
 
+    jobs = _load(CI_WORKFLOW)["jobs"]
+    unwatched = set(gated) - set(watched)
     problems = [
         f"ci.yml::{job_id} is path-gated on {sorted(gated[job_id])} but no "
         "aggregate gate weighs its `.result`. When it path-skips, nothing "
-        "decides whether that skip was legitimate. Either add it to a gate's "
-        "`needs:` AND its env bindings, or — if its skip genuinely cannot "
-        "mislead a required check — record that in "
-        "UNWATCHED_PATH_GATED_JOBS with the argument."
-        for job_id in sorted(set(gated) - set(watched)
-                             - set(UNWATCHED_PATH_GATED_JOBS))
+        "decides whether that skip was legitimate.\nAsk first: SHOULD this "
+        "job's outcome decide a required check? If yes, add it to a gate's "
+        "`needs:` AND to that gate's env bindings — both halves, or the gate "
+        "waits for it and then ignores it. If no — it backs no required "
+        "check and blocks nothing — record that in UNWATCHED_PATH_GATED_JOBS "
+        "with the argument. The two are not interchangeable: doing the first "
+        "to a job that is not a test leg makes a required check start "
+        "blocking on it."
+        for job_id in sorted(unwatched - set(UNWATCHED_PATH_GATED_JOBS))
     ] + [
         f"ci.yml::{job_id} is weighed by the {watched[job_id]} gate but is no "
         "longer path-gated. Either the gate watches the wrong job, or the leg "
         "lost its `if:` and the gate's skip-tolerance branch is now dead code."
         for job_id in sorted(set(watched) - set(gated))
     ]
+    # ⛔ The ledger is not a place to park a gate. Blind review laundered a
+    # gate-shaped job to invisibility in three moves: add a job that reads a
+    # leg's `.result`, delete its `always()` so it stops being reported as an
+    # unmodelled gate, then write a ledger row. Two structural answers, both
+    # here: a ledgered job may not read anyone's `.result`, and a row must
+    # still name a job that is actually unwatched today.
+    for job_id in sorted(UNWATCHED_PATH_GATED_JOBS):
+        if job_id not in unwatched:
+            problems.append(
+                f"UNWATCHED_PATH_GATED_JOBS names ci.yml::{job_id}, which is "
+                "not an unwatched path-gated job today. A row that outlives "
+                "its job keeps whatever id it holds outside the check above, "
+                "silently and forever — delete it.")
+        elif _READS_A_RESULT.search(json.dumps(jobs.get(job_id, {}))):
+            problems.append(
+                f"ci.yml::{job_id} is in UNWATCHED_PATH_GATED_JOBS but reads "
+                "another job's `.result`. A job that consults a verdict is a "
+                "gate, not a downstream consumer, and this ledger is the "
+                "wrong answer for it — ⛔ particularly if it reached this "
+                "state by having its `always()` removed, which is strictly "
+                "worse: a gate that skips reports Success to branch "
+                "protection.")
     assert not problems, (
         f"{len(problems)} gate/leg mismatch(es) in ci.yml:\n  "
         + "\n  ".join(problems)
-        + f"\n(gates discovered: {sorted(g.job_id for g in _ci_gates())}; "
+        + f"\n(gates discovered: {sorted(g.job_id for g in _gates_or_fail())}; "
           f"path-gated jobs: {sorted(gated)})")
 
 
@@ -855,7 +936,7 @@ def test_the_required_check_names_belong_to_the_gates_and_nothing_else() -> None
     check NAME, so whichever job carries it is the job whose verdict counts,
     and a skipped job reports Success.
     """
-    gates = _ci_gates()
+    gates = _gates_or_fail()
     problems = []
     for gate in gates:
         if _EXPRESSION.search(gate.check_name):
@@ -917,7 +998,12 @@ def test_the_required_check_names_belong_to_the_gates_and_nothing_else() -> None
             "these jobs have a `name:` expression this module cannot render, "
             "so a collision with a required-check name cannot be ruled out: "
             + ", ".join(sorted(unrenderable))
-            + ". Teach `_rendered_names` the shape.")
+            + ".\nThe cheap and safe answer is to RENAME the job so its "
+            "literal fragments cannot line up with any required check. "
+            "Teaching `_rendered_names` the shape also works, but only for "
+            "expressions with an enumerable domain — `matrix.*` has one, a "
+            "`workflow_dispatch` input does not. ⛔ Widening `_could_render_"
+            "to` weakens collision detection for EVERY job.")
     assert not problems, "\n  ".join([""] + problems)
 
 
@@ -941,7 +1027,7 @@ def test_every_changed_output_a_gate_or_a_leg_consults_is_declared() -> None:
         for detect in _detect_jobs(CI_WORKFLOW)
     }
     problems = []
-    for gate in _ci_gates():
+    for gate in _gates_or_fail():
         for _name, detect, output in gate.bindings.changed:
             if output not in declared.get(detect, set()):
                 problems.append(
@@ -973,7 +1059,7 @@ def test_every_job_a_gate_waits_for_is_also_weighed() -> None:
     jobs = _load(CI_WORKFLOW)["jobs"]
     detect = _detect_jobs(CI_WORKFLOW)
     problems = []
-    for gate in _ci_gates():
+    for gate in _gates_or_fail():
         awaited = set(_needs(jobs[gate.job_id])) - detect
         weighed = {job_id for _name, job_id in gate.bindings.legs}
         for job_id in sorted(awaited - weighed):
@@ -1042,12 +1128,27 @@ def test_gate_shaped_jobs_are_either_modelled_or_ledgered() -> None:
 # straight through the free-variable check with `[ "$((GITHUB_RUN_ATTEMPT))"
 # -gt 1 ]`, which is empty here and non-empty on every job re-run in CI.
 # `test_the_free_variable_scanner_sees_every_expansion_spelling` pins the list.
+# Everything a verdict step is allowed to declare. An accept-set, because the
+# dangerous keys are the ones nobody has thought of yet.
+_GATE_STEP_KEYS = frozenset({"name", "id", "env", "run", "shell", "if"})
+
 _SHELL_VAR = re.compile(r"\$\{[#!]?([A-Za-z_]\w*)|\$([A-Za-z_]\w*)")
 _ARITH = re.compile(r"\$\(\((.*?)\)\)", re.S)
 _IDENT = re.compile(r"[A-Za-z_]\w*")
 # Command substitution, excluding `$((`. A gate that shells out can read
 # anything the runner exported without naming it in `env:` at all.
 _COMMAND_SUB = re.compile(r"\$\((?!\()|`")
+# ⛔ The shell spellings of `continue-on-error`. Enforced on the GATE SCRIPT
+# only, and the narrowness is deliberate rather than lazy: `python-tests-run`
+# has a live, legitimate `|| true` on its "Install mtail" step, so the same
+# rule applied across the decision path would red an existing best-effort
+# install. Narrowing it to "steps that run tests" is the axis the sibling
+# module documents two failed attempts at — `pytest tests/` resolves to no
+# tracked file, so the obvious predicate excludes 3 of the 5 legs' primary
+# test steps. A gate job has no best-effort work by construction, so the rule
+# is exact there and the leg half is recorded as a gap instead of shipped as
+# a guess. → the `|| true` entry in the module docstring's gap list.
+_EXIT_SWALLOW = re.compile(r"\|\|\s*(?:true|:)(?=\s|$|;|&)|(?m:^\s*set\s+\+e\b)")
 _SHELL_LOOP_VAR = re.compile(r"^\s*for\s+([A-Za-z_]\w*)\s+in\b", re.M)
 _SHELL_ASSIGN = re.compile(r"^\s*([A-Za-z_]\w*)=(.*)$", re.M)
 
@@ -1119,18 +1220,17 @@ def test_gate_scripts_are_executable_the_way_github_runs_them() -> None:
         the gate return 0 for a failing input with no output at all. A
         denylist of `BASH_ENV`/`ENV`/`SHELLOPTS` would have been the usual
         mistake; the accepted set is the modelled bindings and nothing else;
-      * ⛔ a SECOND step in the gate job. A step before the gate can write to
-        `$GITHUB_ENV` and change what the gate reads; the harness runs the
-        step in a vacuum, CI runs it inside a job. If a gate genuinely needs
-        another step, it belongs in a different job — the one that owns a
-        required check's verdict should do nothing else;
+      * ⛔ any step BEFORE the verdict step. It can write to `$GITHUB_ENV`
+        and change what the verdict reads; the harness runs that step in a
+        vacuum, CI runs it inside a job. Steps AFTER the verdict are allowed —
+        they can fail the job but never un-fail it;
       * command substitution, which can read the runner's environment without
         naming anything in `env:`.
     """
     workflow = _load(CI_WORKFLOW)
     jobs = workflow["jobs"]
     problems = []
-    for gate in _ci_gates():
+    for gate in _gates_or_fail():
         job = jobs[gate.job_id]
         steps = job.get("steps") or []
         step = steps[gate.step]
@@ -1152,6 +1252,18 @@ def test_gate_scripts_are_executable_the_way_github_runs_them() -> None:
                     "`working-directory` moves the script somewhere this "
                     "module does not simulate. (The sibling filter guard "
                     "burned on that same key.)")
+        # ⛔ And the same keys on the STEP. Checking only the two `defaults`
+        # scopes left `working-directory:` on the verdict step itself green —
+        # found by blind review, and the reason this is an accept-set over
+        # step keys rather than another list of keys to refuse.
+        unknown_keys = sorted(set(step) - _GATE_STEP_KEYS)
+        if unknown_keys:
+            problems.append(
+                f"{gate}: the verdict step sets {unknown_keys}, which this "
+                "module does not model. `working-directory` moves the script, "
+                "`timeout-minutes` can end it without a verdict, `uses` "
+                "replaces it outright. Model the key here before using it on "
+                "the step that owns a required check.")
         modelled = {gate.bindings.detect_result[0]}
         modelled |= set(gate.bindings.changed_names)
         modelled |= {name for name, _job in gate.bindings.legs}
@@ -1182,6 +1294,14 @@ def test_gate_scripts_are_executable_the_way_github_runs_them() -> None:
                 "PowerShell, where this script is not even valid — so the "
                 "whole exit-code matrix would be asserting about a shell that "
                 "never runs it.")
+        swallowed = _EXIT_SWALLOW.findall(gate.script)
+        if swallowed:
+            problems.append(
+                f"{gate}: the gate script swallows an exit status "
+                f"({swallowed}). `|| true`, `|| :` and `set +e` are the shell "
+                "spellings of `continue-on-error`, which this module bans "
+                "three lines up — banning one and not the other protects the "
+                "spelling rather than the property.")
         if _COMMAND_SUB.search(gate.script):
             problems.append(
                 f"{gate}: the gate script uses command substitution. It can "
@@ -1274,7 +1394,7 @@ def test_the_gate_verdict_cannot_be_skipped() -> None:
     through `$GITHUB_ENV`.
     """
     problems = []
-    for gate in _ci_gates():
+    for gate in _gates_or_fail():
         if _normalised_condition(gate.condition) != "always()":
             problems.append(
                 f"{gate}: job `if: {gate.condition!r}` (required check "
@@ -1354,7 +1474,7 @@ def test_nothing_in_a_gate_decision_path_may_continue_on_error() -> None:
     jobs = _load(CI_WORKFLOW)["jobs"]
     problems: list[str] = []
     checked: set[str] = set()
-    for gate in _ci_gates():
+    for gate in _gates_or_fail():
         in_path = {gate.job_id, gate.bindings.detect_result[1],
                    *(job for _n, job, _o in gate.bindings.changed)}
         in_path |= {job_id for _name, job_id in gate.bindings.legs}
@@ -1383,7 +1503,7 @@ def test_nothing_in_a_gate_decision_path_may_continue_on_error() -> None:
     # decision paths. Whether every path-gated job is weighed is asserted by
     # `test_every_path_gated_leg_is_watched_by_a_gate`, and saying it twice
     # in two voices helps nobody.
-    missing = ({gate.job_id for gate in _ci_gates()}
+    missing = ({gate.job_id for gate in _gates_or_fail()}
                | set(_detect_jobs(CI_WORKFLOW))) - checked
     assert not missing, (
         f"{sorted(missing)} never entered any gate's decision path, so this "
@@ -1393,14 +1513,24 @@ def test_nothing_in_a_gate_decision_path_may_continue_on_error() -> None:
 @needs_bash
 @pytest.mark.parametrize("gate", _ci_gates(), ids=lambda gate: gate.job_id)
 def test_gate_exit_codes_match_the_contract(gate: Gate) -> None:
-    """Run the real gate script over the complete env cross product."""
+    """Run the real gate script over every documented detect and `*_changed`
+    value, against the leg covering set — see `_leg_tuples` for what that
+    design buys and what it gives up."""
     cells = _run_matrix(gate.script, gate)
     problems = _matrix_violations(gate, cells)
+    # ⛔ Counted separately. The stderr finding is about the gate, not about a
+    # cell, and folding it into the cell count printed "1 of 75 cells
+    # disagree" when zero cells disagreed — sending the reader to look for an
+    # exit code that was never wrong.
+    per_cell = [line for line in problems if "contract says" in line]
+    whole_gate = [line for line in problems if line not in per_cell]
     assert not problems, (
-        f"{len(problems)} of {len(cells)} cells disagree with the CI-ROI 6C "
-        f"contract for {gate} (required check {gate.check_name!r}):\n  "
-        + "\n  ".join(problems[:20])
-        + ("\n  …" if len(problems) > 20 else ""))
+        f"{len(per_cell)} of {len(cells)} cells disagree with the CI-ROI 6C "
+        f"contract for {gate} (required check {gate.check_name!r})"
+        + (f", plus {len(whole_gate)} whole-gate finding(s)"
+           if whole_gate else "")
+        + ":\n  " + "\n  ".join((per_cell[:20] + whole_gate))
+        + ("\n  …" if len(per_cell) > 20 else ""))
     seen = {cell.rc for cell in cells}
     assert seen == {0, 1}, (
         f"{gate} produced exit codes {sorted(seen)} across {len(cells)} "
@@ -1441,7 +1571,7 @@ def test_gate_skip_tolerance_weighs_every_filter_its_legs_gate_on() -> None:
     """
     gated = _path_gated_jobs(CI_WORKFLOW)
     found = {}
-    for gate in _ci_gates():
+    for gate in _gates_or_fail():
         for _name, job_id in gate.bindings.legs:
             missing = gated.get(job_id, frozenset()) - gate.bindings.changed_outputs
             if missing:
@@ -1461,15 +1591,16 @@ def test_gate_skip_tolerance_weighs_every_filter_its_legs_gate_on() -> None:
 _TICKET = re.compile(r"#\d{3,}")
 
 
-def test_both_ledgers_state_a_falsifiable_reason() -> None:
+def test_every_ledger_row_states_a_reason_and_a_ticket() -> None:
     """The reason strings are the only thing standing between a ledger and a
     waiver, and until this test nothing read them.
 
-    Both ledger assertions above compare KEYS (and, for skip tolerance, the
-    filter set) — the prose was never touched by any assertion, so "with a
-    reason and a ticket" was an instruction with no enforcement. This repo's
-    other exit-locked ledgers require a substantive justification per row; so
-    does this one.
+    All three ledger assertions elsewhere compare KEYS (and, for skip
+    tolerance, the filter set) — the prose was never touched by any assertion,
+    so "with a reason and a ticket" was an instruction with no enforcement.
+    This repo's other exit-locked ledgers require a substantive justification
+    per row; so does this one. ⚠️ It checks length and a ticket reference, not
+    whether the reason is TRUE — that is what a reviewer is for.
     """
     rows = [(f"UNMODELLED_GATE_SHAPED_JOBS[{key!r}]", reason)
             for key, reason in UNMODELLED_GATE_SHAPED_JOBS.items()]
@@ -1490,7 +1621,7 @@ def test_both_ledgers_state_a_falsifiable_reason() -> None:
                 "tracking never leaves.")
     assert not problems, "\n  ".join([""] + problems)
     assert rows, (
-        "both ledgers are empty, so this assertion checked nothing. If the "
+        "all three ledgers are empty, so this assertion checked nothing. If the "
         "last entry was genuinely closed, delete this test with it.")
 
 
