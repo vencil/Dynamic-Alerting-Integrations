@@ -151,15 +151,18 @@ the saving was 0.76 s, and the blind region was 60 of 125 leg tuples while
 the comment admitted only the 24 of them with three mutually distinct values. Today: 75 cells for a one-leg gate, 1875 for `go-tests`, 2025 in
 total.
 
-⚠️ Cost. The whole module runs in ~15 s in the dev container; an independent
-reviewer measured 30–64 s wall clock on a loaded host, so treat it as tens of
-seconds rather than a point value. Every cell is executed TWICE (see
-`_RUNNER_ENV`), which is where most of it goes. On a Windows dev host it
-is a few minutes — four independent measurements of the pre-covering-design
-version spanned 137–246 s — because a `bash` spawn costs ~150 ms there against
-~3 ms on Linux, and every cell is a spawn. CI is Linux, so the figure that
-matters is the small one; the Windows number is given as a range because it is
-dominated by process-creation noise and no two measurements agreed.
+⚠️ Cost, on THIS shape (2025 cells, each executed twice — see `_RUNNER_ENV`):
+~15 s in the dev container, ~57 s on a Windows dev host. Both measured after
+the per-cell `$GITHUB_STEP_SUMMARY` file landed, and that ordering matters —
+the host figure came DOWN from 137–246 s while the spawn count DOUBLED,
+because 64 threads had been contending on one shared file. CI is Linux, so
+the small figure is the one that governs.
+
+⛔ Every number in this paragraph has been wrong at least once, always in the
+same way: it was measured for one shape and survived into the next. Six
+independent measurements of earlier shapes ranged 15–246 s. If you change the
+cell count, the execution count, or the file layout, re-measure — do not
+adjust the range.
 """
 
 from __future__ import annotations
@@ -1308,12 +1311,17 @@ def _command_words(script: str) -> set[str]:
     words: set[str] = set()
     for fragment in _FRAGMENT.split(_LINE_COMMENT.sub("", script)):
         tokens = fragment.split()
-        # `for X in …` and `while …` headers: the word after `for` is a
-        # binding, not a command. Skipping the header is safe because its list
-        # items are words, and the body arrives as its own fragment after
-        # `do`, which is itself a separator-terminated keyword.
-        if tokens and tokens[0] in ("for", "while", "until"):
+        # ⛔ `for X in …` and `while …` are NOT the same shape, and treating
+        # them as one skipped a whole fragment: `while printenv CI; do exit 0;
+        # done` reached the runner with nothing at the script level seeing it.
+        # In `for X in list`, X is a binding and the list is words — skip the
+        # header. In `while <command>` the rest IS a command — drop only the
+        # keyword. (Caught by the control that this comment now justifies, on
+        # the first run after it was written.)
+        if tokens and tokens[0] == "for":
             continue
+        if tokens and tokens[0] in ("while", "until"):
+            tokens = tokens[1:]
         for token in tokens:
             if _SHELL_ASSIGN.match(token) or token in _SHELL_KEYWORDS:
                 continue
@@ -2104,3 +2112,190 @@ def test_a_script_that_never_ran_is_not_mistaken_for_a_verdict(
     assert len(_matrix_violations(gate, broken)) > len(broken), (
         "every cell of an unrunnable script should mismatch, plus the stderr "
         "report.")
+
+
+# ⛔ THE CONTROLS BELOW EXIST BECAUSE 29 OF 41 HELPER WEAKENINGS SURVIVED.
+#
+# Round-4 blind review weakened one helper at a time and re-ran: `_RUNNER_ENV
+# = {}`, `rc_runner = rc`, `_TEST_OPERATORS` never matching, `_command_words`
+# returning the empty set, `_normalised_condition` returning `"always()"`,
+# `_leg_tuples` collapsing to two values, `_rendered_names` returning the raw
+# string — all green. Four of them were then shown EXPLOITABLE: with the
+# helper weakened, a real ci.yml edit that the pristine guard reds went green
+# (a gate passing a FAILED leg; a path-gated leg taking a required check's
+# name; a step inserted before the verdict; `always() && …`).
+#
+# Every one of those mechanisms had been added in response to a finding, and
+# not one had an input that made it say NO. This module's own words, written
+# about `_matrix_violations`: "a tripwire that only ever sees the real,
+# passing gate is a tripwire nobody has watched fire."
+#
+# ⚠️ STILL UNCONTROLLED, stated rather than left to be discovered. The
+# fail-closed REFUSAL clauses — the `raise`s in `_step_bindings`, `_gates` and
+# `_path_gated_jobs`, `_resolved_shell`, `_simulated_runner_vars`, and the
+# `_TICKET` pattern — can each be made permissive with the suite green. They
+# are one tier less dangerous than the above (a refusal that stops refusing
+# hides a shape rather than passing a failing test), and the first control
+# below is the template for closing them.
+#
+# ⚠️ And `_synthetic_workflow` can only build a ONE-leg, ONE-filter gate, so
+# the multi-leg loop that `go-tests` actually uses — and the multi-filter path
+# through `_expected_exit` — are exercised only against the real tree. That is
+# why the leg-domain weakening below had to be caught by asserting on
+# `_leg_tuples` directly rather than through a synthetic gate.
+
+def test_the_environment_differential_can_actually_fail(tmp_path: Path) -> None:
+    """The whole point of running every cell twice, given an input that diverges.
+
+    ⛔ Nothing exercised this. `rc_runner` appeared five times in the module
+    and zero times below the negative-controls divider, so `_RUNNER_ENV = {}`,
+    `rc_runner = rc`, and "run the second pass with the same env and the same
+    path" were all silent no-ops. The mechanism was correct and unattended,
+    which is the harder failure to see: it is dead code that reads as defence.
+
+    ⚠️ On today's tree every spelling that reaches runner state is ALSO caught
+    by the free-variable, test-operator or command checks — blind review could
+    not construct an attack only the differential sees. Its value is against
+    the spelling nobody has thought of yet, which is exactly the case no other
+    assertion can cover, and exactly why it needs a control of its own.
+    """
+    gate, = _gates(_synthetic_workflow(
+        tmp_path / "diff", detect_env="ZQ_DETECT", changed_env="ZQ_ANY_CHANGED",
+        leg_env="ZQ_LEG", changed_output="zq_changed"))
+
+    # Reads CI, which the harness never binds and `_RUNNER_ENV` sets.
+    peeking = 'if [ -n "$CI" ]; then exit 0; fi\n' + _SYNTHETIC_GATE
+    problems = _matrix_violations(gate, _run_matrix(peeking, gate))
+    assert any("CHANGES with the environment" in line for line in problems), (
+        "a gate whose verdict flips when runner variables are present produced "
+        "no environment finding — the second pass is not varying anything.")
+
+    # And the other direction: the reference gate must NOT trip it, or every
+    # gate reds and the mechanism gets deleted for noise.
+    clean = _matrix_violations(gate, _run_matrix(_SYNTHETIC_GATE, gate))
+    assert not any("CHANGES with the environment" in line for line in clean), (
+        f"the reference gate tripped the environment differential: {clean}")
+
+
+# (script, must the script-level checks reject it?) — the enumeration layers
+# that four consecutive rounds of review each defeated, each with an input.
+_SCRIPT_SAMPLES = (
+    ('if [ -v CI ]; then exit 0; fi\n', True, "test operator reads env"),
+    ('if [ -d /home/runner/work ]; then exit 0; fi\n', True, "file test"),
+    ('if [ "${0#/home/runner}" != "$0" ]; then exit 0; fi\n', True, "$0"),
+    ('if [ "$((GITHUB_RUN_ATTEMPT))" -gt 1 ]; then exit 0; fi\n', True,
+     "arithmetic expansion"),
+    ('if [ "${#GITHUB_TOKEN}" -gt 0 ]; then exit 0; fi\n', True, "length"),
+    ('if [ "${!ZQ_IND}" = "x" ]; then exit 0; fi\n', True, "indirection"),
+    ('if printenv CI; then exit 0; fi\n', True, "stranger command"),
+    ('while printenv CI; do exit 0; done\n', True, "stranger in a header"),
+    ('if [ "$(printenv CI)" = "true" ]; then exit 0; fi\n', True,
+     "command substitution"),
+    ('ZQ_X="${ZQ_X:-push}"\nif [ "$ZQ_X" = "y" ]; then exit 0; fi\n', True,
+     "self-referencing assignment launders a runner variable"),
+    ('exit 0 || true\n', True, "|| true"),
+    ('set +ex\nexit 0\n', True, "set +ex"),
+    ('set +o errexit\nexit 0\n', True, "set +o errexit"),
+    # Legitimate shapes: rejecting these is how a guard gets deleted.
+    ('echo "detect: $ZQ_DETECT"\nexit 0\n', False, "plain echo"),
+    ('if [ "$ZQ_LEG" = "success" ]; then exit 0; fi\n', False, "bound read"),
+    ('if [ -z "$ZQ_LEG" ]; then exit 1; fi\n', False, "-z is comparison"),
+    ('bad=0\nfor r in "$ZQ_LEG"; do bad=1; done\nexit "$bad"\n', False,
+     "loop variable and a genuine local"),
+    ('echo "hi" >> "$GITHUB_STEP_SUMMARY"\nexit 0\n', False,
+     "step summary is reproduced by the harness"),
+)
+
+
+def test_the_script_level_checks_reject_what_defeated_them(
+        tmp_path: Path) -> None:
+    """Both directions over every spelling that has ever got through.
+
+    ⛔ `_TEST_OPERATORS`, `_command_words`, `_COMMAND_SUB`, `_EXIT_SWALLOW` and
+    the `$0` half of `_shell_reads` appeared ZERO times below the
+    negative-controls divider. Each could be made to never match with the
+    whole suite green — including the `0-9` in `_shell_reads`, added one
+    commit earlier precisely so `$0` would be seen, whose eight existing
+    samples contain no `$0`. A pattern widened without widening its samples
+    is a pattern nobody is holding.
+    """
+    gate, = _gates(_synthetic_workflow(
+        tmp_path / "scripts", detect_env="ZQ_DETECT",
+        changed_env="ZQ_ANY_CHANGED", leg_env="ZQ_LEG",
+        changed_output="zq_changed"))
+    bound = {gate.bindings.detect_result[0], *gate.bindings.changed_names,
+             *(name for name, _job in gate.bindings.legs),
+             *_simulated_runner_vars("")}
+
+    problems = []
+    for script, must_reject, why in _SCRIPT_SAMPLES:
+        rejected = bool(
+            (set(_TEST_OPERATORS.findall(_LINE_COMMENT.sub("", script)))
+             - _ALLOWED_TEST_OPERATORS)
+            or (_command_words(script) - _GATE_COMMANDS)
+            or _COMMAND_SUB.search(script)
+            or _EXIT_SWALLOW.search(script)
+            or ({n for n in _shell_reads(script)
+                 if n not in bound and n not in _script_local_names(script)}))
+        if rejected != must_reject:
+            problems.append(
+                f"{'accepted' if must_reject else 'rejected'} "
+                f"{script!r} ({why})")
+    assert not problems, (
+        "the script-level checks disagree with their samples:\n  "
+        + "\n  ".join(problems)
+        + "\nA sample that flips here is a spelling that either reaches the "
+          "runner unseen, or reds a maintainer doing something ordinary.")
+
+
+def test_the_derivation_helpers_can_actually_fail(tmp_path: Path) -> None:
+    """The four helpers whose weakening was shown to let a real attack land.
+
+    Each line below is the exact property that, when removed, turned a red
+    ci.yml edit green: a gate passing a FAILED leg (`_leg_tuples` collapsed to
+    two values), a path-gated leg adopting a required check's name
+    (`_rendered_names` not expanding), a step inserted before the verdict
+    (`_gates` pinning `step=0`), and `always() && …` (`_normalised_condition`
+    answering `always()` regardless).
+    """
+    # `_leg_tuples`: the full product, and it must contain a MIXED tuple —
+    # collapsing the domain to success/skipped kept every existing assertion.
+    assert len(_leg_tuples(3)) == len(_RESULT_DOMAIN) ** 3, len(_leg_tuples(3))
+    assert ("failure", "skipped", "success") in _leg_tuples(3)
+    assert len(_leg_tuples(1)) == len(_RESULT_DOMAIN)
+
+    # `_normalised_condition`: strips ONE wrapper and nothing else.
+    assert _normalised_condition("always()") == "always()"
+    assert _normalised_condition("${{ always() }}") == "always()"
+    assert _normalised_condition("always() && github.event_name != 'x'") \
+        != "always()", "a narrowed condition normalised to bare always()"
+
+    # `_rendered_names`: expands a matrix expression, refuses what it cannot.
+    matrix_job = {"name": "ZQ (${{ matrix.go }})",
+                  "strategy": {"matrix": {"go": ["1.26", "1.27"]}}}
+    assert _rendered_names("zq", matrix_job) == ["ZQ (1.26)", "ZQ (1.27)"]
+    assert _rendered_names("zq", {"name": "ZQ (${{ inputs.x }})"}) is None
+    assert _rendered_names("zq", {"name": "ZQ"}) == ["ZQ"]
+    assert _could_render_to("ZQ (${{ matrix.go }})", "ZQ (1.26)")
+    assert not _could_render_to("scan ${{ matrix.name }}", "Portal Tests")
+
+    # `_gates`: the verdict step's INDEX, not a constant.
+    directory = tmp_path / "twostep"
+    directory.mkdir(parents=True)
+    workflow = {"jobs": {
+        "zq-detect": {"steps": [{"uses": "dorny/paths-filter@v3"}]},
+        "zq-leg": {"if": "needs.zq-detect.outputs.zq_changed == 'true'",
+                   "steps": [{"run": "true"}]},
+        "zq-gate": {"if": "always()", "needs": ["zq-detect", "zq-leg"],
+                    "steps": [{"name": "warm", "run": "echo warm"},
+                              {"name": "verify", "env": {
+                                  "D": "${{ needs.zq-detect.result }}",
+                                  "C": "${{ needs.zq-detect.outputs.zq_changed }}",
+                                  "L": "${{ needs.zq-leg.result }}"},
+                               "run": "exit 0\n"}]}}}
+    path = directory / "zq.yml"
+    path.write_text(yaml.safe_dump(workflow), encoding="utf-8", newline="\n")
+    gate, = _gates(path)
+    assert gate.step == 1, (
+        f"the verdict step was reported at index {gate.step}; pinning it to 0 "
+        "makes the 'nothing may run before the verdict' rule unreachable.")
