@@ -139,11 +139,11 @@ exactly four documented values (success / failure / cancelled / skipped —
 contexts reference), plus the empty string for "the expression did not
 resolve", which is the state #1397's failure scenario is actually about.
 dorny emits `true` or `false`, plus the same empty string. Detect result and
-`*_changed` are taken exhaustively; the LEG axis uses a covering design
-(`_leg_tuples`) rather than the full product, because the full product is
-exponential in the number of legs and adding a leg is the growth path ci.yml
-explicitly invites. Today: 75 cells for a one-leg gate, 975 for `go-tests`,
-1125 in total.
+So is the leg axis: `5^legs` per gate, taken in full. A covering design
+lived here for one round and `_leg_tuples` records why it was reverted —
+the saving was 0.76 s and the blind region was four times what the comment
+claimed. Today: 75 cells for a one-leg gate, 1875 for `go-tests`, 2025 in
+total.
 
 ⚠️ Cost. The whole module runs in ~3 s in the dev container and ~5 s pinned to
 four vCPUs, which is what a GitHub-hosted runner has. On a Windows dev host it
@@ -482,6 +482,25 @@ def _path_gated_jobs(path: Path) -> dict[str, frozenset[str]]:
         if names:
             gated[job_id] = names
 
+    # ⛔ Fail closed on a detect-output spelling this module cannot parse —
+    # the sibling's `_gated_jobs` has this and only its fixpoint had been
+    # carried over. Silently returning an empty set makes the leg invisible,
+    # and the follow-on message ("no longer path-gated … the gate's
+    # skip-tolerance branch is dead code") then points at removing the leg
+    # from the gate, which is the opposite of the repair.
+    for job_id, job in jobs.items():
+        if job_id in gated:
+            continue
+        condition = str(job.get("if", ""))
+        if any(f"needs.{d}.outputs." in condition for d in detect):
+            raise AssertionError(
+                f"{path.name}::{job_id} gates on a detect job's outputs in a "
+                f"shape this module does not parse: {condition!r}. It is "
+                "path-gated in reality and invisible to every coverage "
+                "assertion here (dorny's own `contains(fromJSON(...outputs."
+                "changes), 'name')` array idiom is the likely spelling). "
+                "Teach _IF_GATE_REF the shape.")
+
     changed = True
     while changed:
         changed = False
@@ -510,8 +529,11 @@ UNMODELLED_GATE_SHAPED_JOBS = {
         "EVERY `skipped`, including one caused by a broken detect job. "
         "⚠️ Do not read this entry as 'the docs-ci exposure lives here'. "
         "`All Documentation Checks` is not itself a required check (checked "
-        "against the branch-protection API on 2026-08-13); the seven docs-ci "
-        "legs it waits for are required INDIVIDUALLY, so fixing this job "
+        "against the branch-protection API on 2026-08-13); of the eight legs "
+        "it waits for, seven are required INDIVIDUALLY (the eighth, "
+        "`i4-runbook-smoke-test`, is required nowhere — and `Documentation "
+        "Line Count Monitor` IS required while not being among its `needs:` "
+        "at all), so fixing this job "
         "closes none of the exposure. Tracked as #1398, whose real subject is "
         "those ten directly-required path-gated jobs across docs-ci.yaml and "
         "validate.yaml — see the module docstring. Deliberately out of scope "
@@ -528,6 +550,13 @@ UNMODELLED_GATE_SHAPED_JOBS = {
 #   gh api repos/vencil/Dynamic-Alerting-Integrations/branches/main/protection\
 #     /required_status_checks --jq '.contexts[]'
 # which returned 19 contexts including exactly these three.
+#
+# ⛔ A pin in the same file is not tamper-proof, and this comment used to
+# imply otherwise. Blind review deleted one name from the set and swapped the
+# gate's `name:` onto its path-gated leg: green, with the live API still
+# requiring that check. Only human review catches a SHRINKING edit here —
+# treat any diff that removes a line from this set as a branch-protection
+# change, because that is what it is.
 #
 # ⚠️ It is pinned because a rename is NOT symmetric. Renaming a gate to a name
 # nobody requires leaves the required check waiting forever — that blocks the
@@ -590,39 +619,30 @@ def _expected_exit(detect: str, legs: tuple[str, ...],
 
 
 def _leg_tuples(leg_count: int) -> list[tuple[str, ...]]:
-    """A covering design over the leg axis, not the full cross product.
+    """The FULL cross product over the leg axis.
 
-    ⛔ The full product is `5^legs`, and adding a leg is the growth path
-    `ci.yml` explicitly invites ("New split jobs join HERE rather than getting
-    their own required check"). Measured on a Windows dev host: 3 legs = 158 s
-    for this one test, 4 legs = **911 s**. Exponential cost on the one axis
-    that is designed to grow is a guard that gets deleted.
+    ⛔ This was a covering design (all-equal plus every pair of positions,
+    others `success`) for exactly one round, on the argument that the full
+    product is exponential and adding a leg is the growth path ci.yml invites.
+    Blind review killed the argument on both halves and it is worth recording
+    why, because the reasoning was seductive:
 
-    What is generated instead, and why each part is needed:
-      * every ALL-EQUAL tuple — catches a backdoor keyed on "all legs skipped",
-        which pairwise coverage alone would miss;
-      * every PAIR of positions taking every pair of values, others `success`
-        — the `go-tests` loop is the only cross-leg structure in the tree, and
-        any two-leg interaction shows up here. It subsumes one-at-a-time
-        (the partner value `success` IS the one-at-a-time case).
+      * the SAVING was measured and is negligible where it matters: 1875 cells
+        for `go-tests` in 1.59 s against 975 in 0.83 s in the dev container.
+        The exemption was justified by a Windows dev-host figure in a module
+        that states three paragraphs earlier that CI is Linux and "the figure
+        that matters is the small one";
+      * the BLIND SPOT was mis-stated. The docstring claimed only backdoors
+        needing three mutually DISTINCT leg values escaped. Measured: 60 of
+        125 tuples at three legs were never generated, including
+        `('failure', 'skipped', 'skipped')` — two distinct values, and the
+        ordinary shape of a docs-only PR where the one leg that runs fails.
 
-    ⚠️ Stated blind spot: a backdoor that needs THREE OR MORE legs to hold
-    mutually distinct values simultaneously is not generated. Nothing in the
-    contract or in the shipped scripts has that shape, and buying it back
-    costs the exponential. Growth is now quadratic: 3 legs 65 tuples (vs
-    125), 4 legs 117 (vs 625), 5 legs 185 (vs 3125).
+    ⇒ Correctness over a fraction of a second. If a fourth leg ever makes this
+    genuinely expensive, the honest move is to measure it again on CI, not to
+    re-derive a cheaper sample from the same wish.
     """
-    tuples = {(value,) * leg_count for value in _RESULT_DOMAIN}
-    for i in range(leg_count):
-        for j in range(leg_count):
-            if i == j:
-                continue
-            for a in _RESULT_DOMAIN:
-                for b in _RESULT_DOMAIN:
-                    row = ["success"] * leg_count
-                    row[i], row[j] = a, b
-                    tuples.add(tuple(row))
-    return sorted(tuples)
+    return sorted(itertools.product(_RESULT_DOMAIN, repeat=leg_count))
 
 
 def _cases(leg_count: int, filter_count: int):
@@ -1149,6 +1169,46 @@ _COMMAND_SUB = re.compile(r"\$\((?!\()|`")
 # is exact there and the leg half is recorded as a gap instead of shipped as
 # a guess. → the `|| true` entry in the module docstring's gap list.
 _EXIT_SWALLOW = re.compile(r"\|\|\s*(?:true|:)(?=\s|$|;|&)|(?m:^\s*set\s+\+e\b)")
+
+# Shell keywords carry no external state; they are not commands to allowlist.
+_SHELL_KEYWORDS = frozenset({
+    "if", "then", "elif", "else", "fi", "for", "in", "do", "done", "while",
+    "until", "case", "esac", "{", "}", "!",
+})
+# ⛔ Everything a verdict may EXECUTE. Builtins that read only their arguments
+# and the environment the harness itself supplies. Nothing that can reach the
+# runner: no `printenv`, no `env`, no `grep`, no `curl`, no `jq`.
+_GATE_COMMANDS = frozenset({
+    "echo", "printf", "exit", "continue", "break", "return", "true", "false",
+    ":", "[", "[[", "test", "set", "shift",
+})
+_LINE_COMMENT = re.compile(r"(?m)#.*$")
+_FRAGMENT = re.compile(r"\|\||&&|[;|&]|\n")
+
+
+def _command_words(script: str) -> set[str]:
+    """The first word of every command in the script.
+
+    Deliberately crude and inclusive: split on every separator, drop comments,
+    drop assignments and keywords, and treat whatever is left as a command. An
+    over-read reds and gets looked at; an under-read is how the last three
+    holes happened.
+    """
+    words: set[str] = set()
+    for fragment in _FRAGMENT.split(_LINE_COMMENT.sub("", script)):
+        tokens = fragment.split()
+        # `for X in …` and `while …` headers: the word after `for` is a
+        # binding, not a command. Skipping the header is safe because its list
+        # items are words, and the body arrives as its own fragment after
+        # `do`, which is itself a separator-terminated keyword.
+        if tokens and tokens[0] in ("for", "while", "until"):
+            continue
+        for token in tokens:
+            if _SHELL_ASSIGN.match(token) or token in _SHELL_KEYWORDS:
+                continue
+            words.add(token)
+            break
+    return words
 _SHELL_LOOP_VAR = re.compile(r"^\s*for\s+([A-Za-z_]\w*)\s+in\b", re.M)
 _SHELL_ASSIGN = re.compile(r"^\s*([A-Za-z_]\w*)=(.*)$", re.M)
 
@@ -1294,6 +1354,19 @@ def test_gate_scripts_are_executable_the_way_github_runs_them() -> None:
                 "PowerShell, where this script is not even valid — so the "
                 "whole exit-code matrix would be asserting about a shell that "
                 "never runs it.")
+        strangers = sorted(_command_words(gate.script) - _GATE_COMMANDS)
+        if strangers:
+            problems.append(
+                f"{gate}: the gate script runs {strangers}. ⛔ This is an "
+                "accept-set over COMMANDS, and it is the third fix for the "
+                "same premise: first `$VAR` spellings, then command "
+                "substitution, then `printenv GITHUB_RUN_ATTEMPT | grep -q "
+                "'^[2-9]'` — no `$` anywhere, both earlier defences blind, and "
+                "the gate returns 0 on every workflow re-run with a failing "
+                "leg. Enumerating the ways to reach runner state has no last "
+                "member; the set of commands a verdict needs does. If the gate "
+                "genuinely needs another command, add it here and say why it "
+                "cannot read anything the matrix does not vary.")
         swallowed = _EXIT_SWALLOW.findall(gate.script)
         if swallowed:
             problems.append(
@@ -1514,8 +1587,7 @@ def test_nothing_in_a_gate_decision_path_may_continue_on_error() -> None:
 @pytest.mark.parametrize("gate", _ci_gates(), ids=lambda gate: gate.job_id)
 def test_gate_exit_codes_match_the_contract(gate: Gate) -> None:
     """Run the real gate script over every documented detect and `*_changed`
-    value, against the leg covering set — see `_leg_tuples` for what that
-    design buys and what it gives up."""
+    value, against the full product over the leg axis."""
     cells = _run_matrix(gate.script, gate)
     problems = _matrix_violations(gate, cells)
     # ⛔ Counted separately. The stderr finding is about the gate, not about a
@@ -1576,6 +1648,20 @@ def test_gate_skip_tolerance_weighs_every_filter_its_legs_gate_on() -> None:
             missing = gated.get(job_id, frozenset()) - gate.bindings.changed_outputs
             if missing:
                 found[("ci.yml", gate.job_id, job_id)] = missing
+
+    # ⛔ The ledger pins the FILTER SET; what made the gap survivable is the
+    # reachability argument in its prose, and prose is not read by anything.
+    # Blind review added `lint` to that leg's `needs:` — one word, on a
+    # different job — and the ledgered gap went live while every assertion
+    # here stayed green: `lint` fails on a docs-only PR, the leg skips, and
+    # `go_changed != 'true'` forgives a skip its own `if:` did not cause. So
+    # the premise is asserted, not narrated.
+    jobs = _load(CI_WORKFLOW)["jobs"]
+    for _wf, _gate_id, leg_id in KNOWN_SKIP_TOLERANCE_GAPS:
+        deps = set(_needs(jobs[leg_id]))
+        if deps != _detect_jobs(CI_WORKFLOW):
+            found[("ci.yml", _gate_id, leg_id)] = frozenset({
+                f"__reachability__ {leg_id} now needs {sorted(deps)}"})
 
     ledgered = {key: value[0] for key, value in KNOWN_SKIP_TOLERANCE_GAPS.items()}
     new_gaps = {k: sorted(v) for k, v in found.items() if ledgered.get(k) != v}
