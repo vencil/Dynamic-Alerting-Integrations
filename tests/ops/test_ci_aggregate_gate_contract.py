@@ -1306,8 +1306,126 @@ _TEST_OPERATORS = re.compile(r"(?<![\w-])(-[A-Za-z]{1,2})(?![\w-])")
 # target is a file descriptor or a word, and the only word a verdict has any
 # business naming is one of its own modelled bindings.
 _REDIRECT = re.compile(r"(?:^|[\s;&|])\d*(?:<<?|>>?)\s*(\S+)")
-_LINE_COMMENT = re.compile(r"(?m)#.*$")
+def _strip_comments(script: str) -> str:
+    """Drop bash comments — and ONLY bash comments.
+
+    ⛔ This was `re.sub(r"(?m)#.*$", "", script)`, which also eats a `#` inside
+    a quoted string. bash does not. One extra character in an existing echo —
+    `echo "… #"; if printenv CI; then :; fi` — blinded BOTH scanners that run
+    on the stripped text (`_TEST_OPERATORS` and `_command_words`) and put
+    every rejected spelling back on the table: `[ -v CI ]`, `printenv`, the
+    file tests. The command accept-set was introduced as the answer to "the
+    ways to reach runner state have no last member"; it was bypassable with
+    one character. Quote state is tracked here rather than pattern-matched,
+    because that is the thing the previous version guessed at.
+    """
+    out, quote = [], ""
+    for line in script.splitlines(keepends=True):
+        kept = []
+        for index, char in enumerate(line):
+            if quote:
+                if char == quote and (index == 0 or line[index - 1] != "\\"):
+                    quote = ""
+            elif char in "\"'":
+                quote = char
+            elif char == "#" and (not kept or kept[-1].isspace()):
+                break
+            kept.append(char)
+        out.append("".join(kept))
+        if not line.endswith("\\\n"):
+            quote = ""
+    return "".join(out)
 _FRAGMENT = re.compile(r"\|\||&&|[;|&]|\n")
+
+
+def _gate_script_problems(script: str, bound: set[str],
+                          label: str) -> list[str]:
+    """PURE. Everything wrong with a gate's shell TEXT.
+
+    ⛔ Extracted because its control had re-implemented it. Blind review
+    weakened the production copy four ways — `operators = []`, the strangers
+    branch made dead, and so on — and the sample table stayed green every
+    time, because the table was exercising a second copy of the same idea
+    rather than this code. A control that does not call the thing it guards
+    certifies it as watched without watching it. Same split, and the same
+    reason, as `_matrix_violations` and `_unwatched_ledger_problems`.
+    """
+    problems: list[str] = []
+    stripped = _strip_comments(script)
+
+    redirects = sorted({
+        target for target in _REDIRECT.findall(script)
+        if not (target.startswith("&") or _redirect_word_is_bound(target, bound))
+    })
+    if redirects:
+        problems.append(
+            f"{label}: the gate script redirects to/from {redirects}. A "
+            "redirection reads or writes the filesystem without naming a "
+            "variable, running a command or using a test operator — the "
+            "channel that got past every other check here — and both passes "
+            "of the differential see the same filesystem, so it cannot see "
+            "this either. ⚠️ A READ redirection is the dangerous half: the "
+            "gate job has no `actions/checkout`, so `: < README.md || exit 0` "
+            "succeeds under the harness (which runs in a checkout) and fails "
+            "on CI (which does not), making the gate exit 0 for every input. "
+            "A verdict may only redirect to an expansion of one of its own "
+            "bindings.")
+
+    operators = sorted(set(_TEST_OPERATORS.findall(stripped))
+                       - _ALLOWED_TEST_OPERATORS)
+    if operators:
+        problems.append(
+            f"{label}: the gate script uses the test operator(s) {operators}. "
+            "`-v` reads any environment variable without a `$`, and the file "
+            "tests read a filesystem this module does not reproduce — both "
+            "are channels the exit-code differential cannot see, because they "
+            "answer the same way in both runs. A verdict compares the results "
+            "it was given; it does not probe the machine.")
+
+    strangers = sorted(_command_words(stripped) - _GATE_COMMANDS)
+    if strangers:
+        problems.append(
+            f"{label}: the gate script runs {strangers}. ⛔ This is an "
+            "accept-set over COMMANDS, and it is the third fix for the same "
+            "premise: first `$VAR` spellings, then command substitution, then "
+            "`printenv GITHUB_RUN_ATTEMPT | grep -q '^[2-9]'` — no `$` "
+            "anywhere, both earlier defences blind, and the gate returns 0 on "
+            "every workflow re-run with a failing leg. Enumerating the ways "
+            "to reach runner state has no last member; the set of commands a "
+            "verdict needs does.")
+
+    swallowed = _EXIT_SWALLOW.findall(script)
+    if swallowed:
+        problems.append(
+            f"{label}: the gate script swallows an exit status ({swallowed}). "
+            "`|| true`, `|| :` and `set +e` are the shell spellings of "
+            "`continue-on-error`, which this module bans elsewhere — banning "
+            "one and not the other protects the spelling rather than the "
+            "property.")
+
+    if _COMMAND_SUB.search(script):
+        problems.append(
+            f"{label}: the gate script uses command substitution. It can then "
+            "read runner state that appears in no `env:` block, which is "
+            "exactly what the free-variable check exists to prevent.")
+
+    free = sorted({
+        name for name in _shell_reads(script)
+        if name not in bound and name not in _script_local_names(script)
+    })
+    if free:
+        problems.append(
+            f"{label}: the script reads {free}, which the step neither binds "
+            "in `env:` nor supplies itself. The matrix leaves those empty "
+            "while the runner supplies a value, so that input decides the "
+            "required check and nothing tests it.\n"
+            "⛔ `NAME=\"${NAME:-…}\"` does NOT answer this — it still reads "
+            "the runner's value. Nor does adding the name to the step's "
+            "`env:`: this module only varies the `needs.*` bindings it "
+            "models. The two real answers are to teach "
+            "`_simulated_runner_vars` to reproduce the value, or to move "
+            "whatever needs it into a job that owns no verdict.")
+    return problems
 
 
 def _redirect_word_is_bound(target: str, bound: set[str]) -> bool:
@@ -1327,7 +1445,7 @@ def _command_words(script: str) -> set[str]:
     holes happened.
     """
     words: set[str] = set()
-    for fragment in _FRAGMENT.split(_LINE_COMMENT.sub("", script)):
+    for fragment in _FRAGMENT.split(_strip_comments(script)):
         tokens = fragment.split()
         # ⛔ `for X in …` and `while …` are NOT the same shape, and treating
         # them as one skipped a whole fragment: `while printenv CI; do exit 0;
@@ -1497,59 +1615,8 @@ def test_gate_scripts_are_executable_the_way_github_runs_them() -> None:
                 "PowerShell, where this script is not even valid — so the "
                 "whole exit-code matrix would be asserting about a shell that "
                 "never runs it.")
-        redirects = sorted({
-            target for target in _REDIRECT.findall(gate.script)
-            if not (target.startswith("&")
-                    or _redirect_word_is_bound(target, bound_for_redirects))
-        })
-        if redirects:
-            problems.append(
-                f"{gate}: the gate script redirects to/from {redirects}. A "
-                "redirection reads or writes the filesystem without naming a "
-                "variable, running a command or using a test operator — the "
-                "channel that got past every other check here — and both "
-                "passes of the differential see the same filesystem, so it "
-                "cannot see this either. A verdict may only redirect to an "
-                "expansion of one of its own bindings (today: "
-                "`>> \"$GITHUB_STEP_SUMMARY\"`).")
-        operators = sorted(
-            set(_TEST_OPERATORS.findall(_LINE_COMMENT.sub("", gate.script)))
-            - _ALLOWED_TEST_OPERATORS)
-        if operators:
-            problems.append(
-                f"{gate}: the gate script uses the test operator(s) "
-                f"{operators}. `-v` reads any environment variable without a "
-                "`$`, and the file tests read a filesystem this module does "
-                "not reproduce — both are channels the exit-code differential "
-                "cannot see, because they answer the same way in both runs. "
-                "A verdict compares the results it was given; it does not "
-                "probe the machine.")
-        strangers = sorted(_command_words(gate.script) - _GATE_COMMANDS)
-        if strangers:
-            problems.append(
-                f"{gate}: the gate script runs {strangers}. ⛔ This is an "
-                "accept-set over COMMANDS, and it is the third fix for the "
-                "same premise: first `$VAR` spellings, then command "
-                "substitution, then `printenv GITHUB_RUN_ATTEMPT | grep -q "
-                "'^[2-9]'` — no `$` anywhere, both earlier defences blind, and "
-                "the gate returns 0 on every workflow re-run with a failing "
-                "leg. Enumerating the ways to reach runner state has no last "
-                "member; the set of commands a verdict needs does. If the gate "
-                "genuinely needs another command, add it here and say why it "
-                "cannot read anything the matrix does not vary.")
-        swallowed = _EXIT_SWALLOW.findall(gate.script)
-        if swallowed:
-            problems.append(
-                f"{gate}: the gate script swallows an exit status "
-                f"({swallowed}). `|| true`, `|| :` and `set +e` are the shell "
-                "spellings of `continue-on-error`, which this module bans "
-                "three lines up — banning one and not the other protects the "
-                "spelling rather than the property.")
-        if _COMMAND_SUB.search(gate.script):
-            problems.append(
-                f"{gate}: the gate script uses command substitution. It can "
-                "then read runner state that appears in no `env:` block, which "
-                "is exactly what the free-variable check exists to prevent.")
+        problems += _gate_script_problems(
+            gate.script, bound_for_redirects, str(gate))
         if "${{" in gate.script:
             problems.append(
                 f"{gate}: the gate script interpolates `${{{{ }}}}` directly "
@@ -2222,7 +2289,14 @@ def test_the_environment_differential_can_actually_fail(tmp_path: Path) -> None:
     problems = _matrix_violations(gate, _run_matrix(peeking, gate))
     assert any("CHANGES with the environment" in line for line in problems), (
         "a gate whose verdict flips when runner variables are present produced "
-        "no environment finding — the second pass is not varying anything.")
+        "no environment finding — the second pass is not varying the "
+        "ENVIRONMENT.\n"
+        "⚠️ Scope, because an earlier version of this message claimed more "
+        "than it checks: this control probes `$CI` only, so it holds the env "
+        "half. The second script PATH is varied too, but both paths are temp "
+        "directories, so a probe for a literal `/home/runner` prefix answers "
+        "the same way twice — that side is held by `_shell_reads` seeing "
+        "`$0`, not by this differential.")
 
     # And the other direction: the reference gate must NOT trip it, or every
     # gate reds and the mechanism gets deleted for noise.
@@ -2247,6 +2321,11 @@ _SCRIPT_SAMPLES = (
      "command substitution"),
     ('ZQ_X="${ZQ_X:-push}"\nif [ "$ZQ_X" = "y" ]; then exit 0; fi\n', True,
      "self-referencing assignment launders a runner variable"),
+    (': < README.md || exit 0\n', True,
+     "READ redirection: succeeds in a checkout, fails in the gate job"),
+    ('echo "x #"; if printenv CI; then exit 0; fi\n', True,
+     "a # inside quotes used to blind the comment-stripping scanners"),
+    ('echo "x #"; [ -v CI ] && exit 0\n', True, "same, hiding an operator"),
     ('if : 2>/dev/null < /home/runner/.bashrc; then exit 0; fi\n', True,
      "redirection probes the filesystem with no $, command or operator"),
     ('echo hi > /tmp/zq\n', True, "redirect to a literal path"),
@@ -2286,17 +2365,7 @@ def test_the_script_level_checks_reject_what_defeated_them(
 
     problems = []
     for script, must_reject, why in _SCRIPT_SAMPLES:
-        rejected = bool(
-            (set(_TEST_OPERATORS.findall(_LINE_COMMENT.sub("", script)))
-             - _ALLOWED_TEST_OPERATORS)
-            or (_command_words(script) - _GATE_COMMANDS)
-            or _COMMAND_SUB.search(script)
-            or _EXIT_SWALLOW.search(script)
-            or ({n for n in _shell_reads(script)
-                 if n not in bound and n not in _script_local_names(script)})
-            or ({target for target in _REDIRECT.findall(script)
-                 if not (target.startswith("&")
-                         or _redirect_word_is_bound(target, bound))}))
+        rejected = bool(_gate_script_problems(script, bound, "zq"))
         if rejected != must_reject:
             problems.append(
                 f"{'accepted' if must_reject else 'rejected'} "
