@@ -105,6 +105,15 @@ _BENCH_RE = re.compile(
     r"^(Benchmark[A-Za-z0-9_]+)-\d+\s+\d+\s+(\d+(?:\.\d+)?)\s+ns/op\b"
 )
 
+# Suite header emitted by `go test -bench`, e.g.
+#   "cpu: AMD EPYC 7763 64-Core Processor"
+# `bench_filter.go` has always RETAINED this line in the artifact (see its
+# `retainPrefixes`); until #1396 nothing ever read it. The nightly runner pool is
+# heterogeneous (Intel Xeon / AMD EPYC 7763 / AMD EPYC 9V74 observed in a single
+# 30-night window, with IO/CPU ratios 11.8 / 19.1 / 25.3 — completely separated),
+# so this string is the stratification key for the trend watchdog.
+_CPU_RE = re.compile(r"^cpu:\s*(\S.*?)\s*$")
+
 
 @dataclass
 class RunSample:
@@ -290,6 +299,26 @@ def parse_bench_file(path: Path, run_id: int) -> Iterable[RunSample]:
                 yield RunSample(run_id=run_id, bench=m.group(1), ns_per_op=float(m.group(2)))
 
 
+def parse_cpu_model(path: Path) -> str | None:
+    """Return the runner's CPU model string from the artifact's `cpu:` header.
+
+    The RAW string is the classification key — deliberately NOT normalised into
+    "Xeon" / "EPYC" families. Two Xeon SKUs (e.g. `Platinum 8370C` vs
+    `PLATINUM 8573C`) are different machines with different latency levels;
+    folding them together would re-create the very cross-host anchor that made
+    #1396 a guaranteed false positive. Exact string equality, or nothing.
+
+    Returns None when the artifact predates the header being read (legacy runs)
+    or the line is absent — callers must degrade loudly, never silently.
+    """
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            m = _CPU_RE.match(line)
+            if m:
+                return m.group(1)
+    return None
+
+
 def aggregate(samples: Iterable[RunSample]) -> dict[str, BenchStats]:
     by_bench: dict[str, BenchStats] = {}
     for s in samples:
@@ -398,6 +427,29 @@ def render_markdown_table(
 # lone bad night. The floor is the max of a fixed minimum and a multiple of the
 # control canary's own night-to-night CV — movement smaller than the runner's
 # intrinsic noise (as measured by BenchmarkControlCanaryCPU) is never alerted.
+#
+# Three things about the POPULATION and the CLOSED LOOP were wrong until #1396:
+#
+#   1. Host class (B) — GitHub's hosted runners are heterogeneous, and the `cpu:`
+#      header that says which machine ran was parsed by nobody. It is now read,
+#      carried on NightRecord, and disclosed in the issue body so a false alarm
+#      is a one-minute read instead of a re-download of 14 artifacts.
+#   2. Stratification + three states (C) — both windows are drawn from tonight's
+#      host class only, and a night that cannot be judged is INCONCLUSIVE, which
+#      is neither "regressed" nor "recovered". Previously `findings == []` closed
+#      every open issue, so a night with no evaluable data announced recovery.
+#   3. Frozen anchor (D) — the sliding anchor is right for DETECTION and fatal
+#      for RECOVERY: a permanent regression ages into the settled window, the
+#      anchor rises to meet it, the finding vanishes, and the issue self-closed
+#      claiming perf "has returned below the floor". Replaying the real 30-night
+#      series with a +20% permanent step: 184 of 259 issues (71%) closed
+#      themselves while still fully regressed, median 6 nights after filing — and
+#      that is a LOWER bound, since a self-close falling past the end of the
+#      series counts here as "never closed". Closing now requires beating the
+#      anchor frozen the night the bench first fired, on the same host class;
+#      the same replay then yields 0 of 236.
+#
+# The FIRE arithmetic itself is untouched by all three.
 # ─────────────────────────────────────────────────────────────────────────────
 
 CANARY_BENCH = "BenchmarkControlCanaryCPU"
@@ -408,14 +460,37 @@ PERF_TREND_LABEL = "perf-trend"
 # finding reappears or the issue closes.
 RECOVERING_LABEL = "perf-trend:recovering"
 
+# Three-state verdict for one night (see `analyze_trend`). "no findings" is NOT
+# one state but two, and conflating them is what let a night on which NOTHING
+# could be evaluated close a still-open regression issue.
+STATUS_FINDINGS = "FINDINGS"          # ≥1 bench above its floor → open/update
+STATUS_CLEAR = "CLEAR"                # ≥1 bench evaluated, none above floor
+STATUS_INCONCLUSIVE = "INCONCLUSIVE"  # nothing evaluable → never fire, NEVER close
+
+# Same-class settled nights required before a bench may be judged at all, once
+# host-class stratification is active. Empirically calibrated, not guessed: on
+# the real 30-night series a 2-night same-class anchor still produced 19
+# false-positive bench-nights (the whole 2026-08-12 / #1396 window fires again,
+# because a 2-sample median on a 12.7–19.0%-CV bench is not a central tendency);
+# at 3 the same replay yields ZERO false positives, for 0.4 pp of detection power
+# at δ=20% (83.5% → 83.1%). The unstratified fallback keeps its historical
+# threshold of 2 so legacy behaviour is bit-for-bit unchanged.
+MIN_SETTLED_SAME_CLASS = 3
+
 
 @dataclass
 class NightRecord:
-    """One nightly run reduced to a per-bench median ns/op."""
+    """One nightly run reduced to a per-bench median ns/op.
+
+    ``cpu_model`` is the runner's raw `cpu:` string (None for legacy artifacts /
+    parse failure). It is the stratification key: nights measured on a different
+    CPU model are a different population, not a trend.
+    """
 
     run_id: int
     created_at: str
     medians: dict[str, float] = field(default_factory=dict)
+    cpu_model: str | None = None
 
 
 def _cv(values: list[float]) -> float:
@@ -427,6 +502,19 @@ def _cv(values: list[float]) -> float:
     if mean == 0:
         return 0.0
     return statistics.stdev(vals) / mean
+
+
+def _cpu_class_counts(nights: list[NightRecord]) -> dict[str, int]:
+    """How many nights of the window came from each host class.
+
+    ``None`` (unknown class) is reported under the literal key "unknown" so a
+    partially-labelled window is visible rather than silently merged.
+    """
+    counts: dict[str, int] = {}
+    for n in nights:
+        key = n.cpu_model if n.cpu_model is not None else "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 def night_records_from_gh(workflow: str, limit: int, cache_dir: Path) -> list[NightRecord]:
@@ -449,6 +537,7 @@ def night_records_from_gh(workflow: str, limit: int, cache_dir: Path) -> list[Ni
             run_id=run_id,
             created_at=run["createdAt"],
             medians={b: statistics.median(v) for b, v in by_bench.items()},
+            cpu_model=parse_cpu_model(txt),
         ))
     return nights
 
@@ -456,12 +545,17 @@ def night_records_from_gh(workflow: str, limit: int, cache_dir: Path) -> list[Ni
 def night_records_from_fixture(path: Path) -> list[NightRecord]:
     """Load pre-reduced nightly medians from a JSON fixture (offline testing).
 
-    Format: a JSON list of {"run_id", "createdAt", "benches": {name: median_ns}}.
+    Format: a JSON list of
+    {"run_id", "createdAt", "benches": {name: median_ns}, "cpu_model": str?}.
+    ``cpu_model`` is optional — absent means None, i.e. the unstratified
+    fallback (same as a legacy artifact with no `cpu:` header).
     """
     data = json.loads(path.read_text(encoding="utf-8"))
     nights = [
         NightRecord(run_id=int(d["run_id"]), created_at=d["createdAt"],
-                    medians={k: float(v) for k, v in d["benches"].items()})
+                    medians={k: float(v) for k, v in d["benches"].items()},
+                    cpu_model=(str(d["cpu_model"])
+                               if d.get("cpu_model") is not None else None))
         for d in data
     ]
     nights.sort(key=lambda n: n.created_at, reverse=True)
@@ -489,9 +583,33 @@ def analyze_trend(
     """Apply R1 (sustained) + R2 (creep) to newest-first nightly medians.
 
     Returns (findings, meta). `meta` carries the computed floors + canary CV for
-    transparency in the rendered issue body.
+    transparency in the rendered issue body, plus the host-class stratification
+    facts and the three-state ``status`` (see STATUS_* below).
+
+    Host-class stratification (#1396)
+    ---------------------------------
+    GitHub's hosted runner pool is heterogeneous. Over one real 30-night window
+    the same workflow landed on Intel Xeon 8370C, Xeon 8573C, AMD EPYC 7763 and
+    AMD EPYC 9V74 — with IO/CPU ratios of 11.8 / 19.1 / 25.3, i.e. completely
+    separated populations. A "sliding anchor" built from a mixed-host settled
+    window therefore compares CPUs, not commits: it fired on 3 benches whose real
+    night-to-night CV *within* a host class was 12.7–19.0%, while the sustained
+    floor was pinned at 10% by ``CANARY_FLOOR_CAP`` — a guaranteed, repeating
+    false positive that no threshold tweak can fix.
+
+    So BOTH windows are drawn from tonight's host class only: `recent` = the
+    newest ``recent_k`` same-class nights, `baseline` = the same-class nights
+    behind them. The *fire* arithmetic below is byte-for-byte unchanged; only the
+    population it runs on is corrected.
     """
-    canary_series = [n.medians[CANARY_BENCH] for n in nights if CANARY_BENCH in n.medians]
+    today_cpu = nights[0].cpu_model if nights else None
+    stratified = today_cpu is not None
+    # Unknown host class (legacy artifact / `cpu:` parse failure) → fall back to
+    # the historical unstratified behaviour, and say so loudly in the body.
+    series = [n for n in nights if n.cpu_model == today_cpu] if stratified else list(nights)
+    min_settled = MIN_SETTLED_SAME_CLASS if stratified else 2
+
+    canary_series = [n.medians[CANARY_BENCH] for n in series if CANARY_BENCH in n.medians]
     canary_cv = _cv(canary_series)
     # Floors as fractions. The canary raises the floor above the fixed minimum so
     # we never alert below the runner's own measured noise — but its contribution
@@ -512,21 +630,26 @@ def analyze_trend(
     creep_floor = max(creep_floor_pct / 100.0, creep_canary_contrib)
 
     findings: list[TrendFinding] = []
-    benches = {b for n in nights for b in n.medians} - {CANARY_BENCH}
+    inconclusive: list[str] = []
+    evaluated: list[str] = []
+    benches = {b for n in series for b in n.medians} - {CANARY_BENCH}
     for bench in sorted(benches):
         # Align to CALENDAR nights (newest-first), NOT "nights that happen to
         # contain this bench". Positional slicing of a gap-filtered series would
         # let a bench that STOPPED reporting — the classic symptom of a perf
         # timeout/crash — collapse so an old night masquerades as "today" and a
         # real spike hides in the baseline window. Require the bench present in
-        # ALL recent_k newest nights (so `today` is genuinely tonight) and in ≥2
-        # older nights (for a settled anchor).
-        recent = [n.medians.get(bench) for n in nights[:recent_k]]
-        if any(v is None for v in recent):
+        # ALL recent_k newest same-class nights (so `today` is genuinely tonight)
+        # and in ≥ min_settled older same-class nights (for a settled anchor).
+        recent = [n.medians.get(bench) for n in series[:recent_k]]
+        if len(recent) < recent_k or any(v is None for v in recent):
+            inconclusive.append(bench)
             continue
-        baseline_vals = [n.medians[bench] for n in nights[recent_k:] if bench in n.medians]
-        if len(baseline_vals) < 2:
+        baseline_vals = [n.medians[bench] for n in series[recent_k:] if bench in n.medians]
+        if len(baseline_vals) < min_settled:
+            inconclusive.append(bench)
             continue
+        evaluated.append(bench)
         anchor = statistics.median(baseline_vals)
         today = recent[0]
         recent_typical = statistics.median(recent)
@@ -553,12 +676,31 @@ def analyze_trend(
                 pct_vs_anchor=(today / anchor - 1) * 100 if anchor else float("nan"),
                 pct_typical_vs_anchor=(recent_typical / anchor - 1) * 100 if anchor else float("nan"),
             ))
+    # Three-state verdict. The critical distinction is CLEAR vs INCONCLUSIVE:
+    # "no findings" used to mean "recovered → close every open issue", which is a
+    # lie whenever nothing could be evaluated at all (too few same-class nights).
+    # Only CLEAR — at least one bench actually measured, none above its floor —
+    # may ever close an issue.
+    if findings:
+        status = STATUS_FINDINGS
+    elif evaluated:
+        status = STATUS_CLEAR
+    else:
+        status = STATUS_INCONCLUSIVE
     meta = {
         "canary_cv": canary_cv,
         "floor_pct": floor * 100,
         "creep_floor_pct": creep_floor * 100,
         "n_nights": len(nights),
         "recent_k": recent_k,
+        "status": status,
+        "stratified": stratified,
+        "today_cpu_model": today_cpu,
+        "cpu_class_counts": _cpu_class_counts(nights),
+        "n_class_nights": len(series),
+        "min_settled": min_settled,
+        "evaluated_benches": sorted(evaluated),
+        "inconclusive_benches": sorted(inconclusive),
     }
     return findings, meta
 
@@ -571,7 +713,41 @@ def _signed_pct(pct: float) -> str:
     return f"{pct:+.1f}%"
 
 
-def render_trend_issue_body(findings: list[TrendFinding], meta: dict) -> str:
+def _render_host_class_lines(meta: dict) -> list[str]:
+    """The #1396 one-minute triage block: which machine ran tonight, and what the
+    window is actually made of. Without this an operator cannot tell a real
+    regression from a runner-pool reshuffle without re-downloading 14 artifacts."""
+    counts = meta.get("cpu_class_counts") or {}
+    comp = ", ".join(
+        f"`{model}` ×{n}"
+        for model, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ) or "—"
+    host = meta.get("today_cpu_model")
+    if meta.get("stratified") and host:
+        return [
+            f"- Host class tonight: **`{host}`** — "
+            f"**{meta.get('n_class_nights', '?')}** of the "
+            f"**{meta.get('n_nights', '?')}** window nights ran on it. "
+            f"Window composition: {comp}.",
+            f"- Same-class stratification: **ON** — both the recent window and the anchor "
+            f"use only `{host}` nights (min {meta.get('min_settled', MIN_SETTLED_SAME_CLASS)} "
+            "same-class settled nights, else the bench is INCONCLUSIVE and never fires). "
+            "A mixed-host anchor compares CPUs, not commits (#1396).",
+        ]
+    return [
+        "- Host class tonight: **unknown** — the artifact carries no `cpu:` header, or it "
+        f"failed to parse. Window composition: {comp}.",
+        "- Same-class stratification: **OFF — this verdict is NOT stratified.** The anchor "
+        "may mix runner hardware, so a finding here can be a host-class artefact rather than "
+        "a real regression. Check the `cpu:` line of the linked runs before acting (#1396).",
+    ]
+
+
+def render_trend_issue_body(findings: list[TrendFinding], meta: dict,
+                            frozen: dict[str, tuple[float, str | None]] | None = None) -> str:
+    """Render the issue body. ``frozen`` carries the anchors already frozen by a
+    previous night (parsed from the open issue's marker) so they are preserved
+    verbatim — the frozen anchor must never re-baseline onto the drifted level."""
     lines = [
         "## Nightly bench trend regression",
         "",
@@ -585,6 +761,15 @@ def render_trend_issue_body(findings: list[TrendFinding], meta: dict) -> str:
         f"- Sustained rule = all {meta['recent_k']} most-recent nights above the anchored "
         "(settled-window-median) baseline; creep rule = the recent-window MEDIAN above that "
         "same anchor (catches a step-change that a single noisy night hides from `sustained`).",
+    ]
+    lines += _render_host_class_lines(meta)
+    skipped = meta.get("inconclusive_benches") or []
+    if skipped:
+        lines.append(
+            f"- INCONCLUSIVE (not judged tonight — too few same-class nights): "
+            + ", ".join(f"`{b}`" for b in skipped)
+        )
+    lines += [
         "",
         "| Bench | Rule | Today | today vs anchor | recent-median vs anchor |",
         "|---|---|---:|---:|---:|",
@@ -598,11 +783,14 @@ def render_trend_issue_body(findings: list[TrendFinding], meta: dict) -> str:
         "",
         "_Auto-filed by `analyze_bench_history.py --trend-watch`. The watchdog updates this "
         "issue **in place** each night (no comment spam) and only comments when the set of "
-        "flagged benchmarks changes; it auto-closes when nightly perf returns below the floor "
-        "(closed loop). Single-night blips are filtered by the multi-night window; movement "
-        "below the canary noise floor is ignored._",
+        "flagged benchmarks changes; it auto-closes only when tonight's numbers fall back "
+        "below the FROZEN baseline captured when the issue was filed, measured on the same "
+        "host class (closed loop). Single-night blips are filtered by the multi-night window; "
+        "movement below the canary noise floor is ignored._",
         "",
-        _render_state_marker(_finding_state(findings)),
+        _render_state_marker(
+            _frozen_state(findings, frozen or {}, meta.get("today_cpu_model"))
+        ),
     ]
     return "\n".join(lines)
 
@@ -614,11 +802,21 @@ def render_trend_issue_body(findings: list[TrendFinding], meta: dict) -> str:
 # a real transition — killing the daily comment spam that made #702 unreadable.
 # Greedy within the marker's own line (no DOTALL) so a nested JSON array
 # `[["x","y"]]` is captured whole, up to the last `]` before `-->`. Greedy is
-# safe here because the payload is json.dumps of [[bench, kind]] where bench is
-# constrained by _BENCH_RE to [A-Za-z0-9_] and kind ∈ {creep, sustained} — so it
-# can never contain `-->`, an extra quote, or an unbalanced bracket that would let
-# the match overrun (a free-form payload would need base64; this one doesn't).
-_STATE_MARKER_RE = re.compile(r"<!--\s*perf-trend-state v1\s*(\[.*\])\s*-->")
+# safe here because the payload is json.dumps of rows whose free-form component
+# is only the runner's `cpu:` string (e.g. "AMD EPYC 7763 64-Core Processor") —
+# it contains no `-->`, quote or unbalanced bracket that could let the match
+# overrun, and any payload that somehow did would fail json.loads and degrade to
+# "no prior state" (silent, never a false recovery).
+#
+# v1 → v2 (#1396). v1 rows are [bench, kind]; v2 rows are
+# [bench, kind, frozen_anchor_ns, frozen_cpu_model] — the anchor that was in
+# force the FIRST night the bench fired, plus the host class it was measured on.
+# v1 markers on already-open issues MUST keep parsing (migration), and do: the
+# version is not pinned in the regex and row length is checked per row. A v1 row
+# simply carries no frozen anchor, so that bench keeps the pre-#1396 close
+# behaviour instead of being wedged open forever.
+_STATE_MARKER_RE = re.compile(r"<!--\s*perf-trend-state v\d+\s*(\[.*\])\s*-->")
+_STATE_MARKER_VERSION = "v2"
 
 
 def _finding_state(findings: list[TrendFinding]) -> list[list[str]]:
@@ -626,14 +824,32 @@ def _finding_state(findings: list[TrendFinding]) -> list[list[str]]:
     return sorted([f.bench, f.kind] for f in findings)
 
 
-def _render_state_marker(state: list[list[str]]) -> str:
-    return f"<!-- perf-trend-state v1 {json.dumps(state, separators=(',', ':'))} -->"
+def _frozen_state(findings: list[TrendFinding],
+                  prior_frozen: dict[str, tuple[float, str | None]],
+                  today_cpu: str | None) -> list[list]:
+    """v2 rows: [bench, kind, frozen_anchor_ns, frozen_cpu_model].
+
+    A bench already present in ``prior_frozen`` KEEPS its original anchor — that
+    is the whole point. Re-freezing onto tonight's sliding anchor would re-create
+    the bug this fixes: the anchor creeps up to the regressed level, the finding
+    silently clears, and the issue closes itself claiming recovery.
+    """
+    rows: list[list] = []
+    for f in findings:
+        anchor, cpu = prior_frozen.get(f.bench, (None, None))
+        if anchor is None:
+            anchor, cpu = f.anchor_ns, today_cpu
+        rows.append([f.bench, f.kind, anchor, cpu])
+    return sorted(rows, key=lambda r: (r[0], r[1]))
 
 
-def _parse_state_marker(body: str | None) -> list[list[str]] | None:
-    """Recover the prior state from an issue body, or None if absent/unparseable
-    (a legacy issue filed before this marker existed → caller treats as no-change
-    so the migration run is silent)."""
+def _render_state_marker(state: list[list]) -> str:
+    return (f"<!-- perf-trend-state {_STATE_MARKER_VERSION} "
+            f"{json.dumps(state, separators=(',', ':'))} -->")
+
+
+def _state_marker_rows(body: str | None) -> list | None:
+    """Raw marker rows (v1 2-tuples or v2 4-tuples), or None if absent/garbage."""
     if not body:
         return None
     m = _STATE_MARKER_RE.search(body)
@@ -641,9 +857,129 @@ def _parse_state_marker(body: str | None) -> list[list[str]] | None:
         return None
     try:
         data = json.loads(m.group(1))
-        return sorted([str(b), str(k)] for b, k in data)
-    except (ValueError, TypeError):
+    except ValueError:
         return None
+    if not isinstance(data, list):
+        return None
+    for row in data:
+        if not isinstance(row, list) or len(row) < 2:
+            return None
+    return data
+
+
+def _parse_state_marker(body: str | None) -> list[list[str]] | None:
+    """Recover the prior flagged-set from an issue body, or None if
+    absent/unparseable (a legacy issue filed before this marker existed → caller
+    treats as no-change so the migration run is silent).
+
+    Version-agnostic on purpose: only [bench, kind] is needed for the transition
+    comment, and both v1 and v2 rows start with exactly that pair.
+    """
+    rows = _state_marker_rows(body)
+    if rows is None:
+        return None
+    return sorted([str(r[0]), str(r[1])] for r in rows)
+
+
+def _parse_frozen_anchors(body: str | None) -> dict[str, tuple[float, str | None]]:
+    """bench → (frozen_anchor_ns, frozen_cpu_model) from a v2 marker.
+
+    Empty dict for a v1 / absent / unparseable marker — i.e. "no frozen baseline
+    is known", which the close path reads as "fall back to the pre-#1396
+    behaviour for this issue" rather than "wedge it open".
+    """
+    rows = _state_marker_rows(body) or []
+    out: dict[str, tuple[float, str | None]] = {}
+    for row in rows:
+        if len(row) < 4:
+            continue
+        try:
+            anchor = float(row[2])
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(anchor) or anchor <= 0:
+            continue
+        cpu = str(row[3]) if row[3] is not None else None
+        out[str(row[0])] = (anchor, cpu)
+    return out
+
+
+def _recovery_blockers(frozen: dict[str, tuple[float, str | None]],
+                       tonight: dict[str, float],
+                       today_cpu: str | None,
+                       floor: float) -> list[str]:
+    """Reasons NOT to close a perf-trend issue. Empty list = safe to close.
+
+    Why a frozen baseline is required (#1396, the Critical half)
+    -----------------------------------------------------------
+    The fire path anchors on the SLIDING settled-window median, which is correct
+    for detection but fatal for recovery: once a permanent regression has aged
+    into the settled window, the anchor rises to meet it, the finding evaporates,
+    and the watchdog closed the issue announcing "perf has returned below the
+    floor". Replaying the real 30-night series with a +20% permanent step, that
+    happened to 184 of 259 opened issues (71%, median 6 nights, and a lower bound
+    — a self-close past the end of the series counts as "never closed"); with
+    this check the same replay closes 0 of 236. Recovery is judged ONLY against the
+    anchor frozen when the bench first fired, and only against a night measured
+    on the same host class — cross-class numbers are not comparable, so they are
+    not evidence of anything.
+    """
+    blockers: list[str] = []
+    for bench, (anchor, cpu) in sorted(frozen.items()):
+        if cpu is not None and cpu != today_cpu:
+            blockers.append(
+                f"`{bench}`: frozen baseline was measured on `{cpu}`, tonight ran on "
+                f"`{today_cpu or 'unknown'}` — not comparable"
+            )
+            continue
+        value = tonight.get(bench)
+        if value is None:
+            blockers.append(f"`{bench}`: absent from tonight's run — nothing to compare")
+            continue
+        if value >= anchor * (1 + floor):
+            blockers.append(
+                f"`{bench}`: {format_ns(value)} still ≥ frozen baseline "
+                f"{format_ns(anchor)} × (1 + {floor:.1%})"
+            )
+    return blockers
+
+
+def _close_comment(frozen: dict[str, tuple[float, str | None]],
+                   tonight: dict[str, float],
+                   today_cpu: str | None,
+                   floor: float) -> str:
+    """The auto-close comment. Deliberately narrow: it may only claim what the
+    watchdog actually measured.
+
+    The old text — "Nightly perf has returned below the floor across the recent
+    window" — was false in the common case. "The floor" was the SLIDING anchor,
+    which by then had drifted up onto the regressed level, so the sentence
+    asserted a recovery that never happened. What is now said instead is exactly
+    what was compared: these benchmarks, against the baseline frozen when the
+    issue was filed, on this host class.
+    """
+    if not frozen:
+        # v1 / legacy marker: no frozen baseline exists, so only the weaker
+        # sliding-anchor statement is available — and it is labelled as such.
+        return (
+            "✅ Auto-closing (closed loop). This issue predates the frozen-baseline marker "
+            "(#1396), so recovery could only be judged against the *sliding* settled-window "
+            "anchor: no benchmark is currently above its floor. That anchor drifts with the "
+            "data, so this is weaker evidence than a frozen-baseline close. A new issue is "
+            "filed if it regresses again."
+        )
+    detail = ", ".join(
+        f"`{b}` {format_ns(tonight[b])} < {format_ns(a)} × (1 + {floor:.1%})"
+        for b, (a, _c) in sorted(frozen.items()) if b in tonight
+    )
+    return (
+        "✅ Auto-closing (closed loop). Tonight's medians are back below the **frozen "
+        "baseline** captured when this issue was filed, measured on the same host class "
+        f"(`{today_cpu or 'unknown'}`): {detail}.\n\n"
+        "_Scope: this compares those benchmarks against that frozen baseline. It is not a "
+        "claim about any other benchmark, host class, or the overall health of nightly perf. "
+        "A new issue is filed if it regresses again._"
+    )
 
 
 def _is_recovering(findings: list[TrendFinding]) -> bool:
@@ -769,7 +1105,12 @@ def run_trend_watch(args) -> int:
             open_issues = _list_open_trend_issues() if gh_available else []
 
         if findings:
-            body = render_trend_issue_body(findings, meta)
+            # Frozen anchors are carried over from the OPEN issue's marker so the
+            # baseline this regression will eventually be judged against is the
+            # one in force the night it was first filed — never tonight's drifted
+            # sliding anchor.
+            frozen = _parse_frozen_anchors(open_issues[0].get("body")) if open_issues else {}
+            body = render_trend_issue_body(findings, meta, frozen=frozen)
             print(body)
             current_state = _finding_state(findings)
             if open_issues:
@@ -854,12 +1195,39 @@ def run_trend_watch(args) -> int:
                         _gh_write(create)
             return EXIT_OK
 
-        # No regression → recovered/closed-loop. Close EVERY open perf-trend issue
-        # (not just [0]) so stragglers never linger, and CLOSE BEFORE commenting so
-        # a transient comment failure can't leave a recovered issue open.
+        # ── No findings. That is TWO different situations, not one. ──────────
+        # INCONCLUSIVE = nothing could be judged tonight (too few same-class
+        # nights). Silence from a detector that never ran is not evidence of
+        # recovery, so it must never fire AND never close.
+        if meta["status"] == STATUS_INCONCLUSIVE:
+            host = meta.get("today_cpu_model") or "unknown"
+            print(f"⚠️  INCONCLUSIVE — nothing evaluable tonight: only "
+                  f"{meta.get('n_class_nights')} of {meta.get('n_nights')} window nights ran "
+                  f"on tonight's host class ({host}); "
+                  f"need ≥ {args.recent_nights} recent + {meta.get('min_settled')} settled "
+                  "same-class nights per bench.")
+            for issue in open_issues:
+                print(f"→ NOT closing perf-trend issue #{issue['number']} — tonight is "
+                      "INCONCLUSIVE, not recovered.", file=sys.stderr)
+            return EXIT_OK
+
+        # CLEAR = benches WERE judged and none is above its floor. Close EVERY
+        # open perf-trend issue (not just [0]) so stragglers never linger, and
+        # CLOSE BEFORE commenting so a transient comment failure can't leave a
+        # recovered issue open — but only for issues whose FROZEN baseline
+        # confirms the recovery.
         print("✅ No sustained nightly bench regression.")
+        floor = meta["floor_pct"] / 100.0
+        tonight = nights[0].medians
+        today_cpu = meta.get("today_cpu_model")
         for issue in open_issues:
             num = issue["number"]
+            frozen = _parse_frozen_anchors(issue.get("body"))
+            blockers = _recovery_blockers(frozen, tonight, today_cpu, floor)
+            if blockers:
+                print(f"→ NOT closing perf-trend issue #{num} — the frozen baseline does not "
+                      "confirm recovery: " + "; ".join(blockers), file=sys.stderr)
+                continue
             print(f"→ {'[dry-run] would close' if args.dry_run else 'closing'} "
                   f"recovered perf-trend issue #{num}", file=sys.stderr)
             cur_labels = [l.get("name") for l in (issue.get("labels") or [])]
@@ -867,6 +1235,7 @@ def run_trend_watch(args) -> int:
             if drop_recovering:
                 print(f"→ {'[dry-run] would ' if args.dry_run else ''}remove stale "
                       f"`{RECOVERING_LABEL}` before closing #{num}", file=sys.stderr)
+            close_comment = _close_comment(frozen, tonight, today_cpu, floor)
             if not args.dry_run and gh_available:
                 # Strip the recovering label first so a closed issue never retains it.
                 if drop_recovering:
@@ -874,8 +1243,7 @@ def run_trend_watch(args) -> int:
                                "--remove-label", RECOVERING_LABEL])
                 _gh_write(["issue", "close", str(num), "--repo", REPO])
                 _gh_write(["issue", "comment", str(num), "--repo", REPO, "--body",
-                           "✅ Nightly perf has returned below the floor across the recent window "
-                           "— auto-closing (closed loop). A new issue is filed if it regresses again."])
+                           close_comment])
         return EXIT_OK
     finally:
         if cache_dir is not None and cleanup:
@@ -916,7 +1284,9 @@ def main() -> int:
                         help="Print intended issue actions without calling gh writes.")
     parser.add_argument("--fixture-json", type=Path, default=None,
                         help="Offline test: read nightly medians from a JSON fixture "
-                             "instead of gh (implies no gh writes).")
+                             "instead of gh (implies no gh writes). Each entry accepts an "
+                             "optional \"cpu_model\" (host class); omitting it exercises the "
+                             "unstratified fallback.")
     parser.add_argument("--fixture-open-issue", type=int, default=None,
                         help="With --fixture-json, simulate a pre-existing open perf-trend "
                              "issue number (tests the update/close closed-loop offline).")
