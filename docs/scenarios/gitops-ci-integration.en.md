@@ -128,12 +128,37 @@ da-tools generate-routes --config-dir conf.d/ \
   -o .output/alertmanager-routes.yaml --validate
 
 # Compute blast radius (which tenants, which metrics affected)
-# In CI, first checkout base branch's conf.d/ to conf.d.base/
+# In CI, first extract the base branch's conf.d/ into conf.d.base/
+#
+# ⚠️ config-diff reports whether anything changed through its EXIT CODE:
+#    0 = no changes, 1 = changes detected, 2 = error. So a bare call fails the
+#    step precisely when the command is **working** (it really found changes) —
+#    and a job like this usually only triggers when conf.d changed, so it fails
+#    every time.
+set +e
 da-tools config-diff --old-dir conf.d.base/ --new-dir conf.d/ \
   --format markdown > .output/blast-radius.md
+rc=$?
+set -e
+if [ "$rc" -gt 1 ]; then
+  echo "config-diff exited $rc (expected 0 or 1)" >&2
+  exit "$rc"
+fi
 ```
 
-The blast-radius.md is automatically posted as a PR comment for quick reviewer assessment.
+Once the step finishes successfully (`rc` of 0 or 1), blast-radius.md is posted
+as a PR comment for quick reviewer assessment.
+
+⚠️ **Whether the workflow `da-tools init` produces already carries this handling
+depends on the image you ran.** `init` pulls `ghcr.io/vencil/da-tools:latest` by
+default, and that tag only moves when the `tools/v*` line is released — this
+page updates the moment it merges, the image does not. **Do not go by a version
+number; look at the artifact**: check whether the `Config diff (blast radius)`
+step in the generated `.github/workflows/dynamic-alerting.yaml` contains
+`set +e` / `rc=$?`. If it does not, add the handling above yourself.
+
+For the full exit-code contract, see
+[GitOps deployment integration](../integration/gitops-deployment.en.md).
 
 ### 2.4 Stage 3: Apply
 

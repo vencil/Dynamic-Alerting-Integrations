@@ -1024,14 +1024,22 @@ def _gen_github_actions(
     # review never appears. Same declaration this platform's own backtest.yaml
     # carries for the same action.
     #
-    # ⛔ SCOPE — this does NOT rescue a pull_request from a FORK. GitHub hard-
-    # locks GITHUB_TOKEN to read-only for fork PRs and `permissions:` cannot
-    # raise it; only `pull_request_target` / `workflow_run` get an elevated
-    # token, and this workflow deliberately uses neither (both run trusted code
-    # against untrusted input). So on a fork PR the comment step still 403s,
-    # exactly as before. A customer whose contributors work from forks needs a
-    # different design, not a wider `permissions:` block — tracked as a known
-    # boundary rather than silently implied to be fixed.
+    # ⛔ SCOPE — on a pull_request from a FORK this block is not enough on its
+    # own, and the reason is a repo SETTING rather than a hard platform lock.
+    # By default a fork PR's GITHUB_TOKEN is read-only no matter what
+    # `permissions:` asks for, so the comment step 403s. The documented
+    # exception is the admin toggle "Send write tokens to workflows from pull
+    # requests" — which lives under the settings for forks of PRIVATE
+    # repositories, i.e. exactly the shape most customers deploy this in. With
+    # that toggle on, this `permissions:` block is what grants the write, so it
+    # is load-bearing in that configuration too.
+    #
+    # We deliberately do NOT use `pull_request_target` / `workflow_run` to buy
+    # the elevated token, because both run trusted code against untrusted input.
+    # So: same-repo branches work as-is; fork PRs need the customer's admin to
+    # make that call knowingly. Stated here rather than silently implied either
+    # way — the previous wording claimed the platform hard-locks this and that
+    # a different design was required, which is not what the docs say.
     #
     # ⛔ The write scope sits on the `generate` job, NOT here. At workflow level
     # every job inherits it, including `apply` — the one carrying
@@ -1084,6 +1092,19 @@ def _gen_github_actions(
           pull-requests: write
         steps:
           - uses: actions/checkout@v4
+            with:
+              # Load-bearing. The blast radius is computed against the PR's
+              # base commit, and checkout's default (fetch-depth: 1) does not
+              # put that object in the clone — the lookup below then fails and
+              # the report silently degrades to "every tenant is new", which
+              # docs/internal/lint-policy.md names as pretending to be
+              # diff-aware. Same value and same reason as this platform's own
+              # config-diff.yaml and blast-radius.yml — but note those reach
+              # for `origin/<base branch>`, which this depth guarantees,
+              # while a PR event's base SHA is only reachable while some
+              # branch still leads to it. The next step reports that case
+              # rather than papering over it.
+              fetch-depth: 0
 
           - name: Prepare output directory
             run: mkdir -p .output
@@ -1098,22 +1119,159 @@ def _gen_github_actions(
                   -o /data/output/alertmanager-routes.yaml \\
                   --validate
 
-          - name: Checkout base branch config for diff
+          - name: Resolve base config snapshot
             if: github.event_name == 'pull_request'
+            env:
+              # Passed through env rather than interpolated into the script, so
+              # the expression cannot become shell syntax. Same shape as this
+              # platform's config-diff.yaml.
+              BASE_SHA: ${{{{ github.event.pull_request.base.sha }}}}
             run: |
-              git show ${{{{ github.event.pull_request.base.sha }}}}:conf.d > /dev/null 2>&1 && \\
-                git archive ${{{{ github.event.pull_request.base.sha }}}} conf.d/ | tar -x -C .output/base/ || \\
-                mkdir -p .output/base/conf.d
+              # Two DIFFERENT conditions used to collapse into a single
+              # `|| mkdir -p` fallback here, and both produced an empty
+              # baseline that exits 0:
+              #   (a) the base commit is absent from the clone -> a fault; the
+              #       comparison is impossible and must not be faked.
+              #   (b) the base commit is present but carried no config
+              #       directory yet -> a genuine first import, where "every
+              #       tenant is new" is the correct answer.
+              # Telling them apart is the whole reason this is two lookups
+              # instead of one `||` chain.
+              # RUNNER_TEMP is a default runner variable, and assignments to
+              # those are ignored, so this should be unreachable on a hosted
+              # runner — it is a guard for anything replaying these steps
+              # elsewhere. Fail loudly rather than fall back:
+              # Measured with it unset: as a normal user the step dies on a
+              # bare `/base.tar: Permission denied` with no ::error:: to
+              # explain it, and as root it SUCCEEDS while writing five stray
+              # files into the filesystem root.
+              : "${{RUNNER_TEMP:?RUNNER_TEMP is not set; this step writes its intermediate files there}}"
+              # Trailing slash matters: `git ls-tree -- conf.d/` lists the
+              # directory's CHILDREN, while `-- conf.d` returns the entry
+              # itself. Reading a type out of the first form yields the types
+              # of the children, so a healthy repository whose CONFIG_DIR was
+              # written the natural way ("a directory, so it ends in /") was
+              # rejected as "a blob, not a directory".
+              config_dir="${{CONFIG_DIR%/}}"
+              mkdir -p .output/base/"$config_dir"
+              if ! git cat-file -e "$BASE_SHA" 2>/dev/null; then
+                echo "::error::base commit $BASE_SHA is not in this clone, so there is nothing to compare against. Two causes: the checkout was narrowed (this workflow sets fetch-depth: 0 — check it is still there), or the base ref was rewritten and that commit no longer exists, which is what a force-push, or re-running an old job whose recorded base commit is gone, looks like."
+                exit 1
+              fi
+              # Read the entry from its PARENT tree rather than asking about
+              # the object at that path. `git cat-file -t "$BASE_SHA:$dir"`
+              # looks up the object the entry POINTS AT, and for a submodule
+              # that is a commit belonging to another repository — absent
+              # here, so it fails, and the fault would be filed as "no config
+              # directory at the base", i.e. a first import. Measured: a
+              # gitlink took the first-import branch and exited 0 with an
+              # empty baseline. `ls-tree` reads the entry itself, so it can
+              # say "commit" without ever resolving it.
+              git ls-tree "$BASE_SHA" -- "$config_dir" > "$RUNNER_TEMP"/entry.txt
+              kind=$(cut -d' ' -f2 "$RUNNER_TEMP"/entry.txt)
+              if [ -z "$kind" ]; then kind=missing; fi
+              if [ "$kind" = tree ]; then
+                # ⛔ Extracted through a scratch index, NOT through
+                # `git archive`. `export-ignore` is an ARCHIVE-ONLY attribute
+                # (git: "won't be added to archive files"), so a
+                # .gitattributes rule covering the config directory makes
+                # `git archive` emit a partial or empty baseline while every
+                # command reports success — and the diff then overstates or
+                # invents changes.
+                #
+                # Three separate attempts to DETECT that after the fact were
+                # each falsified by measurement: a file count disagreed with
+                # `find` over symlinks; a name set disagreed with the escaping
+                # `core.quotePath` applies to non-ASCII, quote and backslash
+                # paths; and "did anything arrive at all" was satisfied by a
+                # stray README while all three tenant files were missing.
+                # Reading the tree into an index and checking it out removes
+                # the failure mode instead of watching for it — no comparison,
+                # nothing to enumerate, and no pipeline to swallow a failure.
+                GIT_INDEX_FILE="$RUNNER_TEMP"/base.idx git read-tree "$BASE_SHA:$config_dir"
+                GIT_INDEX_FILE="$RUNNER_TEMP"/base.idx git checkout-index -a -f --prefix=.output/base/"$config_dir"/
+              elif [ "$kind" = missing ]; then
+                echo "::notice::$config_dir does not exist at $BASE_SHA; treating this as the first import, so every tenant is reported as added"
+              else
+                echo "::error::$config_dir at $BASE_SHA is a $kind, not a directory, so no baseline can be built from it. A kind of 'commit' means a submodule is mounted there; 'blob' means either a file has that name, or the path is a symlink (git records those as blobs too). Reporting any of those as a first import would hide the fault."
+                exit 1
+              fi
 
           - name: Config diff (blast radius)
             run: |
+              # config-diff signals findings through its exit code, so a bare
+              # call cannot work: "changed" is exit 1, and this job runs on
+              # every pull request that touches conf.d/, kustomize/ or
+              # rule-packs/ — so both 0 and 1 are ordinary outcomes here.
+              #   0 = no config change  -> the report says so in words, and the
+              #       comment below is refreshed with it. Not skipped: this job
+              #       also runs for kustomize/ and rule-packs/ edits, and
+              #       skipping would leave the PREVIOUS run's report standing
+              #       as though it were still current.
+              #       ⚠️ READ THIS BEFORE TRUSTING A "no changes" COMMENT.
+              #       config-diff compares TENANT files only — it skips every
+              #       file whose name starts with `_`, which includes
+              #       conf.d/_defaults.yaml. So a pull request that changes a
+              #       PLATFORM DEFAULT, inherited by every tenant that does
+              #       not override it, gets a comment that states "No changes
+              #       detected". Measured: raising _defaults.yaml's
+              #       mysql_connections exits 0 with a 325-byte "no changes"
+              #       report, while the same key changed in one tenant file
+              #       exits 1 and is listed. That is the widest-blast-radius
+              #       edit this job can be handed, and it is the one it cannot
+              #       see. Review _defaults.yaml changes by hand, or gate them
+              #       separately (the platform runs its own
+              #       guard-defaults-impact workflow for exactly this, which
+              #       `da-tools init` does not emit).
+              #   1 = changes detected  -> the report is the payload.
+              #   2 and above           -> the run did not complete; fail, and
+              #       post nothing (the comment step inherits an implicit
+              #       success(), so a failure here skips it).
+              #
+              # The head-side directory is checked FIRST because a bind mount
+              # creates a missing host path instead of failing. config-diff
+              # does guard this (`ERROR: new-dir not found`), but that guard
+              # can never fire through a `-v` mount: the path always exists by
+              # the time the tool looks. Measured, with CONFIG_DIR pointing at
+              # a path that is not in the repo: both sides mount as empty
+              # directories, the tool exits 0, and it prints a 322-byte
+              # "no changes" report — non-empty, so the empty-report guard
+              # below passes it too, and the comment is published. That is a
+              # blast-radius gate that is green and silent forever, which is
+              # the same failure this whole step was rewritten to remove.
+              if [ ! -d "${{{{ env.CONFIG_DIR }}}}" ]; then
+                echo "::error::CONFIG_DIR is set to '${{{{ env.CONFIG_DIR }}}}', which does not exist in this pull request's head commit. Either the workflow's CONFIG_DIR does not match where this repository actually keeps its tenant config, or this pull request removed that directory. Refusing to compare, because mounting a path that is not there yields an empty directory and a report that says 'no changes' on every future run."
+                exit 1
+              fi
+              set +e
               docker run --rm \\
-                -v ${{{{ github.workspace }}}}/.output/base/conf.d:/data/conf.d.base:ro \\
+                -v ${{{{ github.workspace }}}}/.output/base/${{{{ env.CONFIG_DIR }}}}:/data/conf.d.base:ro \\
                 -v ${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro \\
                 -v ${{{{ github.workspace }}}}/.output:/data/output \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
                 config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d \\
                   --format markdown > .output/blast-radius.md
+              rc=$?
+              set -e
+              if [ "$rc" -gt 1 ]; then
+                echo "::error::config-diff exited $rc (expected 0 or 1) — image pull, mount, or malformed config"
+                exit "$rc"
+              fi
+              # rc alone is not enough. Anything in front of the tool can exit
+              # 1 with nothing on stdout — a mistyped or renamed subcommand
+              # leaves the entrypoint exiting 1, which is indistinguishable
+              # from "changes detected" by exit code alone, and the comment
+              # comment action would then fail with "Either message or path
+              # input is required" — an error pointing at an input that WAS
+              # supplied, which sends the reader to the wrong place. (It
+              # refuses to publish an empty body; what it cannot do is say
+              # why.) A one-byte file is worse: that publishes. The tool
+              # always prints a report on 0 and on 1, so an empty or
+              # near-empty file here means the run did not really happen.
+              if [ ! -s .output/blast-radius.md ]; then
+                echo "::error::config-diff exited $rc but produced an empty report; treating this as a failed run rather than publishing it"
+                exit 1
+              fi
 
           - name: Post PR comment with blast radius
             if: github.event_name == 'pull_request'

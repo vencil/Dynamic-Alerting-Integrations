@@ -1102,6 +1102,15 @@ jobs:
       # missing binary means the runner image regressed, not that the check is
       # optional.
       VIBE_REQUIRE_NODE: "1"
+      # git / bash / tar back the two tests that EXECUTE a generated CI step
+      # instead of reading it — tests/ops/test_generated_ci_artifacts.py's
+      # baseline-step and blast-radius-step tests. They are the only
+      # executing evidence in a file that is otherwise all text pins, and a
+      # text pin proves a body was not edited, not that it works.
+      # ubuntu-latest ships all three tools, so the same reasoning as
+      # VIBE_REQUIRE_NODE applies: absent means the image regressed, not that
+      # the evidence became optional.
+      VIBE_REQUIRE_SHELL_TOOLS: "1"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6

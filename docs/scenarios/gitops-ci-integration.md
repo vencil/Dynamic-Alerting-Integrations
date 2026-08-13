@@ -128,12 +128,32 @@ da-tools generate-routes --config-dir conf.d/ \
   -o .output/alertmanager-routes.yaml --validate
 
 # 計算 blast radius（影響哪些 tenant、哪些 metric）
-# CI 中先 checkout base branch 的 conf.d/ 到 conf.d.base/
+# CI 中先把 base branch 的 conf.d/ 取出到 conf.d.base/
+#
+# ⚠️ config-diff 用「結束碼」回報有沒有變更：0=無變更、1=偵測到變更、2=錯誤。
+#    所以裸呼叫會在它**正常運作**（真的找到變更）的時候讓這個步驟失敗——
+#    而這種 job 通常只在 conf.d 有變更時才觸發，等於每次都失敗。
+set +e
 da-tools config-diff --old-dir conf.d.base/ --new-dir conf.d/ \
   --format markdown > .output/blast-radius.md
+rc=$?
+set -e
+if [ "$rc" -gt 1 ]; then
+  echo "config-diff 以 $rc 結束（預期 0 或 1）" >&2
+  exit "$rc"
+fi
 ```
 
-產出的 blast-radius.md 會自動貼到 PR comment，讓 reviewer 快速判斷影響範圍。
+步驟成功結束（`rc` 為 0 或 1）之後，產出的 blast-radius.md 才會被貼成 PR comment，
+讓 reviewer 快速判斷影響範圍。
+
+⚠️ **`da-tools init` 產生的 GitHub workflow 是否已帶這段處理，取決於你用的映像。**
+`init` 預設拉 `ghcr.io/vencil/da-tools:latest`，而那個 tag 只在 `tools/v*` 線發版時
+移動——本文件會在 merge 當下更新，映像則不會。**判斷方式不要看版號，直接看產物**：
+產出的 `.github/workflows/dynamic-alerting.yaml` 裡 `Config diff (blast radius)`
+那一步有沒有 `set +e` / `rc=$?`。沒有就照上面自己補。
+
+完整的結束碼契約見 [GitOps 部署整合](../integration/gitops-deployment.md)。
 
 ### 2.4 Stage 3: Apply
 

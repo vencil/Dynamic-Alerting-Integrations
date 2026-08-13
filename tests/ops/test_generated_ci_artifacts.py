@@ -108,25 +108,33 @@ WHAT THIS GUARD DOES **NOT** BUY
   so a guard there starts green with no counterfactual to show for it. Worth
   building, not built here — this file's own history is that every guard added
   in a hurry shipped with one half of its mechanism missing.
-* **It does not check the exit-code contract of the commands it pins.** Every
-  assertion here about failure is fail-OPEN-shaped: `continue-on-error` and
-  `allow_failure` are blocked on both legs so a failure cannot be discarded.
-  Nothing asks the opposite question — whether a command returns non-zero on a
-  NORMAL run. `config_diff.py:656` is
-  ``sys.exit(EXIT_VIOLATION if has_changes else EXIT_OK)``, i.e. rc=1 whenever
-  there ARE changes (the `diff(1)` convention, and dev-rules #13 codifies it),
-  and both generated legs invoke it bare: the GitHub `run:` block (default
-  `bash -e`) and the last line of the GitLab `script:`. Since both jobs are
-  gated on `conf.d/**` having changed, the stage runs only when a diff exists
-  and then fails BECAUSE one exists — so `Post PR comment with blast radius`
-  never executes, and GitLab's `artifacts:when` (default `on_success`) drops
-  `.output/` entirely. ⛔ The platform's OWN blast-radius workflow already
-  solved this — `.github/workflows/config-diff.yaml:60-72` does
-  `set +e` / `rc=$?` / `if [ "$rc" -gt 1 ]`, with a comment recording that it
-  was once burned by the same thing — and the customer artifacts never got that
-  lesson. Fixing it needs the baseline-unavailable handling to land in the same
-  change (a green pipeline posting "everything is new" is harder to notice than
-  a red one), so it is tracked on #1358 rather than done here.
+* **The exit-code contract is now checked on the GitHub leg only.**
+  `config_diff.py` exits 1 whenever there ARE changes (the `diff(1)`
+  convention, codified by dev-rules #13), and both generated legs used to
+  invoke it bare. A bare call cannot work: rc=1 is an ORDINARY outcome, so the
+  stage failed on exactly the pull requests it exists to report on, and the
+  comment step (which inherits an implicit `success()`) never ran. ⛔ Do NOT
+  read this as "the job only runs when conf.d changed, so rc=1 was certain" —
+  an earlier draft of this docstring said that, and it is wrong: the job also
+  runs for `kustomize/` and `rule-packs/` edits, so **rc=0 is reachable and
+  normal**. The always-empty baseline is what made every run report changes.
+  The GitHub leg now captures the code and applies the contract that
+  `docs/integration/gitops-deployment.md` already documented for consumers
+  (0 skip / 1 report / 2 fail), the shape this platform's own
+  `.github/workflows/config-diff.yaml` has carried in its `Run config diff`
+  step since it was burned by the same thing (cited by step name, not by line
+  range — a range drifts the moment anything above it moves, and nothing here
+  would notice). **The GitLab leg still invokes it bare** — see the
+  deferral recorded on `test_generate_stage_body_is_pinned_on_both_legs`, and
+  the premise for that deferral pinned by
+  `test_gitlab_deferral_premise_still_holds`.
+  ⚠️ What is still NOT asserted anywhere: that a *consumer* honours the
+  contract. Both guards in the blast-radius step ARE now observed — see
+  `test_generated_blast_radius_step_honours_the_exit_contract`, which runs the
+  shipped step against a `docker` stub across rc=0/1/2/125/137 with and
+  without a report. What that stub cannot check is the half in front of it:
+  whether the MOUNTS are right, and whether the real image actually exits the
+  way this contract assumes. Those need a daemon and a published image.
 * **It does not check that the GitLab artifact is anywhere GitLab will load
   it.** The pipeline is written to ``.gitlab-ci.d/dynamic-alerting.yml``, but
   GitLab only auto-loads a root ``.gitlab-ci.yml`` — we neither generate one
@@ -135,24 +143,37 @@ WHAT THIS GUARD DOES **NOT** BUY
   perfectly happy: "valid pipeline" and "pipeline that runs" are different
   claims, and only the first is asserted. Issue #1357 — ⛔ deliberately NOT
   fixed in this PR.
-* **It does not execute the shell inside the generated steps.** actionlint
+* **It executes the shell of TWO steps, and reads the rest.** actionlint
   parses ``run:`` blocks (and could shell-check them, but that integration is
-  pinned off — see the ``-shellcheck=`` note), yet nothing here observes what
-  the commands DO on a runner. The concrete live counter-example is the
-  ``generate`` job's "Checkout base branch config for diff" step, which carries
-  TWO defects — and the ORDER matters, because fixing only the visible one
-  changes nothing:
+  pinned off — see the ``-shellcheck=`` note). The generate job's "Resolve base
+  config snapshot" and "Config diff (blast radius)" steps are observed doing
+  what they do; every other ``run:`` in this file — both apply legs, the
+  validate stage, the whole GitLab pipeline — is still text-only, so a defect
+  living in one of those is exactly as invisible today as #1358 was.
 
-    1. ``actions/checkout@v4`` is generated with no ``fetch-depth``, so the
-       runner has a depth-1 clone and the base commit object is simply absent.
-       ``git show <base.sha>:conf.d`` therefore fails FIRST, short-circuiting
-       the ``&&`` — so the ``git archive | tar`` half never runs at all.
-    2. Had it run, it would have failed too: it untars into ``.output/base/``
-       while the preceding step creates only ``.output``.
+  Those two exceptions exist because reading was demonstrably not enough. The
+  step it now runs used to carry TWO defects at once, and measuring mattered
+  because fixing only the visible one changed nothing:
 
-  Either way the ``||`` fallback swallows it into an empty baseline and the step
-  exits 0, so every PR reports every tenant as ADDED. Issue #1358 —
-  ⛔ deliberately NOT fixed in this PR.
+    1. ``actions/checkout@v4`` was generated with no ``fetch-depth``, so the
+       runner had a depth-1 clone and the base commit object was simply
+       absent. ``git show <base.sha>:conf.d`` therefore failed FIRST,
+       short-circuiting the ``&&`` — the ``git archive | tar`` half never ran.
+    2. Had it run, it would have failed too: it untarred into
+       ``.output/base/`` while the preceding step created only ``.output``.
+
+  Either way the ``||`` fallback swallowed it into an empty baseline and the
+  step exited 0, so every PR reported every tenant as ADDED. Executing the
+  step showed every state — including the one where the base commit and the
+  config directory were both present — returning exit 0 with nothing
+  extracted, which is what made #2 visible at all.
+
+  Both are fixed on the GitHub leg (#1358). ⛔ The GitLab leg still carries
+  the equivalent defect and is deliberately NOT fixed — see the deferral and
+  its premise tripwire on ``test_generate_stage_body_is_pinned_on_both_legs``
+  and ``test_gitlab_deferral_premise_still_holds``. ⛔ So does the portal
+  wizard's preview generator, and worse (it passes ``--old-dir`` a path it
+  never mounts); that divergence is #1351, and this change widens it.
 
   ⚠️ **The GitLab half is broken too, and for a THIRD reason** — an earlier
   version of this paragraph said it "relies on the same base commit being
@@ -188,12 +209,16 @@ WHAT THIS GUARD DOES **NOT** BUY
 * **`CONFIG_DIR` can only ever be half-live, and that is structural.** The
   generated tool invocations honour it, but ``on.push.paths`` /
   ``on.pull_request.paths`` (GitHub) and ``rules.changes`` (GitLab) accept
-  literals only — no expressions, no variables — and the base-config checkout
-  also spells ``conf.d`` literally in ``git show``/``git archive``. ⛔ A fourth
-  site this enumeration originally missed: the generated pre-commit hooks'
-  ``files:`` regex. An enumeration inside a stated boundary is itself a claim,
-  and this one was incomplete — the same class of miss the boundary describes.
-  So a customer
+  literals only — no expressions, no variables. ⛔ A third site this
+  enumeration originally missed: the generated pre-commit hooks' ``files:``
+  regex. An enumeration inside a stated boundary is itself a claim, and this
+  one was incomplete — the same class of miss the boundary describes. ⚠️ It
+  went stale a second way: the GitHub base-config step used to spell
+  ``conf.d`` literally in ``git show``/``git archive``, and no longer does —
+  that step now reads ``$CONFIG_DIR`` throughout, and ``git show`` is not in
+  it at all. The GitLab leg still hardcodes the directory in its ``mkdir`` and
+  its ``--old-dir``, so the boundary holds, but anyone grepping for the
+  command named here would not find it. So a customer
   who sets ``CONFIG_DIR: configs`` gets tools reading the right directory while
   the trigger filters match none of their files. The knob-reachability assertion
   above answers "is it read AT ALL", which this satisfies; it cannot answer "is
@@ -236,9 +261,12 @@ BINARY ABSENCE POLICY
 ---------------------
 Missing binary → ``skipif`` (dev hosts stay usable). But when the CI job that
 INSTALLS the binary says so via ``VIBE_REQUIRE_ACTIONLINT`` /
-``VIBE_REQUIRE_CHECK_JSONSCHEMA`` / ``VIBE_REQUIRE_NODE``, a missing binary is a
-FAILURE — a regressed install step must not silently turn this whole file into
-a green no-op. Same fail-closed pattern as ``VIBE_REQUIRE_MTAIL`` / ``_VECTOR``
+``VIBE_REQUIRE_CHECK_JSONSCHEMA`` / ``VIBE_REQUIRE_NODE`` /
+``VIBE_REQUIRE_SHELL_TOOLS``, a missing binary is a FAILURE — a regressed
+install step must not silently turn this whole file into a green no-op.
+The fourth of those covers ``git``/``bash``/``tar``, which are what the
+execution-based tests need; ``ubuntu-latest`` ships them, so an absence is a
+regressed runner image rather than an optional check. Same fail-closed pattern as ``VIBE_REQUIRE_MTAIL`` / ``_VECTOR``
 / ``_HELM`` / ``_DOCKER`` in ``.github/workflows/ci.yml`` (see
 ``tests/helm/test_federation_store_namespace_guard.py`` for the test-side
 precedent).
@@ -315,6 +343,32 @@ def test_generator_sources_exist() -> None:
     """
     for p in (_INIT_PROJECT, _PORTAL_GENERATORS):
         assert p.is_file(), f"missing {p}"
+
+
+def test_shell_tools_present_when_required() -> None:
+    """Fail-closed guard for the tests here that EXECUTE a generated step.
+
+    ``test_generated_baseline_step_...`` and
+    ``test_generated_blast_radius_step_honours_the_exit_contract`` both carry
+    a ``skipif`` on ``_SHELL_TOOLS``, which keeps dev hosts usable — but they
+    are also the only evidence in this file that is not a reading of the text,
+    so they are the last things that should be allowed to vanish quietly.
+    ``ubuntu-latest`` ships all three: an absence there means the runner image
+    regressed, not that the check became optional.
+
+    ⛔ The count is deliberately not written as a number here. Every singular
+    phrasing of it ("the ONE test that executes…") went stale the moment the
+    second executing test landed, in four separate files, and a regex sweep for
+    the phrasing missed two more instances inside this very docstring because
+    they put the verb after the noun. Name the tests or say "the tests"; do not
+    count them in prose.
+    """
+    if os.environ.get("VIBE_REQUIRE_SHELL_TOOLS") == "1":
+        missing = [t for t in _SHELL_TOOLS if shutil.which(t) is None]
+        assert not missing, (
+            f"VIBE_REQUIRE_SHELL_TOOLS=1 but {missing} not on PATH — the "
+            "tests that execute a generated step would have skipped silently."
+        )
 
 
 def test_actionlint_present_when_required() -> None:
@@ -2764,19 +2818,43 @@ _EXPECTED_GL_APPLY: dict[str, list[str]] = {
 # GitHub step list and the GitLab job set are identical across all three), so
 # one pin covers the axis.
 _EXPECTED_GH_GENERATE: list[str] = [
-    "mkdir -p .output",
-    "docker run --rm -v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:"
-    "/data/conf.d:ro -v ${{ github.workspace }}/.output:/data/output "
-    "${{ env.DA_TOOLS_IMAGE }} generate-routes --config-dir /data/conf.d "
-    "-o /data/output/alertmanager-routes.yaml --validate",
-    "git show ${{ github.event.pull_request.base.sha }}:conf.d > /dev/null 2>&1 "
-    "&& git archive ${{ github.event.pull_request.base.sha }} conf.d/ | "
-    "tar -x -C .output/base/ || mkdir -p .output/base/conf.d",
-    "docker run --rm -v ${{ github.workspace }}/.output/base/conf.d:"
-    "/data/conf.d.base:ro -v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:"
-    "/data/conf.d:ro -v ${{ github.workspace }}/.output:/data/output "
-    "${{ env.DA_TOOLS_IMAGE }} config-diff --old-dir /data/conf.d.base "
-    "--new-dir /data/conf.d --format markdown > .output/blast-radius.md",
+    'mkdir -p .output',
+    'docker run --rm -v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro -v ${{ github.workspace }}/.output:/data/output ${{ env.DA_TOOLS_IMAGE }} generate-routes --config-dir /data/conf.d -o /data/output/alertmanager-routes.yaml --validate',
+    ': "${RUNNER_TEMP:?RUNNER_TEMP is not set; this step writes its intermediate files there}"',
+    'config_dir="${CONFIG_DIR%/}"',
+    'mkdir -p .output/base/"$config_dir"',
+    'if ! git cat-file -e "$BASE_SHA" 2>/dev/null; then',
+    'echo "::error::base commit $BASE_SHA is not in this clone, so there is nothing to compare against. Two causes: the checkout was narrowed (this workflow sets fetch-depth: 0 — check it is still there), or the base ref was rewritten and that commit no longer exists, which is what a force-push, or re-running an old job whose recorded base commit is gone, looks like."',
+    'exit 1',
+    'fi',
+    'git ls-tree "$BASE_SHA" -- "$config_dir" > "$RUNNER_TEMP"/entry.txt',
+    'kind=$(cut -d\' \' -f2 "$RUNNER_TEMP"/entry.txt)',
+    'if [ -z "$kind" ]; then kind=missing; fi',
+    'if [ "$kind" = tree ]; then',
+    'GIT_INDEX_FILE="$RUNNER_TEMP"/base.idx git read-tree "$BASE_SHA:$config_dir"',
+    'GIT_INDEX_FILE="$RUNNER_TEMP"/base.idx git checkout-index -a -f --prefix=.output/base/"$config_dir"/',
+    'elif [ "$kind" = missing ]; then',
+    'echo "::notice::$config_dir does not exist at $BASE_SHA; treating this as the first import, so every tenant is reported as added"',
+    'else',
+    'echo "::error::$config_dir at $BASE_SHA is a $kind, not a directory, so no baseline can be built from it. A kind of \'commit\' means a submodule is mounted there; \'blob\' means either a file has that name, or the path is a symlink (git records those as blobs too). Reporting any of those as a first import would hide the fault."',
+    'exit 1',
+    'fi',
+    'if [ ! -d "${{ env.CONFIG_DIR }}" ]; then',
+    'echo "::error::CONFIG_DIR is set to \'${{ env.CONFIG_DIR }}\', which does not exist in this pull request\'s head commit. Either the workflow\'s CONFIG_DIR does not match where this repository actually keeps its tenant config, or this pull request removed that directory. Refusing to compare, because mounting a path that is not there yields an empty directory and a report that says \'no changes\' on every future run."',
+    'exit 1',
+    'fi',
+    'set +e',
+    'docker run --rm -v ${{ github.workspace }}/.output/base/${{ env.CONFIG_DIR }}:/data/conf.d.base:ro -v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro -v ${{ github.workspace }}/.output:/data/output ${{ env.DA_TOOLS_IMAGE }} config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d --format markdown > .output/blast-radius.md',
+    'rc=$?',
+    'set -e',
+    'if [ "$rc" -gt 1 ]; then',
+    'echo "::error::config-diff exited $rc (expected 0 or 1) — image pull, mount, or malformed config"',
+    'exit "$rc"',
+    'fi',
+    'if [ ! -s .output/blast-radius.md ]; then',
+    'echo "::error::config-diff exited $rc but produced an empty report; treating this as a failed run rather than publishing it"',
+    'exit 1',
+    'fi',
 ]
 
 _EXPECTED_GL_GENERATE: list[str] = [
@@ -2794,13 +2872,40 @@ _EXPECTED_GL_GENERATE: list[str] = [
 def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> None:
     """The stage that produces the customer-visible artifact, pinned like apply.
 
-    ⛔ Read the two pins above together with the known defects they currently
-    encode: the GitHub leg's base checkout has no `fetch-depth` and the GitLab
-    leg's `git archive` runs in an image with no git (#1358), and neither leg
-    handles `config-diff`'s exit code (see the "explicitly NOT covered" section).
-    These pins record the shipped text as it IS, so that fixing those defects is
-    a deliberate edit here rather than a silent one — they are not an
-    endorsement of it.
+    ⛔ The two pins are asymmetric on purpose, and the asymmetry is the thing
+    to read, not an oversight:
+
+    * The **GitHub** pin encodes the fixed shape (#1358): `fetch-depth: 0` on
+      the checkout, the base commit and the config directory looked up
+      separately so a fault and a first import stop being the same outcome,
+      and `config-diff`'s exit code handled against the documented contract.
+    * The **GitLab** pin still encodes the broken shape. It is NOT fixed here.
+      ⛔ Do not read the reasons below as ordered: which one bites FIRST is
+      not established, and naming the wrong first blocker is how a reader ends
+      up fixing the wrong thing.
+
+      - The three `$DA_TOOLS_IMAGE` jobs pass the image as a bare scalar, so
+        they inherit its ENTRYPOINT — which is the tool itself. This same
+        generator states, three times beside the apply-stage images, that such
+        an image needs `entrypoint: [""]` or "the job dies before the first
+        script line", and applies that only to the kubectl image. Either that
+        thrice-stated rule is wrong, or these three jobs never reach their
+        first script line. Unresolved without a real runner.
+      - The image has no `git`, so `git archive` cannot work. Installing it in
+        `before_script` is not a way out either: the image runs as
+        `USER nonroot`, and `apk add` there fails on a locked database.
+      - #1357 — nothing includes `.gitlab-ci.d/dynamic-alerting.yml`, so the
+        pipeline does not run at all.
+
+      Repairing the shell of a pipeline that never executes would buy a green
+      test and no customer-visible change, which is why the leg is left alone
+      rather than half-fixed.
+
+    Fixing the GitLab pin is therefore expected to be a later, deliberate edit
+    here, exactly as this GitHub-side edit was — this pin is what will make
+    that edit visible. What this pin canNOT see is the *premise* of the
+    deferral going stale, so that is pinned separately by
+    `test_gitlab_deferral_premise_still_holds`.
     """
     root = generated[(ci, deploy)]
 
@@ -2815,6 +2920,29 @@ def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> No
             f"  expected: {_EXPECTED_GH_GENERATE}\n  got:      {got}\n"
             "This stage produces the blast-radius comment. If the change is "
             "intended, update the pin in the same commit."
+        )
+
+        # ⛔ The pin above is built from `run:` blocks only, and the execution
+        # test builds its own repository rather than running checkout — so
+        # neither of them can see this line, and deleting it would be silent
+        # in both. It is the other half of the baseline fix: the step's first
+        # lookup fails without it, on a repository where nothing is actually
+        # wrong.
+        checkouts = [
+            s for s in wf["jobs"]["generate"]["steps"]
+            if str(s.get("uses", "")).startswith("actions/checkout")
+        ]
+        assert len(checkouts) == 1, (
+            f"expected exactly one checkout in the generate job, got "
+            f"{len(checkouts)}; the fetch-depth assertion below no longer "
+            "knows which one to trust."
+        )
+        assert checkouts[0].get("with", {}).get("fetch-depth") == 0, (
+            "the generate job's checkout must set `fetch-depth: 0`. The "
+            "blast radius is computed against the PR's base commit, and the "
+            "default depth-1 clone does not contain that object — the step "
+            "then reports a fault on a perfectly healthy repository. "
+            f"got with: {checkouts[0].get('with')!r}"
         )
 
         # ⛔ The pin above covers the PRODUCING side. The motivation written
@@ -2880,6 +3008,663 @@ def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> No
             f"{jobs[0].get('artifacts')!r}. This is the only way anything "
             "reaches the customer on this leg — no artifacts, no routes file "
             "and no blast-radius report, with the pipeline still green."
+        )
+
+
+def test_gitlab_deferral_premise_still_holds(generated, tmp_path) -> None:
+    """The GitLab leg is left unfixed on a premise. Pin the premise, not the bug.
+
+    `test_generate_stage_body_is_pinned_on_both_legs` already fires the moment
+    anyone edits that leg, so a second "it is still broken" assertion would be
+    redundant — and a redundant assertion that can only ever stay true is worse
+    than none. What nothing watches is the *reason* the leg was left alone:
+    #1357. `da-tools init` writes the pipeline to
+    `.gitlab-ci.d/dynamic-alerting.yml`, and GitLab only auto-loads a root
+    `.gitlab-ci.yml`; nothing generated here writes one or includes it, so that
+    pipeline never executes. Repairing its shell would buy a green test and
+    nothing a customer can observe, which is why #1358 was fixed on the GitHub
+    leg only.
+
+    The day that premise stops holding, the leg starts running with the
+    always-empty baseline and the unhandled `config-diff` exit code live for
+    every customer, and the justification written beside the pin above turns
+    into a false claim with nothing pointing at it. This is that tripwire.
+
+    ⚠️ Bound, stated precisely because a looser version of it was wrong: the
+    `generated` fixture initialises into an EMPTY directory, while `da-tools
+    init` is documented as running against a customer's existing repository.
+    So the loop below only sees "does the generator create a root
+    `.gitlab-ci.yml` from nothing". A generator that instead APPENDS an
+    `include:` to one the customer already has would be invisible to it —
+    and that is a generator change, not a documentation change, so calling
+    this "a tripwire for the generator changing its mind" overstated it. The
+    second phase closes that case by initialising over a pre-existing root
+    file. What remains genuinely out of reach is closing #1357 purely in
+    prose (telling customers to add the `include:` themselves), which leaves
+    no trace in any artifact.
+    """
+    checked = 0
+    for (ci, deploy), root in generated.items():
+        if ci not in ("gitlab", "both"):
+            continue
+        checked += 1
+        assert (root / _GL_PIPELINE).is_file(), (
+            f"--ci {ci} --deploy {deploy} no longer writes {_GL_PIPELINE}. "
+            "The pipeline moved; re-derive whether GitLab now loads it before "
+            "trusting the deferral recorded above."
+        )
+        assert not (root / ".gitlab-ci.yml").exists(), (
+            f"--ci {ci} --deploy {deploy} now writes a root .gitlab-ci.yml, so "
+            "the generated GitLab pipeline is reachable and #1357's premise is "
+            "gone. That leg still carries the always-empty baseline and the "
+            "bare `config-diff` call (#1358) — fix it and update "
+            "_EXPECTED_GL_GENERATE and the deferral paragraph above, rather "
+            "than deleting this assertion."
+        )
+
+    # Anti-vacuity from an independent source: MATRIX, not the loop variable.
+    # Without this, narrowing MATRIX to github-only would make the loop body
+    # run zero times and this test would pass by describing nothing.
+    expected = sum(1 for ci, _ in MATRIX if ci in ("gitlab", "both"))
+    assert checked == expected > 0, (
+        f"expected {expected} gitlab-bearing combinations from MATRIX, "
+        f"examined {checked}"
+    )
+
+    # Phase 2 — initialise over a repository that ALREADY has a root
+    # `.gitlab-ci.yml`, which is the shape `da-tools init` actually meets.
+    # Without this, a generator taught to append `include:` to an existing
+    # file would close #1357 while every assertion above stayed green.
+    existing = tmp_path / "preexisting-repo"
+    existing.mkdir()
+    root_ci = existing / ".gitlab-ci.yml"
+    ORIGINAL = "stages: [build]\n\nbuild:\n  script:\n    - echo hi\n"
+    root_ci.write_text(ORIGINAL, encoding="utf-8", newline="\n")
+
+    ip.run_init(
+        {
+            "ci": "gitlab",
+            "deploy": "kustomize",
+            "rule_packs": ["mariadb"],
+            "tenants": ["db-a"],
+            "namespace": "monitoring",
+            "da_tools_image": "ghcr.io/vencil/da-tools:latest",
+        },
+        str(existing),
+    )
+
+    assert (existing / _GL_PIPELINE).is_file(), (
+        "initialising over an existing repo stopped writing the pipeline; "
+        "re-derive this test's subject before trusting the deferral."
+    )
+    assert root_ci.read_text(encoding="utf-8") == ORIGINAL, (
+        "`da-tools init` now edits an existing root .gitlab-ci.yml. If it "
+        "wires in the generated pipeline, #1357's premise is gone and the "
+        "GitLab generate leg — still carrying the always-empty baseline and "
+        "the bare `config-diff` call — becomes reachable for every customer. "
+        "Fix that leg and update _EXPECTED_GL_GENERATE and the deferral "
+        "paragraph, rather than relaxing this assertion."
+    )
+
+
+_BASELINE_STEP = "Resolve base config snapshot"
+_SHELL_TOOLS = ("git", "bash", "tar")
+
+
+def _extract_step(root: Path, step_name: str) -> tuple[dict, dict, dict]:
+    """Return (the named step, the workflow-level env, the job-level env)."""
+    wf = yaml.safe_load((root / _GH_WORKFLOW).read_text(encoding="utf-8"))
+    job = wf["jobs"]["generate"]
+    steps = job["steps"]
+    for step in steps:
+        if step.get("name") == step_name:
+            return (
+                step,
+                {k: str(v) for k, v in (wf.get("env") or {}).items()},
+                {k: str(v) for k, v in (job.get("env") or {}).items()},
+            )
+    raise AssertionError(
+        f"{step_name!r} is not in the generate job; steps are "
+        f"{[s.get('name') for s in steps]}"
+    )
+
+
+# The Actions expressions this harness knows how to stand in for. Anything
+# else must fail loudly rather than be dropped — see _resolve_step_env.
+_EXPRESSION_STANDINS = {"${{ github.event.pull_request.base.sha }}": "base_sha"}
+
+
+def _resolve_step_env(step: dict, wf_env: dict, job_env: dict, *,
+                      base_sha: str, expect_step_env: bool = True) -> dict:
+    """Build the step's environment FROM the step, not from this file.
+
+    ⛔ This reads `step["env"]` on purpose. An earlier version of this harness
+    exported `BASE_SHA` itself, which made the generated `env:` block invisible
+    to every test here: deleting that block left the whole module green while
+    the shipped step lost its only binding to the PR's base commit — and the
+    step then failed with "the checkout step needs fetch-depth: 0" on a
+    repository whose checkout was already correct, i.e. two unrelated causes
+    collapsing into one message. Supplying the value here instead of reading it
+    would re-open exactly that hole.
+    """
+    known = {"base_sha": base_sha}
+    # ⛔ ALL THREE Actions env scopes, in the order the runner applies them:
+    # workflow, then job, then step. An earlier version read workflow and
+    # step and silently dropped the job level — measured: giving the
+    # `generate` job its own `CONFIG_DIR` left every test in this file green
+    # while the shipped step would have run against a different directory,
+    # taken the "no config here" branch and reported a first import. Reading
+    # two of three scopes is the same shape of hole this function exists to
+    # close, one level up.
+    resolved = {}
+    for key, raw in {**wf_env, **job_env}.items():
+        value = str(raw).strip()
+        assert "${{" not in value, (
+            f"workflow env {key}={value!r} is an Actions expression this "
+            "harness has no stand-in for. Add one to _EXPRESSION_STANDINS and "
+            "resolve it here — exporting it verbatim would put a literal "
+            "'${{ ... }}' into the shell and hide whatever it binds."
+        )
+        resolved[key] = value
+    step_env = step.get("env") or {}
+    if expect_step_env:
+        assert step_env, (
+            f"step {step.get('name')!r} declares no `env:`. If the generated "
+            "step stopped binding the base commit that way, this harness would "
+            "quietly supply nothing and the resulting failure would read as a "
+            "shallow clone. Update this harness deliberately, do not delete "
+            "the assertion."
+        )
+    else:
+        # Pinning the ABSENCE, the same way `_CLI_GH_TRIGGERS` pins the missing
+        # `branches:` key. The blast-radius step draws CONFIG_DIR and
+        # DA_TOOLS_IMAGE from the workflow scope and binds nothing itself;
+        # saying so here means a step that STARTS binding something cannot slip
+        # past this harness under a flag that was meant to say "nothing to
+        # bind".
+        assert not step_env, (
+            f"step {step.get('name')!r} now declares `env:` "
+            f"({sorted(step_env)}), but this call site says it binds nothing. "
+            "Resolve the new binding here instead of flipping the flag."
+        )
+    for key, raw in step_env.items():
+        value = str(raw).strip()
+        if "${{" in value:
+            slot = _EXPRESSION_STANDINS.get(value)
+            assert slot is not None, (
+                f"step env {key}={value!r} is an Actions expression this "
+                "harness has no stand-in for. Add one to _EXPRESSION_STANDINS "
+                "— dropping it makes the binding invisible again."
+            )
+            value = known[slot]
+        resolved[key] = value
+    return resolved
+
+
+_RUN_EXPRESSION = re.compile(r"\$\{\{\s*([^}]+?)\s*\}\}")
+
+
+def _substitute_run_expressions(body: str, *, workspace: str,
+                                env: dict) -> str:
+    """Stand in for the runner's expression pass over a ``run:`` body.
+
+    ⛔ Without this the script reaches bash with a literal ``${{ ... }}`` in
+    it, which is a bad substitution rather than the path the runner would have
+    produced. That is not a hypothetical: an earlier counterfactual for this
+    module fed a raw ``${{ github.event.pull_request.base.sha }}`` to bash and
+    reported every case as loudly failing, when substituting it correctly
+    showed every case passing SILENTLY — the opposite conclusion, from the
+    same experiment.
+
+    Unknown expressions are a hard failure for the same reason
+    ``_resolve_step_env`` refuses them: standing in for one incorrectly is
+    worse than not running the step at all.
+    """
+    def repl(match: "re.Match[str]") -> str:
+        expr = match.group(1)
+        if expr == "github.workspace":
+            # `.` rather than an absolute path: this bash may be WSL, which
+            # mangles a Windows drive path. Every other path in these steps is
+            # already relative to the working directory.
+            return workspace
+        if expr.startswith("env."):
+            key = expr[len("env."):]
+            assert key in env, (
+                f"`run:` references ${{{{ env.{key} }}}}, which is not in the "
+                f"resolved environment ({sorted(env)}). The runner would "
+                "expand it to an empty string and the step would act on a "
+                "path that is missing its middle segment."
+            )
+            return env[key]
+        raise AssertionError(
+            f"`run:` contains ${{{{ {expr} }}}}, an Actions expression this "
+            "harness has no stand-in for. Add one here — leaving it verbatim "
+            "puts a bad substitution into the shell and the resulting failure "
+            "says nothing about the step."
+        )
+    return _RUN_EXPRESSION.sub(repl, body)
+
+
+def _git(repo: Path, *args: str) -> str:
+    # `-c` overrides rather than inheriting: a developer with a global
+    # commit.gpgsign or core.hooksPath would otherwise make these fixture
+    # commits FAIL (not skip), turning a local git preference into a red test.
+    p = subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=", *args],
+        cwd=repo, capture_output=True, encoding="utf-8", errors="replace",
+        timeout=60,
+    )
+    assert p.returncode == 0, f"git {' '.join(args)} failed: {p.stderr}"
+    return p.stdout.strip()
+
+
+# The two commits differ in this value so the extracted baseline can be
+# checked for CONTENT, not just for a filename. Asserting the filename alone
+# would pass just as happily if the step archived HEAD instead of the base —
+# measured: swapping `git archive "$BASE_SHA"` for `git archive HEAD` left a
+# filename-only oracle green.
+_BASE_CPU = "70"
+_HEAD_CPU = "90"
+
+
+def _tenant_yaml(cpu: str) -> str:
+    return f'tenants:\n  db-a:\n    container_cpu: "{cpu}"\n'
+
+
+def _symlinks_usable(tmp: Path) -> bool:
+    """Can this host create a symlink at all? (Windows without privilege: no.)"""
+    probe = tmp / "_symlink_probe"
+    probe.mkdir(parents=True, exist_ok=True)
+    (probe / "target").write_text("x\n", encoding="utf-8", newline="\n")
+    try:
+        (probe / "link").symlink_to("target")
+    except (OSError, NotImplementedError):
+        return False
+    return (probe / "link").is_symlink()
+
+
+def _synthetic_repo(root: Path, *, base_has_config: bool,
+                    export_ignore: str | None = None,
+                    symlink: bool = False, submodule: bool = False) -> str:
+    """Two commits; return the sha of the first, which plays the PR base.
+
+    ``export_ignore`` is ``"all"`` (the whole config directory), ``"partial"``
+    (one file of two) or ``None``. TWO tenant files, not one: with a single
+    file, "expected count derived from ls-tree" and "expected count hardcoded
+    to 1" are indistinguishable, so the derivation this step advertises had no
+    behavioural coverage at all.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "config", "user.email", "test@example.invalid")
+    _git(root, "config", "user.name", "test")
+    (root / "README.md").write_text("base\n", encoding="utf-8", newline="\n")
+    if export_ignore is not None:
+        # `git archive` honours this; `git cat-file` does not. That asymmetry
+        # is the whole reason the step needs a post-condition on what came
+        # out, rather than only checks on what should have been there.
+        rule = ("conf.d/ export-ignore\n" if export_ignore == "all"
+                else "conf.d/db-b.yaml export-ignore\n")
+        (root / ".gitattributes").write_text(rule, encoding="utf-8",
+                                             newline="\n")
+    if base_has_config and not submodule:
+        (root / "conf.d").mkdir(exist_ok=True)
+        (root / "conf.d" / "db-a.yaml").write_text(
+            _tenant_yaml(_BASE_CPU), encoding="utf-8", newline="\n")
+        (root / "conf.d" / "db-b.yaml").write_text(
+            _tenant_yaml(_BASE_CPU), encoding="utf-8", newline="\n")
+        if symlink:
+            # A reverse control. `git ls-tree` lists a symlink; `find -type f`
+            # does not, so a count-based post-condition failed a perfectly
+            # healthy repository here. Measured before the fix: rc=1 with the
+            # extraction fully correct.
+            (root / "conf.d" / "db-alias.yaml").symlink_to("db-a.yaml")
+    _git(root, "add", "-A")
+    if submodule:
+        # A gitlink whose commit belongs to no repository reachable from here
+        # — what a real submodule looks like from the superproject. Plumbing,
+        # so the fixture needs no second repository. ⛔ AFTER `git add -A`:
+        # that command stages deletions, and with no `conf.d` in the working
+        # tree it removes the entry again. (Measured — the first version of
+        # this fixture silently produced an ordinary "no config dir at base".)
+        _git(root, "update-index", "--add", "--cacheinfo",
+             f"160000,{'a' * 40},conf.d")
+    _git(root, "commit", "-qm", "base")
+    base_sha = _git(root, "rev-parse", "HEAD")
+
+    if submodule:
+        # Once `conf.d` is a gitlink in HEAD, `git add -A` will not descend
+        # into it (its content belongs to the submodule, not here), so the
+        # head commit has to change something else or there is nothing to
+        # commit at all. Only the BASE matters for this state.
+        (root / "README.md").write_text("head\n", encoding="utf-8",
+                                        newline="\n")
+    else:
+        (root / "conf.d").mkdir(exist_ok=True)
+        (root / "conf.d" / "db-a.yaml").write_text(
+            _tenant_yaml(_HEAD_CPU), encoding="utf-8", newline="\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "head")
+    return base_sha
+
+
+def _run_generated_step(step: dict, wf_env: dict, job_env: dict, work: Path,
+                        base_sha: str, env_overrides: dict | None = None, *,
+                        expect_step_env: bool = True,
+                        stub_docker: tuple[int, str] | None = None):
+    (work / ".output").mkdir(parents=True, exist_ok=True)
+    (work / "_runner_temp").mkdir(exist_ok=True)
+    env = _resolve_step_env(step, wf_env, job_env, base_sha=base_sha,
+                            expect_step_env=expect_step_env)
+    # ⚠️ Only for values a CUSTOMER sets, never for a binding the artifact
+    # declares. CONFIG_DIR is a documented knob; overriding it here simulates
+    # someone who wrote it their own way, which is different in kind from the
+    # harness inventing a value the workflow was supposed to supply.
+    if env_overrides:
+        for key in env_overrides:
+            assert key in env, (
+                f"{key} is not in the generated environment, so overriding it "
+                "here would be this harness inventing a binding rather than "
+                "varying a customer-set one."
+            )
+        env.update(env_overrides)
+    # RUNNER_TEMP is supplied by the runner, not by the workflow, so it is the
+    # one value this harness legitimately invents.
+    env["RUNNER_TEMP"] = "_runner_temp"
+    # Written into the script rather than passed through the child environment:
+    # on a Windows host `bash` may be WSL, which starts a fresh Linux
+    # environment and drops the parent's variables (measured — a passed
+    # BASE_SHA arrived empty, and every case then failed identically for a
+    # reason that had nothing to do with the step).
+    prologue = "".join(f"export {k}='{v}'\n" for k, v in sorted(env.items()))
+    if stub_docker is not None:
+        rc, payload = stub_docker
+        # A shell FUNCTION, not an executable on PATH: this bash may be WSL
+        # running against a Windows filesystem, where the exec bit does not
+        # stick and a PATH shim would silently never run — the step would then
+        # reach the real `docker`, or none, and the case would pass or fail for
+        # a reason unrelated to the guard under test. A function is resolved
+        # ahead of PATH by the same shell that runs the step, so the
+        # interception cannot fail quietly.
+        #
+        # The payload goes through a file so its content needs no quoting: the
+        # EMPTY report is the whole point of three of these states, and an
+        # inline `printf` would make "empty" a property of this harness's
+        # escaping rather than of the stub.
+        (work / "_stub_stdout").write_text(payload, encoding="utf-8",
+                                           newline="\n")
+        prologue += f"docker() {{ cat _stub_stdout; return {rc}; }}\n"
+    # The runner expands `${{ ... }}` before bash ever sees the body. Skipping
+    # that leaves a bad substitution in the script, which fails for a reason
+    # that has nothing to do with the step — see _substitute_run_expressions.
+    body = _substitute_run_expressions(str(step["run"]), workspace=".",
+                                       env=env)
+    (work / "_step.sh").write_text(prologue + body,
+                                   encoding="utf-8", newline="\n")
+    # `bash -e` and a RELATIVE script name: that is the default shell Actions
+    # uses for `run:` (note: no pipefail), and an absolute Windows path gets
+    # mangled by this bash.
+    return subprocess.run(["bash", "-e", "_step.sh"], cwd=work,
+                          capture_output=True, encoding="utf-8",
+                          errors="replace", timeout=120)
+
+
+@pytest.mark.skipif(
+    any(shutil.which(t) is None for t in _SHELL_TOOLS),
+    reason=f"executing the generated step needs {_SHELL_TOOLS} on PATH",
+)
+@pytest.mark.parametrize(
+    "state,base_has_config,base_exists,export_ignore,symlink,want_rc,want_files", [
+        ("normal", True, True, None, False, 0, ["db-a.yaml", "db-b.yaml"]),
+        ("first_import", False, True, None, False, 0, []),
+        ("base_not_in_clone", True, False, None, False, 1, []),
+        # ⭐ These two are IMMUNITY proofs, not detection tests. `export-ignore`
+        # is an archive-only attribute, and the step no longer extracts through
+        # `git archive`, so a rule covering the whole directory or a single
+        # file changes nothing about the baseline. Three earlier attempts to
+        # DETECT the archive's silent omission were each falsified; removing
+        # the cause is what finally held.
+        ("export_ignored_all", True, True, "all", False, 0,
+         ["db-a.yaml", "db-b.yaml"]),
+        ("export_ignored_partial", True, True, "partial", False, 0,
+         ["db-a.yaml", "db-b.yaml"]),
+        # A gitlink at the config path: the entry exists, so a lookup of the
+        # object it points at fails (that commit belongs to another repo) and
+        # the fault used to be filed as a first import.
+        ("config_dir_is_a_submodule", True, True, None, False, 1, []),
+        # `git ls-tree -- conf.d/` lists the CHILDREN, so reading a type
+        # out of it saw "blob" and rejected a healthy repository. The
+        # step normalises the trailing slash; this pins that.
+        ("config_dir_trailing_slash", True, True, None, False, 0,
+         ["db-a.yaml", "db-b.yaml"]),
+        # Reverse control: healthy input that a `-type f` count rejected.
+        ("symlink_in_config_dir", True, True, None, True, 0,
+         ["db-a.yaml", "db-alias.yaml", "db-b.yaml"]),
+    ])
+def test_generated_baseline_step_distinguishes_fault_from_first_import(
+    generated, tmp_path, state, base_has_config, base_exists, export_ignore,
+    symlink, want_rc, want_files,
+) -> None:
+    """Run the generated baseline step for real, across every state it must
+    tell apart.
+
+    ⛔ This is the first thing in this file that EXECUTES generated shell, and
+    the gap it closes is why #1358 shipped: every other assertion reads the
+    text. Measured against the pre-fix step, the first three states below all
+    produced **exit 0 and an empty baseline** — including `normal`, where the
+    base commit and the config directory were both present. So the ticket's
+    stated cause (a shallow clone) was only half of it: `tar -x -C
+    .output/base/` ran before anything created `.output/base`, and the `||`
+    arm then made an empty directory and exited 0. Fixing `fetch-depth` alone
+    would have left `normal` broken, with nothing to say so.
+
+    The states:
+
+    * ``normal`` — base commit present, config present at base: extract it.
+    * ``first_import`` — base commit present, no config yet: legitimately
+      empty, proceed, and say why.
+    * ``base_not_in_clone`` — the object is missing: a fault. Comparing
+      against nothing here is the failure `docs/internal/lint-policy.md` calls
+      pretending to be diff-aware, so it must be loud.
+    * ``export_ignored_all`` — both lookups pass and `git archive` succeeds
+      while producing nothing, because it honours `.gitattributes
+      export-ignore` and `git cat-file` does not. Only a post-condition on
+      what arrived can see this.
+    * ``export_ignored_partial`` — one file of two. Separates "the expected
+      set is derived from `git ls-tree`" from "the expected count happens to
+      match this fixture", which a single-file fixture could not.
+    * ``symlink_in_config_dir`` — a REVERSE control: healthy input that must
+      NOT fail. `git ls-tree` lists a symlink and `find -type f` does not, so
+      the first version of the post-condition failed a repository whose
+      extraction was completely correct. Skipped where the host cannot create
+      symlinks; it runs on Linux CI, which is where it matters.
+
+    ⚠️ ``base_not_in_clone`` is simulated with an all-zero sha rather than by
+    building a real shallow clone. The predicate under test is "is this object
+    in the store", which is what a shallow clone breaks; the simpler fixture
+    exercises the same branch and does not depend on how a given git version
+    fetches.
+    """
+    root = generated[("github", "kustomize")]
+    step, wf_env, job_env = _extract_step(root, _BASELINE_STEP)
+
+    if symlink and not _symlinks_usable(tmp_path):
+        pytest.skip("this host cannot create symlinks (Windows without "
+                    "Developer Mode / SeCreateSymbolicLinkPrivilege)")
+
+    work = tmp_path / state
+    real_base = _synthetic_repo(
+        work, base_has_config=base_has_config, export_ignore=export_ignore,
+        symlink=symlink, submodule=(state == "config_dir_is_a_submodule"))
+    base_sha = real_base if base_exists else "0" * 40
+
+    overrides = ({"CONFIG_DIR": wf_env["CONFIG_DIR"] + "/"}
+                 if state == "config_dir_trailing_slash" else None)
+    p = _run_generated_step(step, wf_env, job_env, work, base_sha,
+                            env_overrides=overrides)
+
+    config_dir = wf_env["CONFIG_DIR"]
+    baseline_dir = work / ".output" / "base" / config_dir
+    got_files = sorted(f.name for f in baseline_dir.glob("*")) \
+        if baseline_dir.is_dir() else []
+
+    assert p.returncode == want_rc, (
+        f"{state}: expected rc={want_rc}, got {p.returncode}.\n"
+        f"stdout={p.stdout[-600:]}\nstderr={p.stderr[-600:]}"
+    )
+    assert got_files == want_files, (
+        f"{state}: expected baseline {want_files}, got {got_files}. "
+        "An unexpectedly empty baseline makes config-diff report every tenant "
+        "as added, which reads as a real finding."
+    )
+    if want_files:
+        # Content, not just the name. The file exists under both the base and
+        # the head commit, so a name-only oracle cannot tell "archived the
+        # base" from "archived whatever was checked out".
+        body = (baseline_dir / want_files[0]).read_text(encoding="utf-8")
+        assert f'"{_BASE_CPU}"' in body and f'"{_HEAD_CPU}"' not in body, (
+            f"{state}: the baseline holds the wrong revision of "
+            f"{want_files[0]}. Expected the value from the base commit "
+            f"({_BASE_CPU}); got:\n{body}"
+        )
+    if state == "base_not_in_clone":
+        # ⛔ Both causes, not just one. A single-cause message ("the checkout
+        # step needs fetch-depth: 0") is what this step shipped first, and it
+        # sends an operator to change a setting the generated workflow already
+        # sets — two unrelated causes collapsing into one instruction, which
+        # is the same defect this step exists to remove, moved to the
+        # diagnostics. Asserting only "fetch-depth" was satisfied by that
+        # rejected message, so it constrained nothing.
+        for cause in ("checkout", "rewritten"):
+            assert cause in p.stdout, (
+                f"the failure must name the {cause!r} cause; a message that "
+                f"offers only one leaves the other unactionable. "
+                f"got {p.stdout[-400:]!r}"
+            )
+    if state == "first_import":
+        assert "first import" in p.stdout, (
+            "an empty baseline that IS correct must say so, or the resulting "
+            f"all-added report looks like the bug; got {p.stdout[-300:]!r}"
+        )
+    if state.startswith("export_ignored"):
+        # The point is that the rule had NO effect. `want_files` above already
+        # asserts the full set arrived; this pins the silence too, so a future
+        # switch back to `git archive` cannot pass by adding a warning.
+        assert p.stdout.strip() == "", (
+            "an export-ignore rule must not change the baseline at all now "
+            "that extraction goes through the index. Any output here means "
+            f"the extraction path changed; got {p.stdout[-400:]!r}"
+        )
+    if state == "config_dir_is_a_submodule":
+        assert "not a directory" in p.stdout, (
+            "a gitlink at the config path must be a loud fault: the tree "
+            "lookup used to resolve the commit it points at, which is absent "
+            "here by definition, and the fault was filed as a first import. "
+            f"got {p.stdout[-400:]!r}"
+        )
+
+
+# `flips` records the MEASURED counterfactual: whether the shipped step reaches
+# a different outcome than the bare `docker run ... > report` this replaced.
+# Five of these seven states are NOT new detection — `bash -e` already aborted
+# the step on any non-zero status, so they were loud before. What the `rc > 1`
+# branch buys there is a MESSAGE naming the cause, which matters but is a
+# smaller claim than "now caught". Writing that down because the first draft of
+# this PR's commit message claimed the guard was new detection, and the
+# measurement below is what corrected it.
+@pytest.mark.skipif(
+    any(shutil.which(t) is None for t in _SHELL_TOOLS),
+    reason=f"executing the generated step needs {_SHELL_TOOLS} on PATH",
+)
+@pytest.mark.parametrize("state,rc,report,want_rc,want_in_stdout,flips", [
+    # ⭐ THE fix. config-diff signals "changes detected" with exit 1, and this
+    # job runs on every PR that touches conf.d/ — so before this change the
+    # step failed on the ordinary case, and `Post PR comment` (which inherits
+    # an implicit success()) never ran. The blast-radius comment #1358 is about
+    # could not be posted at all on any PR that actually changed config.
+    # The payload is opaque to the step, which only moves bytes — so it names
+    # no tenant (dev-rules #2). What matters is only that it is non-empty.
+    ("changes_detected", 1, "# Blast radius\n\n- 1 tenant changed\n", 0, "",
+     True),
+    # ⭐ The other flip: exit 0 with nothing on stdout used to SUCCEED, and an
+    # empty file went on to the comment step.
+    ("zero_but_empty_report", 0, "", 1, "empty report", True),
+    ("no_changes", 0, "# No configuration changes\n", 0, "", False),
+    # Already loud before this change (bash -e). Pinned for the MESSAGE.
+    ("caller_error", 2, "", 2, "expected 0 or 1", False),
+    ("image_pull_failed", 125, "", 125, "expected 0 or 1", False),
+    ("oom_killed", 137, "", 137, "expected 0 or 1", False),
+    # Exit 1 with an empty report: an unknown subcommand leaves the entrypoint
+    # exiting 1, which by status alone is indistinguishable from "changes
+    # detected". The status was already fatal before; what is new is that the
+    # step now distinguishes the two at all, via the report.
+    ("one_but_empty_report", 1, "", 1, "empty report", False),
+    # ⭐ The head side had the same hole the baseline side did, and the guard
+    # added above for the EMPTY report is what let it through: with CONFIG_DIR
+    # naming a path that is not in the repo, both `-v` mounts materialise as
+    # empty directories (a bind mount creates a missing host path rather than
+    # failing), the tool exits 0, and it prints a 322-byte "no changes"
+    # report — non-empty, so `[ ! -s ]` passes it and the comment publishes.
+    # Green and silent on every future run. The stub's rc/report here are
+    # deliberately the SUCCESS shape: the step must fail before reaching them.
+    ("head_config_dir_missing", 0, "# No configuration changes\n", 1,
+     "does not exist in this pull request", True),
+])
+def test_generated_blast_radius_step_honours_the_exit_contract(
+    generated, tmp_path, state, rc, report, want_rc, want_in_stdout, flips,
+) -> None:
+    """Execute the shipped `Config diff (blast radius)` step against a stub.
+
+    ⛔ Until this existed, the two guards in that step had no executing
+    coverage anywhere in the tree — their only pin was the verbatim text in
+    `_EXPECTED_GH_GENERATE`, and a text pin proves the body was not EDITED, not
+    that it is CORRECT. That is the same gap that let #1358 ship: this module's
+    own header used to state that it does not execute the shell it generates.
+
+    The stub stands in for `docker` only. It cannot check that the mounts are
+    right — that needs a real daemon and a real image — so this test is scoped
+    to the contract the step applies to whatever the tool returns.
+    """
+    step, wf_env, job_env = _extract_step(generated[("github", "kustomize")],
+                                          "Config diff (blast radius)")
+    work = tmp_path / state
+    work.mkdir()
+    if state != "head_config_dir_missing":
+        # What `actions/checkout` would have put there. Created for every
+        # other state so the head-side guard is satisfied and each case
+        # exercises the contract it is actually about — and NOT created for
+        # the one state that is about the guard itself.
+        (work / wf_env["CONFIG_DIR"]).mkdir(parents=True)
+    p = _run_generated_step(
+        step, wf_env, job_env, work, base_sha="unused-by-this-step",
+        # This step binds nothing itself; CONFIG_DIR and DA_TOOLS_IMAGE come
+        # from the workflow scope. `_resolve_step_env` asserts that absence
+        # rather than merely tolerating it, so a step that starts binding
+        # something cannot slip past under this flag.
+        expect_step_env=False,
+        stub_docker=(rc, report),
+    )
+    assert p.returncode == want_rc, (
+        f"[{state}] config-diff exited {rc} with a "
+        f"{'non-empty' if report else 'empty'} report, so the step should exit "
+        f"{want_rc}; it exited {p.returncode}.\n"
+        f"stdout: {p.stdout[-600:]!r}\nstderr: {p.stderr[-600:]!r}"
+    )
+    if want_in_stdout:
+        assert want_in_stdout in p.stdout, (
+            f"[{state}] the step failed as required but its ::error:: does not "
+            f"say why — {want_in_stdout!r} is not in {p.stdout[-600:]!r}. An "
+            "operator reading only the annotation has to guess between an "
+            "image problem and a config problem."
+        )
+    published = work / ".output" / "blast-radius.md"
+    if want_rc == 0:
+        # The comment step runs only on success, so on this path the file IS
+        # the customer-visible artifact. Asserting the exit status alone would
+        # pass just as happily on a step that truncated it.
+        assert published.read_text(encoding="utf-8") == report, (
+            f"[{state}] the step succeeded but the report handed to the "
+            "comment step is not what the tool produced."
         )
 
 
