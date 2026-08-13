@@ -717,7 +717,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "d5fee32441497edf9bcd12f7f10602e91f4b8938e14a68e47842149d8ad7e54f",
+ "source_digest": "9c8afe5b573290c0a7c347cceb7d015d29792e6ab18a7833ba5d3a09db35b2e2",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2529,11 +2529,15 @@
    "tests/ops/test_nightly_scan_matrix_drift.py",
    "tests/shared/test_actionlint_pin_parity.py"
   ],
+  "tests/ops/test_guard_defaults_scopes.py": [
+   "tests/ops/test_ci_aggregate_gate_contract.py"
+  ],
   "tests/ops/test_init_project.py": [
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_nightly_scan_matrix_drift.py"
   ],
   "tests/ops/test_nightly_scan_matrix_drift.py": [
+   "tests/ops/test_ci_aggregate_gate_contract.py",
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_nightly_race_issue_policy.py"
   ],

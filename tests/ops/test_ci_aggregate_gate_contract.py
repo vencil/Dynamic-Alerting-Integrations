@@ -1,4 +1,4 @@
-r"""The three ci.yml aggregate gates are required checks with no assertions.
+r"""The three ci.yml aggregate gates were required checks with no assertions.
 
 #1397. `ci.yml` reports three REQUIRED status checks — `Python Tests (3.13)`,
 `Go Tests (1.26)`, `Portal Tests` — from three jobs that run no tests at all.
@@ -44,7 +44,8 @@ catches both — the first through `_job_step_files`, the second because a gate
 without `always()` starts inheriting the gate through `needs:` and joins that
 module's exact `GATED_LEGS` set. What this module adds there is reach (the
 gate job and the detect job are outside the sibling's view by construction:
-it skips `always()` jobs and detect jobs) and strictness (key absence rather
+it opts `always()` jobs out explicitly, and a detect job never enters — it
+is not itself path-gated) and strictness (key absence rather
 than truthiness — see below).
 
 ⚠️ What this module does NOT cover.
@@ -54,13 +55,16 @@ checks — that lives in GitHub settings. `REQUIRED_CHECK_NAMES` below mirrors
 them, with the `gh api` command that produced the list.
 `docs/internal/iac-lint-baseline.md` has an in-repo checklist, but do not
 treat it as the list: its authority is line 66, the `gh api` invocation, not
-the tick-boxes at line 46, which name six checks out of the nineteen that are
+the tick-boxes at lines 44-46, which name six checks out of the nineteen that are
 actually required and do not include `Portal Tests`.
 
 ⛔ The biggest thing it does NOT cover, named because it is adjacent enough to
 be mistaken for covered: `run: pytest … || true` on a test leg is the shell
 spelling of `continue-on-error`, achieves exactly the same thing, sits in the
-same decision path, and NOTHING in this repo forbids it. It is banned in the
+same decision path, and nothing forbids it ON A ci.yml TEST LEG — the two
+existing `|| true` guards are scoped to other workflows
+(`tests/ops/test_guard_defaults_scopes.py`,
+`tests/ops/test_nightly_scan_matrix_drift.py`). It is banned in the
 gate scripts here (see `_EXIT_SWALLOW`) and deliberately not on the legs,
 because `python-tests-run` has a live and legitimate `|| true` on its "Install
 mtail" step and the narrowing that would separate the two is the one the
@@ -84,8 +88,8 @@ every workflow, because branch protection matches a check NAME regardless of
 which file produced it. Everything else is bound to `CI_WORKFLOW`. That leaves the LARGER half of the problem untouched
 and it is worth naming precisely, because #1398's summary is easy to read as
 "docs-ci's `all-checks` is weak": of the 19 required checks, **ten are
-path-gated jobs registered as required directly, with no aggregate layer at
-all** — `Go Lint`, `Version Consistency`, `Validate Tenant Config & Routes`
+path-gated jobs registered as required directly, with no REQUIRED aggregate
+layer above them** — `Go Lint`, `Version Consistency`, `Validate Tenant Config & Routes`
 (validate.yaml), and `Check Documentation Links` / `Front Matter` / `Coverage`
 / `MkDocs Build Verification` / `Validate Mermaid Diagrams` / `Documentation
 Line Count Monitor` / `Drift Detection (validate_all.py)` (docs-ci.yaml). A
@@ -137,16 +141,20 @@ including its bugs.
 The value domains are complete rather than sampled. `needs.<job>.result` has
 exactly four documented values (success / failure / cancelled / skipped —
 contexts reference), plus the empty string for "the expression did not
-resolve", which is the state #1397's failure scenario is actually about.
-dorny emits `true` or `false`, plus the same empty string. Detect result and
-So is the leg axis: `5^legs` per gate, taken in full. A covering design
+resolve", which is the state #1397's failure scenario is actually about — and it is
+documented: an unresolvable property "will evaluate to an empty string"
+(contexts reference). dorny emits `true` or `false`, plus the same empty
+string. Detect result and `*_changed` are taken
+exhaustively, and so is the leg axis: `5^legs` per gate, in full. A covering design
 lived here for one round and `_leg_tuples` records why it was reverted —
-the saving was 0.76 s and the blind region was four times what the comment
-claimed. Today: 75 cells for a one-leg gate, 1875 for `go-tests`, 2025 in
+the saving was 0.76 s, and the blind region was 60 of 125 leg tuples while
+the comment admitted only the 24 of them with three mutually distinct values. Today: 75 cells for a one-leg gate, 1875 for `go-tests`, 2025 in
 total.
 
-⚠️ Cost. The whole module runs in ~3 s in the dev container and ~5 s pinned to
-four vCPUs, which is what a GitHub-hosted runner has. On a Windows dev host it
+⚠️ Cost. The whole module runs in ~15 s in the dev container; an independent
+reviewer measured 30–64 s wall clock on a loaded host, so treat it as tens of
+seconds rather than a point value. Every cell is executed TWICE (see
+`_RUNNER_ENV`), which is where most of it goes. On a Windows dev host it
 is a few minutes — four independent measurements of the pre-covering-design
 version spanned 137–246 s — because a `bash` spawn costs ~150 ms there against
 ~3 ms on Linux, and every cell is a spawn. CI is Linux, so the figure that
@@ -178,9 +186,10 @@ CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
 WORKFLOW_DIR = ROOT / ".github/workflows"
 
 BASH = shutil.which("bash")
-# ⛔ Per-test, never `pytestmark`: everything except the two matrix tests is
-# pure YAML and must keep running on the Windows dev host. A module-level skip
-# silently takes those with it.
+# ⛔ Per-test, never `pytestmark`: everything except the three bash-backed
+# tests (one truth table plus two negative controls) is pure YAML and must keep
+# running on the Windows dev host. A module-level skip silently takes those
+# with it.
 needs_bash = pytest.mark.skipif(
     BASH is None, reason="needs bash to execute the gate script")
 
@@ -492,7 +501,7 @@ def _path_gated_jobs(path: Path) -> dict[str, frozenset[str]]:
         if job_id in gated:
             continue
         condition = str(job.get("if", ""))
-        if any(f"needs.{d}.outputs." in condition for d in detect):
+        if any(f"needs.{d}.outputs" in condition for d in detect):
             raise AssertionError(
                 f"{path.name}::{job_id} gates on a detect job's outputs in a "
                 f"shape this module does not parse: {condition!r}. It is "
@@ -518,7 +527,8 @@ def _path_gated_jobs(path: Path) -> dict[str, frozenset[str]]:
 
 
 # ⛔ Jobs that LOOK like an aggregate gate — `if: always()` over at least one
-# path-gated leg — but that this module cannot model, with the reason and the
+# path-gated leg, and reading some job's `.result` — but that this module
+# cannot model, with the reason and the
 # ticket. Asserted as an exact set, so a new one cannot join a silent majority
 # and a fixed one cannot leave a stale excuse behind.
 UNMODELLED_GATE_SHAPED_JOBS = {
@@ -696,6 +706,7 @@ class _Cell:
     changed: tuple[str, ...]
     rc: int
     stderr: str
+    rc_runner: int      # same cell, re-run under a runner-like environment
 
 
 def _run_matrix(script: str, gate: Gate) -> tuple[_Cell, ...]:
@@ -720,40 +731,52 @@ def _run_matrix(script: str, gate: Gate) -> tuple[_Cell, ...]:
     `test_a_script_that_never_ran_is_not_mistaken_for_a_verdict`), and stderr
     is the only signal that separates that from a decision.
     """
-    argv = list(gate.shell_argv)
     with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "gate.sh"
-        path.write_text(script, encoding="utf-8", newline="\n")
-        summary = Path(tmp) / "step-summary.md"
-        summary.write_text("", encoding="utf-8", newline="\n")
-        argv.append(path.as_posix())
+        root = Path(tmp)
+        # Two script paths, so `$0` differs between the runs as well.
+        plain = root / "gate.sh"
+        under_runner = root / "_temp" / "runner-gate.sh"
+        under_runner.parent.mkdir()
+        for target in (plain, under_runner):
+            target.write_text(script, encoding="utf-8", newline="\n")
         cells = list(_cases(len(gate.bindings.legs),
                             len(gate.bindings.changed)))
 
-        def run(case) -> _Cell:
+        def once(case, script_path: Path, extra: dict[str, str],
+                 index: int) -> tuple[int, str]:
             detect, legs, changed = case
+            # ⛔ Per-cell summary file. One shared file across 64 threads was
+            # a real race the retry below would have smoothed over.
+            summary = root / f"summary-{index}-{script_path.name}"
             env = _env_for(gate, detect, legs, changed, summary.as_posix())
+            env.update(extra)
+            argv = list(gate.shell_argv) + [script_path.as_posix()]
             # ⛔ Retry once when the answer falls outside the contract's range.
-            # The scripts are deterministic, so a repeat cannot mask a real
-            # defect — but a `bash` that failed to START answers 126/127, and
-            # under load on a Windows host that happens: blind review measured
-            # one run of this module at `5 failed` and the next, unchanged, at
-            # `19 passed`, with every flaky cell a spawn failure being read as
-            # the gate's verdict. Instrument noise, not a finding — and the
-            # noise was in the FALSE-RED direction, which is how a guard gets
-            # deleted.
+            # `{0,1}` IS the contract's range, so a retry cannot convert a
+            # violation into a pass — but a `bash` that failed to START
+            # answers 126/127, and under load on a Windows host that happens:
+            # blind review measured one run of this module at `5 failed` and
+            # the next, unchanged, at `19 passed`, every flaky cell a spawn
+            # failure read as the gate's verdict. Noise in the FALSE-RED
+            # direction, which is how a guard gets deleted.
             for attempt in (1, 2):
                 done = subprocess.run(
                     argv, env=env, capture_output=True, encoding="utf-8",
                     errors="replace", timeout=60)
                 if done.returncode in (0, 1) or attempt == 2:
                     break
-            return _Cell(detect, legs, changed, done.returncode,
-                         done.stderr)
+            return done.returncode, done.stderr
+
+        def run(indexed) -> _Cell:
+            index, case = indexed
+            detect, legs, changed = case
+            rc, err = once(case, plain, {}, index)
+            rc_runner, _ = once(case, under_runner, _RUNNER_ENV, index)
+            return _Cell(detect, legs, changed, rc, err, rc_runner)
 
         workers = min(64, (os.cpu_count() or 4) * 4)
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            return tuple(pool.map(run, cells))
+            return tuple(pool.map(run, enumerate(cells)))
 
 
 # ⛔ Exact stderr text a gate is allowed to emit. Empty, and it is the seam the
@@ -761,6 +784,41 @@ def _run_matrix(script: str, gate: Gate) -> tuple[_Cell, ...]:
 # name one that exists. Add the literal text, never a pattern: the point is
 # that a NEW noise source has to be looked at once.
 ALLOWED_GATE_STDERR: frozenset[str] = frozenset()
+
+# ⛔ THE DIFFERENTIAL RUN — the answer to four consecutive defeats.
+#
+# Four rounds of review each defeated the previous attempt to prove a gate
+# script CANNOT reach runner state, and each fix extended an enumeration:
+# `$VAR` spellings → `${#X}` / `${!X}` / `$((X))` → command substitution →
+# an accept-set of commands. The fourth defeat is the one that settles it:
+# `[ -v CI ]` and `[ -d /home/runner/work ]` use ONLY accept-set tokens and
+# contain no `$` at all, because `[` is itself a channel to the environment
+# and the filesystem. There is no last member to that list.
+#
+# So the question changes from "can it read runner state" (unprovable by
+# inspection) to "DOES its verdict depend on anything this module does not
+# vary" — which is measurable. Every cell is executed twice: once in the
+# minimal environment, once with the script at a different path and the
+# environment below layered on. If the two exit codes ever differ, the gate
+# consulted something outside the modelled inputs, and it does not matter
+# which spelling it used to do it.
+#
+# ⚠️ Honest limit: this catches environment- and `$0`-derived channels, not a
+# probe of an absolute path that is absent on both runs (`[ -d /home/runner
+# /work ]` reads False here and False again). `_TEST_OPERATORS` covers that
+# side structurally, and the set of `test` unary operators — unlike the set of
+# ways to read the environment — really is closed and documented.
+_RUNNER_ENV = {
+    "CI": "true",
+    "GITHUB_ACTIONS": "true",
+    "GITHUB_RUN_ATTEMPT": "2",
+    "GITHUB_EVENT_NAME": "pull_request",
+    "GITHUB_REF": "refs/pull/1/merge",
+    "GITHUB_WORKSPACE": "/home/runner/work/repo/repo",
+    "GITHUB_TOKEN": "zzsentinel",
+    "RUNNER_OS": "Linux",
+    "RUNNER_TEMP": "/home/runner/work/_temp",
+}
 
 
 def _matrix_violations(gate: Gate, cells: tuple[_Cell, ...]) -> list[str]:
@@ -773,6 +831,18 @@ def _matrix_violations(gate: Gate, cells: tuple[_Cell, ...]) -> list[str]:
     problems: list[str] = []
     for cell in cells:
         want = _expected_exit(cell.detect, cell.legs, cell.changed)
+        if cell.rc != cell.rc_runner:
+            problems.append(
+                f"{gate}: the verdict CHANGES with the environment — exit "
+                f"{cell.rc} in the minimal env, {cell.rc_runner} under a "
+                f"runner-like one ({sorted(_RUNNER_ENV)} plus a different "
+                "script path), for the same modelled inputs "
+                f"({cell.detect!r}, {cell.changed!r}, {cell.legs!r}). The gate "
+                "consults something this module does not vary, so its 2025-"
+                "cell truth table describes a run that will not happen on CI. "
+                "⛔ It does not matter which spelling reached it — `$VAR`, "
+                "`$((…))`, `$(cmd)`, `[ -v NAME ]` — the fix is to bind the "
+                "value in the step's `env:` or stop reading it.")
         if cell.rc == want:
             continue
         bound = ", ".join(
@@ -825,6 +895,41 @@ def test_gate_discovery_did_not_refuse() -> None:
 UNWATCHED_PATH_GATED_JOBS: dict[str, str] = {}
 
 
+def _unwatched_ledger_problems(ledger, unwatched: set[str],
+                               jobs: dict) -> list[str]:
+    """PURE. The ledger is not a place to park a gate.
+
+    Blind review laundered a gate-shaped job to invisibility in three moves:
+    add a job that reads a leg's `.result`, delete its `always()` so it stops
+    being reported as an unmodelled gate, then write a ledger row. Two
+    structural answers: a ledgered job may not read anyone's `.result`, and a
+    row must still name a job that is actually unwatched today.
+
+    ⛔ Split out because the real ledger is empty, so both rules had never
+    executed — a tripwire nobody has watched fire, which is the standard this
+    module holds everything else to.
+    `test_the_unwatched_ledger_rules_can_actually_fail` feeds them input.
+    """
+    problems = []
+    for job_id in sorted(ledger):
+        if job_id not in unwatched:
+            problems.append(
+                f"UNWATCHED_PATH_GATED_JOBS names ci.yml::{job_id}, which is "
+                "not an unwatched path-gated job today. A row that outlives "
+                "its job keeps whatever id it holds outside the check above, "
+                "silently and forever — delete it.")
+        elif _READS_A_RESULT.search(json.dumps(jobs.get(job_id, {}))):
+            problems.append(
+                f"ci.yml::{job_id} is in UNWATCHED_PATH_GATED_JOBS but reads "
+                "another job's `.result`. A job that consults a verdict is a "
+                "gate, not a downstream consumer, and this ledger is the "
+                "wrong answer for it — ⛔ particularly if it reached this "
+                "state by having its `always()` removed, which is strictly "
+                "worse: a gate that skips reports Success to branch "
+                "protection.")
+    return problems
+
+
 def test_every_path_gated_leg_is_watched_by_a_gate() -> None:
     """Discovery is not allowed to quietly find nothing.
 
@@ -870,28 +975,8 @@ def test_every_path_gated_leg_is_watched_by_a_gate() -> None:
         "lost its `if:` and the gate's skip-tolerance branch is now dead code."
         for job_id in sorted(set(watched) - set(gated))
     ]
-    # ⛔ The ledger is not a place to park a gate. Blind review laundered a
-    # gate-shaped job to invisibility in three moves: add a job that reads a
-    # leg's `.result`, delete its `always()` so it stops being reported as an
-    # unmodelled gate, then write a ledger row. Two structural answers, both
-    # here: a ledgered job may not read anyone's `.result`, and a row must
-    # still name a job that is actually unwatched today.
-    for job_id in sorted(UNWATCHED_PATH_GATED_JOBS):
-        if job_id not in unwatched:
-            problems.append(
-                f"UNWATCHED_PATH_GATED_JOBS names ci.yml::{job_id}, which is "
-                "not an unwatched path-gated job today. A row that outlives "
-                "its job keeps whatever id it holds outside the check above, "
-                "silently and forever — delete it.")
-        elif _READS_A_RESULT.search(json.dumps(jobs.get(job_id, {}))):
-            problems.append(
-                f"ci.yml::{job_id} is in UNWATCHED_PATH_GATED_JOBS but reads "
-                "another job's `.result`. A job that consults a verdict is a "
-                "gate, not a downstream consumer, and this ledger is the "
-                "wrong answer for it — ⛔ particularly if it reached this "
-                "state by having its `always()` removed, which is strictly "
-                "worse: a gate that skips reports Success to branch "
-                "protection.")
+    problems += _unwatched_ledger_problems(
+        UNWATCHED_PATH_GATED_JOBS, unwatched, jobs)
     assert not problems, (
         f"{len(problems)} gate/leg mismatch(es) in ci.yml:\n  "
         + "\n  ".join(problems)
@@ -992,7 +1077,7 @@ def test_the_required_check_names_belong_to_the_gates_and_nothing_else() -> None
             rendered = _rendered_names(job_id, job)
             if rendered is None:
                 # ⚠️ Unrenderable does not mean dangerous. Six existing jobs
-                # across the other workflows build a name from `matrix.name`
+                # across the other workflows build a name from a matrix key
                 # or a `workflow_dispatch` input; refusing all of them was a
                 # false red on legitimate, long-standing jobs. What matters is
                 # only whether the name COULD come out as a required check, so
@@ -1098,11 +1183,16 @@ def test_every_job_a_gate_waits_for_is_also_weighed() -> None:
 def test_gate_shaped_jobs_are_either_modelled_or_ledgered() -> None:
     """A job that looks like a required-check gate must not be invisible.
 
-    `if: always()` over a path-gated leg is the whole shape of "a required
-    check that decides what a skip means". Any job wearing it that discovery
-    did NOT pick up is either a gate written in a spelling this module cannot
-    read, or a real gate somebody forgot to wire — both must be a decision
-    recorded here rather than silence.
+    `if: always()` over a path-gated leg, READING some job's `.result`, is the
+    whole shape of "a required check that decides what a skip means". A job
+    wearing it that discovery did NOT pick up is either a gate written in a
+    spelling this module cannot read, or a real gate somebody forgot to wire —
+    both must be a decision recorded here rather than silence.
+
+    ⚠️ The `.result` clause is load-bearing and narrows this: an informational
+    job with `always()` and a gated `needs:` that reads nothing is ignored, not
+    ledgered. Without it, the cheapest way to clear this message was to delete
+    the job's `always()` — a guard rewarding the one edit it exists to prevent.
     """
     detected: set[tuple[str, str]] = set()
     modelled: set[tuple[str, str]] = set()
@@ -1152,7 +1242,14 @@ def test_gate_shaped_jobs_are_either_modelled_or_ledgered() -> None:
 # dangerous keys are the ones nobody has thought of yet.
 _GATE_STEP_KEYS = frozenset({"name", "id", "env", "run", "shell", "if"})
 
-_SHELL_VAR = re.compile(r"\$\{[#!]?([A-Za-z_]\w*)|\$([A-Za-z_]\w*)")
+# ⛔ `\d` is in there for `$0`. The runner passes the gate a script path under
+# `/home/runner/work/_temp/…`; `[ "${0#/home/runner}" != "$0" ]` is a
+# harness/CI discriminator with no variable NAME in it anywhere, and it
+# survived the differential run too — both of that run's script paths are
+# temp dirs, so the probe answers the same way twice. Positional parameters
+# are runner-supplied inputs like any other, and a verdict has no business
+# reading them.
+_SHELL_VAR = re.compile(r"\$\{[#!]?([A-Za-z_0-9]\w*)|\$([A-Za-z_0-9]\w*)")
 _ARITH = re.compile(r"\$\(\((.*?)\)\)", re.S)
 _IDENT = re.compile(r"[A-Za-z_]\w*")
 # Command substitution, excluding `$((`. A gate that shells out can read
@@ -1168,7 +1265,9 @@ _COMMAND_SUB = re.compile(r"\$\((?!\()|`")
 # test steps. A gate job has no best-effort work by construction, so the rule
 # is exact there and the leg half is recorded as a gap instead of shipped as
 # a guess. → the `|| true` entry in the module docstring's gap list.
-_EXIT_SWALLOW = re.compile(r"\|\|\s*(?:true|:)(?=\s|$|;|&)|(?m:^\s*set\s+\+e\b)")
+_EXIT_SWALLOW = re.compile(r"\|\|\s*(?:true|:)(?=\s|$|;|&)"
+    r"|(?m:^\s*set\s+\+[a-z]*e)"
+    r"|(?m:^\s*set\s+\+o\s+errexit)")
 
 # Shell keywords carry no external state; they are not commands to allowlist.
 _SHELL_KEYWORDS = frozenset({
@@ -1182,6 +1281,18 @@ _GATE_COMMANDS = frozenset({
     "echo", "printf", "exit", "continue", "break", "return", "true", "false",
     ":", "[", "[[", "test", "set", "shift",
 })
+# ⛔ `test` operators a verdict may use: string and arithmetic comparison
+# only. This one IS a closed enumeration and legitimately so — `man test`
+# defines the whole set, unlike "ways to read the environment", which is what
+# four previous enumerations tried and failed to close. Refused here:
+# `-v NAME` (reads any variable with no `$` in sight) and the file tests
+# `-d -f -e -r -w -x -s -h -L -p -S -b -c -g -u -k -t -N -O -G -ef -nt -ot`
+# (read a filesystem the harness does not reproduce, which is the one channel
+# the differential run above cannot see).
+_ALLOWED_TEST_OPERATORS = frozenset({
+    "-z", "-n", "-eq", "-ne", "-gt", "-ge", "-lt", "-le", "-a", "-o",
+})
+_TEST_OPERATORS = re.compile(r"(?<![\w-])(-[A-Za-z]{1,2})(?![\w-])")
 _LINE_COMMENT = re.compile(r"(?m)#.*$")
 _FRAGMENT = re.compile(r"\|\||&&|[;|&]|\n")
 
@@ -1264,9 +1375,10 @@ def test_gate_scripts_are_executable_the_way_github_runs_them() -> None:
         ⛔ It has FOUR inputs, not one: the step, `defaults.run` on the job,
         `defaults.run` on the workflow, and the platform — `runs-on:
         windows-*` hands the block to PowerShell, and a `container:` without
-        bash falls back to `sh`. `defaults:` is refused wholesale rather than
-        key by key, which also covers `working-directory` (the sibling module
-        burned on exactly that key);
+        bash falls back to `sh`. `defaults.run` goes through an accept-set —
+        only `shell` is modelled, so any other key including
+        `working-directory` is refused (the sibling module burned on exactly
+        that key), and so do the verdict step's own keys;
       * a `${{ }}` expression inside `run:` — the runner substitutes those
         before bash starts, so a matrix that only sets env would execute a
         different script than CI does;
@@ -1274,7 +1386,8 @@ def test_gate_scripts_are_executable_the_way_github_runs_them() -> None:
         leaves it empty while the runner supplies a value;
       * ⛔ EXTRA `env:` anywhere in the job. This is an accept-set, not a list
         of dangerous names: the step's `env:` must be exactly the bindings
-        this module models, and the job and workflow must declare none. The
+        this module models plus what `_simulated_runner_vars` reproduces, and
+        the job and workflow must declare nothing beyond that set. The
         bypass that forced it was `BASH_ENV`, which bash sources before the
         script runs — measured, a `BASH_ENV` file containing `exit 0` makes
         the gate return 0 for a failing input with no output at all. A
@@ -1354,6 +1467,18 @@ def test_gate_scripts_are_executable_the_way_github_runs_them() -> None:
                 "PowerShell, where this script is not even valid — so the "
                 "whole exit-code matrix would be asserting about a shell that "
                 "never runs it.")
+        operators = sorted(
+            set(_TEST_OPERATORS.findall(_LINE_COMMENT.sub("", gate.script)))
+            - _ALLOWED_TEST_OPERATORS)
+        if operators:
+            problems.append(
+                f"{gate}: the gate script uses the test operator(s) "
+                f"{operators}. `-v` reads any environment variable without a "
+                "`$`, and the file tests read a filesystem this module does "
+                "not reproduce — both are channels the exit-code differential "
+                "cannot see, because they answer the same way in both runs. "
+                "A verdict compares the results it was given; it does not "
+                "probe the machine.")
         strangers = sorted(_command_words(gate.script) - _GATE_COMMANDS)
         if strangers:
             problems.append(
@@ -1808,7 +1933,25 @@ def test_discovery_reads_the_env_names_instead_of_knowing_them(
         "reported one.")
 
 
-def test_the_free_variable_scanner_sees_every_expansion_spelling() -> None:
+def test_the_unwatched_ledger_rules_can_actually_fail() -> None:
+    """Both directions, on synthetic input, because the real ledger is empty.
+
+    Without this the two rules that close the laundering path would be dead
+    code that reads as protection.
+    """
+    jobs = {"zq-plain": {"steps": [{"run": "echo hi"}]},
+            "zq-reader": {"steps": [{"run": "echo ${{ needs.zq-leg.result }}"}]}}
+    assert _unwatched_ledger_problems({}, {"zq-plain"}, jobs) == []
+    assert _unwatched_ledger_problems({"zq-plain": "why"}, {"zq-plain"},
+                                      jobs) == []
+    stale = _unwatched_ledger_problems({"zq-gone": "why"}, {"zq-plain"}, jobs)
+    assert stale and "not an unwatched path-gated job" in stale[0], stale
+    parked = _unwatched_ledger_problems({"zq-reader": "why"},
+                                        {"zq-reader"}, jobs)
+    assert parked and "reads" in parked[0], parked
+
+
+def test_the_free_variable_scanner_sees_the_spellings_that_defeated_it() -> None:
     """Samples in both directions, because the first version had neither.
 
     The free-variable check is the only thing standing between the exit-code
