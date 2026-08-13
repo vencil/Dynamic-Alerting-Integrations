@@ -12,8 +12,11 @@ declared-but-unwired guard, not decoration):
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import re
+import subprocess
+import sys
 
 import pytest
 import yaml
@@ -188,7 +191,11 @@ def _stub_result(errors=(), infos=()):
         "infos": list(infos),
         "stats": {"generator_faces": -1, "artifact_faces": -1,
                   "generator_keys": -1, "artifact_keys": -1,
-                  "artifacts_without_defaults": -1},
+                  "artifacts_without_defaults": -1,
+                  "confd_roots_scanned": -1,
+                  "confd_roots_exempt_from_fifth_floor": -1,
+                  "confd_roots_watched_by_fifth_floor": -1,
+                  "roots_only_the_fifth_floor_notices": ["<stub, not measured>"]},
     }
 
 
@@ -225,7 +232,10 @@ def test_run_check_returns_all_three_result_keys():
     assert set(result) == {"errors", "infos", "stats"}, sorted(result)
     assert set(result["stats"]) == {
         "generator_faces", "artifact_faces", "generator_keys", "artifact_keys",
-        "artifacts_without_defaults"}, sorted(result["stats"])
+        "artifacts_without_defaults", "confd_roots_scanned",
+        "confd_roots_exempt_from_fifth_floor",
+        "confd_roots_watched_by_fifth_floor",
+        "roots_only_the_fifth_floor_notices"}, sorted(result["stats"])
 
 
 def test_main_without_ci_is_report_only(monkeypatch):
@@ -725,6 +735,52 @@ def test_a_missing_artifact_is_fail_closed_and_names_the_path(monkeypatch, capsy
     assert "crashed" in err and "_defaults.yaml.gone" in err, err
 
 
+def test_the_reader_supplies_the_path_that_the_parser_does_not(tmp_path):
+    """⛔ The branch `_read_artifact_keys` exists for, walked at last.
+
+    Two tests already claim the reader "names the path", and both pass WITHOUT
+    the wrapper: they delete a file, and `FileNotFoundError` carries the path by
+    itself. The branch the wrapper was actually written for — round 4's finding
+    that `yaml.safe_load` reports `<unicode string>` and no filename — had never
+    been executed by anything. So the provenance claim rested on the one failure
+    mode that does not need it.
+
+    Both halves are pinned here, because either alone is satisfiable by an
+    accident: the parser really does hide the file, AND the wrapper really does
+    supply it.
+
+    ⛔ `PROJECT_ROOT` is re-pointed rather than a broken file being dropped into
+    the real tree: `_read_artifact_keys` uses it only to compute the relative
+    path for the message, and a malformed `_defaults.yaml` written into this
+    repo — even briefly — is exactly the state four other floors exist to catch.
+    """
+    rel = "some/conf.d/_defaults.yaml"
+    bad = tmp_path / rel
+    bad.parent.mkdir(parents=True)
+    # genuinely malformed: a mapping value where YAML cannot accept one
+    bad.write_text("defaults:\n  a: b: c\n", encoding="utf-8")
+
+    # 1) the parser's own error names no file — the premise for the wrapper.
+    with pytest.raises(Exception) as raw:
+        gate._defaults_section(bad.read_text(encoding="utf-8"))
+    assert "_defaults.yaml" not in str(raw.value), (
+        "the parser now names the file on its own; if that is really true the "
+        f"wrapper's justification has changed, so re-read it: {raw.value}")
+
+    # 2) …and the wrapper supplies it.
+    real_root = gate.PROJECT_ROOT
+    try:
+        gate.PROJECT_ROOT = tmp_path
+        with pytest.raises(RuntimeError) as wrapped:
+            gate._read_artifact_keys(bad)
+    finally:
+        gate.PROJECT_ROOT = real_root
+    assert gate.PROJECT_ROOT == real_root
+    assert str(wrapped.value).startswith(f"{rel}: "), wrapped.value
+    # …and the provenance really came from the wrapper, not from the cause.
+    assert rel not in str(wrapped.value.__cause__), wrapped.value.__cause__
+
+
 def test_the_artifact_face_is_derived_not_enumerated():
     """⛔ The three ways the hardcoded-path version was walked past (blind
     review, round 3 — each demonstrated by injecting `mysql_connections_critical`
@@ -803,7 +859,23 @@ def test_the_two_floors_blame_the_right_cause(monkeypatch):
     non_shipped = [rel for rel in scanned
                    if not any(rel == root or rel.startswith(root + "/")
                               for root in gate._SHIPPED_CONFD_ROOTS)]
-    assert len(non_shipped) >= 2, non_shipped
+    # …and a THIRD collision to dodge, same reason as the two above: the #1411
+    # per-root floor fires when a root contributes nothing, and 9 of the 12
+    # roots hold a single file — exempting that file empties its root and that
+    # floor speaks first. So only files whose root has a sibling are usable
+    # here. ⛔ This is picking a probe that isolates the floor under test, NOT
+    # weakening it: the per-root floor's own behaviour is pinned in
+    # `test_a_root_that_still_has_files_but_zero_keys_is_a_violation`.
+    _root_size: dict[str, int] = {}
+    for rel in scanned:
+        r = gate.conf_d_root(rel)
+        if r:
+            _root_size[r] = _root_size.get(r, 0) + 1
+    non_shipped = [rel for rel in non_shipped
+                   if _root_size.get(gate.conf_d_root(rel) or "", 0) >= 2]
+    assert len(non_shipped) >= 2, (
+        "no multi-file non-shipped root left to probe with; this test needs two "
+        f"files that can be exempted without emptying their root: {non_shipped}")
     # …and the two SMALLEST of them, so the artifact key floor (a third floor,
     # pinned in its own test) does not fire first and mask which floor this test
     # is actually about.
@@ -1034,6 +1106,917 @@ def test_the_leaf_comes_from_the_walk_even_when_the_leaf_contains_a_dot():
     assert m.group(1) == "a.b_critical", (m.group(1), msg[0])
 
 
+def _root_face(root: str, *keys: str):
+    """One artifact under `root`, carrying `keys` at the top level."""
+    return [(f"{root}/_defaults.yaml", _flat(*keys))]
+
+
+def test_a_root_that_still_has_files_but_zero_keys_is_a_violation():
+    """⛔ The gap #1411 was opened for: files present, keys gone.
+
+    Every file-count floor is unmoved (the file is still there) and the global
+    key floor has margin, so before this floor the tree was invisible to all of
+    them.
+
+    ⛔ THE FROZEN FIGURES USED TO BE RESTATED HERE, IN FULL, and that is exactly
+    how the pair of them came apart. This docstring carried its own copy of both
+    measurements and all of their conditions, and the copy had drifted from the
+    one beside `_DEFAULTS_CONFD_ROOTS`: it paired ①'s post-exemption numerator
+    with its pre-exemption denominator, it called the pre-exemption fraction
+    "the same fact stated without the exemption" (it is not — the two count
+    different populations), and it said the exemption made no difference to ②
+    (true of ②'s numerator, false of its denominator). A duplicated measurement
+    is two things that have to be edited together, which is the same defect as a
+    number nobody re-measures, one level up.
+
+    ⛔ SINGLE SOURCE, and the pointer is the part that had to be corrected. The
+    INTEGERS live in the assertions of
+    `test_the_frozen_measurements_replay_against_their_own_commit`, which
+    re-measures them inside `72fdaf56` rather than comparing them against
+    today's tree. The CONDITIONS that pick out each measurement are stated once,
+    in the comment above `_DEFAULTS_CONFD_ROOTS`. ⚠️ The previous wording sent
+    the reader to that comment for the figures — after the figures had already
+    been taken out of it. Two pointers aimed at each other is what a
+    single-source claim looks like when nobody re-reads the other end.
+
+    Today's figure is likewise NOT here: `main()` re-derives and prints it every
+    run (`_roots_only_the_fifth_floor_notices`), and
+    `test_the_fifth_floor_figure_is_printed_with_its_universe_and_floor_subset`
+    pins that it is printed with its conditions attached.
+
+    ⚠️ ONE thing worth keeping HERE, because it is about this test's own probe
+    and belongs nowhere else: ①'s post-exemption numerator and the "of 17
+    tracked ARTIFACTS" figure in `_walk_defaults_keys` share an integer by
+    coincidence. They are different populations answering different questions
+    (the latter is the expressiveness of the top-level-only reader, #1392), and
+    neither may ever be edited to "agree" with the other.
+    """
+    root = "tests/golden/fixtures/l0-only/conf.d"
+    assert root in gate._DEFAULTS_CONFD_ROOTS, "probe must use a pinned root"
+    by_root = {r: _root_face(r, "x") for r in gate._DEFAULTS_CONFD_ROOTS}
+    by_root[root] = [(f"{root}/_defaults.yaml", {})]      # renamed `defaults:`
+
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_every_root_contributes(by_root)
+    msg = str(exc.value)
+    assert root in msg and "ZERO threshold keys" in msg, msg
+    # the likeliest cause leads, and the exemption list is NOT offered as the fix
+    assert "renamed" in msg, msg
+    assert "is NOT the remedy" in msg, msg
+
+
+def test_counterfactual_the_other_floors_are_silent_on_the_exact_same_input():
+    """⛔ The claim this floor is sold on: BEFORE it, this input was all green.
+
+    "Injecting the defect turns the suite red" only proves the defect is caught
+    NOW. What justifies a fifth floor is that the same input walks past the other
+    four — measured here rather than asserted, on real faces with one real root
+    emptied. (This repo has been burned three times claiming new detection power
+    without measuring the before.)
+    """
+    _generators, artifacts = gate._defaults_faces()
+    victim = "tests/golden/fixtures/l0-only/conf.d"
+    kept = {face: ({} if victim in face else keys)
+            for face, keys in artifacts.items()}
+    assert any(victim in f for f in kept), "probe root not in the real scan"
+    assert sum(len(k) for k in kept.values()) < sum(
+        len(k) for k in artifacts.values()), "probe removed nothing"
+
+    # floor 3 (global, per class) — silent: the loss is inside its margin
+    gate._assert_keys_floor(_generators, kept)
+    # floor 4 (per shipped root) — silent: the victim is a fixture, not shipped
+    by_root = {r: [(f, k) for f, k in kept.items() if r in f]
+               for r in gate._SHIPPED_CONFD_ROOTS}
+    gate._assert_shipped_roots_intact(by_root)
+    # floors 1-2 count FILES, and the file is still there — nothing to assert.
+
+    # …and the fifth one, on the same input, does fire.
+    all_by_root: dict[str, list] = {}
+    for face, keys in kept.items():
+        rel = face.split("(", 1)[1].rstrip(")")
+        root = gate.conf_d_root(rel)
+        if root:
+            all_by_root.setdefault(root, []).append((rel, keys))
+    with pytest.raises(gate._GateViolation, match="ZERO threshold keys"):
+        gate._assert_every_root_contributes(all_by_root)
+
+
+def test_a_root_that_vanished_is_reported_differently_from_one_that_emptied():
+    """Gone and empty have different remedies, so they are different messages.
+
+    ⛔ `all_by_root` is deliberately not pre-seeded from the pin — seeding it
+    would turn a vanished root into an empty one and hand the reader the wrong
+    repair.
+    """
+    by_root = {r: _root_face(r, "x") for r in gate._DEFAULTS_CONFD_ROOTS}
+    gone = by_root.pop("try-local/seed/conf.d")
+    assert gone, "sanity: the probe removed something"
+
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_every_root_contributes(by_root)
+    msg = str(exc.value)
+    assert "no artifact at all" in msg, msg
+    assert "ZERO threshold keys" not in msg, msg
+
+
+def test_an_unpinned_new_root_is_a_violation_because_nothing_would_watch_it():
+    """A new root is fine; an UNPINNED one is unwatched.
+
+    Without this, adding a fixture tree silently opts it out of the only floor
+    that can see it go to zero — and a pin that lags reality cannot detect a
+    disappearance either.
+    """
+    by_root = {r: _root_face(r, "x") for r in gate._DEFAULTS_CONFD_ROOTS}
+    by_root["tests/golden/fixtures/brand-new/conf.d"] = _root_face(
+        "tests/golden/fixtures/brand-new/conf.d", "y")
+
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_every_root_contributes(by_root)
+    assert "not pinned" in str(exc.value), exc.value
+
+
+def test_the_may_be_empty_list_is_not_a_blanket_exemption():
+    """Only roots that legitimately declare no thresholds may be empty.
+
+    ⛔ The list must stay a subset of the pin: an entry naming a root that is not
+    watched at all would read as an exemption while exempting nothing, and the
+    next person would add real roots to it expecting the same harmlessness.
+    """
+    assert gate._DEFAULTS_ROOTS_MAY_BE_EMPTY <= gate._DEFAULTS_CONFD_ROOTS, (
+        gate._DEFAULTS_ROOTS_MAY_BE_EMPTY - gate._DEFAULTS_CONFD_ROOTS)
+    # and it must stay small enough to read: every entry needs a stated reason,
+    # which only holds while a human is writing them one at a time.
+    assert 1 <= len(gate._DEFAULTS_ROOTS_MAY_BE_EMPTY) <= 3, (
+        "more than a handful of empty-by-design roots means the rule itself "
+        "is wrong (do not grow this list to make the floor quiet); an EMPTY "
+        "list makes the exemption below pass vacuously")
+
+    # ⛔ EVERY exempt root is built empty, not just the one under test. Handing
+    # the others a key trips a DIFFERENT arm — the one that makes the exemption
+    # list earn its entries on every run — so the moment this list grows a
+    # second entry the test would go red for a reason that has nothing to do
+    # with what it asserts. Measured: with a second (real, pinned) root added to
+    # `_DEFAULTS_ROOTS_MAY_BE_EMPTY`, the old construction failed on
+    # "...is listed in _DEFAULTS_ROOTS_MAY_BE_EMPTY, but it contributes 1
+    # threshold key(s) today" — a true message about a fixture the test built
+    # itself. Same construction as `test_the_may_be_empty_list_must_earn_its_
+    # entries_on_every_run`, and for the same reason.
+    by_root = {r: ([(f"{r}/_defaults.yaml", {})]
+                   if r in gate._DEFAULTS_ROOTS_MAY_BE_EMPTY
+                   else _root_face(r, "x"))
+               for r in gate._DEFAULTS_CONFD_ROOTS}
+    gate._assert_every_root_contributes(by_root)      # must NOT raise
+
+
+def test_the_pin_matches_what_the_real_repo_actually_has():
+    """The pin is only a tripwire while it equals reality.
+
+    ⛔ Derived from `conf_d_root` — the same function the gate uses — so this
+    cannot drift from the gate's own notion of a root.
+    """
+    _generators, artifacts = gate._defaults_faces()
+    real = set()
+    for face in artifacts:
+        rel = face.split("(", 1)[1].rstrip(")")
+        root = gate.conf_d_root(rel)
+        if root:
+            real.add(root)
+    assert real == set(gate._DEFAULTS_CONFD_ROOTS), {
+        "only in repo": sorted(real - set(gate._DEFAULTS_CONFD_ROOTS)),
+        "only in pin": sorted(set(gate._DEFAULTS_CONFD_ROOTS) - real),
+    }
+
+
+def _scanned_confd_roots() -> set[str]:
+    """Roots holding a defaults artifact, DERIVED from the scan, not the pin.
+
+    ⛔ Deriving them from `_DEFAULTS_CONFD_ROOTS` would make every test below
+    assert that the gate is consistent with its own pin — true by construction
+    the day someone drops a root from the pin, which is one of the two things
+    the pin exists to make loud.
+    """
+    roots = set()
+    for rel in gate._tracked_defaults_artifacts():
+        root = gate.conf_d_root(rel)
+        if root:
+            roots.add(root)
+    return roots
+
+
+def _blind_roots_recounted(generators, read_pairs) -> list[str]:
+    """The fifth floor's numerator, WITHOUT the function that reports it.
+
+    ⛔ `_roots_only_the_fifth_floor_notices` is an aggregator over
+    `_floors_that_notice_a_zeroed_root`, and every test of the printed figure
+    used to compute its "expected" by calling that same aggregator — which makes
+    the assertion `f(x) == f(x)`, true for every implementation of `f`.
+    Measured: dropping the first element of its return value left the suite at
+    107 passed and the gate at rc=0, with `main()` printing `6 of 11` where the
+    truth is 7 — the whole numerator can be silently short by one, on the one
+    figure this floor exists to publish.
+
+    So the contract is restated here over the building block instead: the result
+    is EXACTLY the non-exempt scanned roots for which the per-root probe reports
+    no earlier floor. Same inputs, one less layer, and an aggregator that drops,
+    duplicates, re-orders or filters differently cannot satisfy it.
+    """
+    roots = {gate.conf_d_root(rel) for rel, _keys in read_pairs} - {None}
+    return sorted(
+        root for root in roots
+        if root not in gate._DEFAULTS_ROOTS_MAY_BE_EMPTY
+        and not gate._floors_that_notice_a_zeroed_root(
+            generators, read_pairs, root))
+
+
+def test_every_scanned_root_is_wired_to_the_fifth_floor_through_the_real_entry(
+        monkeypatch):
+    """⛔ Per ROOT, and through `_defaults_faces()` — this pins the WIRING.
+
+    Every other test of this floor calls `_assert_every_root_contributes`
+    directly, which answers "does the function still work" and NOT "is it still
+    reached, for this root, by the code path the gate actually runs". Measured:
+    with the fifth floor's call site commented out, one test in this file went
+    red — and it is a test about the ARTIFACT KEY FLOOR that happens to assert
+    the fifth floor fires first, on the vanished-root arm. So the zero-keys arm
+    — the gap #1411 was opened for — had no real-entry coverage at all, and the
+    incidental guard covers exactly the two roots its own probe happens to name.
+
+    So: for EVERY non-exempt root the scan finds, stand the other four floors
+    down, make that one root read empty, and require the fifth to speak up and
+    name it. Roots come from the scan, not from the pin.
+
+    ⚠️ SCOPE of that measurement, because it reads like a search and is not one.
+    "Comment out the call site, see what goes red" finds tests that need the
+    fifth floor; it is structurally BLIND to a test that has come to LEAN on it.
+    When the fifth floor is stood down, the older floors it shadows wake up and
+    catch the same input — so a case whose probe now trips the fifth floor
+    instead of the floor it is named for stays green through the whole
+    experiment. There was one (`_trip_artifact_key_floor`, whose two e2e-bench
+    roots the fifth floor claims first); it was found by disabling the OTHER
+    floor, not this one. Shadowing has to be probed from both sides.
+    """
+    # ⛔ Not `>= 8`. That was a bare lower bound with three roots of slack, in a
+    # file whose stated discipline for every other floor is a bracket, and it
+    # would have gone on passing while a third of the loop quietly evaporated.
+    # Exact equality needs no hand-maintained number at all and cannot go
+    # vacuous: the left side is DERIVED from the defaults scan, the right side is
+    # the hand-written pin minus the hand-written exemption, so this is a real
+    # comparison of two independent things (it is `test_the_pin_matches_what_the
+    # _real_repo_actually_has` restated over exactly the universe this loop
+    # walks, which is the universe whose emptying would make the loop vacuous).
+    roots = sorted(_scanned_confd_roots() - gate._DEFAULTS_ROOTS_MAY_BE_EMPTY)
+    # ⛔ "Cannot go vacuous" was stated and was false. Both sides of the equality
+    # below are `something - _DEFAULTS_ROOTS_MAY_BE_EMPTY`, so an exemption list
+    # that swallowed the whole pin made BOTH sides `[]`, the equality hold, the
+    # loop run zero times and this test pass — the one test that pins the fifth
+    # floor's WIRING, satisfied by exempting everything. One token closes it,
+    # and it is a token rather than a number on purpose: any specific count here
+    # would fire the day a fixture is legitimately retired.
+    assert roots, (
+        "no non-exempt root left to walk — _DEFAULTS_ROOTS_MAY_BE_EMPTY has "
+        "grown to cover the scan, and this test would pass vacuously")
+    assert roots == sorted(
+        set(gate._DEFAULTS_CONFD_ROOTS) - gate._DEFAULTS_ROOTS_MAY_BE_EMPTY), {
+            "scanned but not pinned": sorted(
+                set(roots) - set(gate._DEFAULTS_CONFD_ROOTS)),
+            "pinned but not scanned": sorted(
+                set(gate._DEFAULTS_CONFD_ROOTS)
+                - gate._DEFAULTS_ROOTS_MAY_BE_EMPTY - set(roots))}
+
+    real_read = gate._read_artifact_keys
+    for victim in roots:
+        # Floors 1-2 count FILES (unmoved here, but the stand-down has to be
+        # total or a pass could be somebody else's catch), 3 and 4 are silenced
+        # outright. What is left standing is only the fifth.
+        monkeypatch.setattr(gate, "_DEFAULTS_ARTIFACT_FLOOR", 0)
+        monkeypatch.setattr(gate, "_DEFAULTS_ARTIFACT_READ_FLOOR", 0)
+        monkeypatch.setattr(gate, "_assert_keys_floor", lambda *_a, **_k: None)
+        monkeypatch.setattr(gate, "_assert_shipped_roots_intact",
+                            lambda *_a, **_k: None)
+
+        def _empty_under_victim(path, _victim=victim, _real=real_read):
+            rel = path.relative_to(gate.PROJECT_ROOT).as_posix()
+            return {} if gate.conf_d_root(rel) == _victim else _real(path)
+
+        monkeypatch.setattr(gate, "_read_artifact_keys", _empty_under_victim)
+
+        with pytest.raises(gate._GateViolation) as exc:
+            gate._defaults_faces()
+        msg = str(exc.value)
+        assert victim in msg, (victim, msg)
+        assert "ZERO threshold keys" in msg, (victim, msg)
+
+
+def test_the_floor_probe_asks_the_real_floors_rather_than_modelling_them(
+        monkeypatch):
+    """⛔ The probe must follow the real floors' own numbers, not a copy.
+
+    `_floors_that_notice_a_zeroed_root` is what `main()` prints from and what
+    the reasoning above rests on, so "it calls the real assertions" cannot just
+    be a comment. Both moves below leave the assertion functions untouched and
+    change only what those functions read — the artifact key FLOOR, and the
+    shipped-root TABLE — so a probe carrying its own `total - keys < FLOOR`, or
+    its own idea of which roots are shipped, would keep answering the old way.
+
+    ⛔ Each move is chosen to fire only on the ZEROED input, never on the
+    unmodified one, because the probe is a before/after difference: a floor
+    that was already breached is not credited with catching anything.
+    """
+    generators, artifacts = gate._defaults_faces()
+    read_pairs = [(gate._artifact_rel(face), keys)
+                  for face, keys in artifacts.items()]
+    assert all(rel for rel, _k in read_pairs), read_pairs
+
+    quiet = gate._roots_only_the_fifth_floor_notices(generators, read_pairs)
+    assert quiet, "no blind-spot root to probe with"
+    victim = quiet[0]
+    lost = sum(len(k) for rel, k in read_pairs if gate.conf_d_root(rel) == victim)
+    total = sum(len(k) for _rel, k in read_pairs)
+    assert lost, victim
+
+    # 1) raise the REAL artifact key floor to just above "victim gone" — still
+    #    below today's total, so the unmodified input stays clean.
+    monkeypatch.setattr(gate, "_DEFAULTS_ARTIFACT_KEYS_FLOOR", total - lost + 1)
+    assert not gate._floors_firing_on(generators, read_pairs), "baseline dirty"
+    fired = gate._floors_that_notice_a_zeroed_root(generators, read_pairs, victim)
+    assert gate._FLOOR_KEYS in fired, fired
+    monkeypatch.undo()
+
+    # 2) declare the victim a SHIPPED root, so the other floor now speaks for it.
+    monkeypatch.setattr(gate, "_SHIPPED_CONFD_ROOTS",
+                        dict(gate._SHIPPED_CONFD_ROOTS,
+                             **{victim: (1, 1, "probe root.")}))
+    assert not gate._floors_firing_on(generators, read_pairs), "baseline dirty"
+    fired = gate._floors_that_notice_a_zeroed_root(generators, read_pairs, victim)
+    assert gate._FLOOR_SHIPPED in fired, fired
+    monkeypatch.undo()
+
+    # …and with both back as they are, the same root is silent again — so the
+    # two assertions above are about the floors, not about the monkeypatch.
+    assert not gate._floors_that_notice_a_zeroed_root(
+        generators, read_pairs, victim)
+
+    # ── 3-5) the probe must CALL these two symbols, not reproduce them ───────
+    # ⛔ The moves above change what the real floors READ, so a probe carrying
+    # its own copy of their arithmetic — reading the same module globals — moves
+    # with them and stays green.
+    #
+    # ⚠️ THE MUTANT, WRITTEN OUT IN FULL, because the earlier wording described
+    # one that cannot be reproduced from its own description. It said "rewriting
+    # `_floors_firing_on` as a local `n_art < _DEFAULTS_ARTIFACT_KEYS_FLOOR`
+    # left the suite at 105 passed" — but `_assert_keys_floor` raises from TWO
+    # branches, and a model carrying only the artifact one is already caught by
+    # `test_a_floor_already_breached_is_not_credited_with_catching_a_root`,
+    # whose probe (`{"a producer that stopped yielding": {}}`) is a GENERATOR
+    # starvation. Re-measured on this tree, both variants, to say which is
+    # which:
+    #   * artifact branch only — 2 failed / 112 passed, killed by the
+    #     already-breached test AND by this one. It was never the silent mutant;
+    #     the sibling test was covering the half it left out.
+    #   * BOTH branches modelled (shipped-root table walked locally, plus
+    #     generator and artifact key totals against the same two constants) —
+    #     1 failed / 113 passed, and the one failure is THIS test. That is the
+    #     mutant this test exists for, and nothing else in the file sees it.
+    # ⛔ Keep the first bullet. "Half a model gets killed by a test aimed at the
+    # other half" is the reason the mutation had to be written out rather than
+    # summarised — a mutant that is weaker than its description overstates the
+    # coverage that killed it.
+    #
+    # Worse than a silent mutant, it SUPPRESSES a red: with the real
+    # `_assert_keys_floor` disabled outright, the honest probe turns 6 tests red
+    # and moves the printed figure from 7 to 9, while the modelling one turns
+    # only 4 red and goes on printing 7 — the gate at its most broken, reporting
+    # its healthy number. So these moves replace the FUNCTIONS, which no copy of
+    # their arithmetic can follow.
+    def _always(*_a, **_k):
+        raise gate._GateViolation("probe: this floor was called")
+
+    def _never(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(gate, "_assert_keys_floor", _always)
+    assert gate._FLOOR_KEYS in gate._floors_firing_on(generators, read_pairs)
+    monkeypatch.undo()
+
+    monkeypatch.setattr(gate, "_assert_shipped_roots_intact", _always)
+    assert gate._FLOOR_SHIPPED in gate._floors_firing_on(generators, read_pairs)
+    monkeypatch.undo()
+
+    # …and quiet fakes must make the probe quiet, so the two assertions above
+    # cannot be satisfied by a probe that simply always reports both floors.
+    monkeypatch.setattr(gate, "_assert_keys_floor", _never)
+    monkeypatch.setattr(gate, "_assert_shipped_roots_intact", _never)
+    assert gate._floors_firing_on(generators, read_pairs) == []
+    monkeypatch.undo()
+
+    # ⛔ and the same through the BEFORE/AFTER path, which is what `main()`'s
+    # figure is actually built from: a fake that fires only once the victim's
+    # keys are gone must be credited to the victim.
+    def _below_today(_gens, artifacts):
+        if sum(len(v) for v in artifacts.values()) < total:
+            raise gate._GateViolation("probe: keys dropped")
+
+    monkeypatch.setattr(gate, "_assert_keys_floor", _below_today)
+    assert not gate._floors_firing_on(generators, read_pairs), "baseline dirty"
+    assert gate._FLOOR_KEYS in gate._floors_that_notice_a_zeroed_root(
+        generators, read_pairs, victim)
+    monkeypatch.undo()
+
+
+def test_the_probe_and_the_gate_bucket_through_the_same_implementation(monkeypatch):
+    """⛔ `_bucket_by_root`'s docstring claims "ONE implementation, called by both".
+
+    Nothing asserted it. Measured (mutation): giving `_floors_firing_on` its own
+    loop over `_SHIPPED_CONFD_ROOTS` — with a `startswith(root)` prefix test
+    instead of the real `rel == root or rel.startswith(root + "/")` — left the
+    suite at 105 passed and the gate at rc=0. A second bucketing keeps answering
+    confidently after the real one changes shape, which is precisely how the
+    derived figure would come to describe a partition the gate no longer uses.
+
+    Both call sites are pinned by ONE sentinel, so neither can be re-pointed at
+    a private copy without this going red.
+
+    ⚠️ DISCLOSED GAP, and disclosed rather than closed on purpose — this round's
+    stopping rule is that a guard earns a guard only when its silent failure
+    lets the original defect back. A sentinel that raises pins THAT THE CALL
+    HAPPENS; it cannot pin that the RESULT IS USED. A call site keeping a
+    vestigial `_bucket_by_root(pairs)` and then bucketing again privately would
+    still hit the sentinel and pass here.
+
+    Left open because reaching it takes deliberate construction — a discarded
+    call plus a second implementation — and because the payload is covered from
+    the other side: `test_the_floor_probe_asks_the_real_floors_rather_than_
+    modelling_them` replaces the two floor FUNCTIONS, so a probe that bucketed
+    privately and fed the result to the real floors still has to agree with
+    them, and one that bucketed privately and modelled the floors too is the
+    mutant that test is built to kill. What is genuinely unguarded is the
+    narrow middle: a private bucketing whose answer happens to match the shared
+    one today. That is a latent divergence, not the #1411 defect returning.
+    """
+    boom = RuntimeError("bucketed through the shared implementation")
+
+    def _sentinel(_pairs):
+        raise boom
+
+    monkeypatch.setattr(gate, "_bucket_by_root", _sentinel)
+
+    with pytest.raises(RuntimeError) as probe_exc:
+        gate._floors_firing_on({}, [])
+    assert probe_exc.value is boom, probe_exc.value
+
+    with pytest.raises(RuntimeError) as gate_exc:
+        gate._defaults_faces()
+    assert gate_exc.value is boom, gate_exc.value
+
+
+def test_a_floor_already_breached_is_not_credited_with_catching_a_root():
+    """⛔ Before/after, not just after (#1411).
+
+    If the probe only looked at the zeroed input, a floor that was ALREADY
+    breached would be recorded as catching every root in turn — and the derived
+    figure would report zero blind spots at precisely the moment the gate was
+    most broken. Measured here by breaking a floor outright and checking the
+    probe still calls the root silent.
+    """
+    generators, artifacts = gate._defaults_faces()
+    read_pairs = [(gate._artifact_rel(face), keys)
+                  for face, keys in artifacts.items()]
+    victim = gate._roots_only_the_fifth_floor_notices(generators, read_pairs)[0]
+
+    # a floor breached on the UNMODIFIED input, for a reason that has nothing
+    # to do with the victim root: the generator half of the key floor.
+    starved = {"a producer that stopped yielding": {}}
+    assert gate._FLOOR_KEYS in gate._floors_firing_on(starved, read_pairs)
+
+    assert not gate._floors_that_notice_a_zeroed_root(
+        starved, read_pairs, victim)
+
+
+def test_the_may_be_empty_list_must_earn_its_entries_on_every_run(monkeypatch):
+    """⛔ The exemption is the one line that turns this floor off, so the GATE
+    checks it — not only a test (same place as the `unpinned` arm).
+
+    Measured before this check existed: adding a root carrying 2 real keys to
+    `_DEFAULTS_ROOTS_MAY_BE_EMPTY` left the gate at rc=0 AND the whole suite at
+    96 passed. The two tests that did catch the same edit on a different root
+    only did so because that root is their hardcoded probe — coverage by
+    coincidence, which disappears the moment somebody picks another root.
+    """
+    victim = sorted(_scanned_confd_roots() - gate._DEFAULTS_ROOTS_MAY_BE_EMPTY)[0]
+    # ⛔ The already-exempt roots are built EMPTY, the way the real repo has
+    # them. Handing them a key would trip this very check on the fixture and
+    # make the test pass for the wrong root.
+    by_root = {r: ([(f"{r}/_defaults.yaml", {})]
+                   if r in gate._DEFAULTS_ROOTS_MAY_BE_EMPTY
+                   else _root_face(r, "x"))
+               for r in gate._DEFAULTS_CONFD_ROOTS}
+    tracked = gate._tracked_confd_roots()
+
+    # sanity: this input is otherwise clean
+    gate._assert_every_root_contributes(by_root, tracked)
+
+    monkeypatch.setattr(gate, "_DEFAULTS_ROOTS_MAY_BE_EMPTY",
+                        gate._DEFAULTS_ROOTS_MAY_BE_EMPTY | {victim})
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_every_root_contributes(by_root, tracked)
+    msg = str(exc.value)
+    assert victim in msg, msg
+    assert "_DEFAULTS_ROOTS_MAY_BE_EMPTY" in msg, msg
+    # the remedy must not be "delete the keys": the two legitimate readings are
+    # a wrong exemption, or a tree that started declaring thresholds.
+    assert "Remove the line" in msg, msg
+
+
+def test_the_tracked_root_universe_is_derived_from_the_index_not_from_the_pin(
+        monkeypatch):
+    """⛔ `_tracked_confd_roots` must READ the index, and nothing used to say so.
+
+    Measured (mutation): replacing its whole body with
+    `set(_DEFAULTS_CONFD_ROOTS) | set(_DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS)`
+    — the function answering from the two lists it exists to CHECK — left the
+    suite at 105 passed and the gate at rc=0, and a fresh conf.d tree carrying
+    no `_defaults*` file then went unreported again: #1411's hole, reopened, in
+    silence. Every other test here either takes this function's own output as
+    its baseline and adds or removes one entry, or asserts `tracked ==
+    registered`, which that body satisfies by construction.
+
+    ⛔ Asserting "it contains some root that the defaults scan cannot reach"
+    does NOT kill it either — the two artifact-less roots are exactly what the
+    second list holds, so the impostor returns them too. The seam is what tells
+    the two bodies apart: feed a SYNTHETIC listing and require the answer to
+    follow it, which no body ignoring its input can do.
+    """
+    synthetic = [
+        "a/conf.d/tenants.yaml",                  # a root, one level down
+        "b/nested/conf.d/deep/deeper/x.yml",      # a root, several levels down
+        "c/conf.d",                               # the directory entry itself…
+        "d/notconfd/y.yaml",                      # …and two non-roots
+        "README.md",
+    ]
+    assert gate._tracked_confd_roots(synthetic) == {"a/conf.d", "b/nested/conf.d"}
+    assert gate._tracked_confd_roots([]) == set()
+    # nesting resolves to the INNER root, the same way `conf_d_root` defines it
+    assert gate._tracked_confd_roots(
+        ["p/conf.d/q/conf.d/r.yaml"]) == {"p/conf.d/q/conf.d"}
+
+    # …and the no-argument default is the index too, not some third answer.
+    # ⛔ The listing is fetched HERE, by this test, rather than through
+    # `gate._tracked_paths` — routing both sides through the same helper would
+    # make this line true for a `_tracked_paths` that had itself gone constant.
+    out = subprocess.run(
+        ["git", "-C", str(gate.PROJECT_ROOT), "ls-files", "-z"],
+        capture_output=True, check=True, timeout=60)
+    listing = [p for p in out.stdout.decode("utf-8", "replace").split("\0") if p]
+    assert gate._tracked_confd_roots() == gate._tracked_confd_roots(listing)
+    assert gate._tracked_confd_roots() != set()
+
+    # ⛔⛔ AND THE NO-ARGUMENT PATH HAS TO SEE AN INJECTION, which is the half
+    # the two lines above cannot supply. Measured: rewriting this function as
+    # "scan honestly when `paths` is given, return the two registration lists
+    # unioned when it is not" left the suite at 107 passed and the gate at
+    # rc=0 — and with that body, a new conf.d tree carrying no `_defaults*`
+    # file went unreported again, i.e. #1411's hole re-opened while every
+    # assertion above stayed green. It stayed green because the injected cases
+    # all pass `paths`, and the equality above compares two calls that are BOTH
+    # the default path: today they agree whether or not the default reads the
+    # index, so the comparison cannot tell an honest default from a fake one.
+    #
+    # Feeding the injection through `_tracked_paths` instead is what closes it:
+    # the default path has to consult that seam, so a body that answers from
+    # the registration lists cannot follow a synthetic listing it never reads.
+    monkeypatch.setattr(gate, "_tracked_paths",
+                        lambda: listing + ["zz/injected/conf.d/tenants.yaml"])
+    assert "zz/injected/conf.d" in gate._tracked_confd_roots(), (
+        "`_tracked_confd_roots()` did not follow `_tracked_paths` on its "
+        "no-argument path — it is answering from something other than the index")
+    # …and it must DROP what leaves the listing, not merely add what appears in
+    # it: a body that unions the registration lists with the seam's output
+    # satisfies the line above and still cannot see a disappearance.
+    surviving = [p for p in listing if not p.startswith("try-local/")]
+    monkeypatch.setattr(gate, "_tracked_paths", lambda: surviving)
+    assert "try-local/seed/conf.d" not in gate._tracked_confd_roots(), (
+        "a root that left the listing is still being reported — the answer is "
+        "being unioned with a registration list rather than derived")
+
+
+def test_the_index_listing_is_a_real_seam_on_both_derivations():
+    """⛔ `_tracked_paths` is injectable so BOTH derivations can be fed a world.
+
+    `_tracked_defaults_artifacts`' docstring said "a test injects a synthetic
+    listing" while nothing did — the parameter had no caller and no assertion,
+    so the sentence described an intention and the artifact half of the seam was
+    dead code with a claim attached. A seam nobody pulls is indistinguishable
+    from a seam that does not work.
+    """
+    # ⚠️ The predicate also requires the file to EXIST on disk, so a synthetic
+    # listing has to name real files. Real defaults artifacts are used as the
+    # positive cases and real non-artifacts as the negatives; what is synthetic
+    # is the LISTING, which is the input under test.
+    real = gate._tracked_defaults_artifacts()
+    assert len(real) >= gate._DEFAULTS_ARTIFACT_FLOOR, real
+
+    assert gate._tracked_defaults_artifacts([]) == []
+    assert gate._tracked_defaults_artifacts(real[:2]) == sorted(real[:2])
+    # a path that is in the listing but is not an artifact is filtered out…
+    assert gate._tracked_defaults_artifacts(
+        real[:1] + ["CHANGELOG.md", "Makefile"]) == real[:1]
+    # …and one that never reaches the listing is not conjured up from anywhere.
+    assert real[-1] not in gate._tracked_defaults_artifacts(real[:-1])
+    # a name that matches the predicate but has no file behind it is dropped,
+    # so an injected listing cannot manufacture an artifact out of a string.
+    assert gate._tracked_defaults_artifacts(
+        ["nowhere/at/all/conf.d/_defaults.yaml"]) == []
+
+
+def test_the_index_listing_really_comes_from_the_index(tmp_path):
+    """⛔ The seam moved the question up a level; this is where it stops.
+
+    Injecting `paths` pins the CALLEES. It says nothing about the argument they
+    build when nobody passes one, and that is `_tracked_paths` itself. Measured
+    against the suite as it stood at `3864b63`, before this test existed:
+    replacing its whole body with a literal list of today's answer left that
+    suite at 107 passed and the gate at rc=0 — every test either fed its own
+    listing or compared this against a `git ls-files` it ran itself, and a
+    constant copied from today satisfies both. It would drift eventually, when
+    some unrelated commit adds a file; "eventually" is a delay, not a tripwire.
+
+    ⚠️ THE POPULATION IS PART OF THAT NUMBER. Re-run on the final tree, the
+    same mutation is 1 failed / 113 passed and the one red is THIS test — which
+    is the point, but a reader who meets "107 passed" beside a 114-test file
+    has been handed a figure that no longer describes anything. Same defect as
+    a fraction quoted without the set it was counted over, which is what this
+    whole issue is about.
+
+    So the function is pointed at a DIFFERENT repository. A body that ignores
+    `PROJECT_ROOT` cannot follow, and no snapshot of THIS repo can be right
+    about a repo that did not exist when the snapshot was taken.
+    """
+    (tmp_path / "some" / "conf.d").mkdir(parents=True)
+    (tmp_path / "some" / "conf.d" / "_defaults.yaml").write_text(
+        "defaults:\n  x: 1\n", encoding="utf-8")
+    (tmp_path / "untracked.txt").write_text("not added\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True,
+                   capture_output=True, timeout=60)
+    subprocess.run(["git", "-C", str(tmp_path), "add",
+                    "some/conf.d/_defaults.yaml"], check=True,
+                   capture_output=True, timeout=60)
+
+    real_root = gate.PROJECT_ROOT
+    try:
+        gate.PROJECT_ROOT = tmp_path
+        assert gate._tracked_paths() == ["some/conf.d/_defaults.yaml"], (
+            "`_tracked_paths` did not follow PROJECT_ROOT — it is not reading "
+            "an index, it is reciting one")
+    finally:
+        # ⛔ Restored by hand rather than with monkeypatch because
+        # `_tracked_paths` is module state that everything else in this file
+        # reads; a teardown that ran late would hand another test a listing of
+        # a directory that has since been deleted.
+        gate.PROJECT_ROOT = real_root
+    assert gate.PROJECT_ROOT == real_root
+    assert len(gate._tracked_paths()) > 100, "the real listing did not come back"
+
+
+def test_every_tracked_confd_root_is_registered_somewhere():
+    """⛔ The comparison base is the INDEX, not the defaults scan (#1411).
+
+    Compared against the scan, "a new root must be registered" cannot fire for a
+    root with no `_defaults*` file — it never reaches the scan, so there is
+    nothing to find unpinned. Measured: two such roots were already tracked, and
+    adding a third left the gate at rc=0 and the suite at 96 passed.
+
+    The two lists are about FILES and must stay disjoint: holding a defaults
+    artifact and not holding one are not both true of the same tree.
+    """
+    tracked = gate._tracked_confd_roots()
+    without = set(gate._DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS)
+    assert tracked >= set(gate._DEFAULTS_CONFD_ROOTS) | without, {
+        "registered but not tracked": sorted(
+            (set(gate._DEFAULTS_CONFD_ROOTS) | without) - tracked)}
+    assert not (set(gate._DEFAULTS_CONFD_ROOTS) & without), sorted(
+        set(gate._DEFAULTS_CONFD_ROOTS) & without)
+    assert tracked - (set(gate._DEFAULTS_CONFD_ROOTS) | without) == set(), {
+        "tracked but registered nowhere": sorted(
+            tracked - (set(gate._DEFAULTS_CONFD_ROOTS) | without))}
+
+    # …and every "no defaults artifact" claim is re-checked against the scan,
+    # in both directions, so the list cannot become a quiet exemption: an entry
+    # that grows a `_defaults*` file has to move to the other list.
+    scanned = _scanned_confd_roots()
+    assert not (without & scanned), sorted(without & scanned)
+    for root, why in gate._DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS.items():
+        assert len(why) > 40, (root, why)   # a reason, not a placeholder
+
+
+def test_an_unregistered_new_root_is_a_violation_even_with_no_defaults_file():
+    """The arm that was structurally unable to fire before (#1411)."""
+    by_root = {r: _root_face(r, "x") for r in gate._DEFAULTS_CONFD_ROOTS}
+    tracked = gate._tracked_confd_roots() | {"components/brand-new/conf.d"}
+
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_every_root_contributes(by_root, tracked)
+    msg = str(exc.value)
+    assert "components/brand-new/conf.d" in msg, msg
+    assert "registered nowhere" in msg, msg
+    # ⛔ and it must NOT send the reader to the empty-by-design list, which is
+    # about content and would claim a check that structurally cannot run.
+    assert "_DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS" in msg, msg
+    assert "is NOT _DEFAULTS_ROOTS_MAY_BE_EMPTY" in msg, msg
+
+
+def test_a_registered_root_that_left_the_index_is_a_violation():
+    """A pin that lags reality has already absorbed the disappearance."""
+    by_root = {r: _root_face(r, "x") for r in gate._DEFAULTS_CONFD_ROOTS}
+    gone = sorted(gate._DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS)[0]
+    tracked = gate._tracked_confd_roots() - {gone}
+
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_every_root_contributes(by_root, tracked)
+    assert gone in str(exc.value), exc.value
+    assert "no longer exist in the index" in str(exc.value), exc.value
+
+
+def test_the_label_round_trip_floor_fires_and_counts_what_broke(monkeypatch):
+    """⛔ The floor that keeps the fifth floor's NUMERATOR from going vacuous.
+
+    `run_check` never sees `read_pairs`; it rebuilds them by inverting the
+    artifact labels, so the whole numerator rests on `_artifact_face` and
+    `_artifact_rel` agreeing. A label format that stayed human-identical but
+    stopped round-tripping made the gate print `0 of 0` — all four conditions
+    spelled out word for word — and exit 0 with `✅ threshold reachability OK`.
+
+    ⛔ That floor shipped with NO TEST AT ALL. Measured: disabling it outright
+    left the suite at 107 passed and the gate at rc=0. It does work — with the
+    inversion broken, a one-sided drift takes the gate from rc=0 to rc=1 — but
+    "it works today" and "something will say so tomorrow" are different claims,
+    and this file's whole subject is the gap between them.
+
+    ⚠️ TWO WAYS TO BREAK IT, and the message used to be honest about only one.
+    A label can fail to invert (`None`) or invert to the WRONG path, and the
+    count reported was of the `None`s while the TRIGGER was set inequality — so
+    the invertible-but-wrong case fired correctly and then announced `0 of 17`,
+    a breach reporting nothing broken.
+    """
+    real = gate._artifact_rel
+    n_artifacts = len(gate._defaults_artifacts())
+
+    # 1) labels that do not invert at all
+    monkeypatch.setattr(gate, "_artifact_rel", lambda _face: None)
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._defaults_faces()
+    msg = str(exc.value)
+    assert "round-trip" in msg, msg
+    assert f"{n_artifacts} of {n_artifacts} " in msg, (n_artifacts, msg)
+    monkeypatch.undo()
+
+    # 2) labels that invert to something that is not None and not right — the
+    #    case the old count reported as `0 of 17`.
+    monkeypatch.setattr(gate, "_artifact_rel",
+                        lambda face, _r=real: (_r(face) or "") + "-drifted")
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._defaults_faces()
+    msg = str(exc.value)
+    assert "round-trip" in msg, msg
+    assert not msg.startswith("0 of "), (
+        "an invertible-but-wrong label set was reported as nothing broken — "
+        f"the count is following `is None` rather than the trigger: {msg[:200]}")
+    assert f"{n_artifacts} of {n_artifacts} " in msg, (n_artifacts, msg)
+    monkeypatch.undo()
+
+    # 3) …and one broken label out of the set is reported as one, not as all of
+    #    them: the count has to be a count, not a flag.
+    victim = gate._artifact_face(
+        gate._defaults_artifacts()[0].relative_to(gate.PROJECT_ROOT).as_posix())
+    monkeypatch.setattr(
+        gate, "_artifact_rel",
+        lambda face, _r=real, _v=victim: None if face == _v else _r(face))
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._defaults_faces()
+    assert f"1 of {n_artifacts} " in str(exc.value), str(exc.value)[:200]
+    monkeypatch.undo()
+
+    # 4) and with both halves back, the real labels really do round-trip — or
+    #    every assertion above is about a floor that is always firing.
+    gate._defaults_faces()
+
+
+def test_the_fifth_floor_figure_is_printed_with_its_universe_and_floor_subset(
+        capsys):
+    """⛔ The COUNT may never be printed alone (#1411, and #1392's policy).
+
+    A bare number is exactly what went stale here. ⚠️ Stated with what the
+    record supports: the claim that 11 of the 12 conf.d roots could go to zero
+    unseen was written into SIX PLACES IN ONE COMMIT (`188cfb17`) and then
+    rewritten wholesale — the gate comment, this file, the CHANGELOG entry
+    twice, the COMMIT SUBJECT and the COMMIT BODY. An earlier wording
+    here said it "survived three copy-edits", which nothing in the history
+    shows, and the neighbouring sentence's "in three other places" is what that
+    seems to have been read off — a count of PLACES turning into a count of
+    REVISIONS. One commit is enough to make the point: the number could be
+    written six times without anything being able to check it once.
+
+    ⚠️ THREE CORRECTIONS TO THAT CORRECTION, each found by going back to the
+    commit rather than to the sentence about it — and the first two were made
+    in the same direction twice, which is the joke this docstring keeps being
+    the punchline of:
+      * FIVE, not four. The commit SUBJECT carries it, and that is the copy
+        `git log` puts in front of everyone.
+      * SIX, not five. The commit BODY carries it as well ("12 棵 conf.d root
+        有 11 棵能整棵歸零而四道 floor 全不響"). A sentence whose entire content
+        is "this was written in N places" has now under-counted N twice.
+      * the literal string `11 of 12` never appeared anywhere. Two of the six
+        are English — "of the 12 distinct conf.d roots, 11" in the gate comment
+        and "11 of the 12 conf.d roots" in this file — and the other four are
+        the Chinese wording (CHANGELOG ×2, commit subject, commit body), so
+        quoting only the English pair as if it covered all of them is its own
+        small version of the same error. Writing it in backticks made it look
+        like something a reader could grep for, and grepping finds nothing,
+        which reads as "the claim is false" rather than "the claim was
+        paraphrased".
+
+    ⛔ And it did not go stale by drifting away from a measurement — it went
+    stale when its GROUPING was edited and its numerator was not. So the line
+    has to carry the population the numerator is drawn from, not just a
+    denominator: `N of M` where M counted a different set than N is how a true
+    number becomes a false sentence. Hence the grouping, scenario, floor subset,
+    exemption AND the scanned/exempt/watched arithmetic all ride on it.
+    """
+    gate.main([])
+    line = [ln for ln in capsys.readouterr().err.splitlines()
+            if "fifth-floor coverage" in ln]
+    assert len(line) == 1, line
+    msg = line[0]
+
+    for token in ("conf_d_root",                       # the grouping
+                  "keys go to zero",                   # the scenario…
+                  "files left in place",               # …and its other half
+                  "all four earlier floors silent",    # the floor subset…
+                  "file floors", "per-class key floors", "_SHIPPED_CONFD_ROOTS",
+                  "_DEFAULTS_ROOTS_MAY_BE_EMPTY"):     # the exemption
+        assert token in msg, (token, msg)
+
+    # and the figure itself is DERIVED, not typed: it must equal what the probe
+    # says on the real faces right now.
+    #
+    # ⛔ RECOUNTED, not re-asked. This line used to call
+    # `_roots_only_the_fifth_floor_notices` — the very function whose output the
+    # line is checking — which made it true for any implementation. Measured:
+    # dropping the first element of that function's return value left the suite
+    # at 107 passed with `main()` printing `6 of 11` for a true 7.
+    #
+    # ⚠️ DISCLOSED, per this round's stopping rule: the recount below and the
+    # gate both start from `_defaults_faces()`, so this pins the ARITHMETIC over
+    # the faces and not the face set itself. If the scan came back with half the
+    # artifacts, both sides would shrink together and this test would stay
+    # green.
+    # ⛔ AND THE GAP IS BIGGER THAN THE EARLIER WORDING ADMITTED. It said the
+    # face set is "guarded ELSEWHERE, by the two file floors, both key floors
+    # and the fifth floor's own `missing` arm". What those five actually refuse
+    # to let past is the SCAN SHRINKING BELOW A FLOOR — not an artifact
+    # leaving. Measured, one file at a time, on all four artifacts under
+    # `tests/golden/fixtures/full-l0-l3/conf.d/**`: delete any ONE of them and
+    # all five stay silent, the gate exits 0, and the fifth-floor line prints
+    # the same fraction it printed before (only the artifact face count and the
+    # key total move). So what is disclosed is "a face set that has lost
+    # individual members reads as healthy here", which is a real hole with a
+    # cheap demonstration, not the narrow one the old sentence described.
+    # It is still left unguarded, per the stopping rule: those artifacts are
+    # nested layers of ONE fixture tree, the root itself stays non-empty, and
+    # the defect #1411 is about — a whole tree going silent — is what the fifth
+    # floor does catch. Described at its true size rather than talked down.
+    generators, artifacts = gate._defaults_faces()
+    read_pairs = [(gate._artifact_rel(f), k) for f, k in artifacts.items()]
+    expected = _blind_roots_recounted(generators, read_pairs)
+    # …and the reported list must BE that recount, element for element — a
+    # numerator that is merely the right LENGTH is satisfied by naming the
+    # wrong roots.
+    assert gate._roots_only_the_fifth_floor_notices(
+        generators, read_pairs) == expected, (
+            gate._roots_only_the_fifth_floor_notices(generators, read_pairs),
+            expected)
+    for root in expected:
+        assert root in msg, (root, msg)
+
+    # ⛔ NUMERATOR AND DENOMINATOR OVER THE SAME POPULATION. The numerator is
+    # post-exemption (`_roots_only_the_fifth_floor_notices` subtracts
+    # `_DEFAULTS_ROOTS_MAY_BE_EMPTY` before it starts), so printing it over
+    # `scanned` compared a count of watched roots with a count of scanned ones.
+    # The predicate the sentence states is true over the pre-exemption
+    # population of at least as many roots as the printed numerator; the
+    # numerator is correct for the watched population and for nothing else on
+    # the line. ⛔ Both counts are recomputed below rather than written down —
+    # this comment used to carry today's two integers and a third, which is the
+    # same restatement the gate comment it describes was emptied of.
+    scanned = {gate.conf_d_root(rel) for rel, _k in read_pairs} - {None}
+    watched = scanned - set(gate._DEFAULTS_ROOTS_MAY_BE_EMPTY)
+    assert f"{len(expected)} of {len(watched)} WATCHED" in msg, (
+        len(expected), len(watched), msg)
+    # …and both other terms are printed too, so the reader can redo the
+    # subtraction rather than take the denominator on trust.
+    assert f"{len(scanned)} scanned" in msg, (len(scanned), msg)
+    assert f"{len(scanned) - len(watched)} exempt" in msg, msg
+
+
 def test_a_floor_breach_says_that_nothing_else_ran_and_means_it(monkeypatch, capsys):
     """⛔ The message and the behaviour are asserted TOGETHER.
 
@@ -1146,7 +2129,36 @@ def test_the_walk_descends_through_lists():
 # criticised for being.
 
 def test_every_stats_field_is_recomputed_from_the_faces():
-    """Each field, against an independent recount of the same real faces."""
+    """Each field, against an independent recount of the same real faces.
+
+    ⛔ EVERY field, and the three the fifth floor added (#1411) had to be
+    written in after the fact — measured: pinning `confd_roots_scanned` to a
+    literal 0, and separately to 99, each left the suite at 105 passed and the
+    gate at rc=0, printing a denominator with no relationship to the tree.
+    `confd_roots_exempt_from_fifth_floor` was the same. The contrast is what
+    makes it a defect rather than an oversight: falsifying the neighbouring
+    `artifacts_without_defaults` DID go red, because that field was in this
+    list. "Each field" is a promise this test has to keep as fields are added.
+
+    ⛔ …and it was broken again by the same commit that wrote it. `roots_only_
+    the_fifth_floor_notices` — the one field that is a LIST rather than a count,
+    and the only one `main()` prints by name — was not here. "EVERY field" with
+    an exception in it is the shape of claim this whole file keeps having to
+    correct, so the loop below now starts from `stats.keys()` and requires every
+    key to have been visited: a field added later cannot be quietly left out.
+
+    ⚠️ DISCLOSED, per this round's stopping rule: the recount and `run_check`
+    both begin at `_defaults_faces()`, so what is pinned is the arithmetic over
+    the faces, not the face set. A scan that came back half-sized would move
+    both sides together. ⛔ What the two file floors, the two key floors and the
+    fifth floor's `missing` arm refuse to let past is a scan that shrinks BELOW
+    A FLOOR — not one that loses a member: measured, deleting any single
+    artifact under `tests/golden/fixtures/full-l0-l3/conf.d/**` leaves all five
+    silent and the gate at rc=0. (The same correction is written out in full
+    beside the sibling disclosure in
+    `test_the_fifth_floor_figure_is_printed_with_its_universe_and_floor_subset`.)
+    Still disclosed rather than guarded a sixth time, but at its real size.
+    """
     generators, artifacts = gate._defaults_faces()
     stats = gate.run_check(demand=set(), supply=set(), deferred=set(),
                            known_unwired={})["stats"]
@@ -1157,16 +2169,82 @@ def test_every_stats_field_is_recomputed_from_the_faces():
     assert stats["artifact_keys"] == sum(len(v) for v in artifacts.values())
     assert stats["artifacts_without_defaults"] == sum(
         1 for v in artifacts.values() if not v)
+
+    # ⛔ The root counts are recounted from the LABEL text, not via
+    # `_artifact_rel` — the same spelling the sibling tests here use. `run_check`
+    # derives them through `_artifact_rel`, so recounting the same way would make
+    # this line follow a drift between the label and its inverse instead of
+    # catching one (measured: a label format that stops round-tripping prints
+    # `0 of 0`, and this recount is one of the things that notices).
+    roots = {gate.conf_d_root(label[len(gate._ARTIFACT_FACE_PREFIX):-1])
+             for label in artifacts} - {None}
+    exempt = roots & set(gate._DEFAULTS_ROOTS_MAY_BE_EMPTY)
+    assert stats["confd_roots_scanned"] == len(roots)
+    assert stats["confd_roots_exempt_from_fifth_floor"] == len(exempt)
+    assert stats["confd_roots_watched_by_fifth_floor"] == len(roots - exempt)
+    # …and the three are a real subtraction, not three independent literals that
+    # happen to agree today.
+    assert (stats["confd_roots_watched_by_fifth_floor"]
+            + stats["confd_roots_exempt_from_fifth_floor"]
+            == stats["confd_roots_scanned"])
+    assert stats["confd_roots_exempt_from_fifth_floor"] > 0, (
+        "the exempt count must be exercised by a real entry, or the subtraction "
+        "above is satisfied by 0 + N == N and pins nothing")
+
+    # ⛔ The LIST field, recounted without the function that produces it — see
+    # `_blind_roots_recounted`. Measured before this line existed: dropping the
+    # first element of `_roots_only_the_fifth_floor_notices` left the suite at
+    # 107 passed and the gate at rc=0, printing a numerator short by one.
+    read_pairs = [(gate._artifact_rel(f), k) for f, k in artifacts.items()]
+    assert stats["roots_only_the_fifth_floor_notices"] == _blind_roots_recounted(
+        generators, read_pairs), stats["roots_only_the_fifth_floor_notices"]
+    # …and it is a real subset of the population it is printed over, so the
+    # numerator cannot come from a set the denominator does not describe.
+    assert set(stats["roots_only_the_fifth_floor_notices"]) <= roots - exempt
+    assert len(stats["roots_only_the_fifth_floor_notices"]) < len(roots - exempt), (
+        "every watched root is blind — either the tree changed a great deal or "
+        "the probe stopped detecting the earlier floors")
+
     # …and none of them may be trivially equal to another, or a copy-paste
     # between fields would satisfy every line above.
     assert stats["generator_faces"] != stats["artifact_faces"]
     assert stats["generator_keys"] != stats["artifact_keys"]
+    assert stats["confd_roots_scanned"] != stats["artifact_faces"]
+    assert stats["confd_roots_scanned"] != stats["confd_roots_watched_by_fifth_floor"]
+
+    # ⛔ "EVERY field" made mechanical: a field added to `stats` later and not
+    # asserted above turns this red rather than silently joining the four that
+    # already shipped unguarded.
+    assert set(stats) == {
+        "generator_faces", "artifact_faces", "generator_keys", "artifact_keys",
+        "artifacts_without_defaults", "confd_roots_scanned",
+        "confd_roots_exempt_from_fifth_floor",
+        "confd_roots_watched_by_fifth_floor",
+        "roots_only_the_fifth_floor_notices",
+    }, sorted(stats)
 
 
-def test_main_prints_the_coverage_line_on_every_run(capsys):
-    """It is printed pass OR fail — that is the whole basis for not writing the
-    number in a comment. Asserted on `main()`'s real output, with the numbers
-    cross-checked against a live recount."""
+def test_main_prints_the_coverage_line_on_a_pass_and_on_violations(capsys):
+    """It is printed whether the run passes or reports violations — that is the
+    basis for not writing the number in a comment. Asserted on `main()`'s real
+    output, with the numbers cross-checked against a live recount.
+
+    ⚠️ NOT "pass OR fail", which is what this said and is measurably wrong on
+    one path: a FLOOR BREACH makes `run_check` raise while the faces are being
+    built, so `main()` returns having printed no coverage line at all (measured,
+    by raising `_DEFAULTS_ARTIFACT_KEYS_FLOOR` above today's total: no line, and
+    rc=1 only under `--ci` — without the flag the same breach is report-only at
+    rc=0). The policy survives the correction — a floor breach means the face
+    set is not trustworthy, and a coverage figure computed over an untrustworthy
+    scan is worth less than the loud error that replaces it — but the sentence
+    supporting the policy has to be the true one.
+
+    ⛔ AND THE NAME WAS PART OF THE FALSE SENTENCE. It said "on every run" while
+    this very docstring recorded the path where it is not printed, and that path
+    had no assertion at all — a documented exception with nothing holding it.
+    The negative is now pinned where the breaches already run, in
+    `test_every_floor_breach_is_a_violation_not_a_crash`.
+    """
     rc = gate.main(["--ci"])
     err = capsys.readouterr().err
     line = [ln for ln in err.splitlines() if "defaults-tier coverage" in ln]
@@ -1272,13 +2350,29 @@ def _trip_artifact_key_floor(monkeypatch):
     monkeypatch.setattr(gate, "_tracked_defaults_artifacts", lambda: kept)
     monkeypatch.setattr(gate, "_defaults_artifacts",
                         lambda: [gate.PROJECT_ROOT / r for r in kept])
+    # ⛔ …and the fifth floor (#1411) has to be stood down, or this case stops
+    # being about the artifact key floor at all. Dropping `tests/e2e-bench/`
+    # empties two PINNED roots, so `_assert_every_root_contributes`' `missing`
+    # arm raises first and the parametrised assertion passes on ITS message.
+    # Measured: with the artifact key floor deleted outright, and again with it
+    # put back on a bare `RuntimeError`, this case still passed — it had
+    # silently stopped guarding the branch it is named for. (Counterfactual
+    # across commits: the same param FAILED at `72fdaf56` with the floor
+    # disabled and PASSED at `005ac8d`.) Same stand-down as the sibling
+    # `test_the_artifact_key_floor_sees_a_group_stop_yielding`, which meets the
+    # shadowing head-on by asserting both floors in the order a reader hits them.
+    monkeypatch.setattr(gate, "_assert_every_root_contributes", lambda _b: None)
 
 
-@pytest.mark.parametrize("trip", [
-    _trip_scan_floor, _trip_read_floor, _trip_shipped_root_floor,
-    _trip_generator_key_floor, _trip_artifact_key_floor,
+@pytest.mark.parametrize("trip,names_its_own_floor", [
+    (_trip_scan_floor, "defaults-artifact scan found only"),
+    (_trip_read_floor, "survive the exemption table"),
+    (_trip_shipped_root_floor, "shipped conf.d root"),
+    (_trip_generator_key_floor, "GENERATOR faces yielded"),
+    (_trip_artifact_key_floor, "ARTIFACT faces yielded"),
 ], ids=["scan", "read", "shipped-root", "generator-keys", "artifact-keys"])
-def test_every_floor_breach_is_a_violation_not_a_crash(monkeypatch, capsys, trip):
+def test_every_floor_breach_is_a_violation_not_a_crash(
+        monkeypatch, capsys, trip, names_its_own_floor):
     """⛔ Exit-code semantics, per `scripts/tools/_lib_exitcodes.py`: 1 is "the
     tool ran correctly and found something the USER must act on", 2 is "the tool
     could NOT do its job". A deleted shipped `_defaults.yaml` is the first, and
@@ -1289,12 +2383,35 @@ def test_every_floor_breach_is_a_violation_not_a_crash(monkeypatch, capsys, trip
     left the other three free to go back to a bare `RuntimeError`: mutation put
     the shipped-root floor back on the crash path and nothing went red, because
     no test walked that one.
+
+    ⛔⛔ AND EVERY CASE HAS TO REACH THE FLOOR IT IS NAMED FOR. The
+    `artifact-keys` case was found to have stopped doing so — its probe woke the
+    fifth floor first and the assertion passed on the neighbour's message — and
+    it was repaired by standing the fifth floor down in that helper. ⚠️ That was
+    a fix to the cited instance, and the same defect was live in three of the
+    other four: `scan`, `read` and `shipped-root` each pass on ANY floor's
+    message, because "rc is 1 and the word `crashed` is absent" is a property of
+    every breach. Measured: with the floor a case is named for disabled
+    outright, the case still passed — a neighbouring floor caught the same
+    probe. The whole parametrisation is therefore pinned to the message its own
+    floor emits, which is the discipline `test_the_two_floors_blame_the_right_
+    cause` and the two `match="shipped conf.d root"` call sites already use.
     """
     trip(monkeypatch)
     assert gate.main(["--ci"]) == gate.EXIT_VIOLATION
     err = capsys.readouterr().err
     assert "crashed" not in err, err[-1500:]
     assert "floor breach" in err, err[-1500:]
+    # ⛔ …and NO coverage figure. The sibling test's name used to claim the line
+    # is printed "on every run" while its own docstring recorded this path as the
+    # exception — a documented exception with nothing holding it. A coverage
+    # figure computed over a face set that just breached a floor would be a
+    # measurement of a broken scan, printed in the reassuring shape.
+    assert "defaults-tier coverage" not in err, err[-1500:]
+    assert names_its_own_floor in err, (
+        f"this case is named for the floor that says {names_its_own_floor!r}, "
+        "but a different floor answered — the probe is being caught by a "
+        f"neighbour and this case no longer guards its own floor:\n{err[-1500:]}")
 
 
 def test_a_floor_breach_without_ci_is_report_only(monkeypatch):
@@ -1500,6 +2617,48 @@ def _artifact_groups(artifacts: dict[str, dict[str, int]]) -> dict[str, int]:
     return groups
 
 
+def test_the_two_artifact_groupings_are_one_partition():
+    """⛔ `_artifact_groups` (rsplit on `/conf.d`) and `conf_d_root` must agree.
+
+    The gate's nine-row note says these two spellings "produce the IDENTICAL
+    partition — measured, all 17 tracked artifacts agree", and nothing computed
+    it. That is the same shape as every other number this file has had to
+    correct: a measurement taken once, written down, and left.
+
+    ⛔ This is NOT scraping a digit out of prose (which this file bans, and for
+    good reason). It compares two LIVE derivations against each other. Nothing
+    is being verified against a comment, and no hand-maintained number is
+    involved — the two functions either partition today's artifacts the same way
+    or they do not.
+
+    Divergence is a thing the file wants to hear about anyway: the bracket test
+    brackets `_artifact_groups`, the fifth floor works in `conf_d_root`, and if
+    they ever split, those two would be bracketing different things while
+    appearing to agree. A red here is signal, not maintenance.
+    """
+    _generators, artifacts = gate._defaults_faces()
+    by_bracket_test = _artifact_groups(artifacts)
+
+    by_gate: dict[str, int] = {}
+    for label, keys in artifacts.items():
+        root = gate.conf_d_root(label[len(gate._ARTIFACT_FACE_PREFIX):-1])
+        assert root, label      # every artifact really does sit under a conf.d
+        by_gate[root] = by_gate.get(root, 0) + len(keys)
+
+    assert by_bracket_test == by_gate, {
+        "only via rsplit": sorted(set(by_bracket_test) - set(by_gate)),
+        "only via conf_d_root": sorted(set(by_gate) - set(by_bracket_test)),
+        "different key counts": {
+            r: (by_bracket_test.get(r), by_gate.get(r))
+            for r in set(by_bracket_test) | set(by_gate)
+            if by_bracket_test.get(r) != by_gate.get(r)},
+    }
+    # …and the comparison is non-vacuous: two empty dicts are also equal, and
+    # the partition has to be coarser than "one group per artifact" or the two
+    # spellings could not disagree even in principle.
+    assert 1 < len(by_gate) < len(artifacts), (len(by_gate), len(artifacts))
+
+
 def test_the_artifact_key_floor_sees_a_group_stop_yielding(monkeypatch):
     """End-to-end, on the real tree, with the FILE count still above both file
     floors — which is the case those two floors structurally cannot see."""
@@ -1510,6 +2669,17 @@ def test_the_artifact_key_floor_sees_a_group_stop_yielding(monkeypatch):
     monkeypatch.setattr(gate, "_tracked_defaults_artifacts", lambda: kept)
     monkeypatch.setattr(gate, "_defaults_artifacts",
                         lambda: [gate.PROJECT_ROOT / rel for rel in kept])
+    # ⛔ The fifth floor (#1411) now fires FIRST on this input — it names the two
+    # e2e-bench roots outright, which is strictly better for the reader. But
+    # letting that stand here would silently retire this test: the key floor's
+    # ability to see a group stop yielding would no longer be exercised by
+    # anything, and the next person to touch that floor would get a green suite.
+    # So this asserts BOTH, in the order the reader meets them.
+    with pytest.raises(gate._GateViolation, match="contributed no artifact"):
+        gate.run_check(demand=set(), supply=set(), deferred=set(), known_unwired={})
+
+    # …and with the newer floor stood down, the key floor still catches it alone.
+    monkeypatch.setattr(gate, "_assert_every_root_contributes", lambda _b: None)
     with pytest.raises(RuntimeError, match="ARTIFACT faces yielded"):
         gate.run_check(demand=set(), supply=set(), deferred=set(), known_unwired={})
 
@@ -1546,6 +2716,72 @@ def test_each_key_floor_is_bracketed_by_what_it_has_to_catch():
         f"artifact floor {gate._DEFAULTS_ARTIFACT_KEYS_FLOOR} must sit strictly "
         f"between {a_total - a_biggest} (the biggest conf.d root, {a_biggest} "
         f"keys, going silent) and today's {a_total}; groups={groups}")
+
+
+def test_the_headroom_note_states_both_directions_and_both_are_current():
+    """⛔ The HEADROOM note beside the two key floors carries four numbers, and
+    nothing used to make any of them go red.
+
+    It went stale exactly as its own text predicted: it said artifacts tolerate
+    "+9 keys" upward when the arithmetic gives +8 (70 total − 19 in the biggest
+    conf.d root = 51, and 51 + 9 = 60 is not strictly below a floor of 60), in a
+    paragraph whose opening sentence is "these numbers need maintaining in BOTH
+    directions" and whose closing one is "nobody should discover the direction by
+    guessing". A comment that names a direction still needs a tripwire on the
+    magnitude.
+
+    ⛔ UP and DOWN are different measurements and are asserted separately, in the
+    words the note uses, so a future edit cannot quietly swap one for the other:
+      UP   — against "biggest group gone"; a pure addition turns the BRACKET
+             test red, and the remedy is a HIGHER floor.
+      DOWN — against the floor itself; a removal turns the GATE red, and the
+             remedy is repairing the producer (or, for a deliberate retirement,
+             a LOWER floor).
+    """
+    generators, artifacts = gate._defaults_faces()
+    g_total = sum(len(v) for v in generators.values())
+    g_biggest = max(len(v) for v in generators.values())
+    groups = _artifact_groups(artifacts)
+    a_total, a_biggest = sum(groups.values()), max(groups.values())
+
+    # UP: the largest pure addition that keeps `total - biggest < floor` true.
+    up_gen = gate._DEFAULTS_GENERATOR_KEYS_FLOOR - (g_total - g_biggest) - 1
+    up_art = gate._DEFAULTS_ARTIFACT_KEYS_FLOOR - (a_total - a_biggest) - 1
+    assert (up_art, up_gen) == (8, 28), (
+        f"the HEADROOM note beside the key floors says artifacts +8 / generators "
+        f"+28 upward; measured {up_art} / {up_gen}. Update the note and this "
+        "assertion together, and keep the DIRECTION word beside each number.")
+
+    # DOWN: how many keys may disappear before the floor itself speaks.
+    down_gen = g_total - gate._DEFAULTS_GENERATOR_KEYS_FLOOR
+    down_art = a_total - gate._DEFAULTS_ARTIFACT_KEYS_FLOOR
+    assert (down_art, down_gen) == (10, 22), (
+        f"the note says artifacts 10 / generators 22 downward — and the fifth "
+        f"floor's own comment repeats the artifact one as '10 keys of slack'; "
+        f"measured {down_art} / {down_gen}. Both places move together.")
+
+    # ⛔ and they must not collide. ⚠️ NOT because they once did: at `188cfb17`,
+    # the commit that carried both, DOWN was 10 and UP was 8 — never equal.
+    #
+    # ⛔⛔ AND "+9" IS NOT WHAT WAS MEASURED THERE, it is what was WRITTEN there.
+    # An earlier wording of this note said "measured at `188cfb17` … UP was +9",
+    # which quietly promoted the stale digit to a measurement in the one
+    # paragraph whose entire subject is the gap between a written number and a
+    # measured one. Re-derived by replaying that commit (its own tree, its own
+    # constants): artifacts total 70, biggest group 19, floor 60, so UP is
+    # 60 − (70 − 19) − 1 = 8. The file said 9 and the tree said 8, from the day
+    # both numbers were committed. That is a sharper version of the point, not a
+    # softer one: the number was never right, and nothing was checking.
+    #
+    # What the file's own record says the cause of the confusion was: both are
+    # called "headroom", they sit 47 lines apart, and the DIRECTION was written
+    # down while the MAGNITUDE had no tripwire. This assertion is
+    # forward-looking, not historical: if
+    # the two ever do land on the same integer, the only thing distinguishing
+    # them at a glance disappears, and whichever note is read second inherits
+    # the other's number. If that happens, say which is which in both places
+    # rather than deleting this line.
+    assert up_art != down_art, (up_art, down_art)
 
 
 def test_each_shipped_root_floor_is_bracketed_too():
@@ -1793,8 +3029,14 @@ def test_precommit_filter_covers_every_input_this_gate_reads():
     # insert — were invisible to a test whose name says "every input this gate
     # reads" (blind review, round 2). `_lib_exitcodes` in particular owns the
     # gate's exit-code contract, which is the whole meaning of `--ci`.
+    # ⛔ Hand-maintained, and that is the defect tracked as #1413: an import from
+    # anywhere else is invisible to all three derivations below, so the gate can
+    # grow an input that this pin cannot see. #1411 added exactly such an import
+    # (`scripts/ops/guard_defaults_scopes`) and had to extend this list by hand —
+    # which is the evidence #1413 was opened on, now with a live instance.
     search_dirs = [REPO_ROOT / "scripts" / "tools" / "ops",
-                   REPO_ROOT / "scripts" / "tools"]
+                   REPO_ROOT / "scripts" / "tools",
+                   REPO_ROOT / "scripts" / "ops"]
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -1847,3 +3089,707 @@ def test_precommit_filter_covers_every_input_this_gate_reads():
         "threshold-reachability-check reads these but its `files:` filter does "
         "not fire on them, so a commit touching only one of them skips the "
         f"gate: {uncovered}")
+
+
+# ── the frozen four-floor measurements, REPLAYED at their own commit (#1411) ──
+#
+# The fifth floor's comment carries two historical figures measured on the
+# four-floor subset as it ran at `72fdaf56`. An earlier revision of that comment
+# said "NEITHER HAS A TRIPWIRE, AND NEITHER CAN", and the second half was false
+# by construction — what follows is the construction.
+#
+# The objection it rested on is real and is preserved: re-deriving those numbers
+# from TODAY's tree would compare across worlds and would go red the next time a
+# fixture is retired, i.e. fire at ordinary maintenance. The move is not to
+# compare across worlds. It is to REPLAY the measurement inside the world it was
+# taken in — `git archive` that commit, load ITS gate module, run ITS floors —
+# so today's tree is not an input at all and cannot move the answer.
+
+_FROZEN_COMMIT = "72fdaf56"
+
+
+def _load_module_by_path(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@contextlib.contextmanager
+def _module_isolation():
+    """Let the frozen tree's own helpers win the import, then put ours back.
+
+    ⛔ Not hygiene-for-its-own-sake. The frozen gate imports `scaffold_tenant`,
+    `init_project` and `onboard_platform` to build its GENERATOR faces, and
+    those names are already in `sys.modules` — pointing at TODAY's files —
+    because the live gate at the top of this file imported them. Without this,
+    the "frozen" run would build today's generators, and a replay that quietly
+    mixes the two worlds is worse than no replay: it would still print three
+    confident integers.
+
+    Everything currently loaded out of the live `scripts/` tree is evicted for
+    the duration and restored afterwards, derived rather than listed so a helper
+    added to the gate later is covered without anyone remembering to add it.
+    """
+    saved_modules = dict(sys.modules)
+    saved_path = list(sys.path)
+    live_scripts = str(REPO_ROOT / "scripts")
+    for name, module in list(sys.modules.items()):
+        origin = getattr(module, "__file__", None) or ""
+        if origin.startswith(live_scripts):
+            del sys.modules[name]
+    try:
+        yield
+    finally:
+        for name in [n for n in sys.modules if n not in saved_modules]:
+            del sys.modules[name]
+        sys.modules.update(saved_modules)
+        sys.path[:] = saved_path
+
+
+@pytest.fixture(scope="module")
+def _frozen_checkout(tmp_path_factory):
+    """`72fdaf56`, materialised: its files and its index. NO modules loaded.
+
+    ⛔ THE SPLIT IS THE POINT. This half is the expensive one (archive, untar,
+    `git init`, `git add -A -f`) and it is inert — a directory of files touches
+    no interpreter state, so sharing it across the module costs nothing and
+    leaks nothing. `frozen_tree` below is the half that mutates `sys.modules`,
+    and it is FUNCTION-scoped for exactly that reason.
+
+    ⛔ `git init && git add -A -f` is load-bearing, not tidiness: the frozen
+    scan shells out to `git ls-files`, so an archive with no index reads as an
+    empty repository and every floor below would go vacuous at once. `-f`
+    because a `.gitignore` shipped in the archive must not be allowed to hide a
+    file that WAS tracked at that commit — the denominators below would move and
+    the replay would report a measurement of a tree that never existed.
+
+    ⛔⛔ AND IT IS NOT ALLOWED TO SKIP. If the commit is unreachable this fails,
+    loudly, naming why. A shallow clone is the one realistic cause and it is a
+    non-issue in CI — `.github/workflows/ci.yml`'s `python-tests-run` job (the
+    job that runs this file) checks out with `fetch-depth: 0`, and the comment
+    there records that it does so precisely because another lint test in this
+    directory resolves a git object and is "fail-closed by design — it RAISES
+    rather than silently passing". Same discipline here, and for a reason this
+    repo paid for one commit ago: #1402 was an aggregate gate reading a SKIPPED
+    leg as PASS. A skip that upstream reads as green is the failure mode, not
+    the safe default.
+    """
+    probe = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "cat-file", "-e", f"{_FROZEN_COMMIT}^{{commit}}"],
+        capture_output=True, timeout=60)
+    if probe.returncode != 0:
+        pytest.fail(
+            f"the frozen measurements are pinned to commit {_FROZEN_COMMIT}, "
+            "which this clone cannot reach, so they are currently UNGUARDED.\n"
+            "  MOST LIKELY: a shallow clone. `git fetch --unshallow` fixes it "
+            "locally; in CI the checkout step needs `fetch-depth: 0` (the "
+            "`python-tests-run` job already sets it, and says why).\n"
+            "  ⛔ THIS IS DELIBERATELY A FAILURE AND NOT A SKIP. The numbers it "
+            "guards are frozen historical measurements with no other tripwire — "
+            "a skip here means nobody is watching them, and this repo has "
+            "already shipped one aggregate gate that read a skipped leg as PASS "
+            "(#1402, one commit before this floor). If the commit is genuinely "
+            "gone from history, re-measure and re-freeze against whatever "
+            "replaced it; do not delete this test and keep the numbers.")
+
+    dest = tmp_path_factory.mktemp("frozen-72fdaf56")
+    archive = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "archive", _FROZEN_COMMIT],
+        capture_output=True, check=True, timeout=120)
+    subprocess.run(["tar", "-x", "-C", str(dest)], input=archive.stdout,
+                   check=True, timeout=120)
+    subprocess.run(["git", "init", "-q", str(dest)], check=True,
+                   capture_output=True, timeout=60)
+    subprocess.run(["git", "-C", str(dest), "add", "-A", "-f"],
+                   check=True, capture_output=True, timeout=120)
+    return dest
+
+
+@pytest.fixture
+def frozen_tree(_frozen_checkout):
+    """The frozen gate module — alive for ONE test, never longer.
+
+    ⛔ FUNCTION-SCOPED, AND THAT IS A CORRECTION. `_module_isolation()` wraps
+    the `yield`, so the frozen world stands for as long as this fixture does.
+    While this was module-scoped that meant "from the first test that asks
+    until the end of the file", and today's ordering — the two replay tests
+    happen to sit last — was the only thing making that harmless.
+
+    Measured, with collection order reversed so the replay runs first: EVERY
+    test in this file then ran with SIXTEEN modules resolving into the frozen
+    checkout — the two loaded here by name, plus fourteen live-tree names the
+    frozen gate pulls in behind them (`scaffold_tenant`, `init_project`,
+    `onboard_platform`, `migrate_rule`, `_registry_lib`, `_observed_map_lib`
+    and eight `_lib_*` helpers) — and all but the two replay tests have nothing
+    to do with the frozen world at all. ⚠️ Two earlier wordings of this
+    measurement were low: one said eight modules, listing five and stopping;
+    the other said all-but-one test, which is what a probe sampling during the
+    call phase does NOT report — the fixture is set up during SETUP, so the
+    test that pulls the frozen world in is already inside it by the time it
+    runs. The LIVE gate builds its generator
+    faces from those, and it imports two of them lazily, inside the call — so
+    the live tests were measuring today's tree with that commit's producers, and
+    the suite stayed green throughout. The fixture below says "a replay that
+    quietly mixes the two worlds is worse than no replay"; module scope made
+    that true in the other direction, and adding one test or letting a scheduler
+    reorder was all it took.
+
+    ⛔ THE SCOPE HAS A CONSUMER NOW:
+    `test_the_frozen_world_does_not_outlive_the_test_that_asked_for_it`. It was
+    added because this repair was, for a round, held up by this decorator alone
+    — and a repair that only a decorator enforces goes back in silence.
+
+    ⛔ The cost of the fix is the module LOAD, not the checkout: the archive is
+    materialised once by `_frozen_checkout` (module-scoped, unchanged), and
+    what is paid per test is exec'ing the frozen gate and its imports.
+    """
+    with _module_isolation():
+        frozen = _load_module_by_path(
+            "frozen_gate_at_72fdaf56",
+            _frozen_checkout / "scripts" / "tools" / "lint"
+            / "check_threshold_reachability.py")
+        # ⛔ The GROUPING comes from the frozen tree too, and it is honestly
+        # NOT load-bearing today: `scripts/ops/guard_defaults_scopes.py` is
+        # byte-identical at `72fdaf56` and at HEAD (measured: `git diff` between
+        # them is empty), so swapping today's `conf_d_root` in leaves both
+        # replay tests green and no test can tell the two apart. It is loaded
+        # from the frozen tree anyway, for the same reason the exemption is
+        # DERIVED from the frozen tree rather than read out of
+        # `_DEFAULTS_ROOTS_MAY_BE_EMPTY`: if today's grouping is ever edited,
+        # a frozen measurement must not move with it. The hedge is stated here
+        # rather than tested, because a test for it would only be able to
+        # compare the two copies — which is the cross-world comparison this
+        # whole replay exists to avoid.
+        scopes = _load_module_by_path(
+            "frozen_scopes_at_72fdaf56",
+            _frozen_checkout / "scripts" / "ops" / "guard_defaults_scopes.py")
+        # ⛔ The frozen module resolves its own PROJECT_ROOT from `__file__`; if
+        # that ever landed back on the live tree the replay would be measuring
+        # today under a frozen name, which is the one outcome that would look
+        # exactly like success.
+        assert frozen.PROJECT_ROOT == _frozen_checkout, (
+            frozen.PROJECT_ROOT, _frozen_checkout)
+        yield frozen, scopes.conf_d_root
+
+
+_EMPTIED_ARTIFACT = b"# replayed: the file is still on disk, `defaults:` is not\n{}\n"
+
+
+def _replay_frozen_measurements(frozen, conf_d_root, *, stand_down=()):
+    """Re-run the two frozen scenarios through the frozen gate's OWN floors.
+
+    ⛔ IT CALLS THEM; it does not re-implement their tests. `_defaults_faces()`
+    at that commit runs all four floors — the two file floors inline, then
+    `_assert_shipped_roots_intact` and `_assert_keys_floor` — so it is the whole
+    oracle, and "did a floor speak?" is "did it raise?". A throwaway script
+    written while designing this got ① wrong by re-implementing the shipped
+    root's check and applying its FILE-COUNT half to the keys-go-to-zero
+    scenario, where by definition every file is still there. A
+    re-implementation is a second opinion wearing the floors' authority.
+
+    ⛔ BEFORE and AFTER: the FIRST call below is the untouched world, and it is
+    made outside the try/except that the scenarios use, so a frozen gate that
+    is already breached on its own tree aborts here instead of being credited
+    with catching every group in turn. Without that, the replay would report
+    zero blind spots at exactly the moment the frozen gate was most broken —
+    the same discipline `_floors_that_notice_a_zeroed_root` is built on, one
+    world over.
+
+    The scenarios are staged as INPUT, never as arithmetic:
+      ① keys to zero, files on disk — the victim's artifacts are rewritten in
+         the throwaway checkout to hold no `defaults:` section, so the scan
+         still finds every file and the two file floors genuinely cannot move.
+      ② the group gone, files and all — the victim's artifacts are dropped from
+         what the scan returns, so the file floors see the smaller world too.
+
+    `stand_down` names frozen floors to disable, and takes exactly the two that
+    can change an answer here: `"keys"` and `"shipped"`. ⛔ There is deliberately
+    no `"files"`: measured, standing the two FILE floors down leaves every
+    fraction byte-identical to the baseline, in both scenarios — ① never touches
+    a file, and ② removes one directory from a scan that stays far above both
+    file floors. The branch existed, was never reached by any caller, and cost
+    two hardcoded floor constants in the `finally` above. ⚠️ So "all four floors
+    counted together" (the wording beside `_DEFAULTS_CONFD_ROOTS`) means all four
+    were IN EFFECT and given the chance to speak — not that all four contribute
+    to the answer. Two of them measurably do not.
+
+    ⛔ ONE LEG OF THREE, and the other two are the caller's. A `stand_down` on
+    its own only shows the answer RESPONDS to something, and a body that MODELS
+    the floors' arithmetic reads `stand_down` too and therefore responds in step
+    — measured, such a body left the whole file green. So
+    `test_the_replay_measures_rather_than_restates` also (2) wraps the frozen
+    module's functions from outside to show they were ENTERED, and (3) forces the
+    frozen oracle's verdict on one named group each way to show the reported
+    blind set FOLLOWS THE VERDICT — a body that calls `_defaults_faces()`,
+    swallows the `_GateViolation` and answers from a table of its own passes (1)
+    and (2) and fails (3).
+
+    ⛔ THIS FUNCTION DOES NOT COUNT ITS OWN WORK, and that is deliberate: a
+    self-reported "I evaluated the floors N times" is a claim by the very body
+    under suspicion, so it cannot tell a measurement from a constant. The
+    caller wraps the frozen module's floor functions and counts from out there.
+    """
+    # ⛔ Deliberately NOT inside the try/except used for the scenarios: on a
+    # dirty frozen tree this raises out of the replay rather than reading as a
+    # blind spot.
+    generators, artifacts = frozen._defaults_faces()          # the CLEAN baseline
+    prefix = frozen._ARTIFACT_FACE_PREFIX
+    keys_of = {label[len(prefix):-1]: keys for label, keys in artifacts.items()}
+    rels = sorted(keys_of)
+
+    real_scan = frozen._tracked_defaults_artifacts
+    real_shipped = frozen._assert_shipped_roots_intact
+    real_keys_floor = frozen._assert_keys_floor
+    if "shipped" in stand_down:
+        frozen._assert_shipped_roots_intact = lambda *_a, **_k: None
+    if "keys" in stand_down:
+        frozen._assert_keys_floor = lambda *_a, **_k: None
+
+    def _all_four_stay_silent():
+        try:
+            frozen._defaults_faces()
+            return True
+        except frozen._GateViolation:
+            return False
+
+    try:
+        blind_roots = []
+        for root in sorted({conf_d_root(rel) for rel in rels} - {None}):
+            victims = [rel for rel in rels if conf_d_root(rel) == root]
+            saved = {frozen.PROJECT_ROOT / rel:
+                     (frozen.PROJECT_ROOT / rel).read_bytes() for rel in victims}
+            for path in saved:
+                path.write_bytes(_EMPTIED_ARTIFACT)
+            try:
+                if _all_four_stay_silent():
+                    blind_roots.append(root)
+            finally:
+                for path, blob in saved.items():
+                    path.write_bytes(blob)
+
+        blind_dirs = []
+        for group in sorted({rel.rsplit("/", 1)[0] for rel in rels}):
+            survivors = [rel for rel in rels if rel.rsplit("/", 1)[0] != group]
+            frozen._tracked_defaults_artifacts = lambda _s=survivors: list(_s)
+            try:
+                if _all_four_stay_silent():
+                    blind_dirs.append(group)
+            finally:
+                frozen._tracked_defaults_artifacts = real_scan
+    finally:
+        # ⛔ Every restore here puts back a value that was SAVED above. An
+        # earlier spelling also reset the two file-floor constants to hardcoded
+        # literals, unconditionally — measured: editing those literals to 0 left
+        # the suite at 114 passed, with both file floors dead from the second
+        # call onward and nothing to say so. The branch that needed them is gone
+        # (see the docstring), and with it the only copy of those numbers here.
+        frozen._tracked_defaults_artifacts = real_scan
+        frozen._assert_shipped_roots_intact = real_shipped
+        frozen._assert_keys_floor = real_keys_floor
+
+    # ⛔ The exemption is DERIVED FROM THE FROZEN TREE, not read out of today's
+    # `_DEFAULTS_ROOTS_MAY_BE_EMPTY`. That list did not exist at this commit
+    # (measured: zero occurrences in the file), and the frozen comment is
+    # explicit that the exemption is a condition of how the measurement is
+    # RE-RUN. Reading today's list would let an ordinary future addition to it
+    # move a frozen number — precisely the "fires at ordinary maintenance"
+    # objection that the frozen figures were nearly left unguarded over.
+    exempt = {root for root in {conf_d_root(rel) for rel in rels} - {None}
+              if not sum(len(keys_of[rel]) for rel in rels
+                         if conf_d_root(rel) == root)}
+    scanned = sorted({conf_d_root(rel) for rel in rels} - {None})
+    watched = [root for root in scanned if root not in exempt]
+    dirs = sorted({rel.rsplit("/", 1)[0] for rel in rels})
+
+    # ⛔ THE FRACTIONS ARE BUILT HERE, EACH FROM ONE POPULATION, and that is a
+    # correctness measure rather than a convenience. Measured while writing the
+    # counterfactuals for this test: with the numerator and the denominator
+    # asserted as two loose values, restating ① with its post-exemption
+    # numerator over its pre-exemption denominator PASSED — both of those are
+    # TRUE numbers about this tree, just not about the same set of roots. That
+    # is the whole defect of the original sentence in one line: a fraction can
+    # be made of two true integers and still be a false claim, so no assertion
+    # over the integers separately can forbid it. Pairing them where the
+    # population is known is what makes the mixed fraction a value this function
+    # cannot produce.
+    return {
+        "scanned_roots": scanned,
+        "watched_roots": watched,
+        "exempt_roots": sorted(exempt),
+        "blind_roots": blind_roots,
+        "blind_roots_after_exemption": [r for r in blind_roots if r not in exempt],
+        # ① over the WATCHED population (post-exemption on both halves)
+        "fraction_watched": (len([r for r in blind_roots if r not in exempt]),
+                             len(watched)),
+        # ① over the SCANNED population (pre-exemption on both halves)
+        "fraction_scanned": (len(blind_roots), len(scanned)),
+        "artifact_dirs": dirs,
+        "blind_dirs": blind_dirs,
+        # ② over the artifact-directory population
+        "fraction_dirs": (len(blind_dirs), len(dirs)),
+        "artifacts": rels,
+        "invisible_keys": sum(len(keys_of[rel]) for rel in rels
+                              if rel.rsplit("/", 1)[0] in blind_dirs),
+        "total_keys": sum(len(keys) for keys in keys_of.values()),
+        "generator_keys": sum(len(v) for v in generators.values()),
+    }
+
+
+def test_the_frozen_measurements_replay_against_their_own_commit(frozen_tree):
+    """⛔ The two frozen figures beside `_DEFAULTS_CONFD_ROOTS`, re-measured.
+
+    Both halves of every fraction are asserted, and that is the whole point:
+    the defect this issue is a correction of was a numerator kept while its
+    grouping was rewritten, so a test that pinned only the numerators would be
+    blind to the exact failure it exists for.
+
+    ⛔ THE MIXED FRACTION MUST NOT PASS: ①'s post-exemption numerator over its
+    pre-exemption denominator. Each half is a true count of this tree, of two
+    different sets of roots. It is not a harmless slip either — the
+    post-exemption numerator is independently the answer to a different
+    (scenario × exemption) pair, so the wrong fraction reads exactly like a
+    right one.
+
+    ⚠️ AND ASSERTING THE TWO INTEGERS SEPARATELY DOES NOT FORBID IT. Measured
+    while building this test's counterfactuals: an earlier spelling checked the
+    numerator and the denominator as two loose values and the mixed fraction
+    PASSED, for the good reason that both halves are true of this tree. Each
+    fraction is therefore assembled inside `_replay_frozen_measurements` where
+    its population is known, and asserted as a single object — the mixed pairing
+    is now a value the replay does not produce, rather than one the assertion
+    tolerates. ⛔ The integers below are the only copy anywhere: the four places
+    that used to repeat them — two comments in the gate, the CHANGELOG entry for
+    #1411, and two docstrings in this file — carry conditions only.
+    """
+    frozen, conf_d_root = frozen_tree
+    m = _replay_frozen_measurements(frozen, conf_d_root)
+
+    # ① grouping `conf_d_root`; keys to zero, files on disk; all four floors.
+    assert m["fraction_watched"] == (7, 11), m
+    assert m["fraction_scanned"] == (8, 12), m
+    assert len(m["exempt_roots"]) == 1, m
+    # …and the exempt root is the one the comment names, not merely "some root":
+    # the count alone is satisfied by exempting the wrong tree.
+    assert m["exempt_roots"] == ["rule-packs/recipes/examples/conf.d"], m
+    # ⛔ The two numerators are drawn from DIFFERENT SETS, demonstrated rather
+    # than asserted as a size difference: the exempt root is blind under ① and
+    # is the entire difference between 8 and 7. Anyone tempted to treat the two
+    # fractions as interchangeable has to walk past this line.
+    assert set(m["blind_roots"]) - set(m["blind_roots_after_exemption"]) == set(
+        m["exempt_roots"]), m
+    assert set(m["blind_roots_after_exemption"]) <= set(m["watched_roots"]), m
+    assert set(m["watched_roots"]) < set(m["scanned_roots"]), m
+
+    # ② grouping = each artifact's own directory; the group gone, files and all.
+    assert m["fraction_dirs"] == (11, 17), m
+
+    # ⛔ Cross-checked against a measurement taken by hand, off this file
+    # entirely: the CORRECTION COMMENT on #1411 reports ② — same grouping, same
+    # four floors, same commit — arrived at independently, and the pair below
+    # reproduces it. (⚠️ The issue BODY is a different measurement: same
+    # grouping, but only `_assert_keys_floor`, so its figures legitimately
+    # differ. A reader who checks against the body concludes a number moved
+    # when nothing did.) The KEY figure is asserted alongside the directory one
+    # because it is the half a grouping bug does NOT move in step — a partition
+    # error changes which directories are blind and would have to change the key
+    # total with it to stay consistent.
+    assert (m["invisible_keys"], m["total_keys"]) == (35, 70), m
+    assert m["generator_keys"] == 102, m
+
+
+def test_the_replay_measures_rather_than_restates(frozen_tree):
+    """⛔ The replay's own tripwire — it guards numbers nothing else guards.
+
+    Per the stopping rule this round ran under, a guard needs guarding exactly
+    when its silent failure lets the original defect back, and this one's silent
+    failure is "the frozen figures are unwatched again" with three green
+    assertions still printing. THREE ways it could go quietly vacuous — the
+    third was found by measurement after the first two were closed — and each is
+    shut here by construction rather than by reading the code:
+
+      1. IT NEVER RAN. A loop over an empty scan, an exception swallowed into
+         "blind", a fixture that yielded nothing — all of these produce tidy
+         numbers. So the frozen floor FUNCTIONS are wrapped from out here and
+         the calls are counted by THIS test, and both partitions must be
+         non-degenerate.
+      2. IT IS NOT A MEASUREMENT. Integers that happen to match can be produced
+         by a function that never consults a floor. So each frozen floor is
+         stood down in turn and the answer MUST move.
+      3. IT RAN AND THE ANSWER CAME FROM SOMEWHERE ELSE. ⛔ The one the first
+         two miss, and it is not hypothetical: a body that calls
+         `_defaults_faces()`, discards the `_GateViolation` with a bare
+         `except: pass` and reports a table of its own passes (1) — the counters
+         see the real call count — and passes (2), because its table is indexed
+         by `stand_down`. Measured at 114 passed; and measured again at 114
+         passed with the frozen artifact-key floor genuinely neutered
+         underneath it, which is a frozen floor failing with nothing to say so.
+         So the verdict is FORCED here, one group each way, and the reported
+         blind set has to follow it.
+
+    ⛔⛔ THE COUNT IS TAKEN FROM OUTSIDE, and that is the correction this test
+    needed. It used to assert a `floor_evaluations` the replay reported about
+    ITSELF, and both sentences that rested on it were measured FALSE:
+      * a `_replay_frozen_measurements` replaced by a constants table — no
+        frozen tree opened, no floor called, `floor_evaluations` hardcoded to
+        the same sum and one row picked by `stand_down` — left this test at 2
+        passed;
+      * an `_all_four_stay_silent` replaced by an arithmetic MODEL of the four
+        floors (the shipped table and both key floors copied out by hand, never
+        calling `_defaults_faces()`) left the whole file at 114 passed, because
+        the model reads `stand_down` too and therefore "follows the floors".
+    A self-reported call count is a claim by the body under suspicion. The
+    wrappers below are installed by the test on the frozen MODULE, so the only
+    way to move the counters is to actually call that commit's functions.
+
+    ⚠️ The directions are asserted, not just "it changed". Removing a floor can
+    only ever make MORE groups blind, never fewer; an assertion that merely
+    required difference would be satisfied by a replay that moved the wrong way.
+    """
+    frozen, conf_d_root = frozen_tree
+
+    # 1) IT REALLY RAN — counted by wrapping the frozen module's own functions.
+    real = {name: getattr(frozen, name) for name in
+            ("_defaults_faces", "_assert_shipped_roots_intact",
+             "_assert_keys_floor")}
+    # ⛔ Seeded at zero rather than filled in on first call: a replay that never
+    # touches the frozen module must fail on the NUMBER, with the counters
+    # visible, not on a KeyError that reads like a broken test.
+    seen: dict[str, int] = {name: 0 for name in real}
+
+    def _counting(name, fn):
+        def wrapper(*args, **kwargs):
+            seen[name] += 1
+            return fn(*args, **kwargs)
+        return wrapper
+
+    for name, fn in real.items():
+        setattr(frozen, name, _counting(name, fn))
+    try:
+        baseline = _replay_frozen_measurements(frozen, conf_d_root)
+    finally:
+        # ⛔ before the stand-down runs below: those replace two of these three
+        # attributes themselves, and a wrapper left in place would be restored
+        # by the replay's own `finally` and go on counting into the next run.
+        for name, fn in real.items():
+            setattr(frozen, name, fn)
+
+    # one clean baseline, then one per root and one per artifact directory —
+    # and the frozen oracle really was entered that many times.
+    assert seen["_defaults_faces"] == 1 + 12 + 17, seen
+    # …and it went THROUGH the floors, not merely into the function that owns
+    # them. ⛔ Stated as relations, not as three more hand-written integers:
+    # every evaluation reaches the shipped-root floor, and the keys floor is
+    # reached only on the ones where the shipped floor stayed silent — so it
+    # must be entered strictly fewer times. Equality there would mean the
+    # shipped floor had stopped raising, which is one of the silent failures
+    # this test exists for.
+    assert seen["_assert_shipped_roots_intact"] == seen["_defaults_faces"], seen
+    assert 0 < seen["_assert_keys_floor"] < seen["_defaults_faces"], seen
+    assert len(baseline["artifacts"]) == 17, baseline
+    # neither partition may be all-blind or none-blind — either extreme is what
+    # a broken oracle looks like (nothing ever raised / everything did).
+    assert 0 < len(baseline["blind_roots"]) < len(baseline["scanned_roots"])
+    assert 0 < len(baseline["blind_dirs"]) < len(baseline["artifact_dirs"])
+
+    # 2) stand each frozen floor down; the blind counts must GROW.
+    for floor in ("keys", "shipped"):
+        moved = _replay_frozen_measurements(frozen, conf_d_root, stand_down=(floor,))
+        assert len(moved["blind_roots"]) > len(baseline["blind_roots"]), (
+            floor, moved["blind_roots"], baseline["blind_roots"])
+        assert len(moved["blind_dirs"]) > len(baseline["blind_dirs"]), (
+            floor, moved["blind_dirs"], baseline["blind_dirs"])
+        # the populations are properties of the tree, not of the floors, so they
+        # must NOT move — that is what tells "a floor went quiet" apart from
+        # "the replay lost half its input".
+        assert moved["scanned_roots"] == baseline["scanned_roots"], floor
+        assert moved["artifact_dirs"] == baseline["artifact_dirs"], floor
+
+    # 3) THE VERDICT HAS TO TRAVEL — see (3) in the docstring. One root the
+    # frozen floors DO catch is forced to stay silent, one they MISS is forced
+    # to speak, and the reported blind set must move by exactly those two.
+    caught = sorted(set(baseline["scanned_roots"]) - set(baseline["blind_roots"]))
+    assert caught, baseline                 # some root is caught today…
+    assert baseline["blind_roots"], baseline    # …and some root is not
+    forced_silent, forced_loud = caught[0], sorted(baseline["blind_roots"])[0]
+
+    victims_of = {
+        root: [rel for rel in baseline["artifacts"] if conf_d_root(rel) == root]
+        for root in (forced_silent, forced_loud)}
+    # ⛔ Non-empty, or `all()` below is vacuously true and the inversion fires on
+    # every call — which would look like a very thorough test and measure nothing.
+    assert all(victims_of.values()), victims_of
+
+    def _is_the_victim(root):
+        # ⛔ Keyed on the world the replay has STAGED, not on a call index: ①
+        # empties exactly one root's artifacts at a time and restores them, so
+        # "this root's files are the emptied ones" names the group without this
+        # test having to know the replay's call ORDER. ② writes no file, so
+        # neither inversion can reach its scenario — which is what makes
+        # "②'s partition did not move" an assertion worth making below.
+        return all((frozen.PROJECT_ROOT / rel).read_bytes() == _EMPTIED_ARTIFACT
+                   for rel in victims_of[root])
+
+    real_faces = frozen._defaults_faces
+
+    def _inverting_the_verdict(*args, **kwargs):
+        if _is_the_victim(forced_loud):
+            raise frozen._GateViolation(
+                f"replay tripwire: verdict forced LOUD for {forced_loud}")
+        try:
+            return real_faces(*args, **kwargs)
+        except frozen._GateViolation:
+            if _is_the_victim(forced_silent):
+                return {}, {}       # forced SILENT; the caller discards this
+            raise
+
+    frozen._defaults_faces = _inverting_the_verdict
+    try:
+        forced = _replay_frozen_measurements(frozen, conf_d_root)
+    finally:
+        frozen._defaults_faces = real_faces
+
+    assert forced["blind_roots"] == sorted(
+        (set(baseline["blind_roots"]) | {forced_silent}) - {forced_loud}), (
+            "the replay reported a blind set that did not follow the oracle's "
+            "verdict — an answer that survives having the verdict inverted is "
+            "not being read off the frozen floors at all",
+            forced_silent, forced_loud, forced["blind_roots"],
+            baseline["blind_roots"])
+    # …and ONLY the roots moved. The inversion cannot reach ②'s scenario, so a
+    # body answering from anywhere but the oracle has to get both halves right
+    # at once — move the roots, hold the directories — to stay green.
+    assert forced["blind_dirs"] == baseline["blind_dirs"], (
+        forced["blind_dirs"], baseline["blind_dirs"])
+    assert forced["scanned_roots"] == baseline["scanned_roots"]
+    assert forced["artifact_dirs"] == baseline["artifact_dirs"]
+
+    # …and the floors are back, so the stand-downs and the forced verdicts above
+    # did not leak into the last run of this test. (The sibling test no longer
+    # shares this module object — `frozen_tree` is function-scoped — but a
+    # stand-down that failed to restore would still corrupt everything after it
+    # inside this test.)
+    assert _replay_frozen_measurements(frozen, conf_d_root) == baseline
+
+
+def _resolving_into(checkout: Path) -> list[str]:
+    """Loaded modules whose source file lives inside the frozen checkout."""
+    root = str(checkout)
+    return sorted(name for name, module in list(sys.modules.items())
+                  if (getattr(module, "__file__", None) or "").startswith(root))
+
+
+def test_the_frozen_world_does_not_outlive_the_test_that_asked_for_it(
+        request, _frozen_checkout):
+    """⛔ The CONSUMER for `frozen_tree`'s function scope — it had none.
+
+    That scope is the whole isolation between the replay and the other 100-odd
+    tests in this file, and it was being held by one decorator argument with
+    nothing reading it. Measured, by putting `scope="module"` back: the suite
+    stayed at 114 passed, and with collection order reversed so the replay ran
+    first, most of the file then executed with the live gate's helpers resolving
+    into the frozen checkout — the live tests measuring today's tree with that
+    commit's producers, green throughout. A repair that only a decorator
+    enforces is a repair one edit away from being undone in silence.
+
+    ⛔ ORDER-INDEPENDENT BY CONSTRUCTION, because "the replay happens to run
+    last" is exactly the accident that made module scope look harmless:
+      * the finalizer is registered BEFORE `frozen_tree` is set up, so pytest's
+        LIFO teardown runs it AFTER that fixture's own teardown. A
+        function-scoped fixture is gone by then; a module-scoped one is not, and
+        the check fails no matter where this test sits in the file.
+      * the same check runs on entry, so a frozen world left standing by an
+        EARLIER test is caught here too.
+    ⛔ And it is asserted non-vacuous in between: while this test holds the
+    fixture the frozen world must be visible, or "nothing leaked" is being
+    reported by a probe that can see nothing at all.
+    """
+    def _no_frozen_leak(when: str):
+        leaked = _resolving_into(_frozen_checkout)
+        on_path = [entry for entry in sys.path
+                   if entry.startswith(str(_frozen_checkout))]
+        assert not leaked and not on_path, (
+            f"{when}: the frozen checkout is still reachable from this "
+            "interpreter, so tests that are supposed to measure TODAY's tree "
+            "can silently resolve into `72fdaf56` instead. `frozen_tree` must "
+            f"stay function-scoped.\n  modules: {leaked}\n  sys.path: {on_path}")
+
+    _no_frozen_leak("before this test asked for the frozen world")
+    request.addfinalizer(
+        lambda: _no_frozen_leak("after the frozen world was released"))
+
+    frozen, _conf_d_root = request.getfixturevalue("frozen_tree")
+    # A real measurement, not just the import: the gate imports two of its
+    # generator producers lazily, INSIDE `_defaults_faces()`, so they only enter
+    # `sys.modules` once it is called — and those are the modules the reversed-
+    # order run caught pointing at the frozen tree.
+    frozen._defaults_faces()
+
+    held = _resolving_into(_frozen_checkout)
+    assert "frozen_gate_at_72fdaf56" in held, held
+    assert len(held) > 2, (
+        "the frozen gate pulls its own helpers in with it; seeing almost "
+        "nothing here means this probe would not notice a leak either", held)
+
+
+def test_every_floor_names_its_own_ticket_because_the_banner_cannot():
+    """⛔ Each `_GateViolation` message must name the ticket that owns it.
+
+    The breach banner in `main()` used to carry `TRK-344 / #1392` — the fourth
+    face's pair. Measured on the revision that shipped it: of this module's
+    `_GateViolation` sites, six spoke for the FIFTH floor (#1411) and the banner
+    sent every one of those readers to a ticket that says nothing about what
+    fired. A banner printed after the fact cannot know which floor raised, so
+    the ticket moved to where it is known — the message itself — and the banner
+    now points at that line instead.
+
+    ⛔ This asserts the CLASS, not the six sites that were missing one: a sixth
+    floor added without a ticket is the same defect again, and the banner can no
+    longer cover for it.
+    """
+    import ast
+    import re
+
+    tree = ast.parse(_SCRIPT.read_text(encoding="utf-8"))
+    src = _SCRIPT.read_text(encoding="utf-8")
+
+    sites, ticketless = 0, []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)):
+            continue
+        if getattr(node.exc.func, "id", "") != "_GateViolation":
+            continue
+        sites += 1
+        seg = ast.get_source_segment(src, node) or ""
+        if not re.search(r"#\d{3,4}|TRK-\d+", seg):
+            ticketless.append(node.lineno)
+
+    assert sites >= 10, (
+        f"only {sites} _GateViolation site(s) found — the walk stopped seeing "
+        "them, so this test would pass by looking at nothing")
+    assert not ticketless, (
+        "these _GateViolation sites name no ticket, and the breach banner no "
+        "longer names one for them — a reader who trips them has nowhere to go",
+        ticketless)
+
+    # ⛔ Via AST, not a substring of the source: the banner is written as
+    # adjacent string literals across several lines, so the raw text contains
+    # the quote-newline-indent joins and any substring check against it answers
+    # a question about formatting rather than about what the reader sees.
+    banner = next(
+        n.value for n in ast.walk(tree)
+        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        and "defaults-tier floor breach" in n.value)
+    # ⛔ `TRK-337` is allowed here and nowhere else in this assertion: the banner
+    # names it as one of the things that did NOT run, not as the origin of the
+    # breach. What must not come back is a ticket standing where the BREACHING
+    # floor's identity goes — the fourth face's pair is the one that was there.
+    owning = [t for t in ("TRK-344", "#1392", "#1411") if t in banner]
+    assert not owning, (
+        "the breach banner names a floor's ticket again; it cannot know which "
+        "floor raised, so any ticket it names is right for some and wrong for "
+        "others", owning, banner)
+    assert "names the floor and its ticket" in banner, (
+        "the banner no longer points at the line that does know — without that "
+        "pointer, dropping the ticket just removed information", banner)
