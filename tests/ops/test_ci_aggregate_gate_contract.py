@@ -64,7 +64,9 @@ spelling of `continue-on-error`, achieves exactly the same thing, sits in the
 same decision path, and nothing forbids it ON A ci.yml TEST LEG — the two
 existing `|| true` guards are scoped to other workflows
 (`tests/ops/test_guard_defaults_scopes.py`,
-`tests/ops/test_nightly_scan_matrix_drift.py`). It is banned in the
+`tests/ops/test_nightly_scan_matrix_drift.py`, and
+`tests/ops/test_secret_scan_gate.py`, which also bans `set +e`, `; exit 0`
+and a trailing `exit 0` on any step whose exit code is load-bearing). It is banned in the
 gate scripts here (see `_EXIT_SWALLOW`) and deliberately not on the legs,
 because `python-tests-run` has a live and legitimate `|| true` on its "Install
 mtail" step and the narrowing that would separate the two is the one the
@@ -152,17 +154,16 @@ the comment admitted only the 24 of them with three mutually distinct values. To
 total.
 
 ⚠️ Cost, on THIS shape (2025 cells, each executed twice — see `_RUNNER_ENV`):
-~15 s in the dev container, ~57 s on a Windows dev host. Both measured after
-the per-cell `$GITHUB_STEP_SUMMARY` file landed, and that ordering matters —
-the host figure came DOWN from 137–246 s while the spawn count DOUBLED,
-because 64 threads had been contending on one shared file. CI is Linux, so
-the small figure is the one that governs.
+roughly **6–13 s in the dev container** and **2–4 minutes on a Windows dev
+host**, both as ranges over five and three independent runs. CI is Linux, so
+the small one governs; `go-tests` is ~4 s of it.
 
-⛔ Every number in this paragraph has been wrong at least once, always in the
-same way: it was measured for one shape and survived into the next. Six
-independent measurements of earlier shapes ranged 15–246 s. If you change the
-cell count, the execution count, or the file layout, re-measure — do not
-adjust the range.
+⛔ RANGES, not point values, and that is the third correction to this
+paragraph. Every previous version stated a number measured for one shape that
+survived into the next, and one of them disagreed with its own commit message
+by 2x. Spawn-dominated timings on a loaded host do not repeat — the cleanest
+run measured here was also the slowest. If you change the cell count, the
+execution count or the file layout, re-measure; do not adjust the range.
 """
 
 from __future__ import annotations
@@ -588,9 +589,12 @@ REQUIRED_CHECK_NAMES = frozenset({
 
 # `needs.<job_id>.result`: "Possible values are success, failure, cancelled,
 # or skipped" (contexts reference). The empty string is this module's own
-# addition — it is what an unresolvable expression renders as, and it is the
-# exact state #1397 describes (a failed detect job's outputs read empty). It
-# is NOT documented; including it only makes the matrix stricter.
+# addition to that list, but not an undocumented one: "If you attempt to
+# dereference a nonexistent property, it will evaluate to an empty string"
+# (contexts reference). It is the exact state #1397 describes — a failed
+# detect job's outputs read empty — and including it only makes the matrix
+# stricter. ⚠️ An earlier version of this comment said "NOT documented" while
+# the module docstring said the opposite; the docstring was right.
 _RESULT_DOMAIN = ("success", "failure", "cancelled", "skipped", "")
 # dorny emits the string "true" or "false"; empty for the same reason.
 _CHANGED_DOMAIN = ("true", "false", "")
@@ -1240,7 +1244,8 @@ def test_gate_shaped_jobs_are_either_modelled_or_ledgered() -> None:
 # `$((X))` — blind review walked a runner-supplied `GITHUB_RUN_ATTEMPT`
 # straight through the free-variable check with `[ "$((GITHUB_RUN_ATTEMPT))"
 # -gt 1 ]`, which is empty here and non-empty on every job re-run in CI.
-# `test_the_free_variable_scanner_sees_every_expansion_spelling` pins the list.
+# `test_the_free_variable_scanner_sees_the_spellings_that_defeated_it`
+# pins the list.
 # Everything a verdict step is allowed to declare. An accept-set, because the
 # dangerous keys are the ones nobody has thought of yet.
 _GATE_STEP_KEYS = frozenset({"name", "id", "env", "run", "shell", "if"})
@@ -1454,6 +1459,17 @@ def _command_words(script: str) -> set[str]:
         # header. In `while <command>` the rest IS a command — drop only the
         # keyword. (Caught by the control that this comment now justifies, on
         # the first run after it was written.)
+        # ⛔ A redirection remnant is not a command. `_FRAGMENT` splits on
+        # `&`, so `echo x >&2` leaves a fragment whose first word is `2`, and
+        # the stranger check demanded the maintainer justify a command that
+        # does not exist — while `test_gate_exit_codes_match_the_contract`
+        # was, for the same edit, telling them the `>&2` diagnostic is
+        # legitimate and how to register it. Two assertions in one file
+        # contradicting each other, with the wrong one naming a remedy
+        # (`_GATE_COMMANDS += "2"`) that would allow every fragment starting
+        # with a digit.
+        if tokens and tokens[0].isdigit():
+            continue
         if tokens and tokens[0] == "for":
             continue
         if tokens and tokens[0] in ("while", "until"):
@@ -1737,19 +1753,28 @@ def test_nothing_in_a_gate_decision_path_may_continue_on_error() -> None:
     guard acquires a load-bearing lie:
 
       1. STEP level, documented: "When a `continue-on-error` step fails, the
-         `outcome` is `failure`, but the final `conclusion` is `success`". The
-         gate's `exit 1` is discarded and the job — the required check —
-         concludes success.
+         `outcome` is `failure`, but the final `conclusion` is `success`" —
+         verbatim, in the CONTEXTS reference under `steps.<step_id>`, where it
+         appears on both the `.conclusion` and `.outcome` rows. ⚠️ Not in
+         workflow-syntax: that page's `continue-on-error` section says only
+         "Prevents a job from failing when a step fails" and never mentions
+         either field. The gate's `exit 1` is discarded and the job — the
+         required check — concludes success.
       2. JOB level on a job the gate READS: `needs.<job>.result` is reported
          as `success` for a failed continue-on-error job. Community-reported,
          not in the docs (actions/toolkit#1739 is open about exactly this). On
          `detect-changes` that reinstates skip-as-green in one line: the legs
          skip, the gate's `!= "success"` branch never fires, and the
          `*_changed` outputs are empty so the skip reads as "not needed".
-      3. JOB level on the gate ITSELF: documented only as "allow a workflow
-         run to pass when this job fails". ⛔ Whether the job's OWN check run
-         then reports success is NOT documented, and community reports say it
-         stays red — so do not rewrite this reason as "the required check goes
+      3. JOB level on the gate ITSELF: documented only as "Prevents a workflow
+         run from failing when a job fails". ⛔ Whether the job's OWN check run
+         then reports success is NOT documented — verified by grepping the
+         published docs source, not just the rendered page: across contexts,
+         workflow-syntax, status-checks, troubleshooting-required-status-checks,
+         about-protected-branches and use-jobs, `continue-on-error` appears
+         nowhere in the descriptions of `needs.<job>.result`, `jobs.<job>
+         .result` or `job.status`, and there is no job-level equivalent of the
+         step's outcome/conclusion pair. Community reports say it stays red — so do not rewrite this reason as "the required check goes
          green". The shape is refused because its effect is unknown, which is
          the fail-closed stance, and because one in-repo consumer is known:
          `scripts/tools/dx/pr_preflight.py` reads the key off every workflow
@@ -2340,6 +2365,9 @@ _SCRIPT_SAMPLES = (
      "loop variable and a genuine local"),
     ('echo "hi" >> "$GITHUB_STEP_SUMMARY"\nexit 0\n', False,
      "step summary is reproduced by the harness"),
+    ('echo "gate evaluating" >&2\nexit 0\n', False,
+     "an fd dup is not a command named 2 (the only redirection sample used to "
+     "be `>>`, which has no `&`)"),
 )
 
 

@@ -717,7 +717,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "db4a1bef347506e1cde0f586d3c19db4815fabb3b655633a050bc8f7e472eeb6",
+ "source_digest": "5cea7056c2ad85308ed0078c867f336a6a508bbe400e1dfad74372fc85d8bf83",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1052,6 +1052,9 @@
   ".doclinkignore": [
    "tests/lint/test_check_doc_links.py"
   ],
+  ".gitattributes": [
+   "tests/ops/test_generated_ci_artifacts.py"
+  ],
   ".github/CODEOWNERS": [
    "tests/dx/test_generate_rule_pack_stats_injection.py"
   ],
@@ -1175,6 +1178,7 @@
    "tests/lint/test_check_doc_links.py",
    "tests/lint/test_check_planning_status_sync.py",
    "tests/lint/test_validate_docs_versions.py",
+   "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_gitops_check.py",
    "tests/ops/test_inject_metadata_join.py",
    "tests/ops/test_state_reconcile.py"
@@ -1388,6 +1392,10 @@
   "docs/index.md": [
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
+  "docs/integration/gitops-deployment.md": [
+   "tests/ops/test_config_diff.py",
+   "tests/ops/test_generated_ci_artifacts.py"
+  ],
   "docs/integration/troubleshooting-checklist.md": [
    "tests/ops/test_generate_routes_orchestration.py"
   ],
@@ -1433,6 +1441,9 @@
   ],
   "docs/internal/iac-lint-baseline.md": [
    "tests/ops/test_ci_aggregate_gate_contract.py"
+  ],
+  "docs/internal/lint-policy.md": [
+   "tests/ops/test_generated_ci_artifacts.py"
   ],
   "docs/internal/log-visibility-2tier-catalogue.md": [
    "tests/dx/test_log_visibility_catalogue.py"
@@ -1986,6 +1997,7 @@
    "tests/dx/test_dx_json_stdout_contract.py",
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_threshold_reachability.py",
+   "tests/ops/test_config_diff.py",
    "tests/shared/test_ci_flag_contract.py",
    "tests/shared/test_json_stdout_contract.py",
    "tests/shared/test_tool_exit_codes.py"
