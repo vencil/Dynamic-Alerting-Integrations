@@ -541,8 +541,13 @@ class TestRunTrendWatchDryRun:
         assert "No sustained" in capsys.readouterr().out
 
     def test_recovered_with_open_issue_would_close(self, tmp_path, capsys):
-        nights = [_flat(i, 35e6) for i in range(8)]
-        args = _trend_args(_write_fixture(tmp_path, nights), fixture_open_issue=99)
+        # NOTE: the simulated issue now needs a readable state marker. Closing an
+        # issue whose marker is absent is no longer allowed — see
+        # TestMarkerHealthGatesClose::test_absent_marker_blocks_the_close.
+        nights = [_hnight(i, 35e6, _EPYC) for i in range(8)]
+        args = _trend_args(_write_fixture(tmp_path, nights), fixture_open_issue=99,
+                           fixture_open_body=ab._render_state_marker(
+                               [[_BENCH, "sustained", 40e6, _EPYC]]))
         rc = ab.run_trend_watch(args)
         assert rc == 0
         assert "would close" in capsys.readouterr().err
@@ -712,8 +717,11 @@ class TestStatefulLifecycleDryRun:
 
     def test_close_removes_stale_recovering_label(self, tmp_path, capsys):
         # Perf recovered (no findings) → close AND strip a lingering recovering label.
-        nights = [_flat(i, 35e6) for i in range(8)]
+        # A readable marker is now a precondition of any auto-close (follow-up B).
+        nights = [_hnight(i, 35e6, _EPYC) for i in range(8)]
         args = _trend_args(_write_fixture(tmp_path, nights), fixture_open_issue=42,
+                           fixture_open_body=ab._render_state_marker(
+                               [[_BENCH, "creep", 40e6, _EPYC]]),
                            fixture_open_labels=[ab.RECOVERING_LABEL])
         assert ab.run_trend_watch(args) == 0
         err = capsys.readouterr().err
@@ -992,9 +1000,45 @@ class TestRecoveryBlockers:
         blockers = ab._recovery_blockers({_BENCH: (35e6, _EPYC)}, {}, _EPYC, 0.05)
         assert blockers and "absent" in blockers[0]
 
-    def test_null_frozen_host_compares_values_only(self):
-        assert ab._recovery_blockers({_BENCH: (35e6, None)},
-                                     {_BENCH: 34e6}, _XEON, 0.05) == []
+    def test_null_frozen_host_blocks_it_does_not_compare_values_only(self):
+        # ⚠️ THIS EXPECTATION IS THE REVERSE OF THE ONE THIS TEST SHIPPED WITH.
+        # It used to assert that a frozen row with an UNKNOWN host class falls
+        # back to comparing the raw numbers. That is the cross-class close this
+        # whole mechanism exists to prevent, just reached through the null: the
+        # issue was frozen on a machine nobody recorded, and a night on a
+        # different, faster machine then "proves" recovery — while
+        # `_close_comment` printed "measured on the same host class". Unknown is
+        # not a match; an unverified same-class claim is not evidence.
+        blockers = ab._recovery_blockers({_BENCH: (35e6, None)},
+                                         {_BENCH: 34e6}, _XEON, 0.05)
+        assert blockers and "not comparable" in blockers[0]
+
+    def test_both_classes_unknown_still_blocks(self):
+        # Symmetric case: nothing is known about either side, so nothing about
+        # comparability has been established. The unstratified fallback may still
+        # FIRE (legacy detection behaviour is preserved) but it may not CLOSE.
+        blockers = ab._recovery_blockers({_BENCH: (35e6, None)},
+                                         {_BENCH: 1e6}, None, 0.05)
+        assert blockers and "not comparable" in blockers[0]
+
+    def test_boundary_value_exactly_on_the_floor_blocks(self):
+        # `>=`, not `>`: a bench sitting EXACTLY on anchor × (1 + floor) has not
+        # come back below the floor. New debt introduced by the frozen-anchor
+        # commit and never pinned; a `>` here would silently close on the
+        # boundary.
+        exact = 35e6 * 1.05
+        assert ab._recovery_blockers({_BENCH: (35e6, _EPYC)},
+                                     {_BENCH: exact}, _EPYC, 0.05)
+        assert ab._recovery_blockers({_BENCH: (35e6, _EPYC)},
+                                     {_BENCH: math.nextafter(exact, 0.0)}, _EPYC, 0.05) == []
+
+    def test_five_to_ten_percent_band_is_pinned_to_the_floor(self):
+        # Which floor the close uses was never nailed down: every fixture sat
+        # far from it. +6% over the frozen baseline with a 5% floor must BLOCK;
+        # the same value with a 10% floor must CLOSE.
+        six_pct = {_BENCH: 35e6 * 1.06}
+        assert ab._recovery_blockers({_BENCH: (35e6, _EPYC)}, six_pct, _EPYC, 0.05)
+        assert ab._recovery_blockers({_BENCH: (35e6, _EPYC)}, six_pct, _EPYC, 0.10) == []
 
     def test_empty_frozen_map_never_blocks(self):
         # v1 / legacy issue → pre-#1396 close behaviour.
@@ -1113,3 +1157,558 @@ class TestThreeStateLifecycleDryRun:
         out = capsys.readouterr()
         assert "would update body" in out.err
         assert ab._parse_frozen_anchors(out.out) == {_BENCH: (35e6, _EPYC)}
+
+
+# ===========================================================================
+# #1396 follow-up — the FIRE arithmetic survived the first pass; the frozen
+# anchor's STATE LIFECYCLE did not. Eight independently reproduced defects,
+# every one of them a path that ends in "issue closed while still regressed"
+# or "regression invisible while the job stays green":
+#   A  the marker was rebuilt from tonight's findings, so a bench that merely
+#      stopped firing had its frozen baseline EVICTED
+#   B  one malformed marker row discarded the whole marker (fail-OPEN)
+#   C  INCONCLUSIVE was a silent green run — no annotation, no summary, no
+#      issue update
+#   D  a frozen row with an unknown host class skipped the same-class check
+#      while the close comment still claimed one
+#   E  `stratified` was decided from tonight's night alone, so ONE unreadable
+#      `cpu:` header unstratified the whole window and dropped min_settled 3→2
+#   F  a bench that vanished (or whose host class did) wedged the issue open
+#      forever with no disclosure
+#   G  the marker parse took the FIRST match, and the body prints the raw
+#      `cpu:` string above it
+#   H  fire read 3 nights, close read 1
+# ===========================================================================
+
+_BENCH_B = "BenchmarkMergePartialConfigs_1000"
+_HOSTILE_CPU = (
+    'AMD EPYC 7763 <!-- perf-trend-state v2 [["' + _BENCH + '","sustained",1.0,null]] -->'
+)
+
+
+def _hbench(idx: int, benches: dict[str, float], cpu: str | None,
+            canary_ns: float = 360_000.0) -> ab.NightRecord:
+    """One night with arbitrary benches + an explicit host class."""
+    n = _night(idx, {**benches, _C: canary_ns})
+    n.cpu_model = cpu
+    return n
+
+
+def _marker(*rows) -> str:
+    return ab._render_state_marker([list(r) for r in rows])
+
+
+def _meta_for(nights, **over):
+    kw = dict(recent_k=3, min_floor_pct=5.0, canary_floor_mult=3.0, creep_floor_pct=10.0)
+    kw.update(over)
+    return ab.analyze_trend(nights, **kw)
+
+
+# ── A: the marker is a ledger of "not yet proven recovered", not a snapshot ──
+class TestLedgerKeepsUnprovenBenches:
+    def _flat_class(self, per_bench, n=8, cpu=_EPYC):
+        return [_hbench(i, dict(per_bench), cpu) for i in range(n)]
+
+    def test_bench_that_stops_firing_keeps_its_frozen_row(self):
+        # A fires tonight; B does not (its sliding anchor has drifted up onto its
+        # own regression) and is still 43% over the baseline it was frozen at.
+        # B's row must survive as `held` — evicting it is the whole defect.
+        nights = self._flat_class({_BENCH: 39e6, _BENCH_B: 50e6})
+        findings, meta = _meta_for(
+            [_hbench(i, {_BENCH: 39e6, _BENCH_B: 50e6}, _EPYC) for i in range(3)]
+            + [_hbench(i, {_BENCH: 35e6, _BENCH_B: 50e6}, _EPYC) for i in range(3, 8)])
+        assert [f.bench for f in findings] == [_BENCH]        # only A fires
+        body = _marker([_BENCH, "sustained", 35e6, _EPYC], [_BENCH_B, "sustained", 35e6, _EPYC])
+        rows, held = ab._ledger(body, findings, meta, allow_retire=True)
+        assert ab._parse_frozen_anchors(ab._render_state_marker(rows)) == {
+            _BENCH: (35e6, _EPYC), _BENCH_B: (35e6, _EPYC)}
+        assert [h.bench for h in held] == [_BENCH_B]
+        assert [r[1] for r in rows if r[0] == _BENCH_B] == [ab.KIND_HELD]
+        assert nights                                          # fixture sanity
+
+    def test_proven_recovery_is_the_only_way_a_row_retires(self):
+        nights = self._flat_class({_BENCH: 39e6, _BENCH_B: 34e6})
+        findings, meta = _meta_for(
+            [_hbench(i, {_BENCH: 39e6, _BENCH_B: 34e6}, _EPYC) for i in range(3)]
+            + [_hbench(i, {_BENCH: 35e6, _BENCH_B: 34e6}, _EPYC) for i in range(3, 8)])
+        body = _marker([_BENCH, "sustained", 35e6, _EPYC], [_BENCH_B, "sustained", 35e6, _EPYC])
+        rows, held = ab._ledger(body, findings, meta, allow_retire=True)
+        assert [r[0] for r in rows] == [_BENCH]                # B proved it, B is gone
+        assert held == []
+        assert nights
+
+    def test_inconclusive_night_may_not_retire_anything(self):
+        # allow_retire=False: a night that judged nothing cannot retire a row,
+        # even one whose number happens to look good.
+        nights = self._flat_class({_BENCH: 34e6})
+        _findings, meta = _meta_for(nights)
+        body = _marker([_BENCH, "sustained", 35e6, _EPYC])
+        rows, held = ab._ledger(body, [], meta, allow_retire=False)
+        assert [r[0] for r in rows] == [_BENCH]
+        assert [h.code for h in held] == ["pending"]
+
+    def test_two_benches_recovering_on_different_nights_do_not_false_close(
+            self, tmp_path, capsys):
+        # END TO END, the reproduction. Night 1: A fires, B is silently
+        # regressed. Night 2: A has recovered and nothing fires at all. With the
+        # marker rebuilt from findings, B's frozen baseline was thrown away on
+        # night 1 and night 2 closed the issue with B still +43%.
+        n1 = ([_hbench(i, {_BENCH: 39e6, _BENCH_B: 50e6}, _EPYC) for i in range(3)]
+              + [_hbench(i, {_BENCH: 35e6, _BENCH_B: 50e6}, _EPYC) for i in range(3, 8)])
+        args1 = _trend_args(_write_fixture(tmp_path, n1), fixture_open_issue=42,
+                            fixture_open_body=_marker(
+                                [_BENCH, "sustained", 35e6, _EPYC],
+                                [_BENCH_B, "sustained", 35e6, _EPYC]))
+        assert ab.run_trend_watch(args1) == 0
+        night1_body = capsys.readouterr().out
+        assert ab._parse_frozen_anchors(night1_body) == {
+            _BENCH: (35e6, _EPYC), _BENCH_B: (35e6, _EPYC)}
+
+        n2 = [_hbench(i, {_BENCH: 34e6, _BENCH_B: 50e6}, _EPYC) for i in range(8)]
+        night2 = tmp_path / "n2"
+        night2.mkdir(exist_ok=True)
+        args2 = _trend_args(_write_fixture(night2, n2), fixture_open_issue=42,
+                            fixture_open_body=night1_body)
+        assert ab.run_trend_watch(args2) == 0
+        err = capsys.readouterr().err
+        assert "NOT closing perf-trend issue #42" in err
+        assert "would close" not in err
+        assert _BENCH_B in err
+
+    def test_held_row_is_not_announced_as_recovered(self):
+        # `held` means "still owed proof". Letting it reach the transition
+        # comment would post "Recovered (no longer flagged)" about exactly the
+        # bench whose recovery has NOT been shown.
+        prior = [[_BENCH, "sustained"], [_BENCH_B, ab.KIND_HELD]]
+        assert ab._state_transition_comment(prior, [[_BENCH, "sustained"]]) is None
+        c = ab._state_transition_comment(prior, [[_BENCH, "creep"]])
+        assert c and "Recovered" not in c and "Eased to creep" in c
+
+    def test_held_row_does_not_drive_the_recovering_label(self):
+        # The label means "sustained cleared, creep remains". A held row is not
+        # a sustained finding and must not be read as one.
+        assert ab._recovering_label_change(
+            [_finding(_BENCH, "creep")], [[_BENCH_B, ab.KIND_HELD]], []) is None
+
+
+# ── B: an unreadable marker must fail CLOSED ────────────────────────────────
+class TestMarkerHealthGatesClose:
+    _DAMAGED = ('<!-- perf-trend-state v2 [["%s","sustained",35000000.0,"%s"],["oops"]] -->'
+                % (_BENCH, _EPYC))
+
+    def test_one_broken_row_no_longer_discards_the_good_ones(self):
+        health, rows = ab._state_marker_rows(self._DAMAGED)
+        assert health == ab.MARKER_DAMAGED
+        assert ab._parse_frozen_anchors(self._DAMAGED) == {_BENCH: (35e6, _EPYC)}
+        assert len(rows) == 1
+
+    def test_damaged_marker_does_not_free_a_regressed_issue(self, tmp_path, capsys):
+        # The measured repro: +43% over the frozen baseline, one junk row in the
+        # marker, and the whole marker was dropped → blockers empty → closed.
+        nights = [_hnight(i, 50e6, _EPYC) for i in range(8)]
+        args = _trend_args(_write_fixture(tmp_path, nights), fixture_open_issue=42,
+                           fixture_open_body=self._DAMAGED)
+        assert ab.run_trend_watch(args) == 0
+        err = capsys.readouterr().err
+        assert "would close" not in err
+        assert "::warning::" in err
+
+    def test_damaged_marker_blocks_even_when_surviving_rows_are_satisfied(
+            self, tmp_path, capsys):
+        # Every row we CAN read says "recovered" — but a row we could not read
+        # may have said anything, so this is not evidence of recovery.
+        nights = [_hnight(i, 34e6, _EPYC) for i in range(8)]
+        args = _trend_args(_write_fixture(tmp_path, nights), fixture_open_issue=42,
+                           fixture_open_body=self._DAMAGED)
+        assert ab.run_trend_watch(args) == 0
+        err = capsys.readouterr().err
+        assert "would close" not in err
+        assert "state marker is damaged" in err
+        assert "::warning::" in err
+        assert "would update body" not in err     # never overwrite unreadable state
+
+    def test_absent_marker_blocks_the_close(self, tmp_path, capsys):
+        # Hand-deleted marker (or an issue a human labelled `perf-trend`). The
+        # watchdog does not know what it was watching → it must not close it.
+        nights = [_hnight(i, 34e6, _EPYC) for i in range(8)]
+        args = _trend_args(_write_fixture(tmp_path, nights), fixture_open_issue=42,
+                           fixture_open_body="## someone edited this by hand")
+        assert ab.run_trend_watch(args) == 0
+        err = capsys.readouterr().err
+        assert "would close" not in err
+        assert "state marker is absent" in err
+        assert f"would add `{ab.UNVERIFIABLE_LABEL}`" in err
+
+    def test_v1_marker_keeps_the_documented_legacy_close(self):
+        health, rows = ab._state_marker_rows(
+            '<!-- perf-trend-state v1 [["%s","sustained"]] -->' % _BENCH)
+        assert health == ab.MARKER_LEGACY_V1
+        assert len(rows) == 1
+
+    def test_empty_v2_payload_is_healthy_not_legacy(self):
+        # Every row retired. Same shape as an empty v1 payload, opposite meaning
+        # — which is why the declared version is parsed rather than guessed.
+        assert ab._state_marker_rows(ab._render_state_marker([]))[0] == ab.MARKER_OK
+
+
+# ── C: INCONCLUSIVE must be loud ────────────────────────────────────────────
+class TestInconclusiveIsLoud:
+    def _thin_stratum(self, ns=45e6):
+        # 3 recent XEON nights + only 2 settled XEON → nothing evaluable.
+        return ([_hnight(i, ns, _XEON) for i in range(3)]
+                + [_hnight(3, 35e6, _EPYC), _hnight(4, 35e6, _XEON),
+                   _hnight(5, 35e6, _EPYC), _hnight(6, 35e6, _XEON),
+                   _hnight(7, 35e6, _EPYC)])
+
+    def test_real_regression_on_an_inconclusive_night_is_annotated(
+            self, tmp_path, capsys, monkeypatch):
+        # A REAL +30% permanent step on a night with too few same-class peers
+        # used to produce: green tick, exit 0, no annotation, no summary,
+        # nothing on the issue. Nobody would ever learn it happened.
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        args = _trend_args(_write_fixture(tmp_path, self._thin_stratum()))
+        assert ab.run_trend_watch(args) == 0
+        err = capsys.readouterr().err
+        assert "::warning::" in err and "INCONCLUSIVE" in err
+        assert "not a passing perf verdict" in err
+        assert "INCONCLUSIVE" in summary.read_text(encoding="utf-8")
+
+    def test_inconclusive_summary_names_the_host_class_and_the_counts(
+            self, tmp_path, capsys, monkeypatch):
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        ab.run_trend_watch(_trend_args(_write_fixture(tmp_path, self._thin_stratum())))
+        text = summary.read_text(encoding="utf-8")
+        assert _XEON in text
+        assert "need ≥ 3 recent + 3 settled" in text
+        capsys.readouterr()
+
+    def test_inconclusive_refreshes_the_open_issue_with_the_night_it_saw(
+            self, tmp_path, capsys):
+        args = _trend_args(_write_fixture(tmp_path, self._thin_stratum()),
+                           fixture_open_issue=42,
+                           fixture_open_body=_marker([_BENCH, "sustained", 35e6, _EPYC]))
+        assert ab.run_trend_watch(args) == 0
+        out = capsys.readouterr()
+        assert "would update body of perf-trend issue #42" in out.err
+        assert "INCONCLUSIVE — not evaluated tonight" in out.err
+        assert "NOT closing perf-trend issue #42" in out.err
+
+    def test_inconclusive_body_says_which_night_and_that_it_was_not_judged(self):
+        nights = ([_hnight(i, 45e6, _XEON) for i in range(3)]
+                  + [_hnight(3, 35e6, _EPYC), _hnight(4, 35e6, _XEON),
+                     _hnight(5, 35e6, _EPYC), _hnight(6, 35e6, _XEON),
+                     _hnight(7, 35e6, _EPYC)])
+        _findings, meta = _meta_for(nights)
+        assert meta["status"] == ab.STATUS_INCONCLUSIVE
+        body = ab.render_trend_issue_body([], meta)
+        assert "Not evaluated tonight (INCONCLUSIVE)" in body
+        assert meta["today_night"] in body            # WHICH night these numbers are
+        assert "nothing is closed" in body
+
+    def test_inconclusive_night_does_not_downgrade_a_flagged_row(self, tmp_path):
+        # Regression guard for the ledger itself: writing `held` over a
+        # `sustained` row on a night that measured NOTHING is a state change
+        # made on no evidence, and it reads next night as sustained→gone, i.e. a
+        # "Recovered (no longer flagged)" comment for a bench nobody looked at.
+        # An INCONCLUSIVE night preserves the last kind the watchdog knew.
+        _f, meta = _meta_for(self._thin_stratum())
+        assert meta["status"] == ab.STATUS_INCONCLUSIVE
+        rows, _held = ab._ledger(_marker([_BENCH, "sustained", 35e6, _EPYC]), [], meta,
+                                 allow_retire=False)
+        assert ab._parse_state_marker(ab._render_state_marker(rows)) == [[_BENCH, "sustained"]]
+        # …and a night that COULD judge does downgrade it (that is a real
+        # transition, and the "no longer flagged" comment is then earned).
+        _f2, meta2 = _meta_for([_hnight(i, 34e6, _EPYC) for i in range(8)])
+        rows2, _h2 = ab._ledger(_marker([_BENCH, "sustained", 50e6, _EPYC]), [], meta2,
+                                allow_retire=True)
+        assert rows2 == []                      # 34e6 < 50e6 → proved, retired
+        rows3, _h3 = ab._ledger(_marker([_BENCH, "sustained", 30e6, _EPYC]), [], meta2,
+                                allow_retire=True)
+        assert [r[1] for r in rows3] == [ab.KIND_HELD]     # not proved → held
+        assert tmp_path                          # fixture dir unused, keep signature
+
+    def test_inconclusive_still_never_fires_and_never_closes(self, tmp_path, capsys):
+        args = _trend_args(_write_fixture(tmp_path, self._thin_stratum()),
+                           fixture_open_issue=42,
+                           fixture_open_body=_marker([_BENCH, "sustained", 35e6, _EPYC]))
+        assert ab.run_trend_watch(args) == 0
+        err = capsys.readouterr().err
+        assert "would open" not in err and "would close" not in err
+
+
+# ── D: an unverified same-class claim is not evidence and is not printed ────
+class TestCloseCommentClaims:
+    def test_close_comment_omits_the_same_class_claim_when_unverified(self):
+        c = ab._close_comment({_BENCH: (35e6, None)}, {_BENCH: 34e6}, _EPYC, 0.05)
+        assert "same host class" not in c
+
+    def test_close_comment_keeps_the_claim_when_every_row_matches(self):
+        c = ab._close_comment({_BENCH: (35e6, _EPYC)}, {_BENCH: 34e6}, _EPYC, 0.05)
+        assert "same host class" in c and _EPYC in c
+
+    def test_close_comment_says_recent_window_not_tonight(self):
+        c = ab._close_comment({_BENCH: (35e6, _EPYC)}, {_BENCH: 34e6}, _EPYC, 0.05)
+        assert "recent-window median" in c
+
+
+# ── E: one unreadable header must not unstratify the whole window ───────────
+class TestStratificationScope:
+    def test_single_unreadable_night_does_not_open_a_30_percent_ticket(self):
+        # Tonight's `cpu:` failed to parse; the rest of the window is labelled.
+        # Unstratified (the old fallback) this is a textbook +30.8% sustained
+        # across a 2-night settled minimum — a CLEAR night turned into a filed
+        # regression by one unparsed line.
+        nights = ([_hnight(0, 39e6, None)]
+                  + [_hnight(i, 39e6, _EPYC) for i in (1, 2)]
+                  + [_hnight(i, 29.8e6, _XEON) for i in range(3, 8)])
+        findings, meta = _meta_for(nights)
+        assert findings == []
+        assert meta["status"] == ab.STATUS_INCONCLUSIVE
+        assert meta["stratification"] == ab.STRATA_TONIGHT_UNKNOWN
+        assert meta["min_settled"] == ab.MIN_SETTLED_SAME_CLASS   # never relaxed to 2
+
+    def test_fully_unlabelled_window_keeps_the_legacy_path(self):
+        # The ONE case that may still fall back: nothing to stratify by at all.
+        nights = [_flat(0, 39e6), _flat(1, 39e6), _flat(2, 39e6)] + \
+                 [_flat(i, 29.8e6) for i in range(3, 8)]
+        findings, meta = _meta_for(nights)
+        assert any(f.kind == "sustained" for f in findings)
+        assert meta["stratification"] == ab.STRATA_LEGACY
+        assert meta["min_settled"] == 2
+
+    def test_tonight_unknown_body_does_not_claim_an_unstratified_verdict(self):
+        nights = ([_hnight(0, 39e6, None)]
+                  + [_hnight(i, 39e6, _EPYC) for i in (1, 2)]
+                  + [_hnight(i, 29.8e6, _XEON) for i in range(3, 8)])
+        _f, meta = _meta_for(nights)
+        body = ab.render_trend_issue_body([], meta)
+        assert "unreadable" in body
+        assert "NOT stratified" not in body     # no verdict was produced at all
+
+
+# ── F: a wedged issue is disclosed, never auto-closed ───────────────────────
+class TestUnverifiableDisclosure:
+    def _clear_night_without(self, bench_missing=True):
+        # BenchmarkB is measured every night (so the night is CLEAR, not
+        # INCONCLUSIVE); _BENCH has vanished from the run entirely.
+        benches = {_BENCH_B: 35e6} if bench_missing else {_BENCH_B: 35e6, _BENCH: 34e6}
+        return [_hbench(i, benches, _EPYC) for i in range(8)]
+
+    def test_vanished_bench_holds_the_row_and_counts_the_nights(self):
+        _f, meta = _meta_for(self._clear_night_without())
+        assert meta["status"] == ab.STATUS_CLEAR
+        body = _marker([_BENCH, "sustained", 35e6, _EPYC])
+        rows, held = ab._ledger(body, [], meta, allow_retire=True)
+        assert [h.code for h in held] == ["absent"]
+        assert [h.streak for h in held] == [1]
+        assert rows == [[_BENCH, ab.KIND_HELD, 35e6, _EPYC, 1]]
+
+    def test_streak_accumulates_across_nights_and_survives_the_marker(self):
+        _f, meta = _meta_for(self._clear_night_without())
+        body = _marker([_BENCH, "sustained", 35e6, _EPYC])
+        for expected in (1, 2, 3):
+            rows, held = ab._ledger(body, [], meta, allow_retire=True)
+            assert [h.streak for h in held] == [expected]
+            body = ab._render_state_marker(rows)
+        assert ab._parse_held_streaks(body) == {_BENCH: 3}
+
+    def test_streak_resets_once_the_bench_is_measurable_again(self):
+        _f, meta = _meta_for([_hbench(i, {_BENCH_B: 35e6, _BENCH: 50e6}, _EPYC)
+                              for i in range(8)])
+        body = _marker([_BENCH, ab.KIND_HELD, 35e6, _EPYC, 9])
+        rows, held = ab._ledger(body, [], meta, allow_retire=True)
+        assert [h.code for h in held] == ["above"]      # measured, still regressed
+        assert [h.streak for h in held] == [0]
+        assert rows == [[_BENCH, ab.KIND_HELD, 35e6, _EPYC]]   # 5th element dropped
+
+    def test_body_discloses_the_wedge_once_it_crosses_the_threshold(self):
+        _f, meta = _meta_for(self._clear_night_without())
+        body_in = _marker([_BENCH, ab.KIND_HELD, 35e6, _EPYC,
+                           ab.UNVERIFIABLE_DISCLOSE_AT - 1])
+        rows, held = ab._ledger(body_in, [], meta, allow_retire=True)
+        body = ab.render_trend_issue_body([], meta, rows=rows, held=held)
+        assert "Held — awaiting proof of recovery" in body
+        assert "Not verifiable for ≥ 3 consecutive nights" in body
+        assert f"`{_BENCH}` ({ab.UNVERIFIABLE_DISCLOSE_AT} nights)" in body
+        assert ab.UNVERIFIABLE_LABEL in body
+
+    def test_wedged_issue_gets_the_label_and_is_not_closed(self, tmp_path, capsys):
+        nights = self._clear_night_without()
+        args = _trend_args(_write_fixture(tmp_path, nights), fixture_open_issue=42,
+                           fixture_open_body=_marker(
+                               [_BENCH, ab.KIND_HELD, 35e6, _EPYC,
+                                ab.UNVERIFIABLE_DISCLOSE_AT - 1]))
+        assert ab.run_trend_watch(args) == 0
+        err = capsys.readouterr().err
+        assert "would close" not in err
+        assert f"would add `{ab.UNVERIFIABLE_LABEL}`" in err
+        assert "absent from the recent same-class window" in err
+
+    def test_label_is_dropped_again_once_the_bench_comes_back(self, tmp_path, capsys):
+        nights = [_hbench(i, {_BENCH_B: 35e6, _BENCH: 50e6}, _EPYC) for i in range(8)]
+        args = _trend_args(_write_fixture(tmp_path, nights), fixture_open_issue=42,
+                           fixture_open_body=_marker([_BENCH, ab.KIND_HELD, 35e6, _EPYC, 9]),
+                           fixture_open_labels=[ab.UNVERIFIABLE_LABEL])
+        assert ab.run_trend_watch(args) == 0
+        assert f"would remove `{ab.UNVERIFIABLE_LABEL}`" in capsys.readouterr().err
+
+
+# ── G: the marker parse must not be hijackable from the body above it ───────
+class TestMarkerHijack:
+    def test_parse_takes_the_last_marker_not_the_first(self):
+        body = ("host: " + _HOSTILE_CPU + "\n\nreal table…\n"
+                + _marker([_BENCH_B, "sustained", 42e6, _EPYC]))
+        assert ab._parse_frozen_anchors(body) == {_BENCH_B: (42e6, _EPYC)}
+
+    def test_hostile_cpu_string_is_neutered_when_rendered(self):
+        _f, meta = _meta_for([_hnight(i, 35e6, _HOSTILE_CPU) for i in range(8)])
+        body = ab.render_trend_issue_body(
+            [_finding(_BENCH_B, "sustained")], meta,
+            frozen={_BENCH_B: (42e6, _HOSTILE_CPU)})
+        # Exactly one marker survives in the rendered body, and it is ours.
+        assert len(ab._STATE_MARKER_RE.findall(body)) == 1
+        assert ab._parse_frozen_anchors(body) == {_BENCH_B: (42e6, _HOSTILE_CPU)}
+        assert "&lt;!--" in body
+
+    def test_end_to_end_hostile_host_class_does_not_erase_the_frozen_state(
+            self, tmp_path, capsys):
+        nights = ([_hnight(i, 39e6, _HOSTILE_CPU) for i in range(3)]
+                  + [_hnight(i, 35e6, _HOSTILE_CPU) for i in range(3, 8)])
+        args = _trend_args(_write_fixture(tmp_path, nights), fixture_open_issue=42,
+                           fixture_open_body=_marker(
+                               [_BENCH, "sustained", 30e6, _HOSTILE_CPU]))
+        assert ab.run_trend_watch(args) == 0
+        out = capsys.readouterr().out
+        assert ab._parse_frozen_anchors(out) == {_BENCH: (30e6, _HOSTILE_CPU)}
+
+
+# ── H: close reads the same window fire does ────────────────────────────────
+class TestCloseUsesTheRecentWindow:
+    def test_one_lucky_night_does_not_close_a_permanent_regression(
+            self, tmp_path, capsys):
+        # Tonight dipped to 34e6; the other two recent nights are still at 50e6.
+        # Judging on tonight alone retired a live +43% regression.
+        nights = ([_hnight(0, 34e6, _EPYC)]
+                  + [_hnight(i, 50e6, _EPYC) for i in range(1, 8)])
+        args = _trend_args(_write_fixture(tmp_path, nights), fixture_open_issue=42,
+                           fixture_open_body=_marker([_BENCH, "sustained", 35e6, _EPYC]))
+        assert ab.run_trend_watch(args) == 0
+        err = capsys.readouterr().err
+        assert "would close" not in err
+        assert "still ≥ frozen baseline" in err
+
+    def test_recent_median_below_the_frozen_baseline_closes(self, tmp_path, capsys):
+        nights = ([_hnight(i, 34e6, _EPYC) for i in range(2)]
+                  + [_hnight(i, 50e6, _EPYC) for i in range(2, 8)])
+        args = _trend_args(_write_fixture(tmp_path, nights), fixture_open_issue=42,
+                           fixture_open_body=_marker([_BENCH, "sustained", 35e6, _EPYC]))
+        assert ab.run_trend_watch(args) == 0
+        assert "would close" in capsys.readouterr().err
+
+    def test_recent_medians_use_the_same_alignment_rule_as_fire(self):
+        # Present in only 2 of the 3 recent nights → not comparable, exactly as
+        # the fire path refuses to judge it.
+        nights = ([_hbench(0, {_BENCH_B: 35e6}, _EPYC)]
+                  + [_hbench(i, {_BENCH: 34e6, _BENCH_B: 35e6}, _EPYC) for i in range(1, 8)])
+        _f, meta = _meta_for(nights)
+        assert _BENCH not in meta["recent_medians"]
+        assert _BENCH_B in meta["recent_medians"]
+
+
+# ── I: gaps a mutation sweep found in the tests themselves ──────────────────
+class TestStratificationKeyIsTheRawString:
+    def test_distinct_skus_are_distinct_classes(self):
+        # This test used to assert `_XEON != _XEON_OTHER` — two test-local
+        # constants, zero calls into the module under test. It is now fed
+        # through analyze_trend: tonight's Xeon must NOT be anchored on the
+        # other Xeon's nights, which is what folding SKUs into a "Xeon family"
+        # would do (and would rebuild the #1396 hole).
+        nights = ([_hnight(i, 39e6, _XEON) for i in range(3)]
+                  + [_hnight(i, 35e6, _XEON_OTHER) for i in range(3, 8)])
+        findings, meta = _meta_for(nights)
+        assert findings == []                       # +11.4% across SKUs is NOT a trend
+        assert meta["status"] == ab.STATUS_INCONCLUSIVE
+        assert meta["cpu_class_counts"] == {_XEON: 3, _XEON_OTHER: 5}
+        assert meta["n_class_nights"] == 3
+
+    def test_same_sku_across_the_window_does_fire(self):
+        # Control for the above: identical numbers on ONE SKU still fire, so the
+        # assertion above is about the stratification key, not about the floor.
+        nights = ([_hnight(i, 39e6, _XEON) for i in range(3)]
+                  + [_hnight(i, 35e6, _XEON) for i in range(3, 8)])
+        findings, _meta = _meta_for(nights)
+        assert any(f.kind == "sustained" for f in findings)
+
+
+class TestRecentWindowIsStratifiedToo:
+    def test_foreign_class_nights_inside_the_recent_window_are_skipped(self):
+        # Every earlier fixture put tonight's class contiguously at the top, so
+        # positional slicing of the recent window would have passed all of them.
+        # Two foreign, much faster nights sit at positions 1-2 here: taken
+        # positionally the recent window would read [39, 20, 20] — sustained's
+        # all() breaks, creep's median collapses to 20e6, and the close path's
+        # recent median would "prove" a recovery that never happened.
+        nights = ([_hnight(0, 39e6, _EPYC), _hnight(1, 20e6, _XEON),
+                   _hnight(2, 20e6, _XEON)]
+                  + [_hnight(i, 39e6, _EPYC) for i in (3, 4)]
+                  + [_hnight(i, 35e6, _EPYC) for i in range(5, 10)])
+        findings, meta = _meta_for(nights)
+        assert any(f.kind == "sustained" for f in findings)
+        assert findings[0].today_ns == 39e6
+        assert findings[0].recent_typical_ns == 39e6      # the 20e6 nights are not in it
+        assert meta["recent_medians"][_BENCH] == 39e6
+
+    def test_foreign_class_nights_cannot_manufacture_a_finding_either(self):
+        # Mirror image: foreign SLOW nights inside the recent window must not
+        # push a flat same-class series over the floor (positionally the recent
+        # median would be 90e6 against a 35e6 anchor = a filed ticket).
+        nights = ([_hnight(0, 35e6, _EPYC), _hnight(1, 90e6, _XEON),
+                   _hnight(2, 90e6, _XEON)]
+                  + [_hnight(i, 35e6, _EPYC) for i in range(3, 10)])
+        findings, _meta = _meta_for(nights)
+        assert findings == []
+
+
+class TestCanaryIsStratified:
+    def test_noise_floor_comes_from_tonights_class_only(self):
+        # `canary_ns` was never once passed as a keyword in the suite, so the
+        # canary series being stratified was untested. Tonight's class has a
+        # DEAD-QUIET canary (floor stays at the 5% minimum) while the other
+        # class is wild (3× its CV would cap the floor at 10%). A +6% step then
+        # separates the two: it fires only if the canary is drawn per class.
+        wild = [200_000.0, 500_000.0, 210_000.0, 490_000.0, 220_000.0]
+        nights = ([_hnight(i, 37.1e6, _EPYC, canary_ns=360_000.0) for i in range(3)]
+                  + [_hnight(i, 35e6, _EPYC, canary_ns=360_000.0) for i in range(3, 6)]
+                  + [_hnight(6 + i, 35e6, _XEON, canary_ns=c) for i, c in enumerate(wild)])
+        findings, meta = _meta_for(nights)
+        assert meta["canary_cv"] == 0.0
+        assert meta["floor_pct"] == pytest.approx(5.0)
+        assert any(f.bench == _BENCH and f.kind == "sustained" for f in findings)
+
+    def test_same_window_with_one_class_would_have_been_silenced(self):
+        # The counterfactual for the above: put the wild canary on TONIGHT's
+        # class and the +6% step is (correctly) below the noise floor.
+        wild = [200_000.0, 500_000.0, 210_000.0, 490_000.0, 220_000.0, 480_000.0,
+                230_000.0, 470_000.0]
+        nights = ([_hnight(i, 37.1e6, _EPYC, canary_ns=wild[i]) for i in range(3)]
+                  + [_hnight(i, 35e6, _EPYC, canary_ns=wild[i]) for i in range(3, 8)])
+        _findings, meta = _meta_for(nights)
+        assert meta["floor_pct"] > 6.0
+
+
+class TestTonightIsPinnedToTonight:
+    def test_today_is_the_newest_night_not_merely_some_night(self):
+        # Every trend fixture used to give all recent nights the SAME value, so
+        # "today" being tonight was never actually asserted. Distinct values
+        # here: today_ns must be the newest night's, and meta must name it.
+        nights = ([_hnight(0, 41e6, _EPYC), _hnight(1, 40e6, _EPYC),
+                   _hnight(2, 39e6, _EPYC)]
+                  + [_hnight(i, 35e6, _EPYC) for i in range(3, 8)])
+        findings, meta = _meta_for(nights)
+        assert findings[0].today_ns == 41e6                     # not 39e6, not 40e6
+        assert findings[0].recent_typical_ns == 40e6            # median of the three
+        assert meta["today_night"] == nights[0].created_at
+        assert meta["today_run_id"] == nights[0].run_id
+        assert meta["today_night"] > nights[1].created_at       # newest-first, really
