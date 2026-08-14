@@ -465,19 +465,44 @@ def render_markdown_table(
 # survives a rename) is structural and is #1396's remaining follow-up.
 #
 # ⚠️ KNOWN AND DELIBERATELY NOT FIXED HERE — the recovery/close side still reads
-# the SLIDING anchor. A permanent regression ages into the settled window, the
-# anchor rises to meet it, the finding evaporates, and a CLEAR night closes the
-# issue. Replaying the real 30-night series with a +20% permanent step, that
-# still retires 160 of the 236 issues a real regression opened (68%, median 5
-# nights; the pre-#1396 unstratified code scored 184 of 259 / 71% / 6 nights, so
-# B+C move this barely at all — they were never meant to). A frozen per-bench
-# baseline was prototyped for exactly this and REVERTED before merge: it needs a
-# state lifecycle (ledger semantics, marker health, unjudgeable-forever rows)
-# that the prototype got wrong in six independent places, and its fail-closed
-# guards were provably never executed by any test. Detection (B+C) ships alone;
-# the close path is issue #1396's remaining follow-up and is being redesigned.
-# Until then the close COMMENT says what it actually measured, and says that the
-# anchor it measured against drifts.
+# the SLIDING anchor. The mechanism, which needs no measurement to state: a
+# permanent regression ages out of the recent window and into the settled one,
+# the anchor is the median of that settled window so it rises to meet the new
+# level, the gap closes, the finding evaporates, and the next CLEAR night closes
+# the issue on a baseline that has quietly moved to wherever the regression put
+# it. Detection (B+C) does not touch this — it corrects the POPULATION each rule
+# runs on, not what the anchor is.
+#
+# ⚠️ HOW OFTEN THAT HAPPENS IS UNMEASURED. A close-rate figure ("68%, 160 of
+# 236") was previously quoted here and in CHANGELOG/playbook; it came from a
+# scratchpad script that never imported this module and reimplemented "no
+# findings → close" itself, so it measured a model of the close path rather than
+# the close path. It has been removed rather than replaced: no honest number is
+# available, and a wrong one is worse than none. Anyone reproducing this must
+# drive `run_trend_watch` itself across consecutive nights, feeding each night's
+# rendered body back as the next night's issue body — the marker is the tool's
+# only cross-night memory, so a harness that skips it is not testing this code.
+#
+# A frozen per-bench baseline was prototyped for exactly this and REVERTED before
+# merge: it needs a state lifecycle (ledger semantics, marker health,
+# unjudgeable-forever rows) that the prototype got wrong in six independent
+# places, and its fail-closed guards were provably never executed by any test.
+# Detection (B+C) ships alone; the close path is issue #1396's remaining
+# follow-up and is being redesigned. Until then the close COMMENT says what it
+# actually measured, and says that the anchor it measured against drifts.
+#
+# ⚠️ OTHER LIFECYCLE GAPS, all tracked with the close path and none of them
+# patched here — patching this file's state machine one field at a time is what
+# produced the last four rounds of defects:
+#   - a REOPENED issue has no per-bench close guard (the close blanks the
+#     ledger, which is the only value consistent with the CLEAR prose it writes
+#     alongside — see the close path)
+#   - the marker records no host class, so a ledger written on one machine is
+#     read back on another as though it were comparable
+#   - an issue has no identity beyond "the first open `perf-trend` issue"
+#   - the four real-subprocess boundaries (`_gh`, `list_recent_runs`,
+#     `download_artifact`, `night_records_from_gh`) are unexercised offline
+#   - the GO/NO-GO variance gate (`--ci`, `main()`) is separately under-covered
 # ─────────────────────────────────────────────────────────────────────────────
 
 CANARY_BENCH = "BenchmarkControlCanaryCPU"
@@ -509,14 +534,22 @@ STRATA_TONIGHT_UNKNOWN = "tonight-unknown"  # window is classified, tonight is n
 # wait for more same-class nights sends them to the wrong place entirely.
 REASON_NO_RECENT = "no-recent"       # absent from ≥1 of the K newest same-class nights
 REASON_THIN_ANCHOR = "thin-anchor"   # < min_settled same-class settled nights behind it
-# A third cause exists only for benches named in an ISSUE'S MARKER: a bench that
-# is in NO night of the window is never iterated by `analyze_trend`, so it lands
-# in neither list and carries neither reason code. Reporting it through
+# Two further causes exist only for benches named in an ISSUE'S MARKER: a bench
+# outside tonight's stratum is never iterated by `analyze_trend`, so it lands in
+# neither list and carries neither reason code. Reporting that through
 # `_inconclusive_causes` fell through to "no benchmark appeared in tonight's
 # same-class window at all" — printed, on a CLEAR night, right next to a verdict
-# produced by benchmarks that plainly did appear. Renaming a benchmark is the
-# ordinary way to reach this state, and nothing ever leaves it.
-REASON_ABSENT = "absent-from-window"
+# produced by benchmarks that plainly did appear.
+#
+# ⚠️ Those two are NOT the same state, and collapsing them into REASON_ABSENT
+# produced a self-contradicting warning: the same sentence said "`X` last
+# reported 1 night ago" (measured over the WHOLE window) and "did not appear in
+# ANY of the N nights … a RENAMED or deleted benchmark reaches this state and
+# never leaves it". On a heterogeneous runner pool that is the ordinary case,
+# not a rename: the bench is in the window, just not on tonight's machine, and
+# it clears itself the next time the pool schedules that machine.
+REASON_OFF_CLASS = "off-class"       # in the window, but not in tonight's host-class stratum
+REASON_ABSENT = "absent-from-window"  # in NO night of the window (rename / deletion)
 
 # Same-class settled nights required before a bench may be judged at all, once
 # host-class stratification is active. Empirically calibrated, not guessed: on
@@ -793,6 +826,12 @@ def analyze_trend(
         "evaluated_benches": sorted(evaluated),
         "inconclusive_benches": sorted(inconclusive),
         "inconclusive_reasons": dict(sorted(inconclusive_reasons.items())),
+        # Every bench name seen ANYWHERE in the window, stratum or not. Only
+        # `_unverified_causes` reads it, and only to tell "ran on another
+        # machine" (self-clearing) apart from "renamed or deleted" (never
+        # clears) — two states that were reported with one, wrong, sentence.
+        "window_benches": sorted({b for n in nights for b in n.medians}
+                                 - {CANARY_BENCH}),
     }
     return findings, meta
 
@@ -815,6 +854,14 @@ def _cause_clause(cause: str, meta: dict, benches: list[str]) -> str:
                 f"are behind them; need ≥ {meta.get('recent_k', '?')} recent + "
                 f"{meta.get('min_settled', MIN_SETTLED_SAME_CLASS)} settled same-class nights "
                 f"per bench: {names}")
+    if cause == REASON_OFF_CLASS:
+        return (f"DID report inside the window, but never on tonight's host class "
+                f"(`{_safe_md(meta.get('today_cpu_model')) or 'unknown'}`, "
+                f"{meta.get('n_class_nights', '?')} of {meta.get('n_nights', '?')} window "
+                f"nights), so tonight's stratum holds no measurement of "
+                f"{'it' if len(benches) == 1 else 'them'} — a heterogeneous runner pool "
+                f"reaches this state routinely and it clears itself as soon as the pool "
+                f"schedules that machine again; it is NOT a rename: {names}")
     return (f"did not appear in ANY of the {meta.get('n_nights', '?')} nights in tonight's "
             f"window, so tonight neither judged nor skipped "
             f"{'it' if len(benches) == 1 else 'them'} — a RENAMED or deleted benchmark "
@@ -855,40 +902,75 @@ def _unverified_causes(meta: dict, unverified: Iterable[str]) -> list[str]:
     absent from the window ENTIRELY, in which case there is no reason code for
     it, and the fallback clause ("no benchmark appeared in tonight's same-class
     window at all") was printed on a CLEAR night — i.e. beside a verdict that
-    exists precisely because other benchmarks DID appear. The third cause is the
-    actionable one: the bench was renamed or removed, and no future night can
-    retire this issue."""
+    exists precisely because other benchmarks DID appear.
+
+    A bench with no reason code has TWO possible explanations and they are
+    OPPOSITES. Reporting both as `REASON_ABSENT` diagnosed an ordinary
+    heterogeneous-pool night as a rename, and the resulting warning contradicted
+    itself in one sentence: "`X` last reported 1 night ago" (the caller measures
+    that over the whole window) beside "did not appear in ANY of the 10 nights …
+    a RENAMED or deleted benchmark reaches this state and never leaves it".
+    ``meta["window_benches"]`` separates them; `REASON_OFF_CLASS` is
+    self-clearing, `REASON_ABSENT` is the actionable, never-leaves-it one."""
     if meta.get("stratification") == STRATA_TONIGHT_UNKNOWN:
         return _inconclusive_causes(meta)
     reasons = meta.get("inconclusive_reasons") or {}
+    in_window = set(meta.get("window_benches") or [])
     by_cause: dict[str, list[str]] = {}
     for bench in sorted(unverified):
-        by_cause.setdefault(reasons.get(bench, REASON_ABSENT), []).append(bench)
+        cause = reasons.get(bench) or (REASON_OFF_CLASS if bench in in_window
+                                       else REASON_ABSENT)
+        by_cause.setdefault(cause, []).append(bench)
     return [_cause_clause(c, meta, by_cause[c])
-            for c in (REASON_NO_RECENT, REASON_THIN_ANCHOR, REASON_ABSENT) if c in by_cause]
+            for c in (REASON_NO_RECENT, REASON_THIN_ANCHOR,
+                      REASON_OFF_CLASS, REASON_ABSENT) if c in by_cause]
+
+
+def _class_nights(nights: list[NightRecord], meta: dict) -> list[NightRecord]:
+    """The nights the per-bench prose is ALLOWED to speak about.
+
+    Every verdict in this tool is drawn from tonight's host-class stratum, so a
+    sentence counting nights outside it is describing a population no decision
+    was made on. `_nights_since_seen` counted the whole window while
+    `_unverified_causes` classified from the stratum, and the two then appeared
+    in ONE warning saying both "last reported 1 night ago" and "did not appear in
+    ANY of the 10 nights". Same window for both, or the warning contradicts
+    itself again."""
+    if meta.get("stratification") == STRATA_ON:
+        return [n for n in nights if n.cpu_model == meta.get("today_cpu_model")]
+    return list(nights)
 
 
 def _nights_since_seen(nights: list[NightRecord], bench: str) -> int:
-    """How many of the NEWEST window nights do not carry `bench` (0 = tonight has it).
+    """How many of the NEWEST nights GIVEN do not carry `bench` (0 = the newest has it).
 
     Derived from the window that is already in hand — no new marker field, no
     new state. It is what turns "issue #42 is held open" into "held open because
     `BenchmarkX` last reported 5 nights ago", which is the difference between an
-    operator filing a rename fix and an operator ignoring a recurring warning."""
+    operator filing a rename fix and an operator ignoring a recurring warning.
+    Callers pass ``_class_nights(...)``, not the raw window: see that helper."""
     for i, night in enumerate(nights):
         if bench in night.medians:
             return i
     return len(nights)
 
 
-def _held_open_detail(nights: list[NightRecord], bench: str) -> str:
-    """One phrase saying HOW LONG this bench has been unmeasurable."""
+def _held_open_detail(nights: list[NightRecord], bench: str,
+                      stratified: bool = False) -> str:
+    """One phrase saying HOW LONG this bench has been unmeasurable.
+
+    ``nights`` is tonight's stratum (``_class_nights``), and ``stratified`` makes
+    the unit say so. "3 nights ago" measured over same-class nights only, printed
+    as though it were calendar nights, is the kind of quietly-wrong number that
+    sends an operator looking for an outage on the wrong days."""
     missing = _nights_since_seen(nights, bench)
+    unit = "same-class night" if stratified else "night"
     if missing == 0:
         return f"`{bench}` reported tonight but could not be judged"
     if missing >= len(nights):
-        return f"`{bench}` has not reported in ANY of the last {len(nights)} nights"
-    return f"`{bench}` last reported {missing} night{'' if missing == 1 else 's'} ago"
+        return (f"`{bench}` has not reported in ANY of the last {len(nights)} "
+                f"{unit}{'' if len(nights) == 1 else 's'}")
+    return f"`{bench}` last reported {missing} {unit}{'' if missing == 1 else 's'} ago"
 
 
 def _unverified_benches(state: list[list[str]] | None, meta: dict) -> list[str]:
@@ -1677,7 +1759,12 @@ def run_trend_watch(args) -> int:
                 # warning repeats every night with no way to tell a bench that
                 # is down for one night from one that was renamed a month ago —
                 # and only the second one needs a human.
-                stuck = "; ".join(_held_open_detail(nights, b) for b in unverified)
+                # Counted over tonight's STRATUM, the same population
+                # `_unverified_causes` classifies from — see `_class_nights`.
+                strat_nights = _class_nights(nights, meta)
+                stuck = "; ".join(
+                    _held_open_detail(strat_nights, b, meta.get("stratified", False))
+                    for b in unverified)
                 detail = (f"issue #{num} is tracking {names}, and tonight did NOT evaluate "
                           f"{it} ({stuck}) — "
                           + "; ".join(_unverified_causes(meta, unverified))
@@ -1723,18 +1810,37 @@ def run_trend_watch(args) -> int:
             # table sitting directly above "✅ Auto-closing", which reads as if
             # the watchdog closed an issue it still had findings for.
             #
-            # The marker keeps the PRE-CLOSE ledger instead of being blanked.
-            # Blanking it is only correct for an issue that stays closed: the
-            # auto-close comment tells the reader to reopen if the regression
-            # returns, and a reopened issue carrying `[]` has no per-bench claim
-            # left, so the very next CLEAR night closes it again in silence — the
-            # close guard reads a marker that says the issue is about nothing.
-            # Keeping the ledger is strictly more information (the issue records
-            # what it was closed ON), and it re-arms the guard for the reopen.
-            # The cost is that a reopened issue waits for ALL of those benches to
-            # be measured again before it may close — which is the fail-closed
-            # semantics this guard is for.
-            body = render_trend_issue_body([], meta, state=prior_state or [])
+            # The marker is BLANKED, and `[]` is the only value consistent with
+            # everything else this branch writes. Control flow proves it: the
+            # held-open guard above `continue`s whenever `unverified` is
+            # non-empty, so reaching this line means EVERY row of `prior_state`
+            # was evaluated tonight and every one of them was under its floor.
+            # A ledger written here is therefore 100% rows the same night just
+            # disproved — the identical error the held-open path documents two
+            # screens up ("writing the prior ledger back verbatim re-asserts a
+            # flag the night just disproved"), committed on the way out.
+            #
+            # Keeping it was tried and is reverted. Measured symptoms, all on the
+            # body written at close time: the prose says "Nothing above its floor
+            # tonight (CLEAR)" while the hidden marker says
+            # `[["A","sustained"],["B","creep"]]`; no `tracked=` is passed, so
+            # there is not even a STILL TRACKED line to disclose the mismatch;
+            # after a reopen the next transition reads `**Eased to creep**` (good
+            # news) where the truth is `Newly flagged`, the `recovering` label can
+            # be added on that same false diff, and — because this path never
+            # prunes — the ledger is a fixed point that only ever grows, which
+            # also widens the rename wedge to benches that have already retired.
+            #
+            # The premise the retained ledger was argued from is also false: the
+            # auto-close comment below says "A new issue is filed if it regresses
+            # again." It never suggests reopening.
+            #
+            # KNOWN LIMITATION (deliberate, see #1396 follow-up): a REOPENED issue
+            # therefore carries no per-bench claim, so the next CLEAR night closes
+            # it again without the guard. Re-arming that needs issue-lifecycle
+            # state this file has repeatedly got wrong; it is tracked with the
+            # other lifecycle gaps rather than solved with another marker field.
+            body = render_trend_issue_body([], meta, state=[])
             print(f"→ {'[dry-run] would refresh' if args.dry_run else 'refreshing'} body of "
                   f"#{num} to tonight's CLEAR verdict before closing", file=sys.stderr)
             if not args.dry_run and gh_available:
