@@ -112,6 +112,16 @@ import scaffold_tenant  # noqa: E402
 # again here would be one more copy of the very contract this gate polices.
 from _registry_lib import CRITICAL_SUFFIX as _CRITICAL_SUFFIX  # noqa: E402
 
+# ⛔ The conf.d root of a path comes from the module that already defines what a
+# conf.d root IS (nearest `conf.d` ancestor, inner-most wins for nested trees).
+# Re-deriving it here — "split on conf.d", "take parents[1]" — is the shape this
+# gate has already been bitten by twice (#1392: a dotted path re-split downstream
+# lost a whole class of keys). ⚠️ This import lives outside `scripts/tools/`, so
+# the hook `files:` filter and the test that pins it both had to learn about it;
+# that the pin needed a manual update is #1413.
+sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "ops"))
+from guard_defaults_scopes import conf_d_root  # noqa: E402
+
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
@@ -520,25 +530,73 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #   artifacts    exporter 51 / golden 36 / e2e-bench 57 / try-local 66 / recipes 70
 #
 # ⚠️ Stated honestly, BOTH ways — an earlier revision claimed each floor sits
-# "above what that class would read if a whole group stopped yielding", which is
-# false for two of the nine rows above and was caught by blind review doing the
-# arithmetic:
+# "above what that class would read if a whole group stopped yielding", and that
+# claim FAILS on FOUR of the nine rows above: TWO under each of the two floors.
+# The four are named below rather than counted, because this line said "two of
+# the nine rows" while inviting the reader to redo the arithmetic — and doing it
+# yields four, so the sentence refuted itself. "Two" was the PER-FLOOR count
+# wearing the whole grid's denominator.
+#
+# ⛔ Which grouping produced these nine rows matters as much as the count, and
+# it is not the grouping any other figure in this file uses: generators are one
+# row per PRODUCER FACE (4), artifacts one row per DIRECTORY GROUP (5 — the
+# seven golden-fixture roots collapse into one row, the two e2e-bench roots into
+# another). It is NOT the per-conf.d-root grouping used elsewhere in this module.
+# ⚠️ "Elsewhere" is ONE other grouping, not two: the bracket test's
+# `_artifact_groups` (an rsplit on `/conf.d`) and `conf_d_root` (the fifth
+# floor's, and this module's, definition of a root) produce the IDENTICAL
+# partition — all 17 tracked artifacts agree. An earlier wording named them
+# separately ("neither … nor …"), which reads as three groupings in play when
+# there are two. Two independent spellings of one partition is still worth
+# noting, though: if they ever diverge, the bracket test and the fifth floor
+# would be bracketing different things while appearing to agree.
+# ⛔ That agreement was "measured" and left at that, which made it the same
+# shape as every other number this file has had to correct. It is now COMPUTED
+# on every run of the suite by
+# `test_the_two_artifact_groupings_are_one_partition`, which is cheap (two
+# dicts over 17 paths) and legitimate — it compares two live derivations against
+# each other, not a derivation against a digit copied out of prose. Divergence
+# is a thing this file wants to hear about anyway, so a red there is signal.
+# Do not carry "N of 9" into a sentence beside those; #1411's issue body already
+# put this row count next to two figures from different (scenario × grouping ×
+# floor subset) worlds and read them as comparable.
+#
 #   * generator floor 80 does NOT catch chart (94) or onboard (101) going to
-#     zero. Both are caught by EMPTY-FACE instead, which fires at exactly zero —
-#     so what this floor uniquely watches is a producer that SHRANK without
-#     emptying ("init dropped 40 of its 51 keys"), which nothing else sees.
+#     zero — 2 of its 4 rows. Both are caught by EMPTY-FACE instead, which fires
+#     at exactly zero — so what this floor uniquely watches is a producer that
+#     SHRANK without emptying ("init dropped 40 of its 51 keys"), which nothing
+#     else sees.
 #   * artifact floor 60 does NOT catch try-local (66) or the recipes roots (70,
-#     they carry no keys). Those two are covered by `_SHIPPED_CONFD_ROOTS`.
+#     they carry no keys) — 2 of its 5 rows. Those two are covered by
+#     `_SHIPPED_CONFD_ROOTS`.
 # The two mechanisms are complements, not belt-and-braces; neither covers the
 # whole grid, and pretending otherwise is how the next person stops checking.
 #
-# ⚠️ HEADROOM, measured, because these numbers need maintaining in BOTH
-# directions and the cost is small but real: the paired test requires each floor
-# to stay above "biggest group gone", so today artifacts tolerate +9 keys and
-# generators +28 before a pure ADDITION turns that test red asking for a higher
-# floor. Retiring a fixture asks for a lower one. Either way it is one constant
-# and a line in the commit message — but nobody should discover the direction by
-# guessing.
+# ⚠️ HEADROOM, measured, and ⛔ THE TWO DIRECTIONS ARE OPPOSITE MEASUREMENTS OF
+# DIFFERENT THINGS. This block said so ("BOTH directions", "nobody should
+# discover the direction by guessing") and then printed one bare number per
+# class anyway — the direction was named, the MAGNITUDE had no tripwire, and it
+# duly went stale. Meanwhile the fifth floor's comment below quotes a "10 keys"
+# figure for this same artifact floor which is the OTHER direction entirely (it
+# now says DOWNWARD in so many words; it did not). Spelled out so the two can
+# never be read as one, and pinned by
+# `test_the_headroom_note_states_both_directions_and_both_are_current`:
+#
+#   UP (addition) — the paired bracket test requires each floor to stay strictly
+#     ABOVE "biggest conf.d root / producer gone". A pure ADDITION raises that
+#     lower bound, so too many new keys turn the TEST red. Today: artifacts
+#     tolerate +8, generators +28. Red here means RAISE the floor.
+#     (Was "+9" for artifacts, off by one: 70 total − 19 in the biggest root
+#      = 51, and 51 + 9 = 60 is not strictly below the floor of 60.)
+#   DOWN (removal) — the floor itself fires when its class drops below it, which
+#     is the floor doing its job. Today the slack is total − floor: artifacts 10
+#     keys, generators 22. Red here means REPAIR THE PRODUCER — and only if keys
+#     were removed on purpose (a fixture retired) does it mean LOWER the floor,
+#     in the same commit, naming what went.
+#
+# Either way it is one constant and a line in the commit message. ⛔ The two
+# slacks are not comparable and must never be subtracted from one another: UP is
+# measured against "biggest group gone", DOWN against the floor.
 _DEFAULTS_GENERATOR_KEYS_FLOOR = 80
 _DEFAULTS_ARTIFACT_KEYS_FLOOR = 60
 
@@ -578,6 +636,253 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
         "count is what guards them."),
 }
 
+# ── FIFTH floor: every conf.d root, not just the shipped three (#1411) ───────
+#
+# The four floors above leave a measured gap: with the shipped roots covered by
+# the table above and the rest covered only by a GLOBAL key floor with 10 keys
+# of DOWNWARD slack (today's artifact total 70 − the floor of 60: how many keys
+# may disappear before that floor speaks), a whole fixture tree can stop
+# yielding in silence. ⛔ Not the +8 in that floor's own HEADROOM note — that
+# one is UPWARD, measured against "biggest root gone", and asks for a HIGHER
+# floor. Same word, opposite directions, different baselines.
+#
+# ⚠️ TWO FROZEN HISTORICAL MEASUREMENTS, both of the four-floor subset as it ran
+# at `72fdaf56` — the commit before this floor existed. They are kept BECAUSE
+# they are frozen: that subset no longer exists, so nothing can make them drift.
+# They are NOT today's figures.
+#
+# ⛔⛔ AND THEIR VALUES ARE NOT WRITTEN HERE — only their CONDITIONS are. The
+# integers live in exactly one place: the assertions in
+# `test_the_frozen_measurements_replay_against_their_own_commit`, where they are
+# re-measured at that commit rather than restated. Same policy as the coverage
+# split above (#1392, "a number restated in a comment is a number nobody
+# re-measures"), and this block is where that policy had not been applied.
+# Measured before it was: every frozen figure written here could be edited to
+# anything at all — including the numerator/denominator pairing this block
+# forbids in words — and the suite stayed green and the gate stayed at rc=0.
+#
+# ⚠️ AND "EXACTLY ONE PLACE" WAS FALSE FOR A ROUND, in the sentence that says
+# it. Deleting the figures from this block left three further copies standing —
+# the CHANGELOG entry for #1411, the note beside `main()`'s live fraction, and
+# two docstrings in the test file — and each was measured editable to the
+# pairing this block forbids in words with the suite green and the gate at
+# rc=0. Deleting one copy is not the same as having one source, and the claim
+# was written before the count was taken. All of them carry conditions only
+# now. ⛔ If a figure ever has to be restated somewhere, THIS sentence is the
+# one that becomes false first, so it is the one to change with it.
+#
+# ⛔⛔ THEY HAVE A TRIPWIRE, AND IT IS NOT A COMPARISON AGAINST TODAY'S TREE.
+# An earlier revision of this very block said "NEITHER HAS A TRIPWIRE, AND
+# NEITHER CAN", and the second half was false by construction. The objection it
+# rested on is still correct as far as it goes: re-deriving these numbers from
+# TODAY's tree would compare across worlds and would go red the next time a
+# fixture is retired — ordinary maintenance, the same objection that kills
+# ratchet-to-measured two notes below. ⛔ And scraping the digits back out of
+# this prose with a regex is still not a tripwire: prose has no grammar, a
+# re-worded sentence breaks it, and what it would compare is still the dead
+# subset. What neither objection rules out is REPLAYING the measurement in the
+# world it was taken in. `git archive 72fdaf56` into a temp dir, `git init &&
+# git add -A -f` (the frozen scan shells out to `git ls-files`), import THAT
+# commit's own gate module, and re-run the scenarios through ITS floor
+# functions and ITS floor constants. Nothing in today's tree is an input, so
+# retiring a fixture cannot move the answer;
+# `test_the_frozen_measurements_replay_against_their_own_commit` does exactly
+# this. The cost is dominated by materialising the commit, which is paid once
+# per module; the measurement then runs the frozen `_defaults_faces()` once for
+# a clean baseline, then once per root and once per artifact directory. (No
+# stopwatch figure here either — timings are measurements too, and the ones
+# that used to stand here were a machine's, quoted to a tenth of a second.)
+#
+# ⛔ The replay CALLS the frozen floors; it does not re-implement their tests.
+# That is not a style preference — a throwaway script written while designing
+# this got ① wrong by applying the shipped root's
+# FILE-COUNT check to the keys-go-to-zero scenario, where every file is still on
+# disk by definition. A re-implementation is a second opinion about the floors
+# wearing the floors' authority, which is the same defect `_floors_firing_on`
+# was written to avoid one world over. The scenarios are staged as INPUT — the
+# victim's artifacts are rewritten to hold no `defaults:` section (①) or dropped
+# from the scan's output (②) — and `_defaults_faces()` at that commit is the
+# oracle: it raises, or it does not.
+#
+# Four conditions decide each answer, so all four are stated for each — and the
+# answers themselves stay in the replay.
+#
+#   ① grouping `conf_d_root`; scenario a root's keys go to ZERO with its files
+#     still on disk; floors all four above counted together (both file floors,
+#     both per-class key floors, `_SHIPPED_CONFD_ROOTS`); exempt: the root that
+#     already carried zero keys at that commit, zero being its legal state,
+#     which is the one `_DEFAULTS_ROOTS_MAY_BE_EMPTY` names today. This is the
+#     resolution the floor itself works at.
+#     ⚠️ TWO POPULATIONS, and pairing a numerator with the wrong one is the
+#     exact defect this whole block is a correction of. SCANNED is the conf.d
+#     roots holding a defaults artifact (the repo has more conf.d roots than
+#     that — see `_DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS`); WATCHED is scanned
+#     minus the exempt root. The replay therefore reports ① twice, once over
+#     each population, with the numerator counted on the same side of the
+#     exemption as its denominator. ⛔ A fraction that takes one half from each
+#     is not a harmless slip: the post-exemption numerator is independently the
+#     right answer to a DIFFERENT (scenario × exemption) pair — files-deleted,
+#     same grouping — so the wrong fraction reads exactly like a right one. It
+#     is a value the replay cannot produce, because each fraction is assembled
+#     where its population is known and asserted as one object; two loose
+#     integers cannot forbid it, which was measured.
+#
+#   ② the SAME four floors at a FINER resolution: grouping is each artifact's
+#     own DIRECTORY (one per tracked artifact, so nested layers inside one
+#     conf.d tree are separate rows); scenario is the whole group GONE, files
+#     and all; exempt — none.
+#     ⚠️ "and it makes no difference here" stood here and is only true of the
+#     NUMERATOR: deleting the recipes root's files trips `_SHIPPED_CONFD_ROOTS`'
+#     `min artifacts`, so that root is caught either way and the numerator does
+#     not move. The DENOMINATOR is a different matter — applying ①'s convention
+#     and subtracting the exempt root's directories would restate ② over a
+#     smaller population. ②'s population is un-exempted on purpose, so the two
+#     fractions are built on DIFFERENT conventions: do not subtract or compare
+#     them.
+#
+# ⚠️ "ALL FOUR COUNTED TOGETHER" MEANS ALL FOUR WERE IN EFFECT — not that all
+# four contribute. Measured on both scenarios: standing the two FILE floors down
+# leaves every fraction identical, because ① never removes a file and ② removes
+# one directory from a scan that stays far above them. The answers are decided
+# by `_assert_keys_floor` and `_SHIPPED_CONFD_ROOTS`; the file floors are
+# evaluated and stay silent. Stated because "four floors were counted" reads as
+# "four floors were needed", and the next person to narrow the subset would
+# otherwise expect the answer to move when it will not. The replay's
+# `stand_down` accordingly takes only the two that can move it.
+#
+# ⛔ WHY TWO, since one measurement of one thing would be simpler: ① is the
+# resolution this floor works at (it watches roots), and ② is the resolution the
+# CORRECTION COMMENT on #1411 reports, so it is the one an outside reader can
+# check against. ⚠️ NOT the issue BODY — that uses ②'s grouping but runs only
+# `_assert_keys_floor`, so it is a third (scenario × grouping × floor subset)
+# and its figure is legitimately different. A reader who checks ② against the
+# body concludes the number moved when nothing did.
+#
+# ⚠️ "as it ran at `72fdaf56`" is precise about the FLOORS and loose about the
+# exemption, deliberately: `_DEFAULTS_ROOTS_MAY_BE_EMPTY` did not exist at that
+# commit (measured: zero occurrences in the file). The four floors are what was
+# frozen; the exemption is a condition of how the measurement is RE-RUN, named
+# because it changes ①'s answer — not a claim that the list was there. That is
+# also why the replay DERIVES the exemption from the
+# frozen tree ("which roots already carried zero keys there") instead of reading
+# today's `_DEFAULTS_ROOTS_MAY_BE_EMPTY`: reading today's list would let an
+# ordinary future addition to it move a frozen number, which is the failure this
+# whole block exists to avoid. ② needs no such caveat: it does not use the
+# exemption.
+#
+# ⛔ THE LESSON, which is what this block is really for and the one thing a
+# reader should carry away: the earlier revision's figure did not go stale by
+# drifting away from a measurement. It went stale when a later edit rewrote the
+# sentence's GROUPING and left the numerator alone — the denominator moved
+# worlds and the numerator stayed. A count and its grouping are one indivisible
+# fact, and editing either half of a fraction on its own manufactures a
+# measurement nobody ever took. The same defect, one step smaller, is why
+# `main()`'s live line prints scanned, exempt and watched rather than a bare
+# `N of M` — and why the figures above are conditions here and integers only in
+# the replay, where changing one means re-running it.
+#
+# ⛔ TODAY's figure is deliberately not written here (#1392 policy, same as the
+# coverage split above). `main()` re-derives it on every run via
+# `_roots_only_the_fifth_floor_notices` and prints it with its population,
+# grouping, scenario, floor subset and exemption attached, so the live number is
+# a byte of output rather than a claim in a comment that nobody re-measures.
+#
+# ⛔ This floor deliberately watches ONE thing: a root that stops contributing
+# ENTIRELY (or disappears). It does NOT watch partial shrink — "12 keys became 1"
+# is not detected here, and the global key floor only sees it if the total drops
+# past its own margin. Say so in the message; a floor whose scope readers guess
+# at is how the next person stops checking.
+#
+# ⛔ Why not per-root NUMBERS for all 12 (the obvious extension of
+# `_SHIPPED_CONFD_ROOTS`): 9 of the 12 roots hold a single file, and for those the
+# bracket test that governs that table (`lo == 0` branch) collapses the pair to
+# "at least 1 artifact, at least 1 key" — literally this floor. Twelve
+# hand-maintained number pairs would buy nothing on 9 of them while adding twelve
+# numbers that go stale every time a fixture is retired, and the neighbouring
+# floor's own message already had to be rewritten because maintainers read
+# "adjust the number" as the remedy.
+#
+# ⛔ Why not auto-ratcheting those numbers up to the measured value: the bracket
+# test asserts `lo < min_keys < total` — STRICTLY below today's total — and its
+# comment records that `<= total` was the first spelling, killed by mutation
+# because a zero-headroom floor reddens on the next ordinary edit and teaches
+# people that floors are adjustable. Ratchet-to-measured is that banned thing,
+# automated.
+#
+# The SET is pinned rather than derived, for the same reason the table above is
+# hand-maintained: a set built from the scan disappears along with the root it
+# was supposed to notice. Adding a root is also a violation — not because new
+# roots are bad, but because an unpinned new root is unwatched, and the pin has
+# to stay current to mean anything (same exit-lock discipline as KNOWN_UNWIRED).
+#
+# ⛔ …and the "adding a root is a violation" half was, as first shipped, unable
+# to fire for a whole class of new root. It compared the pin against the roots
+# the DEFAULTS SCAN reached, so a new conf.d tree with no `_defaults*` file in
+# it produced nothing to compare and stayed invisible — measured: two such trees
+# were already in the repo when this floor landed, and adding a third kept the
+# gate at rc=0. The comparison base is now every conf.d root `git ls-files`
+# knows about (`_tracked_confd_roots`), and a root with no defaults artifact is
+# accounted for explicitly in `_DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS` below.
+_DEFAULTS_CONFD_ROOTS: frozenset[str] = frozenset({
+    "components/threshold-exporter/config/conf.d",
+    "rule-packs/recipes/examples/conf.d",
+    "try-local/seed/conf.d",
+    "tests/e2e-bench/fixture/synthetic-v1/conf.d",
+    "tests/e2e-bench/fixture/synthetic-v2/conf.d",
+    "tests/golden/fixtures/array-replace/conf.d",
+    "tests/golden/fixtures/full-l0-l3/conf.d",
+    "tests/golden/fixtures/l0-only/conf.d",
+    "tests/golden/fixtures/metadata-skipped/conf.d",
+    "tests/golden/fixtures/mixed-mode/conf.d",
+    "tests/golden/fixtures/opt-out-null/conf.d",
+    "tests/golden/fixtures/opt-out-null-threshold/conf.d",
+})
+
+# Roots that legitimately carry zero threshold keys. ⛔ Explicit, because
+# "contributes nothing" is exactly what this floor exists to catch — an implicit
+# exemption for whatever happens to be empty today would exempt the failure.
+_DEFAULTS_ROOTS_MAY_BE_EMPTY: frozenset[str] = frozenset({
+    # Both files here declare only other sections (custom-alert recipe examples);
+    # `_SHIPPED_CONFD_ROOTS` already records the same fact as `min keys = 0`.
+    "rule-packs/recipes/examples/conf.d",
+})
+
+# Tracked conf.d roots that hold NO defaults artifact at all. Root -> why.
+#
+# ⛔ A DIFFERENT list from `_DEFAULTS_ROOTS_MAY_BE_EMPTY`, and merging them would
+# destroy the distinction the fifth floor is built on. That list says "this tree
+# HAS defaults artifacts and their key count is legitimately zero" — a claim
+# about content, re-checked on every run. This one says "this tree has no
+# `_defaults*` file for the scan to reach in the first place" — a claim about
+# the file set. Filed together, a tree that lost its `_defaults.yaml` would be
+# indistinguishable from one that never had it, and the remedies are opposite.
+#
+# ⛔ Both directions are enforced, so an entry cannot rot into an exemption: a
+# root here that GROWS a `_defaults*` file is reported by the `unpinned` arm of
+# `_assert_every_root_contributes` (it starts contributing, and it is not in
+# `_DEFAULTS_CONFD_ROOTS`), and a root here that is deleted is reported by the
+# `stale` arm. Neither costs a number to maintain.
+#
+# ⚠️ …and THIS list is the only one the `stale` arm actually speaks for. It runs
+# after `missing`, which catches a vanished `_DEFAULTS_CONFD_ROOTS` entry first
+# (that tree's `_defaults*` file went with it, so it contributed nothing) —
+# measured: `stale` is structurally unreachable for all 12 of those and
+# reachable for exactly the 2 here. The reasoning for that order is written
+# beside the arm itself; the consequence is that "a root here that is deleted"
+# above means literally here, not anywhere in the two lists.
+_DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS: dict[str, str] = {
+    "components/da-tools/app/examples/cardinality-demo/conf.d":
+        "the QUICKSTART cardinality demo: one `tenants:` file carrying enough "
+        "per-tenant metric keys to blow da-guard's --cardinality-limit. It "
+        "demonstrates a TENANT-side budget, so there is no platform-defaults "
+        "layer in it for the defaults-tier faces to read.",
+    "tests/golden/fixtures/flat/conf.d":
+        "the golden fixture for the FLAT (no-hierarchy) layout — its whole "
+        "point is a conf.d holding a single `tenants:` file with no "
+        "`_defaults.yaml` above it, so growing one would change the very "
+        "shape the fixture characterises.",
+}
+
 # Display prefix for artifact labels. ⛔ DISPLAY ONLY — it carries no meaning to
 # any check, and nothing may start classifying by it again (#1393).
 #
@@ -597,6 +902,28 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
 _ARTIFACT_FACE_PREFIX = "artifact ("
 
 
+def _artifact_face(rel: str) -> str:
+    """The face label for artifact `rel`. ONE spelling, used everywhere."""
+    return f"{_ARTIFACT_FACE_PREFIX}{rel})"
+
+
+def _artifact_rel(face: str) -> str | None:
+    """`rel` back out of a label built by `_artifact_face`, else None.
+
+    ⛔ NOT a re-introduction of prefix classification (#1393). It is never asked
+    "is this an artifact" — every caller already holds the ARTIFACTS dict, so
+    class membership is still a consequence of which loop built the entry. This
+    only recovers WHICH FILE an entry came from, and it lives next to its
+    inverse so the two cannot drift into disagreeing.
+
+    Returns None for anything that is not one of our labels — a hermetic caller
+    injecting `{"probe": …}` gets "no path" rather than a mangled one.
+    """
+    if not (face.startswith(_ARTIFACT_FACE_PREFIX) and face.endswith(")")):
+        return None
+    return face[len(_ARTIFACT_FACE_PREFIX):-1]
+
+
 def _is_defaults_artifact(name: str) -> bool:
     """Case-insensitive like the loader, but a PREFIX where the loader is exact.
 
@@ -614,16 +941,68 @@ def _is_defaults_artifact(name: str) -> bool:
     return lower.startswith("_defaults") and lower.endswith(_DEFAULTS_ARTIFACT_SUFFIXES)
 
 
-def _tracked_defaults_artifacts() -> list[str]:
+def _tracked_paths() -> list[str]:
+    """Every repo-relative path in the INDEX. The one place this module shells out.
+
+    ⛔ A SEAM, and that is half its job (#1411). Both derivations below — the
+    defaults artifacts and the conf.d roots — used to run their own identical
+    `git ls-files`, which made "does this function read the index at all?"
+    untestable without a repo mutation: a body that answered from a module
+    constant instead was indistinguishable from a body that scanned. Every test
+    of those derivations either took their output as its own baseline or
+    compared them against a pin they could satisfy by echoing it. With the
+    listing injectable, a test feeds a SYNTHETIC one and requires the answer to
+    follow it — which no constant-returning body can do. Measured: replacing
+    `_tracked_confd_roots`' body with `set(_DEFAULTS_CONFD_ROOTS) |
+    set(_DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS)` left the suite at 105 passed
+    and the gate at rc=0 — and a new conf.d tree with no `_defaults*` file in it
+    then went unreported again, i.e. exactly the hole this floor was opened for.
+
+    ⛔ AND THE SEAM MOVES THE PROBLEM UP ONE LEVEL — the first version of this
+    note stopped one step short. Injecting `paths` proves the CALLEE follows its
+    argument; it says nothing about the argument the callee builds when nobody
+    passes one, which is this function. Measured as the suite stood at
+    `3864b63`, before the test named below existed: replacing THIS body with a
+    literal list of today's answer left it at 107 passed and the gate at rc=0.
+    Every test either fed its own listing or compared this against a fresh
+    `git ls-files` it ran itself, and a constant copied from today satisfies
+    both — until the index next changes, which is not a tripwire, it is a delay.
+    ⚠️ The population is named because the number is not today's: re-run on the
+    final tree that same mutation is 1 failed / 113 passed, and the one red is
+    `test_the_index_listing_really_comes_from_the_index` — i.e. the guard now
+    catches it. A mutation score quoted without the suite it was taken against
+    is the same defect as a fraction quoted without its population.
+
+    So this one is pinned by pointing it at a DIFFERENT repository:
+    `test_the_index_listing_really_comes_from_the_index` builds a throwaway git
+    repo, re-points `PROJECT_ROOT` at it, and requires the answer to be that
+    repo's files. A body that ignores `PROJECT_ROOT` cannot follow it, and no
+    snapshot of THIS repo can be right about a repo that did not exist when the
+    snapshot was taken.
+    """
+    import subprocess  # local: only this module-level scan shells out
+
+    out = subprocess.run(
+        ["git", "-C", str(PROJECT_ROOT), "ls-files", "-z"],
+        capture_output=True, check=True, timeout=60)
+    return [rel for rel in out.stdout.decode("utf-8", "replace").split("\0") if rel]
+
+
+def _tracked_defaults_artifacts(paths: list[str] | None = None) -> list[str]:
     """Repo-relative paths of every TRACKED platform-defaults artifact.
 
     Separate from `_defaults_artifacts` so the floor can count what the scan
     found BEFORE exemptions are subtracted — otherwise exempting files walks the
     count down toward the floor and the floor's message ("repair the scan or
     move the file(s) back") names the one repair that is not the problem.
-    """
-    import subprocess  # local: only this face shells out
 
+    `paths` defaults to the real index listing, the same way `run_check` defaults
+    its inputs to the real extractors; `test_the_index_listing_is_a_real_seam_on
+    _both_derivations` injects a synthetic one and requires the answer to follow
+    it. ⚠️ That sentence was here before the test was — the injectable half had
+    no caller and no assertion, so the docstring was describing an intention.
+    Both derivations that take this seam are exercised through it now.
+    """
     # ⛔ NO pathspec. `git ls-files -- "*_defaults*"` is case-SENSITIVE — measured
     # under both `core.ignorecase` values, `*_DEFAULTS*` returns 0 — so pairing it
     # with a case-insensitive predicate delivered half a fix: `_defaults.YAML`
@@ -637,12 +1016,11 @@ def _tracked_defaults_artifacts() -> list[str]:
     # Listing the whole index and filtering in Python makes `_is_defaults_artifact`
     # the ONLY predicate. Measured cost: ~2.3k paths (2294 today), 0.13s for the git call,
     # 0.5ms for the filter — the pathspec was buying nothing.
-    out = subprocess.run(
-        ["git", "-C", str(PROJECT_ROOT), "ls-files", "-z"],
-        capture_output=True, check=True, timeout=60)
+    if paths is None:
+        paths = _tracked_paths()
     return sorted(
-        rel for rel in out.stdout.decode("utf-8", "replace").split("\0")
-        if rel and _is_defaults_artifact(rel.rsplit("/", 1)[-1])
+        rel for rel in paths
+        if _is_defaults_artifact(rel.rsplit("/", 1)[-1])
         and (PROJECT_ROOT / rel).is_file())
 
 
@@ -650,6 +1028,35 @@ def _defaults_artifacts() -> list[Path]:
     """The artifacts this face reads: tracked, minus the explicit exemptions."""
     return [PROJECT_ROOT / rel for rel in _tracked_defaults_artifacts()
             if rel not in _DEFAULTS_ARTIFACT_EXEMPT]
+
+
+def _tracked_confd_roots(paths: list[str] | None = None) -> set[str]:
+    """Every conf.d root the INDEX knows about — the fifth floor's universe.
+
+    ⛔ Deliberately WIDER than the defaults scan, and that width is the whole
+    point. The pin used to be compared against the roots that yielded a defaults
+    artifact, which makes the "a new root must be registered" arm structurally
+    unable to fire for a root that has no `_defaults*` file: there is nothing to
+    compare it to. Two such roots were already in the tree, measured.
+    ⛔ `git ls-files`, not a filesystem walk, for the reason `_DEFAULTS_ARTIFACT_
+    SUFFIXES` spells out at length: from the main repo a walk reaches every other
+    branch's working copy under `.claude/worktrees/`.
+
+    ⛔ `paths` is the seam that makes "it reads the index" ASSERTABLE rather than
+    merely stated — see `_tracked_paths`. Every other test of this floor takes
+    this function's own output as its baseline and adds or removes one entry, or
+    asserts `tracked == registered`; a body that returned the two registration
+    lists unioned satisfies all of them and re-opens #1411 in silence. Feeding a
+    synthetic listing is what tells the two bodies apart.
+    """
+    if paths is None:
+        paths = _tracked_paths()
+    roots = set()
+    for rel in paths:
+        root = conf_d_root(rel)
+        if root:
+            roots.add(root)
+    return roots
 
 # The probe fed to the `onboard` face below. A severity pair on one metric is
 # the minimal input that used to manufacture the defect, and it is spelled here
@@ -869,7 +1276,8 @@ def _defaults_faces() -> tuple[dict[str, dict[str, KeyInfo]], dict[str, dict[str
             "(almost) nothing passes the placement check vacuously, which is the "
             "shape the hardcoded-path version of this face shipped with. Repair "
             "the scan or restore the file(s); do not lower the floor. (Exemptions "
-            f"are NOT counted here — {len(_DEFAULTS_ARTIFACT_EXEMPT)} exempted.)")
+            f"are NOT counted here — {len(_DEFAULTS_ARTIFACT_EXEMPT)} exempted.) "
+            "(TRK-344 / #1392)")
     to_read = _defaults_artifacts()
     if len(to_read) < _DEFAULTS_ARTIFACT_READ_FLOOR:
         raise _GateViolation(
@@ -879,29 +1287,195 @@ def _defaults_faces() -> tuple[dict[str, dict[str, KeyInfo]], dict[str, dict[str
             f"{len(_DEFAULTS_ARTIFACT_EXEMPT)} exemption(s) consumed it, and zero "
             "faces pass the placement check below perfectly. SHORTEN THE EXEMPTION "
             "LIST; repairing the scan is not the remedy here, and neither is "
-            "lowering the floor.")
-    artifacts: dict[str, dict[str, KeyInfo]] = {}
+            "lowering the floor. (TRK-344 / #1392)")
+    read_pairs = [(path.relative_to(PROJECT_ROOT).as_posix(),
+                   _read_artifact_keys(path)) for path in to_read]
+    artifacts = {_artifact_face(rel): keys for rel, keys in read_pairs}
+    by_root, all_by_root = _bucket_by_root(read_pairs)
+
+    # ⛔ A non-vacuity floor for the fifth floor's own printed FIGURE (#1411).
+    # Every other number this module prints already has one — the two file
+    # floors above, the two per-class key floors below — and this one shipped
+    # without. `run_check` does not get `read_pairs`; it rebuilds them by
+    # INVERTING the labels with `_artifact_rel`, so the figure's whole numerator
+    # rests on `_artifact_face` and its inverse agreeing. Measured on a label
+    # format that stayed human-identical but stopped round-tripping: the gate
+    # printed `0 of 0`, with all four conditions still spelled out word for word,
+    # and exited 0 with `✅ threshold reachability OK`. A vacuous figure that
+    # still reads like a measurement is worse than no figure.
+    #
+    # Round-trip equality rather than "did we get any root": the weaker form
+    # cannot see a HALF-inverted set, and the "no root at all" end is already
+    # covered — if the inversion works and still yields no root, every pinned
+    # root is absent and `_assert_every_root_contributes`' `missing` arm fires.
+    # ⛔ Count over the FACES, not over `inverted` — that is a set, so every
+    # label failing the same way collapses to a single `None` and the message
+    # would report "1 of 17" for a total failure.
+    #
+    # ⛔ …and count the labels that do not come back as THE REL THEY WERE BUILT
+    # FROM, not the ones that come back as `None`. The two differ on the whole
+    # "invertible but wrong" half of the failure space, and the message used the
+    # narrower one while the TRIGGER used set inequality: measured on a label
+    # pair that round-tripped to a mangled-but-non-None path, the floor fired
+    # correctly and then announced `0 of 17` — a breach reported as nothing
+    # broken, in the one message whose job is to say how much drifted. The
+    # denominator is `read_pairs`, not `artifacts`, because a label format that
+    # stopped being INJECTIVE collapses two artifacts into one dict entry and
+    # `len(artifacts)` would then under-count the population it is reporting on.
+    real_rels = [rel for rel, _keys in read_pairs]
+    inverted = {_artifact_rel(face) for face in artifacts}
+    if inverted != set(real_rels):
+        broken = sum(1 for rel in real_rels
+                     if _artifact_rel(_artifact_face(rel)) != rel)
+        raise _GateViolation(
+            f"{broken} of {len(real_rels)} "
+            "artifact face label(s) no longer round-trip through "
+            "`_artifact_face` / `_artifact_rel`. The fifth floor's printed "
+            "figure is derived by inverting these labels, so a drift between "
+            "the two makes it report `0 of 0` — a vacuous number that still "
+            "carries all of its conditions and still exits 0.\n"
+            "  MOST LIKELY: the label format was edited on one side only. The "
+            "two functions sit next to each other precisely so they cannot "
+            "drift; change both, in the same commit.\n"
+            "  ⛔ This is NOT a request to widen `_artifact_rel` until it "
+            "accepts anything — it returns None for labels that are not ours on "
+            "purpose, so a hermetic caller's synthetic face is not mistaken for "
+            "a file. It is a request that the labels this module BUILDS invert. "
+            "(#1411)")
+
+    _assert_shipped_roots_intact(by_root)
+    _assert_every_root_contributes(all_by_root)
+    _assert_keys_floor(generators, artifacts)
+    return generators, artifacts
+
+
+def _read_artifact_keys(path: Path) -> dict[str, KeyInfo]:
+    """One artifact's `defaults:` keys, with the FILE NAMED on any failure.
+
+    ⛔ The reader names the file. `read_text` raises with the path attached, but
+    `yaml.safe_load` does not — its error says `<unicode string>`, and with the
+    scope derived rather than 2 hardcoded paths, "which file" is precisely the
+    information that was missing (blind review, round 4).
+
+    Extracted as its own function so a test can make ONE root read empty and
+    still go through the real `_defaults_faces()` — which is what pins the fifth
+    floor's WIRING rather than merely re-checking that the floor function exists.
+    """
+    rel = path.relative_to(PROJECT_ROOT).as_posix()
+    try:
+        return _defaults_section(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 — re-raised with provenance
+        raise RuntimeError(f"{rel}: {exc}") from exc
+
+
+def _bucket_by_root(
+    pairs: list[tuple[str, dict[str, KeyInfo]]],
+) -> tuple[dict[str, list[tuple[str, dict[str, KeyInfo]]]],
+           dict[str, list[tuple[str, dict[str, KeyInfo]]]]]:
+    """(shipped-root view, every-root view) of the artifacts that were read.
+
+    ⛔ ONE implementation, called by `_defaults_faces` and by the floor probe
+    below. A probe that re-bucketed with its own copy of these two rules would
+    be reporting on its copy — and would keep answering confidently after the
+    real bucketing changed shape, which is the exact way this file has been
+    wrong before.
+    """
     by_root: dict[str, list[tuple[str, dict[str, KeyInfo]]]] = {
         r: [] for r in _SHIPPED_CONFD_ROOTS}
-    for path in to_read:
-        rel = path.relative_to(PROJECT_ROOT).as_posix()
-        # ⛔ The reader names the file. `read_text` raises with the path attached,
-        # but `yaml.safe_load` does not — its error says `<unicode string>`, and
-        # with the scope derived rather than 2 hardcoded paths, "which file" is
-        # precisely the information that was missing (blind review, round 4).
-        try:
-            keys = _defaults_section(path.read_text(encoding="utf-8"))
-        except Exception as exc:  # noqa: BLE001 — re-raised with provenance
-            raise RuntimeError(f"{rel}: {exc}") from exc
-        artifacts[f"{_ARTIFACT_FACE_PREFIX}{rel})"] = keys
+    # ⛔ NOT pre-seeded from the pin: a root that vanished must show up as
+    # absent, and seeding it with an empty list would make "gone" and "present
+    # but empty" indistinguishable — the two have different remedies and the
+    # floor below says so separately.
+    all_by_root: dict[str, list[tuple[str, dict[str, KeyInfo]]]] = {}
+    for rel, keys in pairs:
         for root in _SHIPPED_CONFD_ROOTS:
             if rel == root or rel.startswith(root + "/"):
                 by_root[root].append((rel, keys))
                 break
+        # ⛔ EVERY root, by the repo's own definition — not just the shipped
+        # three. An artifact outside any `conf.d` tree yields None and is simply
+        # not covered by the fifth floor; that is a real (small) gap, recorded
+        # in the floor's own docstring rather than hidden by a fallback key.
+        all_root = conf_d_root(rel)
+        if all_root:
+            all_by_root.setdefault(all_root, []).append((rel, keys))
+    return by_root, all_by_root
 
-    _assert_shipped_roots_intact(by_root)
-    _assert_keys_floor(generators, artifacts)
-    return generators, artifacts
+
+_FLOOR_SHIPPED = "shipped-root floor (_SHIPPED_CONFD_ROOTS)"
+_FLOOR_KEYS = "global per-class key floor"
+
+
+def _floors_firing_on(
+    generators: dict[str, dict[str, KeyInfo]],
+    pairs: list[tuple[str, dict[str, KeyInfo]]],
+) -> list[str]:
+    """Which of the two simulable floors fire on exactly this input.
+
+    ⛔ It CALLS the real `_assert_shipped_roots_intact` and `_assert_keys_floor`
+    and catches `_GateViolation`. It does NOT re-implement their arithmetic —
+    a local `total - keys < FLOOR` would be asserting the MODEL, and would go on
+    answering confidently after a floor changed shape, reporting a blind spot
+    that had been closed or missing one that had opened.
+    """
+    by_root, _all_by_root = _bucket_by_root(pairs)
+    artifacts = {_artifact_face(rel): keys for rel, keys in pairs}
+
+    fired: list[str] = []
+    try:
+        _assert_shipped_roots_intact(by_root)
+    except _GateViolation:
+        fired.append(_FLOOR_SHIPPED)
+    try:
+        _assert_keys_floor(generators, artifacts)
+    except _GateViolation:
+        fired.append(_FLOOR_KEYS)
+    return fired
+
+
+def _floors_that_notice_a_zeroed_root(
+    generators: dict[str, dict[str, KeyInfo]],
+    read_pairs: list[tuple[str, dict[str, KeyInfo]]],
+    root: str,
+) -> list[str]:
+    """Which of the four EARLIER floors fire BECAUSE `root`'s keys went to zero.
+
+    Empty list == all four stay silent, i.e. that root is in the blind spot the
+    fifth floor was added for (#1411).
+
+    ⛔ BEFORE and AFTER, not just after — the same discipline this floor was
+    justified by. A floor already breached on the unmodified input would
+    otherwise be credited with catching every root in turn, and the derived
+    figure would silently read zero blind spots at exactly the moment the gate
+    was most broken. Only a floor that was quiet and then spoke counts.
+
+    ⛔ Floors 1–2 are not simulated because they CANNOT move here: they count
+    tracked FILES, and this scenario leaves every file exactly where it is. That
+    is the defining feature of the scenario, not an omission — the files-deleted
+    scenario is a different measurement (see the fifth floor's own comment).
+    """
+    before = _floors_firing_on(generators, read_pairs)
+    zeroed = [(rel, ({} if conf_d_root(rel) == root else keys))
+              for rel, keys in read_pairs]
+    return [f for f in _floors_firing_on(generators, zeroed) if f not in before]
+
+
+def _roots_only_the_fifth_floor_notices(
+    generators: dict[str, dict[str, KeyInfo]],
+    read_pairs: list[tuple[str, dict[str, KeyInfo]]],
+) -> list[str]:
+    """Roots whose keys could go to zero today with only the fifth floor speaking.
+
+    The universe is the roots the defaults scan actually reached, minus
+    `_DEFAULTS_ROOTS_MAY_BE_EMPTY` (zero is their legal state, so "could go to
+    zero unnoticed" is not a defect for them).
+    """
+    roots = {conf_d_root(rel) for rel, _keys in read_pairs}
+    roots.discard(None)
+    return sorted(
+        root for root in roots  # type: ignore[misc]
+        if root not in _DEFAULTS_ROOTS_MAY_BE_EMPTY
+        and not _floors_that_notice_a_zeroed_root(generators, read_pairs, root))
 
 
 def _assert_shipped_roots_intact(
@@ -944,7 +1518,172 @@ def _assert_shipped_roots_intact(
             "shipping, and then change the confd-schema hooks in "
             ".pre-commit-config.yaml in the same commit (a test pins the ROOT "
             "SET to those hooks — it does NOT police these two numbers, so they "
-            "are on you).")
+            "are on you). (TRK-344 / #1392)")
+
+
+def _assert_every_root_contributes(
+        by_root: dict[str, list[tuple[str, dict[str, KeyInfo]]]],
+        tracked_roots: set[str] | None = None) -> None:
+    """Every pinned conf.d root must still contribute at least one key (#1411).
+
+    ⛔ SCOPE, stated because the neighbouring floors' scopes had to be corrected
+    twice: this catches a root going to ZERO or vanishing. It does not catch
+    partial shrink, and it does not catch re-nesting (a key moved one level down
+    is still a key — `_walk_defaults_keys` counts every level, by design).
+
+    `tracked_roots` defaults to the real index scan, the same way `run_check`
+    defaults its inputs to the real extractors; hermetic callers inject a set.
+    """
+    if tracked_roots is None:
+        tracked_roots = _tracked_confd_roots()
+    seen = set(by_root)
+    missing = _DEFAULTS_CONFD_ROOTS - seen
+    if missing:
+        raise _GateViolation(
+            f"conf.d root(s) {sorted(missing)} contributed no artifact at all. "
+            "They are pinned in _DEFAULTS_CONFD_ROOTS, so the scan finding "
+            "nothing under them means the tree moved, was deleted, or its files "
+            "stopped matching `_is_defaults_artifact`. ⛔ Removing the entry is "
+            "only correct if the tree genuinely stopped existing — otherwise it "
+            "re-creates the blind spot this floor was added for (#1411).")
+
+    unpinned = sorted(r for r in seen if r not in _DEFAULTS_CONFD_ROOTS)
+    if unpinned:
+        raise _GateViolation(
+            f"conf.d root(s) {unpinned} are not pinned in _DEFAULTS_CONFD_ROOTS. "
+            "A new root is not a problem — an UNPINNED one is: nothing would "
+            "notice it later going to zero, and a pin that lags reality cannot "
+            "detect a disappearance either. Add it (one line). If it "
+            "legitimately carries no threshold keys, add it to "
+            "_DEFAULTS_ROOTS_MAY_BE_EMPTY as well, with the reason. If it is "
+            "currently filed under _DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS, "
+            "that entry is now wrong — the tree grew a `_defaults*` file, so "
+            "move it here rather than keeping both. (#1411)")
+
+    # ── The registration exit-lock, against the INDEX rather than the scan ──
+    # ⛔ Comparing the pin against `seen` — the roots the defaults scan reached —
+    # is what the first version of this floor did, and it left the "a new root
+    # must be registered" arm structurally unable to fire for a root with no
+    # `_defaults*` file: such a root never appears in `seen`, so there is nothing
+    # to find unpinned. Measured: two such roots were already tracked when this
+    # floor shipped, and adding a third kept the gate at rc=0. Every conf.d root
+    # in the index has to be accounted for by exactly one of the two lists.
+    registered = set(_DEFAULTS_CONFD_ROOTS) | set(
+        _DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS)
+    unregistered = sorted(tracked_roots - registered)
+    if unregistered:
+        raise _GateViolation(
+            f"tracked conf.d root(s) {unregistered} are registered nowhere. "
+            "Every conf.d tree in the index must be accounted for by exactly "
+            "one of two lists, and which one is a question about FILES, not "
+            "about content:\n"
+            "  * it holds one or more `_defaults*.ya?ml` → _DEFAULTS_CONFD_ROOTS, "
+            "and this floor then watches it for going to zero;\n"
+            "  * it holds none → _DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS, with "
+            "a one-line reason saying why that tree has no platform-defaults "
+            "layer.\n"
+            "  ⛔ The second list is NOT _DEFAULTS_ROOTS_MAY_BE_EMPTY. That one "
+            "means 'has defaults artifacts, and zero keys is legal for them' — "
+            "filing a tree with no artifacts there would claim a check is "
+            "running on it that structurally cannot. (#1411)")
+
+    # ⛔ SCOPE, and it is narrower than it looks. In practice this arm speaks
+    # only for `_DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS`. A tree pinned in
+    # `_DEFAULTS_CONFD_ROOTS` that leaves the index takes its `_defaults*` file
+    # with it, so it is absent from `by_root` and the `missing` arm above has
+    # already raised — measured: this arm is structurally unreachable for all 12
+    # of those, and reachable for exactly the 2 artifact-less ones.
+    #
+    # ⛔ The ORDER is deliberate, not incidental: `missing` first is what a
+    # maintainer should meet, because it names three causes (moved, deleted, or
+    # the files stopped matching `_is_defaults_artifact`) and the third is the
+    # subtle one — a tree still fully present whose files were renamed. Putting
+    # `stale` first would answer "no longer exists in the index" to a tree that
+    # very much still exists, and lose that hypothesis. So the arms stay in this
+    # order and the scope is written down instead.
+    stale = sorted(registered - tracked_roots)
+    if stale:
+        raise _GateViolation(
+            f"conf.d root(s) {stale} are registered but no longer exist in the "
+            "index. A pin that lags reality cannot detect a disappearance — it "
+            "IS the disappearance, already absorbed. If the tree genuinely went "
+            "away, delete the entry; if it merely moved, update the path.\n"
+            # ⚠️ DISCLOSED GAP, not an oversight — and disclosed rather than
+            # guarded on purpose (the stopping rule this round ran under: a
+            # guard is only worth adding when its silent failure lets the
+            # original defect back). This clause quotes the `missing` arm's own
+            # words, "contributed no artifact at all", verbatim. Anything
+            # downstream that tells the two arms apart by matching on message
+            # TEXT will therefore file a `stale` breach under `missing`.
+            # ⚠️ AND ONE READER ALREADY DOES — in
+            # tests/lint/test_check_threshold_reachability.py, the test
+            # test_a_root_that_vanished_is_reported_differently_from_one_that_emptied
+            # asserts `"no artifact at all" in msg`, i.e. it tells the
+            # arms apart by exactly this string. An earlier wording here said
+            # "nothing downstream does that today", which was false when it was
+            # written. It is still harmless — that test drives the `missing`
+            # arm, whose input cannot reach `stale` — so the cost stays a
+            # misattributed grep rather than a missed breach, and the disclosure
+            # stands rather than becoming a guard. If you ever route on these
+            # messages, give the arms distinct identifiers FIRST.
+            "  ⚠️ Reaching THIS message means the tree held no `_defaults*` file "
+            "— it was filed in _DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS. A pinned "
+            "tree that disappears is reported by the 'contributed no artifact at "
+            "all' message above instead, and a SHIPPED tree by the shipped-root "
+            "floor before either (that one is where the reminder to update the "
+            "confd-schema hook in .pre-commit-config.yaml lives, because that is "
+            "the arm a shipped tree actually reaches). (#1411)")
+
+    for root in sorted(_DEFAULTS_CONFD_ROOTS - _DEFAULTS_ROOTS_MAY_BE_EMPTY):
+        n_keys = sum(len(keys) for _rel, keys in by_root[root])
+        if n_keys:
+            continue
+        files = [rel for rel, _k in by_root[root]]
+        raise _GateViolation(
+            f"conf.d root {root!r} still has {len(files)} artifact(s) "
+            f"({', '.join(files)}) but they now contribute ZERO threshold keys. "
+            "The files are present, so every file-count floor is unmoved, and "
+            "the global key floor has margin — this root is invisible to all of "
+            "them.\n"
+            "  MOST LIKELY: the `defaults:` section was renamed, emptied, or "
+            "moved under another key. Check the section name first; a renamed "
+            "section reads as an empty face, and an empty face passes the "
+            "placement check vacuously.\n"
+            "  ⛔ Adding this root to _DEFAULTS_ROOTS_MAY_BE_EMPTY is NOT the "
+            "remedy unless it genuinely stopped declaring thresholds on "
+            "purpose — that list exempts a root from the only check that can "
+            "see it. (#1411)")
+
+    # ── The exemption's own exit-lock ──────────────────────────────────────
+    # ⛔ The loop above trusts `_DEFAULTS_ROOTS_MAY_BE_EMPTY` completely, so the
+    # list is the one place a maintainer can silence this floor with a single
+    # line and no other signal — measured: adding a root that carries real keys
+    # left the gate at rc=0 and the suite fully green. So the list has to earn
+    # its entries on every run: "legitimately carries zero" is a claim about
+    # TODAY, and a claim about today is checkable today.
+    #
+    # ⛔ In the GATE, not only in a test, for the same reason the `unpinned` arm
+    # above is here: the exemption's cost is paid by anyone running the gate, so
+    # the gate is what has to refuse it. Scope, stated: this checks the entries
+    # are still zero. It does not check that an entry is one of the pinned roots
+    # (a test does that) — an entry naming nothing at all exempts nothing.
+    for root in sorted(_DEFAULTS_ROOTS_MAY_BE_EMPTY):
+        n_keys = sum(len(keys) for _rel, keys in by_root.get(root, ()))
+        if not n_keys:
+            continue
+        raise _GateViolation(
+            f"conf.d root {root!r} is listed in _DEFAULTS_ROOTS_MAY_BE_EMPTY, "
+            f"but it contributes {n_keys} threshold key(s) today. That list "
+            "means 'this tree legitimately declares no thresholds', and it "
+            "turns the fifth floor OFF for whatever is named in it — so an "
+            "entry that still has keys is an exemption covering a tree that "
+            "does not need one, and it would go on covering it after the keys "
+            "later disappeared.\n"
+            "  MOST LIKELY: the entry was added to make a failure go away. The "
+            "floor's own message says that is not the remedy; re-read what it "
+            "reported.\n"
+            "  OR: this tree genuinely started declaring thresholds — good "
+            "news. Remove the line, and the floor now watches it. (#1411)")
 
 
 def _assert_keys_floor(generators: dict[str, dict[str, KeyInfo]],
@@ -972,7 +1711,7 @@ def _assert_keys_floor(generators: dict[str, dict[str, KeyInfo]],
             "tier split, a render path that started skipping keys), which no "
             "other check can see. Repair the producer. If a producer legitimately "
             "got smaller, re-measure and update the floor in the same commit, "
-            "saying what shrank and why.")
+            "saying what shrank and why. (TRK-344 / #1392)")
 
     n_art = sum(len(v) for v in artifacts.values())
     if n_art < _DEFAULTS_ARTIFACT_KEYS_FLOOR:
@@ -1006,7 +1745,7 @@ def _assert_keys_floor(generators: dict[str, dict[str, KeyInfo]],
             "  ⚠️ ADDING artifacts pushes this floor UP, not down: it is a "
             "hand-maintained lower bound, not a tracker. A pure addition can "
             "make the paired test go red asking for a higher number — that is "
-            "the same maintenance, in the other direction.")
+            "the same maintenance, in the other direction. (TRK-344 / #1392)")
 
 
 def _report_placement(face: str, keys: dict[str, KeyInfo], errors: list[str]) -> None:
@@ -1344,12 +2083,67 @@ def run_check(
     # line into a false failure for them, which is how a reporting change turns
     # into pressure to weaken someone else's assertion. (`check_scrape_
     # reachability.run_check` already returns a non-error key the same way.)
+    # The same discipline applied to the fifth floor's own figure (#1411). The
+    # comment that used to carry it put "11" over the 12 conf.d roots, whose two
+    # halves came from two different groupings; under this module's own grouping
+    # the measurement is a different number, and it took a re-measurement to
+    # find that out — so this one is derived on every run too, by the same probe
+    # the tests use, and never restated by hand. ⛔ Spelled out rather than
+    # quoted as `11 of 12`: that literal never appeared anywhere (see the note
+    # in `main()`), and putting it in backticks sends the next reader to a
+    # `git grep` that finds nothing, which reads as "the claim is false" rather
+    # than "the claim is a paraphrase". This sentence is where that correction
+    # was written down and then not applied.
+    #
+    # ⛔ Rebuilt from the ARTIFACT faces. `_artifact_rel` only recovers WHICH
+    # FILE an entry names — the class was already decided by which dict it is in
+    # (#1393) — and it returns None for any label this module did not build, so
+    # a hermetic caller injecting `{"probe": …}` contributes no path at all.
+    #
+    # ⚠️ That is a claim about labels that are not OURS, and not the stronger one
+    # an earlier wording made ("synthetic labels yield no conf.d root rather than
+    # something invented"). A synthetic label SHAPED like ours is taken at face
+    # value and does yield a root: measured, `artifact (made/up/conf.d/
+    # _defaults.yaml)` produces the root `made/up/conf.d`, which is on no disk
+    # anywhere. There is no defence against that and none is wanted — the figure
+    # describes the faces it was handed, and a caller that hands it invented
+    # files gets a figure about invented files. What IS defended is the real
+    # run: `_defaults_faces()` refuses to return labels that do not round-trip,
+    # so the numerator cannot silently go vacuous there.
+    read_pairs = [(rel, keys) for rel, keys in
+                  ((_artifact_rel(face), keys)
+                   for face, keys in artifact_faces.items())
+                  if rel is not None]
+    blind_roots = _roots_only_the_fifth_floor_notices(generator_faces, read_pairs)
+    scanned_roots = {conf_d_root(rel) for rel, _k in read_pairs} - {None}
+    # ⛔ The DENOMINATOR the numerator is actually drawn from. `blind_roots`
+    # comes out of `_roots_only_the_fifth_floor_notices`, which subtracts
+    # `_DEFAULTS_ROOTS_MAY_BE_EMPTY` before it starts — so printing it over
+    # `scanned` was two different populations sharing one fraction bar. The
+    # predicate ("keys go to zero and all four earlier floors stay silent") is
+    # counted over the WATCHED population; counted over `scanned` it can only
+    # come out the same or larger, since the exemption only ever removes roots.
+    # `1 exempt` was printed, but inside a parenthesis about grouping — a fact
+    # on the line, not a modifier on the fraction. All three numbers are printed
+    # now so the reader can re-derive: watched = scanned − exempt.
+    # ⛔ NO INTEGERS HERE, deliberately, and this comment used to carry three of
+    # them. Today's are on `main()`'s output every run; the frozen historical
+    # pair is re-measured by
+    # `test_the_frozen_measurements_replay_against_their_own_commit`. A
+    # restatement in a comment beside the code that computes the number is the
+    # most convincing possible copy and still nothing re-measures it.
+    exempt_roots = scanned_roots & set(_DEFAULTS_ROOTS_MAY_BE_EMPTY)
+
     stats = {
         "generator_faces": len(generator_faces),
         "artifact_faces": len(artifact_faces),
         "generator_keys": sum(len(v) for v in generator_faces.values()),
         "artifact_keys": sum(len(v) for v in artifact_faces.values()),
         "artifacts_without_defaults": sum(1 for v in artifact_faces.values() if not v),
+        "confd_roots_scanned": len(scanned_roots),
+        "confd_roots_exempt_from_fifth_floor": len(exempt_roots),
+        "confd_roots_watched_by_fifth_floor": len(scanned_roots - exempt_roots),
+        "roots_only_the_fifth_floor_notices": blind_roots,
     }
 
     # ── Chart face (C): scaffold-reachable but NOT shipped by the chart ──────
@@ -1422,13 +2216,22 @@ def main(argv: list[str] | None = None) -> int:
         # lines and no STALE-EXEMPTION, no known-unwired INFO, no
         # NOT-CHART-ARMED. Nothing in this module ran, including its headline
         # TRK-337 reachability check and both exit-locked ledgers.
+        # ⛔ NO TICKET HERE, on purpose. This banner used to say
+        # "TRK-344 / #1392", which is the fourth face's ticket pair — right for
+        # the five floors that face introduced and WRONG for every arm the fifth
+        # floor added, and a breach of one of those sent the reader to a ticket
+        # that says nothing about what fired. A banner cannot name the ticket of
+        # a floor it does not know; the floor names its own, on the line above
+        # this one. (Measured: of the module's `_GateViolation` sites, six spoke
+        # for the fifth floor while this banner claimed the fourth face's pair.)
         print(
-            "\n1 defaults-tier floor breach — TRK-344 / #1392. ⛔ NOTHING ELSE "
-            "IN THIS MODULE RAN: not the TRK-337 reachability check, not the "
-            "KNOWN_UNWIRED or NOT_CHART_ARMED exit-locks, not the placement "
-            "checks, and no INFO. The floors are evaluated while the faces are "
-            "built — before any check — precisely because an empty face passes "
-            "every one of them vacuously. Fix this and re-run to see the rest.",
+            "\n1 defaults-tier floor breach — the ❌ line above names the floor "
+            "and its ticket. ⛔ NOTHING ELSE IN THIS MODULE RAN: not the "
+            "TRK-337 reachability check, not the KNOWN_UNWIRED or "
+            "NOT_CHART_ARMED exit-locks, not the placement checks, and no INFO. "
+            "The floors are evaluated while the faces are built — before any "
+            "check — precisely because an empty face passes every one of them "
+            "vacuously. Fix this and re-run to see the rest.",
             file=sys.stderr)
         return EXIT_VIOLATION if args.ci else EXIT_OK
     except Exception as exc:  # noqa: BLE001 — caller error, not a violation
@@ -1439,9 +2242,19 @@ def main(argv: list[str] | None = None) -> int:
     infos = result["infos"]
     stats = result["stats"]
 
-    # Printed on EVERY run, pass or fail — the defaults-tier coverage figure has
+    # Printed on every run that gets this far — a clean pass and a run with
+    # violations both print it — because the defaults-tier coverage figure has
     # no home in a comment (it went stale twice there), and a reader who wants to
     # know how much this gate actually looks at should get today's number.
+    # ⚠️ NOT on the floor-breach path, and the earlier "pass OR fail" here
+    # overstated it: the floors are evaluated while the faces are built, so
+    # `run_check` raises before returning and nothing below runs (measured: no
+    # coverage line at all, and rc=1 UNDER `--ci` — without the flag the same
+    # breach is report-only and returns rc=0, as the `except` clause above
+    # spells out). That is the intended shape — a breached floor means the face
+    # set itself is not trustworthy, and printing a coverage figure over it
+    # would be reporting a measurement of a broken scan — but it is a "pass or
+    # violation" line, not a "pass or fail" one.
     print(
         "INFO: defaults-tier coverage: "
         f"{stats['generator_faces']} generator face(s) / "
@@ -1450,6 +2263,51 @@ def main(argv: list[str] | None = None) -> int:
         f"{stats['artifact_keys']} key(s), inspected at every depth of "
         f"`defaults:`; {stats['artifacts_without_defaults']} artifact(s) declare "
         "no `defaults:` section at all.", file=sys.stderr)
+
+    # The fifth floor's own figure, re-derived rather than restated (#1411).
+    # ⛔ The COUNT never travels alone. On its own it is the exact shape that
+    # went stale here before: the claim that 11 of the 12 conf.d roots could go
+    # to zero unseen was written into SIX places in one commit (`188cfb17`) and
+    # rewritten wholesale, and a bare number carries no way to check it. ⚠️ Six,
+    # and none of them spells it as the literal `11 of 12`. Two are in English —
+    # the gate comment ("of the 12 distinct conf.d roots, 11") and the test file
+    # ("11 of the 12 conf.d roots") — and four are the Chinese wording: the
+    # CHANGELOG entry twice, the COMMIT SUBJECT, and the COMMIT BODY. The
+    # subject and body are the copies `git log` shows, the only ones a reader
+    # meets without opening a file. ⚠️ This count has now been wrong twice in
+    # the same direction: an earlier wording said FOUR (missing the subject) and
+    # its correction said FIVE (missing the body), and each time the sentence's
+    # whole point was that a number written in many places is checked in none.
+    # That earlier wording also put the figure in backticks, which sends anyone
+    # checking to `git grep '11 of 12'` for a string that was never there.
+    # FIVE things change the answer and all five are on the line — the
+    # DENOMINATOR's population (watched = scanned − exempt), the grouping, the
+    # scenario, the floor subset, and the exemption — so the reader can
+    # re-derive it from what is printed. (The frozen measurements beside the
+    # fifth floor's constant state the same conditions, and ① is reported over
+    # BOTH of its populations rather than picking one: holding grouping,
+    # scenario, floors and exemption fixed does not by itself settle whether the
+    # denominator is `scanned` or `watched`, and choosing silently is how the
+    # two halves of a fraction came to be counted on different sides of the
+    # exemption in the first place.)
+    #
+    # ⛔ NUMERATOR AND DENOMINATOR SHARE A POPULATION, which cost a correction:
+    # the numerator is post-exemption, so printing it over `scanned` was a
+    # fraction whose two halves counted different sets. See the note on
+    # `exempt_roots` in `run_check`.
+    only_fifth = stats["roots_only_the_fifth_floor_notices"]
+    print(
+        f"INFO: defaults-tier fifth-floor coverage: {len(only_fifth)} of "
+        f"{stats['confd_roots_watched_by_fifth_floor']} WATCHED conf.d root(s) "
+        f"(grouped by `conf_d_root`; watched = {stats['confd_roots_scanned']} "
+        "scanned roots holding a defaults artifact minus "
+        f"{stats['confd_roots_exempt_from_fifth_floor']} exempt via "
+        "_DEFAULTS_ROOTS_MAY_BE_EMPTY — the numerator is counted after that "
+        "subtraction, so both halves of this fraction are the same population) "
+        "would have their keys go to zero — files left in place — with all four "
+        "earlier floors silent (both file floors, both per-class key floors, "
+        "_SHIPPED_CONFD_ROOTS), i.e. only the fifth floor speaks for them: "
+        f"{only_fifth}", file=sys.stderr)
 
     for msg in infos:
         print(f"INFO: {msg}", file=sys.stderr)

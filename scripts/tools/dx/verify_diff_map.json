@@ -717,7 +717,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "ebc121b290bb128cbe9ef6d9a8fdba496d74a5964f3ee93232f031c587ba1a6a",
+ "source_digest": "6753db82fe8b2c9c3d5c806a669d8fb707198924f238b7d7a21637bccf8c5785",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1075,6 +1075,7 @@
    "tests/lint/test_check_confd_schema.py",
    "tests/lint/test_check_devcontainer_dep_parity.py",
    "tests/lint/test_check_pint.py",
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_ci_aggregate_gate_contract.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py",
@@ -1158,6 +1159,7 @@
    "tests/dx/test_recover_index.py",
    "tests/lint/test_check_makefile_targets.py",
    "tests/lint/test_check_orphan_lint.py",
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/lint/test_check_unpinned_deps.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_git_check_lock.py",
@@ -1919,6 +1921,7 @@
    "tests/dx/test_fuse_plumbing_commit.py"
   ],
   "scripts/ops/guard_defaults_scopes.py": [
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_guard_defaults_scopes.py"
   ],
   "scripts/ops/inject_default_key.py": [
@@ -2457,10 +2460,16 @@
   "tests/golden/build_and_capture.py": [
    "tests/golden/test_merge_parity.py"
   ],
+  "tests/golden/fixtures/full-l0-l3/conf.d": [
+   "tests/lint/test_check_threshold_reachability.py"
+  ],
   "tests/golden/fixtures/full-l0-l3/conf.d/db/_defaults.yaml": [
    "tests/lint/test_check_threshold_reachability.py"
   ],
   "tests/golden/fixtures/full-l0-l3/conf.d/db/mariadb/prod/_defaults.yaml": [
+   "tests/lint/test_check_threshold_reachability.py"
+  ],
+  "tests/golden/fixtures/l0-only/conf.d": [
    "tests/lint/test_check_threshold_reachability.py"
   ],
   "tests/helm": [
@@ -2711,6 +2720,7 @@
    "tests/ops/test_trylocal_compose_pins.py"
   ],
   "try-local/seed/conf.d": [
+   "tests/lint/test_check_threshold_reachability.py",
    "tests/ops/test_guard_defaults_scopes.py",
    "tests/shared/test_dry_run_no_write.py"
   ],
