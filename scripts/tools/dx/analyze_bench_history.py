@@ -533,7 +533,19 @@ STRATA_TONIGHT_UNKNOWN = "tonight-unknown"  # window is classified, tonight is n
 # REPORTING is the classic perf-timeout/crash symptom; telling an operator to
 # wait for more same-class nights sends them to the wrong place entirely.
 REASON_NO_RECENT = "no-recent"       # absent from ≥1 of the K newest same-class nights
-REASON_THIN_ANCHOR = "thin-anchor"   # < min_settled same-class settled nights behind it
+# ⚠️ `thin-anchor` was itself TWO causes wearing one name, and the same
+# self-contradiction came back a third time through it: on a window where all 14
+# nights ARE tonight's class, a bench with only 3 nights of its own history
+# printed "`X` reported tonight but could not be judged — only 14 of 14 window
+# nights ran on tonight's host class". The window's composition is not the cause
+# there; the BENCH's own history is, and it was not mentioned at all. Split by
+# which count is actually short — both are in hand at the `continue`:
+#   thin-anchor        → the WINDOW holds < min_settled settled same-class
+#                        nights, so NO bench in tonight's stratum can be judged.
+#   thin-bench-history → the window holds them; this benchmark appears in fewer
+#                        than min_settled of them (new / just-renamed bench).
+REASON_THIN_ANCHOR = "thin-anchor"          # the WINDOW's settled same-class nights are short
+REASON_THIN_BENCH = "thin-bench-history"    # the BENCH's own settled same-class nights are short
 # Two further causes exist only for benches named in an ISSUE'S MARKER: a bench
 # outside tonight's stratum is never iterated by `analyze_trend`, so it lands in
 # neither list and carries neither reason code. Reporting that through
@@ -743,6 +755,10 @@ def analyze_trend(
     inconclusive_reasons: dict[str, str] = {}
     evaluated: list[str] = []
     benches = {b for n in series for b in n.medians} - {CANARY_BENCH}
+    # The settled (anchor) half of tonight's stratum, hoisted out of the loop:
+    # its LENGTH is bench-independent, and it is exactly what separates "the
+    # window is too thin for anything" from "this benchmark is new here" below.
+    settled = series[recent_k:]
     for bench in sorted(benches):
         # Align to CALENDAR nights (newest-first), NOT "nights that happen to
         # contain this bench". Positional slicing of a gap-filtered series would
@@ -756,10 +772,19 @@ def analyze_trend(
             inconclusive.append(bench)
             inconclusive_reasons[bench] = REASON_NO_RECENT
             continue
-        baseline_vals = [n.medians[bench] for n in series[recent_k:] if bench in n.medians]
+        baseline_vals = [n.medians[bench] for n in settled if bench in n.medians]
         if len(baseline_vals) < min_settled:
             inconclusive.append(bench)
-            inconclusive_reasons[bench] = REASON_THIN_ANCHOR
+            # WHICH of the two counts is short decides the cause. `len(settled)`
+            # short ⇒ tonight's stratum cannot anchor ANY benchmark, and the
+            # window composition genuinely is the story. Only `baseline_vals`
+            # short ⇒ the stratum is fine and this benchmark's own history is
+            # what is missing; blaming the window there is the "only 14 of 14
+            # window nights ran on tonight's host class" sentence, which argues
+            # against itself and points the reader at the wrong fix.
+            inconclusive_reasons[bench] = (REASON_THIN_ANCHOR
+                                           if len(settled) < min_settled
+                                           else REASON_THIN_BENCH)
             continue
         evaluated.append(bench)
         anchor = statistics.median(baseline_vals)
@@ -822,6 +847,10 @@ def analyze_trend(
         "today_run_id": nights[0].run_id if nights else None,
         "cpu_class_counts": _cpu_class_counts(nights),
         "n_class_nights": len(series),
+        # Same-class nights BEHIND the recent window — the population every
+        # anchor is drawn from. Only the two thin-* cause clauses read it, and
+        # only to say whether the window or the benchmark is the short one.
+        "n_settled_class": len(settled),
         "min_settled": min_settled,
         "evaluated_benches": sorted(evaluated),
         "inconclusive_benches": sorted(inconclusive),
@@ -849,11 +878,21 @@ def _cause_clause(cause: str, meta: dict, benches: list[str]) -> str:
                 f"not a thin window): {names}")
     if cause == REASON_THIN_ANCHOR:
         return (f"only {meta.get('n_class_nights', '?')} of {meta.get('n_nights', '?')} window "
-                f"nights ran on tonight's host class, so fewer than "
-                f"{meta.get('min_settled', MIN_SETTLED_SAME_CLASS)} settled same-class nights "
-                f"are behind them; need ≥ {meta.get('recent_k', '?')} recent + "
+                f"nights ran on tonight's host class, leaving "
+                f"{meta.get('n_settled_class', '?')} settled same-class night(s) behind the "
+                f"{meta.get('recent_k', '?')} most recent — tonight's stratum cannot anchor ANY "
+                f"benchmark; need ≥ {meta.get('recent_k', '?')} recent + "
                 f"{meta.get('min_settled', MIN_SETTLED_SAME_CLASS)} settled same-class nights "
                 f"per bench: {names}")
+    if cause == REASON_THIN_BENCH:
+        return (f"reported on tonight's host class, and the window DOES hold "
+                f"{meta.get('n_settled_class', '?')} settled same-class nights, but this "
+                f"benchmark appears in fewer than "
+                f"{meta.get('min_settled', MIN_SETTLED_SAME_CLASS)} of them — its OWN history "
+                f"on this host class is what is short, not the window's host-class composition "
+                f"(a newly added or just-renamed benchmark reaches this state and leaves it "
+                f"once it has {meta.get('min_settled', MIN_SETTLED_SAME_CLASS)} settled "
+                f"same-class nights): {names}")
     if cause == REASON_OFF_CLASS:
         return (f"DID report inside the window, but never on tonight's host class "
                 f"(`{_safe_md(meta.get('today_cpu_model')) or 'unknown'}`, "
@@ -871,12 +910,14 @@ def _cause_clause(cause: str, meta: dict, benches: list[str]) -> str:
 def _inconclusive_causes(meta: dict) -> list[str]:
     """One clause per DISTINCT reason a bench IN TONIGHT'S WINDOW was not judged.
 
-    ``analyze_trend`` already separates the two `continue` branches; until this
-    helper existed both collapsed into a single sentence blaming a thin
-    same-class window. On a window where every night IS tonight's class that
-    printed "only 14 of 14 window nights ran on tonight's host class" — a
-    self-contradiction that points the reader away from the actual cause, which
-    is a benchmark that stopped reporting.
+    ``analyze_trend`` separates two `continue` branches into THREE cause codes;
+    until this helper existed all of them collapsed into a single sentence
+    blaming a thin same-class window. On a window where every night IS tonight's
+    class that printed "only 14 of 14 window nights ran on tonight's host class"
+    — a self-contradiction that points the reader away from the actual cause,
+    which is a benchmark that stopped reporting. The SECOND branch then turned
+    out to be two causes as well, and reproduced the identical sentence for a
+    bench whose own history (not the window) was short: see REASON_THIN_BENCH.
 
     Scope note: this answers "what did TONIGHT fail to judge?". "Why is THIS
     ISSUE's bench unverified?" is a different question with a third possible
@@ -888,7 +929,8 @@ def _inconclusive_causes(meta: dict) -> list[str]:
     for bench, cause in sorted((meta.get("inconclusive_reasons") or {}).items()):
         by_cause.setdefault(cause, []).append(bench)
     out = [_cause_clause(c, meta, by_cause[c])
-           for c in (REASON_NO_RECENT, REASON_THIN_ANCHOR) if c in by_cause]
+           for c in (REASON_NO_RECENT, REASON_THIN_ANCHOR, REASON_THIN_BENCH)
+           if c in by_cause]
     if not out:
         out.append("no benchmark appeared in tonight's same-class window at all")
     return out
@@ -922,7 +964,7 @@ def _unverified_causes(meta: dict, unverified: Iterable[str]) -> list[str]:
                                        else REASON_ABSENT)
         by_cause.setdefault(cause, []).append(bench)
     return [_cause_clause(c, meta, by_cause[c])
-            for c in (REASON_NO_RECENT, REASON_THIN_ANCHOR,
+            for c in (REASON_NO_RECENT, REASON_THIN_ANCHOR, REASON_THIN_BENCH,
                       REASON_OFF_CLASS, REASON_ABSENT) if c in by_cause]
 
 
@@ -1244,8 +1286,11 @@ def render_trend_issue_body(findings: list[TrendFinding], meta: dict,
         "_Auto-filed by `analyze_bench_history.py --trend-watch`. The watchdog updates this "
         "issue **in place** each night (no comment spam) and only comments when the set of "
         "flagged benchmarks changes; it auto-closes when no benchmark is above its floor on "
-        "an evaluable night (closed loop) — never on a night that could evaluate nothing, and "
-        "never while ANY benchmark this issue is tracking went unmeasured. Single-night blips "
+        "an evaluable night (closed loop) — never on a night that could evaluate nothing, and, "
+        "as long as the hidden state marker at the end of this body stays READABLE, never "
+        "while any benchmark this issue is tracking went unmeasured (an edited-away or "
+        "corrupted marker leaves no per-bench claim to check; the run says so in its log, its "
+        "annotations and the job summary). Single-night blips "
         "are filtered by the multi-night window; movement below the canary noise floor is "
         "ignored._",
         "",
@@ -1301,9 +1346,26 @@ def _marker_match(body: str | None):
 
 
 def _parse_state_marker(body: str | None) -> list[list[str]] | None:
-    """Recover the prior state from an issue body, or None if absent/unparseable
-    (a legacy issue filed before this marker existed → caller treats as no-change
-    so the migration run is silent)."""
+    """Recover the prior state from an issue body, or None when there is none —
+    which is TWO opposite situations, reported as two different things.
+
+    ABSENT (no marker in the body at all) is a legacy or hand-filed issue: it
+    never recorded a per-bench claim, so nothing is lost, the caller treats it as
+    no-change, and the migration run stays silent. That is the ONLY case this
+    function may be quiet about.
+
+    UNREADABLE (a marker IS there and did not parse) is the opposite: a claim was
+    recorded and cannot be read, so every guard that reads it is disarmed for
+    that issue tonight — including the per-bench close guard, which then closes
+    the issue on a CLEAR night without ever checking which benchmark it was filed
+    for. The body is human-editable, so a single hand edit reaches this; it is
+    therefore inside the threat model, not a theoretical corruption. It gets the
+    annotation + step summary every other degraded path in this file gets, and
+    the caller's behaviour is deliberately unchanged (no marker-health state
+    machine — that design was implemented and reverted).
+
+    Collapsing the two into one message is the same mistake this module has
+    already fixed twice, in ``_inconclusive_causes`` and ``_unverified_causes``."""
     m = _marker_match(body)
     if not m:
         return None
@@ -1316,10 +1378,31 @@ def _parse_state_marker(body: str | None) -> list[list[str]] | None:
         # human-editable, and a hand-pasted deeply-nested JSON array makes
         # `json.loads` raise RecursionError (a RuntimeError, not a ValueError),
         # which escaped to `main` and exited 1 — measured: every nightly run red
-        # until someone edits the issue body by hand. An unreadable marker is a
-        # missing marker; the caller already treats None as "no prior state".
+        # until someone edits the issue body by hand. An unreadable marker
+        # DEGRADES to the caller's "no prior state" — but it is not the same
+        # THING as a missing one, and saying so was the second half of this bug.
+        #
+        # …and "degrade" is the whole point of the annotation below. Silently
+        # degrading was measured on a body whose marker was missing one `]`: the
+        # regex still matched, `json.loads` did not, and the CLEAR path went on
+        # to CLOSE the issue with zero `::warning::` and no step summary file at
+        # all — while the body footer promised, unconditionally, that it never
+        # closes while a tracked benchmark went unmeasured. This was the last
+        # degraded path in the file with no annotation behind it.
         print(f"  ⚠️  perf-trend state marker unreadable ({type(exc).__name__}) — "
               "treating this issue as having no prior state.", file=sys.stderr)
+        _warn(f"perf-trend watchdog: an issue body's state marker is PRESENT but UNREADABLE "
+              f"({type(exc).__name__}) — this is NOT the same as an issue with no marker "
+              "(legacy or hand-filed, which never recorded a per-bench claim). A claim WAS "
+              "recorded here and cannot be read, so tonight treats the issue as tracking "
+              "nothing: the per-bench close guard cannot see what it was filed for and a "
+              "CLEAR night may close it unverified. The body is human-editable — restore the "
+              "marker line, or delete it deliberately.")
+        _step_summary(
+            f"⚠️ **perf-trend watchdog: issue state marker UNREADABLE** ({type(exc).__name__}) "
+            "— the marker is present but did not parse; that is not an absent marker. The "
+            "per-bench close guard is disarmed for that issue tonight."
+        )
         return None
 
 
@@ -1734,7 +1817,37 @@ def run_trend_watch(args) -> int:
         # per-bench baseline frozen when the issue was filed) is #1396's open
         # follow-up; a first attempt was reverted for getting the surrounding
         # state lifecycle wrong.
-        print("✅ No sustained nightly bench regression.")
+        #
+        # ⚠️ CLEAR is a verdict about the benches tonight COULD judge, and an
+        # unconditional "✅ no regression" overstates it by exactly the ones it
+        # could not. On a night with no open issue that WAS the entire output:
+        # zero annotations, and — nothing on this path having called
+        # `_step_summary` — no step summary file created at all. Measured: 14
+        # same-class nights, `BenchmarkA` flat, a second bench present only in
+        # the newest 3 carrying a real +30%, and the job printed one green tick
+        # while `meta` held `inconclusive=[that bench]`. That is follow-up C's
+        # failure mode (a detector that did not run looking like one that found
+        # nothing) surviving one branch further down. The sentences are already
+        # computed — this path just never asked for them.
+        skipped = meta.get("inconclusive_benches") or []
+        if skipped:
+            # `_safe_md`: the host string is FREE-FORM artifact content and goes
+            # into a `::warning::` and into markdown, same as the INCONCLUSIVE
+            # branch above.
+            host = _safe_md(meta.get("today_cpu_model")) or "unknown"
+            names = ", ".join(f"`{b}`" for b in skipped)
+            detail = (f"{len(meta.get('evaluated_benches') or [])} benchmark(s) were judged on "
+                      f"host class {host} and none is above its floor, but "
+                      f"{len(skipped)} was/were NOT judged tonight ({names}) — "
+                      + "; ".join(_inconclusive_causes(meta))
+                      + " — a CLEAR verdict on the benchmarks that WERE judged is not evidence "
+                        "about the others")
+            print("✅ No sustained nightly bench regression among the benchmarks tonight could "
+                  f"judge — but {len(skipped)} was/were NOT judged: {names}.")
+            _warn(f"perf-trend watchdog CLEAR but INCOMPLETE — {detail}.")
+            _step_summary(f"⚠️ **perf-trend watchdog: CLEAR but INCOMPLETE** — {detail}.")
+        else:
+            print("✅ No sustained nightly bench regression.")
         for issue in open_issues:
             num = issue["number"]
             # ── PER-BENCH close guard ────────────────────────────────────────
@@ -1747,9 +1860,15 @@ def run_trend_watch(args) -> int:
             # committed one level down. A body whose own marker says `sustained`
             # must never be closed by a night that did not measure it.
             #
-            # Unreadable / absent marker → unchanged behaviour (close): a legacy
-            # or hand-filed issue carries no per-bench claim to check, and
-            # inventing a marker-health mechanism here is a separate design.
+            # ABSENT marker → unchanged behaviour (close): a legacy or hand-filed
+            # issue never recorded a per-bench claim, so there is nothing here to
+            # check. An UNREADABLE marker is NOT the same case and must not be
+            # described as one — a claim WAS recorded and cannot be read, so this
+            # close proceeds blind. Its behaviour is unchanged too (inventing a
+            # marker-health mechanism here is a separate design, tried and
+            # reverted), but `_parse_state_marker` reports it as its own thing in
+            # the log, an annotation and the job summary rather than letting the
+            # two share one silence.
             prior_state = _parse_state_marker(issue.get("body"))
             unverified = _unverified_benches(prior_state, meta)
             if unverified:

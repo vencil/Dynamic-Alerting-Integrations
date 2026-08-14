@@ -396,6 +396,10 @@ class TestWireFormatIsPinned:
 
     def test_inconclusive_reason_codes(self):
         assert (ab.REASON_NO_RECENT, ab.REASON_THIN_ANCHOR) == ("no-recent", "thin-anchor")
+        # `thin-anchor` was itself two causes: the WINDOW's settled same-class
+        # nights being short, vs THIS bench's own history being short — see
+        # TestThinAnchorSeparatesTheWindowFromTheBench.
+        assert ab.REASON_THIN_BENCH == "thin-bench-history"
         # The third cause exists only for benches named in an issue's marker
         # that are absent from the window entirely (a rename) — see
         # TestUnverifiedCauseHasAThirdOption.
@@ -2493,7 +2497,13 @@ class TestBodyDisclosureLines:
     def test_footer_states_the_closing_contract(self):
         body = self._body()
         assert "never on a night that could evaluate nothing" in body
-        assert "never while ANY benchmark this issue is tracking went unmeasured" in body
+        # The per-bench half of the contract is CONDITIONAL on the marker being
+        # readable — it is the marker that names what the issue is tracking, and
+        # the body a human can edit is where it lives. See
+        # TestUnreadableMarkerIsNotSilentlyAbsent.
+        assert ("as long as the hidden state marker at the end of this body stays READABLE, "
+                "never while any benchmark this issue is tracking went unmeasured") in body
+        assert "never while ANY benchmark this issue is tracking went unmeasured" not in body
 
     def test_which_night_line(self):
         nights = [_hnight(i, 35e6, _EPYC) for i in range(9)]
@@ -3325,8 +3335,11 @@ _FOOTER = (
     "_Auto-filed by `analyze_bench_history.py --trend-watch`. The watchdog updates this "
     "issue **in place** each night (no comment spam) and only comments when the set of "
     "flagged benchmarks changes; it auto-closes when no benchmark is above its floor on "
-    "an evaluable night (closed loop) — never on a night that could evaluate nothing, and "
-    "never while ANY benchmark this issue is tracking went unmeasured. Single-night blips "
+    "an evaluable night (closed loop) — never on a night that could evaluate nothing, and, "
+    "as long as the hidden state marker at the end of this body stays READABLE, never "
+    "while any benchmark this issue is tracking went unmeasured (an edited-away or "
+    "corrupted marker leaves no per-bench claim to check; the run says so in its log, its "
+    "annotations and the job summary). Single-night blips "
     "are filtered by the multi-night window; movement below the canary noise floor is "
     "ignored._"
 )
@@ -3853,3 +3866,245 @@ class TestBothPathsWriteTheSameLedgerRule:
                                         _a_gone_b_regressed())
         carried = [r for r in findings if r[0] == _BENCH]
         assert carried == clear == [[_BENCH, "sustained"]]
+
+
+# ── R6-F1: an unreadable marker is not an absent one ────────────────────────
+
+# The measured repro: the SAME body, one `]` short. The regex still matches (it
+# is greedy up to the LAST `]` before `-->`), so the payload reaches
+# `json.loads` and dies there — the one degraded path in this file that used to
+# report itself with a bare stderr line and nothing else.
+_INTACT_MARKER = ab._render_state_marker([[_BENCH_C, "sustained"]])
+_BROKEN_MARKER = _INTACT_MARKER.replace("]] -->", "] -->")
+
+
+class TestUnreadableMarkerIsNotSilentlyAbsent:
+    """R6-F1 — `_parse_state_marker` returns None for two OPPOSITE situations:
+    no marker at all (a legacy issue that never recorded a per-bench claim) and
+    a marker that is there and did not parse (a claim was recorded and cannot be
+    read). Both were silent to Actions, and the second one hands the CLEAR path
+    an issue that looks like it is tracking nothing — so it closes it, while the
+    body footer promised, unconditionally, that it never closes while a tracked
+    benchmark went unmeasured. The body is human-editable: this is inside the
+    threat model, not a theoretical corruption.
+
+    Behaviour is deliberately UNCHANGED (still closes; no marker-health state
+    machine). What changed is that the run says which of the two happened."""
+
+    def test_the_broken_marker_really_is_the_intact_one_minus_one_bracket(self):
+        assert _BROKEN_MARKER.count("]") == _INTACT_MARKER.count("]") - 1
+        assert ab._marker_match(_BROKEN_MARKER) is not None      # regex still matches
+        assert ab._parse_state_marker(_INTACT_MARKER) == [[_BENCH_C, "sustained"]]
+
+    def test_the_parse_failure_is_annotated_and_summarised(
+            self, tmp_path, capsys, monkeypatch):
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        assert ab._parse_state_marker(_BROKEN_MARKER) is None
+        err = capsys.readouterr().err
+        assert "::warning::" in err
+        assert "PRESENT but UNREADABLE" in err
+        assert "NOT the same as an issue with no marker" in err
+        assert "state marker UNREADABLE" in summary.read_text(encoding="utf-8")
+        assert "per-bench close guard is disarmed" in summary.read_text(encoding="utf-8")
+
+    def test_an_absent_marker_stays_silent(self, tmp_path, capsys, monkeypatch):
+        # The other half of the separation: a legacy body has nothing to lose,
+        # so it must NOT produce the annotation above (that is what would make
+        # the annotation meaningless).
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        assert ab._parse_state_marker("a legacy body with no marker at all") is None
+        assert capsys.readouterr().err == ""
+        assert not summary.exists()
+
+    def test_the_close_still_happens_and_is_no_longer_silent(
+            self, monkeypatch, tmp_path, capsys):
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        _rc, calls = _live(monkeypatch, tmp_path, _flat_window(_EPYC),
+                           issues=[_issue(42, body=_BROKEN_MARKER)])
+        err = capsys.readouterr().err
+        assert _sel(calls, "issue", "close", "42")               # behaviour unchanged
+        assert "::warning::" in err and "PRESENT but UNREADABLE" in err
+        assert "per-bench close guard is disarmed" in summary.read_text(encoding="utf-8")
+
+    def test_one_bracket_decides_whether_the_guard_can_see_the_claim(
+            self, monkeypatch, tmp_path, capsys):
+        # Same window, same tracked bench, same night — only the marker differs.
+        _rc, intact = _live(monkeypatch, tmp_path, _flat_window(_EPYC),
+                            issues=[_issue(42, body=_INTACT_MARKER)])
+        capsys.readouterr()
+        _rc, broken = _live(monkeypatch, tmp_path, _flat_window(_EPYC),
+                            issues=[_issue(42, body=_BROKEN_MARKER)])
+        capsys.readouterr()
+        assert not _sel(intact, "issue", "close", "42")           # guard holds
+        assert _sel(broken, "issue", "close", "42")               # guard is blind
+
+    def test_neither_of_those_two_nights_is_silent(
+            self, monkeypatch, tmp_path, capsys):
+        # The regression this finding is about: the broken-marker night produced
+        # ZERO annotations and no step summary file, while the intact one
+        # produced one annotation and a summary. Now both speak.
+        for body in (_INTACT_MARKER, _BROKEN_MARKER):
+            summary = tmp_path / f"summary-{len(body)}.md"
+            monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+            _live(monkeypatch, tmp_path, _flat_window(_EPYC),
+                  issues=[_issue(42, body=body)])
+            err = capsys.readouterr().err
+            assert sum(l.startswith("::warning::") for l in err.splitlines()) == 1
+            assert summary.exists() and summary.read_text(encoding="utf-8").strip()
+
+    def test_the_footer_no_longer_promises_it_unconditionally(
+            self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _sustained_window(_EPYC))
+        capsys.readouterr()
+        body = _body_of(_one(calls, "issue", "create"))
+        assert "never while ANY benchmark this issue is tracking went unmeasured" not in body
+        assert ("as long as the hidden state marker at the end of this body stays READABLE"
+                in body)
+        assert "an edited-away or corrupted marker leaves no per-bench claim to check" in body
+
+
+# ── R6-F2: a CLEAR night that judged only part of the window ────────────────
+
+def _new_bench_only_in_the_newest_three(cpu=_EPYC):
+    """14 nights, ALL on tonight's host class. `_BENCH` is flat throughout;
+    `_BENCH_B` appears only in the newest 3 nights and carries a real +30%.
+
+    So tonight's stratum is not thin at all (11 settled same-class nights) —
+    `_BENCH_B` simply has no history of its own to anchor against, which is both
+    the F2 fixture (a partial CLEAR) and the F3 fixture (the cause of it)."""
+    return ([_multi(i, {_BENCH: 35e6, _BENCH_B: 45.5e6}, cpu) for i in range(3)]
+            + [_multi(i, {_BENCH: 35e6}, cpu) for i in range(3, 14)])
+
+
+class TestPartialClearIsNotAnUnconditionalAllClear:
+    """R6-F2 — CLEAR is a verdict about the benches tonight COULD judge. With no
+    open issue, a night that judged one bench and skipped another (carrying a
+    real +30%) printed one unconditional green tick, zero annotations, and never
+    created the step summary file at all. That is exactly follow-up C's failure
+    mode — a detector that did not run looking like one that found nothing —
+    surviving one branch further down."""
+
+    def _run(self, tmp_path, capsys, monkeypatch, nights):
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        assert ab.run_trend_watch(_trend_args(_write_fixture(tmp_path, nights))) == 0
+        return capsys.readouterr(), summary
+
+    def test_the_fixture_is_a_partial_clear(self):
+        _f, meta = _meta_for(_new_bench_only_in_the_newest_three())
+        assert meta["status"] == _CLEAR
+        assert meta["evaluated_benches"] == [_BENCH]
+        assert meta["inconclusive_benches"] == [_BENCH_B]
+
+    def test_the_unjudged_bench_is_annotated_and_summarised(
+            self, tmp_path, capsys, monkeypatch):
+        out, summary = self._run(tmp_path, capsys, monkeypatch,
+                                 _new_bench_only_in_the_newest_three())
+        assert summary.exists()                    # the file was never created before
+        text = summary.read_text(encoding="utf-8")
+        assert "CLEAR but INCOMPLETE" in text and f"`{_BENCH_B}`" in text
+        assert "::warning::" in out.err and "CLEAR but INCOMPLETE" in out.err
+        assert "is not evidence about the others" in out.err
+
+    def test_the_green_tick_is_no_longer_unconditional(
+            self, tmp_path, capsys, monkeypatch):
+        out, _summary = self._run(tmp_path, capsys, monkeypatch,
+                                  _new_bench_only_in_the_newest_three())
+        assert "✅ No sustained nightly bench regression." not in out.out.splitlines()
+        assert "NOT judged" in out.out and f"`{_BENCH_B}`" in out.out
+
+    def test_a_fully_judged_clear_night_is_unchanged(
+            self, tmp_path, capsys, monkeypatch):
+        # The control: when nothing was skipped the old sentence is the honest
+        # one and must survive verbatim, with no annotation and no summary.
+        out, summary = self._run(tmp_path, capsys, monkeypatch, _flat_window(_EPYC))
+        assert "✅ No sustained nightly bench regression." in out.out.splitlines()
+        assert "::warning::" not in out.err
+        assert not summary.exists()
+
+
+# ── R6-F3: `thin-anchor` was two causes wearing one name ────────────────────
+
+class TestThinAnchorSeparatesTheWindowFromTheBench:
+    """R6-F3 — third recurrence of one self-contradiction. On a window where all
+    14 nights ARE tonight's host class, a bench with 3 nights of its own history
+    was told "`X` reported tonight but could not be judged — only 14 of 14 window
+    nights ran on tonight's host class": the first half says it ran here
+    tonight, the second blames a host-class composition that is 14/14 tonight's
+    class, and the actual cause (the bench's own history) is not mentioned."""
+
+    def test_the_reason_code_names_the_bench_not_the_window(self):
+        _f, meta = _meta_for(_new_bench_only_in_the_newest_three())
+        assert meta["inconclusive_reasons"] == {_BENCH_B: ab.REASON_THIN_BENCH}
+        assert meta["n_class_nights"] == 14 and meta["n_nights"] == 14
+        assert meta["n_settled_class"] == 11          # the window is NOT thin
+
+    def test_the_clause_drops_the_contradiction_and_names_the_cause(self):
+        _f, meta = _meta_for(_new_bench_only_in_the_newest_three())
+        causes = " | ".join(ab._inconclusive_causes(meta))
+        assert "window nights ran on tonight's host class" not in causes
+        assert "its OWN history on this host class is what is short" in causes
+        assert "not the window's host-class composition" in causes
+        assert f"`{_BENCH_B}`" in causes
+
+    def test_a_genuinely_thin_window_still_blames_the_window(self):
+        # Unchanged behaviour for the case the name was coined for: 4 of 6
+        # nights are tonight's class and only 1 of them is settled.
+        nights = ([_hnight(i, 35e6, _XEON) for i in range(3)]
+                  + [_hnight(3, 35e6, _EPYC), _hnight(4, 35e6, _XEON),
+                     _hnight(5, 35e6, _EPYC)])
+        _f, meta = _meta_for(nights)
+        assert meta["inconclusive_reasons"] == {_BENCH: ab.REASON_THIN_ANCHOR}
+        causes = " | ".join(ab._inconclusive_causes(meta))
+        assert "only 4 of 6 window nights ran on tonight's host class" in causes
+        assert "leaving 1 settled same-class night(s) behind the 3 most recent" in causes
+        assert "OWN history" not in causes
+
+    def test_the_per_issue_helper_reports_the_new_cause_too(self):
+        # `_unverified_causes` answers a different question and keeps its own
+        # ordering tuple; a cause code missing from THAT tuple drops the clause
+        # silently, leaving the held-open warning with an empty reason. Pinned
+        # here because the same night's CLEAR-but-incomplete annotation quotes
+        # `_inconclusive_causes`, which would mask the loss end-to-end.
+        _f, meta = _meta_for(_new_bench_only_in_the_newest_three())
+        causes = ab._unverified_causes(meta, [_BENCH_B])
+        assert len(causes) == 1
+        assert "its OWN history on this host class is what is short" in causes[0]
+        assert f"`{_BENCH_B}`" in causes[0]
+
+    def test_the_held_open_warning_no_longer_argues_against_itself(
+            self, monkeypatch, tmp_path, capsys):
+        # End-to-end, the sentence as an operator receives it — scoped to the
+        # held-open lines, so a clause arriving from some OTHER annotation on
+        # the same night cannot stand in for this one.
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        _live(monkeypatch, tmp_path, _new_bench_only_in_the_newest_three(),
+              issues=[_issue(42, state=[[_BENCH_B, "sustained"]])])
+        text = capsys.readouterr().err + summary.read_text(encoding="utf-8")
+        held = " ".join(l for l in text.splitlines()
+                        if "is tracking" in l or "held open" in l)
+        assert held
+        assert f"`{_BENCH_B}` reported tonight but could not be judged" in held
+        assert "window nights ran on tonight's host class" not in held
+        assert "its OWN history on this host class is what is short" in held
+
+    def test_the_two_thin_causes_partition_rather_than_overlap(self):
+        # When the WINDOW is short every bench's anchor is short too, so the
+        # window is what gets named and `thin-bench-history` cannot occur beside
+        # it. The pair partitions the old `thin-anchor`; it does not double-count
+        # a night, which is what would put both sentences in one warning.
+        thin_window = ([_multi(i, {_BENCH: 35e6, _BENCH_B: 12e6}, _XEON) for i in range(3)]
+                       + [_multi(3, {_BENCH: 35e6}, _XEON),
+                          _multi(4, {_BENCH: 35e6, _BENCH_B: 12e6}, _EPYC)])
+        _f, meta = _meta_for(thin_window)
+        assert meta["n_settled_class"] == 1
+        assert set(meta["inconclusive_reasons"]) == {_BENCH, _BENCH_B}
+        assert set(meta["inconclusive_reasons"].values()) == {ab.REASON_THIN_ANCHOR}
+        # …and the other direction is the fixture above: a window that is NOT
+        # thin never produces `thin-anchor`.
+        _f2, meta2 = _meta_for(_new_bench_only_in_the_newest_three())
+        assert set(meta2["inconclusive_reasons"].values()) == {ab.REASON_THIN_BENCH}
