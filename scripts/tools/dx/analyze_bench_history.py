@@ -451,6 +451,19 @@ def render_markdown_table(
 # unmeasured rows forward instead of dropping them (`_carry_forward_state`), and
 # the body says visibly which benches it is still tracking but did not measure.
 #
+# ⚠️ WHAT THAT GUARD COSTS — measured, and larger than first written down. The
+# trigger is a benchmark RENAME, not "a benchmark permanently removed": the
+# stratification key and the marker both compare bench names with string
+# equality, so `BenchmarkFoo` → `BenchmarkFooV2` is indistinguishable from
+# `BenchmarkFoo` disappearing. Renaming a benchmark is an ordinary refactor.
+# And the blast radius is not one ticket: the FINDINGS path opens a NEW issue
+# only when `open_issues` is empty and updates only `open_issues[0]`, so one
+# wedged issue absorbs every later regression in the repo into itself — it keeps
+# accumulating carried-forward rows while no new ticket can be filed. The
+# `_held_open_detail` phrasing exists so the nightly warning names the wedged
+# bench and how many nights it has been silent; the fix (bench identity that
+# survives a rename) is structural and is #1396's remaining follow-up.
+#
 # ⚠️ KNOWN AND DELIBERATELY NOT FIXED HERE — the recovery/close side still reads
 # the SLIDING anchor. A permanent regression ages into the settled window, the
 # anchor rises to meet it, the finding evaporates, and a CLEAR night closes the
@@ -496,6 +509,14 @@ STRATA_TONIGHT_UNKNOWN = "tonight-unknown"  # window is classified, tonight is n
 # wait for more same-class nights sends them to the wrong place entirely.
 REASON_NO_RECENT = "no-recent"       # absent from ≥1 of the K newest same-class nights
 REASON_THIN_ANCHOR = "thin-anchor"   # < min_settled same-class settled nights behind it
+# A third cause exists only for benches named in an ISSUE'S MARKER: a bench that
+# is in NO night of the window is never iterated by `analyze_trend`, so it lands
+# in neither list and carries neither reason code. Reporting it through
+# `_inconclusive_causes` fell through to "no benchmark appeared in tonight's
+# same-class window at all" — printed, on a CLEAR night, right next to a verdict
+# produced by benchmarks that plainly did appear. Renaming a benchmark is the
+# ordinary way to reach this state, and nothing ever leaves it.
+REASON_ABSENT = "absent-from-window"
 
 # Same-class settled nights required before a bench may be judged at all, once
 # host-class stratification is active. Empirically calibrated, not guessed: on
@@ -776,40 +797,98 @@ def analyze_trend(
     return findings, meta
 
 
+def _cause_clause(cause: str, meta: dict, benches: list[str]) -> str:
+    """The prose for ONE cause, applied to the benches that share it.
+
+    Split out of ``_inconclusive_causes`` so the per-issue variant
+    (``_unverified_causes``) says the same sentences about the same causes
+    rather than paraphrasing them a second time."""
+    names = ", ".join(f"`{b}`" for b in benches)
+    if cause == REASON_NO_RECENT:
+        return (f"did not report on all {meta.get('recent_k', '?')} newest same-class nights "
+                f"(a benchmark that STOPS reporting is the classic perf-timeout/crash symptom, "
+                f"not a thin window): {names}")
+    if cause == REASON_THIN_ANCHOR:
+        return (f"only {meta.get('n_class_nights', '?')} of {meta.get('n_nights', '?')} window "
+                f"nights ran on tonight's host class, so fewer than "
+                f"{meta.get('min_settled', MIN_SETTLED_SAME_CLASS)} settled same-class nights "
+                f"are behind them; need ≥ {meta.get('recent_k', '?')} recent + "
+                f"{meta.get('min_settled', MIN_SETTLED_SAME_CLASS)} settled same-class nights "
+                f"per bench: {names}")
+    return (f"did not appear in ANY of the {meta.get('n_nights', '?')} nights in tonight's "
+            f"window, so tonight neither judged nor skipped "
+            f"{'it' if len(benches) == 1 else 'them'} — a RENAMED or deleted benchmark "
+            f"reaches this state and never leaves it: {names}")
+
+
 def _inconclusive_causes(meta: dict) -> list[str]:
-    """One clause per DISTINCT reason a bench was not judged tonight.
+    """One clause per DISTINCT reason a bench IN TONIGHT'S WINDOW was not judged.
 
     ``analyze_trend`` already separates the two `continue` branches; until this
     helper existed both collapsed into a single sentence blaming a thin
     same-class window. On a window where every night IS tonight's class that
     printed "only 14 of 14 window nights ran on tonight's host class" — a
     self-contradiction that points the reader away from the actual cause, which
-    is a benchmark that stopped reporting."""
+    is a benchmark that stopped reporting.
+
+    Scope note: this answers "what did TONIGHT fail to judge?". "Why is THIS
+    ISSUE's bench unverified?" is a different question with a third possible
+    answer — see ``_unverified_causes``."""
     if meta.get("stratification") == STRATA_TONIGHT_UNKNOWN:
         return ["tonight's `cpu:` header is unreadable while the rest of the window is "
                 "labelled, so there is no same-class population to judge anything against"]
     by_cause: dict[str, list[str]] = {}
     for bench, cause in sorted((meta.get("inconclusive_reasons") or {}).items()):
         by_cause.setdefault(cause, []).append(bench)
-    out: list[str] = []
-    if REASON_NO_RECENT in by_cause:
-        names = ", ".join(f"`{b}`" for b in by_cause[REASON_NO_RECENT])
-        out.append(
-            f"did not report on all {meta.get('recent_k', '?')} newest same-class nights "
-            f"(a benchmark that STOPS reporting is the classic perf-timeout/crash symptom, "
-            f"not a thin window): {names}")
-    if REASON_THIN_ANCHOR in by_cause:
-        names = ", ".join(f"`{b}`" for b in by_cause[REASON_THIN_ANCHOR])
-        out.append(
-            f"only {meta.get('n_class_nights', '?')} of {meta.get('n_nights', '?')} window "
-            f"nights ran on tonight's host class, so fewer than "
-            f"{meta.get('min_settled', MIN_SETTLED_SAME_CLASS)} settled same-class nights "
-            f"are behind them; need ≥ {meta.get('recent_k', '?')} recent + "
-            f"{meta.get('min_settled', MIN_SETTLED_SAME_CLASS)} settled same-class nights "
-            f"per bench: {names}")
+    out = [_cause_clause(c, meta, by_cause[c])
+           for c in (REASON_NO_RECENT, REASON_THIN_ANCHOR) if c in by_cause]
     if not out:
         out.append("no benchmark appeared in tonight's same-class window at all")
     return out
+
+
+def _unverified_causes(meta: dict, unverified: Iterable[str]) -> list[str]:
+    """Why each bench THIS ISSUE tracks went unverified tonight.
+
+    ``_inconclusive_causes`` is the wrong question here and produced a
+    self-contradicting answer: a bench named only in the issue's marker can be
+    absent from the window ENTIRELY, in which case there is no reason code for
+    it, and the fallback clause ("no benchmark appeared in tonight's same-class
+    window at all") was printed on a CLEAR night — i.e. beside a verdict that
+    exists precisely because other benchmarks DID appear. The third cause is the
+    actionable one: the bench was renamed or removed, and no future night can
+    retire this issue."""
+    if meta.get("stratification") == STRATA_TONIGHT_UNKNOWN:
+        return _inconclusive_causes(meta)
+    reasons = meta.get("inconclusive_reasons") or {}
+    by_cause: dict[str, list[str]] = {}
+    for bench in sorted(unverified):
+        by_cause.setdefault(reasons.get(bench, REASON_ABSENT), []).append(bench)
+    return [_cause_clause(c, meta, by_cause[c])
+            for c in (REASON_NO_RECENT, REASON_THIN_ANCHOR, REASON_ABSENT) if c in by_cause]
+
+
+def _nights_since_seen(nights: list[NightRecord], bench: str) -> int:
+    """How many of the NEWEST window nights do not carry `bench` (0 = tonight has it).
+
+    Derived from the window that is already in hand — no new marker field, no
+    new state. It is what turns "issue #42 is held open" into "held open because
+    `BenchmarkX` last reported 5 nights ago", which is the difference between an
+    operator filing a rename fix and an operator ignoring a recurring warning."""
+    for i, night in enumerate(nights):
+        if bench in night.medians:
+            return i
+    return len(nights)
+
+
+def _held_open_detail(nights: list[NightRecord], bench: str) -> str:
+    """One phrase saying HOW LONG this bench has been unmeasurable."""
+    missing = _nights_since_seen(nights, bench)
+    if missing == 0:
+        return f"`{bench}` reported tonight but could not be judged"
+    if missing >= len(nights):
+        return f"`{bench}` has not reported in ANY of the last {len(nights)} nights"
+    return f"`{bench}` last reported {missing} night{'' if missing == 1 else 's'} ago"
 
 
 def _unverified_benches(state: list[list[str]] | None, meta: dict) -> list[str]:
@@ -1185,12 +1264,19 @@ def _recovering_label_change(findings: list[TrendFinding], prior_state: list[lis
     stopped reporting the claim has no evidence behind it: the label would repeat,
     in the notification layer, exactly the false "on the mend" the comment layer
     was fixed not to say. REMOVAL is left alone on purpose — it is driven by a
-    sustained finding that WAS measured tonight, which is real evidence."""
+    sustained finding that WAS measured tonight, which is real evidence.
+
+    The block is scoped to the benches the CLAIM is about — the ones the prior
+    state called `sustained`. Blocking on the whole prior set made an unrelated
+    row veto the label: an issue tracking a `creep` bench that went unmeasured
+    could never acquire `recovering` even when the sustained bench it was filed
+    for was measured tonight and had genuinely eased. That is a different false
+    statement (silence about real progress), not the one this guard exists for."""
     labelled = RECOVERING_LABEL in current_labels
     prior_had_sustained = any(k == "sustained" for _, k in prior_state)
     recovering = _is_recovering(findings) and (prior_had_sustained or labelled)
     if recovering and not labelled:
-        blocked = {str(b) for b, _k in prior_state} & set(unverified)
+        blocked = {str(b) for b, k in prior_state if k == "sustained"} & set(unverified)
         return None if blocked else "add"
     if not recovering and labelled:
         return "remove"
@@ -1587,8 +1673,14 @@ def run_trend_watch(args) -> int:
             if unverified:
                 names = ", ".join(f"`{b}`" for b in unverified)
                 it = "it" if len(unverified) == 1 else "them"
+                # WHICH bench is stuck and for HOW LONG. Without it the same
+                # warning repeats every night with no way to tell a bench that
+                # is down for one night from one that was renamed a month ago —
+                # and only the second one needs a human.
+                stuck = "; ".join(_held_open_detail(nights, b) for b in unverified)
                 detail = (f"issue #{num} is tracking {names}, and tonight did NOT evaluate "
-                          f"{it} — " + "; ".join(_inconclusive_causes(meta))
+                          f"{it} ({stuck}) — "
+                          + "; ".join(_unverified_causes(meta, unverified))
                           + f" — a CLEAR verdict on the OTHER benchmarks is not evidence "
                             f"about {it}, so the issue stays open")
                 print(f"→ NOT closing perf-trend issue #{num} — tonight could not verify "
@@ -1596,7 +1688,21 @@ def run_trend_watch(args) -> int:
                 _warn(f"perf-trend watchdog: {detail}.")
                 _step_summary(f"⚠️ **perf-trend watchdog: issue #{num} held open** — {detail}.")
                 tracked = _tracked_rows(prior_state, unverified)
-                body = render_trend_issue_body([], meta, state=prior_state, tracked=tracked)
+                # ⚠️ `tracked`, NOT `prior_state`. This path is a CLEAR night:
+                # every prior row NOT in `tracked` was measured tonight and was
+                # under its floor, so writing the prior ledger back verbatim
+                # re-asserts a flag the night just disproved — and the ledger
+                # then never shrinks. Two alternating benches keep the issue
+                # open forever (stratification alone produces that parity), and
+                # a stale row makes the NEXT night's transition comment wrong in
+                # whichever direction the stale kind happens to point: a genuine
+                # new `sustained` reads as "no change" (subscribers get nothing)
+                # and a genuine new `creep` reads as "Eased to creep", i.e. good
+                # news, for a bench that just started regressing. Tonight's
+                # findings are empty here, so this is the same rule the FINDINGS
+                # path applies — `_carry_forward_state(current, tracked)` with an
+                # empty `current`.
+                body = render_trend_issue_body([], meta, state=tracked, tracked=tracked)
                 print(f"→ {'[dry-run] would update' if args.dry_run else 'updating'} body of "
                       f"perf-trend issue #{num} (CLEAR, but its benches were not verified)",
                       file=sys.stderr)
@@ -1616,7 +1722,19 @@ def run_trend_watch(args) -> int:
             # table of the LAST night that found something — a "+30.8% sustained"
             # table sitting directly above "✅ Auto-closing", which reads as if
             # the watchdog closed an issue it still had findings for.
-            body = render_trend_issue_body([], meta)
+            #
+            # The marker keeps the PRE-CLOSE ledger instead of being blanked.
+            # Blanking it is only correct for an issue that stays closed: the
+            # auto-close comment tells the reader to reopen if the regression
+            # returns, and a reopened issue carrying `[]` has no per-bench claim
+            # left, so the very next CLEAR night closes it again in silence — the
+            # close guard reads a marker that says the issue is about nothing.
+            # Keeping the ledger is strictly more information (the issue records
+            # what it was closed ON), and it re-arms the guard for the reopen.
+            # The cost is that a reopened issue waits for ALL of those benches to
+            # be measured again before it may close — which is the fail-closed
+            # semantics this guard is for.
+            body = render_trend_issue_body([], meta, state=prior_state or [])
             print(f"→ {'[dry-run] would refresh' if args.dry_run else 'refreshing'} body of "
                   f"#{num} to tonight's CLEAR verdict before closing", file=sys.stderr)
             if not args.dry_run and gh_available:

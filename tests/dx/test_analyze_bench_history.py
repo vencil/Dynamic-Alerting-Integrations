@@ -396,6 +396,10 @@ class TestWireFormatIsPinned:
 
     def test_inconclusive_reason_codes(self):
         assert (ab.REASON_NO_RECENT, ab.REASON_THIN_ANCHOR) == ("no-recent", "thin-anchor")
+        # The third cause exists only for benches named in an issue's marker
+        # that are absent from the window entirely (a rename) — see
+        # TestUnverifiedCauseHasAThirdOption.
+        assert ab.REASON_ABSENT == "absent-from-window"
 
     def test_state_marker_is_byte_exact(self):
         # The marker is written by tonight's run and re-parsed by tomorrow's, so
@@ -1600,6 +1604,13 @@ class TestWritePlaneArgv:
         ]
         assert create[-2:] == ["--assignee", "vencil"]
         assert _BENCH in _body_of(create)
+        # The FIRST body an issue ever gets is the only one whose marker nothing
+        # checked, and it is the one every later night reads back. Dropping it
+        # here (`body.split("<!-- perf-trend-state")[0]`) left all 227 tests
+        # green while disarming the close guard from the first step of the
+        # lifecycle: no marker ⇒ `test_unreadable_marker_keeps_the_previous_
+        # behaviour` ⇒ the next CLEAR night closes the issue unconditionally.
+        assert ab._parse_state_marker(_body_of(create)) == [[_BENCH, "sustained"]]
 
     def test_label_is_ensured_before_the_first_issue_is_filed(
             self, monkeypatch, tmp_path, capsys):
@@ -1703,7 +1714,11 @@ class TestWritePlaneArgv:
                            issues=[_issue(42, state=[[_BENCH, "creep"]])],
                            dry_run=True)
         capsys.readouterr()
-        # The read happened; nothing else did.
+        # The read happened; nothing else did. NOTE: only the `edit`/`comment`
+        # pair is load-bearing here — this scenario has an open issue and
+        # findings, so it reaches the UPDATE branch and the `close`/`create`
+        # lines below are structurally unreachable, hence vacuously true. The
+        # other three write branches are gated in TestDryRunGatesEveryBranch.
         assert _sel(calls, "issue", "list")
         assert _sel(calls, "issue", "edit") == []
         assert _sel(calls, "issue", "comment") == []
@@ -1721,7 +1736,9 @@ class TestEveryOpenIssueIsClosed:
         _rc, calls = _live(monkeypatch, tmp_path, _flat_window(), issues=issues)
         capsys.readouterr()
         assert [c[2] for c in _sel(calls, "issue", "close")] == ["11", "22", "33"]
-        assert len(_sel(calls, "issue", "comment")) == 3
+        # Bound to the issue NUMBERS, not just counted: three comments all
+        # landing on #11 is the same count and a different (wrong) behaviour.
+        assert [c[2] for c in _sel(calls, "issue", "comment")] == ["11", "22", "33"]
 
     def test_inconclusive_refreshes_all_three_and_closes_none(
             self, monkeypatch, tmp_path, capsys):
@@ -1737,6 +1754,10 @@ class TestEveryOpenIssueIsClosed:
 
 
 _BENCH_C = "BenchmarkRenderRulePack_500"
+# Sorts BEFORE both _BENCH_B ("BenchmarkMerge…") and _BENCH ("BenchmarkScan…"),
+# and is inserted LAST into every fixture row below — so the expected orderings
+# in this class are only satisfiable if the module really sorts. See B4.
+_BENCH_D = "BenchmarkAlertRouteFanout_256"
 
 
 class TestMultiBenchWindow:
@@ -1744,19 +1765,25 @@ class TestMultiBenchWindow:
     and per-bench verdicts were indistinguishable by construction."""
 
     def _mixed(self):
-        # A regressed, B flat, C only appears in the settled half (vanished).
+        # A regressed, B + D flat, C only appears in the settled half (vanished).
         nights = []
         for i in range(9):
             row = {_BENCH: 45.5e6 if i < 3 else 35e6, _BENCH_B: 12e6}
             if i >= 3:
                 row[_BENCH_C] = 8e6
+            row[_BENCH_D] = 9e6
             nights.append(_multi(i, row, _EPYC))
         return nights
 
     def test_each_bench_lands_in_its_own_bucket(self):
         findings, meta = _meta_for(self._mixed())
         assert [(f.bench, f.kind) for f in findings] == [(_BENCH, "sustained")]
-        assert meta["evaluated_benches"] == sorted([_BENCH, _BENCH_B])
+        # A LITERAL ordering, not `sorted([...])`: computing the expectation the
+        # same way the module does asserts nothing about the order, and the two
+        # constants it was built from happened to make the tautology invisible.
+        # Insertion order here is D-last, so this list can only match if the
+        # module iterates its bench set in sorted order.
+        assert meta["evaluated_benches"] == [_BENCH_D, _BENCH_B, _BENCH]
         assert meta["inconclusive_benches"] == [_BENCH_C]
         assert meta["status"] == _FINDINGS
 
@@ -1764,6 +1791,7 @@ class TestMultiBenchWindow:
         findings, _meta = _meta_for(self._mixed())
         assert _BENCH_B not in {f.bench for f in findings}
         assert _BENCH_C not in {f.bench for f in findings}
+        assert _BENCH_D not in {f.bench for f in findings}
 
     def test_the_canary_is_never_itself_a_finding(self):
         # The canary defines the noise floor; flagging it would be circular.
@@ -2294,7 +2322,10 @@ class TestClearNightRefreshesTheBody:
         body = _body_of(_one(calls, "issue", "edit", "42"))
         assert "### ✅ Nothing above its floor tonight (CLEAR)" in body
         assert "| Rule |" not in body                    # the stale table is gone
-        assert ab._parse_state_marker(body) == []        # …and so is the flagged set
+        # …and the marker keeps the ledger the issue was CLOSED ON. It used to be
+        # blanked, which is only correct for an issue that stays closed — see
+        # TestClosingKeepsTheLedgerForAReopen.
+        assert ab._parse_state_marker(body) == [[_BENCH, "sustained"]]
 
     def test_body_is_written_after_the_close_not_before(
             self, monkeypatch, tmp_path, capsys):
@@ -2543,3 +2574,584 @@ class TestStratificationKeyIsNotFolded:
         findings, meta = _meta_for(nights)
         assert meta["cpu_class_counts"] == {_EPYC: 9}
         assert [f.kind for f in findings] == ["sustained"]
+
+
+# ===========================================================================
+# ROUND 4 — the ledger arithmetic on the write plane, and the holes round 3
+# left behind it.
+#
+# Round 3 gave the close path a per-bench guard and gave the marker a
+# carry-forward. Both are correct about what they ADD to the ledger and were
+# never asked what they must REMOVE from it: the held-open path wrote the whole
+# prior ledger back verbatim, so a row measured clean tonight was re-asserted
+# every night, forever. Every test below names the behaviour it pins; revert
+# that behaviour and exactly this test goes red.
+# ===========================================================================
+
+
+def _b_gone_a_clean(cpu=_EPYC):
+    """Mirror of `_a_gone_b_clean`: B stopped reporting 3 nights ago, A reports
+    every night and is flat. Tonight: CLEAR, evaluated=[A], inconclusive=[B]."""
+    nights = []
+    for i in range(9):
+        row = {_BENCH: 35e6}
+        if i >= 3:
+            row[_BENCH_B] = 12e6
+        nights.append(_multi(i, row, cpu))
+    return nights
+
+
+_BENCH_E = "BenchmarkValidateSchema_128"
+
+
+def _two_benches_regress(cpu=_EPYC):
+    """A and B both step +30% together — the only window in the suite that
+    produces MORE THAN ONE finding on one night."""
+    return ([_multi(i, {_BENCH: 45.5e6, _BENCH_B: 15.6e6}, cpu) for i in range(3)]
+            + [_multi(i, {_BENCH: 35e6, _BENCH_B: 12e6}, cpu) for i in range(3, 9)])
+
+
+class TestHeldOpenLedgerIsPruned:
+    """A1 — the held-open CLEAR path rendered the body with `state=prior_state`
+    (the FINDINGS path uses `state=state_for_body`), so the ledger only ever
+    grew. Every test in `TestCloseIsGatedPerBench` uses a SINGLE-ROW marker, and
+    on a single-row marker the right answer and the wrong one are byte-identical
+    — which is exactly why the mutation survived. Two rows, one of them measured
+    clean tonight, is the shape that tells them apart."""
+
+    _PRIOR = [[_BENCH, "sustained"], [_BENCH_B, "sustained"]]
+
+    def _night_one(self, monkeypatch, tmp_path, capsys):
+        """One held-open night: A stopped reporting, B measured and clean."""
+        _rc, calls = _live(monkeypatch, tmp_path, _a_gone_b_clean(),
+                           issues=[_issue(42, state=self._PRIOR)])
+        capsys.readouterr()
+        return calls, _body_of(_one(calls, "issue", "edit", "42"))
+
+    def test_the_row_measured_clean_tonight_is_dropped(
+            self, monkeypatch, tmp_path, capsys):
+        _calls, body = self._night_one(monkeypatch, tmp_path, capsys)
+        # B WAS evaluated tonight and was under its floor. Keeping its row is
+        # re-asserting a flag the night just disproved.
+        assert ab._parse_state_marker(body) == [[_BENCH, "sustained"]]
+
+    def test_the_unmeasured_row_is_still_kept_and_still_holds_the_issue_open(
+            self, monkeypatch, tmp_path, capsys):
+        calls, body = self._night_one(monkeypatch, tmp_path, capsys)
+        assert _sel(calls, "issue", "close") == []
+        assert "STILL TRACKED BY THIS ISSUE, NOT VERIFIED TONIGHT" in body
+        assert f"`{_BENCH}` (sustained)" in body
+
+    def test_a_stale_row_would_silence_the_next_real_regression(
+            self, monkeypatch, tmp_path, capsys):
+        # Night 2: A still gone, B genuinely regresses. With the stale row the
+        # ledger already says `B sustained`, so prior == current, the transition
+        # comment is None and every subscriber is notified of nothing.
+        _calls, night_one_body = self._night_one(monkeypatch, tmp_path, capsys)
+        _rc, calls = _live(monkeypatch, tmp_path, _a_gone_b_regressed(),
+                           issues=[_issue(42, body=night_one_body)])
+        capsys.readouterr()
+        comment = _one(calls, "issue", "comment", "42")
+        assert f"**Newly flagged:** `{_BENCH_B}`" in _body_of(comment).splitlines()
+
+    def test_a_stale_row_would_report_a_new_regression_as_good_news(
+            self, monkeypatch, tmp_path, capsys):
+        # Same night 2, but B comes back as creep rather than sustained. Against
+        # the stale `sustained` row that diff reads as an IMPROVEMENT — "Eased to
+        # creep" — for a benchmark that has just started regressing.
+        _calls, night_one_body = self._night_one(monkeypatch, tmp_path, capsys)
+        _rc, calls = _live(monkeypatch, tmp_path, _a_gone_b_creep(),
+                           issues=[_issue(42, body=night_one_body)])
+        capsys.readouterr()
+        comment = _body_of(_one(calls, "issue", "comment", "42"))
+        assert f"**Newly flagged:** `{_BENCH_B}`" in comment.splitlines()
+        assert "Eased to creep" not in comment
+
+    def test_alternating_outages_still_let_the_issue_close(
+            self, monkeypatch, tmp_path, capsys):
+        # Two benches taking turns being unmeasurable is not exotic — host-class
+        # stratification produces that parity on its own. With the ledger frozen
+        # at its widest, one of the two is always unverified and the issue can
+        # never close again.
+        _calls, night_one_body = self._night_one(monkeypatch, tmp_path, capsys)
+        _rc, calls = _live(monkeypatch, tmp_path, _b_gone_a_clean(),
+                           issues=[_issue(42, body=night_one_body)])
+        capsys.readouterr()
+        assert _one(calls, "issue", "close")[2] == "42"
+
+    def test_the_pruned_ledger_matches_what_the_findings_path_would_write(self):
+        # The held-open path is the FINDINGS path with an empty finding set, so
+        # the two must agree on the rule. This is the equivalence the fix relies
+        # on (`state=tracked` == `_carry_forward_state([], tracked)`).
+        tracked = [[_BENCH, "sustained"]]
+        assert ab._carry_forward_state([], tracked) == tracked
+
+
+class TestClosingKeepsTheLedgerForAReopen:
+    """A2 — the close path wrote an EMPTY marker, and the assertion that pinned
+    it demanded exactly that. The auto-close comment tells the reader a new issue
+    is filed if perf regresses again; the realistic human response to a bad close
+    is to REOPEN this one, and a reopened issue carrying `[]` has no per-bench
+    claim left for the guard to check."""
+
+    def _close_then_read_back(self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _flat_window(_EPYC),
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])])
+        capsys.readouterr()
+        assert _one(calls, "issue", "close")[2] == "42"
+        return _body_of(_one(calls, "issue", "edit", "42"))
+
+    def test_the_closed_body_keeps_the_ledger_it_was_closed_on(
+            self, monkeypatch, tmp_path, capsys):
+        body = self._close_then_read_back(monkeypatch, tmp_path, capsys)
+        assert ab._parse_state_marker(body) == [[_BENCH, "sustained"]]
+
+    def test_a_reopened_issue_is_still_guarded(self, monkeypatch, tmp_path, capsys):
+        # Reopen, then a night on which the tracked bench stops reporting. With
+        # a blanked marker this closes AGAIN, silently, with no warning at all.
+        closed_body = self._close_then_read_back(monkeypatch, tmp_path, capsys)
+        _rc, calls = _live(monkeypatch, tmp_path, _a_gone_b_clean(),
+                           issues=[_issue(42, body=closed_body)])
+        err = capsys.readouterr().err
+        assert _sel(calls, "issue", "close") == []
+        assert f"tonight could not verify `{_BENCH}`" in err
+
+    def test_a_reopened_issue_whose_bench_is_measured_still_closes(
+            self, monkeypatch, tmp_path, capsys):
+        # The fail-closed cost, bounded: keeping the ledger does not wedge the
+        # loop, it only requires the same evidence the first close needed.
+        closed_body = self._close_then_read_back(monkeypatch, tmp_path, capsys)
+        _rc, calls = _live(monkeypatch, tmp_path, _flat_window(_EPYC),
+                           issues=[_issue(42, body=closed_body)])
+        capsys.readouterr()
+        assert _one(calls, "issue", "close")[2] == "42"
+
+
+class TestHeldOpenWarningNamesWhatIsStuck:
+    """A3 — "issue #42 held open" repeated every night with no way to tell a
+    bench that is down for one night from one that was renamed a month ago. Only
+    the second one needs a human, and only the second one never resolves."""
+
+    def _run(self, monkeypatch, tmp_path, capsys, nights, state):
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        _live(monkeypatch, tmp_path, nights, issues=[_issue(42, state=state)])
+        return capsys.readouterr().err + summary.read_text(encoding="utf-8")
+
+    def test_the_warning_says_how_long_the_bench_has_been_silent(
+            self, monkeypatch, tmp_path, capsys):
+        text = self._run(monkeypatch, tmp_path, capsys, _a_gone_b_clean(),
+                         [[_BENCH, "sustained"]])
+        assert f"`{_BENCH}` last reported 3 nights ago" in text
+
+    def test_a_bench_absent_from_the_whole_window_says_so(
+            self, monkeypatch, tmp_path, capsys):
+        text = self._run(monkeypatch, tmp_path, capsys, _flat_window(_EPYC),
+                         [[_BENCH_C, "sustained"]])
+        assert f"`{_BENCH_C}` has not reported in ANY of the last 9 nights" in text
+
+    def test_the_step_summary_carries_it_too(self, monkeypatch, tmp_path, capsys):
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        _live(monkeypatch, tmp_path, _a_gone_b_clean(),
+              issues=[_issue(42, state=[[_BENCH, "sustained"]])])
+        capsys.readouterr()
+        text = summary.read_text(encoding="utf-8")
+        assert "issue #42 held open" in text
+        assert f"`{_BENCH}` last reported 3 nights ago" in text
+
+    def test_the_counter_is_measured_from_the_newest_night(self):
+        nights = _a_gone_b_clean()
+        assert ab._nights_since_seen(nights, _BENCH) == 3      # absent from 0,1,2
+        assert ab._nights_since_seen(nights, _BENCH_B) == 0    # reported tonight
+        assert ab._nights_since_seen(nights, "BenchmarkNeverSeen") == len(nights)
+
+    def test_the_phrase_is_singular_for_one_night(self):
+        nights = ([_multi(0, {_BENCH_B: 12e6}, _EPYC)]
+                  + [_multi(i, {_BENCH: 35e6, _BENCH_B: 12e6}, _EPYC) for i in range(1, 9)])
+        assert ab._held_open_detail(nights, _BENCH) == f"`{_BENCH}` last reported 1 night ago"
+
+    def test_a_bench_present_tonight_but_unjudgeable_is_not_called_silent(self):
+        nights = [_multi(i, {_BENCH: 35e6}, _EPYC) for i in range(9)]
+        assert ab._held_open_detail(nights, _BENCH) == \
+            f"`{_BENCH}` reported tonight but could not be judged"
+
+
+class TestUnverifiedCauseHasAThirdOption:
+    """A4 — a bench named only in the marker can be absent from the window
+    ENTIRELY, in which case `analyze_trend` never iterates it and it carries no
+    reason code. `_inconclusive_causes` then fell through to its "nothing
+    appeared at all" clause — printed on a CLEAR night, i.e. beside a verdict
+    that exists BECAUSE other benchmarks appeared."""
+
+    def _text(self, monkeypatch, tmp_path, capsys, state):
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        _live(monkeypatch, tmp_path, _flat_window(_EPYC),
+              issues=[_issue(42, state=state)])
+        return capsys.readouterr().err + summary.read_text(encoding="utf-8")
+
+    def test_the_self_contradicting_sentence_is_gone(
+            self, monkeypatch, tmp_path, capsys):
+        text = self._text(monkeypatch, tmp_path, capsys, [[_BENCH_C, "sustained"]])
+        assert "no benchmark appeared in tonight's same-class window at all" not in text
+
+    def test_the_cause_names_the_rename(self, monkeypatch, tmp_path, capsys):
+        text = self._text(monkeypatch, tmp_path, capsys, [[_BENCH_C, "sustained"]])
+        assert "did not appear in ANY of the 9 nights in tonight's window" in text
+        assert "RENAMED or deleted benchmark" in text
+        assert f"`{_BENCH_C}`" in text
+
+    def test_the_two_existing_causes_are_word_for_word_unchanged(
+            self, monkeypatch, tmp_path, capsys):
+        text = self._run_no_recent(monkeypatch, tmp_path, capsys)
+        assert "did not report on all 3 newest same-class nights" in text
+        assert "perf-timeout/crash symptom" in text
+
+    def _run_no_recent(self, monkeypatch, tmp_path, capsys):
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        _live(monkeypatch, tmp_path, _a_gone_b_clean(),
+              issues=[_issue(42, state=[[_BENCH, "sustained"]])])
+        return capsys.readouterr().err + summary.read_text(encoding="utf-8")
+
+    def test_the_helper_reports_all_three_causes_in_order(self):
+        meta = {"inconclusive_reasons": {"BenchA": ab.REASON_NO_RECENT,
+                                         "BenchB": ab.REASON_THIN_ANCHOR},
+                "recent_k": 3, "n_class_nights": 4, "n_nights": 9, "min_settled": 3}
+        causes = ab._unverified_causes(meta, ["BenchB", "BenchGone", "BenchA"])
+        assert len(causes) == 3
+        assert "perf-timeout/crash symptom" in causes[0] and "`BenchA`" in causes[0]
+        assert "ran on tonight's host class" in causes[1] and "`BenchB`" in causes[1]
+        assert "RENAMED or deleted" in causes[2] and "`BenchGone`" in causes[2]
+
+    def test_the_window_level_helper_keeps_its_own_fallback(self):
+        # `_inconclusive_causes` answers a DIFFERENT question and keeps the
+        # sentence that was wrong only for the per-issue one.
+        assert ab._inconclusive_causes({"inconclusive_reasons": {}}) == \
+            ["no benchmark appeared in tonight's same-class window at all"]
+
+    def test_tonight_unknown_still_explains_itself_once(self):
+        meta = {"stratification": _STRATA_TONIGHT_UNKNOWN}
+        assert ab._unverified_causes(meta, ["A"]) == ab._inconclusive_causes(meta)
+
+
+class TestRecoveringLabelBlockIsScoped:
+    """A5 — the `add` was blocked by ANY unverified bench in the prior state.
+    "The sustained regression cleared, only creep remains" is a claim about the
+    benches the prior state called `sustained`; a `creep` row going unmeasured
+    says nothing about it, and vetoing on it withholds real news."""
+
+    def test_an_unrelated_creep_row_does_not_veto_the_label(self):
+        creep = [_finding(_BENCH_B, "creep")]
+        prior = [[_BENCH, "creep"], [_BENCH_B, "sustained"]]
+        assert ab._recovering_label_change(creep, prior, [], unverified=[_BENCH]) == "add"
+
+    def test_the_sustained_row_itself_still_vetoes_it(self):
+        creep = [_finding(_BENCH_B, "creep")]
+        prior = [[_BENCH, "sustained"], [_BENCH_B, "creep"]]
+        assert ab._recovering_label_change(creep, prior, [], unverified=[_BENCH]) is None
+
+    def test_end_to_end_the_label_is_applied(self, monkeypatch, tmp_path, capsys):
+        # A (creep in the marker) stopped reporting; B was sustained and is now
+        # creep-only, measured tonight. That IS "on the mend", and it is exactly
+        # the notification the blanket block swallowed.
+        _rc, calls = _live(monkeypatch, tmp_path, _a_gone_b_creep(),
+                           issues=[_issue(42, state=[[_BENCH, "creep"],
+                                                     [_BENCH_B, "sustained"]])])
+        capsys.readouterr()
+        assert ["issue", "edit", "42", "--repo", "vencil/Dynamic-Alerting-Integrations",
+                "--add-label", "perf-trend:recovering"] in calls
+
+    def test_removal_is_still_untouched_by_the_unverified_set(self):
+        sust = [_finding(_BENCH_B, "sustained")]
+        prior = [[_BENCH, "sustained"]]
+        assert ab._recovering_label_change(sust, prior, ["perf-trend:recovering"],
+                                           unverified=[_BENCH]) == "remove"
+
+
+class TestDryRunGatesEveryBranch:
+    """B2 — `--dry-run` was proved on ONE of the four write branches (update).
+    Deleting `not args.dry_run` from create, close or the INCONCLUSIVE refresh
+    left the suite green, i.e. `--dry-run` could write to GitHub."""
+
+    def test_the_create_branch_writes_nothing(self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _sustained_window(_EPYC), dry_run=True)
+        err = capsys.readouterr().err
+        assert _sel(calls, "issue", "create") == []
+        assert _sel(calls, "gh", "label", "create") == []
+        assert "would open" in err
+
+    def test_the_close_branch_writes_nothing(self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _flat_window(_EPYC),
+                           issues=[_issue(7, state=[[_BENCH, "sustained"]],
+                                          labels=["perf-trend:recovering"])],
+                           dry_run=True)
+        err = capsys.readouterr().err
+        assert _sel(calls, "issue", "close") == []
+        assert _sel(calls, "issue", "edit") == []
+        assert _sel(calls, "issue", "comment") == []
+        assert "would close" in err and "would refresh body" in err
+
+    def test_the_inconclusive_branch_writes_nothing(self, monkeypatch, tmp_path, capsys):
+        nights = ([_multi(i, {_BENCH: 35e6}, _XEON) for i in range(3)]
+                  + [_multi(3, {_BENCH: 35e6}, _EPYC), _multi(4, {_BENCH: 35e6}, _XEON),
+                     _multi(5, {_BENCH: 35e6}, _EPYC), _multi(6, {_BENCH: 35e6}, _XEON),
+                     _multi(7, {_BENCH: 35e6}, _EPYC)])
+        _rc, calls = _live(monkeypatch, tmp_path, nights,
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])],
+                           dry_run=True)
+        err = capsys.readouterr().err
+        assert _sel(calls, "issue", "edit") == []
+        assert "would update body of perf-trend issue #42" in err
+
+    def test_the_held_open_branch_writes_nothing(self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _a_gone_b_clean(),
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])],
+                           dry_run=True)
+        err = capsys.readouterr().err
+        assert _sel(calls, "issue", "edit") == []
+        assert "would update body of" in err
+
+
+class TestMultipleFindingsInOneNight:
+    """B5 — the whole suite topped out at ONE finding per window, so every
+    multi-finding rendering path (table, comment, ledger, multi-issue FINDINGS
+    branch) had never executed."""
+
+    def test_two_findings_are_two_table_rows(self):
+        findings, meta = _meta_for(_two_benches_regress())
+        assert [(f.bench, f.kind) for f in findings] == \
+            [(_BENCH_B, "sustained"), (_BENCH, "sustained")]
+        rows = [li for li in ab.render_trend_issue_body(findings, meta).splitlines()
+                if li.startswith("| `Benchmark")]
+        assert len(rows) == 2
+        assert rows[0].startswith(f"| `{_BENCH_B}` | sustained |")
+        assert rows[1].startswith(f"| `{_BENCH}` | sustained |")
+
+    def test_findings_come_out_in_sorted_order(self):
+        # `for bench in sorted(benches)` is the ONLY thing that makes the finding
+        # order deterministic: `benches` is a set and str hashing is randomised
+        # per process, and `meta`'s lists are re-sorted on the way out so the
+        # loop order leaks nowhere else. Two benches would catch an unsorted loop
+        # about half the time; five inserted in scrambled order catch it in 119
+        # runs out of 120.
+        scrambled = [_BENCH, _BENCH_D, _BENCH_C, _BENCH_E, _BENCH_B]
+        nights = [_multi(i, {b: (45.5e6 if i < 3 else 35e6) for b in scrambled}, _EPYC)
+                  for i in range(9)]
+        findings, _meta = _meta_for(nights)
+        assert [f.bench for f in findings] == \
+            [_BENCH_D, _BENCH_B, _BENCH_C, _BENCH, _BENCH_E]
+
+    def test_one_transition_category_can_name_two_benches(
+            self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _two_benches_regress(),
+                           issues=[_issue(42, body=ab._render_state_marker([]))])
+        capsys.readouterr()
+        comment = _body_of(_one(calls, "issue", "comment", "42"))
+        assert f"**Newly flagged:** `{_BENCH_B}`, `{_BENCH}`" in comment.splitlines()
+
+    def test_the_ledger_can_carry_two_unverified_rows(self):
+        state = [[_BENCH, "sustained"], [_BENCH_B, "creep"], [_BENCH_C, "sustained"]]
+        meta = {"evaluated_benches": [_BENCH_C]}
+        unverified = ab._unverified_benches(state, meta)
+        assert unverified == [_BENCH_B, _BENCH]
+        assert ab._tracked_rows(state, unverified) == \
+            [[_BENCH_B, "creep"], [_BENCH, "sustained"]]
+
+    def test_two_tracked_rows_are_named_together_in_the_body(
+            self, monkeypatch, tmp_path, capsys):
+        nights = []
+        for i in range(9):
+            row = {_BENCH_B: 12e6}
+            if i >= 3:
+                row[_BENCH] = 35e6
+            nights.append(_multi(i, row, _EPYC))
+        _rc, calls = _live(monkeypatch, tmp_path, nights,
+                           issues=[_issue(42, state=[[_BENCH, "sustained"],
+                                                     [_BENCH_C, "creep"]])])
+        capsys.readouterr()
+        body = _body_of(_one(calls, "issue", "edit", "42"))
+        assert f"`{_BENCH_C}` (creep), `{_BENCH}` (sustained)" in body
+        assert "tonight could not measure them" in body
+        assert ab._parse_state_marker(body) == [[_BENCH_C, "creep"],
+                                                [_BENCH, "sustained"]]
+
+    def test_findings_touch_only_the_first_of_several_open_issues(
+            self, monkeypatch, tmp_path, capsys):
+        # Pinned as SHIPPED behaviour, NOT as desirable: the FINDINGS branch
+        # files a new issue only when `open_issues` is empty and updates only
+        # `[0]`, so one wedged issue absorbs every later regression in the repo.
+        # See the KNOWN LIMITATION block in the module.
+        issues = [_issue(11, body=ab._render_state_marker([])),
+                  _issue(22, state=[[_BENCH_C, "creep"]])]
+        _rc, calls = _live(monkeypatch, tmp_path, _two_benches_regress(), issues=issues)
+        capsys.readouterr()
+        assert [c[2] for c in _sel(calls, "issue", "edit")] == ["11"]
+        assert [c[2] for c in _sel(calls, "issue", "comment")] == ["11"]
+        assert _sel(calls, "issue", "create") == []
+
+
+class TestCanarySampleCountBoundary:
+    """B6 — `canary_n >= 2` is the judgement "this is a measurement, not the
+    absence of one", and `canary_n == 2` never occurred in the suite: `>= 3` and
+    `>= 6` both survived. `_cv`'s own `len < 2` boundary was equally open."""
+
+    def _canary_on(self, n):
+        """9 same-class nights; exactly the newest `n` carry the canary."""
+        return [_multi(i, {_BENCH: 35e6}, _EPYC,
+                       canary_ns=360_000.0 if i < n else None)
+                for i in range(9)]
+
+    def test_two_samples_is_a_measurement(self):
+        _f, meta = _meta_for(self._canary_on(2))
+        assert meta["canary_n"] == 2
+        body = ab.render_trend_issue_body([], meta)
+        assert "Control-canary night-to-night CV: **0.00%**" in body
+        assert "max of fixed minimum and canary-noise-scaled" in body
+        assert "not measured" not in body
+
+    def test_one_sample_is_not(self):
+        _f, meta = _meta_for(self._canary_on(1))
+        assert meta["canary_n"] == 1
+        assert "Control-canary night-to-night CV: **not measured**" in \
+            ab.render_trend_issue_body([], meta)
+
+    def test_cv_needs_two_points_not_three(self):
+        # `len(vals) < 2` → `< 3` reports a real two-night jitter as 0.0, which
+        # is the same value the code uses for "never measured" — and it lowers
+        # the floor while claiming the runner is perfectly stable.
+        assert ab._cv([90.0, 110.0]) == pytest.approx(0.14142, rel=1e-4)
+        assert ab._cv([100.0, 100.0]) == 0.0
+
+
+class TestMarkerVersionIsAnchoredOnRead:
+    """B7 — the WRITER's serialisation is byte-exact-pinned; the READER's regex
+    was not, so `v1` could be widened to `v[19]` or `\\S+` with the suite green.
+    Nothing fed it a marker with the wrong version and asserted it is NOT read."""
+
+    def test_a_different_version_is_not_parsed(self):
+        assert ab._parse_state_marker('<!-- perf-trend-state v2 [["A","creep"]] -->') is None
+        assert ab._parse_state_marker('<!-- perf-trend-state v9 [["A","creep"]] -->') is None
+
+    def test_a_missing_version_is_not_parsed(self):
+        assert ab._parse_state_marker('<!-- perf-trend-state [["A","creep"]] -->') is None
+
+    def test_a_foreign_marker_name_is_not_parsed(self):
+        assert ab._parse_state_marker('<!-- other-state v1 [["A","creep"]] -->') is None
+
+    def test_the_v1_marker_this_module_writes_still_parses(self):
+        assert ab._parse_state_marker(ab._render_state_marker([["A", "creep"]])) == \
+            [["A", "creep"]]
+
+    def test_a_future_version_cannot_shadow_the_real_marker(self):
+        # Parsing takes the LAST match, so a v2 payload appended AFTER the real
+        # marker is what a loosened version pattern would hand back.
+        body = (ab._render_state_marker([["Real", "sustained"]])
+                + '\n<!-- perf-trend-state v2 [["Forged","creep"]] -->')
+        assert ab._parse_state_marker(body) == [["Real", "sustained"]]
+
+
+class TestArgparseDefaultsArePinned:
+    """B8 — every default was free to drift: 3→2 recent nights, 5→7% floor,
+    14→20 nights of history all survived. These ARE the watchdog's policy;
+    nothing else in the repo states them."""
+
+    def _args(self, monkeypatch, *argv):
+        seen = {}
+
+        def capture(a):
+            seen["args"] = a
+            return 0
+
+        monkeypatch.setattr(ab, "run_trend_watch", capture)
+        monkeypatch.setattr("sys.argv", ["analyze_bench_history.py", *argv])
+        assert ab.main() == 0
+        return seen["args"]
+
+    def test_trend_watch_defaults(self, monkeypatch):
+        a = self._args(monkeypatch, "--trend-watch")
+        assert (a.recent_nights, a.trend_limit) == (3, 14)
+        assert (a.min_floor_pct, a.creep_floor_pct, a.canary_floor_mult) == (5.0, 10.0, 3.0)
+        assert a.assignee == "vencil"
+        assert a.workflow == "bench-record.yaml"
+        assert a.dry_run is False
+
+    def test_variance_gate_defaults(self, monkeypatch):
+        a = self._args(monkeypatch, "--trend-watch")
+        assert a.limit == 28
+        assert a.ci is False and a.no_gate is False
+
+    def test_fixture_switches_default_to_live_mode(self, monkeypatch):
+        a = self._args(monkeypatch, "--trend-watch")
+        assert (a.fixture_json, a.fixture_open_issue, a.fixture_open_body,
+                a.fixture_open_labels, a.cache_dir) == (None, None, None, None, None)
+
+    def test_overrides_still_win(self, monkeypatch):
+        a = self._args(monkeypatch, "--trend-watch", "--recent-nights", "5",
+                       "--min-floor-pct", "7.5", "--dry-run")
+        assert (a.recent_nights, a.min_floor_pct, a.dry_run) == (5, 7.5, True)
+
+
+class TestBenchLineRegexIsTight:
+    """B9 — `_BENCH_RE` could be loosened in three independent ways with the
+    suite green. It is the only thing between the detector and lines that merely
+    look numeric."""
+
+    def _parse(self, tmp_path, text):
+        f = tmp_path / "b.txt"
+        f.write_text(text, encoding="utf-8")
+        return list(ab.parse_bench_file(f, run_id=1))
+
+    def test_the_vcpu_suffix_is_required(self, tmp_path):
+        # `go test -bench` always emits `-N`; without it the line is not a row
+        # this tool wrote, and its columns mean something else.
+        assert self._parse(tmp_path, "BenchmarkX   100   123 ns/op\n") == []
+
+    def test_the_unit_must_be_exactly_ns_per_op(self, tmp_path):
+        assert self._parse(tmp_path, "BenchmarkX-4   100   123 ns/opx\n") == []
+        assert self._parse(tmp_path, "BenchmarkX-4   100   123 us/op\n") == []
+
+    def test_a_bench_row_must_start_the_line(self, tmp_path):
+        assert self._parse(tmp_path, "  BenchmarkX-4   100   123 ns/op\n") == []
+        assert self._parse(tmp_path, "ok BenchmarkX-4   100   123 ns/op\n") == []
+
+    def test_both_numeric_columns_are_required(self, tmp_path):
+        assert self._parse(tmp_path, "BenchmarkX-4   many   123 ns/op\n") == []
+        assert self._parse(tmp_path, "BenchmarkX-4   100   fast ns/op\n") == []
+
+    def test_the_pattern_itself_is_anchored(self):
+        # `parse_bench_file` uses `.match`, which anchors on its own — so the
+        # `^` in the pattern is observable ONLY here. Pinned because the pattern
+        # is module-level state that a future caller may `.search` with.
+        assert ab._BENCH_RE.search("ok BenchmarkX-4   100   123 ns/op") is None
+
+    def test_the_canonical_row_still_parses(self, tmp_path):
+        s = self._parse(tmp_path, "BenchmarkX-4   100   123 ns/op   1024 B/op\n")
+        assert [(x.bench, x.ns_per_op) for x in s] == [("BenchmarkX", 123.0)]
+
+
+class TestCpuHeaderRegexIsTight:
+    """B9 (second half) — `_CPU_RE` decides the stratification key, so a
+    loosened pattern silently re-merges host classes."""
+
+    def _cpu(self, tmp_path, text):
+        f = tmp_path / "b.txt"
+        f.write_text(text, encoding="utf-8")
+        return ab.parse_cpu_model(f)
+
+    def test_an_indented_header_is_not_a_header(self, tmp_path):
+        assert self._cpu(tmp_path, f"   cpu: {_EPYC}\n") is None
+
+    def test_a_mid_line_mention_is_not_a_header(self, tmp_path):
+        assert self._cpu(tmp_path, f"note: the cpu: Fake\ncpu: {_EPYC}\n") == _EPYC
+
+    def test_the_pattern_itself_is_anchored(self):
+        # Same reasoning as `_BENCH_RE`: `parse_cpu_model` matches per line, so
+        # dropping `^` is invisible through the function alone.
+        assert ab._CPU_RE.search("note: the cpu: Fake") is None
+
+    def test_trailing_whitespace_is_trimmed_and_the_value_stays_whole(self, tmp_path):
+        # `(\S.*?)` is non-greedy: without the `\s*$` tail it matches ONE
+        # character and the whole runner pool collapses into class "A".
+        assert self._cpu(tmp_path, f"cpu: {_EPYC}   \n") == _EPYC
