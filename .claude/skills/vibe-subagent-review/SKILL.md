@@ -39,6 +39,8 @@ description: IaC-aware 兩階段 review — code 走 spec→quality、IaC 走 bl
 **3. finder ≠ verifier 自審 pass（方法論核心）**
 - 產出 findings 後，**再跑一輪對抗式**：逐條試著**推翻它**——上游有 mitigation 嗎？是 designed-behavior 嗎？data 真的這樣流嗎？測試真的沒蓋嗎？**活不下來的殺掉。**
 - 一個 **FIX 可能移除附帶防護** → 重跑原始 invariant 確認沒開新洞。
+- **修法 commit 本身是新的受審對象**，不是「原 commit 的附錄」——它常比被審的改動更大，而且沒被任何 lens 掃過。實測（#1431）：第一輪審的是 **814 行新增**，據此產出的修法 commit 是 **1336 行新增**（1.6×）且無人審，第二輪補審它才找到整輪唯一的 **Critical**。「已經審過一輪」永遠是指審過**那一版**。
+- **一輪修多條時防 fix-masking**：修法 A 新加的輸出／訊息可能替路徑 B 的缺口作答，讓 B 的回歸案例照樣轉綠、缺口測不出來。逐條驗收要**單獨還原該條修法**看測試轉不轉紅，不要一次還原全部再一起跑。
 - 這是 harness 的**單 agent 便宜版**；要**升級到多 agent** 見下節。
 
 ## 升級到多 agent harness（大 / 高風險 review；defer-with-trigger）

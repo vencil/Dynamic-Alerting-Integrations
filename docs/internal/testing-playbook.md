@@ -1491,6 +1491,24 @@ if bad:
     print("ANCHOR PROBLEM:", bad); sys.exit(1)   # ⛔ 在任何替換之前
 ```
 
+**命中一次仍可能改錯地方。** `count(old) == 1` 只證明「這個字串在檔裡唯一」，不證明「它是程式碼」。
+字串常數的 mutant 特別容易命中**註解**——註解常原樣引用它所描述的那個訊息。
+改到註解是 no-op，跑出來一樣是 SURVIVED，而你會把它讀成「這條修法根本沒生效」。
+
+實測踩到（#1431）：驗一條 anti-fabrication 修法時，替換字串命中的是描述該訊息的註解而非字串常數，
+332 支測試全綠，差點據此判定修法失效。改用 AST 定位到真正的常數後立刻轉紅。
+
+**字串常數的 mutant，動手前用 AST 確認命中的是 `ast.Constant`**——`ast.parse` 不保留註解，
+所以「AST 裡找不到」本身就是判準：
+
+```python
+tree = ast.parse(pathlib.Path(path).read_text(encoding="utf-8"))
+in_code = any(isinstance(n, ast.Constant) and isinstance(n.value, str) and old in n.value
+              for n in ast.walk(tree))
+if not in_code:
+    print("COMMENT-ONLY HIT:", name); sys.exit(1)   # ⛔ 改下去會是 no-op
+```
+
 ### 2. 每輪放兩個 control
 
 - **一個語意等價的 mutant，必須存活** — 證明測試套件不是在對任何改動都轉紅（那等於沒有鑑別力）。
@@ -1514,7 +1532,15 @@ finally:
 ```
 
 另外兩件會讓 mutant 靜默不生效的事：**跑之前清 `__pycache__`**（stale bytecode 會讓替換不生效）、
-以及整輪用 `PYTHONDONTWRITEBYTECODE=1`。sweep 通常超過單次工具 timeout，**丟背景跑再輪詢 `RESTORED`**。
+以及整輪用 `PYTHONDONTWRITEBYTECODE=1`（或 `python3 -B`）。
+sweep 通常超過單次工具 timeout，**丟背景跑再輪詢 `RESTORED`**。
+
+⚠️ **為什麼 stale bytecode 這條會間歇性咬人**：`.pyc` 的有效性只看 (原始檔 mtime **取秒**, 檔案 size)
+兩個欄位。所以**與原碼同長度、且在同一秒內寫入**的 mutant——正好是最常寫的那一種
+（`>=`→`>`、`and`→`or`、改一個字母的字串）——會沿用舊的 `.pyc`，**跑的是沒被改過的碼**，
+得到假的 SURVIVED。長度有變或跨秒寫入的 mutant 則正常生效。
+於是同一份 harness 會時對時錯，看起來像「測試套件不穩」而不像 harness bug——
+這是它難查的原因，也是為什麼清 cache 不是潔癖而是必要條件。
 
 ### 4. 存活的 mutant 有三種下場，而且要分開記
 
