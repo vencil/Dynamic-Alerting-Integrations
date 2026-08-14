@@ -305,6 +305,7 @@ main 的**持續退化**由 nightly trend watchdog 守望（下節），不靠 P
 
 ### Cross-references
 
+- **30 夜真實序列 + counterfactual harness**：[`audit-reports/bench-trend-2026-08/`](audit-reports/bench-trend-2026-08/README.md) —— 上節「同類主機分層 + 三態」的證據基礎（每夜 CPU 型號 + 20 支 bench 的 median），以及一支**直接 import `analyze_bench_history`** 的反事實 harness。動 `--trend-watch` 的判定前先跑它；改偵測面時它的第 3 項**應該**要 FAIL。⚠️ 序列從 job log 重建、GitHub job log 會過期，所以那份資料是存檔而非可重新產生的中間產物。
 - **Design rationale**（原 `bench-gate-rollout.md`，已隨內部 doc 清理移除）：Tier 1 + Tier 2 split、Scapegoat Trap / Noisy Neighbor Illusion / Broken Window / hardware floor escalation
 - **Codified gotchas**：user memory `feedback_github_actions_workflow_gotchas.md` — 13 traps from 12 rounds of adversarial review (Virtual-merge HEAD / Labeled trigger / fetch-depth / fork-PR write / fabricated SHA / Partial shard / alpha vs confidence / Ghost Green race / Blanket Immunity / Redundant Wait + Ghost Comment + Zero-regression crash / hetero CPU silent FN / sharding-on-hetero-pool antipattern / sequential dirty workspace + timeout tightrope)
 - **Issue tracker**：[#433](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/433) — W1 ✅ / W2 ✅ / W3 (FP rate observation, ~2 weeks) / W4 ✅ (Tier 2 shipped)
