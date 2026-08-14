@@ -27,9 +27,30 @@
 //     must be explicitly set — the plugin defaults to `false`, which
 //     would let our exact Phase .a0 debt pattern (`test.fixme()`)
 //     slip through unnoticed (verified: A-13 self-regression test
-//     was silent until we flipped this flag). Conditional forms
+//     was silent until we flipped this flag).
+//
+//   ⛔ CORRECTION (#1428). This comment used to end "Conditional forms
 //     (`test.skip(!isLinux, 'reason')`) still pass — honouring the
-//     playbook's "debt vs. environment gate" distinction.
+//     playbook's debt vs. environment gate distinction". That was never
+//     true. `allowConditional` defaults to false and is not set here, so
+//     the exemption branch in the rule is unreachable and EVERY form is an
+//     error. Measured against this exact config, all seven reported:
+//       test.skip()                      test.skip(cond, 'reason')
+//       test.fixme(cond, 'reason')       test.fixme(false, 'kept')
+//       test.skip('just because')        test.describe.skip(...)
+//       if (cond) { test.skip() }
+//     The config was right and four documents describing it were wrong; the
+//     documents were corrected rather than the flag flipped, because
+//     `allowConditional: true` is an ARITY check in the plugin
+//     (`node.arguments.length !== 0`), so it would also admit
+//     `test.skip(true, 'debt')` and `test.skip('reason')` — the second of
+//     which skips forever, since the string is read as a truthy condition.
+//
+//   So: environment differences do NOT go through an annotation here. Use
+//     the mechanisms this suite already runs on — a `--grep` tag (see
+//     `@critical` / `@visual` in package.json) or a project in
+//     playwright.config.ts. Whether to reopen the annotation route is an
+//     open question tracked with the measurements above.
 import playwright from 'eslint-plugin-playwright';
 import tseslint from 'typescript-eslint';
 

@@ -10,11 +10,16 @@ lang: zh
 
 > **目的**：登記所有 `test.fixme()` / `test.skip()` / a11y waiver / axe exclude 等**故意放過的前端品質債務**，避免「先 fixme、之後再說」的雪球債（v2.7.0 Phase .e review 發現此 pattern 後定規於 [`testing-playbook.md` §v2.7.0 LL §2](testing-playbook.md#2-testfixme-是債務標記不是先通過-ci的工具)）。
 >
-> **搭配的自動化**（v2.8.0 A-13）：ESLint `eslint-plugin-playwright/no-skipped-test` 已在 `tests/e2e/eslint.config.mjs` 設 `disallowFixme: true` + `allowConditional: false`，新加 `test.fixme()` / `test.skip()`（bare form）會被 pre-commit `playwright-lint` hook 或 CI 直接拒。登記**必須**發生在放 fixme 的 commit 前或同一 commit 內。
+> **搭配的自動化**（v2.8.0 A-13，#1428 修正）：ESLint `eslint-plugin-playwright/no-skipped-test` 已在 `tests/e2e/eslint.config.mjs` 設 `disallowFixme: true` + `allowConditional: false`。執行點有兩個，強度不同：
+>
+> - **本機** `playwright-lint` pre-commit hook — 會擋，但**只在有 `tests/e2e/node_modules` 的 checkout 裡跑得起來**。`node_modules` 是 gitignored，所以每一棵新開的 `git worktree` 都要先 `cd tests/e2e && npm ci`（缺席時 hook 會 fail 並印出這行，不是靜默略過）。
+> - **CI** `.github/workflows/playwright.yml` 的 `E2E Spec Lint (A-13)` job — 會跑，但 ⚠️ **是 advisory 不是 blocking**：該 job 與 `Smoke Tests (Chromium)` 都不在 main 的 required status checks 內（2026-08-14 用 branch-protection API 實查 19 個 context），紅了不擋 merge。⛔ 它刻意是**獨立 job 而不是 smoke job 裡的一個 step**——當 step 時一支被 park 的 spec 會讓瀏覽器安裝、portal 啟動與整輪 smoke 全部不執行，等於拿「E2E 跑過而且綠」換成「E2E 從沒跑」，而且照樣不擋 merge。要變成 blocking 見 [#1428](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1428)。
+>
+> ⛔ 這句原本寫的是「會被 pre-commit hook **或 CI** 直接拒」——CI 那半在 #1428 之前是假的（全 `.github/workflows/` grep `eslint` 零命中）。登記**必須**發生在放 fixme 的 commit 前或同一 commit 內。
 
 ## 登記規則
 
-1. **新增 `test.fixme()` / `test.skip()`（bare form）** — 此檔登記為**硬性條件**。條件式 `test.skip(!isLinux, 'reason')` 不屬於債務，不需登記。
+1. **新增 `test.fixme()` / `test.skip()`（任何形式）** — 此檔登記為**硬性條件**。⛔ 這一條原本寫「條件式 `test.skip(!isLinux, 'reason')` 不屬於債務，不需登記」——實測那種寫法**根本落不了地**（lint 對七種形式一律報錯，#1428），所以那句話描述的是一個不存在的通道。環境差異走 `--grep` tag 或 playwright.config.ts 的 project。
 2. **axe-core violation 寫 `allowedNonCriticalViolations > 0`** — 同等登記，註明放過的 violation 類型 + 預計修復版本。
 3. **Playwright `exclude` / `route` stub 長期存在** — 超過 1 個 minor 版本未銷案者登記。
 4. **跨版本殘留**：任何項目跨超過 1 個 minor 版本（如 v2.7.0 引入、v2.8.0 還在）**必須**走 [`testing-playbook.md` §v2.7.0 LL §2](testing-playbook.md#2-testfixme-是債務標記不是先通過-ci的工具) 的 knowledge annealing 三選一（calibrate / 刪測 / 改 `test.skip` 寫明放棄原因）。
@@ -29,7 +34,7 @@ lang: zh
 
 ## v2.8.0 — 目前待辦（active）
 
-_無登記項目。v2.8.0 PR #57 A-7 清零後，`test.fixme()` / `test.skip()`（bare form）在 E2E specs 為零，ESLint 強制守關。_
+_無登記項目。v2.8.0 PR #57 A-7 清零後，`test.fixme()` / `test.skip()`（bare form）在 E2E specs 為零，ESLint 守關（執行點與各自的強度見本頁開頭那段，兩者不等價）。_
 
 ## 歷史清零紀錄
 
@@ -54,6 +59,8 @@ _無登記項目。v2.8.0 PR #57 A-7 清零後，`test.fixme()` / `test.skip()`�
 - 教訓：**Playwright Node.js API 直接查 count/textContent 等同 `--ui` locator panel 信號**；不需 X11 GUI。
 
 **自動化守關**：同 PR 一併落地 A-13 ESLint（`tests/e2e/eslint.config.mjs` + pre-commit `playwright-lint` hook + Makefile `lint-e2e`），之後再有新 `test.fixme()` 進來會被 **commit-time** 擋下，不需再等 CI 或 review catch。
+
+> ⛔ **errata（#1428）**：上面這句在寫下的當時就不成立。`make lint-e2e` 當時**沒有任何呼叫端**（全 repo 只有 target 自身宣告與這一行提及），而「不需再等 CI」的實情是**根本沒有 CI 那一層**——真正的唯一執行點是本機 hook，且它在任何 `git worktree` 裡都因缺 `node_modules` 而失敗。#1428 之後三個入口（hook / `make lint-e2e` / `playwright.yml` 的 `E2E Spec Lint (A-13)` job）都改走同一支 `scripts/tools/lint/e2e_spec_lint.sh`，並由 `tests/lint/test_e2e_spec_lint.py` 釘住。⚠️ **`make lint-e2e` 仍然沒有自動觸發點**——它是人手動打的入口，#1428 沒有改變這件事，只是讓它不再與另外兩個分岔。現況以本頁開頭那段為準。
 
 ## 相關資源
 

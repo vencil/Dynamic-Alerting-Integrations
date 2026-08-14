@@ -942,14 +942,37 @@ repos:
 
       - id: playwright-lint
         name: Playwright spec lint (test.fixme/skip guard, A-13)
-        # A-13 enforcement: block new `test.fixme()` / `test.skip()` (bare
-        # form) from landing in E2E specs. Scoped to tests/e2e/*.spec.*.
-        # Conditional `test.skip(!isLinux, 'reason')` still allowed.
-        # Matches the narrow ESLint config at tests/e2e/eslint.config.mjs.
-        entry: bash -c 'cd tests/e2e && npm run --silent lint'
+        # A-13 enforcement: block new `test.fixme()` / `test.skip()` from
+        # landing in E2E specs. ⛔ EVERY form, including the conditional
+        # `test.skip(cond, 'reason')` — this comment used to say conditional
+        # was still allowed and that was measurably false (#1428). Environment
+        # differences go through a `--grep` tag or a playwright.config.ts
+        # project, not through an annotation. Rule and rationale live in
+        # tests/e2e/eslint.config.mjs.
+        #
+        # The command lives in the script, not here: the same file backs
+        # `make lint-e2e` and the "E2E Spec Lint (A-13)" job in
+        # .github/workflows/playwright.yml, so the three cannot drift (#1428).
+        # It also turns the bare `eslint: not found` that every fresh
+        # `git worktree add` produced into a message that names the remedy.
+        entry: bash scripts/tools/lint/e2e_spec_lint.sh
         language: system
         pass_filenames: false
-        files: ^tests/e2e/.*\.spec\.(ts|js)$
+        # The lint's OWN inputs belong in `files:` alongside its subjects —
+        # editing the rule config, the eslint version, or the runner script
+        # must re-run it, not wait for the next spec edit.
+        # ⛔ Deliberately NOT including .pre-commit-config.yaml: this file is
+        # edited constantly for unrelated reasons, and every such commit would
+        # then require `npm ci` in the work tree.
+        #
+        # ⛔ An earlier version of this comment claimed the `entry:` line was
+        # "covered by CI instead". It is not, and the claim was disproved by
+        # replacing the entry with `bash -c 'exit 0'`: 242 tests passed and an
+        # injected `test.fixme()` sailed through the hook. CI runs the SCRIPT,
+        # never this hook — no workflow names `playwright-lint` and this file
+        # is not in playwright.yml's `paths:` either. What actually covers the
+        # line is tests/lint/test_e2e_spec_lint.py, added for exactly that.
+        files: ^(tests/e2e/(.*\.spec\.(ts|js)|eslint\.config\.mjs|package(-lock)?\.json)|scripts/tools/lint/e2e_spec_lint\.sh)$
 
       - id: hardcode-tenant-check
         name: Detect hardcoded tenant literals in PromQL label selectors (Rule #2)

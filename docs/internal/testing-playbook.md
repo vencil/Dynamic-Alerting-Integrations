@@ -518,11 +518,17 @@ Portal 工具卡片是從 `tool-registry.yaml` 動態產生的 `.cards a.card`�
 
 #### 2. `test.fixme()` 是債務標記，不是「先通過 CI」的工具
 
-✅ **Codified（v2.8.0 PR #57）**：bare `test.fixme()` / `test.skip()` 已由 `tests/e2e/eslint.config.mjs` + pre-commit `playwright-lint` hook 在 commit-time 直接擋下（`eslint-plugin-playwright/no-skipped-test` `{ allowConditional: false, disallowFixme: true }`）。條件式 `test.skip(isChrome, 'reason')` 仍允許——「debt 標記」vs「環境閘門」的區分在自動化層生效。E2E 之外要 skip 改走 Python `pytest.skip`。
+✅ **Codified（v2.8.0 PR #57，#1428 補上 CI 腿並更正下面這段）**：`tests/e2e/eslint.config.mjs` 的 `eslint-plugin-playwright/no-skipped-test` `{ allowConditional: false, disallowFixme: true }` 擋下 E2E spec 裡**任何形式**的 `.skip()` / `.fixme()`。E2E 之外要 skip 改走 Python `pytest.skip`。
+
+⛔ **這裡原本寫「條件式 `test.skip(isChrome, 'reason')` 仍允許」，那句從來不成立。** `allowConditional` 預設 false 且本 repo 未設定，規則裡的豁免分支不可達。對這份設定實測，七種寫法全部報錯：`test.skip()`／`test.skip(cond,'reason')`／`test.fixme(cond,'reason')`／`test.fixme(false,'kept')`／`test.skip('just because')`／`test.describe.skip(...)`／`if (cond) { test.skip() }`。⇒ **「debt 標記 vs 環境閘門」這個區分在本 repo 的自動化層並不存在**，它只存在於 Playwright 上游的語意裡。
+
+⇒ **環境差異走 `--grep` tag 或 playwright.config.ts 的 project，不走 annotation**——兩者這套 suite 本來就在用（`@critical` 52 處、`@visual` 1 處；`projects:` 在 `playwright.config.ts:47`）。#1428 選擇**改敘述而不是翻設定**：`allowConditional: true` 在 plugin 裡是 **arity 檢查**（`node.arguments.length !== 0`），翻了會一併放行 `test.skip(true, 'debt')` 與 `test.skip('reason')`——後者的字串被當成 truthy condition，**永遠跳過而 lint 全綠**。是否重開 annotation 這條路是未定案的問題，量測已附在此。
+
+⚠️ **「commit-time 直接擋下」要加一個限定詞**：`playwright-lint` hook 只在有 `tests/e2e/node_modules` 的 checkout 裡跑得起來，而 `node_modules` 是 gitignored ⇒ **每一棵新開的 `git worktree` 對它都是壞的，且不會自己好**（先 `cd tests/e2e && npm ci`）。#1428 之前這是 A-13 的**唯一**執行點，server 側零覆蓋；現在 `.github/workflows/playwright.yml` 的 `E2E Spec Lint (A-13)` job 也跑同一支 `scripts/tools/lint/e2e_spec_lint.sh`（獨立 job，不是 smoke job 裡的 step——後者會讓一支被 park 的 spec 連帶取消整輪 smoke），但那條腿目前是 **advisory**：它與 `Smoke Tests (Chromium)` 都不在 main 的 required checks 內。
 
 **仍是人類判斷的兩件事**（lint 不管）：
 
-- **登記義務**：lint 擋 bare 形式，但 `test.skip(condition, ...)` 與 `test.fixme(false, ...)` 可繞過。這類仍需在 [`frontend-quality-backlog.md`](frontend-quality-backlog.md) 登記（測試名 / spec / 原因 / 預計移除版本），review 階段把關
+- **登記義務**：⛔ 這一列原本寫「lint 擋 bare 形式，但 `test.skip(condition, ...)` 與 `test.fixme(false, ...)` 可繞過」——**兩半都是假的**，實測那兩種寫法同樣被擋（#1428）。今天 lint 層沒有任何合法的 annotation 逃生門，所以「登記」不是 lint 的補位、而是**你決定要留下這筆債務時該做的事**：在 [`frontend-quality-backlog.md`](frontend-quality-backlog.md) 記下測試名 / spec / 原因 / 預計移除版本。⚠️ 唯一真的繞得過的是 `// eslint-disable-next-line playwright/no-skipped-test`，而**全 repo 沒有任何東西在掃它**——那條路目前只靠 review
 - **Calibration sprint trigger**：單一 spec `test.fixme()` 跨版本存留超過 1 個 minor 或單檔超過 5 條，排 calibration sprint 走 §5 checklist 清倉
 
 #### 3. Locator 穩定性優先順序（遷移 Token 後仍適用）
