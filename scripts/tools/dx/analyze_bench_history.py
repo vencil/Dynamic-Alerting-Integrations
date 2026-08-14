@@ -428,7 +428,7 @@ def render_markdown_table(
 # control canary's own night-to-night CV — movement smaller than the runner's
 # intrinsic noise (as measured by BenchmarkControlCanaryCPU) is never alerted.
 #
-# Three things about the POPULATION and the CLOSED LOOP were wrong until #1396:
+# Two things about the POPULATION the watchdog judges were wrong until #1396:
 #
 #   1. Host class (B) — GitHub's hosted runners are heterogeneous, and the `cpu:`
 #      header that says which machine ran was parsed by nobody. It is now read,
@@ -438,18 +438,23 @@ def render_markdown_table(
 #      host class only, and a night that cannot be judged is INCONCLUSIVE, which
 #      is neither "regressed" nor "recovered". Previously `findings == []` closed
 #      every open issue, so a night with no evaluable data announced recovery.
-#   3. Frozen anchor (D) — the sliding anchor is right for DETECTION and fatal
-#      for RECOVERY: a permanent regression ages into the settled window, the
-#      anchor rises to meet it, the finding vanishes, and the issue self-closed
-#      claiming perf "has returned below the floor". Replaying the real 30-night
-#      series with a +20% permanent step: 184 of 259 issues (71%) closed
-#      themselves while still fully regressed, median 6 nights after filing — and
-#      that is a LOWER bound, since a self-close falling past the end of the
-#      series counts here as "never closed". Closing now requires beating the
-#      anchor frozen the night the bench first fired, on the same host class;
-#      the same replay then yields 0 of 236.
 #
-# The FIRE arithmetic itself is untouched by all three.
+# The FIRE arithmetic itself is untouched by both.
+#
+# ⚠️ KNOWN AND DELIBERATELY NOT FIXED HERE — the recovery/close side still reads
+# the SLIDING anchor. A permanent regression ages into the settled window, the
+# anchor rises to meet it, the finding evaporates, and a CLEAR night closes the
+# issue. Replaying the real 30-night series with a +20% permanent step, that
+# still retires 160 of the 236 issues a real regression opened (68%, median 5
+# nights; the pre-#1396 unstratified code scored 184 of 259 / 71% / 6 nights, so
+# B+C move this barely at all — they were never meant to). A frozen per-bench
+# baseline was prototyped for exactly this and REVERTED before merge: it needs a
+# state lifecycle (ledger semantics, marker health, unjudgeable-forever rows)
+# that the prototype got wrong in six independent places, and its fail-closed
+# guards were provably never executed by any test. Detection (B+C) ships alone;
+# the close path is issue #1396's remaining follow-up and is being redesigned.
+# Until then the close COMMENT says what it actually measured, and says that the
+# anchor it measured against drifts.
 # ─────────────────────────────────────────────────────────────────────────────
 
 CANARY_BENCH = "BenchmarkControlCanaryCPU"
@@ -459,27 +464,6 @@ PERF_TREND_LABEL = "perf-trend"
 # from "on the mend" at a glance. Removed again the moment any `sustained`
 # finding reappears or the issue closes.
 RECOVERING_LABEL = "perf-trend:recovering"
-# Applied when a frozen row has been UNJUDGEABLE for several consecutive nights
-# — the bench stopped reporting, or the host class it was frozen on never came
-# back. Such an issue is a permanent wedge: it can never satisfy the recovery
-# check, and (deliberately) is never auto-closed either, because "silently
-# closed on no evidence" is the exact failure the frozen anchor exists to stop.
-# So it is made LOUD instead: the label plus the body's "Held" table say which
-# benches, for how many nights, and why — and a human decides. See
-# UNVERIFIABLE_DISCLOSE_AT.
-UNVERIFIABLE_LABEL = "perf-trend:unverifiable"
-# Consecutive unjudgeable nights before the label goes on. 3 = the same span the
-# sustained rule needs, i.e. "a full detection window has gone by without the
-# watchdog being able to say anything about this bench".
-UNVERIFIABLE_DISCLOSE_AT = 3
-
-# Marker row kinds. `sustained` / `creep` are FINDINGS (the bench is above its
-# floor tonight); `held` is a bench that is NOT flagged tonight but has not yet
-# proved recovery against its frozen baseline, so its row must survive (#1396
-# follow-up A — walking only tonight's findings evicted those rows and handed
-# back the free auto-close the frozen anchor was introduced to prevent).
-KIND_HELD = "held"
-FLAGGED_KINDS = frozenset({"sustained", "creep"})
 
 # Three-state verdict for one night (see `analyze_trend`). "no findings" is NOT
 # one state but two, and conflating them is what let a night on which NOTHING
@@ -597,31 +581,6 @@ class TrendFinding:
     recent_typical_ns: float
     pct_vs_anchor: float
     pct_typical_vs_anchor: float
-
-
-@dataclass
-class HeldRow:
-    """A bench on the marker that is NOT flagged tonight and has NOT proved recovery.
-
-    ``code`` is why it has not: ``above`` (measured, still over the frozen
-    baseline), ``absent`` / ``not-comparable`` (could not be measured at all —
-    these accumulate into ``streak``), or ``pending`` (no evidence was available
-    this run). Only a row with no reason at all may be retired from the marker.
-    """
-
-    bench: str
-    anchor_ns: float
-    cpu_model: str | None
-    code: str
-    reason: str
-    streak: int = 0
-    # The kind written back to the marker. `held` on any night that could judge
-    # the bench and did not flag it; on a night that judged NOTHING the prior
-    # kind is preserved instead, because downgrading a `sustained` row to `held`
-    # would be a state change made on no evidence — and would then read as a
-    # sustained→(nothing) transition next night, posting "Recovered (no longer
-    # flagged)" for a bench nobody measured.
-    kind: str = KIND_HELD
 
 
 def analyze_trend(
@@ -764,19 +723,6 @@ def analyze_trend(
     else:
         status = STATUS_INCONCLUSIVE
 
-    # Evidence for the CLOSE path (follow-up H). Fire looks at `recent_k` nights;
-    # close used to look at ONE (tonight), so recovery was judged on a ~√3-noisier
-    # statistic than detection — a single lucky night could retire a real
-    # regression. Same population and the same all-present alignment rule as the
-    # fire path above, so this costs nothing: it is the recent window's median.
-    recent_medians: dict[str, float] = {}
-    recent_nights = series[:recent_k]
-    if len(recent_nights) == recent_k:
-        for bench in {b for n in recent_nights for b in n.medians}:
-            vals = [n.medians.get(bench) for n in recent_nights]
-            if all(v is not None for v in vals):
-                recent_medians[bench] = statistics.median(vals)
-
     meta = {
         "canary_cv": canary_cv,
         "floor_pct": floor * 100,
@@ -796,7 +742,6 @@ def analyze_trend(
         "min_settled": min_settled,
         "evaluated_benches": sorted(evaluated),
         "inconclusive_benches": sorted(inconclusive),
-        "recent_medians": recent_medians,
     }
     return findings, meta
 
@@ -814,12 +759,13 @@ def _safe_md(text: str | None) -> str:
 
     The body carries the hidden state marker that is parsed back next night, so
     anything free-form written into the body AHEAD of that marker is a state-
-    injection surface. The runner's `cpu:` header is free-form and attacker-
-    adjacent enough to matter: a header containing a fake marker was measured to
-    hijack the parse outright — the real marker sat at offset 1773, the regex
-    matched the fake at 596, and ``_parse_frozen_anchors`` returned ``{}``, i.e.
-    every frozen baseline gone and the next CLEAR night free to auto-close a
-    still-regressed issue.
+    injection surface. Disclosing the runner's `cpu:` header (B) opened exactly
+    that surface: the header is free-form, and one containing a lookalike marker
+    was measured to hijack the parse outright — the real marker sat at offset
+    1773 and the regex matched the fake at 596, so the watchdog read a
+    prior-state the artifact had authored. From there the flagged-set diff is
+    whatever the fake says: a bench can be announced "Recovered (no longer
+    flagged)" without a single number moving.
 
     Two independent fixes, both applied on purpose: parsing takes the LAST match
     (see ``_marker_match``) and the comment delimiters are escaped here. Escaping
@@ -886,42 +832,6 @@ def _render_tonight_line(meta: dict) -> list[str]:
             + (f" (run `{run}`)." if run else ".")]
 
 
-def _render_held_lines(held: list[HeldRow]) -> list[str]:
-    """The zombie disclosure (follow-up F).
-
-    A frozen row that cannot be judged — the bench vanished from the recent
-    window, or its host class stopped appearing — is a permanent wedge: the
-    recovery check can never pass, so the issue can never auto-close. The chosen
-    behaviour is deliberately conservative: do NOT close it, make it VISIBLE.
-    For a watchdog, stuck-but-legible beats closed-on-no-evidence; only a human
-    can tell "the bench was renamed" from "the bench got so slow it timed out",
-    and exactly one of those must not be silently forgiven."""
-    if not held:
-        return []
-    lines = ["", "### Held — awaiting proof of recovery", "",
-             "| Bench | Frozen baseline | Frozen host class | Why this issue stays open "
-             "| Unjudgeable nights |", "|---|---:|---|---|---:|"]
-    for h in held:
-        lines.append(
-            f"| `{h.bench}` | {format_ns(h.anchor_ns)} "
-            f"| `{_safe_md(h.cpu_model) if h.cpu_model else 'unknown'}` "
-            f"| {h.reason} | {h.streak or '—'} |"
-        )
-    stuck = [h for h in held if h.streak >= UNVERIFIABLE_DISCLOSE_AT]
-    if stuck:
-        lines += [
-            "",
-            f"⚠️ **Not verifiable for ≥ {UNVERIFIABLE_DISCLOSE_AT} consecutive nights** "
-            + ", ".join(f"`{h.bench}` ({h.streak} nights)" for h in stuck)
-            + f". The watchdog will not close this on its own — it has nothing to close it "
-            f"ON — and it is not claiming the regression is gone either. A human decides: "
-            f"if the benchmark was renamed or retired, close this issue; if its host class "
-            f"simply stopped appearing in the pool, widen `--trend-limit` or wait. Labelled "
-            f"`{UNVERIFIABLE_LABEL}`.",
-        ]
-    return lines
-
-
 def _render_verdict_lines(findings: list[TrendFinding], meta: dict) -> list[str]:
     """Tonight's verdict, spelled out. FINDINGS renders the table; the other two
     states say in words why there is no table — because an empty table under a
@@ -946,10 +856,9 @@ def _render_verdict_lines(findings: list[TrendFinding], meta: dict) -> list[str]
     if not findings:
         return [
             "",
-            "### ✅ Nothing above its floor tonight",
+            "### ✅ Nothing above its floor tonight (CLEAR)",
             "",
-            "Benchmarks WERE evaluated and none is above its floor, but this issue is not "
-            "closed: see the held table below for what still has to be proved.",
+            "Benchmarks WERE evaluated on tonight's host class and none is above its floor.",
         ]
     return [
         "",
@@ -963,16 +872,15 @@ def _render_verdict_lines(findings: list[TrendFinding], meta: dict) -> list[str]
 
 
 def render_trend_issue_body(findings: list[TrendFinding], meta: dict,
-                            frozen: dict[str, tuple[float, str | None]] | None = None,
-                            rows: list[list] | None = None,
-                            held: list[HeldRow] | None = None) -> str:
-    """Render the issue body.
+                            state: list[list[str]] | None = None) -> str:
+    """Render the issue body (table + host-class disclosure + hidden state marker).
 
-    ``rows``/``held`` are the next marker state and the held-row disclosure as
-    computed by ``_ledger`` (the caller owns them because retiring a row needs
-    tonight's evidence). When they are omitted, ``frozen`` carries the anchors
-    already frozen by a previous night so they are preserved verbatim — the
-    frozen anchor must never re-baseline onto the drifted level."""
+    ``state`` overrides what goes into the hidden marker; it defaults to tonight's
+    findings. The only caller that overrides it is the INCONCLUSIVE path, which
+    refreshes the body on a night that measured NOTHING: writing tonight's empty
+    finding set there would erase the prior flagged set on no evidence, and the
+    next real transition comment would then announce every bench as "newly
+    flagged"."""
     lines = [
         "## Nightly bench trend regression",
         "",
@@ -996,20 +904,16 @@ def render_trend_issue_body(findings: list[TrendFinding], meta: dict,
             + ", ".join(f"`{b}`" for b in skipped)
         )
     lines += _render_verdict_lines(findings, meta)
-    lines += _render_held_lines(held or [])
-    if rows is None:
-        rows = _frozen_state(findings, frozen or {}, meta.get("today_cpu_model"))
     lines += [
         "",
         "_Auto-filed by `analyze_bench_history.py --trend-watch`. The watchdog updates this "
         "issue **in place** each night (no comment spam) and only comments when the set of "
-        "flagged benchmarks changes; it auto-closes only when the recent-window median falls "
-        "back below the FROZEN baseline captured when the issue was filed, measured on the "
-        "same host class (closed loop) — and never on a night that could evaluate nothing. "
+        "flagged benchmarks changes; it auto-closes when no benchmark is above its floor on "
+        "an evaluable night (closed loop) — and never on a night that could evaluate nothing. "
         "Single-night blips are filtered by the multi-night window; movement below the canary "
         "noise floor is ignored._",
         "",
-        _render_state_marker(rows),
+        _render_state_marker(_finding_state(findings) if state is None else state),
     ]
     return "\n".join(lines)
 
@@ -1021,34 +925,16 @@ def render_trend_issue_body(findings: list[TrendFinding], meta: dict,
 # a real transition — killing the daily comment spam that made #702 unreadable.
 # Greedy within the marker's own line (no DOTALL) so a nested JSON array
 # `[["x","y"]]` is captured whole, up to the last `]` before `-->`. Greedy is
-# safe here because the payload is json.dumps of rows whose free-form component
-# is only the runner's `cpu:` string (e.g. "AMD EPYC 7763 64-Core Processor") —
-# it contains no `-->`, quote or unbalanced bracket that could let the match
-# overrun, and any payload that somehow did would fail json.loads and degrade to
-# "no prior state" (silent, never a false recovery).
+# safe here because the payload is json.dumps of [[bench, kind]] where bench is
+# constrained by _BENCH_RE to [A-Za-z0-9_] and kind ∈ {creep, sustained} — so it
+# can never contain `-->`, an extra quote, or an unbalanced bracket that would let
+# the match overrun (a free-form payload would need base64; this one doesn't).
 #
-# v1 → v2 (#1396). v1 rows are [bench, kind]; v2 rows are
-# [bench, kind, frozen_anchor_ns, frozen_cpu_model, unverifiable_streak?] — the
-# anchor that was in force the FIRST night the bench fired, the host class it was
-# measured on, and (5th element, omitted when 0) how many consecutive nights the
-# row has been unjudgeable. v1 markers on already-open issues MUST keep parsing
-# (migration), and do: the version is not pinned in the regex and row length is
-# checked per row. A v1 row simply carries no frozen anchor, so that bench keeps
-# the pre-#1396 close behaviour instead of being wedged open forever.
-#
-# The version is CAPTURED (not just matched) because "which close path applies"
-# is a property of the marker's own declared version, not of a row-shape guess:
-# an empty v2 payload `[]` (every row retired) has the same shape as an empty v1
-# payload but the opposite meaning.
-_STATE_MARKER_RE = re.compile(r"<!--\s*perf-trend-state v(\d+)\s*(\[.*\])\s*-->")
-_STATE_MARKER_VERSION = "v2"
-
-# Marker health. The close path MUST distinguish these: only a marker we could
-# actually read may authorise an auto-close (follow-up B).
-MARKER_OK = "ok"              # v2+, every row parsed
-MARKER_LEGACY_V1 = "v1"       # pre-#1396 marker → documented legacy close path
-MARKER_ABSENT = "absent"      # no marker at all (hand-edited body / foreign issue)
-MARKER_DAMAGED = "damaged"    # marker present but (partly) unreadable
+# ⚠️ The BODY, however, now carries a free-form string: #1396 discloses the
+# runner's raw `cpu:` header, and it is printed ABOVE this marker. That is what
+# makes `_safe_md` (escape on the way out) and `_marker_match` (take the LAST
+# match on the way in) load-bearing rather than cosmetic — see their docstrings.
+_STATE_MARKER_RE = re.compile(r"<!--\s*perf-trend-state v1\s*(\[.*\])\s*-->")
 
 
 def _finding_state(findings: list[TrendFinding]) -> list[list[str]]:
@@ -1056,345 +942,40 @@ def _finding_state(findings: list[TrendFinding]) -> list[list[str]]:
     return sorted([f.bench, f.kind] for f in findings)
 
 
-def _flagged_only(state: list[list[str]]) -> list[list[str]]:
-    """Keep only rows that mean "flagged tonight".
-
-    The marker also carries `held` rows now (follow-up A). They are bookkeeping —
-    "not yet proved recovered" — not findings, so they must not reach the
-    transition comment (where a held row would read as a benchmark that was
-    flagged and then "Recovered (no longer flagged)", which is the opposite of
-    what it means) nor the recovering-label rule."""
-    return [[b, k] for b, k in state if k in FLAGGED_KINDS]
-
-
-def _frozen_state(findings: list[TrendFinding],
-                  prior_frozen: dict[str, tuple[float, str | None]],
-                  today_cpu: str | None,
-                  held: list[HeldRow] | None = None) -> list[list]:
-    """Marker rows: [bench, kind, frozen_anchor_ns, frozen_cpu_model, streak?].
-
-    A bench already present in ``prior_frozen`` KEEPS its original anchor — that
-    is the whole point. Re-freezing onto tonight's sliding anchor would re-create
-    the bug this fixes: the anchor creeps up to the regressed level, the finding
-    silently clears, and the issue closes itself claiming recovery.
-
-    ``held`` is the set of frozen benches that are NOT firing tonight and have not
-    proved recovery; ``_ledger`` computes it from tonight's evidence. Passing it
-    explicitly is what makes the marker a LEDGER instead of a snapshot: walking
-    only ``findings`` (as this did until the follow-up) evicted the frozen anchor
-    of any bench that merely dropped out of tonight's finding set, and an evicted
-    anchor cannot block anything — two benches recovering on different nights was
-    enough to hand back the false auto-close. When ``held`` is omitted the safe
-    default applies: every prior frozen row is carried forward untouched.
-    """
-    rows: list[list] = []
-    flagged = {f.bench for f in findings}
-    for f in findings:
-        anchor, cpu = prior_frozen.get(f.bench, (None, None))
-        if anchor is None:
-            anchor, cpu = f.anchor_ns, today_cpu
-        rows.append([f.bench, f.kind, anchor, cpu])
-    if held is None:
-        held = [HeldRow(b, a, c, "pending", "", 0)
-                for b, (a, c) in prior_frozen.items() if b not in flagged]
-    for h in held:
-        if h.bench in flagged:
-            continue
-        row: list = [h.bench, h.kind, h.anchor_ns, h.cpu_model]
-        if h.streak:
-            row.append(int(h.streak))
-        rows.append(row)
-    return sorted(rows, key=lambda r: (r[0], r[1]))
-
-
-def _render_state_marker(state: list[list]) -> str:
-    return (f"<!-- perf-trend-state {_STATE_MARKER_VERSION} "
-            f"{json.dumps(state, separators=(',', ':'))} -->")
+def _render_state_marker(state: list[list[str]]) -> str:
+    return f"<!-- perf-trend-state v1 {json.dumps(state, separators=(',', ':'))} -->"
 
 
 def _marker_match(body: str | None):
     """The LAST marker in the body, not the first.
 
     ``re.search`` took the first, and the body prints the runner's free-form
-    `cpu:` string ABOVE the marker — so a `cpu:` header containing a lookalike
-    marker hijacked the parse (measured: real marker at offset 1773, regex match
-    at 596, frozen anchors back as ``{}``, close path free to fire). The watchdog
-    always appends its own marker last, so last-match is the authoritative one.
-    ``_safe_md`` neuters the delimiters on the way in; this is the other half."""
+    `cpu:` string ABOVE the marker (that disclosure is #1396's B half) — so a
+    `cpu:` header containing a lookalike marker hijacked the parse: measured, the
+    real marker sat at offset 1773 and the regex matched the fake at 596. The
+    prior flagged-set then comes from the artifact rather than from the watchdog,
+    which is enough to post a fabricated "Recovered (no longer flagged)". The
+    watchdog always appends its own marker last, so last-match is the
+    authoritative one. ``_safe_md`` neuters the delimiters on the way out; this
+    is the other half."""
     if not body:
         return None
     matches = list(_STATE_MARKER_RE.finditer(body))
     return matches[-1] if matches else None
 
 
-def _state_marker_rows(body: str | None) -> tuple[str, list]:
-    """(health, surviving raw rows) — v1 2-tuples or v2 4/5-tuples.
-
-    Fail-OPEN was the bug (follow-up B): one malformed row made the whole marker
-    unreadable, ``_parse_frozen_anchors`` returned ``{}``, and ``{}`` was read
-    downstream as "this issue has no frozen baseline" → the legacy close path →
-    a still-regressed issue auto-closed. Measured on
-    ``[["BenchmarkA","sustained",1000.0,"…"],["oops"]]``: a +50% regression
-    closed the ticket. Hand-deleting the marker did the same thing.
-
-    So a bad row is SKIPPED, not fatal, and the health of the marker is reported
-    separately, because "unreadable" and "readable and empty" must not lead to
-    the same decision.
-    """
-    m = _marker_match(body)
-    if m is None:
-        return MARKER_ABSENT, []
-    try:
-        data = json.loads(m.group(2))
-    except ValueError:
-        return MARKER_DAMAGED, []
-    if not isinstance(data, list):
-        return MARKER_DAMAGED, []
-    rows, damaged = [], False
-    for row in data:
-        # len 3 = a v2 row missing its host class: not a v1 row, not a usable v2
-        # row. Treat as damage rather than silently dropping the anchor.
-        if not isinstance(row, list) or len(row) < 2 or len(row) == 3:
-            damaged = True
-            continue
-        rows.append(row)
-    if damaged:
-        return MARKER_DAMAGED, rows
-    try:
-        version = int(m.group(1))
-    except ValueError:
-        version = 0
-    return (MARKER_LEGACY_V1 if version <= 1 else MARKER_OK), rows
-
-
 def _parse_state_marker(body: str | None) -> list[list[str]] | None:
-    """Recover the prior flagged-set from an issue body, or None if
-    absent/unparseable (a legacy issue filed before this marker existed → caller
-    treats as no-change so the migration run is silent).
-
-    Version-agnostic on purpose: only [bench, kind] is needed for the transition
-    comment, and both v1 and v2 rows start with exactly that pair.
-    """
-    health, rows = _state_marker_rows(body)
-    if health == MARKER_ABSENT or (health == MARKER_DAMAGED and not rows):
+    """Recover the prior state from an issue body, or None if absent/unparseable
+    (a legacy issue filed before this marker existed → caller treats as no-change
+    so the migration run is silent)."""
+    m = _marker_match(body)
+    if not m:
         return None
-    return sorted([str(r[0]), str(r[1])] for r in rows)
-
-
-def _parse_frozen_anchors(body: str | None) -> dict[str, tuple[float, str | None]]:
-    """bench → (frozen_anchor_ns, frozen_cpu_model) from a v2 marker.
-
-    Empty dict for a v1 / absent / unparseable marker — i.e. "no frozen baseline
-    is known". ⚠️ That is NOT by itself permission to close: the caller must
-    consult ``_state_marker_rows``' health first, because only the v1 case means
-    "pre-#1396 issue, legacy close path"; absent/damaged mean "we do not know
-    what this issue was watching" and must fail closed (follow-up B).
-    """
-    _health, rows = _state_marker_rows(body)
-    out: dict[str, tuple[float, str | None]] = {}
-    for row in rows:
-        if len(row) < 4:
-            continue
-        try:
-            anchor = float(row[2])
-        except (TypeError, ValueError):
-            continue
-        if not math.isfinite(anchor) or anchor <= 0:
-            continue
-        cpu = str(row[3]) if row[3] is not None else None
-        out[str(row[0])] = (anchor, cpu)
-    return out
-
-
-def _parse_held_streaks(body: str | None) -> dict[str, int]:
-    """bench → consecutive nights the row could not be judged (5th row element)."""
-    _health, rows = _state_marker_rows(body)
-    out: dict[str, int] = {}
-    for row in rows:
-        if len(row) < 5:
-            continue
-        try:
-            n = int(row[4])
-        except (TypeError, ValueError):
-            continue
-        if n > 0:
-            out[str(row[0])] = n
-    return out
-
-
-# Block codes that mean "nothing was compared", as opposed to "compared, still
-# regressed". Only these accumulate toward the unverifiable disclosure, because
-# only these can persist forever regardless of how perf actually behaves.
-_UNVERIFIABLE_CODES = frozenset({"absent", "not-comparable"})
-
-
-def _recovery_block(bench: str, anchor: float, cpu: str | None,
-                    recent_medians: dict[str, float], today_cpu: str | None,
-                    floor: float) -> tuple[str, str] | None:
-    """(code, message) for one frozen row, or None when recovery is PROVEN.
-
-    ``code`` ∈ {"not-comparable", "absent", "above"}.
-
-    Same host class is a PRECONDITION, not a nicety, and "unknown" is not a
-    match (follow-up D). The old check skipped the comparison entirely when the
-    frozen host class was ``None`` and compared the raw numbers instead — which
-    means an issue frozen while the class was unknown could be closed by a night
-    on a completely different, faster machine, while ``_close_comment`` printed
-    "measured on the same host class". Unknown ≠ same. An unverified claim about
-    the host class must not be made, and a comparison that rests on one must not
-    be trusted.
-    """
-    if cpu is None or today_cpu is None or cpu != today_cpu:
-        return ("not-comparable",
-                f"`{bench}`: frozen baseline was measured on "
-                f"`{_safe_md(cpu) if cpu else 'unknown'}`, tonight's window is "
-                f"`{_safe_md(today_cpu) if today_cpu else 'unknown'}` — not comparable")
-    value = recent_medians.get(bench)
-    if value is None:
-        return ("absent",
-                f"`{bench}`: absent from the recent same-class window — nothing to compare")
-    if value >= anchor * (1 + floor):
-        return ("above",
-                f"`{bench}`: {format_ns(value)} still ≥ frozen baseline "
-                f"{format_ns(anchor)} × (1 + {floor:.1%})")
-    return None
-
-
-def _recovery_blockers(frozen: dict[str, tuple[float, str | None]],
-                       recent_medians: dict[str, float],
-                       today_cpu: str | None,
-                       floor: float) -> list[str]:
-    """Reasons NOT to close a perf-trend issue. Empty list = safe to close.
-
-    Why a frozen baseline is required (#1396, the Critical half)
-    -----------------------------------------------------------
-    The fire path anchors on the SLIDING settled-window median, which is correct
-    for detection but fatal for recovery: once a permanent regression has aged
-    into the settled window, the anchor rises to meet it, the finding evaporates,
-    and the watchdog closed the issue announcing "perf has returned below the
-    floor". Replaying the real 30-night series with a +20% permanent step, that
-    happened to 184 of 259 opened issues (71%, median 6 nights, and a lower bound
-    — a self-close past the end of the series counts as "never closed"); with
-    this check the same replay closes 0 of 236. Recovery is judged ONLY against the
-    anchor frozen when the bench first fired, and only against nights measured
-    on the same host class — cross-class numbers are not comparable, so they are
-    not evidence of anything.
-
-    ``recent_medians`` is the RECENT WINDOW's median per bench, not tonight alone
-    (follow-up H): firing needs `recent_k` nights to agree, so letting a single
-    night retire the issue made recovery the softer of the two tests in the same
-    tool. ``analyze_trend`` publishes it in ``meta`` off the same stratified
-    series, so the symmetry is free.
-
-    The ``>=`` is deliberate: a value sitting EXACTLY on
-    ``anchor × (1 + floor)`` has not come back below the floor, so it blocks.
-    """
-    blockers: list[str] = []
-    for bench, (anchor, cpu) in sorted(frozen.items()):
-        blocked = _recovery_block(bench, anchor, cpu, recent_medians, today_cpu, floor)
-        if blocked is not None:
-            blockers.append(blocked[1])
-    return blockers
-
-
-def _ledger(body: str | None, findings: list[TrendFinding], meta: dict,
-            *, allow_retire: bool) -> tuple[list[list], list[HeldRow]]:
-    """Next marker state + held-row disclosure for one open issue.
-
-    The marker is a LEDGER OF BENCHES NOT YET PROVEN RECOVERED (follow-up A), so
-    a row leaves it in exactly one way: that bench passes ``_recovery_block``.
-    Falling out of tonight's finding set is not proof of anything — the sliding
-    anchor drifting up onto the regression is the single most likely reason for
-    it, which is precisely the failure the frozen anchor exists to catch.
-
-    ``allow_retire`` is False on an INCONCLUSIVE night: nothing was evaluated, so
-    nothing may be retired, and the v1 rows of a pre-#1396 marker are carried
-    forward verbatim rather than migrated on no evidence.
-    """
-    prior_frozen = _parse_frozen_anchors(body)
-    prior_streaks = _parse_held_streaks(body)
-    _health, prior_rows = _state_marker_rows(body)
-    prior_kinds = {str(r[0]): str(r[1]) for r in prior_rows}
-    today_cpu = meta.get("today_cpu_model")
-    recent = meta.get("recent_medians") or {}
-    floor = meta.get("floor_pct", 0.0) / 100.0
-    flagged = {f.bench for f in findings}
-
-    held: list[HeldRow] = []
-    for bench, (anchor, cpu) in sorted(prior_frozen.items()):
-        if bench in flagged:
-            continue          # still firing → carried as a finding row, not held
-        blocked = _recovery_block(bench, anchor, cpu, recent, today_cpu, floor)
-        if blocked is None and allow_retire:
-            continue          # proven recovered → the row retires
-        code, reason = blocked if blocked else (
-            "pending", f"`{bench}`: below the frozen baseline, awaiting an evaluable night")
-        streak = prior_streaks.get(bench, 0) + 1 if code in _UNVERIFIABLE_CODES else 0
-        prior_kind = prior_kinds.get(bench, KIND_HELD)
-        kind = KIND_HELD if allow_retire or prior_kind not in FLAGGED_KINDS else prior_kind
-        held.append(HeldRow(bench, anchor, cpu, code, reason, streak, kind))
-
-    # v1 rows (no frozen anchor at all) keep their documented pre-#1396 semantics:
-    # they are retired by any night that could judge, and survive a night that
-    # could not. Rewriting them away on an INCONCLUSIVE night would lose the prior
-    # flagged set and make the next real transition comment announce every bench
-    # as "newly flagged".
-    carry: list[list] = []
-    if not allow_retire:
-        carry = [list(r) for r in prior_rows
-                 if len(r) == 2 and str(r[0]) not in flagged
-                 and str(r[0]) not in prior_frozen]
-
-    rows = _frozen_state(findings, prior_frozen, today_cpu, held=held) + carry
-    rows.sort(key=lambda r: (str(r[0]), str(r[1])))
-    return rows, held
-
-
-def _close_comment(frozen: dict[str, tuple[float, str | None]],
-                   recent_medians: dict[str, float],
-                   today_cpu: str | None,
-                   floor: float) -> str:
-    """The auto-close comment. Deliberately narrow: it may only claim what the
-    watchdog actually measured.
-
-    The old text — "Nightly perf has returned below the floor across the recent
-    window" — was false in the common case. "The floor" was the SLIDING anchor,
-    which by then had drifted up onto the regressed level, so the sentence
-    asserted a recovery that never happened. What is now said instead is exactly
-    what was compared: these benchmarks, against the baseline frozen when the
-    issue was filed, on this host class.
-
-    And the same-host-class clause is itself conditional (follow-up D). It used
-    to be printed unconditionally, including on the path where the frozen class
-    was unknown and therefore never compared — a sentence asserting an
-    equivalence the tool had not established. An unverified claim is not written
-    at all.
-    """
-    if not frozen:
-        # v1 / legacy marker: no frozen baseline exists, so only the weaker
-        # sliding-anchor statement is available — and it is labelled as such.
-        return (
-            "✅ Auto-closing (closed loop). This issue predates the frozen-baseline marker "
-            "(#1396), so recovery could only be judged against the *sliding* settled-window "
-            "anchor: no benchmark is currently above its floor. That anchor drifts with the "
-            "data, so this is weaker evidence than a frozen-baseline close. A new issue is "
-            "filed if it regresses again."
-        )
-    verified_class = today_cpu is not None and all(c == today_cpu for _a, c in frozen.values())
-    where = (f", measured on the same host class (`{_safe_md(today_cpu)}`)"
-             if verified_class else "")
-    detail = ", ".join(
-        f"`{b}` {format_ns(recent_medians[b])} < {format_ns(a)} × (1 + {floor:.1%})"
-        for b, (a, _c) in sorted(frozen.items()) if b in recent_medians
-    )
-    return (
-        "✅ Auto-closing (closed loop). The recent-window median — the same nights the "
-        "sustained rule reads, not a single lucky night — is back below the **frozen "
-        f"baseline** captured when this issue was filed{where}: {detail}.\n\n"
-        "_Scope: this compares those benchmarks against that frozen baseline. It is not a "
-        "claim about any other benchmark, host class, or the overall health of nightly perf. "
-        "A new issue is filed if it regresses again._"
-    )
+    try:
+        data = json.loads(m.group(1))
+        return sorted([str(b), str(k)] for b, k in data)
+    except (ValueError, TypeError):
+        return None
 
 
 def _is_recovering(findings: list[TrendFinding]) -> bool:
@@ -1414,7 +995,7 @@ def _recovering_label_change(findings: list[TrendFinding], prior_state: list[lis
     issue that was never sustained therefore never acquires it. `current_labels`
     gates the gh call so we never fire a redundant add/remove."""
     labelled = RECOVERING_LABEL in current_labels
-    prior_had_sustained = any(k == "sustained" for _, k in _flagged_only(prior_state))
+    prior_had_sustained = any(k == "sustained" for _, k in prior_state)
     recovering = _is_recovering(findings) and (prior_had_sustained or labelled)
     if recovering and not labelled:
         return "add"
@@ -1423,39 +1004,21 @@ def _recovering_label_change(findings: list[TrendFinding], prior_state: list[lis
     return None
 
 
-def _state_transition_comment(prior: list[list[str]], current: list[list[str]],
-                              held: list[HeldRow] | None = None) -> str | None:
+def _state_transition_comment(prior: list[list[str]],
+                              current: list[list[str]]) -> str | None:
     """Markdown summary of how the flagged-benchmark set changed since the prior
-    run, or None when nothing changed (→ body refreshed silently, no comment).
-
-    Only `sustained` / `creep` rows count as "flagged": a `held` row is a bench
-    the watchdog is still waiting on, and letting one through here would post
-    "**Recovered (no longer flagged):** `X`" about a benchmark whose whole reason
-    for being on the marker is that recovery has NOT been shown.
-
-    Dropping out of the flagged set is therefore reported two different ways, and
-    `held` is what tells them apart: a bench that left the ledger passed
-    ``_recovery_block`` and is genuinely recovered, while one that is still held
-    only stopped *firing* — most likely because the sliding anchor drifted up
-    onto its regression, which is the exact failure this whole change exists to
-    catch. Calling that "Recovered" in a comment would reintroduce the false
-    all-clear at the notification layer after we removed it from the close
-    decision."""
-    held_now = {h.bench for h in (held or [])}
-    prior, current = _flagged_only(prior), _flagged_only(current)
+    run, or None when nothing changed (→ body refreshed silently, no comment)."""
     if prior == current:
         return None
     prior_kind = {b: k for b, k in prior}
     cur_kind = {b: k for b, k in current}
     newly = sorted(b for b in cur_kind if b not in prior_kind)
-    gone = [b for b in prior_kind if b not in cur_kind]
-    cleared = sorted(b for b in gone if b not in held_now)
-    stopped_firing = sorted(b for b in gone if b in held_now)
+    cleared = sorted(b for b in prior_kind if b not in cur_kind)
     escalated = sorted(b for b in cur_kind
                        if b in prior_kind and prior_kind[b] != cur_kind[b] == "sustained")
     eased = sorted(b for b in cur_kind
                    if b in prior_kind and prior_kind[b] != cur_kind[b] == "creep")
-    if not (newly or cleared or stopped_firing or escalated or eased):
+    if not (newly or cleared or escalated or eased):
         return None  # defensive: states differ only in an unexpected way
     parts = ["## Perf-trend update", ""]
     if newly:
@@ -1466,11 +1029,6 @@ def _state_transition_comment(prior: list[list[str]], current: list[list[str]],
         parts.append("**Eased to creep:** " + ", ".join(f"`{b}`" for b in eased))
     if cleared:
         parts.append("**Recovered (no longer flagged):** " + ", ".join(f"`{b}`" for b in cleared))
-    if stopped_firing:
-        parts.append("**Stopped firing but NOT proved recovered:** "
-                     + ", ".join(f"`{b}`" for b in stopped_firing)
-                     + " — still measured against the frozen baseline; see the "
-                       "Held table in the issue body.")
     parts += ["", "_See the issue body for the full current table. Posted only on a "
               "change in the flagged set — the body is refreshed silently every night._"]
     return "\n".join(parts)
@@ -1523,51 +1081,43 @@ def _step_summary(markdown: str) -> None:
         print(f"  ⚠️  could not write step summary: {exc}", file=sys.stderr)
 
 
-def _sync_label(num: int, label: str, want: bool, current_labels: list[str],
-                args, gh_available: bool, *, color: str, description: str) -> str | None:
-    """Add/remove `label` on issue #num only when its presence has to change."""
-    has = label in current_labels
-    if want == has:
-        return None
-    action = "add" if want else "remove"
-    print(f"→ {'[dry-run] would ' if args.dry_run else ''}{action} "
-          f"`{label}` label", file=sys.stderr)
-    if args.dry_run or not gh_available:
-        return action
-    if want:
-        subprocess.run(
-            ["gh", "label", "create", label, "--repo", REPO, "--color", color,
-             "--description", description, "--force"],
-            capture_output=True, text=True, check=False, timeout=60,
-        )
-        _gh_write(["issue", "edit", str(num), "--repo", REPO, "--add-label", label])
-    else:
-        _gh_write(["issue", "edit", str(num), "--repo", REPO, "--remove-label", label])
-    return action
+def _file_new_issue(body: str, assignee: str | None, n_findings: int) -> bool:
+    """File the perf-trend issue; return whether one actually exists afterwards.
 
+    Assign when requested, but NEVER let an unresolvable login block the alert:
+    the default assignee is the repo OWNER, which `gh issue create --assignee`
+    rejects ("Could not resolve to a User") if the owner is a GitHub Org rather
+    than a User. Try with the assignee; on failure, retry unassigned (the
+    `perf-trend` label still drives notification).
 
-def _sync_unverifiable_label(issue: dict, want: bool, args, gh_available: bool) -> str | None:
-    return _sync_label(
-        issue["number"], UNVERIFIABLE_LABEL, want,
-        [l.get("name") for l in (issue.get("labels") or [])], args, gh_available,
-        color="D93F0B",
-        description="perf-trend: recovery cannot be verified — needs a human",
-    )
-
-
-def _marker_health_warning(issue: dict, health: str) -> str | None:
-    """The ::warning:: text for an unusable marker, or None when it is usable."""
-    if health == MARKER_ABSENT:
-        return (f"perf-trend issue #{issue['number']} carries NO state marker (hand-edited "
-                "body, or an issue labelled `perf-trend` by a human). The watchdog does not "
-                "know what it was watching, so it will NOT auto-close it — close it by hand "
-                "once perf is confirmed good.")
-    if health == MARKER_DAMAGED:
-        return (f"perf-trend issue #{issue['number']} has a DAMAGED state marker (unparseable "
-                "rows). Surviving rows are still honoured, but the watchdog will NOT "
-                "auto-close it — a marker it could not fully read is not evidence of "
-                "recovery. Fix or clear the marker by hand.")
-    return None
+    ⚠️ The "filed unassigned" annotation is emitted AFTER the retry, never
+    before. It used to fire the moment the ASSIGNED create failed — asserting the
+    issue had been filed unassigned one line before the only call that could make
+    that true. When the retry also failed, the nightly run ended with no issue,
+    exit 0, and its single annotation claiming a ticket existed. Total failure is
+    now its own, louder message: no ticket, nobody notified.
+    """
+    create = ["issue", "create", "--repo", REPO,
+              "--title", "Nightly bench trend regression detected",
+              "--label", PERF_TREND_LABEL, "--body", body]
+    filed = False
+    assign_failed = False
+    if assignee:
+        filed = _gh_write(create + ["--assignee", assignee])
+        assign_failed = not filed
+    if not filed:
+        filed = _gh_write(create)
+        if filed and assign_failed:
+            _warn(f"could not assign '{assignee}' (org name? invalid login?) — the "
+                  "perf-trend issue was filed UNASSIGNED; rely on the label for "
+                  "notification.")
+    if not filed:
+        detail = (f"{n_findings} benchmark(s) above the floor but NO issue could be "
+                  "filed — every `gh issue create` attempt failed")
+        _warn(f"perf-trend watchdog: {detail}. Nobody has been notified; the findings "
+              "exist only in this job's log and step summary.")
+        _step_summary(f"⚠️ **perf-trend watchdog: issue creation FAILED** — {detail}.")
+    return filed
 
 
 def run_trend_watch(args) -> int:
@@ -1594,8 +1144,18 @@ def run_trend_watch(args) -> int:
 
     try:
         if len(nights) < args.recent_nights + 2:
-            print(f"→ only {len(nights)} usable nights — need ≥ {args.recent_nights + 2}; "
-                  "skipping trend verdict (not enough history yet).", file=sys.stderr)
+            # Same class of failure as INCONCLUSIVE, and it used to be even more
+            # silent: a stderr line nobody reads, exit 0, no annotation, no
+            # summary. "The watchdog could not run" and "the watchdog found
+            # nothing" looked identical from the outside.
+            detail = (f"only {len(nights)} usable nights — need ≥ {args.recent_nights + 2}; "
+                      "no trend verdict was computed (not enough history yet)")
+            print(f"⚠️  {detail}.", file=sys.stderr)
+            _warn(f"perf-trend watchdog did NOT run — {detail}. Tonight's numbers were not "
+                  "checked for regressions; this is not a passing perf verdict.")
+            _step_summary(
+                f"⚠️ **perf-trend watchdog: not evaluated** — {detail}."
+            )
             return EXIT_OK
 
         findings, meta = analyze_trend(
@@ -1618,17 +1178,7 @@ def run_trend_watch(args) -> int:
             open_issues = _list_open_trend_issues() if gh_available else []
 
         if findings:
-            # Frozen anchors are carried over from the OPEN issue's marker so the
-            # baseline this regression will eventually be judged against is the
-            # one in force the night it was first filed — never tonight's drifted
-            # sliding anchor. The ledger additionally KEEPS the rows of benches
-            # that stopped firing but have not proved recovery (follow-up A).
-            prior_body = open_issues[0].get("body") if open_issues else None
-            health, _rows = _state_marker_rows(prior_body)
-            if open_issues and health == MARKER_DAMAGED:
-                _warn(_marker_health_warning(open_issues[0], health))
-            rows, held = _ledger(prior_body, findings, meta, allow_retire=True)
-            body = render_trend_issue_body(findings, meta, rows=rows, held=held)
+            body = render_trend_issue_body(findings, meta)
             print(body)
             _step_summary(
                 f"⚠️ **perf-trend watchdog: {len(findings)} benchmark(s) above the floor** — "
@@ -1643,7 +1193,7 @@ def run_trend_watch(args) -> int:
                 prior_state = _parse_state_marker(open_issues[0].get("body"))
                 if prior_state is None:
                     prior_state = current_state
-                transition = _state_transition_comment(prior_state, current_state, held)
+                transition = _state_transition_comment(prior_state, current_state)
                 cur_labels = [l.get("name") for l in (open_issues[0].get("labels") or [])]
                 label_change = _recovering_label_change(findings, prior_state, cur_labels)
                 verb = "[dry-run] would update" if args.dry_run else "updating"
@@ -1684,11 +1234,6 @@ def run_trend_watch(args) -> int:
                     if transition:
                         _gh_write(["issue", "comment", str(num), "--repo", REPO,
                                    "--body", transition])
-                # Held rows that nothing can judge are disclosed, never closed.
-                _sync_unverifiable_label(
-                    open_issues[0],
-                    any(h.streak >= UNVERIFIABLE_DISCLOSE_AT for h in held),
-                    args, gh_available)
             else:
                 assignee_note = f" (assignee: {args.assignee})" if args.assignee else ""
                 print(f"→ {'[dry-run] would open' if args.dry_run else 'opening'} "
@@ -1701,25 +1246,7 @@ def run_trend_watch(args) -> int:
                          "Nightly bench trend regression (auto-filed)", "--force"],
                         capture_output=True, text=True, check=False, timeout=60,
                     )
-                    create = ["issue", "create", "--repo", REPO,
-                              "--title", "Nightly bench trend regression detected",
-                              "--label", PERF_TREND_LABEL, "--body", body]
-                    # Assign when requested, but NEVER let an unresolvable login
-                    # block the alert: the default assignee is the repo OWNER,
-                    # which `gh issue create --assignee` rejects ("Could not
-                    # resolve to a User") if the owner is a GitHub Org rather than
-                    # a User. Try with the assignee; on failure, file unassigned
-                    # (the `perf-trend` label still drives notification).
-                    filed = False
-                    if args.assignee:
-                        filed = _gh_write(create + ["--assignee", args.assignee])
-                        if not filed:
-                            print(f"::warning::could not assign '{args.assignee}' "
-                                  "(org name? invalid login?) — filing perf-trend issue "
-                                  "unassigned; rely on the label for notification.",
-                                  file=sys.stderr)
-                    if not filed:
-                        _gh_write(create)
+                    _file_new_issue(body, args.assignee, len(findings))
             return EXIT_OK
 
         # ── No findings. That is TWO different situations, not one. ──────────
@@ -1749,82 +1276,35 @@ def run_trend_watch(args) -> int:
                 num = issue["number"]
                 print(f"→ NOT closing perf-trend issue #{num} — tonight is "
                       "INCONCLUSIVE, not recovered.", file=sys.stderr)
-                health, _rows = _state_marker_rows(issue.get("body"))
-                warning = _marker_health_warning(issue, health)
-                if warning:
-                    # Never overwrite a marker we could not read: rewriting would
-                    # replace unreadable state with a fresh EMPTY one, which the
-                    # next CLEAR night would happily close on.
-                    _warn(warning)
-                    _sync_unverifiable_label(issue, True, args, gh_available)
-                    continue
                 # Refresh the body so the ticket says WHICH night it is showing
-                # and that tonight was not one of them. Nothing may be retired
-                # here: allow_retire=False (no evidence was produced tonight).
-                rows, held = _ledger(issue.get("body"), [], meta, allow_retire=False)
-                body = render_trend_issue_body([], meta, rows=rows, held=held)
+                # and that tonight was not one of them. The marker is rewritten
+                # from the PRIOR state, not from tonight's empty finding set:
+                # tonight produced no evidence, so it may not rewrite the flagged
+                # set (which would make the next real transition announce every
+                # bench as newly flagged).
+                body = render_trend_issue_body(
+                    [], meta, state=_parse_state_marker(issue.get("body")) or [])
                 print(f"→ {'[dry-run] would update' if args.dry_run else 'updating'} body of "
                       f"perf-trend issue #{num} (INCONCLUSIVE — not evaluated tonight)",
                       file=sys.stderr)
                 if not args.dry_run and gh_available:
                     _gh_write(["issue", "edit", str(num), "--repo", REPO, "--body", body])
-                _sync_unverifiable_label(
-                    issue, any(h.streak >= UNVERIFIABLE_DISCLOSE_AT for h in held),
-                    args, gh_available)
             return EXIT_OK
 
-        # CLEAR = benches WERE judged and none is above its floor. Close EVERY
-        # open perf-trend issue (not just [0]) so stragglers never linger, and
-        # CLOSE BEFORE commenting so a transient comment failure can't leave a
-        # recovered issue open — but only for issues whose FROZEN baseline
-        # confirms the recovery.
+        # CLEAR = benches WERE judged on tonight's host class and none is above
+        # its floor. Close EVERY open perf-trend issue (not just [0]) so
+        # stragglers never linger, and CLOSE BEFORE commenting so a transient
+        # comment failure can't leave a recovered issue open.
+        #
+        # ⚠️ The evidence here is the SLIDING settled-window anchor, so this
+        # close is weaker than it looks and the comment says so rather than
+        # claiming a recovery the watchdog cannot observe. Hardening it (a
+        # per-bench baseline frozen when the issue was filed) is #1396's open
+        # follow-up; a first attempt was reverted for getting the surrounding
+        # state lifecycle wrong.
         print("✅ No sustained nightly bench regression.")
-        floor = meta["floor_pct"] / 100.0
-        # The recent-window median, not tonight alone — symmetric with fire (H).
-        recent = meta.get("recent_medians") or {}
-        today_cpu = meta.get("today_cpu_model")
         for issue in open_issues:
             num = issue["number"]
-            health, _rows = _state_marker_rows(issue.get("body"))
-            warning = _marker_health_warning(issue, health)
-            if warning:
-                # FAIL CLOSED (follow-up B). "I could not read the state" is not
-                # "there was no state": auto-closing here is exactly how a
-                # hand-deleted or half-corrupt marker turned a +50% regression
-                # into a closed ticket. The body is deliberately NOT rewritten —
-                # planting a fresh empty marker over unreadable state would make
-                # the next CLEAR night close it after all.
-                print(f"→ NOT closing perf-trend issue #{num} — its state marker is "
-                      f"{'absent' if health == MARKER_ABSENT else 'damaged'}.",
-                      file=sys.stderr)
-                _warn(warning)
-                _step_summary(f"⚠️ **perf-trend watchdog: issue #{num} not auto-closed** — "
-                              f"state marker {'absent' if health == MARKER_ABSENT else 'damaged'}; "
-                              "close it by hand once perf is confirmed good.")
-                _sync_unverifiable_label(issue, True, args, gh_available)
-                continue
-            frozen = _parse_frozen_anchors(issue.get("body"))
-            blockers = _recovery_blockers(frozen, recent, today_cpu, floor)
-            if blockers:
-                print(f"→ NOT closing perf-trend issue #{num} — the frozen baseline does not "
-                      "confirm recovery: " + "; ".join(blockers), file=sys.stderr)
-                # Refresh the body so the held table (and the count of nights a
-                # row has been unjudgeable) is visible on the ticket itself.
-                rows, held = _ledger(issue.get("body"), [], meta, allow_retire=True)
-                body = render_trend_issue_body([], meta, rows=rows, held=held)
-                print(f"→ {'[dry-run] would update' if args.dry_run else 'updating'} body of "
-                      f"perf-trend issue #{num} (still open — held rows)", file=sys.stderr)
-                if not args.dry_run and gh_available:
-                    _gh_write(["issue", "edit", str(num), "--repo", REPO, "--body", body])
-                stuck = [h for h in held if h.streak >= UNVERIFIABLE_DISCLOSE_AT]
-                if stuck:
-                    _step_summary(
-                        f"⚠️ **perf-trend watchdog: issue #{num} cannot be verified** — "
-                        + ", ".join(f"`{h.bench}` ({h.streak} nights)" for h in stuck)
-                        + ". Needs a human."
-                    )
-                _sync_unverifiable_label(issue, bool(stuck), args, gh_available)
-                continue
             print(f"→ {'[dry-run] would close' if args.dry_run else 'closing'} "
                   f"recovered perf-trend issue #{num}", file=sys.stderr)
             cur_labels = [l.get("name") for l in (issue.get("labels") or [])]
@@ -1832,7 +1312,6 @@ def run_trend_watch(args) -> int:
             if drop_recovering:
                 print(f"→ {'[dry-run] would ' if args.dry_run else ''}remove stale "
                       f"`{RECOVERING_LABEL}` before closing #{num}", file=sys.stderr)
-            close_comment = _close_comment(frozen, recent, today_cpu, floor)
             if not args.dry_run and gh_available:
                 # Strip the recovering label first so a closed issue never retains it.
                 if drop_recovering:
@@ -1840,7 +1319,12 @@ def run_trend_watch(args) -> int:
                                "--remove-label", RECOVERING_LABEL])
                 _gh_write(["issue", "close", str(num), "--repo", REPO])
                 _gh_write(["issue", "comment", str(num), "--repo", REPO, "--body",
-                           close_comment])
+                           "✅ Auto-closing (closed loop): no benchmark is above its floor "
+                           "on tonight's evaluable, same-host-class window. _Scope: that "
+                           "verdict is measured against the SLIDING settled-window anchor, "
+                           "which drifts with the data — it is not proof that perf returned "
+                           "to the level this issue was filed at. A new issue is filed if it "
+                           "regresses again._"])
         return EXIT_OK
     finally:
         if cache_dir is not None and cleanup:
