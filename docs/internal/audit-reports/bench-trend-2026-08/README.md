@@ -10,8 +10,7 @@
 
 這份序列是從 **30 次 `bench-record` 的 job log** 逐筆解析重建的（3596 筆原始樣本聚合成
 per-night median）。**GitHub 的 job log 有保留期限**，過了就再也重建不回來；
-所以這裡收的是**輸出**，不是「重建方法」而已。`parse_logs.py` 留著是為了記錄方法與可稽核性，
-它本身不可直接重跑（見該檔頂端說明）。
+所以這裡收的是**輸出**，不是「重建方法」而已。
 
 ## 檔案
 
@@ -19,8 +18,23 @@ per-night median）。**GitHub 的 job log 有保留期限**，過了就再也�
 |---|---|
 | `nights_meta.csv` | 每夜一列：run id / head SHA / **CPU 型號** / runner image / Go 版本 |
 | `per_night_stats.csv` | 每夜 × 每支 benchmark 的 median ns/op（20 支 bench × 30 夜） |
-| `counterfactual.py` | 驅動**真實** `analyze_bench_history` 的反事實 harness |
-| `parse_logs.py` | 上面兩個 CSV 的產生方法（不可直接重跑） |
+| `counterfactual.py` | 驅動**真實** `analyze_bench_history` 的反事實 harness（唯一可直接跑的） |
+| `parse_logs.py` | 重建鏈第 1 步的方法紀錄 |
+| `aggregate_nights.py` | 重建鏈第 2 步的方法紀錄 |
+
+⚠️ **重建鏈是不完整的，這裡照實說明**——`parse_logs.py` 不是「上面兩個 CSV 的產生方法」：
+
+```text
+job logs ──parse_logs.py──▶ raw_samples.json + nights.json   ← 中間產物，未收
+                    │
+                    ├──aggregate_nights.py──▶ per_night_stats.csv   ✅ 已收
+                    └──（session 中一段未保留的展平步驟）──▶ nights_meta.csv   ✅ 已收
+```
+
+兩支 `.py` **都不可直接重跑**（檔頭各自寫明原因）：`parse_logs.py` 需要一個已抓取的 job log 目錄，
+`aggregate_nights.py` 需要未收進 repo 的中間產物，而 `nights_meta.csv` 的展平步驟當時是 ad-hoc 的、
+沒有留下腳本。它們的價值是**可稽核**（看得出這些數字怎麼來的），不是可重現。
+真正要重現只能從 job log 重跑整條鏈——而那正是會過期的東西。
 
 `cpu_model` 是關鍵欄位：30 夜落在 4 種 CPU，IO/CPU 比依 CPU 型號**完全分離**
 （exact permutation p = 4.34e-06）。決定性證據是同 SHA 自然實驗——`f85bfc3ea8b8` 連跑兩夜、

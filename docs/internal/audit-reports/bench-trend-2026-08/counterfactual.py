@@ -51,7 +51,12 @@ MIN_FLOOR = 5.0
 CANARY_MULT = 3.0
 CREEP_FLOOR = 10.0
 WINDOW = 14
-INJECT_HORIZON = 5      # nights a scenario is given to be detected in
+# Minimum nights of runway a scenario must have AFTER its injection night. It
+# bounds which nights may be injection points (`starts` below) — it does NOT cap
+# how long detection is watched for: each scenario is replayed to the end of the
+# series. Capping the replay would shrink check 3's comparison surface, which is
+# the opposite of what check 3 is for.
+INJECT_MIN_RUNWAY = 5
 
 
 def load_module(path: Path, name: str):
@@ -124,7 +129,7 @@ def injection_sweep(ab, series, delta=0.20):
     every night from the injection onward. Returned as a signature so two
     builds can be compared exactly, plus the diagnostics tuple."""
     benches = sorted({b for r in series for b in r["medians"]})
-    starts = list(range(WINDOW - 1, len(series) - INJECT_HORIZON))
+    starts = list(range(WINDOW - 1, len(series) - INJECT_MIN_RUNWAY))
     sig = []
     detected, delays, scenarios = 0, [], 0
     for bench in benches:
@@ -144,7 +149,7 @@ def injection_sweep(ab, series, delta=0.20):
                 delays.append(hit)
     med = statistics.median(delays) if delays else float("nan")
     return (json.dumps(sig, sort_keys=True),
-            f"δ={delta:.0%}  scenarios={scenarios}  ever-detected={detected} "
+            f"δ={delta:.0%}  scenarios={scenarios}  detected-by-series-end={detected} "
             f"({100.0 * detected / scenarios:.1f}%)  median delay={med:.0f} nights")
 
 

@@ -1496,18 +1496,38 @@ if bad:
 改到註解是 no-op，跑出來一樣是 SURVIVED，而你會把它讀成「這條修法根本沒生效」。
 
 實測踩到（#1431）：驗一條 anti-fabrication 修法時，替換字串命中的是描述該訊息的註解而非字串常數，
-332 支測試全綠，差點據此判定修法失效。改用 AST 定位到真正的常數後立刻轉紅。
+332 支測試全綠，差點據此判定修法失效。改成定位到真正的常數之後立刻轉紅。
 
-**字串常數的 mutant，動手前用 AST 確認命中的是 `ast.Constant`**——`ast.parse` 不保留註解，
-所以「AST 裡找不到」本身就是判準：
+**動手前用 `tokenize` 確認命中處有實質程式 token**——判準是「這段 span 裡除了註解還有別的嗎」：
 
 ```python
-tree = ast.parse(pathlib.Path(path).read_text(encoding="utf-8"))
-in_code = any(isinstance(n, ast.Constant) and isinstance(n.value, str) and old in n.value
-              for n in ast.walk(tree))
-if not in_code:
+SUBSTANTIVE = {"NAME", "OP", "NUMBER", "STRING", "FSTRING_START", "FSTRING_MIDDLE"}
+
+def comment_only(src: str, old: str) -> bool:
+    i, j = src.index(old), src.index(old) + len(old)      # §1 已保證恰好命中一次
+    starts = [0]
+    for line in src.splitlines(keepends=True):
+        starts.append(starts[-1] + len(line))
+    off = lambda p: starts[p[0] - 1] + p[1]
+    kinds = {tokenize.tok_name[t.type]
+             for t in tokenize.generate_tokens(io.StringIO(src).readline)
+             if off(t.start) < j and off(t.end) > i}
+    return not (kinds & SUBSTANTIVE)
+
+if comment_only(src, old):
     print("COMMENT-ONLY HIT:", name); sys.exit(1)   # ⛔ 改下去會是 no-op
 ```
+
+⚠️ **兩個看似更簡單、但實測會壞的寫法**：
+
+- **`old in ast.Constant.value`** —— catalog 的 anchor 是**原始碼片段**（含引號、常跨多個 token 甚至多行），
+  而 `ast.Constant.value` 是**解析後**的值。實測對 `tests/shared/_mutation_pilot.py` 的 78 個 anchor
+  **全部 78 個誤判為「不在程式碼裡」**，等於這條規則一條都套不上。
+- **「span 碰到 COMMENT token 就擋」** —— 多行程式碼 anchor 夾一行註解是常態。實測 catalog 裡
+  就有一個 `if "{" in key: → if False:` 的 anchor，中間夾著 `# ADR-024 OQ-6: …`；
+  用這個判準會把它誤擋成註解命中。**要問的是「有沒有實質 token」，不是「有沒有碰到註解」。**
+
+上面的 `comment_only` 對 catalog 78 個 anchor **零誤擋**，而合成的純註解命中確實被擋下。
 
 ### 2. 每輪放兩個 control
 
@@ -1531,16 +1551,20 @@ finally:
     print("RESTORED")   # ⛔ 沒印到這行就代表工作區是髒的
 ```
 
-另外兩件會讓 mutant 靜默不生效的事：**跑之前清 `__pycache__`**（stale bytecode 會讓替換不生效）、
-以及整輪用 `PYTHONDONTWRITEBYTECODE=1`（或 `python3 -B`）。
+另外兩件會讓 mutant 靜默不生效的事：**每個 mutant 落地前清 `__pycache__`**（stale bytecode 會讓替換不生效）、
+以及整輪用 `PYTHONDONTWRITEBYTECODE=1`。
 sweep 通常超過單次工具 timeout，**丟背景跑再輪詢 `RESTORED`**。
 
-⚠️ **為什麼 stale bytecode 這條會間歇性咬人**：`.pyc` 的有效性只看 (原始檔 mtime **取秒**, 檔案 size)
-兩個欄位。所以**與原碼同長度、且在同一秒內寫入**的 mutant——正好是最常寫的那一種
-（`>=`→`>`、`and`→`or`、改一個字母的字串）——會沿用舊的 `.pyc`，**跑的是沒被改過的碼**，
-得到假的 SURVIVED。長度有變或跨秒寫入的 mutant 則正常生效。
+⚠️ **`PYTHONDONTWRITEBYTECODE=1` / `python3 -B` 不能取代清 cache。** 它們只禁止**寫新的** `.pyc`，
+對**已經存在**的那顆完全沒有作用——實測：同長度、同 mtime 秒的改動後用 `-B` import，
+拿到的仍是舊值；清掉 `__pycache__` 才讀到新值。**清 cache 是每個 mutant 的前置步驟，不是整輪一次的環境設定。**
+
+⚠️ **為什麼 stale bytecode 這條會間歇性咬人**：預設的 timestamp-based `.pyc` 只看
+(原始檔 mtime **取秒**, 檔案 size) 兩個欄位。所以**與原碼同長度、且在同一秒內寫入**的 mutant——
+正好是最常寫的那一種（`>=`→`>`、`and`→`or`、改一個字母的字串）——會沿用舊的 `.pyc`，
+**跑的是沒被改過的碼**，得到假的 SURVIVED。長度有變或跨秒寫入的 mutant 則正常生效。
 於是同一份 harness 會時對時錯，看起來像「測試套件不穩」而不像 harness bug——
-這是它難查的原因，也是為什麼清 cache 不是潔癖而是必要條件。
+這是它難查的原因。（hash-based `.pyc`（PEP 552）改用內容雜湊判定，不受此影響；但那不是預設。）
 
 ### 4. 存活的 mutant 有三種下場，而且要分開記
 
