@@ -105,6 +105,15 @@ _BENCH_RE = re.compile(
     r"^(Benchmark[A-Za-z0-9_]+)-\d+\s+\d+\s+(\d+(?:\.\d+)?)\s+ns/op\b"
 )
 
+# Suite header emitted by `go test -bench`, e.g.
+#   "cpu: AMD EPYC 7763 64-Core Processor"
+# `bench_filter.go` has always RETAINED this line in the artifact (see its
+# `retainPrefixes`); until #1396 nothing ever read it. The nightly runner pool is
+# heterogeneous (Intel Xeon / AMD EPYC 7763 / AMD EPYC 9V74 observed in a single
+# 30-night window, with IO/CPU ratios 11.8 / 19.1 / 25.3 — completely separated),
+# so this string is the stratification key for the trend watchdog.
+_CPU_RE = re.compile(r"^cpu:\s*(\S.*?)\s*$")
+
 
 @dataclass
 class RunSample:
@@ -290,6 +299,26 @@ def parse_bench_file(path: Path, run_id: int) -> Iterable[RunSample]:
                 yield RunSample(run_id=run_id, bench=m.group(1), ns_per_op=float(m.group(2)))
 
 
+def parse_cpu_model(path: Path) -> str | None:
+    """Return the runner's CPU model string from the artifact's `cpu:` header.
+
+    The RAW string is the classification key — deliberately NOT normalised into
+    "Xeon" / "EPYC" families. Two Xeon SKUs (e.g. `Platinum 8370C` vs
+    `PLATINUM 8573C`) are different machines with different latency levels;
+    folding them together would re-create the very cross-host anchor that made
+    #1396 a guaranteed false positive. Exact string equality, or nothing.
+
+    Returns None when the artifact predates the header being read (legacy runs)
+    or the line is absent — callers must degrade loudly, never silently.
+    """
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            m = _CPU_RE.match(line)
+            if m:
+                return m.group(1)
+    return None
+
+
 def aggregate(samples: Iterable[RunSample]) -> dict[str, BenchStats]:
     by_bench: dict[str, BenchStats] = {}
     for s in samples:
@@ -398,6 +427,82 @@ def render_markdown_table(
 # lone bad night. The floor is the max of a fixed minimum and a multiple of the
 # control canary's own night-to-night CV — movement smaller than the runner's
 # intrinsic noise (as measured by BenchmarkControlCanaryCPU) is never alerted.
+#
+# Two things about the POPULATION the watchdog judges were wrong until #1396:
+#
+#   1. Host class (B) — GitHub's hosted runners are heterogeneous, and the `cpu:`
+#      header that says which machine ran was parsed by nobody. It is now read,
+#      carried on NightRecord, and disclosed in the issue body so a false alarm
+#      is a one-minute read instead of a re-download of 14 artifacts.
+#   2. Stratification + three states (C) — both windows are drawn from tonight's
+#      host class only, and a night that cannot be judged is INCONCLUSIVE, which
+#      is neither "regressed" nor "recovered". Previously `findings == []` closed
+#      every open issue, so a night with no evaluable data announced recovery.
+#
+# The FIRE arithmetic itself is untouched by both.
+#
+# The three-state verdict is a per-NIGHT gate, and closing is a per-BENCH claim.
+# A night on which A stopped reporting and B was clean is `status=CLEAR,
+# evaluated=[B], inconclusive=[A]` — and it closed A's issue, announced A
+# "Recovered (no longer flagged)" and could even label the issue `recovering`,
+# on zero measurements of A. Every judgement about a tracked bench is therefore
+# now gated on that bench appearing in `evaluated_benches` tonight: the close
+# guard reads the issue's own marker (`_unverified_benches`), the marker carries
+# unmeasured rows forward instead of dropping them (`_carry_forward_state`), and
+# the body says visibly which benches it is still tracking but did not measure.
+#
+# ⚠️ WHAT THAT GUARD COSTS — measured, and larger than first written down. The
+# trigger is a benchmark RENAME, not "a benchmark permanently removed": the
+# stratification key and the marker both compare bench names with string
+# equality, so `BenchmarkFoo` → `BenchmarkFooV2` is indistinguishable from
+# `BenchmarkFoo` disappearing. Renaming a benchmark is an ordinary refactor.
+# And the blast radius is not one ticket: the FINDINGS path opens a NEW issue
+# only when `open_issues` is empty and updates only `open_issues[0]`, so one
+# wedged issue absorbs every later regression in the repo into itself — it keeps
+# accumulating carried-forward rows while no new ticket can be filed. The
+# `_held_open_detail` phrasing exists so the nightly warning names the wedged
+# bench and how many nights it has been silent; the fix (bench identity that
+# survives a rename) is structural and is #1396's remaining follow-up.
+#
+# ⚠️ KNOWN AND DELIBERATELY NOT FIXED HERE — the recovery/close side still reads
+# the SLIDING anchor. The mechanism, which needs no measurement to state: a
+# permanent regression ages out of the recent window and into the settled one,
+# the anchor is the median of that settled window so it rises to meet the new
+# level, the gap closes, the finding evaporates, and the next CLEAR night closes
+# the issue on a baseline that has quietly moved to wherever the regression put
+# it. Detection (B+C) does not touch this — it corrects the POPULATION each rule
+# runs on, not what the anchor is.
+#
+# ⚠️ HOW OFTEN THAT HAPPENS IS UNMEASURED. A close-rate figure ("68%, 160 of
+# 236") was previously quoted here and in CHANGELOG/playbook; it came from a
+# scratchpad script that never imported this module and reimplemented "no
+# findings → close" itself, so it measured a model of the close path rather than
+# the close path. It has been removed rather than replaced: no honest number is
+# available, and a wrong one is worse than none. Anyone reproducing this must
+# drive `run_trend_watch` itself across consecutive nights, feeding each night's
+# rendered body back as the next night's issue body — the marker is the tool's
+# only cross-night memory, so a harness that skips it is not testing this code.
+#
+# A frozen per-bench baseline was prototyped for exactly this and REVERTED before
+# merge: it needs a state lifecycle (ledger semantics, marker health,
+# unjudgeable-forever rows) that the prototype got wrong in six independent
+# places, and its fail-closed guards were provably never executed by any test.
+# Detection (B+C) ships alone; the close path is issue #1396's remaining
+# follow-up and is being redesigned. Until then the close COMMENT says what it
+# actually measured, and says that the anchor it measured against drifts.
+#
+# ⚠️ OTHER LIFECYCLE GAPS, all tracked with the close path and none of them
+# patched here — patching this file's state machine one field at a time is what
+# produced the last four rounds of defects:
+#   - a REOPENED issue has no per-bench close guard (the close blanks the
+#     ledger, which is the only value consistent with the CLEAR prose it writes
+#     alongside — see the close path)
+#   - the marker records no host class, so a ledger written on one machine is
+#     read back on another as though it were comparable
+#   - an issue has no identity beyond "the first open `perf-trend` issue"
+#   - the four real-subprocess boundaries (`_gh`, `list_recent_runs`,
+#     `download_artifact`, `night_records_from_gh`) are unexercised offline
+#   - the GO/NO-GO variance gate (`--ci`, `main()`) is separately under-covered
 # ─────────────────────────────────────────────────────────────────────────────
 
 CANARY_BENCH = "BenchmarkControlCanaryCPU"
@@ -408,14 +513,80 @@ PERF_TREND_LABEL = "perf-trend"
 # finding reappears or the issue closes.
 RECOVERING_LABEL = "perf-trend:recovering"
 
+# Three-state verdict for one night (see `analyze_trend`). "no findings" is NOT
+# one state but two, and conflating them is what let a night on which NOTHING
+# could be evaluated close a still-open regression issue.
+STATUS_FINDINGS = "FINDINGS"          # ≥1 bench above its floor → open/update
+STATUS_CLEAR = "CLEAR"                # ≥1 bench evaluated, none above floor
+STATUS_INCONCLUSIVE = "INCONCLUSIVE"  # nothing evaluable → never fire, NEVER close
+
+# How tonight's host class relates to the window (meta["stratification"]).
+STRATA_ON = "on"                      # tonight's class known → same-class windows
+STRATA_LEGACY = "legacy-unstratified"  # NO night in the window has a class at all
+STRATA_TONIGHT_UNKNOWN = "tonight-unknown"  # window is classified, tonight is not
+
+# WHY a bench was not judged tonight (meta["inconclusive_reasons"][bench]).
+# The two causes are opposite problems and used to be reported with one
+# sentence — "too few same-class nights" — which is a MISDIAGNOSIS for the
+# first one and, on an all-one-class window, self-contradicting prose ("only 14
+# of 14 window nights ran on tonight's host class"). A bench that STOPS
+# REPORTING is the classic perf-timeout/crash symptom; telling an operator to
+# wait for more same-class nights sends them to the wrong place entirely.
+REASON_NO_RECENT = "no-recent"       # absent from ≥1 of the K newest same-class nights
+# ⚠️ `thin-anchor` was itself TWO causes wearing one name, and the same
+# self-contradiction came back a third time through it: on a window where all 14
+# nights ARE tonight's class, a bench with only 3 nights of its own history
+# printed "`X` reported tonight but could not be judged — only 14 of 14 window
+# nights ran on tonight's host class". The window's composition is not the cause
+# there; the BENCH's own history is, and it was not mentioned at all. Split by
+# which count is actually short — both are in hand at the `continue`:
+#   thin-anchor        → the WINDOW holds < min_settled settled same-class
+#                        nights, so NO bench in tonight's stratum can be judged.
+#   thin-bench-history → the window holds them; this benchmark appears in fewer
+#                        than min_settled of them (new / just-renamed bench).
+REASON_THIN_ANCHOR = "thin-anchor"          # the WINDOW's settled same-class nights are short
+REASON_THIN_BENCH = "thin-bench-history"    # the BENCH's own settled same-class nights are short
+# Two further causes exist only for benches named in an ISSUE'S MARKER: a bench
+# outside tonight's stratum is never iterated by `analyze_trend`, so it lands in
+# neither list and carries neither reason code. Reporting that through
+# `_inconclusive_causes` fell through to "no benchmark appeared in tonight's
+# same-class window at all" — printed, on a CLEAR night, right next to a verdict
+# produced by benchmarks that plainly did appear.
+#
+# ⚠️ Those two are NOT the same state, and collapsing them into REASON_ABSENT
+# produced a self-contradicting warning: the same sentence said "`X` last
+# reported 1 night ago" (measured over the WHOLE window) and "did not appear in
+# ANY of the N nights … a RENAMED or deleted benchmark reaches this state and
+# never leaves it". On a heterogeneous runner pool that is the ordinary case,
+# not a rename: the bench is in the window, just not on tonight's machine, and
+# it clears itself the next time the pool schedules that machine.
+REASON_OFF_CLASS = "off-class"       # in the window, but not in tonight's host-class stratum
+REASON_ABSENT = "absent-from-window"  # in NO night of the window (rename / deletion)
+
+# Same-class settled nights required before a bench may be judged at all, once
+# host-class stratification is active. Empirically calibrated, not guessed: on
+# the real 30-night series a 2-night same-class anchor still produced 19
+# false-positive bench-nights (the whole 2026-08-12 / #1396 window fires again,
+# because a 2-sample median on a 12.7–19.0%-CV bench is not a central tendency);
+# at 3 the same replay yields ZERO false positives, for 0.4 pp of detection power
+# at δ=20% (83.5% → 83.1%). The unstratified fallback keeps its historical
+# threshold of 2 so legacy behaviour is bit-for-bit unchanged.
+MIN_SETTLED_SAME_CLASS = 3
+
 
 @dataclass
 class NightRecord:
-    """One nightly run reduced to a per-bench median ns/op."""
+    """One nightly run reduced to a per-bench median ns/op.
+
+    ``cpu_model`` is the runner's raw `cpu:` string (None for legacy artifacts /
+    parse failure). It is the stratification key: nights measured on a different
+    CPU model are a different population, not a trend.
+    """
 
     run_id: int
     created_at: str
     medians: dict[str, float] = field(default_factory=dict)
+    cpu_model: str | None = None
 
 
 def _cv(values: list[float]) -> float:
@@ -427,6 +598,19 @@ def _cv(values: list[float]) -> float:
     if mean == 0:
         return 0.0
     return statistics.stdev(vals) / mean
+
+
+def _cpu_class_counts(nights: list[NightRecord]) -> dict[str, int]:
+    """How many nights of the window came from each host class.
+
+    ``None`` (unknown class) is reported under the literal key "unknown" so a
+    partially-labelled window is visible rather than silently merged.
+    """
+    counts: dict[str, int] = {}
+    for n in nights:
+        key = n.cpu_model if n.cpu_model is not None else "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 def night_records_from_gh(workflow: str, limit: int, cache_dir: Path) -> list[NightRecord]:
@@ -449,6 +633,7 @@ def night_records_from_gh(workflow: str, limit: int, cache_dir: Path) -> list[Ni
             run_id=run_id,
             created_at=run["createdAt"],
             medians={b: statistics.median(v) for b, v in by_bench.items()},
+            cpu_model=parse_cpu_model(txt),
         ))
     return nights
 
@@ -456,12 +641,17 @@ def night_records_from_gh(workflow: str, limit: int, cache_dir: Path) -> list[Ni
 def night_records_from_fixture(path: Path) -> list[NightRecord]:
     """Load pre-reduced nightly medians from a JSON fixture (offline testing).
 
-    Format: a JSON list of {"run_id", "createdAt", "benches": {name: median_ns}}.
+    Format: a JSON list of
+    {"run_id", "createdAt", "benches": {name: median_ns}, "cpu_model": str?}.
+    ``cpu_model`` is optional — absent means None, i.e. the unstratified
+    fallback (same as a legacy artifact with no `cpu:` header).
     """
     data = json.loads(path.read_text(encoding="utf-8"))
     nights = [
         NightRecord(run_id=int(d["run_id"]), created_at=d["createdAt"],
-                    medians={k: float(v) for k, v in d["benches"].items()})
+                    medians={k: float(v) for k, v in d["benches"].items()},
+                    cpu_model=(str(d["cpu_model"])
+                               if d.get("cpu_model") is not None else None))
         for d in data
     ]
     nights.sort(key=lambda n: n.created_at, reverse=True)
@@ -489,9 +679,58 @@ def analyze_trend(
     """Apply R1 (sustained) + R2 (creep) to newest-first nightly medians.
 
     Returns (findings, meta). `meta` carries the computed floors + canary CV for
-    transparency in the rendered issue body.
+    transparency in the rendered issue body, plus the host-class stratification
+    facts and the three-state ``status`` (see STATUS_* below).
+
+    Host-class stratification (#1396)
+    ---------------------------------
+    GitHub's hosted runner pool is heterogeneous. Over one real 30-night window
+    the same workflow landed on Intel Xeon 8370C, Xeon 8573C, AMD EPYC 7763 and
+    AMD EPYC 9V74 — with IO/CPU ratios of 11.8 / 19.1 / 25.3, i.e. completely
+    separated populations. A "sliding anchor" built from a mixed-host settled
+    window therefore compares CPUs, not commits: it fired on 3 benches whose real
+    night-to-night CV *within* a host class was 12.7–19.0%, while the sustained
+    floor was pinned at 10% by ``CANARY_FLOOR_CAP`` — a guaranteed, repeating
+    false positive that no threshold tweak can fix.
+
+    So BOTH windows are drawn from tonight's host class only: `recent` = the
+    newest ``recent_k`` same-class nights, `baseline` = the same-class nights
+    behind them. The *fire* arithmetic below is byte-for-byte unchanged; only the
+    population it runs on is corrected.
+
+    Three, not two, host-class situations (follow-up E)
+    --------------------------------------------------
+    Deciding "stratified?" from ``nights[0]`` alone conflated two opposite cases.
+    A window where NOTHING carries a `cpu:` header is genuinely unstratifiable and
+    keeps the legacy behaviour (including ``min_settled = 2``). A window where the
+    other nights ARE labelled and only TONIGHT failed to parse is a different
+    animal: falling back there silently re-enabled cross-host comparison for that
+    night *and* dropped the settled-night requirement from 3 to 2 — the exact
+    configuration measured to re-fire the #1396 window. One unreadable header
+    could therefore flip a CLEAR night into a freshly-filed 30.8% "sustained"
+    issue. Tonight-unknown is now INCONCLUSIVE: not judged, never fired.
     """
-    canary_series = [n.medians[CANARY_BENCH] for n in nights if CANARY_BENCH in n.medians]
+    today_cpu = nights[0].cpu_model if nights else None
+    if not any(n.cpu_model is not None for n in nights):
+        stratification = STRATA_LEGACY
+    elif today_cpu is None:
+        stratification = STRATA_TONIGHT_UNKNOWN
+    else:
+        stratification = STRATA_ON
+    stratified = stratification == STRATA_ON
+    if stratification == STRATA_ON:
+        series = [n for n in nights if n.cpu_model == today_cpu]
+        min_settled = MIN_SETTLED_SAME_CLASS
+    elif stratification == STRATA_LEGACY:
+        series = list(nights)
+        min_settled = 2
+    else:
+        # Tonight cannot be placed in any stratum → there is no population to
+        # judge it against. Empty series ⇒ no bench evaluated ⇒ INCONCLUSIVE.
+        series = []
+        min_settled = MIN_SETTLED_SAME_CLASS
+
+    canary_series = [n.medians[CANARY_BENCH] for n in series if CANARY_BENCH in n.medians]
     canary_cv = _cv(canary_series)
     # Floors as fractions. The canary raises the floor above the fixed minimum so
     # we never alert below the runner's own measured noise — but its contribution
@@ -512,21 +751,42 @@ def analyze_trend(
     creep_floor = max(creep_floor_pct / 100.0, creep_canary_contrib)
 
     findings: list[TrendFinding] = []
-    benches = {b for n in nights for b in n.medians} - {CANARY_BENCH}
+    inconclusive: list[str] = []
+    inconclusive_reasons: dict[str, str] = {}
+    evaluated: list[str] = []
+    benches = {b for n in series for b in n.medians} - {CANARY_BENCH}
+    # The settled (anchor) half of tonight's stratum, hoisted out of the loop:
+    # its LENGTH is bench-independent, and it is exactly what separates "the
+    # window is too thin for anything" from "this benchmark is new here" below.
+    settled = series[recent_k:]
     for bench in sorted(benches):
         # Align to CALENDAR nights (newest-first), NOT "nights that happen to
         # contain this bench". Positional slicing of a gap-filtered series would
         # let a bench that STOPPED reporting — the classic symptom of a perf
         # timeout/crash — collapse so an old night masquerades as "today" and a
         # real spike hides in the baseline window. Require the bench present in
-        # ALL recent_k newest nights (so `today` is genuinely tonight) and in ≥2
-        # older nights (for a settled anchor).
-        recent = [n.medians.get(bench) for n in nights[:recent_k]]
-        if any(v is None for v in recent):
+        # ALL recent_k newest same-class nights (so `today` is genuinely tonight)
+        # and in ≥ min_settled older same-class nights (for a settled anchor).
+        recent = [n.medians.get(bench) for n in series[:recent_k]]
+        if len(recent) < recent_k or any(v is None for v in recent):
+            inconclusive.append(bench)
+            inconclusive_reasons[bench] = REASON_NO_RECENT
             continue
-        baseline_vals = [n.medians[bench] for n in nights[recent_k:] if bench in n.medians]
-        if len(baseline_vals) < 2:
+        baseline_vals = [n.medians[bench] for n in settled if bench in n.medians]
+        if len(baseline_vals) < min_settled:
+            inconclusive.append(bench)
+            # WHICH of the two counts is short decides the cause. `len(settled)`
+            # short ⇒ tonight's stratum cannot anchor ANY benchmark, and the
+            # window composition genuinely is the story. Only `baseline_vals`
+            # short ⇒ the stratum is fine and this benchmark's own history is
+            # what is missing; blaming the window there is the "only 14 of 14
+            # window nights ran on tonight's host class" sentence, which argues
+            # against itself and points the reader at the wrong fix.
+            inconclusive_reasons[bench] = (REASON_THIN_ANCHOR
+                                           if len(settled) < min_settled
+                                           else REASON_THIN_BENCH)
             continue
+        evaluated.append(bench)
         anchor = statistics.median(baseline_vals)
         today = recent[0]
         recent_typical = statistics.median(recent)
@@ -553,14 +813,248 @@ def analyze_trend(
                 pct_vs_anchor=(today / anchor - 1) * 100 if anchor else float("nan"),
                 pct_typical_vs_anchor=(recent_typical / anchor - 1) * 100 if anchor else float("nan"),
             ))
+    # Three-state verdict. The critical distinction is CLEAR vs INCONCLUSIVE:
+    # "no findings" used to mean "recovered → close every open issue", which is a
+    # lie whenever nothing could be evaluated at all (too few same-class nights).
+    # Only CLEAR — at least one bench actually measured, none above its floor —
+    # may ever close an issue.
+    if findings:
+        status = STATUS_FINDINGS
+    elif evaluated:
+        status = STATUS_CLEAR
+    else:
+        status = STATUS_INCONCLUSIVE
+
     meta = {
         "canary_cv": canary_cv,
+        # How many same-class nights actually carried the canary. `_cv` returns
+        # 0.0 for BOTH "measured, perfectly stable" and "never measured", and
+        # the body printed the latter as `0.00%` — a positive assertion that the
+        # runner has zero night-to-night jitter, made from zero samples. The
+        # count is what lets the renderer tell the two apart.
+        "canary_n": len(canary_series),
         "floor_pct": floor * 100,
         "creep_floor_pct": creep_floor * 100,
         "n_nights": len(nights),
         "recent_k": recent_k,
+        "status": status,
+        "stratified": stratified,
+        "stratification": stratification,
+        "today_cpu_model": today_cpu,
+        # Which night these numbers are FROM. Without it an issue body refreshed
+        # on a night that judged nothing reads as if it were current (follow-up C).
+        "today_night": nights[0].created_at if nights else None,
+        "today_run_id": nights[0].run_id if nights else None,
+        "cpu_class_counts": _cpu_class_counts(nights),
+        "n_class_nights": len(series),
+        # Same-class nights BEHIND the recent window — the population every
+        # anchor is drawn from. Only the two thin-* cause clauses read it, and
+        # only to say whether the window or the benchmark is the short one.
+        "n_settled_class": len(settled),
+        "min_settled": min_settled,
+        "evaluated_benches": sorted(evaluated),
+        "inconclusive_benches": sorted(inconclusive),
+        "inconclusive_reasons": dict(sorted(inconclusive_reasons.items())),
+        # Every bench name seen ANYWHERE in the window, stratum or not. Only
+        # `_unverified_causes` reads it, and only to tell "ran on another
+        # machine" (self-clearing) apart from "renamed or deleted" (never
+        # clears) — two states that were reported with one, wrong, sentence.
+        "window_benches": sorted({b for n in nights for b in n.medians}
+                                 - {CANARY_BENCH}),
     }
     return findings, meta
+
+
+def _cause_clause(cause: str, meta: dict, benches: list[str]) -> str:
+    """The prose for ONE cause, applied to the benches that share it.
+
+    Split out of ``_inconclusive_causes`` so the per-issue variant
+    (``_unverified_causes``) says the same sentences about the same causes
+    rather than paraphrasing them a second time."""
+    names = ", ".join(f"`{b}`" for b in benches)
+    if cause == REASON_NO_RECENT:
+        return (f"did not report on all {meta.get('recent_k', '?')} newest same-class nights "
+                f"(a benchmark that STOPS reporting is the classic perf-timeout/crash symptom, "
+                f"not a thin window): {names}")
+    if cause == REASON_THIN_ANCHOR:
+        return (f"only {meta.get('n_class_nights', '?')} of {meta.get('n_nights', '?')} window "
+                f"nights ran on tonight's host class, leaving "
+                f"{meta.get('n_settled_class', '?')} settled same-class night(s) behind the "
+                f"{meta.get('recent_k', '?')} most recent — tonight's stratum cannot anchor ANY "
+                f"benchmark; need ≥ {meta.get('recent_k', '?')} recent + "
+                f"{meta.get('min_settled', MIN_SETTLED_SAME_CLASS)} settled same-class nights "
+                f"per bench: {names}")
+    if cause == REASON_THIN_BENCH:
+        return (f"reported on tonight's host class, and the window DOES hold "
+                f"{meta.get('n_settled_class', '?')} settled same-class nights, but this "
+                f"benchmark appears in fewer than "
+                f"{meta.get('min_settled', MIN_SETTLED_SAME_CLASS)} of them — its OWN history "
+                f"on this host class is what is short, not the window's host-class composition "
+                f"(a newly added or just-renamed benchmark reaches this state and leaves it "
+                f"once it has {meta.get('min_settled', MIN_SETTLED_SAME_CLASS)} settled "
+                f"same-class nights): {names}")
+    if cause == REASON_OFF_CLASS:
+        return (f"DID report inside the window, but never on tonight's host class "
+                f"(`{_safe_md(meta.get('today_cpu_model')) or 'unknown'}`, "
+                f"{meta.get('n_class_nights', '?')} of {meta.get('n_nights', '?')} window "
+                f"nights), so tonight's stratum holds no measurement of "
+                f"{'it' if len(benches) == 1 else 'them'} — a heterogeneous runner pool "
+                f"reaches this state routinely and it clears itself as soon as the pool "
+                f"schedules that machine again; it is NOT a rename: {names}")
+    return (f"did not appear in ANY of the {meta.get('n_nights', '?')} nights in tonight's "
+            f"window, so tonight neither judged nor skipped "
+            f"{'it' if len(benches) == 1 else 'them'} — a RENAMED or deleted benchmark "
+            f"reaches this state and never leaves it: {names}")
+
+
+def _inconclusive_causes(meta: dict) -> list[str]:
+    """One clause per DISTINCT reason a bench IN TONIGHT'S WINDOW was not judged.
+
+    ``analyze_trend`` separates two `continue` branches into THREE cause codes;
+    until this helper existed all of them collapsed into a single sentence
+    blaming a thin same-class window. On a window where every night IS tonight's
+    class that printed "only 14 of 14 window nights ran on tonight's host class"
+    — a self-contradiction that points the reader away from the actual cause,
+    which is a benchmark that stopped reporting. The SECOND branch then turned
+    out to be two causes as well, and reproduced the identical sentence for a
+    bench whose own history (not the window) was short: see REASON_THIN_BENCH.
+
+    Scope note: this answers "what did TONIGHT fail to judge?". "Why is THIS
+    ISSUE's bench unverified?" is a different question with a third possible
+    answer — see ``_unverified_causes``."""
+    if meta.get("stratification") == STRATA_TONIGHT_UNKNOWN:
+        return ["tonight's `cpu:` header is unreadable while the rest of the window is "
+                "labelled, so there is no same-class population to judge anything against"]
+    by_cause: dict[str, list[str]] = {}
+    for bench, cause in sorted((meta.get("inconclusive_reasons") or {}).items()):
+        by_cause.setdefault(cause, []).append(bench)
+    out = [_cause_clause(c, meta, by_cause[c])
+           for c in (REASON_NO_RECENT, REASON_THIN_ANCHOR, REASON_THIN_BENCH)
+           if c in by_cause]
+    if not out:
+        out.append("no benchmark appeared in tonight's same-class window at all")
+    return out
+
+
+def _unverified_causes(meta: dict, unverified: Iterable[str]) -> list[str]:
+    """Why each bench THIS ISSUE tracks went unverified tonight.
+
+    ``_inconclusive_causes`` is the wrong question here and produced a
+    self-contradicting answer: a bench named only in the issue's marker can be
+    absent from the window ENTIRELY, in which case there is no reason code for
+    it, and the fallback clause ("no benchmark appeared in tonight's same-class
+    window at all") was printed on a CLEAR night — i.e. beside a verdict that
+    exists precisely because other benchmarks DID appear.
+
+    A bench with no reason code has TWO possible explanations and they are
+    OPPOSITES. Reporting both as `REASON_ABSENT` diagnosed an ordinary
+    heterogeneous-pool night as a rename, and the resulting warning contradicted
+    itself in one sentence: "`X` last reported 1 night ago" (the caller measures
+    that over the whole window) beside "did not appear in ANY of the 10 nights …
+    a RENAMED or deleted benchmark reaches this state and never leaves it".
+    ``meta["window_benches"]`` separates them; `REASON_OFF_CLASS` is
+    self-clearing, `REASON_ABSENT` is the actionable, never-leaves-it one."""
+    if meta.get("stratification") == STRATA_TONIGHT_UNKNOWN:
+        return _inconclusive_causes(meta)
+    reasons = meta.get("inconclusive_reasons") or {}
+    in_window = set(meta.get("window_benches") or [])
+    by_cause: dict[str, list[str]] = {}
+    for bench in sorted(unverified):
+        cause = reasons.get(bench) or (REASON_OFF_CLASS if bench in in_window
+                                       else REASON_ABSENT)
+        by_cause.setdefault(cause, []).append(bench)
+    return [_cause_clause(c, meta, by_cause[c])
+            for c in (REASON_NO_RECENT, REASON_THIN_ANCHOR, REASON_THIN_BENCH,
+                      REASON_OFF_CLASS, REASON_ABSENT) if c in by_cause]
+
+
+def _class_nights(nights: list[NightRecord], meta: dict) -> list[NightRecord]:
+    """The nights the per-bench prose is ALLOWED to speak about.
+
+    Every verdict in this tool is drawn from tonight's host-class stratum, so a
+    sentence counting nights outside it is describing a population no decision
+    was made on. `_nights_since_seen` counted the whole window while
+    `_unverified_causes` classified from the stratum, and the two then appeared
+    in ONE warning saying both "last reported 1 night ago" and "did not appear in
+    ANY of the 10 nights". Same window for both, or the warning contradicts
+    itself again."""
+    if meta.get("stratification") == STRATA_ON:
+        return [n for n in nights if n.cpu_model == meta.get("today_cpu_model")]
+    return list(nights)
+
+
+def _nights_since_seen(nights: list[NightRecord], bench: str) -> int:
+    """How many of the NEWEST nights GIVEN do not carry `bench` (0 = the newest has it).
+
+    Derived from the window that is already in hand — no new marker field, no
+    new state. It is what turns "issue #42 is held open" into "held open because
+    `BenchmarkX` last reported 5 nights ago", which is the difference between an
+    operator filing a rename fix and an operator ignoring a recurring warning.
+    Callers pass ``_class_nights(...)``, not the raw window: see that helper."""
+    for i, night in enumerate(nights):
+        if bench in night.medians:
+            return i
+    return len(nights)
+
+
+def _held_open_detail(nights: list[NightRecord], bench: str,
+                      stratified: bool = False) -> str:
+    """One phrase saying HOW LONG this bench has been unmeasurable.
+
+    ``nights`` is tonight's stratum (``_class_nights``), and ``stratified`` makes
+    the unit say so. "3 nights ago" measured over same-class nights only, printed
+    as though it were calendar nights, is the kind of quietly-wrong number that
+    sends an operator looking for an outage on the wrong days."""
+    missing = _nights_since_seen(nights, bench)
+    unit = "same-class night" if stratified else "night"
+    if missing == 0:
+        return f"`{bench}` reported tonight but could not be judged"
+    if missing >= len(nights):
+        return (f"`{bench}` has not reported in ANY of the last {len(nights)} "
+                f"{unit}{'' if len(nights) == 1 else 's'}")
+    return f"`{bench}` last reported {missing} {unit}{'' if missing == 1 else 's'} ago"
+
+
+def _unverified_benches(state: list[list[str]] | None, meta: dict) -> list[str]:
+    """Benches an issue is tracking that tonight did NOT evaluate.
+
+    The three-state verdict got the *night* granularity right — a night that
+    evaluated nothing never closes anything — and stopped there. Closing is a
+    PER-BENCH claim: an issue filed for `BenchmarkA` is closed on the evidence
+    that `BenchmarkA` recovered, and a night where A stopped reporting while B
+    was clean is `status=CLEAR` with `evaluated=[B]`, `inconclusive=[A]`. That
+    night used to close A's issue while the same body's marker still said A was
+    sustained. Membership in ``evaluated_benches`` (rather than absence from
+    ``inconclusive_benches``) is deliberate: a bench that vanished from the
+    window entirely is in neither list, and it is no more verified than one that
+    was skipped."""
+    if not state:
+        return []
+    evaluated = set(meta.get("evaluated_benches") or [])
+    return sorted({str(b) for b, _k in state} - evaluated)
+
+
+def _tracked_rows(state: list[list[str]] | None,
+                  unverified: Iterable[str]) -> list[list[str]]:
+    """The prior-state rows for benches tonight could not verify, as [bench, kind]."""
+    unseen = set(unverified)
+    return sorted([str(b), str(k)] for b, k in (state or []) if str(b) in unseen)
+
+
+def _carry_forward_state(current: list[list[str]],
+                         tracked: list[list[str]]) -> list[list[str]]:
+    """Tonight's flagged set PLUS the rows tonight could not measure.
+
+    The marker is the watchdog's only memory. Overwriting it with tonight's
+    findings drops a bench that merely went unmeasurable, and the ledger then
+    reads "this issue tracks nothing about A" — which is exactly what lets a
+    later CLEAR night close A's issue without ever having measured A. Carrying
+    the row forward keeps the close guard armed until A is genuinely judged, and
+    it is also why no "Recovered" comment can be produced for A: prior and
+    current agree about A, so there is no transition to announce."""
+    have = {str(b) for b, _k in current}
+    return sorted([[str(b), str(k)] for b, k in current]
+                  + [[b, k] for b, k in tracked if b not in have])
 
 
 def _signed_pct(pct: float) -> str:
@@ -571,38 +1065,238 @@ def _signed_pct(pct: float) -> str:
     return f"{pct:+.1f}%"
 
 
-def render_trend_issue_body(findings: list[TrendFinding], meta: dict) -> str:
-    lines = [
-        "## Nightly bench trend regression",
-        "",
-        f"Detected across the last **{meta['n_nights']}** nightly `bench-record` runs.",
-        "",
-        f"- Effective floor: **{meta['floor_pct']:.1f}%** "
-        f"(max of fixed minimum and canary-noise-scaled); "
-        f"creep floor: **{meta['creep_floor_pct']:.1f}%**.",
-        f"- Control-canary night-to-night CV: **{meta['canary_cv']:.2%}** "
-        f"(`{CANARY_BENCH}`; movement below the floor is indistinguishable from runner noise).",
-        f"- Sustained rule = all {meta['recent_k']} most-recent nights above the anchored "
-        "(settled-window-median) baseline; creep rule = the recent-window MEDIAN above that "
-        "same anchor (catches a step-change that a single noisy night hides from `sustained`).",
+def _safe_md(text: str | None) -> str:
+    """Neutralise a free-form string before it is interpolated into the issue body.
+
+    The body carries the hidden state marker that is parsed back next night, so
+    anything free-form written into the body AHEAD of that marker is a state-
+    injection surface. Disclosing the runner's `cpu:` header (B) opened exactly
+    that surface: the header is free-form, and one containing a lookalike marker
+    was measured to hijack the parse outright — the real marker sat at offset
+    1773 and the regex matched the fake at 596, so the watchdog read a
+    prior-state the artifact had authored. From there the flagged-set diff is
+    whatever the fake says: a bench can be announced "Recovered (no longer
+    flagged)" without a single number moving.
+
+    Two independent fixes, both applied on purpose: parsing takes the LAST match
+    (see ``_marker_match``) and the comment delimiters are escaped here. Escaping
+    rather than deleting keeps the string readable in the rendered body; the
+    backtick swap keeps it inside its markdown code span.
+    """
+    return (str(text if text is not None else "")
+            .replace("<!--", "&lt;!--").replace("-->", "--&gt;").replace("`", "'"))
+
+
+def _render_host_class_lines(meta: dict) -> list[str]:
+    """The #1396 one-minute triage block: which machine ran tonight, and what the
+    window is actually made of. Without this an operator cannot tell a real
+    regression from a runner-pool reshuffle without re-downloading 14 artifacts."""
+    counts = meta.get("cpu_class_counts") or {}
+    comp = ", ".join(
+        f"`{_safe_md(model)}` ×{n}"
+        for model, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ) or "—"
+    host = _safe_md(meta.get("today_cpu_model")) or None
+    if meta.get("stratification") == STRATA_TONIGHT_UNKNOWN:
+        return [
+            "- Host class tonight: **unreadable** — tonight's artifact carries no `cpu:` "
+            f"header (or it failed to parse) while the rest of the window does. "
+            f"Window composition: {comp}.",
+            "- Same-class stratification: **cannot be applied to tonight.** Falling back to "
+            "an unstratified verdict here would compare tonight against whatever hardware "
+            "the window happens to hold *and* drop the settled-night minimum — the exact "
+            "configuration that re-fires #1396 — so tonight is INCONCLUSIVE instead: "
+            "nothing is judged and nothing is closed.",
+        ]
+    if meta.get("stratified") and host:
+        return [
+            f"- Host class tonight: **`{host}`** — "
+            f"**{meta.get('n_class_nights', '?')}** of the "
+            f"**{meta.get('n_nights', '?')}** window nights ran on it. "
+            f"Window composition: {comp}.",
+            f"- Same-class stratification: **ON** — both the recent window and the anchor "
+            f"use only `{host}` nights (min {meta.get('min_settled', MIN_SETTLED_SAME_CLASS)} "
+            "same-class settled nights, else the bench is INCONCLUSIVE and never fires). "
+            "A mixed-host anchor compares CPUs, not commits (#1396).",
+        ]
+    return [
+        "- Host class tonight: **unknown** — the artifact carries no `cpu:` header, or it "
+        f"failed to parse. Window composition: {comp}.",
+        "- Same-class stratification: **OFF — this verdict is NOT stratified.** The anchor "
+        "may mix runner hardware, so a finding here can be a host-class artefact rather than "
+        "a real regression. Check the `cpu:` line of the linked runs before acting (#1396).",
+    ]
+
+
+def _render_tonight_line(meta: dict) -> list[str]:
+    """WHICH NIGHT the numbers below are from.
+
+    The body is refreshed in place every night, including nights that judged
+    nothing at all (follow-up C). Without a datestamp the reader cannot tell a
+    current table from a stale one, and "the issue still shows +30%" reads as
+    tonight's measurement when it may be a week old."""
+    night = meta.get("today_night")
+    if not night:
+        return []
+    run = meta.get("today_run_id")
+    return [f"Newest night in this window: **{night}**"
+            + (f" (run `{run}`)." if run else ".")]
+
+
+def _render_verdict_lines(findings: list[TrendFinding], meta: dict,
+                          tracked: list[list[str]] | None = None) -> list[str]:
+    """Tonight's verdict, spelled out. FINDINGS renders the table; the other two
+    states say in words why there is no table — because an empty table under a
+    heading that says "regression" is exactly how an INCONCLUSIVE night used to
+    look like a recovered one.
+
+    ``tracked`` is the set of benches THIS ISSUE was filed for that tonight could
+    not verify. It exists because "no finding tonight" and "this issue's subject
+    recovered" are different statements, and the body used to make the second one
+    while its own hidden marker still said `sustained`."""
+    status = meta.get("status") or (STATUS_FINDINGS if findings else STATUS_CLEAR)
+    still = ", ".join(f"`{b}` ({k})" for b, k in (tracked or []))
+    if status == STATUS_INCONCLUSIVE:
+        host = _safe_md(meta.get("today_cpu_model")) or "unknown"
+        lines = [
+            "",
+            f"### ⚠️ Not evaluated tonight (INCONCLUSIVE) — host class `{host}`",
+            "",
+        ] + [f"- {c}" for c in _inconclusive_causes(meta)] + [
+            "",
+            "No benchmark could be measured against a same-class anchor tonight, so no NEW "
+            "finding was produced and — the point of the three-state verdict — **nothing is "
+            "closed either**. Silence from a detector that never ran is not evidence of "
+            "recovery.",
+        ]
+        if still:
+            lines += [
+                "",
+                f"**This issue is still tracking {still}.** That is the state the last night "
+                "which COULD judge it left behind, not a measurement from tonight — tonight "
+                "says nothing about it either way.",
+            ]
+        return lines
+    if not findings:
+        lines = [
+            "",
+            "### ✅ Nothing above its floor tonight (CLEAR)",
+            "",
+            "Benchmarks WERE evaluated on tonight's host class and none is above its floor.",
+        ]
+        if still:
+            lines += [
+                "",
+                f"⚠️ **But {still} — what this issue was filed for — is NOT among the "
+                "benchmarks evaluated tonight.** A clean verdict on the OTHER benchmarks is "
+                "not evidence about this one, so the issue stays open.",
+            ]
+        return lines
+    return [
         "",
         "| Bench | Rule | Today | today vs anchor | recent-median vs anchor |",
         "|---|---|---:|---:|---:|",
+    ] + [
+        f"| `{f.bench}` | {f.kind} | {format_ns(f.today_ns)} "
+        f"| {_signed_pct(f.pct_vs_anchor)} | {_signed_pct(f.pct_typical_vs_anchor)} |"
+        for f in findings
     ]
-    for f in findings:
+
+
+def _render_floor_lines(meta: dict) -> list[str]:
+    """The floor + canary disclosure.
+
+    ``canary_n < 2`` means the canary was never measured on tonight's class, and
+    ``_cv`` reports that as 0.0 — the same value as a runner with perfectly
+    reproducible timings. Printing "**0.00%**" for it asserted a measurement that
+    does not exist, and the floor line credited the canary for a number it never
+    contributed (with no samples the floor is the fixed minimum, always)."""
+    measured = (meta.get("canary_n") or 0) >= 2
+    floor_src = ("max of fixed minimum and canary-noise-scaled" if measured
+                 else "fixed minimum only — no canary measurement to raise it")
+    canary_line = (
+        f"- Control-canary night-to-night CV: **{meta['canary_cv']:.2%}** "
+        f"(`{CANARY_BENCH}`; movement below the floor is indistinguishable from runner noise)."
+        if measured else
+        f"- Control-canary night-to-night CV: **not measured** — `{CANARY_BENCH}` appears on "
+        f"{meta.get('canary_n', 0)} of tonight's same-class nights (needs ≥ 2 for a CV), so "
+        "the floors below carry NO canary component. This is not a measurement of zero "
+        "jitter; it is the absence of a measurement."
+    )
+    return [
+        f"- Effective floor: **{meta['floor_pct']:.1f}%** ({floor_src}); "
+        f"creep floor: **{meta['creep_floor_pct']:.1f}%**.",
+        canary_line,
+    ]
+
+
+def render_trend_issue_body(findings: list[TrendFinding], meta: dict,
+                            state: list[list[str]] | None = None,
+                            tracked: list[list[str]] | None = None) -> str:
+    """Render the issue body (table + host-class disclosure + hidden state marker).
+
+    ``state`` overrides what goes into the hidden marker; it defaults to tonight's
+    findings. The INCONCLUSIVE path overrides it because it refreshes the body on
+    a night that measured NOTHING: writing tonight's empty finding set there would
+    erase the prior flagged set on no evidence, and the next real transition
+    comment would then announce every bench as "newly flagged". The FINDINGS and
+    held-open-CLEAR paths override it to carry forward the rows tonight could not
+    measure, for the same reason at per-bench granularity.
+
+    ``tracked`` are those same unmeasurable rows, rendered VISIBLY — the marker is
+    a hidden comment, and a body that silently keeps state while its prose says
+    "nothing is flagged" is how a reader ends up trusting the wrong half."""
+    n_class = meta.get("n_class_nights")
+    span = (f"Detected across the last **{n_class}** nights that ran on tonight's host class "
+            f"(of **{meta['n_nights']}** in the `bench-record` window)."
+            if meta.get("stratified") and n_class is not None else
+            f"Detected across the last **{meta['n_nights']}** nightly `bench-record` runs "
+            "(no host-class stratification — see below).")
+    lines = [
+        "## Nightly bench trend regression",
+        "",
+        span,
+        *_render_tonight_line(meta),
+        "",
+        *_render_floor_lines(meta),
+        f"- Sustained rule = all {meta['recent_k']} most-recent nights above the anchored "
+        "(settled-window-median) baseline; creep rule = the recent-window MEDIAN above that "
+        "same anchor (catches a step-change that a single noisy night hides from `sustained`).",
+    ]
+    lines += _render_host_class_lines(meta)
+    skipped = meta.get("inconclusive_benches") or []
+    if skipped:
         lines.append(
-            f"| `{f.bench}` | {f.kind} | {format_ns(f.today_ns)} "
-            f"| {_signed_pct(f.pct_vs_anchor)} | {_signed_pct(f.pct_typical_vs_anchor)} |"
+            "- INCONCLUSIVE (not judged tonight): "
+            + ", ".join(f"`{b}`" for b in skipped)
         )
+        if meta.get("inconclusive_reasons"):
+            lines += [f"  - {c}" for c in _inconclusive_causes(meta)]
+    if tracked:
+        lines.append(
+            "- ⚠️ STILL TRACKED BY THIS ISSUE, NOT VERIFIED TONIGHT: "
+            + ", ".join(f"`{b}` ({k})" for b, k in tracked)
+            + " — tonight could not measure "
+            + ("it" if len(tracked) == 1 else "them")
+            + ", so the state above is the last judged night's, and this issue is NOT closed."
+        )
+    lines += _render_verdict_lines(findings, meta, tracked)
     lines += [
         "",
         "_Auto-filed by `analyze_bench_history.py --trend-watch`. The watchdog updates this "
         "issue **in place** each night (no comment spam) and only comments when the set of "
-        "flagged benchmarks changes; it auto-closes when nightly perf returns below the floor "
-        "(closed loop). Single-night blips are filtered by the multi-night window; movement "
-        "below the canary noise floor is ignored._",
+        "flagged benchmarks changes; it auto-closes when no benchmark is above its floor on "
+        "an evaluable night (closed loop) — never on a night that could evaluate nothing, and, "
+        "as long as the hidden state marker at the end of this body stays READABLE, never "
+        "while any benchmark this issue is tracking went unmeasured. A CORRUPTED marker "
+        "leaves no per-bench claim to check, and the run says so in its log, its annotations "
+        "and the job summary, every night until it is repaired. ⚠️ A marker DELETED outright "
+        "cannot be told apart from a legacy issue that never had one, so **that guard lifts "
+        "silently** — do not remove the last line of this body. Single-night blips "
+        "are filtered by the multi-night window; movement below the canary noise floor is "
+        "ignored._",
         "",
-        _render_state_marker(_finding_state(findings)),
+        _render_state_marker(_finding_state(findings) if state is None else state),
     ]
     return "\n".join(lines)
 
@@ -618,6 +1312,11 @@ def render_trend_issue_body(findings: list[TrendFinding], meta: dict) -> str:
 # constrained by _BENCH_RE to [A-Za-z0-9_] and kind ∈ {creep, sustained} — so it
 # can never contain `-->`, an extra quote, or an unbalanced bracket that would let
 # the match overrun (a free-form payload would need base64; this one doesn't).
+#
+# ⚠️ The BODY, however, now carries a free-form string: #1396 discloses the
+# runner's raw `cpu:` header, and it is printed ABOVE this marker. That is what
+# makes `_safe_md` (escape on the way out) and `_marker_match` (take the LAST
+# match on the way in) load-bearing rather than cosmetic — see their docstrings.
 _STATE_MARKER_RE = re.compile(r"<!--\s*perf-trend-state v1\s*(\[.*\])\s*-->")
 
 
@@ -630,19 +1329,89 @@ def _render_state_marker(state: list[list[str]]) -> str:
     return f"<!-- perf-trend-state v1 {json.dumps(state, separators=(',', ':'))} -->"
 
 
-def _parse_state_marker(body: str | None) -> list[list[str]] | None:
-    """Recover the prior state from an issue body, or None if absent/unparseable
-    (a legacy issue filed before this marker existed → caller treats as no-change
-    so the migration run is silent)."""
+def _marker_match(body: str | None):
+    """The LAST marker in the body, not the first.
+
+    ``re.search`` took the first, and the body prints the runner's free-form
+    `cpu:` string ABOVE the marker (that disclosure is #1396's B half) — so a
+    `cpu:` header containing a lookalike marker hijacked the parse: measured, the
+    real marker sat at offset 1773 and the regex matched the fake at 596. The
+    prior flagged-set then comes from the artifact rather than from the watchdog,
+    which is enough to post a fabricated "Recovered (no longer flagged)". The
+    watchdog always appends its own marker last, so last-match is the
+    authoritative one. ``_safe_md`` neuters the delimiters on the way out; this
+    is the other half."""
     if not body:
         return None
-    m = _STATE_MARKER_RE.search(body)
+    matches = list(_STATE_MARKER_RE.finditer(body))
+    return matches[-1] if matches else None
+
+
+def _parse_state_marker(body: str | None) -> list[list[str]] | None:
+    """Recover the prior state from an issue body, or None when there is none —
+    which is TWO opposite situations, reported as two different things.
+
+    ABSENT (no marker in the body at all) is a legacy or hand-filed issue: it
+    never recorded a per-bench claim, so nothing is lost, the caller treats it as
+    no-change, and the migration run stays silent. That is the ONLY case this
+    function may be quiet about.
+
+    UNREADABLE (a marker IS there and did not parse) is the opposite: a claim was
+    recorded and cannot be read, so every guard that reads it is disarmed for
+    that issue tonight — including the per-bench close guard, which then closes
+    the issue on a CLEAR night without ever checking which benchmark it was filed
+    for. The body is human-editable, so a single hand edit reaches this; it is
+    therefore inside the threat model, not a theoretical corruption. It gets the
+    annotation + step summary every other degraded path in this file gets.
+
+    The CLOSE path's behaviour on it is deliberately unchanged (it still closes;
+    no marker-health state machine — that design was implemented and reverted).
+    The two paths that REFRESH the body decline to write, because writing is what
+    replaces the unreadable marker with a well-formed one and turns this very
+    annotation into a one-night event: the reader is told once, on the night the
+    evidence is destroyed, and never again. That is a guard on an existing write,
+    reading the ABSENT/UNREADABLE split this function already draws (the regex
+    matched, `json.loads` did not) — not a new lifecycle state.
+
+    Collapsing the two into one message is the same mistake this module has
+    already fixed twice, in ``_inconclusive_causes`` and ``_unverified_causes``."""
+    m = _marker_match(body)
     if not m:
         return None
     try:
         data = json.loads(m.group(1))
         return sorted([str(b), str(k)] for b, k in data)
-    except (ValueError, TypeError):
+    except Exception as exc:  # noqa: BLE001 — see below; degrade, never red the run
+        # Catch-all ON PURPOSE. The narrow `(ValueError, TypeError)` covered the
+        # payloads this code writes, not the payloads it READS: the body is
+        # human-editable, and a hand-pasted deeply-nested JSON array makes
+        # `json.loads` raise RecursionError (a RuntimeError, not a ValueError),
+        # which escaped to `main` and exited 1 — measured: every nightly run red
+        # until someone edits the issue body by hand. An unreadable marker
+        # DEGRADES to the caller's "no prior state" — but it is not the same
+        # THING as a missing one, and saying so was the second half of this bug.
+        #
+        # …and "degrade" is the whole point of the annotation below. Silently
+        # degrading was measured on a body whose marker was missing one `]`: the
+        # regex still matched, `json.loads` did not, and the CLEAR path went on
+        # to CLOSE the issue with zero `::warning::` and no step summary file at
+        # all — while the body footer promised, unconditionally, that it never
+        # closes while a tracked benchmark went unmeasured. This was the last
+        # degraded path in the file with no annotation behind it.
+        print(f"  ⚠️  perf-trend state marker unreadable ({type(exc).__name__}) — "
+              "treating this issue as having no prior state.", file=sys.stderr)
+        _warn(f"perf-trend watchdog: an issue body's state marker is PRESENT but UNREADABLE "
+              f"({type(exc).__name__}) — this is NOT the same as an issue with no marker "
+              "(legacy or hand-filed, which never recorded a per-bench claim). A claim WAS "
+              "recorded here and cannot be read, so tonight treats the issue as tracking "
+              "nothing: the per-bench close guard cannot see what it was filed for and a "
+              "CLEAR night may close it unverified. The body is human-editable — restore the "
+              "marker line, or delete it deliberately.")
+        _step_summary(
+            f"⚠️ **perf-trend watchdog: issue state marker UNREADABLE** ({type(exc).__name__}) "
+            "— the marker is present but did not parse; that is not an absent marker. The "
+            "per-bench close guard is disarmed for that issue tonight."
+        )
         return None
 
 
@@ -653,7 +1422,8 @@ def _is_recovering(findings: list[TrendFinding]) -> bool:
 
 
 def _recovering_label_change(findings: list[TrendFinding], prior_state: list[list[str]],
-                             current_labels: list[str]) -> str | None:
+                             current_labels: list[str],
+                             unverified: Iterable[str] = ()) -> str | None:
     """'add' / 'remove' / None for the recovering label.
 
     The label means "the sustained regression has cleared, only creep remains",
@@ -661,31 +1431,58 @@ def _recovering_label_change(findings: list[TrendFinding], prior_state: list[lis
     sustained finding) and PERSISTS through subsequent creep-only nights (already
     labelled), and is removed the moment any sustained returns. A creep-from-start
     issue that was never sustained therefore never acquires it. `current_labels`
-    gates the gh call so we never fire a redundant add/remove."""
+    gates the gh call so we never fire a redundant add/remove.
+
+    ``unverified`` — benches tonight could not measure — blocks the ADD. "Only
+    creep remains" is a claim about the sustained bench, and if that bench simply
+    stopped reporting the claim has no evidence behind it: the label would repeat,
+    in the notification layer, exactly the false "on the mend" the comment layer
+    was fixed not to say. REMOVAL is left alone on purpose — it is driven by a
+    sustained finding that WAS measured tonight, which is real evidence.
+
+    The block is scoped to the benches the CLAIM is about — the ones the prior
+    state called `sustained`. Blocking on the whole prior set made an unrelated
+    row veto the label: an issue tracking a `creep` bench that went unmeasured
+    could never acquire `recovering` even when the sustained bench it was filed
+    for was measured tonight and had genuinely eased. That is a different false
+    statement (silence about real progress), not the one this guard exists for."""
     labelled = RECOVERING_LABEL in current_labels
     prior_had_sustained = any(k == "sustained" for _, k in prior_state)
     recovering = _is_recovering(findings) and (prior_had_sustained or labelled)
     if recovering and not labelled:
-        return "add"
+        blocked = {str(b) for b, k in prior_state if k == "sustained"} & set(unverified)
+        return None if blocked else "add"
     if not recovering and labelled:
         return "remove"
     return None
 
 
-def _state_transition_comment(prior: list[list[str]], current: list[list[str]]) -> str | None:
+def _state_transition_comment(prior: list[list[str]],
+                              current: list[list[str]],
+                              unverified: Iterable[str] = ()) -> str | None:
     """Markdown summary of how the flagged-benchmark set changed since the prior
-    run, or None when nothing changed (→ body refreshed silently, no comment)."""
+    run, or None when nothing changed (→ body refreshed silently, no comment).
+
+    ``unverified`` names the benches tonight could not measure. Dropping out of
+    the flagged set has two possible meanings — "measured, and it is back under
+    its floor" and "not measured at all" — and only the first one is a recovery.
+    The production caller carries unverified rows forward in the marker, so they
+    never reach `cleared` in the first place; this subtraction is the second lock
+    on the same door, for any caller that hands over a raw finding set."""
     if prior == current:
         return None
+    unseen = set(unverified)
     prior_kind = {b: k for b, k in prior}
     cur_kind = {b: k for b, k in current}
     newly = sorted(b for b in cur_kind if b not in prior_kind)
-    cleared = sorted(b for b in prior_kind if b not in cur_kind)
+    dropped = [b for b in prior_kind if b not in cur_kind]
+    cleared = sorted(b for b in dropped if b not in unseen)
+    unknown = sorted(b for b in dropped if b in unseen)
     escalated = sorted(b for b in cur_kind
                        if b in prior_kind and prior_kind[b] != cur_kind[b] == "sustained")
     eased = sorted(b for b in cur_kind
                    if b in prior_kind and prior_kind[b] != cur_kind[b] == "creep")
-    if not (newly or cleared or escalated or eased):
+    if not (newly or cleared or unknown or escalated or eased):
         return None  # defensive: states differ only in an unexpected way
     parts = ["## Perf-trend update", ""]
     if newly:
@@ -696,6 +1493,9 @@ def _state_transition_comment(prior: list[list[str]], current: list[list[str]]) 
         parts.append("**Eased to creep:** " + ", ".join(f"`{b}`" for b in eased))
     if cleared:
         parts.append("**Recovered (no longer flagged):** " + ", ".join(f"`{b}`" for b in cleared))
+    if unknown:
+        parts.append("**Not measured tonight (state unknown, NOT recovered):** "
+                     + ", ".join(f"`{b}`" for b in unknown))
     parts += ["", "_See the issue body for the full current table. Posted only on a "
               "change in the flagged set — the body is refreshed silently every night._"]
     return "\n".join(parts)
@@ -709,16 +1509,101 @@ def _list_open_trend_issues() -> list[dict]:
     return json.loads(out) if out.strip() else []
 
 
-def _gh_write(cmd: list[str]) -> bool:
+def _gh_write(cmd: list[str], what: str | None = None) -> bool:
     """Best-effort gh write — NEVER raises. A transient API blip on an issue
     comment/create/close must not red the whole nightly run or, worse, abort a
-    close path before the issue is actually closed. Returns True on success."""
+    close path before the issue is actually closed. Returns True on success.
+
+    ``what`` describes the write in operator terms. Without it the failure was a
+    single stderr line inside a job that still ends green — the update and close
+    paths could fail EVERY gh call (stale body, unclosed issue, missing label,
+    lost transition comment) and the run's outward face stayed identical to a
+    clean night. Callers that pass ``what`` get the failure into the two places a
+    human actually looks. `_file_new_issue` deliberately passes nothing: a failed
+    ASSIGNED create is an expected step on the way to the unassigned retry, and it
+    does its own reporting once the outcome is known."""
     try:
         _gh(cmd)
         return True
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+    # OSError covers "gh could not be STARTED" (FileNotFoundError if it vanished
+    # between the `shutil.which` probe and this call, PermissionError on a broken
+    # install). `_gh` only converts a non-zero EXIT into CalledProcessError, so
+    # without OSError here a watchdog whose gh disappeared mid-run would raise out
+    # of every write path — the one thing this function's contract forbids.
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
         print(f"  ⚠️  gh {' '.join(cmd[:2])} failed (non-fatal): {exc}", file=sys.stderr)
+        if what:
+            _warn(f"perf-trend watchdog: {what} FAILED ({type(exc).__name__}). The issue "
+                  "does not reflect tonight's run.")
+            _step_summary(f"⚠️ **perf-trend watchdog: {what} failed** — the issue does not "
+                          "reflect tonight's run.")
         return False
+
+
+def _warn(msg: str) -> None:
+    """Emit a GitHub Actions warning annotation (and a plain stderr line locally).
+
+    A nightly watchdog that cannot evaluate anything used to be indistinguishable
+    from a nightly watchdog that found nothing wrong: green tick, exit 0, no
+    annotation, no summary, issue untouched (follow-up C). An injected permanent
+    +30% regression was measured to produce exactly that — a silent green run.
+    Silence is the one thing a watchdog may never do."""
+    print(f"::warning::{msg}", file=sys.stderr)
+
+
+def _step_summary(markdown: str) -> None:
+    """Append a line to the job's step summary, when running under Actions.
+
+    The annotation above is easy to miss in a run with many steps; the summary is
+    the page a human actually opens. Both, or the failure mode is "nobody found
+    out". No-op locally / in tests unless GITHUB_STEP_SUMMARY points somewhere."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(markdown.rstrip("\n") + "\n")
+    except OSError as exc:                                   # pragma: no cover - env issue
+        print(f"  ⚠️  could not write step summary: {exc}", file=sys.stderr)
+
+
+def _file_new_issue(body: str, assignee: str | None, n_findings: int) -> bool:
+    """File the perf-trend issue; return whether one actually exists afterwards.
+
+    Assign when requested, but NEVER let an unresolvable login block the alert:
+    the default assignee is the repo OWNER, which `gh issue create --assignee`
+    rejects ("Could not resolve to a User") if the owner is a GitHub Org rather
+    than a User. Try with the assignee; on failure, retry unassigned (the
+    `perf-trend` label still drives notification).
+
+    ⚠️ The "filed unassigned" annotation is emitted AFTER the retry, never
+    before. It used to fire the moment the ASSIGNED create failed — asserting the
+    issue had been filed unassigned one line before the only call that could make
+    that true. When the retry also failed, the nightly run ended with no issue,
+    exit 0, and its single annotation claiming a ticket existed. Total failure is
+    now its own, louder message: no ticket, nobody notified.
+    """
+    create = ["issue", "create", "--repo", REPO,
+              "--title", "Nightly bench trend regression detected",
+              "--label", PERF_TREND_LABEL, "--body", body]
+    filed = False
+    assign_failed = False
+    if assignee:
+        filed = _gh_write(create + ["--assignee", assignee])
+        assign_failed = not filed
+    if not filed:
+        filed = _gh_write(create)
+        if filed and assign_failed:
+            _warn(f"could not assign '{assignee}' (org name? invalid login?) — the "
+                  "perf-trend issue was filed UNASSIGNED; rely on the label for "
+                  "notification.")
+    if not filed:
+        detail = (f"{n_findings} benchmark(s) above the floor but NO issue could be "
+                  "filed — every `gh issue create` attempt failed")
+        _warn(f"perf-trend watchdog: {detail}. Nobody has been notified; the findings "
+              "exist only in this job's log and step summary.")
+        _step_summary(f"⚠️ **perf-trend watchdog: issue creation FAILED** — {detail}.")
+    return filed
 
 
 def run_trend_watch(args) -> int:
@@ -745,8 +1630,18 @@ def run_trend_watch(args) -> int:
 
     try:
         if len(nights) < args.recent_nights + 2:
-            print(f"→ only {len(nights)} usable nights — need ≥ {args.recent_nights + 2}; "
-                  "skipping trend verdict (not enough history yet).", file=sys.stderr)
+            # Same class of failure as INCONCLUSIVE, and it used to be even more
+            # silent: a stderr line nobody reads, exit 0, no annotation, no
+            # summary. "The watchdog could not run" and "the watchdog found
+            # nothing" looked identical from the outside.
+            detail = (f"only {len(nights)} usable nights — need ≥ {args.recent_nights + 2}; "
+                      "no trend verdict was computed (not enough history yet)")
+            print(f"⚠️  {detail}.", file=sys.stderr)
+            _warn(f"perf-trend watchdog did NOT run — {detail}. Tonight's numbers were not "
+                  "checked for regressions; this is not a passing perf verdict.")
+            _step_summary(
+                f"⚠️ **perf-trend watchdog: not evaluated** — {detail}."
+            )
             return EXIT_OK
 
         findings, meta = analyze_trend(
@@ -768,25 +1663,69 @@ def run_trend_watch(args) -> int:
         else:
             open_issues = _list_open_trend_issues() if gh_available else []
 
+        # An unstratified verdict is a KNOWN-false-positive-prone mode (#1396):
+        # the anchor may mix runner hardware, so a finding can be a runner-pool
+        # reshuffle. The body says so; the JOB did not, so a nightly that quietly
+        # degraded to the legacy path looked exactly like a stratified one.
+        if meta.get("stratification") == STRATA_LEGACY:
+            _warn("perf-trend watchdog is running UNSTRATIFIED — no night in the window "
+                  "carries a `cpu:` header, so the anchor may mix runner hardware and a "
+                  "finding here can be a host-class artefact rather than a regression "
+                  "(#1396). Check the `cpu:` line of the linked runs before acting.")
+            _step_summary("⚠️ **perf-trend watchdog: UNSTRATIFIED verdict** — no `cpu:` header "
+                          "in the window; findings may be host-class artefacts (#1396).")
+
         if findings:
-            body = render_trend_issue_body(findings, meta)
-            print(body)
             current_state = _finding_state(findings)
+            # What THIS issue was filed for that tonight could not measure. The
+            # marker is the only memory of it, and overwriting it with tonight's
+            # findings is what disarms the close guard on a later CLEAR night.
+            prior_state = tracked = None
+            state_for_body = current_state
+            marker_unreadable = False
+            if open_issues:
+                prior_state = _parse_state_marker(open_issues[0].get("body"))
+                # PRESENT-but-UNREADABLE, told apart from ABSENT by the same
+                # predicate `_parse_state_marker` already uses to decide whether
+                # to annotate — no new state, no new marker field. See the body
+                # write below for why this branch has to exist at all.
+                marker_unreadable = (prior_state is None
+                                     and _marker_match(open_issues[0].get("body")) is not None)
+                tracked = _tracked_rows(prior_state, _unverified_benches(prior_state, meta))
+                state_for_body = _carry_forward_state(current_state, tracked)
+            body = render_trend_issue_body(findings, meta, state=state_for_body,
+                                           tracked=tracked)
+            print(body)
+            _step_summary(
+                f"⚠️ **perf-trend watchdog: {len(findings)} benchmark(s) above the floor** — "
+                + ", ".join(f"`{f.bench}` ({f.kind})" for f in findings)
+            )
             if open_issues:
                 num = open_issues[0]["number"]
                 # Persisted prior state lives in the issue body; a legacy body
                 # (no marker) is treated as no-change so the migration run is
                 # silent — it just refreshes the body and plants the marker.
-                prior_state = _parse_state_marker(open_issues[0].get("body"))
                 if prior_state is None:
-                    prior_state = current_state
-                transition = _state_transition_comment(prior_state, current_state)
+                    prior_state = state_for_body
+                unverified = _unverified_benches(prior_state, meta)
+                transition = _state_transition_comment(prior_state, state_for_body,
+                                                       unverified)
                 cur_labels = [l.get("name") for l in (open_issues[0].get("labels") or [])]
-                label_change = _recovering_label_change(findings, prior_state, cur_labels)
+                label_change = _recovering_label_change(findings, prior_state, cur_labels,
+                                                        unverified)
+                if tracked:
+                    print("→ carrying forward (not measured tonight, NOT recovered): "
+                          + ", ".join(f"{b} ({k})" for b, k in tracked), file=sys.stderr)
                 verb = "[dry-run] would update" if args.dry_run else "updating"
                 note = "state changed → will comment" if transition else "no state change → body only"
-                print(f"→ {verb} body of existing perf-trend issue #{num} ({note})",
-                      file=sys.stderr)
+                if marker_unreadable:
+                    print(f"→ NOT refreshing body of perf-trend issue #{num} — its state "
+                          "marker is PRESENT but UNREADABLE, and the refresh would replace "
+                          "it with tonight's clean one (see the annotation above).",
+                          file=sys.stderr)
+                else:
+                    print(f"→ {verb} body of existing perf-trend issue #{num} ({note})",
+                          file=sys.stderr)
                 if label_change:
                     print(f"→ {'[dry-run] would ' if args.dry_run else ''}{label_change} "
                           f"`{RECOVERING_LABEL}` label", file=sys.stderr)
@@ -804,7 +1743,21 @@ def run_trend_watch(args) -> int:
                     # the order would re-fire the same comment whenever the body
                     # edit failed, resurrecting the exact comment-spam this change
                     # exists to kill. Do not reorder.
-                    _gh_write(["issue", "edit", str(num), "--repo", REPO, "--body", body])
+                    #
+                    # …unless the marker we just failed to read is still sitting
+                    # in that body. The refresh writes a WELL-FORMED marker, so
+                    # it destroys the corruption it was reported for: measured,
+                    # night N emitted the "PRESENT but UNREADABLE" annotation and
+                    # wrote back `[]`, and from night N+1 on every run was green
+                    # and silent — the evidence gone, the close guard still
+                    # disarmed, nobody left to tell. Declining the write keeps the
+                    # broken marker on the issue so the annotation re-fires every
+                    # night until a human repairs it. ABSENT is NOT this case: a
+                    # legacy body has no claim to preserve and its write is the
+                    # migration that plants the first marker, so it proceeds.
+                    if not marker_unreadable:
+                        _gh_write(["issue", "edit", str(num), "--repo", REPO, "--body", body],
+                                  what=f"body refresh of issue #{num}")
                     if label_change == "add":
                         subprocess.run(
                             ["gh", "label", "create", RECOVERING_LABEL, "--repo", REPO,
@@ -813,14 +1766,17 @@ def run_trend_watch(args) -> int:
                             capture_output=True, text=True, check=False, timeout=60,
                         )
                         _gh_write(["issue", "edit", str(num), "--repo", REPO,
-                                   "--add-label", RECOVERING_LABEL])
+                                   "--add-label", RECOVERING_LABEL],
+                                  what=f"adding `{RECOVERING_LABEL}` to issue #{num}")
                     elif label_change == "remove":
                         _gh_write(["issue", "edit", str(num), "--repo", REPO,
-                                   "--remove-label", RECOVERING_LABEL])
+                                   "--remove-label", RECOVERING_LABEL],
+                                  what=f"removing `{RECOVERING_LABEL}` from issue #{num}")
                     # Comment ONLY on a real transition of the flagged set.
                     if transition:
                         _gh_write(["issue", "comment", str(num), "--repo", REPO,
-                                   "--body", transition])
+                                   "--body", transition],
+                                  what=f"transition comment on issue #{num}")
             else:
                 assignee_note = f" (assignee: {args.assignee})" if args.assignee else ""
                 print(f"→ {'[dry-run] would open' if args.dry_run else 'opening'} "
@@ -833,33 +1789,190 @@ def run_trend_watch(args) -> int:
                          "Nightly bench trend regression (auto-filed)", "--force"],
                         capture_output=True, text=True, check=False, timeout=60,
                     )
-                    create = ["issue", "create", "--repo", REPO,
-                              "--title", "Nightly bench trend regression detected",
-                              "--label", PERF_TREND_LABEL, "--body", body]
-                    # Assign when requested, but NEVER let an unresolvable login
-                    # block the alert: the default assignee is the repo OWNER,
-                    # which `gh issue create --assignee` rejects ("Could not
-                    # resolve to a User") if the owner is a GitHub Org rather than
-                    # a User. Try with the assignee; on failure, file unassigned
-                    # (the `perf-trend` label still drives notification).
-                    filed = False
-                    if args.assignee:
-                        filed = _gh_write(create + ["--assignee", args.assignee])
-                        if not filed:
-                            print(f"::warning::could not assign '{args.assignee}' "
-                                  "(org name? invalid login?) — filing perf-trend issue "
-                                  "unassigned; rely on the label for notification.",
-                                  file=sys.stderr)
-                    if not filed:
-                        _gh_write(create)
+                    _file_new_issue(body, args.assignee, len(findings))
             return EXIT_OK
 
-        # No regression → recovered/closed-loop. Close EVERY open perf-trend issue
-        # (not just [0]) so stragglers never linger, and CLOSE BEFORE commenting so
-        # a transient comment failure can't leave a recovered issue open.
-        print("✅ No sustained nightly bench regression.")
+        # ── No findings. That is TWO different situations, not one. ──────────
+        # INCONCLUSIVE = nothing could be judged tonight (too few same-class
+        # nights). Silence from a detector that never ran is not evidence of
+        # recovery, so it must never fire AND never close.
+        if meta["status"] == STATUS_INCONCLUSIVE:
+            # `_safe_md` because the host string is FREE-FORM artifact content and
+            # this detail is interpolated into a `::warning::` annotation and into
+            # the markdown step summary — the same injection surface the issue
+            # body was hardened against, reached by a different route.
+            host = _safe_md(meta.get("today_cpu_model")) or "unknown"
+            # Causes, not one blanket sentence: "too few same-class nights" is a
+            # misdiagnosis for a bench that stopped reporting, and on an
+            # all-one-class window it printed "only 14 of 14 window nights".
+            detail = (f"nothing evaluable tonight on host class {host} — "
+                      + "; ".join(_inconclusive_causes(meta)))
+            print(f"⚠️  INCONCLUSIVE — {detail}.")
+            # An INCONCLUSIVE night is NOT a clean bill of health, and until this
+            # follow-up it looked exactly like one from the outside: no
+            # annotation, no summary, nothing on the issue. A real +30% permanent
+            # regression on a night with too few same-class peers produced a
+            # green, silent run. Now it says so in all three places a human
+            # looks (follow-up C).
+            _warn(f"perf-trend watchdog INCONCLUSIVE — {detail}. Tonight's numbers were NOT "
+                  "checked for regressions; this is not a passing perf verdict.")
+            _step_summary(
+                f"⚠️ **perf-trend watchdog: INCONCLUSIVE** — {detail}. "
+                f"Newest night in the window: {meta.get('today_night') or 'unknown'}."
+            )
+            for issue in open_issues:
+                num = issue["number"]
+                print(f"→ NOT closing perf-trend issue #{num} — tonight is "
+                      "INCONCLUSIVE, not recovered.", file=sys.stderr)
+                # Refresh the body so the ticket says WHICH night it is showing
+                # and that tonight was not one of them. The marker is rewritten
+                # from the PRIOR state, not from tonight's empty finding set:
+                # tonight produced no evidence, so it may not rewrite the flagged
+                # set (which would make the next real transition announce every
+                # bench as newly flagged). The same prior state is ALSO rendered
+                # visibly — a body that says "nothing is flagged" while its own
+                # hidden marker says `sustained` contradicts itself, and the
+                # reader has no way to know which half to believe.
+                #
+                # `or []` is the one input for which that rule cannot hold: when
+                # the marker is PRESENT but UNREADABLE it collapses to the empty
+                # ledger and writes `state=[]` — rewriting the flagged set from
+                # tonight's nothing, precisely what the paragraph above forbids,
+                # and overwriting the corrupt marker with a clean one so the
+                # annotation that just reported it never fires again. So this
+                # path declines the write instead and leaves the damaged body
+                # exactly as it found it. ABSENT still takes `or []`: that is the
+                # legacy-issue migration and it must not be blocked.
+                prior_state = _parse_state_marker(issue.get("body"))
+                if prior_state is None and _marker_match(issue.get("body")) is not None:
+                    print(f"→ NOT refreshing body of perf-trend issue #{num} — its state "
+                          "marker is PRESENT but UNREADABLE, and the refresh would replace "
+                          "it with a clean empty one (see the annotation above).",
+                          file=sys.stderr)
+                    continue
+                prior_state = prior_state or []
+                body = render_trend_issue_body(
+                    [], meta, state=prior_state,
+                    tracked=_tracked_rows(prior_state,
+                                          _unverified_benches(prior_state, meta)))
+                print(f"→ {'[dry-run] would update' if args.dry_run else 'updating'} body of "
+                      f"perf-trend issue #{num} (INCONCLUSIVE — not evaluated tonight)",
+                      file=sys.stderr)
+                if not args.dry_run and gh_available:
+                    _gh_write(["issue", "edit", str(num), "--repo", REPO, "--body", body],
+                              what=f"INCONCLUSIVE body refresh of issue #{num}")
+            return EXIT_OK
+
+        # CLEAR = benches WERE judged on tonight's host class and none is above
+        # its floor. Close EVERY open perf-trend issue (not just [0]) so
+        # stragglers never linger, and CLOSE BEFORE commenting so a transient
+        # comment failure can't leave a recovered issue open.
+        #
+        # ⚠️ The evidence here is the SLIDING settled-window anchor, so this
+        # close is weaker than it looks and the comment says so rather than
+        # claiming a recovery the watchdog cannot observe. Hardening it (a
+        # per-bench baseline frozen when the issue was filed) is #1396's open
+        # follow-up; a first attempt was reverted for getting the surrounding
+        # state lifecycle wrong.
+        #
+        # ⚠️ CLEAR is a verdict about the benches tonight COULD judge, and an
+        # unconditional "✅ no regression" overstates it by exactly the ones it
+        # could not. On a night with no open issue that WAS the entire output:
+        # zero annotations, and — nothing on this path having called
+        # `_step_summary` — no step summary file created at all. Measured: 14
+        # same-class nights, `BenchmarkA` flat, a second bench present only in
+        # the newest 3 carrying a real +30%, and the job printed one green tick
+        # while `meta` held `inconclusive=[that bench]`. That is follow-up C's
+        # failure mode (a detector that did not run looking like one that found
+        # nothing) surviving one branch further down. The sentences are already
+        # computed — this path just never asked for them.
+        skipped = meta.get("inconclusive_benches") or []
+        if skipped:
+            # `_safe_md`: the host string is FREE-FORM artifact content and goes
+            # into a `::warning::` and into markdown, same as the INCONCLUSIVE
+            # branch above.
+            host = _safe_md(meta.get("today_cpu_model")) or "unknown"
+            names = ", ".join(f"`{b}`" for b in skipped)
+            detail = (f"{len(meta.get('evaluated_benches') or [])} benchmark(s) were judged on "
+                      f"host class {host} and none is above its floor, but "
+                      f"{len(skipped)} was/were NOT judged tonight ({names}) — "
+                      + "; ".join(_inconclusive_causes(meta))
+                      + " — a CLEAR verdict on the benchmarks that WERE judged is not evidence "
+                        "about the others")
+            print("✅ No sustained nightly bench regression among the benchmarks tonight could "
+                  f"judge — but {len(skipped)} was/were NOT judged: {names}.")
+            _warn(f"perf-trend watchdog CLEAR but INCOMPLETE — {detail}.")
+            _step_summary(f"⚠️ **perf-trend watchdog: CLEAR but INCOMPLETE** — {detail}.")
+        else:
+            print("✅ No sustained nightly bench regression.")
         for issue in open_issues:
             num = issue["number"]
+            # ── PER-BENCH close guard ────────────────────────────────────────
+            # CLEAR is a statement about the benches that were EVALUATED. This
+            # issue was filed for particular ones, and the marker remembers
+            # which. If any of them is not in tonight's evaluated set — it
+            # stopped reporting, or its stratum went thin — then tonight has no
+            # evidence about the thing this issue is about, and closing it is
+            # the same error the three-state verdict fixed at night granularity,
+            # committed one level down. A body whose own marker says `sustained`
+            # must never be closed by a night that did not measure it.
+            #
+            # ABSENT marker → unchanged behaviour (close): a legacy or hand-filed
+            # issue never recorded a per-bench claim, so there is nothing here to
+            # check. An UNREADABLE marker is NOT the same case and must not be
+            # described as one — a claim WAS recorded and cannot be read, so this
+            # close proceeds blind. Its behaviour is unchanged too (inventing a
+            # marker-health mechanism here is a separate design, tried and
+            # reverted), but `_parse_state_marker` reports it as its own thing in
+            # the log, an annotation and the job summary rather than letting the
+            # two share one silence.
+            prior_state = _parse_state_marker(issue.get("body"))
+            unverified = _unverified_benches(prior_state, meta)
+            if unverified:
+                names = ", ".join(f"`{b}`" for b in unverified)
+                it = "it" if len(unverified) == 1 else "them"
+                # WHICH bench is stuck and for HOW LONG. Without it the same
+                # warning repeats every night with no way to tell a bench that
+                # is down for one night from one that was renamed a month ago —
+                # and only the second one needs a human.
+                # Counted over tonight's STRATUM, the same population
+                # `_unverified_causes` classifies from — see `_class_nights`.
+                strat_nights = _class_nights(nights, meta)
+                stuck = "; ".join(
+                    _held_open_detail(strat_nights, b, meta.get("stratified", False))
+                    for b in unverified)
+                detail = (f"issue #{num} is tracking {names}, and tonight did NOT evaluate "
+                          f"{it} ({stuck}) — "
+                          + "; ".join(_unverified_causes(meta, unverified))
+                          + f" — a CLEAR verdict on the OTHER benchmarks is not evidence "
+                            f"about {it}, so the issue stays open")
+                print(f"→ NOT closing perf-trend issue #{num} — tonight could not verify "
+                      f"{names}.", file=sys.stderr)
+                _warn(f"perf-trend watchdog: {detail}.")
+                _step_summary(f"⚠️ **perf-trend watchdog: issue #{num} held open** — {detail}.")
+                tracked = _tracked_rows(prior_state, unverified)
+                # ⚠️ `tracked`, NOT `prior_state`. This path is a CLEAR night:
+                # every prior row NOT in `tracked` was measured tonight and was
+                # under its floor, so writing the prior ledger back verbatim
+                # re-asserts a flag the night just disproved — and the ledger
+                # then never shrinks. Two alternating benches keep the issue
+                # open forever (stratification alone produces that parity), and
+                # a stale row makes the NEXT night's transition comment wrong in
+                # whichever direction the stale kind happens to point: a genuine
+                # new `sustained` reads as "no change" (subscribers get nothing)
+                # and a genuine new `creep` reads as "Eased to creep", i.e. good
+                # news, for a bench that just started regressing. Tonight's
+                # findings are empty here, so this is the same rule the FINDINGS
+                # path applies — `_carry_forward_state(current, tracked)` with an
+                # empty `current`.
+                body = render_trend_issue_body([], meta, state=tracked, tracked=tracked)
+                print(f"→ {'[dry-run] would update' if args.dry_run else 'updating'} body of "
+                      f"perf-trend issue #{num} (CLEAR, but its benches were not verified)",
+                      file=sys.stderr)
+                if not args.dry_run and gh_available:
+                    _gh_write(["issue", "edit", str(num), "--repo", REPO, "--body", body],
+                              what=f"held-open body refresh of issue #{num}")
+                continue
             print(f"→ {'[dry-run] would close' if args.dry_run else 'closing'} "
                   f"recovered perf-trend issue #{num}", file=sys.stderr)
             cur_labels = [l.get("name") for l in (issue.get("labels") or [])]
@@ -867,25 +1980,100 @@ def run_trend_watch(args) -> int:
             if drop_recovering:
                 print(f"→ {'[dry-run] would ' if args.dry_run else ''}remove stale "
                       f"`{RECOVERING_LABEL}` before closing #{num}", file=sys.stderr)
+            # The body is refreshed on the way out too. Nothing else refreshes it
+            # on a CLEAR night, so the closing comment used to land beside the
+            # table of the LAST night that found something — a "+30.8% sustained"
+            # table sitting directly above "✅ Auto-closing", which reads as if
+            # the watchdog closed an issue it still had findings for.
+            #
+            # The marker is BLANKED, and `[]` is the only value consistent with
+            # everything else this branch writes. Control flow proves it: the
+            # held-open guard above `continue`s whenever `unverified` is
+            # non-empty, so reaching this line means EVERY row of `prior_state`
+            # was evaluated tonight and every one of them was under its floor.
+            # A ledger written here is therefore 100% rows the same night just
+            # disproved — the identical error the held-open path documents two
+            # screens up ("writing the prior ledger back verbatim re-asserts a
+            # flag the night just disproved"), committed on the way out.
+            #
+            # Keeping it was tried and is reverted. Measured symptoms, all on the
+            # body written at close time: the prose says "Nothing above its floor
+            # tonight (CLEAR)" while the hidden marker says
+            # `[["A","sustained"],["B","creep"]]`; no `tracked=` is passed, so
+            # there is not even a STILL TRACKED line to disclose the mismatch;
+            # after a reopen the next transition reads `**Eased to creep**` (good
+            # news) where the truth is `Newly flagged`, the `recovering` label can
+            # be added on that same false diff, and — because this path never
+            # prunes — the ledger is a fixed point that only ever grows, which
+            # also widens the rename wedge to benches that have already retired.
+            #
+            # The premise the retained ledger was argued from is also false: the
+            # auto-close comment below says "A new issue is filed if it regresses
+            # again." It never suggests reopening.
+            #
+            # KNOWN LIMITATION (deliberate, see #1396 follow-up): a REOPENED issue
+            # therefore carries no per-bench claim, so the next CLEAR night closes
+            # it again without the guard. Re-arming that needs issue-lifecycle
+            # state this file has repeatedly got wrong; it is tracked with the
+            # other lifecycle gaps rather than solved with another marker field.
+            body = render_trend_issue_body([], meta, state=[])
+            print(f"→ {'[dry-run] would refresh' if args.dry_run else 'refreshing'} body of "
+                  f"#{num} to tonight's CLEAR verdict before closing", file=sys.stderr)
             if not args.dry_run and gh_available:
                 # Strip the recovering label first so a closed issue never retains it.
                 if drop_recovering:
                     _gh_write(["issue", "edit", str(num), "--repo", REPO,
-                               "--remove-label", RECOVERING_LABEL])
-                _gh_write(["issue", "close", str(num), "--repo", REPO])
-                _gh_write(["issue", "comment", str(num), "--repo", REPO, "--body",
-                           "✅ Nightly perf has returned below the floor across the recent window "
-                           "— auto-closing (closed loop). A new issue is filed if it regresses again."])
+                               "--remove-label", RECOVERING_LABEL],
+                              what=f"removing stale `{RECOVERING_LABEL}` from issue #{num}")
+                # Close BEFORE commenting so a transient comment failure cannot
+                # leave a recovered issue open — and gate the comment on the
+                # close actually succeeding. It used to be unconditional: a
+                # failed close left the issue OPEN with "✅ Auto-closing" as its
+                # newest comment, which is a lie about the state of the ticket
+                # printed onto the ticket itself.
+                closed = _gh_write(["issue", "close", str(num), "--repo", REPO],
+                                   what=f"closing recovered issue #{num}")
+                if closed:
+                    _gh_write(["issue", "edit", str(num), "--repo", REPO, "--body", body],
+                              what=f"CLEAR body refresh of issue #{num}")
+                    _gh_write(["issue", "comment", str(num), "--repo", REPO, "--body",
+                               "✅ Auto-closing (closed loop): no benchmark is above its floor "
+                               "on tonight's evaluable, same-host-class window. _Scope: that "
+                               "verdict is measured against the SLIDING settled-window anchor, "
+                               "which drifts with the data — it is not proof that perf returned "
+                               "to the level this issue was filed at. A new issue is filed if it "
+                               "regresses again._"],
+                              what=f"auto-close comment on issue #{num}")
+                else:
+                    print(f"  ⚠️  issue #{num} was NOT closed — skipping the auto-close "
+                          "comment (it would claim a close that did not happen).",
+                          file=sys.stderr)
         return EXIT_OK
     finally:
         if cache_dir is not None and cleanup:
             shutil.rmtree(cache_dir, ignore_errors=True)
 
 
+def _at_least(minimum: int):
+    """argparse type: an int with a lower bound, rejected as a usage error.
+
+    ``--recent-nights 0`` walked all the way into the detector, where the recent
+    slice `series[:0]` is empty, every `len(recent) < 0` guard is vacuously False,
+    and `recent[0]` raised IndexError — a traceback and exit 1 out of a nightly
+    watchdog, from a flag value argparse could have rejected at the door."""
+    def parse(raw: str) -> int:
+        value = int(raw)
+        if value < minimum:
+            raise argparse.ArgumentTypeError(f"must be >= {minimum} (got {value})")
+        return value
+    parse.__name__ = f"int>={minimum}"
+    return parse
+
+
 def main() -> int:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--limit", type=int, default=28,
+    parser.add_argument("--limit", type=_at_least(1), default=28,
                         help="Number of recent successful runs to analyze (default: 28).")
     parser.add_argument("--workflow", default=WORKFLOW_FILE,
                         help=f"Workflow file (default: {WORKFLOW_FILE}).")
@@ -899,11 +2087,11 @@ def main() -> int:
     parser.add_argument("--trend-watch", action="store_true",
                         help="Nightly trend mode: open/update/close a perf-trend issue on "
                              "sustained regression (instead of the variance GO/NO-GO table).")
-    parser.add_argument("--trend-limit", type=int, default=14,
+    parser.add_argument("--trend-limit", type=_at_least(1), default=14,
                         help="Nights of history to pull for --trend-watch (default: 14).")
-    parser.add_argument("--recent-nights", type=int, default=3,
+    parser.add_argument("--recent-nights", type=_at_least(1), default=3,
                         help="K most-recent nights that must all regress for the sustained "
-                             "rule (default: 3).")
+                             "rule (must be >= 1; default: 3).")
     parser.add_argument("--min-floor-pct", type=float, default=5.0,
                         help="Minimum regression floor %% for --trend-watch (default: 5.0).")
     parser.add_argument("--canary-floor-mult", type=float, default=3.0,
@@ -916,7 +2104,9 @@ def main() -> int:
                         help="Print intended issue actions without calling gh writes.")
     parser.add_argument("--fixture-json", type=Path, default=None,
                         help="Offline test: read nightly medians from a JSON fixture "
-                             "instead of gh (implies no gh writes).")
+                             "instead of gh (implies no gh writes). Each entry accepts an "
+                             "optional \"cpu_model\" (host class); omitting it exercises the "
+                             "unstratified fallback.")
     parser.add_argument("--fixture-open-issue", type=int, default=None,
                         help="With --fixture-json, simulate a pre-existing open perf-trend "
                              "issue number (tests the update/close closed-loop offline).")
