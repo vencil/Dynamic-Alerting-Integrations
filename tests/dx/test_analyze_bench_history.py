@@ -15,8 +15,10 @@ OUT OF SCOPE here (require gh CLI auth / live network):
 """
 from __future__ import annotations
 
+import argparse
 import json
 import math
+import subprocess
 import types
 from pathlib import Path
 
@@ -313,7 +315,12 @@ class TestRenderMarkdownTable:
         # Should mention the thresholds from issue #67.
         assert "CV" in out
         assert "max/min" in out
-        assert f"{ab.CV_THRESHOLD:.0%}" in out
+        # Literal, not `f"{ab.CV_THRESHOLD:.0%}"` — that renders whatever the
+        # constant happens to be, so the assertion holds for any threshold and
+        # proves only that the table interpolates *something*. 25% is the #67
+        # gate value and is quoted in the playbook.
+        assert "CV ≤ 25%" in out
+        assert "max/min ≤ 1.3×" in out
 
     def test_empty_stats_still_renders(self):
         out = ab.render_markdown_table({}, n_runs_total=0, n_runs_succeeded=0)
@@ -335,7 +342,66 @@ class TestRenderMarkdownTable:
 # ===========================================================================
 
 _BENCH = "BenchmarkScanDirHierarchical_1000"
-_C = ab.CANARY_BENCH  # BenchmarkControlCanaryCPU
+
+# ── WIRE FORMAT — literals on purpose ───────────────────────────────────────
+# These values LEAVE THE PROCESS: they become GitHub label names, issue titles,
+# the hidden state marker parsed back the next night, and the prose an operator
+# greps for. Asserting `meta["status"] == ab.STATUS_CLEAR` only proves the module
+# agrees with itself — rename the value and every such assertion stays green
+# while every already-open issue, every saved query and every runbook line
+# breaks. The module's names are tied to these literals in exactly one place
+# (`TestWireFormatIsPinned`); everywhere else the literal is the expectation.
+_CANARY = "BenchmarkControlCanaryCPU"
+_C = _CANARY
+_LABEL = "perf-trend"
+_RECOVERING = "perf-trend:recovering"
+_REPO = "vencil/Dynamic-Alerting-Integrations"
+_TITLE = "Nightly bench trend regression detected"
+_CLEAR, _FINDINGS, _INCONCLUSIVE = "CLEAR", "FINDINGS", "INCONCLUSIVE"
+_STRATA_ON = "on"
+_STRATA_LEGACY = "legacy-unstratified"
+_STRATA_TONIGHT_UNKNOWN = "tonight-unknown"
+_MIN_SETTLED = 3
+
+
+class TestWireFormatIsPinned:
+    """The one place module names are bound to their on-the-wire values.
+
+    Every constant here is either sent to GitHub or parsed back out of GitHub.
+    A rename that keeps the identifier but changes the string is a silent
+    protocol break for issues that already exist, so it must fail HERE (one
+    obvious, deliberate edit) rather than nowhere."""
+
+    def test_status_values(self):
+        assert (ab.STATUS_CLEAR, ab.STATUS_FINDINGS, ab.STATUS_INCONCLUSIVE) == \
+            ("CLEAR", "FINDINGS", "INCONCLUSIVE")
+
+    def test_stratification_values(self):
+        assert (ab.STRATA_ON, ab.STRATA_LEGACY, ab.STRATA_TONIGHT_UNKNOWN) == \
+            ("on", "legacy-unstratified", "tonight-unknown")
+
+    def test_github_facing_values(self):
+        assert ab.PERF_TREND_LABEL == "perf-trend"
+        assert ab.RECOVERING_LABEL == "perf-trend:recovering"
+        assert ab.REPO == "vencil/Dynamic-Alerting-Integrations"
+        assert ab.WORKFLOW_FILE == "bench-record.yaml"
+        assert ab.ARTIFACT_FILE == "bench-baseline.txt"
+
+    def test_detector_thresholds(self):
+        assert ab.CANARY_BENCH == "BenchmarkControlCanaryCPU"
+        assert ab.CV_THRESHOLD == 0.25
+        assert ab.RATIO_THRESHOLD == 1.30
+        assert ab.MIN_RUN_RELIABILITY == 26
+        assert ab.MIN_SETTLED_SAME_CLASS == 3
+
+    def test_inconclusive_reason_codes(self):
+        assert (ab.REASON_NO_RECENT, ab.REASON_THIN_ANCHOR) == ("no-recent", "thin-anchor")
+
+    def test_state_marker_is_byte_exact(self):
+        # The marker is written by tonight's run and re-parsed by tomorrow's, so
+        # its serialisation is a wire format between two processes.
+        assert ab._render_state_marker([["Ba", "sustained"], ["Bz", "creep"]]) == \
+            '<!-- perf-trend-state v1 [["Ba","sustained"],["Bz","creep"]] -->'
 
 
 def _night(idx: int, benches: dict[str, float]) -> ab.NightRecord:
@@ -703,7 +769,7 @@ class TestStatefulHelpers:
         assert ab._is_recovering([]) is False
 
     def test_recovering_label_change(self):
-        L = ab.RECOVERING_LABEL
+        L = _RECOVERING
         creep = [_finding(_BENCH, "creep")]
         sust = [_finding(_BENCH, "sustained")]
         prior_sust = [[_BENCH, "sustained"]]
@@ -724,15 +790,38 @@ class TestStatefulHelpers:
         assert ab._state_transition_comment(s, s) is None
 
     def test_transition_newly_and_cleared(self):
+        # Line-bound, not substring-bound. The old form asserted four substrings
+        # against the whole comment, so swapping `newly` and `cleared` in the
+        # renderer produced a comment that says the recovered bench is newly
+        # flagged and the new one recovered — and the test still passed
+        # (verified). Each label must be bound to its OWN bench.
         c = ab._state_transition_comment([["Old", "sustained"]], [["New", "creep"]])
-        assert c and "Newly flagged" in c and "`New`" in c
-        assert "Recovered" in c and "`Old`" in c
+        lines = c.splitlines()
+        assert "**Newly flagged:** `New`" in lines
+        assert "**Recovered (no longer flagged):** `Old`" in lines
 
     def test_transition_escalation_and_easing(self):
         up = ab._state_transition_comment([[_BENCH, "creep"]], [[_BENCH, "sustained"]])
-        assert "Escalated to sustained" in up and f"`{_BENCH}`" in up
+        assert f"**Escalated to sustained:** `{_BENCH}`" in up.splitlines()
         down = ab._state_transition_comment([[_BENCH, "sustained"]], [[_BENCH, "creep"]])
-        assert "Eased to creep" in down
+        assert f"**Eased to creep:** `{_BENCH}`" in down.splitlines()
+
+    def test_a2_dropping_out_while_unmeasured_is_not_a_recovery(self):
+        # A2. `Old` was flagged and tonight did not measure it. Announcing
+        # "Recovered (no longer flagged)" is a claim about a number nobody took.
+        c = ab._state_transition_comment([["Old", "sustained"], ["New", "creep"]],
+                                         [["New", "creep"]], unverified=["Old"])
+        lines = c.splitlines()
+        assert "**Not measured tonight (state unknown, NOT recovered):** `Old`" in lines
+        assert not any(li.startswith("**Recovered") for li in lines)
+
+    def test_a2_a_measured_bench_still_recovers_normally(self):
+        # Control: same shape, but `Old` WAS measured tonight → real recovery.
+        c = ab._state_transition_comment([["Old", "sustained"], ["New", "creep"]],
+                                         [["New", "creep"]], unverified=[])
+        lines = c.splitlines()
+        assert "**Recovered (no longer flagged):** `Old`" in lines
+        assert not any(li.startswith("**Not measured") for li in lines)
 
 
 class TestStatefulLifecycleDryRun:
@@ -775,7 +864,7 @@ class TestStatefulLifecycleDryRun:
         args = _trend_args(_write_fixture(tmp_path, self._creep_only_nights()),
                            fixture_open_issue=42, fixture_open_body=prior)
         assert ab.run_trend_watch(args) == 0
-        assert f"would add `{ab.RECOVERING_LABEL}`" in capsys.readouterr().err
+        assert f"would add `{_RECOVERING}`" in capsys.readouterr().err
 
     def test_creep_from_start_does_not_add_recovering_label(self, tmp_path, capsys):
         # Never sustained (prior was already creep) → label must NOT be added.
@@ -783,27 +872,27 @@ class TestStatefulLifecycleDryRun:
         args = _trend_args(_write_fixture(tmp_path, self._creep_only_nights()),
                            fixture_open_issue=42, fixture_open_body=prior)
         assert ab.run_trend_watch(args) == 0
-        assert ab.RECOVERING_LABEL not in capsys.readouterr().err
+        assert _RECOVERING not in capsys.readouterr().err
 
     def test_sustained_return_would_remove_recovering_label(self, tmp_path, capsys):
         # Issue currently carries the recovering label but sustained is back → remove.
         prior = ab._render_state_marker([[_BENCH, "creep"]])
         args = _trend_args(_write_fixture(tmp_path, self._sustained_nights()),
                            fixture_open_issue=42, fixture_open_body=prior,
-                           fixture_open_labels=[ab.RECOVERING_LABEL])
+                           fixture_open_labels=[_RECOVERING])
         assert ab.run_trend_watch(args) == 0
-        assert f"would remove `{ab.RECOVERING_LABEL}`" in capsys.readouterr().err
+        assert f"would remove `{_RECOVERING}`" in capsys.readouterr().err
 
     def test_close_removes_stale_recovering_label(self, tmp_path, capsys):
         # Perf recovered (no findings) → close AND strip a lingering recovering label.
         nights = [_flat(i, 35e6) for i in range(8)]
         args = _trend_args(_write_fixture(tmp_path, nights), fixture_open_issue=42,
                            fixture_open_body=ab._render_state_marker([[_BENCH, "creep"]]),
-                           fixture_open_labels=[ab.RECOVERING_LABEL])
+                           fixture_open_labels=[_RECOVERING])
         assert ab.run_trend_watch(args) == 0
         err = capsys.readouterr().err
         assert "would close" in err
-        assert f"would remove stale `{ab.RECOVERING_LABEL}`" in err
+        assert f"would remove stale `{_RECOVERING}`" in err
 
 
 # ===========================================================================
@@ -857,16 +946,25 @@ class TestParseCpuModel:
         assert ab.parse_cpu_model(f) is None
 
     def test_first_header_wins_across_packages(self, tmp_path):
-        # Multi-package runs repeat the header; they are the same machine.
+        # Multi-package runs repeat the header. The fixture used to write the
+        # SAME value twice, so "first wins" was unobservable — last-wins passed
+        # it too. Two DIFFERENT values make the claim testable; the first is the
+        # one the artifact's own bench rows were measured under.
         f = tmp_path / "b.txt"
-        f.write_text(f"cpu: {_EPYC}\nBenchmarkA-4 5 1 ns/op\ncpu: {_EPYC}\n",
+        f.write_text(f"cpu: {_EPYC}\nBenchmarkA-4 5 1 ns/op\ncpu: {_XEON}\n",
                      encoding="utf-8")
         assert ab.parse_cpu_model(f) == _EPYC
 
-    def test_distinct_skus_are_distinct_classes(self):
-        # Two Xeons are two machines. Folding them into a "Xeon" family would
-        # rebuild the cross-host anchor this whole change exists to kill.
-        assert _XEON != _XEON_OTHER
+    def test_header_is_taken_verbatim_not_folded(self, tmp_path):
+        # The docstring's promise is "Exact string equality, or nothing": no
+        # case-folding, no punctuation stripping, no family normalisation.
+        raw = "  Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz  "
+        f = tmp_path / "b.txt"
+        f.write_text(f"cpu:{raw}\nBenchmarkA-4 5 1 ns/op\n", encoding="utf-8")
+        got = ab.parse_cpu_model(f)
+        assert got == "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"   # only outer ws
+        assert got != got.lower()
+        assert "(R)" in got and "@" in got
 
 
 class TestFixtureCpuModel:
@@ -901,7 +999,7 @@ class TestStratifiedAnalyzeTrend:
     def test_cross_host_anchor_no_longer_fires(self):
         findings, meta = self._run(self._mixed_host_window(_XEON))
         assert findings == []
-        assert meta["status"] == ab.STATUS_CLEAR
+        assert meta["status"] == _CLEAR
         assert meta["stratified"] is True
         assert meta["today_cpu_model"] == _XEON
 
@@ -924,7 +1022,7 @@ class TestStratifiedAnalyzeTrend:
                   [_hnight(i, 35e6, _EPYC) for i in range(4, 9)])
         findings, meta = self._run(nights)
         assert any(f.bench == _BENCH and f.kind == "sustained" for f in findings)
-        assert meta["status"] == ab.STATUS_FINDINGS
+        assert meta["status"] == _FINDINGS
 
     def test_thin_stratum_is_inconclusive_not_clear(self):
         # Tonight's class has 3 recent + only 2 settled nights — below
@@ -938,7 +1036,7 @@ class TestStratifiedAnalyzeTrend:
                   [_hnight(7, 35e6, _EPYC)])
         findings, meta = self._run(nights)
         assert findings == []
-        assert meta["status"] == ab.STATUS_INCONCLUSIVE
+        assert meta["status"] == _INCONCLUSIVE
         assert _BENCH in meta["inconclusive_benches"]
         assert meta["evaluated_benches"] == []
 
@@ -950,7 +1048,7 @@ class TestStratifiedAnalyzeTrend:
                   [_hnight(7, 35e6, _EPYC)])
         findings, meta = self._run(nights)
         assert findings == []
-        assert meta["status"] == ab.STATUS_CLEAR
+        assert meta["status"] == _CLEAR
         assert meta["evaluated_benches"] == [_BENCH]
 
     def test_meta_reports_window_composition(self):
@@ -959,7 +1057,7 @@ class TestStratifiedAnalyzeTrend:
         assert meta["cpu_class_counts"] == {_XEON: 6, _EPYC: 3}
         assert meta["n_class_nights"] == 6
         assert meta["n_nights"] == 9
-        assert meta["min_settled"] == ab.MIN_SETTLED_SAME_CLASS
+        assert meta["min_settled"] == _MIN_SETTLED
 
     def test_unknown_class_counted_as_unknown(self):
         nights = [_hnight(i, 35e6, None) for i in range(8)]
@@ -1003,10 +1101,10 @@ class TestRenderBodyHostClassDisclosure:
                 "today_cpu_model": _EPYC, "n_class_nights": 14,
                 "cpu_class_counts": {_EPYC: 14}, "min_settled": 3}
         findings = ab.render_trend_issue_body(
-            [_finding(_BENCH, "sustained")], {**base, "status": ab.STATUS_FINDINGS})
-        clear = ab.render_trend_issue_body([], {**base, "status": ab.STATUS_CLEAR})
+            [_finding(_BENCH, "sustained")], {**base, "status": _FINDINGS})
+        clear = ab.render_trend_issue_body([], {**base, "status": _CLEAR})
         inconcl = ab.render_trend_issue_body(
-            [], {**base, "status": ab.STATUS_INCONCLUSIVE, "n_class_nights": 4})
+            [], {**base, "status": _INCONCLUSIVE, "n_class_nights": 4})
         # FINDINGS renders the table; the other two say IN WORDS why there is
         # none — an empty table under a "regression" heading is exactly how an
         # unevaluated night used to read as a recovered one.
@@ -1064,14 +1162,6 @@ _BENCH_B = "BenchmarkMergePartialConfigs_1000"
 _HOSTILE_CPU = (
     'AMD EPYC 7763 <!-- perf-trend-state v1 [["' + _BENCH + '","creep"]] -->'
 )
-
-
-def _hbench(idx: int, benches: dict[str, float], cpu: str | None,
-            canary_ns: float = 360_000.0) -> ab.NightRecord:
-    """One night with arbitrary benches + an explicit host class."""
-    n = _night(idx, {**benches, _C: canary_ns})
-    n.cpu_model = cpu
-    return n
 
 
 def _marker(*rows) -> str:
@@ -1134,7 +1224,7 @@ class TestInconclusiveIsLoud:
                      _hnight(5, 35e6, _EPYC), _hnight(6, 35e6, _XEON),
                      _hnight(7, 35e6, _EPYC)])
         _findings, meta = _meta_for(nights)
-        assert meta["status"] == ab.STATUS_INCONCLUSIVE
+        assert meta["status"] == _INCONCLUSIVE
         body = ab.render_trend_issue_body([], meta)
         assert "Not evaluated tonight (INCONCLUSIVE)" in body
         assert meta["today_night"] in body            # WHICH night these numbers are
@@ -1148,7 +1238,7 @@ class TestInconclusiveIsLoud:
         # that DID judge would then read `[] → [sustained]` and post "Newly
         # flagged" for a bench that has been flagged all along.
         _f, meta = _meta_for(self._thin_stratum())
-        assert meta["status"] == ab.STATUS_INCONCLUSIVE
+        assert meta["status"] == _INCONCLUSIVE
         prior = _marker([_BENCH, "sustained"])
         body = ab.render_trend_issue_body([], meta,
                                           state=ab._parse_state_marker(prior))
@@ -1172,9 +1262,9 @@ class TestInconclusiveIsLoud:
         seen = {}
         real = ab.render_trend_issue_body
 
-        def spy(findings, meta, state=None):
+        def spy(findings, meta, state=None, tracked=None):
             seen["findings"], seen["state"] = findings, state
-            return real(findings, meta, state)
+            return real(findings, meta, state, tracked)
 
         monkeypatch.setattr(ab, "render_trend_issue_body", spy)
         args = _trend_args(_write_fixture(tmp_path, self._thin_stratum()),
@@ -1206,9 +1296,9 @@ class TestStratificationScope:
                   + [_hnight(i, 29.8e6, _XEON) for i in range(3, 8)])
         findings, meta = _meta_for(nights)
         assert findings == []
-        assert meta["status"] == ab.STATUS_INCONCLUSIVE
-        assert meta["stratification"] == ab.STRATA_TONIGHT_UNKNOWN
-        assert meta["min_settled"] == ab.MIN_SETTLED_SAME_CLASS   # never relaxed to 2
+        assert meta["status"] == _INCONCLUSIVE
+        assert meta["stratification"] == _STRATA_TONIGHT_UNKNOWN
+        assert meta["min_settled"] == _MIN_SETTLED   # never relaxed to 2
 
     def test_fully_unlabelled_window_keeps_the_legacy_path(self):
         # The ONE case that may still fall back: nothing to stratify by at all.
@@ -1216,7 +1306,7 @@ class TestStratificationScope:
                  [_flat(i, 29.8e6) for i in range(3, 8)]
         findings, meta = _meta_for(nights)
         assert any(f.kind == "sustained" for f in findings)
-        assert meta["stratification"] == ab.STRATA_LEGACY
+        assert meta["stratification"] == _STRATA_LEGACY
         assert meta["min_settled"] == 2
 
     def test_tonight_unknown_body_does_not_claim_an_unstratified_verdict(self):
@@ -1303,7 +1393,7 @@ class TestStratificationKeyIsTheRawString:
                   + [_hnight(i, 35e6, _XEON_OTHER) for i in range(3, 8)])
         findings, meta = _meta_for(nights)
         assert findings == []                       # +11.4% across SKUs is NOT a trend
-        assert meta["status"] == ab.STATUS_INCONCLUSIVE
+        assert meta["status"] == _INCONCLUSIVE
         assert meta["cpu_class_counts"] == {_XEON: 3, _XEON_OTHER: 5}
         assert meta["n_class_nights"] == 3
 
@@ -1385,3 +1475,1071 @@ class TestTonightIsPinnedToTonight:
         assert meta["today_night"] == nights[0].created_at
         assert meta["today_run_id"] == nights[0].run_id
         assert meta["today_night"] > nights[1].created_at       # newest-first, really
+
+
+# ===========================================================================
+# ROUND 3 — the write plane and the sampling it was tested with.
+#
+# Three blind reviews agreed the DETECTION side is solid and the WRITE side is
+# a vacuum. Measured, on the parent commit:
+#
+#   * inserting `assert dry_run and not gh_available` at the top of
+#     `run_trend_watch` left all 131 tests GREEN — not one test had ever
+#     executed a gh write, so all 33 write sites were unreachable and every
+#     wire constant (label, repo, issue title, close comment, artifact name)
+#     could be changed without a single failure;
+#   * every window in the suite contained exactly ONE judgeable bench, so
+#     nothing could distinguish a per-night verdict from a per-bench one;
+#   * `open_issues` was never longer than 1, so the CLEAR branch's written
+#     promise — "Close EVERY open perf-trend issue (not just [0])" — had no
+#     test, and "close only the first" survived as a mutant.
+#
+# Everything below runs the REAL live-mode branch. The single seam is `ab._gh`
+# (the subprocess boundary itself); `_gh_write`, `_list_open_trend_issues`,
+# `_file_new_issue`, the label lifecycle and the close ordering are the shipped
+# code, and the assertions are on the argv that would reach the GitHub CLI.
+# ===========================================================================
+
+_BODY_FLAG = "--body"
+
+
+def _multi(idx: int, benches: dict[str, float], cpu: str | None = None,
+           canary_ns: float | None = 360_000.0) -> ab.NightRecord:
+    """One night carrying ARBITRARY benches (+ optional canary + host class)."""
+    m = dict(benches)
+    if canary_ns is not None:
+        m[_C] = canary_ns
+    n = _night(idx, m)
+    n.cpu_model = cpu
+    return n
+
+
+def _issue(number: int, state=None, labels=(), body=None) -> dict:
+    return {"number": number, "title": "(open)",
+            "body": body if body is not None else (_marker(*state) if state else ""),
+            "labels": [{"name": n} for n in labels]}
+
+
+def _live(monkeypatch, tmp_path, nights, issues=(), fail=(), **over):
+    """Run the watchdog with the WRITE PLANE ARMED: dry_run=False, gh present.
+
+    ``--fixture-json`` hard-wires ``gh_available = False``, so no fixture-mode
+    test can reach a write — which is precisely why the write plane had zero
+    coverage. This harness takes the live branch instead and stubs only the
+    subprocess boundary: `night_records_from_gh` is replaced (there is no
+    GitHub to download from) and every `gh` invocation is recorded as argv.
+
+    ``fail`` is a list of argv prefixes whose calls raise, so the failure
+    handling (which of the remaining writes still happen, and what the job
+    says about it) is exercised as shipped rather than assumed.
+    """
+    calls: list[list[str]] = []
+
+    def fake_gh(cmd, capture=True):
+        calls.append(list(cmd))
+        for prefix in fail:
+            if list(cmd)[:len(prefix)] == list(prefix):
+                raise subprocess.CalledProcessError(1, ["gh", *cmd], "", "simulated failure")
+        if list(cmd)[:2] == ["issue", "list"]:
+            return json.dumps([dict(i) for i in issues])
+        return ""
+
+    def fake_run(cmd, **kw):        # `gh label create --force` goes direct
+        calls.append(list(cmd))
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ab, "_gh", fake_gh)
+    monkeypatch.setattr(ab, "shutil", types.SimpleNamespace(
+        which=lambda name: f"/usr/bin/{name}", rmtree=lambda *a, **k: None))
+    monkeypatch.setattr(ab, "subprocess", types.SimpleNamespace(
+        run=fake_run, CalledProcessError=subprocess.CalledProcessError,
+        TimeoutExpired=subprocess.TimeoutExpired))
+    monkeypatch.setattr(ab, "night_records_from_gh",
+                        lambda workflow, limit, cache_dir: list(nights))
+    over.setdefault("dry_run", False)
+    args = _trend_args(None, cache_dir=tmp_path / "cache", **over)
+    rc = ab.run_trend_watch(args)
+    return rc, calls
+
+
+def _sel(calls, *prefix) -> list[list[str]]:
+    return [c for c in calls if c[:len(prefix)] == list(prefix)]
+
+
+def _one(calls, *prefix) -> list[str]:
+    hits = _sel(calls, *prefix)
+    assert len(hits) == 1, f"expected exactly one {list(prefix)} call, got {len(hits)}"
+    return hits[0]
+
+
+def _body_of(call: list[str]) -> str:
+    return call[call.index(_BODY_FLAG) + 1]
+
+
+def _sustained_window(cpu=None):
+    return ([_multi(i, {_BENCH: 45.5e6}, cpu) for i in range(3)]
+            + [_multi(i, {_BENCH: 35e6}, cpu) for i in range(3, 9)])
+
+
+def _flat_window(cpu=None, ns=35e6):
+    return [_multi(i, {_BENCH: ns}, cpu) for i in range(9)]
+
+
+class TestWritePlaneArgv:
+    """What actually reaches `gh`. Every string here is a wire format."""
+
+    def test_new_issue_create_argv_is_exact(self, monkeypatch, tmp_path, capsys):
+        rc, calls = _live(monkeypatch, tmp_path, _sustained_window())
+        capsys.readouterr()
+        assert rc == 0
+        create = _one(calls, "issue", "create")
+        assert create[:len(create) - 2] == [
+            "issue", "create", "--repo", "vencil/Dynamic-Alerting-Integrations",
+            "--title", "Nightly bench trend regression detected",
+            "--label", "perf-trend", "--body", _body_of(create),
+        ]
+        assert create[-2:] == ["--assignee", "vencil"]
+        assert _BENCH in _body_of(create)
+
+    def test_label_is_ensured_before_the_first_issue_is_filed(
+            self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _sustained_window())
+        capsys.readouterr()
+        assert _one(calls, "gh", "label", "create") == [
+            "gh", "label", "create", "perf-trend",
+            "--repo", "vencil/Dynamic-Alerting-Integrations",
+            "--color", "FBCA04",
+            "--description", "Nightly bench trend regression (auto-filed)", "--force",
+        ]
+        assert calls.index(["gh", "label", "create", "perf-trend", "--repo",
+                            "vencil/Dynamic-Alerting-Integrations", "--color", "FBCA04",
+                            "--description", "Nightly bench trend regression (auto-filed)",
+                            "--force"]) < calls.index(_one(calls, "issue", "create"))
+
+    def test_open_issue_query_argv_is_exact(self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _flat_window())
+        capsys.readouterr()
+        assert _one(calls, "issue", "list") == [
+            "issue", "list", "--repo", "vencil/Dynamic-Alerting-Integrations",
+            "--label", "perf-trend", "--state", "open",
+            "--json", "number,title,body,labels",
+        ]
+
+    def test_update_writes_body_then_transition_comment(
+            self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _sustained_window(),
+                           issues=[_issue(42, state=[[_BENCH, "creep"]])])
+        capsys.readouterr()
+        edit = _one(calls, "issue", "edit", "42")
+        assert edit[:5] == ["issue", "edit", "42", "--repo",
+                            "vencil/Dynamic-Alerting-Integrations"]
+        assert edit[5] == "--body"
+        comment = _one(calls, "issue", "comment", "42")
+        assert comment[:5] == ["issue", "comment", "42", "--repo",
+                               "vencil/Dynamic-Alerting-Integrations"]
+        assert "**Escalated to sustained:** " + f"`{_BENCH}`" in \
+            _body_of(comment).splitlines()
+        # Body BEFORE comment: the marker must be advanced first so a failed
+        # comment is lost rather than repeated forever (see the source comment).
+        assert calls.index(edit) < calls.index(comment)
+        assert ab._parse_state_marker(_body_of(edit)) == [[_BENCH, "sustained"]]
+
+    def test_no_transition_means_body_only_no_comment(
+            self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _sustained_window(),
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])])
+        capsys.readouterr()
+        assert _sel(calls, "issue", "edit", "42")
+        assert _sel(calls, "issue", "comment") == []
+
+    def test_close_argv_and_ordering(self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _flat_window(),
+                           issues=[_issue(7, state=[[_BENCH, "sustained"]])])
+        capsys.readouterr()
+        close = _one(calls, "issue", "close")
+        assert close == ["issue", "close", "7", "--repo",
+                         "vencil/Dynamic-Alerting-Integrations"]
+        comment = _one(calls, "issue", "comment", "7")
+        assert _body_of(comment).startswith("✅ Auto-closing (closed loop): no benchmark "
+                                            "is above its floor")
+        assert "SLIDING settled-window anchor" in _body_of(comment)
+        assert calls.index(close) < calls.index(comment)
+
+    def test_recovering_label_add_argv(self, monkeypatch, tmp_path, capsys):
+        creep = ([_multi(0, {_BENCH: 39.2e6}), _multi(1, {_BENCH: 39.2e6}),
+                  _multi(2, {_BENCH: 35.7e6})]
+                 + [_multi(i, {_BENCH: 35e6}) for i in range(3, 9)])
+        _rc, calls = _live(monkeypatch, tmp_path, creep,
+                           issues=[_issue(9, state=[[_BENCH, "sustained"]])])
+        capsys.readouterr()
+        assert ["gh", "label", "create", "perf-trend:recovering", "--repo",
+                "vencil/Dynamic-Alerting-Integrations", "--color", "C2E0C6",
+                "--description", "perf-trend: sustained cleared, creep remains",
+                "--force"] in calls
+        assert ["issue", "edit", "9", "--repo", "vencil/Dynamic-Alerting-Integrations",
+                "--add-label", "perf-trend:recovering"] in calls
+
+    def test_recovering_label_remove_argv(self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _sustained_window(),
+                           issues=[_issue(9, state=[[_BENCH, "creep"]],
+                                          labels=["perf-trend:recovering"])])
+        capsys.readouterr()
+        assert ["issue", "edit", "9", "--repo", "vencil/Dynamic-Alerting-Integrations",
+                "--remove-label", "perf-trend:recovering"] in calls
+
+    def test_stale_recovering_label_is_stripped_before_the_close(
+            self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _flat_window(),
+                           issues=[_issue(9, state=[[_BENCH, "sustained"]],
+                                          labels=["perf-trend:recovering"])])
+        capsys.readouterr()
+        strip = ["issue", "edit", "9", "--repo", "vencil/Dynamic-Alerting-Integrations",
+                 "--remove-label", "perf-trend:recovering"]
+        assert strip in calls
+        assert calls.index(strip) < calls.index(_one(calls, "issue", "close"))
+
+    def test_dry_run_still_writes_nothing(self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _sustained_window(),
+                           issues=[_issue(42, state=[[_BENCH, "creep"]])],
+                           dry_run=True)
+        capsys.readouterr()
+        # The read happened; nothing else did.
+        assert _sel(calls, "issue", "list")
+        assert _sel(calls, "issue", "edit") == []
+        assert _sel(calls, "issue", "comment") == []
+        assert _sel(calls, "issue", "close") == []
+        assert _sel(calls, "issue", "create") == []
+
+
+class TestEveryOpenIssueIsClosed:
+    """`open_issues` was never longer than 1 in any test, so the CLEAR branch's
+    written promise — "Close EVERY open perf-trend issue (not just [0])" — was
+    unverified and `open_issues[:1]` survived as a mutant."""
+
+    def test_clear_closes_all_three(self, monkeypatch, tmp_path, capsys):
+        issues = [_issue(n, state=[[_BENCH, "sustained"]]) for n in (11, 22, 33)]
+        _rc, calls = _live(monkeypatch, tmp_path, _flat_window(), issues=issues)
+        capsys.readouterr()
+        assert [c[2] for c in _sel(calls, "issue", "close")] == ["11", "22", "33"]
+        assert len(_sel(calls, "issue", "comment")) == 3
+
+    def test_inconclusive_refreshes_all_three_and_closes_none(
+            self, monkeypatch, tmp_path, capsys):
+        nights = ([_multi(i, {_BENCH: 35e6}, _XEON) for i in range(3)]
+                  + [_multi(3, {_BENCH: 35e6}, _EPYC), _multi(4, {_BENCH: 35e6}, _XEON),
+                     _multi(5, {_BENCH: 35e6}, _EPYC), _multi(6, {_BENCH: 35e6}, _XEON),
+                     _multi(7, {_BENCH: 35e6}, _EPYC)])
+        issues = [_issue(n, state=[[_BENCH, "sustained"]]) for n in (11, 22, 33)]
+        _rc, calls = _live(monkeypatch, tmp_path, nights, issues=issues)
+        capsys.readouterr()
+        assert _sel(calls, "issue", "close") == []
+        assert [c[2] for c in _sel(calls, "issue", "edit")] == ["11", "22", "33"]
+
+
+_BENCH_C = "BenchmarkRenderRulePack_500"
+
+
+class TestMultiBenchWindow:
+    """Every pre-existing window held exactly ONE judgeable bench, so per-night
+    and per-bench verdicts were indistinguishable by construction."""
+
+    def _mixed(self):
+        # A regressed, B flat, C only appears in the settled half (vanished).
+        nights = []
+        for i in range(9):
+            row = {_BENCH: 45.5e6 if i < 3 else 35e6, _BENCH_B: 12e6}
+            if i >= 3:
+                row[_BENCH_C] = 8e6
+            nights.append(_multi(i, row, _EPYC))
+        return nights
+
+    def test_each_bench_lands_in_its_own_bucket(self):
+        findings, meta = _meta_for(self._mixed())
+        assert [(f.bench, f.kind) for f in findings] == [(_BENCH, "sustained")]
+        assert meta["evaluated_benches"] == sorted([_BENCH, _BENCH_B])
+        assert meta["inconclusive_benches"] == [_BENCH_C]
+        assert meta["status"] == _FINDINGS
+
+    def test_one_regressed_bench_does_not_make_the_others_findings(self):
+        findings, _meta = _meta_for(self._mixed())
+        assert _BENCH_B not in {f.bench for f in findings}
+        assert _BENCH_C not in {f.bench for f in findings}
+
+    def test_the_canary_is_never_itself_a_finding(self):
+        # The canary defines the noise floor; flagging it would be circular.
+        nights = [_multi(i, {_BENCH: 35e6}, _EPYC, canary_ns=900_000.0) for i in range(3)] \
+            + [_multi(i, {_BENCH: 35e6}, _EPYC, canary_ns=360_000.0) for i in range(3, 9)]
+        findings, meta = _meta_for(nights)
+        assert _C not in {f.bench for f in findings}
+        assert _C not in meta["evaluated_benches"] + meta["inconclusive_benches"]
+
+
+# ===========================================================================
+# ROUND 3 / A — closing is a PER-BENCH claim, not a per-night one.
+#
+# The three-state verdict fixed the night granularity: a night that evaluated
+# NOTHING never closes anything. A night that evaluated SOMETHING still closed
+# everything. `status=CLEAR, evaluated=[B], inconclusive=[A]` is a night that
+# measured B and did not measure A — and it closed the issue that was filed for
+# A, announced A "Recovered (no longer flagged)", and could label the issue
+# `recovering`, all without a single measurement of A.
+# ===========================================================================
+
+def _a_gone_b_clean(cpu=_EPYC):
+    """A stopped reporting 3 nights ago (perf-timeout symptom) after a +30%
+    step; B reports every night and is flat. Tonight: CLEAR, evaluated=[B],
+    inconclusive=[A]."""
+    nights = []
+    for i in range(9):
+        row = {_BENCH_B: 12e6}
+        if i >= 3:
+            row[_BENCH] = 45.5e6 if i < 6 else 35e6
+        nights.append(_multi(i, row, cpu))
+    return nights
+
+
+class TestCloseIsGatedPerBench:
+    def test_the_setup_really_is_clear_with_an_unmeasured_bench(self):
+        # The precondition, asserted so the tests below cannot silently drift
+        # into testing the INCONCLUSIVE path instead.
+        _f, meta = _meta_for(_a_gone_b_clean())
+        assert meta["status"] == _CLEAR
+        assert meta["evaluated_benches"] == [_BENCH_B]
+        assert meta["inconclusive_benches"] == [_BENCH]
+
+    def test_clear_does_not_close_an_issue_tracking_an_unmeasured_bench(
+            self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _a_gone_b_clean(),
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])])
+        err = capsys.readouterr().err
+        assert _sel(calls, "issue", "close") == []
+        assert f"NOT closing perf-trend issue #42 — tonight could not verify `{_BENCH}`" in err
+
+    def test_the_held_open_issue_says_so_in_its_body(
+            self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _a_gone_b_clean(),
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])])
+        capsys.readouterr()
+        body = _body_of(_one(calls, "issue", "edit", "42"))
+        assert "STILL TRACKED BY THIS ISSUE, NOT VERIFIED TONIGHT" in body
+        assert f"`{_BENCH}` (sustained)" in body
+        # …and the marker is preserved, so tomorrow's guard is still armed.
+        assert ab._parse_state_marker(body) == [[_BENCH, "sustained"]]
+
+    def test_held_open_is_annotated_and_summarised(
+            self, monkeypatch, tmp_path, capsys):
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        _live(monkeypatch, tmp_path, _a_gone_b_clean(),
+              issues=[_issue(42, state=[[_BENCH, "sustained"]])])
+        err = capsys.readouterr().err
+        assert "::warning::" in err and "stays open" in err
+        assert "issue #42 held open" in summary.read_text(encoding="utf-8")
+
+    def test_control_when_the_tracked_bench_IS_measured_it_still_closes(
+            self, monkeypatch, tmp_path, capsys):
+        # Same code path, same issue, same marker — only the data differs: A is
+        # present tonight and clean. The guard must not have broken the loop.
+        _rc, calls = _live(monkeypatch, tmp_path, _flat_window(),
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])])
+        capsys.readouterr()
+        assert _one(calls, "issue", "close")[2] == "42"
+
+    def test_unreadable_marker_keeps_the_previous_behaviour(
+            self, monkeypatch, tmp_path, capsys):
+        # A legacy / hand-filed issue carries no per-bench claim to check.
+        # Inventing a marker-health mechanism here is a separate design (it was
+        # tried and reverted); the honest fallback is the old behaviour.
+        _rc, calls = _live(monkeypatch, tmp_path, _a_gone_b_clean(),
+                           issues=[_issue(42, body="## hand-written, no marker")])
+        capsys.readouterr()
+        assert _one(calls, "issue", "close")[2] == "42"
+
+    def test_empty_marker_also_closes(self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _a_gone_b_clean(),
+                           issues=[_issue(42, body=ab._render_state_marker([]))])
+        capsys.readouterr()
+        assert _one(calls, "issue", "close")[2] == "42"
+
+    def test_only_the_affected_issue_is_held_open(
+            self, monkeypatch, tmp_path, capsys):
+        # Per-issue, not per-run: an issue tracking the measured bench still
+        # closes on the same night another issue is held open.
+        _rc, calls = _live(monkeypatch, tmp_path, _a_gone_b_clean(),
+                           issues=[_issue(11, state=[[_BENCH, "sustained"]]),
+                                   _issue(22, state=[[_BENCH_B, "creep"]])])
+        capsys.readouterr()
+        assert [c[2] for c in _sel(calls, "issue", "close")] == ["22"]
+        # #11 gets the held-open refresh, #22 the CLEAR refresh on its way out.
+        assert [c[2] for c in _sel(calls, "issue", "edit")] == ["11", "22"]
+
+    def test_unverified_benches_helper_uses_evaluated_not_inconclusive(self):
+        # A bench that vanished from the window ENTIRELY is in neither list, and
+        # is no more verified than one that was skipped.
+        meta = {"evaluated_benches": ["B"], "inconclusive_benches": ["A"]}
+        assert ab._unverified_benches([["A", "sustained"], ["B", "creep"],
+                                       ["GoneForever", "creep"]], meta) == \
+            ["A", "GoneForever"]
+        assert ab._unverified_benches([["B", "creep"]], meta) == []
+        assert ab._unverified_benches(None, meta) == []
+        assert ab._unverified_benches([], meta) == []
+
+
+def _a_gone_b_regressed(cpu=_EPYC):
+    """A stopped reporting; B is a fresh +30% sustained regression."""
+    nights = []
+    for i in range(9):
+        row = {_BENCH_B: 45.5e6 if i < 3 else 35e6}
+        if i >= 3:
+            row[_BENCH] = 35e6
+        nights.append(_multi(i, row, cpu))
+    return nights
+
+
+def _a_gone_b_creep(cpu=_EPYC):
+    """A stopped reporting; B shows creep only (one recent night dipped)."""
+    recent = [39.2e6, 39.2e6, 35.7e6]
+    nights = []
+    for i in range(9):
+        row = {_BENCH_B: recent[i] if i < 3 else 35e6}
+        if i >= 3:
+            row[_BENCH] = 35e6
+        nights.append(_multi(i, row, cpu))
+    return nights
+
+
+class TestNoFabricatedRecovery:
+    """A2 — the notification layer must not say about an unmeasured bench what
+    the close layer is no longer allowed to conclude."""
+
+    def test_carried_forward_bench_gets_no_recovered_comment(
+            self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _a_gone_b_regressed(),
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])])
+        capsys.readouterr()
+        comment = _one(calls, "issue", "comment", "42")
+        assert f"**Newly flagged:** `{_BENCH_B}`" in _body_of(comment).splitlines()
+        assert "Recovered" not in _body_of(comment)
+
+    def test_the_marker_keeps_tracking_the_unmeasured_bench(
+            self, monkeypatch, tmp_path, capsys):
+        # Without carry-forward the ledger forgets A tonight, and the very next
+        # CLEAR night closes the issue with the guard above disarmed.
+        _rc, calls = _live(monkeypatch, tmp_path, _a_gone_b_regressed(),
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])])
+        capsys.readouterr()
+        body = _body_of(_one(calls, "issue", "edit", "42"))
+        assert ab._parse_state_marker(body) == [[_BENCH_B, "sustained"],
+                                                [_BENCH, "sustained"]]
+
+    def test_recovering_label_is_not_applied_on_an_unmeasured_sustained(
+            self, monkeypatch, tmp_path, capsys):
+        # "sustained cleared, only creep remains" is a claim about A. A was not
+        # measured. The label repeats, in the notification layer, exactly the
+        # false statement the comment layer was fixed not to make.
+        _rc, calls = _live(monkeypatch, tmp_path, _a_gone_b_creep(),
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])])
+        capsys.readouterr()
+        assert [c for c in calls if "--add-label" in c] == []
+
+    def test_control_label_is_applied_when_the_sustained_bench_was_measured(
+            self, monkeypatch, tmp_path, capsys):
+        # Same transition, but A is present and clean tonight → genuinely
+        # "sustained cleared, creep remains" → the label is correct.
+        recent = [39.2e6, 39.2e6, 35.7e6]
+        nights = [_multi(i, {_BENCH_B: recent[i], _BENCH: 35e6}, _EPYC) for i in range(3)] \
+            + [_multi(i, {_BENCH_B: 35e6, _BENCH: 35e6}, _EPYC) for i in range(3, 9)]
+        _rc, calls = _live(monkeypatch, tmp_path, nights,
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])])
+        capsys.readouterr()
+        assert ["issue", "edit", "42", "--repo", "vencil/Dynamic-Alerting-Integrations",
+                "--add-label", "perf-trend:recovering"] in calls
+
+    def test_label_helper_blocks_add_but_not_remove(self):
+        creep = [_finding(_BENCH_B, "creep")]
+        sust = [_finding(_BENCH_B, "sustained")]
+        prior = [[_BENCH, "sustained"]]
+        assert ab._recovering_label_change(creep, prior, [], unverified=[]) == "add"
+        assert ab._recovering_label_change(creep, prior, [], unverified=[_BENCH]) is None
+        # Removal is driven by a sustained finding that WAS measured tonight.
+        assert ab._recovering_label_change(sust, prior, ["perf-trend:recovering"],
+                                           unverified=[_BENCH]) == "remove"
+
+
+class TestInconclusiveBodyMatchesItsMarker:
+    """A3 — the body was overwritten with "nothing is flagged" prose while the
+    marker in the SAME body said `sustained`. Two halves of one document
+    contradicting each other, with no way for a reader to tell which is stale."""
+
+    def _thin(self):
+        return ([_hnight(i, 35e6, _XEON) for i in range(3)]
+                + [_hnight(3, 35e6, _EPYC), _hnight(4, 35e6, _XEON),
+                   _hnight(5, 35e6, _EPYC), _hnight(6, 35e6, _XEON),
+                   _hnight(7, 35e6, _EPYC)])
+
+    def test_body_shows_what_the_issue_is_still_tracking(
+            self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, self._thin(),
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])])
+        capsys.readouterr()
+        body = _body_of(_one(calls, "issue", "edit", "42"))
+        assert f"**This issue is still tracking `{_BENCH}` (sustained).**" in body
+        assert "STILL TRACKED BY THIS ISSUE, NOT VERIFIED TONIGHT" in body
+        assert ab._parse_state_marker(body) == [[_BENCH, "sustained"]]
+
+    def test_body_no_longer_claims_nothing_is_flagged(
+            self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, self._thin(),
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])])
+        capsys.readouterr()
+        body = _body_of(_one(calls, "issue", "edit", "42"))
+        assert "nothing is flagged" not in body
+        assert "no NEW finding was produced" in body
+        assert "nothing is closed" in body
+
+    def test_a_markerless_issue_gets_no_tracking_claim(self):
+        _f, meta = _meta_for(self._thin())
+        body = ab.render_trend_issue_body([], meta, state=[], tracked=[])
+        assert "STILL TRACKED" not in body
+        assert "still tracking" not in body
+
+
+class TestInconclusiveCauseIsAttributed:
+    """A4 — "too few same-class nights" was printed for both `continue`
+    branches. For a bench that STOPPED REPORTING that is a misdiagnosis, and on
+    an all-one-class window it printed "only 14 of 14 window nights ran on
+    tonight's host class" — a sentence that argues against itself."""
+
+    def _all_one_class_bench_vanished(self):
+        # 14 nights, ALL the same host class; the only bench stops reporting.
+        return ([_multi(i, {}, _EPYC) for i in range(3)]
+                + [_multi(i, {_BENCH: 35e6}, _EPYC) for i in range(3, 14)])
+
+    def test_reasons_are_recorded_separately(self):
+        _f, meta = _meta_for(self._all_one_class_bench_vanished())
+        assert meta["status"] == _INCONCLUSIVE
+        assert meta["inconclusive_reasons"] == {_BENCH: "no-recent"}
+
+    def test_thin_anchor_is_recorded_as_thin_anchor(self):
+        nights = ([_hnight(i, 35e6, _XEON) for i in range(3)]
+                  + [_hnight(3, 35e6, _EPYC), _hnight(4, 35e6, _XEON),
+                     _hnight(5, 35e6, _EPYC)])
+        _f, meta = _meta_for(nights)
+        assert meta["inconclusive_reasons"] == {_BENCH: "thin-anchor"}
+
+    def test_stopped_reporting_is_not_blamed_on_the_window(
+            self, tmp_path, capsys, monkeypatch):
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        args = _trend_args(_write_fixture(
+            tmp_path, self._all_one_class_bench_vanished()))
+        assert ab.run_trend_watch(args) == 0
+        out = capsys.readouterr()
+        text = out.out + out.err + summary.read_text(encoding="utf-8")
+        assert "did not report on all 3 newest same-class nights" in text
+        assert "perf-timeout/crash symptom" in text
+        # The self-contradicting sentence is gone.
+        assert "only 14 of 14 window nights" not in text
+        assert "settled same-class nights are behind them" not in text
+
+    def test_thin_window_still_says_thin_window(self, tmp_path, capsys):
+        nights = ([_hnight(i, 35e6, _XEON) for i in range(3)]
+                  + [_hnight(3, 35e6, _EPYC), _hnight(4, 35e6, _XEON),
+                     _hnight(5, 35e6, _EPYC)])
+        assert ab.run_trend_watch(_trend_args(_write_fixture(tmp_path, nights))) == 0
+        out = capsys.readouterr().out
+        assert "only 4 of 6 window nights ran on tonight's host class" in out
+        assert "perf-timeout/crash symptom" not in out
+
+    def test_both_causes_appear_when_both_happen(self):
+        # A vanished from the recent nights; C has too thin an anchor.
+        nights = ([_multi(i, {_BENCH_B: 12e6}, _XEON) for i in range(3)]
+                  + [_multi(3, {_BENCH_B: 12e6, _BENCH: 35e6}, _XEON)]
+                  + [_multi(i, {_BENCH_B: 12e6, _BENCH: 35e6}, _EPYC) for i in range(4, 8)])
+        _f, meta = _meta_for(nights)
+        assert meta["inconclusive_reasons"] == {_BENCH: "no-recent", _BENCH_B: "thin-anchor"}
+        causes = " | ".join(ab._inconclusive_causes(meta))
+        assert "perf-timeout/crash symptom" in causes and f"`{_BENCH}`" in causes
+        assert "window nights ran on tonight's host class" in causes
+        assert f"`{_BENCH_B}`" in causes
+
+    def test_tonight_unknown_names_its_own_cause(self):
+        nights = ([_hnight(0, 39e6, None)]
+                  + [_hnight(i, 39e6, _EPYC) for i in (1, 2)]
+                  + [_hnight(i, 29.8e6, _XEON) for i in range(3, 8)])
+        _f, meta = _meta_for(nights)
+        assert ab._inconclusive_causes(meta) == [
+            "tonight's `cpu:` header is unreadable while the rest of the window is "
+            "labelled, so there is no same-class population to judge anything against"]
+
+
+class TestUnstratifiedFallbackIsAnnounced:
+    """A5 — the legacy unstratified path is a KNOWN false-positive mode, and the
+    job it ran in looked identical to a stratified one."""
+
+    def test_legacy_window_warns_and_summarises(self, tmp_path, capsys, monkeypatch):
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        nights = [_flat(i, 35e6) for i in range(8)]
+        assert ab.run_trend_watch(_trend_args(_write_fixture(tmp_path, nights))) == 0
+        err = capsys.readouterr().err
+        assert "::warning::" in err and "running UNSTRATIFIED" in err
+        assert "UNSTRATIFIED verdict" in summary.read_text(encoding="utf-8")
+
+    def test_stratified_window_does_not_warn(self, tmp_path, capsys):
+        nights = [_hnight(i, 35e6, _EPYC) for i in range(8)]
+        assert ab.run_trend_watch(_trend_args(_write_fixture(tmp_path, nights))) == 0
+        assert "UNSTRATIFIED" not in capsys.readouterr().err
+
+
+class TestCanaryWithoutSamplesIsNotZeroJitter:
+    """A6 — `_cv` returns 0.0 for "measured, perfectly stable" AND for "never
+    measured", and the body printed the second one as **0.00%**: a positive
+    assertion of zero runner jitter, made from zero samples."""
+
+    def _no_canary(self):
+        return [_multi(i, {_BENCH: 35e6}, _EPYC, canary_ns=None) for i in range(9)]
+
+    def test_meta_counts_the_canary_samples(self):
+        _f, meta = _meta_for(self._no_canary())
+        assert meta["canary_n"] == 0
+        _f2, meta2 = _meta_for([_hnight(i, 35e6, _EPYC) for i in range(9)])
+        assert meta2["canary_n"] == 9
+
+    def test_body_says_not_measured_instead_of_zero(self):
+        _f, meta = _meta_for(self._no_canary())
+        body = ab.render_trend_issue_body([], meta)
+        assert "Control-canary night-to-night CV: **not measured**" in body
+        assert "0.00%" not in body
+        assert "the absence of a measurement" in body
+
+    def test_floor_line_does_not_credit_an_absent_canary(self):
+        _f, meta = _meta_for(self._no_canary())
+        body = ab.render_trend_issue_body([], meta)
+        assert "(fixed minimum only — no canary measurement to raise it)" in body
+        assert "canary-noise-scaled" not in body
+
+    def test_one_sample_is_still_not_a_cv(self):
+        nights = [_multi(0, {_BENCH: 35e6}, _EPYC, canary_ns=360_000.0)] \
+            + [_multi(i, {_BENCH: 35e6}, _EPYC, canary_ns=None) for i in range(1, 9)]
+        _f, meta = _meta_for(nights)
+        assert meta["canary_n"] == 1
+        assert "not measured" in ab.render_trend_issue_body([], meta)
+
+    def test_a_real_measurement_still_reports_a_percentage(self):
+        _f, meta = _meta_for([_hnight(i, 35e6, _EPYC) for i in range(9)])
+        body = ab.render_trend_issue_body([], meta)
+        assert "Control-canary night-to-night CV: **0.00%**" in body
+        assert "max of fixed minimum and canary-noise-scaled" in body
+
+
+class TestGhWriteFailuresAreLoud:
+    """A7 — every write failure on the update/close paths was a single stderr
+    line in a job that still ends green, and the auto-close comment was posted
+    whether or not the close succeeded."""
+
+    def test_failed_body_edit_is_annotated(self, monkeypatch, tmp_path, capsys):
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        _live(monkeypatch, tmp_path, _sustained_window(),
+              issues=[_issue(42, state=[[_BENCH, "creep"]])],
+              fail=[("issue", "edit")])
+        err = capsys.readouterr().err
+        assert "::warning::" in err and "body refresh of issue #42 FAILED" in err
+        assert "body refresh of issue #42 failed" in summary.read_text(encoding="utf-8")
+
+    def test_failed_close_does_not_post_the_auto_close_comment(
+            self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _flat_window(),
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])],
+                           fail=[("issue", "close")])
+        err = capsys.readouterr().err
+        assert _sel(calls, "issue", "comment") == []
+        assert "was NOT closed" in err
+        assert "::warning::" in err and "closing recovered issue #42 FAILED" in err
+
+    def test_successful_close_still_comments(self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _flat_window(),
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])])
+        capsys.readouterr()
+        assert len(_sel(calls, "issue", "comment", "42")) == 1
+
+    def test_failed_transition_comment_is_annotated(self, monkeypatch, tmp_path, capsys):
+        _live(monkeypatch, tmp_path, _sustained_window(),
+              issues=[_issue(42, state=[[_BENCH, "creep"]])],
+              fail=[("issue", "comment")])
+        err = capsys.readouterr().err
+        assert "transition comment on issue #42 FAILED" in err
+
+    def test_failed_label_write_is_annotated(self, monkeypatch, tmp_path, capsys):
+        _live(monkeypatch, tmp_path, _sustained_window(),
+              issues=[_issue(42, state=[[_BENCH, "creep"]],
+                             labels=["perf-trend:recovering"])],
+              fail=[("issue", "edit", "42", "--repo",
+                     "vencil/Dynamic-Alerting-Integrations", "--remove-label")])
+        err = capsys.readouterr().err
+        assert "removing `perf-trend:recovering` from issue #42 FAILED" in err
+
+    def test_a_successful_run_annotates_nothing(self, monkeypatch, tmp_path, capsys):
+        _live(monkeypatch, tmp_path, _sustained_window(_EPYC),
+              issues=[_issue(42, state=[[_BENCH, "creep"]])])
+        assert "::warning::" not in capsys.readouterr().err
+
+
+class TestMarkerParseNeverRedsTheRun:
+    """A8 — `except (ValueError, TypeError)` covered the payloads this code
+    WRITES, not the ones it READS. An issue body is human-editable."""
+
+    def test_deeply_nested_json_degrades_instead_of_raising(self, capsys):
+        # json.loads raises RecursionError (a RuntimeError) here — it escaped
+        # the narrow except, reached main() and exited 1 every single night
+        # until someone hand-edited the issue body back.
+        hostile = "<!-- perf-trend-state v1 " + "[" * 20_000 + "]" * 20_000 + " -->"
+        assert ab._parse_state_marker(hostile) is None
+        assert "state marker unreadable" in capsys.readouterr().err
+
+    def test_the_whole_run_survives_a_hostile_marker(
+            self, monkeypatch, tmp_path, capsys):
+        hostile = "<!-- perf-trend-state v1 " + "[" * 20_000 + "]" * 20_000 + " -->"
+        rc, calls = _live(monkeypatch, tmp_path, _sustained_window(),
+                          issues=[_issue(42, body=hostile)])
+        capsys.readouterr()
+        assert rc == 0
+        assert _sel(calls, "issue", "edit", "42")
+
+    def test_ordinary_garbage_still_returns_none(self):
+        assert ab._parse_state_marker("<!-- perf-trend-state v1 [1] -->") is None
+        assert ab._parse_state_marker('<!-- perf-trend-state v1 ["a"] -->') is None
+        assert ab._parse_state_marker("<!-- perf-trend-state v1 [not json] -->") is None
+
+
+class TestArgparseLowerBounds:
+    """A9 — `--recent-nights 0` reached the detector, where `series[:0]` is
+    empty, every `len(recent) < 0` guard is vacuously false, and `recent[0]`
+    raised IndexError: a traceback and exit 1 out of a nightly watchdog."""
+
+    def _parse(self, monkeypatch, *argv):
+        monkeypatch.setattr("sys.argv", ["analyze_bench_history.py", *argv])
+        with pytest.raises(SystemExit) as exc:
+            ab.main()
+        return exc.value.code
+
+    def test_zero_recent_nights_is_a_usage_error(self, monkeypatch, capsys):
+        assert self._parse(monkeypatch, "--trend-watch", "--recent-nights", "0") == 2
+        assert "must be >= 1" in capsys.readouterr().err
+
+    def test_negative_and_zero_windows_rejected(self, monkeypatch, capsys):
+        assert self._parse(monkeypatch, "--trend-watch", "--trend-limit", "0") == 2
+        assert self._parse(monkeypatch, "--limit", "-1") == 2
+        capsys.readouterr()
+
+    def test_one_is_still_accepted(self):
+        assert ab._at_least(1)("1") == 1
+        with pytest.raises(argparse.ArgumentTypeError):
+            ab._at_least(1)("0")
+
+
+class TestFreeFormHostStringIsNeuteredEverywhere:
+    """A10 — `_safe_md` guarded the issue body; the SAME free-form string went
+    raw into the `::warning::` annotation and the markdown step summary."""
+
+    def _hostile_thin(self):
+        return ([_hnight(i, 35e6, _HOSTILE_CPU) for i in range(3)]
+                + [_hnight(i, 35e6, _EPYC) for i in range(3, 8)])
+
+    def test_annotation_and_summary_carry_no_live_marker(
+            self, tmp_path, capsys, monkeypatch):
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        args = _trend_args(_write_fixture(tmp_path, self._hostile_thin()))
+        assert ab.run_trend_watch(args) == 0
+        out = capsys.readouterr()
+        text = out.out + out.err + summary.read_text(encoding="utf-8")
+        assert "AMD EPYC 7763" in text                       # still disclosed…
+        assert ab._STATE_MARKER_RE.findall(text) == []       # …but inert
+        assert "&lt;!--" in text
+
+
+class TestWindowSpanWording:
+    """A11 — "Detected across the last N nightly runs" quoted the whole window
+    while the verdict used only the same-class nights inside it."""
+
+    def test_stratified_body_counts_same_class_nights(self):
+        nights = ([_hnight(i, 45.5e6, _EPYC) for i in range(3)]
+                  + [_hnight(i, 35e6, _EPYC) for i in range(3, 6)]
+                  + [_hnight(i, 35e6, _XEON) for i in range(6, 9)])
+        findings, meta = _meta_for(nights)
+        assert meta["n_class_nights"] == 6 and meta["n_nights"] == 9
+        body = ab.render_trend_issue_body(findings, meta)
+        assert ("Detected across the last **6** nights that ran on tonight's host class "
+                "(of **9** in the `bench-record` window)." in body)
+
+    def test_unstratified_body_says_the_window_is_unstratified(self):
+        nights = [_flat(i, 35e6) for i in range(9)]
+        _f, meta = _meta_for(nights)
+        body = ab.render_trend_issue_body([], meta)
+        assert ("Detected across the last **9** nightly `bench-record` runs "
+                "(no host-class stratification — see below)." in body)
+
+
+class TestClearNightRefreshesTheBody:
+    """A12 — nothing refreshed the body on a CLEAR night, so the closing comment
+    landed directly under the table of the LAST night that found something: a
+    "+30.8% sustained" table above "✅ Auto-closing"."""
+
+    def test_close_path_writes_a_clear_body(self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _flat_window(),
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])])
+        capsys.readouterr()
+        body = _body_of(_one(calls, "issue", "edit", "42"))
+        assert "### ✅ Nothing above its floor tonight (CLEAR)" in body
+        assert "| Rule |" not in body                    # the stale table is gone
+        assert ab._parse_state_marker(body) == []        # …and so is the flagged set
+
+    def test_body_is_written_after_the_close_not_before(
+            self, monkeypatch, tmp_path, capsys):
+        # Close first (a comment/edit blip must never leave a recovered issue
+        # open); the body refresh and the comment are gated on it succeeding.
+        _rc, calls = _live(monkeypatch, tmp_path, _flat_window(),
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])])
+        capsys.readouterr()
+        assert calls.index(_one(calls, "issue", "close")) < \
+            calls.index(_one(calls, "issue", "edit", "42"))
+
+    def test_failed_close_leaves_the_old_body_alone(self, monkeypatch, tmp_path, capsys):
+        # If the issue is still open, overwriting its body with a CLEAR verdict
+        # would misdescribe an open ticket.
+        _rc, calls = _live(monkeypatch, tmp_path, _flat_window(),
+                           issues=[_issue(42, state=[[_BENCH, "sustained"]])],
+                           fail=[("issue", "close")])
+        capsys.readouterr()
+        assert _sel(calls, "issue", "edit") == []
+
+    def test_dry_run_announces_the_refresh(self, tmp_path, capsys):
+        nights = [_hnight(i, 35e6, _EPYC) for i in range(9)]
+        args = _trend_args(_write_fixture(tmp_path, nights), fixture_open_issue=42,
+                           fixture_open_body=_marker([_BENCH, "sustained"]))
+        assert ab.run_trend_watch(args) == 0
+        assert "would refresh body of #42 to tonight's CLEAR verdict" in \
+            capsys.readouterr().err
+
+
+# ===========================================================================
+# ROUND 3 / B4 — mutants that survived the suite as it stood.
+#
+# Each test below was written against a specific surviving mutation: revert the
+# behaviour it names and this test goes red. The fire arithmetic itself is NOT
+# changed by anything in this round — these pin it so it cannot drift.
+# ===========================================================================
+
+class TestFloorComparisonIsInclusive:
+    """`>=` vs `>` at the floor. Nothing in the suite sat ON the boundary, so
+    both comparisons passed every test."""
+
+    ANCHOR = 35e6
+
+    def _window(self, recent_values):
+        return ([_multi(i, {_BENCH: v}, _EPYC) for i, v in enumerate(recent_values)]
+                + [_multi(i, {_BENCH: self.ANCHOR}, _EPYC) for i in range(3, 9)])
+
+    def test_sustained_fires_at_exactly_the_floor(self):
+        exact = self.ANCHOR * (1 + 5.0 / 100.0)      # the rule's own expression
+        findings, meta = _meta_for(self._window([exact, exact, exact]))
+        assert meta["floor_pct"] == pytest.approx(5.0)
+        assert [(f.bench, f.kind) for f in findings] == [(_BENCH, "sustained")]
+
+    def test_sustained_is_silent_one_ulp_below_the_floor(self):
+        under = math.nextafter(self.ANCHOR * (1 + 5.0 / 100.0), 0.0)
+        findings, _meta = _meta_for(self._window([under, under, under]))
+        assert findings == []
+
+    def test_creep_fires_at_exactly_the_creep_floor(self):
+        # One recent night at the anchor keeps `sustained` out of it, so the
+        # boundary being tested is unambiguously creep's.
+        exact = self.ANCHOR * (1 + 10.0 / 100.0)
+        findings, meta = _meta_for(self._window([exact, exact, self.ANCHOR]))
+        assert meta["creep_floor_pct"] == pytest.approx(10.0)
+        assert [(f.bench, f.kind) for f in findings] == [(_BENCH, "creep")]
+
+    def test_creep_is_silent_one_ulp_below_its_floor(self):
+        under = math.nextafter(self.ANCHOR * (1 + 10.0 / 100.0), 0.0)
+        findings, _meta = _meta_for(self._window([under, under, self.ANCHOR]))
+        assert findings == []
+
+
+class TestFindingNumbersAreTheRealNumbers:
+    """`pct_vs_anchor` / `pct_typical_vs_anchor` had only ever been checked on
+    hand-built TrendFinding objects, so the formulas — and the two fields being
+    swapped — were untested end-to-end."""
+
+    def test_every_field_of_a_real_finding(self):
+        nights = ([_multi(0, {_BENCH: 42e6}, _EPYC), _multi(1, {_BENCH: 38.5e6}, _EPYC),
+                   _multi(2, {_BENCH: 38.5e6}, _EPYC)]
+                  + [_multi(i, {_BENCH: 35e6}, _EPYC) for i in range(3, 9)])
+        findings, _meta = _meta_for(nights)
+        f = findings[0]
+        assert (f.bench, f.kind) == (_BENCH, "sustained")
+        assert f.today_ns == 42e6                                  # newest night
+        assert f.anchor_ns == 35e6                                 # settled median
+        assert f.recent_typical_ns == 38.5e6                       # median of recent
+        assert f.pct_vs_anchor == pytest.approx(20.0)              # 42.0 / 35 - 1
+        assert f.pct_typical_vs_anchor == pytest.approx(10.0)      # 38.5 / 35 - 1
+        # …and the two percentages are NOT interchangeable.
+        assert f.pct_vs_anchor != f.pct_typical_vs_anchor
+
+    def test_the_body_prints_both_percentages_in_their_own_columns(self):
+        nights = ([_multi(0, {_BENCH: 42e6}, _EPYC), _multi(1, {_BENCH: 38.5e6}, _EPYC),
+                   _multi(2, {_BENCH: 38.5e6}, _EPYC)]
+                  + [_multi(i, {_BENCH: 35e6}, _EPYC) for i in range(3, 9)])
+        findings, meta = _meta_for(nights)
+        row = [li for li in ab.render_trend_issue_body(findings, meta).splitlines()
+               if li.startswith(f"| `{_BENCH}`")]
+        assert row == [f"| `{_BENCH}` | sustained | 42.0 ms | +20.0% | +10.0% |"]
+
+
+class TestStateMarkerSerialisation:
+    """The marker is a wire format between tonight's process and tomorrow's."""
+
+    def test_regex_captures_the_whole_nested_array(self):
+        # Non-greedy `(\[.*?\])` stops at the first `]`, so a two-row marker
+        # parses as invalid JSON and the prior state silently becomes None —
+        # which reads downstream as "legacy issue, no prior state".
+        body = "table…\n" + ab._render_state_marker([["A", "creep"], ["B", "sustained"]])
+        assert ab._parse_state_marker(body) == [["A", "creep"], ["B", "sustained"]]
+
+    def test_parse_is_order_independent(self):
+        body = ab._render_state_marker([["Z", "creep"], ["A", "sustained"]])
+        assert ab._parse_state_marker(body) == [["A", "sustained"], ["Z", "creep"]]
+
+    def test_render_is_order_independent_too(self):
+        assert ab._finding_state([_finding("Z", "creep"), _finding("A", "sustained")]) == \
+            [["A", "sustained"], ["Z", "creep"]]
+
+    def test_roundtrip_through_a_rendered_body_is_lossless(self):
+        _f, meta = _meta_for([_hnight(i, 35e6, _EPYC) for i in range(9)])
+        state = [["A", "creep"], ["B", "sustained"]]
+        body = ab.render_trend_issue_body([], meta, state=state)
+        assert ab._parse_state_marker(body) == state
+
+    def test_carry_forward_merges_without_duplicating(self):
+        assert ab._carry_forward_state([["B", "creep"]], [["A", "sustained"]]) == \
+            [["A", "sustained"], ["B", "creep"]]
+        # A row present in BOTH keeps tonight's kind, not the stale one.
+        assert ab._carry_forward_state([["A", "creep"]], [["A", "sustained"]]) == \
+            [["A", "creep"]]
+        assert ab._carry_forward_state([], []) == []
+
+
+class TestBodyDisclosureLines:
+    """The body is the only artefact a human reads. Its explanatory lines had
+    no assertions at all, so any of them could be deleted silently."""
+
+    def _body(self):
+        nights = ([_hnight(i, 45.5e6, _EPYC) for i in range(3)]
+                  + [_hnight(i, 35e6, _EPYC) for i in range(3, 9)])
+        findings, meta = _meta_for(nights)
+        return ab.render_trend_issue_body(findings, meta)
+
+    def test_floor_line(self):
+        assert ("- Effective floor: **5.0%** (max of fixed minimum and "
+                "canary-noise-scaled); creep floor: **10.0%**." in self._body())
+
+    def test_canary_line(self):
+        assert ("- Control-canary night-to-night CV: **0.00%** "
+                "(`BenchmarkControlCanaryCPU`; movement below the floor is "
+                "indistinguishable from runner noise)." in self._body())
+
+    def test_rule_explanation_line(self):
+        assert ("- Sustained rule = all 3 most-recent nights above the anchored "
+                "(settled-window-median) baseline; creep rule = the recent-window MEDIAN "
+                "above that same anchor (catches a step-change that a single noisy night "
+                "hides from `sustained`)." in self._body())
+
+    def test_table_header(self):
+        lines = self._body().splitlines()
+        assert "| Bench | Rule | Today | today vs anchor | recent-median vs anchor |" in lines
+        assert "|---|---|---:|---:|---:|" in lines
+
+    def test_footer_states_the_closing_contract(self):
+        body = self._body()
+        assert "never on a night that could evaluate nothing" in body
+        assert "never while ANY benchmark this issue is tracking went unmeasured" in body
+
+    def test_which_night_line(self):
+        nights = [_hnight(i, 35e6, _EPYC) for i in range(9)]
+        _f, meta = _meta_for(nights)
+        body = ab.render_trend_issue_body([], meta)
+        assert (f"Newest night in this window: **{nights[0].created_at}** "
+                f"(run `{nights[0].run_id}`)." in body)
+
+
+class TestShortWindowThreshold:
+    """`recent_nights + 2` — the bail-out boundary had never been probed from
+    both sides, so `+ 1` and `+ 3` both survived."""
+
+    def test_one_night_short_bails_out(self, tmp_path, capsys):
+        nights = [_flat(i, 35e6) for i in range(4)]        # K + 1
+        assert ab.run_trend_watch(_trend_args(_write_fixture(tmp_path, nights))) == 0
+        err = capsys.readouterr().err
+        assert "only 4 usable nights — need ≥ 5" in err
+        assert "did NOT run" in err
+
+    def test_exactly_the_threshold_runs(self, tmp_path, capsys):
+        nights = [_flat(i, 35e6) for i in range(5)]        # K + 2
+        assert ab.run_trend_watch(_trend_args(_write_fixture(tmp_path, nights))) == 0
+        out = capsys.readouterr()
+        assert "did NOT run" not in out.err
+        assert "No sustained" in out.out
+
+
+class TestVanishedBenchGuard:
+    """A bench that stops reporting must be SKIPPED, never collapsed so an old
+    night masquerades as tonight."""
+
+    def test_skipped_with_the_right_reason(self):
+        nights = ([_multi(i, {_BENCH_B: 12e6}, _EPYC) for i in range(3)]
+                  + [_multi(i, {_BENCH_B: 12e6, _BENCH: 52.5e6}, _EPYC)
+                     for i in range(3, 6)]
+                  + [_multi(i, {_BENCH_B: 12e6, _BENCH: 35e6}, _EPYC)
+                     for i in range(6, 10)])
+        findings, meta = _meta_for(nights)
+        assert {f.bench for f in findings} == set()
+        assert meta["inconclusive_reasons"] == {_BENCH: "no-recent"}
+        assert meta["evaluated_benches"] == [_BENCH_B]
+
+    def test_a_gap_in_the_middle_of_the_recent_window_also_skips(self):
+        # Present tonight and two nights ago, missing in between: the recent
+        # window is not complete, so there is no honest "all K nights" claim.
+        nights = ([_multi(0, {_BENCH: 45.5e6}, _EPYC), _multi(1, {}, _EPYC),
+                   _multi(2, {_BENCH: 45.5e6}, _EPYC)]
+                  + [_multi(i, {_BENCH: 35e6}, _EPYC) for i in range(3, 9)])
+        findings, meta = _meta_for(nights)
+        assert findings == []
+        assert meta["inconclusive_reasons"] == {_BENCH: "no-recent"}
+
+
+class TestStratificationKeyIsNotFolded:
+    """The docstring's promise is "Exact string equality, or nothing"."""
+
+    def test_case_variants_are_distinct_classes(self):
+        lower = _EPYC.lower()
+        nights = ([_hnight(i, 45.5e6, _EPYC) for i in range(3)]
+                  + [_hnight(i, 35e6, lower) for i in range(3, 9)])
+        findings, meta = _meta_for(nights)
+        assert findings == []                              # +30% ACROSS classes is not a trend
+        assert meta["cpu_class_counts"] == {_EPYC: 3, lower: 6}
+        assert meta["status"] == _INCONCLUSIVE
+
+    def test_punctuation_variants_are_distinct_classes(self):
+        stripped = _EPYC.replace("-", " ")
+        nights = ([_hnight(i, 45.5e6, _EPYC) for i in range(3)]
+                  + [_hnight(i, 35e6, stripped) for i in range(3, 9)])
+        _findings, meta = _meta_for(nights)
+        assert sorted(meta["cpu_class_counts"]) == sorted([_EPYC, stripped])
+
+    def test_control_the_identical_string_is_one_class(self):
+        nights = ([_hnight(i, 45.5e6, _EPYC) for i in range(3)]
+                  + [_hnight(i, 35e6, _EPYC) for i in range(3, 9)])
+        findings, meta = _meta_for(nights)
+        assert meta["cpu_class_counts"] == {_EPYC: 9}
+        assert [f.kind for f in findings] == ["sustained"]

@@ -107,11 +107,22 @@ jobs:
   # the nightly baseline is recorded + uploaded, pulls the last N nights'
   # artifacts, and opens / updates / auto-closes a `perf-trend` issue when main
   # shows a SUSTAINED regression (not a single-night blip). Detection +
-  # closed-loop logic live in analyze_bench_history.py --trend-watch (R1
-  # sustained-vs-anchored-baseline + R2 creep-vs-best-night, floored by the
-  # control canary's own night-to-night CV). This run's own artifact isn't
-  # "success" yet so it isn't in the window — a one-night lag, which is fine for
-  # a multi-night trend detector.
+  # closed-loop logic live in analyze_bench_history.py --trend-watch:
+  #   * R1 sustained — all K most-recent nights above an ANCHORED baseline (the
+  #     settled-window MEDIAN), and R2 creep — the recent window's MEDIAN above
+  #     that SAME anchor. Both floored by the control canary's own night-to-night
+  #     CV. (creep was "vs the best night in the window" before #754; a single
+  #     anomalously-fast night pinned that low-watermark forever, which is how
+  #     #702 flagged all 20 benches at once. It has anchored to the settled
+  #     median ever since — do not re-describe it as vs-best-night.)
+  #   * Host-class stratification (#1396) — the hosted runner pool is
+  #     heterogeneous, so both windows are drawn from tonight's `cpu:` class
+  #     only; a mixed-host anchor compares CPUs, not commits.
+  #   * Three states, not two — FINDINGS / CLEAR / INCONCLUSIVE. Only a night
+  #     that actually evaluated a benchmark may close its issue, and only for the
+  #     benchmarks it measured; "no findings" is never by itself a recovery.
+  # This run's own artifact isn't "success" yet so it isn't in the window — a
+  # one-night lag, which is fine for a multi-night trend detector.
   trend-watch:
     name: Nightly sustained-trend watchdog
     needs: bench-record
