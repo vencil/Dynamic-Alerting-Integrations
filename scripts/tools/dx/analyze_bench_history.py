@@ -1288,9 +1288,11 @@ def render_trend_issue_body(findings: list[TrendFinding], meta: dict,
         "flagged benchmarks changes; it auto-closes when no benchmark is above its floor on "
         "an evaluable night (closed loop) — never on a night that could evaluate nothing, and, "
         "as long as the hidden state marker at the end of this body stays READABLE, never "
-        "while any benchmark this issue is tracking went unmeasured (an edited-away or "
-        "corrupted marker leaves no per-bench claim to check; the run says so in its log, its "
-        "annotations and the job summary). Single-night blips "
+        "while any benchmark this issue is tracking went unmeasured. A CORRUPTED marker "
+        "leaves no per-bench claim to check, and the run says so in its log, its annotations "
+        "and the job summary, every night until it is repaired. ⚠️ A marker DELETED outright "
+        "cannot be told apart from a legacy issue that never had one, so **that guard lifts "
+        "silently** — do not remove the last line of this body. Single-night blips "
         "are filtered by the multi-night window; movement below the canary noise floor is "
         "ignored._",
         "",
@@ -1360,9 +1362,16 @@ def _parse_state_marker(body: str | None) -> list[list[str]] | None:
     the issue on a CLEAR night without ever checking which benchmark it was filed
     for. The body is human-editable, so a single hand edit reaches this; it is
     therefore inside the threat model, not a theoretical corruption. It gets the
-    annotation + step summary every other degraded path in this file gets, and
-    the caller's behaviour is deliberately unchanged (no marker-health state
-    machine — that design was implemented and reverted).
+    annotation + step summary every other degraded path in this file gets.
+
+    The CLOSE path's behaviour on it is deliberately unchanged (it still closes;
+    no marker-health state machine — that design was implemented and reverted).
+    The two paths that REFRESH the body decline to write, because writing is what
+    replaces the unreadable marker with a well-formed one and turns this very
+    annotation into a one-night event: the reader is told once, on the night the
+    evidence is destroyed, and never again. That is a guard on an existing write,
+    reading the ABSENT/UNREADABLE split this function already draws (the regex
+    matched, `json.loads` did not) — not a new lifecycle state.
 
     Collapsing the two into one message is the same mistake this module has
     already fixed twice, in ``_inconclusive_causes`` and ``_unverified_causes``."""
@@ -1668,8 +1677,15 @@ def run_trend_watch(args) -> int:
             # findings is what disarms the close guard on a later CLEAR night.
             prior_state = tracked = None
             state_for_body = current_state
+            marker_unreadable = False
             if open_issues:
                 prior_state = _parse_state_marker(open_issues[0].get("body"))
+                # PRESENT-but-UNREADABLE, told apart from ABSENT by the same
+                # predicate `_parse_state_marker` already uses to decide whether
+                # to annotate — no new state, no new marker field. See the body
+                # write below for why this branch has to exist at all.
+                marker_unreadable = (prior_state is None
+                                     and _marker_match(open_issues[0].get("body")) is not None)
                 tracked = _tracked_rows(prior_state, _unverified_benches(prior_state, meta))
                 state_for_body = _carry_forward_state(current_state, tracked)
             body = render_trend_issue_body(findings, meta, state=state_for_body,
@@ -1697,8 +1713,14 @@ def run_trend_watch(args) -> int:
                           + ", ".join(f"{b} ({k})" for b, k in tracked), file=sys.stderr)
                 verb = "[dry-run] would update" if args.dry_run else "updating"
                 note = "state changed → will comment" if transition else "no state change → body only"
-                print(f"→ {verb} body of existing perf-trend issue #{num} ({note})",
-                      file=sys.stderr)
+                if marker_unreadable:
+                    print(f"→ NOT refreshing body of perf-trend issue #{num} — its state "
+                          "marker is PRESENT but UNREADABLE, and the refresh would replace "
+                          "it with tonight's clean one (see the annotation above).",
+                          file=sys.stderr)
+                else:
+                    print(f"→ {verb} body of existing perf-trend issue #{num} ({note})",
+                          file=sys.stderr)
                 if label_change:
                     print(f"→ {'[dry-run] would ' if args.dry_run else ''}{label_change} "
                           f"`{RECOVERING_LABEL}` label", file=sys.stderr)
@@ -1716,8 +1738,21 @@ def run_trend_watch(args) -> int:
                     # the order would re-fire the same comment whenever the body
                     # edit failed, resurrecting the exact comment-spam this change
                     # exists to kill. Do not reorder.
-                    _gh_write(["issue", "edit", str(num), "--repo", REPO, "--body", body],
-                              what=f"body refresh of issue #{num}")
+                    #
+                    # …unless the marker we just failed to read is still sitting
+                    # in that body. The refresh writes a WELL-FORMED marker, so
+                    # it destroys the corruption it was reported for: measured,
+                    # night N emitted the "PRESENT but UNREADABLE" annotation and
+                    # wrote back `[]`, and from night N+1 on every run was green
+                    # and silent — the evidence gone, the close guard still
+                    # disarmed, nobody left to tell. Declining the write keeps the
+                    # broken marker on the issue so the annotation re-fires every
+                    # night until a human repairs it. ABSENT is NOT this case: a
+                    # legacy body has no claim to preserve and its write is the
+                    # migration that plants the first marker, so it proceeds.
+                    if not marker_unreadable:
+                        _gh_write(["issue", "edit", str(num), "--repo", REPO, "--body", body],
+                                  what=f"body refresh of issue #{num}")
                     if label_change == "add":
                         subprocess.run(
                             ["gh", "label", "create", RECOVERING_LABEL, "--repo", REPO,
@@ -1793,7 +1828,24 @@ def run_trend_watch(args) -> int:
                 # visibly — a body that says "nothing is flagged" while its own
                 # hidden marker says `sustained` contradicts itself, and the
                 # reader has no way to know which half to believe.
-                prior_state = _parse_state_marker(issue.get("body")) or []
+                #
+                # `or []` is the one input for which that rule cannot hold: when
+                # the marker is PRESENT but UNREADABLE it collapses to the empty
+                # ledger and writes `state=[]` — rewriting the flagged set from
+                # tonight's nothing, precisely what the paragraph above forbids,
+                # and overwriting the corrupt marker with a clean one so the
+                # annotation that just reported it never fires again. So this
+                # path declines the write instead and leaves the damaged body
+                # exactly as it found it. ABSENT still takes `or []`: that is the
+                # legacy-issue migration and it must not be blocked.
+                prior_state = _parse_state_marker(issue.get("body"))
+                if prior_state is None and _marker_match(issue.get("body")) is not None:
+                    print(f"→ NOT refreshing body of perf-trend issue #{num} — its state "
+                          "marker is PRESENT but UNREADABLE, and the refresh would replace "
+                          "it with a clean empty one (see the annotation above).",
+                          file=sys.stderr)
+                    continue
+                prior_state = prior_state or []
                 body = render_trend_issue_body(
                     [], meta, state=prior_state,
                     tracked=_tracked_rows(prior_state,

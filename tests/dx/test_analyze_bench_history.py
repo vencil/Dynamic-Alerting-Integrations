@@ -2236,8 +2236,14 @@ class TestMarkerParseNeverRedsTheRun:
         rc, calls = _live(monkeypatch, tmp_path, _sustained_window(),
                           issues=[_issue(42, body=hostile)])
         capsys.readouterr()
-        assert rc == 0
-        assert _sel(calls, "issue", "edit", "42")
+        assert rc == 0                       # the RecursionError does not escape
+        # This assertion used to be `_sel(calls, "issue", "edit", "42")` — the
+        # run reached the write plane. It now deliberately does NOT: a hostile
+        # marker is PRESENT-but-UNREADABLE, and refreshing the body would replace
+        # it with a clean one (R7-F2, `TestUnreadableMarkerIsNotOverwritten`).
+        # What this test is about is unchanged: the run survives and exits 0.
+        assert not _sel(calls, "issue", "edit", "42")
+        assert _sel(calls, "issue", "list")  # …having actually run the write path
 
     def test_ordinary_garbage_still_returns_none(self):
         assert ab._parse_state_marker("<!-- perf-trend-state v1 [1] -->") is None
@@ -3337,9 +3343,11 @@ _FOOTER = (
     "flagged benchmarks changes; it auto-closes when no benchmark is above its floor on "
     "an evaluable night (closed loop) — never on a night that could evaluate nothing, and, "
     "as long as the hidden state marker at the end of this body stays READABLE, never "
-    "while any benchmark this issue is tracking went unmeasured (an edited-away or "
-    "corrupted marker leaves no per-bench claim to check; the run says so in its log, its "
-    "annotations and the job summary). Single-night blips "
+    "while any benchmark this issue is tracking went unmeasured. A CORRUPTED marker "
+    "leaves no per-bench claim to check, and the run says so in its log, its annotations "
+    "and the job summary, every night until it is repaired. ⚠️ A marker DELETED outright "
+    "cannot be told apart from a legacy issue that never had one, so **that guard lifts "
+    "silently** — do not remove the last line of this body. Single-night blips "
     "are filtered by the multi-night window; movement below the canary noise floor is "
     "ignored._"
 )
@@ -3963,7 +3971,247 @@ class TestUnreadableMarkerIsNotSilentlyAbsent:
         assert "never while ANY benchmark this issue is tracking went unmeasured" not in body
         assert ("as long as the hidden state marker at the end of this body stays READABLE"
                 in body)
-        assert "an edited-away or corrupted marker leaves no per-bench claim to check" in body
+
+
+# ── R7-F1: the footer promised the one case the code is silent about ────────
+
+# A body shaped like a real one — prose ABOVE, marker on its own last line — so
+# "delete the marker" below is a LINE deletion (what a human editing the issue
+# actually does), not "pass the empty string".
+_WITH_MARKER = ("## Nightly bench trend regression\n\nsome prose\n\n"
+                + _marker([_BENCH, "sustained"]))
+
+
+class TestFooterDoesNotPromiseWhatTheCodeCannotDeliver:
+    """R7-F1 — the footer's parenthetical said an "edited-away OR corrupted"
+    marker is reported in "its log, its annotations and the job summary". Half of
+    that is true. Deleting the marker LINE outright is the other half, and it is
+    reported nowhere, by design: `_parse_state_marker` returns None for an ABSENT
+    marker in silence because ABSENT is type-indistinguishable from a legacy
+    issue's body, which never made a per-bench claim and has nothing to warn
+    about. So the promise could only have been kept by nagging every legacy
+    ticket every night.
+
+    The fix is the sentence, not the code: the footer now promises the readable
+    and the corrupted case only, and DISCLOSES that a deleted marker lifts the
+    guard silently. See `test_a_deleted_marker_really_is_silent` for the
+    measurement the wording had to be made honest about."""
+
+    def _created_body(self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _sustained_window(_EPYC))
+        capsys.readouterr()
+        return _body_of(_one(calls, "issue", "create"))
+
+    def test_the_edited_away_promise_is_gone(self, monkeypatch, tmp_path, capsys):
+        body = self._created_body(monkeypatch, tmp_path, capsys)
+        assert "edited-away" not in body
+        # …and the surviving half is still promised for the case that DOES speak.
+        assert ("A CORRUPTED marker leaves no per-bench claim to check, and the run says "
+                "so in its log, its annotations and the job summary") in body
+
+    def test_the_silent_case_is_disclosed_instead_of_promised(
+            self, monkeypatch, tmp_path, capsys):
+        body = self._created_body(monkeypatch, tmp_path, capsys)
+        assert ("A marker DELETED outright cannot be told apart from a legacy issue that "
+                "never had one, so **that guard lifts silently**") in body
+
+    def test_a_deleted_marker_really_is_silent(
+            self, monkeypatch, tmp_path, capsys):
+        """The measurement the wording is answerable to: take the SAME body and
+        delete the marker line. The issue is closed on a CLEAR night, and not one
+        of the three channels the old footer named says the word `marker`."""
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        deleted = "\n".join(l for l in _WITH_MARKER.splitlines()
+                            if "perf-trend-state" not in l)
+        assert ab._marker_match(deleted) is None            # the line really is gone
+        assert ab._parse_state_marker(_WITH_MARKER) == [[_BENCH, "sustained"]]
+        _rc, calls = _live(monkeypatch, tmp_path, _flat_window(_EPYC),
+                           issues=[_issue(42, body=deleted)])
+        out = capsys.readouterr()
+        assert _sel(calls, "issue", "close", "42")          # the guard is gone with it
+        assert "marker" not in out.err and "marker" not in out.out
+        assert "marker" not in (summary.read_text(encoding="utf-8")
+                                if summary.exists() else "")
+
+
+# ── R7-F2: the annotation was washed away by the same night that raised it ──
+
+def _marker_warnings(err: str) -> list[str]:
+    """ONLY the state-marker annotation lines.
+
+    ⚠️ Read this before weakening any assertion below to `"::warning::" in err`
+    or to a COUNT of warning lines. Every night this class drives carries other
+    annotations (CLEAR-but-INCOMPLETE, UNSTRATIFIED, held-open, gh-write
+    failures), so a marker annotation that silently stopped firing still leaves
+    the count above zero — the assertion goes green while measuring nothing.
+    `test_other_warnings_on_the_same_night_would_have_masked_this` pins that the
+    masking is real, not hypothetical."""
+    return [l for l in err.splitlines()
+            if l.startswith("::warning::") and "PRESENT but UNREADABLE" in l]
+
+
+def _next_body(calls, num: int, prior_body: str) -> str:
+    """The body this issue CARRIES INTO the next night.
+
+    The marker in the issue body is the only memory this tool has across nights,
+    so a cross-night test is only testing the shipped code if night N+1 is fed
+    what night N actually left behind: the last body written tonight, or the
+    untouched prior body when tonight wrote none. (The benchmark playbook makes
+    the same point about the close-rate harness that measured a model instead of
+    this module.)"""
+    edits = [c for c in _sel(calls, "issue", "edit", str(num)) if _BODY_FLAG in c]
+    return _body_of(edits[-1]) if edits else prior_body
+
+
+def _inconclusive_window():
+    """Tonight ran on a host class no settled night shares → nothing evaluable."""
+    return [_multi(i, {_BENCH: 35e6}, _EPYC if i == 0 else _XEON) for i in range(9)]
+
+
+class TestUnreadableMarkerIsNotOverwritten:
+    """R7-F2 — the annotation R6-F1 added was destroyed by the same run that
+    emitted it. Both body-refresh paths rewrite the body with a WELL-FORMED
+    marker, so night N said "PRESENT but UNREADABLE" and then replaced the
+    corrupt marker with a clean one; night N+1 onwards was green and silent, the
+    evidence gone for good and the per-bench close guard still disarmed.
+
+    Measured on the parent commit:
+
+        night N   warnings: 2 (incl. "PRESENT but UNREADABLE")
+                  wrote back marker: <!-- perf-trend-state v1 [] -->
+        night N+1 (CLEAR)  closed: True  warnings: []  summary: none
+        control (N does not overwrite): N+1 still emits 1 warning
+
+    The INCONCLUSIVE path's own comment forbids exactly this — "the marker is
+    rewritten from the PRIOR state, NOT from tonight's empty finding set" — and
+    its `or []` did it anyway on the unreadable branch.
+
+    The fix is a guard on an existing write, using the ABSENT/UNREADABLE split
+    `_parse_state_marker` already draws. Behaviour on the two cases it must not
+    touch is unchanged: ABSENT still writes (that write IS the legacy-issue
+    migration) and the CLOSE path still closes."""
+
+    # ---- the guard itself, per path ---------------------------------------
+
+    def test_the_findings_night_does_not_overwrite_a_broken_marker(
+            self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _sustained_window(_EPYC),
+                           issues=[_issue(42, body=_BROKEN_MARKER)])
+        err = capsys.readouterr().err
+        assert not _sel(calls, "issue", "edit", "42")
+        assert not _sel(calls, "issue", "comment", "42")
+        assert _marker_warnings(err)
+        assert "NOT refreshing body of perf-trend issue #42" in err
+
+    def test_the_inconclusive_night_does_not_overwrite_a_broken_marker(
+            self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _inconclusive_window(),
+                           issues=[_issue(42, body=_BROKEN_MARKER)])
+        err = capsys.readouterr().err
+        assert not _sel(calls, "issue", "edit", "42")
+        assert not _sel(calls, "issue", "close", "42")     # INCONCLUSIVE never closes
+        assert _marker_warnings(err)
+        assert "NOT refreshing body of perf-trend issue #42" in err
+
+    # ---- the two cases the guard must NOT catch ---------------------------
+
+    def test_an_absent_marker_still_gets_its_migration_write_on_findings(
+            self, monkeypatch, tmp_path, capsys):
+        # A legacy body has no per-bench claim to preserve, and this write is the
+        # migration that plants the first marker. Blocking it here would freeze
+        # every legacy ticket out of the lifecycle permanently.
+        _rc, calls = _live(monkeypatch, tmp_path, _sustained_window(_EPYC),
+                           issues=[_issue(42, body="## legacy body, no marker")])
+        capsys.readouterr()
+        assert ab._parse_state_marker(_body_of(_one(calls, "issue", "edit", "42"))) == \
+            [[_BENCH, "sustained"]]
+
+    def test_an_absent_marker_still_gets_its_migration_write_on_inconclusive(
+            self, monkeypatch, tmp_path, capsys):
+        _rc, calls = _live(monkeypatch, tmp_path, _inconclusive_window(),
+                           issues=[_issue(42, body="## legacy body, no marker")])
+        capsys.readouterr()
+        assert ab._parse_state_marker(_body_of(_one(calls, "issue", "edit", "42"))) == []
+
+    def test_a_readable_marker_is_still_refreshed_on_both_paths(
+            self, monkeypatch, tmp_path, capsys):
+        _rc, findings = _live(monkeypatch, tmp_path, _sustained_window(_EPYC),
+                              issues=[_issue(42, body=_INTACT_MARKER)])
+        _rc, inconc = _live(monkeypatch, tmp_path, _inconclusive_window(),
+                            issues=[_issue(42, body=_INTACT_MARKER)])
+        capsys.readouterr()
+        assert _sel(findings, "issue", "edit", "42")
+        assert _sel(inconc, "issue", "edit", "42")
+
+    def test_the_close_path_is_untouched(self, monkeypatch, tmp_path, capsys):
+        # Deliberately NOT in this fix's scope: a CLEAR night still closes an
+        # issue whose marker it cannot read (R6-F1 kept that on purpose — the
+        # marker-health state machine was designed, implemented and reverted).
+        _rc, calls = _live(monkeypatch, tmp_path, _flat_window(_EPYC),
+                           issues=[_issue(42, body=_BROKEN_MARKER)])
+        capsys.readouterr()
+        assert _sel(calls, "issue", "close", "42")
+
+    # ---- the point of all of it: it still speaks the NEXT night ------------
+
+    @pytest.mark.parametrize("night_n", ["findings", "inconclusive"],
+                             ids=["night-N-findings", "night-N-inconclusive"])
+    def test_the_corruption_survives_the_night_and_is_reported_again(
+            self, monkeypatch, tmp_path, capsys, night_n):
+        """The cross-night assertion. Night N+1 is fed the body night N really
+        left behind (`_next_body`), which is the whole mechanism at issue."""
+        summary_n = tmp_path / "n.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_n))
+        nights = (_sustained_window(_EPYC) if night_n == "findings"
+                  else _inconclusive_window())
+        _rc, calls = _live(monkeypatch, tmp_path, nights,
+                           issues=[_issue(42, body=_BROKEN_MARKER)])
+        assert _marker_warnings(capsys.readouterr().err)          # night N speaks
+        carried = _next_body(calls, 42, _BROKEN_MARKER)
+
+        # ⚠️ The next-night assertion comes FIRST on purpose. Checking
+        # `carried == _BROKEN_MARKER` up here would be the assertion that fires
+        # under a reverted fix, and it only says "the body did not change" — the
+        # CLAIM is that the corruption is still reported a night later, so that
+        # is what has to be measured, on the night after, from a fresh run.
+        summary_n1 = tmp_path / "n1.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_n1))
+        _rc, _calls = _live(monkeypatch, tmp_path, _flat_window(_EPYC),
+                            issues=[_issue(42, body=carried)])
+        err = capsys.readouterr().err
+        assert len(_marker_warnings(err)) == 1                    # night N+1 too
+        assert "state marker UNREADABLE" in summary_n1.read_text(encoding="utf-8")
+        # …and only now, the mechanism behind it.
+        assert carried == _BROKEN_MARKER
+        assert ab._parse_state_marker(carried) is None
+
+    def test_the_control_night_shows_what_overwriting_would_have_cost(
+            self, monkeypatch, tmp_path, capsys):
+        """The counterfactual, in-suite: feed night N+1 the body the OLD code
+        would have written (a clean, empty marker) instead of the one it now
+        leaves alone. Same night, same window — and it is silent."""
+        washed = ab._render_state_marker([])     # what the old code wrote back
+        summary = tmp_path / "s.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        _rc, calls = _live(monkeypatch, tmp_path, _flat_window(_EPYC),
+                           issues=[_issue(42, body=washed)])
+        err = capsys.readouterr().err
+        assert ab._parse_state_marker(washed) == []      # readable ⇒ nothing to report
+        assert _marker_warnings(err) == []
+        assert _sel(calls, "issue", "close", "42")       # …and it closes, silently
+
+    def test_other_warnings_on_the_same_night_would_have_masked_this(
+            self, monkeypatch, tmp_path, capsys):
+        """Why `_marker_warnings` filters instead of counting. This night carries
+        the CLEAR-but-INCOMPLETE annotation as well, so `"::warning::" in err`
+        and `count > 0` both stay green with the marker annotation deleted."""
+        _rc, _calls = _live(monkeypatch, tmp_path, _new_bench_only_in_the_newest_three(),
+                            issues=[_issue(42, body=_BROKEN_MARKER)])
+        err = capsys.readouterr().err
+        allw = [l for l in err.splitlines() if l.startswith("::warning::")]
+        assert len(allw) > len(_marker_warnings(err)) >= 1
+        assert any("CLEAR but INCOMPLETE" in l for l in allw)
 
 
 # ── R6-F2: a CLEAR night that judged only part of the window ────────────────
