@@ -1525,7 +1525,12 @@ def _gh_write(cmd: list[str], what: str | None = None) -> bool:
     try:
         _gh(cmd)
         return True
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+    # OSError covers "gh could not be STARTED" (FileNotFoundError if it vanished
+    # between the `shutil.which` probe and this call, PermissionError on a broken
+    # install). `_gh` only converts a non-zero EXIT into CalledProcessError, so
+    # without OSError here a watchdog whose gh disappeared mid-run would raise out
+    # of every write path — the one thing this function's contract forbids.
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
         print(f"  ⚠️  gh {' '.join(cmd[:2])} failed (non-fatal): {exc}", file=sys.stderr)
         if what:
             _warn(f"perf-trend watchdog: {what} FAILED ({type(exc).__name__}). The issue "

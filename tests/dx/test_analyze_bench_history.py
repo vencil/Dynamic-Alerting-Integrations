@@ -2165,6 +2165,18 @@ class TestCanaryWithoutSamplesIsNotZeroJitter:
         assert "max of fixed minimum and canary-noise-scaled" in body
 
 
+def _boom(exc: Exception):
+    """A `subprocess.run` stand-in that fails the way a MISSING binary fails.
+
+    Not the same as the `fail=` seam used elsewhere in this file: that one makes
+    gh exit non-zero (→ CalledProcessError). This one makes gh never start at
+    all, which is a different exception family and a different code path.
+    """
+    def _run(*_a, **_kw):
+        raise exc
+    return _run
+
+
 class TestGhWriteFailuresAreLoud:
     """A7 — every write failure on the update/close paths was a single stderr
     line in a job that still ends green, and the auto-close comment was posted
@@ -2179,6 +2191,26 @@ class TestGhWriteFailuresAreLoud:
         err = capsys.readouterr().err
         assert "::warning::" in err and "body refresh of issue #42 FAILED" in err
         assert "body refresh of issue #42 failed" in summary.read_text(encoding="utf-8")
+
+    def test_gh_that_cannot_start_is_a_failure_not_a_crash(self, monkeypatch, tmp_path, capsys):
+        """`_gh` turns a non-zero EXIT into CalledProcessError, but a `gh` that
+        cannot be STARTED raises OSError straight out of subprocess.run. The
+        `gh_available` probe is a `shutil.which` snapshot taken once per run, so
+        anything that removes gh afterwards (image cleanup mid-job, a broken
+        install, a revoked exec bit) lands here. This function's contract is that
+        it NEVER raises — a watchdog that dies on the first write leaves the issue
+        stale AND loses every annotation it was about to emit."""
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        monkeypatch.setattr(ab.subprocess, "run", _boom(FileNotFoundError(2, "not found", "gh")))
+        assert ab._gh_write(["issue", "close", "42"], what="closing issue #42") is False
+        err = capsys.readouterr().err
+        assert "::warning::" in err and "closing issue #42 FAILED (FileNotFoundError)" in err
+        assert "closing issue #42 failed" in summary.read_text(encoding="utf-8")
+
+    def test_a_broken_gh_install_is_also_survivable(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(ab.subprocess, "run", _boom(PermissionError(13, "denied", "gh")))
+        assert ab._gh_write(["issue", "edit", "42"]) is False
 
     def test_failed_close_does_not_post_the_auto_close_comment(
             self, monkeypatch, tmp_path, capsys):
