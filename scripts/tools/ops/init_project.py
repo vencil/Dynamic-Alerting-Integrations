@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import textwrap
 from datetime import datetime, timezone
@@ -1459,6 +1460,15 @@ _GL_PIPELINE_REL = Path('.gitlab-ci.d') / 'dynamic-alerting.yml'
 # two documents.
 _GL_ROOT_SHELL_REL = Path('.gitlab-ci.yml')
 
+# ⛔ The GitLab pipeline's stage list, named ONCE. It is interpolated into the
+# pipeline's own `stages:` and quoted back to the customer in the root shell's
+# hand-editing note. Those two used to be independent literals, and when
+# #1358 removed the `generate` stage the note kept telling customers to give
+# their own jobs `stage: generate` — a value GitLab rejects, so following our
+# instruction broke the whole pipeline. A shipped instruction that names a
+# stage must be derived from the stage list, not retyped beside it.
+_GL_STAGES = ('validate', 'apply')
+
 # The exact wiring the customer must have, in the two SHAPES it is needed.
 #
 # ⛔ These are not interchangeable, and printing the wrong one is destructive.
@@ -1481,8 +1491,22 @@ _GL_INCLUDE_ITEM_SNIPPET = f"  - local: {_GL_PIPELINE_REL.as_posix()}\n"
 _GL_ROOT_CREATE = 'create'            # no root file — we write the shell
 _GL_ROOT_ALREADY_WIRED = 'wired'      # their root file already includes ours
 _GL_ROOT_NEEDS_INCLUDE = 'needs-include'  # their root file, no `include:` key
-_GL_ROOT_NEEDS_APPEND = 'needs-append'    # their root file HAS an `include:`
+_GL_ROOT_NEEDS_APPEND = 'needs-append'    # `include:` is a LIST — append an item
+_GL_ROOT_NEEDS_CONVERT = 'needs-convert'  # `include:` exists but is NOT a list
 _GL_ROOT_UNPARSEABLE = 'unparseable'      # their root file did not parse
+
+
+def _gitlab_include_path(raw: str) -> str:
+    """Normalise a `local:` include path the way GitLab itself does.
+
+    ⛔ GitLab strips leading slashes (`Gitlab::Utils.remove_leading_slashes`),
+    and every `include:local` example in its documentation uses one — so
+    `/.gitlab-ci.d/dynamic-alerting.yml` and `.gitlab-ci.d/dynamic-alerting.yml`
+    are the SAME file to GitLab. Comparing the raw strings made a correctly
+    wired repo read as unwired, and we then asked for a second include of the
+    file it already loads.
+    """
+    return raw.lstrip('/').removeprefix('./')
 
 
 def _gitlab_declared_includes(doc: object) -> list[str]:
@@ -1498,9 +1522,9 @@ def _gitlab_declared_includes(doc: object) -> list[str]:
     found: list[str] = []
     for entry in entries:
         if isinstance(entry, str):
-            found.append(entry)
+            found.append(_gitlab_include_path(entry))
         elif isinstance(entry, dict) and isinstance(entry.get('local'), str):
-            found.append(entry['local'])
+            found.append(_gitlab_include_path(entry['local']))
     return found
 
 
@@ -1553,13 +1577,36 @@ def _gitlab_root_shell_status(output_dir: str) -> str:
     try:
         doc = yaml.safe_load(body)
     except yaml.YAMLError:
-        return _GL_ROOT_UNPARSEABLE
+        # ⛔ Do not fall through to the block-shaped snippet. `!reference` is
+        # the ordinary route into this branch, and a pipeline sophisticated
+        # enough to use it almost certainly already has an `include:` — the
+        # exact repo for which a second `include:` key silently deletes the
+        # customer's own entries. We cannot parse, but we can still see
+        # whether the key is there, so the shape decision is made on a line
+        # scan rather than on a guess.
+        return (_GL_ROOT_NEEDS_APPEND if _GL_INCLUDE_KEY_RE.search(body)
+                else _GL_ROOT_UNPARSEABLE)
     includes = _gitlab_declared_includes(doc)
     if _GL_PIPELINE_REL.as_posix() in includes:
         return _GL_ROOT_ALREADY_WIRED
-    if includes or (isinstance(doc, dict) and 'include' in doc):
-        return _GL_ROOT_NEEDS_APPEND
-    return _GL_ROOT_NEEDS_INCLUDE
+    if not (isinstance(doc, dict) and 'include' in doc):
+        return _GL_ROOT_NEEDS_INCLUDE
+    # ⛔ LIST-ness, not mere presence. `include:` also accepts a bare string
+    # (`include: 'a.yml'`) and a single mapping (`include:\n  template: …`),
+    # both documented GitLab forms. Telling the owner of one of those to
+    # "append this list item under your existing include:" produces a block
+    # sequence under a scalar or a mapping — a YAML syntax error that stops
+    # their ENTIRE root pipeline from loading, not just ours. Measured: the
+    # bare-string, single-mapping and empty-`[]` shapes all fail to parse
+    # after following that instruction; only the true list survives.
+    return (_GL_ROOT_NEEDS_APPEND if isinstance(doc['include'], list)
+            and doc['include'] else _GL_ROOT_NEEDS_CONVERT)
+
+
+# A top-level `include:` key, seen without parsing. Used only when the
+# document did not parse — enough to choose a snippet SHAPE, never enough to
+# claim the pipeline is wired.
+_GL_INCLUDE_KEY_RE = re.compile(r'^include\s*:', re.MULTILINE)
 
 
 def _gitlab_root_snippet_for(status: str) -> str:
@@ -1590,12 +1637,15 @@ def _gen_gitlab_root_shell() -> str:
     #
     # `stages:` and `variables:` come from the included file, so do not
     # restate them here: a `stages:` in THIS file overrides the included one
-    # and breaks all four generated jobs. For the same reason, a job you add
-    # here needs an explicit `stage:` drawn from that list (validate,
-    # generate, apply) — without one it defaults to `test`, which is not a
-    # declared stage, and the whole pipeline fails to build.
+    # and breaks every generated job. For the same reason, a job you add here
+    # needs an explicit `stage:` drawn from that list ({stage_names}) —
+    # without one it defaults to `test`, which is not a declared stage, and
+    # the whole pipeline fails to build.
 
-    {include_snippet}""").format(include_snippet=_GL_INCLUDE_SNIPPET)
+    {include_snippet}""").format(
+        include_snippet=_GL_INCLUDE_SNIPPET,
+        stage_names=", ".join(_GL_STAGES),
+    )
 
 
 def _gen_gitlab_ci(
@@ -1656,10 +1706,20 @@ def _gen_gitlab_ci(
         # ⛔ Load-bearing, not boilerplate — see validate-config above (#1408).
         entrypoint: [""]
       rules:
+        # ⛔ `exists:` takes FILE globs. It used to say `rule-packs/custom/`
+        # — a bare directory with a trailing slash — and GitLab resolves that
+        # form with a `bsearch` over the sorted worktree path list, i.e. a
+        # binary search against a predicate that is not monotonic. Whether it
+        # finds the directory then depends on where the search happens to
+        # land: with the bare generated layout it hits, and adding any tree
+        # that sorts after `rule-packs/` makes it miss. A missed `exists:` is
+        # ANDed with `changes:`, so the job is simply never created — no
+        # error, no red, just a governance gate that quietly is not there.
+        # A pattern glob is matched with fnmatch over every path instead.
         - changes:
             - rule-packs/custom/**/*
           exists:
-            - rule-packs/custom/
+            - rule-packs/custom/**/*
       # ⛔ NO `allow_failure:`. `da-tools lint --ci` exits non-zero on ERROR
       # only (lint_custom_rules.py: `if args.ci and errors`), and its ERRORs are
       # the governance deny-list on tenant-authored raw PromQL — denied
@@ -2373,10 +2433,13 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
     gl_root_written = str(Path(output_dir) / _GL_ROOT_SHELL_REL) in created
     gl_status = (_GL_ROOT_CREATE if gl_root_written
                  else _gitlab_root_shell_status(output_dir))
+    # ⛔ Every state except "we wrote it" and "already wired" leaves the
+    # customer with work to do, so this list must be the complement of those
+    # two — enumerating the needs-work states instead is how NEEDS_CONVERT got
+    # added later and silently inherited "CI will automatically validate".
     gl_needs_manual = (ci_sel in ('gitlab', 'both')
-                       and gl_status in (_GL_ROOT_NEEDS_INCLUDE,
-                                         _GL_ROOT_NEEDS_APPEND,
-                                         _GL_ROOT_UNPARSEABLE))
+                       and not gl_root_written
+                       and gl_status != _GL_ROOT_ALREADY_WIRED)
 
     if ci_sel in ('github', 'both'):
         if is_zh:
@@ -2429,6 +2492,38 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
                           f"— left untouched. Append the line below to that "
                           f"EXISTING include: list (do not add a second "
                           f"`include:` key — it would drop your own entries):")
+            elif gl_status == _GL_ROOT_NEEDS_CONVERT:
+                # ⛔ Neither ready-made shape is safe here. Their `include:` is
+                # a scalar or a single mapping, so a list item underneath it is
+                # a syntax error and a second `include:` key deletes what they
+                # have. The only correct instruction is "turn it into a list",
+                # which we show structurally rather than pretending to know
+                # their entry.
+                if is_zh:
+                    print(f"  {step}. ⚠️ 你的 repo 已有根目錄 "
+                          f"{_GL_ROOT_SHELL_REL.as_posix()}，其 `include:` 不是清單"
+                          f"形式 — 未修改。請先把它改寫成清單，再把我們這一項加進去，"
+                          f"例如：")
+                    print()
+                    print("       include:")
+                    print("         - <你原本的 include 內容>")
+                    print(f"         - local: {_GL_PIPELINE_REL.as_posix()}")
+                    print()
+                    print("       （直接在下面加一行清單項目會是語法錯誤，"
+                          "另外再寫一個 include: 則會蓋掉你原本的。）")
+                else:
+                    print(f"  {step}. ⚠️ Your repo's root "
+                          f"{_GL_ROOT_SHELL_REL.as_posix()} has an `include:` "
+                          f"that is not a list — left untouched. Convert it to "
+                          f"a list first, then add ours, e.g.:")
+                    print()
+                    print("       include:")
+                    print("         - <your existing include entry>")
+                    print(f"         - local: {_GL_PIPELINE_REL.as_posix()}")
+                    print()
+                    print("       (Appending a list item under a non-list is a "
+                          "syntax error; adding a second `include:` key drops "
+                          "what you have.)")
             elif gl_status == _GL_ROOT_UNPARSEABLE:
                 if is_zh:
                     print(f"  {step}. ⚠️ 你的 repo 已有根目錄 "
@@ -2453,10 +2548,14 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
                           f"GitLab auto-loads only that file, so paste the "
                           f"snippet below into it or the generated pipeline "
                           f"never runs:")
-            print()
-            for line in _gitlab_root_snippet_for(gl_status).rstrip('\n').splitlines():
-                print(f"       {line}")
-            print()
+            # NEEDS_CONVERT printed its own worked example above: neither
+            # ready-made shape is safe for it, so there is nothing here to
+            # hand over.
+            if gl_status != _GL_ROOT_NEEDS_CONVERT:
+                print()
+                for line in _gitlab_root_snippet_for(gl_status).rstrip('\n').splitlines():
+                    print(f"       {line}")
+                print()
         step += 1
 
     # ⛔ Was an unconditional "CI will automatically validate your config".
@@ -2479,17 +2578,17 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
         if ci_sel == 'both':
             if is_zh:
                 print(f"  {step}. 提交並推送 — GitHub Actions 會自動驗證；"
-                      f"GitLab CI 要等你貼入上面的 include: 之後才會")
+                      f"GitLab CI 要等你依上面的說明接上 include: 之後才會")
             else:
                 print(f"  {step}. Commit and push — GitHub Actions validates "
-                      f"automatically; GitLab CI only after you paste the "
-                      f"include above")
+                      f"automatically; GitLab CI only after you wire in the "
+                      f"include as shown above")
         elif is_zh:
-            print(f"  {step}. 貼入上面的 include: 之後提交並推送 — "
+            print(f"  {step}. 依上面的說明接上 include: 之後提交並推送 — "
                   f"{platform} 才會驗證你的配置")
         else:
-            print(f"  {step}. Paste the include above, then commit and push — "
-                  f"only then does {platform} validate your config")
+            print(f"  {step}. Wire in the include as shown above, then commit and "
+                  f"push — only then does {platform} validate your config")
     else:
         if is_zh:
             print(f"  {step}. 提交並推送 — {platform} 會自動驗證你的配置")
@@ -2612,6 +2711,28 @@ def _handle_dry_run(config: dict, output_dir: str) -> None:
     for f in files:
         print(f"  {Path(f).relative_to(output_dir)}")
     print(f"\n  {'總計' if is_zh else 'Total'}: {len(files)}")
+
+    # ⛔ `--dry-run` is the flag people use to answer "what will this do to my
+    # repo", and it exits before `_print_summary` — which is the only place
+    # the manual-wiring instruction lives. So on a repo that already has a
+    # root `.gitlab-ci.yml` the ONLY signal was an absent filename, and the
+    # reader had no way to learn the GitLab leg would be inert until they
+    # hand-edit their own file.
+    if config.get('ci', 'both') in ('gitlab', 'both'):
+        status = _gitlab_root_shell_status(output_dir)
+        if status not in (_GL_ROOT_CREATE, _GL_ROOT_ALREADY_WIRED):
+            print()
+            if is_zh:
+                print(f"  ⚠️ 你的 repo 已有根目錄 {_GL_ROOT_SHELL_REL.as_posix()}，"
+                      f"本工具不會修改它。實際執行後仍須自行接上 include:，"
+                      f"否則產生的 GitLab pipeline 不會執行"
+                      f"（實跑時會印出該貼的內容）。")
+            else:
+                print(f"  ⚠️ Your repo already has a root "
+                      f"{_GL_ROOT_SHELL_REL.as_posix()}; this tool will not "
+                      f"modify it. You will still have to wire in the "
+                      f"include: yourself or the generated GitLab pipeline "
+                      f"never runs (the real run prints what to add).")
     sys.exit(EXIT_OK)
 
 

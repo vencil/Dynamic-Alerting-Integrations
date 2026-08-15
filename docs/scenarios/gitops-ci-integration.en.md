@@ -16,7 +16,7 @@ lang: en
 This guide explains how to integrate the Dynamic Alerting platform into your existing CI/CD workflow. Covers the complete path from zero:
 
 - **Quick init**: `da-tools init` generates all integration files in one command
-- **Three-stage pipeline**: Validate → Generate → Apply
+- **Three-stage pipeline**: Validate → Generate → Apply (GitHub Actions; the GitLab artifact has two stages, Validate → Apply — see §1)
 - **Four deployment modes**: Kustomize, Helm, ArgoCD, GitOps Native (git-sync sidecar)
 - **Two CI platforms**: GitHub Actions, GitLab CI
 

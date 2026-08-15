@@ -1886,6 +1886,54 @@ class TestRunInit:
             assert 'include:' not in snippet, snippet
             assert snippet.strip() == '- local: .gitlab-ci.d/dynamic-alerting.yml'
 
+    def test_non_list_include_is_never_told_to_append_a_list_item(self):
+        """⛔ `include:` also accepts a scalar and a single mapping.
+
+        Telling the owner of one of those to "append this list item under your
+        existing include:" produces a block sequence under a scalar — a YAML
+        syntax error that stops their ENTIRE root pipeline from loading, not
+        just ours. Measured before this split existed: the bare-string,
+        single-mapping and empty-list shapes all failed to parse after
+        following the printed instruction; only a true list survived.
+        """
+        for name, body in {
+            'bare string': "include: 'templates/base.yml'\nstages: [build]\n",
+            'single mapping': 'include:\n  template: Security/SAST.yml\n',
+            'empty list': 'include: []\nstages: [build]\n',
+        }.items():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                status = self._status_for(tmpdir, body)
+                assert status == ip._GL_ROOT_NEEDS_CONVERT, (name, status)
+
+    def test_gitlab_strips_leading_slashes_so_we_must_too(self):
+        """`local: /path` and `local: path` are the same file to GitLab.
+
+        Its own docs use the leading slash in every `include:local` example,
+        so comparing raw strings made a correctly wired repo read as unwired —
+        and we then asked for a second include of the file it already loads.
+        """
+        for spelling in ('/.gitlab-ci.d/dynamic-alerting.yml',
+                         './.gitlab-ci.d/dynamic-alerting.yml'):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                status = self._status_for(
+                    tmpdir, f'include:\n  - local: {spelling}\n')
+                assert status == ip._GL_ROOT_ALREADY_WIRED, (spelling, status)
+
+    def test_root_shell_only_names_stages_the_pipeline_declares(self):
+        """⛔ The shell is shipped INTO the customer's repo and tells them
+        which `stage:` values their own jobs may use. It named `generate`
+        for two commits after #1358 deleted that stage — a customer following
+        it gets a pipeline GitLab refuses to build, so nothing runs at all,
+        validation included. Derive, do not retype.
+        """
+        shell = ip._gen_gitlab_root_shell()
+        declared = yaml.safe_load(
+            ip._gen_gitlab_ci('monitoring', 'img', 'kustomize'))['stages']
+        assert list(ip._GL_STAGES) == declared, (ip._GL_STAGES, declared)
+        named = re.search(r'drawn from that list \(([^)]*)\)', shell)
+        assert named, shell
+        assert [x.strip() for x in named.group(1).split(',')] == declared
+
     def test_root_file_already_including_ours_is_wired(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             status = self._status_for(
@@ -1922,14 +1970,29 @@ class TestRunInit:
                 'include:\n  - local: .gitlab-ci.d/dynamic-alerting.yml\n'
                 'job:\n  script:\n    - !reference [.setup, script]\n',
             )
-            assert status == ip._GL_ROOT_UNPARSEABLE, status
+            # It now classifies as needs-append: the document did not parse,
+            # but a line scan can still see the `include:` key, and that is
+            # exactly enough to pick the SAFE snippet shape (the list item)
+            # without ever claiming the pipeline is wired.
+            assert status == ip._GL_ROOT_NEEDS_APPEND, status
             assert status != ip._GL_ROOT_ALREADY_WIRED
+            assert 'include:' not in ip._gitlab_root_snippet_for(status)
             assert not ip._gitlab_root_shell_is_needed(tmpdir)
+
+    def test_unparseable_without_an_include_key_gets_the_block(self):
+        """No parse AND no `include:` line — the whole block is safe here."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status = self._status_for(
+                tmpdir, 'job:\n  script:\n    - !reference [.a, script]\n')
+            assert status == ip._GL_ROOT_UNPARSEABLE, status
+            assert 'include:' in ip._gitlab_root_snippet_for(status)
 
     def test_unparseable_root_file_is_never_reported_as_wired(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             status = self._status_for(tmpdir, 'include: [unclosed\n')
-            assert status == ip._GL_ROOT_UNPARSEABLE, status
+            # The property that matters is never "wired" — the shape choice
+            # may legitimately come from the line scan.
+            assert status != ip._GL_ROOT_ALREADY_WIRED, status
             assert not ip._gitlab_root_shell_is_needed(tmpdir)
 
     def test_dangling_symlink_at_the_root_path_is_not_written_through(self):

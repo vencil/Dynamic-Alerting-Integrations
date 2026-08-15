@@ -16,7 +16,7 @@ lang: zh
 本指南說明如何將 Dynamic Alerting 平台整合到你的既有 CI/CD 流程中。涵蓋從零開始的完整路徑：
 
 - **快速初始化**：`da-tools init` 一鍵產生所有整合檔案
-- **三階段 Pipeline**：Validate → Generate → Apply
+- **三階段 Pipeline**：Validate → Generate → Apply（GitHub Actions；GitLab 為 Validate → Apply 兩階段，見 §1）
 - **四種部署模式**：Kustomize、Helm、ArgoCD、GitOps Native（git-sync sidecar）
 - **兩大 CI 平台**：GitHub Actions、GitLab CI
 

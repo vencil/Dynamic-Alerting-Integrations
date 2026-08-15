@@ -702,8 +702,15 @@ _EXPECTED_GL_JOB_STAGES = {
 
 _EXPECTED_GL_JOB_RULES = {
     "validate-config": [{"changes": ["conf.d/**/*", "rule-packs/**/*"]}],
+    # ⛔ `exists:` is a FILE glob, not a directory. The bare
+    # `rule-packs/custom/` form is resolved by GitLab with a bsearch over the
+    # sorted worktree paths — a binary search against a non-monotonic
+    # predicate — so whether it matched depended on the surrounding tree, and
+    # a miss ANDs with `changes:` to make the job simply not exist. No error,
+    # no red, just a missing governance gate.
     "lint-custom-rules": [
-        {"changes": ["rule-packs/custom/**/*"], "exists": ["rule-packs/custom/"]}
+        {"changes": ["rule-packs/custom/**/*"],
+         "exists": ["rule-packs/custom/**/*"]}
     ],
 }
 
@@ -3299,9 +3306,15 @@ _GL_INCLUDE_SNIPPET = ip._GL_INCLUDE_SNIPPET
 # confusion the production comment claims to guard against — left the whole
 # suite green.
 _SUMMARY_MARKERS = {
-    # locale: (already-wired phrase, needs-paste phrase)
-    'en': ("nothing to do", "paste"),
-    'zh': ("無需額外動作", "貼入"),
+    # locale: (already-wired phrase, needs-work phrase)
+    #
+    # ⚠️ The needs-work marker is the WARNING glyph, not a verb. It used to be
+    # "paste"/"貼入", which stopped matching the moment a fifth root-file state
+    # (an `include:` that is not a list, where the instruction is "convert it",
+    # not "paste this") forced neutral wording. A marker tied to one phrasing
+    # grades the sentence; this one grades whether the step is flagged at all.
+    'en': ("nothing to do", "⚠️"),
+    'zh': ("無需額外動作", "⚠️"),
 }
 
 
