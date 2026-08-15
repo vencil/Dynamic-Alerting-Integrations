@@ -30,8 +30,15 @@
 #
 # REMOVAL CONDITION
 # =================
-# Delete this file once ADR-032 reaches `accepted` or `rejected`. It has no
-# other consumer. If it is still here after that, it is dead weight.
+# Delete once ADR-032 is IMPLEMENTED — not merely accepted. (The original
+# condition said "accepted or rejected"; ADR-032 was accepted on 2026-08-15 and
+# the condition was widened then, for the reasons in the sibling file's header.)
+#
+# This one measures the residual AFTER the machine term is cancelled — the floor
+# the paired nightly can hope for. That number is what a future implementer will
+# want to check their nightly against, so it stays useful right up to the point
+# where the nightly itself produces it. If it is still here after that, it is
+# dead weight.
 
 name: Bench A/A Noise Experiment (ADR-032)
 

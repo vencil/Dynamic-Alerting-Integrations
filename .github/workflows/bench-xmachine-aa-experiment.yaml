@@ -50,8 +50,20 @@
 #
 # REMOVAL CONDITION
 # =================
-# Same as its sibling: delete once ADR-032 reaches `accepted` or `rejected`.
-# Neither file has any other consumer.
+# Delete once ADR-032 is IMPLEMENTED — not merely accepted.
+#
+# The original condition said "accepted or rejected". ADR-032 was accepted on
+# 2026-08-15 on the strength of this workflow's run 31872791407, and deleting it
+# at that moment would have been wrong for two reasons the run itself surfaced:
+#
+#   1. The deciding number is 3.8x against a 3x threshold, from n=48. That is a
+#      thin margin on a small sample, and the honest way to firm it up is
+#      another dispatch on a different day, pooled — which needs this file.
+#   2. The sampling limit below says exactly that. Deleting the instrument while
+#      its own caveat prescribes re-running it is self-contradictory.
+#
+# Once the nightly actually runs paired, this file has no consumer: the nightly
+# itself becomes the measurement. Delete it then.
 
 name: Bench Cross-Machine A/A (ADR-032)
 
