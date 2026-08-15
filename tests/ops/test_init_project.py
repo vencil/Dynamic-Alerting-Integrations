@@ -1901,12 +1901,20 @@ class TestRunInit:
                 tmpdir, 'include: .gitlab-ci.d/dynamic-alerting.yml\n')
             assert status == ip._GL_ROOT_ALREADY_WIRED, status
 
-    def test_gitlab_custom_tags_do_not_defeat_the_parse(self):
-        """`!reference` is ordinary in a real pipeline; SafeLoader raises on it.
+    def test_gitlab_custom_tags_degrade_safely_not_to_a_false_all_clear(self):
+        """`!reference` is ordinary in a real pipeline and SafeLoader raises.
 
-        Bailing out there would downgrade a genuinely wired repo to a paste
-        instruction, which is the annoying-but-safe direction — still worth
-        not doing.
+        ⛔ Pinning the DIRECTION of that loss, which is the whole point. A
+        tag-tolerant loader would classify this file as wired, but installing
+        one needs `yaml.load(..., Loader=...)` and the repo's SAST rule
+        rejects that — it cannot tell a SafeLoader subclass from an unsafe
+        load, and widening a security lint to win a nicer sentence is the
+        wrong trade.
+
+        So this file lands in UNPARSEABLE and its owner is asked to check the
+        include they in fact already have: one redundant reminder. What must
+        never happen is the other direction — a file GitLab does not load
+        being reported as wired — and UNPARSEABLE cannot produce that.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             status = self._status_for(
@@ -1914,7 +1922,9 @@ class TestRunInit:
                 'include:\n  - local: .gitlab-ci.d/dynamic-alerting.yml\n'
                 'job:\n  script:\n    - !reference [.setup, script]\n',
             )
-            assert status == ip._GL_ROOT_ALREADY_WIRED, status
+            assert status == ip._GL_ROOT_UNPARSEABLE, status
+            assert status != ip._GL_ROOT_ALREADY_WIRED
+            assert not ip._gitlab_root_shell_is_needed(tmpdir)
 
     def test_unparseable_root_file_is_never_reported_as_wired(self):
         with tempfile.TemporaryDirectory() as tmpdir:

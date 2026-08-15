@@ -2,7 +2,7 @@
 title: "Alert Builder Wizard"
 tags: [alert, prometheus-rule, builder, wizard, c-3]
 audience: [platform-engineer, sre, tenant]
-version: v2.7.0
+version: v2.9.0
 lang: en
 related: [alert-simulator, threshold-calculator, master-onboarding, cicd-setup-wizard, deployment-wizard]
 dependencies: [

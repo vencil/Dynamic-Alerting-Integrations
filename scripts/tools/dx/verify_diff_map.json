@@ -717,7 +717,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "e4c45f069ce1aca3ebaabdf268525c63bcdb68e8376619b4c9e3d02e6eef7463",
+ "source_digest": "f8d2e56776866d5415a9121e7df0aeb03dfb8006d371ae559e5c931f08f09c8d",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1174,6 +1174,7 @@
   ],
   "README.md": [
    "tests/dx/test_add_frontmatter.py",
+   "tests/dx/test_bump_docs.py",
    "tests/dx/test_generate_adr_index.py",
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_bilingual_structure.py",
@@ -1635,6 +1636,9 @@
    "tests/helm/test_oauth2_gitlab_profile.py",
    "tests/helm/test_single_writer_guard.py"
   ],
+  "helm/tenant-api/Chart.yaml": [
+   "tests/dx/test_bump_docs.py"
+  ],
   "helm/tenant-api/templates/configmap-federation-store.yaml": [
    "tests/helm/test_federation_store_namespace_guard.py"
   ],
@@ -2031,6 +2035,7 @@
    "tests/dx/test_axe_lite_static.py"
   ],
   "scripts/tools/dx/bump_docs.py": [
+   "tests/dx/test_bump_docs.py",
    "tests/dx/test_coverage_gap_analysis.py",
    "tests/dx/test_makefile_utf8_mode.py",
    "tests/dx/test_verify_diff.py",

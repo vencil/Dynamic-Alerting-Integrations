@@ -944,13 +944,14 @@ lint-new-script: ## Run all CLI/SAST conventions on a single new lint script (PR
 version-show: ## 顯示目前三條版號線
 	@python3 ./scripts/tools/dx/bump_docs.py --show-current
 
-bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0.2.0 EXPORTER=0.6.0 PORTAL=2.8.0 RECIPE_PREVIEW=2.9.0)
+bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0.2.0 EXPORTER=0.6.0 PORTAL=2.8.0 RECIPE_PREVIEW=2.9.0 TENANT_API=2.9.20)
 	@python3 ./scripts/tools/dx/bump_docs.py \
 		$(if $(PLATFORM),--platform $(PLATFORM)) \
 		$(if $(EXPORTER),--exporter $(EXPORTER)) \
 		$(if $(TOOLS),--tools $(TOOLS)) \
 		$(if $(PORTAL),--portal $(PORTAL)) \
-		$(if $(RECIPE_PREVIEW),--recipe-preview $(RECIPE_PREVIEW))
+		$(if $(RECIPE_PREVIEW),--recipe-preview $(RECIPE_PREVIEW)) \
+		$(if $(TENANT_API),--tenant-api $(TENANT_API))
 
 # ----------------------------------------------------------
 # Python 測試 & 覆蓋率

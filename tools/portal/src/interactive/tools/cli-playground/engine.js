@@ -39,7 +39,7 @@ function buildCommand({ isDocker, network, selectedCommand, command, args, flags
     cmd = 'docker run --rm ';
     if (network.network) cmd += network.network + ' ';
     cmd += `-e PROMETHEUS_URL=${network.prometheus} `;
-    cmd += 'ghcr.io/vencil/da-tools:v2.7.0 ';
+    cmd += 'ghcr.io/vencil/da-tools:v2.9.0 ';
   } else {
     cmd = 'da-tools ';
   }

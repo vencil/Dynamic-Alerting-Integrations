@@ -1485,21 +1485,6 @@ _GL_ROOT_NEEDS_APPEND = 'needs-append'    # their root file HAS an `include:`
 _GL_ROOT_UNPARSEABLE = 'unparseable'      # their root file did not parse
 
 
-class _AnyTagLoader(yaml.SafeLoader):
-    """SafeLoader that tolerates GitLab's custom tags (e.g. `!reference`).
-
-    A stranger's pipeline is not required to be plain YAML, and SafeLoader
-    raises on an unknown tag. We only ever READ this document — never write it
-    back — so mapping unknown tags to `None` is enough to reach the one key we
-    care about instead of giving up on the whole file.
-    """
-
-
-_AnyTagLoader.add_multi_constructor(
-    '', lambda loader, suffix, node: None
-)
-
-
 def _gitlab_declared_includes(doc: object) -> list[str]:
     """Local include paths declared by a parsed `.gitlab-ci.yml`.
 
@@ -1554,8 +1539,19 @@ def _gitlab_root_shell_status(output_dir: str) -> str:
     except OSError:
         # Unreadable, a directory, or a broken symlink. Hands off, and say so.
         return _GL_ROOT_UNPARSEABLE
+    # ⛔ `safe_load`, deliberately, even though it costs us a case. A stranger's
+    # pipeline may use GitLab's own tags (`!reference` is ordinary), and
+    # SafeLoader raises on an unknown tag — so such a file lands in
+    # UNPARSEABLE and its owner is told to check the include rather than being
+    # told "nothing to do". A tag-tolerant SafeLoader subclass would recover
+    # that case, but it can only be installed through `yaml.load(...,
+    # Loader=...)`, which the repo's SAST rule rejects because it cannot see
+    # that the subclass is safe. Widening a security lint to win back a nicer
+    # sentence is the wrong trade: every path out of here that is not
+    # ALREADY_WIRED prints the wiring instructions, so the loss is one
+    # redundant reminder, never a false all-clear.
     try:
-        doc = yaml.load(body, Loader=_AnyTagLoader)
+        doc = yaml.safe_load(body)
     except yaml.YAMLError:
         return _GL_ROOT_UNPARSEABLE
     includes = _gitlab_declared_includes(doc)

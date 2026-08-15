@@ -130,14 +130,14 @@ describe('buildCommand', () => {
   it('docker mode → docker run wrapper, network flag, PROMETHEUS_URL env, and --prometheus SKIPPED', () => {
     expect(buildCommand({ ...checkAlert, isDocker: true })).toBe(
       'docker run --rm --network=host -e PROMETHEUS_URL=http://localhost:9090 ' +
-        'ghcr.io/vencil/da-tools:v2.7.0 check-alert HighMemoryUsage acme',
+        'ghcr.io/vencil/da-tools:v2.9.0 check-alert HighMemoryUsage acme',
     );
   });
 
   it('docker mode with an empty network string omits the --network prefix', () => {
     expect(buildCommand({ ...checkAlert, isDocker: true, network: NETWORK_MODES.k8s })).toBe(
       'docker run --rm -e PROMETHEUS_URL=http://prometheus.monitoring.svc.cluster.local:9090 ' +
-        'ghcr.io/vencil/da-tools:v2.7.0 check-alert HighMemoryUsage acme',
+        'ghcr.io/vencil/da-tools:v2.9.0 check-alert HighMemoryUsage acme',
     );
   });
 

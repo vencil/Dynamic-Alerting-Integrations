@@ -2,7 +2,7 @@
 title: "Simulate Preview Widget"
 tags: [simulate, effective-config, preview, c-4, c-7b]
 audience: [platform-engineer, sre, tenant]
-version: v2.7.0
+version: v2.9.0
 lang: en
 related: [tenant-manager, alert-builder, routing-trace, master-onboarding]
 dependencies: [

@@ -2,7 +2,7 @@
 title: "Deployment Profile Wizard"
 tags: [deployment, helm, values, guided, tier]
 audience: [platform-engineer, sre, devops]
-version: v2.7.0
+version: v2.9.0
 lang: en
 related: [architecture-quiz, cicd-setup-wizard, capacity-planner]
 dependencies: [

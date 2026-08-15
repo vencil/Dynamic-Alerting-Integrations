@@ -2,7 +2,7 @@
 title: "Routing Trace Wizard"
 tags: [routing, alertmanager, trace, wizard, c-3]
 audience: [platform-engineer, sre]
-version: v2.7.0
+version: v2.9.0
 lang: en
 related: [alert-builder, alert-simulator, master-onboarding, cicd-setup-wizard, deployment-wizard]
 dependencies: [

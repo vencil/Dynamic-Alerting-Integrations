@@ -13,8 +13,12 @@
 
 import os
 import stat
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
+
+import pytest
 
 # Add scripts/tools to path
 
@@ -178,8 +182,13 @@ class TestApplyRulesEdgeCases:
             changes = bump_docs.apply_rules(rules, "1.0.0", check_only=True)
             assert changes[0][0] == "SKIP"
 
-    def test_no_match_returns_ok(self, monkeypatch):
-        """Pattern 不匹配應回傳 OK。"""
+    def test_no_match_returns_ok_only_when_opted_out(self, monkeypatch):
+        """Pattern 不匹配時，只有明示 `require_match: False` 才回 OK。
+
+        這條原本斷言「手寫規則撈不到 = OK」，正是 #1407 修掉的行為：手寫規則
+        指名單一檔案與單一句型，撈不到就是壞了。保留 OK 這一半的覆蓋，但改成
+        測 opt-out 路徑——預設值的兩個方向由 TestRequireMatchDefaults 顧。
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             test_file = os.path.join(tmpdir, "test.md")
             with open(test_file, 'w', encoding='utf-8') as f:
@@ -188,7 +197,8 @@ class TestApplyRulesEdgeCases:
 
             rules = [{"file": "test.md", "desc": "test",
                        "pattern": r"v\d+\.\d+\.\d+",
-                       "replacement": lambda v: f"v{v}"}]
+                       "replacement": lambda v: f"v{v}",
+                       "require_match": False}]
             monkeypatch.setattr(bump_docs, "REPO_ROOT", Path(tmpdir))
             changes = bump_docs.apply_rules(rules, "1.0.0", check_only=True)
             assert changes[0][0] == "OK"
@@ -748,3 +758,258 @@ class TestLiveRepoRuleTargetsExist:
             + "\n  ".join(missing)
             + "\n修法：改 _build_*_rules() 裡該規則的 \"file\" 指向現行路徑；"
               "若目標已徹底消失（例如範本改由產生器產出），整條規則刪掉。")
+
+
+class TestGlobRulesExpandToFiles:
+    """每一條 `__glob__` 規則都必須至少展開到 1 個檔案。
+
+    這條測試補的是上面 TestLiveRepoRuleTargetsExist 看不到的死角。那條走的是
+    「展開後的規則指向的檔案存在嗎」——但 glob 展開到 **零** 個檔案時，根本不會
+    產生任何規則條目：沒有 SKIP、沒有 DEAD、沒有 MISSING，連 `_MIN_RULES`
+    下限都擋不住（一條 glob 從數百塌成 0，總數仍遠高於下限）。整條規則就這樣
+    從所有 gate 的視野裡消失。
+
+    實測後果（#1407）：JSX 在 TRK-230 搬去 tools/portal/src/ 之後，兩條
+    `glob_dir: docs` + `glob_pattern: **/*.jsx` 的規則展開成 0，於是 44 個
+    JSX front matter 停在 v2.7.0，而平台 SSOT 是 2.9.0、`--check` 全綠。
+
+    斷言的是 glob 的**存在意義**：一條展開到 0 個檔案的 glob 不是「暫時沒東西」，
+    是規則指錯樹了。
+    """
+
+    def _glob_rules(self):
+        return [r for line_rules in bump_docs._build_rules().values()
+                for r in line_rules if r.get("file") == "__glob__"]
+
+    def test_every_glob_rule_expands_to_at_least_one_file(self):
+        glob_rules = self._glob_rules()
+
+        # Anti-vacuity：glob 規則整批被刪掉時，這條測試不能因為沒東西可檢查
+        # 就自動變綠（那正是它要抓的失敗模式的極端版）。
+        assert len(glob_rules) >= 5, (
+            f"_build_rules() 只剩 {len(glob_rules)} 條 glob 規則。"
+            f"這條測試檢查的是 glob 展開結果，規則集空掉時它會失去意義。")
+
+        empty = []
+        for rule in glob_rules:
+            expanded = bump_docs._expand_glob_rules([rule])
+            if not expanded:
+                empty.append(f"{rule['glob_dir']}/{rule['glob_pattern']} "
+                             f"({rule['desc']})")
+
+        assert not empty, (
+            f"{len(empty)} 條 glob 規則展開到 0 個檔案——它們對所有 gate 都是"
+            f"隱形的（不產生規則 → 沒有 SKIP / DEAD / MISSING 可看）：\n  "
+            + "\n  ".join(empty)
+            + "\n修法：把 glob_dir / glob_pattern 指到檔案現在真正住的地方"
+              "（例如 JSX 已搬到 PORTAL_JSX_DIR）；若那棵樹整個不在了，整條刪掉。")
+
+    def test_portal_jsx_globs_point_at_the_real_jsx_tree(self):
+        """PORTAL_JSX_DIR 必須真的裝著 JSX——這是上面那條的具體化。
+
+        `glob_dir` 指到一個存在但空的目錄時，展開一樣是 0；分開斷言是為了讓
+        「常數指錯地方」有一行直接點名的錯誤訊息。
+        """
+        jsx_dir = bump_docs.REPO_ROOT / bump_docs.PORTAL_JSX_DIR
+        assert jsx_dir.is_dir(), f"PORTAL_JSX_DIR 不存在：{bump_docs.PORTAL_JSX_DIR}"
+        assert list(jsx_dir.glob("**/*.jsx")), (
+            f"{bump_docs.PORTAL_JSX_DIR} 底下沒有任何 .jsx——"
+            f"JSX 大概又搬家了，PORTAL_JSX_DIR 要跟著改。")
+
+
+class TestRequireMatchDefaults:
+    """`require_match` 的預設值依規則來源而定（hand-written ON / glob OFF）。"""
+
+    def test_hand_written_rule_defaults_to_require_match(self):
+        assert bump_docs._requires_match({"file": "README.md"}) is True
+
+    def test_glob_expanded_rule_defaults_to_not_require_match(self):
+        assert bump_docs._requires_match(
+            {"file": "docs/a.md", "from_glob": True}) is False
+
+    def test_explicit_value_wins_over_both_defaults(self):
+        assert bump_docs._requires_match(
+            {"file": "README.md", "require_match": False}) is False
+        assert bump_docs._requires_match(
+            {"file": "docs/a.md", "from_glob": True,
+             "require_match": True}) is True
+
+    def test_expand_glob_rules_marks_expanded_rules(self, tmp_path, monkeypatch):
+        """`from_glob` 是預設值的依據，所以展開時一定要蓋上去。"""
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "a.md").write_text("x\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        expanded = bump_docs._expand_glob_rules([{
+            "file": "__glob__", "glob_dir": "docs", "glob_pattern": "**/*.md",
+            "desc": "probe in docs", "pattern": "x",
+            "replacement": lambda v: "y",
+        }])
+        assert expanded and all(r.get("from_glob") for r in expanded)
+
+    def test_unmatched_hand_written_rule_is_dead_without_opt_in(self, tmp_path,
+                                                               monkeypatch):
+        """核心行為改變：沒宣告 require_match 的手寫規則撈不到 → DEAD。
+
+        改動前這裡是 ("OK", "no match (may already be updated)")，於是十幾條
+        規則長年綠燈卻什麼都沒 bump（#1407）。
+        """
+        (tmp_path / "README.md").write_text("no version here\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        changes = bump_docs.apply_rules([{
+            "file": "README.md", "desc": "probe",
+            "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"v{v}",
+        }], "2.9.0", check_only=True)
+        assert changes[0][0] == "DEAD", changes
+
+    def test_unmatched_glob_rule_stays_ok(self, tmp_path, monkeypatch):
+        """反向護欄：glob 展開的規則撈不到仍是 OK，否則整個 docs/ 樹會爆紅。"""
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "a.md").write_text("no version here\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        changes = bump_docs.apply_rules([{
+            "file": "__glob__", "glob_dir": "docs", "glob_pattern": "**/*.md",
+            "desc": "probe in docs",
+            "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"v{v}",
+        }], "2.9.0", check_only=True)
+        assert changes[0][0] == "OK", changes
+
+
+class TestTenantApiVersionLine:
+    """tenant-api 版號線必須真的被評估（#1407 D-4）。"""
+
+    def test_read_current_versions_includes_tenant_api(self):
+        versions = bump_docs.read_current_versions()
+        assert "tenant-api" in versions, (
+            "read_current_versions() 沒讀 tenant-api——少了它，--check 迭代"
+            "versions.items() 時整條線的規則永遠不會被執行。")
+
+    def test_tenant_api_version_comes_from_chart_version_not_appversion(self):
+        """SoT 是 Chart.yaml `version:`，不是 `appVersion:`。
+
+        release.yaml 的 release-tenant-api job 用 `version:` 對 git tag 做
+        gate；`appVersion` 是「最後發布的 binary」，刻意與 version 解耦
+        （見 release.yaml 的 ⚠️ Verify image digest 註解）。兩者取錯會讓
+        --check 拿 binary 版號去改 chart 版號、或反過來。
+        """
+        chart = (bump_docs.REPO_ROOT / "helm" / "tenant-api" / "Chart.yaml"
+                 ).read_text(encoding="utf-8")
+        import re as _re
+        chart_ver = _re.search(r'^version:\s*"?([0-9.]+)"?', chart, _re.MULTILINE)
+        app_ver = _re.search(r'^appVersion:\s*"?([0-9.]+)"?', chart, _re.MULTILINE)
+        assert bump_docs.read_current_versions()["tenant-api"] == chart_ver.group(1)
+        if app_ver and app_ver.group(1) != chart_ver.group(1):
+            assert bump_docs.read_current_versions()["tenant-api"] != app_ver.group(1)
+
+    def test_no_rule_writes_tenant_api_chart_appversion(self):
+        """appVersion 的解耦是 release 不變量，不能有規則去改它。"""
+        offenders = [r["desc"] for r in bump_docs._build_tenant_api_rules()
+                     if r.get("file") == "helm/tenant-api/Chart.yaml"
+                     and "appVersion" in r["pattern"]]
+        assert not offenders, (
+            f"這些規則會覆寫 tenant-api 的 Chart.yaml appVersion：{offenders}。"
+            f"appVersion 追的是最後發布的 binary，與 chart version 刻意解耦"
+            f"（release.yaml L3 digest 檢查會去 probe :v${{appVersion}}）。")
+
+
+class TestCountRulesAreLive:
+    """`--sync-counts` 也是 CI gate（validate.yaml），規則不能是死的。
+
+    D-5：apply_count_updates() 過去對「檔案不存在」回 SKIP、對「撈不到」回 OK，
+    而 --sync-counts 只看 UPDATE 決定 exit code——於是 7 條指著 CLAUDE.md 舊句型
+    的規則印成 ✅ 綠勾，計數整批停止同步也沒人知道。
+    """
+
+    def test_count_rules_exist(self):
+        assert len(bump_docs._build_count_rules()) >= 3
+
+    def test_every_count_rule_file_exists_and_pattern_matches(self):
+        import re as _re
+        dead, missing = [], []
+        for rule in bump_docs._build_count_rules():
+            fpath = bump_docs.REPO_ROOT / rule["file"]
+            if not fpath.exists():
+                missing.append(f"{rule['file']} ({rule['desc']})")
+                continue
+            content = fpath.read_text(encoding="utf-8")
+            if not _re.findall(rule["pattern"], content, _re.MULTILINE):
+                dead.append(f"{rule['file']} ({rule['desc']}): {rule['pattern']}")
+
+        assert not missing, (
+            f"{len(missing)} 條計數規則指向不存在的檔案：\n  " + "\n  ".join(missing))
+        assert not dead, (
+            f"{len(dead)} 條計數規則撈不到任何東西——這些計數已停止同步：\n  "
+            + "\n  ".join(dead)
+            + "\n修法：句型變了就改 pattern；句子真的沒了就整條刪掉"
+              "（別為了餵規則把句子硬塞回文件）。")
+
+    def test_missing_count_file_is_reported_as_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(bump_docs, "_build_count_rules", lambda: [{
+            "file": "gone.md", "desc": "probe", "pattern": r"\d+ things",
+            "replacement": lambda _: "3 things", "is_count": True,
+        }])
+        changes = bump_docs.apply_count_updates(check_only=True)
+        assert changes[0][0] == "MISSING", changes
+
+    def test_unmatched_count_rule_is_reported_as_dead(self, tmp_path, monkeypatch):
+        (tmp_path / "doc.md").write_text("nothing countable\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(bump_docs, "_build_count_rules", lambda: [{
+            "file": "doc.md", "desc": "probe", "pattern": r"\d+ things",
+            "replacement": lambda _: "3 things", "is_count": True,
+        }])
+        changes = bump_docs.apply_count_updates(check_only=True)
+        assert changes[0][0] == "DEAD", changes
+
+    def test_missing_and_dead_stay_distinguishable(self, tmp_path, monkeypatch):
+        """兩種診斷的修法不同（改 "file" vs 改 "pattern"），標籤不可合併。"""
+        (tmp_path / "doc.md").write_text("nothing countable\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(bump_docs, "_build_count_rules", lambda: [
+            {"file": "gone.md", "desc": "m", "pattern": r"\d+ things",
+             "replacement": lambda _: "3 things", "is_count": True},
+            {"file": "doc.md", "desc": "d", "pattern": r"\d+ things",
+             "replacement": lambda _: "3 things", "is_count": True},
+        ])
+        statuses = [c[0] for c in bump_docs.apply_count_updates(check_only=True)]
+        assert statuses == ["MISSING", "DEAD"], statuses
+
+
+class TestCheckWithExplicitVersionFlags:
+    """`--check --<line> X` 必須真的檢查 X，而不是安靜忽略旗標。
+
+    #1407 D-4 的第二個 bug：main() 裡「要不要走 bare-check 分支」的判斷列了
+    platform/exporter/tools/portal/recipe-preview 五條線，獨漏 tenant_api。
+    於是 `--check --tenant-api 9.9.9` 掉進 bare 分支——那個分支重新去讀
+    **現況**版號，所以它檢查的是 2.9.20 而不是 9.9.9，結果 exit 0，指令看起來
+    通過了但根本沒檢查使用者要求的版號。
+
+    這條測試走真的 CLI（subprocess），因為 bug 就住在 argparse 之後的
+    分支條件裡，import 進來呼叫函式是看不到的。
+    """
+
+    _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "tools" / "dx" / "bump_docs.py"
+
+    def _run(self, *args):
+        return subprocess.run(
+            [sys.executable, str(self._SCRIPT), *args],
+            capture_output=True, text=True,
+        )
+
+    @pytest.mark.parametrize("flag", [
+        "--platform", "--exporter", "--tools",
+        "--portal", "--recipe-preview", "--tenant-api",
+    ])
+    def test_check_with_absurd_version_fails_for_every_line(self, flag):
+        """六條線一視同仁：沒有一條可以吞掉旗標。
+
+        參數化到全部六條，而不是只補 tenant-api——漏一條正是原本的 bug 形狀，
+        下次新增第七條版號線時這裡會逼人一起想到。
+        """
+        result = self._run("--check", flag, "9.9.9")
+        assert result.returncode != 0, (
+            f"`--check {flag} 9.9.9` exit 0——repo 裡不可能所有引用都是 9.9.9，"
+            f"所以這個旗標被安靜忽略了（掉進 bare-check 分支）。\n"
+            f"stdout tail:\n{result.stdout[-800:]}")

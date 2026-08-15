@@ -88,6 +88,13 @@ RECIPE_PREVIEW_CHART_YAML = REPO_ROOT / "helm" / "recipe-preview" / "Chart.yaml"
 # pattern_func(old_ver) -> regex pattern
 # replacement_func(new_ver) -> replacement string
 
+# Interactive portal sources. TRK-230 (Option C) moved every JSX tool out of
+# `docs/interactive/tools/` to here; esbuild bundles them into
+# docs/assets/dist/. Rules that still globbed `docs/**/*.jsx` after the move
+# expanded to nothing and went silent — hence the single named constant, so a
+# future move breaks one line instead of drifting rule by rule (#1407).
+PORTAL_JSX_DIR = "tools/portal/src/interactive/tools"
+
 # Semver with optional pre-release suffix (-preview, -beta, etc.)
 _SEMVER = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?"
 # Strict semver (no suffix) for image tags and chart versions
@@ -108,17 +115,46 @@ def _build_tools_rules():
         "pattern": r"ghcr\.io/vencil/da-tools:v?[0-9]+\.[0-9]+\.[0-9]+",
         "replacement": lambda v: f"ghcr.io/vencil/da-tools:v{v}",
     })
-    rules.append({
-        "file": "__glob__",
-        "glob_dir": "docs",
-        "glob_pattern": "**/*.jsx",
-        "desc": "da-tools image tag in docs/**/*.jsx",
-        "pattern": r"ghcr\.io/vencil/da-tools:v?[0-9]+\.[0-9]+\.[0-9]+",
-        "replacement": lambda v: f"ghcr.io/vencil/da-tools:v{v}",
-    })
-    for f in ["README.md", "README.en.md",
-              "components/da-tools/README.md",
-              "components/threshold-exporter/README.md"]:
+    # Portal JSX/JS sources. The glob USED to say glob_dir "docs" +
+    # "**/*.jsx", but the JSX moved to tools/portal/src/ in TRK-230 and
+    # `find docs -name '*.jsx'` has returned 0 ever since. A glob that
+    # expands to zero files emits zero rules — so it was invisible to
+    # EVERY gate: nothing to count, nothing to mark DEAD, nothing to
+    # fail on (#1407). See the per-glob expansion floor in
+    # tests/dx/test_bump_docs.py, which now makes that collapse a test
+    # failure instead of silence.
+    #
+    # The `.js` sibling is here because the same image pin lives in the
+    # non-JSX helpers under cli-playground/ — repointing only the .jsx
+    # glob would have left an identically stale tag next door.
+    for _ext in ("**/*.jsx", "**/*.js"):
+        rules.append({
+            "file": "__glob__",
+            "glob_dir": PORTAL_JSX_DIR,
+            "glob_pattern": _ext,
+            "desc": f"da-tools image tag in {PORTAL_JSX_DIR}/{_ext}",
+            "pattern": r"ghcr\.io/vencil/da-tools:v?[0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"ghcr.io/vencil/da-tools:v{v}",
+        })
+    # ⚠️ README.md, README.en.md and components/threshold-exporter/README.md
+    # were in this list and matched nothing: none of them pins a da-tools
+    # image any more. They name the image unpinned in prose
+    # (`ghcr.io/vencil/da-tools` container) or use `:latest`. Only the
+    # da-tools README carries real `:vX.Y.Z` pins, so only it keeps a rule.
+    #
+    # ⛔ The portal test is in this list on purpose. `cli-playground/engine.js`
+    # emits the pinned image into the command it builds, and the vitest suite
+    # asserts that command as a literal string — so bumping the source without
+    # the expectation turns the portal suite red for a reason that has nothing
+    # to do with what it tests (command assembly). Measured: repointing the
+    # portal glob in this same change did exactly that.
+    #
+    # This does NOT make the assertion tautological. The test grades the
+    # docker wrapper — flags, env, argument order — and the version is
+    # incidental to it; keeping the two in step is the same service this tool
+    # performs for every README that quotes a pinned image.
+    for f in ["components/da-tools/README.md",
+              "tools/portal/tests/cli-playground-engine.test.ts"]:
         rules.append({
             "file": f,
             "desc": f"da-tools image tag in {f}",
@@ -241,12 +277,21 @@ def _build_tenant_api_rules():
         "pattern": r"^version:\s+" + _SEMVER_STRICT,
         "replacement": lambda v: f"version: {v}",
     })
-    rules.append({
-        "file": "helm/tenant-api/Chart.yaml",
-        "desc": "tenant-api Chart.yaml appVersion",
-        "pattern": r"^appVersion:\s+" + _SEMVER_STRICT,
-        "replacement": lambda v: f"appVersion: {v}",
-    })
+    # ⚠️ There is deliberately NO rule for helm/tenant-api/Chart.yaml
+    # `appVersion`. Unlike every other chart here, tenant-api's appVersion is
+    # decoupled from its version ON PURPOSE: `version` tracks chart/template
+    # changes (and is gated against the git tag by the "Verify Chart.yaml
+    # version matches tag" step in .github/workflows/release.yaml), while appVersion
+    # names the last PUBLISHED binary, which release.yaml's L3 digest step
+    # probes as `:v${appVersion}` — see the ⚠️ comment above "Verify image
+    # digest" in the release-tenant-api job, and the Chart.yaml comment
+    # explaining why it is not bumped in feature PRs.
+    #
+    # A rule was here (pattern `^appVersion:\s+<semver>`) and it never fired
+    # only because the value is quoted (`appVersion: "2.7.0"`). Had the quotes
+    # ever gone away, `--tenant-api X` would have silently overwritten the
+    # pinned binary version with the chart version and broken that invariant.
+    # Deleted rather than "fixed": the correct behaviour is no rule at all.
 
     # Dockerfile LABEL version
     rules.append({
@@ -256,13 +301,12 @@ def _build_tenant_api_rules():
         "replacement": lambda v: f'org.opencontainers.image.version="{v}"',
     })
 
-    # README OCI chart --version
-    rules.append({
-        "file": "components/tenant-api/README.md",
-        "desc": "tenant-api OCI chart --version in README",
-        "pattern": r"oci://ghcr\.io/vencil/charts/tenant-api\s+--version\s+" + _SEMVER_STRICT,
-        "replacement": lambda v: f"oci://ghcr.io/vencil/charts/tenant-api --version {v}",
-    })
+    # ⚠️ No rule for the README's `helm install ... oci://.../tenant-api`
+    # snippet. It deliberately carries NO `--version` flag — the README says
+    # 「版本見 Releases / CHANGELOG；省略 --version 取最新，或 --version <x.y.z>
+    # 釘版」, i.e. unpinned-by-design so the doc cannot go stale. The old rule
+    # required a literal `--version <semver>` there and so matched nothing
+    # forever. Deleted, not repointed: there is no version string to drive.
 
     # tenant-api image tag in docs
     rules.append({
@@ -308,18 +352,11 @@ def _build_exporter_rules():
             "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
             "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
         },
-        {
-            "file": "README.md",
-            "desc": "OCI chart --version in Chinese README",
-            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
-            "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
-        },
-        {
-            "file": "README.en.md",
-            "desc": "OCI chart --version in English README",
-            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
-            "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
-        },
+        # ⚠️ Deleted: the same OCI `--version` rule for README.md and
+        # README.en.md. Neither README contains a `helm install` / `oci://`
+        # snippet at all any more — install instructions were routed out to
+        # the integration guides (which keep their own rules above). Nothing
+        # to drive, so no rule.
         {
             "file": "docs/integration/gitops-deployment.md",
             "desc": "OCI chart --version in gitops deployment guide",
@@ -344,13 +381,9 @@ def _build_exporter_rules():
             "pattern": r"`exporter/v[0-9]+\.[0-9]+\.[0-9]+`",
             "replacement": lambda v: f"`exporter/v{v}`",
         },
-        # OCI chart inline version (colon-style, no --version flag)
-        {
-            "file": "docs/index.md",
-            "desc": "OCI chart inline version in index.md",
-            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter:[0-9]+\.[0-9]+\.[0-9]+",
-            "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter:{v}",
-        },
+        # ⚠️ Deleted: OCI chart inline version in docs/index.md. That page was
+        # rewritten into a router ("想試哪個？…") and contains no `oci://`
+        # reference at all now.
         # Exporter image tag in API docs
         {
             "file": "docs/api/README.md",
@@ -401,32 +434,41 @@ def _build_platform_rules():
     rules = []
 
     # Doc footers: **文件版本：** vX.Y.Z or **Document version:** vX.Y.Z
+    #
+    # These were pinned to docs/architecture-and-design{,.en}.md, where the
+    # footer no longer exists (that doc now carries its version only in front
+    # matter). But the SHAPE is alive elsewhere — the docs/scenarios/ guides
+    # gitops-ci-integration.md and hands-on-lab.md still end with it, and both
+    # sat at v2.7.0 unnoticed. So the fix is not "delete", it is "widen to the
+    # tree": a glob finds the footer wherever it lives and cannot be
+    # invalidated by one file dropping it. Same treatment as the sibling
+    # **最後更新**： footer rule below.
     rules.append({
-        "file": "docs/architecture-and-design.md",
-        "desc": "architecture-and-design.md footer",
+        "file": "__glob__",
+        "glob_dir": "docs",
+        "glob_pattern": "**/*.md",
+        "desc": "doc footer **文件版本：** vX.Y.Z",
         "pattern": r"\*\*文件版本：\*\*\s*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**文件版本：** v{v}",
     })
     rules.append({
-        "file": "docs/architecture-and-design.en.md",
-        "desc": "architecture-and-design.en.md footer",
+        "file": "__glob__",
+        "glob_dir": "docs",
+        "glob_pattern": "**/*.md",
+        "desc": "doc footer **Document version:** vX.Y.Z",
         "pattern": r"\*\*Document version:\*\*\s*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**Document version:** v{v}",
     })
 
-    # Doc headers with inline version
-    rules.append({
-        "file": "docs/architecture-and-design.md",
-        "desc": "architecture-and-design.md header version",
-        "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)? 的技術架構",
-        "replacement": lambda v: f"v{v} 的技術架構",
-    })
-    rules.append({
-        "file": "docs/architecture-and-design.en.md",
-        "desc": "architecture-and-design.en.md header version",
-        "pattern": r"\(v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\)\.",
-        "replacement": lambda v: f"(v{v}).",
-    })
+    # ⚠️ Two architecture-and-design header rules were deleted here, both
+    # genuinely obsolete rather than broken:
+    #   - `vX.Y.Z 的技術架構`  — that phrasing exists nowhere in the repo any
+    #     more (the intro was rewritten around 「架構 Hub」).
+    #   - `(vX.Y.Z).` in the .en doc — same rewrite, and the pattern was
+    #     dangerously loose besides: it would have matched ANY parenthesised
+    #     version followed by a period, anywhere in the file.
+    # Both docs still get their version bumped, via the front-matter glob
+    # below (`version: v2.9.0` in their YAML header), so nothing lost cover.
 
     # BYO guides version headers
     rules.append({
@@ -522,13 +564,9 @@ def _build_platform_rules():
         "replacement": lambda v: f"Multi-Tenant Dynamic Alerting 平台 (v{v})",
     })
 
-    # da-tools README platform version reference
-    rules.append({
-        "file": "components/da-tools/README.md",
-        "desc": "da-tools README platform version ref",
-        "pattern": r"平台版本（v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\+）",
-        "replacement": lambda v: f"平台版本（v{v}+）",
-    })
+    # ⚠️ Deleted: `平台版本（vX.Y.Z+）` in components/da-tools/README.md. That
+    # sentence is gone from the README; the file's platform version now lives
+    # only in the versioning-strategy table, which the next rule drives.
     rules.append({
         "file": "components/da-tools/README.md",
         "desc": "da-tools version strategy table (platform row + git tag)",
@@ -536,13 +574,20 @@ def _build_platform_rules():
         "replacement": lambda v: f"| 平台文件 | v{v} | `v{v}`",
     })
 
-    # Front matter `version: vX.Y.Z` in all docs/ .md and .jsx files
-    for ext in ("**/*.md", "**/*.jsx"):
+    # Front matter `version: vX.Y.Z`.
+    #
+    # Two different trees, NOT one: the .md front matter lives under docs/,
+    # the .jsx front matter under PORTAL_JSX_DIR. The old code globbed both
+    # extensions under docs/ — correct for .md, dead for .jsx since TRK-230
+    # moved the JSX out. Zero expansion is silent (no rule, so no SKIP and no
+    # DEAD), which is how 44 of these files sat at v2.7.0 while the platform
+    # SSOT said 2.9.0 and every gate reported green (#1407).
+    for _glob_dir, _ext in (("docs", "**/*.md"), (PORTAL_JSX_DIR, "**/*.jsx")):
         rules.append({
             "file": "__glob__",
-            "glob_dir": "docs",
-            "glob_pattern": ext,
-            "desc": f"front matter version: in docs/{ext}",
+            "glob_dir": _glob_dir,
+            "glob_pattern": _ext,
+            "desc": f"front matter version: in {_glob_dir}/{_ext}",
             "pattern": r"(?<=\n)version:\s*v[0-9]+\.[0-9]+[^\n]*(?=\n)",
             "replacement": lambda v: f"version: v{v}",
         })
@@ -641,26 +686,38 @@ def _build_platform_rules():
         "replacement": lambda v: f'platform_version: "{v}"',
     })
 
-    # README.md / README.en.md intro version
-    rules.append({
-        "file": "README.md",
-        "desc": "README.md intro version",
-        "pattern": r"治理平台\*\* v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
-        "replacement": lambda v: f"治理平台** v{v}",
-    })
-    rules.append({
-        "file": "README.en.md",
-        "desc": "README.en.md intro version",
-        "pattern": r"Governance Platform\*\* v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
-        "replacement": lambda v: f"Governance Platform** v{v}",
-    })
+    # README.md / README.en.md platform version.
+    #
+    # Both rules used to anchor on an intro sentence (「…治理平台** vX.Y.Z」 /
+    # "…Governance Platform** vX.Y.Z") that no longer exists — the H1 is now
+    # a plain product name. The version did not leave the READMEs, it moved
+    # into the shields.io badge on the badge row, so these are repointed
+    # rather than deleted. Identical shape in both files, hence one loop.
+    for _readme in ("README.md", "README.en.md"):
+        rules.append({
+            "file": _readme,
+            "desc": f"{_readme} version badge",
+            "pattern": r"badge/version-v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?-brightgreen",
+            "replacement": lambda v: f"badge/version-v{v}-brightgreen",
+        })
 
-    # Interactive HTML files version subtitle
+    # Interactive hub footer version.
+    #
+    # The old pattern (`vX.Y.Z — Multi-Tenant`) described a subtitle that was
+    # rewritten: the footer now reads `Dynamic Alerting Platform — <a
+    # href="../CHANGELOG/">vX.Y.Z</a> |`. Stale regex, live target — so this
+    # is repointed, not deleted. It had been dead long enough for the footer
+    # to fall to v2.7.0 while the platform shipped 2.9.0.
+    #
+    # ⚠️ NOT covered, deliberately: the hero badge in the same file reads
+    # `INTERACTIVE TOOLS HUB v2.6` — two-component and plausibly the hub's
+    # own version rather than the platform's, so bumping it is a judgement
+    # call for the owner, not something to guess at from a regex.
     rules.append({
         "file": "docs/interactive/index.html",
-        "desc": "interactive index.html subtitle version",
-        "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\s+—\s+Multi-Tenant",
-        "replacement": lambda v: f"v{v} — Multi-Tenant",
+        "desc": "interactive index.html footer version",
+        "pattern": r"Dynamic Alerting Platform — <a href=\"\.\./CHANGELOG/\">v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?</a>",
+        "replacement": lambda v: f"Dynamic Alerting Platform — <a href=\"../CHANGELOG/\">v{v}</a>",
     })
 
     # Interactive JSX front matter and version consistency
@@ -939,83 +996,44 @@ def _build_count_rules():
 
     Returns list of rule dicts for count syncing.
     """
-    total_tools, ops_tools, dx_tools, lint_tools = _count_python_tools()
+    # Only the counts that a surviving rule actually embeds are read here.
+    # The per-directory ops/dx/lint split and the docs count are still
+    # reported by `--sync-counts` (main() calls the _count_* helpers
+    # directly) — they just no longer have a doc sentence to patch.
+    total_tools, _ops, _dx, _lint = _count_python_tools()
     rule_packs = _count_rule_packs()
     jsx_tools = _count_jsx_tools()
-    docs = _count_docs()
-    hooks = _count_precommit_hooks()
 
     rules = []
 
-    # CLAUDE.md: 84 個 Python 工具（不含共用函式庫）
-    if total_tools > 0:
-        rules.append({
-            "file": "CLAUDE.md",
-            "desc": f"CLAUDE.md: Python tools total ({total_tools} tools)",
-            "pattern": r"(\d+)\s*個\s*Python\s*工具（不含共用函式庫）",
-            "replacement": lambda _: f"{total_tools} 個 Python 工具（不含共用函式庫）",
-            "is_count": True,
-        })
-
-    # CLAUDE.md: ops/ count in table (currently 44)
-    if ops_tools > 0:
-        rules.append({
-            "file": "CLAUDE.md",
-            "desc": f"CLAUDE.md: ops/ tools ({ops_tools} tools)",
-            "pattern": r"\| `ops/` \| 運維工具.*?\| \d+ \|",
-            "replacement": lambda _: f"| `ops/` | 運維工具（scaffold, diagnose, migrate, validate, alert-quality, alert-correlate, drift-detect, policy, forecast, notification-test, threshold-recommend, tenant-mapping, explain-route, discover-mappings, init, config-history, gitops-check, operator-generate, operator-check, rule-pack-split, policy-opa-bridge...） | {ops_tools} |",
-            "is_count": True,
-        })
-
-    # CLAUDE.md: dx/ count in table (currently 20)
-    if dx_tools > 0:
-        rules.append({
-            "file": "CLAUDE.md",
-            "desc": f"CLAUDE.md: dx/ tools ({dx_tools} tools)",
-            "pattern": r"\| `dx/` \| DX.*?\| \d+ \|",
-            "replacement": lambda _: f"| `dx/` | DX 自動化（generate_*, bump_docs, sync_*, coverage_gap_analysis, generate_tenant_metadata...） | {dx_tools} |",
-            "is_count": True,
-        })
-
-    # CLAUDE.md: lint/ count in table (currently 19)
-    if lint_tools > 0:
-        rules.append({
-            "file": "CLAUDE.md",
-            "desc": f"CLAUDE.md: lint/ tools ({lint_tools} tools)",
-            "pattern": r"\| `lint/` \| 文件.*?\| \d+ \|",
-            "replacement": lambda _: f"| `lint/` | 文件 CI lint（check_*, validate_docs_*, lint_*, check_cli_coverage, check_bilingual_content, check_frontmatter_versions, check_routing_profiles, check_doc_template, check_portal_i18n...） | {lint_tools} |",
-            "is_count": True,
-        })
-
-    # CLAUDE.md: 15 個 Rule Pack in architecture section
-    if rule_packs > 0:
-        rules.append({
-            "file": "CLAUDE.md",
-            "desc": f"CLAUDE.md: Rule Pack count ({rule_packs} packs)",
-            "pattern": r"(\d+)\s+個\s+Rule\s+Pack（(\d+)\s+個\s+optional",
-            "replacement": lambda _: f"{rule_packs} 個 Rule Pack（{rule_packs - 1} 個 optional",
-            "is_count": True,
-        })
-
-    # CLAUDE.md: 30 JSX tools in section header
-    if jsx_tools > 0:
-        rules.append({
-            "file": "CLAUDE.md",
-            "desc": f"CLAUDE.md: JSX tools ({jsx_tools} tools)",
-            "pattern": r"互動工具生態（(\d+)\s+JSX\s+tools）",
-            "replacement": lambda _: f"互動工具生態（{jsx_tools} JSX tools）",
-            "is_count": True,
-        })
-
-    # CLAUDE.md: 91 個文件 in doc navigation section
-    if docs > 0:
-        rules.append({
-            "file": "CLAUDE.md",
-            "desc": f"CLAUDE.md: docs count ({docs} files)",
-            "pattern": r"完整文件對照表（(\d+)\s+個文件，含受眾與內容摘要）",
-            "replacement": lambda _: f"完整文件對照表（{docs} 個文件，含受眾與內容摘要）",
-            "is_count": True,
-        })
+    # ⚠️ SEVEN CLAUDE.md count rules were deleted here (#1407). All seven
+    # matched nothing, and `--sync-counts --check` printed each as a green
+    # "✅ … no match (pattern not found)" — the exact failure mode this pass
+    # closes. Each was checked individually against the whole repo before
+    # deletion; all are obsolete rather than broken, because CLAUDE.md was
+    # condensed and the sentences they anchored on no longer exist in ANY
+    # form, here or elsewhere:
+    #
+    #   Python tools total 「N 個 Python 工具（不含共用函式庫）」 — phrase gone
+    #                      repo-wide. The equivalent count in README.md /
+    #                      README.en.md ("N 個 Python 工具" in the repo-map
+    #                      row) keeps its own rules below and is live.
+    #   ops/ dx/ lint/     the three-column tool table they patched no longer
+    #                      exists in CLAUDE.md; there is no such table
+    #                      anywhere now (`| \`ops/\` |` has zero hits).
+    #   Rule Pack count    「N 個 Rule Pack（N 個 optional」 gone; the
+    #                      README.md badge rule below still covers it.
+    #   JSX tools          「互動工具生態（N JSX tools）」 survives only inside
+    #                      frozen CHANGELOG history; the live count is
+    #                      dev-rules.md's, which has its own rule below.
+    #   docs count         「完整文件對照表（N 個文件…）」 — the surviving
+    #                      cross-references in README.md / docs/index.md
+    #                      carry no number at all.
+    #
+    # CLAUDE.md is a deliberately trimmed context file, so re-inserting seven
+    # count sentences just to give these rules something to match would be
+    # the tail wagging the dog. Deleting is the honest option; what remains
+    # below is every count sentence that actually exists.
 
     # CLAUDE.md: pre-commit hook breakdown (auto-run + manual-stage + pre-push)
     # Source-of-truth count derived dynamically from .pre-commit-config.yaml stages.
@@ -1097,7 +1115,16 @@ def apply_count_updates(check_only=False, dry_run=False, verbose=False):
     for rule in rules:
         fpath = REPO_ROOT / rule["file"]
         if not fpath.exists():
-            changes.append(("SKIP", rule["desc"], f"file not found: {rule['file']}"))
+            # MISSING, not SKIP. Count rules are every bit as much a gate as
+            # version rules — .github/workflows/validate.yaml runs
+            # `--sync-counts --check` — and a rule whose file is gone syncs
+            # no count at all. Same MISSING/DEAD split as apply_rules(),
+            # kept separate because the fixes differ (see below).
+            changes.append(("MISSING", rule["desc"],
+                            f"file not found: {rule['file']} — this rule syncs "
+                            f"no count. Fix the \"file\" path in "
+                            f"_build_count_rules(), or delete the rule if its "
+                            f"target is gone."))
             continue
 
         content = fpath.read_text(encoding="utf-8")
@@ -1106,7 +1133,15 @@ def apply_count_updates(check_only=False, dry_run=False, verbose=False):
 
         matches = re.findall(pattern, content, re.MULTILINE)
         if not matches:
-            changes.append(("OK", rule["desc"], "no match (pattern not found)"))
+            # Count rules are all hand-written and single-file — there is no
+            # glob fan-out here — so zero matches is unconditionally a defect,
+            # exactly the require_match-by-default rule that apply_rules()
+            # applies to hand-written version rules.
+            changes.append(("DEAD", rule["desc"],
+                            f"pattern {pattern!r} matched NOTHING in "
+                            f"{rule['file']} — the sentence this count is "
+                            f"embedded in changed shape, so the count stopped "
+                            f"being synced. Fix the \"pattern\"."))
             continue
 
         # Check if update is needed
@@ -1173,6 +1208,25 @@ def read_current_versions():
         if m:
             versions["portal"] = m.group(1)
 
+    # tenant-api version from helm/tenant-api/Chart.yaml `version:`.
+    #
+    # `version:`, NOT `appVersion:` — the two are decoupled on purpose for
+    # this chart (see _build_tenant_api_rules). `version` is the release
+    # line's identity: .github/workflows/release.yaml gates it to equal the
+    # `tenant-api/v*` tag, and the image is pushed as `:v${that}`.
+    #
+    # Omitting this line was not a cosmetic gap: read_current_versions() is
+    # what `--check` iterates, so ALL tenant-api rules were unreachable and
+    # `--what-if` just printed "version not found in source-of-truth" and
+    # moved on with no effect on the exit code (#1407).
+    if TENANT_API_CHART_YAML.exists():
+        content = TENANT_API_CHART_YAML.read_text(encoding="utf-8")
+        m = re.search(
+            r'^version:\s*"?([0-9]+\.[0-9]+\.[0-9]+)"?', content, re.MULTILINE
+        )
+        if m:
+            versions["tenant-api"] = m.group(1)
+
     # recipe-preview version from its Chart.yaml (sync-bump; version == appVersion).
     if RECIPE_PREVIEW_CHART_YAML.exists():
         content = RECIPE_PREVIEW_CHART_YAML.read_text(encoding="utf-8")
@@ -1207,8 +1261,27 @@ def _filter_by_scope(rules, scope):
     return filtered
 
 
+def _requires_match(rule):
+    """Is zero matches a DEAD rule (True) or a legitimate no-op (False)?
+
+    Default ON for hand-written rules, OFF for glob-expanded ones; an
+    explicit `require_match` key always wins. See apply_rules() for why the
+    two classes have opposite defaults.
+    """
+    if "require_match" in rule:
+        return bool(rule["require_match"])
+    return not rule.get("from_glob", False)
+
+
 def _expand_glob_rules(rules):
-    """Expand __glob__ rules into per-file rules."""
+    """Expand __glob__ rules into per-file rules.
+
+    Each expanded rule carries `from_glob: True`. That marker is what lets
+    apply_rules() default `require_match` ON for hand-written rules while
+    leaving it OFF here: a hand-written rule names ONE file and one shape, so
+    zero matches means it is broken, whereas a glob rule is fanned out across
+    every file in a tree and legitimately matches nothing in most of them.
+    """
     expanded = []
     for rule in rules:
         if rule.get("file") == "__glob__":
@@ -1220,6 +1293,7 @@ def _expand_glob_rules(rules):
                     "desc": f"{rule['desc'].split(' in ')[0]} in {rel}",
                     "pattern": rule["pattern"],
                     "replacement": rule["replacement"],
+                    "from_glob": True,
                     "skip_released_changelog": rule.get(
                         "skip_released_changelog", False),
                 })
@@ -1346,14 +1420,26 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
       `pair_anchor` / `pair_key`  two-line YAML pin (see
                                   _rewrite_anchored_pair); `pattern` then
                                   matches the VALUE only.
-      `require_match: True`       zero matches is a DEAD rule, not an "OK".
-                                  Default-off because most rules legitimately
-                                  match nothing in some files, but mandatory
-                                  for a rule that is the mechanical exit driver
-                                  for something else (e.g. the
-                                  federation-reconciler pin, whose staleness is
-                                  what keeps an image-pin EXEMPTIONS entry
-                                  alive forever).
+      `require_match`             zero matches is a DEAD rule, not an "OK".
+
+    `require_match` DEFAULTS TO ON for hand-written rules and OFF for
+    glob-expanded ones (`from_glob`), because the two have opposite null
+    semantics:
+
+      hand-written  names one file and one shape. Zero matches means the
+                    shape moved and the rule stopped bumping anything —
+                    always a defect. It used to be recorded as
+                    ("OK", "no match (may already be updated)"), which is
+                    how ~16 rules read green while the strings they were
+                    meant to drive rotted (#1407).
+      glob-expanded fans one pattern across a whole tree; matching nothing
+                    in most files is the normal case, not a defect. The
+                    glob's own health is asserted differently — every
+                    `__glob__` must expand to >=1 file (see
+                    tests/dx/test_bump_docs.py).
+
+    Opt OUT with an explicit `require_match: False` plus a comment naming
+    the reason — never silently, or the signal decays back to noise.
     """
     rules = _expand_glob_rules(rules)
     changes = []
@@ -1411,7 +1497,7 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
 
         matches = re.findall(pattern, scan_text, re.MULTILINE)
         if not matches:
-            if rule.get("require_match"):
+            if _requires_match(rule):
                 changes.append(("DEAD", rule["desc"],
                                 f"pattern {pattern!r} matched NOTHING in "
                                 f"{rule['file']} — this rule is the mechanical "
@@ -1599,23 +1685,48 @@ def main():
 
         changes = apply_count_updates(check_only=args.check, dry_run=args.dry_run)
         for status, desc, detail in changes:
-            icon = {"UPDATE": "📝", "OK": "✅", "SKIP": "⚠️ "}[status]
+            # DEAD / MISSING are ❌, never ⚠️ — they fail the gate now, and an
+            # icon that reads as "advisory" is what let 7 dead count rules
+            # pass as green ticks.
+            icon = {"UPDATE": "📝", "OK": "✅",
+                    "DEAD": "❌", "MISSING": "❌"}[status]
             print(f"  {icon} {desc}: {detail}")
 
         update_count = sum(1 for s, _, _ in changes if s == "UPDATE")
+        dead_counts = sum(1 for s, _, _ in changes if s == "DEAD")
+        missing_counts = sum(1 for s, _, _ in changes if s == "MISSING")
+
+        # A dead/missing count rule is a defect regardless of mode: in
+        # --check it must fail CI, and in a plain `--sync-counts` run it must
+        # not report "Done, 0 updated" as if everything were synced.
+        if missing_counts:
+            print(f"\n❌ {missing_counts} count rule(s) point at a file that "
+                  f"does not exist (MISSING). Fix the \"file\" path in "
+                  f"_build_count_rules(), or delete the rule.")
+        if dead_counts:
+            print(f"\n❌ {dead_counts} count rule(s) matched NOTHING (DEAD). "
+                  f"A rule that matches nothing syncs nothing — fix the "
+                  f"\"pattern\" in _build_count_rules().")
+
         if args.check:
             if update_count > 0:
                 print(f"\n❌ {update_count} count(s) are outdated. Run without --check to apply.")
+                sys.exit(EXIT_VIOLATION)
+            elif dead_counts or missing_counts:
                 sys.exit(EXIT_VIOLATION)
             else:
                 print("\n✅ All counts are already up to date.")
         elif args.dry_run:
             if update_count > 0:
                 print(f"\n🔍 Dry run: {update_count} count(s) would be updated.")
-            else:
+            elif not (dead_counts or missing_counts):
                 print("\n✅ Dry run: all counts are already up to date.")
+            if dead_counts or missing_counts:
+                sys.exit(EXIT_VIOLATION)
         else:
             print(f"\n✅ Done. {update_count} count(s) updated.")
+            if dead_counts or missing_counts:
+                sys.exit(EXIT_VIOLATION)
         return
 
     # --init-changelog: insert a new version stub at the top of CHANGELOG.md
@@ -1709,11 +1820,11 @@ def main():
                     scan_text, _ = _split_at_released_changelog(content)
 
                 matches = re.findall(pattern, scan_text, re.MULTILINE)
-                if not matches and rule.get("require_match"):
+                if not matches and _requires_match(rule):
                     unmatched += 1
                     print(f"  ❌ {desc}")
-                    print(f"       DEAD: pattern matched nothing, but this rule "
-                          f"is declared require_match")
+                    print(f"       DEAD: pattern matched nothing in an "
+                          f"unglobbed rule (require_match)")
                 elif not matches:
                     matched += 1
                     print(f"  ✅ {desc}")
@@ -1740,8 +1851,13 @@ def main():
         sys.exit(EXIT_VIOLATION if (unmatched > 0 or missing > 0) else EXIT_OK)
 
     # --check mode: read current versions and verify all references match
+    # `args.tenant_api` belongs in this guard like the other five: without it
+    # `--check --tenant-api 9.9.9` fell through to the bare-check branch,
+    # which re-reads the CURRENT versions — so the flag was silently ignored
+    # and the command exited 0 while claiming to have checked 9.9.9 (#1407).
     if args.check and not (args.platform or args.exporter or args.tools
-                           or args.portal or args.recipe_preview):
+                           or args.portal or args.recipe_preview
+                           or args.tenant_api):
         versions = read_current_versions()
         if not versions:
             print("ERROR: Cannot read current versions from source files", file=sys.stderr)
