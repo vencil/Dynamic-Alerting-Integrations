@@ -1392,10 +1392,28 @@ def test_every_scanned_root_is_wired_to_the_fifth_floor_through_the_real_entry(
     # "gate green while the deleted test is red" is exactly what that test
     # being true-by-construction rules out. Stated as the algebra rather than
     # as a mutation anecdote, because the algebra is what survives.
-    # ⚠️ What this equality still cannot see, disclosed rather than guarded:
-    # adding a root to `_DEFAULTS_ROOTS_MAY_BE_EMPTY` subtracts it from BOTH
-    # sides at once. The gate's own exit-lock below refuses an entry that still
-    # carries keys, which is what keeps that door shut today.
+    # ⚠️⚠️ What this equality cannot see, and ⛔ THE DOOR IS OPEN — an earlier
+    # wording here said the gate's exit-lock "keeps that door shut today",
+    # which blind review disproved and re-measurement confirmed. Adding a root
+    # to `_DEFAULTS_ROOTS_MAY_BE_EMPTY` subtracts it from BOTH sides of this
+    # equality at once. The exit-lock is `if not n_keys: continue` — it rejects
+    # an entry whose root STILL CARRIES KEYS, and the moment a maintainer
+    # reaches for that line is the moment the root has just gone to zero and
+    # the fifth floor has said so. The two conditions are complementary, so
+    # the lock cannot see the case it was cited for.
+    # Measured per root on the tree as it stood when this was written (stated
+    # as a past measurement, because nothing re-counts it): rename a
+    # `defaults:` section away — the floor's own "MOST LIKELY" cause — add one
+    # line here, and the gate returns rc=0. Seven of the twelve roots could be
+    # silenced that way; the rest were held by the shipped-root or key floors,
+    # never by this lock.
+    # ⛔ NOT FIXED HERE, and that is a scope decision rather than a judgement
+    # that it is fine: the lock and the list are #1411's, this ticket is about
+    # four residuals of that PR, and closing it properly means changing what
+    # an entry has to prove (something structural, like "these artifacts carry
+    # no `defaults:` section at all", rather than "their key count is 0 right
+    # now"). Recorded so the next reader inherits the measurement instead of
+    # the reassurance.
     roots = sorted(_scanned_confd_roots() - gate._DEFAULTS_ROOTS_MAY_BE_EMPTY)
     # ⛔ "Cannot go vacuous" was stated and was false. Both sides of the equality
     # below are `something - _DEFAULTS_ROOTS_MAY_BE_EMPTY`, so an exemption list
@@ -2702,6 +2720,74 @@ def test_exempting_a_shipped_artifact_is_not_silent(monkeypatch):
         gate.run_check(demand=set(), supply=set(), deferred=set(), known_unwired={})
 
 
+def test_may_be_empty_cannot_be_used_to_silence_a_root_that_just_went_to_zero(
+        monkeypatch):
+    """⛔ The one-line silencer: rename a `defaults:` section away, then add the
+    root to `_DEFAULTS_ROOTS_MAY_BE_EMPTY` (#1434).
+
+    The older exit-lock beside this one refuses an entry whose root STILL
+    CARRIES KEYS, and a maintainer reaches for that list precisely when the
+    root has just gone to zero — the two conditions never overlap. Measured
+    before this arm existed: seven of the twelve roots went from a red gate to
+    `rc=0` on a one-line diff, which is #1411's blind spot re-opened.
+
+    ⛔ COUNTERFACTUAL, both directions, because "it goes red now" is not the
+    claim — "it did not before" is half of it, and "the legitimate entry still
+    passes" is the other half.
+    """
+    real_reader = gate._read_artifact_keys
+    victim = "tests/golden/fixtures/array-replace/conf.d"
+
+    def blanked(path):
+        rel = path.relative_to(gate.PROJECT_ROOT).as_posix()
+        return {} if gate.conf_d_root(rel) == victim else real_reader(path)
+
+    monkeypatch.setattr(gate, "_read_artifact_keys", blanked)
+    monkeypatch.setattr(gate, "_DEFAULTS_ROOTS_MAY_BE_EMPTY",
+                        frozenset(gate._DEFAULTS_ROOTS_MAY_BE_EMPTY) | {victim})
+
+    with pytest.raises(gate._GateViolation, match="threshold-shaped values"):
+        gate._defaults_faces()
+
+    # …and this is what the gate did before the arm existed: the same state,
+    # with only this falsifier stood down, is silent. Without it the test
+    # above would pass on any implementation that raises for some other reason.
+    monkeypatch.setattr(gate, "_threshold_shaped_leaves", lambda _rel: 0)
+    gate._defaults_faces()
+
+    # …and a root that genuinely holds no threshold-shaped data — the state the
+    # list exists for — is still accepted. Same arm, opposite answer, so the
+    # arm cannot drift into "refuse every entry".
+    monkeypatch.undo()
+    gate._defaults_faces()
+    assert gate._DEFAULTS_ROOTS_MAY_BE_EMPTY, "the list must not be empty here"
+    for root in gate._DEFAULTS_ROOTS_MAY_BE_EMPTY:
+        rels = [rel for rel in gate._tracked_defaults_artifacts()
+                if gate.conf_d_root(rel) == root]
+        assert rels, root
+        assert all(gate._threshold_shaped_leaves(rel) == 0 for rel in rels), (
+            f"{root} is exempted as 'declares no thresholds' while its "
+            "artifacts hold threshold-shaped values — the entry is what is "
+            "wrong here, not this assertion")
+
+
+def _placement_message_for_a_hashed_fixture() -> str:
+    """The UPSTREAM message — the one that tells a reader to add an exemption.
+
+    Driven through the real `_report_placement` rather than reconstructed here,
+    because a copy of a message proves things about the copy. It is reached by
+    a `_critical` key sitting BELOW the top level — the third of the three
+    placement branches, and the only one whose remedy paragraph names the
+    exemption table.
+    """
+    errors: list[str] = []
+    gate._report_placement("artifact (probe/conf.d/_defaults.yaml)",
+                           _nested(db={"pg_connections_critical": 1}), errors)
+    named = [e for e in errors if "_DEFAULTS_ARTIFACT_EXEMPT" in e]
+    assert len(named) == 1, errors
+    return named[0]
+
+
 def test_an_exemption_that_empties_a_root_says_so_in_the_message(monkeypatch):
     """⛔ Whichever floor answers, it has to name the thing the reader just did.
 
@@ -2725,7 +2811,14 @@ def test_an_exemption_that_empties_a_root_says_so_in_the_message(monkeypatch):
     tracked = gate._tracked_defaults_artifacts()
     by_root: dict[str, list[str]] = {}
     for rel in tracked:
-        by_root.setdefault(gate.conf_d_root(rel), []).append(rel)
+        # ⛔ The same `if root:` the gate's own `_bucket_by_root` has, and this
+        # test shipped without it. An artifact outside every conf.d tree is a
+        # state the gate's comment calls TOLERATED, and it made the line below
+        # die on a bare `TypeError` from `sorted()` comparing None to str —
+        # a test contradicting the prose of the very commit that wrote it.
+        root = gate.conf_d_root(rel)
+        if root:
+            by_root.setdefault(root, []).append(rel)
 
     solo_unshipped = [files[0] for root, files in sorted(by_root.items())
                       if len(files) == 1 and root not in gate._SHIPPED_CONFD_ROOTS
@@ -2735,18 +2828,32 @@ def test_an_exemption_that_empties_a_root_says_so_in_the_message(monkeypatch):
     assert solo_unshipped and shipped_any, sorted(by_root)
 
     # ⛔ NAMING THE TABLE IS NOT ENOUGH, and a first version asserted only that.
-    # `_DEFAULTS_ARTIFACT_EXEMPT` appears ten times in the gate, so that
-    # substring survives deleting the remedy paragraphs outright — measured:
-    # both were removable with the suite green. What has to hold is that the
-    # message offers the way OUT, so an anchor from each remedy is required.
-    # If you reword a remedy, update its anchor here in the same edit; if you
-    # remove one, this is the test that should stop you.
-    # ⛔ ONE wording for one remedy, and this list is what enforces that. The
-    # two messages started with two phrasings of the same three exits ("give
-    # the root a second `_defaults*` file" / "carry the keys in a sibling
-    # `_defaults*` file"); the anchors caught it on their first run.
+    # `_DEFAULTS_ARTIFACT_EXEMPT` occurs many times over in the gate — in code,
+    # in comments and in other messages — so that substring survives deleting
+    # the remedy paragraphs outright; measured, both were removable with the
+    # suite green. (An earlier wording put a COUNT here, "appears ten times",
+    # which was 13 by then. The argument never needed the total: what matters
+    # is that the name is not unique to the paragraph being guarded.)
+    #
+    # So an anchor from each remedy is required, and comparison is CASEFOLDED
+    # because the anchors are bare substrings: reordering three remedies so a
+    # different one leads capitalises its first word, which is a pure
+    # readability edit that this test used to reject while printing the
+    # remedies it claimed were missing.
+    #
+    # ⛔ ONE wording for one remedy, and this list is what enforces it —
+    # across ALL THREE messages that send a reader to the exemption table, not
+    # the two that happened to be easy to reach. Blind review deleted the
+    # third one's remedies outright with the suite green, and it is the
+    # UPSTREAM one: the message that tells you to add the exemption in the
+    # first place, i.e. the one a reader meets first.
     exits = ("sibling `_defaults*` file", "move the exempted file",
              "do not exempt it")
+
+    def _missing_exits(message: str) -> list[str]:
+        low = message.casefold()
+        return [e for e in exits if e.casefold() not in low]
+
     for victim in (solo_unshipped[0], shipped_any[0]):
         monkeypatch.setitem(gate._DEFAULTS_ARTIFACT_EXEMPT, victim,
                             "probe: " + "x" * 40)
@@ -2756,21 +2863,43 @@ def test_an_exemption_that_empties_a_root_says_so_in_the_message(monkeypatch):
         assert "_DEFAULTS_ARTIFACT_EXEMPT" in msg, (
             f"exempting {victim} produced a message that never mentions the "
             f"table the reader just edited: {msg}")
-        missing_exits = [e for e in exits if e not in msg]
-        assert not missing_exits, (
-            f"exempting {victim} produced a message with no way out — these "
-            f"remedies are gone or reworded: {missing_exits}\n{msg}")
-        # ⛔ …and the remedy half must NOT be printed when there is nothing to
-        # blame: with the table empty this message spent its longest paragraph
-        # on an entry the reader never added.
+        assert not _missing_exits(msg), (
+            f"exempting {victim} produced a message missing these remedies: "
+            f"{_missing_exits(msg)}. If you REWORDED one, update the `exits` "
+            "tuple a few lines above this assertion in the same edit — the "
+            "anchors exist so the three messages cannot drift apart, not to "
+            f"freeze the prose. Message was:\n{msg}")
         monkeypatch.undo()
 
+    # …and the THIRD message, the upstream pointer that sends a reader to the
+    # table. It is reached by placement rather than by a floor, so it is driven
+    # through `_report_placement` directly rather than through a victim.
+    placement = _placement_message_for_a_hashed_fixture()
+    assert not _missing_exits(placement), (
+        "the placement message that TELLS people to add an exemption offers "
+        f"different remedies from the floors they will then hit: "
+        f"{_missing_exits(placement)}\n{placement}")
+
+    # ⛔ …and the remedy half must NOT be printed when there is nothing to
+    # blame: with the table empty these messages spent their longest paragraph
+    # on an entry the reader never added. ⛔ BOTH arms, because the conditional
+    # was applied to both and only one of them had this control — measured, the
+    # shipped-root half could be put back to unconditional with the suite
+    # green, i.e. exactly the "fixed the cited instance, not the class" shape
+    # this file keeps recording.
+    monkeypatch.setattr(gate, "_DEFAULTS_ARTIFACT_EXEMPT", {})
     with pytest.raises(gate._GateViolation) as exc:
         gate._assert_every_root_contributes({}, tracked_roots=set())
-    clean = str(exc.value)
-    assert "_DEFAULTS_ARTIFACT_EXEMPT" not in clean, (
+    assert "_DEFAULTS_ARTIFACT_EXEMPT" not in str(exc.value), (
         "with the exemption table empty, the `missing` message still leads "
-        f"with the exemption paragraph:\n{clean}")
+        f"with the exemption paragraph:\n{exc.value}")
+
+    starved = {root: [] for root in gate._SHIPPED_CONFD_ROOTS}
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_shipped_roots_intact(starved)
+    assert "_DEFAULTS_ARTIFACT_EXEMPT" not in str(exc.value), (
+        "with the exemption table empty, the shipped-root floor still prints "
+        f"the exemption paragraph:\n{exc.value}")
 
 
 def test_the_key_floors_are_per_class_not_one_global_number():
@@ -2967,10 +3096,19 @@ def test_the_artifact_key_floor_owns_erosion_that_empties_no_root(monkeypatch):
         == biggest_root else _r(path)))
     with pytest.raises(gate._GateViolation) as exc:
         gate._defaults_faces()
-    assert "ARTIFACT faces yielded" not in str(exc.value), (
+    reported = str(exc.value)
+    assert "ARTIFACT faces yielded" not in reported, (
         "the artifact key floor reported a whole root going to zero — the two "
         "floors that used to run ahead of it no longer do, so the bracket's "
-        f"lower bound can go back to naming that scenario: {exc.value}")
+        f"lower bound can go back to naming that scenario: {reported}")
+    # ⛔ …and WHICH floor answered, not merely which one did not. Asserting only
+    # the negative left the table above free to name the wrong owner: with
+    # `_assert_shipped_roots_intact` stubbed out the fifth floor answers
+    # instead, the table's first row goes stale, and this test stays green.
+    assert reported.startswith("shipped conf.d root"), (
+        "the table beside the key floors says the biggest root going to zero "
+        "is reported by the shipped-root floor; something else answered "
+        f"first, so that row is now wrong: {reported}")
     monkeypatch.undo()
 
     # 2. Inside the blind band this floor is silent. Asserted on the floor's own
@@ -2983,11 +3121,18 @@ def test_the_artifact_key_floor_owns_erosion_that_empties_no_root(monkeypatch):
     #    carrying keys, which is the shape floors 1-2 (files) and 4-5 (a root at
     #    zero) all structurally miss.
     plan = _erosion_plan(band + 1)
-    assert sum(plan.values()) == band + 1, (
-        f"the plan removes {sum(plan.values())} keys, not {band + 1} — the "
-        "non-shipped roots can no longer supply that much erosion without one "
-        "of them emptying, so this measurement would be about a different "
-        f"floor than the one it names: {plan}")
+    supply = sum(plan.values())
+    assert supply == band + 1, (
+        f"the plan removes {supply} keys, not {band + 1} — the non-shipped "
+        "roots can no longer supply that much erosion without one of them "
+        "emptying, so this measurement would be about a different floor than "
+        "the one it names.\n"
+        f"  This happens when keys grow on the SHIPPED side, which the bracket "
+        f"test cannot see (its bound moves with the biggest group, not with "
+        f"the split). RAISE `_DEFAULTS_ARTIFACT_KEYS_FLOOR` to at least "
+        f"{total - supply + 1}, which brings the band back within what the "
+        f"non-shipped roots can supply, and say in the commit message what "
+        f"grew.\n  plan={plan}")
     _read_with_erosion(monkeypatch, plan)
     with pytest.raises(gate._GateViolation, match="ARTIFACT faces yielded"):
         gate._defaults_faces()
@@ -3062,9 +3207,14 @@ def test_each_key_floor_is_bracketed_by_what_it_has_to_catch():
         "that erosion the size of a whole root still trips it even when it is "
         "spread around and empties nothing. ⛔ NOT because this floor is what "
         "reports a root going silent: two earlier floors do that, and this one "
-        "is never reached in that case. Adding keys raises the lower bound, so "
-        "a pure addition asks for a HIGHER floor here; a removal is the gate's "
-        f"job, not this test's. groups={groups}")
+        "is never reached in that case.\n"
+        "  Adding keys raises the lower bound, so a pure addition asks for a "
+        "HIGHER floor here. ⚠️ But satisfying THIS bound alone is not enough "
+        "and doing only that leaves other tests red with less helpful "
+        "messages: the end-to-end probes trip this floor by dropping one "
+        "GROUP, so the floor also has to stay above `total − (that group)`. "
+        "Move it high enough for both, in one edit, and say what grew.\n"
+        f"  groups={groups}")
 
 
 def test_the_headroom_note_states_both_directions_and_both_are_current():

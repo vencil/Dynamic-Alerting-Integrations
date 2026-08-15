@@ -1122,10 +1122,15 @@ def _tracked_confd_roots(paths: list[str] | None = None) -> set[str]:
             "silence it buys is the whole failure this floor exists to end.\n"
             "  RENAME the directory to lower case. Registering it under this "
             "spelling is not an alternative — it would claim a set of checks "
-            "are running on the tree that structurally are not. ⚠️ After the "
-            "rename you WILL still have to register it, in one of the two "
-            "lists the next message names: renaming makes the tree visible, it "
-            "does not account for it.\n"
+            "are running on the tree that structurally are not.\n"
+            "  ⚠️ TWO STEPS on a case-insensitive filesystem, which is what "
+            "the machines this repo is developed on have: a direct "
+            "`git mv A/CONF.D A/conf.d` fails with `Invalid argument`. Go via "
+            "a temporary name — `git mv A/CONF.D A/_tmp && git mv A/_tmp "
+            "A/conf.d`.\n"
+            "  ⚠️ And the rename is not the end: you WILL still have to "
+            "register the tree, in one of the two lists the next message "
+            "names. Renaming makes it visible; it does not account for it.\n"
             "  ⛔ A directory whose name is merely SIMILAR (`conf_d`, `confd`) "
             "is not this; only a case variant is, because only a case variant "
             "reads as correct to a human and as absent to `git ls-files`. "
@@ -1619,7 +1624,8 @@ def _assert_shipped_roots_intact(
 
 def _assert_every_root_contributes(
         by_root: dict[str, list[tuple[str, dict[str, KeyInfo]]]],
-        tracked_roots: set[str] | None = None) -> None:
+        tracked_roots: set[str] | None = None,
+        threshold_shape: "object | None" = None) -> None:
     """Every pinned conf.d root must still contribute at least one key (#1411).
 
     ⛔ SCOPE, stated because the neighbouring floors' scopes had to be corrected
@@ -1816,6 +1822,88 @@ def _assert_every_root_contributes(
             "  OR: this tree genuinely started declaring thresholds — good "
             "news. Remove the line, and the floor now watches it. (#1411)")
 
+    # ⛔⛔ AND THE LOCK ABOVE CANNOT SEE THE CASE IT WAS CITED FOR (#1434).
+    # `if not n_keys: continue` refuses an entry whose root STILL CARRIES KEYS
+    # — and the moment a maintainer reaches for this list is the moment the
+    # root has just gone to ZERO and the floor above has said so. The two
+    # conditions are complementary. Measured before this arm existed: rename a
+    # `defaults:` section away (that floor's own "MOST LIKELY" cause), add one
+    # line to the list, and the gate returned rc=0 with the suite green —
+    # seven of the twelve roots could be silenced that way, i.e. #1411's blind
+    # spot restored by a one-line diff.
+    #
+    # What separates the two states is NOT "is the section there" — a renamed
+    # section is absent in exactly the same way a legitimate one is. It is
+    # whether the tree still holds data SHAPED like threshold declarations.
+    # `Defaults` is `map[string]float64` (types.go) with null meaning opt-out
+    # (ADR-017), so the falsifier is `name: <number|null>` anywhere in the
+    # document, whatever the enclosing key is called. Renaming moves the keys;
+    # it does not delete the numbers.
+    #
+    # ⚠️ LIMIT, disclosed rather than papered over: a root whose declarations
+    # were all non-numeric and non-null would be invisible to this. Measured
+    # when written, every root carried at least one such leaf (the smallest
+    # was 1, the legitimately-empty one 0), so the separation had margin — but
+    # it is a property of today's fixtures, not a guarantee.
+    shaped = threshold_shape or _threshold_shaped_leaves
+    for root in sorted(_DEFAULTS_ROOTS_MAY_BE_EMPTY):
+        stranded = {rel: n for rel, n in
+                    ((rel, shaped(rel)) for rel, _keys in by_root.get(root, ()))
+                    if n}
+        if not stranded:
+            continue
+        raise _GateViolation(
+            f"conf.d root {root!r} is listed in _DEFAULTS_ROOTS_MAY_BE_EMPTY "
+            "and reads as empty, but its artifacts still hold "
+            f"threshold-shaped values: {stranded} (counts of `name: "
+            "<number|null>` pairs anywhere in each document). 'This tree "
+            "legitimately declares no thresholds' is not true of a tree that "
+            "still has the numbers in it — they have stopped being READ, "
+            "which is the failure this floor exists to report, not a reason "
+            "to exempt the tree from it.\n"
+            "  MOST LIKELY: a `defaults:` section here was renamed or "
+            "re-nested, the floor above said so, and this list looked like "
+            "the way to make it stop. It is not; repair the section.\n"
+            "  OR: these values genuinely are not thresholds (some other "
+            "schema that happens to use numbers). Then this entry is fine and "
+            "this arm is wrong — say so in an issue rather than deleting it, "
+            "because the same shape is how the blind spot comes back. "
+            "(#1411 / #1434)")
+
+
+def _threshold_shaped_leaves(rel: str) -> int:
+    """`name: <number|null>` pairs anywhere in one artifact's document.
+
+    The falsifier for a `_DEFAULTS_ROOTS_MAY_BE_EMPTY` entry: it answers "does
+    this tree still hold threshold declarations that stopped being read",
+    which "is there a `defaults:` section" cannot — a renamed section and an
+    absent one look identical from there.
+
+    ⛔ WHOLE DOCUMENT, not the `defaults:` subtree: the whole point is to find
+    keys that are no longer under it. A file the scan cannot read at all
+    counts as zero — it is a different failure with its own reporting, and
+    raising here would blame the exemption list for it.
+    """
+    import yaml  # local import: the module's convention for the YAML faces
+
+    path = PROJECT_ROOT / rel
+    try:
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — the reader above names it properly
+        return 0
+
+    def walk(node: object) -> int:
+        if isinstance(node, dict):
+            return sum(1 if (v is None or (isinstance(v, (int, float))
+                                           and not isinstance(v, bool)))
+                       else walk(v)
+                       for v in node.values())
+        if isinstance(node, list):
+            return sum(walk(v) for v in node)
+        return 0
+
+    return walk(doc)
+
 
 def _assert_keys_floor(generators: dict[str, dict[str, KeyInfo]],
                        artifacts: dict[str, dict[str, KeyInfo]]) -> None:
@@ -1979,10 +2067,11 @@ def _report_placement(face: str, keys: dict[str, KeyInfo], errors: list[str]) ->
             "which most of them are. An exemption takes the file out of the "
             "read set, so exempting the last one empties its root and a "
             "per-root floor reports THAT instead — a second failure whose "
-            "message is about something else. Give the root a sibling that "
-            "carries the keys, or move the hashed fixture out of the conf.d "
-            "tree, or edit it after all; there is no third table to put it in. "
-            "(#1218 / TRK-344 / #1434)"
+            "message is about something else. The three ways out are the ones "
+            "those floors will offer you, in the same words on purpose: carry "
+            "the keys in a sibling `_defaults*` file, move the exempted file "
+            "out of the conf.d tree, or do not exempt it. There is no third "
+            "table to put it in. (#1218 / TRK-344 / #1434)"
         )
     # The other half of the same rule (docs_defaults_sample_test.go pins both;
     # is_shipped_optional_key refuses both).
