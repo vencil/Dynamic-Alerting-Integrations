@@ -1,0 +1,17 @@
+shard,cpu,nproc,go_version,binary_sha256
+1,Intel(R) Xeon(R) 6973P-C,4,go version go1.26.5 linux/amd64,601e7eb2a226775a490874db6d351632286af5d4bfac3261d11cb5633c0095ac
+2,AMD EPYC 9V74 80-Core Processor,4,go version go1.26.5 linux/amd64,601e7eb2a226775a490874db6d351632286af5d4bfac3261d11cb5633c0095ac
+3,INTEL(R) XEON(R) PLATINUM 8573C,4,go version go1.26.5 linux/amd64,601e7eb2a226775a490874db6d351632286af5d4bfac3261d11cb5633c0095ac
+4,AMD EPYC 7763 64-Core Processor,4,go version go1.26.5 linux/amd64,601e7eb2a226775a490874db6d351632286af5d4bfac3261d11cb5633c0095ac
+5,AMD EPYC 7763 64-Core Processor,4,go version go1.26.5 linux/amd64,601e7eb2a226775a490874db6d351632286af5d4bfac3261d11cb5633c0095ac
+6,INTEL(R) XEON(R) PLATINUM 8573C,4,go version go1.26.5 linux/amd64,601e7eb2a226775a490874db6d351632286af5d4bfac3261d11cb5633c0095ac
+7,AMD EPYC 7763 64-Core Processor,4,go version go1.26.5 linux/amd64,601e7eb2a226775a490874db6d351632286af5d4bfac3261d11cb5633c0095ac
+8,AMD EPYC 9V74 80-Core Processor,4,go version go1.26.5 linux/amd64,601e7eb2a226775a490874db6d351632286af5d4bfac3261d11cb5633c0095ac
+9,AMD EPYC 7763 64-Core Processor,4,go version go1.26.5 linux/amd64,601e7eb2a226775a490874db6d351632286af5d4bfac3261d11cb5633c0095ac
+10,AMD EPYC 7763 64-Core Processor,4,go version go1.26.5 linux/amd64,601e7eb2a226775a490874db6d351632286af5d4bfac3261d11cb5633c0095ac
+11,AMD EPYC 7763 64-Core Processor,4,go version go1.26.5 linux/amd64,601e7eb2a226775a490874db6d351632286af5d4bfac3261d11cb5633c0095ac
+12,AMD EPYC 9V74 80-Core Processor,4,go version go1.26.5 linux/amd64,601e7eb2a226775a490874db6d351632286af5d4bfac3261d11cb5633c0095ac
+13,AMD EPYC 9V74 80-Core Processor,4,go version go1.26.5 linux/amd64,601e7eb2a226775a490874db6d351632286af5d4bfac3261d11cb5633c0095ac
+14,AMD EPYC 7763 64-Core Processor,4,go version go1.26.5 linux/amd64,601e7eb2a226775a490874db6d351632286af5d4bfac3261d11cb5633c0095ac
+15,Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz,4,go version go1.26.5 linux/amd64,601e7eb2a226775a490874db6d351632286af5d4bfac3261d11cb5633c0095ac
+16,AMD EPYC 7763 64-Core Processor,4,go version go1.26.5 linux/amd64,601e7eb2a226775a490874db6d351632286af5d4bfac3261d11cb5633c0095ac
