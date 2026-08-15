@@ -185,9 +185,24 @@ jobs:
       # format, encodes trailing bytes exactly, and the digest turns "the
       # recovery probably worked" into something the recovering side checks.
       #
-      # Recover + verify (reconstructs the analyser's per-round file layout):
-      #   awk '$1=="RAW"{ print $4 | ("base64 -d > " $2 ".txt") }' job.log
-      #   awk '$1=="RAW"{ print $3"  "$2".txt" }' job.log | sha256sum -c -
+      # Recover + verify (reconstructs the analyser's per-round file layout).
+      #
+      # Anchor on the record SHAPE, not on field 1. Two properties of a real
+      # fetched log break the obvious `$1=="RAW"` form, and both were measured
+      # against a log pulled from this repo, not assumed:
+      #   1. A log fetched through the GitHub API prefixes EVERY line with an
+      #      RFC3339 timestamp (and a BOM on line 1), so field 1 is the stamp
+      #      and `$1=="RAW"` recovers ZERO files.
+      #   2. Merely tolerating that prefix is not enough either: the ##[group]
+      #      header echoes this step's own shell source, so the literal
+      #      `printf 'RAW %s %s %s\n'` sits in the log as a decoy record and a
+      #      loose match decodes it into a junk `%s.txt`.
+      # Requiring 64 hex digits and a base64 payload excludes the decoy and
+      # ignores any prefix:
+      #   grep -oE 'RAW [A-Za-z0-9_.-]+ [0-9a-f]{64} [A-Za-z0-9+/]+={0,2}' \
+      #     job.log > records.txt
+      #   awk '{ print $4 | ("base64 -d > " $2 ".txt") }' records.txt
+      #   awk '{ print $3"  "$2".txt" }' records.txt | sha256sum -c -
       - name: Emit raw measurements to the job log
         if: always()
         run: |
