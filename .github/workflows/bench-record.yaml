@@ -37,7 +37,12 @@ jobs:
     name: 1000-tenant baseline (informational)
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
-    timeout-minutes: 30
+    # 45, not 30: the paired run measures two versions instead of one (ADR-032),
+    # so the bench time roughly doubles and two more test binaries get compiled.
+    # The headroom is deliberate — ADR-032 §待決 4 records that the real nightly
+    # cost is ESTIMATED, not measured, and this job's own timing is the
+    # measurement. Tighten this once a few nights have reported.
+    timeout-minutes: 45
 
     steps:
       # persist-credentials: false — same rationale as bench-attrib-main:
@@ -63,26 +68,150 @@ jobs:
             ${{ runner.os }}-go-1.26-
             ${{ runner.os }}-go-
 
-      - name: Run benchmark-report
-        run: make benchmark-report
+      # ── ADR-032 paired measurement (segment 1: measure only) ────────────────
+      # The reference version is PINNED in a committed file, never "latest tag".
+      # Auto-following the newest tag would move the reference the instant
+      # anyone cuts a release — an absorption event nobody reviewed, which is
+      # the behaviour ADR-032 exists to remove. Changing it takes a PR.
+      # ⛔ Reports failure through an OUTPUT, never a non-zero exit. An
+      # unreadable pin file must degrade exactly like an unbuildable reference
+      # — paired side INCONCLUSIVE, nightly baseline unaffected. Exiting
+      # non-zero here would skip every step below, including the baseline the
+      # release-asset workflow depends on, which is the trade this design
+      # explicitly refuses to make.
+      - name: Read the pinned reference version
+        id: ref
+        run: |
+          set -uo pipefail
+          tag=$(sed -n 's/^tag:[[:space:]]*//p' .github/bench-reference.yaml 2>/dev/null | head -n1)
+          # Shape-check before it reaches `git checkout`: this string comes from
+          # a file, and a file is an input.
+          if printf '%s' "$tag" | grep -qE '^exporter/v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "reference version: $tag"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "reason=unreadable-reference-pin" >> "$GITHUB_OUTPUT"
+            echo "::error::.github/bench-reference.yaml has no usable tag (got '${tag}') — paired series is INCONCLUSIVE tonight"
+          fi
 
-      # Append the control canary to the nightly baseline so the trend watchdog
-      # can derive a per-night NOISE FLOOR from BenchmarkControlCanaryCPU's
-      # own night-to-night variance — it never alerts on movement smaller than
-      # the runner's intrinsic noise. Same canary module the PR gate uses
-      # (scripts/tools/ops/bench-canary), so the floor is apples-to-apples.
-      - name: Append control canary to baseline
+      - name: Checkout reference version
+        if: steps.ref.outputs.ok == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.ref.outputs.tag }}
+          path: .ref
+          persist-credentials: false
+
+      # Measures main HEAD and the reference version ALTERNATELY on this one
+      # runner, so the machine's speed divides out of the ratio. Same harness
+      # the PR gate uses. ROUNDS=6/BENCHTIME=3s keeps the main side's sample
+      # count and benchtime identical to what `make benchmark-report` produced,
+      # which is what lets the existing watchdog keep reading it unchanged.
+      #
+      # ⛔ Never fails the job. A reference that will not build is a real and
+      # expected failure mode (the tag ages while main is refactored), and the
+      # nightly baseline below is a release asset — breaking that to shout about
+      # the paired side would trade a working feature for volume. The paired
+      # side records INCONCLUSIVE instead, loudly. See ADR-032 §待決 3.
+      - name: Paired interleaved measurement (main vs pinned reference)
+        id: paired
+        if: steps.ref.outputs.ok == 'true'
+        env:
+          BASE_DIR: ${{ github.workspace }}/.ref/components/threshold-exporter/app
+          PR_DIR: ${{ github.workspace }}/components/threshold-exporter/app
+          CANARY_DIR: ${{ github.workspace }}/scripts/tools/ops/bench-canary
+          BENCH_OUT_DIR: ${{ github.workspace }}/.build/paired
+          ROUNDS: "6"
+          BENCHTIME: 3s
+        run: |
+          set -uo pipefail
+          mkdir -p .build/paired
+          if bash scripts/tools/ops/bench_interleave.sh; then
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+          else
+            rc=$?
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            echo "rc=$rc" >> "$GITHUB_OUTPUT"
+            echo "paired measurement failed (rc=$rc) — see bench.err.log"
+          fi
+
+      - name: Nightly baseline (from the paired main side)
+        if: steps.paired.outputs.status == 'ok'
         run: |
           set -euo pipefail
+          mkdir -p .build
+          # The main side IS the nightly baseline: same benches, same benchtime,
+          # same sample count, and it already carries the control canary rows
+          # (bench_interleave.sh runs one canary binary into BOTH sides). So the
+          # existing watchdog and the release-asset workflow keep working with
+          # no change, and running the paired night costs 2x rather than 3x.
+          cp .build/paired/bench-pr.txt .build/bench-baseline.txt
+          cp .build/paired/bench.err.log .build/bench.err.log || true
+          echo "baseline rows: $(grep -c '^Benchmark' .build/bench-baseline.txt || echo 0)"
+
+      # Only reached when the reference side is unusable. Reproduces exactly what
+      # this job did before ADR-032, so a bad reference never costs us a night.
+      - name: Nightly baseline (fallback — reference unusable)
+        if: steps.paired.outputs.status != 'ok'
+        run: |
+          set -euo pipefail
+          make benchmark-report
           ( cd scripts/tools/ops/bench-canary && \
             go test -bench='ControlCanary' -benchmem -run='^$' -count=6 -benchtime=1s . ) \
             >> .build/bench-baseline.txt 2>>.build/bench.err.log || \
             echo "::warning::canary append failed — trend watchdog will fall back to the fixed floor"
 
+      - name: Compute paired ratios
+        if: steps.paired.outputs.status == 'ok'
+        run: |
+          set -euo pipefail
+          python3 scripts/tools/dx/pair_bench_ratio.py \
+            --reference .build/paired/bench-base.txt \
+            --main .build/paired/bench-pr.txt \
+            --reference-tag "${REF_TAG}" \
+            --out .build/bench-paired.json
+        env:
+          REF_TAG: ${{ steps.ref.outputs.tag }}
+
+      # Loud, and machine-readable. `::error::` surfaces in the run's annotations
+      # so a rotting reference cannot sit unnoticed for weeks, and the JSON keeps
+      # the paired series honest: this night is INCONCLUSIVE, not clean.
+      - name: Paired measurement unusable — record and annotate
+        if: steps.paired.outputs.status != 'ok'
+        env:
+          REF_TAG: ${{ steps.ref.outputs.tag }}
+          # Two distinct causes reach this step and they need different fixes:
+          # a pin file nobody can parse, vs a reference version that no longer
+          # builds. Reporting both as the latter sends the reader to the wrong
+          # place — the same misdiagnosis class as `thin-anchor` in the watchdog.
+          REASON: ${{ steps.ref.outputs.reason || 'reference-build-or-run-failed' }}
+        run: |
+          set -uo pipefail
+          echo "::error::paired measurement unusable (${REASON}) — tonight is INCONCLUSIVE for the paired series. The nightly baseline came from the fallback path and is unaffected. See ADR-032 §待決 3."
+          mkdir -p .build
+          printf '{\n  "schema": "bench-paired/v1",\n  "reference_tag": "%s",\n  "status": "INCONCLUSIVE",\n  "reason": "%s"\n}\n' \
+            "${REF_TAG}" "${REASON}" > .build/bench-paired.json
+          tail -n 40 .build/paired/bench.err.log 2>/dev/null || true
+
       - name: Summarize results
         if: always()
+        env:
+          PAIRED_STATUS: ${{ steps.paired.outputs.status }}
+          REF_TAG: ${{ steps.ref.outputs.tag }}
         run: |
           echo "### Bench Record — $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Paired reference: \`${REF_TAG:-unresolved}\` — status \`${PAIRED_STATUS:-not-run}\`" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f .build/bench-paired.json ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat .build/bench-paired.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           if [ -f .build/bench-baseline.txt ]; then
             cat .build/bench-baseline.txt >> "$GITHUB_STEP_SUMMARY"
@@ -91,6 +220,9 @@ jobs:
           fi
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
+      # bench-baseline.txt keeps its name and its place: `release-attach-bench-
+      # baseline.yaml` downloads this artifact by name and expects that file.
+      # The paired files are additive.
       - name: Upload bench artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -100,6 +232,9 @@ jobs:
             .build/bench-baseline.txt
             .build/bench.raw.jsonl
             .build/bench.err.log
+            .build/bench-paired.json
+            .build/paired/bench-base.txt
+            .build/paired/bench-pr.txt
           retention-days: 90
           if-no-files-found: warn
 

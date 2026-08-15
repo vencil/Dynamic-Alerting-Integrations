@@ -180,6 +180,9 @@
   "scripts/tools/dx/migrate_conf_d.py": [
    "tests/dx/test_migrate_conf_d.py"
   ],
+  "scripts/tools/dx/pair_bench_ratio.py": [
+   "tests/dx/test_pair_bench_ratio.py"
+  ],
   "scripts/tools/dx/pr_preflight.py": [
    "tests/dx/test_pr_preflight_checks.py",
    "tests/dx/test_pr_preflight_orchestrator.py"
@@ -717,7 +720,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "6753db82fe8b2c9c3d5c806a669d8fb707198924f238b7d7a21637bccf8c5785",
+ "source_digest": "2062c725ed1af6762d4344ff234c93f2ad0a1979caed2649513d01872ecc08ab",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -756,6 +759,7 @@
   "tests/dx/test_log_visibility_catalogue.py",
   "tests/dx/test_makefile_utf8_mode.py",
   "tests/dx/test_migrate_conf_d.py",
+  "tests/dx/test_pair_bench_ratio.py",
   "tests/dx/test_pr_preflight_checks.py",
   "tests/dx/test_pr_preflight_orchestrator.py",
   "tests/dx/test_preflight_bash.py",
