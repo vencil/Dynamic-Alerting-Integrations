@@ -22,7 +22,7 @@ lang: zh
 1. **新增 `test.fixme()` / `test.skip()`（任何形式）** — 此檔登記為**硬性條件**。⛔ 這一條原本寫「條件式 `test.skip(!isLinux, 'reason')` 不屬於債務，不需登記」——實測那種寫法**根本落不了地**（lint 對七種形式一律報錯，#1428），所以那句話描述的是一個不存在的通道。環境差異走 `--grep` tag 或 playwright.config.ts 的 project。
 2. **axe-core violation 寫 `allowedNonCriticalViolations > 0`** — 同等登記，註明放過的 violation 類型 + 預計修復版本。
 3. **Playwright `exclude` / `route` stub 長期存在** — 超過 1 個 minor 版本未銷案者登記。
-4. **跨版本殘留**：任何項目跨超過 1 個 minor 版本（如 v2.7.0 引入、v2.8.0 還在）**必須**走 [`testing-playbook.md` §v2.7.0 LL §2](testing-playbook.md#2-testfixme-是債務標記不是先通過-ci的工具) 的 knowledge annealing 三選一（calibrate / 刪測 / 改 `test.skip` 寫明放棄原因）。
+4. **跨版本殘留**：任何項目跨超過 1 個 minor 版本（如 v2.7.0 引入、v2.8.0 還在）**必須**走 [`testing-playbook.md` §v2.7.0 LL §2](testing-playbook.md#2-testfixme-是債務標記不是先通過-ci的工具) 的 knowledge annealing 三選一（calibrate / 刪測 + 在本表登記 / 用 `--grep` tag 或 playwright.config.ts 的 project 把它移出預設 run）。⛔ 第三項原本寫「改 `test.skip` 寫明放棄原因」——實測那個寫法會被 lint 擋（#1428），是個做不到的動作。
 
 ## 登記 Template
 
@@ -34,7 +34,9 @@ lang: zh
 
 ## v2.8.0 — 目前待辦（active）
 
-_無登記項目。v2.8.0 PR #57 A-7 清零後，`test.fixme()` / `test.skip()`（bare form）在 E2E specs 為零，ESLint 守關（執行點與各自的強度見本頁開頭那段，兩者不等價）。_
+_無登記項目。v2.8.0 PR #57 A-7 清零後，`test.fixme()` / `test.skip()` 在 E2E specs 為零（任何寫法），ESLint 守關（執行點與各自的強度見本頁開頭那段，兩者不等價）。_
+
+> ⚠️ **「無登記項目」只對這張表的字面範圍成立**：登記義務綁在 `test.fixme()` / `test.skip()` 的出現，而 `tests/e2e/visual.spec.ts` 的 TRK-238 區塊用**整段 block comment** park 了 5 支 spec——理由逐字寫著是被 A-13 逼的。那是 lint 看不到、本表也沒收的第三種狀態（#1428 實查）。要不要把 block-comment parking 納入登記義務，是尚未拍板的事。
 
 ## 歷史清零紀錄
 

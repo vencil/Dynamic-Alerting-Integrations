@@ -47,7 +47,8 @@ permissions:
   pull-requests: write
 
 jobs:
-  # A-13: no `test.fixme()` / bare `test.skip()` in E2E specs. Until #1428 this
+  # A-13: no `test.skip()` / `test.fixme()` in E2E specs, in any spelling —
+  # the rule does not distinguish them. Until #1428 this
   # rule had exactly one execution point — the `playwright-lint` pre-commit
   # hook — and that hook cannot run inside a `git worktree`, which is how this
   # repo is normally worked: tests/e2e/node_modules is gitignored, so a new work

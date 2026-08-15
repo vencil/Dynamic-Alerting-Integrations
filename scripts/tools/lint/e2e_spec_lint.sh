@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# A-13 enforcement: keep `test.fixme()` / bare `test.skip()` out of the
-# Playwright E2E specs. Policy: docs/internal/testing-playbook.md §v2.7.0 LL §2.
+# A-13 enforcement: keep `test.skip()` / `test.fixme()` out of the Playwright
+# E2E specs — every spelling, the rule does not distinguish them.
+# Policy: docs/internal/testing-playbook.md §v2.7.0 LL §2.
 # Rule: tests/e2e/eslint.config.mjs pins `playwright/no-skipped-test` with
 # `{ allowConditional: false, disallowFixme: true }`.
 #

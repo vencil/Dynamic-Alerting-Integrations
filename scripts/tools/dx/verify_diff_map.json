@@ -701,6 +701,9 @@
   "tests/ops/test_alertmanager_amtool_validity.py": [
    "tests/ops/test_alertmanager_routing_correctness.py"
   ],
+  "tests/ops/test_ci_path_filter_coverage.py": [
+   "tests/lint/test_e2e_spec_lint.py"
+  ],
   "tests/ops/test_init_project.py": [
    "tests/ops/test_generated_ci_artifacts.py"
   ],
@@ -720,7 +723,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "23811219d5d115c3bdb30dd48f3eb909318287a3ff6fdb201d09feda5e8b313a",
+ "source_digest": "6efe82fde5c104de4ef7d89e22e81ab5d4b0ce6e5216c17a26cc088c4f840151",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -878,6 +881,7 @@
   "tests/lint/test_counterexample_coverage.py",
   "tests/lint/test_detect_sed_damage.py",
   "tests/lint/test_docs_yaml_split_parity.py",
+  "tests/lint/test_e2e_spec_lint.py",
   "tests/lint/test_fallback_image_digest_pin.py",
   "tests/lint/test_fix_doc_links.py",
   "tests/lint/test_fix_file_hygiene.py",
@@ -1108,6 +1112,9 @@
   ".github/workflows/nightly-race.yaml": [
    "tests/ops/test_nightly_race_issue_policy.py"
   ],
+  ".github/workflows/playwright.yml": [
+   "tests/lint/test_e2e_spec_lint.py"
+  ],
   ".github/workflows/release.yaml": [
    "tests/dx/test_verify_release.py"
   ],
@@ -1135,6 +1142,7 @@
    "tests/lint/test_check_portal_asset_shipping.py",
    "tests/lint/test_check_threshold_reachability.py",
    "tests/lint/test_counterexample_coverage.py",
+   "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py",
    "tests/shared/test_actionlint_pin_parity.py"
@@ -1165,6 +1173,7 @@
    "tests/lint/test_check_orphan_lint.py",
    "tests/lint/test_check_threshold_reachability.py",
    "tests/lint/test_check_unpinned_deps.py",
+   "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_git_check_lock.py",
    "tests/ops/test_nightly_scan_matrix_drift.py",
@@ -1466,7 +1475,11 @@
   "docs/scenarios": [
    "tests/dx/test_bump_docs.py"
   ],
+  "docs/scenarios/gitops-ci-integration.en.md": [
+   "tests/ops/test_generated_ci_artifacts.py"
+  ],
   "docs/scenarios/gitops-ci-integration.md": [
+   "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_generated_ci_artifacts.py"
   ],
   "docs/scenarios/incremental-migration-playbook.md": [
@@ -2245,6 +2258,9 @@
   "scripts/tools/lint/check_vmalert_coverage.py": [
    "tests/rulepacks/test_platform_rules_extract_sync.py"
   ],
+  "scripts/tools/lint/e2e_spec_lint.sh": [
+   "tests/lint/test_e2e_spec_lint.py"
+  ],
   "scripts/tools/lint/fix_file_hygiene.py": [
    "tests/shared/test_sast.py"
   ],
@@ -2435,6 +2451,7 @@
   ],
   "tests/e2e": [
    "tests/lint/test_check_playwright_rtl_drift.py",
+   "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_wrapped_path_references.py"
   ],
   "tests/e2e-bench": [
@@ -2454,6 +2471,24 @@
   ],
   "tests/e2e-bench/receiver/Dockerfile": [
    "tests/ops/test_nightly_scan_matrix_drift.py"
+  ],
+  "tests/e2e/eslint.config.mjs": [
+   "tests/lint/test_e2e_spec_lint.py"
+  ],
+  "tests/e2e/fixtures/axe-helper.ts": [
+   "tests/lint/test_e2e_spec_lint.py"
+  ],
+  "tests/e2e/package-lock.json": [
+   "tests/lint/test_e2e_spec_lint.py"
+  ],
+  "tests/e2e/package.json": [
+   "tests/lint/test_e2e_spec_lint.py"
+  ],
+  "tests/e2e/playwright.config.ts": [
+   "tests/lint/test_e2e_spec_lint.py"
+  ],
+  "tests/e2e/portal-home.spec.ts": [
+   "tests/lint/test_e2e_spec_lint.py"
   ],
   "tests/federation-e2e": [
    "tests/dx/test_verify_diff.py"
@@ -2517,12 +2552,16 @@
   "tests/lint/test_counterexample_coverage.py": [
    "tests/lint/test_check_threshold_registry.py"
   ],
+  "tests/lint/test_mkdocs_strict_check.py": [
+   "tests/lint/test_e2e_spec_lint.py"
+  ],
   "tests/lint/test_trufflehog_to_sarif.py": [
    "tests/ops/test_secret_scan_gate.py"
   ],
   "tests/ops": [
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_threshold_registry.py",
+   "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_grar_facade_reexports.py",
    "tests/ops/test_nightly_race_issue_policy.py",
    "tests/ops/test_onboard_platform.py"
@@ -2540,6 +2579,7 @@
   ],
   "tests/ops/test_ci_path_filter_coverage.py": [
    "tests/lint/test_counterexample_coverage.py",
+   "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_ci_aggregate_gate_contract.py",
    "tests/ops/test_wrapped_path_references.py"
   ],

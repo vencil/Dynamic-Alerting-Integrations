@@ -967,7 +967,8 @@ repos:
         #
         # ⛔ An earlier version of this comment claimed the `entry:` line was
         # "covered by CI instead". It is not, and the claim was disproved by
-        # replacing the entry with `bash -c 'exit 0'`: 242 tests passed and an
+        # replacing the entry with `bash -c 'exit 0'`: the seven files that read
+        # this config passed (242 tests) and an
         # injected `test.fixme()` sailed through the hook. CI runs the SCRIPT,
         # never this hook — no workflow names `playwright-lint` and this file
         # is not in playwright.yml's `paths:` either. What actually covers the
