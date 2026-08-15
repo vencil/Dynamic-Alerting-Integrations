@@ -1403,19 +1403,15 @@ def test_every_scanned_root_is_wired_to_the_fifth_floor_through_the_real_entry(
     # then: rename a `defaults:` section away, add one line, and EIGHT of the
     # twelve roots went back to rc=0 — one of which is the entry that is
     # legitimately on the list, so seven were newly silenceable.
-    # ⛔ Two numbers, one population: an earlier wording put "seven" beside a
-    # re-measured "one of the twelve" and the two counted different things
-    # (the first excluded the legitimate entry, the second included it),
-    # reading as though seven had been closed and one remained. It is 8 → 1.
-    # ✅ CLOSED in the same commit that measured it (#1434), by a second arm
-    # asking what the entry actually claims — see `_defaults_shaped_blocks`
-    # and `_top_level_keys_off_schema`. ⛔ Do not "fix" this by checking whether a
-    # `defaults:` section exists; that reads identically for a renamed section
-    # and an absent one, which is why the falsifier looks for the block's
-    # SHAPE instead. The wiring test below is not the thing holding that
-    # closed; this one is, and its name is on a line of its own so a grep for
-    # it finds this reference too:
-    # test_may_be_empty_cannot_be_used_to_silence_a_root_that_just_went_to_zero
+    # ⛔ STILL OPEN, and it stayed open on purpose (#1434). Three arms were
+    # written for it inside that ticket and all three were withdrawn: the full
+    # account, including which mutations killed which version and why no
+    # predicate over today's content can answer this question, is in the
+    # `_DEFAULTS_ROOTS_MAY_BE_EMPTY` block of
+    # `scripts/tools/lint/check_threshold_reachability.py`. Read that before
+    # writing a fourth. ⛔ In particular, do not "fix" it by checking whether a
+    # `defaults:` section exists: that reads identically for a renamed section
+    # and a legitimately absent one, which is the trap all three fell into.
     roots = sorted(_scanned_confd_roots() - gate._DEFAULTS_ROOTS_MAY_BE_EMPTY)
     # ⛔ "Cannot go vacuous" was stated and was false. Both sides of the equality
     # below are `something - _DEFAULTS_ROOTS_MAY_BE_EMPTY`, so an exemption list
@@ -2722,195 +2718,12 @@ def test_exempting_a_shipped_artifact_is_not_silent(monkeypatch):
         gate.run_check(demand=set(), supply=set(), deferred=set(), known_unwired={})
 
 
-@pytest.mark.parametrize("label,doc,expected", [
-    # MUST see it — a defaults block that stopped being called `defaults`.
-    ("renamed away", "defaultz:\n  cpu: 80\n  mem: 90\n", 1),
-    ("renamed and moved down", "db:\n  mysql:\n    defaultz:\n      cpu: 80\n", 1),
-    ("re-nested under a key", "defaults:\n  threshold:\n    cpu: 80\n", 1),
-    # MUST NOT — every one of these is a correct edit somebody makes. ⛔ FOUR
-    # of them were real reds against the first version of this falsifier (the
-    # bare `defaults:`, the tenant stub, the recipe entry, and numbers mixed
-    # with strings); the rest were already silent and are here as controls
-    # against this predicate drifting the other way. An earlier wording said
-    # all of them were reds, which would have told the next reader they are
-    # ten independent pieces of regression evidence when six of them are not.
-    ("bare `defaults:` with no value", "defaults:\n", 0),
-    ("empty mapping", "defaults: {}\n", 0),
-    ("a tenant stub", "tenants:\n  shop-a:\n", 0),
-    ("a recipe entry with string fields",
-     "_custom_alerts:\n  - recipe: r\n    name: n\n    min_events: 20\n", 0),
-    ("YAML 1.1 booleans", "flags:\n  on: yes\n  off: no\n", 0),
-    ("numeric strings", "meta:\n  retention: \"30\"\n", 0),
-    ("numbers mixed with strings", "meta:\n  db: mysql\n  retention: 30\n", 0),
-    ("a list of numbers", "codes:\n  - 1\n  - 2\n", 0),
-    ("comments only", "# nothing here\n", 0),
-    ("unreadable YAML", "a: [1,\n", 0),
-    # DISCLOSED LIMITS, pinned so they are decisions rather than surprises.
-    ("LIMIT: renamed block of all nulls", "defaultz:\n  cpu: ~\n", 0),
-    ("LIMIT: an all-numeric block that is not thresholds",
-     "scrape:\n  interval: 30\n  timeout: 10\n", 1),
-])
-def test_the_defaults_shape_falsifier_answers_each_branch(
-        tmp_path, monkeypatch, label, doc, expected):
-    """⛔ Per BRANCH, because the only control this falsifier shipped with was
-    "stub the whole function to 0", which cannot see inside it.
-
-    Mutation measured five single-point weakenings surviving — the list walk,
-    the null half, the bool exclusion, the read-failure path and "only look at
-    the first artifact" — on a module whose one live entry is a tree of recipe
-    examples, i.e. a tree whose content sits entirely under a YAML list. The
-    branch that walks lists is the one that arm depends on, and nothing was
-    holding it.
-
-    Each row below is one branch. Four of the "must not" rows were reds against
-    the first version and are the ones that cost something; the others are
-    drift controls. Which is which is spelled out beside the rows rather than
-    summarised into a count that would flatter them.
-    """
-    art = tmp_path / "_defaults.yaml"
-    art.write_text(doc, encoding="utf-8")
-    monkeypatch.setattr(gate, "PROJECT_ROOT", tmp_path)
-    assert gate._defaults_shaped_blocks("_defaults.yaml") == expected, (
-        f"{label}: {doc!r}")
 
 
-@pytest.mark.parametrize("label,doc,expected", [
-    # The two mutations the block-shape predicate is structurally blind to,
-    # which is why this second witness exists (#1434).
-    ("the wrapper deleted, keys at the top level",
-     "mysql_connections: 80\nmysql_threads_running: 30\n",
-     ["mysql_connections", "mysql_threads_running"]),
-    ("renamed to a key the schema does not allow",
-     "defaultz:\n  cpu: 80\n", ["defaultz"]),
-    ("renamed, plus a string sibling that hides it from the block shape",
-     "defaultz:\n  cpu: 80\n  unit: pct\n", ["defaultz"]),
-    # …and everything the schema legitimately allows stays silent, including
-    # the shapes the exempt tree is actually made of.
-    ("a legitimate defaults section", "defaults:\n  cpu: 80\n", []),
-    ("custom-alert recipes", "_custom_alerts:\n  - recipe: threshold\n", []),
-    ("comments only", "# nothing here\n", []),
-    ("a routing key matched by patternProperties", "_routing_x: {a: 1}\n", []),
-    ("unreadable YAML is somebody else's failure", "a: [1,\n", []),
-])
-def test_the_schema_witness_reads_its_key_set_out_of_the_schema(
-        tmp_path, monkeypatch, label, doc, expected):
-    """⛔ The second witness for a `_DEFAULTS_ROOTS_MAY_BE_EMPTY` entry.
-
-    One predicate could not cover this space: widening it produced false reds
-    with no legal exit, narrowing it produced a bypass in nought-to-two lines.
-    The way out was not a third predicate but a second, INDEPENDENT witness —
-    and the repo already had one. `platform-defaults.schema.json` is
-    `additionalProperties: false`, it is enforced elsewhere by
-    `check_confd_schema.py`, and its authority comes from the loader rather
-    than from this gate, so citing it is not this gate agreeing with itself.
-
-    ⛔ The allowed set is read out of that file on every run. A copy of it here
-    would be a second contract, drifting.
-    """
-    art = tmp_path / "_defaults.yaml"
-    art.write_text(doc, encoding="utf-8")
-    # ⛔ The schema path is pinned to the REAL file before PROJECT_ROOT moves:
-    # the constant is derived from it, and letting it follow the tmp tree would
-    # test this helper against a schema that does not exist — which reads as
-    # "no forbidden keys" and would make every row below pass vacuously.
-    real_schema = gate._PLATFORM_DEFAULTS_SCHEMA
-    assert real_schema.is_file(), real_schema
-    monkeypatch.setattr(gate, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(gate, "_PLATFORM_DEFAULTS_SCHEMA", real_schema)
-    assert gate._top_level_keys_off_schema("_defaults.yaml") == expected, label
 
 
-@pytest.mark.parametrize("label,doc,silenced", [
-    ("thresholds flattened to the top level",
-     "mysql_connections: 80\nmysql_threads_running: 30\n", False),
-    ("`defaults:` renamed away", "defaultz:\n  cpu: 80\n  mem: 90\n", False),
-    ("renamed with a string sibling", "defaultz:\n  cpu: 80\n  unit: pct\n", False),
-    ("renamed with a null sibling", "defaultz:\n  cpu: 80\n  mem: ~\n", False),
-    ("a tree that genuinely declares nothing",
-     "# recipe examples only\n_custom_alerts:\n  - recipe: threshold\n", True),
-])
-def test_the_two_witnesses_together_refuse_every_measured_silencer(
-        tmp_path, monkeypatch, label, doc, silenced):
-    """⛔ END TO END, through the arm itself rather than either helper.
-
-    The threat is one edit plus one line: break a root's `defaults:` so the
-    floor fires, then add the root to `_DEFAULTS_ROOTS_MAY_BE_EMPTY` so it
-    stops. Every row here is a way of breaking it that was measured to work
-    against one witness or the other; the last row is the state the list
-    legitimately exists for, and it must stay silent or the list is unusable.
-    """
-    root = "probe/conf.d"
-    art = tmp_path / root / "_defaults.yaml"
-    art.parent.mkdir(parents=True)
-    art.write_text(doc, encoding="utf-8")
-
-    real_schema = gate._PLATFORM_DEFAULTS_SCHEMA
-    assert real_schema.is_file(), real_schema
-    monkeypatch.setattr(gate, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(gate, "_PLATFORM_DEFAULTS_SCHEMA", real_schema)
-    monkeypatch.setattr(gate, "_DEFAULTS_CONFD_ROOTS", frozenset({root}))
-    monkeypatch.setattr(gate, "_DEFAULTS_ROOTS_MAY_BE_EMPTY", frozenset({root}))
-    monkeypatch.setattr(gate, "_DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS", {})
-
-    # the root reads as empty — which is what makes the exemption look right
-    by_root = {root: [(f"{root}/_defaults.yaml", {})]}
-    if silenced:
-        gate._assert_every_root_contributes(by_root, tracked_roots={root})
-        return
-    with pytest.raises(gate._GateViolation) as exc:
-        gate._assert_every_root_contributes(by_root, tracked_roots={root})
-    assert root in str(exc.value), (label, exc.value)
 
 
-def test_may_be_empty_cannot_be_used_to_silence_a_root_that_just_went_to_zero(
-        monkeypatch):
-    """⛔ The one-line silencer: rename a `defaults:` section away, then add the
-    root to `_DEFAULTS_ROOTS_MAY_BE_EMPTY` (#1434).
-
-    The older exit-lock beside this one refuses an entry whose root STILL
-    CARRIES KEYS, and a maintainer reaches for that list precisely when the
-    root has just gone to zero — the two conditions never overlap. Measured
-    before this arm existed: seven of the twelve roots went from a red gate to
-    `rc=0` on a one-line diff, which is #1411's blind spot re-opened.
-
-    ⛔ COUNTERFACTUAL, both directions, because "it goes red now" is not the
-    claim — "it did not before" is half of it, and "the legitimate entry still
-    passes" is the other half.
-    """
-    real_reader = gate._read_artifact_keys
-    victim = "tests/golden/fixtures/array-replace/conf.d"
-
-    def blanked(path):
-        rel = path.relative_to(gate.PROJECT_ROOT).as_posix()
-        return {} if gate.conf_d_root(rel) == victim else real_reader(path)
-
-    monkeypatch.setattr(gate, "_read_artifact_keys", blanked)
-    monkeypatch.setattr(gate, "_DEFAULTS_ROOTS_MAY_BE_EMPTY",
-                        frozenset(gate._DEFAULTS_ROOTS_MAY_BE_EMPTY) | {victim})
-
-    with pytest.raises(gate._GateViolation, match="defaults-SHAPED blocks"):
-        gate._defaults_faces()
-
-    # …and this is what the gate did before the arm existed: the same state,
-    # with only this falsifier stood down, is silent. Without it the test
-    # above would pass on any implementation that raises for some other reason.
-    monkeypatch.setattr(gate, "_defaults_shaped_blocks", lambda _rel: 0)
-    gate._defaults_faces()
-
-    # …and a root that genuinely holds no threshold-shaped data — the state the
-    # list exists for — is still accepted. Same arm, opposite answer, so the
-    # arm cannot drift into "refuse every entry".
-    monkeypatch.undo()
-    gate._defaults_faces()
-    assert gate._DEFAULTS_ROOTS_MAY_BE_EMPTY, "the list must not be empty here"
-    for root in gate._DEFAULTS_ROOTS_MAY_BE_EMPTY:
-        rels = [rel for rel in gate._tracked_defaults_artifacts()
-                if gate.conf_d_root(rel) == root]
-        assert rels, root
-        assert all(gate._defaults_shaped_blocks(rel) == 0 for rel in rels), (
-            f"{root} is exempted as 'declares no thresholds' while its "
-            "artifacts hold threshold-shaped values — the entry is what is "
-            "wrong here, not this assertion")
 
 
 def _placement_message_for_a_hashed_fixture() -> str:
@@ -3254,10 +3067,23 @@ def test_the_artifact_key_floor_owns_erosion_that_empties_no_root(monkeypatch):
     # the negative left the table above free to name the wrong owner: with
     # `_assert_shipped_roots_intact` stubbed out the fifth floor answers
     # instead, the table's first row goes stale, and this test stays green.
-    assert reported.startswith("shipped conf.d root"), (
-        "the table beside the key floors says the biggest root going to zero "
-        "is reported by the shipped-root floor; something else answered "
-        f"first, so that row is now wrong: {reported}")
+    #
+    # ⚠️ IDENTITY, NOT A PROSE PREFIX. A first version asserted
+    # `reported.startswith("shipped conf.d root")`, and blind review measured
+    # two false reds on it: prefixing the message with "The " reddens it while
+    # the SAME floor answered, and so does a golden fixture legitimately
+    # growing past the shipped root's key count (which moves "the biggest
+    # group" to another tree — a real change of owner, but the message that
+    # comes back is then correct and the assertion still reads as a bug).
+    # The cheapest way to green either was to weaken this very line. Matching
+    # the floor's own stable phrase and naming the alternative keeps the claim
+    # about which floor answered without pinning the sentence it says it in.
+    assert "conf.d root" in reported and "artifact(s) /" in reported, (
+        "the table beside the key floors says the biggest conf.d root going "
+        "to zero is reported by the SHIPPED-ROOT floor (the one that prints "
+        "an artifact/key pair). Something else answered first — most likely "
+        "the biggest group is no longer a shipped tree — so update that row "
+        f"rather than this assertion: {reported}")
     monkeypatch.undo()
 
     # 2. Inside the blind band this floor is silent. Asserted on the floor's own

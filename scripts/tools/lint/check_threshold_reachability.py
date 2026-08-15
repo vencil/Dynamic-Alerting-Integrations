@@ -1863,199 +1863,45 @@ def _assert_every_root_contributes(
     # on every root. ⚠️ That is a property of today's fixtures, not a
     # guarantee, and the two ways it can be wrong are named in
     # `_defaults_shaped_blocks` rather than left to be discovered.
-    # ⛔ TWO WITNESSES, because one predicate could not cover the space and
-    # three attempts at widening or narrowing it kept trading one blind spot
-    # for another (#1434). They are independent and they are complements,
-    # measured on this tree and on injected mutations of it:
+    # ⛔ NOT GUARDED HERE, and this is a scope decision taken after three
+    # attempts (#1434). The arm that used to sit at this spot asked whether the
+    # tree still held threshold-shaped data, in three successive spellings —
+    # every leaf that looked like a threshold, then the block shape, then that
+    # plus the schema's allowed top-level key set as a second witness. Each
+    # version was measured and each failed the same way round:
     #
-    #   mutation of an exempt root        block shape   schema key set
-    #   `defaults:` renamed to `defalts:`     sees it       sees it
-    #   renamed, plus one string sibling      blind         sees it
-    #   the wrapper deleted, keys at root     blind         sees it
-    #   renamed to a key the schema ALLOWS    sees it       blind
-    #   today's artifacts (all of them)       silent        silent
+    #   version                     how it died (all measured, on this tree)
+    #   any `name: <number|null>`   false red on THREE correct edits to the one
+    #                               exempt tree, with no in-repo way to go green
+    #   block shape only            bypassed by one string sibling, one null, or
+    #                               deleting the wrapper — and it gave up the
+    #                               coverage the first version had
+    #   block shape + schema keys   BOTH: still bypassed (rename to `_state_*`,
+    #                               an open `patternProperties` prefix, with one
+    #                               non-numeric child — declarations fully
+    #                               intact, gate green), AND it false-reds on a
+    #                               normal recipe whose `selectors:` values are
+    #                               numbers, in the SHIPPED examples tree, with
+    #                               a message that misdiagnoses the cause
     #
-    # The second witness is NOT a second implementation of validation: it
-    # reads the allowed top-level key set out of `platform-defaults.schema.json`
-    # — the schema `check_confd_schema.py` already enforces, whose authority
-    # comes from the Go loader's `ThresholdConfig`, not from this gate — and
-    # asks whether this artifact's top-level keys are in it. Deriving the set
-    # rather than re-running jsonschema keeps the judgement in one place and
-    # keeps this gate free of that dependency, which CI's test job does not
-    # guarantee.
-    for root in sorted(_DEFAULTS_ROOTS_MAY_BE_EMPTY):
-        rels = [rel for rel, _keys in by_root.get(root, ())]
-        off_schema = {rel: keys for rel, keys in
-                      ((rel, _top_level_keys_off_schema(rel)) for rel in rels)
-                      if keys}
-        if off_schema:
-            raise _GateViolation(
-                f"conf.d root {root!r} is listed in _DEFAULTS_ROOTS_MAY_BE_EMPTY "
-                "and reads as empty, but its artifacts carry top-level keys "
-                "that `docs/schemas/platform-defaults.schema.json` does not "
-                f"allow: {off_schema}. That schema is `additionalProperties: "
-                "false`, so an unknown top-level key is how a `defaults:` "
-                "section looks after it was renamed — or after its wrapper was "
-                "deleted and its keys landed at the top level. Either way the "
-                "thresholds are still in the file and nothing is reading them, "
-                "which is what this floor reports; it is not a reason to "
-                "exempt the tree from it.\n"
-                "  Repair the section. ⛔ Do not add the key to the schema to "
-                "make this go away — the schema is what the loader accepts, "
-                "and widening it to fit a typo makes the typo load-bearing.\n"
-                "  ⚠️ `check_confd_schema.py` enforces the same schema and "
-                "would also refuse these files — but only where its hooks are "
-                "scoped, and `tests/golden/fixtures/**` and `tests/e2e-bench/**` "
-                "are deliberately outside that scope. This arm is what covers "
-                "an exempt root that lives there. (#1411 / #1434)")
-
-        stranded = {rel: n for rel, n in
-                    ((rel, _defaults_shaped_blocks(rel)) for rel in rels)
-                    if n}
-        if not stranded:
-            continue
-        raise _GateViolation(
-            f"conf.d root {root!r} is listed in _DEFAULTS_ROOTS_MAY_BE_EMPTY "
-            "and reads as empty, but its artifacts still hold "
-            f"defaults-SHAPED blocks: {stranded} (a non-empty mapping, "
-            "appearing as a value, all of whose values are numbers — the "
-            "shape `Defaults map[string]float64` actually has). 'This tree "
-            "legitimately declares no thresholds' is not true of a tree that "
-            "still has such a block in it: the keys have stopped being READ, "
-            "which is the failure this floor exists to report, not a reason "
-            "to exempt the tree from it.\n"
-            "  MOST LIKELY: a `defaults:` section here was renamed or "
-            "re-nested, the floor above said so, and this list looked like "
-            "the way to make it stop. It is not; repair the section.\n"
-            "  OR: that block genuinely is not thresholds — some other schema "
-            "whose values happen to be all numbers. Then MOVE IT OUT of the "
-            "`_defaults*` file: those files ARE the platform-defaults layer, "
-            "so configuration that is not platform defaults is misfiled in "
-            "one, and relocating it is a real fix rather than a way around "
-            "this arm. ⛔ Deleting this arm is not, because the same shape is "
-            "how the blind spot comes back.\n"
-            "  ⚠️ It does NOT flag: a recipe entry with string fields, a "
-            "tenant stub, `defaults: {}`, booleans, or numeric strings — all "
-            "measured, all silent. If you are seeing this for something that "
-            "looks like one of those, that IS worth an issue. (#1411 / #1434)")
-
-
-_PLATFORM_DEFAULTS_SCHEMA = (
-    PROJECT_ROOT / "docs" / "schemas" / "platform-defaults.schema.json")
-
-
-def _top_level_keys_off_schema(rel: str) -> list[str]:
-    """Top-level keys of one artifact that the platform-defaults schema forbids.
-
-    ⛔ The allowed set is READ OUT OF THE SCHEMA, never listed here. That file
-    is `additionalProperties: false` and its authority comes from the loader
-    (`ThresholdConfig`), so a key outside it is a key the platform will not
-    read — which is exactly the state a renamed or unwrapped `defaults:`
-    section leaves behind. Enumerating the set in this module would give the
-    repo a second, drifting copy of a contract it already has one of.
-
-    A file the scan cannot read counts as no violation: unreadable YAML is a
-    different failure with its own reporting, and blaming the exemption list
-    for it would be the "message about something else" shape this file keeps
-    having to correct.
-    """
-    import json  # local imports: the module's convention for the file faces
-    import re
-
-    import yaml
-
-    try:
-        schema = json.loads(
-            _PLATFORM_DEFAULTS_SCHEMA.read_text(encoding="utf-8"))
-        doc = yaml.safe_load((PROJECT_ROOT / rel).read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001 — see the docstring
-        return []
-    if not isinstance(doc, dict):
-        return []
-
-    allowed = set(schema.get("properties") or ())
-    patterns = [re.compile(p) for p in (schema.get("patternProperties") or ())]
-    return sorted(
-        key for key in doc
-        if key not in allowed and not any(p.search(key) for p in patterns))
-
-
-def _defaults_shaped_blocks(rel: str) -> int:
-    """How many `defaults:`-SHAPED blocks one artifact's document still holds.
-
-    The falsifier for a `_DEFAULTS_ROOTS_MAY_BE_EMPTY` entry: it answers "does
-    this tree still hold threshold declarations that stopped being read",
-    which "is there a `defaults:` section" cannot — a renamed section and an
-    absent one look identical from there. Renaming moves the block; it does
-    not delete it.
-
-    ⛔ A BLOCK, NOT A LEAF, and the first version counted leaves — every bare
-    number or null anywhere in the document. Blind review measured what that
-    cost on the ONE root this arm actually guards, whose files are Custom
-    Alerts recipe examples: `min_events` (the recipe schema's only integer
-    field, which the docs tell you to declare at domain level, i.e. in exactly
-    these files) turned the gate red, and so did writing `defaults:` with no
-    value — the explicit spelling of the very claim the exemption list makes.
-    Both are correct edits; neither has anything to do with a renamed block.
-
-    So the shape is the one `Defaults map[string]float64` actually has: a
-    NON-EMPTY MAPPING, APPEARING AS A VALUE, ALL of whose values are numbers.
-    A recipe entry has string fields, a tenant stub has null, `defaults: {}`
-    is empty, `on:`/`no:` are booleans — none of them are that shape.
-
-    ⛔ WHOLE DOCUMENT, not the `defaults:` subtree, and lists are walked: the
-    point is to find the block wherever it moved to. A file the scan cannot
-    read at all counts as zero — that is a different failure with its own
-    reporting, and raising here would blame the exemption list for it.
-
-    ⚠️ WHAT THIS ONE MISSES, and why that is survivable now: a block with any
-    non-number among its values (a string sibling, a null) is not this shape,
-    and the wrapper being deleted outright puts the keys at the document root,
-    which is skipped. All three were measured as live bypasses while this was
-    the ONLY witness. They are covered by `_top_level_keys_off_schema`, which
-    fires on exactly those: an unknown top-level key, whatever its values are.
-    ⛔ Do not "fix" that by widening this predicate — three attempts at
-    widening or narrowing it each traded one blind spot for another, which is
-    why the arm now asks two independent questions instead of one clever one.
-
-    ⚠️ AND THE ONE GAP BOTH WITNESSES SHARE, measured rather than reasoned:
-    a rename to a key the schema DOES allow is caught here as long as the
-    VALUE is still a mapping (`state_filters:` / `profiles:` / `tenants:`
-    with numeric children — all three measured as seen). What neither sees is
-    a rename to an allowed key whose value has collapsed to a SCALAR
-    (`_state_cpu: 80`, `_routing_x: 80`, `max_metrics_per_tenant: 80`).
-    ⚠️ That shape does not preserve the declarations it is supposed to be
-    hiding — a block of N thresholds cannot become one scalar and still be N
-    thresholds — so it is not the failure this arm is for. Recorded because
-    "neither witness sees it" is worth knowing even when the thing they miss
-    is not the threat.
-    """
-    import yaml  # local import: the module's convention for the YAML faces
-
-    path = PROJECT_ROOT / rel
-    try:
-        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001 — the reader above names it properly
-        return 0
-
-    def is_number(value: object) -> bool:
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-    def walk(node: object, *, is_root: bool) -> int:
-        found = 0
-        if isinstance(node, dict):
-            if not is_root and node and all(is_number(v) for v in node.values()):
-                found += 1
-            for value in node.values():
-                found += walk(value, is_root=False)
-        elif isinstance(node, list):
-            for value in node:
-                found += walk(value, is_root=False)
-        return found
-
-    return walk(doc, is_root=True)
-
-
+    # ⛔ THE COMMON ROOT IS NOT THAT THE PREDICATES WERE BAD. The question is
+    # "was this entry added to hide something", and the only evidence available
+    # at check time is the state AFTER it was hidden — at the moment somebody
+    # reaches for this list, the tree really is empty. No predicate over
+    # today's content can separate that from the legitimate case; ESLint says
+    # the same thing about its own bulk suppressions, and a survey of 20+
+    # ecosystems (PHPStan, Psalm, RuboCop, mypy, pyright, semgrep, SonarQube,
+    # Gatekeeper, Kyverno …) found none that tries. What they do instead is
+    # move to a measurable face: per-violation fingerprints that fail in BOTH
+    # directions, or a regenerated snapshot reviewed as source.
+    #
+    # So the gap is recorded rather than half-closed. Measured before any of
+    # this: rename a `defaults:` section away and add one line here, and eight
+    # of the twelve roots went to rc=0 (one of them the entry that is
+    # legitimately on the list, so seven were newly silenceable).
+    # ⚠️ It needs somebody to break a root first and then deliberately add the
+    # line; the three shipped roots cannot be silenced this way at all, because
+    # `_assert_shipped_roots_intact` runs before this function.
 def _assert_keys_floor(generators: dict[str, dict[str, KeyInfo]],
                        artifacts: dict[str, dict[str, KeyInfo]]) -> None:
     """The only non-vacuity signal that moves when a reader silently stops reading.
