@@ -78,6 +78,35 @@ jobs:
           cache: false
 
       # ── ADR-032 paired measurement (segment 1: measure only) ────────────────
+      #
+      # ⚠️ ACCEPTED SECURITY FINDING — CodeQL "Cache Poisoning via execution of
+      # untrusted code" (alert 390), dismissed in the GitHub UI. Recorded here
+      # because a dismissal that lives only in a dropdown is invisible to
+      # whoever next reads this file.
+      #
+      # WHAT IS REAL. This job compiles and runs a SECOND revision of this repo
+      # (the pinned reference) while running on the default branch, i.e.
+      # privileged. Both sides share one filesystem, and this job uploads the
+      # artifact that `release-attach-bench-baseline.yaml` turns into a public
+      # GitHub Release asset. So a malicious reference revision could tamper
+      # with the main side's output before it is uploaded. That path exists
+      # independently of how CodeQL models it.
+      #
+      # WHAT WAS MITIGATED. The reference is pinned to an immutable commit SHA
+      # (a tag can be re-pointed; see .github/bench-reference.yaml), and this
+      # job neither reads nor writes the shared Go module cache (below).
+      #
+      # WHY ACCEPTED. What remains requires a PAST RELEASE OF OUR OWN CODE to
+      # be malicious — the same trust assumption under which that release was
+      # shipped to customers. Removing it would mean not executing the
+      # reference on the same machine, which is the one property ADR-032
+      # depends on: the machine term only cancels if both sides ran on it.
+      #
+      # ⛔ RE-EXAMINE IF any of these change:
+      #   - the reference ever points outside this repository
+      #   - this job gains write permissions beyond `contents: read`
+      #   - the uploaded artifact gains a consumer with a wider blast radius
+      #     than the current release-asset attachment
       # The reference version is PINNED in a committed file, never "latest tag".
       # Auto-following the newest tag would move the reference the instant
       # anyone cuts a release — an absorption event nobody reviewed, which is
