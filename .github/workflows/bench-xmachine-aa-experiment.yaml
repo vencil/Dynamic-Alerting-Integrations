@@ -1,0 +1,411 @@
+# bench-xmachine-aa-experiment.yaml — cross-machine A/A measurement for ADR-032.
+#
+# WHY THIS EXISTS (and why the sibling workflow could not answer it)
+# =================================================================
+# bench-aa-noise-experiment.yaml runs both sides on ONE runner. That design
+# answers "once the machine is held fixed, how much noise is left?" — measured,
+# 1.61% residual rSD on a real runner. But it CANNOT answer the question
+# ADR-032 actually rests on, and not by oversight: with both sides on the same
+# machine, the machine-identity term is identically ZERO by construction. The
+# thing the ADR proposes to eliminate is invisible to the instrument built to
+# test it.
+#
+# The 10.82% cross-CPU-class figure quoted in ADR-032 comes from the nightly
+# series — observational data, where machine identity is confounded with 30
+# nights of real code change. This workflow measures the same term
+# experimentally, with the code held exactly constant.
+#
+# HOW
+# ===
+# N independent jobs, each landing on its own runner VM. Every job compiles the
+# SAME source and runs an interleaved A/A locally. Because every side of every
+# job runs identical code, the true ratio between ANY two measurements anywhere
+# in the matrix is exactly 1.000. So the same data supports both estimators:
+#
+#   PAIRED (what ADR-032 proposes)
+#     B_j / A_j     — both sides from job j, same machine. Machine term cancels.
+#
+#   CROSS-MACHINE (what the nightly does today)
+#     B_j / A_k     — j != k, i.e. tonight's build on machine j against a
+#                     reference measured earlier on machine k. Machine term
+#                     is fully exposed.
+#
+# Every deviation from 1.000 in either estimator is error. The gap between them
+# IS the machine-identity term, measured rather than inferred.
+#
+# The binary is NOT shipped between jobs. Each job builds its own and reports
+# the SHA-256, so the analysis can VERIFY the code was identical everywhere
+# instead of assuming an artifact handoff preserved it. If the digests diverge,
+# that is itself a finding and the run should not be interpreted as an A/A.
+#
+# ⚠️ KNOWN SAMPLING LIMIT — read before quoting any cross-class number.
+# All shards are dispatched at once, so they are drawn from the runner pool at
+# one moment. The nightly samples that pool over 30 days. A single dispatch can
+# therefore under-represent CPU diversity, and may return a single CPU model —
+# in which case this measures the WITHIN-class between-machine term, which is a
+# lower bound on the nightly's exposure, not the cross-class figure. The
+# collected metadata records each shard's CPU model so the analysis reports the
+# observed distribution rather than assuming one. Pool across several dispatches
+# on different days if the diversity in one run is insufficient.
+#
+# REMOVAL CONDITION
+# =================
+# Same as its sibling: delete once ADR-032 reaches `accepted` or `rejected`.
+# Neither file has any other consumer.
+
+name: Bench Cross-Machine A/A (ADR-032)
+
+on:
+  workflow_dispatch:
+    inputs:
+      shards:
+        description: "Parallel measurement jobs — each lands on its own runner VM (2..20)"
+        required: false
+        default: "16"
+      rounds:
+        description: "Interleaved rounds per shard (each round runs both sides; the order alternates A,B / B,A)"
+        required: false
+        default: "6"
+      count:
+        description: "-test.count per invocation (samples the round's median is taken over)"
+        required: false
+        default: "5"
+      benchtime:
+        description: "-test.benchtime"
+        required: false
+        default: "1s"
+
+permissions:
+  contents: read
+
+jobs:
+  # Validate once, centrally. A bad input must not fan out into N jobs that each
+  # discover the same problem after burning a runner apiece.
+  plan:
+    name: Validate inputs and plan shards
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      bench_re: ${{ steps.plan.outputs.bench_re }}
+    steps:
+      - name: Validate and emit shard list
+        id: plan
+        env:
+          SHARDS: ${{ inputs.shards }}
+          ROUNDS: ${{ inputs.rounds }}
+          COUNT: ${{ inputs.count }}
+          BENCHTIME: ${{ inputs.benchtime }}
+        run: |
+          set -euo pipefail
+          # Checked one by one rather than looped through `eval "val=\${$v}"`.
+          # That loop is shorter, and it also hands a workflow input straight to
+          # the shell parser — `shards` is only settable by someone who can
+          # dispatch, but "only privileged users can exploit it" is not a reason
+          # to write an injection sink into a file that gets copied.
+          case "$SHARDS" in ''|*[!0-9]*)
+            echo "::error::shards must be a positive integer (got '$SHARDS')"; exit 2 ;;
+          esac
+          case "$ROUNDS" in ''|*[!0-9]*)
+            echo "::error::rounds must be a positive integer (got '$ROUNDS')"; exit 2 ;;
+          esac
+          case "$COUNT" in ''|*[!0-9]*)
+            echo "::error::count must be a positive integer (got '$COUNT')"; exit 2 ;;
+          esac
+          # Format AND magnitude, same reasoning as the sibling workflow: a
+          # character-class check passes `999999s`, which then eats the whole
+          # timeout. Split number from unit and cap each unit separately.
+          #
+          # `x` is NOT accepted here, unlike the sibling workflow. It bounds
+          # ITERATIONS, not wall time, so it cannot participate in the combined
+          # budget below: the selected benchmarks span 116us/op to 255ms/op, so
+          # `1000000x` is anything from two minutes to seventy hours depending
+          # on which bench it lands on. A unit that cannot be converted to
+          # seconds has no place in a harness whose whole point is a bounded
+          # runtime.
+          BT_NUM="${BENCHTIME%%[!0-9]*}"
+          BT_UNIT="${BENCHTIME#"$BT_NUM"}"
+          bt_bad=""
+          bt_ms=0
+          case "$BT_NUM" in ''|*[!0-9]*) bt_bad="needs a leading number" ;; esac
+          if [ -z "$bt_bad" ]; then
+            case "$BT_UNIT" in
+              s)  if [ "$BT_NUM" -ge 1 ] && [ "$BT_NUM" -le 60 ]; then
+                    bt_ms=$((BT_NUM * 1000)); else bt_bad="s must be 1..60"; fi ;;
+              ms) if [ "$BT_NUM" -ge 1 ] && [ "$BT_NUM" -le 60000 ]; then
+                    bt_ms="$BT_NUM"; else bt_bad="ms must be 1..60000"; fi ;;
+              *)  bt_bad="unit must be s or ms (x bounds iterations, not wall time)" ;;
+            esac
+          fi
+          if [ -n "$bt_bad" ]; then
+            echo "::error::benchtime '$BENCHTIME' rejected — $bt_bad (expected e.g. 1s / 250ms)"
+            exit 2
+          fi
+          # shards: 2 is the minimum that yields any cross-machine pair at all;
+          # 20 is the standard-runner concurrency ceiling, past which shards
+          # queue instead of running concurrently and stop sampling the pool at
+          # one moment — which is the whole point of fanning out.
+          if [ "$SHARDS" -lt 2 ] || [ "$SHARDS" -gt 20 ]; then
+            echo "::error::shards must be 2..20 (got $SHARDS)"
+            exit 2
+          fi
+          if [ "$ROUNDS" -lt 2 ] || [ "$ROUNDS" -gt 20 ]; then
+            echo "::error::rounds must be 2..20 (got $ROUNDS)"
+            exit 2
+          fi
+          if [ "$COUNT" -lt 1 ] || [ "$COUNT" -gt 20 ]; then
+            echo "::error::count must be 1..20 (got $COUNT)"
+            exit 2
+          fi
+
+          # The benchmark set lives HERE, not in the measure job, for one
+          # reason: this job has to know how many benchmarks there are to
+          # compute the runtime budget below, and a second copy of the list
+          # would be a number that silently goes stale.
+          BENCH_RE='^(BenchmarkResolveSilentModes_1000|BenchmarkScanDirFileHashes_1000|BenchmarkIncrementalLoad_1000_NoChange|BenchmarkFullDirLoad_1000)$'
+          NBENCH=$(printf '%s' "$BENCH_RE" | tr '|' '\n' | grep -c 'Benchmark')
+
+          # COMBINED budget. Each bound above is individually sane and their
+          # PRODUCT is not: rounds=20 count=20 benchtime=60s passes every check
+          # so far and asks for 4 x 20 x 60s = 80 min PER SIDE, 53 hours per
+          # shard, against a 30-minute job timeout. Per-parameter limits are not
+          # a runtime limit — same shape as "format is not magnitude" one block
+          # up, one level further out.
+          #
+          # -test.benchtime applies per benchmark per -test.count iteration, so
+          # one invocation targets NBENCH * COUNT * benchtime, and a shard runs
+          # 2 * ROUNDS invocations. OVERHEAD_PCT covers process start, fixture
+          # setup and the ramp-up iterations Go runs before the timed window:
+          # measured 28s actual against 20s theoretical on a real runner
+          # (4 benches, count=5, benchtime=1s), i.e. ~1.4x — 1.5x here.
+          BUDGET_S=1200   # 20 min of the measure job's 30, leaving setup+upload
+          est_ms=$(( NBENCH * COUNT * bt_ms * 2 * ROUNDS * 3 / 2 ))
+          est_s=$(( est_ms / 1000 ))
+          if [ "$est_s" -gt "$BUDGET_S" ]; then
+            echo "::error::estimated ${est_s}s of measurement per shard (${NBENCH} benches x count=${COUNT} x ${bt_ms}ms x 2 sides x ${ROUNDS} rounds x 1.5 overhead) exceeds the ${BUDGET_S}s budget — the measure job would hit its 30-minute timeout and produce nothing. Lower rounds, count or benchtime."
+            exit 2
+          fi
+
+          list="$(printf '[%s]' "$(seq -s, 1 "$SHARDS")")"
+          {
+            echo "shards=$list"
+            echo "bench_re=$BENCH_RE"
+          } >> "$GITHUB_OUTPUT"
+          echo "planning $SHARDS shard(s): $list"
+          echo "rounds=$ROUNDS count=$COUNT benchtime=$BENCHTIME (${bt_ms}ms)"
+          echo "benches=$NBENCH  estimated ${est_s}s per shard (budget ${BUDGET_S}s)"
+
+  measure:
+    name: A/A on runner ${{ matrix.shard }}
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      # One shard failing must not cancel the rest — a 15-of-16 result is still
+      # analysable, and cancelling would discard machines already measured.
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      # Each shard builds its own binary and reports the digest. See the header:
+      # this is deliberately NOT an artifact handoff, so the analysis can verify
+      # rather than assume that every machine ran identical code.
+      - name: Build test binary and record its digest
+        working-directory: components/threshold-exporter/app
+        env:
+          # Through env, not `${{ }}` inside the script. The value is our own
+          # integer from `plan` so it is not dangerous today, but expression
+          # interpolation into a run block is the same sink as the eval above
+          # and there is no reason to leave one in place.
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/aa"
+          go test -c -o "${RUNNER_TEMP}/aa.test" .
+          {
+            echo "shard=${SHARD}"
+            echo "runner_os=${RUNNER_OS}"
+            echo "nproc=$(nproc)"
+            grep -m1 'model name' /proc/cpuinfo || true
+            echo "go_version=$(go version)"
+            echo "binary_sha256=$(sha256sum < "${RUNNER_TEMP}/aa.test" | cut -d' ' -f1)"
+          } > "${RUNNER_TEMP}/aa/meta.txt"
+          cat "${RUNNER_TEMP}/aa/meta.txt"
+
+      - name: Run interleaved A/A
+        working-directory: components/threshold-exporter/app
+        env:
+          ROUNDS: ${{ inputs.rounds }}
+          COUNT: ${{ inputs.count }}
+          BENCHTIME: ${{ inputs.benchtime }}
+          SHARD: ${{ matrix.shard }}
+          # From plan, which owns the list because it needs the bench COUNT to
+          # size the runtime budget. One definition, no drift.
+          RE: ${{ needs.plan.outputs.bench_re }}
+        run: |
+          set -euo pipefail
+          OUT="${RUNNER_TEMP}/aa/raw"
+          mkdir -p "$OUT"
+          echo "start $(date -u +%FT%TZ) shard=$SHARD rounds=$ROUNDS count=$COUNT benchtime=$BENCHTIME" \
+            > "${RUNNER_TEMP}/aa/timeline.txt"
+          # Alternate which side goes first. `bench_interleave.sh` argues a
+          # fixed alternating loop already gives both sides symmetric warm
+          # caches, and for CACHES that is right — but it says nothing about
+          # effects on a shorter timescale, e.g. turbo budget spent by the first
+          # invocation of a round leaving the second at a lower clock.
+          #
+          # Measured on the 12-round fixed-order run 31869902576: B came out
+          # 0.395% faster than A on average (48 paired observations, |t| = 1.59,
+          # sign split 23/48 — not significant, but all four benches leaned the
+          # same way). That is not negligible against PAIRED's ~0.7% error, and
+          # PAIRED is the DENOMINATOR of the amplification ratio, so an order
+          # bias deflates the very number this experiment exists to measure.
+          # Balancing it makes the test more sensitive to the machine term, not
+          # more flattering to it.
+          for r in $(seq 1 "$ROUNDS"); do
+            if [ $((r % 2)) -eq 1 ]; then sides="A B"; else sides="B A"; fi
+            for side in $sides; do
+              t0=$SECONDS
+              "${RUNNER_TEMP}/aa.test" -test.bench="$RE" -test.benchtime="$BENCHTIME" \
+                -test.run='^$' -test.count="$COUNT" > "$OUT/s${SHARD}_r${r}_${side}.txt" 2>&1
+              echo "round=$r side=$side order=$sides wall=$((SECONDS-t0))s at=$(date -u +%FT%TZ)" \
+                >> "${RUNNER_TEMP}/aa/timeline.txt"
+            done
+          done
+          echo "done $(date -u +%FT%TZ)" >> "${RUNNER_TEMP}/aa/timeline.txt"
+          cp "${RUNNER_TEMP}/aa/meta.txt" "$OUT/s${SHARD}_meta.txt"
+          tail -3 "${RUNNER_TEMP}/aa/timeline.txt"
+
+      # v4 upload paired with v4 download in the collect job. The sibling
+      # workflow uses upload@v7, but that artifact is only ever fetched by a
+      # human; this one is consumed in-run by download-artifact, and v4/v4 is
+      # the pairing already proven in nightly-image-scan.yaml.
+      - name: Upload shard measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xaa-${{ github.run_id }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/aa/raw
+          retention-days: 30
+          if-no-files-found: error
+
+  collect:
+    name: Consolidate raw measurements into one job log
+    needs: measure
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download every shard
+        uses: actions/download-artifact@v4
+        with:
+          pattern: xaa-${{ github.run_id }}-*
+          path: ${{ runner.temp }}/all
+          merge-multiple: true
+
+      # One consolidated emission instead of N per-shard logs: the analysis side
+      # then makes ONE log fetch rather than N, and the shard id already lives
+      # in each filename so nothing is lost by merging.
+      #
+      # Format and recovery are identical to bench-aa-noise-experiment.yaml —
+      # one base64 line per file, prefixed with the SHA-256 of the original
+      # bytes. See that file's header for why plain BEGIN/END framing is wrong
+      # here, and why the recovery below anchors on the record SHAPE rather than
+      # on field 1 (a log fetched through the GitHub API prefixes every line
+      # with a timestamp, and ##[group] echoes this step's own source as a
+      # decoy record).
+      #
+      # Recover + verify:
+      #   grep -oE 'RAW [A-Za-z0-9_.-]+ [0-9a-f]{64} [A-Za-z0-9+/]+={0,2}' \
+      #     job.log > records.txt
+      #   awk '{ print $4 | ("base64 -d > " $2 ".txt") }' records.txt
+      #   awk '{ print $3"  "$2".txt" }' records.txt | sha256sum -c -
+      - name: Emit raw measurements to the job log
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=("${RUNNER_TEMP}"/all/*.txt)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::no shard measurements were collected"
+            exit 2
+          fi
+          rec="${RUNNER_TEMP}/xaa-records.txt"
+          : > "$rec"
+          for f in "${files[@]}"; do
+            printf 'RAW %s %s %s\n' \
+              "$(basename "$f" .txt)" \
+              "$(sha256sum < "$f" | cut -d' ' -f1)" \
+              "$(base64 -w0 < "$f")" >> "$rec"
+          done
+          # Measure the ENCODED bytes, not the raw ones — base64 plus the name,
+          # a 64-char digest and a newline inflate the payload about 1.38x
+          # (measured), so a raw-byte ceiling silently permits far more than it
+          # claims. Self-imposed limit: GitHub publishes no numeric job-log size
+          # bound, and exceeding the real one would truncate exactly the data
+          # this step exists to rescue.
+          emitted=$(wc -c < "$rec")
+          if [ "$emitted" -gt 2000000 ]; then
+            echo "::error::encoded measurements are ${emitted} bytes, over the 2 MB self-imposed log budget — lower shards/rounds/count, or take the data from the artifacts instead"
+            exit 2
+          fi
+          echo "emitting ${#files[@]} file(s), ${emitted} encoded bytes"
+          cat "$rec"
+
+      - name: Summarize shards and CPU distribution
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          metas=("${RUNNER_TEMP}"/all/*_meta.txt)
+          # Every shard can fail (fail-fast: false means the matrix still
+          # completes). Expanding an empty array under `set -u` would abort with
+          # a shell error that says nothing about what actually went wrong.
+          if [ "${#metas[@]}" -eq 0 ]; then
+            echo "::error::no shard metadata collected — every measure job failed"
+            exit 2
+          fi
+          ndigest=$(sed -n 's/^binary_sha256=//p' "${metas[@]}" | sort -u | wc -l)
+          {
+            echo "### Cross-machine A/A (ADR-032)"
+            echo
+            echo "| shard | nproc | CPU | binary sha256 (first 12) |"
+            echo "|---|---|---|---|"
+            for m in "${metas[@]}"; do
+              s=$(sed -n 's/^shard=//p' "$m")
+              n=$(sed -n 's/^nproc=//p' "$m")
+              c=$(sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' "$m")
+              d=$(sed -n 's/^binary_sha256=//p' "$m" | cut -c1-12)
+              echo "| $s | $n | ${c:-?} | ${d:-?} |"
+            done
+            echo
+            echo "distinct CPU models: $(sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' "${metas[@]}" | sort -u | wc -l)"
+            echo "distinct binary digests: ${ndigest} (must be 1 for this to be an A/A)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Fail the run, do not merely report. If the shards did not execute
+          # identical binaries then a deviation from 1.000 is no longer
+          # necessarily measurement error, and every number this experiment
+          # produces is void — but a green check plus a line buried in the job
+          # summary reads exactly like a valid result. The off-CI analyser
+          # refuses these too; that refusal must not be the ONLY guard, because
+          # it lives outside this repo and nothing forces a reader to use it.
+          #
+          # Deliberately placed AFTER the emit step: the raw measurements are
+          # already in the log by now, so failing here costs no data and still
+          # leaves the run diagnosable.
+          if [ "$ndigest" -ne 1 ]; then
+            echo "::error::shards ran ${ndigest} distinct test binaries — this is not an A/A and its numbers must not be interpreted as measurement error"
+            sed -n 's/^binary_sha256=//p' "${metas[@]}" | sort | uniq -c | sort -rn
+            exit 2
+          fi
