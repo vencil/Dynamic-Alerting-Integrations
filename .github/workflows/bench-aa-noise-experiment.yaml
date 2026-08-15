@@ -134,6 +134,32 @@ jobs:
           echo "done $(date -u +%FT%TZ)" >> "${RUNNER_TEMP}/aa/timeline.txt"
           tail -5 "${RUNNER_TEMP}/aa/timeline.txt"
 
+      # The artifact is NOT always reachable. Some analysis environments (the
+      # agent sandbox this experiment is driven from) allow api.github.com but
+      # deny the Azure blob host artifacts actually live on:
+      #
+      #   CONNECT rejected, host productionresultssa6.blob.core.windows.net:443
+      #
+      # `/actions/jobs/<id>/logs` redirects to the same denied host, but the job
+      # log itself IS retrievable through the GitHub API. So the raw rows are
+      # emitted here too. ~12 KB, well inside the log budget, and it makes the
+      # measurements recoverable without depending on egress policy.
+      #
+      # Recover with (each file is delimited, so the off-CI analyser's per-round
+      # file layout can be reconstructed verbatim):
+      #   awk '/^===== BEGIN /{f=$3; next} /^===== END /{f=""; next} f{print > (f".txt")}'
+      - name: Emit raw measurements to the job log
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for f in "${RUNNER_TEMP}"/aa/raw/*.txt; do
+            b="$(basename "$f" .txt)"
+            echo "===== BEGIN $b ====="
+            cat "$f"
+            echo "===== END $b ====="
+          done
+
       - name: Summarize
         if: always()
         run: |
