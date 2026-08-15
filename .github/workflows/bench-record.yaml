@@ -54,13 +54,24 @@ jobs:
         with:
           persist-credentials: false
 
+      # ⛔ cache: false + cache/restore below — this job WRITES NO CACHE.
+      # Since ADR-032 it compiles and runs a second, older revision of this
+      # repo (the pinned reference). That job runs on the default branch, so it
+      # is privileged: anything the reference build wrote into `~/go/pkg/mod`
+      # before a cache SAVE would be restored by every other workflow. Flagged
+      # by CodeQL as cache poisoning, and it is a fair call — the reference is
+      # our own released code, but "our own code from months ago, executed with
+      # today's privileges" is exactly the shape that rule is about.
+      # Restoring is harmless; only saving is. Other workflows still populate
+      # this key, so the nightly keeps the speed-up without owning the write.
       - name: Set up Go 1.26
         uses: actions/setup-go@v6
         with:
           go-version: "1.26"
+          cache: false
 
-      - name: Cache Go modules
-        uses: actions/cache@v5
+      - name: Restore Go modules (restore-only — see above)
+        uses: actions/cache/restore@v5
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
@@ -84,24 +95,30 @@ jobs:
         run: |
           set -uo pipefail
           tag=$(sed -n 's/^tag:[[:space:]]*//p' .github/bench-reference.yaml 2>/dev/null | head -n1)
-          # Shape-check before it reaches `git checkout`: this string comes from
-          # a file, and a file is an input.
-          if printf '%s' "$tag" | grep -qE '^exporter/v[0-9]+\.[0-9]+\.[0-9]+$'; then
+          sha=$(sed -n 's/^sha:[[:space:]]*//p' .github/bench-reference.yaml 2>/dev/null | head -n1)
+          # Shape-check before either string reaches `checkout`: they come from
+          # a file, and a file is an input. The SHA is what we actually check
+          # out — a tag is mutable, so pinning to one would let the reference
+          # point move without review, which is the whole thing this file exists
+          # to prevent. `tag` is a human-readable label only.
+          if printf '%s' "$tag" | grep -qE '^exporter/v[0-9]+\.[0-9]+\.[0-9]+$' \
+             && printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$'; then
             echo "ok=true" >> "$GITHUB_OUTPUT"
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
-            echo "reference version: $tag"
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+            echo "reference version: $tag ($sha)"
           else
             echo "ok=false" >> "$GITHUB_OUTPUT"
             echo "tag=" >> "$GITHUB_OUTPUT"
             echo "reason=unreadable-reference-pin" >> "$GITHUB_OUTPUT"
-            echo "::error::.github/bench-reference.yaml has no usable tag (got '${tag}') — paired series is INCONCLUSIVE tonight"
+            echo "::error::.github/bench-reference.yaml has no usable tag+sha pair (tag='${tag}' sha='${sha}') — paired series is INCONCLUSIVE tonight"
           fi
 
       - name: Checkout reference version
         if: steps.ref.outputs.ok == 'true'
         uses: actions/checkout@v6
         with:
-          ref: ${{ steps.ref.outputs.tag }}
+          ref: ${{ steps.ref.outputs.sha }}
           path: .ref
           persist-credentials: false
 

@@ -19,6 +19,17 @@
 #    無關的發布多做一次吸收（例如 v2.8.1 是平台 tag only，exporter 沒動）。
 #    換版次數越少，吸收事件越少。
 #
+# ⛔ 為什麼是 SHA 而不是 tag：
+#    tag 是可移動的。有人把 exporter/v2.9.0 指到別的 commit，參考點就悄悄變了
+#    ——那是一次沒有人審過的吸收事件，正是本檔案存在的目的要擋掉的東西，只是
+#    換了一條路徑進來。checkout 走 sha，tag 只是給人看的標籤。
+#    （順帶解掉 CodeQL 的 cache-poisoning 告警：夜跑 job 跑在 default branch
+#    的特權情境，執行一份由可變 ref 決定的程式碼是它點名的模式。）
+#
+# 換版時兩個欄位都要改，取得方式：
+#    git rev-parse <新 tag>^{commit}
+#
 # 相關：ADR-032 / 實作追蹤 TRK-359（#1439）
 
 tag: exporter/v2.9.0
+sha: 3fd96b51f52e61566bb12c4c3fa23fed7e34dfa0
