@@ -61,11 +61,12 @@ lang: zh
 | `ADR-030` | adr | ADR-030: 決策層遷移驗證 — 製造 Oracle 而非觀測 | rule-packs | — | [docs/adr/030-decision-layer-migration-validation.md](../adr/030-decision-layer-migration-validation.md) |
 | `ADR-031` | adr | ADR-031: slo_burn_rate recipe — 宣告式 SLO 告警編譯 | threshold-exporter | — | [docs/adr/031-slo-burn-rate-recipe.md](../adr/031-slo-burn-rate-recipe.md) |
 
-### proposed (16)
+### proposed (17)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
 | `ADR-026` | adr | ADR-026: Node/Cluster 維護告警抑制 — 不需要子系統 | k8s | — | [docs/adr/026-node-maintenance-liveness-suppression.md](../adr/026-node-maintenance-liveness-suppression.md) |
+| `ADR-032` | adr | ADR-032: 夜跑效能監測改用成對交錯量測，取代跨夜滑動錨點 | dx | — | [docs/adr/032-paired-interleaved-bench-measurement.md](../adr/032-paired-interleaved-bench-measurement.md) |
 | `TRK-001` | dx | TRK-001: `check_noqa_hygiene.py` — noqa/nosec 必要性驗證 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-002` | dx | TRK-002: `make test-impact` — 變更影響測試自動縮減 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-003` | dx | TRK-003: Pre-commit hook CI gate | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |

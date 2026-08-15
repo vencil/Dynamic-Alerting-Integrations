@@ -1,0 +1,156 @@
+# bench-aa-noise-experiment.yaml — one-off A/A measurement experiment for ADR-032.
+#
+# QUESTION IT ANSWERS
+# ===================
+# ADR-032 proposes moving the nightly perf watchdog from "tonight vs an older
+# night" to "two builds measured on the SAME runner, compare the ratio". Its
+# premise (machine identity is the dominant noise term) is measured; its
+# BENEFIT is not. Two local attempts on a 4-core shared cloud VM failed to
+# detect any benefit:
+#
+#   count=1 : paired residual rSD 7.99%, SEPARATED/PAIRED bias ratio 0.9×
+#   count=5 : paired residual rSD 7.39%, SEPARATED/PAIRED bias ratio 1.1×
+#
+# Raising count 5× barely moved the residual, which REFUTED the "single-sample
+# sampling noise" explanation. The remaining candidate is that the local VM is
+# simply too noisy to resolve the effect: its residual (~7.4%) is ~14× the
+# within-night jitter measured on real nightly artifacts (0.52%). This workflow
+# repeats the identical experiment on the machine that actually matters.
+#
+# ⚠️ It measures nothing about this repo's code. Both sides run the SAME
+# compiled binary, so the true effect is exactly 0% and every deviation is
+# measurement error. That is the point: it calibrates the instrument.
+#
+# WHY workflow_dispatch ONLY
+# ==========================
+# One-off calibration, not a gate. No schedule, no push/PR trigger, no branch
+# protection interaction, contents:read only, and it writes nothing back — the
+# raw output leaves as an artifact and is analysed off-CI.
+#
+# REMOVAL CONDITION
+# =================
+# Delete this file once ADR-032 reaches `accepted` or `rejected`. It has no
+# other consumer. If it is still here after that, it is dead weight.
+
+name: Bench A/A Noise Experiment (ADR-032)
+
+on:
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: "Interleaved rounds (each round runs side A then side B)"
+        required: false
+        default: "12"
+      count:
+        description: "-test.count per invocation (samples the round's median is taken over)"
+        required: false
+        default: "5"
+      benchtime:
+        description: "-test.benchtime"
+        required: false
+        default: "1s"
+
+permissions:
+  contents: read
+
+jobs:
+  aa:
+    name: A/A interleaved noise measurement
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      # Compile ONCE. bench_interleave.sh does the same and explains why: `go
+      # test -bench` recompiles on every invocation, and the Go compiler is
+      # CPU-heavy enough to inject a thermal spike immediately before each
+      # measurement — which is exactly the kind of time-correlated bias this
+      # experiment is trying to measure.
+      - name: Build test binary once
+        working-directory: components/threshold-exporter/app
+        run: |
+          set -euo pipefail
+          go test -c -o "${RUNNER_TEMP}/aa.test" .
+          ls -la "${RUNNER_TEMP}/aa.test"
+
+      - name: Record runner identity
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/aa"
+          {
+            echo "runner_os=${RUNNER_OS}"
+            echo "nproc=$(nproc)"
+            grep -m1 'model name' /proc/cpuinfo || true
+            echo "go_version=$(go version)"
+          } > "${RUNNER_TEMP}/aa/runner.txt"
+          cat "${RUNNER_TEMP}/aa/runner.txt"
+
+      # Both sides are the SAME binary — a true A/A. Rounds alternate A,B so the
+      # same raw data can afterwards be analysed under two topologies: adjacent
+      # pairing (the interleaved gate) and first-half-vs-second-half (the "all
+      # base then all pr" shape whose false REDs motivated the interleave).
+      - name: Run interleaved A/A
+        working-directory: components/threshold-exporter/app
+        env:
+          ROUNDS: ${{ inputs.rounds }}
+          COUNT: ${{ inputs.count }}
+          BENCHTIME: ${{ inputs.benchtime }}
+        run: |
+          set -euo pipefail
+          # Reject non-positive / non-numeric inputs BEFORE anything is created.
+          # `seq 1 0` is empty, so rounds=0 would skip the measurement loop
+          # entirely and still upload an artifact — a green calibration run with
+          # no measurements in it. The two-topology analysis also needs the
+          # session split into halves, so fewer than 2 rounds cannot answer the
+          # question this workflow exists for.
+          case "$ROUNDS" in ''|*[!0-9]*) echo "::error::rounds must be a positive integer (got '$ROUNDS')"; exit 2 ;; esac
+          case "$COUNT"  in ''|*[!0-9]*) echo "::error::count must be a positive integer (got '$COUNT')"; exit 2 ;; esac
+          if [ "$ROUNDS" -lt 2 ] || [ "$COUNT" -lt 1 ]; then
+            echo "::error::need rounds >= 2 (got $ROUNDS) and count >= 1 (got $COUNT)"
+            exit 2
+          fi
+          OUT="${RUNNER_TEMP}/aa/raw"
+          mkdir -p "$OUT"
+          RE='^(BenchmarkResolveSilentModes_1000|BenchmarkScanDirFileHashes_1000|BenchmarkIncrementalLoad_1000_NoChange|BenchmarkFullDirLoad_1000)$'
+          echo "start $(date -u +%FT%TZ) rounds=$ROUNDS count=$COUNT benchtime=$BENCHTIME" \
+            > "${RUNNER_TEMP}/aa/timeline.txt"
+          for r in $(seq 1 "$ROUNDS"); do
+            for side in A B; do
+              t0=$SECONDS
+              "${RUNNER_TEMP}/aa.test" -test.bench="$RE" -test.benchtime="$BENCHTIME" \
+                -test.run='^$' -test.count="$COUNT" > "$OUT/r${r}_${side}.txt" 2>&1
+              echo "round=$r side=$side wall=$((SECONDS-t0))s at=$(date -u +%FT%TZ)" \
+                >> "${RUNNER_TEMP}/aa/timeline.txt"
+            done
+          done
+          echo "done $(date -u +%FT%TZ)" >> "${RUNNER_TEMP}/aa/timeline.txt"
+          tail -5 "${RUNNER_TEMP}/aa/timeline.txt"
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "### A/A noise experiment (ADR-032)"
+            echo '```'
+            cat "${RUNNER_TEMP}/aa/runner.txt" 2>/dev/null || echo "(no runner info)"
+            echo
+            tail -20 "${RUNNER_TEMP}/aa/timeline.txt" 2>/dev/null || echo "(no timeline)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload raw measurements
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: aa-noise-${{ github.run_id }}
+          path: ${{ runner.temp }}/aa
+          retention-days: 30
+          if-no-files-found: error
