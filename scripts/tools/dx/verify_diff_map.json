@@ -717,7 +717,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "6753db82fe8b2c9c3d5c806a669d8fb707198924f238b7d7a21637bccf8c5785",
+ "source_digest": "e4c45f069ce1aca3ebaabdf268525c63bcdb68e8376619b4c9e3d02e6eef7463",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1065,6 +1065,7 @@
    "tests/lint/test_check_workflow_git_push_permissions.py",
    "tests/ops/test_ci_aggregate_gate_contract.py",
    "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_nightly_race_issue_policy.py",
    "tests/shared/test_actionlint_pin_parity.py"
   ],
@@ -1393,6 +1394,9 @@
   ],
   "docs/index.md": [
    "tests/ops/test_ci_path_filter_coverage.py"
+  ],
+  "docs/integration": [
+   "tests/dx/test_bump_docs.py"
   ],
   "docs/integration/gitops-deployment.md": [
    "tests/ops/test_config_diff.py",
@@ -2665,6 +2669,7 @@
    "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "tools/portal/src": [
+   "tests/dx/test_bump_docs.py",
    "tests/dx/test_scan_component_health.py",
    "tests/lint/test_check_design_token_usage.py",
    "tests/lint/test_check_jsx_i18n.py",

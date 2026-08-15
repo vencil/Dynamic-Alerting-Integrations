@@ -135,14 +135,25 @@ WHAT THIS GUARD DOES **NOT** BUY
   without a report. What that stub cannot check is the half in front of it:
   whether the MOUNTS are right, and whether the real image actually exits the
   way this contract assumes. Those need a daemon and a published image.
-* **It does not check that the GitLab artifact is anywhere GitLab will load
-  it.** The pipeline is written to ``.gitlab-ci.d/dynamic-alerting.yml``, but
-  GitLab only auto-loads a root ``.gitlab-ci.yml`` — we neither generate one
-  nor tell the customer to ``include:`` ours, so on their instance the whole
-  file is inert. Both validators here are handed the path directly and are
-  perfectly happy: "valid pipeline" and "pipeline that runs" are different
-  claims, and only the first is asserted. Issue #1357 — ⛔ deliberately NOT
-  fixed in this PR.
+* **Reachability is now asserted, on both legs (#1357, fixed).** It used not to
+  be: the pipeline was written to ``.gitlab-ci.d/dynamic-alerting.yml``, GitLab
+  auto-loads a root ``.gitlab-ci.yml`` only, and nothing generated one or told
+  the customer to ``include:`` ours — so on their instance the whole file was
+  inert while both validators, handed the path directly, were perfectly happy.
+  "Valid pipeline" and "pipeline that runs" are different claims and only the
+  first was asserted. ``da-tools init`` now also emits a root ``.gitlab-ci.yml``
+  whose entire body is ``include: [local: .gitlab-ci.d/dynamic-alerting.yml]``,
+  and ``test_generated_ci_config_is_reachable_or_ships_wiring`` holds the
+  general property — every generated CI artifact is either at a location its
+  platform auto-loads, or is wired in from one, or carries the wiring
+  instructions itself — with a control case proving the classifier can say no.
+  ⛔ What is still NOT checked: that GitLab resolves that ``local:`` include the
+  way the docs say. That needs a real instance, same boundary as the
+  ``exists:`` note below.
+  ⚠️ **Consequence worth reading before touching the GitLab leg:** it is now
+  REACHABLE, so the defects listed on
+  ``test_generate_stage_body_is_pinned_on_both_legs`` stopped being theoretical.
+  See the note there.
 * **It executes the shell of TWO steps, and reads the rest.** actionlint
   parses ``run:`` blocks (and could shell-check them, but that integration is
   pinned off — see the ``-shellcheck=`` note). The generate job's "Resolve base
@@ -169,9 +180,12 @@ WHAT THIS GUARD DOES **NOT** BUY
   extracted, which is what made #2 visible at all.
 
   Both are fixed on the GitHub leg (#1358). ⛔ The GitLab leg still carries
-  the equivalent defect and is deliberately NOT fixed — see the deferral and
-  its premise tripwire on ``test_generate_stage_body_is_pinned_on_both_legs``
-  and ``test_gitlab_deferral_premise_still_holds``. ⛔ So does the portal
+  the equivalent defect and is deliberately NOT fixed here — but it is no
+  longer unreachable, so this is now a live defect rather than a dormant one.
+  See ``test_generate_stage_body_is_pinned_on_both_legs``, whose deferral
+  paragraph records exactly what changed, and
+  ``test_gitlab_root_shell_wires_the_pipeline``, which pins the wiring that
+  made it live. ⛔ So does the portal
   wizard's preview generator, and worse (it passes ``--old-dir`` a path it
   never mounts); that divergence is #1351, and this change widens it.
 
@@ -431,6 +445,12 @@ GL_COMBOS = [c for c in MATRIX if c[0] in _EMITS_GITLAB]
 
 _GH_WORKFLOW = Path(".github") / "workflows" / "dynamic-alerting.yaml"
 _GL_PIPELINE = Path(".gitlab-ci.d") / "dynamic-alerting.yml"
+# #1357 — the root shell. Written ONLY when the target repo has no root
+# `.gitlab-ci.yml`; every fixture here initialises into an empty directory, so
+# in this file it is unconditional for the gitlab-emitting combinations. The
+# brownfield case has its own phase in
+# `test_gitlab_root_shell_wires_the_pipeline`.
+_GL_ROOT_SHELL = Path(".gitlab-ci.yml")
 
 
 def test_matrix_matches_the_independent_hand_written_floor() -> None:
@@ -527,11 +547,25 @@ def test_generated_github_workflow_passes_actionlint(generated, ci, deploy) -> N
 
 @_needs_check_jsonschema
 @pytest.mark.parametrize("ci,deploy", GL_COMBOS)
-def test_generated_gitlab_pipeline_passes_schema(generated, ci, deploy) -> None:
+@pytest.mark.parametrize(
+    "artifact", [_GL_PIPELINE, _GL_ROOT_SHELL], ids=["pipeline", "root-shell"],
+)
+def test_generated_gitlab_pipeline_passes_schema(
+    generated, ci, deploy, artifact,
+) -> None:
     """``--regex-variant nonunicode`` matches GitLab's own RE2 flavour; the
     ``gitlab-ci`` data transform resolves the ``!reference`` tags the vendored
-    schema expects."""
-    path = generated[(ci, deploy)] / _GL_PIPELINE
+    schema expects.
+
+    ⛔ BOTH emitted files, not just the big one (#1357). The root shell is the
+    document GitLab actually parses; the pipeline it includes is reached only
+    if that parse succeeds, so validating the included file alone grades the
+    half that runs second. It is four lines and three of them are comments,
+    which is exactly the kind of file whose validation gets skipped as
+    obviously fine — `include:` alone is a legal pipeline per the schema, and
+    that is a fact worth having asserted rather than assumed.
+    """
+    path = generated[(ci, deploy)] / artifact
     proc = _run([
         _CHECK_JSONSCHEMA,
         "--builtin-schema", "vendor.gitlab-ci",
@@ -540,7 +574,7 @@ def test_generated_gitlab_pipeline_passes_schema(generated, ci, deploy) -> None:
         str(path),
     ])
     assert proc.returncode == 0, (
-        f"check-jsonschema rejected the pipeline generated by "
+        f"check-jsonschema rejected {artifact.as_posix()} generated by "
         f"`da-tools init --ci {ci} --deploy {deploy}`:\n"
         f"{proc.stdout}\n{proc.stderr}"
     )
@@ -2464,9 +2498,25 @@ def test_ci_selection_controls_which_artifacts_exist(generated, ci, deploy) -> N
 
     if ci in _EMITS_GITLAB:
         assert gl_files == [_GL_PIPELINE.name], f"--ci {ci} emitted {gl_files}"
+        # #1357 — and the root shell that makes the above reachable. Checked
+        # here as well as in its own test because THIS test is the one that
+        # owns the both-directions property: a dispatch bug that emitted the
+        # root shell under `--ci github` would leave GitLab loading a pipeline
+        # that includes a file which does not exist, i.e. a hard pipeline
+        # error on a customer who never asked for GitLab.
+        assert (root / _GL_ROOT_SHELL).is_file(), (
+            f"--ci {ci} wrote {_GL_PIPELINE.as_posix()} but no root "
+            f"{_GL_ROOT_SHELL.as_posix()}. GitLab auto-loads that path only, "
+            "so the pipeline is inert again (#1357)."
+        )
     else:
         assert gl_files == [], (
             f"--ci {ci} must not emit GitLab CI files, got {gl_files}"
+        )
+        assert not (root / _GL_ROOT_SHELL).exists(), (
+            f"--ci {ci} must not emit a root {_GL_ROOT_SHELL.as_posix()}: it "
+            "would `include:` a pipeline this selection never wrote, which "
+            "GitLab reports as a pipeline configuration error."
         )
 
 
@@ -2708,6 +2758,19 @@ def test_dry_run_preview_matches_what_run_init_writes(
     whether init would touch ``kustomize/`` was told it would not, and then it
     did. Equality, not containment: an over-promise (a path previewed but never
     created) is the same defect pointed the other way.
+
+    ⛔ The preview is taken BEFORE the write, and that ordering is now
+    load-bearing rather than incidental. Since #1357 one artifact — the root
+    ``.gitlab-ci.yml`` — is conditional on the target REPO rather than on the
+    flags, so ``_preview_files`` reads the filesystem. Calling it after
+    ``run_init`` (which is what this test used to do) asks it about a directory
+    the write already changed, and it answers correctly about the wrong world.
+    ``main()`` exits inside ``--dry-run`` and never reaches the writer, so
+    before-the-write is also the real call order.
+
+    The ``brownfield`` phase covers the case no flag can express: a repo that
+    already has a root ``.gitlab-ci.yml``. The preview must not promise a file
+    the writer is going to refuse to touch.
     """
     config = {
         "ci": ci,
@@ -2719,27 +2782,43 @@ def test_dry_run_preview_matches_what_run_init_writes(
         "config_source": config_source,
         "git_repo": git_repo,
     }
-    target = tmp_path / "out"
-    ip.run_init(config, str(target))
 
-    actual = _files_written(target)
-    base = PurePosixPath(target.as_posix())
-    preview = {
-        str(PurePosixPath(p).relative_to(base))
-        for p in ip._preview_files(config, str(target))
-    }
-    assert _ALWAYS_WRITTEN <= actual, (
-        f"run_init wrote {sorted(actual)} for --ci {ci} --deploy {deploy}; the "
-        "files every run is supposed to produce are missing, so comparing it "
-        "against the preview would compare two empties."
-    )
-    assert preview == actual, (
-        f"`da-tools init --ci {ci} --deploy {deploy}` (config_source="
-        f"{config_source}) previews a different file set than it writes.\n"
-        f"  previewed but never created: {sorted(preview - actual)}\n"
-        f"  created but never previewed: {sorted(actual - preview)}\n"
-        "Fix _preview_files to follow run_init — never the reverse."
-    )
+    for phase in ("greenfield", "brownfield"):
+        target = tmp_path / phase
+        target.mkdir()
+        preexisting: set[str] = set()
+        if phase == "brownfield":
+            (target / ".gitlab-ci.yml").write_text(
+                "stages: [build]\n", encoding="utf-8", newline="\n",
+            )
+            preexisting = {".gitlab-ci.yml"}
+
+        basep = PurePosixPath(target.as_posix())
+        preview = {
+            str(PurePosixPath(p).relative_to(basep))
+            for p in ip._preview_files(config, str(target))
+        }
+        ip.run_init(config, str(target))
+        # The customer's own file is not something init claims to write, so it
+        # is excluded from the comparison rather than from the test — that it
+        # survives untouched is asserted directly in
+        # `test_gitlab_root_shell_wires_the_pipeline`.
+        actual = _files_written(target) - preexisting
+
+        assert _ALWAYS_WRITTEN <= actual, (
+            f"run_init wrote {sorted(actual)} for --ci {ci} --deploy {deploy} "
+            f"({phase}); the files every run is supposed to produce are "
+            "missing, so comparing it against the preview would compare two "
+            "empties."
+        )
+        assert preview == actual, (
+            f"`da-tools init --ci {ci} --deploy {deploy}` (config_source="
+            f"{config_source}, {phase}) previews a different file set than it "
+            f"writes.\n"
+            f"  previewed but never created: {sorted(preview - actual)}\n"
+            f"  created but never previewed: {sorted(actual - preview)}\n"
+            "Fix _preview_files to follow run_init — never the reverse."
+        )
 
 
 def _normalized_commands(text: str) -> list[str]:
@@ -2879,33 +2958,48 @@ def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> No
       the checkout, the base commit and the config directory looked up
       separately so a fault and a first import stop being the same outcome,
       and `config-diff`'s exit code handled against the documented contract.
-    * The **GitLab** pin still encodes the broken shape. It is NOT fixed here.
-      ⛔ Do not read the reasons below as ordered: which one bites FIRST is
-      not established, and naming the wrong first blocker is how a reader ends
-      up fixing the wrong thing.
+    * The **GitLab** pin still encodes the broken `script:` shape, and its
+      deferral has LOST the premise it rested on. Read this before touching
+      the leg — the two blockers below used to be three, and the one that was
+      removed is the one that made the other two harmless.
 
-      - The three `$DA_TOOLS_IMAGE` jobs pass the image as a bare scalar, so
-        they inherit its ENTRYPOINT — which is the tool itself. This same
-        generator states, three times beside the apply-stage images, that such
-        an image needs `entrypoint: [""]` or "the job dies before the first
-        script line", and applies that only to the kubectl image. Either that
-        thrice-stated rule is wrong, or these three jobs never reach their
-        first script line. Unresolved without a real runner.
+      Removed:
+
+      - ~~#1357 — nothing includes `.gitlab-ci.d/dynamic-alerting.yml`, so the
+        pipeline does not run at all.~~ **Fixed.** `da-tools init` now emits a
+        root `.gitlab-ci.yml` that includes it; see
+        `test_gitlab_root_shell_wires_the_pipeline`.
+      - ~~The three `$DA_TOOLS_IMAGE` jobs pass the image as a bare scalar, so
+        they inherit its ENTRYPOINT — which is the tool itself.~~ **Fixed
+        (#1408).** The generator's own thrice-stated rule beside the
+        apply-stage images was the correct half and the YAML was the wrong
+        half; all three jobs now carry `entrypoint: [""]`, so they do reach
+        their first script line. ⛔ Which means the remaining blocker is no
+        longer masked by a job that died before running.
+
+      Still live, and now CUSTOMER-VISIBLE rather than dormant:
+
       - The image has no `git`, so `git archive` cannot work. Installing it in
         `before_script` is not a way out either: the image runs as
-        `USER nonroot`, and `apk add` there fails on a locked database.
-      - #1357 — nothing includes `.gitlab-ci.d/dynamic-alerting.yml`, so the
-        pipeline does not run at all.
+        `USER nonroot`, and `apk add` there fails on a locked database. The
+        `2>/dev/null || true` after it swallows the failure, so the baseline
+        is empty and every merge request reports every tenant as ADDED —
+        with a green pipeline.
+      - `config-diff` is still invoked bare, so its documented rc=1 ("changes
+        detected", the ordinary outcome) fails the job. That is #1358 on this
+        leg, unfixed.
 
-      Repairing the shell of a pipeline that never executes would buy a green
-      test and no customer-visible change, which is why the leg is left alone
-      rather than half-fixed.
+      ⛔ This is a deliberate, stated scope boundary of the #1357/#1408 change
+      and NOT an argument that the leg is fine: the honest summary is that
+      wiring the pipeline up turned two latent defects into live ones. The
+      justification for leaving them is no longer "no customer can observe
+      this" — it is "the fix needs a `git` in the published da-tools image,
+      which is an image change, not a generator change". Do not restate the
+      old justification; it is gone.
 
     Fixing the GitLab pin is therefore expected to be a later, deliberate edit
     here, exactly as this GitHub-side edit was — this pin is what will make
-    that edit visible. What this pin canNOT see is the *premise* of the
-    deferral going stale, so that is pinned separately by
-    `test_gitlab_deferral_premise_still_holds`.
+    that edit visible.
     """
     root = generated[(ci, deploy)]
 
@@ -3011,37 +3105,38 @@ def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> No
         )
 
 
-def test_gitlab_deferral_premise_still_holds(generated, tmp_path) -> None:
-    """The GitLab leg is left unfixed on a premise. Pin the premise, not the bug.
+def test_gitlab_root_shell_wires_the_pipeline(generated, tmp_path, capsys) -> None:
+    """#1357, from the other side: this used to pin the DEFERRAL's premise.
 
-    `test_generate_stage_body_is_pinned_on_both_legs` already fires the moment
-    anyone edits that leg, so a second "it is still broken" assertion would be
-    redundant — and a redundant assertion that can only ever stay true is worse
-    than none. What nothing watches is the *reason* the leg was left alone:
-    #1357. `da-tools init` writes the pipeline to
-    `.gitlab-ci.d/dynamic-alerting.yml`, and GitLab only auto-loads a root
-    `.gitlab-ci.yml`; nothing generated here writes one or includes it, so that
-    pipeline never executes. Repairing its shell would buy a green test and
-    nothing a customer can observe, which is why #1358 was fixed on the GitHub
-    leg only.
+    ⛔ Read the history, because the assertions inverted and an inverted
+    assertion with the old comment above it is how a fix gets silently undone.
+    The previous version of this test — `test_gitlab_deferral_premise_still_holds`
+    — asserted that NO root `.gitlab-ci.yml` is created and that an existing one
+    is left byte-identical, because the GitLab leg's broken `script:` body was
+    being left unfixed on the premise that nothing loads it. Its own failure
+    message said to fix the leg and rewrite this test "rather than deleting
+    this assertion", so that is what happened: phase 1's polarity flipped,
+    phase 2's did not, and both are re-argued below.
 
-    The day that premise stops holding, the leg starts running with the
-    always-empty baseline and the unhandled `config-diff` exit code live for
-    every customer, and the justification written beside the pin above turns
-    into a false claim with nothing pointing at it. This is that tripwire.
+    **Phase 1 — greenfield.** `da-tools init` must write a root
+    `.gitlab-ci.yml` whose body includes the generated pipeline. Not merely
+    "a root file exists": the file must NAME the pipeline, because a root
+    pipeline that does not include ours leaves the artifact exactly as inert
+    as writing nothing did, with an existence check going green over it.
 
-    ⚠️ Bound, stated precisely because a looser version of it was wrong: the
-    `generated` fixture initialises into an EMPTY directory, while `da-tools
-    init` is documented as running against a customer's existing repository.
-    So the loop below only sees "does the generator create a root
-    `.gitlab-ci.yml` from nothing". A generator that instead APPENDS an
-    `include:` to one the customer already has would be invisible to it —
-    and that is a generator change, not a documentation change, so calling
-    this "a tripwire for the generator changing its mind" overstated it. The
-    second phase closes that case by initialising over a pre-existing root
-    file. What remains genuinely out of reach is closing #1357 purely in
-    prose (telling customers to add the `include:` themselves), which leaves
-    no trace in any artifact.
+    **Phase 2 — brownfield, and its polarity is UNCHANGED on purpose.** The
+    old test asserted an existing root file is left byte-identical as a
+    tripwire (an append would have closed #1357 invisibly). That assertion is
+    now the specification: option B says never edit a root pipeline we did not
+    write. Overwriting deletes every job the customer runs; appending edits a
+    document whose structure — `!reference` tags and all — this tool never
+    parsed. So the same bytes-unchanged check stands, for the opposite reason,
+    and what it is paired with is new: the summary must then TELL the customer
+    the include, because "we left your file alone" and "your pipeline is
+    wired" are only compatible if something says the missing line out loud.
+    Without that pairing, `da-tools init` would meet a repo with an existing
+    root pipeline — the shape it is documented as running against — and leave
+    #1357 fully intact while every greenfield assertion above stayed green.
     """
     checked = 0
     for (ci, deploy), root in generated.items():
@@ -3050,16 +3145,33 @@ def test_gitlab_deferral_premise_still_holds(generated, tmp_path) -> None:
         checked += 1
         assert (root / _GL_PIPELINE).is_file(), (
             f"--ci {ci} --deploy {deploy} no longer writes {_GL_PIPELINE}. "
-            "The pipeline moved; re-derive whether GitLab now loads it before "
-            "trusting the deferral recorded above."
+            "The pipeline moved; the include below now points at nothing."
         )
-        assert not (root / ".gitlab-ci.yml").exists(), (
-            f"--ci {ci} --deploy {deploy} now writes a root .gitlab-ci.yml, so "
-            "the generated GitLab pipeline is reachable and #1357's premise is "
-            "gone. That leg still carries the always-empty baseline and the "
-            "bare `config-diff` call (#1358) — fix it and update "
-            "_EXPECTED_GL_GENERATE and the deferral paragraph above, rather "
-            "than deleting this assertion."
+        shell = root / _GL_ROOT_SHELL
+        assert shell.is_file(), (
+            f"--ci {ci} --deploy {deploy} no longer writes a root "
+            f"{_GL_ROOT_SHELL.as_posix()}. GitLab auto-loads that path and no "
+            "other, so the generated pipeline is inert on the customer's "
+            "instance — #1357, reopened."
+        )
+        body = shell.read_text(encoding="utf-8")
+        # ⛔ Parsed, not grepped. A commented-out `#  - local: ...` line
+        # contains the path and satisfies a substring test while GitLab loads
+        # nothing — the same "mentions it" ≠ "reads it" gap the dead-variable
+        # guard in this file was rebuilt to close.
+        doc = yaml.safe_load(body)
+        includes = doc.get("include") if isinstance(doc, dict) else None
+        if isinstance(includes, (str, dict)):
+            includes = [includes]
+        locals_ = [
+            (i.get("local") if isinstance(i, dict) else i)
+            for i in (includes or [])
+        ]
+        assert _GL_PIPELINE.as_posix() in locals_, (
+            f"the root {_GL_ROOT_SHELL.as_posix()} generated for --ci {ci} "
+            f"--deploy {deploy} does not include {_GL_PIPELINE.as_posix()}; "
+            f"its `include:` resolves to {locals_!r}. A root file that does "
+            "not name the pipeline is exactly as inert as no root file."
         )
 
     # Anti-vacuity from an independent source: MATRIX, not the loop variable.
@@ -3071,39 +3183,201 @@ def test_gitlab_deferral_premise_still_holds(generated, tmp_path) -> None:
         f"examined {checked}"
     )
 
-    # Phase 2 — initialise over a repository that ALREADY has a root
+    # ── Phase 2 — initialise over a repository that ALREADY has a root
     # `.gitlab-ci.yml`, which is the shape `da-tools init` actually meets.
-    # Without this, a generator taught to append `include:` to an existing
-    # file would close #1357 while every assertion above stayed green.
     existing = tmp_path / "preexisting-repo"
     existing.mkdir()
-    root_ci = existing / ".gitlab-ci.yml"
+    root_ci = existing / _GL_ROOT_SHELL
     ORIGINAL = "stages: [build]\n\nbuild:\n  script:\n    - echo hi\n"
     root_ci.write_text(ORIGINAL, encoding="utf-8", newline="\n")
 
-    ip.run_init(
-        {
-            "ci": "gitlab",
-            "deploy": "kustomize",
-            "rule_packs": ["mariadb"],
-            "tenants": ["db-a"],
-            "namespace": "monitoring",
-            "da_tools_image": "ghcr.io/vencil/da-tools:latest",
-        },
-        str(existing),
-    )
+    config = {
+        "ci": "gitlab",
+        "deploy": "kustomize",
+        "rule_packs": ["mariadb"],
+        "tenants": ["db-a"],
+        "namespace": "monitoring",
+        "da_tools_image": "ghcr.io/vencil/da-tools:latest",
+    }
+    created = ip.run_init(config, str(existing))
 
     assert (existing / _GL_PIPELINE).is_file(), (
-        "initialising over an existing repo stopped writing the pipeline; "
-        "re-derive this test's subject before trusting the deferral."
+        "initialising over an existing repo stopped writing the pipeline."
     )
     assert root_ci.read_text(encoding="utf-8") == ORIGINAL, (
-        "`da-tools init` now edits an existing root .gitlab-ci.yml. If it "
-        "wires in the generated pipeline, #1357's premise is gone and the "
-        "GitLab generate leg — still carrying the always-empty baseline and "
-        "the bare `config-diff` call — becomes reachable for every customer. "
-        "Fix that leg and update _EXPECTED_GL_GENERATE and the deferral "
-        "paragraph, rather than relaxing this assertion."
+        "`da-tools init` modified an existing root .gitlab-ci.yml. It must "
+        "not: overwriting deletes the customer's entire pipeline, and "
+        "appending edits a document this tool never parsed. Surface the "
+        "`include:` in the summary instead (option B, #1357)."
+    )
+    assert str(root_ci) not in created, (
+        "run_init reported the pre-existing root .gitlab-ci.yml as a file it "
+        "created. It did not write it — a created-list entry for an untouched "
+        "file overstates --force's blast radius and makes the summary lie."
+    )
+
+    # The other half of "we left your file alone": say the missing line.
+    ip._print_summary(created, str(existing), config)
+    summary = capsys.readouterr().out
+    for line in _GL_INCLUDE_SNIPPET.strip().splitlines():
+        assert line.strip() in summary, (
+            f"the post-init summary never prints {line.strip()!r}. The tool "
+            "refused to wire the pipeline itself and then did not say how, "
+            "which leaves #1357 fully intact on the brownfield path.\n"
+            f"summary was:\n{summary}"
+        )
+    # ⛔ And it must not claim the pipeline already runs. This is the exact
+    # sentence #1357 cites: the summary's last step said "Commit and push — CI
+    # will automatically validate your config" unconditionally, which was false
+    # for every `--ci gitlab` run.
+    assert "Commit and push — CI will automatically validate" not in summary, (
+        "the summary is back to the unconditional CI claim. On this path "
+        "nothing validates anything until the customer pastes the include."
+    )
+
+
+# The wiring the generator promises, read off the generator so this file cannot
+# pin a snippet the tool stopped printing.
+_GL_INCLUDE_SNIPPET = ip._GL_INCLUDE_SNIPPET
+
+
+# ============================================================
+# ── The #1357 property, stated platform-generally ──
+# ============================================================
+
+# Where each platform LOOKS, as a predicate on a repo-relative POSIX path.
+# ⛔ Enumerated from the platforms' own loading rules, not from what this
+# generator happens to emit — the whole point is to catch an artifact written
+# somewhere new.
+_AUTOLOADED = {
+    "github": lambda p: bool(
+        re.fullmatch(r"\.github/workflows/[^/]+\.ya?ml", p)
+    ),
+    "gitlab": lambda p: p == ".gitlab-ci.yml",
+}
+
+# Which generated paths belong to which platform (a path can only be judged
+# against the platform that would load it).
+_PLATFORM_OF = {
+    "github": lambda p: p.startswith(".github/"),
+    "gitlab": lambda p: p == ".gitlab-ci.yml" or p.startswith(".gitlab-ci.d/"),
+}
+
+
+def _unreachable_ci_artifacts(files: dict[str, str]) -> list[str]:
+    """Return the CI artifacts that neither run nor explain how to make them.
+
+    ``files`` maps repo-relative POSIX path -> file text. An artifact passes if
+    EITHER of the two things #1357 asks for is true:
+
+      1. it sits at a location its platform auto-loads; or
+      2. it is wired in from such a location — some auto-loaded artifact of the
+         same platform names it — or it carries the wiring instructions itself
+         (its own text names the auto-loaded path AND the mechanism).
+
+    Branch 2's second half is what keeps the property honest for a tool that
+    may legitimately be unable to write the auto-loaded file (a customer repo
+    that already has one): "here is the line to paste" is a real answer, and a
+    file that says nothing is not.
+    """
+    unreachable = []
+    for path, text in sorted(files.items()):
+        platform = next(
+            (name for name, owns in _PLATFORM_OF.items() if owns(path)), None,
+        )
+        if platform is None:
+            continue
+        if _AUTOLOADED[platform](path):
+            continue
+        wired_from = any(
+            path in other_text
+            for other, other_text in files.items()
+            if _PLATFORM_OF[platform](other) and _AUTOLOADED[platform](other)
+        )
+        self_documents = "include" in text and any(
+            _AUTOLOADED[platform](cand)
+            for cand in re.findall(r"[\w./-]+\.ya?ml", text)
+        )
+        if not (wired_from or self_documents):
+            unreachable.append(path)
+    return unreachable
+
+
+def test_unreachable_ci_artifact_detector_can_say_no() -> None:
+    """⛔ The control. Without it the property test below proves nothing.
+
+    Every input this classifier meets in practice passes, so a version of it
+    that returns ``[]`` unconditionally would be indistinguishable from a
+    correct one. These three cases are the shapes #1357 actually described,
+    each hand-built to be rejected for a different reason.
+    """
+    # The pre-#1357 world: a pipeline nothing loads and nothing explains.
+    assert _unreachable_ci_artifacts({
+        ".gitlab-ci.d/dynamic-alerting.yml": "stages: [validate]\n",
+    }) == [".gitlab-ci.d/dynamic-alerting.yml"]
+
+    # A root file that exists but includes something else entirely.
+    assert _unreachable_ci_artifacts({
+        ".gitlab-ci.yml": "include:\n  - local: .gitlab-ci.d/other.yml\n",
+        ".gitlab-ci.d/dynamic-alerting.yml": "stages: [validate]\n",
+    }) == [".gitlab-ci.d/dynamic-alerting.yml"]
+
+    # A GitHub workflow parked outside the auto-loaded directory.
+    assert _unreachable_ci_artifacts({
+        ".github/dynamic-alerting.yaml": "name: x\n",
+    }) == [".github/dynamic-alerting.yaml"]
+
+    # …and the two passing shapes, so the classifier is not simply strict.
+    assert _unreachable_ci_artifacts({
+        ".gitlab-ci.yml": "include:\n  - local: .gitlab-ci.d/dynamic-alerting.yml\n",
+        ".gitlab-ci.d/dynamic-alerting.yml": "stages: [validate]\n",
+    }) == []
+    assert _unreachable_ci_artifacts({
+        ".github/workflows/dynamic-alerting.yaml": "name: x\n",
+    }) == []
+
+
+@pytest.mark.parametrize("ci,deploy", MATRIX)
+def test_generated_ci_config_is_reachable_or_ships_wiring(
+    generated, ci, deploy,
+) -> None:
+    """#1357's assertion, in the issue's own words, for every platform.
+
+    「產出的 CI 設定必須位於該平台會自動載入的位置，或產物本身帶有接線說明」
+    — generated CI config must sit where its platform auto-loads it, or ship
+    the wiring instructions with it.
+
+    ⛔ Deliberately NOT "assert the root .gitlab-ci.yml exists": that is the
+    current implementation of the property, and pinning an implementation is
+    what let the original defect stand for so long — every existing check
+    validated the file that was written, none asked whether anything would
+    read it. Stated as a property, a future move of the pipeline (to
+    `.gitlab/ci/`, into the root file directly, wherever) is only red if it
+    breaks reachability. `test_unreachable_ci_artifact_detector_can_say_no` is
+    the control that keeps this from being a tautology.
+    """
+    root = generated[(ci, deploy)]
+    files = {
+        p.relative_to(root).as_posix(): p.read_text(encoding="utf-8")
+        for p in root.rglob("*") if p.is_file()
+    }
+    ci_files = {
+        p for p in files
+        if any(owns(p) for owns in _PLATFORM_OF.values())
+    }
+    assert ci_files, (
+        f"--ci {ci} --deploy {deploy} wrote no CI artifact at all "
+        f"(files: {sorted(files)}) — this test would have verified nothing."
+    )
+
+    unreachable = _unreachable_ci_artifacts(files)
+    assert not unreachable, (
+        f"`da-tools init --ci {ci} --deploy {deploy}` wrote CI config at "
+        f"{unreachable}, which the target platform does not auto-load and "
+        "which nothing wires in or explains. That is #1357: a file that "
+        "validates perfectly and never runs. Either put it where the platform "
+        "looks, include it from there, or ship the wiring instructions inside "
+        "it."
     )
 
 

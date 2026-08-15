@@ -380,7 +380,25 @@ function StepReview({ config }) {
             <ol className="text-sm text-[color:var(--da-color-fg)] space-y-1 list-decimal list-inside">
               <li>{t('在你的 repo 根目錄執行上方的 Docker 命令', 'Run the Docker command above in your repo root')}</li>
               <li>{t('編輯 conf.d/ 中的 tenant YAML，調整閾值', 'Edit tenant YAML in conf.d/, adjust thresholds')}</li>
-              <li>{t('git commit → CI 自動執行 Validate + Generate', 'git commit → CI auto-runs Validate + Generate')}</li>
+              {/* ⛔ #1357. This step used to read "git commit → CI auto-runs
+                  Validate + Generate" for every platform, which was false on
+                  the GitLab leg: GitLab auto-loads the repository-root
+                  `.gitlab-ci.yml` and nothing else, so the generated
+                  `.gitlab-ci.d/dynamic-alerting.yml` did not run at all. `init`
+                  now writes that root shell too — unless the repo already has
+                  one, which it never edits, and that is the case this text has
+                  to name because the wizard cannot see the target repo. */}
+              {(config.ci === 'gitlab' || config.ci === 'both') && (
+                <li>
+                  {t('GitLab：根目錄 .gitlab-ci.yml 是 GitLab 唯一會自動載入的路徑。init 會產生它（內容就是 include: - local: .gitlab-ci.d/dynamic-alerting.yml）；若你的 repo 已有這個檔案，init 不會改動它，請自行貼入該 include，否則 pipeline 不會執行。',
+                     'GitLab: the repo-root .gitlab-ci.yml is the only path GitLab auto-loads. init generates it (its whole body is `include: - local: .gitlab-ci.d/dynamic-alerting.yml`); if your repo already has one, init leaves it untouched — paste that include yourself or the pipeline never runs.')}
+                </li>
+              )}
+              <li>{config.ci === 'gitlab'
+                ? t('git commit → GitLab CI 執行 Validate + Generate（前提是上一步的 include 已就位）', 'git commit → GitLab CI runs Validate + Generate (once the include above is in place)')
+                : config.ci === 'both'
+                  ? t('git commit → GitHub Actions 自動執行 Validate + Generate；GitLab CI 在上一步的 include 就位後同樣執行', 'git commit → GitHub Actions auto-runs Validate + Generate; GitLab CI does the same once the include above is in place')
+                  : t('git commit → GitHub Actions 自動執行 Validate + Generate', 'git commit → GitHub Actions auto-runs Validate + Generate')}</li>
               <li>{t('PR 審核通過後手動觸發 Apply（或 ArgoCD 自動同步）', 'After PR approval, manually trigger Apply (or ArgoCD auto-syncs)')}</li>
             </ol>
           </div>

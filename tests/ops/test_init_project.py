@@ -1269,6 +1269,41 @@ class TestGenGitlabCi:
         yaml_str = ip._gen_gitlab_ci('monitoring', 'ghcr.io/custom/da-tools:v1.0', 'kustomize')
         assert 'DA_TOOLS_IMAGE: ghcr.io/custom/da-tools:v1.0' in yaml_str
 
+    def test_da_tools_jobs_override_the_image_entrypoint(self):
+        """#1408 — every $DA_TOOLS_IMAGE job must clear the ENTRYPOINT.
+
+        The da-tools image is `ENTRYPOINT ["python3", "/opt/da-tools/
+        entrypoint.py"]`, not a shell. GitLab's docker executor runs `script:`
+        by invoking a shell inside the image, so a bare `image: $DA_TOOLS_IMAGE`
+        feeds that invocation to the tool as arguments and the job dies before
+        its first script line. The generator already said so three times beside
+        the apply-stage images and applied it to the kubectl image only.
+
+        Parsed, not grepped: `'entrypoint' in yaml_str` was true BEFORE the fix
+        (the apply job had it), so a substring test here could never have gone
+        red.
+        """
+        for deploy in ('kustomize', 'helm', 'argocd'):
+            pipe = yaml.safe_load(
+                ip._gen_gitlab_ci('monitoring', 'ghcr.io/vencil/da-tools:latest', deploy)
+            )
+            jobs = {
+                name: body for name, body in pipe.items()
+                if isinstance(body, dict) and 'script' in body
+            }
+            assert jobs, f"--deploy {deploy} produced no jobs to check"
+            for name, body in jobs.items():
+                image = body.get('image')
+                assert isinstance(image, dict), (
+                    f"--deploy {deploy}: job {name!r} declares `image: "
+                    f"{image!r}` as a bare scalar, so it inherits the image's "
+                    "ENTRYPOINT and never reaches its first script line."
+                )
+                assert image.get('entrypoint') == [''], (
+                    f"--deploy {deploy}: job {name!r} has entrypoint "
+                    f"{image.get('entrypoint')!r}, expected ['']."
+                )
+
 
 # ============================================================
 # ── 8. _gen_kustomize_base ──
@@ -1572,15 +1607,39 @@ class TestPreviewFiles:
         files = ip._preview_files(config, '/tmp')
         assert any('github/workflows' in f and '.yaml' in f for f in files)
 
-    def test_includes_gitlab_pipeline(self):
-        """Preview includes GitLab CI when ci=gitlab."""
+    def test_includes_gitlab_pipeline(self, tmp_path):
+        """Preview includes GitLab CI when ci=gitlab.
+
+        ⛔ A real (empty) directory, not `/tmp`. Since #1357 the preview reads
+        the target for a pre-existing root `.gitlab-ci.yml`, and `/tmp` on a
+        shared machine is not a directory whose contents this test controls.
+        """
         config = {
             'ci': 'gitlab',
             'deploy': 'kustomize',
             'tenants': ['db-a'],
         }
-        files = ip._preview_files(config, '/tmp')
+        files = ip._preview_files(config, str(tmp_path))
         assert any('gitlab-ci.d' in f for f in files)
+
+    def test_includes_gitlab_root_shell_when_repo_has_none(self, tmp_path):
+        """#1357 — the preview lists the root shell on a greenfield repo."""
+        config = {'ci': 'gitlab', 'deploy': 'kustomize', 'tenants': ['db-a']}
+        files = ip._preview_files(config, str(tmp_path))
+        assert any(f.endswith('/.gitlab-ci.yml') for f in files), files
+
+    def test_omits_gitlab_root_shell_when_repo_already_has_one(self, tmp_path):
+        """…and does NOT list it when init would refuse to write it.
+
+        An over-promise is the same defect as an under-promise: `--dry-run`
+        would be telling a customer their existing root pipeline is about to be
+        replaced, which is the fear the flag exists to settle.
+        """
+        (tmp_path / '.gitlab-ci.yml').write_text('stages: [build]\n', encoding='utf-8')
+        config = {'ci': 'gitlab', 'deploy': 'kustomize', 'tenants': ['db-a']}
+        files = ip._preview_files(config, str(tmp_path))
+        assert not any(f.endswith('/.gitlab-ci.yml') for f in files), files
+        assert any('gitlab-ci.d' in f for f in files), files
 
     def test_both_ci_includes_github_and_gitlab(self):
         """Preview includes both when ci=both."""
@@ -1707,6 +1766,59 @@ class TestRunInit:
             created = ip.run_init(config, tmpdir)
             pipeline_path = os.path.join(tmpdir, '.gitlab-ci.d', 'dynamic-alerting.yml')
             assert os.path.isfile(pipeline_path)
+
+    def test_creates_gitlab_root_shell(self):
+        """#1357 — run_init also wires the pipeline into a root .gitlab-ci.yml."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = {
+                'ci': 'gitlab',
+                'deploy': 'kustomize',
+                'rule_packs': ['mariadb'],
+                'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+            }
+            created = ip.run_init(config, tmpdir)
+            root_path = os.path.join(tmpdir, '.gitlab-ci.yml')
+            assert os.path.isfile(root_path)
+            assert root_path in created
+            doc = yaml.safe_load(open(root_path, encoding='utf-8').read())
+            assert doc == {
+                'include': [{'local': '.gitlab-ci.d/dynamic-alerting.yml'}]
+            }, doc
+
+    def test_leaves_an_existing_gitlab_root_shell_alone(self):
+        """…and never touches one the customer already had (option B, #1357)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root_path = os.path.join(tmpdir, '.gitlab-ci.yml')
+            original = 'stages: [build]\n\nbuild:\n  script:\n    - echo hi\n'
+            with open(root_path, 'w', encoding='utf-8', newline='\n') as fh:
+                fh.write(original)
+            config = {
+                'ci': 'gitlab',
+                'deploy': 'kustomize',
+                'rule_packs': ['mariadb'],
+                'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+            }
+            created = ip.run_init(config, tmpdir)
+            assert open(root_path, encoding='utf-8').read() == original
+            assert root_path not in created
+
+    def test_github_only_writes_no_gitlab_root_shell(self):
+        """The root shell would `include:` a file --ci github never wrote."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = {
+                'ci': 'github',
+                'deploy': 'kustomize',
+                'rule_packs': ['mariadb'],
+                'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+            }
+            ip.run_init(config, tmpdir)
+            assert not os.path.exists(os.path.join(tmpdir, '.gitlab-ci.yml'))
 
     def test_creates_kustomize_base(self):
         """run_init creates kustomize/base/kustomization.yaml."""

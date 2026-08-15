@@ -67,7 +67,8 @@ your-repo/
 ├── .github/workflows/
 │   └── dynamic-alerting.yaml    # GitHub Actions pipeline
 ├── .gitlab-ci.d/
-│   └── dynamic-alerting.yml     # GitLab CI pipeline
+│   └── dynamic-alerting.yml     # GitLab CI pipeline（真正的 stages / jobs）
+├── .gitlab-ci.yml               # GitLab 根 pipeline 外殼（只有一行 include）
 ├── kustomize/
 │   ├── base/
 │   │   └── kustomization.yaml   # ConfigMap generator
@@ -77,6 +78,30 @@ your-repo/
 ├── .pre-commit-config.da.yaml   # Pre-commit hooks 片段
 └── .da-init.yaml                # 初始化標記（升級偵測用）
 ```
+
+#### GitLab 為什麼是兩個檔案
+
+GitHub Actions 會自動載入 `.github/workflows/` 底下**所有** workflow，所以那一份
+檔案放好就會跑。GitLab 不是：一個專案只會自動載入**根目錄的 `.gitlab-ci.yml`**
+這一個路徑，其他位置的 pipeline 檔案在被 `include:` 之前完全不會執行——而且不會
+有任何錯誤訊息，因為對 GitLab 來說那只是一個普通檔案。
+
+所以 `da-tools init` 會多產生一份根目錄外殼，內容就只有這樣：
+
+```yaml
+# .gitlab-ci.yml
+include:
+  - local: .gitlab-ci.d/dynamic-alerting.yml
+```
+
+被 `include:` 進來的檔案裡的 `stages:` 與 `variables:` 會併入這條 pipeline，所以
+外殼不需要重述任何東西。真正的 pipeline 仍然留在 `.gitlab-ci.d/`，方便你把它跟
+自己的 CI 設定分開管理、也方便日後升級時整份覆蓋。
+
+**如果你的 repo 已經有根目錄 `.gitlab-ci.yml`**：`da-tools init` **不會**改動它
+（覆寫會刪掉你所有的 job，而在一份沒被解析過的 YAML 後面追加內容同樣不安全）。
+它會在結束訊息裡把上面那段 `include:` 印出來，請自行貼進你既有的 `.gitlab-ci.yml`。
+沒貼的話，產生出來的 pipeline 檔案語法完全正確，但一次也不會執行。
 
 ## 2. 三階段 CI/CD Pipeline
 

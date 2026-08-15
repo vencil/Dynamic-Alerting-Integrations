@@ -67,7 +67,8 @@ your-repo/
 ├── .github/workflows/
 │   └── dynamic-alerting.yaml    # GitHub Actions pipeline
 ├── .gitlab-ci.d/
-│   └── dynamic-alerting.yml     # GitLab CI pipeline
+│   └── dynamic-alerting.yml     # GitLab CI pipeline (the real stages / jobs)
+├── .gitlab-ci.yml               # GitLab root pipeline shell (one include line)
 ├── kustomize/
 │   ├── base/
 │   │   └── kustomization.yaml   # ConfigMap generator
@@ -77,6 +78,32 @@ your-repo/
 ├── .pre-commit-config.da.yaml   # Pre-commit hooks snippet
 └── .da-init.yaml                # Init marker (for upgrade detection)
 ```
+
+#### Why GitLab gets two files
+
+GitHub Actions auto-loads **every** workflow under `.github/workflows/`, so
+dropping that one file in place is enough. GitLab does not: a project auto-loads
+exactly one path, the repository-root `.gitlab-ci.yml`. A pipeline file anywhere
+else does not run until something `include:`s it — and it fails silently, because
+as far as GitLab is concerned it is just a file.
+
+So `da-tools init` also writes a root shell whose entire body is:
+
+```yaml
+# .gitlab-ci.yml
+include:
+  - local: .gitlab-ci.d/dynamic-alerting.yml
+```
+
+`stages:` and `variables:` from the included file are merged into this pipeline,
+so the shell restates nothing. The real pipeline stays in `.gitlab-ci.d/`, which
+keeps it separable from your own CI config and replaceable wholesale on upgrade.
+
+**If your repo already has a root `.gitlab-ci.yml`**, `da-tools init` does **not**
+touch it — overwriting would delete every job you run, and appending to a YAML
+document the tool never parsed is no safer. It prints the `include:` snippet above
+in its closing summary; paste it into your existing `.gitlab-ci.yml` yourself.
+Until you do, the generated pipeline is perfectly valid YAML that never runs once.
 
 ## 2. Three-Stage CI/CD Pipeline
 

@@ -112,10 +112,26 @@ describe('cicdGenerateFileTree', () => {
       .toContain('.gitlab-ci.d/dynamic-alerting.yml');
   });
 
+  // ⛔ #1357. The pipeline above is inert on its own — GitLab auto-loads the
+  // repo-root `.gitlab-ci.yml` and nothing else — so listing the .gitlab-ci.d
+  // file without this one described a setup that never runs. Paired with the
+  // negative below: emitting the root shell under ci=github would have GitLab
+  // include a file that selection never wrote.
+  it('emits the root .gitlab-ci.yml shell when ci=gitlab', () => {
+    expect(cicdGeneratedPaths(baseConfig({ ci: 'gitlab' })))
+      .toContain('.gitlab-ci.yml');
+  });
+
+  it('emits NO gitlab paths when ci=github', () => {
+    expect(cicdGeneratedPaths(baseConfig({ ci: 'github' })).filter(p => p.startsWith('.gitlab-ci')))
+      .toEqual([]);
+  });
+
   it('emits BOTH github + gitlab when ci=both', () => {
     const out = cicdGeneratedPaths(baseConfig({ ci: 'both' }));
     expect(out).toContain('.github/workflows/dynamic-alerting.yaml');
     expect(out).toContain('.gitlab-ci.d/dynamic-alerting.yml');
+    expect(out).toContain('.gitlab-ci.yml');
   });
 
   // ⛔ These two replace assertions that pinned the OPPOSITE — "emits
