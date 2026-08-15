@@ -2998,7 +2998,17 @@ def _erosion_plan(need: int) -> dict[str, int]:
     for path in gate._defaults_artifacts():
         rel = path.relative_to(gate.PROJECT_ROOT).as_posix()
         root = gate.conf_d_root(rel)
-        if root in gate._SHIPPED_CONFD_ROOTS:
+        # ⛔ `None` — an artifact under no conf.d tree — is skipped, the same
+        # way `_bucket_by_root` skips it. Without this it becomes a bucket of
+        # its own and the plan erodes keys from a thing that is not a root, so
+        # the measurement stops being about the floor it names.
+        # ⚠️ NOT because `sorted()` would raise: the sort below passes an
+        # explicit int `key=`, so it never compares the keys (verified). The
+        # sibling helper this file records at the tenant-stub test DID crash,
+        # and it did so because its `sorted()` had no `key=` — the same shape
+        # with a different consequence, which is why the guard is worth having
+        # in both and the reason is worth writing down in neither's shorthand.
+        if root is None or root in gate._SHIPPED_CONFD_ROOTS:
             continue
         per_root.setdefault(root, []).append((rel, len(real(path))))
 
