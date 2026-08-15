@@ -3004,10 +3004,14 @@ def _erosion_plan(need: int) -> dict[str, int]:
         # the measurement stops being about the floor it names.
         # ⚠️ NOT because `sorted()` would raise: the sort below passes an
         # explicit int `key=`, so it never compares the keys (verified). The
-        # sibling helper this file records at the tenant-stub test DID crash,
-        # and it did so because its `sorted()` had no `key=` — the same shape
+        # one `TypeError` this file records — inside
+        # `test_an_exemption_that_empties_a_root_says_so_in_the_message` — came
+        # from a bare `sorted(by_root.items())` with no `key=`: the same shape
         # with a different consequence, which is why the guard is worth having
         # in both and the reason is worth writing down in neither's shorthand.
+        # ⛔ An earlier wording here pointed at "the tenant-stub test", which
+        # was a parametrize case in a test deleted one commit earlier — the
+        # pointer was dangling the moment it was written.
         if root is None or root in gate._SHIPPED_CONFD_ROOTS:
             continue
         per_root.setdefault(root, []).append((rel, len(real(path))))

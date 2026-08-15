@@ -867,6 +867,14 @@ _DEFAULTS_CONFD_ROOTS: frozenset[str] = frozenset({
 # Roots that legitimately carry zero threshold keys. ⛔ Explicit, because
 # "contributes nothing" is exactly what this floor exists to catch — an implicit
 # exemption for whatever happens to be empty today would exempt the failure.
+#
+# ⛔⛔ BEFORE YOU ADD A LINE HERE, read the disclosure at the end of
+# `_assert_every_root_contributes` (#1443). Adding an entry is the one edit that
+# turns the fifth floor off for a tree, nothing checks whether the tree was
+# broken a minute earlier, and three attempts at checking it were withdrawn as
+# unworkable. The remedy for a root that just went to zero is almost never a
+# line here. ⚠️ This pointer exists because the disclosure names the mechanism
+# but a maintainer reaching for the exemption edits THIS list, not that one.
 _DEFAULTS_ROOTS_MAY_BE_EMPTY: frozenset[str] = frozenset({
     # Both files here declare only other sections (custom-alert recipe examples);
     # `_SHIPPED_CONFD_ROOTS` already records the same fact as `min keys = 0`.
@@ -1643,12 +1651,21 @@ def _assert_every_root_contributes(
     `tracked_roots` defaults to the real index scan, the same way `run_check`
     defaults its inputs to the real extractors; hermetic callers inject a set.
 
-    ⚠️ ONE ARM HAS NO SUCH SEAM, on purpose: the `_DEFAULTS_ROOTS_MAY_BE_EMPTY`
-    falsifier reads the artifacts off disk, so for a hermetic caller — whose
-    rels do not exist — it reads zero and that arm is inert. A `threshold_shape`
-    parameter was added for it and then removed: nothing ever passed it (the
-    test that needed it patches the module name instead), so it was a second
-    way in that only one of the two was ever proven to work.
+    ⚠️ EVERY ARM IS PARAMETER-DRIVEN, the `_DEFAULTS_ROOTS_MAY_BE_EMPTY`
+    exit-lock included: it counts keys out of `by_root` like the rest, and no
+    call in this function touches the filesystem. ⛔ An earlier wording here
+    said the opposite — that the exemption arm read the artifacts off disk and
+    was therefore inert for a hermetic caller. That described a SECOND arm,
+    withdrawn in #1434 (the block at the end of this function says why), and
+    once it went the sentence survived as a live description of behaviour that
+    had inverted: a hermetic caller handing an exempt root a key gets a
+    violation, which is what the exemption-list test one file over relies on.
+    A `threshold_shape` parameter existed briefly for the withdrawn arm and was
+    removed with it; nothing ever passed it.
+    ⚠️ NOTHING ENFORCES THE FIRST SENTENCE. It is checkable in one read — grep
+    this function for a filesystem call — and it is left as a statement rather
+    than a test on purpose: a guard here would be guarding a sentence, and the
+    defect it would catch is the one this paragraph already had to correct.
     """
     if tracked_roots is None:
         tracked_roots = _tracked_confd_roots()
@@ -1889,13 +1906,35 @@ def _assert_every_root_contributes(
     # move to a measurable face: per-violation fingerprints that fail in BOTH
     # directions, or a regenerated snapshot reviewed as source.
     #
-    # So the gap is recorded rather than half-closed. Measured before any of
-    # this: rename a `defaults:` section away and add one line here, and eight
-    # of the twelve roots went to rc=0 (one of them the entry that is
-    # legitimately on the list, so seven were newly silenceable).
+    # So the gap in `_DEFAULTS_ROOTS_MAY_BE_EMPTY` is recorded rather than
+    # half-closed, and it is tracked in #1443 — grep either of those to land
+    # back here. Measured before any of this: rename a `defaults:` section away
+    # and add one line to that list, and eight of the twelve roots went to
+    # rc=0 (one of them the entry that is legitimately on the list, so seven
+    # were newly silenceable).
     # ⚠️ It needs somebody to break a root first and then deliberately add the
-    # line; the three shipped roots cannot be silenced this way at all, because
-    # `_assert_shipped_roots_intact` runs before this function.
+    # line.
+    # ⛔ AND THE SHIPPED FACE IS NOT IMMUNE, which is a correction to an earlier
+    # wording here that said the three shipped roots "cannot be silenced this
+    # way at all, because `_assert_shipped_roots_intact` runs before this
+    # function". Call order is necessary and not sufficient: that floor
+    # compares each shipped root against ITS OWN `(min_artifacts, min_keys)`
+    # pair, and renaming a `defaults:` section changes no file count. So what
+    # protects a shipped root is its `min_keys`, not the order. Measured, same
+    # operation on each of the three, keys zeroed and the line added:
+    #   components/threshold-exporter/config/conf.d  (2, 15)  RED, shipped floor
+    #   try-local/seed/conf.d                        (1,  3)  RED, shipped floor
+    #   rule-packs/recipes/examples/conf.d           (2,  0)  GREEN
+    # The third is the one already legitimately on the exemption list, so
+    # nothing new is silenceable today — but the reason is its list membership,
+    # not the shipped floor, which has nothing to say at `min_keys = 0`. ⚠️ Any
+    # shipped root registered that way is fully exposed to this path, and the
+    # registration table's own note recommends exactly that ("min keys is 0
+    # because both roots legitimately declare only other sections — the
+    # artifact count is what guards them"). The artifact count does not guard
+    # them against this.
+
+
 def _assert_keys_floor(generators: dict[str, dict[str, KeyInfo]],
                        artifacts: dict[str, dict[str, KeyInfo]]) -> None:
     """The only non-vacuity signal that moves when a reader silently stops reading.
