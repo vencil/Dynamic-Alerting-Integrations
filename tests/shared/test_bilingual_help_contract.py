@@ -35,7 +35,7 @@ allowlist — there is no silent escape (``test_partition_is_exact``).
 
 * BILINGUAL (derived complement, 37 — all pass; repair queue empty) — the
   behavioral assertions above run per tool.
-* ``ENGLISH_ONLY`` (137) — dx convention: non-customer-facing internal tools
+* ``ENGLISH_ONLY`` (138) — dx convention: non-customer-facing internal tools
   may ship English-only help. RATCHET: shrink-only — the gate runs each one
   under ``DA_LANG=zh`` and turns RED the moment its help gains CJK, forcing
   the entry OUT of the allowlist and INTO the bilingual contract.
@@ -52,7 +52,7 @@ allowlist — there is no silent escape (``test_partition_is_exact``).
 COST DESIGN (why not a blind full-matrix sweep)
 -----------------------------------------------
 Subprocess budget = 2×|BILINGUAL| + 1×|ENGLISH_ONLY| + 1×|CHINESE_ONLY|
-= 2×37 + 137 + 28 = 239 (vs 376 already spent by test_tool_exit_codes).
+= 2×37 + 138 + 28 = 240 (vs 376 already spent by test_tool_exit_codes).
 The allowlists are known-conclusion sets: one zh-help run suffices to verify
 "still no CJK" / "still has CJK" — an en-side run there would prove nothing
 this gate asserts. The CHINESE_ONLY wiring ratchet is a source-text check
@@ -173,6 +173,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "generate_tenant_fixture.py": _R_DX,
     "generate_tenant_metadata.py": _R_DX,
     "migrate_conf_d.py": _R_DX,
+    "pair_bench_ratio.py": _R_DX,
     "render_soak_diff.py": _R_DX,
     "reword_chain.py": _R_DX,
     "run_chaos_soak.py": _R_DX,
@@ -404,8 +405,17 @@ def test_allowlists_shrink_only_count_pin():
     # leaving the pin at 139 matters: unclaimed headroom lets the NEXT
     # English-only tool slip in without the explicit, reviewed bump the
     # docstring above promises.
-    assert len(ENGLISH_ONLY) <= 137, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=137). Adding an "
+    # pin 138: bumped from 137 for pair_bench_ratio.py (#1441 / TRK-359), the
+    # ADR-032 nightly paired-ratio tool. Same class as its sibling
+    # analyze_bench_history.py, already here: a dx CLI invoked only by
+    # bench-record.yaml, never by a customer. Worth recording HOW it got here —
+    # it was not written English-only on purpose, it was written with an
+    # English docstring that had one Chinese fragment (`§待決 5`) left in it,
+    # and this gate's ratchet is what surfaced the inconsistency. The fragment
+    # is now English; the tool is English-only by decision rather than by
+    # accident.
+    assert len(ENGLISH_ONLY) <= 138, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=138). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )

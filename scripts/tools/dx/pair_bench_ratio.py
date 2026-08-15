@@ -25,7 +25,8 @@ that arithmetic — it does not decide anything. Deciding is the watchdog's job.
 THREE STATES, NOT TWO
 =====================
 A benchmark that could not be evaluated is NOT the same as a benchmark that was
-evaluated and found clean. Conflating them is the exact defect ADR-032 §待決 5
+evaluated and found clean. Conflating them is the exact defect ADR-032's open
+question 5
 exists to prevent: a missing denominator read as "no findings" makes a
 regression silent. So every benchmark lands in exactly one bucket:
 
