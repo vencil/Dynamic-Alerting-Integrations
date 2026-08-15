@@ -1227,12 +1227,17 @@ class TestGenGitlabCi:
         assert 'stages:' in yaml_str
         assert 'variables:' in yaml_str
 
-    def test_three_stages(self):
-        """Pipeline has validate, generate, apply stages."""
+    def test_two_stages(self):
+        """Pipeline has validate and apply — and NOT generate (#1358).
+
+        The blast-radius job was removed: GitLab runs `script:` inside
+        $DA_TOOLS_IMAGE, which carries no `git`, so its baseline could never
+        be taken and it reported every tenant as new before failing on
+        config-diff's ordinary exit code 1.
+        """
         yaml_str = ip._gen_gitlab_ci('monitoring', 'ghcr.io/vencil/da-tools:latest', 'kustomize')
-        assert '- validate' in yaml_str
-        assert '- generate' in yaml_str
-        assert '- apply' in yaml_str
+        stages = yaml.safe_load(yaml_str)['stages']
+        assert stages == ['validate', 'apply'], stages
 
     def test_validate_config_job(self):
         """validate-config job is present."""
@@ -1240,11 +1245,23 @@ class TestGenGitlabCi:
         assert 'validate-config:' in yaml_str
         assert 'da-tools validate-config' in yaml_str
 
-    def test_generate_routes_job(self):
-        """generate-routes job is present."""
+    def test_no_blast_radius_job(self):
+        """⛔ Absence is the assertion (#1358).
+
+        Parsed, not grepped: the removal left an explanatory comment that
+        names `config-diff` and `git`, so a substring test on the raw text
+        would pass for the wrong reason — and would keep passing if the job
+        came back.
+        """
         yaml_str = ip._gen_gitlab_ci('monitoring', 'ghcr.io/vencil/da-tools:latest', 'kustomize')
-        assert 'generate-routes:' in yaml_str
-        assert 'da-tools generate-routes' in yaml_str
+        doc = yaml.safe_load(yaml_str)
+        assert 'generate-routes' not in doc, sorted(doc)
+        for name, body in doc.items():
+            if not isinstance(body, dict) or 'script' not in body:
+                continue
+            script = ' '.join(str(x) for x in body['script'])
+            assert 'config-diff' not in script, (name, script)
+            assert 'git ' not in script, (name, script)
 
     def test_kustomize_apply_job(self):
         """Kustomize deployment includes apply job."""

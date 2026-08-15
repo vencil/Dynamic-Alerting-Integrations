@@ -100,8 +100,29 @@ include:
 
 **如果你的 repo 已經有根目錄 `.gitlab-ci.yml`**：`da-tools init` **不會**改動它
 （覆寫會刪掉你所有的 job，而在一份沒被解析過的 YAML 後面追加內容同樣不安全）。
-它會在結束訊息裡把上面那段 `include:` 印出來，請自行貼進你既有的 `.gitlab-ci.yml`。
+它會在結束訊息裡把該貼的內容印出來，請自行貼進你既有的 `.gitlab-ci.yml`。
 沒貼的話，產生出來的 pipeline 檔案語法完全正確，但一次也不會執行。
+
+⚠️ **你既有的檔案如果已經有 `include:`，要貼的是「清單項目」而不是整個區塊**：
+
+```yaml
+include:
+  - local: .gitlab-ci.d/security.yml    # ← 你原本就有的
+  - local: .gitlab-ci.d/dynamic-alerting.yml   # ← 只加這一行
+```
+
+`include:` 是 top-level 的 key，寫第二個是重複 key，YAML 只會保留其中一個——
+也就是說「整段貼上」會**靜默刪掉你原本的 include**。`da-tools init` 會偵測你的
+檔案屬於哪一種，只印出安全的那個形狀。
+
+#### GitLab 腿沒有 blast-radius 那一步
+
+GitHub 那一份有第三個階段（config-diff 算爆炸半徑、貼成 PR comment），GitLab
+這一份**刻意沒有**，原因在映像而不在你的 repo：GitLab 是在 `$DA_TOOLS_IMAGE`
+**裡面**跑 `script:`，而那顆映像沒有 `git`，所以比較基準（`git archive <base>`）
+在這個平台根本取不到。取不到的基準不會表現成「沒有變更」，而是表現成「每一個
+租戶都是新增的」。與其出貨一份不能信的報告，不如先不出貨——缺少的檢查看得見，
+錯誤的檢查看不見。追蹤在 [#1358](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1358)，補回的作法見 [#1444](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1444)。
 
 ## 2. 三階段 CI/CD Pipeline
 
@@ -126,6 +147,10 @@ graph LR
     end
     V1 --> V2 --> V3 --> G1 --> G2 --> G3 --> A1 --> A2 --> A3
 ```
+
+> ℹ️ 上圖是 **GitHub Actions** 那一份的形狀。**GitLab 那一份沒有 Stage 2**
+> （映像裡沒有 `git`，比較基準取不到——理由見 §1「GitLab 腿沒有 blast-radius
+> 那一步」），只有 Validate 與 Apply 兩個 stage。
 
 ### 2.2 Stage 1: Validate
 
@@ -406,5 +431,5 @@ python3 scripts/tools/ops/assemble_config_dir.py \
 
 ---
 
-**文件版本：** v2.7.0 — 2026-04-18
+**文件版本：** v2.9.0 — 2026-04-18
 **維護者：** Platform Engineering Team

@@ -101,9 +101,36 @@ keeps it separable from your own CI config and replaceable wholesale on upgrade.
 
 **If your repo already has a root `.gitlab-ci.yml`**, `da-tools init` does **not**
 touch it — overwriting would delete every job you run, and appending to a YAML
-document the tool never parsed is no safer. It prints the `include:` snippet above
-in its closing summary; paste it into your existing `.gitlab-ci.yml` yourself.
+document the tool never parsed is no safer. It prints what to paste in its closing
+summary; paste it into your existing `.gitlab-ci.yml` yourself.
 Until you do, the generated pipeline is perfectly valid YAML that never runs once.
+
+⚠️ **If your file already has an `include:`, paste the LIST ITEM, not the whole
+block**:
+
+```yaml
+include:
+  - local: .gitlab-ci.d/security.yml           # ← yours, already there
+  - local: .gitlab-ci.d/dynamic-alerting.yml   # ← add only this line
+```
+
+`include:` is a top-level key, so a second one is a duplicate key and YAML keeps
+only one of them — pasting the whole block would **silently delete your own
+includes**. `da-tools init` detects which shape your file is and prints only the
+safe one.
+
+#### The GitLab leg has no blast-radius step
+
+The GitHub artifact has a third stage (config-diff computes the blast radius and
+posts it as a PR comment). This one deliberately does not, and the reason is the
+image rather than your repository: GitLab runs `script:` **inside**
+`$DA_TOOLS_IMAGE`, and that image carries no `git`, so the baseline
+(`git archive <base>`) cannot be taken on this platform at all. A baseline that
+cannot be read does not look like "no changes" — it looks like "every tenant is
+new". Rather than ship a report nobody should trust, we ship none: a missing
+check is visible, a confidently wrong one is not. Tracked in
+[#1358](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1358); the plan to
+restore it is [#1444](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1444).
 
 ## 2. Three-Stage CI/CD Pipeline
 
@@ -128,6 +155,11 @@ graph LR
     end
     V1 --> V2 --> V3 --> G1 --> G2 --> G3 --> A1 --> A2 --> A3
 ```
+
+> ℹ️ The diagram shows the **GitHub Actions** artifact. **The GitLab artifact has
+> no Stage 2** — its image carries no `git`, so the comparison baseline cannot be
+> taken (see "The GitLab leg has no blast-radius step" in §1). It has two stages:
+> Validate and Apply.
 
 ### 2.2 Stage 1: Validate
 
@@ -413,5 +445,5 @@ With CI pipeline integration, each team only modifies their own conf.d/. The mer
 
 ---
 
-**Document version:** v2.7.0 — 2026-04-18
+**Document version:** v2.9.0 — 2026-04-18
 **Maintainer:** Platform Engineering Team

@@ -655,7 +655,7 @@ _GITLAB_DEPLOY_CONDITIONS = {
 # The generated GitLab pipeline's job set, pinned exactly (see the reasoning at
 # the assertion — a new job is not covered by anything here by default).
 _EXPECTED_GL_JOBS = {
-    "validate-config", "lint-custom-rules", "generate-routes", "apply",
+    "validate-config", "lint-custom-rules", "apply",
 }
 
 # ⛔ The NON-deploy jobs' gates, pinned exactly. The deploy-trigger guard selects
@@ -677,9 +677,15 @@ _EXPECTED_GL_JOBS = {
 #                                                           credentials
 #   default: before_script: [echo pwned]                  → a command injected into
 #                                                           EVERY job, apply included
+# ⛔ `generate-routes` is deliberately ABSENT (#1358 / option C). GitLab runs
+# `script:` inside $DA_TOOLS_IMAGE, which has no `git`, so the blast-radius
+# baseline could never be taken on this platform; the job reported every
+# tenant as new and then failed on config-diff's ordinary exit code 1. A
+# missing check is visible, a confidently wrong one is not. If it comes back,
+# it comes back with `git` in the image and the GitHub leg's two-lookup shape.
 _EXPECTED_GL_TOP_LEVEL = {
     "stages", "variables",
-    "validate-config", "lint-custom-rules", "generate-routes", "apply",
+    "validate-config", "lint-custom-rules", "apply",
 }
 
 # job -> the stage it must run in. `stages:` order was pinned; each job's own
@@ -691,7 +697,6 @@ _EXPECTED_GL_TOP_LEVEL = {
 _EXPECTED_GL_JOB_STAGES = {
     "validate-config": "validate",
     "lint-custom-rules": "validate",
-    "generate-routes": "generate",
     "apply": "apply",
 }
 
@@ -699,10 +704,6 @@ _EXPECTED_GL_JOB_RULES = {
     "validate-config": [{"changes": ["conf.d/**/*", "rule-packs/**/*"]}],
     "lint-custom-rules": [
         {"changes": ["rule-packs/custom/**/*"], "exists": ["rule-packs/custom/"]}
-    ],
-    "generate-routes": [
-        {"if": '$CI_PIPELINE_SOURCE == "merge_request_event"',
-         "changes": ["conf.d/**/*"]}
     ],
 }
 
@@ -2177,10 +2178,24 @@ def test_gitlab_deploy_jobs_are_not_offered_on_every_pipeline(
     # 95 passed. The rules it pins are load-bearing (a `when: never` on
     # validate-config is caught by nothing else), so it gets the same floor the
     # counter-example corpora got.
-    assert len(_EXPECTED_GL_JOB_RULES) >= 3, (
-        f"_EXPECTED_GL_JOB_RULES has {len(_EXPECTED_GL_JOB_RULES)} entries — "
-        "emptying it makes the loop below a no-op that still reports green. "
-        "Every non-deploy GitLab job needs its gate pinned here."
+    #
+    # ⚠️ The floor is DERIVED, not a literal. It used to be `>= 3`, which was
+    # simply the job count of the day; when #1358 removed `generate-routes`
+    # the correct pin and the stale literal became indistinguishable, and the
+    # tempting repair is to edit 3 to 2 — which re-creates the same trap one
+    # job later. Deriving it from `_EXPECTED_GL_JOBS` means the floor tracks
+    # the pipeline: every non-deploy job must have its gate pinned, whatever
+    # that set becomes.
+    _non_deploy = _EXPECTED_GL_JOBS - {"apply"}
+    assert set(_EXPECTED_GL_JOB_RULES) == _non_deploy, (
+        f"_EXPECTED_GL_JOB_RULES pins {sorted(_EXPECTED_GL_JOB_RULES)} but the "
+        f"non-deploy jobs are {sorted(_non_deploy)} — emptying or shrinking it "
+        "makes the loop below a no-op that still reports green. A `when: never` "
+        "on validate-config is caught by nothing else."
+    )
+    assert _non_deploy, (
+        "_EXPECTED_GL_JOBS contains no non-deploy job, so the loop below "
+        "describes nothing."
     )
     assert set(_EXPECTED_GL_JOB_RULES) <= _EXPECTED_GL_JOBS, (
         "_EXPECTED_GL_JOB_RULES names jobs that are not in _EXPECTED_GL_JOBS: "
@@ -2380,9 +2395,13 @@ def test_gitlab_deploy_jobs_are_not_offered_on_every_pipeline(
     # sequence was not. Measured: reordering to `[apply, validate, generate]`
     # left 95 passed, and the manual play button then sits in stage 1, where an
     # operator can deploy before `validate-config` has run at all.
-    assert pipeline.get("stages") == ["validate", "generate", "apply"], (
+    # ⚠️ Two stages, not three: the GitLab leg has no blast-radius job (#1358,
+    # option C). The ORDER is what this assertion is really about — the deploy
+    # job carries no `needs:`, so `stages:` is the only thing keeping
+    # validation ahead of deployment — and that property is unchanged.
+    assert pipeline.get("stages") == ["validate", "apply"], (
         f"`stages:` is {pipeline.get('stages')!r}, expected "
-        "['validate', 'generate', 'apply']. "
+        "['validate', 'apply']. "
         "The deploy job carries no `needs:`, so this order is the only thing "
         "putting validation before deployment. A boundary stated in prose must "
         "not rest on an unenforced fact."
@@ -2936,15 +2955,12 @@ _EXPECTED_GH_GENERATE: list[str] = [
     'fi',
 ]
 
-_EXPECTED_GL_GENERATE: list[str] = [
-    "mkdir -p .output .output/base/conf.d",
-    "git archive $CI_MERGE_REQUEST_DIFF_BASE_SHA -- conf.d/ | "
-    "tar -x -C .output/base/ 2>/dev/null || true",
-    "da-tools generate-routes --config-dir $CONFIG_DIR "
-    "-o .output/alertmanager-routes.yaml --validate",
-    "da-tools config-diff --old-dir .output/base/conf.d --new-dir $CONFIG_DIR "
-    "--format markdown > .output/blast-radius.md",
-]
+# ⛔ Was the GitLab blast-radius script, pinned line by line. The job is gone
+# (#1358 / option C), so what is pinned now is its ABSENCE — see
+# `test_generate_stage_body_is_pinned_on_both_legs`. Kept as an empty list
+# rather than deleted so the shape of "what GitLab would have to emit" stays
+# next to the GitHub pin it was always meant to be read against.
+_EXPECTED_GL_GENERATE: list[str] = []
 
 
 @pytest.mark.parametrize("ci,deploy", MATRIX)
@@ -3066,42 +3082,67 @@ def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> No
             )
 
     if ci in ("gitlab", "both"):
+        # ⛔ The GitLab leg emits NO blast-radius job, and that absence is the
+        # assertion (#1358, option C — owner-approved).
+        #
+        # It used to emit one, and every line of it was pinned above. The job
+        # could never have worked: GitLab runs `script:` inside
+        # $DA_TOOLS_IMAGE, and that image is python:alpine plus the tool, with
+        # no `git`. The baseline came from `git archive`, so it always failed;
+        # `2>/dev/null || true` swallowed that, leaving an EMPTY baseline,
+        # against which config-diff reports every tenant as newly added — and
+        # then exits 1, its ordinary "changes found" answer, which the bare
+        # call turned into a failed job.
+        #
+        # So the job produced an authoritative-looking report from a baseline
+        # it never read, and went red doing it. While nothing loaded the
+        # pipeline (#1357) none of that was observable; wiring it up made all
+        # of it customer-visible at once, which is why the job comes out
+        # rather than staying in.
+        #
+        # ⚠️ This is a REMOVAL, not a fix. Restoring the capability needs
+        # `git` in the published image plus the GitHub leg's shape (base
+        # commit and config dir looked up separately, config-diff's exit code
+        # handled against its documented contract). Do that and this
+        # assertion is what tells you to re-pin the body — do not simply
+        # delete it.
         pipe = yaml.safe_load((root / _GL_PIPELINE).read_text(encoding="utf-8"))
-        jobs = [
-            body for body in pipe.values()
-            if isinstance(body, dict) and body.get("stage") == "generate"
-        ]
-        assert len(jobs) == 1, (
-            f"expected exactly one GitLab job in the generate stage, "
-            f"found {len(jobs)}"
-        )
-        got_gl: list[str] = []
-        for line in jobs[0].get("script", []):
-            got_gl.extend(_normalized_commands(str(line)))
-        assert got_gl == _EXPECTED_GL_GENERATE, (
-            f"the GitLab generate body changed for --ci {ci} --deploy {deploy}.\n"
-            f"  expected: {_EXPECTED_GL_GENERATE}\n  got:      {got_gl}"
+
+        assert "generate" not in (pipe.get("stages") or []), (
+            "the GitLab pipeline declares a `generate` stage again. If the "
+            "blast-radius job is back, it needs `git` in $DA_TOOLS_IMAGE and "
+            "the GitHub leg's two-lookup baseline — re-pin _EXPECTED_GL_GENERATE "
+            "and rewrite this block rather than relaxing it (#1358)."
         )
 
-        # ⛔ On this leg `artifacts:` is the ENTIRE delivery mechanism. The
-        # GitHub leg hands the blast radius to the customer through a sticky PR
-        # comment (pinned via the `uses:` set); GitLab has no comment step at
-        # all, so deleting these four lines loses `alertmanager-routes.yaml` and
-        # `blast-radius.md` with a fully green pipeline. Measured: removing the
-        # block left 341 passed, zero red.
-        #
-        # ⚠️ `when:` is absent on purpose — that records the CURRENT state, not
-        # an endorsement. Its default is `on_success`, which is exactly why the
-        # unhandled `config-diff` exit code (#1358) drops the artifacts too. A
-        # fix there will have to edit this pin, which is the point of pinning.
-        assert jobs[0].get("artifacts") == {
-            "paths": [".output/"],
-            "expire_in": "7 days",
-        }, (
-            f"the GitLab generate job's `artifacts:` changed: "
-            f"{jobs[0].get('artifacts')!r}. This is the only way anything "
-            "reaches the customer on this leg — no artifacts, no routes file "
-            "and no blast-radius report, with the pipeline still green."
+        for name, body in pipe.items():
+            if not isinstance(body, dict) or "script" not in body:
+                continue
+            script = " ".join(str(line) for line in body.get("script", []))
+            assert "config-diff" not in script, (
+                f"GitLab job {name!r} runs `config-diff` again. On this leg "
+                "the baseline cannot be taken — the image has no git — so the "
+                "report is computed against an empty directory (#1358)."
+            )
+            assert "git " not in script, (
+                f"GitLab job {name!r} shells out to git, which is absent from "
+                f"$DA_TOOLS_IMAGE. Whatever it guards will fail at runtime; on "
+                "the old blast-radius job the failure was swallowed by "
+                "`|| true` and the wrong answer shipped (#1358)."
+            )
+
+        # Anti-vacuity: the loop above proves nothing if there are no jobs.
+        scripted = [
+            name for name, body in pipe.items()
+            if isinstance(body, dict) and "script" in body
+        ]
+        assert len(scripted) >= 3, (
+            f"expected the GitLab pipeline to still carry its validate and "
+            f"apply jobs, found {scripted}"
+        )
+        assert _EXPECTED_GL_GENERATE == [], (
+            "_EXPECTED_GL_GENERATE is non-empty again but nothing pins it; "
+            "wire it back into an assertion or reset it to []."
         )
 
 
