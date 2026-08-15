@@ -1347,7 +1347,13 @@ def _undeclared_da_tools_usage(
             problems.append(f"da-tools {sub} (no such subcommand)")
             continue
         problems.extend(
-            f"da-tools {sub} {flag}" for flag in flags if flag not in declared[sub]
+            f"da-tools {sub} {flag}" for flag in flags
+            # ⛔ `_CLI_GLOBAL_FLAGS` subtracted here as it is at the module's
+            # two other call sites. Without it, documenting
+            # `da-tools validate-config --help` was reported as a flag "the CLI
+            # would reject" — measured rc=0, so the message asserted something
+            # false, on a page a customer reads.
+            if flag not in declared[sub] and flag not in _CLI_GLOBAL_FLAGS
         )
     return problems
 
@@ -1609,7 +1615,7 @@ def test_mirror_page_list_covers_every_page_that_declares_a_mirror() -> None:
     Every assertion in this section is parametrised over ``_MIRROR_DOC_PAGES``,
     so the list is the quantifier: shrink it and the tests still pass, having
     checked less. Measured — deleting the ``.en.md`` entry took the section
-    quietly running five fewer tests at rc=0, and emptying it entirely left one test
+    quietly running fewer tests at rc=0, and emptying it entirely left one test
     passing and ten skipped, which is the skip-as-green shape this repo has
     been burned by before.
 
@@ -1621,7 +1627,8 @@ def test_mirror_page_list_covers_every_page_that_declares_a_mirror() -> None:
     discovered = {
         path.relative_to(_REPO_ROOT).as_posix()
         for path in (_REPO_ROOT / "docs").rglob("*.md")
-        if _MIRROR_MARKER.search(path.read_text(encoding="utf-8", errors="replace"))
+        if _MIRROR_MARKER.search(_prose_outside_fences(
+            path.read_text(encoding="utf-8", errors="replace")))
     }
     assert discovered, (
         "no page under docs/ carries a `<!-- mirrors-artifact: … -->` marker. "
@@ -1655,6 +1662,53 @@ def _derived_merge_mode(artifact_text: str) -> str:
     """
     return "merge-items" if isinstance(
         yaml.safe_load(artifact_text), dict) else "append-whole"
+
+
+def _shipped_hook_ids() -> set[str]:
+    """The hook ids `da-tools init` actually writes — read off the generator.
+
+    The discriminator between "a copy of our artifact" and "a pre-commit
+    example", derived rather than typed, so adding a third hook to the
+    generator extends the check with it.
+    """
+    cfg = yaml.safe_load(ip._gen_precommit_snippet("img:tag"))
+    ids = {h["id"] for r in cfg["repos"] for h in r["hooks"]}
+    assert ids, "the generated artifact declares no hook ids to key on"
+    return ids
+
+
+def _names_our_hooks(text: str, start: int, ours: set[str]) -> bool:
+    hit = _fence_after(text, start - 1)
+    if hit is None:
+        return False
+    return any(hook_id in hit[1] for hook_id in ours)
+
+
+def _prose_outside_fences(text: str) -> str:
+    """The page with fenced blocks blanked out, offsets preserved.
+
+    ⛔ A marker shown INSIDE a code fence is being displayed, not declared.
+    Without this, documenting the `<!-- mirrors-artifact: … -->` convention —
+    which dev-rule #4 Doc-as-Code asks for — registers the documenting page as
+    a mirror page, and the only way back to green is to not write the
+    documentation. Measured by a blind review on `testing-playbook.md`.
+
+    ⛔ Line-based on purpose. The first version reused `_fence_after`, whose
+    `start` is the OPENING FENCE line and whose `body` excludes both fence
+    lines — so `start + len(body) + 1` is not the end of the block, the
+    blanked ranges overlapped, and 78% of a real page was erased along with
+    the markers this is meant to preserve. Measured: `discovered` went to the
+    empty set.
+    """
+    kept: list[str] = []
+    inside = False
+    for line in text.splitlines(keepends=True):
+        if line.lstrip().startswith("```"):
+            inside = not inside
+            kept.append("\n" if line.endswith("\n") else "")
+            continue
+        kept.append(("\n" if line.endswith("\n") else "") if inside else line)
+    return "".join(kept)
 
 
 def _tracked_markdown() -> list[str]:
@@ -1718,6 +1772,16 @@ def test_the_artifact_and_the_pages_agree_on_how_to_merge_it(
 
     for page in _MIRROR_DOC_PAGES:
         text = (_REPO_ROOT / page).read_text(encoding="utf-8")
+        declared = _MIRROR_MARKER.search(_prose_outside_fences(text))
+        if not declared or declared.group("path") != _PRECOMMIT_ARTIFACT:
+            # ⛔ Scoped to pages mirroring THIS artifact. The module's own note
+            # on `_PRECOMMIT_ARTIFACT` says other artifacts may be mirrored
+            # with the same marker and "must not be dragged through assertions
+            # about hook entries"; the first version of this loop required a
+            # merge-mode on every listed page, so a page mirroring, say, a
+            # `_defaults.yaml` sample reddened with a message that told it it
+            # needed `merge-items` — advice that was false for that artifact.
+            continue
         on_page = _MERGE_MODE.search(text)
         assert on_page and on_page.group("mode") == expected, (
             f"{page} declares merge-mode "
@@ -1798,6 +1862,7 @@ def test_no_page_outside_the_list_ships_an_unchecked_precommit_block() -> None:
     `_unmarked_precommit_blocks` treats as a pre-commit block, and none of them
     contains `repos:`. Quoting the key was enough to walk past the guard.
     """
+    ours = _shipped_hook_ids()
     stragglers = {}
     for page in _tracked_markdown():
         if page in _MIRROR_DOC_PAGES:
@@ -1805,17 +1870,26 @@ def test_no_page_outside_the_list_ships_an_unchecked_precommit_block() -> None:
         text = (_REPO_ROOT / page).read_text(encoding="utf-8", errors="replace")
         if "repos" not in text:
             continue
-        unmarked = _unmarked_precommit_blocks(text)
-        if unmarked:
-            stragglers[page] = len(unmarked)
+        copies = [
+            start for start in _unmarked_precommit_blocks(text)
+            if _names_our_hooks(text, start, ours)
+        ]
+        if copies:
+            stragglers[page] = len(copies)
 
     assert not stragglers, (
-        f"{stragglers} ship a pre-commit config block that no test compares "
-        "against anything. ⛔ #1418 was exactly this: a hand-copied block that "
-        "had drifted three ways from the artifact it claimed to show, on a page "
-        "the customer is pointed at four times from the CLI. Add a "
+        f"{stragglers} ship an unchecked copy of OUR pre-commit hooks "
+        f"({sorted(ours)}) — nothing compares them to the artifact. ⛔ #1418 "
+        "was exactly this: a hand-copied block that had drifted three ways "
+        "from the artifact it claimed to show, on a page the customer is "
+        "pointed at four times from the CLI. Add a "
         "`<!-- mirrors-artifact: <path> -->` marker naming the file it mirrors "
-        "and add the page to _MIRROR_DOC_PAGES, or delete the block."
+        "and add the page to _MIRROR_DOC_PAGES, or delete the block.\n"
+        "⛔ A block that does NOT name our hook ids is not this — a generic "
+        "`repos:` example in a contributor doc has no shipped artifact to be "
+        "compared against, and an earlier version of this check reported it "
+        "anyway. Following that message's advice then produced twenty new "
+        "failures, because the page had no artifact to point a marker at."
     )
 
 

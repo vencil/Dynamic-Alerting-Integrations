@@ -723,7 +723,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "9e75d274ebfc07a662310400b96d07ede9a6f1ffef7dec115d96bb1d6d5b519f",
+ "source_digest": "d3c04c5f0d6850c661a08d18469d75ac73a62b8ab1a36a2ef8857edff26571df",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1071,6 +1071,7 @@
   ],
   ".github/workflows": [
    "tests/lint/test_check_workflow_git_push_permissions.py",
+   "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_ci_aggregate_gate_contract.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_nightly_race_issue_policy.py",
@@ -1084,6 +1085,7 @@
    "tests/lint/test_check_devcontainer_dep_parity.py",
    "tests/lint/test_check_pint.py",
    "tests/lint/test_check_threshold_reachability.py",
+   "tests/lint/test_e2e_spec_lint.py",
    "tests/ops/test_ci_aggregate_gate_contract.py",
    "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_generated_ci_artifacts.py",
@@ -1111,9 +1113,6 @@
   ],
   ".github/workflows/nightly-race.yaml": [
    "tests/ops/test_nightly_race_issue_policy.py"
-  ],
-  ".github/workflows/playwright.yml": [
-   "tests/lint/test_e2e_spec_lint.py"
   ],
   ".github/workflows/release.yaml": [
    "tests/dx/test_verify_release.py"

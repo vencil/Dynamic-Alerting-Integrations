@@ -1603,9 +1603,13 @@ repos:
 
   # --- Shell lint: ShellCheck, SC2006 class ------------------------------------
   # Hybrid policy (lint-policy / iac-lint-baseline): official OSS engine, no Vibe
-  # wrapper. Covers the SHELL-SCRIPT face — 60 tracked files (59 `*.sh` plus
-  # `scripts/hooks/commit-msg`, which `identify` tags from its shebang). Baseline
-  # measured before enabling: 0 SC2006 across all 60.
+  # wrapper. Covers the SHELL-SCRIPT face — every tracked `*.sh` plus
+  # `scripts/hooks/commit-msg`, which `identify` tags from its shebang. Baseline
+  # measured before enabling: 0 SC2006 across the whole face.
+  # ⚠️ The count that used to sit here ("60 tracked files (59 `*.sh` …)") went
+  # stale the moment this PR added one shell script, which is the argument
+  # against writing it down: the face is defined by `types: [shell]`, and any
+  # number beside that is a second definition nobody re-derives.
   #
   # ⚠️ This does NOT discharge the "enabling shellcheck-on-workflows" decision the
   # actionlint block above defers — that is actionlint's own `-shellcheck=`, still

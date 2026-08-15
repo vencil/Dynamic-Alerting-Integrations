@@ -182,10 +182,18 @@ ln -s ../../conf.d/prod-mariadb.yaml .
 ln -s ../../conf.d/prod-redis.yaml .
 ```
 
+⛔ **Those symlinks point outside `kustomize/base/`, so `kustomize build` needs `--load-restrictor LoadRestrictionsNone`** — without it, the build fails with:
+
+```text
+security; file '.../kustomize/base/_defaults.yaml' is not in or below '.../kustomize/base'
+```
+
+That is kustomize's default load restrictor doing its job, not a broken link. The workflow `da-tools init` generates already passes the flag. If your deployment tool cannot pass it (some ArgoCD setups need `kustomize.buildOptions` configured cluster-side), copy the files in instead of linking them — at the cost of re-copying whenever `conf.d/` changes.
+
 **CI apply:**
 
 ```bash
-kustomize build kustomize/overlays/prod > /tmp/manifests.yaml
+kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod > /tmp/manifests.yaml
 kubectl apply --dry-run=server -f /tmp/manifests.yaml
 kubectl apply -f /tmp/manifests.yaml
 ```
@@ -397,7 +405,8 @@ With CI pipeline integration, each team only modifies their own conf.d/. The mer
 | CI validate fails | `da-tools validate-config --config-dir conf.d/` | Every non-PASS check prints `-> Suggested action:` and `-> See:`; add `--json` for the machine-readable form of the same thing. ⚠️ If `conf.d/` contains a **YAML syntax error** the tool currently raises a Python traceback instead of a report (in both modes) — read the filename and line it ends with |
 | ConfigMap updated but exporter unresponsive | Check `reloadInterval` setting, exporter logs | `kubectl logs -l app=threshold-exporter -n monitoring` |
 | Alertmanager routes not effective | `da-tools explain-route --tenant <name> --config-dir conf.d/` | Check four-layer merge order |
-| Kustomize build fails | Verify symlinks point to correct conf.d/ files | `ls -la kustomize/base/` |
+| Kustomize build fails with `is not in or below` | **Not a broken symlink** — the conf.d files live outside `kustomize/base/` and the default load restrictor refuses them. Re-run with the flag (see §3.1) | `kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod` |
+| Kustomize build fails with `no such file` | That one IS the link — e.g. pointing at a tenant file that does not exist | `ls -la kustomize/base/` |
 | Config is green but an alert never fires | `diagnose.py <tenant> --config-dir conf.d/ --show-inheritance` | If the key appears in the `declared` section the platform recognises it but asserts no value — **unset means silent, with no error message**. Supply a value calibrated against your own baseline |
 
 ## Related Documents
