@@ -942,14 +942,42 @@ repos:
 
       - id: playwright-lint
         name: Playwright spec lint (test.fixme/skip guard, A-13)
-        # A-13 enforcement: block new `test.fixme()` / `test.skip()` (bare
-        # form) from landing in E2E specs. Scoped to tests/e2e/*.spec.*.
-        # Conditional `test.skip(!isLinux, 'reason')` still allowed.
-        # Matches the narrow ESLint config at tests/e2e/eslint.config.mjs.
-        entry: bash -c 'cd tests/e2e && npm run --silent lint'
+        # A-13 enforcement: block new `test.fixme()` / `test.skip()` from
+        # landing in E2E specs. ⛔ EVERY form, including the conditional
+        # `test.skip(cond, 'reason')` — this comment used to say conditional
+        # was still allowed and that was measurably false (#1428). Environment
+        # differences go through a `--grep` tag or a playwright.config.ts
+        # project, not through an annotation. Rule and rationale live in
+        # tests/e2e/eslint.config.mjs.
+        #
+        # The command lives in the script, not here: the same file backs
+        # `make lint-e2e` and the "E2E Spec Lint (A-13)" job in
+        # .github/workflows/playwright.yml, so the three cannot drift (#1428).
+        # It also turns the bare `eslint: not found` that every fresh
+        # `git worktree add` produced into a message that names the remedy.
+        entry: bash scripts/tools/lint/e2e_spec_lint.sh
         language: system
         pass_filenames: false
-        files: ^tests/e2e/.*\.spec\.(ts|js)$
+        # The lint's OWN inputs belong in `files:` alongside its subjects —
+        # editing the rule config, the eslint version, or the runner script
+        # must re-run it, not wait for the next spec edit.
+        # ⛔ Deliberately NOT including .pre-commit-config.yaml: this file is
+        # edited constantly for unrelated reasons, and every such commit would
+        # then require `npm ci` in the work tree.
+        #
+        # ⛔ An earlier version of this comment claimed the `entry:` line was
+        # "covered by CI instead". It is not, and the claim was disproved by
+        # replacing the entry with `bash -c 'exit 0'`: every test that reads
+        # this config still passed, and an
+        # injected `test.fixme()` sailed through the hook. CI runs the SCRIPT,
+        # never this hook — the single occurrence of `playwright-lint` under
+        # .github/ is a COMMENT describing this arrangement, and this file is
+        # not in playwright.yml's `paths:` either. (An earlier version of this
+        # sentence said no workflow "names" it, which stopped being true in
+        # the same commit that added the comment — mention is not execution,
+        # which is the distinction this whole hook's twin is built on.) What
+        # covers the line is tests/lint/test_e2e_spec_lint.py, added for it.
+        files: ^(tests/e2e/(.*\.spec\.(ts|js)|eslint\.config\.mjs|package(-lock)?\.json)|scripts/tools/lint/e2e_spec_lint\.sh)$
 
       - id: hardcode-tenant-check
         name: Detect hardcoded tenant literals in PromQL label selectors (Rule #2)
@@ -1575,9 +1603,13 @@ repos:
 
   # --- Shell lint: ShellCheck, SC2006 class ------------------------------------
   # Hybrid policy (lint-policy / iac-lint-baseline): official OSS engine, no Vibe
-  # wrapper. Covers the SHELL-SCRIPT face — 60 tracked files (59 `*.sh` plus
-  # `scripts/hooks/commit-msg`, which `identify` tags from its shebang). Baseline
-  # measured before enabling: 0 SC2006 across all 60.
+  # wrapper. Covers the SHELL-SCRIPT face — every tracked `*.sh` plus
+  # `scripts/hooks/commit-msg`, which `identify` tags from its shebang. Baseline
+  # measured before enabling: 0 SC2006 across the whole face.
+  # ⚠️ The count that used to sit here ("60 tracked files (59 `*.sh` …)") went
+  # stale the moment this PR added one shell script, which is the argument
+  # against writing it down: the face is defined by `types: [shell]`, and any
+  # number beside that is a second definition nobody re-derives.
   #
   # ⚠️ This does NOT discharge the "enabling shellcheck-on-workflows" decision the
   # actionlint block above defers — that is actionlint's own `-shellcheck=`, still
