@@ -11,7 +11,7 @@ lang: zh
 
 > **受眾**：Platform Engineers、SREs
 > **前置閱讀**：[架構與設計](../architecture-and-design.md) §1–§3（向量匹配與 Projected Volume 原理）
-> **版本**：v2.6.0
+> **版本**：v2.9.0
 
 ---
 

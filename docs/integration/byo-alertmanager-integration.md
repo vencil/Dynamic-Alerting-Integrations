@@ -9,7 +9,7 @@ lang: zh
 
 > **Language / 語言：** **中文 (Current)** | [English](./byo-alertmanager-integration.en.md)
 
-> **版本**：v2.6.0
+> **版本**：v2.9.0
 > **受眾**：Platform Engineers、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 

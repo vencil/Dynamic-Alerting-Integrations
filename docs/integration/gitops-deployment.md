@@ -9,7 +9,7 @@ lang: zh
 
 > **Language / 語言：** **中文 (Current)** | [English](./gitops-deployment.en.md)
 
-> **版本**：v2.6.0
+> **版本**：v2.9.0
 > **受眾**：Platform Engineers、DevOps、SREs
 > **前置文件**：[BYO Prometheus 整合指南](byo-prometheus-integration.md)
 
@@ -67,12 +67,12 @@ components/threshold-exporter/config/conf.d/db-b.yaml       @<org>/team-db-b
 
 當 PR 修改 `conf.d/` 下的 tenant 配置時，CI 自動執行 `config-diff` 產出 blast radius 報告，讓 reviewer 一眼看出變更影響範圍。
 
-**現成 CI 範本**（可直接 include 使用）：
+**CI 範本**：
 
-| 平台 | 範本位置 | 觸發條件 |
+| 平台 | 取得方式 | 觸發條件 |
 |------|---------|---------|
-| GitHub Actions | `.github/workflows/config-diff.yaml` | PR 修改 `conf.d/**` |
-| GitLab CI | `.gitlab/ci/config-diff.gitlab-ci.yml` | MR 修改 `conf.d/**` |
+| GitHub Actions | 本 repo 內建 `.github/workflows/config-diff.yaml`，可直接複製套用 | PR 修改 `conf.d/**` |
+| GitLab CI | 由 `da-tools init --ci gitlab` 產生 `.gitlab-ci.d/dynamic-alerting.yml`，並以根目錄 `.gitlab-ci.yml` 的 `include: local` 接進 pipeline | MR 修改 `conf.d/**` |
 
 GitHub Actions 範本會自動將 blast radius 報告貼為 PR comment（冪等更新，不重複建立）。
 

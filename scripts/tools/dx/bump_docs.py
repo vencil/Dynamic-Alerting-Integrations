@@ -169,8 +169,13 @@ def _build_tools_rules():
     })
 
     # CI workflow and K8s manifest image tags
+    #
+    # 這裡只列「repo 內真的存在」的檔案。`.gitlab/ci/config-diff.gitlab-ci.yml`
+    # 曾在此列，但該檔在 v2.1.0 就被刪了——GitLab 那條路徑現在由
+    # `da-tools init --ci gitlab` 產生，不是 checked-in 範本。規則指向不存在的
+    # 檔案時 apply_rules() 只會回 SKIP，過去所有 gate 都不看 SKIP，於是這條
+    # 規則靜靜死了五個版本（#1407）。B 段已讓 missing 變成 failing signal。
     for f in [".github/workflows/config-diff.yaml",
-              ".gitlab/ci/config-diff.gitlab-ci.yml",
               "k8s/03-monitoring/cronjob-maintenance-scheduler.yaml",
               "k8s/03-monitoring/cronjob-threshold-govern.yaml"]:
         rules.append({
@@ -316,13 +321,13 @@ def _build_exporter_rules():
             "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
         },
         {
-            "file": "docs/gitops-deployment.md",
+            "file": "docs/integration/gitops-deployment.md",
             "desc": "OCI chart --version in gitops deployment guide",
             "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
             "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
         },
         {
-            "file": "docs/gitops-deployment.en.md",
+            "file": "docs/integration/gitops-deployment.en.md",
             "desc": "OCI chart --version in gitops deployment guide (en)",
             "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
             "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
@@ -425,13 +430,13 @@ def _build_platform_rules():
 
     # BYO guides version headers
     rules.append({
-        "file": "docs/byo-prometheus-integration.md",
+        "file": "docs/integration/byo-prometheus-integration.md",
         "desc": "BYOP guide version",
         "pattern": r"\*\*版本\*\*：v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**版本**：v{v}",
     })
     rules.append({
-        "file": "docs/byo-alertmanager-integration.md",
+        "file": "docs/integration/byo-alertmanager-integration.md",
         "desc": "BYO Alertmanager guide version",
         "pattern": r"\*\*版本\*\*：v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**版本**：v{v}",
@@ -453,7 +458,7 @@ def _build_platform_rules():
 
     # GitOps deployment guide version header
     rules.append({
-        "file": "docs/gitops-deployment.md",
+        "file": "docs/integration/gitops-deployment.md",
         "desc": "gitops-deployment.md version header",
         "pattern": r"\*\*版本\*\*：v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**版本**：v{v}",
@@ -461,19 +466,19 @@ def _build_platform_rules():
 
     # English doc version headers (BYO guides and gitops)
     rules.append({
-        "file": "docs/byo-prometheus-integration.en.md",
+        "file": "docs/integration/byo-prometheus-integration.en.md",
         "desc": "BYOP guide (en) version",
         "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**Version**: v{v}",
     })
     rules.append({
-        "file": "docs/byo-alertmanager-integration.en.md",
+        "file": "docs/integration/byo-alertmanager-integration.en.md",
         "desc": "BYO Alertmanager guide (en) version",
         "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**Version**: v{v}",
     })
     rules.append({
-        "file": "docs/gitops-deployment.en.md",
+        "file": "docs/integration/gitops-deployment.en.md",
         "desc": "gitops-deployment.en.md version header",
         "pattern": r"\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**Version**: v{v}",
@@ -481,13 +486,13 @@ def _build_platform_rules():
 
     # Federation integration guide version header
     rules.append({
-        "file": "docs/federation-integration.md",
+        "file": "docs/integration/federation-integration.md",
         "desc": "federation-integration.md version header",
         "pattern": r"> \*\*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\*\*",
         "replacement": lambda v: f"> **v{v}**",
     })
     rules.append({
-        "file": "docs/federation-integration.en.md",
+        "file": "docs/integration/federation-integration.en.md",
         "desc": "federation-integration.en.md version header",
         "pattern": r"> \*\*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\*\*",
         "replacement": lambda v: f"> **v{v}**",
@@ -659,22 +664,29 @@ def _build_platform_rules():
     })
 
     # Interactive JSX front matter and version consistency
+    #
+    # 這些 JSX 已在 TRK-230 (Option C) 搬到 `tools/portal/src/`，由 esbuild
+    # bundle 進 docs/assets/dist/。規則留在舊的 `docs/interactive/tools/`
+    # 路徑上，於是靜默 SKIP 到今天——front matter 還停在 v2.7.0（#1407）。
     rules.append({
-        "file": "docs/interactive/tools/cli-playground.jsx",
+        "file": "tools/portal/src/interactive/tools/cli-playground.jsx",
         "desc": "cli-playground.jsx front matter version",
         "pattern": r"(?<=\n)version:\s*v[0-9]+\.[0-9]+[^\n]*(?=\n)",
         "replacement": lambda v: f"version: v{v}",
     })
 
+    # ⚠️ 這條的目標字串不在 cli-playground.jsx —— `[✓] Version consistency`
+    # 是 playground 的模擬輸出，住在拆分出去的 commands.js 裡。原規則同時搞錯
+    # 目錄與檔名，repoint 時一併修正（#1407）。
     rules.append({
-        "file": "docs/interactive/tools/cli-playground.jsx",
-        "desc": "cli-playground.jsx version consistency output",
+        "file": "tools/portal/src/interactive/tools/cli-playground/commands.js",
+        "desc": "cli-playground commands.js version consistency output",
         "pattern": r"\[✓\]\s+Version consistency\s+v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"[✓] Version consistency  v{v}",
     })
 
     rules.append({
-        "file": "docs/interactive/tools/platform-demo.jsx",
+        "file": "tools/portal/src/interactive/tools/platform-demo.jsx",
         "desc": "platform-demo.jsx version display",
         "pattern": r"(?<=\n)version:\s*v[0-9]+\.[0-9]+[^\n]*(?=\n)",
         "replacement": lambda v: f"version: v{v}",
@@ -1653,8 +1665,8 @@ def main():
 
                 if not fpath.exists():
                     missing += 1
-                    print(f"  ⚠️  {desc}")
-                    print(f"       file not found: {rule['file']}")
+                    print(f"  ❌ {desc}")
+                    print(f"       MISSING: file not found: {rule['file']}")
                     continue
 
                 content = fpath.read_text(encoding="utf-8")
@@ -1720,9 +1732,12 @@ def main():
 
         print(f"\n{'='*60}")
         print(f"  Summary: {total_rules} rules, "
-              f"{matched} ✅, {unmatched} ❌, {missing} ⚠️")
+              f"{matched} ✅, {unmatched} ❌ DEAD/drift, {missing} ❌ MISSING")
         print(f"{'='*60}")
-        sys.exit(EXIT_VIOLATION if unmatched > 0 else EXIT_OK)
+        # `missing` 也算 violation：規則指向不存在的檔案，跟 pattern 撈不到
+        # 一樣是「這條規則什麼都沒 bump」。舊版只看 unmatched，所以 14 條指向
+        # 已搬走檔案的規則能讓 --what-if exit 0（#1407）。
+        sys.exit(EXIT_VIOLATION if (unmatched > 0 or missing > 0) else EXIT_OK)
 
     # --check mode: read current versions and verify all references match
     if args.check and not (args.platform or args.exporter or args.tools
@@ -1748,12 +1763,22 @@ def main():
                     has_drift = True
                     print(f"  DEAD   [{line}] {desc}: {detail}")
                 elif status == "SKIP":
-                    print(f"  SKIP   [{line}] {desc}: {detail}")
+                    # 檔案不存在 = 規則指向的東西被搬走或刪掉了。過去這裡只印
+                    # 一行 SKIP 就放行，於是 14 條規則在 `make version-check`
+                    # 綠燈下靜靜死了好幾個版本（#1407）——release gate 說「版號
+                    # 全部一致」，其實是「我沒去看那些檔案」。
+                    #
+                    # MISSING 與 DEAD 是兩種不同的診斷，標籤刻意分開：
+                    #   MISSING = 檔案不在了 → 修 _build_*_rules() 的 "file"，
+                    #             或該規則已無對象就整條刪掉。
+                    #   DEAD    = 檔案在、pattern 撈不到 → 修 "pattern"。
+                    has_drift = True
+                    print(f"  MISSING [{line}] {desc}: {detail}")
 
         if has_drift:
-            print("\n❌ Version drift (or a DEAD rule) detected. Run bump_docs.py "
-                  "with version flags to fix drift; fix a DEAD rule in "
-                  "_build_*_rules().")
+            print("\n❌ Version drift (or a DEAD / MISSING rule) detected. Run "
+                  "bump_docs.py with version flags to fix drift; fix a DEAD "
+                  "pattern or a MISSING file path in _build_*_rules().")
             sys.exit(EXIT_VIOLATION)
         else:
             print("✅ All version references are consistent.")
@@ -1768,6 +1793,7 @@ def main():
     all_rules = _build_rules()
     total_updates = 0
     dead_rules = 0
+    missing_rules = 0
 
     for line, new_ver in [("platform", args.platform),
                           ("exporter", args.exporter),
@@ -1790,16 +1816,31 @@ def main():
                               check_only=args.check, dry_run=args.dry_run)
 
         for status, desc, detail in changes:
-            icon = {"UPDATE": "📝", "OK": "✅", "SKIP": "⚠️ ", "DEAD": "❌"}[status]
+            # SKIP 用 ❌ 不用 ⚠️ ——它現在會讓 bump 失敗，圖示不該再讀成「可忽略」。
+            icon = {"UPDATE": "📝", "OK": "✅", "SKIP": "❌", "DEAD": "❌"}[status]
             print(f"  {icon} {desc}: {detail}")
             if status == "UPDATE":
                 total_updates += 1
             elif status == "DEAD":
                 dead_rules += 1
+            elif status == "SKIP":
+                missing_rules += 1
+
+    # MISSING 與 DEAD 在這裡同等對待，理由一致：explicit bump 是 release 動作，
+    # 「這條規則沒 bump 到任何東西」不論成因是 pattern 撈不到（DEAD）還是檔案
+    # 不在（MISSING），結果都是某個版號引用被留在舊版本、而 release 流程回報成功。
+    # 兩者刻意分開計數與分開報訊，因為修法不同：MISSING 修 "file"、DEAD 修
+    # "pattern"（#1407）。
+    if missing_rules:
+        print(f"\n❌ {missing_rules} rule(s) point at a file that does not exist "
+              f"(MISSING). A rule with no file bumps nothing — fix the \"file\" "
+              f"path in _build_*_rules(), or delete the rule if its target is gone.")
 
     if dead_rules:
         print(f"\n❌ {dead_rules} rule(s) matched NOTHING (DEAD). A rule that "
               f"matches nothing bumps nothing — fix it in _build_*_rules().")
+
+    if dead_rules or missing_rules:
         sys.exit(EXIT_VIOLATION)
 
     if args.check:

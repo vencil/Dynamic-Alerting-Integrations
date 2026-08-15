@@ -707,3 +707,44 @@ class TestHelmTwoLinePin:
         version = bump_docs.read_current_versions()["tools"]
         changes = bump_docs.apply_rules(rules, version, check_only=True)
         assert [c[0] for c in changes] == ["OK", "OK"], changes
+
+
+class TestLiveRepoRuleTargetsExist:
+    """每一條規則指向的檔案，在今天的 repo 裡都必須真的存在。
+
+    上面那條 live-repo 測試只顧 federation-reconciler 兩條規則，其餘上千條
+    無人看守。規則指向不存在的檔案時 apply_rules() 只回 SKIP，而在 #1407
+    修掉之前所有 consumer 都不看 SKIP——於是 14 條規則（11 個路徑）在
+    `make version-check` 全綠的情況下靜靜死了好幾個版本：docs/ 底下的整合
+    指南搬進 docs/integration/、interactive JSX 搬去 tools/portal/src/、
+    GitLab CI 範本整個被刪，沒有任何一個 gate 出聲。
+
+    這條測試是那個漏洞的機械守門員：走完 _build_rules() 全集，任何指向
+    不存在檔案的規則直接讓測試紅，且訊息裡直接點名路徑。
+    """
+
+    # _build_rules() 目前產出約 1900 條（含 glob 展開）。這個下限純粹是
+    # anti-vacuity：把 _build_rules() 改窄成「什麼都不描述」時，這條測試
+    # 不能因為集合變空就自動變綠。故意抓得比實際低很多，正常增刪規則不會誤觸。
+    _MIN_RULES = 500
+
+    def test_every_rule_target_file_exists(self):
+        rules = bump_docs._expand_glob_rules(
+            [r for line_rules in bump_docs._build_rules().values()
+             for r in line_rules])
+
+        assert len(rules) >= self._MIN_RULES, (
+            f"_build_rules() 只產出 {len(rules)} 條規則（下限 "
+            f"{self._MIN_RULES}）。規則集被改窄到這個程度時，"
+            f"「沒有死規則」是因為幾乎沒有規則，不是因為健康。")
+
+        missing = sorted({
+            r["file"] for r in rules
+            if not (bump_docs.REPO_ROOT / r["file"]).exists()})
+
+        assert not missing, (
+            f"{len(missing)} 個規則目標檔案不存在——這些規則什麼都 bump 不到，"
+            f"而且在 --check 裡只會是一行 MISSING：\n  "
+            + "\n  ".join(missing)
+            + "\n修法：改 _build_*_rules() 裡該規則的 \"file\" 指向現行路徑；"
+              "若目標已徹底消失（例如範本改由產生器產出），整條規則刪掉。")
