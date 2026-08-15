@@ -25,7 +25,8 @@
 # ==========================
 # One-off calibration, not a gate. No schedule, no push/PR trigger, no branch
 # protection interaction, contents:read only, and it writes nothing back — the
-# raw output leaves as an artifact and is analysed off-CI.
+# raw output leaves as an artifact AND as base64 in the job log (see the emit
+# step for why both), and is analysed off-CI.
 #
 # REMOVAL CONDITION
 # =================
@@ -105,21 +106,39 @@ jobs:
           BENCHTIME: ${{ inputs.benchtime }}
         run: |
           set -euo pipefail
-          # Reject non-positive / non-numeric inputs BEFORE anything is created.
-          # `seq 1 0` is empty, so rounds=0 would skip the measurement loop
-          # entirely and still upload an artifact — a green calibration run with
-          # no measurements in it. The two-topology analysis also needs the
-          # session split into halves, so fewer than 2 rounds cannot answer the
-          # question this workflow exists for.
-          # Upper bounds matter as much as lower ones. rounds drives how much
-          # gets emitted to the job log (the recovery path below), and count /
-          # benchtime multiply straight into wall time — a large enough value
-          # just burns the 60-minute timeout and produces nothing.
+          # Validate BEFORE anything is created, both directions.
+          #   lower: `seq 1 0` is empty, so rounds=0 skips the measurement loop
+          #     entirely and still uploads an artifact — a green calibration run
+          #     with no measurements in it. And the two-topology analysis splits
+          #     the session into halves, so <2 rounds cannot answer the question
+          #     this workflow exists for.
+          #   upper: rounds drives how much is emitted to the job log (the
+          #     recovery path below); count and benchtime multiply straight into
+          #     wall time, where a large enough value just burns the 60-minute
+          #     timeout and produces nothing.
           case "$ROUNDS" in ''|*[!0-9]*) echo "::error::rounds must be a positive integer (got '$ROUNDS')"; exit 2 ;; esac
           case "$COUNT"  in ''|*[!0-9]*) echo "::error::count must be a positive integer (got '$COUNT')"; exit 2 ;; esac
-          case "$BENCHTIME" in
-            *[!0-9msx]*|''|[!0-9]*) echo "::error::benchtime must look like 1s / 250ms / 100x (got '$BENCHTIME')"; exit 2 ;;
-          esac
+          # Format AND magnitude. Format alone is not a bound: `999999s` is all
+          # digits plus a valid unit, so it passes any shape check and then eats
+          # the whole 60-minute timeout. Split the number from the unit and cap
+          # each unit separately. This also rejects shapes a character-class
+          # check lets through, e.g. `1sm`.
+          BT_NUM="${BENCHTIME%%[!0-9]*}"
+          BT_UNIT="${BENCHTIME#"$BT_NUM"}"
+          bt_bad=""
+          case "$BT_NUM" in ''|*[!0-9]*) bt_bad="needs a leading number" ;; esac
+          if [ -z "$bt_bad" ]; then
+            case "$BT_UNIT" in
+              s)  [ "$BT_NUM" -ge 1 ] && [ "$BT_NUM" -le 60 ]      || bt_bad="s must be 1..60" ;;
+              ms) [ "$BT_NUM" -ge 1 ] && [ "$BT_NUM" -le 60000 ]   || bt_bad="ms must be 1..60000" ;;
+              x)  [ "$BT_NUM" -ge 1 ] && [ "$BT_NUM" -le 1000000 ] || bt_bad="x must be 1..1000000" ;;
+              *)  bt_bad="unit must be s, ms or x" ;;
+            esac
+          fi
+          if [ -n "$bt_bad" ]; then
+            echo "::error::benchtime '$BENCHTIME' rejected — $bt_bad (expected e.g. 1s / 250ms / 100x)"
+            exit 2
+          fi
           if [ "$ROUNDS" -lt 2 ] || [ "$ROUNDS" -gt 40 ]; then
             echo "::error::rounds must be 2..40 (got $ROUNDS) — 2 so the session can be split into halves for the two-topology analysis, 40 so the run fits the timeout and the log budget"
             exit 2
@@ -153,8 +172,9 @@ jobs:
       #
       # `/actions/jobs/<id>/logs` redirects to the same denied host, but the job
       # log itself IS retrievable through the GitHub API. So the raw rows are
-      # emitted here too. ~12 KB, well inside the log budget, and it makes the
-      # measurements recoverable without depending on egress policy.
+      # emitted here too. Measured: 16 files base64 to 33 KB, so the default
+      # 12 rounds (24 files) lands near 50 KB — well inside the budget below,
+      # and it makes the measurements recoverable regardless of egress policy.
       #
       # Payloads are base64, ONE LINE PER FILE, with a SHA-256 of the original
       # bytes. Plain BEGIN/END text framing was the obvious choice and it is
@@ -174,26 +194,30 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           files=("${RUNNER_TEMP}"/aa/raw/*.txt)
-          total=0
-          for f in "${files[@]}"; do
-            total=$(( total + $(wc -c < "$f") ))
-          done
-          # Self-imposed budget. GitHub does NOT publish a numeric job-log size
-          # limit, so this is a conservative ceiling rather than a documented
-          # one: base64 inflates by ~4/3, and exceeding whatever the real limit
-          # is would truncate the log — losing exactly the data this step is
-          # here to rescue. Fail loudly instead of emitting a partial record.
-          if [ "$total" -gt 2000000 ]; then
-            echo "::error::raw measurements are ${total} bytes, over the 2 MB self-imposed log budget — lower rounds/count, or take the data from the artifact instead"
-            exit 2
-          fi
-          echo "emitting ${#files[@]} file(s), ${total} raw bytes (base64 ≈ $(( total * 4 / 3 )))"
+          # Build first, measure the ENCODED bytes, then decide. Budgeting on
+          # raw size would not bound what actually reaches the log: base64
+          # inflates by ~4/3 and each record carries a name, a 64-char digest
+          # and a newline, so a raw-byte ceiling silently permits ~1.35× more.
+          rec="${RUNNER_TEMP}/aa-records.txt"
+          : > "$rec"
           for f in "${files[@]}"; do
             printf 'RAW %s %s %s\n' \
               "$(basename "$f" .txt)" \
               "$(sha256sum < "$f" | cut -d' ' -f1)" \
-              "$(base64 -w0 < "$f")"
+              "$(base64 -w0 < "$f")" >> "$rec"
           done
+          emitted=$(wc -c < "$rec")
+          # Self-imposed ceiling. GitHub does NOT publish a numeric job-log size
+          # limit, so this is a conservative value rather than a documented one;
+          # exceeding whatever the real limit is would truncate the log, losing
+          # exactly the data this step exists to rescue. Fail loudly instead of
+          # emitting half a record set.
+          if [ "$emitted" -gt 2000000 ]; then
+            echo "::error::encoded measurements are ${emitted} bytes, over the 2 MB self-imposed log budget — lower rounds/count, or take the data from the artifact instead"
+            exit 2
+          fi
+          echo "emitting ${#files[@]} file(s), ${emitted} encoded bytes"
+          cat "$rec"
 
       - name: Summarize
         if: always()
