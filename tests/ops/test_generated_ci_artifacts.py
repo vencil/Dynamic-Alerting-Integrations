@@ -3241,6 +3241,119 @@ def test_gitlab_root_shell_wires_the_pipeline(generated, tmp_path, capsys) -> No
 _GL_INCLUDE_SNIPPET = ip._GL_INCLUDE_SNIPPET
 
 
+# ── The summary's wiring line, in both locales and on every branch ──────────
+#
+# ⛔ Why parametrized over language: `_print_summary` picks its strings from
+# the module-level `_LANG`, which `detect_cli_lang()` sets from the
+# environment at import. An assertion written only against the English text is
+# vacuous whenever the suite runs under a zh locale — and zh is this
+# project's primary customer language, so the unpinned half was the half that
+# mattered. Every assertion below is made once per locale.
+#
+# ⛔ Why all four branches: the root-shell status selects both the sentence and
+# the snippet SHAPE, and one of the four sentences is an all-clear. Only the
+# brownfield needs-include branch was covered, so a mutation pinning
+# `gl_root_written` to False — which makes a greenfield run report our OWN
+# freshly-written shell as the customer's pre-existing pipeline, the exact
+# confusion the production comment claims to guard against — left the whole
+# suite green.
+_SUMMARY_MARKERS = {
+    # locale: (already-wired phrase, needs-paste phrase)
+    'en': ("nothing to do", "paste"),
+    'zh': ("無需額外動作", "貼入"),
+}
+
+
+@pytest.mark.parametrize("lang", sorted(_SUMMARY_MARKERS))
+@pytest.mark.parametrize("shape", ["greenfield", "wired", "needs-append"])
+def test_summary_wiring_line_reports_what_init_actually_did(
+    lang, shape, tmp_path, capsys, monkeypatch,
+) -> None:
+    monkeypatch.setattr(ip, "_LANG", lang)
+    wired_phrase, paste_phrase = _SUMMARY_MARKERS[lang]
+
+    root = tmp_path / shape
+    root.mkdir()
+    if shape == "wired":
+        (root / ".gitlab-ci.yml").write_text(
+            f"include:\n  - local: {_GL_PIPELINE.as_posix()}\n",
+            encoding="utf-8", newline="\n",
+        )
+    elif shape == "needs-append":
+        (root / ".gitlab-ci.yml").write_text(
+            "include:\n  - local: .gitlab-ci.d/theirs.yml\n",
+            encoding="utf-8", newline="\n",
+        )
+
+    config = {
+        "ci": "gitlab",
+        "deploy": "kustomize",
+        "rule_packs": ["mariadb"],
+        "tenants": ["db-a"],
+        "namespace": "monitoring",
+        "da_tools_image": "ghcr.io/vencil/da-tools:latest",
+    }
+    created = ip.run_init(config, str(root))
+    ip._print_summary(created, str(root), config)
+    summary = capsys.readouterr().out
+    # Markers are matched case-insensitively: the English strings capitalise
+    # at the start of a step ("Paste the include above"), and pinning case
+    # would make this test fail on rewording rather than on regression.
+    haystack = summary.lower()
+
+    if shape == "greenfield":
+        # We wrote the root shell ourselves this run. Saying "already in
+        # place — nothing to do" about our own new file is a false report of
+        # a customer-owned pipeline, and it suppresses nothing the customer
+        # needs, so no other assertion would catch it.
+        assert wired_phrase not in haystack, (
+            "a greenfield run described the root shell it just wrote as the "
+            f"customer's pre-existing one.\nsummary was:\n{summary}"
+        )
+        assert paste_phrase not in haystack, (
+            "a greenfield run asked the customer to paste an include the "
+            f"tool already wrote.\nsummary was:\n{summary}"
+        )
+    elif shape == "wired":
+        assert wired_phrase in haystack, (
+            "an already-wired root file did not get the nothing-to-do "
+            f"sentence.\nsummary was:\n{summary}"
+        )
+        assert paste_phrase not in haystack, (
+            "the summary told a customer whose root file already includes "
+            f"our pipeline to paste it again.\nsummary was:\n{summary}"
+        )
+    else:  # needs-append
+        assert paste_phrase in haystack, (
+            f"no paste instruction on the brownfield path.\n{summary}"
+        )
+        # ⛔ Shape, not just presence. Their file already has an `include:`
+        # key; handing them a second one is a duplicate mapping key and YAML
+        # keeps exactly one, so following our own instruction would delete
+        # their entries.
+        assert f"- local: {_GL_PIPELINE.as_posix()}" in summary, summary
+        snippet_block_lines = [
+            ln for ln in summary.splitlines() if ln.strip() == "include:"
+        ]
+        assert not snippet_block_lines, (
+            "the summary handed a whole `include:` block to a repo that "
+            "already has that key — pasting it drops the customer's own "
+            f"includes.\nsummary was:\n{summary}"
+        )
+
+    # ⛔ In every shape and locale: the closing line must not resurrect the
+    # unconditional pre-#1357 claim. Stated as a property rather than a
+    # sentence so it cannot be satisfied by rewording.
+    needs_action = shape == "needs-append"
+    closing = [ln for ln in summary.splitlines() if "GitLab CI" in ln]
+    assert closing, f"no closing platform line at all.\n{summary}"
+    if needs_action:
+        assert any("include" in ln for ln in closing), (
+            "the closing line promises validation without mentioning the "
+            f"include the customer still has to paste.\n{summary}"
+        )
+
+
 # ============================================================
 # ── The #1357 property, stated platform-generally ──
 # ============================================================
@@ -3326,6 +3439,20 @@ def test_unreachable_ci_artifact_detector_can_say_no() -> None:
     assert _unreachable_ci_artifacts({
         ".github/dynamic-alerting.yaml": "name: x\n",
     }) == [".github/dynamic-alerting.yaml"]
+
+    # ⛔ `self_documents` is a conjunction, and only its first half is
+    # exercised above. Weakening it to `"include" in text` leaves every other
+    # case here green, which would let a pipeline that merely *uses* `include:`
+    # for its own composition certify itself as reachable — #1357 regressing
+    # to green. This case pins the second half: the word is present, the
+    # filenames it names are real, and not one of them is auto-loaded.
+    assert _unreachable_ci_artifacts({
+        ".gitlab-ci.d/dynamic-alerting.yml": (
+            "include:\n"
+            "  - local: .gitlab-ci.d/shared-jobs.yml\n"
+            "stages: [validate]\n"
+        ),
+    }) == [".gitlab-ci.d/dynamic-alerting.yml"]
 
     # …and the two passing shapes, so the classifier is not simply strict.
     assert _unreachable_ci_artifacts({
