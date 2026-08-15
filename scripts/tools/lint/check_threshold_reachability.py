@@ -1843,9 +1843,10 @@ def _assert_every_root_contributes(
     # whether the tree still holds the declarations, under whatever name they
     # ended up with. Renaming moves them; it does not delete them.
     #
-    # ⛔ AND NULL IS NOT PART OF THE SHAPE, which is a correction: an earlier
-    # wording here read `name: <number|null>` and justified the null half with
-    # "null means opt-out (ADR-017)". Both cited sources say the opposite.
+    # ⚠️ ONE CORRECTION OUTLIVED THE THREE ATTEMPTS, because it is about the
+    # data rather than about any predicate: an earlier wording here read
+    # `name: <number|null>` and justified the null half with "null means
+    # opt-out (ADR-017)". Both cited sources say the opposite.
     # `docs/adr/017-defaults-yaml-inheritance-dual-hash.md` — for a THRESHOLD
     # key, an explicit `null` does NOT opt out of inheritance; `"disable"` is
     # the way, and the ADR says treating null as meaningful would amount to
@@ -1853,16 +1854,9 @@ def _assert_every_root_contributes(
     # `types.go` is blunter still: a null "would not work — it decodes into
     # map[string]float64 as 0, which emits a threshold of zero for every
     # tenant". So a null in a `defaults:` block is always a defect, never a
-    # legal state, and the shape does not need to accommodate it.
+    # legal state. ⚠️ NOTHING IN THIS FUNCTION ACTS ON THAT — it is written
+    # down so the next attempt does not re-derive the wrong half of it.
     #
-    # ⚠️ THE SEPARATION IS MEASURED, and stated with the direction that costs
-    # something. Measured when written, across the twelve roots: the
-    # legitimately-empty one held ZERO defaults-shaped blocks and every other
-    # root held at least one, both as they stand and after renaming their
-    # `defaults:` away — so the falsifier separates the two states with margin
-    # on every root. ⚠️ That is a property of today's fixtures, not a
-    # guarantee, and the two ways it can be wrong are named in
-    # `_defaults_shaped_blocks` rather than left to be discovered.
     # ⛔ NOT GUARDED HERE, and this is a scope decision taken after three
     # attempts (#1434). The arm that used to sit at this spot asked whether the
     # tree still held threshold-shaped data, in three successive spellings —
