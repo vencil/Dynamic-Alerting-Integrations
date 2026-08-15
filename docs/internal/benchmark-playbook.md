@@ -240,6 +240,19 @@ regression 清掉後（下次 push 不再 flag）label 自動移除。**沒有 o
 
 main 的**持續退化**由 nightly trend watchdog 守望（下節），不靠 PR-time 單點判定。
 
+### 夜跑成對交錯量測（[ADR-032](../adr/032-paired-interleaved-bench-measurement.md) 實作第一段）
+
+`bench-record.yaml` 的第一個 job 現在**每夜在同一台 runner、同一個 job 內交錯量測 main HEAD 與一個固定參考版本**，產出 per-bench 比值。機器速度在比值裡相消，所以不需要知道今晚拿到什麼機器。
+
+⚠️ **本段只量測，不判定。** `analyze_bench_history.py` 與 `perf-trend` 的開關票行為**完全未動**——下面「Nightly sustained-trend watchdog」整節描述的仍是現行行為，比值目前只是 artifact（`bench-paired.json`）。監測器改寫是第二段，追蹤於 [#1439](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1439)（TRK-359）。
+
+- **參考版本釘在 `.github/bench-reference.yaml`，不自動跟隨最新 tag。** ⛔ 換這個值 = 一次**吸收事件**：換版當下 main 上有什麼、新參考點就吸收什麼，包含一個已開票但決定暫不修的退化 ⇒ 之後比值回 1.00 ⇒ 監測器讀成「不再超標」（ADR-032 §待決 1）。自動跟隨會讓這件事在任何人打 tag 的瞬間悄悄發生，所以改它需要一個 PR——**這個摩擦是刻意的**。
+- **綁 `exporter/v*` 而非平台 `v*` 線。** 夜跑量的是 `components/threshold-exporter/app`；平台線會為了與 exporter 無關的發布多做一次吸收（`v2.8.1` 就是平台 tag only）。換版次數越少，吸收事件越少。
+- **參考版本建置失敗 → fail-loud 但不 fail-job。** 配對序列當夜記 `INCONCLUSIVE` + `::error::` annotation；`bench-baseline.txt` 走 fallback 路徑（等同 ADR-032 之前的行為）照常產出，因為它是 `release-attach-bench-baseline.yaml` 的 release 資產來源。⛔ **絕不降級為 warning**——「量不到」與「量了沒事」必須在資料上可區分，這正是本 ADR 要消滅的失效模式。
+- **新測試沒有分母是預期狀態，不是錯誤。** 參考版本裡不存在的 bench 由 `pair_bench_ratio.py` 記為 `missing-in-reference` 並放進 `inconclusive`，不會被算成乾淨。
+- **成本 2× 而非 3×。** 交錯量測的 main 側**直接當** `bench-baseline.txt`：樣本數（6 輪 × `count=1` vs 現行 `count=6`）、benchtime、bench 集合都相同，且 `bench_interleave.sh` 把單一 canary binary 跑進兩側故 canary 列本就在內。舊監測器與 release 資產無需改動。
+- 交錯參數 `ROUNDS=6 BENCHTIME=3s`；job timeout 30 → 45 分鐘（實際耗時尚未實測，見 ADR-032 §待決 4，這個 job 自己的計時就是那個量測）。
+
 ### Nightly sustained-trend watchdog
 
 `bench-record.yaml` 的第二個 job `trend-watch`（nightly baseline 上傳後跑）用 `analyze_bench_history.py --trend-watch` 比對最近 N 晚，**只在「持續多晚」退化時自動開 `perf-trend` issue**（`--assignee` 預設 repo owner = email 通知;若 owner 是 GitHub **Org** 無法 assign,自動 fallback 成**不指派**、仍照常開 issue,靠 `perf-trend` label 訂閱通知),perf 回到 baseline 時**自動關閉**（closed loop）：

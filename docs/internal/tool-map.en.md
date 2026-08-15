@@ -118,6 +118,7 @@ lang: en
 | `inject_waveform.py` | fault-waveform 注入執行器（ADR-030 決策層驗證 PR-2） |
 | `migrate_conf_d.py` | Migrate flat conf.d/ to hierarchical domain/region/env/ layout. |
 | `migrate_ssot_language.py` | SSOT 語言切換遷移工具 (DORMANT, S#101 policy lock) |
+| `pair_bench_ratio.py` | Turn one night's PAIRED benchmark run into per-benchmark ratios (ADR-032). |
 | `pr_preflight.py` | PR Preflight Check — branch 收尾前的自動化檢查。 |
 | `render_soak_diff.py` | v2.8.0 readiness harness: chaos soak result renderer. |
 | `reword_chain.py` | 批次改寫 commit chain 的 subject line（preserve tree + author/committer date） |
