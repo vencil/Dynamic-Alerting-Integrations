@@ -1516,3 +1516,490 @@ class TestTenantApiDockerfilePin:
         assert pins, "Dockerfile 裡的 image pin 不見了——規則會 DEAD"
         assert all(p == f"ghcr.io/vencil/tenant-api:v{version}" for p in pins), pins
 
+
+
+class TestReleaseLineTableRows:
+    """da-tools 版號表的 tenant-api 列 + QUICKSTART 的 portal image pin（#1407 第三輪 F1）。
+
+    這兩處是「沒有任何規則涵蓋」的真陳舊：
+      components/da-tools/README.md   `| tenant-api | v2.8.0 | \\`tenant-api/v2.8.0\\` |`
+                                      ——該表五列裡唯一沒有專屬規則的一列。
+      components/da-portal/QUICKSTART.md `docker run … da-portal:v2.8.0`
+                                      ——2 分鐘上手路徑真的會被複製貼上的那行。
+
+    ⛔ 反面同樣重要：repo 內另外三處 `tenant-api:v2.7.0`（k8s deployment /
+    docs/assets/platform-data.json / portal images.js）**是對的**，不可以順手
+    「修好」。tenant-api 的 image tag 刻意追 Chart.yaml 的 `appVersion`（最後
+    發布的 binary），chart 部署 `:v${appVersion}`、release.yaml 的 L3 digest
+    step 也是探那個 tag；而本表列的是 **release line**（它直接寫出 git tag
+    `tenant-api/vX.Y.Z`），追的是 `version:`。platform-data.json 更是
+    generate_platform_data.py 產生的，加規則會跟產生器打架。
+    """
+
+    def _rule(self, builder, desc):
+        rules = [r for r in builder() if r.get("desc") == desc]
+        assert len(rules) == 1, f"預期剛好一條 {desc!r} 規則：{rules}"
+        return rules[0]
+
+    def _tenant_api_row(self):
+        return self._rule(bump_docs._build_tenant_api_rules,
+                          "tenant-api version + git tag in da-tools strategy table")
+
+    def _portal_quickstart(self):
+        return self._rule(bump_docs._build_portal_rules,
+                          "da-portal image tag in QUICKSTART")
+
+    def test_both_rules_require_match(self):
+        """兩條都是 hand-written 且顯式 require_match：句型再被改寫時要大聲死掉，
+        不可以靜靜退回「沒人涵蓋」的狀態——那正是它們的成因。"""
+        assert self._tenant_api_row().get("require_match") is True
+        assert self._portal_quickstart().get("require_match") is True
+
+    def test_tenant_api_row_is_live_and_current(self):
+        version = bump_docs.read_current_versions()["tenant-api"]
+        changes = bump_docs.apply_rules([self._tenant_api_row()], version,
+                                        check_only=True)
+        assert [c[0] for c in changes] == ["OK"], changes
+
+    def test_portal_quickstart_is_live_and_current(self):
+        version = bump_docs.read_current_versions()["portal"]
+        changes = bump_docs.apply_rules([self._portal_quickstart()], version,
+                                        check_only=True)
+        assert [c[0] for c in changes] == ["OK"], changes
+
+    def test_tenant_api_row_tracks_chart_version_not_appversion(self):
+        """該列的數字必須等於 Chart.yaml 的 `version:`，而不是 `appVersion:`。
+
+        兩者在這個 chart 上刻意脫鉤，抓錯來源就會把 release-line 引用寫成
+        image-runtime pin（或反之）。"""
+        chart = bump_docs.TENANT_API_CHART_YAML.read_text(encoding="utf-8")
+        chart_version = re.search(r'^version:\s*"?([^"\s]+)"?', chart,
+                                  re.MULTILINE).group(1)
+        app_version = re.search(r'^appVersion:\s*"?([^"\s]+)"?', chart,
+                                re.MULTILINE).group(1)
+        assert chart_version != app_version, (
+            "前提沒了：這條測試的意義建立在兩者脫鉤上")
+
+        readme = (bump_docs.REPO_ROOT / "components" / "da-tools"
+                  / "README.md").read_text(encoding="utf-8")
+        row = re.search(r"\| tenant-api \| v(\S+) \| `tenant-api/v(\S+)`", readme)
+        assert row, "da-tools README 的 tenant-api 列不見了——規則會 DEAD"
+        assert row.group(1) == chart_version, (row.group(1), chart_version)
+        assert row.group(2) == chart_version, (row.group(2), chart_version)
+
+    def test_image_runtime_pins_are_left_alone(self):
+        """沒有任何規則會去動那三處刻意追 appVersion 的 image pin。"""
+        chart = bump_docs.TENANT_API_CHART_YAML.read_text(encoding="utf-8")
+        app_version = re.search(r'^appVersion:\s*"?([^"\s]+)"?', chart,
+                                re.MULTILINE).group(1)
+        targets = ["k8s/04-tenant-api/deployment.yaml",
+                   "docs/assets/platform-data.json",
+                   "tools/portal/src/interactive/tools/_common/data/images.js"]
+        for rel in targets:
+            path = bump_docs.REPO_ROOT / rel
+            if not path.exists():        # 檔案搬走了不是本測試要管的事
+                continue
+            pins = re.findall(r"tenant-api:v?(\d+\.\d+\.\d+)",
+                              path.read_text(encoding="utf-8"))
+            assert pins, f"{rel} 的 tenant-api pin 不見了"
+            assert all(p == app_version for p in pins), (
+                f"{rel} 的 image pin {pins} 應該追 appVersion {app_version}；"
+                f"若有人替它加了 bump 規則，這裡會先紅")
+
+        covered = {r.get("file") for r in bump_docs._build_rules()["tenant-api"]}
+        assert covered.isdisjoint(targets), (
+            f"這三個檔案是 appVersion-tracking 的 image pin，不該有 tenant-api "
+            f"版號線規則：{covered & set(targets)}")
+
+
+class TestChangelogReachingGlobsSkipFrozenHistory:
+    """能碰到 docs/CHANGELOG.md 的 glob 一律要 skip_released_changelog（#1407 第三輪 F3）。
+
+    docs/CHANGELOG.md 是 root CHANGELOG.md 的 **symlink**，所以它是每一條
+    `docs/**/*.md` glob 展開結果的成員——glob 規則沒有辦法「不看到它」。已發布
+    的 `## [vX.Y.Z]` 區段是凍結歷史：裡面的版號是「那一版做了什麼」的事實，
+    不是指向現行版本的指標，改掉就是竄改歷史，而且會被報成一般的 UPDATE。
+
+    原本只有 `於 v` 那條帶旗標（因為 PR #503 燒過）。這個 branch 又把三個活的
+    pattern 廣播到同一批檔案上（`**文件版本：**` / `**Document version:**` /
+    `**最後更新**：`，最後一條先前只是因為 `(?=\\s*\\|)` lookahead 才沒作用，
+    而那個 lookahead 在本 branch 被拿掉了），三條都沒有旗標。
+
+    這裡的不變式**從 glob 展開結果推導**，不維護白名單——新加一條 docs glob
+    而忘記旗標時，這條會自己紅。
+    """
+
+    def _changelog_reaching_rules(self):
+        out = []
+        for line, rules in bump_docs._build_rules().items():
+            for rule in rules:
+                if rule.get("file") != "__glob__":
+                    continue
+                files = {e["file"]
+                         for e in bump_docs._expand_glob_rules([dict(rule)])}
+                if "docs/CHANGELOG.md" in files:
+                    out.append((line, rule))
+        return out
+
+    def test_the_invariant_has_teeth(self):
+        """前提檢查：真的有 glob 碰得到 CHANGELOG。否則下一條是空跑。"""
+        assert len(self._changelog_reaching_rules()) >= 6, (
+            "沒有任何 glob 展開到 docs/CHANGELOG.md——symlink 或 glob 換了形狀，"
+            "這組測試已失去意義，請重新確認凍結歷史還有沒有被保護")
+
+    def test_every_changelog_reaching_glob_skips_frozen_history(self):
+        offenders = [f"[{line}] {rule['desc']}"
+                     for line, rule in self._changelog_reaching_rules()
+                     if not rule.get("skip_released_changelog")]
+        assert not offenders, (
+            "以下 glob 規則展開後含 docs/CHANGELOG.md 卻沒有 "
+            "skip_released_changelog——它們可以改寫已發布的 `## [vX.Y.Z]` 區段，"
+            "而且會報成一般 UPDATE（PR #503 那一類）：\n  "
+            + "\n  ".join(offenders))
+
+    @pytest.mark.parametrize("desc,line,body,frozen_line", [
+        ("doc footer **文件版本：** vX.Y.Z", "platform",
+         "**文件版本：** v0.1.0", "**文件版本：** v0.1.0"),
+        ("doc footer **Document version:** vX.Y.Z", "platform",
+         "**Document version:** v0.1.0", "**Document version:** v0.1.0"),
+        ("doc footer **最後更新**：vX.Y.Z pattern", "platform",
+         "**最後更新**：v0.1.0", "**最後更新**：v0.1.0"),
+    ])
+    def test_footer_inside_frozen_entry_is_not_rewritten(
+            self, desc, line, body, frozen_line, tmp_path, monkeypatch):
+        """本 branch 新加的三個 pattern：在凍結區段裡插一行頁尾，bump 後必須原封不動。
+
+        （這正是 review 用來示範的手法：把頁尾插進 `## [v0.1.0]` 之後再跑
+        `--platform`，舊版會改寫它並報 UPDATE。）
+        """
+        rule = [r for r in bump_docs._build_rules()[line]
+                if r.get("desc") == desc]
+        assert len(rule) == 1, desc
+        rule = rule[0]
+
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        changelog = docs / "CHANGELOG.md"
+        changelog.write_text(
+            "# Changelog\n\n"
+            "## [Unreleased]\n\n- 待發佈。\n\n"
+            f"## [v0.1.0] — synthetic (2026-01-01)\n\n- 條目。\n\n{frozen_line}\n",
+            encoding="utf-8")
+        os.chmod(changelog,
+                 stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+
+        changes = bump_docs.apply_rules([dict(rule)], "0.2.0", check_only=False)
+
+        after = changelog.read_text(encoding="utf-8")
+        assert frozen_line in after, (
+            f"凍結區段裡的 {frozen_line!r} 被改寫了：\n{after}")
+        assert "0.2.0" not in after, after
+        assert "UPDATE" not in [c[0] for c in changes], changes
+
+    def test_live_section_of_changelog_still_bumped(self, tmp_path, monkeypatch):
+        """反面：旗標不可以連 `## [Unreleased]` 上方的活內容一起跳過。"""
+        rule = [r for r in bump_docs._build_rules()["platform"]
+                if r.get("desc") == "doc footer **文件版本：** vX.Y.Z"][0]
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        changelog = docs / "CHANGELOG.md"
+        changelog.write_text(
+            "# Changelog\n\n**文件版本：** v0.1.0\n\n"
+            "## [Unreleased]\n\n- 待發佈。\n\n"
+            "## [v0.1.0] — synthetic (2026-01-01)\n\n- 條目。\n",
+            encoding="utf-8")
+        os.chmod(changelog,
+                 stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+
+        bump_docs.apply_rules([dict(rule)], "0.2.0", check_only=False)
+        assert "**文件版本：** v0.2.0" in changelog.read_text(encoding="utf-8")
+
+
+class TestPerLineScopeGuard:
+    """`--scope` 的空集合檢查必須是 per-line，不是全 repo 加總（#1407 第三輪 F2）。
+
+    舊版把 filter 套在全部六條線上加總，但 bump / check 迴圈是**逐線**過濾的。
+    於是「全域非空、但對正在處理的那條線是空的」scope 會通過守門員，然後一條
+    規則都沒評估就報成功——正是守門員 docstring 自己說要擋掉的那件事：
+
+        --tenant-api 9.9.9 --scope docs         → ✅ Done. 0 update(s) applied.  exit 0
+        --check --tenant-api 9.9.9 --scope docs → ✅ … already up to date.        exit 0
+    """
+
+    _SCRIPT = (Path(__file__).resolve().parents[2] / "scripts" / "tools"
+               / "dx" / "bump_docs.py")
+
+    def _run(self, *args):
+        return subprocess.run([sys.executable, str(self._SCRIPT), *args],
+                              capture_output=True, text=True)
+
+    def test_bump_with_line_empty_scope_is_caller_error(self):
+        r = self._run("--tenant-api", "9.9.9", "--scope", "docs", "--dry-run")
+        assert r.returncode == 2, (
+            f"`--tenant-api 9.9.9 --scope docs` 應為 caller error(2)，實得 "
+            f"{r.returncode}。exit 0 表示「我一條 tenant-api 規則都沒評估」"
+            f"與「已完成」長得一樣。\nstdout:\n{r.stdout[-600:]}")
+        assert "tenant-api" in r.stderr
+        assert "Done" not in r.stdout
+
+    def test_check_with_line_empty_scope_is_caller_error(self):
+        r = self._run("--check", "--tenant-api", "9.9.9", "--scope", "docs")
+        assert r.returncode == 2, r.stdout[-600:]
+        assert "up to date" not in r.stdout
+
+    def test_guard_runs_before_any_write(self):
+        """守門員在迴圈**之前**跑：多線 bump 時不可以先寫好一條線再失敗。
+
+        platform 在 docs 下有 ~2100 條規則、tenant-api 一條都沒有。若守門員
+        擺在迴圈內，這個指令會先把整棵 docs/ 處理完才發現 tenant-api 沒東西可
+        做——在沒有 --check 的那條路徑上，那就是已經寫進去了。
+
+        ⛔ 這條**故意**用 `--check` 跑真實 repo。要證的是「守門員在迴圈之前
+        fire」，而 stdout 裡有沒有 `PLATFORM` 區塊標題就是那個順序的證據；把
+        `--check` 拿掉雖然更貼近災難現場，但一旦守門員退化，測試自己就會把整
+        棵 docs/ 改寫成 9.9.9（實測會弄髒 237 個檔案）。測試不該有那種爆炸半徑。
+        """
+        r = self._run("--check", "--platform", "9.9.9", "--tenant-api",
+                      "9.9.9", "--scope", "docs")
+        assert r.returncode == 2, r.stdout[-600:]
+        assert "PLATFORM" not in r.stdout, (
+            "守門員在迴圈裡才 fire：platform 線已經整個跑完了，換成不帶 "
+            f"--check 的同一個指令就是 2100 條規則落地。\n{r.stdout[-600:]}")
+
+    def test_line_with_rules_under_scope_still_works(self):
+        """反面：scope 對該線非空時照常運作，守門員不得誤傷。"""
+        r = self._run("--platform", "9.9.9", "--scope", "docs", "--dry-run")
+        assert r.returncode == 0, (r.returncode, r.stdout[-600:], r.stderr[-400:])
+
+    def test_bare_check_reports_scope_excluded_lines(self):
+        """bare `--check --scope helm` 不再靜靜跳過 platform 線。
+
+        這裡刻意**不**要求 exit 2：bare check 沒有指名任何一條線，`--scope helm`
+        的語意就是「只看 helm」，而 platform 在 helm 下本來就沒有規則。錯的是
+        「完全不吭聲」，不是 exit code——所以修法是把它列印成一個獨立診斷
+        SCOPE-EMPTY，與 NO-SSOT / MISSING / DEAD / GLOB-* 分開標籤。
+        """
+        r = self._run("--check", "--scope", "helm")
+        assert "SCOPE-EMPTY" in r.stdout, r.stdout[-600:]
+        assert "[platform]" in r.stdout, r.stdout[-600:]
+        assert r.returncode == 0, r.stdout[-600:]
+
+    def test_repo_wide_zero_scope_still_caller_error(self):
+        """不得弱化：全域 0 條規則仍然是 exit 2。"""
+        r = self._run("--check", "--scope", "nosuchdir")
+        assert r.returncode == 2, r.stdout[-600:]
+
+    def test_what_if_reports_scope_excluded_lines(self):
+        r = self._run("--what-if", "--scope", "helm")
+        assert "SCOPE-EMPTY" in r.stdout, r.stdout[-800:]
+
+    def test_helper_is_pure_per_line(self):
+        """單元層：全域非空、目標線為空 → 一定要 exit 2。"""
+        all_rules = {"a": [{"file": "docs/x.md"}], "b": [{"file": "helm/y.yaml"}]}
+        with pytest.raises(SystemExit) as exc:
+            bump_docs._require_nonempty_line_scope(all_rules, "docs", ["b"])
+        assert exc.value.code == 2
+        # 目標線非空 → 不得拋出
+        bump_docs._require_nonempty_line_scope(all_rules, "docs", ["a"])
+
+
+class TestSyncCountsFlagContract:
+    """`--sync-counts` 的守備範圍與 Makefile 接線（#1407 第三輪 F4）。"""
+
+    _SCRIPT = (Path(__file__).resolve().parents[2] / "scripts" / "tools"
+               / "dx" / "bump_docs.py")
+
+    def _run(self, *args):
+        return subprocess.run([sys.executable, str(self._SCRIPT), *args],
+                              capture_output=True, text=True)
+
+    def test_make_version_check_runs_sync_counts(self):
+        """`--sync-counts --check` 必須是 release gate 的一部分。
+
+        NO-SOURCE 與計數的 DEAD / MISSING 三種診斷，原本在 repo 內只有
+        .github/workflows/validate.yaml 的 path-filtered PR job 跑得到——
+        `make pre-tag` 看不到，等於擋不住 tag。
+        """
+        makefile = (bump_docs.REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+        body = makefile.split("\nversion-check:", 1)
+        assert len(body) == 2, "Makefile 沒有 version-check target"
+        recipe = body[1].split("\n.PHONY", 1)[0]
+        assert "--sync-counts --check" in recipe, (
+            f"version-check 沒有跑 `--sync-counts --check`：\n{recipe}")
+        assert "bump_docs.py --check" in recipe, recipe
+
+    def test_pre_tag_depends_on_version_check(self):
+        makefile = (bump_docs.REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+        pre_tag = [ln for ln in makefile.splitlines()
+                   if ln.startswith("pre-tag:")]
+        assert pre_tag and "version-check" in pre_tag[0], pre_tag
+
+    def test_sync_counts_is_green_today(self):
+        r = self._run("--sync-counts", "--check")
+        assert r.returncode == 0, r.stdout[-1200:]
+
+    @pytest.mark.parametrize("extra", [
+        ["--platform", "2.10.0"], ["--tenant-api", "2.10.0"],
+        ["--scope", "docs"],
+    ])
+    def test_sync_counts_rejects_flags_it_would_discard(self, extra):
+        """`--sync-counts` 不讀版號旗標也不讀 --scope，過去照收不誤且靜默丟棄。
+
+        `--sync-counts --platform 2.10.0` 於是同步了計數、**沒有** bump 版號，
+        然後 exit 0——release script 可以就這樣掉一整條版號線。
+        """
+        r = self._run("--sync-counts", "--check", *extra)
+        assert r.returncode == 2, (r.returncode, r.stdout[-600:])
+        assert "does not accept" in r.stderr, r.stderr[-400:]
+
+
+class TestShieldsBadgeEscaping:
+    """README 版號 badge 的 shields.io 欄位跳脫（#1407 第三輪 F5）。
+
+    static badge 的路徑文法是 `/badge/<label>-<message>-<color>`：三個欄位用
+    單一 `-` 分隔，欄位**內文**的 `-` 必須寫成 `--`。正式版號沒有 `-`，
+    release candidate 有——`_SEMVER` 放寬到接受 pre-release 之後，
+    `--platform 2.10.0-rc1` 就會吐出 `badge/version-v2.10.0-rc1-brightgreen`
+    （四個欄位），整個 rc 視窗都渲染錯誤。
+
+    ⛔ 這個 bug 不會被任何既有 gate 抓到：pattern 咬得到自己的輸出（冪等測試
+    綠）、值 round-trip 得回來、`--check` 全程報 consistent。唯一症狀是
+    README 上一張壞掉的圖。
+    """
+
+    def _badge_rules(self):
+        rules = [r for r in bump_docs._build_rules()["platform"]
+                 if r.get("desc", "").endswith("version badge")]
+        assert len(rules) == 2, f"預期 README.md / README.en.md 兩條：{rules}"
+        return rules
+
+    def test_release_version_unchanged(self):
+        """沒有 suffix 的版號不受影響——跳脫只能動到該動的字元。"""
+        for rule in self._badge_rules():
+            assert rule["replacement"]("2.10.0") == \
+                "badge/version-v2.10.0-brightgreen"
+
+    def test_prerelease_dash_is_doubled(self):
+        for rule in self._badge_rules():
+            assert rule["replacement"]("2.10.0-rc1") == \
+                "badge/version-v2.10.0--rc1-brightgreen"
+
+    def test_output_always_has_exactly_three_badge_fields(self):
+        """把輸出照 shields.io 的規則解析回來：先把 `--` 佔位，再切 `-`。"""
+        for rule in self._badge_rules():
+            for ver in ("2.10.0", "2.10.0-rc1", "2.10.0-beta.2",
+                        "3.0.0-rc1-hotfix"):
+                out = rule["replacement"](ver)
+                path = out[len("badge/"):]
+                fields = path.replace("--", "\x00").split("-")
+                assert len(fields) == 3, (
+                    f"{ver!r} → {out!r} 解析成 {len(fields)} 個欄位 "
+                    f"{[f.replace(chr(0), '-') for f in fields]}，"
+                    f"shields.io 只認 label-message-color 三個")
+                label, message, color = (f.replace("\x00", "-") for f in fields)
+                assert (label, message, color) == ("version", f"v{ver}",
+                                                   "brightgreen")
+
+    def test_pattern_still_matches_the_escaped_form(self):
+        """跳脫後的字串仍要被自己的 pattern 咬回來，否則下一次 --check 永遠 drift。"""
+        for rule in self._badge_rules():
+            out = rule["replacement"]("2.10.0-rc1")
+            assert re.findall(rule["pattern"], out) == [out], out
+
+    def test_escaping_is_confined_to_the_badge_rule(self):
+        """其他規則不得被順手加上跳脫——`--` 在版號字串裡是壞掉的。"""
+        for line, rules in bump_docs._build_rules().items():
+            for rule in rules:
+                if rule.get("desc", "").endswith("version badge"):
+                    continue
+                if rule.get("whole_file") or rule.get("pair_anchor"):
+                    continue
+                assert "--rc1" not in rule["replacement"]("9.9.9-rc1"), (
+                    f"[{line}] {rule['desc']} 不該跳脫 dash")
+
+    def test_real_readmes_are_parseable_today(self):
+        for name in ("README.md", "README.en.md"):
+            text = (bump_docs.REPO_ROOT / name).read_text(encoding="utf-8")
+            found = re.findall(r"badge/version-(\S+?)-brightgreen", text)
+            assert found, f"{name} 的版號 badge 不見了——規則會 DEAD"
+            for message in found:
+                assert "-" not in message.replace("--", ""), (
+                    f"{name} badge 的 message 欄位含未跳脫的 dash：{message!r}")
+
+
+class TestEveryDiagnosisIsWiredIntoEveryGatingMode:
+    """⛔ 接線層鎖，補齊到「每一種診斷 × 每一個會擋 release 的模式」。
+
+    這個分支的論點寫在 `TestGlobGroupHealth` 裡：`make pre-tag` 不跑 pytest，
+    所以只有測試看得到的守門員，對 release gate 而言等於不存在。照那個論點，
+    「只有 helper 的單元測試釘住」也一樣不存在——真正要釘的是 `main()` 有沒有
+    把診斷接到結束碼上。
+
+    盲審實測：`--check` 對 MISSING / DEAD / GLOB-EMPTY 的結束碼判斷可以整段
+    刪掉、`--what-if` 的三個計數可以從結束碼拿掉、`--sync-counts` 的 plain 與
+    check 分支、以及 explicit bump 的 `sys.exit(EXIT_VIOLATION)` 全都可以刪掉
+    ——而整份測試維持全綠。以下每一條各對應一個當時存活的變異。
+
+    ⚠️ 全部在 `tmp_path` 上跑（`REPO_ROOT` 被 monkeypatch），所以不會像某次
+    mutation 那樣真的寫進 repo。
+    """
+
+    _MISSING = {
+        "file": "docs/gone.md", "desc": "probe missing",
+        "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"v{v}",
+    }
+    _DEAD = {
+        "file": "docs/there.md", "desc": "probe dead",
+        "pattern": r"\*\*絕不出現\*\*：v[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"**絕不出現**：v{v}",
+    }
+    _GLOB_EMPTY = {
+        "file": "__glob__", "glob_dir": "nowhere", "glob_pattern": "**/*.md",
+        "desc": "probe glob-empty",
+        "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"v{v}",
+    }
+
+    def _repo(self, tmp_path, monkeypatch, rule):
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "there.md").write_text("沒有版號\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(bump_docs, "read_current_versions",
+                            lambda: {line: "2.9.0"
+                                     for line in bump_docs.VERSION_LINES})
+        monkeypatch.setattr(bump_docs, "_build_rules", lambda: {
+            line: ([dict(rule)] if line == "platform" else [])
+            for line in bump_docs.VERSION_LINES})
+
+    @pytest.mark.parametrize("diagnosis", ["missing", "dead", "glob_empty"])
+    @pytest.mark.parametrize("mode", ["--check", "--what-if"])
+    def test_gating_modes_exit_nonzero(self, diagnosis, mode, tmp_path,
+                                       monkeypatch, capsys, cli_argv):
+        rule = {"missing": self._MISSING, "dead": self._DEAD,
+                "glob_empty": self._GLOB_EMPTY}[diagnosis]
+        self._repo(tmp_path, monkeypatch, rule)
+        cli_argv("bump_docs", mode)
+        with pytest.raises(SystemExit) as exc:
+            bump_docs.main()
+        capsys.readouterr()
+        assert exc.value.code != 0, (
+            f"{mode} 對 {diagnosis} 仍 exit 0——release gate 會說版號全部一致，"
+            "而那條規則其實一個字都沒驅動。")
+
+    @pytest.mark.parametrize("diagnosis", ["missing", "dead", "glob_empty"])
+    def test_explicit_bump_exits_nonzero(self, diagnosis, tmp_path,
+                                         monkeypatch, capsys, cli_argv):
+        """`make bump-docs` 走的就是這條路徑——真正的 release bump。"""
+        rule = {"missing": self._MISSING, "dead": self._DEAD,
+                "glob_empty": self._GLOB_EMPTY}[diagnosis]
+        self._repo(tmp_path, monkeypatch, rule)
+        cli_argv("bump_docs", "--platform", "2.10.0")
+        with pytest.raises(SystemExit) as exc:
+            bump_docs.main()
+        capsys.readouterr()
+        assert exc.value.code != 0, (
+            f"explicit bump 對 {diagnosis} 仍 exit 0——版號被推上去了，而這條"
+            "規則沒有跟上，沒有任何人會知道。")

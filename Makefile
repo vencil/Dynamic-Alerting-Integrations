@@ -608,8 +608,15 @@ onboard-analyze: ## Analyze existing AM/Prometheus configs for onboarding
 #   GLOB-DEAD  glob 展開到檔案、但整棵樹一個都沒撈到
 #   NO-SSOT    六條版號線之一讀不到 source-of-truth（該線全部規則未被評估）
 # `--scope` 過濾後剩 0 條規則會以 exit 2 擋下，不會回報「一致」。
-version-check: ## 檢查版號一致性 (CI lint 用；DRIFT/DEAD/MISSING/GLOB-EMPTY/GLOB-DEAD/NO-SSOT 皆會 fail)
+#
+# 第二行 `--sync-counts --check` 同一個理由（#1407 第三輪）：計數規則自己的三種
+# 診斷——NO-SOURCE（計數來源讀不到）/ DEAD（句型變了撈不到）/ MISSING（檔案不在）
+# ——在 repo 內只有 .github/workflows/validate.yaml:348 跑得到，而那個 job 有 path
+# filter。「只有 path-filtered PR job 看得到的守門員」對 release 而言，跟「只有
+# pytest 看得到」是同一句話：等於不存在。tag 前必須自己跑一次。
+version-check: ## 檢查版號一致性 + 計數一致性 (CI lint 用；DRIFT/DEAD/MISSING/GLOB-EMPTY/GLOB-DEAD/NO-SSOT/NO-SOURCE 皆會 fail)
 	@python3 ./scripts/tools/dx/bump_docs.py --check
+	@python3 ./scripts/tools/dx/bump_docs.py --sync-counts --check
 
 .PHONY: pre-tag
 pre-tag: version-check lint-docs playbook-freshness-ll draft-advisory-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）

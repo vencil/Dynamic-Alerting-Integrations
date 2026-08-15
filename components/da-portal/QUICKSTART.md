@@ -20,7 +20,7 @@
 ## 馬上試（≤ 2 分鐘）
 
 ```sh
-docker run --rm -p 8080:80 ghcr.io/vencil/da-portal:v2.8.0
+docker run --rm -p 8080:80 ghcr.io/vencil/da-portal:v2.9.0
 #   → 開瀏覽器：http://localhost:8080
 ```
 

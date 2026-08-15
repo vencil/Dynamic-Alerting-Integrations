@@ -30,6 +30,8 @@ Chart.yaml version 與 appVersion 同步，統一由 --exporter 管理。
   python3 scripts/tools/bump_docs.py --dry-run --platform 2.1.0
 
   # 限定範圍：只處理 docs/ 下的檔案
+  # （--scope 對「指名的版號線」選不到任何規則時 → exit 2，不會回報「已完成」；
+  #   bare --check 下被 scope 排除的線會印 SCOPE-EMPTY，不算 violation）
   python3 scripts/tools/bump_docs.py --dry-run --scope docs --platform 2.1.0
 
   # 初始化英文 CHANGELOG
@@ -44,7 +46,8 @@ Chart.yaml version 與 appVersion 同步，統一由 --exporter 管理。
   # 自動更新散落在文件中的硬編碼計數（工具、Rule Pack、文件數、hooks 等）
   python3 scripts/tools/bump_docs.py --sync-counts
 
-  # 檢查計數是否需要更新
+  # 檢查計數是否需要更新（`make version-check` / `make pre-tag` 會跑這條）
+  # ⛔ --sync-counts 不接受版號旗標與 --scope（它只同步計數，過去照收然後靜默丟棄）
   python3 scripts/tools/bump_docs.py --sync-counts --check
 
   # 組合使用
@@ -143,6 +146,17 @@ PORTAL_JSX_DIR = "tools/portal/src/interactive/tools"
 _SEMVER = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?"
 
 
+def _shields_escape(value: str) -> str:
+    """Escape a value for one field of a shields.io static-badge URL.
+
+    `https://img.shields.io/badge/<label>-<message>-<color>` splits on single
+    dashes, so a dash that is part of a field's TEXT has to be doubled. Only
+    the README version badge needs this, and only since `_SEMVER` grew a
+    pre-release suffix — see the rule in _build_platform_rules().
+    """
+    return value.replace("-", "--")
+
+
 def _build_tools_rules():
     """Build version replacement rules for da-tools (image tags, VERSION file).
 
@@ -156,6 +170,10 @@ def _build_tools_rules():
         "desc": "da-tools image tag in docs/**/*.md",
         "pattern": r"ghcr\.io/vencil/da-tools:v?" + _SEMVER,
         "replacement": lambda v: f"ghcr.io/vencil/da-tools:v{v}",
+        # docs/**/*.md reaches docs/CHANGELOG.md (symlink to the root one).
+        # A pinned image quoted inside a released entry is a record of what
+        # that release shipped — see the ⛔ note in _build_platform_rules().
+        "skip_released_changelog": True,
     })
     # Portal JSX/JS sources. The glob USED to say glob_dir "docs" +
     # "**/*.jsx", but the JSX moved to tools/portal/src/ in TRK-230 and
@@ -383,6 +401,34 @@ def _build_tenant_api_rules():
         "require_match": True,
     })
 
+    # da-tools README versioning table — the tenant-api row.
+    #
+    # Every OTHER row of that five-row table already had a dedicated rule
+    # (平台文件 / threshold-exporter / da-tools / da-portal). The tenant-api
+    # row was the only one without, so it sat at v2.8.0 while this line's
+    # SSOT said 2.9.20.
+    #
+    # ⚠️ It tracks Chart.yaml `version:` (this line's SSOT), NOT `appVersion`.
+    # That distinction is the whole reason three OTHER stale-looking
+    # `tenant-api:v2.7.0` strings in this repo are correct and must be left
+    # alone: k8s/04-tenant-api/deployment.yaml, docs/assets/platform-data.json
+    # (which is GENERATED from the deploy SSOT — a rule here would fight
+    # generate_platform_data.py) and the portal's images.js are IMAGE-RUNTIME
+    # pins, and the chart deploys `:v${appVersion}` on purpose. This row is a
+    # RELEASE-LINE reference: it literally names the git tag `tenant-api/vX.Y.Z`,
+    # which release.yaml gates against `version:`.
+    #
+    # Version and tag sit on one line and are always equal, so one rule owns
+    # both — the same shape as the 平台文件 row in _build_platform_rules().
+    rules.append({
+        "file": "components/da-tools/README.md",
+        "desc": "tenant-api version + git tag in da-tools strategy table",
+        "pattern": (r"\| tenant-api \| v" + _SEMVER
+                    + r" \| `tenant-api/v" + _SEMVER + "`"),
+        "replacement": lambda v: f"| tenant-api | v{v} | `tenant-api/v{v}`",
+        "require_match": True,
+    })
+
     return rules
 
 
@@ -495,6 +541,27 @@ def _build_platform_rules():
 
     Covers doc footers, headers, front matter, README intros, and mkdocs.yml.
     Returns list of rule dicts for the 'platform' version line.
+
+    ⛔ EVERY rule that globs `docs/**/*.md` MUST set
+    `skip_released_changelog: True`.
+
+    `docs/CHANGELOG.md` is a SYMLINK to the root CHANGELOG.md, so it is a
+    member of every one of those 260-file expansions — a glob rule cannot
+    opt out of seeing it. Version strings inside released `## [vX.Y.Z]`
+    entries are historical facts about what a past release did, not pointers
+    to the current version, so rewriting them corrupts frozen history and
+    reports it as an ordinary UPDATE.
+
+    Only the `於 v` rule carried the flag, because that is the one shape that
+    had already burned us (PR #503, where the stop-gap was to reword 於→在 to
+    dodge the regex). Three more live patterns were widened onto that file
+    since — `**文件版本：**`, `**Document version:**`, and `**最後更新**：`
+    (the last had been inert only because of a `(?=\\s*\\|)` lookahead, which
+    was removed) — none of which had the flag. There are zero live instances
+    inside frozen entries today, so nothing is corrupted; the flag is the
+    control, and `test_every_changelog_reaching_glob_skips_frozen_history`
+    now derives the required set from the glob expansions themselves rather
+    than from a hand-kept list, so a NEW docs glob cannot be added without it.
     """
     rules = []
 
@@ -515,6 +582,7 @@ def _build_platform_rules():
         "desc": "doc footer **文件版本：** vX.Y.Z",
         "pattern": r"\*\*文件版本：\*\*\s*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**文件版本：** v{v}",
+        "skip_released_changelog": True,
     })
     rules.append({
         "file": "__glob__",
@@ -523,6 +591,7 @@ def _build_platform_rules():
         "desc": "doc footer **Document version:** vX.Y.Z",
         "pattern": r"\*\*Document version:\*\*\s*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**Document version:** v{v}",
+        "skip_released_changelog": True,
     })
 
     # ⚠️ Two architecture-and-design header rules were deleted here, both
@@ -655,6 +724,11 @@ def _build_platform_rules():
             "desc": f"front matter version: in {_glob_dir}/{_ext}",
             "pattern": r"(?<=\n)version:\s*v[0-9]+\.[0-9]+[^\n]*(?=\n)",
             "replacement": lambda v: f"version: v{v}",
+            # docs/**/*.md reaches docs/CHANGELOG.md. Front matter is above
+            # the first `## [vX.Y.Z]` heading so it stays live and is still
+            # bumped; the flag costs nothing here and keeps the invariant
+            # "every docs glob carries it" mechanical instead of case-by-case.
+            "skip_released_changelog": True,
         })
 
     # Doc header blockquote pattern: `> **vX.Y.Z |` (common in doc headers)
@@ -665,6 +739,7 @@ def _build_platform_rules():
         "desc": "doc header blockquote version (> **vX.Y.Z |)",
         "pattern": r"> \*\*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\*\*\s*\|",
         "replacement": lambda v: f"> **v{v}** |",
+        "skip_released_changelog": True,
     })
 
     # ⚠️ Deleted: `inline doc header version (bold blockquote, no pipe)`,
@@ -686,15 +761,9 @@ def _build_platform_rules():
     # Inline version text: `於 v2.0.0 統一採集` or similar inline version
     # strings in doc content.
     #
-    # `skip_released_changelog`: CHANGELOG.md is scanned via the docs/**/*.md
-    # glob (docs/CHANGELOG.md symlinks to the root CHANGELOG.md). Version
-    # strings inside released `## [vX.Y.Z]` entries are historical facts —
-    # `於 v<old>` there records what a past release did, not a pointer to
-    # the current version — so they must never be bumped. Without this flag
-    # the rule false-matched a historical `已於 v<old> …` sentence and tried
-    # to flip it to the version being bumped to (PR #503; the stop-gap there
-    # was to reword 於→在 to dodge the regex). See
-    # _split_at_released_changelog().
+    # `skip_released_changelog`: see the ⛔ note at the top of this function —
+    # this was the first rule to need it (PR #503), and it is now required of
+    # EVERY docs/**/*.md glob rule, not just this one.
     rules.append({
         "file": "__glob__",
         "glob_dir": "docs",
@@ -713,6 +782,7 @@ def _build_platform_rules():
         "desc": "doc header **版本**：vX.Y.Z pattern",
         "pattern": r"\*\*版本\*\*：v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?(?=（|：)",
         "replacement": lambda v: f"**版本**：v{v}",
+        "skip_released_changelog": True,
     })
 
     # Footer pattern: **最後更新**：vX.Y.Z
@@ -736,6 +806,7 @@ def _build_platform_rules():
         "desc": "doc footer **最後更新**：vX.Y.Z pattern",
         "pattern": r"\*\*最後更新\*\*：v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**最後更新**：v{v}",
+        "skip_released_changelog": True,
     })
 
     # JSON schema "version" field: docs/schemas files
@@ -777,12 +848,31 @@ def _build_platform_rules():
     # a plain product name. The version did not leave the READMEs, it moved
     # into the shields.io badge on the badge row, so these are repointed
     # rather than deleted. Identical shape in both files, hence one loop.
+    #
+    # ⚠️ This is the ONE replacement here that is not a plain f-string of the
+    # version, and the reason is the badge URL grammar, not taste.
+    # shields.io's static route is `/badge/<label>-<message>-<color>`: the
+    # THREE fields are separated by single dashes, so a dash that belongs to
+    # a field's text must be written doubled (`--`). A release version has no
+    # dash, but a RELEASE CANDIDATE does — once `_SEMVER` was widened to
+    # accept pre-release suffixes, `--platform 2.10.0-rc1` started emitting
+    # `badge/version-v2.10.0-rc1-brightgreen`, i.e. FOUR fields, which
+    # renders as the wrong badge for the entire rc window.
+    #
+    # Nothing would ever have flagged it: the pattern matches its own output
+    # (so it is idempotent, and the prerelease-idempotency test passes), the
+    # value round-trips, and `--check` reports "consistent" the whole time.
+    # The only symptom is a broken image in the README.
+    #
+    # Escaping is confined to this rule. The pattern needs no change: `-` is
+    # inside its suffix character class, so it matches the doubled form on
+    # the way back in.
     for _readme in ("README.md", "README.en.md"):
         rules.append({
             "file": _readme,
             "desc": f"{_readme} version badge",
             "pattern": r"badge/version-v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?-brightgreen",
-            "replacement": lambda v: f"badge/version-v{v}-brightgreen",
+            "replacement": lambda v: f"badge/version-v{_shields_escape(v)}-brightgreen",
         })
 
     # Interactive hub footer version.
@@ -886,6 +976,27 @@ def _build_portal_rules():
         "desc": "da-portal image tag in README",
         "pattern": r"ghcr\.io/vencil/da-portal:v?" + _SEMVER,
         "replacement": lambda v: f"ghcr.io/vencil/da-portal:v{v}",
+    })
+
+    # da-portal image tag in QUICKSTART.md.
+    #
+    # components/da-portal/README.md had a rule; QUICKSTART.md — the file
+    # whose 「馬上試（≤ 2 分鐘）」 block is the copy-paste command a first-time
+    # reader actually runs — did not, so it sat at v2.8.0 while every other
+    # `da-portal:` pin in the repo was already v2.9.0. A stale pin here is
+    # worse than a stale doc footer: the reader runs the OLD portal and
+    # judges the product by it.
+    #
+    # `require_match` is explicit (not just the hand-written default)
+    # because this rule exists precisely BECAUSE the string was uncovered:
+    # if the 馬上試 block is rewritten, it must die loudly rather than
+    # quietly go back to being uncovered.
+    rules.append({
+        "file": "components/da-portal/QUICKSTART.md",
+        "desc": "da-portal image tag in QUICKSTART",
+        "pattern": r"ghcr\.io/vencil/da-portal:v?" + _SEMVER,
+        "replacement": lambda v: f"ghcr.io/vencil/da-portal:v{v}",
+        "require_match": True,
     })
 
     # da-tools README versioning table — da-portal row (version + git tag)
@@ -1896,13 +2007,26 @@ def _init_changelog_entry(version: str, lang: str = "zh"):
               f"({today})")
 
 
+_SCOPE_HINT = ("(it is matched against each rule's \"file\" / \"glob_dir\" "
+               "prefix, repo-relative, e.g. docs, components, helm; use '.' "
+               "for root-level files)")
+
+
 def _require_nonempty_scope(all_rules, scope):
-    """A `--scope` that selects ZERO rules is a caller error, not a pass.
+    """A `--scope` that selects ZERO rules ANYWHERE is a caller error.
 
     Measured: `--check --scope nosuchdir` printed "✅ All version references
     are consistent." and exited 0 — the same green as a real clean run, from a
     command that checked nothing at all. A typo'd scope in a release script is
     therefore indistinguishable from success.
+
+    ⚠️ This is the REPO-WIDE floor only. It sums the filter over all six
+    lines while the bump/check loops filter PER LINE, so a scope that is
+    non-empty globally but empty for the line being worked on sails past it
+    and then evaluates nothing — exactly the hole this guard's own docstring
+    claims to close. `_require_nonempty_line_scope()` below is the per-line
+    half; both are needed (this one still catches the typo'd scope in bare
+    `--check`, where no single line is "requested").
 
     Exits EXIT_CALLER_ERROR (2, "you invoked me wrong"), NOT EXIT_VIOLATION
     (1, "the repo is wrong") — nothing is drifting; the filter is.
@@ -1914,10 +2038,66 @@ def _require_nonempty_scope(all_rules, scope):
     if total == 0:
         print(f"ERROR: --scope {scope!r} selected ZERO rules. Nothing would "
               f"be checked or bumped, so this cannot report success. Check "
-              f"the path (it is matched against each rule's \"file\" / "
-              f"\"glob_dir\" prefix, repo-relative, e.g. docs, components, "
-              f"helm; use '.' for root-level files).", file=sys.stderr)
+              f"the path {_SCOPE_HINT}.", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
+
+
+def _require_nonempty_line_scope(all_rules, scope, requested_lines):
+    """A `--scope` that selects zero rules for a REQUESTED line is a caller error.
+
+    Measured, with the repo-wide guard above in place and passing:
+
+        bump_docs.py --tenant-api 9.9.9 --scope docs
+          → "✅ Done. 0 update(s) applied."          exit 0
+        bump_docs.py --check --tenant-api 9.9.9 --scope docs
+          → "✅ All version references are already up to date."  exit 0
+
+    `--scope docs` selects ~2100 rules across the platform and tools lines, so
+    the repo-wide sum is nowhere near zero — but tenant-api owns nothing under
+    docs/, and tenant-api is the ONLY line the caller asked about. Both
+    commands evaluated exactly nothing and reported success for the work they
+    were asked to do. In a release script that is the same failure the
+    repo-wide guard exists to prevent, one level down.
+
+    `requested_lines` is what the invocation actually asks for — the lines
+    carrying a version flag. It is deliberately NOT "all six": a bare
+    `--check --scope docs` legitimately means "check the docs tree", and
+    recipe-preview owning nothing there is the scope working as asked, not a
+    defect. Those cases are REPORTED instead (SCOPE-EMPTY), so they stop
+    being invisible without turning every scoped check into an error.
+
+    Called BEFORE any line is processed, so a bad invocation cannot write
+    half a bump and then fail.
+    """
+    if not scope:
+        return
+    empty = [line for line in requested_lines
+             if not _filter_by_scope(all_rules.get(line, []), scope)]
+    if empty:
+        print(f"ERROR: --scope {scope!r} selected ZERO rules for the "
+              f"requested version line(s): {', '.join(empty)}. Those lines "
+              f"would be reported as done/consistent without a single rule "
+              f"being evaluated. Drop --scope, or scope to a directory that "
+              f"line owns {_SCOPE_HINT}.", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+
+
+def _scope_empty_note(line, all_rules, scope):
+    """SCOPE-EMPTY text for a line the caller did not single out, or None.
+
+    Distinct label, kept apart from NO-SSOT / MISSING / DEAD / GLOB-EMPTY /
+    GLOB-DEAD as those are from each other, because it means something none of
+    them do: the SSOT read fine and every rule is healthy — `--scope` simply
+    excluded all of them, so this line was NOT looked at. Previously a
+    scope-excluded line printed nothing at all, so `--check --scope helm`
+    dropped the entire platform line in silence and still said
+    "✅ All version references are consistent."
+    """
+    if not scope or _filter_by_scope(all_rules.get(line, []), scope):
+        return None
+    return (f"--scope {scope!r} excluded all "
+            f"{len(all_rules.get(line, []))} rule group(s) on this line — it "
+            f"was NOT checked. Widen or drop --scope to cover it.")
 
 
 def main():
@@ -1965,6 +2145,29 @@ def main():
 
     # --sync-counts: auto-update all hardcoded counts
     if args.sync_counts:
+        # Count rules are a hand-written, single-file set with no glob_dir, so
+        # `--scope` has nothing to filter on and was simply ignored; the six
+        # version flags are not read on this path either. Both were accepted
+        # in silence, so `--sync-counts --platform 2.10.0` did the counts and
+        # NOT the bump while exiting 0 — a release script could lose a whole
+        # version bump that way and never see a word about it. Reject the
+        # combination instead of pretending to honour it. EXIT_CALLER_ERROR
+        # (2) for the same reason as the --scope guards: the repo is fine, the
+        # invocation is not.
+        ignored = [name for name, value in
+                   (("--platform", args.platform), ("--exporter", args.exporter),
+                    ("--tools", args.tools), ("--portal", args.portal),
+                    ("--recipe-preview", args.recipe_preview),
+                    ("--tenant-api", args.tenant_api), ("--scope", args.scope))
+                   if value]
+        if ignored:
+            print(f"ERROR: --sync-counts does not accept {', '.join(ignored)} "
+                  f"— it syncs hardcoded COUNTS, which have no version and no "
+                  f"scope filter, and those flags were previously accepted and "
+                  f"then silently discarded. Run --sync-counts on its own, and "
+                  f"the version bump as a separate command.", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
+
         total_tools, ops_tools, dx_tools, lint_tools = _count_python_tools()
         rule_packs = _count_rule_packs()
         jsx_tools = _count_jsx_tools()
@@ -2078,6 +2281,15 @@ def main():
         glob_dead = 0
 
         for line in VERSION_LINES:
+            note = _scope_empty_note(line, all_rules, args.scope)
+            if note:
+                # Not counted as a violation: --what-if is an audit and the
+                # caller narrowed the scope on purpose. It IS printed, because
+                # a silently-absent line is indistinguishable from a healthy
+                # one in the Summary below.
+                print(f"\n⚠️  {line}: SCOPE-EMPTY — {note}")
+                continue
+
             ver = versions.get(line)
             if not ver:
                 # Was `⚠️  … version not found in source-of-truth` + continue,
@@ -2246,6 +2458,14 @@ def main():
         # Reproduced by rewording one sentence in CLAUDE.md: 2170 platform
         # rules gone, exit 0 (#1407 second round).
         for line in VERSION_LINES:
+            note = _scope_empty_note(line, all_rules, args.scope)
+            if note:
+                # Printed, not fatal — see _scope_empty_note(). A bare
+                # `--check --scope docs` is a legitimate "check the docs
+                # tree"; what was wrong was doing it in total silence.
+                print(f"  SCOPE-EMPTY [{line}] {note}")
+                continue
+
             ver = versions.get(line)
             if not ver:
                 has_drift = True
@@ -2304,19 +2524,26 @@ def main():
 
     all_rules = _build_rules()
     _require_nonempty_scope(all_rules, args.scope)
+
+    requested = [(line, ver) for line, ver in
+                 [("platform", args.platform),
+                  ("exporter", args.exporter),
+                  ("tools", args.tools),
+                  ("portal", args.portal),
+                  ("recipe-preview", args.recipe_preview),
+                  ("tenant-api", args.tenant_api)]
+                 if ver]
+    # BEFORE the loop, so a scope that silently selects nothing for one of the
+    # requested lines cannot bump the other lines first and then be discovered.
+    _require_nonempty_line_scope(all_rules, args.scope,
+                                 [line for line, _ in requested])
+
     total_updates = 0
     dead_rules = 0
     missing_rules = 0
     glob_broken = 0
 
-    for line, new_ver in [("platform", args.platform),
-                          ("exporter", args.exporter),
-                          ("tools", args.tools),
-                          ("portal", args.portal),
-                          ("recipe-preview", args.recipe_preview),
-                          ("tenant-api", args.tenant_api)]:
-        if not new_ver:
-            continue
+    for line, new_ver in requested:
 
         # Strip leading 'v' if provided
         new_ver = new_ver.lstrip("v")
