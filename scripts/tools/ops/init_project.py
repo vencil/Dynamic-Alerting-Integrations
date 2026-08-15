@@ -1460,13 +1460,21 @@ _GL_PIPELINE_REL = Path('.gitlab-ci.d') / 'dynamic-alerting.yml'
 # two documents.
 _GL_ROOT_SHELL_REL = Path('.gitlab-ci.yml')
 
-# ⛔ The GitLab pipeline's stage list, named ONCE. It is interpolated into the
-# pipeline's own `stages:` and quoted back to the customer in the root shell's
-# hand-editing note. Those two used to be independent literals, and when
-# #1358 removed the `generate` stage the note kept telling customers to give
-# their own jobs `stage: generate` — a value GitLab rejects, so following our
-# instruction broke the whole pipeline. A shipped instruction that names a
-# stage must be derived from the stage list, not retyped beside it.
+# ⛔ The GitLab pipeline's stage list.
+#
+# The root shell's hand-editing note — which ships into the customer's repo
+# and tells them which `stage:` values their own jobs may use — is DERIVED
+# from this tuple. It previously retyped the list, and when #1358 removed the
+# `generate` stage the note went on naming it; a customer following it gets a
+# pipeline GitLab refuses to build, so nothing runs, validation included.
+#
+# ⚠️ Stated precisely, because the honest scope is narrower than "SSOT": the
+# pipeline template still carries its own literal `stages:` block and each
+# job its own literal `stage:` — `textwrap.dedent` runs before `.format()`,
+# so a multi-line placeholder at column 0 flattens the whole template. What
+# ties them is a TEST (`test_root_shell_only_names_stages_the_pipeline_
+# declares`), not a derivation. That is a tripwire, not an invariant: it
+# catches drift, it does not prevent it.
 _GL_STAGES = ('validate', 'apply')
 
 # The exact wiring the customer must have, in the two SHAPES it is needed.
@@ -1482,7 +1490,30 @@ _GL_INCLUDE_SNIPPET = (
     "include:\n"
     f"  - local: {_GL_PIPELINE_REL.as_posix()}\n"
 )
-_GL_INCLUDE_ITEM_SNIPPET = f"  - local: {_GL_PIPELINE_REL.as_posix()}\n"
+# ⛔ There is deliberately NO paste-ready "just this line" fragment any more.
+#
+# Three independent reviews found three different ways one destroys a
+# customer's root pipeline, and they share a root cause: a fragment carries
+# indentation and block/flow style, and we control neither.
+#   * `include:` as a scalar, a single mapping, or empty — a block item
+#     underneath any of them is a syntax error.
+#   * `include: ['a.yml']` (flow) or `include: *anchor` (alias) — both parse
+#     to a Python list, so a type check calls them safe, yet the value is on
+#     the key's own line and a block item under it is the same syntax error.
+#   * a genuine block list indented 0 or 4 spaces — our fixed 2-space item
+#     does not join it.
+# In every case the customer follows our instruction and their ENTIRE
+# pipeline stops loading — strictly worse than the #1357 bug we set out to
+# fix, which only left OUR pipeline inert.
+#
+# So for any file we did not write we show the END STATE and let the customer
+# fit it to their own document. It is a sentence more to read and it cannot
+# be wrong.
+_GL_WIRING_EXAMPLE = (
+    "include:\n"
+    "  - <keep your existing entries here>\n"
+    f"  - local: {_GL_PIPELINE_REL.as_posix()}\n"
+)
 
 
 # Root-shell outcomes. "There is already a root file" is not one case but
@@ -1526,6 +1557,33 @@ def _gitlab_declared_includes(doc: object) -> list[str]:
         elif isinstance(entry, dict) and isinstance(entry.get('local'), str):
             found.append(_gitlab_include_path(entry['local']))
     return found
+
+
+def _enclosing_repo_root(output_dir: str) -> Optional[Path]:
+    """The git work-tree root above `output_dir`, if it is not `output_dir`.
+
+    ⛔ Every claim this tool makes about GitLab wiring is really a claim about
+    the REPOSITORY root, because that is the only path GitLab auto-loads —
+    but the whole five-state classification reads `--output-dir`. Those are
+    the same directory only when the customer runs it at the top of their
+    repo. `-o` defaults to `.` and its help calls it the "output root", while
+    sibling scaffolders in this same family default to a subdirectory, so
+    `-o alerting/` is a trained habit rather than an exotic case.
+
+    Run that way, the tool writes an inert `.gitlab-ci.yml` one level down,
+    never reads the real root file, and prints "GitLab wiring done" — #1357
+    re-created and then certified, which is precisely the outcome
+    `_gitlab_root_shell_status` exists to prevent. Returning the enclosing
+    root lets the caller downgrade the claim instead of asserting it.
+    """
+    try:
+        here = Path(output_dir).resolve()
+    except OSError:
+        return None
+    for candidate in (here, *here.parents):
+        if (candidate / '.git').exists():
+            return None if candidate == here else candidate
+    return None
 
 
 def _gitlab_root_shell_status(output_dir: str) -> str:
@@ -1610,9 +1668,15 @@ _GL_INCLUDE_KEY_RE = re.compile(r'^include\s*:', re.MULTILINE)
 
 
 def _gitlab_root_snippet_for(status: str) -> str:
-    """The snippet shape that is safe to paste for a given root-file status."""
-    return (_GL_INCLUDE_ITEM_SNIPPET if status == _GL_ROOT_NEEDS_APPEND
-            else _GL_INCLUDE_SNIPPET)
+    """What to show for a given root-file status.
+
+    Only NEEDS_INCLUDE gets a paste-ready block, and only because adding a
+    brand-new top-level key at the end of a document is the one edit whose
+    correctness does not depend on the rest of the file's style. Every other
+    state shows the end state instead — see `_GL_WIRING_EXAMPLE`.
+    """
+    return (_GL_INCLUDE_SNIPPET if status == _GL_ROOT_NEEDS_INCLUDE
+            else _GL_WIRING_EXAMPLE)
 
 
 def _gitlab_root_shell_is_needed(output_dir: str) -> bool:
@@ -2437,9 +2501,15 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
     # customer with work to do, so this list must be the complement of those
     # two — enumerating the needs-work states instead is how NEEDS_CONVERT got
     # added later and silently inherited "CI will automatically validate".
+    # ⛔ Complement, not an enumeration of needs-work states — enumerating is
+    # how NEEDS_CONVERT silently inherited "CI will automatically validate".
+    # The subdirectory case is unfinished work too: whatever we wrote, the
+    # repository root does not include it yet.
+    gl_in_subdir = _enclosing_repo_root(output_dir) is not None
     gl_needs_manual = (ci_sel in ('gitlab', 'both')
-                       and not gl_root_written
-                       and gl_status != _GL_ROOT_ALREADY_WIRED)
+                       and (gl_in_subdir
+                            or (not gl_root_written
+                                and gl_status != _GL_ROOT_ALREADY_WIRED)))
 
     if ci_sel in ('github', 'both'):
         if is_zh:
@@ -2451,7 +2521,27 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
         step += 1
 
     if ci_sel in ('gitlab', 'both'):
-        if gl_root_written:
+        # ⛔ Every GitLab claim below is about the REPOSITORY root, which is
+        # the only path GitLab auto-loads. If we were pointed at a
+        # subdirectory, none of them is true of the repo — say so instead of
+        # asserting wiring we did not do.
+        repo_root = _enclosing_repo_root(output_dir)
+        if repo_root is not None:
+            rel = Path(output_dir).resolve().relative_to(repo_root)
+            if is_zh:
+                print(f"  {step}. ⚠️ 這次的輸出目錄是 `{rel.as_posix()}/`，"
+                      f"不是 repo 根目錄。GitLab 只會自動載入 **repo 根目錄** 的 "
+                      f"`.gitlab-ci.yml`，所以產在這個子目錄裡的那一份不會被讀到。"
+                      f"請在 repo 根目錄的 `.gitlab-ci.yml` 加上："
+                      f"`- local: {(rel / _GL_PIPELINE_REL).as_posix()}`")
+            else:
+                print(f"  {step}. ⚠️ This run wrote into `{rel.as_posix()}/`, "
+                      f"not the repository root. GitLab auto-loads only the "
+                      f"**repository root** `.gitlab-ci.yml`, so the one "
+                      f"generated here is not read. Add "
+                      f"`- local: {(rel / _GL_PIPELINE_REL).as_posix()}` to "
+                      f"your repository-root `.gitlab-ci.yml`.")
+        elif gl_root_written:
             if is_zh:
                 print(f"  {step}. GitLab 接線已完成：已產生根目錄 "
                       f"{_GL_ROOT_SHELL_REL.as_posix()}（GitLab 只會自動載入這個路徑），"
@@ -2476,86 +2566,54 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
             # include" is an instruction they have to translate, and this is
             # the point at which a wrong translation leaves the whole pipeline
             # inert with nothing red anywhere.
-            # ⛔ Which snippet SHAPE is safe depends on their file. Handing an
-            # `include:` block to a repo that already has that key makes a
-            # duplicate mapping key, and YAML keeps one — so following this
-            # instruction would delete their own includes.
-            if gl_status == _GL_ROOT_NEEDS_APPEND:
+            # ⛔ Three states, one safe instruction. NEEDS_APPEND,
+            # NEEDS_CONVERT and UNPARSEABLE differ in what we know about
+            # their file, but not in what we can safely tell them: show the
+            # end state, never a fragment whose indentation and block/flow
+            # style we cannot see. (An earlier version printed a ready-made
+            # list item for NEEDS_APPEND; flow sequences, aliases and
+            # non-2-space indentation all made that a syntax error that took
+            # the customer's whole pipeline down.)
+            if gl_status == _GL_ROOT_NEEDS_INCLUDE:
                 if is_zh:
                     print(f"  {step}. ⚠️ 你的 repo 已有根目錄 "
-                          f"{_GL_ROOT_SHELL_REL.as_posix()}（且已有 include:）"
-                          f"— 未修改。請把下面這一行**接在既有 include: 清單底下**"
-                          f"（不要另外再寫一個 include:，那會蓋掉你原本的）：")
-                else:
-                    print(f"  {step}. ⚠️ Your repo already has a root "
-                          f"{_GL_ROOT_SHELL_REL.as_posix()} with an `include:` "
-                          f"— left untouched. Append the line below to that "
-                          f"EXISTING include: list (do not add a second "
-                          f"`include:` key — it would drop your own entries):")
-            elif gl_status == _GL_ROOT_NEEDS_CONVERT:
-                # ⛔ Neither ready-made shape is safe here. Their `include:` is
-                # a scalar or a single mapping, so a list item underneath it is
-                # a syntax error and a second `include:` key deletes what they
-                # have. The only correct instruction is "turn it into a list",
-                # which we show structurally rather than pretending to know
-                # their entry.
-                if is_zh:
-                    print(f"  {step}. ⚠️ 你的 repo 已有根目錄 "
-                          f"{_GL_ROOT_SHELL_REL.as_posix()}，其 `include:` 不是清單"
-                          f"形式 — 未修改。請先把它改寫成清單，再把我們這一項加進去，"
-                          f"例如：")
-                    print()
-                    print("       include:")
-                    print("         - <你原本的 include 內容>")
-                    print(f"         - local: {_GL_PIPELINE_REL.as_posix()}")
-                    print()
-                    print("       （直接在下面加一行清單項目會是語法錯誤，"
-                          "另外再寫一個 include: 則會蓋掉你原本的。）")
-                else:
-                    print(f"  {step}. ⚠️ Your repo's root "
-                          f"{_GL_ROOT_SHELL_REL.as_posix()} has an `include:` "
-                          f"that is not a list — left untouched. Convert it to "
-                          f"a list first, then add ours, e.g.:")
-                    print()
-                    print("       include:")
-                    print("         - <your existing include entry>")
-                    print(f"         - local: {_GL_PIPELINE_REL.as_posix()}")
-                    print()
-                    print("       (Appending a list item under a non-list is a "
-                          "syntax error; adding a second `include:` key drops "
-                          "what you have.)")
-            elif gl_status == _GL_ROOT_UNPARSEABLE:
-                if is_zh:
-                    print(f"  {step}. ⚠️ 你的 repo 已有根目錄 "
-                          f"{_GL_ROOT_SHELL_REL.as_posix()}，但無法解析它 — 未修改。"
-                          f"請自行確認下列 include 已存在其中，否則產生的 "
-                          f"pipeline 不會執行：")
-                else:
-                    print(f"  {step}. ⚠️ Your repo has a root "
-                          f"{_GL_ROOT_SHELL_REL.as_posix()} that could not be "
-                          f"parsed — left untouched. Make sure the include "
-                          f"below is present in it, or the generated pipeline "
-                          f"never runs:")
-            else:
-                if is_zh:
-                    print(f"  {step}. ⚠️ 你的 repo 已有根目錄 "
-                          f"{_GL_ROOT_SHELL_REL.as_posix()} — 未修改。"
-                          f"GitLab 只會自動載入該檔，請自行貼入下列片段，"
+                          f"{_GL_ROOT_SHELL_REL.as_posix()}，但裡面沒有 "
+                          f"`include:` — 未修改。請自行加上下列這段，"
                           f"否則產生的 pipeline 不會執行：")
                 else:
-                    print(f"  {step}. ⚠️ Your repo already has a root "
-                          f"{_GL_ROOT_SHELL_REL.as_posix()} — left untouched. "
-                          f"GitLab auto-loads only that file, so paste the "
-                          f"snippet below into it or the generated pipeline "
-                          f"never runs:")
-            # NEEDS_CONVERT printed its own worked example above: neither
-            # ready-made shape is safe for it, so there is nothing here to
-            # hand over.
-            if gl_status != _GL_ROOT_NEEDS_CONVERT:
-                print()
-                for line in _gitlab_root_snippet_for(gl_status).rstrip('\n').splitlines():
-                    print(f"       {line}")
-                print()
+                    print(f"  {step}. ⚠️ Your repo has a root "
+                          f"{_GL_ROOT_SHELL_REL.as_posix()} with no "
+                          f"`include:` — left untouched. Add the block below "
+                          f"or the generated pipeline never runs:")
+            else:
+                if gl_status == _GL_ROOT_UNPARSEABLE:
+                    lead_zh = (f"你的 repo 已有根目錄 "
+                               f"{_GL_ROOT_SHELL_REL.as_posix()}，但無法解析它")
+                    lead_en = (f"Your repo has a root "
+                               f"{_GL_ROOT_SHELL_REL.as_posix()} that could "
+                               f"not be parsed")
+                else:
+                    lead_zh = (f"你的 repo 已有根目錄 "
+                               f"{_GL_ROOT_SHELL_REL.as_posix()}，且已經有 "
+                               f"`include:`")
+                    lead_en = (f"Your repo's root "
+                               f"{_GL_ROOT_SHELL_REL.as_posix()} already has "
+                               f"an `include:`")
+                if is_zh:
+                    print(f"  {step}. ⚠️ {lead_zh} — 未修改。請自行編輯它，"
+                          f"讓 `include:` 最後長成下面這樣（保留你原本的項目，"
+                          f"照你檔案既有的縮排來寫；不要另外再開一個 "
+                          f"`include:`，那會蓋掉你原本的）：")
+                else:
+                    print(f"  {step}. ⚠️ {lead_en} — left untouched. Edit it "
+                          f"so the `include:` ends up like this (keep your "
+                          f"own entries, and match your file's existing "
+                          f"indentation; do not add a second `include:` key "
+                          f"— it would drop what you have):")
+            print()
+            for line in _gitlab_root_snippet_for(gl_status).rstrip('\n').splitlines():
+                print(f"       {line}")
+            print()
         step += 1
 
     # ⛔ Was an unconditional "CI will automatically validate your config".

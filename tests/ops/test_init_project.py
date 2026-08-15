@@ -1866,104 +1866,80 @@ class TestRunInit:
             )
             assert status == ip._GL_ROOT_NEEDS_INCLUDE, status
 
-    def test_root_file_with_its_own_include_asks_for_a_list_item(self):
-        """⛔ Handing this repo an `include:` BLOCK destroys their entries.
+    def test_no_existing_file_ever_gets_a_paste_ready_fragment(self):
+        """⛔ The rule three reviews converged on, stated once.
 
-        `include:` is a top-level mapping key; a second one is a duplicate key
-        and YAML keeps exactly one. A customer who does what we print would
-        silently lose their SAST/security includes.
+        A ready-made fragment carries indentation and block/flow style, and
+        we control neither. Every one of these shapes was demonstrated to
+        turn the customer's ENTIRE root pipeline into a syntax error when
+        they followed the instruction we printed:
+
+          * `include:` scalar / single mapping / empty  — block item under a
+            non-list
+          * `include: ['a.yml']` and `include: *anchor` — parse to a Python
+            list, so a type check calls them safe, but the value is on the
+            key's own line
+          * a real block list indented 0 or 4 spaces      — our fixed 2-space
+            item does not join it
+
+        That is strictly worse than #1357 itself, which only left OUR
+        pipeline inert. So for any file we did not write we show the END
+        STATE and let the customer fit it to their document.
         """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            status = self._status_for(
-                tmpdir,
-                'include:\n'
-                '  - local: .gitlab-ci.d/security.yml\n'
-                '  - template: Jobs/SAST.gitlab-ci.yml\n'
-                'stages: [build]\n',
-            )
-            assert status == ip._GL_ROOT_NEEDS_APPEND, status
-            snippet = ip._gitlab_root_snippet_for(status)
-            assert 'include:' not in snippet, snippet
-            assert snippet.strip() == '- local: .gitlab-ci.d/dynamic-alerting.yml'
-
-    def test_non_list_include_is_never_told_to_append_a_list_item(self):
-        """⛔ `include:` also accepts a scalar and a single mapping.
-
-        Telling the owner of one of those to "append this list item under your
-        existing include:" produces a block sequence under a scalar — a YAML
-        syntax error that stops their ENTIRE root pipeline from loading, not
-        just ours. Measured before this split existed: the bare-string,
-        single-mapping and empty-list shapes all failed to parse after
-        following the printed instruction; only a true list survived.
-        """
-        for name, body in {
-            'bare string': "include: 'templates/base.yml'\nstages: [build]\n",
+        shapes = {
+            'scalar': "include: 'templates/base.yml'\n",
             'single mapping': 'include:\n  template: Security/SAST.yml\n',
-            'empty list': 'include: []\nstages: [build]\n',
-        }.items():
+            'empty list': 'include: []\n',
+            'flow sequence': "include: ['a.yml', 'b.yml']\n",
+            'alias': '.inc: &inc\n  - local: a.yml\ninclude: *inc\n',
+            'block list 0-indent': 'include:\n- local: a.yml\n',
+            'block list 2-indent': 'include:\n  - local: a.yml\n',
+            'block list 4-indent': 'include:\n    - local: a.yml\n',
+            'unparseable + include': (
+                'include:\n  - local: a.yml\nx: !reference [.a, b]\n'),
+        }
+        for name, body in shapes.items():
             with tempfile.TemporaryDirectory() as tmpdir:
                 status = self._status_for(tmpdir, body)
-                assert status == ip._GL_ROOT_NEEDS_CONVERT, (name, status)
+                assert status != ip._GL_ROOT_ALREADY_WIRED, (name, status)
+                snippet = ip._gitlab_root_snippet_for(status)
+                assert snippet == ip._GL_WIRING_EXAMPLE, (
+                    f'{name}: got a paste-ready fragment instead of the '
+                    f'end-state example — {snippet!r}')
 
-    def test_gitlab_strips_leading_slashes_so_we_must_too(self):
-        """`local: /path` and `local: path` are the same file to GitLab.
+    def test_only_a_file_without_an_include_key_gets_a_paste_ready_block(self):
+        """The one edit whose correctness does not depend on the file's style.
 
-        Its own docs use the leading slash in every `include:local` example,
-        so comparing raw strings made a correctly wired repo read as unwired —
-        and we then asked for a second include of the file it already loads.
-        """
-        for spelling in ('/.gitlab-ci.d/dynamic-alerting.yml',
-                         './.gitlab-ci.d/dynamic-alerting.yml'):
-            with tempfile.TemporaryDirectory() as tmpdir:
-                status = self._status_for(
-                    tmpdir, f'include:\n  - local: {spelling}\n')
-                assert status == ip._GL_ROOT_ALREADY_WIRED, (spelling, status)
-
-    def test_root_shell_only_names_stages_the_pipeline_declares(self):
-        """⛔ The shell is shipped INTO the customer's repo and tells them
-        which `stage:` values their own jobs may use. It named `generate`
-        for two commits after #1358 deleted that stage — a customer following
-        it gets a pipeline GitLab refuses to build, so nothing runs at all,
-        validation included. Derive, do not retype.
-        """
-        shell = ip._gen_gitlab_root_shell()
-        declared = yaml.safe_load(
-            ip._gen_gitlab_ci('monitoring', 'img', 'kustomize'))['stages']
-        assert list(ip._GL_STAGES) == declared, (ip._GL_STAGES, declared)
-        named = re.search(r'drawn from that list \(([^)]*)\)', shell)
-        assert named, shell
-        assert [x.strip() for x in named.group(1).split(',')] == declared
-
-    def test_force_does_not_rewrite_an_existing_root_gitlab_ci(self):
-        """⛔ The `--force` help promises this exception; nothing tested it.
-
-        `--force` is the most destructive flag the tool has — it exists to
-        discard hand edits — and the one file it must never touch is the one
-        that may be the customer's ENTIRE pipeline. A mutation that ORs
-        `--force` into the root-shell write condition left the whole suite
-        green, so the promise lived only in prose.
+        Adding a brand-new top-level key at the end of a document cannot
+        collide with an existing `include:` and cannot mis-indent into one.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
-            root_path = os.path.join(tmpdir, '.gitlab-ci.yml')
-            original = 'stages: [build]\n\nbuild:\n  script:\n    - echo hi\n'
-            with open(root_path, 'w', encoding='utf-8', newline='\n') as fh:
-                fh.write(original)
-            config = {
-                'ci': 'gitlab',
-                'deploy': 'kustomize',
-                'rule_packs': ['mariadb'],
-                'tenants': ['db-a'],
-                'namespace': 'monitoring',
-                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
-                'force': True,
-            }
-            # Two runs: the second is the "already initialised, forced" shape.
-            ip.run_init(config, tmpdir)
-            created = ip.run_init(config, tmpdir)
-            assert open(root_path, encoding='utf-8').read() == original, (
-                '--force rewrote an existing root .gitlab-ci.yml, deleting '
-                "the customer's own pipeline")
-            assert root_path not in created
+            status = self._status_for(tmpdir, 'stages: [build]\n')
+            assert status == ip._GL_ROOT_NEEDS_INCLUDE, status
+            assert ip._gitlab_root_snippet_for(status) == ip._GL_INCLUDE_SNIPPET
+
+    def test_output_dir_below_the_repo_root_is_not_reported_as_wired(self):
+        """⛔ Every GitLab claim is about the REPOSITORY root.
+
+        The classification reads `--output-dir`, and those are the same
+        directory only when the tool is run at the top of the repo. `-o`
+        defaults to `.` but its help calls it the "output root", and sibling
+        scaffolders in this family default to a subdirectory — so `-o sub/`
+        is a trained habit. Run that way the tool wrote an inert
+        `.gitlab-ci.yml` one level down, never read the real root file, and
+        printed "GitLab wiring done": #1357 re-created and then certified.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = os.path.join(tmpdir, 'repo')
+            os.makedirs(os.path.join(repo, '.git'))
+            with open(os.path.join(repo, '.gitlab-ci.yml'), 'w',
+                      encoding='utf-8', newline='\n') as fh:
+                fh.write('include:\n  - local: .gitlab-ci.d/sast.yml\n')
+            sub = os.path.join(repo, 'alerting')
+            os.makedirs(sub)
+            assert ip._enclosing_repo_root(sub) is not None
+            assert ip._enclosing_repo_root(repo) is None, (
+                'the repo root itself must not be treated as a subdirectory')
 
     def test_root_file_already_including_ours_is_wired(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1983,17 +1959,15 @@ class TestRunInit:
     def test_gitlab_custom_tags_degrade_safely_not_to_a_false_all_clear(self):
         """`!reference` is ordinary in a real pipeline and SafeLoader raises.
 
-        ⛔ Pinning the DIRECTION of that loss, which is the whole point. A
-        tag-tolerant loader would classify this file as wired, but installing
-        one needs `yaml.load(..., Loader=...)` and the repo's SAST rule
-        rejects that — it cannot tell a SafeLoader subclass from an unsafe
-        load, and widening a security lint to win a nicer sentence is the
-        wrong trade.
+        ⛔ Pinning the DIRECTION of that loss. A tag-tolerant loader would
+        classify this file precisely, but installing one needs
+        `yaml.load(..., Loader=...)` and the repo's SAST rule rejects that —
+        it cannot tell a SafeLoader subclass from an unsafe load, and
+        widening a security lint to win a nicer sentence is the wrong trade.
 
-        So this file lands in UNPARSEABLE and its owner is asked to check the
-        include they in fact already have: one redundant reminder. What must
-        never happen is the other direction — a file GitLab does not load
-        being reported as wired — and UNPARSEABLE cannot produce that.
+        So the owner is asked to check wiring they may already have: one
+        redundant reminder. What must never happen is the other direction —
+        a file GitLab does not load being reported as wired.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             status = self._status_for(
@@ -2001,13 +1975,8 @@ class TestRunInit:
                 'include:\n  - local: .gitlab-ci.d/dynamic-alerting.yml\n'
                 'job:\n  script:\n    - !reference [.setup, script]\n',
             )
-            # It now classifies as needs-append: the document did not parse,
-            # but a line scan can still see the `include:` key, and that is
-            # exactly enough to pick the SAFE snippet shape (the list item)
-            # without ever claiming the pipeline is wired.
-            assert status == ip._GL_ROOT_NEEDS_APPEND, status
-            assert status != ip._GL_ROOT_ALREADY_WIRED
-            assert 'include:' not in ip._gitlab_root_snippet_for(status)
+            assert status != ip._GL_ROOT_ALREADY_WIRED, status
+            assert ip._gitlab_root_snippet_for(status) == ip._GL_WIRING_EXAMPLE
             assert not ip._gitlab_root_shell_is_needed(tmpdir)
 
     def test_unparseable_without_an_include_key_gets_the_block(self):

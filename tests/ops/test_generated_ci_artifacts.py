@@ -3449,26 +3449,23 @@ def test_summary_wiring_line_reports_what_init_actually_did(
             f"\n{summary}"
         )
         assert f"- local: {_GL_PIPELINE.as_posix()}" in summary, summary
-        if shape in ("needs-append", "unparseable-with-include"):
-            # ⛔ Shape, not just presence. Their file already has an
-            # `include:` key; a second one is a duplicate mapping key and
-            # YAML keeps exactly one, so following our own instruction would
-            # delete their entries. `unparseable` reaches this via a line
-            # scan — `!reference` is the ordinary route in, and such a
-            # pipeline almost always already has an `include:`.
-            assert not [ln for ln in summary.splitlines()
-                        if ln.strip() == "include:"], (
-                "the summary handed a whole `include:` block to a repo that "
-                "already has that key — pasting it drops the customer's own "
-                f"includes.\nsummary was:\n{summary}"
-            )
-        elif shape == "needs-convert":
-            # Neither ready-made shape is safe: a list item under a scalar is
-            # a syntax error, a second key deletes their entry. The only
-            # correct instruction is a worked "convert to a list" example.
-            assert "<" in summary, (
-                "needs-convert did not show a worked conversion example; a "
-                f"ready-made snippet is unsafe for this shape.\n{summary}"
+        if shape == "needs-include":
+            # No `include:` key at all — a brand-new top-level key appended
+            # at the end of the document is style-independent, so the
+            # ready-made block is safe here and only here.
+            assert any(ln.strip() == "include:"
+                       for ln in summary.splitlines()), summary
+        else:
+            # ⛔ Every other existing-file shape gets the END STATE, never a
+            # paste-ready fragment. A fragment carries indentation and
+            # block/flow style we cannot see: scalar / single-mapping /
+            # empty `include:`, flow sequences, aliases, and block lists
+            # indented 0 or 4 spaces were each demonstrated to turn the
+            # customer's whole root pipeline into a syntax error when they
+            # followed the printed instruction.
+            assert "<keep your existing entries here>" in summary, (
+                f"shape {shape!r} was handed a paste-ready fragment instead "
+                f"of the end-state example.\nsummary was:\n{summary}"
             )
 
     if ci == "both":
