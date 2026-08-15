@@ -65,19 +65,39 @@ def load(where: pathlib.Path | None = None):
     return meta, obs
 
 
+def med(obs, shard, side, bench):
+    """One side's summary for one bench on one shard: the median across rounds
+    of that round's already-median-of-5 value."""
+    return st.median([obs[(shard, r, side, bench)] for r in ROUNDS])
+
+
+def peers(meta, shards, shard):
+    """The OTHER shards that ran the same CPU model. The nightly needs at least
+    two of these to form a same-class multi-night reference; a shard with fewer
+    is what `INCONCLUSIVE` looks like in production."""
+    return [k for k in shards
+            if k != shard and meta[k]["cpu"] == meta[shard]["cpu"]]
+
+
+def short_cpu(model: str) -> str:
+    """Trim a /proc/cpuinfo model name down to something that fits a column."""
+    for noise in ("Processor", "Intel(R) ", "INTEL(R) ",
+                  "Xeon(R) ", "XEON(R) ", "AMD "):
+        model = model.replace(noise, "")
+    return model.strip()
+
+
 def estimators(meta, obs):
     """The two estimators, over the MATCHED population. Returns
     (paired_median, cross_median, n_evaluable, n_total)."""
     shards = sorted(meta)
     benches = sorted({k[3] for k in obs})
-    med = lambda s, side, b: st.median([obs[(s, r, side, b)] for r in ROUNDS])
-    peers = lambda s: [k for k in shards
-                       if k != s and meta[k]["cpu"] == meta[s]["cpu"]]
-    evaluable = [s for s in shards if len(peers(s)) >= 2]
-    paired = [abs(med(j, "B", b) / med(j, "A", b) - 1)
+    evaluable = [s for s in shards if len(peers(meta, shards, s)) >= 2]
+    paired = [abs(med(obs, j, "B", b) / med(obs, j, "A", b) - 1)
               for j in evaluable for b in benches]
-    cross = [abs(med(j, "B", b) /
-                 st.median([med(k, "A", b) for k in peers(j)]) - 1)
+    cross = [abs(med(obs, j, "B", b) /
+                 st.median([med(obs, k, "A", b)
+                            for k in peers(meta, shards, j)]) - 1)
              for j in evaluable for b in benches]
     return st.median(paired), st.median(cross), len(evaluable), len(shards)
 
@@ -112,10 +132,7 @@ def main() -> int:
     for c, n in cpus.most_common():
         print(f"  {n:>2} x {c}")
 
-    med = lambda s, side, b: st.median([obs[(s, r, side, b)] for r in ROUNDS])
-    peers = lambda s: [k for k in shards
-                       if k != s and meta[k]["cpu"] == meta[s]["cpu"]]
-    evaluable = [s for s in shards if len(peers(s)) >= 2]
+    evaluable = [s for s in shards if len(peers(meta, shards, s)) >= 2]
     excluded = [s for s in shards if s not in evaluable]
 
     print(f"\nCoverage — the current design needs >=2 same-class peers to form "
@@ -127,20 +144,22 @@ def main() -> int:
           f"{'max':>10}{'>5% floor':>11}{'n':>6}")
     print("-" * 91)
     p_all = summarize("PAIRED  all 16 shards",
-                      [abs(med(j, "B", b) / med(j, "A", b) - 1)
+                      [abs(med(obs, j, "B", b) / med(obs, j, "A", b) - 1)
                        for j in shards for b in benches])
     p_match = summarize("PAIRED  the same 12 shards (matched)",
-                        [abs(med(j, "B", b) / med(j, "A", b) - 1)
+                        [abs(med(obs, j, "B", b) / med(obs, j, "A", b) - 1)
                          for j in evaluable for b in benches])
     c_med = summarize("CROSS   vs same-class multi-night median",
-                      [abs(med(j, "B", b) /
-                           st.median([med(k, "A", b) for k in peers(j)]) - 1)
+                      [abs(med(obs, j, "B", b) /
+                           st.median([med(obs, k, "A", b)
+                                      for k in peers(meta, shards, j)]) - 1)
                        for j in evaluable for b in benches])
     summarize("CROSS   single night vs single night, same class",
-              [abs(med(j, "B", b) / med(k, "A", b) - 1)
-               for b in benches for j in shards for k in peers(j)])
+              [abs(med(obs, j, "B", b) / med(obs, k, "A", b) - 1)
+               for b in benches for j in shards
+               for k in peers(meta, shards, j)])
     summarize("CROSS   single vs single, DIFFERENT class",
-              [abs(med(j, "B", b) / med(k, "A", b) - 1)
+              [abs(med(obs, j, "B", b) / med(obs, k, "A", b) - 1)
                for b in benches for j in shards for k in shards
                if meta[k]["cpu"] != meta[j]["cpu"]])
 
@@ -148,7 +167,7 @@ def main() -> int:
     print(f"  {'matched population (quoted in the ADR)':<44}{c_med/p_match:>6.1f}x")
     print(f"  {'mixed population (do NOT quote)':<44}{c_med/p_all:>6.1f}x")
 
-    print(f"\nPAIRED at reduced interleave depth (cost lever):")
+    print("\nPAIRED at reduced interleave depth (cost lever):")
     print(f"{'  rounds used':<46}{'median':>9}{'p90':>9}{'max':>10}"
           f"{'>5% floor':>11}{'n':>6}")
     for n in (6, 3, 1):
@@ -159,16 +178,13 @@ def main() -> int:
                    for j in shards for b in benches])
 
     print("\nPer-CPU-class medians (ms/op) — shows the machine term directly:")
-    short = lambda c: (c.replace("Processor", "").replace("Intel(R) ", "")
-                        .replace("INTEL(R) ", "").replace("Xeon(R) ", "")
-                        .replace("XEON(R) ", "").replace("AMD ", "").strip())
     order = [c for c, _ in cpus.most_common()]
-    print(f"{'bench':<40}" + "".join(f"{short(c)[:11]:>12}" for c in order)
+    print(f"{'bench':<40}" + "".join(f"{short_cpu(c)[:11]:>12}" for c in order)
           + f"{'slow/fast':>11}")
     for b in benches:
         cell, vals = "", {}
         for c in order:
-            xs = [med(s, "A", b) for s in shards if meta[s]["cpu"] == c]
+            xs = [med(obs, s, "A", b) for s in shards if meta[s]["cpu"] == c]
             vals[c] = st.median(xs)
             cell += f"{vals[c]/1e6:>12.3f}"
         print(f"{b:<40}{cell}{max(vals.values())/min(vals.values()):>10.2f}x")
