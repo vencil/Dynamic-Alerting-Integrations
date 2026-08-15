@@ -9,7 +9,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](byo-alertmanager-integration.md)
 >
-> **Version**: 
+> **Version**: v2.9.0
 > **Audience**: Platform Engineers, SREs
 > **Prerequisites**: [BYO Prometheus Integration Guide](byo-prometheus-integration.en.md)
 

@@ -9,7 +9,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](gitops-deployment.md)
 
-> **Version**: 
+> **Version**: v2.9.0
 > **Audience**: Platform Engineers, DevOps, SREs
 > **Prerequisite**: [BYO Prometheus Integration Guide](byo-prometheus-integration.md)
 

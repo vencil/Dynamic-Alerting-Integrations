@@ -1459,23 +1459,64 @@ _GL_PIPELINE_REL = Path('.gitlab-ci.d') / 'dynamic-alerting.yml'
 # two documents.
 _GL_ROOT_SHELL_REL = Path('.gitlab-ci.yml')
 
-# The exact wiring the customer must have, in the two places it is needed: the
-# body of the generated root shell, and the snippet `_print_summary` prints
-# when it must not touch a root file that already exists. One string, so the
-# brownfield instruction can never drift from the greenfield artifact.
+# The exact wiring the customer must have, in the two SHAPES it is needed.
+#
+# ⛔ These are not interchangeable, and printing the wrong one is destructive.
+# `include:` is a top-level mapping key: pasting the whole block into a root
+# file that ALREADY has an `include:` produces a duplicate key, and YAML keeps
+# exactly one of them — so the customer's own includes (SAST, security
+# templates, their `.gitlab-ci.d/` split) silently vanish because they did
+# what we told them to. When their file already has the key, the thing to
+# hand them is the list ITEM to append underneath it.
 _GL_INCLUDE_SNIPPET = (
     "include:\n"
     f"  - local: {_GL_PIPELINE_REL.as_posix()}\n"
 )
+_GL_INCLUDE_ITEM_SNIPPET = f"  - local: {_GL_PIPELINE_REL.as_posix()}\n"
 
 
-# Root-shell outcomes. Three, not two: "there is already a root file" splits
-# into one case that needs the customer to do something and one that does not,
-# and telling a customer to paste an `include:` they already have is how a
-# correct summary trains people to stop reading it.
+# Root-shell outcomes. "There is already a root file" is not one case but
+# four, because the sentence we print and the snippet we hand over both
+# depend on what is in it — and one of those sentences is an all-clear.
 _GL_ROOT_CREATE = 'create'            # no root file — we write the shell
 _GL_ROOT_ALREADY_WIRED = 'wired'      # their root file already includes ours
-_GL_ROOT_NEEDS_INCLUDE = 'needs-include'  # their root file — hands off, tell them
+_GL_ROOT_NEEDS_INCLUDE = 'needs-include'  # their root file, no `include:` key
+_GL_ROOT_NEEDS_APPEND = 'needs-append'    # their root file HAS an `include:`
+_GL_ROOT_UNPARSEABLE = 'unparseable'      # their root file did not parse
+
+
+class _AnyTagLoader(yaml.SafeLoader):
+    """SafeLoader that tolerates GitLab's custom tags (e.g. `!reference`).
+
+    A stranger's pipeline is not required to be plain YAML, and SafeLoader
+    raises on an unknown tag. We only ever READ this document — never write it
+    back — so mapping unknown tags to `None` is enough to reach the one key we
+    care about instead of giving up on the whole file.
+    """
+
+
+_AnyTagLoader.add_multi_constructor(
+    '', lambda loader, suffix, node: None
+)
+
+
+def _gitlab_declared_includes(doc: object) -> list[str]:
+    """Local include paths declared by a parsed `.gitlab-ci.yml`.
+
+    `include:` accepts a bare string, a single mapping, or a list of either,
+    so all three shapes are normalised here rather than at each call site.
+    """
+    raw = doc.get('include') if isinstance(doc, dict) else None
+    if raw is None:
+        return []
+    entries = raw if isinstance(raw, list) else [raw]
+    found: list[str] = []
+    for entry in entries:
+        if isinstance(entry, str):
+            found.append(entry)
+        elif isinstance(entry, dict) and isinstance(entry.get('local'), str):
+            found.append(entry['local'])
+    return found
 
 
 def _gitlab_root_shell_status(output_dir: str) -> str:
@@ -1487,25 +1528,48 @@ def _gitlab_root_shell_status(output_dir: str) -> str:
     delete every job they run, and appending to it would edit a document whose
     structure we have not parsed. So we never touch an existing one.
 
-    ⚠️ The wired/not-wired split is a SUBSTRING test on the include path, which
-    is deliberately weak in one direction: a root file that only mentions
-    `.gitlab-ci.d/dynamic-alerting.yml` in a comment reads as wired. That
-    error costs a missing reminder, never a modified file — the tool's
-    behaviour is identical in both branches, only the sentence differs — so a
-    YAML parse (which would have to cope with `!reference` and every other
-    GitLab tag in a stranger's pipeline) buys nothing here. It also makes the
-    `--force` re-run say the true thing: our own shell contains that path.
+    ⛔ The wired/not-wired split PARSES the document; it used to be a substring
+    test on the include path. That test was justified as costing "a missing
+    reminder, never a modified file", which was wrong in the one direction
+    that matters: a root file merely MENTIONING the path in a comment read as
+    wired, and the wired branch does not stay silent — it prints "nothing to
+    do" and the closing line reverts to "GitLab CI will automatically validate
+    your config". A false positive is therefore an affirmative all-clear on a
+    pipeline GitLab never loads, i.e. #1357 re-created and then certified. The
+    tool also refuses to rewrite an existing root file under `--force`, so
+    there is no in-tool route back from that lie.
+
+    ⚠️ `is_symlink()` is checked alongside `exists()`: `exists()` follows
+    symlinks, so a DANGLING symlink at the root path reads as "no file here"
+    and the writer then follows it, planting our shell outside `--output-dir`
+    entirely. Every other generated file follows symlinks too, but this is the
+    one existence check that exists to protect a customer-owned file, so it
+    must fail closed.
     """
     root = Path(output_dir) / _GL_ROOT_SHELL_REL
-    if not root.exists():
+    if not root.exists() and not root.is_symlink():
         return _GL_ROOT_CREATE
     try:
         body = root.read_text(encoding='utf-8', errors='replace')
     except OSError:
-        return _GL_ROOT_NEEDS_INCLUDE
-    return (_GL_ROOT_ALREADY_WIRED
-            if _GL_PIPELINE_REL.as_posix() in body
-            else _GL_ROOT_NEEDS_INCLUDE)
+        # Unreadable, a directory, or a broken symlink. Hands off, and say so.
+        return _GL_ROOT_UNPARSEABLE
+    try:
+        doc = yaml.load(body, Loader=_AnyTagLoader)
+    except yaml.YAMLError:
+        return _GL_ROOT_UNPARSEABLE
+    includes = _gitlab_declared_includes(doc)
+    if _GL_PIPELINE_REL.as_posix() in includes:
+        return _GL_ROOT_ALREADY_WIRED
+    if includes or (isinstance(doc, dict) and 'include' in doc):
+        return _GL_ROOT_NEEDS_APPEND
+    return _GL_ROOT_NEEDS_INCLUDE
+
+
+def _gitlab_root_snippet_for(status: str) -> str:
+    """The snippet shape that is safe to paste for a given root-file status."""
+    return (_GL_INCLUDE_ITEM_SNIPPET if status == _GL_ROOT_NEEDS_APPEND
+            else _GL_INCLUDE_SNIPPET)
 
 
 def _gitlab_root_shell_is_needed(output_dir: str) -> bool:
@@ -1524,10 +1588,16 @@ def _gen_gitlab_root_shell() -> str:
     # `.gitlab-ci.yml`. The real pipeline (stages, jobs, variables) lives in
     # the included file; this shell exists so that GitLab finds it.
     #
-    # Safe to hand-edit: add your own `include:` entries or your own jobs
-    # below. Keep the `local:` line, or the Dynamic Alerting pipeline stops
-    # running. `stages:` and `variables:` from the included file are merged
-    # into this pipeline, so nothing else needs restating here.
+    # Safe to hand-edit — keep the `local:` line, or the Dynamic Alerting
+    # pipeline stops running. Add further `include:` entries as list items
+    # under the existing key (a second `include:` key would replace this one).
+    #
+    # `stages:` and `variables:` come from the included file, so do not
+    # restate them here: a `stages:` in THIS file overrides the included one
+    # and breaks all four generated jobs. For the same reason, a job you add
+    # here needs an explicit `stage:` drawn from that list (validate,
+    # generate, apply) — without one it defaults to `test`, which is not a
+    # declared stage, and the whole pipeline fails to build.
 
     {include_snippet}""").format(include_snippet=_GL_INCLUDE_SNIPPET)
 
@@ -2306,7 +2376,9 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
     gl_status = (_GL_ROOT_CREATE if gl_root_written
                  else _gitlab_root_shell_status(output_dir))
     gl_needs_manual = (ci_sel in ('gitlab', 'both')
-                       and gl_status == _GL_ROOT_NEEDS_INCLUDE)
+                       and gl_status in (_GL_ROOT_NEEDS_INCLUDE,
+                                         _GL_ROOT_NEEDS_APPEND,
+                                         _GL_ROOT_UNPARSEABLE))
 
     if ci_sel in ('github', 'both'):
         if is_zh:
@@ -2343,18 +2415,48 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
             # include" is an instruction they have to translate, and this is
             # the point at which a wrong translation leaves the whole pipeline
             # inert with nothing red anywhere.
-            if is_zh:
-                print(f"  {step}. ⚠️ 你的 repo 已有根目錄 "
-                      f"{_GL_ROOT_SHELL_REL.as_posix()} — 未修改。"
-                      f"GitLab 只會自動載入該檔，請自行貼入下列片段，"
-                      f"否則產生的 pipeline 不會執行：")
+            # ⛔ Which snippet SHAPE is safe depends on their file. Handing an
+            # `include:` block to a repo that already has that key makes a
+            # duplicate mapping key, and YAML keeps one — so following this
+            # instruction would delete their own includes.
+            if gl_status == _GL_ROOT_NEEDS_APPEND:
+                if is_zh:
+                    print(f"  {step}. ⚠️ 你的 repo 已有根目錄 "
+                          f"{_GL_ROOT_SHELL_REL.as_posix()}（且已有 include:）"
+                          f"— 未修改。請把下面這一行**接在既有 include: 清單底下**"
+                          f"（不要另外再寫一個 include:，那會蓋掉你原本的）：")
+                else:
+                    print(f"  {step}. ⚠️ Your repo already has a root "
+                          f"{_GL_ROOT_SHELL_REL.as_posix()} with an `include:` "
+                          f"— left untouched. Append the line below to that "
+                          f"EXISTING include: list (do not add a second "
+                          f"`include:` key — it would drop your own entries):")
+            elif gl_status == _GL_ROOT_UNPARSEABLE:
+                if is_zh:
+                    print(f"  {step}. ⚠️ 你的 repo 已有根目錄 "
+                          f"{_GL_ROOT_SHELL_REL.as_posix()}，但無法解析它 — 未修改。"
+                          f"請自行確認下列 include 已存在其中，否則產生的 "
+                          f"pipeline 不會執行：")
+                else:
+                    print(f"  {step}. ⚠️ Your repo has a root "
+                          f"{_GL_ROOT_SHELL_REL.as_posix()} that could not be "
+                          f"parsed — left untouched. Make sure the include "
+                          f"below is present in it, or the generated pipeline "
+                          f"never runs:")
             else:
-                print(f"  {step}. ⚠️ Your repo already has a root "
-                      f"{_GL_ROOT_SHELL_REL.as_posix()} — left untouched. "
-                      f"GitLab auto-loads only that file, so paste the snippet "
-                      f"below into it or the generated pipeline never runs:")
+                if is_zh:
+                    print(f"  {step}. ⚠️ 你的 repo 已有根目錄 "
+                          f"{_GL_ROOT_SHELL_REL.as_posix()} — 未修改。"
+                          f"GitLab 只會自動載入該檔，請自行貼入下列片段，"
+                          f"否則產生的 pipeline 不會執行：")
+                else:
+                    print(f"  {step}. ⚠️ Your repo already has a root "
+                          f"{_GL_ROOT_SHELL_REL.as_posix()} — left untouched. "
+                          f"GitLab auto-loads only that file, so paste the "
+                          f"snippet below into it or the generated pipeline "
+                          f"never runs:")
             print()
-            for line in _GL_INCLUDE_SNIPPET.rstrip('\n').splitlines():
+            for line in _gitlab_root_snippet_for(gl_status).rstrip('\n').splitlines():
                 print(f"       {line}")
             print()
         step += 1
@@ -2363,13 +2465,28 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
     # False on every `--ci gitlab` run — nothing loaded the pipeline — and it
     # is still false on the brownfield GitLab path until the include is
     # pasted. The claim now names the platform it is true for.
+    #
+    # ⛔ `gl_needs_manual` is a GitLab-only condition, so on `--ci both` it must
+    # not be spoken over the combined platform name: GitHub Actions auto-loads
+    # `.github/workflows/` and validates on push no matter what the customer
+    # does about the GitLab include. Saying "only then does GitHub Actions +
+    # GitLab CI validate" contradicts the GitHub wiring line printed two steps
+    # earlier, and teaches the reader that the two legs are coupled.
     platform = {
         'github': 'GitHub Actions',
         'gitlab': 'GitLab CI',
         'both': 'GitHub Actions + GitLab CI',
     }.get(ci_sel, 'CI')
     if gl_needs_manual:
-        if is_zh:
+        if ci_sel == 'both':
+            if is_zh:
+                print(f"  {step}. 提交並推送 — GitHub Actions 會自動驗證；"
+                      f"GitLab CI 要等你貼入上面的 include: 之後才會")
+            else:
+                print(f"  {step}. Commit and push — GitHub Actions validates "
+                      f"automatically; GitLab CI only after you paste the "
+                      f"include above")
+        elif is_zh:
             print(f"  {step}. 貼入上面的 include: 之後提交並推送 — "
                   f"{platform} 才會驗證你的配置")
         else:
@@ -2547,10 +2664,15 @@ def _build_parser() -> argparse.ArgumentParser:
     # every conf.d/<tenant>.yaml, discarding hand-tuned thresholds. That
     # understatement got worse with #1218: re-running is now the only in-tool
     # route to the corrected `_defaults.yaml`, so someone WILL reach for it.
+    # ⚠️ #1357 carved out one exception, so "every generated file" is no longer
+    # true: the root `.gitlab-ci.yml` is never rewritten once it exists, on any
+    # run, forced or not — it is the one artifact that may be the customer's
+    # own pipeline. That also means there is no in-tool route to regenerate it.
     parser.add_argument('--force', action='store_true',
                         help='Re-run in an initialised directory: REWRITES every '
                              'generated file, including conf.d/_defaults.yaml and '
-                             'each conf.d/<tenant>.yaml (hand edits are lost)'
+                             'each conf.d/<tenant>.yaml (hand edits are lost). '
+                             'Does NOT rewrite an existing root .gitlab-ci.yml'
                         if _LANG == 'en'
                         # ⚠️ 大寫「重寫所有產生的檔案」而非 markdown `**`：這是
                         # argparse help，會**原樣**印到終端機（實測 `--help` 輸出
@@ -2558,7 +2680,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         # 用了 markdown 語法——全 repo 唯一一處，不是慣例。
                         else '在已初始化的目錄重跑：會「重寫所有產生的檔案」，'
                              '含 conf.d/_defaults.yaml 與每一份 conf.d/<tenant>.yaml'
-                             '（手動調整會遺失）')
+                             '（手動調整會遺失）。不會重寫已存在的根目錄 '
+                             '.gitlab-ci.yml')
     parser.add_argument('--dry-run', action='store_true',
                         help='Show what files would be created without writing'
                         if _LANG == 'en' else '顯示會產生的檔案但不寫入')

@@ -1820,6 +1820,117 @@ class TestRunInit:
             ip.run_init(config, tmpdir)
             assert not os.path.exists(os.path.join(tmpdir, '.gitlab-ci.yml'))
 
+    # ── Root-shell status detection (adversarial review round 1) ──────────
+    #
+    # Each of these pins a way the tool previously told the customer something
+    # false about a file it refuses to touch. The status is what selects both
+    # the sentence and the snippet SHAPE, and one of the wrong answers deletes
+    # the customer's own `include:` entries.
+
+    def _status_for(self, tmpdir, body):
+        root = os.path.join(tmpdir, '.gitlab-ci.yml')
+        with open(root, 'w', encoding='utf-8', newline='\n') as fh:
+            fh.write(body)
+        return ip._gitlab_root_shell_status(tmpdir)
+
+    def test_root_file_mentioning_the_path_only_in_a_comment_is_not_wired(self):
+        """A comment is not an include. Reading it as one prints an all-clear.
+
+        The wired branch does not merely stay quiet — it says "nothing to do"
+        and the closing line promises GitLab will validate. So a false positive
+        here is #1357 re-created and then certified, with no in-tool route back
+        (`--force` never rewrites an existing root file).
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status = self._status_for(
+                tmpdir,
+                '# TODO: wire in .gitlab-ci.d/dynamic-alerting.yml someday\n'
+                'stages: [build]\n',
+            )
+            assert status == ip._GL_ROOT_NEEDS_INCLUDE, status
+
+    def test_root_file_with_its_own_include_asks_for_a_list_item(self):
+        """⛔ Handing this repo an `include:` BLOCK destroys their entries.
+
+        `include:` is a top-level mapping key; a second one is a duplicate key
+        and YAML keeps exactly one. A customer who does what we print would
+        silently lose their SAST/security includes.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status = self._status_for(
+                tmpdir,
+                'include:\n'
+                '  - local: .gitlab-ci.d/security.yml\n'
+                '  - template: Jobs/SAST.gitlab-ci.yml\n'
+                'stages: [build]\n',
+            )
+            assert status == ip._GL_ROOT_NEEDS_APPEND, status
+            snippet = ip._gitlab_root_snippet_for(status)
+            assert 'include:' not in snippet, snippet
+            assert snippet.strip() == '- local: .gitlab-ci.d/dynamic-alerting.yml'
+
+    def test_root_file_already_including_ours_is_wired(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status = self._status_for(
+                tmpdir,
+                'include:\n  - local: .gitlab-ci.d/dynamic-alerting.yml\n',
+            )
+            assert status == ip._GL_ROOT_ALREADY_WIRED, status
+
+    def test_include_shorthand_string_form_is_understood(self):
+        """`include:` also accepts a bare string; that is still wired."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status = self._status_for(
+                tmpdir, 'include: .gitlab-ci.d/dynamic-alerting.yml\n')
+            assert status == ip._GL_ROOT_ALREADY_WIRED, status
+
+    def test_gitlab_custom_tags_do_not_defeat_the_parse(self):
+        """`!reference` is ordinary in a real pipeline; SafeLoader raises on it.
+
+        Bailing out there would downgrade a genuinely wired repo to a paste
+        instruction, which is the annoying-but-safe direction — still worth
+        not doing.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status = self._status_for(
+                tmpdir,
+                'include:\n  - local: .gitlab-ci.d/dynamic-alerting.yml\n'
+                'job:\n  script:\n    - !reference [.setup, script]\n',
+            )
+            assert status == ip._GL_ROOT_ALREADY_WIRED, status
+
+    def test_unparseable_root_file_is_never_reported_as_wired(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status = self._status_for(tmpdir, 'include: [unclosed\n')
+            assert status == ip._GL_ROOT_UNPARSEABLE, status
+            assert not ip._gitlab_root_shell_is_needed(tmpdir)
+
+    def test_dangling_symlink_at_the_root_path_is_not_written_through(self):
+        """`exists()` follows symlinks, so a broken one reads as "no file".
+
+        The writer follows it too, planting our shell outside --output-dir.
+        This is the one existence check whose job is protecting a
+        customer-owned path, so it must fail closed.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            outside = os.path.join(tmpdir, 'outside', 'ESCAPE.yml')
+            os.makedirs(os.path.dirname(outside))
+            target = os.path.join(tmpdir, 'repo')
+            os.makedirs(target)
+            os.symlink(outside, os.path.join(target, '.gitlab-ci.yml'))
+            config = {
+                'ci': 'gitlab',
+                'deploy': 'kustomize',
+                'rule_packs': ['mariadb'],
+                'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+            }
+            ip.run_init(config, target)
+            assert not os.path.exists(outside), (
+                'run_init followed a dangling symlink and wrote the root shell '
+                'outside --output-dir')
+
     def test_creates_kustomize_base(self):
         """run_init creates kustomize/base/kustomization.yaml."""
         with tempfile.TemporaryDirectory() as tmpdir:

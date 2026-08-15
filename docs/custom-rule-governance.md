@@ -10,7 +10,7 @@ lang: zh
 > **Language / 語言：** **中文 (Current)** | [English](./custom-rule-governance.en.md)
 
 > **受眾**: Platform Engineering、Domain Experts (DBA/Infra)、Tenant Tech Leads
-> **版本**: 
+> **版本**: v2.9.0
 > **相關文件**: [架構與設計](architecture-and-design.md)、[規則包目錄](rule-packs/README.md)、[遷移指南](migration-guide.md)
 
 ---

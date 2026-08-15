@@ -10,7 +10,7 @@ lang: en
 > **Language / 語言：** **English (Current)** | [中文](./custom-rule-governance.md)
 
 > **Audience**: Platform Engineering, Domain Experts (DBA/Infra), Tenant Tech Leads
-> **Version**: 
+> **Version**: v2.9.0
 > **Related**: [Architecture and Design](architecture-and-design.en.md), [Rule Packs Directory](rule-packs/README.md), [Migration Guide](migration-guide.md)
 
 ---
