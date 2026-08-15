@@ -304,6 +304,7 @@ da-tools gitops-check local --dir /data/config/conf.d
 ⚠️ The block below is what `init` writes with the **default image** (`ghcr.io/vencil/da-tools:latest`). If you passed `--da-tools-image`, the first token of both `entry` values is the image you named — **go by the `.pre-commit-config.da.yaml` in your own repo root**, not by the image printed below.
 
 <!-- mirrors-artifact: .pre-commit-config.da.yaml -->
+<!-- merge-mode: merge-items -->
 <!-- ⛔ The line above is machine-read. tests/ops/test_generated_ci_artifacts.py
      takes the file `da-tools init` actually writes and compares it against the
      block below in full, reading BOTH sides from artifacts. Do not hand-edit

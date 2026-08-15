@@ -299,6 +299,7 @@ da-tools gitops-check local --dir /data/config/conf.d
 ⚠️ 下面這段是**預設 image**（`ghcr.io/vencil/da-tools:latest`）下的產出內容。你若跑 `init` 時帶了 `--da-tools-image`，兩個 `entry` 的第一個 token 會是你指定的那顆——**以你 repo 根目錄那份 `.pre-commit-config.da.yaml` 為準**，不要照抄下面的 image。
 
 <!-- mirrors-artifact: .pre-commit-config.da.yaml -->
+<!-- merge-mode: merge-items -->
 <!-- ⛔ 上面那一行是機器讀的。tests/ops/test_generated_ci_artifacts.py 會拿
      `da-tools init` 真的寫出來的那個檔，與下面這個區塊做整份結構比對（兩側都讀產物）。
      不要手改這裡——要改請改 scripts/tools/ops/init_project.py 的

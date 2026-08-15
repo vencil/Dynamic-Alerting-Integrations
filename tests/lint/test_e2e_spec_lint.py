@@ -42,6 +42,7 @@ satisfy the other two (it did: see ``_BASH`` below).
 from __future__ import annotations
 
 import ast
+import json
 import os
 import re
 import shlex
@@ -66,15 +67,23 @@ _PRECOMMIT_CONFIG = _REPO_ROOT / ".pre-commit-config.yaml"
 _MAKEFILE = _REPO_ROOT / "Makefile"
 _WORKFLOW = _REPO_ROOT / ".github/workflows/playwright.yml"
 
-# ⛔ Resolve bash ONCE, to an absolute path, exactly as
+# Resolve bash ONCE, to an absolute path, exactly as
 # tests/lint/test_mkdocs_strict_check.py does. Passing the bare name "bash" to
 # subprocess lets Windows resolve it through its own PATH, which on this host
-# finds the WSL launcher at C:\Windows\System32\bash.exe: it identifies itself
-# as /bin/bash, cannot see a `C:/…` path, and answers every invocation with
-# exit 127 "No such file or directory". Measured while writing this file — and
-# the reason the zero-exit case below is load-bearing: 127 silently satisfies
-# every "must fail" assertion here, so both non-zero cases were green against a
-# script that had never run.
+# can find the WSL launcher at C:\Windows\System32\bash.exe: it identifies
+# itself as /bin/bash, cannot see a `C:/…` path, and answers every invocation
+# with exit 127 "No such file or directory". Measured while writing this file:
+# 127 silently satisfies every "must fail" assertion here, so both non-zero
+# cases were green against a script that had never run.
+#
+# ⛔ This line is NOT the protection, and an earlier version of this comment
+# implied it was. `shutil.which` searches the same PATH the shell would, so a
+# tree whose PATH lacks a POSIX bash resolves to that same launcher — a blind
+# review reproduced it by removing mingw from PATH and took this file to 3
+# failed with `assert 127 == 0`. What the absolute path buys is that the choice
+# is made once and is printable. The thing that actually catches a bash which
+# cannot run anything is the zero-exit case below, which is why it is not
+# optional.
 _BASH = shutil.which("bash")
 
 # The shared GitHub-glob matcher. ⛔ Imported rather than reimplemented: a
@@ -105,6 +114,101 @@ def _hook() -> dict:
     return hooks[0]
 
 
+_ESLINT_CONFIG = _REPO_ROOT / "tests/e2e/eslint.config.mjs"
+_NPM_PACKAGE = _REPO_ROOT / "tests/e2e/package.json"
+
+
+def _npm_scripts() -> dict:
+    return json.loads(_NPM_PACKAGE.read_text(encoding="utf-8")).get("scripts", {})
+
+
+def _js_literal(text: str, opener: str) -> str:
+    """The balanced `{…}` or `[…]` that starts at `opener`, as source text.
+
+    Enough JS to read two literals out of a flat config, and no more: a real
+    parser is not available here and a regex would stop at the first `}`.
+    """
+    start = text.index(opener) + len(opener) - 1
+    pairs = {"{": "}", "[": "]"}
+    close = pairs[text[start]]
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == text[start]:
+            depth += 1
+        elif text[i] == close:
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    raise AssertionError(f"unbalanced {text[start]!r} after {opener!r}")
+
+
+def _rule_options(config: str) -> dict:
+    """The `no-skipped-test` options object, read as data not matched as text."""
+    body = _js_literal(config, "'playwright/no-skipped-test': [")
+    brace = body.index("{")
+    out: dict = {}
+    for pair in body[brace + 1:body.rindex("}")].split(","):
+        if ":" not in pair:
+            continue
+        key, _, value = pair.partition(":")
+        out[key.strip().strip("'\"")] = {"true": True, "false": False}.get(
+            value.strip(), value.strip())
+    return out
+
+
+def _rule_ignores(config: str) -> list[str]:
+    body = _js_literal(config, "ignores: [")
+    return [
+        line.strip().rstrip(",").strip("'\"")
+        for line in body.splitlines()
+        if line.strip().startswith(("'", '"'))
+    ]
+
+
+def _precommit_config() -> dict:
+    return yaml.safe_load(_PRECOMMIT_CONFIG.read_text(encoding="utf-8"))
+
+
+def _silencing_keys(hook: dict, config: dict) -> list[str]:
+    """Every reason pre-commit would NOT run this hook on `git commit`.
+
+    ⛔ Returns a list rather than a bool so the failure names the key. Four
+    mechanisms, all measured against real pre-commit 4.5.1 in a throwaway git
+    repo, all of which leave `files:` reading perfectly:
+
+    * `stages:` on the hook without `pre-commit` in it;
+    * a top-level `default_stages:` without `pre-commit`, when the hook does
+      not override it — THIS REPO ALREADY SETS THAT KEY, so the interaction is
+      live, not hypothetical;
+    * `types:` narrowed off the default `[file]`, which ANDs with `files:`;
+    * any `exclude_types:`, which subtracts from it.
+
+    The first version asserted `"stages" not in hook`. That is a key-existence
+    check, and it was wrong in both directions at once: `stages: [pre-commit,
+    pre-push]` is a legitimate widening that it reds, while the top-level
+    default it never reads silences the hook just as completely.
+    """
+    reasons: list[str] = []
+    stages = hook.get("stages")
+    if stages is None:
+        stages = config.get("default_stages")
+        where = "the top-level `default_stages:`"
+    else:
+        where = "the hook's `stages:`"
+    if stages is not None and "pre-commit" not in stages:
+        reasons.append(f"{where} is {stages!r}, which omits `pre-commit`")
+
+    types = hook.get("types")
+    if types is not None and list(types) != ["file"]:
+        reasons.append(
+            f"`types: {types!r}` narrows the file set beyond `files:` "
+            "(pre-commit ANDs them; the default is `[file]`)")
+    if hook.get("exclude_types"):
+        reasons.append(f"`exclude_types: {hook['exclude_types']!r}` subtracts "
+                       "from the file set without touching `files:`")
+    return reasons
+
+
 def _make_commands(makefile_text: str, target: str) -> list[str]:
     """The COMMAND lines of a Makefile target — comments excluded.
 
@@ -112,8 +216,8 @@ def _make_commands(makefile_text: str, target: str) -> list[str]:
     command, so an assertion that scans the whole recipe is satisfied by a
     comment that merely names the script. Measured: replacing the command with
     ``cd tests/e2e && npm run --silent lint`` and leaving a comment saying
-    "originally scripts/tools/lint/e2e_spec_lint.sh" kept this file at 7
-    passed — the precise regression its docstring claims to catch.
+    "originally scripts/tools/lint/e2e_spec_lint.sh" kept this file green —
+    the precise regression its docstring claims to catch.
     """
     out: list[str] = []
     active = False
@@ -205,9 +309,11 @@ def _is_sole_invocation(command: str) -> bool:
     and execs it with NO shell (so `|| true` there is a literal argument, not
     an operator), the Makefile recipe runs under `/bin/sh` with no `pipefail`,
     and a GitHub `run:` without an explicit `shell:` gets `set -e` but ALSO no
-    `pipefail`. Measured under that last one: `bash fail.sh | tee o.txt` and
-    `bash fail.sh & wait` both exit 0 while `bash fail.sh 2>&1` and
-    `bash fail.sh; exit 0` exit 1. So a predicate that sorted trailing tokens
+    `pipefail`. Measured under that last one against scripts exiting 1 and 3:
+    `bash fail.sh | tee o.txt` and `bash fail.sh & wait` both exit 0, while
+    `bash fail.sh 2>&1` and `bash fail.sh; exit 0` both propagate the script's
+    OWN status (1 and 3 respectively — not a fixed 1, which an earlier version
+    of this sentence claimed). So a predicate that sorted trailing tokens
     into "harmless" and "silencing" would need a different answer per leg, and
     would still be one spelling short — the same enumeration that has been
     reopened once per review round.
@@ -231,23 +337,85 @@ def _workflow() -> dict:
     return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
 
 
+_TRIGGER_KEYS = frozenset({"paths", "branches"})
+
+
+def _reads_trigger_key(node: ast.AST) -> bool:
+    """A READ of a trigger key out of a mapping — not a write, not a mention.
+
+    ⛔ An earlier version flagged every `ast.Constant` equal to "paths", which
+    reds on the fixtures that BUILD `{"paths": …}` and on its own comparison —
+    three false positives on an untouched file. Only two forms read a key.
+    """
+    if isinstance(node, ast.Subscript):
+        return (isinstance(node.slice, ast.Constant)
+                and node.slice.value in _TRIGGER_KEYS)
+    return (isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and bool(node.args)
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value in _TRIGGER_KEYS)
+
+
+def _default_branch() -> str:
+    """The branch this repo merges into, asked of git rather than typed here.
+
+    A literal `"main"` in an assertion about `branches:` is the same shape as
+    the assertion it is checking: a name somebody typed, which keeps agreeing
+    with itself after the thing it names has moved.
+    """
+    out = subprocess.run(
+        ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+        cwd=_REPO_ROOT, capture_output=True, text=True, check=False,
+        stdin=subprocess.DEVNULL, timeout=120,
+    )
+    ref = out.stdout.strip()
+    assert out.returncode == 0 and ref.startswith("origin/"), (
+        "cannot read `refs/remotes/origin/HEAD`, so the default branch is "
+        f"unknown (rc={out.returncode}, out={ref!r}, err={out.stderr.strip()!r}). "
+        "⛔ Failing rather than assuming a name: guessing here would let this "
+        "assertion agree with itself on a repo whose default branch moved."
+    )
+    return ref.split("/", 1)[1]
+
+
+def _event_block(event: str) -> dict:
+    triggers = _workflow().get("on") or _workflow().get(True)
+    return (triggers or {}).get(event) or {}
+
+
 def _trigger_paths(event: str) -> list[str]:
     """The `on.<event>.paths` list, refusing shapes this file cannot grade.
 
-    ⛔ The ONLY way this file reads a `paths:` list, and that is the point. The
-    first version called `reject_unmodelled_patterns` as its own line inside
-    the caller; deleting that one line left the whole file at 14 passed,
-    because the control beside it was pinning the imported function rather than
-    the wiring — the same "the control guards the helper, not the call" shape
-    this repo has now recorded three times. Routing every read through here
-    means the rejection cannot be dropped without dropping the accessor, and
-    then there is nothing left to read patterns from.
+    ⛔ One of the only two places this file reads a trigger key, and that is
+    the point. The first version called `reject_unmodelled_patterns` as its own
+    line inside the caller; deleting that one line left the whole file green,
+    because the control beside it was pinning the imported function
+    rather than the wiring — the same "the control guards the helper, not the
+    call" shape this repo has now recorded three times. Routing every read
+    through here means the rejection cannot be dropped without dropping the
+    accessor, and then there is nothing left to read patterns from.
     """
-    triggers = _workflow().get("on") or _workflow().get(True)
-    patterns = (triggers.get(event) or {}).get("paths") or []
+    patterns = _event_block(event).get("paths") or []
     assert patterns, f"`on.{event}` has no `paths:` at all"
     reject_unmodelled_patterns(patterns, f"{_WORKFLOW.name}::on.{event}.paths")
     return patterns
+
+
+def _trigger_branches(event: str) -> list[str]:
+    """The `on.<event>.branches` list — the ninth off-switch, found by review.
+
+    ⛔ `paths:` was covered and `branches:` two lines above it was not, in the
+    same YAML block. Measured: rewriting `branches: [main]` to a name no branch
+    has (2 places) left both this file and the shared path-filter module
+    green, with the leg dead for every pull request into main —
+    which is the only side anybody looks at before a merge. An enumeration of
+    off-switches will always be one short; what stops that here is that the
+    caller asserts the repo's real default branch is still listed, derived from
+    git rather than typed in.
+    """
+    return _event_block(event).get("branches") or []
 
 
 def _script_step() -> tuple[str, dict, dict]:
@@ -268,7 +436,7 @@ def _script_step() -> tuple[str, dict, dict]:
 # Negative controls for the readers above. The real files are all in the state
 # these tests want, so asserting only against them cannot tell a working reader
 # from a constant — a blind review replaced `_hook` and `_make_recipe` with
-# hard-coded returns and this file stayed at 7 passed.
+# hard-coded returns and this file stayed green.
 # --------------------------------------------------------------------------
 
 _FAKE_MAKEFILE = (
@@ -300,6 +468,20 @@ def test_make_commands_ignores_comments_and_stops_at_the_next_target() -> None:
     assert _make_commands(_FAKE_MAKEFILE, "next-target") == [
         "bash scripts/tools/lint/e2e_spec_lint.sh"
     ]
+
+
+_ACCEPTED_SPELLINGS = (
+    f"bash {_SCRIPT_REL}",
+    f"sh {_SCRIPT_REL}",
+    f"/bin/bash {_SCRIPT_REL}",
+    f"/bin/sh {_SCRIPT_REL}",
+    f"/usr/bin/env bash {_SCRIPT_REL}",
+    _SCRIPT_REL,
+    # The Makefile writes `bash ./scripts/…` in neighbouring recipes; adopting
+    # that spelling here changes nothing and must not red.
+    f"bash ./{_SCRIPT_REL}",
+    f"./{_SCRIPT_REL}",
+)
 
 
 def test_invokes_script_separates_running_from_mentioning() -> None:
@@ -372,17 +554,17 @@ def test_is_sole_invocation_refuses_trailing_tokens_but_not_spellings() -> None:
     (`set -e`, no `pipefail`) against a script that exits 1, and the tolerated
     forms are the spellings the repo's own recipes already use.
     """
-    for accepted in (
-        f"bash {_SCRIPT_REL}",
-        f"sh {_SCRIPT_REL}",
-        f"/bin/bash {_SCRIPT_REL}",
-        f"/usr/bin/env bash {_SCRIPT_REL}",
-        _SCRIPT_REL,
-        # The Makefile writes `bash ./scripts/…` in neighbouring recipes;
-        # adopting that spelling here changes nothing and must not red.
-        f"bash ./{_SCRIPT_REL}",
-        f"./{_SCRIPT_REL}",
-    ):
+    missing = sorted(
+        i for i in _INTERPRETERS
+        if not any(a.startswith(i + " ") for a in _ACCEPTED_SPELLINGS))
+    assert not missing, (
+        f"{missing} were added to `_INTERPRETERS` without a case below. That "
+        "set is the last enumeration left in this file, and it grew by one "
+        "(`/bin/sh`) in a commit where nothing could see the change — every "
+        "member has to appear here or the set is unobserved."
+    )
+
+    for accepted in _ACCEPTED_SPELLINGS:
         assert _is_sole_invocation(accepted), (
             f"{accepted!r} was refused. This spelling runs the script and lets "
             "its exit status stand, so refusing it is a false red — and a "
@@ -415,7 +597,7 @@ def test_reading_a_paths_list_goes_through_the_negation_rejection(
 
     An import that is never reached is the same as no import, and asserting on
     the imported function alone does not notice when the call site goes away —
-    measured: deleting the call from the caller left this file at 14 passed
+    measured: deleting the call from the caller left this file green
     while a test named for the wiring stayed green. Feeding a negated list
     through `_trigger_paths` means removing either the rejection or the
     accessor reds this.
@@ -436,52 +618,141 @@ def test_reading_a_paths_list_goes_through_the_negation_rejection(
         _trigger_paths("push")
 
 
-def test_nothing_in_this_file_reads_a_paths_list_around_the_accessor() -> None:
+def test_nothing_in_this_file_reads_a_trigger_key_around_the_accessor() -> None:
     """⛔ The accessor only helps while it is the only door.
 
     The test above proves `_trigger_paths` rejects a negation. It cannot notice
     a caller that stops calling it: measured, inlining the old two-line read
-    back into the trigger test left this file at 14 passed with the rejection
-    bypassed. So the last step is mechanical — the key `"paths"` may be read in
-    exactly one function, and this reads THIS file's own AST to say so rather
-    than trusting the convention to hold.
+    back into the trigger test left this file green with the rejection
+    bypassed. So the last step is mechanical, and it reads THIS file's own AST.
+
+    ⛔ The quantifier is the MODULE, not a list of function bodies. The first
+    version iterated `ast.FunctionDef` and skipped `_trigger_paths`, which put
+    every module-level statement outside it: a blind review hoisted the read to
+    module scope in one edit and this file stayed green with the
+    rejection bypassed. `ast.FunctionDef` is an enumeration wearing a
+    quantifier's clothes — it misses module scope, `async def`, lambdas and
+    comprehensions alike. Walking the whole tree and subtracting the accessor's
+    own nodes cannot miss a scope, because it never names one.
     """
-    def _reads_the_key(node: ast.AST) -> bool:
-        """A READ of `paths`, not any mention of the word.
-
-        ⛔ The first version flagged every `ast.Constant` equal to "paths",
-        which reds on the fixture that BUILDS `{"paths": …}` and on this
-        function's own comparison — three false positives on an untouched file.
-        Only two forms actually read the key out of a mapping.
-        """
-        if isinstance(node, ast.Subscript):
-            return (isinstance(node.slice, ast.Constant)
-                    and node.slice.value == KEY)
-        return (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "get"
-                and bool(node.args)
-                and isinstance(node.args[0], ast.Constant)
-                and node.args[0].value == KEY)
-
-    KEY = "paths"
     tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
-    offenders: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef) or node.name == "_trigger_paths":
-            continue
-        offenders += [
-            f"{node.name}:{child.lineno}"
-            for child in ast.walk(node) if _reads_the_key(child)
-        ]
-
-    assert not offenders, (
-        f"{offenders} read a `paths` key outside `_trigger_paths`. Every read "
-        "goes through the accessor, because that is the only thing that makes "
-        "the negation rejection unskippable — a second reader is a second "
-        "answer, and the one it gives is 'covered' for a pattern that removes "
-        "coverage. Extend `_trigger_paths` instead of reading around it."
+    accessor_names = {"_trigger_paths", "_trigger_branches"}
+    accessors = [
+        node for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in accessor_names
+    ]
+    assert {a.name for a in accessors} == accessor_names, (
+        f"the accessors {sorted(accessor_names)} are not both present "
+        f"(found {sorted(a.name for a in accessors)}). They are the only "
+        "places allowed to read a trigger key, so a missing one makes this "
+        "check permit every read in the file — restore it, or delete this "
+        "test in the same commit so the loss is visible."
     )
+    inside_accessors = {
+        id(node) for a in accessors for node in ast.walk(a)
+    }
+
+    offenders = sorted(
+        f"line {node.lineno}"
+        for node in ast.walk(tree)
+        if _reads_trigger_key(node) and id(node) not in inside_accessors
+    )
+    assert not offenders, (
+        f"{offenders} read one of {sorted(_TRIGGER_KEYS)} outside "
+        f"{sorted(accessor_names)}. Every read goes through an accessor, "
+        "because that is the only thing that makes the negation rejection "
+        "unskippable — a second reader is a second answer, and the one it "
+        "gives is 'covered' for a pattern that removes coverage. Extend the "
+        "accessor instead of reading around it."
+    )
+
+
+def test_silencing_keys_names_every_measured_way_off_the_commit_path() -> None:
+    """⛔ Control for the loosened `stages:` rule, which is otherwise dead code.
+
+    The real hook has no `stages:` key, so `stages is None` short-circuits and
+    the half that does the judging never runs: measured, replacing the literal
+    `"pre-commit"` in the old inline predicate with a nonsense stage left this
+    file green. Loosening a rule and pairing it with controls are the
+    same decision — the sibling loosening in `_is_sole_invocation` got its
+    tolerated/refused table in the same commit and this one did not.
+    """
+    live = {"id": "playwright-lint"}
+    for hook, config, why in (
+        ({**live, "stages": ["manual"]}, {}, "hook stages omit pre-commit"),
+        ({**live, "stages": []}, {}, "hook stages empty"),
+        (live, {"default_stages": ["manual"]}, "top-level default_stages"),
+        (live, {"default_stages": ["pre-push"]}, "top-level, pre-push only"),
+        ({**live, "types": ["python"]}, {}, "types narrowed"),
+        ({**live, "exclude_types": ["ts"]}, {}, "exclude_types subtracts"),
+    ):
+        assert _silencing_keys(hook, config), (
+            f"{why}: {hook!r} + {config!r} was read as still running on "
+            "commit. Every one of these was measured to skip the hook while "
+            "leaving `files:` intact."
+        )
+
+    for hook, config, why in (
+        (live, {}, "no stages anywhere — pre-commit's own default"),
+        (live, {"default_stages": ["pre-commit"]}, "this repo's actual config"),
+        ({**live, "stages": ["pre-commit", "pre-push"]}, {},
+         "widening, measured to keep running"),
+        ({**live, "stages": ["pre-commit"]}, {"default_stages": ["manual"]},
+         "hook overrides a narrowed default"),
+        ({**live, "types": ["file"]}, {}, "types spelled as the default"),
+        ({**live, "exclude_types": []}, {}, "empty exclude_types"),
+    ):
+        assert not _silencing_keys(hook, config), (
+            f"{why}: {hook!r} + {config!r} was read as silenced. A rule that "
+            "reds on legitimate config gets loosened by whoever hits it next, "
+            "and the loosening will not come with controls."
+        )
+
+
+def test_the_trigger_key_reader_tells_reads_from_writes_and_mentions() -> None:
+    """⛔ Control for `_reads_trigger_key`, which otherwise never returns True.
+
+    On a clean tree the door test's offender list is empty either way, so the
+    predicate is unobserved: measured, `return False` as its whole body left
+    this file green. That is the same "only ever fed inputs that should
+    pass" shape this file already pins for `_is_sole_invocation` — the
+    discipline has to reach the helper written last, too.
+
+    Both directions matter. Too narrow and the door opens; too broad and it
+    reds on the fixtures that BUILD a trigger dict, which is exactly what the
+    first version did (three false positives on an untouched file).
+    """
+    def _nodes(src: str) -> list[ast.AST]:
+        return list(ast.walk(ast.parse(src)))
+
+    for src in (
+        'x["paths"]',
+        'x.get("paths")',
+        'cfg["on"]["push"]["branches"]',
+        'cfg.get("branches", [])',
+        '[p for p in wf["paths"]]',
+        'f = lambda w: w["branches"]',
+    ):
+        assert any(_reads_trigger_key(n) for n in _nodes(src)), (
+            f"{src!r} reads a trigger key and was not detected. The door test "
+            "is only as wide as this predicate."
+        )
+
+    for src in (
+        '{"paths": paths}',                      # builds one
+        '{"on": {"push": {"branches": br}}}',    # builds one
+        'x["pathsep"]',                          # different key
+        'x.get("paths_extra")',                  # different key
+        'os.environ.get(name)',                  # non-constant key
+        's = "paths"',                           # mentions it
+        'assert node.args[0].value == "paths"',  # compares it
+    ):
+        assert not any(_reads_trigger_key(n) for n in _nodes(src)), (
+            f"{src!r} does not read a trigger key but was flagged. A predicate "
+            "that bites the fixtures makes the door test unsatisfiable, and "
+            "the cheapest way out of that is deleting the door."
+        )
 
 
 # --------------------------------------------------------------------------
@@ -506,14 +777,17 @@ def test_all_three_entry_points_run_the_one_script() -> None:
         "script exists to stop: the hook, `make lint-e2e` and the CI job then "
         "drift independently, which is how the CI leg came to be missing."
     )
-    stages = hook.get("stages")
-    assert stages is None or "pre-commit" in stages, (
-        f"the hook sets `stages: {stages!r}`, which does not include "
-        "`pre-commit`, so it no longer runs on the commit path — "
-        "`stages: [manual]` means it runs only when somebody remembers to ask. "
-        "⛔ This checks the VALUE, not the key: adding `pre-push` alongside "
-        "`pre-commit` is a legitimate widening and was measured to keep the "
-        "hook running, so it must not red here."
+    silenced = _silencing_keys(hook, _precommit_config())
+    assert not silenced, (
+        f"the `playwright-lint` hook is off the commit path: {silenced}. "
+        "⛔ These are checked by VALUE, not by key existence: adding `pre-push` "
+        "alongside `pre-commit` is a legitimate widening and was measured to "
+        "keep the hook running, so it must not red here. Each entry above was "
+        "measured against real pre-commit in a throwaway repo — `stages: "
+        "[manual]` and a top-level `default_stages: [manual]` both print "
+        "\"No hook with id 'playwright-lint' in stage 'pre-commit'\" and exit "
+        "0, while `types: [python]` and `exclude_types: [ts]` both print "
+        "\"(no files to check) Skipped\" with `files:` still reading correctly."
     )
     assert "exclude" not in hook, (
         "the hook grew an `exclude:` pattern, which can empty its file set "
@@ -535,6 +809,62 @@ def test_all_three_entry_points_run_the_one_script() -> None:
     _script_step()  # raises with its own message when no step runs the script
 
 
+def test_the_rule_itself_cannot_be_disarmed_below_the_script() -> None:
+    """⛔ The three links under the script, which nothing was watching.
+
+    Everything else in this file guards the chain down to `npm run lint`. A
+    coverage review walked the two links below that, with a `test.fixme()`
+    already injected into a real spec, and both went green:
+
+    * emptying the rule's options object — `disallowFixme` defaults to false,
+      so `test.fixme()` reports nothing and `eslint .` exits 0;
+    * replacing `package.json`'s `lint` script with anything that exits 0;
+    * adding `**/*.spec.ts` to `ignores`, which removes every spec from the
+      run while the rule stays configured exactly as written.
+
+    All three leave the script, all three entry points and this file's other
+    assertions untouched, so "A-13 is enforced" was resting on two of five
+    links. These are read as DATA — the options object, the script's argv, the
+    ignore list — rather than matched as text, so reformatting is free.
+    """
+    config = _ESLINT_CONFIG.read_text(encoding="utf-8")
+    options = _rule_options(config)
+    assert options.get("disallowFixme") is True, (
+        f"`playwright/no-skipped-test` options are {options!r}. "
+        "`disallowFixme` defaults to FALSE, so dropping it takes `test.fixme()` "
+        "back to passing silently — measured against this exact config, with "
+        "the options object emptied, an injected `test.fixme()` reports "
+        "nothing and `eslint .` exits 0. The regression this repo already "
+        "recorded once."
+    )
+    assert options.get("allowConditional") is False, (
+        f"`allowConditional` is {options.get('allowConditional')!r}. Setting it "
+        "true exempts a call when ANY of three things holds — it takes at "
+        "least one argument, OR sits inside an `if` block, OR inside a "
+        "`switch` case — none of which asks whether the condition means "
+        "anything. Four documents were corrected rather than flipping this; "
+        "flipping it now silently reverses that decision."
+    )
+
+    lint = _npm_scripts().get("lint", "")
+    argv = shlex.split(lint)
+    assert argv and argv[0] == "eslint", (
+        f"`package.json`'s `lint` script is {lint!r}. The script, all three "
+        "entry points and every assertion above run whatever this says — "
+        "measured, pointing it at a no-op leaves an injected `test.fixme()` "
+        "unreported with the whole repo green."
+    )
+
+    ignored = _rule_ignores(config)
+    offenders = [p for p in ignored if ".spec." in p]
+    assert not offenders, (
+        f"eslint `ignores` contains {offenders}, which removes specs from the "
+        "run while leaving the rule configured exactly as written — the "
+        "quietest of the three ways down here, because every assertion about "
+        "the rule still reads true."
+    )
+
+
 def test_the_ci_legs_signal_is_not_silently_switched_off() -> None:
     """⛔ What this can prove, and what it deliberately does NOT claim.
 
@@ -545,7 +875,7 @@ def test_the_ci_legs_signal_is_not_silently_switched_off() -> None:
     test's earlier name — "cannot be switched off without this test noticing" —
     promised exactly that, and a blind review produced the counterexample: one
     `- '!tests/e2e/**'` line in `paths:` switched the leg off with this file at
-    11 passed and `tests/ops/test_ci_path_filter_coverage.py` at 40 passed.
+    green, and so was `tests/ops/test_ci_path_filter_coverage.py`.
 
     What it proves is narrower and still worth having: the signal is not
     silenced without a red line appearing in a diff someone reads. The ways to
@@ -604,7 +934,7 @@ def test_editing_a_spec_or_the_runner_triggers_the_workflow() -> None:
 
     Two measured holes, opposite ends of the same rule: dropping
     `tests/e2e/**` from `paths:` (the trigger for the change class A-13 exists
-    to catch) left this file at 7 passed, and before #1428 the runner itself
+    to catch) left this file green, and before #1428 the runner itself
     was outside the filter, so a pull request that only edited it never started
     the one CI leg that executes it.
 
@@ -617,8 +947,8 @@ def test_editing_a_spec_or_the_runner_triggers_the_workflow() -> None:
     `any()` below absorbs a negation. `_match_segments` reads `!tests/e2e/**`
     as a literal first segment `"!tests"`, answers False, and the surviving
     positive pattern still reports "covered". Measured — adding that one line
-    beside the existing `tests/e2e/**` (2 places) left this file at 11 passed
-    and the shared module at 40 passed, with the leg off. The shared module had
+    beside the existing `tests/e2e/**` (2 places) left this file and the
+    shared module both green, with the leg off. The shared module had
     already written this rule down for `dorny/paths-filter` filters; importing
     it into this second caller is what stops the two answers from drifting.
     """
@@ -626,7 +956,17 @@ def test_editing_a_spec_or_the_runner_triggers_the_workflow() -> None:
     assert specs, "no E2E specs found — the sample below would prove nothing"
     sample = specs[0].relative_to(_REPO_ROOT).as_posix()
 
+    default_branch = _default_branch()
     for event in ("push", "pull_request"):
+        branches = _trigger_branches(event)
+        assert not branches or default_branch in branches, (
+            f"`on.{event}.branches` is {branches!r}, which does not include "
+            f"{default_branch!r} — the branch this repo actually merges into, "
+            "read from `refs/remotes/origin/HEAD` rather than typed here. The "
+            "leg then never runs for the event that matters and reports "
+            "nothing rather than reporting red. ⛔ An ABSENT `branches:` is "
+            "fine and deliberately tolerated: it means every branch."
+        )
         patterns = _trigger_paths(event)
         for target, why in (
             (sample, "editing an E2E spec is the change class A-13 guards"),
@@ -722,7 +1062,8 @@ def _run(root: Path, extra_path: Path | None = None):
 def test_bash_is_available_wherever_this_suite_is_meant_to_run() -> None:
     """⛔ Without this, `_BASH = None` turns four cases into a silent skip.
 
-    Measured: setting it to None left 3 passed / 4 skipped and rc=0 — the
+    Measured: setting it to None leaves every behavioural case skipped and
+    the file green — the
     skip-as-green shape this repo has a documented history with. The skips are
     legitimate on a developer box without bash; they are not legitimate on the
     runners, and every job in this repo's workflows is `ubuntu-latest`.

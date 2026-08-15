@@ -723,7 +723,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "c5a63757311eda0b2ce07657303bbbd60a18d9922e4530b86a20c6d49e193753",
+ "source_digest": "9e75d274ebfc07a662310400b96d07ede9a6f1ffef7dec115d96bb1d6d5b519f",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1220,7 +1220,8 @@
    "tests/lint/test_check_subprocess_timeout.py"
   ],
   "components/da-tools/README.md": [
-   "tests/ops/test_ci_path_filter_coverage.py"
+   "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/ops/test_generated_ci_artifacts.py"
   ],
   "components/da-tools/app/Dockerfile": [
    "tests/lint/test_check_iac_vibe_rules.py",

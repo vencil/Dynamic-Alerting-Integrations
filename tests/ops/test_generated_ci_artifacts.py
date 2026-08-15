@@ -1207,7 +1207,7 @@ _MIRROR_DOC_PAGES = (
 #   2. Replacing that with "compare the blocks that carry a marker" fixed the
 #      false reds and DELETED the coverage. Measured: pasting the pre-#1418
 #      broken snippet back onto the page as an unmarked second example left
-#      this file at 21 passed and all four doc lints at rc=0 — the exact defect
+#      this file green and all four doc lints at rc=0 — the exact defect
 #      #1418 exists for, reintroducible in full.
 #
 # So the marker says which artifact, and the exhaustiveness test below
@@ -1361,7 +1361,7 @@ def _normalised_precommit(cfg: object) -> object:
     `pre-commit validate-config` refuses outright — and every key nobody had
     thought of (`stages:`, `args:`, `exclude:`, `always_run:`) was invisible by
     construction. A blind review flipped the page to `repo: meta` plus
-    `stages: [manual]` and the guard stayed at 18 passed.
+    `stages: [manual]` and the guard stayed green.
 
     ⛔ And because this filter is applied to BOTH sides of the comparison it
     feeds, any weakening of it keeps that equation true: replacing this body
@@ -1448,7 +1448,7 @@ def test_unmarked_precommit_blocks_reports_the_block_nobody_marked() -> None:
 
     The real pages have no unmarked block, so every assertion against them
     passes for `return []` too — measured, by neutering the caller's set
-    subtraction and watching the section stay at 28 passed. Here the input IS
+    subtraction and watching the section stay green. Here the input IS
     wrong, which is the only way to tell a working check from a stub.
     """
     marked_only = (
@@ -1609,7 +1609,7 @@ def test_mirror_page_list_covers_every_page_that_declares_a_mirror() -> None:
     Every assertion in this section is parametrised over ``_MIRROR_DOC_PAGES``,
     so the list is the quantifier: shrink it and the tests still pass, having
     checked less. Measured — deleting the ``.en.md`` entry took the section
-    from 21 to 16 passed with rc=0, and emptying it entirely left one test
+    quietly running five fewer tests at rc=0, and emptying it entirely left one test
     passing and ten skipped, which is the skip-as-green shape this repo has
     been burned by before.
 
@@ -1641,6 +1641,133 @@ def test_mirror_page_list_covers_every_page_that_declares_a_mirror() -> None:
     )
 
 
+_MERGE_MODE = re.compile(r"merge-mode:\s*(?P<mode>[a-z-]+)")
+
+
+def _derived_merge_mode(artifact_text: str) -> str:
+    """What a reader can safely DO with this artifact, derived from its shape.
+
+    ⛔ Not read from the file's own claim. A YAML document whose top level is a
+    mapping cannot be appended to another config: the reader ends up with the
+    key twice and every loader in this stack keeps only the last one, silently.
+    So the answer is a function of the artifact, and the artifact's own header
+    has to agree with it rather than assert it.
+    """
+    return "merge-items" if isinstance(
+        yaml.safe_load(artifact_text), dict) else "append-whole"
+
+
+def _tracked_markdown() -> list[str]:
+    """Every tracked `.md`, asked of git rather than globbed.
+
+    `rglob` from the repo root would walk `node_modules/`, `.venv/` and every
+    other ignored tree; scoping it to `docs/` instead is how the first version
+    of the caller came to be narrower than its own docstring.
+    """
+    out = subprocess.run(
+        ["git", "ls-files", "-z", "*.md"],
+        cwd=_REPO_ROOT, capture_output=True, text=True, check=False,
+        stdin=subprocess.DEVNULL, timeout=120,
+    )
+    pages = [p for p in out.stdout.split("\0") if p]
+    assert out.returncode == 0 and pages, (
+        f"`git ls-files -z '*.md'` yielded {len(pages)} path(s) "
+        f"(rc={out.returncode}). The caller's quantifier comes from here, so "
+        "an empty answer would silently check nothing."
+    )
+    return sorted(pages)
+
+
+@pytest.mark.parametrize("ci,deploy", MATRIX)
+def test_the_artifact_and_the_pages_agree_on_how_to_merge_it(
+    generated, ci, deploy,
+) -> None:
+    """⛔ The defect this PR is named after had NO guard until this test.
+
+    `.pre-commit-config.da.yaml` used to open with `# Add this to your existing
+    .pre-commit-config.yaml`, and a reader who did exactly that got a second
+    top-level `repos:` key. Measured with pre-commit's own loader and its own
+    `validate-config`: rc=0, no warning, and every hook the customer already
+    had is gone — output byte-identical to a healthy config. The CLI's
+    next-steps line and both doc pages carried the same instruction.
+
+    ⛔ It was fixed with nothing pinning it. Counterfactual, run by a blind
+    review: reverting all three carriers to the previous commit while keeping
+    every test left the suite green and four doc lints at rc=0. The reason is
+    structural and worth stating, because it applies to any future assertion
+    here — the mirror comparison runs `yaml.safe_load` on both sides, and just
+    over half of this artifact's lines are comments, so the entire half a
+    customer reads first is outside it.
+
+    Hence a marker, in the file and on the pages, whose VALUE is derived from
+    the artifact rather than declared by it.
+    """
+    root = generated[(ci, deploy)]
+    artifact = (root / _PRECOMMIT_ARTIFACT).read_text(encoding="utf-8")
+    expected = _derived_merge_mode(artifact)
+
+    found = _MERGE_MODE.search(artifact)
+    assert found and found.group("mode") == expected, (
+        f"{_PRECOMMIT_ARTIFACT} declares merge-mode "
+        f"{found.group('mode') if found else None!r}, derived value is "
+        f"{expected!r}. This file's top level is a mapping, so appending it "
+        "whole to an existing config silently drops that config's hooks — the "
+        "header has to say so, and this line is what stops the instruction "
+        "from quietly reverting."
+    )
+
+    for page in _MIRROR_DOC_PAGES:
+        text = (_REPO_ROOT / page).read_text(encoding="utf-8")
+        on_page = _MERGE_MODE.search(text)
+        assert on_page and on_page.group("mode") == expected, (
+            f"{page} declares merge-mode "
+            f"{on_page.group('mode') if on_page else None!r}, but the artifact "
+            f"it mirrors needs {expected!r}. The page shows this block under a "
+            '"merge into your config" heading; if the two disagree, one of '
+            "them is teaching the destructive action."
+        )
+
+
+def test_appending_the_artifact_whole_really_does_lose_the_customers_hooks() -> None:
+    """⛔ The control that keeps the marker above from being decoration.
+
+    `merge-items` is only the right answer while wholesale appending is
+    actually destructive. This runs that action against pre-commit's own
+    loader, so the warning cannot outlive the hazard it describes — and so a
+    reader of the test can see why the instruction is worded the way it is
+    without taking anyone's word for it.
+    """
+    artifact = ip._gen_precommit_snippet("ghcr.io/vencil/da-tools:latest")
+    existing = (
+        "repos:\n"
+        "  - repo: https://github.com/pre-commit/pre-commit-hooks\n"
+        "    rev: v5.0.0\n"
+        "    hooks:\n"
+        "      - id: end-of-file-fixer\n"
+        "      - id: trailing-whitespace\n"
+    )
+    mine = {"end-of-file-fixer", "trailing-whitespace"}
+
+    naive = yaml.safe_load(existing + artifact)
+    kept = {h["id"] for r in naive["repos"] for h in r["hooks"]}
+    assert not (mine & kept), (
+        "appending the artifact whole no longer drops the reader's hooks "
+        f"(kept {sorted(kept)}). If that is genuinely fixed — the artifact "
+        "became a fragment, or the loader started rejecting duplicate keys — "
+        "then `_derived_merge_mode` and the header should change together, "
+        "and this test should be the thing that made you look."
+    )
+
+    item = artifact[artifact.index("  - repo: local"):]
+    merged = yaml.safe_load(existing + item)
+    kept = {h["id"] for r in merged["repos"] for h in r["hooks"]}
+    assert mine <= kept and {"da-validate-config", "da-generate-routes"} <= kept, (
+        f"following the header's instruction yielded {sorted(kept)}. The "
+        "positive half matters as much as the negative one: an instruction "
+        "that is safe because it does nothing is not an instruction."
+    )
+
+
 def test_no_page_outside_the_list_ships_an_unchecked_precommit_block() -> None:
     """⛔ The other end of the same rule, and the one the list cannot reach.
 
@@ -1651,22 +1778,32 @@ def test_no_page_outside_the_list_ships_an_unchecked_precommit_block() -> None:
     #1418 shipped. So this asks the opposite question of the whole tree: does
     any page have a top-level `repos:` block that nothing is comparing?
 
-    Cost measured on this tree: 258 pages under docs/, of which exactly 2 carry
-    such a block and both are already listed — so this starts at zero false
-    reds rather than at a backlog of exemptions. Running the fence parser over
-    all 258 took ~2.0 s (measured 3×; a figure of 122 ms quoted during review
-    did not reproduce), so the substring pre-filter below skips the 256 pages
-    that cannot contain the block: 2.54 s → 0.05 s, with the injected-block
-    case still red. The pre-filter is sound rather than clever — a top-level
-    `repos:` key IS that substring, so a page without it cannot have one.
+    ⛔ Every TRACKED `.md`, not `docs/**`. A blind review pasted the pre-#1418
+    broken snippet into `components/da-tools/README.md` — outside `docs/` — and
+    this whole file stayed green, which is the same "the quantifier is narrower
+    than the sentence describing it" shape the guard exists to catch. The tree
+    has markdown outside `docs/` and nothing says a customer-facing snippet
+    cannot land there.
+
+    Measured on this tree: exactly 2 pages carry such a block and both are
+    already listed, so this starts at zero false reds rather than at a backlog
+    of exemptions. The substring pre-filter exists because parsing fences on
+    every tracked page is an order of magnitude slower than parsing the handful
+    that mention the key at all — no figure is quoted here on purpose, because
+    the last two figures written into this file both expired inside a day.
+
+    ⛔ The pre-filter matches `repos` WITHOUT the colon, and an earlier version
+    with the colon was measured unsound while claiming in this very docstring
+    to be sound: `"repos":`, `'repos':` and `repos :` are all valid YAML that
+    `_unmarked_precommit_blocks` treats as a pre-commit block, and none of them
+    contains `repos:`. Quoting the key was enough to walk past the guard.
     """
     stragglers = {}
-    for path in sorted((_REPO_ROOT / "docs").rglob("*.md")):
-        page = path.relative_to(_REPO_ROOT).as_posix()
+    for page in _tracked_markdown():
         if page in _MIRROR_DOC_PAGES:
             continue
-        text = path.read_text(encoding="utf-8", errors="replace")
-        if "repos:" not in text:
+        text = (_REPO_ROOT / page).read_text(encoding="utf-8", errors="replace")
+        if "repos" not in text:
             continue
         unmarked = _unmarked_precommit_blocks(text)
         if unmarked:
@@ -1689,7 +1826,7 @@ def test_every_precommit_block_on_the_page_is_marked(page) -> None:
     Without this, the marker is opt-in: a second pre-commit block that simply
     carries no marker is not compared against anything. Measured on this very
     page — pasting the pre-#1418 broken snippet back as an unmarked second
-    example left the guard at 21 passed and all four doc lints at rc=0.
+    example left the guard green and all four doc lints at rc=0.
     """
     text = (_REPO_ROOT / page).read_text(encoding="utf-8")
     blocks = set(_precommit_fences(text))
@@ -3476,7 +3613,7 @@ def _normalized_commands(text: str) -> list[str]:
 # anything INSIDE a branch could be rewritten freely.
 _EXPECTED_GH_APPLY: dict[str, list[str]] = {
     "kustomize": [
-        "kustomize build kustomize/overlays/prod > /tmp/manifests.yaml",
+        "kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod > /tmp/manifests.yaml",
         "kubectl apply --dry-run=server -f /tmp/manifests.yaml",
         'echo "--- Dry-run passed. Applying... ---"',
         "kubectl apply -f /tmp/manifests.yaml",
@@ -3496,7 +3633,7 @@ _EXPECTED_GH_APPLY: dict[str, list[str]] = {
 
 _EXPECTED_GL_APPLY: dict[str, list[str]] = {
     "kustomize": [
-        "kustomize build kustomize/overlays/prod > /tmp/manifests.yaml",
+        "kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod > /tmp/manifests.yaml",
         "kubectl apply --dry-run=server -f /tmp/manifests.yaml",
         "kubectl apply -f /tmp/manifests.yaml",
         "kubectl rollout restart deployment/prometheus -n $MONITORING_NS",

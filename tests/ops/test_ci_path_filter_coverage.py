@@ -433,8 +433,8 @@ def reject_unmodelled_patterns(patterns: Iterable[object], where: str) -> None:
     remaining positive patterns still report "covered" — so the single pattern
     form that REMOVES coverage is absorbed. Measured on playwright.yml: adding
     `- '!tests/e2e/**'` beside `- 'tests/e2e/**'` (2 places) left this module at
-    40 passed and the twin at 11 passed, with A-13's only server-side execution
-    point switched off.
+    green and so was the twin, with A-13's only server-side execution point
+    switched off.
     """
     negated = sorted(
         str(p) for p in patterns if isinstance(p, str) and p.startswith("!"))

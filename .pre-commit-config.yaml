@@ -970,9 +970,13 @@ repos:
         # replacing the entry with `bash -c 'exit 0'`: every test that reads
         # this config still passed, and an
         # injected `test.fixme()` sailed through the hook. CI runs the SCRIPT,
-        # never this hook — no workflow names `playwright-lint` and this file
-        # is not in playwright.yml's `paths:` either. What actually covers the
-        # line is tests/lint/test_e2e_spec_lint.py, added for exactly that.
+        # never this hook — the single occurrence of `playwright-lint` under
+        # .github/ is a COMMENT describing this arrangement, and this file is
+        # not in playwright.yml's `paths:` either. (An earlier version of this
+        # sentence said no workflow "names" it, which stopped being true in
+        # the same commit that added the comment — mention is not execution,
+        # which is the distinction this whole hook's twin is built on.) What
+        # covers the line is tests/lint/test_e2e_spec_lint.py, added for it.
         files: ^(tests/e2e/(.*\.spec\.(ts|js)|eslint\.config\.mjs|package(-lock)?\.json)|scripts/tools/lint/e2e_spec_lint\.sh)$
 
       - id: hardcode-tenant-check
