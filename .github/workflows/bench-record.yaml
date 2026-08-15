@@ -54,30 +54,28 @@ jobs:
         with:
           persist-credentials: false
 
-      # ⛔ cache: false + cache/restore below — this job WRITES NO CACHE.
-      # Since ADR-032 it compiles and runs a second, older revision of this
-      # repo (the pinned reference). That job runs on the default branch, so it
-      # is privileged: anything the reference build wrote into `~/go/pkg/mod`
-      # before a cache SAVE would be restored by every other workflow. Flagged
-      # by CodeQL as cache poisoning, and it is a fair call — the reference is
-      # our own released code, but "our own code from months ago, executed with
-      # today's privileges" is exactly the shape that rule is about.
-      # Restoring is harmless; only saving is. Other workflows still populate
-      # this key, so the nightly keeps the speed-up without owning the write.
+      # ⛔ THIS JOB TOUCHES NO SHARED MODULE CACHE — not for writing, and not
+      # for reading either. Since ADR-032 it compiles and runs a second, older
+      # revision of this repo (the pinned reference) while running on the
+      # default branch, i.e. privileged.
+      #
+      #   writing  anything the reference build left in `~/go/pkg/mod` before a
+      #            cache SAVE would be restored by every other workflow.
+      #            That is CodeQL's cache-poisoning finding, and it is fair:
+      #            "our own code from months ago, executed with today's
+      #            privileges" is exactly the shape that rule is about.
+      #   reading  a cache poisoned by someone else would be fed straight into
+      #            the build of main's side. Restore-only closes the export
+      #            path and leaves the import path open, which is half a fix.
+      #
+      # The cost is one module download per night, inside a 45-minute budget.
+      # That is a cheap price for removing a shared mutable dependency from a
+      # privileged job, so this is not merely appeasing the scanner.
       - name: Set up Go 1.26
         uses: actions/setup-go@v6
         with:
           go-version: "1.26"
           cache: false
-
-      - name: Restore Go modules (restore-only — see above)
-        uses: actions/cache/restore@v5
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-1.26-
-            ${{ runner.os }}-go-
 
       # ── ADR-032 paired measurement (segment 1: measure only) ────────────────
       # The reference version is PINNED in a committed file, never "latest tag".
@@ -181,33 +179,54 @@ jobs:
             >> .build/bench-baseline.txt 2>>.build/bench.err.log || \
             echo "::warning::canary append failed — trend watchdog will fall back to the fixed floor"
 
+      # ⛔ Must not abort the job. `pair_bench_ratio.py` exits 2 on inputs that
+      # are not a valid pair (no `cpu:` header, mismatched CPUs, an empty side)
+      # — real conditions, and every one of them means "tonight is
+      # INCONCLUSIVE", not "the nightly is broken". A hard failure here would
+      # also skip the step below, so the paired series would record NOTHING and
+      # the run would simply be red. Same mistake as the reference-pin read;
+      # this is its second instance, caught in review.
       - name: Compute paired ratios
+        id: ratios
         if: steps.paired.outputs.status == 'ok'
-        run: |
-          set -euo pipefail
-          python3 scripts/tools/dx/pair_bench_ratio.py \
-            --reference .build/paired/bench-base.txt \
-            --main .build/paired/bench-pr.txt \
-            --reference-tag "${REF_TAG}" \
-            --out .build/bench-paired.json
         env:
           REF_TAG: ${{ steps.ref.outputs.tag }}
+        run: |
+          set -uo pipefail
+          if python3 scripts/tools/dx/pair_bench_ratio.py \
+              --reference .build/paired/bench-base.txt \
+              --main .build/paired/bench-pr.txt \
+              --reference-tag "${REF_TAG}" \
+              --out .build/bench-paired.json; then
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            echo "ratio computation rejected the inputs — see stderr above"
+          fi
 
       # Loud, and machine-readable. `::error::` surfaces in the run's annotations
       # so a rotting reference cannot sit unnoticed for weeks, and the JSON keeps
       # the paired series honest: this night is INCONCLUSIVE, not clean.
       - name: Paired measurement unusable — record and annotate
-        if: steps.paired.outputs.status != 'ok'
+        if: steps.paired.outputs.status != 'ok' || steps.ratios.outputs.status != 'ok'
         env:
           REF_TAG: ${{ steps.ref.outputs.tag }}
-          # Two distinct causes reach this step and they need different fixes:
-          # a pin file nobody can parse, vs a reference version that no longer
-          # builds. Reporting both as the latter sends the reader to the wrong
-          # place — the same misdiagnosis class as `thin-anchor` in the watchdog.
-          REASON: ${{ steps.ref.outputs.reason || 'reference-build-or-run-failed' }}
+          # Three distinct causes reach this step and they need different fixes:
+          # a pin file nobody can parse, a reference version that no longer
+          # builds, and inputs the ratio tool refused. Reporting them all as one
+          # sends the reader to the wrong place — the same misdiagnosis class as
+          # `thin-anchor` in the watchdog.
+          REASON: >-
+            ${{ steps.ref.outputs.reason
+                || (steps.paired.outputs.status != 'ok' && 'reference-build-or-run-failed')
+                || 'ratio-inputs-rejected' }}
+          # Which path produced tonight's bench-baseline.txt. Saying "fallback"
+          # when the paired run actually succeeded and only the ratio failed
+          # would be a false statement in an annotation people act on.
+          BASELINE_FROM: ${{ steps.paired.outputs.status == 'ok' && 'the paired main side' || 'the fallback path' }}
         run: |
           set -uo pipefail
-          echo "::error::paired measurement unusable (${REASON}) — tonight is INCONCLUSIVE for the paired series. The nightly baseline came from the fallback path and is unaffected. See ADR-032 §待決 3."
+          echo "::error::paired measurement unusable (${REASON}) — tonight is INCONCLUSIVE for the paired series. The nightly baseline came from ${BASELINE_FROM} and is unaffected. See ADR-032 §待決 3."
           mkdir -p .build
           printf '{\n  "schema": "bench-paired/v1",\n  "reference_tag": "%s",\n  "status": "INCONCLUSIVE",\n  "reason": "%s"\n}\n' \
             "${REF_TAG}" "${REASON}" > .build/bench-paired.json

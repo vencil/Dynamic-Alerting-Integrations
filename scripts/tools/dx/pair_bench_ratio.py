@@ -128,9 +128,22 @@ def main() -> int:
               "to emit a paired verdict", file=sys.stderr)
         return 2
 
-    # Both sides ran in one job on one runner. If the headers disagree, the
-    # pairing assumption (machine cancels) is not true and the ratio means
-    # nothing — fail loudly rather than publish a number that looks fine.
+    # Both sides ran in one job on one runner. The `cpu:` header is the only
+    # evidence of that in the data, so a side without one cannot be shown to
+    # satisfy the pairing assumption. ⛔ Check for absence BEFORE comparing:
+    # `None == None` is true, so two header-less sides would otherwise sail
+    # through and publish ratios whose central premise was never checked.
+    if ref_cpu is None or main_cpu is None:
+        missing = [n for n, c in (("reference", ref_cpu), ("main", main_cpu))
+                   if c is None]
+        print(f"[pair_bench_ratio] no `cpu:` header on the {' and '.join(missing)} "
+              f"side — the same-machine premise is unverifiable, so these are not "
+              f"usable as a pair", file=sys.stderr)
+        return 2
+
+    # If the headers disagree, the pairing assumption (machine cancels) is
+    # false and the ratio means nothing — fail loudly rather than publish a
+    # number that looks fine.
     if ref_cpu != main_cpu:
         print(f"[pair_bench_ratio] the two sides report different CPUs "
               f"({ref_cpu!r} vs {main_cpu!r}) — that cannot happen within one "
@@ -147,7 +160,7 @@ def main() -> int:
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n",
-                        encoding="utf-8")
+                        encoding="utf-8", newline="\n")
 
     print(f"[pair_bench_ratio] reference {args.reference_tag} on {ref_cpu}")
     print(f"[pair_bench_ratio] {len(evaluated)} evaluated, "

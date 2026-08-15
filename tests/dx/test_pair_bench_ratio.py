@@ -137,6 +137,25 @@ def test_mismatched_cpu_headers_are_refused(tmp_path: Path):
     assert "different CPUs" in r.stderr
 
 
+def test_both_sides_missing_a_cpu_header_are_refused(tmp_path: Path):
+    """⛔ `None == None` passes an equality check. Two header-less sides must be
+    refused on ABSENCE, before any comparison — otherwise the same-machine
+    premise is never actually verified and the ratios look perfectly fine."""
+    headerless = "BenchmarkA-4  \t       5\t 100 ns/op\nPASS\n"
+    r = run(tmp_path, headerless, headerless)
+    assert r.returncode == 2
+    assert "no `cpu:` header" in r.stderr
+    assert not (tmp_path / "out.json").exists()
+
+
+def test_one_side_missing_a_cpu_header_is_refused(tmp_path: Path):
+    r = run(tmp_path,
+            "BenchmarkA-4  \t       5\t 100 ns/op\nPASS\n",
+            side([("BenchmarkA", 100.0)]))
+    assert r.returncode == 2
+    assert "reference side" in r.stderr
+
+
 def test_side_with_no_benchmark_rows_is_refused(tmp_path: Path):
     r = run(tmp_path, "", side([("BenchmarkA", 100.0)]))
     assert r.returncode == 2
