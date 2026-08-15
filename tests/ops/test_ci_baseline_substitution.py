@@ -2057,13 +2057,14 @@ def test_control_the_git_stub_still_injects_behind_a_dash_c_option(
     # the rule nothing. There is no shape that answers "is this output parsed?";
     # `_DISPLAY_ONLY_LISTINGS` is where a measured exception goes.
     ("git ls-files --error-unmatch conf.d/x >/dev/null", True),
-    # ⛔ Command substitution. `blast-radius.yml` writes its header listing as
-    # `changed_raw=$(git diff --name-only …)`, so this is not a hypothetical
-    # spelling — it is the shipped one. Blind review removed `\$\(` from the
-    # segment splitter and the module stayed green, because that one
-    # live line is covered by the verbatim exemption further down: the rule
-    # would have gone blind to every FUTURE `x=$(git ls-files …)` while today's
-    # tree looked fine.
+    # ⛔ Command substitution. `blast-radius.yml` USED to write its header
+    # listing as `changed_raw=$(git diff --name-only …)`; the tier-semantics
+    # half of #1419 replaced it with a file-routed `-z` form, so no live line
+    # has this shape today. The row stays because of what happened while it did
+    # exist: blind review removed `\$\(` from the segment splitter and the
+    # module stayed green, since that one live line sat in the verbatim
+    # exemption further down (now empty). The rule would have gone blind to
+    # every FUTURE `x=$(git ls-files …)` while the tree of the day looked fine.
     ("changed_raw=$(git diff -z --name-only a...b)", True),
     ("out=$(git ls-files -z)", True),
 ], ids=["plain", "dash-c", "absolute-path", "if-prefix", "dash-C-and-c",
@@ -3719,32 +3720,17 @@ def _shell_commands(workflow: Path) -> list[str]:
     return out
 
 
-# ⛔ The ONE listing in these three files whose output is not read back path by
-# path: it is truncated to five entries, comma-joined and printed in a comment
-# header. It is exempted verbatim rather than by a shape, because every shape
-# that tried to describe "is this parsed?" turned out to be an enumeration in
-# disguise — first the command name, then the redirect form (`> "$VAR"`), which
-# `| tee "$f" >/dev/null` and a one-line shell function both walk past while
-# staying byte-identical in behaviour. A single literal is closed: any new or
-# reworded listing fails this rule until someone amends this constant, and that
-# amendment is the review trigger. The measurement behind the exemption is on
-# the line itself in blast-radius.yml — adding `-z` there crashes the consumer.
-#
-# ⛔⛔ THIS WHOLE EXEMPTION DIES WHEN THE TIER-SEMANTICS PR MERGES, and the
-# instruction is DELETE, not update. That PR replaces this exact statement with
-# one that carries `-z` and routes the bytes through `_printable()`, so both
-# sentences above stop being true: the output IS NUL-separated there, and
-# adding `-z` no longer crashes anything. Measured on the merged tree: this
-# control fails with "no longer exist verbatim", and of the two ways to green
-# it, re-pointing the literal at the merged line is the WORSE one — it parks a
-# now-compliant listing in an exemption slot and leaves the paragraph above
-# asserting two things that are false. Emptying the set is the better one: the
-# rule then covers that line for real, and the suite is green (measured, both
-# ways).
-_DISPLAY_ONLY_LISTINGS = {
-    'changed_raw=$(git diff --name-only "origin/$BASE_REF"...HEAD -- '
-    '"${{ steps.detect.outputs.conf_d }}")',
-}
+# The display-only exemption is EMPTY, and that is the merged state rather
+# than an oversight. It held one listing — the comment header in
+# blast-radius.yml, whose output was collapsed into a display string and
+# was therefore not required to be NUL-separated. The tier-semantics half
+# of #1419 replaced that statement with one that carries `-z` and routes
+# the bytes through `_printable()`, so the rule below now covers it for
+# real and there is nothing left to exempt.
+# ⛔ Kept as an empty set rather than deleted: two places read the name,
+# and removing it turns a clear refusal into a NameError. A future
+# exemption must arrive with the measurement that justifies it.
+_DISPLAY_ONLY_LISTINGS: set[str] = set()
 
 
 @pytest.mark.parametrize("workflow", [CONFIG_DIFF, BLAST_RADIUS, GUARD_DEFAULTS],

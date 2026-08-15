@@ -88,16 +88,22 @@ Example output:
 | Affected tenants | 187 |
 | Tier A (threshold/routing) | 187 |
 
-<details>
-<summary>Substantive changes: 187 tenants</summary>
+> :warning: Affected tenant count exceeds the inline-detail threshold (50). Showing tenant list only — per-field diffs are available in the workflow artifact.
 
-- **tenant-fin-001**
-  - `mysql_connections`: 90 → 95
-- **tenant-fin-002**
-  - `mysql_connections`: 90 → 95
+<details>
+<summary>Tier A (threshold/routing): 187 tenants</summary>
+
+- `tenant-fin-001`
+- `tenant-fin-002`
 ...
 </details>
 ```
+
+⚠️ 187 > `SUMMARY_MODE_TENANT_THRESHOLD` (50), so the layout is a tenant list
+plus the artifact, not per-tenant expansion. An earlier version showed
+`Substantive changes: 187 tenants` with per-field diffs — a layout the renderer
+structurally cannot produce. The PR Comment example further down was the same
+class; both were fixed together ([#1419](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1419)).
 
 Note: Tenants that have already overridden `mysql_connections` themselves (e.g., set to 98) will not appear in the affected list — the override key is the metric key, not the alert name.
 
@@ -208,27 +214,41 @@ PR submitted → CI triggers blast-radius.yml
 |--------|-------|
 | Total tenants scanned | 500 |
 | Affected tenants | 347 |
-| Tier A (threshold/routing) | 12 |
-| Tier B (other alerting) | 0 |
-| Tier C (format-only) | 335 |
+| Tier A (threshold/routing) | 347 |
+
+> :warning: Affected tenant count exceeds the inline-detail threshold (50). Showing tenant list only — per-field diffs are available in the workflow artifact.
 
 <details>
-<summary>Substantive changes: 12 tenants</summary>
-- **tenant-fin-001**: `mysql_connections`: 90 → 95
-- **tenant-fin-002**: `mysql_connections`: 90 → 95
-...
-</details>
+<summary>Tier A (threshold/routing): 347 tenants</summary>
 
-Format-only changes: 335 tenants (no threshold/routing/alerting impact)
+- `tenant-fin-000`
+- `tenant-fin-001`
+...
+- _…and 147 more (see artifact)_
+
+</details>
 ```
+
+⚠️ This block is the ACTUAL output of `blast_radius.py`, not hand-written. An
+earlier version showed `Tier A | 12` / `Tier C (format-only) | 335` — that was
+the output of the very defect [#1419](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1419) fixed, where inherited threshold changes were
+reported as having no impact. And 347 affected tenants crosses the
+inline-detail threshold (50), so the layout is a tenant list plus the artifact,
+not per-tenant expansion.
 
 ### Tier Classification Logic
 
 | Tier | Definition | PR Comment Behavior |
 |------|-----------|-------------------|
-| **A** | Threshold value changes, routing receiver changes | Highlighted, details expanded |
-| **B** | Other alerting field changes (severity, rules, etc.) | Listed |
-| **C** | Format-only / metadata / timezone / non-alerting fields | Count only, not expanded |
+| **A** | Threshold value changes, routing receiver changes | Counted as highlights; in **per-tenant mode** it is a bullet inside the same `<details>` as Tier B, but **carries the old and new value** |
+| **B** | Other alerting field changes (severity, rules, etc.) | A bullet in that same `<details>`; ⚠️ on add/remove it prints **the field name only, not the value** |
+| **C** | Comment fields (`_comment` / `_comments` / `_description` / `_metadata`) and a pure reorder of **both** recipe fields | Count only, not expanded |
+
+⚠️ **A and B differ less in layout than this table used to claim.** The old wording said "A highlighted, details expanded / B listed"; in fact `_tenant_change_summary` emits both as the same two-space-indented `-` bullets. The real difference is the **value**: a Tier B add/remove prints only the field name, so a switch like `_silent_mode: "all"` never shows what it was set to. **In summary mode Tier A gets no per-field detail at all** — just the tenant list.
+
+⚠️ Tier C is the **provably harmless** category, not the bucket for whatever was not classified: unrecognised fields land in Tier B (listed, not highlighted), because Tier C renders as "no threshold/routing/alerting impact" — a positive claim. A key inside `effective_config` that does not start with `_` is a **threshold**, i.e. Tier A (#1419) — except the platform document's own structural keys (`profiles`, `tenants`, `optional_overrides`, `state_filters`, `max_metrics_per_tenant`), which are structural AT THEIR OWN LEVEL and land in Tier B; paths beneath them are still thresholds.
+
+⚠️ Two cells in this table are worth calling out — measured, and written down here rather than left for a reader to hit: **(1) `_metadata`, which the real pipeline cannot reach**: it is dropped unconditionally by `deep_merge`, so changing `_metadata.db_type` produces no diff at all; the Tier C carriers that are reachable today are `_comment` / `_comments` / `_description`. **(2) A pure reorder, which this change makes reachable**: `describe_tenant` writes `_custom_alerts` and `_custom_alerts_resolution` from the same `resolved` list in order, so a reorder always reorders both, and the downgrade rule previously named only `_custom_alerts` — a realistic reorder never reached it. **Both fields are named now, and a pure reorder lands in Tier C (measured).** One sentence used to file both cells under "cannot currently reach", and (2) had stopped being true inside the same commit.
 
 ## Scenario 5: Post-Migration Verification at Scale
 
