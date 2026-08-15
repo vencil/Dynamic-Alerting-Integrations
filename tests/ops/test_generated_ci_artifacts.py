@@ -3306,8 +3306,7 @@ def test_gitlab_root_shell_wires_the_pipeline(generated, tmp_path, capsys) -> No
     #
     # The live property: on a path where the customer still has to wire it up,
     # the closing line must not promise validation without naming that work.
-    closing = [ln for ln in summary.splitlines()
-               if "GitLab CI" in ln or "GitLab CI" in ln.replace("GitLab", "GitLab")]
+    closing = [ln for ln in summary.splitlines() if "GitLab CI" in ln]
     assert closing, f"no closing platform line at all.\n{summary}"
     assert any("include" in ln for ln in closing), (
         "the summary promises validation without mentioning the include the "
@@ -3386,10 +3385,28 @@ _ROOT_SHAPES = {
     "unparseable-no-include": "job:\n  script:\n    - !reference [.a, script]\n",
 }
 
+
+
+# ⛔ Both axes are load-bearing and neither could shrink noticeably.
+# Demonstrated by composition: dropping `needs-convert` from the shape axis
+# made "delete the worked-conversion branch entirely" invisible — and that
+# branch is what stops a scalar-`include:` customer being handed a duplicate
+# mapping key that deletes their SAST entries. Dropping `both` from the ci
+# axis made "speak a GitLab-only manual step over the combined platform name"
+# invisible. A shrunken axis reports fewer tests and stays green.
+_SUMMARY_CI_VALUES = ["github", "gitlab", "both"]
+
+
+def test_summary_axes_cannot_shrink_silently() -> None:
+    assert set(_ROOT_SHAPES) == {
+        "greenfield", "wired", "needs-append", "needs-include",
+        "needs-convert", "unparseable-with-include", "unparseable-no-include",
+    }, sorted(_ROOT_SHAPES)
+    assert _SUMMARY_CI_VALUES == ["github", "gitlab", "both"]
+
+
 @pytest.mark.parametrize("lang", sorted(_SUMMARY_MARKERS))
-
-
-@pytest.mark.parametrize("ci", ["gitlab", "both"])
+@pytest.mark.parametrize("ci", _SUMMARY_CI_VALUES)
 @pytest.mark.parametrize("shape", sorted(_ROOT_SHAPES))
 def test_summary_wiring_line_reports_what_init_actually_did(
     lang, shape, ci, tmp_path, capsys, monkeypatch,
@@ -3419,6 +3436,25 @@ def test_summary_wiring_line_reports_what_init_actually_did(
     # at the start of a step ("Paste the include above"), and pinning case
     # would make this test fail on rewording rather than on regression.
     haystack = summary.lower()
+
+    if ci == "github":
+        # ⛔ The `--ci github` summary had no assertion of any kind, which is
+        # how "delete the GitHub wiring line" survived. Two properties: the
+        # wiring line is present and names the workflow, and nothing GitLab
+        # is mentioned at all — the root shell is not written on this path,
+        # so any GitLab sentence here would be describing a file that does
+        # not exist.
+        assert any(
+            "GitHub Actions" in ln and _GH_WORKFLOW.as_posix() in ln
+            for ln in summary.splitlines()
+        ), f"--ci github printed no GitHub wiring line.\n{summary}"
+        assert _GL_ROOT_SHELL.as_posix() not in summary, (
+            "--ci github mentioned the GitLab root shell, which this path "
+            f"never writes.\n{summary}"
+        )
+        assert paste_phrase not in haystack, (
+            f"--ci github asked for GitLab wiring.\n{summary}")
+        return
 
     if shape == "greenfield":
         # We wrote the root shell ourselves this run. Saying "already in
@@ -3474,8 +3510,16 @@ def test_summary_wiring_line_reports_what_init_actually_did(
         # over "GitHub Actions + GitLab CI", both survived the whole suite.
         # The carve-out carries an eight-line comment arguing it is
         # load-bearing; nothing pinned it.
-        assert "GitHub Actions" in summary, (
-            f"--ci both printed no GitHub wiring line.\n{summary}")
+        # ⛔ The SENTENCE, not the platform name. Every `--ci both` summary
+        # contains "GitHub Actions" twice — the wiring line and the closing
+        # line — so a bare substring test is satisfied by the closing line
+        # and deleting the wiring line entirely survives. Match it by the
+        # workflow path it must name.
+        assert any(
+            "GitHub Actions" in ln and _GH_WORKFLOW.as_posix() in ln
+            for ln in summary.splitlines()
+        ), (f"--ci both printed no GitHub wiring line naming "
+            f"{_GH_WORKFLOW.as_posix()}.\n{summary}")
         if shape not in ("greenfield", "wired"):
             # The defect this pins is the COMBINED platform name being used
             # for a GitLab-only condition — "only then does GitHub Actions +

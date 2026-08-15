@@ -1907,6 +1907,41 @@ class TestRunInit:
                     f'{name}: got a paste-ready fragment instead of the '
                     f'end-state example — {snippet!r}')
 
+    def test_everything_we_print_is_itself_valid_yaml_and_wires_us_in(self):
+        """⛔ The check that would have caught three rounds of this bug at once.
+
+        Every previous defect in this area was found by a human reading the
+        output; nothing mechanically took what we print and asked "is this
+        even YAML, and does it wire us in?". A mutation that mangles the
+        worked example so the customer's own entry loses its `- ` — producing
+        a document that does not parse, i.e. exactly the outcome this state
+        exists to prevent — survived the entire suite.
+
+        Both artifacts are checked structurally, not by substring:
+          * the ready-made block, as pasted into a file with no `include:`
+          * the end-state example, on its own
+        """
+        # 1. The end-state example must parse, and `include:` must be a LIST
+        #    whose last entry is ours — the shape we are asking them to reach.
+        doc = yaml.safe_load(ip._GL_WIRING_EXAMPLE)
+        assert isinstance(doc, dict), ip._GL_WIRING_EXAMPLE
+        entries = doc.get('include')
+        assert isinstance(entries, list) and entries, ip._GL_WIRING_EXAMPLE
+        assert entries[-1] == {'local': ip._GL_PIPELINE_REL.as_posix()}, entries
+        assert len(entries) >= 2, (
+            'the example does not show the customer keeping their own '
+            'entries, so it reads as "replace yours with ours"')
+
+        # 2. The ready-made block, actually pasted onto a file that has no
+        #    `include:` key — the only state it is offered for.
+        original = 'stages: [build]\nbuild:\n  script: [echo hi]\n'
+        pasted = original + '\n' + ip._GL_INCLUDE_SNIPPET
+        merged = yaml.safe_load(pasted)
+        assert merged['include'] == [
+            {'local': ip._GL_PIPELINE_REL.as_posix()}], merged
+        assert 'build' in merged, (
+            'pasting the block lost the rest of the customer file')
+
     def test_only_a_file_without_an_include_key_gets_a_paste_ready_block(self):
         """The one edit whose correctness does not depend on the file's style.
 
