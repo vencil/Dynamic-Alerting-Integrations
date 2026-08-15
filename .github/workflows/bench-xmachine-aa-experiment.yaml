@@ -63,7 +63,7 @@ on:
         required: false
         default: "16"
       rounds:
-        description: "Interleaved rounds per shard (each round runs side A then side B)"
+        description: "Interleaved rounds per shard (each round runs both sides; the order alternates A,B / B,A)"
         required: false
         default: "6"
       count:
