@@ -1380,10 +1380,18 @@ def test_every_scanned_root_is_wired_to_the_fifth_floor_through_the_real_entry(
     # (#1434) and the sentence went with it — but the pairing was
     # wrong anyway, which is worth keeping because it reads so plausibly:
     # that one compared POST-exemption roots against the whole pin, this one
-    # compares PRE-exemption roots against the pin minus the exemption, and
-    # mutation separated them in both directions. Exempting a single-file
-    # root's only artifact reddens this and left that one green; a stale pin
-    # entry for a `_MAY_BE_EMPTY` root did the reverse.
+    # compares PRE-exemption roots against the pin minus the exemption, so the
+    # two are asking different questions of different universes.
+    # ⛔ AN EARLIER WORDING HERE CLAIMED MUTATION HAD SEPARATED THEM IN BOTH
+    # DIRECTIONS, and blind review showed the sentence was false in both halves
+    # — it had compressed two-part mutant configurations into one clause. The
+    # separating case needs the pin edited TOO (exempt a single-file root's only
+    # artifact AND re-file the root as artifact-less): only then is the gate
+    # green with this test red. Plain exemption reddens the gate first, which
+    # reddens the deleted test as well. And there is no reverse case at all:
+    # "gate green while the deleted test is red" is exactly what that test
+    # being true-by-construction rules out. Stated as the algebra rather than
+    # as a mutation anecdote, because the algebra is what survives.
     # ⚠️ What this equality still cannot see, disclosed rather than guarded:
     # adding a root to `_DEFAULTS_ROOTS_MAY_BE_EMPTY` subtracts it from BOTH
     # sides at once. The gate's own exit-lock below refuses an entry that still
@@ -1745,14 +1753,28 @@ def test_a_conf_d_tree_spelled_in_another_case_is_refused_not_ignored():
     real = gate._tracked_paths()
     gate._tracked_confd_roots(real)      # today's index must stay silent
 
+    # ⛔ DEPTH, and the first version of this probe had only one. Every case was
+    # `x/{spelling}/_defaults.yaml`, so the immediate parent was always the
+    # offending directory — and mutation showed the walk could be narrowed to
+    # `.parents[:1]` with the whole suite still green. The real index is not
+    # flat: of the 17 tracked artifacts, 6 sit below their root and the deepest
+    # is three levels down (`…/full-l0-l3/conf.d/db/mariadb/prod/`), so the
+    # narrowed walk would go silent on the layout this repo actually uses.
     for spelling in ("CONF.D", "Conf.d", "conf.D"):
-        with pytest.raises(gate._GateViolation) as exc:
-            gate._tracked_confd_roots(real + [f"x/{spelling}/_defaults.yaml"])
-        assert f"x/{spelling}" in str(exc.value), exc.value
+        for probe in (f"x/{spelling}/_defaults.yaml",
+                      f"x/{spelling}/db/mariadb/prod/_defaults.yaml"):
+            with pytest.raises(gate._GateViolation) as exc:
+                gate._tracked_confd_roots(real + [probe])
+            assert f"x/{spelling}" in str(exc.value), exc.value
         # …and with no artifact in it either, which is the half the exit-lock
         # owns and the half a scan-derived universe cannot see.
         with pytest.raises(gate._GateViolation):
             gate._tracked_confd_roots(real + [f"x/{spelling}/tenant-a.yaml"])
+        # …and a Windows-style listing, because `conf_d_root` normalises those
+        # and this refusal has to agree with it rather than quietly disagree.
+        with pytest.raises(gate._GateViolation):
+            gate._tracked_confd_roots(
+                real + [f"x\\{spelling}\\db\\_defaults.yaml"])
 
     # ⛔ Not a name-similarity check: these are different directories, not the
     # same one misspelled, and reporting them would be a false red on a layout
@@ -2712,15 +2734,43 @@ def test_an_exemption_that_empties_a_root_says_so_in_the_message(monkeypatch):
                    if root in gate._SHIPPED_CONFD_ROOTS]
     assert solo_unshipped and shipped_any, sorted(by_root)
 
+    # ⛔ NAMING THE TABLE IS NOT ENOUGH, and a first version asserted only that.
+    # `_DEFAULTS_ARTIFACT_EXEMPT` appears ten times in the gate, so that
+    # substring survives deleting the remedy paragraphs outright — measured:
+    # both were removable with the suite green. What has to hold is that the
+    # message offers the way OUT, so an anchor from each remedy is required.
+    # If you reword a remedy, update its anchor here in the same edit; if you
+    # remove one, this is the test that should stop you.
+    # ⛔ ONE wording for one remedy, and this list is what enforces that. The
+    # two messages started with two phrasings of the same three exits ("give
+    # the root a second `_defaults*` file" / "carry the keys in a sibling
+    # `_defaults*` file"); the anchors caught it on their first run.
+    exits = ("sibling `_defaults*` file", "move the exempted file",
+             "do not exempt it")
     for victim in (solo_unshipped[0], shipped_any[0]):
         monkeypatch.setitem(gate._DEFAULTS_ARTIFACT_EXEMPT, victim,
                             "probe: " + "x" * 40)
         with pytest.raises(gate._GateViolation) as exc:
             gate._defaults_faces()
-        assert "_DEFAULTS_ARTIFACT_EXEMPT" in str(exc.value), (
+        msg = str(exc.value)
+        assert "_DEFAULTS_ARTIFACT_EXEMPT" in msg, (
             f"exempting {victim} produced a message that never mentions the "
-            f"table the reader just edited: {exc.value}")
+            f"table the reader just edited: {msg}")
+        missing_exits = [e for e in exits if e not in msg]
+        assert not missing_exits, (
+            f"exempting {victim} produced a message with no way out — these "
+            f"remedies are gone or reworded: {missing_exits}\n{msg}")
+        # ⛔ …and the remedy half must NOT be printed when there is nothing to
+        # blame: with the table empty this message spent its longest paragraph
+        # on an entry the reader never added.
         monkeypatch.undo()
+
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_every_root_contributes({}, tracked_roots=set())
+    clean = str(exc.value)
+    assert "_DEFAULTS_ARTIFACT_EXEMPT" not in clean, (
+        "with the exemption table empty, the `missing` message still leads "
+        f"with the exemption paragraph:\n{clean}")
 
 
 def test_the_key_floors_are_per_class_not_one_global_number():
@@ -2823,7 +2873,7 @@ def test_the_artifact_key_floor_backstops_a_vanished_group(monkeypatch):
         gate.run_check(demand=set(), supply=set(), deferred=set(), known_unwired={})
 
 
-def _erosion_plan(need: int) -> tuple[dict[str, int], int]:
+def _erosion_plan(need: int) -> dict[str, int]:
     """{artifact: keys to drop} removing `need` keys with no OTHER floor firing.
 
     Two constraints, and the first draft of this helper had only one — the
@@ -2835,9 +2885,22 @@ def _erosion_plan(need: int) -> tuple[dict[str, int], int]:
       * no conf.d root may reach zero      → the fifth floor would answer;
       * shipped roots are left alone       → the fourth floor would answer.
 
-    Returns the shortfall too, because "the mutation did not actually happen"
-    and "the mutation happened and nothing noticed" look identical from the
-    outside — this file has been fooled by that before.
+    ⛔ It used to return a shortfall as well, so the caller could tell "the
+    mutation did not actually happen" from "it happened and nothing noticed".
+    That is the right question and it already has an answer one line down —
+    `sum(plan.values()) == band + 1` — so the shortfall was a second copy of
+    one check, and mutation confirmed it: `return plan, 0` was green. Deleted
+    rather than given a control of its own.
+
+    ⚠️ DISCLOSED, because the same mutation pass found it and the answer is
+    "no control, on purpose": the `- 1` below (keep one key alive per root) is
+    slack at today's sizes, not a load-bearing constraint — the largest
+    non-shipped root carries more keys than the plan ever asks for, so
+    removing the `- 1` changes nothing today. It becomes load-bearing if the
+    band ever approaches the biggest root, and what would notice then is the
+    caller's `pytest.raises(match=...)`: an emptied root is reported by the
+    fifth floor, whose message does not match. That is a real tripwire, so no
+    further guard is added here.
     """
     real = gate._read_artifact_keys
     per_root: dict[str, list[tuple[str, int]]] = {}
@@ -2860,7 +2923,7 @@ def _erosion_plan(need: int) -> tuple[dict[str, int], int]:
                 plan[rel] = take
                 left -= take
                 droppable -= take
-    return plan, left
+    return plan
 
 
 def _read_with_erosion(monkeypatch, plan: dict[str, int]) -> None:
@@ -2891,7 +2954,7 @@ def test_the_artifact_key_floor_owns_erosion_that_empties_no_root(monkeypatch):
     """
     _generators, artifacts = gate._defaults_faces()
     groups = _artifact_groups(artifacts)
-    total, biggest = sum(groups.values()), max(groups.values())
+    total = sum(groups.values())
     band = total - gate._DEFAULTS_ARTIFACT_KEYS_FLOOR
     biggest_root = max(groups, key=lambda root: groups[root])
 
@@ -2919,19 +2982,28 @@ def test_the_artifact_key_floor_owns_erosion_that_empties_no_root(monkeypatch):
     # 3. One key further and it speaks — on the real tree, with every root still
     #    carrying keys, which is the shape floors 1-2 (files) and 4-5 (a root at
     #    zero) all structurally miss.
-    plan, shortfall = _erosion_plan(band + 1)
-    assert shortfall == 0, (
-        f"could not erode {band + 1} keys without emptying a root; the tree is "
-        f"too small for this measurement to mean anything: {plan}")
-    assert sum(plan.values()) == band + 1, plan
+    plan = _erosion_plan(band + 1)
+    assert sum(plan.values()) == band + 1, (
+        f"the plan removes {sum(plan.values())} keys, not {band + 1} — the "
+        "non-shipped roots can no longer supply that much erosion without one "
+        "of them emptying, so this measurement would be about a different "
+        f"floor than the one it names: {plan}")
     _read_with_erosion(monkeypatch, plan)
     with pytest.raises(gate._GateViolation, match="ARTIFACT faces yielded"):
         gate._defaults_faces()
     monkeypatch.undo()
 
-    # …and the size of that band is what the lower bound is really about: it has
-    # to stay under a whole root's worth of keys.
-    assert band < biggest, (band, biggest, groups)
+    # ⛔ AND THE BAND IS NOT RE-ASSERTED HERE. A line reading
+    # `assert band < biggest` stood at this spot and blind review killed it two
+    # ways: it is the bracket test's lower bound restated (`band < biggest` is
+    # `total - FLOOR < biggest` is `total - biggest < FLOOR`, equivalent for
+    # every possible floor value, so the two can only ever go red together),
+    # and its message was a bare tuple, so a legitimate key addition produced
+    # three reds of which this one could not say what to do. Deleting a test
+    # for being true-by-construction and then writing one in the same commit is
+    # the shape this file keeps having to correct. The inequality has an owner:
+    # test_each_key_floor_is_bracketed_by_what_it_has_to_catch, whose message
+    # explains which direction to move the floor.
 
 
 def test_each_key_floor_is_bracketed_by_what_it_has_to_catch():

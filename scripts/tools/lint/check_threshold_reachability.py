@@ -1090,9 +1090,16 @@ def _tracked_confd_roots(paths: list[str] | None = None) -> set[str]:
     # `conf.d` reddens both.
     #
     # Rather than fold case here — `conf_d_root` is shared with the
-    # guard-defaults workflow (#1219), and the repo's other 89 references to
-    # `conf.d` across 8 CI files would stay case-sensitive, so this gate would
-    # be demanding registration for a tree nothing else can see — the fix is
+    # guard-defaults workflow (#1219), and the repo's other references to
+    # `conf.d` — the confd-schema hooks in `.pre-commit-config.yaml`, and the
+    # `blast-radius`, `config-diff`, `backtest` and `guard-defaults-impact`
+    # workflows — would stay case-sensitive, so this gate would be demanding
+    # registration for a tree nothing else can see. ⚠️ An earlier wording put a
+    # COUNT here ("89 references across 8 CI files"); blind review could not
+    # reproduce it under any of four definitions (80/8, 66/7, 50/6, 105/10) and
+    # it was self-contradicting besides ("other than" excludes a file that the
+    # 8 includes). The consumers are named instead: a name can be checked by
+    # opening the file, and the argument never needed the total. The fix is
     # to make the divergence unobservable: if the index only ever holds one
     # spelling, a case-sensitive and a case-insensitive reader cannot disagree.
     # ⚠️ This is a claim about the INDEX, not the filesystem, deliberately: the
@@ -1113,9 +1120,12 @@ def _tracked_confd_roots(paths: list[str] | None = None) -> set[str]:
             "hooks, blast-radius, config-diff, backtest, and the "
             "guard-defaults workflow. It is not a supported layout, and the "
             "silence it buys is the whole failure this floor exists to end.\n"
-            "  RENAME the directory to lower case. That is the only remedy: "
-            "there is nothing to register, because registering it would claim "
-            "a set of checks are running on it that structurally are not.\n"
+            "  RENAME the directory to lower case. Registering it under this "
+            "spelling is not an alternative — it would claim a set of checks "
+            "are running on the tree that structurally are not. ⚠️ After the "
+            "rename you WILL still have to register it, in one of the two "
+            "lists the next message names: renaming makes the tree visible, it "
+            "does not account for it.\n"
             "  ⛔ A directory whose name is merely SIMILAR (`conf_d`, `confd`) "
             "is not this; only a case variant is, because only a case variant "
             "reads as correct to a human and as absent to `git ls-files`. "
@@ -1589,14 +1599,15 @@ def _assert_shipped_roots_intact(
             "re-nested, or emptied — the file is still there, so the file counts "
             "above did not move. Check the section name first.\n"
             "  OR: the file(s) were deleted or moved — restore them.\n"
-            "  OR: you just added a _DEFAULTS_ARTIFACT_EXEMPT entry for a file "
-            f"in this tree ({len(_DEFAULTS_ARTIFACT_EXEMPT)} entry/entries "
-            "today). An exemption removes the file from the read set, so its "
-            "keys stop counting here — on a shipped root that is not something "
-            "an exemption may buy. Carry the keys in a sibling `_defaults*` "
-            "file, move the exempted file out of the tree, or do not exempt "
-            "it. (#1434)\n"
-            "  ⛔ LOWERING THESE NUMBERS IS NOT A REMEDY. A shipped root whose "
+            + ("" if not _DEFAULTS_ARTIFACT_EXEMPT else
+               "  OR: you just added a _DEFAULTS_ARTIFACT_EXEMPT entry for a "
+               f"file in this tree ({len(_DEFAULTS_ARTIFACT_EXEMPT)} "
+               "entry/entries). An exemption removes the file from the read "
+               "set, so its keys stop counting here — on a shipped root that "
+               "is not something an exemption may buy. Carry the keys in a "
+               "sibling `_defaults*` file, move the exempted file out of the "
+               "tree, or do not exempt it. (#1434)\n")
+            + "  ⛔ LOWERING THESE NUMBERS IS NOT A REMEDY. A shipped root whose "
             "keys went to zero is precisely what this floor is for; editing "
             "_SHIPPED_CONFD_ROOTS to match the new reality re-creates the blind "
             "spot. Only change the table when a tree genuinely moved or stopped "
@@ -1632,31 +1643,40 @@ def _assert_every_root_contributes(
     seen = set(by_root)
     missing = _DEFAULTS_CONFD_ROOTS - seen
     if missing:
+        # ⛔ The exemption half is CONDITIONAL, and printing it unconditionally
+        # was measured as its own small defect (blind review): with the table
+        # empty the message said "0 entry/entries today" and then spent its
+        # longest paragraph on what to do about the entry you did not add,
+        # burying the three causes that could actually be yours.
         raise _GateViolation(
             f"conf.d root(s) {sorted(missing)} contributed no artifact at all. "
             "They are pinned in _DEFAULTS_CONFD_ROOTS, so the scan finding "
-            "nothing under them means the tree moved, was deleted, its files "
-            "stopped matching `_is_defaults_artifact`, or "
-            f"_DEFAULTS_ARTIFACT_EXEMPT ({len(_DEFAULTS_ARTIFACT_EXEMPT)} "
-            "entry/entries today) consumed the last one. ⛔ Removing the entry "
-            "is only correct if the tree genuinely stopped existing — "
+            "nothing under them means the tree moved, was deleted, or its "
+            "files stopped matching `_is_defaults_artifact`. ⛔ Removing the "
+            "entry is only correct if the tree genuinely stopped existing — "
             "otherwise it re-creates the blind spot this floor was added for "
-            "(#1411).\n"
-            "  ⛔ IF YOU JUST ADDED AN EXEMPTION, the three remedies above are "
-            "not yours and following them leads in a circle: dropping the pin "
+            "(#1411)." + ("" if not _DEFAULTS_ARTIFACT_EXEMPT else
+            f"\n  ⛔ FOURTH CAUSE, and it applies here: "
+            f"_DEFAULTS_ARTIFACT_EXEMPT holds {len(_DEFAULTS_ARTIFACT_EXEMPT)} "
+            "entry/entries, and an exemption removes its file from the read "
+            "set — so exempting the last `_defaults*` file in a root empties "
+            "that root and lands you here. The three remedies above are then "
+            "not yours, and following them leads in a circle: dropping the pin "
             "sends you to the 'registered nowhere' message, and the only edit "
             "that turns this green from there is filing the tree under "
             "_DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS — which is a claim about "
             "FILES, and the file is still sitting there. That entry would be "
             "false the moment it was written, and a later 'no longer exists in "
             "the index' report would quote it back as fact.\n"
-            "  What is actually available: give the root a second `_defaults*` "
-            "file to carry its keys, move the exempted file out of the conf.d "
-            "tree, or do not exempt it. An exemption is for a file whose BYTES "
+            "  What is actually available — the same three the shipped-root "
+            "floor offers, in the same words on purpose: carry the keys in a "
+            "sibling `_defaults*` file, move the exempted file out of the "
+            "conf.d tree, or do not exempt it. An exemption is for a file "
+            "whose BYTES "
             "must not change; it was never a way to hand a whole root's "
             "coverage back. If none of those three fit your case, this gate "
             "needs to change — say so in an issue rather than making a table "
-            "say something untrue. (#1434)")
+            "say something untrue.") + " (#1434)")
 
     unpinned = sorted(r for r in seen if r not in _DEFAULTS_CONFD_ROOTS)
     if unpinned:
