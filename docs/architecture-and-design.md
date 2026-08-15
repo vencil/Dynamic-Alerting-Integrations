@@ -382,6 +382,7 @@ spec:
 | ADR-029 | [租戶自訂告警跨租戶查詢隔離 — 編譯期邊界中和為主、評估期 ruler 隔離延後](adr/029-custom-alert-cross-tenant-query-scoping.md) | ✅ Accepted | — |
 | ADR-030 | [決策層遷移驗證 — 製造 Oracle 而非觀測](adr/030-decision-layer-migration-validation.md) | 🟢 Accepted | — |
 | ADR-031 | [slo_burn_rate recipe — 宣告式 SLO 告警編譯](adr/031-slo-burn-rate-recipe.md) | ✅ Accepted | — |
+| ADR-032 | [夜跑效能監測改用成對交錯量測，取代跨夜滑動錨點](adr/032-paired-interleaved-bench-measurement.md) | 🟡 Proposed | — |
 
 <!-- ADR_INDEX_END -->
 
