@@ -11,15 +11,51 @@
 #
 # Exit-code policy:
 #   - guard exit 0 → workflow success, comment posted with "no findings".
-#   - guard exit 1 → workflow FAIL (blocks merge); comment lists errors.
+#   - guard exit 1 → workflow FAIL; comment lists errors.
 #   - guard exit 2 → workflow FAIL (caller error); comment + log link.
+#
+# ⚠️ "FAIL" is not "blocks merge", which is what these lines used to say.
+# `Defaults Impact Guard` is not among the nineteen required status checks
+# on main (`gh api repos/{owner}/{repo}/branches/main/protection`), so a red
+# run turns the merge box yellow and nothing more. What it protects is the
+# reviewer's PR comment, and that is worth saying accurately (#1419).
 #
 # Customer template note:
 #   Customers can copy this workflow into their own repo to gate
-#   _defaults.yaml changes. The Build da-guard step assumes the
-#   threshold-exporter Go module is co-located in the repo; for
-#   customers consuming a pre-built binary, replace the build step
-#   with a release-asset download (see C-11 packaging).
+#   _defaults.yaml changes. ⛔ NO COUNT in this sentence, and none is coming
+#   back. It said "TWO things in it are repo-coupled, not one" — and a blind
+#   review immediately produced a third: the `Detect conf.d path` step below
+#   searches two HARDCODED paths, so a customer whose tree sits anywhere else
+#   hard-fails on every PR (measured by running that step's shipped bash
+#   against a tree at `env/prod/conf.d`). The count is the wrong shape for
+#   this list: it goes stale silently every time the workflow grows a
+#   dependency, which is the failure mode the last line of this note is
+#   already about. What is repo-coupled:
+#   (1) the Build da-guard step assumes the threshold-exporter Go module
+#       is co-located; consuming a pre-built binary means replacing that
+#       step with a release-asset download (see C-11 packaging), and
+#   (2) `Determine scope from changed _defaults.yaml` shells out to
+#       `scripts/ops/guard_defaults_scopes.py` (and therefore to python3).
+#       Measured in a copy without it: rc=2 and a bare interpreter error,
+#       no `::error::` annotation. ⛔ The invocation is a REPO-RELATIVE path,
+#       so the helper has to land at `scripts/ops/guard_defaults_scopes.py`
+#       from the repo root. An earlier version of this line said "copy the
+#       helper alongside the workflow"; following that literally puts it in
+#       `.github/workflows/` and reproduces the rc=2 the sentence is warning
+#       about — advice that does not work is worse than no advice.
+#   (3) `Detect conf.d path` resolves through a hardcoded list — repo-root
+#       `conf.d/`, then `components/threshold-exporter/config/conf.d/`. A tree
+#       anywhere else resolves to nothing, and on a `pull_request` that is now
+#       a hard failure by design (silently validating nothing is #1219). The
+#       annotation says to update the resolution order, and that is the fix;
+#       it is named here because a customer reads this note before they read
+#       the step.
+#   ⚠️ (2) was NOT added by #1419, which is what this note used to say. The
+#   helper arrived with #1299 (2026-08-01) and the note named only (1) from
+#   then until #1419 added this paragraph. No tag contains that commit
+#   (`git tag --contains`), so no released copy carries the gap — but the
+#   note has to grow whenever the workflow grows a dependency, and nothing
+#   here enforces that.
 
 name: Dangling Defaults Guard
 
@@ -91,7 +127,47 @@ jobs:
           #   2. repo-root conf.d/ (customer GitOps layout)
           #   3. components/threshold-exporter/config/conf.d/ (this repo)
           #   4. nothing → skip
-          if [ -n "$INPUT_DIR" ] && [ -d "$INPUT_DIR" ]; then
+          # ⛔ An override that does not resolve must NOT fall through. The
+          # operator named a tree to validate; silently validating a different
+          # one and reporting success is this ticket's own shape, on the very
+          # chain this step edits. The override exists because a customer's
+          # GitOps layout moved — one typo used to swap that for silence.
+          # ⚠️ Trim surrounding whitespace FIRST. Pasting a path into the
+          # workflow_dispatch box is the normal way to use this input, and a
+          # trailing space made the hard failure above fire on a correct path —
+          # for which the operator's cheapest recovery is to re-run WITHOUT the
+          # override, i.e. exactly the fall-through this branch exists to
+          # prevent. Only leading/trailing blanks are trimmed; an interior space
+          # is a legitimate directory name and still resolves.
+          # ⛔ Parameter expansion, not `sed`: `sed` is line-oriented, so the
+          # first version left a LEADING newline in place (paste from a wiki)
+          # and still false-red. `[[:space:]]` inside `${...}` covers \n.
+          # ⛔ Try the RAW value first. A directory name may legitimately end in
+          # a space on Linux, and trimming unconditionally rejected it while
+          # quoting a path the operator never typed (`'weird'` for `weird `) —
+          # a false red whose cheapest recovery is to drop the override, i.e.
+          # the fall-through this branch exists to prevent. The trim is for
+          # pasted whitespace, so it only gets to act when the raw value does
+          # not resolve.
+          RAW_INPUT_DIR="$INPUT_DIR"
+          if [ -n "$INPUT_DIR" ] && [ ! -d "$INPUT_DIR" ]; then
+            INPUT_DIR="${INPUT_DIR#"${INPUT_DIR%%[![:space:]]*}"}"
+            INPUT_DIR="${INPUT_DIR%"${INPUT_DIR##*[![:space:]]}"}"
+          fi
+          # ⛔ …and an override that trims to nothing is an ERROR, not an absent
+          # override. Trimming alone turned "   " into "" and let it fall
+          # through to auto-detection with a green verdict — the first version
+          # of this fix re-created the exact silent fall-through the branch below
+          # exists to prevent, while fixing a false red.
+          if [ -n "$RAW_INPUT_DIR" ] && [ -z "$INPUT_DIR" ]; then
+            echo "::error::config_dir override was whitespace only — refusing to fall back to auto-detection. Leave the input EMPTY to ask for auto-detection, or give a real path"
+            exit 1
+          fi
+          if [ -n "$INPUT_DIR" ] && [ ! -d "$INPUT_DIR" ]; then
+            echo "::error::config_dir override is not a directory — refusing to fall back to auto-detection and validate a tree you did not ask for. As given: '$RAW_INPUT_DIR'; after trimming surrounding whitespace: '$INPUT_DIR'"
+            exit 1
+          fi
+          if [ -n "$INPUT_DIR" ]; then
             echo "conf_d=$INPUT_DIR" >> "$GITHUB_OUTPUT"
           elif [ -d "conf.d" ]; then
             echo "conf_d=conf.d" >> "$GITHUB_OUTPUT"
@@ -99,6 +175,16 @@ jobs:
             echo "conf_d=components/threshold-exporter/config/conf.d" >> "$GITHUB_OUTPUT"
           else
             echo "conf_d=" >> "$GITHUB_OUTPUT"
+            # ⛔ Benign for a manual run, NOT for a pull_request. Every later
+            # step is gated on this output, so on a PR an empty value means the
+            # whole job — including the verdict — silently does nothing and
+            # reports success, which is the #1219 shape this workflow exists to
+            # prevent. Failing here rather than in the verdict step keeps the
+            # message pointed at the actual cause.
+            if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+              echo "::error::No conf.d/ directory found on a PR that changed a _defaults.yaml — nothing was validated. If the tree moved, update the resolution order above."
+              exit 1
+            fi
             echo "::warning::No conf.d/ directory found; nothing to validate"
           fi
 
@@ -119,9 +205,75 @@ jobs:
             echo "::error::base ref origin/${BASE_REF} not found — the checkout step must use fetch-depth: 0"
             exit 1
           fi
-          git diff --name-only "origin/${BASE_REF}...HEAD" -- '**/_defaults.yaml' \
-            > "$RUNNER_TEMP/changed-defaults.txt"
-          echo "Changed _defaults.yaml:"; cat "$RUNNER_TEMP/changed-defaults.txt"
+          # ⛔ `-z`, for the same reason config-diff.yaml and blast-radius.yml
+          # already pass it: without it git C-quotes any non-ASCII path
+          # (`"\347\222\260-prod/conf.d/_defaults.yaml"`), and the helper below
+          # turns those escapes into path separators. Measured, both directions
+          # are wrong and one of them is SILENT: a tree above the conf.d root
+          # becomes a target on a directory that does not exist (red, blaming
+          # da-guard), and one below it becomes `unmanaged` — WORST stays 0, the
+          # job is GREEN, and the sticky comment asserts the file is not under
+          # any conf.d tree while it is. This repo is Chinese-language and the
+          # customer GitOps layout is this workflow's stated use case.
+          # ⚠️ An earlier version of this comment said "this file was the one of
+          # the three that did not get `-z`". It was false: `blast-radius.yml`
+          # was also listing changed paths without it, for the string that goes
+          # into the PR comment header. Both are fixed, and the rule is now
+          # asserted over all three files rather than this one (#1419).
+          # ⛔ Same branch-topology probe as config-diff.yaml, and for the same
+          # reason: a PR from a branch with no common ancestor (orphan branch,
+          # re-imported or squashed repo) makes the three-dot form exit 128,
+          # and under `set -euo pipefail` this step then died with a bare
+          # `fatal: … no merge base` — no annotation, no explanation, and a
+          # second red from the verdict step on top. The round that added the
+          # probe added it to ONE of the three files.
+          # ⚠️ A warning and a WIDER scope, not a hard failure: with no merge
+          # base there is no PR diff to narrow to, and the empty target list
+          # already routes this workflow to whole-tree validation, which
+          # validates more rather than less. Silence is what would be wrong.
+          mb_err=$(mktemp)
+          set +e
+          git merge-base "origin/${BASE_REF}" HEAD >/dev/null 2>"$mb_err"
+          mb_rc=$?
+          set -e
+          if [ "$mb_rc" -gt 1 ]; then
+            # ⚠️ Deliberately does NOT name the file pattern: an existing guard
+            # (`test_zero_defaults_is_not_an_error`) forbids an `::error::`
+            # mentioning it in this step, because zero resolved files must stay
+            # benign. This error is about git being unable to answer, not about
+            # the count, and the wording keeps those two apart.
+            echo "::error::git merge-base exited $mb_rc for origin/${BASE_REF} — cannot compute which files this PR changed: $(tr '\n' ' ' < "$mb_err")"
+            exit "$mb_rc"
+          fi
+          if [ "$mb_rc" -eq 1 ]; then
+            echo "::warning::origin/${BASE_REF} and HEAD share no history, so this PR has no computable _defaults.yaml diff — falling back to validating the whole detected tree"
+            : > "$RUNNER_TEMP/changed-defaults.txt"
+          else
+            # ⛔ The listing gets the SAME wrapper as the probe above, and this
+            # is the half the previous round left out while the comment on line
+            # one of this block said "same as config-diff.yaml". It was not: the
+            # sibling wraps its `git diff` in `set +e` / `rc=$?` / `::error::`,
+            # this one ran bare under `set -euo pipefail`. The failure mode is
+            # not the bare death — it is that the redirect CREATES the file
+            # first, so a `git diff` that dies partway leaves a TRUNCATED list
+            # that looks exactly like a complete one, and the step after it
+            # resolves scopes from that. Fewer trees validated, green comment.
+            # ⚠️ Wording carries no file pattern on purpose: an existing guard
+            # (`test_zero_defaults_is_not_an_error`) forbids an `::error::` in
+            # this step that names one, because zero resolved files must stay
+            # benign. This error is about git being unable to answer.
+            set +e
+            git diff -z --name-only "origin/${BASE_REF}...HEAD" -- '**/_defaults.yaml' \
+              > "$RUNNER_TEMP/changed-defaults.txt"
+            diff_rc=$?
+            set -e
+            if [ "$diff_rc" -ne 0 ]; then
+              echo "::error::git diff exited $diff_rc listing this PR's changed config files — the scopes below would be resolved from a partial list, so nothing is validated rather than some of it silently"
+              exit "$diff_rc"
+            fi
+          fi
+          echo "Changed _defaults.yaml:"
+          tr '\0' '\n' < "$RUNNER_TEMP/changed-defaults.txt"
 
           # This repo's _defaults.yaml files live in SEVERAL independent conf.d
           # trees (shipped config, try-local seed, recipe examples, e2e-bench and
@@ -129,7 +281,7 @@ jobs:
           # So the scope is not one directory: it is one (config-dir, scope) pair
           # per tree that the PR actually touched. Resolution lives in a tested
           # helper rather than inline bash, because this is the step that failed.
-          python3 scripts/ops/guard_defaults_scopes.py - \
+          python3 scripts/ops/guard_defaults_scopes.py --null - \
             < "$RUNNER_TEMP/changed-defaults.txt" > "$RUNNER_TEMP/guard-targets.tsv"
           echo "Resolved targets:"; cat "$RUNNER_TEMP/guard-targets.tsv"
 
@@ -147,6 +299,30 @@ jobs:
           run_one() {
             local config_dir="$1" scope="$2" part
             part="$RUNNER_TEMP/part.md"
+            # ⛔ Truncate: in da-guard's run() at least one
+            # `return exitCallerErr` sits BELOW the writeReport call, so a
+            # caller error can leave a partially written --output. Stale
+            # content from the previous tree is therefore not the only
+            # hazard; truncating first means whatever survives belongs to
+            # THIS tree.
+            # ⚠️ This used to give a count and nine absolute main.go line
+            # numbers. Two drafts of that count were wrong (six, then seven)
+            # before a third was right, and nothing asserts any of it — the
+            # same commit bans line DISTANCES in two test files for exactly
+            # this reason. Only the ordering is load-bearing, so only the
+            # ordering is stated.
+            # ⚠️ The removal was right; the reason first given for it was not.
+            # It said the numbers "point at a file in another component that
+            # this workflow never reads". False, and measured so: `paths:`
+            # above lists `cmd/da-guard/**` as a trigger and the build step
+            # below compiles that very package. main.go is the thing this
+            # workflow exists to run. The numbers had to go because nothing
+            # checks them and an unrelated edit to that file moves them all,
+            # not because the file is far away.
+            # Without this, tree N+1 inherits tree N's findings
+            # and the sticky comment attributes them to a tree that was
+            # never validated — the #1219 shape.
+            : > "$part"
             set +e
             "$RUNNER_TEMP/da-guard" \
                 --config-dir "$config_dir" \
@@ -158,7 +334,17 @@ jobs:
             set -e
             echo "### \`$config_dir\` (scope: \`$scope\`) — exit $rc" >> "$REPORT"
             echo >> "$REPORT"
-            cat "$part" >> "$REPORT" 2>/dev/null || echo "_(no report produced)_" >> "$REPORT"
+            # ⛔ Test the file, do not rely on `cat` failing: the truncation
+            # above CREATES it, so `cat` always succeeds and a `||` fallback
+            # would be permanently unreachable. An empty part means da-guard
+            # exited before writeReport, i.e. this tree was NOT validated — and
+            # an empty section under a heading reads to a reviewer as "no
+            # findings", which is the #1219 shape wearing a different hat.
+            if [ -s "$part" ]; then
+              cat "$part" >> "$REPORT"
+            else
+              echo "⚠️ **NOT VALIDATED** — da-guard exited $rc without producing a report for this tree." >> "$REPORT"
+            fi
             echo >> "$REPORT"
             # `if` rather than `a && b` — under the default `bash -e` a false
             # test as a standalone statement would abort the step.
@@ -169,6 +355,29 @@ jobs:
           if [ -s "$TARGETS" ]; then
             # One da-guard run per conf.d tree the PR actually touched.
             while IFS=$'\t' read -r kind a b; do
+              # ⛔ Row SHAPE first, kind second. `read` cannot tell "a third
+              # kind" from "a mis-split row", and the two need different
+              # messages: a leading tab shifts the path into $kind, and
+              # classifying that as an unrecognised kind sent the reader off to
+              # audit guard_defaults_scopes.py's kind vocabulary — where nothing
+              # is wrong — while naming an EMPTY path. The required fields come
+              # from that helper's own output contract
+              # (`target<TAB>dir<TAB>scope`, `unmanaged<TAB>path`).
+              bad_row=0
+              if [ -z "$kind" ] || [ -z "$a" ]; then
+                bad_row=1
+              elif [ "$kind" = "target" ] && [ -z "$b" ]; then
+                bad_row=1
+              fi
+              if [ "$bad_row" -eq 1 ]; then
+                echo "### (unreadable row) — NOT CHECKED" >> "$REPORT"
+                echo >> "$REPORT"
+                echo "\`guard-targets.tsv\` 有一列讀不出必要欄位（kind=\`${kind}\`、第二欄=\`${a}\`）。**沒有任何東西為它被驗證。** 這一列由 \`guard_defaults_scopes.py\` 產生，所以這是產生端的問題，不是 kind 詞彙表的問題。" >> "$REPORT"
+                echo >> "$REPORT"
+                echo "::error::guard-targets.tsv has an unreadable row (kind='${kind}', second field='${a}') — produced by guard_defaults_scopes.py, so this is a producer bug rather than an unknown scope kind"
+                WORST=2
+                continue
+              fi
               case "$kind" in
                 target)    run_one "$a" "$b" ;;
                 # ⛔ Never silent: a _defaults.yaml outside every conf.d tree is
@@ -180,6 +389,21 @@ jobs:
                            echo "此檔不在任何 \`conf.d\` 樹底下，da-guard 無從解析它的繼承鏈。" >> "$REPORT"
                            echo >> "$REPORT"
                            echo "::warning::${a} is outside every conf.d tree — not validated" ;;
+                # The whole point of guard_defaults_scopes.py is that a file
+                # it cannot place is reported rather than dropped. A `case`
+                # with no catch-all would drop a third kind on the floor and
+                # leave WORST at 0.
+                # ⛔ Heading AND a sentence, like both branches above. An earlier
+                # version wrote only the heading — a zero-length section body,
+                # which is the very shape `run_one`'s comment forbids ("an empty
+                # section under a heading reads to a reviewer as 'no findings'").
+                # In the isolated case this section IS the whole comment.
+                *)         echo "### \`${a}\` — NOT CHECKED (unrecognised scope kind \`${kind}\`)" >> "$REPORT"
+                           echo >> "$REPORT"
+                           echo "此列的 kind 是 \`${kind}\`，而本 workflow 只認得 \`target\` 與 \`unmanaged\`。這棵樹**沒有被驗證**；請對齊 \`guard_defaults_scopes.py\` 與本檔的 kind 詞彙表後重跑。" >> "$REPORT"
+                           echo >> "$REPORT"
+                           echo "::error::unrecognised scope kind '${kind}' for ${a} — guard_defaults_scopes.py and this workflow disagree"
+                           WORST=2 ;;
               esac
             done < "$TARGETS"
           else
@@ -197,7 +421,9 @@ jobs:
           echo "exit=$WORST" >> "$GITHUB_OUTPUT"
           # Always continue so the comment-posting step runs even when the
           # guard returned 1 (errors). The "Fail if guard found errors" step
-          # at the end converts the captured exit code into a workflow failure.
+          # at the end converts the captured exit code into a workflow
+          # failure — and it runs unconditionally, so this `exit 0` cannot
+          # turn "the guard never reported" into a pass (#1419).
           exit 0
 
       - name: Post sticky PR comment
@@ -221,8 +447,15 @@ jobs:
               body = `_(da-guard did not produce a report; exit code = ${guardExit}. See workflow log.)_\n`;
             }
 
+            // ⛔ Provenance — see the equivalent block in blast-radius.yml.
+            // This comment is sticky and this workflow's posting step does not
+            // run on a failed job, so without the stamp a stale verdict is
+            // indistinguishable from the current one.
+            const sha = (context.payload.pull_request?.head?.sha || context.sha).slice(0, 7);
+            const runUrl = context.serverUrl + '/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + context.runId;
+            const stamp = '\n<sub>commit `' + sha + '` • [run log](' + runUrl + ')</sub>\n';
             const marker = '<!-- da-guard-defaults-impact -->';
-            const footer = `\n\n---\n*Generated by [da-guard](../blob/main/components/threshold-exporter/app/cmd/da-guard) • C-12 Dangling Defaults Guard PR-5 • exit code: \`${guardExit}\`*\n`;
+            const footer = `\n\n---\n*Generated by [da-guard](../blob/main/components/threshold-exporter/app/cmd/da-guard) • C-12 Dangling Defaults Guard PR-5 • exit code: \`${guardExit}\`*\n${stamp}`;
             const fullBody = `${marker}\n${body}${footer}`;
 
             const { data: comments } = await github.rest.issues.listComments({
@@ -248,21 +481,52 @@ jobs:
             }
 
       - name: Upload report artifact
-        if: always() && steps.guard.outputs.exit != ''
+        # ⛔ NOT gated on the exit code. An earlier draft of this file
+        # claimed "with no exit code there is no report file either" — false:
+        # the report is created and appended to per tree, and the exit code is
+        # published only at the very end of the step. So on exactly the path
+        # the verdict below reports (guard died before publishing), the
+        # partial report is the ONLY diagnostic that exists, and that gate
+        # threw it away while the message said "See workflow log".
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: da-guard-report
           path: ${{ runner.temp }}/guard-report.md
           retention-days: 14
+          # Explicit rather than relying on the action's default: when the
+          # guard step was skipped there is genuinely no file, and that must
+          # not turn into a second red on top of the real one.
+          if-no-files-found: warn
 
       - name: Fail if guard found errors
-        if: steps.guard.outputs.exit != ''
+        # ⛔ Deliberately NOT `steps.guard.outputs.exit != ''`. Under that gate
+        # a guard that never reached its final echo — skipped because "Detect
+        # conf.d path" found no tree, or dead before writing $GITHUB_OUTPUT —
+        # took this verdict step down with it, and the job went green having
+        # validated nothing (#1419). An ABSENT verdict must read as a failure,
+        # never as a clean one.
+        # ⛔ Do not silence a red here by restoring a gate on
+        # `steps.guard.outputs.exit`: that is the exact bypass this replaced.
+        # When an earlier step failed, that failure is the root cause.
+        # ⚠️ The conf_d term is NOT that gate. It is the producer's own
+        # precondition, not the producer's result: when Detect finds no tree
+        # there is nothing to validate and this file says so itself, so a
+        # bare `!cancelled()` turned that documented benign path into a red
+        # whose message blamed a step failure that never happened. Gating on
+        # the precondition keeps the benign path green and still fails when
+        # the guard should have run and did not.
+        if: ${{ !cancelled() && steps.detect.outputs.conf_d != '' }}
         env:
           GUARD_EXIT: ${{ steps.guard.outputs.exit }}
         run: |
           case "$GUARD_EXIT" in
             0)
               echo "✅ Dangling Defaults Guard: clean."
+              ;;
+            "")
+              echo "::error::da-guard produced no exit code — the 'Run da-guard' step was skipped or died before writing its output, so NOTHING was validated. If an earlier step in this job failed, that is the root cause."
+              exit 1
               ;;
             1)
               echo "::error::Dangling Defaults Guard found errors. See PR comment for details."
