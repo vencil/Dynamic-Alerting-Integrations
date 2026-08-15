@@ -111,10 +111,21 @@ jobs:
           # no measurements in it. The two-topology analysis also needs the
           # session split into halves, so fewer than 2 rounds cannot answer the
           # question this workflow exists for.
+          # Upper bounds matter as much as lower ones. rounds drives how much
+          # gets emitted to the job log (the recovery path below), and count /
+          # benchtime multiply straight into wall time — a large enough value
+          # just burns the 60-minute timeout and produces nothing.
           case "$ROUNDS" in ''|*[!0-9]*) echo "::error::rounds must be a positive integer (got '$ROUNDS')"; exit 2 ;; esac
           case "$COUNT"  in ''|*[!0-9]*) echo "::error::count must be a positive integer (got '$COUNT')"; exit 2 ;; esac
-          if [ "$ROUNDS" -lt 2 ] || [ "$COUNT" -lt 1 ]; then
-            echo "::error::need rounds >= 2 (got $ROUNDS) and count >= 1 (got $COUNT)"
+          case "$BENCHTIME" in
+            *[!0-9msx]*|''|[!0-9]*) echo "::error::benchtime must look like 1s / 250ms / 100x (got '$BENCHTIME')"; exit 2 ;;
+          esac
+          if [ "$ROUNDS" -lt 2 ] || [ "$ROUNDS" -gt 40 ]; then
+            echo "::error::rounds must be 2..40 (got $ROUNDS) — 2 so the session can be split into halves for the two-topology analysis, 40 so the run fits the timeout and the log budget"
+            exit 2
+          fi
+          if [ "$COUNT" -lt 1 ] || [ "$COUNT" -gt 20 ]; then
+            echo "::error::count must be 1..20 (got $COUNT)"
             exit 2
           fi
           OUT="${RUNNER_TEMP}/aa/raw"
@@ -145,19 +156,43 @@ jobs:
       # emitted here too. ~12 KB, well inside the log budget, and it makes the
       # measurements recoverable without depending on egress policy.
       #
-      # Recover with (each file is delimited, so the off-CI analyser's per-round
-      # file layout can be reconstructed verbatim):
-      #   awk '/^===== BEGIN /{f=$3; next} /^===== END /{f=""; next} f{print > (f".txt")}'
+      # Payloads are base64, ONE LINE PER FILE, with a SHA-256 of the original
+      # bytes. Plain BEGIN/END text framing was the obvious choice and it is
+      # wrong for a recovery path: a payload line that looks like a delimiter
+      # misroutes the rest of the file, and a file with no trailing newline
+      # welds its last row onto the END marker. Both silently corrupt the one
+      # thing this step exists to preserve. Base64 cannot collide with the line
+      # format, encodes trailing bytes exactly, and the digest turns "the
+      # recovery probably worked" into something the recovering side checks.
+      #
+      # Recover + verify (reconstructs the analyser's per-round file layout):
+      #   awk '$1=="RAW"{ print $4 | ("base64 -d > " $2 ".txt") }' job.log
+      #   awk '$1=="RAW"{ print $3"  "$2".txt" }' job.log | sha256sum -c -
       - name: Emit raw measurements to the job log
         if: always()
         run: |
           set -euo pipefail
           shopt -s nullglob
-          for f in "${RUNNER_TEMP}"/aa/raw/*.txt; do
-            b="$(basename "$f" .txt)"
-            echo "===== BEGIN $b ====="
-            cat "$f"
-            echo "===== END $b ====="
+          files=("${RUNNER_TEMP}"/aa/raw/*.txt)
+          total=0
+          for f in "${files[@]}"; do
+            total=$(( total + $(wc -c < "$f") ))
+          done
+          # Self-imposed budget. GitHub does NOT publish a numeric job-log size
+          # limit, so this is a conservative ceiling rather than a documented
+          # one: base64 inflates by ~4/3, and exceeding whatever the real limit
+          # is would truncate the log — losing exactly the data this step is
+          # here to rescue. Fail loudly instead of emitting a partial record.
+          if [ "$total" -gt 2000000 ]; then
+            echo "::error::raw measurements are ${total} bytes, over the 2 MB self-imposed log budget — lower rounds/count, or take the data from the artifact instead"
+            exit 2
+          fi
+          echo "emitting ${#files[@]} file(s), ${total} raw bytes (base64 ≈ $(( total * 4 / 3 )))"
+          for f in "${files[@]}"; do
+            printf 'RAW %s %s %s\n' \
+              "$(basename "$f" .txt)" \
+              "$(sha256sum < "$f" | cut -d' ' -f1)" \
+              "$(base64 -w0 < "$f")"
           done
 
       - name: Summarize
