@@ -105,6 +105,18 @@ jobs:
           BENCHTIME: ${{ inputs.benchtime }}
         run: |
           set -euo pipefail
+          # Reject non-positive / non-numeric inputs BEFORE anything is created.
+          # `seq 1 0` is empty, so rounds=0 would skip the measurement loop
+          # entirely and still upload an artifact — a green calibration run with
+          # no measurements in it. The two-topology analysis also needs the
+          # session split into halves, so fewer than 2 rounds cannot answer the
+          # question this workflow exists for.
+          case "$ROUNDS" in ''|*[!0-9]*) echo "::error::rounds must be a positive integer (got '$ROUNDS')"; exit 2 ;; esac
+          case "$COUNT"  in ''|*[!0-9]*) echo "::error::count must be a positive integer (got '$COUNT')"; exit 2 ;; esac
+          if [ "$ROUNDS" -lt 2 ] || [ "$COUNT" -lt 1 ]; then
+            echo "::error::need rounds >= 2 (got $ROUNDS) and count >= 1 (got $COUNT)"
+            exit 2
+          fi
           OUT="${RUNNER_TEMP}/aa/raw"
           mkdir -p "$OUT"
           RE='^(BenchmarkResolveSilentModes_1000|BenchmarkScanDirFileHashes_1000|BenchmarkIncrementalLoad_1000_NoChange|BenchmarkFullDirLoad_1000)$'

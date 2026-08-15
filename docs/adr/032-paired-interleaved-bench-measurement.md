@@ -2,7 +2,7 @@
 title: "ADR-032: 夜跑效能監測改用成對交錯量測，取代跨夜滑動錨點"
 tags: [adr, benchmark, ci, perf-trend, measurement]
 audience: [platform-engineers, contributors]
-version: v2.10.0
+version: v2.9.0
 lang: zh
 id: ADR-032
 tracking_kind: adr
@@ -18,7 +18,7 @@ updated_at: 2026-08-15
 
 🟡 **Proposed**（草案，未實作）。本 ADR 提出把 `bench-record.yaml` 夜跑的量測拓撲，從「今夜 vs 窗內較舊的夜」改為「同機同時量兩個 build，比其比值」。
 
-⚠️ **本文的核心宣稱尚未獲得支持，且唯一一次直接測試是負面結果。** 已量到的是這個做法的**前提**（機器身分是主導噪音項，見 §證據 2），但一次 A/A 實跑**沒有測到交錯量測的效益**（見 §證據 3）。該次實驗有一個已識別的設計瑕疵，但在修正版跑出來之前，**本 ADR 的效益宣稱不成立**。
+⚠️ **本文的核心宣稱尚未獲得支持，而兩次直接測試都是負面結果。** 已量到的是這個做法的**前提**（機器身分是主導噪音項，見 §證據 2），但**兩次 A/A 實跑都沒有測到交錯量測的效益**（見 §證據 3），且第二次推翻了我對第一次的解釋。在真實 GitHub runner 上取得數字之前，**本 ADR 的效益宣稱不成立**。
 
 Tracker：[#1432](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1432)（關票側誤關）、[#1430](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1430)（aged-in 不發射）。前情：[#1396](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1396) / PR [#1431](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1431)。
 
@@ -84,9 +84,26 @@ Tracker：[#1432](https://github.com/vencil/Dynamic-Alerting-Integrations/issues
 
 機器在該次 session 內確實有漂（side A 第 7–8 輪相對第 1 輪 **-5.4%**），所以交錯要對付的現象存在；但它被更大的東西蓋過去了。
 
-**已識別的設計瑕疵（假設，尚未證實）**：該次用 `-test.count=1`，每輪每支 bench 只量一次；最慢的 `FullDirLoad_1000` 在 `benchtime=1s` 下只跑 4 次迭代。交錯消得掉時間相關漂移，消不掉單次抽樣噪音。量化對照與此一致：paired rSD 7.99% ⇒ 單次量測 rSD ≈ 5.6%，而 §證據 2 在 count=6 取中位數下的夜內抖動是 0.52%，差約 10 倍。
+當時提出的解釋是：該次用 `-test.count=1`，每輪每支 bench 只量一次（最慢的 `FullDirLoad_1000` 在 `benchtime=1s` 下只跑 4 次迭代），而交錯消得掉時間相關漂移、消不掉單次抽樣噪音。
 
-⛔ **在修正版（縮小 bench 集、提高 count）跑出結果之前，不得宣稱交錯量測能降低噪音。** 這個負面結果本身也有價值：**交錯不是萬靈丹，它的效益取決於單次估計是否夠穩**——若夜跑改用交錯卻沿用過低的 count，可能一無所獲。
+**修正版實驗（`count=5`，4 支代表性 bench × 8 輪）推翻了這個解釋：**
+
+| | count=1（18 支 bench） | **count=5（4 支 bench）** |
+|---|---|---|
+| PAIRED 殘餘噪音 rSD | 7.99% | **7.39%** |
+| PAIRED 偏差 | 2.18% | 2.10% |
+| SEPARATED 偏差 | 1.94% | 2.29% |
+| **SEPARATED / PAIRED** | **0.9×** | **1.1×** |
+
+**取樣數提高 5 倍，殘餘噪音只從 7.99% 掉到 7.39%。** 若抽樣噪音是主因，取 5 個中位數應把它壓低約 √5 ≈ 2.2 倍。沒有發生 ⇒ **抽樣噪音不是主因，該假設作廢。**
+
+資料指向的替代解釋（同樣未證實）：噪音存在於**數十秒尺度**上，且在 A 那次呼叫與 B 那次呼叫之間變化。本實驗的交錯是**呼叫層級**的（每次呼叫約 40 秒），所以同一支 bench 在兩側相隔約 40 秒。交錯要有效，前提是**漂移的時間尺度遠大於 A↔B 的間隔**——這台機器上不成立。
+
+但還有第三種可能，而且我無法從這兩次實驗排除它：**這台機器根本不適合回答這個問題。** 殘餘噪音 7.4% 是 §證據 2 夜內抖動 0.52% 的約 14 倍；在噪音比訊號大一個數量級的環境裡，「測不到效果」既可能是效果不存在，也可能是儀器解析度不夠。
+
+⛔ **兩次實驗都沒有支持效益宣稱，因此在 GitHub runner 上取得數字之前，不得宣稱交錯量測能降低噪音。** 刻意不再調整第三次實驗——連續調整到出現想要的答案，正是本 repo 反覆在抓的形狀。`bench-aa-noise-experiment.yaml` 就是為了在真正的 runner 上重跑同一個實驗而加的。
+
+這兩個負面結果本身有獨立價值：**交錯不是萬靈丹，它的效益取決於漂移尺度與 A↔B 間隔的相對大小**——若夜跑改用交錯卻讓兩側相隔太久，可能一無所獲。
 
 ## 決策
 
@@ -102,7 +119,7 @@ base(=固定參考 commit), head, base, head, …   一輪一輪交錯
 
 watchdog 看的是 `head / base` 的比值隨時間的走勢，而不是 `今夜 / 某個舊夜`。
 
-**這不是新技術，是把本 repo 已經驗證過的做法搬到夜跑。** `bench-gate-pr.yaml` 走過 v1→v5 五次拓撲演化後收斂到同一形狀，機制已存在於 [`scripts/tools/ops/bench_interleave.sh`](../../scripts/tools/ops/bench_interleave.sh)，其檔頭記錄了理由與代價：
+**這不是新技術，是把本 repo 已經驗證過的做法搬到夜跑。** `bench-gate-pr.yaml` 走過 v1→v5 五次拓撲演化後收斂到同一形狀，機制已存在於 [`scripts/tools/ops/bench_interleave.sh`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/bench_interleave.sh)，其檔頭記錄了理由與代價：
 
 > On shared GitHub-hosted runners the machine drifts mid-run (thermal throttle, noisy neighbour, CPU frequency scaling)... **INTERLEAVE.** Run base and pr alternately, one round at a time (base, pr, base, pr, ...). Any time-correlated drift now hits **BOTH sides within the same round and cancels**
 
@@ -127,7 +144,7 @@ Go 官方的 `benchseries` 是同一結構（`Denominator: "baseline"` / `Denomi
 
 - **夜跑時間約翻倍**（要 build + 跑兩側）。參考點：PR gate 的交錯主迴圈在 `BENCHTIME=1s` 下約 **4 分鐘**（3s 時 12 分鐘），整個 gate ~8–10 分鐘。夜跑無等待壓力，此成本應可負擔——但**尚未實測夜跑側的數字**。
 - **參考 commit 要選、要換。** 建議用「上一個 GA tag」，與六線 release 節奏對齊。換參考點會在比值序列上造成不連續，需要明確處理（見 §待決）。
-- **殘餘噪音未知，且首次實測遠高於預期。** 從夜跑資料推得的區間是 0.52%–3.15%，但 §證據 3 的 A/A 實測在 `count=1` 下量到 **7.99%**。兩者差距目前歸因於取樣數，尚未證實。floor 能降到多少**因此完全不能宣稱**——若殘餘噪音真的接近 8%，這個提案的偵測力還不如現況的 5% floor。
+- **殘餘噪音未知，且首次實測遠高於預期。** 從夜跑資料推得的區間是 0.52%–3.15%，但 §證據 3 的兩次 A/A 實測量到 **7.99%（count=1）與 7.39%（count=5）**；取樣數提高 5 倍幾乎沒改善，所以差距**不是**取樣造成的，成因未明。floor 能降到多少**因此完全不能宣稱**——若殘餘噪音真的接近 8%，這個提案的偵測力還不如現況的 5% floor。
 - **既有 release baseline asset 的角色會變。** `release-attach-bench-baseline.yaml` 每次 release 自動附上 `bench-baseline-<TAG>.txt`（已驗證存在，含 `cpu:` 表頭與 canary）。本提案下它不再是比對基準，而是稽核與冷啟動用。
 
 ## 否決的替代方案
@@ -142,8 +159,8 @@ Go 官方的 `benchseries` 是同一結構（`Denominator: "baseline"` / `Denomi
 ## 待決（Open Questions）
 
 1. **參考 commit 的更換策略** —— 每個 GA tag 換一次？換的那夜比值序列不連續，watchdog 要怎麼處理才不會誤判為 step？
-2. **殘餘噪音實測值，以及交錯到底有沒有效** —— 首次 A/A 實測是負面的（§證據 3）。修正版實驗：縮小 bench 集、提高 `-test.count`，確認「每輪估計夠穩」之後交錯是否才顯現效益。**若修正版仍測不到效益，本 ADR 應被否決而非修補。**
-3. **每輪需要多少 count 才夠穩** —— 這是上一條的前置。它同時決定夜跑的實際 wall time，因為 count 直接乘上去。
+2. **殘餘噪音實測值，以及交錯到底有沒有效** —— 本地兩次 A/A 皆為負面（§證據 3），且 `count=5` 的修正版推翻了抽樣噪音假設。剩下的候選是本地環境解析度不足。**下一步是在 GitHub runner 上跑 `bench-aa-noise-experiment.yaml`；若那裡仍測不到效益，本 ADR 應被否決而非修補。**
+3. **A↔B 的間隔要多短才有效** —— 取代原本的「count 要多大」。本實驗的交錯是呼叫層級（間隔約 40 秒）；若真 runner 上仍無效，下一個變數是把間隔縮到單支 bench 層級。這同時決定夜跑的 wall time。
 4. **夜跑 wall time 實測** —— 翻倍是估計，非實測。
 5. **既有 14 夜窗與三態的去留** —— 比值序列上仍需要某種持續性判準（單夜比值跳動不該發射），但不再需要同類分層。
 6. **遷移路徑** —— 新舊並行一段時間比對，或直接切換？並行成本是三倍夜跑時間。
@@ -160,4 +177,4 @@ Go 官方的 `benchseries` 是同一結構（`Denominator: "baseline"` / `Denomi
 
 - [`benchmark-playbook.md`](../internal/benchmark-playbook.md) —— 夜跑 watchdog 現行行為與十三條已知限制
 - [`audit-reports/bench-trend-2026-08/`](../internal/audit-reports/bench-trend-2026-08/README.md) —— 30 夜真實序列與 counterfactual harness
-- [`scripts/tools/ops/bench_interleave.sh`](../../scripts/tools/ops/bench_interleave.sh) —— 已存在的交錯量測機制
+- [`scripts/tools/ops/bench_interleave.sh`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/bench_interleave.sh) —— 已存在的交錯量測機制
