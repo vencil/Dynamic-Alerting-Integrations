@@ -256,9 +256,9 @@ jobs:
           fi
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      # bench-baseline.txt keeps its name and its place: `release-attach-bench-
-      # baseline.yaml` downloads this artifact by name and expects that file.
-      # The paired files are additive.
+      # bench-baseline.txt keeps its name and its place, because
+      # `release-attach-bench-baseline.yaml` downloads this artifact by name
+      # and expects that file. The paired files are additive.
       - name: Upload bench artifacts
         if: always()
         uses: actions/upload-artifact@v7

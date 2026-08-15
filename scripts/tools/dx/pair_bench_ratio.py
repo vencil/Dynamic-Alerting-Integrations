@@ -40,10 +40,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import re
 import statistics as st
 import sys
+
+# Same two sys.path inserts every sibling dx tool uses: parent for the repo
+# layout where _lib_compat.py sits one directory up, self-dir for the flat
+# Docker layout. Importing the carrier is what hardens stdout — without it
+# `--help` can die on a legacy Windows console (cp950).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 
 # Same shape analyze_bench_history.py parses, deliberately: both read the raw
 # `go test -bench` stdout that bench_interleave.sh appends per round.
@@ -115,6 +125,7 @@ def main() -> int:
                     help="the tag the reference side was built from")
     ap.add_argument("--out", type=pathlib.Path, required=True)
     args = ap.parse_args()
+    try_utf8_stdout()
 
     for p in (args.reference, args.main):
         if not p.is_file():
