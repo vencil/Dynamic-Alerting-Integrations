@@ -25,7 +25,8 @@
 # ==========================
 # One-off calibration, not a gate. No schedule, no push/PR trigger, no branch
 # protection interaction, contents:read only, and it writes nothing back — the
-# raw output leaves as an artifact and is analysed off-CI.
+# raw output leaves as an artifact AND as base64 in the job log (see the emit
+# step for why both), and is analysed off-CI.
 #
 # REMOVAL CONDITION
 # =================
@@ -105,16 +106,45 @@ jobs:
           BENCHTIME: ${{ inputs.benchtime }}
         run: |
           set -euo pipefail
-          # Reject non-positive / non-numeric inputs BEFORE anything is created.
-          # `seq 1 0` is empty, so rounds=0 would skip the measurement loop
-          # entirely and still upload an artifact — a green calibration run with
-          # no measurements in it. The two-topology analysis also needs the
-          # session split into halves, so fewer than 2 rounds cannot answer the
-          # question this workflow exists for.
+          # Validate BEFORE anything is created, both directions.
+          #   lower: `seq 1 0` is empty, so rounds=0 skips the measurement loop
+          #     entirely and still uploads an artifact — a green calibration run
+          #     with no measurements in it. And the two-topology analysis splits
+          #     the session into halves, so <2 rounds cannot answer the question
+          #     this workflow exists for.
+          #   upper: rounds drives how much is emitted to the job log (the
+          #     recovery path below); count and benchtime multiply straight into
+          #     wall time, where a large enough value just burns the 60-minute
+          #     timeout and produces nothing.
           case "$ROUNDS" in ''|*[!0-9]*) echo "::error::rounds must be a positive integer (got '$ROUNDS')"; exit 2 ;; esac
           case "$COUNT"  in ''|*[!0-9]*) echo "::error::count must be a positive integer (got '$COUNT')"; exit 2 ;; esac
-          if [ "$ROUNDS" -lt 2 ] || [ "$COUNT" -lt 1 ]; then
-            echo "::error::need rounds >= 2 (got $ROUNDS) and count >= 1 (got $COUNT)"
+          # Format AND magnitude. Format alone is not a bound: `999999s` is all
+          # digits plus a valid unit, so it passes any shape check and then eats
+          # the whole 60-minute timeout. Split the number from the unit and cap
+          # each unit separately. This also rejects shapes a character-class
+          # check lets through, e.g. `1sm`.
+          BT_NUM="${BENCHTIME%%[!0-9]*}"
+          BT_UNIT="${BENCHTIME#"$BT_NUM"}"
+          bt_bad=""
+          case "$BT_NUM" in ''|*[!0-9]*) bt_bad="needs a leading number" ;; esac
+          if [ -z "$bt_bad" ]; then
+            case "$BT_UNIT" in
+              s)  [ "$BT_NUM" -ge 1 ] && [ "$BT_NUM" -le 60 ]      || bt_bad="s must be 1..60" ;;
+              ms) [ "$BT_NUM" -ge 1 ] && [ "$BT_NUM" -le 60000 ]   || bt_bad="ms must be 1..60000" ;;
+              x)  [ "$BT_NUM" -ge 1 ] && [ "$BT_NUM" -le 1000000 ] || bt_bad="x must be 1..1000000" ;;
+              *)  bt_bad="unit must be s, ms or x" ;;
+            esac
+          fi
+          if [ -n "$bt_bad" ]; then
+            echo "::error::benchtime '$BENCHTIME' rejected — $bt_bad (expected e.g. 1s / 250ms / 100x)"
+            exit 2
+          fi
+          if [ "$ROUNDS" -lt 2 ] || [ "$ROUNDS" -gt 40 ]; then
+            echo "::error::rounds must be 2..40 (got $ROUNDS) — 2 so the session can be split into halves for the two-topology analysis, 40 so the run fits the timeout and the log budget"
+            exit 2
+          fi
+          if [ "$COUNT" -lt 1 ] || [ "$COUNT" -gt 20 ]; then
+            echo "::error::count must be 1..20 (got $COUNT)"
             exit 2
           fi
           OUT="${RUNNER_TEMP}/aa/raw"
@@ -133,6 +163,76 @@ jobs:
           done
           echo "done $(date -u +%FT%TZ)" >> "${RUNNER_TEMP}/aa/timeline.txt"
           tail -5 "${RUNNER_TEMP}/aa/timeline.txt"
+
+      # The artifact is NOT always reachable. Some analysis environments (the
+      # agent sandbox this experiment is driven from) allow api.github.com but
+      # deny the Azure blob host artifacts actually live on:
+      #
+      #   CONNECT rejected, host productionresultssa6.blob.core.windows.net:443
+      #
+      # `/actions/jobs/<id>/logs` redirects to the same denied host, but the job
+      # log itself IS retrievable through the GitHub API. So the raw rows are
+      # emitted here too. Measured: 16 files base64 to 33 KB, so the default
+      # 12 rounds (24 files) lands near 50 KB — well inside the budget below,
+      # and it makes the measurements recoverable regardless of egress policy.
+      #
+      # Payloads are base64, ONE LINE PER FILE, with a SHA-256 of the original
+      # bytes. Plain BEGIN/END text framing was the obvious choice and it is
+      # wrong for a recovery path: a payload line that looks like a delimiter
+      # misroutes the rest of the file, and a file with no trailing newline
+      # welds its last row onto the END marker. Both silently corrupt the one
+      # thing this step exists to preserve. Base64 cannot collide with the line
+      # format, encodes trailing bytes exactly, and the digest turns "the
+      # recovery probably worked" into something the recovering side checks.
+      #
+      # Recover + verify (reconstructs the analyser's per-round file layout).
+      #
+      # Anchor on the record SHAPE, not on field 1. Two properties of a real
+      # fetched log break the obvious `$1=="RAW"` form, and both were measured
+      # against a log pulled from this repo, not assumed:
+      #   1. A log fetched through the GitHub API prefixes EVERY line with an
+      #      RFC3339 timestamp (and a BOM on line 1), so field 1 is the stamp
+      #      and `$1=="RAW"` recovers ZERO files.
+      #   2. Merely tolerating that prefix is not enough either: the ##[group]
+      #      header echoes this step's own shell source, so the literal
+      #      `printf 'RAW %s %s %s\n'` sits in the log as a decoy record and a
+      #      loose match decodes it into a junk `%s.txt`.
+      # Requiring 64 hex digits and a base64 payload excludes the decoy and
+      # ignores any prefix:
+      #   grep -oE 'RAW [A-Za-z0-9_.-]+ [0-9a-f]{64} [A-Za-z0-9+/]+={0,2}' \
+      #     job.log > records.txt
+      #   awk '{ print $4 | ("base64 -d > " $2 ".txt") }' records.txt
+      #   awk '{ print $3"  "$2".txt" }' records.txt | sha256sum -c -
+      - name: Emit raw measurements to the job log
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=("${RUNNER_TEMP}"/aa/raw/*.txt)
+          # Build first, measure the ENCODED bytes, then decide. Budgeting on
+          # raw size would not bound what actually reaches the log: base64
+          # inflates by ~4/3 and each record carries a name, a 64-char digest
+          # and a newline, so a raw-byte ceiling silently permits ~1.35× more.
+          rec="${RUNNER_TEMP}/aa-records.txt"
+          : > "$rec"
+          for f in "${files[@]}"; do
+            printf 'RAW %s %s %s\n' \
+              "$(basename "$f" .txt)" \
+              "$(sha256sum < "$f" | cut -d' ' -f1)" \
+              "$(base64 -w0 < "$f")" >> "$rec"
+          done
+          emitted=$(wc -c < "$rec")
+          # Self-imposed ceiling. GitHub does NOT publish a numeric job-log size
+          # limit, so this is a conservative value rather than a documented one;
+          # exceeding whatever the real limit is would truncate the log, losing
+          # exactly the data this step exists to rescue. Fail loudly instead of
+          # emitting half a record set.
+          if [ "$emitted" -gt 2000000 ]; then
+            echo "::error::encoded measurements are ${emitted} bytes, over the 2 MB self-imposed log budget — lower rounds/count, or take the data from the artifact instead"
+            exit 2
+          fi
+          echo "emitting ${#files[@]} file(s), ${emitted} encoded bytes"
+          cat "$rec"
 
       - name: Summarize
         if: always()
