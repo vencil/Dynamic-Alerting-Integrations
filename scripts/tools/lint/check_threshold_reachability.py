@@ -1611,7 +1611,7 @@ def _assert_shipped_roots_intact(
                "set, so its keys stop counting here — on a shipped root that "
                "is not something an exemption may buy. Carry the keys in a "
                "sibling `_defaults*` file, move the exempted file out of the "
-               "tree, or do not exempt it. (#1434)\n")
+               "conf.d tree, or do not exempt it. (#1434)\n")
             + "  ⛔ LOWERING THESE NUMBERS IS NOT A REMEDY. A shipped root whose "
             "keys went to zero is precisely what this floor is for; editing "
             "_SHIPPED_CONFD_ROOTS to match the new reality re-creates the blind "
@@ -1624,8 +1624,7 @@ def _assert_shipped_roots_intact(
 
 def _assert_every_root_contributes(
         by_root: dict[str, list[tuple[str, dict[str, KeyInfo]]]],
-        tracked_roots: set[str] | None = None,
-        threshold_shape: "object | None" = None) -> None:
+        tracked_roots: set[str] | None = None) -> None:
     """Every pinned conf.d root must still contribute at least one key (#1411).
 
     ⛔ SCOPE, stated because the neighbouring floors' scopes had to be corrected
@@ -1643,6 +1642,13 @@ def _assert_every_root_contributes(
 
     `tracked_roots` defaults to the real index scan, the same way `run_check`
     defaults its inputs to the real extractors; hermetic callers inject a set.
+
+    ⚠️ ONE ARM HAS NO SUCH SEAM, on purpose: the `_DEFAULTS_ROOTS_MAY_BE_EMPTY`
+    falsifier reads the artifacts off disk, so for a hermetic caller — whose
+    rels do not exist — it reads zero and that arm is inert. A `threshold_shape`
+    parameter was added for it and then removed: nothing ever passed it (the
+    test that needed it patches the module name instead), so it was a second
+    way in that only one of the two was ever proven to work.
     """
     if tracked_roots is None:
         tracked_roots = _tracked_confd_roots()
@@ -1682,7 +1688,7 @@ def _assert_every_root_contributes(
             "must not change; it was never a way to hand a whole root's "
             "coverage back. If none of those three fit your case, this gate "
             "needs to change — say so in an issue rather than making a table "
-            "say something untrue.") + " (#1434)")
+            "say something untrue. (#1434)"))
 
     unpinned = sorted(r for r in seen if r not in _DEFAULTS_CONFD_ROOTS)
     if unpinned:
@@ -1840,49 +1846,83 @@ def _assert_every_root_contributes(
     # document, whatever the enclosing key is called. Renaming moves the keys;
     # it does not delete the numbers.
     #
-    # ⚠️ LIMIT, disclosed rather than papered over: a root whose declarations
-    # were all non-numeric and non-null would be invisible to this. Measured
-    # when written, every root carried at least one such leaf (the smallest
-    # was 1, the legitimately-empty one 0), so the separation had margin — but
-    # it is a property of today's fixtures, not a guarantee.
-    shaped = threshold_shape or _threshold_shaped_leaves
+    # ⚠️ THE SEPARATION IS MEASURED, and stated with the direction that costs
+    # something. Measured when written, across the twelve roots: the
+    # legitimately-empty one held ZERO defaults-shaped blocks and every other
+    # root held at least one, both as they stand and after renaming their
+    # `defaults:` away — so the falsifier separates the two states with margin
+    # on every root. ⚠️ That is a property of today's fixtures, not a
+    # guarantee, and the two ways it can be wrong are named in
+    # `_defaults_shaped_blocks` rather than left to be discovered.
     for root in sorted(_DEFAULTS_ROOTS_MAY_BE_EMPTY):
         stranded = {rel: n for rel, n in
-                    ((rel, shaped(rel)) for rel, _keys in by_root.get(root, ()))
+                    ((rel, _defaults_shaped_blocks(rel))
+                     for rel, _keys in by_root.get(root, ()))
                     if n}
         if not stranded:
             continue
         raise _GateViolation(
             f"conf.d root {root!r} is listed in _DEFAULTS_ROOTS_MAY_BE_EMPTY "
             "and reads as empty, but its artifacts still hold "
-            f"threshold-shaped values: {stranded} (counts of `name: "
-            "<number|null>` pairs anywhere in each document). 'This tree "
+            f"defaults-SHAPED blocks: {stranded} (a non-empty mapping, "
+            "appearing as a value, all of whose values are numbers — the "
+            "shape `Defaults map[string]float64` actually has). 'This tree "
             "legitimately declares no thresholds' is not true of a tree that "
-            "still has the numbers in it — they have stopped being READ, "
+            "still has such a block in it: the keys have stopped being READ, "
             "which is the failure this floor exists to report, not a reason "
             "to exempt the tree from it.\n"
             "  MOST LIKELY: a `defaults:` section here was renamed or "
             "re-nested, the floor above said so, and this list looked like "
             "the way to make it stop. It is not; repair the section.\n"
-            "  OR: these values genuinely are not thresholds (some other "
-            "schema that happens to use numbers). Then this entry is fine and "
-            "this arm is wrong — say so in an issue rather than deleting it, "
-            "because the same shape is how the blind spot comes back. "
-            "(#1411 / #1434)")
+            "  OR: that block genuinely is not thresholds — some other schema "
+            "whose values happen to be all numbers. Then MOVE IT OUT of the "
+            "`_defaults*` file: those files ARE the platform-defaults layer, "
+            "so configuration that is not platform defaults is misfiled in "
+            "one, and relocating it is a real fix rather than a way around "
+            "this arm. ⛔ Deleting this arm is not, because the same shape is "
+            "how the blind spot comes back.\n"
+            "  ⚠️ It does NOT flag: a recipe entry with string fields, a "
+            "tenant stub, `defaults: {}`, booleans, or numeric strings — all "
+            "measured, all silent. If you are seeing this for something that "
+            "looks like one of those, that IS worth an issue. (#1411 / #1434)")
 
 
-def _threshold_shaped_leaves(rel: str) -> int:
-    """`name: <number|null>` pairs anywhere in one artifact's document.
+def _defaults_shaped_blocks(rel: str) -> int:
+    """How many `defaults:`-SHAPED blocks one artifact's document still holds.
 
     The falsifier for a `_DEFAULTS_ROOTS_MAY_BE_EMPTY` entry: it answers "does
     this tree still hold threshold declarations that stopped being read",
     which "is there a `defaults:` section" cannot — a renamed section and an
-    absent one look identical from there.
+    absent one look identical from there. Renaming moves the block; it does
+    not delete it.
 
-    ⛔ WHOLE DOCUMENT, not the `defaults:` subtree: the whole point is to find
-    keys that are no longer under it. A file the scan cannot read at all
-    counts as zero — it is a different failure with its own reporting, and
-    raising here would blame the exemption list for it.
+    ⛔ A BLOCK, NOT A LEAF, and the first version counted leaves — every bare
+    number or null anywhere in the document. Blind review measured what that
+    cost on the ONE root this arm actually guards, whose files are Custom
+    Alerts recipe examples: `min_events` (the recipe schema's only integer
+    field, which the docs tell you to declare at domain level, i.e. in exactly
+    these files) turned the gate red, and so did writing `defaults:` with no
+    value — the explicit spelling of the very claim the exemption list makes.
+    Both are correct edits; neither has anything to do with a renamed block.
+
+    So the shape is the one `Defaults map[string]float64` actually has: a
+    NON-EMPTY MAPPING, APPEARING AS A VALUE, ALL of whose values are numbers.
+    A recipe entry has string fields, a tenant stub has null, `defaults: {}`
+    is empty, `on:`/`no:` are booleans — none of them are that shape.
+
+    ⛔ WHOLE DOCUMENT, not the `defaults:` subtree, and lists are walked: the
+    point is to find the block wherever it moved to. A file the scan cannot
+    read at all counts as zero — that is a different failure with its own
+    reporting, and raising here would blame the exemption list for it.
+
+    ⚠️ TWO LIMITS, both disclosed rather than papered over:
+      * a renamed block whose values are ALL null (ADR-017 opt-out) reads as
+        zero. Measured when written: no tracked artifact had a single null
+        leaf, so this half had no live input either way;
+      * an all-numeric block that is NOT thresholds (say `scrape: {interval:
+        30}`) reads as one. The message says what to do about that, and it is
+        a real answer rather than a shrug: a `_defaults*` file IS the
+        platform-defaults layer, so non-defaults config in one is misfiled.
     """
     import yaml  # local import: the module's convention for the YAML faces
 
@@ -1892,17 +1932,22 @@ def _threshold_shaped_leaves(rel: str) -> int:
     except Exception:  # noqa: BLE001 — the reader above names it properly
         return 0
 
-    def walk(node: object) -> int:
-        if isinstance(node, dict):
-            return sum(1 if (v is None or (isinstance(v, (int, float))
-                                           and not isinstance(v, bool)))
-                       else walk(v)
-                       for v in node.values())
-        if isinstance(node, list):
-            return sum(walk(v) for v in node)
-        return 0
+    def is_number(value: object) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
 
-    return walk(doc)
+    def walk(node: object, *, is_root: bool) -> int:
+        found = 0
+        if isinstance(node, dict):
+            if not is_root and node and all(is_number(v) for v in node.values()):
+                found += 1
+            for value in node.values():
+                found += walk(value, is_root=False)
+        elif isinstance(node, list):
+            for value in node:
+                found += walk(value, is_root=False)
+        return found
+
+    return walk(doc, is_root=True)
 
 
 def _assert_keys_floor(generators: dict[str, dict[str, KeyInfo]],

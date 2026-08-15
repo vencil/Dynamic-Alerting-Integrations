@@ -1392,28 +1392,26 @@ def test_every_scanned_root_is_wired_to_the_fifth_floor_through_the_real_entry(
     # "gate green while the deleted test is red" is exactly what that test
     # being true-by-construction rules out. Stated as the algebra rather than
     # as a mutation anecdote, because the algebra is what survives.
-    # ⚠️⚠️ What this equality cannot see, and ⛔ THE DOOR IS OPEN — an earlier
-    # wording here said the gate's exit-lock "keeps that door shut today",
-    # which blind review disproved and re-measurement confirmed. Adding a root
-    # to `_DEFAULTS_ROOTS_MAY_BE_EMPTY` subtracts it from BOTH sides of this
-    # equality at once. The exit-lock is `if not n_keys: continue` — it rejects
-    # an entry whose root STILL CARRIES KEYS, and the moment a maintainer
-    # reaches for that line is the moment the root has just gone to zero and
-    # the fifth floor has said so. The two conditions are complementary, so
-    # the lock cannot see the case it was cited for.
-    # Measured per root on the tree as it stood when this was written (stated
-    # as a past measurement, because nothing re-counts it): rename a
-    # `defaults:` section away — the floor's own "MOST LIKELY" cause — add one
-    # line here, and the gate returns rc=0. Seven of the twelve roots could be
-    # silenced that way; the rest were held by the shipped-root or key floors,
-    # never by this lock.
-    # ⛔ NOT FIXED HERE, and that is a scope decision rather than a judgement
-    # that it is fine: the lock and the list are #1411's, this ticket is about
-    # four residuals of that PR, and closing it properly means changing what
-    # an entry has to prove (something structural, like "these artifacts carry
-    # no `defaults:` section at all", rather than "their key count is 0 right
-    # now"). Recorded so the next reader inherits the measurement instead of
-    # the reassurance.
+    # ⚠️ What this equality cannot see on its own: adding a root to
+    # `_DEFAULTS_ROOTS_MAY_BE_EMPTY` subtracts it from BOTH sides at once.
+    # An earlier wording said the gate's older exit-lock kept that door shut;
+    # blind review disproved it and re-measurement confirmed. That lock is
+    # `if not n_keys: continue` — it rejects an entry whose root STILL CARRIES
+    # KEYS, and the moment a maintainer reaches for the list is the moment the
+    # root has just gone to zero and the floor has said so. Complementary
+    # conditions: the lock could not see the case it was cited for. Measured
+    # then: rename a `defaults:` section away, add one line, and seven of the
+    # twelve roots went back to rc=0.
+    # ✅ CLOSED in the same commit that measured it (#1434), by a second arm
+    # asking what the entry actually claims — see `_defaults_shaped_blocks`.
+    # Re-measured after: one of the twelve, and that one is the entry that is
+    # legitimately there. ⛔ Do not "fix" this by checking whether a
+    # `defaults:` section exists; that reads identically for a renamed section
+    # and an absent one, which is why the falsifier looks for the block's
+    # SHAPE instead. The wiring test below is not the thing holding that
+    # closed; this one is, and its name is on a line of its own so a grep for
+    # it finds this reference too:
+    # test_may_be_empty_cannot_be_used_to_silence_a_root_that_just_went_to_zero
     roots = sorted(_scanned_confd_roots() - gate._DEFAULTS_ROOTS_MAY_BE_EMPTY)
     # ⛔ "Cannot go vacuous" was stated and was false. Both sides of the equality
     # below are `something - _DEFAULTS_ROOTS_MAY_BE_EMPTY`, so an exemption list
@@ -2720,6 +2718,51 @@ def test_exempting_a_shipped_artifact_is_not_silent(monkeypatch):
         gate.run_check(demand=set(), supply=set(), deferred=set(), known_unwired={})
 
 
+@pytest.mark.parametrize("label,doc,expected", [
+    # MUST see it — a defaults block that stopped being called `defaults`.
+    ("renamed away", "defaultz:\n  cpu: 80\n  mem: 90\n", 1),
+    ("renamed and moved down", "db:\n  mysql:\n    defaultz:\n      cpu: 80\n", 1),
+    ("re-nested under a key", "defaults:\n  threshold:\n    cpu: 80\n", 1),
+    # MUST NOT — every one of these is a correct edit somebody makes, and each
+    # was a real red against the first version of this falsifier.
+    ("bare `defaults:` with no value", "defaults:\n", 0),
+    ("empty mapping", "defaults: {}\n", 0),
+    ("a tenant stub", "tenants:\n  shop-a:\n", 0),
+    ("a recipe entry with string fields",
+     "_custom_alerts:\n  - recipe: r\n    name: n\n    min_events: 20\n", 0),
+    ("YAML 1.1 booleans", "flags:\n  on: yes\n  off: no\n", 0),
+    ("numeric strings", "meta:\n  retention: \"30\"\n", 0),
+    ("numbers mixed with strings", "meta:\n  db: mysql\n  retention: 30\n", 0),
+    ("a list of numbers", "codes:\n  - 1\n  - 2\n", 0),
+    ("comments only", "# nothing here\n", 0),
+    ("unreadable YAML", "a: [1,\n", 0),
+    # DISCLOSED LIMITS, pinned so they are decisions rather than surprises.
+    ("LIMIT: renamed block of all nulls", "defaultz:\n  cpu: ~\n", 0),
+    ("LIMIT: an all-numeric block that is not thresholds",
+     "scrape:\n  interval: 30\n  timeout: 10\n", 1),
+])
+def test_the_defaults_shape_falsifier_answers_each_branch(
+        tmp_path, monkeypatch, label, doc, expected):
+    """⛔ Per BRANCH, because the only control this falsifier shipped with was
+    "stub the whole function to 0", which cannot see inside it.
+
+    Mutation measured five single-point weakenings surviving — the list walk,
+    the null half, the bool exclusion, the read-failure path and "only look at
+    the first artifact" — on a module whose one live entry is a tree of recipe
+    examples, i.e. a tree whose content sits entirely under a YAML list. The
+    branch that walks lists is the one that arm depends on, and nothing was
+    holding it.
+
+    Each row below is one branch, and the "must not" rows are the ones that
+    cost something: every one of them was a red against the first version.
+    """
+    art = tmp_path / "_defaults.yaml"
+    art.write_text(doc, encoding="utf-8")
+    monkeypatch.setattr(gate, "PROJECT_ROOT", tmp_path)
+    assert gate._defaults_shaped_blocks("_defaults.yaml") == expected, (
+        f"{label}: {doc!r}")
+
+
 def test_may_be_empty_cannot_be_used_to_silence_a_root_that_just_went_to_zero(
         monkeypatch):
     """⛔ The one-line silencer: rename a `defaults:` section away, then add the
@@ -2746,13 +2789,13 @@ def test_may_be_empty_cannot_be_used_to_silence_a_root_that_just_went_to_zero(
     monkeypatch.setattr(gate, "_DEFAULTS_ROOTS_MAY_BE_EMPTY",
                         frozenset(gate._DEFAULTS_ROOTS_MAY_BE_EMPTY) | {victim})
 
-    with pytest.raises(gate._GateViolation, match="threshold-shaped values"):
+    with pytest.raises(gate._GateViolation, match="defaults-SHAPED blocks"):
         gate._defaults_faces()
 
     # …and this is what the gate did before the arm existed: the same state,
     # with only this falsifier stood down, is silent. Without it the test
     # above would pass on any implementation that raises for some other reason.
-    monkeypatch.setattr(gate, "_threshold_shaped_leaves", lambda _rel: 0)
+    monkeypatch.setattr(gate, "_defaults_shaped_blocks", lambda _rel: 0)
     gate._defaults_faces()
 
     # …and a root that genuinely holds no threshold-shaped data — the state the
@@ -2765,7 +2808,7 @@ def test_may_be_empty_cannot_be_used_to_silence_a_root_that_just_went_to_zero(
         rels = [rel for rel in gate._tracked_defaults_artifacts()
                 if gate.conf_d_root(rel) == root]
         assert rels, root
-        assert all(gate._threshold_shaped_leaves(rel) == 0 for rel in rels), (
+        assert all(gate._defaults_shaped_blocks(rel) == 0 for rel in rels), (
             f"{root} is exempted as 'declares no thresholds' while its "
             "artifacts hold threshold-shaped values — the entry is what is "
             "wrong here, not this assertion")
@@ -2847,7 +2890,14 @@ def test_an_exemption_that_empties_a_root_says_so_in_the_message(monkeypatch):
     # third one's remedies outright with the suite green, and it is the
     # UPSTREAM one: the message that tells you to add the exemption in the
     # first place, i.e. the one a reader meets first.
-    exits = ("sibling `_defaults*` file", "move the exempted file",
+    # ⛔ The anchors run PAST the point the three messages can diverge. The
+    # first version stopped at "move the exempted file", one word short of
+    # where two of them said "out of the conf.d tree" and the third said "out
+    # of the tree" — mutation changed one of them to "orchard" and the suite
+    # stayed green, so the rule this list is supposed to enforce was not
+    # enforced at the only place it had already been broken.
+    exits = ("sibling `_defaults*` file",
+             "move the exempted file out of the conf.d tree",
              "do not exempt it")
 
     def _missing_exits(message: str) -> list[str]:
