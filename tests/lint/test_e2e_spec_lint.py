@@ -41,6 +41,7 @@ satisfy the other two (it did: see ``_BASH`` below).
 """
 from __future__ import annotations
 
+import ast
 import os
 import re
 import shlex
@@ -81,7 +82,10 @@ _BASH = shutil.which("bash")
 # and the original already refuses to grade patterns outside the alphabet it
 # models instead of guessing.
 sys.path.insert(0, str(_REPO_ROOT / "tests" / "ops"))
-from test_ci_path_filter_coverage import _match_segments  # noqa: E402
+from test_ci_path_filter_coverage import (  # noqa: E402
+    _match_segments,
+    reject_unmodelled_patterns,
+)
 
 
 def _hook() -> dict:
@@ -120,7 +124,7 @@ def _make_commands(makefile_text: str, target: str) -> list[str]:
         if not active:
             continue
         if line.startswith("\t"):
-            body = line.lstrip("\t").lstrip("@").lstrip("-").lstrip("+")
+            body = _strip_recipe_prefixes(line.lstrip("\t"))
             if not body.lstrip().startswith("#"):
                 out.append(body)
         elif line.strip():
@@ -128,27 +132,122 @@ def _make_commands(makefile_text: str, target: str) -> list[str]:
     return out
 
 
+def _strip_recipe_prefixes(body: str) -> str:
+    """Drop the recipe prefixes that do not change failure semantics.
+
+    ⛔ `-` is deliberately NOT among them, and this is the whole point of the
+    function existing. Make's `-` prefix means "ignore the exit status of this
+    line", so `-bash …/e2e_spec_lint.sh` runs the lint and throws the verdict
+    away. An earlier version stripped it alongside `@` and `+`, which handed
+    the caller a string indistinguishable from the honest invocation: measured
+    against GNU Make 4.3, `@bash fail.sh` gives `make` rc=2 while `-bash`,
+    `@-bash` and `-@bash` all give rc=0 — and every one of them reduced to the
+    same `bash fail.sh` here. Leaving `-`
+    attached makes it the head token of the argv, which no interpreter in
+    `_invokes_script`'s set matches — so the line reads as "not an invocation"
+    and the caller reds, which is the correct answer for a line whose result is
+    discarded.
+
+    `@` (do not echo) and `+` (run even under `make -n`) are dropped because
+    neither touches the exit status.
+    """
+    while body[:1] in {"@", "+"}:
+        body = body[1:]
+    return body
+
+
+_INTERPRETERS = {"bash", "sh", "/bin/bash", "/bin/sh", "/usr/bin/env"}
+
+
+def _argv(command: str) -> list[str]:
+    """`shlex.split`, with `./x` folded to `x`.
+
+    The Makefile writes `bash ./scripts/…` in other recipes, and `./x` and `x`
+    name the same file to every shell that runs any of these three legs.
+    Without the fold, adopting the neighbouring recipes' spelling would red a
+    change that altered nothing.
+    """
+    try:
+        return [t[2:] if t.startswith("./") else t for t in shlex.split(command)]
+    except ValueError:
+        return []
+
+
 def _invokes_script(command: str) -> bool:
-    """True when this shell command actually RUNS the script.
+    """True when this command RUNS the script — used to FIND it, not to bless it.
 
     ⛔ Not `_SCRIPT_REL in command`. `echo bash …/e2e_spec_lint.sh` contains
     the path and runs nothing; so does a comment. The argv is what decides.
+
+    ⛔ Deliberately permissive about what FOLLOWS the path, because its job is
+    to locate the invocation even when that invocation has been disarmed. A
+    finder that rejected `… || true` would make the disarmed step invisible and
+    report "no step runs the script", which is red for the wrong reason and
+    sends the reader looking for a deleted step. `_is_sole_invocation` is the
+    one that judges.
     """
-    try:
-        argv = shlex.split(command)
-    except ValueError:
-        return False
+    argv = _argv(command)
     if not argv or _SCRIPT_REL not in argv:
         return False
     head = argv[: argv.index(_SCRIPT_REL)]
     # Either the script is the command itself, or it is the argument of a
-    # shell. Anything else in front of it (echo, :, true, a `-c` payload) means
-    # the path is being printed or ignored rather than executed.
-    return all(token in {"bash", "sh", "/bin/bash", "/usr/bin/env"} for token in head)
+    # shell. Anything else in front of it (echo, :, true, a `-c` payload, or
+    # make's `-` "ignore errors" prefix) means the path is being printed or
+    # its result discarded rather than executed for its verdict.
+    return all(token in _INTERPRETERS for token in head)
+
+
+def _is_sole_invocation(command: str) -> bool:
+    """True when the command is that invocation and NOTHING else.
+
+    ⛔ This rejects rather than classifies, and that is the design. The three
+    legs do not share failure semantics — pre-commit `shlex`-splits `entry:`
+    and execs it with NO shell (so `|| true` there is a literal argument, not
+    an operator), the Makefile recipe runs under `/bin/sh` with no `pipefail`,
+    and a GitHub `run:` without an explicit `shell:` gets `set -e` but ALSO no
+    `pipefail`. Measured under that last one: `bash fail.sh | tee o.txt` and
+    `bash fail.sh & wait` both exit 0 while `bash fail.sh 2>&1` and
+    `bash fail.sh; exit 0` exit 1. So a predicate that sorted trailing tokens
+    into "harmless" and "silencing" would need a different answer per leg, and
+    would still be one spelling short — the same enumeration that has been
+    reopened once per review round.
+
+    What IS uniform is the correct form: this script takes no arguments and its
+    exit status is the entire verdict, so the only right way to call it is to
+    call it and nothing else. Anything past the path is therefore refused
+    without being understood, and the reader is asked to look.
+
+    ⛔ The cost is real and deliberate: a legitimate edit (a `timeout` wrapper,
+    a redirect, a trailing comment, a multi-line `run:` block) reds this until
+    someone updates it. That is the review trigger, not a bug — but it is also
+    why this is the ONLY assertion written this way, and why the tests below
+    pin the forms that must keep passing.
+    """
+    argv = _argv(command)
+    return bool(argv) and argv[-1] == _SCRIPT_REL and _invokes_script(command)
 
 
 def _workflow() -> dict:
     return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
+
+
+def _trigger_paths(event: str) -> list[str]:
+    """The `on.<event>.paths` list, refusing shapes this file cannot grade.
+
+    ⛔ The ONLY way this file reads a `paths:` list, and that is the point. The
+    first version called `reject_unmodelled_patterns` as its own line inside
+    the caller; deleting that one line left the whole file at 14 passed,
+    because the control beside it was pinning the imported function rather than
+    the wiring — the same "the control guards the helper, not the call" shape
+    this repo has now recorded three times. Routing every read through here
+    means the rejection cannot be dropped without dropping the accessor, and
+    then there is nothing left to read patterns from.
+    """
+    triggers = _workflow().get("on") or _workflow().get(True)
+    patterns = (triggers.get(event) or {}).get("paths") or []
+    assert patterns, f"`on.{event}` has no `paths:` at all"
+    reject_unmodelled_patterns(patterns, f"{_WORKFLOW.name}::on.{event}.paths")
+    return patterns
 
 
 def _script_step() -> tuple[str, dict, dict]:
@@ -225,6 +324,166 @@ def test_invokes_script_separates_running_from_mentioning() -> None:
         )
 
 
+def test_make_commands_keeps_the_ignore_errors_prefix_attached() -> None:
+    """⛔ The half a blind review walked straight through.
+
+    `_make_commands` used to `.lstrip("-")` alongside `@` and `+`, so a recipe
+    line of `-bash <script>` reduced to the same string as the honest call and
+    read as a valid invocation. Measured in a container against a script that
+    exits 1: `@bash fail.sh` gives `make` rc=2, `-bash fail.sh` gives rc=0 —
+    the lint runs and its verdict is discarded.
+
+    Paired, because stripping too little is its own failure: `@` and `+` change
+    nothing about the exit status and must still be dropped, or the honest
+    recipe line reds.
+    """
+    tolerated = (
+        f"lint-e2e:\n\t@bash {_SCRIPT_REL}\n",
+        f"lint-e2e:\n\t+bash {_SCRIPT_REL}\n",
+        f"lint-e2e:\n\t@+bash {_SCRIPT_REL}\n",
+        f"lint-e2e:\n\tbash {_SCRIPT_REL}\n",
+    )
+    for makefile in tolerated:
+        commands = _make_commands(makefile, "lint-e2e")
+        assert any(_is_sole_invocation(c) for c in commands), (
+            f"{makefile!r} reduced to {commands!r}, which no longer reads as "
+            "an invocation. These prefixes do not touch the exit status."
+        )
+
+    for makefile in (
+        f"lint-e2e:\n\t-bash {_SCRIPT_REL}\n",
+        f"lint-e2e:\n\t@-bash {_SCRIPT_REL}\n",
+        f"lint-e2e:\n\t-@bash {_SCRIPT_REL}\n",
+    ):
+        commands = _make_commands(makefile, "lint-e2e")
+        assert not any(_is_sole_invocation(c) for c in commands), (
+            f"{makefile!r} reduced to {commands!r} and read as a valid "
+            "invocation, but make discards this line's exit status."
+        )
+
+
+def test_is_sole_invocation_refuses_trailing_tokens_but_not_spellings() -> None:
+    """⛔ The over-tightness control, which the first version of this file lacked.
+
+    `_is_sole_invocation` refuses anything after the path without interpreting
+    it, so the only thing standing between it and an assertion nobody can
+    satisfy is this list of forms that MUST keep passing. Both halves were
+    measured: the rejected forms exit 0 under a GitHub `run:` step's real shell
+    (`set -e`, no `pipefail`) against a script that exits 1, and the tolerated
+    forms are the spellings the repo's own recipes already use.
+    """
+    for accepted in (
+        f"bash {_SCRIPT_REL}",
+        f"sh {_SCRIPT_REL}",
+        f"/bin/bash {_SCRIPT_REL}",
+        f"/usr/bin/env bash {_SCRIPT_REL}",
+        _SCRIPT_REL,
+        # The Makefile writes `bash ./scripts/…` in neighbouring recipes;
+        # adopting that spelling here changes nothing and must not red.
+        f"bash ./{_SCRIPT_REL}",
+        f"./{_SCRIPT_REL}",
+    ):
+        assert _is_sole_invocation(accepted), (
+            f"{accepted!r} was refused. This spelling runs the script and lets "
+            "its exit status stand, so refusing it is a false red — and a "
+            "false red here is paid by whoever next touches an unrelated line."
+        )
+
+    for refused in (
+        f"bash {_SCRIPT_REL} || true",
+        f"bash {_SCRIPT_REL} || exit 0",
+        f"bash {_SCRIPT_REL} | tee out.txt",
+        f"bash {_SCRIPT_REL} &",
+        f"bash {_SCRIPT_REL} 2>&1",
+        f"bash {_SCRIPT_REL}  # A-13",
+        f"timeout 300 bash {_SCRIPT_REL}",
+        f"echo bash {_SCRIPT_REL}",
+        f'bash -c ":" {_SCRIPT_REL}',
+    ):
+        assert not _is_sole_invocation(refused), (
+            f"{refused!r} was accepted. Whether this particular form silences "
+            "the result is exactly the question this predicate declines to "
+            "answer: the last four rounds of review each found one more "
+            "spelling, so anything past the path is refused and looked at."
+        )
+
+
+def test_reading_a_paths_list_goes_through_the_negation_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """⛔ Exercises the ACCESSOR, so the wiring is what is under test.
+
+    An import that is never reached is the same as no import, and asserting on
+    the imported function alone does not notice when the call site goes away —
+    measured: deleting the call from the caller left this file at 14 passed
+    while a test named for the wiring stayed green. Feeding a negated list
+    through `_trigger_paths` means removing either the rejection or the
+    accessor reds this.
+
+    The tolerated case carries the same weight: a `paths:` list of ordinary
+    patterns must come back untouched, or every workflow edit reds.
+    """
+    def _fake(paths: list[str]) -> dict:
+        return {"on": {"push": {"paths": paths}}}
+
+    monkeypatch.setattr(
+        __name__ + "._workflow", lambda: _fake(["tests/e2e/**", "package.json"]))
+    assert _trigger_paths("push") == ["tests/e2e/**", "package.json"]
+
+    monkeypatch.setattr(
+        __name__ + "._workflow", lambda: _fake(["tests/e2e/**", "!tests/e2e/**"]))
+    with pytest.raises(AssertionError, match="exclusion patterns"):
+        _trigger_paths("push")
+
+
+def test_nothing_in_this_file_reads_a_paths_list_around_the_accessor() -> None:
+    """⛔ The accessor only helps while it is the only door.
+
+    The test above proves `_trigger_paths` rejects a negation. It cannot notice
+    a caller that stops calling it: measured, inlining the old two-line read
+    back into the trigger test left this file at 14 passed with the rejection
+    bypassed. So the last step is mechanical — the key `"paths"` may be read in
+    exactly one function, and this reads THIS file's own AST to say so rather
+    than trusting the convention to hold.
+    """
+    def _reads_the_key(node: ast.AST) -> bool:
+        """A READ of `paths`, not any mention of the word.
+
+        ⛔ The first version flagged every `ast.Constant` equal to "paths",
+        which reds on the fixture that BUILDS `{"paths": …}` and on this
+        function's own comparison — three false positives on an untouched file.
+        Only two forms actually read the key out of a mapping.
+        """
+        if isinstance(node, ast.Subscript):
+            return (isinstance(node.slice, ast.Constant)
+                    and node.slice.value == KEY)
+        return (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and bool(node.args)
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == KEY)
+
+    KEY = "paths"
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name == "_trigger_paths":
+            continue
+        offenders += [
+            f"{node.name}:{child.lineno}"
+            for child in ast.walk(node) if _reads_the_key(child)
+        ]
+
+    assert not offenders, (
+        f"{offenders} read a `paths` key outside `_trigger_paths`. Every read "
+        "goes through the accessor, because that is the only thing that makes "
+        "the negation rejection unskippable — a second reader is a second "
+        "answer, and the one it gives is 'covered' for a pattern that removes "
+        "coverage. Extend `_trigger_paths` instead of reading around it."
+    )
+
+
 # --------------------------------------------------------------------------
 # The contract.
 # --------------------------------------------------------------------------
@@ -241,42 +500,79 @@ def test_all_three_entry_points_run_the_one_script() -> None:
 
     hook = _hook()
     entry = str(hook.get("entry", ""))
-    assert _invokes_script(entry), (
-        f"the `playwright-lint` hook's entry is {entry!r}, which does not run "
-        f"{_SCRIPT_REL}. ⛔ Inlining the command here is what the script exists "
-        "to stop: the hook, `make lint-e2e` and the CI job then drift "
-        "independently, which is how the CI leg came to be missing."
+    assert _is_sole_invocation(entry), (
+        f"the `playwright-lint` hook's entry is {entry!r}, which is not just a "
+        f"call to {_SCRIPT_REL}. ⛔ Inlining the command here is what the "
+        "script exists to stop: the hook, `make lint-e2e` and the CI job then "
+        "drift independently, which is how the CI leg came to be missing."
     )
-    assert "stages" not in hook, (
-        "the hook grew a `stages:` key. Any value but the inherited "
-        "`pre-commit` takes it off the commit path — `stages: [manual]` means "
-        "it runs only when somebody remembers to ask for it."
+    stages = hook.get("stages")
+    assert stages is None or "pre-commit" in stages, (
+        f"the hook sets `stages: {stages!r}`, which does not include "
+        "`pre-commit`, so it no longer runs on the commit path — "
+        "`stages: [manual]` means it runs only when somebody remembers to ask. "
+        "⛔ This checks the VALUE, not the key: adding `pre-push` alongside "
+        "`pre-commit` is a legitimate widening and was measured to keep the "
+        "hook running, so it must not red here."
     )
     assert "exclude" not in hook, (
         "the hook grew an `exclude:` pattern, which can empty its file set "
-        "without touching `files:`. If some path genuinely must be exempt, say "
-        "so in `files:` where the whole selection is readable at once."
+        "without touching `files:` — measured: `exclude: .*` reports "
+        "'(no files to check) Skipped' while `files:` still reads correctly. "
+        "If some path genuinely must be exempt, say so in `files:` where the "
+        "whole selection is readable at once."
     )
 
     commands = _make_commands(_MAKEFILE.read_text(encoding="utf-8"), "lint-e2e")
-    assert any(_invokes_script(c) for c in commands), (
-        f"`make lint-e2e` runs {commands!r}, none of which invokes "
-        f"{_SCRIPT_REL}."
+    assert any(_is_sole_invocation(c) for c in commands), (
+        f"`make lint-e2e` runs {commands!r}, none of which is a bare call to "
+        f"{_SCRIPT_REL}. ⛔ Note a leading `-` counts as failure here: make's "
+        "`-` prefix discards the line's exit status, so `-bash <script>` runs "
+        "the lint and throws the answer away (measured: `make` rc=0 against a "
+        "script that exited 1)."
     )
 
     _script_step()  # raises with its own message when no step runs the script
 
 
-def test_the_ci_leg_cannot_be_switched_off_without_this_test_noticing() -> None:
-    """⛔ #1428's whole subject is a gate that exists and does not execute.
+def test_the_ci_legs_signal_is_not_silently_switched_off() -> None:
+    """⛔ What this can prove, and what it deliberately does NOT claim.
+
+    It does NOT prove A-13 is enforced. Enforcement lives in branch protection,
+    and neither this job nor `Smoke Tests (Chromium)` is among main's required
+    contexts (checked against the API on 2026-08-14), so this leg can report
+    red and a merge still happens. No in-repo test can read that setting. This
+    test's earlier name — "cannot be switched off without this test noticing" —
+    promised exactly that, and a blind review produced the counterexample: one
+    `- '!tests/e2e/**'` line in `paths:` switched the leg off with this file at
+    11 passed and `tests/ops/test_ci_path_filter_coverage.py` at 40 passed.
+
+    What it proves is narrower and still worth having: the signal is not
+    silenced without a red line appearing in a diff someone reads. The ways to
+    silence it do not share a carrier, so each is checked where it lives —
+    `if:`, `continue-on-error:` and `needs:` here, the invocation itself via
+    `_is_sole_invocation`, and the `paths:` filter in the trigger test below.
 
     Measured on this very workflow: `if: false` on the job and
-    `continue-on-error: true` on the step each left 47 tests passing, with the
-    only server-side execution point A-13 has turned off and nothing in the
-    repo red. `tests/ops/test_ci_path_filter_coverage.py` does not cover this
+    `continue-on-error: true` on the step each left this whole file passing,
+    with the only server-side execution point A-13 has turned off and nothing
+    in the repo red. `tests/ops/test_ci_path_filter_coverage.py` does not cover this
     workflow — its scan is scoped to the ones using `dorny/paths-filter`.
     """
     job_id, job, step = _script_step()
+
+    run = str(step.get("run", ""))
+    assert _is_sole_invocation(run), (
+        f"the step's `run:` is {run!r}, which is not just a call to "
+        f"{_SCRIPT_REL}. ⛔ Refused without being interpreted — see "
+        "`_is_sole_invocation` for why trailing tokens are not sorted into "
+        "harmless and silencing. Measured under this step's actual shell (it "
+        "sets no `shell:`, so `set -e` applies and `pipefail` does NOT): "
+        "appending `|| true`, `|| exit 0`, `| tee out.txt` or `& wait` each "
+        "makes the step exit 0 while the lint fails. If a wrapper is genuinely "
+        "needed here, add it AND update this assertion, so it is a change "
+        "somebody agreed to rather than one nobody saw."
+    )
 
     assert "if" not in job, (
         f"job {job_id!r} grew an `if:` condition ({job.get('if')!r}). This job "
@@ -315,15 +611,23 @@ def test_editing_a_spec_or_the_runner_triggers_the_workflow() -> None:
     Evaluated, not string-matched: `tests/e2e/**` could legitimately be spelled
     another way, and an assertion on the literal would then demand a rewrite
     for a change that broke nothing.
+
+    ⛔ Third hole, found by blind review and the reason
+    `reject_unmodelled_patterns` is imported rather than rewritten here: the
+    `any()` below absorbs a negation. `_match_segments` reads `!tests/e2e/**`
+    as a literal first segment `"!tests"`, answers False, and the surviving
+    positive pattern still reports "covered". Measured — adding that one line
+    beside the existing `tests/e2e/**` (2 places) left this file at 11 passed
+    and the shared module at 40 passed, with the leg off. The shared module had
+    already written this rule down for `dorny/paths-filter` filters; importing
+    it into this second caller is what stops the two answers from drifting.
     """
     specs = sorted((_REPO_ROOT / "tests" / "e2e").glob("*.spec.ts"))
     assert specs, "no E2E specs found — the sample below would prove nothing"
     sample = specs[0].relative_to(_REPO_ROOT).as_posix()
 
-    triggers = _workflow().get("on") or _workflow().get(True)
     for event in ("push", "pull_request"):
-        patterns = (triggers.get(event) or {}).get("paths") or []
-        assert patterns, f"`on.{event}` has no `paths:` at all"
+        patterns = _trigger_paths(event)
         for target, why in (
             (sample, "editing an E2E spec is the change class A-13 guards"),
             (_SCRIPT_REL, "editing the runner is the change most likely to break it"),

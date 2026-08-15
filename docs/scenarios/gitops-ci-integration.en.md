@@ -299,6 +299,8 @@ da-tools gitops-check local --dir /data/config/conf.d
 
 **Merge into your `.pre-commit-config.yaml`:**
 
+⛔ **"Merge" means copying the `- repo: local` item below INTO the `repos:` list of your existing `.pre-commit-config.yaml`.** The block below is a complete file — its first line is `repos:` — so **appending it whole leaves two top-level `repos:` keys, and YAML keeps only the last one, silently**: measured, `pre-commit validate-config` still exits 0 while every hook you had is gone. Take the block as a whole file only if you do not have a `.pre-commit-config.yaml` yet.
+
 ⚠️ The block below is what `init` writes with the **default image** (`ghcr.io/vencil/da-tools:latest`). If you passed `--da-tools-image`, the first token of both `entry` values is the image you named — **go by the `.pre-commit-config.da.yaml` in your own repo root**, not by the image printed below.
 
 <!-- mirrors-artifact: .pre-commit-config.da.yaml -->

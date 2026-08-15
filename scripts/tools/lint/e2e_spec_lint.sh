@@ -62,7 +62,7 @@ if [ ! -e node_modules/.bin/eslint ]; then
 [A-13] eslint is not installed in tests/e2e, so the fixme/skip guard could not
        run. This is a FAILURE, not a skip: nothing checked your specs.
 
-  Fix — once per work tree, takes about 15 seconds:
+  Fix — once per work tree:
 
       cd tests/e2e && npm ci
 

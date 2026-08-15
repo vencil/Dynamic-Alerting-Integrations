@@ -103,6 +103,7 @@ import ast
 import re
 import subprocess
 import sys
+from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
 
@@ -421,6 +422,31 @@ def test_is_catch_all_is_derived_from_the_tracked_set(monkeypatch) -> None:
             _is_catch_all.cache_clear()
 
 
+def reject_unmodelled_patterns(patterns: Iterable[object], where: str) -> None:
+    """Refuse to grade a `!`-prefixed pattern rather than silently mis-grade it.
+
+    ⛔ Public because `tests/lint/test_e2e_spec_lint.py` asks the same question
+    of a workflow's `on.*.paths` list, and a second copy of this rule is a
+    second answer. The shape it rejects is the one that cannot make any caller
+    red: every caller wraps `_match_segments` in `any()`, `_match_segments`
+    reads `!x` as the literal segment `"!x"` and answers False, and the
+    remaining positive patterns still report "covered" — so the single pattern
+    form that REMOVES coverage is absorbed. Measured on playwright.yml: adding
+    `- '!tests/e2e/**'` beside `- 'tests/e2e/**'` (2 places) left this module at
+    40 passed and the twin at 11 passed, with A-13's only server-side execution
+    point switched off.
+    """
+    negated = sorted(
+        str(p) for p in patterns if isinstance(p, str) and p.startswith("!"))
+    if negated:
+        raise AssertionError(
+            f"{where}: exclusion patterns {negated} cannot be expressed by the "
+            "OR-over-positive-patterns model these assertions use — an excluded "
+            "path would still report as covered. Model exclusion before adding "
+            "one; do not silence this by dropping the pattern from the list "
+            "being checked.")
+
+
 def _workflow_filters_raw(path: Path) -> dict[str, list[str]]:
     """Every `dorny/paths-filter` filter defined in a workflow, by name.
 
@@ -454,16 +480,9 @@ def _workflow_filters_raw(path: Path) -> dict[str, list[str]]:
                     "default (`some` = OR over positive patterns). Model the "
                     "quantifier in `_covers`' callers before using it.")
             parsed = yaml.safe_load(step["with"]["filters"])
-            negated = sorted(
-                p for patterns in parsed.values() for p in patterns
-                if isinstance(p, str) and p.startswith("!"))
-            if negated:
-                raise AssertionError(
-                    f"{path.name}: exclusion patterns {negated} cannot be "
-                    "expressed by this module's OR-over-patterns model — an "
-                    "excluded path would still report as covered. Model "
-                    "exclusion (and set predicate-quantifier accordingly) "
-                    "before adding one.")
+            reject_unmodelled_patterns(
+                [p for patterns in parsed.values() for p in patterns],
+                path.name)
             _merge_filter_block(filters, parsed, path.name)
     return filters
 

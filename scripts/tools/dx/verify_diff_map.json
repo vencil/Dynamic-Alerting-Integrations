@@ -723,7 +723,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "6efe82fde5c104de4ef7d89e22e81ab5d4b0ce6e5216c17a26cc088c4f840151",
+ "source_digest": "c5a63757311eda0b2ce07657303bbbd60a18d9922e4530b86a20c6d49e193753",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1473,7 +1473,8 @@
    "tests/ops/test_secret_scan_gate.py"
   ],
   "docs/scenarios": [
-   "tests/dx/test_bump_docs.py"
+   "tests/dx/test_bump_docs.py",
+   "tests/ops/test_generated_ci_artifacts.py"
   ],
   "docs/scenarios/gitops-ci-integration.en.md": [
    "tests/ops/test_generated_ci_artifacts.py"
@@ -2452,6 +2453,7 @@
   "tests/e2e": [
    "tests/lint/test_check_playwright_rtl_drift.py",
    "tests/lint/test_e2e_spec_lint.py",
+   "tests/ops/test_ci_path_filter_coverage.py",
    "tests/ops/test_wrapped_path_references.py"
   ],
   "tests/e2e-bench": [
@@ -2551,6 +2553,9 @@
   ],
   "tests/lint/test_counterexample_coverage.py": [
    "tests/lint/test_check_threshold_registry.py"
+  ],
+  "tests/lint/test_e2e_spec_lint.py": [
+   "tests/ops/test_ci_path_filter_coverage.py"
   ],
   "tests/lint/test_mkdocs_strict_check.py": [
    "tests/lint/test_e2e_spec_lint.py"

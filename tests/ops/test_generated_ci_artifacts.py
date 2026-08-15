@@ -1210,7 +1210,7 @@ _MIRROR_DOC_PAGES = (
 #      this file at 21 passed and all four doc lints at rc=0 — the exact defect
 #      #1418 exists for, reintroducible in full.
 #
-# So the marker says which artifact, and `test_every_precommit_block_is_marked`
+# So the marker says which artifact, and the exhaustiveness test below
 # says every pre-commit block must carry one. Neither half is optional.
 _MIRROR_MARKER = re.compile(r"<!--\s*mirrors-artifact:\s*(?P<path>\S+?)\s*-->")
 
@@ -1545,8 +1545,9 @@ def test_normalised_precommit_keeps_what_the_comparison_needs() -> None:
     Any information this drops is dropped symmetrically, so the equation it
     feeds cannot notice. Measured: replacing the body with a constant left the
     whole file green, and so did re-adding the six-key projection this function
-    was written to remove. Each case below is a difference that MUST survive
-    normalisation, and the last two are differences that must NOT.
+    was written to remove. The ``must_differ`` table below holds the differences
+    that MUST survive normalisation; the single assertion after the loop holds
+    the one difference it is allowed to absorb.
     """
     base = {
         "repos": [{
@@ -1637,6 +1638,47 @@ def test_mirror_page_list_covers_every_page_that_declares_a_mirror() -> None:
         "this: the page goes on shipping a copy of an artifact, just without "
         "anything comparing them. Add the page here, or remove its marker AND "
         "its mirrored block together."
+    )
+
+
+def test_no_page_outside_the_list_ships_an_unchecked_precommit_block() -> None:
+    """⛔ The other end of the same rule, and the one the list cannot reach.
+
+    The test above derives the page list from pages that DECLARE a mirror, so a
+    new page carrying a marker is picked up automatically. A new page carrying
+    a broken pre-commit block and NO marker is not — it is outside every
+    quantifier here, which is exactly the state `docs/scenarios/…` was in when
+    #1418 shipped. So this asks the opposite question of the whole tree: does
+    any page have a top-level `repos:` block that nothing is comparing?
+
+    Cost measured on this tree: 258 pages under docs/, of which exactly 2 carry
+    such a block and both are already listed — so this starts at zero false
+    reds rather than at a backlog of exemptions. Running the fence parser over
+    all 258 took ~2.0 s (measured 3×; a figure of 122 ms quoted during review
+    did not reproduce), so the substring pre-filter below skips the 256 pages
+    that cannot contain the block: 2.54 s → 0.05 s, with the injected-block
+    case still red. The pre-filter is sound rather than clever — a top-level
+    `repos:` key IS that substring, so a page without it cannot have one.
+    """
+    stragglers = {}
+    for path in sorted((_REPO_ROOT / "docs").rglob("*.md")):
+        page = path.relative_to(_REPO_ROOT).as_posix()
+        if page in _MIRROR_DOC_PAGES:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if "repos:" not in text:
+            continue
+        unmarked = _unmarked_precommit_blocks(text)
+        if unmarked:
+            stragglers[page] = len(unmarked)
+
+    assert not stragglers, (
+        f"{stragglers} ship a pre-commit config block that no test compares "
+        "against anything. ⛔ #1418 was exactly this: a hand-copied block that "
+        "had drifted three ways from the artifact it claimed to show, on a page "
+        "the customer is pointed at four times from the CLI. Add a "
+        "`<!-- mirrors-artifact: <path> -->` marker naming the file it mirrors "
+        "and add the page to _MIRROR_DOC_PAGES, or delete the block."
     )
 
 

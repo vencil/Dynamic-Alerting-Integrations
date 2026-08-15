@@ -294,6 +294,8 @@ da-tools gitops-check local --dir /data/config/conf.d
 
 **合併到你的 `.pre-commit-config.yaml`：**
 
+⛔ **「合併」是指把下面的 `- repo: local` 這一項，接進你既有 `.pre-commit-config.yaml` 的 `repos:` 清單底下。** 下面整段是一份完整檔案（第一行就是 `repos:`），**整份附加在既有設定後面會多出第二個頂層 `repos:` 鍵，YAML 只留最後一個、而且不報錯**——實測 `pre-commit validate-config` 仍回 exit 0，你原本的 hook 全數消失。你若還沒有 `.pre-commit-config.yaml`，才可以整份採用。
+
 ⚠️ 下面這段是**預設 image**（`ghcr.io/vencil/da-tools:latest`）下的產出內容。你若跑 `init` 時帶了 `--da-tools-image`，兩個 `entry` 的第一個 token 會是你指定的那顆——**以你 repo 根目錄那份 `.pre-commit-config.da.yaml` 為準**，不要照抄下面的 image。
 
 <!-- mirrors-artifact: .pre-commit-config.da.yaml -->
