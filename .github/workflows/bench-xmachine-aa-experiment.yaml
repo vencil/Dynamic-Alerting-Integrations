@@ -87,6 +87,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       shards: ${{ steps.plan.outputs.shards }}
+      bench_re: ${{ steps.plan.outputs.bench_re }}
     steps:
       - name: Validate and emit shard list
         id: plan
@@ -114,20 +115,30 @@ jobs:
           # Format AND magnitude, same reasoning as the sibling workflow: a
           # character-class check passes `999999s`, which then eats the whole
           # timeout. Split number from unit and cap each unit separately.
+          #
+          # `x` is NOT accepted here, unlike the sibling workflow. It bounds
+          # ITERATIONS, not wall time, so it cannot participate in the combined
+          # budget below: the selected benchmarks span 116us/op to 255ms/op, so
+          # `1000000x` is anything from two minutes to seventy hours depending
+          # on which bench it lands on. A unit that cannot be converted to
+          # seconds has no place in a harness whose whole point is a bounded
+          # runtime.
           BT_NUM="${BENCHTIME%%[!0-9]*}"
           BT_UNIT="${BENCHTIME#"$BT_NUM"}"
           bt_bad=""
+          bt_ms=0
           case "$BT_NUM" in ''|*[!0-9]*) bt_bad="needs a leading number" ;; esac
           if [ -z "$bt_bad" ]; then
             case "$BT_UNIT" in
-              s)  [ "$BT_NUM" -ge 1 ] && [ "$BT_NUM" -le 60 ]      || bt_bad="s must be 1..60" ;;
-              ms) [ "$BT_NUM" -ge 1 ] && [ "$BT_NUM" -le 60000 ]   || bt_bad="ms must be 1..60000" ;;
-              x)  [ "$BT_NUM" -ge 1 ] && [ "$BT_NUM" -le 1000000 ] || bt_bad="x must be 1..1000000" ;;
-              *)  bt_bad="unit must be s, ms or x" ;;
+              s)  if [ "$BT_NUM" -ge 1 ] && [ "$BT_NUM" -le 60 ]; then
+                    bt_ms=$((BT_NUM * 1000)); else bt_bad="s must be 1..60"; fi ;;
+              ms) if [ "$BT_NUM" -ge 1 ] && [ "$BT_NUM" -le 60000 ]; then
+                    bt_ms="$BT_NUM"; else bt_bad="ms must be 1..60000"; fi ;;
+              *)  bt_bad="unit must be s or ms (x bounds iterations, not wall time)" ;;
             esac
           fi
           if [ -n "$bt_bad" ]; then
-            echo "::error::benchtime '$BENCHTIME' rejected — $bt_bad (expected e.g. 1s / 250ms / 100x)"
+            echo "::error::benchtime '$BENCHTIME' rejected — $bt_bad (expected e.g. 1s / 250ms)"
             exit 2
           fi
           # shards: 2 is the minimum that yields any cross-machine pair at all;
@@ -146,10 +157,43 @@ jobs:
             echo "::error::count must be 1..20 (got $COUNT)"
             exit 2
           fi
+
+          # The benchmark set lives HERE, not in the measure job, for one
+          # reason: this job has to know how many benchmarks there are to
+          # compute the runtime budget below, and a second copy of the list
+          # would be a number that silently goes stale.
+          BENCH_RE='^(BenchmarkResolveSilentModes_1000|BenchmarkScanDirFileHashes_1000|BenchmarkIncrementalLoad_1000_NoChange|BenchmarkFullDirLoad_1000)$'
+          NBENCH=$(printf '%s' "$BENCH_RE" | tr '|' '\n' | grep -c 'Benchmark')
+
+          # COMBINED budget. Each bound above is individually sane and their
+          # PRODUCT is not: rounds=20 count=20 benchtime=60s passes every check
+          # so far and asks for 4 x 20 x 60s = 80 min PER SIDE, 53 hours per
+          # shard, against a 30-minute job timeout. Per-parameter limits are not
+          # a runtime limit — same shape as "format is not magnitude" one block
+          # up, one level further out.
+          #
+          # -test.benchtime applies per benchmark per -test.count iteration, so
+          # one invocation targets NBENCH * COUNT * benchtime, and a shard runs
+          # 2 * ROUNDS invocations. OVERHEAD_PCT covers process start, fixture
+          # setup and the ramp-up iterations Go runs before the timed window:
+          # measured 28s actual against 20s theoretical on a real runner
+          # (4 benches, count=5, benchtime=1s), i.e. ~1.4x — 1.5x here.
+          BUDGET_S=1200   # 20 min of the measure job's 30, leaving setup+upload
+          est_ms=$(( NBENCH * COUNT * bt_ms * 2 * ROUNDS * 3 / 2 ))
+          est_s=$(( est_ms / 1000 ))
+          if [ "$est_s" -gt "$BUDGET_S" ]; then
+            echo "::error::estimated ${est_s}s of measurement per shard (${NBENCH} benches x count=${COUNT} x ${bt_ms}ms x 2 sides x ${ROUNDS} rounds x 1.5 overhead) exceeds the ${BUDGET_S}s budget — the measure job would hit its 30-minute timeout and produce nothing. Lower rounds, count or benchtime."
+            exit 2
+          fi
+
           list="$(printf '[%s]' "$(seq -s, 1 "$SHARDS")")"
-          echo "shards=$list" >> "$GITHUB_OUTPUT"
+          {
+            echo "shards=$list"
+            echo "bench_re=$BENCH_RE"
+          } >> "$GITHUB_OUTPUT"
           echo "planning $SHARDS shard(s): $list"
-          echo "rounds=$ROUNDS count=$COUNT benchtime=$BENCHTIME"
+          echo "rounds=$ROUNDS count=$COUNT benchtime=$BENCHTIME (${bt_ms}ms)"
+          echo "benches=$NBENCH  estimated ${est_s}s per shard (budget ${BUDGET_S}s)"
 
   measure:
     name: A/A on runner ${{ matrix.shard }}
@@ -205,19 +249,36 @@ jobs:
           COUNT: ${{ inputs.count }}
           BENCHTIME: ${{ inputs.benchtime }}
           SHARD: ${{ matrix.shard }}
+          # From plan, which owns the list because it needs the bench COUNT to
+          # size the runtime budget. One definition, no drift.
+          RE: ${{ needs.plan.outputs.bench_re }}
         run: |
           set -euo pipefail
           OUT="${RUNNER_TEMP}/aa/raw"
           mkdir -p "$OUT"
-          RE='^(BenchmarkResolveSilentModes_1000|BenchmarkScanDirFileHashes_1000|BenchmarkIncrementalLoad_1000_NoChange|BenchmarkFullDirLoad_1000)$'
           echo "start $(date -u +%FT%TZ) shard=$SHARD rounds=$ROUNDS count=$COUNT benchtime=$BENCHTIME" \
             > "${RUNNER_TEMP}/aa/timeline.txt"
+          # Alternate which side goes first. `bench_interleave.sh` argues a
+          # fixed alternating loop already gives both sides symmetric warm
+          # caches, and for CACHES that is right — but it says nothing about
+          # effects on a shorter timescale, e.g. turbo budget spent by the first
+          # invocation of a round leaving the second at a lower clock.
+          #
+          # Measured on the 12-round fixed-order run 31869902576: B came out
+          # 0.395% faster than A on average (48 paired observations, |t| = 1.59,
+          # sign split 23/48 — not significant, but all four benches leaned the
+          # same way). That is not negligible against PAIRED's ~0.7% error, and
+          # PAIRED is the DENOMINATOR of the amplification ratio, so an order
+          # bias deflates the very number this experiment exists to measure.
+          # Balancing it makes the test more sensitive to the machine term, not
+          # more flattering to it.
           for r in $(seq 1 "$ROUNDS"); do
-            for side in A B; do
+            if [ $((r % 2)) -eq 1 ]; then sides="A B"; else sides="B A"; fi
+            for side in $sides; do
               t0=$SECONDS
               "${RUNNER_TEMP}/aa.test" -test.bench="$RE" -test.benchtime="$BENCHTIME" \
                 -test.run='^$' -test.count="$COUNT" > "$OUT/s${SHARD}_r${r}_${side}.txt" 2>&1
-              echo "round=$r side=$side wall=$((SECONDS-t0))s at=$(date -u +%FT%TZ)" \
+              echo "round=$r side=$side order=$sides wall=$((SECONDS-t0))s at=$(date -u +%FT%TZ)" \
                 >> "${RUNNER_TEMP}/aa/timeline.txt"
             done
           done
@@ -307,6 +368,14 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           metas=("${RUNNER_TEMP}"/all/*_meta.txt)
+          # Every shard can fail (fail-fast: false means the matrix still
+          # completes). Expanding an empty array under `set -u` would abort with
+          # a shell error that says nothing about what actually went wrong.
+          if [ "${#metas[@]}" -eq 0 ]; then
+            echo "::error::no shard metadata collected — every measure job failed"
+            exit 2
+          fi
+          ndigest=$(sed -n 's/^binary_sha256=//p' "${metas[@]}" | sort -u | wc -l)
           {
             echo "### Cross-machine A/A (ADR-032)"
             echo
@@ -321,5 +390,22 @@ jobs:
             done
             echo
             echo "distinct CPU models: $(sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' "${metas[@]}" | sort -u | wc -l)"
-            echo "distinct binary digests: $(sed -n 's/^binary_sha256=//p' "${metas[@]}" | sort -u | wc -l) (must be 1 for this to be an A/A)"
+            echo "distinct binary digests: ${ndigest} (must be 1 for this to be an A/A)"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          # Fail the run, do not merely report. If the shards did not execute
+          # identical binaries then a deviation from 1.000 is no longer
+          # necessarily measurement error, and every number this experiment
+          # produces is void — but a green check plus a line buried in the job
+          # summary reads exactly like a valid result. The off-CI analyser
+          # refuses these too; that refusal must not be the ONLY guard, because
+          # it lives outside this repo and nothing forces a reader to use it.
+          #
+          # Deliberately placed AFTER the emit step: the raw measurements are
+          # already in the log by now, so failing here costs no data and still
+          # leaves the run diagnosable.
+          if [ "$ndigest" -ne 1 ]; then
+            echo "::error::shards ran ${ndigest} distinct test binaries — this is not an A/A and its numbers must not be interpreted as measurement error"
+            sed -n 's/^binary_sha256=//p' "${metas[@]}" | sort | uniq -c | sort -rn
+            exit 2
+          fi
