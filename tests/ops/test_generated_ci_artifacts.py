@@ -1693,6 +1693,16 @@ def _prose_outside_fences(text: str) -> str:
     a mirror page, and the only way back to green is to not write the
     documentation. Measured by a blind review on `testing-playbook.md`.
 
+    ⛔ INLINE code spans count too, and leaving them out shipped a false red
+    that only appears on Linux. `docs/CHANGELOG.md` is a symlink to the root
+    `CHANGELOG.md`; on a Windows checkout with `core.symlinks` off it is a
+    15-byte file holding the link text, so the scan read nothing and passed,
+    while CI resolved it and read the whole changelog — which describes this
+    very convention and therefore contains a literal ``<!-- mirrors-artifact:
+    … -->`` inside backticks. The page was reported as declaring a mirror.
+    Documenting a marker must not be the same act as using one, in prose
+    exactly as in a fenced block.
+
     ⛔ Line-based on purpose. The first version reused `_fence_after`, whose
     `start` is the OPENING FENCE line and whose `body` excludes both fence
     lines — so `start + len(body) + 1` is not the end of the block, the
@@ -1707,7 +1717,10 @@ def _prose_outside_fences(text: str) -> str:
             inside = not inside
             kept.append("\n" if line.endswith("\n") else "")
             continue
-        kept.append(("\n" if line.endswith("\n") else "") if inside else line)
+        if inside:
+            kept.append("\n" if line.endswith("\n") else "")
+            continue
+        kept.append(re.sub(r"`[^`\n]*`", lambda m: " " * len(m.group()), line))
     return "".join(kept)
 
 

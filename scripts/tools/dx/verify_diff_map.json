@@ -723,7 +723,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "d3c04c5f0d6850c661a08d18469d75ac73a62b8ab1a36a2ef8857edff26571df",
+ "source_digest": "ae6152a0adbc52af3faaa5ec3d63060867058fced72b93730766eab56f062b3c",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1322,7 +1322,8 @@
   "docs/CHANGELOG.md": [
    "tests/dx/test_bump_docs.py",
    "tests/dx/test_doc_coverage.py",
-   "tests/ops/test_ci_path_filter_coverage.py"
+   "tests/ops/test_ci_path_filter_coverage.py",
+   "tests/ops/test_generated_ci_artifacts.py"
   ],
   "docs/README-root.md": [
    "tests/lint/test_fix_file_hygiene.py"
