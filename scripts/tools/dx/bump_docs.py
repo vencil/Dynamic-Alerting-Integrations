@@ -82,6 +82,36 @@ DA_PORTAL_CHART_YAML = REPO_ROOT / "helm" / "da-portal" / "Chart.yaml"
 RECIPE_PREVIEW_CHART_YAML = REPO_ROOT / "helm" / "recipe-preview" / "Chart.yaml"
 
 # ---------------------------------------------------------------------------
+# The six version lines are a FIXED EXPECTATION, not whatever happened to parse
+# ---------------------------------------------------------------------------
+# Every consumer used to iterate `read_current_versions().items()` — i.e. the
+# set of lines was defined by what the SSOT regexes managed to read. So a line
+# whose source-of-truth became unreadable did not fail; it CEASED TO EXIST, and
+# with it every rule it owned. Measured: rewording CLAUDE.md's project-overview
+# sentence (same version number, different phrasing) removed the platform line
+# and its ~2170 expanded rules, and `--check` still printed "✅ All version
+# references are consistent." with exit 0.
+#
+# Fixing the tenant-api instance of this (#1407 D-4) left the CLASS alive, so
+# the expectation is now declared here and the reads are checked AGAINST it.
+# A new line must be added in three places — this tuple, _build_rules(), and
+# read_current_versions() — and the tests below pin all three to each other.
+#
+# The description is printed verbatim in the NO-SSOT diagnostic, so it must say
+# WHICH file and WHICH shape stopped parsing.
+VERSION_LINE_SOURCES = {
+    "platform": ("CLAUDE.md",
+                 "`**Multi-Tenant Dynamic Alerting 平台 (vX.Y.Z)**` in the "
+                 "專案概覽 lead-in line"),
+    "exporter": ("helm/threshold-exporter/Chart.yaml", '`appVersion: "X.Y.Z"`'),
+    "tools": ("components/da-tools/app/VERSION", "the whole file (bare X.Y.Z)"),
+    "portal": ("helm/da-portal/Chart.yaml", '`appVersion: "X.Y.Z"`'),
+    "recipe-preview": ("helm/recipe-preview/Chart.yaml", '`appVersion: "X.Y.Z"`'),
+    "tenant-api": ("helm/tenant-api/Chart.yaml", "`version: X.Y.Z`"),
+}
+VERSION_LINES = tuple(VERSION_LINE_SOURCES)
+
+# ---------------------------------------------------------------------------
 # Replacement rules per version line
 # ---------------------------------------------------------------------------
 # Each rule: (file_relative_path, pattern_func, replacement_func)
@@ -95,10 +125,22 @@ RECIPE_PREVIEW_CHART_YAML = REPO_ROOT / "helm" / "recipe-preview" / "Chart.yaml"
 # future move breaks one line instead of drifting rule by rule (#1407).
 PORTAL_JSX_DIR = "tools/portal/src/interactive/tools"
 
-# Semver with optional pre-release suffix (-preview, -beta, etc.)
+# Semver with optional pre-release suffix (-preview, -rc1, -beta, etc.)
+#
+# ⛔ There is deliberately NO "strict" (suffix-less) variant any more. Rules
+# used to mix `_SEMVER` into image tags and chart versions, which is
+# wrong in BOTH directions once a release candidate exists:
+#
+#   read side   `appVersion: "2.10.0-rc1"` does not match a strict pattern, so
+#               the exporter line silently vanished (see VERSION_LINE_SOURCES).
+#   write side  worse — a strict pattern matches the `2.10.0` PREFIX of an
+#               already-correct `2.10.0-rc1`, so the value never compares equal
+#               to the replacement. `--check` reports eternal drift and a write
+#               appends the suffix again: `2.10.0-rc1-rc1`.
+#
+# `test_rule_patterns_are_idempotent_on_prerelease_versions` is the mechanical
+# guard: no rule pattern may match a proper prefix of its own output.
 _SEMVER = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?"
-# Strict semver (no suffix) for image tags and chart versions
-_SEMVER_STRICT = r"[0-9]+\.[0-9]+\.[0-9]+"
 
 
 def _build_tools_rules():
@@ -112,7 +154,7 @@ def _build_tools_rules():
         "glob_dir": "docs",
         "glob_pattern": "**/*.md",
         "desc": "da-tools image tag in docs/**/*.md",
-        "pattern": r"ghcr\.io/vencil/da-tools:v?[0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"ghcr\.io/vencil/da-tools:v?" + _SEMVER,
         "replacement": lambda v: f"ghcr.io/vencil/da-tools:v{v}",
     })
     # Portal JSX/JS sources. The glob USED to say glob_dir "docs" +
@@ -133,7 +175,7 @@ def _build_tools_rules():
             "glob_dir": PORTAL_JSX_DIR,
             "glob_pattern": _ext,
             "desc": f"da-tools image tag in {PORTAL_JSX_DIR}/{_ext}",
-            "pattern": r"ghcr\.io/vencil/da-tools:v?[0-9]+\.[0-9]+\.[0-9]+",
+            "pattern": r"ghcr\.io/vencil/da-tools:v?" + _SEMVER,
             "replacement": lambda v: f"ghcr.io/vencil/da-tools:v{v}",
         })
     # ⚠️ README.md, README.en.md and components/threshold-exporter/README.md
@@ -158,7 +200,7 @@ def _build_tools_rules():
         rules.append({
             "file": f,
             "desc": f"da-tools image tag in {f}",
-            "pattern": r"ghcr\.io/vencil/da-tools:v?[0-9]+\.[0-9]+\.[0-9]+",
+            "pattern": r"ghcr\.io/vencil/da-tools:v?" + _SEMVER,
             "replacement": lambda v: f"ghcr.io/vencil/da-tools:v{v}",
         })
 
@@ -166,7 +208,7 @@ def _build_tools_rules():
     rules.append({
         "file": "components/da-tools/app/VERSION",
         "desc": "da-tools VERSION file",
-        "pattern": r"^[0-9]+\.[0-9]+\.[0-9]+\s*$",
+        "pattern": r"^" + _SEMVER + r"\s*$",
         "replacement": lambda v: f"{v}\n",
         "whole_file": True,
     })
@@ -175,7 +217,7 @@ def _build_tools_rules():
     rules.append({
         "file": "components/da-tools/README.md",
         "desc": "da-tools build.sh version",
-        "pattern": r"\./build\.sh [0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"\./build\.sh " + _SEMVER,
         "replacement": lambda v: f"./build.sh {v}",
     })
 
@@ -194,13 +236,13 @@ def _build_tools_rules():
     rules.append({
         "file": "components/da-tools/README.md",
         "desc": "da-tools version strategy table (da-tools row)",
-        "pattern": r"\| \*\*da-tools\*\* \| \*\*v?[0-9]+\.[0-9]+\.[0-9]+\*\*",
+        "pattern": r"\| \*\*da-tools\*\* \| \*\*v?" + _SEMVER + r"\*\*",
         "replacement": lambda v: f"| **da-tools** | **v{v}**",
     })
     rules.append({
         "file": "components/da-tools/README.md",
         "desc": "da-tools version strategy table (git tag)",
-        "pattern": r"\*\*`tools/v[0-9]+\.[0-9]+\.[0-9]+`\*\*",
+        "pattern": r"\*\*`tools/v" + _SEMVER + r"`\*\*",
         "replacement": lambda v: f"**`tools/v{v}`**",
     })
 
@@ -217,7 +259,7 @@ def _build_tools_rules():
         rules.append({
             "file": f,
             "desc": f"da-tools image tag in {f}",
-            "pattern": r"ghcr\.io/vencil/da-tools:v?[0-9]+\.[0-9]+\.[0-9]+",
+            "pattern": r"ghcr\.io/vencil/da-tools:v?" + _SEMVER,
             "replacement": lambda v: f"ghcr.io/vencil/da-tools:v{v}",
         })
 
@@ -240,14 +282,14 @@ def _build_tools_rules():
         "desc": "da-tools image tag in helm/federation-reconciler/values.yaml (two-line repository/tag pin)",
         "pair_anchor": r"^[ \t]*repository:[ \t]*ghcr\.io/vencil/da-tools[ \t]*$",
         "pair_key": "tag",
-        "pattern": r'"v?' + _SEMVER_STRICT + r'"',
+        "pattern": r'"v?' + _SEMVER + r'"',
         "replacement": lambda v: f'"v{v}"',
         "require_match": True,
     })
     rules.append({
         "file": "helm/federation-reconciler/Chart.yaml",
         "desc": "federation-reconciler Chart.yaml appVersion (the da-tools image it ships)",
-        "pattern": r'^appVersion:\s*"v?' + _SEMVER_STRICT + '"',
+        "pattern": r'^appVersion:\s*"v?' + _SEMVER + '"',
         "replacement": lambda v: f'appVersion: "v{v}"',
         "require_match": True,
     })
@@ -256,7 +298,7 @@ def _build_tools_rules():
     rules.append({
         "file": "mkdocs.yml",
         "desc": "mkdocs.yml tools_version",
-        "pattern": r'tools_version:\s+"' + _SEMVER_STRICT + '"',
+        "pattern": r'tools_version:\s+"' + _SEMVER + '"',
         "replacement": lambda v: f'tools_version: "{v}"',
     })
 
@@ -274,7 +316,7 @@ def _build_tenant_api_rules():
     rules.append({
         "file": "helm/tenant-api/Chart.yaml",
         "desc": "tenant-api Chart.yaml version",
-        "pattern": r"^version:\s+" + _SEMVER_STRICT,
+        "pattern": r"^version:\s+" + _SEMVER,
         "replacement": lambda v: f"version: {v}",
     })
     # ⚠️ There is deliberately NO rule for helm/tenant-api/Chart.yaml
@@ -297,7 +339,7 @@ def _build_tenant_api_rules():
     rules.append({
         "file": "components/tenant-api/Dockerfile",
         "desc": "tenant-api Dockerfile LABEL version",
-        "pattern": r'org\.opencontainers\.image\.version="' + _SEMVER_STRICT + '"',
+        "pattern": r'org\.opencontainers\.image\.version="' + _SEMVER + '"',
         "replacement": lambda v: f'org.opencontainers.image.version="{v}"',
     })
 
@@ -308,14 +350,37 @@ def _build_tenant_api_rules():
     # required a literal `--version <semver>` there and so matched nothing
     # forever. Deleted, not repointed: there is no version string to drive.
 
-    # tenant-api image tag in docs
+    # ⚠️ Deleted: the `tenant-api image tag in docs` glob (docs/**/*.md). It
+    # expanded to 260 files and matched in ZERO — GLOB-DEAD. Verified
+    # repo-wide: no file under docs/ pins that image at all. The one doc-shaped
+    # mention, components/tenant-api/README.md, deliberately writes
+    # `ghcr.io/vencil/tenant-api:<version>` as a placeholder, which is the
+    # right answer for prose and nothing for a regex to drive.
+    #
+    # The pins that DO exist are below (Dockerfile) and outside this tool's
+    # reach — see the note there.
+
+    # tenant-api image tag in the Dockerfile's build/run instructions.
+    #
+    # These two comment lines said `:2.4.0` while the chart said 2.9.20 — five
+    # minor versions of rot, in the copy-paste command a person actually runs.
+    # Nothing covered them: the deleted glob only looked in docs/.
+    #
+    # `require_match` is explicit (not just the hand-written default) because
+    # this rule exists precisely BECAUSE the shape was uncovered; if someone
+    # rewrites the comment, it must fail loudly rather than quietly return to
+    # being uncovered.
     rules.append({
-        "file": "__glob__",
-        "glob_dir": "docs",
-        "glob_pattern": "**/*.md",
-        "desc": "tenant-api image tag in docs",
-        "pattern": r"ghcr\.io/vencil/tenant-api:v?" + _SEMVER_STRICT,
+        "file": "components/tenant-api/Dockerfile",
+        "desc": "tenant-api image tag in Dockerfile build/run comments",
+        "pattern": r"ghcr\.io/vencil/tenant-api:v?" + _SEMVER,
+        # v-PREFIXED, unlike the `:2.4.0` these comments carried. That is not a
+        # cosmetic change: release.yaml publishes this image as
+        # `:v${version}` (see its header comment), so the un-prefixed tag a
+        # reader copy-pastes out of `docker run` does not exist in the
+        # registry. `v?` in the pattern absorbs both spellings on the way in.
         "replacement": lambda v: f"ghcr.io/vencil/tenant-api:v{v}",
+        "require_match": True,
     })
 
     return rules
@@ -331,25 +396,25 @@ def _build_exporter_rules():
         {
             "file": "helm/threshold-exporter/Chart.yaml",
             "desc": "Chart.yaml version (chart release)",
-            "pattern": r"^version:\s*[0-9]+\.[0-9]+\.[0-9]+",
+            "pattern": r"^version:\s*" + _SEMVER,
             "replacement": lambda v: f"version: {v}",
         },
         {
             "file": "helm/threshold-exporter/Chart.yaml",
             "desc": "Chart.yaml appVersion",
-            "pattern": r'^appVersion:\s*"[0-9]+\.[0-9]+\.[0-9]+"',
+            "pattern": r'^appVersion:\s*"' + _SEMVER + '"',
             "replacement": lambda v: f'appVersion: "{v}"',
         },
         {
             "file": "docs/migration-guide.md",
             "desc": "OCI chart --version in migration guide",
-            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version " + _SEMVER,
             "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
         },
         {
             "file": "components/threshold-exporter/README.md",
             "desc": "OCI chart --version in exporter README",
-            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version " + _SEMVER,
             "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
         },
         # ⚠️ Deleted: the same OCI `--version` rule for README.md and
@@ -360,25 +425,25 @@ def _build_exporter_rules():
         {
             "file": "docs/integration/gitops-deployment.md",
             "desc": "OCI chart --version in gitops deployment guide",
-            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version " + _SEMVER,
             "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
         },
         {
             "file": "docs/integration/gitops-deployment.en.md",
             "desc": "OCI chart --version in gitops deployment guide (en)",
-            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version " + _SEMVER,
             "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
         },
         {
             "file": "components/da-tools/README.md",
             "desc": "exporter version in da-tools strategy table",
-            "pattern": r"\| threshold-exporter \| v[0-9]+\.[0-9]+\.[0-9]+",
+            "pattern": r"\| threshold-exporter \| v" + _SEMVER,
             "replacement": lambda v: f"| threshold-exporter | v{v}",
         },
         {
             "file": "components/da-tools/README.md",
             "desc": "exporter git tag in da-tools strategy table",
-            "pattern": r"`exporter/v[0-9]+\.[0-9]+\.[0-9]+`",
+            "pattern": r"`exporter/v" + _SEMVER + "`",
             "replacement": lambda v: f"`exporter/v{v}`",
         },
         # ⚠️ Deleted: OCI chart inline version in docs/index.md. That page was
@@ -388,38 +453,38 @@ def _build_exporter_rules():
         {
             "file": "docs/api/README.md",
             "desc": "exporter image tag in API docs (zh)",
-            "pattern": r"ghcr\.io/vencil/threshold-exporter:v?[0-9]+\.[0-9]+\.[0-9]+",
+            "pattern": r"ghcr\.io/vencil/threshold-exporter:v?" + _SEMVER,
             "replacement": lambda v: f"ghcr.io/vencil/threshold-exporter:v{v}",
         },
         {
             "file": "docs/api/README.en.md",
             "desc": "exporter image tag in API docs (en)",
-            "pattern": r"ghcr\.io/vencil/threshold-exporter:v?[0-9]+\.[0-9]+\.[0-9]+",
+            "pattern": r"ghcr\.io/vencil/threshold-exporter:v?" + _SEMVER,
             "replacement": lambda v: f"ghcr.io/vencil/threshold-exporter:v{v}",
         },
         # OCI chart --version in scenario docs
         {
             "file": "docs/scenarios/multi-cluster-federation.md",
             "desc": "OCI chart --version in federation scenario (zh)",
-            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version " + _SEMVER,
             "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
         },
         {
             "file": "docs/scenarios/multi-cluster-federation.en.md",
             "desc": "OCI chart --version in federation scenario (en)",
-            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version " + _SEMVER,
             "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
         },
         {
             "file": "docs/migration-guide.en.md",
             "desc": "OCI chart --version in migration guide (en)",
-            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version [0-9]+\.[0-9]+\.[0-9]+",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version " + _SEMVER,
             "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
         },
         {
             "file": "mkdocs.yml",
             "desc": "mkdocs.yml exporter_version",
-            "pattern": r'exporter_version:\s+"' + _SEMVER_STRICT + '"',
+            "pattern": r'exporter_version:\s+"' + _SEMVER + '"',
             "replacement": lambda v: f'exporter_version: "{v}"',
         },
     ]
@@ -602,15 +667,21 @@ def _build_platform_rules():
         "replacement": lambda v: f"> **v{v}** |",
     })
 
-    # Inline text version in doc headers: **v2.0.0-preview** 統一採集 etc.
-    rules.append({
-        "file": "__glob__",
-        "glob_dir": "docs",
-        "glob_pattern": "**/*.md",
-        "desc": "inline doc header version (bold blockquote, no pipe)",
-        "pattern": r"> \*\*v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?\*\*\s*$",
-        "replacement": lambda v: f"> **v{v}**",
-    })
+    # ⚠️ Deleted: `inline doc header version (bold blockquote, no pipe)`,
+    # pattern `> \*\*vX.Y.Z\*\*\s*$`. It expanded to 260 files and matched in
+    # ZERO of them — GLOB-DEAD, found the moment glob health became a group
+    # property instead of a per-file one.
+    #
+    # Checked before deleting: the shape it describes (a blockquote whose
+    # ENTIRE content is a bold version) exists nowhere in docs/**. The two
+    # live shapes are both covered elsewhere:
+    #   `> **vX.Y.Z** |`    the sibling glob below/above — 26 matches.
+    #   `> **vX.Y.Z** — …`  docs/integration/federation-integration{,.en}.md,
+    #                       which have their own hand-written rules (and those
+    #                       are require_match ON, i.e. stronger than a glob).
+    # So this is obsolete, not broken: there is no file it would drive if the
+    # pattern were "fixed", and widening it to `> **vX.Y.Z**` + anything would
+    # just double-cover what those three rules already own.
 
     # Inline version text: `於 v2.0.0 統一採集` or similar inline version
     # strings in doc content.
@@ -644,13 +715,26 @@ def _build_platform_rules():
         "replacement": lambda v: f"**版本**：v{v}",
     })
 
-    # Footer pattern: **最後更新**：v2.0.0 |
+    # Footer pattern: **最後更新**：vX.Y.Z
+    #
+    # The `(?=\s*\|)` lookahead this pattern used to carry required the footer
+    # to continue with a pipe — and the ONE footer of this shape in the repo,
+    # docs/internal/design-system-guide.md, ends the line right after the
+    # version. So the rule matched nothing, anywhere, for its whole life, and
+    # that footer sat at v2.6.0 while the platform shipped 2.9.0.
+    #
+    # ⛔ Note for the next person tempted to widen a rule instead of testing
+    # it: the sibling `**文件版本：**` rule above was widened into a glob in
+    # this same branch, with a comment saying it got "the same treatment as the
+    # **最後更新** footer rule below". The treatment being copied was a rule
+    # that had never matched anything. Copying a pattern is not evidence the
+    # pattern works — GLOB-DEAD in apply_rules() is.
     rules.append({
         "file": "__glob__",
         "glob_dir": "docs",
         "glob_pattern": "**/*.md",
         "desc": "doc footer **最後更新**：vX.Y.Z pattern",
-        "pattern": r"\*\*最後更新\*\*：v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?(?=\s*\|)",
+        "pattern": r"\*\*最後更新\*\*：v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?",
         "replacement": lambda v: f"**最後更新**：v{v}",
     })
 
@@ -770,13 +854,13 @@ def _build_portal_rules():
     rules.append({
         "file": "helm/da-portal/Chart.yaml",
         "desc": "da-portal Chart.yaml version",
-        "pattern": r"^version:\s*[0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"^version:\s*" + _SEMVER,
         "replacement": lambda v: f"version: {v}",
     })
     rules.append({
         "file": "helm/da-portal/Chart.yaml",
         "desc": "da-portal Chart.yaml appVersion",
-        "pattern": r'^appVersion:\s*"[0-9]+\.[0-9]+\.[0-9]+"',
+        "pattern": r'^appVersion:\s*"' + _SEMVER + '"',
         "replacement": lambda v: f'appVersion: "{v}"',
     })
 
@@ -792,7 +876,7 @@ def _build_portal_rules():
     rules.append({
         "file": "components/da-portal/README.md",
         "desc": "da-portal OCI chart --version in README",
-        "pattern": r"oci://ghcr\.io/vencil/charts/da-portal --version [0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"oci://ghcr\.io/vencil/charts/da-portal --version " + _SEMVER,
         "replacement": lambda v: f"oci://ghcr.io/vencil/charts/da-portal --version {v}",
     })
 
@@ -800,7 +884,7 @@ def _build_portal_rules():
     rules.append({
         "file": "components/da-portal/README.md",
         "desc": "da-portal image tag in README",
-        "pattern": r"ghcr\.io/vencil/da-portal:v?[0-9]+\.[0-9]+\.[0-9]+",
+        "pattern": r"ghcr\.io/vencil/da-portal:v?" + _SEMVER,
         "replacement": lambda v: f"ghcr.io/vencil/da-portal:v{v}",
     })
 
@@ -839,13 +923,13 @@ def _build_recipe_preview_rules():
         {
             "file": "helm/recipe-preview/Chart.yaml",
             "desc": "recipe-preview Chart.yaml version",
-            "pattern": r"^version:\s*[0-9]+\.[0-9]+\.[0-9]+",
+            "pattern": r"^version:\s*" + _SEMVER,
             "replacement": lambda v: f"version: {v}",
         },
         {
             "file": "helm/recipe-preview/Chart.yaml",
             "desc": "recipe-preview Chart.yaml appVersion",
-            "pattern": r'^appVersion:\s*"[0-9]+\.[0-9]+\.[0-9]+"',
+            "pattern": r'^appVersion:\s*"' + _SEMVER + '"',
             "replacement": lambda v: f'appVersion: "{v}"',
         },
     ]
@@ -991,10 +1075,41 @@ def _count_precommit_hook_stages():
     return auto, manual, push
 
 
+# The count-rule set is a FIXED EXPECTATION, exactly like VERSION_LINES.
+#
+# Every group used to be wrapped in `if <count> > 0:`, so a count source that
+# could not be read did not fail — it deleted its own rules. Reported repro:
+# move docs/assets/tool-registry.yaml away and the JSX-count rule stops
+# existing, so `--sync-counts --check` (a CI step,
+# .github/workflows/validate.yaml) exits 0 while docs/internal/dev-rules.md
+# keeps a stale number and nothing anywhere says so.
+#
+# `>= 3` — the old test's floor — cannot see one of five disappear. The IDs
+# below are pinned by test_count_rule_ids_are_pinned; the rules are now built
+# UNCONDITIONALLY and an unreadable source becomes a NO-SOURCE diagnosis
+# instead of a vanished rule.
+COUNT_RULE_IDS = (
+    "precommit-hook-breakdown",
+    "dev-rules-jsx-tools",
+    "readme-rule-pack-badge",
+    "readme-python-tools",
+    "readme-en-python-tools",
+)
+
+
 def _build_count_rules():
     """Build count replacement rules for CLAUDE.md and README.md.
 
-    Returns list of rule dicts for count syncing.
+    Returns list of rule dicts for count syncing, one per COUNT_RULE_IDS entry
+    and always in that order. Each rule carries:
+
+      id          stable identity, pinned by the tests.
+      source_ok   False when the count could not be READ (missing/empty
+                  source). apply_count_updates() turns that into NO-SOURCE —
+                  a third diagnosis kept apart from MISSING (the doc being
+                  patched is gone) and DEAD (the doc is there but the sentence
+                  moved), because the three have three different fixes.
+      source      human-readable "which file feeds this count".
     """
     # Only the counts that a surviving rule actually embeds are read here.
     # The per-directory ops/dx/lint split and the docs count are still
@@ -1038,63 +1153,85 @@ def _build_count_rules():
     # CLAUDE.md: pre-commit hook breakdown (auto-run + manual-stage + pre-push)
     # Source-of-truth count derived dynamically from .pre-commit-config.yaml stages.
     auto_n, manual_n, push_n = _count_precommit_hook_stages()
-    if auto_n + manual_n + push_n > 0:
-        rules.append({
-            "file": "CLAUDE.md",
-            "desc": (
-                f"CLAUDE.md: pre-commit hook breakdown "
-                f"({auto_n} auto + {manual_n} manual + {push_n} push)"
-            ),
-            "pattern": (
-                r"\d+\s+auto-run\s+\+\s+\d+\s+manual-stage"
-                r"(?:\s+\+\s+\d+\s+pre-push)?\s+hooks"
-            ),
-            "replacement": lambda _: (
-                f"{auto_n} auto-run + {manual_n} manual-stage "
-                f"+ {push_n} pre-push hooks"
-            ),
-            "is_count": True,
-        })
+    rules.append({
+        "id": "precommit-hook-breakdown",
+        "file": "CLAUDE.md",
+        "desc": (
+            f"CLAUDE.md: pre-commit hook breakdown "
+            f"({auto_n} auto + {manual_n} manual + {push_n} push)"
+        ),
+        "pattern": (
+            r"\d+\s+auto-run\s+\+\s+\d+\s+manual-stage"
+            r"(?:\s+\+\s+\d+\s+pre-push)?\s+hooks"
+        ),
+        "replacement": lambda _: (
+            f"{auto_n} auto-run + {manual_n} manual-stage "
+            f"+ {push_n} pre-push hooks"
+        ),
+        "is_count": True,
+        "source": ".pre-commit-config.yaml (hook stages)",
+        "source_ok": auto_n + manual_n + push_n > 0,
+    })
 
     # dev-rules.md: 互動工具 SOP 章節「N 個 JSX 互動工具」count
     # Phase .c 期間自 39 增至 43；hardcoded count is drift surface.
-    if jsx_tools > 0:
-        rules.append({
-            "file": "docs/internal/dev-rules.md",
-            "desc": f"dev-rules.md: JSX 互動工具 count ({jsx_tools} tools)",
-            "pattern": r"專案有\s+\*\*\d+\s+個\s+JSX\s+互動工具\*\*",
-            "replacement": lambda _: f"專案有 **{jsx_tools} 個 JSX 互動工具**",
-            "is_count": True,
-        })
+    rules.append({
+        "id": "dev-rules-jsx-tools",
+        "file": "docs/internal/dev-rules.md",
+        "desc": f"dev-rules.md: JSX 互動工具 count ({jsx_tools} tools)",
+        "pattern": r"專案有\s+\*\*\d+\s+個\s+JSX\s+互動工具\*\*",
+        "replacement": lambda _: f"專案有 **{jsx_tools} 個 JSX 互動工具**",
+        "is_count": True,
+        "source": "docs/assets/tool-registry.yaml",
+        "source_ok": jsx_tools > 0,
+    })
 
     # README.md: 15 個 Rule Pack (in badge)
-    if rule_packs > 0:
-        rules.append({
-            "file": "README.md",
-            "desc": f"README.md: Rule Pack badge ({rule_packs} packs)",
-            "pattern": r"badge/rule%20packs-(\d+)-orange",
-            "replacement": lambda _: f"badge/rule%20packs-{rule_packs}-orange",
-            "is_count": True,
-        })
+    rules.append({
+        "id": "readme-rule-pack-badge",
+        "file": "README.md",
+        "desc": f"README.md: Rule Pack badge ({rule_packs} packs)",
+        "pattern": r"badge/rule%20packs-(\d+)-orange",
+        "replacement": lambda _: f"badge/rule%20packs-{rule_packs}-orange",
+        "is_count": True,
+        "source": "docs/assets/platform-data.json (fallback: k8s/03-monitoring/)",
+        "source_ok": rule_packs > 0,
+    })
 
     # README.md / README.en.md: Python tools count in the repo-map row.
     # Same scope as _count_python_tools (scripts/tools/{ops,dx,lint}); the
     # repo-map phrasing differs from CLAUDE.md so needs its own rule (else drifts).
-    if total_tools > 0:
-        rules.append({
-            "file": "README.md",
-            "desc": f"README.md: Python tools in repo-map ({total_tools} tools)",
-            "pattern": r"`scripts/tools/\{ops,dx,lint\}`\s*下\s*\d+\s*個\s*Python\s*工具",
-            "replacement": lambda _: f"`scripts/tools/{{ops,dx,lint}}` 下 {total_tools} 個 Python 工具",
-            "is_count": True,
-        })
-        rules.append({
-            "file": "README.en.md",
-            "desc": f"README.en.md: Python tools in repo-map ({total_tools} tools)",
-            "pattern": r"\+\s*\d+\s*Python tools under\s*`scripts/tools/\{ops,dx,lint\}`",
-            "replacement": lambda _: f"+ {total_tools} Python tools under `scripts/tools/{{ops,dx,lint}}`",
-            "is_count": True,
-        })
+    rules.append({
+        "id": "readme-python-tools",
+        "file": "README.md",
+        "desc": f"README.md: Python tools in repo-map ({total_tools} tools)",
+        "pattern": r"`scripts/tools/\{ops,dx,lint\}`\s*下\s*\d+\s*個\s*Python\s*工具",
+        "replacement": lambda _: f"`scripts/tools/{{ops,dx,lint}}` 下 {total_tools} 個 Python 工具",
+        "is_count": True,
+        "source": "scripts/tools/{ops,dx,lint}/*.py",
+        "source_ok": total_tools > 0,
+    })
+    rules.append({
+        "id": "readme-en-python-tools",
+        "file": "README.en.md",
+        "desc": f"README.en.md: Python tools in repo-map ({total_tools} tools)",
+        "pattern": r"\+\s*\d+\s*Python tools under\s*`scripts/tools/\{ops,dx,lint\}`",
+        "replacement": lambda _: f"+ {total_tools} Python tools under `scripts/tools/{{ops,dx,lint}}`",
+        "is_count": True,
+        "source": "scripts/tools/{ops,dx,lint}/*.py",
+        "source_ok": total_tools > 0,
+    })
+
+    # Self-check: the built set must BE the declared expectation. Without this,
+    # deleting a rule here and forgetting COUNT_RULE_IDS would reintroduce the
+    # very "the set is whatever got built" semantics this replaced.
+    built = tuple(r["id"] for r in rules)
+    if built != COUNT_RULE_IDS:
+        raise AssertionError(
+            f"_build_count_rules() produced {built}, expected {COUNT_RULE_IDS}. "
+            f"Adding or removing a count rule means updating COUNT_RULE_IDS in "
+            f"the same edit — the pinned set is what makes a vanished rule a "
+            f"failure instead of silence.")
 
     return rules
 
@@ -1113,6 +1250,21 @@ def apply_count_updates(check_only=False, dry_run=False, verbose=False):
     changes = []
 
     for rule in rules:
+        if not rule.get("source_ok", True):
+            # NO-SOURCE: the count itself could not be read. Distinct from
+            # MISSING (the doc to patch is gone) and DEAD (the doc is there,
+            # the sentence moved) because the fix is different again: restore
+            # or repoint the SOURCE. Previously this state deleted the rule,
+            # so `--sync-counts --check` exited 0 with a stale number in the
+            # doc and no output naming it at all.
+            changes.append((
+                "NO-SOURCE", rule["desc"],
+                f"count source unreadable: {rule['source']} — this rule has "
+                f"no number to sync, so {rule['file']} keeps whatever it "
+                f"says today. Restore the source, or delete the rule (and its "
+                f"COUNT_RULE_IDS entry) if the count is retired."))
+            continue
+
         fpath = REPO_ROOT / rule["file"]
         if not fpath.exists():
             # MISSING, not SKIP. Count rules are every bit as much a gate as
@@ -1173,7 +1325,7 @@ def read_current_versions():
     # Exporter version from Chart.yaml (version = appVersion = exporter version)
     if CHART_YAML.exists():
         content = CHART_YAML.read_text(encoding="utf-8")
-        m = re.search(r'^appVersion:\s*"([0-9]+\.[0-9]+\.[0-9]+)"', content, re.MULTILINE)
+        m = re.search(r'^appVersion:\s*"(' + _SEMVER + ')"', content, re.MULTILINE)
         if m:
             versions["exporter"] = m.group(1)
 
@@ -1196,14 +1348,14 @@ def read_current_versions():
     # da-tools version from VERSION file
     if DA_TOOLS_VERSION.exists():
         ver = DA_TOOLS_VERSION.read_text(encoding="utf-8").strip()
-        if re.match(r"^[0-9]+\.[0-9]+\.[0-9]+$", ver):
+        if re.match(r"^" + _SEMVER + "$", ver):
             versions["tools"] = ver
 
     # Portal version from da-portal Chart.yaml (version == appVersion).
     if DA_PORTAL_CHART_YAML.exists():
         content = DA_PORTAL_CHART_YAML.read_text(encoding="utf-8")
         m = re.search(
-            r'^appVersion:\s*"([0-9]+\.[0-9]+\.[0-9]+)"', content, re.MULTILINE
+            r'^appVersion:\s*"(' + _SEMVER + ')"', content, re.MULTILINE
         )
         if m:
             versions["portal"] = m.group(1)
@@ -1222,7 +1374,7 @@ def read_current_versions():
     if TENANT_API_CHART_YAML.exists():
         content = TENANT_API_CHART_YAML.read_text(encoding="utf-8")
         m = re.search(
-            r'^version:\s*"?([0-9]+\.[0-9]+\.[0-9]+)"?', content, re.MULTILINE
+            r'^version:\s*"?(' + _SEMVER + ')"?', content, re.MULTILINE
         )
         if m:
             versions["tenant-api"] = m.group(1)
@@ -1231,12 +1383,31 @@ def read_current_versions():
     if RECIPE_PREVIEW_CHART_YAML.exists():
         content = RECIPE_PREVIEW_CHART_YAML.read_text(encoding="utf-8")
         m = re.search(
-            r'^appVersion:\s*"([0-9]+\.[0-9]+\.[0-9]+)"', content, re.MULTILINE
+            r'^appVersion:\s*"(' + _SEMVER + ')"', content, re.MULTILINE
         )
         if m:
             versions["recipe-preview"] = m.group(1)
 
     return versions
+
+
+def missing_version_lines(versions=None):
+    """Which of the six lines failed to read their source-of-truth?
+
+    Returns [(line, source_path, expected_shape), ...] for every line in
+    VERSION_LINES that `read_current_versions()` did NOT produce.
+
+    This is the whole point of VERSION_LINES existing. `read_current_versions`
+    reports what it could parse; only a comparison against a FIXED expectation
+    can tell "this line is at 2.9.0" apart from "this line is gone" — and the
+    second one used to be indistinguishable from "there is no such line",
+    which is why an unreadable SSOT silently deleted that line's entire rule
+    set while every gate stayed green.
+    """
+    if versions is None:
+        versions = read_current_versions()
+    return [(line, *VERSION_LINE_SOURCES[line])
+            for line in VERSION_LINES if not versions.get(line)]
 
 
 def _filter_by_scope(rules, scope):
@@ -1273,6 +1444,14 @@ def _requires_match(rule):
     return not rule.get("from_glob", False)
 
 
+GLOB_EMPTY_FILE = "__glob_empty__"
+
+
+def _glob_id(rule):
+    """Stable identity of a `__glob__` rule, used to group its expansion."""
+    return f"{rule['glob_dir']}/{rule['glob_pattern']} ({rule['desc']})"
+
+
 def _expand_glob_rules(rules):
     """Expand __glob__ rules into per-file rules.
 
@@ -1281,24 +1460,61 @@ def _expand_glob_rules(rules):
     leaving it OFF here: a hand-written rule names ONE file and one shape, so
     zero matches means it is broken, whereas a glob rule is fanned out across
     every file in a tree and legitimately matches nothing in most of them.
+
+    Each expanded rule ALSO carries `glob_id`, because per-file `require_match`
+    is not the glob's health check — the group's total is. See apply_rules()'s
+    GLOB-DEAD pass.
+
+    A glob that expands to ZERO files gets one sentinel entry
+    (`file: GLOB_EMPTY_FILE`, `glob_collapsed: True`) instead of nothing at
+    all. Emitting nothing is what made a collapsed glob invisible to every
+    runtime gate: no rule, therefore no SKIP, no DEAD, no MISSING, and a
+    rule-count floor cannot notice a few hundred entries going missing out of
+    ~2900.
+
+    Every OTHER key is copied verbatim. It used to copy a hard-coded list of
+    five, so `require_match` / `whole_file` / `pair_anchor` / `pair_key` set on
+    a glob rule were silently dropped — while apply_rules' own docstring
+    promised "opt OUT with an explicit `require_match: False`". Nothing set
+    them today; a silent no-op that only bites the next author is exactly the
+    failure mode this file exists to remove.
     """
     expanded = []
     for rule in rules:
-        if rule.get("file") == "__glob__":
-            glob_dir = REPO_ROOT / rule["glob_dir"]
-            for fpath in sorted(glob_dir.glob(rule["glob_pattern"])):
-                rel = fpath.relative_to(REPO_ROOT)
-                expanded.append({
-                    "file": str(rel),
-                    "desc": f"{rule['desc'].split(' in ')[0]} in {rel}",
-                    "pattern": rule["pattern"],
-                    "replacement": rule["replacement"],
-                    "from_glob": True,
-                    "skip_released_changelog": rule.get(
-                        "skip_released_changelog", False),
-                })
-        else:
+        if rule.get("file") != "__glob__":
             expanded.append(rule)
+            continue
+
+        gid = _glob_id(rule)
+        glob_dir = REPO_ROOT / rule["glob_dir"]
+        found = 0
+        for fpath in sorted(glob_dir.glob(rule["glob_pattern"])):
+            rel = fpath.relative_to(REPO_ROOT)
+            per_file = dict(rule)
+            per_file.pop("glob_dir", None)
+            per_file.pop("glob_pattern", None)
+            per_file.update({
+                "file": str(rel),
+                "desc": f"{rule['desc'].split(' in ')[0]} in {rel}",
+                "from_glob": True,
+                "glob_id": gid,
+                "glob_desc": rule["desc"],
+            })
+            expanded.append(per_file)
+            found += 1
+
+        if found == 0:
+            expanded.append({
+                "file": GLOB_EMPTY_FILE,
+                "desc": rule["desc"],
+                "pattern": rule["pattern"],
+                "replacement": rule["replacement"],
+                "from_glob": True,
+                "glob_id": gid,
+                "glob_collapsed": True,
+                "glob_dir": rule["glob_dir"],
+                "glob_pattern": rule["glob_pattern"],
+            })
     return expanded
 
 
@@ -1433,25 +1649,65 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
                     how ~16 rules read green while the strings they were
                     meant to drive rotted (#1407).
       glob-expanded fans one pattern across a whole tree; matching nothing
-                    in most files is the normal case, not a defect. The
-                    glob's own health is asserted differently — every
-                    `__glob__` must expand to >=1 file (see
-                    tests/dx/test_bump_docs.py).
+                    in most FILES is the normal case, not a defect. Its
+                    health is therefore asserted at the GROUP level, below.
 
     Opt OUT with an explicit `require_match: False` plus a comment naming
     the reason — never silently, or the signal decays back to noise.
+
+    Two group-level diagnoses cover what per-file `require_match` cannot see.
+    Both are runtime, not test-only: `make pre-tag` never runs pytest, so a
+    pytest-only tripwire is not a release gate.
+
+      GLOB-EMPTY  the glob expanded to zero FILES — it is pointed at a tree
+                  that no longer holds those files (JSX moved to
+                  tools/portal/src/ in TRK-230 and two `docs/**/*.jsx` globs
+                  went silent for two releases).
+      GLOB-DEAD   the glob expanded fine but matched NOTHING across its whole
+                  expansion. Three rules were in this state when it was added,
+                  one of them rotting a real footer:
+                  docs/internal/design-system-guide.md sat at v2.6.0 because
+                  the `**最後更新**` pattern carried a `(?=\\s*\\|)` lookahead
+                  and that footer has no pipe. "Expands to >=1 file" — the
+                  previous, test-only assertion — passes happily for all
+                  three: 260 files, zero matches.
     """
     rules = _expand_glob_rules(rules)
     changes = []
+    # glob_id -> [total matches across the expansion, desc]
+    glob_hits = {}
+
+    def _note_glob(rule, hits):
+        gid = rule.get("glob_id")
+        if gid is None:
+            return
+        entry = glob_hits.setdefault(gid, [0, rule.get("glob_desc", rule["desc"])])
+        entry[0] += hits
+
     for rule in rules:
+        if rule.get("glob_collapsed"):
+            _note_glob(rule, 0)
+            changes.append((
+                "GLOB-EMPTY", rule["desc"],
+                f"glob {rule['glob_dir']}/{rule['glob_pattern']} expanded to "
+                f"ZERO files — the whole rule is invisible (no per-file rule "
+                f"exists, so there is no SKIP/DEAD/MISSING to see). Point "
+                f"glob_dir/glob_pattern at where those files live now, or "
+                f"delete the rule if that tree is gone."))
+            continue
+
         fpath = REPO_ROOT / rule["file"]
         if not fpath.exists():
+            _note_glob(rule, 0)
             changes.append(("SKIP", rule["desc"], f"file not found: {rule['file']}"))
             continue
 
         content = fpath.read_text(encoding="utf-8")
 
         if rule.get("whole_file"):
+            # A whole-file rule owns the file outright, so its contribution to
+            # the group is "this file is driven", not a match count.
+            _note_glob(rule, 1)
             new_content = rule["replacement"](new_version)
             if content.strip() != new_content.strip():
                 diff_detail = f"{content.strip()} → {new_content.strip()}"
@@ -1466,6 +1722,7 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
         if rule.get("pair_anchor"):
             new_value = rule["replacement"](new_version)
             new_content, old_values = _rewrite_anchored_pair(content, rule, new_value)
+            _note_glob(rule, len(old_values))
             if not old_values:
                 changes.append(("DEAD", rule["desc"],
                                 f"anchor {rule['pair_anchor']!r} + key "
@@ -1496,6 +1753,7 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
             scan_text, frozen_tail = _split_at_released_changelog(content)
 
         matches = re.findall(pattern, scan_text, re.MULTILINE)
+        _note_glob(rule, len(matches))
         if not matches:
             if _requires_match(rule):
                 changes.append(("DEAD", rule["desc"],
@@ -1524,6 +1782,23 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
                 os.chmod(fpath, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
         else:
             changes.append(("OK", rule["desc"], "already up to date"))
+
+    # Group-level verdict. A glob whose ENTIRE expansion matched nothing is not
+    # "a tree where the string happens to be absent" — it is a pattern that
+    # describes a shape the repo no longer contains, i.e. a rule that bumps
+    # nothing. GLOB-EMPTY already spoke for the zero-file case, so it is not
+    # re-reported here: one defect, one diagnosis.
+    for gid, (hits, desc) in sorted(glob_hits.items()):
+        if hits == 0 and not any(
+                c[0] == "GLOB-EMPTY" and c[1] == desc for c in changes):
+            changes.append((
+                "GLOB-DEAD", desc,
+                f"glob {gid} expanded to files but matched NOTHING in ANY of "
+                f"them — per-file `require_match` is off for globs, so every "
+                f"one of those files reported OK while the rule bumped "
+                f"nothing. Fix the \"pattern\", narrow the glob to where the "
+                f"shape really lives, or delete the rule with a stated "
+                f"reason."))
 
     return changes
 
@@ -1621,6 +1896,30 @@ def _init_changelog_entry(version: str, lang: str = "zh"):
               f"({today})")
 
 
+def _require_nonempty_scope(all_rules, scope):
+    """A `--scope` that selects ZERO rules is a caller error, not a pass.
+
+    Measured: `--check --scope nosuchdir` printed "✅ All version references
+    are consistent." and exited 0 — the same green as a real clean run, from a
+    command that checked nothing at all. A typo'd scope in a release script is
+    therefore indistinguishable from success.
+
+    Exits EXIT_CALLER_ERROR (2, "you invoked me wrong"), NOT EXIT_VIOLATION
+    (1, "the repo is wrong") — nothing is drifting; the filter is.
+    """
+    if not scope:
+        return
+    total = sum(len(_filter_by_scope(rules, scope))
+                for rules in all_rules.values())
+    if total == 0:
+        print(f"ERROR: --scope {scope!r} selected ZERO rules. Nothing would "
+              f"be checked or bumped, so this cannot report success. Check "
+              f"the path (it is matched against each rule's \"file\" / "
+              f"\"glob_dir\" prefix, repo-relative, e.g. docs, components, "
+              f"helm; use '.' for root-level files).", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+
+
 def main():
     """CLI entry point: 版號一致性管理工具."""
     try_utf8_stdout()
@@ -1685,20 +1984,26 @@ def main():
 
         changes = apply_count_updates(check_only=args.check, dry_run=args.dry_run)
         for status, desc, detail in changes:
-            # DEAD / MISSING are ❌, never ⚠️ — they fail the gate now, and an
-            # icon that reads as "advisory" is what let 7 dead count rules
-            # pass as green ticks.
-            icon = {"UPDATE": "📝", "OK": "✅",
-                    "DEAD": "❌", "MISSING": "❌"}[status]
+            # DEAD / MISSING / NO-SOURCE are ❌, never ⚠️ — they fail the gate
+            # now, and an icon that reads as "advisory" is what let 7 dead
+            # count rules pass as green ticks.
+            icon = {"UPDATE": "📝", "OK": "✅", "DEAD": "❌",
+                    "MISSING": "❌", "NO-SOURCE": "❌"}[status]
             print(f"  {icon} {desc}: {detail}")
 
         update_count = sum(1 for s, _, _ in changes if s == "UPDATE")
         dead_counts = sum(1 for s, _, _ in changes if s == "DEAD")
         missing_counts = sum(1 for s, _, _ in changes if s == "MISSING")
+        no_source_counts = sum(1 for s, _, _ in changes if s == "NO-SOURCE")
 
-        # A dead/missing count rule is a defect regardless of mode: in
-        # --check it must fail CI, and in a plain `--sync-counts` run it must
-        # not report "Done, 0 updated" as if everything were synced.
+        # A dead/missing/source-less count rule is a defect regardless of
+        # mode: in --check it must fail CI, and in a plain `--sync-counts` run
+        # it must not report "Done, 0 updated" as if everything were synced.
+        if no_source_counts:
+            print(f"\n❌ {no_source_counts} count rule(s) could not READ their "
+                  f"count source (NO-SOURCE). The rule still exists but has "
+                  f"no number to sync — restore the source file, or retire "
+                  f"the rule together with its COUNT_RULE_IDS entry.")
         if missing_counts:
             print(f"\n❌ {missing_counts} count rule(s) point at a file that "
                   f"does not exist (MISSING). Fix the \"file\" path in "
@@ -1708,24 +2013,25 @@ def main():
                   f"A rule that matches nothing syncs nothing — fix the "
                   f"\"pattern\" in _build_count_rules().")
 
+        broken_counts = dead_counts or missing_counts or no_source_counts
         if args.check:
             if update_count > 0:
                 print(f"\n❌ {update_count} count(s) are outdated. Run without --check to apply.")
                 sys.exit(EXIT_VIOLATION)
-            elif dead_counts or missing_counts:
+            elif broken_counts:
                 sys.exit(EXIT_VIOLATION)
             else:
                 print("\n✅ All counts are already up to date.")
         elif args.dry_run:
             if update_count > 0:
                 print(f"\n🔍 Dry run: {update_count} count(s) would be updated.")
-            elif not (dead_counts or missing_counts):
+            elif not broken_counts:
                 print("\n✅ Dry run: all counts are already up to date.")
-            if dead_counts or missing_counts:
+            if broken_counts:
                 sys.exit(EXIT_VIOLATION)
         else:
             print(f"\n✅ Done. {update_count} count(s) updated.")
-            if dead_counts or missing_counts:
+            if broken_counts:
                 sys.exit(EXIT_VIOLATION)
         return
 
@@ -1738,8 +2044,20 @@ def main():
     if args.show_current:
         versions = read_current_versions()
         print("Current versions (from source-of-truth files):")
-        for line, ver in sorted(versions.items()):
-            print(f"  {line}: {ver}")
+        # Iterate the EXPECTATION, not the parse result. Printing only what
+        # parsed is what made the failure look like nothing at all: an
+        # unreadable CLAUDE.md simply produced a five-line list, and five
+        # lines look exactly as healthy as six unless you count them.
+        for line in VERSION_LINES:
+            ver = versions.get(line)
+            print(f"  {line}: {ver}" if ver else f"  {line}: ❌ NOT FOUND")
+        missing = missing_version_lines(versions)
+        if missing:
+            print(f"\n❌ {len(missing)} version line(s) have an unreadable "
+                  f"source-of-truth (NO-SSOT):")
+            for line, src, shape in missing:
+                print(f"  - {line}: could not read {shape} from {src}")
+            sys.exit(EXIT_VIOLATION)
         return
 
     # --what-if: comprehensive rule audit — show all rules and their status
@@ -1750,19 +2068,34 @@ def main():
             sys.exit(EXIT_CALLER_ERROR)
 
         all_rules = _build_rules()
+        _require_nonempty_scope(all_rules, args.scope)
         total_rules = 0
         matched = 0
         unmatched = 0
         missing = 0
+        no_ssot = 0
+        glob_empty = 0
+        glob_dead = 0
 
-        for line in ("platform", "exporter", "tools", "portal", "recipe-preview", "tenant-api"):
+        for line in VERSION_LINES:
             ver = versions.get(line)
             if not ver:
-                print(f"\n⚠️  {line}: version not found in source-of-truth")
+                # Was `⚠️  … version not found in source-of-truth` + continue,
+                # with no effect on the exit code. So the run that lost 2170
+                # platform rules printed one warning line and still summarised
+                # "670 rules, 670 ✅, 0 DEAD, 0 MISSING" at exit 0.
+                no_ssot += 1
+                src, shape = VERSION_LINE_SOURCES[line]
+                print(f"\n❌ {line}: NO-SSOT — could not read {shape} from "
+                      f"{src}. Every rule on this line is UNEVALUATED (not "
+                      f"passing): {len(all_rules.get(line, []))} rule "
+                      f"group(s) skipped.")
                 continue
 
             rules = _expand_glob_rules(
                 _filter_by_scope(all_rules.get(line, []), args.scope))
+            # glob_id -> total matches across the whole expansion
+            glob_hits = {}
 
             print(f"\n{'='*60}")
             print(f"  {line.upper()} (current: {ver}) — "
@@ -1771,8 +2104,21 @@ def main():
 
             for rule in rules:
                 total_rules += 1
-                fpath = REPO_ROOT / rule["file"]
                 desc = rule["desc"]
+
+                if rule.get("glob_collapsed"):
+                    glob_empty += 1
+                    glob_hits.setdefault(rule["glob_id"], [0, desc])
+                    print(f"  ❌ {desc}")
+                    print(f"       GLOB-EMPTY: {rule['glob_dir']}/"
+                          f"{rule['glob_pattern']} expanded to ZERO files")
+                    continue
+
+                gid = rule.get("glob_id")
+                if gid is not None:
+                    glob_hits.setdefault(gid, [0, desc])
+
+                fpath = REPO_ROOT / rule["file"]
 
                 if not fpath.exists():
                     missing += 1
@@ -1786,6 +2132,8 @@ def main():
 
                 if rule.get("pair_anchor"):
                     _, old_values = _rewrite_anchored_pair(content, rule, replacement)
+                    if gid is not None:
+                        glob_hits[gid][0] += len(old_values)
                     if not old_values:
                         unmatched += 1
                         print(f"  ❌ {desc}")
@@ -1804,6 +2152,8 @@ def main():
                     continue
 
                 if rule.get("whole_file"):
+                    if gid is not None:
+                        glob_hits[gid][0] += 1
                     if content.strip() == replacement.strip():
                         matched += 1
                         print(f"  ✅ {desc}")
@@ -1820,6 +2170,8 @@ def main():
                     scan_text, _ = _split_at_released_changelog(content)
 
                 matches = re.findall(pattern, scan_text, re.MULTILINE)
+                if gid is not None:
+                    glob_hits[gid][0] += len(matches)
                 if not matches and _requires_match(rule):
                     unmatched += 1
                     print(f"  ❌ {desc}")
@@ -1841,14 +2193,34 @@ def main():
                     print(f"       found: {unique}")
                     print(f"       expected: {replacement}")
 
+            # Group verdict for this line's globs. Per-file rows above are all
+            # ✅ for a glob that matches nothing anywhere — that is the whole
+            # point of `require_match` defaulting OFF for them — so the only
+            # place the defect can surface is here.
+            for gid, (hits, gdesc) in sorted(glob_hits.items()):
+                if hits == 0 and not any(
+                        r.get("glob_id") == gid and r.get("glob_collapsed")
+                        for r in rules):
+                    glob_dead += 1
+                    print(f"  ❌ {gdesc}")
+                    print(f"       GLOB-DEAD: {gid} expanded to files but "
+                          f"matched NOTHING in ANY of them")
+
         print(f"\n{'='*60}")
         print(f"  Summary: {total_rules} rules, "
-              f"{matched} ✅, {unmatched} ❌ DEAD/drift, {missing} ❌ MISSING")
+              f"{matched} ✅, {unmatched} ❌ DEAD/drift, {missing} ❌ MISSING, "
+              f"{glob_empty} ❌ GLOB-EMPTY, {glob_dead} ❌ GLOB-DEAD, "
+              f"{no_ssot} ❌ NO-SSOT")
         print(f"{'='*60}")
         # `missing` 也算 violation：規則指向不存在的檔案，跟 pattern 撈不到
         # 一樣是「這條規則什麼都沒 bump」。舊版只看 unmatched，所以 14 條指向
         # 已搬走檔案的規則能讓 --what-if exit 0（#1407）。
-        sys.exit(EXIT_VIOLATION if (unmatched > 0 or missing > 0) else EXIT_OK)
+        #
+        # `no_ssot` / `glob_empty` / `glob_dead` 同理，而且更狠：那三種狀態下
+        # 規則根本沒被評估過，Summary 的 ✅ 數字是在數「我有看的那些」。一條
+        # 版號線整個消失時舊版仍印 exit 0（#1407 第二輪）。
+        sys.exit(EXIT_VIOLATION if (unmatched or missing or no_ssot
+                                    or glob_empty or glob_dead) else EXIT_OK)
 
     # --check mode: read current versions and verify all references match
     # `args.tenant_api` belongs in this guard like the other five: without it
@@ -1864,9 +2236,27 @@ def main():
             sys.exit(EXIT_CALLER_ERROR)
 
         all_rules = _build_rules()
+        _require_nonempty_scope(all_rules, args.scope)
         has_drift = False
 
-        for line, ver in versions.items():
+        # Iterate the six DECLARED lines, not `versions.items()`. Iterating the
+        # parse result meant a line whose SSOT stopped parsing was not checked
+        # and not reported — it ceased to exist, taking its rules with it, and
+        # this branch printed "✅ All version references are consistent."
+        # Reproduced by rewording one sentence in CLAUDE.md: 2170 platform
+        # rules gone, exit 0 (#1407 second round).
+        for line in VERSION_LINES:
+            ver = versions.get(line)
+            if not ver:
+                has_drift = True
+                src, shape = VERSION_LINE_SOURCES[line]
+                print(f"  NO-SSOT [{line}] could not read {shape} from {src} "
+                      f"— every rule on this line is UNEVALUATED. Restore the "
+                      f"string, or update read_current_versions() + "
+                      f"VERSION_LINE_SOURCES together if the shape moved on "
+                      f"purpose.")
+                continue
+
             rules = _filter_by_scope(all_rules.get(line, []), args.scope)
             changes = apply_rules(rules, ver, check_only=True)
             for status, desc, detail in changes:
@@ -1890,6 +2280,12 @@ def main():
                     #   DEAD    = 檔案在、pattern 撈不到 → 修 "pattern"。
                     has_drift = True
                     print(f"  MISSING [{line}] {desc}: {detail}")
+                elif status in ("GLOB-EMPTY", "GLOB-DEAD"):
+                    # 兩種 glob 層級的診斷，與 per-file 的 DEAD/MISSING 分開
+                    # 標籤：per-file require_match 對 glob 是關的，所以整條
+                    # glob 撈不到時，每個檔案都印綠勾，只有 group 這層看得見。
+                    has_drift = True
+                    print(f"  {status} [{line}] {desc}: {detail}")
 
         if has_drift:
             print("\n❌ Version drift (or a DEAD / MISSING rule) detected. Run "
@@ -1907,9 +2303,11 @@ def main():
         sys.exit(EXIT_CALLER_ERROR)
 
     all_rules = _build_rules()
+    _require_nonempty_scope(all_rules, args.scope)
     total_updates = 0
     dead_rules = 0
     missing_rules = 0
+    glob_broken = 0
 
     for line, new_ver in [("platform", args.platform),
                           ("exporter", args.exporter),
@@ -1933,14 +2331,19 @@ def main():
 
         for status, desc, detail in changes:
             # SKIP 用 ❌ 不用 ⚠️ ——它現在會讓 bump 失敗，圖示不該再讀成「可忽略」。
-            icon = {"UPDATE": "📝", "OK": "✅", "SKIP": "❌", "DEAD": "❌"}[status]
-            print(f"  {icon} {desc}: {detail}")
+            icon = {"UPDATE": "📝", "OK": "✅", "SKIP": "❌", "DEAD": "❌",
+                    "GLOB-EMPTY": "❌", "GLOB-DEAD": "❌"}[status]
+            print(f"  {icon} [{status}] {desc}: {detail}"
+                  if status in ("GLOB-EMPTY", "GLOB-DEAD")
+                  else f"  {icon} {desc}: {detail}")
             if status == "UPDATE":
                 total_updates += 1
             elif status == "DEAD":
                 dead_rules += 1
             elif status == "SKIP":
                 missing_rules += 1
+            elif status in ("GLOB-EMPTY", "GLOB-DEAD"):
+                glob_broken += 1
 
     # MISSING 與 DEAD 在這裡同等對待，理由一致：explicit bump 是 release 動作，
     # 「這條規則沒 bump 到任何東西」不論成因是 pattern 撈不到（DEAD）還是檔案
@@ -1956,7 +2359,13 @@ def main():
         print(f"\n❌ {dead_rules} rule(s) matched NOTHING (DEAD). A rule that "
               f"matches nothing bumps nothing — fix it in _build_*_rules().")
 
-    if dead_rules or missing_rules:
+    if glob_broken:
+        print(f"\n❌ {glob_broken} glob rule(s) are GLOB-EMPTY (expanded to no "
+              f"files) or GLOB-DEAD (expanded but matched nothing anywhere). "
+              f"A release bump ran with those trees UNTOUCHED — fix "
+              f"glob_dir/glob_pattern or the \"pattern\" in _build_*_rules().")
+
+    if dead_rules or missing_rules or glob_broken:
         sys.exit(EXIT_VIOLATION)
 
     if args.check:

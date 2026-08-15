@@ -598,7 +598,17 @@ validate-config: ## 一站式配置驗證 (YAML + schema + routes + policy + cus
 onboard-analyze: ## Analyze existing AM/Prometheus configs for onboarding
 	@python3 scripts/tools/ops/onboard_platform.py $(ARGS)
 
-version-check: ## 檢查版號一致性 (CI lint 用)
+# 這個 target 是 pre-tag 唯一的版號閘門——`make pre-tag` 不跑 pytest，所以
+# 任何「只有測試抓得到」的守門員對 release 而言等於不存在（#1407 第二輪）。
+# 因此以下五種診斷全部由 `--check` 自己在 runtime 判定，不靠 tests/dx/：
+#   DRIFT      版號引用落後 SSOT
+#   DEAD       規則的 pattern 撈不到（檔案在、句型變了）
+#   MISSING    規則指向的檔案不存在
+#   GLOB-EMPTY glob 展開到 0 個檔案（整條規則對所有 gate 隱形）
+#   GLOB-DEAD  glob 展開到檔案、但整棵樹一個都沒撈到
+#   NO-SSOT    六條版號線之一讀不到 source-of-truth（該線全部規則未被評估）
+# `--scope` 過濾後剩 0 條規則會以 exit 2 擋下，不會回報「一致」。
+version-check: ## 檢查版號一致性 (CI lint 用；DRIFT/DEAD/MISSING/GLOB-EMPTY/GLOB-DEAD/NO-SSOT 皆會 fail)
 	@python3 ./scripts/tools/dx/bump_docs.py --check
 
 .PHONY: pre-tag

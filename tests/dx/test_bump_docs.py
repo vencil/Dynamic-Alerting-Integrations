@@ -12,6 +12,7 @@
 """
 
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -207,16 +208,21 @@ class TestApplyRulesEdgeCases:
 class TestReadCurrentVersions:
     """測試版號讀取。"""
 
-    def test_reads_from_real_repo(self):
-        """從真實 repo 讀取版號 (若 Chart.yaml 存在)。"""
+    @pytest.mark.parametrize("line", bump_docs.VERSION_LINES)
+    def test_reads_from_real_repo(self, line):
+        """六條線在今天的 repo 裡都必須讀得到，一條都不能少。
+
+        原本這條只斷言 platform/exporter/tools/portal 四條，而且整個包在
+        `if <chart>.exists()` 裡——recipe-preview 沒有被任何地方斷言過，
+        tenant-api 也是補上 read 之後才有人看。參數化到六條之後，新增第七條
+        版號線時 VERSION_LINES 一改，這條就自動跟著要求它可讀。
+        """
         versions = bump_docs.read_current_versions()
-        if bump_docs.CHART_YAML.exists():
-            assert "platform" in versions
-            assert "exporter" in versions
-        if bump_docs.DA_TOOLS_VERSION.exists():
-            assert "tools" in versions
-        if bump_docs.DA_PORTAL_CHART_YAML.exists():
-            assert "portal" in versions
+        src, shape = bump_docs.VERSION_LINE_SOURCES[line]
+        assert versions.get(line), (
+            f"版號線 {line} 讀不到 SSOT：{src} 裡的 {shape}。"
+            f"少了它，這條線的所有規則都不會被評估——而在 #1407 第二輪修掉之前，"
+            f"那等於整條線從 --check 的視野裡消失且 exit 0。")
 
 
 class TestFilterByScope:
@@ -295,11 +301,13 @@ class TestMainCLI:
     """main() CLI 路徑覆蓋。"""
 
     def test_show_current(self, monkeypatch, capsys, cli_argv):
-        """--show-current 顯示版號。"""
+        """--show-current 顯示全部六條線（讀不到的印 NOT FOUND 並 exit 1）。"""
         cli_argv("bump_docs", "--show-current")
-        bump_docs.main()
+        bump_docs.main()          # 真實 repo 六條都讀得到 → 不應 SystemExit
         out = capsys.readouterr().out
         assert "Current versions" in out
+        for line in bump_docs.VERSION_LINES:
+            assert line in out, f"--show-current 沒列出 {line}"
 
     def test_check_only(self, monkeypatch, capsys, cli_argv):
         """--check 模式不修改檔案。"""
@@ -750,7 +758,8 @@ class TestLiveRepoRuleTargetsExist:
 
         missing = sorted({
             r["file"] for r in rules
-            if not (bump_docs.REPO_ROOT / r["file"]).exists()})
+            if not r.get("glob_collapsed")          # 由 GLOB-EMPTY 負責診斷
+            and not (bump_docs.REPO_ROOT / r["file"]).exists()})
 
         assert not missing, (
             f"{len(missing)} 個規則目標檔案不存在——這些規則什麼都 bump 不到，"
@@ -793,7 +802,10 @@ class TestGlobRulesExpandToFiles:
         empty = []
         for rule in glob_rules:
             expanded = bump_docs._expand_glob_rules([rule])
-            if not expanded:
+            # ⚠️ 不能只判斷 `not expanded`：展開到 0 個檔案時現在會產生一個
+            # glob_collapsed sentinel（好讓 runtime gate 看得見），所以「回傳
+            # 非空」不再代表「有展開到檔案」。照舊寫法這條會變成永遠綠。
+            if not expanded or any(r.get("glob_collapsed") for r in expanded):
                 empty.append(f"{rule['glob_dir']}/{rule['glob_pattern']} "
                              f"({rule['desc']})")
 
@@ -827,12 +839,32 @@ class TestRequireMatchDefaults:
         assert bump_docs._requires_match(
             {"file": "docs/a.md", "from_glob": True}) is False
 
-    def test_explicit_value_wins_over_both_defaults(self):
+    def test_explicit_value_wins_over_both_defaults(self, tmp_path, monkeypatch):
+        """明示值壓過兩邊預設——而且要走**真的產得出來**的規則。
+
+        原本這條手搓 `{"file": ..., "from_glob": True, "require_match": True}`
+        餵給 _requires_match()。那個 dict 生產路徑造不出來：_expand_glob_rules()
+        當時只複製固定五個 key，`require_match` 在展開時就被丟掉了。於是這條
+        測試「證明」了一個實際上永遠不會發生的行為（#1407 F7）。
+        現在改成從 __glob__ 規則展開，讓斷言跟生產路徑同一條。
+        """
         assert bump_docs._requires_match(
             {"file": "README.md", "require_match": False}) is False
-        assert bump_docs._requires_match(
-            {"file": "docs/a.md", "from_glob": True,
-             "require_match": True}) is True
+
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "a.md").write_text("no version\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        expanded = bump_docs._expand_glob_rules([{
+            "file": "__glob__", "glob_dir": "docs", "glob_pattern": "**/*.md",
+            "desc": "probe in docs", "pattern": r"v\d+\.\d+\.\d+",
+            "replacement": lambda v: f"v{v}",
+            "require_match": True,
+        }])
+        assert expanded, "glob 應展開到 1 個檔案"
+        assert all(r.get("from_glob") for r in expanded)
+        assert all(bump_docs._requires_match(r) is True for r in expanded), (
+            "glob 規則上明示的 require_match: True 在展開時被吃掉了——"
+            "_expand_glob_rules() 必須整份複製 key，不是複製白名單。")
 
     def test_expand_glob_rules_marks_expanded_rules(self, tmp_path, monkeypatch):
         """`from_glob` 是預設值的依據，所以展開時一定要蓋上去。"""
@@ -921,8 +953,17 @@ class TestCountRulesAreLive:
     的規則印成 ✅ 綠勾，計數整批停止同步也沒人知道。
     """
 
-    def test_count_rules_exist(self):
-        assert len(bump_docs._build_count_rules()) >= 3
+    def test_count_rule_ids_are_pinned(self):
+        """規則集是釘死的期望值，不是「這次剛好建出幾條」。
+
+        `>= 3` 這種下限看不見五條掉一條：把 tool-registry.yaml 搬走時，
+        JSX 那條規則整條消失，剩四條仍然 >= 3，`--sync-counts --check`
+        exit 0，而 dev-rules.md 的數字繼續錯著（#1407 F2）。
+        """
+        ids = tuple(r["id"] for r in bump_docs._build_count_rules())
+        assert ids == bump_docs.COUNT_RULE_IDS, (
+            f"count 規則集與 COUNT_RULE_IDS 不符：{ids}。"
+            f"增刪 count 規則時兩邊要同一筆改動一起改。")
 
     def test_every_count_rule_file_exists_and_pattern_matches(self):
         import re as _re
@@ -1013,3 +1054,465 @@ class TestCheckWithExplicitVersionFlags:
             f"`--check {flag} 9.9.9` exit 0——repo 裡不可能所有引用都是 9.9.9，"
             f"所以這個旗標被安靜忽略了（掉進 bare-check 分支）。\n"
             f"stdout tail:\n{result.stdout[-800:]}")
+
+
+class TestVersionLineExpectation:
+    """六條版號線是**釘死的期望值**，不是「這次剛好讀到幾條」（#1407 第二輪）。
+
+    原本每個 consumer 都在 iterate `read_current_versions()` 的結果，於是
+    「某條線的 SSOT 讀不到」不是錯誤，是那條線**不存在**——連同它底下所有規則
+    一起從 gate 的視野裡消失。實測：把 CLAUDE.md:51 的一句話換個講法（版號
+    數字不變、只改措辭），platform 線與它的 2170 條規則一起蒸發，而
+    `--check` 印「✅ All version references are consistent.」exit 0、
+    `--what-if` 印「Summary: 670 rules, 670 ✅, 0 DEAD, 0 MISSING」exit 0。
+
+    D-4 修掉的 tenant-api 是這個 class 的一個實例；這裡釘的是 class 本身。
+    """
+
+    def test_version_lines_matches_build_rules_keys(self):
+        """VERSION_LINES 與 _build_rules() 的 key 必須是同一組。
+
+        兩邊分家就是漏洞重生：宣告了線卻沒有規則（永遠 vacuous 通過），或
+        有規則卻沒宣告線（那條線不會被 iterate 到）。
+        """
+        assert set(bump_docs.VERSION_LINES) == set(bump_docs._build_rules()), (
+            "VERSION_LINES 與 _build_rules() 的版號線不一致——新增版號線要同時"
+            "改 VERSION_LINE_SOURCES、_build_rules() 與 read_current_versions()。")
+
+    def test_missing_version_lines_reports_unreadable_line(self, tmp_path,
+                                                           monkeypatch):
+        """SSOT 讀不到 → 出現在 missing_version_lines()，而不是安靜消失。"""
+        # REPO_ROOT 指到空目錄 → CLAUDE.md 不在 → platform 讀不到；
+        # 其餘五條的 SSOT 是模組層絕對路徑，仍讀真 repo。
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        missing = dict((line, src) for line, src, _ in
+                       bump_docs.missing_version_lines())
+        assert "platform" in missing
+        assert missing["platform"] == "CLAUDE.md"
+
+    def test_reworded_claude_md_is_reported_not_dropped(self, tmp_path,
+                                                        monkeypatch):
+        """審查者的原始 repro：同一個版號、換句話說，platform 線不可以消失。"""
+        (tmp_path / "CLAUDE.md").write_text(
+            "## 專案概覽\n\n**Dynamic Alerting 多租戶平台 v2.9.0** — …\n",
+            encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        versions = bump_docs.read_current_versions()
+        assert "platform" not in versions          # 確實讀不到（前提成立）
+        assert any(line == "platform"
+                   for line, _, _ in bump_docs.missing_version_lines(versions)), (
+            "CLAUDE.md 換了句型之後，platform 必須被報成 NO-SSOT——"
+            "而不是變成「沒有 platform 這條線」。")
+
+    def test_check_fails_when_a_line_has_no_ssot(self, monkeypatch, capsys,
+                                                 cli_argv):
+        """`--check` 遇到讀不到的線要 exit 1 並印 NO-SSOT。"""
+        real = bump_docs.read_current_versions()
+        monkeypatch.setattr(bump_docs, "read_current_versions",
+                            lambda: {k: v for k, v in real.items()
+                                     if k != "platform"})
+        cli_argv("bump_docs", "--check")
+        with pytest.raises(SystemExit) as exc:
+            bump_docs.main()
+        out = capsys.readouterr().out
+        assert exc.value.code != 0, (
+            "少了一條版號線時 --check 仍 exit 0——那條線的規則一條都沒跑，"
+            "「一致」是在講它有看的那些。")
+        assert "NO-SSOT" in out and "platform" in out
+        assert "All version references are consistent" not in out
+
+    def test_what_if_fails_when_a_line_has_no_ssot(self, monkeypatch, capsys,
+                                                   cli_argv):
+        """`--what-if` 同理：⚠️ 一行然後 exit 0 是不夠的。"""
+        real = bump_docs.read_current_versions()
+        monkeypatch.setattr(bump_docs, "read_current_versions",
+                            lambda: {k: v for k, v in real.items()
+                                     if k != "tenant-api"})
+        cli_argv("bump_docs", "--what-if")
+        with pytest.raises(SystemExit) as exc:
+            bump_docs.main()
+        out = capsys.readouterr().out
+        assert exc.value.code != 0
+        assert "NO-SSOT" in out
+        assert "1 ❌ NO-SSOT" in out, "Summary 必須把 NO-SSOT 數出來"
+
+    def test_show_current_fails_when_a_line_has_no_ssot(self, monkeypatch,
+                                                        capsys, cli_argv):
+        """--show-current 是這個 bug 的第一現場：少一行看起來跟健康一樣。"""
+        real = bump_docs.read_current_versions()
+        monkeypatch.setattr(bump_docs, "read_current_versions",
+                            lambda: {k: v for k, v in real.items()
+                                     if k != "portal"})
+        cli_argv("bump_docs", "--show-current")
+        with pytest.raises(SystemExit) as exc:
+            bump_docs.main()
+        out = capsys.readouterr().out
+        assert exc.value.code != 0
+        assert "portal: ❌ NOT FOUND" in out
+
+
+class TestPrereleaseVersions:
+    """release candidate 不可以讓某條線靜靜消失，也不可以被寫成 `-rc1-rc1`。
+
+    `_SEMVER_STRICT`（無 suffix）曾同時用在 SSOT 讀取與 image tag / chart
+    version 的寫入規則上。讀的一邊：`appVersion: "2.10.0-rc1"` 比對不到 →
+    exporter 線消失（就是上面那個 class 的 bug，只是觸發原因是一次合法的
+    rc bump）。寫的一邊更糟：strict pattern 會咬到 `2.10.0-rc1` 的 `2.10.0`
+    前綴，永遠比不上 replacement → --check 永遠 drift，而真的寫下去會變成
+    `2.10.0-rc1-rc1`。
+    """
+
+    def test_chart_ssot_accepts_prerelease(self, tmp_path, monkeypatch):
+        chart = tmp_path / "Chart.yaml"
+        chart.write_text('apiVersion: v2\nname: threshold-exporter\n'
+                         'version: 2.10.0-rc1\nappVersion: "2.10.0-rc1"\n',
+                         encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "CHART_YAML", chart)
+        assert bump_docs.read_current_versions().get("exporter") == "2.10.0-rc1"
+
+    def test_version_file_ssot_accepts_prerelease(self, tmp_path, monkeypatch):
+        vf = tmp_path / "VERSION"
+        vf.write_text("2.10.0-rc1\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "DA_TOOLS_VERSION", vf)
+        assert bump_docs.read_current_versions().get("tools") == "2.10.0-rc1"
+
+    def test_rule_patterns_are_idempotent_on_prerelease_versions(self):
+        """沒有任何規則的 pattern 可以只咬中自己輸出的**前綴**。
+
+        這是 `-rc1-rc1` 那個 corruption 的機械化檢查：把 replacement 產出來
+        當輸入餵回自己的 pattern，撈到的東西若是輸出的真前綴，就代表再跑一次
+        會再接一次 suffix。撈不到（靠 lookahead/lookbehind 的上下文不在）
+        則跳過——這條只負責證偽，不假裝證實。
+        """
+        offenders = []
+        for line, rules in bump_docs._build_rules().items():
+            for rule in rules:
+                if rule.get("whole_file") or rule.get("pair_anchor"):
+                    continue
+                repl = rule["replacement"]("9.9.9-rc1")
+                text = f"\n{repl}\n"
+                for m in re.findall(rule["pattern"], text, re.MULTILINE):
+                    if isinstance(m, tuple):        # capturing groups
+                        continue
+                    if m != repl and repl.startswith(m):
+                        offenders.append(
+                            f"[{line}] {rule['desc']}: pattern 咬到 {m!r}，"
+                            f"但自己的輸出是 {repl!r}")
+        assert not offenders, (
+            "以下規則對 pre-release 版號不是冪等的——再跑一次會把 suffix 再接"
+            "一次（2.10.0-rc1-rc1），而 --check 會永遠報 drift：\n  "
+            + "\n  ".join(offenders))
+
+
+class TestGlobGroupHealth:
+    """glob 的健康條件是「整棵展開樹裡至少撈到一次」，不是「展開到 >=1 個檔案」。
+
+    per-file 的 require_match 對 glob 是關的（正確：一棵樹裡多數檔案本來就
+    沒有那個字串），所以整條 glob 從頭到尾撈不到時，每個檔案都印 ✅ 綠勾，
+    沒有任何一層看得見。實測有三條規則長期處於這個狀態，其中
+    `**最後更新**` 那條因為 pattern 帶了 `(?=\\s*\\|)` lookahead 而永遠撈不到，
+    docs/internal/design-system-guide.md 的頁尾就這樣停在 v2.6.0。
+
+    ⛔ 兩個診斷刻意分開，因為修法不同：
+      GLOB-EMPTY  展開到 0 個檔案 → 改 glob_dir / glob_pattern。
+      GLOB-DEAD   展開到檔案但整棵樹 0 命中 → 改 pattern，或整條刪掉。
+    而且兩者都在 runtime 判定：`make pre-tag` 不跑 pytest，只有測試看得到的
+    守門員對 release gate 而言等於不存在（#1407 F6）。
+    """
+
+    _GLOB = {
+        "file": "__glob__", "glob_dir": "docs", "glob_pattern": "**/*.md",
+        "desc": "probe in docs",
+        "pattern": r"\*\*最後更新\*\*：v[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"**最後更新**：v{v}",
+    }
+
+    def _docs(self, tmp_path, **files):
+        (tmp_path / "docs").mkdir()
+        for name, body in files.items():
+            (tmp_path / "docs" / f"{name}.md").write_text(body, encoding="utf-8")
+        return tmp_path
+
+    def test_glob_matching_nothing_anywhere_is_glob_dead(self, tmp_path,
+                                                         monkeypatch):
+        self._docs(tmp_path, a="# A\n沒有頁尾\n", b="# B\n也沒有\n")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        changes = bump_docs.apply_rules([dict(self._GLOB)], "2.9.0",
+                                        check_only=True)
+        statuses = [c[0] for c in changes]
+        assert "GLOB-DEAD" in statuses, (
+            f"整棵樹一個都沒撈到卻沒有 GLOB-DEAD：{statuses}")
+        # 反面同時釘住：per-file 仍然是 OK（不能靠把 glob 的 require_match
+        # 打開來「解決」——那會讓整個 docs/ 樹爆紅）。
+        assert statuses.count("OK") == 2
+
+    def test_glob_matching_once_is_healthy(self, tmp_path, monkeypatch):
+        self._docs(tmp_path,
+                   a="# A\n沒有頁尾\n",
+                   b="# B\n\n**最後更新**：v2.9.0\n")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        statuses = [c[0] for c in bump_docs.apply_rules(
+            [dict(self._GLOB)], "2.9.0", check_only=True)]
+        assert "GLOB-DEAD" not in statuses, (
+            "一棵樹裡命中一次就是活的——把門檻抬到「每個檔案都要命中」會讓"
+            "所有 docs glob 永遠紅。")
+
+    def test_collapsed_glob_is_glob_empty_at_runtime(self, tmp_path,
+                                                     monkeypatch):
+        (tmp_path / "docs").mkdir()          # 空目錄：展開到 0 個檔案
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        changes = bump_docs.apply_rules([dict(self._GLOB)], "2.9.0",
+                                        check_only=True)
+        statuses = [c[0] for c in changes]
+        assert statuses == ["GLOB-EMPTY"], (
+            f"glob 塌成 0 個檔案時 runtime 必須出聲（不是只有 pytest 抓得到）："
+            f"{changes}")
+
+    def test_collapsed_glob_is_not_double_reported(self, tmp_path, monkeypatch):
+        """一個缺陷一個診斷：GLOB-EMPTY 不應該再附送一條 GLOB-DEAD。"""
+        (tmp_path / "docs").mkdir()
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        statuses = [c[0] for c in bump_docs.apply_rules(
+            [dict(self._GLOB)], "2.9.0", check_only=True)]
+        assert statuses.count("GLOB-DEAD") == 0
+
+    def test_expansion_carries_glob_id(self, tmp_path, monkeypatch):
+        """group 判定靠 glob_id；展開時沒蓋上去的話整個機制是死的。"""
+        self._docs(tmp_path, a="# A\n", b="# B\n")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        expanded = bump_docs._expand_glob_rules([dict(self._GLOB)])
+        assert len(expanded) == 2
+        assert len({r["glob_id"] for r in expanded}) == 1
+
+    @pytest.mark.parametrize("line", bump_docs.VERSION_LINES)
+    def test_live_repo_has_no_dead_or_collapsed_glob(self, line):
+        """今天的 repo：每一條 glob 都必須在自己的樹裡至少撈到一次。
+
+        這是三個 rot 點的回歸鎖（`**最後更新**` lookahead、`> **vX.Y.Z**`
+        無管線、tenant-api image tag in docs）。
+        """
+        version = bump_docs.read_current_versions()[line]
+        rules = bump_docs._build_rules()[line]
+        bad = [(c[0], c[1]) for c in
+               bump_docs.apply_rules(rules, version, check_only=True)
+               if c[0] in ("GLOB-DEAD", "GLOB-EMPTY")]
+        assert not bad, (
+            f"{line} 有 glob 規則什麼都沒撈到：\n  "
+            + "\n  ".join(f"{s}: {d}" for s, d in bad))
+
+
+    def test_check_cli_fails_on_a_dead_glob(self, tmp_path, monkeypatch,
+                                            capsys, cli_argv):
+        """接線層鎖：`--check`（= `make version-check`，pre-tag 的版號閘門）
+        必須因為 GLOB-DEAD 而 exit 1。
+
+        上面的單元測試證明 apply_rules() 會產生這個狀態；這條證明 main() 有
+        接住它。少了接線，診斷只會印在畫面上而 gate 照樣綠——那正是 SKIP 在
+        #1407 之前的處境。
+        """
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "a.md").write_text("沒有任何版號\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(bump_docs, "read_current_versions",
+                            lambda: {line: "2.9.0"
+                                     for line in bump_docs.VERSION_LINES})
+        monkeypatch.setattr(bump_docs, "_build_rules", lambda: {
+            line: ([dict(self._GLOB)] if line == "platform" else [])
+            for line in bump_docs.VERSION_LINES})
+
+        cli_argv("bump_docs", "--check")
+        with pytest.raises(SystemExit) as exc:
+            bump_docs.main()
+        out = capsys.readouterr().out
+        assert exc.value.code != 0, (
+            "整條 glob 撈不到時 `--check` 仍 exit 0——release gate 會說「版號"
+            "全部一致」，其實那棵樹一個字都沒被驅動。")
+        assert "GLOB-DEAD" in out
+        assert "All version references are consistent" not in out
+
+class TestExpandGlobPreservesEveryKey:
+    """`_expand_glob_rules()` 不可以偷偷丟 key（#1407 F7）。
+
+    它原本只複製固定五個 key，所以 glob 規則上設的 require_match /
+    whole_file / pair_anchor / pair_key 會被無聲丟掉——而 apply_rules 的
+    docstring 明寫「Opt OUT with an explicit `require_match: False`」。
+    今天沒有 glob 規則設這些，但「設了沒作用而且不出聲」正是這整輪在拔的
+    東西。
+    """
+
+    def test_require_match_true_survives_and_takes_effect(self, tmp_path,
+                                                          monkeypatch):
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "a.md").write_text("沒有版號\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        changes = bump_docs.apply_rules([{
+            "file": "__glob__", "glob_dir": "docs", "glob_pattern": "**/*.md",
+            "desc": "probe in docs",
+            "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"v{v}",
+            "require_match": True,
+        }], "2.9.0", check_only=True)
+        assert changes[0][0] == "DEAD", (
+            f"glob 上明示的 require_match: True 沒有生效：{changes}")
+
+    def test_skip_released_changelog_still_survives(self, tmp_path,
+                                                    monkeypatch):
+        """既有的 key 不能因為改成整份複製就掉了（反向護欄）。"""
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "a.md").write_text("x\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        expanded = bump_docs._expand_glob_rules([{
+            "file": "__glob__", "glob_dir": "docs", "glob_pattern": "**/*.md",
+            "desc": "probe in docs", "pattern": "x",
+            "replacement": lambda v: "y",
+            "skip_released_changelog": True,
+        }])
+        assert all(r["skip_released_changelog"] for r in expanded)
+
+    def test_glob_bookkeeping_keys_are_not_leaked_as_file_rules(
+            self, tmp_path, monkeypatch):
+        """展開後的規則不能還帶著 glob_dir/glob_pattern（那是模板的東西）。"""
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "a.md").write_text("x\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        expanded = bump_docs._expand_glob_rules([{
+            "file": "__glob__", "glob_dir": "docs", "glob_pattern": "**/*.md",
+            "desc": "probe in docs", "pattern": "x",
+            "replacement": lambda v: "y",
+        }])
+        assert all("glob_dir" not in r and "glob_pattern" not in r
+                   for r in expanded)
+
+
+class TestCountSourceUnreadable:
+    """count 來源讀不到 → NO-SOURCE，而不是規則消失（#1407 F2）。"""
+
+    def test_rule_survives_when_source_unreadable(self, tmp_path, monkeypatch):
+        """tool-registry.yaml 不在 → JSX 規則仍在，只是 source_ok=False。"""
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        rules = {r["id"]: r for r in bump_docs._build_count_rules()}
+        assert tuple(rules) == bump_docs.COUNT_RULE_IDS, (
+            "來源讀不到時規則整條消失了——這正是 --sync-counts --check 會對著"
+            "一個過期數字 exit 0 的原因。")
+        assert rules["dev-rules-jsx-tools"]["source_ok"] is False
+
+    def test_unreadable_source_is_reported_as_no_source(self, tmp_path,
+                                                        monkeypatch):
+        (tmp_path / "doc.md").write_text("專案有 **9 個 JSX 互動工具**\n",
+                                         encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(bump_docs, "_build_count_rules", lambda: [{
+            "id": "probe", "file": "doc.md", "desc": "probe",
+            "pattern": r"\d+ 個", "replacement": lambda _: "3 個",
+            "is_count": True, "source": "docs/assets/tool-registry.yaml",
+            "source_ok": False,
+        }])
+        changes = bump_docs.apply_count_updates(check_only=True)
+        assert changes[0][0] == "NO-SOURCE", changes
+        assert "tool-registry.yaml" in changes[0][2]
+
+    def test_no_source_is_distinct_from_missing_and_dead(self, tmp_path,
+                                                         monkeypatch):
+        """三種診斷三種修法（修來源 / 修 file / 修 pattern），標籤不可合併。"""
+        (tmp_path / "doc.md").write_text("nothing countable\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(bump_docs, "_build_count_rules", lambda: [
+            {"id": "a", "file": "doc.md", "desc": "n", "pattern": r"\d+ things",
+             "replacement": lambda _: "3 things", "is_count": True,
+             "source": "src.yaml", "source_ok": False},
+            {"id": "b", "file": "gone.md", "desc": "m", "pattern": r"\d+ things",
+             "replacement": lambda _: "3 things", "is_count": True,
+             "source": "src.yaml", "source_ok": True},
+            {"id": "c", "file": "doc.md", "desc": "d", "pattern": r"\d+ things",
+             "replacement": lambda _: "3 things", "is_count": True,
+             "source": "src.yaml", "source_ok": True},
+        ])
+        statuses = [c[0] for c in bump_docs.apply_count_updates(check_only=True)]
+        assert statuses == ["NO-SOURCE", "MISSING", "DEAD"], statuses
+
+    def test_sync_counts_check_fails_on_no_source(self, monkeypatch, capsys,
+                                                  cli_argv):
+        """CI 步驟（validate.yaml 的 Count consistency）必須因此變紅。"""
+        monkeypatch.setattr(bump_docs, "_count_jsx_tools", lambda: 0)
+        cli_argv("bump_docs", "--sync-counts", "--check")
+        with pytest.raises(SystemExit) as exc:
+            bump_docs.main()
+        out = capsys.readouterr().out
+        assert exc.value.code != 0, (
+            "tool-registry.yaml 讀不到時 --sync-counts --check 仍 exit 0——"
+            "dev-rules.md 的數字會一直錯下去而沒人知道。")
+        assert "NO-SOURCE" in out
+        assert "All counts are already up to date" not in out
+
+    def test_plain_sync_counts_also_fails_on_no_source(self, monkeypatch,
+                                                       capsys, cli_argv,
+                                                       tmp_path):
+        """非 --check 模式也不可以報「Done, 0 updated」了事。"""
+        monkeypatch.setattr(bump_docs, "_count_jsx_tools", lambda: 0)
+        cli_argv("bump_docs", "--sync-counts", "--dry-run")
+        with pytest.raises(SystemExit) as exc:
+            bump_docs.main()
+        assert exc.value.code != 0
+        assert "NO-SOURCE" in capsys.readouterr().out
+
+
+class TestScopeMustSelectSomething:
+    """`--scope` 過濾到 0 條規則是 caller error，不是通過（#1407 F8）。"""
+
+    _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "tools" / "dx" / "bump_docs.py"
+
+    def _run(self, *args):
+        return subprocess.run([sys.executable, str(self._SCRIPT), *args],
+                              capture_output=True, text=True)
+
+    def test_bogus_scope_is_caller_error_in_check(self):
+        r = self._run("--check", "--scope", "nosuchdir")
+        assert r.returncode == 2, (
+            f"`--check --scope nosuchdir` 應為 caller error(2)，實得 "
+            f"{r.returncode}。exit 0 表示「我一條規則都沒看」與「全部一致」"
+            f"長得一模一樣。\nstdout:\n{r.stdout[-500:]}")
+        assert "consistent" not in r.stdout
+
+    def test_bogus_scope_is_caller_error_in_bump(self):
+        r = self._run("--platform", "9.9.9", "--dry-run", "--scope", "nosuchdir")
+        assert r.returncode == 2, r.stdout[-500:]
+
+    def test_real_scope_still_passes(self):
+        r = self._run("--check", "--scope", "docs")
+        assert r.returncode == 0, r.stdout[-800:]
+
+
+class TestTenantApiDockerfilePin:
+    """components/tenant-api/Dockerfile 的 image pin 必須被規則驅動（#1407 F9）。
+
+    那兩行 `docker build -t` / `docker run` 的註解停在 :2.4.0，chart 已經
+    2.9.20——五個 minor 的落差，而且就在使用者直接複製貼上的指令裡。原本沒有
+    任何規則涵蓋它：唯一相關的 glob 只看 docs/（而且那條 glob 本身 0 命中）。
+    """
+
+    def _rule(self):
+        rules = [r for r in bump_docs._build_tenant_api_rules()
+                 if r.get("file") == "components/tenant-api/Dockerfile"
+                 and "image tag" in r["desc"]]
+        assert len(rules) == 1, f"預期剛好一條 Dockerfile image-tag 規則：{rules}"
+        return rules[0]
+
+    def test_rule_exists_and_requires_match(self):
+        assert self._rule().get("require_match") is True
+
+    def test_rule_is_live_against_the_real_dockerfile(self):
+        version = bump_docs.read_current_versions()["tenant-api"]
+        changes = bump_docs.apply_rules([self._rule()], version,
+                                        check_only=True)
+        assert [c[0] for c in changes] == ["OK"], changes
+
+    def test_dockerfile_pins_are_v_prefixed_and_current(self):
+        """v 前綴不是美觀問題：release.yaml 推的是 `:v${version}`，
+        沒有前綴的 tag 在 registry 裡不存在。"""
+        version = bump_docs.read_current_versions()["tenant-api"]
+        text = (bump_docs.REPO_ROOT / "components" / "tenant-api"
+                / "Dockerfile").read_text(encoding="utf-8")
+        pins = re.findall(r"ghcr\.io/vencil/tenant-api:\S+", text)
+        assert pins, "Dockerfile 裡的 image pin 不見了——規則會 DEAD"
+        assert all(p == f"ghcr.io/vencil/tenant-api:v{version}" for p in pins), pins
+

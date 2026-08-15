@@ -1934,6 +1934,37 @@ class TestRunInit:
         assert named, shell
         assert [x.strip() for x in named.group(1).split(',')] == declared
 
+    def test_force_does_not_rewrite_an_existing_root_gitlab_ci(self):
+        """⛔ The `--force` help promises this exception; nothing tested it.
+
+        `--force` is the most destructive flag the tool has — it exists to
+        discard hand edits — and the one file it must never touch is the one
+        that may be the customer's ENTIRE pipeline. A mutation that ORs
+        `--force` into the root-shell write condition left the whole suite
+        green, so the promise lived only in prose.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root_path = os.path.join(tmpdir, '.gitlab-ci.yml')
+            original = 'stages: [build]\n\nbuild:\n  script:\n    - echo hi\n'
+            with open(root_path, 'w', encoding='utf-8', newline='\n') as fh:
+                fh.write(original)
+            config = {
+                'ci': 'gitlab',
+                'deploy': 'kustomize',
+                'rule_packs': ['mariadb'],
+                'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+                'force': True,
+            }
+            # Two runs: the second is the "already initialised, forced" shape.
+            ip.run_init(config, tmpdir)
+            created = ip.run_init(config, tmpdir)
+            assert open(root_path, encoding='utf-8').read() == original, (
+                '--force rewrote an existing root .gitlab-ci.yml, deleting '
+                "the customer's own pipeline")
+            assert root_path not in created
+
     def test_root_file_already_including_ours_is_wired(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             status = self._status_for(

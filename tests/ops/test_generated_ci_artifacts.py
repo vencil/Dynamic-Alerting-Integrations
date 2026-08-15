@@ -3122,16 +3122,34 @@ def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> No
             "and rewrite this block rather than relaxing it (#1358)."
         )
 
+        # ⛔ Every key that can carry shell, not just `script:`. The deferral
+        # paragraph on `test_generate_stage_body_is_pinned_on_both_legs`
+        # explicitly names `before_script` as the tempting way back in, and a
+        # pin that reads only `script:` does not watch the door its own
+        # docstring warns about. Measured: re-introducing both `git` and
+        # `config-diff` through `before_script:` left the whole suite green.
+        # `_READ_KEYS` above enumerates these from GitLab's schema for exactly
+        # this reason — do not narrow this tuple to what the generator
+        # happens to emit today.
+        _SHELL_KEYS = ("before_script", "script", "after_script")
         for name, body in pipe.items():
-            if not isinstance(body, dict) or "script" not in body:
+            if not isinstance(body, dict):
                 continue
-            script = " ".join(str(line) for line in body.get("script", []))
+            if not any(k in body for k in _SHELL_KEYS):
+                continue
+            script = " ".join(
+                str(line) for key in _SHELL_KEYS for line in body.get(key, [])
+            )
             assert "config-diff" not in script, (
                 f"GitLab job {name!r} runs `config-diff` again. On this leg "
                 "the baseline cannot be taken — the image has no git — so the "
                 "report is computed against an empty directory (#1358)."
             )
-            assert "git " not in script, (
+            # ⚠️ Word boundary, not `"git "`. The join leaves no trailing
+            # space on the final line, so a trailing-space test misses `git`
+            # as the last token — measured: `- apk add --no-cache git`
+            # appended as the last script line survived.
+            assert not re.search(r"\bgit\b", script), (
                 f"GitLab job {name!r} shells out to git, which is absent from "
                 f"$DA_TOOLS_IMAGE. Whatever it guards will fail at runtime; on "
                 "the old blast-radius job the failure was swallowed by "
@@ -3278,9 +3296,22 @@ def test_gitlab_root_shell_wires_the_pipeline(generated, tmp_path, capsys) -> No
     # sentence #1357 cites: the summary's last step said "Commit and push — CI
     # will automatically validate your config" unconditionally, which was false
     # for every `--ci gitlab` run.
-    assert "Commit and push — CI will automatically validate" not in summary, (
-        "the summary is back to the unconditional CI claim. On this path "
-        "nothing validates anything until the customer pastes the include."
+    # ⛔ Stated as a property, because the literal it used to check is now
+    # unreachable: production always interpolates a platform name, so the bare
+    # "CI" fallback cannot be produced by any config `_validate_config`
+    # accepts. Measured: forcing `gl_needs_manual` False made the summary say
+    # "Commit and push — GitLab CI will automatically validate your config"
+    # and this assertion stayed GREEN. It was also locale-vacuous — this test
+    # never pins `_LANG`, so under a zh locale it could not fail at all.
+    #
+    # The live property: on a path where the customer still has to wire it up,
+    # the closing line must not promise validation without naming that work.
+    closing = [ln for ln in summary.splitlines()
+               if "GitLab CI" in ln or "GitLab CI" in ln.replace("GitLab", "GitLab")]
+    assert closing, f"no closing platform line at all.\n{summary}"
+    assert any("include" in ln for ln in closing), (
+        "the summary promises validation without mentioning the include the "
+        f"customer still has to wire in.\n{summary}"
     )
 
 
@@ -3318,29 +3349,63 @@ _SUMMARY_MARKERS = {
 }
 
 
+def test_summary_markers_cover_both_locales() -> None:
+    """⛔ Anti-vacuity for the parametrize axis below.
+
+    Deleting the 'zh' row silently removes three test cases and the suite
+    stays green — which is precisely the regression the bilingual pinning was
+    added to prevent.
+    """
+    assert set(_SUMMARY_MARKERS) == {"en", "zh"}, sorted(_SUMMARY_MARKERS)
+
+
+# Every root-file shape the classifier distinguishes, and the `--ci` values
+# that reach the GitLab branch at all.
+#
+# ⛔ This axis was `["greenfield", "wired", "needs-append"]` × `ci="gitlab"`,
+# and the gaps were not cosmetic: dropping NEEDS_INCLUDE or UNPARSEABLE from
+# the needs-work set, deleting the GitHub wiring line, and deleting the
+# `--ci both` carve-out (which carries an eight-line comment arguing it is
+# load-bearing) ALL left the suite green. NEEDS_INCLUDE is the plainest
+# brownfield repo there is — a root pipeline with no `include:` key — and it
+# is the shape `da-tools init` is documented as meeting.
+_ROOT_SHAPES = {
+    "greenfield": None,
+    "wired": f"include:\n  - local: {_GL_PIPELINE.as_posix()}\n",
+    "needs-append": "include:\n  - local: .gitlab-ci.d/theirs.yml\n",
+    "needs-include": "stages: [build]\nbuild:\n  script: [echo hi]\n",
+    "needs-convert": "include: 'templates/base.yml'\n",
+    # `!reference` is the ordinary route into "did not parse". Both
+    # sub-shapes matter: one already has an `include:` (the common case for a
+    # pipeline sophisticated enough to use `!reference`) and must get the
+    # LIST ITEM; one has none and can safely take the whole block.
+    "unparseable-with-include": (
+        "include:\n  - local: .gitlab-ci.d/theirs.yml\n"
+        "job:\n  script:\n    - !reference [.setup, script]\n"
+    ),
+    "unparseable-no-include": "job:\n  script:\n    - !reference [.a, script]\n",
+}
+
 @pytest.mark.parametrize("lang", sorted(_SUMMARY_MARKERS))
-@pytest.mark.parametrize("shape", ["greenfield", "wired", "needs-append"])
+
+
+@pytest.mark.parametrize("ci", ["gitlab", "both"])
+@pytest.mark.parametrize("shape", sorted(_ROOT_SHAPES))
 def test_summary_wiring_line_reports_what_init_actually_did(
-    lang, shape, tmp_path, capsys, monkeypatch,
+    lang, shape, ci, tmp_path, capsys, monkeypatch,
 ) -> None:
     monkeypatch.setattr(ip, "_LANG", lang)
     wired_phrase, paste_phrase = _SUMMARY_MARKERS[lang]
 
-    root = tmp_path / shape
+    root = tmp_path / f"{shape}-{ci}"
     root.mkdir()
-    if shape == "wired":
+    body = _ROOT_SHAPES[shape]
+    if body is not None:
         (root / ".gitlab-ci.yml").write_text(
-            f"include:\n  - local: {_GL_PIPELINE.as_posix()}\n",
-            encoding="utf-8", newline="\n",
-        )
-    elif shape == "needs-append":
-        (root / ".gitlab-ci.yml").write_text(
-            "include:\n  - local: .gitlab-ci.d/theirs.yml\n",
-            encoding="utf-8", newline="\n",
-        )
+            body, encoding="utf-8", newline="\n")
 
     config = {
-        "ci": "gitlab",
+        "ci": ci,
         "deploy": "kustomize",
         "rule_packs": ["mariadb"],
         "tenants": ["db-a"],
@@ -3377,23 +3442,55 @@ def test_summary_wiring_line_reports_what_init_actually_did(
             "the summary told a customer whose root file already includes "
             f"our pipeline to paste it again.\nsummary was:\n{summary}"
         )
-    else:  # needs-append
+    else:
+        # Every remaining shape leaves the customer with work to do.
         assert paste_phrase in haystack, (
-            f"no paste instruction on the brownfield path.\n{summary}"
+            f"shape {shape!r} did not flag that manual wiring is required."
+            f"\n{summary}"
         )
-        # ⛔ Shape, not just presence. Their file already has an `include:`
-        # key; handing them a second one is a duplicate mapping key and YAML
-        # keeps exactly one, so following our own instruction would delete
-        # their entries.
         assert f"- local: {_GL_PIPELINE.as_posix()}" in summary, summary
-        snippet_block_lines = [
-            ln for ln in summary.splitlines() if ln.strip() == "include:"
-        ]
-        assert not snippet_block_lines, (
-            "the summary handed a whole `include:` block to a repo that "
-            "already has that key — pasting it drops the customer's own "
-            f"includes.\nsummary was:\n{summary}"
-        )
+        if shape in ("needs-append", "unparseable-with-include"):
+            # ⛔ Shape, not just presence. Their file already has an
+            # `include:` key; a second one is a duplicate mapping key and
+            # YAML keeps exactly one, so following our own instruction would
+            # delete their entries. `unparseable` reaches this via a line
+            # scan — `!reference` is the ordinary route in, and such a
+            # pipeline almost always already has an `include:`.
+            assert not [ln for ln in summary.splitlines()
+                        if ln.strip() == "include:"], (
+                "the summary handed a whole `include:` block to a repo that "
+                "already has that key — pasting it drops the customer's own "
+                f"includes.\nsummary was:\n{summary}"
+            )
+        elif shape == "needs-convert":
+            # Neither ready-made shape is safe: a list item under a scalar is
+            # a syntax error, a second key deletes their entry. The only
+            # correct instruction is a worked "convert to a list" example.
+            assert "<" in summary, (
+                "needs-convert did not show a worked conversion example; a "
+                f"ready-made snippet is unsafe for this shape.\n{summary}"
+            )
+
+    if ci == "both":
+        # ⛔ Deleting the GitHub wiring line, and deleting the `--ci both`
+        # carve-out that stops a GitLab-only manual step from being spoken
+        # over "GitHub Actions + GitLab CI", both survived the whole suite.
+        # The carve-out carries an eight-line comment arguing it is
+        # load-bearing; nothing pinned it.
+        assert "GitHub Actions" in summary, (
+            f"--ci both printed no GitHub wiring line.\n{summary}")
+        if shape not in ("greenfield", "wired"):
+            # The defect this pins is the COMBINED platform name being used
+            # for a GitLab-only condition — "only then does GitHub Actions +
+            # GitLab CI validate", two steps after a line saying GitHub
+            # wiring is already done. Naming the two legs separately in one
+            # sentence is the fix, so grep for the combined name, not for a
+            # gating word.
+            assert "GitHub Actions + GitLab CI" not in summary, (
+                "a GitLab-only manual step was spoken over the combined "
+                "platform name — GitHub auto-loads .github/workflows/ and "
+                f"validates on push regardless.\n{summary}"
+            )
 
     # ⛔ In every shape and locale: the closing line must not resurrect the
     # unconditional pre-#1357 claim. Stated as a property rather than a

@@ -669,6 +669,6 @@ class TestSyncCountsEmitsLF:
         # 任何規則會碰，所以它必須保持原樣——若哪天又有規則手滑改到它，這個
         # 數字會從 1 變 2，測試就會叫。
         assert len(differing) == 1, (
-            f"expected exactly 2 changed lines, got {len(differing)}: "
+            f"expected exactly 1 changed line, got {len(differing)}: "
             f"{[(before_lines[i], after_lines[i]) for i in differing]}"
         )
