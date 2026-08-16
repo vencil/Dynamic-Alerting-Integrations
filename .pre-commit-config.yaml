@@ -1258,7 +1258,10 @@ repos:
         name: "threshold key reachability — every alert-demanded key must be producible by platform defaults (TRK-337)"
         entry: python3 -X utf8 scripts/tools/lint/check_threshold_reachability.py --ci
         language: python
-        additional_dependencies: ['pyyaml']
+        # jsonschema joins pyyaml for the #1443 schema witness (the same pairing
+        # threshold-registry-check already carries). The gate imports it INSIDE
+        # the witness, so `--help` and every other face still work without it.
+        additional_dependencies: ['pyyaml', 'jsonschema']
         pass_filenames: false
         # Fires when the DEMAND side (a rule-pack alert's user_threshold), ANY
         # supply/declared/defaults face, the shared extractor, or the gate itself
@@ -1303,7 +1306,13 @@ repos:
         # case-sensitive filter beside a case-insensitive reader is the same
         # divergence in miniature: the gate would read `_defaults.YAML` while the
         # hook never fired on the commit that added it.
-        files: ^(rule-packs/rule-pack-.*\.yaml|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_observed_map_lib|init_project|_registry_lib|onboard_platform)\.py|scripts/tools/_lib_(compat|exitcodes|validation)\.py|scripts/ops/guard_defaults_scopes\.py|scripts/tools/lint/check_threshold_reachability\.py)$
+        # ⚠️ The last two alternatives are the #1443 schema witness's inputs. The
+        # schema JSON was added because `test_precommit_filter_covers_every_input_
+        # this_gate_reads` derived it and went red — the derivation reads path
+        # literals out of the module. `check_confd_schema.py` is added BY HAND:
+        # the gate reaches it by `import`, not by path, so that derivation is
+        # structurally blind to it and nothing here would have told us.
+        files: ^(rule-packs/rule-pack-.*\.yaml|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_observed_map_lib|init_project|_registry_lib|onboard_platform)\.py|scripts/tools/_lib_(compat|exitcodes|validation)\.py|scripts/ops/guard_defaults_scopes\.py|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json)$
 
       - id: threshold-registry-check
         name: "threshold registry SoT — schema + scaffold equivalence + generated-surface freshness + prose membership (TRK-339 WS1a / #1200)"

@@ -1675,6 +1675,161 @@ def test_the_may_be_empty_list_must_earn_its_entries_on_every_run(monkeypatch):
     assert "Remove the line" in msg, msg
 
 
+# ── The schema witness (#1443) ───────────────────────────────────────────────
+#
+# The fifth floor can be switched off for a tree by one line in
+# `_DEFAULTS_ROOTS_MAY_BE_EMPTY`, and no predicate over today's content can tell
+# a legitimate entry from one added to hide a rename — the reasoning is at the
+# end of `_assert_every_root_contributes`, and three predicates were withdrawn
+# there. What is left is a witness whose answer does not depend on the exemption
+# at all: the schema that says which top-level keys a `_defaults*` file may have.
+
+_WITNESS_OK = "defaults:\n  cpu: 90\n"
+_WITNESS_RENAMED = "defalts:\n  cpu: 90\n"
+_WITNESS_STATE_PREFIX = "_state_defaults:\n  cpu: 90\n  unit: pct\n"
+_WITNESS_NESTED = "defaults:\n  threshold:\n    cpu: 90\n"
+# ⛔ A REAL recipe shape, copied from the finance domain file under
+# `rule-packs/recipes/examples/conf.d/`, not a plausible-looking one. (The path
+# is named in two pieces on purpose — writing it whole wrapped it mid-token and
+# `tests/ops/test_wrapped_path_references.py` caught it, which is the guard
+# doing exactly its job.) The first draft here
+# wrote `- name: x / expr: up == 0` and the witness rejected it for a missing
+# `recipe` key — correctly, and that is the point: this witness validates the
+# WHOLE platform-defaults schema, not only the set of top-level key names. A
+# fixture that is merely "shaped like" the tree would have made the two silent
+# rows below prove nothing.
+_WITNESS_NO_SECTION = (
+    "_custom_alerts:\n"
+    "  - recipe: ratio\n"
+    "    name: payment_failure_ratio\n"
+    "    metric: payment_failed_total\n"
+    "    denominator_metric: payment_attempts_total\n"
+    "    op: \">\"\n"
+    "    window: 5m\n"
+    "    threshold: \"0.01:critical\"\n")
+_WITNESS_PLACEHOLDER = "# nothing declared here yet\n"
+
+
+def _witness(docs: dict[str, str]) -> None:
+    """Drive the REAL witness over synthetic artifact text (reader seam only)."""
+    gate._assert_defaults_artifacts_match_schema(
+        sorted(docs), read=lambda rel: docs[rel])
+
+
+def test_the_schema_witness_is_silent_on_the_real_tree():
+    """Anti-vacuity first: it must be handed the real scan, and pass on it."""
+    tracked = gate._tracked_defaults_artifacts()
+    assert len(tracked) >= gate._DEFAULTS_ARTIFACT_FLOOR, tracked
+    gate._assert_defaults_artifacts_match_schema(tracked)   # must NOT raise
+
+
+def test_the_schema_witness_refuses_an_empty_input():
+    """A check that validates nothing passes perfectly."""
+    with pytest.raises(gate._GateViolation) as exc:
+        gate._assert_defaults_artifacts_match_schema([])
+    assert "no artifacts at all" in str(exc.value), exc.value
+
+
+def test_the_schema_witness_is_not_reachable_by_either_exemption_table(
+        monkeypatch):
+    """⛔ THE #1443 TEST. Exempt EVERYTHING; the witness must still speak.
+
+    Measured on `90391b5f` through the real `_defaults_faces()`, renaming a
+    tree's `defaults:` section and adding that root to
+    `_DEFAULTS_ROOTS_MAY_BE_EMPTY`: 7 of the 12 pinned roots returned rc=0. The
+    exemption is what made them green, so the check that answers afterwards must
+    not read it — this drives that property directly rather than trusting the
+    call order, which was necessary and not sufficient one round ago.
+    """
+    monkeypatch.setattr(gate, "_DEFAULTS_ROOTS_MAY_BE_EMPTY",
+                        frozenset(gate._DEFAULTS_CONFD_ROOTS))
+    monkeypatch.setattr(
+        gate, "_DEFAULTS_ARTIFACT_EXEMPT",
+        {rel: "exempted by this test" for rel in gate._tracked_defaults_artifacts()})
+
+    victim = "tests/golden/fixtures/l0-only/conf.d/_defaults.yaml"
+    with pytest.raises(gate._GateViolation) as exc:
+        _witness({victim: _WITNESS_RENAMED})
+    msg = str(exc.value)
+    assert victim in msg, msg
+    assert "defalts" in msg, msg
+    # ⛔ and the message must not offer the exemption as a way out
+    assert "NEITHER IS AN EXEMPTION" in msg, msg
+    assert "WIDENING THE SCHEMA" in msg, msg
+
+
+def test_the_schema_witness_scope_is_exactly_what_the_docstring_claims():
+    """The docstring's four scope rows, as assertions rather than prose.
+
+    ⛔ Two of these four assert that the witness stays SILENT. They are not
+    slack — an undisclosed gap and a disclosed one look identical from outside,
+    and the third withdrawn predicate died on exactly the `^_state_` row below.
+    If a future change closes one of these, this test goes red and the docstring
+    has to be rewritten in the same commit.
+    """
+    # 1. renamed to a key the schema does not allow -> CAUGHT
+    with pytest.raises(gate._GateViolation):
+        _witness({"x/conf.d/_defaults.yaml": _WITNESS_RENAMED})
+
+    # 2. renamed onto an OPEN patternProperties prefix -> NOT caught
+    _witness({"x/conf.d/_defaults.yaml": _WITNESS_STATE_PREFIX})
+
+    # 3. re-nested under `defaults:` -> legal, and left legal
+    _witness({"x/conf.d/_defaults.yaml": _WITNESS_NESTED})
+
+    # 4. section deleted outright -> not this witness's business
+    _witness({"x/conf.d/_defaults.yaml": _WITNESS_NO_SECTION})
+
+    # …and the shapes the real tree actually has must stay silent (a witness
+    # that reddens on today's tree would be removed, not fixed).
+    _witness({"a/_defaults.yaml": _WITNESS_OK,
+              "b/_defaults.yaml": _WITNESS_PLACEHOLDER,
+              "c/_defaults.yaml": _WITNESS_NO_SECTION})
+
+
+def test_the_schema_witness_is_handed_the_tracked_scan_not_the_read_set(
+        monkeypatch):
+    """⛔ Wiring, and with the two sets made DIFFERENT so the answer discriminates.
+
+    `_DEFAULTS_ARTIFACT_EXEMPT` is empty today, so a caller passing the read set
+    instead would be indistinguishable on this tree. One exemption is injected
+    to separate them — a file from a four-artifact root, so no root empties and
+    no other floor speaks.
+    """
+    exempt = "tests/golden/fixtures/full-l0-l3/conf.d/db/mariadb/_defaults.yaml"
+    assert exempt in gate._tracked_defaults_artifacts(), "fixture moved"
+    monkeypatch.setattr(gate, "_DEFAULTS_ARTIFACT_EXEMPT",
+                        {exempt: "injected by this test"})
+
+    seen: list[list[str]] = []
+    monkeypatch.setattr(gate, "_assert_defaults_artifacts_match_schema",
+                        lambda rels, read=None: seen.append(list(rels)))
+    gate._defaults_faces()
+
+    assert seen, "the witness was not called at all"
+    assert exempt in seen[0], (
+        "the witness was handed the READ set — an exemption for a file whose "
+        "bytes must not change would then also buy it schema invisibility")
+    assert seen[0] == gate._tracked_defaults_artifacts(), seen[0]
+
+
+def test_the_schema_judgement_has_a_single_implementation(monkeypatch):
+    """The gate must call the sibling lint's function, not a local copy of it.
+
+    ⛔ Two copies of one judgement is how `iter_config_files` grew a second
+    opinion that outlived the first. Neutralising the sibling has to neutralise
+    the gate; if this test can be made green with a private re-implementation
+    here, the single-implementation claim in both docstrings is decorative.
+    """
+    import check_confd_schema
+
+    monkeypatch.setattr(check_confd_schema, "defaults_doc_violations",
+                        lambda rel, doc, schema, validator: ["SENTINEL-2c1f"])
+    with pytest.raises(gate._GateViolation) as exc:
+        _witness({"x/conf.d/_defaults.yaml": _WITNESS_OK})
+    assert "SENTINEL-2c1f" in str(exc.value), exc.value
+
+
 def test_the_tracked_root_universe_is_derived_from_the_index_not_from_the_pin(
         monkeypatch):
     """⛔ `_tracked_confd_roots` must READ the index, and nothing used to say so.
