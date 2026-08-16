@@ -3679,6 +3679,19 @@ def test_summary_wiring_line_reports_what_init_actually_did(
     # at the start of a step ("Paste the include above"), and pinning case
     # would make this test fail on rewording rather than on regression.
     haystack = summary.lower()
+    # ⛔ The needs-work marker is the bare ⚠️ glyph, which grades "is any step
+    # flagged" over the WHOLE summary. That was sound while CI wiring was the
+    # only thing that could warn. It no longer is: the apply stage now warns
+    # that cluster credentials are the customer's step, and that warning is
+    # true on every path including `--ci github` and greenfield — so an
+    # unscoped ⚠️ made six of these rows fail for a warning they are not
+    # about. Scope it to lines that name a CI artifact, which is what every
+    # wiring warning does and what no other step does.
+    _CI_PATH_HINTS = (".gitlab-ci.yml", ".gitlab-ci.d/", ".github/workflows/")
+    wiring = "\n".join(
+        ln for ln in summary.splitlines()
+        if any(hint in ln for hint in _CI_PATH_HINTS)
+    ).lower()
 
     if ci == "github":
         # ⛔ The `--ci github` summary had no assertion of any kind, which is
@@ -3695,7 +3708,7 @@ def test_summary_wiring_line_reports_what_init_actually_did(
             "--ci github mentioned the GitLab root shell, which this path "
             f"never writes.\n{summary}"
         )
-        assert paste_phrase not in haystack, (
+        assert paste_phrase not in wiring, (
             f"--ci github asked for GitLab wiring.\n{summary}")
         return
 
@@ -3708,7 +3721,7 @@ def test_summary_wiring_line_reports_what_init_actually_did(
             "a greenfield run described the root shell it just wrote as the "
             f"customer's pre-existing one.\nsummary was:\n{summary}"
         )
-        assert paste_phrase not in haystack, (
+        assert paste_phrase not in wiring, (
             "a greenfield run asked the customer to paste an include the "
             f"tool already wrote.\nsummary was:\n{summary}"
         )
@@ -3717,13 +3730,13 @@ def test_summary_wiring_line_reports_what_init_actually_did(
             "an already-wired root file did not get the nothing-to-do "
             f"sentence.\nsummary was:\n{summary}"
         )
-        assert paste_phrase not in haystack, (
+        assert paste_phrase not in wiring, (
             "the summary told a customer whose root file already includes "
             f"our pipeline to paste it again.\nsummary was:\n{summary}"
         )
     else:
         # Every remaining shape leaves the customer with work to do.
-        assert paste_phrase in haystack, (
+        assert paste_phrase in wiring, (
             f"shape {shape!r} did not flag that manual wiring is required."
             f"\n{summary}"
         )

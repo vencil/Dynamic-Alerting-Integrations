@@ -2678,6 +2678,36 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
         print(f"  {step}. Merge .pre-commit-config.da.yaml into your .pre-commit-config.yaml")
     step += 1
 
+    # ⛔ The apply stage cannot succeed as delivered and NOTHING said so. Every
+    # deploy method's apply job talks to a cluster (or to an Argo CD server),
+    # and the generator emits no `KUBECONFIG`, no secret reference, no login
+    # step — by design, because those are the customer's own credentials. But
+    # "by design" was only ever true inside this file: the summary listed
+    # thresholds, pre-commit and CI wiring, then said "commit and push",
+    # leaving the first manual deploy to fail with `connection refused` (or
+    # `argocd: not logged in`) and nothing to connect that to a missing step.
+    #
+    # ⚠️ Deliberately named as a step rather than half-wired: a guessed secret
+    # name is a wrong answer that looks like an answer, and credentials are the
+    # one thing this tool must not invent.
+    _apply_needs = {
+        'kustomize': ('kubectl / kustomize', 'KUBECONFIG'),
+        'helm': ('helm', 'KUBECONFIG'),
+        'argocd': ('argocd', 'ARGOCD_SERVER + ARGOCD_AUTH_TOKEN'),
+    }.get(config.get('deploy'), ('kubectl', 'KUBECONFIG'))
+    if is_zh:
+        print(f"  {step}. ⚠️ Apply 階段需要你自己提供叢集憑證——產生出來的 "
+              f"pipeline 刻意不含任何憑證。請在你的 CI 設定 "
+              f"{_apply_needs[1]}（{_apply_needs[0]} 會用到），"
+              f"否則第一次手動部署會直接連線失敗")
+    else:
+        print(f"  {step}. ⚠️ The apply stage needs cluster credentials you "
+              f"supply — the generated pipeline deliberately contains none. "
+              f"Set {_apply_needs[1]} in your CI (that is what "
+              f"{_apply_needs[0]} uses), or the first manual deploy fails on "
+              f"connection")
+    step += 1
+
     # ── CI wiring (#1357) ──────────────────────────────────
     # ⛔ "Did we write it" comes from `created`, never from the disk: by the
     # time this runs the file exists either way, so a second existence check

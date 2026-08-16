@@ -3601,3 +3601,55 @@ class TestShippedStageNumbersMatchTheDeclaredStages:
         assert max(banners) <= len(declared), (
             f'出貨檔案宣告 {declared} 卻有 Stage {max(banners)} 的區段註解:\n'
             f'{text}')
+
+
+class TestTheApplyStageAdmitsItNeedsCredentials:
+    """⛔ 第七輪盲審 lens W：apply 階段以出貨狀態不可能成功，而沒有任何一句話說。
+
+    六種（平台 × 部署方式）組合的 apply job 都要跟叢集或 Argo CD server 講話，
+    產生器**刻意**不放任何憑證——那是對的，憑證是這個工具最不該發明的東西。
+    問題是「刻意」這件事只寫在原始碼註解裡：結尾訊息列了閾值、pre-commit、CI
+    接線，然後說「commit 並推送」，於是第一次手動部署以 `connection refused`
+    收場，而沒有任何東西把它連到一個沒做的步驟。
+
+    ⚠️ 這條釘的是「有講」，不是「有接好」。半接一個猜出來的 secret 名稱是一個
+    看起來像答案的錯答案。
+    """
+
+    @pytest.mark.parametrize('deploy,needle', [
+        ('kustomize', 'KUBECONFIG'),
+        ('helm', 'KUBECONFIG'),
+        ('argocd', 'ARGOCD_AUTH_TOKEN'),
+    ])
+    @pytest.mark.parametrize('lang', ['en', 'zh'])
+    def test_the_summary_names_the_credential_the_apply_stage_needs(
+            self, deploy, needle, lang, monkeypatch):
+        import contextlib
+        import io
+        monkeypatch.setenv('DA_LANG', lang)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = {
+                'ci': 'github', 'deploy': deploy,
+                'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+            }
+            created = ip.run_init(config, tmpdir)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ip._print_summary(created, tmpdir, config)
+            out = buf.getvalue()
+        assert needle in out, (
+            f'{deploy}/{lang}: 結尾訊息沒有點名 apply 需要的憑證——客戶會在'
+            f'第一次部署撞上 connection refused 而沒有線索。\n{out}')
+
+    def test_the_generator_still_supplies_no_credential_of_its_own(self):
+        """反向：說明歸說明，產生器不得開始猜 secret 名稱塞進 YAML。"""
+        for deploy in ('kustomize', 'helm', 'argocd'):
+            wf = ip._gen_github_actions(
+                'monitoring', 'ghcr.io/vencil/da-tools:latest', deploy)
+            gl = ip._gen_gitlab_ci(
+                'monitoring', 'ghcr.io/vencil/da-tools:latest', deploy)
+            for text, label in ((wf, 'github'), (gl, 'gitlab')):
+                assert 'KUBECONFIG' not in text, (deploy, label, text)
+                assert 'ARGOCD_AUTH_TOKEN' not in text, (deploy, label, text)
