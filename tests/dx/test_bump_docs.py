@@ -2536,3 +2536,164 @@ class TestRoundSixSurvivors:
                 "真的窄化過的子集不該被拿來判定整條 glob 的健康度")
         finally:
             bump_docs.REPO_ROOT = old_root
+
+
+class TestBareCheckAndGlobGroupIntegrity:
+    """第六輪盲審 lens U（純變異）存活者的補釘。
+
+    這一組的共同形狀：**產品碼是對的，沒有任何測試在看它**。四條各對應一個
+    在 HEAD 上實測存活的變異，殺傷力從「`make version-check` 的本業失效」到
+    「GLOB-DEAD 這個診斷整個被關掉而畫面全綠」。
+    """
+
+    def _probe_repo(self, tmp_path, monkeypatch, rules):
+        """把 REPO_ROOT 指到 tmp_path，六條線的 SSOT 都固定回 2.9.0。"""
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(bump_docs, "read_current_versions",
+                            lambda: {line: "2.9.0"
+                                     for line in bump_docs.VERSION_LINES})
+        monkeypatch.setattr(bump_docs, "_build_rules", lambda: {
+            line: ([dict(r) for r in rules] if line == "platform" else [])
+            for line in bump_docs.VERSION_LINES})
+
+    def test_bare_check_exits_nonzero_on_plain_drift(
+            self, tmp_path, monkeypatch, capsys, cli_argv):
+        """⛔ `make version-check` 的**本業**——單純的版號 drift——沒有被釘住。
+
+        `TestEveryDiagnosisIsWiredIntoEveryGatingMode` 涵蓋了 MISSING / DEAD /
+        GLOB-EMPTY / GLOB-DEAD 四種「規則壞了」的診斷，卻沒有涵蓋最原始的那
+        一種：規則好好的，檔案裡的版號就是舊的。
+
+        實測（把 UPDATE 分支的 `has_drift = True` 拿掉，整份測試全綠）：在
+        真的 repo 上把 README front matter 改成 v2.8.4，bare `--check` 印出
+
+            DRIFT  [platform] front matter version: …: v2.8.4 → v2.9.0
+            ✅ All version references are consistent.
+
+        然後 exit 0。`make version-check` 與 `make pre-tag` 走的就是這條路徑。
+        """
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "there.md").write_text("v2.8.0\n", encoding="utf-8")
+        self._probe_repo(tmp_path, monkeypatch, [{
+            "file": "docs/there.md", "desc": "probe drift",
+            "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"v{v}",
+        }])
+        cli_argv("bump_docs", "--check")
+        with pytest.raises(SystemExit) as exc:
+            bump_docs.main()
+        out = capsys.readouterr().out
+        assert "DRIFT" in out, out
+        assert exc.value.code != 0, (
+            "bare --check 印了 DRIFT 還是 exit 0——`make version-check` 的本業"
+            f"就是這個。\n{out}")
+        # ⛔ 印出診斷與結束碼必須同進退。上面那個變異的畫面是自相矛盾的：
+        # DRIFT 一行、成功一行。只斷言結束碼的話，換一種寫法（先印再吞）
+        # 仍然過得去。
+        assert "All version references are consistent" not in out, (
+            f"同一次執行既印 DRIFT 又宣告一致：\n{out}")
+
+    def test_a_dead_glob_is_not_hidden_by_a_healthy_one(
+            self, tmp_path, monkeypatch):
+        """⛔ GLOB-DEAD 是 group 層級的診斷，而 group 的**身分鍵**沒有被釘住。
+
+        實測：把 `_glob_id()` 改成 `return "glob"`（每條 glob 收斂成同一個
+        group），在真的 repo 上把 `doc footer **Document version:**` 這條
+        glob 的 pattern 弄死——
+
+            HEAD          : rc=1，1 ❌ GLOB-DEAD
+            _glob_id 塌掉  : rc=0，0 ❌ GLOB-DEAD
+
+        ——因為另外七條 docs glob 的命中數被算進同一個 group。整份測試全綠：
+        既有的 GLOB-DEAD 測試都只放**一條** glob 進去，而一條的時候塌不塌
+        沒有差別。
+        """
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "a.md").write_text("v2.8.0\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        healthy = {
+            "file": "__glob__", "glob_dir": "docs", "glob_pattern": "**/*.md",
+            "desc": "probe healthy glob",
+            "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"v{v}",
+        }
+        dead = {
+            "file": "__glob__", "glob_dir": "docs", "glob_pattern": "**/*.md",
+            "desc": "probe dead glob",
+            "pattern": r"\*\*絕不出現\*\*：v[0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"**絕不出現**：v{v}",
+        }
+        assert bump_docs._glob_id(healthy) != bump_docs._glob_id(dead), (
+            "兩條掃同一棵樹、但驅動不同 pattern 的 glob 拿到同一個 group id")
+        changes = bump_docs.apply_rules(
+            bump_docs._expand_glob_rules([dict(healthy), dict(dead)]),
+            "9.9.9", check_only=True)
+        dead_groups = [c[1] for c in changes if c[0] == "GLOB-DEAD"]
+        assert dead_groups == ["probe dead glob"], (
+            "健康的那條 glob 把死掉的那條蓋掉了——group 身分鍵一旦塌掉，"
+            f"GLOB-DEAD 就再也不會出聲。實得 {dead_groups}")
+
+    def test_every_glob_scans_its_whole_tree(self):
+        """⛔ 把 `docs` 那組 glob 的 pattern 從 `**/*.md` 收窄成
+        `internal/**/*.md`，整份測試全綠：
+
+            --what-if : 2323 → 2118 條規則（少 205 條，七種診斷仍全 0）
+            --platform 9.9.9 --dry-run : 341 → 151 個檔案（少 190 個）
+
+        這正是 #1407 本身的失效模式（一批檔案的版號就地凍結，而每一道閘門
+        都說綠），只是發生在 glob 的**廣度**而不是它的存在與否。既有的釘全都
+        擋不住：數量下限數的是「幾條 glob」、`>= 20` 的檔案下限對
+        `docs/internal/**` 仍然成立。
+
+        glob 的合約就是「掃整棵樹」——要窄的東西寫成 hand-written 規則。
+        """
+        rooted = [r for rules in bump_docs._build_rules().values()
+                  for r in rules if r.get("file") == "__glob__"]
+        assert rooted, "一條 glob 規則都沒有了"
+        narrowed = [(r["glob_dir"], r["glob_pattern"], r["desc"])
+                    for r in rooted if not r["glob_pattern"].startswith("**/")]
+        assert not narrowed, (
+            "有 glob 規則不再掃整棵樹——被排除的那些檔案沒有任何診斷會提到"
+            f"它們，版號就地凍結：{narrowed}")
+
+        # ⛔ 形狀釘之外再加一條行為釘：docs 的 front matter glob 今天必須真的
+        # 驅動 `docs/internal/` **以外**的檔案。只釘 pattern 前綴的話，換成
+        # 把 glob_dir 改成 `docs/internal` 一樣能繞過去。
+        probe = "\nversion: v2.9.0\n"
+        front = [r for r in rooted if r["glob_dir"] == "docs"
+                 and re.search(r["pattern"], probe)]
+        assert len(front) == 1, [r["desc"] for r in front]
+        outside = [e["file"] for e in bump_docs._expand_glob_rules(
+            [dict(front[0])]) if not e["file"].startswith("docs/internal/")]
+        assert len(outside) >= 100, (
+            f"`{front[0]['desc']}` 在 docs/internal/ 之外只剩 {len(outside)} "
+            "個檔案——這條 glob 正在被收窄。")
+
+    def test_a_whole_file_rule_counts_toward_its_glob_group(
+            self, tmp_path, monkeypatch):
+        """⛔ glob 展開出來的 whole-file 規則若記 0 命中，會讓一條**正在正常
+        改寫檔案**的 glob 被判 GLOB-DEAD。
+
+        實測（`_note_glob(rule, 1)` → `_note_glob(rule, 0)`）：同一次執行同時
+        印出 `UPDATE probe whole-file glob in docs/VERSION.md` 與
+        `GLOB-DEAD probe whole-file glob … matched NOTHING in ANY of them`。
+        這是**假紅**——合法的 release bump 會被自己的閘門擋下來。
+
+        今天 repo 裡沒有任何 whole-file 落在 glob 底下（所以這條變異在真 repo
+        上看不出來），但 `whole_file` + `__glob__` 是規則 schema 支援的組合，
+        而那個分支的存在理由就是要處理它。沒有測試的分支等於沒有行為。
+        """
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "VERSION.md").write_text("v2.8.0\n",
+                                                      encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        changes = bump_docs.apply_rules(bump_docs._expand_glob_rules([{
+            "file": "__glob__", "glob_dir": "docs", "glob_pattern": "**/*.md",
+            "desc": "probe whole-file glob", "whole_file": True,
+            "replacement": lambda v: f"v{v}",
+        }]), "9.9.9", check_only=True)
+        statuses = [c[0] for c in changes]
+        assert "UPDATE" in statuses, changes
+        assert "GLOB-DEAD" not in statuses, (
+            "一條正在改寫檔案的 whole-file glob 被判定為死的——假紅會擋下"
+            f"合法的 release bump。實得 {changes}")

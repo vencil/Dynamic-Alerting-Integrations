@@ -717,7 +717,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "529d4a8873f3cf0377c6df72a26e3fcc86cd0d287b7b32c4b77ac920f7cfbed1",
+ "source_digest": "a7a50a05fd0bd22c02df8b2ef335e5c2bfd0456879e79007cb1816458fd1702e",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -1433,6 +1433,7 @@
   ],
   "docs/internal": [
    "tests/dx/test_add_frontmatter.py",
+   "tests/dx/test_bump_docs.py",
    "tests/dx/test_bump_playbook_versions.py",
    "tests/dx/test_doc_coverage.py",
    "tests/dx/test_generate_doc_map.py",
