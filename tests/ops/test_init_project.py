@@ -3469,6 +3469,40 @@ class TestSubdirectoryContentsAreNotOnlyAPlacementProblem:
         assert 'alerting/.gitlab-ci.d/dynamic-alerting.yml' in gl
         assert '.github/workflows' not in gl.split('Not done yet')[-1]
 
+    def test_a_leftover_file_from_an_earlier_run_is_not_listed(self):
+        """⛔ 上面那條在「檔案不存在」時是恆真的，因此擋不住 `ci_sel` 過濾被
+        拿掉——實測把它改成 `('gitlab', 'both', 'github')` 仍然全綠。
+
+        真正會分辨的情境是**再跑一次 init 但縮小 `--ci`**：目錄裡還留著上一次
+        `--ci both` 寫下的 GitLab pipeline。這一次沒有產生它、也沒有要求客戶
+        接線它，把它列進「你還要改這些路徑」只會指派一件本次根本沒發生的工作。
+        """
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = _P(tmpdir) / 'repo'
+            (repo / '.git').mkdir(parents=True)
+            sub = repo / 'alerting'
+            sub.mkdir()
+            stale = sub / ip._GL_PIPELINE_REL
+            stale.parent.mkdir(parents=True, exist_ok=True)
+            stale.write_text(
+                'stages: [validate]\n'
+                'job:\n  stage: validate\n  script: [true]\n'
+                '  rules:\n    - changes: [stale-tree/**/*]\n',
+                encoding='utf-8', newline='\n')
+            config = dict(self._CONFIG, ci='github')
+            created = ip.run_init(config, str(sub))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ip._print_summary(created, str(sub), config)
+            out = buf.getvalue()
+        assert 'Not done yet' in out, out
+        assert 'stale-tree/**/*' not in out, (
+            '`--ci github` 的結尾訊息列出了上一次執行留下的 GitLab pipeline '
+            f'裡的 path filter——這一次既沒產生它也沒要求接線它。\n{out}')
+
     def test_an_install_at_the_repo_root_says_nothing_of_the_kind(self):
         """反空洞：根目錄安裝沒有這個問題，這一段不該出現。"""
         with tempfile.TemporaryDirectory() as tmpdir:
