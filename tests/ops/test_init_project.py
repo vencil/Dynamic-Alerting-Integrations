@@ -3653,3 +3653,413 @@ class TestTheApplyStageAdmitsItNeedsCredentials:
             for text, label in ((wf, 'github'), (gl, 'gitlab')):
                 assert 'KUBECONFIG' not in text, (deploy, label, text)
                 assert 'ARGOCD_AUTH_TOKEN' not in text, (deploy, label, text)
+
+
+class TestEnclosingRepoRootIsTheBasisOfEverySubdirClaim:
+    """⛔ 第七輪盲審 lens Y：所有子目錄宣稱的**基礎**沒有守衛。
+
+    `_enclosing_repo_root` 的三個消費端都被釘得很緊，這個原語本身沒有——所以
+    它可以被改成把「在 repo 根」說成「在子目錄」（反過來也行），而整份測試全綠。
+    三個實測存活的變異各對應下面一條，兩條的後果是**把 #1357 重造一次並認證**。
+    """
+
+    def _root(self, tmp, sub=''):
+        from pathlib import Path as _P
+        return ip._enclosing_repo_root(str(_P(tmp) / sub) if sub else str(tmp))
+
+    def test_the_repo_root_itself_is_not_a_subdirectory(self):
+        """⛔ `for candidate in (here, *here.parents)` 的第一項。
+
+        拿掉 `here` 之後，一個**巢狀在別的 git 目錄裡**的 repo（很常見：把
+        clone 放在另一個受版控的目錄下）會被判成子目錄安裝：實測不再寫根
+        `.gitlab-ci.yml`（12 → 11 個檔案），並印出兩句假警告
+        （「⚠️ GitHub is NOT wired … Move `repo/.github/workflows/…`」）——
+        對一個**確實**在 repo 根跑的執行。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            outer = _P(tmpdir) / 'outer'
+            (outer / '.git').mkdir(parents=True)
+            inner = outer / 'inner'
+            (inner / '.git').mkdir(parents=True)
+            assert ip._enclosing_repo_root(str(inner)) is None, (
+                '一個自己就是 repo 根的目錄被判成別人的子目錄')
+            assert ip._enclosing_repo_root(str(inner / 'a')) == inner
+
+    def test_a_git_file_worktree_is_still_a_repository_root(self):
+        """⛔ `.git` 是**檔案**的情形：git worktree 與 submodule 都是。
+
+        `.exists()` → `.is_dir()` 之後，`-o alerting/` 在這種 repo 裡實測從
+        11 個檔案 + 正確的兩句警告，變成 **12 個檔案**（在子目錄裡種下一份
+        GitLab 永遠不會載入的 `.gitlab-ci.yml`）+「GitHub wiring done」+
+        「GitLab wiring done」+「will automatically validate your config」。
+        #1357 完整重造並認證。
+
+        ⚠️ 這不是罕見形狀——本專案自己的盲審就是在 worktree 裡跑的。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            repo = _P(tmpdir) / 'repo'
+            (repo / 'alerting').mkdir(parents=True)
+            (repo / '.git').write_text(
+                'gitdir: /elsewhere/.git/worktrees/x\n',
+                encoding='utf-8', newline='\n')
+            assert ip._enclosing_repo_root(str(repo / 'alerting')) == repo, (
+                '`.git` 是檔案（worktree / submodule）時沒有被認出是 repo 根'
+                '——子目錄安裝會被當成根安裝並發出全綠宣告')
+
+    def test_the_search_does_not_stop_one_level_up(self):
+        """⛔ `here.parents[:1]`：`-o a/b/`（兩層）就找不到 repo 根。
+
+        實測同樣是 11 → 12 個檔案 + 兩句「wiring done」+「will automatically
+        validate」。深度 ≥2 的輸出目錄不是特例，是 `-o infra/alerting/` 這種
+        很自然的擺法。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            repo = _P(tmpdir) / 'repo'
+            (repo / '.git').mkdir(parents=True)
+            deep = repo / 'a' / 'b'
+            deep.mkdir(parents=True)
+            assert ip._enclosing_repo_root(str(deep)) == repo, (
+                '兩層深的輸出目錄找不到 repo 根')
+
+    def test_no_git_anywhere_is_not_a_subdirectory(self):
+        """反向：完全不在 repo 裡時必須回 None，否則每一次 greenfield 都會
+        被掛上子目錄警告。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assert ip._enclosing_repo_root(tmpdir) is None
+
+
+class TestTheClassifierEdgesThatProduceAFalseAllClear:
+    """⛔ lens Y：五個存活變異，後果都是對一條 GitLab 永遠不會載入的 pipeline
+    宣告「已接好、什麼都不用做」——#1357 本身的形狀。
+    """
+
+    _WANT = '.gitlab-ci.d/dynamic-alerting.yml'
+
+    def test_a_path_gitlab_does_not_resolve_is_not_already_wired(self):
+        """⛔ 正規化不得比 GitLab 本身**寬**。
+
+        GitLab 做的是 `remove_leading_slashes`——它不砍尾端斜線。給正規化加上
+        `.rstrip('/')` 之後，一個寫成 `- local: .gitlab-ci.d/dynamic-alerting.yml/`
+        （GitLab 解析不到的路徑）的 repo 實測得到「GitLab wiring already in
+        place … nothing to do」+「will automatically validate your config」。
+        """
+        assert ip._gitlab_include_path('/' + self._WANT) == self._WANT
+        assert ip._gitlab_include_path('//' + self._WANT) == self._WANT, (
+            'GitLab 的 remove_leading_slashes 砍的是「所有」前導斜線，'
+            '正規化只砍一個會讓正確接線的 repo 被反覆要求再接一次')
+        assert ip._gitlab_include_path('./' + self._WANT) == self._WANT
+        assert ip._gitlab_include_path(self._WANT + '/') != self._WANT, (
+            '尾端斜線被砍掉了——那讓一個 GitLab 解析不到的路徑被認證為已接線')
+
+    def test_an_unparseable_root_file_is_not_treated_as_wired(self):
+        """⛔ `_gitlab_root_includes` 的 `YAMLError` 腿必須 fail-CLOSED。
+
+        回 True 之後，`-o alerting/` 搭配一份**解析不了**的 repo 根 pipeline
+        實測印出「GitLab wiring already in place: the repository-root
+        .gitlab-ci.yml already includes `alerting/…` … nothing to do」——一句
+        由一個沒能解析的檔案推導出來的全綠宣告。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            repo = _P(tmpdir) / 'repo'
+            (repo / 'alerting').mkdir(parents=True)
+            (repo / '.gitlab-ci.yml').write_text(
+                'job:\n  script:\n    - !reference [.x, script]\n',
+                encoding='utf-8', newline='\n')
+            assert ip._gitlab_root_includes(repo, repo / 'alerting') is False, (
+                '解析不了的 repo 根檔被當成「已經 include 我們」')
+
+    def test_a_root_file_with_no_trailing_newline_keeps_the_safe_path(self):
+        """⛔ 試貼後置條件必須自己補分隔換行。
+
+        少了 `'\\n'` 之後，一份**沒有結尾換行**且沒有 `include:` 的根檔會從
+        「可以安全附加，這是現成區塊」掉到「形狀無法安全附加」的端狀態範例。
+        不是資料損毀，但唯一一條 paste-ready 路徑對所有缺 EOF 換行的檔案消失
+        ——而缺 EOF 換行正是本 repo dev-rule #11 說到會被踩的那種檔案。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            repo = _P(tmpdir) / 'repo'
+            repo.mkdir()
+            (repo / '.gitlab-ci.yml').write_text(
+                'stages:\n  - build', encoding='utf-8', newline='\n')
+            assert ip._classify_root_file(
+                repo / ip._GL_ROOT_SHELL_REL, self._WANT) == \
+                ip._GL_ROOT_NEEDS_INCLUDE, (
+                    '沒有結尾換行的根檔失去了唯一一條可安全附加的路徑')
+
+    def test_an_include_nested_under_a_job_is_not_a_top_level_include(self):
+        """⛔ 解析失敗後的行掃描必須錨在行首。
+
+        少了 `^` 之後，一份用 `!reference` 而解析不了、且唯一的 `include:` 是
+        **巢狀在某個 job 底下**的根檔，實測從「⚠️ 你的根 .gitlab-ci.yml 解析
+        不了」變成「⚠️ 你的根 .gitlab-ci.yml 已經有 `include:`」——斷言一個
+        不存在的 top-level key，並要客戶去找它。
+        """
+        assert ip._GL_INCLUDE_KEY_RE.search('include: a.yml\n')
+        assert ip._GL_INCLUDE_KEY_RE.search('x: 1\ninclude:\n  - a.yml\n')
+        assert not ip._GL_INCLUDE_KEY_RE.search(
+            'job:\n  variables:\n    include: nope\n'), (
+                '巢狀在 job 底下的 include: 被當成 top-level key')
+
+    def test_the_subdirectory_snippet_is_a_valid_include_entry(self):
+        """子目錄用的那對 helper（`_gl_block_for` / `_gl_example_for`）產出的
+        內容，必須是 GitLab 解析得到的 include 條目。
+
+        ⚠️ **這條釘的不是 `local:` 這個 key。** 盲審把「拿掉 `local:`」報成
+        缺陷（說裸字串不是合法 include、客戶貼完仍然不會載入），查證後不成立：
+        GitLab 文件明寫 `include:` 接受純字串與字串陣列，本地路徑等同
+        `include:local`（`doc/ci/yaml/includes.md`）。本檔案自己的
+        `_gitlab_declared_includes` 早就照這個語意實作。所以那個變異是等價的，
+        已殺掉——留下的是真正該釘的性質：印出來的東西 parse 得出來，而且
+        `_gitlab_declared_includes` 在裡面找得到我們要的路徑。
+
+        縮排那一段是**渲染一致性**釘，不是正確性釘：4 空格的 block sequence
+        同樣是合法 YAML。它擋的是無意的漂移，不是客戶會踩的破口。
+        """
+        want = 'alerting/.gitlab-ci.d/dynamic-alerting.yml'
+        for text in (ip._gl_block_for(want), ip._gl_example_for(want)):
+            doc = yaml.safe_load(text.replace(
+                '<keep your existing entries here>', 'other.yml'))
+            assert isinstance(doc, dict) and 'include' in doc, text
+            assert want in ip._gitlab_declared_includes(doc), (
+                f'子目錄片段沒有宣告一個 GitLab 認得的 local include:\n{text}')
+        # 縮排也是合約的一部分：範例被拿來對照客戶自己的檔案。
+        items = [ln for ln in ip._gl_example_for(want).splitlines()
+                 if ln.lstrip().startswith('- ')]
+        assert items and all(ln.startswith('  - ') for ln in items), items
+
+
+class TestTheCliLayerItself:
+    """⛔ 第七輪盲審 lens Y 最大的一個破口：`main()` / `_build_config_from_args`
+    / `_validate_config` / `_check_existing_init` / parser 預設值這一層**幾乎
+    零覆蓋**——127 個變異裡 13 個實測存活者住在這裡。
+
+    形狀是：所有從 `config` dict 往下的東西（`run_init` / `_preview_files` /
+    `_print_summary`）被釘得非常緊，而**把 CLI 參數變成那個 dict** 的那一層
+    沒有。後果分兩類：改掉客戶實際收到什麼（預設值），以及把必要參數檢查整個
+    反轉（合法輸入被拒 / 非法輸入被收下）。
+
+    ⚠️ 全部走 `subprocess`，因為要釘的正是 `main()` 那一層的結束碼與 stderr。
+    """
+
+    _SCRIPT = None
+
+    @classmethod
+    def setup_class(cls):
+        from pathlib import Path as _P
+        cls._SCRIPT = _P(ip.__file__)
+
+    def _run(self, tmpdir, *args):
+        import subprocess
+        return subprocess.run(
+            [sys.executable, str(self._SCRIPT), '-o', str(tmpdir), *args],
+            capture_output=True, text=True, timeout=300)
+
+    def _files(self, tmpdir):
+        from pathlib import Path as _P
+        return sorted(p.relative_to(tmpdir).as_posix()
+                      for p in _P(tmpdir).rglob('*') if p.is_file())
+
+    # ── 非互動判定：少算一個旗標就掉進互動提示，CI 裡直接死 ──────────
+    @pytest.mark.parametrize('flag,value', [
+        ('--deploy', 'helm'),
+        ('--ci', 'github'),
+        ('--rule-packs', 'mariadb'),
+        ('--tenants', 'db-a'),
+    ])
+    def test_any_single_generating_flag_means_non_interactive(
+            self, flag, value):
+        """⛔ `has_cli_args` 少算 `--deploy`（或 `--ci`）之後，
+        `da-tools init --deploy helm` 從 rc=0 / 8 個檔案變成 **rc=1 / 0 個
+        檔案**——掉進互動提示，然後在關閉的 stdin 上死掉。
+
+        四個旗標各自都必須足以構成「這是非互動呼叫」。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, flag, value)
+            assert r.returncode == 0, (
+                f'{flag} {value} 沒有被當成非互動呼叫\n'
+                f'rc={r.returncode}\n{r.stderr[-600:]}')
+            assert self._files(tmpdir), '沒有產生任何檔案'
+
+    # ── 必要參數檢查：兩個方向都要對 ────────────────────────────────
+    def test_non_interactive_without_tenants_is_a_caller_error(self):
+        """⛔ 拿掉這個守衛之後 `--non-interactive` 單獨呼叫從 rc=2 變 rc=0，
+        並**靜默地為兩個憑空發明的租戶 `db-a,db-b` 產生 12 個檔案**。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--non-interactive')
+            assert r.returncode == 2, (r.returncode, r.stderr[-400:])
+            assert not self._files(tmpdir), self._files(tmpdir)
+
+    def test_git_config_source_requires_a_repo_url(self):
+        """⛔ 這個檢查被反轉過（`not args.git_repo` → `args.git_repo`）而全綠：
+        **附了 URL** 的合法呼叫變成 rc=2 / 0 個檔案，錯誤訊息還說少了那個
+        URL。兩個方向都釘。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a',
+                          '--config-source', 'git')
+            assert r.returncode == 2, (r.returncode, r.stderr[-400:])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a',
+                          '--config-source', 'git',
+                          '--git-repo', 'https://example.com/x.git')
+            assert r.returncode == 0, (
+                '附了 --git-repo 的合法呼叫被拒絕\n'
+                f'rc={r.returncode}\n{r.stderr[-600:]}')
+            assert self._files(tmpdir)
+
+    def test_an_unknown_rule_pack_is_rejected(self):
+        """⛔ `invalid = []` 之後，`--rule-packs bogus` 從 rc=2 / 0 個檔案變成
+        **rc=0 / 9 個檔案**，`defaults:` 是空的——一份什麼都不會告警的配置。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a',
+                          '--rule-packs', 'bogus')
+            assert r.returncode == 2, (r.returncode, r.stdout[-400:])
+            assert not self._files(tmpdir)
+
+    def test_an_auto_enabled_pack_is_accepted_on_the_cli(self):
+        """⛔ 反向：自動啟用的 pack 必須仍可在 CLI 上指名。
+
+        拿掉那道過濾之後 `--rule-packs platform,mariadb` 變成 rc=2
+        「Unknown Rule Packs: platform」——一個工具自己會自動啟用的 pack。
+        """
+        auto = ip._auto_enabled_rule_packs()
+        assert auto, '沒有 auto-enabled pack，這條測試就空了'
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a',
+                          '--rule-packs', f'{sorted(auto)[0]},mariadb')
+            assert r.returncode == 0, (
+                f'auto-enabled pack {sorted(auto)[0]!r} 在 CLI 上被拒絕\n'
+                f'{r.stderr[-600:]}')
+
+    def test_the_auto_filter_keeps_the_selectable_packs(self):
+        """⛔ 過濾條件從 `not in auto` 反轉成 `in auto` 之後，
+        `--rule-packs mariadb,redis` 產出 `rule_packs: []`、`# Rule Packs:`
+        空白，而 `defaults:` 裡 **mariadb 與 redis 的每一條閾值都不見了**。
+        47 個情境都受影響，而且全綠。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a',
+                          '--rule-packs', 'mariadb,redis')
+            assert r.returncode == 0, r.stderr[-400:]
+            from pathlib import Path as _P
+            marker = yaml.safe_load(
+                (_P(tmpdir) / '.da-init.yaml').read_text(encoding='utf-8'))
+            assert 'mariadb' in marker['rule_packs'], marker
+            assert 'redis' in marker['rule_packs'], marker
+
+    def test_tenant_names_are_stripped_before_validation(self):
+        """⛔ 少了 `.strip()`：`--tenants " db-a , db-b "` 從 rc=0 / 10 個檔案
+        變成 rc=2 / **0 個檔案**，錯誤是「Invalid tenant names (K8s
+        convention)」——一個人手打的空白就讓整次呼叫失敗。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--non-interactive',
+                          '--tenants', ' db-a , db-b ')
+            assert r.returncode == 0, (
+                f'租戶名稱前後的空白沒有被剝掉\nrc={r.returncode}\n'
+                f'{r.stderr[-600:]}')
+            from pathlib import Path as _P
+            assert (_P(tmpdir) / 'conf.d' / 'db-a.yaml').exists()
+            assert (_P(tmpdir) / 'conf.d' / 'db-b.yaml').exists()
+
+    # ── parser 預設值：改一個字就換掉客戶收到的整棵樹 ────────────────
+    def test_the_shipped_defaults_are_what_they_claim(self):
+        """⛔ 四個預設值全部沒有被釘住，而每一個都直接決定客戶收到什麼：
+
+            --ci      both → github      : 少 2 個檔案，GitLab 腿整個消失
+            --deploy  kustomize → helm   : kustomize/ 四個檔案消失，
+                                           apply 階段從 kubectl 換成 helm
+            --rule-packs mariadb,kubernetes → mariadb
+                                         : _defaults.yaml 少三條 container_* 閾值
+            --tenants db-a,db-b → db-a   : 少一個租戶檔
+
+        釘在 parser 上（單一來源），而不是逐條比對產出的檔案清單。
+        """
+        parser = ip._build_parser()
+        defaults = {a.dest: a.default for a in parser._actions}
+        assert defaults['ci'] is None and defaults['deploy'] is None, (
+            'CI/deploy 的預設值搬到 argparse 了——那會讓 `has_cli_args` 恆真，'
+            '互動流程從此不可達', defaults)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a')
+            assert r.returncode == 0, r.stderr[-400:]
+            from pathlib import Path as _P
+            marker = yaml.safe_load(
+                (_P(tmpdir) / '.da-init.yaml').read_text(encoding='utf-8'))
+        assert marker['ci_platform'] == 'both', marker
+        assert marker['deploy_method'] == 'kustomize', marker
+        assert 'mariadb' in marker['rule_packs'], marker
+        assert 'kubernetes' in marker['rule_packs'], marker
+
+    def test_the_default_tenants_are_two_not_one(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = self._run(tmpdir, '--ci', 'github')
+            assert r.returncode == 0, r.stderr[-400:]
+            from pathlib import Path as _P
+            names = sorted(p.stem for p in (_P(tmpdir) / 'conf.d').iterdir()
+                           if not p.stem.startswith('_'))
+            assert names == ['db-a', 'db-b'], names
+
+    # ── 已初始化目錄：結束碼與閘門順序都是合約 ──────────────────────
+    def test_reinit_without_force_is_a_violation_not_a_caller_error(self):
+        """⛔ `EXIT_VIOLATION` → `EXIT_CALLER_ERROR` 存活：結束碼 1 → 2 而全綠。
+
+        兩者意思不同（1 = 你的樹的狀態擋住了；2 = 你的命令列寫錯了），呼叫端
+        腳本會照這個分。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assert self._run(tmpdir, '--non-interactive',
+                             '--tenants', 'db-a').returncode == 0
+            again = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a')
+            assert again.returncode == ip.EXIT_VIOLATION, (
+                again.returncode, again.stderr[-400:])
+            assert '--force' in again.stderr
+
+    def test_the_already_initialized_gate_runs_before_argument_validation(self):
+        """⛔ 兩個閘門的先後是合約，而它是自由的：把 `_check_existing_init`
+        搬到驗證之後，已初始化的目錄 + `--rule-packs bogus` 從
+        「already initialized … Use --force」變成「Unknown Rule Packs」。
+
+        先講樹的狀態才對——那是客戶下一步要處理的東西，而參數在他刪掉 marker
+        之前根本不會被用到。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assert self._run(tmpdir, '--non-interactive',
+                             '--tenants', 'db-a').returncode == 0
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a',
+                          '--rule-packs', 'bogus')
+            assert 'already initialized' in r.stderr, r.stderr[-500:]
+            assert r.returncode == ip.EXIT_VIOLATION, r.returncode
+
+    def test_a_marker_that_is_a_directory_does_not_crash(self):
+        """⛔ `.da-init.yaml` 是**目錄**時，`.is_file()` 讓它繞過守衛，然後在
+        寫了 11 個檔案之後以裸 `IsADirectoryError` traceback 死掉。
+
+        這條釘的是「不得半寫後崩潰」，不預設哪一種收場才對。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            (_P(tmpdir) / '.da-init.yaml').mkdir()
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a')
+            assert 'Traceback' not in r.stderr, (
+                '.da-init.yaml 是目錄時以未處理的例外收場\n'
+                f'{r.stderr[-800:]}')
+            assert r.returncode == ip.EXIT_VIOLATION, r.returncode
+            assert '.da-init.yaml' in r.stderr, r.stderr[-400:]
+            # ⛔ 而且不得半寫：擋下來就一個檔案都不留。
+            assert not self._files(tmpdir), self._files(tmpdir)
+
+        # `--force` 同樣不得刪掉客戶放在那裡的目錄。
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            (_P(tmpdir) / '.da-init.yaml').mkdir()
+            r = self._run(tmpdir, '--non-interactive', '--tenants', 'db-a',
+                          '--force')
+            assert r.returncode == ip.EXIT_VIOLATION, (
+                r.returncode, r.stderr[-400:])
+            assert (_P(tmpdir) / '.da-init.yaml').is_dir()

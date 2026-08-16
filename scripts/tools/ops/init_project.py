@@ -3071,7 +3071,31 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
 def _check_existing_init(output_dir: str, force: bool, parser: argparse.ArgumentParser) -> None:
     """Check if directory is already initialized."""
     marker_path = str(Path(output_dir) / '.da-init.yaml')
-    if Path(marker_path).is_file() and not force:
+    # ⛔ Exists but is not a regular file — a directory, a fifo, a dangling
+    # symlink. `.is_file()` alone answers False for all of those, so the run
+    # proceeded, wrote ELEVEN files, and then died on the marker write with a
+    # raw `IsADirectoryError` traceback. Half a scaffold plus a stack trace is
+    # the worst of the three possible outcomes: `--force` cannot help (the
+    # write fails either way), and nothing names the path that is in the way.
+    #
+    # ⚠️ Checked before `force`, deliberately. `--force` means "overwrite the
+    # marker I wrote last time", not "unlink whatever occupies that name" —
+    # this tool does not remove a directory the customer put there.
+    marker = Path(marker_path)
+    if marker.exists() and not marker.is_file():
+        if _LANG == 'zh':
+            print(f"⚠️  {marker_path} 存在，但不是一般檔案（目錄？符號連結？），"
+                  f"無法寫入初始化標記。", file=sys.stderr)
+            print("   請自行移除或改名該路徑後再執行；--force 不會刪除它。",
+                  file=sys.stderr)
+        else:
+            print(f"⚠️  {marker_path} exists but is not a regular file "
+                  f"(a directory? a symlink?), so the init marker cannot be "
+                  f"written.", file=sys.stderr)
+            print("   Remove or rename that path yourself and re-run; "
+                  "--force will not delete it.", file=sys.stderr)
+        sys.exit(EXIT_VIOLATION)
+    if marker.is_file() and not force:
         if _LANG == 'zh':
             print(f"⚠️  此目錄已初始化 ({marker_path})。", file=sys.stderr)
             print("   使用 --force 覆寫或手動刪除 .da-init.yaml。", file=sys.stderr)
