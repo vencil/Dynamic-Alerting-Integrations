@@ -37,7 +37,12 @@ jobs:
     name: 1000-tenant baseline (informational)
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
-    timeout-minutes: 30
+    # 45, not 30: the paired run measures two versions instead of one (ADR-032),
+    # so the bench time roughly doubles and two more test binaries get compiled.
+    # The headroom is deliberate — ADR-032 §待決 4 records that the real nightly
+    # cost is ESTIMATED, not measured, and this job's own timing is the
+    # measurement. Tighten this once a few nights have reported.
+    timeout-minutes: 45
 
     steps:
       # persist-credentials: false — same rationale as bench-attrib-main:
@@ -49,40 +54,303 @@ jobs:
         with:
           persist-credentials: false
 
+      # ⛔ THIS JOB TOUCHES NO SHARED MODULE CACHE — not for writing, and not
+      # for reading either. Since ADR-032 it compiles and runs a second, older
+      # revision of this repo (the pinned reference) while running on the
+      # default branch, i.e. privileged.
+      #
+      #   writing  anything the reference build left in `~/go/pkg/mod` before a
+      #            cache SAVE would be restored by every other workflow.
+      #            That is CodeQL's cache-poisoning finding, and it is fair:
+      #            "our own code from months ago, executed with today's
+      #            privileges" is exactly the shape that rule is about.
+      #   reading  a cache poisoned by someone else would be fed straight into
+      #            the build of main's side. Restore-only closes the export
+      #            path and leaves the import path open, which is half a fix.
+      #
+      # The cost is one module download per night, inside a 45-minute budget.
+      # That is a cheap price for removing a shared mutable dependency from a
+      # privileged job, so this is not merely appeasing the scanner.
       - name: Set up Go 1.26
         uses: actions/setup-go@v6
         with:
           go-version: "1.26"
+          cache: false
 
-      - name: Cache Go modules
-        uses: actions/cache@v5
+      # ── ADR-032 paired measurement (segment 1: measure only) ────────────────
+      #
+      # ⚠️ ACCEPTED SECURITY FINDING — CodeQL "Cache Poisoning via execution of
+      # untrusted code" (alert 390), dismissed in the GitHub UI. Recorded here
+      # because a dismissal that lives only in a dropdown is invisible to
+      # whoever next reads this file.
+      #
+      # WHAT IS REAL. This job compiles and runs a SECOND revision of this repo
+      # (the pinned reference) while running on the default branch, i.e.
+      # privileged. Both sides share one filesystem, and this job uploads the
+      # artifact that `release-attach-bench-baseline.yaml` turns into a public
+      # GitHub Release asset. So a malicious reference revision could tamper
+      # with the main side's output before it is uploaded. That path exists
+      # independently of how CodeQL models it.
+      #
+      # WHAT WAS MITIGATED. The reference is pinned to an immutable commit SHA
+      # (a tag can be re-pointed; see .github/bench-reference.yaml), and this
+      # job neither reads nor writes the shared Go module cache (below).
+      #
+      # WHY ACCEPTED. What remains requires a PAST RELEASE OF OUR OWN CODE to
+      # be malicious — the same trust assumption under which that release was
+      # shipped to customers. Removing it would mean not executing the
+      # reference on the same machine, which is the one property ADR-032
+      # depends on: the machine term only cancels if both sides ran on it.
+      #
+      # ⛔ RE-EXAMINE IF any of these change:
+      #   - the reference ever points outside this repository
+      #   - this job gains write permissions beyond `contents: read`
+      #   - the uploaded artifact gains a consumer with a wider blast radius
+      #     than the current release-asset attachment
+      # The reference version is PINNED in a committed file, never "latest tag".
+      # Auto-following the newest tag would move the reference the instant
+      # anyone cuts a release — an absorption event nobody reviewed, which is
+      # the behaviour ADR-032 exists to remove. Changing it takes a PR.
+      # ⛔ Reports failure through an OUTPUT, never a non-zero exit. An
+      # unreadable pin file must degrade exactly like an unbuildable reference
+      # — paired side INCONCLUSIVE, nightly baseline unaffected. Exiting
+      # non-zero here would skip every step below, including the baseline the
+      # release-asset workflow depends on, which is the trade this design
+      # explicitly refuses to make.
+      - name: Read the pinned reference version
+        id: ref
+        run: |
+          set -uo pipefail
+          tag=$(sed -n 's/^tag:[[:space:]]*//p' .github/bench-reference.yaml 2>/dev/null | head -n1)
+          sha=$(sed -n 's/^sha:[[:space:]]*//p' .github/bench-reference.yaml 2>/dev/null | head -n1)
+          # Shape-check before either string reaches `checkout`: they come from
+          # a file, and a file is an input. The SHA is what we actually check
+          # out — a tag is mutable, so pinning to one would let the reference
+          # point move without review, which is the whole thing this file exists
+          # to prevent. `tag` is a human-readable label only.
+          if printf '%s' "$tag" | grep -qE '^exporter/v[0-9]+\.[0-9]+\.[0-9]+$' \
+             && printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+            echo "reference version: $tag ($sha)"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "reason=unreadable-reference-pin" >> "$GITHUB_OUTPUT"
+            echo "::error::.github/bench-reference.yaml has no usable tag+sha pair (tag='${tag}' sha='${sha}') — paired series is INCONCLUSIVE tonight"
+          fi
+
+      - name: Checkout reference version
+        if: steps.ref.outputs.ok == 'true'
+        uses: actions/checkout@v6
         with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-1.26-
-            ${{ runner.os }}-go-
+          ref: ${{ steps.ref.outputs.sha }}
+          path: .ref
+          persist-credentials: false
 
-      - name: Run benchmark-report
-        run: make benchmark-report
+      # The paired ratio assumes both sides run the SAME work. They drift: the
+      # reference is pinned for weeks-to-months while main's benchmark fixtures
+      # keep being edited, and a fixture change makes a permanent step in the
+      # ratio that looks exactly like a regression. Measured on 2026-08-16, all
+      # four exporter `*bench_test.go` files had changed since exporter/v2.9.0.
+      #
+      # This is the only place the comparison can be made — `.ref` exists only
+      # inside this job, so it cannot be recovered from the artifacts later.
+      #
+      # DISCLOSED, NOT ACTED ON (ADR-032 §工作定義漂移). Silencing drifted
+      # benchmarks would silence all of them; auto-re-baselining needs per-bench
+      # step state, which is what sank the frozen-anchor prototype. No
+      # `::error::`/`::warning::` either — drift is constant by construction over
+      # a reference's life, and an annotation that fires every single night is
+      # wallpaper. It goes in the JSON (which the watchdog will read) and the
+      # step summary (which a human reads).
+      - name: Record workload drift between the two sides
+        id: drift
+        if: steps.ref.outputs.ok == 'true'
+        env:
+          REF_APP: .ref/components/threshold-exporter/app
+          MAIN_APP: components/threshold-exporter/app
+        run: |
+          set -uo pipefail
+          mkdir -p .build/paired
+          rm -f .build/paired/workload-drift.txt
 
-      # Append the control canary to the nightly baseline so the trend watchdog
-      # can derive a per-night NOISE FLOOR from BenchmarkControlCanaryCPU's
-      # own night-to-night variance — it never alerts on movement smaller than
-      # the runner's intrinsic noise. Same canary module the PR gate uses
-      # (scripts/tools/ops/bench-canary), so the floor is apples-to-apples.
-      - name: Append control canary to baseline
+          # ⛔ Establish that BOTH sides were actually enumerable before writing
+          # any answer. Without this the failure is silent and wrong in the worst
+          # direction: a `cd` that fails (an old reference laid out differently)
+          # leaves the pipeline with nothing to compare, the loop writes no rows,
+          # and an EMPTY drift file is indistinguishable from "checked, nothing
+          # drifted". That is the same "could not measure" read as "measured and
+          # clean" conflation this whole ADR exists to remove — reproduced from a
+          # review finding on PR #1455.
+          #
+          # Leaving the file ABSENT is the signal: pair_bench_ratio.py records
+          # `unreadable`, so the night says the premise is undisclosed rather than
+          # confirmed. `::warning::` is right here and wrong for ordinary drift —
+          # this condition is exceptional and must not persist, whereas drift is
+          # constant by construction over a reference's life.
+          ref_n=$( ( cd "$REF_APP"  && find . -name '*bench_test.go' -type f -print ) 2>/dev/null | wc -l )
+          main_n=$( ( cd "$MAIN_APP" && find . -name '*bench_test.go' -type f -print ) 2>/dev/null | wc -l )
+          if [ "$ref_n" -eq 0 ] || [ "$main_n" -eq 0 ]; then
+            echo "::warning::workload-drift enumeration found no benchmark test files (reference=${ref_n}, main=${main_n}) — leaving the drift file absent so tonight records the check as not established, not as clean"
+            exit 0
+          fi
+
+          : > .build/paired/workload-drift.txt
+          # Union of both sides, so a file added or deleted counts as drift too.
+          # `cmp -s` is non-zero for "differs" AND for "missing on one side",
+          # which is the answer we want in both cases.
+          {
+            ( cd "$REF_APP"  && find . -name '*bench_test.go' -type f -print )
+            ( cd "$MAIN_APP" && find . -name '*bench_test.go' -type f -print )
+          } | sed 's|^\./||' | sort -u | while read -r rel; do
+            cmp -s "$REF_APP/$rel" "$MAIN_APP/$rel" \
+              || echo "$rel" >> .build/paired/workload-drift.txt
+          done
+          echo "enumerated reference=${ref_n} main=${main_n}; drifted benchmark test files: $(wc -l < .build/paired/workload-drift.txt)"
+          cat .build/paired/workload-drift.txt
+
+      # Measures main HEAD and the reference version ALTERNATELY on this one
+      # runner, so the machine's speed divides out of the ratio. Same harness
+      # the PR gate uses. ROUNDS=6/BENCHTIME=3s keeps the main side's sample
+      # count and benchtime identical to what `make benchmark-report` produced,
+      # which is what lets the existing watchdog keep reading it unchanged.
+      #
+      # ⛔ Never fails the job. A reference that will not build is a real and
+      # expected failure mode (the tag ages while main is refactored), and the
+      # nightly baseline below is a release asset — breaking that to shout about
+      # the paired side would trade a working feature for volume. The paired
+      # side records INCONCLUSIVE instead, loudly. See ADR-032 §待決 3.
+      - name: Paired interleaved measurement (main vs pinned reference)
+        id: paired
+        if: steps.ref.outputs.ok == 'true'
+        env:
+          BASE_DIR: ${{ github.workspace }}/.ref/components/threshold-exporter/app
+          PR_DIR: ${{ github.workspace }}/components/threshold-exporter/app
+          CANARY_DIR: ${{ github.workspace }}/scripts/tools/ops/bench-canary
+          BENCH_OUT_DIR: ${{ github.workspace }}/.build/paired
+          ROUNDS: "6"
+          BENCHTIME: 3s
+        run: |
+          set -uo pipefail
+          mkdir -p .build/paired
+          if bash scripts/tools/ops/bench_interleave.sh; then
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+          else
+            rc=$?
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            echo "rc=$rc" >> "$GITHUB_OUTPUT"
+            echo "paired measurement failed (rc=$rc) — see bench.err.log"
+          fi
+
+      - name: Nightly baseline (from the paired main side)
+        if: steps.paired.outputs.status == 'ok'
         run: |
           set -euo pipefail
+          mkdir -p .build
+          # The main side IS the nightly baseline: same benches, same benchtime,
+          # same sample count, and it already carries the control canary rows
+          # (bench_interleave.sh runs one canary binary into BOTH sides). So the
+          # existing watchdog and the release-asset workflow keep working with
+          # no change, and running the paired night costs 2x rather than 3x.
+          cp .build/paired/bench-pr.txt .build/bench-baseline.txt
+          cp .build/paired/bench.err.log .build/bench.err.log || true
+          echo "baseline rows: $(grep -c '^Benchmark' .build/bench-baseline.txt || echo 0)"
+
+      # Only reached when the reference side is unusable. Reproduces exactly what
+      # this job did before ADR-032, so a bad reference never costs us a night.
+      - name: Nightly baseline (fallback — reference unusable)
+        if: steps.paired.outputs.status != 'ok'
+        run: |
+          set -euo pipefail
+          make benchmark-report
           ( cd scripts/tools/ops/bench-canary && \
             go test -bench='ControlCanary' -benchmem -run='^$' -count=6 -benchtime=1s . ) \
             >> .build/bench-baseline.txt 2>>.build/bench.err.log || \
             echo "::warning::canary append failed — trend watchdog will fall back to the fixed floor"
 
+      # ⛔ Must not abort the job. `pair_bench_ratio.py` exits 2 on inputs that
+      # are not a valid pair (no `cpu:` header, mismatched CPUs, an empty side)
+      # — real conditions, and every one of them means "tonight is
+      # INCONCLUSIVE", not "the nightly is broken". A hard failure here would
+      # also skip the step below, so the paired series would record NOTHING and
+      # the run would simply be red. Same mistake as the reference-pin read;
+      # this is its second instance, caught in review.
+      - name: Compute paired ratios
+        id: ratios
+        if: steps.paired.outputs.status == 'ok'
+        env:
+          REF_TAG: ${{ steps.ref.outputs.tag }}
+          REF_SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -uo pipefail
+          if python3 scripts/tools/dx/pair_bench_ratio.py \
+              --reference .build/paired/bench-base.txt \
+              --main .build/paired/bench-pr.txt \
+              --reference-tag "${REF_TAG}" \
+              --reference-sha "${REF_SHA}" \
+              --workload-drift .build/paired/workload-drift.txt \
+              --out .build/bench-paired.json; then
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            echo "ratio computation rejected the inputs — see stderr above"
+          fi
+
+      # Loud, and machine-readable. `::error::` surfaces in the run's annotations
+      # so a rotting reference cannot sit unnoticed for weeks, and the JSON keeps
+      # the paired series honest: this night is INCONCLUSIVE, not clean.
+      - name: Paired measurement unusable — record and annotate
+        if: steps.paired.outputs.status != 'ok' || steps.ratios.outputs.status != 'ok'
+        env:
+          REF_TAG: ${{ steps.ref.outputs.tag }}
+          REF_SHA: ${{ steps.ref.outputs.sha }}
+          # Three distinct causes reach this step and they need different fixes:
+          # a pin file nobody can parse, a reference version that no longer
+          # builds, and inputs the ratio tool refused. Reporting them all as one
+          # sends the reader to the wrong place — the same misdiagnosis class as
+          # `thin-anchor` in the watchdog.
+          REASON: >-
+            ${{ steps.ref.outputs.reason
+                || (steps.paired.outputs.status != 'ok' && 'reference-build-or-run-failed')
+                || 'ratio-inputs-rejected' }}
+          # Which path produced tonight's bench-baseline.txt. Saying "fallback"
+          # when the paired run actually succeeded and only the ratio failed
+          # would be a false statement in an annotation people act on.
+          BASELINE_FROM: ${{ steps.paired.outputs.status == 'ok' && 'the paired main side' || 'the fallback path' }}
+        run: |
+          set -uo pipefail
+          echo "::error::paired measurement unusable (${REASON}) — tonight is INCONCLUSIVE for the paired series. The nightly baseline came from ${BASELINE_FROM} and is unaffected. See ADR-032 §待決 3."
+          mkdir -p .build
+          printf '{\n  "schema": "bench-paired/v1",\n  "reference_tag": "%s",\n  "reference_sha": "%s",\n  "status": "INCONCLUSIVE",\n  "reason": "%s"\n}\n' \
+            "${REF_TAG}" "${REF_SHA}" "${REASON}" > .build/bench-paired.json
+          tail -n 40 .build/paired/bench.err.log 2>/dev/null || true
+
       - name: Summarize results
         if: always()
+        env:
+          PAIRED_STATUS: ${{ steps.paired.outputs.status }}
+          REF_TAG: ${{ steps.ref.outputs.tag }}
         run: |
           echo "### Bench Record — $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Paired reference: \`${REF_TAG:-unresolved}\` — status \`${PAIRED_STATUS:-not-run}\`" >> "$GITHUB_STEP_SUMMARY"
+          # The one thing in this summary that needs a human. Everything else
+          # here is a number; this is a question ("is that ratio a regression or
+          # a changed fixture?") that only a person can answer.
+          if [ -s .build/paired/workload-drift.txt ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ **Workload drift** — these benchmark test files differ between \`${REF_TAG}\` and main, so a ratio for a benchmark they define may be a changed workload rather than a code change:" >> "$GITHUB_STEP_SUMMARY"
+            sed 's|^|- `|; s|$|`|' .build/paired/workload-drift.txt >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f .build/bench-paired.json ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat .build/bench-paired.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           if [ -f .build/bench-baseline.txt ]; then
             cat .build/bench-baseline.txt >> "$GITHUB_STEP_SUMMARY"
@@ -91,6 +359,9 @@ jobs:
           fi
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
+      # bench-baseline.txt keeps its name and its place, because
+      # `release-attach-bench-baseline.yaml` downloads this artifact by name
+      # and expects that file. The paired files are additive.
       - name: Upload bench artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -100,6 +371,10 @@ jobs:
             .build/bench-baseline.txt
             .build/bench.raw.jsonl
             .build/bench.err.log
+            .build/bench-paired.json
+            .build/paired/bench-base.txt
+            .build/paired/bench-pr.txt
+            .build/paired/workload-drift.txt
           retention-days: 90
           if-no-files-found: warn
 

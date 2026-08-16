@@ -173,7 +173,8 @@ graph LR
 
 ```bash
 # 本地驗證（與 CI 完全相同的檢查）
-da-tools validate-config --config-dir conf.d/ --ci
+# 驗證有 FAIL 時 exit code 非零，本身就能當 CI 的成敗判準——不需要額外旗標
+da-tools validate-config --config-dir conf.d/
 ```
 
 ### 2.3 Stage 2: Generate
@@ -234,10 +235,18 @@ ln -s ../../conf.d/prod-mariadb.yaml .
 ln -s ../../conf.d/prod-redis.yaml .
 ```
 
+⛔ **上面那些 symlink 指向 `kustomize/base/` 之外，所以 `kustomize build` 必須帶 `--load-restrictor LoadRestrictionsNone`**，否則會失敗於：
+
+```text
+security; file '.../kustomize/base/_defaults.yaml' is not in or below '.../kustomize/base'
+```
+
+那是 kustomize 預設 load-restrictor 的既定行為，不是連結壞掉。`da-tools init` 產出的 workflow 已經帶了這個旗標。若你的部署工具無法傳旗標（部分 ArgoCD 需要在叢集側設 `kustomize.buildOptions`），改用 `cp` 複製檔案而非連結——代價是 `conf.d/` 每次變更都要重新複製。
+
 **CI 中 apply：**
 
 ```bash
-kustomize build kustomize/overlays/prod > /tmp/manifests.yaml
+kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod > /tmp/manifests.yaml
 kubectl apply --dry-run=server -f /tmp/manifests.yaml
 kubectl apply -f /tmp/manifests.yaml
 ```
@@ -351,6 +360,17 @@ da-tools gitops-check local --dir /data/config/conf.d
 
 **合併到你的 `.pre-commit-config.yaml`：**
 
+⛔ **「合併」是指把下面的 `- repo: local` 這一項，接進你既有 `.pre-commit-config.yaml` 的 `repos:` 清單底下。** 下面整段是一份完整檔案（第一行就是 `repos:`），**整份附加在既有設定後面會多出第二個頂層 `repos:` 鍵，YAML 只留最後一個、而且不報錯**——實測 `pre-commit validate-config` 仍回 exit 0，你原本的 hook 全數消失。你若還沒有 `.pre-commit-config.yaml`，才可以整份採用。
+
+⚠️ 下面這段是**預設 image**（`ghcr.io/vencil/da-tools:latest`）下的產出內容。你若跑 `init` 時帶了 `--da-tools-image`，兩個 `entry` 的第一個 token 會是你指定的那顆——**以你 repo 根目錄那份 `.pre-commit-config.da.yaml` 為準**，不要照抄下面的 image。
+
+<!-- mirrors-artifact: .pre-commit-config.da.yaml -->
+<!-- merge-mode: merge-items -->
+<!-- ⛔ 上面那一行是機器讀的。tests/ops/test_generated_ci_artifacts.py 會拿
+     `da-tools init` 真的寫出來的那個檔，與下面這個區塊做整份結構比對（兩側都讀產物）。
+     不要手改這裡——要改請改 scripts/tools/ops/init_project.py 的
+     _gen_precommit_snippet()，這一段會跟著被要求同步。 -->
+
 ```yaml
 repos:
   - repo: local
@@ -358,16 +378,27 @@ repos:
       - id: da-validate-config
         name: Validate Dynamic Alerting config
         entry: >-
-          docker run --rm
-          -v ${PWD}/conf.d:/data/conf.d:ro
           ghcr.io/vencil/da-tools:latest
-          validate-config --config-dir /data/conf.d --ci
-        language: system
+          validate-config --config-dir /src/conf.d
+        language: docker_image
+        files: ^conf\.d/.*\.ya?ml$
+        pass_filenames: false
+
+      - id: da-generate-routes
+        name: Generate Alertmanager routes (dry-run)
+        entry: >-
+          ghcr.io/vencil/da-tools:latest
+          generate-routes --config-dir /src/conf.d --dry-run --validate
+        language: docker_image
         files: ^conf\.d/.*\.ya?ml$
         pass_filenames: false
 ```
 
-每次 commit 修改 `conf.d/` 下的檔案時，自動在本機執行驗證。
+⚠️ **`language: docker_image` 與 `/src` 開頭的路徑是綁在一起的，不要拆開改。** pre-commit 用 `shlex` 切開 `entry` 之後**不經 shell** 直接 exec，所以寫成 `language: system` + `docker run -v ${PWD}/conf.d:...` 的形式會把字面字串 `${PWD}` 交給 docker，每一個動到 `conf.d/` 的 commit 都失敗。`docker_image` 讓 pre-commit 自己組 `docker run`，並把你的工作樹掛在 `/src`（`-v <cwd>:/src:rw,Z --workdir /src`）——所以 `--config-dir` 必須是 `/src` 相對路徑。
+
+代價講明白：那個掛載是**整個 repo 可讀寫**，比手寫的唯讀 `conf.d` 掛載寬。這是 pre-commit 自己的機制，而跑不起來的 hook 保護不了任何東西。
+
+每次 commit 修改 `conf.d/` 下的檔案時，自動在本機執行驗證（`da-validate-config`）並對路由做一次 dry-run（`da-generate-routes`）。
 
 ## 5. 完整流程示例
 
@@ -423,10 +454,11 @@ python3 scripts/tools/ops/assemble_config_dir.py \
 
 | 問題 | 診斷 | 解法 |
 |------|------|------|
-| CI validate 失敗 | `da-tools validate-config --config-dir conf.d/ --verbose` | 根據錯誤訊息修改 YAML |
+| CI validate 失敗 | `da-tools validate-config --config-dir conf.d/` | 每個非 PASS 的檢查會附 `-> Suggested action:` 與 `-> See:`；加 `--json` 可得同樣資訊的機器可讀版。⚠️ 若 `conf.d/` 裡有 **YAML 語法錯**，本工具目前是丟出 Python traceback 而不是報告（兩種模式皆然），此時直接看 traceback 末尾指的檔名與行號 |
 | ConfigMap 更新後 exporter 沒反應 | 確認 `reloadInterval` 設定、檢查 exporter logs | `kubectl logs -l app=threshold-exporter -n monitoring` |
 | Alertmanager 路由不生效 | `da-tools explain-route --tenant <name> --config-dir conf.d/` | 檢查四層合併順序 |
-| Kustomize build 失敗 | 確認 symlink 指向正確的 conf.d/ 檔案 | `ls -la kustomize/base/` |
+| Kustomize build 失敗，訊息含 `is not in or below` | **不是 symlink 壞掉**——conf.d 的檔案在 `kustomize/base/` 之外，預設 load-restrictor 拒收。加旗標重跑（見 §3.1） | `kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod` |
+| Kustomize build 失敗，訊息含 `no such file` | 這才是連結本身的問題（例如指向不存在的租戶檔） | `ls -la kustomize/base/` |
 | 配置全綠、告警卻從來不觸發 | `diagnose.py <tenant> --config-dir conf.d/ --show-inheritance` | 該 key 若出現在 `declared` 段，代表平台認得它但不主張值——**你不填就是靜默且無錯誤訊息**，填上你自己 baseline 校準出的值即可 |
 
 ## 相關文件

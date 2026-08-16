@@ -20,6 +20,11 @@ on:
       - 'tests/e2e/**'
       - 'package.json'
       - '.github/workflows/playwright.yml'
+      # The A-13 lint runner below. Without this entry, a pull request that
+      # ONLY edits the runner does not start this workflow, so the one CI leg
+      # that executes it never runs — and the local hook would be running the
+      # edited copy against itself. #1428.
+      - 'scripts/tools/lint/e2e_spec_lint.sh'
   pull_request:
     branches:
       - main
@@ -31,12 +36,75 @@ on:
       - 'tests/e2e/**'
       - 'package.json'
       - '.github/workflows/playwright.yml'
+      # The A-13 lint runner below. Without this entry, a pull request that
+      # ONLY edits the runner does not start this workflow, so the one CI leg
+      # that executes it never runs — and the local hook would be running the
+      # edited copy against itself. #1428.
+      - 'scripts/tools/lint/e2e_spec_lint.sh'
 
 permissions:
   contents: read
   pull-requests: write
 
 jobs:
+  # A-13: no `test.skip()` / `test.fixme()` in E2E specs, in any spelling —
+  # the rule does not distinguish them. Until #1428 this
+  # rule had exactly one execution point — the `playwright-lint` pre-commit
+  # hook — and that hook cannot run inside a `git worktree`, which is how this
+  # repo is normally worked: tests/e2e/node_modules is gitignored, so a new work
+  # tree starts without it and never fixes itself. A repo-wide grep of
+  # .github/workflows/ for `eslint` returned nothing, so the server side caught
+  # none of it.
+  #
+  # ⛔ A SEPARATE JOB, not a step inside "Smoke Tests (Chromium)". As a step it
+  # was measurably worse than nothing: GitHub stops a job at the first failing
+  # step, so one parked spec would have skipped the browser install, the portal
+  # server and the whole smoke run — and since this workflow is not a required
+  # check, that would trade "E2E ran and passed" for "E2E never ran" while
+  # still not blocking the merge. The report-upload and PR-comment steps carry
+  # `if: always()`, so they would have run and found no report, leaving the pull
+  # request with no visible signal at all.
+  #
+  # ⚠️ ADVISORY, not blocking. Neither this job nor "Smoke Tests (Chromium)" is
+  # among main's required status checks (measured 2026-08-14 against the
+  # branch-protection API: 19 contexts, neither name is one of them), so a red
+  # here does not stop a merge. Adding a name to branch protection is NOT the
+  # fix on its own: this workflow is suppressed wholesale by a top-level
+  # `paths:` filter, and GitHub treats a required check that reports no status
+  # as permanently pending — the trap validate.yaml's banner describes. The
+  # repo's shape for a blocking leg is a ci.yml job plus an `if: always()`
+  # aggregation gate (see "Portal Tests"). Tracked in #1428.
+  lint-specs:
+    name: E2E Spec Lint (A-13)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          # No `lfs: true` here on purpose: the LFS payload is the visual
+          # regression baselines, which eslint never reads. Only the smoke job
+          # needs them.
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'tests/e2e/package-lock.json'
+
+      - name: Install E2E dependencies
+        working-directory: tests/e2e
+        run: npm ci
+
+      # No `working-directory`: the script derives the repo root from its own
+      # location, which is what lets the pre-commit hook and `make lint-e2e`
+      # run the very same file from wherever they happen to be invoked.
+      - name: Lint E2E specs (A-13 fixme/skip guard)
+        run: bash scripts/tools/lint/e2e_spec_lint.sh
+
   test:
     name: Smoke Tests (Chromium)
     runs-on: ubuntu-latest
@@ -73,7 +141,13 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: 'tests/e2e/package.json'
+          # Keyed on the LOCKFILE, not package.json. `npm ci` installs exactly
+          # what the lockfile pins, so a lockfile-only change (a security bump
+          # inside an existing range) must invalidate the cache — keyed on
+          # package.json it would not, and the job would keep restoring the
+          # pre-bump tree. Matches ci.yml's portal job, which already keys on
+          # tools/portal/package-lock.json.
+          cache-dependency-path: 'tests/e2e/package-lock.json'
 
       - name: Install E2E dependencies
         working-directory: tests/e2e

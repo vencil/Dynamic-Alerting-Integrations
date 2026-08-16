@@ -518,12 +518,18 @@ Portal 工具卡片是從 `tool-registry.yaml` 動態產生的 `.cards a.card`�
 
 #### 2. `test.fixme()` 是債務標記，不是「先通過 CI」的工具
 
-✅ **Codified（v2.8.0 PR #57）**：bare `test.fixme()` / `test.skip()` 已由 `tests/e2e/eslint.config.mjs` + pre-commit `playwright-lint` hook 在 commit-time 直接擋下（`eslint-plugin-playwright/no-skipped-test` `{ allowConditional: false, disallowFixme: true }`）。條件式 `test.skip(isChrome, 'reason')` 仍允許——「debt 標記」vs「環境閘門」的區分在自動化層生效。E2E 之外要 skip 改走 Python `pytest.skip`。
+✅ **Codified（v2.8.0 PR #57，#1428 補上 CI 腿並更正下面這段）**：`tests/e2e/eslint.config.mjs` 的 `eslint-plugin-playwright/no-skipped-test` `{ allowConditional: false, disallowFixme: true }` 擋下 E2E spec 裡**任何形式**的 `.skip()` / `.fixme()`。E2E 之外要 skip 改走 Python `pytest.skip`。
+
+⛔ **這裡原本寫「條件式 `test.skip(isChrome, 'reason')` 仍允許」，那句從來不成立。** `allowConditional` **在 rule options 裡明確設為 false**（不是「沒設所以用預設」——⚠️ 那兩個選項都**不可刪**：`disallowFixme` 的 plugin 預設也是 false，刪掉整個 options 物件會讓 `test.fixme()` 重新全綠，正是該檔註解記載過的那次回歸）。豁免分支因此不可達。對這份設定實測，七種寫法全部報錯：`test.skip()`／`test.skip(cond,'reason')`／`test.fixme(cond,'reason')`／`test.fixme(false,'kept')`／`test.skip('just because')`／`test.describe.skip(...)`／`if (cond) { test.skip() }`。⇒ **「debt 標記 vs 環境閘門」這個區分在本 repo 的自動化層並不存在**，它只存在於 Playwright 上游的語意裡。
+
+⇒ **環境差異走 `--grep` tag 或 playwright.config.ts 的 project，不走 annotation**——兩者這套 suite 本來就在用（`@critical` 52 處、`@visual` 1 處；`projects:` 在 `playwright.config.ts:47`）。#1428 選擇**改敘述而不是翻設定**：`allowConditional: true` 的豁免條件是**三者任一**——呼叫帶至少一個參數、**或**位於 `if` 區塊內、**或**位於 `switch case` 內（plugin 2.10.2 的三路 `||`）。沒有一項在問那個條件有沒有意義，所以 `test.skip(true, 'debt')`、`test.skip('reason')`（字串被當成 truthy condition，**永遠跳過而 lint 全綠**）、以及包在 `if (true)` 裡的裸 `test.skip()` 都會過。是否重開 annotation 這條路是未定案的問題，量測已附在此。
+
+⚠️ **「commit-time 直接擋下」要加一個限定詞**：`playwright-lint` hook 只在有 `tests/e2e/node_modules` 的 checkout 裡跑得起來，而 `node_modules` 是 gitignored ⇒ **每一棵新開的 `git worktree` 對它都是壞的，且不會自己好**（先 `cd tests/e2e && npm ci`）。#1428 之前這是 A-13 的**唯一**執行點，server 側零覆蓋；現在 `.github/workflows/playwright.yml` 的 `E2E Spec Lint (A-13)` job 也跑同一支 `scripts/tools/lint/e2e_spec_lint.sh`（獨立 job，不是 smoke job 裡的 step——後者會讓一支被 park 的 spec 連帶取消整輪 smoke），但那條腿目前是 **advisory**：它與 `Smoke Tests (Chromium)` 都不在 main 的 required checks 內。
 
 **仍是人類判斷的兩件事**（lint 不管）：
 
-- **登記義務**：lint 擋 bare 形式，但 `test.skip(condition, ...)` 與 `test.fixme(false, ...)` 可繞過。這類仍需在 [`frontend-quality-backlog.md`](frontend-quality-backlog.md) 登記（測試名 / spec / 原因 / 預計移除版本），review 階段把關
-- **Calibration sprint trigger**：單一 spec `test.fixme()` 跨版本存留超過 1 個 minor 或單檔超過 5 條，排 calibration sprint 走 §5 checklist 清倉
+- **登記義務**：⛔ 這一列原本寫「lint 擋 bare 形式，但 `test.skip(condition, ...)` 與 `test.fixme(false, ...)` 可繞過」——**兩半都是假的**，實測那兩種寫法同樣被擋（#1428）。今天 lint 層沒有任何合法的 annotation 逃生門，所以「登記」不是 lint 的補位、而是**你決定要留下這筆債務時該做的事**：在 [`frontend-quality-backlog.md`](frontend-quality-backlog.md) 記下測試名 / spec / 原因 / 預計移除版本。⚠️ lint 層有**兩條**繞法，而且被實際使用的是第二條：①`// eslint-disable-next-line playwright/no-skipped-test`——全 repo 零使用者、也沒有任何東西在掃它；②**把整段 spec 註解掉**——`visual.spec.ts` 的 TRK-238 區塊正是這樣 park 了 **5 支** spec，理由逐字寫著「A-13 ESLint rule … forbids `test.fixme()`」，並附了一份 activation SOP。第二條完全不受機械檢查，而且那 5 支**沒有登記在 backlog 裡**（該頁寫「無登記項目」——就字面規則而言為真，因為登記義務綁在 `test.fixme()` / `test.skip()` 的出現，而 block comment 兩者都沒有）。兩條目前都只靠 review
+- **Calibration sprint trigger**：⛔ 這一條原本以「單一 spec `test.fixme()` 跨版本存留超過 1 個 minor 或單檔超過 5 條」計數——而 A-13 之後 `test.fixme()` **一條都落不了地**，所以那個觸發條件恆假（#1428）。改以**本頁登記表的列數**＋**被 block comment park 掉的 spec 數**計；後者今天是 `visual.spec.ts` 的 5 支，且不在登記表內
 
 #### 3. Locator 穩定性優先順序（遷移 Token 後仍適用）
 
@@ -554,7 +560,7 @@ Phase .a0 已將主要互動工具加 `data-testid`（wizard、playground、conf
 排程 calibration sprint 時，按下列順序執行單一 spec：
 
 1. `cd tests/e2e && npx playwright test wizard.spec.ts --ui`
-2. 逐條 unlock `test.fixme(true, ...)` → 改 `test(...)` 或 `test.fixme(false, ...)`（後者保留將來再關）
+2. 逐條 unlock → 改成真的 `test(...)`。⛔ 這一步原本寫「或 `test.fixme(false, ...)`（後者保留將來再關）」——實測 `test.fixme(false, 'kept')` 同樣被 lint 擋下（#1428），那個選項不存在。還不想現在修就**刪測 + 在 [`frontend-quality-backlog.md`](frontend-quality-backlog.md) 登記**
 3. Locator panel 驗「exactly 1 match」；不是 1 時先補 `data-testid`（jsx 側）再回 spec
 4. `npx playwright test wizard.spec.ts` headless 跑過 → 再 `--count=3` 驗穩定性
 5. `docs/internal/frontend-quality-backlog.md` 該檔的登記條目逐條劃掉

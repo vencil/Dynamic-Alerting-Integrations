@@ -184,7 +184,8 @@ Runs automatically on every PR and push. Checks:
 
 ```bash
 # Local validation (same checks as CI)
-da-tools validate-config --config-dir conf.d/ --ci
+# Exits non-zero when any check FAILs — usable as a CI gate with no extra flag
+da-tools validate-config --config-dir conf.d/
 ```
 
 ### 2.3 Stage 2: Generate
@@ -250,10 +251,18 @@ ln -s ../../conf.d/prod-mariadb.yaml .
 ln -s ../../conf.d/prod-redis.yaml .
 ```
 
+⛔ **Those symlinks point outside `kustomize/base/`, so `kustomize build` needs `--load-restrictor LoadRestrictionsNone`** — without it, the build fails with:
+
+```text
+security; file '.../kustomize/base/_defaults.yaml' is not in or below '.../kustomize/base'
+```
+
+That is kustomize's default load restrictor doing its job, not a broken link. The workflow `da-tools init` generates already passes the flag. If your deployment tool cannot pass it (some ArgoCD setups need `kustomize.buildOptions` configured cluster-side), copy the files in instead of linking them — at the cost of re-copying whenever `conf.d/` changes.
+
 **CI apply:**
 
 ```bash
-kustomize build kustomize/overlays/prod > /tmp/manifests.yaml
+kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod > /tmp/manifests.yaml
 kubectl apply --dry-run=server -f /tmp/manifests.yaml
 kubectl apply -f /tmp/manifests.yaml
 ```
@@ -367,6 +376,18 @@ da-tools gitops-check local --dir /data/config/conf.d
 
 **Merge into your `.pre-commit-config.yaml`:**
 
+⛔ **"Merge" means copying the `- repo: local` item below INTO the `repos:` list of your existing `.pre-commit-config.yaml`.** The block below is a complete file — its first line is `repos:` — so **appending it whole leaves two top-level `repos:` keys, and YAML keeps only the last one, silently**: measured, `pre-commit validate-config` still exits 0 while every hook you had is gone. Take the block as a whole file only if you do not have a `.pre-commit-config.yaml` yet.
+
+⚠️ The block below is what `init` writes with the **default image** (`ghcr.io/vencil/da-tools:latest`). If you passed `--da-tools-image`, the first token of both `entry` values is the image you named — **go by the `.pre-commit-config.da.yaml` in your own repo root**, not by the image printed below.
+
+<!-- mirrors-artifact: .pre-commit-config.da.yaml -->
+<!-- merge-mode: merge-items -->
+<!-- ⛔ The line above is machine-read. tests/ops/test_generated_ci_artifacts.py
+     takes the file `da-tools init` actually writes and compares it against the
+     block below in full, reading BOTH sides from artifacts. Do not hand-edit
+     here — change scripts/tools/ops/init_project.py's _gen_precommit_snippet()
+     and this block will be required to follow. -->
+
 ```yaml
 repos:
   - repo: local
@@ -374,16 +395,27 @@ repos:
       - id: da-validate-config
         name: Validate Dynamic Alerting config
         entry: >-
-          docker run --rm
-          -v ${PWD}/conf.d:/data/conf.d:ro
           ghcr.io/vencil/da-tools:latest
-          validate-config --config-dir /data/conf.d --ci
-        language: system
+          validate-config --config-dir /src/conf.d
+        language: docker_image
+        files: ^conf\.d/.*\.ya?ml$
+        pass_filenames: false
+
+      - id: da-generate-routes
+        name: Generate Alertmanager routes (dry-run)
+        entry: >-
+          ghcr.io/vencil/da-tools:latest
+          generate-routes --config-dir /src/conf.d --dry-run --validate
+        language: docker_image
         files: ^conf\.d/.*\.ya?ml$
         pass_filenames: false
 ```
 
-Every commit touching `conf.d/` files automatically validates locally.
+⚠️ **`language: docker_image` and the `/src`-relative paths go together — do not split them.** pre-commit splits `entry` with `shlex` and then execs it **without a shell**, so the `language: system` + `docker run -v ${PWD}/conf.d:...` form hands docker the literal string `${PWD}` and fails on every commit that touches `conf.d/`. `docker_image` makes pre-commit build the `docker run` itself and mount your work tree at `/src` (`-v <cwd>:/src:rw,Z --workdir /src`) — which is why `--config-dir` must be `/src`-relative.
+
+Trade-off, stated: that mount is the **whole repo, read-write** — wider than the read-only `conf.d` mount the hand-written form asked for. It is pre-commit's own mechanism, and a hook that cannot run protects nothing.
+
+Every commit touching `conf.d/` files runs local validation (`da-validate-config`) plus a routing dry-run (`da-generate-routes`).
 
 ## 5. End-to-End Workflow Example
 
@@ -439,10 +471,11 @@ With CI pipeline integration, each team only modifies their own conf.d/. The mer
 
 | Issue | Diagnosis | Solution |
 |-------|-----------|----------|
-| CI validate fails | `da-tools validate-config --config-dir conf.d/ --verbose` | Fix YAML per error message |
+| CI validate fails | `da-tools validate-config --config-dir conf.d/` | Every non-PASS check prints `-> Suggested action:` and `-> See:`; add `--json` for the machine-readable form of the same thing. ⚠️ If `conf.d/` contains a **YAML syntax error** the tool currently raises a Python traceback instead of a report (in both modes) — read the filename and line it ends with |
 | ConfigMap updated but exporter unresponsive | Check `reloadInterval` setting, exporter logs | `kubectl logs -l app=threshold-exporter -n monitoring` |
 | Alertmanager routes not effective | `da-tools explain-route --tenant <name> --config-dir conf.d/` | Check four-layer merge order |
-| Kustomize build fails | Verify symlinks point to correct conf.d/ files | `ls -la kustomize/base/` |
+| Kustomize build fails with `is not in or below` | **Not a broken symlink** — the conf.d files live outside `kustomize/base/` and the default load restrictor refuses them. Re-run with the flag (see §3.1) | `kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod` |
+| Kustomize build fails with `no such file` | That one IS the link — e.g. pointing at a tenant file that does not exist | `ls -la kustomize/base/` |
 | Config is green but an alert never fires | `diagnose.py <tenant> --config-dir conf.d/ --show-inheritance` | If the key appears in the `declared` section the platform recognises it but asserts no value — **unset means silent, with no error message**. Supply a value calibrated against your own baseline |
 
 ## Related Documents

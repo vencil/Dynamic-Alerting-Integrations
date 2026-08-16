@@ -99,7 +99,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -120,7 +120,7 @@ from _registry_lib import CRITICAL_SUFFIX as _CRITICAL_SUFFIX  # noqa: E402
 # the hook `files:` filter and the test that pins it both had to learn about it;
 # that the pin needed a manual update is #1413.
 sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "ops"))
-from guard_defaults_scopes import conf_d_root  # noqa: E402
+from guard_defaults_scopes import CONF_D, conf_d_root  # noqa: E402
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
@@ -572,6 +572,32 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # The two mechanisms are complements, not belt-and-braces; neither covers the
 # whole grid, and pretending otherwise is how the next person stops checking.
 #
+# ⛔ AND THE ARTIFACT BULLET STOPPED ONE SENTENCE SHORT OF ITS SIBLING (#1434).
+# The generator bullet says what its floor UNIQUELY watches; the artifact one
+# only said who covers the rows it misses, so the reader was left to assume the
+# other three rows are its own. They are not — and this is structural rather
+# than a fact about today's numbers. `_assert_shipped_roots_intact` and
+# `_assert_every_root_contributes` both run BEFORE `_assert_keys_floor` (see the
+# call order at the end of `_defaults_faces`), and the fifth floor fires on ANY
+# pinned root reaching zero. So for the artifact half, "a whole conf.d root
+# stopped yielding" is reported by one of those two, always, and this floor
+# never gets to speak. What it does own is the shape neither of them can see:
+# erosion that never takes any single root to zero. It speaks once more than
+# `total - floor` keys have gone, wherever they went — which is why the bracket
+# below is a statement about that blind band and not about a vanished root.
+# Measured through the real entry point, not by calling the floors one at a
+# time (that hides the call order):
+#
+#   scenario                                              reported by
+#   biggest conf.d root zeroed                            shipped-root floor
+#   `total - floor` keys eroded, no root emptied          nobody
+#   one key more than that, no root emptied               THIS floor, alone
+#
+# That table is asserted by
+# `test_the_artifact_key_floor_owns_erosion_that_empties_no_root`, so the
+# derivation cannot drift from the behaviour again; the numbers are re-derived
+# there from the constants rather than copied out of this comment.
+#
 # ⚠️ HEADROOM, measured, and ⛔ THE TWO DIRECTIONS ARE OPPOSITE MEASUREMENTS OF
 # DIFFERENT THINGS. This block said so ("BOTH directions", "nobody should
 # discover the direction by guessing") and then printed one bare number per
@@ -841,6 +867,14 @@ _DEFAULTS_CONFD_ROOTS: frozenset[str] = frozenset({
 # Roots that legitimately carry zero threshold keys. ⛔ Explicit, because
 # "contributes nothing" is exactly what this floor exists to catch — an implicit
 # exemption for whatever happens to be empty today would exempt the failure.
+#
+# ⛔⛔ BEFORE YOU ADD A LINE HERE, read the disclosure at the end of
+# `_assert_every_root_contributes` (#1443). Adding an entry is the one edit that
+# turns the fifth floor off for a tree, nothing checks whether the tree was
+# broken a minute earlier, and three attempts at checking it were withdrawn as
+# unworkable. The remedy for a root that just went to zero is almost never a
+# line here. ⚠️ This pointer exists because the disclosure names the mechanism
+# but a maintainer reaching for the exemption edits THIS list, not that one.
 _DEFAULTS_ROOTS_MAY_BE_EMPTY: frozenset[str] = frozenset({
     # Both files here declare only other sections (custom-alert recipe examples);
     # `_SHIPPED_CONFD_ROOTS` already records the same fact as `min keys = 0`.
@@ -1051,6 +1085,65 @@ def _tracked_confd_roots(paths: list[str] | None = None) -> set[str]:
     """
     if paths is None:
         paths = _tracked_paths()
+
+    # ⛔ This function's NAME is "every conf.d root the index knows about" and
+    # its body knew only one spelling of it (#1434). `conf_d_root` matches
+    # `conf.d` exactly, while `_is_defaults_artifact` folds case ON PURPOSE
+    # (it mirrors `config_hierarchy.go`, which lowercases the FILE name). The
+    # asymmetry is not symmetric in consequence: measured on synthetic index
+    # listings, a `CONF.D/` tree holding a `_defaults.yaml` is caught by
+    # nothing, and neither is one holding no artifact — the `unpinned` and
+    # `unregistered` arms below both derive their universe from here, so the
+    # whole registration exit-lock goes with it. The identical tree spelled
+    # `conf.d` reddens both.
+    #
+    # Rather than fold case here — `conf_d_root` is shared with the
+    # guard-defaults workflow (#1219), and the repo's other references to
+    # `conf.d` — the confd-schema hooks in `.pre-commit-config.yaml`, and the
+    # `blast-radius`, `config-diff`, `backtest` and `guard-defaults-impact`
+    # workflows — would stay case-sensitive, so this gate would be demanding
+    # registration for a tree nothing else can see. ⚠️ An earlier wording put a
+    # COUNT here ("89 references across 8 CI files"); blind review could not
+    # reproduce it under any of four definitions (80/8, 66/7, 50/6, 105/10) and
+    # it was self-contradicting besides ("other than" excludes a file that the
+    # 8 includes). The consumers are named instead: a name can be checked by
+    # opening the file, and the argument never needed the total. The fix is
+    # to make the divergence unobservable: if the index only ever holds one
+    # spelling, a case-sensitive and a case-insensitive reader cannot disagree.
+    # ⚠️ This is a claim about the INDEX, not the filesystem, deliberately: the
+    # developer machines here are NTFS and the dev container mounts them over
+    # 9p, both case-insensitive, so a filesystem probe proves nothing either
+    # way. `git ls-files` says the same thing everywhere.
+    near_miss = sorted({
+        str(parent)
+        for rel in paths
+        for parent in PurePosixPath(rel.replace("\\", "/")).parents
+        if parent.name.casefold() == CONF_D and parent.name != CONF_D})
+    if near_miss:
+        raise _GateViolation(
+            f"the index holds {len(near_miss)} directory(ies) that differ from "
+            f"{CONF_D!r} only by case: {near_miss}. Every conf.d-aware check in "
+            "this repo spells it in lower case, so a tree named this way is "
+            "invisible to all of them at once — this floor, the confd-schema "
+            "hooks, blast-radius, config-diff, backtest, and the "
+            "guard-defaults workflow. It is not a supported layout, and the "
+            "silence it buys is the whole failure this floor exists to end.\n"
+            "  RENAME the directory to lower case. Registering it under this "
+            "spelling is not an alternative — it would claim a set of checks "
+            "are running on the tree that structurally are not.\n"
+            "  ⚠️ TWO STEPS on a case-insensitive filesystem, which is what "
+            "the machines this repo is developed on have: a direct "
+            "`git mv A/CONF.D A/conf.d` fails with `Invalid argument`. Go via "
+            "a temporary name — `git mv A/CONF.D A/_tmp && git mv A/_tmp "
+            "A/conf.d`.\n"
+            "  ⚠️ And the rename is not the end: you WILL still have to "
+            "register the tree, in one of the two lists the next message "
+            "names. Renaming makes it visible; it does not account for it.\n"
+            "  ⛔ A directory whose name is merely SIMILAR (`conf_d`, `confd`) "
+            "is not this; only a case variant is, because only a case variant "
+            "reads as correct to a human and as absent to `git ls-files`. "
+            "(#1434)")
+
     roots = set()
     for rel in paths:
         root = conf_d_root(rel)
@@ -1394,8 +1487,16 @@ def _bucket_by_root(
                 break
         # ⛔ EVERY root, by the repo's own definition — not just the shipped
         # three. An artifact outside any `conf.d` tree yields None and is simply
-        # not covered by the fifth floor; that is a real (small) gap, recorded
-        # in the floor's own docstring rather than hidden by a fallback key.
+        # not covered by the fifth floor: it is still scanned, still counted by
+        # the file and key floors, and still placement-checked; what it cannot
+        # have is a per-ROOT floor, there being no root. There were none when
+        # this was written and none in the history up to that point — stated as
+        # a past measurement rather than "today", because nothing re-counts it.
+        # ⚠️ This used to say the gap was "recorded in the floor's own
+        # docstring". It was not — that docstring listed partial shrink and
+        # re-nesting and stopped, so the pointer sent a reader somewhere the
+        # sentence did not exist (#1434). It is now recorded there, and this
+        # comment no longer promises on its behalf.
         all_root = conf_d_root(rel)
         if all_root:
             all_by_root.setdefault(all_root, []).append((rel, keys))
@@ -1511,7 +1612,15 @@ def _assert_shipped_roots_intact(
             "re-nested, or emptied — the file is still there, so the file counts "
             "above did not move. Check the section name first.\n"
             "  OR: the file(s) were deleted or moved — restore them.\n"
-            "  ⛔ LOWERING THESE NUMBERS IS NOT A REMEDY. A shipped root whose "
+            + ("" if not _DEFAULTS_ARTIFACT_EXEMPT else
+               "  OR: you just added a _DEFAULTS_ARTIFACT_EXEMPT entry for a "
+               f"file in this tree ({len(_DEFAULTS_ARTIFACT_EXEMPT)} "
+               "entry/entries). An exemption removes the file from the read "
+               "set, so its keys stop counting here — on a shipped root that "
+               "is not something an exemption may buy. Carry the keys in a "
+               "sibling `_defaults*` file, move the exempted file out of the "
+               "conf.d tree, or do not exempt it. (#1434)\n")
+            + "  ⛔ LOWERING THESE NUMBERS IS NOT A REMEDY. A shipped root whose "
             "keys went to zero is precisely what this floor is for; editing "
             "_SHIPPED_CONFD_ROOTS to match the new reality re-creates the blind "
             "spot. Only change the table when a tree genuinely moved or stopped "
@@ -1531,21 +1640,72 @@ def _assert_every_root_contributes(
     partial shrink, and it does not catch re-nesting (a key moved one level down
     is still a key — `_walk_defaults_keys` counts every level, by design).
 
+    ⚠️ And a third thing it does not cover, moved here from `_bucket_by_root`,
+    which claimed this docstring already said it (#1434): a defaults artifact
+    that sits under NO `conf.d` tree gets no root, so no per-root floor can
+    speak for it. It is not unwatched — the scan, both file floors, the key
+    floors and the placement check all still see it — it simply has no root to
+    be a member of. Measured at 0 such artifacts today, and `git log` finds
+    none in this repo's history either.
+
     `tracked_roots` defaults to the real index scan, the same way `run_check`
     defaults its inputs to the real extractors; hermetic callers inject a set.
+
+    ⚠️ EVERY ARM IS PARAMETER-DRIVEN, the `_DEFAULTS_ROOTS_MAY_BE_EMPTY`
+    exit-lock included: it counts keys out of `by_root` like the rest, and no
+    call in this function touches the filesystem. ⛔ An earlier wording here
+    said the opposite — that the exemption arm read the artifacts off disk and
+    was therefore inert for a hermetic caller. That described a SECOND arm,
+    withdrawn in #1434 (the block at the end of this function says why), and
+    once it went the sentence survived as a live description of behaviour that
+    had inverted: a hermetic caller handing an exempt root a key gets a
+    violation, which is what the exemption-list test one file over relies on.
+    A `threshold_shape` parameter existed briefly for the withdrawn arm and was
+    removed with it; nothing ever passed it.
+    ⚠️ NOTHING ENFORCES THE FIRST SENTENCE. It is checkable in one read — grep
+    this function for a filesystem call — and it is left as a statement rather
+    than a test on purpose: a guard here would be guarding a sentence, and the
+    defect it would catch is the one this paragraph already had to correct.
     """
     if tracked_roots is None:
         tracked_roots = _tracked_confd_roots()
     seen = set(by_root)
     missing = _DEFAULTS_CONFD_ROOTS - seen
     if missing:
+        # ⛔ The exemption half is CONDITIONAL, and printing it unconditionally
+        # was measured as its own small defect (blind review): with the table
+        # empty the message said "0 entry/entries today" and then spent its
+        # longest paragraph on what to do about the entry you did not add,
+        # burying the three causes that could actually be yours.
         raise _GateViolation(
             f"conf.d root(s) {sorted(missing)} contributed no artifact at all. "
             "They are pinned in _DEFAULTS_CONFD_ROOTS, so the scan finding "
-            "nothing under them means the tree moved, was deleted, or its files "
-            "stopped matching `_is_defaults_artifact`. ⛔ Removing the entry is "
-            "only correct if the tree genuinely stopped existing — otherwise it "
-            "re-creates the blind spot this floor was added for (#1411).")
+            "nothing under them means the tree moved, was deleted, or its "
+            "files stopped matching `_is_defaults_artifact`. ⛔ Removing the "
+            "entry is only correct if the tree genuinely stopped existing — "
+            "otherwise it re-creates the blind spot this floor was added for "
+            "(#1411)." + ("" if not _DEFAULTS_ARTIFACT_EXEMPT else
+            f"\n  ⛔ FOURTH CAUSE, and it applies here: "
+            f"_DEFAULTS_ARTIFACT_EXEMPT holds {len(_DEFAULTS_ARTIFACT_EXEMPT)} "
+            "entry/entries, and an exemption removes its file from the read "
+            "set — so exempting the last `_defaults*` file in a root empties "
+            "that root and lands you here. The three remedies above are then "
+            "not yours, and following them leads in a circle: dropping the pin "
+            "sends you to the 'registered nowhere' message, and the only edit "
+            "that turns this green from there is filing the tree under "
+            "_DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS — which is a claim about "
+            "FILES, and the file is still sitting there. That entry would be "
+            "false the moment it was written, and a later 'no longer exists in "
+            "the index' report would quote it back as fact.\n"
+            "  What is actually available — the same three the shipped-root "
+            "floor offers, in the same words on purpose: carry the keys in a "
+            "sibling `_defaults*` file, move the exempted file out of the "
+            "conf.d tree, or do not exempt it. An exemption is for a file "
+            "whose BYTES "
+            "must not change; it was never a way to hand a whole root's "
+            "coverage back. If none of those three fit your case, this gate "
+            "needs to change — say so in an issue rather than making a table "
+            "say something untrue. (#1434)"))
 
     unpinned = sorted(r for r in seen if r not in _DEFAULTS_CONFD_ROOTS)
     if unpinned:
@@ -1684,6 +1844,95 @@ def _assert_every_root_contributes(
             "reported.\n"
             "  OR: this tree genuinely started declaring thresholds — good "
             "news. Remove the line, and the floor now watches it. (#1411)")
+
+    # ⛔⛔ AND THE LOCK ABOVE CANNOT SEE THE CASE IT WAS CITED FOR (#1434).
+    # `if not n_keys: continue` refuses an entry whose root STILL CARRIES KEYS
+    # — and the moment a maintainer reaches for this list is the moment the
+    # root has just gone to ZERO and the floor above has said so. The two
+    # conditions are complementary. Measured before this arm existed: rename a
+    # `defaults:` section away (that floor's own "MOST LIKELY" cause), add one
+    # line to the list, and the gate returned rc=0 with the suite green —
+    # seven of the twelve roots could be silenced that way, i.e. #1411's blind
+    # spot restored by a one-line diff.
+    #
+    # What separates the two states is NOT "is the section there" — a renamed
+    # section is absent in exactly the same way a legitimate one is. It is
+    # whether the tree still holds the declarations, under whatever name they
+    # ended up with. Renaming moves them; it does not delete them.
+    #
+    # ⚠️ ONE CORRECTION OUTLIVED THE THREE ATTEMPTS, because it is about the
+    # data rather than about any predicate: an earlier wording here read
+    # `name: <number|null>` and justified the null half with "null means
+    # opt-out (ADR-017)". Both cited sources say the opposite.
+    # `docs/adr/017-defaults-yaml-inheritance-dual-hash.md` — for a THRESHOLD
+    # key, an explicit `null` does NOT opt out of inheritance; `"disable"` is
+    # the way, and the ADR says treating null as meaningful would amount to
+    # ruling that "half-finished line silently switches an alert off".
+    # `types.go` is blunter still: a null "would not work — it decodes into
+    # map[string]float64 as 0, which emits a threshold of zero for every
+    # tenant". So a null in a `defaults:` block is always a defect, never a
+    # legal state. ⚠️ NOTHING IN THIS FUNCTION ACTS ON THAT — it is written
+    # down so the next attempt does not re-derive the wrong half of it.
+    #
+    # ⛔ NOT GUARDED HERE, and this is a scope decision taken after three
+    # attempts (#1434). The arm that used to sit at this spot asked whether the
+    # tree still held threshold-shaped data, in three successive spellings —
+    # every leaf that looked like a threshold, then the block shape, then that
+    # plus the schema's allowed top-level key set as a second witness. Each
+    # version was measured and each failed the same way round:
+    #
+    #   version                     how it died (all measured, on this tree)
+    #   any `name: <number|null>`   false red on THREE correct edits to the one
+    #                               exempt tree, with no in-repo way to go green
+    #   block shape only            bypassed by one string sibling, one null, or
+    #                               deleting the wrapper — and it gave up the
+    #                               coverage the first version had
+    #   block shape + schema keys   BOTH: still bypassed (rename to `_state_*`,
+    #                               an open `patternProperties` prefix, with one
+    #                               non-numeric child — declarations fully
+    #                               intact, gate green), AND it false-reds on a
+    #                               normal recipe whose `selectors:` values are
+    #                               numbers, in the SHIPPED examples tree, with
+    #                               a message that misdiagnoses the cause
+    #
+    # ⛔ THE COMMON ROOT IS NOT THAT THE PREDICATES WERE BAD. The question is
+    # "was this entry added to hide something", and the only evidence available
+    # at check time is the state AFTER it was hidden — at the moment somebody
+    # reaches for this list, the tree really is empty. No predicate over
+    # today's content can separate that from the legitimate case; ESLint says
+    # the same thing about its own bulk suppressions, and a survey of 20+
+    # ecosystems (PHPStan, Psalm, RuboCop, mypy, pyright, semgrep, SonarQube,
+    # Gatekeeper, Kyverno …) found none that tries. What they do instead is
+    # move to a measurable face: per-violation fingerprints that fail in BOTH
+    # directions, or a regenerated snapshot reviewed as source.
+    #
+    # So the gap in `_DEFAULTS_ROOTS_MAY_BE_EMPTY` is recorded rather than
+    # half-closed, and it is tracked in #1443 — grep either of those to land
+    # back here. Measured before any of this: rename a `defaults:` section away
+    # and add one line to that list, and eight of the twelve roots went to
+    # rc=0 (one of them the entry that is legitimately on the list, so seven
+    # were newly silenceable).
+    # ⚠️ It needs somebody to break a root first and then deliberately add the
+    # line.
+    # ⛔ AND THE SHIPPED FACE IS NOT IMMUNE, which is a correction to an earlier
+    # wording here that said the three shipped roots "cannot be silenced this
+    # way at all, because `_assert_shipped_roots_intact` runs before this
+    # function". Call order is necessary and not sufficient: that floor
+    # compares each shipped root against ITS OWN `(min_artifacts, min_keys)`
+    # pair, and renaming a `defaults:` section changes no file count. So what
+    # protects a shipped root is its `min_keys`, not the order. Measured, same
+    # operation on each of the three, keys zeroed and the line added:
+    #   components/threshold-exporter/config/conf.d  (2, 15)  RED, shipped floor
+    #   try-local/seed/conf.d                        (1,  3)  RED, shipped floor
+    #   rule-packs/recipes/examples/conf.d           (2,  0)  GREEN
+    # The third is the one already legitimately on the exemption list, so
+    # nothing new is silenceable today — but the reason is its list membership,
+    # not the shipped floor, which has nothing to say at `min_keys = 0`. ⚠️ Any
+    # shipped root registered that way is fully exposed to this path, and the
+    # registration table's own note recommends exactly that ("min keys is 0
+    # because both roots legitimately declare only other sections — the
+    # artifact count is what guards them"). The artifact count does not guard
+    # them against this.
 
 
 def _assert_keys_floor(generators: dict[str, dict[str, KeyInfo]],
@@ -1843,7 +2092,16 @@ def _report_placement(face: str, keys: dict[str, KeyInfo], errors: list[str]) ->
             "the nesting, each produce no critical row at all. If "
             "this file's BYTES are an input to another gate (a golden parity "
             "fixture hashes them), do not edit it to satisfy this one: register "
-            "it in _DEFAULTS_ARTIFACT_EXEMPT with a reason. (#1218 / TRK-344)"
+            "it in _DEFAULTS_ARTIFACT_EXEMPT with a reason.\n"
+            "  ⛔ UNLESS it is the only `_defaults*` file in its conf.d root, "
+            "which most of them are. An exemption takes the file out of the "
+            "read set, so exempting the last one empties its root and a "
+            "per-root floor reports THAT instead — a second failure whose "
+            "message is about something else. The three ways out are the ones "
+            "those floors will offer you, in the same words on purpose: carry "
+            "the keys in a sibling `_defaults*` file, move the exempted file "
+            "out of the conf.d tree, or do not exempt it. There is no third "
+            "table to put it in. (#1218 / TRK-344 / #1434)"
         )
     # The other half of the same rule (docs_defaults_sample_test.go pins both;
     # is_shipped_optional_key refuses both).
