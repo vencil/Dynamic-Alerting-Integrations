@@ -2901,3 +2901,63 @@ class TestDryRunWritesNothing:
         assert "would be updated" in out, out
         assert target.read_bytes() == original, (
             "`main()` 沒有把 --dry-run 傳到寫檔那一層")
+
+
+class TestTheDiagnosticSentencesAreThePayload:
+    """⛔ 第七輪盲審 lens U 的最後兩條：**標籤**被斷言了，**要照著做的那句話**
+    沒有。
+
+    兩個變異都存活：`_scope_empty_note` 的整段內容縮成 `"excluded"`，以及
+    glob 展開後的 per-file `desc` 不再指名檔案。維護者拿到的是標籤，而標籤
+    只說「有問題」，不說「問題在哪個檔案、怎麼修」。
+    """
+
+    def test_the_scope_empty_note_says_what_to_do_about_it(self, tmp_path,
+                                                           monkeypatch):
+        """SCOPE-EMPTY 這個診斷刻意不是致命的（`--check --scope docs` 是正當
+        用法），所以那句話**就是**它的全部價值：被排除了幾條規則、以及要怎麼
+        把它們納回來。只斷言標籤等於允許那句話變成噪音。
+        """
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        all_rules = {"platform": [
+            {"file": "helm/x.yaml", "desc": "a", "pattern": "v1",
+             "replacement": lambda v: v},
+            {"file": "helm/y.yaml", "desc": "b", "pattern": "v1",
+             "replacement": lambda v: v},
+        ]}
+        note = bump_docs._scope_empty_note("platform", all_rules, "docs")
+        assert note, "一個把整條線排除掉的 scope 沒有出聲"
+        assert "docs" in note, note          # 是哪個 scope
+        assert "2" in note, note             # 被排除了幾條
+        assert "NOT checked" in note, note   # 後果
+        assert "--scope" in note, note       # 怎麼修
+        # 反向：沒有被排除時不得出聲，否則上面四句都可以是恆真的樣板。
+        assert bump_docs._scope_empty_note("platform", all_rules, "helm") is None
+
+    def test_an_expanded_glob_rule_names_the_file_it_drives(self, tmp_path,
+                                                            monkeypatch):
+        """⛔ per-file `desc` 不指名檔案時，一條 glob 展開出的 260 條規則會印出
+        260 句**一模一樣**的訊息。DEAD / MISSING 的修法第一步就是「打開那個
+        檔案」，而訊息裡沒有檔名。
+        """
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        (tmp_path / "docs").mkdir()
+        for name in ("a.md", "b.md"):
+            (tmp_path / "docs" / name).write_text("x\n", encoding="utf-8",
+                                                  newline="\n")
+        expanded = bump_docs._expand_glob_rules([{
+            "file": "__glob__", "glob_dir": "docs", "glob_pattern": "**/*.md",
+            "desc": "front matter version: in docs/**/*.md",
+            "pattern": r"v[0-9]+", "replacement": lambda v: f"v{v}",
+        }])
+        descs = [r["desc"] for r in expanded]
+        assert len(descs) == 2, descs
+        assert len(set(descs)) == 2, (
+            f"展開出來的規則共用同一句描述：{descs}")
+        for r in expanded:
+            assert r["file"] in r["desc"], (
+                f"規則的描述沒有指名它驅動的檔案：{r['desc']} / {r['file']}")
+        # group 層級的描述反過來**不得**指名個別檔案——GLOB-DEAD 是整條 glob
+        # 的性質，把某一個檔名放進去會讓讀者去修錯的東西。
+        for r in expanded:
+            assert r["glob_desc"] == "front matter version: in docs/**/*.md", r
