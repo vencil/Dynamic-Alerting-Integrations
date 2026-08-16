@@ -2698,3 +2698,206 @@ class TestBareCheckAndGlobGroupIntegrity:
         assert "GLOB-DEAD" not in statuses, (
             "一條正在改寫檔案的 whole-file glob 被判定為死的——假紅會擋下"
             f"合法的 release bump。實得 {changes}")
+
+
+class TestRoundSevenMutationSurvivors:
+    """第七輪盲審 lens U（125 個變異）存活者的補釘。
+
+    形狀與前幾輪相同，只是位置往旁邊移了一格：宣稱窮舉的軸漏掉**基本款**、
+    fixture 讓兩個運算子不可區分、重複守衛只釘了其中一份。
+    """
+
+    def test_a_file_with_one_stale_and_one_current_occurrence_is_not_ok(
+            self, tmp_path, monkeypatch):
+        """⛔ `any(...)` → `all(...)` 存活，因為**每一個 fixture 都只寫一個
+        出現位置**——那個檔案裡兩個運算子完全不可區分。
+
+        真實情境是混合的：有人手動修好了其中一處、另一處留著（這正是
+        `replaced N occurrence(s)` 這句話存在的理由）。在 `all` 之下那個檔案
+        回報「already up to date」、不寫檔、`--check` 綠燈，而那個過期的 pin
+        從此不再被 bump。
+        """
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "x.md").write_text(
+            "image: da-tools:v2.9.0\nother: da-tools:v2.10.0\n",
+            encoding="utf-8", newline="\n")
+        rule = {
+            "file": "docs/x.md", "desc": "probe mixed",
+            "pattern": r"da-tools:v[0-9]+\.[0-9]+\.[0-9]+",
+            "replacement": lambda v: f"da-tools:v{v}",
+        }
+        changes = bump_docs.apply_rules([dict(rule)], "2.10.0",
+                                        check_only=True)
+        assert [c[0] for c in changes] == ["UPDATE"], (
+            "一個混合了過期與最新兩種出現位置的檔案被回報成已是最新——"
+            f"那個過期的 pin 從此不會再被 bump。實得 {changes}")
+        # ⛔ 訊息要指名一個**真的會變**的值。`sorted(set(matches))[0]` 在混合
+        # 檔案裡可能正好是那個已經正確的，於是這行讀起來是
+        # 「replaced 2 occurrence(s): v2.10.0 → v2.10.0」——對一次真實改寫的
+        # 無動作報告。
+        assert "da-tools:v2.9.0 → da-tools:v2.10.0" in changes[0][2], changes
+
+    def test_the_what_if_twin_of_the_collapsed_glob_guard(
+            self, tmp_path, monkeypatch, capsys, cli_argv):
+        """⛔ 同一條守衛有兩份（`apply_rules` 一份、`--what-if` 一份），只有
+        前者被釘。
+
+        後者拿掉之後，一條展開到 0 個檔案的 glob 會被報**兩次**——一次
+        GLOB-EMPTY、一次 GLOB-DEAD——並在 Summary 被重複計數，也就是
+        「一個缺陷、一個診斷」被打破。
+        """
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(bump_docs, "read_current_versions",
+                            lambda: {line: "2.9.0"
+                                     for line in bump_docs.VERSION_LINES})
+        monkeypatch.setattr(bump_docs, "_build_rules", lambda: {
+            line: ([{
+                "file": "__glob__", "glob_dir": "nowhere",
+                "glob_pattern": "**/*.md", "desc": "probe collapsed",
+                "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+",
+                "replacement": lambda v: f"v{v}",
+            }] if line == "platform" else [])
+            for line in bump_docs.VERSION_LINES})
+        cli_argv("bump_docs", "--what-if")
+        with pytest.raises(SystemExit):
+            bump_docs.main()
+        out = capsys.readouterr().out
+        # ⚠️ 逐行判定，不是整份 substring：Summary 那一行本身就含有這兩個
+        # 標籤字樣，用 `in out` 會因為錯誤的理由通過（或失敗）。
+        diagnosis = [ln for ln in out.splitlines()
+                     if "GLOB-EMPTY:" in ln or "GLOB-DEAD:" in ln]
+        assert any("GLOB-EMPTY:" in ln for ln in diagnosis), out
+        assert not any("GLOB-DEAD:" in ln for ln in diagnosis), (
+            "一條 collapsed glob 同時被報成 GLOB-EMPTY 與 GLOB-DEAD——"
+            f"一個缺陷兩個診斷，Summary 也被重複計數。\n{out}")
+        assert "1 ❌ GLOB-EMPTY, 0 ❌ GLOB-DEAD" in out, (
+            f"Summary 把同一個缺陷計了兩次。\n{out}")
+
+    def test_the_tools_ssot_rejects_a_value_that_is_not_a_version(
+            self, tmp_path, monkeypatch):
+        """⛔ `VERSION` 檔的形狀檢查拿掉之後仍然全綠：`banana` 會被當成版號
+        讀進來，然後拿去比對 / 寫入每一條 tools 線的規則。
+
+        既有的 `test_version_file_ssot_accepts_prerelease` 只涵蓋**接受**方向。
+        """
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        vf = tmp_path / "VERSION"
+        monkeypatch.setattr(bump_docs, "DA_TOOLS_VERSION", vf)
+        for bad in ("banana", "2.10", "v2.10.0", "2.10.0 extra", ""):
+            vf.write_text(bad + "\n", encoding="utf-8", newline="\n")
+            assert "tools" not in bump_docs.read_current_versions(), (
+                f"VERSION 檔寫 {bad!r} 被接受成 tools 線的 SSOT")
+        vf.write_text("2.10.0-rc1\n", encoding="utf-8", newline="\n")
+        assert bump_docs.read_current_versions().get("tools") == "2.10.0-rc1"
+
+    def test_the_platform_ssot_anchor_does_not_swallow_anything_parenthesised(
+            self, tmp_path, monkeypatch):
+        """⛔ 平台 SSOT 的 regex 可以被放寬成
+        `Dynamic Alerting[^(]*\\(v?([^)]*)\\)` 而存活——那會吞掉任何一個
+        帶括號的無關字串。既有測試只涵蓋「改寫句子 → NO-SSOT」那個方向，
+        沒有任何東西釘住它**接受**什麼形狀。
+        """
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        md = tmp_path / "CLAUDE.md"
+        md.write_text(
+            "**Multi-Tenant Dynamic Alerting 平台 (v2.9.0)** — Config-driven\n",
+            encoding="utf-8", newline="\n")
+        assert bump_docs.read_current_versions().get("platform") == "2.9.0"
+        # 同一句話換掉產品名，或把版號換成非版號，都不得被讀成 SSOT
+        md.write_text(
+            "**Multi-Tenant Dynamic Alerting 平台 (nightly build)** — x\n",
+            encoding="utf-8", newline="\n")
+        assert "platform" not in bump_docs.read_current_versions(), (
+            "平台 SSOT 的 anchor 把一個不是版號的括號內容讀成了版號")
+
+
+class TestDryRunWritesNothing:
+    """⛔ 第七輪盲審 lens U 的 near-miss，查證後是真的破口。
+
+    把四個寫檔守衛的 `and not dry_run` 全部拿掉，`tests/dx` 會紅——但紅的是
+    **後面某條測試讀到被弄髒的樹**，順序相依，而 `pytest-randomly` 有裝。
+    沒有任何一條斷言直接說「dry run 不寫檔」。
+
+    ⛔ 而 repo 裡那個專門的閘門 `tests/shared/test_dry_run_no_write.py`
+    **看不到這支工具**：它的 `OPS_DIR` 只掃 `scripts/tools/ops/`，
+    `bump_docs.py` 在 `dx/`。實測把上述守衛全部拿掉，該檔 23 條測試全綠。
+    這條把斷言放在工具自己的測試檔裡，不依賴跑哪個子集、也不依賴順序。
+    """
+
+    def _probe_repo(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        (tmp_path / "docs").mkdir()
+        targets = {}
+        for name, body in (
+            ("plain.md", "pin: da-tools:v2.9.0\n"),
+            ("pair.md", "anchor: x\nversion: v2.9.0\n"),
+            ("whole.txt", "2.9.0\n"),
+        ):
+            p = tmp_path / "docs" / name
+            p.write_text(body, encoding="utf-8", newline="\n")
+            targets[name] = p.read_bytes()
+        return targets
+
+    def test_none_of_the_four_write_guards_fires_under_dry_run(
+            self, tmp_path, monkeypatch):
+        rules = [
+            {"file": "docs/plain.md", "desc": "plain",
+             "pattern": r"da-tools:v[0-9]+\.[0-9]+\.[0-9]+",
+             "replacement": lambda v: f"da-tools:v{v}"},
+            {"file": "docs/pair.md", "desc": "pair",
+             "pair_anchor": r"^anchor: x$", "pair_key": "version",
+             "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+",
+             "replacement": lambda v: f"v{v}"},
+            {"file": "docs/whole.txt", "desc": "whole",
+             "whole_file": True, "replacement": lambda v: f"{v}\n"},
+        ]
+        before = self._probe_repo(tmp_path, monkeypatch)
+        changes = bump_docs.apply_rules([dict(r) for r in rules], "9.9.9",
+                                        dry_run=True)
+        assert any(c[0] == "UPDATE" for c in changes), (
+            "探針規則一個都沒觸發，這條測試是空的", changes)
+        for name, original in before.items():
+            now = (tmp_path / "docs" / name).read_bytes()
+            assert now == original, (
+                f"--dry-run 改寫了 {name}：{original!r} → {now!r}")
+
+    def test_main_passes_the_flag_all_the_way_down(self, tmp_path,
+                                                    monkeypatch, capsys,
+                                                    cli_argv):
+        """上一條驗的是 `apply_rules` 的四個守衛；這條驗 `main()` 有沒有把旗標
+        傳下去——兩者是不同的失效點。
+
+        ⚠️ 刻意 **hermetic**（`REPO_ROOT` 指到 tmp_path）。第一版是直接在真的
+        repo 上跑 `--platform 9.9.9 --dry-run` 再問 `git status`；它確實會咬，
+        但守衛壞掉時那一跑會**真的改掉 293 個檔案**，測試自己把工作區弄髒、
+        而且沒有安全的還原方式。一條為了證明「不會寫檔」而寫檔的測試，代價
+        訂錯了。
+        """
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        (tmp_path / "docs").mkdir()
+        target = tmp_path / "docs" / "plain.md"
+        target.write_text("pin: da-tools:v2.9.0\n",
+                          encoding="utf-8", newline="\n")
+        original = target.read_bytes()
+        monkeypatch.setattr(bump_docs, "read_current_versions",
+                            lambda: {line: "2.9.0"
+                                     for line in bump_docs.VERSION_LINES})
+        monkeypatch.setattr(bump_docs, "_build_rules", lambda: {
+            line: ([{
+                "file": "docs/plain.md", "desc": "probe",
+                "pattern": r"da-tools:v[0-9]+\.[0-9]+\.[0-9]+",
+                "replacement": lambda v: f"da-tools:v{v}",
+            }] if line == "platform" else [])
+            for line in bump_docs.VERSION_LINES})
+        cli_argv("bump_docs", "--platform", "9.9.9", "--dry-run")
+        # 這條腿正常結束時**不會** SystemExit（它是成功路徑），所以不能用
+        # `pytest.raises` 包——包了的話守衛壞掉時測試會因為錯的理由紅。
+        try:
+            bump_docs.main()
+        except SystemExit as exc:
+            assert exc.code == 0, exc.code
+        out = capsys.readouterr().out
+        assert "would be updated" in out, out
+        assert target.read_bytes() == original, (
+            "`main()` 沒有把 --dry-run 傳到寫檔那一層")

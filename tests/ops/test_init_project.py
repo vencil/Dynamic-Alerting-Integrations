@@ -2233,10 +2233,46 @@ class TestRunInit:
                          '.gitlab-ci.d/dynamic-alerting.yml\n')
             from pathlib import Path as _P
             assert ip._gitlab_root_includes(_P(repo), _P(sub))
+
+            # ⛔ 這條測試原本到此為止——它只呼叫 helper，**從不驅動
+            # `_print_summary`**，儘管名字與 docstring 講的都是結尾訊息的
+            # 行為。實測：把子目錄的 already-wired 判斷整段換成 `if False`
+            # （於是一個接線正確的 repo 又被要求加一次它已經有的那一行），
+            # 這條測試照樣綠。這正是隔壁 `test_the_subdir_remedy_is_never_a_
+            # bare_fragment` 的 docstring 才剛警告過的同一個缺陷。
+            import contextlib
+            import io
+            config = {
+                'ci': 'gitlab', 'deploy': 'kustomize',
+                'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+            }
+            created = ip.run_init(config, sub)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ip._print_summary(created, sub, config)
+            out = buf.getvalue()
+            assert 'GitLab wiring already in place' in out, out
+            wiring_warnings = [
+                ln for ln in out.splitlines()
+                if '⚠️' in ln and '.gitlab-ci' in ln]
+            assert not wiring_warnings, (
+                '一個接線正確的 split-pipeline repo 仍被要求接線：\n'
+                + '\n'.join(wiring_warnings))
+
             # …and a root that includes something else does NOT count.
             with open(root_ci, 'w', encoding='utf-8', newline='\n') as fh:
                 fh.write('include:\n  - template: Security/SAST.yml\n')
             assert not ip._gitlab_root_includes(_P(repo), _P(sub))
+            created = ip.run_init(config, sub)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ip._print_summary(created, sub, config)
+            out2 = buf.getvalue()
+            assert 'GitLab wiring already in place' not in out2, out2
+            assert any('⚠️' in ln and '.gitlab-ci' in ln
+                       for ln in out2.splitlines()), out2
 
     def test_only_a_file_without_an_include_key_gets_a_paste_ready_block(self):
         """The one edit whose correctness does not depend on the file's style.
@@ -4063,3 +4099,246 @@ class TestTheCliLayerItself:
             assert r.returncode == ip.EXIT_VIOLATION, (
                 r.returncode, r.stderr[-400:])
             assert (_P(tmpdir) / '.da-init.yaml').is_dir()
+
+
+class TestTheClosingLineAndTheSubdirWarningSayTrueThings:
+    """⛔ 第七輪盲審 lens U：結尾那句與子目錄警告的**內容**幾乎沒有被斷言。
+
+    四個各自獨立的存活變異，共同點是既有斷言「因為別的理由」而成立：
+      * 子目錄的 `--ci both` 分岔可以整個拿掉——擋它的守衛詞出現在它要抓的
+        那句反話裡；
+      * 結尾那句可以指名一個這次沒選的平台；
+      * 整段子目錄 GitHub 警告可以換成一句佔位噪音；
+      * 「加在檔案最後」這五個字可以刪掉。
+    """
+
+    _CFG = {
+        'deploy': 'kustomize', 'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+        'namespace': 'monitoring',
+        'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+    }
+
+    def _summary(self, tmpdir, ci, sub='', root_body=None):
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        repo = _P(tmpdir) / 'repo'
+        (repo / '.git').mkdir(parents=True)
+        target = repo / sub if sub else repo
+        target.mkdir(exist_ok=True)
+        if root_body is not None:
+            (repo / '.gitlab-ci.yml').write_text(
+                root_body, encoding='utf-8', newline='\n')
+        config = dict(self._CFG, ci=ci)
+        created = ip.run_init(config, str(target))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ip._print_summary(created, str(target), config)
+        return buf.getvalue()
+
+    def _closing(self, out):
+        """結尾那句：講「提交並推送」的那一行。"""
+        hits = [ln.strip() for ln in out.splitlines()
+                if 'commit and push' in ln.lower() or '提交並推送' in ln
+                or '推送' in ln]
+        assert len(hits) == 1, (hits, out)
+        return hits[0]
+
+    @pytest.mark.parametrize('ci,forbidden', [
+        ('gitlab', 'GitHub Actions'),
+        ('github', 'GitLab'),
+    ])
+    def test_the_closing_line_never_names_an_unselected_platform(
+            self, ci, forbidden):
+        """⛔ 平台名稱查表的兩個值都可以被改掉而全綠：`--ci gitlab` 可以收尾在
+        「GitHub Actions + GitLab CI will automatically validate your config」。
+
+        釘住它的那句斷言（`"GitHub Actions + GitLab CI" not in summary`）在
+        `if ci == "both"` 底下——也就是只在**已經選了 both** 的時候才檢查。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._summary(tmpdir, ci)
+        line = self._closing(out)
+        assert forbidden not in line, (
+            f'--ci {ci} 的結尾句指名了 {forbidden}：{line}')
+
+    def test_a_subdirectory_never_closes_with_an_automatic_validation_claim(
+            self):
+        """⛔ 子目錄的 `--ci both` 分岔拿掉之後，收尾變成
+        「GitHub Actions validates automatically; GitLab CI only after you
+        complete the step above」——而它印在「⚠️ GitHub is NOT wired」的兩步
+        之後，GitHub 正是那條**沒有** `include:` 可以從根救回來的腿。
+
+        ⚠️ 既有的守衛用 `"only" not in ln` 當豁免詞，而那句反話裡就有 "only"
+        （"GitLab CI **only** after…"）——斷言被它要抓的那句話自己滿足。改成
+        判定：子目錄下的結尾句不得對**任何**平台宣稱自動驗證。
+        """
+        wired = ('include:\n  - local: alerting/.gitlab-ci.d/'
+                 'dynamic-alerting.yml\n')
+        for root_body in (None, wired):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                out = self._summary(tmpdir, 'both', sub='alerting',
+                                    root_body=root_body)
+            line = self._closing(out)
+            assert 'automatically' not in line.lower(), (
+                '子目錄安裝的結尾句宣稱有東西會自動驗證——GitHub 那條腿在'
+                f'子目錄下是無條件未完成的：{line}')
+            assert '自動驗證' not in line, line
+
+    @pytest.mark.parametrize('lang', ['en', 'zh'])
+    def test_the_subdir_github_warning_names_the_file_and_its_destination(
+            self, lang, monkeypatch):
+        """⛔ 整段警告可以被換成 `⚠️ something about \\`alerting/\\`` 而全綠：
+        既有斷言只有「summary 裡有 ⚠️」與「summary 裡有 alerting」兩句，
+        佔位字串兩句都滿足。
+
+        客戶真正需要的兩件事——**哪個檔案**、**移到哪裡**——一個都沒被斷言。
+        兩個語系分開釘：只釘一次的話，刪掉其中一個語系的整段（讓另一個語系的
+        文案印給使用者）照樣過。
+        """
+        monkeypatch.setattr(ip, '_LANG', lang)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._summary(tmpdir, 'github', sub='alerting')
+        src = 'alerting/.github/workflows/dynamic-alerting.yaml'
+        dst = '.github/workflows/dynamic-alerting.yaml'
+        warn = [ln for ln in out.splitlines() if '⚠️' in ln and src in ln]
+        assert warn, (
+            f'{lang}: 子目錄的 GitHub 警告沒有指名要搬的那個檔案 {src}\n{out}')
+        assert any(dst in ln for ln in warn), (
+            f'{lang}: 警告說了要搬，但沒說搬到哪裡\n{warn}')
+        # 語系必須真的切換，否則「兩個語系」這個軸是假的。
+        marker = '尚未接線' if lang == 'zh' else 'is NOT wired'
+        assert any(marker in ln for ln in warn), (lang, warn)
+
+    def test_the_append_instruction_names_the_paste_position(self):
+        """⛔ 「加在檔案最後」可以刪掉而全綠。
+
+        產品碼的註解說得很清楚：後置條件只驗證了**一個**貼上位置（EOF
+        append），而 GitLab 官方文件把 `include:` 放在檔案**開頭**——對以
+        `---` 開頭的文件，頂端貼是 parse error。那五個字就是讓被驗證過的
+        片段成立的東西。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._summary(tmpdir, 'gitlab',
+                                root_body='stages:\n  - build\n')
+        assert 'AT THE END' in out, (
+            '可安全附加的指示沒有指明貼在哪裡——後置條件只驗過檔尾那一個位置'
+            f'\n{out}')
+
+
+class TestTheDryRunLegsThatNoTestReaches:
+    """⛔ 第七輪盲審 lens U：`--dry-run` 的三個分支條件沒有任何測試觀察得到。
+
+    共同成因：既有測試各自為了正當理由把軸縮窄了（「GitHub 在子目錄下是無條件
+    未完成的，所以這條只測 gitlab」），而縮窄所**蘊含**的那條姊妹測試從來沒有
+    被寫出來——於是縮窄留下的那一格永遠沒人看。
+
+    `--dry-run` 是「這會對我的 repo 做什麼」那個旗標，它說錯話的成本與實跑一樣。
+    """
+
+    _CFG = {
+        'deploy': 'kustomize', 'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+        'namespace': 'monitoring',
+        'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+    }
+
+    def _dry(self, tmpdir, ci, sub='', root_body=None):
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        repo = _P(tmpdir) / 'repo'
+        (repo / '.git').mkdir(parents=True)
+        target = repo / sub if sub else repo
+        target.mkdir(exist_ok=True)
+        if root_body is not None:
+            (repo / '.gitlab-ci.yml').write_text(
+                root_body, encoding='utf-8', newline='\n')
+        buf = io.StringIO()
+        # `_handle_dry_run` ends in `sys.exit(0)` — it is a terminal CLI leg.
+        with contextlib.redirect_stdout(buf), pytest.raises(SystemExit) as exc:
+            ip._handle_dry_run(dict(self._CFG, ci=ci), str(target))
+        assert exc.value.code == 0, exc.value.code
+        return buf.getvalue()
+
+    _WIRED = ('include:\n  - local: alerting/.gitlab-ci.d/'
+              'dynamic-alerting.yml\n')
+
+    # ⚠️ 只有 `both` 對那個變異有鑑別力：`--ci github` 之下 `_gl_ok` 因為
+    # `ci_sel` 那一項就已經是 False，所以 `not _gl_ok` 仍然為真、警告照印。
+    # `github` 這一格留著是為了釘住「兩個值都必須被警告」這個性質本身。
+    @pytest.mark.parametrize('ci', ['github', 'both'])
+    def test_github_in_a_wired_subdirectory_is_still_warned_about(self, ci):
+        """⛔ 拿掉 `_gh_pending` 這一項之後，一個 GitLab 已正確接線的
+        split-pipeline repo 跑 `-o alerting/ --ci both --dry-run` 只會印出檔案
+        清單、什麼都不說——而實跑會印「⚠️ GitHub is NOT wired … move it」。
+
+        既有那條「已接線的子目錄不該被警告」刻意只用 `--ci gitlab`，
+        docstring 也解釋了為什麼；但**沒有任何姊妹測試涵蓋同一個 repo 上的
+        github / both**。另一條正向測試確實有跑遍 `--ci` 三值，可是它的
+        fixture 根本沒有 root pipeline，於是 `_gl_ok` 恆假、`_gh_pending`
+        從來不需要出力。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._dry(tmpdir, ci, sub='alerting', root_body=self._WIRED)
+        assert '⚠️' in out, (
+            f'--ci {ci} 在一個 GitLab 已接線的子目錄裡完全沒有警告——'
+            f'GitHub 那條腿在子目錄下是無條件未完成的。\n{out}')
+        assert 'GitHub Actions' in out, out
+
+    def test_gitlab_only_in_a_wired_subdirectory_is_silent(self):
+        """反向：同一個 repo 上 `--ci gitlab` 不得警告（否則上面那條只是
+        『永遠有警告』的同義反覆）。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._dry(tmpdir, 'gitlab', sub='alerting',
+                            root_body=self._WIRED)
+        assert '⚠️' not in out, out
+
+    def test_a_root_that_already_includes_us_is_not_told_to_wire_it(self):
+        """⛔ `status not in (CREATE, ALREADY_WIRED)` → `status != CREATE`
+        存活：一個根 `.gitlab-ci.yml` **已經 include 我們** 的 repo 被
+        `--dry-run` 告知「this tool will not modify it; you will still have to
+        wire in the include: yourself」——實跑說不用做的事。
+
+        既有的 brownfield 測試用的是**未接線**的根檔，靜默測試用的是
+        greenfield，已接線的根檔兩者都不涵蓋。
+        """
+        wired_root = ('include:\n  - local: .gitlab-ci.d/'
+                      'dynamic-alerting.yml\n')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._dry(tmpdir, 'gitlab', root_body=wired_root)
+        assert '⚠️' not in out, (
+            '一個已經 include 我們的根檔被要求再接一次\n' + out)
+
+    def test_ci_github_is_not_told_about_a_gitlab_include(self):
+        """⛔ `elif ci_sel in ('gitlab','both')` → `elif True` 存活：
+        `--ci github --dry-run` 在一個 brownfield 根檔上印出 GitLab 的 include
+        警告——這次執行根本沒產生任何 GitLab 設定。
+
+        brownfield 測試的 `ci` 軸是 `["gitlab","both"]`，`github` 被排除在外；
+        靜默測試用 greenfield。於是「`--ci github` + 既有根 pipeline」這一格
+        沒有任何觀察者。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = self._dry(tmpdir, 'github',
+                            root_body='stages:\n  - build\n')
+        assert '⚠️' not in out, (
+            '--ci github 被告知它不存在的 GitLab 設定接線問題\n' + out)
+
+    def test_a_dry_run_writes_nothing_at_all(self):
+        """⛔ 四個寫檔守衛的 `and not dry_run` 全部拿掉時，`tests/ops` 與
+        `tests/dx` 裡沒有任何**直接**斷言會抓到它——上一輪那個「紅」是後面
+        某條測試讀到被弄髒的樹，是順序相依的巧合，而 `pytest-randomly`
+        有裝。
+
+        `tests/shared/test_dry_run_no_write.py` 有直接斷言，但那是另一個檔案；
+        這條把同一句話放進**產生器自己的**測試檔，讓它不依賴跑哪個子集。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from pathlib import Path as _P
+            self._dry(tmpdir, 'both')
+            repo = _P(tmpdir) / 'repo'
+            written = sorted(p.relative_to(repo).as_posix()
+                             for p in repo.rglob('*') if p.is_file())
+        before, after = [], written
+        assert before == after, (
+            f'--dry-run 寫了東西到磁碟：{sorted(set(after) - set(before))}')

@@ -1957,14 +1957,26 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
                 changes.append(("OK", rule["desc"], "no match (may already be updated)"))
             continue
 
+        # ⛔ `any`, not `all`. A file legitimately holds a MIX: someone
+        # hand-fixed one occurrence and left the other, which is exactly the
+        # state `replaced N occurrence(s)` is worded for. Under `all` that file
+        # reports "already up to date", nothing is written, `--check` stays
+        # green, and the stale pin is never bumped again. Every fixture in the
+        # suite wrote exactly ONE occurrence, so the two were indistinguishable
+        # everywhere (#1407, seventh-round mutation pass).
         needs_update = any(m != replacement for m in matches)
         if needs_update:
             new_content = re.sub(pattern, replacement, scan_text,
                                  flags=re.MULTILINE) + frozen_tail
-            # Build diff detail
+            # Build diff detail. ⛔ Name a value that actually CHANGES: with a
+            # mixed file, `sorted(set(matches))[0]` can be the occurrence that
+            # was already correct, and the line then reads
+            # "replaced 2 occurrence(s): v2.10.0 → v2.10.0" — a no-op report
+            # for a real rewrite.
             unique_old = sorted(set(matches))
+            stale = [m for m in unique_old if m != replacement]
             diff_detail = (f"replaced {len(matches)} occurrence(s): "
-                           f"{unique_old[0]} → {replacement}")
+                           f"{(stale or unique_old)[0]} → {replacement}")
             if dry_run:
                 diff_detail = f"[dry-run] {diff_detail}"
             changes.append(("UPDATE", rule["desc"], diff_detail))
