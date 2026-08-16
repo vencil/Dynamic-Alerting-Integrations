@@ -958,7 +958,7 @@ lint-new-script: ## Run all CLI/SAST conventions on a single new lint script (PR
 	@echo ""
 	@echo "✓ All convention gates pass for $(SCRIPT)"
 
-version-show: ## 顯示目前三條版號線
+version-show: ## 顯示目前六條版號線（含讀不到 SSOT 的線）
 	@python3 ./scripts/tools/dx/bump_docs.py --show-current
 
 bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0.2.0 EXPORTER=0.6.0 PORTAL=2.8.0 RECIPE_PREVIEW=2.9.0 TENANT_API=2.9.20)

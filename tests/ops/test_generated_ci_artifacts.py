@@ -3308,10 +3308,15 @@ def test_gitlab_root_shell_wires_the_pipeline(generated, tmp_path, capsys) -> No
     # the closing line must not promise validation without naming that work.
     closing = [ln for ln in summary.splitlines() if "GitLab CI" in ln]
     assert closing, f"no closing platform line at all.\n{summary}"
-    assert any("include" in ln for ln in closing), (
-        "the summary promises validation without mentioning the include the "
-        f"customer still has to wire in.\n{summary}"
-    )
+    # Same property as the parametrized test: not the word "include" (the
+    # remedy differs per path — move a file, convert a list, paste a block)
+    # but the absence of an unconditional promise.
+    assert not [
+        ln for ln in closing
+        if ("automatically validate" in ln or "會自動驗證" in ln)
+        and "only" not in ln.lower() and "才會" not in ln
+    ], ("the summary promises validation unconditionally while the customer "
+        f"still has to wire it in.\n{summary}")
 
 
 # The wiring the generator promises, read off the generator so this file cannot
@@ -3395,6 +3400,53 @@ _ROOT_SHAPES = {
 # axis made "speak a GitLab-only manual step over the combined platform name"
 # invisible. A shrunken axis reports fewer tests and stays green.
 _SUMMARY_CI_VALUES = ["github", "gitlab", "both"]
+
+
+@pytest.mark.parametrize("lang", sorted(_SUMMARY_MARKERS))
+@pytest.mark.parametrize("ci", ["github", "gitlab", "both"])
+def test_output_dir_below_the_repo_root_is_never_an_all_clear(
+    lang, ci, tmp_path, capsys, monkeypatch,
+) -> None:
+    """⛔ The subdirectory leg was added to stop a false all-clear, and the
+    all-clear itself was never pinned.
+
+    `_enclosing_repo_root` was tested only as a pure function: no test drove
+    `_print_summary` with an output dir inside a work-tree, so deleting the
+    whole ⚠️ step, and dropping the subdirectory case from the "still has
+    work" condition, both survived the suite. The second one restores
+    "Commit and push — CI will automatically validate your config" for a run
+    whose pipeline the repository root does not include — #1357 re-created
+    and certified, which is the exact sentence this leg exists to prevent.
+
+    GitHub needs it more than GitLab, not less: GitLab can be rescued from
+    the root with `include:`, GitHub Actions has no such indirection.
+    """
+    monkeypatch.setattr(ip, "_LANG", lang)
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    sub = repo / "alerting"
+    sub.mkdir()
+
+    config = {
+        "ci": ci, "deploy": "kustomize", "rule_packs": ["mariadb"],
+        "tenants": ["db-a"], "namespace": "monitoring",
+        "da_tools_image": "ghcr.io/vencil/da-tools:latest",
+    }
+    created = ip.run_init(config, str(sub))
+    ip._print_summary(created, str(sub), config)
+    summary = capsys.readouterr().out
+
+    assert "⚠️" in summary, (
+        f"a run into `alerting/` reported no warning at all.\n{summary}")
+    assert "alerting" in summary, (
+        f"the warning never names the subdirectory.\n{summary}")
+    # ⛔ The load-bearing half: no unconditional promise anywhere.
+    assert not [
+        ln for ln in summary.splitlines()
+        if ("automatically validate" in ln or "會自動驗證" in ln)
+        and "only" not in ln.lower() and "才會" not in ln
+    ], (f"the summary promised unconditional validation for CI config "
+        f"written below the repository root.\n{summary}")
 
 
 def test_summary_axes_cannot_shrink_silently() -> None:
@@ -3540,9 +3592,20 @@ def test_summary_wiring_line_reports_what_init_actually_did(
     closing = [ln for ln in summary.splitlines() if "GitLab CI" in ln]
     assert closing, f"no closing platform line at all.\n{summary}"
     if needs_action:
-        assert any("include" in ln for ln in closing), (
-            "the closing line promises validation without mentioning the "
-            f"include the customer still has to paste.\n{summary}"
+        # ⛔ The property is "does not promise unconditional validation", not
+        # "contains the word include". The remedy is not always an include —
+        # on the `--output-dir`-below-repo-root path it is "move the file",
+        # and GitHub has no include mechanism at all — so pinning the word
+        # made the assertion fail on a correct rewording rather than on a
+        # regression. What must never come back is the bare promise.
+        unconditional = [
+            ln for ln in closing
+            if ("automatically validate" in ln or "會自動驗證" in ln)
+            and "only" not in ln.lower() and "才會" not in ln
+        ]
+        assert not unconditional, (
+            "the closing line promises validation unconditionally on a path "
+            f"where the customer still has work to do.\n{summary}"
         )
 
 

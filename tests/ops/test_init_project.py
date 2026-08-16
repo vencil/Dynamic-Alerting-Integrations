@@ -1942,6 +1942,79 @@ class TestRunInit:
         assert 'build' in merged, (
             'pasting the block lost the rest of the customer file')
 
+    def test_the_block_carve_out_is_verified_not_assumed(self):
+        """⛔ Post-condition, not premise.
+
+        The carve-out was justified as "adding a brand-new top-level key at
+        the end of a document is style-independent". That is false for at
+        least two shapes GitLab accepts: a document closed with `...`, and a
+        JSON/flow-style root (what jsonnet, CUE and json.dumps pipelines
+        commit). Appending a block mapping to either is a parse error that
+        takes the customer's whole pipeline down — the failure class this
+        redesign exists to eliminate.
+
+        So the classifier applies the edit and checks, rather than reasoning
+        about style.
+        """
+        for name, body in {
+            'doc-end marker': 'stages: [build]\n...\n',
+            'json root': '{"stages": ["build"], "build": {"script": ["x"]}}\n',
+        }.items():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                status = self._status_for(tmpdir, body)
+                assert status == ip._GL_ROOT_NEEDS_CONVERT, (name, status)
+                assert (ip._gitlab_root_snippet_for(status)
+                        == ip._GL_WIRING_EXAMPLE), name
+        # …and a plain block document still gets the convenient block.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status = self._status_for(tmpdir, 'stages: [build]\n')
+            assert status == ip._GL_ROOT_NEEDS_INCLUDE, status
+
+    def test_no_shell_is_planted_in_a_subdirectory(self):
+        """⛔ GitLab reads only the repo root, and the shell's `local:` path is
+        resolved from there — so a shell written into a subdirectory is both
+        unread AND wrong the moment the customer does the obvious `git mv`
+        to rescue it. Writing it is not a partial fix.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = os.path.join(tmpdir, 'repo')
+            os.makedirs(os.path.join(repo, '.git'))
+            sub = os.path.join(repo, 'alerting')
+            os.makedirs(sub)
+            config = {
+                'ci': 'gitlab', 'deploy': 'kustomize',
+                'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+            }
+            created = ip.run_init(config, sub)
+            assert not os.path.exists(os.path.join(sub, '.gitlab-ci.yml')), (
+                'a root shell was planted in a subdirectory GitLab never '
+                'reads, carrying an include path wrong from the repo root')
+            assert os.path.join(sub, '.gitlab-ci.yml') not in created
+
+    def test_subdir_already_wired_at_the_repo_root_is_not_nagged(self):
+        """The subdirectory branch used to take precedence over every other
+        state and never look at the repository root, so a customer who had
+        already wired the subdir path correctly was told to add a line their
+        file already contains.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = os.path.join(tmpdir, 'repo')
+            os.makedirs(os.path.join(repo, '.git'))
+            sub = os.path.join(repo, 'alerting')
+            os.makedirs(sub)
+            root_ci = os.path.join(repo, '.gitlab-ci.yml')
+            with open(root_ci, 'w', encoding='utf-8', newline='\n') as fh:
+                fh.write('include:\n  - local: alerting/'
+                         '.gitlab-ci.d/dynamic-alerting.yml\n')
+            from pathlib import Path as _P
+            assert ip._gitlab_root_includes(_P(repo), _P(sub))
+            # …and a root that includes something else does NOT count.
+            with open(root_ci, 'w', encoding='utf-8', newline='\n') as fh:
+                fh.write('include:\n  - template: Security/SAST.yml\n')
+            assert not ip._gitlab_root_includes(_P(repo), _P(sub))
+
     def test_only_a_file_without_an_include_key_gets_a_paste_ready_block(self):
         """The one edit whose correctness does not depend on the file's style.
 
@@ -1975,6 +2048,72 @@ class TestRunInit:
             assert ip._enclosing_repo_root(sub) is not None
             assert ip._enclosing_repo_root(repo) is None, (
                 'the repo root itself must not be treated as a subdirectory')
+
+    # ⛔ RESTORED. These three were written to close earlier review findings
+    # and were then silently deleted by an index-based slice edit while a
+    # neighbouring block was rewritten. Nothing caught it — the deleted
+    # things WERE the guards, and a test that no longer exists cannot fail.
+    # A later round found the `_GL_STAGES` one only because the source
+    # comment still named it and the name resolved to nothing.
+    def test_force_does_not_rewrite_an_existing_root_gitlab_ci(self):
+        """⛔ The `--force` help promises this exception; nothing tested it.
+
+        `--force` is the most destructive flag the tool has — it exists to
+        discard hand edits — and the one file it must never touch is the one
+        that may be the customer's ENTIRE pipeline. A mutation that ORs
+        `--force` into the root-shell write condition left the whole suite
+        green, so the promise lived only in prose.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root_path = os.path.join(tmpdir, '.gitlab-ci.yml')
+            original = 'stages: [build]\n\nbuild:\n  script:\n    - echo hi\n'
+            with open(root_path, 'w', encoding='utf-8', newline='\n') as fh:
+                fh.write(original)
+            config = {
+                'ci': 'gitlab',
+                'deploy': 'kustomize',
+                'rule_packs': ['mariadb'],
+                'tenants': ['db-a'],
+                'namespace': 'monitoring',
+                'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+                'force': True,
+            }
+            # Two runs: the second is the "already initialised, forced" shape.
+            ip.run_init(config, tmpdir)
+            created = ip.run_init(config, tmpdir)
+            assert open(root_path, encoding='utf-8').read() == original, (
+                '--force rewrote an existing root .gitlab-ci.yml, deleting '
+                "the customer's own pipeline")
+            assert root_path not in created
+
+    def test_gitlab_strips_leading_slashes_so_we_must_too(self):
+        """`local: /path` and `local: path` are the same file to GitLab.
+
+        Its own docs use the leading slash in every `include:local` example,
+        so comparing raw strings made a correctly wired repo read as unwired —
+        and we then asked for a second include of the file it already loads.
+        """
+        for spelling in ('/.gitlab-ci.d/dynamic-alerting.yml',
+                         './.gitlab-ci.d/dynamic-alerting.yml'):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                status = self._status_for(
+                    tmpdir, f'include:\n  - local: {spelling}\n')
+                assert status == ip._GL_ROOT_ALREADY_WIRED, (spelling, status)
+
+    def test_root_shell_only_names_stages_the_pipeline_declares(self):
+        """⛔ The shell is shipped INTO the customer's repo and tells them
+        which `stage:` values their own jobs may use. It named `generate`
+        for two commits after #1358 deleted that stage — a customer following
+        it gets a pipeline GitLab refuses to build, so nothing runs at all,
+        validation included. Derive, do not retype.
+        """
+        shell = ip._gen_gitlab_root_shell()
+        declared = yaml.safe_load(
+            ip._gen_gitlab_ci('monitoring', 'img', 'kustomize'))['stages']
+        assert list(ip._GL_STAGES) == declared, (ip._GL_STAGES, declared)
+        named = re.search(r'drawn from that list \(([^)]*)\)', shell)
+        assert named, shell
+        assert [x.strip() for x in named.group(1).split(',')] == declared
 
     def test_root_file_already_including_ours_is_wired(self):
         with tempfile.TemporaryDirectory() as tmpdir:

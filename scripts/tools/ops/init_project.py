@@ -1586,6 +1586,30 @@ def _enclosing_repo_root(output_dir: str) -> Optional[Path]:
     return None
 
 
+def _gitlab_root_includes(repo_root: Path, output_dir: Path) -> bool:
+    """Does the REPOSITORY-root pipeline already include our subdir pipeline?
+
+    Only meaningful when `output_dir` is below `repo_root`. Everything else
+    in this module reads `<output_dir>/.gitlab-ci.yml`; this is the one place
+    that has to look at the real root, because that is the file GitLab reads
+    and the one the subdirectory warning talks about.
+    """
+    root_ci = repo_root / _GL_ROOT_SHELL_REL
+    try:
+        body = root_ci.read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return False
+    try:
+        doc = yaml.safe_load(body)
+    except yaml.YAMLError:
+        return False
+    try:
+        want = (output_dir.relative_to(repo_root) / _GL_PIPELINE_REL).as_posix()
+    except ValueError:
+        return False
+    return want in _gitlab_declared_includes(doc)
+
+
 def _gitlab_root_shell_status(output_dir: str) -> str:
     """Decide what to do about the repository-root `.gitlab-ci.yml`.
 
@@ -1648,6 +1672,26 @@ def _gitlab_root_shell_status(output_dir: str) -> str:
     if _GL_PIPELINE_REL.as_posix() in includes:
         return _GL_ROOT_ALREADY_WIRED
     if not (isinstance(doc, dict) and 'include' in doc):
+        # ⛔ POST-CONDITION, not a premise. The carve-out for "no `include:`
+        # key" was justified as "adding a brand-new top-level key at the end
+        # of a document is the one edit whose correctness does not depend on
+        # the rest of the file's style". That is false for at least two
+        # shapes GitLab accepts: a document closed with `...`, and a
+        # JSON/flow-style root (what jsonnet, CUE and `json.dumps` pipelines
+        # commit). Appending a block mapping to either is a parse error that
+        # takes the customer's whole pipeline down.
+        #
+        # So do not reason about style — apply the edit and check. Anything
+        # the ready-made block would break falls back to the worked example,
+        # which asks the customer to fit it to their own document.
+        try:
+            pasted = yaml.safe_load(body + '\n' + _GL_INCLUDE_SNIPPET)
+        except yaml.YAMLError:
+            return _GL_ROOT_NEEDS_CONVERT
+        if not (isinstance(pasted, dict)
+                and _GL_PIPELINE_REL.as_posix()
+                in _gitlab_declared_includes(pasted)):
+            return _GL_ROOT_NEEDS_CONVERT
         return _GL_ROOT_NEEDS_INCLUDE
     # ⛔ LIST-ness, not mere presence. `include:` also accepts a bare string
     # (`include: 'a.yml'`) and a single mapping (`include:\n  template: …`),
@@ -1680,8 +1724,17 @@ def _gitlab_root_snippet_for(status: str) -> str:
 
 
 def _gitlab_root_shell_is_needed(output_dir: str) -> bool:
-    """True when we may create the root `.gitlab-ci.yml` ourselves."""
-    return _gitlab_root_shell_status(output_dir) == _GL_ROOT_CREATE
+    """True when we may create the root `.gitlab-ci.yml` ourselves.
+
+    ⛔ Also false when `output_dir` is BELOW the repository root. GitLab reads
+    only the repo-root file, so a shell planted in a subdirectory is inert —
+    and worse, its `local:` path is resolved from the repo root, so it is
+    wrong the moment the customer does the obvious `git mv` to rescue it.
+    Writing a file that is both unread and mis-pathed is not a partial fix;
+    the summary tells them what to add at the root instead.
+    """
+    return (_gitlab_root_shell_status(output_dir) == _GL_ROOT_CREATE
+            and _enclosing_repo_root(output_dir) is None)
 
 
 def _gen_gitlab_root_shell() -> str:
@@ -2505,14 +2558,49 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
     # how NEEDS_CONVERT silently inherited "CI will automatically validate".
     # The subdirectory case is unfinished work too: whatever we wrote, the
     # repository root does not include it yet.
-    gl_in_subdir = _enclosing_repo_root(output_dir) is not None
-    gl_needs_manual = (ci_sel in ('gitlab', 'both')
-                       and (gl_in_subdir
-                            or (not gl_root_written
-                                and gl_status != _GL_ROOT_ALREADY_WIRED)))
+    repo_root = _enclosing_repo_root(output_dir)
+    gl_in_subdir = repo_root is not None
+    gl_subdir_wired = (gl_in_subdir and _gitlab_root_includes(
+        repo_root, Path(output_dir).resolve()))
+    # ⛔ In a subdirectory the LOCAL status is meaningless — `gl_status` reads
+    # `<output_dir>/.gitlab-ci.yml`, a path GitLab never looks at. The only
+    # question that matters there is whether the REPOSITORY root includes us.
+    # Mixing the two made a correctly-wired subdir repo get "nothing to do"
+    # on one line and "you still have work" on the next.
+    if gl_in_subdir:
+        gl_needs_manual = not gl_subdir_wired
+    else:
+        gl_needs_manual = (ci_sel in ('gitlab', 'both')
+                           and not gl_root_written
+                           and gl_status != _GL_ROOT_ALREADY_WIRED)
 
     if ci_sel in ('github', 'both'):
-        if is_zh:
+        # ⛔ GitHub needs this warning MORE than GitLab, not less. GitLab at
+        # least has `include:`, so a pipeline in a subdirectory can be
+        # rescued from the root; GitHub Actions loads
+        # `<repo-root>/.github/workflows/` and nothing else, with no
+        # indirection to recover it. A workflow written one level down is
+        # simply inert, so "GitHub wiring done" there is a clean bill of
+        # health for something that will never run — #1357's shape, on the
+        # leg that has no remedy.
+        if repo_root is not None:
+            rel = Path(output_dir).resolve().relative_to(repo_root)
+            if is_zh:
+                print(f"  {step}. ⚠️ GitHub 尚未接線：workflow 產在 "
+                      f"`{rel.as_posix()}/` 底下，而 GitHub Actions 只會載入 "
+                      f"**repo 根目錄**的 `.github/workflows/`。請把 "
+                      f"`{(rel / _GH_WORKFLOW_REL).as_posix()}` 移到 "
+                      f"`{_GH_WORKFLOW_REL.as_posix()}`"
+                      f"（GitHub 沒有 include 機制可以繞過這件事）")
+            else:
+                print(f"  {step}. ⚠️ GitHub is NOT wired: the workflow was "
+                      f"written under `{rel.as_posix()}/`, and GitHub Actions "
+                      f"loads only the **repository root** "
+                      f"`.github/workflows/`. Move "
+                      f"`{(rel / _GH_WORKFLOW_REL).as_posix()}` to "
+                      f"`{_GH_WORKFLOW_REL.as_posix()}` — GitHub has no "
+                      f"`include:` mechanism to work around this.")
+        elif is_zh:
             print(f"  {step}. GitHub 接線已完成：{_GH_WORKFLOW_REL.as_posix()} "
                   f"位於 GitHub Actions 會自動載入的目錄")
         else:
@@ -2525,8 +2613,26 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
         # the only path GitLab auto-loads. If we were pointed at a
         # subdirectory, none of them is true of the repo — say so instead of
         # asserting wiring we did not do.
-        repo_root = _enclosing_repo_root(output_dir)
-        if repo_root is not None:
+        if repo_root is not None and _gitlab_root_includes(
+                repo_root, Path(output_dir).resolve()):
+            # ⛔ Check the REAL root file before instructing. The subdir
+            # branch used to take precedence over every other state and
+            # never looked at the repository root at all, so a customer who
+            # had already wired the subdirectory path correctly was told to
+            # add a line their file already contains.
+            rel = Path(output_dir).resolve().relative_to(repo_root)
+            if is_zh:
+                print(f"  {step}. GitLab 接線已就緒：repo 根目錄的 "
+                      f"{_GL_ROOT_SHELL_REL.as_posix()} 已經 include 了 "
+                      f"`{(rel / _GL_PIPELINE_REL).as_posix()}`（未修改），"
+                      f"無需額外動作")
+            else:
+                print(f"  {step}. GitLab wiring already in place: the "
+                      f"repository-root {_GL_ROOT_SHELL_REL.as_posix()} "
+                      f"already includes "
+                      f"`{(rel / _GL_PIPELINE_REL).as_posix()}` "
+                      f"(left untouched) — nothing to do")
+        elif repo_root is not None:
             rel = Path(output_dir).resolve().relative_to(repo_root)
             if is_zh:
                 print(f"  {step}. ⚠️ 這次的輸出目錄是 `{rel.as_posix()}/`，"
@@ -2636,17 +2742,17 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
         if ci_sel == 'both':
             if is_zh:
                 print(f"  {step}. 提交並推送 — GitHub Actions 會自動驗證；"
-                      f"GitLab CI 要等你依上面的說明接上 include: 之後才會")
+                      f"GitLab CI 要等你依上面的說明處理完之後才會")
             else:
                 print(f"  {step}. Commit and push — GitHub Actions validates "
-                      f"automatically; GitLab CI only after you wire in the "
-                      f"include as shown above")
+                      f"automatically; GitLab CI only after you complete the "
+                      f"step above")
         elif is_zh:
-            print(f"  {step}. 依上面的說明接上 include: 之後提交並推送 — "
+            print(f"  {step}. 依上面的說明處理完之後提交並推送 — "
                   f"{platform} 才會驗證你的配置")
         else:
-            print(f"  {step}. Wire in the include as shown above, then commit and "
-                  f"push — only then does {platform} validate your config")
+            print(f"  {step}. Complete the step above, then commit and push — "
+                  f"only then does {platform} validate your config")
     else:
         if is_zh:
             print(f"  {step}. 提交並推送 — {platform} 會自動驗證你的配置")
@@ -2776,7 +2882,25 @@ def _handle_dry_run(config: dict, output_dir: str) -> None:
     # root `.gitlab-ci.yml` the ONLY signal was an absent filename, and the
     # reader had no way to learn the GitLab leg would be inert until they
     # hand-edit their own file.
-    if config.get('ci', 'both') in ('gitlab', 'both'):
+    # ⛔ The subdirectory case first: `_gitlab_root_shell_status` reads
+    # `<output_dir>/.gitlab-ci.yml`, so with `-o sub/` it reports `create`
+    # and this whole block stayed silent — while the REAL run warned. The
+    # flag whose job is "what will this do to my repo" must not be the one
+    # that hides it.
+    repo_root = _enclosing_repo_root(output_dir)
+    if repo_root is not None:
+        rel = Path(output_dir).resolve().relative_to(repo_root)
+        print()
+        if is_zh:
+            print(f"  ⚠️ 輸出目錄是 `{rel.as_posix()}/`，不是 repo 根目錄。"
+                  f"GitHub Actions 與 GitLab 都只讀 repo 根目錄，"
+                  f"所以產在這裡的 CI 設定不會被載入（實跑時會印出補救步驟）。")
+        else:
+            print(f"  ⚠️ The output directory is `{rel.as_posix()}/`, not the "
+                  f"repository root. Both GitHub Actions and GitLab read only "
+                  f"the repository root, so CI config generated here is not "
+                  f"loaded (the real run prints the remedy).")
+    elif config.get('ci', 'both') in ('gitlab', 'both'):
         status = _gitlab_root_shell_status(output_dir)
         if status not in (_GL_ROOT_CREATE, _GL_ROOT_ALREADY_WIRED):
             print()

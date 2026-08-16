@@ -58,7 +58,7 @@ import os
 import re
 import stat
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
 # Migrated in #489 Phase B (was missing encoding setup → would crash on
@@ -1521,26 +1521,69 @@ def missing_version_lines(versions=None):
             for line in VERSION_LINES if not versions.get(line)]
 
 
+def _path_is_under(path: str, scope: str) -> bool:
+    """Path containment by SEGMENT, not by string prefix.
+
+    ⛔ `str.startswith` made `--scope doc` select `docs/**` — a one-character
+    typo that passes both emptiness guards (it still selects the glob rules)
+    while silently dropping every hand-written `docs/**` rule. "Selected
+    something" is not "selected what you meant", and the guards only ever
+    checked the former.
+    """
+    if scope == ".":
+        return True
+    parts = PurePosixPath(path.replace("\\", "/")).parts
+    want = PurePosixPath(scope.replace("\\", "/")).parts
+    return parts[:len(want)] == want
+
+
 def _filter_by_scope(rules, scope):
-    """Filter rules to only include files under scope directory."""
+    """Filter rules to those whose target lies under `scope`."""
     if not scope:
         return rules
-    # Normalize scope: strip trailing slash
     scope = scope.rstrip("/").rstrip("\\")
     filtered = []
     for rule in rules:
         f = rule.get("file", "")
         if f == "__glob__":
-            # Check glob_dir
-            if rule.get("glob_dir", "").startswith(scope) or scope == ".":
+            # ⛔ Either direction of containment selects the rule. A glob
+            # rooted at `docs` and a scope of `docs/integration` overlap —
+            # the glob owns files inside the scope — but requiring the
+            # glob_dir to be under the scope dropped the whole group, so
+            # `--scope docs/integration` silently skipped the front-matter
+            # rule that governs the very files being scoped.
+            gd = rule.get("glob_dir", "")
+            if _path_is_under(gd, scope) or _path_is_under(scope, gd):
                 filtered.append(rule)
-        elif f.startswith(scope + "/") or f.startswith(scope + "\\"):
+        elif _path_is_under(f, scope):
             filtered.append(rule)
-        elif "/" not in f and "\\" not in f:
-            # Root-level files: include if scope is "."
-            if scope == ".":
-                filtered.append(rule)
     return filtered
+
+
+def _scoped_rules(rules, scope):
+    """Rules for `scope`, narrowed on both sides of glob expansion.
+
+    ⛔ Two filters, deliberately. The first (pre-expansion) must be generous
+    so a glob rooted ABOVE the scope is not dropped — `--scope
+    docs/integration` needs the `docs/**` front-matter rule, because that
+    rule is what governs the files being scoped. The second (post-expansion)
+    must be strict, or that same generosity applies the rule to every file
+    in the tree and a scoped bump quietly becomes a repo-wide one.
+
+    Sentinels (a collapsed glob) are kept: they carry a diagnosis, not a
+    file, and dropping them would restore the silence they exist to break.
+    """
+    selected = _filter_by_scope(rules, scope)
+    if not scope:
+        return selected
+    out = []
+    for rule in _expand_glob_rules(selected):
+        if rule.get("glob_collapsed") or _path_is_under(rule.get("file", ""),
+                                                        scope):
+            if rule.get("glob_id") is not None:
+                rule = dict(rule, scope_narrowed=True)
+            out.append(rule)
+    return out
 
 
 def _requires_match(rule):
@@ -1792,6 +1835,14 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
         gid = rule.get("glob_id")
         if gid is None:
             return
+        # ⛔ GLOB-DEAD is a property of the WHOLE glob, not of whatever the
+        # caller scoped. Under `--scope docs/integration` a `docs/**` rule
+        # legitimately matches nothing in that subset while being perfectly
+        # healthy across the tree, and reporting it dead would make a scoped
+        # bump fail for a defect that does not exist. Health is assessed on
+        # the full expansion — run without `--scope` for that.
+        if rule.get("scope_narrowed"):
+            return
         entry = glob_hits.setdefault(gid, [0, rule.get("glob_desc", rule["desc"])])
         entry[0] += hits
 
@@ -2010,6 +2061,38 @@ def _init_changelog_entry(version: str, lang: str = "zh"):
 _SCOPE_HINT = ("(it is matched against each rule's \"file\" / \"glob_dir\" "
                "prefix, repo-relative, e.g. docs, components, helm; use '.' "
                "for root-level files)")
+
+
+def _require_semver_shape(requested: list) -> None:
+    """Reject a version argument this tool cannot round-trip.
+
+    ⛔ The damage necessarily precedes the detection, which is why this is a
+    guard and not a check. Every rule matches on the OLD value, so the first
+    run with a malformed version always succeeds: `--platform 2.10.0+build.5`
+    (`+` is outside `_SEMVER`'s suffix class) and the truncation typo
+    `--platform 2.10` both report `✅ Done. 339 update(s) applied.` and exit
+    0. Only afterwards does `--check` go permanently red — and the first
+    thing an engineer does is re-run the same command, which appends the
+    suffix a second time: `v2.10.0+build.5+build.5`.
+
+    This is the failure `_SEMVER`'s own comment describes ("a write appends
+    the suffix again"), reached from the input side. `_SEMVER` is the shape
+    every rule pattern is built from, so it is exactly the right acceptance
+    test: a value that does not match it cannot be written and then matched
+    back. The repo is not at fault here, so this is a caller error.
+    """
+    bad = [(line, ver) for line, ver in requested
+           if not re.fullmatch(_SEMVER, ver.lstrip('v'))]
+    if not bad:
+        return
+    for line, ver in bad:
+        print(f"ERROR: --{line} {ver!r} is not a version this tool can "
+              f"round-trip (expected MAJOR.MINOR.PATCH with an optional "
+              f"-suffix, e.g. 2.10.0 or 2.10.0-rc1).", file=sys.stderr)
+    print("Nothing was written. A malformed version would be applied to "
+          "hundreds of files, report success, and then append its suffix "
+          "again on the re-run.", file=sys.stderr)
+    sys.exit(EXIT_CALLER_ERROR)
 
 
 def _require_nonempty_scope(all_rules, scope):
@@ -2477,7 +2560,7 @@ def main():
                       f"purpose.")
                 continue
 
-            rules = _filter_by_scope(all_rules.get(line, []), args.scope)
+            rules = _scoped_rules(all_rules.get(line, []), args.scope)
             changes = apply_rules(rules, ver, check_only=True)
             for status, desc, detail in changes:
                 if status == "UPDATE":
@@ -2537,6 +2620,7 @@ def main():
     # requested lines cannot bump the other lines first and then be discovered.
     _require_nonempty_line_scope(all_rules, args.scope,
                                  [line for line, _ in requested])
+    _require_semver_shape(requested)
 
     total_updates = 0
     dead_rules = 0
@@ -2552,7 +2636,7 @@ def main():
         print(f"  {line.upper()} → {new_ver}")
         print(f"{'='*60}")
 
-        rules = _filter_by_scope(all_rules.get(line, []), args.scope)
+        rules = _scoped_rules(all_rules.get(line, []), args.scope)
         changes = apply_rules(rules, new_ver,
                               check_only=args.check, dry_run=args.dry_run)
 

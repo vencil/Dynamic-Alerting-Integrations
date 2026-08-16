@@ -1840,8 +1840,13 @@ class TestSyncCountsFlagContract:
         r = self._run("--sync-counts", "--check")
         assert r.returncode == 0, r.stdout[-1200:]
 
+    # ⛔ EVERY flag the guard claims to reject. The bug it exists to prevent
+    # was itself a list that named five of six version lines and dropped
+    # `tenant_api`; pinning a subset reproduces that shape one level up.
     @pytest.mark.parametrize("extra", [
-        ["--platform", "2.10.0"], ["--tenant-api", "2.10.0"],
+        ["--platform", "2.10.0"], ["--exporter", "2.10.0"],
+        ["--tools", "2.10.0"], ["--portal", "2.10.0"],
+        ["--recipe-preview", "2.10.0"], ["--tenant-api", "2.10.0"],
         ["--scope", "docs"],
     ])
     def test_sync_counts_rejects_flags_it_would_discard(self, extra):
@@ -2003,3 +2008,63 @@ class TestEveryDiagnosisIsWiredIntoEveryGatingMode:
         assert exc.value.code != 0, (
             f"explicit bump 對 {diagnosis} 仍 exit 0——版號被推上去了，而這條"
             "規則沒有跟上，沒有任何人會知道。")
+
+
+class TestRoundFourSurvivors:
+    """變異存活者的補釘（第四輪 lens M / O 交叉確認）。"""
+
+    def test_plain_sync_counts_writing_mode_fails_on_a_broken_count(
+            self, tmp_path, monkeypatch, capsys, cli_argv):
+        """⛔ `--sync-counts` 三個分支裡，唯一**會寫檔**的那個沒有保護。
+
+        原本聲稱釘住它的測試傳的是 `--dry-run`，所以走的是另一條分支——
+        名字與 docstring 描述的正是沒被涵蓋的那一個。人手跑
+        `--sync-counts` 修數字時，若某條 count 規則是 NO-SOURCE / DEAD /
+        MISSING 而結束碼判斷不見了，畫面上只會剩 `✅ Done.`。
+        """
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(bump_docs, "_build_count_rules", lambda: [{
+            "file": "docs/gone.md", "desc": "probe count",
+            "pattern": r"[0-9]+ tools", "count": 3,
+            "replacement": lambda n: f"{n} tools",
+            "source_ok": True, "source": "probe",
+        }])
+        cli_argv("bump_docs", "--sync-counts")
+        with pytest.raises(SystemExit) as exc:
+            bump_docs.main()
+        capsys.readouterr()
+        assert exc.value.code != 0, (
+            "plain（會寫檔的）--sync-counts 對壞掉的 count 規則仍 exit 0")
+
+    def test_a_glob_rule_cannot_smuggle_a_rule_over_the_appversion_pins(self):
+        """⛔ 反向釘只看了 `"file"` 這個 key，而 glob 規則的 `"file"` 是字面
+        字串 `"__glob__"`——所以一條掃過那三個 appVersion pin 的 glob 完全
+        繞過它。要比對的是**展開後**的檔案集合。
+        """
+        protected = {
+            "k8s/04-tenant-api/deployment.yaml",
+            "docs/assets/platform-data.json",
+            "tools/portal/src/interactive/tools/_common/data/images.js",
+        }
+        expanded = {
+            r.get("file")
+            for r in bump_docs._expand_glob_rules(
+                bump_docs._build_rules()["tenant-api"])
+        }
+        assert expanded.isdisjoint(protected), (
+            "tenant-api 線有規則會改寫刻意追 appVersion 的 image pin："
+            f"{sorted(expanded & protected)}")
+
+    def test_the_portal_jsx_globs_are_actually_targeted(self):
+        """⛔ #1407 的招牌修法（JSX front matter / image pin 兩組 glob）可以被
+        整組刪掉而測試全綠：沒有任何斷言說「有規則指向 PORTAL_JSX_DIR」。
+        既有的測試只檢查那個目錄裡有 .jsx，反空洞下限又寬到刪六條都看不見。
+        """
+        rooted = [
+            r for rules in bump_docs._build_rules().values() for r in rules
+            if r.get("file") == "__glob__"
+            and r.get("glob_dir") == bump_docs.PORTAL_JSX_DIR
+        ]
+        assert len(rooted) >= 3, (
+            "portal 那棵樹上的 glob 規則消失了——44 份 JSX front matter 停在 "
+            f"舊版號正是 #1407 的成因。目前 rooted={len(rooted)}")
