@@ -99,9 +99,85 @@ def test_non_positive_reference_median_is_refused_not_divided():
     assert inconclusive == {"BenchmarkZero": "reference-median-not-positive"}
 
 
-# --- main() ----------------------------------------------------------------
+# --- read_workload_drift() --------------------------------------------------
+#
+# Called directly, not through the CLI. The CLI tests below cover the same
+# states end-to-end, but they run in a subprocess, so a branch that only they
+# reach is invisible to coverage AND its failure message is a JSON diff rather
+# than a name. Both properties matter for a function whose entire job is to keep
+# three states apart.
 
-def run(tmp_path: Path, ref_text: str, main_text: str) -> subprocess.CompletedProcess:
+def test_read_drift_no_path_is_not_requested():
+    assert pbr.read_workload_drift(None) == {"status": "not-requested", "files": []}
+
+
+def test_read_drift_missing_file_is_unreadable(tmp_path: Path):
+    assert pbr.read_workload_drift(tmp_path / "nope.txt") == {
+        "status": "unreadable", "files": []}
+
+
+def test_read_drift_directory_is_unreadable_not_a_crash(tmp_path: Path):
+    """A directory raises IsADirectoryError — an OSError, but worth pinning:
+    the caller passes a path it built, and a layout change could aim it at one."""
+    (tmp_path / "adir").mkdir()
+    assert pbr.read_workload_drift(tmp_path / "adir") == {
+        "status": "unreadable", "files": []}
+
+
+def test_read_drift_undecodable_bytes_are_unreadable(tmp_path: Path):
+    """⛔ UnicodeDecodeError is a ValueError, not an OSError."""
+    p = tmp_path / "drift.bin"
+    p.write_bytes(b"a_bench_test.go\n\xff\xfe\n")
+    assert pbr.read_workload_drift(p) == {"status": "unreadable", "files": []}
+
+
+def test_read_drift_empty_file_is_checked_with_nothing(tmp_path: Path):
+    p = tmp_path / "drift.txt"
+    p.write_text("", encoding="utf-8")
+    assert pbr.read_workload_drift(p) == {"status": "checked", "files": []}
+
+
+def test_read_drift_normalizes_blank_lines_whitespace_and_duplicates(tmp_path: Path):
+    p = tmp_path / "drift.txt"
+    p.write_text("b.go\n\n  a.go  \nb.go\n", encoding="utf-8")
+    assert pbr.read_workload_drift(p) == {
+        "status": "checked", "files": ["a.go", "b.go"]}
+
+
+# --- main(), called in-process ----------------------------------------------
+#
+# The subprocess tests below are the real end-to-end check (they exercise the
+# actual entry point, including the stdout hardening the carrier import does).
+# But a subprocess is opaque to coverage, so every branch in `main()` would read
+# as untested. This one in-process call walks the whole success path with a
+# drift list attached, so the payload assembly is measured where it runs.
+
+def test_main_in_process_walks_the_full_success_path(tmp_path, monkeypatch, capsys):
+    (tmp_path / "ref.txt").write_text(side([("BenchmarkA", 100.0)]), encoding="utf-8")
+    (tmp_path / "main.txt").write_text(side([("BenchmarkA", 105.0)]), encoding="utf-8")
+    (tmp_path / "drift.txt").write_text("config_bench_test.go\n", encoding="utf-8")
+    out = tmp_path / "nested" / "out.json"   # parent does not exist yet
+    monkeypatch.setattr(sys, "argv", [
+        "pair_bench_ratio.py",
+        "--reference", str(tmp_path / "ref.txt"),
+        "--main", str(tmp_path / "main.txt"),
+        "--reference-tag", "exporter/v2.9.0",
+        "--reference-sha", "3fd96b51f52e61566bb12c4c3fa23fed7e34dfa0",
+        "--workload-drift", str(tmp_path / "drift.txt"),
+        "--out", str(out),
+    ])
+    assert pbr.main() == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["status"] == "OK"
+    assert payload["workload_drift"]["files"] == ["config_bench_test.go"]
+    assert payload["evaluated"]["BenchmarkA"]["ratio"] == pytest.approx(1.05)
+    assert "workload drift" in capsys.readouterr().out
+
+
+# --- main(), through the real CLI -------------------------------------------
+
+def run(tmp_path: Path, ref_text: str, main_text: str,
+        *extra: str) -> subprocess.CompletedProcess:
     (tmp_path / "ref.txt").write_text(ref_text, encoding="utf-8")
     (tmp_path / "main.txt").write_text(main_text, encoding="utf-8")
     return subprocess.run(
@@ -109,7 +185,7 @@ def run(tmp_path: Path, ref_text: str, main_text: str) -> subprocess.CompletedPr
          "--reference", str(tmp_path / "ref.txt"),
          "--main", str(tmp_path / "main.txt"),
          "--reference-tag", "exporter/v2.9.0",
-         "--out", str(tmp_path / "out.json")],
+         "--out", str(tmp_path / "out.json"), *extra],
         capture_output=True, text=True, timeout=60)
 
 
@@ -124,6 +200,108 @@ def test_happy_path_writes_the_expected_payload(tmp_path: Path):
     assert payload["cpu"] == CPU
     assert payload["evaluated"]["BenchmarkA"]["ratio"] == pytest.approx(1.05)
     assert payload["inconclusive"] == {"BenchmarkNew": "missing-in-reference"}
+
+
+def test_success_payload_carries_an_explicit_status(tmp_path: Path):
+    """The unusable-measurement path writes `"status": "INCONCLUSIVE"`. If the
+    success path omitted the key, every consumer would have to encode "absent
+    means OK" — a default that is silently wrong the day a third status
+    exists."""
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 100.0)]))
+    assert r.returncode == 0, r.stderr
+    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert payload["status"] == "OK"
+
+
+def test_reference_sha_is_recorded_verbatim(tmp_path: Path):
+    """A tag can be re-pointed; the SHA is what was actually built. A night
+    series that recorded only the tag cannot be re-read after a re-point."""
+    sha = "3fd96b51f52e61566bb12c4c3fa23fed7e34dfa0"
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 100.0)]),
+            "--reference-sha", sha)
+    assert r.returncode == 0, r.stderr
+    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert payload["reference_sha"] == sha
+
+
+def test_reference_sha_absent_is_null_not_missing(tmp_path: Path):
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 100.0)]))
+    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert payload["reference_sha"] is None
+
+
+# --- workload drift --------------------------------------------------------
+#
+# Three states, for the same reason the verdict has three: "nobody checked" read
+# as "nothing drifted" is the conflation that makes a changed fixture look like
+# a code change (or the reverse) with nothing in the record to say so.
+
+def test_drift_not_requested_is_distinguishable_from_no_drift(tmp_path: Path):
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 100.0)]))
+    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert payload["workload_drift"] == {"status": "not-requested", "files": []}
+
+
+def test_drift_checked_and_empty_is_a_positive_statement(tmp_path: Path):
+    """An empty file means "I compared both sides and nothing had drifted".
+
+    That reading is only sound because the caller does not write the file at all
+    when its own comparison could not run — see the enumeration guard in
+    bench-record.yaml. Without that guard an empty file would also be what a
+    failed comparison leaves behind, and the two are opposite facts.
+    """
+    (tmp_path / "drift.txt").write_text("", encoding="utf-8")
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 100.0)]),
+            "--workload-drift", str(tmp_path / "drift.txt"))
+    assert r.returncode == 0, r.stderr
+    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert payload["workload_drift"] == {"status": "checked", "files": []}
+
+
+def test_drift_files_are_recorded_deduped_and_sorted(tmp_path: Path):
+    (tmp_path / "drift.txt").write_text(
+        "config_bench_test.go\n\n  pkg/config/simulate_bench_test.go  \n"
+        "config_bench_test.go\n", encoding="utf-8")
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 105.0)]),
+            "--workload-drift", str(tmp_path / "drift.txt"))
+    assert r.returncode == 0, r.stderr
+    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert payload["workload_drift"] == {
+        "status": "checked",
+        "files": ["config_bench_test.go", "pkg/config/simulate_bench_test.go"],
+    }
+    assert "workload drift" in r.stdout
+
+
+def test_unreadable_drift_file_is_recorded_not_fatal(tmp_path: Path):
+    """This is a disclosure aid. Failing the night's ratios because an
+    annotation input went missing would trade a working measurement for a
+    warning — and it must not be recorded as `checked` either."""
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 100.0)]),
+            "--workload-drift", str(tmp_path / "nope.txt"))
+    assert r.returncode == 0, r.stderr
+    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert payload["workload_drift"] == {"status": "unreadable", "files": []}
+    assert "unreadable" in r.stderr
+
+
+def test_undecodable_drift_file_is_unreadable_not_a_crash(tmp_path: Path):
+    """⛔ `UnicodeDecodeError` is a `ValueError`, not an `OSError`.
+
+    Catching only `OSError` let one non-UTF-8 byte in the drift file raise
+    through `main()`, and the workflow reads a non-zero exit as "the ratios
+    failed" and marks the whole night INCONCLUSIVE — throwing away a good
+    measurement over an annotation, which is precisely what this feature is
+    documented as refusing to do. Found in review on PR #1455.
+    """
+    (tmp_path / "drift.bin").write_bytes(b"config_bench_test.go\n\xff\xfe_bad.go\n")
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 105.0)]),
+            "--workload-drift", str(tmp_path / "drift.bin"))
+    assert r.returncode == 0, r.stderr
+    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert payload["workload_drift"] == {"status": "unreadable", "files": []}
+    # The ratios themselves must survive — that is the whole point.
+    assert payload["evaluated"]["BenchmarkA"]["ratio"] == pytest.approx(1.05)
 
 
 def test_mismatched_cpu_headers_are_refused(tmp_path: Path):
