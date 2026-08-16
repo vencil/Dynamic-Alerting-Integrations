@@ -256,6 +256,49 @@ class TestFilterByScope:
         result = bump_docs._filter_by_scope(rules, "docs")
         assert len(result) == 1
 
+    # ── 以下三條補的是「上面四條用 startswith 實作也全綠」的破口 ──
+    #
+    # ⛔ 上面全部只用「完全相等的 segment 名」當 scope，所以
+    # `_path_is_under` 換成 `path.startswith(scope)` 之後它們一條都不會紅。
+    # 實測損害：`--check --scope doc`（少打一個 s）從
+    # `rc=2 ERROR: selected ZERO rules` 變成 `rc=0 ✅ All version references
+    # are consistent`——「有選到東西」不等於「選到你要的東西」，而兩個
+    # 空值守門員只看得見前者。
+
+    def test_a_prefix_that_is_not_a_segment_selects_nothing(self):
+        """`doc` 不是 `docs/a.md` 的父目錄——這是 `_path_is_under` docstring
+        自己舉的例子，而它從來沒有被斷言過。
+        """
+        assert bump_docs._path_is_under("docs/a.md", "docs") is True
+        assert bump_docs._path_is_under("docs/a.md", "doc") is False, (
+            "`doc` 被當成 `docs/` 的前綴——字串前綴不是路徑包含。")
+        rules = [{"file": "docs/a.md"}, {"file": "docs/b.md"}]
+        assert bump_docs._filter_by_scope(rules, "doc") == [], (
+            "一個字母的 typo 選到了整棵 docs/ 樹，而 --scope 的兩個空值守門員"
+            "都會因此放行。")
+
+    def test_a_prefix_that_is_not_a_segment_also_misses_glob_dirs(self):
+        """glob 那條腿走的是 glob_dir，同樣不能吃字串前綴。"""
+        rules = [{"file": "__glob__", "glob_dir": "docs"}]
+        assert bump_docs._filter_by_scope(rules, "doc") == [], (
+            "`--scope doc` 選到了 glob_dir `docs` 的規則——這正是那個 typo "
+            "能一路走到「✅ 全部一致」的原因（glob 有被選到，所以非空守門員"
+            "以為一切正常，而所有手寫的 docs/** 規則被靜靜丟掉）。")
+
+    def test_a_glob_rooted_above_the_scope_is_kept(self):
+        """⛔ 雙向包含：`docs/**` 的 glob 對 `--scope docs/integration` 必須留下。
+
+        既有的 `test_glob_rule_scope` 只走了「glob 比 scope 窄」那個方向，
+        所以把過濾改成單向（只留 glob_dir 在 scope 底下的）照樣全綠。實測
+        損害：`--scope docs/integration` 從 42 個檔掉到 8 個——被丟掉的正是
+        那 34 條「治理被 scope 到的那些檔案」的 docs/** front-matter 規則，
+        也就是原始碼那段 ⛔ 註解說絕不能掉的東西。
+        """
+        rules = [{"file": "__glob__", "glob_dir": "docs"}]
+        assert len(bump_docs._filter_by_scope(rules, "docs/integration")) == 1, (
+            "glob 掛在 scope 上方就被丟掉了——那條 glob 擁有的正是被 scope "
+            "的那批檔案。")
+
 
 class TestInitChangelog:
     """_init_changelog_entry() 測試。"""
@@ -1967,6 +2010,21 @@ class TestEveryDiagnosisIsWiredIntoEveryGatingMode:
         "pattern": r"v[0-9]+\.[0-9]+\.[0-9]+",
         "replacement": lambda v: f"v{v}",
     }
+    # ⛔ GLOB-DEAD 原本不在這個軸上，而 class docstring 寫的是「每一種診斷 ×
+    # 每一個會擋 release 的模式」——少一種診斷，這個 class 的名字就是假的。
+    # 三個變異因此存活：`--what-if` 結束碼把 glob_dead 拿掉、`--what-if` 的
+    # group verdict 迴圈整段閹掉、explicit bump 的 glob_broken 計數縮成
+    # `("GLOB-EMPTY",)`。GLOB-DEAD 只有 `--check` 那條腿被
+    # `TestGlobGroupHealth.test_check_cli_fails_on_a_dead_glob` 釘住。
+    #
+    # 展開到 1 個檔案（`docs/there.md` 由 `_repo` 寫出）、整棵樹 0 命中 —— 這
+    # 是 GLOB-EMPTY 看不到、per-file require_match 也看不到的那一格。
+    _GLOB_DEAD = {
+        "file": "__glob__", "glob_dir": "docs", "glob_pattern": "**/*.md",
+        "desc": "probe glob-dead",
+        "pattern": r"\*\*絕不出現\*\*：v[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"**絕不出現**：v{v}",
+    }
 
     def _repo(self, tmp_path, monkeypatch, rule):
         (tmp_path / "docs").mkdir()
@@ -1979,35 +2037,57 @@ class TestEveryDiagnosisIsWiredIntoEveryGatingMode:
             line: ([dict(rule)] if line == "platform" else [])
             for line in bump_docs.VERSION_LINES})
 
-    @pytest.mark.parametrize("diagnosis", ["missing", "dead", "glob_empty"])
+    _PROBES = {"missing": _MISSING, "dead": _DEAD,
+               "glob_empty": _GLOB_EMPTY, "glob_dead": _GLOB_DEAD}
+
+    def test_the_diagnosis_axis_covers_every_glob_level_diagnosis(self):
+        """⛔ 反空洞：軸縮回去（例如把 glob_dead 拿掉）必須是紅的，不是靜靜
+        少跑幾個 case。`_PROBES` 是 parametrize 的唯一來源，這條釘住它的內容。
+        """
+        assert set(self._PROBES) == {
+            "missing", "dead", "glob_empty", "glob_dead"}, sorted(self._PROBES)
+
+    @pytest.mark.parametrize("diagnosis", sorted(_PROBES))
     @pytest.mark.parametrize("mode", ["--check", "--what-if"])
     def test_gating_modes_exit_nonzero(self, diagnosis, mode, tmp_path,
                                        monkeypatch, capsys, cli_argv):
-        rule = {"missing": self._MISSING, "dead": self._DEAD,
-                "glob_empty": self._GLOB_EMPTY}[diagnosis]
+        rule = self._PROBES[diagnosis]
         self._repo(tmp_path, monkeypatch, rule)
         cli_argv("bump_docs", mode)
         with pytest.raises(SystemExit) as exc:
             bump_docs.main()
-        capsys.readouterr()
+        out = capsys.readouterr().out
         assert exc.value.code != 0, (
             f"{mode} 對 {diagnosis} 仍 exit 0——release gate 會說版號全部一致，"
             "而那條規則其實一個字都沒驅動。")
+        # ⛔ 結束碼非 0 還不夠：要確定紅的是**這一種**診斷。`--what-if` 的
+        # group verdict 迴圈被閹掉時，glob_dead 那格會因為別的計數而僥倖非 0
+        # ——標籤才分得出「有接住」與「剛好也不是 0」。
+        label = {"missing": "MISSING", "dead": "DEAD",
+                 "glob_empty": "GLOB-EMPTY", "glob_dead": "GLOB-DEAD"}[diagnosis]
+        assert label in out, (
+            f"{mode} 沒有印出 {label}——結束碼非 0 可能來自別的原因，這個診斷"
+            f"本身仍是隱形的。\n{out}")
 
-    @pytest.mark.parametrize("diagnosis", ["missing", "dead", "glob_empty"])
+    @pytest.mark.parametrize("diagnosis", sorted(_PROBES))
     def test_explicit_bump_exits_nonzero(self, diagnosis, tmp_path,
                                          monkeypatch, capsys, cli_argv):
         """`make bump-docs` 走的就是這條路徑——真正的 release bump。"""
-        rule = {"missing": self._MISSING, "dead": self._DEAD,
-                "glob_empty": self._GLOB_EMPTY}[diagnosis]
+        rule = self._PROBES[diagnosis]
         self._repo(tmp_path, monkeypatch, rule)
         cli_argv("bump_docs", "--platform", "2.10.0")
         with pytest.raises(SystemExit) as exc:
             bump_docs.main()
-        capsys.readouterr()
+        out = capsys.readouterr().out
         assert exc.value.code != 0, (
             f"explicit bump 對 {diagnosis} 仍 exit 0——版號被推上去了，而這條"
             "規則沒有跟上，沒有任何人會知道。")
+        if diagnosis in ("glob_empty", "glob_dead"):
+            # glob_broken 的計數縮成 `("GLOB-EMPTY",)` 時 GLOB-DEAD 會落回
+            # 「什麼都沒計」——結束碼還是可能非 0，但那段收尾訊息不會印。
+            assert "glob rule(s) are GLOB-EMPTY" in out, (
+                f"explicit bump 沒有把 {diagnosis} 計進 glob_broken——"
+                f"那棵樹在一次 release bump 裡整個沒被碰到，而收尾沒說。\n{out}")
 
 
 class TestRoundFourSurvivors:
@@ -2068,3 +2148,300 @@ class TestRoundFourSurvivors:
         assert len(rooted) >= 3, (
             "portal 那棵樹上的 glob 規則消失了——44 份 JSX front matter 停在 "
             f"舊版號正是 #1407 的成因。目前 rooted={len(rooted)}")
+
+    def test_the_docs_globs_are_actually_targeted(self):
+        """⛔ 上一條替 `tools/portal/` 關上的那個門，`docs/` 這邊還開著。
+
+        實測：把 `doc header blockquote version (> **vX.Y.Z |)` 整條刪掉——
+        它今天驅動 **26 個真的檔案**——整份測試維持全綠。既有的下限都太鬆：
+        `test_every_glob_rule_expands_to_at_least_one_file` 是 `>= 5` 對 11、
+        `test_the_invariant_has_teeth` 是 `>= 6` 對 8，刪一條都碰不到。
+        `test_the_portal_jsx_globs_are_actually_targeted` 夠緊，但只守
+        PORTAL_JSX_DIR。
+
+        兩段斷言各擋一半：
+          1. 數量下限（緊貼今天的 8 條）——刪掉任何一條 docs glob 就紅。
+          2. 那條 blockquote 規則**照形狀**指認（不是照 desc 字串），並要求
+             它今天仍然驅動一批真的檔案。加一條無關的 docs glob 來湊數字，
+             過不了這一關。
+        """
+        rooted = [
+            r for rules in bump_docs._build_rules().values() for r in rules
+            if r.get("file") == "__glob__" and r.get("glob_dir") == "docs"
+        ]
+        assert len(rooted) >= 8, (
+            "docs/ 樹上的 glob 規則少了——每一條都橫跨 260 個檔案，刪掉一條"
+            "不會讓任何既有下限紅，但那批檔案的版號會就地凍結（#1407 的失敗"
+            f"模式，只是換一棵樹）。目前 rooted={len(rooted)}")
+
+        # ⛔ 照形狀指認：`> **vX.Y.Z** | …` 這個 doc header blockquote。
+        # 用 desc 字串當 key 的話，改一次措辭這條就變成假綠。
+        probe = "> **v2.9.0** | 2026-06-06"
+        blockquote = [r for r in rooted if re.search(r["pattern"], probe)]
+        assert len(blockquote) == 1, (
+            "找不到（或找到不只一條）驅動 `> **vX.Y.Z** |` doc header 的 "
+            f"docs glob。目前 {[r['desc'] for r in blockquote]}")
+
+        driven = [
+            e["file"] for e in bump_docs._expand_glob_rules([dict(blockquote[0])])
+            if re.search(blockquote[0]["pattern"],
+                         (bump_docs.REPO_ROOT / e["file"]).read_text(
+                             encoding="utf-8"), re.MULTILINE)
+        ]
+        assert len(driven) >= 20, (
+            f"`{blockquote[0]['desc']}` 今天只驅動 {len(driven)} 個檔案"
+            "（歷史值 26）——這條 glob 正在死掉或已經被改窄，而 GLOB-DEAD 只在"
+            "「一個都沒撈到」時才會出聲。")
+
+
+class TestSemverShapeGuard:
+    """⛔ `_require_semver_shape()` 完全沒有測試——而它是上一個 commit 的招牌修法。
+
+    實測的損害（原始碼 docstring 記的就是這個）：每一條規則都是**比對舊值**再
+    改寫，所以第一次用壞版號跑一定成功——`--platform 2.10.0+build.5`（`+` 不在
+    `_SEMVER` 的 suffix 字元類裡）與截斷 typo `--platform 2.10` 都印
+    `✅ Done. 339 update(s) applied.` 並 exit 0。之後 `--check` 才永久轉紅，而
+    工程師的第一個反應是把同一行再跑一次——於是後綴被接上第二次：
+    `v2.10.0+build.5+build.5`。
+
+    變異 `bad = []` 存活於整份測試套件。
+
+    ⚠️ 全程 `REPO_ROOT` 被 monkeypatch 到 `tmp_path`，所以「寫了沒有」是在
+    tmp 目錄上量的，不會像某一輪那樣真的寫進 repo 的 237 個檔案。
+    """
+
+    _RULE = {
+        "file": "docs/x.md", "desc": "probe footer",
+        "pattern": r"\*\*最後更新\*\*：v[0-9]+\.[0-9]+\.[0-9]+"
+                   r"(?:-[a-zA-Z0-9._-]+)?",
+        "replacement": lambda v: f"**最後更新**：v{v}",
+    }
+    _ORIGINAL = "# X\n\n**最後更新**：v2.9.0\n"
+
+    def _repo(self, tmp_path, monkeypatch):
+        (tmp_path / "docs").mkdir()
+        target = tmp_path / "docs" / "x.md"
+        target.write_text(self._ORIGINAL, encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(bump_docs, "read_current_versions",
+                            lambda: {line: "2.9.0"
+                                     for line in bump_docs.VERSION_LINES})
+        monkeypatch.setattr(bump_docs, "_build_rules", lambda: {
+            line: ([dict(self._RULE)] if line == "platform" else [])
+            for line in bump_docs.VERSION_LINES})
+        return target
+
+    # 六種壞形狀，各自代表一類真的會被打出來的東西：
+    #   build metadata / 截斷 typo（兩種寫法）/ 四段 / 帶 build 的 prerelease /
+    #   完全不是版號。
+    @pytest.mark.parametrize("bad", [
+        "2.10.0+build.5",
+        "2.10",
+        "v2.10",
+        "2.10.0.1",
+        "2.10.0-rc1+build.5",
+        "latest",
+    ])
+    def test_a_malformed_version_exits_nonzero_and_writes_nothing(
+            self, bad, tmp_path, monkeypatch, capsys, cli_argv):
+        target = self._repo(tmp_path, monkeypatch)
+        cli_argv("bump_docs", "--platform", bad)
+        with pytest.raises(SystemExit) as exc:
+            bump_docs.main()
+        captured = capsys.readouterr()
+        assert exc.value.code == bump_docs.EXIT_CALLER_ERROR, (
+            f"--platform {bad!r} 沒有被擋下（exit={exc.value.code}）。這是"
+            "caller error(2)：repo 沒有錯，是這個值寫不回去也比對不回來。")
+        assert target.read_text(encoding="utf-8") == self._ORIGINAL, (
+            f"--platform {bad!r} 已經改了檔案。損害必然先於偵測——第一次跑一定"
+            "成功（規則比對的是舊值），紅燈要到下一次 --check 才出現，而那時"
+            "後綴已經被接上去了。")
+        assert "not a version this tool can" in captured.err, captured.err
+        assert "Nothing was written" in captured.err, captured.err
+
+    @pytest.mark.parametrize("good", [
+        "2.10.0", "2.10.0-rc1", "2.10.0-preview.1", "v2.10.0",
+    ])
+    def test_a_well_formed_version_still_goes_through(
+            self, good, tmp_path, monkeypatch, capsys, cli_argv):
+        """反面：守門員不能順手把合法的 prerelease / `v` 前綴一起擋掉。"""
+        target = self._repo(tmp_path, monkeypatch)
+        cli_argv("bump_docs", "--platform", good)
+        bump_docs.main()          # 不應 SystemExit
+        out = capsys.readouterr().out
+        assert f"v{good.lstrip('v')}" in target.read_text(encoding="utf-8"), (
+            f"--platform {good!r} 是合法形狀卻沒有被寫進去。")
+        assert "1 update(s) applied" in out, out
+
+    def test_the_guard_is_the_same_shape_every_rule_pattern_is_built_from(self):
+        """⛔ 驗收標準必須是 `_SEMVER` 本人，不是另抄一份正則。
+
+        另抄一份的話，兩邊哪天飄開，被放行的值就會是「寫得進去、比對不回來」
+        ——正是這個守門員存在的理由。
+        """
+        for good in ("2.10.0", "2.10.0-rc1", "2.10.0-preview.1"):
+            assert re.fullmatch(bump_docs._SEMVER, good), good
+            bump_docs._require_semver_shape([("platform", good)])
+        for bad in ("2.10.0+build.5", "2.10"):
+            assert not re.fullmatch(bump_docs._SEMVER, bad), bad
+            with pytest.raises(SystemExit):
+                bump_docs._require_semver_shape([("platform", bad)])
+
+
+class TestScopedRulesNarrowsAfterExpansion:
+    """⛔ `_scoped_rules()` 的**展開後**過濾沒有任何測試（`grep -rn _scoped_rules
+    tests/` 為 0 命中）。
+
+    兩道過濾是刻意的：展開**前**那道要寬鬆，否則掛在 scope 上方的 `docs/**`
+    glob 會整條被丟掉（那條 glob 治理的正是被 scope 的檔案）；展開**後**那道
+    要嚴格，否則同一份寬鬆把規則套到整棵樹上，一次被 scope 的 bump 悄悄變成
+    全 repo 的 bump。
+
+    實測：把後者改成 `if True:` 之後
+    `--platform 9.9.9 --scope docs/integration --dry-run` 從 42 個檔變成 278 個。
+    """
+
+    _GLOB = {
+        "file": "__glob__", "glob_dir": "docs", "glob_pattern": "**/*.md",
+        "desc": "probe footer",
+        "pattern": r"\*\*最後更新\*\*：v[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"**最後更新**：v{v}",
+    }
+
+    def _tree(self, tmp_path, monkeypatch):
+        for rel in ("docs/integration", "docs/other"):
+            (tmp_path / rel).mkdir(parents=True)
+        for rel in ("docs/top.md", "docs/integration/a.md", "docs/other/b.md"):
+            (tmp_path / rel).write_text("**最後更新**：v2.9.0\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+
+    def test_expansion_outside_the_scope_is_dropped(self, tmp_path, monkeypatch):
+        self._tree(tmp_path, monkeypatch)
+        files = {r["file"] for r in
+                 bump_docs._scoped_rules([dict(self._GLOB)], "docs/integration")}
+        assert files == {"docs/integration/a.md"}, (
+            f"被 scope 的 bump 撈到了 scope 外的檔案：{sorted(files)}。展開前"
+            "那道過濾故意寬鬆（要留住掛在上方的 glob），所以展開後這道就是"
+            "唯一擋住「悄悄變成全 repo bump」的東西。")
+
+    def test_the_pre_expansion_filter_is_still_generous(self, tmp_path,
+                                                        monkeypatch):
+        """反面：不能靠把展開前那道一起收緊來「解決」——那會把 glob 整條丟掉。"""
+        self._tree(tmp_path, monkeypatch)
+        assert bump_docs._filter_by_scope([dict(self._GLOB)],
+                                          "docs/integration"), (
+            "掛在 scope 上方的 docs/** glob 在展開前就被丟掉了——被 scope 的"
+            "那些檔案於是完全沒有規則治理。")
+
+    def test_sentinels_survive_the_post_expansion_filter(self, tmp_path,
+                                                         monkeypatch):
+        """塌成 0 個檔案的 glob 帶的是診斷不是檔案，被 scope 濾掉就恢復沉默。"""
+        (tmp_path / "docs").mkdir()
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        out = bump_docs._scoped_rules([dict(self._GLOB)], "docs/integration")
+        assert [r for r in out if r.get("glob_collapsed")], out
+
+    def test_cli_scoped_dry_run_stays_inside_the_scope(self):
+        """接線層鎖：走真的 repo、真的 CLI，只用 `--dry-run`（不寫檔）。"""
+        script = (Path(__file__).resolve().parents[2] / "scripts" / "tools"
+                  / "dx" / "bump_docs.py")
+        r = subprocess.run(
+            [sys.executable, str(script), "--platform", "9.9.9",
+             "--scope", "docs/integration", "--dry-run"],
+            capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout[-800:]
+        stray = sorted({m for m in re.findall(r"docs/[\w./-]+\.md", r.stdout)
+                        if not m.startswith("docs/integration/")})
+        assert not stray, (
+            "被 scope 到 docs/integration 的 dry-run 報告了 scope 外的檔案："
+            f"{stray[:10]}（共 {len(stray)}）——展開後那道過濾沒有作用，一次"
+            "局部 bump 會變成全 repo bump。")
+
+
+class TestScopeNarrowedGlobHealth:
+    """⛔ `scope_narrowed` 兩個方向都沒有測試（兩個變異都存活）。
+
+    GLOB-DEAD 是**整條 glob** 的性質，不是「你 scope 到的那一小塊」的性質。
+    `--scope docs/integration` 底下，一條 `docs/**` 的規則在那個子集裡撈不到
+    是完全正常的（它在整棵樹上很健康），把它報成 dead 會讓一次合法的局部
+    bump 因為一個不存在的缺陷而失敗——實測 `--check --scope docs/integration`
+    從 rc 0 變 rc 1。
+
+    兩個變異各對應下面一條：
+      1. `_scoped_rules()` 不再蓋 `scope_narrowed=True`。
+      2. `_note_glob()` 不再 `if rule.get("scope_narrowed"): return`。
+    """
+
+    _GLOB = {
+        "file": "__glob__", "glob_dir": "docs", "glob_pattern": "**/*.md",
+        "desc": "probe footer",
+        "pattern": r"\*\*最後更新\*\*：v[0-9]+\.[0-9]+\.[0-9]+",
+        "replacement": lambda v: f"**最後更新**：v{v}",
+    }
+
+    def _tree(self, tmp_path, monkeypatch):
+        for rel in ("docs/integration", "docs/other"):
+            (tmp_path / rel).mkdir(parents=True)
+        # scope 內那個檔案沒有頁尾、scope 外那個有——整條 glob 是活的，
+        # 但被 scope 的子集是 0 命中。
+        (tmp_path / "docs/integration/a.md").write_text(
+            "# A\n沒有頁尾\n", encoding="utf-8")
+        (tmp_path / "docs/other/b.md").write_text(
+            "**最後更新**：v2.9.0\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+
+    def test_scoped_expansion_carries_the_marker(self, tmp_path, monkeypatch):
+        self._tree(tmp_path, monkeypatch)
+        scoped = bump_docs._scoped_rules([dict(self._GLOB)], "docs/integration")
+        assert scoped, "scope 內沒有選到任何規則，下面的斷言會是空跑"
+        assert all(r.get("scope_narrowed") for r in scoped), (
+            "被 scope narrow 過的 glob 展開沒有蓋上 scope_narrowed——"
+            "`_note_glob()` 因此無從得知這只是整條 glob 的一小塊。")
+
+    def test_an_unscoped_expansion_is_not_marked(self, tmp_path, monkeypatch):
+        """反面：無 scope 時不能蓋，否則 GLOB-DEAD 對所有 glob 永久失效。"""
+        self._tree(tmp_path, monkeypatch)
+        unscoped = bump_docs._scoped_rules([dict(self._GLOB)], None)
+        assert not any(r.get("scope_narrowed") for r in unscoped), unscoped
+
+    def test_a_scoped_run_does_not_invent_a_glob_dead(self, tmp_path,
+                                                      monkeypatch):
+        self._tree(tmp_path, monkeypatch)
+        scoped = bump_docs._scoped_rules([dict(self._GLOB)], "docs/integration")
+        statuses = [c[0] for c in
+                    bump_docs.apply_rules(scoped, "2.9.0", check_only=True)]
+        assert "GLOB-DEAD" not in statuses, (
+            "被 scope 的子集裡撈不到就被報成 GLOB-DEAD——那條 glob 在整棵樹上"
+            f"是活的，這是一個不存在的缺陷擋掉合法的局部 bump：{statuses}")
+
+    def test_the_same_glob_is_still_dead_when_run_unscoped(self, tmp_path,
+                                                           monkeypatch):
+        """⛔ 反面鎖：豁免只限被 scope 的那條路徑。
+
+        沒有這條的話，「一律不報 GLOB-DEAD」也能讓上一條變綠——而那正是
+        #1407 花整輪拔掉的沉默。
+        """
+        (tmp_path / "docs" / "integration").mkdir(parents=True)
+        (tmp_path / "docs/integration/a.md").write_text(
+            "# A\n沒有頁尾\n", encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        statuses = [c[0] for c in bump_docs.apply_rules(
+            bump_docs._scoped_rules([dict(self._GLOB)], None), "2.9.0",
+            check_only=True)]
+        assert "GLOB-DEAD" in statuses, statuses
+
+    def test_cli_scoped_check_is_green_on_the_real_repo(self):
+        """接線層鎖：`--check --scope docs/integration` 必須是 rc 0。
+
+        少了 `scope_narrowed` 這一整套，這條命令會因為一批「在整棵 docs/ 樹上
+        很健康」的 glob 而 exit 1。
+        """
+        script = (Path(__file__).resolve().parents[2] / "scripts" / "tools"
+                  / "dx" / "bump_docs.py")
+        r = subprocess.run(
+            [sys.executable, str(script), "--check", "--scope",
+             "docs/integration"], capture_output=True, text=True)
+        assert r.returncode == 0, (
+            "被 scope 的 --check 因為 GLOB-DEAD 之類的 glob 診斷而紅了——"
+            f"那些診斷是整條 glob 的性質，不該由子集判定。\n{r.stdout[-1500:]}")
+        assert "GLOB-DEAD" not in r.stdout, r.stdout[-1500:]

@@ -1898,10 +1898,43 @@ class TestRunInit:
             'unparseable + include': (
                 'include:\n  - local: a.yml\nx: !reference [.a, b]\n'),
         }
+        # ⛔ The STATUS, not only the snippet. Both NEEDS_APPEND and
+        # NEEDS_CONVERT hand back `_GL_WIRING_EXAMPLE`, so the snippet
+        # assertion below is satisfied by either — which is how the mutation
+        # `return _GL_ROOT_NEEDS_APPEND` (i.e. drop the LIST-ness check
+        # entirely) survived this test, the one test whose docstring argues
+        # that the list-vs-not-a-list distinction is the whole point.
+        #
+        # The three non-list shapes are exactly the ones the production
+        # comment names: bare string, single mapping, empty `[]`. Everything
+        # that really is a non-empty list — flow, alias, and block lists at
+        # any indentation — is NEEDS_APPEND, and `unparseable + include` gets
+        # there via the line scan rather than the parse.
+        expected_status = {
+            'scalar': ip._GL_ROOT_NEEDS_CONVERT,
+            'single mapping': ip._GL_ROOT_NEEDS_CONVERT,
+            'empty list': ip._GL_ROOT_NEEDS_CONVERT,
+            'flow sequence': ip._GL_ROOT_NEEDS_APPEND,
+            'alias': ip._GL_ROOT_NEEDS_APPEND,
+            'block list 0-indent': ip._GL_ROOT_NEEDS_APPEND,
+            'block list 2-indent': ip._GL_ROOT_NEEDS_APPEND,
+            'block list 4-indent': ip._GL_ROOT_NEEDS_APPEND,
+            'unparseable + include': ip._GL_ROOT_NEEDS_APPEND,
+        }
+        assert set(expected_status) == set(shapes), (
+            'the status table drifted from the shape table — a shape with no '
+            'expected status is back to being graded only on its snippet')
         for name, body in shapes.items():
             with tempfile.TemporaryDirectory() as tmpdir:
                 status = self._status_for(tmpdir, body)
                 assert status != ip._GL_ROOT_ALREADY_WIRED, (name, status)
+                assert status == expected_status[name], (
+                    f'{name}: classified {status!r}, expected '
+                    f'{expected_status[name]!r}. NEEDS_APPEND and '
+                    f'NEEDS_CONVERT print the same snippet but DIFFERENT '
+                    f'lead sentences, and collapsing them tells the owner of '
+                    f'a scalar / single-mapping / empty `include:` that they '
+                    f'already have a list to append to.')
                 snippet = ip._gitlab_root_snippet_for(status)
                 assert snippet == ip._GL_WIRING_EXAMPLE, (
                     f'{name}: got a paste-ready fragment instead of the '

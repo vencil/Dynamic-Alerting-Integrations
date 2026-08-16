@@ -125,9 +125,17 @@ WHAT THIS GUARD DOES **NOT** BUY
   step since it was burned by the same thing (cited by step name, not by line
   range — a range drifts the moment anything above it moves, and nothing here
   would notice). **The GitLab leg still invokes it bare** — see the
-  deferral recorded on `test_generate_stage_body_is_pinned_on_both_legs`, and
-  the premise for that deferral pinned by
-  `test_gitlab_deferral_premise_still_holds`.
+  deferral recorded on `test_generate_stage_body_is_pinned_on_both_legs`.
+  ⛔ That deferral's original premise — "nothing loads the GitLab pipeline
+  anyway" — NO LONGER HOLDS, and the test that used to pin it says the
+  opposite now. `test_gitlab_deferral_premise_still_holds` asserted that NO
+  root `.gitlab-ci.yml` is written; #1357 made `da-tools init` write one, so
+  that test was renamed to `test_gitlab_root_shell_wires_the_pipeline` and
+  its greenfield polarity INVERTED — it now asserts the root shell IS
+  created and DOES `include:` the generated pipeline (its brownfield half,
+  "an existing root file is left byte-identical", kept its polarity but
+  changed meaning: tripwire → specification). So the bare invocation below
+  is a LIVE defect, not a dormant one. Do not cite the old name; it is gone.
   ⚠️ What is still NOT asserted anywhere: that a *consumer* honours the
   contract. Both guards in the blast-radius step ARE now observed — see
   `test_generated_blast_radius_step_honours_the_exit_contract`, which runs the
@@ -2847,6 +2855,173 @@ def test_dry_run_preview_matches_what_run_init_writes(
         )
 
 
+# ── `--dry-run`'s two WARNINGS, which nothing looked at ───────────────────
+#
+# ⛔ `grep -rn "_handle_dry_run" tests/` returned zero hits. The test above
+# is the only thing that exercises the dry-run path at all, and it compares
+# FILE SETS — it never captures stdout, so both of the function's warning
+# legs could be deleted whole and the suite stayed green.
+#
+# They are not cosmetic. `--dry-run` exits before `_print_summary`, which is
+# the only place the manual-wiring instruction lives, so on a repo where the
+# GitLab leg will be inert the ONLY signal a dry run can give is these lines.
+# An absent filename is not a signal: the reader has no way to learn that the
+# file they did not see listed is the one that makes the rest of them run.
+#
+# ⚠️ The negative half is the load-bearing half, and it is the one that was
+# actually wrong once: warning UNCONDITIONALLY told a customer with a
+# correctly wired split-pipeline repo that their config would not be loaded,
+# and promised a remedy the real run never prints — from the flag whose
+# entire job is "what will this do to my repo".
+_DRYRUN_MARKERS = {
+    # locale: (subdirectory warning, brownfield-GitLab warning)
+    "en": ("not the repository root", "this tool will not modify it"),
+    "zh": ("不是 repo 根目錄", "本工具不會修改它"),
+}
+
+
+def test_dry_run_marker_table_covers_both_locales() -> None:
+    """⛔ Anti-vacuity for the axis below: dropping a locale must be RED."""
+    assert set(_DRYRUN_MARKERS) == {"en", "zh"}, sorted(_DRYRUN_MARKERS)
+
+
+def _dry_run_output(config: dict, target: Path, capsys) -> str:
+    with pytest.raises(SystemExit) as exc:
+        ip._handle_dry_run(config, str(target))
+    assert exc.value.code == 0, exc.value.code
+    return capsys.readouterr().out
+
+
+def _config(**over) -> dict:
+    base = {
+        "ci": "both",
+        "deploy": "kustomize",
+        "rule_packs": ["mariadb"],
+        "tenants": ["db-a"],
+        "namespace": "monitoring",
+        "da_tools_image": "ghcr.io/vencil/da-tools:latest",
+    }
+    base.update(over)
+    return base
+
+
+@pytest.mark.parametrize("lang", sorted(_DRYRUN_MARKERS))
+@pytest.mark.parametrize("ci", CI_CHOICES)
+def test_dry_run_warns_that_a_subdirectory_target_is_not_loaded(
+    lang, ci, tmp_path, capsys, monkeypatch,
+) -> None:
+    """`-o alerting/` inside a work-tree: the warning must be there.
+
+    `_gitlab_root_shell_status` reads `<output_dir>/.gitlab-ci.yml`, so with
+    `-o sub/` it reports `create` and the second leg stays silent — while the
+    REAL run warns. The flag whose job is "what will this do to my repo" must
+    not be the one that hides it.
+    """
+    monkeypatch.setattr(ip, "_LANG", lang)
+    subdir_marker, brownfield_marker = _DRYRUN_MARKERS[lang]
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    sub = repo / "alerting"
+    sub.mkdir()
+
+    out = _dry_run_output(_config(ci=ci), sub, capsys)
+
+    assert subdir_marker in out, (
+        f"--dry-run into `alerting/` (--ci {ci}) said nothing about the "
+        f"output directory not being the repository root.\n{out}")
+    assert "alerting" in out, f"the warning never names the subdirectory\n{out}"
+    assert brownfield_marker not in out, (
+        "the subdirectory case was reported as the brownfield-root case; "
+        f"there is no root pipeline here at all.\n{out}")
+
+
+@pytest.mark.parametrize("lang", sorted(_DRYRUN_MARKERS))
+def test_dry_run_does_not_warn_about_a_correctly_wired_subdirectory(
+    lang, tmp_path, capsys, monkeypatch,
+) -> None:
+    """⛔ The negative half. A split-pipeline repo that ALREADY includes us
+    must not be told its config will not be loaded — and must not be promised
+    a remedy the real run does not print.
+
+    `--ci gitlab`, deliberately: GitHub is UNCONDITIONALLY unfinished in a
+    subdirectory (its workflow must be moved and there is no `include:`
+    indirection), so `github`/`both` warn here correctly and only the GitLab
+    leg can be rescued from the root.
+    """
+    monkeypatch.setattr(ip, "_LANG", lang)
+    subdir_marker, _ = _DRYRUN_MARKERS[lang]
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    sub = repo / "alerting"
+    sub.mkdir()
+    (repo / _GL_ROOT_SHELL).write_text(
+        f"include:\n  - local: alerting/{_GL_PIPELINE.as_posix()}\n",
+        encoding="utf-8", newline="\n")
+
+    out = _dry_run_output(_config(ci="gitlab"), sub, capsys)
+
+    assert subdir_marker not in out, (
+        "a correctly wired split-pipeline repo was told by --dry-run that "
+        "its config would not be loaded. The real run prints an all-clear "
+        f"for this exact repo, so the two flags disagree.\n{out}")
+    assert "⚠️" not in out, f"--dry-run warned about nothing at all.\n{out}"
+
+
+@pytest.mark.parametrize("lang", sorted(_DRYRUN_MARKERS))
+@pytest.mark.parametrize("ci", ["gitlab", "both"])
+def test_dry_run_warns_that_an_existing_root_pipeline_is_left_untouched(
+    lang, ci, tmp_path, capsys, monkeypatch,
+) -> None:
+    """Brownfield at the repository root — the second warning leg.
+
+    The customer's own root `.gitlab-ci.yml` is never rewritten, so the
+    generated pipeline stays inert until they wire it in by hand. Without
+    this line a dry run over the shape `da-tools init` is documented as
+    meeting reports a plain file list and nothing else.
+    """
+    monkeypatch.setattr(ip, "_LANG", lang)
+    subdir_marker, brownfield_marker = _DRYRUN_MARKERS[lang]
+    target = tmp_path / "brownfield"
+    target.mkdir()
+    (target / _GL_ROOT_SHELL).write_text(
+        "stages: [build]\nbuild:\n  script: [echo hi]\n",
+        encoding="utf-8", newline="\n")
+
+    out = _dry_run_output(_config(ci=ci), target, capsys)
+
+    assert brownfield_marker in out, (
+        f"--dry-run over a repo that already has a root "
+        f"{_GL_ROOT_SHELL.as_posix()} (--ci {ci}) never said the tool will "
+        f"not touch it, so nothing told the reader the GitLab leg stays "
+        f"inert until they hand-edit.\n{out}")
+    assert subdir_marker not in out, (
+        f"the root-level brownfield case was reported as a subdirectory "
+        f"case.\n{out}")
+
+
+@pytest.mark.parametrize("lang", sorted(_DRYRUN_MARKERS))
+@pytest.mark.parametrize("ci", CI_CHOICES)
+def test_dry_run_is_silent_when_there_is_nothing_to_warn_about(
+    lang, ci, tmp_path, capsys, monkeypatch,
+) -> None:
+    """⛔ Anti-vacuity for both legs at once: a greenfield run at the
+    repository root has no unfinished wiring, so neither warning may fire.
+
+    Without this, "print both warnings unconditionally" satisfies the two
+    positive tests above — and that is the mutation the production code was
+    changed to remove.
+    """
+    monkeypatch.setattr(ip, "_LANG", lang)
+    target = tmp_path / "greenfield"
+    target.mkdir()
+
+    out = _dry_run_output(_config(ci=ci), target, capsys)
+
+    assert "⚠️" not in out, (
+        f"--ci {ci} into a greenfield root warned about wiring that is not "
+        f"missing.\n{out}")
+
+
 def _normalized_commands(text: str) -> list[str]:
     """Shell text → one normalized command per entry (continuations folded)."""
     folded = re.sub(r"\\\s*\n\s*", " ", text)
@@ -3403,7 +3578,12 @@ _SUMMARY_CI_VALUES = ["github", "gitlab", "both"]
 
 
 @pytest.mark.parametrize("lang", sorted(_SUMMARY_MARKERS))
-@pytest.mark.parametrize("ci", ["github", "gitlab", "both"])
+# ⛔ The SHARED constant, not a third hand-copied list. This axis used to
+# spell `["github", "gitlab", "both"]` inline, so `test_summary_axes_cannot_
+# shrink_silently` pinned the sibling axis while this one could quietly lose
+# a value — and `github` is the leg with no `include:` indirection to rescue
+# it, i.e. the one that needs the subdirectory warning most.
+@pytest.mark.parametrize("ci", _SUMMARY_CI_VALUES)
 def test_output_dir_below_the_repo_root_is_never_an_all_clear(
     lang, ci, tmp_path, capsys, monkeypatch,
 ) -> None:
@@ -3555,6 +3735,45 @@ def test_summary_wiring_line_reports_what_init_actually_did(
                 f"shape {shape!r} was handed a paste-ready fragment instead "
                 f"of the end-state example.\nsummary was:\n{summary}"
             )
+            # ⛔ WHICH lead sentence. Up to here every needs-work shape got
+            # byte-identical assertions, so `unparseable-with-include` — the
+            # row added for exactly one behaviour — graded nothing that
+            # `needs-append` did not already grade. It was decorative.
+            #
+            # The behaviour it exists for: a document that did not parse is
+            # still LINE-SCANNED for a top-level `include:`, because
+            # `!reference` is the ordinary route into "did not parse" and a
+            # pipeline sophisticated enough to use it almost certainly
+            # already has one — the exact repo where a second `include:` key
+            # silently deletes the customer's own entries. So the classifier
+            # answers NEEDS_APPEND there, not UNPARSEABLE, and the printed
+            # lead says "already has an `include:`" rather than "could not be
+            # parsed". Both mutations that erase the scan (return
+            # UNPARSEABLE unconditionally; make `_GL_INCLUDE_KEY_RE` never
+            # match) survived until this assertion existed.
+            unparseable_lead = {
+                "en": "could not be parsed",
+                "zh": "無法解析它",
+            }[lang]
+            has_include_lead = {
+                "en": "already has an `include:`",
+                "zh": "且已經有 `include:`",
+            }[lang]
+            if shape == "unparseable-no-include":
+                assert unparseable_lead in summary, (
+                    "a root file that neither parses nor carries an "
+                    f"`include:` was not reported as unparseable.\n{summary}")
+            else:
+                assert has_include_lead in summary, (
+                    f"shape {shape!r} was told its root file could not be "
+                    "parsed, when what we can see is that it HAS an "
+                    "`include:`. For the `!reference` case that is the "
+                    "difference between 'edit your existing include' and a "
+                    "sentence that invites a second `include:` key — which "
+                    f"drops every entry they have.\n{summary}")
+                assert unparseable_lead not in summary, (
+                    f"shape {shape!r} got the unparseable lead as well.\n"
+                    f"{summary}")
 
     if ci == "both":
         # ⛔ Deleting the GitHub wiring line, and deleting the `--ci both`
