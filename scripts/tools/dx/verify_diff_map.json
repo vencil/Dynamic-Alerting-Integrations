@@ -717,7 +717,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "72826c798fec8d82def739670526a3f0f9222009499290e5d271c6356217daea",
+ "source_digest": "2baf54c4f3887d0e0424162b8c7b0e6a1c9bb1acaff977854a9b124bf4a1fc10",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2553,6 +2553,7 @@
   "tests/ops": [
    "tests/dx/test_verify_diff.py",
    "tests/lint/test_check_threshold_registry.py",
+   "tests/ops/test_generated_ci_artifacts.py",
    "tests/ops/test_grar_facade_reexports.py",
    "tests/ops/test_init_project.py",
    "tests/ops/test_nightly_race_issue_policy.py",

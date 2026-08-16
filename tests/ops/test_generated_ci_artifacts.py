@@ -3712,6 +3712,25 @@ def test_summary_wiring_line_reports_what_init_actually_did(
             f"--ci github asked for GitLab wiring.\n{summary}")
         return
 
+    if ci == "gitlab":
+        # ⛔ The MIRROR of the `github` arm above, and its absence was a
+        # finding: that arm carried the symmetric argument in prose ("any
+        # GitLab sentence here would be describing a file that does not
+        # exist") while only one direction was asserted. Measured — widening
+        # the GitHub wiring line's guard to `if True:` left the whole of
+        # tests/ops green while `--ci gitlab` printed "GitHub wiring done:
+        # .github/workflows/dynamic-alerting.yaml sits where GitHub Actions
+        # auto-loads it" for a file the run never wrote. #1357's own shape, on
+        # the leg this test declares it is watching.
+        assert _GH_WORKFLOW.as_posix() not in summary, (
+            "--ci gitlab mentioned the GitHub workflow, which this path "
+            f"never writes.\n{summary}"
+        )
+        assert "GitHub Actions" not in summary, (
+            "--ci gitlab named GitHub Actions in its summary.\n"
+            f"{summary}"
+        )
+
     if shape == "greenfield":
         # We wrote the root shell ourselves this run. Saying "already in
         # place — nothing to do" about our own new file is a false report of

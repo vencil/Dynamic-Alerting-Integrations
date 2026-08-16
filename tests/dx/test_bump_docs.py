@@ -2862,6 +2862,37 @@ class TestDryRunWritesNothing:
             assert now == original, (
                 f"--dry-run 改寫了 {name}：{original!r} → {now!r}")
 
+    def test_the_fourth_guard_is_the_one_in_apply_count_updates(
+            self, tmp_path, monkeypatch, capsys, cli_argv):
+        """⛔ 這個 class 的名字說「四個守衛」，上面那條只驅動三個。
+
+        第四個在 `apply_count_updates`，走的是 `--sync-counts --dry-run`
+        ——一個**被接受**的組合（`--dry-run` 不在拒絕名單裡，因為這條分支真的
+        會處理它）。實測拿掉那一個守衛，`tests/dx` 加上共用的 dry-run 閘門
+        2474 條全綠。
+
+        這條同時修正 `tests/shared/test_dry_run_no_write.py` 裡「bump_docs 本身
+        已在 TestDryRunWritesNothing 直接釘住」那句話——在此之前那是四分之三。
+        """
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        target = tmp_path / "probe.md"
+        target.write_text("3 tools\n", encoding="utf-8", newline="\n")
+        original = target.read_bytes()
+        monkeypatch.setattr(bump_docs, "_build_count_rules", lambda: [{
+            "file": "probe.md", "desc": "probe count",
+            "pattern": r"[0-9]+ tools", "count": 99,
+            "replacement": lambda n: f"{n} tools",
+            "source_ok": True, "source": "probe",
+        }])
+        cli_argv("bump_docs", "--sync-counts", "--dry-run")
+        try:
+            bump_docs.main()
+        except SystemExit as exc:
+            assert exc.code == 0, exc.code
+        capsys.readouterr()
+        assert target.read_bytes() == original, (
+            "`--sync-counts --dry-run` 改寫了檔案")
+
     def test_main_passes_the_flag_all_the_way_down(self, tmp_path,
                                                     monkeypatch, capsys,
                                                     cli_argv):

@@ -3539,6 +3539,40 @@ class TestSubdirectoryContentsAreNotOnlyAPlacementProblem:
             '`--ci github` 的結尾訊息列出了上一次執行留下的 GitLab pipeline '
             f'裡的 path filter——這一次既沒產生它也沒要求接線它。\n{out}')
 
+    def test_a_leftover_github_workflow_is_not_listed_either(self):
+        """⛔ 上一條只替 **GitLab** 那半解除了恆真，GitHub 那道過濾
+        （`ci_sel in ('github', 'both')`）留在它被寫來修正的那個完全一樣的
+        恆真狀態裡：把它改成 `if True:` 仍然全綠。
+
+        鏡像情境：目錄裡留著上一次 `--ci both` 寫下的 GitHub workflow，這次
+        跑 `--ci gitlab`。
+        """
+        import contextlib
+        import io
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = _P(tmpdir) / 'repo'
+            (repo / '.git').mkdir(parents=True)
+            sub = repo / 'alerting'
+            sub.mkdir()
+            stale = sub / ip._GH_WORKFLOW_REL
+            stale.parent.mkdir(parents=True, exist_ok=True)
+            stale.write_text(
+                'name: stale\non:\n  push:\n    paths:\n'
+                '      - stale-gh-tree/**\njobs:\n  j:\n'
+                '    runs-on: ubuntu-latest\n    steps:\n      - run: true\n',
+                encoding='utf-8', newline='\n')
+            config = dict(self._CONFIG, ci='gitlab')
+            created = ip.run_init(config, str(sub))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ip._print_summary(created, str(sub), config)
+            out = buf.getvalue()
+        assert 'Not done yet' in out, out
+        assert 'stale-gh-tree/**' not in out, (
+            '`--ci gitlab` 的結尾訊息列出了上一次執行留下的 GitHub workflow '
+            f'裡的 path filter。\n{out}')
+
     def test_an_install_at_the_repo_root_says_nothing_of_the_kind(self):
         """反空洞：根目錄安裝沒有這個問題，這一段不該出現。"""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -3660,9 +3694,17 @@ class TestTheApplyStageAdmitsItNeedsCredentials:
     @pytest.mark.parametrize('lang', ['en', 'zh'])
     def test_the_summary_names_the_credential_the_apply_stage_needs(
             self, deploy, needle, lang, monkeypatch):
+        """⚠️ `_LANG` 是**匯入時**求值的（`init_project.py:66`），所以
+        `monkeypatch.setenv('DA_LANG', …)` 對它毫無作用——這條的語系軸原本
+        是死的，兩列都在測英文那一句。實測：把整段中文憑證訊息刪掉，這個
+        class 7/7 全綠、tests/ops 4515 全綠。
+
+        同一分支的其他測試用的都是 `setattr(ip, '_LANG', …)`；這條是唯一的
+        例外，而它偏偏是宣稱雙語的那條。
+        """
         import contextlib
         import io
-        monkeypatch.setenv('DA_LANG', lang)
+        monkeypatch.setattr(ip, '_LANG', lang)
         with tempfile.TemporaryDirectory() as tmpdir:
             config = {
                 'ci': 'github', 'deploy': deploy,
@@ -4144,12 +4186,22 @@ class TestTheClosingLineAndTheSubdirWarningSayTrueThings:
         assert len(hits) == 1, (hits, out)
         return hits[0]
 
+    # ⛔ BOTH fixtures, and that is the finding. The first version passed only
+    # `root_body=None` — a greenfield install at the repo root, where
+    # `gl_root_written` is True, `gl_needs_manual` is False, and the closing
+    # sentence therefore always comes from the `else` branch. The branch that
+    # HARDCODES "GitHub Actions" into the closing line (`elif ci_sel == 'both'`)
+    # was unreachable for every row, so mutating it to `elif True:` stayed
+    # green while `--ci gitlab` on a brownfield repo closed with
+    # "GitHub Actions validates automatically; GitLab CI only after…".
+    @pytest.mark.parametrize('root_body', [None, 'stages:\n  - build\n'],
+                             ids=['greenfield', 'brownfield'])
     @pytest.mark.parametrize('ci,forbidden', [
         ('gitlab', 'GitHub Actions'),
         ('github', 'GitLab'),
     ])
     def test_the_closing_line_never_names_an_unselected_platform(
-            self, ci, forbidden):
+            self, ci, forbidden, root_body):
         """⛔ 平台名稱查表的兩個值都可以被改掉而全綠：`--ci gitlab` 可以收尾在
         「GitHub Actions + GitLab CI will automatically validate your config」。
 
@@ -4157,10 +4209,11 @@ class TestTheClosingLineAndTheSubdirWarningSayTrueThings:
         `if ci == "both"` 底下——也就是只在**已經選了 both** 的時候才檢查。
         """
         with tempfile.TemporaryDirectory() as tmpdir:
-            out = self._summary(tmpdir, ci)
+            out = self._summary(tmpdir, ci, root_body=root_body)
         line = self._closing(out)
         assert forbidden not in line, (
-            f'--ci {ci} 的結尾句指名了 {forbidden}：{line}')
+            f'--ci {ci} ({root_body and "brownfield" or "greenfield"}) '
+            f'的結尾句指名了 {forbidden}：{line}')
 
     def test_a_subdirectory_never_closes_with_an_automatic_validation_claim(
             self):
