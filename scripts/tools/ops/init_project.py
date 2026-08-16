@@ -214,7 +214,12 @@ GITLAB_HELM_IMAGE = 'alpine/helm:3.21.3'
 # alternatives are worth offering: download it from the customer's own server
 # (`https://$ARGOCD_SERVER/download/argocd-linux-amd64`), or enable auto-sync
 # and drop this stage entirely.
-GITLAB_ARGOCD_IMAGE = 'quay.io/argoproj/argocd:v3.5.0'
+# ⚠️ Named for the CLI, not for a platform: BOTH legs use it now. The
+# GitHub leg used to `run: argocd app sync` on a bare `ubuntu-latest`,
+# whose runner image ships helm / kubectl / kustomize / kind / minikube
+# and no `argocd` — so that job exited 127 on every dispatch while the
+# GitLab sibling had this pin all along.
+ARGOCD_CLI_IMAGE = 'quay.io/argoproj/argocd:v3.5.0'
 
 # registry.k8s.io/git-sync publishes ONLY exact patch tags (no `latest`, no
 # `v4`), so a consumer is forced to name a version. The previous pin, v4.4.0
@@ -249,7 +254,7 @@ DA_TOOLS_IMAGE = 'ghcr.io/vencil/da-tools:latest'
 _GITLAB_APPLY_IMAGES = {
     'kustomize': ('DA_KUBECTL_IMAGE', GITLAB_KUBECTL_IMAGE),
     'helm': ('DA_HELM_IMAGE', GITLAB_HELM_IMAGE),
-    'argocd': ('DA_ARGOCD_IMAGE', GITLAB_ARGOCD_IMAGE),
+    'argocd': ('DA_ARGOCD_IMAGE', ARGOCD_CLI_IMAGE),
 }
 
 
@@ -932,6 +937,12 @@ def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
     """).format(namespace=namespace)
 
     else:  # argocd
+        # ⛔ `container:`, not a bare `run:`. `ubuntu-latest` carries helm,
+        # kubectl, kustomize, kind and minikube — and no `argocd`, so the
+        # shipped job exited 127 on every dispatch. The GitLab sibling pinned
+        # an image for exactly this reason; the two legs now share the pin.
+        # The job has no checkout step (`argocd app sync` talks to the server),
+        # so nothing here needs a toolchain the CLI image lacks.
         return textwrap.dedent("""\
 
       # ── Stage 3: Sync ArgoCD Application ──────────────────
@@ -940,13 +951,15 @@ def _build_github_apply_stage(deploy_method: str, namespace: str) -> str:
       apply:
         needs: [validate]
         runs-on: ubuntu-latest
+        container:
+          image: {argocd_image}
         if: github.event_name == 'workflow_dispatch'
         environment: production
         steps:
           - name: Trigger ArgoCD sync
             run: |
               argocd app sync dynamic-alerting --prune --timeout 300
-    """)
+    """).format(argocd_image=ARGOCD_CLI_IMAGE)
 
 
 def _gen_github_actions(
@@ -1013,9 +1026,16 @@ def _gen_github_actions(
       # `docker run validate-config` with no credentials, already narrowed by
       # the paths filter below. The GitLab leg gets portability from
       # `$CI_DEFAULT_BRANCH`; this is the GitHub equivalent.
+      # ⛔ Same three trees as the pull_request leg. It used to list `conf.d/**`
+      # alone, so a direct push touching only `rule-packs/custom/**` ran nothing
+      # — and the custom-rule governance lint inside `validate` is scoped to
+      # exactly that tree. A repo that permits direct pushes got no lint at all
+      # on tenant-authored PromQL pushed that way.
       push:
         paths:
           - 'conf.d/**'
+          - 'kustomize/**'
+          - 'rule-packs/**'
       workflow_dispatch:
 
     # Least-privilege, and `pull-requests: write` is LOAD-BEARING, not
@@ -1066,6 +1086,16 @@ def _gen_github_actions(
 
           - name: Validate config (schema + routing + policy)
             run: |
+              # ⛔ The same guard the config-diff step carries, and for the same
+              # reason: `docker -v` CREATES a missing host path instead of
+              # failing, so a wrong or moved CONFIG_DIR mounts an EMPTY
+              # directory, `validate-config` parses zero files and exits 0.
+              # Stage 2 refuses to compare in that case; Stage 1 went green and
+              # silent — the worse half, because nothing on the PR hints at it.
+              if [ ! -d "${{{{ env.CONFIG_DIR }}}}" ]; then
+                echo "::error::CONFIG_DIR is set to '${{{{ env.CONFIG_DIR }}}}', which does not exist in this commit. Refusing to validate, because mounting a path that is not there yields an empty directory and a PASS that checked nothing."
+                exit 1
+              fi
               docker run --rm \\
                 -v ${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
@@ -1112,7 +1142,15 @@ def _gen_github_actions(
 
           - name: Generate Alertmanager routes
             run: |
+              # ⛔ `--user` is load-bearing on the ONE writable mount in this
+              # workflow. The image ends `USER nonroot:nonroot` (uid 10001)
+              # while `mkdir -p .output` above runs as the runner user (uid
+              # 1001, umask 022) — so the container cannot create a file in
+              # its own output directory and the step dies with EACCES. The
+              # config-diff step below never hits this because it redirects on
+              # the HOST; this one is told `-o` inside the container.
               docker run --rm \\
+                --user $(id -u):$(id -g) \\
                 -v ${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro \\
                 -v ${{{{ github.workspace }}}}/.output:/data/output \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\

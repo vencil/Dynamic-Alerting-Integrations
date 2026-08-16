@@ -474,7 +474,11 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
 # ============================================================
 def check_versions() -> dict[str, object]:
     """Run bump_docs.py --check for version consistency."""
-    cmd = [sys.executable, str(_THIS_DIR / "bump_docs.py"), "--check"]
+    # ⛔ `dx/`, not `_THIS_DIR`. bump_docs.py has never lived beside this
+    # file, so this check has never once run: `make validate-config` was
+    # red for every developer with "can't open file .../ops/bump_docs.py".
+    cmd = [sys.executable,
+           str(_THIS_DIR.parent / "dx" / "bump_docs.py"), "--check"]
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True,

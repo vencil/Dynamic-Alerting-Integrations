@@ -910,7 +910,14 @@ _CLI_GH_TRIGGERS = {
     # fires. Pinning the ABSENCE is the contract: it says "we deliberately
     # do not guess", where pinning `["main"]` would have cemented the bug
     # and made the eventual fix red a test.
-    "push": {"paths": ["conf.d/**"]},
+    #
+    # ⛔ The SAME three trees as `pull_request`. This used to be `conf.d/**`
+    # alone, so a direct push touching only `rule-packs/custom/**` ran
+    # nothing — and the custom-rule governance lint inside `validate` is
+    # scoped to exactly that tree. Held equal by
+    # `test_the_push_leg_watches_the_same_trees_as_the_pr_leg` below, so the
+    # two cannot drift apart again by editing one of them.
+    "push": {"paths": ["conf.d/**", "kustomize/**", "rule-packs/**"]},
     "workflow_dispatch": None,
 }
 # Pinned WITH versions: a name-only pin accepted `actions/checkout@v1`.
@@ -3099,7 +3106,11 @@ _EXPECTED_GL_APPLY: dict[str, list[str]] = {
 # one pin covers the axis.
 _EXPECTED_GH_GENERATE: list[str] = [
     'mkdir -p .output',
-    'docker run --rm -v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro -v ${{ github.workspace }}/.output:/data/output ${{ env.DA_TOOLS_IMAGE }} generate-routes --config-dir /data/conf.d -o /data/output/alertmanager-routes.yaml --validate',
+    # ⛔ `--user` is not cosmetic and must stay in the pin: this is the only
+    # WRITABLE mount in the workflow, and the image ends `USER nonroot`
+    # (uid 10001) while `mkdir -p .output` above runs as the runner user.
+    # Without it the container cannot create its own output file.
+    'docker run --rm --user $(id -u):$(id -g) -v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro -v ${{ github.workspace }}/.output:/data/output ${{ env.DA_TOOLS_IMAGE }} generate-routes --config-dir /data/conf.d -o /data/output/alertmanager-routes.yaml --validate',
     ': "${RUNNER_TEMP:?RUNNER_TEMP is not set; this step writes its intermediate files there}"',
     'config_dir="${CONFIG_DIR%/}"',
     'mkdir -p .output/base/"$config_dir"',
@@ -4758,3 +4769,89 @@ def test_portal_file_tree_matches_what_init_writes(
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+class TestGitHubLegDefectsFoundInRoundSeven:
+    """第七輪盲審 lens W：四個既有缺陷各自讓一段出貨的 pipeline 不能用。
+
+    共同形狀：**同一個危害在這份檔案的別處已經被處理過了**，只是沒套到這幾個
+    位置——所以修法是把既有的作法補齊，不是發明新的。
+    """
+
+    def _gh(self, deploy: str) -> dict:
+        return yaml.safe_load(ip._gen_github_actions(
+            'monitoring', 'ghcr.io/vencil/da-tools:latest', deploy))
+
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    def test_stage_one_refuses_a_config_dir_that_is_not_there(self, deploy):
+        """⛔ `docker -v` 會**建立**不存在的 host 路徑而不是失敗。
+
+        於是一個指錯（或搬走）的 `CONFIG_DIR` 掛進來的是空目錄，
+        `validate-config` 解析 0 個檔案、印 `Result: PASS`、exit 0——一個永遠
+        綠而且什麼都沒驗的 required check。實測：
+
+            $ docker run --rm -v /tmp/ws2/conf.d:/data/conf.d:ro img ls /data/conf.d
+            []                       # 而且 /tmp/ws2/conf.d 是 docker 剛建的
+            $ validate_config.py --config-dir /tmp/emptyconf
+            Total: 5 checks | 5 pass | 0 warn | 0 fail   →   rc=0
+
+        config-diff 那一步 170 行後就帶著這個守衛（註解自己寫「a blast-radius
+        gate that is green and silent forever」），Stage 1 沒有——而 Stage 1 是
+        更糟的那半，因為 PR 上連一個提示都沒有。
+        """
+        steps = self._gh(deploy)['jobs']['validate']['steps']
+        body = next(s['run'] for s in steps
+                    if s.get('name', '').startswith('Validate config'))
+        assert 'if [ ! -d "${{ env.CONFIG_DIR }}" ]; then' in body, (
+            f'{deploy}: Stage 1 沒有 CONFIG_DIR 存在性守衛——掛進空目錄之後'
+            f'它會綠著什麼都不驗。\n{body}')
+        assert '::error::' in body and 'exit 1' in body, body
+
+    def test_the_argocd_apply_job_has_the_cli_it_invokes(self):
+        """⛔ `ubuntu-latest` 沒有 `argocd`。
+
+        GitHub 的 runner-image manifest 列出 helm / kind / kubectl / kustomize /
+        minikube——沒有 argocd。原本的 job 既沒有安裝步驟也沒有映像，於是每一次
+        dispatch 都是 `argocd: command not found` / exit 127。GitLab 的同胞一直
+        都 pin 著映像（`$DA_ARGOCD_IMAGE`），這是腿間不對稱、不是範圍問題。
+        """
+        job = self._gh('argocd')['jobs']['apply']
+        assert job.get('container'), (
+            'argocd 的 GitHub apply job 沒有 container:——它呼叫一個 '
+            f'ubuntu-latest 上不存在的 binary。\n{job}')
+        assert job['container']['image'] == ip.ARGOCD_CLI_IMAGE, job['container']
+        # ⛔ 兩條腿共用同一個 pin：分成兩份就是下一次版本漂移。
+        assert ip._GITLAB_APPLY_IMAGES['argocd'][1] == ip.ARGOCD_CLI_IMAGE
+
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    def test_the_only_writable_mount_runs_as_the_runner(self, deploy):
+        """⛔ 映像以 `USER nonroot`（uid 10001）結尾，而 `mkdir -p .output` 是
+        runner 使用者（uid 1001, umask 022）建的目錄。
+
+        容器因此無法在自己的輸出目錄裡建檔，`generate-routes -o` 直接 EACCES
+        ——每一個 PR 都死在這一步，而整個 `pull-requests: write` 權限存在的理由
+        （blast-radius comment）永遠到不了。
+
+        對照組寫在下一步：config-diff 是在 **host** 上重導向，所以它碰不到這個
+        問題；只有這一步是把 `-o` 交給容器內部。
+        """
+        steps = self._gh(deploy)['jobs']['generate']['steps']
+        body = next(s['run'] for s in steps
+                    if s.get('name') == 'Generate Alertmanager routes')
+        assert '--user $(id -u):$(id -g)' in body, (
+            f'{deploy}: 唯一可寫的 bind mount 沒有 --user——容器寫不進去。'
+            f'\n{body}')
+
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    def test_the_push_leg_watches_the_same_trees_as_the_pr_leg(self, deploy):
+        """⛔ `push` 原本只看 `conf.d/**`，`pull_request` 看三棵樹。
+
+        而 `validate` 裡的自訂規則治理 lint 掃的是 `rule-packs/custom`——所以一個
+        允許直推預設分支的 repo，對以那種方式推上來的租戶自撰 PromQL 完全沒有
+        lint。兩者相等是刻意的：只改其中一個就會再漂開。
+        """
+        on = self._gh(deploy)
+        on = on[True] if True in on else on['on']
+        assert on['push']['paths'] == on['pull_request']['paths'], (
+            f"{deploy}: push 與 pull_request 的 paths 不一致——"
+            f"push={on['push']['paths']} pr={on['pull_request']['paths']}")

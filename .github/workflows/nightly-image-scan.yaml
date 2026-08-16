@@ -369,7 +369,7 @@ jobs:
             ref: "alpine/k8s:1.34.9"
           - name: delivered-helm # GITLAB_HELM_IMAGE (scripts/tools/ops/init_project.py)
             ref: "alpine/helm:3.21.3"
-          - name: delivered-argocd # GITLAB_ARGOCD_IMAGE (scripts/tools/ops/init_project.py)
+          - name: delivered-argocd # ARGOCD_CLI_IMAGE (scripts/tools/ops/init_project.py)
             ref: "quay.io/argoproj/argocd:v3.5.0"
           # Not routed through _GITLAB_APPLY_IMAGES — this one is the git-sync
           # sidecar + init container in the generated kustomize gitops overlay,
