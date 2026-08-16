@@ -4342,3 +4342,160 @@ class TestTheDryRunLegsThatNoTestReaches:
         before, after = [], written
         assert before == after, (
             f'--dry-run 寫了東西到磁碟：{sorted(set(after) - set(before))}')
+
+
+class TestTheSummaryDoesNotContradictItself:
+    """⛔ 第七輪盲審 lens Y：結尾訊息的**結構**沒有被斷言。
+
+    四個存活變異各自讓同一份訊息自己打自己，或指向一個這次沒產生的東西。
+    這裡釘的是結構性質（編號連續、路徑相對、步驟與產物一致），不是逐字文案
+    ——文案改寫不該讓測試紅，結構壞掉必須紅。
+    """
+
+    _CFG = {
+        'rule_packs': ['mariadb'], 'tenants': ['db-a'],
+        'namespace': 'monitoring',
+        'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+    }
+
+    def _summary(self, tmpdir, ci='both', deploy='kustomize', **extra):
+        import contextlib
+        import io
+        config = dict(self._CFG, ci=ci, deploy=deploy, **extra)
+        created = ip.run_init(config, tmpdir)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ip._print_summary(created, tmpdir, config)
+        return buf.getvalue(), created
+
+    def _steps(self, out):
+        import re as _re
+        return [int(m.group(1)) for m in
+                (_re.match(r'\s*(\d+)\. ', ln) for ln in out.splitlines())
+                if m]
+
+    @pytest.mark.parametrize('ci', ['github', 'gitlab', 'both'])
+    @pytest.mark.parametrize('deploy', ['kustomize', 'helm', 'argocd'])
+    def test_step_numbers_are_consecutive(self, ci, deploy):
+        """⛔ 少一個 `step += 1` 之後，41 個情境的結尾訊息出現重複編號
+        （`7. GitLab wiring done…` 緊接著 `7. Commit and push…`），全綠。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out, _ = self._summary(tmpdir, ci=ci, deploy=deploy)
+        steps = self._steps(out)
+        assert steps == list(range(1, len(steps) + 1)), (
+            f'{ci}/{deploy}: 步驟編號不連續 {steps}\n{out}')
+
+    def test_the_generated_file_list_is_relative_to_the_output_dir(self):
+        """⛔ 拿掉 `relative_to(output_dir)` 之後，45 個情境的每一個 ✓ 行都變成
+        絕對路徑（`✓ /tmp/…/repo/conf.d/_defaults.yaml`）。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out, created = self._summary(tmpdir)
+        shown = [ln.strip()[2:].strip() for ln in out.splitlines()
+                 if ln.strip().startswith('✓')]
+        assert shown, out
+        assert not any(os.path.isabs(s) for s in shown), (
+            f'產出清單印的是絕對路徑：{[s for s in shown if os.path.isabs(s)]}')
+        assert len(shown) == len(created), (len(shown), len(created))
+
+    @pytest.mark.parametrize('deploy', ['helm', 'argocd'])
+    def test_a_step_never_points_at_a_tree_this_run_did_not_generate(
+            self, deploy):
+        """⛔ `deploy == 'kustomize'` 改成 `!= 'argocd'` 之後，`--deploy helm`
+        的第一步變成「Create symlinks from conf.d/ to kustomize/base/」——指向
+        一個 `--deploy helm` 從來不產生的目錄樹。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out, created = self._summary(tmpdir, deploy=deploy)
+        assert not any(f.startswith('kustomize/') for f in created), created
+        assert 'kustomize/' not in out, (
+            f'--deploy {deploy} 的結尾訊息提到 kustomize/，而這次沒有產生它'
+            f'\n{out}')
+
+    def test_greenfield_both_does_not_promise_a_step_it_never_printed(self):
+        """⛔ 從 `gl_needs_manual` 拿掉 `and not gl_root_written` 之後，13 個
+        情境自相矛盾：第 N 行說「GitLab wiring done: generated .gitlab-ci.yml」，
+        第 N+1 行說「GitLab CI only after you complete the step above」——而
+        那個 step 從來沒有被印出來。這是最常見的組態（greenfield `--ci both`）。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out, _ = self._summary(tmpdir, ci='both')
+        assert 'GitLab wiring done' in out, out
+        closing = [ln for ln in out.splitlines()
+                   if 'commit and push' in ln.lower()]
+        assert len(closing) == 1, closing
+        assert 'only after you complete' not in closing[0].lower(), (
+            'greenfield 的結尾句指向一個從來沒被印出來的步驟：\n'
+            + '\n'.join(out.splitlines()[-6:]))
+
+    def test_the_gitops_artifacts_need_both_flags_not_either(self):
+        """⛔ `config_source == 'git' and git_repo` 兩處都可以改成 `or` 而全綠
+        （preview 與實跑一起改，於是兩者仍然一致、沒有測試看得見差別）。
+
+        後果：只給 `--git-repo X`（沒有 `--config-source git`）就會多寫出
+        `kustomize/overlays/gitops/kustomization.yaml` 與 git-sync patch——
+        一份會改動客戶 Deployment 的檔案。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _, created = self._summary(
+                tmpdir, git_repo='https://example.com/x.git',
+                config_source='local')
+        gitops = [f for f in created if 'gitops' in f or 'git-sync' in f]
+        assert not gitops, (
+            '只給了 --git-repo（沒有 --config-source git）卻產生了 gitops '
+            f'產物：{gitops}')
+        # 反向：兩個旗標都給時，那些產物**必須**出現，而且預覽與實跑要一致。
+        # ⚠️ 預覽要在寫入**之前**取——寫完再問會得到一個「對錯誤世界正確」的
+        # 答案（根 shell 是唯一取決於目標 repo 而非旗標的產物）。
+        cfg = dict(self._CFG, ci='both', deploy='kustomize',
+                   git_repo='https://example.com/x.git', config_source='git')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preview = sorted(ip._preview_files(dict(cfg), tmpdir))
+            created = sorted(ip.run_init(dict(cfg), tmpdir))
+        assert any('gitops' in f or 'git-sync' in f for f in created), created
+        assert preview == created, sorted(set(preview) ^ set(created))
+
+    def test_the_defaults_file_keeps_its_authored_key_order(self):
+        """⛔ `sort_keys=False` → `True` 存活：46 個情境裡客戶要編輯的那份
+        `conf.d/_defaults.yaml` 被整份重排（`_routing_defaults` 被拉到
+        `defaults:` 上面，每個 metric key 字母排序）。
+
+        那份檔案的順序是刻意的——它是客戶第一個打開來讀的東西。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._summary(tmpdir)
+            from pathlib import Path as _P
+            body = (_P(tmpdir) / 'conf.d' / '_defaults.yaml').read_text(
+                encoding='utf-8')
+        keys = [ln.split(':')[0] for ln in body.splitlines()
+                if ln and not ln.startswith((' ', '#'))]
+        assert keys == ['defaults', 'state_filters', '_routing_defaults'], keys
+        # 反空洞：這個順序必須**不是**字母序，否則 sort_keys 開不開都一樣、
+        # 這條測試等於沒有鑑別力。
+        assert keys != sorted(keys), keys
+
+    @pytest.mark.parametrize('lang', ['en', 'zh'])
+    def test_the_help_text_follows_the_locale(self, lang, monkeypatch):
+        """⛔ `_h()` 改成永遠回英文而全綠：`LANG=zh_TW.UTF-8 … --help` 的每一句
+        雙語說明都退回英文。`_HELP` 的中文那一半從來沒有被斷言過。"""
+        monkeypatch.setattr(ip, '_LANG', lang)
+        text = ip._build_parser().format_help()
+        # ⛔ 從 `_HELP` 表本身推導期望值，不是挑一個字面字串。第一版挑了
+        # 「初始化」／「產生」，而那兩個詞在別處也出現，於是 `_h()` 改成永遠
+        # 回英文之後測試照樣綠——測到的是別的東西。
+        def _probe(s):
+            # argparse 會把 `%(prog)s` 換掉，所以比對只取第一個插值之前的
+            # 那一段（epilog 的第一行就是這樣一句）。
+            return s.split('%')[0].split('(')[0].strip()[:12]
+
+        expected = [v[lang] for v in ip._HELP.values() if lang in v]
+        assert len(expected) >= 10, len(expected)
+        missing = [e for e in expected if _probe(e) and _probe(e) not in text]
+        assert not missing, (
+            f'{lang}: `_HELP` 裡有 {len(missing)} 句沒有出現在 --help 輸出裡'
+            f'——語系選擇沒有生效。例如 {missing[:2]}')
+        other = 'en' if lang == 'zh' else 'zh'
+        leaked = [v[other] for v in ip._HELP.values()
+                  if other in v and lang in v
+                  and _probe(v[other]) and _probe(v[other]) != _probe(v[lang])
+                  and _probe(v[other]) in text]
+        assert not leaked, (
+            f'{lang}: --help 裡混進了 {other} 的文案：{leaked[:2]}')
