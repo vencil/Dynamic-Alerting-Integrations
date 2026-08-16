@@ -1740,11 +1740,14 @@ def test_the_schema_witness_is_silent_on_the_real_tree():
             (gate.PROJECT_ROOT / rel).read_text(encoding="utf-8"))))
         for rel in tracked)
     assert judged == expected, (judged, expected)
-    assert judged < len(tracked), (
-        "at least one tracked artifact yields no YAML document at all "
-        "(comment-only). If that stops being true this note is stale, but a "
-        "judged count EQUAL to the file count is also what a naive "
-        "one-document-per-file assumption would produce.")
+    # ⛔ NOTHING ELSE. `assert judged < len(tracked)` stood here, on the
+    # reasoning that one artifact is comment-only today — and blind review
+    # reddened it by adding a legal section to that artifact, which is a
+    # SHIPPED customer example. It was the same rent this file had just
+    # finished condemning in `assert len(silent) >= 10`: a floor whose only
+    # basis is a coincidence of today's tree, whose cheapest green is deleting
+    # it. The equality above needs no companion — a reader that stops reading
+    # cannot match an independent recount.
 
 
 def test_the_schema_witness_refuses_an_empty_input():
@@ -1791,91 +1794,51 @@ def test_the_schema_witness_is_not_reachable_by_either_exemption_table(
     assert "DO NOT move the block under a different top-level section name" in msg, msg
 
 
-def test_the_schema_witness_scope_is_exactly_what_the_docstring_claims():
-    """The docstring's scope rows, as assertions rather than prose.
+def test_the_witness_catches_a_renamed_section_and_the_pinned_members_stay_caught():
+    """The attack reddens, and the two names that must stay CAUGHT are PINNED.
 
-    ⛔ Most of these assert that the witness stays SILENT. They are not slack —
-    an undisclosed gap and a disclosed one look identical from outside, and the
-    third withdrawn predicate died on exactly the open-prefix row. If a future
-    change closes one of these, this test goes red and the docstring has to be
-    rewritten in the same commit.
+    ⛔ A PIN, NOT A CLASSIFIER, and the distinction is why the enumeration here
+    is correct where the previous one was not. The version this replaces built
+    `silent`/`caught` by probing every property and then asserted a PARTITION —
+    which is true by construction (each name enters exactly one side), so blind
+    review measured both directions escaping it: widening the schema so
+    `optional_overrides` stops being caught left the suite green, and making the
+    witness invent a violation on a legal `_metadata:` section also left it
+    green. A classifier over an open input space cannot be enumerated; a pin
+    over THIS repo's two shaped properties is closed, single, and any change to
+    it should force a review.
 
-    ⛔ The silent set is derived from the schema, NOT listed here. An earlier
-    version of this test named two spellings, which is how the docstring came to
-    claim the silent set was two wide when blind review measured fourteen.
+    ⚠️ The SILENT side is deliberately NOT asserted here — see the disclosure
+    block below for what that costs and why it is still the right trade.
     """
-    import json
-
-    schema = json.loads(
-        (REPO_ROOT / "docs/schemas/platform-defaults.schema.json")
-        .read_text(encoding="utf-8"))
-
-    # 1. renamed to a name the schema does not allow -> CAUGHT
+    # the attack this gate exists for: a name the schema does not allow
     for bad in ("defalts", "defaultss", "Defaults"):
-        with pytest.raises(gate._GateViolation):
+        with pytest.raises(gate._GateViolation) as exc:
             _witness({"x/conf.d/_defaults.yaml": f"{bad}:\n  cpu: 90\n"})
+        assert bad in str(exc.value), exc.value
 
-    # 2. renamed onto a property the schema allows but does not shape, or onto
-    #    an open `patternProperties` prefix -> NOT caught.
-    #
-    # ⛔ THE CLASSIFICATION IS BEHAVIOURAL, not a list of value-shape keywords.
-    # The first spelling asked whether the property's spec carried any of
-    # {properties, items, patternProperties, additionalProperties} — an
-    # enumeration of an OPEN set (`type`, `enum`, `const`, `oneOf`, `$ref` …).
-    # Blind review gave `max_metrics_per_tenant` a `"type"`, which is exactly
-    # the improvement #1414 asks for and this gate's own message points at, and
-    # THIS ASSERTION WENT RED — the cheapest green being to revert the schema
-    # fix. Probing the real validator instead means a newly shaped property
-    # moves from the silent side to the caught side on its own, which is what
-    # "derived" was supposed to mean.
-    silent, caught = [], []
-    for name in sorted(schema["properties"]):
-        if name == "defaults":
-            continue
-        probe = {"x/conf.d/_defaults.yaml": f"{name}:\n  cpu: 90\n"}
-        try:
-            _witness(probe)
-        except gate._GateViolation:
-            caught.append(name)
-        else:
-            silent.append(name)
+    # …and the two properties whose value shape makes them catchable must stay
+    # catchable. If a schema change makes one of these silent it widens the
+    # #1443 bypass, and that red is correct rather than a maintenance cost.
+    for name in ("_custom_alerts", "optional_overrides"):
+        with pytest.raises(gate._GateViolation):
+            _witness({"x/conf.d/_defaults.yaml": f"{name}:\n  cpu: 90\n"})
 
-    # ⛔ ANTI-VACUITY BY PARTITION, not by a count. `assert len(silent) >= 10`
-    # stood here and meant "the schema must keep at least ten unshaped
-    # properties" — a floor that has to be LOWERED every time somebody improves
-    # the schema, i.e. a guard that charges rent on its own fix.
-    assert set(silent) | set(caught) == set(schema["properties"]) - {"defaults"}
-    assert not (set(silent) & set(caught))
-    assert caught, "no property is shaped enough to be caught — the witness is inert"
-    assert silent, "every property is caught — this row no longer describes the tree"
-
-    # 2b. the open prefixes are unbounded, so they are probed by shape not name
-    for name in ("_state_defaults", "_routing_zz"):
-        _witness({"x/conf.d/_defaults.yaml": f"{name}:\n  cpu: 90\n"})
-
-    # 3. a SECOND `defaults:` key (PyYAML last-wins -> None) -> NOT caught
-    _witness({"x/conf.d/_defaults.yaml": _WITNESS_OK + "defaults:\n"})
-
-    # 4. re-nested under `defaults:` -> legal, and left legal
-    _witness({"x/conf.d/_defaults.yaml": _WITNESS_NESTED})
-
-    # 5. section deleted outright -> not this witness's business
-    _witness({"x/conf.d/_defaults.yaml": _WITNESS_NO_SECTION})
-
-    # …and the shapes the real tree actually has must stay silent (a witness
-    # that reddens on today's tree would be removed, not fixed).
+    # the shapes the real tree actually has must stay silent — a witness that
+    # reddens on today's tree gets deleted, not fixed
     _witness({"a/conf.d/_defaults.yaml": _WITNESS_OK,
               "b/conf.d/_defaults.yaml": _WITNESS_PLACEHOLDER,
-              "c/conf.d/_defaults.yaml": _WITNESS_NO_SECTION})
+              "c/conf.d/_defaults.yaml": _WITNESS_NO_SECTION,
+              "d/conf.d/_defaults.yaml": _WITNESS_NESTED})
 
 
 def test_the_witness_reads_every_artifact_and_every_document_in_it():
-    """⛔ Two survivors from one blind round, and both looked like nothing.
+    """A partial reader hides the attack in whatever it stopped reading.
 
-    Truncating the loop to `rels[:1]` and swapping `safe_load_all` for
-    `safe_load` each left the whole suite green: no test had ever handed the
-    witness more than one artifact with the offender anywhere but first, and no
-    tracked artifact is a multi-document file (measured: 0 of 17).
+    Blind review truncated the loop to `rels[:1]` and swapped `safe_load_all`
+    for `safe_load`; both left the whole suite green, because no test had ever
+    handed the witness an offender anywhere but first, and no tracked artifact
+    is a multi-document file (measured: 0 of 17).
     """
     # offender is NOT first — `sorted()` puts the clean one ahead of it
     with pytest.raises(gate._GateViolation) as exc:
@@ -1885,297 +1848,104 @@ def test_the_witness_reads_every_artifact_and_every_document_in_it():
 
     # offender is in the SECOND YAML document of a single file
     with pytest.raises(gate._GateViolation) as exc:
-        _witness({"a/conf.d/_defaults.yaml": _WITNESS_OK + "---\ndefalts:\n  cpu: 1\n"})
+        _witness({"a/conf.d/_defaults.yaml":
+                  _WITNESS_OK + "---\ndefalts:\n  cpu: 1\n"})
     assert "defalts" in str(exc.value), exc.value
 
-    # both offenders counted, not just the first
-    with pytest.raises(gate._GateViolation) as exc:
-        _witness({"a/conf.d/_defaults.yaml": _WITNESS_RENAMED,
-                  "b/conf.d/_defaults.yaml": _WITNESS_RENAMED})
-    assert "2 violation(s) across 2 defaults artifact(s)" in str(exc.value), exc.value
+    # ⛔ The two counts are read back as NUMBERS, not matched as a sentence.
+    # The first spelling asserted the literal "2 violation(s) across 2 defaults
+    # artifact(s)", so re-wording the message reddened a test whose subject is
+    # arithmetic. The invariant is that the two populations differ, which needs
+    # a fixture where they do: three files, one bad.
+    def _counts(docs):
+        with pytest.raises(gate._GateViolation) as exc:
+            _witness(docs)
+        found = re.findall(r"(\d+) violation\(s\) across (\d+)", str(exc.value))
+        assert found, exc.value
+        return tuple(int(n) for n in found[0])
 
-    # ⛔ …and a population where the two numbers DIFFER, because the case above
-    # has offenders == everything handed in. Blind review replaced the offender
-    # count with the input count and this test stayed green on that fixture
-    # alone; on the real shape (one bad file among seventeen) the degraded
-    # message would have said "1 violation(s) across 17 defaults artifact(s)".
-    with pytest.raises(gate._GateViolation) as exc:
-        _witness({"a/conf.d/_defaults.yaml": _WITNESS_OK,
-                  "b/conf.d/_defaults.yaml": _WITNESS_OK,
-                  "c/conf.d/_defaults.yaml": _WITNESS_RENAMED})
-    assert "1 violation(s) across 1 defaults artifact(s)" in str(exc.value), exc.value
+    assert _counts({"a/conf.d/_defaults.yaml": _WITNESS_RENAMED,
+                    "b/conf.d/_defaults.yaml": _WITNESS_RENAMED}) == (2, 2)
+    assert _counts({"a/conf.d/_defaults.yaml": _WITNESS_OK,
+                    "b/conf.d/_defaults.yaml": _WITNESS_OK,
+                    "c/conf.d/_defaults.yaml": _WITNESS_RENAMED}) == (1, 1)
 
 
-def test_the_witness_default_reader_actually_reads(tmp_path, monkeypatch):
-    """⛔ THE ONLY POSITIVE CONTROL ON THE REAL READER, and it was missing.
+def test_the_witness_validates_artifacts_outside_conf_d_without_refusing_them():
+    """A `_defaults*` file outside every conf.d tree is checked, not rejected.
 
-    Every discriminating test injects `read=`; the one test that exercised the
-    default reader asserted the tree is CLEAN — and an assertion of silence
-    cannot tell a working reader from one that returns `""`. Blind review
-    stubbed the default reader and the entire suite stayed green while the
-    #1443 attack went undetected on the real tree.
+    ⛔ Two wrong shapes preceded this one, both measured by blind review. A
+    silent filter dropped such a file with no report, which
+    `guard_defaults_scopes.py` forbids for unmanaged paths — ⚠️ though the
+    authority cited for that was overstated: that module's own `resolve()`
+    collects unmanaged paths and CARRIES ON, it does not stop the run. A hard
+    refusal then made a perfectly legal Go-side `testdata/_defaults.yaml` fail
+    the whole gate with no in-repo way to go green.
+
+    What is left is the narrow true statement: the schema is a conf.d contract,
+    so a violation found OUTSIDE a conf.d tree may be the contract not applying
+    rather than the file being wrong — and the message says so instead of
+    diagnosing a renamed section.
     """
-    root = tmp_path / "repo"
-    (root / "some/conf.d").mkdir(parents=True)
-    (root / "some/conf.d/_defaults.yaml").write_text(
-        "defalts:\n  cpu: 90\n", encoding="utf-8", newline="\n")
-    monkeypatch.setattr(gate, "PROJECT_ROOT", root)
+    # legal content outside conf.d: checked, and silent
+    _witness({"a/conf.d/_defaults.yaml": _WITNESS_OK,
+              "components/x/testdata/_defaults.yaml": _WITNESS_OK})
 
+    # a real violation outside conf.d: reported, but NOT as a renamed section
     with pytest.raises(gate._GateViolation) as exc:
-        gate._assert_defaults_artifacts_match_schema(
-            ["some/conf.d/_defaults.yaml"] * gate._DEFAULTS_ARTIFACT_FLOOR)
-    assert "some/conf.d/_defaults.yaml" in str(exc.value), exc.value
-    assert "defalts" in str(exc.value), exc.value
-
-
-def test_the_witness_names_the_file_on_every_way_out():
-    """Malformed YAML and non-string keys are reported, not raised as tracebacks.
-
-    The sibling lint turns an unparseable artifact into a caller error on
-    purpose; this side lost that when it grew its own loop. Blind review got a
-    bare `<unicode string>` parser traceback and a jsonschema `TypeError`, both
-    with the path in hand and absent from the message.
-    """
-    with pytest.raises(gate._GateViolation) as exc:
-        _witness({"bad/conf.d/_defaults.yaml":
-                  "defaults:\n  cpu: 90\n bad indent: [\n"})
-    assert "bad/conf.d/_defaults.yaml" in str(exc.value), exc.value
-
-    with pytest.raises(gate._GateViolation) as exc:
-        _witness({"yaml11/conf.d/_defaults.yaml":
-                  "defaults:\n  cpu: 90\non: true\n"})
-    msg = str(exc.value)
-    assert "yaml11/conf.d/_defaults.yaml" in msg, msg
-    assert "not schema-checkable" in msg, msg
-
-
-def test_the_witness_only_speaks_for_confd_trees():
-    """A `_defaults.yaml` outside every conf.d tree is not this schema's business.
-
-    `_is_defaults_artifact` matches a basename anywhere in the index — the width
-    is deliberate and load-bearing elsewhere. Blind review added an unrelated
-    `tools/portal/_defaults.yaml` and got a violation whose diagnosis named a
-    renamed section the file never had.
-    """
-    # ⛔ REFUSED BY NAME, not skipped. The first spelling dropped such a file
-    # with a list comprehension — which `guard_defaults_scopes.py` forbids for
-    # unmanaged paths in as many words, and which would silently absorb the
-    # event #1434 registered as its own reopen trigger.
-    with pytest.raises(gate._GateViolation) as exc:
-        _witness({"a/conf.d/_defaults.yaml": _WITNESS_OK,
-                  "tools/portal/_defaults.yaml": "theme: dark\npage_size: 50\n"})
+        _witness({"tools/portal/_defaults.yaml": "theme: dark\n"})
     msg = str(exc.value)
     assert "tools/portal/_defaults.yaml" in msg, msg
-    assert "under no `conf.d` tree" in msg, msg
-    # …and it must NOT be reported as the renamed-section defect it is not
+    assert "OUTSIDE every `conf.d` tree" in msg, msg
     assert "mis-spelled" not in msg, msg
 
-    # the real tree has none of these, so the refusal costs nothing today
-    assert [rel for rel in gate._tracked_defaults_artifacts()
-            if gate.conf_d_root(rel) is None] == []
 
+# ── ⛔ WHAT THIS FILE DELIBERATELY STOPPED GUARDING (#1443, round 4) ─────────
+#
+# Six further controls stood here and were removed. Not because they were
+# wrong — each one killed a real mutation — but because every one of them was
+# measured to REDDEN on a legitimate edit, and four rounds of blind review
+# produced more defects in this machinery than in the 60 lines it guards. The
+# rule applied: a guard earns its place when its silent failure lets the
+# ORIGINAL defect back. These do not; CI runs the gate's real-tree tests
+# regardless of any of them.
+#
+# What is no longer guarded, with the survival facts already measured:
+#   * the hook's `additional_dependencies` and `files:` filter — hoisting the
+#     two lazy imports to module level disarms both, and the local hook then
+#     stops firing on the sibling lint and on the schema. CI's `Python Tests`
+#     leg still runs the real-tree tests, so the defect does not return; only
+#     the local fast feedback does. (Killed M7/M8/M9 before removal; false-red
+#     on `import jsonschema.validators`, a behaviour-identical spelling.)
+#   * the call-site floor on the judged count, and the positive control on the
+#     default reader — both are subsumed by
+#     `test_the_schema_witness_is_silent_on_the_real_tree`, which compares the
+#     judged count against an INDEPENDENT recount of the same tree.
+#   * the AST assertion that the witness runs after the four floors. Running it
+#     first still catches the attack; what the order buys is message quality.
+#   * the assertion that the gate calls the sibling's judgement rather than a
+#     private copy.
+#   * `test_the_schema_witness_is_handed_the_tracked_scan_not_the_read_set` —
+#     subsumed by the exemption test above, which maxes out BOTH tables.
+#   * the derived silent/caught partition — its two set assertions were true by
+#     construction, and the pin above is what actually held.
+#
+# ⚠️ Also unguarded, and named because "we caught the file-naming bug" reads
+# like the class is closed: the `except Exception` around the read (added for
+# non-UTF-8 artifacts) and the `TypeError` re-raise predicate both survive
+# being reverted. Writing those tests needs a tmp tree; the trade was made
+# knowingly, not overlooked.
+#
+# ⚠️ And one shape of OVER-reporting: a witness that invents a violation on a
+# legal top-level key is caught only for the keys today's tree actually uses.
+# Measured across the 17 tracked artifacts, that is five — `defaults` (15),
+# `state_filters` (2), `optional_overrides` (2), `_custom_alerts` (1),
+# `_routing_defaults` (1) — so a mutant that reddens on, say, `_metadata:`
+# survives. Closing it would mean synthesising a document per schema property,
+# which is the derived-classifier shape blind review has now broken twice: the
+# probe value that is legal for one property violates another, so the fixture
+# ends up encoding the schema a second time.
 
-def test_the_witness_runs_after_the_floors_that_diagnose_better():
-    """⛔ The position is a DECISION, and it had fifteen lines of prose and no guard.
-
-    Running the witness first also catches the attack, so no behavioural test
-    distinguishes the two orders — blind review moved the call to the top of the
-    function and the suite stayed green. What the order buys is that the four
-    floors keep speaking for the trees they already cover, with the warnings
-    this message does not carry. Asserted structurally, over the real source.
-    """
-    import ast
-
-    src = (REPO_ROOT / "scripts/tools/lint/check_threshold_reachability.py"
-           ).read_text(encoding="utf-8")
-    fn = next(n for n in ast.walk(ast.parse(src))
-              if isinstance(n, ast.FunctionDef) and n.name == "_defaults_faces")
-    called: list[str] = []
-    for node in ast.walk(fn):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            called.append(node.func.id)
-
-    witness = "_assert_defaults_artifacts_match_schema"
-    floors = ["_assert_shipped_roots_intact", "_assert_every_root_contributes",
-              "_assert_keys_floor"]
-    assert witness in called, called
-    for floor in floors:
-        assert floor in called, (floor, called)
-        assert called.index(floor) < called.index(witness), (
-            f"{floor} must run BEFORE the schema witness — it diagnoses the "
-            "trees it covers better, and this order is why the witness only "
-            "speaks when every floor has stayed silent. (#1443)")
-
-
-def test_the_hook_declares_what_the_gate_imports_and_fires_on_what_it_reaches():
-    """⛔ Both halves of the wiring were unguarded, and blind review weakened both.
-
-    Removing `jsonschema` from `additional_dependencies` and removing
-    `check_confd_schema.py` from the `files:` filter each left the suite green.
-    The existing filter test derives inputs from PATH literals, so a sibling the
-    gate reaches by `import` is structurally invisible to it — that gap was
-    disclosed in a comment and disclosed is not guarded.
-    """
-    import ast
-    import re
-
-    import yaml
-
-    src_path = REPO_ROOT / "scripts/tools/lint/check_threshold_reachability.py"
-    tree = ast.parse(src_path.read_text(encoding="utf-8"))
-
-    # ⛔ MODULE-WIDE, not function-scoped. The first spelling walked only
-    # `FunctionDef` bodies, so hoisting the two lazy imports to the top of the
-    # module — an ordinary E402 tidy-up that changes no behaviour — emptied
-    # this set and BOTH wirings below could then be deleted with the suite
-    # green (measured, twice, by two independent reviewers). Where an import
-    # is written is a separate invariant; it is asserted separately at the end
-    # of this test rather than being the precondition for any coverage.
-    imported: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.update(a.name.split(".")[0] for a in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
-            imported.add(node.module.split(".")[0])
-    # anti-vacuity: this set collapsing to nothing must not read as "clean"
-    assert {"yaml", "jsonschema", "check_confd_schema"} <= imported, sorted(imported)
-
-    config = yaml.safe_load(
-        (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
-    hook = next(h for repo in config["repos"] for h in repo["hooks"]
-                if h["id"] == "threshold-reachability-check")
-    declared = set(hook.get("additional_dependencies", []))
-    pattern = re.compile(hook["files"])
-
-    # (a) third-party imports must be declared. The PyPI name differs from the
-    #     module name for exactly one of them; that mapping has an authority
-    #     outside this repo, which is why enumerating it is allowed here.
-    dist_of = {"yaml": "pyyaml"}
-    stdlib = set(getattr(__import__("sys"), "stdlib_module_names", ()))
-    for mod in sorted(imported - stdlib):
-        # ⛔ FIRST-PARTY IS DERIVED FROM THE TREE, not from a list of two
-        # directories. The gate imports repo modules from four places
-        # (`scripts/tools/lint`, `scripts/tools/ops`, `scripts/tools`,
-        # `scripts/ops`); with two of them hardcoded, making `_lib_compat` a
-        # lazy import — a sensible change, and one this module's own comments
-        # encourage — produced "the gate imports third-party '_lib_compat'",
-        # whose cheapest green is adding it to `additional_dependencies` and
-        # having pre-commit try to `pip install _lib_compat`.
-        local = sorted(REPO_ROOT.glob(f"scripts/**/{mod}.py"))
-        if local:
-            rel = local[0].relative_to(REPO_ROOT).as_posix()
-            # (b) a repo module the gate imports must make the hook fire when
-            #     it changes. ⚠️ `search` not `match`: pre-commit filters with
-            #     `include_re.search(filename)`, and asserting the stricter one
-            #     would reject a legal equivalent rewrite of the pattern.
-            assert pattern.search(rel), (
-                f"the gate imports {mod!r} ({rel}), so editing it changes this "
-                "gate's answer — but the hook's `files:` filter does not fire "
-                "on it. ⚠️ The sibling coverage test does walk imports; what it "
-                "cannot see is this file, because its `search_dirs` list has no "
-                "`scripts/tools/lint` entry (#1413).")
-            continue
-        assert dist_of.get(mod, mod) in declared, (
-            f"the gate imports third-party {mod!r} but the hook does not "
-            f"declare it; the hook runs in an isolated venv. declared={declared}")
-
-    # (c) …and the lazy placement is its OWN invariant, asserted here rather
-    # than assumed by the scan above. jsonschema must stay inside a function so
-    # `--help` keeps working without it and so importers of this module do not
-    # inherit the dependency.
-    lazy = {n.names[0].name
-            for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef)
-            for n in ast.walk(fn) if isinstance(n, ast.Import)}
-    assert "jsonschema" in lazy, (
-        "jsonschema must be imported INSIDE a function: `--help` has to work "
-        "without it, and check_threshold_registry.py imports this module at "
-        "its own top level.")
-
-
-def test_the_schema_witness_is_handed_the_tracked_scan_not_the_read_set(
-        monkeypatch):
-    """⛔ Wiring, and with the two sets made DIFFERENT so the answer discriminates.
-
-    `_DEFAULTS_ARTIFACT_EXEMPT` is empty today, so a caller passing the read set
-    instead would be indistinguishable on this tree. One exemption is injected
-    to separate them — a file from a four-artifact root, so no root empties and
-    no other floor speaks.
-    """
-    # ⛔ DERIVED, not hardcoded. The first spelling of this named one fixture
-    # path, so retiring that fixture failed the test with "fixture moved"
-    # instead of telling anyone what it was protecting.
-    tracked = gate._tracked_defaults_artifacts()
-    by_root: dict[str, list[str]] = {}
-    for rel in tracked:
-        # `conf_d_root` returns None for an artifact under no conf.d tree. The
-        # witness now refuses those outright, so none can reach here — but
-        # grouping on the raw return value made this test die with a TypeError
-        # from `sorted()` instead of saying anything (blind review).
-        root = gate.conf_d_root(rel)
-        if root is None:
-            continue
-        by_root.setdefault(root, []).append(rel)
-    # …and NOT a shipped root: those carry a per-root `(min_artifacts, …)` pair,
-    # so removing one of their artifacts trips the shipped floor instead and the
-    # test would be measuring that. Both conditions are derived; neither is a
-    # path literal.
-    exempt = next(rels[0] for root, rels in sorted(by_root.items())
-                  if len(rels) > 1 and root not in gate._SHIPPED_CONFD_ROOTS)
-
-    monkeypatch.setattr(gate, "_DEFAULTS_ARTIFACT_EXEMPT",
-                        {exempt: "injected by this test"})
-    read_set = [p.relative_to(gate.PROJECT_ROOT).as_posix()
-                for p in gate._defaults_artifacts()]
-    assert exempt not in read_set, "the exemption seam did not take"
-
-    seen: list[list[str]] = []
-
-    def _spy(rels, read=None):
-        seen.append(list(rels))
-        return gate._DEFAULTS_ARTIFACT_FLOOR          # satisfy the caller's floor
-
-    monkeypatch.setattr(gate, "_assert_defaults_artifacts_match_schema", _spy)
-    gate._defaults_faces()
-
-    assert seen, "the witness was not called at all"
-    assert exempt in seen[0], (
-        "the witness was handed the READ set — an artifact exemption would "
-        "then also buy schema invisibility, and the one-line disarm this "
-        "witness closes would come back as a two-line one")
-    assert seen[0] == tracked, seen[0]
-
-
-def test_the_judged_count_floor_is_wired_at_the_call_site(monkeypatch):
-    """⛔ The floor lives at the call site, so THAT is what needs the control.
-
-    A witness that reads nothing returns a small count and raises nothing; the
-    only thing that turns that into a red is this floor, and a floor with no
-    test is a floor that can be deleted in the same edit that breaks the reader.
-    """
-    monkeypatch.setattr(gate, "_assert_defaults_artifacts_match_schema",
-                        lambda rels, read=None: gate._DEFAULTS_ARTIFACT_FLOOR - 1)
-    with pytest.raises(gate._GateViolation) as exc:
-        gate._defaults_faces()
-    msg = str(exc.value)
-    assert "judged only" in msg, msg
-    assert "reader stopped reading" in msg, msg
-
-
-def test_the_schema_judgement_has_a_single_implementation(monkeypatch):
-    """The gate must call the sibling lint's function, not a local copy of it.
-
-    ⛔ Two copies of one judgement is how `iter_config_files` grew a second
-    opinion that outlived the first. Neutralising the sibling has to neutralise
-    the gate; if this test can be made green with a private re-implementation
-    here, the single-implementation claim in both docstrings is decorative.
-    """
-    import check_confd_schema
-
-    monkeypatch.setattr(check_confd_schema, "defaults_doc_violations",
-                        lambda rel, doc, schema, validator: ["SENTINEL-2c1f"])
-    with pytest.raises(gate._GateViolation) as exc:
-        _witness({"x/conf.d/_defaults.yaml": _WITNESS_OK})
-    assert "SENTINEL-2c1f" in str(exc.value), exc.value
 
 
 def test_the_tracked_root_universe_is_derived_from_the_index_not_from_the_pin(

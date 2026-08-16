@@ -723,7 +723,7 @@
   ]
  },
  "parse_errors": [],
- "source_digest": "7b1945cc896443463328450d39bb8ae9724d62286dd51900e548a5b45677e526",
+ "source_digest": "fea375a531c87579fec02471a14fb64cdc8ff3871f8a719173a60b93d0684d3e",
  "tests_scanned": [
   "tests/dx/test_add_frontmatter.py",
   "tests/dx/test_analyze_bench_history.py",
@@ -2514,6 +2514,9 @@
   "tests/golden/fixtures/l0-only/conf.d": [
    "tests/lint/test_check_threshold_reachability.py"
   ],
+  "tests/golden/fixtures/l0-only/conf.d/_defaults.yaml": [
+   "tests/lint/test_check_threshold_reachability.py"
+  ],
   "tests/helm": [
    "tests/dx/test_verify_diff.py",
    "tests/helm/test_optional_overrides_render.py"
@@ -2617,6 +2620,9 @@
   ],
   "tests/ops/test_secret_scan_gate.py": [
    "tests/ops/test_ci_aggregate_gate_contract.py"
+  ],
+  "tests/ops/test_wrapped_path_references.py": [
+   "tests/lint/test_check_threshold_reachability.py"
   ],
   "tests/preview/test_promtool_pin_parity.py": [
    "tests/shared/test_federation_audit_mtail.py",

@@ -1211,21 +1211,6 @@ def _assert_defaults_artifacts_match_schema(
     # `git log --all --diff-filter=A` finds 0 in this repo's whole history — so
     # this costs nothing now and forces a decision the first time it happens.
     unscoped = [rel for rel in rels if conf_d_root(rel) is None]
-    if unscoped:
-        raise _GateViolation(
-            f"defaults artifact(s) {unscoped} sit under no `conf.d` tree, so "
-            "this witness cannot speak for them: "
-            f"{_PLATFORM_DEFAULTS_SCHEMA_REL} describes a conf.d file, and "
-            "applying it elsewhere produced a real violation under a "
-            "diagnosis about a renamed section the file never had (measured).\n"
-            "  This is the first artifact of its kind in this repo's history, "
-            "so there is no precedent to follow — decide deliberately. Either "
-            "move it under a conf.d tree, or extend this gate to say what "
-            "contract DOES apply to it.\n"
-            "  ⛔ Do not make this check skip it quietly: "
-            "`scripts/ops/guard_defaults_scopes.py` requires an unmanaged path "
-            "to be reported with its reason, and #1434's reopen trigger is "
-            "precisely this event. (#1443 / #1434)")
     if not rels:
         raise _GateViolation(
             "the schema witness was handed no conf.d defaults artifacts at "
@@ -1340,6 +1325,13 @@ def _assert_defaults_artifacts_match_schema(
     # and NO judged document, so ordering the vacuity guard ahead of this
     # replaced a message naming the broken file with one saying "zero documents"
     # — the reader was blamed for the tree.
+    # ⛔ The conf.d question is answered in the MESSAGE, not by dropping or
+    # refusing the file. Two earlier shapes were measured wrong: a silent
+    # filter (no report at all) and a hard refusal (a legal Go-side
+    # `testdata/_defaults.yaml` failed the whole gate with no in-repo remedy).
+    # What survives is the narrow true claim — this schema describes a conf.d
+    # file, so a violation outside one may mean the contract does not apply.
+    outside = sorted({rel for rel in offenders if conf_d_root(rel) is None})
     if not problems:
         if judged == 0:
             raise _GateViolation(
@@ -1355,9 +1347,30 @@ def _assert_defaults_artifacts_match_schema(
         f"{len(problems)} violation(s) across {len(offenders)} defaults "
         f"artifact(s) do not satisfy {_PLATFORM_DEFAULTS_SCHEMA_REL}:\n  "
         + "\n  ".join(problems)
-        + "\n  MOST LIKELY: a `defaults:` section was mis-spelled — a typo, or "
-        "a rename that was not carried through. The declarations are still in "
-        "the file and nothing is reading them. Restore the section name.\n"
+        # ⛔ CONDITIONAL. Printed unconditionally, this headline told a
+        # maintainer whose `_routing_defaults/repeat_interval` had the wrong
+        # TYPE to "restore the section name" of a `defaults:` block their file
+        # never had — the same false-diagnosis shape this gate elsewhere names
+        # as a defect. It only applies when the violation is about a top-level
+        # KEY the schema will not accept.
+        + ("\n  MOST LIKELY: a `defaults:` section was mis-spelled — a typo, "
+           "or a rename that was not carried through. The declarations are "
+           "still in the file and nothing is reading them. Restore the "
+           "section name.\n"
+           if (offenders - set(outside)) and any(
+               "does not match any of the regexes" in p
+               or "Additional properties are not allowed" in p
+               for p in problems) else
+           "\n  ⚠️ NOT diagnosed as a renamed `defaults:` section: either every "
+           "top-level key here is one this schema accepts, or the only "
+           "offenders sit outside a conf.d tree — in both cases that headline "
+           "would name a section the file never had.\n")
+        + ("" if not outside else
+           f"  ⚠️ {outside} sit OUTSIDE every `conf.d` tree. This schema "
+           "describes a conf.d file, so the finding above may mean the "
+           "contract does not apply to them rather than that they are wrong — "
+           "decide which, and if it is the former say so in this gate rather "
+           "than moving the file to satisfy a scan. (#1443 / #1434)\n")
         # ⛔ FORBID THE CHEAP WRONG FIX WITHOUT PUBLISHING IT. One blind round
         # asked for this warning (a maintainer who "fixes" the red by moving
         # the block under a legal section name leaves the thresholds unread);
@@ -1367,7 +1380,7 @@ def _assert_defaults_artifacts_match_schema(
         # carries two questions. The prohibition stays; the enumeration and the
         # number go, and live in the docstring where somebody designing the
         # guard reads them rather than somebody under pressure to go green.
-        "  ⛔ DO NOT move the block under a different top-level section name. "
+        + "  ⛔ DO NOT move the block under a different top-level section name. "
         "Some of them are legal here and this check would go quiet while the "
         "thresholds stay unread — which is the defect being reported, not a "
         "fix for it.\n"
