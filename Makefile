@@ -890,9 +890,12 @@ lint-docs-mkdocs: ## mkdocs 嚴格 build 檢查（catch site-root vs filesystem 
 
 .PHONY: lint-e2e
 lint-e2e: ## Playwright 專用 lint（test.fixme/skip guard，A-13 enforcement）
-	@# 依賴：tests/e2e/ 內已 `npm install --include=dev` 完成 eslint + eslint-plugin-playwright。
-	@# 首次執行或 CI 新 runner 需先跑 `cd tests/e2e && npm install --include=dev`。
-	@cd tests/e2e && npm run --silent lint
+	@# Single source of truth：本 target + `playwright-lint` pre-commit hook
+	@# + .github/workflows/playwright.yml 的 "E2E Spec Lint (A-13)" job 都呼叫
+	@# 同一支 script，指令本體只活在那一份（同 lint-docs-mkdocs 的作法）；
+	@# 三者由 tests/lint/test_e2e_spec_lint.py 釘住，分岔會紅。
+	@# 依賴缺席時 script 會 fail 並印出 `cd tests/e2e && npm ci`，不是靜默略過。
+	@bash scripts/tools/lint/e2e_spec_lint.sh
 
 .PHONY: lint-portal
 lint-portal: ## da-portal 整套 lint：jsx-loader-compat / undefined-tokens / portal-i18n / babel parse / registry-jsx parity

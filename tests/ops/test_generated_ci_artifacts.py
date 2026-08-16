@@ -1179,6 +1179,939 @@ def test_generated_precommit_hooks_can_actually_run(generated, ci, deploy) -> No
             )
 
 
+# The customer-facing pages that carry a mirrored artifact block. HARD-CODED as
+# a pair rather than globbed: an anti-vacuity floor must not be derived from the
+# thing it protects, and a glob that quietly stopped matching would leave this
+# guard testing nothing while staying green.
+#
+# ⛔ Written as literal path strings for the same reason `_INIT_PROJECT` is (see
+# its comment above): verify_diff.py builds its source→test map by scanning test
+# files for literal paths, so a `/ "docs" / "scenarios"` split form would
+# register this guard against NOTHING and editing the page would not select it.
+_MIRROR_DOC_PAGES = (
+    "docs/scenarios/gitops-ci-integration.md",
+    "docs/scenarios/gitops-ci-integration.en.md",
+)
+
+# A page declares "the fenced block below mirrors that artifact" with this
+# marker, and the guard learns WHICH artifact from the page itself.
+#
+# ⛔ Two earlier designs failed here, in opposite directions, and the current
+# one has to keep both lessons:
+#
+#   1. "the ONE fenced ```yaml block whose top level is `repos:`" inferred the
+#      target from contents. Three legitimate Markdown edits went red with a
+#      message that named none of them: an info string (```yaml title="…" —
+#      `pymdownx.highlight` and `superfences` are enabled), an indented fence
+#      (`pymdownx.tabbed`), and adding a second, honest example.
+#   2. Replacing that with "compare the blocks that carry a marker" fixed the
+#      false reds and DELETED the coverage. Measured: pasting the pre-#1418
+#      broken snippet back onto the page as an unmarked second example left
+#      this file green and all four doc lints at rc=0 — the exact defect
+#      #1418 exists for, reintroducible in full.
+#
+# So the marker says which artifact, and the exhaustiveness test below
+# says every pre-commit block must carry one. Neither half is optional.
+_MIRROR_MARKER = re.compile(r"<!--\s*mirrors-artifact:\s*(?P<path>\S+?)\s*-->")
+
+# The artifact whose mirror carries a `da-tools` argv. Other artifacts may be
+# mirrored with the same marker (a `_defaults.yaml` sample, say) and must not
+# be dragged through assertions about hook entries.
+_PRECOMMIT_ARTIFACT = ".pre-commit-config.da.yaml"
+
+
+def _fence_after(text: str, pos: int) -> tuple[int, str] | None:
+    """The first fenced block at or after ``pos`` as ``(start_offset, body)``.
+
+    The language tag is deliberately NOT part of the contract: the marker above
+    a block is what declares what it is, so ```yaml, ```yml and a bare ``` all
+    work, with or without an info string, at any indentation. Returns None when
+    there is no complete fence — callers turn that into a failure, because a
+    silently empty block would make a comparison vacuously true.
+    """
+    lines = text[pos:].splitlines(keepends=True)
+    opener = indent = None
+    consumed = 0
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.startswith("```"):
+            opener, indent = i, len(line) - len(line.lstrip())
+            break
+        consumed += len(line)
+    if opener is None:
+        return None
+    start = pos + consumed
+    body: list[str] = []
+    for line in lines[opener + 1:]:
+        if line.lstrip().startswith("```"):
+            return start, "".join(body)
+        body.append(line[indent:] if not line[:indent].strip() else line.lstrip())
+    return None
+
+
+def _precommit_fences(text: str) -> list[int]:
+    """Start offsets of every fenced block that IS a pre-commit config.
+
+    Identified by content (top level is a `repos:` mapping), which is what
+    makes the exhaustiveness check below independent of the marker: a block
+    someone forgets — or declines — to mark is still found.
+    """
+    found: list[int] = []
+    pos = 0
+    while True:
+        hit = _fence_after(text, pos)
+        if hit is None:
+            return found
+        start, body = hit
+        try:
+            loaded = yaml.safe_load(body)
+        except yaml.YAMLError:
+            loaded = None
+        if isinstance(loaded, dict) and "repos" in loaded:
+            found.append(start)
+        pos = start + len(body) + 1
+
+
+def _marked_fences(text: str) -> dict[int, str]:
+    """Start offset -> declared artifact path, for every marked block."""
+    out: dict[int, str] = {}
+    for marker in _MIRROR_MARKER.finditer(text):
+        hit = _fence_after(text, marker.end())
+        if hit is not None:
+            out[hit[0]] = marker.group("path")
+    return out
+
+
+def _unmarked_precommit_blocks(text: str) -> list[int]:
+    """Offsets of pre-commit blocks on the page that carry no mirror marker.
+
+    A pure function, for the same reason `_undeclared_da_tools_usage` is one:
+    the real pages have zero unmarked blocks — that is the fixed state — so
+    asserting against them cannot tell this apart from `return []`. Measured:
+    replacing the caller's subtraction with an empty set left the section at 28
+    passed. The synthetic case below is the only input that distinguishes them.
+    """
+    return sorted(set(_precommit_fences(text)) - set(_marked_fences(text)))
+
+
+def _markdown_code_spans(text: str) -> list[str]:
+    """Every fenced block and inline code span on the page — prose excluded.
+
+    ⛔ Scoping by Markdown STRUCTURE, not by a list of words to ignore. The
+    first version of the caller scanned the raw page and immediately reported
+    `da-tools commands` from the sentence "All da-tools commands" in a link
+    description. That false positive is the whole reason
+    `check_doc_datools_cmds.py` documents a repo-wide version as prototyped and
+    rejected: prose mentions a command name without inviting anyone to run it,
+    and no denylist of English words converges. A code span, by contrast, is
+    exactly the thing a reader copies.
+    """
+    fences: list[str] = []
+    prose = re.sub(
+        r"^[ \t]*```[^\n]*\n(.*?)^[ \t]*```",
+        lambda m: fences.append(m.group(1)) or "\n",
+        text,
+        flags=re.S | re.M,
+    )
+    return fences + re.findall(r"`([^`\n]+)`", prose)
+
+
+def _da_tools_invocations(text: str) -> list[tuple[str, tuple[str, ...]]]:
+    """``(subcommand, flags)`` for every `da-tools` call inside a code span."""
+    out: list[tuple[str, tuple[str, ...]]] = []
+    for span in _markdown_code_spans(text):
+        # Fold shell line-continuations: the page splits `da-tools init … \`
+        # over seven lines, and a per-line scan sees the subcommand but none of
+        # its flags — which is the half that was wrong for two releases.
+        folded = re.sub(r"\\\s*\n\s*", " ", span)
+        for match in re.finditer(r"(?<![\w./-])da-tools\s+([a-z][a-z0-9-]*)", folded):
+            tail = re.split(r"\n", folded[match.end():], maxsplit=1)[0]
+            flags = tuple(re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]*)", tail))
+            out.append((match.group(1), flags))
+    return out
+
+
+def _undeclared_da_tools_usage(
+    text: str, declared: dict[str, set[str]]
+) -> list[str]:
+    """Every `da-tools <sub> <flag>` on the page that argparse would reject.
+
+    A pure function on purpose: the real pages are all-clean, so asserting on
+    them alone cannot tell this apart from a stub. The negative-control test
+    below feeds it a page that IS wrong, which is the only input that
+    distinguishes the two.
+    """
+    problems: list[str] = []
+    for sub, flags in _da_tools_invocations(text):
+        if sub not in declared:
+            problems.append(f"da-tools {sub} (no such subcommand)")
+            continue
+        problems.extend(
+            f"da-tools {sub} {flag}" for flag in flags
+            # ⛔ `_CLI_GLOBAL_FLAGS` subtracted here as it is at the module's
+            # two other call sites. Without it, documenting
+            # `da-tools validate-config --help` was reported as a flag "the CLI
+            # would reject" — measured rc=0, so the message asserted something
+            # false, on a page a customer reads.
+            if flag not in declared[sub] and flag not in _CLI_GLOBAL_FLAGS
+        )
+    return problems
+
+
+def _normalised_precommit(cfg: object) -> object:
+    """The whole config, with folded-scalar whitespace collapsed and NOTHING dropped.
+
+    ⛔ The first version projected six hook keys it had decided to care about.
+    That is an enumeration wearing an allowlist's clothes, and it was measurably
+    blind: `repo:` was dropped entirely — `repo: meta` is a config
+    `pre-commit validate-config` refuses outright — and every key nobody had
+    thought of (`stages:`, `args:`, `exclude:`, `always_run:`) was invisible by
+    construction. A blind review flipped the page to `repo: meta` plus
+    `stages: [manual]` and the guard stayed green.
+
+    ⛔ And because this filter is applied to BOTH sides of the comparison it
+    feeds, any weakening of it keeps that equation true: replacing this body
+    with `return "MUTANT-CONSTANT"` left the whole file green. That is what
+    `test_normalised_precommit_keeps_what_the_comparison_needs` is for — it is
+    the only thing standing between this function and a no-op.
+
+    The single normalisation is that `entry` arrives from a folded (``>-``)
+    scalar on both sides, where line-wrapping is each side's formatting choice
+    and only the token sequence is contractual.
+    """
+    if isinstance(cfg, dict):
+        return {
+            key: (" ".join(str(value).split()) if key == "entry"
+                  else _normalised_precommit(value))
+            for key, value in cfg.items()
+        }
+    if isinstance(cfg, list):
+        return [_normalised_precommit(item) for item in cfg]
+    return cfg
+
+
+# --------------------------------------------------------------------------
+# Negative controls for the helpers above.
+#
+# ⛔ A blind review weakened ten helpers added with this guard, one at a time,
+# and 28 of 41 single-point mutations survived. The cause was structural, not
+# careless: every helper was only ever fed inputs that were supposed to PASS —
+# two real doc pages and four real config files — so nothing could tell a
+# working helper from a stub. These cases feed synthetic inputs that must be
+# REJECTED, plus the neighbouring ones that must still be TOLERATED, because
+# only pinning the first half lets a helper drift towards biting everything.
+# --------------------------------------------------------------------------
+
+_FENCE = "```"
+
+_SYNTHETIC_PAGE = (
+    "# Title\n\nSome prose that mentions da-tools commands in passing.\n\n"
+    "<!-- mirrors-artifact: some/artifact.yaml -->\n\n"
+    f"{_FENCE}yaml title=\"x.yaml\"\nrepos:\n  - repo: local\n"
+    "    hooks:\n      - id: h\n        entry: >-\n          img\n"
+    f"          run --flag\n{_FENCE}\n\n"
+    "Inline `da-tools validate-config --config-dir conf.d/` in a table cell.\n\n"
+    f"=== \"tab\"\n\n    {_FENCE}\n    repos:\n      - repo: local\n"
+    f"        hooks: []\n    {_FENCE}\n"
+)
+
+
+def test_fence_after_reads_the_forms_mkdocs_allows() -> None:
+    """Info strings, bare fences and indented fences are all legal here."""
+    marker = _MIRROR_MARKER.search(_SYNTHETIC_PAGE)
+    assert marker, "the synthetic page lost its marker"
+    hit = _fence_after(_SYNTHETIC_PAGE, marker.end())
+    assert hit is not None, "an info-string fence was not found at all"
+    body = yaml.safe_load(hit[1])
+    assert body["repos"][0]["hooks"][0]["id"] == "h", (
+        "the block was found but decoded wrong — most likely the de-indent "
+        "branch or the info-string tolerance regressed."
+    )
+    # `pos` must be honoured: searching past the block finds the NEXT one.
+    later = _fence_after(_SYNTHETIC_PAGE, hit[0] + len(hit[1]))
+    assert later is not None and later[0] > hit[0], (
+        "_fence_after ignored its `pos` argument, so every caller silently "
+        "re-reads the first block on the page."
+    )
+    assert _fence_after("no fences here", 0) is None
+
+
+def test_precommit_fences_finds_the_indented_one_too() -> None:
+    """⛔ The exhaustiveness check is only as wide as this finder.
+
+    Both blocks in the synthetic page are pre-commit configs and one of them is
+    indented inside a tab container. A finder that reads only column-zero
+    fences would let an indented block go unmarked and unchecked — which is the
+    coverage the marker redesign had already lost once.
+    """
+    assert len(_precommit_fences(_SYNTHETIC_PAGE)) == 2
+    # A fenced block that is not a pre-commit config must not be collected.
+    assert _precommit_fences(f"{_FENCE}yaml\nfoo: 1\n{_FENCE}\n") == []
+
+
+def test_unmarked_precommit_blocks_reports_the_block_nobody_marked() -> None:
+    """⛔ The control for the exhaustiveness rule.
+
+    The real pages have no unmarked block, so every assertion against them
+    passes for `return []` too — measured, by neutering the caller's set
+    subtraction and watching the section stay green. Here the input IS
+    wrong, which is the only way to tell a working check from a stub.
+    """
+    marked_only = (
+        "<!-- mirrors-artifact: a.yaml -->\n\n"
+        f"{_FENCE}yaml\nrepos:\n  - repo: local\n    hooks: []\n{_FENCE}\n"
+    )
+    assert _unmarked_precommit_blocks(marked_only) == []
+
+    # The shape #1418 is about: a second pre-commit block, no marker on it.
+    plus_unmarked = marked_only + (
+        f"\nAnother example:\n\n{_FENCE}yaml\nrepos:\n  - repo: local\n"
+        f"    hooks:\n      - id: x\n        language: system\n{_FENCE}\n"
+    )
+    assert len(_unmarked_precommit_blocks(plus_unmarked)) == 1, (
+        "an unmarked pre-commit block was not reported, so the exhaustiveness "
+        "rule is decorative: a page can ship a second, uncompared copy of the "
+        "very artifact this section exists to keep honest."
+    )
+
+    # A fenced block that is not a pre-commit config is nobody's business here.
+    assert _unmarked_precommit_blocks(
+        marked_only + f"\n{_FENCE}yaml\nsomething: else\n{_FENCE}\n"
+    ) == []
+
+
+def test_markdown_code_spans_excludes_prose() -> None:
+    """The false positive this helper exists for, as a fixture rather than luck.
+
+    ⛔ Before this case, the only input in the whole repo that distinguished
+    "split by Markdown structure" from "scan the raw page" was one English
+    sentence in a link description on one of the two real pages. Rewording that
+    link would have silently retired the helper's reason to exist.
+    """
+    spans = _markdown_code_spans(_SYNTHETIC_PAGE)
+    joined = "\n".join(spans)
+    assert "da-tools validate-config --config-dir conf.d/" in joined, (
+        "inline code spans are not being collected"
+    )
+    assert "id: h" in joined, "fenced blocks are not being collected"
+    assert "in passing" not in joined, (
+        "prose leaked into the scanned set — `da-tools commands` in a sentence "
+        "is not an invocation, and treating it as one is what got a repo-wide "
+        "version of this check rejected."
+    )
+
+
+def test_da_tools_flag_check_rejects_what_argparse_would() -> None:
+    """⛔ The only input that tells this check apart from `return []`.
+
+    The real pages are clean, by construction — that is the point of the fix.
+    So every assertion against them passes for a stub too, and a blind review
+    proved it: emptying the flag regex, disabling the continuation fold, and
+    `assert … or True` all survived against the real pages.
+    """
+    declared = {"validate-config": {"--config-dir", "--json"}}
+
+    clean = "`da-tools validate-config --config-dir conf.d/ --json`\n"
+    assert _undeclared_da_tools_usage(clean, declared) == []
+
+    bogus = "`da-tools validate-config --config-dir conf.d/ --ci`\n"
+    assert _undeclared_da_tools_usage(bogus, declared) == [
+        "da-tools validate-config --ci"
+    ]
+
+    unknown = "`da-tools no-such-command --config-dir conf.d/`\n"
+    assert _undeclared_da_tools_usage(unknown, declared) == [
+        "da-tools no-such-command (no such subcommand)"
+    ]
+
+    # The continuation fold is load-bearing: without it the flags of a wrapped
+    # command are invisible, which is the half that was wrong for two releases.
+    wrapped = (
+        f"{_FENCE}bash\nda-tools validate-config \\\n"
+        f"  --config-dir conf.d/ \\\n  --ci\n{_FENCE}\n"
+    )
+    assert _undeclared_da_tools_usage(wrapped, declared) == [
+        "da-tools validate-config --ci"
+    ], "line-continuations are not being folded before the flags are read"
+
+    # …and it must not reach across a real newline into the next command.
+    two_commands = (
+        f"{_FENCE}bash\nda-tools validate-config --config-dir conf.d/\n"
+        f"da-tools validate-config --json\n{_FENCE}\n"
+    )
+    assert _undeclared_da_tools_usage(two_commands, declared) == []
+
+    # Prose must not be scanned, even when it names a subcommand.
+    assert _undeclared_da_tools_usage("See all da-tools commands here.\n", declared) == []
+
+
+def test_normalised_precommit_keeps_what_the_comparison_needs() -> None:
+    """⛔ The control for a filter that is applied to both sides of an equation.
+
+    Any information this drops is dropped symmetrically, so the equation it
+    feeds cannot notice. Measured: replacing the body with a constant left the
+    whole file green, and so did re-adding the six-key projection this function
+    was written to remove. The ``must_differ`` table below holds the differences
+    that MUST survive normalisation; the single assertion after the loop holds
+    the one difference it is allowed to absorb.
+    """
+    base = {
+        "repos": [{
+            "repo": "local",
+            "hooks": [{
+                "id": "h", "name": "n", "language": "docker_image",
+                "entry": "img run --flag", "files": "^conf\\.d/",
+                "pass_filenames": False,
+            }],
+        }],
+    }
+
+    def _mutate(**over):
+        import copy
+        out = copy.deepcopy(base)
+        hook = out["repos"][0]["hooks"][0]
+        for key, value in over.items():
+            if key == "repo":
+                out["repos"][0]["repo"] = value
+            elif value is None:
+                hook.pop(key, None)
+            else:
+                hook[key] = value
+        return out
+
+    must_differ = {
+        "repo (a `repo: meta` config is one pre-commit refuses to load)":
+            _mutate(repo="meta"),
+        "language (docker_image vs system decides how entry is exec'd)":
+            _mutate(language="system"),
+        "entry (the argv the customer's machine runs)":
+            _mutate(entry="img run --other"),
+        "files (when the hook fires)": _mutate(files="^other/"),
+        "pass_filenames (whether argv gets paths appended)":
+            _mutate(pass_filenames=True),
+        "id": _mutate(id="other"),
+        "an added key nobody enumerated (stages:)":
+            _mutate(stages=["manual"]),
+        "a removed key": _mutate(name=None),
+    }
+    for why, mutated in must_differ.items():
+        assert _normalised_precommit(mutated) != _normalised_precommit(base), (
+            f"normalisation erased a difference in {why}. Every such erasure "
+            "silently weakens the doc-vs-artifact comparison, because it is "
+            "applied to both sides."
+        )
+
+    # …and the one difference it must absorb: a folded scalar's line wrapping.
+    wrapped = _mutate(entry="img\nrun\n--flag")
+    assert _normalised_precommit(wrapped) == _normalised_precommit(base), (
+        "line-wrapping inside a `>-` scalar is each side's formatting choice; "
+        "treating it as contractual would make the page unable to wrap at all."
+    )
+
+
+def test_mirror_page_list_covers_every_page_that_declares_a_mirror() -> None:
+    """⛔ Anti-vacuity for the hard-coded page list itself.
+
+    Every assertion in this section is parametrised over ``_MIRROR_DOC_PAGES``,
+    so the list is the quantifier: shrink it and the tests still pass, having
+    checked less. Measured — deleting the ``.en.md`` entry took the section
+    quietly running fewer tests at rc=0, and emptying it entirely left one test
+    passing and ten skipped, which is the skip-as-green shape this repo has
+    been burned by before.
+
+    The floor cannot be a number (a number goes stale the moment a third page
+    mirrors something) and it must not be derived from the list it protects.
+    So it is derived from the pages themselves: a page that declares a mirror
+    IS a page this section must cover, and the marker is that declaration.
+    """
+    discovered = {
+        path.relative_to(_REPO_ROOT).as_posix()
+        for path in (_REPO_ROOT / "docs").rglob("*.md")
+        if _MIRROR_MARKER.search(_prose_outside_fences(
+            path.read_text(encoding="utf-8", errors="replace")))
+    }
+    assert discovered, (
+        "no page under docs/ carries a `<!-- mirrors-artifact: … -->` marker. "
+        "Either the marker convention was removed — in which case remove this "
+        "whole section in the same commit rather than leaving it quantifying "
+        "over nothing — or the pages moved out of docs/."
+    )
+    assert discovered == set(_MIRROR_DOC_PAGES), (
+        "the pages that declare a mirror and the pages this section checks "
+        "have diverged.\n"
+        f"  declares a mirror but unchecked: {sorted(discovered - set(_MIRROR_DOC_PAGES))}\n"
+        f"  checked but declares nothing:    {sorted(set(_MIRROR_DOC_PAGES) - discovered)}\n"
+        "⛔ Dropping an entry from _MIRROR_DOC_PAGES is not how you silence "
+        "this: the page goes on shipping a copy of an artifact, just without "
+        "anything comparing them. Add the page here, or remove its marker AND "
+        "its mirrored block together."
+    )
+
+
+_MERGE_MODE = re.compile(r"merge-mode:\s*(?P<mode>[a-z-]+)")
+
+
+def _derived_merge_mode(artifact_text: str) -> str:
+    """What a reader can safely DO with this artifact, derived from its shape.
+
+    ⛔ Not read from the file's own claim. A YAML document whose top level is a
+    mapping cannot be appended to another config: the reader ends up with the
+    key twice and every loader in this stack keeps only the last one, silently.
+    So the answer is a function of the artifact, and the artifact's own header
+    has to agree with it rather than assert it.
+    """
+    return "merge-items" if isinstance(
+        yaml.safe_load(artifact_text), dict) else "append-whole"
+
+
+def _shipped_hook_ids() -> set[str]:
+    """The hook ids `da-tools init` actually writes — read off the generator.
+
+    The discriminator between "a copy of our artifact" and "a pre-commit
+    example", derived rather than typed, so adding a third hook to the
+    generator extends the check with it.
+    """
+    cfg = yaml.safe_load(ip._gen_precommit_snippet("img:tag"))
+    ids = {h["id"] for r in cfg["repos"] for h in r["hooks"]}
+    assert ids, "the generated artifact declares no hook ids to key on"
+    return ids
+
+
+def _names_our_hooks(text: str, start: int, ours: set[str]) -> bool:
+    hit = _fence_after(text, start - 1)
+    if hit is None:
+        return False
+    return any(hook_id in hit[1] for hook_id in ours)
+
+
+def _prose_outside_fences(text: str) -> str:
+    """The page with fenced blocks blanked out, offsets preserved.
+
+    ⛔ A marker shown INSIDE a code fence is being displayed, not declared.
+    Without this, documenting the `<!-- mirrors-artifact: … -->` convention —
+    which dev-rule #4 Doc-as-Code asks for — registers the documenting page as
+    a mirror page, and the only way back to green is to not write the
+    documentation. Measured by a blind review on `testing-playbook.md`.
+
+    ⛔ INLINE code spans count too, and leaving them out shipped a false red
+    that only appears on Linux. `docs/CHANGELOG.md` is a symlink to the root
+    `CHANGELOG.md`; on a Windows checkout with `core.symlinks` off it is a
+    15-byte file holding the link text, so the scan read nothing and passed,
+    while CI resolved it and read the whole changelog — which describes this
+    very convention and therefore contains a literal ``<!-- mirrors-artifact:
+    … -->`` inside backticks. The page was reported as declaring a mirror.
+    Documenting a marker must not be the same act as using one, in prose
+    exactly as in a fenced block.
+
+    ⛔ Line-based on purpose. The first version reused `_fence_after`, whose
+    `start` is the OPENING FENCE line and whose `body` excludes both fence
+    lines — so `start + len(body) + 1` is not the end of the block, the
+    blanked ranges overlapped, and 78% of a real page was erased along with
+    the markers this is meant to preserve. Measured: `discovered` went to the
+    empty set.
+    """
+    kept: list[str] = []
+    inside = False
+    for line in text.splitlines(keepends=True):
+        if line.lstrip().startswith("```"):
+            inside = not inside
+            kept.append("\n" if line.endswith("\n") else "")
+            continue
+        if inside:
+            kept.append("\n" if line.endswith("\n") else "")
+            continue
+        kept.append(re.sub(r"`[^`\n]*`", lambda m: " " * len(m.group()), line))
+    return "".join(kept)
+
+
+def _tracked_markdown() -> list[str]:
+    """Every tracked `.md`, asked of git rather than globbed.
+
+    `rglob` from the repo root would walk `node_modules/`, `.venv/` and every
+    other ignored tree; scoping it to `docs/` instead is how the first version
+    of the caller came to be narrower than its own docstring.
+    """
+    out = subprocess.run(
+        ["git", "ls-files", "-z", "*.md"],
+        cwd=_REPO_ROOT, capture_output=True, text=True, check=False,
+        stdin=subprocess.DEVNULL, timeout=120,
+    )
+    pages = [p for p in out.stdout.split("\0") if p]
+    assert out.returncode == 0 and pages, (
+        f"`git ls-files -z '*.md'` yielded {len(pages)} path(s) "
+        f"(rc={out.returncode}). The caller's quantifier comes from here, so "
+        "an empty answer would silently check nothing."
+    )
+    return sorted(pages)
+
+
+@pytest.mark.parametrize("ci,deploy", MATRIX)
+def test_the_artifact_and_the_pages_agree_on_how_to_merge_it(
+    generated, ci, deploy,
+) -> None:
+    """⛔ The defect this PR is named after had NO guard until this test.
+
+    `.pre-commit-config.da.yaml` used to open with `# Add this to your existing
+    .pre-commit-config.yaml`, and a reader who did exactly that got a second
+    top-level `repos:` key. Measured with pre-commit's own loader and its own
+    `validate-config`: rc=0, no warning, and every hook the customer already
+    had is gone — output byte-identical to a healthy config. The CLI's
+    next-steps line and both doc pages carried the same instruction.
+
+    ⛔ It was fixed with nothing pinning it. Counterfactual, run by a blind
+    review: reverting all three carriers to the previous commit while keeping
+    every test left the suite green and four doc lints at rc=0. The reason is
+    structural and worth stating, because it applies to any future assertion
+    here — the mirror comparison runs `yaml.safe_load` on both sides, and just
+    over half of this artifact's lines are comments, so the entire half a
+    customer reads first is outside it.
+
+    Hence a marker, in the file and on the pages, whose VALUE is derived from
+    the artifact rather than declared by it.
+    """
+    root = generated[(ci, deploy)]
+    artifact = (root / _PRECOMMIT_ARTIFACT).read_text(encoding="utf-8")
+    expected = _derived_merge_mode(artifact)
+
+    found = _MERGE_MODE.search(artifact)
+    assert found and found.group("mode") == expected, (
+        f"{_PRECOMMIT_ARTIFACT} declares merge-mode "
+        f"{found.group('mode') if found else None!r}, derived value is "
+        f"{expected!r}. This file's top level is a mapping, so appending it "
+        "whole to an existing config silently drops that config's hooks — the "
+        "header has to say so, and this line is what stops the instruction "
+        "from quietly reverting."
+    )
+
+    for page in _MIRROR_DOC_PAGES:
+        text = (_REPO_ROOT / page).read_text(encoding="utf-8")
+        declared = _MIRROR_MARKER.search(_prose_outside_fences(text))
+        if not declared or declared.group("path") != _PRECOMMIT_ARTIFACT:
+            # ⛔ Scoped to pages mirroring THIS artifact. The module's own note
+            # on `_PRECOMMIT_ARTIFACT` says other artifacts may be mirrored
+            # with the same marker and "must not be dragged through assertions
+            # about hook entries"; the first version of this loop required a
+            # merge-mode on every listed page, so a page mirroring, say, a
+            # `_defaults.yaml` sample reddened with a message that told it it
+            # needed `merge-items` — advice that was false for that artifact.
+            continue
+        on_page = _MERGE_MODE.search(text)
+        assert on_page and on_page.group("mode") == expected, (
+            f"{page} declares merge-mode "
+            f"{on_page.group('mode') if on_page else None!r}, but the artifact "
+            f"it mirrors needs {expected!r}. The page shows this block under a "
+            '"merge into your config" heading; if the two disagree, one of '
+            "them is teaching the destructive action."
+        )
+
+
+def test_appending_the_artifact_whole_really_does_lose_the_customers_hooks() -> None:
+    """⛔ The control that keeps the marker above from being decoration.
+
+    `merge-items` is only the right answer while wholesale appending is
+    actually destructive. This runs that action against pre-commit's own
+    loader, so the warning cannot outlive the hazard it describes — and so a
+    reader of the test can see why the instruction is worded the way it is
+    without taking anyone's word for it.
+    """
+    artifact = ip._gen_precommit_snippet("ghcr.io/vencil/da-tools:latest")
+    existing = (
+        "repos:\n"
+        "  - repo: https://github.com/pre-commit/pre-commit-hooks\n"
+        "    rev: v5.0.0\n"
+        "    hooks:\n"
+        "      - id: end-of-file-fixer\n"
+        "      - id: trailing-whitespace\n"
+    )
+    mine = {"end-of-file-fixer", "trailing-whitespace"}
+
+    naive = yaml.safe_load(existing + artifact)
+    kept = {h["id"] for r in naive["repos"] for h in r["hooks"]}
+    assert not (mine & kept), (
+        "appending the artifact whole no longer drops the reader's hooks "
+        f"(kept {sorted(kept)}). If that is genuinely fixed — the artifact "
+        "became a fragment, or the loader started rejecting duplicate keys — "
+        "then `_derived_merge_mode` and the header should change together, "
+        "and this test should be the thing that made you look."
+    )
+
+    item = artifact[artifact.index("  - repo: local"):]
+    merged = yaml.safe_load(existing + item)
+    kept = {h["id"] for r in merged["repos"] for h in r["hooks"]}
+    assert mine <= kept and {"da-validate-config", "da-generate-routes"} <= kept, (
+        f"following the header's instruction yielded {sorted(kept)}. The "
+        "positive half matters as much as the negative one: an instruction "
+        "that is safe because it does nothing is not an instruction."
+    )
+
+
+def test_no_page_outside_the_list_ships_an_unchecked_precommit_block() -> None:
+    """⛔ The other end of the same rule, and the one the list cannot reach.
+
+    The test above derives the page list from pages that DECLARE a mirror, so a
+    new page carrying a marker is picked up automatically. A new page carrying
+    a broken pre-commit block and NO marker is not — it is outside every
+    quantifier here, which is exactly the state `docs/scenarios/…` was in when
+    #1418 shipped. So this asks the opposite question of the whole tree: does
+    any page have a top-level `repos:` block that nothing is comparing?
+
+    ⛔ Every TRACKED `.md`, not `docs/**`. A blind review pasted the pre-#1418
+    broken snippet into `components/da-tools/README.md` — outside `docs/` — and
+    this whole file stayed green, which is the same "the quantifier is narrower
+    than the sentence describing it" shape the guard exists to catch. The tree
+    has markdown outside `docs/` and nothing says a customer-facing snippet
+    cannot land there.
+
+    Measured on this tree: exactly 2 pages carry such a block and both are
+    already listed, so this starts at zero false reds rather than at a backlog
+    of exemptions. The substring pre-filter exists because parsing fences on
+    every tracked page is an order of magnitude slower than parsing the handful
+    that mention the key at all — no figure is quoted here on purpose, because
+    the last two figures written into this file both expired inside a day.
+
+    ⛔ The pre-filter matches `repos` WITHOUT the colon, and an earlier version
+    with the colon was measured unsound while claiming in this very docstring
+    to be sound: `"repos":`, `'repos':` and `repos :` are all valid YAML that
+    `_unmarked_precommit_blocks` treats as a pre-commit block, and none of them
+    contains `repos:`. Quoting the key was enough to walk past the guard.
+    """
+    ours = _shipped_hook_ids()
+    stragglers = {}
+    for page in _tracked_markdown():
+        if page in _MIRROR_DOC_PAGES:
+            continue
+        text = (_REPO_ROOT / page).read_text(encoding="utf-8", errors="replace")
+        if "repos" not in text:
+            continue
+        copies = [
+            start for start in _unmarked_precommit_blocks(text)
+            if _names_our_hooks(text, start, ours)
+        ]
+        if copies:
+            stragglers[page] = len(copies)
+
+    assert not stragglers, (
+        f"{stragglers} ship an unchecked copy of OUR pre-commit hooks "
+        f"({sorted(ours)}) — nothing compares them to the artifact. ⛔ #1418 "
+        "was exactly this: a hand-copied block that had drifted three ways "
+        "from the artifact it claimed to show, on a page the customer is "
+        "pointed at four times from the CLI. Add a "
+        "`<!-- mirrors-artifact: <path> -->` marker naming the file it mirrors "
+        "and add the page to _MIRROR_DOC_PAGES, or delete the block.\n"
+        "⛔ A block that does NOT name our hook ids is not this — a generic "
+        "`repos:` example in a contributor doc has no shipped artifact to be "
+        "compared against, and an earlier version of this check reported it "
+        "anyway. Following that message's advice then produced twenty new "
+        "failures, because the page had no artifact to point a marker at."
+    )
+
+
+@pytest.mark.parametrize("page", _MIRROR_DOC_PAGES)
+def test_every_precommit_block_on_the_page_is_marked(page) -> None:
+    """⛔ Exhaustiveness. The marker says WHICH artifact; this says NO block escapes.
+
+    Without this, the marker is opt-in: a second pre-commit block that simply
+    carries no marker is not compared against anything. Measured on this very
+    page — pasting the pre-#1418 broken snippet back as an unmarked second
+    example left the guard green and all four doc lints at rc=0.
+    """
+    text = (_REPO_ROOT / page).read_text(encoding="utf-8")
+    blocks = set(_precommit_fences(text))
+
+    assert blocks, (
+        f"{page} contains no pre-commit config block at all. This page exists "
+        "to show the customer what to merge; if that genuinely moved, move "
+        "this page out of _MIRROR_DOC_PAGES in the same commit."
+    )
+    unmarked = _unmarked_precommit_blocks(text)
+    assert not unmarked, (
+        f"{page} has {len(unmarked)} pre-commit block(s) with no "
+        "`<!-- mirrors-artifact: <path> -->` marker above them, so nothing "
+        "compares them to anything that ships. ⛔ Removing the marker from the "
+        "others is not the fix. If a block is illustrative rather than "
+        "mirrored, it still has to say so — mark it with the artifact it "
+        "corresponds to, or delete it."
+    )
+
+
+@pytest.mark.parametrize("page", _MIRROR_DOC_PAGES)
+@pytest.mark.parametrize("ci,deploy", MATRIX)
+def test_docs_mirrored_block_matches_the_shipped_artifact(
+    generated, ci, deploy, page
+) -> None:
+    """⛔ A page that shows an artifact must show the artifact that ships.
+
+    `init_project.py` names this page in four places: the ``# Docs:`` header of
+    each generated workflow, and once in each language branch of the "next
+    steps" the CLI prints. §4 of it hand-copied a pre-commit hook, and when the
+    generator's copy was fixed (#1347, #1390) the page stayed put: it went on
+    teaching `language: system` + a literal ``${PWD}`` mount + a ``--ci`` flag
+    `validate-config` does not accept. Every one of those is a 100% failure for
+    a customer who copies it, and NOTHING was watching — the sibling guards in
+    this file read the artifact only, and the verify_diff entry for this page is
+    a test SELECTOR, not an assertion.
+
+    Both sides are read from artifacts: the page as committed, and the file
+    ``run_init`` really wrote. The per-combination parametrisation additionally
+    pins that the mirrored file is ``--ci``/``--deploy`` independent.
+    """
+    root = generated[(ci, deploy)]
+    doc = _REPO_ROOT / page
+    assert doc.is_file(), (
+        f"{page} is missing. It is one of the pages the generated workflows "
+        "link to in their `# Docs:` header — if it moved, move this constant "
+        "with it; do not drop the entry."
+    )
+    text = doc.read_text(encoding="utf-8")
+
+    marked = _marked_fences(text)
+    assert marked, (
+        f"{page} carries no `<!-- mirrors-artifact: <path> -->` marker, so "
+        "nothing on it is being compared against what `da-tools init` writes. "
+        "This page previously hand-copied an artifact and drifted for two "
+        "releases without a single test noticing."
+    )
+
+    for start, rel in marked.items():
+        artifact = root / rel
+        assert artifact.is_file(), (
+            f"{page} claims to mirror {rel!r}, but "
+            f"`da-tools init --ci {ci} --deploy {deploy}` writes no such file. "
+            "Either the marker names the wrong path, or the page is showing a "
+            "customer something that no longer ships."
+        )
+        hit = _fence_after(text, start)
+        assert hit is not None and hit[1].strip(), (
+            f"{page}: the `mirrors-artifact: {rel}` marker is not followed by "
+            "a complete fenced block. The marker is the declaration; a marker "
+            "with nothing under it compares nothing."
+        )
+
+        doc_cfg = _normalised_precommit(yaml.safe_load(hit[1]))
+        art_cfg = _normalised_precommit(
+            yaml.safe_load(artifact.read_text(encoding="utf-8"))
+        )
+        assert doc_cfg, (
+            f"{page} shows an empty block under `mirrors-artifact: {rel}` — "
+            "that is nothing a customer can copy, and it would make the "
+            "comparison below vacuously true."
+        )
+        assert doc_cfg == art_cfg, (
+            f"{page} no longer matches the {rel} that "
+            f"`da-tools init --ci {ci} --deploy {deploy}` writes.\n"
+            f"  page:     {doc_cfg}\n"
+            f"  artifact: {art_cfg}\n"
+            "The ARTIFACT is the source of truth: it is what the customer's "
+            "machine will actually run, and its argv is separately derived "
+            "against the real CLI by "
+            "test_generated_precommit_hooks_can_actually_run (a static "
+            "derivation, not an execution). If the generator changed on "
+            "purpose, update the block on the page — in every language. If the "
+            "page is right and the generator regressed, fix "
+            "`_gen_precommit_snippet` in scripts/tools/ops/init_project.py. "
+            "⛔ Do not relax this comparison to make the two 'close enough' — "
+            "the defect it exists for was exactly a page that looked close "
+            "enough."
+        )
+
+
+def test_docs_mirrored_block_pins_the_cli_default_image() -> None:
+    """⛔ The mirrored image tag must be the CLI's default, not the fixture's.
+
+    The comparison above reads both sides from artifacts, with one exception it
+    could not see: the artifact is produced by a fixture that passes
+    ``da_tools_image`` in explicitly, and every test in this repo passes the
+    same literal. Two of the ten argv tokens across the two hooks — the first
+    of each — were therefore supplied by the test suite rather than derived.
+    Measured by flipping ``DA_TOOLS_IMAGE`` to another tag, which left 386
+    tests passing across `tests/ops` while a default `da-tools init` started
+    writing an image the page does not mention.
+
+    Scoped to the pre-commit artifact on purpose: the marker is generic, and a
+    page mirroring some other artifact (a `_defaults.yaml` sample, say) has no
+    hook entries to check. Asserting on every marker made such a page red with
+    a message that explained none of it.
+    """
+    parser = ip._build_parser()
+    defaults = [a.default for a in parser._actions if a.dest == "da_tools_image"]
+    assert defaults, "the init parser no longer declares --da-tools-image"
+    default_image = defaults[0]
+
+    checked = 0
+    for page in _MIRROR_DOC_PAGES:
+        text = (_REPO_ROOT / page).read_text(encoding="utf-8")
+        for start, rel in _marked_fences(text).items():
+            if rel != _PRECOMMIT_ARTIFACT:
+                continue
+            hit = _fence_after(text, start)
+            assert hit is not None, f"{page}: marked block has no fence"
+            cfg = yaml.safe_load(hit[1]) or {}
+            entries = [
+                str(hook.get("entry", ""))
+                for repo in cfg.get("repos") or []
+                for hook in repo.get("hooks") or []
+            ]
+            assert len(entries) >= 2, (
+                f"{page} mirrors {rel} with {len(entries)} hook(s). The shipped "
+                "file has two, and the page teaching only one of them is the "
+                "exact omission #1418 found."
+            )
+            images = {entry.split()[0] for entry in entries if entry.split()}
+            assert images == {default_image}, (
+                f"{page} shows the image(s) {sorted(images)}, but a default "
+                f"`da-tools init` writes {default_image!r}. The page documents "
+                "the default invocation, so it has to track the default. ⛔ Do "
+                "not pin the page to a released tag to make this pass — that "
+                "is the drift, not the fix."
+            )
+            checked += 1
+
+    assert checked == len(_MIRROR_DOC_PAGES), (
+        f"only {checked} of {len(_MIRROR_DOC_PAGES)} page(s) carried a "
+        f"`mirrors-artifact: {_PRECOMMIT_ARTIFACT}` marker. Every assertion "
+        "above lives inside that loop, so a page that loses its marker makes "
+        "this test pass by checking nothing."
+    )
+
+
+@pytest.mark.parametrize("page", _MIRROR_DOC_PAGES)
+def test_docs_da_tools_invocations_use_flags_the_cli_declares(page) -> None:
+    """⛔ Every `da-tools` flag on these pages must exist, or copying it exits 2.
+
+    This page taught ``validate-config --ci`` and ``--verbose`` for two
+    releases. Neither flag exists; both exit 2 at argparse before a single
+    check runs, so the "diagnose your failure" row of the troubleshooting table
+    was itself a failure.
+
+    ⛔ Scope is these pages, not docs/ at large. `check_doc_datools_cmds.py`
+    documents why the repo-wide version was prototyped and rejected (~88 false
+    positives from scenario docs using illustrative pseudo-commands); the two
+    pages here were checked command by command and contain none, which is what
+    makes an exact-match assertion affordable at all. Widening it is #1379's
+    job, not this guard's.
+    """
+    declared = _da_tools_subcommands()
+    text = (_REPO_ROOT / page).read_text(encoding="utf-8")
+
+    problems = _undeclared_da_tools_usage(text, declared)
+    assert not problems, (
+        f"{page} documents {len(problems)} `da-tools` invocation(s) the CLI "
+        f"would reject: {problems}. A reader who copies any of them gets exit "
+        "2 from argparse before any check runs."
+    )
+
+    # Anti-vacuity, on the quantity that moves when the extractor breaks: the
+    # subcommand count alone stayed at 19 with the whole flag half disabled.
+    invocations = _da_tools_invocations(text)
+    flags_seen = sum(len(flags) for _, flags in invocations)
+    assert len(invocations) >= 6 and flags_seen >= 10, (
+        f"{page} yielded {len(invocations)} invocation(s) and {flags_seen} "
+        "flag(s) inside code spans. Measured at the time of writing: 19 and 25 "
+        "on each page. A drop this large means the extractor broke, not that "
+        "the page got shorter. ⛔ Lowering these numbers is not the fix."
+    )
+
+
 def test_the_unsupported_if_corpus_is_not_empty() -> None:
     """⛔ Anti-vacuity floor for the corpus that guards the guard.
 
@@ -2767,7 +3700,7 @@ def _normalized_commands(text: str) -> list[str]:
 # anything INSIDE a branch could be rewritten freely.
 _EXPECTED_GH_APPLY: dict[str, list[str]] = {
     "kustomize": [
-        "kustomize build kustomize/overlays/prod > /tmp/manifests.yaml",
+        "kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod > /tmp/manifests.yaml",
         "kubectl apply --dry-run=server -f /tmp/manifests.yaml",
         'echo "--- Dry-run passed. Applying... ---"',
         "kubectl apply -f /tmp/manifests.yaml",
@@ -2787,7 +3720,7 @@ _EXPECTED_GH_APPLY: dict[str, list[str]] = {
 
 _EXPECTED_GL_APPLY: dict[str, list[str]] = {
     "kustomize": [
-        "kustomize build kustomize/overlays/prod > /tmp/manifests.yaml",
+        "kustomize build --load-restrictor LoadRestrictionsNone kustomize/overlays/prod > /tmp/manifests.yaml",
         "kubectl apply --dry-run=server -f /tmp/manifests.yaml",
         "kubectl apply -f /tmp/manifests.yaml",
         "kubectl rollout restart deployment/prometheus -n $MONITORING_NS",
