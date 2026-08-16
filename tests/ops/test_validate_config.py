@@ -5,6 +5,7 @@ happy paths sit alongside policy_dsl / profile / route / report / main / custom
 rules / reserved-key edge case classes appended below.
 """
 
+import fnmatch
 import io
 import json
 import os
@@ -611,3 +612,142 @@ class TestIsReservedKey:
     def test_not_reserved(self):
         assert vc._is_reserved_key("mysql_connections") is False
         assert vc._is_reserved_key("custom_metric") is False
+
+
+# ============================================================
+# #1447 — what the report points at has to be openable by its reader.
+# ============================================================
+
+_REPO_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
+class TestCheckHintsPointSomewhereCustomersCanOpen:
+    """The report used to name files only this repository has.
+
+    Its audience runs `da-tools validate-config` against a repo holding
+    `conf.d/` and whatever `da-tools init` wrote. `-> See: docs/scenarios/…`
+    named a path that does not exist over there.
+    """
+
+    @staticmethod
+    def _exclude_patterns():
+        """Patterns mkdocs holds back, read from mkdocs.yml's exclude_docs.
+
+        Read textually rather than with `yaml.safe_load`: mkdocs.yml carries
+        `!!python/name:` tags for the emoji extension, which safe_load
+        refuses. `generate_nav.py` reads the nav the same way for the same
+        reason.
+        """
+        lines = open(os.path.join(_REPO_ROOT, "mkdocs.yml"),
+                     encoding="utf-8").read().splitlines()
+        patterns, collecting = [], False
+        for line in lines:
+            if line.startswith("exclude_docs:"):
+                collecting = True
+                continue
+            if not collecting:
+                continue
+            if line.strip() and not line[0].isspace():
+                break
+            if line.strip() and not line.strip().startswith("#"):
+                patterns.append(line.strip())
+        return patterns
+
+    @classmethod
+    def _is_excluded(cls, rel_to_docs):
+        """⚠️ Models the literal / fnmatch subset of .gitignore syntax only.
+
+        Directory-form entries (`internal/`) are NOT modelled and would be
+        read as "not excluded" — a fail-OPEN direction. `test_exclude_...`
+        below pins the shapes that are modelled so the gap stays visible
+        rather than being assumed away.
+        """
+        patterns = cls._exclude_patterns()
+        assert patterns, (
+            "read no exclude_docs patterns from mkdocs.yml — the block moved "
+            "or was renamed, so this check is no longer looking at anything")
+        return any(
+            fnmatch.fnmatch(rel_to_docs, pat)
+            or fnmatch.fnmatch(os.path.basename(rel_to_docs), pat)
+            for pat in patterns
+        )
+
+    def test_every_hint_target_is_reachable(self):
+        assert vc._CHECK_HINTS, "no hints defined"
+        for check, (hint, docs) in vc._CHECK_HINTS.items():
+            assert hint, f"{check}: empty hint"
+            if docs.startswith(("http://", "https://")):
+                # Absolute URLs are already openable, but they still have to
+                # look like one — an earlier draft simply `continue`d here,
+                # which meant a typo'd scheme skipped every check below.
+                assert "://" in docs and " " not in docs, (
+                    f"{check}: {docs!r} is not a usable absolute URL")
+                continue
+            path = docs.split("#", 1)[0]
+            assert path.startswith("docs/") and path.endswith(".md"), (
+                f"{check}: hint target {docs!r} is neither a docs/ page nor "
+                "an absolute URL, so there is nothing the reader can open")
+            assert os.path.isfile(os.path.join(_REPO_ROOT, path)), (
+                f"{check}: {path} does not exist")
+            assert not self._is_excluded(path[len("docs/"):]), (
+                f"{check}: {path} matches an mkdocs.yml exclude_docs "
+                "pattern, so the URL printed for it would 404")
+
+    def test_exclude_matching_is_answerable(self):
+        """⛔ Control for the half that never fires on real data.
+
+        `exclude_docs` holds back only two README files today, so
+        `_is_excluded` returns False for every hint and could be replaced
+        with `return False` without turning anything red.
+        """
+        assert self._is_excluded("README-root.md"), (
+            "a pattern mkdocs.yml really lists was not matched — if the "
+            "exclude_docs block changed, update this literal rather than "
+            "deleting the assertion; it is this layer's only control")
+        assert not self._is_excluded("scenarios/alert-routing-split.md")
+
+    @pytest.mark.parametrize("rel,expected", [
+        ("docs/scenarios/alert-routing-split.md",
+         "scenarios/alert-routing-split/"),
+        # A deliberately precise pointer must not be coarsened to the page.
+        ("docs/scenarios/alert-routing-split.md#guardrails",
+         "scenarios/alert-routing-split/#guardrails"),
+        # mkdocs folds index/README onto the directory; keeping the filename
+        # yields a 404 that a file-exists check cannot see (measured on the
+        # live site: /adr/README/ → 404, /adr/ → 200).
+        ("docs/adr/README.md", "adr/"),
+        ("docs/index.md", ""),
+    ])
+    def test_docs_url_matches_how_mkdocs_serves_the_page(self, rel, expected):
+        assert vc._docs_url(rel) == vc.DOCS_SITE_BASE + expected
+
+    @pytest.mark.parametrize("value", [
+        "", "https://example.invalid/x", "scripts/tools/ops/diagnose.py",
+        "docs/notes.txt",
+    ])
+    def test_non_docs_values_are_returned_unchanged(self, value):
+        """Must-tolerate side: don't mangle something that isn't a docs page."""
+        assert vc._docs_url(value) == value
+
+    def test_printed_report_carries_the_url_not_the_repo_path(self):
+        captured = io.StringIO()
+        original, sys.stdout = sys.stdout, captured
+        try:
+            vc.print_report([vc._make_result("routes", vc.FAIL, ["boom"])])
+        finally:
+            sys.stdout = original
+        out = captured.getvalue()
+        assert "-> See: https://vencil.github.io/" in out
+        assert "-> See: docs/" not in out
+
+    def test_json_mode_carries_the_url_too(self):
+        captured = io.StringIO()
+        original, sys.stdout = sys.stdout, captured
+        try:
+            vc.print_report([vc._make_result("routes", vc.FAIL, ["boom"])],
+                            as_json=True)
+        finally:
+            sys.stdout = original
+        entry = json.loads(captured.getvalue())[0]
+        assert entry["docs_link"].startswith("https://vencil.github.io/")

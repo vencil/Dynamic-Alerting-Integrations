@@ -2021,6 +2021,26 @@ def _preview_files(config: dict, output_dir: str) -> list[str]:
     return paths
 
 
+def _existing_files(output_dir: str) -> set[str]:
+    """Absolute paths of files present before generation starts.
+
+    #1447: `init` writes unconditionally, and the only warning it had lived
+    behind `.da-init.yaml` — so the person it warns is the one who already
+    knows they ran `init` here. Someone with a hand-written `conf.d/` and no
+    marker got a screen of green ticks and "Initialization complete!" while
+    their thresholds were replaced.
+
+    ⚠️ Naming the overwrite costs nothing and covers both paths, but be
+    honest about when it arrives: `_print_summary` runs after every write, so
+    that notice is a receipt, not a chance to stop. `--dry-run` is where it
+    is still actionable, which is why the preview carries it too.
+    """
+    root = Path(output_dir)
+    if not root.is_dir():
+        return set()
+    return {str(p.resolve()) for p in root.rglob("*") if p.is_file()}
+
+
 def run_init(config: dict, output_dir: str) -> list[str]:
     """Generate all files based on config. Returns list of created file paths."""
     created: list[str] = []
@@ -2164,7 +2184,8 @@ def run_init(config: dict, output_dir: str) -> list[str]:
     return created
 
 
-def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
+def _print_summary(created: list[str], output_dir: str, config: dict,
+                   pre_existing: set[str] | None = None) -> None:
     """Print post-init summary."""
     is_zh = _LANG == 'zh'
 
@@ -2177,9 +2198,27 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
     print(f"  {'輸出目錄' if is_zh else 'Output directory'}: {output_dir}")
     print()
 
+    overwritten = []
     for f in created:
         rel = str(Path(f).relative_to(output_dir))
-        print(f"  ✓ {rel}")
+        if pre_existing and str(Path(f).resolve()) in pre_existing:
+            overwritten.append(rel)
+            print(f"  ✓ {rel}" + ("（已覆寫）" if is_zh else " (overwritten)"))
+        else:
+            print(f"  ✓ {rel}")
+
+    if overwritten:
+        print()
+        if is_zh:
+            print(f"  ⚠️  上列 {len(overwritten)} 個檔案在此之前就存在，"
+                  f"內容已被取代，沒有備份。")
+            print("     若其中有你手動調整過的閾值，請從版本控制取回"
+                  "（例如 git checkout -- conf.d/）。")
+        else:
+            print(f"  ⚠️  {len(overwritten)} of the files above already "
+                  f"existed and were replaced. No backup was made.")
+            print("     If any held hand-tuned thresholds, recover them from "
+                  "version control (e.g. git checkout -- conf.d/).")
 
     # Show auto-enabled packs
     auto = _auto_enabled_rule_packs()
@@ -2232,9 +2271,18 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
     if is_zh:
         print("  📖 完整指南: https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/gitops-ci-integration/")
         print("  🛠️  驗證: da-tools validate-config --config-dir conf.d/")
+        # #1447: `da-tools` is the entry point *inside the image*; there is no
+        # binary of that name to install, so a bare copy-paste ends in
+        # `command not found`. The guide declares the docker prefix once — say
+        # here that one is needed, rather than leaving the reader to find out.
+        print("     （`da-tools` 是映像裡的進入點，不是可安裝的執行檔；"
+              "本機執行請加上指南裡的 docker run 前綴）")
     else:
         print("  📖 Full guide: https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/gitops-ci-integration/")
         print("  🛠️  Validate: da-tools validate-config --config-dir conf.d/")
+        print("     (`da-tools` is the entry point inside the image, not an "
+              "installable binary — prefix it with the docker run line from "
+              "the guide)")
     print()
 
 
@@ -2247,15 +2295,48 @@ def _print_summary(created: list[str], output_dir: str, config: dict) -> None:
 # ============================================================
 
 def _check_existing_init(output_dir: str, force: bool, parser: argparse.ArgumentParser) -> None:
-    """Check if directory is already initialized."""
+    """Check if directory is already initialized.
+
+    #1447: this message is the only warning most people ever read — `--help`
+    spells out the blast radius, but nobody opens `--help` after the CLI has
+    just told them what to type.  The old two lines recommended `--force`
+    with no mention of what it destroys, and offered "or remove
+    .da-init.yaml manually" as an alternative — which is not an alternative
+    at all: the marker is the *entire* gate, so deleting it reproduces the
+    same overwrite **without** `--force` and without even this warning.
+
+    ⛔ The behaviour is unchanged; only the description of it is.  Making
+    `--force` non-destructive would need a separate decision (and would break
+    `tests/ops/test_init_project.py::test_force_really_discards_hand_edits_in_both_files`,
+    which pins today's semantics on purpose).
+    """
     marker_path = str(Path(output_dir) / '.da-init.yaml')
     if Path(marker_path).is_file() and not force:
         if _LANG == 'zh':
             print(f"⚠️  此目錄已初始化 ({marker_path})。", file=sys.stderr)
-            print("   使用 --force 覆寫或手動刪除 .da-init.yaml。", file=sys.stderr)
+            print("   加上 --force 會**重新產生每一個檔案並覆寫**——包含"
+                  "conf.d/_defaults.yaml 與每一份 conf.d/<tenant>.yaml，"
+                  "你手動調整過的閾值會遺失，且不會有備份或差異提示。",
+                  file=sys.stderr)
+            print("   先備份（或先 commit）再重跑；只想改設定的話，"
+                  "直接編輯既有檔案即可，不需要重跑 init。", file=sys.stderr)
+            print("   ⛔ 刪掉 .da-init.yaml 不是比較安全的做法——"
+                  "那個檔案就是這道檢查的全部，刪了之後不加 --force "
+                  "也會發生同樣的覆寫，而且不會再出現這則警告。",
+                  file=sys.stderr)
         else:
             print(f"⚠️  This directory is already initialized ({marker_path}).", file=sys.stderr)
-            print("   Use --force to overwrite or remove .da-init.yaml manually.", file=sys.stderr)
+            print("   Adding --force REWRITES every generated file, including "
+                  "conf.d/_defaults.yaml and each conf.d/<tenant>.yaml: "
+                  "hand-tuned thresholds are lost, with no backup and no diff.",
+                  file=sys.stderr)
+            print("   Back up (or commit) first. To change settings you do "
+                  "not need to re-run init at all — edit the existing files.",
+                  file=sys.stderr)
+            print("   ⛔ Deleting .da-init.yaml is not the safer option: that "
+                  "marker is this entire check, so removing it reproduces the "
+                  "same overwrite without --force and without this warning.",
+                  file=sys.stderr)
         sys.exit(EXIT_VIOLATION)
 
 
@@ -2334,14 +2415,36 @@ def _validate_config(config: dict) -> None:
 
 
 def _handle_dry_run(config: dict, output_dir: str) -> None:
-    """Handle --dry-run mode: preview files without writing."""
+    """Handle --dry-run mode: preview files without writing.
+
+    #1447: this is the only non-destructive way to see what `init` will do,
+    so it is the one place where "this file already exists and will be
+    replaced" is still actionable — everywhere else the reader is told after
+    the write. It listed the paths and nothing else, which meant
+    `--dry-run --force` printed a screen of files about to be overwritten
+    with no hint that any of them existed.
+    """
     is_zh = _LANG == 'zh'
     print("DRY RUN — " + ("以下檔案會被產生：" if is_zh else "The following files would be created:"))
     print()
+    existing = _existing_files(output_dir)
     files = _preview_files(config, output_dir)
+    overwritten = 0
     for f in files:
-        print(f"  {Path(f).relative_to(output_dir)}")
+        rel = Path(f).relative_to(output_dir)
+        if str(Path(f).resolve()) in existing:
+            overwritten += 1
+            print(f"  {rel}" + ("（已存在，會被覆寫）" if is_zh
+                                else " (exists — would be overwritten)"))
+        else:
+            print(f"  {rel}")
     print(f"\n  {'總計' if is_zh else 'Total'}: {len(files)}")
+    if overwritten:
+        if is_zh:
+            print(f"  ⚠️  其中 {overwritten} 個已經存在，內容會被取代且沒有備份。")
+        else:
+            print(f"  ⚠️  {overwritten} of them already exist and would be "
+                  f"replaced, with no backup.")
     sys.exit(EXIT_OK)
 
 
@@ -2438,8 +2541,11 @@ def main():
     if args.dry_run:
         _handle_dry_run(config, output_dir)
 
+    # Snapshot before generation: after the writes there is no way to tell an
+    # overwrite from a fresh file (#1447).
+    pre_existing = _existing_files(output_dir)
     created = run_init(config, output_dir)
-    _print_summary(created, output_dir, config)
+    _print_summary(created, output_dir, config, pre_existing)
 
 
 if __name__ == "__main__":

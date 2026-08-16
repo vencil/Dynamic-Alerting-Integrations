@@ -102,7 +102,10 @@ import sys
 
 import yaml
 
-from _lib_python import load_yaml_file, VALID_RESERVED_KEYS, VALID_RESERVED_PREFIXES  # noqa: E402
+from _lib_python import (  # noqa: E402
+    load_yaml_file, VALID_RESERVED_KEYS, VALID_RESERVED_PREFIXES,
+    DOCS_SITE_BASE,
+)
 
 # ============================================================
 # Check results
@@ -497,8 +500,49 @@ def check_versions() -> dict[str, object]:
 # ============================================================
 # Report
 # ============================================================
+def _docs_url(rel_path: str) -> str:
+    """Repo-relative ``docs/**.md`` path → the URL a customer can open.
+
+    #1447: these hints used to print the repo-relative path verbatim
+    (``-> See: docs/scenarios/alert-routing-split.md``). The audience for
+    this report is a customer whose repository holds ``conf.d/`` and the
+    files ``da-tools init`` wrote — there is no ``docs/`` tree there, so the
+    pointer named a file they cannot open. Deriving the URL keeps
+    ``_CHECK_HINTS`` greppable as repo paths while what gets *printed* is
+    reachable from outside this repository.
+
+    ``mkdocs.yml`` builds every page under ``docs/`` (only ``exclude_docs``
+    is held back) and leaves ``use_directory_urls`` at its default, so
+    ``docs/a/b.md`` is served at ``<base>a/b/``.
+
+    ⛔ Two shapes are passed through untouched rather than mangled: an
+    absolute URL (already openable) and anything that is not a
+    ``docs/**.md`` path. A section anchor is kept — ``docs/a/b.md#c``
+    becomes ``<base>a/b/#c`` — because dropping it would silently coarsen a
+    pointer that someone deliberately made precise.
+    """
+    if rel_path.startswith(("http://", "https://")):
+        return rel_path
+    path, sep, anchor = rel_path.partition("#")
+    if not path.startswith("docs/") or not path.endswith(".md"):
+        return rel_path
+    stem = path[len("docs/"):-len(".md")]
+    # mkdocs maps `x/index.md` and `x/README.md` onto the directory itself
+    # (and a top-level one onto the site root), so keeping the filename in
+    # the URL produces a 404 that the file-exists check cannot see.
+    head, _, last = stem.rpartition("/")
+    if last in ("index", "README"):
+        stem = head
+    base = f"{DOCS_SITE_BASE}{stem}/" if stem else DOCS_SITE_BASE
+    return f"{base}{sep}{anchor}" if sep else base
+
+
 # v2.5.0 Phase C: Suggested actions for each check type.
 # Maps check name → (hint_message, docs_link).
+# ⛔ The link is stored as a repo-relative path and rendered through
+# `_docs_url()`; `tests/ops/test_validate_config.py` asserts every target
+# resolves to something a reader outside this repository can open, so a hint
+# pointing at an unreachable page fails there rather than in their terminal.
 _CHECK_HINTS: dict[str, tuple[str, str]] = {
     "yaml_syntax": (
         "Fix YAML syntax errors (indentation, quoting, colons) in the listed files.",
@@ -553,7 +597,7 @@ def print_report(results: list[dict[str, object]], as_json: bool = False) -> Non
                 hint, docs = _CHECK_HINTS.get(r["check"], ("", ""))
                 if hint:
                     entry["suggested_action"] = hint
-                    entry["docs_link"] = docs
+                    entry["docs_link"] = _docs_url(docs)
             enriched.append(entry)
         print(json.dumps(enriched, indent=2))
         return
@@ -575,7 +619,7 @@ def print_report(results: list[dict[str, object]], as_json: bool = False) -> Non
             hint, docs = _CHECK_HINTS.get(r["check"], ("", ""))
             if hint:
                 print(f"       -> Suggested action: {hint}")
-                print(f"       -> See: {docs}")
+                print(f"       -> See: {_docs_url(docs)}")
 
     # Summary
     total = len(results)
