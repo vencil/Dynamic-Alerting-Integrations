@@ -1686,7 +1686,6 @@ def test_the_may_be_empty_list_must_earn_its_entries_on_every_run(monkeypatch):
 
 _WITNESS_OK = "defaults:\n  cpu: 90\n"
 _WITNESS_RENAMED = "defalts:\n  cpu: 90\n"
-_WITNESS_STATE_PREFIX = "_state_defaults:\n  cpu: 90\n  unit: pct\n"
 _WITNESS_NESTED = "defaults:\n  threshold:\n    cpu: 90\n"
 # ⛔ A REAL recipe shape, copied from the finance domain file under
 # `rule-packs/recipes/examples/conf.d/`, not a plausible-looking one. (The path
@@ -1724,10 +1723,28 @@ def test_the_schema_witness_is_silent_on_the_real_tree():
     lower than the artifact count on purpose — a comment-only placeholder
     yields no YAML document at all.
     """
+    import yaml
+
     tracked = gate._tracked_defaults_artifacts()
     assert len(tracked) >= gate._DEFAULTS_ARTIFACT_FLOOR, tracked
     judged = gate._assert_defaults_artifacts_match_schema(tracked)  # must NOT raise
-    assert judged >= gate._DEFAULTS_ARTIFACT_FLOOR, (judged, len(tracked))
+
+    # ⛔ EQUALITY AGAINST AN INDEPENDENT RECOUNT, not `judged >= floor`. Blind
+    # review replaced the returned count with the floor constant itself and the
+    # whole suite stayed green: the inequality was satisfied by the very number
+    # it was compared against, and the other control stubs the witness out
+    # entirely so it never sees a real return value. This side re-derives the
+    # document count from the tree without calling the witness at all.
+    expected = sum(
+        len(list(yaml.safe_load_all(
+            (gate.PROJECT_ROOT / rel).read_text(encoding="utf-8"))))
+        for rel in tracked)
+    assert judged == expected, (judged, expected)
+    assert judged < len(tracked), (
+        "at least one tracked artifact yields no YAML document at all "
+        "(comment-only). If that stops being true this note is stale, but a "
+        "judged count EQUAL to the file count is also what a naive "
+        "one-document-per-file assumption would produce.")
 
 
 def test_the_schema_witness_refuses_an_empty_input():
@@ -1771,7 +1788,7 @@ def test_the_schema_witness_is_not_reachable_by_either_exemption_table(
     # ⛔ nor may it leave the cheapest wrong fix unnamed: renaming the block to
     # another name the schema accepts silences this check and keeps the
     # declarations unread, which is the defect it exists to report.
-    assert "DO NOT rename the block to another top-level name" in msg, msg
+    assert "DO NOT move the block under a different top-level section name" in msg, msg
 
 
 def test_the_schema_witness_scope_is_exactly_what_the_docstring_claims():
@@ -1798,23 +1815,43 @@ def test_the_schema_witness_scope_is_exactly_what_the_docstring_claims():
         with pytest.raises(gate._GateViolation):
             _witness({"x/conf.d/_defaults.yaml": f"{bad}:\n  cpu: 90\n"})
 
-    # 2. renamed onto ANY property the schema allows but does not shape, or onto
-    #    an open `patternProperties` prefix -> NOT caught. Derived, so the day a
-    #    property grows a value shape this row narrows on its own.
-    unshaped = sorted(
-        name for name, spec in schema["properties"].items()
-        if name != "defaults"
-        and not {"properties", "items", "patternProperties",
-                 "additionalProperties"} & set(spec))
-    assert len(unshaped) >= 10, unshaped        # anti-vacuity for the derivation
-    for name in unshaped + ["_state_defaults", "_routing_zz"]:
-        _witness({"x/conf.d/_defaults.yaml": f"{name}:\n  cpu: 90\n"})
+    # 2. renamed onto a property the schema allows but does not shape, or onto
+    #    an open `patternProperties` prefix -> NOT caught.
+    #
+    # ⛔ THE CLASSIFICATION IS BEHAVIOURAL, not a list of value-shape keywords.
+    # The first spelling asked whether the property's spec carried any of
+    # {properties, items, patternProperties, additionalProperties} — an
+    # enumeration of an OPEN set (`type`, `enum`, `const`, `oneOf`, `$ref` …).
+    # Blind review gave `max_metrics_per_tenant` a `"type"`, which is exactly
+    # the improvement #1414 asks for and this gate's own message points at, and
+    # THIS ASSERTION WENT RED — the cheapest green being to revert the schema
+    # fix. Probing the real validator instead means a newly shaped property
+    # moves from the silent side to the caught side on its own, which is what
+    # "derived" was supposed to mean.
+    silent, caught = [], []
+    for name in sorted(schema["properties"]):
+        if name == "defaults":
+            continue
+        probe = {"x/conf.d/_defaults.yaml": f"{name}:\n  cpu: 90\n"}
+        try:
+            _witness(probe)
+        except gate._GateViolation:
+            caught.append(name)
+        else:
+            silent.append(name)
 
-    # 2b. …and the two that ARE shaped must still be caught, so row 2 cannot be
-    #     satisfied by a witness that has simply stopped working.
-    for name in ("_custom_alerts", "optional_overrides"):
-        with pytest.raises(gate._GateViolation):
-            _witness({"x/conf.d/_defaults.yaml": f"{name}:\n  cpu: 90\n"})
+    # ⛔ ANTI-VACUITY BY PARTITION, not by a count. `assert len(silent) >= 10`
+    # stood here and meant "the schema must keep at least ten unshaped
+    # properties" — a floor that has to be LOWERED every time somebody improves
+    # the schema, i.e. a guard that charges rent on its own fix.
+    assert set(silent) | set(caught) == set(schema["properties"]) - {"defaults"}
+    assert not (set(silent) & set(caught))
+    assert caught, "no property is shaped enough to be caught — the witness is inert"
+    assert silent, "every property is caught — this row no longer describes the tree"
+
+    # 2b. the open prefixes are unbounded, so they are probed by shape not name
+    for name in ("_state_defaults", "_routing_zz"):
+        _witness({"x/conf.d/_defaults.yaml": f"{name}:\n  cpu: 90\n"})
 
     # 3. a SECOND `defaults:` key (PyYAML last-wins -> None) -> NOT caught
     _witness({"x/conf.d/_defaults.yaml": _WITNESS_OK + "defaults:\n"})
@@ -1857,6 +1894,17 @@ def test_the_witness_reads_every_artifact_and_every_document_in_it():
                   "b/conf.d/_defaults.yaml": _WITNESS_RENAMED})
     assert "2 violation(s) across 2 defaults artifact(s)" in str(exc.value), exc.value
 
+    # ⛔ …and a population where the two numbers DIFFER, because the case above
+    # has offenders == everything handed in. Blind review replaced the offender
+    # count with the input count and this test stayed green on that fixture
+    # alone; on the real shape (one bad file among seventeen) the degraded
+    # message would have said "1 violation(s) across 17 defaults artifact(s)".
+    with pytest.raises(gate._GateViolation) as exc:
+        _witness({"a/conf.d/_defaults.yaml": _WITNESS_OK,
+                  "b/conf.d/_defaults.yaml": _WITNESS_OK,
+                  "c/conf.d/_defaults.yaml": _WITNESS_RENAMED})
+    assert "1 violation(s) across 1 defaults artifact(s)" in str(exc.value), exc.value
+
 
 def test_the_witness_default_reader_actually_reads(tmp_path, monkeypatch):
     """⛔ THE ONLY POSITIVE CONTROL ON THE REAL READER, and it was missing.
@@ -1880,7 +1928,7 @@ def test_the_witness_default_reader_actually_reads(tmp_path, monkeypatch):
     assert "defalts" in str(exc.value), exc.value
 
 
-def test_the_witness_names_the_file_on_every_way_out(tmp_path):
+def test_the_witness_names_the_file_on_every_way_out():
     """Malformed YAML and non-string keys are reported, not raised as tracebacks.
 
     The sibling lint turns an unparseable artifact into a caller error on
@@ -1909,13 +1957,22 @@ def test_the_witness_only_speaks_for_confd_trees():
     `tools/portal/_defaults.yaml` and got a violation whose diagnosis named a
     renamed section the file never had.
     """
-    _witness({"a/conf.d/_defaults.yaml": _WITNESS_OK,
-              "tools/portal/_defaults.yaml": "theme: dark\npage_size: 50\n"})
-
-    # …and the narrowing must not be able to eat everything silently
+    # ⛔ REFUSED BY NAME, not skipped. The first spelling dropped such a file
+    # with a list comprehension — which `guard_defaults_scopes.py` forbids for
+    # unmanaged paths in as many words, and which would silently absorb the
+    # event #1434 registered as its own reopen trigger.
     with pytest.raises(gate._GateViolation) as exc:
-        _witness({"tools/portal/_defaults.yaml": "theme: dark\n"})
-    assert "no conf.d defaults artifacts" in str(exc.value), exc.value
+        _witness({"a/conf.d/_defaults.yaml": _WITNESS_OK,
+                  "tools/portal/_defaults.yaml": "theme: dark\npage_size: 50\n"})
+    msg = str(exc.value)
+    assert "tools/portal/_defaults.yaml" in msg, msg
+    assert "under no `conf.d` tree" in msg, msg
+    # …and it must NOT be reported as the renamed-section defect it is not
+    assert "mis-spelled" not in msg, msg
+
+    # the real tree has none of these, so the refusal costs nothing today
+    assert [rel for rel in gate._tracked_defaults_artifacts()
+            if gate.conf_d_root(rel) is None] == []
 
 
 def test_the_witness_runs_after_the_floors_that_diagnose_better():
@@ -1966,13 +2023,22 @@ def test_the_hook_declares_what_the_gate_imports_and_fires_on_what_it_reaches():
 
     src_path = REPO_ROOT / "scripts/tools/lint/check_threshold_reachability.py"
     tree = ast.parse(src_path.read_text(encoding="utf-8"))
+
+    # ⛔ MODULE-WIDE, not function-scoped. The first spelling walked only
+    # `FunctionDef` bodies, so hoisting the two lazy imports to the top of the
+    # module — an ordinary E402 tidy-up that changes no behaviour — emptied
+    # this set and BOTH wirings below could then be deleted with the suite
+    # green (measured, twice, by two independent reviewers). Where an import
+    # is written is a separate invariant; it is asserted separately at the end
+    # of this test rather than being the precondition for any coverage.
     imported: set[str] = set()
-    for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)):
-        for node in ast.walk(fn):
-            if isinstance(node, ast.Import):
-                imported.update(a.name.split(".")[0] for a in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
-                imported.add(node.module.split(".")[0])
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            imported.add(node.module.split(".")[0])
+    # anti-vacuity: this set collapsing to nothing must not read as "clean"
+    assert {"yaml", "jsonschema", "check_confd_schema"} <= imported, sorted(imported)
 
     config = yaml.safe_load(
         (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
@@ -1987,19 +2053,43 @@ def test_the_hook_declares_what_the_gate_imports_and_fires_on_what_it_reaches():
     dist_of = {"yaml": "pyyaml"}
     stdlib = set(getattr(__import__("sys"), "stdlib_module_names", ()))
     for mod in sorted(imported - stdlib):
-        if (REPO_ROOT / "scripts/tools/lint" / f"{mod}.py").is_file():
-            # (b) sibling lint modules must make the hook fire when they change
-            assert pattern.match(f"scripts/tools/lint/{mod}.py"), (
-                f"the gate imports {mod!r}, so editing it changes this gate's "
-                "answer — but the hook's `files:` filter does not fire on it. "
-                "The existing coverage test reads PATH literals and cannot see "
-                "an `import`.")
+        # ⛔ FIRST-PARTY IS DERIVED FROM THE TREE, not from a list of two
+        # directories. The gate imports repo modules from four places
+        # (`scripts/tools/lint`, `scripts/tools/ops`, `scripts/tools`,
+        # `scripts/ops`); with two of them hardcoded, making `_lib_compat` a
+        # lazy import — a sensible change, and one this module's own comments
+        # encourage — produced "the gate imports third-party '_lib_compat'",
+        # whose cheapest green is adding it to `additional_dependencies` and
+        # having pre-commit try to `pip install _lib_compat`.
+        local = sorted(REPO_ROOT.glob(f"scripts/**/{mod}.py"))
+        if local:
+            rel = local[0].relative_to(REPO_ROOT).as_posix()
+            # (b) a repo module the gate imports must make the hook fire when
+            #     it changes. ⚠️ `search` not `match`: pre-commit filters with
+            #     `include_re.search(filename)`, and asserting the stricter one
+            #     would reject a legal equivalent rewrite of the pattern.
+            assert pattern.search(rel), (
+                f"the gate imports {mod!r} ({rel}), so editing it changes this "
+                "gate's answer — but the hook's `files:` filter does not fire "
+                "on it. ⚠️ The sibling coverage test does walk imports; what it "
+                "cannot see is this file, because its `search_dirs` list has no "
+                "`scripts/tools/lint` entry (#1413).")
             continue
-        if (REPO_ROOT / "scripts/tools/ops" / f"{mod}.py").is_file():
-            continue                    # covered by the ops alternatives already
         assert dist_of.get(mod, mod) in declared, (
             f"the gate imports third-party {mod!r} but the hook does not "
             f"declare it; the hook runs in an isolated venv. declared={declared}")
+
+    # (c) …and the lazy placement is its OWN invariant, asserted here rather
+    # than assumed by the scan above. jsonschema must stay inside a function so
+    # `--help` keeps working without it and so importers of this module do not
+    # inherit the dependency.
+    lazy = {n.names[0].name
+            for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef)
+            for n in ast.walk(fn) if isinstance(n, ast.Import)}
+    assert "jsonschema" in lazy, (
+        "jsonschema must be imported INSIDE a function: `--help` has to work "
+        "without it, and check_threshold_registry.py imports this module at "
+        "its own top level.")
 
 
 def test_the_schema_witness_is_handed_the_tracked_scan_not_the_read_set(
@@ -2017,7 +2107,14 @@ def test_the_schema_witness_is_handed_the_tracked_scan_not_the_read_set(
     tracked = gate._tracked_defaults_artifacts()
     by_root: dict[str, list[str]] = {}
     for rel in tracked:
-        by_root.setdefault(gate.conf_d_root(rel), []).append(rel)
+        # `conf_d_root` returns None for an artifact under no conf.d tree. The
+        # witness now refuses those outright, so none can reach here — but
+        # grouping on the raw return value made this test die with a TypeError
+        # from `sorted()` instead of saying anything (blind review).
+        root = gate.conf_d_root(rel)
+        if root is None:
+            continue
+        by_root.setdefault(root, []).append(rel)
     # …and NOT a shipped root: those carry a per-root `(min_artifacts, …)` pair,
     # so removing one of their artifacts trips the shipped floor instead and the
     # test would be measuring that. Both conditions are derived; neither is a
