@@ -1260,7 +1260,14 @@ repos:
         language: python
         # jsonschema joins pyyaml for the #1443 schema witness (the same pairing
         # threshold-registry-check already carries). The gate imports it INSIDE
-        # the witness, so `--help` and every other face still work without it.
+        # the witness — ⛔ which buys exactly one thing, and an earlier wording
+        # here claimed two: `--help` still works without jsonschema, but NO face
+        # does, because every face is built by `_defaults_faces()` and that is
+        # what calls the witness (measured: `--help` rc=0, bare `--ci` rc=2 with
+        # jsonschema blocked). The narrow claim is the one that matters: the
+        # lazy import is why `check_threshold_registry.py` can keep importing
+        # this module at ITS top level without inheriting the dependency.
+        # A test pins this list against the module's own in-function imports.
         additional_dependencies: ['pyyaml', 'jsonschema']
         pass_filenames: false
         # Fires when the DEMAND side (a rule-pack alert's user_threshold), ANY
